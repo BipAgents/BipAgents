@@ -177,14 +177,16 @@ pub async fn call_with(config: &Config, agent: &AgentConfig, arguments: &Dict, c
     let limit = config.limits.upload_max_bytes;
     let too_big = |max: u64| {
         let can_connect = drive_allowed && drive.is_none() && catalog.iter().any(|s| s.drive.is_some());
-        tool_failure(
+        let said = tool_failure(
             &format!("{path} is too large to send in the conversation (at most {} MB).", megabytes(max)),
             if can_connect {
                 "This file is too big to send you here: connect your cloud drive in the app and I'll put it there."
             } else {
                 "This file is too big to send you here."
             },
-        )
+        );
+        // a drive the person connects in the app lifts it: never counted by the brake (loop_brake.rs)
+        if can_connect { crate::tool_answers::lifted_in_the_app(said) } else { said }
     };
     let found = match found {
         Ok(found) => found,

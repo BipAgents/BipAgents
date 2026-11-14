@@ -1933,7 +1933,8 @@ pub async fn serve(
             let name = params.get("name").and_then(Value::as_str).unwrap_or("").to_string();
             // every answer as it goes to Hermes: a refusal plain, a real failure « don't retry » (tool_answers.rs)
             let (caller, tool, hub) = (agent.name.clone(), name.clone(), state.hub.clone());
-            let claim = hub.claim_call(&agent.name, &name);
+            let call_id = params.as_object().and_then(crate::tool_answers::call_id_of);
+            let claim = hub.claim_call_with(&agent.name, &name, call_id.as_deref());
             let settled = move |done: Result<anyhow::Result<Dict>, tokio::task::JoinError>| {
                 let mut result = match done {
                     Ok(Ok(result)) => result,

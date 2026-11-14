@@ -199,8 +199,18 @@ pub struct BridgeCall {
 #[derive(Debug, Clone, PartialEq)]
 pub struct CallClaim {
     pub agent: String,
-    pub run_id: String,
+    /// The run whose call it is; None while its call (by id) has not started yet (`RunHub::waiting`).
+    pub run_id: Option<String>,
     pub id: u64,
+}
+
+/// A request whose call id came before its call (`RunHub::claim_call_with`).
+#[derive(Debug, Clone)]
+struct Waiting {
+    agent: String,
+    claim: u64,
+    refused: bool,
+    at: f64,
 }
 
 /// One of the bridge's tools (its own servers', or a connector's) in a run's events.
@@ -213,14 +223,15 @@ fn same_tool(a: &str, b: &str) -> bool {
     a == b || a.ends_with(&format!("_{b}")) || b.ends_with(&format!("_{a}"))
 }
 
-/// A request whose call never started is forgotten after this many seconds (stub value, review 3).
-const EARLY_SECONDS: f64 = 60.0;
+/// A request whose call never started is forgotten after this many seconds: a request comes within milliseconds of
+/// its call's `tool.started`; one with no call in the run (a sub-agent's, review 3) must not wait for the next call.
+const EARLY_SECONDS: f64 = 5.0;
 
 /// A run's bridge calls kept to the last 50 (one whose events never came: a run cut short), a request whose call never
-/// started forgotten after a minute.
+/// started forgotten after `EARLY_SECONDS`.
 fn keep_calls(calls: &mut Vec<BridgeCall>) {
     let now = crate::py::time_time();
-    calls.retain(|c| !(c.early && now - c.at > 60.0));
+    calls.retain(|c| !(c.early && now - c.at > EARLY_SECONDS));
     if calls.len() > 50 {
         let over = calls.len() - 50;
         calls.drain(..over);
@@ -752,6 +763,8 @@ struct HubInner {
 pub struct RunHub {
     /// The bridge's calls' order and the claims' ids (`claim_call`).
     next_call: std::sync::atomic::AtomicU64,
+    /// Requests whose call id came before the call's `tool.started` (`claim_call_with`), by that id: paired there.
+    waiting: Mutex<HashMap<String, Waiting>>,
     pub hermes: HermesClient,
     pub push: Option<Arc<PushService>>,
     /// Watched runs survive a restart (`resume`).
@@ -801,6 +814,7 @@ impl RunHub {
     ) -> Self {
         RunHub {
             next_call: std::sync::atomic::AtomicU64::new(0),
+            waiting: Mutex::new(HashMap::new()),
             hermes,
             push,
             store,
@@ -1635,7 +1649,7 @@ impl RunHub {
         };
         let event = if matches!(event.r#type.as_str(), "tool.started" | "tool.completed" | "tool.failed") {
             let seq = self.next_call.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
-            Self::with_refused(&mut st, seq, self.with_service(sub, event))
+            self.with_refused(&sub.agent.name, &mut st, seq, self.with_service(sub, event))
         } else {
             event
         };
@@ -2772,7 +2786,22 @@ impl RunHub {
     /// request that comes before its run's `tool.started` waits in the run `sub_of` picks, paired when it starts. None:
     /// no run of the agent followed (a routine).
     pub fn claim_call(&self, agent: &str, tool: &str) -> Option<CallClaim> {
+        self.claim_call_with(agent, tool, None)
+    }
+
+    /// [`claim_call`](Self::claim_call), the call's id known (`hermes/tool_call_id` in the request's `_meta`: a small
+    /// Hermes patch to come, not sent by v0.23.1 yet), so the request is paired with exactly its call, whatever order
+    /// two runs' requests come in (review 3; until then two runs calling the same tool within milliseconds may swap
+    /// their steps' marks). A request that comes before its call's `tool.started` waits for that id only. Without an id: the
+    /// earliest call not paired yet; and a request whose run is delegating (a sub-agent's call: Hermes drops its events
+    /// from the run's stream) or that finds no call started waits a few seconds (`EARLY_SECONDS`) at most, never kept
+    /// for the parent's next call.
+    pub fn claim_call_with(&self, agent: &str, tool: &str, call_id: Option<&str>) -> Option<CallClaim> {
         let id = self.next_call.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+        let fits = |c: &BridgeCall| match call_id {
+            Some(wanted) => c.call_id.as_deref() == Some(wanted),
+            None => !c.early && same_tool(&c.tool, tool),
+        };
         let open = {
             let inner = lock(&self.inner);
             let mut best: Option<(u64, Arc<RunSubscription>)> = None;
@@ -2781,35 +2810,50 @@ impl RunHub {
                 if st.finished || st.terminal.is_some() {
                     continue;
                 }
-                let earliest = st.bridge_calls.iter().filter(|c| c.claim.is_none() && same_tool(&c.tool, tool)).map(|c| c.seq).min();
+                let earliest = st.bridge_calls.iter().filter(|c| c.claim.is_none() && fits(c)).map(|c| c.seq).min();
                 if let Some(seq) = earliest.filter(|seq| best.as_ref().is_none_or(|(b, _)| seq < b)) {
                     best = Some((seq, sub.clone()));
                 }
             }
             best
         };
-        let sub = match open {
-            Some((seq, sub)) => {
-                {
-                    let mut st = lock(&sub.state);
-                    if let Some(call) = st.bridge_calls.iter_mut().find(|c| c.seq == seq) {
-                        call.claim = Some(id);
-                    }
-                }
-                sub
+        let claim = |sub: &RunSubscription| CallClaim { agent: agent.to_string(), run_id: Some(sub.run_id.clone()), id };
+        if let Some((seq, sub)) = open {
+            let mut st = lock(&sub.state);
+            if let Some(call) = st.bridge_calls.iter_mut().find(|c| c.seq == seq) {
+                call.claim = Some(id);
             }
-            None => {
-                let sub = self.sub_of(agent, tool)?;
-                let mut st = lock(&sub.state);
-                let seq = self.next_call.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
-                let at = crate::py::time_time();
-                st.bridge_calls.push(BridgeCall { tool: tool.to_string(), call_id: None, seq, claim: Some(id), refused: false, early: true, at });
-                keep_calls(&mut st.bridge_calls);
-                drop(st);
-                sub
-            }
-        };
-        Some(CallClaim { agent: agent.to_string(), run_id: sub.run_id.clone(), id })
+            return Some(claim(&sub));
+        }
+        if let Some(wanted) = call_id {
+            // its call has not started yet: paired by that id when it does, in whichever run (`with_refused`)
+            self.sub_of(agent, tool)?;
+            let mut waiting = lock(&self.waiting);
+            let now = crate::py::time_time();
+            waiting.retain(|_, w| now - w.at <= EARLY_SECONDS);
+            waiting.insert(wanted.to_string(), Waiting { agent: agent.to_string(), claim: id, refused: false, at: now });
+            return Some(CallClaim { agent: agent.to_string(), run_id: None, id });
+        }
+        let sub = self.sub_of(agent, tool)?;
+        let mut st = lock(&sub.state);
+        if st.delegating > 0 || st.subagents > 0 {
+            // a sub-agent's call: no event of its own will ever come; paired with nothing
+            return Some(claim(&sub));
+        }
+        let seq = self.next_call.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+        let at = crate::py::time_time();
+        st.bridge_calls.push(BridgeCall {
+            tool: tool.to_string(),
+            call_id: None,
+            seq,
+            claim: Some(id),
+            refused: false,
+            early: true,
+            at,
+        });
+        keep_calls(&mut st.bridge_calls);
+        drop(st);
+        Some(claim(&sub))
     }
 
     /// The call `claim` answered « not done » without `isError` (a refusal, a third failure in a row: tool_answers.rs):
@@ -2817,17 +2861,18 @@ impl RunHub {
     /// failed (`with_refused`): the apps' step not done, never ✓; the safety net's hand-over refused; the brake's retry
     /// (review 1, 14/11).
     pub fn refuse(&self, claim: &CallClaim) {
-        let Some(sub) = lock(&self.inner).subs.get(&(claim.agent.clone(), claim.run_id.clone())).cloned() else { return };
+        let Some(run_id) = claim.run_id.clone() else {
+            if let Some(w) = lock(&self.waiting).values_mut().find(|w| w.claim == claim.id) {
+                w.refused = true;
+            }
+            return;
+        };
+        let Some(sub) = lock(&self.inner).subs.get(&(claim.agent.clone(), run_id.clone())).cloned() else { return };
         let mut st = lock(&sub.state);
         if let Some(call) = st.bridge_calls.iter_mut().find(|c| c.claim == Some(claim.id)) {
-            tracing::info!(agent = %claim.agent, tool = %call.tool, run_id = %claim.run_id, "a refused call: its step relayed failed");
+            tracing::info!(agent = %claim.agent, tool = %call.tool, run_id = %run_id, "a refused call: its step relayed failed");
             call.refused = true;
         }
-    }
-
-    /// `claim_call`, the call's id known (stub, review 3: filled in by the fix).
-    pub fn claim_call_with(&self, agent: &str, tool: &str, _call_id: Option<&str>) -> Option<CallClaim> {
-        self.claim_call(agent, tool)
     }
 
     /// [`claim_call`](Self::claim_call) and [`refuse`](Self::refuse) at once (a refusal whose request was not claimed).
@@ -2840,14 +2885,34 @@ impl RunHub {
     /// A run's bridge calls as its events go by: `tool.started` opens one (or pairs a request that came first),
     /// `tool.completed` closes it, `error: true` when the bridge refused it (`refuse`). A call closes with its own event
     /// whatever Hermes said of it: no mark ever outlives its call.
-    fn with_refused(st: &mut SubscriptionState, seq: u64, event: SSEEvent) -> SSEEvent {
+    fn with_refused(&self, agent: &str, st: &mut SubscriptionState, seq: u64, event: SSEEvent) -> SSEEvent {
         let tool = crate::loop_brake::event_tool(&event.data);
         if !bridge_tool(&tool) {
             return event;
         }
         let call_id = event.data.get("tool_call_id").and_then(Value::as_str).map(str::to_string);
         if event.r#type == "tool.started" {
-            match st.bridge_calls.iter_mut().filter(|c| c.early && c.call_id.is_none() && same_tool(&tool, &c.tool)).min_by_key(|c| c.seq) {
+            keep_calls(&mut st.bridge_calls);
+            // a request that came first: by its call's id when Hermes gave it (`RunHub::waiting`)
+            let waited = call_id.as_deref().and_then(|id| {
+                let mut waiting = lock(&self.waiting);
+                let ours = waiting.get(id).is_some_and(|w| w.agent == agent);
+                if ours { waiting.remove(id) } else { None }
+            });
+            if let Some(w) = waited {
+                st.bridge_calls.push(BridgeCall { tool, call_id, seq, claim: Some(w.claim), refused: w.refused, early: false, at: w.at });
+                return event;
+            }
+            // else the earliest request of that tool with no id
+            let waiting = {
+                st.bridge_calls
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, c)| c.early && c.call_id.is_none() && same_tool(&tool, &c.tool))
+                    .min_by_key(|(_, c)| c.seq)
+                    .map(|(at, _)| at)
+            };
+            match waiting.map(|at| &mut st.bridge_calls[at]) {
                 Some(early) => {
                     early.call_id = call_id;
                     early.tool = tool;
@@ -3890,8 +3955,9 @@ mod tests {
         assert_eq!(completed_errors(&run).last(), Some(&json!(false)), "a stray refusal kept for the next call");
     }
 
-    /// Review 3 (14/11): two runs of one agent calling the same tool at once: Hermes (patch 0028) puts the call's id in
-    /// the request's `_meta`, so each request is paired with its own call whatever order the requests come in.
+    /// Review 3 (14/11): two runs of one agent calling the same tool at once: with the call's id in the request's `_meta`
+    /// (`tool_answers::CALL_ID_META`, once Hermes sends it), each request is paired with its own call whatever order the
+    /// requests come in.
     #[tokio::test]
     async fn two_runs_calling_the_same_tool_at_once_are_paired_by_the_calls_id() {
         let hub = RunHub::new(HermesClient::new(reqwest::Client::new()), None, 7200, None);

@@ -2021,7 +2021,7 @@ async fn mcp(
     // the call this request is, in the run the hub follows (`claim_call`): a refusal is relayed on it
     let (caller, hub) = (agent.name.clone(), state.hub.clone());
     // (by the name Hermes called: its events', before tool_diet's reroute)
-    let claim = hub.claim_call(&agent.name, &tk::str_or_empty(params.get("name")));
+    let claim = hub.claim_call_with(&agent.name, &tk::str_or_empty(params.get("name")), crate::tool_answers::call_id_of(&params).as_deref());
     let answer = |mut result: Dict| {
         crate::names::localize_result(&mut result, &lang);
         crate::tool_answers::settle_for(&hub, claim.as_ref(), SERVER_NAME, &caller, &mut result);

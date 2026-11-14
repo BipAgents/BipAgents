@@ -1656,7 +1656,8 @@ async fn mcp(State(state): State<AppState>, headers: HeaderMap, body: Bytes) -> 
                 _ => Dict::new(),
             };
             // every answer as it goes to Hermes: a refusal plain, a real failure « don't retry » (tool_answers.rs)
-            let (caller, claim) = (agent.name.clone(), state.hub.claim_call(&agent.name, &name));
+            let call_id = params.as_object().and_then(crate::tool_answers::call_id_of);
+            let (caller, claim) = (agent.name.clone(), state.hub.claim_call_with(&agent.name, &name, call_id.as_deref()));
             let failed = |tool: &str, err: tokio::task::JoinError| {
                 crate::tool_answers::internal_failure(SERVER_NAME, tool, &err.to_string())
             };

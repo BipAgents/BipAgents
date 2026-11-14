@@ -1488,7 +1488,8 @@ async fn connector_mcp(
             // tool_answers.rs: the bridge's own refusals plain; the connector's failures (its own `isError`, no answer
             // in time, a crash) kept as failures, « don't retry », never three in a row
             let server = entry_name(&conn.slug);
-            let claim = state.hub.claim_call(&agent.name, &tool);
+            let call_id = params.as_object().and_then(crate::tool_answers::call_id_of);
+            let claim = state.hub.claim_call_with(&agent.name, &tool, call_id.as_deref());
             let result = match runner::call_tool(&state, &agent, &id, &tool, arguments, "agent").await {
                 Ok(Value::Object(mut result)) => {
                     crate::tool_answers::mark_failure(&mut result);

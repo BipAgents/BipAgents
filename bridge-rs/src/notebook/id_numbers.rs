@@ -26,7 +26,8 @@ const KEYS: &[&str] = &[
     // fr
     "passeport", "carte d identite", "carte identite", "carte nationale d identite", "piece d identite",
     "numero d identite", "titre de sejour", "permis de conduire", "securite sociale", "secu", "carte vitale",
-    "numero fiscal", "carte bancaire", "numero de carte", "cni", "nir", "permis",
+    "numero fiscal", "n fiscal", "identifiant fiscal", "spi", "impots gouv", "ameli", "carte bancaire",
+    "numero de carte", "cni", "nir", "permis",
     // en
     "passport", "id card", "identity card", "id number", "id no", "driving licence", "driving license",
     "driver s license", "driver s licence", "drivers license", "driver license", "driver licence", "social security",
@@ -148,11 +149,52 @@ static DNI: LazyLock<Regex> =
 /// An ID number in a fact: never kept.
 pub fn id_number(text: &str) -> bool {
     let text = ADDRESSES.replace_all(text, " ");
-    if NIR.is_match(&text) || RIB.is_match(&text) || cards(&text) {
+    // the person's own numbers, recognised by their shape or their key, before any exemption (review 3: a mutuelle's
+    // member number and an ameli login are the NIR, next to « adhérent » or « client »)
+    if NIR.is_match(&text) || nir_key(&text) || RIB.is_match(&text) || cards(&text) {
         return true;
     }
     let text = set_aside(&text);
     long_digits(&text) || iban(&text) || dni(&text) || (named(&text) && coded(&text))
+}
+
+/// A French social security number whose key checks (97 − the first 13 digits mod 97), written in one block or in
+/// groups (« 185057800608491 », « 2850578006084 41 »): 15 digits exactly, a first digit of 1, 2, 3, 4, 7 or 8.
+fn nir_key(text: &str) -> bool {
+    let chars: Vec<char> = text.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        if !chars[i].is_ascii_digit() || (i > 0 && chars[i - 1].is_ascii_alphanumeric()) {
+            i += 1;
+            continue;
+        }
+        let mut digits = String::new();
+        while i < chars.len() {
+            if chars[i].is_ascii_digit() {
+                digits.push(chars[i]);
+                i += 1;
+                continue;
+            }
+            // one separator (or up to three spaces) between two digits
+            let gap = chars[i..].iter().take_while(|c| matches!(c, ' ' | '\u{a0}' | '\u{202f}')).count();
+            let gap = if gap == 0 && matches!(chars[i], '.' | '-') { 1 } else { gap };
+            if (1..=3).contains(&gap) && chars.get(i + gap).is_some_and(char::is_ascii_digit) {
+                i += gap;
+                continue;
+            }
+            break;
+        }
+        let ends_clean = !chars.get(i).is_some_and(char::is_ascii_alphanumeric);
+        if digits.len() == 15 && ends_clean && digits.starts_with(['1', '2', '3', '4', '7', '8']) {
+            let (body, key) = digits.split_at(13);
+            if let (Ok(n), Ok(k)) = (body.parse::<u64>(), key.parse::<u64>()) {
+                if 97 - n % 97 == k {
+                    return true;
+                }
+            }
+        }
+    }
+    false
 }
 
 /// Whether three numbers can be a date: day, month and year (or year, month, day; or month, day, year), a year of

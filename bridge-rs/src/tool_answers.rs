@@ -58,6 +58,16 @@ pub fn internal_failure(server: &str, tool: &str, what: &str) -> Dict {
     out
 }
 
+/// Where Hermes is to put the id of the call a `tools/call` request is (the request's `params._meta`): a small Hermes
+/// patch to come; v0.23.1 sends none, and the hub then pairs a request with the earliest call of its tool.
+pub const CALL_ID_META: &str = "hermes/tool_call_id";
+
+/// The id of the call a `tools/call` request is (`params`), when Hermes gives it (`CALL_ID_META`): the hub pairs the
+/// request with exactly that call (`RunHub::claim_call_with`).
+pub fn call_id_of(params: &serde_json::Map<String, Value>) -> Option<String> {
+    params.get("_meta")?.get(CALL_ID_META)?.as_str().map(str::trim).filter(|id| !id.is_empty() && id.len() <= 200).map(str::to_string)
+}
+
 /// The mark of a refusal the person lifts in the app (`lifted_in_the_app`), taken off before the answer goes out.
 pub const LIFTED_MARK: &str = "_bipagents_lifted";
 
