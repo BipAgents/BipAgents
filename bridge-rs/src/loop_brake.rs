@@ -897,10 +897,14 @@ struct BridgeTurn {
 /// notes, all answered).
 pub const REFUSED_AGAIN: u32 = 2;
 
-/// A refusal that invites the same call later (the place full, the browser held, a moment's wait): not counted.
+/// A refusal that invites the same call later (the place full, the browser held, a moment's wait) or once the person
+/// has done something in the app (a switch, a share): not counted.
 fn retry_later(text: &str) -> bool {
     let t = text.to_lowercase();
-    ["try again", "again in a", "again later", "a bit later", "in a moment", "in a minute"].iter().any(|w| t.contains(w))
+    ["try again", "again in a", "again later", "a bit later", "in a moment", "in a minute", "of the app", "in the app",
+     "in their app", "the person turns", "the person switches"]
+        .iter()
+        .any(|w| t.contains(w))
 }
 
 /// `note` added to a tool's result (its first text, else a text of its own).
@@ -1111,7 +1115,11 @@ Don't ask for it again: tell your person in plain words what stops it, and go on
         let why = crate::tools_knowledge::head(text.lines().next().unwrap_or("").trim(), 200).to_string();
         let mut turns = self.turns.lock().unwrap_or_else(|e| e.into_inner());
         let entry = turns.entry(turn_key(agent, turn)).or_default();
-        let refused = entry.refused.entry(signature_of(tool, arguments)).or_insert((0, why));
+        // the very same refusal again: another one (the person's settings changed meanwhile) starts the count over
+        let refused = entry.refused.entry(signature_of(tool, arguments)).or_insert((0, why.clone()));
+        if refused.1 != why {
+            *refused = (0, why);
+        }
         refused.0 += 1;
     }
 
@@ -1253,6 +1261,15 @@ mod tests {
             let other = args(&[("page", "Camille Testeur"), ("facts", "Aime le jazz")]);
             assert!(turns.check(&settings, agent, turn.as_ref(), "notebook_write", &other, 1.0).is_none());
         }
+        // a different refusal for the same write (the person's settings changed meanwhile) starts the count over
+        let first = tool_text("Not done: The person hasn't shared their reminders with you.", true);
+        let then = tool_text("Not added: a reminder at a time isn't set on any phone.", true);
+        let call = args(&[("title", "Appeler Paul"), ("due", "2026-11-07T14:00")]);
+        for refusal in [&first, &then] {
+            assert!(turns.check(&settings, "settings", None, "reminders_add", &call, 3.0).is_none());
+            turns.record_refusal("settings", None, "reminders_add", &call, refusal);
+        }
+        assert!(turns.check(&settings, "settings", None, "reminders_add", &call, 3.0).is_none());
         // a refusal meant to be tried again later (the place full, the browser held) is not counted
         let later = tool_text("Not done: your place is full right now; try again later.", true);
         let page = args(&[("title", "Menu")]);
