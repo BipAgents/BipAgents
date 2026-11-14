@@ -390,6 +390,43 @@ mod tests {
         assert!(kept.is_empty(), "kept by the Carnet: {kept:#?}");
     }
 
+    /// Review 2 (14/11): « permis » alone (the French everyday name of the driving licence), a RIB with dashes or dots,
+    /// a card right after a phone word.
+    #[test]
+    fn a_permis_a_rib_and_a_card_after_a_phone_word_are_refused() {
+        let kept: Vec<&str> = [
+            "N° de permis : 12AA34567",
+            "Numéro de permis de Léa : 12AA34567",
+            "Permis n° 15AB12345",
+            "RIB : 30006-00001-12345678901-89",
+            "RIB 30006.00001.12345678901.89",
+            "Handy 4111111111111111",
+            "Tél. 5500000000000004",
+        ]
+        .into_iter()
+        .filter(|t| !id_number(t))
+        .collect();
+        assert!(kept.is_empty(), "kept by the Carnet: {kept:#?}");
+    }
+
+    /// Review 2 (14/11), refused before this branch too: a flight next to « passeport », lists of postcodes or years, a
+    /// company's SIRET, a customer number; a building permit is no driving licence.
+    #[test]
+    fn flights_lists_companies_customers_and_building_permits_are_kept() {
+        let refused: Vec<&str> = [
+            "Vol AF1234 le 12 mars, passeport à prendre",
+            "Codes postaux du secteur : 75011 75012 75020",
+            "Vacances en 2019 2021 2023 2025",
+            "SIRET de l'artisan 123 456 789 00012",
+            "Numéro client Free 12345678901234",
+            "Permis de construire PC 069 123 22 A0045 accordé",
+        ]
+        .into_iter()
+        .filter(|t| id_number(t))
+        .collect();
+        assert!(refused.is_empty(), "refused by the Carnet: {refused:#?}");
+    }
+
     /// Review 1 (14/11): ordinary notes the first version refused (a book, an order, a validity, opening hours, a
     /// phone number next to an ID word, a parcel).
     #[test]

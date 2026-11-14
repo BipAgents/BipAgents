@@ -3552,6 +3552,62 @@ mod tests {
         assert_eq!(completed.data["error"], json!(false));
     }
 
+    fn review2_event(kind: &str, data: Value) -> SSEEvent {
+        SSEEvent::new(kind, data.as_object().cloned().unwrap(), "{}")
+    }
+
+    fn last_completed(sub: &Arc<RunSubscription>) -> Value {
+        let st = lock(&sub.state);
+        st.backlog.iter().rev().find(|e| e.r#type == "tool.completed").map(|e| e.data["error"].clone()).unwrap_or(Value::Null)
+    }
+
+    /// Review 2 (14/11): `refused_call` marked a run by tool name (`sub_of`: the agent's run whose last call was that tool, the latest). Two
+    /// runs of one agent calling the same tool at once (a background task and the person's conversation: both followed),
+    /// the task's call refused: the mark goes to the conversation, whose call went well. The apps then show the
+    /// conversation's step failed and the task's refused step done.
+    #[tokio::test]
+    async fn a_refusal_is_relayed_on_the_run_that_made_the_call() {
+        let hub = RunHub::new(HermesClient::new(reqwest::Client::new()), None, 7200, None);
+        let agent = AgentConfig { name: "vie".into(), ..Default::default() };
+        let task = Arc::new(RunSubscription::new(agent.clone(), "run_task"));
+        let chat = Arc::new(RunSubscription::new(agent, "run_chat"));
+        lock(&hub.inner).subs.insert(task.key(), task.clone());
+        lock(&hub.inner).subs.insert(chat.key(), chat.clone());
+        let tool = "mcp_bipagents_create_podcast";
+        // the task starts a podcast (long), then the person's conversation another one
+        hub.dispatch(&task, review2_event("tool.started", json!({"tool": tool, "tool_call_id": "t1"})));
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        hub.dispatch(&chat, review2_event("tool.started", json!({"tool": tool, "tool_call_id": "c1"})));
+        // the task's call is refused by the bridge (« the voice failed… » or any refusal), the conversation's goes well
+        hub.refused_call("vie", crate::agent_tools::SERVER_NAME, "create_podcast");
+        hub.dispatch(&chat, review2_event("tool.completed", json!({"tool": tool, "tool_call_id": "c1", "error": false})));
+        hub.dispatch(&task, review2_event("tool.completed", json!({"tool": tool, "tool_call_id": "t1", "error": false})));
+        assert_eq!(
+            (last_completed(&chat), last_completed(&task)),
+            (json!(false), json!(true)),
+            "(the conversation's podcast made, the task's refused) as the apps get them"
+        );
+    }
+
+    /// Review 2 (14/11): a refused call whose `tool.completed` already went by (Hermes gave up on the call, or reported it as failed
+    /// itself): its mark stays, and the next call of that tool in the run, which went well, is relayed failed.
+    #[tokio::test]
+    async fn a_mark_never_outlives_its_call() {
+        let hub = RunHub::new(HermesClient::new(reqwest::Client::new()), None, 7200, None);
+        let agent = AgentConfig { name: "vie".into(), ..Default::default() };
+        let sub = Arc::new(RunSubscription::new(agent, "run_stale"));
+        lock(&hub.inner).subs.insert(sub.key(), sub.clone());
+        let tool = "mcp_bipagents_calendar_add";
+        hub.dispatch(&sub, review2_event("tool.started", json!({"tool": tool, "tool_call_id": "a"})));
+        // Hermes reports it failed on its own (its timeout, an interruption): `with_refused` returns before taking the mark
+        hub.refused_call("vie", crate::agent_tools::SERVER_NAME, "calendar_add");
+        hub.dispatch(&sub, review2_event("tool.completed", json!({"tool": tool, "tool_call_id": "a", "error": true})));
+        // the next one goes well
+        hub.dispatch(&sub, review2_event("tool.started", json!({"tool": tool, "tool_call_id": "b"})));
+        hub.dispatch(&sub, review2_event("tool.completed", json!({"tool": tool, "tool_call_id": "b", "error": false})));
+        assert_eq!(last_completed(&sub), json!(false), "a calendar_add that went well, relayed failed");
+    }
+
     #[tokio::test]
     async fn a_run_without_its_own_list_gets_the_automatic_one_until_the_agent_writes_one() {
         let hub = RunHub::new(HermesClient::new(reqwest::Client::new()), None, 7200, None);

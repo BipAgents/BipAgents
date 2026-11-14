@@ -58,6 +58,11 @@ pub fn internal_failure(server: &str, tool: &str, what: &str) -> Dict {
     out
 }
 
+/// A refusal the person lifts in the app (a share, a switch, a mailbox to connect): stub (review 2), filled in by the fix.
+pub fn lifted_in_the_app(result: Dict) -> Dict {
+    result
+}
+
 /// A failure the bridge relays as one (a connector's own `isError` answer): `isError` kept, under `STREAK`.
 pub fn mark_failure(result: &mut Dict) {
     if result.get("isError").is_some_and(crate::py::truthy) {

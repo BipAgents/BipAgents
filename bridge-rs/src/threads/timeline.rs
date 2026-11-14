@@ -1225,6 +1225,37 @@ mod tests {
         assert_eq!(status, ["failed", "failed", "done", "done"]);
     }
 
+    /// Review 2 (14/11): a bridge tool behind Hermes' tool search is called through `tool_call` (tool_diet.rs: most of the bridge's tools for
+    /// most kinds of agents). Hermes keeps that wrapper in the transcript (tool_executor.py `_unwrap_tool_search_call`:
+    /// « tool_call.function stays untouched for the transcript »), so the history's call is named `tool_call`; its
+    /// refusal (`{"result": "Not done: …"}`) must still show as a step not done, as it does live (the run's events name
+    /// the underlying tool).
+    #[test]
+    fn a_refused_call_through_the_tool_search_shows_failed_in_the_history() {
+        let mut rows = vec![
+            row(1, "user", json!("Prépare un brouillon pour Paul")),
+            row(2, "assistant", json!("")),
+            row(3, "tool", json!("{\"result\": \"Not done: No mailbox is connected for you: the person connects one in the BipAgents app (your settings › Boîtes mail).\"}")),
+            row(4, "tool", json!("{\"result\": \"Not done: The person turned this connector off in the app.\"}")),
+            row(5, "assistant", json!("Je ne peux pas.")),
+        ];
+        let single = json!({"name": "mcp__bipagents__mail_draft", "arguments": {"to": "paul@example.org"}}).to_string();
+        let batch = json!({"calls": [{"name": "mcp__bipconn_garmin__push_workouts", "arguments": {}}]}).to_string();
+        rows[1].tool_calls = Some(json!([{"id": "a", "function": {"name": "tool_call", "arguments": single}},
+                                         {"id": "b", "function": {"name": "tool_call", "arguments": batch}}]));
+        rows[2].tool_call_id = Some("a".into());
+        rows[2].tool_name = Some("mcp__bipagents__mail_draft".into());
+        rows[3].tool_call_id = Some("b".into());
+        rows[3].tool_name = Some("mcp__bipconn_garmin__push_workouts".into());
+        let got = segment_items("vie", 0, "s1", &rows, &HashSet::new(), &mut String::new());
+        let status: Vec<String> = got
+            .iter()
+            .filter(|i| i.kind() == "tool")
+            .map(|i| i.body["tool"]["status"].as_str().unwrap_or("").to_string())
+            .collect();
+        assert_eq!(status, ["failed", "failed"], "a refused call through tool_call shows as a step done");
+    }
+
     /// Another agent's message in Bot Mode's conversation: its sender's id, the name it signed with, its words alone
     /// (iOS drew « Message from … » around the line that already had it).
     #[test]

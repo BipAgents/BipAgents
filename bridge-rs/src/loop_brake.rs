@@ -1279,6 +1279,58 @@ mod tests {
         }
     }
 
+    /// Review 2 (14/11) — d00246c8d: « a refusal sending the person to the app is not counted » (`retry_later`: « of the app », « in the
+    /// app », « the person turns »…). The write tools' real refusals of that kind say « in the BipAgents app », « of the
+    /// BipAgents app », « They can turn on », « they switch »: counted, so once the person has done it, the third identical
+    /// call is refused by the brake (« you asked for exactly this 2 times »), a routine's and a conversation's alike.
+    #[test]
+    fn a_refusal_the_person_lifts_in_the_app_is_never_counted() {
+        let lifted_in_the_app = [
+            // reminders.rs (reminders_add, the person hasn't shared their reminders)
+            ("reminders_add", "The person hasn't shared their reminders with you, so nothing was done. They can turn on the \
+    « Rappels » tool on your page in the BipAgents app: tell them so in one sentence, without steps for a particular phone."),
+            // calendar.rs (calendar_add, the phone's calendar not shared)
+            ("calendar_add", "The person hasn't shared their phone calendar with you: they switch « Calendrier » on in your \
+    page of the BipAgents app."),
+            // contacts.rs (contacts_add, the address book not shared)
+            ("contacts_add", "The person hasn't shared their address book with you: they switch « Contacts » on in your page \
+    of the BipAgents app."),
+            // mailbox.rs (mail_draft, no mailbox connected)
+            ("mail_draft", "No mailbox is connected for you: the person connects one in the BipAgents app (your settings › \
+    Boîtes mail)."),
+        ];
+        let turns = Turns::default();
+        let settings = Settings::default();
+        let mut blocked = Vec::new();
+        for (tool, text) in lifted_in_the_app {
+            let call = args(&[("title", "Appeler Paul"), ("due", "2026-11-20T14:00")]);
+            let refused = tool_text(text, true);
+            for _ in 0..2 {
+                assert!(turns.check(&settings, "review2", None, tool, &call, 0.0).is_none());
+                turns.record_refusal("review2", None, tool, &call, &refused);
+            }
+            // the person turned it on in the app meanwhile: the same call again must reach the tool
+            if let Some(stopped) = turns.check(&settings, "review2", None, tool, &call, 1.0) {
+                blocked.push((tool, stopped["content"][0]["text"].as_str().unwrap_or("").to_string()));
+            }
+        }
+        assert!(blocked.is_empty(), "refused by the brake after the person lifted it in the app: {blocked:#?}");
+    }
+
+        /// The tools mark these refusals themselves (`tool_answers::lifted_in_the_app`): never counted, whatever their words.
+        #[test]
+        fn a_refusal_its_tool_marks_as_lifted_in_the_app_is_never_counted() {
+            let turns = Turns::default();
+            let settings = Settings::default();
+            let call = args(&[("title", "Appeler Paul")]);
+            let marked = crate::tool_answers::lifted_in_the_app(tool_text("Not done: not shared yet.", true));
+            for _ in 0..3 {
+                assert!(turns.check(&settings, "marked", None, "reminders_add", &call, 0.0).is_none());
+                turns.record_refusal("marked", None, "reminders_add", &call, &marked);
+            }
+            assert!(turns.check(&settings, "marked", None, "reminders_add", &call, 0.0).is_none());
+        }
+
     #[test]
     fn the_lab_loop_is_stopped_at_the_eleventh_add() {
         // 2026-10-27: calendar_add and calendar_list in turns, the adds' arguments unknown (no preview)
