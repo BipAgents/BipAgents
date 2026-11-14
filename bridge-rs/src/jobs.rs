@@ -593,6 +593,11 @@ impl Jobs {
         self.hub.as_ref().and_then(|hub| hub.run_progress(&agent.name, run_id)).is_some_and(|p| p.capped)
     }
 
+    /// The brake stopped the task's run (runs.rs `stop_looping`): its line.
+    fn braked(&self, agent: &AgentConfig, run_id: &str) -> Option<String> {
+        self.hub.as_ref()?.brake_said(&agent.name, run_id)
+    }
+
     fn agent(&self, name: &str) -> Result<AgentConfig, JobError> {
         self.config
             .get()
@@ -1086,6 +1091,13 @@ impl Jobs {
 
         async fn ended(&self, agent: &AgentConfig, job: &mut Dict, end: End) {
         let End { mut status, output, usage, error } = end;
+        // Hermes' own lines (background_turn.rs `hermes_line`) are never a report: nothing else, the run was interrupted
+        let words = crate::background_turn::without_hermes_lines(&output);
+        if words.is_empty() && !output.trim().is_empty() && (status == "completed" || status == "gone") {
+            tracing::warn!(agent = %agent.name, job = %tk::str_or_empty(job.get("id")), "the task's run ended on Hermes' line only");
+            status = "interrupted".into();
+        }
+        let output = words;
         let usage = match usage {
             Some(Value::Object(u)) if !u.is_empty() => Some(u),
             // a run stopped (its budget, a pause) comes back without its usage, one lost in a Hermes restart with an
@@ -1104,9 +1116,12 @@ impl Jobs {
         let mut full = String::new();
         // the hub stopped it before a call past its budget, before this watch did (a run that still ended with its
         // answer is done)
-        let capped = (status != "completed" && self.capped(agent, &tk::str_or_empty(job.get("run_id"))))
-            .then(|| json!("budget"));
-        let stopping = job.get("stopping").filter(|v| py::truthy(v)).cloned().or(capped);
+        let run_id = tk::str_or_empty(job.get("run_id"));
+        let capped = (status != "completed" && self.capped(agent, &run_id)).then(|| json!("budget"));
+        // the brake stopped it (the same tool again and again): « loop », and its line told (never silence)
+        let braked = (status != "completed").then(|| self.braked(agent, &run_id)).flatten();
+        let looped = braked.is_some().then(|| json!("loop"));
+        let stopping = job.get("stopping").filter(|v| py::truthy(v)).cloned().or(capped).or(looped);
         if stopping.is_some() || ["cancelled", "canceled", "interrupted"].contains(&status.as_str()) {
             job.insert("state".into(), json!("paused"));
             job.insert("reason".into(), stopping.unwrap_or(json!("interrupted")));
@@ -1134,6 +1149,11 @@ impl Jobs {
             self.hand_back(&handback, agent, job, &from, &full).await;
         } else if state_of(job) == "done" || reason == json!("budget") || reason == json!("time") {
             self.tell_end(agent, job).await;
+        } else if let (Some(said), true, Some(tell)) = (braked, reason == json!("loop"), &self.tell) {
+            let body = push_body(&self.config.get(), agent, PAUSED_BODY);
+            let line = format!("{body}{} {}\n{said}", colon(body), tk::str_or_empty(job.get("title")));
+            let session = job.get("session_id").filter(|v| !v.is_null()).map(py::py_str);
+            tell(agent.name.clone(), session, line, tk::str_or_empty(job.get("id")), body.into()).await;
         }
     }
 
@@ -1423,6 +1443,37 @@ make). If you meant something else, call that tool instead: a password, API key 
 mcp__bipagents_connectors__ask_secret; the sites a connector needs → mcp__bipagents_files__sandbox_sites_request; a \
 connector you built → mcp__bipagents_connectors__connector_register (behind the tool search: tool_call with its name).";
 
+/// A task of `agent` with the same words as `prompt` (case and spaces aside; its first 8000 characters, as a task keeps
+/// them) still waiting for the person, under way or paused: its title and state. The cards lab of 14/11 (GLM-5.3 Flash, a watcher's turn): the same propose_task again and
+/// again, each call a new waiting task and a push, until the brake stopped the turn; the next turn began with it again.
+pub fn same_task(config: &crate::config::Config, agent: &str, prompt: &str) -> Option<(String, String)> {
+    let words = |text: &str| text.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase();
+    let wanted = words(tk::head(prompt, 8000));
+    if wanted.is_empty() {
+        return None;
+    }
+    tasks(config)
+        .into_iter()
+        .filter(|j| agent_of(j) == agent)
+        .filter(|j| ["proposed", "queued", "running", "counting", "stopping", "paused"].contains(&state_of(j).as_str()))
+        .find(|j| words(&tk::str_or_empty(j.get("prompt"))) == wanted)
+        .map(|j| (tk::str_or_empty(j.get("title")), state_of(&j)))
+}
+
+/// What propose_task answers for a task already there (`same_task`), before its small tasks' automatic start too
+/// (agent_tools.rs): never a second one.
+pub fn already_there(title: &str, state: &str) -> Dict {
+    let where_ = match state {
+        "proposed" => "it waits for your person's go in « Tâches de fond »",
+        "paused" => "it is paused in « Tâches de fond »: your person resumes it there when they want",
+        _ => "it is under way in « Tâches de fond »",
+    };
+    tool_text(
+        &format!("Already proposed: « {title} »: {where_}. Don't propose it again; go on with what you were doing."),
+        false,
+    )
+}
+
 /// The `propose_task` MCP tool (agent_tools.rs). Err: what Python lets through (a task file that cannot be written).
 pub async fn propose_tool(jobs: Option<&Jobs>, agent: &AgentConfig, arguments: &Dict) -> anyhow::Result<Dict> {
     let Some(jobs) = jobs else {
@@ -1441,6 +1492,10 @@ pub async fn propose_tool(jobs: Option<&Jobs>, agent: &AgentConfig, arguments: &
         // model ended ask_secret / sandbox_sites_request, then behind the search, on this in-view name with
         // {"prompt": "No", "title": "x"}; tasks « x » were proposed to the person and the turn went round in circles)
         return Ok(tool_text(NOT_A_TASK, true));
+    }
+    if let Some((title, state)) = same_task(&jobs.config.get(), &agent.name, &prompt) {
+        tracing::info!(agent = %agent.name, title = %title, state = %state, "the same task proposed again: not twice");
+        return Ok(already_there(&title, &state));
     }
     let from = jobs.hub.as_ref().and_then(|hub| hub.asking_session(&agent.name));
     let title = tk::str_or_empty(arguments.get("title"));

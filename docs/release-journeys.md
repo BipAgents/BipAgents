@@ -85,7 +85,7 @@ la bêta.
 
 | N° | Parcours | Ce que la personne doit voir | Automatisé |
 |---|---|---|---|
-| J18 | « Pas envoyé » puis renvoyer | « Pas envoyé · Toucher pour réessayer » sous un message qu'aucun tour n'a pris ; un toucher le renvoie, la réponse vient, le message une seule fois | P, i, A |
+| J18 | « Pas envoyé » puis renvoyer | « Pas envoyé · Toucher pour réessayer » sous un message qu'aucun tour n'a pris (envoyé pendant un tour qui a déjà agi, `#note`, puis « Arrêter » avant son étape suivante ; pendant un tour qui n'a encore rien fait, le message le relance et il est pris : pas de « Pas envoyé », turn_restart.rs) ; un toucher le renvoie, la réponse vient, le message une seule fois | P, i, A |
 | J19 | « En attente » montre chaque sorte de message | Une photo, un document, un texte « Après » envoyés pendant une réponse : chacun dans « En attente » avec ce qu'il est (jamais une ligne vide) | P, i, A |
 
 ### Boîte, notifications, le reste
@@ -237,6 +237,13 @@ fait que l'iPhone (un simulateur temporaire, effacé après, sous les créneaux 
 compiler est servi tel quel (`JOURNEYS_BRIDGE`), la colonne Pont est lue dans le junit de sa boîte noire complète
 (`JOURNEYS_PONT_JUNIT`), et Android part dès la fin de la partie serveur ; seul l'iPhone attend la fin des tests UI
 (`JOURNEYS_IOS_AFTER`).
+
+Les paiements par carte d'un veilleur (paiement urgent, « Prêt à acheter ») ne sont pas dans ces parcours (faux pont,
+pas de vrai modèle) : la batterie les passe avec `--lab`, sur un vrai labo avec cartes et le vrai modèle
+(`scripts/release-battery/cards_lab.py`, `internal/notes/release-process.md` §1 ; ses six vérifications et son coût
+dans le rapport de la batterie). Seul : `BIPAGENTS_LAB_DIR=/tmp/bb-cards BIPAGENTS_LAB_TAG=bipagents-cards-<nom>
+python3 scripts/release-battery/cards_lab.py --sha <commit> --out <dossier>` (les deux variables sont obligatoires :
+`lab.py down --yes` supprime tous les serveurs de ce label).
 
 Le simulateur joint le pont par un tunnel ssh sur le `127.0.0.1` du Mac : lancé depuis Claude Code, le script doit
 tourner HORS du bac à sable de Claude (le simulateur n'atteint pas un port ouvert dans le bac à sable : la requête
