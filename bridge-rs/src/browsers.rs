@@ -222,103 +222,22 @@ pub fn refresh_downloads(config: &Config, agent: &str) -> bool {
     if let Some(text) = std::fs::read_to_string(&unit).ok().and_then(|t| with_policy_mounts(&t, &place)) {
         changed = std::fs::write(&unit, text).is_ok();
     }
-    // one writer of mcp.json at a time (`edit_proxy_settings`: the phone exit's and the guard's keys are written too)
-    let _ = edit_proxy_settings(config, agent, |settings| {
+    let settings_path = place.join("mcp.json");
+    if let Ok(Value::Object(mut settings)) =
+        std::fs::read_to_string(&settings_path).map(|t| serde_json::from_str(&t).unwrap_or(Value::Null))
+    {
         let text = settings.get("unit").and_then(|u| u.get("text")).and_then(Value::as_str).map(str::to_string);
-        let Some(patched) = text.and_then(|t| with_policy_mounts(&t, &place)) else { return false };
-        match settings.get_mut("unit") {
-            Some(Value::Object(unit)) => {
+        if let Some(patched) = text.and_then(|t| with_policy_mounts(&t, &place)) {
+            if let Some(Value::Object(unit)) = settings.get_mut("unit") {
                 unit.insert("text".into(), json!(patched));
-                true
+                let _ = std::fs::write(&settings_path, format!("{}\n", crate::py::dumps(&Value::Object(settings))));
             }
-            _ => false,
         }
-    });
+    }
     if changed {
         tracing::info!(agent = %agent, "browser: downloads go to its profile from its next start");
     }
     changed
-}
-
-/// One writer at a time of the agents' `mcp.json` at the bridge's start (`refresh_proxy_settings`, phone_exit.rs): two
-/// sweeps reading then writing the same file would lose each other's keys.
-static SETTINGS_WRITING: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-/// The agent's `mcp.json` (bip-browser-mcp's settings) changed by `edit` (true: something changed, written then),
-/// under `SETTINGS_WRITING`. False when there is none or nothing changed.
-pub fn edit_proxy_settings(
-    config: &Config,
-    agent: &str,
-    edit: impl FnOnce(&mut serde_json::Map<String, Value>) -> bool,
-) -> std::io::Result<bool> {
-    let _one = SETTINGS_WRITING.lock().unwrap_or_else(|e| e.into_inner());
-    let path = folder(config, agent).join("mcp.json");
-    let Some(Value::Object(mut settings)) =
-        std::fs::read_to_string(&path).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok())
-    else {
-        return Ok(false);
-    };
-    if !edit(&mut settings) {
-        return Ok(false);
-    }
-    write_proxy_settings(&path, &Value::Object(settings)).map(|()| true)
-}
-
-/// `mcp.json` written whole or not at all (a file beside it, then renamed: the installer's night refresh writes it the
-/// same way), keeping its mode (third review of card-guards, 14/11).
-fn write_proxy_settings(path: &Path, settings: &Value) -> std::io::Result<()> {
-    let body = format!("{}\n", crate::py::Dumps::new().indent(2).dumps(settings));
-    let partial = path.with_file_name("mcp.json.part");
-    std::fs::write(&partial, body)?;
-    if let Ok(meta) = std::fs::metadata(path) {
-        let _ = std::fs::set_permissions(&partial, meta.permissions());
-    }
-    std::fs::rename(&partial, path)
-}
-
-/// A browser set up before the guard's own world (card-guards, 14/11): its `mcp.json` given the DevTools secret's
-/// file and where the agent's scripts are written down, as `proxy_config` writes them now (second review of 14/11:
-/// without them the guard looked through the page's own world on every browser set up before). The proxy reads them
-/// at its next start (after an update: `stale_proxies`). Whether it changed.
-pub fn refresh_proxy_settings(config: &Config, agent: &str) -> bool {
-    let place = folder(config, agent);
-    let wanted = [
-        ("cdp_secret_file", place.join(CDP_SECRET).to_string_lossy().to_string()),
-        ("scripts", place.join(crate::browser_mcp::SCRIPTS_FILE).to_string_lossy().to_string()),
-    ];
-    let edited = edit_proxy_settings(config, agent, |settings| {
-        let mut changed = false;
-        for (key, value) in &wanted {
-            if settings.get(*key).and_then(Value::as_str) != Some(value.as_str()) {
-                settings.insert(key.to_string(), json!(value));
-                changed = true;
-            }
-        }
-        changed
-    });
-    match edited {
-        Ok(changed) => {
-            if changed {
-                tracing::info!(agent = %agent, "browser: its guard given the DevTools secret (from its proxy's next start)");
-            }
-            changed
-        }
-        Err(exc) => {
-            tracing::warn!(agent = %agent, error = %exc, "browser: the guard's settings not brought up to date");
-            false
-        }
-    }
-}
-
-/// At the bridge's start, Hermes or not: `refresh_proxy_settings` for every agent with a browser here, the spare ones
-/// and the abandoned ones the hub's gateway still serves too (as `stale_proxies` looks at them).
-pub fn refresh_all_proxy_settings(config: &Config) {
-    let mut served: Vec<String> = config.agents.values().map(|a| a.name.clone()).collect();
-    served.extend(crate::agent_pool::spares(config).into_iter().map(|s| s.id));
-    served.extend(crate::agent_pool::abandoned(config));
-    for name in served {
-        refresh_proxy_settings(config, &name);
-    }
 }
 
 /// The latest finished downloads, as the agent sees them (« /telechargements/x.pdf (34 KB) »); older than
@@ -1028,10 +947,6 @@ pub fn proxy_config(config: &Config, agent: &str, engine: &str, ports: &IndexMap
         "stop": [systemctl, "--user", "stop", unit],
         "cache": place.join("mcp-cache.json").to_string_lossy(), "busy": place.join("busy").to_string_lossy(),
         "cdp_port": ports.get("cdp").copied().unwrap_or(0),
-        // the guard's own look at the page, in a world of its own through DevTools (browser_mcp.rs `isolated`): the
-        // relay's secret, as Hermes' `browser.cdp_url` holds it; and where the agent's scripts are written down
-        "cdp_secret_file": place.join(CDP_SECRET).to_string_lossy(),
-        "scripts": place.join(crate::browser_mcp::SCRIPTS_FILE).to_string_lossy(),
         "idle": config.browser.idle_minutes as u64 * 60,
         "ended": place.join("ended").to_string_lossy(), "after_run": crate::browser_mcp::AFTER_RUN_SECONDS,
         "rescue": place.join("rescue").to_string_lossy(),
@@ -1131,11 +1046,7 @@ pub async fn setup_with(
         settings["unit"] = json!({"path": unit.to_string_lossy(), "text": text});
         settings["profile"] = json!(place.join("profile").to_string_lossy());
         settings["reload"] = json!([systemctl, "--user", "daemon-reload"]);
-        {
-            // one writer at a time, whole or not at all (`edit_proxy_settings`)
-            let _one = SETTINGS_WRITING.lock().unwrap_or_else(|e| e.into_inner());
-            write_proxy_settings(&path, &settings)?;
-        }
+        std::fs::write(&path, format!("{}\n", crate::py::Dumps::new().indent(2).dumps(&settings)))?;
         if !deferred {
             run(args(&["systemctl", "--user", "disable", &stem]), no_env()).await?;
         }

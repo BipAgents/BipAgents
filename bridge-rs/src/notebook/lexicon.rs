@@ -635,6 +635,95 @@ mod tests {
         }
     }
 
+    /// bridge-tools-no-breaker (14/11): the bench's notes were refused three times in a row (« le 14 novembre 2026
+    /// sur la Pharmacie » read as an IBAN once the spaces were squeezed out), then Hermes paused all the bridge's tools.
+    #[test]
+    fn emails_logins_and_dates_are_not_id_numbers() {
+        for fact in [
+            // the bench's notes (14/11, DeepSeek), as the agent wrote them
+            "Compte client créé le 14 novembre 2026 sur la Pharmacie des Essais, pour commander en ligne.",
+            "Compte client créé le 14 novembre 2026 (pharmacie en ligne, 127.0.0.1:8088)",
+            "Pharmacie des Essais (127.0.0.1:8088) : compte client créé le 14/11/2026 (Camille Testeur, \
+camille.testeur@example.org, Mme, née le 14/03/1991) — identifiant et mot de passe dans le coffre",
+            "Identifiant : camille.testeur@example.org — mot de passe gardé dans le coffre",
+            // e-mail addresses, digits and ID-like words in them included
+            "Login: jdupont1985@gmail.com",
+            "E-Mail: max.mustermann1990@web.de",
+            "Usuario: maria.garcia19900101@correo.es",
+            "Adresse du service passeport : passeport.service2024@mairie-exemple.fr",
+            "Contacto NIE: nie.extranjeros2024@policia.example.es",
+            "Identifiant : fr76jeanmartin1234@example.org",
+            "Compte : 4970101234567890@cartes.example.com",
+            // a site's login identifier
+            "Identifiant client : 4500123987",
+            "Login : camille_t92",
+            "Benutzername: max.mustermann_1990",
+            "Usuario: maria_garcia_1990",
+            "Numéro client : CL-2026-118842",
+            "Espace client https://www.exemple.fr/compte/12345678901234",
+            // dates, in the four languages, next to an ID word too
+            "Rendez-vous le 14 novembre à la mairie pour le passeport",
+            "Passport renewed on 14 March 2026",
+            "Passport renewed on March 14, 2026",
+            "Reisepass beantragt am 14.03.2026",
+            "Pasaporte renovado el 14/03/2026",
+            "Passeport valable jusqu'au 12-03-2031",
+            "Lu 12 fois avec Paul dans le train",
+            "Vu le 12 mars avec Léa au cinéma, très bien",
+            // phone numbers (a German mobile has 13 digits)
+            "Telefon: +49 151 23456789",
+            "Telefon: 0049 151 23456789",
+            "Móvil: +34 612 345 678",
+            "Mobile: +44 7700 900123",
+            // « nie » is German for « never »
+            "Er ruft nie zurück, Kundennummer 123456",
+        ] {
+            assert!(!id_number(fact), "{fact}");
+        }
+    }
+
+    #[test]
+    fn id_numbers_in_the_four_languages_are_refused() {
+        for fact in [
+            // fr
+            "Passeport : 12AB34567",
+            "N° de sécurité sociale : 1 85 05 78 006 084 36",
+            "Sécu 185057800608436",
+            "CNI : 880692310285",
+            "Carte d'identité n° X4RTBPFW4",
+            "Numéro fiscal : 1234567890123",
+            "IBAN FR76 3000 6000 0112 3456 7890 189",
+            "RIB : FR7630006000011234567890189",
+            "Carte bancaire 4970-1012-3456-7890",
+            // en
+            "Passport number: 123456789",
+            "SSN: 123-45-6789",
+            "Social security number 078-05-1120",
+            "National Insurance number: QQ 12 34 56 C",
+            "NI number AB123456C",
+            "Visa card 4111 1111 1111 1111",
+            "Driving licence: MORGA753116SM9IJ",
+            "IBAN GB29 NWBK 6016 1331 9268 19",
+            // de
+            "Reisepassnummer: C01X00T47",
+            "Personalausweis: L01X00T47",
+            "Steuer-ID: 12 345 678 901",
+            "Sozialversicherungsnummer: 65 170839 J 003",
+            "IBAN: DE89 3704 0044 0532 0130 00",
+            "Kreditkarte 5500 0000 0000 0004",
+            // es
+            "DNI: 12345678Z",
+            "Mi dni es 12345678Z",
+            "12345678Z",
+            "NIE X1234567L",
+            "Número de la Seguridad Social: 28 1234567840",
+            "Pasaporte PAA123456",
+            "IBAN ES91 2100 0418 4502 0005 1332",
+        ] {
+            assert!(id_number(fact), "{fact}");
+        }
+    }
+
     #[test]
     fn contact_forms() {
         assert_eq!(email(" Lea@Example.org ").as_deref(), Some("lea@example.org"));

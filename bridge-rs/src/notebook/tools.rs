@@ -1009,10 +1009,7 @@ mod tests {
         let (said, _) = w(json!({"page": "Léa Martin", "fix": [{"old": "Aime le jazz", "new": "Pointure : 36"}]}));
         assert!(said.contains("not written back"), "{said}");
         let text = page_text(&config, lea);
-        // the page's body: its front matter holds a random id (« p00348b2636 ») that may hold « 36 » (a flake, 14/11)
-        let body = text.strip_prefix("---\n").and_then(|rest| rest.split_once("\n---")).map_or(text.as_str(), |(_, b)| b);
-        assert!(body.len() < text.len(), "{text}");
-        assert!(!body.contains("36") && !text.contains("Pointure") && body.contains("Aime le jazz"), "{text}");
+        assert!(!text.contains("36") && text.contains("Aime le jazz"), "{text}");
     }
 
     #[test]
@@ -1119,6 +1116,30 @@ mod tests {
         // ID numbers: never kept
         let (said, error) = run(&config, "quotidien", WRITE, json!({"page": "Zoé Roux", "facts": ["Passeport : 12AB34567"]}), &t);
         assert!(error && said == ID_NUMBER);
+    }
+
+    /// bridge-tools-no-breaker (14/11): DeepSeek's notes after a sign-up on the bench, refused three times in a row
+    /// (« Not saved: ID numbers are never kept ») for an e-mail and a date; Hermes then paused all the bridge's tools.
+    #[test]
+    fn the_benchs_notes_are_kept_and_a_refusal_says_where_the_number_is() {
+        let (_dir, config) = setup();
+        let t = turn("run_bench");
+        let (said, error) = run(&config, "quotidien", WRITE, json!({"page": "Pharmacie des Essais", "kind": "subject",
+            "section": "status", "facts": [
+                "Pharmacie des Essais : compte client créé le 14/11/2026 (Camille Testeur, camille.testeur@example.org) — mot de passe dans le coffre",
+                "Identifiant : camille.testeur@example.org — mot de passe gardé dans le coffre"],
+            "summary": "Compte client créé le 14 novembre 2026 sur la Pharmacie des Essais, pour commander en ligne."}), &t);
+        assert!(!error && said.starts_with("Saved: Pharmacie des Essais"), "{said}");
+        assert!(page_text(&config, "Sujets/Pharmacie des Essais.md").contains("camille.testeur@example.org"));
+        // a real ID number: refused, and the answer says where it is and what to do instead
+        let (said, error) = run(&config, "quotidien", WRITE, json!({"page": "Pharmacie des Essais", "kind": "subject",
+            "facts": ["Compte client créé", "Passeport : 12AB34567"]}), &t);
+        assert!(error, "{said}");
+        assert_eq!(said, "Not saved: ID numbers are never kept, and fact 2 holds one. Write it again without the \
+number (an e-mail address, a login or a date is fine).");
+        let (said, _) = run(&config, "quotidien", WRITE, json!({"page": "Pharmacie des Essais", "facts": ["Compte créé"],
+            "summary": "IBAN FR76 3000 6000 0112 3456 7890 189"}), &t);
+        assert!(said.starts_with("Not saved: ID numbers are never kept, and the summary holds one."), "{said}");
     }
 
     #[test]

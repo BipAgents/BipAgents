@@ -960,7 +960,7 @@ of the applicable safeguards.
 The relay only accepts encrypted connections (HTTPS), seals tokens (XChaCha20-Poly1305), has no database and never
 writes a token in clear. In the app, your agents' keys are protected by the Keychain or the Keystore, and the
 connection to your server goes through Tailscale or through an HTTPS door on your local network that only accepts your
-server's certificate. The code of the app, the server side and the relay is public: https://github.com/BipAgents/BipAgents. To report a
+server's certificate. The code of the app, the server side and the relay is public: https://github.com/Alexbob0/BipAgents. To report a
 security flaw: **security@bipagents.com** (see the SECURITY.md file in the repository).
 
 With the all-included offer, each place is a separate account on the server, without administrator rights; Kerfy
