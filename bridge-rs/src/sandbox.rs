@@ -1646,7 +1646,8 @@ async fn mcp(State(state): State<AppState>, headers: HeaderMap, body: Bytes) -> 
         "ping" => Ok(reply(json!({}))),
         "tools/list" => Ok(reply(json!({"tools": tools()}))),
         "tools/call" if crate::update_drain::closing() => {
-            Ok(reply(crate::update_drain::busy_result(&crate::names::agent_language(&config, &agent.name))))
+            let busy = crate::update_drain::busy_result(&crate::names::agent_language(&config, &agent.name));
+            Ok(reply(crate::tool_answers::settle_value(SERVER_NAME, &agent.name, busy)))
         }
         "tools/call" => {
             let name = params.get("name").and_then(Value::as_str).unwrap_or("").to_string();
@@ -1654,18 +1655,31 @@ async fn mcp(State(state): State<AppState>, headers: HeaderMap, body: Bytes) -> 
                 Some(Value::Object(map)) => map.clone(),
                 _ => Dict::new(),
             };
+            // every answer as it goes to Hermes: a refusal plain, a real failure « don't retry » (tool_answers.rs)
+            let caller = agent.name.clone();
+            let failed = |tool: &str, err: tokio::task::JoinError| {
+                crate::tool_answers::internal_failure(SERVER_NAME, tool, &err.to_string())
+            };
+            let reply = |mut result: Dict| {
+                crate::tool_answers::settle(SERVER_NAME, &caller, &mut result);
+                reply(Value::Object(result))
+            };
             if name == crate::service_files::TOOL_NAME {
-                return Ok(reply(Value::Object(crate::service_files::call(&config, &agent, &arguments).await)));
+                return Ok(reply(crate::service_files::call(&config, &agent, &arguments).await));
             }
             if [crate::sandbox_sites::LIST, crate::sandbox_sites::REQUEST].contains(&name.as_str()) {
                 let (c, a) = (config.clone(), agent.clone());
                 // the turn calling it: a « Refuser » in that turn answers a second request at once
                 let turn = state.hub.turn_of(&agent.name, crate::sandbox_sites::REQUEST).map(|t| t.run_id);
-                let (mut text, is_error, card) = tokio::task::spawn_blocking(move || {
+                let tool = name.clone();
+                let (mut text, is_error, card) = match tokio::task::spawn_blocking(move || {
                     crate::sandbox_sites::call(&c, &a, &name, &arguments, turn.as_deref())
                 })
                 .await
-                .map_err(anyhow::Error::from)?;
+                {
+                    Ok(done) => done,
+                    Err(err) => return Ok(reply(failed(&tool, err))),
+                };
                 if let Some(card) = card {
                     // in its turn's conversation before anyone can answer it (card_place.rs)
                     let run = format!("{}{}", crate::sandbox_sites::RUN_PREFIX, card.id);
@@ -1676,12 +1690,14 @@ async fn mcp(State(state): State<AppState>, headers: HeaderMap, body: Bytes) -> 
 send to {} now.", card.host);
                     }
                 }
-                return Ok(reply(Value::Object(tool_text(&text, is_error))));
+                return Ok(reply(tool_text(&text, is_error)));
             }
-            let result = tokio::task::spawn_blocking(move || call(&config, &agent, &name, &arguments))
-                .await
-                .map_err(anyhow::Error::from)?;
-            Ok(reply(Value::Object(result)))
+            let tool = name.clone();
+            let result = match tokio::task::spawn_blocking(move || call(&config, &agent, &name, &arguments)).await {
+                Ok(result) => result,
+                Err(err) => failed(&tool, err),
+            };
+            Ok(reply(result))
         }
         other => Ok(crate::web::json_response(
             200,

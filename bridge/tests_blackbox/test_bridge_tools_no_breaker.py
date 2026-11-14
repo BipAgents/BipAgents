@@ -16,11 +16,8 @@ from pathlib import Path
 
 import pytest
 
-from bbkit.common import AUTH
-from bbkit.mcp import TOKEN, give_token, rpc, text_of
+from bbkit.mcp import TOKEN, give_token, not_done, rpc, text_of
 
-#: What a refusal opens with on the wire: it says nothing was done (never `isError`).
-REFUSED = ("Not done: ", "Not saved: ")
 #: Three notes holding a real ID number: refused, whatever the agent changes around it.
 PASSPORT_NOTES = (
     {"page": "Camille Testeur", "kind": "person", "facts": ["Passeport : 12AB34567"]},
@@ -59,17 +56,12 @@ class HermesBreaker:
         return result
 
 
-def refused(result):
-    """A refusal as the bridge answers it now: a plain answer that says nothing was done."""
-    return result is not None and result.get("isError") is False and text_of(result).startswith(REFUSED)
-
-
 def test_three_refused_notes_in_a_row_then_another_bridge_tool_answers_at_once(bridge):
     give_token(bridge)
     hermes = HermesBreaker(bridge)
     for note in PASSPORT_NOTES:
         answer = hermes.call("notebook_write", note)
-        assert refused(answer), answer
+        assert answer is not None and not_done(answer), answer
         assert text_of(answer).startswith("Not saved: ID numbers are never kept, and fact "), answer
     assert not hermes.paused and hermes.strikes == 0
     started = time.monotonic()
@@ -104,11 +96,11 @@ def test_refusals_and_policy_answers_are_plain_on_every_server_of_the_bridge(bri
         ("weather", {"place": "Lyon"}, "Weather"),                         # off for this agent
         ("no_such_tool", {}, "unknown tool"),                              # not a tool of the bridge
         ("notebook_read", {"page": "Personne Inconnue"}, "No such page"),  # not found
-        ("notebook_write", {"page": "Santé", "kind": "area", "facts": ["Tension 12/8"]}, "health"),  # health filter
+        ("notebook_write", {"page": "Marc Dupont", "facts": ["x"], "private": True}, "health"),  # health filter
         ("read_page", {"page": "nope"}, "unknown page id"),
     ]:
         answer = rpc(bridge, "tools/call", {"name": name, "arguments": arguments}).json()["result"]
-        assert refused(answer) and says in text_of(answer), (name, answer)
+        assert answer is not None and not_done(answer) and says in text_of(answer), (name, answer)
     # the other servers of the bridge (the same token): the files' and the vault's
     for path, name, arguments in [("/v1/agent-tools/files", "shared_files_get", {"agent": "personne", "path": "x.txt"}),
                                   ("/v1/agent-tools/vault", "vault_confirm_login", {"site": "https://shop.example"})]:
@@ -174,7 +166,5 @@ def test_hermes_own_breaker_never_pauses_the_bridge_after_three_refused_notes(br
             results.append(json.loads(line[len("RESULT "):]))
     finally:
         client.kill()
-    for refusal in results[:3]:
-        assert "error" not in refusal and refusal["result"].startswith("Not saved: ID numbers"), refusal
-    for answer in results[3:]:
-        assert "error" not in answer, f"the bridge's tools were paused: {answer}"
+    assert not any("error" in answer for answer in results), f"Hermes counted strikes, paused the bridge: {results}"
+    assert all(r["result"].startswith("Not saved: ID numbers are never kept, and fact ") for r in results[:3]), results

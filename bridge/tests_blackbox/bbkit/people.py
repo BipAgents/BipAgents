@@ -32,6 +32,7 @@ from starlette.responses import JSONResponse
 
 from .common import AUTH
 from .fakes import Fake
+from .mcp import not_done
 from .servers import wait_until
 
 PROJECT_TOKEN = "queens-token-0123456789abcdefghijklmn"
@@ -366,7 +367,7 @@ def mcp_as(bridge, token: str, path: str, name: str, arguments: Dict[str, Any], 
     assert resp.status_code == 200, resp.text
     result = resp.json()["result"]
     text = "\n".join(p.get("text", "") for p in result.get("content", []))
-    if result.get("isError"):
+    if result.get("isError") or not_done(result):   # a refusal is plain on the wire (tool_answers.rs)
         raise RuntimeError(text)
     return text
 

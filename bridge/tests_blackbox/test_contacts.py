@@ -7,7 +7,7 @@ import os
 import pytest
 
 from bbkit.common import AUTH
-from bbkit.mcp import call, give_token, rpc, text_of
+from bbkit.mcp import call, give_token, not_done, rpc, text_of
 from conftest import managed_install, profile, wait_registered
 
 TOKEN = "coach-token-" + "c" * 30
@@ -48,7 +48,7 @@ def test_the_phone_shares_its_address_book_and_does_what_the_agents_ask(bridges,
     assert bridge.get("/v1/contacts").status_code == 401
     assert not any(n.startswith("contacts_") for n in names(bridge))
     not_yet = call(bridge, "contacts_search", {"query": "x"}, token=TOKEN)
-    assert not_yet["isError"] and "hasn't shared their address book" in text_of(not_yet)
+    assert not_done(not_yet) and "hasn't shared their address book" in text_of(not_yet)
     assert bridge.get("/v1/contacts", headers=AUTH).json()["scope"] == {"all": True, "groups": [], "notes": False}
     unknown = bridge.put("/v1/contacts/agents", json={"agents": ["ghost"]}, headers=AUTH)
     assert unknown.status_code == 400 and unknown.json() == {"detail": "unknown agent"}
@@ -72,8 +72,8 @@ def test_the_phone_shares_its_address_book_and_does_what_the_agents_ask(bridges,
     asked = call(bridge, "contacts_add", {"name": "Marc Petit", "phones": ["06 99 99 99 99"], "group": "Famille"},
                  token=TOKEN)
     assert not asked["isError"] and "next sync" in text_of(asked)
-    assert call(bridge, "contacts_add", {"name": "x", "birthday": "bientôt"}, token=TOKEN)["isError"]
-    assert call(bridge, "contacts_update", {"id": "zz", "job": "x"}, token=TOKEN)["isError"]
+    assert not_done(call(bridge, "contacts_add", {"name": "x", "birthday": "bientôt"}, token=TOKEN))
+    assert not_done(call(bridge, "contacts_update", {"id": "zz", "job": "x"}, token=TOKEN))
     assert not call(bridge, "contacts_update", {"id": "c2", "job": "comptable"}, token=TOKEN)["isError"]
     queue = bridge.get("/v1/contacts/queue", headers=AUTH).json()["queue"]
     assert [op["op"] for op in queue] == ["add", "update"]
@@ -98,7 +98,7 @@ def test_the_phone_shares_its_address_book_and_does_what_the_agents_ask(bridges,
     assert bridge.put("/v1/contacts/agents", json={"agents": []}, headers=AUTH).json() == {"agents": []}
     give_token(bridge, "coach", TOKEN)
     assert not any(n.startswith("contacts_") for n in names(bridge))
-    assert call(bridge, "contacts_search", {"query": "lili"}, token=TOKEN)["isError"]
+    assert not_done(call(bridge, "contacts_search", {"query": "lili"}, token=TOKEN))
     assert bridge.get("/v1/contacts", headers=AUTH).json()["contacts"] == 0
 
 

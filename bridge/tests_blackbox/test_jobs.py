@@ -11,7 +11,7 @@ import pytest
 
 from bbkit.common import AUTH, in_session
 from bbkit.fakes import split_now
-from bbkit.mcp import call, give_token, text_of
+from bbkit.mcp import call, give_token, not_done, text_of
 from bbkit.servers import wait_until
 
 TOKEN = "f" * 64
@@ -164,13 +164,13 @@ def test_an_agent_proposes_a_task_the_person_starts(bridges, fakes):
     # no task in it (5/11, a call meant for ask_secret ended on this name): nothing proposed, the right tools named
     jobs_before = len(bridge.get("/v1/jobs", headers=AUTH).json()["jobs"])
     junk = call(bridge, "propose_task", {"title": "x", "prompt": "No"})
-    assert junk["isError"] and "ask_secret" in text_of(junk) and "sandbox_sites_request" in text_of(junk), junk
+    assert not_done(junk) and "ask_secret" in text_of(junk) and "sandbox_sites_request" in text_of(junk), junk
     assert len(bridge.get("/v1/jobs", headers=AUTH).json()["jobs"]) == jobs_before
     for _ in range(5):
         call(bridge, "propose_task", {"title": "Encore", "prompt": "Encore un dossier à préparer."})
     too_many = call(bridge, "propose_task", {"title": "Encore", "prompt": "Encore un dossier à préparer."})
     # (a turn no run carries: the brake's note that the same tool comes back often, after the answer)
-    assert too_many["isError"] and text_of(too_many).startswith("enough of your proposals are waiting for the person already")
+    assert not_done(too_many) and text_of(too_many).startswith("Not done: enough of your proposals are waiting for the person already")
 
 
 @pytest.mark.slow

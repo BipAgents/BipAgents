@@ -10,6 +10,7 @@ import json
 import yaml
 
 from bbkit.common import AUTH
+from bbkit.mcp import not_done
 from bbkit.servers import wait_until
 from conftest import managed_install, profile, servers, wait_registered
 
@@ -37,7 +38,7 @@ def names(bridge, who):
 
 def ask(bridge, who, **arguments):
     result = rpc(bridge, who, "tools/call", {"name": "message_agent", "arguments": arguments})["result"]
-    return result["content"][0]["text"], result["isError"]
+    return result["content"][0]["text"], not_done(result)
 
 
 def test_a_linked_agent_gets_message_agent_and_its_call_brings_the_answer(bridges, fakes):
@@ -79,7 +80,7 @@ def test_a_linked_agent_gets_message_agent_and_its_call_brings_the_answer(bridge
     # told to give the file first (token lab of 2026-11-07: « dans /envoi/analyses.pdf », four times).
     runs = len(fakes.hermes.started)
     text, failed = ask(bridge, "quotidien", target="bip/coach", message="Lis /envoi/analyses.pdf, la ferritine ?")
-    assert failed and text.startswith("Nothing was sent: Coach sees none of your folders") and "send_files_to_agent" in text
+    assert failed and text.startswith("Not done: Nothing was sent: Coach sees none of your folders") and "send_files_to_agent" in text
     assert len(fakes.hermes.started) == runs
     # the same conversation again, by name too
     text, failed = ask(bridge, "quotidien", target="Coach", message="Et la semaine d'avant ?")

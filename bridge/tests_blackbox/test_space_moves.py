@@ -18,6 +18,7 @@ import tomllib
 from concurrent.futures import ThreadPoolExecutor
 
 from bbkit.common import AUTH
+from bbkit.mcp import not_done
 from bbkit.servers import wait_until
 from conftest import wait_registered
 import test_own_space as own
@@ -41,7 +42,7 @@ def ask(bridge, message):
     body = {"jsonrpc": "2.0", "id": 1, "method": "tools/call",
             "params": {"name": "message_agent", "arguments": {"target": "bip/coach", "message": message}}}
     result = bridge.post(MCP, json=body, headers={"Authorization": f"Bearer {TOKEN}"}, timeout=120).json()["result"]
-    return result["content"][0]["text"], result["isError"]
+    return result["content"][0]["text"], not_done(result)
 
 
 def owner_record(database, session_id, home):

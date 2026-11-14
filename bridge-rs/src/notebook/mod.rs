@@ -44,6 +44,7 @@ pub mod followups;
 pub mod forget;
 pub mod groups;
 pub mod known;
+pub mod id_numbers;
 pub mod lexicon;
 pub mod misplaced;
 pub mod moves;

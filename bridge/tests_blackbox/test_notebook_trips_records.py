@@ -6,7 +6,7 @@ import re
 from datetime import date, timedelta
 
 from bbkit.common import AUTH
-from bbkit.mcp import call, give_token, text_of
+from bbkit.mcp import call, give_token, not_done, text_of
 from test_notebook import in_french, nightly, notebook, tidy
 
 
@@ -124,7 +124,7 @@ def test_records_are_tables_merged_on_their_key(bridge):
     page = path.read_text()
     assert "| 2028-03-12 | arch:42 |" in page and page.endswith("À garder : les factures.\n")
     unknown = call(bridge, "notebook_record", {"action": "update", "type": "purchase", "id": "r000000", "fields": {"price": "1 €"}})
-    assert unknown["isError"]
+    assert not_done(unknown)
     call(bridge, "notebook_record", {"action": "add", "type": "subscription",
                                      "fields": {"service": "Musique+", "price": "10,99 €", "period": "mois",
                                                 "renewal": iso(5), "cancel": "dans l'appli, Réglages > Abonnement"}})

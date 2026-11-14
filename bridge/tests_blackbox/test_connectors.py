@@ -21,6 +21,7 @@ import yaml
 from cryptography.fernet import Fernet
 
 from bbkit.common import AUTH, answered
+from bbkit.mcp import not_done
 from bbkit.servers import free_port, wait_until
 from conftest import profile, wait_registered
 from test_sandbox import isolated
@@ -181,7 +182,7 @@ def test_a_connector_end_to_end_the_secret_never_reaches_the_agent_the_model_or_
     assert "garmin" in text(result) and PASSWORD not in json.dumps(result) and EMAIL not in json.dumps(result)
     # the same name again is refused; a notification can refuse a card, never give it
     again = tool(bridge, "ask_secret", {"name": "garmin", "site": "x.example", "kind": "password", "reason": "r"})
-    assert again["isError"] and "already in the vault" in text(again)
+    assert not_done(again) and "already in the vault" in text(again)
     with ThreadPoolExecutor(1) as pool:
         waiting = pool.submit(tool, bridge, "ask_secret", {"name": "strava", "site": "strava.example", "kind": "token",
                                                             "reason": "r"})
@@ -190,7 +191,7 @@ def test_a_connector_end_to_end_the_secret_never_reaches_the_agent_the_model_or_
         assert yes.status_code == 409 and yes.json()["detail"]["code"] == "needs_secure_field"
         no = bridge.post("/v1/approve", headers=AUTH, json={"agent": "vie", "run_id": other["run_id"], "choice": "deny"})
         assert no.status_code == 200
-        assert waiting.result(timeout=30)["isError"]
+        assert not_done(waiting.result(timeout=30))
 
     # 2. the connector: ONE approval card, then its own entry in the agent's Hermes
     result, card = approve_next(bridge, "connector_register", REGISTER)
@@ -259,7 +260,7 @@ def test_a_changed_connector_does_not_run_before_a_new_approval(bridges, fakes):
     before = len([a for a in bridge.commands.of("podman") if a[:3] == ["run", "--rm", "-i"]])
     (work / "server.py").write_text(SERVER + "\n# changed\n")
     refused = connector_call(bridge, conn["id"])
-    assert refused["isError"] and "changed since the person approved" in text(refused)
+    assert not_done(refused) and "changed since the person approved" in text(refused)
     assert len([a for a in bridge.commands.of("podman") if a[:3] == ["run", "--rm", "-i"]]) == before  # not run
     detail = bridge.get(f"/v1/agents/vie/connectors/{conn['id']}", headers=AUTH).json()
     assert detail["status"] == "reapprove" and detail["status_text"] == "À réapprouver" and not detail["runs"]
@@ -274,7 +275,7 @@ def test_a_changed_connector_does_not_run_before_a_new_approval(bridges, fakes):
     # its switch: off, no run
     bridge.patch(f"/v1/agents/vie/connectors/{conn['id']}", headers=AUTH, json={"enabled": False})
     off = connector_call(bridge, conn["id"])
-    assert off["isError"] and "turned this connector off" in text(off)
+    assert not_done(off) and "turned this connector off" in text(off)
     # removed: its entry goes from the agent's Hermes
     assert bridge.delete(f"/v1/agents/vie/connectors/{conn['id']}", headers=AUTH).status_code == 204
     servers = yaml.safe_load((hub / "profiles" / "vie" / "config.yaml").read_text())["mcp_servers"]

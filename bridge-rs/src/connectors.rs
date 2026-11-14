@@ -1463,16 +1463,32 @@ async fn connector_mcp(
         "ping" => Ok(rpc(&rid, json!({}))),
         "tools/list" => Ok(rpc(&rid, json!({"tools": conn.tools}))),
         "tools/call" if crate::update_drain::closing() => {
-            Ok(rpc(&rid, crate::update_drain::busy_result(&crate::names::agent_language(&config, &agent.name))))
+            let busy = crate::update_drain::busy_result(&crate::names::agent_language(&config, &agent.name));
+            Ok(rpc(&rid, crate::tool_answers::settle_value(&entry_name(&conn.slug), &agent.name, busy)))
         }
         "tools/call" => {
             let tool = params.get("name").and_then(Value::as_str).unwrap_or("").to_string();
             let arguments = params.get("arguments").and_then(Value::as_object).cloned().unwrap_or_default();
+            // tool_answers.rs: the bridge's own refusals plain; the connector's failures (its own `isError`, no answer
+            // in time, a crash) kept as failures, « don't retry », never three in a row
+            let server = entry_name(&conn.slug);
             let result = match runner::call_tool(&state, &agent, &id, &tool, arguments, "agent").await {
-                Ok(result) => result,
-                Err(err) => json!({"content": [{"type": "text", "text": err.agent_text()}], "isError": true}),
+                Ok(Value::Object(mut result)) => {
+                    crate::tool_answers::mark_failure(&mut result);
+                    Value::Object(result)
+                }
+                Ok(other) => other,
+                Err(err) => {
+                    let mut said = crate::tools_knowledge::tool_text(&err.agent_text(), true);
+                    if err.failed() {
+                        said.insert(crate::tool_answers::FAILURE_MARK.into(), Value::Bool(true));
+                        let more = " Don't retry it in this turn: tell your person simply that it didn't work this time.";
+                        crate::tool_answers::add_text(&mut said, more);
+                    }
+                    Value::Object(said)
+                }
             };
-            Ok(rpc(&rid, result))
+            Ok(rpc(&rid, crate::tool_answers::settle_value(&server, &agent.name, result)))
         }
         other => Ok(web::json_response(
             200,

@@ -4,7 +4,7 @@ import json
 import re
 
 from bbkit.common import AUTH
-from bbkit.mcp import call, give_token, rpc
+from bbkit.mcp import call, give_token, not_done, rpc
 
 DASHBOARD = """<!DOCTYPE html>
 <html lang="fr"><head><title>Prises de sang</title>
@@ -64,7 +64,7 @@ def test_an_agent_makes_a_page_and_the_app_gets_it_locked(bridge):
     assert listed.startswith("prises-de-sang: Prises de sang (changed now ago, version 2)")
     assert call(bridge, "read_page", {"page": "prises-de-sang"})["content"][0]["text"] == "<p>v2</p>"
     nope = call(bridge, "read_page", {"page": "nope"})
-    assert nope["isError"] is True and nope["content"][0]["text"] == "unknown page id: nope (see list_pages)"
+    assert not_done(nope) and nope["content"][0]["text"] == "Not done: unknown page id: nope (see list_pages)"
     app_list = bridge.get("/v1/pages", params={"agent": "wellness"}, headers=AUTH).json()["pages"]
     assert [(p["page"], p["path"], p["version"], p["title"]) for p in app_list] == [
         ("prises-de-sang", media, 2, "Prises de sang")]
@@ -127,18 +127,18 @@ def test_an_update_keeps_the_path_and_a_new_page_never_takes_another_s(bridge):
     assert record["version"] == 2 and record["title"] == "Suivi" and record["created"] == created
     for bad in ("../x", "A B", "x" * 61):
         refused = call(bridge, "create_page", {"html": "<p>x</p>", "title": "x", "page": bad})
-        assert refused["isError"] is True and refused["content"][0]["text"].startswith("unknown page id: ")
+        assert not_done(refused) and refused["content"][0]["text"].startswith("Not done: unknown page id: ")
     big = call(bridge, "create_page", {"html": "x" * 1_000_001, "title": "big"})
-    assert big["isError"] is True and "too big" in big["content"][0]["text"]
+    assert not_done(big) and "too big" in big["content"][0]["text"]
     empty = call(bridge, "create_page", {"html": " ", "title": "vide"})
-    assert empty["content"][0]["text"] == "the page is empty: give its whole HTML"
+    assert empty["content"][0]["text"] == "Not done: the page is empty: give its whole HTML"
     # 10/11: a call meant for create_podcast that ended on create_page (« placeholder », « x »): nothing made, the
     # model told how to reach the tool it meant
     before = sorted(p.name for p in pages_dir(bridge).iterdir())
     junk = call(bridge, "create_page", {"html": "placeholder", "title": "x"})
-    assert junk["isError"] is True and junk["content"][0]["text"].startswith("No page made: « placeholder »")
+    assert not_done(junk) and junk["content"][0]["text"].startswith("Not done: No page made: « placeholder »")
     assert "tool_call" in junk["content"][0]["text"] and "create_podcast" in junk["content"][0]["text"]
     assert sorted(p.name for p in pages_dir(bridge).iterdir()) == before
     assert call(bridge, "delete_page", {"page": "suivi-2"})["content"][0]["text"] == "Page suivi-2 deleted."
     gone = call(bridge, "delete_page", {"page": "suivi-2"})
-    assert gone["isError"] is True and gone["content"][0]["text"] == "unknown page id: suivi-2 (see list_pages)"
+    assert not_done(gone) and gone["content"][0]["text"] == "Not done: unknown page id: suivi-2 (see list_pages)"

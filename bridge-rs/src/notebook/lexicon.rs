@@ -430,77 +430,10 @@ pub fn query(text: &str) -> (Vec<String>, Vec<&'static str>) {
     (words, labels)
 }
 
-/// An ID number in a fact: never kept (passports, ID cards, social security, bank cards, IBAN). Phone numbers and
-/// dates pass.
-pub fn id_number(text: &str) -> bool {
-    const KEYS: &[&str] = &[
-        "passeport", "passport", "reisepass", "pasaporte", "carte d identite", "carte identite", "cni", "id card",
-        "identity card", "personalausweis", "ausweis", "dni", "nie", "permis de conduire", "driving licence",
-        "driver s license", "fuhrerschein", "carnet de conducir", "securite sociale", "secu", "social security", "ssn",
-        "sozialversicherung", "seguridad social", "nir", "iban", "carte bancaire", "card number", "kreditkarte",
-        "tarjeta", "numero fiscal", "tax id", "steuer id", "steuernummer", "nif", "mrz",
-    ];
-    // a long run of digits (spaces between groups): a card, a social security number, an account
-    let mut digits = 0;
-    let mut longest = 0;
-    let chars: Vec<char> = text.chars().collect();
-    for (i, c) in chars.iter().enumerate() {
-        if c.is_ascii_digit() {
-            digits += 1;
-            longest = longest.max(digits);
-        } else if *c == ' ' && i > 0 && chars[i - 1].is_ascii_digit() && chars.get(i + 1).is_some_and(char::is_ascii_digit) {
-            continue;
-        } else {
-            digits = 0;
-        }
-    }
-    if longest >= 13 {
-        return true;
-    }
-    // an IBAN: two letters, two digits, then 11 or more letters and digits
-    let squeezed: String = text.chars().filter(|c| !c.is_whitespace()).collect();
-    let up = squeezed.to_uppercase();
-    let b = up.as_bytes();
-    for i in 0..b.len().saturating_sub(15) {
-        let head = b[i].is_ascii_uppercase() && b[i + 1].is_ascii_uppercase() && b[i + 2].is_ascii_digit() && b[i + 3].is_ascii_digit();
-        if head && (i == 0 || !b[i - 1].is_ascii_alphanumeric()) && b[i + 4..].iter().take_while(|c| c.is_ascii_alphanumeric()).count() >= 11 {
-            return true;
-        }
-    }
-    // with an ID word: a code of 6 characters or more with 4 digits or more (« 12AB34567 », « 12 AB 34567 »)
-    if !holds(text, KEYS) {
-        return false;
-    }
-    let mut run = String::new();
-    let mut runs: Vec<String> = Vec::new();
-    for c in text.chars().chain(std::iter::once('.')) {
-        if c.is_ascii_alphanumeric() || (c == ' ' && !run.is_empty()) {
-            run.push(c);
-        } else {
-            runs.push(std::mem::take(&mut run));
-        }
-    }
-    runs.iter().flat_map(|r| {
-        // a run of words: its codes are the stretches of short groups that hold digits
-        let mut out: Vec<String> = Vec::new();
-        let mut code = String::new();
-        for group in r.split(' ') {
-            let coded = group.chars().any(|c| c.is_ascii_digit()) || (group.len() <= 3 && group.chars().all(|c| c.is_ascii_uppercase()) && !group.is_empty());
-            if coded {
-                code.push_str(group);
-            } else {
-                out.push(std::mem::take(&mut code));
-            }
-        }
-        out.push(code);
-        out
-    })
-    .any(|code| code.len() >= 6 && code.chars().filter(char::is_ascii_digit).count() >= 4 && !looks_like_date(&code))
-}
+/// An ID number in a fact: never kept (id_numbers.rs). An e-mail address, a site's login, a date or a phone number
+/// is not one.
+pub use super::id_numbers::id_number;
 
-fn looks_like_date(code: &str) -> bool {
-    code.len() == 8 && code.chars().all(|c| c.is_ascii_digit()) && (code.starts_with("19") || code.starts_with("20"))
-}
 
 /// An e-mail address, lower case (None: not one).
 pub fn email(text: &str) -> Option<String> {

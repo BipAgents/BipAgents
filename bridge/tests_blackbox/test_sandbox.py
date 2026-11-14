@@ -19,6 +19,7 @@ from pathlib import Path
 import yaml
 
 from bbkit.common import AUTH, answered as decisions
+from bbkit.mcp import not_done
 from bbkit.servers import free_port, wait_until
 from conftest import managed_install, profile, wait_registered
 
@@ -105,7 +106,7 @@ def rpc(bridge, who, method, params=None):
 
 def call(bridge, who, name, **arguments):
     result = rpc(bridge, who, "tools/call", {"name": name, "arguments": arguments}).json()["result"]
-    return result["content"][0]["text"], result["isError"]
+    return result["content"][0]["text"], not_done(result)
 
 
 def started(bridge, hub, names):

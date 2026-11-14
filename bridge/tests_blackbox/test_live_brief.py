@@ -9,6 +9,7 @@ import pytest
 
 from bbkit.common import AUTH
 from bbkit.fakes import split_brief_now, split_now, taken_notes, waiting_notes
+from bbkit.mcp import not_done
 from bbkit.servers import wait_until
 
 
@@ -344,11 +345,11 @@ def test_what_the_agent_noted_in_a_call_is_made_once_it_ends(bridge, fakes):
     hermes.add_session("s1", talk(4))
     # no call under way: said so, nothing noted
     refused = call(bridge, "after_call", {"what": "un audio"})
-    assert refused["isError"] and "no voice call" in text_of(refused)
+    assert not_done(refused) and "no voice call" in text_of(refused)
     live = bridge.post("/v1/live/calls/start", headers=AUTH, json={"agent": "wellness", "session": "s1"}).json()["live_session"]
     noted = call(bridge, "after_call", {"what": "Un audio de 1 min où je prononce « Hermès » lentement, en français"})
     assert not noted["isError"] and "as soon as the call ends" in text_of(noted)
-    assert call(bridge, "after_call", {"what": " "})["isError"]
+    assert not_done(call(bridge, "after_call", {"what": " "}))
     hermes.messages[("", live)] = [{"role": "user", "content": "Comment on prononce Hermès ?"},
                                    {"role": "assistant", "content": "Er-mès. Je te prépare un audio après l'appel."}]
     ended = bridge.post("/v1/live/calls", headers=AUTH, json={"agent": "wellness", "session": "s1", "live_session": live})

@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from .common import AUTH
+from .mcp import not_done
 from .model import ScriptedModel, picture
 from .servers import free_port, wait_until
 
@@ -83,7 +84,7 @@ class Journey:
         assert resp.status_code == 200, resp.text
         result = resp.json()["result"]
         text = "\n".join(p.get("text", "") for p in result.get("content", []))
-        if result.get("isError"):
+        if result.get("isError") or not_done(result):   # a refusal is plain on the wire (tool_answers.rs)
             raise RuntimeError(text)
         return text
 

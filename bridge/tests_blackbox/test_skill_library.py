@@ -5,6 +5,7 @@ back, the maker keeps its own. The agents' side is the `skill_library` MCP tool.
 import json
 
 from bbkit.common import AUTH
+from bbkit.mcp import not_done
 from bbkit.servers import wait_until
 from conftest import managed_install, profile, wait_registered
 from test_sandbox import TOKENS, give_tokens
@@ -26,7 +27,7 @@ def names(bridge, who):
 
 def tool(bridge, who, **arguments):
     result = rpc(bridge, who, "tools/call", {"name": "skill_library", "arguments": arguments})
-    return result["content"][0]["text"], result["isError"]
+    return result["content"][0]["text"], not_done(result)
 
 
 def registrations(bridge, name):

@@ -278,7 +278,7 @@ pub fn call_from(
                 format!("\nIn the Android phone's calendar (the reminders you added there, to come):\n{}", in_calendar.join("\n"))
             };
             if rows.is_empty() && !asked.is_empty() {
-                return Ok(tool_text(&format!("Not in the phone's copy yet:\n{}{in_calendar}", asked.join("\n")), false));
+                return Ok(tool_text(&format!("Asked, not in the phone's copy yet:\n{}{in_calendar}", asked.join("\n")), false));
             }
             let asked = if asked.is_empty() { String::new() } else { format!("\n{}", asked.join("\n")) };
             if rows.is_empty() && !in_calendar.is_empty() {

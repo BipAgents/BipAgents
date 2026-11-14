@@ -1918,13 +1918,24 @@ pub async fn serve(
             crate::names::localize_tools(&mut tools, &crate::handback::language_of(&config, &agent));
             Ok(web::json_response(200, &rpc(&id, json!({"tools": tools}))))
         }
-        "tools/call" if crate::update_drain::closing() => Ok(web::json_response(
-            200,
-            &rpc(&id, crate::update_drain::busy_result(&crate::handback::language_of(&config, &agent))),
-        )),
+        "tools/call" if crate::update_drain::closing() => {
+            let busy = crate::update_drain::busy_result(&crate::handback::language_of(&config, &agent));
+            Ok(web::json_response(200, &rpc(&id, crate::tool_answers::settle_value(server.name, &agent.name, busy))))
+        }
         "tools/call" => {
             let lang = crate::handback::language_of(&config, &agent);
             let name = params.get("name").and_then(Value::as_str).unwrap_or("").to_string();
+            // every answer as it goes to Hermes: a refusal plain, a real failure « don't retry » (tool_answers.rs)
+            let (caller, tool) = (agent.name.clone(), name.clone());
+            let settled = move |done: Result<anyhow::Result<Dict>, tokio::task::JoinError>| {
+                let mut result = match done {
+                    Ok(Ok(result)) => result,
+                    Ok(Err(err)) => crate::tool_answers::internal_failure(server.name, &tool, &format!("{err:#}")),
+                    Err(err) => crate::tool_answers::internal_failure(server.name, &tool, &err.to_string()),
+                };
+                crate::tool_answers::settle(server.name, &caller, &mut result);
+                Value::Object(result)
+            };
             let arguments = match params.get("arguments") {
                 Some(Value::Object(map)) => map.clone(),
                 _ => Dict::new(),
@@ -1942,8 +1953,8 @@ pub async fn serve(
                 result
             });
             if !stream {
-                let result = (&mut work).await.map_err(anyhow::Error::from)??;
-                return Ok(web::json_response(200, &rpc(&id, Value::Object(result))));
+                let result = settled((&mut work).await);
+                return Ok(web::json_response(200, &rpc(&id, result)));
             }
             let abort = work.abort_handle();
             let events = async_stream::stream! {
@@ -1954,14 +1965,8 @@ pub async fn serve(
                             yield Ok::<Bytes, Infallible>(Bytes::from(format!("event: message\ndata: {}\n\n", py::dumps(&request))));
                         }
                         done = &mut work => {
-                            match done {
-                                Ok(Ok(result)) => {
-                                    let payload = py::dumps(&rpc(&id, Value::Object(result)));
-                                    yield Ok(Bytes::from(format!("event: message\ndata: {payload}\n\n")));
-                                }
-                                Ok(Err(err)) => tracing::error!(server = server.name, exc = %format!("{err:#}"), "bridge tool failed"),
-                                Err(err) => tracing::error!(server = server.name, exc = %err, "bridge tool failed"),
-                            }
+                            let payload = py::dumps(&rpc(&id, settled(done)));
+                            yield Ok(Bytes::from(format!("event: message\ndata: {payload}\n\n")));
                             break;
                         }
                         _ = tokio::time::sleep(KEEPALIVE) => {

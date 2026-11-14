@@ -15,7 +15,7 @@ from cryptography.fernet import Fernet
 from websockets.asyncio.server import serve
 
 from bbkit.common import AUTH, answered
-from bbkit.mcp import give_token
+from bbkit.mcp import give_token, not_done
 from bbkit.servers import free_port, wait_until
 
 TOKEN = "agent-token-for-vie-0123456789abcdef"
@@ -280,7 +280,7 @@ def test_a_card_first_then_the_password_typed_into_password_fields_only_never_re
         assert item["pending"] is False and item["confirmed_at"]
         # Created and confirmed: a second sign-up for it is refused (log in with the vault instead).
         again = tool(bridge, "vault_create_login", ARGS)
-        assert again["isError"] is True and "already in the vault" in again["content"][0]["text"]
+        assert not_done(again) and "already in the vault" in again["content"][0]["text"]
         assert cards(bridge) == []
     finally:
         chrome.stop()
@@ -291,13 +291,13 @@ def test_a_refusal_conflicting_rules_another_site_or_a_known_login_type_nothing(
     try:
         bridge = login_bridge(bridges, fakes, chrome)
         conflict = tool(bridge, "vault_create_login", {**ARGS, "rules": {"require_symbol": True, "allowed_symbols": ""}})
-        assert conflict["isError"] is True
+        assert not_done(conflict)
         assert "a special character is required but none is allowed" in conflict["content"][0]["text"]
         elsewhere = tool(bridge, "vault_create_login", {**ARGS, "site": "other.example"})
-        assert elsewhere["isError"] is True and "not https://other.example" in elsewhere["content"][0]["text"]
+        assert not_done(elsewhere) and "not https://other.example" in elsewhere["content"][0]["text"]
         assert cards(bridge) == []
         refused, card = create(bridge, allow=False)
-        assert card and refused["isError"] is True and "The person refused" in refused["content"][0]["text"]
+        assert card and not_done(refused) and "The person refused" in refused["content"][0]["text"]
         assert chrome.typed == [] and bridge.get("/v1/vault", headers=AUTH).json()["items"] == []
         assert not [c for c in bridge.commands.of("podman") if "printf" in c[-1]]
         decided = answered(bridge, "vie")
@@ -310,7 +310,7 @@ def test_a_refusal_conflicting_rules_another_site_or_a_known_login_type_nothing(
                   "agents": ["vie"]}
         assert bridge.post("/v1/vault", headers=AUTH, json=person).status_code == 201
         known = tool(bridge, "vault_create_login", ARGS)
-        assert known["isError"] is True and "already in the vault" in known["content"][0]["text"]
+        assert not_done(known) and "already in the vault" in known["content"][0]["text"]
         assert chrome.typed == []
         # Its password stays write-only.
         item = bridge.get("/v1/vault", headers=AUTH).json()["items"][0]
@@ -340,7 +340,7 @@ def test_corrected_rules_within_the_window_need_no_new_card_and_replace_the_wait
         assert ops == ["add", "remove", "add"]
         # Another identifier is another account: a new card.
         other, card = create(bridge, {**ARGS, "username": "ines@example.org"}, allow=False)
-        assert card and other["isError"] is True
+        assert card and not_done(other)
     finally:
         chrome.stop()
 
@@ -352,13 +352,13 @@ def test_the_persons_hold_is_respected(bridges, fakes):
         hold = bridge.data / "browsers" / "vie" / "hold.token"
         hold.write_text("abc123\n")
         waiting = tool(bridge, "vault_create_login", ARGS)
-        assert waiting["isError"] is True and "using your browser" in waiting["content"][0]["text"]
+        assert not_done(waiting) and "using your browser" in waiting["content"][0]["text"]
         assert cards(bridge) == [] and chrome.typed == []
         hold.unlink()
         # Taken by the person while they were asked: the flag is there, nothing is typed.
         bridge.commands.rule("podman", ["exec", "bipagents-browser-vie", "sh", "-c"], exit=3, times=1)
         held, card = create(bridge)
-        assert card and held["isError"] is True and "using your browser" in held["content"][0]["text"]
+        assert card and not_done(held) and "using your browser" in held["content"][0]["text"]
         assert chrome.typed == [] and bridge.get("/v1/vault", headers=AUTH).json()["items"] == []
     finally:
         chrome.stop()
@@ -370,7 +370,7 @@ def test_never_typed_into_a_field_that_is_not_a_password(bridges, fakes):
         bridge = login_bridge(bridges, fakes, chrome)
         chrome.reported = [0]          # a page whose « password » field turned into its e-mail field
         result, card = create(bridge)
-        assert card and result["isError"] is True and "could not be typed" in result["content"][0]["text"]
+        assert card and not_done(result) and "could not be typed" in result["content"][0]["text"]
         assert chrome.typed == [] and chrome.value("email") == "alex@example.org"
         assert bridge.get("/v1/vault", headers=AUTH).json()["items"] == []
     finally:
@@ -387,7 +387,7 @@ def test_a_password_field_in_another_sites_frame_is_never_typed_into(bridges, fa
                       "http://shop.example/x", "about:blank"):
             chrome.fields_frame = frame
             refused = tool(bridge, "vault_create_login", ARGS)
-            assert refused["isError"] is True and "No password field" in refused["content"][0]["text"], frame
+            assert not_done(refused) and "No password field" in refused["content"][0]["text"], frame
         assert cards(bridge) == [] and chrome.typed == []
         assert bridge.get("/v1/vault", headers=AUTH).json()["items"] == []
         chrome.fields_frame = "https://shop.example/embedded-signup"
@@ -406,7 +406,7 @@ def test_a_page_that_left_the_site_before_typing_gets_nothing(bridges, fakes):
         bridge = login_bridge(bridges, fakes, chrome)
         chrome.live_origin = "https://evil.test"
         result, card = create(bridge)
-        assert card and result["isError"] is True and "could not be typed" in result["content"][0]["text"]
+        assert card and not_done(result) and "could not be typed" in result["content"][0]["text"]
         assert chrome.typed == [] and chrome.value("password") == "" and chrome.value("confirm") == ""
         assert bridge.get("/v1/vault", headers=AUTH).json()["items"] == []
     finally:

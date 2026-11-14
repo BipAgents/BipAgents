@@ -19,6 +19,12 @@ use bipbridge::config::{parse_config, Config};
 use serde_json::{json, Value};
 use tower::ServiceExt;
 
+/// A refusal, a policy decision or a limit as the bridge's MCP tools answer it on the wire (tool_answers.rs, 14/11):
+/// plain, never `isError` (three of those in a row and Hermes pauses all the bridge's tools), saying nothing was done.
+pub fn refused(result: &Value) -> bool {
+    result["isError"] == false && bipbridge::tool_answers::says_not_done(result["content"][0]["text"].as_str().unwrap_or(""))
+}
+
 pub const BRIDGE_KEY: &str = "test-bridge-key-0123456789abcdef0123456789";
 pub const HERMES_KEY: &str = "hermes-wellness-key-xyz";
 

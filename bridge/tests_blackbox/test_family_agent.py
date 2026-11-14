@@ -6,7 +6,7 @@ family's and is offered to take it over."""
 import json
 
 from bbkit.common import AUTH, sse
-from bbkit.mcp import call, give_token, rpc
+from bbkit.mcp import call, give_token, not_done, rpc
 from test_households_and_peers import household
 from test_shared_agents import link, wait
 
@@ -58,7 +58,7 @@ def test_every_member_gets_the_familys_agent(bridges, fakes):
     assert {"family_notebook_read", "family_notebook_write", "weather", "create_page"} <= names
     assert not names & {"mail_search", "propose_task", "notebook_read", "upcoming_dates", "list_pages", "read_page"}
     closed = call(a, "mail_search", {"query": "x"}, token=TOKEN)
-    assert closed["isError"] is True and "family's agent" in closed["content"][0]["text"]
+    assert not_done(closed) and "family's agent" in closed["content"][0]["text"]
     read = call(a, "family_notebook_read", {}, token=TOKEN)
     assert read["isError"] is False and "Lait" in read["content"][0]["text"]
     wrote = call(a, "family_notebook_write", {"op": "item_add", "list": lid, "text": "Pain"}, token=TOKEN)

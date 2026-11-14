@@ -93,7 +93,7 @@ async fn told_only_after_the_person_says_so() {
         json!({"name": "tell_family", "arguments": {"to": ["lea"], "message": "x"}}),
     )
     .await;
-    assert_eq!(alone["isError"], true);
+    assert!(common::refused(&alone), "{alone}");
     let before = agent_tools::tools_url(&a.app.state.config());
 
     // Linked (Alex invites, Léa joins).
@@ -132,7 +132,7 @@ async fn told_only_after_the_person_says_so() {
         json!({"name": "tell_family", "arguments": {"to": ["marc"], "message": "x"}}),
     )
     .await;
-    assert_eq!(wrong["isError"], true);
+    assert!(common::refused(&wrong), "{wrong}");
 
     // « Envoyer », the words changed: Léa's bridge keeps it for her first agent and notes it for its next turn.
     let id = proposal["id"].as_str().unwrap();

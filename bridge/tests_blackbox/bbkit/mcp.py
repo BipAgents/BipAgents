@@ -34,5 +34,15 @@ def text_of(result: Dict[str, Any]) -> str:
     return result["content"][0]["text"]
 
 
+#: What a refusal opens with (tool_answers.rs `NOT_DONE`, or a text that already says it: « Not saved: »…).
+REFUSAL_OPENINGS = ("Not ",)
+
+
+def not_done(result: Dict[str, Any]) -> bool:
+    """A refusal, a policy decision or a limit as the bridge's tools answer it (tool_answers.rs, 14/11): a plain answer,
+    never `isError` (three of those in a row and Hermes pauses all the bridge's tools), that says nothing was done."""
+    return result.get("isError") is False and text_of(result).startswith(REFUSAL_OPENINGS)
+
+
 def media_of(result: Dict[str, Any]) -> str:
     return text_of(result).split("MEDIA:")[1].split()[0]

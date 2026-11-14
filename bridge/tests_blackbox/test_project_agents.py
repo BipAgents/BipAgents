@@ -7,7 +7,7 @@ import json
 import time
 
 from bbkit.common import AUTH
-from bbkit.mcp import call, give_token, rpc, text_of
+from bbkit.mcp import call, give_token, not_done, rpc, text_of
 from test_read_shares import FakeGuichet, Phone, open_item
 
 TOKEN = "project-token-0123456789abcdefghij"
@@ -51,7 +51,7 @@ def test_a_project_agent_is_closed_and_its_whole_thread_is_shared(bridges, fakes
     assert {"weather", "create_page", "route", "map_image"} <= open_
     assert not open_ & {"mail_search", "notebook_read", "propose_task", "create_project_agent", "upcoming_dates"}
     closed = call(bridge, "mail_search", {"query": "banque"}, token=TOKEN)
-    assert closed["isError"] is True and "project agent" in text_of(closed)
+    assert not_done(closed) and "project agent" in text_of(closed)
     assert "project agent" not in json.dumps(call(bridge, "weather", {"place": "Lisbonne"}, token=TOKEN))
     refused = bridge.patch(f"/v1/agents/{agent}/settings", headers=AUTH, json={"toolsets": {"terminal": True}})
     assert refused.status_code == 400 and "project agent" in refused.json()["detail"]
@@ -173,4 +173,4 @@ def test_the_usual_agent_proposes_a_project_with_only_its_summary(bridges, fakes
     again = bridge.get("/v1/guide", headers=AUTH).json()["proposals"][0]
     assert bridge.post(f"/v1/guide/proposals/{again['id']}/decline", headers=AUTH).json() == {"ok": True}
     refused = call(bridge, "create_project_agent", {"name": "fête de léa", "summary": "Samedi."}, token=COACH_TOKEN)
-    assert refused["isError"] and "don't propose it again" in text_of(refused)
+    assert not_done(refused) and "don't propose it again" in text_of(refused)

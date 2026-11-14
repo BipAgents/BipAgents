@@ -14,6 +14,7 @@ import time
 import httpx
 
 from bbkit.common import AUTH
+from bbkit.mcp import not_done
 from bbkit.servers import wait_until
 from test_card_payments import CARD, CODE, NUMBER, tool
 from test_card_payments_chrome import CHROME, FIXTURES, Browser, pytestmark  # noqa: F401 (skipped without Chromium)
@@ -103,7 +104,7 @@ def test_in_stock_urgent_push_code_paid_in_the_real_page(bridges, fakes):
 def test_in_stock_nobody_answers_the_cart_waits(bridges, fakes):
     shop, browser, bridge, side, gate = journey(bridges, fakes, window=3)
     try:
-        assert side.done.wait(30) and side.result["isError"] is True
+        assert side.done.wait(30) and not_done(side.result)
         assert "Panier prêt" in side.result["content"][0]["text"]
         values = browser.values()["selects.html"]
         assert values["numero"] == "" and values["crypto"] == ""   # nothing typed, the page as the agent left it

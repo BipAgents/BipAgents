@@ -43,7 +43,17 @@ pub const LINES: usize = 3;
 /// Pages a search without words lists (the latest).
 pub const LATEST: usize = 10;
 
-const ID_NUMBER: &str = "Not saved: ID numbers are never kept.";
+const ID_NUMBER: &str = "Not saved: ID numbers are never kept";
+
+/// An ID number refused (lexicon::id_number), and where it was: the agent writes it again without it, instead of
+/// guessing what was wrong (14/11 bench: an e-mail taken out three times while a date was the culprit).
+fn id_refused(place: &str) -> Dict {
+    tool_text(
+        &format!("{ID_NUMBER}, and {place} holds one. Write it again without the number (an e-mail address, a login or \
+a date is fine)."),
+        true,
+    )
+}
 const SEVERAL: &str = "Ask which one.";
 
 fn private_property() -> Value {
@@ -517,9 +527,12 @@ fn write(config: &Config, agent: &str, arguments: &Dict, turn: &Turn, health: bo
             .collect(),
         _ => Vec::new(),
     };
-    let texts = facts.iter().chain(std::iter::once(&summary)).chain(fixes.iter().map(|(_, new)| new));
-    if texts.into_iter().any(|t| lexicon::id_number(t)) {
-        return Ok(tool_text(ID_NUMBER, true));
+    let places = facts.iter().enumerate().map(|(n, fact)| (format!("fact {}", n + 1), fact));
+    let places = places
+        .chain(std::iter::once(("the summary".to_string(), &summary)))
+        .chain(fixes.iter().map(|(_, new)| ("a fix".to_string(), new)));
+    if let Some((place, _)) = places.into_iter().find(|(_, text)| lexicon::id_number(text)) {
+        return Ok(id_refused(&place));
     }
     let w = super::words(&super::language(config));
     let health_page = super::fold(&page) == super::fold(w.health) || super::fold(&page) == "health";
@@ -703,7 +716,7 @@ fn task(config: &Config, agent: &str, arguments: &Dict, health: bool) -> anyhow:
             let part = if private { Part::Health } else { Part::Main };
             let title = s(arguments, "title");
             if lexicon::id_number(&title) {
-                return Ok(tool_text(ID_NUMBER, true));
+                return Ok(id_refused("the title"));
             }
             let added = super::add_task(
                 config,
@@ -853,12 +866,12 @@ fn record(config: &Config, agent: &str, arguments: &Dict, turn: &Turn) -> anyhow
             let Some(kind) = kind.or_else(|| record_by_id(config, None, &s(arguments, "id")).map(|(k, _, _)| k)) else {
                 return Ok(tool_text(types, true));
             };
-            let numbered = fields.iter().any(|(k, v)| {
-                let v = tk::str_or_empty(Some(v));
-                lexicon::id_number(&v) || (kind.id == "paper" && k == "number" && !v.trim().is_empty())
+            let numbered = fields.iter().find(|(k, v)| {
+                let v = tk::str_or_empty(Some(*v));
+                lexicon::id_number(&v) || (kind.id == "paper" && *k == "number" && !v.trim().is_empty())
             });
-            if numbered {
-                return Ok(tool_text(ID_NUMBER, true));
+            if let Some((field, _)) = numbered {
+                return Ok(id_refused(&format!("the field « {field} »")));
             }
             if kind.id == "paper" {
                 super::papers::clean_fields(config, &mut fields);
@@ -1115,7 +1128,7 @@ mod tests {
         assert!(private.contains("Asthme léger"));
         // ID numbers: never kept
         let (said, error) = run(&config, "quotidien", WRITE, json!({"page": "Zoé Roux", "facts": ["Passeport : 12AB34567"]}), &t);
-        assert!(error && said == ID_NUMBER);
+        assert!(error && said.starts_with(ID_NUMBER), "{said}");
     }
 
     /// bridge-tools-no-breaker (14/11): DeepSeek's notes after a sign-up on the bench, refused three times in a row
@@ -1199,7 +1212,7 @@ number (an e-mail address, a login or a date is fine).");
         assert!(got.contains("number: HAB-778812"), "{got}");
         let (said, error) = run(&config, "quotidien", RECORD, json!({"action": "add", "type": "paper",
             "fields": {"document": "Passeport", "holder": "Léa", "number": "12AB34567"}}), &t);
-        assert!(error && said == ID_NUMBER);
+        assert!(error && said.starts_with(ID_NUMBER), "{said}");
         let (said, _) = run(&config, "quotidien", RECORD, json!({"action": "add", "type": "booking",
             "fields": {"date": "2026-12-01", "what": "Hôtel", "with": "Ibis"}}), &t);
         assert!(said.contains("Ibis"), "a booking's « with » is its provider: {said}");
