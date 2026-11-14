@@ -1,14 +1,19 @@
 //! What the Carnet never keeps: ID numbers (passports, ID cards, social security, tax numbers, driving licences, bank
 //! cards, IBAN), in the usual forms of the four languages (`lexicon::id_number`). An e-mail address or a site's login
-//! is not one, nor a date or a phone number.
+//! is not one, nor a date, a time, a phone number, a book's ISBN, an order or a parcel's number.
 //!
 //! bridge-tools-no-breaker (14/11): on the sign-up bench, DeepSeek's note « Compte client créé le 14 novembre 2026 sur
 //! la Pharmacie des Essais… » was refused three times in a row: the IBAN check squeezed the spaces out of the whole
 //! text and read « LE14NOVEMBRE2026SURLA… » as one (two letters, two digits, eleven more). The agent took its e-mail
 //! login for the culprit, took it out, and was refused again; Hermes then paused all the bridge's tools for a minute.
 //! Now an IBAN is a country's code with its own length, written in one block or in groups of four, mostly digits;
-//! e-mail and web addresses and dates are set aside before any check; short words that are also common words (« nie »:
-//! German for « never ») count only in capitals.
+//! e-mail and web addresses, dates, times, phone numbers (after their word) and ISBNs are set aside before any check;
+//! short words that are also common words (« nie »: German for « never ») count only in capitals.
+//!
+//! Review 1 (14/11): the everyday names (« Steuer-Nr. », « SV-Nummer », « Pass-Nr. », « ID number », « pièce
+//! d'identité »…), a NIR written with dots, a card with dashes or double spaces are refused; a long number with dashes
+//! (an order, a book) is no card unless it has a card's shape; a parcel's or an order's long number is kept unless it
+//! is a card's (its check digit, or a card named).
 
 use std::sync::LazyLock;
 
@@ -19,25 +24,39 @@ use super::fold;
 /// Words that say an ID number follows, folded (`fold`); `*`: any word starting so (the German compounds).
 const KEYS: &[&str] = &[
     // fr
-    "passeport", "carte d identite", "carte identite", "carte nationale d identite", "titre de sejour",
-    "permis de conduire", "securite sociale", "secu", "carte vitale", "numero fiscal", "carte bancaire",
-    "numero de carte", "cni", "nir",
+    "passeport", "carte d identite", "carte identite", "carte nationale d identite", "piece d identite",
+    "numero d identite", "titre de sejour", "permis de conduire", "securite sociale", "secu", "carte vitale",
+    "numero fiscal", "carte bancaire", "numero de carte", "cni", "nir",
     // en
-    "passport", "id card", "identity card", "driving licence", "driver s license", "drivers license",
-    "social security", "ssn", "national insurance", "ni number", "card number", "credit card", "tax id",
+    "passport", "id card", "identity card", "id number", "id no", "driving licence", "driving license",
+    "driver s license", "driver s licence", "drivers license", "driver license", "driver licence", "social security",
+    "ssn", "national insurance", "ni number", "card number", "credit card", "tax id",
     // de
-    "reisepass*", "passnummer", "personalausweis*", "ausweis*", "fuhrerschein*", "sozialversicherung*",
-    "rentenversicherung*", "versicherungsnummer", "steuer id", "steuerid*", "steuernummer",
-    "steueridentifikationsnummer", "kreditkarte*", "kartennummer",
+    "reisepass*", "pass nr", "passnummer", "personalausweis*", "ausweis*", "fuhrerschein*", "sozialversicherung*",
+    "rentenversicherung*", "versicherungsnummer", "sv nummer", "steuer id", "steuerid*", "steuer nr", "steuernummer",
+    "steueridentifikationsnummer", "identifikationsnummer", "idnr", "kreditkarte*", "kartennummer",
     // es
-    "pasaporte", "carnet de conducir", "permiso de conducir", "seguridad social", "tarjeta", "dni", "nif", "cif",
-    "nss",
+    "pasaporte", "carnet de conducir", "permiso de conducir", "licencia de conducir", "seguridad social", "tarjeta",
+    "dni", "nif", "cif", "nss",
     // all
     "iban", "mrz",
 ];
 
 /// Short words that are an ID's name only in capitals (« nie » is German for « never », « niño » folds to « nino »).
 const CAPITALS: &[&str] = &["NIE", "NINO"];
+
+/// Words that name a bank card or account (folded): a long number near one is the person's, whatever its check digit.
+const BANK_WORDS: &[&str] = &[
+    "carte", "card", "karte*", "kreditkarte*", "tarjeta", "cb", "visa", "mastercard", "amex", "maestro", "bancaire",
+    "rib", "iban", "virement", "konto*", "cuenta",
+];
+
+/// Words of a parcel or an order (folded): their long numbers are no ID numbers (a card's or an account's still is).
+const PARCEL_WORDS: &[&str] = &[
+    "colis", "suivi", "commande", "livraison", "parcel", "tracking", "order", "shipment", "delivery", "sendung*",
+    "paket", "bestellung*", "lieferung", "paquete", "envio", "pedido", "seguimiento", "dhl", "ups", "fedex", "gls",
+    "colissimo", "chronopost", "dpd", "amazon",
+];
 
 /// Each IBAN country's length (SWIFT's IBAN registry).
 const IBAN_LENGTHS: &[(&str, usize)] = &[
@@ -58,9 +77,27 @@ static ADDRESSES: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?i)[\w.%+\-]+@[\w\-]+(?:\.[\w\-]+)*\.[a-z]{2,}|\bhttps?://\S+|\bwww\.\S+").expect("valid regex")
 });
 
+/// A French social security number (NIR) written in its groups (« 1 85 05 78 006 084 36 », « 2.05.12.75.116.001.42 »),
+/// looked for before the dates are set aside (« 2.05.12 » could be one).
+static NIR: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\b[1-478][ .\-]\d{2}[ .\-](?:0[1-9]|1[0-2]|[2-9]\d)[ .\-](?:\d{2}|2[ABab])[ .\-]\d{3}[ .\-]\d{3}(?:[ .\-]\d{2})?\b")
+        .expect("valid regex")
+});
+
+/// A bank card's shape: four groups of four (the last 1 to 4), or Amex's 4-6-5, apart by a dash, a dot or spaces.
+static CARD: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\b\d{4}(?:\s{1,3}|[.\-])\d{4}(?:\s{1,3}|[.\-])\d{4}(?:\s{1,3}|[.\-])\d{1,4}\b|\b3[47]\d{2}(?:\s{1,3}|[.\-])\d{6}(?:\s{1,3}|[.\-])\d{5}\b")
+        .expect("valid regex")
+});
+
 /// Dates in numbers (« 14/03/1991 », « 14.03.2026 », « 2031-03-12 »): set aside when they can be one (`a_date`).
 static NUMBER_DATES: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\b(\d{1,4})[./\-](\d{1,2})[./\-](\d{1,4})\b").expect("valid regex"));
+
+/// A month and its year (« 03.2031 », « 03/2031 », « 2031-03 »): a validity, never an ID.
+static MONTH_YEARS: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\b(?:0?[1-9]|1[0-2])[./\-](?:19|20)\d{2}\b|\b(?:19|20)\d{2}[./\-](?:0[1-9]|1[0-2])\b").expect("valid regex")
+});
 
 /// Dates with the month's name, in the four languages (« 14 novembre 2026 », « 14 March 2026 », « March 14, 2026 »,
 /// « 14. März 2026 », « 14 de marzo de 2026 »).
@@ -77,9 +114,35 @@ diciembre|dic";
     .expect("valid regex")
 });
 
-/// Times of day (« 14h30 », « 10:30 », « 9 h »): set aside too.
-static TIMES: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?i)\b\d{1,2}\s?[h:]\s?\d{2}\b|\b\d{1,2}\s?h\b").expect("valid regex"));
+/// Times of day (« 14h30 », « 10:30 », « 9.00 », « 9 h »): set aside too.
+static TIMES: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)\b(?:[01]?\d|2[0-3])\s?[h:.]\s?[0-5]\d\b|\b\d{1,2}\s?h\b").expect("valid regex")
+});
+
+/// A phone number after its word (« tél. 01 23 45 67 89 », « Telefon 030 1234567 », « móvil: +34 612 345 678 »).
+static PHONES: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)\b(?:t[ée]l(?:[ée]phone)?|telefon|phone|mobile?|handy|portable|m[óo]vil|tel[ée]fono|fax|fixe)\b\.?\s*:?\s*\+?[\d(][\d .\-/()]{4,}\d")
+        .expect("valid regex")
+});
+
+/// A book's number: after « ISBN », or an ISBN-13 (978/979) whose check digit holds.
+static ISBN: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)\bISBN(?:-1[03])?\s*:?\s*[\dX][\d\- X]{8,16}[\dX]\b|\b97[89]\d{10}\b").expect("valid regex")
+});
+
+/// A Spanish DNI (8 digits and its letter) or NIE (X, Y or Z, 7 digits and its letter): its letter checks it.
+static DNI: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\b([XYZ]?)(\d{7,8})[\- ]?([A-Z])\b").expect("valid regex"));
+
+/// An ID number in a fact: never kept.
+pub fn id_number(text: &str) -> bool {
+    let text = ADDRESSES.replace_all(text, " ");
+    if NIR.is_match(&text) || cards(&text) {
+        return true;
+    }
+    let text = set_aside(&text);
+    long_digits(&text) || iban(&text) || dni(&text) || (named(&text) && coded(&text))
+}
 
 /// Whether three numbers can be a date: day, month and year (or year, month, day; or month, day, year), a year of
 /// four digits between 1900 and 2100 (« 012-05-1120 » is a social security number, not a date).
@@ -93,37 +156,63 @@ fn a_date(a: &str, b: &str, c: &str) -> bool {
     a.len() <= 2 && year(c) && (day_month(n(a), n(b)) || day_month(n(b), n(a)))
 }
 
-/// The text with its e-mail and web addresses, its dates and times set aside.
+/// The text with its e-mail and web addresses, its phone numbers (after their word), books, dates and times set aside.
 fn set_aside(text: &str) -> String {
     let text = ADDRESSES.replace_all(text, " ");
+    let text = PHONES.replace_all(&text, " ");
+    let text = ISBN.replace_all(&text, |c: &regex::Captures| {
+        let found = &c[0];
+        let digits: String = found.chars().filter(char::is_ascii_digit).collect();
+        if found.to_ascii_uppercase().starts_with("ISBN") || isbn13(&digits) { " ".to_string() } else { found.to_string() }
+    });
     let text = NAMED_DATES.replace_all(&text, " ");
-    let text = TIMES.replace_all(&text, " ");
-    NUMBER_DATES
-        .replace_all(&text, |c: &regex::Captures| {
-            if a_date(&c[1], &c[2], &c[3]) { " ".to_string() } else { c[0].to_string() }
-        })
-        .into_owned()
+    let text = NUMBER_DATES.replace_all(&text, |c: &regex::Captures| {
+        if a_date(&c[1], &c[2], &c[3]) { " ".to_string() } else { c[0].to_string() }
+    });
+    let text = MONTH_YEARS.replace_all(&text, " ");
+    TIMES.replace_all(&text, " ").into_owned()
 }
 
-/// A Spanish DNI (8 digits and its letter) or NIE (X, Y or Z, 7 digits and its letter): its letter checks it.
-static DNI: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\b([XYZ]?)(\d{7,8})[\- ]?([A-Z])\b").expect("valid regex"));
-
-/// An ID number in a fact: never kept.
-pub fn id_number(text: &str) -> bool {
-    let text = set_aside(text);
-    long_digits(&text) || iban(&text) || dni(&text) || (named(&text) && coded(&text))
+/// An ISBN-13 whose check digit holds.
+fn isbn13(digits: &str) -> bool {
+    let d: Vec<u32> = digits.chars().filter_map(|c| c.to_digit(10)).collect();
+    d.len() == 13 && d.iter().enumerate().map(|(i, x)| if i % 2 == 0 { *x } else { 3 * x }).sum::<u32>().is_multiple_of(10)
 }
 
-/// A digit's joiner inside a long number: one space (a no-break one too), a dash or a dot between two digits.
-fn joins(c: char) -> bool {
-    matches!(c, ' ' | '\u{a0}' | '\u{202f}' | '-' | '.')
+/// A number whose last digit checks it as a card's does (Luhn).
+fn luhn(digits: &str) -> bool {
+    let d: Vec<u32> = digits.chars().filter_map(|c| c.to_digit(10)).collect();
+    let sum: u32 = d
+        .iter()
+        .rev()
+        .enumerate()
+        .map(|(i, x)| if i % 2 == 1 { if *x * 2 > 9 { *x * 2 - 9 } else { *x * 2 } } else { *x })
+        .sum();
+    !d.is_empty() && sum.is_multiple_of(10)
 }
 
-/// A long run of digits (13 or more, groups joined by `joins`): a card, a social security or tax number, an account.
-/// A phone number (after « + » or « 00 »: 15 digits at most) is left out.
+/// Folded words of `list` in `text` (`*`: a word starting so).
+fn holds(text: &str, list: &[&str]) -> bool {
+    let padded = format!(" {} ", fold(text));
+    list.iter().any(|k| match k.strip_suffix('*') {
+        Some(stem) => padded.split(' ').any(|w| !w.is_empty() && w.starts_with(stem)),
+        None => padded.contains(&format!(" {k} ")),
+    })
+}
+
+/// A bank card written in its groups (`CARD`): a card's check digit, or a card or an account named in the text.
+fn cards(text: &str) -> bool {
+    let named = holds(text, BANK_WORDS);
+    CARD.find_iter(text).any(|m| named || luhn(&m.as_str().chars().filter(char::is_ascii_digit).collect::<String>()))
+}
+
+/// A long run of digits (13 or more, groups apart by up to three spaces): a card, a social security or tax number, an
+/// account. A phone number (after « + » or « 00 »: 15 digits at most) is left out, and so is a parcel's or an order's
+/// number (`PARCEL_WORDS`) unless it checks as a card's, or a card, an account or an ID is named.
 fn long_digits(text: &str) -> bool {
     let chars: Vec<char> = text.chars().collect();
+    let parcel = holds(text, PARCEL_WORDS) && !holds(text, BANK_WORDS) && !named(text);
+    let space = |c: char| matches!(c, ' ' | '\u{a0}' | '\u{202f}');
     let mut i = 0;
     while i < chars.len() {
         if !chars[i].is_ascii_digit() {
@@ -135,14 +224,21 @@ fn long_digits(text: &str) -> bool {
         while i < chars.len() {
             if chars[i].is_ascii_digit() {
                 digits.push(chars[i]);
-            } else if !(joins(chars[i]) && i > 0 && chars[i - 1].is_ascii_digit() && chars.get(i + 1).is_some_and(char::is_ascii_digit)) {
-                break;
+                i += 1;
+                continue;
             }
-            i += 1;
+            // a gap of one to three spaces between two digits joins them
+            let gap = chars[i..].iter().take_while(|c| space(**c)).count();
+            if (1..=3).contains(&gap) && chars.get(i + gap).is_some_and(char::is_ascii_digit) {
+                i += gap;
+                continue;
+            }
+            break;
         }
         let after_plus = start > 0 && chars[..start].iter().rev().find(|c| !c.is_whitespace()) == Some(&'+');
         let phone = (after_plus && digits.len() <= 15) || (digits.starts_with("00") && digits.len() <= 17);
-        if digits.len() >= 13 && !phone {
+        let card = (13..=19).contains(&digits.len()) && luhn(&digits);
+        if digits.len() >= 13 && !phone && !(parcel && !card) {
             return true;
         }
     }
@@ -216,18 +312,16 @@ fn dni(text: &str) -> bool {
 
 /// An ID's name in the text (`KEYS`, `CAPITALS`).
 fn named(text: &str) -> bool {
-    let padded = format!(" {} ", fold(text));
-    let key = KEYS.iter().any(|k| match k.strip_suffix('*') {
-        Some(stem) => padded.split(' ').any(|w| !w.is_empty() && w.starts_with(stem)),
-        None => padded.contains(&format!(" {k} ")),
-    });
-    key || text.split(|c: char| !c.is_alphanumeric()).any(|w| CAPITALS.contains(&w))
+    holds(text, KEYS) || text.split(|c: char| !c.is_alphanumeric()).any(|w| CAPITALS.contains(&w))
 }
 
-/// A code next to an ID's name: 6 characters or more, 2 digits or more (« 12AB34567 », « 12 AB 34567 », « X4RTBPFW4 »,
-/// « 123-45-6789 », « QQ 12 34 56 C »): the stretches of short groups that hold a digit or are a few capitals.
+/// A code next to an ID's name: 6 characters or more, with 4 digits or more, or 8 or more mixing 2 digits and 2
+/// letters or more (« 12AB34567 », « 12 AB 34567 », « X4RTBPFW4 », « 123-45-6789 », « 21/815/08150 », « QQ 12 34 56
+/// C »): the stretches of short groups that hold a digit or are a few capitals, apart by spaces, dashes, dots or
+/// slashes.
 fn coded(text: &str) -> bool {
     let chars: Vec<char> = text.chars().collect();
+    let joins = |c: char| matches!(c, ' ' | '\u{a0}' | '\u{202f}' | '-' | '.' | '/');
     let mut runs: Vec<Vec<String>> = vec![Vec::new()];
     let mut group = String::new();
     for (i, c) in chars.iter().enumerate() {
@@ -235,9 +329,7 @@ fn coded(text: &str) -> bool {
             group.push(*c);
             continue;
         }
-        let inside = joins(*c)
-            && !group.is_empty()
-            && chars.get(i + 1).is_some_and(char::is_ascii_alphanumeric);
+        let inside = joins(*c) && !group.is_empty() && chars.get(i + 1).is_some_and(char::is_ascii_alphanumeric);
         if let Some(run) = runs.last_mut() {
             run.push(std::mem::take(&mut group));
         }
@@ -259,7 +351,8 @@ fn coded(text: &str) -> bool {
                 code.push_str(group);
             } else {
                 let digits = code.chars().filter(char::is_ascii_digit).count();
-                found |= code.len() >= 6 && digits >= 2;
+                let letters = code.chars().filter(char::is_ascii_alphabetic).count();
+                found |= code.len() >= 6 && (digits >= 4 || (digits >= 2 && letters >= 2 && code.len() >= 8));
                 code.clear();
             }
         }
@@ -321,7 +414,10 @@ mod tests {
 
     #[test]
     fn each_check_alone() {
-        assert!(long_digits("4970 1012 3456 7890") && long_digits("4970-1012-3456-7890"));
+        assert!(long_digits("4970 1012 3456 7890") && cards("Carte 4970-1012-3456-7890") && cards("4111.1111.1111.1111"));
+        assert!(!long_digits("402-9384756-1029384") && !cards("402-9384756-1029384") && !cards("2026 2027 2028 2029"));
+        assert!(NIR.is_match("2.05.12.75.116.001.42") && !NIR.is_match("402-9384756-1029384"));
+        assert!(!long_digits("Colis 00340434161094042557") && long_digits("Commande payée par carte 4970101234567890"));
         assert!(!long_digits("+49 151 23456789") && !long_digits("0049 151 23456789") && !long_digits("06 12 34 56 78"));
         assert!(iban("FR76 3000 6000 0112 3456 7890 189") && iban("fr7630006000011234567890189") && iban("BE 68 5390 0754 7034"));
         assert!(!iban("LE14NOVEMBRE2026SURLAPHARMACIE") && !iban("Lu 12 fois avec Paul dans le train"));

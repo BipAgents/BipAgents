@@ -527,10 +527,16 @@ fn write(config: &Config, agent: &str, arguments: &Dict, turn: &Turn, health: bo
             .collect(),
         _ => Vec::new(),
     };
+    // every text written: the facts, the summary, the fixes, and the page's name, its aliases and its contact (a
+    // file's name and its front matter: review 1, « Personnes/Passeport de Léa 12AB34567.md »)
+    let (aliases, contact) = (args_list(arguments, "aliases"), s(arguments, "contact"));
     let places = facts.iter().enumerate().map(|(n, fact)| (format!("fact {}", n + 1), fact));
     let places = places
         .chain(std::iter::once(("the summary".to_string(), &summary)))
-        .chain(fixes.iter().map(|(_, new)| ("a fix".to_string(), new)));
+        .chain(fixes.iter().map(|(_, new)| ("a fix".to_string(), new)))
+        .chain(std::iter::once(("the page's name".to_string(), &page)))
+        .chain(aliases.iter().map(|alias| ("an alias".to_string(), alias)))
+        .chain(std::iter::once(("the contact".to_string(), &contact)));
     if let Some((place, _)) = places.into_iter().find(|(_, text)| lexicon::id_number(text)) {
         return Ok(id_refused(&place));
     }
@@ -548,7 +554,6 @@ fn write(config: &Config, agent: &str, arguments: &Dict, turn: &Turn, health: bo
         k if k.is_empty() => "person".to_string(),
         k => k,
     };
-    let (aliases, contact) = (args_list(arguments, "aliases"), s(arguments, "contact"));
     let (start, end) = (s(arguments, "start"), s(arguments, "end"));
     let close = arguments.get("close").and_then(Value::as_bool);
     let mut out: Vec<String> = Vec::new();
@@ -717,6 +722,9 @@ fn task(config: &Config, agent: &str, arguments: &Dict, health: bool) -> anyhow:
             let title = s(arguments, "title");
             if lexicon::id_number(&title) {
                 return Ok(id_refused("the title"));
+            }
+            if lexicon::id_number(&s(arguments, "page")) {
+                return Ok(id_refused("the page's name"));
             }
             let added = super::add_task(
                 config,

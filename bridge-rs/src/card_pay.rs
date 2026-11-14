@@ -1920,20 +1920,22 @@ pub async fn serve(
         }
         "tools/call" if crate::update_drain::closing() => {
             let busy = crate::update_drain::busy_result(&crate::handback::language_of(&config, &agent));
-            Ok(web::json_response(200, &rpc(&id, crate::tool_answers::settle_value(server.name, &agent.name, busy))))
+            let name = params.get("name").and_then(Value::as_str).unwrap_or("");
+            let busy = crate::tool_answers::settle_value_for(&state.hub, server.name, &agent.name, name, busy);
+            Ok(web::json_response(200, &rpc(&id, busy)))
         }
         "tools/call" => {
             let lang = crate::handback::language_of(&config, &agent);
             let name = params.get("name").and_then(Value::as_str).unwrap_or("").to_string();
             // every answer as it goes to Hermes: a refusal plain, a real failure « don't retry » (tool_answers.rs)
-            let (caller, tool) = (agent.name.clone(), name.clone());
+            let (caller, tool, hub) = (agent.name.clone(), name.clone(), state.hub.clone());
             let settled = move |done: Result<anyhow::Result<Dict>, tokio::task::JoinError>| {
                 let mut result = match done {
                     Ok(Ok(result)) => result,
                     Ok(Err(err)) => crate::tool_answers::internal_failure(server.name, &tool, &format!("{err:#}")),
                     Err(err) => crate::tool_answers::internal_failure(server.name, &tool, &err.to_string()),
                 };
-                crate::tool_answers::settle(server.name, &caller, &mut result);
+                crate::tool_answers::settle_for(&hub, server.name, &caller, &tool, &mut result);
                 Value::Object(result)
             };
             let arguments = match params.get("arguments") {

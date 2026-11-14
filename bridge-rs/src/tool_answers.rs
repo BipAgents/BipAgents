@@ -65,47 +65,93 @@ pub fn mark_failure(result: &mut Dict) {
     }
 }
 
+/// What a failure with no text of its own says when it goes out plain (`settle`).
+pub const FAILED_SILENTLY: &str = "this call failed (its answer said nothing more).";
+
 /// A tool call's answer as it goes to Hermes, from `server` to `agent` (module doc): a refusal plain, a real failure
-/// with `isError` at most `STREAK` times in a row.
-pub fn settle(server: &str, agent: &str, result: &mut Dict) {
+/// with `isError` at most `STREAK` times in a row. True when it goes out plain saying nothing was done: Hermes then
+/// reports the call as done (`tool.completed` `error` false), so the caller tells the hub (`settle_for`).
+pub fn settle(server: &str, agent: &str, result: &mut Dict) -> bool {
     let failure = result.remove(FAILURE_MARK).is_some_and(|v| v == Value::Bool(true));
     let error = result.get("isError").is_some_and(crate::py::truthy);
     let key = (server.to_string(), agent.to_string());
     let mut streaks = STREAKS.lock().unwrap_or_else(|e| e.into_inner());
     if !error {
         streaks.remove(&key);
-        return;
+        return false;
     }
     if failure {
         let streak = streaks.entry(key.clone()).or_insert(0);
         if *streak < STREAK {
             *streak += 1;
             result.insert("isError".into(), Value::Bool(true));
-            return;
+            return false;
         }
         streaks.remove(&key);
         drop(streaks);
         tracing::warn!(server = server, agent = agent, "a third failure in a row: sent plain (Hermes' breaker)");
         result.insert("isError".into(), Value::Bool(false));
+        // a failure without a text (a connector's empty content, an image, only structuredContent): one that says so
+        if first_text(result).is_none() {
+            let content = result.entry("content").or_insert_with(|| Value::Array(Vec::new()));
+            if !content.is_array() {
+                *content = Value::Array(Vec::new());
+            }
+            if let Value::Array(blocks) = content {
+                blocks.insert(0, serde_json::json!({"type": "text", "text": FAILED_SILENTLY}));
+            }
+        }
+        say_not_done(result);
         add_text(result, FAILED_AGAIN);
-        return;
+        return true;
     }
     streaks.remove(&key);
     drop(streaks);
     result.insert("isError".into(), Value::Bool(false));
     say_not_done(result);
+    true
 }
 
-/// A JSON-RPC result value settled (`settle`): an object answer, else as it is.
-pub fn settle_value(server: &str, agent: &str, result: Value) -> Value {
+/// [`settle`], and when the answer goes out plain saying nothing was done, the hub told (`RunHub::refused_call`): it
+/// relays that call's `tool.completed` as failed (the apps' step, the safety net, the brake).
+pub fn settle_for(hub: &crate::runs::RunHub, server: &str, agent: &str, tool: &str, result: &mut Dict) {
+    if settle(server, agent, result) {
+        hub.refused_call(agent, server, tool);
+    }
+}
+
+/// [`settle_for`] on a JSON-RPC result value (an object answer; anything else as it is).
+pub fn settle_value_for(hub: &crate::runs::RunHub, server: &str, agent: &str, tool: &str, result: Value) -> Value {
     match result {
         Value::Object(mut map) => {
-            settle(server, agent, &mut map);
+            settle_for(hub, server, agent, tool, &mut map);
             Value::Object(map)
         }
         other => other,
     }
 }
+
+/// What Hermes kept of a call (`{"result": …}` for a plain answer, `_render_call_tool_result`): one of the bridge's
+/// tools (or a connector's) that said nothing was done. For what the hub can't have been told: the history
+/// (threads/timeline.rs), a run event's preview.
+pub fn refused_in_hermes(tool: &str, rendered: &str) -> bool {
+    let ours = tool.contains("bipagents") || tool.contains(crate::connectors::ENTRY_PREFIX);
+    ours && rendered_not_done(rendered)
+}
+
+/// A result as Hermes renders it whose text says nothing was done (`{"result": "Not …"}`); a cut one too.
+pub fn rendered_not_done(rendered: &str) -> bool {
+    let rendered = rendered.trim_start();
+    match serde_json::from_str::<Value>(rendered) {
+        Ok(value) => value.get("result").and_then(Value::as_str).is_some_and(|t| says_not_done(t.trim_start())),
+        Err(_) => rendered.starts_with("{\"result\": \"Not ") || rendered.starts_with("{\"result\":\"Not "),
+    }
+}
+
+fn first_text(result: &Dict) -> Option<&str> {
+    result.get("content")?.as_array()?.iter().find_map(|b| b.get("text").and_then(Value::as_str))
+}
+
 
 /// The first text of a refusal opened with `NOT_DONE`, unless it already says nothing was done.
 fn say_not_done(result: &mut Dict) {
@@ -200,7 +246,8 @@ mod tests {
 
     /// A tool with an `outputSchema` needs a `structuredContent` fitting it in every answer, refusals included, or
     /// Hermes' MCP client refuses the answer (and counts it): the browser's proxy does it (browser_mcp.rs `fitting`);
-    /// none of the bridge's own tools declares one.
+    /// none of the bridge's own tools declares one, and a connector's entry lists its program's tools without theirs
+    /// (connectors.rs `served_tools`).
     #[test]
     fn no_tool_of_the_bridge_declares_an_output_schema() {
         fn walk(dir: &std::path::Path, found: &mut Vec<String>) {
@@ -209,7 +256,7 @@ mod tests {
                 if path.is_dir() {
                     walk(&path, found);
                 } else if path.extension().is_some_and(|e| e == "rs")
-                    && !["browser_mcp.rs", "tool_answers.rs"].contains(&path.file_name().unwrap().to_str().unwrap())
+                    && !["browser_mcp.rs", "tool_answers.rs", "connectors.rs"].contains(&path.file_name().unwrap().to_str().unwrap())
                     && std::fs::read_to_string(&path).unwrap().contains("outputSchema")
                 {
                     found.push(path.display().to_string());

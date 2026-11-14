@@ -371,6 +371,7 @@ pub fn completed_with_error(data: &serde_json::Map<String, Value>) -> bool {
     let head = preview.chars().take(80).collect::<String>().to_ascii_lowercase();
     head.starts_with("error")
         || head.starts_with("{\"error\"")
+        || crate::tool_answers::rendered_not_done(preview)
         || head.contains("\"success\": false")
         || head.contains("\"success\":false")
 }
@@ -878,6 +879,9 @@ struct BridgeTurn {
     /// The same write asked again after its « already done »: its calls in all, by signature (the hub stops the run
     /// at `same_call`: `RunHub::same_write_again`).
     again: HashMap<String, u32>,
+    /// The same write the tool refused (its signature: how many times, and the refusal's first line): stopped at its
+    /// `REFUSED_AGAIN`th ask (`check`).
+    refused: HashMap<String, (u32, String)>,
     /// A turn with no run (a routine): all its bridge calls, by tool and in all.
     calls: u32,
     per_tool: HashMap<String, u32>,
@@ -885,6 +889,18 @@ struct BridgeTurn {
     /// A routine's limit getting close: the note added to the call's result (`take_note`), once per limit.
     note: Option<String>,
     warned: HashSet<String>,
+}
+
+/// The very same write the tool refused this many times is refused by the brake at the next ask, and the hub told
+/// (`same_write_calls`, `RunHub::same_write_again`). Refusals reach Hermes plain since 14/11 (tool_answers.rs), so
+/// neither its breaker nor its failure warning stops a model asking again and again (review 1: 8 identical refused
+/// notes, all answered).
+pub const REFUSED_AGAIN: u32 = 2;
+
+/// A refusal that invites the same call later (the place full, the browser held, a moment's wait): not counted.
+fn retry_later(text: &str) -> bool {
+    let t = text.to_lowercase();
+    ["try again", "again in a", "again later", "a bit later", "in a moment", "in a minute"].iter().any(|w| t.contains(w))
 }
 
 /// `note` added to a tool's result (its first text, else a text of its own).
@@ -1019,6 +1035,20 @@ what you have, and say plainly what you couldn't find or do (no limits or tools 
         if !write_tool(tool) {
             return None;
         }
+        // the very same write the tool refused, asked again and again: stopped here, a routine's too (the refusal
+        // would be the same; Hermes doesn't stop it any more)
+        if let Some((times, why)) = entry.refused.get(&signature_of(tool, arguments)).filter(|(n, _)| *n >= REFUSED_AGAIN).cloned() {
+            let calls = entry.again.entry(signature_of(tool, arguments)).or_insert(times);
+            *calls += 1;
+            tracing::info!(agent = %agent, tool = %tool, refused = times, "the same refused write again: stopped");
+            return Some(tool_text(
+                &format!(
+                    "Not done: you asked for exactly this {times} times and it was refused each time (« {why} »). \
+Don't ask for it again: tell your person in plain words what stops it, and go on without it."
+                ),
+                true,
+            ));
+        }
         // Only within a followed run: without one, the « turn » is a guess, and the person may well have asked for
         // the same thing again since (« refais le podcast »).
         if turn.is_some() && entry.seen.contains(&signature_of(tool, arguments)) {
@@ -1064,8 +1094,26 @@ what you have, and say plainly what you couldn't find or do (no limits or tools 
         entry.seen.insert(signature_of(tool, arguments));
     }
 
-    /// A write the tool refused (stub, review 1: filled in by the fix).
-    pub fn record_refusal(&self, _agent: &str, _turn: Option<&Turn>, _tool: &str, _arguments: &Dict, _result: &Dict) {}
+    /// A write the tool refused (its result's `isError`, before tool_answers.rs sends it plain): counted for `check`,
+    /// unless it invites the same call later or was a real failure of the bridge (its own « don't retry »).
+    pub fn record_refusal(&self, agent: &str, turn: Option<&Turn>, tool: &str, arguments: &Dict, result: &Dict) {
+        if !write_tool(tool) || result.contains_key(crate::tool_answers::FAILURE_MARK) {
+            return;
+        }
+        let text = result
+            .get("content")
+            .and_then(Value::as_array)
+            .and_then(|c| c.iter().find_map(|b| b.get("text").and_then(Value::as_str)))
+            .unwrap_or("");
+        if retry_later(text) {
+            return;
+        }
+        let why = crate::tools_knowledge::head(text.lines().next().unwrap_or("").trim(), 200).to_string();
+        let mut turns = self.turns.lock().unwrap_or_else(|e| e.into_inner());
+        let entry = turns.entry(turn_key(agent, turn)).or_default();
+        let refused = entry.refused.entry(signature_of(tool, arguments)).or_insert((0, why));
+        refused.0 += 1;
+    }
 
     /// [`record`](Self::record), with what the write answered: kept for the same write asked again (`check`). A page
     /// deleted in the turn forgets the calls that made it: making it again is new work, not a loop (10/11, the

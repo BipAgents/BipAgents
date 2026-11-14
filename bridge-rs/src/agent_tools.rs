@@ -2002,13 +2002,6 @@ async fn mcp(
         crate::tool_answers::settle(SERVER_NAME, &agent.name, &mut result);
         return Ok(crate::web::json_response(200, &rpc_result(&request_id, Value::Object(result))));
     }
-    // every answer as it goes to Hermes: a refusal plain, a real failure « don't retry » (tool_answers.rs)
-    let caller = agent.name.clone();
-    let answer = |mut result: Dict| {
-        crate::names::localize_result(&mut result, &lang);
-        crate::tool_answers::settle(SERVER_NAME, &caller, &mut result);
-        crate::web::json_response(200, &rpc_result(&request_id, Value::Object(result)))
-    };
     let name = tk::str_or_empty(params.get("name"));
     let arguments = match params.get("arguments") {
         Some(Value::Object(map)) => map.clone(),
@@ -2016,6 +2009,14 @@ async fn mcp(
     };
     // a deferred tool's call that the model's constrained names ended on an in-view tool (tool_diet.rs)
     let name = crate::tool_diet::reroute(&state.config(), &agent, &name, &arguments);
+    // every answer as it goes to Hermes: a refusal plain (the hub told, for its run's events), a real failure « don't
+    // retry » (tool_answers.rs)
+    let (caller, called, hub) = (agent.name.clone(), name.clone(), state.hub.clone());
+    let answer = |mut result: Dict| {
+        crate::names::localize_result(&mut result, &lang);
+        crate::tool_answers::settle_for(&hub, SERVER_NAME, &caller, &called, &mut result);
+        crate::web::json_response(200, &rpc_result(&request_id, Value::Object(result)))
+    };
     if crate::family_agent::is_family(&state.config(), &agent.name) {
         // the family's agent: only the family's tools, in every turn, its creator's too (family_agent.rs)
         // the calendars family members share with it are answered below, once whose turn it is is known
@@ -2126,6 +2127,9 @@ async fn mcp(
     let wrote = move |agent: &str, name: &str, arguments: &Dict, result: &mut Dict| {
         if !result.get("isError").map(py::truthy).unwrap_or(false) {
             crate::loop_brake::TURNS.record_answer(agent, turn.as_ref(), name, arguments, result);
+        } else {
+            // the same refused write asked again and again: stopped at its third ask (loop_brake.rs)
+            crate::loop_brake::TURNS.record_refusal(agent, turn.as_ref(), name, arguments, result);
         }
         // a routine's limits getting close: told with this call's result
         if let Some(note) = crate::loop_brake::TURNS.take_note(agent, turn.as_ref()) {
@@ -2311,7 +2315,7 @@ async fn mcp(
                         }
                     }
                     let mut result = result;
-                    crate::tool_answers::settle(SERVER_NAME, &tools_of.1, &mut result);
+                    crate::tool_answers::settle_for(&tools_of.0.hub, SERVER_NAME, &tools_of.1, &tool, &mut result);
                     let payload = py::dumps(&rpc_result(&request_id, Value::Object(result)));
                     yield Ok(Bytes::from(format!("event: message\ndata: {payload}\n\n")));
                     break;
@@ -2322,7 +2326,7 @@ async fn mcp(
                         Ok(done) => or_failure(&tool, done),
                         Err(err) => or_failure(&tool, Err(err.into())),
                     };
-                    crate::tool_answers::settle(SERVER_NAME, &tools_of.1, &mut result);
+                    crate::tool_answers::settle_for(&tools_of.0.hub, SERVER_NAME, &tools_of.1, &tool, &mut result);
                     let payload = py::dumps(&rpc_result(&request_id, Value::Object(result)));
                     yield Ok(Bytes::from(format!("event: message\ndata: {payload}\n\n")));
                     break;

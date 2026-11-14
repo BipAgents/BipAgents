@@ -1647,7 +1647,8 @@ async fn mcp(State(state): State<AppState>, headers: HeaderMap, body: Bytes) -> 
         "tools/list" => Ok(reply(json!({"tools": tools()}))),
         "tools/call" if crate::update_drain::closing() => {
             let busy = crate::update_drain::busy_result(&crate::names::agent_language(&config, &agent.name));
-            Ok(reply(crate::tool_answers::settle_value(SERVER_NAME, &agent.name, busy)))
+            let name = params.get("name").and_then(Value::as_str).unwrap_or("");
+            Ok(reply(crate::tool_answers::settle_value_for(&state.hub, SERVER_NAME, &agent.name, name, busy)))
         }
         "tools/call" => {
             let name = params.get("name").and_then(Value::as_str).unwrap_or("").to_string();
@@ -1656,12 +1657,12 @@ async fn mcp(State(state): State<AppState>, headers: HeaderMap, body: Bytes) -> 
                 _ => Dict::new(),
             };
             // every answer as it goes to Hermes: a refusal plain, a real failure « don't retry » (tool_answers.rs)
-            let caller = agent.name.clone();
+            let (caller, called) = (agent.name.clone(), name.clone());
             let failed = |tool: &str, err: tokio::task::JoinError| {
                 crate::tool_answers::internal_failure(SERVER_NAME, tool, &err.to_string())
             };
             let reply = |mut result: Dict| {
-                crate::tool_answers::settle(SERVER_NAME, &caller, &mut result);
+                crate::tool_answers::settle_for(&state.hub, SERVER_NAME, &caller, &called, &mut result);
                 reply(Value::Object(result))
             };
             if name == crate::service_files::TOOL_NAME {

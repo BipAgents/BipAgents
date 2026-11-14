@@ -173,10 +173,13 @@ fn delegate_tool(tool: &str) -> bool {
     tool == DELEGATE_TOOL || tool.ends_with(&format!("_{DELEGATE_TOOL}"))
 }
 
-/// A handing-over tool that answered it did not (start_task's « Not started: … », a refused budget, no jobs here).
+/// A handing-over tool that answered it did not (start_task's « Not started: … », a refused budget, no jobs here): its
+/// event's `error` (Hermes', or the bridge's for a refusal it said plainly: `RunHub::with_refused`), a refusal kept
+/// in its preview (`{"result": "Not …"}`), or the words of one.
 fn handoff_refused(event: &SSEEvent) -> bool {
     let preview = event.data.get("preview").and_then(Value::as_str).unwrap_or("");
     event.data.get("error").and_then(Value::as_bool).unwrap_or(false)
+        || crate::tool_answers::rendered_not_done(preview)
         || preview.contains("Not started")
         || preview.contains("aren't available here")
         || preview.contains("may take without your person's go")
@@ -467,6 +470,9 @@ pub struct SubscriptionState {
     pub exempt_until: f64,
     /// A handing-over tool answered it could not; the bridge's rescue was done (or tried).
     pub handoff_failed: bool,
+    /// Calls of the bridge's tools it answered « not done » plainly (tool_answers.rs `settle_for`), by tool name: their
+    /// `tool.completed`, where Hermes says `error: false`, is relayed failed (`with_refused`).
+    pub refused: Vec<String>,
     pub rescued: bool,
     /// The group discussion whose hidden conversation runs this (rooms.rs): its approvals open the room.
     pub room_id: Option<String>,
@@ -567,6 +573,7 @@ impl Default for SubscriptionState {
             subagents: 0,
             exempt_until: 0.0,
             handoff_failed: false,
+            refused: Vec::new(),
             rescued: false,
             room_id: None,
             phone: None,
@@ -1534,7 +1541,7 @@ impl RunHub {
             event
         };
         let event = if matches!(event.r#type.as_str(), "tool.started" | "tool.completed" | "tool.failed") {
-            self.with_service(sub, event)
+            Self::with_refused(&mut st, self.with_service(sub, event))
         } else {
             event
         };
@@ -2628,13 +2635,49 @@ impl RunHub {
     /// The turn a call of the bridge's tool `tool` by `agent` belongs to (loop_brake.rs, its MCP counts): the agent's
     /// run going on that the hub follows; with several, the one whose last call was this tool, else the one that
     /// called a tool last. None: no run of the agent followed (a routine, Hermes' cron).
-    /// A call of one of the bridge's tools answered « not done » plainly (stub, review 1: filled in by the fix).
-    pub fn refused_call(&self, _agent: &str, _server: &str, _tool: &str) {}
+    /// A call of one of the bridge's tools (`server`'s `tool`) answered « not done » without `isError` (a refusal, a
+    /// third failure in a row: tool_answers.rs): Hermes will report it done (`tool.completed` `error: false`, its
+    /// preview often empty), so the run the call belongs to (`turn_of`'s) relays it failed (`with_refused`): the apps'
+    /// step not done, never ✓; the safety net's hand-over refused; the brake's retry (review 1, 14/11).
+    pub fn refused_call(&self, agent: &str, server: &str, tool: &str) {
+        let Some(sub) = self.sub_of(agent, tool) else { return };
+        let mut st = lock(&sub.state);
+        if st.refused.len() >= 20 {
+            st.refused.remove(0);
+        }
+        tracing::info!(agent = %agent, server = %server, tool = %tool, run_id = %sub.run_id, "a refused call: its step relayed failed");
+        st.refused.push(tool.to_string());
+    }
+
+    /// `tool.completed` of a call the bridge refused (`refused_call`): `error: true`, as the apps, the safety net and the
+    /// brake read it.
+    fn with_refused(st: &mut SubscriptionState, event: SSEEvent) -> SSEEvent {
+        if event.r#type != "tool.completed" || event.data.get("error").and_then(Value::as_bool) == Some(true) {
+            return event;
+        }
+        let tool = crate::loop_brake::event_tool(&event.data);
+        let Some(at) = st.refused.iter().position(|t| tool == *t || tool.ends_with(&format!("_{t}"))) else {
+            return event;
+        };
+        st.refused.remove(at);
+        let mut data = event.data;
+        data.insert("error".into(), json!(true));
+        let raw = crate::py::Dumps::new().unicode().dumps(&Value::Object(data.clone()));
+        SSEEvent::new(event.r#type, data, raw)
+    }
 
     pub fn turn_of(&self, agent: &str, tool: &str) -> Option<crate::loop_brake::Turn> {
+        let sub = self.sub_of(agent, tool)?;
+        let st = lock(&sub.state);
+        Some(crate::loop_brake::Turn { run_id: sub.run_id.clone(), background: st.background, banned: st.turn.banned.clone() })
+    }
+
+    /// The followed run a call of the bridge's `tool` by `agent` belongs to: the one whose last call was that tool,
+    /// else the most recent.
+    fn sub_of(&self, agent: &str, tool: &str) -> Option<Arc<RunSubscription>> {
         let tool = crate::loop_brake::bare(tool);
         let inner = lock(&self.inner);
-        let mut best: Option<((bool, f64), crate::loop_brake::Turn)> = None;
+        let mut best: Option<((bool, f64), Arc<RunSubscription>)> = None;
         for sub in inner.subs.values().filter(|sub| sub.agent.name == agent) {
             let st = lock(&sub.state);
             if st.finished || st.terminal.is_some() || st.braked {
@@ -2642,15 +2685,10 @@ impl RunHub {
             }
             let key = (st.last_tool == tool, st.last_tool_at.max(st.followed_since));
             if best.as_ref().is_none_or(|(k, _)| key > *k) {
-                let turn = crate::loop_brake::Turn {
-                    run_id: sub.run_id.clone(),
-                    background: st.background,
-                    banned: st.turn.banned.clone(),
-                };
-                best = Some((key, turn));
+                best = Some((key, sub.clone()));
             }
         }
-        best.map(|(_, turn)| turn)
+        best.map(|(_, sub)| sub)
     }
 
     /// The long-work safety net (decided 2026-10-22, independent of the model): a run in a person's conversation (not a

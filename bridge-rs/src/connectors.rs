@@ -372,9 +372,19 @@ pub fn tools_url(config: &Config) -> String {
     format!("{}{PATH}?v={}", base_url(config), crate::agent_tools::version_of(&tools()))
 }
 
-/// The tools a connector's entry lists to Hermes (stub, review 1: filled in by the fix).
+/// The tools a connector's entry lists to Hermes: as its program declares them, without their `outputSchema`
+/// (FastMCP declares one for every typed tool). With one, Hermes' MCP client refuses any answer without a fitting
+/// `structuredContent` (an exception, a strike for its breaker, and the model never reads the answer): the bridge's
+/// refusals (the connector off, waiting for approval…) and its plain third failure are text only (review 1, 14/11).
+/// The program's own `structuredContent` still reaches the model (Hermes passes it beside the text).
 pub fn served_tools(tools: &[Value]) -> Vec<Value> {
-    tools.to_vec()
+    tools
+        .iter()
+        .map(|tool| match tool {
+            Value::Object(map) => Value::Object(map.iter().filter(|(k, _)| *k != "outputSchema").map(|(k, v)| (k.clone(), v.clone())).collect()),
+            other => other.clone(),
+        })
+        .collect()
 }
 
 pub fn entry_name(slug: &str) -> String {
@@ -1466,10 +1476,12 @@ async fn connector_mcp(
                                 "instructions": format!("{} (connecteur fait par {}, approuvé par la personne)", conn.description, agent.display_name)})))
         }
         "ping" => Ok(rpc(&rid, json!({}))),
-        "tools/list" => Ok(rpc(&rid, json!({"tools": conn.tools}))),
+        // without their outputSchema: any text answer is then valid for Hermes' MCP client (`served_tools`)
+        "tools/list" => Ok(rpc(&rid, json!({"tools": served_tools(&conn.tools)}))),
         "tools/call" if crate::update_drain::closing() => {
             let busy = crate::update_drain::busy_result(&crate::names::agent_language(&config, &agent.name));
-            Ok(rpc(&rid, crate::tool_answers::settle_value(&entry_name(&conn.slug), &agent.name, busy)))
+            let tool = params.get("name").and_then(Value::as_str).unwrap_or("");
+            Ok(rpc(&rid, crate::tool_answers::settle_value_for(&state.hub, &entry_name(&conn.slug), &agent.name, tool, busy)))
         }
         "tools/call" => {
             let tool = params.get("name").and_then(Value::as_str).unwrap_or("").to_string();
@@ -1493,7 +1505,7 @@ async fn connector_mcp(
                     Value::Object(said)
                 }
             };
-            Ok(rpc(&rid, crate::tool_answers::settle_value(&server, &agent.name, result)))
+            Ok(rpc(&rid, crate::tool_answers::settle_value_for(&state.hub, &server, &agent.name, &tool, result)))
         }
         other => Ok(web::json_response(
             200,

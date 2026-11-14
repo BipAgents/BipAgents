@@ -620,6 +620,8 @@ pub fn segment_items(
                     let status = match &result {
                         None => "running",
                         Some(r) if r.trim_start().starts_with("{\"error\"") => "failed",
+                        // a refusal of the bridge's tools, plain since 14/11 (tool_answers.rs): a step not done
+                        Some(r) if crate::tool_answers::refused_in_hermes(&name, r) => "failed",
                         Some(_) => "done",
                     };
                     let tool = json!({"name": name, "call_id": call_id, "arguments": cut(&args, RESULT_MAX),
