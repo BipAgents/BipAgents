@@ -213,10 +213,10 @@ pub fn call(config: &Config, agent: &str, name: &str, arguments: &Dict, turn: &T
 
 fn call_in(config: &Config, agent: &str, name: &str, arguments: &Dict, turn: &Turn) -> anyhow::Result<Dict> {
     if !super::enabled(config, agent) {
-        return Ok(tool_text(
+        return Ok(crate::tool_answers::lifted_in_the_app(tool_text(
             "The Carnet is off for you: the person switches « Carnet » on in your page of the app.",
             true,
-        ));
+        )));
     }
     let health = super::health_agent(config, agent);
     if !health && flag(arguments, "private") {

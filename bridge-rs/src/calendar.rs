@@ -346,17 +346,17 @@ pub fn call(
     let mut data = read(config);
     let phone = tk::py_in(agent, data.get("agents").unwrap_or(&json!([])));
     if !phone && !remote.any {
-        return Ok(tool_text(
+        return Ok(crate::tool_answers::lifted_in_the_app(tool_text(
             "The person hasn't shared their phone calendar with you: they switch « Calendrier » on in your page of the \
 BipAgents app.",
             true,
-        ));
+        )));
     }
     // What the person lets this agent do with the phone's calendar (phone_rights.rs).
     let reads = phone && crate::phone_rights::allows(&data, agent, crate::phone_rights::READ);
     let writes = phone && crate::phone_rights::allows(&data, agent, crate::phone_rights::WRITE);
     if name == "calendar_list" && !reads && !remote.any {
-        return Ok(tool_text(&crate::phone_rights::refused("read their phone calendar"), true));
+        return Ok(crate::tool_answers::lifted_in_the_app(tool_text(&crate::phone_rights::refused("read their phone calendar"), true)));
     }
     let mut calendars: Vec<Value> = if phone {
         list_of(&data, "calendars")
@@ -516,7 +516,7 @@ BipAgents app.",
     }
     if !writes && TOOL_NAMES.contains(&name) {
         let why = crate::phone_rights::refused("add, move or delete events in their phone calendar");
-        return Ok(tool_text(&why, true));
+        return Ok(crate::tool_answers::lifted_in_the_app(tool_text(&why, true)));
     }
     let known = |id: &str| events.iter().find(|e| text(e, "id") == id);
     let op = match name {

@@ -898,11 +898,13 @@ struct BridgeTurn {
 pub const REFUSED_AGAIN: u32 = 2;
 
 /// A refusal that invites the same call later (the place full, the browser held, a moment's wait) or once the person
-/// has done something in the app (a switch, a share): not counted.
+/// has done something in the app (a switch, a share): not counted. The tools mark the latter themselves
+/// (`tool_answers::lifted_in_the_app`); these words are the net for one they don't.
 fn retry_later(text: &str) -> bool {
     let t = text.to_lowercase();
     ["try again", "again in a", "again later", "a bit later", "in a moment", "in a minute", "of the app", "in the app",
-     "in their app", "the person turns", "the person switches"]
+     "in their app", "bipagents app", "the person turns", "the person switches", "they switch", "they can turn",
+     "the person connects", "you can allow it"]
         .iter()
         .any(|w| t.contains(w))
 }
@@ -1101,7 +1103,10 @@ Don't ask for it again: tell your person in plain words what stops it, and go on
     /// A write the tool refused (its result's `isError`, before tool_answers.rs sends it plain): counted for `check`,
     /// unless it invites the same call later or was a real failure of the bridge (its own « don't retry »).
     pub fn record_refusal(&self, agent: &str, turn: Option<&Turn>, tool: &str, arguments: &Dict, result: &Dict) {
-        if !write_tool(tool) || result.contains_key(crate::tool_answers::FAILURE_MARK) {
+        if !write_tool(tool)
+            || result.contains_key(crate::tool_answers::FAILURE_MARK)
+            || result.contains_key(crate::tool_answers::LIFTED_MARK)
+        {
             return;
         }
         let text = result

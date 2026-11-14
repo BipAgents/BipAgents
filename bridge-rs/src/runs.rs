@@ -173,6 +173,52 @@ fn delegate_tool(tool: &str) -> bool {
     tool == DELEGATE_TOOL || tool.ends_with(&format!("_{DELEGATE_TOOL}"))
 }
 
+/// One of a run's calls of the bridge's tools (`RunHub::claim_call`, `with_refused`).
+#[derive(Debug, Clone)]
+pub struct BridgeCall {
+    /// Its name in the run's events (`mcp_bipagents_notebook_write`), or the bridge's for a request still waiting.
+    tool: String,
+    call_id: Option<String>,
+    /// The order its call started (or its request came, `early`).
+    seq: u64,
+    /// The MCP request paired with it.
+    claim: Option<u64>,
+    refused: bool,
+    /// A request that came before its run's `tool.started`.
+    early: bool,
+    /// When it was opened (a request whose call never started is forgotten after a minute).
+    at: f64,
+}
+
+/// A bridge call's MCP request paired with its run's call (`RunHub::claim_call`): what `RunHub::refuse` marks.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CallClaim {
+    pub agent: String,
+    pub run_id: String,
+    pub id: u64,
+}
+
+/// One of the bridge's tools (its own servers', or a connector's) in a run's events.
+fn bridge_tool(tool: &str) -> bool {
+    tool.contains("bipagents") || tool.contains(crate::connectors::ENTRY_PREFIX)
+}
+
+/// The same tool, named by the run's events (`mcp_bipagents_create_podcast`) or by the bridge (`create_podcast`).
+fn same_tool(a: &str, b: &str) -> bool {
+    a == b || a.ends_with(&format!("_{b}")) || b.ends_with(&format!("_{a}"))
+}
+
+/// A run's bridge calls kept to the last 50 (one whose events never came: a run cut short), a request whose call never
+/// started forgotten after a minute.
+fn keep_calls(calls: &mut Vec<BridgeCall>) {
+    let now = crate::py::time_time();
+    calls.retain(|c| !(c.early && now - c.at > 60.0));
+    if calls.len() > 50 {
+        let over = calls.len() - 50;
+        calls.drain(..over);
+    }
+}
+
 /// A handing-over tool that answered it did not (start_task's « Not started: … », a refused budget, no jobs here): its
 /// event's `error` (Hermes', or the bridge's for a refusal it said plainly: `RunHub::with_refused`), a refusal kept
 /// in its preview (`{"result": "Not …"}`), or the words of one.
@@ -470,9 +516,10 @@ pub struct SubscriptionState {
     pub exempt_until: f64,
     /// A handing-over tool answered it could not; the bridge's rescue was done (or tried).
     pub handoff_failed: bool,
-    /// Calls of the bridge's tools it answered « not done » plainly (tool_answers.rs `settle_for`), by tool name: their
-    /// `tool.completed`, where Hermes says `error: false`, is relayed failed (`with_refused`).
-    pub refused: Vec<String>,
+    /// The run's calls of the bridge's tools going on, each with its MCP request once paired (`RunHub::claim_call`) and
+    /// whether the bridge refused it: its `tool.completed`, where Hermes says `error: false`, is then relayed failed
+    /// (`with_refused`).
+    pub bridge_calls: Vec<BridgeCall>,
     pub rescued: bool,
     /// The group discussion whose hidden conversation runs this (rooms.rs): its approvals open the room.
     pub room_id: Option<String>,
@@ -573,7 +620,7 @@ impl Default for SubscriptionState {
             subagents: 0,
             exempt_until: 0.0,
             handoff_failed: false,
-            refused: Vec::new(),
+            bridge_calls: Vec::new(),
             rescued: false,
             room_id: None,
             phone: None,
@@ -688,6 +735,8 @@ struct HubInner {
 }
 
 pub struct RunHub {
+    /// The bridge's calls' order and the claims' ids (`claim_call`).
+    next_call: std::sync::atomic::AtomicU64,
     pub hermes: HermesClient,
     pub push: Option<Arc<PushService>>,
     /// Watched runs survive a restart (`resume`).
@@ -736,6 +785,7 @@ impl RunHub {
         store: Option<Store>,
     ) -> Self {
         RunHub {
+            next_call: std::sync::atomic::AtomicU64::new(0),
             hermes,
             push,
             store,
@@ -1541,7 +1591,8 @@ impl RunHub {
             event
         };
         let event = if matches!(event.r#type.as_str(), "tool.started" | "tool.completed" | "tool.failed") {
-            Self::with_refused(&mut st, self.with_service(sub, event))
+            let seq = self.next_call.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+            Self::with_refused(&mut st, seq, self.with_service(sub, event))
         } else {
             event
         };
@@ -2632,40 +2683,116 @@ impl RunHub {
         runs
     }
 
-    /// The turn a call of the bridge's tool `tool` by `agent` belongs to (loop_brake.rs, its MCP counts): the agent's
-    /// run going on that the hub follows; with several, the one whose last call was this tool, else the one that
-    /// called a tool last. None: no run of the agent followed (a routine, Hermes' cron).
-    /// A call of one of the bridge's tools (`server`'s `tool`) answered « not done » without `isError` (a refusal, a
-    /// third failure in a row: tool_answers.rs): Hermes will report it done (`tool.completed` `error: false`, its
-    /// preview often empty), so the run the call belongs to (`turn_of`'s) relays it failed (`with_refused`): the apps'
-    /// step not done, never ✓; the safety net's hand-over refused; the brake's retry (review 1, 14/11).
-    pub fn refused_call(&self, agent: &str, server: &str, tool: &str) {
-        let Some(sub) = self.sub_of(agent, tool) else { return };
-        let mut st = lock(&sub.state);
-        if st.refused.len() >= 20 {
-            st.refused.remove(0);
-        }
-        tracing::info!(agent = %agent, server = %server, tool = %tool, run_id = %sub.run_id, "a refused call: its step relayed failed");
-        st.refused.push(tool.to_string());
+    /// A call of one of the bridge's tools, as its MCP request arrives (`agent`, `tool` its name on the bridge): paired
+    /// with the call its run started (`tool.started`), the earliest of the agent's followed runs not paired yet, so a
+    /// refusal is relayed on the call that got it (`refuse`), never on another run's or the next call (review 2). A
+    /// request that comes before its run's `tool.started` waits in the run `sub_of` picks, paired when it starts. None:
+    /// no run of the agent followed (a routine).
+    pub fn claim_call(&self, agent: &str, tool: &str) -> Option<CallClaim> {
+        let id = self.next_call.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+        let open = {
+            let inner = lock(&self.inner);
+            let mut best: Option<(u64, Arc<RunSubscription>)> = None;
+            for sub in inner.subs.values().filter(|sub| sub.agent.name == agent) {
+                let st = lock(&sub.state);
+                if st.finished || st.terminal.is_some() {
+                    continue;
+                }
+                let earliest = st.bridge_calls.iter().filter(|c| c.claim.is_none() && same_tool(&c.tool, tool)).map(|c| c.seq).min();
+                if let Some(seq) = earliest.filter(|seq| best.as_ref().is_none_or(|(b, _)| seq < b)) {
+                    best = Some((seq, sub.clone()));
+                }
+            }
+            best
+        };
+        let sub = match open {
+            Some((seq, sub)) => {
+                {
+                    let mut st = lock(&sub.state);
+                    if let Some(call) = st.bridge_calls.iter_mut().find(|c| c.seq == seq) {
+                        call.claim = Some(id);
+                    }
+                }
+                sub
+            }
+            None => {
+                let sub = self.sub_of(agent, tool)?;
+                let mut st = lock(&sub.state);
+                let seq = self.next_call.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+                let at = crate::py::time_time();
+                st.bridge_calls.push(BridgeCall { tool: tool.to_string(), call_id: None, seq, claim: Some(id), refused: false, early: true, at });
+                keep_calls(&mut st.bridge_calls);
+                drop(st);
+                sub
+            }
+        };
+        Some(CallClaim { agent: agent.to_string(), run_id: sub.run_id.clone(), id })
     }
 
-    /// `tool.completed` of a call the bridge refused (`refused_call`): `error: true`, as the apps, the safety net and the
-    /// brake read it.
-    fn with_refused(st: &mut SubscriptionState, event: SSEEvent) -> SSEEvent {
-        if event.r#type != "tool.completed" || event.data.get("error").and_then(Value::as_bool) == Some(true) {
+    /// The call `claim` answered « not done » without `isError` (a refusal, a third failure in a row: tool_answers.rs):
+    /// Hermes will report it done (`tool.completed` `error: false`, its preview often empty), so its run relays it
+    /// failed (`with_refused`): the apps' step not done, never ✓; the safety net's hand-over refused; the brake's retry
+    /// (review 1, 14/11).
+    pub fn refuse(&self, claim: &CallClaim) {
+        let Some(sub) = lock(&self.inner).subs.get(&(claim.agent.clone(), claim.run_id.clone())).cloned() else { return };
+        let mut st = lock(&sub.state);
+        if let Some(call) = st.bridge_calls.iter_mut().find(|c| c.claim == Some(claim.id)) {
+            tracing::info!(agent = %claim.agent, tool = %call.tool, run_id = %claim.run_id, "a refused call: its step relayed failed");
+            call.refused = true;
+        }
+    }
+
+    /// [`claim_call`](Self::claim_call) and [`refuse`](Self::refuse) at once (a refusal whose request was not claimed).
+    pub fn refused_call(&self, agent: &str, _server: &str, tool: &str) {
+        if let Some(claim) = self.claim_call(agent, tool) {
+            self.refuse(&claim);
+        }
+    }
+
+    /// A run's bridge calls as its events go by: `tool.started` opens one (or pairs a request that came first),
+    /// `tool.completed` closes it, `error: true` when the bridge refused it (`refuse`). A call closes with its own event
+    /// whatever Hermes said of it: no mark ever outlives its call.
+    fn with_refused(st: &mut SubscriptionState, seq: u64, event: SSEEvent) -> SSEEvent {
+        let tool = crate::loop_brake::event_tool(&event.data);
+        if !bridge_tool(&tool) {
             return event;
         }
-        let tool = crate::loop_brake::event_tool(&event.data);
-        let Some(at) = st.refused.iter().position(|t| tool == *t || tool.ends_with(&format!("_{t}"))) else {
+        let call_id = event.data.get("tool_call_id").and_then(Value::as_str).map(str::to_string);
+        if event.r#type == "tool.started" {
+            match st.bridge_calls.iter_mut().filter(|c| c.early && c.call_id.is_none() && same_tool(&tool, &c.tool)).min_by_key(|c| c.seq) {
+                Some(early) => {
+                    early.call_id = call_id;
+                    early.tool = tool;
+                    early.early = false;
+                }
+                None => st.bridge_calls.push(BridgeCall { tool, call_id, seq, claim: None, refused: false, early: false, at: crate::py::time_time() }),
+            }
+            keep_calls(&mut st.bridge_calls);
             return event;
-        };
-        st.refused.remove(at);
+        }
+        if event.r#type != "tool.completed" && event.r#type != "tool.failed" {
+            return event;
+        }
+        let at = match &call_id {
+            Some(id) => st.bridge_calls.iter().position(|c| c.call_id.as_deref() == Some(id)),
+            None => None,
+        }
+        .or_else(|| st.bridge_calls.iter().filter(|c| !c.early && same_tool(&tool, &c.tool)).min_by_key(|c| c.seq).map(|c| c.seq)
+            .and_then(|seq| st.bridge_calls.iter().position(|c| c.seq == seq)));
+        let Some(at) = at else { return event };
+        let call = st.bridge_calls.remove(at);
+        if !call.refused || event.r#type != "tool.completed" || event.data.get("error").and_then(Value::as_bool) == Some(true) {
+            return event;
+        }
         let mut data = event.data;
         data.insert("error".into(), json!(true));
         let raw = crate::py::Dumps::new().unicode().dumps(&Value::Object(data.clone()));
         SSEEvent::new(event.r#type, data, raw)
     }
 
+    /// The turn a call of the bridge's tool `tool` by `agent` belongs to (loop_brake.rs, its MCP counts): the agent's
+    /// run going on that the hub follows; with several, the one whose last call was this tool, else the one that
+    /// called a tool last. None: no run of the agent followed (a routine, Hermes' cron).
     pub fn turn_of(&self, agent: &str, tool: &str) -> Option<crate::loop_brake::Turn> {
         let sub = self.sub_of(agent, tool)?;
         let st = lock(&sub.state);

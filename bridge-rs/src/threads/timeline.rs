@@ -374,6 +374,25 @@ fn cut(text: &str, max: usize) -> String {
 }
 
 /// The calls of an assistant row: (call id, name, arguments).
+/// The tool a call reached: its result's own name when Hermes kept one, else, for a call through its tool search
+/// (`tool_call`, the transcript keeps the wrapper: tool_executor.py `_unwrap_tool_search_call`), the tool named in
+/// its arguments (`{"name": …}` or a batch's first `{"calls": [{"name": …}]}`), else the call's name.
+fn called_tool(name: &str, args: &str, answered_by: Option<&str>) -> String {
+    if let Some(by) = answered_by.filter(|b| !b.is_empty() && *b != name) {
+        return by.to_string();
+    }
+    if name != "tool_call" {
+        return name.to_string();
+    }
+    let parsed: Value = serde_json::from_str(args).unwrap_or(Value::Null);
+    parsed
+        .get("name")
+        .or_else(|| parsed.get("calls").and_then(|c| c.get(0)).and_then(|c| c.get("name")))
+        .and_then(Value::as_str)
+        .unwrap_or(name)
+        .to_string()
+}
+
 fn calls_of(row: &Row) -> Vec<(Option<String>, String, String)> {
     let Some(Value::Array(calls)) = &row.tool_calls else { return Vec::new() };
     calls
@@ -613,15 +632,15 @@ pub fn segment_items(
                         }
                         continue;
                     }
-                    let result = call_id
-                        .as_deref()
-                        .and_then(|c| results.get(c))
-                        .map(|r| result_words(&words_and_images(&r.content).0));
+                    let answered = call_id.as_deref().and_then(|c| results.get(c));
+                    let result = answered.map(|r| result_words(&words_and_images(&r.content).0));
+                    // the tool that answered: through Hermes' tool search the transcript keeps `tool_call` (review 2)
+                    let called = called_tool(&name, &args, answered.and_then(|r| r.tool_name.as_deref()));
                     let status = match &result {
                         None => "running",
                         Some(r) if r.trim_start().starts_with("{\"error\"") => "failed",
                         // a refusal of the bridge's tools, plain since 14/11 (tool_answers.rs): a step not done
-                        Some(r) if crate::tool_answers::refused_in_hermes(&name, r) => "failed",
+                        Some(r) if crate::tool_answers::refused_in_hermes(&called, r) => "failed",
                         Some(_) => "done",
                     };
                     let tool = json!({"name": name, "call_id": call_id, "arguments": cut(&args, RESULT_MAX),

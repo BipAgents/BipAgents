@@ -1480,8 +1480,7 @@ async fn connector_mcp(
         "tools/list" => Ok(rpc(&rid, json!({"tools": served_tools(&conn.tools)}))),
         "tools/call" if crate::update_drain::closing() => {
             let busy = crate::update_drain::busy_result(&crate::names::agent_language(&config, &agent.name));
-            let tool = params.get("name").and_then(Value::as_str).unwrap_or("");
-            Ok(rpc(&rid, crate::tool_answers::settle_value_for(&state.hub, &entry_name(&conn.slug), &agent.name, tool, busy)))
+            Ok(rpc(&rid, crate::tool_answers::settle_value_for(&state.hub, None, &entry_name(&conn.slug), &agent.name, busy)))
         }
         "tools/call" => {
             let tool = params.get("name").and_then(Value::as_str).unwrap_or("").to_string();
@@ -1489,6 +1488,7 @@ async fn connector_mcp(
             // tool_answers.rs: the bridge's own refusals plain; the connector's failures (its own `isError`, no answer
             // in time, a crash) kept as failures, « don't retry », never three in a row
             let server = entry_name(&conn.slug);
+            let claim = state.hub.claim_call(&agent.name, &tool);
             let result = match runner::call_tool(&state, &agent, &id, &tool, arguments, "agent").await {
                 Ok(Value::Object(mut result)) => {
                     crate::tool_answers::mark_failure(&mut result);
@@ -1505,7 +1505,7 @@ async fn connector_mcp(
                     Value::Object(said)
                 }
             };
-            Ok(rpc(&rid, crate::tool_answers::settle_value_for(&state.hub, &server, &agent.name, &tool, result)))
+            Ok(rpc(&rid, crate::tool_answers::settle_value_for(&state.hub, claim.as_ref(), &server, &agent.name, result)))
         }
         other => Ok(web::json_response(
             200,

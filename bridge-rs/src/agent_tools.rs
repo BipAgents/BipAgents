@@ -2011,10 +2011,13 @@ async fn mcp(
     let name = crate::tool_diet::reroute(&state.config(), &agent, &name, &arguments);
     // every answer as it goes to Hermes: a refusal plain (the hub told, for its run's events), a real failure « don't
     // retry » (tool_answers.rs)
-    let (caller, called, hub) = (agent.name.clone(), name.clone(), state.hub.clone());
+    // the call this request is, in the run the hub follows (`claim_call`): a refusal is relayed on it
+    let (caller, hub) = (agent.name.clone(), state.hub.clone());
+    // (by the name Hermes called: its events', before tool_diet's reroute)
+    let claim = hub.claim_call(&agent.name, &tk::str_or_empty(params.get("name")));
     let answer = |mut result: Dict| {
         crate::names::localize_result(&mut result, &lang);
-        crate::tool_answers::settle_for(&hub, SERVER_NAME, &caller, &called, &mut result);
+        crate::tool_answers::settle_for(&hub, claim.as_ref(), SERVER_NAME, &caller, &mut result);
         crate::web::json_response(200, &rpc_result(&request_id, Value::Object(result)))
     };
     if crate::family_agent::is_family(&state.config(), &agent.name) {
@@ -2315,7 +2318,7 @@ async fn mcp(
                         }
                     }
                     let mut result = result;
-                    crate::tool_answers::settle_for(&tools_of.0.hub, SERVER_NAME, &tools_of.1, &tool, &mut result);
+                    crate::tool_answers::settle_for(&tools_of.0.hub, claim.as_ref(), SERVER_NAME, &tools_of.1, &mut result);
                     let payload = py::dumps(&rpc_result(&request_id, Value::Object(result)));
                     yield Ok(Bytes::from(format!("event: message\ndata: {payload}\n\n")));
                     break;
@@ -2326,7 +2329,7 @@ async fn mcp(
                         Ok(done) => or_failure(&tool, done),
                         Err(err) => or_failure(&tool, Err(err.into())),
                     };
-                    crate::tool_answers::settle_for(&tools_of.0.hub, SERVER_NAME, &tools_of.1, &tool, &mut result);
+                    crate::tool_answers::settle_for(&tools_of.0.hub, claim.as_ref(), SERVER_NAME, &tools_of.1, &mut result);
                     let payload = py::dumps(&rpc_result(&request_id, Value::Object(result)));
                     yield Ok(Bytes::from(format!("event: message\ndata: {payload}\n\n")));
                     break;

@@ -58,8 +58,14 @@ pub fn internal_failure(server: &str, tool: &str, what: &str) -> Dict {
     out
 }
 
-/// A refusal the person lifts in the app (a share, a switch, a mailbox to connect): stub (review 2), filled in by the fix.
-pub fn lifted_in_the_app(result: Dict) -> Dict {
+/// The mark of a refusal the person lifts in the app (`lifted_in_the_app`), taken off before the answer goes out.
+pub const LIFTED_MARK: &str = "_bipagents_lifted";
+
+/// A refusal the person lifts in the app (a share, a switch, a right, a mailbox to connect), marked by its tool: the
+/// same call may well go once she has done it, so the brake never counts it (loop_brake.rs `record_refusal`; review 2,
+/// 14/11: two « not shared » refusals, the person turned « Rappels » on, and the third identical call was stopped).
+pub fn lifted_in_the_app(mut result: Dict) -> Dict {
+    result.insert(LIFTED_MARK.into(), Value::Bool(true));
     result
 }
 
@@ -78,6 +84,7 @@ pub const FAILED_SILENTLY: &str = "this call failed (its answer said nothing mor
 /// reports the call as done (`tool.completed` `error` false), so the caller tells the hub (`settle_for`).
 pub fn settle(server: &str, agent: &str, result: &mut Dict) -> bool {
     let failure = result.remove(FAILURE_MARK).is_some_and(|v| v == Value::Bool(true));
+    result.remove(LIFTED_MARK);
     let error = result.get("isError").is_some_and(crate::py::truthy);
     let key = (server.to_string(), agent.to_string());
     let mut streaks = STREAKS.lock().unwrap_or_else(|e| e.into_inner());
@@ -117,19 +124,28 @@ pub fn settle(server: &str, agent: &str, result: &mut Dict) -> bool {
     true
 }
 
-/// [`settle`], and when the answer goes out plain saying nothing was done, the hub told (`RunHub::refused_call`): it
-/// relays that call's `tool.completed` as failed (the apps' step, the safety net, the brake).
-pub fn settle_for(hub: &crate::runs::RunHub, server: &str, agent: &str, tool: &str, result: &mut Dict) {
+/// [`settle`], and when the answer goes out plain saying nothing was done, the hub told which call it was (`claim`,
+/// `RunHub::claim_call` when the request came): it relays that call's `tool.completed` as failed (the apps' step,
+/// the safety net, the brake).
+pub fn settle_for(hub: &crate::runs::RunHub, claim: Option<&crate::runs::CallClaim>, server: &str, agent: &str, result: &mut Dict) {
     if settle(server, agent, result) {
-        hub.refused_call(agent, server, tool);
+        if let Some(claim) = claim {
+            hub.refuse(claim);
+        }
     }
 }
 
 /// [`settle_for`] on a JSON-RPC result value (an object answer; anything else as it is).
-pub fn settle_value_for(hub: &crate::runs::RunHub, server: &str, agent: &str, tool: &str, result: Value) -> Value {
+pub fn settle_value_for(
+    hub: &crate::runs::RunHub,
+    claim: Option<&crate::runs::CallClaim>,
+    server: &str,
+    agent: &str,
+    result: Value,
+) -> Value {
     match result {
         Value::Object(mut map) => {
-            settle_for(hub, server, agent, tool, &mut map);
+            settle_for(hub, claim, server, agent, &mut map);
             Value::Object(map)
         }
         other => other,

@@ -878,10 +878,10 @@ fn split_id(text: &str) -> (String, String, String) {
 pub fn call(config: &Config, agent: &str, name: &str, arguments: &Dict, opener: &Connect) -> anyhow::Result<Dict> {
     let accounts = of(config).of_agent(agent)?;
     if accounts.is_empty() {
-        return Ok(tool_text(
+        return Ok(crate::tool_answers::lifted_in_the_app(tool_text(
             "No mailbox is connected for you: the person connects one in the BipAgents app (your settings › Boîtes mail).",
             true,
-        ));
+        )));
     }
     let arg = |k: &str| tk::str_or_empty(arguments.get(k));
     // the mailbox this call reaches (a draft answering a mail goes to that mail's box), one call at a time on it

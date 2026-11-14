@@ -72,7 +72,7 @@ pub async fn tool_call(jobs: Option<&Arc<Jobs>>, agent: &AgentConfig) -> anyhow:
     };
     let config = jobs.config.get();
     if !super::enabled(&config, &agent.name) {
-        return Ok(tool_text("Your Carnet tools are off: the person turns them on in your page of the app.", true));
+        return Ok(crate::tool_answers::lifted_in_the_app(tool_text("Your Carnet tools are off: the person turns them on in your page of the app.", true)));
     }
     jobs::started(start(jobs, agent, "asked").await, &config, agent)
 }
