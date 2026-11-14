@@ -372,6 +372,11 @@ pub fn tools_url(config: &Config) -> String {
     format!("{}{PATH}?v={}", base_url(config), crate::agent_tools::version_of(&tools()))
 }
 
+/// The tools a connector's entry lists to Hermes (stub, review 1: filled in by the fix).
+pub fn served_tools(tools: &[Value]) -> Vec<Value> {
+    tools.to_vec()
+}
+
 pub fn entry_name(slug: &str) -> String {
     format!("{ENTRY_PREFIX}{slug}")
 }
@@ -1736,6 +1741,22 @@ pub fn settings_listing(state: &AppState, config: &Config, agent: &AgentConfig) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Review 1 (14/11): a connector's tool may declare an `outputSchema` (FastMCP does for every typed tool); then
+    /// Hermes' MCP client refuses an answer without `structuredContent` (an exception: a breaker strike, and the model
+    /// never reads the bridge's refusal). Its entry lists the tools without it: any text answer is valid.
+    #[test]
+    fn a_connectors_tools_are_listed_without_their_output_schema() {
+        let tools = vec![json!({"name": "push_workouts", "description": "Pushes workouts",
+                                "inputSchema": {"type": "object"},
+                                "outputSchema": {"type": "object", "required": ["result"]}}),
+                         json!({"name": "list", "inputSchema": {"type": "object"}})];
+        let served = served_tools(&tools);
+        assert_eq!(served.len(), 2);
+        assert!(served.iter().all(|t| t.get("outputSchema").is_none()), "{served:?}");
+        assert_eq!(served[0]["inputSchema"], json!({"type": "object"}));
+        assert_eq!(served[0]["description"], "Pushes workouts");
+    }
 
     #[test]
     fn a_connectors_tool_reads_by_its_connectors_name() {

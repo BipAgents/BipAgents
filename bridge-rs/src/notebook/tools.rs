@@ -1155,6 +1155,28 @@ number (an e-mail address, a login or a date is fine).");
         assert!(said.starts_with("Not saved: ID numbers are never kept, and the summary holds one."), "{said}");
     }
 
+    /// Review 1 (14/11): the page's name, its aliases, its contact and a task's page are written too: filtered like
+    /// the facts (a passport ended up in « Personnes/Passeport de Léa 12AB34567.md »).
+    #[test]
+    fn no_id_number_reaches_the_carnet_by_a_name_an_alias_or_a_contact() {
+        let (_dir, config) = setup();
+        let t = turn("run_names");
+        for (arguments, place) in [
+            (json!({"page": "Passeport de Léa 12AB34567", "kind": "person", "facts": ["Valable jusqu'en 2031"]}), "the page's name"),
+            (json!({"page": "Léa Martin", "kind": "person", "facts": ["Aime le jazz"],
+                    "aliases": ["IBAN FR76 3000 6000 0112 3456 7890 189"]}), "an alias"),
+            (json!({"page": "Léa Martin", "kind": "person", "facts": ["Aime le jazz"],
+                    "contact": "Carte bancaire 4970 1012 3456 7890"}), "the contact"),
+        ] {
+            let (said, error) = run(&config, "quotidien", WRITE, arguments, &t);
+            assert!(error && said.starts_with(&format!("{ID_NUMBER}, and {place} holds one")), "{said}");
+        }
+        let (said, error) = run(&config, "quotidien", TASK, json!({"action": "add", "title": "Renouveler",
+            "page": "Passeport 12AB34567", "origin": "asked"}), &t);
+        assert!(error && said.starts_with(ID_NUMBER), "{said}");
+        assert!(pages(&config).is_empty(), "{:?}", pages(&config));
+    }
+
     #[test]
     fn only_useful_pages_reach_the_model() {
         let (_dir, config) = setup();

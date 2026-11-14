@@ -221,6 +221,33 @@ mod tests {
         assert!(found.is_empty(), "an outputSchema: its refusals need a fitting structuredContent: {found:?}");
     }
 
+    /// Review 1 (14/11): a connector program's own failure may carry no text (an empty content, an image, only
+    /// structuredContent: valid MCP); the third in a row, sent plain, must still say it failed.
+    #[test]
+    fn a_third_failure_in_a_row_without_a_text_still_says_it_failed() {
+        for (n, failed) in [
+            json!({"content": [], "isError": true}),
+            json!({"isError": true, "structuredContent": {"error": "quota"}}),
+            json!({"content": [{"type": "image", "data": "AAAA", "mimeType": "image/png"}], "isError": true}),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let server = format!("bipconn_textless{n}");
+            let mut sent = Vec::new();
+            for _ in 0..3 {
+                let mut result = failed.as_object().cloned().unwrap();
+                mark_failure(&mut result);
+                settle(&server, "a-textless", &mut result);
+                sent.push(result);
+            }
+            let third = &sent[2];
+            let said = third["content"].as_array().and_then(|c| c.iter().find_map(|b| b["text"].as_str())).unwrap_or("");
+            assert_eq!(third["isError"], json!(false), "{third:?}");
+            assert!(said.starts_with(NOT_DONE) && said.contains("failed"), "the third failure says nothing: {third:?}");
+        }
+    }
+
     #[test]
     fn a_failure_says_dont_retry_and_keeps_its_details_in_the_log() {
         let failed = internal_failure("bipagents", "notebook_write", "Permission denied: /srv/carnet/Personnes/Léa Martin.md");

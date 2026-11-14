@@ -1194,6 +1194,35 @@ mod tests {
         assert!(got[4].body.get("added_during_run").is_none(), "a message of its own, not words added to a turn");
     }
 
+    /// Review 1 (14/11): the bridge's refusals are plain now (Hermes keeps `{"result": "Not …"}`, no `error`): a
+    /// refused call of the bridge's tools (or a connector's) still shows as a step not done, never ✓.
+    #[test]
+    fn a_refused_call_of_the_bridges_tools_shows_failed() {
+        let mut rows = vec![
+            row(1, "user", json!("Note mon passeport")),
+            row(2, "assistant", json!("")),
+            row(3, "tool", json!("{\"result\": \"Not saved: ID numbers are never kept, and fact 1 holds one.\"}")),
+            row(4, "tool", json!("{\"result\": \"Not done: The person turned this connector off in the app.\"}")),
+            row(5, "tool", json!("{\"result\": \"Saved: Léa Martin › tastes (1 fact).\"}")),
+            row(6, "tool", json!("{\"result\": \"Not much on this subject.\"}")),
+            row(7, "assistant", json!("Je ne peux pas le noter.")),
+        ];
+        rows[1].tool_calls = Some(json!([
+            {"id": "a", "function": {"name": "mcp_bipagents_notebook_write", "arguments": "{}"}},
+            {"id": "b", "function": {"name": "mcp__bipconn_garmin__push_workouts", "arguments": "{}"}},
+            {"id": "c", "function": {"name": "mcp__bipagents__notebook_write", "arguments": "{}"}},
+            {"id": "d", "function": {"name": "web_search", "arguments": "{}"}}]));
+        for (n, id) in ["a", "b", "c", "d"].into_iter().enumerate() {
+            rows[2 + n].tool_call_id = Some(id.into());
+        }
+        let status: Vec<String> = items(&rows)
+            .iter()
+            .filter(|i| i.kind() == "tool")
+            .map(|i| i.body["tool"]["status"].as_str().unwrap_or("").to_string())
+            .collect();
+        assert_eq!(status, ["failed", "failed", "done", "done"]);
+    }
+
     /// Another agent's message in Bot Mode's conversation: its sender's id, the name it signed with, its words alone
     /// (iOS drew « Message from … » around the line that already had it).
     #[test]

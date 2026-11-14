@@ -271,6 +271,54 @@ fn coded(text: &str) -> bool {
 mod tests {
     use super::*;
 
+    /// Review 1 (14/11): real ID numbers the first version let into the Carnet, under their everyday names and forms.
+    #[test]
+    fn the_everyday_names_and_forms_of_id_numbers_are_refused() {
+        let kept: Vec<&str> = [
+            // German tax number as on every Steuerbescheid (slashes)
+            "Steuernummer: 21/815/08150",
+            "Steuer-Nr. 181/815/08155",
+            "SV-Nummer: 65 170839 J 003",
+            "Pass-Nr.: C01X00T47",
+            "Identifikationsnummer: 12 345 678 901",
+            "Driving license: 880692310285",
+            "Driver License: D1234567",
+            "ID number: 880692310285",
+            "Pièce d'identité n° X4RTBPFW4",
+            // as copied from a PDF: two spaces between the groups
+            "Carte bancaire 4970  1012  3456  7890",
+            // a child's social security number with dots (« 2.05.12 » could be a date): the shape of a NIR
+            "Zoé : 2.05.12.75.116.001.42",
+            "Sécu de Léa : 1.85.05.78.006.084.36",
+        ]
+        .into_iter()
+        .filter(|t| !id_number(t))
+        .collect();
+        assert!(kept.is_empty(), "kept by the Carnet: {kept:#?}");
+    }
+
+    /// Review 1 (14/11): ordinary notes the first version refused (a book, an order, a validity, opening hours, a
+    /// phone number next to an ID word, a parcel).
+    #[test]
+    fn books_orders_validities_hours_phones_and_parcels_are_kept() {
+        let refused: Vec<&str> = [
+            "Livre à acheter pour Léa : ISBN 978-2-07-036822-8",
+            "Livre : 9782070368228",
+            "Commande Amazon 402-9384756-1029384, livraison prévue jeudi",
+            "Reisepass von Léa gültig bis 03.2031",
+            "Passport expires 2031-03, renew in January",
+            "Bürgeramt (Reisepass): geöffnet 9.00-12.00 Uhr",
+            "RDV passeport à la mairie le 3 décembre, tél. 01 23 45 67 89",
+            "Reisepass: Termin beim Bürgeramt, Telefon 030 1234567",
+            "Colis DHL 00340434161094042557, livré au point relais",
+            "Suivi du colis : 6A12345678901, livré mardi",
+        ]
+        .into_iter()
+        .filter(|t| id_number(t))
+        .collect();
+        assert!(refused.is_empty(), "refused by the Carnet: {refused:#?}");
+    }
+
     #[test]
     fn each_check_alone() {
         assert!(long_digits("4970 1012 3456 7890") && long_digits("4970-1012-3456-7890"));

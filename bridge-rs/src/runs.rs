@@ -2628,6 +2628,9 @@ impl RunHub {
     /// The turn a call of the bridge's tool `tool` by `agent` belongs to (loop_brake.rs, its MCP counts): the agent's
     /// run going on that the hub follows; with several, the one whose last call was this tool, else the one that
     /// called a tool last. None: no run of the agent followed (a routine, Hermes' cron).
+    /// A call of one of the bridge's tools answered « not done » plainly (stub, review 1: filled in by the fix).
+    pub fn refused_call(&self, _agent: &str, _server: &str, _tool: &str) {}
+
     pub fn turn_of(&self, agent: &str, tool: &str) -> Option<crate::loop_brake::Turn> {
         let tool = crate::loop_brake::bare(tool);
         let inner = lock(&self.inner);
@@ -3462,6 +3465,53 @@ mod tests {
         assert_eq!(raw["event"], "steps.updated");
         assert_eq!(raw["steps"]["done"], 1);
         assert_eq!(st.steps.as_ref().unwrap()["total"], 2, "kept for a background task's card");
+    }
+
+    /// Review 1 (14/11): a refused hand-over reaches Hermes plain now (`{"result": "Not …"}`, `error` false): still
+    /// refused for the safety net, or the run is taken as handed over (no steer, no rescue, no go_on).
+    #[test]
+    fn a_refused_hand_over_said_plainly_is_still_refused() {
+        for (tool, text) in [
+            ("mcp_bipagents_propose_task", crate::jobs::NOT_A_TASK),
+            ("mcp_bipagents_start_task", "budget_eur must be a number of euros"),
+            ("mcp_bipagents_notebook_fill", "Your Carnet tools are off: the person turns them on in your page of the app."),
+        ] {
+            let mut wire = crate::tools_knowledge::tool_text(text, true);
+            crate::tool_answers::settle(crate::agent_tools::SERVER_NAME, "a-handoff", &mut wire);
+            let preview = json!({"result": wire["content"][0]["text"]}).to_string();
+            let data = json!({"tool": tool, "error": false, "preview": preview});
+            assert!(handoff_refused(&SSEEvent::new("tool.completed", data.as_object().cloned().unwrap(), "")), "{tool}");
+        }
+    }
+
+    /// Review 1 (14/11): Hermes' `tool.completed` for a refused call of the bridge's tools says `error: false` (its
+    /// preview often empty): the bridge, which refused it, marks it failed for the apps (a step not done, never ✓), the
+    /// safety net and the brake.
+    #[tokio::test]
+    async fn a_call_the_bridge_refused_is_relayed_failed() {
+        let hub = RunHub::new(HermesClient::new(reqwest::Client::new()), None, 7200, None);
+        let agent = AgentConfig { name: "vie".into(), ..Default::default() };
+        let sub = Arc::new(RunSubscription::new(agent, "run_refused"));
+        lock(&hub.inner).subs.insert(sub.key(), sub.clone());
+        let event = |kind: &str, data: Value| SSEEvent::new(kind, data.as_object().cloned().unwrap(), "{}");
+        hub.dispatch(&sub, event("tool.started", json!({"tool": "mcp_bipagents_notebook_fill", "tool_call_id": "f"})));
+        assert!(lock(&sub.state).handed_off);
+        hub.refused_call("vie", crate::agent_tools::SERVER_NAME, "notebook_fill");
+        hub.dispatch(&sub, event("tool.completed", json!({"tool": "mcp_bipagents_notebook_fill", "tool_call_id": "f",
+                                                          "error": false, "preview": ""})));
+        let st = lock(&sub.state);
+        assert!(!st.handed_off && st.handoff_failed, "the refused hand-over seen refused");
+        let completed = st.backlog.iter().rev().find(|e| e.r#type == "tool.completed").expect("relayed");
+        assert_eq!(completed.data["error"], json!(true), "the apps get a failed step");
+        let raw: Value = serde_json::from_str(&completed.raw).unwrap();
+        assert_eq!(raw["error"], json!(true));
+        drop(st);
+        // the next call of the same tool, not refused: as Hermes says
+        hub.dispatch(&sub, event("tool.started", json!({"tool": "mcp_bipagents_notebook_fill", "tool_call_id": "g"})));
+        hub.dispatch(&sub, event("tool.completed", json!({"tool": "mcp_bipagents_notebook_fill", "tool_call_id": "g", "error": false})));
+        let st = lock(&sub.state);
+        let completed = st.backlog.iter().rev().find(|e| e.r#type == "tool.completed").unwrap();
+        assert_eq!(completed.data["error"], json!(false));
     }
 
     #[tokio::test]

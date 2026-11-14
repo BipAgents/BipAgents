@@ -1064,6 +1064,9 @@ what you have, and say plainly what you couldn't find or do (no limits or tools 
         entry.seen.insert(signature_of(tool, arguments));
     }
 
+    /// A write the tool refused (stub, review 1: filled in by the fix).
+    pub fn record_refusal(&self, _agent: &str, _turn: Option<&Turn>, _tool: &str, _arguments: &Dict, _result: &Dict) {}
+
     /// [`record`](Self::record), with what the write answered: kept for the same write asked again (`check`). A page
     /// deleted in the turn forgets the calls that made it: making it again is new work, not a loop (10/11, the
     /// upgrade journey: GLM made two pages, deleted them, asked for them again and was told « already done » until
@@ -1178,6 +1181,37 @@ mod tests {
 
     fn args(pairs: &[(&str, &str)]) -> Dict {
         pairs.iter().map(|(k, v)| (k.to_string(), json!(v))).collect()
+    }
+
+    /// Review 1 (14/11): refusals reach Hermes plain now, so neither its breaker nor its failure warning stops a model
+    /// asking for the very same refused write again and again: the brake does, at the third ask (a routine's too).
+    #[test]
+    fn the_same_refused_write_is_stopped_at_its_third_ask() {
+        let turns = Turns::default();
+        let settings = Settings::default();
+        let note = args(&[("page", "Camille Testeur"), ("facts", "Passeport : 12AB34567")]);
+        let refused = tool_text("Not saved: ID numbers are never kept, and fact 1 holds one.", true);
+        let said = |r: &Dict| r["content"][0]["text"].as_str().unwrap_or("").to_string();
+        for (agent, turn) in [("routine", None), ("conversation", Some(Turn { run_id: "run_r".into(), background: false, banned: None }))] {
+            for _ in 0..2 {
+                assert!(turns.check(&settings, agent, turn.as_ref(), "notebook_write", &note, 0.0).is_none());
+                turns.record_refusal(agent, turn.as_ref(), "notebook_write", &note, &refused);
+            }
+            let third = turns.check(&settings, agent, turn.as_ref(), "mcp__bipagents__notebook_write", &note, 1.0);
+            let third = third.expect("the third identical refused write is stopped");
+            assert!(said(&third).starts_with("Not done: you asked for exactly this 2 times") && said(&third).contains("ID numbers"), "{}", said(&third));
+            assert_eq!(turns.same_write_calls(agent, turn.as_ref(), "notebook_write", &note), 3, "the hub stops the run at same_call");
+            // another write goes on
+            let other = args(&[("page", "Camille Testeur"), ("facts", "Aime le jazz")]);
+            assert!(turns.check(&settings, agent, turn.as_ref(), "notebook_write", &other, 1.0).is_none());
+        }
+        // a refusal meant to be tried again later (the place full, the browser held) is not counted
+        let later = tool_text("Not done: your place is full right now; try again later.", true);
+        let page = args(&[("title", "Menu")]);
+        for _ in 0..4 {
+            assert!(turns.check(&settings, "later", None, "create_page", &page, 2.0).is_none());
+            turns.record_refusal("later", None, "create_page", &page, &later);
+        }
     }
 
     #[test]

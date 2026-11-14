@@ -142,29 +142,43 @@ def test_a_real_failure_keeps_is_error_says_dont_retry_and_never_three_in_a_row(
 PYTHON = os.environ.get("MCP_SDK_PYTHON")
 HERMES_SRC = os.environ.get("HERMES_SRC")
 CLIENT = str(Path(__file__).parent / "bbkit" / "hermes_breaker_client.py")
+hermes = pytest.mark.skipif(not (PYTHON and HERMES_SRC), reason="no Hermes checkout and Python given (HERMES_SRC, MCP_SDK_PYTHON)")
 
 
-@pytest.mark.skipif(not (PYTHON and HERMES_SRC), reason="no Hermes checkout and Python given (HERMES_SRC, MCP_SDK_PYTHON)")
-def test_hermes_own_breaker_never_pauses_the_bridge_after_three_refused_notes(bridge, tmp_path):
-    give_token(bridge)
+def through_hermes(tmp_path, url, token, calls, server="bipagents"):
+    """Each call through Hermes' own MCP client (bbkit/hermes_breaker_client.py): what the model gets (`result`),
+    `failed` (its `tool.completed` error) and its breaker's count for that server after it (`strikes`). A callable
+    among `calls` is done between two calls (the person's switch…)."""
     home = tmp_path / "hermes-home"
-    home.mkdir()
-    env = {**os.environ, "HERMES_HOME": str(home)}
-    client = subprocess.Popen([PYTHON, "-I", CLIENT, bridge.url + "/v1/agent-tools/mcp", TOKEN], env=env, text=True,
-                              stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    home.mkdir(exist_ok=True)
+    client = subprocess.Popen([PYTHON, "-I", CLIENT, url, token, server], env={**os.environ, "HERMES_HOME": str(home)},
+                              text=True, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
     try:
         ready = client.stdout.readline()
         assert ready.startswith("READY ") and int(ready.split()[1]) > 0, ready
-        calls = [{"name": "notebook_write", "arguments": note} for note in PASSPORT_NOTES]
-        calls += [{"name": "notebook_search", "arguments": {"words": "Camille"}}, {"name": "list_pages", "arguments": {}}]
-        results = []
-        for call in calls:
-            client.stdin.write(json.dumps(call) + "\n")
+        out = []
+        for step in calls:
+            if callable(step):
+                step()
+                continue
+            name, arguments = step
+            client.stdin.write(json.dumps({"name": name, "arguments": arguments}) + "\n")
             client.stdin.flush()
             line = client.stdout.readline()
             assert line.startswith("RESULT "), line
-            results.append(json.loads(line[len("RESULT "):]))
+            out.append(json.loads(line[len("RESULT "):]))
+        return out
     finally:
         client.kill()
-    assert not any("error" in answer for answer in results), f"Hermes counted strikes, paused the bridge: {results}"
-    assert all(r["result"].startswith("Not saved: ID numbers are never kept, and fact ") for r in results[:3]), results
+
+
+@hermes
+def test_hermes_own_breaker_never_pauses_the_bridge_after_three_refused_notes(bridge, tmp_path):
+    give_token(bridge)
+    calls = [("notebook_write", note) for note in PASSPORT_NOTES]
+    calls += [("notebook_search", {"words": "Camille"}), ("list_pages", {})]
+    results = through_hermes(tmp_path, bridge.url + "/v1/agent-tools/mcp", TOKEN, calls)
+    answers = [json.loads(r["result"]) for r in results]
+    assert not any("error" in a for a in answers), f"Hermes counted strikes, paused the bridge: {answers}"
+    assert all(a["result"].startswith("Not saved: ID numbers are never kept, and fact ") for a in answers[:3]), answers
+    assert [r["strikes"] for r in results] == [0] * 5, results
