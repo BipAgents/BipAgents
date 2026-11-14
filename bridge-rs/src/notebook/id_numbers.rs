@@ -456,6 +456,28 @@ mod tests {
         assert!(refused.is_empty(), "refused by the Carnet: {refused:#?}");
     }
 
+    /// Review 3 (14/11): a social security number (its key checks, with or without groups) or a tax number next to a
+    /// customer's word: a mutuelle's member number and an ameli login are the NIR itself.
+    #[test]
+    fn a_social_security_or_tax_number_near_a_customer_word_is_refused() {
+        let kept: Vec<&str> = [
+            "Mutuelle MGEN, adhérent 185057800608491",
+            "Mutuelle : adhérent n° 185057800608491",
+            "Espace client ameli : 185057800608491",
+            "Adhérent 2850578006084 41",
+            "Espace client impots.gouv : identifiant 1234567890123",
+            "Identifiant fiscal : 1234567890123",
+            "N° fiscal 1234567890123, client depuis 2019",
+            "SPI : 12 34 567 890 123",
+        ]
+        .into_iter()
+        .filter(|t| !id_number(t))
+        .collect();
+        assert!(kept.is_empty(), "kept by the Carnet: {kept:#?}");
+        // a customer number that is no NIR nor a tax number stays kept
+        assert!(!id_number("Numéro client Free 12345678901234"));
+    }
+
     /// Review 1 (14/11): ordinary notes the first version refused (a book, an order, a validity, opening hours, a
     /// phone number next to an ID word, a parcel).
     #[test]

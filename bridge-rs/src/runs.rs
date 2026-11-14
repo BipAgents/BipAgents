@@ -213,6 +213,9 @@ fn same_tool(a: &str, b: &str) -> bool {
     a == b || a.ends_with(&format!("_{b}")) || b.ends_with(&format!("_{a}"))
 }
 
+/// A request whose call never started is forgotten after this many seconds (stub value, review 3).
+const EARLY_SECONDS: f64 = 60.0;
+
 /// A run's bridge calls kept to the last 50 (one whose events never came: a run cut short), a request whose call never
 /// started forgotten after a minute.
 fn keep_calls(calls: &mut Vec<BridgeCall>) {
@@ -2822,6 +2825,11 @@ impl RunHub {
         }
     }
 
+    /// `claim_call`, the call's id known (stub, review 3: filled in by the fix).
+    pub fn claim_call_with(&self, agent: &str, tool: &str, _call_id: Option<&str>) -> Option<CallClaim> {
+        self.claim_call(agent, tool)
+    }
+
     /// [`claim_call`](Self::claim_call) and [`refuse`](Self::refuse) at once (a refusal whose request was not claimed).
     pub fn refused_call(&self, agent: &str, _server: &str, tool: &str) {
         if let Some(claim) = self.claim_call(agent, tool) {
@@ -3843,6 +3851,73 @@ mod tests {
         hub.dispatch(&sub, review2_event("tool.started", json!({"tool": tool, "tool_call_id": "b"})));
         hub.dispatch(&sub, review2_event("tool.completed", json!({"tool": tool, "tool_call_id": "b", "error": false})));
         assert_eq!(last_completed(&sub), json!(false), "a calendar_add that went well, relayed failed");
+    }
+
+    fn completed_errors(sub: &Arc<RunSubscription>) -> Vec<Value> {
+        let st = lock(&sub.state);
+        st.backlog.iter().filter(|e| e.r#type == "tool.completed").map(|e| e.data["error"].clone()).collect()
+    }
+
+    /// Review 3 (14/11): a sub-agent's calls reach the bridge with the agent's token, their events never reach the
+    /// run's stream (Hermes' api_server_runs.py drops `subagent.tool…`): its request must never wait in the parent's run
+    /// and be paired with the parent's next call of the same tool.
+    #[tokio::test]
+    async fn a_request_whose_call_never_starts_is_never_paired_with_another_call() {
+        let hub = RunHub::new(HermesClient::new(reqwest::Client::new()), None, 7200, None);
+        let agent = AgentConfig { name: "vie".into(), ..Default::default() };
+        let run = Arc::new(RunSubscription::new(agent, "run_parent"));
+        lock(&hub.inner).subs.insert(run.key(), run.clone());
+        let tool = "mcp_bipagents_notebook_write";
+        hub.dispatch(&run, review2_event("tool.started", json!({"tool": "delegate_task", "tool_call_id": "d"})));
+        let child = hub.claim_call("vie", "notebook_write").expect("the agent's run is followed");
+        hub.refuse(&child);
+        hub.dispatch(&run, review2_event("tool.completed", json!({"tool": "delegate_task", "tool_call_id": "d", "error": false})));
+        hub.dispatch(&run, review2_event("tool.started", json!({"tool": tool, "tool_call_id": "p"})));
+        let _parent = hub.claim_call("vie", "notebook_write");
+        hub.dispatch(&run, review2_event("tool.completed", json!({"tool": tool, "tool_call_id": "p", "error": false})));
+        assert_eq!(completed_errors(&run).last(), Some(&json!(false)), "the parent's note, saved, relayed failed");
+        // a request with no run event at all, not delegating: forgotten within seconds, never paired later
+        let stray = hub.claim_call("vie", "notebook_write").expect("followed");
+        hub.refuse(&stray);
+        {
+            let mut st = lock(&run.state);
+            for call in st.bridge_calls.iter_mut().filter(|c| c.early) {
+                call.at -= EARLY_SECONDS + 1.0;
+            }
+        }
+        hub.dispatch(&run, review2_event("tool.started", json!({"tool": tool, "tool_call_id": "q"})));
+        hub.dispatch(&run, review2_event("tool.completed", json!({"tool": tool, "tool_call_id": "q", "error": false})));
+        assert_eq!(completed_errors(&run).last(), Some(&json!(false)), "a stray refusal kept for the next call");
+    }
+
+    /// Review 3 (14/11): two runs of one agent calling the same tool at once: Hermes (patch 0028) puts the call's id in
+    /// the request's `_meta`, so each request is paired with its own call whatever order the requests come in.
+    #[tokio::test]
+    async fn two_runs_calling_the_same_tool_at_once_are_paired_by_the_calls_id() {
+        let hub = RunHub::new(HermesClient::new(reqwest::Client::new()), None, 7200, None);
+        let agent = AgentConfig { name: "vie".into(), ..Default::default() };
+        let task = Arc::new(RunSubscription::new(agent.clone(), "run_task"));
+        let chat = Arc::new(RunSubscription::new(agent, "run_chat"));
+        lock(&hub.inner).subs.insert(task.key(), task.clone());
+        lock(&hub.inner).subs.insert(chat.key(), chat.clone());
+        let tool = "mcp_bipagents_calendar_add";
+        hub.dispatch(&task, review2_event("tool.started", json!({"tool": tool, "tool_call_id": "t"})));
+        hub.dispatch(&chat, review2_event("tool.started", json!({"tool": tool, "tool_call_id": "c"})));
+        // the conversation's request comes first: refused; then the task's: added
+        let chat_request = hub.claim_call_with("vie", "calendar_add", Some("c")).unwrap();
+        hub.refuse(&chat_request);
+        let _task_request = hub.claim_call_with("vie", "calendar_add", Some("t")).unwrap();
+        hub.dispatch(&chat, review2_event("tool.completed", json!({"tool": tool, "tool_call_id": "c", "error": false})));
+        hub.dispatch(&task, review2_event("tool.completed", json!({"tool": tool, "tool_call_id": "t", "error": false})));
+        assert_eq!((completed_errors(&chat).last().cloned(), completed_errors(&task).last().cloned()),
+                   (Some(json!(true)), Some(json!(false))));
+        // a request whose id comes before its run's event: paired by that id when it starts
+        hub.refuse(&hub.claim_call_with("vie", "calendar_add", Some("late")).unwrap());
+        hub.dispatch(&task, review2_event("tool.started", json!({"tool": tool, "tool_call_id": "other"})));
+        hub.dispatch(&task, review2_event("tool.started", json!({"tool": tool, "tool_call_id": "late"})));
+        hub.dispatch(&task, review2_event("tool.completed", json!({"tool": tool, "tool_call_id": "other", "error": false})));
+        hub.dispatch(&task, review2_event("tool.completed", json!({"tool": tool, "tool_call_id": "late", "error": false})));
+        assert_eq!(completed_errors(&task)[1..], [json!(false), json!(true)]);
     }
 
     #[tokio::test]

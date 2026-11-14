@@ -513,6 +513,8 @@ mod tests {
         let said = text(&done);
         assert!(said.contains("too large") && !said.contains("MEDIA:"), "{said}");
         assert!(said.contains("connect your cloud drive"), "a drive service exists: {said}");
+        // the person lifts it in the app (a drive to connect): never counted by the brake (review 3)
+        assert!(done.contains_key(crate::tool_answers::LIFTED_MARK), "{done:?}");
         // no drive service at all: just too big
         let done = call_with(&config, &agent, &args(json!({"path": "/envoi/film.mp4"})), &[]).await;
         assert!(text(&done).ends_with("« This file is too big to send you here. »"), "{}", text(&done));
