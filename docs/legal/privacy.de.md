@@ -1045,7 +1045,7 @@ Das Relay akzeptiert nur verschlüsselte Verbindungen (HTTPS), versiegelt die To
 Datenbank und schreibt nie ein Token im Klartext. In der App sind die Schlüssel deiner Agenten durch den
 Schlüsselbund oder den Keystore geschützt, und die Verbindung zu deinem Server läuft über Tailscale oder über eine
 HTTPS-Tür in deinem lokalen Netz, die nur das Zertifikat deines Servers akzeptiert. Der Code der App, der
-Serverseite und des Relays ist öffentlich: https://github.com/BipAgents/BipAgents. Um eine Sicherheitslücke zu melden:
+Serverseite und des Relays ist öffentlich: https://github.com/Alexbob0/BipAgents. Um eine Sicherheitslücke zu melden:
 **security@bipagents.com** (siehe die Datei SECURITY.md im Repository).
 
 Mit dem Alles-inklusive-Angebot ist jeder Platz ein eigenes Konto auf dem Server, ohne Administratorrechte; Kerfy
