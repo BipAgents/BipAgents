@@ -1,0 +1,1396 @@
+//! Messages between agents of two households, through the bridge, only where both people allowed them.
+//!
+//! Hermes' Bot Mode lets an agent message another one (`message_agent`) on a « peer »: an address and a key in
+//! its config (`bot_peers`). Giving an agent another agent's key would let it do anything with that agent. So
+//! the bridge is the only peer: each gateway gets a token of its own, which says who is calling and nothing more,
+//! and the bridge forwards to the other household's bridge (`to_household`), but only along a link the person turned
+//! on in the app (« Qui peut écrire à qui »).
+//!
+//! Between agents of this household Bot Mode is off (Alex, 2026-11-10): no Bot Mode mark on a profile, no peer, no
+//! token for an agent that writes only to its own household's (`set_tokens`), and the relay refuses a local target.
+//! Hermes' Bot Mode wrote into the target's Bot Chat, the person's main conversation with it, with no cap; the
+//! bridge's `message_agent` (agent_messages.rs) asks in the two agents' own conversation, counted by agent_hops.rs.
+//!
+//! Another household's agent (`deliver`, since 2026-10-29) doesn't reach the Bot Chat itself: the « Bot Chat » it
+//! finds or opens is the two agents' own conversation (« Vie (Alex) ⇄ Cuisine », agent_pairs.rs, a hidden Hermes
+//! session per pair), and a message to the real Bot Chat (an id its side kept from before) goes there too
+//! (`only_pair_session`). That turn's history is only what those two agents said to each other, never what the
+//! person told their agent; the bridge keeps the thread for the person's app, like the pairs inside a household.
+//!
+//! Hermes delivers these messages as the gateway (`hermes -p default peer dm`): the token says which gateway
+//! calls, and the message's signature (« Message from … (@agent): ») which of its agents. An agent in its own
+//! space is alone in its gateway, so it is known for sure; in the shared hub, an agent could sign as another hub
+//! agent (same person, nothing secret there).
+
+use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::path::{Path, PathBuf};
+use std::sync::{LazyLock, Mutex};
+
+use axum::body::{Body, Bytes};
+use axum::extract::{Path as UrlPath, Request, State};
+use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode};
+use axum::response::Response;
+use axum::routing::{delete, get, post, put};
+use axum::Router;
+use futures::TryStreamExt;
+use regex::Regex;
+use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
+
+use crate::agents_admin::pyyaml::Yaml;
+use crate::app::AppState;
+use crate::config::{AgentConfig, Config};
+use crate::households::{own_url, split, HouseholdError, Households};
+use crate::web::{self, ApiResult, HttpError, QueryMap};
+use crate::Dict;
+
+pub use crate::households::SEPARATOR;
+
+/// The permanent conversation where an agent gets its peers' messages (Hermes' Bot Mode).
+pub const BOT_CHAT_TITLE: &str = "Bot Chat";
+/// What agents see in their roster: message_agent target "bip/<agent>".
+pub const PEER_NAME: &str = "bip";
+/// Headers never forwarded (hop by hop, or the caller's own key).
+const HOP: [&str; 7] =
+    ["host", "content-length", "connection", "keep-alive", "transfer-encoding", "authorization", "upgrade"];
+const ALLOWED_PATHS: [&str; 3] = ["api/sessions", "v1/runs", "v1/capabilities"];
+
+fn digest(token: &str) -> String {
+    hex::encode(Sha256::digest(token.as_bytes()))
+}
+
+/// Python's `ValueError` of `apply` and `manual_token` (safe to show).
+#[derive(Debug, Clone, thiserror::Error)]
+#[error("{0}")]
+pub struct InvalidLink(pub String);
+
+/// The links the person allowed between agents, and the tokens given to their gateways (`peers.json`).
+pub struct Links {
+    pub path: PathBuf,
+}
+
+/// The `links` of a loaded `peers.json` as pairs.
+pub fn links_of(data: &Dict) -> Vec<(String, String)> {
+    data.get("links")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|x| {
+                    x.as_array().filter(|p| p.len() == 2).map(|p| (crate::py::py_str(&p[0]), crate::py::py_str(&p[1])))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn pairs_value(pairs: &[(String, String)]) -> Value {
+    Value::Array(pairs.iter().map(|(a, b)| json!([a, b])).collect())
+}
+
+impl Links {
+    pub fn new(path: &str) -> Self {
+        Links { path: PathBuf::from(path) }
+    }
+
+    /// `{"links": [[from, to]…], "tokens": {gateway: digest}}`.
+    pub fn load(&self) -> Dict {
+        let data: Value = std::fs::read_to_string(&self.path)
+            .ok()
+            .and_then(|t| serde_json::from_str(&t).ok())
+            .unwrap_or_else(|| json!({}));
+        let data = data.as_object().cloned().unwrap_or_default();
+        let mut out = Dict::new();
+        out.insert("links".into(), pairs_value(&links_of(&data)));
+        out.insert("tokens".into(), data.get("tokens").cloned().unwrap_or_else(|| json!({})));
+        out
+    }
+
+    pub fn save(&self, data: &Dict) -> anyhow::Result<()> {
+        if let Some(parent) = self.path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let mut links = links_of(data);
+        links.sort();
+        let content =
+            json!({"links": pairs_value(&links), "tokens": data.get("tokens").cloned().unwrap_or_else(|| json!({}))});
+        let tmp = format!("{}.tmp", self.path.display());
+        crate::py::write_with_mode(&tmp, crate::py::dumps(&content).as_bytes(), 0o600)?;
+        std::fs::rename(&tmp, &self.path)?;
+        Ok(())
+    }
+
+    /// The gateway (see `gateway_of`) this token was given to.
+    pub fn caller(&self, token: &str) -> Option<String> {
+        let wanted = digest(token);
+        let data = self.load();
+        let tokens = data.get("tokens")?.as_object()?;
+        tokens
+            .iter()
+            .find(|(_, d)| {
+                d.as_str().map(|d| crate::auth::constant_time_eq(d.as_bytes(), wanted.as_bytes())).unwrap_or(false)
+            })
+            .map(|(gw, _)| gw.clone())
+    }
+
+    pub fn allowed(&self, sender: &str, target: &str) -> bool {
+        links_of(&self.load()).iter().any(|(s, t)| s == sender && t == target)
+    }
+}
+
+/// The HERMES_HOME of the gateway serving an agent this bridge manages (None: set up by hand).
+pub fn managed_home(config: &Config, agent: &AgentConfig) -> Option<PathBuf> {
+    if let Some(space) = agent.space.as_deref().filter(|s| !s.is_empty()) {
+        return Some(PathBuf::from(space));
+    }
+    if config.hermes.enabled() && agent.hermes_url.starts_with(&format!("{}/p/", config.hermes.hub_url)) {
+        let home = if config.hermes.home.is_empty() {
+            crate::py::join(&crate::py::expanduser("~"), ".hermes")
+        } else {
+            config.hermes.home.clone()
+        };
+        return Some(PathBuf::from(home));
+    }
+    None
+}
+
+/// Which gateway serves the agent: its HERMES_HOME, or « manual:<agent> » for one set up by hand.
+pub fn gateway_of(config: &Config, agent: &AgentConfig) -> String {
+    match managed_home(config, agent) {
+        Some(home) => home.to_string_lossy().into_owned(),
+        None => format!("manual:{}", agent.name),
+    }
+}
+
+pub static SIGNATURE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^Message from .{0,200}? \(@([A-Za-z0-9_-]{1,64})\):").expect("valid regex"));
+
+/// `json.loads(body or b"{}")` as a dict (anything else: empty).
+fn body_json(body: &[u8]) -> Option<Value> {
+    if body.is_empty() {
+        return Some(json!({}));
+    }
+    serde_json::from_slice(body).ok()
+}
+
+/// The agent of `gateway` that signed this message (Hermes puts « Message from … (@agent): » first).
+pub fn sender_of(config: &Config, gateway: &str, body: &[u8]) -> Option<String> {
+    let data = body_json(body)?;
+    let text = match &data {
+        Value::Object(map) => {
+            let value = map
+                .get("message")
+                .filter(|v| crate::py::truthy(v))
+                .or_else(|| map.get("input").filter(|v| crate::py::truthy(v)));
+            value.map(crate::py::py_str).unwrap_or_default()
+        }
+        _ => String::new(),
+    };
+    let found = SIGNATURE.captures(&text)?;
+    let agent = config.agent(Some(&found[1]))?;
+    if gateway_of(config, agent) == gateway {
+        Some(agent.name.clone())
+    } else {
+        None
+    }
+}
+
+/// The bridge as the agents reach it (`peer_url`, default http://127.0.0.1:<port>/peer).
+pub fn peer_url(config: &Config) -> String {
+    match config.peer_url.as_deref().filter(|u| !u.is_empty()) {
+        Some(url) => url.to_string(),
+        None => format!("http://127.0.0.1:{}/peer", config.port),
+    }
+}
+
+/// The person's links: the skills that list them ([`write_contacts`]), and Bot Mode for the senders to another
+/// household ([`set_tokens`]). Returns `{"manual": {agent: ""}}`: the agents set up by hand that need their token
+/// from the administrator. `InvalidLink` (Python's `ValueError`) for a link that cannot be.
+pub fn apply(
+    config: &Config,
+    links: &Links,
+    wanted: &[(String, String)],
+    households: Option<&Households>,
+) -> anyhow::Result<Dict> {
+    let linked: HashSet<String> = match households {
+        Some(h) => h
+            .load()
+            .get("households")
+            .and_then(Value::as_object)
+            .map(|m| m.keys().cloned().collect())
+            .unwrap_or_default(),
+        None => HashSet::new(),
+    };
+    let known = |name: &str| match split(name) {
+        Some((_, household)) => linked.contains(&household),
+        None => config.agent(Some(name)).is_some(),
+    };
+    for (sender, target) in wanted {
+        // Between two households, one end is ours: « vie → cuisine__lea » (ours writes) or « vie__alex → cuisine ».
+        if sender == target || !known(sender) || !known(target) || (split(sender).is_some() && split(target).is_some())
+        {
+            return Err(InvalidLink(format!("unknown link {sender} → {target}")).into());
+        }
+    }
+    let mut data = links.load();
+    let unique: BTreeSet<(String, String)> = wanted.iter().cloned().collect();
+    let pairs: Vec<(String, String)> = unique.into_iter().collect();
+    let manual = set_tokens(config, &mut data, &pairs)?;
+    data.insert("links".into(), pairs_value(&pairs));
+    links.save(&data)?;
+    write_contacts(config, &pairs, households);
+    tracing::info!(links = pairs.len(), "agent links set");
+    let mut out = Dict::new();
+    out.insert("manual".into(), Value::Object(manual));
+    Ok(out)
+}
+
+/// Hermes' Bot Mode (the profile's mark, `bot_peers.bip` and its key) only for our agents that write to another
+/// household's agent, and their gateways: between agents of this household it is off, the bridge's `message_agent`
+/// is the one way (agent_messages.rs: in the two agents' own conversation, capped). A gateway with no such sender
+/// left loses its token and its peer. Returns the agents set up by hand that need their token from the administrator.
+fn set_tokens(config: &Config, data: &mut Dict, pairs: &[(String, String)]) -> anyhow::Result<Dict> {
+    let mut sending: BTreeMap<String, AgentConfig> = BTreeMap::new();
+    let mut bots = BTreeSet::new();
+    for (sender, target) in pairs {
+        if split(sender).is_some() || split(target).is_none() {
+            continue;
+        }
+        if let Some(agent) = config.agent(Some(sender)) {
+            sending.insert(gateway_of(config, agent), agent.clone());
+            bots.insert(agent.name.clone());
+        }
+    }
+    mark_bots(config, &bots);
+    let mut tokens = data.get("tokens").and_then(Value::as_object).cloned().unwrap_or_default();
+    let mut manual = Dict::new();
+    let key_env = format!("HERMES_PEER_{}_KEY", PEER_NAME.to_uppercase());
+    for (gateway, agent) in &sending {
+        if tokens.contains_key(gateway) {
+            continue;
+        }
+        if gateway.starts_with("manual:") {
+            manual.insert(agent.name.clone(), json!("")); // the administrator adds it (bipbridge peer-token)
+            continue;
+        }
+        let token = crate::py::token_urlsafe(32);
+        // The gateway's own (default) profile: Hermes reads the peer and its key there when it delivers.
+        crate::profile_files::set(
+            &Path::new(gateway).join("config.yaml"),
+            &[
+                (&format!("bot_peers.{PEER_NAME}.url"), Yaml::str(peer_url(config))),
+                (&format!("bot_peers.{PEER_NAME}.note"), Yaml::str(PEER_NOTE)),
+            ],
+        )?;
+        crate::services::set_env(&Path::new(gateway).join(".env"), &key_env, Some(&token))?;
+        tokens.insert(gateway.clone(), json!(digest(&token)));
+    }
+    // A gateway that sends nothing any more loses its token and its peer, when the bridge can give them again by
+    // itself. An agent set up by hand keeps its token: only its administrator could put a new one in, and without a
+    // link it is refused anyway.
+    let stale: Vec<String> =
+        tokens.keys().filter(|g| !sending.contains_key(*g) && !g.starts_with("manual:")).cloned().collect();
+    for gateway in stale {
+        let folder = Path::new(&gateway);
+        if folder.is_dir() {
+            crate::services::set_env(&folder.join(".env"), &key_env, None)?;
+            let peers_file = folder.join("config.yaml");
+            if peers_file.exists() {
+                crate::profile_files::edit(&peers_file, |yaml| {
+                    if let Some(peers) = yaml.get_mut("bot_peers").filter(|p| p.is_map()) {
+                        peers.remove(PEER_NAME);
+                    }
+                })?;
+            }
+        }
+        tokens.shift_remove(&gateway);
+    }
+    data.insert("tokens".into(), Value::Object(tokens));
+    Ok(manual)
+}
+
+/// Hermes turns Bot Mode on for an install where a profile is marked (`ui_meta.hermes-bots` in its profile.yaml):
+/// then each agent's Bot Chat, its main conversation, gets Hermes' `message_agent` with the install's other profiles
+/// as its roster, whatever links the person set (lab of 2026-11-11: Prof, linked to nobody, had it). Only the agents
+/// that write to another household are marked; every other profile this bridge manages loses the mark.
+fn mark_bots(config: &Config, bots: &BTreeSet<String>) {
+    for agent in config.agents.values() {
+        let Some(folder) = crate::shares::profile_dir(config, agent).filter(|f| f.is_dir()) else { continue };
+        let done = if bots.contains(&agent.name) {
+            crate::agents_admin::mark_as_bot(&folder)
+        } else {
+            crate::profile_files::edit(&folder.join("profile.yaml"), |data| {
+                if let Some(meta) = data.get_mut("ui_meta").filter(|m| m.is_map()) {
+                    meta.remove("hermes-bots");
+                }
+            })
+            .map(|_| ())
+        };
+        if let Err(exc) = done {
+            tracing::warn!(agent = %agent.name, error = %exc, "Bot Mode mark not set");
+        }
+    }
+}
+
+/// At start, the tokens and peers [`set_tokens`] gives for the links kept: a place set up while Bot Mode still ran
+/// between its own agents loses them there.
+pub fn heal_tokens(config: &Config, links: &Links) {
+    let mut data = links.load();
+    let before = data.get("tokens").cloned();
+    let pairs = links_of(&data);
+    match set_tokens(config, &mut data, &pairs) {
+        Ok(_) if data.get("tokens") != before.as_ref() => {
+            if let Err(exc) = links.save(&data) {
+                tracing::warn!(error = %exc, "agent peers not healed");
+            }
+        }
+        Ok(_) => {}
+        Err(exc) => tracing::warn!(error = %exc, "agent peers not healed"),
+    }
+}
+
+/// What a gateway's agents read about the bridge as their peer: only other households' agents are reached there.
+const PEER_NOTE: &str = "Les agents des autres foyers, par BipAgents (cible : bip/<agent>__<foyer>)";
+
+const CONTACTS: &str = "---
+name: agent-contacts
+description: \"The other agents you may write to with message_agent or give files to with send_files_to_agent, and how to address them.\"
+version: 1.2.0
+author: BipAgents
+license: MIT
+---
+
+# Agents you may write to
+
+Use `message_agent` with one of these targets (the person allowed exactly these; any other is refused):
+
+{lines}
+
+Your person's own agents answer in the same call. Another household's agent answers in your « Bot Chat »; a
+message from one is signed with its household, for example « Message from Vie (Alex) (@vie__alex) »: answer it at
+`bip/vie__alex`.
+
+Another agent never sees your files, your shared folder /partage included, nor a path of yours you write to it. To
+give files to one of your person's agents, use `send_files_to_agent` (it says the path that agent reads them at),
+then tell it with `message_agent`, giving those paths. Another household's agents get no files.
+";
+
+pub fn contacts_skill_path(home: &Path, agent: &str) -> PathBuf {
+    home.join("profiles").join(agent).join("skills").join("agent-contacts").join("SKILL.md")
+}
+
+/// Each agent this bridge manages gets the list of agents it may write to (a skill in its profile).
+pub fn write_contacts(config: &Config, links: &[(String, String)], households: Option<&Households>) {
+    let names: BTreeMap<String, String> = households
+        .map(|h| {
+            h.public()
+                .iter()
+                .map(|x| {
+                    (
+                        x.get("id").map(crate::py::py_str).unwrap_or_default(),
+                        x.get("name").map(crate::py::py_str).unwrap_or_default(),
+                    )
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    for agent in config.agents.values() {
+        let Some(home) = managed_home(config, agent) else { continue };
+        let skill = contacts_skill_path(&home, &agent.name);
+        if crate::profile_files::hands_off(&skill) {
+            continue; // the person's own Hermes (profile_files::hands_off)
+        }
+        let mut targets: Vec<&String> = links.iter().filter(|(s, _)| *s == agent.name).map(|(_, t)| t).collect();
+        targets.sort();
+        if targets.is_empty() {
+            if skill.exists() {
+                let _ = std::fs::remove_file(&skill);
+            }
+            continue;
+        }
+        let mut lines = Vec::new();
+        for target in targets {
+            match split(target) {
+                Some((other, household)) => {
+                    let household_name = names.get(&household).cloned().unwrap_or(household);
+                    lines.push(format!("- `bip/{target}`: {other}, an agent of {household_name}'s household"));
+                }
+                None => {
+                    let shown =
+                        config.agent(Some(target)).map(|a| a.display_name.clone()).unwrap_or_else(|| target.clone());
+                    lines.push(format!("- `bip/{target}`: {shown}"));
+                }
+            }
+        }
+        let written = skill
+            .parent()
+            .map(std::fs::create_dir_all)
+            .unwrap_or(Ok(()))
+            .and_then(|_| std::fs::write(&skill, CONTACTS.replace("{lines}", &lines.join("\n"))));
+        if written.is_err() {
+            tracing::warn!(agent = %agent.name, "contacts not written");
+        }
+    }
+}
+
+/// A new token for an agent set up by hand (its old one stops working). Printed once, never stored.
+pub fn manual_token(config: &Config, links: &Links, name: &str) -> anyhow::Result<String> {
+    let Some(agent) = config.agent(Some(name)) else {
+        return Err(InvalidLink(format!("unknown agent {name}")).into());
+    };
+    let token = crate::py::token_urlsafe(32);
+    let mut data = links.load();
+    let mut tokens = data.get("tokens").and_then(Value::as_object).cloned().unwrap_or_default();
+    tokens.insert(gateway_of(config, agent), json!(digest(&token)));
+    data.insert("tokens".into(), Value::Object(tokens));
+    links.save(&data)?;
+    Ok(token)
+}
+
+// -- the peer protocol ------------------------------------------------------------------------------------------------
+
+/// `json.loads(body)` as a dict (`_json`): anything else is empty.
+fn json_dict(body: &[u8]) -> Dict {
+    match body_json(body) {
+        Some(Value::Object(map)) => map,
+        _ => Dict::new(),
+    }
+}
+
+/// `urllib.parse.quote_plus`-style encoding of a query, as httpx writes `params=`.
+fn encode_query(pairs: &[(String, String)]) -> String {
+    const SAFE: &percent_encoding::AsciiSet =
+        &percent_encoding::NON_ALPHANUMERIC.remove(b'_').remove(b'.').remove(b'-').remove(b'~').remove(b' ');
+    let enc = |s: &str| percent_encoding::utf8_percent_encode(s, SAFE).to_string().replace(' ', "+");
+    pairs.iter().map(|(k, v)| format!("{}={}", enc(k), enc(v))).collect::<Vec<_>>().join("&")
+}
+
+/// `urllib.parse.quote(text)` (`/` kept).
+fn quote(text: &str) -> String {
+    const SAFE: &percent_encoding::AsciiSet =
+        &percent_encoding::NON_ALPHANUMERIC.remove(b'_').remove(b'.').remove(b'-').remove(b'~').remove(b'/');
+    percent_encoding::utf8_percent_encode(text, SAFE).to_string()
+}
+
+/// `urllib.parse.unquote(text)`.
+fn unquote(text: &str) -> String {
+    percent_encoding::percent_decode_str(text).decode_utf8_lossy().into_owned()
+}
+
+async fn from_target(state: &AppState, agent: &AgentConfig, path: &str, params: &[(String, String)]) -> Option<Value> {
+    let mut url = format!("{}/{path}", agent.hermes_url);
+    if !params.is_empty() {
+        url = format!("{url}?{}", encode_query(params));
+    }
+    let resp = state
+        .http
+        .get(url)
+        .bearer_auth(&agent.hermes_key)
+        .timeout(std::time::Duration::from_secs(15))
+        .send()
+        .await
+        .ok()?;
+    if resp.status().as_u16() != 200 {
+        return None;
+    }
+    let bytes = resp.bytes().await.ok()?;
+    serde_json::from_slice(&bytes).ok()
+}
+
+/// The target's Bot Chat, as its own Hermes lists it (hidden sessions included).
+async fn bot_chat(state: &AppState, agent: &AgentConfig) -> Option<Dict> {
+    let params = [("limit", "200"), ("title", BOT_CHAT_TITLE), ("include_hidden", "1")]
+        .map(|(k, v)| (k.to_string(), v.to_string()));
+    bot_chat_row(from_target(state, agent, "api/sessions", &params).await?)
+}
+
+/// The Bot Chat among a listing of sessions, read as hermes.rs reads every listing: under `data` (Hermes v0.22.5),
+/// `sessions` or `items`.
+fn bot_chat_row(listing: Value) -> Option<Dict> {
+    crate::hermes::HermesClient::session_rows(listing).into_iter().find(|row| {
+        row.get("title").filter(|t| crate::py::truthy(t)).map(crate::py::py_str).unwrap_or_default().trim()
+            == BOT_CHAT_TITLE
+    })
+}
+
+fn id_of(row: &Dict) -> String {
+    row.get("id").filter(|v| crate::py::truthy(v)).map(crate::py::py_str).unwrap_or_default()
+}
+
+static CHAT_PATH: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^api/sessions/([^/]+)/chat\z").expect("valid regex"));
+static RUN_PATH: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^v1/runs/([^/]+)(/stop)?\z").expect("valid regex"));
+
+/// Where a household request about the target's « Bot Chat » goes.
+enum PairRoute {
+    /// Given by the bridge itself.
+    Answer(Response),
+    /// Forwarded to the target's Hermes: this path and body, for this conversation of the pair.
+    Forward { path: String, body: Bytes, session: String },
+}
+
+/// What another household's agent may do with `agent`: the calls of `hermes peer` (dm, send, status, stop), as on
+/// the Bot Chat, but in the two agents' own conversation (agent_pairs.rs): the « Bot Chat » it finds or opens is that
+/// conversation, and a message to the real Bot Chat (an id the other side kept from before) goes there too. The
+/// person's Bot Chat and other conversations stay out of that turn's history. Anything else is refused.
+#[allow(clippy::too_many_arguments)]
+async fn only_pair_session(
+    state: &AppState,
+    agent: &AgentConfig,
+    remote: &str,
+    shown: &str,
+    method: &Method,
+    path: &str,
+    query: &QueryMap,
+    body: Bytes,
+) -> ApiResult<PairRoute> {
+    let refuse = || HttpError::new(403, format!("only {}'s Bot Chat is reachable", agent.name));
+    let config = state.config();
+    let session = || async {
+        crate::agent_pairs::household_session(&state.http, &config, remote, shown, agent).await.map_err(|exc| {
+            tracing::warn!(sender = %remote, target = %agent.name, error = %exc, "household pair: no conversation");
+            HttpError::new(502, format!("{} can't be reached", agent.display_name))
+        })
+    };
+    let row = |id: &str| json!({"id": id, "title": BOT_CHAT_TITLE});
+    if *method == Method::GET && path == "v1/capabilities" {
+        return Ok(PairRoute::Forward { path: path.to_string(), body, session: String::new() });
+    }
+    if *method == Method::GET && path == "api/sessions" {
+        if query.get("title") != Some(BOT_CHAT_TITLE) {
+            return Err(refuse());
+        }
+        let id = session().await?;
+        return Ok(PairRoute::Answer(web::ok(json!({"object": "list", "data": [row(&id)]}))));
+    }
+    if *method == Method::POST && path == "api/sessions" {
+        if json_dict(&body).get("title") != Some(&json!(BOT_CHAT_TITLE)) {
+            return Err(refuse());
+        }
+        let id = session().await?;
+        let mut made = row(&id);
+        made["session"] = row(&id);
+        return Ok(PairRoute::Answer(web::ok(made)));
+    }
+    let chat = CHAT_PATH.captures(path);
+    if *method == Method::POST && (chat.is_some() || path == "v1/runs") {
+        let mut data = json_dict(&body);
+        let wanted = match &chat {
+            Some(c) => unquote(&c[1]),
+            None => data.get("session_id").filter(|v| crate::py::truthy(v)).map(crate::py::py_str).unwrap_or_default(),
+        };
+        let id = session().await?;
+        if wanted.is_empty() || (wanted != id && bot_chat(state, agent).await.map(|r| id_of(&r)) != Some(wanted)) {
+            return Err(refuse());
+        }
+        return Ok(match chat {
+            Some(_) => PairRoute::Forward { path: format!("api/sessions/{}/chat", quote(&id)), body, session: id },
+            None => {
+                data.insert("session_id".into(), json!(id));
+                let body = Bytes::from(crate::py::dumps(&Value::Object(data)).into_bytes());
+                PairRoute::Forward { path: path.to_string(), body, session: id }
+            }
+        });
+    }
+    if let Some(run) = RUN_PATH.captures(path) {
+        if (*method == Method::GET) == run.get(2).is_none() {
+            let status = from_target(state, agent, &format!("v1/runs/{}", &run[1]), &[]).await;
+            let of_run = status.as_ref().and_then(Value::as_object).map(|s| {
+                s.get("session_id").filter(|v| crate::py::truthy(v)).map(crate::py::py_str).unwrap_or_default()
+            });
+            let Some(of_run) = of_run.filter(|s| !s.is_empty()) else { return Err(refuse()) };
+            let known = crate::agent_pairs::household_session_known(&config, remote, &agent.name);
+            // a run started in the Bot Chat before the pairs' conversations may still be followed to its end
+            if known.as_deref() == Some(of_run.as_str())
+                || bot_chat(state, agent).await.map(|r| id_of(&r)).as_deref() == Some(of_run.as_str())
+            {
+                return Ok(PairRoute::Forward { path: path.to_string(), body, session: of_run });
+            }
+        }
+    }
+    Err(refuse())
+}
+
+fn is_message(method: &Method, path: &str) -> bool {
+    *method == Method::POST && (path.ends_with("/chat") || path == "v1/runs")
+}
+
+/// The caller's token (`authorization` without its « Bearer » prefix).
+fn bearer(headers: &HeaderMap) -> String {
+    let header =
+        headers.get("authorization").map(|v| String::from_utf8_lossy(v.as_bytes()).into_owned()).unwrap_or_default();
+    header.strip_prefix("Bearer ").unwrap_or(&header).trim().to_string()
+}
+
+/// The caller's headers to forward: the last value of each, hop-by-hop ones (and `x-bip-*` when asked) left out.
+fn forwarded_headers(headers: &HeaderMap, drop_bip: bool) -> HeaderMap {
+    let mut out = HeaderMap::new();
+    for (name, value) in headers {
+        let lower = name.as_str();
+        if HOP.contains(&lower) || (drop_bip && lower.starts_with("x-bip-")) {
+            continue;
+        }
+        out.insert(name.clone(), value.clone());
+    }
+    out
+}
+
+/// The request to the target streamed back as it comes (a turn can take minutes: no read timeout).
+async fn forward(
+    state: &AppState,
+    method: &Method,
+    url: &str,
+    query: &QueryMap,
+    body: Bytes,
+    headers: HeaderMap,
+) -> ApiResult<Response> {
+    forward_with(&state.http, method, url, query, body, headers).await
+}
+
+/// [`forward`] with another client (a linked household's, door_tls.rs).
+async fn forward_with(
+    http: &reqwest::Client,
+    method: &Method,
+    url: &str,
+    query: &QueryMap,
+    body: Bytes,
+    headers: HeaderMap,
+) -> ApiResult<Response> {
+    let mut target = url.to_string();
+    if !query.pairs.is_empty() {
+        target = format!("{target}?{}", encode_query(&query.pairs));
+    }
+    let mut builder = http.request(method.clone(), target).headers(headers);
+    if !body.is_empty() || matches!(*method, Method::POST | Method::PUT | Method::PATCH) {
+        builder = builder.body(body);
+    }
+    let upstream = builder.send().await.map_err(|_| HttpError::new(502, "this agent isn't answering right now"))?;
+    let status = StatusCode::from_u16(upstream.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
+    // httpx joins a header's values with « , ».
+    let mut merged: Vec<(HeaderName, Vec<u8>)> = Vec::new();
+    for (name, value) in upstream.headers() {
+        let lower = name.as_str();
+        if HOP.contains(&lower) || lower == "content-encoding" {
+            continue;
+        }
+        match merged.iter_mut().find(|(n, _)| n == name) {
+            Some((_, joined)) => {
+                joined.extend_from_slice(b", ");
+                joined.extend_from_slice(value.as_bytes());
+            }
+            None => merged.push((name.clone(), value.as_bytes().to_vec())),
+        }
+    }
+    let stream = upstream.bytes_stream().map_err(std::io::Error::other);
+    let mut response = Response::new(Body::from_stream(stream));
+    *response.status_mut() = status;
+    for (name, value) in merged {
+        if let Ok(value) = HeaderValue::from_bytes(&value) {
+            response.headers_mut().insert(name, value);
+        }
+    }
+    Ok(response)
+}
+
+/// `/peer/p/<target>/<path>`: an agent of ours writing to another household's agent (`to_household`). Our own
+/// agents write to each other with the bridge's `message_agent` (agent_messages.rs), never through Bot Mode: a local
+/// target is refused.
+async fn relay(state: AppState, target: String, path: String, request: Request) -> ApiResult<Response> {
+    let config = state.config();
+    let token = bearer(request.headers());
+    let gateway = if token.is_empty() { None } else { state.links.caller(&token) };
+    let Some(gateway) = gateway else {
+        return Err(HttpError::new(401, "unknown agent"));
+    };
+    let remote = split(&target);
+    let household = remote.as_ref().and_then(|(_, h)| state.households.get(h));
+    let (Some(household), Some((remote_agent, _))) = (household, remote) else {
+        if config.agent(Some(&target)).is_some() {
+            return Err(HttpError::new(403, format!("write to {target} with the bridge's message_agent")));
+        }
+        return Err(HttpError::new(404, "not found"));
+    };
+    if !ALLOWED_PATHS.iter().any(|p| path.starts_with(p)) {
+        return Err(HttpError::new(404, "not found"));
+    }
+    let (parts, body) = request.into_parts();
+    let body = axum::body::to_bytes(body, usize::MAX)
+        .await
+        .map_err(|_| HttpError::new(400, "There was an error parsing the body"))?;
+    let query = QueryMap::parse(parts.uri.query());
+    let links = links_of(&state.links.load());
+    let mine: BTreeSet<String> =
+        config.agents.values().filter(|a| gateway_of(&config, a) == gateway).map(|a| a.name.clone()).collect();
+    to_household(
+        &state,
+        &config,
+        &gateway,
+        &mine,
+        &links,
+        &target,
+        &remote_agent,
+        &household,
+        &path,
+        &parts.method,
+        &parts.headers,
+        &query,
+        body,
+    )
+    .await
+}
+
+/// One of our agents writes to an agent of a linked household: our link checked here, theirs on their bridge.
+#[allow(clippy::too_many_arguments)]
+async fn to_household(
+    state: &AppState,
+    config: &Config,
+    gateway: &str,
+    mine: &BTreeSet<String>,
+    links: &[(String, String)],
+    target: &str,
+    agent: &str,
+    household: &Dict,
+    path: &str,
+    method: &Method,
+    request_headers: &HeaderMap,
+    query: &QueryMap,
+    body: Bytes,
+) -> ApiResult<Response> {
+    let linked = |s: &str| links.iter().any(|(a, b)| a == s && b == target);
+    let (sender, allowed) = if is_message(method, path) {
+        let sender =
+            sender_of(config, gateway, &body)
+                .or_else(|| if mine.len() == 1 { mine.iter().next().cloned() } else { None });
+        let allowed = sender.as_deref().map(linked).unwrap_or(false);
+        (sender, allowed)
+    } else {
+        let sender = mine.iter().find(|n| linked(n)).cloned();
+        let allowed = sender.is_some();
+        (sender, allowed)
+    };
+    let Some(sender) = sender.filter(|_| allowed) else {
+        tracing::info!(sender = %gateway, target = %target, "household message refused");
+        return Err(HttpError::new(403, format!("not allowed to write to {target} (ask the person)")));
+    };
+    let shown = config.agent(Some(&sender)).map(|a| a.display_name.clone()).unwrap_or_else(|| sender.clone());
+    let key_out = household.get("key_out").map(crate::py::py_str).unwrap_or_default();
+    let mut headers = forwarded_headers(request_headers, false);
+    for (name, value) in [
+        ("authorization", format!("Bearer {key_out}")),
+        ("x-bip-sender", sender.clone()),
+        ("x-bip-sender-name", quote(&shown)),
+    ] {
+        if let Ok(value) = HeaderValue::from_str(&value) {
+            headers.insert(name, value);
+        }
+    }
+    tracing::info!(sender = %sender, target = %target, "household message");
+    let url = format!("{}/family/p/{agent}/{path}", crate::family_relay::reach_url(household));
+    let http = crate::door_tls::household_client(&state.http, household);
+    forward_with(&http, method, &url, query, body, headers).await
+}
+
+/// « Message from Vie (@vie): » becomes « Message from Vie (Alex) (@vie__alex): »: the agent sees who writes, from
+/// which household, and the address to answer.
+pub fn resign(body: &[u8], sender: &str, name: &str, household: &str) -> Vec<u8> {
+    let Some(Value::Object(mut data)) = body_json(body) else { return body.to_vec() };
+    for field in ["message", "input"] {
+        if let Some(Value::String(text)) = data.get(field).cloned() {
+            let signed = format!(
+                "Message from {name} ({household}) (@{sender}{SEPARATOR}{}):",
+                crate::households::slug(household)
+            );
+            let resigned = match SIGNATURE.find(&text) {
+                Some(found) => format!("{signed}{}", &text[found.end()..]),
+                None => format!("{signed} {text}"),
+            };
+            data.insert(field.to_string(), Value::String(resigned));
+        }
+    }
+    crate::py::dumps(&Value::Object(data)).into_bytes()
+}
+
+/// A message from another household's agent is a turn someone other than this person drives: it is marked for
+/// Hermes (`guest_turn`, patch 0018: only the bridge tools of `agent_shares::RELATIVE_TOOLS` and `web_search`, no
+/// Hermes tool that reaches the person's data or acts, no USER.md in the prompt), and while it goes on the bridge's
+/// MCP tools answer only `RELATIVE_TOOLS` (`household_turn`, agent_tools.rs).
+pub fn guest_marked(body: &[u8]) -> Vec<u8> {
+    let Some(Value::Object(mut data)) = body_json(body) else { return body.to_vec() };
+    let tools = crate::agent_shares::guest_tools(&crate::agent_shares::RELATIVE_TOOLS);
+    data.insert("guest_turn".into(), crate::hermes::guest_turn(&tools));
+    crate::py::dumps(&Value::Object(data)).into_bytes()
+}
+
+/// A household message's turn is taken as going on for this long at most (Hermes' peer DM waits 600 s).
+pub const HOUSEHOLD_TURN_SECONDS: f64 = 600.0;
+/// Household messages' turns going on: (id, agent, since).
+static HOUSEHOLD_TURNS: Mutex<Vec<(u64, String, f64)>> = Mutex::new(Vec::new());
+static HOUSEHOLD_TURN_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+fn household_turn_began(agent: &str) -> u64 {
+    let id = HOUSEHOLD_TURN_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let mut turns = HOUSEHOLD_TURNS.lock().unwrap_or_else(|e| e.into_inner());
+    turns.push((id, agent.to_string(), crate::py::time_time()));
+    id
+}
+
+fn household_turn_ended(id: u64) {
+    HOUSEHOLD_TURNS.lock().unwrap_or_else(|e| e.into_inner()).retain(|(t, _, _)| *t != id);
+}
+
+/// Whether another household's agent has a turn of `agent` going on (a session chat until it answers, a run for
+/// `HOUSEHOLD_TURN_SECONDS`: the bridge doesn't follow its end).
+pub fn household_turn(agent: &str) -> bool {
+    let at = crate::py::time_time();
+    let mut turns = HOUSEHOLD_TURNS.lock().unwrap_or_else(|e| e.into_inner());
+    turns.retain(|(_, _, since)| at - since < HOUSEHOLD_TURN_SECONDS);
+    turns.iter().any(|(_, a, _)| a == agent)
+}
+
+async fn relay_path(
+    State(state): State<AppState>,
+    UrlPath((target, path)): UrlPath<(String, String)>,
+    request: Request,
+) -> ApiResult<Response> {
+    relay(state, target, path, request).await
+}
+
+async fn relay_bare(
+    State(state): State<AppState>,
+    UrlPath(target): UrlPath<String>,
+    request: Request,
+) -> ApiResult<Response> {
+    relay(state, target, String::new(), request).await
+}
+
+/// `/peer/p/<target>/…`: Hermes' peer protocol (its sessions and runs API), for the agents (their own tokens).
+/// Mounted at the root.
+pub fn peer_router() -> Router<AppState> {
+    Router::new()
+        .route("/peer/p/{target}/", get(relay_bare).post(relay_bare))
+        .route("/peer/p/{target}/{*path}", get(relay_path).post(relay_path))
+}
+
+// -- between households -----------------------------------------------------------------------------------------------
+
+/// The household whose key this request carries (401 otherwise).
+fn household_caller(state: &AppState, headers: &HeaderMap) -> ApiResult<String> {
+    let token = bearer(headers);
+    let household = if token.is_empty() { None } else { state.households.caller(&token) };
+    household.ok_or_else(|| HttpError::new(401, "unknown household"))
+}
+
+/// Starlette's `await request.json()`: invalid JSON is an uncaught error (500). Small bodies only (64 KiB): some of
+/// these routes are open (`/family/accept`).
+async fn request_json(request: Request) -> ApiResult<Value> {
+    let bytes = axum::body::to_bytes(request.into_body(), 64 * 1024).await.map_err(|e| {
+        if crate::body_limit::is_too_large(&e) {
+            HttpError::new(413, "request body too large")
+        } else {
+            HttpError::new(400, "There was an error parsing the body")
+        }
+    })?;
+    serde_json::from_slice(&bytes).map_err(|e| HttpError::from(anyhow::anyhow!("JSONDecodeError: {e}")))
+}
+
+/// `body.get(key, "")` with Python's `str()`; a body that is not a dict is an uncaught error (500).
+fn body_str(body: &Value, key: &str) -> ApiResult<String> {
+    match body {
+        Value::Object(map) => Ok(map.get(key).map(crate::py::py_str).unwrap_or_default()),
+        _ => Err(HttpError::from(anyhow::anyhow!("AttributeError: object has no attribute 'get'"))),
+    }
+}
+
+/// A household linked or unlinked: the agents get the family's tools, or lose them (agent_tools.rs `tools_for`).
+fn family_tools_changed(state: &AppState) {
+    let config = state.config();
+    if config.hermes.enabled() {
+        state.spawn(crate::agent_tools::register_all(state.config.clone(), crate::agents_admin::default_run()));
+    }
+}
+
+async fn family_accept(State(state): State<AppState>, request: Request) -> ApiResult<Response> {
+    // a household already linked that links again says so with its current key (it then keeps its place)
+    let current = Some(bearer(request.headers())).filter(|t| !t.is_empty());
+    let body = request_json(request).await?;
+    let (code, name, url, key) =
+        (body_str(&body, "code")?, body_str(&body, "name")?, body_str(&body, "url")?, body_str(&body, "key")?);
+    // the certificate their address serves when it is a door (sent over ours, checked, with our one-time code)
+    let fingerprint = body_str(&body, "fingerprint")?;
+    let fingerprint = Some(fingerprint.as_str()).filter(|f| !f.is_empty());
+    match state.households.accept(&code, &name, &url, &key, fingerprint, current.as_deref()) {
+        Ok(mut answer) => {
+            // their address can't be reached from here (a home): their bridge will fetch our calls (family_relay.rs)
+            if body.get("pull").and_then(Value::as_bool) == Some(true) {
+                let household = crate::households::slug(&name);
+                if state.households.mark(&household, "relay", json!(crate::family_relay::new_token()))? {
+                    answer.insert("relay".into(), json!(true));
+                }
+            }
+            family_tools_changed(&state);
+            if let Some(own) = crate::door_tls::door_fingerprint(&state.config()) {
+                answer.insert("fingerprint".into(), json!(own));
+            }
+            Ok(web::ok(Value::Object(answer)))
+        }
+        Err(HouseholdError(message)) if message == crate::households::NAME_TAKEN => Err(HttpError::new(409, message)),
+        Err(HouseholdError(message)) => Err(HttpError::new(403, message)),
+    }
+}
+
+/// `POST /family/door {fingerprint}`: a linked household's bridge tells the certificate its address serves (links
+/// made before invitations carried it, a certificate put back after a restore). Its key says who it is.
+async fn family_door(State(state): State<AppState>, request: Request) -> ApiResult<Response> {
+    let household = household_caller(&state, request.headers())?;
+    let body = request_json(request).await?;
+    let (fingerprint, url) = (body_str(&body, "fingerprint")?, body_str(&body, "url")?);
+    let url = Some(url.as_str()).filter(|u| !u.is_empty());
+    match state.households.set_fingerprint(&household, &fingerprint, url) {
+        Ok(changed) => {
+            if changed {
+                tracing::info!(household = %household, "household door certificate kept");
+            }
+            Ok(web::ok(json!({"ok": true})))
+        }
+        Err(e) if e.downcast_ref::<HouseholdError>().is_some() => {
+            Err(HttpError::new(409, e.downcast_ref::<HouseholdError>().map(|h| h.0.clone()).unwrap_or_default()))
+        }
+        Err(_) => Err(HttpError::new(401, "unknown household")),
+    }
+}
+
+async fn family_agents(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<Response> {
+    let household = household_caller(&state, &headers)?;
+    let config = state.config();
+    // every agent (the pairing screen lists those not paired yet); `tell`: whether that household's family news may
+    // name it (family_news::reachable_by), so its tell_family proposes no agent that /family/tell would refuse
+    let links = links_of(&state.links.load());
+    let first = config.agents.values().next();
+    let agents: Vec<Value> = config
+        .agents
+        .values()
+        .map(|a| {
+            let tell = crate::family_news::reachable_by(&config, &links, &household, a, first);
+            json!({"id": a.name, "name": a.display_name, "tell": tell})
+        })
+        .collect();
+    Ok(web::ok(json!({"name": state.households.name(), "agents": agents})))
+}
+
+/// `/family/p/<target>/<path>`: a linked household's agent writes to one of ours.
+async fn deliver(state: AppState, target: String, path: String, request: Request) -> ApiResult<Response> {
+    let household = household_caller(&state, request.headers())?;
+    let config = state.config();
+    let Some(agent) =
+        config.agent(Some(&target)).cloned().filter(|_| ALLOWED_PATHS.iter().any(|p| path.starts_with(p)))
+    else {
+        return Err(HttpError::new(404, "not found"));
+    };
+    let (parts, body) = request.into_parts();
+    let sender = parts
+        .headers
+        .get("x-bip-sender")
+        .map(|v| String::from_utf8_lossy(v.as_bytes()).into_owned())
+        .unwrap_or_default();
+    let remote = format!("{sender}{SEPARATOR}{household}");
+    let links = links_of(&state.links.load());
+    let allowed = if is_message(&parts.method, &path) {
+        !sender.is_empty() && links.iter().any(|(s, t)| *s == remote && *t == agent.name)
+    } else {
+        links.iter().any(|(s, t)| s.ends_with(&format!("{SEPARATOR}{household}")) && *t == agent.name)
+    };
+    if !allowed {
+        tracing::info!(sender = %remote, target = %agent.name, "household message refused");
+        return Err(HttpError::new(403, format!("{} does not take messages from {remote}", agent.display_name)));
+    }
+    let body = axum::body::to_bytes(body, usize::MAX)
+        .await
+        .map_err(|_| HttpError::new(400, "There was an error parsing the body"))?;
+    let query = QueryMap::parse(parts.uri.query());
+    let given = parts
+        .headers
+        .get("x-bip-sender-name")
+        .map(|v| String::from_utf8_lossy(v.as_bytes()).into_owned())
+        .unwrap_or_default();
+    let name = Some(unquote(&given)).filter(|n| !n.is_empty()).unwrap_or_else(|| sender.clone());
+    let household_name =
+        state.households.get(&household).and_then(|h| h.get("name").map(crate::py::py_str)).unwrap_or_default();
+    let shown = if household_name.is_empty() { name.clone() } else { format!("{name} ({household_name})") };
+    // the pair's own conversation, never the person's Bot Chat (agent_pairs.rs)
+    let (path, mut body, session) =
+        match only_pair_session(&state, &agent, &remote, &shown, &parts.method, &path, &query, body).await? {
+            PairRoute::Answer(answer) => return Ok(answer),
+            PairRoute::Forward { path, body, session } => (path, body, session),
+        };
+    let message = is_message(&parts.method, &path);
+    if message && !crate::agent_shares::guest_turns_closed(&config, Some(&agent)) {
+        // a turn another household drives, on a Hermes that would run it open (audit 11/11, BA-2)
+        return Ok(crate::agent_shares::guest_turns_refused(&config, 503));
+    }
+    if message {
+        body = Bytes::from(resign(&body, &sender, &name, &household_name));
+        let (framed, said) = crate::agent_pairs::household_framed(&body, &shown, &remote);
+        if let Err(exc) =
+            crate::agent_pairs::record(&config, &remote, &agent.name, "ask", &said, crate::py::time_time())
+        {
+            tracing::warn!(sender = %remote, target = %agent.name, error = %exc, "household pair: the ask not kept");
+        }
+        body = Bytes::from(framed);
+        body = Bytes::from(crate::dates::now::stamped_body_for(&state.config(), &agent, &body));
+        body = Bytes::from(guest_marked(&body));
+    }
+    let mut headers = forwarded_headers(&parts.headers, true);
+    if let Ok(value) = HeaderValue::from_str(&format!("Bearer {}", agent.hermes_key)) {
+        headers.insert("authorization", value);
+    }
+    tracing::info!(sender = %remote, target = %agent.name, "household message");
+    let url = format!("{}/{path}", agent.hermes_url);
+    let starts_run = parts.method == Method::POST && path == "v1/runs";
+    let turn = message.then(|| household_turn_began(&agent.name));
+    let response = forward(&state, &parts.method, &url, &query, body.clone(), headers).await;
+    if let (Some(turn), false) = (turn, starts_run && response.as_ref().is_ok_and(|r| r.status().is_success())) {
+        household_turn_ended(turn); // a session chat answers when its turn is over; a run refused never ran
+    }
+    let response = response?;
+    if !message || !response.status().is_success() {
+        return Ok(response);
+    }
+    // the answer kept in the pair's thread: the run followed to its end, or the session chat's reply once read
+    let (response_parts, response_body) = response.into_parts();
+    let Ok(bytes) = axum::body::to_bytes(response_body, 16 << 20).await else {
+        return Err(HttpError::new(502, "Hermes' answer was lost"));
+    };
+    let run_id = if starts_run {
+        let answer: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
+        let answer = answer.get("run").filter(|r| r.is_object()).unwrap_or(&answer);
+        answer.get("run_id").or_else(|| answer.get("id")).and_then(Value::as_str).map(str::to_string)
+    } else {
+        None
+    };
+    state.spawn(crate::agent_pairs::keep_household_answer(
+        state.http.clone(),
+        (*config).clone(),
+        remote.clone(),
+        agent.clone(),
+        session,
+        run_id,
+    ));
+    let response = Response::from_parts(response_parts, Body::from(bytes));
+    if starts_run {
+        // the turn it started followed by the hub, for the brake (loop_brake.rs)
+        return Ok(crate::runs::keep_started(&state.hub, &agent, &body, response, true).await);
+    }
+    Ok(response)
+}
+
+async fn deliver_path(
+    State(state): State<AppState>,
+    UrlPath((target, path)): UrlPath<(String, String)>,
+    request: Request,
+) -> ApiResult<Response> {
+    deliver(state, target, path, request).await
+}
+
+async fn deliver_bare(
+    State(state): State<AppState>,
+    UrlPath(target): UrlPath<String>,
+    request: Request,
+) -> ApiResult<Response> {
+    deliver(state, target, String::new(), request).await
+}
+
+/// What a linked household's bridge may call (the key each was given): introduce itself with an invitation code,
+/// list our agents, and hand a message over along a link this person turned on. Mounted at the root.
+pub fn family_router() -> Router<AppState> {
+    Router::new()
+        .route("/family/accept", post(family_accept))
+        .route("/family/agents", get(family_agents))
+        .route("/family/door", post(family_door))
+        .route("/family/p/{target}/", get(deliver_bare).post(deliver_bare))
+        .route("/family/p/{target}/{*path}", get(deliver_path).post(deliver_path))
+}
+
+// -- the app's side -----------------------------------------------------------------------------------------------------
+
+async fn family(State(state): State<AppState>) -> Response {
+    let config = state.config();
+    web::ok(json!({"name": state.households.name(), "url": own_url(&config), "households": state.households.public()}))
+}
+
+async fn set_name(State(state): State<AppState>, request: Request) -> ApiResult<Response> {
+    let body = request_json(request).await?;
+    let name = body_str(&body, "name")?;
+    if let Err(exc) = state.households.set_name(&name) {
+        return match exc.downcast_ref::<HouseholdError>() {
+            Some(e) => Err(HttpError::new(400, e.0.clone())),
+            None => Err(exc.into()),
+        };
+    }
+    Ok(web::ok(json!({"name": state.households.name()})))
+}
+
+/// `{days?}`: an invitation sent through the person's account (« Inviter par son compte ») waits longer than a QR
+/// code shown in the same room (ten minutes): up to a week.
+async fn invite(State(state): State<AppState>, request: Request) -> ApiResult<Response> {
+    let bytes = axum::body::to_bytes(request.into_body(), 64 * 1024)
+        .await
+        .map_err(|_| HttpError::new(400, "There was an error parsing the body"))?;
+    let days = serde_json::from_slice::<Value>(&bytes).ok().and_then(|b| b.get("days").and_then(Value::as_f64));
+    let seconds = days.map(|d| d.clamp(0.0, 7.0) * 86400.0).filter(|s| *s > 0.0);
+    let config = state.config();
+    let Some(url) = own_url(&config).filter(|u| !u.is_empty()) else {
+        return Err(HttpError::new(409, "this bridge has no address on the tailnet (public_url)"));
+    };
+    let code = match state.households.invite_for(seconds.unwrap_or(crate::households::INVITE_SECONDS)) {
+        Ok(code) => code,
+        Err(exc) => {
+            return match exc.downcast_ref::<HouseholdError>() {
+                Some(e) => Err(HttpError::new(409, e.0.clone())),
+                None => Err(exc.into()),
+            }
+        }
+    };
+    let (url, fingerprint) = family_address(&config, url);
+    let mut invitation = json!({"v": 1, "kind": "family", "url": url, "code": code, "name": state.households.name()});
+    // our address is a door with a self-signed certificate: the other bridge pins it, as the apps do
+    if let Some(fingerprint) = fingerprint {
+        invitation["fingerprint"] = json!(fingerprint);
+    }
+    Ok(web::ok(invitation))
+}
+
+/// Where another household's bridge reaches this one, and the certificate to pin there. A place of the offer with
+/// its own name (`<label>.p.bipagents.com`, place_cert.rs) is reached by that name on 443, with its publicly trusted
+/// certificate: a home network that lets out only 443 (Alex's, 30/10) never reaches the IP door on 444+.
+fn family_address(config: &Config, public: String) -> (String, Option<String>) {
+    let now = crate::py::time_time() as i64;
+    if let Some(held) = crate::place_cert::held_for(config).filter(|h| config.cloud && h.expires > now) {
+        return (format!("https://{}", held.host), None);
+    }
+    (public, crate::door_tls::door_fingerprint(config))
+}
+
+/// The other household's invitation, scanned in the app: this bridge introduces itself to theirs.
+async fn join(State(state): State<AppState>, request: Request) -> ApiResult<Response> {
+    let body = request_json(request).await?;
+    let url = body_str(&body, "url")?.trim_end_matches('/').to_string();
+    let code = body_str(&body, "code")?;
+    let config = state.config();
+    let mine = own_url(&config).filter(|u| !u.is_empty());
+    let (Some(mine), false) = (mine, state.households.name().is_empty()) else {
+        return Err(HttpError::new(409, "name this household and give the bridge a tailnet address first"));
+    };
+    // the inviter's certificate when its address is a door (in its invitation, as the apps get it at pairing)
+    let given = body_str(&body, "fingerprint")?;
+    let fingerprint = match given.trim() {
+        "" => None,
+        given => Some(
+            crate::door_tls::normalize(given).ok_or_else(|| HttpError::new(400, "this invitation is damaged"))?,
+        ),
+    };
+    if fingerprint.is_none() && crate::door_tls::door_address(&url) {
+        // a door's address without its certificate: an older app, or an invitation from an older bridge
+        return Err(HttpError::new(409, "this invitation is too old: ask for a new one (and update the app)"));
+    }
+    let key = crate::py::token_urlsafe(32);
+    let (mine, own) = family_address(&config, mine);
+    let mut payload = json!({"code": code, "name": state.households.name(), "url": mine, "key": key});
+    if let Some(own) = own {
+        payload["fingerprint"] = json!(own);
+    }
+    // our address can't be reached from the internet (a home): theirs keeps its calls for us (family_relay.rs)
+    let pull = crate::households::private_address(&mine);
+    if pull {
+        payload["pull"] = json!(true);
+    }
+    // theirs can't be reached from here: a home's invitation scanned on a place of the offer (the apps say who
+    // should scan whose invitation instead)
+    let out_of_reach = || {
+        HttpError::json(
+            502,
+            json!({"code": "their_side_unreachable", "private": crate::households::private_address(&url),
+                   "message": "their side does not answer right now: try again later"}),
+        )
+    };
+    if config.cloud && crate::households::private_address(&url) {
+        return Err(out_of_reach()); // a place of the offer never reaches a home network or a tailnet
+    }
+    let mut call = crate::door_tls::client_for(&state.http, fingerprint.as_deref())
+        .post(format!("{url}/family/accept"))
+        .timeout(std::time::Duration::from_secs(15))
+        .json(&payload);
+    // already linked to the household at this address: our current key lets theirs know we are linking again
+    let current = state
+        .households
+        .public()
+        .into_iter()
+        .find(|h| h.get("url").and_then(Value::as_str) == Some(url.as_str()))
+        .and_then(|h| state.households.get(&crate::py::py_str(&h["id"])))
+        .and_then(|e| e.get("key_out").and_then(Value::as_str).map(str::to_string));
+    if let Some(current) = current {
+        call = call.bearer_auth(current);
+    }
+    let resp = call.send().await.map_err(|_| out_of_reach())?;
+    if resp.status().as_u16() == 409 {
+        return Err(HttpError::new(409, "their bridge is already linked to a household with this name"));
+    }
+    if resp.status().as_u16() != 200 {
+        return Err(HttpError::new(403, "the invitation was refused (expired?)"));
+    }
+    let bytes = resp.bytes().await.map_err(|_| out_of_reach())?;
+    let answer: Value =
+        serde_json::from_slice(&bytes).map_err(|e| HttpError::from(anyhow::anyhow!("JSONDecodeError: {e}")))?;
+    let name = body_str(&answer, "name")?;
+    let key_in = body_str(&answer, "key")?;
+    let household = match state.households.joined(&name, &url, &key, &key_in, fingerprint.as_deref()) {
+        Ok(h) => {
+            // they keep their calls for us: we fetch them (an older bridge doesn't answer `relay`)
+            if pull && answer.get("relay").and_then(Value::as_bool) == Some(true) {
+                state.households.mark(&h, "pull", json!(true))?;
+                crate::family_relay::start_pulling(&state, &h);
+            }
+            family_tools_changed(&state);
+            h
+        }
+        Err(exc) => {
+            return match exc.downcast_ref::<HouseholdError>() {
+                Some(e) => Err(HttpError::new(409, e.0.clone())),
+                None => Err(exc.into()),
+            }
+        }
+    };
+    Ok(web::ok(json!({"id": household, "name": answer.get("name").cloned().unwrap_or(Value::Null)})))
+}
+
+async fn unlink(state: &AppState, household: &str) -> ApiResult<Response> {
+    let entry = state.households.get(household);
+    if state.households.remove(household).is_err() {
+        return Err(HttpError::new(404, "no such household"));
+    }
+    // the calls kept for it (a home that fetched them, family_relay.rs) fail at once
+    crate::family_relay::forget(household);
+    // the family's agent held here: that member gets what is the family's (family_agent.rs)
+    crate::family_agent::after_unlink(state, household, entry);
+    let mut data = state.links.load();
+    let suffix = format!("{SEPARATOR}{household}");
+    let kept: Vec<(String, String)> =
+        links_of(&data).into_iter().filter(|(s, t)| !s.ends_with(&suffix) && !t.ends_with(&suffix)).collect();
+    data.insert("links".into(), pairs_value(&kept));
+    state.links.save(&data)?;
+    family_tools_changed(state);
+    Ok(web::no_content())
+}
+
+async fn unlink_route(State(state): State<AppState>, UrlPath(household): UrlPath<String>) -> ApiResult<Response> {
+    unlink(&state, &household).await
+}
+
+/// Starlette tries the routes in order: `DELETE /v1/family/name` (a path with another method) falls through to
+/// `DELETE /v1/family/{household}`. Other methods: 405 with this path's own methods.
+async fn or_unlink(state: AppState, request: Request, literal: &str, allow: &'static str) -> Response {
+    if request.method() == Method::DELETE {
+        return match unlink(&state, literal).await {
+            Ok(r) => r,
+            Err(e) => axum::response::IntoResponse::into_response(e),
+        };
+    }
+    let mut response = Response::new(Body::empty());
+    *response.status_mut() = StatusCode::METHOD_NOT_ALLOWED;
+    response.headers_mut().insert("allow", HeaderValue::from_static(allow));
+    response
+}
+
+async fn name_fallback(State(state): State<AppState>, request: Request) -> Response {
+    or_unlink(state, request, "name", "PUT").await
+}
+
+async fn invite_fallback(State(state): State<AppState>, request: Request) -> Response {
+    or_unlink(state, request, "invite", "POST").await
+}
+
+async fn join_fallback(State(state): State<AppState>, request: Request) -> Response {
+    or_unlink(state, request, "join", "POST").await
+}
+
+/// For the app: this household's name, its invitations, joining another one, the households linked (mounted under
+/// /v1, bridge key).
+pub fn household_admin_router() -> Router<AppState> {
+    Router::new()
+        .route("/family", get(family))
+        .route("/family/name", put(set_name).fallback(name_fallback))
+        .route("/family/invite", post(invite).fallback(invite_fallback))
+        .route("/family/join", post(join).fallback(join_fallback))
+        .route("/family/{household}", delete(unlink_route))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_place_with_its_own_name_is_reached_by_it_on_443() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = Config::with_key("k".repeat(40));
+        config.lan.enabled = true;
+        config.lan.cert_dir = dir.path().to_string_lossy().into_owned();
+        let door = "https://51.75.1.2:444".to_string();
+        assert_eq!(family_address(&config, door.clone()).0, door);
+        for name in [crate::place_cert::CERT_NAME, crate::place_cert::KEY_NAME] {
+            std::fs::write(dir.path().join(name), "x").unwrap();
+        }
+        let meta = json!({"host": "k3x9q2.p.bipagents.com", "expires": crate::py::time_time() as i64 + 86400});
+        std::fs::write(dir.path().join(crate::place_cert::META_NAME), meta.to_string()).unwrap();
+        assert_eq!(family_address(&config, door.clone()).0, door); // a self-install keeps its own address
+        config.cloud = true;
+        assert_eq!(family_address(&config, door), ("https://k3x9q2.p.bipagents.com".to_string(), None));
+    }
+
+    #[test]
+    fn a_households_message_is_marked_and_closes_the_tools_while_it_goes_on() {
+        let out: Value = serde_json::from_slice(&guest_marked(br#"{"message": "salut"}"#)).unwrap();
+        assert_eq!(out["message"], "salut");
+        let tools: Vec<&str> = out["guest_turn"]["tools"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
+        assert!(tools.contains(&"mcp__bipagents__weather") && tools.contains(&"web_search"));
+        assert!(!tools.iter().any(|t| ["terminal", "session_search", "mcp__bipagents__mail_search"].contains(t)));
+        assert_eq!(guest_marked(b"not json"), b"not json");
+        assert!(!household_turn("cuisine-test"));
+        let turn = household_turn_began("cuisine-test");
+        assert!(household_turn("cuisine-test") && !household_turn("vie-test"));
+        household_turn_ended(turn);
+        assert!(!household_turn("cuisine-test"));
+    }
+
+    #[test]
+    fn the_bot_chat_is_found_under_data_as_hermes_v0225_answers() {
+        // Hermes v0.22.5's `GET /api/sessions` (gateway/platforms/api_server.py `_handle_list_sessions`)
+        let listing = json!({"object": "list", "data": [{"id": "s9", "title": "Courses"},
+                                                        {"id": "bot-1", "title": " Bot Chat "}],
+                             "limit": 200, "offset": 0, "has_more": false});
+        assert_eq!(bot_chat_row(listing).map(|r| id_of(&r)).as_deref(), Some("bot-1"));
+        assert!(bot_chat_row(json!({"object": "list", "data": [{"id": "s9", "title": "Courses"}]})).is_none());
+    }
+
+    #[test]
+    fn the_bot_chat_is_found_under_sessions_too() {
+        // the other shape hermes.rs reads (`sessions`, the black-box suite's Hermes), and `items`
+        let listing = json!({"sessions": [{"id": "s9", "title": "Courses"}, {"id": "bot-2", "title": "Bot Chat"}]});
+        assert_eq!(bot_chat_row(listing).map(|r| id_of(&r)).as_deref(), Some("bot-2"));
+        let items = json!({"items": [{"id": "bot-3", "title": "Bot Chat"}]});
+        assert_eq!(bot_chat_row(items).map(|r| id_of(&r)).as_deref(), Some("bot-3"));
+        assert!(bot_chat_row(json!({"sessions": []})).is_none());
+        assert!(bot_chat_row(json!({"detail": "nope"})).is_none());
+    }
+
+    #[test]
+    fn resigning_and_quoting() {
+        let body = br#"{"session_id": "bot-1", "message": "Message from Vie (@vie): bonjour"}"#;
+        let out: Value = serde_json::from_slice(&resign(body, "vie", "Vie", "Alex")).unwrap();
+        assert_eq!(out["message"], "Message from Vie (Alex) (@vie__alex): bonjour");
+        let out: Value = serde_json::from_slice(&resign(br#"{"input": "salut"}"#, "vie", "Vie", "Léa")).unwrap();
+        assert_eq!(out["input"], "Message from Vie (Léa) (@vie__lea): salut");
+        assert_eq!(quote("Vie Ö/x"), "Vie%20%C3%96/x");
+        assert_eq!(
+            encode_query(&[("title".into(), "Bot Chat".into()), ("x".into(), "a~b*c/d".into())]),
+            "title=Bot+Chat&x=a~b%2Ac%2Fd"
+        );
+    }
+}

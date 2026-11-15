@@ -1,0 +1,379 @@
+"""Hermes for one person: the official install, one multiplex gateway (the default profile listens, every agent is a
+named profile reached under /p/<agent>/ with its own key), the model, and each agent's personality.
+
+Everything goes through Hermes' own commands (`hermes config set`, `hermes profile create`, `hermes gateway
+install`), so an update of Hermes keeps working. Commands are collected by a Runner: the real one runs them, the
+dry one prints them (and tests read them)."""
+from __future__ import annotations
+
+import os
+import secrets
+import shlex
+import subprocess
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Dict, Iterable, List, Optional, Sequence
+
+
+from . import routing
+
+INSTALL_URL = "https://hermes-agent.nousresearch.com/install.sh"
+# The Hermes version BipAgents is tested with, v0.23.1: its patches (hermes/patches/, base in hermes/patches/BASE) apply
+# cleanly there. Override with BIPAGENTS_HERMES_COMMIT (empty = Hermes' own default, without guarantee for the patches).
+HERMES_COMMIT = os.environ.get("BIPAGENTS_HERMES_COMMIT", "3b42157858")
+HUB_PROFILE = "default"
+
+
+@dataclass
+class Model:
+    provider: str            # "openrouter" | "openai-api" | "anthropic" | "custom" | "lmstudio"
+    name: str                # the model id
+    base_url: Optional[str] = None
+    api_key: Optional[str] = None
+    vision: bool = False
+
+    @property
+    def key_env(self) -> Optional[str]:
+        return {"openrouter": "OPENROUTER_API_KEY", "openai-api": "OPENAI_API_KEY",
+                "anthropic": "ANTHROPIC_API_KEY", "lmstudio": "LM_API_KEY"}.get(self.provider,
+                                                                                   "CUSTOM_MODEL_API_KEY" if self.api_key else None)
+
+
+@dataclass
+class Runner:
+    dry: bool = False
+    env: Dict[str, str] = field(default_factory=dict)
+    log: List[str] = field(default_factory=list)
+
+    def run(self, args: Sequence[str], *, input_text: Optional[str] = None, shell: bool = False, check: bool = True,
+            cwd: Optional[Path] = None) -> str:
+        shown = args if isinstance(args, str) else " ".join(shlex.quote(a) for a in args)
+        if cwd:
+            shown = f"cd {shlex.quote(str(cwd))} && {shown}"
+        self.log.append(shown)
+        if self.dry:
+            return ""
+        result = subprocess.run(args, input=input_text, text=True, capture_output=True, shell=shell,
+                                env={**os.environ, **self.env}, check=False, cwd=cwd)
+        if result.returncode != 0 and check:
+            said = result.stderr.strip() or result.stdout.strip()   # Hermes prints its errors on stdout
+            raise RuntimeError(f"{shown} failed ({result.returncode}): {said[-600:]}")
+        return result.stdout
+
+
+def hermes_bin() -> str:
+    found = Path.home() / ".local" / "bin" / "hermes"
+    return str(found)
+
+
+def hermes_home() -> Path:
+    return Path(os.environ.get("HERMES_HOME", Path.home() / ".hermes"))
+
+
+def profile_dir(name: str) -> Path:
+    return hermes_home() if name == HUB_PROFILE else hermes_home() / "profiles" / name
+
+
+def new_key() -> str:
+    """Never starting with « - »: `hermes config set KEY <value>` would read it as an option (1 key in 64; lab
+    2026-10-29, an agent left without its key: « unrecognized arguments »)."""
+    while True:
+        key = secrets.token_urlsafe(32)
+        if not key.startswith("-"):
+            return key
+
+
+UNFINISHED = ".bipagents-unfinished"   # in HERMES_HOME while the installer sets up a Hermes of its own
+
+
+def install(runner: Runner, *, browser: bool) -> None:
+    """The official installer, without questions; Hermes' own browser only when this machine can afford it. On a
+    server whose administrator shares one Hermes between its accounts (shared_hermes.py), that one instead."""
+    if Path(hermes_bin()).exists():
+        return
+    from . import shared_hermes
+    base = shared_hermes.root()
+    if base is not None and shared_hermes.ready(base, shared_hermes.version_id()):
+        shared_hermes.point(runner, base, shared_hermes.version_id())
+        return
+    if not runner.dry:
+        hermes_home().mkdir(parents=True, exist_ok=True)
+        (hermes_home() / UNFINISHED).touch()   # a run that stops here is taken up again, not taken for « their » Hermes
+    flags = ["--non-interactive", "--skip-computer-use"] + ([] if browser else ["--skip-browser"])
+    if HERMES_COMMIT:
+        flags += ["--commit", HERMES_COMMIT]
+    runner.run(f"curl -fsSL {INSTALL_URL} | bash -s -- {' '.join(flags)}", shell=True)
+
+
+def hermes_checkout() -> Path:
+    return Path(os.environ.get("HERMES_INSTALL_DIR", hermes_home() / "hermes-agent"))
+
+
+def patch_variants(patch: Path) -> List[Path]:
+    """A patch, then its version for a newer Hermes (next/ beside it, when one is kept), for someone who updated
+    Hermes past the base of the patches."""
+    newer = patch.parent / "next" / patch.name
+    return [patch] + ([newer] if newer.exists() else [])
+
+
+def set_patches(folder: Path) -> List[Path]:
+    """BipAgents' Hermes patches in ``folder``, in order."""
+    return sorted(p for p in folder.glob("*.patch") if not p.name.startswith("."))
+
+
+def apply_fitting(runner: Runner, checkout: Path, variants: Sequence[Path]) -> Optional[str]:
+    """Put on the first version of a patch that fits this Hermes: as is (`git apply`), else merged with its context
+    (`apply_3way`). Returns the file applied, None when none fits (nothing changed then)."""
+    for variant in variants:
+        try:
+            runner.run(["git", "-C", str(checkout), "apply", "--check", str(variant)])
+            runner.run(["git", "-C", str(checkout), "apply", str(variant)])
+        except RuntimeError:
+            continue
+        return str(variant)
+    if runner.dry:
+        return None
+    return next((str(v) for v in variants if apply_3way(runner, checkout, v)), None)
+
+
+def apply_3way(runner: Runner, checkout: Path, patch: Path) -> bool:
+    """A patch whose context moved (a Hermes past the patches' base), merged with `git apply --3way` from the blobs its
+    full index lines name, when the checkout has them. Only as a fallback, and guarded: `--3way --check` passes a merge
+    with conflicts, and `--3way` works on the index; so the touched files are staged, merged for real, put back as
+    they were on a conflict or when nothing changed (already there), and the index is left as a plain `git apply`
+    leaves it (those paths as in HEAD)."""
+    git = lambda *a: subprocess.run(["git", "-C", str(checkout), *a], capture_output=True, text=True)
+    listed = git("apply", "--numstat", str(patch))
+    paths = [line.split("\t", 2)[2] for line in listed.stdout.splitlines() if line.count("\t") >= 2]
+    if listed.returncode != 0 or not paths:
+        return False
+    before = {p: (checkout / p).read_bytes() if (checkout / p).is_file() else None for p in paths}
+    merged = False
+    try:
+        present = [p for p, data in before.items() if data is not None]
+        if not present or git("add", "--", *present).returncode == 0:
+            runner.run(["git", "-C", str(checkout), "apply", "--3way", str(patch)])
+            merged = any(((checkout / p).read_bytes() if (checkout / p).is_file() else None) != data
+                         for p, data in before.items())
+    except (RuntimeError, OSError):
+        merged = False
+    finally:
+        git("reset", "--quiet", "--", *paths)
+    if not merged:
+        for path, data in before.items():
+            target = checkout / path
+            if data is None:
+                target.unlink(missing_ok=True)
+            else:
+                target.write_bytes(data)
+    return merged
+
+
+def apply_patches(runner: Runner, patches: Path, applied: Optional[List[str]] = None) -> List[str]:
+    """BipAgents' Hermes patches, applied once, before the gateway first starts, each in the version that fits this
+    Hermes. Returns the patches that could not be applied (the app then works without those features)."""
+    checkout = hermes_checkout()
+    skipped: List[str] = []
+    if (hermes_home() / "shared").is_symlink():
+        return skipped   # a shared Hermes was built with them (shared_hermes.py)
+    for patch in set_patches(patches):
+        variants = patch_variants(patch)
+        if not runner.dry and any(subprocess.run(["git", "-C", str(checkout), "apply", "--reverse", "--check", str(v)],
+                                                 capture_output=True).returncode == 0 for v in variants):
+            continue   # already there (a second run of the installer)
+        fit = apply_fitting(runner, checkout, variants)
+        if fit is None:
+            skipped.append(patch.name)
+        elif applied is not None:
+            applied.append(fit)   # by us: an uninstall takes it back off a Hermes that was there before
+    return skipped
+
+
+def _config(runner: Runner, profile: str, key: str, value: str) -> None:
+    args = [hermes_bin()] + ([] if profile == HUB_PROFILE else ["-p", profile]) + ["config", "set", key, value]
+    runner.run(args)
+
+
+def write_env(runner: Runner, profile: str, key: str, value: str) -> None:
+    """A secret `KEY=value` in the profile's .env, where `hermes config set KEY value` puts it, but never on a command
+    line: every account of a shared server reads the others' in /proc (audit 11/11, BV-6). Created 0600, then moved
+    over the old file: never readable by others, even for a moment."""
+    write_env_file(runner, profile_dir(profile) / ".env", key, value)
+
+
+def write_env_file(runner: Runner, path: Path, key: str, value: str) -> None:
+    """`write_env` into a given `.env` (another Hermes home: migrations.py)."""
+    runner.log.append(f"write {path}: {key}")   # never the value
+    if runner.dry:
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+    lines = [line for line in lines if line.split("=", 1)[0].strip().removeprefix("export ").strip() != key]
+    tmp = path.with_name(".env.bip-tmp")
+    tmp.unlink(missing_ok=True)
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        fh.write("\n".join(lines + [f"{key}={value}"]) + "\n")
+    os.replace(tmp, path)
+
+
+# A local server reads a prompt it has not cached at ~1–2k tokens/s, and Hermes compresses at half of the window it
+# detects (a million tokens for some models): a discussion grows to 185k tokens and a lost cache costs two minutes.
+# Compress at this size instead. After a compaction the prompt is back to ~60k (system prompt, summary, recent turns).
+LOCAL_COMPRESSION_TOKENS = 100_000
+
+
+def is_local(base_url: str) -> bool:
+    """A model served on this machine or the local network: plain http (cloud APIs are https)."""
+    return base_url.startswith("http://")
+
+
+def set_model(runner: Runner, profile: str, model: Model) -> None:
+    _config(runner, profile, "model.provider", model.provider)
+    _config(runner, profile, "model.default", model.name)
+    if model.base_url:
+        _config(runner, profile, "model.base_url", model.base_url)
+    if model.provider in ("custom",) and model.api_key:
+        _config(runner, profile, "model.key_env", model.key_env or "CUSTOM_MODEL_API_KEY")
+    if model.api_key and model.key_env:
+        write_env(runner, profile, model.key_env, model.api_key)   # in the profile's .env, not on a command line
+    _config(runner, profile, "model.supports_vision", "true" if model.vision else "false")
+    if model.base_url and is_local(model.base_url):
+        _config(runner, profile, "compression.threshold_tokens", str(LOCAL_COMPRESSION_TOKENS))
+    if not runner.dry and model.provider == "custom" and routing.pins(model.base_url or ""):
+        # the providers EUrouter tries first, so their prompt cache works (routing.py)
+        routing.write(profile_dir(profile) / "config.yaml", routing.DEFAULT_ORDER)
+
+
+# Hermes names its sandbox images without a registry. podman refuses a short name it would have to ask about (Fedora's
+# « enforcing » mode, no terminal in a service): exit 125, no sandbox. Its aliases say where they come from.
+SANDBOX_IMAGE_ALIASES = {"nousresearch/hermes-sandbox": "docker.io/nousresearch/hermes-sandbox",
+                         "nikolaik/python-nodejs": "docker.io/nikolaik/python-nodejs"}
+
+
+def podman_short_names(runner: Runner, home: Optional[Path] = None) -> Path:
+    """The aliases, for this account only (podman reads ~/.config/containers/registries.conf.d)."""
+    path = (home or Path.home()) / ".config" / "containers" / "registries.conf.d" / "50-bipagents.conf"
+    runner.log.append(f"write {path}")
+    if not runner.dry:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("# BipAgents: where Hermes' sandbox images come from (podman won't guess in a service).\n[aliases]\n"
+                        + "".join(f'"{name}" = "{full}"\n' for name, full in SANDBOX_IMAGE_ALIASES.items()),
+                        encoding="utf-8")
+    return path
+
+
+def sandbox_runtime() -> Optional[str]:
+    """podman (or docker) on Linux: the agents' tools then run in a container (Hermes' `docker` terminal backend)."""
+    import platform
+    import shutil
+    if platform.system() != "Linux":
+        return None
+    return shutil.which("podman") or shutil.which("docker")
+
+
+CLARIFY_ON = ("tools", "enable", "clarify", "--platform", "api_server")   # the agent can ask the person a question
+# ... and its question waits an hour for the answer (Alex, 10/11). Hermes 0.23 waits 90 s and its config migration v53
+# lowers an `agent.clarify_timeout` of 3600 to 90: the legacy `clarify.timeout`, read first by 0.22.5 and 0.23.1 and
+# touched by no migration, keeps the hour (bridge-rs/src/tool_diet.rs `with_clarify` writes both, at each start).
+CLARIFY_WAIT = (("agent.clarify_timeout", "3600"), ("clarify.timeout", "3600"))
+DISK_TOOLS = ("terminal", "file", "code_execution", "browser")   # the local browser opens file:// pages
+
+DESKTOP_BINARIES = ("Xvnc", "xfwm4", "xfce4-panel", "xfdesktop", "xfsettingsd", "dbus-run-session", "xauth", "xdpyinfo")
+
+
+def desktop_ready() -> bool:
+    """Hermes' Bot Desktop (a visible browser the agents drive, watched live from the app) runs on Linux, with TigerVNC
+    and Xfce installed (`hermes computer-use screen install`, which needs sudo once)."""
+    import platform
+    import shutil
+    return platform.system() == "Linux" and all(shutil.which(b) for b in DESKTOP_BINARIES)
+
+
+def setup_desktop(runner: Runner, browser: str) -> None:
+    """The agents' browser in a desktop of their own: visible, started on first use and stopped when idle (sooner on
+    a small machine), so the person can watch it live and take over from the app."""
+    _config(runner, HUB_PROFILE, "browser.backend", "off")          # Hermes' own browser tools (vault fill included)
+    _config(runner, HUB_PROFILE, "browser.headed", "true")
+    _config(runner, HUB_PROFILE, "bot_desktop.auto_start", "true")
+    _config(runner, HUB_PROFILE, "bot_desktop.idle_stop_minutes", "60" if browser == "permanent" else "10")
+
+
+BROWSER_IMAGE = "bipagents-browser"
+
+
+def build_browser(runner: Runner, engine: str, repo: Path) -> None:
+    """The agents' visible browser (browser/Containerfile): Chrome, its screen, and the stealth-browser-mcp server,
+    fetched from its own repository at a fixed commit with our patch. Each agent then gets its own container of it
+    (the bridge sets them up: `bipbridge browser add`). Always with today's Chrome and packages, never a cached layer
+    (browser_refresh.py, which also keeps it up to date each night). Built here only when there is no quicker way
+    (shared_images.py): the server's shared images, else the image GitHub Actions built for this checkout."""
+    from .shared_images import browser
+    browser(runner, engine, repo)
+
+
+def setup_hub(runner: Runner, port: int, model: Model, sandbox: Optional[str] = None) -> str:
+    """The default profile: the one listener (127.0.0.1, published on the tailnet by `tailscale serve`). Every agent
+    is cloned from it, so what is set here (sandbox, attachments) holds for all of them."""
+    key = new_key()
+    # Attachments (MEDIA:) only from the agent's own files, never from another's folder.
+    _config(runner, HUB_PROFILE, "gateway.strict", "true")
+    # A risky command always asks the person: Hermes' « smart » default lets the model itself judge it, the same
+    # model a page or an e-mail it read may have steered.
+    _config(runner, HUB_PROFILE, "approvals.mode", "manual")
+    if sandbox:
+        # Terminal, files, code and browser in a container: an agent cannot read another's files on the host.
+        _config(runner, HUB_PROFILE, "terminal.backend", "docker")
+        # The engine the installer found (podman, rootless): Hermes would otherwise take `docker` first, a root daemon
+        # this account may not be allowed to use.
+        _config(runner, HUB_PROFILE, "HERMES_DOCKER_BINARY", sandbox)
+        if Path(sandbox).name == "podman":
+            podman_short_names(runner)
+    else:
+        # Same account as the bridge, no sandbox: an agent able to read the disk could read the bridge's keys. Off until
+        # the person turns one on in the app (every agent is cloned from this profile).
+        runner.run([hermes_bin(), "-p", HUB_PROFILE, "tools", "disable", *DISK_TOOLS, "--platform", "api_server"])
+    # The app's question card: Hermes' `clarify` tool, which its API toolset leaves out (« no interactive UI tools »);
+    # every agent is cloned from this profile, and the bridge adds it at each start too (tool_diet.rs `with_clarify`).
+    runner.run([hermes_bin(), "-p", HUB_PROFILE, *CLARIFY_ON])
+    # never `key` here: that loop once replaced the hub's key with « clarify.timeout » (10/11 to 13/11), which
+    # Hermes 0.23 refuses (shorter than 16): no API server, so no agent was ever served on a fresh install
+    for setting, value in CLARIFY_WAIT:
+        _config(runner, HUB_PROFILE, setting, value)
+    _config(runner, HUB_PROFILE, "API_SERVER_ENABLED", "true")
+    _config(runner, HUB_PROFILE, "API_SERVER_HOST", "127.0.0.1")
+    _config(runner, HUB_PROFILE, "API_SERVER_PORT", str(port))
+    write_env(runner, HUB_PROFILE, "API_SERVER_KEY", key)
+    _config(runner, HUB_PROFILE, "gateway.multiplex_profiles", "true")
+    from .detect import local_timezone
+    timezone = local_timezone()
+    if timezone and timezone != "UTC":
+        _config(runner, HUB_PROFILE, "timezone", timezone)   # routines run at the person's hours
+    set_model(runner, HUB_PROFILE, model)
+    return key
+
+
+def create_agent(runner: Runner, name: str, *, description: str, soul: str, model: Model) -> str:
+    """A named profile served by the hub under /p/<name>/, with its own key, model and personality. Picked up by a
+    running gateway within 30 s: no restart. A profile left by an install that stopped is reused. Cloned from the hub,
+    as the bridge does for the app's agents: `profile create` alone starts from Hermes' defaults (no sandbox)."""
+    if runner.dry or not (profile_dir(name) / "config.yaml").exists():
+        # `--description=…` in one argument: a description that starts with « - » is never read as an option
+        runner.run([hermes_bin(), "profile", "create", name, "--clone-from", HUB_PROFILE, "--no-alias",
+                    f"--description={description}"])
+    key = new_key()
+    write_env(runner, name, "API_SERVER_KEY", key)       # its own key; only the hub enables the api_server
+    set_model(runner, name, model)
+    if not runner.dry:
+        folder = profile_dir(name)
+        (folder / "SOUL.md").write_text(soul, encoding="utf-8")
+    return key
+
+
+def install_service(runner: Runner) -> None:
+    """launchd (macOS) or a systemd user unit (Linux), written by Hermes itself; started now and at login."""
+    runner.run([hermes_bin(), "gateway", "install", "--start-now", "--start-on-login"])
+
+
+def agent_url(base: str, name: str) -> str:
+    return f"{base.rstrip('/')}/p/{name}"

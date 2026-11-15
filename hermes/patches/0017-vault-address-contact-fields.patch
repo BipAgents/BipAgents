@@ -1,0 +1,166 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Alexbob0 <190955252+Alexbob0@users.noreply.github.com>
+Date: Sun, 1 Nov 2026 10:07:40 +0100
+Subject: Address items carry a name, a phone and an e-mail
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+BipAgents « Coordonnées »: an address item also carries a full name, a phone and an e-mail, which the
+browser fill types into a form's name, phone and e-mail fields; none of its fields is required.
+
+BipAgents patch, documented in hermes/patches/README.md of the BipAgents repository.
+
+Bip-Patch: 0017-vault-address-contact-fields
+---
+ agent/vault_login_classifier.py   | 20 ++++++++++++++---
+ agent/vault_store.py              |  7 +++++-
+ tests/tools/test_browser_vault.py | 37 +++++++++++++++++++++++++++++++
+ 3 files changed, 60 insertions(+), 4 deletions(-)
+
+diff --git a/agent/vault_login_classifier.py b/agent/vault_login_classifier.py
+index 2bb17a2b7fdd3a181f73283c41bb96314f367998..d441155d608ea011b7b1730803b3208587ef2f89 100644
+--- a/agent/vault_login_classifier.py
++++ b/agent/vault_login_classifier.py
+@@ -33,6 +33,8 @@ LOGIN_AUTOFILL_TOKENS = ("username", "email", "tel", "current-password")
+ PAYMENT_AUTOFILL_TOKENS = ("cc-number", "cc-name", "cc-exp", "cc-exp-month", "cc-exp-year", "cc-csc")
+ ADDRESS_AUTOFILL_TOKENS = ("address-line1", "address-line2", "address-level2", "address-level1",
+                            "postal-code", "country-name", "country")
++# The contact fields an address item may also carry (agent/vault_store.py ADDRESS_FIELDS): full name, phone, e-mail.
++CONTACT_AUTOFILL_TOKENS = ("name", "tel", "email")
+ _CHECKOUT_HEURISTICS = (
+     (re.compile(r"\b(?:card\s*number|cardnumber|ccnumber|cc\s*num|pan)\b"), "cc-number"),
+     (re.compile(r"\b(?:name\s*on\s*card|cardholder|cc\s*name|ccname)\b"), "cc-name"),
+@@ -40,6 +42,12 @@ _CHECKOUT_HEURISTICS = (
+     (re.compile(r"\b(?:exp(?:iry|iration)?\s*month|exp\s*mm|ccmonth)\b"), "cc-exp-month"),
+     (re.compile(r"\b(?:exp(?:iry|iration)?\s*year|exp\s*yy(?:yy)?|ccyear)\b"), "cc-exp-year"),
+     (re.compile(r"\b(?:exp(?:iry|iration)?(?:\s*date)?|mm\s*yy|valid\s*thru)\b"), "cc-exp"),
++    # contact fields before the address ones: « E-mail address » is an e-mail, not a street (accents are split off
++    # by _normalize_text: « téléphone » reads « te le phone », « prénom » « pre nom »)
++    (re.compile(r"\b(?:e\s*mail|courriel)\b"), "email"),
++    (re.compile(r"\b(?:phone|telephone|te\s*le\s*phone|mobile|portable|tel)\b"), "tel"),
++    (re.compile(r"\b(?:full\s*name|your\s*name|nom\s*complet|nom\s*et\s*pre\s*nom|pre\s*nom\s*et\s*nom)\b|^(?:name|nom)$"),
++     "name"),
+     (re.compile(r"\b(?:address\s*(?:line\s*)?2|apt|suite|unit)\b"), "address-line2"),
+     (re.compile(r"\b(?:address(?:\s*line\s*1)?|street)\b"), "address-line1"),
+     (re.compile(r"\b(?:city|town|locality)\b"), "address-level2"),
+@@ -180,17 +188,23 @@ def select_password_fill(
+ 
+ def classify_checkout_control(control: LoginControl) -> Optional[ClassifiedLoginControl]:
+     """Classify one control as a payment/address fill target (autocomplete token exact match 100,
+-    label/name heuristic 70), or None. Password/email inputs are never checkout targets."""
++    label/name heuristic 70), or None. Password inputs are never checkout targets; an e-mail input and a phone
++    input are, for an address item's e-mail and phone (a payment item has neither, so nothing is typed there)."""
+     tokens = [t for t in control.autocomplete.lower().split() if t]
+-    for token in PAYMENT_AUTOFILL_TOKENS + ADDRESS_AUTOFILL_TOKENS:
++    for token in PAYMENT_AUTOFILL_TOKENS + ADDRESS_AUTOFILL_TOKENS + CONTACT_AUTOFILL_TOKENS:
+         if token in tokens:
+             return ClassifiedLoginControl(control, 100, "country-name" if token == "country" else token)
+-    if control.type in ("password", "email"):
++    if control.type == "password":
+         return None
++    if control.type == "email":
++        return ClassifiedLoginControl(control, 85, "email")
+     searchable = _normalize_text(" ".join(part for part in (control.name, control.label) if part))
+     for pattern, token in _CHECKOUT_HEURISTICS:
+         if pattern.search(searchable):
+             return ClassifiedLoginControl(control, 70, token)
++    if control.type == "tel":
++        # after the heuristics: a card number is often an <input type=tel>
++        return ClassifiedLoginControl(control, 60, "tel")
+     return None
+ 
+ 
+diff --git a/agent/vault_store.py b/agent/vault_store.py
+index dc981d48a219ca9099d5106771e797ad5bef57f9..584c346f10744e90125f56aa7bbf32a6635bb8c6 100644
+--- a/agent/vault_store.py
++++ b/agent/vault_store.py
+@@ -52,9 +52,12 @@ PAYMENT_FIELDS = {
+ ADDRESS_FIELDS = {
+     "address_line1": "address-line1", "address_line2": "address-line2", "city": "address-level2",
+     "state": "address-level1", "postal_code": "postal-code", "country": "country-name",
++    # contact details kept with the address (BipAgents « Coordonnées »): a form's name, phone and e-mail fields
++    "full_name": "name", "phone": "tel", "email": "email",
+ }
++# An address item may hold contact details only (a name and an e-mail): at least one field, none required.
+ REQUIRED_FIELDS = {"payment": ("card_number", "exp_month", "exp_year", "cvc"),
+-                   "address": ("address_line1", "city", "postal_code", "country")}
++                   "address": ()}
+ 
+ _DEFAULT_PORTS = {"http": 80, "https": 443}
+ 
+@@ -592,6 +595,8 @@ class VaultStore:
+             missing = [f for f in REQUIRED_FIELDS[kind] if f not in secret]
+             if missing:
+                 raise VaultError(f"{kind} items require {', '.join(missing)}")
++            if not secret:
++                raise VaultError(f"{kind} items require at least one field")
+             if origin:
+                 norm_origin = normalize_origin(origin)
+ 
+diff --git a/tests/tools/test_browser_vault.py b/tests/tools/test_browser_vault.py
+index 514345d6704d3781e67795810187e53623c21630..049d6b6ef08282bda65898958124fe1df6bdd00e 100644
+--- a/tests/tools/test_browser_vault.py
++++ b/tests/tools/test_browser_vault.py
+@@ -30,10 +30,14 @@ from agent.vault_login_classifier import (
+     ClassifiedLoginControl,
+     LoginControl,
+     build_fill_js,
++    classify_checkout_control,
+     classify_login_control,
++    select_checkout_fills,
+     select_password_fill,
+ )
+ from agent.vault_store import (
++    ADDRESS_FIELDS,
++    PAYMENT_FIELDS,
+     VaultError,
+     VaultStore,
+     normalize_origin,
+@@ -129,6 +133,16 @@ class TestVaultStore:
+         with pytest.raises(VaultError, match="cvc"):
+             store.add_item(kind="payment", label="Card", secret={k: v for k, v in _CARD.items() if k != "cvc"})
+ 
++    def test_an_address_item_keeps_contact_details(self, store):
++        """BipAgents « Coordonnées »: a name, a phone and an e-mail with the address, or on their own."""
++        contact = {"full_name": "Camille Example", "phone": "+33 6 00 00 00 01", "email": "camille@example.org"}
++        meta = store.add_item(kind="address", label="Pro", secret={**_ADDRESS, **contact})
++        assert store.resolve_secret(meta.id) == {**_ADDRESS, **contact}
++        alone = store.add_item(kind="address", label="E-mail only", secret={"email": "camille@example.org"})
++        assert store.resolve_secret(alone.id) == {"email": "camille@example.org"}
++        with pytest.raises(VaultError, match="at least one field"):
++            store.add_item(kind="address", label="Empty", secret={"note": "x"})
++
+     def test_unknown_kind_rejected(self, store):
+         with pytest.raises(VaultError):
+             store.add_item(kind="totp", label="x", secret={})
+@@ -200,6 +214,29 @@ class TestClassifier:
+         res = classify_login_control(_ctrl(label="Username or account"))
+         assert res.token == "username"
+ 
++    def test_checkout_contact_fields(self):
++        """An address item's name, phone and e-mail: by autocomplete, by type, by label (French accents too); a card
++        number in an <input type=tel> stays a card number."""
++        assert classify_checkout_control(_ctrl(autocomplete="name")).token == "name"
++        assert classify_checkout_control(_ctrl(autocomplete="shipping tel")).token == "tel"
++        assert classify_checkout_control(_ctrl(type="email")).token == "email"
++        assert classify_checkout_control(_ctrl(label="E-mail address")).token == "email"
++        assert classify_checkout_control(_ctrl(label="Téléphone")).token == "tel"
++        assert classify_checkout_control(_ctrl(label="Nom complet")).token == "name"
++        assert classify_checkout_control(_ctrl(type="tel", name="cardnumber")).token == "cc-number"
++        assert classify_checkout_control(_ctrl(type="tel")).token == "tel"
++        assert classify_checkout_control(_ctrl(type="password", autocomplete="")) is None
++        assert classify_checkout_control(_ctrl(label="Last name")) is None
++        fields = [classify_checkout_control(_ctrl(index=i, **kw)) for i, kw in enumerate(
++            [{"autocomplete": "name"}, {"type": "email"}, {"label": "Phone"}, {"autocomplete": "address-line1"}])]
++        secret = {"full_name": "Camille Example", "email": "camille@example.org", "phone": "0600000001",
++                  "address_line1": "1 Main St"}
++        fills = select_checkout_fills(fields, secret, ADDRESS_FIELDS)
++        assert sorted((f["index"], f["value"]) for f in fills) == [
++            (0, "Camille Example"), (1, "camille@example.org"), (2, "0600000001"), (3, "1 Main St")]
++        # a card's fill never types into them
++        assert select_checkout_fills(fields, _CARD, PAYMENT_FIELDS) == []
++
+     def test_unmatched_returns_none(self):
+         assert classify_login_control(_ctrl(label="Search the docs")) is None
+ 

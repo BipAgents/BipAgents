@@ -1,0 +1,136 @@
+"""More of the bridge-owned conversations (docs/conversations.md): presence from the thread's event stream, rename
+and delete, the read sync's one form, renames in items (a shared agent's: test_shared_agents.py)."""
+import threading
+import time
+
+import httpx
+
+from bbkit.common import AUTH, sse
+from bbkit.servers import wait_until
+
+NOW = "2026-11-02T20:00:00.000Z"
+
+
+def get(bridge, path, **params):
+    resp = bridge.get(path, params=params, headers=AUTH)
+    assert resp.status_code == 200, resp.text
+    return resp.json()
+
+
+def with_device(bridges):
+    bridge = bridges.new()
+    bridge.seed_db([("INSERT INTO devices (token, environment, agent_ids, created_at, updated_at) VALUES (?,?,?,?,?)",
+                     ("a" * 64, "production", "[]", NOW, NOW))])
+    return bridge
+
+
+def main_session(fakes, messages=None):
+    fakes.hermes.v0225 = True
+    fakes.hermes.add_session("api_main", messages or [{"role": "user", "content": "Quel train ?"},
+                                                      {"role": "assistant", "content": "Le train de 9 h."}],
+                             title="Bot Chat", last_active=10, started_at=1)
+
+
+def test_a_thread_on_screen_is_not_pushed(bridges, fakes):
+    main_session(fakes)
+    bridge = with_device(bridges).start()
+    main = get(bridge, "/v1/threads/main", agent="wellness")
+    stop = threading.Event()
+
+    def watch():   # the app shows the conversation: its event stream open with `thread=`
+        with httpx.Client(base_url=bridge.url, headers=AUTH, timeout=30) as client:
+            with client.stream("GET", "/v1/threads/events", params={"agent": "wellness", "thread": "main"}) as resp:
+                for _ in resp.iter_lines():
+                    if stop.is_set():
+                        return
+
+    viewer = threading.Thread(target=watch, daemon=True)
+    viewer.start()
+    time.sleep(0.5)
+    fakes.hermes.runs["r1"] = [sse("run.completed", output="Le train de 9 h.")]
+    bridge.post("/v1/watch", headers=AUTH, json={"agent": "wellness", "run_id": "r1", "session_id": "api_main"})
+    rows = lambda: bridge.get("/v1/notifications", headers=AUTH).json()["notifications"]   # noqa: E731
+    assert wait_until(rows)
+    assert rows()[0]["push"] == "skipped:on_screen" and rows()[0]["read_at"] and rows()[0]["c"] == main["id"]
+    assert fakes.apns.payloads() == []
+    stop.set()
+    viewer.join(timeout=15)
+    # the screen left: the next reply is pushed
+    fakes.hermes.add_session("api_main", fakes.hermes.messages[("", "api_main")] +
+                             [{"role": "assistant", "content": "Et le retour à 18 h."}], title="Bot Chat",
+                             last_active=11, started_at=1)
+    fakes.hermes.runs["r2"] = [sse("run.completed", output="Et le retour à 18 h.")]
+    bridge.post("/v1/watch", headers=AUTH, json={"agent": "wellness", "run_id": "r2", "session_id": "api_main"})
+    assert wait_until(lambda: fakes.apns.payloads(), timeout=15)
+
+
+def test_rename_delete_and_the_read_sync(bridges, fakes):
+    main_session(fakes)
+    fakes.hermes.add_session("api_side", [{"role": "user", "content": "Vacances ?"}], title="Vacances",
+                             last_active=5, started_at=0.5)
+    bridge = with_device(bridges).start()
+    side = [t for t in get(bridge, "/v1/threads", agent="wellness")["threads"] if t["kind"] == "side"][0]
+    renamed = bridge.patch(f"/v1/threads/{side['id']}", headers=AUTH, json={"title": "Été"}).json()
+    assert renamed["title"] == "Été" and renamed["version"] > side["version"]
+    assert fakes.hermes.patched[-1] == {"id": "api_side", "title": "Été"}
+    main = bridge.patch("/v1/threads/main", headers=AUTH, json={"title": "Discussion", "agent": "wellness"}).json()
+    assert main["title"] == "Discussion" and not [p for p in fakes.hermes.patched if p["id"] == "api_main"]
+    assert bridge.delete(f"/v1/threads/{side['id']}", headers=AUTH).status_code == 204
+    assert "api_side" in fakes.hermes.deleted and bridge.get(f"/v1/threads/{side['id']}", headers=AUTH).status_code == 404
+    # the read sync: `n` one comma-separated string (APNs and FCM alike), `unread` the total
+    fakes.hermes.runs["r1"] = [sse("run.completed", output="Le train de 9 h.")]
+    bridge.post("/v1/watch", headers=AUTH, json={"agent": "wellness", "run_id": "r1", "session_id": "api_main"})
+    assert wait_until(lambda: fakes.apns.payloads())
+    done = bridge.post("/v1/notifications/read", headers=AUTH, json={"agent": "wellness", "thread": "main"}).json()
+    assert wait_until(lambda: any(p.get("reason") == "read" for p in fakes.apns.payloads()))
+    silent = [p for p in fakes.apns.payloads() if p.get("reason") == "read"][0]
+    assert silent["n"] == ",".join(done["read"]) and silent["unread"] == 0
+    # deleting the main thread empties it, its id stays
+    assert bridge.delete("/v1/threads/main", headers=AUTH, params={"agent": "wellness"}).status_code == 204
+    assert "api_main" in fakes.hermes.deleted
+    assert get(bridge, "/v1/threads/main", agent="wellness")["id"] == main["id"]
+
+
+def test_an_agent_rename_reaches_the_app_through_its_item(bridges, fakes):
+    main_session(fakes, [{"role": "user", "content": "Appelle-toi Léon"},
+                         {"role": "assistant", "content": "D'accord !<!--bip:renamed wellness Léon-->"}])
+    bridge = bridges.new().start()
+    item = get(bridge, "/v1/threads/main/timeline", agent="wellness")["items"][1]
+    assert item["text"] == "D'accord !" and item["renamed"] == [{"agent": "wellness", "name": "Léon"}]
+
+
+def test_a_live_call_put_in_a_conversation_tells_its_open_screens(bridges, fakes):
+    """2026-11-03 (Alex, TestFlight 20261103.1141): back from a Live call, the call's item showed only once the
+    conversation was opened again. Recording the call in its thread sends the thread's event on the stream (no journal
+    row: nothing to notify), and the next `after=` page has the call."""
+    main_session(fakes)
+    fakes.hermes.add_session("live_1", [{"role": "user", "content": "Je pars à Lyon"},
+                                        {"role": "assistant", "content": "Bon voyage !"}],
+                             title="Live · 11:00", last_active=12, started_at=11)
+    bridge = with_device(bridges).start()
+    main = get(bridge, "/v1/threads/main", agent="wellness")
+    page = get(bridge, f"/v1/threads/{main['id']}/timeline", agent="wellness")
+    events, stop = [], threading.Event()
+
+    def watch():
+        with httpx.Client(base_url=bridge.url, headers=AUTH, timeout=30) as client:
+            with client.stream("GET", "/v1/threads/events", params={"agent": "wellness", "thread": "main"}) as resp:
+                for line in resp.iter_lines():
+                    if line.startswith("data:"):
+                        events.append(line[5:].strip())
+                    if stop.is_set():
+                        return
+
+    viewer = threading.Thread(target=watch, daemon=True)
+    viewer.start()
+    time.sleep(0.5)
+    ended = bridge.post("/v1/live/calls", headers=AUTH, json={"agent": "wellness", "session": "api_main",
+                                                               "live_session": "live_1"})
+    assert ended.json() == {"ok": True}
+    assert wait_until(lambda: any(main["id"] in e and '"call"' in e for e in events), timeout=15), events
+    newer = get(bridge, f"/v1/threads/{main['id']}/timeline", agent="wellness", after=page["last"])
+    calls = [i for i in newer["items"] if i["kind"] == "call"]
+    assert calls and calls[0]["call"]["live_session"] == "live_1"
+    assert bridge.get("/v1/notifications", headers=AUTH).json()["notifications"] == []
+    stop.set()
+    viewer.join(timeout=15)

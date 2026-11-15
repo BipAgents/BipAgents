@@ -1,0 +1,177 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Alexbob0 <190955252+Alexbob0@users.noreply.github.com>
+Date: Sun, 1 Nov 2026 10:07:39 +0100
+Subject: Tool search: some MCP tools kept direct, rarely needed skill
+ categories by name only
+
+BipAgents patch, documented in hermes/patches/README.md of the BipAgents repository.
+
+Bip-Patch: 0009-tool-search-keep-direct-compact-skills
+---
+ agent/prompt_builder.py                       | 14 ++++
+ ..._tool_search_keep_direct_compact_skills.py | 68 +++++++++++++++++++
+ .../tools/test_tool_search_listing_layout.py  |  2 +-
+ tools/tool_search.py                          |  9 ++-
+ tools/tool_search_catalog.py                  |  3 +-
+ 5 files changed, 92 insertions(+), 4 deletions(-)
+ create mode 100644 tests/agent/test_tool_search_keep_direct_compact_skills.py
+
+diff --git a/agent/prompt_builder.py b/agent/prompt_builder.py
+index eb8de4439c20cd1a0016a3bc778bfdf096c0317b..e25b5281d4135534635835db48c02f8ca91c0ce1 100644
+--- a/agent/prompt_builder.py
++++ b/agent/prompt_builder.py
+@@ -1364,10 +1364,24 @@ def _oneshot_prompt_variant() -> bool:
+     return is_single_query_session()
+ 
+ 
++def _configured_compact_categories() -> frozenset:
++    """``skills.compact_categories`` of this profile's config (a list of top-level category names)."""
++    skills_cfg = _config_readonly("skills.compact_categories").get("skills")
++    raw = skills_cfg.get("compact_categories") if isinstance(skills_cfg, dict) else None
++    if not isinstance(raw, (list, tuple, set)):
++        return frozenset()
++    return frozenset(str(c).strip() for c in raw if str(c).strip())
++
++
+ def _build_skills_system_prompt_inner(
+     skills_dir: Path, extra_roots: list[tuple[int, Path]], available_tools: set[str] | None,
+     available_toolsets: set[str] | None, compact_categories: frozenset[str] | None,
+ ) -> str:
++    # ``skills.compact_categories`` (BipAgents): categories this profile rarely needs, listed by name only
++    # like the coding posture's — their skills still load with skill_view.
++    configured = _configured_compact_categories()
++    if configured:
++        compact_categories = frozenset(compact_categories or ()) | configured
+     # The resolved platform is part of the key: per-platform disabled-skill lists need distinct cache entries.
+     _platform_hint = _current_session_platform_hint()
+     disabled = get_disabled_skill_names(_platform_hint or None)
+diff --git a/tests/agent/test_tool_search_keep_direct_compact_skills.py b/tests/agent/test_tool_search_keep_direct_compact_skills.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..485b79d10533cf0a02baffbd5f672985bf01bf03
+--- /dev/null
++++ b/tests/agent/test_tool_search_keep_direct_compact_skills.py
+@@ -0,0 +1,68 @@
++"""BipAgents patch 0009: ``!<name>`` in ``tools.tool_search.defer`` keeps a tool direct (an MCP tool
++included), and ``skills.compact_categories`` lists those categories by name only in the skills index."""
++
++import pytest
++
++from agent import prompt_builder
++from agent.prompt_builder import build_skills_system_prompt
++from tools import tool_search
++from tools.tool_search import is_deferrable_tool_name
++
++
++@pytest.fixture
++def mcp_tools(monkeypatch):
++    """Every ``mcp__<server>__<tool>`` name registered under its server's ``mcp-<server>`` toolset."""
++    monkeypatch.setattr(tool_search, "_registry_toolset",
++                        lambda name: "mcp-" + name.split("__")[1] if name.startswith("mcp__") else None)
++
++
++def test_bang_entry_keeps_an_mcp_tool_direct(mcp_tools):
++    name = "mcp__bipagents__notes_search"
++    assert is_deferrable_tool_name(name, frozenset()) is True   # an MCP tool defers by default
++    assert is_deferrable_tool_name(name, frozenset({"!" + name})) is False
++    # Only that tool: another MCP tool of the same server still defers.
++    assert is_deferrable_tool_name("mcp__bipagents__other", frozenset({"!" + name})) is True
++
++
++def test_a_list_without_bang_entries_behaves_as_before(mcp_tools):
++    assert is_deferrable_tool_name("mcp__x__y", frozenset({"web_search"})) is True
++    assert is_deferrable_tool_name("web_search", frozenset({"web_search"})) is True
++    assert is_deferrable_tool_name("web_search", frozenset({"!web_search"})) is False
++
++
++def test_configured_compact_categories_list_skills_by_name_only(monkeypatch, tmp_path):
++    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
++    for category, name, description in (("music", "song-maker", "Compose a song"),
++                                        ("notes", "note-taker", "Take careful notes")):
++        folder = tmp_path / "skills" / category / name
++        folder.mkdir(parents=True)
++        (folder / "SKILL.md").write_text(f"---\nname: {name}\ndescription: {description}\n---\n")
++    prompt_builder.clear_skills_system_prompt_cache(clear_snapshot=True)
++    full = build_skills_system_prompt()
++    assert "Compose a song" in full and "Take careful notes" in full
++
++    monkeypatch.setattr(prompt_builder, "_config_readonly",
++                        lambda what: {"skills": {"compact_categories": ["music"]}})
++    compact = build_skills_system_prompt()
++    assert "song-maker" in compact and "Compose a song" not in compact   # name only, still loadable
++    assert "Take careful notes" in compact                                # other categories whole
++
++
++def test_tool_search_description_has_no_counts(mcp_tools, monkeypatch):
++    """The deferred count changed with the kind of session (82/83/84 seen in one day) and broke the prompt cache
++    from that tool on; neither the description nor the catalog's group headings carry a count."""
++    from tools import tool_search_catalog
++    monkeypatch.setattr(tool_search_catalog, "hidden_declared_sources", lambda: [])
++
++    def described(n):
++        defs = [{"type": "function", "function": {"name": f"mcp__bipagents__t{i}", "description": f"Tool {i}.",
++                                                  "parameters": {"type": "object", "properties": {}}}}
++                for i in range(n)]
++        listing, form = tool_search_catalog.build_catalog_listing_with_form(defs)
++        return tool_search.bridge_tool_schemas(n, listing=listing, listing_form=form)[0]["function"]["description"]
++
++    few, more = described(3), described(4)
++    assert few.startswith("Search additional tools that are loaded on demand.")
++    assert " tools:\n- mcp__bipagents__t0" in few and "(3)" not in few
++    # One tool more only adds its own line, at the end: everything before it is byte-identical.
++    assert more.startswith(few)
+diff --git a/tests/tools/test_tool_search_listing_layout.py b/tests/tools/test_tool_search_listing_layout.py
+index ef679edbb38b644575dc1f310efb7f8c8556196c..b7c74552e36f9ddb7f5f4f2491acf3a866c0da71 100644
+--- a/tests/tools/test_tool_search_listing_layout.py
++++ b/tests/tools/test_tool_search_listing_layout.py
+@@ -54,7 +54,7 @@ def test_single_tool_groups_render_without_a_count_heading():
+     assert text is not None and form == "full"
+     assert text.splitlines()[1:] == [
+         "- layoutsolo_only: The only solo tool.",
+-        "layoutpair tools (2):",
++        "layoutpair tools:",  # BipAgents 0009: no count
+         "- layoutpair_a: First paired tool.",
+         "- layoutpair_b: Second paired tool.",
+     ]
+diff --git a/tools/tool_search.py b/tools/tool_search.py
+index 4657a8e44a9c3530597d3de803374fbde0163418..9ae8abf3d160a3540c7debcbe1f555c6bc61a70c 100644
+--- a/tools/tool_search.py
++++ b/tools/tool_search.py
+@@ -150,9 +150,12 @@ _DEFAULT_DEFERRED_TOOLS = frozenset(DEFAULT_CONFIG["tools"]["tool_search"]["defe
+ def is_deferrable_tool_name(name: str, defer_tools: Optional[frozenset] = None) -> bool:
+     """True if a tool is *eligible* for deferral: named in ``defer_tools`` (curated set or
+     user override), OR an MCP tool, OR neither core nor a session-gated GUI surface (i.e. a
+-    plugin tool). Bridge names never defer."""
++    plugin tool). Bridge names never defer, nor a tool named ``!<name>`` in ``defer_tools``
++    (an MCP tool the agent uses all the time, kept direct to save a discovery round-trip)."""
+     if name in BRIDGE_TOOL_NAMES:
+         return False
++    if defer_tools is not None and "!" + name in defer_tools:
++        return False   # « !<name> » keeps a tool direct, an MCP or plugin tool included (BipAgents)
+     if defer_tools is not None and name in defer_tools:
+         return True
+     if name in _core_tool_names():
+@@ -242,7 +245,9 @@ def _search_description(deferred_count: int, listing: Optional[str], listing_for
+     ``manage_connections``; without that tool in the session the sentence would name a tool
+     the model cannot call."""
+     desc = (
+-        (f"Search {deferred_count} additional tools that are loaded on demand. "
++        # BipAgents 0009: no count — it changed with the kind of session and the MCP servers' state, and every
++        # change cost the prompt cache all that follows this tool (the whole system prompt).
++        ("Search additional tools that are loaded on demand. "
+          if deferred_count else "Search remote connector tools (email, calendars, issue trackers, and more). ")
+         + "Send one keyword query per capability you need; returns matching tool names "
+         f"and descriptions. Then `{TOOL_DESCRIBE_NAME}` loads schemas and `{TOOL_CALL_NAME}` "
+diff --git a/tools/tool_search_catalog.py b/tools/tool_search_catalog.py
+index 15d3b39301252a64fa7a5f13adb08d099050c989..a46a82f80529081da0a7018ca8845ff0175eb438 100644
+--- a/tools/tool_search_catalog.py
++++ b/tools/tool_search_catalog.py
+@@ -293,7 +293,8 @@ def build_catalog_listing_with_form(
+         else:
+             lines = [", ".join(name for name, _ in tools)] if len(tools) > 1 else [f"- {tools[0][0]}"]
+         # A one-tool group's "<label> tools (1):" heading says nothing its single line does not.
+-        return "\n".join(lines if len(tools) == 1 else [f"{label} tools ({len(tools)}):", *lines])
++        # BipAgents 0009: no count (prompt-cache stable, the names follow).
++        return "\n".join(lines if len(tools) == 1 else [f"{label} tools:", *lines])
+ 
+     header = ("Deferred tool catalog (call schemas via "
+               f"`{TOOL_DESCRIBE_NAME}`, invoke via `{TOOL_CALL_NAME}`):")

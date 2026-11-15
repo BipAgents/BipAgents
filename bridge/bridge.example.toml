@@ -1,0 +1,250 @@
+# BipAgents bridge — example configuration (no secrets here: open-source repository).
+# Copy to ~/.config/hermes-ios/bridge.toml, then `chmod 600` that file.
+# Alternative path: BRIDGE_CONFIG environment variable.
+#
+# Each secret can be given inline (`bridge_key = "…"`) or via a file
+# (`bridge_key_file = "~/.config/hermes-ios/bridge.key"`); same for `hermes_key(_file)`.
+
+bridge_key = "CHANGE-ME-run-bipbridge-genkey"
+host = "127.0.0.1"          # exposed on the tailnet via `tailscale serve`, never directly
+port = 8643
+log_level = "info"
+data_dir = "~/.local/share/hermes-bridge"
+public_url = "https://mamachine.tailnet.ts.net:8643"   # the bridge on the tailnet, for the pairing QR code
+# Messages between agents (the app's « Qui peut écrire à qui »): the bridge is their only peer and checks each
+# message against the links the person allowed. How the agents reach it (default http://127.0.0.1:<port>/peer):
+# peer_url = "http://host.containers.internal:8643/peer"   # agents in containers
+
+# Kyutai Pocket TTS (CPU, first sound ≈ 50 ms) for the Bips' voices: the repo's pocket/pocket_server.py server,
+# voices in voices/. "pocket:<name>" (pocket:colibri…) speaks French, "pocket:en/<name>", "pocket:es/<name>",
+# "pocket:de/<name>" the other languages. Pocket down: the app reads the text with the phone's own voice.
+[pocket]
+url = "http://127.0.0.1:8098"
+default_voice = "pocket:colibri"
+
+# Your own voice model (optional): any server with OpenAI's POST /v1/audio/speech (Fish Audio Drama 3 on audio.cpp,
+# Kokoro, Kyutai…). Its voices are "server:<lang>/<id>" (the app lists them from GET /v1/audio/voices, else `voices`);
+# each use below goes to it (true) or to the agent's Bip (false). Down or failing: a Bip of the same language speaks.
+# [voice_server]
+# url = "http://192.168.1.20:8099"
+# model = "drama-3"          # the `model` it expects ("tts-1" by default)
+# stream_rate = 44100        # it streams raw PCM at this rate (audio.cpp); absent: whole WAV files
+# voices = []                # when it cannot list them
+# live = true                # the Live
+# replies = true             # spoken replies to voice notes
+# reading = true             # messages and reports read aloud
+# first_audio_seconds = 5    # a Live sentence or a spoken reply waits this long for its first sound (plus the text's
+#                            # length for whole files), then the agent's Bip says it, and the next ones for 30 s
+
+# Words the voices say wrong, respelled (whole words, any case), per language.
+# [pronunciations.fr]
+# Garmin = "Garmine"
+
+# Replies from Hermes scheduled tasks (cron_… sessions), read directly from Hermes and put in the
+# Inbox with a push, whatever the job's configured delivery. `[SILENT]` ignored.
+[cron]
+watch = true
+interval_seconds = 30
+
+# Files that agents point to with a "MEDIA:<path>" line (podcast mp3, image…): prefix as seen by
+# the agent (inside its container) -> folder on the host. Only media files under these folders are served
+# (GET /v1/media); an mp3 attached to an Inbox message becomes its audio, instead of a read-aloud.
+[media.roots]
+# "/home/hermes/.hermes/media" = "~/hermes-agent/hermes-home/media"
+
+[fcm]
+# The Android app's notifications: the Firebase project's service account key (JSON, mode 600), from the Firebase
+# console › Project settings › Service accounts › Generate new private key. Without it, Android devices register with the
+# publisher's push relay ([push] service_url) like iPhones without an APNs key.
+# service_account = "~/.config/bipagents/fcm.json"
+# base_url = "https://fcm.googleapis.com"   # tests only, with token_url (default: the service account's token_uri)
+
+# The agents' « Météo » (weather tool) needs nothing: MET Norway's forecast and OpenStreetMap's place search, free,
+# reached from this server with only the place. Their `route` tool always gives a link that opens the maps app; with
+# a Google Maps Platform key (Routes API on, billed per route by Google) it also gives the travel time, with the
+# traffic, and the distance: then the route's places and times go to Google. The key is never shown to the agents.
+# [maps]
+# google_key_file = "~/.config/bipagents/google-maps.key"   # mode 600 (or google_key = "…")
+
+# Model calls through EUrouter name the providers it tries first (others still answer when they are down), so the
+# provider's prompt cache works: about 5 times cheaper input. Written in each agent's Hermes config at start
+# (model_route.rs). [] lets EUrouter pick a provider per call.
+# [model]
+# provider_order = ["entrim", "greenpt", "inceptron"]
+# On the offer's places only: the models run in the European Union (the guichet's `eu_hosted`), the only ones that
+# may read « Santé » there. Empty (the default): the health tool refuses on every model of a place.
+# eu_hosted = ["glm-5.3-flash"]
+
+[apns]
+# Leave team_id/key_id empty to disable push.
+team_id = ""                # Apple Developer Team ID (10 characters)
+key_id = ""                 # Key ID of the APNs .p8 key
+p8_path = "~/.config/hermes-ios/AuthKey_KEYID.p8"   # mode 600
+bundle_id = "com.kerfystudio.bipagents"   # = the app's BIP_BUNDLE_ID (Config/Local.xcconfig) if you changed it
+environment = "sandbox"     # default for devices that don't specify one: sandbox (Xcode) | production (TestFlight/App Store)
+# base_url = ""             # tests only: another host instead of Apple's (both environments); sandbox_url: the sandbox's
+
+[push]
+previews = false            # false: generic push body, the content is fetched over the tailnet by the extension
+
+[outbox]
+db_path = "~/.local/share/hermes-bridge/bridge.db"
+audio_dir = "~/.local/share/hermes-bridge/audio"
+retention_days = 90
+audio_max_chars = 2000      # beyond this, no audio pre-synthesis
+audio_wait_seconds = 8      # max wait for the audio before sending the push
+
+[limits]
+upload_max_mb = 50
+upload_retention_days = 30
+upload_file_mode = "640"    # octal; see README (Hermes container user)
+upload_dir_mode = "750"
+sentence_max_chars = 180
+tts_max_chars = 1000        # limit for POST /v1/tts/sentence
+tts_cache_entries = 256
+watch_max_minutes = 120
+purge_interval_hours = 6
+
+# The person's own Hermes, managed by this bridge: lets the app create agents (« + »). Written by the installer;
+# leave it out for agents set up by hand. With Hermes in a container: `bin` is a wrapper running `hermes` inside it,
+# `home` the HERMES_HOME folder on the host and `container_home` the same folder inside the container.
+# [hermes]
+# bin = "~/.local/bin/hermes"
+# home = "~/.hermes"
+# hub_url = "http://127.0.0.1:8642"                      # the multiplex gateway (one per person)
+# public_hub_url = "https://mamachine.tailnet.ts.net:8642"
+# container_home = "/home/hermes/.hermes"
+# The agents cannot read this bridge's files: their tools run in a sandbox, or their Hermes in a container that does
+# not see them. Only then does the bridge keep credentials (vault, services with a token). Set it after checking,
+# from an agent's terminal, that this file and the bridge's data folder are out of reach.
+# isolated = true
+
+# Local-network door, for when Tailscale is down (no Internet, VPN off): the bridge also listens on the LAN over
+# HTTPS with its own certificate (created in data_dir/lan, pinned by the app through the QR code) and relays Hermes.
+# Open this port on the LAN only (firewall), never on the Internet.
+[lan]
+enabled = false
+host = "0.0.0.0"
+port = 8650
+# address = "192.168.1.20"   # advertised to the app; detected when empty (set it when the bridge runs in a container)
+
+# Agents' own spaces (the app's « Lui donner son propre espace »): an agent created in the shared hub moves into
+# its own Hermes, so it may hold logins from the vault. Each space gets its own gateway on a local port (reached
+# by the app through this bridge, nothing new on the tailnet) and, with podman or docker, its tools in a sandbox.
+# [spaces]
+# root = "~/.local/share/hermes-bridge/spaces"
+# first_port = 8660        # the first free port from there
+# sandbox = "auto"         # "none": never a sandbox (agents in a space then cannot hold logins)
+# Own commands instead of a systemd/launchd service per space, e.g. a container each ({agent}, {home} filled in):
+# start = "podman run -d --name hermes-space-{agent} ... "
+# stop = "podman rm -f hermes-space-{agent}"
+# container_home = "/home/hermes/.hermes"   # the space's HERMES_HOME inside that container (attachments)
+
+# The agents' sandboxes (Hermes' docker backend with podman), isolated: no folder of this machine mounted in them
+# (the files the person sends are copied into a podman volume of the agent's own, read-only at /fichiers; a shared
+# folder is a podman volume too, bipagents-share-<agent>, at /partage and read-only at /lecture/<agent> in its readers',
+# kept in step with <data>/shares/<agent>/ for backups), and no internet but the package registries, through a small
+# proxy container (bipagents-egress) on a network without a route out (bipagents-sandbox). Hermes then runs harmless
+# work there (python -c, execute_code, pip install) without asking.
+# [sandbox]
+# isolate = "auto"            # Linux with podman; "off" (then restart the bridge): the folders mounted as before, the network and proxy settings taken out (Hermes asks before risky commands)
+# subnet = "10.233.80.0/24"   # the sandboxes' network; the proxy takes its .2
+# registries = ["pypi.org", "files.pythonhosted.org", "registry.npmjs.org"]   # default: PyPI, npm, Rust crates, Go, Debian (no host that publishes but npm)
+# image = ""                  # the proxy's image (default: the agents' sandbox image)
+# Reading open, sending guarded (send_guard.rs): what an agent sends a site its person did not validate is counted;
+# past these, the upload is cut and the person gets one card (« Autoriser » validates the site for that agent).
+# send_site_kb_hour = 64      # per site per hour
+# send_day_kb = 256           # per agent per day, all such sites together (slow leaks)
+# While a card waits (or for a site the person refused) the site stays readable within a small allowance; the
+# registries and the browser's small requests have ceilings of their own (never a card). Defaults in the proxy;
+# 0 for these six lets nothing pass (it is not « no limit »):
+# send_held_site_kb_hour = 16 # per held site per hour
+# send_held_kb_hour = 64      # all held sites of an agent together, per hour
+# registry_send_mb_hour = 6   # sent (not downloaded) to the package registries, per sandbox
+# registry_send_mb_day = 24
+# browser_free_mb_site_hour = 4   # the browser's small requests, per site per hour
+# browser_free_mb_day = 32        # ...and per agent per day; past them they count like any send
+# The offer's limits: on by default where `cloud = true`, off on a self-install (0 turns one off).
+# download_day_mb = 2048      # what an agent may download per day (registries and browser included)
+# connections_per_minute = 300
+# cpus = 1.5                  # each sandbox's share of the processors (podman --cpus)
+# blocklist = true            # piracy and torrent trackers refused; lists fetched weekly from blocklist_urls
+# blocklist_urls = ["https://blocklistproject.github.io/Lists/alt-version/piracy-nl.txt", "https://blocklistproject.github.io/Lists/alt-version/torrent-nl.txt"]
+
+# Link Agent Wallet (Stripe), for people in the United States and Canada (link_wallet.rs): a one-time card per
+# purchase, approved in the app and in Link's app, typed by the bridge. Off unless enabled AND configured with Kerfy
+# Studio's OAuth client (Stripe's Link Agent Wallet registration form) and Stripe's `link-cli` on the server.
+# [link]
+# enabled = false
+# client_id = ""
+# client_secret_file = "/etc/bipagents/link-client-secret"   # 0600, the secret alone
+# publishable_key = "pk_live_..."
+# redirect_uri = "bipagents://oauth/callback"                 # registered exactly with Stripe
+# cli = "link-cli"                                            # npm @stripe/link-cli
+# test = false                                                # Link's test mode: test cards, nothing charged
+
+# The brake on a turn going round in circles (loop_brake.rs): a conversation's turn calling one tool more than
+# same_tool times, more than tool_calls tools in all, or the same call same_call times is stopped, and the person told
+# in plain words; the agents' write tools (calendar, reminders, contacts, Carnet, drafts, pages, audio) refuse the same
+# write twice in a turn and more than `writes`, counted per turn (per run), never across conversations. Background
+# tasks: the task_* limits. Work tools (terminal, code, files, web search) count for the total only; the visible
+# browser has its own limits (browser_calls, page_reads), under Hermes' cap of 150. A routine (Hermes' cron, no run the
+# bridge can stop): its calls of the bridge's tools are refused past same_tool of one tool or routine_tool_calls in all.
+# [brake]
+# enabled = true
+# same_tool = 10
+# tool_calls = 60
+# same_call = 3               # writes and actions
+# same_lookup = 5             # read-only lookups (past conversations, Carnet, web, files, mails…); a retry after an error isn't counted
+# writes = 10
+# warn = true                 # about two thirds of a limit: the agent is told once (a steer; a routine: in the tool's result)
+# rescue = true               # a stopped conversation turn: one short turn where the agent says what happened and proposes
+# rescue_tool_calls = 5
+# rescue_seconds = 180
+# browser_calls = 40          # a browsing turn's total: tool_calls + browser_calls
+# page_reads = 15             # the page's content, a screenshot, a snapshot
+# task_same_tool = 40
+# task_tool_calls = 120
+# task_same_call = 5
+# task_same_lookup = 8
+# task_writes = 40
+# task_browser_calls = 80
+# task_page_reads = 30
+# routine_tool_calls = 40     # a routine reading many different mails is held to the same item read again, not to mail_read
+# idle_seconds = 120          # with no run followed (a routine), the agent's calls are one turn until quiet this long
+
+# Card payments by the agents on a place of the all-included offer (cards.rs, « expérimental » during the beta). The
+# card's number and expiry stay on the phone that added it; the app sends them with each payment the person approves,
+# held in memory for that one fill. Off by default: Kerfy Studio turns it on for its places (then restarts the
+# bridge), and off again for everyone the same way. Self-hosted installs use `[vault] cards` instead.
+# [payments]
+# offer_cards = false
+# offer_cap_max_eur = 150     # the highest cap a person may set on such a card (1 to 1000)
+
+[agents.wellness]
+display_name = "Wellness"
+hermes_url = "http://127.0.0.1:8642"
+public_url = "https://mamachine.tailnet.ts.net:8642"   # its Hermes on the tailnet, for the pairing QR code
+hermes_key = "CHANGE-ME-API_SERVER_KEY-of-wellness"
+upload_dir_host = "~/hermes-agent/hermes-home/profiles/wellness/uploads"
+upload_dir_container = "/home/hermes/.hermes/profiles/wellness/uploads"
+voice = "pocket:colibri"
+
+[agents.vie]
+display_name = "Vie"
+hermes_url = "http://127.0.0.1:8644"
+hermes_key = "CHANGE-ME-API_SERVER_KEY-of-vie"
+upload_dir_host = "~/hermes-agent/hermes-home/profiles/vie/uploads"
+upload_dir_container = "/home/hermes/.hermes/profiles/vie/uploads"
+voice = "pocket:mousse"
+# The agents' vault (Réglages → Coffre in the app): an agent may hold logins only when it has its own space
+# (its own container or sandbox), never in a gateway shared with other agents. The bridge writes the items the
+# person allows into the agent's Hermes vault with that agent's Python; the secret goes on stdin, never argv.
+# isolated = true
+# python = "podman exec -i hermes-vie /home/hermes/.local/share/hermes/python/bin/python3 -I"
+# hermes_home = "/home/hermes/.hermes/profiles/vie"   # the agent's HERMES_HOME, as that Python sees it
+# hermes_root = "/home/hermes/.hermes/hermes-agent"    # Hermes' code folder, when that Python needs it
+# Its browser's desktop set up by hand (a VNC behind websockify, like a noVNC page): the bridge logs in itself and
+# shows it in the app (« Bureau », Face ID), so the VNC port needs no publishing on the tailnet.
+# desktop_vnc = "ws://127.0.0.1:6080/websockify"        # or "tcp://127.0.0.1:5901"
+# desktop_vnc_password_file = "~/.config/hermes-vnc.pass" # the password in clear, or a vncpasswd file (chmod 600)

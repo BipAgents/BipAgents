@@ -1,0 +1,136 @@
+name: Tests
+
+on:
+  push:
+    branches: [main, pre-test]   # stable only ever takes a pre-tested commit
+  pull_request:
+  workflow_dispatch:   # the private repository's app jobs: by hand only (its Actions minutes are counted)
+
+permissions:
+  contents: read
+
+jobs:
+  python:
+    name: Bridge and installer
+    if: github.repository == 'BipAgents/BipAgents'   # free there; the private copy would count minutes
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            installer/requirements.txt
+            bridge/tests_blackbox/requirements.txt
+            sandbox/requirements.txt
+      - run: pip install -r installer/requirements.txt -r bridge/tests_blackbox/requirements.txt
+      # The bridge (bridge-rs/), built once for the installer's config checks and the black-box suite; its own unit
+      # tests and clippy run in bridge-release.yml.
+      - run: rustup toolchain install stable --profile minimal && rustup default stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: bridge-rs
+      - name: Build the bridge
+        working-directory: bridge-rs
+        run: cargo build --release --locked
+      - name: Installer
+        run: PYTHONPATH=installer python -m pytest -q installer/tests
+      - name: Styled documents skills (their scripts against the agents' sandbox image's pinned libraries)
+        # a venv of their own: sandbox/requirements.txt pins what the image has, not what the installer's tests use
+        run: |
+          python -m venv "$RUNNER_TEMP/skills-venv"
+          "$RUNNER_TEMP/skills-venv/bin/pip" install -q -r sandbox/requirements.txt pytest
+          "$RUNNER_TEMP/skills-venv/bin/python" -m pytest -q -p no:cacheprovider bridge-rs/tests_skills
+      - name: Demo voices (every reply the demo shows has its recording)
+        # scripts/ stays private (scripts/public-paths.txt): the public repository has no such test to run
+        if: hashFiles('scripts/test_demo_voices.py') != ''
+        run: python scripts/test_demo_voices.py
+      - name: Tool labels (every tool has its words, the apps' and the bridge's generated files are the table's)
+        # the bridge's own tools are checked by its unit test (agent_tools.rs every_tool_an_agent_can_call_has_its_words)
+        if: hashFiles('scripts/tool-labels.py') != ''
+        run: python -I scripts/tool-labels.py . --check
+      - name: Working line films (the apps' frame data is the generator's)
+        if: hashFiles('scripts/pixel/working.py') != ''
+        run: python -I scripts/pixel/working.py --check
+      - name: Working line scenes (the apps' scene data is the gallery v3b's engine, square for square)
+        if: hashFiles('scripts/pixel/working-scenes.mjs') != ''
+        run: node scripts/pixel/working-scenes.mjs --check
+      - name: Bridge (black-box suite, the HTTP contract)
+        working-directory: bridge
+        # The runner's /usr/bin/chromium is a bare snapshot without a setuid sandbox (« No usable sandbox! », the VM
+        # refuses unprivileged user namespaces); Google Chrome's .deb ships chrome-sandbox setuid.
+        env:
+          BIP_CHROME: /usr/bin/google-chrome
+        run: python -m pytest tests_blackbox -q -p no:cacheprovider
+
+  relay:
+    name: Push relay (Rust)
+    if: github.repository == 'BipAgents/BipAgents'   # free there; the private copy would count minutes
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: relay
+    steps:
+      - uses: actions/checkout@v7
+      - run: rustup toolchain install stable --profile minimal -c clippy,rustfmt && rustup default stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: relay
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets --locked -- -D warnings
+      - run: cargo test --locked
+
+  windows:
+    name: Windows install script
+    if: github.repository == 'BipAgents/BipAgents'   # free there; the private copy would count minutes
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: install.ps1 parses (Windows PowerShell 5.1, the one every PC has)
+        shell: powershell
+        run: |
+          $errors = $null
+          [void][System.Management.Automation.Language.Parser]::ParseFile("$PWD\install.ps1", [ref]$null, [ref]$errors)
+          if ($errors) { $errors | ForEach-Object { Write-Error "$($_.Extent.StartLineNumber): $($_.Message)" }; exit 1 }
+
+  swift:
+    name: HermesKit and VoiceKit
+    # the apps' source is private; run by hand (macOS minutes count ten times), checked locally before each merge
+    if: github.repository == 'Alexbob0/bipagents-private' && github.event_name == 'workflow_dispatch'
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+      # The newest Xcode on the runner: the voices' packages use the iOS SDK's latest asset-pack API.
+      - name: Newest Xcode
+        run: sudo xcode-select -s "$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)" && xcodebuild -version
+      - name: HermesKit
+        working-directory: Packages/HermesKit
+        run: swift test
+      - name: VoiceKit
+        working-directory: Packages/VoiceKit
+        run: swift test
+      # The notifications' UI rig (BipAgentsUITests): the demo launched as a tapped notification of the contract
+      # (contracts/notifications/) opens the right conversation on the right message; prints « [open-timing] ».
+      - name: App UI tests (notifications)
+        run: |
+          device=$(xcrun simctl list devices available -j | python3 -c "import json,sys; d=json.load(sys.stdin)['devices']; print(next(x['udid'] for r in sorted(d, reverse=True) if 'iOS' in r for x in d[r] if x['name'].startswith('iPhone')))")
+          xcodebuild test -project BipAgents.xcodeproj -scheme BipAgents -destination "id=$device" \
+            -only-testing:BipAgentsUITests CODE_SIGNING_ALLOWED=NO | tee ui-tests.log | grep -E "open-timing|Test Case|error:|\*\* TEST" || true
+          grep -q "\*\* TEST SUCCEEDED \*\*" ui-tests.log
+
+  android:
+    name: Android app
+    # the apps' source is private; run by hand (macOS minutes count ten times), checked locally before each merge
+    if: github.repository == 'Alexbob0/bipagents-private' && github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v6
+      - name: Unit tests and debug build
+        working-directory: android
+        run: ./gradlew :app:testDebugUnitTest :app:lintDebug :app:assembleDebug --no-configuration-cache

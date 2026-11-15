@@ -1,0 +1,289 @@
+"""The rest of one person's install around Hermes: the bridge (its config and service) and the Bips' voices (Pocket,
+one server per machine, shared: the first install brings it up, the next ones reuse it)."""
+from __future__ import annotations
+
+import json
+import secrets
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Dict, List, Optional
+from xml.sax.saxutils import escape
+
+from .hermes import Model, agent_url, profile_dir
+from .ports import Ports, browser_ports
+
+POCKET_PORT = 8098
+
+
+@dataclass
+class AgentEntry:
+    name: str            # profile name (= key in the bridge config)
+    display_name: str
+    key: str             # its API_SERVER_KEY
+    voice: Optional[str] = None
+    root: bool = False   # the gateway's main profile (an existing Hermes), served at its root, not /p/<name>
+
+
+# The publisher's push relay (relay/README.md, online since 11/2026, APNs + FCM): every install sends through it.
+PUSH_SERVICE_URL = "https://push.bipagents.com"
+
+
+@dataclass
+class Install:
+    repo: Path                       # the BipAgents checkout
+    home: Path                       # this person's home
+    ports: Ports
+    tailnet_name: Optional[str]      # e.g. "box.tail1234.ts.net"
+    lan_address: Optional[str]
+    agents: List[AgentEntry] = field(default_factory=list)
+    model: Optional[Model] = None
+    # The publisher's push relay (relay/): the app registers there and gives this bridge a relay token.
+    push_service_url: Optional[str] = None
+    bridge_key: str = field(default_factory=lambda: secrets.token_urlsafe(32))
+    pocket_url: str = f"http://127.0.0.1:{POCKET_PORT}"
+    # The person's own voice model (voice_server.py): the bridge's `[voice_server]` lines, none for the Bips only.
+    voice_server: List[str] = field(default_factory=list)
+    # The agents' tools run in a sandbox: they cannot read the bridge's files, so it may keep credentials.
+    isolated: bool = False
+    # Each agent gets a visible browser of its own, in a container (browser/, bridge-rs/src/browsers.rs).
+    browser: bool = False
+    # An existing Hermes keeps its own API port (default: this install's block).
+    hermes_port: Optional[int] = None
+    # A server the app created (`--cloud`, cloud.py): the door on the Internet at `lan_address`:443, the pairing secret
+    # and the progress the bridge shows the app until it is claimed.
+    cloud: bool = False
+    door_port: int = 443
+    setup_file: Optional[Path] = None
+    progress_file: Optional[Path] = None
+
+    @property
+    def hub_port(self) -> int:
+        return self.hermes_port or self.ports.hermes
+
+    @property
+    def config_dir(self) -> Path:
+        return self.home / ".config" / "bipagents"
+
+    @property
+    def data_dir(self) -> Path:
+        return self.home / ".local" / "share" / "bipagents"
+
+    @property
+    def bridge_config(self) -> Path:
+        return self.config_dir / "bridge.toml"
+
+    def public(self, port: int) -> Optional[str]:
+        return f"https://{self.tailnet_name}:{port}" if self.tailnet_name else None
+
+
+def _q(value: str) -> str:
+    return json.dumps(value, ensure_ascii=False)   # a TOML basic string is a JSON string for these values
+
+
+def bridge_toml(inst: Install) -> str:
+    """The bridge's config for this install: its agents behind the person's multiplex gateway."""
+    hub_local = f"http://127.0.0.1:{inst.hub_port}"
+    hub_public = inst.public(inst.hub_port)
+    lines = [
+        "# Written by the BipAgents installer. Keys here: chmod 600.",
+        f"bridge_key = {_q(inst.bridge_key)}",
+        'host = "127.0.0.1"',
+        f"port = {inst.ports.bridge}",
+        f"data_dir = {_q(str(inst.data_dir))}",
+    ]
+    if inst.cloud and inst.lan_address:
+        door_url = f"https://{inst.lan_address}" + ("" if inst.door_port == 443 else f":{inst.door_port}")
+        lines += ["cloud = true", f"public_url = {_q(door_url)}"]
+    elif inst.public(inst.ports.bridge):
+        lines.append(f"public_url = {_q(inst.public(inst.ports.bridge))}")
+    lines += ["", "[pocket]", f"url = {_q(inst.pocket_url)}", 'default_voice = "pocket:colibri"']
+    if inst.voice_server:
+        lines += [""] + inst.voice_server
+    lines += ["", "[cron]", "watch = true"]
+    # The person's own Hermes: lets the app create agents (« + »).
+    lines += ["", "[hermes]", f"bin = {_q(str(inst.home / '.local' / 'bin' / 'hermes'))}",
+              f"home = {_q(str(inst.home / '.hermes'))}", f"hub_url = {_q(hub_local)}"]
+    if hub_public:
+        lines.append(f"public_hub_url = {_q(hub_public)}")
+    if (inst.home / ".hermes" / "shared").is_symlink():   # the server's shared Hermes (shared_hermes.py)
+        from .shared_hermes import bridge_lines
+        lines += bridge_lines(inst.home / ".hermes")
+    if inst.isolated:
+        lines.append("isolated = true")
+    if inst.browser:
+        first, count = browser_ports(inst.ports.base)
+        lines += ["", "[browser]", "enabled = true", f"first_port = {first}", f"ports = {count}"]
+    media = inst.home / ".hermes" / "media"
+    lines += ["", "[media.roots]", f"{_q(str(media))} = {_q(str(media))}"]   # native Hermes: same path both sides
+    push = []
+    if inst.push_service_url:
+        push.append(f"service_url = {_q(inst.push_service_url)}")
+    if push:
+        lines += ["", "[push]"] + push
+    if inst.model and inst.model.base_url:
+        lines += ["", "[model]", f"health_url = {_q(inst.model.base_url.rstrip('/') + '/models')}"]
+        if inst.model.api_key:
+            lines.append(f"health_key = {_q(inst.model.api_key)}")
+    door = inst.door_port if inst.cloud else inst.ports.lan
+    lines += ["", "[lan]", f"enabled = {'true' if inst.lan_address else 'false'}", f"port = {door}"]
+    if inst.lan_address:
+        lines.append(f"address = {_q(inst.lan_address)}")
+    if inst.cloud and inst.setup_file and inst.progress_file:
+        lines += ["", "[setup]", f"file = {_q(str(inst.setup_file))}", f"progress = {_q(str(inst.progress_file))}"]
+    for agent in inst.agents:
+        uploads = profile_dir(agent.name) / "uploads"
+        local = hub_local if agent.root else agent_url(hub_local, agent.name)
+        lines += ["", f"[agents.{agent.name}]", f"display_name = {_q(agent.display_name)}",
+                  f"hermes_url = {_q(local)}", f"hermes_key = {_q(agent.key)}",
+                  f"upload_dir_host = {_q(str(uploads))}", f"upload_dir_container = {_q(str(uploads))}"]
+        if hub_public:
+            lines.append(f"public_url = {_q(hub_public if agent.root else agent_url(hub_public, agent.name))}")
+        if agent.voice:
+            lines.append(f"voice = {_q(agent.voice)}")
+    return "\n".join(lines) + "\n"
+
+
+# Seconds the bridge gets to stop before systemd / launchd kill it (systemd waits 90 s by default). The bridge itself
+# exits within about 5 s of SIGTERM (bridge-rs main_cli.rs STOP_HARD): this is only the backstop, so an update or a
+# move never leaves the person's app without its server for a minute and a half (seen 2026-10-26).
+BRIDGE_STOP_SECONDS = 15
+
+
+def launchd_plist(label: str, program: List[str], workdir: Path, env: Dict[str, str], log: Path,
+                  stop_seconds: Optional[int] = None) -> str:
+    args = "".join(f"<string>{escape(a)}</string>" for a in program)
+    envs = "".join(f"<key>{escape(k)}</key><string>{escape(v)}</string>" for k, v in env.items())
+    exit_timeout = f"\n  <key>ExitTimeOut</key><integer>{stop_seconds}</integer>" if stop_seconds else ""
+    return f"""<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>{escape(label)}</string>
+  <key>ProgramArguments</key><array>{args}</array>
+  <key>WorkingDirectory</key><string>{escape(str(workdir))}</string>
+  <key>EnvironmentVariables</key><dict>{envs}</dict>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>ThrottleInterval</key><integer>10</integer>{exit_timeout}
+  <key>StandardOutPath</key><string>{escape(str(log))}</string>
+  <key>StandardErrorPath</key><string>{escape(str(log))}</string>
+</dict>
+</plist>
+"""
+
+
+def systemd_unit(description: str, program: List[str], workdir: Path, env: Dict[str, str],
+                 stop_seconds: Optional[int] = None) -> str:
+    environment = "".join(f"Environment={k}={v}\n" for k, v in env.items())
+    stop = f"TimeoutStopSec={stop_seconds}\n" if stop_seconds else ""
+    return f"""[Unit]
+Description={description}
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory={workdir}
+{environment}ExecStart={" ".join(program)}
+Restart=on-failure
+RestartSec=5
+{stop}UMask=0027
+NoNewPrivileges=true
+
+[Install]
+WantedBy=default.target
+"""
+
+
+def bridge_service(inst: Install, system: str) -> tuple[str, Path, str]:
+    """(file name, path, content) of the bridge's service for this person."""
+    from .rustbridge import program as bridge_program
+    program = bridge_program(inst.home, inst.repo)   # this checkout's binary (rustbridge.py)
+    # BIPAGENTS_REPO: the checkout whose installer the bridge runs (`place import`, restores), its binary being elsewhere.
+    env = {"BRIDGE_CONFIG": str(inst.bridge_config), "BIPAGENTS_REPO": str(inst.repo)}
+    if system == "macos":
+        path = inst.home / "Library" / "LaunchAgents" / "io.github.bipagents.bridge.plist"
+        return "io.github.bipagents.bridge", path, launchd_plist(
+            "io.github.bipagents.bridge", program, inst.repo / "bridge", env, inst.home / "Library" / "Logs" / "bipagents-bridge.log",
+            stop_seconds=BRIDGE_STOP_SECONDS)
+    path = inst.home / ".config" / "systemd" / "user" / "bipagents-bridge.service"
+    # TODO(security audit 2026-10-27, H1 defense in depth): ProtectHome=read-only + ReadWritePaths= is NOT set, on
+    # purpose. In a user unit (`systemctl --user`) systemd implies PrivateUsers=yes for every mount-namespace option
+    # (ProtectHome, ReadWritePaths, ProtectSystem…): the bridge would run in a user namespace mapping only this account
+    # and root, where the rootless podman it starts (sandboxes, browsers, the egress proxy) can no longer map its
+    # subordinate ids (newuidmap fails), and the encrypted space it mounts (space.rs) would only exist in its own mount
+    # namespace. What it writes, for the day this moves to a system unit or a dedicated helper: its data dir
+    # (`[outbox] db_path`'s folder, ~/.local/share/hermes-bridge), its config dir (bridge.toml, its lock and last-good
+    # copy, ~/.config/hermes-ios), ~/.config/bipagents and ~/.local/state/bipagents (backups, credit, import, sleep),
+    # the Hermes home (~/.hermes: profiles, config.yaml/.env through `hermes config set`, skills, crons), podman's
+    # storage and settings (~/.local/share/containers, ~/.config/containers, $XDG_RUNTIME_DIR), the spaces root
+    # (~/.local/share/bipagents/space), ~/.ssh/authorized_keys (ssh_keys.rs), ~/.config/systemd/user (units of the
+    # browsers and of `place import`/restores run from this checkout) and this checkout itself. The share and volume
+    # file work is done through folder descriptors instead (bridge-rs/src/beneath.rs).
+    return "bipagents-bridge", path, systemd_unit("BipAgents bridge", program, inst.repo / "bridge", env,
+                                                  stop_seconds=BRIDGE_STOP_SECONDS)
+
+
+def zram_commands(package_manager: str) -> List[str]:
+    """Compressed memory for a small rented server (as root): half the memory as a zstd-compressed swap, which lets
+    it hold about 1.5× more before slowing down (systemd's zram-generator). As the offer's cloud-init does
+    (installer/cloud/user-data.yaml): Ubuntu's cloud kernels keep the module in linux-modules-extra (without it the
+    device never comes and `systemctl start` waited 90 s for nothing, Hetzner Ubuntu 24.04, 12/11), and the swap on
+    the device is its own unit."""
+    install = {"apt": "apt-get install -y systemd-zram-generator", "dnf": "dnf install -y zram-generator"}[package_manager]
+    module = ['modprobe zram || apt-get install -y "linux-modules-extra-$(uname -r)"'] if package_manager == "apt" else []
+    return module + ["modprobe zram", install,
+                     "printf '[zram0]\\nzram-size = ram / 2\\ncompression-algorithm = zstd\\nswap-priority = 100\\n' "
+                     "> /etc/systemd/zram-generator.conf",
+                     "systemctl daemon-reload", "systemctl restart systemd-zram-setup@zram0.service",
+                     "systemctl start dev-zram0.swap"]
+
+
+def bip_languages(locale: Optional[str] = None) -> str:
+    """All of Pocket's languages, this machine's first (the one Pocket keeps loaded): « fr,en,es,de,nl »,
+    « en,fr,es,de,nl »…"""
+    import os
+
+    first = (locale if locale is not None else os.environ.get("LC_ALL") or os.environ.get("LANG") or "")[:2].lower()
+    order = ["fr", "en", "es", "de", "nl"]
+    return ",".join([first] + [code for code in order if code != first] if first in order else order)
+
+
+def pocket_service(inst: Install, system: str, languages: str, packages: Optional[Path] = None) -> tuple[str, Path, str]:
+    """The Bips' voices: Pocket's own models, or with `packages` the phones' 8-bit ones (voices.py), loaded only while
+    they speak (a podcast, an audio file, a reply for a phone that can't speak itself)."""
+    python = inst.repo / "pocket" / ".venv" / "bin" / "python"
+    if packages is not None:
+        program = [str(python), str(inst.repo / "pocket" / "pocket_server.py"), "--onnx", str(packages),
+                   "--keep", "none", "--idle-unload", "120", "--threads", "2", "--port", str(POCKET_PORT)]
+    else:
+        program = [str(python), str(inst.repo / "pocket" / "pocket_server.py"), "--voices", str(inst.repo / "voices"),
+                   "--languages", languages, "--port", str(POCKET_PORT)]
+    env = {"PYTHONUNBUFFERED": "1"}
+    if system == "macos":
+        path = inst.home / "Library" / "LaunchAgents" / "io.github.bipagents.pocket.plist"
+        return "io.github.bipagents.pocket", path, launchd_plist(
+            "io.github.bipagents.pocket", program, inst.repo / "pocket", env, inst.home / "Library" / "Logs" / "bipagents-pocket.log")
+    path = inst.home / ".config" / "systemd" / "user" / "bipagents-pocket.service"
+    return "bipagents-pocket", path, systemd_unit("BipAgents voices (Pocket TTS)", program, inst.repo / "pocket", env)
+
+
+def hermes_service(inst: Install, system: str, hermes: str, hermes_home: Path) -> tuple[str, Path, str]:
+    """Our own service for Hermes' gateway (`hermes gateway run`), when Hermes refuses to install its own (inside a
+    container, or a service manager it does not handle)."""
+    program = [hermes, "gateway", "run"]
+    env = {"HERMES_HOME": str(hermes_home), "PATH": f"{inst.home}/.local/bin:/usr/local/bin:/usr/bin:/bin",
+           "PYTHONUNBUFFERED": "1"}
+    if system == "macos":
+        path = inst.home / "Library" / "LaunchAgents" / "io.github.bipagents.hermes.plist"
+        return "io.github.bipagents.hermes", path, launchd_plist(
+            "io.github.bipagents.hermes", program, inst.home, env, inst.home / "Library" / "Logs" / "bipagents-hermes.log")
+    path = inst.home / ".config" / "systemd" / "user" / "bipagents-hermes.service"
+    return "bipagents-hermes", path, systemd_unit("Hermes gateway (BipAgents)", program, inst.home, env)
+
+
+def tailscale_commands(cli: str, ports: Ports, desk: bool = False, hermes_port: Optional[int] = None) -> List[str]:
+    """What publishes this install on the tailnet (HTTPS with the tailnet's certificate), never on the Internet. The
+    agents' desk only when it is installed; an existing Hermes on its own port."""
+    published = [hermes_port or ports.hermes] + [p for p in ports.tailnet if p != ports.hermes and (desk or p != ports.desk)]
+    return [f"{cli} serve --bg --https={p} http://127.0.0.1:{p}" for p in published]

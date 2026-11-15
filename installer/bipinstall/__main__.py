@@ -1,0 +1,959 @@
+"""``python -m bipinstall [--dry-run]``: installs BipAgents for the person running it, in their own account, without
+admin rights. Asks where the model is, picks a setup that fits the machine, creates the first agents, and shows the
+QR code to scan in the app. `--dry-run` shows every step and command without changing anything."""
+from __future__ import annotations
+
+import argparse
+import getpass
+import asyncio
+import os
+import re
+import shlex
+import shutil
+import subprocess
+import sys
+import time
+from pathlib import Path
+from typing import Callable, List, Optional
+
+import httpx
+import yaml
+
+from . import bridgeconf, browser_refresh, checkout, hermes, models, rustbridge, souls, ui, voices
+from .detect import Machine, detect
+from .plan import make_plan
+from .ports import pick_block
+from .stack import PUSH_SERVICE_URL, AgentEntry, Install, bip_languages, zram_commands, bridge_service, bridge_toml, hermes_service, pocket_service, tailscale_commands
+
+REPO = Path(__file__).resolve().parents[2]
+# The installer's own environment (installer/requirements.txt): what its timers and the bridge run it with.
+INSTALLER_PYTHON = REPO / "installer" / ".venv" / "bin" / "python"
+
+
+def templates() -> List[dict]:
+    """The kinds of agents, in English. Their language is set later in the app (the iPhone's by default): they answer
+    in the language they are written to, and the app tells them which one to write first in."""
+    return souls.templates("en")
+
+
+def say(text: str = "") -> None:
+    print(text, flush=True)
+
+
+def ask(question: str, default: str = "") -> str:
+    shown = f" [{default}]" if default else ""
+    try:
+        after = " " if question.endswith("?") and not shown else ": "
+        answer = input(f"{ui.question(question)}{shown}{after}").strip()
+    except EOFError:  # no one to answer (answers given in advance ran out): stop rather than ask forever
+        say("\nNo answer: install stopped, nothing else was changed.")
+        raise SystemExit(1)
+    return answer or default
+
+
+def choose(question: str, options: List[str], default: int = 1) -> int:
+    for i, option in enumerate(options, 1):
+        say(f"  {i}. {option}")
+    while True:
+        answer = ask(question, str(default))
+        if answer.isdigit() and 1 <= int(answer) <= len(options):
+            return int(answer)
+
+
+# -- the model -----------------------------------------------------------------------------------------
+
+PROFILES_EN = {"léger": "Light", "local": "Local", "costaud": "Heavy-duty"}   # the plan's profiles, as said in English
+
+
+def pick_model(machine: Machine) -> tuple[hermes.Model, bool]:
+    say("\nWhere does the model (the agents' \"brain\") run?")
+    first = "On another machine on my tailnet (PC with a GPU, Spark, Mac at home…)" if machine.cloud \
+        else "On another machine on my network (PC with a GPU, Spark, Mac…)"
+    where = choose("Choice", [first, "In the cloud, through an API (OpenRouter, OpenAI, Anthropic, Mistral)",
+                                           "On this machine (Ollama or LM Studio already installed)"],
+                   default=2 if machine.cloud else 1)
+    if where == 2:
+        provider = models.CLOUD[choose("Provider", [p.label for p in models.CLOUD]) - 1]
+        say(f"Create your key here: {provider.key_hint}")
+        key = ask("API key")
+        name = ask("Model (exact ID)", {"openrouter": "anthropic/claude-sonnet-5.5", "openai": "gpt-5.1",
+                                                   "anthropic": "claude-sonnet-5-5", "mistral": "mistral-large-latest"}
+                   .get(provider.key, ""))
+        hermes_provider = {"openrouter": "openrouter", "openai": "openai-api", "anthropic": "anthropic"}.get(provider.key, "custom")
+        model = hermes.Model(hermes_provider, name, base_url=provider.base_url, api_key=key)
+        return verify(model), False
+    if where == 1 and machine.cloud:
+        found = []   # no home network around a rented server: the address on the tailnet is asked below
+    else:
+        say("Looking for model servers on your network…")
+        found = asyncio.run(models.discover(machine.lan_addresses if where == 1 else []))
+    found = [s for s in found if (s.base_url.startswith("http://127.0.0.1")) == (where == 3)]
+    if not found:
+        if not (where == 1 and machine.cloud):
+            say("None found automatically.")
+        example = "http://pc-maison.tail1234.ts.net:11434/v1" if machine.cloud else "http://192.168.1.20:11434/v1"
+        base = ""
+        while not base.startswith(("http://", "https://")):
+            base = ask(f"Server address (e.g. {example})")
+        base = base.rstrip("/")
+        server = models.Server(base_url=base if base.endswith("/v1") else base + "/v1", kind="manuel")
+    else:
+        server = found[choose("Server", [f"{s.kind} — {s.base_url} ({len(s.models)} model(s))"
+                                                         for s in found]) - 1]
+    key = ask("The server's API key (empty if it has none)")
+    names = server.models or asyncio.run(models.list_models(server.base_url, key or None))
+    name = names[choose("Model", names) - 1] if len(names) > 1 \
+        else (names[0] if names else ask("Model"))
+    provider = "lmstudio" if server.kind == "LM Studio" else "custom"
+    return verify(hermes.Model(provider, name, base_url=server.base_url, api_key=key or None)), where == 3
+
+
+def verify(model: hermes.Model) -> hermes.Model:
+    say(f"Testing {model.name}…")
+    result = asyncio.run(models.check(model.base_url or "", model.name, model.api_key))
+    if not result.ok:
+        say(ui.sad(f"The model isn't answering ({result.error})."))
+        say("Check the address, the key or the name, then run this again.")
+        sys.exit(1)
+    model.vision = bool(result.vision)
+    sees = "It reads images: photos will be sent to it as they are." if model.vision \
+        else "It doesn't read images: Hermes will describe them to it."
+    say(ui.done(f"It answers in {result.seconds:.1f} s.") + f" {sees}")
+    return model
+
+
+# -- the run -------------------------------------------------------------------------------------------
+
+def colours() -> List[tuple]:
+    """(category, label) of each Bip colour an « Autre » agent can take: the kinds' own, in the installer's language."""
+    return [(t["category"], t["label"]) for t in templates() if t["category"] != "custom"]
+
+
+def custom_agent(name: str) -> dict:
+    """« Autre » : the person writes the agent's role, tone and limits; they become its SOUL.md."""
+    say(f"\nLet's build {name} just for you (press Enter to skip a question).")
+    role = ""
+    while not role:
+        role = ask(f"What does {name} do for you? (e.g. \"keeps an eye on my plants and tells me when to water them\")")
+    tone = ask("Its tone? (e.g. direct, warm, funny, formal)",
+               "clear and kind")
+    rules = ask("Anything it must always or never do?", "")
+    say("Which Bip color?")
+    options = colours()
+    category = options[choose("Color", [label for _, label in options], default=len(options)) - 1][0]
+    return {"category": category, "label": "Other", "description": role[:120],
+            "soul": souls.custom_soul(name, role, tone, rules, lang="en")}
+
+
+def pick_agents() -> List[tuple]:
+    """(the name the person gives, its template) for each agent to create. No name is imposed."""
+    say("\nWhich kinds of agents should we create first? (numbers separated by commas; you can add more from the app)")
+    kinds = templates()
+    for i, t in enumerate(kinds, 1):
+        say(f"  {i}. {t['label']} — {t['description']}")
+    picked = ask("Kinds", "1")
+    chosen = [kinds[int(x) - 1] for x in picked.replace(" ", "").split(",") if x.isdigit() and 1 <= int(x) <= len(kinds)]
+    named = []
+    for template in chosen or [kinds[0]]:
+        name = ""
+        while not name:
+            name = ask(f"What's the name of your \"{template['label']}\" agent?").strip()
+        named.append((name, custom_agent(name) if template["category"] == "custom" else template))
+    return named
+
+
+def pocket_running() -> bool:
+    return voice_engine_answers("http://127.0.0.1:8098")
+
+
+def voice_engine_answers(base_url: str) -> bool:
+    """Whether a voice engine (Pocket) already runs there."""
+    try:
+        return httpx.get(f"{base_url.rstrip('/')}/health", timeout=2).status_code == 200
+    except httpx.HTTPError:
+        return False
+
+
+def write(path: Path, content: str, runner: hermes.Runner, mode: int = 0o644) -> None:
+    runner.log.append(f"write {path}")
+    if runner.dry:
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content, encoding="utf-8")
+    path.chmod(mode)
+
+
+def start_service(system: str, label: str, path: Path, runner: hermes.Runner) -> None:
+    if system == "macos":
+        runner.run(["launchctl", "bootout", f"gui/{os.getuid()}/{label}"], check=False)  # an older copy, if any
+        runner.run(["launchctl", "bootstrap", f"gui/{os.getuid()}", str(path)])
+    else:
+        runner.run(["systemctl", "--user", "daemon-reload"])
+        runner.run(["systemctl", "--user", "enable", "--now", label])
+
+
+def venv(folder: Path, runner: hermes.Runner, requirements: str = "requirements.txt") -> None:
+    """The folder's Python environment, with its requirements as they are now (a new one after an update is
+    installed; nothing happens when they are all there). Without uv's cache: the packages downloaded for it don't stay
+    on disk next to it (PyTorch's alone was 5.5 GB). Pocket's own models on Linux: PyTorch without CUDA (pip's
+    default build brings ~4 GB of NVIDIA libraries that no server uses)."""
+    if runner.dry or not (folder / ".venv" / "bin" / "python").exists():
+        runner.run(["uv", "venv", "--no-cache", "--python", "3.12", str(folder / ".venv")])
+    cpu = ["--torch-backend", "cpu"] if folder.name == "pocket" and requirements == "requirements.txt" \
+        and sys.platform.startswith("linux") else []
+    runner.run(["uv", "pip", "install", "--no-cache", "--quiet", *cpu, "--python",
+                str(folder / ".venv" / "bin" / "python"), "-r", str(folder / requirements)])
+
+
+def wait_for(url: str, headers: Optional[dict] = None, seconds: int = 90) -> bool:
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        try:
+            if httpx.get(url, headers=headers or {}, timeout=3, verify=False).status_code < 500:
+                return True
+        except httpx.HTTPError:
+            pass
+        time.sleep(2)
+    return False
+
+
+def compress_memory(machine, runner) -> None:
+    """A small rented server gets compressed memory (zram): done here when this account may (root, or sudo without a
+    password), else the commands to run once."""
+    from .detect import zram_active
+
+    if machine.memory_gib > 8.5 or zram_active():
+        return
+    manager = "apt" if shutil.which("apt-get") else "dnf" if shutil.which("dnf") else None
+    if manager is None:
+        return
+    commands = zram_commands(manager)
+    root = os.geteuid() == 0
+    try:
+        if not root:
+            runner.run("sudo -n true", shell=True)
+        for command in commands:
+            runner.run(command if root else f"sudo -n sh -c {shlex.quote(command)}", shell=True)
+        say(ui.done("Compressed memory (zram) on: this server holds about 1.5× more."))
+    except RuntimeError:
+        say(ui.note("Compressed memory (zram) lets this small server hold about 1.5× more. Run once:"))
+        for command in commands:
+            say(f"    sudo sh -c {shlex.quote(command)}")
+
+
+def main(argv: Optional[List[str]] = None) -> int:
+    if argv is None:
+        argv = sys.argv[1:]
+    if argv and argv[0] == "uninstall":
+        return uninstall_main(argv[1:])
+    if argv and argv[0] == "hermes-update":
+        from .update import main as update_main
+        return update_main(argv[1:])
+    if argv and argv[0] == "update":
+        from .upgrade import main as upgrade_main
+        return upgrade_main(argv[1:])
+    if argv and argv[0] == "bridge":   # rustbridge.py: which bridge runs, its binaries fetched again
+        from .rustbridge import main as bridge_main
+        return bridge_main(argv[1:])
+    if argv and argv[0] == "qr":   # the code to scan in the app again, from the bridge
+        return qr_main(argv[1:])
+    if argv and argv[0] in ("export", "import", "resume"):   # moving.py: to another machine, or a backup
+        from . import moving
+        return {"export": moving.export_main, "import": moving.import_main, "resume": moving.resume_main}[argv[0]](argv[1:])
+    if argv and argv[0] in ("send", "import-place"):   # to_place.py: one's own Hermes into a place of the offer
+        from . import to_place
+        return {"send": to_place.send_main, "import-place": to_place.import_place_main}[argv[0]](argv[1:])
+    if argv and argv[0] == "shared-hermes":   # shared_hermes.py: one read-only Hermes for the server's places
+        from . import shared_hermes
+        return shared_hermes.main(argv[1:])
+    if argv and argv[0] == "shared-images":   # shared_images.py: the agents' images once for the server's places
+        from . import shared_images
+        return shared_images.main(argv[1:])
+    if argv and argv[0] == "backup":   # backup.py: this place to the guichet, now
+        from .backup import main as backup_main
+        return backup_main(argv[1:])
+    if argv and argv[0] in ("move-out", "move-in"):   # placemove.py: a planned move, run by the seat agents
+        from .placemove import main as move_main
+        return move_main(argv)
+    if argv and argv[0] == "restore":   # backup.py: a place moved after an outage, from its last backup
+        from .backup import restore_main
+        return restore_main(argv[1:])
+    if argv and argv[0] == "encrypt":   # space.py: this account's space encrypted at rest
+        from .space import main as space_main
+        return space_main(argv[1:])
+    if argv and argv[0] == "voice":
+        from .voice_server import main as voice_main
+        return voice_main(argv[1:])
+    if argv and argv[0] == "browser-refresh":   # browser_refresh.py: the agents' browser kept up to date, each night
+        from .browser_refresh import main as browser_refresh_main
+        return browser_refresh_main(argv[1:])
+    if argv and argv[0] == "console":   # a one-time link to the web console, from the bridge
+        from .console import main as console_main
+        return console_main(argv[1:])
+    if argv and argv[0] in ("family", "famille"):   # « famille ajouter »: its first name, kept working
+        from .family import main as family_main
+        return family_main(argv[1:])
+    if argv and argv[0] == "sandbox":   # « sandbox adopt <agent> »: its hand-made mounts into volumes (the bridge)
+        return sandbox_main(argv[1:])
+    if argv and argv[0] == "archive":   # « archive add <agent> <folder> »: a folder searched on demand (the bridge)
+        return archive_main(argv[1:])
+    if argv and argv[0] == "approvals":   # what the agents asked, and the answers (the bridge's logs, read only)
+        return approvals_main(argv[1:])
+    parser =argparse.ArgumentParser(prog="bipinstall", description="Install BipAgents for this account "
+                                     "(`bipinstall uninstall` removes it; `bipinstall family add <name>` prepares a "
+                                     "family member's install on this server; `bipinstall update` brings it up to date; `bipinstall voice` connects your own voice "
+                                     "model (a TTS server on the network); `bipinstall console` gives a link to the web "
+                                     "console; `bipinstall hermes-update` updates Hermes "
+                                     "and checks the agents)")
+    parser.add_argument("--dry-run", action="store_true", help="show every step without changing anything")
+    parser.add_argument("--push-service", default=PUSH_SERVICE_URL or None,
+                        help="the publisher's push relay (the app's notifications without an APNs key of your own)")
+    parser.add_argument("--ports", type=int, help="the first port of this install's block (default: the first free one)")
+    parser.add_argument("--languages", default=None,
+                        help="the Bips' languages: fr, en, es, de, nl (default: all five, this machine's first; only the "
+                             "first stays loaded, the others load when spoken and unload when silent)")
+    parser.add_argument("--light-voices", action="store_true",
+                        help="the Bips' voices as the phones have them (8-bit, no PyTorch), loaded only while they "
+                             "speak: the default since 2026-10-26, kept for older commands")
+    parser.add_argument("--pocket-models", action="store_true",
+                        help="the Bips' voices with Pocket's own models instead (PyTorch, about 5.5 GB): only to make "
+                             "or serve voices of your own")
+    parser.add_argument("--voice-server",
+                        help="your own voice model: a TTS server with OpenAI's /v1/audio/speech, Kyutai's included "
+                             "(default: look for one on this machine and the local network, then ask)")
+    parser.add_argument("--voice-uses", help="what it speaks for, among live, replies, reading (default: asked)")
+    parser.add_argument("--no-tailscale", action="store_true",
+                        help="this machine only, nothing published on a tailnet (tests, or a setup done by hand)")
+    parser.add_argument("--cloud", metavar="FILE",
+                        help="a server the app created (cloud-init writes FILE): no question, no Tailscale, the app "
+                             "pairs itself")
+    args = parser.parse_args(argv)
+    runner = hermes.Runner(dry=args.dry_run)
+
+    machine = detect()
+    say(ui.banner(os.environ.get("USER", ""), machine.summary))
+    if machine.system == "linux" and not args.dry_run:
+        from .account import ensure_user_services
+        if not ensure_user_services(say):
+            return 1
+    if not rustbridge.asset() and not os.environ.get(rustbridge.BUILD):
+        say(ui.fail(rustbridge.unsupported()))   # before anything is changed
+        if not args.dry_run:
+            return 1
+    if args.cloud:
+        return cloud_install(args, runner, machine)
+    if machine.cloud:
+        say(ui.note(f"Server rented from {machine.cloud}: no door on a local network (it would be on the Internet),\n"
+                       "    everything goes through Tailscale. Your host can read the disk: encrypt what matters, and keep "
+                       "the system up to date."))
+        machine.lan_addresses = []
+        compress_memory(machine, runner)
+    if args.no_tailscale:
+        machine.tailnet_name = None
+    elif not machine.tailnet_name:
+        say(ui.sad("Tailscale isn't connected."))
+        say("Install it and sign in (https://tailscale.com/download), then run this again.")
+        if not args.dry_run:
+            return 1
+    from .existing import detect_existing
+    existing = detect_existing()
+    if existing:
+        return install_on_existing(args, runner, machine, existing)
+    model, model_here = pick_model(machine)
+    plan = make_plan(machine, model_here)
+    ports = pick_block(wanted=args.ports)
+    say(f"\n{ui.BOLD}{PROFILES_EN.get(plan.profile, plan.profile)} setup{ui.RESET}: about {plan.memory_gib(1):.1f} GB for you, "
+           f"{plan.people} person(s) in all on this machine.")
+    for line in plan.notes:
+        say(ui.note(line))
+    sandbox = hermes.sandbox_runtime()
+    from . import shared_images
+    if shared_images.use_shared(runner, sandbox, say=say):   # a machine whose administrator pulled them once
+        say(ui.note("The agents' browser and sandbox: this machine's shared images."))
+    if sandbox:
+        say(ui.note(f"Sandbox: the agents' tools run in a container ({Path(sandbox).name})."))
+    elif machine.system == "linux":
+        say("  · No sandbox: your agents won't have a terminal or file access by default, and no vault.\n"
+               "    For both, have podman installed once (sudo apt install podman, or dnf), then run this again.")
+    else:
+        say("  · No sandbox on a Mac yet: your agents won't have a terminal or file access by default,\n"
+               "    and no password vault.")
+    say(ui.note(f"Ports {ports.base}–{ports.base + 9}: agents {ports.hermes}, bridge {ports.bridge}, local network {ports.lan}."))
+    browser = False
+    if sandbox and plan.browser != "none":
+        say("\nEach agent can have its own visible browser: a real Chrome on a desktop of its own, that you watch live\n"
+               "and take over from the app (Desktop). It signs in to websites with the vault, without seeing your\n"
+               "passwords. About 0.5 GB of memory per agent while it browses.")
+        browser = yes(ask("Give your agents a visible browser? (y/n)",
+                          "y"))
+    chosen = pick_agents()
+    if not yes(ask("\nReady to go? (y/n)", "y")):
+        return 1
+
+    inst = Install(repo=REPO, home=Path.home(), ports=ports, tailnet_name=machine.tailnet_name,
+                   lan_address=(machine.lan_addresses or [None])[0], model=model,
+                   push_service_url=args.push_service,
+                   isolated=bool(sandbox), browser=browser)
+    steps = iter(range(1, 7 if browser else 6))
+    total = 6 if browser else 5
+    step(next(steps), total, "Hermes, the agents' brain")
+    hermes.install(runner, browser=plan.browser != "none")
+    skipped = hermes.apply_patches(runner, REPO / "hermes" / "patches")
+    if skipped:
+        say(f"  Patches not applied to this Hermes version: {', '.join(skipped)} (the app works, without these features).")
+    hub_key = hermes.setup_hub(runner, ports.hermes, model, sandbox=sandbox)
+    from . import migrations
+    from .upgrade import install_command
+    migrations.sandboxes_at_gateway_start(runner, Path.home())   # what that last migration sets, a fresh install too
+    migrations.mark([mid for mid, _ in migrations.MIGRATIONS], runner)   # a fresh install has them all already
+    install_command(runner)   # `bipagents update` later
+    if plan.browser != "none" and not browser:   # the visible browser brings its own desktop
+        if hermes.desktop_ready() or sandbox:
+            hermes.setup_desktop(runner, plan.browser)
+        elif machine.system == "linux":
+            say("  Agents' desktop: TigerVNC and Xfce are missing. For the app to show their browser live,\n"
+                   "  run once (with sudo): hermes computer-use screen install, then run this installer again.")
+    for display_name, template in chosen:
+        profile = souls.profile_name(display_name, (a.name for a in inst.agents))
+        soul = template["soul"].replace("{name}", display_name)
+        key = hermes.create_agent(runner, profile, description=template["description"], soul=soul, model=model)
+        inst.agents.append(AgentEntry(profile, display_name, key))
+    gateway_service(inst, machine, runner)
+
+    say(ui.done("Hermes and your agents are set up."))
+    status = finish(inst, machine, runner, args, steps, total, sandbox, desk=plan.browser == "permanent")
+    if status == 0 and not runner.dry:
+        (hermes.hermes_home() / hermes.UNFINISHED).unlink(missing_ok=True)   # from now on, theirs
+    return status
+
+
+# The offer's model (Kerfy picks it, 2026-10-27), set at install with a placeholder key: the claim then only writes the
+# person's key (and model, if another) into files Hermes reads at each turn, no gateway restart (bridge-rs/src/
+# cloud_setup.rs, internal/notes/instant-agents.md).
+CLOUD_MODEL = "glm-5.3-flash"
+CLOUD_MODEL_URL = "https://api.eurouter.ai/api/v1"
+CLOUD_KEY_PLACEHOLDER = "reserve-no-key-yet"
+
+
+def cloud_install(args, runner: hermes.Runner, machine: Machine) -> int:
+    """`--cloud FILE`: a server of the all-included offer (cloud.py), installed at first boot. No question and no
+    Tailscale: the bridge's door is on the Internet, and the app pairs itself, without a QR code."""
+    global PROGRESS
+    from . import cloud, migrations
+    from .upgrade import install_command
+    try:
+        setup = cloud.read(Path(args.cloud))
+    except cloud.CloudError as exc:
+        say(ui.sad(str(exc)))
+        return 1
+    address = cloud.public_address()
+    if not address:
+        if not runner.dry:
+            say(ui.sad("This server has no public address: the app couldn't reach it."))
+            return 1
+        address = "198.51.100.7"   # a dry run anywhere
+    door = address if setup.port == cloud.DOOR_PORT else f"{address}:{setup.port}"
+    say(ui.note(f"Server of the all-included offer ({machine.cloud or 'cloud'}), {door}: the app pairs itself."))
+    machine.lan_addresses, machine.tailnet_name = [], None
+    compress_memory(machine, runner)
+    config_dir = Path.home() / ".config" / "bipagents"
+    PROGRESS = cloud.Progress(config_dir / "setup-progress.json", dry=runner.dry)
+    sandbox = hermes.sandbox_runtime()
+    # The server's images (browser, sandbox), pulled once by root: nothing to pull or build in this account.
+    from . import shared_images
+    if shared_images.use_shared(runner, sandbox, say=say):
+        say(ui.note("The agents' browser and sandbox: the server's shared images."))
+    # « Solo » (4 GB): one visible browser at a time, started when an agent browses and stopped when idle.
+    browser = bool(sandbox) and setup.profile != "mini" and machine.memory_gib >= 3.5
+    if not args.languages:   # the Bips in the person's language first; the others load only when spoken
+        others = [lang for lang in cloud.LANGUAGES if lang != setup.language]
+        args.languages = ",".join([setup.language] + ([] if setup.profile == "mini" else others))
+    model = hermes.Model("custom", CLOUD_MODEL, base_url=CLOUD_MODEL_URL, api_key=CLOUD_KEY_PLACEHOLDER)
+    inst = Install(repo=REPO, home=Path.home(), ports=pick_block(wanted=args.ports), tailnet_name=None,
+                   lan_address=address, model=model, push_service_url=args.push_service, isolated=bool(sandbox),
+                   browser=browser, cloud=True, door_port=setup.port, setup_file=config_dir / "setup.json",
+                   progress_file=PROGRESS.path)
+    runner.log.append(f"write {inst.setup_file}")
+    if not runner.dry:
+        cloud.write_setup(inst.setup_file, setup)
+    if setup.backup:   # as it is used once the app has paired it, to the guichet, encrypted with a key made here
+        from . import backup
+        runner.log.append(f"write {Path.home() / backup.SETTINGS}")
+        if not runner.dry:
+            backup.configure(setup.backup["url"], setup.backup["token"])
+        venv(REPO / "installer", runner)
+        backup.install_timer(runner, REPO, INSTALLER_PYTHON)
+    total = 5 if browser else 4   # Hermes, voices, bridge, [browser], checks
+    steps = iter(range(1, total + 1))
+    step(next(steps), total, "Hermes, the agents' brain")
+    hermes.install(runner, browser=browser)
+    hermes.apply_patches(runner, REPO / "hermes" / "patches")
+    hermes.setup_hub(runner, inst.ports.hermes, model, sandbox=sandbox)
+    migrations.sandboxes_at_gateway_start(runner, Path.home())
+    migrations.mark([mid for mid, _ in migrations.MIGRATIONS], runner)
+    install_command(runner)
+    gateway_service(inst, machine, runner)
+    status = finish(inst, machine, runner, args, steps, total, sandbox)
+    if status == 0 and not runner.dry:
+        (hermes.hermes_home() / hermes.UNFINISHED).unlink(missing_ok=True)
+    if status == 0 and setup.keys:   # encrypted from the start: nothing of anyone is here yet (space.py)
+        from . import space
+        runner.log.append(f"write {Path.home() / space.KEYS}")
+        if not runner.dry:
+            cloud._write_private(Path.home() / space.KEYS, setup.keys)
+            status = space.encrypt(None, say=say)
+    return status
+
+
+def tidy(runner: hermes.Runner) -> None:
+    """A server's place, once installed: the download caches go (uv's, npm's, pip's) and the images' leftover layers
+    (podman keeps the images in use); an update fetches again what it needs. Never fails the install. Hermes' own
+    installer keeps its uv cache in ~/.hermes/cache/uv and runs its own npm (~/.hermes/tools/node-*/): both caches
+    are folders removed as they are (measured 2026-10-26: 285 MB and 98 MB)."""
+    home = Path.home()
+    uv = shutil.which("uv") or str(home / ".local" / "bin" / "uv")
+    if runner.dry or Path(uv).exists():
+        runner.run([uv, "cache", "clean"], check=False)
+    engine = hermes.sandbox_runtime()
+    if engine:
+        runner.run([engine, "image", "prune", "--force"], check=False)
+    for folder in (home / ".cache" / "pip", home / ".npm" / "_cacache", hermes.hermes_home() / "cache" / "uv"):
+        runner.log.append(f"remove {folder}")
+        if not runner.dry:
+            shutil.rmtree(folder, ignore_errors=True)
+
+
+def gateway_service(inst: Install, machine: Machine, runner: hermes.Runner) -> None:
+    try:
+        hermes.install_service(runner)
+    except RuntimeError:
+        # Hermes declines its own service in some setups (inside a container): ours runs the same command.
+        say("  Hermes service: installing my own.")
+        label, path, content = hermes_service(inst, machine.system, hermes.hermes_bin(), hermes.hermes_home())
+        write(path, content, runner)
+        start_service(machine.system, label, path, runner)
+
+
+# Where each step is also written (`--cloud`: the bridge shows it to the app), or None.
+PROGRESS: Optional[Callable[..., None]] = None
+
+
+STARTED = time.monotonic()   # each step says when it starts: the install log is then the install's timeline
+
+
+def step(number: int, total: int, label: str) -> None:
+    say(ui.step(number, total, label))
+    elapsed = int(time.monotonic() - STARTED)
+    say(f"  ({time.strftime('%H:%M:%S')}, {elapsed // 60} min {elapsed % 60:02d} s since the start)")
+    if PROGRESS is not None:
+        PROGRESS(number, total, label)
+
+
+def yes(answer: str) -> bool:
+    return answer.strip().lower() in ("y", "yes")
+
+
+# What hermes/patches/ brings, in plain words (asked before applying them, or said when the person's Hermes isn't the
+# tested version). On v0.23.1 messages, approvals and the agent's questions need none (test of 12/11 on upstream main).
+FIXES = ("the time with each message, the cost of each message, cheaper repeated prompts, agents writing to each "
+         "other,\n  the vault in the browser, the task list")
+
+
+def install_on_existing(args, runner: hermes.Runner, machine: Machine, existing) -> int:
+    """BipAgents on the person's own Hermes: their model, tools, platforms, agents and conversations stay as they are.
+    Only the local API and each shown agent's key are added (existing.py), and written down for `uninstall`."""
+    from .existing import RECORD, apply_changes, bridge_writes, key_of, plan_changes, profile_label, same_version
+
+    say(f"\nYou already have Hermes ({existing.version}): I'll plug into it without touching your settings, your model "
+           f"({existing.model or 'not set'}), your tools or your agents.")
+    if not existing.multiplex:
+        say(ui.sad("This Hermes version doesn't serve several agents at the same address."))
+        say("Update it (hermes update), then run this installer again.")
+        return 1
+    if (Path.home() / ".config" / "bipagents" / "bridge.toml").exists():
+        say(ui.sad("BipAgents is already installed on this account."))
+        say("To do it again: bash ~/BipAgents/install.sh uninstall, then run this again.")
+        return 1
+    ports = pick_block(wanted=args.ports)
+    hub_port = existing.api_port if existing.api_enabled and existing.api_port else ports.hermes
+
+    say("\nWhich agents do you want to see in the app? (numbers separated by commas)")
+    for i, profile in enumerate(existing.profiles, 1):
+        about = f" — {profile.description}" if profile.description else ""
+        main_one = " (your main profile)" if profile.name == hermes.HUB_PROFILE else ""
+        say(f"  {i}. {profile_label(profile.name)}{main_one}{about}")
+    every = ",".join(str(i) for i in range(1, len(existing.profiles) + 1))
+    picked = ask("Agents", every)
+    numbers = [int(x) for x in picked.replace(" ", "").split(",") if x.isdigit() and 1 <= int(x) <= len(existing.profiles)]
+    shown = [existing.profiles[n - 1] for n in dict.fromkeys(numbers)] or existing.profiles
+    names = {p.name: (ask(f"Its name in the app ({p.name})", profile_label(p.name))
+                      or profile_label(p.name)) for p in shown}
+
+    sandbox = hermes.sandbox_runtime()
+    if existing.protected:
+        say(ui.note("All your agents' tools run in a sandbox: the password vault is available."))
+    else:
+        exposed = ", ".join(profile_label(p.name) for p in existing.profiles if not p.sandboxed)
+        say(ui.note(f"{exposed}: terminal on this machine, so access to your files and the bridge's keys. I won't change "
+                       "their tools,\n    but the bridge won't keep any passwords (no vault)."))
+    browser = False
+    if existing.protected and sandbox and machine.system == "linux":
+        say("\nEach agent can have its own visible browser: a real Chrome on a desktop of its own, that you watch live\n"
+               "and take over from the app (Desktop). About 0.5 GB of memory per agent while it browses.")
+        browser = yes(ask("Give your agents a visible browser? (y/n)",
+                          "y"))
+    patch = False
+    declined: List[str] = []
+    if same_version(existing, hermes.HERMES_COMMIT):
+        patch = yes(ask(f"Apply the BipAgents fixes to your Hermes ({FIXES})?\n"
+                           "  `hermes update` takes them off. (y/n)", "y"))
+        if not patch:   # refused: not offered again by updates (bipagents hermes-update --fixes-only still can)
+            declined = [p.name for p in hermes.set_patches(REPO / "hermes" / "patches")]
+    else:
+        say(ui.note(f"Your Hermes ({existing.commit or 'unknown version'}) isn't the tested version "
+                       f"({hermes.HERMES_COMMIT}): no BipAgents fixes. The app works (messages, approvals,\n"
+                       f"    the agent's questions), without these: {FIXES}."))
+        say(ui.note("Afterwards: bipagents hermes-update --fixes-only offers those that fit it, and "
+                    "bipagents hermes-update --to-bipagents moves it to the tested version with all of them."))
+
+    changes = plan_changes(existing, [p.name for p in shown], hub_port)
+    say("\nWhat I change in your Hermes:")
+    for profile, key, value, _ in changes:
+        new_key = "<new key>"
+        say(ui.note(f"{profile_label(profile)}{': '}{key} = {new_key if key.endswith('KEY') else value}"))
+    if not changes:
+        say(ui.note("nothing (your local API and your agents' keys are already there)"))
+    if patch:
+        say(ui.note("the BipAgents fixes, in Hermes' code"))
+    later = bridge_writes([p.name for p in shown])
+    if later:
+        say(ui.note(later))
+    restart = bool(changes or patch)
+    if restart:
+        say(ui.note({"service": "your gateway will be restarted once",
+                     "manual": "your gateway runs by hand: you'll restart it at the end",
+                     "stopped": "your gateway isn't running: I'll install it as a service, which starts by itself"}
+                    [existing.gateway]))
+    say(ui.note("Uninstalling BipAgents undoes all of this: your files come back as they were."))
+    if not yes(ask("\nReady to go? (y/n)", "y")):
+        return 1
+
+    inst = Install(repo=REPO, home=Path.home(), ports=ports, tailnet_name=machine.tailnet_name,
+                   lan_address=(machine.lan_addresses or [None])[0],
+                   push_service_url=args.push_service, isolated=existing.protected, browser=browser, hermes_port=hub_port)
+    total = 6 if browser else 5
+    steps = iter(range(1, total + 1))
+    step(next(steps), total, "Your Hermes")
+    patched: List[str] = []
+    if patch:
+        skipped = hermes.apply_patches(runner, REPO / "hermes" / "patches", applied=patched)
+        if skipped:
+            say(ui.note(f"Fixes not applied: {', '.join(skipped)} (the app works, without these features)."))
+    apply_changes(runner, changes, inst.config_dir / RECORD, existing.gateway, patched, declined,
+                  profiles=[p.name for p in shown])
+    for profile in shown:
+        inst.agents.append(AgentEntry(profile.name, names[profile.name], key_of(existing, changes, profile.name) or "",
+                                      root=profile.name == hermes.HUB_PROFILE))
+    if restart and existing.gateway == "service":
+        runner.run([hermes.hermes_bin(), "gateway", "restart"])
+    elif restart and existing.gateway == "stopped":
+        gateway_service(inst, machine, runner)
+    elif restart:
+        say(ui.note("Restart your gateway now (stop it, then hermes gateway run): it will pick up these settings."))
+        if not runner.dry:
+            ask("Press Enter when it's done")
+    say(ui.done("Your Hermes is ready for the app."))
+    return finish(inst, machine, runner, args, steps, total, sandbox, bot_chat=False)
+
+
+def own_voice_model(args, machine: Machine) -> List[str]:
+    """The person's own voice model, if they have one running (found on the network, or `--voice-server`), and what it
+    speaks for: the bridge's `[voice_server]` lines, none for the Bips' voices only."""
+    from . import voice_server
+    if getattr(args, "voice_server", None):
+        server = voice_server.check(args.voice_server)
+        if server is None:
+            say(ui.note(f"No voice server answers at {args.voice_server}: the Bips' voices only."))
+            return []
+    else:
+        found = asyncio.run(voice_server.discover(machine.lan_addresses))
+        if not found:
+            return []   # nothing asked: most people have none, `bipinstall voice` connects one later
+        say("\n  A voice model answers on your network. The Bips (Pocket) always speak; yours can speak for some uses.")
+        server = voice_server.choose(found, ask, choose, say)
+        if server is None:
+            return []
+    uses = voice_server.parse_uses(args.voice_uses) if getattr(args, "voice_uses", None) \
+        else voice_server.ask_uses(ask, yes)
+    say(f"  Your voice model: {server.label}.")
+    return voice_server.toml_lines(server, uses)
+
+
+def finish(inst: Install, machine: Machine, runner: hermes.Runner, args, steps, total: int, sandbox: Optional[str],
+           desk: bool = False, bot_chat: bool = True) -> int:
+    """What every install ends with: the voices, the bridge, the visible browser when chosen, Tailscale, the checks
+    and the QR code."""
+    step(next(steps), total, "The Bips' voices")
+    if pocket_running():
+        say("  already set up on this machine: I'll share it.")
+        checkout.narrow(REPO, runner, voice_states=False)
+    else:
+        languages = args.languages or bip_languages()
+        # The phones' 8-bit voices, loaded only while they speak, without PyTorch (a place's from its guichet, the
+        # others' from the public repository's latest voices release); Pocket's own models when they can't be had,
+        # or when asked (--pocket-models).
+        packages = None
+        if not getattr(args, "pocket_models", False):
+            packages = voices.install(languages.split(","), inst.home, runner, say)
+        # Pocket's own models read the voice states of the checkout (a light clone leaves them out until then).
+        checkout.narrow(REPO, runner, voice_states=packages is None)
+        venv(REPO / "pocket", runner, "requirements-onnx.txt" if packages else "requirements.txt")
+        label, path, content = pocket_service(inst, machine.system, languages, packages=packages)
+        write(path, content, runner)
+        start_service(machine.system, label, path, runner)
+
+    inst.voice_server = own_voice_model(args, machine)
+    if machine.system == "macos":
+        say("  macOS may ask whether Python and bipbridge can reach devices on the local network: allow them, or the agents\n"
+               "  and the bridge won't reach a model installed on another machine at home.")
+    step(next(steps), total, "The bridge, which links the app to your agents")
+    try:
+        rustbridge.ensure(inst.home, REPO, runner)   # this version's binaries (bridge-rs/, built by GitHub Actions)
+    except rustbridge.RustBridgeError as exc:
+        say(ui.fail(f"The bridge couldn't be installed: {exc}"))
+        say(ui.note("Your agents are set up; run this installer again to finish."))
+        return 1
+    venv(REPO / "installer", runner)   # what the bridge runs the installer with (`place import`, restores)
+    runner.log.append(f"write {inst.bridge_config}")
+    if not runner.dry:   # under the bridge's lock, written whole and checked (bridgeconf)
+        bridgeconf.write(inst.bridge_config, bridge_toml(inst), removing=bridgeconf.ANY)
+    label, path, content = bridge_service(inst, machine.system)
+    write(path, content, runner)
+    start_service(machine.system, label, path, runner)
+
+    say(ui.done("Bridge started."))
+    if inst.browser:
+        step(next(steps), total, "Your agents' visible browser")
+        say(ui.note("Preparing its image: Chrome, its desktop and the server that drives it (stealth-browser-mcp, fetched "
+                       "from its repository).\n    Allow a few minutes the first time."))
+        try:
+            hermes.build_browser(runner, sandbox, REPO)
+            browser_refresh.install_timer(runner, REPO, INSTALLER_PYTHON)   # Chrome's security fixes, each night
+            runner.run(rustbridge.cli(inst.home, REPO) + ["browser", "add", "--all", "--config", str(inst.bridge_config)],
+                       cwd=REPO / "bridge")
+            if machine.system == "linux":
+                runner.run(["systemctl", "--user", "restart", label])   # the bridge reads the agents' desktops
+            say(ui.done("Each agent has its browser, on its own desktop."))
+        except RuntimeError as exc:
+            say(ui.fail("The browser couldn't be installed: your agents work without it."))
+            say(ui.note(str(exc)[-300:]))
+            say(ui.note("To try again later:"))
+            say(f"    {sandbox} build -t {hermes.BROWSER_IMAGE} {REPO / 'browser'}")
+            say(f"    {shlex.join(rustbridge.cli(inst.home, REPO))} browser add --all --config {inst.bridge_config}")
+            say(f"    systemctl --user restart {label}")
+    if not inst.cloud:
+        publish_on_tailnet(inst, machine, runner, args, steps, total, desk)
+    return checks_and_end(inst, runner, args, steps, total, bot_chat)
+
+
+def publish_on_tailnet(inst: Install, machine: Machine, runner: hermes.Runner, args, steps, total: int,
+                       desk: bool) -> None:
+    step(next(steps), total, "Tailscale, to reach your agents from anywhere")
+    commands = [] if args.no_tailscale else None
+    if commands is None:
+        commands = tailscale_commands(machine.tailscale or "tailscale", inst.ports, desk=desk, hermes_port=inst.hermes_port)
+    published = True
+    for command in commands:
+        try:
+            runner.run(command, shell=True)
+        except RuntimeError:
+            published = False
+    if not published:
+        say("  Publishing was refused: ask the machine's administrator to run:")
+        for command in commands:
+            say(f"    sudo {command}")
+
+
+def checks_and_end(inst: Install, runner: hermes.Runner, args, steps, total: int, bot_chat: bool) -> int:
+    step(next(steps), total, "Checks")
+    if not runner.dry:
+        hub = f"http://127.0.0.1:{inst.hub_port}"
+        for agent in inst.agents:
+            url = hub if agent.root else f"{hub}/p/{agent.name}"
+            answers = wait_for(f"{url}/v1/capabilities", {"Authorization": f"Bearer {agent.key}"})
+            state = "answers" if answers else "isn't answering yet"
+            say((ui.done if answers else ui.fail)(f"{agent.display_name} {state}."))
+            if answers and bot_chat:
+                httpx.post(f"{url}/api/sessions", json={"title": "Bot Chat"},
+                           headers={"Authorization": f"Bearer {agent.key}"}, timeout=10)
+        wait_for(f"http://127.0.0.1:{inst.ports.bridge}/health")
+    if inst.cloud:
+        tidy(runner)
+    if args.dry_run:
+        say("\nDry run: here is what would have been done.")
+        hidden = "<key>"
+        for line in runner.log:
+            say(f"  $ {re.sub(r'(_KEY )[^ ]+', lambda m: m.group(1) + hidden, line)}")
+        say("\n--- bridge.toml ---")
+        say(re.sub(r'(_key = )"[^"]*"', lambda m: f'{m.group(1)}"{hidden}"', bridge_toml(inst)))
+        return 0
+    if inst.cloud:
+        if PROGRESS is not None:
+            PROGRESS(total, total, "Ready", done=True)
+        elapsed = int(time.monotonic() - STARTED)
+        say(f"  ({time.strftime('%H:%M:%S')}, installed in {elapsed // 60} min {elapsed % 60:02d} s)")
+        say(ui.finale("It's ready: the app pairs itself with this server."))
+        return 0
+    if args.no_tailscale:
+        say(ui.finale("It's ready, on this machine only."))
+        say("Without Tailscale, the app can't reach it yet.")
+        return 0
+    say(ui.finale("It's ready! Scan this code in the app."))
+    say("In the BipAgents app: \"+\" › Scan QR code.")
+    subprocess.run(rustbridge.cli(inst.home, REPO) + ["qr", "--config", str(inst.bridge_config)], cwd=REPO / "bridge",
+                   check=False)
+    return 0
+
+
+def qr_main(argv: List[str]) -> int:
+    parser = argparse.ArgumentParser(prog="bipagents qr", description="Show the code to scan in the BipAgents app again")
+    parser.add_argument("account", nargs="?", help="another account's install, from an account with sudo (e.g. a family member's)")
+    # The bridge's own options pass through (`--agent vie`, `--png vie.png`).
+    args, rest = parser.parse_known_args(argv)
+    if args.account and args.account != getpass.getuser():
+        command = f"$HOME/.local/bin/bipagents qr {' '.join(shlex.quote(a) for a in rest)}".strip()
+        return subprocess.run(["sudo", "-iu", args.account, "sh", "-c", command], check=False).returncode
+    config = Path.home() / ".config" / "bipagents" / "bridge.toml"
+    if not config.exists():
+        say(f"No BipAgents install in this account ({config} is missing): run this command in the account it was installed in.")
+        return 1
+    say("In the BipAgents app: \"+\" › Scan QR code.")
+    return subprocess.run(rustbridge.cli(Path.home()) + ["qr", "--config", str(config)] + rest, cwd=REPO / "bridge",
+                          check=False).returncode
+
+
+def sandbox_main(argv: List[str]) -> int:
+    """`bipagents sandbox adopt <agent> [--dry-run] [--undo]`: the bridge's `sandbox adopt` (bridge-rs/src/
+    sandbox_adopt.rs), with this account's config: an agent's hand-made sandbox mounts moved into volumes."""
+    parser = argparse.ArgumentParser(prog="bipagents sandbox",
+                                     description="Isolate an agent's sandbox that still mounts folders added by hand")
+    parser.add_argument("action", choices=["adopt"])
+    parser.add_argument("agent", help="the agent (its id, e.g. wellness)")
+    parser.add_argument("--dry-run", action="store_true", help="print the plan only, change nothing")
+    parser.add_argument("--undo", action="store_true", help="set the mounts back as they were before")
+    parser.add_argument("--link", action="append", default=[], metavar="PATH",
+                        help="a folder programs of this machine keep writing: moved into a volume, a link left at its "
+                             "path (repeatable)")
+    parser.add_argument("--allow-sites", action="store_true",
+                        help="allow now the sites the plan says the agent's programs will need")
+    args = parser.parse_args(argv)
+    config = Path.home() / ".config" / "bipagents" / "bridge.toml"
+    if not config.exists():
+        say(f"No BipAgents install in this account ({config} is missing): run this command in the account it was installed in.")
+        return 1
+    try:   # this checkout's bridge, fetched if an update ran before its release was out
+        rustbridge.ensure(Path.home())
+    except rustbridge.RustBridgeError as exc:
+        say(f"{exc}. Try `bipagents update` again in a few minutes.")
+        return 1
+    command = rustbridge.cli(Path.home()) + ["sandbox", "adopt", "--agent", args.agent, "--config", str(config)]
+    command += ["--dry-run"] * args.dry_run + ["--undo"] * args.undo
+    for path in args.link:
+        command += ["--link", path]
+    command += ["--allow-sites"] * args.allow_sites
+    return subprocess.run(command, cwd=REPO / "bridge", check=False).returncode
+
+
+def approvals_main(argv: List[str]) -> int:
+    """`bipagents approvals [agent] [--last N]`: the approvals the agents asked, the newest last (time, agent, tool,
+    the answer, the command as Hermes showed it), from the bridge's own logs (bridge-rs/src/approvals_log.rs). Reads
+    only; no key, no vault, nothing of the agents' memories."""
+    parser = argparse.ArgumentParser(prog="bipagents approvals",
+                                     description="List the approvals your agents asked, and what you answered")
+    parser.add_argument("agent", nargs="?", help="one agent only (its id, e.g. wellness)")
+    parser.add_argument("--last", type=int, default=30, help="how many (default 30)")
+    args = parser.parse_args(argv)
+    config = Path.home() / ".config" / "bipagents" / "bridge.toml"
+    if not config.exists():
+        say(f"No BipAgents install in this account ({config} is missing): run this command in the account it was installed in.")
+        return 1
+    try:   # this checkout's bridge, fetched if an update ran before its release was out
+        rustbridge.ensure(Path.home())
+    except rustbridge.RustBridgeError as exc:
+        say(f"{exc}. Try `bipagents update` again in a few minutes.")
+        return 1
+    command = rustbridge.cli(Path.home()) + ["approvals", "--config", str(config)]
+    command += ["--agent", args.agent] if args.agent else []
+    command += ["--last", str(max(1, args.last))]
+    return subprocess.run(command, cwd=REPO / "bridge", check=False).returncode
+
+
+def archive_main(argv: List[str]) -> int:
+    """`bipagents archive add|list|remove|refresh|extract <agent> [folder]`: the bridge's `archive`
+    (bridge-rs/src/archives/), with this account's config: a big folder of documents an agent searches where it is,
+    instead of a copy. `extract` fills the Carnet's records from it (records_fill.rs): `--sample N` first (writes
+    nothing, prints what it would record and the cost for the whole archive), then `--run --budget EUR`."""
+    parser = argparse.ArgumentParser(prog="bipagents archive",
+                                     description="Connect a folder of documents to an agent: indexed on this machine, "
+                                                 "searched by the agent when you ask about the past")
+    parser.add_argument("action", choices=["add", "list", "remove", "refresh", "extract"])
+    parser.add_argument("agent", help="the agent (its id, e.g. vie)")
+    parser.add_argument("folder", nargs="?", help="add: the folder (/home/…, or /workspace/… as the agent sees it)")
+    parser.add_argument("--name", help="add: the archive's name in the app (default: the folder's)")
+    parser.add_argument("--id", "--archive", dest="id", help="remove, refresh, extract: the archive's id (from list)")
+    parser.add_argument("--sample", nargs="?", type=int, const=50, help="extract: try it on N documents (50), writing nothing")
+    parser.add_argument("--run", action="store_true", help="extract: fill the records from the whole archive (with --budget)")
+    parser.add_argument("--budget", help="extract --run: the cap in euros")
+    parser.add_argument("--model", help="extract: another model of the agent's provider (default: the agent's own)")
+    parser.add_argument("--price-in", help="extract: that model's price, euros per million tokens in")
+    parser.add_argument("--price-out", help="extract: that model's price, euros per million tokens out")
+    parser.add_argument("--nightly", choices=["on", "off"], help="extract: the nightly pass on new documents")
+    parser.add_argument("--overview", action="store_true", help="add: a yearly overview page in the Carnet")
+    args = parser.parse_args(argv)
+    config = Path.home() / ".config" / "bipagents" / "bridge.toml"
+    if not config.exists():
+        say(f"No BipAgents install in this account ({config} is missing): run this command in the account it was installed in.")
+        return 1
+    if args.action == "add" and not args.folder:
+        say("Give the folder: bipagents archive add <agent> <folder>")
+        return 2
+    try:
+        rustbridge.ensure(Path.home())
+    except rustbridge.RustBridgeError as exc:
+        say(f"{exc}. Try `bipagents update` again in a few minutes.")
+        return 1
+    command = rustbridge.cli(Path.home()) + ["archive", args.action, "--agent", args.agent, "--config", str(config)]
+    command += ["--folder", args.folder] * bool(args.folder) + ["--name", args.name] * bool(args.name)
+    command += ["--id", args.id] * bool(args.id) + ["--overview"] * args.overview
+    if args.action == "extract":
+        command += ["--sample", str(args.sample)] * (args.sample is not None) + ["--run"] * args.run
+        for flag, value in (("--budget", args.budget), ("--model", args.model), ("--price-in", args.price_in),
+                            ("--price-out", args.price_out), ("--nightly", args.nightly)):
+            command += [flag, value] * bool(value)
+    return subprocess.run(command, cwd=REPO / "bridge", check=False).returncode
+
+
+def uninstall_main(argv: List[str]) -> int:
+    from .uninstall import uninstall
+
+    parser = argparse.ArgumentParser(prog="bipinstall uninstall", description="Remove BipAgents from this account")
+    parser.add_argument("--all", action="store_true", help="also remove Hermes and the agents' data (conversations, memory)")
+    parser.add_argument("--dry-run", action="store_true", help="show what would be removed")
+    args = parser.parse_args(argv)
+    if args.all and not args.dry_run:
+        say("This also deletes Hermes and all the agents' data: conversations, memory, files.")
+        word = "delete"
+        if ask("Type \"delete\" to confirm") != word:
+            say("Nothing was deleted.")
+            return 1
+    runner = hermes.Runner(dry=args.dry_run)
+    uninstall(runner, everything=args.all)
+    for line in runner.log:
+        say(f"  {'$ ' if not line.startswith('remove') else ''}{line}")
+    say("BipAgents is removed from this account."
+        + ("" if args.all else " The agents' data is kept in ~/.hermes (`uninstall --all` to delete it too)."))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

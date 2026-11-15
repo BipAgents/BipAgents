@@ -1,0 +1,673 @@
+//! Port of bridge/tests/test_jobs.py: background tasks run in their own conversation of a fake Hermes, stopped at
+//! their budget, paused, resumed, forgotten, proposed by an agent, followed again after a restart; mail scans listed
+//! with them; the routes.
+
+mod common;
+
+use std::sync::{Arc, Mutex};
+
+use axum::body::Bytes;
+use axum::extract::{Request, State};
+use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response};
+use axum::routing::any;
+use axum::{Json, Router};
+use bipbridge::config::{parse_config, AgentConfig, Config, SharedConfig};
+use bipbridge::hermes::HermesClient;
+use bipbridge::jobs::{self, Jobs, TellJob};
+use bipbridge::mail_scan::{self, Scans};
+use bipbridge::runs::RunHub;
+use bipbridge::Dict;
+use common::{config_dict, spawn_fake, Urls};
+use serde_json::{json, Map, Value};
+
+/// A gateway with one conversation at a time: each poll of its counters adds `step` input tokens while a run goes
+/// on; a run ends after `rounds` polls of its status, or when stopped.
+#[derive(Default)]
+struct Gateway {
+    rounds: u32,
+    step: i64,
+    output: String,
+    requests: Vec<(String, String, Option<Value>)>,
+    runs: Map<String, Value>,
+    counters: [i64; 3],
+    messages: Vec<Value>,
+    forget_runs: bool,
+    /// What each run streams on `/events` (`model.usage`, `tool.started`…), then `run.cancelled` once stopped.
+    events: Vec<Value>,
+}
+
+type Fake = Arc<Mutex<Gateway>>;
+
+async fn handle(State(fake): State<Fake>, request: Request) -> Response {
+    let method = request.method().to_string();
+    let full = request.uri().path().to_string();
+    let bytes: Bytes = axum::body::to_bytes(request.into_body(), usize::MAX).await.unwrap();
+    let body: Option<Value> = if bytes.is_empty() { None } else { serde_json::from_slice(&bytes).ok() };
+    let mut g = fake.lock().unwrap();
+    g.requests.push((method.clone(), full.clone(), body.clone()));
+    let path = full.strip_prefix("/p/coach").unwrap_or(&full).to_string();
+    let parts: Vec<&str> = path.split('/').collect();
+    if method == "POST" && path == "/api/sessions" {
+        return Json(json!({"session": {"id": "s1", "title": body.unwrap()["title"]}})).into_response();
+    }
+    if method == "GET" && path == "/api/sessions/s1" {
+        if g.runs.values().any(|r| r["status"] == "running") {
+            g.counters[0] += g.step;
+            g.counters[1] += g.step / 20;
+        }
+        let c = g.counters;
+        return Json(
+            json!({"session": {"id": "s1", "input_tokens": c[0], "output_tokens": c[1], "cache_read_tokens": c[2]}}),
+        )
+        .into_response();
+    }
+    if method == "GET" && path == "/api/sessions/s1/messages" {
+        return Json(json!({"messages": g.messages})).into_response();
+    }
+    if method == "POST" && path == "/v1/runs" {
+        let run_id = format!("r{}", g.runs.len() + 1);
+        g.runs.insert(run_id.clone(), json!({"status": "running", "polls": 0, "input": body.unwrap()["input"]}));
+        return (StatusCode::ACCEPTED, Json(json!({"run_id": run_id, "status": "started"}))).into_response();
+    }
+    if method == "GET" && path.ends_with("/events") {
+        let (id, events) = (parts[3].to_string(), g.events.clone());
+        drop(g);
+        let fake = fake.clone();
+        let stream = async_stream::stream! {
+            for event in events {
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                yield Ok::<_, std::io::Error>(Bytes::from(format!("data: {event}\n\n")));
+            }
+            for _ in 0..300 {
+                if fake.lock().unwrap().runs[&id]["status"] != "running" {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+            yield Ok(Bytes::from(format!("data: {}\n\n", json!({"event": "run.cancelled", "run_id": id}))));
+        };
+        return Response::builder()
+            .header("content-type", "text/event-stream")
+            .body(axum::body::Body::from_stream(stream))
+            .unwrap();
+    }
+    if method == "POST" && path.ends_with("/stop") {
+        g.runs[parts[3]]["status"] = json!("cancelled");
+        return Json(json!({"status": "stopping"})).into_response();
+    }
+    if method == "GET" && path.starts_with("/v1/runs/") {
+        let (rounds, forget, output) = (g.rounds, g.forget_runs, g.output.clone());
+        let Some(run) = g.runs.get_mut(parts[3]).filter(|_| !forget) else {
+            return (StatusCode::NOT_FOUND, Json(json!({"error": "not found"}))).into_response();
+        };
+        let polls = run["polls"].as_u64().unwrap() + 1;
+        run["polls"] = json!(polls);
+        if run["status"] == "running" && polls >= rounds as u64 {
+            run["status"] = json!("completed");
+            return Json(json!({"status": "completed", "output": output, "usage": {"input_tokens": 100_000, "output_tokens": 5_000}}))
+                .into_response();
+        }
+        return Json(json!({"status": run["status"]})).into_response();
+    }
+    StatusCode::NOT_FOUND.into_response()
+}
+
+async fn gateway(rounds: u32, step: i64) -> (Fake, String) {
+    let fake: Fake = Arc::new(Mutex::new(Gateway {
+        rounds,
+        step,
+        output: "Rapport : trois écoles comparées, page « Écoles ».".into(),
+        ..Default::default()
+    }));
+    let url = spawn_fake(Router::new().fallback(any(handle)).with_state(fake.clone())).await;
+    (fake, url)
+}
+
+type Told = Arc<Mutex<Vec<(String, Option<String>, String, String)>>>;
+
+fn setup(dir: &std::path::Path, url: &str) -> (Config, AgentConfig) {
+    let mut dict = config_dict(dir, &Urls::default());
+    dict["agents"]["coach"] =
+        json!({"display_name": "Coach", "hermes_url": format!("{url}/p/coach"), "hermes_key": "k"});
+    let mut config = parse_config(&dict, None).unwrap();
+    config.browser.language = "fr-FR".into(); // a French place: its pushes in French (names.rs)
+    let agent = config.agent(Some("coach")).unwrap().clone();
+    (config, agent)
+}
+
+fn board(config: &Config, told: Option<&Told>) -> Arc<Jobs> {
+    let mut jobs =
+        Jobs::new(SharedConfig::new(config.clone()), HermesClient::new(reqwest::Client::new()), None, None, None);
+    jobs.poll = 0.01;
+    if let Some(told) = told {
+        let told = told.clone();
+        let tell: TellJob = Arc::new(move |agent, session, line, _job, body| {
+            told.lock().unwrap().push((agent, session, line, body));
+            Box::pin(async {})
+        });
+        jobs.tell = Some(tell);
+    }
+    Arc::new(jobs)
+}
+
+/// A task run's words, without its time line and its rules' note (every run of a task carries them).
+fn words(input: &Value) -> String {
+    let text = common::without_now(input.as_str().unwrap());
+    let (words, rules) = text.split_once("\n\n<!--bip:task-rules\n").expect("the task's rules in its message");
+    assert!(rules.ends_with("\n-->"));
+    words.to_string()
+}
+
+fn id_of(job: &Dict) -> String {
+    job["id"].as_str().unwrap().to_string()
+}
+
+#[tokio::test]
+async fn a_task_runs_in_its_own_conversation_and_ends_with_its_report() {
+    let dir = tempfile::tempdir().unwrap();
+    let (fake, url) = gateway(3, 40_000).await;
+    let (config, agent) = setup(dir.path(), &url);
+    let told: Told = Default::default();
+    let board = board(&config, Some(&told));
+    let job = board
+        .create(&agent, "Écoles du quartier", "Compare les trois écoles près de chez nous.", 0.50, Some("research"))
+        .await
+        .unwrap();
+    assert_eq!((job["state"].as_str(), job["session_id"].as_str()), (Some("running"), Some("s1")));
+    board.wait(&id_of(&job)).await;
+    let done = board.view(&id_of(&job)).unwrap();
+    assert_eq!(done["state"], "done");
+    assert!(done["report"].as_str().unwrap().starts_with("Rapport"));
+    // The run's own usage at the end, not the counters' guess.
+    assert_eq!(done["tokens"], json!({"input": 100_000, "output": 5_000, "cached": 0}));
+    let posted: Vec<Value> = fake
+        .lock()
+        .unwrap()
+        .requests
+        .iter()
+        .filter(|(m, _, _)| m == "POST")
+        .map(|(_, _, b)| b.clone().unwrap_or(Value::Null))
+        .collect();
+    assert_eq!(posted[0]["title"], "🧩 Écoles du quartier");
+    assert_eq!(posted[1]["session_id"], "s1");
+    // the rules in the message, the system prompt the conversations' own (background_turn.rs, cache audit #2)
+    assert!(posted[1].get("instructions").is_none(), "{}", posted[1]);
+    let input = common::without_now(posted[1]["input"].as_str().unwrap());
+    assert!(input.starts_with("Écoles du quartier\n\nCompare"));
+    assert!(input.ends_with(&format!("<!--bip:task-rules\n{}\n-->", jobs::INSTRUCTIONS)), "{input}");
+    assert_eq!(
+        told.lock().unwrap().clone(),
+        vec![(
+            "coach".into(),
+            Some("s1".into()),
+            "Tâche de fond terminée : Écoles du quartier".into(),
+            "Tâche de fond terminée".into()
+        )]
+    );
+    let listed = board.list(None);
+    assert_eq!(listed[0]["id"], json!(id_of(&job)));
+    assert!(!listed[0].contains_key("base") && !listed[0].contains_key("run_id"));
+}
+
+#[tokio::test]
+async fn a_task_stops_at_its_budget_and_goes_on_with_a_bigger_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let (fake, url) = gateway(50, 60_000).await;
+    let (config, agent) = setup(dir.path(), &url);
+    let told: Told = Default::default();
+    let board = board(&config, Some(&told));
+    let job = board.create(&agent, "Gros tri", "Range tout.", 0.05, None).await.unwrap();
+    let id = id_of(&job);
+    board.wait(&id).await;
+    let paused = board.view(&id).unwrap();
+    assert_eq!((paused["state"].as_str(), paused["reason"].as_str()), (Some("paused"), Some("budget")));
+    assert!(fake
+        .lock()
+        .unwrap()
+        .requests
+        .iter()
+        .any(|(m, p, b)| m == "POST" && p == "/p/coach/v1/runs/r1/stop" && b.is_none()));
+    let before = paused["tokens"]["input"].as_i64().unwrap();
+    assert!(before >= 100_000 * 20 / 21); // counted from the conversation's counters
+    assert_eq!(told.lock().unwrap().last().unwrap().3, "Tâche de fond en pause");
+    // Resuming without more budget is refused; with more, the same conversation goes on.
+    assert!(board.resume(&id, None, None).await.unwrap_err().downcast_ref::<jobs::JobError>().is_some());
+    fake.lock().unwrap().rounds = 2;
+    board.resume(&id, Some(3.0), Some("Continue, et termine par ton rapport.")).await.unwrap();
+    board.wait(&id).await;
+    let done = board.view(&id).unwrap();
+    assert_eq!((done["state"].as_str(), done["runs"].as_i64()), (Some("done"), Some(2)));
+    assert_eq!(done["tokens"]["input"].as_i64().unwrap(), before + 100_000); // the second run's own usage added
+    let g = fake.lock().unwrap();
+    assert_eq!(words(&g.runs["r2"]["input"]), "Continue, et termine par ton rapport.");
+    assert_eq!(g.requests.iter().filter(|(m, p, _)| m == "POST" && p.ends_with("/api/sessions")).count(), 1);
+}
+
+#[tokio::test]
+async fn the_person_pauses_resumes_and_forgets_a_task() {
+    let dir = tempfile::tempdir().unwrap();
+    let (fake, url) = gateway(1000, 10).await;
+    let (config, agent) = setup(dir.path(), &url);
+    let board = board(&config, None);
+    let job = board.create(&agent, "Long", "Fais-le.", 0.50, None).await.unwrap();
+    let id = id_of(&job);
+    let again = board.create(&agent, "Autre", "Encore.", 0.50, None).await.unwrap_err();
+    assert!(again.to_string().contains("already"));
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    assert_eq!(board.pause(&id).await.unwrap()["state"], "stopping");
+    board.wait(&id).await;
+    let view = board.view(&id).unwrap();
+    assert_eq!((view["state"].as_str(), view["reason"].as_str()), (Some("paused"), Some("stopped")));
+    board.resume(&id, None, None).await.unwrap();
+    assert_eq!(words(&fake.lock().unwrap().runs["r2"]["input"]), jobs::CONTINUE);
+    board.forget(&id).await.unwrap();
+    assert!(jobs::load(&config, &id).is_none());
+    assert_eq!(fake.lock().unwrap().runs["r2"]["status"], "cancelled");
+}
+
+#[tokio::test]
+async fn an_agent_proposes_a_task_the_person_starts() {
+    let dir = tempfile::tempdir().unwrap();
+    let (fake, url) = gateway(1, 40_000).await;
+    let (config, agent) = setup(dir.path(), &url);
+    let told: Told = Default::default();
+    let board = board(&config, Some(&told));
+    let arguments: Dict = serde_json::from_value(
+        json!({"title": "Dossier location", "prompt": "Prépare le dossier.", "budget": "small"}),
+    )
+    .unwrap();
+    let result = jobs::propose_tool(Some(&board), &agent, &arguments).await.unwrap();
+    assert_eq!(result["isError"], false);
+    assert!(result["content"][0]["text"].as_str().unwrap().contains("Tâches de fond"));
+    assert!(result["content"][0]["text"].as_str().unwrap().contains("1,818,181 tokens"), "small: 5 × 0.20 € at home");
+    let proposed = board.list(None)[0].clone();
+    assert_eq!((proposed["state"].as_str(), proposed["proposed_by"].as_str()), (Some("proposed"), Some("agent")));
+    assert_eq!((proposed["budget_eur"].as_f64(), proposed["max_tokens"].as_i64()), (Some(1.0), Some(1_818_181)));
+    assert!(!fake.lock().unwrap().requests.iter().any(|(_, p, _)| p.ends_with("/v1/runs"))); // nothing spent before the go
+    let first = told.lock().unwrap()[0].clone();
+    assert_eq!((first.3.as_str(), first.1), ("Tâche de fond proposée", None));
+    let id = id_of(&proposed);
+    board.start(&id, Some(0.30)).await.unwrap();
+    board.wait(&id).await;
+    assert_eq!(board.view(&id).unwrap()["state"], "done");
+}
+
+#[tokio::test]
+async fn after_a_restart_a_finished_run_is_read_from_its_conversation() {
+    let dir = tempfile::tempdir().unwrap();
+    let (fake, url) = gateway(1000, 40_000).await;
+    let (config, agent) = setup(dir.path(), &url);
+    let first = board(&config, None);
+    let job = first.create(&agent, "Recherche", "Cherche.", 50.0, None).await.unwrap();
+    let id = id_of(&job);
+    first.stop_followers(); // the bridge stops
+    {
+        let mut g = fake.lock().unwrap();
+        g.forget_runs = true; // Hermes restarted meanwhile: the run is gone, its turns stay
+        g.messages = vec![
+            json!({"role": "user", "content": "Recherche\n\nCherche."}),
+            json!({"role": "assistant", "content": "Voici le rapport."}),
+        ];
+    }
+    let again = board(&config, None);
+    assert_eq!(again.clone().resume_following().await, 1);
+    again.wait(&id).await;
+    let view = again.view(&id).unwrap();
+    assert_eq!((view["state"].as_str(), view["report"].as_str()), (Some("done"), Some("Voici le rapport.")));
+}
+
+#[tokio::test]
+async fn mail_scans_are_listed_and_controlled_with_the_tasks() {
+    let dir = tempfile::tempdir().unwrap();
+    let (config, _) = setup(dir.path(), "http://127.0.0.1:9");
+    let scan: Dict = serde_json::from_value(json!({"agent": "coach", "account": "a1", "label": "Gmail", "state": "paused", "error": "budget",
+        "created": 1.0, "ranges": [], "tokens": {"input": 9000, "output": 900, "cached": 0},
+        "processed": 30, "pages": 0, "step": {"since": "2026-07-21", "until": "2026-10-21", "max_tokens": 10_000, "mails": 80, "processed": 30}}))
+    .unwrap();
+    mail_scan::save(&config, &scan).unwrap();
+    let scans = Arc::new(Scans::new(None, None, None));
+    let board = Jobs::new(
+        SharedConfig::new(config.clone()),
+        HermesClient::new(reqwest::Client::new()),
+        None,
+        None,
+        Some(scans),
+    );
+    let listed: Vec<Value> = board.list(None).into_iter().map(Value::Object).collect();
+    assert_eq!(
+        Value::Array(listed),
+        json!([{"id": "mail-scan:coach", "kind": "mail_scan", "agent": "coach", "title": "Gmail",
+                "state": "paused", "reason": "budget", "error": null, "created": 1.0, "finished": null,
+                "tokens": {"input": 9000, "output": 900, "cached": 0}, "max_tokens": 10_000,
+                "progress": {"done": 30, "total": 80}, "processed": 30, "pages": 0}])
+    );
+    // Forgotten from the jobs' list: its file goes.
+    board.forget("mail-scan:coach").await.unwrap();
+    assert!(mail_scan::load(&config, "coach").is_none());
+    let unknown = board.pause("mail-scan:coach").await.unwrap_err();
+    assert_eq!(unknown.to_string(), "unknown job");
+}
+
+#[tokio::test]
+async fn the_routes_need_the_bridge_key_and_list_the_jobs() {
+    let dir = tempfile::tempdir().unwrap();
+    let app = common::TestApp::new(common::config(dir.path(), &Urls::default()));
+    assert_eq!(app.get("/v1/jobs", &[]).await.status, 401);
+    let (k, v) = common::auth();
+    let answer = app.get("/v1/jobs", &[(k, &v)]).await;
+    assert_eq!(answer.status, 200);
+    // a home install (the test's HOME has no place token): five times the offer's budgets (jobs.rs HOME_BUDGET_SCALE)
+    assert_eq!(
+        answer.json(),
+        json!({"jobs": [], "budgets_eur": {"small": 1.0, "medium": 2.5, "large": 7.5}, "budgets_tokens": {"small": 1_818_181, "medium": 4_545_454, "large": 13_636_363}})
+    );
+    // a place of the offer keeps its own: 0.20 / 0.50 / 1.50 €, cache reads at the input price
+    assert_eq!(
+        jobs::budgets_on(&common::config(dir.path(), &Urls::default()), true),
+        (json!({"small": 0.20, "medium": 0.50, "large": 1.50}), json!({"small": 363_636, "medium": 909_090, "large": 2_727_272}))
+    );
+    let missing = app.request("POST", "/v1/jobs/t000000000000/pause", &[(k, &v)], None).await;
+    assert_eq!((missing.status.as_u16(), missing.json()), (404, json!({"detail": "unknown job"})));
+}
+
+fn with_handback(config: &Config, told: &Told) -> Arc<Jobs> {
+    let board = board(config, Some(told));
+    let mut jobs = Arc::try_unwrap(board).ok().unwrap();
+    let mut handback = bipbridge::background_turn::Pipeline::new(
+        SharedConfig::new(config.clone()),
+        HermesClient::new(reqwest::Client::new()),
+    );
+    handback.poll = 0.01;
+    jobs.handback = Some(Arc::new(handback));
+    Arc::new(jobs)
+}
+
+fn posted_runs(fake: &Fake) -> Vec<Value> {
+    fake.lock()
+        .unwrap()
+        .requests
+        .iter()
+        .filter(|(m, p, _)| m == "POST" && p == "/p/coach/v1/runs")
+        .map(|(_, _, b)| b.clone().unwrap_or(Value::Null))
+        .collect()
+}
+
+/// 2026-10-25: a task started from a conversation ends with the agent's own message there (fed with the report, the
+/// full report kept as a page and linked), not only a push towards the task's conversation.
+#[tokio::test]
+async fn a_finished_task_is_handed_back_to_the_conversation_it_came_from() {
+    let dir = tempfile::tempdir().unwrap();
+    let (fake, url) = gateway(3, 40_000).await;
+    fake.lock().unwrap().output =
+        "J'ai comparé les écoles.\n\n- **Jules Ferry** : la plus proche\n- Pasteur : cantine bio\n\
+- Curie : classes de 22"
+            .into();
+    let (config, agent) = setup(dir.path(), &url);
+    let told: Told = Default::default();
+    let board = with_handback(&config, &told);
+    let job =
+        board.create_from(&agent, "Écoles", "Compare les écoles.", 0.50, None, "asked", Some("api_c")).await.unwrap();
+    let id = id_of(&job);
+    assert_eq!(job["from_session"], "api_c");
+    board.wait(&id).await;
+    let runs = posted_runs(&fake);
+    assert_eq!(runs.len(), 2);
+    let turn = &runs[1];
+    assert_eq!(turn["session_id"], "api_c");
+    // its rules in the note, the system prompt (and the conversation's prompt cache) untouched
+    assert!(turn.get("instructions").is_none(), "{turn}");
+    let note = &common::without_now(turn["input"].as_str().unwrap());
+    // the report's page holds the points: the message introduces it
+    assert!(note.contains(bipbridge::handback::PAGE_INSTRUCTIONS));
+    let page = format!("/bipagents/pages/coach/rapport-{id}.html");
+    assert!(note.starts_with("<!--bip:task\nYour background work « Écoles » is finished."), "{note}");
+    assert!(
+        note.contains("- Pasteur : cantine bio") && note.contains(&format!("MEDIA:{page}")) && note.ends_with("-->")
+    );
+    // the report page, in the agent's pages
+    let kept = dir.path().join(format!("data/agent-pages/coach/rapport-{id}.html"));
+    let html = std::fs::read_to_string(kept).unwrap();
+    assert!(html.contains("<li><strong>Jules Ferry</strong> : la plus proche</li>"));
+    let done = jobs::load(&config, &id).unwrap();
+    assert_eq!(done["state"], "done");
+    assert_eq!(done["handed_back"]["by_agent"], true);
+    assert_eq!(done["handed_back"]["links"], json!([page]));
+    // the turn's tokens are the task's too (its usage: 105,000 more)
+    assert_eq!(done["tokens"]["input"], 205_000);
+    // no « Tâche de fond terminée » push towards the task's own conversation: the message is the news
+    assert!(told.lock().unwrap().is_empty());
+}
+
+/// 2026-10-31 (Alex's « Vérifier restaurants étoilés près du Pyla »): a task that made its own page delivers that page
+/// alone — no « Rapport — » page beside it — and the agent's message only introduces it (one message, one version).
+#[tokio::test]
+async fn a_task_that_made_its_page_is_handed_back_with_that_page_alone() {
+    let dir = tempfile::tempdir().unwrap();
+    let (fake, url) = gateway(3, 40_000).await;
+    fake.lock().unwrap().output = "Vérification terminée : 3 tables étoilées.\n\n- Le Patio, Arcachon\n- Nacre, Arès\n\
+MEDIA:/bipagents/pages/coach/tables-etoilees.html"
+        .into();
+    let (config, agent) = setup(dir.path(), &url);
+    let told: Told = Default::default();
+    let board = with_handback(&config, &told);
+    let job = board
+        .create_from(&agent, "Vérifier les tables", "Vérifie.", 0.50, None, "asked", Some("api_c"))
+        .await
+        .unwrap();
+    let id = id_of(&job);
+    board.wait(&id).await;
+    let runs = posted_runs(&fake);
+    let note = &common::without_now(runs[1]["input"].as_str().unwrap());
+    assert!(note.contains(bipbridge::handback::PAGE_INSTRUCTIONS), "{note}");
+    assert!(note.contains("End your message with these lines:\nMEDIA:/bipagents/pages/coach/tables-etoilees.html\n-->"));
+    assert!(!note.contains("rapport-"), "{note}");
+    assert!(!dir.path().join(format!("data/agent-pages/coach/rapport-{id}.html")).exists());
+    let done = jobs::load(&config, &id).unwrap();
+    assert_eq!(done["handed_back"]["links"], json!(["/bipagents/pages/coach/tables-etoilees.html"]));
+}
+
+/// 2026-10-26: a task that ended with its budget (nearly) spent still gets the agent's own message (it used to get the
+/// template, ids and all); only one far past it (`OVERRUN_MAX`) does not.
+#[tokio::test]
+async fn a_task_ending_at_its_budget_is_still_handed_back_by_the_agent() {
+    let dir = tempfile::tempdir().unwrap();
+    let (fake, url) = gateway(3, 40_000).await;
+    let (config, agent) = setup(dir.path(), &url);
+    let told: Told = Default::default();
+    let board = with_handback(&config, &told);
+    let job = board.create_from(&agent, "Écoles", "Compare.", 0.0605, None, "asked", Some("api_c")).await.unwrap();
+    let id = id_of(&job);
+    board.wait(&id).await;
+    assert_eq!(posted_runs(&fake).len(), 2, "the agent's turn, past the budget");
+    let done = jobs::load(&config, &id).unwrap();
+    assert_eq!((done["state"].as_str(), done["handed_back"]["by_agent"].as_bool()), (Some("done"), Some(true)));
+    assert_eq!(done["handed_back"]["why"], Value::Null);
+    // without a conversation to go back to: the push as before
+    let other = board.create(&agent, "Autre", "Encore.", 0.50, None).await.unwrap();
+    board.wait(&id_of(&other)).await;
+    assert_eq!(told.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn the_month_s_credit_used_stops_a_task_after_its_step_refuses_new_ones_and_resumes_it_when_back() {
+    // credit.rs (Alex 2026-10-26): no wall for conversations, but background tasks pause while the credit is used.
+    let dir = tempfile::tempdir().unwrap();
+    let (fake, url) = gateway(1000, 10).await;
+    let (config, agent) = setup(dir.path(), &url);
+    let credit = dir.path().join("credit.json");
+    let mut jobs =
+        Jobs::new(SharedConfig::new(config.clone()), HermesClient::new(reqwest::Client::new()), None, None, None);
+    jobs.poll = 0.01;
+    jobs.credit_file = Some(credit.clone());
+    let board = Arc::new(jobs);
+    let job = board.create(&agent, "Long", "Fais-le.", 0.50, None).await.unwrap();
+    let id = id_of(&job);
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    std::fs::write(&credit, json!({"state": "full", "resumes": 4.0e9}).to_string()).unwrap();
+    board.wait(&id).await;
+    let view = board.view(&id).unwrap();
+    assert_eq!((view["state"].as_str(), view["reason"].as_str()), (Some("paused"), Some("credit")));
+    assert_eq!(fake.lock().unwrap().runs["r1"]["status"], "cancelled");
+    // no new task meanwhile, said plainly
+    let refused = board.create(&agent, "Autre", "Encore.", 0.50, None).await.unwrap_err();
+    assert!(refused.to_string().contains("credit is used up"), "{refused}");
+    // a stale file (its new month come) pauses nothing; the credit back: the task goes on by itself
+    std::fs::write(&credit, json!({"state": "full", "resumes": 1.0}).to_string()).unwrap();
+    assert!(!board.credit_used());
+    std::fs::write(&credit, json!({"state": "ok"}).to_string()).unwrap();
+    board.resume_after_credit(&config).await;
+    assert_eq!(words(&fake.lock().unwrap().runs["r2"]["input"]), jobs::CONTINUE);
+    assert_eq!(board.view(&id).unwrap()["state"], "running");
+    board.forget(&id).await.unwrap();
+}
+
+/// 2026-10-31, Alex's home install: a task spent about twice its budget (« 0,071 € dépensés · au plus 0,037 € »).
+/// Hermes writes a conversation's counters only at a run's end (its token counts are queued and drained when the turn
+/// is saved), so the bridge, reading them every few seconds, saw nothing move and the run went on to its end. With
+/// Hermes patch 0020 each model call's real tokens come on the run's stream: the hub stops the run before a call that
+/// would pass what is left of the budget, and the task pauses at its budget with those tokens.
+#[tokio::test]
+async fn a_task_is_stopped_on_its_real_tokens_before_a_call_past_its_budget() {
+    let usage = |call: u32, input: i64, total_in: i64, total_out: i64| {
+        json!({"event": "model.usage", "call": call, "input_tokens": input, "output_tokens": 300,
+               "totals": {"input_tokens": total_in, "output_tokens": total_out, "cache_read_tokens": 1_000}})
+    };
+    let step = |file: &str| json!({"event": "tool.started", "tool": "read_file", "preview": file});
+    let dir = tempfile::tempdir().unwrap();
+    // counters that never move while the run goes on, as Hermes' own; the run would go on for ever
+    let (fake, url) = gateway(10_000, 0).await;
+    fake.lock().unwrap().events = vec![
+        usage(1, 20_000, 20_000, 300),
+        step("a.md"),
+        usage(2, 35_000, 55_000, 600),
+        step("b.md"),
+        usage(3, 40_000, 95_000, 900),
+        step("c.md"),
+    ];
+    let (config, agent) = setup(dir.path(), &url);
+    let hub = Arc::new(RunHub::new(HermesClient::new(reqwest::Client::new()), None, 7200, None));
+    let mut board =
+        Jobs::new(SharedConfig::new(config.clone()), HermesClient::new(reqwest::Client::new()), Some(hub), None, None);
+    board.poll = 0.05;
+    let board = Arc::new(board);
+    let job = board.create(&agent, "Analyse interview", "Résume l'interview.", 0.05, None).await.unwrap();
+    let id = id_of(&job);
+    tokio::time::timeout(std::time::Duration::from_secs(20), board.wait(&id)).await.expect("the task stopped");
+    let paused = board.view(&id).unwrap();
+    assert_eq!((paused["state"].as_str(), paused["reason"].as_str()), (Some("paused"), Some("budget")), "{paused:?}");
+    // after its 2nd call (55.6k, the next reading 35k at least) it goes on; after its 3rd (95.9k, the next 40k) a 4th
+    // would pass 100k: stopped as it asks for tools, within its budget
+    // at home (the test's HOME) its screens count a cache read a tenth of a fresh token; an offer place shows Hermes' own
+    assert_eq!(paused["tokens"], json!({"input": 94_100, "output": 900, "cached": 100, "cache_reads": 1_000}));
+    let raw = jobs::load(&config, &id).unwrap();
+    assert_eq!(jobs::task_view_on(&raw, true)["tokens"], json!({"input": 95_000, "output": 900, "cached": 1_000}));
+    assert!(jobs::spent(&paused) <= 100_000);
+    let g = fake.lock().unwrap();
+    assert!(g.requests.iter().any(|(m, p, _)| m == "POST" && p == "/p/coach/v1/runs/r1/stop"));
+    assert_eq!(g.runs.len(), 1);
+}
+
+/// Without patch 0020 (no `model.usage`) and with Hermes' counters still until the run's end, nothing tells the bridge
+/// a run's tokens before it ends: it is counted at its end, with its own usage, past its budget. Kept to say why the
+/// stop needs Hermes 0020 (the installer's patches).
+#[tokio::test]
+async fn without_real_tokens_a_run_is_counted_at_its_end() {
+    let dir = tempfile::tempdir().unwrap();
+    let (fake, url) = gateway(4, 0).await;
+    let (config, agent) = setup(dir.path(), &url);
+    let board = board(&config, None);
+    let job = board.create(&agent, "Analyse interview", "Résume l'interview.", 0.025, None).await.unwrap();
+    board.wait(&id_of(&job)).await;
+    let done = board.view(&id_of(&job)).unwrap();
+    assert_eq!(done["state"], "done");
+    assert_eq!(jobs::spent(&done), 105_000, "its usage at the end, twice its budget");
+    assert!(!fake.lock().unwrap().requests.iter().any(|(_, p, _)| p.ends_with("/stop")));
+}
+
+/// Cache audit #2 (2026-11-03): a turn taken without the person gets the same system prompt as the agent's
+/// conversations, so its request carries no run instructions, whatever starts it (background_turn.rs); what the turn
+/// must know is in its message. Same keys as a conversation's run (`input`, `session_id`), a task's thinking level
+/// aside (`model_options`, not part of the prompt).
+#[tokio::test]
+async fn every_background_turn_keeps_the_conversations_system_prompt() {
+    use bipbridge::background_turn::{Kind, Pipeline, Turn};
+    let dir = tempfile::tempdir().unwrap();
+    let (fake, url) = gateway(1, 10).await;
+    let (config, agent) = setup(dir.path(), &url);
+    let mut pipeline = Pipeline::new(SharedConfig::new(config.clone()), HermesClient::new(reqwest::Client::new()));
+    pipeline.poll = 0.01;
+    for kind in [Kind::Handback, Kind::Trigger, Kind::Watcher, Kind::Task] {
+        let mut turn = Turn::new(&agent, kind, "api_c", format!("<!--bip:{} note -->", kind.as_str()));
+        turn.max_seconds = 5.0;
+        let ran = pipeline.run(&turn).await.unwrap();
+        assert_eq!(ran.session, "api_c", "{kind:?}");
+    }
+    let runs = posted_runs(&fake);
+    assert_eq!(runs.len(), 4);
+    for run in &runs {
+        let mut keys: Vec<&str> =
+            run.as_object().unwrap().keys().map(String::as_str).filter(|k| *k != "model_options").collect();
+        keys.sort_unstable();
+        assert_eq!(keys, ["input", "session_id"], "{run}");
+    }
+    // the same request a background task sends through its board
+    let board = board(&config, None);
+    let job = board.create(&agent, "Écoles", "Compare.", 0.50, None).await.unwrap();
+    board.wait(&id_of(&job)).await;
+    let task = posted_runs(&fake).pop().unwrap();
+    assert!(task.get("instructions").is_none(), "{task}");
+}
+
+/// Alex, 2026-11-04 (offer place): a task stopped at « 5 % of the month », he gave it more, and his credit still
+/// showed about 97 % left. Its budget counted every prompt token at the full input price, while the router bills the
+/// cache reads (nearly all of a task's prompt: its conversation read again at each step) at a fifth of it. Its euros
+/// now are the router's bill for its calls: fresh input, cache reads and output at the model's prices, the numbers
+/// the month's credit is metered with.
+#[tokio::test]
+async fn a_task_counts_its_euros_as_the_month_s_credit_does_cache_reads_included() {
+    let usage = |call: u32, input: i64, total_in: i64, total_cached: i64, total_out: i64| {
+        json!({"event": "model.usage", "call": call, "input_tokens": input, "output_tokens": 300,
+               "totals": {"input_tokens": total_in, "output_tokens": total_out, "cache_read_tokens": total_cached}})
+    };
+    let step = |file: &str| json!({"event": "tool.started", "tool": "read_file", "preview": file});
+    let dir = tempfile::tempdir().unwrap();
+    let (fake, url) = gateway(10_000, 0).await;
+    fake.lock().unwrap().events = vec![
+        usage(1, 95_000, 95_000, 90_000, 900),
+        step("a.md"),
+        usage(2, 300_000, 400_000, 380_000, 3_000),
+        step("b.md"),
+    ];
+    let (mut config, agent) = setup(dir.path(), &url);
+    // GLM-5.3 Flash at EUrouter, as the guichet lists it: 0.10 € fresh, 0.02 € from the cache, 0.35 € out
+    (config.jobs.price_in, config.jobs.price_cached, config.jobs.price_out) = (0.10, 0.02, 0.35);
+    let hub = Arc::new(RunHub::new(HermesClient::new(reqwest::Client::new()), None, 7200, None));
+    let mut board =
+        Jobs::new(SharedConfig::new(config.clone()), HermesClient::new(reqwest::Client::new()), Some(hub), None, None);
+    board.poll = 0.05;
+    let board = Arc::new(board);
+    let job = board.create(&agent, "Connecteur", "Installe le connecteur.", 0.015, None).await.unwrap();
+    let id = id_of(&job);
+    tokio::time::timeout(std::time::Duration::from_secs(20), board.wait(&id)).await.expect("the task stopped");
+    let paused = board.view(&id).unwrap();
+    // its first call (95k read, 90k of it from the cache) cost 0.0026 €: the old count said 0.048 €, three times
+    // this budget, and stopped it there; it went on to its second call (0.0107 €), whose next one would pass 0.015 €
+    assert_eq!((paused["state"].as_str(), paused["reason"].as_str()), (Some("paused"), Some("budget")), "{paused:?}");
+    // a place of the offer shows Hermes' own counts; the test's HOME is a home install, whose screens weigh the cache
+    // reads at their price (0.02 / 0.10), its euros the same
+    let raw = jobs::load(&config, &id).unwrap();
+    assert_eq!(jobs::task_view_on(&raw, true)["tokens"], json!({"input": 400_000, "output": 3_000, "cached": 380_000}));
+    assert_eq!(paused["tokens"], json!({"input": 96_000, "output": 3_000, "cached": 76_000, "cache_reads": 380_000}));
+    let bill = (20_000.0 * 0.10 + 380_000.0 * 0.02 + 3_000.0 * 0.35) / 1e6;
+    assert!((paused["eur"].as_f64().unwrap() - bill).abs() < 1e-6, "{} vs {bill}", paused["eur"]);
+    assert_eq!(paused["budget_eur"], json!(0.015));
+    assert!(!paused.contains_key("prices"), "its prices stay the bridge's");
+    // « Continuer (+0,20 €) »: its new total, at once
+    fake.lock().unwrap().events = vec![];
+    fake.lock().unwrap().rounds = 2;
+    let resumed = board.resume(&id, Some(0.215), None).await.unwrap();
+    assert_eq!((resumed["state"].as_str(), resumed["budget_eur"].as_f64()), (Some("running"), Some(0.215)));
+    board.wait(&id).await;
+    assert_eq!(board.view(&id).unwrap()["state"], "done");
+}

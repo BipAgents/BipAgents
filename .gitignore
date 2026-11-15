@@ -1,0 +1,47 @@
+# macOS
+.DS_Store
+
+# Xcode
+xcuserdata/
+*.xcuserstate
+DerivedData/
+build/
+
+# SwiftPM
+.build/
+.swiftpm/
+
+# Python (bridge)
+.venv/
+__pycache__/
+.pytest_cache/
+*.pyc
+
+# Secrets never belong here
+*.p8
+bridge.toml
+bridge.toml.*
+.env
+
+# Machine-specific context (private infrastructure details)
+context/
+
+# Local signing team
+Config/Local.xcconfig
+voices/ab-test/
+
+# Built websites (python3 site/build.py)
+site/dist/
+
+# Store screenshots (scripts/store-shots.py)
+docs/store/shots/
+
+# Guichet (its settings and state stay on Kerfy Studio's machine)
+
+# Rust builds (bridge-rs, relay): per-agent target dirs at the root
+/target-*/
+bridge-rs/target/
+keys-rs/target/
+
+# Real brake traces from an install (scripts/brake-traces/export.py): never committed
+bridge-rs/tests/fixtures/brake-traces-real/

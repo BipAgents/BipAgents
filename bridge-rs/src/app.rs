@@ -1,0 +1,1930 @@
+//! FastAPI application factory: routes, services and background tasks.
+//!
+//! [`Services`] is Python's `Services` (everything the routes share), reached through [`AppState`] (a cheap
+//! handle every handler gets with `State(state): State<AppState>`). [`create_app`] builds the services (Python
+//! does it in the lifespan), heals what earlier bridges left, starts the background tasks and assembles the
+//! router exactly as Python's `create_app` mounts each module: the same prefixes, the same routers behind the
+//! bridge key.
+
+use std::collections::HashMap;
+use std::ops::Deref;
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::Duration;
+
+use axum::body::Body;
+use axum::extract::{Path, Request, State};
+use axum::http::{HeaderMap, HeaderValue, StatusCode};
+use axum::middleware::{self, Next};
+use axum::response::{IntoResponse, Response};
+use axum::routing::{delete, get, post};
+use axum::Router;
+use futures::StreamExt;
+use regex::Regex;
+use serde::Deserialize;
+use serde_json::{json, Map, Value};
+use std::sync::LazyLock;
+use tokio::task::JoinHandle;
+
+use crate::agent_tools::AudioMaker;
+use crate::apns::ApnsClient;
+use crate::auth::require_bridge_key;
+use crate::config::{AgentConfig, Config, SharedConfig};
+use crate::console::ConsoleStore;
+use crate::cronwatch::{CronWatcher, Presence};
+use crate::desktop::Tickets;
+use crate::fcm::FcmClient;
+use crate::guard::Guard;
+use crate::hermes::HermesClient;
+use crate::households::Households;
+use crate::jobs::{jobs_of, Jobs};
+use crate::lan::lan_info;
+use crate::live_brief::Briefs;
+use crate::logs::{redact6, J};
+use crate::mail_scan::Scans;
+use crate::outbox::OutboxService;
+use crate::peers::Links;
+use crate::push::{PushService, Sender};
+use crate::relay::RelayClient;
+use crate::runs::RunHub;
+use crate::sleep::Sleep;
+use crate::store::{iso, Row, Store};
+use crate::tts::{SynthOptions, TtsError, TtsOptions, TtsService, INTERACTIVE};
+use crate::vault::Vault;
+use crate::voices::{relay_for, voice_for};
+use crate::web::{self, check_max_len, ApiResult, FieldError, HttpError, Json, QueryMap, Validate};
+use crate::{agents_admin, py, VERSION};
+
+pub static RUN_ID: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^[A-Za-z0-9_.:\-]{1,256}$").expect("valid regex"));
+pub static DEVICE_TOKEN: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^[0-9a-fA-F]{32,512}$").expect("valid regex"));
+pub static SESSION_ID: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^[A-Za-z0-9_.:-]{1,200}$").expect("valid regex"));
+pub const SSE_KEEPALIVE_SECONDS: f64 = 10.0;
+pub const MESSAGE_MAX_CHARS: usize = 8000;
+
+/// Everything that needs a running event loop (created in the lifespan).
+pub struct Services {
+    pub config: SharedConfig,
+    /// The shared HTTP client (Hermes, TTS engines, relays): no total timeout, 30 s to connect; set
+    /// `.timeout(…)` on each request as Python's per-request timeouts (its default is 30 s per phase).
+    pub http: reqwest::Client,
+    /// APNs' client (HTTP/2), 15 s.
+    pub apns_http: reqwest::Client,
+    pub store: Store,
+    pub tts: Arc<TtsService>,
+    pub hermes: HermesClient,
+    pub briefs: Arc<Briefs>,
+    pub sleep: Arc<Sleep>,
+    pub audio_maker: Arc<AudioMaker>,
+    pub apns: Option<Arc<ApnsClient>>,
+    /// "apns", "relay" or None.
+    pub push_mode: Option<&'static str>,
+    pub fcm: Option<Arc<FcmClient>>,
+    /// The publisher's relay, for the apps that registered there (any install without an Apple key of its own).
+    pub push_service: Option<Arc<RelayClient>>,
+    pub push: Arc<PushService>,
+    pub hub: Arc<RunHub>,
+    pub outbox: Arc<OutboxService>,
+    pub presence: Arc<Presence>,
+    pub vault: Arc<Vault>,
+    pub links: Arc<Links>,
+    pub households: Arc<Households>,
+    pub desktop_tickets: Tickets,
+    /// Desktops set up by hand: the person took over (input passes).
+    pub desktop_control: Mutex<HashMap<String, bool>>,
+    /// Mail scans and background jobs, made at first use (mail_scan::scans_of, jobs::jobs_of).
+    pub scans: OnceLock<Arc<Scans>>,
+    pub jobs: OnceLock<Arc<Jobs>>,
+    /// Group discussions between the person's agents (rooms::rooms_of).
+    pub rooms: OnceLock<Arc<crate::rooms::Rooms>>,
+    /// The agents' waiting messages (msg_queue::queues_of, made with the app: the hub tells them each run's end).
+    pub queues: OnceLock<Arc<crate::msg_queue::Queues>>,
+    /// The conversations the bridge owns (threads::threads_of, made with the app: the hub and the push service
+    /// reach them).
+    pub threads: OnceLock<Arc<crate::threads::Threads>>,
+    /// Wrong keys counted by address (guard.py): Python's `app.state.guard`.
+    pub guard: Guard,
+    /// The web consoles (console.py): Python's `app.state.console`.
+    pub console: ConsoleStore,
+    tasks: Mutex<Vec<JoinHandle<()>>>,
+}
+
+/// The handle every route gets (`State(state): State<AppState>`); derefs to [`Services`].
+#[derive(Clone)]
+pub struct AppState(pub Arc<Services>);
+
+impl Deref for AppState {
+    type Target = Services;
+    fn deref(&self) -> &Services {
+        &self.0
+    }
+}
+
+impl Services {
+    pub fn new(config: Config) -> anyhow::Result<Services> {
+        let data_dir = config.data_dir();
+        let shared = SharedConfig::new(config.clone());
+        let http =
+            reqwest::Client::builder().connect_timeout(Duration::from_secs(30)).pool_max_idle_per_host(20).build()?;
+        let apns_http = reqwest::Client::builder().timeout(Duration::from_secs(15)).build()?;
+        let store = Store::open(&config.outbox.db_path)?;
+        let tts = Arc::new(TtsService::new(
+            http.clone(),
+            &config.default_voice,
+            TtsOptions {
+                cache_entries: config.limits.tts_cache_entries,
+                max_chars: config.limits.tts_max_chars,
+                sentence_max_chars: config.limits.sentence_max_chars,
+                pocket_url: config.pocket_url.clone(),
+                voice_server: config.voice_server.clone(),
+                words: config.pronunciations.clone(),
+                ..Default::default()
+            },
+        ));
+        let hermes = HermesClient::new(http.clone());
+        let briefs = Arc::new(Briefs::new(&py::join(&data_dir, "briefs"), hermes.clone(), shared.clone()));
+        // when each routine last ran (sleep.rs: a place with routines stays up)
+        let routines_config = shared.clone();
+        let routines: crate::sleep::Routines = Arc::new(move || {
+            let config = routines_config.get();
+            Box::pin(async move { crate::routines::last_runs(&config) })
+        });
+        let (up_config, up_hermes) = (shared.clone(), hermes.clone());
+        let hermes_up: crate::sleep::HermesUp = Arc::new(move || {
+            let (config, hermes) = (up_config.get(), up_hermes.clone());
+            Box::pin(async move { hermes_up(&config, &hermes).await })
+        });
+        let sleep = Arc::new(Sleep::new(shared.clone(), routines, hermes_up));
+        let audio_maker = Arc::new(AudioMaker::new(shared.clone(), tts.clone()));
+        let mut apns = None;
+        if config.apns.enabled() {
+            if std::path::Path::new(&config.apns.p8_path).exists() {
+                apns = Some(Arc::new(ApnsClient::new(config.apns.clone(), apns_http.clone())));
+            } else {
+                tracing::warn!(path = %config.apns.p8_path, "APNs key file missing");
+            }
+        }
+        // Without an APNs key of its own, an install's apps register with the publisher's relay (push_service below).
+        let sender = apns.clone().map(Sender::Apns);
+        // « apns » tells the apps to give their APNs token itself: only without the publisher's relay. With it (every
+        // install since 2026-11-12, Alex's own too) they register there; a phone still known by its APNs token is
+        // sent to directly until its next launch moves it (no notification lost in between).
+        let relay_set = config.push_service_url.as_deref().is_some_and(|u| !u.is_empty());
+        let push_mode = (apns.is_some() && !relay_set).then_some("apns");
+        // Android: FCM with the Firebase project's key, else the publisher's relay.
+        let mut fcm = None;
+        if let Some(account) = config.fcm_service_account.as_deref() {
+            if std::path::Path::new(account).exists() {
+                fcm = Some(Arc::new(FcmClient::new(
+                    account,
+                    http.clone(),
+                    &config.fcm_base_url,
+                    config.fcm_token_url.as_deref(),
+                )?));
+            } else {
+                tracing::warn!(path = %account, "FCM service account missing");
+            }
+        }
+        let android = fcm.clone().map(Sender::Fcm);
+        // The publisher's relay, for the apps that registered there (any install without an Apple key of its own).
+        let push_service = config
+            .push_service_url
+            .as_deref()
+            .filter(|u| !u.is_empty())
+            .map(|url| Arc::new(RelayClient::new(url, "", http.clone())));
+        if push_service.is_none() && (apns.is_none() || fcm.is_none()) {
+            // 2026-11-12: the offer's places and the installs from before 2026-11-04 had none: no phone was told
+            tracing::warn!("no push relay ([push] service_url): the phones this bridge has no key for get no notification");
+        }
+        let push = Arc::new(PushService::new(shared.clone(), store.clone(), sender, android, push_service.clone()));
+        let hub = Arc::new(
+            RunHub::new(hermes.clone(), Some(push.clone()), config.limits.watch_max_seconds, Some(store.clone()))
+                .with_config(shared.clone()),
+        );
+        let outbox = Arc::new(OutboxService::new(shared.clone(), store.clone(), tts.clone(), push.clone()));
+        Ok(Services {
+            config: shared,
+            http,
+            apns_http,
+            store,
+            tts,
+            hermes,
+            briefs,
+            sleep,
+            audio_maker,
+            apns,
+            push_mode,
+            fcm,
+            push_service,
+            push,
+            hub,
+            outbox,
+            presence: Arc::new(Presence::new(45.0)),
+            vault: Arc::new(Vault::new(&py::join(&data_dir, "vault"))),
+            links: Arc::new(Links::new(&py::join(&data_dir, "peers.json"))),
+            households: Arc::new(Households::new(&crate::households::path_for(&config))),
+            desktop_tickets: Tickets::new(),
+            desktop_control: Mutex::new(HashMap::new()),
+            scans: OnceLock::new(),
+            jobs: OnceLock::new(),
+            rooms: OnceLock::new(),
+            queues: OnceLock::new(),
+            threads: OnceLock::new(),
+            guard: Guard::default(),
+            console: ConsoleStore::new(&py::join(&data_dir, "console.json")),
+            tasks: Mutex::new(Vec::new()),
+        })
+    }
+
+    /// The configuration as it is now (a snapshot).
+    pub fn config(&self) -> Arc<Config> {
+        self.config.get()
+    }
+
+    /// A background task, stopped with the bridge.
+    pub fn spawn<F>(&self, future: F)
+    where
+        F: std::future::Future<Output = ()> + Send + 'static,
+    {
+        let handle = tokio::spawn(future);
+        self.tasks.lock().unwrap_or_else(|e| e.into_inner()).push(handle);
+    }
+
+    /// Python's `stop()`: background tasks cancelled, the hub and the outbox closed, the database closed.
+    pub async fn stop(&self) {
+        if let Some(jobs) = self.jobs.get() {
+            jobs.stop_followers();
+        }
+        if let Some(rooms) = self.rooms.get() {
+            rooms.stop_workers();
+        }
+        let tasks: Vec<JoinHandle<()>> = std::mem::take(&mut *self.tasks.lock().unwrap_or_else(|e| e.into_inner()));
+        for task in &tasks {
+            task.abort();
+        }
+        for task in tasks {
+            let _ = task.await;
+        }
+        self.hub.close().await;
+        self.outbox.close().await;
+        self.store.close();
+    }
+}
+
+async fn hermes_up(config: &Config, hermes: &HermesClient) -> bool {
+    match config.agents.values().next() {
+        None => true,
+        Some(agent) => hermes.capabilities(agent).await.is_ok(),
+    }
+}
+
+impl AppState {
+    /// Python's `start_background()`.
+    pub fn start_background(&self) {
+        let config = self.config();
+        if config.cron_watch {
+            // the agents' turns no run of ours carries: Bot Chat replies, sub-agents' reports (cronwatch.rs)
+            let watcher = CronWatcher::new(
+                self.config.clone(),
+                self.hermes.clone(),
+                self.outbox.clone(),
+                config.cron_interval_seconds,
+                Some(self.hub.clone()),
+                Some(self.push.clone()),
+                Some(self.presence.clone()),
+            );
+            self.spawn(Arc::new(watcher).run());
+        }
+        self.spawn(purge_loop(self.clone()));
+        // the browsers set up before: their guard given the DevTools secret (browsers.rs, card-guards' second review)
+        let settings = self.config.clone();
+        self.spawn(async move { crate::browsers::refresh_all_proxy_settings(&settings.get()) });
+        // the family agents' one common conversation (family_thread.rs): the queue's turns reach it; the conversations
+        // of before (one per member) cleared once
+        crate::family_thread::init(self);
+        let me = self.clone();
+        self.spawn(async move { crate::family_thread::migrate(&me).await });
+        // what takes the place's space, measured; the 80/95 % cards, the pause when full (storage_watch.rs)
+        self.spawn(crate::storage_watch::run_forever(self.clone()));
+        // the agents' drafts, finished tasks' folders, old downloads and package caches removed by themselves
+        self.spawn(crate::space_tidy::run_forever(self.clone()));
+        self.spawn(crate::mail_tidy::run_forever(self.clone())); // mail tidy jobs a restart left behind
+        self.spawn(crate::mail_rules::run_forever(self.clone())); // standing mail rules: resumes, weekly line
+        crate::held_approvals::start(self); // what turns nobody follows ask: kept as cards, never waited for
+        self.spawn(crate::door_tls::announce_forever(self.clone())); // our door's certificate to linked households
+        // a household that can't be reached (a home) and one that can (a place): the calls kept for it, fetched by it
+        self.spawn(crate::family_relay::serve_loopback(self.clone()));
+        self.spawn(crate::family_relay::pull_forever(self.clone()));
+        self.spawn(crate::notebook::tidy::scheduler(self.clone()));
+        self.spawn(crate::dates::run_forever(self.clone()));
+        self.spawn(crate::read_shares::run_forever(self.clone())); // shared conversations' encrypted copies
+        self.spawn(crate::project_agent::run_forever(self.clone())); // projects past their end: archived
+        self.spawn(crate::connections::run_forever(self.clone())); // renews the services' access tokens
+        self.spawn(crate::connectors_run::scheduler(self.clone())); // the connectors' mechanical schedules
+        self.spawn(crate::watchers::scheduler(self.clone())); // the watchers: checks with no model call
+        self.spawn(crate::routines::scheduler(self.clone())); // routines on a clock (Hermes' cron runs none)
+        self.spawn(crate::triggers::scheduler(self.clone())); // routines started by an e-mail or a link
+        self.spawn(crate::triggers_mail::supervisor(self.clone())); // their mailboxes, by IMAP IDLE
+        self.spawn(crate::archives::scheduler(self.config.clone()));
+        crate::agent_email::start(self);
+        self.spawn(self.briefs.clone().run());
+        self.spawn(self.briefs.clone().sweep_forever());
+        self.spawn(crate::live_calls::run_forever(self.clone())); // Live calls the app never ended (live_calls.rs)
+        // the plan's AI credit used (a server of the offer): routines, the browser and background tasks pause
+        self.spawn(crate::credit::run_forever(self.clone()));
+        // an agent's Hermes restarted when there is a reason, once idle (agent_restart.rs)
+        self.spawn(crate::agent_restart::run_forever(self.clone()));
+        self.spawn(crate::own_space::tidy_at_start(self.clone())); // others-facing agents left in the hub: out, once
+        self.spawn(crate::agent_shares::drop_relative_conversations(self.clone())); // personal shares read-only (12/11)
+        self.spawn(crate::phone_exit::serve(self.clone())); // the phone exit's socket for the agents' proxy (off by default)
+        if self.sleep.enabled() {
+            // a server of the offer: the guichet's seat agent reads whether a run goes on (runs.rs BUSY_MARKER)
+            self.spawn(self.hub.clone().mark_busy_forever(self.sleep.home.clone(), 60.0));
+            self.spawn(self.sleep.clone().run_forever());
+        }
+        self.vault.warn_hub_holders(&config); // own_space.rs: credentials kept in a hub that is no longer private
+        let hub = self.hub.clone();
+        let agents = config.agents.clone();
+        self.spawn(async move {
+            hub.resume(agents).await;
+        });
+        let rooms = crate::rooms::rooms_of(self);
+        self.spawn(async move {
+            rooms.resume();
+        });
+        // the rows of cards gone that nothing read: read, the badges count what the Boîte shows (card_place.rs)
+        self.spawn(crate::card_place::sweep(self.clone()));
+        let jobs = jobs_of(self);
+        self.spawn(async move {
+            jobs.clone().resume_following().await;
+            crate::archives::records_fill::resume_all(jobs.config.get(), jobs.tell.clone());
+            crate::notebook::fill::follow(&jobs);
+        });
+        if config.hermes.enabled() {
+            self.spawn(crate::sandbox::isolate_all(self.config.clone(), agents_admin::default_run()));
+            self.spawn(crate::sandbox_sites::watch(self.clone()));
+            // a card made while a tool call runs, in its turn's conversation; one answered elsewhere, gone (card_place.rs)
+            self.spawn(crate::card_place::watch(self.clone()));
+            self.spawn(crate::send_guard::watch(self.clone()));
+            // « what my agents know about me » common to the person's own agents (shared_memory.rs)
+            self.spawn(crate::shared_memory::run_forever(self.clone()));
+            self.spawn(crate::shares::mirror_forever(self.config.clone()));
+            self.spawn(crate::agent_tools::register_all(self.config.clone(), agents_admin::default_run()));
+            // an agent's thread that an unpatched Hermes v0.22.5 moved aside, put back (welcome.rs)
+            self.spawn(crate::welcome::restore_moved_aside_all(self.clone()));
+            let shared = self.config.clone();
+            self.spawn(async move { crate::browsers::vault_only_all(&shared.get()).await });
+            // a card payment's hold left by this bridge's previous run (or cut off since): tabs left, lifted (card_pay.rs)
+            self.spawn(crate::card_pay::end_stale_holds_forever(self.config.clone()));
+            if config.hermes.isolated {
+                // « Coordonnées » in an agent's Hermes vault only while its browser is on (vault.rs)
+                let (shared, vault) = (self.config.clone(), self.vault.clone());
+                self.spawn(async move {
+                    let config = shared.get();
+                    vault.retry_removals(&config).await;
+                    if vault.follow_browsers(&config).await {
+                        crate::profile_files::reconcile_all(&config);
+                    }
+                });
+            }
+            if config.cloud {
+                // a place of the reserve: its first agent made before its claim; what a claim left, finished
+                self.spawn(crate::cloud_setup::prepare_when_installed(self.config.clone(), self.http.clone()));
+                if crate::cloud_setup::has_pending(&config) {
+                    let (shared, http) = (self.config.clone(), self.http.clone());
+                    self.spawn(async move {
+                        crate::cloud_setup::finish_pending(&shared, &http, &agents_admin::default_run()).await;
+                    });
+                }
+            }
+        }
+    }
+}
+
+async fn purge_loop(state: AppState) {
+    tokio::time::sleep(Duration::from_secs(5)).await;
+    loop {
+        let config = state.config();
+        let result: anyhow::Result<()> = async {
+            for agent in config.agents.values() {
+                if let Some(root) = agent.upload_dir_host.clone().filter(|r| !r.is_empty()) {
+                    let days = crate::files_kept::kept_days(&config);
+                    if days <= 0 {
+                        continue; // kept always: the person's choice
+                    }
+                    let removed =
+                        tokio::task::spawn_blocking(move || crate::files::purge_uploads(&root, days, None)).await?;
+                    if removed > 0 {
+                        tracing::info!(agent = %agent.name, removed = removed, "uploads purged");
+                        // and from its sandbox's copy (sandbox.rs)
+                        let (c, name) = (config.clone(), agent.name.clone());
+                        tokio::task::spawn_blocking(move || crate::sandbox::sync_agent(&c, &name)).await??;
+                    }
+                }
+            }
+            // the photos sent in a conversation and never filed: 30 days, whatever the choice (Carnet v2)
+            let c = config.clone();
+            let (removed, agents) =
+                tokio::task::spawn_blocking(move || crate::files_kept::purge_photos(&c, crate::py::time_time())).await?;
+            if removed > 0 {
+                tracing::info!(removed = removed, "sent photos never filed purged");
+                for name in agents {
+                    let c = config.clone();
+                    tokio::task::spawn_blocking(move || crate::sandbox::sync_agent(&c, &name)).await??;
+                }
+            }
+            let days = crate::files_kept::kept_days(&config);
+            if days > 0 {
+                let c = config.clone();
+                let removed = tokio::task::spawn_blocking(move || crate::sent_files::purge(&c, days, None)).await?;
+                if removed > 0 {
+                    tracing::info!(removed = removed, "files the agents sent purged");
+                }
+            }
+            // the files relatives sent to the shared agents, and the ones held here for a relative's agent
+            let c = config.clone();
+            let removed =
+                tokio::task::spawn_blocking(move || crate::shared_files::purge(&c, crate::py::time_time())).await?;
+            if removed > 0 {
+                tracing::info!(removed = removed, "files sent to shared agents purged");
+            }
+            let (c, days) = (config.clone(), config.outbox.retention_days);
+            let removed = tokio::task::spawn_blocking(move || crate::agent_tools::purge_audio(&c, days, None)).await?;
+            if removed > 0 {
+                tracing::info!(removed = removed, "agent audio purged");
+            }
+            let c = config.clone();
+            let removed = tokio::task::spawn_blocking(move || crate::storage_watch::apply_rules(&c)).await?;
+            if removed > 0 {
+                tracing::info!(removed = removed, "files past the space rules purged");
+            }
+            let removed = state.outbox.purge().await?;
+            if removed > 0 {
+                tracing::info!(removed = removed, "outbox purged");
+            }
+            Ok(())
+        }
+        .await;
+        if let Err(exc) = result {
+            tracing::error!(exc = %format!("{exc:#}"), "purge failed");
+        }
+        tokio::time::sleep(Duration::from_secs(config.limits.purge_interval_seconds)).await;
+    }
+}
+
+// -- request models ----------------------------------------------------------------------------------
+
+#[derive(Debug, Deserialize)]
+pub struct TtsRequest {
+    pub text: String,
+    #[serde(default)]
+    pub voice: Option<String>,
+    #[serde(default = "default_format")]
+    pub format: String,
+    #[serde(default)]
+    pub agent: Option<String>,
+    /// What it is for (`live`, `replies`, `reading`): with no `voice`, the agent's voice for that use.
+    #[serde(default, rename = "use")]
+    pub use_: Option<String>,
+}
+
+fn default_format() -> String {
+    "pcm16".into()
+}
+
+impl Validate for TtsRequest {
+    fn validate(&self, errors: &mut Vec<FieldError>) {
+        check_max_len(errors, "text", Some(&self.text), 20000);
+        check_max_len(errors, "voice", self.voice.as_deref(), 300);
+        check_max_len(errors, "use", self.use_.as_deref(), 20);
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct DeviceRequest {
+    pub token: String,
+    #[serde(default)]
+    pub environment: Option<String>,
+    #[serde(default)]
+    pub agent_ids: Vec<String>,
+    /// the token this phone registered before (the OS rotated it, or the relay's was renewed): its row dropped at
+    /// once, in the same environment, so the phone isn't notified twice (audit 2026-10-27, 20). Older apps omit it.
+    #[serde(default)]
+    pub previous: Option<String>,
+    /// the phone's public key for sealed notifications (push.rs seal.rs: P-256, uncompressed, base64): its pushes then
+    /// carry the words in `enc`, a neutral line in clear. Each registration gives it again; without it, none is kept.
+    #[serde(default)]
+    pub push_key: Option<String>,
+}
+impl Validate for DeviceRequest {
+    fn validate(&self, errors: &mut Vec<FieldError>) {
+        check_max_len(errors, "previous", self.previous.as_deref(), 600);
+        check_max_len(errors, "push_key", self.push_key.as_deref(), 200);
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct WatchRequest {
+    pub agent: String,
+    pub run_id: String,
+    #[serde(default)]
+    pub session_id: Option<String>,
+}
+impl Validate for WatchRequest {}
+
+#[derive(Debug, Deserialize)]
+pub struct ApproveRequest {
+    pub agent: String,
+    pub run_id: String,
+    #[serde(default)]
+    pub choice: String,
+    #[serde(default)]
+    pub request_id: Option<String>,
+    /// A question's answer (Hermes' clarify: its words; empty skips it) instead of a choice.
+    #[serde(default)]
+    pub answer: Option<String>,
+}
+
+impl Validate for ApproveRequest {
+    fn validate(&self, errors: &mut Vec<FieldError>) {
+        check_max_len(errors, "choice", Some(&self.choice), 32);
+        check_max_len(errors, "answer", self.answer.as_deref(), 20_000);
+        check_max_len(errors, "request_id", self.request_id.as_deref(), 256);
+    }
+}
+
+/// `_agent_or_404`.
+pub fn agent_or_404(config: &Config, name: Option<&str>) -> ApiResult<AgentConfig> {
+    config.agent(name).cloned().ok_or_else(|| HttpError::new(404, "unknown agent"))
+}
+
+fn check_run_id(run_id: &str) -> ApiResult<String> {
+    if !RUN_ID.is_match(run_id) {
+        return Err(HttpError::new(400, "invalid run_id"));
+    }
+    Ok(run_id.to_string())
+}
+
+/// `body.agent`'s agent (404 when named and unknown).
+fn body_agent(config: &Config, name: Option<&str>) -> ApiResult<Option<AgentConfig>> {
+    match name.filter(|n| !n.is_empty()) {
+        None => Ok(None),
+        Some(n) => config.agent(Some(n)).cloned().map(Some).ok_or_else(|| HttpError::new(404, "unknown agent")),
+    }
+}
+
+fn tts_error(exc: TtsError) -> HttpError {
+    HttpError::new(exc.status, exc.message)
+}
+
+pub(crate) fn outbox_item(row: &Row, state: &AppState) -> Value {
+    let id = py::py_str(&row["id"]);
+    let has_audio = std::path::Path::new(&state.outbox.audio_file(&id)).exists();
+    let get = |k: &str| row.get(k).cloned().unwrap_or(Value::Null);
+    json!({
+        "id": get("id"), "agent": get("agent"), "title": get("title"), "text": get("text"),
+        "created_at": get("created_at"), "sent_at": get("sent_at"), "session_id": get("session_id"),
+        "has_audio": has_audio, "audio_url": format!("/v1/outbox/{id}/audio"),
+        "attachments": row.get("attachments").and_then(Value::as_str).and_then(|a| serde_json::from_str::<Value>(a).ok())
+            .unwrap_or(json!([])),
+    })
+}
+
+fn with_headers(mut response: Response, headers: &[(&'static str, String)]) -> Response {
+    for (name, value) in headers {
+        if let Ok(v) = HeaderValue::from_str(value) {
+            response.headers_mut().insert(*name, v);
+        }
+    }
+    response
+}
+
+fn bytes_response(data: bytes::Bytes, content_type: &str, headers: &[(&'static str, String)]) -> Response {
+    let mut response = Response::new(Body::from(data));
+    let content_type = if content_type.starts_with("text/") && !content_type.contains("charset") {
+        format!("{content_type}; charset=utf-8")
+    } else {
+        content_type.to_string()
+    };
+    if let Ok(v) = HeaderValue::from_str(&content_type) {
+        response.headers_mut().insert("content-type", v);
+    }
+    with_headers(response, headers)
+}
+
+// -- the core routes (Python's build_router: /v1, bridge key) ----------------------------------------
+
+async fn list_agents(State(state): State<AppState>) -> ApiResult<Response> {
+    let config = state.config();
+    // made on the person's request (a card accepted): their apps add these at once, in this order
+    let requested = crate::guide::load(&config).requested;
+    let agents: Vec<Value> = config
+        .agents
+        .values()
+        .map(|a| {
+            json!({
+                "id": a.name, "name": a.display_name,
+                "voice": crate::voices::voice_for(&config, Some(a), None),
+                "server_voice": a.server_voice, "category": a.category, "color": a.color,
+                "outfit": a.outfit.clone().unwrap_or_default(), "costumes": a.costumes.unwrap_or(true),
+                // the language it writes first in, from its record (the apps keep no copy of it)
+                "language": crate::profile_files::settings(&agents_admin::profile_folder(&config, a)).language,
+                "url": a.public_url,
+                "family": crate::family_agent::is_family(&config, &a.name),
+                "project": crate::project_agent::listing_mark(&config, &a.name),
+                "requested": requested.get(&a.name),
+            })
+        })
+        .collect();
+    let unclaimed = agents_admin::unclaimed_profiles(&config);
+    let groups = crate::agent_groups::all(&config);
+    let agents: Vec<Value> = agents
+        .into_iter()
+        .map(|mut a| {
+            let group = a["id"].as_str().and_then(|id| groups.get(id)).cloned().unwrap_or_else(|| json!(""));
+            a["group"] = group;
+            a
+        })
+        .collect();
+    Ok(web::ok(
+        json!({"bridge": {"url": config.public_url, "lan": lan_info(&config)}, "agents": agents, "unclaimed": unclaimed}),
+    ))
+}
+
+async fn tts_sentence(State(state): State<AppState>, Json(body): Json<TtsRequest>) -> ApiResult<Response> {
+    let config = state.config();
+    let agent = body_agent(&config, body.agent.as_deref())?;
+    if !["pcm16", "opus", "wav"].contains(&body.format.as_str()) {
+        return Err(HttpError::new(400, "format must be pcm16, opus or wav"));
+    }
+    let voice = body
+        .voice
+        .clone()
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| voice_for(&config, agent.as_ref(), body.use_.as_deref()));
+    let audio = state
+        .tts
+        .synthesize(
+            &body.text,
+            Some(&voice),
+            &body.format,
+            INTERACTIVE,
+            SynthOptions { relay: relay_for(&config, agent.as_ref()), ..Default::default() },
+        )
+        .await
+        .map_err(tts_error)?;
+    let mut headers = vec![
+        ("x-sample-rate", audio.sample_rate.to_string()),
+        ("x-channels", audio.channels.to_string()),
+        ("x-cache", if audio.cached { "hit" } else { "miss" }.to_string()),
+        ("cache-control", "no-store".to_string()),
+    ];
+    if audio.format == "pcm16" {
+        headers.push(("x-sample-format", "s16le".into()));
+    }
+    Ok(bytes_response(audio.data, &audio.content_type, &headers))
+}
+
+/// The text a Bip says, prepared as this bridge would for Pocket (numbers in words, respellings, pauses), for a
+/// phone that speaks with the Bips' voices itself (voices/onnx/). `local: false`: not a Bip's voice, the phone
+/// asks for the audio as before.
+async fn tts_prepare(State(state): State<AppState>, Json(body): Json<TtsRequest>) -> ApiResult<Response> {
+    let config = state.config();
+    let agent = body_agent(&config, body.agent.as_deref())?;
+    let voice = body
+        .voice
+        .clone()
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| voice_for(&config, agent.as_ref(), body.use_.as_deref()));
+    let prepared = state
+        .tts
+        .for_phone(&body.text, Some(&voice), Some(MESSAGE_MAX_CHARS))
+        .map_err(tts_error)?;
+    Ok(web::ok(match prepared {
+        None => json!({"local": false, "voice": voice}),
+        Some((text, language, bip)) => {
+            json!({"local": true, "voice": voice, "text": text, "language": language, "bip": bip})
+        }
+    }))
+}
+
+/// A whole reply as one audio file (voice-message mode). The engine gets the full text at once, so it batches the
+/// sentences on the GPU: far faster per second of audio than sentence by sentence.
+async fn tts_message(State(state): State<AppState>, Json(body): Json<TtsRequest>) -> ApiResult<Response> {
+    let config = state.config();
+    let agent = body_agent(&config, body.agent.as_deref())?;
+    if agent.is_some() {
+        // a reply read aloud: a use of the voice (feature_tips.rs)
+        let c = config.clone();
+        tokio::task::spawn_blocking(move || {
+            let _ = crate::feature_tips::used(&c, "voice", py::time_time());
+        });
+    }
+    let fmt = if body.format != "pcm16" { body.format.clone() } else { "mp3".to_string() }; // default to a compressed file here
+    if !["mp3", "opus", "wav"].contains(&fmt.as_str()) {
+        return Err(HttpError::new(400, "format must be mp3, opus or wav"));
+    }
+    let voice = body
+        .voice
+        .clone()
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| voice_for(&config, agent.as_ref(), body.use_.as_deref()));
+    let audio = state
+        .tts
+        .synthesize(
+            &body.text,
+            Some(&voice),
+            &fmt,
+            INTERACTIVE,
+            SynthOptions { max_chars: Some(MESSAGE_MAX_CHARS), relay: relay_for(&config, agent.as_ref()), ..Default::default() },
+        )
+        .await
+        .map_err(tts_error)?;
+    Ok(bytes_response(
+        audio.data,
+        &audio.content_type,
+        &[("x-cache", if audio.cached { "hit" } else { "miss" }.to_string()), ("cache-control", "no-store".into())],
+    ))
+}
+
+/// Raw PCM16 (s16le, mono, 24 kHz) streamed as the engine produces it: first audio in ~0.1 s with Pocket.
+/// Errors before the first chunk are plain HTTP errors; the body is chunked audio only.
+async fn tts_stream(State(state): State<AppState>, Json(body): Json<TtsRequest>) -> ApiResult<Response> {
+    let config = state.config();
+    let agent = body_agent(&config, body.agent.as_deref())?;
+    let voice = body
+        .voice
+        .clone()
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| voice_for(&config, agent.as_ref(), body.use_.as_deref()));
+    let relay = relay_for(&config, agent.as_ref());
+    let mut chunks = state.tts.stream(&body.text, Some(&voice), INTERACTIVE, Some(MESSAGE_MAX_CHARS), relay.as_deref());
+    let first = match chunks.next().await {
+        None => bytes::Bytes::new(),
+        Some(Err(exc)) => return Err(tts_error(exc)),
+        Some(Ok(chunk)) => chunk,
+    };
+    let rest = chunks.map(|c| c.map_err(|e| std::io::Error::other(e.message)));
+    let stream = futures::stream::iter((!first.is_empty()).then(|| Ok::<_, std::io::Error>(first))).chain(rest);
+    let response = Response::new(Body::from_stream(stream));
+    Ok(with_headers(
+        response,
+        &[
+            ("content-type", "application/octet-stream".into()),
+            ("x-sample-rate", "24000".into()),
+            ("x-channels", "1".into()),
+            ("x-sample-format", "s16le".into()),
+            ("cache-control", "no-store".into()),
+        ],
+    ))
+}
+
+async fn upload_file(State(state): State<AppState>, request: Request) -> ApiResult<Response> {
+    Ok(web::ok(crate::files::handle_upload(state, request).await?))
+}
+
+async fn register_device(State(state): State<AppState>, Json(body): Json<DeviceRequest>) -> ApiResult<Response> {
+    let config = state.config();
+    let mut token = body.token.trim().replace([' ', '<', '>'], "");
+    let environment =
+        body.environment.clone().filter(|e| !e.is_empty()).unwrap_or_else(|| config.apns.environment.clone());
+    if environment == "relay" {
+        // a relay token from the publisher's relay: kept as it is (case-sensitive)
+        if state.push_service.is_none() {
+            return Err(HttpError::new(409, "this bridge has no push relay set up"));
+        }
+        if !crate::relay::relay_token_taken(&token, crate::relay::unix_now()) {
+            return Err(HttpError::new(400, "invalid relay token"));
+        }
+    } else if environment == "fcm" {
+        // the Android app (Firebase Cloud Messaging); its tokens are case-sensitive
+        if !crate::fcm::FCM_TOKEN.is_match(&token) {
+            return Err(HttpError::new(400, "invalid FCM token"));
+        }
+    } else {
+        if !DEVICE_TOKEN.is_match(&token) {
+            return Err(HttpError::new(400, "invalid device token (hex expected)"));
+        }
+        if environment != "sandbox" && environment != "production" {
+            return Err(HttpError::new(400, "environment must be sandbox, production or fcm"));
+        }
+        token = token.to_lowercase();
+    }
+    let agent_ids: Vec<String> =
+        body.agent_ids.iter().map(|a| a.trim().to_lowercase()).filter(|a| !a.is_empty()).collect();
+    let unknown: Vec<&String> = agent_ids.iter().filter(|a| !config.agents.contains_key(*a)).collect();
+    if !unknown.is_empty() {
+        return Err(HttpError::json(400, json!({"error": "unknown agent_ids", "agent_ids": unknown})));
+    }
+    let push_key = match body.push_key.as_deref().map(str::trim).filter(|k| !k.is_empty()) {
+        Some(given) => {
+            use base64::Engine as _;
+            let raw = crate::push::seal::push_key(given).map_err(|e| HttpError::new(400, e))?;
+            Some(base64::engine::general_purpose::STANDARD.encode(raw))
+        }
+        None => None,
+    };
+    let mut device = state.store.upsert_device_keyed(&token, &environment, &agent_ids, push_key.as_deref()).await?;
+    if let Some(key) = push_key.as_deref() {
+        // the same phone under another token (its APNs or Firebase one before the relay's): one row, one notification
+        for other in state.store.delete_same_phone(&token, key).await? {
+            tracing::info!(token = %redact6(&other), now = %environment, "same phone's other token dropped");
+        }
+    }
+    // the key is the phone's own business: the answer only says its pushes are sealed now
+    if device.remove("push_key").is_some() {
+        device.insert("sealed".into(), Value::Bool(true));
+    }
+    tracing::info!(token = %redact6(&token), env = %environment, agents = ?J(&agent_ids), "device registered");
+    let reachable = match environment.as_str() {
+        "relay" => state.push_service.is_some(),
+        "fcm" => state.fcm.is_some(),
+        _ => state.apns.is_some(),
+    };
+    if !reachable {
+        tracing::warn!(token = %redact6(&token), env = %environment,
+            "device registered, but this bridge has no way to send to it (no key of its own, no [push] service_url)");
+    }
+    if let Some(previous) = previous_token(body.previous.as_deref(), &environment).filter(|p| *p != token) {
+        // the same phone's former token: forgotten now rather than told too until its push fails
+        if state.store.delete_device_in(&previous, &environment).await? {
+            tracing::info!(token = %redact6(&previous), env = %environment, "previous device token dropped");
+        }
+    }
+    if environment == "relay" && crate::relay::is_first_format(&token) {
+        // the relay's first format, until its end: used, and the app asked for a new one at its next refresh
+        tracing::warn!(token = %redact6(&token), "first-format relay token (r1): the app is asked for a new one");
+        device.insert("renew".into(), Value::Bool(true));
+    }
+    Ok(web::ok(Value::Object(device)))
+}
+
+/// The former token a registration names, written the way its environment keeps tokens (APNs' in lowercase hex).
+fn previous_token(given: Option<&str>, environment: &str) -> Option<String> {
+    let token = given?.trim().replace([' ', '<', '>'], "");
+    if token.is_empty() {
+        return None;
+    }
+    Some(if environment == "sandbox" || environment == "production" { token.to_lowercase() } else { token })
+}
+
+async fn delete_device(State(state): State<AppState>, Path(token): Path<String>) -> ApiResult<Response> {
+    let token = token.trim().to_string();
+    if state.store.delete_device(&token).await? || state.store.delete_device(&token.to_lowercase()).await? {
+        tracing::info!(token = %redact6(&token), "device removed");
+    }
+    Ok(web::no_content())
+}
+
+async fn get_outbox_audio(
+    State(state): State<AppState>,
+    Path(item_id): Path<String>,
+    headers: HeaderMap,
+) -> ApiResult<Response> {
+    let row = state.store.get_outbox(&item_id).await?.ok_or_else(HttpError::not_found)?;
+    let path = state.outbox.audio_file(&item_id);
+    if !std::path::Path::new(&path).exists() {
+        let Some(task) = state.outbox.ensure_audio(&row, None) else {
+            return Err(HttpError::new(404, "no audio for this message"));
+        };
+        if tokio::time::timeout(Duration::from_secs(20), task).await.is_err() {
+            let mut response = web::json_response(202, &json!({"status": "pending"}));
+            response.headers_mut().insert("retry-after", HeaderValue::from_static("3"));
+            return Ok(response);
+        }
+        if !std::path::Path::new(&path).exists() {
+            return Err(HttpError::new(503, "audio synthesis failed"));
+        }
+    }
+    Ok(web::file_response(&path, "audio/mpeg", Some(&format!("{item_id}.mp3")), &[], &headers).await)
+}
+
+/// A file an agent pointed to with « MEDIA:<path> »: under `[media] roots` (and the bridge's audio and pages), or in
+/// the places of the agent `agent` names (sent_files.rs: its sandbox's /envoi, its workspace…), from the bridge's
+/// copy. An app that names no agent (before 2026-10-22) gets such a copy only when a single agent has that path.
+async fn get_media(State(state): State<AppState>, q: QueryMap, headers: HeaderMap) -> ApiResult<Response> {
+    let path = web::query_str(&q, "path", true, Some(1024))?.unwrap_or_default();
+    let agent = web::query_str(&q, "agent", false, Some(64))?.filter(|a| !a.is_empty());
+    // a page of a relative's family agent: from its owner's bridge (agent_shares.rs)
+    if let Some(answer) = crate::agent_shares::relay_page(&state, &path).await {
+        return answer;
+    }
+    media_file(&state, &path, agent, &headers).await
+}
+
+/// The file `/v1/media` serves for `path` (of agent `agent`): also what a relative opens of a personal agent shared
+/// with her, once agent_feed.rs found it in a message she may read.
+pub async fn media_file(state: &AppState, path: &str, agent: Option<String>, headers: &HeaderMap) -> ApiResult<Response> {
+    let path = path.to_string();
+    let config = state.config();
+    let host = match crate::agent_tools::served_media(&config, &path) {
+        Some(host) => host,
+        None => {
+            let agent_cfg = match agent.as_deref() {
+                Some(name) => match config.agent(Some(name)) {
+                    Some(agent) => Some(agent.clone()),
+                    None => {
+                        tracing::warn!(
+                            target: "bipbridge::media",
+                            agent = %name,
+                            path = %path,
+                            why = "unknown agent",
+                            "media file asked for and not found"
+                        );
+                        return Err(HttpError::not_found());
+                    }
+                },
+                None => None,
+            };
+            let (c, p) = (config.clone(), path.clone());
+            let found = tokio::task::spawn_blocking(move || match &agent_cfg {
+                Some(agent) => crate::sent_files::capture(&c, agent, &p),
+                None => crate::sent_files::find_unique(&c, &p).ok_or_else(|| "no agent named, no single copy".into()),
+            })
+            .await
+            .map_err(anyhow::Error::from)?;
+            match found {
+                Ok(copy) => copy.to_string_lossy().into_owned(),
+                Err(why) => {
+                    tracing::warn!(
+                        target: "bipbridge::media",
+                        agent = agent.as_deref().unwrap_or("-"),
+                        path = %path,
+                        why = %why,
+                        "media file asked for and not found"
+                    );
+                    return Err(HttpError::not_found());
+                }
+            }
+        }
+    };
+    let mut extra = vec![("x-content-type-options", "nosniff".to_string())];
+    if host.to_lowercase().ends_with(".html") {
+        // A page an agent made (or an .html file from its sandbox): never a document of this origin, even opened by
+        // hand; kept by the app but asked again each time (its ETag: a new version shows, the same one is a 304).
+        extra.push(("content-security-policy", format!("sandbox allow-scripts; {}", crate::pages::POLICY)));
+        extra.push((crate::pages::DNS_PREFETCH.0, crate::pages::DNS_PREFETCH.1.into()));
+        extra.push(("cache-control", "no-cache".into()));
+    } else if crate::media::is_document(&host) {
+        extra.push(("content-security-policy", "sandbox; default-src 'none'".into()));
+    }
+    let media_type = crate::media::content_type(&host);
+    Ok(web::file_response(&host, &media_type, Some(&py::basename(&host)), &extra, headers).await)
+}
+
+/// The pages an agent made (each one's `path` is for `/v1/media`), the last changed first.
+async fn list_pages(State(state): State<AppState>, q: QueryMap) -> ApiResult<Response> {
+    let agent = web::query_required(&q, "agent")?;
+    let config = state.config();
+    let agent_cfg = agent_or_404(&config, Some(&agent))?;
+    let found = tokio::task::spawn_blocking(move || crate::pages::list_pages(&config, &agent_cfg.name))
+        .await
+        .map_err(anyhow::Error::from)?;
+    let pages: Vec<Value> = found
+        .iter()
+        .map(|p| {
+            let mut out = Map::new();
+            for k in ["page", "path", "title", "created", "updated", "version", "bytes"] {
+                out.insert(k.into(), p.get(k).cloned().unwrap_or(Value::Null));
+            }
+            // its place in the Carnet, when it has one; made in a shared conversation, at whose request (shared_pages.rs)
+            for k in ["notebook", "private", "group", "asked_by"] {
+                if let Some(v) = p.get(k) {
+                    out.insert(k.into(), v.clone());
+                }
+            }
+            Value::Object(out)
+        })
+        .collect();
+    Ok(web::ok(json!({"pages": pages})))
+}
+
+async fn delete_page(State(state): State<AppState>, Path(page): Path<String>, q: QueryMap) -> ApiResult<Response> {
+    let agent = web::query_required(&q, "agent")?;
+    let config = state.config();
+    let agent_cfg = agent_or_404(&config, Some(&agent))?;
+    let (c, name, p) = (config.clone(), agent_cfg.name.clone(), page.clone());
+    let deleted =
+        tokio::task::spawn_blocking(move || crate::pages::delete(&c, &name, &p)).await.map_err(anyhow::Error::from)?;
+    if !deleted {
+        return Err(HttpError::not_found());
+    }
+    tracing::info!(agent = %agent_cfg.name, page = %page, "agent page deleted");
+    Ok(web::ok(json!({"deleted": page})))
+}
+
+/// Is each agent's Hermes up, and does the model answer? Lets the app tell « server down » from « model
+/// down » (its machine off, an expired API key).
+/// `?agent=<name>`: that agent's Hermes only (the app refreshes one agent at a time).
+async fn status(State(state): State<AppState>, q: QueryMap) -> ApiResult<Response> {
+    let config = state.config();
+    let only = match q.get("agent").filter(|a| !a.is_empty()) {
+        Some(a) => Some(agent_or_404(&config, Some(a))?.name),
+        None => None,
+    };
+    let wanted = |name: &String| only.as_ref().is_none_or(|o| o == name);
+    let hermes_ok = |agent: AgentConfig| {
+        let state = state.clone();
+        async move {
+            match tokio::time::timeout(Duration::from_secs(5), state.hermes.capabilities(&agent)).await {
+                Ok(Ok(_)) => json!({"ok": true}),
+                Ok(Err(exc)) => json!({"ok": false, "error": exc.type_name()}),
+                Err(_) => json!({"ok": false, "error": "TimeoutError"}),
+            }
+        }
+    };
+    let model_ok = async {
+        let url = config.model_health_url.clone().filter(|u| !u.is_empty())?;
+        let mut request = state.http.get(&url).timeout(Duration::from_secs(5));
+        if let Some(key) = config.model_health_key.as_deref().filter(|k| !k.is_empty()) {
+            request = request.header("Authorization", format!("Bearer {key}"));
+        }
+        Some(match request.send().await {
+            Ok(resp) => json!({"ok": resp.status().as_u16() < 400, "status": resp.status().as_u16()}),
+            Err(exc) => json!({"ok": false, "error": crate::hermes::httpx_error_name(&exc)}),
+        })
+    };
+    let names: Vec<String> = config.agents.keys().filter(|n| wanted(n)).cloned().collect();
+    let checks =
+        futures::future::join_all(config.agents.iter().filter(|(n, _)| wanted(n)).map(|(_, a)| hermes_ok(a.clone())));
+    let (results, model) = tokio::join!(checks, model_ok);
+    let restarts = crate::agent_restart::status_fields(&config);
+    let agents: Map<String, Value> = names
+        .into_iter()
+        .zip(results)
+        .map(|(name, mut result)| {
+            if let Some(last) = restarts.get(&name) {
+                result["last_restart"] = last.clone(); // {at, reason}: diagnostics (agent_restart.rs)
+            }
+            (name, result)
+        })
+        .collect();
+    Ok(web::ok(json!({"agents": agents, "model": model, "protected": config.hermes.isolated})))
+}
+
+/// The LAN door as it is now (address, certificate): the app refreshes it while the tailnet works.
+async fn pairing(State(state): State<AppState>) -> ApiResult<Response> {
+    Ok(web::ok(json!({"lan": lan_info(&state.config())})))
+}
+
+async fn watch_run(State(state): State<AppState>, Json(body): Json<WatchRequest>) -> ApiResult<Response> {
+    let agent = agent_or_404(&state.config(), Some(&body.agent))?;
+    let run_id = check_run_id(&body.run_id)?;
+    let session_id = body.session_id.as_deref().filter(|s| !s.is_empty() && SESSION_ID.is_match(s));
+    let sub = state.hub.watch(&agent, &run_id, session_id, true);
+    Ok(web::ok(
+        json!({"watching": true, "agent": agent.name, "run_id": run_id, "followers": sub.followers(), "finished": sub.finished()}),
+    ))
+}
+
+/// The app follows a run through the bridge (SSE): the bridge holds the single Hermes subscription,
+/// replays the run from its start (re-attaching after a disconnect is exact), and knows whether
+/// someone is watching, so approvals and « reply ready » are pushed only when nobody is.
+async fn run_events(State(state): State<AppState>, Path(run_id): Path<String>, q: QueryMap) -> ApiResult<Response> {
+    let agent = web::query_required(&q, "agent")?;
+    // a shared agent's turn: its words from the owner's bridge (`thread`: her conversation, agent_shares.rs)
+    if let (true, Some(cid)) = (agent.contains(crate::households::SEPARATOR), q.get("thread")) {
+        let run_id = check_run_id(&run_id)?;
+        return crate::agent_shares::relay_stream(&state, &agent, cid, &format!("runs/{run_id}/events")).await;
+    }
+    let session_id = web::query_str(&q, "session_id", false, Some(200))?;
+    let agent_cfg = agent_or_404(&state.config(), Some(&agent))?;
+    let run_id = check_run_id(&run_id)?;
+    if let Some(s) = session_id.as_deref() {
+        if !SESSION_ID.is_match(s) {
+            return Err(HttpError::new(400, "invalid session_id"));
+        }
+    }
+    let listener = state.hub.subscribe(&agent_cfg, &run_id, "app", true);
+    if let Some(s) = session_id.filter(|s| !s.is_empty()) {
+        listener.sub.set_session_id(Some(s));
+    }
+    // a family agent's common conversation: its cards say whose turn they are (family_thread.rs)
+    let config = state.config();
+    let by = crate::family_thread::is_common(&config, &agent_cfg.name).then(|| {
+        crate::family_thread::author_of(&config, &agent_cfg.name, &run_id, &state.households.name())
+            .by_of(crate::family_thread::CREATOR)
+    });
+    Ok(listener_events_with(listener, by))
+}
+
+/// A listener of the run hub as the SSE the app reads (`event: <type>`, `data: <json>`, a keepalive comment every
+/// 10 s): the bridge's `GET /v1/runs/{id}/events`, and the door's relay of Hermes' own (lan.rs).
+pub fn listener_events(listener: crate::runs::Listener) -> Response {
+    listener_events_with(listener, None)
+}
+
+/// `listener_events`, with `by` on its cards (`approval.request`, `clarify.request`): whose turn it is.
+pub fn listener_events_with(mut listener: crate::runs::Listener, by: Option<Value>) -> Response {
+    let events = async_stream::stream! {
+        loop {
+            match tokio::time::timeout(Duration::from_secs_f64(SSE_KEEPALIVE_SECONDS), listener.queue.recv()).await {
+                Err(_) => {
+                    yield Ok::<_, std::io::Error>(bytes::Bytes::from_static(b": keepalive\n\n"));
+                }
+                Ok(None) | Ok(Some(None)) => break,
+                Ok(Some(Some(event))) => {
+                    let card = ["approval.request", "clarify.request"].contains(&event.r#type.as_str());
+                    let data = match (&by, card) {
+                        (Some(by), true) => {
+                            let mut data = event.data.clone();
+                            data.insert("by".into(), by.clone());
+                            py::Dumps::new().unicode().dumps(&Value::Object(data))
+                        }
+                        _ if event.raw.is_empty() => py::Dumps::new().unicode().dumps(&Value::Object(event.data.clone())),
+                        _ => event.raw.clone(),
+                    };
+                    let data = data.replace('\n', "\ndata: ");
+                    yield Ok(bytes::Bytes::from(format!("event: {}\ndata: {}\n\n", event.r#type, data)));
+                }
+            }
+        }
+        listener.close();
+    };
+    let response = Response::new(Body::from_stream(events));
+    with_headers(
+        response,
+        &[
+            ("content-type", "text/event-stream; charset=utf-8".into()),
+            ("cache-control", "no-store".into()),
+            ("x-accel-buffering", "no".into()),
+        ],
+    )
+}
+
+/// `POST /v1/approve` for a card of the bridge's own (`bip-…`): its module answers it. None: not one of them.
+async fn bridge_card(
+    state: &AppState,
+    agent: &AgentConfig,
+    run_id: &str,
+    body: &ApproveRequest,
+) -> ApiResult<Option<Response>> {
+    // a card of the bridge's own (a site for the agent's programs, sandbox_sites.rs), answered here
+    if let Some(id) = run_id.strip_prefix(crate::sandbox_sites::RUN_PREFIX) {
+        let decision = crate::sandbox_sites::decision_of_choice(&body.choice);
+        let choice = match decision {
+            crate::sandbox_sites::Decision::DenyAll => "deny",
+            crate::sandbox_sites::Decision::Always(_) => "deny_always",
+            _ => "always",
+        };
+        return Ok(Some(match crate::sandbox_sites::answer(&state.config(), &agent.name, id, decision, "notification")
+            .map_err(anyhow::Error::from)?
+        {
+            Some(_) => Ok(web::ok(json!({"ok": true, "choice": choice}))),
+            None => Err(HttpError::new(404, "no such request (answered already?)")),
+        }?));
+    }
+    // a card of the vault's (an account to create with a vault password, vault_logins.rs), answered here
+    if let Some(id) = run_id.strip_prefix(crate::vault_logins::RUN_PREFIX) {
+        let allow = crate::card_place::allowed(&body.choice); // an unknown word: refused
+        return Ok(Some(if crate::vault_logins::answer(&state.config(), &agent.name, id, allow, "notification") {
+            Ok(web::ok(json!({"ok": true, "choice": if allow { "once" } else { "deny" }})))
+        } else {
+            Err(HttpError::new(404, "no such request (answered already?)"))
+        }?));
+    }
+    // a site's terms or consent box (terms_consent.rs): « Oui » ticks that one box, « Non » stops that sign-up
+    if let Some(id) = run_id.strip_prefix(crate::terms_consent::RUN_PREFIX) {
+        let allow = crate::card_place::allowed(&body.choice); // an unknown word: refused
+        return Ok(Some(if crate::terms_consent::answer(&state.config(), &agent.name, id, allow, "notification") {
+            Ok(web::ok(json!({"ok": true, "choice": if allow { "once" } else { "deny" }})))
+        } else {
+            Err(HttpError::new(404, "no such request (answered already?)"))
+        }?));
+    }
+    // a secret card (secrets.rs): refused here; the value only comes through the app's secure field
+    if let Some(id) = run_id.strip_prefix(crate::secrets::RUN_PREFIX) {
+        if body.choice.trim().to_lowercase() != "deny" {
+            return Err(HttpError::json(409, json!({"code": "needs_secure_field"})));
+        }
+        return Ok(Some(if crate::secrets::deny(&state.config(), Some(&agent.name), id, "notification") {
+            Ok(web::ok(json!({"ok": true, "choice": "deny"})))
+        } else {
+            Err(HttpError::new(404, "no such request (answered already?)"))
+        }?));
+    }
+    // a connector's approval card (connectors.rs)
+    if let Some(id) = run_id.strip_prefix(crate::connectors::RUN_PREFIX) {
+        let allow = crate::card_place::allowed(&body.choice); // an unknown word: refused
+        return Ok(Some(crate::connectors::answered_response(
+            crate::connectors::answer(state, id, allow, "notification").await,
+            allow,
+        )?));
+    }
+    // a tip card (a feature to discover, feature_tips.rs), answered here
+    if let Some(id) = run_id.strip_prefix(crate::feature_tips::RUN_PREFIX) {
+        return Ok(Some(crate::feature_tips::approve(state, &agent.name, id, &body.choice).await?));
+    }
+    // a standing mail rule's card (mail_rules.rs): on with « Oui », the mails already there filed by the bridge
+    if let Some(id) = run_id.strip_prefix(crate::mail_rules::RUN_PREFIX) {
+        let allow = crate::card_place::allowed(&body.choice); // an unknown word: refused
+        let (config, name, id) = (state.config(), agent.name.clone(), id.to_string());
+        let rule = tokio::task::spawn_blocking(move || -> anyhow::Result<Option<crate::mail_rules::Rule>> {
+            let rule = crate::mail_rules::answer(&config, &name, &id, allow, "app")?;
+            if let Some(rule) = rule.as_ref().filter(|r| allow && !r.existing_done) {
+                crate::mail_rules::start(&config, &rule.id, crate::mailbox::default_connect());
+            }
+            Ok(rule)
+        })
+        .await
+        .map_err(anyhow::Error::from)??;
+        return Ok(Some(match rule {
+            Some(rule) => Ok(web::ok(
+                json!({"ok": true, "choice": if allow { "once" } else { "deny" }, "count": rule.existing}),
+            )),
+            None => Err(HttpError::new(404, "no such request (answered already?)")),
+        }?));
+    }
+    // a mail tidy card (archive, mark read, move or trash many e-mails, mail_tidy.rs): done by the bridge on « Oui »
+    if let Some(id) = run_id.strip_prefix(crate::mail_tidy::RUN_PREFIX) {
+        let allow = crate::card_place::allowed(&body.choice); // an unknown word: refused
+        let (config, name, id) = (state.config(), agent.name.clone(), id.to_string());
+        let job = tokio::task::spawn_blocking(move || -> anyhow::Result<Option<crate::mail_tidy::Job>> {
+            let job = crate::mail_tidy::answer(&config, &name, &id, allow, "app")?;
+            if let Some(job) = job.as_ref().filter(|_| allow) {
+                crate::mail_tidy::start(&config, &job.id, crate::mailbox::default_connect());
+            }
+            Ok(job)
+        })
+        .await
+        .map_err(anyhow::Error::from)??;
+        return Ok(Some(match job {
+            Some(job) => {
+                Ok(web::ok(json!({"ok": true, "choice": if allow { "once" } else { "deny" }, "count": job.uids.len()})))
+            }
+            None => Err(HttpError::new(404, "no such request (answered already?)")),
+        }?));
+    }
+    // a routine an agent proposed, started by an e-mail or a link (triggers.rs): on with « Oui », forgotten with « Non »,
+    // as a routine's card (routines.rs): any other word (empty, unknown, another card's) changes nothing
+    if let Some(id) = run_id.strip_prefix(crate::triggers::RUN_PREFIX) {
+        let choice = body.choice.trim().to_lowercase();
+        let allow = matches!(choice.as_str(), "once" | "session" | "always");
+        if !allow && !crate::routines::refuses(&choice) {
+            return Err(HttpError::new(422, "choice: once or deny"));
+        }
+        let (config, name, id) = (state.config(), agent.name.clone(), id.to_string());
+        let answered = tokio::task::spawn_blocking(move || crate::triggers::answer(&config, &name, &id, allow))
+            .await
+            .map_err(anyhow::Error::from)?;
+        return Ok(Some(match answered {
+            Some(_) => Ok(web::ok(json!({"ok": true, "choice": if allow { "once" } else { "deny" }}))),
+            None => Err(HttpError::new(404, "no such request (answered already?)")),
+        }?));
+    }
+    // « Passer par mon téléphone pour <site> ? » (phone_exit): the session the phone now carries, in the answer
+    if let Some(id) = run_id.strip_prefix(crate::phone_exit::store::RUN_PREFIX) {
+        let (config, name, id, choice) = (state.config(), agent.name.clone(), id.to_string(), body.choice.clone());
+        let answered = tokio::task::spawn_blocking(move || {
+            crate::phone_exit::agent::answer(&config, &name, &id, &choice, "notification")
+        })
+        .await
+        .map_err(anyhow::Error::from)??;
+        return Ok(Some(match answered {
+            Some(Some(session)) => {
+                let choice = if body.choice.trim().eq_ignore_ascii_case("always") { "always" } else { "once" };
+                Ok(web::ok(json!({"ok": true, "choice": choice,
+                    "exit": {"session": session.json(), "tunnel": "/v1/exit/tunnel"}})))
+            }
+            Some(None) => Ok(web::ok(json!({"ok": true, "choice": "deny"}))),
+            None => Err(HttpError::new(404, "no such request (answered already?)")),
+        }?));
+    }
+    // the cards of a routine its agent made or wants changed (routines.rs `answer`): only a « Oui » starts it or applies
+    // the change; only a « Non » deletes one that never started or drops the change; any other answer changes nothing
+    if let Some(id) = run_id.strip_prefix(crate::routines::RUN_PREFIX) {
+        if crate::routines::card_by(&state.config(), &agent.name, id).is_some() {
+            // a family member asked for it: hers to answer, from her bridge (family_thread.rs)
+            return Err(HttpError::new(403, "this card is a family member's: they answer it"));
+        }
+        return Ok(Some(routine_card(state, agent, id, &body.choice).await?));
+    }
+    // agents at their cap of messages between them (agent_hops.rs): « Oui » is « Continuer », the chain starts over
+    if let Some(id) = run_id.strip_prefix(crate::agent_hops::RUN_PREFIX) {
+        let allow = crate::card_place::allowed(&body.choice.trim().to_lowercase());
+        let (config, name, id) = (state.config(), agent.name.clone(), id.to_string());
+        let answered = tokio::task::spawn_blocking(move || crate::agent_hops::answer(&config, &name, &id, allow))
+            .await
+            .map_err(anyhow::Error::from)?;
+        return Ok(Some(match answered {
+            Some(_) => Ok(web::ok(json!({"ok": true, "choice": if allow { "once" } else { "deny" }}))),
+            None => Err(HttpError::new(404, "no such request (answered already?)")),
+        }?));
+    }
+    // a card payment waiting for the person while nobody followed its turn (card_pay.rs `urgent`): its code came
+    // first (`/v1/vault/payments/<id>/approve`); « Non » refuses it
+    if let Some(id) = run_id.strip_prefix(crate::card_pay::URGENT_PREFIX) {
+        let allow = crate::card_place::allowed(&body.choice);
+        return Ok(Some(match crate::card_pay::answer_card(&agent.name, id, allow) {
+            Ok(()) => Ok(web::ok(json!({"ok": true, "choice": if allow { "once" } else { "deny" }}))),
+            Err((status, why)) => Err(HttpError::new(status, why)),
+        }?));
+    }
+    // the « Panier prêt » of a payment come too late (urgent_pay.rs): answered, gone (the app opened the shop itself)
+    if let Some(id) = run_id.strip_prefix(crate::urgent_pay::CART_PREFIX) {
+        let allow = crate::card_place::allowed(&body.choice);
+        let (config, name, id) = (state.config(), agent.name.clone(), id.to_string());
+        let answered = tokio::task::spawn_blocking(move || crate::urgent_pay::answer(&config, &name, &id))
+            .await
+            .map_err(anyhow::Error::from)?;
+        return Ok(Some(match answered {
+            true => Ok(web::ok(json!({"ok": true, "choice": if allow { "once" } else { "deny" }}))),
+            false => Err(HttpError::new(404, "no such request (answered already?)")),
+        }?));
+    }
+    // what a turn nobody followed asked (held_approvals.rs): « Oui » lets the agent do exactly that once, as it goes on
+    if let Some(id) = run_id.strip_prefix(crate::held_approvals::RUN_PREFIX) {
+        let allow = crate::card_place::allowed(&body.choice); // an unknown word: refused
+        let (config, name, id) = (state.config(), agent.name.clone(), id.to_string());
+        let answered = tokio::task::spawn_blocking(move || crate::held_approvals::answer(&config, &name, &id, allow))
+            .await
+            .map_err(anyhow::Error::from)?;
+        return Ok(Some(match answered {
+            Some(_) => Ok(web::ok(json!({"ok": true, "choice": if allow { "once" } else { "deny" }}))),
+            None => Err(HttpError::new(404, "no such request (answered already?)")),
+        }?));
+    }
+    // a space card (what to keep when the place fills up, storage_watch.rs), answered here
+    if let Some(id) = run_id.strip_prefix(crate::storage_watch::RUN_PREFIX) {
+        return Ok(Some(crate::storage_watch::approve(state, agent, id, &body.choice).await?));
+    }
+    Ok(None)
+}
+
+/// The card of a routine its agent made or wants changed (`bip-rout-<id>`), answered by whoever it is for: this place's
+/// person (`/v1/approve`), or the family member who asked for it (agent_shares.rs, family_thread.rs).
+pub(crate) async fn routine_card(state: &AppState, agent: &AgentConfig, id: &str, choice: &str) -> ApiResult<Response> {
+    let choice = choice.trim().to_lowercase();
+    if !crate::routines::known_choice(&choice) {
+        return Err(HttpError::new(422, "choice: once or deny"));
+    }
+    let (config, name, id, given) = (state.config(), agent.name.clone(), id.to_string(), choice.clone());
+    let answered = tokio::task::spawn_blocking(move || crate::routines::answer(&config, &name, &id, &given))
+        .await
+        .map_err(anyhow::Error::from)?;
+    if let Some(r) = answered.as_ref().filter(|r| crate::routines::lapsed(r)) {
+        // a one-time routine started after its time: not run, one line in the Boîte (O-5)
+        crate::routines::tell_done(state, agent, r, crate::routines::Done::Lapsed, None).await;
+    }
+    match answered {
+        Some(r) => Ok(web::ok(json!({"ok": true, "choice": choice, "muted": r.muted}))),
+        None => Err(HttpError::new(404, "no such request (answered already?)")),
+    }
+}
+
+/// A card of the bridge's own answered by the bridge itself, as `/v1/approve` would (approval_level.rs: a
+/// non-critical card under « Seulement le critique »). True when it was answered.
+pub(crate) async fn answer_bridge_card(state: &AppState, agent: &AgentConfig, run_id: &str, choice: &str) -> bool {
+    let body = ApproveRequest {
+        agent: agent.name.clone(),
+        run_id: run_id.to_string(),
+        choice: choice.to_string(),
+        request_id: None,
+        answer: None,
+    };
+    match bridge_card(state, agent, run_id, &body).await {
+        Ok(Some(r)) if r.status().is_success() => {
+            crate::card_place::answered_via(state, agent, run_id, choice, Some("auto")).await;
+            true
+        }
+        Ok(_) => false,
+        Err(err) => {
+            tracing::warn!(agent = %agent.name, run_id, error = ?err, "card not answered by the approval level");
+            false
+        }
+    }
+}
+
+/// The « Toujours » kind card `run_id` offers (its `bip_always_kind`, set by the bridge: approval_level.rs), among
+/// `items` (the cards, or the Hermes approvals, waiting).
+fn always_kind_of(items: Vec<crate::Dict>, run_id: &str) -> Option<String> {
+    let item = items.into_iter().find(|i| i.get("run_id").and_then(Value::as_str) == Some(run_id))?;
+    let key = item.get("bip_always_kind").and_then(Value::as_str)?.to_string();
+    crate::approval_level::offers_always(&key).then_some(key)
+}
+
+/// The person's « Toujours » kept, and told to the agent's personality.
+async fn grant(config: &Config, agent: &str, key: &str) {
+    match crate::approval_level::grant_always(config, agent, key) {
+        Ok(()) => crate::approval_level::granted_now(config, agent).await,
+        Err(why) => tracing::warn!(agent, key, why = %why, "always not kept"),
+    }
+}
+
+async fn approve(State(state): State<AppState>, Json(body): Json<ApproveRequest>) -> ApiResult<Response> {
+    let config = state.config();
+    if config.agent(Some(&body.agent)).is_none() && crate::agent_shares::is_shared_with_me(&config, &body.agent) {
+        // an agent a relative shares with this person: her answer goes to their bridge (agent_shares.rs)
+        let run_id = check_run_id(&body.run_id)?;
+        let choice = body.choice.trim().to_lowercase();
+        let (answer, request) = (body.answer.as_deref(), body.request_id.as_deref());
+        return crate::agent_shares::approve_mine(&state, &body.agent, &run_id, &choice, answer, request).await;
+    }
+    let agent = agent_or_404(&config, Some(&body.agent))?;
+    let run_id = check_run_id(&body.run_id)?;
+    if crate::agent_shares::relative_run(&config, &run_id) {
+        return Err(HttpError::new(403, "a relative's turn: they answer its approvals"));
+    }
+    // a card of the bridge's own, answered here; then gone from the Boîte and the conversation on every device
+    // (a card that folds several requests of the same kind: each of them, card_place.rs `fold`)
+    if run_id.starts_with("bip-") {
+        let members = crate::card_place::members(&state, &agent.name, &run_id);
+        let choice = body.choice.trim().to_lowercase();
+        // « Toujours autoriser… »: the kind the card offers it for, read from the card itself (never from the body)
+        let always = (choice == "always")
+            .then(|| always_kind_of(crate::card_place::bridge_cards(&state, &config, Some(&agent.name)), &run_id))
+            .flatten();
+        let mut first: Option<ApiResult<Option<Response>>> = None;
+        for member in &members {
+            let answered = bridge_card(&state, &agent, member, &body).await;
+            if matches!(&answered, Ok(Some(r)) if r.status().is_success()) {
+                crate::card_place::answered(&state, &agent, member, &choice).await;
+                if first.as_ref().is_none_or(|f| !matches!(f, Ok(Some(r)) if r.status().is_success())) {
+                    first = Some(answered); // the answer of the first request done stands for the card
+                }
+            } else if first.is_none() {
+                first = Some(answered);
+            }
+        }
+        if let Some(response) = first.transpose()?.flatten() {
+            if let (Some(key), true) = (always, response.status().is_success()) {
+                grant(&config, &agent.name, &key).await;
+            }
+            return Ok(response);
+        }
+    }
+    let request_id = body.request_id.as_deref();
+    let (kind, mut value) = match &body.answer {
+        Some(answer) => ("clarify", answer.trim().to_string()),
+        None => ("approval", body.choice.trim().to_lowercase()),
+    };
+    // « Toujours autoriser… » on a Hermes approval that offers it: Hermes answered « once » (never its own « always »,
+    // which nothing here could take back), the « Toujours » kept by the bridge
+    let mut always = None;
+    if kind == "approval" && value == "always" {
+        let asked = state.hub.pending_approvals(Some(&agent.name)).into_iter().filter(|p| {
+            p.get("run_id").and_then(Value::as_str) == Some(run_id.as_str())
+                && (request_id.is_none() || p.get("request_id").and_then(Value::as_str) == request_id)
+        });
+        always = always_kind_of(asked.collect(), &run_id);
+        if always.is_some() {
+            value = "once".into();
+        }
+    }
+    let (status, payload) =
+        match state.hermes.answer_prompt(&agent, &run_id, kind, &value, request_id).await {
+            Ok(r) => r,
+            Err(exc) if exc.is_transport() => return Err(HttpError::new(502, "your agent isn't answering right now: try again in a moment")),
+            Err(exc) => return Err(anyhow::anyhow!(exc).into()),
+        };
+    let waiting = |p: &Map<String, Value>| {
+        p.get("run_id").and_then(Value::as_str) == Some(run_id.as_str())
+            && (request_id.is_none() || p.get("request_id").and_then(Value::as_str) == request_id)
+    };
+    // a question nothing waits for any more (409: Hermes settled it, its turn moved on) goes from every phone too
+    if ((200..300).contains(&status) || (status == 409 && request_id.is_some())) && kind == "clarify" {
+        let asked = state.hub.pending_questions(&agent.name).into_iter().find(waiting);
+        state.hub.forget_approval(&agent.name, &run_id, request_id);
+        // answered on one device: gone from the others' (the thread's `pending.questions`)
+        let session = asked.and_then(|q| q.get("session_id").and_then(Value::as_str).map(str::to_string));
+        crate::threads::threads_of(&state).touch(&agent.name, session.as_deref(), "answered").await;
+    } else if (200..300).contains(&status) {
+        if let Some(key) = &always {
+            grant(&state.config(), &agent.name, key).await;
+        }
+        // kept for the conversation, with the request as it was shown (approvals_log.rs)
+        let shown = state.hub.pending_approvals(Some(&agent.name)).into_iter().find(waiting);
+        let session = shown.as_ref().and_then(|p| p.get("session_id").and_then(Value::as_str).map(str::to_string));
+        let mut fields = shown.unwrap_or_default();
+        fields.insert("run_id".into(), json!(run_id));
+        fields.insert("request_id".into(), json!(request_id));
+        fields.insert("choice".into(), json!(body.choice));
+        fields.insert("via".into(), json!("notification"));
+        fields.remove("created_at");
+        if let Err(err) = crate::approvals_log::record(&state.config(), &agent.name, &fields) {
+            tracing::warn!(agent = %agent.name, error = %err, "approval decision not kept");
+        }
+        state.hub.forget_approval(&agent.name, &run_id, request_id);
+        // its notification read on every device: the badges count only what the Boîte shows (5/11)
+        crate::notifications::read_card(&state, &agent.name, request_id.unwrap_or(&run_id), &run_id).await;
+        // the answered item in the conversation on every device (the timeline's approvals log)
+        crate::threads::threads_of(&state).touch(&agent.name, session.as_deref(), "answered").await;
+        // a background task's: also the conversation it reports to, which showed it too (card_place.rs)
+        if let Some(s) = session.as_deref() {
+            let report = crate::card_place::report_of(&state, &agent, s).await;
+            if report.as_deref() != Some(s) {
+                crate::threads::threads_of(&state).touch(&agent.name, report.as_deref(), "answered").await;
+            }
+        }
+    }
+    tracing::info!(agent = %agent.name, run_id = %run_id, status = status, kind = kind, "answer forwarded");
+    Ok(web::json_response(status, &payload))
+}
+
+async fn approvals(State(state): State<AppState>, q: QueryMap) -> ApiResult<Response> {
+    let config = state.config();
+    let shared = q.get("agent").filter(|a| crate::agent_shares::is_shared_with_me(&config, a)).map(str::to_string);
+    let name = match q.get("agent").filter(|a| !a.is_empty() && shared.is_none()) {
+        Some(a) => Some(agent_or_404(&config, Some(a))?.name),
+        None => None,
+    };
+    let mut items = if shared.is_some() { Vec::new() } else { state.hub.pending_approvals(name.as_deref()) };
+    // a relative's turn with one of this person's agents: theirs to answer, not in this Boîte (agent_shares.rs)
+    items
+        .retain(|i| !crate::agent_shares::relative_run(&config, i.get("run_id").and_then(Value::as_str).unwrap_or("")));
+    // the approvals of this person's own turns with agents relatives share with her
+    if name.is_none() {
+        items.extend(crate::agent_shares::pending_mine(shared.as_deref()));
+    }
+    // the bridge's own cards too (a site for an agent's programs, sandbox_sites.rs)
+    if shared.is_none() {
+        // each with the conversation it shows in (card_place.rs)
+        let cards = crate::card_place::fold(&config, crate::card_place::bridge_cards(&state, &config, name.as_deref()));
+        items.extend(cards.into_iter().map(|c| crate::card_place::with_session(&config, c)));
+    }
+    // the agents' questions waiting (a run's `clarify.request`, runs.rs `keep_question`): listed in the Boîte beside the
+    // approvals, each opening its conversation, gone once answered, skipped or expired (13/11, Alex: a question was never
+    // in the Boîte). A relative's turn's are theirs. Their own list: an app from before reads `items` as approvals.
+    let mut questions = if shared.is_some() { Vec::new() } else { state.hub.pending_questions_of(name.as_deref()) };
+    questions
+        .retain(|i| !crate::agent_shares::relative_run(&config, i.get("run_id").and_then(Value::as_str).unwrap_or("")));
+    // hers in the turns she asked with agents relatives share with her (the family conversation: hers to answer)
+    if name.is_none() {
+        questions.extend(crate::agent_shares::pending_questions_mine(shared.as_deref()));
+    }
+    for question in questions.iter_mut() {
+        let id = crate::threads::answered_id(
+            question.get("run_id").and_then(Value::as_str),
+            question.get("request_id").and_then(Value::as_str),
+        );
+        question.entry("id").or_insert(json!(id));
+    }
+    for item in items.iter_mut().chain(questions.iter_mut()) {
+        if item.get("created_at").is_some_and(Value::is_string) {
+            continue; // ISO already (a relayed card)
+        }
+        let created = item.get("created_at").and_then(Value::as_f64).unwrap_or(0.0);
+        let micros = (created * 1_000_000.0).round() as i64;
+        let when = chrono::DateTime::<chrono::Utc>::from_timestamp_micros(micros).unwrap_or_default();
+        item.insert("created_at".into(), json!(iso(when)));
+    }
+    Ok(web::ok(json!({"items": items, "questions": questions})))
+}
+
+/// Python's `build_router()`: the core routes, mounted under /v1 behind the bridge key.
+pub fn build_router() -> Router<AppState> {
+    Router::new()
+        .route("/agents", get(list_agents))
+        .route("/tts/sentence", post(tts_sentence))
+        .route("/tts/prepare", post(tts_prepare))
+        .route("/tts/message", post(tts_message))
+        .route("/tts/stream", post(tts_stream))
+        .route("/files", post(upload_file))
+        .route("/devices", post(register_device))
+        .route("/devices/{token}", delete(delete_device))
+        .route("/outbox/{item_id}/audio", get(get_outbox_audio))
+        .route("/media", get(get_media))
+        .route("/pages", get(list_pages))
+        .route("/pages/{page}", delete(delete_page))
+        .route("/status", get(status))
+        .route("/pairing", get(pairing))
+        .route("/watch", post(watch_run))
+        .route("/runs/{run_id}/events", get(run_events))
+        .route("/approve", post(approve))
+        .route("/approvals", get(approvals))
+}
+
+async fn health(State(state): State<AppState>) -> ApiResult<Response> {
+    let tts = &state.tts;
+    let (pocket_ok, server_ok) = tokio::join!(
+        async {
+            match tts.pocket.as_ref() {
+                Some(engine) => tts.reachable(Some(engine)).await,
+                None => None,
+            }
+        },
+        async {
+            match tts.server.as_ref() {
+                Some(engine) => tts.reachable(Some(engine)).await,
+                None => None,
+            }
+        },
+    );
+    // « voice_server »: the person's own voice model (null: none; false: set up, down for now).
+    let mut body = json!({
+        "ok": true, "version": VERSION, "pocket": pocket_ok,
+        "voice_server": server_ok,
+        "apns": state.apns.is_some(), "push": state.push_mode,
+        // The app registers with the publisher's relay and sends the relay token (environment « relay »).
+        "push_relay": state.push_service.is_some(), "fcm": state.fcm.is_some(),
+        "tts_queue": tts.pocket.as_ref().map(|p| p.scheduler.depth()).unwrap_or(0),
+        // The space encrypted at rest (space.rs): « on » or « off » (a locked bridge answers « locked » itself).
+        "space": crate::space::health_state(),
+        // What this bridge offers that the Python one doesn't (the apps hide the rest).
+        "features": ["agent_groups", "files_kept", "calendar", "health_categories", "contacts", "time_zone", "message_search", "agent_templates", "agent_create_bip", "agent_catalogue", "agent_notify", "agent_queue", "threads", "notifications", "push_seal"],
+    });
+    // The config was broken at start and its last good copy put back (config.rs): {at, broken}, for the app and the
+    // seat agent to tell.
+    if let Some(restored) = crate::config::restored() {
+        body["config_restored"] = restored;
+    }
+    Ok(web::ok(body))
+}
+
+/// A request that only asks whether a route matches its path (see `redirect_slashes`): answered before any handler.
+#[derive(Clone, Copy)]
+struct Probe;
+
+async fn probe(request: Request, next: Next) -> Response {
+    if request.extensions().get::<Probe>().is_some() {
+        let mut response = StatusCode::NO_CONTENT.into_response();
+        response.headers_mut().insert("x-bip-probe", HeaderValue::from_static("1"));
+        return response;
+    }
+    next.run(request).await
+}
+
+/// FastAPI's answer to an unknown path: Starlette's `redirect_slashes` first (the same path with or without its
+/// trailing slash matches a route: 307 there), else 404 `{"detail": "Not Found"}`.
+async fn not_found(routes: Router, request: Request) -> Response {
+    let path = request.uri().path().to_string();
+    let websocket = request
+        .headers()
+        .get("upgrade")
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v.eq_ignore_ascii_case("websocket"))
+        .unwrap_or(false);
+    if path != "/" && !websocket {
+        let other = if path.ends_with('/') { path.trim_end_matches('/').to_string() } else { format!("{path}/") };
+        let other = if other.is_empty() { "/".to_string() } else { other };
+        let query = request.uri().query().map(|q| format!("?{q}")).unwrap_or_default();
+        let mut probe_request =
+            Request::builder().method(request.method().clone()).uri(format!("{other}{query}")).body(Body::empty());
+        if let Ok(probe_request) = probe_request.as_mut() {
+            probe_request.extensions_mut().insert(Probe);
+        }
+        if let Ok(probe_request) = probe_request {
+            use tower::ServiceExt;
+            let answer = match routes.oneshot(probe_request).await {
+                Ok(answer) => answer,
+                Err(never) => match never {},
+            };
+            {
+                if answer.headers().contains_key("x-bip-probe") {
+                    let (parts, _) = request.into_parts();
+                    let scheme = crate::auth::scheme_of(&parts);
+                    let host = parts.headers.get("host").and_then(|v| v.to_str().ok()).unwrap_or("").to_string();
+                    let location = format!("{scheme}://{host}{other}{query}");
+                    let mut response = StatusCode::TEMPORARY_REDIRECT.into_response();
+                    if let Ok(v) = HeaderValue::from_str(&location) {
+                        response.headers_mut().insert("location", v);
+                    }
+                    response.headers_mut().insert("content-length", HeaderValue::from_static("0"));
+                    return response;
+                }
+            }
+        }
+    }
+    HttpError::new(404, "Not Found").into_response()
+}
+
+/// axum answers a known path with a wrong method by an empty 405: ours says it in JSON, as every other error, with
+/// axum's `Allow`.
+async fn method_not_allowed_detail(request: Request, next: Next) -> Response {
+    let mut response = next.run(request).await;
+    if response.status() != StatusCode::METHOD_NOT_ALLOWED {
+        // axum's method fallbacks add `Allow` to what they answer (DELETE /v1/family/name → the unlink's 404)
+        response.headers_mut().remove("allow");
+        return response;
+    }
+    if !response.headers().contains_key("content-type") {
+        let allow = response.headers().get("allow").cloned();
+        let mut json = HttpError::new(405, "Method Not Allowed").into_response();
+        if let Some(allow) = allow {
+            json.headers_mut().insert("allow", allow);
+        }
+        return json;
+    }
+    response
+}
+
+/// What `create_app` takes besides the configuration.
+#[derive(Debug, Clone)]
+pub struct AppOptions {
+    /// The cron watcher, the purge loop… (tests turn them off, as Python's `start_background`).
+    pub start_background: bool,
+}
+
+impl Default for AppOptions {
+    fn default() -> Self {
+        AppOptions { start_background: true }
+    }
+}
+
+/// The application: its router (ready to serve) and its state (to stop it).
+pub struct App {
+    pub router: Router,
+    pub state: AppState,
+}
+
+impl App {
+    /// Python's lifespan end: `services.stop()`.
+    pub async fn shutdown(&self) {
+        self.state.stop().await;
+    }
+}
+
+/// Python's `create_app(config)`, with its lifespan's start.
+pub fn create_app(config: Config, options: AppOptions) -> anyhow::Result<App> {
+    let services = Services::new(config)?;
+    let state = AppState(Arc::new(services));
+    let queues = crate::msg_queue::queues_of(&state); // before any run ends: the hub tells it each end
+    crate::threads::threads_of(&state); // the same: the hub and the push service point at the threads
+    let config = state.config();
+    // An existing Hermes the person brought: its profiles left as they are, but for the bridge's tools' entry
+    crate::profile_files::set_hands_off(crate::profile_files::hands_off_home(&config));
+    crate::profile_files::reconcile_all(&config); // what the bridge decides in each profile, as this bridge renders it
+    crate::voices::heal_defaults(&state.config); // after the souls: their language says the Bip's
+    let config = state.config();
+    crate::guide::refresh(&config); // the guide's list of agents and the setup blocks, as this bridge writes them
+                                    // The skills about other agents as this bridge writes them (an update may have changed their words).
+    crate::peers::write_contacts(&config, &crate::peers::links_of(&state.links.load()), Some(&state.households));
+    crate::peers::heal_tokens(&config, &state.links); // Bot Mode only towards other households
+    crate::shares::heal_skills(&config);
+    if options.start_background {
+        state.start_background();
+        state.spawn(queues.run_forever()); // the queues kept before a restart, and looked at again every 10 s
+    }
+    let mut agent_names: Vec<&String> = config.agents.keys().collect();
+    agent_names.sort();
+    tracing::info!(version = VERSION, agents = ?J(&agent_names), apns = state.apns.is_some(), "bridge started");
+    let router = assemble(&state, &config);
+    crate::family_relay::set_router(router.clone()); // the calls a linked household keeps for us, run here
+    Ok(App { router, state })
+}
+
+fn assemble(state: &AppState, config: &Config) -> Router {
+    let auth = || middleware::from_fn_with_state(state.clone(), require_bridge_key);
+    let (import_admin, import_open) = crate::place_import::place_import_routers(None);
+    // Everything Python mounts under /v1 with Depends(require_bridge_key), in its order.
+    let mut authed = Router::new()
+        .merge(build_router())
+        .merge(agents_admin::router())
+        .merge(crate::agent_groups::router())
+        .merge(crate::agent_notify::router())
+        .merge(crate::msg_queue::router())
+        .merge(crate::threads::router())
+        .merge(crate::used::router())
+        .merge(crate::notifications::router())
+        .merge(crate::model_choice::router())
+        .merge(crate::files_kept::router())
+        .merge(crate::storage_watch::router())
+        .merge(crate::feature_tips::router())
+        .merge(crate::dates::router())
+        .merge(crate::vault::router())
+        .merge(crate::card_pay::app_router())
+        .merge(crate::urgent_pay::app_router())
+        .merge(crate::vault_logins::app_router())
+        .merge(crate::secrets::app_router())
+        .merge(crate::connectors::app_router())
+        .merge(crate::templates::router())
+        .merge(crate::autonomous::router())
+        .merge(crate::triggers::router())
+        .merge(crate::routines::router())
+        .merge(crate::approval_level::router())
+        .merge(crate::handover::app_router())
+        .merge(crate::link_wallet::app_router())
+        .merge(crate::place_backup::router())
+        .merge(crate::place_move::router())
+        .merge(crate::update_drain::router())
+        .merge(import_admin)
+        .merge(crate::ssh_keys::router())
+        .merge(crate::device_keys::router())
+        .merge(crate::memory_edit::router())
+        .merge(crate::mailbox::router())
+        .merge(crate::agent_email::router())
+        .merge(crate::sandbox_sites::router())
+        .merge(crate::mail_scan::router())
+        .merge(crate::mail_rules::router())
+        .merge(crate::jobs::router())
+        .merge(crate::notes_import::router())
+        .merge(crate::assistant_import::router())
+        .merge(crate::guide::router())
+        .merge(crate::agent_create::router())
+        .merge(crate::rooms::router())
+        .merge(crate::agent_pairs::router())
+        .merge(crate::meet::router())
+        .merge(crate::reminders::router())
+        .merge(crate::notebook::api::router())
+        .merge(crate::calendar::router())
+        .merge(crate::contacts::router())
+        .merge(crate::archives::router())
+        .merge(crate::archives::records_fill::router())
+        .merge(crate::whatsapp_import::router())
+        .merge(crate::health::router())
+        .merge(crate::voices::router())
+        .merge(crate::live_brief::router())
+        .merge(crate::live_turns::router())
+        .merge(crate::voice_escalate::router())
+        .merge(crate::favicons::router())
+        .merge(crate::map_tiles::router())
+        .merge(crate::message_search::router())
+        .merge(crate::connections::router())
+        .merge(crate::live_activities::router())
+        .merge(crate::skill_library::router());
+    if !config.cloud {
+        authed = authed.merge(crate::console::console_admin_router());
+    }
+    authed = authed
+        .merge(crate::peers::household_admin_router())
+        .merge(crate::family_news::router())
+        .merge(crate::agent_shares::router())
+        .merge(crate::family_agent::router())
+        .merge(crate::read_shares::router())
+        .merge(crate::project_agent::router())
+        .merge(crate::friends_cards::router())
+        .merge(crate::shared_expenses::router())
+        .merge(crate::desktop::desktop_admin_router())
+        .merge(crate::phone_exit::admin_router());
+    // Under /v1 without the bridge key: a computer sending its agents (the app's one-time code instead), and a
+    // server the app created until the app claims it (its own proofs).
+    // The phone exit's tunnel (prototype): the phone's own token.
+    let open = Router::new().merge(import_open).merge(crate::cloud_setup::router()).merge(crate::phone_exit::open_router());
+
+    let mut app = Router::new()
+        .route("/health", get(health))
+        .merge(Router::new().nest("/v1", authed.route_layer(auth())));
+    if !config.cloud {
+        // on the Internet (a server the app created), no web console: one door less
+        app = app.merge(crate::console::console_router()).nest("/console/static", crate::console::console_files());
+    }
+    app = app
+        .merge(Router::new().nest("/v1", open))
+        // The agents' Hermes through the bridge: on the LAN door, and for agents in their own space (their gateway
+        // listens on a local port only). Hermes checks each agent's own key.
+        .merge(crate::peers::peer_router()) // agents' own tokens, checked against the links the person allowed
+        .merge(crate::sandbox::router()) // the agents' file tools (shared folders), same tokens
+        .merge(crate::card_pay::router()) // the agents' card payment tools, same tokens
+        .merge(crate::vault_logins::router()) // the agents' vault tools (accounts with a vault password), same tokens
+        .merge(crate::connectors::router()) // the connectors agents make, and each one's own MCP entry, same tokens
+        .merge(crate::handover::router()) // « l'agent prépare, tu paies »: the payment handed to the person
+        .merge(crate::link_wallet::router()) // Link Agent Wallet (US/CA), behind its flag
+        .merge(crate::agent_tools::router()) // the agents' MCP tools (create_audio), each agent with its own token
+        .merge(crate::connections::callback_router()) // a service's sign-in coming back (its single-use state)
+        .merge(crate::triggers::hook_router()) // a routine's link: its secret token is the key (POST only)
+        .merge(crate::peers::family_router()) // the linked households' bridges, with the key each was given
+        .merge(crate::family_news::household_router()) // their family news, the same key
+        .merge(crate::family_relay::household_router()) // a home's bridge fetching our calls for it, the same key
+        .merge(crate::agent_shares::household_router()) // the agents shared with them, the same key
+        .merge(crate::family_agent::household_router()) // the family's agent and its Carnet, the same key
+        .merge(crate::family_calendar::household_router()) // the family agent and the members' calendars, the same key
+        .merge(crate::family_thread::household_router()) // the family conversation changed: this person told
+        .merge(crate::rooms_remote::household_router()) // their agents in this person's discussions, the same key
+        .merge(crate::meet::household_router()) // a date to find together, the same key
+        .nest("/desktop/static/novnc", crate::desktop::static_files())
+        .merge(crate::desktop::desktop_router()); // the page and its stream: a short-lived ticket from the route above
+    // The same routes, answering « matched » without running anything: what `redirect_slashes` asks.
+    let routes: Router = app.clone().route_layer(middleware::from_fn(probe)).with_state(state.clone());
+    let inner: Router =
+        app.fallback(move |request: Request| not_found(routes.clone(), request)).with_state(state.clone());
+    // Python's middlewares wrap the whole app (before routing): here around the routed app, as one service.
+    // Bodies: one limit for the whole app, before routing (body_limit.rs: 4 MB, raised on the few routes that take
+    // large bodies), so axum's own per-extractor limit is off. An exception in a route is a plain-text 500, logged as
+    // uvicorn does.
+    Router::new()
+        .fallback_service(inner)
+        .layer(middleware::from_fn(method_not_allowed_detail))
+        // a person's action that succeeded: the place is used (used.rs, freed beta places)
+        .layer(middleware::from_fn(crate::used::note))
+        .layer(middleware::from_fn_with_state(state.clone(), crate::place_move::guard))
+        .layer(middleware::from_fn_with_state(state.clone(), crate::files::upload_size_limit))
+        .layer(middleware::from_fn(crate::body_limit::body_limit))
+        .layer(axum::extract::DefaultBodyLimit::disable())
+        .layer(tower_http::catch_panic::CatchPanicLayer::custom(internal_error))
+        // a person's message carried out whole even when the phone goes away meanwhile: outside every other layer
+        .layer(middleware::from_fn(crate::threads::send_whole))
+}
+
+/// A route that panicked (a bug, or a `todo!()` not ported yet): Starlette's 500, uvicorn's log line.
+fn internal_error(panic: Box<dyn std::any::Any + Send + 'static>) -> Response {
+    let message = panic
+        .downcast_ref::<String>()
+        .cloned()
+        .or_else(|| panic.downcast_ref::<&str>().map(|s| s.to_string()))
+        .unwrap_or_else(|| "panic".to_string());
+    tracing::error!(target: "uvicorn.error", exc = %message, "Exception in ASGI application\n");
+    HttpError::internal().into_response()
+}
+
+#[cfg(test)]
+mod device_tests {
+    use super::previous_token;
+
+    #[test]
+    fn a_previous_token_is_written_as_its_environment_keeps_tokens() {
+        assert_eq!(previous_token(Some(" <AB CD> "), "production").as_deref(), Some("abcd"));
+        assert_eq!(previous_token(Some("Fcm:Token"), "fcm").as_deref(), Some("Fcm:Token"));
+        assert_eq!(previous_token(Some("r2.AbC"), "relay").as_deref(), Some("r2.AbC"));
+        assert_eq!(previous_token(Some("  "), "fcm"), None);
+        assert_eq!(previous_token(None, "fcm"), None);
+    }
+}

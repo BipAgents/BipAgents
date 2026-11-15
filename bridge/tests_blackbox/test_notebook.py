@@ -1,0 +1,610 @@
+"""The Carnet (notebook/ in the Rust bridge, 2026-10-22): the agents' tools over MCP, the Markdown pages on disk, the
+app's routes (home, search with a short answer, page, edit, history and restore, export), tasks linked to the phone's
+reminders both ways, the private health part, and the nightly pass: its free pre-filter, one call to the small model,
+its cost and its monthly cap."""
+import hashlib
+import io
+import json
+import re
+import time
+import zipfile
+from datetime import datetime, timezone
+
+from bbkit.common import AUTH
+from bbkit.mcp import call, give_token, rpc, text_of
+from conftest import managed_install, profile
+
+TODAY = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+
+def notebook(bridge):
+    return bridge.state_dir / "notebook"
+
+
+def in_french(bridge):
+    settings = bridge.patch("/v1/notebook/settings", json={"language": "fr"}, headers=AUTH)
+    assert settings.status_code == 200 and settings.json()["language"] == "fr"
+
+
+def marc(bridge):
+    return call(bridge, "notebook_write", {"page": "Marc Dupont", "kind": "person", "section": "dates",
+                                          "facts": ["Anniversaire : 14 novembre"], "summary": "Ami d'enfance.",
+                                          "aliases": ["Marco"], "contact": "C-1"})
+
+
+def test_an_agent_files_facts_that_read_well_in_obsidian(bridge):
+    give_token(bridge)
+    names = [t["name"] for t in rpc(bridge, "tools/list").json()["result"]["tools"]]
+    assert {n for n in names if n.startswith("notebook_")} == {
+        "notebook_search", "notebook_read", "notebook_write", "notebook_task", "notebook_record", "notebook_fill"}
+    in_french(bridge)
+    filed = marc(bridge)
+    assert filed["isError"] is False
+    # short, and nothing to say to the person: the line under the answer shows it (carnet_line)
+    assert text_of(filed) == "Saved: Marc Dupont › dates (1 fact, new page)."
+    page = (notebook(bridge) / "carnet" / "Personnes" / "Marc Dupont.md").read_text()
+    assert re.fullmatch(
+        r"---\nid: p[0-9a-f]{10}\ntype: person\naliases:\n  - Marco\ncontact: C-1\nupdated: " + TODAY + r"\n---\n"
+        r"# Marc Dupont\n\n## En bref\nAmi d'enfance\.\n\n## Dates\n- Anniversaire : 14 novembre — \*Wellness, "
+        + TODAY + r"\*\n", page), page
+    # Found again by a nickname or the contact: the same page, nothing repeated.
+    again = call(bridge, "notebook_write", {"page": "Marco", "facts": ["anniversaire: 14 Novembre", "Aime le jazz"]})
+    assert text_of(again) == "Saved: Marc Dupont › tastes (1 fact)."
+    assert text_of(call(bridge, "notebook_write", {"page": "C-1", "facts": ["Aime le jazz"]})) == "Already there: Marc Dupont."
+    found = text_of(call(bridge, "notebook_search", {"words": "marco"}))
+    assert found.startswith("Pages:\nMarc Dupont (person, Personnes/Marc Dupont.md)"), found
+    assert "jazz" in text_of(call(bridge, "notebook_read", {"page": "marc dupont"}))
+    # a correction and a new « En bref » in one call
+    fixed = call(bridge, "notebook_write", {"page": "Marc Dupont", "summary": "Ami d'enfance, fan de jazz.",
+                                            "fix": [{"old": "14 novembre", "new": "Anniversaire : 15 novembre"}]})
+    assert text_of(fixed) == "Saved: Marc Dupont.\nFixed: Marc Dupont (1).", text_of(fixed)
+    page = (notebook(bridge) / "carnet" / "Personnes" / "Marc Dupont.md").read_text()
+    assert "## En bref\nAmi d'enfance, fan de jazz.\n\n## Dates\n- Anniversaire : 15 novembre — *Wellness" in page
+    # One page outline: the jazz under « Goûts et préférences », after « Dates »
+    assert page.index("## Dates") < page.index("## Goûts et préférences\n- Aime le jazz")
+    # A label said again replaces the old fact (« Chausse du 38 » is the shoe size)
+    call(bridge, "notebook_write", {"page": "Marc", "section": "tastes", "facts": ["Pointure : 41"]})
+    replaced = call(bridge, "notebook_write", {"page": "Marc", "section": "tastes", "facts": ["Chausse du 42"]})
+    assert text_of(replaced) == "Saved: Marc Dupont › tastes (1 fact, 1 replaced)."
+    page = (notebook(bridge) / "carnet" / "Personnes" / "Marc Dupont.md").read_text()
+    assert "- Pointure : 42" in page and "Pointure : 41" not in page
+    # ask is in the schema already, not there yet (B3); forget only shows the person (they confirm in the app)
+    later = call(bridge, "notebook_write", {"page": "Marc Dupont", "ask": {"question": "Sa pointure ?", "chips": ["41", "42"]},
+                                            "forget": ["Aime le jazz"]})
+    assert text_of(later) == "No question now.\nShown to the person: they confirm in the app."
+    assert "jazz" in (notebook(bridge) / "carnet" / "Personnes" / "Marc Dupont.md").read_text()
+    # ID numbers are never kept
+    refused = call(bridge, "notebook_write", {"page": "Marc Dupont", "facts": ["Passeport : 12AB34567"]})
+    assert refused["isError"] and text_of(refused) == "Not saved: ID numbers are never kept."
+    # The person turned the « Noté » lines off: nothing changes for the agent.
+    bridge.patch("/v1/notebook/settings", json={"mentions": False}, headers=AUTH)
+    quiet = call(bridge, "notebook_write", {"page": "Rénovation cuisine", "kind": "subject", "section": "decisions",
+                                            "facts": ["Devis plombier accepté : 480 € [[Marc Dupont]]"]})
+    assert text_of(quiet) == "Saved: Rénovation cuisine › decisions (1 fact, new page)."
+    # Health is not this agent's: refused.
+    for args in ({"page": "Santé", "kind": "area", "facts": ["Tension 12/8"]},
+                 {"page": "Marc Dupont", "facts": ["x"], "private": True}):
+        refused = call(bridge, "notebook_write", args)
+        assert refused["isError"] and "health" in text_of(refused)
+    # The language changed later (2026-11-02): the folders and the own pages move to the new names, the sections are
+    # re-titled, the people's names and the facts stay; the agents' next writes go there.
+    moved = bridge.patch("/v1/notebook/settings", json={"language": "en"}, headers=AUTH)
+    assert moved.status_code == 200 and moved.json()["language"] == "en", moved.text
+    carnet = notebook(bridge) / "carnet"
+    assert not (carnet / "Personnes").exists() and not (carnet / "Sujets").exists()
+    page = (carnet / "People" / "Marc Dupont.md").read_text()
+    assert "## In brief\n" in page and "## Likes and preferences\n- Aime le jazz" in page, page
+    assert (carnet / "Subjects" / "Rénovation cuisine.md").exists()
+    again = call(bridge, "notebook_write", {"page": "Marco", "facts": ["Joue du piano"]})
+    assert text_of(again).startswith("Saved: Marc Dupont")
+    assert "Joue du piano" in (carnet / "People" / "Marc Dupont.md").read_text() and not (carnet / "Personnes").exists()
+    history = bridge.get("/v1/notebook/history", params={"path": "People/Marc Dupont.md"}, headers=AUTH).json()["changes"]
+    assert any(c["action"] == "language" for c in history)
+    assert all(c["action"] != "language" for c in bridge.get("/v1/notebook", headers=AUTH).json()["recent"])
+    # back to French: the same way
+    assert bridge.patch("/v1/notebook/settings", json={"language": "fr"}, headers=AUTH).status_code == 200
+    assert (carnet / "Personnes" / "Marc Dupont.md").exists() and not (carnet / "People").exists()
+
+
+def test_a_deleted_page_leaves_nouveau(bridge):
+    """2026-11-02: a page deleted in the app stayed under « Nouveau » (« Written by you · 5 min ago »): its « create »
+    line is still in the log. « Nouveau » lists the pages that still exist; a page's own history keeps it all."""
+    give_token(bridge)
+    in_french(bridge)
+    marc(bridge)
+    call(bridge, "notebook_write", {"page": "Zoé", "kind": "person", "facts": ["Aime le thé"]})
+    paths = [c["path"] for c in bridge.get("/v1/notebook", headers=AUTH).json()["recent"]]
+    assert "Personnes/Zoé.md" in paths and "Personnes/Marc Dupont.md" in paths
+    gone = bridge.delete("/v1/notebook/page", params={"path": "Personnes/Zoé.md"}, headers=AUTH)
+    assert gone.status_code == 200, gone.text
+    for recent in (bridge.get("/v1/notebook", headers=AUTH).json()["recent"],
+                   bridge.get("/v1/notebook/history", headers=AUTH).json()["changes"]):
+        assert [c["path"] for c in recent] == ["Personnes/Marc Dupont.md"] * len(recent) and recent, recent
+    own = bridge.get("/v1/notebook/history", params={"path": "Personnes/Zoé.md"}, headers=AUTH).json()["changes"]
+    assert [c["action"] for c in own] == ["delete", "create"]
+
+
+def test_the_app_reads_searches_edits_and_restores(bridge):
+    give_token(bridge)
+    in_french(bridge)
+    marc(bridge)
+    call(bridge, "notebook_write", {"page": "Rénovation cuisine", "kind": "subject", "section": "decisions",
+                                    "facts": ["Devis accepté avec [[Marco]]"]})
+    home = bridge.get("/v1/notebook", headers=AUTH).json()
+    counts = {s["kind"]: s["count"] for s in home["sections"]}
+    assert counts == {"self": 0, "person": 1, "subject": 1, "trip": 0, "area": 0, "tasks": 0, "documents": 0}
+    assert [s["title"] for s in home["sections"]][:4] == ["Toi", "Personnes", "Sujets", "Voyages"]
+    # The person themself: their own « Toi » page, never among « Personnes ».
+    me = call(bridge, "notebook_write", {"page": "moi", "facts": ["Veut courir un marathon"]})
+    assert text_of(me) == "Saved: Toi › goals (1 fact, new page)."
+    with_me = bridge.get("/v1/notebook", headers=AUTH).json()
+    assert with_me["sections"][0] == {"kind": "self", "title": "Toi", "count": 1, "path": "Toi.md"}
+    assert with_me["sections"][1]["count"] == 1
+    # an English app on this French Carnet (2026-11-02): what the app shows in English, the pages as they are
+    english = bridge.get("/v1/notebook", params={"lang": "en"}, headers=AUTH).json()
+    assert english["language"] == "fr" and english["shown_language"] == "en"
+    assert english["sections"][0] == {"kind": "self", "title": "You", "count": 1, "path": "Toi.md"}
+    assert [s["title"] for s in english["sections"]][1:4] == ["People", "Subjects", "Trips"]
+    mine = bridge.get("/v1/notebook/page", params={"path": "Toi.md", "lang": "en"}, headers=AUTH).json()
+    assert mine["title"] == "You" and [s["title"] for s in mine["sections"]] == ["Goals"]
+    assert [o["title"] for o in mine["outline"]][:2] == ["Who you are", "Family"]
+    assert "## Objectifs" in mine["text"]
+    assert any(c["title"] == "You" for c in bridge.get("/v1/notebook/history", params={"lang": "en"}, headers=AUTH).json()["changes"])
+    assert [s["id"] for s in bridge.get("/v1/notebook/page", params={"path": "Toi.md"}, headers=AUTH).json()["outline"]] == [
+        "about", "family", "work", "habits", "goals", "agents", "other"]
+    recent = home["recent"][0]
+    assert recent["title"] == "Rénovation cuisine" and recent["name"] == "Wellness" and recent["agent"] == "wellness"
+    assert recent["action"] == "create" and recent["summary"] == "Devis accepté avec [[Marco]]"
+    # A short answer on top when a fact answers the question.
+    found = bridge.get("/v1/notebook/search", params={"q": "anniversaire marc"}, headers=AUTH).json()
+    assert found["answers"][0]["answer"] == "14 novembre" and found["answers"][0]["page"] == "Marc Dupont"
+    assert found["answers"][0]["label"] == "Anniversaire" and found["pages"][0]["title"] == "Marc Dupont"
+    view = bridge.get("/v1/notebook/page", params={"path": "Personnes/Marc Dupont.md"}, headers=AUTH).json()
+    assert view["summary"] == "Ami d'enfance." and view["aliases"] == ["Marco"] and view["contact"] == "C-1"
+    # each fact split by the bridge too (Carnet v2 B2: the apps show `label`, `answer`, `when` as they come)
+    day = datetime.strptime(TODAY, "%Y-%m-%d")
+    when = f"noté le {day.day} {['janv.', 'févr.', 'mars', 'avr.', 'mai', 'juin', 'juil.', 'août', 'sept.', 'oct.', 'nov.', 'déc.'][day.month - 1]}"
+    assert view["sections"] == [{"id": "dates", "title": "Dates", "facts": [{"text": "Anniversaire : 14 novembre",
+                                 "label": "Anniversaire", "answer": "14 novembre", "when": when, "fresh": True,
+                                 "noted": f"Noté par Wellness le {when.removeprefix('noté le ')} {day.year}",
+                                 "by": "Wellness", "date": TODAY, "item": True, "links": []}]}]
+    assert [s["id"] for s in view["outline"]] == ["who", "dates", "family", "work", "tastes", "gifts", "agreed",
+                                                   "exchanges", "remember", "other"]
+    assert view["rev"] == hashlib.sha256(view["text"].encode()).hexdigest()[:16]
+    assert view["emails"] == [] and view["phones"] == []
+    # « Modifier » on one section, over the revision the app read: the unchanged line keeps its attribution, the new
+    # one is the person's.
+    section = {"path": "Personnes/Marc Dupont.md", "section": "dates", "text": "- Anniversaire : 14 novembre\n- Fête : 25 avril"}
+    assert bridge.put("/v1/notebook/section", json=section, headers=AUTH).status_code == 422   # no rev: never blind
+    edited = bridge.put("/v1/notebook/section", json={**section, "rev": view["rev"]}, headers=AUTH)
+    assert edited.status_code == 200, edited.text
+    assert edited.json()["rev"] != view["rev"] and edited.json()["change_id"].startswith("c")
+    facts = edited.json()["sections"][0]["facts"]
+    assert [(f["text"], f["by"]) for f in facts] == [("Anniversaire : 14 novembre", "Wellness"), ("Fête : 25 avril", "toi")]
+    restored_section = bridge.get("/v1/notebook/history", params={"path": "Personnes/Marc Dupont.md"}, headers=AUTH).json()
+    bridge.post("/v1/notebook/restore", json={"change": restored_section["changes"][1]["id"]}, headers=AUTH)
+    view = bridge.get("/v1/notebook/page", params={"path": "Personnes/Marc Dupont.md"}, headers=AUTH).json()
+    assert view["backlinks"] == [{"title": "Rénovation cuisine", "path": "Sujets/Rénovation cuisine.md", "kind": "subject"}]
+    assert view["frontmatter"]["type"] == "person" and view["id"].startswith("p") and view["shared_with"] == []
+    subject = bridge.get("/v1/notebook/page", params={"path": "Sujets/Rénovation cuisine.md"}, headers=AUTH).json()
+    assert subject["links"] == [{"title": "Marco", "path": "Personnes/Marc Dupont.md", "kind": "person"}]
+    assert bridge.get("/v1/notebook/page", params={"path": "../state.json"}, headers=AUTH).status_code == 404
+    # An agent wrote since the app read the page: 409, the section as it is now, nothing written
+    stale = view["rev"]
+    call(bridge, "notebook_write", {"page": "Marc Dupont", "section": "dates", "facts": ["Fête : 3 mai"]})
+    clash = bridge.put("/v1/notebook/section", json={**section, "text": "- Anniversaire : 16 novembre", "rev": stale},
+                       headers=AUTH)
+    assert clash.status_code == 409, clash.text
+    detail = clash.json()["detail"]
+    assert detail["code"] == "page_changed" and detail["text"] == "Un agent vient d'écrire ici. Vérifie avant d'enregistrer."
+    assert "Fête : 3 mai" in [f["text"] for f in detail["section"]["facts"]] and len(detail["rev"]) == 16
+    assert "16 novembre" not in (notebook(bridge) / "carnet" / "Personnes" / "Marc Dupont.md").read_text()
+    # The person's own edit, recorded as theirs, then undone; a whole page is never written by an app.
+    put = bridge.put("/v1/notebook/section", json={**section, "text": "- Anniversaire : 16 novembre", "rev": detail["rev"]},
+                     headers=AUTH)
+    assert put.status_code == 200, put.text
+    assert bridge.put("/v1/notebook/page", json={"path": "Personnes/Marc Dupont.md", "text": "x"}, headers=AUTH).status_code == 405
+    changes = bridge.get("/v1/notebook/history", params={"path": "Personnes/Marc Dupont.md"}, headers=AUTH).json()["changes"]
+    assert [(c["action"], c["by"]) for c in changes][:3] == [("section", "you"), ("note", "wellness"), ("restore", "you")]
+    assert changes[-1]["action"] == "create"
+    restored = bridge.post("/v1/notebook/restore", json={"change": changes[-1]["id"]}, headers=AUTH)
+    assert restored.status_code == 200 and restored.json()["change"]["action"] == "restore"
+    assert "14 novembre" in (notebook(bridge) / "carnet" / "Personnes" / "Marc Dupont.md").read_text()
+    assert bridge.post("/v1/notebook/restore", json={"change": changes[-1]["id"]}, headers=AUTH).status_code == 400
+    # Documents: the files the agents were sent, with the pages that name them.
+    folder = bridge.root / "uploads" / "wellness" / "2026-10"
+    folder.mkdir(parents=True)
+    (folder / "0123456789ab-devis-plombier.pdf").write_bytes(b"%PDF-1.4")
+    call(bridge, "notebook_write", {"page": "Rénovation cuisine", "facts": ["Le devis-plombier.pdf est signé"]})
+    docs = bridge.get("/v1/notebook/documents", headers=AUTH).json()["documents"]
+    assert [(d["name"], d["type"], d["origin"], d["agent"]) for d in docs] == [
+        ("devis-plombier.pdf", "pdf", "received", "wellness")]
+    assert docs[0]["subjects"] == [{"title": "Rénovation cuisine", "path": "Sujets/Rénovation cuisine.md", "kind": "subject"}]
+    # Export for Obsidian: the vault as a zip, with its Documents page.
+    export = bridge.get("/v1/notebook/export", headers=AUTH)
+    assert export.status_code == 200 and export.headers["content-type"] == "application/zip"
+    assert export.headers["content-disposition"] == 'attachment; filename="Carnet.zip"'
+    names = sorted(zipfile.ZipFile(io.BytesIO(export.content)).namelist())
+    assert names == ["Documents.md", "Personnes/Marc Dupont.md", "Sujets/Rénovation cuisine.md", "Toi.md"]
+    deleted = bridge.delete("/v1/notebook/page", params={"path": "Sujets/Rénovation cuisine.md"}, headers=AUTH)
+    assert deleted.status_code == 200 and not (notebook(bridge) / "carnet" / "Sujets" / "Rénovation cuisine.md").exists()
+    assert bridge.get("/v1/notebook", headers=AUTH).status_code == 200
+    assert bridge.get("/v1/notebook").status_code == 401
+
+
+def test_tasks_stay_few_and_follow_the_phone_reminders(bridge):
+    give_token(bridge)
+    in_french(bridge)
+    assert bridge.put("/v1/reminders/agents", json={"agents": ["Wellness"]}, headers=AUTH).status_code == 200
+    assert bridge.put("/v1/reminders", json={"lists": [], "items": []}, headers=AUTH).status_code == 200   # an iPhone
+    added = call(bridge, "notebook_task", {"action": "add", "title": "Appeler le plombier", "due": "2026-11-03T09:00",
+                                           "page": "Maison", "origin": "asked"})
+    assert "Phone reminder too." in text_of(added)
+    task_id = re.search(r"\[(t[0-9a-f]+)\]", text_of(added)).group(1)
+    undated = call(bridge, "notebook_task", {"action": "add", "title": "Trier les photos"})
+    assert "Phone reminder" not in text_of(undated)   # no date: in the Carnet only
+    queue = bridge.get("/v1/reminders/queue", headers=AUTH).json()["queue"]
+    assert [(op["op"], op["args"]["title"], op["args"]["due"]) for op in queue] == [
+        ("add", "Appeler le plombier Maison", "2026-11-03T09:00")]
+    assert queue[0]["args"]["notes"] == f"BipAgents · Carnet ^{task_id}"
+    tasks_page = (notebook(bridge) / "carnet" / "Tâches" / "Tâches.md").read_text()
+    assert f"- [ ] Appeler le plombier [[Maison]] 📅 2026-11-03 — *Wellness, {TODAY}* ^{task_id}" in tasks_page
+    # Ticked on the phone: done in the Carnet, nothing sent back.
+    bridge.post(f"/v1/reminders/queue/{queue[0]['id']}", json={"done": True}, headers=AUTH)
+    snapshot = {"lists": [], "items": [{"id": "r9", "title": "Appeler le plombier", "notes": queue[0]["args"]["notes"],
+                                        "completed": True}]}
+    bridge.put("/v1/reminders", json=snapshot, headers=AUTH)
+    tasks = bridge.get("/v1/notebook/tasks", headers=AUTH).json()
+    assert [t["title"] for t in tasks["open"]] == ["Trier les photos"] and tasks["done"][0]["id"] == task_id
+    assert tasks["done"][0]["origin"] == "asked"
+    assert bridge.get("/v1/reminders/queue", headers=AUTH).json()["queue"] == []
+    # Done in the Carnet before the phone got it: the request is cancelled. After: the reminder is ticked.
+    second = bridge.post("/v1/notebook/tasks", json={"title": "Rendez-vous banque", "due": "2026-11-05"}, headers=AUTH).json()
+    assert second["reminder"] is True and second["task"]["origin"] == "asked"
+    bridge.post(f"/v1/notebook/tasks/{second['task']['id']}", json={"done": True}, headers=AUTH)
+    assert bridge.get("/v1/reminders/queue", headers=AUTH).json()["queue"] == []
+    third = text_of(call(bridge, "notebook_task", {"action": "add", "title": "Payer la cantine", "due": "2026-11-06",
+                                                   "origin": "own"}))
+    third_id = re.search(r"\[(t[0-9a-f]+)\]", third).group(1)
+    op = bridge.get("/v1/reminders/queue", headers=AUTH).json()["queue"][0]
+    bridge.post(f"/v1/reminders/queue/{op['id']}", json={"done": True}, headers=AUTH)
+    bridge.put("/v1/reminders", json={"lists": [], "items": [{"id": "r10", "title": "Payer la cantine",
+                                                              "notes": op["args"]["notes"]}]}, headers=AUTH)
+    assert text_of(call(bridge, "notebook_task", {"action": "done", "id": third_id})) == "Done: Payer la cantine."
+    asked = bridge.get("/v1/reminders/queue", headers=AUTH).json()["queue"]
+    assert [(o["op"], o["args"]) for o in asked] == [("complete", {"id": "r10"})]
+    # Proposals: only with the Carnet's go, a few a week, never a kind the person declined.
+    no_id = call(bridge, "notebook_task", {"action": "add", "title": "Cadeau Marc", "origin": "accepted"})
+    assert no_id["isError"]
+    proposed = text_of(call(bridge, "notebook_task", {"action": "propose", "kind": "birthday", "title": "Rappel anniversaire Marc"}))
+    proposal = re.search(r"proposal (q[0-9a-f]+)", proposed).group(1)
+    declined = call(bridge, "notebook_task", {"action": "decline", "proposal": proposal, "never": True})
+    assert "Pas de propositions de tâches pour les anniversaires" in text_of(declined)
+    again = call(bridge, "notebook_task", {"action": "propose", "kind": "birthday", "title": "Rappel anniversaire Paul"})
+    assert again["isError"] and "doesn't want proposals of this kind" in text_of(again)
+    listed = bridge.get("/v1/notebook/proposals", headers=AUTH).json()
+    assert listed["declined"] == ["birthday"] and listed["proposals"][0]["state"] == "declined"
+    assert "## Ce que tes agents doivent savoir\n- Pas de propositions" in (notebook(bridge) / "carnet" / "Toi.md").read_text()
+
+
+def test_a_task_is_added_once_and_takes_its_reminder_when_it_leaves(bridge):
+    give_token(bridge)
+    in_french(bridge)
+    assert bridge.put("/v1/reminders/agents", json={"agents": ["Wellness"]}, headers=AUTH).status_code == 200
+    assert bridge.put("/v1/reminders", json={"lists": [], "items": []}, headers=AUTH).status_code == 200   # an iPhone
+    queue = lambda: bridge.get("/v1/reminders/queue", headers=AUTH).json()["queue"]
+    first = text_of(call(bridge, "notebook_task", {"action": "add", "title": "Appeler le dentiste", "due": "2026-11-03"}))
+    task_id = re.search(r"\[(t[0-9a-f]+)\]", first).group(1)
+    # Asked again while filling the Carnet from memory: the same task, said so, no second reminder.
+    again = call(bridge, "notebook_task", {"action": "add", "title": "appeler le Dentiste.", "due": "2026-11-03"})
+    assert again["isError"] is False
+    assert text_of(again).startswith(f"Already there [{task_id}]: Appeler le dentiste, due 2026-11-03.")
+    same = bridge.post("/v1/notebook/tasks", json={"title": "Appeler le dentiste"}, headers=AUTH).json()
+    assert same["existing"] is True and same["task"]["id"] == task_id
+    assert len(queue()) == 1
+    # Removed while its add still waits: cancelled.
+    call(bridge, "notebook_task", {"action": "add", "title": "Appeler le garage", "due": "2026-11-04"})
+    assert len(queue()) == 2
+    call(bridge, "notebook_write", {"page": "Tâches", "fix": [{"old": "Appeler le garage", "new": ""}]})
+    assert [op["args"]["title"] for op in queue()] == ["Appeler le dentiste"]
+    # On the phone: removed by its id and mark (the agent's edit, or the person's in the app).
+    op = queue()[0]
+    bridge.post(f"/v1/reminders/queue/{op['id']}", json={"done": True}, headers=AUTH)
+    mark = f"BipAgents · Carnet ^{task_id}"
+    assert op["args"]["notes"] == mark
+    bridge.put("/v1/reminders", json={"lists": [], "items": [{"id": "r1", "title": "Appeler le dentiste", "notes": mark}]},
+               headers=AUTH)
+    fixed = call(bridge, "notebook_write", {"page": "Tâches", "fix": [{"old": "Appeler le dentiste", "new": ""}]})
+    assert text_of(fixed) == "Fixed: Tâches (1).", text_of(fixed)
+    asked = queue()
+    assert [(o["op"], o["args"]) for o in asked] == [("remove", {"id": "r1", "mark": mark})]
+    # An app from before « remove » answers « unknown request »: the request waits for its update.
+    bridge.post(f"/v1/reminders/queue/{asked[0]['id']}", json={"done": False, "error": "unknown request"}, headers=AUTH)
+    assert [o["id"] for o in queue()] == [asked[0]["id"]]
+    bridge.post(f"/v1/reminders/queue/{asked[0]['id']}", json={"done": True}, headers=AUTH)
+    assert queue() == []
+
+
+def test_reminders_left_by_removed_tasks_are_cleaned_at_start(bridge):
+    give_token(bridge)
+    in_french(bridge)
+    assert bridge.put("/v1/reminders/agents", json={"agents": ["Wellness"]}, headers=AUTH).status_code == 200
+    assert bridge.put("/v1/reminders", json={"lists": [], "items": []}, headers=AUTH).status_code == 200   # an iPhone
+    kept = re.search(r"\[(t[0-9a-f]+)\]", text_of(call(bridge, "notebook_task", {
+        "action": "add", "title": "Rendez-vous banque", "due": "2026-11-05"}))).group(1)
+    # Archived (moved under « Archivées »): not gone, nothing asked.
+    op = bridge.get("/v1/reminders/queue", headers=AUTH).json()["queue"][0]
+    bridge.post(f"/v1/reminders/queue/{op['id']}", json={"done": True}, headers=AUTH)
+    path = notebook(bridge) / "carnet" / "Tâches" / "Tâches.md"
+    page = path.read_text()
+    line = next(l for l in page.splitlines() if kept in l)
+    moved = page.replace(line + "\n", "") + f"\n## Archivées\n{line}\n"
+    # by hand, in Obsidian (the apps never write a whole page)
+    path.write_text(moved)
+    assert bridge.get("/v1/reminders/queue", headers=AUTH).json()["queue"] == []
+    # What an older bridge left: a link to a task removed, and the phone with duplicates and another Carnet's mark.
+    bridge.stop()
+    state_path = notebook(bridge) / "state.json"
+    state = json.loads(state_path.read_text())
+    state["reminders"]["t0000aaaa"] = {"op": "old", "part": "main", "complete": False}
+    state["tasks"]["t0000aaaa"] = {"origin": "asked"}
+    state_path.write_text(json.dumps(state))
+    reminders_path = bridge.state_dir / "reminders.json"
+    data = json.loads(reminders_path.read_text())
+    mark = lambda t: f"BipAgents · Carnet ^{t}"
+    data["items"] = [{"id": "r2", "notes": mark("t0000aaaa")}, {"id": "r3", "notes": mark(kept)},
+                     {"id": "r4", "notes": mark(kept)}, {"id": "r5", "notes": mark("t9999ffff")}]
+    reminders_path.write_text(json.dumps(data))
+    bridge.start()
+    deadline = time.time() + 10
+    while time.time() < deadline and len(bridge.get("/v1/reminders/queue", headers=AUTH).json()["queue"]) < 2:
+        time.sleep(0.2)
+    asked = bridge.get("/v1/reminders/queue", headers=AUTH).json()["queue"]
+    assert sorted((o["op"], o["args"]["id"]) for o in asked) == [("remove", "r2"), ("remove", "r4")]
+    assert "t0000aaaa" not in json.loads(state_path.read_text())["reminders"]
+    # Once: a restart or the phone's next share asks nothing more.
+    bridge.put("/v1/reminders", json={"lists": [], "items": data["items"]}, headers=AUTH)
+    assert len(bridge.get("/v1/reminders/queue", headers=AUTH).json()["queue"]) == 2
+
+
+def test_dates_to_come_are_facts_of_close_people(bridge):
+    give_token(bridge)
+    in_french(bridge)
+    soon = datetime.now(timezone.utc).replace(hour=12)
+    day = (soon.toordinal() + 10)
+    date = datetime.fromordinal(day)
+    months = ["janvier", "février", "mars", "avril", "mai", "juin", "juillet", "août", "septembre", "octobre",
+              "novembre", "décembre"]
+    fact = f"Anniversaire : {date.day} {months[date.month - 1]}"
+    call(bridge, "notebook_write", {"page": "Zoé", "kind": "person", "facts": [fact]})
+    def dates():
+        return [d for d in bridge.get("/v1/notebook", headers=AUTH).json()["dates"] if not d.get("computed")]
+
+    assert dates() == []   # not marked close
+    call(bridge, "notebook_write", {"page": "Zoé", "close": True})
+    assert [(d["page"], d["in_days"], d["yearly"], d["fact"]) for d in dates()] == [("Zoé", 10, True, fact)]
+    # What the person's card shows in the « Personnes » mosaic.
+    card = bridge.get("/v1/notebook/pages", params={"kind": "person"}, headers=AUTH).json()["pages"][0]
+    assert (card["close"], card["next_date"]["in_days"], card["next_date"]["fact"], card["facts"]) == (True, 10, fact, 1)
+    call(bridge, "notebook_write", {"page": "Jardin", "kind": "subject", "section": "status", "facts": ["Haie taillée"]})
+    subject = bridge.get("/v1/notebook/pages", params={"kind": "subject"}, headers=AUTH).json()["pages"][0]
+    assert (subject["status"], subject["next_date"]) == ("Haie taillée", None)
+    assert bridge.get("/v1/notebook/tasks", headers=AUTH).json()["open"] == []   # a fact is not a task
+    assert bridge.post("/v1/notebook/close", json={"path": "Personnes/Zoé.md", "close": False}, headers=AUTH).status_code == 200
+    assert dates() == []
+
+
+def test_the_person_picks_a_subjects_icon_and_agents_keep_it(bridge):
+    give_token(bridge)
+    in_french(bridge)
+    call(bridge, "notebook_write", {"page": "Voyage Japon", "kind": "subject", "section": "status", "facts": ["Vols à réserver"]})
+    card = bridge.get("/v1/notebook/pages", params={"kind": "subject"}, headers=AUTH).json()["pages"][0]
+    assert card["icon"] is None   # the apps pick one from its words
+    chosen = bridge.post("/v1/notebook/icon", json={"path": "Sujets/Voyage Japon.md", "icon": "gifts"}, headers=AUTH)
+    assert chosen.status_code == 200 and chosen.json()["path"] == "Sujets/Voyage Japon.md"
+    assert "\nicon: gifts\n" in (notebook(bridge) / "carnet" / "Sujets" / "Voyage Japon.md").read_text()
+    # an agent's next note keeps it; the page, the list and the search return it
+    call(bridge, "notebook_write", {"page": "Voyage Japon", "section": "decisions", "facts": ["Avril, 12 jours"]})
+    assert bridge.get("/v1/notebook/page", params={"path": "Sujets/Voyage Japon.md"}, headers=AUTH).json()["icon"] == "gifts"
+    assert bridge.get("/v1/notebook/pages", params={"kind": "subject"}, headers=AUTH).json()["pages"][0]["icon"] == "gifts"
+    assert bridge.get("/v1/notebook/search", params={"q": "japon"}, headers=AUTH).json()["pages"][0]["icon"] == "gifts"
+    assert bridge.post("/v1/notebook/icon", json={"path": "Sujets/Voyage Japon.md", "icon": "Not An Id!"},
+                       headers=AUTH).status_code == 400
+    assert bridge.post("/v1/notebook/icon", json={"path": "Sujets/Nulle part.md", "icon": "travel"},
+                       headers=AUTH).status_code == 404
+    assert bridge.post("/v1/notebook/icon", json={"path": "Sujets/Voyage Japon.md", "icon": ""}, headers=AUTH).status_code == 200
+    assert bridge.get("/v1/notebook/page", params={"path": "Sujets/Voyage Japon.md"}, headers=AUTH).json()["icon"] is None
+
+
+def test_the_health_part_is_private_to_the_health_agent_and_the_person(bridge, fakes):
+    health = bridge.state_dir / "health" / "agents.json"
+    health.parent.mkdir(parents=True, exist_ok=True)
+    health.write_text(json.dumps({"agents": ["wellness"], "categories": {"wellness": ["sleep"]}}))
+    give_token(bridge)
+    in_french(bridge)
+    tools = {t["name"]: t for t in rpc(bridge, "tools/list").json()["result"]["tools"]}
+    assert "private" in tools["notebook_write"]["inputSchema"]["properties"]
+    filed = call(bridge, "notebook_write", {"page": "Santé", "kind": "area", "facts": ["Allergie à la pénicilline"]})
+    assert text_of(filed).startswith("Saved: Santé"), text_of(filed)
+    assert (notebook(bridge) / "private" / "Domaines" / "Santé.md").exists()
+    assert not (notebook(bridge) / "carnet" / "Domaines").exists()
+    home = bridge.get("/v1/notebook", headers=AUTH).json()
+    assert all(s["count"] == 0 for s in home["sections"]) and home["recent"] == []
+    assert bridge.get("/v1/notebook/search", params={"q": "pénicilline"}, headers=AUTH).json()["pages"] == []
+    private = bridge.get("/v1/notebook/pages", params={"private": 1}, headers=AUTH).json()["pages"]
+    assert [p["title"] for p in private] == ["Santé"]
+    found = text_of(call(bridge, "notebook_search", {"words": "pénicilline"}))
+    assert "pénicilline" in found and "[private health part]" in found, found
+    export = zipfile.ZipFile(io.BytesIO(bridge.get("/v1/notebook/export", headers=AUTH).content)).namelist()
+    assert not any("Santé" in n for n in export)
+    with_health = bridge.get("/v1/notebook/export", params={"health": 1}, headers=AUTH).content
+    assert "Santé (privé)/Domaines/Santé.md" in zipfile.ZipFile(io.BytesIO(with_health)).namelist()
+    # The health agent's conversations never go to the nightly pass's model.
+    fakes.hermes.add_session("s1", [{"role": "user", "content": "Mon cardiologue Dr Martin me revoit le 12 décembre"},
+                                    {"role": "assistant", "content": "Noté."}], last_active=time.time())
+    run = bridge.post("/v1/notebook/tidy", headers=AUTH).json()["run"]
+    assert run["turns_seen"] == 0 and run["model_called"] is False and fakes.model.chats == []
+
+
+def nightly(bridges, fakes, **notebook_config):
+    return bridges.new(change=lambda c: c.update(notebook={"base_url": fakes.model.url + "/v1", "key": "sk-nb",
+                                                           "model": "small-eu", **notebook_config})).start()
+
+
+def tidy(bridge):
+    response = bridge.post("/v1/notebook/tidy", headers=AUTH)
+    assert response.status_code == 200, response.text
+    return response.json()["run"]
+
+
+def test_the_nightly_pass_calls_no_model_when_there_is_nothing_to_file(bridges, fakes):
+    bridge = nightly(bridges, fakes)
+    run = tidy(bridge)
+    assert run["reason"] == "no conversation" and run["model_called"] is False and fakes.model.chats == []
+    fakes.hermes.add_session("s1", [{"role": "user", "content": "merci !"}, {"role": "assistant", "content": "Avec plaisir."},
+                                    {"role": "user", "content": "quel temps fait-il ?"},
+                                    {"role": "assistant", "content": "Il fait beau."}], last_active=time.time())
+    run = tidy(bridge)
+    assert (run["reason"], run["turns_seen"], run["turns_kept"], run["model_called"]) == ("nothing to file", 2, 0, False)
+    assert fakes.model.chats == []
+    assert bridge.get("/v1/notebook/settings", headers=AUTH).json()["spent_this_month"] == 0
+
+
+def test_the_nightly_pass_files_what_the_agents_missed_and_counts_its_cost(bridges, fakes):
+    bridge = nightly(bridges, fakes)
+    in_french(bridge)
+    filed = {"role": "assistant", "content": "Noté.",
+             "tool_calls": [{"function": {"name": "mcp_bipagents_notebook_write", "arguments": "{}"}}]}
+    fakes.hermes.add_session("s1", [
+        {"role": "user", "content": "L'anniversaire de Marc est le 14 novembre"}, filed,
+        {"role": "user", "content": "Mon frère Paul arrive le 3 novembre"}, {"role": "assistant", "content": "Super !"},
+        {"role": "user", "content": "merci"}, {"role": "assistant", "content": "De rien."}], last_active=time.time())
+    fakes.model.notebook_lines = [{"op": "note", "agent": "wellness", "kind": "person", "page": "Paul",
+                                   "section": "Famille", "facts": ["Frère, arrive le 3 novembre"]},
+                                  {"op": "task", "agent": "wellness", "origin": "asked", "title": "x", "due": "bad"}]
+    run = tidy(bridge)
+    assert (run["reason"], run["turns_seen"], run["turns_kept"], run["model_called"]) == ("filed", 3, 1, True)
+    assert (run["tokens_in"], run["tokens_out"], run["eur"], run["applied"], run["model"]) == (3000, 300, 0.00195, 1, "small-eu")  # 0.50 € / 1.50 € a million (defaults)
+    chat = fakes.model.chats[-1]
+    assert chat["authorization"] == "Bearer sk-nb" and chat["body"]["model"] == "small-eu"
+    sent = chat["body"]["messages"][1]["content"]
+    assert "Mon frère Paul arrive le 3 novembre" in sent and "Marc" not in sent and "merci" not in sent
+    page = (notebook(bridge) / "carnet" / "Personnes" / "Paul.md").read_text()
+    assert f"## Famille et proches\n- Frère, arrive le 3 novembre — *Wellness, {TODAY}*" in page
+    change = bridge.get("/v1/notebook/history", headers=AUTH).json()["changes"][0]
+    assert change["by"] == "nightly" and change["agent"] == "wellness" and change["nightly"] is True
+    # The same conversation is not read again.
+    again = tidy(bridge)
+    assert again["model_called"] is False and len(fakes.model.chats) == 1
+    assert bridge.get("/v1/notebook/settings", headers=AUTH).json()["spent_this_month"] == 0.00195
+
+
+def test_the_monthly_cap_stops_the_nightly_pass(bridges, fakes):
+    bridge = nightly(bridges, fakes, monthly_cap=0.00001)
+    fakes.hermes.add_session("s1", [{"role": "user", "content": "Ma sœur Léa se marie le 12 juin"},
+                                    {"role": "assistant", "content": "Félicitations !"}], last_active=time.time())
+    run = tidy(bridge)
+    assert run["reason"] == "monthly cap reached" and run["model_called"] is False and fakes.model.chats == []
+    settings = bridge.get("/v1/notebook/settings", headers=AUTH).json()
+    assert settings["monthly_cap"] == 0.00001 and settings["nightly"] == "nightly" and settings["mentions"] is True
+    assert bridge.patch("/v1/notebook/settings", json={"nightly": "weekly"}, headers=AUTH).json()["nightly"] == "weekly"
+    assert bridge.patch("/v1/notebook/settings", json={"nightly": "hourly"}, headers=AUTH).status_code == 422
+
+
+def test_the_agents_memories_are_copied_once_for_the_nightly_pass_to_sort(bridges, fakes):
+    bridge = bridges.new(change=lambda c: c.update(notebook={"base_url": fakes.model.url + "/v1", "key": "sk-nb"}))
+    home = managed_install(bridge, fakes)
+    memories = profile(home, "coach") / "memories"
+    memories.mkdir(parents=True)
+    (memories / "MEMORY.md").write_text("Alex court le dimanche\n§\nSa fille Zoé a 8 ans")
+    (memories / "USER.md").write_text("Alex, vit à Lyon")
+    bridge.start()
+    bridge.patch("/v1/notebook/settings", json={"language": "fr"}, headers=AUTH)
+    fakes.model.notebook_lines = [{"op": "note", "agent": "coach", "kind": "person", "page": "Zoé",
+                                   "section": "Infos", "facts": ["Fille d'Alex, 8 ans"]}]
+    run = tidy(bridge)
+    assert run["seeded"] == 3 and run["inbox"] == 3 and run["model_called"] is True
+    sent = fakes.model.chats[-1]["body"]["messages"][1]["content"]
+    assert "To sort" in sent and "Sa fille Zoé a 8 ans" in sent
+    inbox = (notebook(bridge) / "carnet" / "À ranger.md").read_text()
+    assert "Zoé" not in inbox   # sorted
+    assert (notebook(bridge) / "carnet" / "Personnes" / "Zoé.md").exists()
+    assert "seeded" not in tidy(bridge)   # once
+
+
+def test_the_agents_web_pages_live_in_the_carnet(bridge):
+    give_token(bridge)
+    in_french(bridge)
+    call(bridge, "notebook_write", {"page": "Voyage Japon", "kind": "subject", "section": "status", "facts": ["Billets pris"]})
+    made = call(bridge, "create_page", {"html": "<p>Budget</p>", "title": "Budget du voyage", "notebook": "Voyage Japon"})
+    assert "Linked to the Carnet page Voyage Japon (Sujets/Voyage Japon.md)." in text_of(made)
+    lost = call(bridge, "create_page", {"html": "<p>x</p>", "title": "Autre", "notebook": "Nulle part"})
+    assert "No Carnet page « Nulle part »: the page is not linked" in text_of(lost)
+    docs = bridge.get("/v1/notebook/documents", headers=AUTH).json()["documents"]
+    budget = next(d for d in docs if d["page"] == "budget-du-voyage")
+    assert (budget["type"], budget["name"], budget["origin"]) == ("page", "Budget du voyage", "made")
+    assert budget["linked"] == {"title": "Voyage Japon", "path": "Sujets/Voyage Japon.md", "kind": "subject"}
+    assert budget["subjects"][0]["title"] == "Voyage Japon"
+    assert budget["path"] == "/bipagents/pages/wellness/budget-du-voyage.html"
+    view = bridge.get("/v1/notebook/page", params={"path": "Sujets/Voyage Japon.md"}, headers=AUTH).json()
+    assert [d["page"] for d in view["documents"]] == ["budget-du-voyage"]
+    # An update keeps the link; the Carnet page deleted leaves the web page in Documents, unlinked.
+    call(bridge, "create_page", {"html": "<p>v2</p>", "title": "Budget du voyage", "page": "budget-du-voyage"})
+    pages = bridge.get("/v1/pages", params={"agent": "wellness"}, headers=AUTH).json()["pages"]
+    # by name: both pages may carry the same second, and a tie keeps the folder's order (not the same on Linux)
+    assert next(p for p in pages if p["page"] == "budget-du-voyage")["notebook"]["part"] == "main"
+    bridge.delete("/v1/notebook/page", params={"path": "Sujets/Voyage Japon.md"}, headers=AUTH)
+    docs = bridge.get("/v1/notebook/documents", headers=AUTH).json()["documents"]
+    assert next(d for d in docs if d["page"] == "budget-du-voyage")["linked"] is None
+    # The web page deleted: gone from the Carnet.
+    bridge.delete("/v1/pages/budget-du-voyage", params={"agent": "wellness"}, headers=AUTH)
+    assert [d["page"] for d in bridge.get("/v1/notebook/documents", headers=AUTH).json()["documents"]] == ["autre"]
+
+
+def test_the_health_agents_web_pages_stay_in_the_private_part(bridge):
+    health = bridge.state_dir / "health" / "agents.json"
+    health.parent.mkdir(parents=True, exist_ok=True)
+    health.write_text(json.dumps({"agents": ["wellness"], "categories": {"wellness": ["sleep"]}}))
+    give_token(bridge)
+    in_french(bridge)
+    call(bridge, "notebook_write", {"page": "Santé", "kind": "area", "facts": ["Prise de sang tous les 6 mois"]})
+    made = call(bridge, "create_page", {"html": "<p>Ferritine</p>", "title": "Prises de sang", "notebook": "Domaines/Santé"})
+    assert "Linked to the Carnet page Santé (Domaines/Santé.md)." in text_of(made)
+    assert bridge.get("/v1/notebook/documents", headers=AUTH).json()["documents"] == []
+    assert bridge.get("/v1/notebook", headers=AUTH).json()["sections"][6] == {"kind": "documents", "title": "Documents", "count": 0}
+    private = bridge.get("/v1/notebook/documents", params={"private": 1}, headers=AUTH).json()["documents"]
+    assert [(d["page"], d["linked"]["path"]) for d in private] == [("prises-de-sang", "Domaines/Santé.md")]
+    view = bridge.get("/v1/notebook/page", params={"path": "Domaines/Santé.md", "private": 1}, headers=AUTH).json()
+    assert [d["page"] for d in view["documents"]] == ["prises-de-sang"]
+    # Not linked, still the health agent's: private all the same.
+    call(bridge, "create_page", {"html": "<p>Sommeil</p>", "title": "Sommeil"})
+    assert bridge.get("/v1/notebook/documents", headers=AUTH).json()["documents"] == []
+    assert len(bridge.get("/v1/notebook/documents", params={"private": 1}, headers=AUTH).json()["documents"]) == 2
+
+
+def test_old_pages_are_refiled_and_the_rest_sorted_by_the_nightly_pass(bridges, fakes):
+    bridge = nightly(bridges, fakes)
+    in_french(bridge)
+    folder = notebook(bridge) / "carnet" / "Personnes"
+    folder.mkdir(parents=True)
+    (folder / "Léa.md").write_text("---\nid: p0000000001\ntype: person\naliases: []\n---\n# Léa\n\n## Infos\n"
+                                   "- Anniversaire : 12 mars — *Wellness, 2026-10-01*\n- Grande voyageuse — *Wellness, 2026-10-01*\n")
+    # Shown in the outline at once; on disk at the nightly pass, without a model for what is obvious.
+    view = bridge.get("/v1/notebook/page", params={"path": "Personnes/Léa.md"}, headers=AUTH).json()
+    assert [(s["id"], s["title"]) for s in view["sections"]] == [("dates", "Dates"), ("other", "Autres")]
+    fakes.model.notebook_lines = [{"op": "refile", "page": "Léa", "fact": "Grande voyageuse", "section": "tastes"}]
+    run = tidy(bridge)
+    assert run["refiled"] == 1 and run["unsorted"] == 1 and run["model_called"] is True and run["applied"] == 1
+    sent = fakes.model.chats[-1]["body"]["messages"][1]["content"]
+    assert "Filed under « other »" in sent and "- [Léa] (person) Grande voyageuse" in sent
+    page = (folder / "Léa.md").read_text()
+    assert page.endswith("# Léa\n\n## Dates\n- Anniversaire : 12 mars — *Wellness, 2026-10-01*\n\n"
+                         "## Goûts et préférences\n- Grande voyageuse — *Wellness, 2026-10-01*\n")
+    changes = bridge.get("/v1/notebook/history", params={"path": "Personnes/Léa.md"}, headers=AUTH).json()["changes"]
+    assert [(c["action"], c["name"]) for c in changes] == [("refile", "rangement"), ("refile", "rangement")]
+    # The tidy has no agent: the apps still get strings (the iPhone failed to read a null agent, 2026-10-22).
+    recent = bridge.get("/v1/notebook", headers=AUTH).json()["recent"]
+    assert recent and all(isinstance(c[k], str) for c in recent for k in ("id", "by", "name", "agent", "title", "summary"))
+    # Once: not again, and a line the model already saw is not sent again.
+    again = tidy(bridge)
+    assert "refiled" not in again and again["unsorted"] == 0 and again["model_called"] is False

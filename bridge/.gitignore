@@ -1,0 +1,9 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+# Local config and data never belong in the repo
+bridge.toml
+bridge.toml.*
+*.p8
+*.db

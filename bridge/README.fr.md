@@ -1,0 +1,310 @@
+[🇬🇧 English](README.md) · 🇫🇷 Français
+
+# Bridge BipAgents (`bipbridge`)
+
+Un seul programme, écrit en Rust (`bridge-rs/`), qui tourne sur le **serveur** à côté des gateways Hermes et sert
+les apps BipAgents sur le tailnet (fichiers : `docs/file-uploads.md`). Il a remplacé le bridge Python
+(`bridge/bipbridge`) le 2026-10-21, avec les mêmes routes, fichiers et réglages ; celui-ci reste dans l'historique du
+dépôt. Ce dossier contient ce qui va avec : l'exemple de config (`bridge.example.toml`), les fichiers de service pour
+une installation à la main (`systemd/`, `launchd/`) et la suite boîte noire qui fixe son contrat HTTP
+(`tests_blackbox/`).
+
+Aujourd'hui le bridge fait tout ce dont les apps ont besoin au-delà de l'API d'Hermes : les voix des Bips et les appels
+Live, les fichiers, les notifications (directement ou par le [relais](../relay/README.fr.md)), les accords et les
+questions, la Boîte et les tâches planifiées, le Carnet (`src/notebook/`) avec ses fiches, voyages et archives, les
+connecteurs (mail, agenda et CalDAV, notes, rappels, contacts, santé, météo, cartes), le navigateur visible et le coffre
+de chaque agent (identifiants et cartes), les bacs à sable isolés des agents, les dossiers partagés et les sites
+autorisés, les tâches de fond, les pages et les podcasts, les liens familiaux entre installations, les groupes, la
+console web (`/console/`), la mise en place et les sauvegardes de l'offre, et le chiffrement de l'espace sur le disque.
+Chaque module de `bridge-rs/src/` commence par un commentaire sur ce qu'il fait et ses routes ; les sections ci-dessous
+documentent le cœur d'origine (voix, fichiers, push, accords), que les apps utilisent toujours tel quel.
+
+| Fonction | Route | Ce que fait le bridge |
+|---|---|---|
+| TTS par phrase | `POST /v1/tts/sentence` | normalise le texte (markdown, liens), appelle le moteur de voix (Pocket, ou ton propre modèle de voix), renvoie du PCM int16 mono 24 kHz (ou Opus/WAV) ; file FIFO globale + cache LRU |
+| Fichiers | `POST /v1/files` | dépose PDF/Excel/texte… dans un dossier monté dans le conteneur Hermes et renvoie le chemin **vu par l'agent** |
+| Push | `POST/DELETE /v1/devices` | enregistre les device tokens APNs (SQLite), envoie les push via HTTP/2 + jeton JWT ES256 |
+| Messages proactifs | `GET /v1/notifications`, `GET /v1/outbox/{id}/audio` | stocke les messages des routines et du travail de fond des agents, pré-synthétise l'audio (mp3), pousse `MESSAGE` |
+| Approbations | `POST /v1/watch`, `POST /v1/approve`, `GET /v1/approvals` | surveille un run en arrière-plan, pousse `APPROVAL` si personne ne le suit, relaie la réponse à Hermes |
+| Santé | `GET /health` | sans authentification : version + moteurs de voix joignables |
+
+Le bridge écoute **uniquement sur `127.0.0.1:8643`** ; l'exposition HTTPS se fait par `tailscale serve`.
+Il ne contient aucun secret : tout est dans son dossier de config (mode 600) : `~/.config/bipagents/` quand
+l'installateur l'a posé, `~/.config/hermes-ios/` par défaut à la main.
+
+## 1. Installation sur le serveur (à la main ; l'installateur fait tout cela lui-même)
+
+L'installateur (`install.sh`, `installer/bipinstall/rustbridge.py`) télécharge les binaires de la version du dépôt
+depuis la release GitHub `bridge-<clé>` (clé : les 12 premiers caractères du SHA-256 de
+`git rev-parse HEAD:bridge-rs`), les vérifie avec son `SHA256SUMS` et les lance en service ; `bipagents update` les
+tient à jour. Il existe des binaires pour Linux x86_64 et aarch64 (glibc ≥ 2.28 ; Windows via WSL2) et macOS
+(universel). À la main, prérequis : Pocket sur `:8098`, api_server Hermes sur `:8642`
+(wellness) et `:8644` (vie).
+
+```bash
+# 1. Le programme : l'archive d'une release, ou compilé ici (Rust stable)
+cd <dépôt>
+key=$(printf '%s' "$(git rev-parse HEAD:bridge-rs)" | sha256sum | cut -c1-12)   # macOS : shasum -a 256
+curl -fsSL "https://github.com/BipAgents/BipAgents/releases/download/bridge-$key/bipbridge-linux-x86_64.tar.gz" \
+  | tar -xz -C ~/.local/bin bipbridge bip-browser-mcp
+# ou : (cd bridge-rs && cargo build --release && cp target/release/{bipbridge,bip-browser-mcp} ~/.local/bin/)
+
+# 2. Configuration
+mkdir -p ~/.config/hermes-ios && chmod 700 ~/.config/hermes-ios
+cp bridge/bridge.example.toml ~/.config/hermes-ios/bridge.toml
+chmod 600 ~/.config/hermes-ios/bridge.toml
+~/.local/bin/bipbridge genkey                  # -> à mettre dans bridge_key (et à donner à l'app)
+$EDITOR ~/.config/hermes-ios/bridge.toml       # clés Hermes, APNs, dossiers d'upload
+~/.local/bin/bipbridge check                   # valide la config (refuse les valeurs CHANGE-ME)
+
+# 3. Dossiers d'upload visibles par les agents (home Hermes monté dans les conteneurs)
+mkdir -p ~/hermes-agent/hermes-home/profiles/{wellness,vie}/uploads
+
+# 4. Unité systemd utilisateur
+mkdir -p ~/.config/systemd/user
+cp bridge/systemd/hermes-bridge.service ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now hermes-bridge
+journalctl --user -u hermes-bridge -f          # journaux JSON
+
+# 5. Vérifications locales
+curl -s http://127.0.0.1:8643/health
+curl -s -H "Authorization: Bearer $BRIDGE_KEY" http://127.0.0.1:8643/v1/agents
+
+# 6. Exposition sur le tailnet (HTTPS, certificat réel, rien sur Internet)
+sudo tailscale serve --bg --https=8643 http://127.0.0.1:8643
+# depuis le Mac ou l'iPhone :
+curl https://server.example.ts.net:8643/health
+```
+
+Mise à jour : les binaires de la nouvelle version (étape 1 à nouveau), `systemctl --user restart hermes-bridge`. Le redémarrage du bridge n'affecte pas Hermes (aucun tour en cours n'est tué).
+
+### Droits sur les fichiers déposés (à vérifier une fois)
+
+Les fichiers sont créés par l'utilisateur du bridge en mode `640` (dossiers `750`). Ils sont lisibles dans le
+conteneur seulement si l'utilisateur de l'agent y est mappé sur cet utilisateur (ex. `--userns=keep-id`) :
+
+```bash
+podman exec hermes-gateway id
+podman exec hermes-gateway ls -ln /home/hermes/.hermes/profiles/wellness/uploads/
+# après un envoi de test depuis l'app :
+podman exec hermes-gateway cat /home/hermes/.hermes/profiles/wellness/uploads/<AAAA-MM>/<fichier>
+```
+
+Si le conteneur ne peut pas lire : mettre `upload_file_mode = "644"` et `upload_dir_mode = "755"` dans `[limits]`
+(ou une ACL `setfacl` pour l'UID mappé). Les fichiers de plus de 30 jours sont purgés automatiquement
+(seulement ceux écrits par le bridge : `AAAA-MM/<12 hex>-<nom>`).
+
+### APNs
+
+Dans Apple Developer : *Keys* → nouvelle clé avec *Apple Push Notifications service (APNs)* → télécharger
+`AuthKey_<KEYID>.p8` (une seule fois). La copier dans `~/.config/hermes-ios/` (mode 600) et renseigner `[apns]`
+(`team_id`, `key_id`, `p8_path`, `bundle_id = "io.github.bipagents"`). `environment` est le défaut pour les appareils
+qui n'en précisent pas : `sandbox` pour une app lancée depuis Xcode, `production` pour TestFlight/App Store
+(l'app envoie le sien à l'enregistrement). Sans `[apns]` rempli, le bridge tourne sans push.
+
+## 2. Configuration (`~/.config/hermes-ios/bridge.toml`)
+
+Voir `bridge.example.toml` (commenté). Chemin modifiable par `BRIDGE_CONFIG`. Un avertissement est journalisé si le
+fichier est lisible par le groupe ou les autres. Chaque secret accepte aussi la forme `<nom>_file = "chemin"`.
+
+| Clé | Défaut | Rôle |
+|---|---|---|
+| `bridge_key` | — (obligatoire) | clé Bearer unique de l'app (≥ 32 car., `bipbridge genkey`) |
+| `host`, `port` | `127.0.0.1`, `8643` | écoute locale |
+| `[pocket] url`, `default_voice` | `http://127.0.0.1:8098`, `pocket:ours` | Kyutai Pocket TTS (`pocket/`) pour les voix des Bips (une ancienne section `[kyutai]` est ignorée : un serveur Kyutai est un `[voice_server]` comme un autre) |
+| `[voice_server] url`, `model`, `stream_rate`, `voices`, `live`, `replies`, `reading`, `first_audio_seconds` | absent, `tts-1`, aucun, `[]`, `true` ×3, `5` | le modèle de voix de la personne (OpenAI `/v1/audio/speech`), voir plus bas |
+| `[pronunciations.<langue>] <mot> = "<graphie>"` | aucun | les mots que les voix disent mal, réécrits (mots entiers, toute casse) |
+| `[apns] team_id, key_id, p8_path, bundle_id, environment` | push désactivé si vide | |
+| `[push] previews` | `false` | `false` : corps de notification générique, le texte transite par le tailnet |
+| `[outbox] db_path, audio_dir, retention_days, audio_max_chars, audio_wait_seconds` | `~/.local/share/hermes-bridge/…`, 90 j, 2000, 8 s | |
+| `[limits] upload_max_mb, upload_retention_days, upload_file_mode, sentence_max_chars, tts_max_chars, watch_max_minutes` | 50, 30, `640`, 180, 1000, 120 | |
+| `[agents.<id>] display_name, hermes_url, hermes_key, upload_dir_host, upload_dir_container, voice` | | `<id>` en minuscules = identifiant utilisé par l'app (`wellness`, `vie`) |
+
+## 3. Ce que l'iPhone appelle
+
+Base : `https://server.example.ts.net:8643`, en-tête `Authorization: Bearer <clé bridge>` partout sauf `/health`
+(401 + `WWW-Authenticate: Bearer` sinon). L'identifiant d'agent est
+insensible à la casse (`wellness`, `vie`).
+
+- **Lancement / Réglages** : `GET /health` (pastille), `GET /v1/agents` (agents connus du bridge).
+- **Notifications** : au démarrage, `POST /v1/devices {token, environment, agent_ids}` ; à la déconnexion
+  `DELETE /v1/devices/{token}`.
+- **Passage en arrière-plan pendant un run** : `POST /v1/watch {agent, run_id}` → push `APPROVAL` si une approbation arrive,
+  push silencieux `run_finished` à la fin.
+- **Notification Service Extension** : `MESSAGE` → `GET /v1/notifications/{n}` + `GET /v1/outbox/{id}/audio` (mp3) ;
+  `APPROVAL` → `GET /v1/approvals?agent=` pour afficher la commande ; actions Approuver/Refuser → `POST /v1/approve`.
+- **Boîte de réception** : `GET /v1/notifications` (ses lignes `boite`) au retour au premier plan.
+- **Fichiers** : `POST /v1/files` (multipart `agent`, `file`) puis ligne `[Pièce jointe : … → <path>]` dans le message.
+
+Le contrat détaillé (payloads exacts) est dans la section suivante.
+
+## 4. Contrat d'API
+
+### `GET /health` (public)
+`{"ok": true, "version": "0.1.0", "pocket": bool, "apns": bool, "tts_queue": n}`
+
+### `GET /v1/agents`
+`{"agents": [{"id": "wellness", "name": "Wellness", "voice": "5476", "uploads": true, "inbox": true}]}`
+
+### `POST /v1/tts/sentence`
+Corps : `{"text": "…", "voice"?: "5476", "format"?: "pcm16"|"opus"|"wav" (défaut pcm16), "agent"?: "wellness"}`
+(voix : `voice`, sinon celle de l'agent, sinon `default_voice`). Réponse 200 binaire :
+- `pcm16` : `Content-Type: application/octet-stream`, PCM signé 16 bits little-endian, mono ;
+  en-têtes `X-Sample-Rate: 24000`, `X-Channels: 1`, `X-Sample-Format: s16le`
+- `opus` : `audio/ogg` (Ogg Opus) ; `wav` : `audio/wav`
+- toujours `X-Cache: hit|miss`. Erreurs : 400 (texte vide après normalisation, format), 404 (agent), 413 (> 1000 car.),
+  502 (moteur de voix injoignable / erreur).
+
+### `POST /v1/tts/stream`
+Même corps que `/v1/tts/sentence` (le format est toujours PCM16). Relaie le `POST /v1/audio/stream` du moteur (celui de Pocket) :
+réponse 200 en transfert *chunked*, PCM s16le mono 24 kHz envoyé à mesure qu'il est produit (premier son ≈ 0,75 s,
+quelle que soit la longueur du texte), en-têtes `X-Sample-Rate`, `X-Channels`, `X-Sample-Format: s16le`.
+Les erreurs survenues avant le premier octet audio sont des erreurs HTTP classiques (400, 404, 413 au-delà de
+8000 car., 502). Un moteur sans route de streaming (404) est remplacé par une synthèse en un bloc. Un flux complet
+est mis en cache. L'app l'utilise en Live et retombe sur `/v1/tts/sentence` si le bridge ne connaît pas la route.
+
+### Voix et moteurs
+`voice` (corps des routes TTS, ou `voice` d'un agent dans la config) : une voix `pocket:<nom>` (`pocket:colibri`,
+`pocket:mousse`, `pocket:lumen`, `pocket:galet`, `pocket:ours`, cf. `voices/french/`) passe par Kyutai Pocket TTS (CPU,
+section `[pocket]`), avec sa propre file d'attente ; une ancienne voix Kyutai 1.6B (`5476`…) parle avec le Bip par
+défaut. `/health` indique `"pocket": true|false|null`. Les apps peuvent aussi parler avec les voix des
+Bips sur le téléphone lui-même, sans le bridge (`voices/onnx/`).
+
+Modèle de voix personnel : `server:<langue>/<id>` (`server:fr/fr-mascotte-s17`, `server:en/af_bella`) va à
+`[voice_server]`, tout serveur doté du `POST /v1/audio/speech` d'OpenAI (Fish Audio Drama 3 sur audio.cpp, Kokoro,
+Kyutai…), rééchantillonné en 24 kHz. Un agent a son Bip (`voice`) et sa voix sur ce serveur (`server_voice`) ;
+`[voice_server] live`, `replies`, `reading` disent quels usages passent par le serveur (`voices.rs` : `use` dans les
+routes TTS, la WebSocket du Live, la lecture de la boîte). En panne, en échec avant le premier son, ou trop lent pour
+une phrase du Live ou une réponse vocale (aucun son `first_audio_seconds` après l'envoi, plus la durée du texte pour un
+fichier entier) : le Bip de l'agent parle, et continue pendant 30 s. `GET /v1/voices` liste ses voix (son `GET /v1/audio/voices`, le `/v1/voices` de Kyutai, sinon `voices`) et
+ses usages ; `PUT /v1/voices/uses` et `PUT /v1/agents/{id}/voices` les changent dans le fichier de config. Les voix d'une
+ancienne app (`drama:<id>`) y vont aussi.
+
+Autres langues : `pocket:<langue>/<nom>` (`pocket:en/colibri`, `pocket:es/ours`, `pocket:de/galet`, `pocket:nl/lumen`, cf.
+`voices/english|spanish|german|dutch/`) passe au modèle Pocket de cette langue ; le serveur Pocket reçoit `voice` =
+`en/colibri`. Le texte est préparé dans la langue de la voix (`bridge-rs/src/speech_intl.rs`, nombres via `num2words` :
+« $5 » → « five dollars », « 23:15 Uhr » → « dreiundzwanzig Uhr fünfzehn »). Quand Pocket échoue, le bridge répond 502/503 et l'app lit le texte avec la voix du téléphone.
+
+### Tâches planifiées et fichiers des agents
+- Le bridge relit toutes les minutes les sessions `cron_…` de chaque agent et met la réponse finale de chaque
+  tâche dans la Boîte (`[SILENT]` ignoré, section `[cron]`). `GET /v1/cron-jobs?agent=` liste les tâches vues
+  (`{agent, job, name, notify, last_seen}`) ; `PUT /v1/cron-jobs/{agent}/{job}` `{"notify": false}` les range
+  dans la Boîte sans notification.
+- **Bot Chat** (Hermes Bot Mode) : le même surveillant relit la « Bot Chat » de chaque agent. Un tour que l'agent
+  prend de lui-même (réponse d'un coéquipier via `message_agent`, routine) est poussé comme « réponse prête »,
+  sauf si l'app suivait ce tour ou si la conversation est ouverte sur le téléphone. L'app signale qu'une
+  conversation est ouverte en interrogeant `GET /v1/sessions/{id}/state?agent=` (→ `message_count`) toutes les
+  quelques secondes, ce qui lui sert aussi à afficher ces tours sans recharger à la main.
+- `GET /v1/media?path=/home/hermes/.hermes/media/…` sert un fichier désigné par une ligne `MEDIA:<chemin>` d'un agent, s'il est
+  sous un dossier de `[media.roots]` et a une extension média (audio, image, PDF). Dans un message de la Boîte,
+  la ligne est retirée du texte et un mp3 devient l'audio du message.
+
+### Outils des agents : `POST /v1/agent-tools/mcp` (MCP, un jeton par agent)
+
+Le bridge donne à chaque agent de l'installation un serveur MCP, `bipagents`, inscrit au démarrage dans son profil
+Hermes (`mcp_servers.bipagents` : cette adresse, `Authorization: Bearer <son propre jeton>`, `timeout`). C'est Hermes
+qui l'appelle, pas le bac à sable de l'agent : rien n'est ouvert aux conteneurs. Outils : `create_podcast` (`turns` : `[{speaker, text}]`, `title` et `voices` facultatifs) — une conversation entre 4 animateurs au plus, chacun avec sa voix (le modèle de voix de la personne s'il lit, voix naturelles d'abord, sinon les Bips ; l'agent peut les choisir avec `list_voices`), 350 ms entre les tours ; `create_audio` (`text`, `title`
+facultatif) : le texte lu avec la voix de lecture de l'agent réglée dans l'app (son modèle de voix — Drama 3, Kokoro… —
+sinon son Bip), découpé en paragraphes et en petits groupes de phrases, avec les prononciations de la personne, dans
+la file d'arrière-plan (un Live passe d'abord). Le fichier (`.m4a` si ffmpeg est installé, sinon `.wav`) est servi par
+`GET /v1/media?path=/bipagents/audio/…` ; le résultat donne à l'agent la ligne `MEDIA:` à mettre dans sa réponse. Un
+appel long répond en flux d'événements, avec un commentaire toutes les 10 s. Les fichiers sont purgés après
+`[outbox] retention_days` ; les jetons (empreintes) sont dans `agent-tools.json`.
+
+Pages : `create_page` (`html`, `title`, `page` facultatif pour en mettre une à jour) garde une petite page web faite
+par l'agent pour la personne — un tableau de bord de ses prises de sang, un suivi, un graphique, un quiz, sur
+n'importe quel sujet — en un seul fichier HTML où tout est inclus, dans `agent-pages/<agent>/` (1 Mo de HTML au plus,
+100 pages par agent, gardées jusqu'à leur suppression, et supprimées avec l'agent). Elle est verrouillée avant d'être
+gardée : une Content-Security-Policy en tête de son head (pas de réseau, pas de formulaires, pas de cadres), et
+`<script src="chart.js">` (ou le Chart.js d'un CDN) devient le Chart.js 4 fourni, inclus dans la page (`static/vendor`,
+MIT) ; l'agent apprend ce que sa page demande d'autre au réseau. `GET /v1/media?path=/bipagents/pages/<agent>/<id>.html`
+la sert avec `Content-Security-Policy: sandbox allow-scripts; …` et `Cache-Control: no-store` (une mise à jour garde
+l'adresse) ; les apps l'affichent dans une vue sans issue. `list_pages`, `read_page` (la source de l'agent, gardée à
+côté et jamais servie) et `delete_page` complètent ; les apps les listent par `GET /v1/pages?agent=` et en suppriment
+une par `DELETE /v1/pages/{id}?agent=`.
+
+### `POST /v1/files` (multipart/form-data : `agent`, `file`)
+200 : `{"path": "/home/hermes/.hermes/profiles/wellness/uploads/2026-10/0a1b2c3d4e5f-Releve_oct.pdf",
+"filename": "Releve_oct.pdf", "size": 220512, "content_type": "application/pdf"}`
+(`path` = chemin **dans le conteneur Hermes** ; sur l'hôte : `{upload_dir_host}/AAAA-MM/<12 hex>-<nom>`, mode 640).
+Nom assaini : base seule, sans caractères de contrôle, espaces et caractères shell → `_`, pas de point initial, ≤ 120 car.
+Erreurs : 400 (multipart invalide / pas de `file`), 404 (agent inconnu), 409 (uploads non configurés pour l'agent),
+413 (> 50 Mo).
+
+### `POST /v1/devices`
+Corps : `{"token": "<hex APNs>", "environment"?: "sandbox"|"production", "agent_ids"?: ["wellness","vie"]}`
+(`agent_ids` vide = tous les agents ; `environment` absent = `[apns].environment`). Réponse 200 :
+`{"token","environment","agent_ids","created_at","updated_at"}`. Ré-enregistrer met à jour. 400 : token non hexadécimal,
+environnement invalide, `{"detail":{"error":"unknown agent_ids","agent_ids":[…]}}`.
+
+### `DELETE /v1/devices/{toke### La Boîte : `GET /v1/notifications?agent=…`
+Un message de la Boîte est une ligne `boite` du journal des notifications (`bridge-rs/src/notifications.rs`), avec
+`boite` : `{"title", "text" (entier, markdown), "attachments", "has_audio", "audio_url"}`, les messages en sourdine
+compris (push `skipped:muted`) ; `ref` est son id pour la route audio ci-dessous.
+
+d}` → Item (404 sinon)
+
+### `GET /v1/outbox/{id}/audio`
+200 `audio/mpeg` ; si la synthèse est encore en cours (attente ≤ 20 s) : 202 `{"status":"pending"}` + `Retry-After: 3` ;
+404 si pas d'audio (texte > `audio_max_chars`) ; 503 si la synthèse a échoué.
+
+### `POST /v1/watch`
+Corps : `{"agent":"wellness","run_id":"…"}` → `{"watching": true, "agent", "run_id", "followers": n, "finished": bool}`.
+Le bridge s'abonne au run (un seul abonnement Hermes par run, avec rejeu pour un suivi tardif) pendant au plus `watch_max_minutes`. Sur `approval.request` sans client attaché (le flux de l'app) : push `APPROVAL` (une fois par `request_id`). À la fin du run sans client attaché : push « réponse prête »
+(`run.completed` avec une réponse, catégorie `MESSAGE`, `kind: "reply"`, `session_id` si connu), push silencieux sinon.
+
+### `GET /v1/runs/{run_id}/events?agent=…&session_id=…`
+Flux SSE du run pour l'app, relayé depuis l'abonnement unique du bridge à Hermes (Hermes ne livre chaque événement
+qu'à un seul abonné) : mêmes événements que Hermes (`event: <type>`, `data: <json>`), `: keepalive` toutes les 10 s.
+Le run est rejoué depuis son début à chaque connexion (historique gardé 15 min après la fin), donc une reconnexion
+reconstruit la réponse à l'identique. Vaut `POST /v1/watch` : tant que l'app écoute, aucun push ; quand elle part
+(conversation quittée, écran verrouillé), le bridge pousse l'approbation ou la réponse prête, qui rouvre la
+conversation `session_id`. `bridge.error` (`run_not_found`, `hermes_refused`, `hermes_unreachable`, `watch_timeout`)
+signale un problème côté bridge.
+
+### `POST /v1/approve`
+Corps : `{"agent":"wellness","run_id":"…","choice":"once"|"session"|"always"|"deny","request_id"?:"…"}` → relayé à
+Hermes `POST /v1/runs/{run_id}/approval` avec la clé de l'agent ; statut et JSON de Hermes renvoyés tels quels
+(200 `{"object":"hermes.run.approval_response",…}`, 409 `approval_not_pending`, …). 502 si Hermes injoignable.
+
+### `GET /v1/approvals?agent=<id>`
+`{"items":[{"agent","run_id","request_id","command","description","choices":["once","session","deny"],"created_at"}]}` —
+approbations vues par le bridge et pas encore résolues (commande déjà expurgée par Hermes).
+
+### Payloads APNs
+```json
+MESSAGE  {"aps":{"alert":{"title":"Wellness","body":"Nouveau message"},"thread-id":"wellness","mutable-content":1,
+          "category":"MESSAGE","sound":"default"},"outbox_id":"…","agent":"wellness","session_id":"…"}
+APPROVAL {"aps":{"alert":{"title":"Wellness","body":"Approbation requise"},"thread-id":"wellness","mutable-content":1,
+          "category":"APPROVAL","sound":"default"},"agent":"wellness","run_id":"…","request_id":"…",
+          "choices":["once","session","deny"]}
+SILENT   {"aps":{"content-available":1},"agent":"wellness","reason":"run_finished","run_id":"…","status":"run.completed"}
+```
+`apns-push-type` : `alert` (priorité 10) ou `background` (priorité 5) ; `apns-collapse-id` = `request_id` pour les
+approbations ; `apns-topic` = `bundle_id`. Jeton JWT ES256 renouvelé toutes les 50 min (et sur `ExpiredProviderToken`).
+Un token en 410, ou 400 `BadDeviceToken`/`DeviceTokenNotForTopic`, est supprimé. Avec `previews = true`, le corps
+contient un extrait du texte (ou de la commande).
+
+## 5. Fonctionnement interne
+
+- **Synthèse sérialisée** : une seule requête par moteur à la fois côté bridge aussi, servie par ordre d'arrivée ; priorité
+  « interactive » (voix, `/v1/tts/sentence`) devant « arrière-plan » (audio de l'outbox) — jamais d'interruption d'une
+  synthèse déjà lancée. Une requête annulée (barge-in) quitte la file. Cache LRU (voix, format, texte normalisé).
+- **SSE tolérant** : type lu dans le JSON (`type` ou `event`) sinon la ligne `event:` ; `: keepalive` ignoré ;
+  texte pris dans `delta` / `text` / `content`. Événements de texte : `message.delta`, `assistant.delta`.
+- **Journaux** : JSON sur stdout (journald), jamais de secret ni de texte de message ; tokens d'appareil tronqués ;
+  pas de journal d'accès (les chemins contiennent des tokens).
+
+## 6. Développement et tests
+
+```bash
+cd bridge-rs && cargo test && cargo clippy --all-targets -- -D warnings     # ses propres tests
+cargo build --release && cd ../bridge
+pip install -r tests_blackbox/requirements.txt                              # Python 3.12, le banc seulement
+python -m pytest tests_blackbox -q -p no:cacheprovider                      # le contrat HTTP (tests_blackbox/README.md)
+```
+
+Aucun n'appelle de service réel : Hermes, les moteurs de voix, APNs et FCM sont simulés
+(`bridge-rs/tests/common/`, `tests_blackbox/bbkit/`). Les tests Rust ont été portés depuis ceux du bridge Python, et
+ses fixtures dorées (`bridge-rs/tests/golden/`) faites en lançant le code Python : elles sont figées (leurs générateurs sont partis avec lui).

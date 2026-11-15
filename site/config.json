@@ -1,0 +1,220 @@
+{
+  "_readme": "The one place for what the owner fills in: the company's details (both sites' legal pages and footers), the store links, the web checkout and the prices. Empty strings stay visible as TODO marks (company) or fall back (stores: « soon »; checkout: the store badges and « web subscription coming soon »).",
+  "company": {
+    "name": "Kerfy Studio",
+    "form": "SAS",
+    "capital": "1000",
+    "siren": "131834921",
+    "rcsCity": "Paris",
+    "address": "47 rue Vivienne, 75002 Paris",
+    "phone": "",
+    "vat": "FR79131834921",
+    "president": "",
+    "noticeDate": ""
+  },
+  "contact": {
+    "general": "contact@kerfystudio.com",
+    "support": "support@bipagents.com",
+    "abuse": "abuse@bipagents.com",
+    "privacy": "privacy@bipagents.com",
+    "security": "security@bipagents.com"
+  },
+  "repo": "https://github.com/BipAgents/BipAgents",
+  "stores": {
+    "bipagents": {
+      "appStore": "",
+      "googlePlay": "",
+      "appleTeamId": "9FA6JLUQ9G",
+      "playSigningSha256": "C4:56:6D:6D:6F:26:88:69:3D:18:6F:97:EF:50:11:34:16:52:C4:A5:5C:AD:49:9B:AD:B2:34:48:E7:2B:DD:30"
+    },
+    "tablee": {
+      "appStore": "https://apps.apple.com/app/id6762468127",
+      "googlePlay": "https://play.google.com/store/apps/details?id=net.tablee.app"
+    }
+  },
+  "beta": {
+    "_readme": "The public beta (the site's « Join the beta » page, /beta/). testflight: the TestFlight public link (https://testflight.apple.com/join/…); play: the Google Play testing link (https://play.google.com/apps/testing/…). Empty: the badge reads « coming soon » and the page says the beta opens in a few days. cap: the places, as the page shows them after « Places: » (e.g. « 500 », « 120 left »), one text for every language or {\"en\": …, \"fr\": …, \"de\": …, \"es\": …}; empty: no line.",
+    "testflight": "https://testflight.apple.com/join/nqbPNHDd",
+    "play": "https://play.google.com/apps/testing/com.kerfystudio.bipagents",
+    "cap": "100"
+  },
+  "checkout": {
+    "_readme": "url: one template for every plan and period, {plan} = solo|duo|famille, {period} = month|year, {lang} = en|fr|de|es; the page adds &currency=EUR|USD|… (the visitor's choice; or put {currency} in the template). links: optional per plan/period overrides, e.g. {\"duo\": {\"year\": \"https://…\"}}. Both empty = no web checkout yet. The guichet answers « bientôt sur le site » until its [web] enabled is on, and « complet » when the offer is full.",
+    "url": "",
+    "_urlWhenLive": "https://guichet.bipagents.com/v1/web/checkout?plan={plan}&period={period}&lang={lang} (put it back in url once guichet.bipagents.com answers and its [web] is on)",
+    "links": {}
+  },
+  "prices": {
+    "_readme": "Each currency its own round prices (decided 2026-10-23, not Stripe's conversion): the same table as the guichet's guichet.toml ([web.currencies] and the plans' web.<currency>), keep them equal. web = sold on the site (Stripe), store = App Store / Google Play in that currency (null: not known yet, the « in the app » and savings lines are hidden). year = 10 months for 12. tax: inclusive (VAT/GST inside the price) or exclusive (sales tax added at checkout, « + taxes » shown). countries: the visitor's region (browser language) that picks this currency first; the one without countries is the default. symbol: the selector's label. proposal: a price not decided yet (SGD, ILS).",
+    "plans": [
+      "solo",
+      "duo",
+      "famille"
+    ],
+    "people": {
+      "solo": 1,
+      "duo": 2,
+      "famille": 6
+    },
+    "currencies": {
+      "EUR": {
+        "symbol": "€",
+        "tax": "inclusive",
+        "countries": [],
+        "web": {
+          "month": {
+            "solo": 7.49,
+            "duo": 11.99,
+            "famille": 17.99
+          },
+          "year": {
+            "solo": 74.9,
+            "duo": 119.9,
+            "famille": 179.9
+          }
+        },
+        "store": {
+          "month": {
+            "solo": 7.99,
+            "duo": 12.99,
+            "famille": 19.99
+          },
+          "year": {
+            "solo": 79.9,
+            "duo": 129.0,
+            "famille": 199.0
+          }
+        }
+      },
+      "USD": {
+        "symbol": "$",
+        "tax": "exclusive",
+        "countries": [
+          "US"
+        ],
+        "web": {
+          "month": {
+            "solo": 7.49,
+            "duo": 11.99,
+            "famille": 17.99
+          },
+          "year": {
+            "solo": 74.9,
+            "duo": 119.9,
+            "famille": 179.9
+          }
+        },
+        "store": {
+          "month": {
+            "solo": 7.99,
+            "duo": 12.99,
+            "famille": 19.99
+          },
+          "year": {
+            "solo": 79.9,
+            "duo": 129.9,
+            "famille": 199.9
+          }
+        }
+      },
+      "CAD": {
+        "symbol": "CA$",
+        "tax": "exclusive",
+        "countries": [
+          "CA"
+        ],
+        "web": {
+          "month": {
+            "solo": 9.49,
+            "duo": 15.99,
+            "famille": 22.99
+          },
+          "year": {
+            "solo": 94.9,
+            "duo": 159.9,
+            "famille": 229.9
+          }
+        },
+        "store": null
+      },
+      "GBP": {
+        "symbol": "£",
+        "tax": "inclusive",
+        "countries": [
+          "GB"
+        ],
+        "web": {
+          "month": {
+            "solo": 6.49,
+            "duo": 10.49,
+            "famille": 15.49
+          },
+          "year": {
+            "solo": 64.9,
+            "duo": 104.9,
+            "famille": 154.9
+          }
+        },
+        "store": null
+      },
+      "SGD": {
+        "symbol": "S$",
+        "tax": "inclusive",
+        "countries": [
+          "SG"
+        ],
+        "proposal": true,
+        "web": {
+          "month": {
+            "solo": 9.99,
+            "duo": 15.99,
+            "famille": 24.99
+          },
+          "year": {
+            "solo": 99.9,
+            "duo": 159.9,
+            "famille": 249.9
+          }
+        },
+        "store": null
+      },
+      "ILS": {
+        "symbol": "₪",
+        "tax": "inclusive",
+        "countries": [
+          "IL"
+        ],
+        "proposal": true,
+        "web": {
+          "month": {
+            "solo": 28.9,
+            "duo": 46.9,
+            "famille": 69.9
+          },
+          "year": {
+            "solo": 289.0,
+            "duo": 469.0,
+            "famille": 699.0
+          }
+        },
+        "store": null
+      }
+    }
+  },
+  "compare": {
+    "_readme": "The other offers' prices the home compares with (its first screen's line and the footnote). One place, with where they were read and when; read them again before each publication. Prices in euros as the pages show them to a visitor in France: ChatGPT's as displayed, Claude's before tax (its page says so). A comparison to remove: take the lines out of the i18n files (hero.sub, compare.note).",
+    "date": "2026-11-10",
+    "chatgpt": {
+      "plus": 23,
+      "go": 8,
+      "per": "month, per person",
+      "source": "https://chatgpt.com/pricing"
+    },
+    "claude": {
+      "pro": 18,
+      "tax": "excluded",
+      "per": "month billed monthly, per person",
+      "source": "https://claude.com/pricing"
+    }
+  }
+}

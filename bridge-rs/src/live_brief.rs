@@ -1,0 +1,1131 @@
+//! A Live call continues a conversation from a short brief of it instead of its whole history (100k tokens and more:
+//! a minute of reading for a local model, and a cache broken for the written conversation). The brief:
+//!
+//! - the key points, which the agent itself keeps up to date in the background: in a throwaway session (hidden, deleted
+//!   at once), from its previous points and the messages since, once a conversation has had 6 new messages and been quiet
+//!   a minute (its turn is over, the model server's cache is still warm); one at a time, never for Live, scheduled-task
+//!   or throwaway sessions;
+//! - the last exchanges, word for word, read when the brief is asked for: always up to date;
+//! - the calls of the last day that continued it.
+//!
+//! The apps give it to the call's own short session as instructions (Hermes adds them to the end of its system prompt),
+//! the same text at every turn of the call so that the model server's cache holds.
+//!
+//!     GET  /v1/live/brief?agent=&session=   {session, text, points_at}   (without a session: the agent's latest one)
+//!     POST /v1/live/calls                   {agent, session, live_session, run_id?, started_at?}   a call that just
+//!                                           ended, put into its conversation (live_calls.rs)
+//!     POST /v1/live/calls/start             {agent, session?, prelude?} -> {live_session}   a call that starts: its
+//!                                           own session made (its turns: live_turns.rs), the prelude read at once
+//!     GET  /v1/live/calls?agent=&session=   {calls}   the calls shown in a conversation (live_calls.rs)
+//!
+//! Messages and points stay on this server (data folder « briefs », one file per conversation).
+//!
+//! The throwaway sessions must never come back. Hermes (517b5e10f) titles a session in a background thread after its
+//! first turn (`agent/title_generator.py` `auto_title_session`), and that thread bills its model call to the session
+//! (`agent/aux_accounting.py` → `hermes_state_usage.py` `record_auxiliary_usage`), which upserts the session row
+//! (`_insert_session_row(session_id, "unknown")`): after our DELETE, a new empty, visible row then took the generated
+//! title — an empty conversation named after the person's subjects, every hour or two. So:
+//!
+//! - the scratch session's title is set with a PATCH (Hermes' « user » provenance): the titler sees a title it must
+//!   not replace and stops before any model call (`_has_upgraded_title`); the title is unique (Hermes refuses a
+//!   title another session holds);
+//! - the scratch ids are kept (« briefs/scratch.json ») and deleted again a few times over the next half hour, and at
+//!   the bridge's start, until Hermes answers 404 (that path only ever deletes the ids it created);
+//! - the empty rows already written back are swept (`is_ghost`): an `api_` id (minted by `POST /api/sessions`) whose
+//!   source is Hermes' accounting placeholder « unknown », no message (count and transcript), not pinned, ten
+//!   minutes old at least.
+
+use std::sync::{LazyLock, Mutex};
+
+use axum::extract::State;
+use axum::response::Response;
+use axum::routing::{get, post};
+use axum::Router;
+use chrono::{Local, TimeZone};
+use serde::Deserialize;
+use serde_json::{json, Map, Value};
+
+use crate::app::AppState;
+use crate::config::{AgentConfig, SharedConfig};
+use crate::cronwatch::is_cron_session;
+use crate::hermes::{HermesClient, HermesError};
+use crate::py;
+use crate::voice_speech::pystr;
+use crate::web::{self, ApiResult, FieldError, HttpError, Json, QueryMap, Validate};
+use crate::Dict;
+
+pub const RECENT_MESSAGES: usize = 8;
+/// Characters of call recaps waiting for one conversation.
+pub const RECAPS_MAX: usize = 8000;
+/// Between two calls' recaps in their file (a recap holds line breaks).
+pub const RECAP_SEPARATOR: &str = "\u{1e}";
+static RECAP_LOCK: Mutex<()> = Mutex::new(());
+pub const MESSAGE_CHARS: usize = 700;
+pub const RECENT_CHARS: usize = 6000;
+/// New messages before the key points are written again.
+pub const POINTS_EVERY: usize = 6;
+/// Shorter conversations: the last exchanges say it all.
+pub const MIN_MESSAGES: usize = 10;
+/// The turn is over.
+pub const QUIET_SECONDS: f64 = 60.0;
+/// After a Live call that continued the conversation, the key points wait this long (3/11): rewritten a minute after
+/// a call, they changed the next call's instructions (a broken prompt cache) and, on a one-slot local model server,
+/// their throwaway turn pushed the call's prompt out of the cache: the next call's first answer came 3-4 s later.
+pub const AFTER_CALL_QUIET_SECONDS: f64 = 600.0;
+pub const LOOP_SECONDS: f64 = 120.0;
+pub const CALLS_KEPT: usize = 3;
+pub const CALL_HOURS: f64 = 24.0;
+pub const CALL_CHARS: usize = 2500;
+pub const POINTS_TITLE: &str = "BipAgents · notes";
+/// The scratch session of a call's warm-up (`warm_up`).
+pub const WARM_TITLE: &str = "BipAgents · live";
+/// The warm-up's request, after the call's prelude: the shortest answer, no tool.
+pub const WARM_MESSAGE: &str = "<!--bip:warm\nNot from the person: answer exactly « OK » and nothing else, no tool.\n-->";
+/// The longest prelude a call start may send for its warm-up (the brief is ~6-9k characters).
+pub const WARM_PRELUDE_MAX: usize = 40_000;
+/// After a scratch session's deletion, when it is deleted again (seconds): Hermes' titler may write it back meanwhile.
+pub const SCRATCH_CHECKS: [f64; 6] = [10.0, 30.0, 90.0, 300.0, 900.0, 1800.0];
+/// A scratch session Hermes still keeps past the last check (a turn still running…): again every half hour…
+pub const SCRATCH_RETRY_SECONDS: f64 = 1800.0;
+/// …for two days at most.
+pub const SCRATCH_KEPT_SECONDS: f64 = 2.0 * 86400.0;
+/// While its chat runs, a scratch session is not deleted by the sweep (a crash meanwhile: deleted at the next start).
+pub const SCRATCH_CHAT_SECONDS: f64 = 300.0;
+pub const SWEEP_SECONDS: f64 = 5.0;
+/// The empty rows Hermes wrote back: looked for 20 s after the start, then every 6 hours.
+pub const GHOSTS_FIRST_SECONDS: f64 = 20.0;
+pub const GHOSTS_EVERY_SECONDS: f64 = 6.0 * 3600.0;
+pub const GHOST_AGE_SECONDS: f64 = 600.0;
+const GHOST_PAGE: i64 = 200;
+const GHOST_PAGES: i64 = 10;
+static SCRATCH_LOCK: Mutex<()> = Mutex::new(());
+pub const LIVE_TITLE: &str = "Live";
+/// A call's Carnet line, in its brief (the apps put the brief in the call's prelude): filing fast while the person
+/// waits on the line, one notebook_write without a search first (10/11: the agents' rule says search first, a second
+/// model call before « noté »). A turn the phone sent to be filed has its own note (live_turns.rs `NOTE`).
+pub const CARNET: &str = "Something to keep (a fact, a date, a size): file it at once with notebook_write, one call \
+a page, no notebook_search before, then only « OK, noté » or the like, nothing added.";
+/// What the apps put in a message for the agent only (a call's opening, a call's recap): never shown to the person.
+static HIDDEN: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(r"(?s)<!--\s*bip:.*?-->").unwrap());
+
+pub const POINTS_REQUEST: &str =
+    "<!--bip:notes-->[Request from the BipAgents app, not from the person. Use no tool and save nothing to \
+memory: only answer with the text asked for.]
+You keep short notes so that a voice call can continue a conversation with the person. Here are your previous notes, \
+then the messages since.
+
+Previous notes:
+{points}
+
+Messages since:
+{messages}
+
+Write the updated notes: what is being discussed, the decisions taken, what you promised or still have to do, the \
+names, dates and facts the person gave, their mood if it matters. At most 12 short lines, most important first, in \
+the language of the conversation. Only the notes.";
+
+/// `POINTS_REQUEST.format(points=…, messages=…)` (the values are not read for placeholders again).
+pub fn points_request(points: &str, messages: &str) -> String {
+    let (head, rest) = POINTS_REQUEST.split_once("{points}").expect("template");
+    let (middle, tail) = rest.split_once("{messages}").expect("template");
+    format!("{head}{points}{middle}{messages}{tail}")
+}
+
+fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// A Python exception without an error type of its own here (`KeyError`…), named for the logs.
+#[derive(Debug, thiserror::Error)]
+#[error("{1}")]
+struct PyError(&'static str, String);
+
+/// `type(exc).__name__`.
+fn error_name(err: &anyhow::Error) -> &'static str {
+    if let Some(e) = err.downcast_ref::<HermesError>() {
+        return e.type_name();
+    }
+    if let Some(e) = err.downcast_ref::<PyError>() {
+        return e.0;
+    }
+    if err.downcast_ref::<std::io::Error>().is_some() {
+        return "OSError";
+    }
+    "Exception"
+}
+
+fn is_hermes_http(err: &anyhow::Error) -> bool {
+    matches!(err.downcast_ref::<HermesError>(), Some(HermesError::Http { .. }))
+}
+
+pub fn visible(text: &str) -> String {
+    // a reply's spoken version out first, even one never closed (spoken.rs)
+    pystr::strip(&HIDDEN.replace_all(&crate::spoken::strip(text), "")).to_string()
+}
+
+/// A call's recap as the apps frame it (« <!--bip:call\n…\n--> »): the turns inside may quote anything (a page, a
+/// family message), so they cannot end the note early nor open another (audit 2026-10-27 #15). Anything else as it is.
+pub fn recap_in_note(recap: &str) -> String {
+    let Some((head, body)) = recap.trim().strip_prefix("<!--bip:").and_then(|rest| rest.split_once('\n')) else {
+        return recap.to_string();
+    };
+    let body = body.strip_suffix("-->").unwrap_or(body);
+    format!("<!--bip:{}\n{}-->", crate::tools_knowledge::in_note_line(head), crate::tools_knowledge::in_note(body))
+}
+
+fn content(message: &Dict) -> String {
+    match message.get("content") {
+        Some(Value::Array(parts)) => {
+            let joined: Vec<String> = parts
+                .iter()
+                .filter_map(|p| p.as_object())
+                .map(|p| match p.get("text") {
+                    Some(v) if py::truthy(v) => py::py_str(v),
+                    _ => String::new(),
+                })
+                .collect();
+            visible(&joined.join(" "))
+        }
+        Some(Value::String(s)) => visible(s),
+        _ => String::new(),
+    }
+}
+
+/// (role, text) of what the person and the agent said, tools and machinery left out.
+pub fn exchanges(messages: &[Dict]) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    for message in messages {
+        let role = message.get("role").and_then(Value::as_str).unwrap_or("");
+        if !(role == "user" || role == "assistant")
+            || message.get("display_kind").and_then(Value::as_str) == Some("hidden")
+        {
+            continue;
+        }
+        let text = content(message);
+        if !text.is_empty() {
+            out.push((role.to_string(), text));
+        }
+    }
+    out
+}
+
+pub fn transcript(pairs: &[(String, String)], limit: usize) -> String {
+    let line = |role: &str, text: &str| -> String {
+        let short = if pystr::len(text) <= limit {
+            text.to_string()
+        } else {
+            let head = pystr::head(text, limit);
+            let cut = match head.rfind(' ') {
+                Some(i) => head[..i].to_string(),
+                None => head,
+            };
+            cut + "…"
+        };
+        let prefix = if role == "user" { "- The person: " } else { "- You: " };
+        prefix.to_string() + &pystr::split_ws(&short).join(" ")
+    };
+    pairs.iter().map(|(role, text)| line(role, text)).collect::<Vec<_>>().join("\n")
+}
+
+/// Python's `_seconds`: a number, or an ISO date (naive: local time, as `datetime.timestamp()`).
+pub fn seconds(value: Option<&Value>) -> Option<f64> {
+    match value? {
+        Value::Bool(b) => Some(*b as i64 as f64),
+        Value::Number(n) => n.as_f64(),
+        Value::String(s) => {
+            let text = s.replace('Z', "+00:00");
+            let parsed = crate::store::fromisoformat(&text)?;
+            let tail: String = text.chars().skip(10).collect();
+            if tail.contains('+') || tail.contains('-') {
+                Some(parsed.timestamp_micros() as f64 / 1e6)
+            } else {
+                let local = Local.from_local_datetime(&parsed.naive_utc()).earliest()?;
+                Some(local.timestamp_micros() as f64 / 1e6)
+            }
+        }
+        _ => None,
+    }
+}
+
+fn truthy_key(session: &Dict, key: &str) -> bool {
+    session.get(key).map(py::truthy).unwrap_or(false)
+}
+
+/// An empty row Hermes wrote back after its deletion (see the module's doc): only `POST /api/sessions` mints `api_`
+/// ids and it gives them its own source, so an `api_` row with the accounting placeholder « unknown » and no message
+/// was upserted by Hermes' usage accounting, not created by anyone. Never a pinned one, a Bot Chat, a scheduled task's
+/// or a call's, and only past ten minutes. The transcript is checked as well before deleting (`sweep_ghosts`).
+pub fn is_ghost(session: &Dict, now: f64) -> bool {
+    let id = session.get("id").and_then(Value::as_str).unwrap_or("");
+    let source = session.get("source").and_then(Value::as_str).unwrap_or("");
+    let title = session.get("title").and_then(Value::as_str).unwrap_or("");
+    let old = |key: &str| seconds(session.get(key)).is_some_and(|at| now - at >= GHOST_AGE_SECONDS);
+    id.starts_with("api_")
+        && source == "unknown"
+        && as_int(session.get("message_count")) == Some(0)
+        && !truthy_key(session, "pinned")
+        && !title.eq_ignore_ascii_case(crate::threads::LEGACY_MAIN_TITLE)
+        && !title.starts_with(LIVE_TITLE)
+        && !is_cron_session(session)
+        && old("started_at")
+        && session.get("last_active").is_none_or(|v| v.is_null() || old("last_active"))
+}
+
+/// A throwaway session to delete again (« briefs/scratch.json »).
+#[derive(Debug, Clone, PartialEq)]
+struct Scratch {
+    agent: String,
+    id: String,
+    at: f64,
+    checks: usize,
+    next: f64,
+}
+
+impl Scratch {
+    fn of(value: &Value) -> Option<Scratch> {
+        Some(Scratch {
+            agent: value.get("agent")?.as_str()?.to_string(),
+            id: value.get("id")?.as_str()?.to_string(),
+            at: value.get("at")?.as_f64()?,
+            checks: value.get("checks").and_then(Value::as_u64).unwrap_or(0) as usize,
+            next: value.get("next").and_then(Value::as_f64).unwrap_or(0.0),
+        })
+    }
+
+    fn json(&self) -> Value {
+        json!({"agent": self.agent, "id": self.id, "at": self.at, "checks": self.checks, "next": self.next})
+    }
+}
+
+/// A conversation with the person: not a call, a scheduled task, a throwaway notes session, a sub-agent or an empty row
+/// Hermes wrote back after a deletion (its accounting placeholder source « unknown », no message, whatever its age).
+pub fn is_conversation(session: &Dict) -> bool {
+    let title = match session.get("title") {
+        Some(v) if py::truthy(v) => py::py_str(v),
+        _ => String::new(),
+    };
+    let written_back = session.get("source").and_then(Value::as_str) == Some("unknown")
+        && as_int(session.get("message_count")) == Some(0);
+    !(is_cron_session(session)
+        || title.starts_with(LIVE_TITLE)
+        || title.starts_with(POINTS_TITLE)
+        || written_back
+        || truthy_key(session, "is_internal_child")
+        || truthy_key(session, "hidden"))
+}
+
+/// `re.sub(r"[^\w.-]", "_", name)`.
+fn safe_name(name: &str) -> String {
+    name.chars().map(|c| if pystr::is_word(c) || c == '.' || c == '-' { c } else { '_' }).collect()
+}
+
+/// pathlib's `with_suffix(suffix)` on a file path.
+fn with_suffix(path: &str, suffix: &str) -> String {
+    let (dir, name) = match path.rfind('/') {
+        Some(i) => (&path[..=i], &path[i + 1..]),
+        None => ("", path),
+    };
+    let stem = match name.rfind('.') {
+        Some(i) if i > 0 && i < name.len() - 1 => &name[..i],
+        _ => name,
+    };
+    format!("{dir}{stem}{suffix}")
+}
+
+/// An int (Python's `isinstance(x, int)`, bool included).
+fn as_int(value: Option<&Value>) -> Option<i64> {
+    match value? {
+        Value::Bool(b) => Some(*b as i64),
+        Value::Number(n) => n.as_i64(),
+        _ => None,
+    }
+}
+
+pub struct Briefs {
+    pub folder: String,
+    pub hermes: HermesClient,
+    /// The agents as they are now (Python shares the config's dict).
+    pub config: SharedConfig,
+    writing: tokio::sync::Mutex<()>,
+}
+
+impl Briefs {
+    pub fn new(folder: &str, hermes: HermesClient, config: SharedConfig) -> Self {
+        Briefs { folder: folder.to_string(), hermes, config, writing: tokio::sync::Mutex::new(()) }
+    }
+
+    fn path(&self, agent: &str, session: &str) -> String {
+        let safe = pystr::head(&safe_name(session), 120);
+        py::join(&py::join(&self.folder, &safe_name(agent)), &format!("{safe}.json"))
+    }
+
+    fn recaps(&self, agent: &str, session: &str) -> String {
+        let safe = pystr::head(&safe_name(session), 120);
+        let folder = self.folder.trim_end_matches('/');
+        let sibling = py::join(&py::dirname(folder), "call-recaps");
+        py::join(&py::join(&sibling, &safe_name(agent)), &format!("{safe}.txt"))
+    }
+
+    /// A call's recap waits for the next message written in `session` (several calls: one after the other, the
+    /// oldest dropped beyond RECAPS_MAX characters).
+    pub fn keep_recap(&self, agent: &str, session: &str, recap: &str) -> std::io::Result<()> {
+        let path = self.recaps(agent, session);
+        let _guard = lock(&RECAP_LOCK);
+        let mut kept: Vec<String> = match std::fs::read_to_string(&path) {
+            Ok(text) => text.split(RECAP_SEPARATOR).map(str::to_string).collect(),
+            Err(_) => Vec::new(),
+        };
+        kept.push(recap_in_note(recap));
+        while kept.len() > 1 && kept.iter().map(|r| pystr::len(r)).sum::<usize>() > RECAPS_MAX {
+            kept.remove(0);
+        }
+        py::makedirs(&py::dirname(&path), 0o700)?;
+        let temporary = with_suffix(&path, ".tmp");
+        py::write_with_mode(&temporary, kept.join(RECAP_SEPARATOR).as_bytes(), 0o600)?;
+        std::fs::rename(&temporary, &path)
+    }
+
+    pub fn take_recap(&self, agent: &str, session: &str) -> Option<String> {
+        let path = self.recaps(agent, session);
+        let text = {
+            let _guard = lock(&RECAP_LOCK);
+            let text = std::fs::read_to_string(&path).ok()?;
+            let _ = std::fs::remove_file(&path);
+            text
+        };
+        let joined = text.split(RECAP_SEPARATOR).filter(|r| !r.is_empty()).collect::<Vec<_>>().join("\n");
+        (!joined.is_empty()).then_some(joined)
+    }
+
+    pub fn load(&self, agent: &str, session: &str) -> Dict {
+        match std::fs::read_to_string(self.path(agent, session))
+            .ok()
+            .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+        {
+            Some(Value::Object(map)) => map,
+            _ => Map::new(),
+        }
+    }
+
+    pub fn save(&self, agent: &str, session: &str, data: &Dict) -> std::io::Result<()> {
+        let path = self.path(agent, session);
+        let parent = py::dirname(&path);
+        std::fs::create_dir_all(&parent)?;
+        py::chmod(&parent, 0o700)?;
+        let temporary = with_suffix(&path, ".tmp");
+        std::fs::write(&temporary, py::Dumps::new().unicode().dumps(&Value::Object(data.clone())))?;
+        std::fs::rename(&temporary, &path)
+    }
+
+    /// The agent's most recent conversation.
+    pub async fn latest(&self, agent: &AgentConfig) -> Result<Option<String>, HermesError> {
+        for session in self.hermes.list_sessions(agent, 10).await? {
+            if is_conversation(&session) {
+                if let Some(Value::String(id)) = session.get("id") {
+                    return Ok(Some(id.clone()));
+                }
+            }
+        }
+        Ok(None)
+    }
+
+    pub async fn brief(&self, agent: &AgentConfig, session: &str) -> Result<Dict, HermesError> {
+        let state = self.load(&agent.name, session);
+        let messages = exchanges(&self.hermes.session_messages(agent, session).await?);
+        let mut recent: Vec<(String, String)> = Vec::new();
+        let mut size = 0;
+        let start = messages.len().saturating_sub(RECENT_MESSAGES);
+        for (role, text) in messages[start..].iter().rev() {
+            size += pystr::len(text).min(MESSAGE_CHARS);
+            if !recent.is_empty() && size > RECENT_CHARS {
+                break;
+            }
+            recent.insert(0, (role.clone(), text.clone()));
+        }
+        let mut parts = vec![
+            "This is a voice call with the person. It continues the conversation summed up below: speak as in that \
+             conversation, briefly, as one does on the phone: short spoken sentences, no lists."
+                .to_string(),
+        ];
+        if crate::notebook::enabled(&self.config.get(), &agent.name) {
+            parts[0] = format!("{} {CARNET}", parts[0]);
+        }
+        if let Some(points) = state.get("points").filter(|v| py::truthy(v)) {
+            parts.push(format!(
+                "Key points of the conversation so far (your own notes):\n{}",
+                pystr::strip(&py::py_str(points))
+            ));
+        }
+        if !recent.is_empty() {
+            parts.push(format!("Its last exchanges:\n{}", transcript(&recent, MESSAGE_CHARS)));
+        }
+        let calls = self.calls(agent, &state).await?;
+        if !calls.is_empty() {
+            parts.push(calls);
+        }
+        let mut out = Map::new();
+        out.insert("session".into(), json!(session));
+        out.insert("text".into(), json!(parts.join("\n\n")));
+        out.insert("points_at".into(), state.get("points_at").cloned().unwrap_or(Value::Null));
+        Ok(out)
+    }
+
+    async fn calls(&self, agent: &AgentConfig, state: &Dict) -> Result<String, HermesError> {
+        let mut out: Vec<String> = Vec::new();
+        let calls: Vec<Value> = state.get("calls").and_then(Value::as_array).cloned().unwrap_or_default();
+        let start = calls.len().saturating_sub(CALLS_KEPT);
+        for call in &calls[start..] {
+            let at = match call.get("at") {
+                Some(v) if py::truthy(v) => py::py_float(v).unwrap_or(0.0),
+                _ => 0.0,
+            };
+            if py::time_time() - at > CALL_HOURS * 3600.0 {
+                continue;
+            }
+            let Some(live_session) = call.get("live_session") else { continue }; // KeyError
+            let said = match self.hermes.session_messages(agent, &py::py_str(live_session)).await {
+                Ok(messages) => exchanges(&messages),
+                Err(HermesError::Http { .. }) => continue,
+                Err(other) => return Err(other),
+            };
+            let text = pystr::head(&transcript(&said, 400), CALL_CHARS);
+            if !text.is_empty() {
+                let when = Local
+                    .timestamp_micros((at * 1e6) as i64)
+                    .single()
+                    .map(|d| d.format("%d/%m %H:%M").to_string())
+                    .unwrap_or_default();
+                out.push(format!("Voice call of {when}:\n{text}"));
+            }
+        }
+        Ok(if out.is_empty() {
+            String::new()
+        } else {
+            format!("Earlier voice calls that continued it:\n{}", out.join("\n"))
+        })
+    }
+
+    pub fn note_call(&self, agent: &str, session: &str, live_session: &str) -> std::io::Result<()> {
+        let mut state = self.load(agent, session);
+        let mut calls: Vec<Value> = state
+            .get("calls")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|call| call.get("live_session").and_then(Value::as_str) != Some(live_session))
+            .collect();
+        calls.push(json!({"live_session": live_session, "at": py::time_time()}));
+        let start = calls.len().saturating_sub(CALLS_KEPT);
+        state.insert("calls".into(), Value::Array(calls[start..].to_vec()));
+        self.save(agent, session, &state)
+    }
+
+    pub fn due(&self, agent: &str, session: &Dict, now: f64) -> bool {
+        let count = as_int(session.get("message_count"));
+        let last = seconds(session.get("last_active"));
+        let Some(count) = count else { return false };
+        if count < MIN_MESSAGES as i64 || !is_conversation(session) {
+            return false;
+        }
+        if let Some(last) = last {
+            if now - last < QUIET_SECONDS {
+                return false;
+            }
+        }
+        let id = py::py_str(session.get("id").unwrap_or(&Value::Null));
+        let state = self.load(agent, &id);
+        if let Some(call) = last_call(&state) {
+            if now - call < AFTER_CALL_QUIET_SECONDS {
+                return false; // another call may follow: its instructions and the model's cache stay as they are
+            }
+        }
+        match as_int(state.get("count")) {
+            None => true,
+            Some(done) => count - done >= POINTS_EVERY as i64 || count < done,
+        }
+    }
+
+    /// The key points written again by the agent, from its previous ones and the messages since.
+    pub async fn refresh(&self, agent: &AgentConfig, session: &str, count: Option<i64>) -> anyhow::Result<bool> {
+        let _writing = self.writing.lock().await;
+        let state = self.load(&agent.name, session);
+        let messages = self.hermes.session_messages(agent, session).await?;
+        let done = as_int(state.get("upto")).unwrap_or(0);
+        // Compressed by Hermes since (fewer messages than covered): start again from the last ones.
+        let since: &[Dict] = if 0 < done && done as usize <= messages.len() {
+            &messages[done as usize..]
+        } else {
+            &messages[messages.len().saturating_sub(40)..]
+        };
+        let text = transcript(&exchanges(since), MESSAGE_CHARS);
+        if text.is_empty() {
+            return Ok(false);
+        }
+        let points = match state.get("points") {
+            Some(v) if py::truthy(v) => py::py_str(v),
+            _ => "(none yet)".to_string(),
+        };
+        let request = points_request(pystr::strip(&points), &text);
+        // thinking off, or GLM's « low » through EUrouter (« none » makes it answer nothing there)
+        let options = crate::agents_admin::quick_turn_options(&self.config.get(), agent);
+        let extra = json!({"model_options": options});
+        let reply = self.scratch_chat(agent, POINTS_TITLE, &request, extra, 240.0).await?;
+        let points = visible(&reply);
+        if points.is_empty() {
+            return Ok(false);
+        }
+        let mut state = self.load(&agent.name, session); // a call may have been noted meanwhile
+        state.insert("points".into(), json!(pystr::head(&points, 4000)));
+        state.insert("points_at".into(), json!(py::time_time()));
+        state.insert("upto".into(), json!(messages.len()));
+        state.insert("count".into(), json!(count.unwrap_or(messages.len() as i64)));
+        self.save(&agent.name, session, &state)?;
+        tracing::info!(agent = %agent.name, chars = pystr::len(&points), "live brief points");
+        Ok(true)
+    }
+
+    /// A Live call's prompt read once by the model while its greeting plays (3/11), never waited for: a turn in a hidden
+    /// throwaway session whose message starts with the call's prelude (the apps' first message: the time, the call's
+    /// rules and brief), no `instructions`. Hermes' system prompt holds nothing of the session, so the call's first
+    /// question finds the agent's system prompt, its tools and the prelude in the model server's cache (a provider's
+    /// prefix cache, vLLM's or llama.cpp's slot) instead of reading ~20k tokens then. What the call's turns send as
+    /// `model_options` (`live_turns::live_turn_options`): the same rendering and tools. One at a time per agent.
+    pub async fn warm_up(&self, agent: &AgentConfig, prelude: &str) -> anyhow::Result<()> {
+        static RUNNING: LazyLock<Mutex<std::collections::HashSet<String>>> = LazyLock::new(Default::default);
+        if !lock(&RUNNING).insert(agent.name.clone()) {
+            return Ok(());
+        }
+        let started = std::time::Instant::now();
+        // the call's turns' options (their closed tools included): the warm-up renders as they do
+        let options = crate::live_turns::live_turn_options(&self.config.get(), agent);
+        let extra = json!({"model_options": options});
+        let message = format!("{}\n\n{WARM_MESSAGE}", crate::live_turns::with_call_rules(prelude));
+        let reply = self.scratch_chat(agent, WARM_TITLE, &message, extra, 60.0).await;
+        lock(&RUNNING).remove(&agent.name);
+        tracing::info!(agent = %agent.name, ms = started.elapsed().as_millis() as u64, ok = reply.is_ok(), "live warm-up");
+        reply.map(|_| ())
+    }
+
+    /// One turn in a hidden throwaway session, deleted at once and again over the next half hour (`sweep_scratch`):
+    /// its reply.
+    async fn scratch_chat(
+        &self,
+        agent: &AgentConfig,
+        title: &str,
+        message: &str,
+        extra: Value,
+        timeout: f64,
+    ) -> anyhow::Result<String> {
+        // Unique: Hermes refuses a title another session holds (one left behind would stop the notes for good).
+        let title = format!("{title} · {}", &uuid::Uuid::new_v4().simple().to_string()[..8]);
+        let scratch = self.hermes.create_session(agent, &title).await?;
+        self.note_scratch(&agent.name, &scratch, py::time_time() + SCRATCH_CHAT_SECONDS)?;
+        // The title again through a PATCH: « user » provenance, so Hermes' titler leaves the session alone (no model
+        // call billed to it, which would write the row back after its deletion).
+        let mut fields = Map::new();
+        fields.insert("title".into(), json!(title));
+        fields.insert("hidden".into(), Value::Bool(true));
+        match self.hermes.update_session(agent, &scratch, fields.clone()).await {
+            Ok(()) => {}
+            Err(HermesError::Http { .. }) => {
+                // an older Hermes without « hidden »: the session shows a few seconds, then it's deleted
+                fields.remove("hidden");
+                match self.hermes.update_session(agent, &scratch, fields).await {
+                    Ok(()) | Err(HermesError::Http { .. }) => {}
+                    Err(other) => return Err(other.into()),
+                }
+            }
+            Err(other) => return Err(other.into()),
+        }
+        let reply = self.hermes.session_chat(agent, &scratch, message, extra.as_object().cloned(), timeout).await;
+        let deleted = self.hermes.delete_session(agent, &scratch).await;
+        // Deleted or not, deleted again over the next half hour (`sweep_scratch`).
+        self.note_scratch(&agent.name, &scratch, py::time_time() + SCRATCH_CHECKS[0])?;
+        match deleted {
+            Ok(()) => {}
+            Err(HermesError::Http { status, .. }) => {
+                tracing::warn!(agent = %agent.name, status = status, "notes session not deleted");
+            }
+            Err(other) => return Err(other.into()),
+        }
+        Ok(reply?)
+    }
+
+    fn scratch_path(&self) -> String {
+        py::join(&self.folder, "scratch.json")
+    }
+
+    fn scratch_list(&self) -> Vec<Scratch> {
+        let text = std::fs::read_to_string(self.scratch_path()).unwrap_or_default();
+        match serde_json::from_str::<Value>(&text) {
+            Ok(Value::Object(map)) => {
+                map.get("sessions").and_then(Value::as_array).into_iter().flatten().filter_map(Scratch::of).collect()
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    fn scratch_save(&self, list: &[Scratch]) -> std::io::Result<()> {
+        let path = self.scratch_path();
+        if list.is_empty() {
+            return match std::fs::remove_file(&path) {
+                Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e),
+                _ => Ok(()),
+            };
+        }
+        py::makedirs(&self.folder, 0o700)?;
+        let data = json!({"sessions": list.iter().map(Scratch::json).collect::<Vec<_>>()});
+        let temporary = with_suffix(&path, ".tmp");
+        py::write_with_mode(&temporary, data.to_string().as_bytes(), 0o600)?;
+        std::fs::rename(&temporary, &path)
+    }
+
+    /// A scratch session to delete (again) at `next`; its checks start over.
+    fn note_scratch(&self, agent: &str, id: &str, next: f64) -> std::io::Result<()> {
+        let _guard = lock(&SCRATCH_LOCK);
+        let mut list = self.scratch_list();
+        list.retain(|s| !(s.agent == agent && s.id == id));
+        list.push(Scratch { agent: agent.to_string(), id: id.to_string(), at: py::time_time(), checks: 0, next });
+        self.scratch_save(&list)
+    }
+
+    /// The scratch sessions still to check (agent, id).
+    pub fn scratch_pending(&self) -> Vec<(String, String)> {
+        let _guard = lock(&SCRATCH_LOCK);
+        self.scratch_list().into_iter().map(|s| (s.agent, s.id)).collect()
+    }
+
+    /// The scratch sessions due (all of them at the bridge's start) deleted again; one leaves the list once Hermes
+    /// answers 404 at its last check (or after two days). Returns how many Hermes still had.
+    pub async fn sweep_scratch(&self, now: f64, all: bool) -> std::io::Result<usize> {
+        let due: Vec<Scratch> = {
+            let _guard = lock(&SCRATCH_LOCK);
+            self.scratch_list().into_iter().filter(|s| all || s.next <= now).collect()
+        };
+        if due.is_empty() {
+            return Ok(0);
+        }
+        let config = self.config.get();
+        let mut came_back = 0;
+        let mut done: Vec<(Scratch, bool)> = Vec::new(); // (the entry updated, dropped)
+        for mut entry in due {
+            let Some(agent) = config.agents.values().find(|a| a.name == entry.agent) else {
+                done.push((entry, true)); // the agent is gone, its sessions with it
+                continue;
+            };
+            let gone = match self.hermes.delete_session(agent, &entry.id).await {
+                Ok(()) => {
+                    came_back += 1;
+                    tracing::warn!(agent = %agent.name, session = %entry.id, "notes session still there, deleted again");
+                    false
+                }
+                Err(HermesError::Http { status: 404, .. }) => true,
+                Err(err) => {
+                    tracing::warn!(agent = %agent.name, error = %err.type_name(), "notes session check failed");
+                    false
+                }
+            };
+            entry.checks += 1;
+            let last = entry.checks >= SCRATCH_CHECKS.len();
+            let drop = (gone && last) || now - entry.at > SCRATCH_KEPT_SECONDS;
+            entry.next = now
+                + if last {
+                    SCRATCH_RETRY_SECONDS
+                } else {
+                    SCRATCH_CHECKS[entry.checks] - SCRATCH_CHECKS[entry.checks - 1]
+                };
+            done.push((entry, drop));
+        }
+        let _guard = lock(&SCRATCH_LOCK);
+        let mut list = self.scratch_list();
+        for (entry, drop) in done {
+            let Some(index) = list.iter().position(|s| s.agent == entry.agent && s.id == entry.id) else { continue };
+            if list[index].at != entry.at {
+                continue; // noted again meanwhile (deleted once more by `refresh`): its own checks
+            }
+            if drop {
+                list.remove(index);
+            } else {
+                list[index] = entry;
+            }
+        }
+        self.scratch_save(&list)?;
+        Ok(came_back)
+    }
+
+    /// The empty rows Hermes wrote back (`is_ghost`, and an empty transcript) deleted. Returns how many.
+    pub async fn sweep_ghosts(&self, agent: &AgentConfig, now: f64) -> Result<usize, HermesError> {
+        let mut ghosts = Vec::new();
+        for page in 0..GHOST_PAGES {
+            let sessions = self.hermes.list_sessions_page(agent, GHOST_PAGE, page * GHOST_PAGE).await?;
+            for session in sessions.iter().filter(|s| is_ghost(s, now)) {
+                if let Some(Value::String(id)) = session.get("id") {
+                    ghosts.push(id.clone());
+                }
+            }
+            if (sessions.len() as i64) < GHOST_PAGE {
+                break;
+            }
+        }
+        let mut deleted = 0;
+        for id in ghosts {
+            match self.hermes.session_messages(agent, &id).await {
+                Ok(messages) if messages.is_empty() => {}
+                _ => continue,
+            }
+            match self.hermes.delete_session(agent, &id).await {
+                Ok(()) => deleted += 1,
+                Err(HermesError::Http { .. }) => {}
+                Err(other) => return Err(other),
+            }
+        }
+        if deleted > 0 {
+            tracing::info!(agent = %agent.name, count = deleted, "empty sessions written back by Hermes deleted");
+        }
+        Ok(deleted)
+    }
+
+    /// Every few seconds the scratch sessions due deleted again (all of them at the start); the rows Hermes wrote back
+    /// swept 20 s after the start, then every 6 hours.
+    pub async fn sweep_forever(self: std::sync::Arc<Self>) {
+        let mut all = true;
+        let mut ghosts_at = py::time_time() + GHOSTS_FIRST_SECONDS;
+        loop {
+            let now = py::time_time();
+            if let Err(err) = self.sweep_scratch(now, all).await {
+                tracing::warn!(error = %err, "notes sessions sweep");
+            }
+            all = false;
+            if now >= ghosts_at {
+                ghosts_at = now + GHOSTS_EVERY_SECONDS;
+                let config = self.config.get();
+                for agent in config.agents.values() {
+                    if let Err(err) = self.sweep_ghosts(agent, now).await {
+                        tracing::warn!(agent = %agent.name, error = %err.type_name(), "empty sessions sweep");
+                    }
+                }
+            }
+            tokio::time::sleep(std::time::Duration::from_secs_f64(SWEEP_SECONDS)).await;
+        }
+    }
+
+    /// Every two minutes, at most one conversation's key points written again (the one waiting the longest).
+    pub async fn run(self: std::sync::Arc<Self>) {
+        tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+        loop {
+            if let Err(exc) = self.tick(None).await {
+                // the loop must keep running
+                tracing::warn!(error = %error_name(&exc), "live brief loop");
+            }
+            tokio::time::sleep(std::time::Duration::from_secs_f64(LOOP_SECONDS)).await;
+        }
+    }
+
+    pub async fn tick(&self, now: Option<f64>) -> anyhow::Result<bool> {
+        let now = now.unwrap_or_else(py::time_time);
+        let config = self.config.get();
+        for agent in config.agents.values() {
+            let Ok(sessions) = self.hermes.list_sessions(agent, 10).await else {
+                continue; // an agent down must not stop the others
+            };
+            for session in &sessions {
+                if !self.due(&agent.name, session, now) {
+                    continue;
+                }
+                let count = as_int(session.get("message_count"));
+                let Some(id) = session.get("id") else {
+                    return Err(PyError("KeyError", "'id'".into()).into());
+                };
+                return match self.refresh(agent, &py::py_str(id), count).await {
+                    Ok(done) => Ok(done),
+                    Err(exc) if is_hermes_http(&exc) || exc.downcast_ref::<std::io::Error>().is_some() => {
+                        tracing::warn!(agent = %agent.name, error = %error_name(&exc), "live brief points failed");
+                        Ok(false)
+                    }
+                    Err(exc) => Err(exc),
+                };
+            }
+        }
+        Ok(false)
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CallEnded {
+    pub agent: String,
+    pub session: String,
+    pub live_session: String,
+    /// The turn going on at the hang-up, left to end (live_calls.rs).
+    #[serde(default)]
+    pub run_id: Option<String>,
+    /// When the call started (Unix seconds), when its start notice did not reach the bridge.
+    #[serde(default)]
+    pub started_at: Option<f64>,
+}
+
+impl Validate for CallEnded {
+    fn validate(&self, errors: &mut Vec<FieldError>) {
+        web::check_max_len(errors, "agent", Some(&self.agent), 200);
+        web::check_max_len(errors, "session", Some(&self.session), 300);
+        web::check_max_len(errors, "live_session", Some(&self.live_session), 300);
+        web::check_max_len(errors, "run_id", self.run_id.as_deref(), 256);
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CallStarted {
+    pub agent: String,
+    /// The conversation the call continues (none: a call that lands nowhere).
+    #[serde(default)]
+    pub session: Option<String>,
+    /// What opens the call's first message: the model reads it at once (`warm_up`).
+    #[serde(default)]
+    pub prelude: Option<String>,
+}
+
+impl Validate for CallStarted {
+    fn validate(&self, errors: &mut Vec<FieldError>) {
+        web::check_max_len(errors, "agent", Some(&self.agent), 200);
+        web::check_max_len(errors, "session", self.session.as_deref(), 300);
+        web::check_max_len(errors, "prelude", self.prelude.as_deref(), WARM_PRELUDE_MAX);
+    }
+}
+
+fn setup(state: &AppState, name: &str) -> ApiResult<AgentConfig> {
+    state.config().agent(Some(name)).cloned().ok_or_else(|| HttpError::new(404, "unknown agent"))
+}
+
+fn hermes_error(exc: HermesError) -> HttpError {
+    match exc {
+        HermesError::Http { status, .. } => HttpError::new(if status >= 500 { 502 } else { status }, "your agent couldn't answer this: try again in a moment"),
+        other => anyhow::Error::from(other).into(),
+    }
+}
+
+async fn live_brief(State(state): State<AppState>, q: QueryMap) -> ApiResult<Response> {
+    let agent = web::query_required(&q, "agent")?;
+    let session = web::query_str(&q, "session", false, None)?;
+    let config = setup(&state, &agent)?;
+    // the call's radio rules (spoken.rs: for the ear, one place for both apps), then its start time (dates/now.rs)
+    let now = format!("{}\n\n{}", live_rules(&state, &config), crate::dates::now::line(&state.config(), &config));
+    // What the call's turns send as `model_options` (the apps since 2026-10-28; before, always thinking off): GLM
+    // through EUrouter can't switch thinking off and answers nothing to « none », so it gets « low ».
+    let options = crate::agents_admin::quick_turn_options(&state.config(), &config);
+    let chosen = match session.filter(|s| !s.is_empty()) {
+        Some(s) => Some(s),
+        None => state.briefs.latest(&config).await.map_err(hermes_error)?,
+    };
+    let Some(chosen) = chosen else {
+        let text = if crate::notebook::enabled(&state.config(), &config.name) { format!("{CARNET}\n\n{now}") } else { now };
+        return Ok(web::ok(json!({"session": null, "text": text, "points_at": null, "model_options": options})));
+    };
+    let mut brief = state.briefs.brief(&config, &chosen).await.map_err(hermes_error)?;
+    let text = brief.get("text").and_then(Value::as_str).unwrap_or("").to_string();
+    // The time last: it changes every minute, and what follows a change is read again by the model (3/11: the
+    // stable part first, the key points, then the last exchanges and calls, then the time).
+    brief.insert("text".into(), json!(format!("{text}\n\n{now}")));
+    brief.insert("model_options".into(), options);
+    Ok(web::ok(Value::Object(brief)))
+}
+
+async fn blocking<T: Send + 'static>(work: impl FnOnce() -> std::io::Result<T> + Send + 'static) -> ApiResult<T> {
+    let result = tokio::task::spawn_blocking(work).await.map_err(anyhow::Error::from)?;
+    Ok(result.map_err(anyhow::Error::from)?)
+}
+
+async fn live_call(State(state): State<AppState>, Json(body): Json<CallEnded>) -> ApiResult<Response> {
+    let agent = setup(&state, &body.agent)?;
+    crate::agent_restart::note_live(&agent.name); // not restarted for a while (agent_restart.rs)
+    let briefs = state.briefs.clone();
+    let config = state.config();
+    let (name, session, live) = (agent.name.clone(), body.session.clone(), body.live_session.clone());
+    blocking(move || {
+        let _ = crate::feature_tips::used(&config, "live", crate::py::time_time()); // a Live call (feature_tips.rs)
+        briefs.note_call(&name, &session, &live)
+    })
+    .await?;
+    // The call lands in its conversation (live_calls.rs), its last turn waited for: in the background.
+    let mut ending = crate::live_calls::Ending::hangup(
+        agent,
+        &body.session,
+        &body.live_session,
+        body.run_id.filter(|r| !r.is_empty()),
+    );
+    ending.started_at = body.started_at.filter(|t| *t > 0.0);
+    let background = state.clone();
+    state.spawn(async move {
+        crate::live_calls::end_call(&background, ending).await;
+    });
+    Ok(web::ok(json!({"ok": true})))
+}
+
+/// The call's own session, titled with its start time. Hermes refuses a title another session holds (400
+/// `invalid_title`), and the calls' sessions stay: a second call in the same second (before 3/11 the same minute, in
+/// the apps) was refused, and the person saw « Ça n'a pas été accepté » once they spoke. Such a call gets a unique title.
+async fn create_call_session(state: &AppState, agent: &AgentConfig) -> Result<String, HermesError> {
+    let title = format!("Live · {}", Local::now().format("%Y-%m-%d %H:%M:%S"));
+    match state.hermes.create_session(agent, &title).await {
+        Err(HermesError::Http { status: 400, .. }) => {
+            let unique = format!("{title} · {}", &uuid::Uuid::new_v4().simple().to_string()[..6]);
+            state.hermes.create_session(agent, &unique).await
+        }
+        made => made,
+    }
+}
+
+/// A call starts: the bridge makes its own short session (its turns: live_turns.rs), has the model read the prelude
+/// at once, and ends the call by itself if the app never says (live_calls.rs).
+async fn live_call_start(State(state): State<AppState>, Json(body): Json<CallStarted>) -> ApiResult<Response> {
+    let agent = setup(&state, &body.agent)?;
+    crate::agent_restart::note_live(&agent.name);
+    let live_session = create_call_session(&state, &agent).await.map_err(hermes_error)?;
+    if let Some(prelude) = body.prelude.filter(|p| !p.trim().is_empty()) {
+        // never waited for: the first question goes whenever the person is done
+        let (briefs, warmed) = (state.briefs.clone(), agent.clone());
+        state.spawn(async move {
+            if let Err(exc) = briefs.warm_up(&warmed, &prelude).await {
+                tracing::info!(agent = %warmed.name, error = %error_name(&exc), "live warm-up failed");
+            }
+        });
+    }
+    if let Some(session) = body.session.filter(|s| !s.is_empty()) {
+        let calls = crate::live_calls::LiveCalls::of(&state.briefs);
+        let call = crate::live_calls::OpenCall {
+            agent: agent.name.clone(),
+            session,
+            live_session: live_session.clone(),
+            started_at: crate::py::time_time(),
+            after: Vec::new(),
+        };
+        blocking(move || calls.note_start(call)).await?;
+    }
+    Ok(web::ok(json!({"ok": true, "live_session": live_session})))
+}
+
+/// The calls that continued a conversation, shown in it (live_calls.rs).
+async fn live_calls_list(State(state): State<AppState>, q: QueryMap) -> ApiResult<Response> {
+    let agent = web::query_required(&q, "agent")?;
+    let session = web::query_required(&q, "session")?;
+    let config = setup(&state, &agent)?;
+    let calls = crate::live_calls::LiveCalls::of(&state.briefs);
+    let records = blocking(move || Ok(calls.records(&config.name, &session))).await?;
+    Ok(web::ok(crate::live_calls::listed(records)))
+}
+
+/// A call's radio rules (spoken.rs `radio_rule`), in the agent's language: stable, before the call's time.
+fn live_rules(state: &AppState, agent: &AgentConfig) -> String {
+    crate::spoken::radio_rule(&crate::handback::language_of(&state.config(), agent), true)
+}
+
+/// What waited for the person's next message in `session`, for the agent only (the message sending route,
+/// threads/send.rs): the current time, a Live call's recap, the family's news, what is
+/// new in the Carnet, the rooms, friends' taps, the place's space, a feature to propose (`text` and `kinds`: the
+/// message's, never kept).
+pub async fn message_notes(state: &AppState, agent: &AgentConfig, session: &str, text: &str, kinds: &[String]) -> Option<String> {
+    let briefs = state.briefs.clone();
+    let config = state.config();
+    // « crée un agent » (agent_create.rs): the family's names for Bip's « for whom », read only then
+    let family = if crate::agent_create::asks_for_agent(text) { crate::agent_create::family_names(state) } else { Vec::new() };
+    let (agent, session, text, kinds) = (agent.clone(), session.to_string(), text.to_string(), kinds.to_vec());
+    // a feature to discover, at a good moment (feature_tips.rs): the message's signals, the agent busy or not
+    let moment = crate::feature_tips::Moment {
+        busy: crate::feature_tips::busy(state, &agent.name, &session),
+        guide: crate::feature_tips::guide_of(&config),
+    };
+    blocking(move || {
+        // the beta's measures (beta_measures.rs): that the person wrote, and to the guide or not; never what
+        if !session.starts_with("cron_") {
+            let to_guide = moment.guide.as_deref() == Some(agent.name.as_str());
+            crate::beta_measures::person_message(&config, to_guide, crate::py::time_time());
+        }
+        // the Carnet: whether the message talked about health or money (a question of the day needs it; the text is
+        // dropped), and a follow-up due put at the head of the answer (notebook/ask.rs, followups.rs)
+        let now = crate::py::time_time();
+        crate::notebook::ask::on_message(&agent.name, &session, &text, now);
+        if crate::notebook::enabled(&config, &agent.name) {
+            if let Err(err) = crate::notebook::followups::on_message(&config, &agent.name, &session, moment.busy, now) {
+                tracing::warn!(error = %err, "Carnet follow-up not made");
+            }
+        }
+        // The family news waiting for the agent (family_news.rs) joins the same message, the same way.
+        // The current time first (dates/now.rs), then what waited for this message. The bridge's own notes name the
+        // app's parts in the agent's language (names.rs); the others carry people's words, left as they are.
+        let lang = crate::handback::language_of(&config, &agent);
+        let named = |note: Option<String>| note.map(|n| crate::names::localize(&n, &lang));
+        let parts: Vec<String> =
+            [
+                Some(crate::dates::now::line(&config, &agent)),
+                briefs.take_recap(&agent.name, &session),
+                // its last turn here was cut by the model's length limit (reply_cut.rs)
+                crate::reply_cut::take_note(&agent.name, &session, &lang),
+                crate::family_news::take_notes(&config, &agent.name),
+                named(crate::notebook::news::take_now(&config, &agent.name)), // the Carnet's news (notebook/news.rs)
+                crate::rooms_memory::take_note(&config, &agent.name), // what's new in its rooms (rooms_memory.rs)
+                crate::friends_cards::take_note(&config, &agent.name), // friends' taps on its cards (friends_cards.rs)
+                named(crate::storage_watch::take_note(&config, &agent.name)), // the place's space (storage_watch.rs)
+                crate::feature_tips::on_message(&config, &agent.name, &session, &text, &kinds, &moment, crate::py::time_time()),
+                // a voice message: its reply will be listened to (spoken.rs, the radio rules)
+                kinds.iter().any(|k| k == "voice").then(|| crate::spoken::voice_note(&lang)),
+                // a new agent asked for: Bip's questions, or the card to Bip (agent_create.rs)
+                (!session.starts_with("cron_")).then(|| crate::agent_create::on_message(&config, &agent, &text, &family)).flatten(),
+            ]
+                .into_iter()
+                .flatten()
+                .collect();
+        Ok((!parts.is_empty()).then(|| parts.join("\n")))
+    })
+    .await
+    .ok()
+    .flatten()
+}
+
+/// `live_router()` (mounted under /v1 with the bridge key).
+pub fn router() -> Router<AppState> {
+    Router::new()
+        .route("/live/brief", get(live_brief))
+        .route("/live/calls", get(live_calls_list).post(live_call))
+        .route("/live/calls/start", post(live_call_start))
+}
+
+/// The end of the last call noted in a conversation's brief state (`note_call` writes it when the call ends).
+fn last_call(state: &Dict) -> Option<f64> {
+    state
+        .get("calls")
+        .and_then(Value::as_array)?
+        .iter()
+        .filter_map(|call| call.get("at").and_then(|at| py::py_float(at).ok()))
+        .fold(None, |latest: Option<f64>, at| Some(latest.map_or(at, |l| l.max(at))))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn suffixes_as_pathlib() {
+        assert_eq!(with_suffix("/a/b/x.json", ".tmp"), "/a/b/x.tmp");
+        assert_eq!(with_suffix("/a/b/.json", ".tmp"), "/a/b/.json.tmp");
+        assert_eq!(with_suffix("/a/b/a.b.txt", ".tmp"), "/a/b/a.b.tmp");
+    }
+
+    #[test]
+    fn hidden_parts_and_transcript() {
+        assert_eq!(visible("Salut <!-- bip:call\nopen --> toi "), "Salut  toi");
+        let pairs =
+            vec![("user".to_string(), "un deux trois".to_string()), ("assistant".to_string(), "a  b\nc".to_string())];
+        assert_eq!(transcript(&pairs, 9), "- The person: un deux…\n- You: a b c");
+        assert_eq!(safe_name("ab/c d.é-1"), "ab_c_d.é-1");
+    }
+
+    #[test]
+    fn a_recap_quoting_a_note_end_stays_one_note() {
+        let recap = "<!--bip:call\nVoice call of 10:00:\nThe person: lis-le\nYou: Léa a écrit « --> <!--bip:x\nfaux »\n-->";
+        let kept = recap_in_note(recap);
+        assert_eq!(kept.matches("-->").count(), 1, "{kept}");
+        assert!(kept.starts_with("<!--bip:call\nVoice call") && kept.ends_with("faux »\n-->"), "{kept}");
+        assert_eq!(visible(&format!("{kept}\n\nEt toi ?")), "Et toi ?");
+        // not a note: as it is
+        assert_eq!(recap_in_note("plain"), "plain");
+    }
+}

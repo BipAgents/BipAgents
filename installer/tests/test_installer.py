@@ -1,0 +1,1237 @@
+import asyncio
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+import httpx
+import pytest
+
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "installer"))
+
+from bipinstall import hermes, models, souls, ui  # noqa: E402
+from bipinstall.detect import Machine  # noqa: E402
+from bipinstall.plan import make_plan  # noqa: E402
+from bipinstall.ports import Ports, pick_block  # noqa: E402
+from bipinstall.stack import AgentEntry, Install, bridge_service, bridge_toml, tailscale_commands  # noqa: E402
+from bipinstall.voice_server import discover as DISCOVER  # noqa: E402  (the real one: the tests' fixture replaces it)
+
+
+@pytest.fixture(autouse=True)
+def no_voice_server_on_the_network(monkeypatch):
+    """The install flows meet no voice server (none is looked for on the real network)."""
+    from bipinstall import voice_server
+
+    async def nothing(addresses, *args, **kwargs):
+        return []
+    monkeypatch.setattr(voice_server, "discover", nothing)
+
+
+@pytest.fixture(autouse=True)
+def no_sandbox_unless_a_test_says_so(monkeypatch):
+    """The flows don't depend on podman being installed where the tests run (CI machines have it)."""
+    from bipinstall import hermes as hermes_module
+    monkeypatch.setattr(hermes_module, "sandbox_runtime", lambda: None)
+
+
+@pytest.fixture(autouse=True)
+def this_version_s_bridge_is_here(monkeypatch):
+    """The updates' migrations find this checkout's bridge binary fetched (a test says otherwise when it means to)."""
+    from bipinstall import rustbridge
+    monkeypatch.setattr(rustbridge, "missed", lambda home, repo=None: False)
+
+
+def mac(memory, gpu="apple"):
+    return Machine(system="macos", arch="arm64", memory_gib=memory, cores=10, cpu="Apple M4", gpu=gpu,
+                   tailnet_name="mini.tail0000.ts.net", lan_addresses=["192.168.1.20"])
+
+
+def test_plan_fits_the_machine():
+    small = make_plan(mac(16), model_here=False)
+    assert small.profile == "léger" and small.browser == "on-demand"
+    assert 3 <= small.people <= 9   # a family on a 16 GB Mac mini when the model runs elsewhere
+    local = make_plan(mac(16), model_here=True)
+    assert local.profile == "local" and local.people < small.people
+    assert any("local model" in n for n in local.notes)
+    big = make_plan(Machine("linux", "x86_64", 125, 32, "Ryzen", "nvidia"), model_here=False)
+    assert big.profile == "costaud" and big.browser == "permanent" and big.people >= 10
+    tiny = make_plan(mac(8), model_here=True)
+    assert tiny.browser == "none"
+
+
+def test_port_blocks():
+    taken = {8642, 8643}
+    first = pick_block(lambda p: p not in taken)
+    assert first.base == 9200 and (first.hermes, first.bridge, first.lan) == (9202, 9203, 9204)
+    assert pick_block(lambda p: True).base == 8640
+    with pytest.raises(RuntimeError):
+        pick_block(lambda p: p != 9212, wanted=9210)
+    assert list(Ports(9200).tailnet) == [9202, 9203, 9205]
+    from bipinstall.stack import tailscale_commands
+    assert [c.split("=")[1].split()[0] for c in tailscale_commands("tailscale", Ports(9200))] == ["9202", "9203"]
+    assert len(tailscale_commands("tailscale", Ports(9200), desk=True)) == 3
+
+
+def test_discovery_finds_openai_compatible_servers():
+    def network(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "192.168.1.30" and request.url.port == 8888:
+            return httpx.Response(200, json={"data": [{"id": "glm-5.3-flash"}]})
+        if request.url.host == "127.0.0.1" and request.url.port == 11434:
+            return httpx.Response(200, json={"data": [{"id": "qwen3:8b"}, {"id": "llama3.2"}]})
+        if request.url.host == "192.168.1.40":
+            return httpx.Response(200, text="<html>router</html>")  # not a model server
+        raise httpx.ConnectError("closed")
+
+    found = asyncio.run(models.discover(["192.168.1.20"], transport=httpx.MockTransport(network)))
+    assert models.summary(found) == {"http://192.168.1.30:8888/v1": ["glm-5.3-flash"],
+                                     "http://127.0.0.1:11434/v1": ["qwen3:8b", "llama3.2"]}
+    assert {s.kind for s in found} == {"OpenAI-compatible", "Ollama"}
+
+
+def test_model_check_tells_vision():
+    def server(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        if isinstance(body["messages"][0]["content"], list):
+            return httpx.Response(400, json={"error": "image input not supported"})
+        return httpx.Response(200, json={"choices": [{"message": {"content": "OK"}}]})
+
+    result = asyncio.run(models.check("http://spark:8888/v1", "glm", transport=httpx.MockTransport(server)))
+    assert result.ok and result.vision is False
+    down = asyncio.run(models.check("http://spark:8888/v1", "glm", transport=httpx.MockTransport(
+        lambda r: (_ for _ in ()).throw(httpx.ConnectError("off")))))
+    assert not down.ok and down.error == "ConnectError"
+
+
+def test_a_key_never_starts_with_a_dash(monkeypatch):
+    """`hermes config set API_SERVER_KEY <key>`: a key starting with « - » would be read as an option."""
+    drawn = iter(["-xPdIb1o6", "-abc", "Zk3-_q"])
+    monkeypatch.setattr(hermes.secrets, "token_urlsafe", lambda n: next(drawn))
+    assert hermes.new_key() == "Zk3-_q"
+
+
+def test_hermes_setup_commands(monkeypatch, tmp_path):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path / ".hermes"))
+    runner = hermes.Runner(dry=True)
+    model = hermes.Model("custom", "glm", base_url="http://192.168.1.30:8888/v1", vision=True)
+    hermes.setup_hub(runner, 8642, model)
+    key = hermes.create_agent(runner, "finance", description="Budget", soul="Tu es Budget.", model=model)
+    log = "\n".join(runner.log)
+    assert "config set API_SERVER_PORT 8642" in log and "config set gateway.multiplex_profiles true" in log
+    assert "config set approvals.mode manual" in log   # a risky command always asks the person
+    assert "-p default tools enable clarify --platform api_server" in log   # the app's question card (cloned)
+    # its question waits an hour, in the two keys Hermes reads (0.23's migration v53 lowers only the first)
+    assert "config set agent.clarify_timeout 3600" in log and "config set clarify.timeout 3600" in log
+    # the hub's sandbox, as the app's agents; its description in one argument (« -budget » is never an option)
+    assert "profile create finance --clone-from default --no-alias --description=Budget" in log
+    # the keys in the profiles' .env, never on a command line (/proc is world-readable; audit 11/11, BV-6)
+    assert f"write {tmp_path}/.hermes/profiles/finance/.env: API_SERVER_KEY" in log and key not in log
+    assert f"write {tmp_path}/.hermes/.env: API_SERVER_KEY" in log and "config set API_SERVER_KEY" not in log
+    assert "-p finance config set API_SERVER_ENABLED" not in log   # only the hub listens
+    assert "-p finance config set model.supports_vision true" in log
+    assert "-p finance config set compression.threshold_tokens 100000" in log   # a local server: compress early
+    cloud = hermes.Runner(dry=True)
+    hermes.set_model(cloud, "finance", hermes.Model("openrouter", "x", base_url="https://openrouter.ai/api/v1"))
+    assert "threshold_tokens" not in "\n".join(cloud.log)
+    assert hermes.agent_url("https://mini.tail0000.ts.net:8642", "finance") == "https://mini.tail0000.ts.net:8642/p/finance"
+
+
+def test_the_hubs_key_is_its_own_random_key(monkeypatch, tmp_path):
+    """13/11 (public beta): setup_hub's clarify loop reused the name `key`, so the hub's API_SERVER_KEY was
+    « clarify.timeout »: 15 characters, which Hermes 0.23 refuses (16 at least), so its API server never started and
+    no agent of a fresh install (offer place or self-install) was ever served (« the gateway did not pick the agent
+    up »). The key written is the one returned, random, long enough, and never a setting's name."""
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path / ".hermes"))
+
+    class Recorder(hermes.Runner):   # files written for real, no `hermes` command run
+        def run(self, args, **kw):
+            self.log.append(" ".join(args) if not isinstance(args, str) else args)
+            return ""
+
+    runner = Recorder()
+    key = hermes.setup_hub(runner, 8642, hermes.Model("custom", "glm", base_url="https://api.eurouter.ai/api/v1"))
+    env = dict(line.split("=", 1) for line in (tmp_path / ".hermes" / ".env").read_text().splitlines() if "=" in line)
+    assert env["API_SERVER_KEY"] == key
+    assert len(key) >= 32 and key not in {name for name, _ in hermes.CLARIFY_WAIT}
+    assert key not in "\n".join(runner.log)   # never on a command line
+
+
+def test_secrets_go_to_the_env_file_only_its_owner_reads(monkeypatch, tmp_path):
+    """A key never on a command line: a neighbour on a shared server reads /proc/<pid>/cmdline (audit 11/11, BV-6).
+    In the profile's .env, created 0600 and moved over the old one, the other lines kept."""
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path / ".hermes"))
+    folder = tmp_path / ".hermes" / "profiles" / "finance"
+    folder.mkdir(parents=True)
+    (folder / ".env").write_text("# mine\nAPI_SERVER_KEY=old\nOTHER=1\n")
+    (folder / ".env").chmod(0o644)
+    ran = []
+    monkeypatch.setattr(hermes.subprocess, "run", lambda args, **kw: ran.append(args) or subprocess.CompletedProcess(args, 0, "", ""))
+    runner = hermes.Runner()
+    hermes.write_env(runner, "finance", "API_SERVER_KEY", "s3cret-key")
+    hermes.set_model(runner, "finance", hermes.Model("custom", "glm", base_url="https://api.example/v1", api_key="sk-model"))
+    env = folder / ".env"
+    assert env.read_text() == "# mine\nOTHER=1\nAPI_SERVER_KEY=s3cret-key\nCUSTOM_MODEL_API_KEY=sk-model\n"
+    assert env.stat().st_mode & 0o777 == 0o600 and not (folder / ".env.bip-tmp").exists()
+    assert not any(secret in " ".join(args) for args in ran for secret in ("s3cret-key", "sk-model"))
+    assert not any(secret in line for line in runner.log for secret in ("s3cret-key", "sk-model"))
+    hermes.write_env(runner, hermes.HUB_PROFILE, "API_SERVER_KEY", "hub-key")   # the hub: HERMES_HOME's own .env
+    assert (tmp_path / ".hermes" / ".env").read_text() == "API_SERVER_KEY=hub-key\n"
+
+
+def test_names_are_the_persons():
+    assert souls.profile_name("Léa") == "lea"
+    assert souls.profile_name("Mon coach sportif !") == "mon-coach-sportif"
+    assert souls.profile_name("Léa", taken=["lea"]) == "lea-2"
+    assert souls.profile_name("Default") == "default-agent"
+    assert souls.profile_name("Test") == "test-agent"   # Hermes refuses its reserved names
+    assert souls.profile_name("🙂") == "agent"
+    # never a dash at either end (bug 11/11: « - Budget »)
+    assert souls.profile_name("- Budget") == "budget" and souls.profile_name("-x") == "x"
+    assert souls.profile_name("--") == "agent" and souls.profile_name("a" * 31 + " suite") == "a" * 31
+    from bipinstall.__main__ import templates
+    assert all("{name}" in t["soul"] and "name" not in t for t in templates() if t["category"] != "custom")
+    assert templates()[-1]["category"] == "custom"
+
+
+def test_custom_agent(monkeypatch):
+    from bipinstall import __main__ as cli
+    answers = iter(["keeps an eye on my plants and tells me when to water them", "funny", "never chemicals", "4"])
+    monkeypatch.setattr("builtins.input", lambda prompt="": next(answers))
+    agent = cli.custom_agent("Fern")
+    assert agent["category"] == "home" and agent["description"].startswith("keeps an eye on my plants")
+    assert agent["soul"].startswith("You are Fern") and "funny" in agent["soul"] and "never chemicals" in agent["soul"]
+    assert "write in English." in agent["soul"]   # its language block, until the app sets another
+
+
+def test_uninstall_undoes_the_install(tmp_path, monkeypatch):
+    from bipinstall.uninstall import install_ports, uninstall
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path / ".hermes"))
+    (tmp_path / ".config" / "bipagents").mkdir(parents=True)
+    (tmp_path / ".config" / "bipagents" / "bridge.toml").write_text('bridge_key = "x"\nport = 9203\n')
+    agents = tmp_path / "Library" / "LaunchAgents"
+    agents.mkdir(parents=True)
+    (agents / "io.github.bipagents.bridge.plist").write_text("<plist/>")
+    (tmp_path / ".hermes").mkdir()
+    assert install_ports(tmp_path / ".config" / "bipagents" / "bridge.toml") == [9202, 9203, 9205]
+    runner = hermes.Runner(dry=True)
+    uninstall(runner, everything=False, home=tmp_path, system="macos", tailscale="tailscale")
+    log = "\n".join(runner.log)
+    assert "tailscale serve --https=9202 off" in log and "launchctl bootout" in log
+    assert f"remove {tmp_path}/.config/bipagents" in log and ".hermes" not in log   # the agents' data stays
+    runner = hermes.Runner(dry=True)
+    uninstall(runner, everything=True, home=tmp_path, system="macos", tailscale=None)
+    assert f"remove {tmp_path}/.hermes" in "\n".join(runner.log)
+
+
+def test_hermes_is_pinned_and_patched(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path / ".hermes"))
+    monkeypatch.setenv("HOME", str(tmp_path))   # no Hermes installed there
+    runner = hermes.Runner(dry=True)
+    hermes.install(runner, browser=False)
+    assert "--commit 3b42157858" in runner.log[0] and "--skip-browser" in runner.log[0]   # v0.23.1
+    hermes.apply_patches(runner, ROOT / "hermes" / "patches")
+    applied = [line for line in runner.log if " apply " in line and "--check" not in line]
+    assert [line.rsplit("/", 1)[-1].strip("'") for line in applied] == [
+        "0005-vault-fill-reattach-supervisor.patch",
+        "0007-browser-vault-only.patch", "0008-timezone-terminal-followed.patch",
+        "0009-tool-search-keep-direct-compact-skills.patch", "0010-empty-replies-changed-retries-leaked-tool-calls.patch",
+        "0011-titles-reasoning-floor-glm.patch", "0013-mcp-results-vault-scrub.patch",
+        "0015-time-anchor.patch", "0016-message-agent-the-bridges-everywhere.patch",
+        "0017-vault-address-contact-fields.patch", "0018-guest-turns-closed-tools-no-user-profile.patch",
+        "0020-runs-model-usage-per-call.patch",
+        "0021-api-bot-chat-stays-api.patch", "0022-tool-order-common-first.patch",
+        "0023-prompt-cache-stable-across-conversations.patch", "0024-closed-tools-per-turn.patch",
+        "0025-stream-colon-mid-sentence.patch",
+        "0026-runs-todo-updated.patch", "0027-refused-api-turn-unlocks.patch"]
+
+
+def bridge_check(tmp_path: Path, text: str) -> str:
+    """The bridge's own reading of a config (`bipbridge check`, the Rust release build: $CARGO_TARGET_DIR or
+    bridge-rs/target); skipped without one."""
+    binary = Path(os.environ.get("CARGO_TARGET_DIR") or ROOT / "bridge-rs" / "target") / "release" / "bipbridge"
+    if not binary.is_file():
+        pytest.skip(f"no bridge build at {binary} (cargo build --release in bridge-rs/)")
+    path = tmp_path / "check.toml"
+    path.write_text(text)
+    path.chmod(0o600)
+    done = subprocess.run([str(binary), "--config", str(path), "check"], capture_output=True, text=True,
+                          env={"HOME": str(tmp_path), "PATH": "/usr/bin:/bin"})
+    assert done.returncode == 0, done.stderr
+    return done.stdout
+
+
+@pytest.mark.bridge_build   # also run by the battery's Linux installer suite, with the release build it made
+def test_bridge_config_is_valid_for_the_bridge(tmp_path):
+    inst = Install(repo=ROOT, home=tmp_path, ports=Ports(9200), tailnet_name="mini.tail0000.ts.net",
+                   lan_address="192.168.1.20", model=hermes.Model("custom", "glm", base_url="http://192.168.1.30:8888/v1"),
+                   agents=[AgentEntry("finance", "Budget", "k" * 43)])
+    shown = bridge_check(tmp_path, bridge_toml(inst))
+    assert "agent finance: hermes=http://127.0.0.1:9202/p/finance " in shown
+    assert "listen      127.0.0.1:9203" in shown and "lan         off" not in shown
+    assert "pocket      http://127.0.0.1:8098" in shown
+    import tomllib
+    config = tomllib.loads(bridge_toml(inst))
+    assert config["model"]["health_url"] == "http://192.168.1.30:8888/v1/models"
+    assert config["hermes"]["hub_url"] == "http://127.0.0.1:9202"
+    assert config["hermes"]["public_hub_url"] == "https://mini.tail0000.ts.net:9202"
+    assert not config["hermes"].get("isolated")             # no sandbox: the bridge keeps no credentials
+    assert not config.get("browser", {}).get("enabled")
+    inst.isolated = inst.browser = True
+    config = tomllib.loads(bridge_check(tmp_path, bridge_toml(inst)) and bridge_toml(inst))
+    assert config["hermes"]["isolated"] is True and config["browser"]["enabled"] is True
+    assert tailscale_commands("tailscale", inst.ports)[0] == "tailscale serve --bg --https=9202 http://127.0.0.1:9202"
+    label, path, content = bridge_service(inst, "macos")
+    assert path.name == "io.github.bipagents.bridge.plist" and str(inst.bridge_config) in content
+    label, path, content = bridge_service(inst, "linux")
+    assert label == "bipagents-bridge" and "BRIDGE_CONFIG=" in content
+
+
+def test_whole_dry_run(monkeypatch, tmp_path, capsys):
+    """The installer from the first question to the end, without network or changes."""
+    from bipinstall import __main__ as cli
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(cli, "detect", lambda: mac(16))
+    monkeypatch.setattr(cli, "pick_block", lambda wanted=None: Ports(8640))
+    monkeypatch.setattr(cli.models, "discover", lambda addresses: _async([models.Server("http://192.168.1.30:8888/v1", "vLLM", ["glm"])]))
+    monkeypatch.setattr(cli.models, "check", lambda *a, **k: _async(models.ModelCheck(ok=True, seconds=0.2, vision=True)))
+    monkeypatch.setattr(cli, "pocket_running", lambda: True)
+    monkeypatch.setattr(cli, "voice_engine_answers", lambda url: False)
+    # The machine is a Mac whatever runs the test (CI: Linux), and its binaries come from the release.
+    from bipinstall import rustbridge
+    monkeypatch.setattr(rustbridge, "asset", lambda system=None, machine=None: "bipbridge-macos-universal.tar.gz")
+    monkeypatch.delenv(rustbridge.BUILD, raising=False)
+    answers = iter(["1", "1", "", "1,9", "Léa", "Fougère", "suit mes plantes", "", "", "4", "y"])
+    monkeypatch.setattr("builtins.input", lambda prompt="": next(answers))
+    assert cli.main(["--dry-run"]) == 0
+    out = capsys.readouterr().out
+    assert "profile create lea" in out and "profile create fougere" in out
+    assert "[agents.fougere]" in out and 'display_name = "Fougère"' in out
+    assert ".env: API_SERVER_KEY" in out and "config set API_SERVER_KEY" not in out   # never on a command line
+    assert "[kyutai]" not in out
+    # The bridge: this version's Rust binaries, nothing of Python's (no venv, no `-m bipbridge`).
+    assert "fetch the bridge " in out and "bipbridge-macos-universal.tar.gz" in out
+    assert "bridge/.venv" not in out and "-m bipbridge" not in out and "bridge/requirements" not in out
+
+
+def test_the_agents_get_their_language_from_the_app(monkeypatch, tmp_path, capsys):
+    """No language asked: the agents are created in English, answer in the language they are written to, and their
+    language block (the one they write first in) is set later by the app."""
+    from bipinstall import __main__ as cli
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(cli, "detect", lambda: mac(16))
+    monkeypatch.setattr(cli, "pick_block", lambda wanted=None: Ports(8640))
+    monkeypatch.setattr(cli.models, "discover", lambda addresses: _async([models.Server("http://192.168.1.30:8888/v1", "vLLM", ["glm"])]))
+    monkeypatch.setattr(cli.models, "check", lambda *a, **k: _async(models.ModelCheck(ok=True, seconds=0.2, vision=True)))
+    monkeypatch.setattr(cli, "pocket_running", lambda: True)
+    monkeypatch.setattr(cli, "voice_engine_answers", lambda url: False)
+    souls_written = {}
+    create_agent = cli.hermes.create_agent
+
+    def remembering(runner, name, **kw):   # the dry run writes no SOUL.md: keep what would be written
+        souls_written[name] = kw["soul"]
+        return create_agent(runner, name, **kw)
+
+    monkeypatch.setattr(cli.hermes, "create_agent", remembering)
+    answers = iter(["1", "1", "", "1,9", "Lea", "Fern", "watches my plants", "", "", "4", "y"])
+    monkeypatch.setattr("builtins.input", lambda prompt="": next(answers))
+    assert cli.main(["--dry-run"]) == 0
+    out = capsys.readouterr().out
+    assert "Hello" in out and "Where does the model" in out and "Hermes, the agents' brain" in out
+    assert "The Bips' voices" in out and "Dry run: here is what would have been done." in out
+    assert "language" not in out.lower().split("the bips' voices")[0]   # nothing asked about it
+    assert ".env: API_SERVER_KEY" in out and "Où tourne" not in out
+    assert souls_written["lea"].startswith("You are Lea, your user's everyday agent.")
+    assert souls_written["fern"].startswith("You are Fern") and "watches my plants" in souls_written["fern"]
+    assert "answer in the language your person writes in" in souls_written["fern"] and "Tu " not in souls_written["fern"]
+
+
+def test_a_kyutai_server_is_a_voice_model_like_any_other(monkeypatch, tmp_path, capsys):
+    """Kyutai is no engine of its own: one already running (an administrator's, on any GPU) is the person's voice model."""
+    from bipinstall import __main__ as cli
+    from bipinstall import voice_server
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(cli, "detect", lambda: mac(16))
+    monkeypatch.setattr(cli, "pick_block", lambda wanted=None: Ports(8640))
+    monkeypatch.setattr(cli.models, "discover", lambda addresses: _async([models.Server("http://192.168.1.30:8888/v1", "vLLM", ["glm"])]))
+    monkeypatch.setattr(cli.models, "check", lambda *a, **k: _async(models.ModelCheck(ok=True, seconds=0.2, vision=True)))
+    monkeypatch.setattr(cli, "pocket_running", lambda: True)
+    monkeypatch.setattr(voice_server, "check", lambda url: voice_server.VoiceServer(url.rstrip("/"), ["5476"], "kyutai-tts",
+                                                                                    kind="Kyutai"))
+    answers = iter(["1", "1", "", "1,9", "Léa", "Fougère", "suit mes plantes", "", "", "4", "y"])
+    monkeypatch.setattr("builtins.input", lambda prompt="": next(answers))
+    assert cli.main(["--dry-run", "--voice-server", "http://127.0.0.1:8097", "--voice-uses", "reading"]) == 0
+    out = capsys.readouterr().out
+    assert "Your voice model: Kyutai — http://127.0.0.1:8097" in out
+    assert '[voice_server]\nurl = "http://127.0.0.1:8097"\nmodel = "kyutai-tts"\nlive = false\nreplies = false\nreading = true' in out
+
+
+def test_linux_with_podman_offers_the_visible_browser(monkeypatch, tmp_path, capsys):
+    """A sandbox on Linux: the agents' visible browser is offered, its image built from the repository, each agent
+    given its container by the bridge, and Hermes' own desktop left out (the browser brings its own)."""
+    from bipinstall import __main__ as cli
+    monkeypatch.setenv("HOME", str(tmp_path))
+    linux = Machine("linux", "x86_64", 32, 8, "Ryzen", "none", tailnet_name="box.tail0000.ts.net",
+                    lan_addresses=["192.168.1.21"])
+    monkeypatch.setattr(cli, "detect", lambda: linux)
+    monkeypatch.setattr(cli.hermes, "sandbox_runtime", lambda: "/usr/bin/podman")
+    monkeypatch.setattr(cli, "pick_block", lambda wanted=None: Ports(8640))
+    monkeypatch.setattr(cli.models, "discover", lambda addresses: _async([models.Server("http://192.168.1.30:8888/v1", "vLLM", ["glm"])]))
+    monkeypatch.setattr(cli.models, "check", lambda *a, **k: _async(models.ModelCheck(ok=True, seconds=0.2, vision=True)))
+    monkeypatch.setattr(cli, "pocket_running", lambda: True)
+    answers = iter(["1", "1", "", "y", "1", "Léa", "y"])
+    monkeypatch.setattr("builtins.input", lambda prompt="": next(answers))
+    assert cli.main(["--dry-run"]) == 0
+    out = capsys.readouterr().out
+    assert "visible browser" in out and "[6/6]" in out
+    assert "/usr/bin/podman build --pull=newer --build-arg BROWSER_REFRESH=" in out and "/browser/Containerfile" in out
+    assert " -t bipagents-browser -f " in out                          # today's Chrome, never a cached layer
+    assert "bipagents-refresh-browser.timer" in out                     # and its security fixes each night
+    assert "/bipbridge browser add --all --config" in out and "systemctl --user restart bipagents-bridge" in out
+    assert "fetch the bridge " in out and "bridge/.venv" not in out and "bridge/requirements" not in out
+    assert "[browser]\nenabled = true" in out and "isolated = true" in out
+    assert "config set HERMES_DOCKER_BINARY /usr/bin/podman" in out   # not a root docker found first
+    assert "registries.conf.d/50-bipagents.conf" in out                # its sandbox image by its full name
+    assert "bot_desktop.auto_start" not in out
+
+
+def test_uninstall_removes_the_browsers(tmp_path, monkeypatch):
+    from bipinstall.uninstall import uninstall
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path / ".hermes"))
+    units = tmp_path / ".config" / "systemd" / "user"
+    units.mkdir(parents=True)
+    (units / "bipagents-browser-lea.service").write_text("[Unit]\n")
+    (units / "bipagents-refresh-browser.timer").write_text("[Timer]\n")
+    monkeypatch.setattr("shutil.which", lambda name: "/usr/bin/podman" if name == "podman" else None)
+    runner = hermes.Runner(dry=True)
+    uninstall(runner, everything=False, home=tmp_path, system="linux", tailscale=None)
+    log = "\n".join(runner.log)
+    assert "systemctl --user disable --now bipagents-browser-lea" in log
+    assert "systemctl --user disable --now bipagents-refresh-browser.timer" in log      # its nightly refresh too
+    assert "/usr/bin/podman image rm -f bipagents-browser" in log
+
+
+def _existing_hermes(home: Path, api: bool = False, sandboxed: bool = False):
+    """A Hermes installed before BipAgents: a model, a named profile, its own settings."""
+    (home / ".local" / "bin").mkdir(parents=True)
+    (home / ".local" / "bin" / "hermes").write_text("#!/bin/sh\n")
+    hermes_home = home / ".hermes"
+    checkout = hermes_home / "hermes-agent" / "hermes_cli"
+    checkout.mkdir(parents=True)
+    (checkout / "config_defaults.py").write_text('"multiplex_profiles": True,\n')
+    terminal = "terminal:\n  backend: docker\n" if sandboxed else ""
+    (hermes_home / "config.yaml").write_text(f"model:\n  default: glm-5.3\n  provider: custom\n{terminal}")
+    (hermes_home / ".env").write_text("TELEGRAM_BOT_TOKEN=tg\n" + ("API_SERVER_ENABLED=true\nAPI_SERVER_PORT=8642\n"
+                                                                   "API_SERVER_KEY=main-key\n" if api else ""))
+    cuisine = hermes_home / "profiles" / "cuisine"
+    cuisine.mkdir(parents=True)
+    (cuisine / "config.yaml").write_text(f"model:\n  default: glm-5.3\n{terminal}")
+    (cuisine / "profile.yaml").write_text("description: Recettes et menus\n")
+    return hermes_home
+
+
+def test_an_existing_hermes_keeps_its_settings(monkeypatch, tmp_path, capsys):
+    """Someone who already uses Hermes: no model question, nothing of theirs changed; the local API and the shown
+    agents' keys are added, and the app reaches the main profile at the gateway's root."""
+    from bipinstall import __main__ as cli
+    from bipinstall import existing
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path / ".hermes"))
+    _existing_hermes(tmp_path)
+    found = existing.detect_existing(run=lambda args: "Hermes Agent v0.21.6\n" if "--version" in args else "")
+    assert found and found.multiplex and not found.api_enabled and not found.protected and found.gateway == "stopped"
+    assert [p.name for p in found.profiles] == ["default", "cuisine"] and found.model == "glm-5.3"
+    monkeypatch.setattr(cli, "detect", lambda: mac(16))
+    monkeypatch.setattr(cli, "pick_block", lambda wanted=None: Ports(8640))
+    monkeypatch.setattr(cli.hermes, "sandbox_runtime", lambda: None)
+    monkeypatch.setattr(existing, "_run", lambda args: "")
+    monkeypatch.setattr(cli, "pocket_running", lambda: True)
+    answers = iter(["", "Marc", "", "y"])   # every agent, the main one renamed « Marc », go
+    monkeypatch.setattr("builtins.input", lambda prompt="": next(answers))
+    assert cli.main(["--dry-run"]) == 0
+    out = capsys.readouterr().out
+    assert "You already have Hermes" in out and "Where does the model" not in out
+    assert "config set API_SERVER_ENABLED true" in out and "config set API_SERVER_PORT 8642" in out
+    assert "/profiles/cuisine/.env: API_SERVER_KEY" in out and "config set API_SERVER_KEY" not in out
+    assert "model." not in out and "terminal.backend" not in out and "tools disable" not in out
+    assert "profile create" not in out and "no vault" in out
+    assert '[agents.default]\ndisplay_name = "Marc"\nhermes_url = "http://127.0.0.1:8642"' in out
+    assert 'hermes_url = "http://127.0.0.1:8642/p/cuisine"' in out and "isolated = true" not in out
+
+
+def test_a_hermes_our_install_left_unfinished_is_taken_up_again(tmp_path, monkeypatch):
+    from bipinstall import existing, hermes
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path / ".hermes"))
+    _existing_hermes(tmp_path, api=True, sandboxed=False)
+    (tmp_path / ".hermes" / hermes.UNFINISHED).touch()
+    assert existing.detect_existing(run=lambda args: "") is None
+
+def test_an_existing_hermes_with_its_api_on_keeps_its_port_and_key(tmp_path, monkeypatch):
+    from bipinstall import existing
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path / ".hermes"))
+    _existing_hermes(tmp_path, api=True, sandboxed=True)
+    found = existing.detect_existing(run=lambda args: "")
+    assert found.api_enabled and found.api_port == 8642 and found.protected
+    changes = existing.plan_changes(found, ["default", "cuisine"], 9202)
+    assert [(p, k) for p, k, _, _ in changes] == [("cuisine", "API_SERVER_KEY")]
+    assert existing.key_of(found, changes, "default") == "main-key"
+
+
+def test_an_existing_hermes_is_told_what_the_bridge_writes_in_its_profiles():
+    """Alex 12/11, « mains propres »: the bridge writes only its tools' entry in the shown profiles (not the main
+    one's), said before « Ready to go? »."""
+    from bipinstall.existing import bridge_writes
+    assert bridge_writes(["default"]) is None
+    said = bridge_writes(["default", "dev", "jardin_potager"])
+    assert said.startswith("Dev, Jardin Potager: ") and "Hermes" not in said.split(":")[0]
+    assert "mcp_servers.bipagents" in said and "personality" in said and "scheduled jobs stay as they are" in said
+
+
+def test_uninstall_puts_an_existing_hermes_back(tmp_path, monkeypatch):
+    from bipinstall import existing
+    from bipinstall.uninstall import uninstall
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path / ".hermes"))
+    _existing_hermes(tmp_path)
+    config = tmp_path / ".config" / "bipagents"
+    config.mkdir(parents=True)
+    (config / "bridge.toml").write_text('bridge_key = "x"\nport = 9203\n')
+    runner = hermes.Runner()
+    monkeypatch.setattr(runner, "run", lambda args, **k: runner.log.append(" ".join(args)) or "")
+    changes = [("default", "API_SERVER_ENABLED", "true", None), ("default", "API_SERVER_PORT", "9202", "8642"),
+               ("cuisine", "API_SERVER_KEY", "new-key", "old-key")]
+    existing.apply_changes(runner, changes, config / existing.RECORD, "service", ["/repo/hermes/patches/0004.patch"])
+    runner = hermes.Runner(dry=True)
+    uninstall(runner, everything=True, home=tmp_path, system="linux", tailscale=None)
+    log = "\n".join(runner.log)
+    assert "config unset API_SERVER_ENABLED" in log and "config set API_SERVER_PORT 8642" in log
+    # the key of before comes back in its .env, never on a command line (audit 11/11, BV-6)
+    assert "/profiles/cuisine/.env: API_SERVER_KEY" in log and "old-key" not in log and "new-key" not in log
+    assert "gateway restart" in log and "gateway uninstall" not in log
+    assert "apply --reverse /repo/hermes/patches/0004.patch" in log   # our patches come back off its code
+    assert f"keep {tmp_path}/.hermes" in log and f"remove {tmp_path}/.hermes\n" not in log + "\n"
+
+
+def _tree(root: Path) -> dict:
+    return {str(p.relative_to(root)): p.read_bytes() for p in sorted(root.rglob("*")) if p.is_file()}
+
+
+def test_uninstall_gives_an_existing_hermes_back_byte_for_byte(tmp_path, monkeypatch):
+    """Alex 12/11, « mains propres »: everything BipAgents added to the person's Hermes taken out again, their files
+    back byte for byte (the bridge rewrote config.yaml in its own format; older bridges also wrote SOUL.md blocks,
+    skills, a settings record, Hermes config backups, TERMINAL_DOCKER_VOLUMES)."""
+    import yaml
+    from bipinstall import existing
+    from bipinstall.uninstall import uninstall
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path / ".hermes"))
+    hermes_home = _existing_hermes(tmp_path)
+    cuisine = hermes_home / "profiles" / "cuisine"
+    (cuisine / "config.yaml").write_text("# Basile's own comment\nmodel:\n  default: glm-5.3\nmcp_servers:\n"
+                                         "  recettes:\n    command: python3\nagent:\n  reasoning_effort: medium\n")
+    (cuisine / "SOUL.md").write_text("Tu es Basile, le cuisinier de Léa.\n")
+    (cuisine / ".env").write_text("EUROUTER_API_KEY=k\n")
+    (cuisine / "backups" / "config").mkdir(parents=True)
+    (cuisine / "backups" / "config" / "config.yaml.good.1").write_text("theirs\n")
+    (cuisine / "skills" / "menus").mkdir(parents=True)
+    (cuisine / "skills" / "menus" / "SKILL.md").write_text("---\nname: menus\n---\n")
+    before = _tree(hermes_home)
+    config = tmp_path / ".config" / "bipagents"
+    config.mkdir(parents=True)
+    (config / "bridge.toml").write_text('bridge_key = "x"\nport = 9203\n')
+    runner = hermes.Runner()
+    monkeypatch.setattr(runner, "run", lambda args, **k: runner.log.append(" ".join(args)) or "")
+    changes = existing.plan_changes(existing.detect_existing(run=lambda args: ""), ["default", "cuisine"], 9202)
+    existing.apply_changes(runner, changes, config / existing.RECORD, "service", [], profiles=["default", "cuisine"])
+    # what the installer (the .env keys above) and the bridge, this one or an older one, then wrote
+    data = yaml.safe_load((cuisine / "config.yaml").read_text())
+    data["mcp_servers"]["bipagents"] = {"url": "http://127.0.0.1:9203/v1/agent-tools/mcp", "timeout": 1800}
+    data["mcp_servers"]["bipagents_checkout"] = {"url": "http://127.0.0.1:9203/v1/agent-tools/checkout"}
+    (cuisine / "config.yaml").write_text(yaml.safe_dump(data))
+    (cuisine / "SOUL.md").write_text("Tu es Basile, le cuisinier de Léa.\n\n<!-- bipagents:language -->\nAnswer in "
+                                     "French.\n<!-- /bipagents:language -->\n<!-- bipagents:notebook -->\nx\n"
+                                     "<!-- /bipagents:notebook -->\n")
+    with open(cuisine / ".env", "a") as fh:
+        fh.write("TERMINAL_DOCKER_VOLUMES=[\"/x/uploads:/fichiers:ro,z\"]\n")
+    for rel in ("bipagents-settings.json", ".bipagents-profile.lock", "skills/.bipagents-style-skills.json",
+                "skills/docs-styles/SKILL.md", "skills/slides-styles/scripts/deck.py", "memories/.prompt-day.json",
+                "backups/config/config.yaml.good.2"):
+        (cuisine / rel).parent.mkdir(parents=True, exist_ok=True)
+        (cuisine / rel).write_text("ours\n")
+    assert _tree(hermes_home) != before
+    runner = hermes.Runner()
+    monkeypatch.setattr(runner, "run", lambda args, **k: runner.log.append(" ".join(args)) or "")
+    uninstall(runner, everything=False, home=tmp_path, system="linux", tailscale=None)
+    after = _tree(hermes_home)
+    assert sorted(set(after) ^ set(before)) == [] and [k for k in before if before[k] != after[k]] == []
+    assert not config.exists()   # the snapshot went with the bridge's config
+
+
+def test_uninstall_cleans_what_an_older_install_left_without_a_snapshot(tmp_path, monkeypatch):
+    import json as _json
+    from bipinstall import existing
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path / ".hermes"))
+    hermes_home = _existing_hermes(tmp_path)
+    cuisine = hermes_home / "profiles" / "cuisine"
+    (cuisine / "config.yaml").write_text("model:\n  default: glm-5.3\nmcp_servers:\n  bipagents:\n    url: http://x\n")
+    (cuisine / "SOUL.md").write_text("Tu es Basile.\n\n<!-- bipagents:language -->\nx\n<!-- /bipagents:language -->\n")
+    (cuisine / "skills" / "docs-styles").mkdir(parents=True)
+    (cuisine / "bipagents-settings.json").write_text("{}")
+    record = tmp_path / "existing-hermes.json"
+    record.write_text(_json.dumps({"preexisting": True, "gateway": "service", "restore": []}))
+    runner = hermes.Runner()
+    monkeypatch.setattr(runner, "run", lambda args, **k: "")
+    existing.restore(runner, record)
+    assert (cuisine / "config.yaml").read_text() == "model:\n  default: glm-5.3\n"
+    assert (cuisine / "SOUL.md").read_text() == "Tu es Basile.\n"
+    assert not (cuisine / "skills" / "docs-styles").exists() and not (cuisine / "bipagents-settings.json").exists()
+
+
+def test_a_rented_server_is_recognised(tmp_path):
+    from bipinstall.detect import cloud_vendor
+    (tmp_path / "sys_vendor").write_text("Hetzner\n")
+    assert cloud_vendor(str(tmp_path)) == "Hetzner"
+    (tmp_path / "sys_vendor").write_text("Microsoft Corporation\n")
+    (tmp_path / "product_name").write_text("Surface Laptop 7\n")
+    assert cloud_vendor(str(tmp_path)) is None                  # a Surface, not Azure
+    (tmp_path / "product_name").write_text("Virtual Machine\n")
+    assert cloud_vendor(str(tmp_path)) == "Azure"
+    assert cloud_vendor(str(tmp_path / "missing")) is None      # a Mac, a home server
+
+
+def test_on_a_rented_server_nothing_listens_on_a_local_network(monkeypatch, tmp_path, capsys):
+    from bipinstall import __main__ as cli
+    monkeypatch.setenv("HOME", str(tmp_path))
+    vps = Machine("linux", "arm64", 8, 4, "Neoverse-N1", None, tailnet_name="vps.tail0000.ts.net",
+                  lan_addresses=["10.0.0.2"], cloud="Hetzner")
+    monkeypatch.setattr(cli, "detect", lambda: vps)
+    monkeypatch.setattr(cli.hermes, "sandbox_runtime", lambda: None)
+    monkeypatch.setattr(cli, "pick_block", lambda wanted=None: Ports(8640))
+    monkeypatch.setattr(cli.models, "check", lambda *a, **k: _async(models.ModelCheck(ok=True, seconds=0.4, vision=False)))
+    monkeypatch.setattr(cli, "pocket_running", lambda: True)
+    # The model in the cloud is the default choice (Enter), OpenRouter, a key, the model; one agent; go.
+    answers = iter(["", "1", "sk-or-test", "", "1", "Léa", "y"])
+    monkeypatch.setattr("builtins.input", lambda prompt="": next(answers))
+    assert cli.main(["--dry-run"]) == 0
+    out = capsys.readouterr().out
+    assert "Server rented from Hetzner" in out and "another machine on my tailnet" in out
+    assert "[lan]\nenabled = false" in out
+
+
+def test_hermes_update_checks(tmp_path, monkeypatch):
+    from bipinstall import update
+    assert update.behind("⚕ Update available: 590 commits behind origin/main.") == 590
+    assert update.behind("✓ Already up to date") == 0
+    assert update.channel("→ Update channel: main\n") == "main"
+    agents = [{"id": "vie", "name": "Vie", "url": "http://h/p/vie", "key": "k"},
+              {"id": "jardin", "name": "Jardin", "url": "http://h/p/jardin", "key": "k"},
+              {"id": "old", "name": "Old", "url": "http://h/p/old", "key": "bad"}]
+
+    def gateway(request):
+        if request.headers["authorization"] == "Bearer bad":
+            return httpx.Response(401)
+        if "/vie/" in str(request.url):
+            return httpx.Response(200, json={"run_submission": True, "run_clarify": True})
+        return httpx.Response(200, json={"run_submission": True})
+
+    client = httpx.Client(transport=httpx.MockTransport(gateway))
+    problems = update.check_agents(agents, expect_clarify=True, client=client, attempts=1)
+    assert problems["vie"] == "" and "0001" in problems["jardin"] and problems["old"] == "refuses its key"
+    assert update.check_agents(agents[1:2], expect_clarify=False, client=client, attempts=1) == {"jardin": ""}
+    monkeypatch.setattr(update.Path, "home", lambda: tmp_path)
+    units = tmp_path / ".config" / "systemd" / "user"
+    units.mkdir(parents=True)
+    (units / "bipagents-hermes.service").write_text("")
+    (units / "bipagents-space-jardin.service").write_text("")
+    monkeypatch.setattr(update.platform, "system", lambda: "Linux")
+    assert update.gateway_units() == [("systemd", "bipagents-hermes"), ("systemd", "bipagents-space-jardin")]
+
+
+async def _async_value(value):
+    return value
+
+
+def _async(value):
+    return _async_value(value)
+
+
+def test_family_member_gets_a_block_of_ports(tmp_path):
+    from bipinstall import family
+
+    config = tmp_path / "bridge.toml"
+    config.write_text('bridge_key = "k"\npublic_url = "https://box.ts.net:8643"\n\n[apns]\nteam_id = "T"\n')
+    before = config.read_text()
+    result = family.add("Léa", str(config), is_free=lambda port: True)
+    assert result["member"] == "lea" and result["server_url"] == "https://box.ts.net:8643"
+    assert result["ports"].base == 9200                     # never 8640: the administrator's own block
+    assert config.read_text() == before                     # no relay key: their notifications use the publisher's relay
+    second = family.add("Chloé", str(config), is_free=lambda port: True)
+    assert second["ports"].base == 9210                     # reserved blocks are not handed out twice
+    with pytest.raises(SystemExit):
+        family.add("Léa", str(config), is_free=lambda port: True)
+
+
+def test_a_bridge_relaying_for_another_moves_to_the_publishers_relay(tmp_path, monkeypatch):
+    from bipinstall import migrations, stack
+    config = tmp_path / ".config" / "bipagents" / "bridge.toml"
+    config.parent.mkdir(parents=True)
+    member = 'bridge_key = "k"\n\n[push]\nrelay_url = "https://alex.ts.net:8643"\nrelay_key = "r"\n\n[cron]\nwatch = true\n'
+    config.write_text(member)
+    runner = hermes.Runner()
+    runner.dry = False
+    ran = []
+    runner.run = lambda args, **kw: ran.append(list(args)) or ""
+    from bipinstall import drain
+    monkeypatch.setattr(drain, "until_quiet", lambda path, what: ran.append(["drain", what, str(path)]) or "")
+    monkeypatch.setattr(stack, "PUSH_SERVICE_URL", "")
+    with pytest.raises(migrations.NotYet):
+        migrations.push_relay_service(runner, tmp_path)
+    assert config.read_text() == member and ran == []
+    monkeypatch.setattr(stack, "PUSH_SERVICE_URL", "https://push.example.com")
+    assert "publisher's push relay" in migrations.push_relay_service(runner, tmp_path)
+    assert config.read_text() == 'bridge_key = "k"\n\n[push]\nservice_url = "https://push.example.com"\n[cron]\nwatch = true\n'
+    assert ran[0] == ["drain", "bridge", str(config)] and len(ran) == 2   # its turns waited for, then restarted
+    # the administrator's side: its [relay] table and key file go
+    config.write_text('bridge_key = "k"\n\n[relay]\nclients_file = "/x/relay-clients"\n\n[cron]\nwatch = true\n')
+    (config.parent / "relay-clients").write_text("chi key\n")
+    assert "no longer relays" in migrations.push_relay_service(runner, tmp_path)
+    assert "[relay]" not in config.read_text() and not (config.parent / "relay-clients").exists()
+    assert migrations.push_relay_service(runner, tmp_path) == "no relay between bridges here"
+
+
+def test_every_install_gets_the_publishers_push_relay(tmp_path, monkeypatch):
+    """2026-11-12: the offer's places and the installs from before 2026-11-04 had no `[push] service_url`: no push."""
+    from bipinstall import drain, migrations, stack
+    config = tmp_path / ".config" / "bipagents" / "bridge.toml"
+    config.parent.mkdir(parents=True)
+    runner = hermes.Runner()
+    runner.dry = False
+    ran = []
+    runner.run = lambda args, **kw: ran.append(list(args)) or ""
+    monkeypatch.setattr(drain, "until_quiet", lambda path, what: ran.append(["drain", what]) or "")
+    assert migrations.push_service_everywhere(runner, tmp_path) == "no bridge here"
+    monkeypatch.setattr(stack, "PUSH_SERVICE_URL", "")
+    config.write_text('bridge_key = "k"\n\n[cron]\nwatch = true\n')
+    with pytest.raises(migrations.NotYet):
+        migrations.push_service_everywhere(runner, tmp_path)
+    monkeypatch.setattr(stack, "PUSH_SERVICE_URL", "https://push.example.com")
+    # no [push] table (an offer's place): one added, the bridge drained then restarted
+    assert "publisher's push relay" in migrations.push_service_everywhere(runner, tmp_path)
+    assert config.read_text() == ('bridge_key = "k"\n\n[cron]\nwatch = true\n\n[push]\n'
+                                  'service_url = "https://push.example.com"\n')
+    assert ran[0] == ["drain", "bridge"] and len(ran) == 2
+    # a second run changes nothing, restarts nothing
+    ran.clear()
+    assert "already" in migrations.push_service_everywhere(runner, tmp_path) and ran == []
+    # a [push] table without it, or with an empty one; an Apple key of its own changes nothing to that
+    for push in ('[push]\nmessage_wait_seconds = 3\n', '[push]\nservice_url = ""\nmessage_wait_seconds = 3\n'):
+        config.write_text(f'bridge_key = "k"\n\n{push}\n[apns]\nteam_id = "T"\n')
+        migrations.push_service_everywhere(runner, tmp_path)
+        assert config.read_text() == ('bridge_key = "k"\n\n[push]\nservice_url = "https://push.example.com"\n'
+                                      'message_wait_seconds = 3\n\n[apns]\nteam_id = "T"\n')
+    # Alex's own install (direct APNs): the relay line too, its [apns] and key file left, the key's place said
+    config.write_text('bridge_key = "k"\n\n[apns]\nteam_id = "T"\np8_path = "/home/alex/.config/bipagents/AuthKey.p8"\n')
+    said = migrations.push_service_everywhere(runner, tmp_path)
+    assert "/home/alex/.config/bipagents/AuthKey.p8" in said and "yourself" in said
+    assert 'p8_path = "/home/alex' in config.read_text() and 'service_url = "https://push.example.com"' in config.read_text()
+    # one given by the person is kept
+    config.write_text('bridge_key = "k"\n\n[push]\nservice_url = "https://push.mine.org"\n')
+    assert "already" in migrations.push_service_everywhere(runner, tmp_path)
+    assert "push.mine.org" in config.read_text()
+
+
+def test_bridge_settings_migrations_apply_over_the_persons_own_hermes(tmp_path, monkeypatch):
+    from bipinstall import migrations
+    monkeypatch.setattr(migrations, "STATE", tmp_path / "migrations.json")
+    seen = []
+    monkeypatch.setattr(migrations, "MIGRATIONS", [
+        ("2026-11-10-clarify-hour", lambda r, h: seen.append("hermes") or "hermes"),
+        ("2026-11-12-push-service-everywhere", lambda r, h: seen.append("push") or "push"),
+    ])
+    runner = hermes.Runner()
+    runner.dry = False
+    said = migrations.run(runner, tmp_path, own_hermes=False)
+    assert seen == ["push"] and said[1] == "push" and "not applied" in said[0]
+    assert migrations.pending() == ["2026-11-10-clarify-hour"]
+
+
+
+def test_family_add_restarts_the_bridge_by_its_own_name(tmp_path, monkeypatch):
+    from bipinstall import family
+    monkeypatch.setattr(family.sys, "platform", "linux")
+    units = tmp_path / ".config" / "systemd" / "user"
+    units.mkdir(parents=True)
+    assert family.bridge_restart(tmp_path) == ["systemctl", "--user", "restart", "bipagents-bridge"]
+    (units / "hermes-pocket.service").write_text("ExecStart=/x/python pocket_server.py\n")
+    (units / "hermes-ios-bridge.service").write_text("ExecStart=/x/python -m bipbridge serve\n")
+    assert family.bridge_restart(tmp_path) == ["systemctl", "--user", "restart", "hermes-ios-bridge"]
+
+
+def test_family_add_tells_their_iphone_to_join_your_tailnet():
+    from bipinstall import family
+    text = "\n".join(family.iphone_steps("Léa", "https://box.tail1234.ts.net:8643"))
+    assert "YOUR tailnet (tail1234.ts.net)" in text and "box" in text and "Invite users" in text
+
+# -- a family member's account -----------------------------------------------------------------------------------
+
+from bipinstall import account  # noqa: E402
+
+SUBUID = "admin:100000:65536\nlea:165536:65536\n"
+
+
+def test_next_subid_range_follows_every_given_range():
+    assert account.next_subid_start(SUBUID, "admin:100000:65536\n") == 231072
+    assert account.next_subid_start("", "") == account.SUBID_FIRST
+
+
+def test_a_missing_account_is_created_first_and_alone():
+    commands = account.prepare_commands("marc", account_exists=False, subuid=SUBUID, subgid=SUBUID, linger=False)
+    assert commands == [["sudo", "useradd", "--create-home", "--shell", "/bin/bash", "marc"]]
+
+
+def test_an_existing_account_gets_only_what_it_lacks():
+    commands = account.prepare_commands("marc", account_exists=True, subuid=SUBUID, subgid=SUBUID + "marc:231072:65536\n",
+                                        linger=False)
+    assert commands == [["sudo", "usermod", "--add-subuids", "296608-362143", "marc"],
+                        ["sudo", "loginctl", "enable-linger", "marc"]]
+    assert account.prepare_commands("lea", account_exists=True, subuid=SUBUID, subgid=SUBUID, linger=True) == []
+
+
+def test_linger_and_session_env(tmp_path):
+    (tmp_path / "linger").mkdir()
+    (tmp_path / "linger" / "lea").touch()
+    assert account.linger_enabled("lea", tmp_path / "linger") and not account.linger_enabled("marc", tmp_path / "linger")
+    assert account.session_env(1001, tmp_path) == {}
+    (tmp_path / "1001").mkdir()
+    (tmp_path / "1001" / "bus").touch()
+    assert account.session_env(1001, tmp_path)["DBUS_SESSION_BUS_ADDRESS"] == f"unix:path={tmp_path}/1001/bus"
+
+
+def test_install_runs_in_their_account_with_their_systemd():
+    command = account.install_command("lea", 1001, "curl -fsSL https://x/install.sh | bash -s -- --ports 8650")
+    assert command[:3] == ["sudo", "-iu", "lea"]
+    assert "XDG_RUNTIME_DIR=/run/user/1001" in command
+    assert command[-1].endswith("--ports 8650")
+
+
+def test_an_account_without_its_own_systemd_stops_the_install():
+    said = []
+    assert not account.ensure_user_services(said.append, login="lea", check=lambda: False)
+    assert any("enable-linger lea" in line for line in said)
+    assert account.ensure_user_services(said.append, login="lea", check=lambda: True)
+
+
+def test_another_accounts_runtime_folder_is_private(tmp_path):
+    """The administrator cannot look inside a member's /run/user/<uid>: no crash, the system manager is asked."""
+    folder = tmp_path / "1002"
+    folder.mkdir()
+    (folder / "bus").touch()
+    folder.chmod(0o000)
+    try:
+        assert account.session_env(1002, tmp_path) == {}
+    finally:
+        folder.chmod(0o700)
+    asked = []
+    assert account.user_manager_running(1002, run=lambda c: asked.append(c) or 0)
+    assert asked == [["systemctl", "is-active", "--quiet", "user@1002.service"]]
+
+
+def test_podman_is_told_where_the_sandbox_image_comes_from(tmp_path):
+    """Hermes asks for « nousresearch/hermes-sandbox:desktop »: without an alias, podman in a service stops at the short
+    name (exit 125) and the agents have no sandbox."""
+    import tomllib
+    path = hermes.podman_short_names(hermes.Runner(), home=tmp_path)
+    aliases = tomllib.loads(path.read_text())["aliases"]
+    assert aliases["nousresearch/hermes-sandbox"] == "docker.io/nousresearch/hermes-sandbox"
+
+
+
+
+# -- The person's own voice model ---------------------------------------------------------------------------------
+
+def test_a_voice_server_is_found_with_its_voices_and_the_model_it_expects():
+    from bipinstall import voice_server
+
+    def server(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "192.168.1.20" and request.url.port == 8099:
+            if request.url.path == "/v1/audio/voices":
+                return httpx.Response(200, json={"voices": ["fr-mascotte-s17", "fr-naturelle-s15"]})
+            if request.url.path == "/v1/models":
+                return httpx.Response(200, json={"data": [{"id": "drama-3"}]})
+        if request.url.host == "192.168.1.30" and request.url.port == 8097 and request.url.path == "/v1/voices":
+            return httpx.Response(200, json={"default": "5476", "aliases": {"5476": "a.wav"}})
+        raise httpx.ConnectError("refused", request=request)
+
+    found = asyncio.run(DISCOVER(["192.168.1.5"], transport=httpx.MockTransport(server)))
+    by_url = {s.url: s for s in found}
+    drama = by_url["http://192.168.1.20:8099"]
+    assert drama.voices == ["fr-mascotte-s17", "fr-naturelle-s15"] and drama.model == "drama-3"
+    assert drama.stream_rate == 44100 and drama.kind == "Fish Audio Drama 3"
+    kyutai = by_url["http://192.168.1.30:8097"]
+    assert kyutai.voices == ["5476"] and kyutai.kind == "Kyutai" and kyutai.stream_rate is None
+    assert len(found) == 2
+
+
+def test_the_bridge_gets_its_voice_server_and_what_it_speaks_for(tmp_path):
+    from bipinstall import voice_server
+    server = voice_server.VoiceServer("http://192.168.1.20:8099", ["a"], "drama-3", 44100)
+    lines = voice_server.toml_lines(server, voice_server.parse_uses("live,reading"))
+    assert lines == ['[voice_server]', 'url = "http://192.168.1.20:8099"', 'model = "drama-3"', 'stream_rate = 44100',
+                     'live = true', 'replies = false', 'reading = true']
+    with pytest.raises(ValueError):
+        voice_server.parse_uses("live,podcasts")
+    config = tmp_path / "bridge.toml"
+    config.write_text('bridge_key = "k"\n\n[cron]\nwatch = true\n')
+    assert voice_server.connect(config, lines, hermes.Runner())
+    text = config.read_text()
+    assert "[cron]\nwatch = true" in text and text.endswith("reading = true\n")
+    voice_server.connect(config, lines, hermes.Runner())
+    assert config.read_text().count("[voice_server]") == 1     # replaced, not added twice
+    import tomllib
+    assert tomllib.loads(config.read_text())["voice_server"]["replies"] is False
+
+
+def test_picking_a_voice_server_or_none():
+    from bipinstall import voice_server
+    found = [voice_server.VoiceServer("http://a:8880", ["af_bella"], kind="Kokoro")]
+    assert voice_server.choose(found, lambda q, d="": "", lambda q, o, d=1: 1, print) is found[0]
+    assert voice_server.choose(found, lambda q, d="": "", lambda q, o, d=1: 3, print) is None
+    defaults = []
+    voice_server.choose([], lambda q, d="": "", lambda q, o, d=1: defaults.append(d) or d, print)
+    assert defaults == [2]                                      # nothing found: « None » by default
+
+
+def test_the_voice_server_lines_go_into_the_bridge_config(tmp_path):
+    import tomllib
+    from bipinstall import voice_server
+    inst = Install(repo=tmp_path, home=tmp_path, ports=Ports(8640), tailnet_name=None, lan_address=None,
+                   voice_server=voice_server.toml_lines(voice_server.VoiceServer("http://gpu:8880", ["af_bella"]),
+                                                        {"live": False}))
+    config = tomllib.loads(bridge_toml(inst))
+    assert config["voice_server"] == {"url": "http://gpu:8880", "model": "tts-1", "live": False, "replies": True,
+                                      "reading": True}
+
+
+# -- Updates --------------------------------------------------------------------------------------------------------
+
+def test_the_approvals_command_lists_what_the_agents_asked(tmp_path, monkeypatch):
+    """`bipagents approvals [agent] [--last N]`: the bridge's `approvals` with this account's config (read only)."""
+    from bipinstall import __main__ as main, rustbridge
+    home = tmp_path / "home"
+    monkeypatch.setattr(main.Path, "home", staticmethod(lambda: home))
+    assert main.approvals_main(["wellness"]) == 1   # no install in this account
+    config = home / ".config" / "bipagents" / "bridge.toml"
+    config.parent.mkdir(parents=True)
+    config.write_text('bridge_key = "k"\n')
+    monkeypatch.setattr(rustbridge, "ensure", lambda home: None)
+    monkeypatch.setattr(rustbridge, "cli", lambda home, repo=None: ["/r/bridge-rs/bin/bipbridge"])
+    seen = []
+
+    class Done:
+        returncode = 0
+
+    monkeypatch.setattr(main.subprocess, "run", lambda args, **kw: seen.append(list(args)) or Done())
+    assert main.approvals_main(["wellness", "--last", "5"]) == 0
+    assert seen[0][1:] == ["approvals", "--config", str(config), "--agent", "wellness", "--last", "5"]
+
+
+def test_each_install_of_a_machine_hands_out_browser_ports_of_its_own():
+    from bipinstall.ports import browser_ports
+    assert browser_ports(8640) == (9600, 400)       # the first install keeps its ports
+    assert browser_ports(9200) == (20000, 40) and browser_ports(9210) == (20040, 40) and browser_ports(9230) == (20120, 40)
+    inst = Install(repo=Path("/r"), home=Path("/home/bip2"), ports=Ports(9210), tailnet_name=None, lan_address=None,
+                   browser=True)
+    assert "[browser]\nenabled = true\nfirst_port = 20040\nports = 40" in bridge_toml(inst)
+
+
+def test_forty_places_on_one_server_get_port_blocks_clear_of_the_first_install_s_browsers():
+    """A shared server holds up to 40 places (seat-agent.py's MAX_SEATS): the 40th block used to be 9600, where place
+    1's browsers listen. The blocks now skip that range, and every place's browsers get a range of their own."""
+    from bipinstall.ports import BROWSERS_FIRST, BROWSERS_FIRST_COUNT, browser_ports
+    taken = set()
+    blocks = []
+    for _ in range(42):
+        ports = pick_block(lambda port: port not in taken)
+        blocks.append(ports.base)
+        taken.update(range(ports.base, ports.base + 10))
+    assert blocks[:2] == [8640, 9200] and blocks[39:] == [9580, 9590, 10000]
+    first_browsers = set(range(BROWSERS_FIRST, BROWSERS_FIRST + BROWSERS_FIRST_COUNT))
+    assert not taken & first_browsers
+    browsers = [set(range(first, first + count)) for first, count in map(browser_ports, blocks)]
+    assert sum(len(b) for b in browsers) == len(set().union(*browsers))   # no two places share a browser port
+
+
+def test_the_bipagents_command_runs_install_sh_and_shows_its_help_alone(tmp_path):
+    import subprocess
+    from bipinstall import upgrade
+    path = upgrade.install_command(hermes.Runner(), home=tmp_path)
+    assert path == tmp_path / ".local" / "bin" / "bipagents" and path.stat().st_mode & 0o111
+    shown = subprocess.run([str(path)], capture_output=True, text=True).stdout
+    assert "bipagents update" in shown and "bipagents uninstall" in shown   # no new install by mistake
+    assert f'exec bash "{upgrade.REPO}/install.sh" "$@"' in path.read_text()
+
+
+def test_a_blocked_update_says_how_to_put_local_changes_aside(monkeypatch):
+    from bipinstall import upgrade
+    porcelain = " M bridge-rs/src/tts.rs\n?? voices/english/galet.safetensors\n"
+    monkeypatch.setattr(upgrade, "git", lambda *args: __import__("subprocess").CompletedProcess(args, 0, porcelain, ""))
+    lines = upgrade.blocked_pull()
+    assert any("bridge-rs/src/tts.rs" in line for line in lines) and any("git stash" in line for line in lines)
+    assert any("voices/english/galet.safetensors" in line for line in lines)
+    assert upgrade.as_account("chi", "bash BipAgents/install.sh update --auto").startswith("sudo -u chi bash -c 'cd /home/chi")
+
+
+def test_the_other_installs_of_the_machine_are_found_and_updated_after_one_sudo(monkeypatch, capsys):
+    import pwd
+    import subprocess
+    from bipinstall import upgrade
+    Entry = __import__("collections").namedtuple("Entry", "pw_name pw_uid pw_dir")
+    monkeypatch.setattr(pwd, "getpwall", lambda: [Entry("root", 0, "/root"), Entry("admin", 1000, "/home/admin"),
+                                                   Entry("chi", 1002, "/home/chi"), Entry("alex", 1003, "/home/alex"),
+                                                   Entry("guest", 1004, "/home/guest"), Entry("aibox", 1005, "/home/aibox")])
+    monkeypatch.setenv("USER", "admin")
+    ran = []
+
+    def fake_run(args, **kwargs):
+        ran.append(args)
+        ok = args[:2] == ["sudo", "-v"] or (args[:3] == ["sudo", "-n", "test"] and "guest" not in args[-1])
+        ok = ok or (args[0] == "pgrep" and args[2] != "aibox")   # aibox's old install: stopped, left there
+        return subprocess.CompletedProcess(args, 0 if ok or args[0] == "bash" else 1)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    upgrade.update_others(hermes.Runner())
+    updates = [a[2] for a in ran if a[0] == "bash"]
+    assert len(updates) == 2 and updates[0].startswith("sudo -n -u chi bash -c") and "update --auto" in updates[1]
+    assert not any("aibox" in update for update in updates)
+    assert "aibox: its BipAgents isn't running" in capsys.readouterr().out
+    assert ran[0] == ["sudo", "-v"] and not any("admin/.config" in " ".join(a) for a in ran)   # not itself
+
+
+def test_in_wsl_windows_tailscale_publishes_the_install(monkeypatch):
+    from bipinstall import detect
+    monkeypatch.setattr(detect.shutil, "which", lambda name: None)
+    monkeypatch.setenv("WSL_DISTRO_NAME", "Ubuntu-24.04")
+    monkeypatch.setattr(detect.os.path, "exists", lambda path: path == detect.TAILSCALE_WINDOWS)
+    assert detect.tailscale_cli() == detect.TAILSCALE_WINDOWS
+    monkeypatch.delenv("WSL_DISTRO_NAME")
+    monkeypatch.setattr(detect.os.path, "exists", lambda path: path == detect.TAILSCALE_WINDOWS)
+    assert detect.tailscale_cli() is None   # elsewhere, a Windows path means nothing
+
+
+def test_new_installs_send_through_the_publishers_relay_when_it_is_set(tmp_path):
+    inst = Install(repo=tmp_path, home=tmp_path, ports=Ports(base=9200), tailnet_name=None, lan_address=None,
+                   push_service_url="https://push.example")
+    toml = bridge_toml(inst)
+    assert '[push]\nservice_url = "https://push.example"' in toml
+    assert "[push]" not in bridge_toml(Install(repo=tmp_path, home=tmp_path, ports=Ports(base=9200), tailnet_name=None,
+                                               lan_address=None))
+
+
+def test_bip_languages_put_this_machine_first():
+    from bipinstall.stack import bip_languages
+
+    assert bip_languages("fr_FR.UTF-8") == "fr,en,es,de,nl"
+    assert bip_languages("de_DE.UTF-8") == "de,fr,en,es,nl"
+    assert bip_languages("nl_NL.UTF-8") == "nl,fr,en,es,de"
+    assert bip_languages("ja_JP.UTF-8") == "fr,en,es,de,nl"
+    assert bip_languages("") == "fr,en,es,de,nl"
+
+
+def test_zram_for_small_rented_servers(tmp_path):
+    from bipinstall.detect import zram_active
+    from bipinstall.stack import zram_commands
+
+    swaps = tmp_path / "swaps"
+    swaps.write_text("Filename Type Size Used Priority\n/swapfile file 2097148 0 -2\n")
+    assert not zram_active(str(swaps))
+    swaps.write_text("Filename Type Size Used Priority\n/dev/zram0 partition 1990652 0 100\n")
+    assert zram_active(str(swaps))
+    assert not zram_active(str(tmp_path / "missing"))
+    commands = zram_commands("apt")
+    # Ubuntu's cloud kernels: the module from linux-modules-extra first (Hetzner Ubuntu 24.04 has none, 12/11)
+    assert commands[0].startswith("modprobe zram || apt-get install -y ") and "linux-modules-extra" in commands[0]
+    assert commands[1] == "modprobe zram" and commands[2] == "apt-get install -y systemd-zram-generator"
+    dnf = zram_commands("dnf")
+    assert dnf[0] == "modprobe zram" and dnf[1].startswith("dnf ") and not any("modules-extra" in c for c in dnf)
+    conf = next(c for c in commands if "zram-generator.conf" in c)
+    assert "zram-size = ram / 2" in conf and "swap-priority = 100" in conf
+    assert commands[-2:] == ["systemctl restart systemd-zram-setup@zram0.service", "systemctl start dev-zram0.swap"]
+
+
+def _cloud_file(tmp_path, **values):
+    import base64
+    data = {"v": 1, "pair": base64.urlsafe_b64encode(bytes(32)).decode().rstrip("="), "language": "de", "profile": "solo"}
+    data.update(values)
+    path = tmp_path / "cloud.json"
+    path.write_text(json.dumps(data))
+    return path
+
+
+def test_a_server_the_app_created_installs_without_a_question(monkeypatch, tmp_path, capsys):
+    """`--cloud`: no question, no Tailscale, the bridge's door on the Internet (443, its address), the pairing secret
+    and the progress for the app, the Bips in the person's language first, the model left for the app to send."""
+    from bipinstall import __main__ as cli, cloud
+    monkeypatch.setenv("HOME", str(tmp_path))
+    droplet = Machine("linux", "x86_64", 4, 2, "DO-Premium-Intel", None, lan_addresses=["10.110.0.2"], cloud="DigitalOcean")
+    monkeypatch.setattr(cli, "detect", lambda: droplet)
+    monkeypatch.setattr(cli.hermes, "sandbox_runtime", lambda: "/usr/bin/podman")
+    monkeypatch.setattr(cli, "pick_block", lambda wanted=None: Ports(8640))
+    monkeypatch.setattr(cli, "pocket_running", lambda: False)
+    monkeypatch.setattr(cloud, "public_address", lambda: "164.90.10.20")
+    monkeypatch.setattr("builtins.input", lambda prompt="": pytest.fail(f"asked: {prompt}"))
+    languages = []
+    real_pocket = cli.pocket_service
+    units = []
+    monkeypatch.setattr(cli, "pocket_service", lambda inst, system, langs, packages=None:
+                        languages.append((langs, packages)) or units.append(real_pocket(inst, system, langs, packages))
+                        or units[-1])
+    assert cli.main(["--dry-run", "--cloud", str(_cloud_file(tmp_path))]) == 0
+    out = capsys.readouterr().out
+    assert "164.90.10.20: the app pairs itself" in out and "[5/5]" in out and "Tailscale" not in out
+    assert 'cloud = true\npublic_url = "https://164.90.10.20"' in out
+    assert '[lan]\nenabled = true\nport = 443\naddress = "164.90.10.20"' in out
+    assert f'[setup]\nfile = "{tmp_path}/.config/bipagents/setup.json"' in out
+    # the offer's model from the start, with a placeholder key until the claim writes the person's
+    assert "config set model.provider custom" in out and "config set model.default glm-5.3-flash" in out
+    # (the dry run hides every *_KEY value as <key>; the value itself is the installer's placeholder)
+    assert ".env: CUSTOM_MODEL_API_KEY" in out and "OPENROUTER_API_KEY" not in out and "config set CUSTOM_MODEL" not in out
+    assert cli.CLOUD_KEY_PLACEHOLDER == "reserve-no-key-yet"
+    assert "profile create" not in out   # the agents come with the app's claim
+    # The phones' 8-bit voices, without PyTorch, loaded only while they speak.
+    assert languages == [("de,fr,en,es,nl", tmp_path / ".local/share/bipagents/voices")]
+    assert "would download the voices of de, fr, en, es" in out and "requirements-onnx.txt" in out
+    assert "--onnx" in units[0][2] and "--keep none" in units[0][2]
+    assert "[browser]\nenabled = true" in out and "Scan this code" not in out
+    # Installed: the download caches and the images' leftover layers go.
+    assert "uv cache clean" in out and ".npm/_cacache" in out and "/usr/bin/podman image prune --force" in out
+    assert ".hermes/cache/uv" in out
+
+
+def test_a_mini_server_has_no_browser_and_one_language(monkeypatch, tmp_path, capsys):
+    from bipinstall import __main__ as cli, cloud
+    monkeypatch.setenv("HOME", str(tmp_path))
+    droplet = Machine("linux", "x86_64", 2, 1, "DO-Regular", None, lan_addresses=[], cloud="DigitalOcean")
+    monkeypatch.setattr(cli, "detect", lambda: droplet)
+    monkeypatch.setattr(cli.hermes, "sandbox_runtime", lambda: "/usr/bin/podman")
+    monkeypatch.setattr(cli, "pick_block", lambda wanted=None: Ports(8640))
+    monkeypatch.setattr(cli, "pocket_running", lambda: False)
+    monkeypatch.setattr(cloud, "public_address", lambda: "164.90.10.21")
+    assert cli.main(["--dry-run", "--cloud", str(_cloud_file(tmp_path, profile="mini", language="fr"))]) == 0
+    out = capsys.readouterr().out
+    assert "[4/4]" in out and "[browser]" not in out and "fr,en" not in out
+
+
+def test_the_second_seat_of_a_shared_server_has_its_door_on_444(monkeypatch, tmp_path, capsys):
+    """Two people on one server, each in an account of their own: the second one's door is on 444, and the voices
+    already running there are shared."""
+    from bipinstall import __main__ as cli, cloud
+    monkeypatch.setenv("HOME", str(tmp_path))
+    server = Machine("linux", "x86_64", 4, 2, "VPS-1", None, lan_addresses=[], cloud="OVHcloud")
+    monkeypatch.setattr(cli, "detect", lambda: server)
+    monkeypatch.setattr(cli.hermes, "sandbox_runtime", lambda: "/usr/bin/podman")
+    monkeypatch.setattr(cli, "pick_block", lambda wanted=None: Ports(9200))
+    monkeypatch.setattr(cli, "pocket_running", lambda: True)
+    monkeypatch.setattr(cloud, "public_address", lambda: "51.75.1.2")
+    assert cli.main(["--dry-run", "--cloud", str(_cloud_file(tmp_path, port=444))]) == 0
+    out = capsys.readouterr().out
+    assert "51.75.1.2:444: the app pairs itself" in out
+    assert 'public_url = "https://51.75.1.2:444"' in out and "[lan]\nenabled = true\nport = 444" in out
+    assert "already set up on this machine: I'll share it" in out
+
+
+def test_the_cloud_file_is_checked(tmp_path):
+    from bipinstall import cloud
+    with pytest.raises(cloud.CloudError):
+        cloud.read(_cloud_file(tmp_path, pair="c2hvcnQ"))   # 5 bytes
+    with pytest.raises(cloud.CloudError):
+        cloud.read(_cloud_file(tmp_path, v=2))
+    setup = cloud.read(_cloud_file(tmp_path, language="it", profile="huge"))
+    assert (setup.language, setup.profile, setup.port) == ("en", "solo", 443)
+    with pytest.raises(cloud.CloudError):
+        cloud.read(_cloud_file(tmp_path, port=80))
+    assert cloud.read(_cloud_file(tmp_path, port="444")).port == 444
+    assert cloud.public_address(metadata=lambda: "10.0.0.5") in (None,) or cloud._global(cloud.public_address() or "")
+    progress = cloud.Progress(tmp_path / "p.json")
+    progress(2, 5, "Voices")
+    assert json.loads((tmp_path / "p.json").read_text()) == {"step": 2, "total": 5, "label": "Voices", "done": False}
+
+
+def test_the_migrations_run_once_and_one_not_ready_waits(tmp_path, monkeypatch):
+    from bipinstall import migrations
+    monkeypatch.setattr(migrations, "STATE", tmp_path / "migrations.json")
+    calls = []
+
+    def ready(runner, home):
+        calls.append(home)
+        return "done"
+
+    def later(runner, home):
+        raise migrations.NotYet("this version's bridge isn't out yet")
+
+    monkeypatch.setattr(migrations, "MIGRATIONS", [("a", ready), ("b", later)])
+    runner = hermes.Runner()
+    runner.dry = False
+    assert migrations.run(runner, tmp_path) == ["done", "b: this version's bridge isn't out yet"]
+    assert migrations.pending() == ["b"]
+    migrations.run(runner, tmp_path)
+    assert calls == [tmp_path]   # done once
+
+
+def test_an_update_gives_every_hub_an_hour_for_a_question(tmp_path):
+    """2026-11-10, before Hermes 0.23 (90 s, and its config migration v53 lowers an hour to that): the hub of each
+    Hermes of the account (its own, a space's), which every agent is cloned from, gets both keys; the agents' profiles
+    are the bridge's. A second run writes the same; a failing command stops nothing; the runner's env stays as it was."""
+    from bipinstall import migrations
+    for folder in [tmp_path / ".hermes", tmp_path / ".hermes" / "profiles" / "vie",
+                   tmp_path / ".local" / "share" / "bipagents" / "spaces" / "lea"]:
+        folder.mkdir(parents=True)
+        (folder / "config.yaml").write_text("model:\n  default: x\n")
+    (tmp_path / ".local" / "share" / "bipagents" / "spaces" / "empty").mkdir()
+    runner = hermes.Runner()
+    runner.env = {"KEEP": "1"}
+    ran = []
+
+    def run(args, check=True, **kw):
+        ran.append((list(args[1:]), runner.env["HERMES_HOME"], check))
+        return ""
+    runner.run = run
+    said = migrations.clarify_hour(runner, tmp_path)
+    space = str(tmp_path / ".local" / "share" / "bipagents" / "spaces" / "lea")
+    keys = [["config", "set", "agent.clarify_timeout", "3600"], ["config", "set", "clarify.timeout", "3600"]]
+    assert [(a, h) for a, h, _ in ran] == [(k, str(tmp_path / ".hermes")) for k in keys] + [(k, space) for k in keys]
+    assert all(check is False for *_, check in ran) and runner.env == {"KEEP": "1"}
+    assert said.endswith("(2 Hermes)")
+    migrations.clarify_hour(runner, tmp_path)
+    assert ran[4:] == ran[:4]   # the same again
+    assert "2026-11-10-clarify-hour" in [mid for mid, _ in migrations.MIGRATIONS]
+
+
+def test_a_hub_installed_with_the_clarify_key_gets_its_own_key_again(tmp_path):
+    """13/11: installs of 10-13/11 carry « clarify.timeout » as the hub's API_SERVER_KEY (Hermes 0.23 serves nothing
+    with it). The update writes a random key in its place (the other lines kept, 0600) and restarts the gateway; a
+    good key is never touched."""
+    import stat
+    from bipinstall import migrations
+    hub = tmp_path / ".hermes"
+    hub.mkdir()
+    (hub / "config.yaml").write_text("gateway:\n  multiplex_profiles: true\n")
+    env = hub / ".env"
+    env.write_text("API_SERVER_ENABLED=true\nAPI_SERVER_KEY=clarify.timeout\nCUSTOM_API_KEY=sk-x\n")
+    runner = hermes.Runner()
+    ran = []
+    runner.run = lambda args, check=True, **kw: ran.append(list(args)) or ""
+    said = migrations.hub_key(runner, tmp_path)
+    values = dict(line.split("=", 1) for line in env.read_text().splitlines())
+    assert values["API_SERVER_ENABLED"] == "true" and values["CUSTOM_API_KEY"] == "sk-x"
+    assert len(values["API_SERVER_KEY"]) >= 32 and values["API_SERVER_KEY"] not in "\n".join(runner.log)
+    assert stat.S_IMODE(env.stat().st_mode) == 0o600
+    assert ["systemctl", "--user", "try-restart", "hermes-gateway.service"] in ran and "again" in said
+    ran.clear()
+    kept = env.read_text()
+    assert "already" in migrations.hub_key(runner, tmp_path) and env.read_text() == kept and ran == []
+    assert "2026-11-13-hub-key" in [mid for mid, _ in migrations.MIGRATIONS]
+    # an install of another account (no Hermes of its own) has nothing to fix
+    assert "nothing" in migrations.hub_key(runner, tmp_path / "other")

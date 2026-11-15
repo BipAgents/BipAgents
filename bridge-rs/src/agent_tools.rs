@@ -1,0 +1,2590 @@
+//! Tools the bridge gives the agents, over MCP (`/v1/agent-tools/mcp`): `create_audio` reads a text aloud with the
+//! voice the person chose for the agent in the app (its server voice for reading — Drama 3, Kokoro… — else its Bip);
+//! `create_podcast` makes a conversation between hosts, each with a voice of their own (the person's voice model when
+//! it reads, else Bips); `list_voices` lists the voices the agent may give them; `create_page` and its kin keep the
+//! small web pages the agent makes for the person (pages.py); `mail_search`, `mail_read`, `mail_attachment` and
+//! `mail_draft` reach the mailboxes the person connected for it (mailbox.py); `propose_task` proposes a background
+//! task the person starts in the app (jobs.py); `tell_family` proposes to pass something on to the family's agents, which the person sends
+//! or not from the app (family_news.rs, only for an install with a linked household).
+//!
+//! The agent's own Hermes calls it (an MCP server entry `bipagents` in its profile, with a token of its own), not its
+//! sandbox: nothing is opened to the containers, and the voice server stays on this machine's loopback. The text is cut
+//! into paragraphs and short groups of sentences (a voice server skips or repeats lines in a long block), read with the
+//! person's pronunciations, one piece after the other in the background queue, so a Live started meanwhile is not held
+//! up. The file lands in the bridge's own folder, served to the app like any `MEDIA:` file under `/bipagents/audio`.
+
+use std::collections::{HashMap, HashSet};
+use std::convert::Infallible;
+use std::io::{Seek, SeekFrom, Write};
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, LazyLock, Mutex};
+use std::time::{Duration, Instant};
+
+use axum::body::{Body, Bytes};
+use axum::extract::State;
+use axum::http::{HeaderMap, HeaderValue, StatusCode};
+use axum::response::Response;
+use axum::routing::post;
+use axum::Router;
+use indexmap::IndexMap;
+use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
+
+use crate::agents_admin::pyyaml::Yaml;
+use crate::agents_admin::Run;
+use crate::app::AppState;
+use crate::config::{AgentConfig, Config, SharedConfig};
+use crate::jobs::Jobs;
+use crate::push::PushService;
+use crate::tools_knowledge::{self as tk, tool_text};
+use crate::tts::{mono, voice_language, Resampler, SynthOptions, TtsError, TtsService, BACKGROUND, OUTPUT_RATE};
+use crate::voices::{relay_for, voice_for};
+use crate::web::ApiResult;
+use crate::{mailbox, pages, py, reminders, shares, Dict};
+
+/// The entry in the agents' `mcp_servers`.
+pub const SERVER_NAME: &str = "bipagents";
+pub const PATH: &str = "/v1/agent-tools/mcp";
+/// How the app asks for the files (`GET /v1/media?path=…`).
+pub const MEDIA_PREFIX: &str = "/bipagents/audio";
+/// About 25 minutes of audio.
+pub const MAX_CHARS: usize = 20000;
+pub const CHUNK_CHARS: usize = 350;
+pub const MAX_TURNS: usize = 400;
+pub const MAX_SPEAKERS: usize = 4;
+pub const PAUSE_TURN_MS: u32 = 350;
+pub const PAUSE_SENTENCES_MS: u32 = 150;
+pub const PAUSE_PARAGRAPH_MS: u32 = 500;
+/// Seconds Hermes waits for a call (its default is 300: too short for a podcast).
+pub const TOOL_TIMEOUT: u32 = 1800;
+/// An SSE comment while it reads, so the client's read timeout never fires.
+pub const KEEPALIVE_SECONDS: f64 = 10.0;
+pub const AI_SOURCE: &str = "http://cv.iptc.org/newscodes/digitalsourcetype/trainedAlgorithmicMedia";
+
+/// Python's `ValueError` here: a message for the agent (`isError`), not a protocol error.
+#[derive(Debug, Clone, thiserror::Error)]
+#[error("{0}")]
+pub struct ValueError(pub String);
+
+fn value_error(message: impl Into<String>) -> anyhow::Error {
+    ValueError(message.into()).into()
+}
+
+// --- the tools ---------------------------------------------------------------------------------------------------
+
+pub const CREATE_AUDIO: &str = "create_audio";
+pub const CREATE_PODCAST: &str = "create_podcast";
+pub const LIST_VOICES: &str = "list_voices";
+pub const CREATE_PAGE: &str = "create_page";
+pub const LIST_PAGES: &str = "list_pages";
+pub const READ_PAGE: &str = "read_page";
+pub const DELETE_PAGE: &str = "delete_page";
+pub const KNOWLEDGE_READ: &str = "knowledge_read";
+pub const KNOWLEDGE_SEARCH: &str = "knowledge_search";
+pub const PROPOSE_TASK: &str = "propose_task";
+pub const KNOWLEDGE_TOOLS: [&str; 2] = [KNOWLEDGE_READ, KNOWLEDGE_SEARCH];
+pub const PAGE_TOOLS: [&str; 4] = [CREATE_PAGE, LIST_PAGES, READ_PAGE, DELETE_PAGE];
+/// The tools that make files in the place: refused plainly when it is full (storage_watch.rs).
+pub const WRITING_TOOLS: [&str; 3] = [CREATE_AUDIO, CREATE_PODCAST, CREATE_PAGE];
+
+fn create_audio_tool() -> Value {
+    json!({
+        "name": "create_audio",
+        "description": "Turn a text into an audio file read aloud with your voice — the one the person chose for you in the \
+    BipAgents app — for example a podcast, a story or a long message to listen to. It takes about as long as the \
+    audio lasts. The result gives a MEDIA: line: put it alone on a line in your reply, and the person gets the \
+    audio in the app. Write the text as it should be heard: no markdown, no lists, no links.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "text": {"type": "string", "description": "What to read aloud.", "maxLength": MAX_CHARS},
+                "title": {"type": "string", "description": "A short title, used for the file name.", "maxLength": 80},
+            },
+            "required": ["text"],
+        },
+    })
+}
+
+fn create_podcast_tool() -> Value {
+    json!({
+        "name": "create_podcast",
+        "description": "Make a podcast where two or more hosts talk with each other, each with their own voice — like a radio show: \
+    the first host speaks with your voice (or the best one of the person's voice model), the others get \
+    different voices (or the ones you pick with list_voices). Write a real conversation: short turns, reactions, \
+    questions, a little humour, each host with a name and a personality; no markdown, no lists, no links. \
+    Length: about 180 spoken words a minute in all turns (2 minutes ≈ 360 words); give minutes when the person asked \
+    for a length. It takes about as long as the audio lasts. The result gives a MEDIA: line: put it alone on a line \
+    in your reply.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "title": {"type": "string", "description": "A short title, used for the file name.", "maxLength": 80},
+                "turns": {
+                    "type": "array", "maxItems": MAX_TURNS,
+                    "description": "The conversation, in order: who speaks and what they say.",
+                    "items": {"type": "object", "required": ["speaker", "text"], "properties": {
+                        "speaker": {"type": "string", "description": "The host's name, the same in every turn."},
+                        "text": {"type": "string", "description": "What they say in this turn."}}},
+                },
+                "voices": {"type": "object", "additionalProperties": {"type": "string"},
+                           "description": "Optional: a voice per host name, from list_voices."},
+                "minutes": {"type": "number", "description": "Optional: the length the person asked for, in minutes."},
+            },
+            "required": ["turns"],
+        },
+    })
+}
+
+fn list_voices_tool() -> Value {
+    json!({
+        "name": "list_voices",
+        "description": "The voices create_podcast may give its hosts: yours first, then the person's voice model's, then \
+    the Bips (the app's mascots), in your language.",
+        "inputSchema": {"type": "object", "properties": {}},
+    })
+}
+
+/// create_page's description: what a page is for, its locks, and the page kit with short examples to copy (the
+/// quality lever: a small model writes a polished page in a few lines of HTML; pages.rs puts the kit inline).
+pub const CREATE_PAGE_DESCRIPTION: &str = r##"Make a small live web page for the person, shown INSIDE your reply where you put its MEDIA: line (and kept in their Carnet): a dashboard, a comparison, a plan, a progression, a budget, a routine, a diagram, a calculator, a quiz, a checklist. Always use this for a page (never an .html file of your own: it would not open). Write ONE HTML file (or just its body): the data inline in a <script>. It runs locked, with no network at all: no CDN, no fetch, no external images or fonts (emoji, inline SVG, CSS or data: URIs). Nothing typed in it is kept. Phone first, a clear title and the date or source of the data in a .sub line. To change it later, call again with its page id. Link it to the Carnet page of its subject (notebook; search the Carnet first).
+THE KIT is always there (no link needed), in the app's look, light and dark, in your colour; use it rather than your own CSS:
+- text: h1, .sub (date, source), h2, .muted, .good/.warn/.bad; .note (a tinted tip), .chip (.good .warn .bad .plain)
+- .card (a rounded block); .grid (tiles side by side; .grid.two: two columns); .row (.between)
+- .kpi tiles: <div class="kpi"><span class="l">Label</span><span class="v">42<small>km</small></span><span class="d up">+12 %</span></div> (.kpi.main: the one that matters; .d.down)
+- .bar progress: <div class="bar" style="--v:64%"></div> (.good .warn .bad); .big (a huge number)
+- <table class="sort"> (a tap on a header sorts; td.n right-aligned, tr.best highlighted), wrapped in <div class="table-wrap">
+- <ol class="timeline"><li class="done"><b>Step</b> text<span class="when">date</span></li> (li.now: current); <ul class="check"><li class="done">
+- diagrams: <div class="flow"><div>A</div><div>B</div></div> (arrows; .flow.down vertical), or <pre class="diagram">A -> B
+B -> C: label</pre> (boxes and arrows drawn for you)
+- charts in SVG: <div id="c"></div><script>Bip.bars("#c",{labels:["L","M"],values:[5,8],unit:"km",goal:6})</script>; Bip.line(el,{labels,values|series:[{name,values}],unit,goal}); Bip.donut(el,{labels,values,unit,center:"1 748 €"}); Bip.spark(el,[3,5,4]); colours var(--c1)…var(--c6)
+- what-ifs: <label class="field">Budget <output for="b" data-unit="€"></output></label><input type="range" id="b" min="0" max="500" value="200">, <label class="toggle">Bio <input type="checkbox" id="bio"></label>, then Bip.whatIf(v => Bip.set("#total", Bip.fmt(v.b*12,0,"€"))); .tabs: <div class="tabs"><button>Week</button><button>Month</button></div><section class="tab">…</section><section class="tab">…</section>
+- maps: never draw one yourself (no coordinates, no SVG map, no map library): call map_image with the places' names or addresses (and area: the town), then paste the short <figure class="map-card"> it gives as it is; the bridge fills in the places (a live map in the app, « Open in Maps » on each place, its picture elsewhere)
+- Bip.fmt(n, digits, unit) formats in the person's language. Chart.js 4 too if you need more: <script src="chart.js"></script> (already in the app's colours).
+EXAMPLES (whole pages):
+1 dashboard: <h1>🏃 Tes sorties</h1><p class="sub">Santé · 4 dernières semaines</p><div class="grid"><div class="kpi main"><span class="l">Distance</span><span class="v">86<small>km</small></span><span class="d up">+14 %</span></div><div class="kpi"><span class="l">Allure</span><span class="v">5:42<small>/km</small></span></div></div><div class="card"><h3>Km par semaine</h3><div id="w"></div></div><script>Bip.bars("#w",{labels:["S1","S2","S3","S4"],values:[18,21,22,25],unit:"km"})</script>
+2 comparison: <h1>Mutuelles</h1><p class="sub">Devis du 12/10</p><div class="table-wrap"><table class="sort"><thead><tr><th>Offre</th><th class="n">€/mois</th><th class="n">Optique</th></tr></thead><tbody><tr class="best"><td>Alan</td><td class="n">42</td><td class="n">200 €</td></tr><tr><td>MGEN</td><td class="n">48</td><td class="n">150 €</td></tr></tbody></table></div><p class="note">Alan : le moins cher et le mieux remboursé.</p>
+3 plan: <h1>Plan 10 km</h1><p class="sub">6 semaines</p><ol class="timeline"><li class="done"><b>Semaine 1</b> 3 × 5 km<span class="when">3 oct.</span></li><li class="now"><b>Semaine 2</b> fractionné<span class="when">10 oct.</span></li><li><b>Semaine 6</b> 10 km 🎉</li></ol>
+4 diagram: <h1>Le matin</h1><pre class="diagram">Réveil -> Petit-déj
+Petit-déj -> École: 8 h 10
+Petit-déj -> Travail</pre>
+The result gives a MEDIA: line: put it alone on its own line where the page belongs in your reply."##;
+
+fn create_page_tool() -> Value {
+    json!({
+        "name": "create_page",
+        "description": CREATE_PAGE_DESCRIPTION,
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "html": {"type": "string", "description": "The whole page: one HTML file with everything inline."},
+                "title": {"type": "string", "description": "A short title, shown on the page's card.", "maxLength": 80},
+                "page": {"type": "string", "description": "To update a page: its id (from a previous result or list_pages)."},
+                "notebook": {"type": "string", "description": "The Carnet page it is about: its name, its path (« Domaines/Santé ») or its id. Kept when you update the page without it."},
+            },
+            "required": ["html", "title"],
+        },
+    })
+}
+
+fn list_pages_tool() -> Value {
+    json!({
+        "name": "list_pages",
+        "description": "The pages you made for the person (id, title, last change), the last changed first.",
+        "inputSchema": {"type": "object", "properties": {}},
+    })
+}
+
+fn read_page_tool() -> Value {
+    json!({
+        "name": "read_page",
+        "description": "The HTML of one of your pages as you wrote it, to update it with create_page.",
+        "inputSchema": {"type": "object", "properties": {"page": {"type": "string", "description": "The page id."}},
+                        "required": ["page"]},
+    })
+}
+
+fn delete_page_tool() -> Value {
+    json!({
+        "name": "delete_page",
+        "description": "Delete one of your pages, when the person asks for it.",
+        "inputSchema": {"type": "object", "properties": {"page": {"type": "string", "description": "The page id."}},
+                        "required": ["page"]},
+    })
+}
+
+fn knowledge_read_tool() -> Value {
+    json!({
+        "name": "knowledge_read",
+        "description": "Read one of your knowledge pages (for instance mail/index.md: what the scan of the person's mailbox \
+    wrote, then the pages it links to). Without a path: the list of your pages.",
+        "inputSchema": {"type": "object", "properties": {"path": {"type": "string", "description": "e.g. mail/index.md"}}},
+    })
+}
+
+fn knowledge_search_tool() -> Value {
+    json!({
+        "name": "knowledge_search",
+        "description": "Search your knowledge pages for words; returns the matching lines with their page.",
+        "inputSchema": {"type": "object", "properties": {"words": {"type": "string"}}, "required": ["words"]},
+    })
+}
+
+// The mail tools are listed for every agent (Hermes reads the list once, when its gateway starts): an agent the person
+// gave no mailbox is told so when it tries one.
+fn propose_task_tool() -> Value {
+    json!({
+        "name": "propose_task",
+        "description": "Propose a background task to the person: long work (a deep research, a file to prepare, many pages or \
+    mails to go through) that would take far more than a reply. It does not start: the person sees it in the \
+    app's « Tâches de fond » with its cost and starts it, then you do it in a conversation of its own and your \
+    report is sent to them. Use it when the person asks for something that big; then tell them in your reply \
+    that it waits for their go in « Tâches de fond ».",
+        "inputSchema": {"type": "object", "properties": {
+            "title": {"type": "string", "description": "a few words, in the person's language"},
+            "prompt": {"type": "string", "description": "everything needed to do the task without this conversation: \
+    the goal, what the person said, where to look, what to make"},
+            "budget": {"type": "string", "enum": ["small", "medium", "large"],
+                       "description": "small: a few searches; medium: a real research or file; large: hundreds of \
+    pages or documents"}},
+            "required": ["title", "prompt"]},
+    })
+}
+
+static TOOL_LIST: LazyLock<Vec<Value>> = LazyLock::new(|| {
+    let mut tools = vec![
+        create_audio_tool(),
+        create_podcast_tool(),
+        list_voices_tool(),
+        create_page_tool(),
+        list_pages_tool(),
+        read_page_tool(),
+        delete_page_tool(),
+    ];
+    tools.extend(mailbox::mail_tools());
+    tools.extend(crate::mail_tidy::tools()); // a big mailbox tidied by headers and approved cards (mail_tidy.rs)
+    tools.extend([knowledge_read_tool(), knowledge_search_tool()]);
+    tools.extend(reminders::reminder_tools());
+    tools.push(propose_task_tool());
+    tools.push(crate::live_calls::after_call_tool()); // what to make once a voice call ends (live_calls.rs)
+    tools.push(crate::jobs::start_task_tool());
+    tools.push(crate::routes::route_tool());
+    tools.push(crate::maps::tool());
+    tools.push(crate::dates::tool());
+    tools.push(crate::storage_watch::tool()); // the space a recurring production takes, and what to keep
+    tools.push(crate::give_file::tool()); // a file it made, to the person's drive or the conversation (give_file.rs)
+    tools.push(crate::rooms_memory::tool()); // its group discussions, read from a one-to-one turn
+    tools.push(crate::triggers::tool()); // routines started by an e-mail or a link (triggers.rs)
+    tools.push(crate::routines::tool()); // routines on a clock (routines.rs; Hermes' cronjob tool is off), the tile's
+    tools
+});
+
+/// `TOOLS`: every tool's definition, in Python's order.
+pub fn tools() -> &'static [Value] {
+    &TOOL_LIST
+}
+
+/// The tools with the family's (`tell_family`, `family_members`: only for an install with a linked household).
+static FAMILY_TOOL_LIST: LazyLock<Vec<Value>> = LazyLock::new(|| {
+    let mut tools = TOOL_LIST.clone();
+    tools.extend(crate::family_news::tools());
+    tools
+});
+
+/// The tools every agent of this install gets (the family's once a household is linked).
+pub fn install_tools(config: &Config) -> &'static [Value] {
+    if crate::family_news::has_family(config) {
+        &FAMILY_TOOL_LIST
+    } else {
+        &TOOL_LIST
+    }
+}
+
+/// An agent's own knowledge pages (memory_edit.py: knowledge/ in its profile, its person sees and edits them).
+/// Err: a page that is not UTF-8 (Python's UnicodeDecodeError, which it lets through).
+pub fn knowledge_tool(config: &Config, agent: &AgentConfig, name: &str, arguments: &Dict) -> anyhow::Result<Dict> {
+    use crate::memory_edit::{page_path, pages as listed};
+    let folder = crate::agents_admin::profile_folder(config, agent);
+    // read_text: a missing page or one outside the folder is caught (HTTPException, OSError), bad UTF-8 is not
+    let read = |relative: &str| -> anyhow::Result<Option<String>> {
+        let Ok(path) = page_path(&folder, relative) else { return Ok(None) };
+        match tk::read_text(&path) {
+            Ok(text) => Ok(Some(text)),
+            Err(err) if err.kind() == std::io::ErrorKind::InvalidData => Err(err.into()),
+            Err(_) => Ok(None),
+        }
+    };
+    if name == KNOWLEDGE_READ {
+        let path = tk::strip(&tk::str_or_empty(arguments.get("path"))).trim_start_matches('/').to_string();
+        if path.is_empty() {
+            let found = listed(&folder);
+            if found.is_empty() {
+                return Ok(tool_text("No knowledge page yet.", false));
+            }
+            let lines: Vec<String> = found.iter().map(|p| tk::str_or_empty(p.get("path"))).collect();
+            return Ok(tool_text(&lines.join("\n"), false));
+        }
+        return Ok(match read(&path)? {
+            Some(text) => tool_text(tk::head(&text, 20000), false),
+            None => tool_text(&format!("no page {path} (knowledge_read without a path lists them)"), true),
+        });
+    }
+    let words: Vec<String> = tk::split_ws(&tk::str_or_empty(arguments.get("words")))
+        .into_iter()
+        .filter(|w| tk::chars(w) > 1)
+        .map(str::to_lowercase)
+        .take(8)
+        .collect();
+    if words.is_empty() {
+        return Ok(tool_text("give some words to search", true));
+    }
+    let mut hits: Vec<String> = Vec::new();
+    'pages: for page in listed(&folder) {
+        let page_name = tk::str_or_empty(page.get("path"));
+        let Some(text) = read(&page_name)? else { continue };
+        for line in crate::hermes::splitlines(&text) {
+            let low = line.to_lowercase();
+            if words.iter().all(|w| low.contains(w.as_str())) {
+                hits.push(format!("{page_name}: {}", tk::head(tk::strip(&line), 240)));
+                if hits.len() >= 40 {
+                    break 'pages;
+                }
+            }
+        }
+    }
+    if hits.is_empty() {
+        Ok(tool_text("Nothing found.", false))
+    } else {
+        Ok(tool_text(&hits.join("\n"), false))
+    }
+}
+
+/// `_digest`: what the store keeps of a token.
+pub fn digest(token: &str) -> String {
+    hex::encode(Sha256::digest(token.as_bytes()))
+}
+
+pub fn store_path(config: &Config) -> PathBuf {
+    PathBuf::from(config.data_dir()).join("agent-tools.json")
+}
+
+pub fn audio_root(config: &Config) -> PathBuf {
+    PathBuf::from(config.data_dir()).join("agent-audio")
+}
+
+/// The agents' audio files and pages (the bridge's own folders).
+pub fn media_roots(config: &Config) -> IndexMap<String, String> {
+    let mut roots = IndexMap::new();
+    roots.insert(MEDIA_PREFIX.into(), audio_root(config).to_string_lossy().into_owned());
+    roots.insert(pages::PREFIX.into(), pages::root(config).to_string_lossy().into_owned());
+    roots.insert(crate::maps::PREFIX.into(), crate::maps::media_root(config).to_string_lossy().into_owned());
+    roots
+}
+
+/// The files sent to the phone from a space card (storage_watch.rs): documents too, until the person saved them.
+fn send_roots(config: &Config) -> IndexMap<String, String> {
+    let root = crate::storage_watch::send_root(config).to_string_lossy().into_owned();
+    IndexMap::from([(crate::storage_watch::SEND_PREFIX.to_string(), root)])
+}
+
+/// The host file of a `MEDIA:` path under `[media] roots` (media and documents) or the bridge's own folders (media
+/// only: a page's record and source beside it are never served).
+pub fn served_media(config: &Config, path: &str) -> Option<String> {
+    crate::media::resolve(path, &config.media_roots)
+        .or_else(|| crate::media::resolve_media(path, &media_roots(config)))
+        .or_else(|| crate::media::resolve(path, &send_roots(config)))
+}
+
+/// `tools_version()` of a tool list: the first 10 hex digits of the SHA-256 of `json.dumps(tools, sort_keys=True)`.
+pub fn version_of(tools: &[Value]) -> String {
+    let text = py::Dumps::new().sort_keys().dumps(&Value::Array(tools.to_vec()));
+    hex::encode(Sha256::digest(text.as_bytes()))[..10].to_string()
+}
+
+/// The tools of `agent`: the install's, the Carnet's (on by default), `health` when the person gave it their health data, the calendar's when they
+/// shared their calendar with it, the address book's when they shared that, `weather` when its « Météo » is on.
+pub fn tools_for(config: &Config, agent: &AgentConfig) -> Vec<Value> {
+    tools_for_at(config, agent, crate::handover::on_offer())
+}
+
+/// `tools_for`, `offer` saying whether this place is one of the offer's. The descriptions name the app's parts in the
+/// agent's language (names.rs: « Notebook », not « Carnet »).
+pub fn tools_for_at(config: &Config, agent: &AgentConfig, offer: bool) -> Vec<Value> {
+    let mut tools = own_tools(config, agent, offer);
+    crate::names::localize_tools(&mut tools, &crate::handback::language_of(config, agent));
+    tools
+}
+
+fn own_tools(config: &Config, agent: &AgentConfig, offer: bool) -> Vec<Value> {
+    if crate::family_agent::is_family(config, &agent.name) {
+        return crate::family_agent::tools(config, &agent.name); // nobody's private data (family_agent.rs)
+    }
+    if crate::project_agent::is_project(config, &agent.name) {
+        return crate::project_agent::tools(config); // shown to friends: nobody's private data (project_agent.rs)
+    }
+    let mut tools = install_tools(config).to_vec();
+    if crate::notebook::enabled(config, &agent.name) {
+        tools.extend(crate::notebook::tools::tools(crate::notebook::health_agent(config, &agent.name)));
+        tools.push(crate::notebook::fill::tool());
+    }
+    if crate::weather::enabled(config, &agent.name) {
+        tools.push(crate::weather::weather_tool());
+    }
+    if crate::health::enabled(config, &agent.name) {
+        tools.push(crate::health::health_tool(&crate::health::categories(config, &agent.name)));
+    }
+    if calendar_on(config, &agent.name) {
+        tools.extend(crate::calendar::tools());
+    }
+    if crate::meet::offered(config, &agent.name) {
+        tools.push(crate::meet::tool()); // a date to find with a relative's household (meet.rs)
+    }
+    if crate::contacts::enabled(config, &agent.name) {
+        tools.extend(crate::contacts::tools_of(config, &agent.name));
+    }
+    if crate::agent_files::offered(config, &agent.name) {
+        tools.push(crate::agent_files::tool());
+    }
+    if crate::agent_messages::offered(config, &agent.name) {
+        tools.push(crate::agent_messages::tool()); // in any conversation, not only its Bot Chat (agent_messages.rs)
+    }
+    if crate::archives::enabled(config, &agent.name) {
+        tools.extend(crate::archives::tools(config, &agent.name));
+    }
+    // the guide's (propose_agent, suggest_switch), propose_agent when asked for the person's other own agents, or
+    // propose_profile while it has no role or a generic name
+    tools.extend(crate::guide::tools(config, agent));
+    // the person's library of shared skills (skill_library.rs): for an agent that has one or writes its own
+    if crate::skill_library::offered(config, agent) {
+        tools.push(crate::skill_library::tool());
+    }
+    // the guide's search of ready-made models (templates.rs)
+    tools.extend(crate::templates::tools(config, agent));
+    // the offer's places: a green light before heavy work, behind the tool search (heavy_work.rs)
+    if crate::heavy_work::offered(agent, offer) {
+        tools.extend(crate::heavy_work::tools());
+    }
+    // a site refusing servers, opened through the person's own phone after a card (phone_exit)
+    if crate::phone_exit::agent::offered(config, &agent.name) {
+        tools.push(crate::phone_exit::agent::tool());
+    }
+    if !crate::routines::enabled(config, &agent.name) {
+        tools.retain(|t| t["name"] != crate::routines::TOOL_NAME);
+    }
+    tools
+}
+
+/// The agents whose tools now differ from what their latest MCP session listed, each with since when (Unix time):
+/// their Hermes hasn't fetched the new list yet (mcp_sessions.rs). An agent with no session isn't stale.
+pub fn stale_agents(config: &Config) -> Vec<(String, f64)> {
+    crate::mcp_sessions::SESSIONS.stale(
+        |name| config.agent(Some(name)).map(|agent| version_of(&tools_for(config, agent))),
+        py::time_time(),
+    )
+}
+
+/// Whether `agent` reads a calendar: the phone's, or one of its mailboxes' (caldav.rs).
+pub fn calendar_on(config: &Config, agent: &str) -> bool {
+    crate::calendar::enabled(config, agent) || crate::caldav::shared_with(config, agent)
+}
+
+/// Changes whenever the tools do: Hermes keeps the list it got when it connected, so a new tool needs a new entry.
+pub fn tools_version() -> String {
+    static VERSION: LazyLock<String> = LazyLock::new(|| version_of(tools()));
+    VERSION.clone()
+}
+
+/// The bridge as the agents' Hermes reaches it: this machine, unless the agents' gateways run elsewhere (`peer_url`,
+/// set for spaces in containers of their own). The tools' version rides along (`?v=`), ignored by the bridge: a
+/// changed entry makes Hermes connect again and fetch the new list.
+pub fn tools_url(config: &Config) -> String {
+    // A household linked or unlinked changes the list (the family's tools): a new version, so Hermes fetches it.
+    let version =
+        if crate::family_news::has_family(config) { version_of(install_tools(config)) } else { tools_version() };
+    url_with(config, &version)
+}
+
+/// `tools_url` for a given tools version.
+pub fn url_with(config: &Config, version: &str) -> String {
+    let base = match config.peer_url.as_deref() {
+        Some(peer) if peer.ends_with("/peer") => format!("{}{PATH}", &peer[..peer.len() - "/peer".len()]),
+        _ => format!("http://127.0.0.1:{}{PATH}", config.port),
+    };
+    format!("{base}?v={version}")
+}
+
+pub fn load_tokens(config: &Config) -> IndexMap<String, String> {
+    let Ok(text) = std::fs::read(store_path(config)) else { return IndexMap::new() };
+    let Ok(data) = serde_json::from_slice::<Value>(&text) else { return IndexMap::new() };
+    match data.get("tokens") {
+        Some(Value::Object(tokens)) => tokens.iter().map(|(k, v)| (k.clone(), py::py_str(v))).collect(),
+        _ => IndexMap::new(),
+    }
+}
+
+/// The token store is read, changed and written whole, one change at a time: at start the bridge registers several
+/// agents at once (its own, the spares), and a write from a read made before another agent's lost that agent's token
+/// (its tools refused until the next start).
+static STORE: Mutex<()> = Mutex::new(());
+
+/// `name`'s digest kept in the store (None: removed).
+fn keep_token(config: &Config, name: &str, digest: Option<String>) -> std::io::Result<()> {
+    let _store = STORE.lock().unwrap_or_else(|e| e.into_inner());
+    let mut tokens = load_tokens(config);
+    let changed = match digest {
+        Some(digest) => tokens.insert(name.to_string(), digest.clone()).as_ref() != Some(&digest),
+        None => tokens.shift_remove(name).is_some(),
+    };
+    if changed {
+        save_tokens(config, &tokens)?;
+    }
+    Ok(())
+}
+
+pub fn save_tokens(config: &Config, tokens: &IndexMap<String, String>) -> std::io::Result<()> {
+    let path = store_path(config);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let tmp = path.with_extension("part");
+    let map: Dict = tokens.iter().map(|(k, v)| (k.clone(), Value::String(v.clone()))).collect();
+    std::fs::write(&tmp, format!("{}\n", py::Dumps::new().indent(1).dumps(&json!({"tokens": map}))))?;
+    py::chmod(&tmp.to_string_lossy(), 0o600)?;
+    std::fs::rename(&tmp, &path)
+}
+
+/// The agent a token belongs to (its digest in the store).
+pub fn agent_for(config: &Config, token: &str) -> Option<AgentConfig> {
+    let wanted = digest(token);
+    for (name, known) in load_tokens(config) {
+        if crate::auth::constant_time_eq(known.as_bytes(), wanted.as_bytes()) {
+            // a spare (agent_pool.rs) lists its tools before it is taken
+            return config.agent(Some(&name)).cloned().or_else(|| crate::agent_pool::agent(config, &name));
+        }
+    }
+    None
+}
+
+/// The agent's Hermes knows the bridge's tools: an MCP entry with its own token in its profile. Agents set up by
+/// hand are left as they are. Returns whether the profile was changed (a new conversation picks it up). Err: a
+/// `hermes config set` that failed (Python's RuntimeError/OSError).
+pub async fn register(config: &Config, agent: &AgentConfig, run: &Run) -> anyhow::Result<bool> {
+    crate::mcp_sessions::poke(); // its tools may have changed: its open MCP streams check now (mcp_sessions.rs)
+    let tools = tools_for(config, agent);
+    let url = if tools.as_slice() != install_tools(config) {
+        url_with(config, &version_of(&tools))
+    } else {
+        tools_url(config)
+    };
+    let changed = register_at(config, agent, run, &url).await?;
+    // The card payment tools (card_pay.rs): their own entry, with the same token.
+    let paying = crate::card_pay::register(config, agent, run).await.unwrap_or_else(|exc| {
+        tracing::warn!(agent = %agent.name, error = %last_chars(&exc.to_string(), 200), "card payment tools not registered");
+        false
+    });
+    // The vault's account tools (vault_logins.rs): their own entry too.
+    let accounts = crate::vault_logins::register(config, agent, run).await.unwrap_or_else(|exc| {
+        tracing::warn!(agent = %agent.name, error = %last_chars(&exc.to_string(), 200), "vault account tools not registered");
+        false
+    });
+    // The connectors it makes (connectors.rs): their tools' entry, and one per connector the person approved.
+    let connecting = crate::connectors::register(config, agent, run).await.unwrap_or_else(|exc| {
+        tracing::warn!(agent = %agent.name, error = %last_chars(&exc.to_string(), 200), "connector tools not registered");
+        false
+    });
+    // « L'agent prépare, tu paies » (handover.rs) for every agent, and Link Agent Wallet (link_wallet.rs) for the
+    // agents the person chose, where it is on.
+    let handing = crate::handover::register(config, agent, run).await.unwrap_or_else(|exc| {
+        tracing::warn!(agent = %agent.name, error = %last_chars(&exc.to_string(), 200), "checkout tool not registered");
+        false
+    });
+    let link = crate::link_wallet::register(config, agent, run).await.unwrap_or_else(|exc| {
+        tracing::warn!(agent = %agent.name, error = %last_chars(&exc.to_string(), 200), "Link tools not registered");
+        false
+    });
+    // What the bridge decides in its profile (profile_files::reconcile): its kind's tools in view (tool_diet.rs,
+    // after the entries above, so the bridge tools it keeps direct are the ones it has now), the providers EUrouter
+    // tries first (model_route.rs), the thinking level the person chose or GLM's « low » (after the commands above).
+    let reconciled = crate::profile_files::reconcile(config, agent).unwrap_or_else(|exc| {
+        tracing::warn!(agent = %agent.name, error = %last_chars(&exc.to_string(), 200), "profile settings not brought up to date");
+        false
+    });
+    // The styled decks and Word documents (style_skills.rs), in place of Hermes' `powerpoint` and `docx`.
+    let styled = crate::style_skills::apply(config, agent).unwrap_or_else(|exc| {
+        tracing::warn!(agent = %agent.name, error = %last_chars(&exc.to_string(), 200), "styled documents skills not set");
+        false
+    });
+    Ok(changed || paying || accounts || connecting || handing || link || reconciled || styled)
+}
+
+/// `register` with the tools' URL given (tests: a later version of the tools).
+pub async fn register_at(config: &Config, agent: &AgentConfig, _run: &Run, url: &str) -> anyhow::Result<bool> {
+    let Some(folder) = shares::profile_dir(config, agent) else { return Ok(false) };
+    if !folder.is_dir() {
+        return Ok(false);
+    }
+    let profile = shares::profile_config(&folder);
+    let servers = profile.get("mcp_servers").filter(|v| py::truthy(v));
+    let entry = servers.and_then(|s| s.get(SERVER_NAME)).filter(|v| py::truthy(v)).cloned().unwrap_or(json!({}));
+    let tokens = load_tokens(config);
+    let header = match &entry {
+        Value::Object(map) => match map.get("headers").filter(|v| py::truthy(v)).and_then(|h| h.get("Authorization")) {
+            Some(v) => py::py_str(v),
+            None => String::new(),
+        },
+        _ => String::new(),
+    };
+    let current = header.strip_prefix("Bearer ").unwrap_or("").to_string();
+    let known = !current.is_empty() && tokens.get(&agent.name) == Some(&digest(&current));
+    let mut same = false;
+    if let Value::Object(map) = &entry {
+        let timeout = py::py_str(map.get("timeout").unwrap_or(&Value::Null));
+        same = map.get("url") == Some(&Value::String(url.to_string())) && known && timeout == TOOL_TIMEOUT.to_string();
+    }
+    // An isolated sandbox's file tools (sandbox.rs): a second entry, « untrusted » so Hermes asks the person before
+    // each write or delete, with the same token.
+    let files = crate::sandbox::isolates(config, agent);
+    let files_entry = servers.and_then(|s| s.get(crate::sandbox::SERVER_NAME)).cloned().unwrap_or(json!({}));
+    let files_same = !files
+        || (files_entry.get("url") == Some(&json!(crate::sandbox::tools_url(config)))
+            && files_entry.get("trust") == Some(&json!("untrusted"))
+            && files_entry.get("headers").and_then(|h| h.get("Authorization")) == Some(&json!(header)));
+    if same && files_same {
+        return Ok(false);
+    }
+    let token = if known { current } else { py::token_urlsafe(32) };
+    let bearer = Yaml::str(format!("Bearer {token}"));
+    // written straight into its config.yaml (profile_files.rs), as `hermes config set mcp_servers.<…>` would
+    crate::profile_files::edit(&folder.join("config.yaml"), |data| {
+        if files {
+            let entry = [
+                ("url", Yaml::str(crate::sandbox::tools_url(config))),
+                ("headers.Authorization", bearer.clone()),
+                ("trust", Yaml::str("untrusted")),
+            ];
+            crate::profile_files::set_server(data, crate::sandbox::SERVER_NAME, Some(&entry));
+        }
+        if !same {
+            let entry =
+                [("url", Yaml::str(url)), ("headers.Authorization", bearer), ("timeout", Yaml::Int(TOOL_TIMEOUT.into()))];
+            crate::profile_files::set_server(data, SERVER_NAME, Some(&entry));
+        }
+    })?;
+    if files {
+        tracing::info!(agent = %agent.name, "file tools registered (writes and deletes approved by the person)");
+    }
+    if same {
+        return Ok(true);
+    }
+    keep_token(config, &agent.name, Some(digest(&token)))?;
+    tracing::info!(agent = %agent.name, "agent tools registered");
+    Ok(true)
+}
+
+/// At start: every agent this install manages gets the tools (agents made before them, or moved since).
+pub async fn register_all(config: SharedConfig, run: Run) {
+    let snapshot = config.get();
+    for agent in snapshot.agents.values() {
+        if let Err(exc) = register(&snapshot, agent, &run).await {
+            tracing::warn!(agent = %agent.name, error = %last_chars(&exc.to_string(), 200), "agent tools not registered");
+        }
+    }
+}
+
+/// `text[-n:]`.
+fn last_chars(text: &str, n: usize) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    chars[chars.len().saturating_sub(n)..].iter().collect()
+}
+
+/// A deleted agent: its token goes, and its pages.
+pub fn forget(config: &Config, name: &str) {
+    pages::forget(config, name);
+    crate::shared_pages::forget(config, name);
+    crate::approvals_log::forget(config, name);
+    crate::approval_level::forget(config, name);
+    crate::maps::forget(config, name);
+    crate::notebook::forget(config, name);
+    crate::archives::forget(config, name);
+    if let Err(err) = keep_token(config, name, None) {
+        tracing::warn!(agent = %name, error = %err, "agent tools token not removed");
+    }
+}
+
+// --- the audio ---------------------------------------------------------------------------------------------------
+
+/// `re.split(r"(?<=[<ends>])\s+", text)`.
+fn split_after(text: &str, ends: &[char]) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut current = String::new();
+    let mut prev: Option<char> = None;
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        if tk::is_py_space(c) && prev.map(|p| ends.contains(&p)).unwrap_or(false) {
+            while chars.peek().map(|n| tk::is_py_space(*n)).unwrap_or(false) {
+                chars.next();
+            }
+            out.push(std::mem::take(&mut current));
+            prev = Some(c);
+            continue;
+        }
+        current.push(c);
+        prev = Some(c);
+    }
+    out.push(current);
+    out
+}
+
+fn char_len(s: &str) -> usize {
+    s.chars().count()
+}
+
+/// `text` in pieces of at most `limit` characters, cut between sentences, else at commas, else between words.
+fn pieces(text: &str, limit: usize) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for unit in split_after(text, &['.', '!', '?', '…']) {
+        let unit = tk::strip(&unit).to_string();
+        if unit.is_empty() {
+            continue;
+        }
+        let parts: Vec<String> = if char_len(&unit) <= limit {
+            vec![unit]
+        } else {
+            split_after(&unit, &[',', ';', ':']).into_iter().filter(|p| !tk::strip(p).is_empty()).collect()
+        };
+        for part in parts {
+            let mut part: Vec<char> = part.chars().collect();
+            while part.len() > limit {
+                let found = part[..limit].iter().rposition(|c| *c == ' ');
+                let cut = match found {
+                    Some(i) if i > limit / 2 => i,
+                    _ => limit,
+                };
+                let head: String = part[..cut].iter().collect();
+                out.push(tk::strip(&head).to_string());
+                let rest: String = part[cut..].iter().collect();
+                part = tk::strip(&rest).chars().collect();
+            }
+            let part: String = part.into_iter().collect();
+            if part.is_empty() {
+                continue;
+            }
+            match out.last_mut() {
+                Some(last) if char_len(last) + 1 + char_len(&part) <= limit => *last = format!("{last} {part}"),
+                _ => out.push(part),
+            }
+        }
+    }
+    out
+}
+
+/// `re.split(r"\n\s*\n", text)`.
+fn paragraphs(text: &str) -> Vec<String> {
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = Vec::new();
+    let mut start = 0;
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i] == '\n' {
+            let mut j = i + 1;
+            let mut last_newline = None;
+            while j < chars.len() && tk::is_py_space(chars[j]) {
+                if chars[j] == '\n' {
+                    last_newline = Some(j);
+                }
+                j += 1;
+            }
+            if let Some(k) = last_newline {
+                out.push(chars[start..i].iter().collect());
+                start = k + 1;
+                i = k + 1;
+                continue;
+            }
+        }
+        i += 1;
+    }
+    out.push(chars[start..].iter().collect());
+    out
+}
+
+/// `(piece, pause after it in ms)`: paragraphs (blank lines) kept apart by a longer pause. `MEDIA:` lines go.
+pub fn split_for_speech(text: &str, limit: usize) -> Vec<(String, u32)> {
+    let kept: Vec<String> =
+        crate::hermes::splitlines(text).into_iter().filter(|line| !tk::strip(line).starts_with("MEDIA:")).collect();
+    let text = kept.join("\n");
+    let mut chunks = Vec::new();
+    for paragraph in paragraphs(&text) {
+        let paragraph = tk::squeeze(&paragraph);
+        if paragraph.is_empty() {
+            continue;
+        }
+        let found = pieces(&paragraph, limit);
+        let count = found.len();
+        for (index, piece) in found.into_iter().enumerate() {
+            chunks.push((piece, if index + 1 == count { PAUSE_PARAGRAPH_MS } else { PAUSE_SENTENCES_MS }));
+        }
+    }
+    chunks
+}
+
+fn silence(ms: u32) -> Vec<u8> {
+    vec![0u8; 2 * (OUTPUT_RATE as usize * ms as usize / 1000)]
+}
+
+fn slug(title: &str) -> String {
+    let text = tk::dashes(&tk::ascii_fold(&tk::spaced_punctuation(title)).to_lowercase());
+    let text = tk::head(text.trim_matches('-'), 40).to_string();
+    if text.is_empty() {
+        "audio".into()
+    } else {
+        text
+    }
+}
+
+/// What generated audio says it is, in its metadata: synthetic speech made by an AI agent.
+pub fn ai_mark(agent: &str) -> String {
+    format!("AI-generated: synthetic voice by the AI agent {agent} (BipAgents). digitalsourcetype={AI_SOURCE}")
+}
+
+/// A RIFF LIST/INFO chunk (ICMT comment, ISFT software) at the end of a WAV, its RIFF size updated.
+pub fn tag_wav(path: &Path, comment: &str, software: &str) -> std::io::Result<()> {
+    fn field(key: &[u8], text: &str) -> Vec<u8> {
+        let mut data = text.as_bytes().to_vec();
+        data.push(0);
+        if data.len() % 2 == 1 {
+            data.push(0);
+        }
+        let mut out = key.to_vec();
+        out.extend((data.len() as u32).to_le_bytes());
+        out.extend(data);
+        out
+    }
+    let mut body = b"INFO".to_vec();
+    body.extend(field(b"ICMT", comment));
+    body.extend(field(b"ISFT", software));
+    let mut handle = std::fs::OpenOptions::new().read(true).write(true).open(path)?;
+    handle.seek(SeekFrom::End(0))?;
+    handle.write_all(b"LIST")?;
+    handle.write_all(&(body.len() as u32).to_le_bytes())?;
+    handle.write_all(&body)?;
+    let size = handle.stream_position()? - 8;
+    handle.seek(SeekFrom::Start(4))?;
+    handle.write_all(&(size as u32).to_le_bytes())?;
+    Ok(())
+}
+
+/// An .m4a next to the WAV when ffmpeg is here (a tenth of the size), else the WAV itself.
+async fn encode(wav_path: &Path, comment: &str) -> PathBuf {
+    let Some(ffmpeg) = crate::spaces::which("ffmpeg") else { return wav_path.to_path_buf() };
+    let target = wav_path.with_extension("m4a");
+    let mut args: Vec<String> = ["-nostdin", "-y", "-loglevel", "error", "-i"].iter().map(|s| s.to_string()).collect();
+    args.push(wav_path.to_string_lossy().into_owned());
+    args.extend(["-c:a", "aac", "-b:a", "64k"].iter().map(|s| s.to_string()));
+    if !comment.is_empty() {
+        args.extend([
+            "-metadata".into(),
+            format!("comment={comment}"),
+            "-metadata".into(),
+            format!("description={comment}"),
+            "-metadata".into(),
+            "encoder=BipAgents".into(),
+        ]);
+    }
+    args.push(target.to_string_lossy().into_owned());
+    let output = tokio::process::Command::new(ffmpeg)
+        .args(&args)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .output()
+        .await;
+    let failed = match &output {
+        Ok(out) => !out.status.success() || !target.exists(),
+        Err(_) => true,
+    };
+    if failed {
+        let err = match &output {
+            Ok(out) => String::from_utf8_lossy(&out.stderr).into_owned(),
+            Err(err) => err.to_string(),
+        };
+        tracing::warn!(error = %last_chars(&err, 200), "audio not encoded, kept as WAV");
+        let _ = std::fs::remove_file(&target);
+        return wav_path.to_path_buf();
+    }
+    let _ = std::fs::remove_file(wav_path);
+    target
+}
+
+/// Python's `round()` to an int (ties to even).
+fn py_round(value: f64) -> i64 {
+    value.round_ties_even() as i64
+}
+
+/// A voice per speaker, in order of appearance: the one asked for (from `voices`), else voices of the person's
+/// voice model when it reads (natural voices make a better podcast than Bips), the agent's own leading, then
+/// different ones of the same family first (« naturelle » with « naturelle »); without a voice model, Bips.
+pub fn cast_from(
+    config: &Config,
+    available: &[Dict],
+    speakers: &[String],
+    wanted: &IndexMap<String, String>,
+) -> anyhow::Result<IndexMap<String, String>> {
+    let all: Vec<String> = available.iter().map(|e| tk::str_or_empty(e.get("voice"))).collect();
+    let allowed: HashSet<&String> = all.iter().collect();
+    for (speaker, voice) in wanted {
+        if !allowed.contains(voice) {
+            return Err(value_error(format!("unknown voice for {speaker}: {voice} (see list_voices)")));
+        }
+    }
+    let own = all.first().cloned().unwrap_or_default();
+    let model: Vec<String> = all.iter().filter(|v| v.starts_with("server:")).cloned().collect();
+    let server_reads = config.voice_server.as_ref().map(|s| s.uses.get("reading").copied().unwrap_or(true));
+    let mut pool: Vec<String> = if !model.is_empty() && server_reads == Some(true) {
+        model
+    } else {
+        let family = own.split(':').next().unwrap_or("").to_string();
+        all.iter().filter(|v| v.split(':').next().unwrap_or("") == family).cloned().collect()
+    };
+    if !pool.contains(&own) {
+        // the agent speaks with a Bip: a natural voice of the model leads, not a mascot's
+        pool.sort_by_key(|v| if v.contains("natur") { 0 } else { 1 });
+    }
+    let lead = if pool.contains(&own) || pool.is_empty() { own.clone() } else { pool[0].clone() };
+    let name = lead.rsplit('/').next().unwrap_or("").to_string();
+    let family =
+        if name.matches('-').count() >= 2 { name.split('-').nth(1).unwrap_or("").to_string() } else { String::new() };
+    let mut ranked: Vec<String> =
+        pool.iter().filter(|v| !family.is_empty() && v.contains(&format!("-{family}-"))).cloned().collect();
+    ranked.extend(pool.iter().cloned());
+    ranked.extend(all.iter().cloned());
+    let mut cast = IndexMap::new();
+    let mut used: HashSet<String> = wanted.values().cloned().collect();
+    for speaker in speakers {
+        if let Some(voice) = wanted.get(speaker) {
+            cast.insert(speaker.clone(), voice.clone());
+            continue;
+        }
+        let choice = if !used.contains(&lead) {
+            lead.clone()
+        } else {
+            ranked.iter().find(|v| !used.contains(*v)).cloned().unwrap_or_else(|| lead.clone())
+        };
+        cast.insert(speaker.clone(), choice.clone());
+        used.insert(choice);
+    }
+    Ok(cast)
+}
+
+/// Audio files and podcasts made for an agent (`create_audio`, `create_podcast`). One audio at a time per agent (a
+/// Pocket's voices per language, and when they were read (kept a while).
+type PocketVoices = (Instant, IndexMap<String, Vec<String>>);
+
+/// second request waits for the first).
+pub struct AudioMaker {
+    pub config: SharedConfig,
+    pub tts: Arc<TtsService>,
+    locks: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
+    pocket_cache: Mutex<Option<PocketVoices>>,
+}
+
+impl AudioMaker {
+    pub fn new(config: SharedConfig, tts: Arc<TtsService>) -> Self {
+        AudioMaker { config, tts, locks: Mutex::new(HashMap::new()), pocket_cache: Mutex::new(None) }
+    }
+
+    fn lock_of(&self, agent: &str) -> Arc<tokio::sync::Mutex<()>> {
+        self.locks.lock().unwrap_or_else(|e| e.into_inner()).entry(agent.to_string()).or_default().clone()
+    }
+
+    /// The Bips Pocket serves, by language (its `/health`), kept a few minutes.
+    pub async fn pocket_voices(&self) -> IndexMap<String, Vec<String>> {
+        let Some(pocket) = self.tts.pocket.as_ref() else { return IndexMap::new() };
+        let now = Instant::now();
+        if let Some((at, voices)) = self.pocket_cache.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+            if now.duration_since(*at) < Duration::from_secs(300) {
+                return voices.clone();
+            }
+        }
+        let found: Option<Value> = async {
+            let resp = self
+                .tts
+                .client
+                .get(format!("{}/health", pocket.url))
+                .timeout(Duration::from_secs(5))
+                .send()
+                .await
+                .ok()?;
+            if resp.status().as_u16() != 200 {
+                return None;
+            }
+            let data: Value = resp.json().await.ok()?;
+            data.get("voices").cloned()
+        }
+        .await;
+        let mut voices = IndexMap::new();
+        if let Some(Value::Object(map)) = found {
+            for (k, names) in map {
+                let list = match names {
+                    Value::Array(items) => items.iter().map(py::py_str).collect(),
+                    Value::String(s) => s.chars().map(|c| c.to_string()).collect(),
+                    _ => Vec::new(),
+                };
+                voices.insert(k, list);
+            }
+        }
+        *self.pocket_cache.lock().unwrap_or_else(|e| e.into_inner()) = Some((now, voices.clone()));
+        voices
+    }
+
+    /// The voices an agent may give a podcast's hosts: its own first, then its voice model's in its language,
+    /// then the Bips in its language.
+    pub async fn voices(&self, agent: &AgentConfig) -> Vec<Dict> {
+        let config = self.config.get();
+        let own = voice_for(&config, Some(agent), Some("reading"));
+        let language = voice_language(&own);
+        let entry = |voice: String, kind: &str| -> Dict {
+            let mut d = Dict::new();
+            d.insert("voice".into(), Value::String(voice));
+            d.insert("kind".into(), Value::String(kind.into()));
+            d
+        };
+        let mut found = vec![entry(own.clone(), "your voice")];
+        if config.voice_server.is_some() {
+            for name in self.tts.server_voices(300.0).await {
+                let prefix = name.split('-').next().unwrap_or("");
+                if prefix.chars().count() == 2 && prefix != language {
+                    continue; // « en-naturelle-s47 »: another language's voice
+                }
+                found.push(entry(format!("server:{language}/{name}"), "voice model"));
+            }
+        }
+        let bips = self.pocket_voices().await.get(&language).cloned().unwrap_or_default();
+        for name in bips {
+            let voice = if language == "fr" { format!("pocket:{name}") } else { format!("pocket:{language}/{name}") };
+            found.push(entry(voice, "Bip"));
+        }
+        let mut seen = HashSet::new();
+        found.into_iter().filter(|e| seen.insert(tk::str_or_empty(e.get("voice")))).collect()
+    }
+
+    /// A voice per speaker, in order of appearance (see [`cast_from`]). Err: a wanted voice that is not offered
+    /// (Python's ValueError).
+    pub async fn cast(
+        &self,
+        agent: &AgentConfig,
+        speakers: &[String],
+        wanted: &IndexMap<String, String>,
+    ) -> anyhow::Result<IndexMap<String, String>> {
+        let available = self.voices(agent).await;
+        cast_from(&self.config.get(), &available, speakers, wanted)
+    }
+
+    /// PCM16 at 24 kHz, the pieces of `text` read one after the other (no pause after the last).
+    async fn speak(&self, text: &str, voice: &str, relay: Option<String>) -> Result<Vec<u8>, TtsError> {
+        let chunks = split_for_speech(text, CHUNK_CHARS);
+        let mut pcm = Vec::new();
+        let count = chunks.len();
+        for (index, (piece, pause)) in chunks.into_iter().enumerate() {
+            let options = SynthOptions { normalized: false, max_chars: Some(0), relay: relay.clone() };
+            let audio = self.tts.synthesize(&piece, Some(voice), "pcm16", BACKGROUND, options).await?;
+            let mut data = if audio.channels == 1 { audio.data.to_vec() } else { mono(&audio.data, audio.channels) };
+            if audio.sample_rate != OUTPUT_RATE {
+                data = Resampler::new(audio.sample_rate, OUTPUT_RATE).feed(&data, true);
+            }
+            pcm.extend(data);
+            if index + 1 < count {
+                pcm.extend(silence(pause));
+            }
+        }
+        Ok(pcm)
+    }
+
+    async fn save(&self, agent: &AgentConfig, pcm: &[u8], title: &str) -> anyhow::Result<Dict> {
+        let config = self.config.get();
+        let folder = audio_root(&config).join(&agent.name);
+        std::fs::create_dir_all(&folder)?;
+        let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
+        let wav_path = folder.join(format!("{stamp}-{}.wav", slug(title)));
+        std::fs::write(&wav_path, crate::tts::pcm16_to_wav(pcm, OUTPUT_RATE, 1))?;
+        let shown = if agent.display_name.is_empty() { &agent.name } else { &agent.display_name };
+        let mark = ai_mark(shown);
+        tag_wav(&wav_path, &mark, "BipAgents")?;
+        let last = encode(&wav_path, &mark).await;
+        let file = last.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        let mut made = Dict::new();
+        made.insert("path".into(), Value::String(format!("{MEDIA_PREFIX}/{}/{file}", agent.name)));
+        made.insert("seconds".into(), json!(pcm.len() as f64 / 2.0 / OUTPUT_RATE as f64));
+        crate::storage_watch::mark_dirty(); // a big write: the place's space measured again soon
+        Ok(made)
+    }
+
+    pub async fn create(&self, agent: &AgentConfig, text: &str, title: &str) -> anyhow::Result<Dict> {
+        let text = tk::strip(text);
+        if text.is_empty() {
+            return Err(value_error("the text is empty"));
+        }
+        let length = char_len(text);
+        if length > MAX_CHARS {
+            return Err(value_error(format!(
+                "the text is too long ({length} characters, at most {MAX_CHARS}): split it"
+            )));
+        }
+        if split_for_speech(text, CHUNK_CHARS).is_empty() {
+            return Err(value_error("nothing to read once MEDIA: lines are removed"));
+        }
+        let voice = voice_for(&self.config.get(), Some(agent), Some("reading"));
+        let lock = self.lock_of(&agent.name);
+        let guard = lock.lock().await;
+        let started = Instant::now();
+        let pcm = self.speak(text, &voice, relay_for(&self.config.get(), Some(agent))).await?;
+        let title = if title.is_empty() { tk::head(text, 40) } else { title };
+        let made = self.save(agent, &pcm, title).await?;
+        drop(guard);
+        let seconds = made.get("seconds").and_then(Value::as_f64).unwrap_or(0.0);
+        tracing::info!(agent = %agent.name, chars = length, seconds = py_round(seconds),
+            took = py_round(started.elapsed().as_secs_f64()), "agent audio made");
+        Ok(made)
+    }
+
+    /// `turns`: the tool's list as given (items that are not objects are skipped); `voices`: a voice per host.
+    pub async fn podcast(
+        &self,
+        agent: &AgentConfig,
+        turns: &[Value],
+        title: &str,
+        voices: Option<&Dict>,
+    ) -> anyhow::Result<Dict> {
+        let mut clean: Vec<(String, String)> = Vec::new();
+        for turn in turns {
+            let Value::Object(turn) = turn else { continue };
+            let speaker = tk::head(&tk::squeeze(&tk::str_or_empty(turn.get("speaker"))), 40).to_string();
+            let text = tk::strip(&tk::str_or_empty(turn.get("text"))).to_string();
+            if !speaker.is_empty() && !text.is_empty() && !split_for_speech(&text, CHUNK_CHARS).is_empty() {
+                clean.push((speaker, text));
+            }
+        }
+        if clean.is_empty() {
+            return Err(value_error("no turn to read: each turn needs a speaker and a text"));
+        }
+        if clean.len() > MAX_TURNS {
+            return Err(value_error(format!(
+                "too many turns ({}, at most {MAX_TURNS}): make two episodes",
+                clean.len()
+            )));
+        }
+        let total: usize = clean.iter().map(|(_, t)| char_len(t)).sum();
+        if total > MAX_CHARS {
+            return Err(value_error(format!(
+                "the podcast is too long ({total} characters, at most {MAX_CHARS}): make two episodes"
+            )));
+        }
+        let mut speakers: Vec<String> = Vec::new();
+        for (speaker, _) in &clean {
+            if !speakers.contains(speaker) {
+                speakers.push(speaker.clone());
+            }
+        }
+        if speakers.len() > MAX_SPEAKERS {
+            return Err(value_error(format!("too many speakers ({}, at most {MAX_SPEAKERS})", speakers.len())));
+        }
+        let wanted: IndexMap<String, String> = voices
+            .map(|v| v.iter().filter(|(k, _)| speakers.contains(k)).map(|(k, v)| (k.clone(), py::py_str(v))).collect())
+            .unwrap_or_default();
+        let cast = self.cast(agent, &speakers, &wanted).await?;
+        let relay = relay_for(&self.config.get(), Some(agent));
+        let lock = self.lock_of(&agent.name);
+        let guard = lock.lock().await;
+        let started = Instant::now();
+        let mut pcm = Vec::new();
+        let first = cast[&speakers[0]].clone();
+        for (index, (speaker, text)) in clean.iter().enumerate() {
+            let voice = &cast[speaker];
+            pcm.extend(self.speak(text, voice, if *voice == first { relay.clone() } else { None }).await?);
+            if index + 1 < clean.len() {
+                pcm.extend(silence(PAUSE_TURN_MS));
+            }
+        }
+        let mut made = self.save(agent, &pcm, if title.is_empty() { "podcast" } else { title }).await?;
+        drop(guard);
+        let seconds = made.get("seconds").and_then(Value::as_f64).unwrap_or(0.0);
+        tracing::info!(agent = %agent.name, turns = clean.len(), speakers = speakers.len(), seconds = py_round(seconds),
+            took = py_round(started.elapsed().as_secs_f64()), "agent podcast made");
+        let cast_map: Dict = cast.into_iter().map(|(k, v)| (k, Value::String(v))).collect();
+        made.insert("cast".into(), Value::Object(cast_map));
+        Ok(made)
+    }
+}
+
+pub fn purge_audio(config: &Config, retention_days: i64, now: Option<f64>) -> usize {
+    let root = audio_root(config);
+    if !root.is_dir() {
+        return 0;
+    }
+    let now = now.filter(|n| *n != 0.0).unwrap_or_else(py::time_time);
+    let cutoff = now - retention_days as f64 * 86400.0;
+    let mut removed = 0;
+    for folder in std::fs::read_dir(&root).into_iter().flatten().flatten() {
+        let Ok(entries) = std::fs::read_dir(folder.path()) else { continue };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let is_link = std::fs::symlink_metadata(&path).map(|m| m.file_type().is_symlink()).unwrap_or(true);
+            if path.is_file()
+                && !is_link
+                && tk::mtime(&path).map(|m| m < cutoff).unwrap_or(false)
+                && std::fs::remove_file(&path).is_ok()
+            {
+                removed += 1;
+            }
+        }
+    }
+    removed
+}
+
+// --- MCP (streamable HTTP, JSON-RPC) ------------------------------------------------------------------------------
+
+fn rpc_result(request_id: &Value, result: Value) -> Value {
+    json!({"jsonrpc": "2.0", "id": request_id, "result": result})
+}
+
+fn rpc_error(request_id: &Value, code: i64, message: &str) -> Value {
+    json!({"jsonrpc": "2.0", "id": request_id, "error": {"code": code, "message": message}})
+}
+
+fn duration(seconds: f64) -> String {
+    let total = py_round(seconds);
+    let (minutes, rest) = (total.div_euclid(60), total.rem_euclid(60));
+    if minutes != 0 {
+        format!("{minutes} min {rest:02} s")
+    } else {
+        format!("{rest} s")
+    }
+}
+
+/// A create_page call with no page in it (`html` with no tag at all and a few words: « placeholder », « x »), its
+/// refusal. 10/11, the release battery's upgrade journey (GLM-5.3 Flash, a routine asking for a PDF and a podcast,
+/// `create_podcast` behind the tool search): the model meant to call `create_podcast` directly, its call ended on the
+/// in-view `create_page` (the tool names are constrained to the request's, the longest common prefix wins:
+/// tool_diet.rs) with `{"html": "placeholder", "title": "x"}`, and its own reasoning said « I meant create_podcast but
+/// typed create_page ». Each such call made a page (`x`, `unused`, `stop`, `no`…, the « placeholder.html » of 9/11),
+/// the model deleted them, asked again, was told « already done », until the brake stopped the routine. Nothing is
+/// made now, and the model is told how to reach the tool it meant.
+pub fn no_page_in(html: &str) -> Option<String> {
+    let html = html.trim();
+    if html.is_empty() || html.contains('<') || html.chars().count() > 200 {
+        return None;
+    }
+    Some(format!(
+        "No page made: « {} » is not a page (create_page needs the page's HTML). If you meant another tool that is not \
+in your list (create_podcast, create_audio, list_voices…), call it through tool_call, e.g. tool_call {{\"calls\": \
+[{{\"name\": \"mcp__bipagents__create_podcast\", \"arguments\": {{…}}}}]}}. Don't call create_page again for it.",
+        tk::head(html, 40)
+    ))
+}
+
+/// create_page, list_pages, read_page, delete_page. Err: what Python lets through (an OSError writing the page).
+pub fn page_tool(config: &Config, agent: &AgentConfig, name: &str, arguments: &Dict) -> anyhow::Result<Dict> {
+    page_tool_marked(config, agent, name, arguments, None)
+}
+
+/// [`page_tool`]; `mark`: a page made in a shared conversation (shared_pages.rs).
+pub fn page_tool_marked(
+    config: &Config,
+    agent: &AgentConfig,
+    name: &str,
+    arguments: &Dict,
+    mark: Option<&pages::Mark>,
+) -> anyhow::Result<Dict> {
+    let page = tk::strip(&tk::str_or_empty(arguments.get("page"))).to_string();
+    let caught = |err: anyhow::Error| -> anyhow::Result<Dict> {
+        match err.downcast_ref::<pages::ValueError>() {
+            Some(message) => Ok(tool_text(&message.0, true)),
+            None => Err(err),
+        }
+    };
+    if name == LIST_PAGES {
+        let found = pages::list_pages(config, &agent.name);
+        if found.is_empty() {
+            return Ok(tool_text("No page yet.", false));
+        }
+        let lines: Vec<String> = found
+            .iter()
+            .map(|p| {
+                format!(
+                    "{}: {} (changed {} ago, version {})",
+                    py::py_str(p.get("page").unwrap_or(&Value::Null)),
+                    tk::str_or_empty(p.get("title")),
+                    pages::age(p, None),
+                    py::py_str(p.get("version").unwrap_or(&Value::Null))
+                )
+            })
+            .collect();
+        return Ok(tool_text(&lines.join("\n"), false));
+    }
+    if name == READ_PAGE {
+        return match pages::source(config, &agent.name, &page) {
+            Ok(text) => Ok(tool_text(&text, false)),
+            Err(err) => caught(err),
+        };
+    }
+    if name == DELETE_PAGE {
+        if !pages::delete(config, &agent.name, &page) {
+            return Ok(tool_text(&format!("unknown page id: {page} (see list_pages)"), true));
+        }
+        tracing::info!(agent = %agent.name, page = %page, "agent page deleted");
+        return Ok(tool_text(&format!("Page {page} deleted."), false));
+    }
+    if let Some(refused) = no_page_in(&tk::str_or_empty(arguments.get("html"))) {
+        tracing::info!(agent = %agent.name, "create_page with no page in it: nothing made (another tool meant)");
+        return Ok(tool_text(&refused, true));
+    }
+    let made = match pages::save_marked(
+        config,
+        &agent.name,
+        &tk::str_or_empty(arguments.get("html")),
+        &tk::str_or_empty(arguments.get("title")),
+        if page.is_empty() { None } else { Some(&page) },
+        mark,
+    ) {
+        Ok(made) => made,
+        Err(err) => return caught(err),
+    };
+    let id = py::py_str(made.get("page").unwrap_or(&Value::Null));
+    let version = made.get("version").and_then(Value::as_i64).unwrap_or(0);
+    let bytes = made.get("bytes").and_then(Value::as_i64).unwrap_or(0);
+    tracing::info!(agent = %agent.name, page = %id, version = version, bytes = bytes, "agent page made");
+    let outside: Vec<String> = match made.get("outside") {
+        Some(Value::Array(items)) => items.iter().map(py::py_str).collect(),
+        _ => Vec::new(),
+    };
+    let warning = if outside.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "\nWarning: the page asks for things on the network, which will not load (it runs offline): {}. Put them \
+inline, or do without, and update the page.",
+            outside.iter().take(5).cloned().collect::<Vec<_>>().join(", ")
+        )
+    };
+    let path = py::py_str(made.get("path").unwrap_or(&Value::Null));
+    // its place in the Carnet: the page it is about; the health agent's pages stay in the private health part
+    let health = crate::notebook::health_agent(config, &agent.name);
+    let wanted = tk::strip(&tk::str_or_empty(arguments.get("notebook"))).to_string();
+    let mut linked = String::new();
+    let mut link: Option<(String, &str)> = None;
+    if !wanted.is_empty() {
+        let parts: Vec<crate::notebook::Part> = if health {
+            vec![crate::notebook::Part::Main, crate::notebook::Part::Health]
+        } else {
+            vec![crate::notebook::Part::Main]
+        };
+        match crate::notebook::find(config, &parts, &wanted) {
+            Some(mut found) if crate::notebook::KINDS.contains(&found.page.kind().as_str()) => {
+                if found.page.id().is_empty() {
+                    // a page without an id yet (made by hand): given one, so the link survives a rename
+                    let _guard = crate::notebook::lock();
+                    let before = found.page.render();
+                    found.page.ensure_id();
+                    let who = crate::notebook::Who::agent(config, &agent.name);
+                    crate::notebook::commit(
+                        config,
+                        found.part,
+                        &found.path,
+                        Some(&before),
+                        Some(&found.page.render()),
+                        &who,
+                        "id",
+                        "",
+                    )?;
+                }
+                linked = format!("\nLinked to the Carnet page {} ({}).", found.page.title, found.path);
+                link = Some((found.page.id(), found.part.as_str()));
+            }
+            _ => {
+                linked = format!(
+                    "\nNo Carnet page « {wanted} »: the page is not linked (notebook_search finds the page; file the subject first if it has none)."
+                );
+            }
+        }
+    }
+    if link.is_some() || health {
+        pages::set_link(config, &agent.name, &id, link.as_ref().map(|(i, p)| (i.as_str(), *p)), health)?;
+    }
+    Ok(tool_text(
+        &format!(
+            "MEDIA:{path}\nPage {}: id {id}, version {version}.{warning}{linked}\nTo show it to the person, put the MEDIA \
+line above alone on its own line in your reply, exactly as it is, where the page belongs in your text (the app shows it \
+there, live): keep a sentence or two before it and the rest after.",
+            if version > 1 { "updated" } else { "ready" }
+        ),
+        false,
+    ))
+}
+
+async fn blocking<F>(work: F) -> anyhow::Result<Dict>
+where
+    F: FnOnce() -> anyhow::Result<Dict> + Send + 'static,
+{
+    tokio::task::spawn_blocking(work).await?
+}
+
+/// The Carnet's view of a tool call's turn (notebook/reads.rs): its run, its Hermes session, and its page cap — 20
+/// for « Remplir mon Carnet »'s background task (notebook/fill.rs), else 6 — and whether it is busy (a background task,
+/// a routine, a Live call: the Carnet asks no question then, notebook/ask.rs).
+fn carnet_turn(state: &AppState, agent: &str, turn: Option<&crate::loop_brake::Turn>) -> crate::notebook::reads::Turn {
+    use crate::notebook::reads;
+    let Some(turn) = turn else { return reads::Turn::default() };
+    let session = state.hub.subscription(agent, &turn.run_id).and_then(|s| s.session_id());
+    let fill = turn.background
+        && crate::jobs::tasks(&state.config()).iter().any(|job| {
+            tk::str_or_empty(job.get("run_id")) == turn.run_id
+                && tk::str_or_empty(job.get("template")) == crate::notebook::fill::TEMPLATE
+        });
+    let cap = if fill { reads::PAGES_PER_FILL } else { reads::PAGES_PER_TURN };
+    let live = session.as_deref().is_some_and(|s| {
+        crate::live_calls::LiveCalls::of(&state.briefs).open_calls().iter().any(|c| c.agent == agent && c.live_session == s)
+    });
+    let routine = session.as_deref().is_some_and(|s| s.starts_with("cron_"));
+    let busy = turn.background || live || routine;
+    reads::Turn { run: Some(turn.run_id.clone()), session, cap, busy }
+}
+
+/// One tool call. Err: what Python lets through (a store that cannot be read or written): a 500.
+#[allow(clippy::too_many_arguments)]
+pub async fn call_tool(
+    maker: &AudioMaker,
+    agent: &AgentConfig,
+    name: &str,
+    arguments: &Dict,
+    push: Option<Arc<PushService>>,
+    jobs: Option<Arc<Jobs>>,
+    asking: Option<String>,
+    carnet: crate::notebook::reads::Turn,
+) -> anyhow::Result<Dict> {
+    if name == PROPOSE_TASK {
+        // the same task already waiting or under way: never a second one, nor a second push (jobs.rs `same_task`)
+        if let Some((title, state)) = jobs
+            .as_ref()
+            .and_then(|j| crate::jobs::same_task(&j.config.get(), &agent.name, &tk::str_or_empty(arguments.get("prompt"))))
+        {
+            return Ok(crate::jobs::already_there(&title, &state));
+        }
+        // a small task under « Seulement le critique »: started at once (approval_level.rs)
+        if let Some(started) = match jobs.as_ref() {
+            Some(jobs) => crate::approval_level::auto_task(jobs, agent, arguments).await,
+            None => None,
+        } {
+            return Ok(started);
+        }
+        return crate::jobs::propose_tool(jobs.as_deref(), agent, arguments).await;
+    }
+    if name == crate::jobs::START_TASK {
+        return crate::jobs::start_tool(jobs.as_ref(), agent, arguments).await;
+    }
+    if name == crate::notebook::fill::TOOL_NAME {
+        return crate::notebook::fill::tool_call(jobs.as_ref(), agent).await;
+    }
+    let config = maker.config.get();
+    if WRITING_TOOLS.contains(&name) || name == crate::agent_files::TOOL_NAME || name == crate::give_file::TOOL_NAME {
+        // the place full, or this agent's work paused for space: said plainly, and a card for the person
+        let (c, agent_name) = (config.clone(), agent.name.clone());
+        let refused = tokio::task::spawn_blocking(move || crate::storage_watch::refuse_tool(&c, &agent_name)).await?;
+        if let Some(refused) = refused {
+            return Ok(refused);
+        }
+    }
+    if name == crate::give_file::TOOL_NAME {
+        return Ok(crate::give_file::call(&config, agent, arguments).await);
+    }
+    if name == crate::storage_watch::TOOL_NAME {
+        let (c, agent_name, arguments) = (config.clone(), agent.name.clone(), arguments.clone());
+        return blocking(move || Ok(crate::storage_watch::call(&c, &agent_name, &arguments))).await;
+    }
+    if crate::mail_tidy::TOOL_NAMES.contains(&name) {
+        let (c, agent_name, name_c, arguments) =
+            (config.clone(), agent.name.clone(), name.to_string(), arguments.clone());
+        let called = tokio::task::spawn_blocking(move || {
+            crate::mail_tidy::call(&c, &agent_name, &name_c, &arguments, &mailbox::default_connect())
+        })
+        .await??;
+        // a card the person's level approves at once (approval_level.rs, after the call): no notification
+        let asked = |item: &Dict| !crate::approval_level::auto_card(&config, &agent.name, item);
+        if let (Some(card), Some(push)) = (called.card.as_ref().filter(|c| asked(&crate::mail_tidy::item_of(&config, c))), push.as_ref()) {
+            let line = crate::mail_tidy::item_of(&config, card)
+                .get("bip_summary")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string();
+            // the card's run id: the notification's « Autoriser » answers it through /v1/approve
+            let run_id = format!("{}{}", crate::mail_tidy::RUN_PREFIX, card.id);
+            push.notify_bridge_card(&agent.name, &line, "mail_request", &run_id).await;
+        }
+        for (rule, push) in called
+            .rules
+            .iter()
+            .filter(|r| asked(&crate::mail_rules::item_of(&config, r)))
+            .filter_map(|r| push.as_ref().map(|p| (r, p)))
+        {
+            let line = crate::mail_rules::item_of(&config, rule)
+                .get("bip_summary")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string();
+            let run_id = format!("{}{}", crate::mail_rules::RUN_PREFIX, rule.id);
+            push.notify_bridge_card(&agent.name, &line, "mail_request", &run_id).await;
+        }
+        return Ok(called.result);
+    }
+    if name == crate::phone_exit::agent::TOOL_NAME {
+        if !crate::phone_exit::agent::offered(&config, &agent.name) {
+            return Ok(tool_text("Browsing through your person's phone is not available to you.", true));
+        }
+        let (c, a, arguments) = (config.clone(), agent.clone(), arguments.clone());
+        let (text, is_error, card) =
+            tokio::task::spawn_blocking(move || crate::phone_exit::agent::call(&c, &a, &arguments)).await?;
+        if let (Some(card), Some(push)) = (&card, push.as_ref()) {
+            crate::phone_exit::agent::notify(push, &config, card).await;
+        }
+        return Ok(tool_text(&text, is_error));
+    }
+    if name == crate::triggers::TOOL_NAME {
+        let (c, agent_name, arguments) = (config.clone(), agent.name.clone(), arguments.clone());
+        let (result, card) = tokio::task::spawn_blocking(move || crate::triggers::call(&c, &agent_name, &arguments)).await?;
+        if let (Some((line, id)), Some(push)) = (card, push.as_ref()) {
+            push.notify_bridge_card(&agent.name, &line, "trigger_request", &id).await;
+        }
+        return Ok(result);
+    }
+    if name == crate::rooms_memory::TOOL_NAME {
+        let (c, agent_name, arguments) = (config.clone(), agent.name.clone(), arguments.clone());
+        return blocking(move || Ok(crate::rooms_memory::call(&c, &agent_name, &arguments))).await;
+    }
+    if crate::heavy_work::TOOL_NAMES.contains(&name) {
+        // the green light before heavy work (heavy_work.rs): the place's room, one heavy job at a time; « later »
+        // from the agent's own background task pauses that task until there is room
+        return crate::heavy_work::call_with(config.clone(), agent.clone(), name.to_string(), arguments.clone(), jobs)
+            .await;
+    }
+    if name == crate::archives::records_fill::TOOL {
+        if !crate::archives::enabled(&config, &agent.name) {
+            return Ok(tool_text("No archive is connected to you: the person adds one in your page of the app.", true));
+        }
+        return crate::archives::records_fill::tool_call(config, agent, arguments).await;
+    }
+    if name == crate::weather::TOOL_NAME {
+        if !crate::weather::enabled(&config, &agent.name) {
+            return Ok(tool_text(
+                "The weather is off for you: the person switches « Météo » on in your page of the app.",
+                true,
+            ));
+        }
+        return Ok(crate::weather::call(&config, arguments).await);
+    }
+    if name == crate::routes::TOOL_NAME {
+        return Ok(crate::routes::call(crate::weather::http(), &config, arguments).await);
+    }
+    if name == crate::dates::TOOL_NAME {
+        let (config, agent) = (config.clone(), agent.clone());
+        let arguments = arguments.clone();
+        return blocking(move || Ok(crate::dates::call(&config, &agent, &arguments))).await;
+    }
+    if name == crate::maps::TOOL_NAME {
+        return Ok(crate::maps::call(&config, &agent.name, arguments).await);
+    }
+    if name == crate::friends_cards::TOOL_NAME {
+        let (config, agent, arguments) = (config.clone(), agent.clone(), arguments.clone());
+        return blocking(move || Ok(crate::friends_cards::call(&config, &agent, &arguments))).await;
+    }
+    if name == crate::shared_expenses::TOOL_NAME {
+        let (config, agent, arguments) = (config.clone(), agent.clone(), arguments.clone());
+        return blocking(move || Ok(crate::shared_expenses::call(&config, &agent, &arguments))).await;
+    }
+    if name == crate::skill_library::TOOL_NAME {
+        let (config, agent, arguments) = (config.clone(), agent.clone(), arguments.clone());
+        return blocking(move || Ok(crate::skill_library::call(&config, &agent, &arguments))).await;
+    }
+    if name == crate::templates::FIND_TOOL {
+        return Ok(crate::templates::find_call(&config, agent, arguments).await);
+    }
+    if name == crate::meet::TOOL_NAME {
+        let (config, agent, arguments) = (config.clone(), agent.clone(), arguments.clone());
+        return blocking(move || Ok(crate::meet::call(&config, &agent, &arguments))).await;
+    }
+    if crate::guide::TOOL_NAMES.contains(&name) {
+        let (config, agent, name, arguments) = (config.clone(), agent.clone(), name.to_string(), arguments.clone());
+        return blocking(move || crate::guide::call(&config, &agent, &name, &arguments)).await;
+    }
+    let (agent_c, name_c, arguments_c) = (agent.clone(), name.to_string(), arguments.clone());
+    if name == crate::health::TOOL_NAME {
+        return blocking(move || {
+            if !crate::health::enabled(&config, &agent_c.name) {
+                return Ok(tool_text(
+                    "The person hasn't shared their health data with you: they switch « Santé » on in your page of \
+the BipAgents app.",
+                    true,
+                ));
+            }
+            // On the offer, only through a model run in the Union: checked here at each call (health.rs).
+            if let Some(why) = crate::health::eu_refusal(&config, &agent_c) {
+                tracing::info!(agent = %agent_c.name, "health refused: the agent's model isn't marked as run in the EU");
+                return Ok(tool_text(&why, true));
+            }
+            Ok(crate::health::call(&config, &agent_c.name, &arguments_c))
+        })
+        .await;
+    }
+    if PAGE_TOOLS.contains(&name) {
+        return blocking(move || page_tool(&config, &agent_c, &name_c, &arguments_c)).await;
+    }
+    if name == crate::agent_files::TOOL_NAME {
+        return blocking(move || Ok(crate::agent_files::call(&config, &agent_c, &arguments_c))).await;
+    }
+    if crate::archives::TOOL_NAMES.contains(&name) {
+        return blocking(move || {
+            if !crate::archives::enabled(&config, &agent_c.name) {
+                return Ok(tool_text(
+                    "No archive is connected to you: the person adds one in your page of the app.",
+                    true,
+                ));
+            }
+            crate::archives::call(&config, &agent_c.name, &name_c, &arguments_c, &mailbox::default_connect())
+        })
+        .await;
+    }
+    if mailbox::MAIL_TOOL_NAMES.contains(&name) {
+        return blocking(move || {
+            mailbox::call(&config, &agent_c.name, &name_c, &arguments_c, &mailbox::default_connect())
+        })
+        .await;
+    }
+    if crate::notebook::tools::TOOL_NAMES.contains(&name) {
+        let result =
+            blocking(move || crate::notebook::tools::call(&config, &agent_c.name, &name_c, &arguments_c, &carnet))
+                .await?;
+        let reminder = result
+            .get("content")
+            .and_then(|c| c.get(0))
+            .and_then(|c| c.get("text"))
+            .and_then(Value::as_str)
+            .is_some_and(|t| t.contains("Phone reminder too"));
+        if let (Some(push), true) = (push, reminder) {
+            // The person's phone woken to add the task's reminder now (a silent push; else when the app opens).
+            let agent_name = agent.name.clone();
+            tokio::spawn(async move {
+                push.notify_silent(&agent_name, "reminders", Dict::new()).await;
+            });
+        }
+        return Ok(result);
+    }
+    if KNOWLEDGE_TOOLS.contains(&name) {
+        return blocking(move || knowledge_tool(&config, &agent_c, &name_c, &arguments_c)).await;
+    }
+    if reminders::REMINDER_TOOL_NAMES.contains(&name) {
+        let result =
+            blocking(move || {
+                reminders::call_from(&config, &agent_c.name, &name_c, &arguments_c, None, None, asking.as_deref())
+            })
+            .await?;
+        let failed = result.get("isError").map(py::truthy).unwrap_or(false);
+        if let Some(push) = push {
+            if name != "reminders_list" && !failed {
+                // The person's phone woken to do it now (a silent push; else when the app opens).
+                let agent_name = agent.name.clone();
+                tokio::spawn(async move {
+                    push.notify_silent(&agent_name, "reminders", Dict::new()).await;
+                });
+            }
+        }
+        return Ok(result);
+    }
+    if crate::calendar::TOOL_NAMES.contains(&name) {
+        let (config_s, agent_s) = (config.clone(), agent.name.clone());
+        let sources = tokio::task::spawn_blocking(move || crate::caldav::sources(&config_s, &agent_s)).await?;
+        let phone = crate::calendar::enabled(&config, &agent.name);
+        if let Some(done) = crate::caldav::handle(name, arguments, &sources, phone).await {
+            return Ok(done);
+        }
+        let remote = match crate::calendar::range(arguments, None) {
+            Ok((from, to)) if name == "calendar_list" => crate::caldav::listed(&sources, from, to).await,
+            _ => crate::caldav::Remote::of(&sources),
+        };
+        let result =
+            blocking(move || crate::calendar::call(&config, &agent_c.name, &name_c, &arguments_c, None, &remote))
+                .await?;
+        let asked = result
+            .get("content")
+            .and_then(|c| c.get(0))
+            .and_then(|c| c.get("text"))
+            .and_then(Value::as_str)
+            .is_some_and(|t| t.starts_with(crate::calendar::ASKED));
+        if let Some(push) = push {
+            if asked {
+                // The person's phone woken to do it now (a silent push; else when the app opens).
+                let agent_name = agent.name.clone();
+                tokio::spawn(async move {
+                    push.notify_silent(&agent_name, "calendar", Dict::new()).await;
+                });
+            }
+        }
+        return Ok(result);
+    }
+    if crate::contacts::TOOL_NAMES.contains(&name) {
+        let result =
+            blocking(move || crate::contacts::call(&config, &agent_c.name, &name_c, &arguments_c, None)).await?;
+        let asked = result.get("content").and_then(|c| c.get(0)).and_then(|c| c.get("text")).and_then(Value::as_str)
+            == Some(crate::contacts::ASKED);
+        if let Some(push) = push {
+            if asked {
+                // The person's phone woken to do it now (a silent push; else when the app opens).
+                let agent_name = agent.name.clone();
+                tokio::spawn(async move {
+                    push.notify_silent(&agent_name, "contacts", Dict::new()).await;
+                });
+            }
+        }
+        return Ok(result);
+    }
+    if name == LIST_VOICES {
+        let lines: Vec<String> = maker
+            .voices(agent)
+            .await
+            .iter()
+            .map(|e| format!("{} ({})", tk::str_or_empty(e.get("voice")), tk::str_or_empty(e.get("kind"))))
+            .collect();
+        return Ok(tool_text(&lines.join("\n"), false));
+    }
+    if name != CREATE_AUDIO && name != CREATE_PODCAST {
+        return Ok(tool_text(&format!("unknown tool: {name}"), true));
+    }
+    let title = tk::str_or_empty(arguments.get("title"));
+    let made = if name == CREATE_PODCAST {
+        let turns = match arguments.get("turns") {
+            Some(Value::Array(items)) => items.clone(),
+            _ => Vec::new(),
+        };
+        let voices = match arguments.get("voices") {
+            Some(Value::Object(map)) => map.clone(),
+            _ => Dict::new(),
+        };
+        if let Some(short) = too_short(&turns, asked_minutes(arguments)) {
+            return Ok(tool_text(&short, true));
+        }
+        maker.podcast(agent, &turns, &title, Some(&voices)).await
+    } else {
+        maker.create(agent, &tk::str_or_empty(arguments.get("text")), &title).await
+    };
+    let made = match made {
+        Ok(made) => made,
+        Err(err) => {
+            if let Some(message) = err.downcast_ref::<ValueError>() {
+                return Ok(tool_text(&message.0, true));
+            }
+            if let Some(exc) = err.downcast_ref::<TtsError>() {
+                tracing::warn!(agent = %agent.name, error = %exc, "agent audio failed");
+                return Ok(tk::tool_failure(
+                    &format!("the voice failed ({exc}); try again later"),
+                    "I couldn't make the audio right now; I'll try again in a moment.",
+                ));
+            }
+            return Err(err);
+        }
+    };
+    if crate::family_agent::is_family(&maker.config.get(), &agent.name) {
+        // a family agent's audio is the family's: into its pool, so every member's bridge serves it (family_thread.rs)
+        let (config, agent_c, path) = (maker.config.get(), agent.name.clone(), py::py_str(made.get("path").unwrap_or(&Value::Null)));
+        let name = if title.is_empty() { None } else { Some(title.clone()) };
+        let _ = tokio::task::spawn_blocking(move || crate::shared_files::share_made(&config, &agent_c, &path, name.as_deref())).await;
+    }
+    let cast: String = match made.get("cast") {
+        Some(Value::Object(map)) => {
+            map.iter().map(|(speaker, voice)| format!("\n- {speaker}: {}", py::py_str(voice))).collect()
+        }
+        _ => String::new(),
+    };
+    let seconds = made.get("seconds").and_then(Value::as_f64).unwrap_or(0.0);
+    let voices = if cast.is_empty() { String::new() } else { format!("\nVoices:{cast}") };
+    let length = match asked_minutes(arguments).filter(|_| name == CREATE_PODCAST) {
+        // the length asked for and the one made, and that it is the podcast: a model that saw « 1 min 37 » for
+        // « 2 minutes » made it again and handed both files (2026-10-30 bench, DeepSeek)
+        // and its real length said, not the one asked (« deux minutes » for 1 min 22, 2026-10-30 bench)
+        Some(minutes) => format!(
+            "{real}, asked about {}; spoken length varies, this is the podcast: don't make it again for its length, \
+and if you tell its length, say {real}",
+            duration(minutes * 60.0),
+            real = duration(seconds),
+        ),
+        None => duration(seconds),
+    };
+    // the MEDIA line first: a shortened view of the result (a history search's) still has it (2026-10-28)
+    Ok(tool_text(
+        &format!(
+            "MEDIA:{}\nAudio ready ({}): to give it to the person, put the MEDIA line above alone at the end of your \
+reply, exactly as it is (a new file each time: never one from an earlier turn).{voices}",
+            py::py_str(made.get("path").unwrap_or(&Value::Null)),
+            length,
+        ),
+        false,
+    ))
+}
+
+/// Spoken words a minute, roughly, with the place's voices: the podcast's length told to the model. Measured on
+/// 2026-10-30 (Pocket voices, DeepSeek scripts): 302 words → 1 min 36, 249 → 1 min 22, ≈ 185 a minute (was 150).
+pub const WORDS_PER_MINUTE: f64 = 180.0;
+
+/// A script under this share of the words asked for is sent back before any audio (was 0.8: 1 min 22 for « 2
+/// minutes » went through).
+pub const SHORT_SHARE: f64 = 0.9;
+
+/// create_podcast's `minutes`, when it is a length (a number, or a number in a string; 0 to an hour).
+fn asked_minutes(arguments: &Dict) -> Option<f64> {
+    let minutes = match arguments.get("minutes")? {
+        Value::Number(n) => n.as_f64()?,
+        Value::String(s) => s.trim().replace(',', ".").parse::<f64>().ok()?,
+        _ => return None,
+    };
+    (minutes > 0.0 && minutes <= 60.0).then_some(minutes)
+}
+
+/// The refusal, before any audio is made, of a podcast written far shorter than the length asked (under
+/// `SHORT_SHARE` of its words): the model writes more and calls again, the person gets one file of the right length instead of a
+/// short one and its remakes.
+fn too_short(turns: &[Value], minutes: Option<f64>) -> Option<String> {
+    let minutes = minutes?;
+    let words: usize = turns
+        .iter()
+        .filter_map(|t| t.get("text").and_then(Value::as_str))
+        .map(|t| t.split_whitespace().count())
+        .sum();
+    let wanted = (minutes * WORDS_PER_MINUTE).round() as usize;
+    (words > 0 && (words as f64) < SHORT_SHARE * wanted as f64).then(|| {
+        format!(
+            "too short for {}: {words} words make about {}; write about {wanted} words in all turns (≈ {} a minute), \
+then call again. Nothing was made.",
+            duration(minutes * 60.0),
+            duration(words as f64 / WORDS_PER_MINUTE * 60.0),
+            WORDS_PER_MINUTE as usize
+        )
+    })
+}
+
+/// The note for a file that replaces one made earlier in the same turn (made_files.rs `superseded`): only its line
+/// goes in the reply. None when `made_before` (the turn's files before this one) holds no earlier version of it.
+pub fn remake_note(made_before: &[String], path: &str) -> Option<&'static str> {
+    let mut all = made_before.to_vec();
+    all.push(path.to_string());
+    (!crate::made_files::superseded(&all).is_empty()).then_some(
+        "This new version replaces the one made earlier in this turn: put only this MEDIA line in your reply, \
+not the earlier one.",
+    )
+}
+
+fn agent_of(state: &AppState, headers: &HeaderMap) -> ApiResult<AgentConfig> {
+    let header = headers.get("authorization").and_then(|v| v.to_str().ok()).unwrap_or("");
+    let token = tk::strip(header.strip_prefix("Bearer ").unwrap_or(header));
+    let agent = if token.is_empty() { None } else { agent_for(&state.config(), token) };
+    agent.ok_or_else(|| crate::web::HttpError::new(401, "unknown agent"))
+}
+
+fn empty(status: u16) -> Response {
+    let mut response = Response::new(Body::empty());
+    *response.status_mut() = StatusCode::from_u16(status).unwrap_or(StatusCode::OK);
+    response
+}
+
+/// Aborts the tool's work when the stream is dropped (the client went away).
+struct AbortOnDrop(tokio::task::AbortHandle);
+
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
+const INSTRUCTIONS: &str = "BipAgents: create_audio reads a text aloud with your voice; create_podcast makes a \
+conversation between hosts with different voices; create_page makes a small web page \
+(a dashboard, a tracker, a chart, a tool) on any subject, shown in the app; each \
+gives a MEDIA: line for your reply. Any other file you made (a spreadsheet, a document, a picture) reaches \
+the person with give_file: their cloud drive's link, or a MEDIA: line for your reply (without it: save the file in \
+/envoi and end your reply with MEDIA:/envoi/<name>). mail_search, mail_read, mail_attachment and mail_draft reach the \
+mailboxes the person connected for you (drafts only: you never send). send_files_to_agent gives files to \
+another of your person's agents: it sees none of your folders, your /partage included, so that tool is the way; \
+message_agent asks one of them and brings back its answer.";
+
+/// The `Mcp-Session-Id` the client sent.
+fn session_header(headers: &HeaderMap) -> Option<String> {
+    headers.get("mcp-session-id").and_then(|v| v.to_str().ok()).map(str::trim).filter(|v| !v.is_empty()).map(str::to_string)
+}
+
+/// The `v=` of the query (the tools' version when the agent's entry was written: `url_with`).
+fn version_in(query: Option<&str>) -> Option<String> {
+    query?.split('&').find_map(|pair| pair.strip_prefix("v=")).map(str::to_string)
+}
+
+/// The session the request names, checked against its agent: Err(404) when it is another agent's.
+fn session_of(headers: &HeaderMap, query: Option<&str>, agent: &str) -> ApiResult<Option<String>> {
+    let Some(id) = session_header(headers) else { return Ok(None) };
+    match crate::mcp_sessions::SESSIONS.check(&id, agent, version_in(query).as_deref()) {
+        crate::mcp_sessions::Known::Other => Err(crate::web::HttpError::new(404, "unknown session")),
+        crate::mcp_sessions::Known::Adopted => {
+            tracing::info!(agent = %agent, "an MCP session from before this bridge started taken on");
+            Ok(Some(id))
+        }
+        crate::mcp_sessions::Known::Yes => Ok(Some(id)),
+    }
+}
+
+async fn mcp(
+    State(state): State<AppState>,
+    uri: axum::http::Uri,
+    headers: HeaderMap,
+    body: Bytes,
+) -> ApiResult<Response> {
+    let agent = agent_of(&state, &headers)?;
+    let Ok(message) = serde_json::from_slice::<Value>(&body) else {
+        return Ok(crate::web::json_response(400, &rpc_error(&Value::Null, -32700, "parse error")));
+    };
+    let message = match message {
+        Value::Object(map) if map.get("jsonrpc") == Some(&json!("2.0")) => map,
+        _ => return Ok(crate::web::json_response(400, &rpc_error(&Value::Null, -32600, "invalid request"))),
+    };
+    let method = message.get("method").cloned().unwrap_or(Value::Null);
+    let request_id = message.get("id").cloned().unwrap_or(Value::Null);
+    let params = match message.get("params") {
+        Some(Value::Object(map)) => map.clone(),
+        // Python: `params.get` on a list or a string → AttributeError, a 500
+        Some(v) if py::truthy(v) => return Err(anyhow::anyhow!("AttributeError: params has no attribute 'get'").into()),
+        _ => Dict::new(),
+    };
+    if request_id.is_null() {
+        // a notification (`notifications/initialized`…) or a response: nothing to answer
+        return Ok(empty(202));
+    }
+    let method_name = method.as_str().unwrap_or("");
+    let session = if method_name == "initialize" { None } else { session_of(&headers, uri.query(), &agent.name)? };
+    if method_name == "initialize" {
+        let version = match params.get("protocolVersion") {
+            Some(v) if py::truthy(v) => py::py_str(v),
+            _ => "2025-06-18".into(),
+        };
+        let result = json!({
+            "protocolVersion": version,
+            // the tools it is given change while it runs: told on its session's stream (mcp_sessions.rs)
+            "capabilities": {"tools": {"listChanged": true}},
+            "serverInfo": {"name": SERVER_NAME, "version": crate::VERSION},
+            "instructions": INSTRUCTIONS,
+        });
+        let mut response = crate::web::json_response(200, &rpc_result(&request_id, result));
+        let id = crate::mcp_sessions::SESSIONS.open(&agent.name);
+        if let Ok(value) = HeaderValue::from_str(&id) {
+            response.headers_mut().insert("mcp-session-id", value);
+        }
+        return Ok(response);
+    }
+    if method_name == "ping" {
+        return Ok(crate::web::json_response(200, &rpc_result(&request_id, json!({}))));
+    }
+    if method_name == "tools/list" {
+        let tools = tools_for(&state.config(), &agent);
+        if let Some(id) = session.as_deref() {
+            crate::mcp_sessions::SESSIONS.listed(id, &version_of(&tools));
+        }
+        return Ok(crate::web::json_response(200, &rpc_result(&request_id, json!({"tools": tools}))));
+    }
+    if method_name != "tools/call" {
+        let shown = if method.is_null() { "None".to_string() } else { py::py_str(&method) };
+        return Ok(crate::web::json_response(
+            200,
+            &rpc_error(&request_id, -32601, &format!("method not found: {shown}")),
+        ));
+    }
+    // its results name the app's parts in its language (names.rs: « Notebook », not « Carnet »)
+    let lang = crate::names::agent_language(&state.config(), &agent.name);
+    if crate::update_drain::closing() {
+        // the bridge restarts for an update in a moment: « try again in a minute », not an error (update_drain.rs)
+        tracing::info!(target: "bipbridge::update", agent = %agent.name, tool = %tk::str_or_empty(params.get("name")),
+            "a tool call while the bridge closes for an update: try again in a minute");
+        let result = tool_text(crate::update_drain::busy_text(&lang), false);
+        return Ok(crate::web::json_response(200, &rpc_result(&request_id, Value::Object(result))));
+    }
+    let answer = |mut result: Dict| {
+        crate::names::localize_result(&mut result, &lang);
+        crate::web::json_response(200, &rpc_result(&request_id, Value::Object(result)))
+    };
+    let name = tk::str_or_empty(params.get("name"));
+    let arguments = match params.get("arguments") {
+        Some(Value::Object(map)) => map.clone(),
+        _ => Dict::new(),
+    };
+    // a deferred tool's call that the model's constrained names ended on an in-view tool (tool_diet.rs)
+    let name = crate::tool_diet::reroute(&state.config(), &agent, &name, &arguments);
+    if crate::family_agent::is_family(&state.config(), &agent.name) {
+        // the family's agent: only the family's tools, in every turn, its creator's too (family_agent.rs)
+        // the calendars family members share with it are answered below, once whose turn it is is known
+        let calendar = crate::calendar::TOOL_NAMES.contains(&name.as_str());
+        if let Some(closed) = crate::family_agent::closed_tool(&name).filter(|_| !calendar) {
+            tracing::info!(agent = %agent.name, tool = %name, "tool closed for the family's agent");
+            return Ok(answer(closed));
+        }
+        if crate::family_agent::TOOL_NAMES.contains(&name.as_str()) {
+            let result = crate::family_agent::call_tool(&state.config(), &agent, &name, &arguments)?;
+            return Ok(answer(result));
+        }
+    }
+    if crate::project_agent::is_project(&state.config(), &agent.name) {
+        // a project agent: only its few tools, in every turn (project_agent.rs)
+        if let Some(closed) = crate::project_agent::closed_tool(&name) {
+            tracing::info!(agent = %agent.name, tool = %name, "tool closed for a project agent");
+            return Ok(answer(closed));
+        }
+    }
+    // Whose turn this call is (shared_pages.rs, 2026-11-09): the person's own turns are open everywhere, conversations
+    // shown to friends included; a relative's turn keeps the person's data closed (agent_shares.rs; Hermes closes its
+    // own tools for that run, patch 0018) but may make a page, marked and counted; another household's agent or a
+    // relative's discussion closes the agent while it goes on.
+    let mut page_mark: Option<pages::Mark> = None;
+    let mut asker: Option<crate::shared_pages::Asker> = None;
+    // a family agent's tools are closed above (family_agent.rs `TOOLS`), the same in every turn, a member's too
+    let family = crate::family_agent::is_family(&state.config(), &agent.name);
+    // the family member whose turn it is (a family agent's routine she asks for is hers: routines.rs `by`)
+    let mut member: Option<crate::shared_pages::Asker> = None;
+    let arguments = match crate::shared_pages::who(&state, &agent.name, &name) {
+        crate::shared_pages::Who::Guest => {
+            if let Some(closed) = crate::agent_shares::closed_tool(&name, false) {
+                tracing::info!(agent = %agent.name, tool = %name, "tool closed during another household's turn");
+                return Ok(answer(closed));
+            }
+            arguments
+        }
+        crate::shared_pages::Who::Friend(friend) => {
+            if let Some(closed) = crate::agent_shares::closed_tool(&name, true).filter(|_| !family) {
+                tracing::info!(agent = %agent.name, tool = %name, "tool closed during a relative's turn");
+                return Ok(answer(closed));
+            }
+            if family {
+                member = Some(friend.clone());
+            }
+            if name == crate::shared_files::TOOL_NAME {
+                // the files everyone who uses the agent sent, its pool (shared_files.rs)
+                return Ok(answer(crate::shared_files::read_call(&state, &agent.name, &arguments).await));
+            }
+            if name != CREATE_PAGE {
+                arguments
+            } else {
+                let config = state.config();
+                if let Some(refused) = crate::shared_pages::refused(&config, &agent.name, &friend, &arguments) {
+                    return Ok(answer(refused));
+                }
+                page_mark = Some(crate::shared_pages::mark_for(&config, &agent.name, &friend));
+                asker = Some(friend);
+                crate::shared_pages::friend_arguments(&arguments)
+            }
+        }
+        crate::shared_pages::Who::Owner => {
+            if name == crate::shared_files::TOOL_NAME {
+                // the owner's turns too: the files of everyone who uses the agent are everyone's (shared_files.rs)
+                return Ok(answer(crate::shared_files::read_call(&state, &agent.name, &arguments).await));
+            }
+            if name == CREATE_PAGE && family {
+                // a family agent's page, made in its creator's turn: the family's (every member sees it, marked as
+                // his), never in his personal Carnet (family_thread.rs)
+                let by = Some(state.households.name()).filter(|n| !n.trim().is_empty());
+                page_mark = Some(pages::Mark { group: true, asked_by: by, lang: lang.clone() });
+                crate::shared_pages::friend_arguments(&arguments)
+            } else {
+                // a page made in a conversation shown to friends: theirs to see, not to pass on (read_shares.rs)
+                if name == CREATE_PAGE && crate::read_shares::shared_turn(&state, &agent.name) {
+                    page_mark = Some(pages::Mark { group: true, asked_by: None, lang: lang.clone() });
+                }
+                arguments
+            }
+        }
+    };
+    // The brake (loop_brake.rs), per turn (the run the hub follows, else the routine's): the same write twice, too many
+    // writes, or a routine going round in circles, refused in plain words.
+    let turn = state.hub.turn_of(&agent.name, &name);
+    // the files made in this turn (audio, pages, maps), for the reply that ends it (made_files.rs)
+    let turn_run = turn.as_ref().map(|t| t.run_id.clone());
+    // the Carnet's tools: the turn's pages, capped, and its session for the line under the answer (notebook/reads.rs)
+    let carnet = carnet_turn(&state, &agent.name, turn.as_ref());
+    if let Some(refused) = crate::loop_brake::TURNS.check(
+        &state.config().brake,
+        &agent.name,
+        turn.as_ref(),
+        &name,
+        &arguments,
+        py::time_time(),
+    ) {
+        // the very same write asked again and again: the hub stops the run at its `same_call` (Hermes' run events
+        // don't carry these tools' arguments, so it can't count them itself)
+        if let Some(t) = turn.as_ref() {
+            let calls = crate::loop_brake::TURNS.same_write_calls(&agent.name, Some(t), &name, &arguments);
+            if calls > 1 {
+                state.hub.same_write_again(&agent.name, &t.run_id, &name, calls);
+            }
+        }
+        return Ok(answer(refused));
+    }
+    let wrote = move |agent: &str, name: &str, arguments: &Dict, result: &mut Dict| {
+        if !result.get("isError").map(py::truthy).unwrap_or(false) {
+            crate::loop_brake::TURNS.record_answer(agent, turn.as_ref(), name, arguments, result);
+        }
+        // a routine's limits getting close: told with this call's result
+        if let Some(note) = crate::loop_brake::TURNS.take_note(agent, turn.as_ref()) {
+            crate::loop_brake::add_note(result, &note);
+        }
+    };
+    if name == crate::guide::RENAME_SELF {
+        // its name in the bridge's config (the shared one, not this request's copy), and the mark for its reply
+        let (mut result, mark) = crate::guide::rename_yourself_call(&state.config, &agent, &arguments).await?;
+        if let Some(mark) = mark {
+            crate::made_files::MADE.note(&agent.name, &mark, turn_run.as_deref(), py::time_time());
+        }
+        wrote(&agent.name, &name, &arguments, &mut result);
+        return Ok(answer(result));
+    }
+    if name == crate::live_calls::AFTER_CALL {
+        let mut result = crate::live_calls::after_call(&state, &agent, &arguments);
+        wrote(&agent.name, &name, &arguments, &mut result);
+        return Ok(answer(result));
+    }
+    if name == crate::agent_messages::TOOL_NAME {
+        let called = crate::agent_messages::call(&state.http, Some(state.hub.clone()), &state.config(), &agent, &arguments).await;
+        let mut result = called.result;
+        if let Some(card) = called.card {
+            // the agents at their cap (agent_hops.rs): « Continuer » in the conversation their chain started from
+            if let Some(root) = state.config().agent(Some(&card.agent)).cloned() {
+                crate::card_place::place_for(&state, &root, &card.run_id, card.root_run.as_deref()).await;
+            }
+        }
+        wrote(&agent.name, &name, &arguments, &mut result);
+        return Ok(answer(result));
+    }
+    if name == crate::phone_exit::agent::TOOL_NAME && crate::phone_exit::agent::offered(&state.config(), &agent.name) {
+        // « Passer par mon téléphone pour <site> ? »: its card in this turn's conversation, then pushed (card_place.rs)
+        let cards_before = crate::card_place::waiting(&state, &agent.name);
+        let (c, a, args) = (state.config(), agent.clone(), arguments.clone());
+        let (text, is_error, card) = tokio::task::spawn_blocking(move || crate::phone_exit::agent::call(&c, &a, &args))
+            .await
+            .map_err(anyhow::Error::from)?;
+        if let Some(card) = &card {
+            crate::card_place::place_new(&state, &agent, &cards_before, turn_run.as_deref()).await;
+            crate::phone_exit::agent::notify(&state.push, &state.config(), card).await;
+        }
+        return Ok(answer(tool_text(&text, is_error)));
+    }
+    if name == crate::routines::TOOL_NAME {
+        if !crate::routines::enabled(&state.config(), &agent.name) {
+            return Ok(answer(tool_text("Routines are off for you: the person switches « Routines » on in your page of the app.", true)));
+        }
+        // made in this conversation: its report goes back there
+        let origin = state.hub.asking_session(&agent.name);
+        let cards_before = crate::card_place::waiting(&state, &agent.name);
+        let called = crate::routines::call(&state.config(), &agent.name, &arguments, origin.as_deref());
+        let mut result = called.result;
+        if let Some(id) = called.run {
+            let state = state.clone();
+            tokio::spawn(async move { crate::routines::fire(&state, &id).await });
+        }
+        if let Some((routine, done)) = &called.notice {
+            // its pause or delete, one line in the Boîte, not pushed (audit PI-6 O3)
+            crate::routines::tell_done(&state, &agent, routine, *done, origin.as_deref()).await;
+        }
+        if let (Some((_, card)), Some(m)) = (&called.card, &member) {
+            // asked by a family member in the family's conversation (family_thread.rs): her card, answered from her
+            // bridge (it follows her turn: her Boîte, her push), never the creator's; its reports for everyone
+            crate::routines::set_card_by(&state.config(), &agent.name, card, &m.household);
+            let run_id = format!("{}{card}", crate::routines::RUN_PREFIX);
+            crate::card_place::taken(&state.config(), &run_id);
+            crate::threads::threads_of(&state).touch(&agent.name, origin.as_deref(), "card").await;
+        } else if let Some((line, card)) = called.card {
+            // its card (a routine to start, a proposal): in this turn's conversation (card_place.rs) and pushed, as
+            // routine_trigger's; the agent was told it waits, so no turn resumes to tell it the answer (`taken`);
+            // critical at every level (approval_level.rs), so `settle_new` answers none of them
+            crate::card_place::place_new(&state, &agent, &cards_before, turn_run.as_deref()).await;
+            let run_id = format!("{}{card}", crate::routines::RUN_PREFIX);
+            crate::card_place::taken(&state.config(), &run_id);
+            let session = state.hub.asking_session(&agent.name);
+            let auto = crate::approval_level::settle_new(&state, &agent, &cards_before, session.as_deref()).await;
+            if auto.is_empty() {
+                state.push.notify_bridge_card(&agent.name, &line, "routine_request", &card).await;
+            } else {
+                crate::loop_brake::add_note(&mut result, &crate::approval_level::told(&auto));
+            }
+        }
+        wrote(&agent.name, &name, &arguments, &mut result);
+        return Ok(answer(result));
+    }
+    if family && crate::calendar::TOOL_NAMES.contains(&name.as_str()) {
+        // the calendars its members chose to share with it, each asked on her own place (family_calendar.rs); `who`
+        // defaults to the person writing in this turn (the creator's, a routine's: None)
+        let mut result = crate::family_calendar::call(&state, &agent, &name, &arguments, member.as_ref()).await?;
+        wrote(&agent.name, &name, &arguments, &mut result);
+        return Ok(answer(result));
+    }
+    if crate::family_news::TOOL_NAMES.contains(&name.as_str()) {
+        let mut result = crate::family_news::call_tool(&state.http, &state.config(), &agent, &name, &arguments).await?;
+        wrote(&agent.name, &name, &arguments, &mut result);
+        return Ok(answer(result));
+    }
+    let agent_name = agent.name.clone();
+    let jobs = crate::jobs::jobs_of(&state);
+    let push = state.push.clone();
+    let maker = state.audio_maker.clone();
+    let work_lang = lang.clone();
+    // the cards waiting before the call: those it makes show in its turn's conversation (card_place.rs)
+    let cards_before = crate::card_place::waiting(&state, &agent.name);
+    let card_state = state.clone();
+    let note_config = state.config();
+    // the phone the person asked from in this turn (threads/send.rs): where a reminder goes (reminders.rs)
+    let asking = turn_run.as_deref().and_then(|r| state.hub.subscription(&agent.name, r)).and_then(|s| s.phone());
+    let work = tokio::spawn(async move {
+        let mut result = match page_mark {
+            // a page made in a shared conversation: its mark (shared_pages.rs)
+            Some(mark) if name == CREATE_PAGE => {
+                let (c, a, n, args) = (note_config.clone(), agent.clone(), name.clone(), arguments.clone());
+                blocking(move || page_tool_marked(&c, &a, &n, &args, Some(&mark))).await
+            }
+            _ => call_tool(&maker, &agent, &name, &arguments, Some(push), Some(jobs), asking, carnet).await,
+        };
+        crate::card_place::place_new(&card_state, &agent, &cards_before, turn_run.as_deref()).await;
+        // the cards the person's level approves at once (approval_level.rs): answered, told in the result
+        let session = turn_run.as_deref().and_then(|r| card_state.hub.subscription(&agent.name, r)).and_then(|s| s.session_id());
+        let auto = crate::approval_level::settle_new(&card_state, &agent, &cards_before, session.as_deref()).await;
+        if let (Ok(done), false) = (&mut result, auto.is_empty()) {
+            crate::loop_brake::add_note(done, &crate::approval_level::told(&auto));
+        }
+        if let Ok(done) = &mut result {
+            crate::names::localize_result(done, &work_lang);
+            wrote(&agent.name, &name, &arguments, done);
+            if let (Some(friend), false) = (&asker, done.get("isError").map(py::truthy).unwrap_or(false)) {
+                // made for a relative: hers to see, counted in her day (shared_pages.rs)
+                let page = crate::made_files::media_path_of(done)
+                    .and_then(|p| p.strip_suffix(".html").and_then(|p| p.rsplit('/').next()).map(str::to_string));
+                if let Some(page) = page {
+                    let (config, agent_name, friend) = (note_config.clone(), agent.name.clone(), friend.clone());
+                    let _ = tokio::task::spawn_blocking(move || crate::shared_pages::note(&config, &agent_name, &page, &friend)).await;
+                }
+            }
+            if crate::made_files::makes_files(&name) {
+                let before = turn_run.as_deref().map(|run| crate::made_files::MADE.in_run(&agent.name, run));
+                crate::made_files::MADE.note_result(&agent.name, done, turn_run.as_deref(), py::time_time());
+                // a podcast remade in the turn: the model told to hand only the new one (the bridge drops the others)
+                if let (Some(before), Some(path)) = (before, crate::made_files::media_path_of(done)) {
+                    if let Some(note) = remake_note(&before, &path) {
+                        crate::loop_brake::add_note(done, note);
+                    }
+                }
+            }
+        }
+        result
+    });
+    let accept = headers.get("accept").and_then(|v| v.to_str().ok()).unwrap_or("");
+    if !accept.contains("text/event-stream") {
+        let result = work.await.map_err(anyhow::Error::from)??;
+        return Ok(answer(result));
+    }
+    let guard = AbortOnDrop(work.abort_handle());
+    let tools_of = (state.clone(), agent_name.clone());
+    let events = async_stream::stream! {
+        let _guard = guard;
+        let mut work = work;
+        loop {
+            match tokio::time::timeout(Duration::from_secs_f64(KEEPALIVE_SECONDS), &mut work).await {
+                Err(_) => yield Ok::<Bytes, Infallible>(Bytes::from_static(b": reading aloud\n\n")),
+                Ok(Ok(Ok(result))) => {
+                    // its tools changed and its session's stream may be closed: told here too, before the result
+                    if let Some(id) = session.as_deref() {
+                        let (state, name) = &tools_of;
+                        let config = state.config();
+                        if let Some(agent) = config.agent(Some(name)) {
+                            if crate::mcp_sessions::SESSIONS.due(id, &crate::mcp_sessions::fingerprint(&config, agent)) {
+                                tracing::info!(agent = %name, "tools changed: told with a call's result");
+                                yield Ok(Bytes::from(format!("event: message\ndata: {}\n\n", crate::mcp_sessions::LIST_CHANGED)));
+                            }
+                        }
+                    }
+                    let payload = py::dumps(&rpc_result(&request_id, Value::Object(result)));
+                    yield Ok(Bytes::from(format!("event: message\ndata: {payload}\n\n")));
+                    break;
+                }
+                Ok(Ok(Err(err))) => {
+                    tracing::error!(exc = %format!("{err:#}"), "Exception in ASGI application");
+                    break;
+                }
+                Ok(Err(err)) => {
+                    tracing::error!(exc = %err, "Exception in ASGI application");
+                    break;
+                }
+            }
+        }
+    };
+    let mut response = Response::new(Body::from_stream(events));
+    response.headers_mut().insert("content-type", HeaderValue::from_static("text/event-stream; charset=utf-8"));
+    response.headers_mut().insert("cache-control", HeaderValue::from_static("no-cache"));
+    Ok(response)
+}
+
+/// GET: the session's server stream, where `notifications/tools/list_changed` goes when the agent's tools change
+/// (mcp_sessions.rs). Without a session (a client that never got one): no stream, as before.
+async fn server_stream(State(state): State<AppState>, uri: axum::http::Uri, headers: HeaderMap) -> ApiResult<Response> {
+    let agent = agent_of(&state, &headers)?;
+    let Some(id) = session_of(&headers, uri.query(), &agent.name)? else {
+        let mut response = empty(405); // no server-initiated stream
+        response.headers_mut().insert("allow", HeaderValue::from_static("POST"));
+        return Ok(response);
+    };
+    let sessions = &crate::mcp_sessions::SESSIONS;
+    let Some(number) = sessions.new_stream(&id) else { return Err(crate::web::HttpError::new(404, "unknown session")) };
+    let name = agent.name;
+    let events = async_stream::stream! {
+        let mut quiet_since = Instant::now();
+        loop {
+            if !sessions.serves(&id, number) {
+                break; // ended (DELETE), or a newer stream of the session took over
+            }
+            let config = state.config();
+            let Some(agent) = config.agent(Some(&name)).cloned() else { break };
+            if sessions.due(&id, &crate::mcp_sessions::fingerprint(&config, &agent)) {
+                tracing::info!(agent = %name, "tools changed: told on its MCP stream");
+                yield Ok::<Bytes, Infallible>(Bytes::from(format!("event: message\ndata: {}\n\n", crate::mcp_sessions::LIST_CHANGED)));
+                quiet_since = Instant::now();
+            } else if quiet_since.elapsed().as_secs_f64() >= crate::mcp_sessions::KEEPALIVE_SECONDS {
+                yield Ok(Bytes::from_static(b": keepalive\n\n"));
+                quiet_since = Instant::now();
+            }
+            drop(config);
+            sessions.wait(crate::mcp_sessions::CHECK_SECONDS).await;
+        }
+    };
+    let mut response = Response::new(Body::from_stream(events));
+    response.headers_mut().insert("content-type", HeaderValue::from_static("text/event-stream; charset=utf-8"));
+    response.headers_mut().insert("cache-control", HeaderValue::from_static("no-cache"));
+    Ok(response)
+}
+
+/// DELETE: the session ends (its stream with it).
+async fn end_session(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<Response> {
+    let agent = agent_of(&state, &headers)?;
+    if let Some(id) = session_header(&headers) {
+        crate::mcp_sessions::SESSIONS.end(&id, &agent.name);
+    }
+    Ok(empty(200))
+}
+
+/// `agent_tools_router()`: the agents' MCP tools, each agent with its own token. Mounted at the root.
+pub fn router() -> Router<AppState> {
+    Router::new().route(PATH, post(mcp).get(server_stream).delete(end_session))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Alex, 2026-11-01: an English person's agents said « in your Carnet (Notebook) ». What an agent writing in
+    /// English, German or Spanish reads — its personality's blocks, its tools' descriptions, their answers, a
+    /// background task's instructions — names the app's parts in its language (names.rs); a French agent's are as
+    /// they were.
+    #[test]
+    fn an_agent_in_another_language_reads_no_french_product_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = Config::with_key("k".repeat(40));
+        config.hermes.home = dir.path().join("hermes").to_string_lossy().into_owned();
+        config.outbox.db_path = dir.path().join("data/outbox.db").to_string_lossy().into_owned();
+        for lang in ["en", "de", "es", "fr"] {
+            let agent = AgentConfig { name: format!("coach-{lang}"), display_name: "Coach".into(), ..Default::default() };
+            let mut soul = crate::souls::with_language("You are Coach.\n", Some(lang));
+            soul = crate::souls::with_notebook(&soul, true);
+            soul = crate::souls::with_archives(&soul, true);
+            soul = crate::souls::with_health(&soul, true);
+            soul = crate::souls::with_payments(&soul, &crate::souls::Shopping::SetUp);
+            soul = crate::souls::with_shared_memory(&soul, Some(true));
+            soul = crate::souls::with_server(&soul, true);
+            soul = crate::souls::with_style(&soul, Some("detailed"), None);
+            let folder = crate::agents_admin::profile_folder(&config, &agent);
+            std::fs::create_dir_all(&folder).unwrap();
+            std::fs::write(folder.join("SOUL.md"), &soul).unwrap();
+            config.agents.insert(agent.name.clone(), agent.clone());
+
+            let tools = tools_for_at(&config, &agent, true);
+            let family = crate::souls::split_language(&soul).1;
+            let mut texts = vec![
+                ("soul", soul.clone()),
+                ("compact", crate::souls::language_block_compact(Some(lang))),
+                ("tools", serde_json::to_string(&tools).unwrap()),
+                ("task", crate::names::localize(crate::jobs::INSTRUCTIONS, lang)),
+                ("fill", crate::names::localize(crate::notebook::fill::PROMPT, lang)),
+                ("family", crate::family_agent::with_family(&soul, true)),
+                ("member", crate::names::localize(&crate::family_agent::member_instructions("Léa"), lang)),
+            ];
+            assert_eq!(family.as_deref(), Some(lang));
+            // the Carnet's answers: an empty search, then a fact filed
+            for (name, arguments) in [
+                (crate::notebook::tools::SEARCH, json!({})),
+                (crate::notebook::tools::WRITE, json!({"page": "Marc", "kind": "person", "facts": ["Likes jazz"]})),
+            ] {
+                let Value::Object(arguments) = arguments else { unreachable!() };
+                let turn = crate::notebook::reads::Turn::default();
+                let mut result = crate::notebook::tools::call(&config, &agent.name, name, &arguments, &turn).unwrap();
+                crate::names::localize_result(&mut result, &crate::names::agent_language(&config, &agent.name));
+                texts.push((name, result["content"][0]["text"].as_str().unwrap().to_string()));
+            }
+            for (what, text) in texts {
+                let found = crate::names::french_in(&text);
+                if lang == "fr" {
+                    assert!(what != "soul" || found.contains(&"Carnet"), "French as it was: {text}");
+                } else {
+                    assert_eq!(found, Vec::<&str>::new(), "{lang} {what}: {text}");
+                }
+            }
+            if lang != "fr" {
+                let notebook = crate::names::names(lang).notebook;
+                assert!(soul.contains("never by another language's names") && soul.contains(notebook), "{soul}");
+            }
+        }
+    }
+
+    /// Every tool the bridge can give an agent, whatever its settings: each MCP server's list (`bipagents`, the
+    /// Carnet's, the guide's, the family's and project agents', `bipagents_files`, `_pay`, `_link`, `_vault`,
+    /// `_checkout`, `_connectors`), by name.
+    fn every_served_tool() -> Vec<String> {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = Config::with_key("k".repeat(40));
+        config.hermes.home = dir.path().join("hermes").to_string_lossy().into_owned();
+        config.outbox.db_path = dir.path().join("data/outbox.db").to_string_lossy().into_owned();
+        let agent = AgentConfig { name: "vie".into(), display_name: "Vie".into(), ..Default::default() };
+        config.agents.insert(agent.name.clone(), agent.clone());
+        let mut tools: Vec<Value> = tools().to_vec();
+        tools.extend(crate::family_news::tools());
+        tools.extend(crate::notebook::tools::tools(true));
+        tools.push(crate::notebook::fill::tool());
+        tools.push(crate::weather::weather_tool());
+        tools.push(crate::health::health_tool(&[]));
+        tools.extend(crate::calendar::tools());
+        tools.push(crate::meet::tool());
+        tools.extend(crate::contacts::tools());
+        tools.push(crate::agent_files::tool());
+        tools.push(crate::agent_messages::tool());
+        tools.extend(crate::archives::tools(&config, &agent.name));
+        tools.push(crate::archives::records_fill::tool(&config, &agent.name));
+        tools.extend(crate::guide::every_tool(&config));
+        tools.push(json!({"name": crate::templates::FIND_TOOL})); // the guide's only (templates::tools)
+        tools.push(crate::skill_library::tool());
+        tools.extend(crate::heavy_work::tools());
+        tools.push(crate::phone_exit::agent::tool());
+        tools.extend(crate::family_agent::tools(&config, &agent.name));
+        tools.extend(crate::project_agent::tools(&config));
+        tools.extend(crate::sandbox::tools());
+        tools.extend(crate::card_pay::tools());
+        tools.extend(crate::link_wallet::tools());
+        tools.extend(crate::vault_logins::tools());
+        tools.extend(crate::handover::tools());
+        tools.extend(crate::connectors::tools());
+        let mut names: Vec<String> = tools.iter().map(|t| t["name"].as_str().unwrap().to_string()).collect();
+        names.sort();
+        names.dedup();
+        names
+    }
+
+    /// Alex, 2026-11-07: « J'utilise « Routine schedule » », « J'utilise « Give file » » in the working line, « Utiliser
+    /// un outil » in the « Étapes ». Every tool an agent can be given — the bridge's, each server's list, and Hermes'
+    /// own (tool_kinds::HERMES_TOOLS: v0.22.5 and its patches) — has its words in scripts/tool-labels.py: a kind by its
+    /// exact name or a prefix (the apps' row and working line, never the tool's name), and the « Étapes » step that
+    /// kind makes (or none, said so). A new tool without them fails here.
+    #[test]
+    fn every_tool_an_agent_can_call_has_its_words() {
+        use crate::tool_kinds::{HERMES_TOOLS, KINDS, STEPS};
+        let served = every_served_tool();
+        assert!(served.len() > 90 && served.contains(&crate::routines::TOOL_NAME.to_string()), "{served:?}");
+        let hermes = HERMES_TOOLS.iter().map(|t| t.to_string());
+        let unworded: Vec<String> = served
+            .iter()
+            .cloned()
+            .chain(hermes)
+            .filter(|name| {
+                !KINDS.iter().any(|k| k.names.contains(&name.as_str()) || k.prefixes.iter().any(|p| name.starts_with(p)))
+            })
+            .collect();
+        assert_eq!(unworded, Vec::<String>::new(), "give them a kind (and a step) in scripts/tool-labels.py");
+        // as Hermes names them (`mcp__bipagents__…`, the agent's browser's), still worded
+        for tool in ["mcp__bipagents__routine_schedule", "mcp__bipagents_files__shared_files_list", "mcp__stealth__navigate"] {
+            assert_ne!(crate::threads::layout::kind_of(tool), "unknown", "{tool}");
+        }
+        for kind in KINDS {
+            assert!(kind.step.is_none_or(|s| STEPS.iter().any(|w| w.id == s)), "{}: no words for its step", kind.id);
+        }
+        assert!(STEPS.iter().any(|w| w.id == "unknown"), "a connector's tool has its step");
+    }
+
+    #[test]
+    fn a_long_text_is_read_in_short_pieces_paragraph_by_paragraph() {
+        let text = format!(
+            "{}\n\nDeuxième partie, plus courte.\nMEDIA:/tmp/old.mp3\n",
+            "Bonjour et bienvenue. ".repeat(30).trim()
+        );
+        let chunks = split_for_speech(&text, 120);
+        assert!(chunks.iter().all(|(p, _)| p.chars().count() <= 120));
+        let joined: Vec<&str> = chunks.iter().map(|(p, _)| p.as_str()).collect();
+        assert_eq!(joined.join(" ").matches("Bonjour et bienvenue.").count(), 30);
+        assert_eq!(chunks.last().unwrap(), &("Deuxième partie, plus courte.".to_string(), PAUSE_PARAGRAPH_MS));
+        assert_eq!(chunks.iter().filter(|(_, p)| *p == PAUSE_PARAGRAPH_MS).count(), 2);
+        let long_one = format!("{}.", vec!["une idée assez longue"; 20].join(", "));
+        assert!(split_for_speech(&long_one, 60).iter().all(|(p, _)| p.chars().count() <= 60));
+    }
+
+    #[test]
+    fn python_splits_and_names() {
+        assert_eq!(paragraphs("a\n \n\nb\nc\n\n"), vec!["a", "b\nc", ""]);
+        assert_eq!(split_after("Un. Deux!  Trois", &['.', '!']), vec!["Un.", "Deux!", "Trois"]);
+        assert_eq!(slug("Podcast du matin"), "podcast-du-matin");
+        assert_eq!(slug("!!"), "audio");
+        assert_eq!(duration(65.4), "1 min 05 s");
+        assert_eq!(duration(2.5), "2 s");
+    }
+
+    #[test]
+    fn a_wav_is_tagged_with_its_ai_mark() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("a.wav");
+        std::fs::write(&path, crate::tts::pcm16_to_wav(&[0, 0, 1, 0], OUTPUT_RATE, 1)).unwrap();
+        tag_wav(&path, "abc", "BipAgents").unwrap();
+        let data = std::fs::read(&path).unwrap();
+        assert_eq!(u32::from_le_bytes(data[4..8].try_into().unwrap()) as usize, data.len() - 8);
+        assert_eq!(&data[48..52], b"LIST");
+        assert!(data.windows(4).any(|w| w == b"ICMT"));
+    }
+
+    #[test]
+    fn a_podcast_far_shorter_than_asked_is_sent_back_before_any_audio() {
+        let turns = |words: usize| -> Vec<Value> {
+            let text = vec!["mot"; words].join(" ");
+            vec![json!({"speaker": "Léa", "text": text}), json!("not a turn")]
+        };
+        let asked = |v: Value| -> Option<f64> {
+            let mut d = Dict::new();
+            d.insert("minutes".into(), v);
+            asked_minutes(&d)
+        };
+        assert_eq!(asked(json!(2)), Some(2.0));
+        assert_eq!(asked(json!("1,5")), Some(1.5));
+        assert_eq!(asked(json!(0)), None);
+        assert_eq!(asked(json!(600)), None);
+        assert_eq!(asked_minutes(&Dict::new()), None);
+        // « 2 minutes »: 360 words wanted; 249 (1 min 22 on the 2026-10-30 bench) and 320 sent back, 324 made
+        let short = too_short(&turns(249), Some(2.0)).unwrap();
+        assert!(short.contains("249 words") && short.contains("about 360 words") && short.contains("Nothing was made"));
+        assert!(short.contains("1 min 23 s") && short.contains("≈ 180 a minute"), "{short}");
+        assert!(too_short(&turns(320), Some(2.0)).is_some());
+        assert_eq!(too_short(&turns(324), Some(2.0)), None);
+        // no length asked: never
+        assert_eq!(too_short(&turns(10), None), None);
+    }
+
+    #[test]
+    fn a_remade_podcast_is_told_to_hand_only_the_new_file() {
+        let first = "/bipagents/audio/vie/20261030-101503-mars.m4a".to_string();
+        let second = "/bipagents/audio/vie/20261030-101722-mars.m4a";
+        assert!(remake_note(std::slice::from_ref(&first), second).is_some());
+        assert!(remake_note(&[], second).is_none());
+        assert!(remake_note(&["/bipagents/audio/vie/20261030-101503-venus.m4a".into()], second).is_none());
+        let description = create_podcast_tool()["description"].as_str().unwrap().to_string();
+        assert!(description.contains("180 spoken words a minute") && description.contains("≈ 360 words"));
+        assert!(create_podcast_tool()["inputSchema"]["properties"]["minutes"].is_object());
+    }
+}

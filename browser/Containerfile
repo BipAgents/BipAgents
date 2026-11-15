@@ -1,0 +1,87 @@
+# The agents' visible browser: a real Chrome (Chromium on ARM, where Google ships none for Linux) on a screen of its
+# own, driven through the stealth-browser-mcp server. One container per agent (bipbridge/browsers.py): its own profile,
+# and what a page can reach (file:// included) is this container, never the host.
+#
+# Nothing of stealth-browser-mcp (MIT) is kept in our repository: it is fetched here from its own repository, at the
+# commit BipAgents is tested with, then our patch (stealth.patch) is applied. Its Python packages come from PyPI at
+# pinned versions (requirements.txt); nodriver among them is AGPL v3, installed as a separate package, unmodified.
+FROM registry.fedoraproject.org/fedora:44
+
+ARG STEALTH_REPO=https://github.com/vibheksoni/stealth-browser-mcp.git
+ARG STEALTH_COMMIT=a7b9eea8aa8dac36dc140ce4f2778d48021e79c0
+
+# Chrome and the system's packages, as of the day of the build: the installer and the nightly refresh
+# (installer/bipinstall/browser_refresh.py) pass a new BROWSER_REFRESH when Fedora or Google have security updates,
+# so this layer is installed again rather than taken from the build cache. The pinned layers below stay as they are.
+ARG BROWSER_REFRESH=first-build
+RUN echo "packages of ${BROWSER_REFRESH}" && dnf -y upgrade --refresh && dnf -y install --setopt=install_weak_deps=False \
+        python3.11 git-core procps-ng \
+        xorg-x11-server-Xvfb x11vnc openbox lxpanel \
+        liberation-fonts dejavu-sans-fonts dejavu-serif-fonts google-noto-sans-fonts \
+        google-noto-emoji-color-fonts google-noto-cjk-fonts \
+        mesa-dri-drivers mesa-vulkan-drivers vulkan-loader mesa-libEGL mesa-libgbm nss alsa-lib \
+    && if [ "$(uname -m)" = x86_64 ]; then \
+           printf '[google-chrome]\nname=google-chrome\nbaseurl=https://dl.google.com/linux/chrome/rpm/stable/x86_64\nenabled=1\ngpgcheck=1\ngpgkey=https://dl.google.com/linux/linux_signing_key.pub\n' \
+               > /etc/yum.repos.d/google-chrome.repo \
+           && dnf -y install google-chrome-stable; \
+       else \
+           dnf -y install chromium; \
+       fi \
+    && dnf clean all
+
+# Chrome's managed policies (policies.json): it keeps no passwords, cards or addresses of its own (the vault fills
+# them, and they stay in it), and opens no file:// page, page source, chrome:// page (its new tab aside) nor DevTools
+# page: the container's own files are the browser's secrets (/run/bipagents: the screen's password, the DevTools
+# secret), its profile's session files hold what was typed in its tabs, and Chrome's own pages install extensions or
+# open DevTools (security audit 11/11). The bridge refuses those addresses too (browser_mcp.rs). Not chrome-untrusted://
+# (Chrome's reading mode and Google Lens are pages of it, which the person may open): the bridge refuses it to the agent.
+COPY policies.json /opt/stealth/policies.json
+RUN for dir in /etc/opt/chrome/policies/managed /etc/chromium/policies/managed; do \
+        mkdir -p "$dir" && cp /opt/stealth/policies.json "$dir/bipagents.json"; \
+    done
+
+COPY requirements.txt stealth.patch /opt/stealth/
+RUN git clone --quiet "$STEALTH_REPO" /opt/stealth/stealth-browser-mcp \
+    && git -C /opt/stealth/stealth-browser-mcp checkout --quiet "$STEALTH_COMMIT" \
+    && git -C /opt/stealth/stealth-browser-mcp apply /opt/stealth/stealth.patch \
+    && rm -rf /opt/stealth/stealth-browser-mcp/.git \
+    && python3.11 -m venv /opt/stealth/venv \
+    && /opt/stealth/venv/bin/pip install --no-cache-dir --quiet --disable-pip-version-check -r /opt/stealth/requirements.txt
+
+COPY entrypoint.sh mcp.sh open_browser.sh devtools_relay.py hold_gate.py /opt/stealth/
+# The server's code stays read-only for the user it runs as; only its output folder is theirs.
+RUN chmod 755 /opt/stealth/entrypoint.sh /opt/stealth/mcp.sh /opt/stealth/open_browser.sh && useradd -m -u 1000 bip \
+    && install -d -o bip -g bip /opt/stealth/stealth-browser-mcp/element_clones
+
+# Read by the MCP server (our patch) and by Chrome: the screen, the DevTools port Hermes reaches (relayed on 9223 by
+# devtools_relay.py),
+# the persistent profile and launch flags (the bridge adds the language, and a GPU's when it passes /dev/dri in), and
+# the flags the server adds in any container that this one does without (a single process, no GPU at all, and a
+# redundant one Chrome shows a warning bar for; nodriver's --remote-allow-origins=*, so Chrome refuses a DevTools
+# WebSocket from a web page), a browser always shown on the screen (an agent's headless ignored), and
+# how long a starting Chrome may take to open its DevTools (nodriver's own ~3 s failed cold starts on a loaded server).
+# No back/forward cache: a page left keeps no live copy to come back to with « back » (a card payment's page, besides
+# the history the bridge forgets after it, bridge-rs/src/card_pay.rs `release`).
+# BROWSER_IDLE_TIMEOUT=0: the server's own reaper never lets go of the agent's browser; the bridge stops the whole
+# container once nobody uses it (bip-browser-mcp's `idle`). FastMCP (3) shows no banner and never asks PyPI for a newer
+# version at each start.
+ENV DISPLAY=:99 \
+    STEALTH_CDP_PORT=9222 \
+    STEALTH_USER_DATA_DIR=/home/bip/profile \
+    STEALTH_BROWSER_ARGS="--start-maximized;--no-first-run;--no-default-browser-check;--disable-dev-shm-usage;--ignore-gpu-blocklist;--test-type;--hide-crash-restore-bubble;--disable-back-forward-cache" \
+    STEALTH_DROP_ARGS="--single-process;--disable-gpu;--disable-setuid-sandbox;--remote-allow-origins=*" \
+    STEALTH_HEADFUL=1 \
+    STEALTH_CONNECT_SECONDS=45 \
+    BROWSER_IDLE_TIMEOUT=0 \
+    FASTMCP_SHOW_SERVER_BANNER=false \
+    FASTMCP_CHECK_FOR_UPDATES=off \
+    PYTHONWARNINGS=ignore \
+    PYTHONUNBUFFERED=1
+
+# The DevTools relay's version (devtools_relay.py RELAY_VERSION): from 3 it asks for the browser's secret, and the
+# nightly refresh (browser_refresh.py) gives the browsers set up before it theirs.
+LABEL bipagents.relay="3"
+
+USER bip
+WORKDIR /home/bip
+ENTRYPOINT ["/opt/stealth/entrypoint.sh"]

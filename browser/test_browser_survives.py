@@ -1,0 +1,244 @@
+"""The agent's Chrome outlives its MCP server (python3 -m pytest browser/test_browser_survives.py).
+
+Hermes restarts its MCP servers (a gateway restart, a stdio reconnect, a `hermes chat` that ends); before
+stealth.patch started Chrome apart, the Chrome a server launched died with it, and the agent had to start its browser
+again at every turn, its page lost. Here, in a real container of the browser image (BIP_BROWSER_IMAGE, default
+`bipagents-browser`, built from this folder; podman or docker): a page opened through one server is still there, under
+the same instance id, through the next one, whether the first ended cleanly or was killed; `close_instance` closes the
+pages and leaves Chrome; only `quit_browser` quits it. Skipped where no engine or image is at hand.
+"""
+import json
+import os
+import shutil
+import subprocess
+import time
+import uuid
+
+import pytest
+
+IMAGE = os.environ.get("BIP_BROWSER_IMAGE", "bipagents-browser")
+ENGINE = next((e for e in ("podman", "docker") if shutil.which(e)), None)
+
+
+def _image_present() -> bool:
+    if ENGINE is None:
+        return False
+    return subprocess.run([ENGINE, "image", "inspect", IMAGE], capture_output=True).returncode == 0
+
+
+pytestmark = pytest.mark.skipif(not _image_present(), reason=f"no container engine or no {IMAGE} image")
+
+PAGE = "data:text/html,<title>Still here</title><p>the agent's page</p>"
+
+
+class Server:
+    """One MCP server over stdio, as Hermes starts it (`<engine> exec -i <container> /opt/stealth/mcp.sh`)."""
+
+    def __init__(self, container: str):
+        self.process = subprocess.Popen([ENGINE, "exec", "-i", container, "/opt/stealth/mcp.sh"],
+                                        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        self.next = 0
+        self.request("initialize", {"protocolVersion": "2025-06-18", "capabilities": {},
+                                    "clientInfo": {"name": "test", "version": "1"}})
+        self.send({"jsonrpc": "2.0", "method": "notifications/initialized"})
+
+    def send(self, message: dict) -> None:
+        self.process.stdin.write((json.dumps(message) + "\n").encode())
+        self.process.stdin.flush()
+
+    def request(self, method: str, params: dict) -> dict:
+        self.next += 1
+        self.send({"jsonrpc": "2.0", "id": self.next, "method": method, "params": params})
+        while True:
+            line = self.process.stdout.readline()
+            assert line, "the server ended"
+            message = json.loads(line)
+            if message.get("id") == self.next:
+                return message
+
+    def call(self, tool: str, **arguments):
+        answer = self.request("tools/call", {"name": tool, "arguments": arguments})
+        result = answer["result"]
+        assert not result.get("isError"), result
+        if "structuredContent" in result:
+            value = result["structuredContent"]
+            return value.get("result", value) if isinstance(value, dict) and set(value) == {"result"} else value
+        return json.loads(result["content"][0]["text"])
+
+    def end(self) -> None:
+        self.process.stdin.close()
+        self.process.wait(timeout=30)
+
+    def kill(self) -> None:
+        self.process.kill()
+        self.process.wait(timeout=10)
+
+
+def chromes(container: str) -> int:
+    out = subprocess.run([ENGINE, "exec", container, "pgrep", "-c", "-f", "--", "--user-data-dir=/home/bip/profile"],
+                         capture_output=True, text=True).stdout.strip()
+    return int(out or 0)
+
+
+@pytest.fixture
+def container():
+    name = f"bip-survives-{uuid.uuid4().hex[:8]}"
+    subprocess.run([ENGINE, "run", "-d", "--rm", "--name", name, "--shm-size", "1g", IMAGE], check=True,
+                   capture_output=True)
+    try:
+        for _ in range(100):
+            if subprocess.run([ENGINE, "exec", name, "test", "-e", "/tmp/.X11-unix/X99"]).returncode == 0:
+                break
+            time.sleep(0.2)
+        yield name
+    finally:
+        subprocess.run([ENGINE, "rm", "-f", name], capture_output=True)
+
+
+def test_the_page_and_its_instance_outlive_the_server(container):
+    first = Server(container)
+    instance = first.call("spawn_browser")["instance_id"]
+    first.call("navigate", instance_id=instance, url=PAGE)
+    # Asked again within the same server: the same browser, not a second one.
+    assert first.call("spawn_browser")["instance_id"] == instance
+    first.end()   # Hermes restarts its MCP server
+    assert chromes(container) > 0
+
+    second = Server(container)
+    state = second.call("get_instance_state", instance_id=instance)   # the agent's old id, straight away
+    assert state["title"] == "Still here"
+    assert [i["instance_id"] for i in second.call("list_instances") if i["source"] == "active"] == [instance]
+    assert second.call("spawn_browser")["instance_id"] == instance
+    second.kill()   # killed mid-browse: Chrome stays all the same
+
+    third = Server(container)
+    assert third.call("get_instance_state", instance_id=instance)["title"] == "Still here"
+    # Done with the task: its pages close, Chrome stays for the next one.
+    assert third.call("close_instance", instance_id=instance) is True
+    assert chromes(container) > 0
+    assert third.call("spawn_browser")["instance_id"] == instance
+    assert third.call("get_instance_state", instance_id=instance)["url"] == "about:blank"
+    # Only the person's « quit » quits it; the next spawn_browser starts it again, under the same id.
+    assert third.call("close_instance", instance_id=instance, quit_browser=True) is True
+    for _ in range(50):
+        if chromes(container) == 0:
+            break
+        time.sleep(0.2)
+    assert chromes(container) == 0
+    assert third.call("spawn_browser")["instance_id"] == instance
+    assert chromes(container) > 0
+    third.end()
+
+
+def test_the_caller_never_chooses_chromes_launch(container):
+    """Audit 11/11, BV-3: an agent steered by a page quit Chrome, then started it with `--no-proxy-server` (the egress
+    proxy's flag displaced: no send guard). The container's flags, profile and no proxy, whatever the call says."""
+    server = Server(container)
+    instance = server.call("spawn_browser")["instance_id"]
+    assert server.call("close_instance", instance_id=instance, quit_browser=True) is True
+    for _ in range(50):
+        if chromes(container) == 0:
+            break
+        time.sleep(0.2)
+    server.call("spawn_browser", browser_args=["--no-proxy-server", "--user-data-dir=/tmp/elsewhere"],
+                proxy="http://203.0.113.9:1", user_data_dir="/tmp/elsewhere", user_agent="Evil/1")
+    out = subprocess.run([ENGINE, "exec", container, "pgrep", "-a", "-f", "--", "--remote-debugging-port="],
+                         capture_output=True, text=True).stdout
+    main = [line for line in out.splitlines() if "--type=" not in line]
+    assert main and all("--user-data-dir=/home/bip/profile" in line for line in main), out
+    for caller in ("--no-proxy-server", "203.0.113.9", "/tmp/elsewhere", "Evil/1"):
+        assert caller not in out, out
+    server.end()
+
+
+def test_a_chrome_that_went_away_comes_back_under_the_same_id(container):
+    server = Server(container)
+    instance = server.call("spawn_browser")["instance_id"]
+    # The person closed its window in « Bureau », or it crashed.
+    subprocess.run([ENGINE, "exec", container, "pkill", "-f", "--", "--user-data-dir=/home/bip/profile"])
+    for _ in range(50):
+        if chromes(container) == 0:
+            break
+        time.sleep(0.2)
+    assert server.call("navigate", instance_id=instance, url=PAGE)["title"] == "Still here"
+    assert chromes(container) > 0
+    server.end()
+
+
+def test_the_persons_browser_and_two_servers_share_one_chrome(container):
+    # The person opened the browser from the app first (no flags: open_browser.sh gives nodriver's own).
+    subprocess.run([ENGINE, "exec", "-d", container, "/opt/stealth/open_browser.sh"], check=True)
+    for _ in range(100):
+        if chromes(container) > 0:
+            break
+        time.sleep(0.2)
+    gateway, chat = Server(container), Server(container)   # the agent's gateway and a `hermes chat` beside it
+    instance = gateway.call("spawn_browser")["instance_id"]
+    assert chat.call("spawn_browser")["instance_id"] == instance
+    chat.call("navigate", instance_id=instance, url=PAGE)
+    chat.end()   # the `hermes chat` ends: the gateway's browser goes on
+    assert gateway.call("get_instance_state", instance_id=instance)["title"] == "Still here"
+    gateway.end()
+    out = subprocess.run([ENGINE, "exec", container, "pgrep", "-a", "-f", "--", "--remote-debugging-port=9222"],
+                         capture_output=True, text=True).stdout
+    assert len([line for line in out.splitlines() if "--type=" not in line]) == 1   # one Chrome, never two
+
+
+# Run in the container (the server's Python has websockets): addresses sent to a new tab, what Chrome answers; and
+# where the new tab page's own frames are.
+ASK = """
+import asyncio, json, sys, urllib.request
+import websockets
+async def main():
+    version = json.load(urllib.request.urlopen("http://127.0.0.1:9222/json/version"))
+    async with websockets.connect(version["webSocketDebuggerUrl"], max_size=None) as ws:
+        n = 0
+        async def call(method, params=None, session=None):
+            nonlocal n
+            n += 1
+            await ws.send(json.dumps({"id": n, "method": method, "params": params or {},
+                                      **({"sessionId": session} if session else {})}))
+            while True:
+                answer = json.loads(await ws.recv())
+                if answer.get("id") == n:
+                    return answer.get("result", {})
+        out = {}
+        for url in sys.argv[1:]:
+            tab = (await call("Target.createTarget", {"url": "about:blank"}))["targetId"]
+            session = (await call("Target.attachToTarget", {"targetId": tab, "flatten": True}))["sessionId"]
+            out[url] = (await call("Page.navigate", {"url": url}, session)).get("errorText")
+        await asyncio.sleep(3)
+        frames = []
+        for target in (await call("Target.getTargets"))["targetInfos"]:
+            if target["type"] == "iframe":
+                attached = await call("Target.attachToTarget", {"targetId": target["targetId"], "flatten": True})
+                session = attached["sessionId"]
+                href = await call("Runtime.evaluate", {"expression": "location.href", "returnByValue": True}, session)
+                frames.append(href["result"]["value"])
+        out["frames"] = frames
+        print(json.dumps(out))
+asyncio.run(main())
+"""
+
+
+def test_chrome_reads_the_images_policies(container):
+    """policies.json as Chrome reads it in the image. Chrome says nothing, even in its log, of a policy file it could
+    not read (tried 13/11): what it refuses shows the file was read (chrome://version). The new tab page renders with
+    its own frame (its Gmail / Images / apps bar, chrome-untrusted://new-tab-page: never blocked)."""
+    subprocess.run([ENGINE, "exec", "-d", container, "/opt/stealth/open_browser.sh"], check=True)
+    listing = "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:9222/json/list').read().decode())"
+    for _ in range(100):
+        out = subprocess.run([ENGINE, "exec", container, "python3.11", "-I", "-c", listing],
+                             capture_output=True, text=True).stdout
+        if any(t["type"] == "page" for t in json.loads(out or "[]")):
+            break
+        time.sleep(0.2)
+    asked = ["chrome://version/", "chrome://newtab/"]
+    answer = subprocess.run([ENGINE, "exec", container, "/opt/stealth/venv/bin/python", "-I", "-c", ASK, *asked],
+                            capture_output=True, text=True, check=True).stdout
+    seen = json.loads(answer)
+    assert seen["chrome://version/"] == "net::ERR_BLOCKED_BY_ADMINISTRATOR", seen
+    assert seen["chrome://newtab/"] is None
+    assert any(f.startswith("chrome-untrusted://new-tab-page/") for f in seen["frames"]), seen["frames"]
+    assert not any(f.startswith("chrome-error://") for f in seen["frames"]), seen["frames"]
+

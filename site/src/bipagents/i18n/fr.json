@@ -1,0 +1,670 @@
+{
+  "lang": {
+    "short": "FR",
+    "name": "Français"
+  },
+  "meta": {
+    "title": "BipAgents — Des agents personnels qui ne vendent jamais tes données.",
+    "description": "Des agents IA personnels pour toute la famille : privés, dans ton propre espace en Europe ou chez toi, et moins chers qu’une seule place ailleurs. Construit sur Hermes Agent."
+  },
+  "a11y": {
+    "skip": "Aller au contenu",
+    "nav": "Sections",
+    "language": "Langue"
+  },
+  "nav": {
+    "demo": "Démo",
+    "features": "Ce qu’ils font",
+    "privacy": "Privé",
+    "pricing": "Prix",
+    "faq": "Questions",
+    "cta": "Rejoindre la bêta",
+    "ctaShort": "La bêta",
+    "family": "Ensemble"
+  },
+  "hero": {
+    "slogan": "Des agents personnels qui ne vendent jamais tes données.",
+    "sub": "Gratuit pour toute la famille, ou moins cher qu’un abonnement ChatGPT ou Claude.",
+    "eu": "Serveurs dans l’UE, ou chez toi",
+    "badge": "Construit sur Hermes Agent",
+    "proof2": "<b>Ton accord</b> avant de payer ou d’envoyer",
+    "cta": "Choisir ma formule",
+    "watch": "Voir la démo",
+    "price": "Bêta gratuite sur iPhone et Android · places limitées · sans carte bancaire",
+    "beta": "Bêta gratuite",
+    "get": "Obtenir l’app"
+  },
+  "salon": {
+    "alt": "Un salon douillet, le soir : sur le canapé, un téléphone appelle Pasta Mia ; sur la table basse, une tablette montre 11,99 € par mois d’abonnement en moins ; près de la fenêtre, un ordinateur avec des vols et un hôtel, et un chevalet avec le bilan bien-être de la semaine. Quatre Bips s’en occupent.",
+    "a11y": "Ce que font les Bips du salon",
+    "dinners": {
+      "name": "Dîners",
+      "line": "Complet à 20 h, j’ai réservé 20 h 30 et prévenu Julie."
+    },
+    "budget": {
+      "name": "Budget",
+      "line": "Disney+ inutilisé depuis juin. Je résilie ? 11,99 € par mois récupérés."
+    },
+    "wellness": {
+      "name": "Bien-être",
+      "line": "Tu as dormi 6 h 10. Demain : 30 min tranquilles, pas de fractionné."
+    },
+    "trips": {
+      "name": "Voyages",
+      "line": "Pars mardi, pas vendredi : 140 € de moins, même hôtel."
+    },
+    "easel": {
+      "title": "Bien-être",
+      "l1": "Nuits : 7 h",
+      "l2": "9 400 pas",
+      "l3": "3 footings"
+    },
+    "paint": {
+      "phone1": "Vendredi",
+      "phone2": "20 h 30 · 2 pers.",
+      "tablet": "Abonnements : −11,99 €/mois",
+      "laptop1": "Vols",
+      "laptop2": "Hôtel"
+    }
+  },
+  "store": {
+    "soon": "Bientôt sur",
+    "get": "Télécharger sur"
+  },
+  "demo": {
+    "kicker": "La vraie app",
+    "title": "Tu demandes. Il s’en occupe. Tu décides.",
+    "sub": "L’app iPhone, filmée pendant sa démo intégrée : des agents d’exemple et les mêmes écrans que chez toi. Rien n’est envoyé.",
+    "pick": "Les exemples",
+    "play": "Lire",
+    "pause": "Pause",
+    "ctaTitle": "Tes Bips, pour de vrai.",
+    "book_table": {
+      "tab": "Une table vendredi",
+      "title": "réserve une table",
+      "cap": "Trois restaurants avec de la place : tu choisis, il demande avant de réserver en ton nom.",
+      "alt": "Enregistrement de l’écran de l’app. Tu écris « Réserve une table vendredi soir ». L’agent Quotidien ouvre un site de réservation qui montre trois restaurants italiens avec des tables libres, puis demande lequel réserver. Da Vinci à 20 h est choisi. Une carte demande ton accord pour envoyer la réservation en ton nom, et il est donné. L’agent répond que Da Vinci est réservé vendredi, pour 2, et noté dans ton agenda."
+    },
+    "sleep_week": {
+      "tab": "Mon sommeil",
+      "title": "fait le point sur ton sommeil",
+      "cap": "Il lit tes données de sommeil, trace le graphique et propose une chose à essayer ce soir.",
+      "alt": "Enregistrement de l’écran de l’app. Tu demandes « Comment j’ai dormi cette semaine ? ». L’agent Coach lit tes 7 dernières nuits et montre le graphique de la semaine. Il répond : 7 h 12 en moyenne, 25 minutes de plus que la semaine dernière ; les soirs où tu te couches après minuit, tu perds plus d’une heure de sommeil ; ce soir, écrans coupés à 22 h 30 ?"
+    },
+    "subscriptions": {
+      "tab": "Mes abonnements",
+      "title": "résilie les abonnements oubliés",
+      "cap": "Il en trouve deux que tu n’ouvres plus, tu choisis, et rien ne part sans ton accord.",
+      "alt": "Enregistrement de l’écran de l’app. Tu écris « Résilie les abonnements que je n’utilise plus ». L’agent Budget trouve CinéPlus (13,99 € par mois, pas ouvert depuis juillet) et FitApp Premium (9,99 € par mois, dernière séance en juin) et demande lesquels résilier ; les deux sont choisis. Une carte demande ton accord pour envoyer la résiliation en ton nom, et il est donné. L’agent confirme les deux résiliations : jusqu’à 288 € économisés par an."
+    },
+    "dinner": {
+      "tab": "Le dîner",
+      "title": "trouve le dîner de ce soir",
+      "cap": "Avec ce qui reste dans le frigo : une recette en 20 minutes, et ce qui manque pour la liste.",
+      "alt": "Enregistrement de l’écran de l’app. Tu demandes « Qu’est-ce qu’on mange ce soir ? ». L’agent Maison regarde ce qui reste des courses de mardi, cherche une recette rapide et propose des pâtes courgette, feta et citron pour 4, en 20 minutes, avec les trois étapes. Il ne manque que le basilic et le parmesan : il propose de les ajouter à la liste de courses."
+    },
+    "weekend_lisbon": {
+      "tab": "Un week-end entre amis",
+      "title": "organise un week-end entre amis",
+      "cap": "Partagé avec trois amis : ils votent sur ses cartes depuis leur lien, pour la date puis l’appart, et chacun a sa tâche.",
+      "alt": "Enregistrement de l’écran de l’app. Un agent partagé avec trois amis, Léa, Sam et Inès. Tu écris « On part à Lisbonne avec Léa, Sam et Inès : fais-nous voter ». L’agent publie une carte de vote « Quel week-end ? » ; les votes des amis arrivent et le week-end du 21 novembre l’emporte. Il cherche des apparts et lance un second vote : Alfama, terrasse, 92 € la nuit, ou Bairro Alto, rooftop, 105 € la nuit, et les votes arrivent. Alfama l’emporte et l’agent montre la liste du week-end : une tâche pour chacun."
+    }
+  },
+  "control": {
+    "once": "Une fois",
+    "deny": "Refuser"
+  },
+  "private": {
+    "whereTitle": "Où sont tes données ?",
+    "where1": "Dans ton propre espace, séparé de celui des autres, sur un serveur dans l’Union européenne (OVHcloud ou Hetzner). Ou sur ton propre ordinateur, si tu l’installes chez toi.",
+    "where2": "Avec Tout compris, ton espace est sauvegardé chiffré quelques minutes après chaque activité, et au moins une fois par jour. La copie gardée sur notre serveur de sauvegarde est illisible sans la clé, qui reste dans ton espace et sur tes appareils.",
+    "whoTitle": "Qui peut les lire ?",
+    "who2": "L’IA lit ce que ton agent lui envoie, pour te répondre : via EUrouter, un routeur d’IA européen, puis le fournisseur qui fait tourner le modèle choisi. Avant ton premier message, l’app te nomme le routeur et le modèle.",
+    "who3": "Notre limite, dite franchement : comme pour tout serveur loué, l’hébergeur et nous pourrions techniquement y entrer. Notre logiciel ne le fait pas, et nous ne le ferions que si la loi l’exige.",
+    "compare": "Comparer avec ChatGPT, Gemini et les autres, sources à l’appui →",
+    "href": "https://github.com/BipAgents/BipAgents/blob/stable/docs/privacy-compare.fr.md",
+    "title": "À toi. Pas à tout le monde.",
+    "classic": "Un assistant classique",
+    "theirs": "Leurs serveurs",
+    "theirsSub": "voient tes infos et peuvent entraîner leur IA avec",
+    "you": "Toi",
+    "ai": "L’IA",
+    "space": "Ton espace",
+    "spaceSub": "privé, rien qu’à toi",
+    "picA11y": "Un assistant classique : tes messages vont sur leurs serveurs, qui voient tes infos et peuvent entraîner leur IA avec. BipAgents : tes messages vont dans ton espace, privé, rien qu’à toi.",
+    "f1": "<b>Pas lu par nous</b>, ni IA entraînée avec",
+    "f2": "<b>Sans pub</b> ni pistage",
+    "f4": "<b>Tout est à toi</b> : tu pars avec quand tu veux",
+    "detail": "Voir le détail",
+    "limitTitle": "Ce que nous ne promettons pas",
+    "detailTitle": "Le détail, sans détour",
+    "line": "Tes agents vivent dans ton propre espace, en Europe ou chez toi.",
+    "k1t": "Pas lu par nous",
+    "k1": "Aucune IA entraînée dessus.",
+    "k2t": "Pas de pub",
+    "k2": "Pas de pistage, pas de distraction.",
+    "k3t": "Ton accord",
+    "k3": "Avant de payer ou d’envoyer quoi que ce soit."
+  },
+  "pricing": {
+    "kicker": "Prix",
+    "periodLabel": "Payer",
+    "monthly": "Au mois",
+    "yearly": "À l’année",
+    "yearlyBadge": "2 mois offerts",
+    "planLabel": "Formule",
+    "solo": {
+      "name": "Solo",
+      "who": "1 personne",
+      "blurb": "Tes agents, rien qu’à toi."
+    },
+    "duo": {
+      "name": "Duo",
+      "who": "2 personnes",
+      "blurb": "Chacun ses agents et son espace."
+    },
+    "famille": {
+      "name": "Famille",
+      "who": "jusqu’à 6 personnes",
+      "blurb": "Un crédit d’IA commun, chacun son espace.",
+      "flag": "Le meilleur prix par personne"
+    },
+    "perYear": "/an",
+    "perMonthShort": "/mois",
+    "equivPrefix": "soit",
+    "inApp": "Dans l’app :",
+    "cta": "S’abonner",
+    "soon": "<b>L’abonnement sur le web arrive très bientôt.</b> En attendant, BipAgents arrive sur les stores, où tu pourras t’abonner dans l’app :",
+    "trial": "Une semaine gratuite pour commencer, si tu n’en as jamais eu : rien n’est prélevé si tu arrêtes avant la fin.",
+    "cancel": "Résiliable à tout moment : ton espace est gardé 30 jours, le temps de tout récupérer (3 jours après une semaine gratuite sans suite).",
+    "includedTitle": "Compris dans chaque formule",
+    "inc1": "Tes Bips, tes agents IA, prêts en une minute",
+    "inc2": "Un crédit d’IA chaque mois, commun en Duo et Famille, reporté s’il en reste",
+    "inc3": "Live, les voix des Bips et le podcast du matin",
+    "inc4": "Carnet, mails, agenda, rappels, navigateur et tâches de fond",
+    "inc5": "Une sauvegarde chiffrée après chaque activité",
+    "currencyLabel": "Devise",
+    "fineTax": "Prix TTC en euros.",
+    "fine": "Sans engagement : tu résilies quand tu veux, l’abonnement s’arrête à la fin de la période payée. À l’année : payé en une fois pour 12 mois. 14 jours pour changer d’avis. Sur le web, le vendeur est Kerfy Studio ; dans l’app, l’App Store ou Google Play.",
+    "terms": "Conditions de l’offre",
+    "js": {
+      "saveYearWeb": "{x} de moins par an qu’en payant au mois",
+      "plusTax": "+ taxes",
+      "taxIncl": "Prix en {currency}, taxes comprises.",
+      "taxExcl": "Prix en {currency} hors taxes : la taxe de vente de ton État ou de ta province s’ajoute au paiement.",
+      "currencies": {
+        "EUR": "euros",
+        "USD": "dollars américains",
+        "CAD": "dollars canadiens",
+        "GBP": "livres sterling",
+        "SGD": "dollars de Singapour",
+        "ILS": "shekels israéliens"
+      },
+      "perMonth": "/mois",
+      "perYear": "/an",
+      "equiv": "soit {x} par mois",
+      "inApp": "Dans l’app : {x}",
+      "saveYear": "{x} de moins par an qu’en payant chaque mois dans l’app",
+      "saveMonth": "{x} de moins chaque mois que dans l’app",
+      "buy": "S’abonner · {plan} {period}",
+      "period": {
+        "month": "au mois",
+        "year": "à l’année"
+      },
+      "names": {
+        "solo": "Solo",
+        "duo": "Duo",
+        "famille": "Famille"
+      }
+    },
+    "mode": {
+      "offer": "Tout compris",
+      "self": "Sur mon ordinateur"
+    },
+    "afterBeta": "Les abonnements ouvrent après la bêta. D’ici là, c’est gratuit pour celles et ceux qui la testent.",
+    "ways": {
+      "title": "Deux façons d’avoir tes agents.",
+      "sub": "Sur ton ordinateur, c’est gratuit. Ou on s’occupe de tout pour toi.",
+      "offerTag": "Le plus simple",
+      "offerLead": "Prêt en une minute : rien à installer, on s’occupe du serveur, des mises à jour et des sauvegardes.",
+      "offerFrom": "dès {{p.from}}/mois",
+      "offer1": "Ton espace privé, sur un serveur en Europe",
+      "offer2": "Pour toi seul, à deux, ou en famille jusqu’à 6",
+      "offer3": "Sans engagement : tu arrêtes quand tu veux",
+      "offerCta": "Voir les formules",
+      "selfTitle": "Sur ton ordinateur",
+      "selfLead": "Tu l’installes toi-même, avec Hermes Agent : une commande installe tout.",
+      "selfPrice": "Gratuit",
+      "self1": "L’app est gratuite : tu ne paies que ton modèle d’IA, à son fournisseur",
+      "self2": "Tes agents et leurs fichiers restent chez toi",
+      "self3": "Tu as déjà Hermes Agent ? La même commande y branche l’app",
+      "selfCta": "Voir comment l’installer",
+      "plansTitle": "Les formules Tout compris"
+    },
+    "headline": "Seul, à deux, ou toute la famille.",
+    "line": "Les abonnements ouvrent après la bêta : une semaine offerte, et tu arrêtes quand tu veux.",
+    "betaTitle": "Bêta ouverte : c’est gratuit.",
+    "betaLine": "iPhone et Android · places limitées · sans carte bancaire",
+    "free": {
+      "name": "Chez toi",
+      "who": "sur ton ordinateur",
+      "blurb": "Une commande installe tout, avec Hermes Agent. Tu ne paies que ton modèle d’IA.",
+      "kicker": "Mode libre"
+    },
+    "yearNote": "À l’année : 2 mois offerts."
+  },
+  "install": {
+    "title": "Ton propre ordinateur ? L’app est gratuite.",
+    "hermes": "Tu as déjà Hermes Agent ? La même commande y branche l’app, sans toucher à ton modèle ni à tes agents.",
+    "out1": "✓ Hermes Agent, le cerveau des agents",
+    "out2": "✓ Le bridge et les voix des Bips",
+    "out3": "✓ C’est prêt ! Scanne le QR code dans l’app.",
+    "copy": "Copier",
+    "copied": "Copié ✓",
+    "windows": "Sur Windows 11, dans PowerShell ouvert en administrateur :",
+    "guide": "Le guide complet",
+    "whatTitle": "Ce que ça veut dire",
+    "what1": "L’app est gratuite. Tu ne paies rien à Kerfy Studio.",
+    "what2": "Tes agents, leur mémoire et leurs fichiers vivent sur ton ordinateur, avec Hermes Agent.",
+    "what3": "Tu apportes ton modèle d’IA : ta clé chez OpenRouter, OpenAI, Anthropic ou Mistral, ou un modèle de ton réseau (Ollama, LM Studio…).",
+    "what4": "Les voix des Bips tournent aussi chez toi, sans carte graphique.",
+    "needTitle": "Ce qu’il te faut",
+    "need1": "Un Mac, un PC sous Linux ou Windows 11 (22H2 ou plus récent) qui reste allumé.",
+    "need2": "Environ 1 Go de mémoire par personne, plus les voix, quand le modèle tourne ailleurs : un Mac mini de 16 Go tient une famille.",
+    "need3": "Tailscale sur l’ordinateur et ton téléphone : l’app joint tes agents de partout, sans rien ouvrir sur Internet.",
+    "need4": "Pas besoin d’être administrateur : tout s’installe dans ton compte (sous Windows, PowerShell en administrateur).",
+    "stepsTitle": "En trois étapes",
+    "step1": "<b>Colle la commande</b> dans le Terminal de ton Mac ou de ton PC Linux.",
+    "step2": "<b>Réponds à ses questions</b> : où tourne ton modèle d’IA, et les noms de tes premiers agents.",
+    "step3": "<b>Scanne le QR code</b> dans l’app : tous tes agents s’y ajoutent.",
+    "yourselfTitle": "Ce que tu fais toi-même",
+    "yourselfSub": "Avec Tout compris, c’est nous qui nous en occupons.",
+    "yourself1": "Les mises à jour : une commande, ou chaque nuit si tu le choisis.",
+    "yourself2": "Les sauvegardes : une commande exporte tes agents, à ranger en lieu sûr.",
+    "yourself3": "Garder l’ordinateur allumé et connecté : s’il s’éteint, tes agents aussi.",
+    "yourself4": "Payer ton modèle d’IA à son fournisseur, selon ce que tu utilises."
+  },
+  "faq": {
+    "kicker": "Questions",
+    "title": "Bonnes questions.",
+    "1": {
+      "q": "Qu’est-ce que je reçois, exactement ?",
+      "a": "Tes propres agents IA, les Bips, dans l’app sur iPhone, iPad et Android. Ils travaillent dans ton espace à toi, sur un serveur en Europe dont on s’occupe : rien à installer, rien à régler, mises à jour et sauvegardes comprises."
+    },
+    "2": {
+      "q": "Il y a une semaine gratuite ?",
+      "a": "Oui : une semaine gratuite pour commencer, si tu n’en as jamais eu. On te dit avant de payer quand elle finit et le prix qui suit. Arrête avant la fin et rien n’est prélevé."
+    },
+    "3": {
+      "q": "Combien de messages par mois ?",
+      "a": "Chaque formule a son crédit d’IA du mois : environ 7 000 messages pour Solo, 13 000 pour Duo, 24 000 pour Famille avec le modèle par défaut, commun à toutes ses personnes. L’app te l’affiche en nombre estimé de messages avec ton modèle : un échange simple en compte un, une tâche dans le navigateur bien plus (souvent plusieurs dizaines). En Duo et Famille, la personne qui paie voit combien chacun en utilise, jamais ce qu’il écrit, et peut mettre une limite par personne. Ce qui reste passe au mois suivant. Besoin de plus : du crédit en plus dans l’app, qui ne périme jamais. Crédit du mois utilisé : tes discussions continuent, les routines et le navigateur reprennent le mois suivant ou dès que tu ajoutes du crédit."
+    },
+    "4": {
+      "q": "Qui peut lire mes conversations ?",
+      "a": "Pas nous : Kerfy Studio ne les lit pas et n’entraîne aucune IA avec. Pour te répondre, l’IA lit ce que ton agent lui envoie : via EUrouter, un routeur d’IA européen, puis le fournisseur qui fait tourner le modèle choisi ; l’app nomme le routeur et le modèle avant ton premier message. Comme nous louons le serveur, nous pourrions techniquement entrer dans ton espace : notre logiciel ne le fait pas, et nous ne le ferions que si la loi nous y oblige. Tes proches ne lisent que ce que tu partages avec eux : un de tes agents, en lecture seule, et la conversation commune de l’agent de la famille."
+    },
+    "5": {
+      "q": "Comment marchent Duo et Famille ?",
+      "a": "Chaque personne invitée a son propre compte, son espace et ses agents ; le crédit d’IA du forfait est commun. Payer ne donne accès à aucune conversation : la personne qui paie voit seulement combien de crédit chacun utilise. Avec Famille, jusqu’à six personnes partagent le même forfait et son crédit."
+    },
+    "6": {
+      "q": "Je peux arrêter quand je veux ?",
+      "a": "Oui, sans frais : l’abonnement s’arrête à la fin de la période payée. Ton espace est ensuite gardé 30 jours, le temps de tout récupérer, puis effacé avec ses sauvegardes. Et tu as 14 jours pour changer d’avis après l’achat."
+    },
+    "7": {
+      "q": "Pourquoi c’est moins cher sur le web ?",
+      "a": "Dans l’app, l’App Store et Google Play prennent une commission. Sur le web, elle est plus petite, alors on te la rend. C’est le même service : tu te connectes dans l’app avec le même compte."
+    },
+    "8": {
+      "q": "iPhone ou Android ?",
+      "a": "Les deux, et l’iPad aussi : iOS 18 ou plus récent, Android 10 ou plus récent. En français, anglais, allemand et espagnol."
+    },
+    "9": {
+      "q": "C’est quoi, Hermes Agent ?",
+      "a": "L’agent IA open source de Nous Research. BipAgents est une app indépendante construite dessus : elle fait de tes agents Hermes des Bips que tu emportes partout."
+    },
+    "10": {
+      "q": "Et avec mon propre ordinateur ?",
+      "a": "L’app est gratuite : une commande l’installe sur ton ordinateur ou ton serveur, et tu ne paies que le modèle d’IA de ton choix. L’abonnement, lui, t’évite tout ça."
+    },
+    "11": {
+      "q": "Quel modèle d’IA, et est-il bon ?",
+      "a": "Avec l’abonnement, GLM-5.3 Flash, le même pour tous, choisi par Kerfy Studio. Pour les tâches de tous les jours (mails, agenda, recherches, réservations), il est très proche des meilleurs modèles. Avant ton premier message, l’app te nomme le routeur et l’entreprise du modèle. Sur ton propre ordinateur, tu apportes le modèle de ton choix."
+    },
+    "all": "Toutes les questions →",
+    "more": "Une autre question ? Écris-nous :"
+  },
+  "foot": {
+    "about": "BipAgents, l’app de tes propres agents IA, est éditée par Kerfy Studio, un petit studio français. Construite sur Hermes Agent, logiciel libre de Nous Research ; BipAgents est une app indépendante.",
+    "publisher": "Éditeur :",
+    "capital": "capital",
+    "address": "siège social",
+    "legal": "Légal",
+    "privacy": "Confidentialité",
+    "terms": "Conditions d’utilisation",
+    "offer": "Conditions de l’offre",
+    "notice": "Mentions légales",
+    "support": "Support",
+    "cancel": "Résilier un contrat",
+    "more": "Et aussi",
+    "play": "Joue avec les Bips",
+    "fine": "© 2026 Kerfy Studio. Prix TTC, sauf en dollars américains et canadiens : la taxe de vente s’ajoute au paiement. Le podcast de la démo : Built with Fish Audio. Les voix des Bips : Pocket TTS, de Kyutai. Carte de la démo © OpenStreetMap. Aucun cookie et aucun traceur sur ce site.",
+    "demo": "La démo",
+    "faq": "Questions",
+    "install": "Installer chez toi",
+    "beta": "Conditions de la bêta"
+  },
+  "lines": {
+    "hop": [
+      "Bip !",
+      "Coucou !",
+      "Oui ?",
+      "Hop !"
+    ],
+    "wink": [
+      "Hé hé",
+      "Bien joué",
+      "Toujours là !"
+    ],
+    "spin": [
+      "Wiii !"
+    ],
+    "surprised": [
+      "Oh !",
+      "Ah ?!",
+      "Quoi ?"
+    ],
+    "thanks": [
+      "Merci ♡"
+    ],
+    "giggle": [
+      "Hihi !",
+      "Ça chatouille !",
+      "Arrête, hihi !"
+    ],
+    "pet": [
+      "Mmmh…",
+      "Encore…",
+      "Ronron"
+    ],
+    "dizzy": [
+      "Tout tourne…"
+    ],
+    "grumpy": [
+      "Hé ! Doucement…"
+    ],
+    "boing": [
+      "Boing !"
+    ]
+  },
+  "page": {
+    "demo": {
+      "title": "La démo — BipAgents",
+      "description": "L’app BipAgents filmée sur un téléphone pendant sa propre démo : cinq courts exemples où tes Bips cherchent, proposent et attendent ton accord."
+    },
+    "faq": {
+      "title": "Questions — BipAgents",
+      "description": "Prix, crédit d’IA, semaine gratuite, résiliation, vie privée, famille, appareils, Hermes Agent : les réponses sur BipAgents."
+    },
+    "install": {
+      "title": "Installer chez toi — BipAgents",
+      "description": "L’app BipAgents est gratuite sur ton propre ordinateur ou serveur : une commande installe Hermes Agent et le bridge, tu ne paies que ton modèle d’IA."
+    },
+    "beta": {
+      "title": "La bêta — BipAgents",
+      "description": "La bêta publique de BipAgents : gratuite, sur iPhone et Android, places limitées, sans carte bancaire. Ton espace privé en Europe, avec un crédit d’IA."
+    }
+  },
+  "beta": {
+    "kicker": "Bêta",
+    "title": "Essaie BipAgents avant tout le monde.",
+    "sub": "La bêta publique est gratuite, sur iPhone et Android. Les places sont limitées, et aucune carte bancaire n’est demandée.",
+    "whatTitle": "Ce que c’est",
+    "what1": "Gratuite pendant toute la bêta",
+    "what2": "Sur iPhone et Android",
+    "what3": "Places limitées",
+    "what4": "Sans carte bancaire",
+    "getTitle": "Ce que tu reçois",
+    "get1": "Ton espace privé, sur un serveur en Europe",
+    "get2": "Un crédit d’IA pour tes agents",
+    "get3": "Tes Bips, prêts en une minute",
+    "askTitle": "Ce qu’on te demande",
+    "ask1": "Tes retours : ce qui marche, ce qui manque, ce qui gêne",
+    "ask2": "Un peu d’indulgence : c’est une bêta, des choses peuvent casser",
+    "getIt": "Installer la bêta",
+    "codeCta": "Obtenir un code",
+    "soon": "Ouverture prochaine.",
+    "storeSoon": "Bientôt sur",
+    "storeGet": "La bêta sur",
+    "cap": "Places : {cap}",
+    "terms": "Conditions de la bêta",
+    "after": "Après la bêta, l’offre tout compris devient payante.",
+    "afterCta": "Voir les prix",
+    "sticky": "Bêta gratuite",
+    "stickySub": "places limitées"
+  },
+  "notebook": {
+    "kicker": "Carnet",
+    "title": "Ta vie, bien rangée.",
+    "sub": "Tes agents rangent ce qui compte au même endroit, que tu peux lire : le Carnet.",
+    "a11y": "L’écran Carnet de l’app : les rappels du jour, le prochain voyage avec ses billets et son hôtel, les achats et garanties, les abonnements, les contrats et papiers, les réservations, et les archives.",
+    "i1": "Rappels",
+    "i2": "Voyages",
+    "i3": "Achats et garanties",
+    "i4": "Abonnements",
+    "i5": "Contrats et papiers",
+    "i6": "Réservations",
+    "line1": "Rien n’est effacé : le passé part dans les Archives.",
+    "line2": "Tu cherches, tu corriges, tu l’emportes quand tu veux.",
+    "shot": {
+      "title": "Carnet",
+      "search": "Rechercher",
+      "today": "Aujourd’hui",
+      "t1": "Renouveler l’assurance auto",
+      "t1s": "avant 18 h",
+      "t2": "Appeler le plombier",
+      "t3": "Rendre les livres",
+      "trip": "Lisbonne · dans 12 jours",
+      "tripSub": "Billets, hôtel et quoi emporter",
+      "k1": "Achats et garanties",
+      "k2": "Abonnements",
+      "k3": "Contrats et papiers",
+      "k4": "Réservations",
+      "archives": "Archives",
+      "archivesSub": "ce qui est passé"
+    }
+  },
+  "family": {
+    "title": "À chacun ses agents.",
+    "sub": "Chacun son espace privé ; on ne partage que ce qu’on veut.",
+    "s1t": "Chacun sa place",
+    "s1": "Son espace, ses agents, un crédit d’IA commun",
+    "s2t": "Vos agents se parlent",
+    "s2": "Seulement si tu le permets, et un message à la famille attend ton « Envoyer »",
+    "s3t": "L’agent de la famille",
+    "s3": "Listes, courses, dates ; jamais le privé",
+    "s4t": "Un agent partagé avec tes amis, gratuitement !",
+    "s4": "Pour un voyage, une fête : jusqu’à 20 amis le suivent, sans rien payer ni s’abonner",
+    "lock": "Ce que tes amis suivent de ton agent de projet est chiffré de bout en bout (même Kerfy Studio ne peut pas le lire) et s’arrête à la date que tu choisis.",
+    "a11y": "Dans la conversation, l’agent Quotidien propose : prévenir Sam ? Les mots « L’école a appelé : Léa a de la fièvre, je vais la chercher », Sam comme destinataire, et les boutons Envoyer et Non merci. Chez Sam, la notification arrive.",
+    "mock": {
+      "agent": "Quotidien",
+      "ask": "Prévenir Sam ?",
+      "words": "L’école a appelé : Léa a de la fièvre, je vais la chercher.",
+      "to": "À :",
+      "send": "Envoyer",
+      "no": "Non merci",
+      "at": "Chez Sam",
+      "notif": "Camille : L’école a appelé : Léa a de la fièvre, je vais la chercher."
+    },
+    "line": "Partages-en un avec ta famille, tes amis ou d’autres parents, seulement si tu le choisis. Ils suivent gratuitement."
+  },
+  "pick": {
+    "title": "Compose ton équipe.",
+    "line": "Un Bip par coin de ta vie, chacun avec son caractère et sa voix. Choisis les tiens : ils sont prêts en une minute.",
+    "voice": "Voix",
+    "asks": "Il te demande avant",
+    "tools": "Ses outils",
+    "add": "Ajouter à l’équipe",
+    "added": "Dans l’équipe",
+    "see": "Le voir en action",
+    "roster": "Les Bips",
+    "demo": "Voir l’app en action"
+  },
+  "bips": {
+    "daily": {
+      "n": "Quotidien",
+      "tag": "l’organisé",
+      "voice": "Colibri",
+      "line": "Complet à 20 h, j’ai réservé 20 h 30 et prévenu Julie.",
+      "d1": "Trie tes mails et prépare les réponses",
+      "d2": "Tient ton agenda, réserve, prend les rendez-vous",
+      "d3": "Te fait le point du matin, en podcast si tu veux",
+      "ask": "d’envoyer un mail ou de réserver en ton nom.",
+      "tools": "Mails|Agenda|Rappels|Web|Podcast"
+    },
+    "wellness": {
+      "n": "Bien-être",
+      "tag": "le coach",
+      "voice": "Mousse",
+      "line": "Tu as dormi 6 h 10. Demain : 30 min tranquilles, pas de fractionné.",
+      "d1": "Suit ton sommeil et tes séances",
+      "d2": "Prépare ton plan et l’adapte à ta forme",
+      "d3": "Fait le bilan de ta semaine en une page",
+      "ask": "de lire tes données de santé : c’est toi qui l’actives.",
+      "tools": "Santé|Routines|Pages|Rappels"
+    },
+    "finance": {
+      "n": "Budget",
+      "tag": "le comptable",
+      "voice": "Ours",
+      "line": "CinéPlus, pas ouvert depuis juillet. Je résilie ? 13,99 € par mois récupérés.",
+      "d1": "Te montre où part l’argent du mois",
+      "d2": "Repère l’abonnement oublié, le prélèvement bizarre",
+      "d3": "Te dit ce que tu peux dépenser ce week-end",
+      "ask": "de payer ou de résilier quoi que ce soit.",
+      "tools": "Mails|Web|Pages|Carnet"
+    },
+    "home": {
+      "n": "Maison",
+      "tag": "l’intendant",
+      "voice": "Ours",
+      "line": "La machine est terminée depuis 10 min. Pense à étendre le linge.",
+      "d1": "Rappels, courses, lessives",
+      "d2": "Le dîner avec ce qu’il reste dans le frigo",
+      "d3": "Le chauffage, si ta maison est connectée",
+      "ask": "de toucher à un réglage de la maison.",
+      "tools": "Rappels|Routines|Listes|Maison connectée"
+    },
+    "work": {
+      "n": "Travail",
+      "tag": "le bras droit",
+      "voice": "Galet",
+      "line": "J’ai lu les trois documents. Le résumé tient en une page.",
+      "d1": "Cherche, lit et résume pour toi",
+      "d2": "Prépare tes rendez-vous et leurs suites",
+      "d3": "Travaille en tâche de fond pendant que tu fais autre chose",
+      "ask": "d’envoyer quoi que ce soit en ton nom.",
+      "tools": "Mails|Agenda|Web|Pages|Tâches de fond"
+    },
+    "family": {
+      "n": "Famille",
+      "tag": "le chef d’orchestre",
+      "voice": "Lumen",
+      "line": "Tout le monde est au courant : chacun reçoit son rappel la veille.",
+      "d1": "Le planning de toute la maison",
+      "d2": "La liste de courses, cochée par qui y passe",
+      "d3": "Jamais ce qui est privé",
+      "ask": "de prévenir la famille : le message attend ton « Envoyer ».",
+      "tools": "Agenda|Listes|Rappels|Carnet"
+    },
+    "trips": {
+      "n": "Voyages",
+      "tag": "l’éclaireur",
+      "voice": "Lumen",
+      "line": "Pars mardi, pas vendredi : 140 € de moins, même hôtel.",
+      "d1": "Compare les dates, les vols, les hôtels",
+      "d2": "Fait voter tes amis et tient les comptes",
+      "d3": "Dessine la carte des lieux à ne pas rater",
+      "ask": "de réserver ou de payer.",
+      "tools": "Web|Cartes|Pages|Partage"
+    },
+    "own": {
+      "n": "Le tien",
+      "tag": "sur mesure",
+      "voice": "au choix",
+      "line": "Un prof d’anglais ? Un potager ? Décris-moi en une phrase, j’arrive.",
+      "d1": "Tu le décris en une phrase",
+      "d2": "Il arrive avec son caractère et sa couleur",
+      "d3": "Tu choisis ce qu’il a le droit de faire",
+      "ask": "tout ce que tu décides.",
+      "tools": "Ceux que tu lui donnes"
+    }
+  },
+  "room": {
+    "title": "Week-end à Lyon",
+    "count": "3 Bips",
+    "me": "On peut se faire Lyon samedi ?",
+    "m1": "Train de 9 h 34, deux heures de trajet. Retour dimanche à 18 h.",
+    "m2": "Oui : avec le train de 9 h 34, il reste 95 € pour le week-end.",
+    "m3": "Rien dans ton agenda samedi. Je réserve les billets ?",
+    "ask": "Réserver les billets en ton nom",
+    "a11y": "Une discussion avec plusieurs Bips"
+  },
+  "team": {
+    "title": "Ensemble, ils font équipe.",
+    "line": "Mets-en plusieurs dans la même discussion : chacun apporte ce qu’il sait.",
+    "p1t": "Appelle-les.",
+    "p1": "En Live, tu leur parles comme à quelqu’un : ils te laissent finir tes phrases.",
+    "p2t": "Ils travaillent sans toi.",
+    "p2": "Le point du matin à 7 h 30, le rappel du lundi, la recherche qui tourne en tâche de fond.",
+    "p3t": "Ils notent tout au même endroit.",
+    "p3": "Le Carnet : ce qui compte sur toi et tes proches. Tu le lis, tu le corriges, tu l’emportes.",
+    "p4t": "Tes amis peuvent suivre.",
+    "p4": "Un Bip partagé pour un voyage ou une fête : jusqu’à 20 amis, sans rien payer."
+  },
+  "rules": {
+    "title": "Les règles de la maison.",
+    "line": "Tes Bips habitent chez toi : dans ton propre espace, séparé de celui des autres.",
+    "where": "Un serveur privé en Europe, prêt en une minute. Ou ton propre ordinateur.",
+    "alt": "Ton espace : une maison où vivent tes Bips, sous le drapeau européen.",
+    "r1t": "Ils demandent avant de payer ou d’écrire à quelqu’un de nouveau.",
+    "r1": "Un paiement, un mail à une nouvelle adresse, un message à ta famille : ils attendent que tu dises oui.",
+    "r2t": "On ne lit pas par-dessus leur épaule.",
+    "r2": "Kerfy Studio ne lit pas ton espace, et n’entraîne aucune IA avec.",
+    "r3t": "Pas de pub, pas de pistage.",
+    "r3": "Aucun cookie ni traceur sur ce site, et aucune publicité dans l’app.",
+    "r4t": "L’IA tourne en Europe.",
+    "r4": "Elle ne reçoit que ce que ton agent lui envoie, via EUrouter, un routeur d’IA européen. Les fabricants du modèle ne reçoivent pas tes messages.",
+    "r5t": "Tout est à toi.",
+    "r5": "Tu pars quand tu veux, avec tes agents, leur mémoire et ton Carnet."
+  },
+  "dock": {
+    "label": "Ton équipe",
+    "one": "{n} Bip, prêt en une minute",
+    "many": "{n} Bips, prêts en une minute",
+    "none": "Choisis ton premier Bip"
+  },
+  "end": {
+    "title": "Prêt ?",
+    "one": "{names} t’attend.",
+    "many": "{names} t’attendent.",
+    "none": "Choisis ton premier Bip.",
+    "and": "et"
+  },
+  "home": {
+    "close": "Fermer",
+    "self": "Ou sur ton ordinateur :"
+  },
+  "compare": {
+    "note": "Gratuit : pendant la bêta, et sur ton propre ordinateur, où tu ne paies que ton modèle d’IA. Formule Famille : {{note.famille}} par mois pour 6 personnes au plus ; Solo : {{p.from}}. ChatGPT Plus : {{note.chatgptplus}} par mois et par personne, ChatGPT Go : {{note.chatgptgo}} ({{note.chatgptsource}}). Claude Pro : {{note.claudepro}} par mois hors taxes et par personne ({{note.claudesource}}). Prix lus en France le {{note.date}}. Les abonnements ouvrent après la bêta.",
+    "noteLabel": "Voir la note"
+  },
+  "glance": {
+    "alt": "Quatre Bips, chacun avec la tâche qu’il vient de finir : une table réservée, un abonnement résilié, un footing prévu, des vols moins chers.",
+    "dinners": "Table réservée à 20 h 30",
+    "budget": "11,99 € gagnés par mois",
+    "wellness": "Footing léger prévu",
+    "trips": "Vols 140 € moins chers"
+  }
+}

@@ -1,0 +1,311 @@
+🇬🇧 English · [🇫🇷 Français](self-hosting.fr.md)
+
+# Self-hosting BipAgents: Mac mini, VPS or Linux server
+
+BipAgents needs **no GPU**: the Bips' voices run on CPU (Kyutai Pocket TTS). Any machine that already runs
+[Hermes Agent](https://github.com/NousResearch/hermes-agent) is enough, whether it is a Mac mini, a VPS
+or a Linux server at home. The installer does all of this in one command ([README](../README.md)); this guide is
+for doing it by hand, or understanding what it set up.
+
+```
+phone (BipAgents)  ──Tailscale──▶ your machine
+                                   ├─ Hermes Agent, api_server   :8642 (one port per agent: 8644, …)
+                                   ├─ bridge (bridge-rs/)        :8643  voice, files, push, Inbox
+                                   └─ Pocket TTS (pocket/)       :8098  Bips' voices (local, called by the bridge)
+```
+
+Nothing is exposed to the Internet: everything goes through your tailnet, over HTTPS with a real certificate (`tailscale serve`).
+
+## Which machine?
+
+| Machine | Requirements | Notes |
+|---|---|---|
+| **Mac mini** Apple Silicon | 16 GB recommended | Measured on M4: first audio ≈ 50 ms, ≈ 6.5× real time, ≈ 0.6 GB for the 4 languages. Disable sleep and enable automatic login (the services are LaunchAgents). |
+| **VPS** Linux | 4 vCPU (2 of them for Pocket), 8 GB | **Dedicated** vCPUs preferably (shared vCPUs slow the voice down). ARM (Ampere, Hetzner CAX) or x86 with `--quantize`. Hermes calls its language model through an API, it does not need a GPU. Not measured: check the first audio latency after installation. |
+| **Linux server** with a GPU | | Everything above, plus the bonus below: your own voice model. |
+
+## 1. Tailscale
+
+Install Tailscale on the machine and on your phone, in the same tailnet. In the admin console:
+*DNS* → enable **MagicDNS** and **HTTPS Certificates**. The machine then gets a name like `mamachine.tailnet.ts.net`.
+
+On a Mac, the `tailscale` command comes with the app (*Tailscale Settings* → install the command-line
+interface), or via `brew install tailscale`.
+
+## 2. Hermes: one api_server per agent
+
+Each agent (Hermes profile) exposes its api_server on a local port. In the profile's `.env`:
+
+```bash
+API_SERVER_ENABLED=true
+API_SERVER_HOST=127.0.0.1        # 0.0.0.0 if Hermes runs in a container, published on 127.0.0.1
+API_SERVER_PORT=8642             # 8644 for the second agent, etc.
+API_SERVER_KEY=<random key of at least 32 characters, one per agent>
+```
+
+Check: `curl -H "Authorization: Bearer $KEY" http://127.0.0.1:8642/v1/capabilities` must advertise runs
+(`run_submission`, `run_events_sse`, `run_approval`). The agent's questions (`clarify` tool) require a version
+of Hermes that wires them into the api_server, see [`hermes-clarify-api.md`](hermes-clarify-api.md).
+
+## 3. The repository and Pocket TTS (Bips' voices)
+
+```bash
+git clone https://github.com/BipAgents/BipAgents ~/BipAgents
+cd ~/BipAgents/pocket
+python3 -m venv .venv && .venv/bin/pip install -r requirements.txt    # Python ≥ 3.10 (VPS: see below)
+.venv/bin/python pocket_server.py --voices ../voices --languages fr,en,es,de,nl
+curl -s http://127.0.0.1:8098/health
+```
+
+The first launch downloads the models (≈ 440 MB per language). Loading only the languages you need speeds up
+startup (`--languages fr`). Details: [`pocket/README.md`](../pocket/README.md).
+
+### On a VPS
+
+- **OS**: Ubuntu 24.04 or Debian 12 work fine (`sudo apt install python3-venv python3-pip git`).
+- **PyTorch without CUDA**: on x86 Linux, `pip` installs PyTorch with CUDA by default (several useless GB without a
+  GPU). Install the CPU build first, then the rest:
+
+  ```bash
+  .venv/bin/pip install torch --index-url https://download.pytorch.org/whl/cpu
+  .venv/bin/pip install -r requirements.txt
+  ```
+
+  (On ARM, Hetzner CAX or Ampere, the default build already comes without CUDA.)
+- **Sharing the CPU with Hermes**: `--threads 2` reserves 2 cores for Pocket (same speed measured as with all
+  cores on Apple M4). On x86, **add `--quantize`** (int8 weights): measured on an x86 server, first audio drops from ≈ 140 ms to ≈ 55 ms;
+  `pip install "pocket-tts[quantize]"` adds torchao to optimize it.
+- **Memory and disk**: ≈ 0.6 to 1 GB of RAM for the 4 languages, ≈ 2 GB of disk for the models (in
+  `~/.cache/huggingface`, `HF_HOME` to put them elsewhere) and ≈ 1 GB for CPU PyTorch. Add some swap
+  on a 4 GB VPS.
+- **Network**: keep Pocket on `127.0.0.1` (the default) and open nothing in the firewall: the bridge is on
+  the same machine, the phone goes through Tailscale. With `ufw`: `sudo ufw allow in on tailscale0`, nothing else.
+- **Measure** once installed: `python3 pocket/bench.py` (first audio and speed). Target: first audio under
+  ≈ 300 ms, at least 1.5× real time. Otherwise: `--quantize` (x86), then dedicated vCPUs.
+
+## 4. The bridge
+
+The bridge is a single program, written in Rust (`bridge-rs/`). Each version of the repository has its binaries in
+the GitHub release `bridge-<key>`, where the key is the first 12 characters of the SHA-256 of the `bridge-rs/` tree:
+
+```bash
+cd ~/BipAgents
+key=$(printf '%s' "$(git rev-parse HEAD:bridge-rs)" | sha256sum | cut -c1-12)    # macOS: shasum -a 256
+asset=bipbridge-linux-x86_64.tar.gz    # bipbridge-linux-aarch64.tar.gz (ARM), bipbridge-macos-universal.tar.gz (Mac)
+mkdir -p ~/.local/bin
+curl -fsSL "https://github.com/BipAgents/BipAgents/releases/download/bridge-$key/$asset" | tar -xz -C ~/.local/bin bipbridge bip-browser-mcp
+# Or build it (stable Rust): cd bridge-rs && cargo build --release && cp target/release/{bipbridge,bip-browser-mcp} ~/.local/bin/
+mkdir -p ~/.config/hermes-ios && chmod 700 ~/.config/hermes-ios
+cp bridge/bridge.example.toml ~/.config/hermes-ios/bridge.toml && chmod 600 ~/.config/hermes-ios/bridge.toml
+~/.local/bin/bipbridge genkey      # → bridge_key (also enter it in the app)
+```
+
+The release's `SHA256SUMS` lists each archive's checksum.
+
+In `~/.config/hermes-ios/bridge.toml`, for a machine without a GPU:
+
+```toml
+[pocket]
+url = "http://127.0.0.1:8098"
+default_voice = "pocket:colibri"
+
+[agents.wellness]               # one section per agent
+display_name = "Wellness"
+hermes_url = "http://127.0.0.1:8642"
+hermes_key = "<API_SERVER_KEY of this agent>"
+upload_dir_host = "~/hermes/profiles/wellness/uploads"        # where the bridge drops uploaded files
+upload_dir_container = "/home/hermes/.hermes/profiles/wellness/uploads"   # the same folder as seen by the agent
+```
+
+Then run `~/.local/bin/bipbridge check --config ~/.config/hermes-ios/bridge.toml`.
+
+All options: [`bridge/README.md`](../bridge/README.md).
+
+### The agents' sandboxes (Linux with podman)
+
+When the agents' tools run in Hermes' sandbox (`terminal.backend: docker`, with rootless podman), the bridge keeps
+that sandbox isolated, so Hermes runs harmless work there (`python -c`, `execute_code`, `pip install`) without asking
+you each time:
+
+- **no folder of this machine inside**: the files you send an agent are copied into a podman volume of its own
+  (`bipagents-files-<agent>`, read-only at `/fichiers`); a folder an agent shares is a podman volume too
+  (`bipagents-share-<agent>`), at `/partage` in its sandbox and read-only at `/lecture/<agent>` in the sandboxes of
+  the agents you let read it. The bridge keeps `<data>/shares/<agent>/` in step with it (backups and exports take
+  that folder); the first time, that folder's content is copied into the volume and the folder kept as
+  `<agent>.before-volume`. The `shared_files_*` tools reach the same folders (you approve deletes from the app);
+- **no internet but the package registries**: the sandbox sits on `bipagents-sandbox`, a podman network without a
+  route out, and reaches PyPI, npm, Rust crates, Go and Debian only, through a small proxy container
+  (`bipagents-egress`, `podman logs bipagents-egress` shows what it let through or blocked). When the bridge runs as a
+  systemd user service, that proxy runs in its own scope (`systemd-run --user --scope`): restarting or updating the
+  bridge leaves it running. Web search and the
+  agent's own visible browser are separate tools and keep working. Each agent can also have **sites of its own**
+  (HTTPS only): each sandbox gets its own proxy credentials, so the proxy knows which agent asks. When the proxy
+  refuses a site to an agent's programs, or when the agent asks first (`sandbox_sites_request`), you get one card in
+  the app, « Autoriser toujours / Refuser »; the list is in the agent's options, « Sites autorisés », where you can
+  remove a site or add one by hand (`*.example.org` for its subdomains). A name of your own network (`localhost`,
+  `.local`, a private or Tailscale address) is never let through.
+
+Existing agents switch at the bridge's next start (`bipbridge sandbox` does it now and prints what each one got). The
+`[sandbox]` section of `bridge.example.toml` lists the settings. On macOS, or with docker instead of podman, the
+sandboxes stay as they were (folders mounted, Hermes asks before risky commands). To step back on Linux, set
+`[sandbox] isolate = "off"` and restart the bridge: each sandbox gets its folders mounted again (what the agents wrote
+in the volumes copied back first), and the network and proxy settings are taken out; the volumes stay.
+
+A sandbox that still mounts a folder of this machine you added by hand is not isolated for Hermes, which would ask
+before every script. Where the bridge isolates the network, it also puts Hermes' « code the agent wrote » approvals
+(`execute_code`, `python -c`, heredocs, `bash -c`) in the agent's `command_allowlist`: it reads and computes in its
+own space without asking, while risky commands (deleting, credential files, a download piped into a shell…), payments,
+deleting shared files, the write tools of services you added and new sites still ask (`approvals.mode` stays
+`manual`). `bipagents sandbox adopt <agent>` moves such hand-made folders into volumes. `bipagents approvals [agent]
+[--last N]` lists what the agents asked, with your answer (from the bridge's own logs, read only). On a card that is
+not critical (sorting mail, writing in a service you connected, files in the agent's own space), « Toujours autoriser »
+is kept for that agent and that kind; the agent's settings list them and take them back. A card asked while nobody
+watches (a routine at night, a background task) no longer blocks the turn: it waits in the Boîte for up to 24 hours (or
+until the routine's next run), and the agent does that exact step after your « Oui ».
+
+### The Carnet (the agents' notebook)
+
+The bridge keeps the person's Carnet under its data dir (`notebook/carnet/`, plain Markdown that opens in Obsidian;
+`notebook/private/` for health; `notebook/history/` for every change). Its nightly sorting calls a small model once a
+night at most, only when the day's conversations hold something the agents did not file, under a monthly cap:
+`[notebook] model` (default: the agents' own model, at their provider), `base_url` and `key` for another
+OpenAI-compatible API, `price_in`/`price_out` (€ per million tokens), `monthly_cap` (€, default 0.10) and `hour`
+(default 3). Each run logs `notebook pass` with its tokens and cost; the Carnet's settings show the month's spend.
+
+Long work goes to background tasks, never inline in a conversation. An agent starts one by itself only when the person
+asked for it, within `[jobs] direct_budget_eur` (€, default 0.20); above that it proposes the task and the person
+starts it with one tap. On your own install that budget, the task budgets and so the « Continuer » step are five times
+the offer's (1 € by default), counted at `[jobs] price_in` / `price_cached` / `price_out` when set, else at the
+`[notebook]` prices; a token read again from the model's cache counts a tenth of a fresh one unless `price_cached`
+says otherwise. A conversation's run that goes past `handoff_tool_calls`
+(default 15) tool calls or `handoff_seconds` (default 180) is told once to hand the rest over (`handoff = false` turns
+this off); the bridge logs `long run: handing over to a background task (steer)`. Never while a sub-agent
+(`delegate_task`) works for that run, and the calls and time spent in one don't count. A run browsing with the agent's
+visible browser (a browser tool among its last `handoff_browser_window` calls, default 5) is watched live, so it is
+only told by its own thresholds, `handoff_browser_tool_calls` and `handoff_browser_seconds` (default 0: never). A run
+told to hand over that still ends without doing it (and without a real answer) gets its background task started by the
+bridge, with the person's request and the steps done so far, within `direct_budget_eur` (`handoff_rescue = false`
+turns this off); if the task cannot start, it is proposed (« Démarrer » in the conversation), and the conversation and
+a notification say so.
+
+In a group discussion between the person's agents (« Discussion entre agents »), each agent answers in its own Hermes,
+in a hidden conversation for that discussion. Who answers: the agents named with `@`, else the ones whose role matches
+the message, else one call to a small model (`[rooms] router_model = false` turns it off; the `[notebook]` model,
+at most `router_daily_max` calls a day, default 300), else the agent that spoke last. An agent that addresses another
+with `@` gives it one more turn, up to `max_hops` (default 1, at most 2); a turn is stopped after `turn_seconds`
+(default 300) unless it waits for the person's approval.
+
+The bridge restarts an agent's Hermes (and its browser) only when there is a reason, and only while the agent does
+nothing (no turn, Live call, background task, mail scan, watcher check, or routine due within
+`routine_margin_minutes`, default 30): its pings failed `unhealthy_pings` times in a row (default 3, one every 5
+minutes), other code asked for it, or, at the agent's quietest night hour (between `window_start` 1 and `window_end` 6,
+or `hour`), its gateway takes more than `hermes_mb` (900) or `hermes_growth` (2.5) times its size after start, or its
+browser more than `chrome_mb` (1536). At most once an hour, once a night for memory. `[agent_restart] enabled = false`
+turns it off; it is off by itself on a Hermes you had before BipAgents, except for one reason: after an update, a
+gateway still running the previous bridge's browser helper (`bip-browser-mcp`) is restarted once idle, whatever the
+hour's limit, so the agents' browser runs this version's. The last restart and its reason show in
+`GET /v1/status` (`last_restart`). A turn counts even when only its Hermes knows of it (`GET /health/detailed`: a turn
+started before the bridge restarted); a restart asked for while turns go on waits for them at most
+`turn_wait_seconds` (600), then is done all the same, and the reasons asked for meanwhile make that one restart.
+
+Before `bipagents update` restarts the bridge or the agents' Hermes, it waits for the turns going on to end, 5 minutes
+in all at most (`POST /v1/update/drain` to the bridge, which then answers the agents' tool calls « Update in progress:
+try again in a minute » until it restarts: a plain result, which Hermes' MCP circuit breaker doesn't count).
+
+Every 6 hours the bridge tidies the agents' working space (`space_tidy.rs`): drafts in `/workspace/brouillons` left 7
+days unchanged, a background task's folder 24 hours after it ended (never while it runs or is paused), browser
+downloads older than 30 days and the sandbox's package caches (pip, uv, npm, yarn) unused for 14 days. Nothing else:
+never the files sent to or given to the person, their pages, Archives or shared folders. A pass that frees more than
+200 MB leaves one quiet line in the agent's Boîte (no notification, at most once a week). `[tidy]`: `enabled`,
+`every_hours`, `scratch_days`, `task_hours`, `cache_days`, `line_mb`.
+
+The records (« Fiches »: purchases, subscriptions, contracts, papers, bookings) can be filled from an agent's archive:
+`bipagents archive extract <agent> --archive <id> --sample 50` reads 50 likely documents with the agent's model and
+prints what it would record and the estimate for the whole archive, writing nothing; `--run --budget <€>` then fills
+them (a background job, paused at the cap), and the new documents are read each night. `--model <id>` picks another
+model of the agent's provider for the pass (with `--price-in`/`--price-out`, € per million tokens; a model on this
+machine is free). `[archive_records]`: `models = [{id, label, price_in, price_out}]` offered in the app,
+`unknown_price_in`/`unknown_price_out` (€ 3 / 15 by default, so a cap holds), `sample_cap_eur` (1), `nightly_cap_eur`
+(0.05 a night and archive). The documents' text goes to the model's provider.
+
+## 5. Start at boot
+
+**macOS (Mac mini)**: two LaunchAgents.
+
+```bash
+cd ~/BipAgents
+for f in pocket/launchd/io.github.bipagents.pocket.plist bridge/launchd/io.github.bipagents.bridge.plist; do
+  sed "s#__HOME__#$HOME#g" "$f" > ~/Library/LaunchAgents/$(basename "$f")
+  launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/$(basename "$f")
+done
+tail -f ~/Library/Logs/bipagents-*.log
+```
+
+To stop them: `launchctl bootout gui/$(id -u)/io.github.bipagents.pocket` (same for `.bridge`).
+
+**Linux (VPS, server)**: two systemd user services.
+
+```bash
+mkdir -p ~/.config/systemd/user
+cp ~/BipAgents/pocket/systemd/pocket-tts.service ~/.config/systemd/user/
+cp ~/BipAgents/bridge/systemd/hermes-bridge.service ~/.config/systemd/user/   # runs ~/.local/bin/bipbridge
+systemctl --user daemon-reload && systemctl --user enable --now pocket-tts hermes-bridge
+sudo loginctl enable-linger $USER     # services keep running without an open session
+```
+
+Updating: `git pull`, `pip install -r requirements.txt` in Pocket's venv, the bridge binary of the new key (same
+commands as above, when `bridge-rs/` changed), restart both services. If you added the agents' browser by hand
+(`browser/README.md`), `bipagents browser-refresh` keeps its Chrome up to date: run it from a nightly timer
+(`installer/bipinstall/browser_refresh.py` writes one: « Staying up to date » there).
+
+## 6. Open on the tailnet
+
+```bash
+sudo tailscale serve --bg --https=8642 http://127.0.0.1:8642   # one per agent (8644, …)
+sudo tailscale serve --bg --https=8643 http://127.0.0.1:8643   # the bridge
+```
+
+From your phone or another device on the tailnet: `https://mamachine.tailnet.ts.net:8643/health`. Pocket (8098)
+stays local, only the bridge calls it.
+
+## 7. The app
+
+- The apps (iPhone, iPad, Android) come from the App Store and Google Play *(coming soon: they are in testing)*. Until
+  then, the web console opens your agents in a computer's browser: `~/.local/bin/bipbridge console --config
+  ~/.config/hermes-ios/bridge.toml` gives a one-time link (on the tailnet).
+- In the app: **＋ › Scan QR code**. On the server, fill in `public_url` (the bridge's and each agent's tailnet address)
+  in `bridge.toml`, then show the code with `~/.local/bin/bipbridge qr --config ~/.config/hermes-ios/bridge.toml` (one
+  per agent, `--agent <id>` for one only, `--png <file>` to save it). It holds the agent's keys: show it only to your
+  own phone. Pick your language and your Bip.
+
+**Without Tailscale (optional)**: with `[lan] enabled = true`, the bridge also opens an HTTPS door on your local
+network (port 8650, open it on the LAN only) and the QR code carries its address and certificate fingerprint. When
+the tailnet does not answer, the app goes through that door, accepting only that certificate; it shows « Online ·
+local network ». It learns a new local address on its own while the tailnet works; if the address changed while the
+tailnet was down, it asks you to scan a new QR code. Notifications still need the Internet (the push relay).
+
+**Notifications** (replies on the lock screen, approvals, Inbox): the publisher's app can only be reached through
+Apple's and Google's services with the publisher's keys, so every install sends them through Kerfy Studio's
+[push relay](../relay/README.md): `[push] service_url = "https://push.bipagents.com"`, set by the installer (and by
+the 2026-11-12 update on older installs). The agent's name and the start of its message are sealed for your phone's
+own key; the relay, Apple and Google see only a neutral line (« New message »…). With `service_url` set, the bridge no
+longer sends to Apple itself: an `[apns]` section can be removed. Without it, everything else works, just without
+notifications.
+
+## Bonus: your own voice model (GPU)
+
+With a GPU, a more expressive voice server can speak instead of the Bips for some uses: the Live, the spoken replies,
+the reading of messages. Any server with OpenAI's `POST /v1/audio/speech` will do: Fish Audio Drama 3 on audio.cpp
+(recipe in `tts/drama3/`), Kokoro, Kyutai TTS 1.6B… Run it, then in the bridge (or `install.sh voice`, which finds it
+on the network):
+
+```toml
+[voice_server]
+url = "http://127.0.0.1:8880"
+live = true
+replies = true
+reading = true
+```
+
+Its voices show up in the app as "Voice 1, Voice 2…" (agent › Voice). When it doesn't answer, the Bips take over.
+Nothing else depends on it: the Bips, the four languages, the Inbox and notifications work without it.

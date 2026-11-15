@@ -1,0 +1,1293 @@
+//! tests/test_cloud_setup.py: a server the app created proves its certificate, then is claimed once with the
+//! pairing secret (or restored with the backup key, or reopened after an account recovery).
+
+mod browsers_places;
+mod common;
+
+use std::sync::{Arc, Mutex};
+
+use axum::Router;
+use base64::Engine;
+use bipbridge::app::AppState;
+use bipbridge::cloud_setup::{self, ClaimRequest, Hooks, CLAIM_CONTEXT, SETUP_CONTEXT};
+use bipbridge::config::{parse_config, Config};
+use browsers_places::{send, send_json, v1};
+use common::{config_dict, TestApp, Urls, BRIDGE_KEY};
+use serde_json::{json, Value};
+
+const NONCE: &str = "abababababababababababababababab";
+
+fn secret() -> Vec<u8> {
+    (0u8..32).collect()
+}
+
+fn encoded(secret: &[u8]) -> String {
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(secret)
+}
+
+/// The `cloud` fixture: a place of the all-included offer, its certificate made.
+fn cloud(dir: &std::path::Path) -> Config {
+    let setup = dir.join("setup.json");
+    std::fs::write(&setup, json!({"pair": encoded(&secret())}).to_string()).unwrap();
+    let path = dir.join("bridge.toml");
+    std::fs::write(&path, "# bridge config\n").unwrap();
+    let mut d = config_dict(dir, &Urls::default());
+    let map = d.as_object_mut().unwrap();
+    map.insert("cloud".into(), json!(true));
+    map.insert("public_url".into(), json!("https://203.0.113.7"));
+    map.insert(
+        "lan".into(),
+        json!({"enabled": true, "address": "203.0.113.7", "port": 443, "cert_dir": dir.join("lan").to_string_lossy()}),
+    );
+    map.insert(
+        "setup".into(),
+        json!({"file": setup.to_string_lossy(), "progress": dir.join("progress.json").to_string_lossy()}),
+    );
+    map.insert("hermes".into(), json!({"bin": "/opt/hermes", "home": dir.join(".hermes").to_string_lossy(), "hub_url": "http://127.0.0.1:8642"}));
+    let mut config = parse_config(&d, Some(&path.to_string_lossy())).unwrap();
+    config.place_spare_agents = Some(0); // no spare agents unless a test asks for some
+    bipbridge::lan::ensure_certificate(&config).unwrap();
+    config
+}
+
+fn done(config: &Config, flag: bool) {
+    let progress = config.setup_progress.clone().unwrap();
+    std::fs::write(progress, json!({"step": 6, "total": 6, "label": "Checks", "done": flag}).to_string()).unwrap();
+}
+
+fn claim_body(challenge: &str, request: Option<&str>, secret: &[u8]) -> Value {
+    let request = request.map(str::to_string).unwrap_or_else(|| {
+        json!({"model": {"provider": "custom", "name": "glm-5.3", "key": "sk-eu-0123456789", "base_url": "https://api.eurouter.example/v1"},
+               "agents": [{"name": "Quotidien", "kind": "daily"}], "language": "fr"})
+        .to_string()
+    });
+    json!({"challenge": challenge, "mac": cloud_setup::proof(secret, &[CLAIM_CONTEXT, challenge, &request]), "request": request})
+}
+
+/// The `client` fixture: the setup routes with `claim_server` and `start_restore` replaced.
+struct Client {
+    app: TestApp,
+    router: Router,
+    claims: Arc<Mutex<Vec<ClaimRequest>>>,
+    restores: Arc<Mutex<Vec<String>>>,
+    rekeys: Arc<Mutex<Vec<String>>>,
+}
+
+impl Client {
+    fn new(config: Config) -> Client {
+        let app = TestApp::new(config);
+        let state: AppState = app.app.state.clone();
+        let claims: Arc<Mutex<Vec<ClaimRequest>>> = Arc::default();
+        let restores: Arc<Mutex<Vec<String>>> = Arc::default();
+        let rekeys: Arc<Mutex<Vec<String>>> = Arc::default();
+        let (c, r, k) = (claims.clone(), restores.clone(), rekeys.clone());
+        let hooks = Hooks {
+            claim: Arc::new(move |_state, request: ClaimRequest| {
+                let name = request.agents[0].name.clone();
+                c.lock().unwrap().push(request);
+                Box::pin(async move { Ok(vec![json!({"id": "quotidien", "name": name})]) })
+            }),
+            restore: Arc::new(move |_config: &Config, key: &str| {
+                r.lock().unwrap().push(key.to_string());
+                Ok(())
+            }),
+            rekey: Arc::new(move |_state, model: cloud_setup::ModelChoice| {
+                k.lock().unwrap().push(model.key);
+                Box::pin(async { Ok(()) })
+            }),
+        };
+        let router = v1(&state, Router::new(), cloud_setup::router_with(hooks));
+        Client { app, router, claims, restores, rekeys }
+    }
+
+    async fn setup(&self) -> Value {
+        send(&self.router, "GET", &format!("/v1/setup?nonce={NONCE}"), &[], None).await.json()
+    }
+
+    async fn challenge(&self) -> String {
+        self.setup().await["challenge"].as_str().unwrap().to_string()
+    }
+
+    async fn claim(&self, body: &Value) -> common::TestResponse {
+        send_json(&self.router, "POST", "/v1/setup/claim", &[], body).await
+    }
+}
+
+#[tokio::test]
+async fn the_server_proves_its_certificate_before_anything() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = cloud(dir.path());
+    let client = Client::new(config.clone());
+    let state = client.setup().await;
+    let print = bipbridge::lan::fingerprint(&config).unwrap();
+    assert_eq!(state["state"], "installing");
+    assert_eq!(state["fingerprint"], print);
+    let challenge = state["challenge"].as_str().unwrap();
+    // Only a server that knows the secret from the user-data can make this proof for this certificate.
+    assert_eq!(state["proof"], cloud_setup::proof(&secret(), &[SETUP_CONTEXT, NONCE, &print, challenge]));
+    assert_ne!(state["proof"], cloud_setup::proof(&[b'x'; 32], &[SETUP_CONTEXT, NONCE, &print, challenge]));
+    assert_eq!(
+        state.as_object().unwrap().keys().collect::<Vec<_>>(),
+        ["state", "step", "total", "label", "fingerprint", "challenge", "proof", "prepared"]
+    );
+    assert_eq!(state["prepared"], false); // its agents are made at the claim (the fixture's place has some)
+    done(&config, true);
+    assert_eq!(client.setup().await["state"], "ready");
+    let short = send(&client.router, "GET", "/v1/setup?nonce=short", &[], None).await;
+    assert_eq!(short.status, 422);
+    assert_eq!(
+        short.json(),
+        json!({"detail": [{"type": "string_too_short", "loc": ["query", "nonce"], "msg": "String should have at least 32 characters",
+                           "input": "short", "ctx": {"min_length": 32}}]})
+    );
+    let not_hex = send(&client.router, "GET", &format!("/v1/setup?nonce={}", "z".repeat(40)), &[], None).await;
+    assert_eq!(not_hex.json()["detail"][0]["type"], "string_pattern_mismatch");
+}
+
+#[tokio::test]
+async fn a_claim_with_the_secret_pairs_the_app_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = cloud(dir.path());
+    let client = Client::new(config.clone());
+    done(&config, true);
+    let challenge = client.challenge().await;
+    let paired = client.claim(&claim_body(&challenge, None, &secret())).await;
+    assert_eq!(paired.status, 200, "{}", paired.text());
+    assert_eq!(
+        paired.json(),
+        json!({"bridgeURL": "https://203.0.113.7", "bridgeKey": BRIDGE_KEY, "fingerprint": bipbridge::lan::fingerprint(&config),
+               "agents": [{"id": "quotidien", "name": "Quotidien"}]})
+    );
+    assert_eq!(client.claims.lock().unwrap()[0].model.key, "sk-eu-0123456789");
+    assert!(!dir.path().join("setup.json").exists());
+    // The app uses its key: the secret is gone for good, the server says so, and a second claim, even with the same
+    // proof, is refused.
+    let key = format!("Bearer {BRIDGE_KEY}");
+    assert_eq!(client.app.get("/v1/agents", &[("authorization", &key)]).await.status, 200);
+    assert!(!dir.path().join("claim-recovery.json").exists());
+    assert_eq!(client.setup().await, json!({"state": "claimed"}));
+    assert_eq!(client.claim(&claim_body(&challenge, None, &secret())).await.status, 410);
+}
+
+fn claim_with_id(claim_id: &str, model_key: &str) -> String {
+    json!({"model": {"provider": "custom", "name": "glm-5.3", "key": model_key, "base_url": "https://api.eurouter.example/v1"},
+           "agents": [{"name": "Quotidien", "kind": "daily"}], "language": "fr", "claim_id": claim_id})
+    .to_string()
+}
+
+#[tokio::test]
+async fn a_claim_whose_answer_was_lost_is_recovered_by_its_claimer_only() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = cloud(dir.path());
+    let client = Client::new(config.clone());
+    done(&config, true);
+    let id = "app-made-claim-id-0123456789abcdef";
+    let first = client
+        .claim(&claim_body(&client.challenge().await, Some(&claim_with_id(id, "sk-eu-first-key")), &secret()))
+        .await;
+    assert_eq!(first.status, 200, "{}", first.text());
+    assert_eq!(first.json()["bridgeKey"], BRIDGE_KEY);
+    let record = std::fs::read_to_string(dir.path().join("claim-recovery.json")).unwrap();
+    assert!(!record.contains(id) && !record.contains(BRIDGE_KEY) && !record.contains("sk-eu-first-key")); // hashes only
+    use std::os::unix::fs::PermissionsExt;
+    assert_eq!(std::fs::metadata(dir.path().join("claim-recovery.json")).unwrap().permissions().mode() & 0o777, 0o600);
+
+    // The answer never reached the app. Its retry starts over: the place still proves its certificate and says ready.
+    let state = client.setup().await;
+    assert_eq!(state["state"], "ready");
+    assert_eq!(state["claimed"], true);
+    let print = bipbridge::lan::fingerprint(&config).unwrap();
+    let challenge = state["challenge"].as_str().unwrap();
+    assert_eq!(state["proof"], cloud_setup::proof(&secret(), &[SETUP_CONTEXT, NONCE, &print, challenge]));
+
+    // Someone else (another secret, or the secret without the claim id): refused as before.
+    let wrong = client.claim(&claim_body(challenge, Some(&claim_with_id(id, "sk-eu-first-key")), &[b'y'; 32])).await;
+    assert_eq!(wrong.status, 401);
+    let other = claim_with_id("someone-elses-id-0123456789abcdef", "sk-eu-first-key");
+    assert_eq!(client.claim(&claim_body(&client.challenge().await, Some(&other), &secret())).await.status, 410);
+    let without = json!({"model": {"provider": "custom", "name": "glm-5.3", "key": "sk-eu-first-key", "base_url": "https://x/v1"},
+                         "agents": [{"name": "Quotidien"}]}).to_string();
+    assert_eq!(client.claim(&claim_body(&client.challenge().await, Some(&without), &secret())).await.status, 410);
+    let reopen = json!({"reopen": {"name": "iPhone"}}).to_string();
+    assert_eq!(client.claim(&claim_body(&client.challenge().await, Some(&reopen), &secret())).await.status, 410);
+
+    // The claimer, with a new AI key (the guichet made another one): a fresh bridge key, the same agents, the new
+    // AI key written; the place isn't claimed a second time.
+    let again = client
+        .claim(&claim_body(&client.challenge().await, Some(&claim_with_id(id, "sk-eu-second-key")), &secret()))
+        .await;
+    assert_eq!(again.status, 200, "{}", again.text());
+    let again = again.json();
+    assert_eq!(again["recovered"], true);
+    assert_eq!(again["fingerprint"], json!(print));
+    assert_eq!(again["bridgeURL"], "https://203.0.113.7");
+    assert_eq!(again["agents"], json!([{"id": "quotidien", "name": "Quotidien"}]));
+    let new_key = again["bridgeKey"].as_str().unwrap().to_string();
+    assert_ne!(new_key, BRIDGE_KEY);
+    assert_eq!(client.claims.lock().unwrap().len(), 1);
+    assert_eq!(*client.rekeys.lock().unwrap(), vec!["sk-eu-second-key".to_string()]);
+    let toml = std::fs::read_to_string(config.source_path.clone().unwrap()).unwrap();
+    assert!(toml.contains(&new_key));
+    let old = format!("Bearer {BRIDGE_KEY}");
+    assert_eq!(client.app.get("/v1/agents", &[("authorization", &old)]).await.status, 401); // the lost key: revoked
+
+    // Lost again, the same AI key this time: recovered without writing the model again.
+    let third = client
+        .claim(&claim_body(&client.challenge().await, Some(&claim_with_id(id, "sk-eu-second-key")), &secret()))
+        .await;
+    assert_eq!(third.status, 200, "{}", third.text());
+    assert_eq!(client.rekeys.lock().unwrap().len(), 1);
+    let kept = format!("Bearer {}", third.json()["bridgeKey"].as_str().unwrap());
+
+    // The app uses its key: no recovery any more.
+    assert_eq!(client.app.get("/v1/agents", &[("authorization", &kept)]).await.status, 200);
+    assert_eq!(client.setup().await, json!({"state": "claimed"}));
+    let late = claim_with_id(id, "sk-eu-second-key");
+    assert_eq!(client.claim(&claim_body(&"0".repeat(32), Some(&late), &secret())).await.status, 410);
+}
+
+#[tokio::test]
+async fn an_app_without_claim_id_recovers_with_the_secret_within_a_day() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = cloud(dir.path());
+    let client = Client::new(config.clone());
+    done(&config, true);
+    assert_eq!(client.claim(&claim_body(&client.challenge().await, None, &secret())).await.status, 200);
+    // the apps out before claim_id: the same proof of the secret is enough (the same AI key: nothing rewritten)
+    let again = client.claim(&claim_body(&client.challenge().await, None, &secret())).await;
+    assert_eq!(again.status, 200, "{}", again.text());
+    assert_eq!(again.json()["recovered"], true);
+    assert!(client.rekeys.lock().unwrap().is_empty());
+    // A day later (the bridge key still unused): claimed, the record gone.
+    let path = dir.path().join("claim-recovery.json");
+    let mut record: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    record["at"] = json!(record["at"].as_f64().unwrap() - cloud_setup::RECOVERY_SECONDS - 1.0);
+    std::fs::write(&path, record.to_string()).unwrap();
+    assert_eq!(client.setup().await, json!({"state": "claimed"}));
+    assert!(!path.exists());
+    assert_eq!(client.claim(&claim_body(&"0".repeat(32), None, &secret())).await.status, 410);
+}
+
+#[tokio::test]
+async fn challenges_are_single_use_and_claims_wait_for_the_install() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = cloud(dir.path());
+    let client = Client::new(config.clone());
+    let challenge = client.challenge().await;
+    assert_eq!(client.claim(&claim_body(&challenge, None, &secret())).await.status, 409); // still installing
+    done(&config, true);
+    let used = client.claim(&claim_body(&challenge, None, &secret())).await;
+    assert_eq!(used.status, 400); // used up by the 409
+    assert_eq!(used.json(), json!({"detail": "challenge unknown or expired: ask /v1/setup again"}));
+    let fresh = client.challenge().await;
+    let bad = json!({"model": {"provider": "custom", "name": "x", "key": "sk-0123456789"}, "agents": []}).to_string();
+    let refused = client.claim(&claim_body(&fresh, Some(&bad), &secret())).await;
+    assert_eq!(refused.status, 400); // no base_url
+    assert_eq!(refused.json(), json!({"detail": "a custom model needs its base_url"}));
+    let fresh = client.challenge().await;
+    let bad = json!({"model": {"provider": "mistral", "name": "x", "key": "sk-0123456789"}}).to_string();
+    let refused = client.claim(&claim_body(&fresh, Some(&bad), &secret())).await;
+    assert_eq!(
+        refused.json(),
+        json!({"detail": "invalid request: String should match pattern '^(openrouter|custom)$'"})
+    );
+    let malformed = client.claim(&json!({"challenge": "x", "mac": "y", "request": ""})).await;
+    assert_eq!(malformed.status, 422);
+    assert_eq!(malformed.json()["detail"].as_array().unwrap().len(), 3);
+    assert!(client.claims.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn wrong_proofs_get_the_address_blocked() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = cloud(dir.path());
+    let client = Client::new(config.clone());
+    done(&config, true);
+    let limit = client.app.app.state.guard.limit;
+    for _ in 0..limit {
+        let challenge = client.challenge().await;
+        let wrong = client.claim(&claim_body(&challenge, None, &[b'y'; 32])).await;
+        assert_eq!(wrong.status, 401);
+        assert_eq!(wrong.json(), json!({"detail": "wrong pairing proof"}));
+    }
+    let blocked = send(&client.router, "GET", &format!("/v1/setup?nonce={NONCE}"), &[], None).await;
+    assert_eq!(blocked.status, 429);
+    assert_eq!(blocked.json(), json!({"detail": "too many wrong proofs, try again later"}));
+    assert!(client.claims.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn wrong_bridge_keys_get_the_address_blocked_and_the_console_is_off() {
+    let dir = tempfile::tempdir().unwrap();
+    let app = TestApp::new(cloud(dir.path()));
+    let limit = app.app.state.guard.limit;
+    for _ in 0..limit {
+        assert_eq!(app.get("/v1/agents", &[("authorization", "Bearer nope")]).await.status, 401);
+    }
+    // Blocked for a while, even with the right key; requests without a key don't count.
+    let key = format!("Bearer {BRIDGE_KEY}");
+    assert_eq!(app.get("/v1/agents", &[("authorization", &key)]).await.status, 429);
+    assert_eq!(app.get("/console/", &[]).await.status, 404);
+    // The whole app has the setup routes, without the bridge key.
+    assert_eq!(app.get(&format!("/v1/setup?nonce={NONCE}"), &[]).await.status, 429);
+    // the same address, still blocked
+}
+
+#[tokio::test]
+async fn a_moved_place_is_claimed_with_the_backup_key_and_says_it_is_restoring() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = cloud(dir.path());
+    let client = Client::new(config.clone());
+    done(&config, true);
+    let challenge = client.challenge().await;
+    let request = json!({"restore": {"key": "the-key-the-phone-kept-0123456789"}}).to_string();
+    let answer = client.claim(&claim_body(&challenge, Some(&request), &secret())).await;
+    assert_eq!(answer.status, 200, "{}", answer.text());
+    let answer = answer.json();
+    assert_eq!(answer["restoring"], true);
+    assert!(answer.get("bridgeKey").is_none()); // its own key comes back
+    assert_eq!(*client.restores.lock().unwrap(), vec!["the-key-the-phone-kept-0123456789".to_string()]);
+    assert!(client.claims.lock().unwrap().is_empty());
+    let state = client.setup().await;
+    assert_eq!(state["state"], "restoring");
+    assert!(state["proof"].as_str().is_some()); // still proved with the secret
+    let again = client.challenge().await;
+    assert_eq!(client.claim(&claim_body(&again, Some(&request), &secret())).await.status, 409); // once at a time
+                                                                                                // The restore failed (a wrong key): the place says why and takes another claim.
+    std::fs::remove_file(dir.path().join("restoring.json")).unwrap();
+    std::fs::write(
+        config.setup_progress.clone().unwrap(),
+        json!({"step": 0, "total": 4, "label": "this key doesn't open these backups", "done": false, "restoring": false,
+               "error": "this key doesn't open these backups"})
+        .to_string(),
+    )
+    .unwrap();
+    let state = client.setup().await;
+    assert_eq!(state["state"], "ready");
+    assert_eq!(state["error"], "this key doesn't open these backups");
+    let bad = json!({"restore": {"key": "short"}}).to_string();
+    let retry = client.challenge().await;
+    let refused = client.claim(&claim_body(&retry, Some(&bad), &secret())).await;
+    assert_eq!(refused.status, 400);
+    assert_eq!(refused.json(), json!({"detail": "invalid restore request"}));
+}
+
+#[tokio::test]
+async fn a_device_key_opens_the_bridge_and_a_reopen_leaves_only_the_recovering_device() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = cloud(dir.path());
+    let app = TestApp::new(config.clone());
+    let owner_key = format!("Bearer {BRIDGE_KEY}");
+    let owner = [("authorization", owner_key.as_str())];
+    let made = app.send_json("POST", "/v1/device-keys", &owner, &json!({"name": "iPad  d'Alex"})).await;
+    assert_eq!(made.status, 200, "{}", made.text());
+    let made = made.json();
+    let ipad_key = format!("Bearer {}", made["key"].as_str().unwrap());
+    let ipad = [("authorization", ipad_key.as_str())];
+    let listed = app.get("/v1/device-keys", &ipad).await.json();
+    assert_eq!(listed["devices"][0]["name"], "iPad d'Alex");
+    assert_eq!(listed["devices"][0]["me"], true);
+    assert_eq!(app.get("/v1/backup", &ipad).await.status, 200); // any route, as with the bridge key
+    let stored = std::fs::read_to_string(dir.path().join("data").join("device-keys.json")).unwrap();
+    assert!(!stored.contains(made["key"].as_str().unwrap())); // its hash only
+    let other = app.send_json("POST", "/v1/device-keys", &owner, &json!({"name": "Pixel"})).await.json();
+    let removed =
+        app.request("DELETE", &format!("/v1/device-keys/{}", other["id"].as_str().unwrap()), &ipad, None).await;
+    assert_eq!(removed.json(), json!({"ok": true}));
+    let other_key = format!("Bearer {}", other["key"].as_str().unwrap());
+    assert_eq!(app.get("/v1/device-keys", &[("authorization", other_key.as_str())]).await.status, 401);
+
+    // The seat agent wrote a new secret (installer/cloud/seat-agent.py): the place is claimed again.
+    let new_secret: Vec<u8> = (32u8..64).collect();
+    std::fs::write(
+        config.setup_file.clone().unwrap(),
+        json!({"pair": encoded(&new_secret), "reopen": true}).to_string(),
+    )
+    .unwrap();
+    done(&config, true);
+    let challenge =
+        app.get(&format!("/v1/setup?nonce={NONCE}"), &[]).await.json()["challenge"].as_str().unwrap().to_string();
+    let request = json!({"reopen": {"name": "Nouvel iPhone"}}).to_string();
+    let again =
+        app.send_json("POST", "/v1/setup/claim", &[], &claim_body(&challenge, Some(&request), &new_secret)).await;
+    assert_eq!(again.status, 200, "{}", again.text());
+    let again = again.json();
+    assert_eq!(again["reopened"], true);
+    assert_eq!(again["fingerprint"], json!(bipbridge::lan::fingerprint(&config)));
+    assert_ne!(again["bridgeKey"], BRIDGE_KEY);
+    assert_eq!(app.get("/v1/device-keys", &owner).await.status, 401); // the old bridge key: gone
+    assert_eq!(app.get("/v1/device-keys", &ipad).await.status, 401); // the other devices: gone
+    let mine_key = format!("Bearer {}", again["bridgeKey"].as_str().unwrap());
+    let mine = app.get("/v1/device-keys", &[("authorization", mine_key.as_str())]).await.json();
+    let names: Vec<&Value> = mine["devices"].as_array().unwrap().iter().map(|d| &d["name"]).collect();
+    assert_eq!(names, vec![&json!("Nouvel iPhone")]);
+    let toml = std::fs::read_to_string(config.source_path.clone().unwrap()).unwrap();
+    assert!(toml.contains("bridge_key = ") && !toml.contains(BRIDGE_KEY));
+    assert_eq!(app.get(&format!("/v1/setup?nonce={NONCE}"), &[]).await.json(), json!({"state": "claimed"}));
+}
+
+#[tokio::test]
+async fn claiming_sets_the_model_and_creates_agents_reached_through_the_door() {
+    use axum::routing::{any, get};
+    // The hub's gateway: its capabilities, and the sessions the new agents make.
+    let gateway = common::spawn_fake(
+        Router::new()
+            .route("/v1/capabilities", get(|| async { axum::Json(json!({})) }))
+            .route("/p/{profile}/v1/capabilities", get(|| async { axum::Json(json!({})) }))
+            .fallback(any(|| async { (axum::http::StatusCode::CREATED, axum::Json(json!({"id": "s1"}))) })),
+    )
+    .await;
+    let dir = tempfile::tempdir().unwrap();
+    let mut config = cloud(dir.path());
+    config.hermes.hub_url = gateway.clone();
+    let shared = bipbridge::config::SharedConfig::new(config.clone());
+    let commands: Arc<Mutex<Vec<Vec<String>>>> = Arc::default();
+    let seen = commands.clone();
+    let failing = Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let fail = failing.clone();
+    let run: bipbridge::agents_admin::Run = Arc::new(move |args: Vec<String>, _env| {
+        seen.lock().unwrap().push(args.clone());
+        let fails = fail.load(std::sync::atomic::Ordering::SeqCst)
+            && args.get(1..3) == Some(&["profile".to_string(), "create".to_string()][..])
+            && args.get(3).map(String::as_str) == Some("maison");
+        Box::pin(async move {
+            if fails {
+                anyhow::bail!("disk full") // the second agent fails the first time
+            }
+            Ok(String::new())
+        })
+    });
+    let wanted = ClaimRequest::from_value(&json!({
+        "model": {"provider": "openrouter", "name": "z-ai/glm-5.3", "key": "sk-or-0123456789", "vision": true},
+        "agents": [{"name": "Quotidien", "kind": "daily"}, {"name": "Maison", "kind": "home"}], "language": "fr"}))
+    .unwrap();
+    let http = reqwest::Client::new();
+    assert!(cloud_setup::claim_server(&shared, &wanted, &http, Some(run.clone())).await.is_err());
+    let ran = commands.lock().unwrap().clone();
+    let hermes = |rest: &[&str]| -> Vec<String> {
+        std::iter::once("/opt/hermes").chain(rest.iter().copied()).map(str::to_string).collect()
+    };
+    // the model written into the hub by the bridge itself, then the gateway restarted to read its key
+    assert!(!ran.iter().any(|c| c.get(1).map(String::as_str) == Some("config")));
+    let hub = bipbridge::agents_admin::install_home(&shared.get());
+    let model = std::fs::read_to_string(std::path::Path::new(&hub).join("config.yaml")).unwrap();
+    assert!(model.contains("provider: openrouter") && model.contains("base_url: https://openrouter.ai/api/v1"), "{model}");
+    assert!(model.contains("supports_vision: true"), "{model}");
+    let env = std::fs::read_to_string(std::path::Path::new(&hub).join(".env")).unwrap();
+    assert!(env.contains("OPENROUTER_API_KEY=sk-or-0123456789"), "{env}");
+    assert!(ran.contains(&hermes(&["gateway", "restart"])));
+    assert_eq!(
+        shared.get().agent(Some("quotidien")).unwrap().public_url.as_deref(),
+        Some("https://203.0.113.7/hermes/quotidien")
+    );
+    let toml = std::fs::read_to_string(config.source_path.clone().unwrap()).unwrap();
+    assert!(
+        toml.contains(
+            "[model]\nhealth_url = \"https://openrouter.ai/api/v1/models\"\nhealth_key = \"sk-or-0123456789\""
+        ),
+        "{toml}"
+    );
+    assert_eq!(cloud_setup::secret_of(&shared.get()), Some(secret())); // not paired yet: the app may try again
+                                                                       // Again: the model is not set twice, Quotidien is not made twice, Maison is made this time.
+    commands.lock().unwrap().clear();
+    failing.store(false, std::sync::atomic::Ordering::SeqCst);
+    let agents = cloud_setup::claim_server(&shared, &wanted, &http, Some(run)).await.unwrap();
+    assert_eq!(
+        agents,
+        vec![json!({"id": "quotidien", "name": "Quotidien"}), json!({"id": "maison", "name": "Maison"})]
+    );
+    let ran = commands.lock().unwrap().clone();
+    assert!(!ran.iter().any(|c| c.get(1..3) == Some(&["config".to_string(), "set".to_string()][..])));
+    assert_eq!(
+        ran.iter().filter(|c| c.get(1..3) == Some(&["profile".to_string(), "create".to_string()][..])).count(),
+        1
+    );
+}
+
+/// 13/11 (lab of the public beta): a claim whose first try made the agent's profile and then failed (the gateway did
+/// not serve it) met « A profile named 'quotidien' already exists » at every retry: the new agent's id was planned from
+/// the bridge's agents only. The profiles' folders count too: the retry makes its agent under another id and succeeds.
+#[tokio::test]
+async fn a_claim_retried_after_a_profile_was_left_makes_its_agent_under_another_id() {
+    use axum::routing::{any, get};
+    let gateway = common::spawn_fake(
+        Router::new()
+            .route("/p/{profile}/v1/capabilities", get(|| async { axum::Json(json!({})) }))
+            .fallback(any(|| async { (axum::http::StatusCode::CREATED, axum::Json(json!({"id": "s1"}))) })),
+    )
+    .await;
+    let dir = tempfile::tempdir().unwrap();
+    let mut config = cloud(dir.path());
+    config.hermes.hub_url = gateway.clone();
+    let home = std::path::PathBuf::from(bipbridge::agents_admin::install_home(&config));
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::write(home.join("config.yaml"), "model:\n  default: x\n").unwrap();
+    std::fs::write(home.join(".env"), "").unwrap();
+    let shared = bipbridge::config::SharedConfig::new(config.clone());
+    let commands: Arc<Mutex<Vec<Vec<String>>>> = Arc::default();
+    let hermes = fake_hermes(home.clone(), commands.clone());
+    let failing = Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let fail = failing.clone();
+    // the first try: its profile made (a real `profile create` leaves its folder), then a later step fails
+    let run: bipbridge::agents_admin::Run = Arc::new(move |args: Vec<String>, env| {
+        let after_create = args.get(1) == Some(&"-p".to_string()) && args.get(3) == Some(&"tools".to_string());
+        if after_create && fail.swap(false, std::sync::atomic::Ordering::SeqCst) {
+            return Box::pin(async { anyhow::bail!("the gateway did not pick the agent up") });
+        }
+        hermes(args, env)
+    });
+    let wanted = ClaimRequest::from_value(&json!({
+        "model": {"provider": "custom", "name": "glm-5.3", "key": "sk-eu-0123456789", "base_url": "https://api.eurouter.example/v1"},
+        "agents": [{"name": "Quotidien", "kind": "daily"}], "language": "fr"}))
+    .unwrap();
+    let http = reqwest::Client::new();
+    assert!(cloud_setup::claim_server(&shared, &wanted, &http, Some(run.clone())).await.is_err());
+    assert!(home.join("profiles/quotidien/config.yaml").is_file()); // what the first try left
+    assert!(!failing.load(std::sync::atomic::Ordering::SeqCst));
+    let agents = cloud_setup::claim_server(&shared, &wanted, &http, Some(run)).await.unwrap();
+    assert_eq!(agents, vec![json!({"id": "quotidien-2", "name": "Quotidien"})]);
+    let ran = commands.lock().unwrap().clone();
+    assert!(ran.iter().any(|c| is_create(c, "quotidien-2")));
+    assert_eq!(ran.iter().filter(|c| is_create(c, "quotidien")).count(), 1); // never made twice
+}
+
+fn is_restart(c: &[String]) -> bool {
+    c.ends_with(&["gateway".into(), "restart".into()])
+        || c.get(..3) == Some(&["systemctl".to_string(), "--user".to_string(), "restart".to_string()][..])
+}
+
+fn is_create(c: &[String], profile: &str) -> bool {
+    c.get(1..4) == Some(&["profile".to_string(), "create".to_string(), profile.to_string()][..])
+}
+
+/// A fake `hermes`: `profile create` clones the hub's folder, `config set` of a variable writes the profile's .env.
+fn fake_hermes(home: std::path::PathBuf, commands: Arc<Mutex<Vec<Vec<String>>>>) -> bipbridge::agents_admin::Run {
+    fake_hermes_slow(home, commands, std::time::Duration::ZERO)
+}
+
+/// The same, each command taking `delay` (a real `hermes` command is a Python start: ≈ 1 s on a place's server).
+fn fake_hermes_slow(
+    home: std::path::PathBuf,
+    commands: Arc<Mutex<Vec<Vec<String>>>>,
+    delay: std::time::Duration,
+) -> bipbridge::agents_admin::Run {
+    Arc::new(move |args: Vec<String>, _env| {
+        commands.lock().unwrap().push(args.clone());
+        if args.get(1..3) == Some(&["profile".to_string(), "create".to_string()][..]) {
+            let folder = home.join("profiles").join(&args[3]);
+            std::fs::create_dir_all(&folder).unwrap();
+            std::fs::copy(home.join("config.yaml"), folder.join("config.yaml")).unwrap();
+            std::fs::copy(home.join(".env"), folder.join(".env")).unwrap();
+        }
+        // `config set KEY [--] VALUE`: the bridge puts `--` before a key's value (one starting with « - »)
+        let value = match args.len() {
+            7 => Some(&args[6]),
+            8 if args[6] == "--" => Some(&args[7]),
+            _ => None,
+        };
+        if let (Some(value), true) = (value, args[1] == "-p" && args[3..5] == ["config".to_string(), "set".to_string()])
+        {
+            let env = home.join("profiles").join(&args[2]).join(".env");
+            let text = std::fs::read_to_string(&env).unwrap_or_default();
+            std::fs::write(&env, format!("{text}{}={}\n", args[5], value)).unwrap();
+        }
+        Box::pin(async move {
+            tokio::time::sleep(delay).await;
+            Ok(String::new())
+        })
+    })
+}
+
+/// Waits until `check` holds (15 s at most).
+async fn until(what: &str, check: impl Fn() -> bool) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    while !check() {
+        assert!(std::time::Instant::now() < deadline, "{what}");
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+}
+
+/// 2026-10-30 (Alex: « créer un agent devrait prendre ~2 s ») — a place keeps spare agents made ahead: a claim, the
+/// app's new agent and a team take them with file writes only (no `profile create`, no restart); spares are never
+/// listed, counted nor in the circle; the pool refills in the background; a team bigger than the pool gets the rest
+/// made as before. Each `hermes` command of the fake takes 300 ms, to measure.
+#[tokio::test(flavor = "multi_thread")]
+async fn spare_agents_make_new_agents_files_only() {
+    use axum::routing::{any, get};
+    use bipbridge::agent_pool;
+    use bipbridge::agents_admin::{self, NewAgent};
+    let gateway = common::spawn_fake(
+        Router::new()
+            .route("/p/{profile}/v1/capabilities", get(|| async { axum::Json(json!({})) }))
+            .fallback(any(|| async { (axum::http::StatusCode::CREATED, axum::Json(json!({"id": "s1"}))) })),
+    )
+    .await;
+    let dir = tempfile::tempdir().unwrap();
+    let mut config = cloud(dir.path());
+    config.hermes.hub_url = gateway.clone();
+    config.agents.clear();
+    config.place_spare_agents = Some(2);
+    let home = dir.path().join(".hermes");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::write(
+        home.join("config.yaml"),
+        "model:\n  provider: custom\n  default: glm-5.3-flash\n  base_url: https://api.eurouter.example/v1\n  key_env: CUSTOM_MODEL_API_KEY\n",
+    )
+    .unwrap();
+    std::fs::write(home.join(".env"), "API_SERVER_ENABLED=true\nCUSTOM_MODEL_API_KEY=reserve-no-key-yet\n").unwrap();
+    let shared = bipbridge::config::SharedConfig::new(config.clone());
+    let commands: Arc<Mutex<Vec<Vec<String>>>> = Arc::default();
+    let delay = std::time::Duration::from_millis(300);
+    let run = fake_hermes_slow(home.clone(), commands.clone(), delay);
+    let http = reqwest::Client::new();
+    done(&config, true);
+    // without delay: a preparation holds the claims' lock, which the other tests of this file share
+    let fast = fake_hermes(home.clone(), commands.clone());
+    assert_eq!(cloud_setup::prepare_place(&shared, &http, Some(fast)).await.unwrap(), Some("agent".into()));
+
+    // The pool: two spares, made ahead, served, hidden everywhere.
+    let started = std::time::Instant::now();
+    let made = agent_pool::refill(&shared, &http, &run).await;
+    let refill_time = started.elapsed();
+    assert_eq!(made.len(), 2, "{made:?}");
+    let snapshot = shared.get();
+    for id in &made {
+        assert!(agent_pool::is_spare_id(id));
+        assert!(commands.lock().unwrap().iter().any(|c| is_create(c, id)));
+        assert!(!snapshot.agents.contains_key(id)); // not in the apps' list
+        assert!(home.join("profiles").join(id).join("config.yaml").is_file());
+        // no Hermes Bot Mode mark (peers.rs)
+        assert!(!std::fs::read_to_string(home.join("profiles").join(id).join("profile.yaml"))
+            .unwrap_or_default()
+            .contains("hermes-bots"));
+        // the bridge's MCP endpoint knows it: its Hermes lists the tools before it is taken
+        assert_eq!(agent_pool::agent(&snapshot, id).unwrap().name, *id);
+    }
+    assert!(agents_admin::unclaimed_profiles(&snapshot).is_empty(), "{:?}", agents_admin::unclaimed_profiles(&snapshot));
+    assert_eq!(agents_admin::agents_count(&snapshot), 1); // the cap counts the prepared agent only
+    let circle: Vec<String> = bipbridge::shared_memory::circle(&snapshot).into_iter().map(|m| m.name).collect();
+    assert!(circle.iter().all(|n| !agent_pool::is_spare_id(n)), "{circle:?}");
+    assert_eq!(agent_pool::refill(&shared, &http, &run).await, Vec::<String>::new()); // full: nothing more
+
+    // The claim, four agents asked for: the first is the prepared one, two take spares, the last is made after.
+    commands.lock().unwrap().clear();
+    let wanted = ClaimRequest::from_value(&json!({
+        "model": {"provider": "custom", "name": "glm-5.3-flash", "key": "sk-eu-person", "base_url": "https://api.eurouter.example/v1"},
+        "agents": [{"name": "Quotidien", "kind": "daily"}, {"name": "Maison", "kind": "home"},
+                   {"name": "Sport", "kind": "daily"}, {"name": "Cuisine", "kind": "daily"}], "language": "fr"}))
+    .unwrap();
+    let started = std::time::Instant::now();
+    let agents = cloud_setup::claim_server(&shared, &wanted, &http, Some(run.clone())).await.unwrap();
+    let claim_time = started.elapsed();
+    let ids: Vec<String> = agents.iter().map(|a| a["id"].as_str().unwrap().to_string()).collect();
+    assert_eq!(ids[0], "agent");
+    assert!(made.contains(&ids[1]) && made.contains(&ids[2]), "{ids:?}");
+    assert_eq!(ids[3], "cuisine");
+    assert_eq!(agents[1]["name"], "Maison");
+    let ran = commands.lock().unwrap().clone();
+    assert!(!ran.iter().any(|c| is_restart(c) || c.get(1) == Some(&"profile".to_string())), "{ran:?}");
+    // the agent answers at once: nothing held for a restart
+    let started = std::time::Instant::now();
+    cloud_setup::READINESS.wait("agent", std::time::Duration::from_secs(5)).await;
+    assert!(started.elapsed() < std::time::Duration::from_millis(100));
+    // a spare taken follows the claim's model and key; it is the person's agent now
+    let maison = home.join("profiles").join(&ids[1]);
+    assert!(std::fs::read_to_string(maison.join(".env")).unwrap().contains("CUSTOM_MODEL_API_KEY=sk-eu-person\n"));
+    assert!(std::fs::read_to_string(maison.join("SOUL.md")).unwrap().contains("Maison"));
+    assert!(!std::fs::read_to_string(maison.join("profile.yaml")).unwrap_or_default().contains("hermes-bots"));
+    let toml = std::fs::read_to_string(config.source_path.clone().unwrap()).unwrap();
+    assert!(toml.contains(&format!("[agents.{}]", ids[1])) && toml.contains("display_name = \"Maison\""), "{toml}");
+    // Cuisine made after, the pool refilled after it, in the background
+    until("pool refilled after the claim", || agent_pool::spares(&shared.get()).len() == 2).await;
+    until("cuisine made", || !commands.lock().unwrap().iter().all(|c| !is_create(c, "cuisine"))).await;
+    assert!(!commands.lock().unwrap().iter().any(|c| is_restart(c)));
+
+    // The app's new agent: a spare, files only.
+    commands.lock().unwrap().clear();
+    let body = NewAgent { name: "Léa".into(), kind: Some("daily".into()), lang: Some("fr".into()), ..Default::default() };
+    let started = std::time::Instant::now();
+    let lea = agents_admin::create_agent(&shared, &body, &http, &run).await.unwrap();
+    let spare_time = started.elapsed();
+    assert!(agent_pool::is_spare_id(&lea.name) && lea.display_name == "Léa");
+    let during: Vec<Vec<String>> = commands.lock().unwrap().clone();
+    assert!(!during.iter().any(|c| is_restart(c) || c.get(1) == Some(&"profile".to_string())), "{during:?}");
+    assert!(spare_time < std::time::Duration::from_millis(1500), "{spare_time:?} {during:?}");
+    assert_eq!(agents_admin::agents_count(&shared.get()), 5);
+    until("pool refilled after a creation", || agent_pool::spares(&shared.get()).len() == 2).await;
+
+    // A team of three with two spares: two taken, one made in the batch path.
+    commands.lock().unwrap().clear();
+    let team: Vec<NewAgent> = ["Budget", "Voyages", "Jardin"]
+        .iter()
+        .map(|n| NewAgent { name: n.to_string(), kind: Some("daily".into()), lang: Some("fr".into()), ..Default::default() })
+        .collect();
+    let started = std::time::Instant::now();
+    let results = agents_admin::create_agents(&shared, &team, &http, &run).await;
+    let team_time = started.elapsed();
+    let names: Vec<String> = results.iter().map(|r| r.as_ref().unwrap().name.clone()).collect();
+    assert_eq!(names.iter().filter(|n| agent_pool::is_spare_id(n)).count(), 2, "{names:?}");
+    assert_eq!(names[2], "jardin");
+    assert!(commands.lock().unwrap().iter().any(|c| is_create(c, "jardin")));
+
+    // Without spares (as before): the batch path for one agent, to compare.
+    let snapshot = shared.get();
+    let mut none = Config::clone(&snapshot);
+    none.place_spare_agents = Some(0);
+    let plain = bipbridge::config::SharedConfig::new(none); // the pool off: spares never taken
+    let body = NewAgent { name: "Zoé".into(), kind: Some("daily".into()), lang: Some("fr".into()), ..Default::default() };
+    let started = std::time::Instant::now();
+    let zoe = agents_admin::create_agent(&plain, &body, &http, &run).await.unwrap();
+    let plain_time = started.elapsed();
+    assert_eq!(zoe.name, "zoe");
+    eprintln!(
+        "MEASURE (fake hermes, {} ms per command): refill of 2 spares {:?}; claim with 4 agents {:?}; new agent from a \
+         spare {:?}; team of 3 (2 spares) {:?}; new agent without spare {:?}",
+        delay.as_millis(),
+        refill_time,
+        claim_time,
+        spare_time,
+        team_time,
+        plain_time
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_prepared_place_is_claimed_with_file_writes_and_its_other_agents_made_after() {
+    use axum::routing::{any, get};
+    let gateway = common::spawn_fake(
+        Router::new()
+            .route("/p/{profile}/v1/capabilities", get(|| async { axum::Json(json!({})) }))
+            .fallback(any(|| async { (axum::http::StatusCode::CREATED, axum::Json(json!({"id": "s1"}))) })),
+    )
+    .await;
+    let dir = tempfile::tempdir().unwrap();
+    let mut config = cloud(dir.path());
+    config.hermes.hub_url = gateway.clone();
+    config.agents.clear(); // a place of the reserve: no agent yet
+    let home = dir.path().join(".hermes");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::write(home.join("config.yaml"), "model:\n  provider: openrouter\n  default: openrouter/auto\n").unwrap();
+    std::fs::write(home.join(".env"), "# Hermes\nAPI_SERVER_ENABLED=true\n").unwrap();
+    let shared = bipbridge::config::SharedConfig::new(config.clone());
+    let commands: Arc<Mutex<Vec<Vec<String>>>> = Arc::default();
+    let run = fake_hermes(home.clone(), commands.clone());
+    let http = reqwest::Client::new();
+    // Still installing: nothing prepared yet. Once done: its first agent, under a neutral id.
+    done(&config, false);
+    assert_eq!(cloud_setup::prepare_place(&shared, &http, Some(run.clone())).await.unwrap(), Some("agent".into()));
+    assert_eq!(cloud_setup::prepared_of(&shared.get()).as_deref(), Some("agent"));
+    assert!(commands
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|c| c.get(1..4) == Some(&["profile".to_string(), "create".to_string(), "agent".to_string()][..])));
+    assert_eq!(shared.get().agents["agent"].display_name, "Bip");
+    commands.lock().unwrap().clear();
+
+    // The claim: files written, no `hermes` command before the answer.
+    let wanted = ClaimRequest::from_value(&json!({
+        "model": {"provider": "custom", "name": "glm-5.3", "key": "sk-eu-0123456789", "base_url": "https://api.eurouter.example/v1"},
+        "agents": [{"name": "Quotidien", "kind": "daily"}, {"name": "Maison", "kind": "home"}], "language": "en"}))
+    .unwrap();
+    let started = std::time::Instant::now();
+    let agents = cloud_setup::claim_server(&shared, &wanted, &http, Some(run.clone())).await.unwrap();
+    assert!(started.elapsed() < std::time::Duration::from_secs(2), "{:?}", started.elapsed());
+    assert_eq!(agents, vec![json!({"id": "agent", "name": "Quotidien"}), json!({"id": "maison", "name": "Maison"})]);
+    // A name of its own given by the app: kept, and that first agent is the guide all the same (no first choice).
+    let guide = bipbridge::guide::load(&shared.get());
+    assert_eq!(guide.guide.as_deref(), Some("agent"));
+    assert_eq!(guide.first_run.as_deref(), Some("guide"));
+    assert!(guide.intro.contains(&"agent".to_string()));
+    let view = bipbridge::guide::view(&shared.get());
+    assert_eq!(view["first_run"], false);
+    let hello = view["welcome"]["agent"]["text"].as_str().unwrap();
+    assert!(hello.starts_with("Hello, I'm Quotidien!") && hello.contains("call me something else"), "{hello}");
+    let maison = view["welcome"]["maison"]["text"].as_str().unwrap();
+    assert!(maison.starts_with("Hello, I'm Maison! I look after the home"), "{maison}");
+    assert_eq!(view["welcome"]["maison"]["suggestions"].as_array().unwrap().len(), 3);
+    for folder in [home.clone(), home.join("profiles/agent")] {
+        let yaml = std::fs::read_to_string(folder.join("config.yaml")).unwrap();
+        let data = bipbridge::agents_admin::pyyaml::to_json(&bipbridge::agents_admin::pyyaml::load(&yaml).unwrap());
+        assert_eq!(
+            data["model"],
+            json!({"provider": "custom", "default": "glm-5.3", "base_url": "https://api.eurouter.example/v1",
+                   "key_env": "CUSTOM_MODEL_API_KEY", "supports_vision": false})
+        );
+        let env = std::fs::read_to_string(folder.join(".env")).unwrap();
+        assert!(env.contains("CUSTOM_MODEL_API_KEY=sk-eu-0123456789\n"), "{env}");
+    }
+    let key = shared.get().agents["agent"].hermes_key.clone();
+    assert!(std::fs::read_to_string(home.join("profiles/agent/.env"))
+        .unwrap()
+        .contains(&format!("API_SERVER_KEY={key}")));
+    assert!(std::fs::read_to_string(home.join("profiles/agent/SOUL.md")).unwrap().contains("Quotidien"));
+    let toml = std::fs::read_to_string(config.source_path.clone().unwrap()).unwrap();
+    assert!(toml.contains("display_name = \"Quotidien\"") && toml.contains("[agents.maison]"), "{toml}");
+    // Maison is listed at once (the app adds it), made right after; the gateway is never restarted (Hermes reads the
+    // model and key files at each turn).
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    while std::fs::read_dir(dir.path()).unwrap().flatten().any(|e| e.file_name() == "claim-pending.json") {
+        assert!(std::time::Instant::now() < deadline, "Maison not made");
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    let ran = commands.lock().unwrap().clone();
+    assert!(!ran.iter().any(|c| is_restart(c)), "{ran:?}");
+    assert!(ran.iter().any(|c| is_create(c, "maison")), "{ran:?}");
+    assert!(!ran.iter().any(|c| c.len() > 4 && c[1..3] == ["config", "set"]));
+    let maison = shared.get().agents["maison"].clone();
+    // The agents' keys never on a command line (a neighbour on the server reads /proc/<pid>/cmdline): in their .env,
+    // only their owner reads it (audit 11/11, BV-6).
+    for (name, secret) in [("agent", &key), ("maison", &maison.hermes_key)] {
+        assert!(!ran.iter().any(|c| c.iter().any(|a| a.contains(secret.as_str()))), "{name}'s key in {ran:?}");
+        let env = home.join("profiles").join(name).join(".env");
+        assert!(std::fs::read_to_string(&env).unwrap().contains(&format!("API_SERVER_KEY={secret}\n")));
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(std::fs::metadata(&env).unwrap().permissions().mode() & 0o777, 0o600, "{name}");
+    }
+    let started = std::time::Instant::now();
+    cloud_setup::READINESS.wait("maison", std::time::Duration::from_secs(5)).await;
+    assert!(started.elapsed() < std::time::Duration::from_secs(1));
+
+    // A recovered claim with another AI key: written in the hub and every profile, the gateway restarted.
+    commands.lock().unwrap().clear();
+    let mut model = wanted.model.clone();
+    model.key = "sk-eu-the-new-key-42".into();
+    cloud_setup::rekey_model(&shared, &model, run.clone()).await.unwrap();
+    for folder in [home.clone(), home.join("profiles/agent"), home.join("profiles/maison")] {
+        let env = std::fs::read_to_string(folder.join(".env")).unwrap();
+        assert!(
+            env.contains("CUSTOM_MODEL_API_KEY=sk-eu-the-new-key-42\n") && !env.contains("sk-eu-0123456789"),
+            "{env}"
+        );
+    }
+    assert!(std::fs::read_to_string(home.join("profiles/agent/.env"))
+        .unwrap()
+        .contains(&format!("API_SERVER_KEY={key}")));
+    assert_eq!(shared.get().model_health_key.as_deref(), Some("sk-eu-the-new-key-42"));
+    assert_eq!(commands.lock().unwrap().len(), 1); // the restart
+}
+
+/// Alex, 2026-10-30: the place's first agent is « Bip », the guide, and it greets the person first.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_apps_placeholder_claims_bip_the_guide_with_its_welcome() {
+    use axum::routing::{any, get};
+    let gateway = common::spawn_fake(
+        Router::new()
+            .route("/p/{profile}/v1/capabilities", get(|| async { axum::Json(json!({})) }))
+            .fallback(any(|| async { (axum::http::StatusCode::CREATED, axum::Json(json!({"id": "s1"}))) })),
+    )
+    .await;
+    let dir = tempfile::tempdir().unwrap();
+    let mut config = cloud(dir.path());
+    config.hermes.hub_url = gateway.clone();
+    config.agents.clear();
+    let home = dir.path().join(".hermes");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::write(home.join("config.yaml"), "model:\n  provider: openrouter\n  default: openrouter/auto\n").unwrap();
+    std::fs::write(home.join(".env"), "# Hermes\nAPI_SERVER_ENABLED=true\n").unwrap();
+    let shared = bipbridge::config::SharedConfig::new(config.clone());
+    let run = fake_hermes(home.clone(), Arc::default());
+    let http = reqwest::Client::new();
+    done(&config, false);
+    assert_eq!(cloud_setup::prepare_place(&shared, &http, Some(run.clone())).await.unwrap(), Some("agent".into()));
+    // nothing to greet before the claim
+    assert_eq!(bipbridge::guide::view(&shared.get())["welcome"], json!({}));
+
+    // What the apps send today (OfferFlow.firstAgents, Android FIRST_AGENT): the placeholder means Bip.
+    let wanted = ClaimRequest::from_value(&json!({
+        "model": {"provider": "custom", "name": "glm-5.3", "key": "sk-eu-0123456789", "base_url": "https://api.eurouter.example/v1"},
+        "agents": [{"name": "Agent", "kind": "daily"}], "language": "fr"}))
+    .unwrap();
+    let agents = cloud_setup::claim_server(&shared, &wanted, &http, Some(run.clone())).await.unwrap();
+    assert_eq!(agents, vec![json!({"id": "agent", "name": "Bip"})]);
+    assert!(std::fs::read_to_string(home.join("profiles/agent/SOUL.md"))
+        .unwrap()
+        .contains(bipbridge::guide::GUIDE_START));
+    let view = bipbridge::guide::view(&shared.get());
+    assert_eq!((view["guide"].as_str(), view["first_run"].as_bool()), (Some("agent"), Some(false)));
+    let hello = view["welcome"]["agent"]["text"].as_str().unwrap();
+    assert!(hello.starts_with("Bonjour, je suis Bip !"), "{hello}");
+    assert!(hello.contains("Tu préfères m'appeler autrement ?"), "{hello}");
+    assert!(hello.contains("qu'est-ce qui te prend du temps en ce moment ?"), "{hello}");
+    // the guide may rename itself while it is still « Bip »
+    let agent = shared.get().agents["agent"].clone();
+    let tools = bipbridge::guide::tools(&shared.get(), &agent);
+    assert!(tools.iter().any(|t| t["name"] == bipbridge::guide::PROPOSE_PROFILE), "{tools:?}");
+
+    assert_eq!(view["welcome"]["agent"]["session"], Value::Null); // any empty conversation opens with it
+
+    // The person's first message: the welcome stays at the top of that conversation only, the later ones change nothing.
+    bipbridge::welcome::done(&shared.get(), "agent", Some("s-first"));
+    bipbridge::welcome::done(&shared.get(), "agent", Some("s-other"));
+    let view = bipbridge::guide::view(&shared.get());
+    assert_eq!(view["welcome"]["agent"]["session"], "s-first");
+    // A claim answered again (its answer lost) doesn't bring it back to empty conversations.
+    cloud_setup::claim_server(&shared, &wanted, &http, Some(run)).await.unwrap();
+    assert_eq!(bipbridge::guide::view(&shared.get())["welcome"]["agent"]["session"], "s-first");
+    // Written to where the bridge couldn't see the conversation: shown nowhere.
+    let maison = shared.get().agents["agent"].clone();
+    bipbridge::guide::change(&shared.get(), |s| s.welcome.clear()).unwrap();
+    bipbridge::welcome::wait_for(&shared.get(), &maison, "home", "de");
+    assert!(bipbridge::guide::view(&shared.get())["welcome"]["agent"]["text"]
+        .as_str()
+        .unwrap()
+        .starts_with("Hallo, ich bin Bip! Ich bin für deinen Alltag da")); // the guide's own, in its language
+    bipbridge::welcome::done(&shared.get(), "agent", None);
+    assert_eq!(bipbridge::guide::view(&shared.get())["welcome"], json!({}));
+}
+
+#[test]
+fn the_first_agents_name_at_the_claim() {
+    assert_eq!(cloud_setup::first_agent_name("Agent"), "Bip");
+    assert_eq!(cloud_setup::first_agent_name(" agent "), "Bip");
+    assert_eq!(cloud_setup::first_agent_name(""), "Bip");
+    assert_eq!(cloud_setup::first_agent_name("Bip"), "Bip");
+    assert_eq!(cloud_setup::first_agent_name("Quotidien"), "Quotidien");
+}
+
+#[tokio::test]
+async fn requests_through_the_door_wait_for_an_agent_the_claim_makes_ready() {
+    let readiness = Arc::new(cloud_setup::Readiness::default());
+    readiness.hold("lent");
+    let r = readiness.clone();
+    let waiter = tokio::spawn(async move {
+        let started = std::time::Instant::now();
+        r.wait("lent", std::time::Duration::from_secs(5)).await;
+        started.elapsed()
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    readiness.release("lent");
+    let waited = waiter.await.unwrap();
+    assert!(waited >= std::time::Duration::from_millis(250) && waited < std::time::Duration::from_secs(2));
+    // never longer than its limit
+    readiness.hold(cloud_setup::GATEWAY);
+    let started = std::time::Instant::now();
+    readiness.wait("other", std::time::Duration::from_millis(200)).await;
+    assert!(started.elapsed() >= std::time::Duration::from_millis(200));
+}
+
+/// Alex's wife, 2026-10-30 (iPhone and app in English, a place of the EU reserve): the claim's language, the phone's
+/// zone and country are the whole place's, nothing French left in what its agents read.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_english_claim_makes_the_whole_place_english_in_the_persons_zone() {
+    use axum::routing::{any, get};
+    let gateway = common::spawn_fake(
+        Router::new()
+            .route("/p/{profile}/v1/capabilities", get(|| async { axum::Json(json!({})) }))
+            .fallback(any(|| async { (axum::http::StatusCode::CREATED, axum::Json(json!({"id": "s1"}))) })),
+    )
+    .await;
+    let dir = tempfile::tempdir().unwrap();
+    let mut config = cloud(dir.path());
+    config.hermes.hub_url = gateway.clone();
+    config.agents.clear();
+    config.default_voice = "pocket:ours".into(); // an offer place: the Bips
+    let home = dir.path().join(".hermes");
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::write(home.join("config.yaml"), "model:\n  provider: openrouter\n  default: openrouter/auto\n").unwrap();
+    std::fs::write(home.join(".env"), "# Hermes\nAPI_SERVER_ENABLED=true\n").unwrap();
+    let shared = bipbridge::config::SharedConfig::new(config.clone());
+    let run = fake_hermes(home.clone(), Arc::default());
+    let http = reqwest::Client::new();
+    done(&config, false);
+    cloud_setup::prepare_place(&shared, &http, Some(run.clone())).await.unwrap();
+    let wanted = ClaimRequest::from_value(&json!({
+        "model": {"provider": "custom", "name": "glm-5.3", "key": "sk-eu-0123456789", "base_url": "https://api.eurouter.example/v1"},
+        "agents": [{"name": "Agent", "kind": "daily"}, {"name": "Maison", "kind": "home"}], "language": "en",
+        "timezone": "America/New_York", "country": "us"}))
+    .unwrap();
+    assert_eq!((wanted.timezone.as_deref(), wanted.country.as_deref()), (Some("America/New_York"), Some("US")));
+    cloud_setup::claim_server(&shared, &wanted, &http, Some(run.clone())).await.unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    while std::fs::read_dir(dir.path()).unwrap().flatten().any(|e| e.file_name() == "claim-pending.json") {
+        assert!(std::time::Instant::now() < deadline, "Maison not made");
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    let config = shared.get();
+    bipbridge::agents_admin::render_souls(&config);
+    // every personality and every block placed after it: English, with no French example to copy
+    for id in ["agent", "maison"] {
+        let soul = std::fs::read_to_string(home.join("profiles").join(id).join("SOUL.md")).unwrap();
+        let soul = bipbridge::souls::with_notebook(&soul, true);
+        let soul = bipbridge::souls::with_archives(&bipbridge::souls::with_health(&soul, true), true);
+        assert!(soul.contains("write in English.") && soul.contains("« I'm on it in the background"), "{soul}");
+        assert!(soul.contains("your person's Notebook") && soul.contains("goes to « You »"), "{soul}");
+        // the app's parts by their English names (names.rs, 2026-11-01: « in your Carnet (Notebook) »)
+        for french in ["Je m'en occupe", "Je compare", "Je garderai", "Noté dans", "« Toi »", "En bref", "veilleur",
+                       "ton accord", "rappelle-moi", "quand ai-je", "Coach sportif", "Carnet", "Boîte",
+                       "Tâches de fond"] {
+            assert!(!soul.contains(french), "{id}: {french}");
+        }
+    }
+    let hello = bipbridge::guide::view(&config)["welcome"]["agent"]["text"].as_str().unwrap().to_string();
+    assert!(hello.starts_with("Hello, I'm Bip!"), "{hello}");
+    // the Carnet, and every later agent made without a language, in the person's
+    assert_eq!(bipbridge::notebook::language(&config), "en");
+    let later = bipbridge::agents_admin::plan_agent(
+        &config,
+        &bipbridge::agents_admin::NewAgent { name: "Budget".into(), kind: Some("finance".into()), ..Default::default() },
+    )
+    .unwrap();
+    assert!(later.soul.contains("write in English."), "{}", later.soul);
+    // the zone: the person's, in the hub's Hermes config (later agents are cloned from it) and every profile's
+    for folder in [home.clone(), home.join("profiles/agent"), home.join("profiles/maison")] {
+        let yaml = std::fs::read_to_string(folder.join("config.yaml")).unwrap();
+        assert!(yaml.contains("timezone: America/New_York"), "{}: {yaml}", folder.display());
+    }
+    let person = bipbridge::dates::load(&config);
+    assert_eq!((person.time_zone.as_str(), person.routines.as_str(), person.country.as_str()),
+               ("America/New_York", "America/New_York", "US"));
+    let agent = config.agents["agent"].clone();
+    let line = bipbridge::dates::now::line(&config, &agent);
+    assert!(line.contains(", America/New_York (UTC-0") && !line.contains("country"), "{line}"); // the zone says it
+    // the voices: the agents' Bips in English, for whatever the bridge reads aloud itself
+    assert_eq!(bipbridge::voices::voice_for(&config, Some(&agent), Some("reading")), "pocket:en/ours");
+    assert_eq!(bipbridge::voices::relay_for(&config, Some(&agent)).as_deref(), Some("pocket:en/ours"));
+    let mut maison = config.agents["maison"].clone();
+    maison.category = Some("wellness".into());
+    assert_eq!(bipbridge::voices::voice_for(&config, Some(&maison), Some("live")), "pocket:en/mousse");
+
+    // At start: a voice still the untouched French default follows the agent's language; one the person picked
+    // (always told with its language by the apps) or a French agent's stays.
+    let toml = config.source_path.clone().unwrap();
+    for (id, voice) in [("agent", "pocket:ours"), ("maison", "pocket:en/lumen")] {
+        let mut changed = shared.get().agents[id].clone();
+        changed.voice = Some(voice.into());
+        shared.put_agent(changed);
+        bipbridge::voices::set_section_keys(&toml, &format!("agents.{id}"), &[("voice".into(), Some(json!(voice)))]).unwrap();
+    }
+    bipbridge::voices::heal_defaults(&shared);
+    assert_eq!(shared.get().agents["agent"].voice.as_deref(), Some("pocket:en/ours"));
+    assert_eq!(shared.get().agents["maison"].voice.as_deref(), Some("pocket:en/lumen"));
+    assert!(std::fs::read_to_string(&toml).unwrap().contains("voice = \"pocket:en/ours\""));
+    let set_language = |lang: &str| {
+        let agent = shared.get().agents["agent"].clone();
+        bipbridge::agents_admin::set_language(&shared.get(), &agent, lang).unwrap();
+    };
+    set_language("fr");
+    let mut changed = shared.get().agents["agent"].clone();
+    changed.voice = Some("pocket:ours".into());
+    shared.put_agent(changed);
+    bipbridge::voices::heal_defaults(&shared);
+    assert_eq!(shared.get().agents["agent"].voice.as_deref(), Some("pocket:ours")); // French: its own
+    set_language("en");
+
+    // an American in Paris: the country said in the line, since the zone doesn't
+    bipbridge::dates::change(&config, |p| p.time_zone = "Europe/Paris".into()).unwrap();
+    let line = bipbridge::dates::now::line(&config, &agent);
+    assert!(line.ends_with(", Europe/Paris (UTC+01:00), country: United States-->")
+            || line.ends_with(", Europe/Paris (UTC+02:00), country: United States-->"), "{line}");
+}
+
+/// An older app's claim (no zone, no country): the server's zone stays until the app reports the phone's, and the
+/// language still makes the place's.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_claim_without_zone_nor_country_keeps_the_servers() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = cloud(dir.path());
+    let wanted = ClaimRequest::from_value(&json!({
+        "model": {"provider": "custom", "name": "glm-5.3", "key": "sk-eu-0123456789"},
+        "agents": [{"name": "Agent"}], "language": "de"}))
+    .unwrap();
+    cloud_setup::apply_locale(&config, &wanted).unwrap();
+    assert!(!dir.path().join("data/time.json").exists());
+    assert_eq!(bipbridge::dates::load(&config), bipbridge::dates::Person::default());
+    assert_eq!(bipbridge::notebook::language(&config), "de");
+    // a zone this bridge doesn't know: the claim goes on without it
+    let wanted = ClaimRequest::from_value(&json!({
+        "model": {"provider": "custom", "name": "glm-5.3", "key": "sk-eu-0123456789"},
+        "agents": [], "timezone": "Mars/Olympus"}))
+    .unwrap();
+    assert_eq!(wanted.timezone, None);
+}
+
+#[test]
+fn the_claims_zone_and_country_are_checked() {
+    let claim = |extra: Value| {
+        let mut body = json!({"model": {"provider": "custom", "name": "glm-5.3", "key": "sk-eu-0123456789"}, "agents": []});
+        body.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+        ClaimRequest::from_value(&body)
+    };
+    assert_eq!(claim(json!({"timezone": 5})).unwrap_err(), "Input should be a valid string");
+    assert!(claim(json!({"timezone": "Europe/Paris; rm -rf"})).unwrap_err().starts_with("String should match pattern"));
+    assert!(claim(json!({"timezone": "A".repeat(65)})).unwrap_err().starts_with("String should have at most 64"));
+    assert!(claim(json!({"country": "USA"})).unwrap_err().starts_with("String should have at most 2"));
+    assert!(claim(json!({"country": "1F"})).unwrap_err().starts_with("String should match pattern"));
+    let ok = claim(json!({"timezone": null, "country": "gb"})).unwrap();
+    assert_eq!((ok.timezone, ok.country.as_deref()), (None, Some("GB")));
+}
+
+/// A Hermes keeping the sessions of one agent as Hermes does for this: titles unique (400), `?title=` filtered,
+/// `PATCH` of title and hidden, a session gone answering 404.
+async fn sessions_hermes(rows: Arc<Mutex<Vec<Value>>>, patched: Arc<Mutex<Vec<Value>>>) -> String {
+    use axum::extract::{Request, State};
+    use axum::http::{Method, StatusCode};
+    type Book = (Arc<Mutex<Vec<Value>>>, Arc<Mutex<Vec<Value>>>);
+    async fn handle(State((rows, patched)): State<Book>, request: Request) -> (StatusCode, axum::Json<Value>) {
+        let path = request.uri().path().trim_start_matches("/p/coach/api/sessions").to_string();
+        let query = request.uri().query().unwrap_or_default().to_string();
+        let method = request.method().clone();
+        let body = axum::body::to_bytes(request.into_body(), 1 << 20).await.unwrap();
+        let mut rows = rows.lock().unwrap();
+        let id = path.trim_start_matches('/').split('/').next().unwrap_or_default().to_string();
+        match (method, path.as_str()) {
+            (Method::GET, "") => {
+                let title = query
+                    .split('&')
+                    .find_map(|p| p.strip_prefix("title="))
+                    .map(|t| t.replace('+', " ").replace("%20", " "));
+                let listed: Vec<Value> =
+                    rows.iter().filter(|r| title.as_deref().is_none_or(|t| r["title"] == t)).cloned().collect();
+                (StatusCode::OK, axum::Json(json!({"sessions": listed})))
+            }
+            (Method::GET, p) if p.ends_with("/messages") => (StatusCode::OK, axum::Json(json!({"messages": []}))),
+            (Method::GET, _) => match rows.iter().find(|r| r["id"] == id.as_str()) {
+                Some(row) => (StatusCode::OK, axum::Json(json!({"session": row}))),
+                None => (StatusCode::NOT_FOUND, axum::Json(json!({"error": "Session not found"}))),
+            },
+            (Method::PATCH, _) => {
+                let fields: Value = serde_json::from_slice(&body).unwrap();
+                // v0.22.5 (hermes_state_titles.py): a hidden Bot Chat's name is its identity, never renamed; an
+                // archived hidden one yields its title to the next
+                let renamed = fields.get("title").is_some_and(|t| t != "Bot Chat");
+                if renamed && rows.iter().any(|r| r["id"] == id.as_str() && r["title"] == "Bot Chat" && r["hidden"] == true) {
+                    return (StatusCode::BAD_REQUEST, axum::Json(json!({"error": "This is the bot's canonical Bot Chat"})));
+                }
+                let retired = |r: &Value| r["title"] == "Bot Chat" && r["hidden"] == true && r["archived"] == true;
+                if rows.iter().any(|r| {
+                    r["id"] != id.as_str() && fields.get("title").is_some_and(|t| &r["title"] == t) && !retired(r)
+                }) {
+                    return (StatusCode::BAD_REQUEST, axum::Json(json!({"error": "title already in use"})));
+                }
+                if let Some(title) = fields.get("title") {
+                    for row in rows.iter_mut().filter(|r| r["id"] != id.as_str() && &r["title"] == title) {
+                        row["title"] = Value::Null;
+                    }
+                }
+                patched.lock().unwrap().push(json!({"id": id, "fields": fields}));
+                if let Some(row) = rows.iter_mut().find(|r| r["id"] == id.as_str()) {
+                    for (k, v) in fields.as_object().unwrap() {
+                        row[k] = v.clone();
+                    }
+                }
+                (StatusCode::OK, axum::Json(json!({})))
+            }
+            _ => (StatusCode::NOT_FOUND, axum::Json(json!({"error": "no route"}))),
+        }
+    }
+    common::spawn_fake(Router::new().fallback(handle).with_state((rows, patched))).await
+}
+
+/// Alex, 2026-11-01 (his wife's agent made with the guide): « c'est allé dans une discussion séparée, pas celle
+/// principale … c'est dans les discussions historiques ». The person's first conversation with a new agent becomes its
+/// thread when its Bot Chat is still empty; a Bot Chat written in, or that conversation being the Bot Chat, is left.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_new_agents_first_conversation_becomes_its_thread_when_its_bot_chat_is_empty() {
+    use bipbridge::welcome::{adopt, Adopted};
+    let rows = Arc::new(Mutex::new(vec![
+        json!({"id": "s_first", "title": "Bonjour, aide-moi pour le sport", "message_count": 4, "source": "api_server"}),
+        json!({"id": "s_botchat", "title": "Bot Chat", "message_count": 0}),
+    ]));
+    let patched = Arc::new(Mutex::new(Vec::new()));
+    let hermes_url = sessions_hermes(rows.clone(), patched.clone()).await;
+    let dir = tempfile::tempdir().unwrap();
+    let mut config = cloud(dir.path());
+    let coach = bipbridge::config::AgentConfig {
+        name: "coach".into(),
+        display_name: "Coach".into(),
+        hermes_url: format!("{hermes_url}/p/coach"),
+        hermes_key: "k".into(),
+        ..Default::default()
+    };
+    config.agents.insert("coach".into(), coach.clone());
+    let hermes = bipbridge::hermes::HermesClient::new(reqwest::Client::new());
+    let unchecked = |config: &Config| bipbridge::welcome::unchecked(&bipbridge::guide::load(config));
+    let again = |config: &Config, session: &str| {
+        bipbridge::guide::change(config, |s| s.welcome.clear()).unwrap();
+        bipbridge::welcome::wait_for(config, &config.agents["coach"], "wellness", "fr");
+        bipbridge::welcome::done(config, "coach", Some(session));
+    };
+
+    // made, not written to yet: nothing to look at
+    bipbridge::welcome::wait_for(&config, &coach, "wellness", "fr");
+    assert_eq!(adopt(&hermes, &config, &coach).await, Adopted::Nothing);
+    // written to from an iPhone that didn't know its Bot Chat yet: that conversation becomes its Bot Chat
+    bipbridge::welcome::done(&config, "coach", Some("s_first"));
+    assert_eq!(unchecked(&config), vec!["coach".to_string()]);
+    assert_eq!(adopt(&hermes, &config, &coach).await, Adopted::Made);
+    let now = rows.lock().unwrap().clone();
+    assert_eq!(now[0]["title"], "Bot Chat");
+    assert_eq!((now[1]["title"].as_str(), &now[1]["hidden"]), (Some("Fil vide mis de côté · _botchat"), &json!(true)));
+    // checked once: the welcome stays at the top of that conversation, nothing asked of Hermes again
+    assert_eq!(bipbridge::guide::view(&config)["welcome"]["coach"]["session"], "s_first");
+    assert!(unchecked(&config).is_empty());
+    let count = patched.lock().unwrap().len();
+    assert_eq!(adopt(&hermes, &config, &coach).await, Adopted::Nothing);
+    assert_eq!(patched.lock().unwrap().len(), count);
+
+    // The person writes in the Bot Chat too: left as it is.
+    *rows.lock().unwrap() = vec![
+        json!({"id": "s_first", "title": "Bonjour", "message_count": 2}),
+        json!({"id": "s_botchat", "title": "Bot Chat", "message_count": 6}),
+    ];
+    patched.lock().unwrap().clear();
+    again(&config, "s_first");
+    assert_eq!(adopt(&hermes, &config, &coach).await, Adopted::Kept);
+    assert!(patched.lock().unwrap().is_empty() && unchecked(&config).is_empty());
+
+    // Written to in its Bot Chat (the apps from now on): nothing to change.
+    *rows.lock().unwrap() = vec![json!({"id": "s_botchat", "title": "Bot Chat", "message_count": 0})];
+    again(&config, "s_botchat");
+    assert_eq!(adopt(&hermes, &config, &coach).await, Adopted::Kept);
+    // A first conversation gone (deleted): left.
+    again(&config, "s_gone");
+    assert_eq!(adopt(&hermes, &config, &coach).await, Adopted::Kept);
+    assert!(patched.lock().unwrap().is_empty());
+
+    // Hermes out of reach: tried again at the next look.
+    let mut away = coach.clone();
+    away.hermes_url = "http://127.0.0.1:9/p/coach".into();
+    again(&config, "s_first");
+    assert_eq!(adopt(&hermes, &config, &away).await, Adopted::Later);
+    assert_eq!(unchecked(&config), vec!["coach".to_string()]);
+}
+
+/// Release bench 2026-11-02: an unpatched Hermes v0.22.5 renamed an agent's thread « Bot Chat (API <id>) » and made a
+/// new empty local « Bot Chat » (hidden). At the bridge's start the thread is its Bot Chat again, the new one archived
+/// and hidden (Hermes refuses to rename a hidden Bot Chat, and frees the title of an archived hidden one).
+#[tokio::test(flavor = "multi_thread")]
+async fn a_thread_hermes_moved_aside_is_the_agents_bot_chat_again() {
+    use bipbridge::welcome::restore_moved_aside;
+    let rows = Arc::new(Mutex::new(vec![
+        json!({"id": "local-9f", "title": "Bot Chat", "message_count": 2, "hidden": true}),
+        json!({"id": "api_1_a", "title": "Bot Chat (API api_1_a)", "message_count": 40, "source": "api_server"}),
+        json!({"id": "api_2_b", "title": "Bot Chat (API api_2_b)", "message_count": 3, "source": "api_server"}),
+        json!({"id": "api_3_c", "title": "Courses", "message_count": 5, "source": "api_server"}),
+    ]));
+    let patched = Arc::new(Mutex::new(Vec::new()));
+    let hermes_url = sessions_hermes(rows.clone(), patched.clone()).await;
+    let coach = bipbridge::config::AgentConfig {
+        name: "coach".into(),
+        hermes_url: format!("{hermes_url}/p/coach"),
+        hermes_key: "k".into(),
+        ..Default::default()
+    };
+    let hermes = bipbridge::hermes::HermesClient::new(reqwest::Client::new());
+    assert_eq!(restore_moved_aside(&hermes, &coach).await.unwrap().as_deref(), Some("api_1_a"));
+    let now = rows.lock().unwrap().clone();
+    assert_eq!(now[1]["title"], "Bot Chat"); // the one with its history
+    assert_eq!((&now[0]["hidden"], &now[0]["archived"]), (&json!(true), &json!(true)));
+    assert_eq!((now[2]["title"].as_str(), now[3]["title"].as_str()), (Some("Bot Chat (API api_2_b)"), Some("Courses")));
+    // once back, nothing more to do at the next start (the smaller moved one stays where it is)
+    patched.lock().unwrap().clear();
+    assert_eq!(restore_moved_aside(&hermes, &coach).await.unwrap(), None);
+    assert!(patched.lock().unwrap().is_empty());
+    // a place never moved aside isn't touched
+    rows.lock().unwrap().remove(2);
+    assert_eq!(restore_moved_aside(&hermes, &coach).await.unwrap(), None);
+    assert!(patched.lock().unwrap().is_empty());
+    // Hermes out of reach: an error, tried again later
+    let mut away = coach.clone();
+    away.hermes_url = "http://127.0.0.1:9/p/coach".into();
+    assert!(restore_moved_aside(&hermes, &away).await.is_err());
+}

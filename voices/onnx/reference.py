@@ -1,0 +1,151 @@
+"""Speaking with a voice package the way the apps do (their engines follow this loop): ONNX Runtime and numpy only.
+
+    voices/onnx/.venv/bin/python voices/onnx/reference.py build/voices french colibri "Bonjour !" out.wav
+    voices/onnx/.venv/bin/python voices/onnx/reference.py --tests build/voices
+
+`--tests` writes the audio the apps' engine tests compare theirs with (`engine_test_reference`): build.py does it with
+each build, this is for packages built before.
+
+For each chunk of the text (textprep.py): the voice's cache, one step of the language model over the chunk's tokens
+(its noise drawn and unused, as pocket does), then frame after frame: the previous latent (BOS first) through
+`input_linear`, one model step (a new latent, the end-of-speech logit, the cache one longer, the frame for the
+decoder), the frame through the audio decoder (1920 samples at 24 kHz, 80 ms). The end: the logit above the
+threshold after the first frames, then `frames_after_eos` more. Each chunk starts again from the voice's cache and a
+fresh decoder, its first `fade_in_samples` samples (Pocket 4 packages: 120, 5 ms) faded in from 0 to 1."""
+from __future__ import annotations
+
+import json
+import sys
+import wave
+from pathlib import Path
+from typing import Dict, Iterator, List, Optional
+
+import numpy as np
+
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+
+import textprep  # noqa: E402
+
+DTYPES = {"f16": "<f2", "f32": "<f4"}
+
+
+def raw(path: Path, spec: Dict) -> np.ndarray:
+    return np.fromfile(path, dtype=DTYPES[spec["dtype"]]).reshape(spec["shape"])
+
+
+class Package:
+    """A language's package and the shared decoder, as an app loads them."""
+
+    def __init__(self, folder: Path, mimi_folder: Path, threads: int = 1):
+        import onnxruntime as ort
+        self.folder = Path(folder)
+        self.manifest = json.loads((self.folder / "manifest.json").read_text(encoding="utf-8"))
+        options = ort.SessionOptions()
+        options.intra_op_num_threads = threads
+        options.inter_op_num_threads = 1
+        self.flow = ort.InferenceSession(str(self.folder / "flowlm.onnx"), options, providers=["CPUExecutionProvider"])
+        self.mimi = ort.InferenceSession(str(Path(mimi_folder) / "mimi.onnx"), options,
+                                         providers=["CPUExecutionProvider"])
+        tensors = self.manifest["tensors"]
+        self.table = raw(self.folder / "text_table.f16", tensors["text_table.f16"])
+        self.input_linear = raw(self.folder / "input_linear.f32", tensors["input_linear.f32"])
+        self.bos = raw(self.folder / "bos.f32", tensors["bos.f32"])
+        self.tokenizer = textprep.Tokenizer.load(self.folder / "tokenizer.json")
+        self.mimi_inputs = [i for i in self.mimi.get_inputs()]
+
+    def voice(self, name: str) -> np.ndarray:
+        spec = self.manifest["voices"][name]
+        return raw(self.folder / spec["file"], spec).astype(np.float32)
+
+    def _mimi_start(self) -> List[np.ndarray]:
+        return [np.zeros(i.shape, dtype=np.float32) for i in self.mimi_inputs[2:]]
+
+    def speak(self, text: str, voice: str, seed: Optional[int] = None,
+              temperature: Optional[float] = None) -> Iterator[np.ndarray]:
+        """The audio, 1920 samples at a time. `temperature` 0: no noise, the same audio every time (tests)."""
+        gen = self.manifest["generation"]
+        rng = np.random.default_rng(seed)
+        scale = float(np.sqrt(gen["temperature"] if temperature is None else temperature))
+        cache = self.voice(voice)
+        names = [i.name for i in self.mimi_inputs]
+        # Pocket 4: each chunk's first 5 ms faded in (a fresh decoder clicks); 3.3.0 packages don't say, no fade.
+        fade = int(gen.get("fade_in_samples", 0))
+        ramp = np.linspace(0, 1, fade, dtype=np.float32) if fade else None
+        for chunk in textprep.chunks(self.tokenizer, text, self.manifest["language"]):
+            noise = lambda: (rng.standard_normal((1, 32)) * scale).astype(np.float32)  # noqa: E731
+            x = self.table[np.asarray(chunk.ids)].astype(np.float32)[None]
+            _, _, past, _ = self.flow.run(None, {"x": x, "past_kv": cache, "noise": noise()})
+            states = self._mimi_start()
+            previous = self.bos.astype(np.float32)
+            ended = None
+            for step in range(chunk.max_gen_len):
+                x = (self.input_linear @ previous).astype(np.float32)[None, None]
+                latent, eos, past, frame = self.flow.run(None, {"x": x, "past_kv": past, "noise": noise()})
+                if ended is None and step >= gen["min_frames_before_eos"] and float(eos.reshape(-1)[0]) > gen["eos_threshold"]:
+                    ended = step
+                if ended is not None and step >= ended + chunk.frames_after_eos:
+                    break
+                feeds = {names[0]: frame.astype(np.float32), names[1]: np.array([step * gen["mimi_steps_per_frame"]],
+                                                                              dtype=np.int64)}
+                feeds.update(zip(names[2:], states))
+                out = self.mimi.run(None, feeds)
+                states = out[1:]
+                audio = out[0].reshape(-1)
+                if step == 0 and fade:
+                    audio = audio.copy()
+                    audio[:fade] *= ramp[:min(fade, len(audio))]
+                yield audio
+                previous = latent[0]
+
+
+def save_wav(path: Path, audio: np.ndarray, rate: int = 24000) -> None:
+    pcm = (np.clip(audio, -1, 1) * 32767).astype("<i2")
+    with wave.open(str(path), "wb") as out:
+        out.setnchannels(1)
+        out.setsampwidth(2)
+        out.setframerate(rate)
+        out.writeframes(pcm.tobytes())
+
+
+def find(out: Path, language: str) -> Path:
+    index = json.loads((out / "index.json").read_text(encoding="utf-8"))
+    return out / index["languages"][language]["folder"]
+
+
+def engine_test_reference_name(index: Dict) -> str:
+    """The apps' engine tests' reference for these packages (index.json): named after the French package and the
+    decoder, so a test never compares its audio with another build's (the iPhone's did: Pocket 3.3.0's audio after
+    the 4.0.1 export). PocketEngineTests.swift and PocketEngineTest.kt name it the same way."""
+    return f"zero-{index['languages']['french']['folder']}-{index['mimi']['folder']}.f32"
+
+
+def engine_test_reference(out: Path) -> Path:
+    """What the apps' engine tests compare theirs with: « Bonjour, je suis Colibri. » without noise, one thread, raw
+    float32 little-endian, in out/samples/. Speech made frame by frame amplifies the tiniest rounding difference, so
+    the tests compare the first two frames, then unrelated (2026-10-29, Pocket 4.0.1's French): Android's engine, the
+    same ONNX Runtime (1.31), 78.5 dB from it; the iPhone's, 1.24.2, 25.5 dB (22.7 from audio made here with 1.24.2:
+    its own arithmetic counts more than the runtime); another build's audio, 1.4 dB."""
+    index = json.loads((out / "index.json").read_text(encoding="utf-8"))
+    package = Package(find(out, "french"), out / index["mimi"]["folder"], threads=1)
+    audio = np.concatenate(list(package.speak("Bonjour, je suis Colibri.", "colibri", temperature=0)))
+    path = out / "samples" / engine_test_reference_name(index)
+    path.parent.mkdir(exist_ok=True)
+    audio.astype("<f4").tofile(path)
+    return path
+
+
+def main(argv: List[str]) -> int:
+    if argv[:1] == ["--tests"]:
+        print(engine_test_reference(Path(argv[1])))
+        return 0
+    out, language, voice, text, wav = Path(argv[0]), argv[1], argv[2], argv[3], Path(argv[4])
+    index = json.loads((out / "index.json").read_text(encoding="utf-8"))
+    package = Package(find(out, language), out / index["mimi"]["folder"])
+    save_wav(wav, np.concatenate(list(package.speak(text, voice, seed=42))))
+    print(wav)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

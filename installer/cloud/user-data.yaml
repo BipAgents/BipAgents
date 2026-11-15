@@ -1,0 +1,277 @@
+#cloud-config
+# BipAgents on a server of the all-included offer ("no computer"), or any server set up with cloud-init.
+# Whoever creates the server fills in {{pair}} (a one-time pairing secret, base64url), {{language}} (fr, en, de, es)
+# and {{profile}} (solo, mini); nothing else secret is ever here, since the provider keeps it and serves it to the
+# server for its whole life (its metadata service, 169.254.169.254). The model key goes from the phone to the bridge
+# once paired (bridge-rs/src/cloud_setup.rs). The guichet's servers, shared by several people, don't even carry the
+# pairing secret: their script holds only a one-time token with which root fetches each place's setup from the guichet
+# at first boot (seat-agent.py --bootstrap), and only root may ask the metadata service anything (below).
+#
+# Ubuntu 24.04 and Debian 13, x86 and ARM (internal/research/os-arm-test-2026-10-28.md): the same text, no branch
+# by system but the zram line's fallback (below).
+#
+# It creates the `bip` account (BipAgents and its agents, without sudo: an agent that got out of its sandbox would not
+# be root), lets in only the bridge's door (443) and SSH by key, turns on security updates, then runs the installer in
+# `--cloud` mode as `bip` (installer/bipinstall/cloud.py). Its log: /var/log/bipagents-install.log.
+#
+# The guichet turns this text into the first-boot script of its reserve's servers (guichet/bipguichet/bootstrap.py):
+# OVHcloud's VPS take a shell script, not cloud-config. ASCII only: DigitalOcean ignored the whole user-data when it
+# held anything else (checked on a droplet, 2026-10-19), and installer/tests/test_cloud_init.py refuses it.
+
+users:
+  - default
+  - name: bip
+    shell: /bin/bash
+    lock_passwd: true
+
+package_update: true
+package_upgrade: true
+packages:
+  - podman
+  # Hermes starts each sandbox with `podman run --init`: its init binary is only a Recommends of podman, which
+  # Debian 13's cloud images don't install (lab 2026-10-29: every agent's terminal failed, "catatonit not found").
+  - catatonit
+  - uidmap
+  - slirp4netns
+  - passt
+  - git
+  - curl
+  - ufw
+  - unattended-upgrades
+  # Hermes' Node.js links libatomic (its installer would ask for sudo, which `bip` hasn't got).
+  - libatomic1
+  # Each place's backups to the guichet, encrypted on the place (installer/bipinstall/backup.py).
+  - restic
+  # Each place's space encrypted at rest when its setup asks for it (installer/bipinstall/space.py; then also run
+  # space-hardening.sh as root: swap encrypted, no core dumps, logs in memory).
+  - gocryptfs
+  - fuse3
+  # The server's ready-made Hermes comes packed with zstd; root's BipAgents reads its settings with PyYAML.
+  - zstd
+  - python3-yaml
+  # The places read the server's shared images through fuse-overlayfs (installer/bipinstall/shared_images.py).
+  - fuse-overlayfs
+  # The metadata service for root only (bipagents-metadata-block.service, below).
+  - nftables
+  # In Ubuntu's cloud images already, not in Debian 13's (Hetzner's has no sudo at all): the install's `sudo -iu bip`,
+  # the user bus rootless podman's systemd cgroups need, and the restarts after an update (below).
+  - sudo
+  - dbus-user-session
+  - needrestart
+
+write_files:
+  - path: /etc/bipagents/cloud.json
+    permissions: "0600"
+    content: |
+      {"v": 1, "pair": "{{pair}}", "language": "{{language}}", "profile": "{{profile}}"}
+  - path: /etc/sysctl.d/60-bipagents.conf
+    content: |
+      # The bridge's door listens on 443 without being root.
+      net.ipv4.ip_unprivileged_port_start = 443
+  - path: /etc/ssh/sshd_config.d/10-bipagents.conf
+    content: |
+      PasswordAuthentication no
+  - path: /etc/systemd/journald.conf.d/60-bipagents.conf
+    content: |
+      # The logs of all the server's places stay under 200 MB together.
+      [Journal]
+      SystemMaxUse=200M
+  - path: /etc/apt/apt.conf.d/20auto-upgrades
+    content: |
+      APT::Periodic::Update-Package-Lists "1";
+      APT::Periodic::Unattended-Upgrade "1";
+  # Kernel fixes only count after a reboot: the server reboots by itself at night, only when an update asks for it
+  # (/var/run/reboot-required), whoever is connected. The time is server time (UTC on these images): 00:00-00:44, a
+  # minute of its own taken from its machine id at first boot (below; 00:20 until then), so the servers of a region
+  # don't all go down together; back within minutes, before the agents' browser refresh (01:00-03:00,
+  # installer/bipinstall/browser_refresh.py). The guichet's servers say so before going down (seat-agent.py
+  # --rebooting): a planned reboot is not an outage. Servers installed before 2026-10-22: nightly-reboot.sh.
+  - path: /etc/apt/apt.conf.d/52bipagents-reboot
+    content: |
+      Unattended-Upgrade::Automatic-Reboot "true";
+      Unattended-Upgrade::Automatic-Reboot-WithUsers "true";
+      Unattended-Upgrade::Automatic-Reboot-Time "00:20";
+  # The updates themselves at 23:00-23:30, just before (the systems' own time, 06:00-07:00, would leave a kernel fix
+  # waiting a whole day for the next night). Debian marks /var/run/reboot-required too (unattended-upgrades' own
+  # kernel hook, /etc/kernel/postinst.d).
+  - path: /etc/systemd/system/apt-daily-upgrade.timer.d/60-bipagents.conf
+    content: |
+      [Timer]
+      OnCalendar=
+      OnCalendar=*-*-* 23:00
+      RandomizedDelaySec=30min
+  # The provider's metadata service (169.254.169.254, and its IPv6 addresses) answers anyone on the server: it serves
+  # the first-boot script and the server's own details. Only root may ask it (cloud-init, the provider's agents): the
+  # places' accounts (uid 1000 and up) are refused, and so are their agents' browsers and sandboxes (rootless podman:
+  # pasta and slirp4netns send as the place's uid) and any container of root's (forwarded). Its own table, so ufw's
+  # rules are never touched; loaded at every boot before the network, and again by the seat agent if it went.
+  - path: /etc/bipagents/metadata-block.nft
+    content: |
+      table inet bipagents_metadata
+      delete table inet bipagents_metadata
+      table inet bipagents_metadata {
+        chain output {
+          type filter hook output priority 0; policy accept;
+          meta skuid >= 1000 ip daddr 169.254.0.0/16 reject
+          meta skuid >= 1000 ip6 daddr { fd00:ec2::254, fe80::a9fe:a9fe } reject
+        }
+        chain forward {
+          type filter hook forward priority 0; policy accept;
+          ip daddr 169.254.0.0/16 drop
+          ip6 daddr { fd00:ec2::254, fe80::a9fe:a9fe } drop
+        }
+      }
+  - path: /etc/systemd/system/bipagents-metadata-block.service
+    content: |
+      [Unit]
+      Description=BipAgents: the provider's metadata service for root only
+      DefaultDependencies=no
+      Before=network-pre.target
+      Wants=network-pre.target
+      After=local-fs.target
+
+      [Service]
+      Type=oneshot
+      RemainAfterExit=yes
+      ExecStart=/usr/sbin/nft -f /etc/bipagents/metadata-block.nft
+
+      [Install]
+      WantedBy=sysinit.target
+  # Services whose libraries an update replaced are restarted (needrestart; it never restarts user@.service, so the
+  # places' own services keep theirs until the night's reboot or their own restart). Never cloud-init's own units:
+  # on Debian 13 the apt-get of runcmd below restarted cloud-final.service, killing the first boot halfway
+  # (2026-10-28).
+  - path: /etc/needrestart/conf.d/60-bipagents.conf
+    content: |
+      $nrconf{restart} = 'a';
+      $nrconf{override_rc}{qr(^cloud-)} = 0;
+  # A place's space encrypted at rest (its setup carries "keys") needs the server hardened first: swap emptied and
+  # encrypted, no core dumps, the journal in memory (runcmd below, add-seat.sh). The same text as
+  # installer/cloud/space-hardening.sh (installer/tests/test_cloud_init.py checks it).
+  - path: /usr/local/lib/bipagents/space-hardening.sh
+    permissions: "0755"
+    content: |
+      #!/bin/bash
+      # BipAgents: what a server must also do for its places' encrypted spaces (installer/bipinstall/space.py,
+      # internal/space-encryption.md, private) to mean something: the open spaces' data passes through memory, and memory reaches the
+      # disk through the swap file, crash dumps and logs. Run as root before any place whose setup carries "keys" is
+      # installed: by the first-boot commands (user-data.yaml, which ships this script as
+      # /usr/local/lib/bipagents/space-hardening.sh) and by add-seat.sh. Done once: /var/lib/bipagents/space-hardened says
+      # so (the seat agent tells the guichet), and running it again changes nothing:
+      #     space-hardening.sh
+      # - the swap file emptied, then encrypted with a new random key at each boot (systemd-cryptsetup, plain mode:
+      #   nothing to keep);
+      # - no core dumps kept (systemd-coredump, apport), none written by the kernel;
+      # - the journal in memory only (lost at a reboot; 200 MB at most), what it had kept on the disk removed;
+      # - gocryptfs and FUSE installed, and user_allow_other (the agents' browser containers read the open folder).
+      # Any step that fails stops it with an error: the place is then not installed.
+      # ASCII only, like user-data.yaml (installer/tests/test_cloud_init.py checks it).
+      set -eu
+
+      DONE=/var/lib/bipagents/space-hardened
+      if [ -f "$DONE" ]; then
+          echo "space hardening already done ($(cat "$DONE"))"
+          exit 0
+      fi
+
+      if command -v apt-get >/dev/null 2>&1; then
+          DEBIAN_FRONTEND=noninteractive apt-get install -y gocryptfs fuse3 cryptsetup-bin >/dev/null
+      elif command -v dnf >/dev/null 2>&1; then
+          dnf install -y gocryptfs fuse3 cryptsetup >/dev/null
+      fi
+      grep -q '^user_allow_other' /etc/fuse.conf 2>/dev/null || echo 'user_allow_other' >> /etc/fuse.conf
+
+      # Swap: the file is taken out of use and overwritten with zeros (what memory put there in clear goes), then becomes
+      # the backing of an encrypted device, keyed from /dev/urandom at each boot.
+      if grep -q '^/swapfile ' /etc/fstab; then
+          if grep -q '^/swapfile ' /proc/swaps; then
+              swapoff /swapfile
+          fi
+          size_mb=$(( $(stat -c %s /swapfile) / 1048576 ))
+          dd if=/dev/zero of=/swapfile bs=1M count="$size_mb" conv=notrunc,fsync status=none
+          sed -i 's|^/swapfile .*|/dev/mapper/bipswap none swap sw,nofail 0 0|' /etc/fstab
+          grep -q '^bipswap ' /etc/crypttab 2>/dev/null \
+              || echo 'bipswap /swapfile /dev/urandom swap,plain,cipher=aes-xts-plain64,size=512,nofail' >> /etc/crypttab
+      fi
+      if grep -q '^bipswap ' /etc/crypttab 2>/dev/null; then
+          systemctl daemon-reload
+          [ -e /dev/mapper/bipswap ] || systemctl start systemd-cryptsetup@bipswap.service
+          if ! swapon --show=NAME --noheadings | grep -qx "$(readlink -f /dev/mapper/bipswap)"; then
+              swapon /dev/mapper/bipswap
+          fi
+      fi
+
+      # Core dumps: none kept.
+      mkdir -p /etc/systemd/coredump.conf.d
+      printf '[Coredump]\nStorage=none\nProcessSizeMax=0\n' > /etc/systemd/coredump.conf.d/60-bipagents.conf
+      printf 'kernel.core_pattern = |/bin/false\nfs.suid_dumpable = 0\n' > /etc/sysctl.d/61-bipagents-space.conf
+      sysctl --system >/dev/null
+      if systemctl list-unit-files apport.service >/dev/null 2>&1; then
+          systemctl disable --now apport.service >/dev/null 2>&1 || true   # not installed everywhere
+      fi
+
+      # The journal in memory, and what it kept on the disk so far removed (before any place runs).
+      mkdir -p /etc/systemd/journald.conf.d
+      printf '[Journal]\nStorage=volatile\nRuntimeMaxUse=200M\n' > /etc/systemd/journald.conf.d/61-bipagents-space.conf
+      systemctl restart systemd-journald
+      rm -rf /var/log/journal
+
+      mkdir -p "$(dirname "$DONE")"
+      date -u +%FT%TZ > "$DONE"
+      echo "space hardening done: swap emptied and encrypted at each boot, no core dumps, journal in memory"
+
+runcmd:
+  # Packages are in by now (cloud-init analyze show: each module's time, from the boot on).
+  - echo "$(date -u +%FT%TZ) runcmd start (boot $(cut -d' ' -f1 /proc/uptime) s ago)" >> /var/log/bipagents-timeline.log
+  - sysctl --system
+  # The night's reboot minute, 00:00 to 00:44, from the machine id (the same each time it is worked out).
+  - m=$(( 0x$(cut -c1-4 /etc/machine-id) % 45 )) && printf 'Unattended-Upgrade::Automatic-Reboot-Time "00:%02d";\n' "$m" > /etc/apt/apt.conf.d/53bipagents-reboot-time
+  - systemctl daemon-reload
+  # Before any place's account runs anything: the metadata service for root only (above).
+  - systemctl enable --now bipagents-metadata-block.service
+  - systemctl restart systemd-journald
+  # Compressed memory (zram: half the memory, zstd) ahead of the swap file: the server holds about 1.5x more before
+  # slowing down (the places' installs then leave it as it is). Ubuntu's cloud kernels keep the module in
+  # linux-modules-extra (DigitalOcean, 2026-10-26); Debian's kernels have the module (cloud and arm64), so that
+  # install never runs there, and its zram-generator starts the device at once with its own defaults (lz4), hence the
+  # restart once the settings are written. The guichet's seat agent sets it up on servers installed before,
+  # and again after a kernel update (installer/cloud/seat-agent.py, the same text and the same restart).
+  - modprobe zram || apt-get install -y "linux-modules-extra-$(uname -r)"; modprobe zram && apt-get install -y systemd-zram-generator && printf '[zram0]\nzram-size = ram / 2\ncompression-algorithm = zstd\nswap-priority = 100\n' > /etc/systemd/zram-generator.conf && systemctl daemon-reload && systemctl restart systemd-zram-setup@zram0.service && systemctl start dev-zram0.swap || true
+  # 2 GB of swap: room for an agent's browser on a 4 GB server.
+  - test -f /swapfile || { fallocate -l 2G /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile && echo '/swapfile none swap sw 0 0' >> /etc/fstab; }
+  # A place to be encrypted at rest (its setup, written by the seat agent's --bootstrap above on the guichet's servers,
+  # carries "keys"): the server hardened before any place runs (the swap file just made is emptied and encrypted,
+  # the journal goes to memory). If that fails nothing is installed: no encrypted place on an unhardened server.
+  - if grep -qs '"keys"' /etc/bipagents/cloud*.json; then bash /usr/local/lib/bipagents/space-hardening.sh >> /var/log/bipagents-space-hardening.log 2>&1 || exit 1; fi
+  - systemctl restart ssh
+  - ufw default deny incoming
+  - ufw default allow outgoing
+  - ufw allow OpenSSH
+  - ufw allow 443/tcp
+  - ufw --force enable
+  # The agents' sandboxes (rootless podman) need the account's own range of user ids.
+  - grep -q '^bip:' /etc/subuid || usermod --add-subuids 200000-265535 --add-subgids 200000-265535 bip
+  - chown bip:bip /etc/bipagents/cloud.json
+  # On the guichet's servers (shared by several people), the place's own disk of 5 GB before anything runs in it
+  # (seat-agent.py --own-disk, as add-seat.sh does for the others).
+  - if [ -f /usr/local/lib/bipagents/seat-agent.py ]; then python3 /usr/local/lib/bipagents/seat-agent.py --own-disk 1 >> /var/log/bipagents-disk.log 2>&1 || true; fi
+  # BipAgents' services run when nobody is logged in.
+  - loginctl enable-linger bip
+  - systemctl start "user@$(id -u bip).service"
+  # Hermes and the agents' images once for the whole server, ready-made (installer/bipinstall/shared_hermes.py and
+  # shared_images.py), both at once, by root's own BipAgents (the one the seat agent uses too): the places then point
+  # at them instead of installing their own, the images through a read-only view of root's store for each account. A failure only costs time: the place installs its own, as before.
+  # Each phase's time goes to /var/log/bipagents-timeline.log (installer/README.md, measuring an install).
+  - echo "$(date -u +%FT%TZ) shared start" >> /var/log/bipagents-timeline.log
+  - test -d /usr/local/lib/bipagents/repo/.git || git clone --quiet --filter=blob:none https://github.com/BipAgents/BipAgents.git /usr/local/lib/bipagents/repo
+  # Root's checkout at the BipAgents commit the places install: main's latest here. A guichet whose update wave pins
+  # a commit writes that commit in place of origin/main, as it does in the install line below (BIPAGENTS_TO;
+  # guichet-rs/src/bootstrap.rs, SHARED_AT): the shared Hermes is then the version the places look for, not main's,
+  # which each place would otherwise install for itself. If it fails, root's BipAgents stays on main: time lost only.
+  - git -C /usr/local/lib/bipagents/repo -c advice.detachedHead=false checkout --quiet --force origin/main
+  - cd /usr/local/lib/bipagents/repo && { PYTHONPATH=installer python3 -m bipinstall.shared_hermes enable > /var/log/bipagents-shared-hermes.log 2>&1 & PYTHONPATH=installer python3 -m bipinstall.shared_images pull --timer > /var/log/bipagents-images.log 2>&1 & wait; }; cd /
+  - echo "$(date -u +%FT%TZ) shared done, install start" >> /var/log/bipagents-timeline.log
+  - sudo -iu bip bash -c 'curl -fsSL https://raw.githubusercontent.com/BipAgents/BipAgents/stable/install.sh | bash -s -- --cloud /etc/bipagents/cloud.json' > /var/log/bipagents-install.log 2>&1
+  - echo "$(date -u +%FT%TZ) install done" >> /var/log/bipagents-timeline.log
+  # The installer kept the secret for the bridge (deleted once the app has paired); this copy goes.
+  - shred -u /etc/bipagents/cloud.json || rm -f /etc/bipagents/cloud.json

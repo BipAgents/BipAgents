@@ -1,0 +1,514 @@
+"""`bipinstall browser-refresh`: the agents' browser kept up to date with security fixes, each night, by itself.
+
+The image (browser/Containerfile) installs Chrome (Chromium on ARM) and Fedora's packages once, when it is built; a
+container engine reuses that layer at each rebuild, so Chrome would stay as it was on the first day. This job, a timer
+of each install that has browsers (a self-hosted one, each place of the offer), runs apart from BipAgents' own updates
+(the offer's places only get those in waves):
+
+1. it waits for the server's other installs (one build at a time per server: a lock in /tmp), at the lowest priority;
+2. it asks dnf, in a throwaway container of the current image, whether Chrome or Chromium has a newer version, or any
+   of the image's packages a security update. Nothing: « up to date », and that is all;
+3. else it builds the image again under a temporary tag, with a new BROWSER_REFRESH (the Containerfile's packages
+   layer is installed again, the pinned stealth-browser-mcp layers stay as pinned) and the newest base image; checks
+   that Chrome starts (`--version`) and the MCP server's Python is there; and only then names it `bipagents-browser`.
+   A failure (network, Google's repository down) keeps the current image and says so; the next night tries again;
+4. running browsers are never interrupted: each one starts on the new image next time (its unit runs `podman run
+   --rm … bipagents-browser`). One still running on an old image and unused for 30 minutes (an `idle_minutes = 0`
+   browser never stops by itself) is restarted now; its profile, and so its logins, stay;
+5. images no longer used are removed, so the disk does not grow.
+
+What it did goes to the journal (`journalctl --user -u bipagents-refresh-browser`).
+
+Since 2026-10-27 the image usually isn't built here (shared_images.py): on a server of the offer it is the server's,
+pulled by root each night (this job only restarts the idle browsers on it); elsewhere it comes from GHCR, built each
+night by GitHub Actions when there is something new, and this job pulls it again. Steps 2-3 are for an image built here.
+
+Since 2026-10-28 (security audit 2026-10-27, 11 and 21), an image whose DevTools relay asks for the browser's secret
+(label bipagents.relay ≥ 3) gives each browser of this account that isn't running on an older image its secret, the
+mount of it in its unit, and Hermes' `browser.cdp_url` carrying it (`secure_devtools`), before any restart: a browser set
+up by an older bridge never starts on the new image without them.
+"""
+from __future__ import annotations
+
+import fcntl
+import json
+import os
+import platform
+import re
+import secrets
+import shlex
+import shutil
+import subprocess
+import sys
+import time
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Callable, List, Optional, Sequence, Tuple
+
+IMAGE = "bipagents-browser"   # hermes.BROWSER_IMAGE (not imported: this runs from a timer, with little around it)
+NEW = f"{IMAGE}:refresh"     # the image being built, named IMAGE only once it works
+UNIT = "bipagents-refresh-browser"   # never bipagents-browser-*: that is each agent's browser (moving, uninstall…)
+LOCK = Path("/tmp/bipagents-browser-refresh.lock")   # shared by every account of the server
+LOCK_WAIT = 3 * 3600        # another place's build takes minutes; past this, tomorrow
+IDLE_RESTART = 30 * 60      # a browser on an old image, unused this long, is restarted on the new one
+BROWSERS = ("google-chrome-stable", "chromium")
+VERSION = re.compile(r"\b(\d+\.\d+\.\d+\.\d+)\b")
+
+# Run as root in a throwaway container of the current image: which browser it has, then dnf's own answer (exit code
+# 100: updates, 0: none, anything else: it could not tell).
+CHECK = r"""pkg=
+for p in google-chrome-stable chromium; do rpm -q "$p" >/dev/null 2>&1 && pkg=$p && break; done
+echo "browser $pkg $(rpm -q --qf '%{VERSION}' "$pkg" 2>/dev/null)"
+out=$(dnf -q check-upgrade "$pkg" 2>&1); code=$?
+echo "browser-update $code $(printf '%s\n' "$out" | awk -v p="$pkg." 'index($1, p) == 1 {print $2; exit}')"
+dnf -q check-upgrade --security >/dev/null 2>&1; echo "security $?"
+"""
+
+# Chrome (or Chromium) answers, and the MCP server's Python finds its packages.
+SMOKE = ("google-chrome-stable --version 2>/dev/null || chromium-browser --version "
+         "&& /opt/stealth/venv/bin/python -c 'import nodriver'")
+
+Run = Callable[[Sequence[str], int], Tuple[int, str]]
+
+
+def say(text: str) -> None:
+    print(text, flush=True)
+
+
+def run(args: Sequence[str], timeout: int = 600) -> Tuple[int, str]:
+    """A command's exit code and its output (stdout then stderr); 124 when it took too long, 127 when missing."""
+    try:
+        done = subprocess.run(list(args), capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return 124, f"{args[0]} gave no answer in {timeout} s"
+    except OSError as exc:
+        return 127, str(exc)
+    return done.returncode, (done.stdout + done.stderr).strip()
+
+
+# -- What the check says ---------------------------------------------------------------------------------------------
+
+@dataclass
+class Check:
+    browser: str = ""          # google-chrome-stable or chromium
+    version: str = ""          # installed
+    newer: str = ""            # its newer version, when there is one
+    browser_code: int = -1     # dnf check-upgrade's exit code: 0, 100, else an error
+    security_code: int = -1
+
+
+def parse_check(output: str) -> Check:
+    check = Check()
+    for line in output.splitlines():
+        words = line.split()
+        if not words:
+            continue
+        if words[0] == "browser" and len(words) >= 2:
+            check.browser = words[1] if words[1] in BROWSERS else ""
+            check.version = words[2] if len(words) > 2 and check.browser else ""
+        elif words[0] == "browser-update" and len(words) >= 2 and words[1].lstrip("-").isdigit():
+            check.browser_code = int(words[1])
+            check.newer = words[2] if len(words) > 2 else ""
+        elif words[0] == "security" and len(words) >= 2 and words[1].lstrip("-").isdigit():
+            check.security_code = int(words[1])
+    return check
+
+
+def label(check: Check) -> str:
+    name = "Chromium" if check.browser == "chromium" else "Chrome"
+    return f"{name} {check.version}" if check.version else name
+
+
+def decide(check: Check, force: bool = False) -> Tuple[Optional[bool], str]:
+    """(True: rebuild, False: up to date, None: could not tell — the image stays), and why."""
+    if force:
+        return True, f"rebuild asked ({label(check)} now)"
+    if not check.browser:
+        return None, "no Chrome or Chromium found in the image"
+    if check.browser_code not in (0, 100):
+        return None, f"could not ask for {label(check)}'s updates (dnf: {check.browser_code}; network, or a repository down)"
+    if check.browser_code == 100:
+        return True, f"{label(check)}: {check.newer or 'a newer version'} is out"
+    if check.security_code == 100:
+        return True, f"{label(check)} is current; security updates for the image's packages"
+    if check.security_code != 0:
+        return False, f"{label(check)}: up to date (the security check gave no answer: {check.security_code})"
+    return False, f"{label(check)}: up to date"
+
+
+# -- Commands ---------------------------------------------------------------------------------------------------------
+
+def is_podman(engine: str) -> bool:
+    return Path(engine).name == "podman"
+
+
+def build_command(engine: str, repo: Path, tag: str = IMAGE, stamp: Optional[str] = None) -> List[str]:
+    """The image built with today's packages: a new BROWSER_REFRESH installs the packages layer again instead of
+    taking it from the cache, and the base image (fedora) is pulled when the registry has a newer one."""
+    stamp = stamp or time.strftime("%Y%m%d%H%M")
+    pull = ["--pull=newer"] if is_podman(engine) else ["--pull"]
+    return [engine, "build", *pull, "--build-arg", f"BROWSER_REFRESH={stamp}", "-t", tag,
+            "-f", str(repo / "browser" / "Containerfile"), str(repo / "browser")]
+
+
+def check_command(engine: str, image: str = IMAGE) -> List[str]:
+    return [engine, "run", "--rm", "--pull=never", "--user", "0", "--entrypoint", "/bin/sh", image, "-c", CHECK]
+
+
+def smoke_command(engine: str, image: str) -> List[str]:
+    return [engine, "run", "--rm", "--pull=never", "--entrypoint", "/bin/sh", image, "-c", SMOKE]
+
+
+def image_id(engine: str, image: str, run: Run) -> str:
+    code, out = run([engine, "image", "inspect", "--format", "{{.Id}}", image], 60)
+    return out.strip().removeprefix("sha256:") if code == 0 else ""
+
+
+# -- The swap ---------------------------------------------------------------------------------------------------------
+
+def browsers_root(home: Path) -> Path:
+    """Where the bridge keeps each browser's folder (its `busy` file): bridge.toml's [browser] root, else its default."""
+    for config in (home / ".config" / "bipagents" / "bridge.toml", home / ".config" / "hermes-ios" / "bridge.toml"):
+        try:
+            text = config.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        section = re.search(r"^\[browser\]\n((?:(?!\[).*\n?)*)", text, re.M)
+        found = re.search(r"^root\s*=\s*['\"]([^'\"]+)['\"]", section.group(1), re.M) if section else None
+        if found:
+            return Path(os.path.expanduser(found.group(1)))
+    return home / ".local" / "share" / "hermes-bridge" / "browsers"
+
+
+CDP_SECRET = "cdp.token"                 # bridge-rs browsers.rs CDP_SECRET, next to vnc.pass
+CDP_MOUNT = "/run/bipagents/cdp.token"   # where the container's relay reads it (browser/devtools_relay.py)
+RELAY_SECRET = 3                         # the relay version that asks for it (label bipagents.relay)
+
+
+def relay_version(engine: str, image: str, run: Run) -> int:
+    code, out = run([engine, "image", "inspect", "--format", '{{index .Config.Labels "bipagents.relay"}}', image], 60)
+    return int(out.strip()) if code == 0 and out.strip().isdigit() else 0
+
+
+def cdp_secret(place: Path) -> str:
+    """The browser's DevTools secret, made (0600) when it has none or an unusable one."""
+    path = place / CDP_SECRET
+    try:
+        text = path.read_text(encoding="utf-8").strip()
+    except OSError:
+        text = ""
+    if len(text) < 16 or not text.isalnum():
+        text = secrets.token_hex(32)
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as file:
+            file.write(text + "\n")
+    os.chmod(path, 0o600)
+    return text
+
+
+def with_cdp_mount(text: str, place: Path) -> str:
+    """A unit's `podman run` (as the bridge wrote it) with the secret mounted read-only, before its published ports."""
+    marker = " -p 127.0.0.1:"
+    if CDP_MOUNT in text or marker not in text:
+        return text
+    at = text.index(marker)
+    return text[:at] + " -v " + shlex.quote(f"{place / CDP_SECRET}:{CDP_MOUNT}:ro,Z") + text[at:]
+
+
+def with_cdp_url(text: str, port: int, secret: str) -> str:
+    """A Hermes config whose `cdp_url` is this browser's relay, with the secret in front of its path."""
+    plain = re.compile(rf"^([ \t]*cdp_url:[ \t]*)(['\"]?)http://127\.0\.0\.1:{port}/?\2[ \t]*$", re.M)
+    return plain.sub(lambda m: f"{m.group(1)}http://127.0.0.1:{port}/t/{secret}", text)
+
+
+def _write(path: Path, text: str) -> None:
+    partial = path.with_name(path.name + ".part")
+    partial.write_text(text, encoding="utf-8")
+    os.chmod(partial, path.stat().st_mode & 0o777)
+    partial.replace(path)
+
+
+def secure_devtools(home: Path, agent: str) -> bool:
+    """The agent's browser gets its DevTools secret: the file, its mount in the container's unit (and in the unit its
+    first use writes, mcp.json), Hermes' `browser.cdp_url` carrying it. Returns whether a unit changed."""
+    place = browsers_root(home) / agent
+    try:
+        port = int(json.loads((place / "ports.json").read_text(encoding="utf-8"))["cdp"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return False
+    secret = cdp_secret(place)
+    changed = False
+    unit = home / ".config" / "systemd" / "user" / f"bipagents-browser-{agent}.service"
+    if unit.is_file():
+        text = unit.read_text(encoding="utf-8")
+        if with_cdp_mount(text, place) != text:
+            _write(unit, with_cdp_mount(text, place))
+            changed = True
+    mcp = place / "mcp.json"
+    try:
+        settings = json.loads(mcp.read_text(encoding="utf-8"))
+        text = settings["unit"]["text"]
+    except (OSError, ValueError, KeyError, TypeError):
+        settings = None
+    if settings is not None:
+        # the browser proxy's own look at the page goes through DevTools with the same secret (card-guards, 14/11:
+        # the bridge writes these keys at its start too; whichever comes first)
+        wanted = {"cdp_secret_file": str(place / CDP_SECRET), "scripts": str(place / "scripts.jsonl")}
+        missing = {key: value for key, value in wanted.items() if settings.get(key) != value}
+        if with_cdp_mount(text, place) != text or missing:
+            settings["unit"]["text"] = with_cdp_mount(text, place)
+            settings.update(missing)
+            _write(mcp, json.dumps(settings, indent=2, ensure_ascii=False) + "\n")
+    roots = [home / ".hermes"] + sorted((home / ".local" / "share" / "bipagents" / "spaces").glob("*"))
+    for config in (root / "profiles" / agent / "config.yaml" for root in roots):
+        try:
+            text = config.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        if with_cdp_url(text, port, secret) != text:
+            _write(config, with_cdp_url(text, port, secret))
+    return changed
+
+
+def restart_old(engine: str, home: Path, run: Run, now: Optional[float] = None) -> List[str]:
+    """This install's running browsers on an image older than the current one, restarted when unused for
+    IDLE_RESTART (their profiles stay; a browser in use keeps going, and takes the new image at its next start).
+    Returns the agents restarted."""
+    now = time.time() if now is None else now
+    current = image_id(engine, IMAGE, run)
+    code, out = run([engine, "ps", "--filter", "name=bipagents-browser-", "--format", "{{.Names}}"], 60)
+    if not current or code != 0:
+        return []
+    units = home / ".config" / "systemd" / "user"
+    root = browsers_root(home)
+    restarted = []
+    to_restart, on_old = [], set()
+    for name in out.split():
+        agent = name.removeprefix("bipagents-browser-")
+        if name == agent or not (units / f"{name}.service").is_file():
+            continue   # another account's (one docker for the whole machine), or not a browser of ours
+        code, used = run([engine, "inspect", "--format", "{{.Image}}", name], 60)
+        if code != 0 or used.strip().removeprefix("sha256:") == current:
+            continue
+        try:
+            unused = now - (root / agent / "busy").stat().st_mtime
+        except OSError:
+            unused = float("inf")
+        if unused < IDLE_RESTART:
+            say(f"{agent}'s browser is in use: on the new image at its next start")
+            on_old.add(agent)   # its relay doesn't know the secret yet: left as it is until a later night
+            continue
+        to_restart.append((agent, name))
+    if relay_version(engine, IMAGE, run) >= RELAY_SECRET:
+        agents = {p.name.removeprefix("bipagents-browser-").removesuffix(".service")
+                  for p in units.glob("bipagents-browser-*.service")}
+        agents.update(p.parent.name for p in root.glob("*/mcp.json"))   # set up, never used yet (no unit)
+        agents = sorted(agents)
+        changed = [agent for agent in agents if agent not in on_old and secure_devtools(home, agent)]
+        if changed:
+            run(["systemctl", "--user", "daemon-reload"], 60)
+            say(f"DevTools secret given to the browsers of {', '.join(changed)}")
+    for agent, name in to_restart:
+        code, said = run(["systemctl", "--user", "restart", f"{name}.service"], 180)
+        if code == 0:
+            restarted.append(agent)
+            say(f"{agent}'s browser restarted on the new image (its profile and logins kept)")
+        else:
+            say(f"{agent}'s browser could not be restarted ({said[-200:]}): on the new image at its next start")
+    return restarted
+
+
+def prune(engine: str, run: Run) -> None:
+    """Images no longer named nor used (yesterday's, a failed build's layers) removed."""
+    code, out = run([engine, "image", "prune", "-f"], 600)
+    if code != 0:
+        say(f"old images not removed: {out[-200:]}")
+    if not is_podman(engine):
+        run([engine, "builder", "prune", "-f", "--filter", "until=168h"], 600)
+
+
+# -- The lock ---------------------------------------------------------------------------------------------------------
+
+def server_lock(path: Path = LOCK, wait: float = LOCK_WAIT, sleep: Callable[[float], None] = time.sleep) -> Optional[int]:
+    """One refresh at a time on the server (its places are accounts of their own, each with its own images): a
+    file every account can open, locked with flock. None after `wait` seconds (another one is stuck: tomorrow)."""
+    try:
+        try:
+            fd = os.open(path, os.O_RDONLY)
+        except FileNotFoundError:
+            try:
+                fd = os.open(path, os.O_RDONLY | os.O_CREAT | os.O_EXCL, 0o644)
+                os.fchmod(fd, 0o644)   # whatever this account's umask: the other accounts open it too
+            except FileExistsError:
+                fd = os.open(path, os.O_RDONLY)
+    except PermissionError:   # made unreadable by hand: this account's own lock, the others may build meanwhile
+        say(f"{path} cannot be opened: not waiting for the server's other installs")
+        private = Path.home() / ".cache" / "bipagents-browser-refresh.lock"
+        private.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(private, os.O_RDONLY | os.O_CREAT, 0o600)
+    deadline = time.monotonic() + wait
+    said = False
+    while True:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return fd
+        except BlockingIOError:
+            if time.monotonic() >= deadline:
+                os.close(fd)
+                return None
+            if not said:
+                say("another install of this server is refreshing its browser: waiting for it")
+                said = True
+            sleep(30)
+
+
+# -- The whole refresh ------------------------------------------------------------------------------------------------
+
+def from_registry(engine: str, repo: Path, home: Path, run: Run = run) -> int:
+    """An image pulled from GHCR (shared_images.py): the workflow builds it again each night when there is something
+    new, under the same key; this pulls it, checks that it starts and only then names it IMAGE."""
+    from .shared_images import browser_key, browser_ref
+    key = browser_key(repo)
+    if not key:
+        say("current image kept: this checkout's browser key is unknown")
+        return 1
+    ref = browser_ref(key)
+    before = image_id(engine, IMAGE, run)
+    code, out = run([engine, "pull", "--quiet", ref], 3600)
+    if code != 0:
+        say(f"current image kept: {ref} could not be pulled ({out[-200:]})")
+        return 1
+    if image_id(engine, ref, run) != before:
+        code, version = run(smoke_command(engine, ref), 300)
+        found = VERSION.search(version)
+        if code != 0 or not found:
+            say(f"current image kept: the new one does not start ({version[-300:]})")
+            run([engine, "rmi", ref], 120)
+            return 1
+        run([engine, "tag", ref, IMAGE], 120)
+        say(f"browser refreshed from {ref}: {found.group(1)}")
+    else:
+        say(f"browser up to date ({ref})")
+    run([engine, "rmi", ref], 120)   # only the name: the image is IMAGE
+    restart_old(engine, home, run)
+    prune(engine, run)
+    return 0
+
+
+def refresh(engine: str, repo: Path, home: Path, run: Run = run, force: bool = False,
+            stamp: Optional[str] = None) -> int:
+    """0: up to date or refreshed; 1: the image stays as it was (said why); the next night tries again. An image
+    from the server's shared store is root's to refresh; one pulled from GHCR is pulled again (shared_images.py)."""
+    before = image_id(engine, IMAGE, run)
+    if not before:
+        say("no agent browser image here: nothing to refresh")
+        return 0
+    from .shared_images import source_of
+    origin = source_of(home).get("source")
+    if origin == "shared":
+        say("the server keeps this browser up to date (its shared images, pulled each night)")
+        restart_old(engine, home, run)
+        return 0
+    if origin == "registry" and not force:
+        return from_registry(engine, repo, home, run)
+    code, out = run(check_command(engine), 900)
+    check = parse_check(out)
+    rebuild, why = decide(check, force)
+    if rebuild is None:
+        say(f"current image kept: {why}" + (f" — {out[-300:]}" if code not in (0,) and out else ""))
+        return 1
+    if not rebuild:
+        say(why)
+        restart_old(engine, home, run)
+        prune(engine, run)
+        return 0
+    say(f"{why}: building the browser again (the current one keeps working meanwhile)")
+    run([engine, "rmi", NEW], 120)   # a failed night's leftover
+    code, out = run(build_command(engine, repo, NEW, stamp), 3600)
+    if code == 0:
+        code, version = run(smoke_command(engine, NEW), 300)
+        found = VERSION.search(version)
+        if code != 0 or not found:
+            say(f"current image kept: the new one does not start ({version[-300:]})")
+            code = 1
+    else:
+        say(f"current image kept: the build failed ({out[-400:]})")
+    if code != 0:
+        run([engine, "rmi", NEW], 120)
+        prune(engine, run)
+        return 1
+    code, out = run([engine, "tag", NEW, IMAGE], 120)
+    if code != 0:
+        say(f"current image kept: {out[-200:]}")
+        run([engine, "rmi", NEW], 120)
+        return 1
+    run([engine, "rmi", NEW], 120)   # only the name: the image is IMAGE now
+    old = check.version or "?"
+    say(f"browser refreshed: {label(check).split()[0]} {old} → {found.group(1)}"
+        if old != found.group(1) else f"browser refreshed: {label(check)}, system packages updated")
+    restart_old(engine, home, run)
+    prune(engine, run)
+    return 0
+
+
+def units(repo: Path, python: Path) -> List[Tuple[str, str]]:
+    """The systemd user service and its nightly timer: between 1:00 and 3:00 (spread: the places of a server don't
+    all check at once, and before the 4:30 update), at the lowest priority."""
+    service = ("[Unit]\nDescription=BipAgents: the agents' browser kept up to date (Chrome, security fixes)\n"
+               "After=network-online.target\n\n"
+               "[Service]\nType=oneshot\nNice=19\nIOSchedulingClass=idle\n"
+               f"Environment=PYTHONPATH={repo / 'installer'}\nWorkingDirectory={repo}\n"
+               f"ExecStart={python} -m bipinstall browser-refresh\n")
+    timer = ("[Unit]\nDescription=BipAgents: refresh the agents' browser each night\n\n[Timer]\n"
+             "OnCalendar=*-*-* 01:00:00\nRandomizedDelaySec=2h\nPersistent=true\n\n[Install]\nWantedBy=timers.target\n")
+    return [(f"{UNIT}.service", service), (f"{UNIT}.timer", timer)]
+
+
+def install_timer(runner, repo: Path, python: Path, home: Optional[Path] = None) -> None:
+    """Linux only (the browsers are containers; a Mac has none)."""
+    folder = (home or Path.home()) / ".config" / "systemd" / "user"
+    for name, text in units(repo, python):
+        runner.log.append(f"write {folder / name}")
+        if not runner.dry:
+            folder.mkdir(parents=True, exist_ok=True)
+            (folder / name).write_text(text, encoding="utf-8")
+    runner.run(["systemctl", "--user", "daemon-reload"], check=False)
+    runner.run(["systemctl", "--user", "enable", "--now", f"{UNIT}.timer"], check=False)
+
+
+def version(engine: str, run: Run = run) -> str:
+    """The browser of the current image, e.g. « Chrome 155.0.8059.84 », or ''."""
+    code, out = run([engine, "run", "--rm", "--pull=never", "--entrypoint", "/bin/sh", IMAGE, "-c",
+                     "google-chrome-stable --version 2>/dev/null || chromium-browser --version"], 120)
+    found = VERSION.search(out) if code == 0 else None
+    return f"{'Chromium' if 'Chromium' in out else 'Chrome'} {found.group(1)}" if found else ""
+
+
+def main(argv: List[str]) -> int:
+    import argparse
+    parser = argparse.ArgumentParser(prog="bipinstall browser-refresh", description=__doc__.split("\n\n")[0])
+    parser.add_argument("--force", action="store_true", help="build again even when nothing is new")
+    parser.add_argument("--version", action="store_true", help="only say which Chrome the browser has")
+    args = parser.parse_args(argv)
+    if platform.system() != "Linux":
+        say("the agents' browsers only run on Linux: nothing to refresh")
+        return 0
+    engine = shutil.which("podman") or shutil.which("docker")
+    if not engine:
+        say("no podman or docker here: nothing to refresh")
+        return 0
+    if args.version:
+        say(version(engine) or "no agent browser image here")
+        return 0
+    lock = server_lock()
+    if lock is None:
+        say("another refresh of this server has not finished for hours: tomorrow")
+        return 1
+    try:
+        return refresh(engine, Path(__file__).resolve().parents[2], Path.home(), force=args.force)
+    finally:
+        os.close(lock)
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

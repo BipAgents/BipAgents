@@ -1,0 +1,337 @@
+🇬🇧 English · [🇫🇷 Français](README.fr.md)
+
+# The BipAgents installer
+
+One command, run in the account of the person the agents are for — no admin rights:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/BipAgents/BipAgents/stable/install.sh | bash
+```
+
+Add `--dry-run` to see every step and command without changing anything.
+
+## What it does
+
+1. **Looks at the machine**: system, memory, processor, GPU, Tailscale.
+2. **Asks where the model runs** — usually *not* on this machine:
+   - another machine of your network (a PC with a GPU, a Spark, a Mac): it finds the OpenAI-compatible servers by
+     itself (Ollama, LM Studio, vLLM, llama.cpp…) and lists their models;
+   - a cloud API (OpenRouter, OpenAI, Anthropic, Mistral) with your key;
+   - this machine, when it has the room.
+
+   It checks that the model answers, and whether it reads images (photos are then sent to it as they are).
+3. **Picks a setup that fits**:
+
+   | Profile | Typical machine | Model | Voices | Agents' browser |
+   |---|---|---|---|---|
+   | Light (default) | Mac mini 16 GB | elsewhere (network or API) | Pocket (CPU) | on demand, one at a time |
+   | Local | Mac 24–32 GB, PC with GPU | on this machine | Pocket | on demand |
+   | Large | Linux server ≥ 64 GB | elsewhere | Pocket + your voice model (if one already runs) | permanent, one per person |
+
+   On a 16 GB Mac mini with the model elsewhere: about 1 GB per person plus the voices — a family fits.
+4. **Installs Hermes** with its official installer, at the version tested with BipAgents (v0.23.1, `3b42157858`), applies the
+   patches of `hermes/patches/` (the time with each message, the cost of each message, cheaper repeated prompts, agents writing to each other, the vault in the browser), as **one gateway per person** (Hermes' multiplex mode): every
+   agent is a profile reached at `/p/<agent>/` with its own key. New agents are picked up without a restart.
+   On Linux with podman, each agent's tools run in a sandbox the bridge keeps isolated: no folder of the machine
+   inside (the files sent to the agent are copied into a podman volume of its own; shared folders between agents are
+   podman volumes too, `/partage` and `/lecture/<agent>`, kept in step with `<data>/shares/` for backups) and no
+   internet but the package registries (PyPI, npm, Rust crates, Go, Debian), through the `bipagents-egress` proxy on
+   a network without a route out. Hermes then runs harmless work there without asking each time. `bipagents update`
+   switches existing installs (`2026-10-22-isolated-sandboxes`, `2026-10-23-share-volumes`). `[sandbox] isolate =
+   "off"` in the bridge's config, then a restart of the bridge, steps back: folders mounted as before, the network and
+   proxy settings taken out.
+5. **Creates the first agents**, named by the person, from kinds (Everyday, Wellness, Finances, Home, Work, Learn, Creative, Tech) or a custom « Other » (its role, tone, rules, language and colour, described by the person),
+   each with a starting personality (`SOUL.md`) and joined to Bot Mode so they can talk to each other.
+6. **Sets up the voices** (Pocket TTS, one server per machine, shared by everyone) and **the bridge** (one program in
+   Rust: this version's binaries downloaded from the GitHub release `bridge-<key>` and checked against its
+   `SHA256SUMS`, into `~/.local/share/bipagents/bridge/<key>/`; its config in `~/.config/bipagents/bridge.toml`, keys
+   generated, its local-network door), as services that start on their own: launchd on macOS, systemd user units on
+   Linux. Builds exist for Linux x86_64 and ARM64 (Windows runs BipAgents in WSL2) and macOS; on any other machine
+   the installer stops before changing anything, and runs a bridge built there with
+   `BIPAGENTS_BRIDGE_BUILD=<folder of bipbridge and bip-browser-mcp>` (`cargo build --release` in `bridge-rs/`).
+   `bipagents bridge` says which version runs; `bipagents bridge rust` fetches it again and restarts it.
+7. **Gives each agent its visible browser** (Linux with podman, if you want it): a real Chrome on a desktop of its
+   own, which you watch live in the conversation or the « Bureau » and take over from the app (behind Face ID or the
+   phone's lock), and in which the vault fills
+   passwords without the agent seeing them. See [`browser/`](../browser/README.md).
+8. **Publishes the install on the tailnet** (`tailscale serve`, never on the Internet). Without the right to do it
+   (another person's account on Linux), it prints the commands for the administrator.
+9. **Shows one QR code**: scanned in the app, it adds every agent of the install.
+
+## On a rented server (VPS)
+
+The installer recognises a rented server (Hetzner, OVH, Scaleway, AWS…): no door on a local network, and the model
+in the cloud offered first. The server is prepared in advance with a cloud-init file: see
+[BipAgents on a rented server](../docs/vps.md).
+
+On a place of the all-included offer (`--cloud` with the guichet's setup), the place backs itself up as it is used
+(restic): a timer looks every 5 minutes, backs up a few minutes after a change (at most 15 minutes behind while the
+person goes on), nothing while nothing changes, once a day all the same; `bipagents backup` backs up now. Encrypted with a key made on the place and kept by the person's phones, sent to the
+guichet, which can't read it. After an outage the place moves to another server and the phone gives it its key back.
+
+## On Windows
+
+Windows 11 (22H2 or later), in PowerShell opened as administrator:
+
+```powershell
+irm https://raw.githubusercontent.com/BipAgents/BipAgents/stable/install.ps1 | iex
+```
+
+The agents live in **WSL2** (Ubuntu), installed exactly as on a Linux server — sandboxes, voices and browsers
+included. `install.ps1` prepares what Windows needs, each step only when needed, then runs this installer there:
+
+- WSL2 and Ubuntu (Ubuntu asks for a Linux user name and password the first time; Windows may ask for a restart:
+  run the command again afterwards);
+- WSL's network **mirrors** Windows' (`networkingMode=mirrored` in `%USERPROFILE%\.wslconfig`): the local network
+  reaches the bridge's door, and a model server running on Windows (LM Studio, Ollama…) is found at `127.0.0.1`;
+- in Ubuntu: systemd, git, curl, podman, and « linger »;
+- **Windows' Tailscale**, signed in (installed with winget if you agree): it publishes the agents on your tailnet —
+  the installer drives it from WSL;
+- a **« BipAgents » task at logon** that keeps WSL awake (Windows stops it once no window uses it).
+
+Keep the PC on and awake (Settings › System › Power: never sleep when plugged in); the agents start when you log in
+to Windows. Update: `wsl -d Ubuntu-24.04 -- bash -lc 'bipagents update'`. Another distribution:
+`$env:BIPAGENTS_DISTRO = '…'` before the command. Remove: uninstall BipAgents in Ubuntu (below), then
+`Unregister-ScheduledTask BipAgents` (and `wsl --unregister Ubuntu-24.04` to delete Ubuntu with everything in it).
+
+A Hermes installed on Windows itself (the RTX Spark's agent setup, `install.ps1` of Hermes) is not used: its agents
+run without a sandbox, and the bridge does not run on Windows yet. It stays as it is, next to BipAgents.
+
+## If you already have Hermes
+
+The installer sees it and plugs into it **without touching your settings**: no question about the model, and your
+model, tools, platforms (Telegram…) and agents stay as they are. It asks which agents (profiles) to show in the app,
+your main profile included, and shows everything it will change before it starts:
+
+- Hermes' local API, when it is off: on, on 127.0.0.1, on a port of your block, with a new key;
+- a key for each shown agent that has none;
+- BipAgents' patches in Hermes' code, if you want them and your version is the tested one;
+- a service for your gateway when it is not running, or a restart when it already runs as a service (one you started
+  by hand, you restart yourself).
+
+Once running, the bridge adds one thing to the shown agents other than your main profile: an entry in their
+`config.yaml` that gives them the app's tools (`mcp_servers.bipagents`). It never touches their personality
+(`SOUL.md`), thinking level, other tools, skills, memory or scheduled jobs: they stay yours, so they don't get the
+app's own rules either (the Carnet's habits, the language they write first in, the documents' styles), and files sent
+from the app aren't mounted in a sandbox of yours.
+
+All of it is written down in `~/.config/bipagents/existing-hermes.json`, with a copy of each shown profile's
+`config.yaml`, `.env` and `SOUL.md` as they were: uninstalling puts those files back byte for byte (when you changed
+nothing else in them meanwhile; otherwise only what BipAgents added is taken out), removes what it added, takes the
+patches off, and leaves your gateway as it ran before. `--all` never removes a Hermes that was there before BipAgents.
+When your agents' tools do not run in a sandbox, the bridge keeps no passwords (no vault): it tells you so, without
+changing their tools. It needs a
+Hermes that serves several agents at one address (`hermes update` otherwise).
+
+## The Carnet
+
+Every agent files what matters in the person's Carnet, kept by the bridge as Markdown pages under its data dir
+(`notebook/carnet/`, exportable to Obsidian from the app). A nightly sorting with a small model catches what the agents
+missed, only when there is something to sort and under a monthly cap (`[notebook] monthly_cap`, 0.10 € by default);
+see docs/self-hosting.md.
+
+## Updating BipAgents
+
+`bipagents update` (or `curl -fsSL https://raw.githubusercontent.com/BipAgents/BipAgents/stable/install.sh | bash -s --
+update`, the same as `bash ~/BipAgents/install.sh update`) brings this account's install up to date. `bipagents` alone
+lists its commands (update, qr, voice, console, hermes-update, bridge, family add, export, resume, send, backup,
+browser-refresh, encrypt, uninstall); the installer puts it in `~/.local/bin`. It shows what is new, restarts only
+what changed (the bridge, the Bips' voices when this account runs them, the agents' browsers when their image changed:
+rebuilt, their profiles kept), and applies the settings a fresh install now makes (`installer/bipinstall/migrations.py`:
+for instance risky commands always asking you). It then offers to update the machine's other installs
+too (the family's), each in its own account, after your sudo password, asked once (`--all`: without asking); run
+from an administrator's account with no install of its own, it updates that account's Bips' voices and the others.
+What no account can do this way comes as commands to run (Hermes' own update).
+Local changes in `~/BipAgents` that block it are shown with the commands that put them aside.
+
+The first time, it offers to do this each night at 4:30 (a timer of this account, `install.sh update --auto`: no
+questions; `systemctl --user disable --now bipagents-update.timer` stops it). `--check` only says what is new. A Hermes
+you had before BipAgents keeps its settings unless you add `--apply-to-my-hermes`.
+
+The agents' browser does not wait for these updates: each night a timer of its own (`bipagents-refresh-browser`) checks
+whether Chrome or the image's packages have security fixes and, only then, builds the image again and swaps it in
+without interrupting a browser in use (`browser/README.md`, « Staying up to date »). The offer's places get it too.
+
+## Moving to another machine
+
+From a rented server to a computer at home, from one host to a cheaper one, or the other way round: everything comes
+along. Your agents' personality, memory, skills, conversations, routines and files, Hermes' settings and your model's
+key, the phones' keys and notifications, the vault, shared data, the family's links and the browsers' logins.
+
+1. On the old machine: `bipagents export --moving`. It writes one encrypted file (`~/bipagents-<machine>-<date>.bipagents`),
+   shows its passphrase once, then stops the install there, so no routine runs twice. `bipagents resume` starts it again
+   if you change your mind.
+2. For your phones to need nothing: in Tailscale's admin, rename the old machine (`aibox-old`) and give the new one its
+   name. Same name and same ports: the app finds its agents by itself. Otherwise you scan a new QR code at the end.
+3. Copy the file to the new machine (`scp`), then run there, in the account that will hold the agents:
+   `curl -fsSL https://raw.githubusercontent.com/BipAgents/BipAgents/stable/install.sh | bash -s -- import <file>`. It
+   asks for the passphrase and installs BipAgents and Hermes in the same versions, for this machine's processor. It
+   puts everything back with paths, ports, the tailnet name and the local network adjusted, starts it all and checks
+   the agents answer.
+4. Once everything works on the new machine, `bipagents uninstall --all` on the old one removes the old copy.
+
+The file goes from one machine to the other as you copy it: nothing passes through anyone else. Whoever has the file
+**and** its passphrase can run your agents, so keep them apart. Without `--moving`, `bipagents export` is a backup:
+the install keeps running. Left out are Hermes' code and runtimes (installed again), caches, logs and browser caches.
+
+What may need you afterwards:
+- **A model on your local network.** One the new machine cannot reach is reported at the end; choose another in the
+  app.
+- **Sites signing in again.** Some sites ask again from a new address.
+- **Losing the sandbox.** Moving to a Mac, or to a Linux without podman, leaves the agents without terminal, file
+  access, vault or browser until one is there.
+
+## Updating Hermes
+
+Whenever you want: `bipagents hermes-update`. Before changing anything, it says which BipAgents
+patches still apply on the new version (checked on a copy). Then it takes our patches off, runs `hermes update`
+(its backup, its dependencies), puts back the patches that apply, restarts the agents (the hub and their spaces) and
+checks that each one answers. When an agent no longer answers, it offers to go back to the previous version.
+`--check` checks without changing anything. When a BipAgents update brings a new patch, `--fixes-only` puts it on
+the Hermes you have, without updating Hermes, then restarts and checks the agents.
+
+**Your own Hermes** (installed before BipAgents): only the patches you chose are put back; the ones BipAgents added
+since are offered, with a question, when they fit your version (`--fixes-only`, and `bipagents update` when the
+patches change; a refusal is remembered). When your Hermes isn't the version BipAgents is built and tested on,
+`--check` says so, and `bipagents hermes-update --to-bipagents` moves it there with every patch: it shows the plan
+and asks, backs up first (`~/.local/state/bipagents/hermes-move/<time>/`: your conversations, profiles, memory,
+skills and settings, Hermes' code and environment as they are), waits for the turns going on, stops the gateways
+(the hub and your agents' spaces), runs that version's own Hermes installer (`--commit`: its dependencies and
+migrations, as a fresh install), puts every patch on, checks your model and settings are unchanged, restarts and
+checks every agent. Any failure puts everything back by itself. `--undo-move` takes a finished move back.
+
+## Uninstall
+
+`bipagents uninstall` removes the services, the tailnet
+publishing and the bridge's config, keeping the agents' data in `~/.hermes`. `--all` also removes Hermes and that data,
+after a confirmation. `--dry-run` shows what would be removed.
+
+## Voices: the Bips, and your own voice model
+
+The Bips' voices (Kyutai Pocket TTS, on the CPU, in French, English, Spanish and German) are always installed: they
+are light and answer almost instantly. **Your own voice model** can speak for some uses instead: any server already
+running on this machine or the local network with OpenAI's `POST /v1/audio/speech` — Fish Audio Drama 3 on audio.cpp
+(`tts/drama3/`), Kokoro, Kyutai… Nothing is installed for it: the installer looks for one (audio.cpp's port 8099,
+Kokoro's 8880, Kyutai's 8097) and asks what it speaks for — the **Live**, the **spoken replies** to your voice notes,
+the **reading** of messages and reports. The Bips speak for the rest, and stand in when it is down.
+
+- `--voice-server http://192.168.1.20:8880` gives its address; `--voice-uses live,replies` what it speaks for.
+- `bash ~/BipAgents/install.sh voice` connects one later (or changes it, `--off` to go back to the Bips), in each
+  account whose bridge should use it. In the app: each agent › Voice › « Your voice model » (« Voice 1, Voice 2… »),
+  and Settings › Voice › « Your voice model » for what it speaks for.
+
+## Several people on one machine
+
+**One install per person, each in their own account.** Each person gets their own bridge, Hermes, agents, memory,
+files and browser sessions, separated by the system: one person's agents cannot read the other's. All installs run
+at the same time on the same machine, each on its own block of ten ports (8640 for the first, then 9200, 9210…).
+
+What they share: the model and the voices (Pocket, and a voice model already running on the machine or the network, see
+above). Each install sends its own notifications through Kerfy Studio's push relay (`[push] service_url`).
+
+### Who runs what, from which account
+
+| | Who | Which account | What |
+|---|---|---|---|
+| Once | The administrator | Their own (with `sudo`) | `bash ~/BipAgents/install.sh` — their own install, as usual |
+| For each person | The administrator | **Their own** (with `sudo`), never the person's | `bash ~/BipAgents/install.sh family add Lea` |
+| The person | — | — | Nothing on the server: Tailscale on your tailnet, the app, their QR code |
+
+### `family add`, step by step (Linux)
+
+Run it **in the administrator's terminal**. It shows each step as `[n/4]`:
+
+1. **Their Linux account** (`lea`, or the one given with `--account`): created if it does not exist, given ID ranges
+   for rootless containers (the agents' browser) and « linger » (their services keep running while they are logged
+   out). Each `sudo` command is shown and confirmed first; nothing is asked when the account is already ready.
+   `--dry-run` only shows these commands.
+2. **Their install, in their account**: no need to log into their account (no `ssh lea@…`). Answer `y` and it runs
+   there through `sudo`, its questions showing up **in your terminal** (the model, their first agents, the visible
+   browser). They type nothing. It ends with their **QR code**. Answer `N` to get the command and run it later.
+3. **Publish their ports on the tailnet**: it offers to run the `sudo tailscale serve` commands (`y`), or prints them.
+4. **Their phone, on YOUR tailnet**: the one this server is in. A Tailscale account of their own makes a tailnet of
+   its own, where the app can't reach the server. So:
+   1. invite them in the [Tailscale console](https://login.tailscale.com/admin/users) › Invite users (their email);
+   2. on their phone, they accept the invite, then in the Tailscale app: profile icon › Add account › sign in with
+      the invited email › pick your tailnet;
+   3. once the Tailscale app lists the server: the BipAgents app › « + » › Scan QR code.
+
+   Simpler, but their phone is then one of your devices: sign Tailscale in with your own account. The QR code again:
+   `bipagents qr lea`.
+
+The installer speaks English. Agents answer in the language they are written to; the one they write first in
+(routines, reports) is set per agent in the app, the phone's by default.
+
+On macOS, create their account in System Settings; they paste the printed line in **their own** session. Services
+run while the account is logged in (automatic login on a Mac mini used as a server).
+
+## Servers of the offer: what comes ready-made
+
+What is the same on every server is built once by GitHub Actions, not on each server:
+
+| What | Built by | Where a server gets it | If it can't |
+|---|---|---|---|
+| Hermes, shared by the server's places (`shared_hermes.py`) | « Shared Hermes (ready-made) » | release `hermes-<version>` (`shared-hermes version`), unpacked into `/opt/bipagents/hermes/<version>` | built on the server, as before |
+| The agents' browser (`browser/`) | « Server images », again each night when Chrome or Fedora have news | `ghcr.io/bipagents/bipagents-browser:<key>` (`shared-images key`) | pulled by the account, else built by it |
+| Hermes' sandbox | « Server images » (a mirror) | `ghcr.io/bipagents/hermes-sandbox:desktop` | Docker Hub |
+| The bridge | « Bridge binaries (Rust) » | release `bridge-<key>` | — |
+
+At first boot root fetches Hermes and pulls both images at once (`user-data.yaml`), into `/opt/bipagents/hermes` and
+`/var/lib/bipagents/images`; each place then points at Hermes and reads the images through its
+`~/.config/containers/storage.conf` (`additionalimagestores`, with fuse-overlayfs), after checking they run right as
+that account. The store stays root's: each account reads it through its own view, `/var/lib/bipagents/views/<account>`,
+a read-only idmapped bind mount that shows the store's ids as that account's rootless podman maps them (mounted by
+`shared-images pull`/`views`, again at each boot by `bipagents-image-views.service`). One copy on disk for all the
+places. A new place on the same server fetches nothing (`add-seat.sh` → `seat-agent.py --prepare`). The voices were already shared
+(the server's one Pocket). root pulls the images again each night at 00:50 (`bipagents-images.timer`).
+
+### Places kept from each other on a shared server
+
+Several people share one server; one place filling its disk or its memory must never take the others down
+(`installer/cloud/seat-agent.py`, 2026-10-30):
+
+- **Disk: 5 GB a place, as its own disk.** Each place's home is an ext4 image of 5 GB (`/var/lib/bipagents/places/<account>.img`,
+  sparse: it takes on the server what the place wrote), mounted at `/home/<account>` before its services start.
+  Everything the place writes is inside (its podman storage, so what an agent installs in its sandbox, its browsers,
+  its encrypted space), so `df` shows 5 GB there and a full place gets « no space left » on its own disk only. New
+  places get it before their install (`add-seat.sh`, `user-data.yaml` → `seat-agent.py --own-disk <n>`); places
+  installed before move into one at their next update order (the copy stops their services a minute or two; their
+  old home is kept 7 days). Every 5 minutes the seat agent reads each place's level: 80 % → its agents get one note
+  (clean up, or room can be asked for); 95 % → the guichet alerts Kerfy once; a place not yet on its own disk is
+  measured with `du` against the same 5 GB and, past 95 %, its agents' workspaces are paused by its bridge (nothing
+  deleted) until it is back under 90 %.
+- **Memory and CPU: soft shares.** Each place's `user-<uid>.slice` (its bridge, Hermes, containers, terminals):
+  `MemoryHigh` = 80 % of the memory ÷ the places (at least 768 MB; above it the place slows down, nothing is killed),
+  `MemoryMax` only as a safety at 1.5× that, `CPUWeight` equal, `TasksMax` 8192.
+- **The agents know** (offer places only): « Your space is small: large toolchains don't fit here », with GitHub
+  Actions or an online service suggested instead; never figures.
+
+### Measuring an install (a throwaway server)
+
+Before and after, on the same provider and size, a fresh server each time:
+
+1. Note when the order is placed and when the server answers SSH (the provider's delivery time, apart).
+2. `cloud-init analyze show` (or the provider's post-install log): packages and upgrade, then `runcmd`.
+3. `/var/log/bipagents-timeline.log`: `runcmd start`, `shared start` → `shared done` (Hermes + images, together),
+   `install start` → `install done`; for each extra place, `place <n> shared start` → `place <n> install done`.
+4. `/var/log/bipagents-install.log` (and `-install<n>.log`): each step `[n/total]` says its time and the time since
+   the start; the last line says « installed in … ».
+5. `/var/log/bipagents-shared-hermes.log` (« ready-made, downloaded in … s, unpacked in … s », or « built here in …
+   min ») and `/var/log/bipagents-images.log` (« … (new) »).
+6. From the app: the time from paying to « ready » on the phone, and from pairing to the first answer.
+7. Disk: `du -sh /opt/bipagents/hermes /var/lib/bipagents/images /home/*/.local/share/containers`: the accounts'
+   own image storage should stay small (no browser or sandbox image in it: `sudo -iu bip2 podman images` lists them
+   as read-only, `R/O`).
+
+The « before » numbers: 18 min for a full install (DigitalOcean, 2026-10-19); 13.5 min for a first place and 10.5 min
+for a second one (2-seat test).
+
+## Files
+
+- `install.sh` (repository root): fetches the repository and Python (uv), then runs the installer. The installer's
+  own environment (`installer/.venv`, `installer/requirements.txt`) is what its timers and the bridge run it with.
+- `bipinstall/`: `detect.py` (the machine), `models.py` (finding and checking the model), `plan.py` (the profile and
+  its memory), `ports.py`, `hermes.py` (Hermes through its own commands), `stack.py` (bridge, voices, services),
+  `rustbridge.py` (the bridge's binaries), agent kinds in `bridge-rs/assets/agent_templates.yaml` (read by
+  `souls.py`, embedded in the bridge).
+- Tests: `python -m pytest installer/tests` (no network, nothing installed).

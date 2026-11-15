@@ -1,0 +1,173 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Alexbob0 <190955252+Alexbob0@users.noreply.github.com>
+Date: Sun, 1 Nov 2026 10:07:40 +0100
+Subject: The current time with each message, never from the terminal
+
+BipAgents patch, documented in hermes/patches/README.md of the BipAgents repository.
+
+Bip-Patch: 0015-time-anchor
+---
+ agent/prompt_builder.py           |  4 ----
+ agent/system_prompt.py            | 14 +++++++++++---
+ hermes_state_common.py            |  5 ++++-
+ tests/agent/test_now_line.py      | 30 ++++++++++++++++++++++++++++++
+ tests/agent/test_system_prompt.py |  9 +++++----
+ 5 files changed, 50 insertions(+), 12 deletions(-)
+ create mode 100644 tests/agent/test_now_line.py
+
+diff --git a/agent/prompt_builder.py b/agent/prompt_builder.py
+index e25b5281d4135534635835db48c02f8ca91c0ce1..5f47000e6d4855c6aeea8a4c98815f9eadcbc8b0 100644
+--- a/agent/prompt_builder.py
++++ b/agent/prompt_builder.py
+@@ -443,7 +443,6 @@ OPENAI_MODEL_EXECUTION_GUIDANCE = (
+     "NEVER answer these from memory or mental computation — ALWAYS use a tool:\n"
+     "- Arithmetic, math, calculations → use terminal or execute_code\n"
+     "- Hashes, encodings, checksums → use terminal (e.g. sha256sum, base64)\n"
+-    "- Current time, date, timezone → use terminal (e.g. date)\n"
+     "- System state: OS, CPU, memory, disk, ports, processes → use terminal\n"
+     "- File contents, sizes, line counts → use read_file, search_files, or terminal\n"
+     "- Git history, branches, diffs → use terminal\n"
+@@ -456,7 +455,6 @@ OPENAI_MODEL_EXECUTION_GUIDANCE = (
+     "Examples:\n"
+     "- 'Is port 443 open?' → check THIS machine (don't ask 'open where?')\n"
+     "- 'What OS am I running?' → check the live system (don't use user profile)\n"
+-    "- 'What time is it?' → run `date` (don't guess)\n"
+     "Only ask for clarification when the ambiguity genuinely changes what tool you would call.\n"
+     "</act_dont_ask>\n\n"
+     "<prerequisite_checks>\n"
+@@ -504,7 +502,6 @@ OPENAI_MODEL_EXECUTION_GUIDANCE = (
+ _EXECUTION_GUIDANCE_LINE_TOOLS = {
+     "- Arithmetic, math, calculations → use terminal or execute_code\n": {"terminal", "execute_code"},
+     "- Hashes, encodings, checksums → use terminal (e.g. sha256sum, base64)\n": {"terminal"},
+-    "- Current time, date, timezone → use terminal (e.g. date)\n": {"terminal"},
+     "- System state: OS, CPU, memory, disk, ports, processes → use terminal\n": {"terminal"},
+     "- File contents, sizes, line counts → use read_file, search_files, or terminal\n": {
+         "read_file",
+@@ -512,7 +509,6 @@ _EXECUTION_GUIDANCE_LINE_TOOLS = {
+         "terminal",
+     },
+     "- Git history, branches, diffs → use terminal\n": {"terminal"},
+-    "- 'What time is it?' → run `date` (don't guess)\n": {"terminal"},
+ }
+ 
+ 
+diff --git a/agent/system_prompt.py b/agent/system_prompt.py
+index 3b946fad6ef1ba1f156fe280ecf32786e8ac1d47..21c96673478dc6d160fa7b5ad0bf889854024d6c 100644
+--- a/agent/system_prompt.py
++++ b/agent/system_prompt.py
+@@ -505,6 +505,14 @@ def _zone_bits(now: Any, tz: Any) -> list[str]:
+     return bits
+ 
+ 
++# The client (BipAgents' bridge and apps) and the cron scheduler put the current time at the top of each
++# user message, in the person's zone: ``<!--bip:now Thursday, October 29, 2026, 08:40, Europe/Paris (UTC+01:00)-->``.
++# Other gateways (a messenger, the CLI) put none: the hint holds only for a message that carries the line.
++NOW_LINE_HINT = ("When a message starts with a bip:now line, that line is the current date and time: trust the "
++                 "latest one over the start date, and don't check the clock with a tool. Without one, check the "
++                 "clock with a tool when the exact time matters.")
++
++
+ def _timestamp_line(agent: Any) -> str:
+     """Date-only so the prompt is byte-stable for the day; zone + offset so
+     tools needn't guess EST vs EDT. Long-lived sessions get an "as of" line on
+@@ -522,9 +530,9 @@ def _timestamp_line(agent: Any) -> str:
+     # of' refreshes exactly when the cache prefix is already being invalidated (compaction), so the added
+     # line costs no extra cache churn. Same-day sessions skip the second line entirely — nothing to correct,
+     # and the single-line shape stays byte-identical for the day (prefix-cache safe).
+-    if now.strftime("%Y%m%d") != _start.strftime("%Y%m%d"):
+-        timestamp_line += (f"\nToday's date (as of the last context rebuild): {safe_strftime(now, '%A, %B %d, %Y')} "
+-                           "— trust this over the start date for what day it is now; query tools for exact time.")
++    # The current time comes with each message instead (NOW_LINE_HINT): an « as of the last rebuild » date went
++    # stale in conversations that last days (the prompt cache keeps it) and sent the model to the terminal.
++    timestamp_line += f"\n{NOW_LINE_HINT}"
+     if getattr(agent, "_bot_chat_timeless_prompt", False):
+         timestamp_line = f"Timezone: {', '.join(_bits)}" if _bits else ""
+     trailer = (("Session ID", agent.session_id if agent.pass_session_id else None), ("Model", agent.model),
+diff --git a/hermes_state_common.py b/hermes_state_common.py
+index 47642b7fb7e888ff7812f0ac630c52ef7848c62f..8d925651a0a67725186646e762137437c0f1879f 100644
+--- a/hermes_state_common.py
++++ b/hermes_state_common.py
+@@ -58,7 +58,10 @@ def escape_like(text: str) -> str:
+     return text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+ 
+ 
+-_PREVIEW_CONTENT_SQL = "REPLACE(REPLACE(m.content, X'0A', ' '), X'0D', ' ')"
++# A leading now line (the current time a client puts at the top of each message) is not the person's words.
++_PREVIEW_CONTENT_SQL = ("REPLACE(REPLACE(CASE WHEN m.content LIKE '<!--bip:now %' AND INSTR(m.content, '-->') > 0"
++                        " THEN LTRIM(SUBSTR(m.content, INSTR(m.content, '-->') + 3), CHAR(10) || CHAR(13) || ' ')"
++                        " ELSE m.content END, X'0A', ' '), X'0D', ' ')")
+ # User-invoked and gateway auto-load scaffolds both get the head+tail excerpt window:
+ # the typed request sits at the tail (auto-load) or behind the instruction marker.
+ # No LIKE wildcards in either prefix, so no ESCAPE clause is needed.
+diff --git a/tests/agent/test_now_line.py b/tests/agent/test_now_line.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..b75e5a11112be75eb99364846648243476439727
+--- /dev/null
++++ b/tests/agent/test_now_line.py
+@@ -0,0 +1,30 @@
++"""The current time comes with each message, never from the terminal: the prompt no longer sends the model to
++``date`` and says how to read a ``bip:now`` line; a session's preview skips the line."""
++
++
++def test_the_prompt_sends_nobody_to_the_terminal_for_the_time():
++    from agent.prompt_builder import OPENAI_MODEL_EXECUTION_GUIDANCE, execution_guidance_text
++    from agent.system_prompt import NOW_LINE_HINT
++
++    for text in (OPENAI_MODEL_EXECUTION_GUIDANCE, execution_guidance_text({"terminal", "execute_code"})):
++        assert "Current time, date, timezone" not in text
++        assert "run `date`" not in text
++        assert "use terminal" in text  # the other lines stay
++    assert "bip:now" in NOW_LINE_HINT and "don't check the clock" in NOW_LINE_HINT
++    # only for a message that carries the line: a messenger's or the CLI's turn still checks the clock
++    assert NOW_LINE_HINT.startswith("When a message starts with a bip:now line")
++    assert "Without one, check the clock with a tool" in NOW_LINE_HINT
++
++
++def test_a_session_preview_skips_the_now_line():
++    import sqlite3
++
++    from hermes_state_common import _PREVIEW_RAW_SELECT, _shape_preview
++
++    db = sqlite3.connect(":memory:")
++    db.execute("CREATE TABLE messages (content TEXT)")
++    now = "<!--bip:now Thursday, October 29, 2026, 08:40, Europe/Paris (UTC+01:00)-->"
++    for content in (f"{now}\nOn part à Lisbonne quand ?", "Sans heure", "<!--bip:now cut"):
++        db.execute("INSERT INTO messages VALUES (?)", (content,))
++    previews = [_shape_preview(raw) for (raw,) in db.execute(f"SELECT {_PREVIEW_RAW_SELECT} FROM messages m")]
++    assert previews == ["On part à Lisbonne quand ?", "Sans heure", "<!--bip:now cut"]
+diff --git a/tests/agent/test_system_prompt.py b/tests/agent/test_system_prompt.py
+index 38f3d739bb70ebfe0388d84ce00d57e7f1b5fda6..a2118ffd93db84268f5f89e54284c8ec6dd9d97c 100644
+--- a/tests/agent/test_system_prompt.py
++++ b/tests/agent/test_system_prompt.py
+@@ -11,7 +11,7 @@ from zoneinfo import ZoneInfo
+ 
+ import pytest
+ 
+-from agent.system_prompt import build_system_prompt, build_system_prompt_parts
++from agent.system_prompt import NOW_LINE_HINT, build_system_prompt, build_system_prompt_parts
+ 
+ 
+ def _make_agent(**overrides):
+@@ -523,7 +523,7 @@ def test_coding_prompt_orders_shared_context_before_workspace(monkeypatch):
+         "WORKSPACE",
+         "Operator instructions (from config):\nOPERATOR",
+         expected_profile,
+-        "Conversation started: Friday, January 02, 2026",
++        "Conversation started: Friday, January 02, 2026\n" + NOW_LINE_HINT,
+     ))
+ 
+     with (
+@@ -927,10 +927,11 @@ class TestConversationStartedTwoLine:
+         parts = sp.build_system_prompt_parts(agent)
+         return parts["volatile"]
+ 
+-    def test_old_session_gets_rebuild_date_line(self):
++    def test_old_session_gets_the_message_time_line(self):
+         vol = self._volatile(self._agent("20200110_090000_old"))
+         assert "Conversation started:" in vol
+-        assert "as of the last context rebuild" in vol
++        assert "as of the last context rebuild" not in vol
++        assert "When a message starts with a bip:now line" in vol
+ 
+     def test_same_day_session_keeps_single_line(self):
+         from hermes_time import now as hermes_now

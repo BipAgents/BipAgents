@@ -1,0 +1,507 @@
+//! What a notification may carry through the relay: ids, never what the agent said, nor a title.
+//!
+//! A bridge's alert is a neutral line (`notif.<type>`, `NEUTRAL_KEYS`); the relay replaces any other body with
+//! `BRIDGE_FALLBACK` and keeps only short id-like values next to `aps`. The alert's title never passes (the apps name the agent
+//! from their own list); the guichet's texts (accounts, servers) pass only on a token sealed for the guichet, and
+//! `category`, `sound` and `interruption-level` only with the values the apps use.
+//!
+//! Sealed notifications (refonte phase 5): a bridge seals what the agent said for each phone's own key (`enc`, opened
+//! by the phone only) and shows a neutral line in clear (`notif.<type>`, `NEUTRAL_KEYS`). The relay passes `enc` as it
+//! is (base64, at most `ENC_MAX` characters) and never sees the words.
+
+use serde_json::{Map, Value};
+
+use crate::seal::Audience;
+
+pub const GENERIC_BODY: &str = "Nouveau message";
+/// What a bridge's push shows when its line isn't one of `NEUTRAL_KEYS` (a bridge only sends those).
+pub const BRIDGE_FALLBACK: &str = "notif.reply";
+/// The neutral lines of sealed notifications (contracts/notifications/loc-keys.json, the bridge's seal.rs TYPES): codes
+/// both apps translate. A test checks this list against the contract file.
+pub const NEUTRAL_KEYS: &[&str] = &[
+    "notif.reply",
+    "notif.question",
+    "notif.approval",
+    "notif.room_reply",
+    "notif.boite",
+    "notif.task",
+    "notif.subtask",
+    "notif.scan",
+    "notif.family",
+    "notif.email_held",
+    "notif.site",
+    "notif.login",
+    "notif.connector",
+    "notif.secret",
+    "notif.mail_card",
+    "notif.meet",
+];
+/// A sealed notification's `enc` at most (base64 characters; the bridge's seal.rs keeps it under).
+pub const ENC_MAX: usize = 3000;
+/// The guichet's words (a server of the all-included offer, the account, the family, shared conversations): only on
+/// a token sealed for the guichet, sent with its key, so a bridge's token can't make them up.
+const GUICHET_BODIES: &[&str] = &[
+    GENERIC_BODY,
+    "Ton serveur ne répond plus : on s’en occupe.",
+    "Tes agents ont une nouvelle place : ouvre l’app pour les y remettre.",
+    "Ton serveur répond de nouveau.",
+    "Ton abonnement ne sera pas renouvelé : pense à utiliser ton crédit d’IA.",
+    "Ton abonnement annuel se renouvelle bientôt : la date, le prix et comment l’arrêter sont dans tes e-mails.",
+    "Un nouvel appareil veut rejoindre ton compte : approuve-le ou refuse-le dans l’app.",
+    "Ton compte est en cours de récupération sur un autre appareil : si ce n’est pas toi, arrête-la dans l’app.",
+    // a device let in by an e-mail code (the guichet's account_otp.rs)
+    "Un nouvel appareil s’est connecté à ton compte. Ce n’était pas toi ? Retire-le dans l’app.",
+    "Quelqu’un de ta famille veut relier ses agents aux tiens : accepte ou refuse dans l’app.",
+    // a free week ends in two days (the guichet's trial_notices.rs): bought on the website, then in a store
+    "Ta semaine gratuite finit après-demain : rien n’est prélevé si tu l’arrêtes avant. Le prix et le lien pour l’arrêter sont dans tes e-mails.",
+    "Ta semaine gratuite finit après-demain, puis ton forfait devient payant. Pour arrêter : Réglages › Offre tout compris.",
+    // a beta place ends in [beta] notice_days (the guichet's beta.rs tick)
+    "Ta place de bêta s’arrête bientôt : merci d’avoir testé ! Ta semaine gratuite reste à toi pour la suite.",
+    // the beta ended and the place goes on free for [beta] gift_days, then that gift month ends in [beta] notice_days
+    "La bêta est finie, merci d’avoir testé ! Ton premier mois est offert : tes agents continuent, rien à faire.",
+    "Ton mois offert finit bientôt : abonne-toi pour garder tes agents. Réglages › Offre tout compris.",
+    // a conversation someone shows this person read-only (the guichet's read_shares.rs); the app names it itself
+    "Nouveau message dans une conversation partagée",
+    // freed beta places (BipAgents-reprise/release-1112/place-idle-contract-v2.md: « écrit », routines keep running):
+    // `place_idle_soon` on day 5 without use, `place_parked` when the place is freed on day 7 (the apps translate them)
+    PLACE_IDLE_SOON,
+    PLACE_PARKED,
+];
+/// `place_idle_soon`: nobody used the place for 5 days.
+pub const PLACE_IDLE_SOON: &str =
+    "Tu n’as pas écrit à tes agents depuis 5 jours : ta place sera libérée dans 2 jours. Écris-leur, ou touche « Garder ma place ».";
+/// `place_parked`: the place was freed on day 7, its copy kept 30 days.
+pub const PLACE_PARKED: &str = "Ta place a été libérée : personne n’a écrit à tes agents pendant 7 jours. Tes données sont gardées 30 jours : ouvre l’app pour la reprendre.";
+pub const MAX_PAYLOAD_BYTES: usize = 4096;
+/// The values the apps use; anything else is dropped (no custom sound). The urgent payment's category (`PAYMENT`: a
+/// watcher found the ticket, the person has minutes to approve; the bridge's card_pay.rs `urgent`) and « time-sensitive »
+/// pass only for such a push (`urgent_payment`): an approval naming its payment (`pay`), marked `urgent`.
+const CATEGORIES: &[&str] = &["MESSAGE", "APPROVAL", "PAYMENT"];
+const URGENT_CATEGORY: &str = "PAYMENT";
+const URGENT_LEVEL: &str = "time-sensitive";
+const SOUNDS: &[&str] = &["default"];
+const INTERRUPTION_LEVELS: &[&str] = &["active", "passive"];
+const VALUE_MAX: usize = 256;
+const LIST_MAX: usize = 10;
+const LIST_ITEM_MAX: usize = 64;
+const APS_KEYS: &[&str] = &[
+    "alert",
+    "badge",
+    "sound",
+    "thread-id",
+    "category",
+    "content-available",
+    "mutable-content",
+    "interruption-level",
+    "relevance-score",
+];
+
+fn id_like_key(key: &str) -> bool {
+    !key.is_empty() && key.len() <= 40 && key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+}
+
+fn alert(value: &Value, aud: Audience) -> Value {
+    let mut out = Map::new();
+    let (bodies, fallback) = match aud {
+        Audience::Bridge => (NEUTRAL_KEYS, BRIDGE_FALLBACK),
+        Audience::Guichet => (GUICHET_BODIES, GENERIC_BODY),
+    };
+    let generic = value.get("loc-key").and_then(Value::as_str).filter(|k| bodies.contains(k));
+    let body = generic.unwrap_or(fallback).to_string();
+    out.insert("body".into(), Value::String(body.clone()));
+    out.insert("loc-key".into(), Value::String(body));
+    Value::Object(out)
+}
+
+fn custom(value: &Value) -> Option<Value> {
+    match value {
+        Value::String(s) if s.chars().count() <= VALUE_MAX && !s.contains('\n') => Some(value.clone()),
+        Value::Number(_) | Value::Bool(_) => Some(value.clone()),
+        Value::Array(items)
+            if items.len() <= LIST_MAX
+                && items.iter().all(|i| i.as_str().is_some_and(|s| s.chars().count() <= LIST_ITEM_MAX)) =>
+        {
+            Some(value.clone())
+        }
+        _ => None,
+    }
+}
+
+/// A sealed text as a bridge made it: base64 only, not too long. Anything else is dropped (the phone then shows the
+/// neutral line).
+fn sealed(value: &Value) -> Option<Value> {
+    let text = value.as_str()?;
+    let fits = !text.is_empty()
+        && text.len() <= ENC_MAX
+        && text.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'+' | b'/' | b'='));
+    fits.then(|| value.clone())
+}
+
+/// An urgent payment's push as the bridge makes it (push_runs/notices.rs `PaymentUrgent`): an approval (`t`), its
+/// payment named (`pay`), marked `urgent`.
+fn urgent_payment(object: &Map<String, Value>) -> bool {
+    object.get("t").and_then(Value::as_str) == Some("approval")
+        && object.get("urgent").and_then(Value::as_i64) == Some(1)
+        && object.get("pay").and_then(Value::as_str).is_some_and(|p| !p.is_empty() && p.len() <= 64)
+}
+
+/// The payload as the relay forwards it, or why it refuses it.
+pub fn scrub(payload: &Value, aud: Audience) -> Result<Value, &'static str> {
+    let object = payload.as_object().ok_or("payload must be an object")?;
+    let mut out = Map::new();
+    if let Some(aps) = object.get("aps") {
+        let aps = aps.as_object().ok_or("aps must be an object")?;
+        let mut clean = Map::new();
+        let urgent = aps.get("category").and_then(Value::as_str) == Some(URGENT_CATEGORY) && urgent_payment(object);
+        for (key, value) in aps {
+            if !APS_KEYS.contains(&key.as_str()) {
+                continue;
+            }
+            if key == "category" && value.as_str() == Some(URGENT_CATEGORY) && !urgent {
+                continue; // « Payer » on a push that is no payment: dropped
+            }
+            if key == "interruption-level" && urgent && value.as_str() == Some(URGENT_LEVEL) {
+                clean.insert(key.clone(), Value::String(URGENT_LEVEL.into()));
+                continue;
+            }
+            let allowed = match key.as_str() {
+                "category" => Some(CATEGORIES),
+                "sound" => Some(SOUNDS),
+                "interruption-level" => Some(INTERRUPTION_LEVELS),
+                _ => None,
+            };
+            if let Some(allowed) = allowed {
+                if let Some(v) = value.as_str().filter(|v| allowed.contains(v)) {
+                    clean.insert(key.clone(), Value::String(v.into()));
+                }
+            } else if key == "alert" {
+                clean.insert(key.clone(), alert(value, aud));
+            } else if matches!(value, Value::String(_) | Value::Number(_) | Value::Bool(_)) {
+                clean.insert(key.clone(), custom(value).unwrap_or(Value::Null));
+            }
+        }
+        clean.retain(|_, v| !v.is_null());
+        out.insert("aps".into(), Value::Object(clean));
+    }
+    for (key, value) in object {
+        if key == "aps" || !id_like_key(key) {
+            continue;
+        }
+        if key == "enc" {
+            if let Some(kept) = sealed(value) {
+                out.insert(key.clone(), kept);
+            }
+            continue;
+        }
+        if let Some(kept) = custom(value) {
+            out.insert(key.clone(), kept);
+        }
+    }
+    let out = Value::Object(out);
+    if serde_json::to_vec(&out).map(|b| b.len()).unwrap_or(usize::MAX) > MAX_PAYLOAD_BYTES {
+        return Err("payload too large");
+    }
+    Ok(out)
+}
+
+/// The phases of an agent's work a Live Activity shows (the bridge's live_activities.rs).
+const LIVE_PHASES: &[&str] = &["working", "approval", "question", "done", "failed", "stopped"];
+
+/// A Live Activity's update (`push_type: liveactivity`): Apple's timing keys and a `content-state` of codes only — the
+/// phase, the running tool's name, a speaking agent's name, counts. The site a browser is on (`detail`, sent by a
+/// bridge with previews on) never passes, nor any alert: the title the person sees was set on the phone.
+pub fn scrub_live(payload: &Value) -> Result<Value, &'static str> {
+    let aps = payload.get("aps").and_then(Value::as_object).ok_or("aps must be an object")?;
+    let mut clean = Map::new();
+    for key in ["timestamp", "dismissal-date", "stale-date"] {
+        if let Some(n) = aps.get(key).and_then(Value::as_i64) {
+            clean.insert(key.into(), Value::from(n));
+        }
+    }
+    let event =
+        aps.get("event").and_then(Value::as_str).filter(|e| matches!(*e, "update" | "end")).ok_or("invalid event")?;
+    clean.insert("event".into(), Value::String(event.into()));
+    let state = aps.get("content-state").and_then(Value::as_object).ok_or("content-state must be an object")?;
+    let mut kept = Map::new();
+    let phase = state.get("phase").and_then(Value::as_str).filter(|p| LIVE_PHASES.contains(p)).unwrap_or("working");
+    kept.insert("phase".into(), Value::String(phase.into()));
+    if let Some(tool) = state.get("tool").and_then(Value::as_str).filter(|t| t.len() <= 64 && id_like_key(t)) {
+        kept.insert("tool".into(), Value::String(tool.into()));
+    }
+    if let Some(speaker) =
+        state.get("speaker").and_then(Value::as_str).filter(|s| s.chars().count() <= 40 && !s.contains('\n'))
+    {
+        kept.insert("speaker".into(), Value::String(speaker.into()));
+    }
+    for key in ["subtasks", "subtasksDone"] {
+        let n = state.get(key).and_then(Value::as_i64).unwrap_or(0).clamp(0, 999);
+        kept.insert(key.into(), Value::from(n));
+    }
+    // the agent's task list (« Étapes », 6/11): its numbers only, when the bridge sent them; never the step's words
+    for key in ["steps", "stepsDone"] {
+        if let Some(n) = state.get(key).and_then(Value::as_i64) {
+            kept.insert(key.into(), Value::from(n.clamp(0, 999)));
+        }
+    }
+    clean.insert("content-state".into(), Value::Object(kept));
+    let mut out = Map::new();
+    out.insert("aps".into(), Value::Object(clean));
+    Ok(Value::Object(out))
+}
+
+/// An (already scrubbed) APNs payload as Firebase data: strings only, as the Android app reads it.
+pub fn fcm_data(payload: &Value) -> Map<String, Value> {
+    let mut data = Map::new();
+    let aps = payload.get("aps").and_then(Value::as_object);
+    let alert = aps.and_then(|a| a.get("alert")).and_then(Value::as_object);
+    if let Some(alert) = alert {
+        for key in ["title", "body"] {
+            if let Some(text) = alert.get(key).and_then(Value::as_str).filter(|t| !t.is_empty()) {
+                data.insert(key.into(), Value::String(text.into()));
+            }
+        }
+    }
+    if let Some(category) = aps.and_then(|a| a.get("category")).and_then(Value::as_str) {
+        data.insert("category".into(), Value::String(category.into()));
+    }
+    let silent = aps.and_then(|a| a.get("content-available")).is_some_and(|v| v.as_i64() == Some(1) || v == true);
+    if silent && alert.is_none() {
+        data.insert("silent".into(), Value::String("1".into()));
+    }
+    if let Some(object) = payload.as_object() {
+        for (key, value) in object {
+            match value {
+                _ if key == "aps" => {}
+                Value::Null => {}
+                Value::String(s) => {
+                    data.insert(key.clone(), Value::String(s.clone()));
+                }
+                other => {
+                    data.insert(key.clone(), Value::String(other.to_string()));
+                }
+            }
+        }
+    }
+    data
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn a_preview_never_passes_the_generic_texts_do() {
+        let preview = json!({"aps": {"alert": {"title": "Vie", "body": "Ton rendez-vous chez le médecin est à 9h"},
+                                     "mutable-content": 1, "category": "MESSAGE", "thread-id": "vie"},
+                             "agent": "vie", "outbox_id": "abc123"});
+        let clean = scrub(&preview, Audience::Bridge).unwrap();
+        assert_eq!(clean["aps"]["alert"], json!({"body": BRIDGE_FALLBACK, "loc-key": BRIDGE_FALLBACK}));
+        assert_eq!(clean["aps"]["category"], "MESSAGE");
+        assert_eq!(clean["outbox_id"], "abc123");
+        let neutral =
+            json!({"aps": {"alert": {"title": "Vie", "body": "notif.approval", "loc-key": "notif.approval"}}});
+        assert_eq!(scrub(&neutral, Audience::Bridge).unwrap()["aps"]["alert"]["body"], "notif.approval");
+        // the French generic lines of the bridges before the pointer-only push: gone
+        let old = json!({"aps": {"alert": {"body": "Approbation requise", "loc-key": "Approbation requise"}}});
+        assert_eq!(scrub(&old, Audience::Bridge).unwrap()["aps"]["alert"]["body"], BRIDGE_FALLBACK);
+        let plain = json!({"aps": {"alert": "Un texte entier"}});
+        assert_eq!(scrub(&plain, Audience::Bridge).unwrap()["aps"]["alert"]["body"], BRIDGE_FALLBACK);
+        // The guichet's word on a server of the all-included offer.
+        let down = "Ton serveur ne répond plus : on s’en occupe.";
+        let server = json!({"aps": {"alert": {"title": "BipAgents", "body": down, "loc-key": down}}, "kind": "server"});
+        let clean = scrub(&server, Audience::Guichet).unwrap();
+        assert_eq!(clean["aps"]["alert"], json!({"body": down, "loc-key": down}));
+        assert_eq!(clean["kind"], "server");
+        // A conversation shown read-only (the guichet's read_shares.rs): the share's id only, the app names it.
+        let shared = "Nouveau message dans une conversation partagée";
+        let push = json!({"aps": {"alert": {"title": "BipAgents", "body": shared, "loc-key": shared},
+                                  "thread-id": "Q2xxZm9vYmFyYmF6cXV4", "mutable-content": 1},
+                          "kind": "rshare", "rshare": "Q2xxZm9vYmFyYmF6cXV4"});
+        let clean = scrub(&push, Audience::Guichet).unwrap();
+        assert_eq!(clean["aps"]["alert"]["body"], shared);
+        assert_eq!((clean["kind"].clone(), clean["rshare"].clone()), (json!("rshare"), json!("Q2xxZm9vYmFyYmF6cXV4")));
+    }
+
+    #[test]
+    fn a_freed_beta_place_is_told_by_the_guichet_only() {
+        for text in [PLACE_IDLE_SOON, PLACE_PARKED] {
+            let push =
+                json!({"aps": {"alert": {"title": "BipAgents", "body": text, "loc-key": text}}, "kind": "server"});
+            assert_eq!(
+                scrub(&push, Audience::Guichet).unwrap()["aps"]["alert"],
+                json!({"body": text, "loc-key": text})
+            );
+            assert_eq!(scrub(&push, Audience::Bridge).unwrap()["aps"]["alert"]["body"], BRIDGE_FALLBACK);
+        }
+        // the contract's words, apostrophes typeset as the relay's other generic bodies
+        assert!(PLACE_IDLE_SOON.starts_with("Tu n’as pas écrit à tes agents depuis 5 jours"));
+        assert!(PLACE_IDLE_SOON.ends_with("Écris-leur, ou touche « Garder ma place »."));
+        assert!(PLACE_PARKED.starts_with("Ta place a été libérée : personne n’a écrit à tes agents pendant 7 jours."));
+        assert!(PLACE_PARKED.ends_with("Tes données sont gardées 30 jours : ouvre l’app pour la reprendre."));
+    }
+
+    #[test]
+    fn a_bridges_token_cannot_speak_as_the_guichet_nor_set_a_title() {
+        let account = "Un nouvel appareil veut rejoindre ton compte : approuve-le ou refuse-le dans l’app.";
+        let forged = json!({"aps": {"alert": {"title": "Sécurité BipAgents", "body": account, "loc-key": account},
+                                    "category": "ACCOUNT_ALERT", "sound": "alarm.caf",
+                                    "interruption-level": "time-sensitive", "badge": 1}});
+        let clean = scrub(&forged, Audience::Bridge).unwrap();
+        assert_eq!(clean["aps"], json!({"alert": {"body": BRIDGE_FALLBACK, "loc-key": BRIDGE_FALLBACK}, "badge": 1}));
+        let fine = json!({"aps": {"alert": {"loc-key": "notif.approval"}, "category": "APPROVAL", "sound": "default",
+                                  "interruption-level": "passive"}});
+        let clean = scrub(&fine, Audience::Bridge).unwrap();
+        assert_eq!(
+            (&clean["aps"]["category"], &clean["aps"]["sound"], &clean["aps"]["interruption-level"]),
+            (&json!("APPROVAL"), &json!("default"), &json!("passive"))
+        );
+        assert!(clean["aps"]["alert"].get("title").is_none());
+        // time-sensitive only for an urgent payment
+        let urgent = json!({"t": "approval", "pay": "pay_0123456789ab", "urgent": 1,
+                            "aps": {"alert": {"loc-key": "notif.approval"}, "category": "PAYMENT",
+                                    "interruption-level": "time-sensitive", "relevance-score": 1}});
+        let clean = scrub(&urgent, Audience::Bridge).unwrap();
+        assert_eq!(
+            (&clean["aps"]["category"], &clean["aps"]["interruption-level"], &clean["aps"]["relevance-score"]),
+            (&json!("PAYMENT"), &json!("time-sensitive"), &json!(1))
+        );
+        let sneaky = json!({"aps": {"alert": {"loc-key": "notif.reply"}, "category": "MESSAGE",
+                                    "interruption-level": "time-sensitive"}});
+        assert!(scrub(&sneaky, Audience::Bridge).unwrap()["aps"].get("interruption-level").is_none());
+    }
+
+    /// « time-sensitive » and « Payer » are for the urgent payment only (review 13/11): a push that is not one (an
+    /// agent's message, a plain approval: no `pay`, no `urgent`) saying `category: PAYMENT` gets neither, so it never
+    /// breaks through Focus / Do Not Disturb.
+    #[test]
+    fn a_push_that_is_not_an_urgent_payment_gets_no_time_sensitive_with_category_payment() {
+        let not_payments = [
+            json!({"t": "message", "c": "t_1", "aps": {"alert": {"loc-key": "notif.reply"}, "category": "PAYMENT",
+                                                        "interruption-level": "time-sensitive"}}),
+            json!({"t": "approval", "run_id": "r1", "request_id": "q1",
+                   "aps": {"alert": {"loc-key": "notif.approval"}, "category": "PAYMENT",
+                           "interruption-level": "time-sensitive"}}),
+        ];
+        let kept: Vec<Value> = not_payments
+            .iter()
+            .map(|p| {
+                scrub(p, Audience::Bridge).unwrap()["aps"].get("interruption-level").cloned().unwrap_or(Value::Null)
+            })
+            .collect();
+        assert_eq!(kept, vec![Value::Null, Value::Null], "time-sensitive kept for pushes that are not urgent payments");
+        let categories: Vec<Value> = not_payments
+            .iter()
+            .map(|p| scrub(p, Audience::Bridge).unwrap()["aps"].get("category").cloned().unwrap_or(Value::Null))
+            .collect();
+        assert_eq!(categories, vec![Value::Null, Value::Null], "« Payer » on pushes that are no payment");
+    }
+
+    #[test]
+    fn a_live_activity_carries_codes_only() {
+        let update = json!({"aps": {"timestamp": 1000, "event": "update", "stale-date": 2800,
+            "alert": {"title": "Vie", "body": "secret"},
+            "content-state": {"phase": "working", "tool": "browser_navigate", "detail": "kiabi.fr", "speaker": "Coach",
+                              "subtasks": 3, "subtasksDone": 1, "note": "secret"}}, "agent": "vie"});
+        assert_eq!(
+            scrub_live(&update).unwrap(),
+            json!({"aps": {"timestamp": 1000, "event": "update", "stale-date": 2800,
+                "content-state": {"phase": "working", "tool": "browser_navigate", "speaker": "Coach",
+                                  "subtasks": 3, "subtasksDone": 1}}})
+        );
+        let end = json!({"aps": {"timestamp": 1001, "event": "end", "dismissal-date": 1240,
+            "content-state": {"phase": "later", "tool": "a tool with spaces"}}});
+        assert_eq!(
+            scrub_live(&end).unwrap()["aps"]["content-state"],
+            json!({"phase": "working", "subtasks": 0, "subtasksDone": 0})
+        );
+        let steps = json!({"aps": {"timestamp": 1002, "event": "update",
+            "content-state": {"phase": "working", "steps": 5, "stepsDone": 2, "step": "Trier les e-mails de la banque"}}});
+        assert_eq!(
+            scrub_live(&steps).unwrap()["aps"]["content-state"],
+            json!({"phase": "working", "subtasks": 0, "subtasksDone": 0, "steps": 5, "stepsDone": 2})
+        );
+        assert!(scrub_live(&json!({"aps": {"event": "start", "content-state": {}}})).is_err());
+        assert!(scrub_live(&json!({"aps": {"event": "update"}})).is_err());
+    }
+
+    #[test]
+    fn only_short_ids_travel_next_to_aps() {
+        let payload = json!({"aps": {"content-available": 1, "unknown": "x"}, "agent": "vie",
+                             "choices": ["once", "deny"], "note": "line one\nline two", "big": "x".repeat(300),
+                             "nested": {"text": "secret"}, "bad key!": "x", "count": 3});
+        let clean = scrub(&payload, Audience::Bridge).unwrap();
+        assert_eq!(
+            clean,
+            json!({"aps": {"content-available": 1}, "agent": "vie", "choices": ["once", "deny"], "count": 3})
+        );
+        assert!(scrub(&json!("text"), Audience::Bridge).is_err());
+    }
+
+    #[test]
+    fn a_sealed_push_passes_with_its_neutral_line_and_enc_as_it_is() {
+        let enc = format!("BHk{}+/=", "A".repeat(2000));
+        let push = json!({"aps": {"alert": {"loc-key": "notif.reply", "body": "notif.reply"}, "mutable-content": 1,
+                                  "category": "MESSAGE", "thread-id": "vie"},
+                          "agent": "vie", "run_id": "r1", "enc": enc});
+        let clean = scrub(&push, Audience::Bridge).unwrap();
+        assert_eq!(clean["aps"]["alert"], json!({"body": "notif.reply", "loc-key": "notif.reply"}));
+        assert_eq!(clean["enc"], json!(enc));
+        assert_eq!(fcm_data(&clean)["enc"], json!(enc));
+        assert_eq!(fcm_data(&clean)["body"], "notif.reply");
+        // too long, not base64, not a string: dropped (the neutral line stays)
+        for bad in [
+            json!("A".repeat(ENC_MAX + 1)),
+            json!("line one\nline two"),
+            json!("pas du base64 !"),
+            json!(""),
+            json!({"text": "secret"}),
+            json!(12),
+        ] {
+            let mut push = push.clone();
+            push["enc"] = bad.clone();
+            assert!(scrub(&push, Audience::Bridge).unwrap().get("enc").is_none(), "{bad}");
+        }
+        // a code nobody knows is not a neutral line
+        let made_up = json!({"aps": {"alert": {"loc-key": "notif.Ton médecin à 9 h"}}});
+        assert_eq!(scrub(&made_up, Audience::Bridge).unwrap()["aps"]["alert"]["body"], BRIDGE_FALLBACK);
+        // the guichet doesn't use the bridges' codes
+        let guichet = json!({"aps": {"alert": {"loc-key": "notif.reply"}}});
+        assert_eq!(scrub(&guichet, Audience::Guichet).unwrap()["aps"]["alert"]["body"], GENERIC_BODY);
+        // the whole stays within APNs' limit
+        let mut huge = push.clone();
+        huge["enc"] = json!("A".repeat(ENC_MAX));
+        for i in 0..20 {
+            huge[format!("id{i}")] = json!("x".repeat(60));
+        }
+        assert_eq!(scrub(&huge, Audience::Bridge), Err("payload too large"));
+    }
+
+    #[test]
+    fn the_neutral_lines_are_the_contracts() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../contracts/notifications/loc-keys.json");
+        let doc: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        let mut keys: Vec<&str> = doc["keys"].as_object().unwrap().keys().map(String::as_str).collect();
+        let mut ours = NEUTRAL_KEYS.to_vec();
+        keys.sort_unstable();
+        ours.sort_unstable();
+        assert_eq!(keys, ours);
+    }
+
+    #[test]
+    fn firebase_gets_strings_as_the_android_app_reads_them() {
+        let payload = scrub(
+            &json!({"aps": {"alert": {"title": "Vie", "body": "x"}, "category": "APPROVAL"},
+                                    "agent": "vie", "run_id": "r1", "choices": ["once", "deny"]}),
+            Audience::Bridge,
+        )
+        .unwrap();
+        let data = fcm_data(&payload);
+        assert!(!data.contains_key("title"));
+        assert_eq!(data["body"], BRIDGE_FALLBACK);
+        assert_eq!(data["category"], "APPROVAL");
+        assert_eq!(data["choices"], "[\"once\",\"deny\"]");
+        let silent = fcm_data(&json!({"aps": {"content-available": 1}, "agent": "vie"}));
+        assert_eq!(silent["silent"], "1");
+    }
+}

@@ -1,0 +1,75 @@
+🇬🇧 English · [🇫🇷 Français](README.fr.md)
+
+# Bips' voices
+
+Synthetic mascot voices for the BipAgents agents, organized by language. Each language has its own
+`README.md` (voices, usage, how they were made) and a `voices.json` (descriptions and measurements).
+
+| Language | Engine | Voices |
+|---|---|---|
+| [`french/`](french/) | Kyutai Pocket TTS 4.0.1, `french` model | galet, lumen, mousse, ours, colibri |
+| [`english/`](english/), [`german/`](german/), [`spanish/`](spanish/) | Kyutai Pocket TTS 4.0.1, `english`, `german`, `spanish` models | the same five Bips, designed in each language (2026-10-15) |
+| [`dutch/`](dutch/) | Kyutai Pocket TTS 4.0.1, `dutch` model | the same five Bips, their English timbre speaking Dutch (2026-10-26, see below) |
+
+A new language = a new folder (`english/`, `spanish/`…) with the same structure: `<voice>.safetensors`
+(Pocket TTS state), `<voice>_source.wav` (cloning clip), `<voice>_sample.wav` (test sentence), `voices.json`, `README.md`.
+
+Voices computed with Kyutai Pocket TTS (CC-BY-4.0 weights, Kyutai) from Qwen3-TTS VoiceDesign clips (Apache-2.0).
+Fully synthetic: no real person is imitated.
+
+## Pocket 4.0.1 (2026-10-25)
+
+Pocket 4.0.1 retrained the French, German and Spanish models (and the English one) and says brands and English words
+right from the raw text, so the Bips moved to it (a listening test, 2026-10-25). A voice state only fits the weights it
+was computed with: each `<voice>.safetensors` was recomputed from its own language's `<voice>_source.wav` (never
+another language's clip: that keeps an accent) with Kyutai's cloning model `kyutai/pocket-tts` (CC-BY-4.0, gated:
+accept its terms, Hugging Face login), `get_state_for_audio_prompt(..., truncate=True)` then `export_model_state`, and
+`<voice>_sample.wav` spoken again with 4.0.1. The 3.3.0 states are in git history.
+
+A server's Pocket and these states move together: `bipagents update` (in the account that runs Pocket) installs the
+pocket-tts that `pocket/requirements.txt` pins and restarts it on the voices of the same commit.
+
+## Short prompts (2026-11-04)
+
+A Bip's state is Pocket's cache after its clip, and every generated frame attends to all of it: the Bips cloned from
+20-26 s (all five English ones, French galet, lumen and mousse) spoke 1.5-2x slower on a phone than the ~8 s ones
+(voices/onnx/bench.py). Their clips were cut to about 8 s with one rule for all (voices/onnx/short_prompts.py: pauses
+over 0.4 s shortened, a 6.5-9 s window of whole phrases closest to 8 s) and cloned again the same way: 1.2-1.3x faster
+on a phone, approved by ear on 2026-11-04. Their `<voice>_source.wav` is that cut clip now (the window in each
+`voices.json`, `short_prompt`), their `<voice>_sample.wav` and the apps' previews were spoken again; the full clips
+(also the timbre the Dutch clips were made from) are in git history before 2026-11-04.
+
+## Other languages
+
+The Bips keep their names in every language: the bridge sends `pocket:<code>/<voice>` (`en`, `es`, `de`) and the
+Pocket server loads `voices/<english|spanish|german>/<voice>.safetensors` with that language's model. Same recipe
+as in French: description written in the language (native-speaker accent) → Qwen3-TTS VoiceDesign in the language → clip →
+Pocket cloning; three takes per Bip, picked by ear on 2026-10-15 (each folder's `voices.json`). In German and Spanish the
+cloned reference is the take cut on a pause before 10 s: with ~23 s, those Pocket models cut the reading short. Test
+sentences:
+
+- en: "Hi there! I looked at your day: three meetings, and a little time for a walk this afternoon."
+- es: "¡Holi! He mirado tu día: tres citas y un rato para caminar esta tarde."
+- de: "Huhu! Ich habe mir deinen Tag angesehen: drei Termine und ein bisschen Zeit für einen Spaziergang heute Nachmittag."
+
+The apps' previews (`voice-<voice>-<code>.m4a`, in the apps' own source) are converted from `<voice>_sample.wav`.
+
+## Dutch (2026-10-26)
+
+Qwen3-TTS has no Dutch, so the Bips' Dutch source clips come from another synthetic voice: **Chatterbox Multilingual**
+by Resemble AI ([resemble-ai/chatterbox](https://github.com/resemble-ai/chatterbox), MIT) spoke a Dutch sentence
+(`language_id="nl"`) in the timbre of each Bip's English clip (`voices/english/<voice>_source.wav`), with accent
+transfer off (`cfg_weight=0`, `exaggeration=0.5`): option (c) « Chatterbox ← anglais » of the Dutch listening bench,
+picked by ear. Sentence: « Goedemorgen! Ik heb even naar je dag gekeken: drie afspraken, en vanmiddag nog wat tijd voor
+een wandeling. Zal ik je een kwartier van tevoren herinneren? ». Each take was trimmed of its silences and, at 10 s or
+more, cut on its last pause before 10 s (the Dutch model, like German and Spanish, reads short with a long reference),
+then checked with Whisper large-v3-turbo forced to Dutch (≤ 5 % word error rate; seeds in `dutch/voices.json`). Pocket
+4.0.1's `dutch` model then cloned each clip as for the other languages (`kyutai/pocket-tts`, `truncate=True`,
+`export_model_state`). Test sentence:
+
+- nl: "Hoi! Ik heb even naar je dag gekeken: drie afspraken, en vanmiddag nog wat tijd voor een wandeling."
+
+Credits: Chatterbox (MIT, Resemble AI) for the source clips, Pocket TTS (CC-BY-4.0, Kyutai) for the states, Qwen3-TTS
+(Apache-2.0) for the English timbres. Chatterbox marks everything it generates with Resemble AI's **Perth** watermark
+(imperceptible, meant to identify AI-made audio): the `dutch/<voice>_source.wav` files carry it; the Bips' speech is
+generated by Pocket from the states and is not Chatterbox's output. Fully synthetic: no real person is imitated.

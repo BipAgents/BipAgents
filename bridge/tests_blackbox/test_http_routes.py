@@ -1,0 +1,458 @@
+"""Auth, /health, /v1/tts/*, /v1/files, /v1/devices (tests/test_http_routes.py, over HTTP)."""
+import os
+import stat
+import time
+
+import pytest
+
+from bbkit.common import AUTH, BRIDGE_KEY, REMOTE, pcm_for
+
+
+# -- auth ------------------------------------------------------------------------------------------
+
+def test_health_is_public_and_reports_reachability(bridge):
+    resp = bridge.get("/health")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is True and body["pocket"] is True and body["apns"] is True
+    assert "version" in body
+    assert body.pop("features", []) in ([], ["agent_groups", "files_kept", "calendar", "health_categories", "contacts", "time_zone",
+                                                    "message_search", "agent_templates", "agent_create_bip", "agent_catalogue", "agent_notify", "agent_queue",
+                                                    "threads", "notifications", "push_seal"])   # Rust
+    assert body.pop("space", "off") == "off"   # Rust: the space's encryption (space.rs), off here
+    assert body == {"ok": True, "version": body["version"], "pocket": True, "voice_server": None,
+                    "apns": True, "push": "apns", "push_relay": False, "fcm": False,
+                    "tts_queue": 0}
+
+
+@pytest.mark.parametrize("headers", [{}, {"Authorization": "Bearer nope"}, {"Authorization": BRIDGE_KEY},
+                                     {"Authorization": f"Basic {BRIDGE_KEY}"}])
+def test_routes_require_bridge_key(bridge, headers):
+    for method, path in [("get", "/v1/notifications"), ("post", "/v1/tts/sentence"), ("post", "/v1/devices"),
+                         ("delete", "/v1/devices/abc"), ("post", "/v1/files"), ("get", "/v1/agents"),
+                         ("post", "/v1/watch"), ("post", "/v1/approve"), ("get", "/v1/approvals")]:
+        resp = bridge.request(method.upper(), path, headers=headers)
+        assert resp.status_code == 401, (method, path)
+        assert resp.headers.get("www-authenticate") == "Bearer"
+        assert resp.json() == {"detail": "unauthorized"}
+
+
+def test_the_bearer_scheme_is_case_insensitive(bridge):
+    assert bridge.get("/v1/agents", headers={"Authorization": f"bearer {BRIDGE_KEY}"}).status_code == 200
+    assert bridge.get("/v1/agents", headers={"Authorization": f"BEARER   {BRIDGE_KEY}"}).status_code == 200
+
+
+def test_agents_listing(bridge):
+    resp = bridge.get("/v1/agents", headers=AUTH)
+    listing = resp.json()
+    assert all(a.pop("group", "") == "" for a in listing["agents"])   # agent groups: Rust only
+    assert all((a.pop("outfit", ""), a.pop("costumes", True)) == ("", True) for a in listing["agents"])   # costumes: Rust only
+    assert all(a.pop("family", False) is False for a in listing["agents"])   # the family's agent: Rust only
+    assert all(a.pop("project", None) is None for a in listing["agents"])   # project agents: Rust only
+    assert all(a.pop("requested", None) is None for a in listing["agents"])   # made from an accepted card: Rust only
+    assert all(a.pop("language") is None for a in listing["agents"])   # its record's language (none: no profile here)
+    assert listing == {"bridge": {"url": None, "lan": None},
+                           "agents": [{"id": "wellness", "name": "Wellness", "voice": "pocket:colibri", "server_voice": None,
+                                       "category": None, "color": None, "url": None}],
+                           "unclaimed": []}
+
+
+def test_unknown_routes_and_methods(bridge):
+    assert bridge.get("/v1/nothing-here", headers=AUTH).status_code == 404
+    assert bridge.get("/v1/nothing-here", headers=AUTH).json() == {"detail": "Not Found"}
+    resp = bridge.put("/v1/agents", headers=AUTH, json={})
+    assert resp.status_code == 405 and resp.json() == {"detail": "Method Not Allowed"}
+    assert "GET" in resp.headers["allow"]
+    assert bridge.request("HEAD", "/v1/agents", headers=AUTH).status_code == 200   # answered as its GET
+    # A path with another method falls through to a later route: DELETE /v1/family/{household}, no `Allow`.
+    resp = bridge.delete("/v1/family/name", headers=AUTH)
+    assert resp.status_code == 404 and resp.json() == {"detail": "no such household"} and "allow" not in resp.headers
+
+
+def test_validation_errors_are_422_with_a_list(bridge):
+    resp = bridge.post("/v1/tts/sentence", headers=AUTH, json={"voice": "x"})
+    assert resp.status_code == 422
+    detail = resp.json()["detail"]
+    assert isinstance(detail, list) and detail[0]["loc"] == ["body", "text"] and detail[0]["type"] == "missing"
+    bad_json = bridge.post("/v1/tts/sentence", headers={**AUTH, "content-type": "application/json"}, content=b"{nope")
+    assert bad_json.status_code == 422 and isinstance(bad_json.json()["detail"], list)
+    too_long = bridge.post("/v1/tts/sentence", headers=AUTH, json={"text": "x" * 20001})
+    assert too_long.status_code == 422 and too_long.json()["detail"][0]["type"] == "string_too_long"
+
+
+def test_wrong_keys_from_the_internet_get_the_address_blocked(bridge):
+    """guard.py: 20 wrong keys in 10 minutes from one address (not this machine's) block it for 15 minutes, even with
+    the right key; requests without a key don't count, and the bridge's own address is never counted."""
+    remote = {"X-Forwarded-For": REMOTE}
+    for _ in range(5):
+        assert bridge.get("/v1/agents", headers=remote).status_code == 401           # no key: not counted
+    for _ in range(19):
+        assert bridge.get("/v1/agents", headers={**remote, "Authorization": "Bearer nope"}).status_code == 401
+    assert bridge.get("/v1/agents", headers={**remote, **AUTH}).status_code == 200
+    assert bridge.get("/v1/agents", headers={**remote, "Authorization": "Bearer nope"}).status_code == 401
+    blocked = bridge.get("/v1/agents", headers={**remote, **AUTH})
+    assert blocked.status_code == 429 and blocked.json() == {"detail": "too many wrong keys, try again later"}
+    assert bridge.get("/v1/agents", headers={"X-Forwarded-For": "203.0.113.51", **AUTH}).status_code == 200
+    for _ in range(25):
+        bridge.get("/v1/agents", headers={"Authorization": "Bearer nope"})          # 127.0.0.1: never counted
+    assert bridge.get("/v1/agents", headers=AUTH).status_code == 200
+    warned = bridge.logged("wrong key")
+    assert warned and warned[0]["address"] == REMOTE and warned[0]["what"] == "bridge key" and warned[0]["count"] == 1
+    assert bridge.logged("address blocked")[0]["minutes"] == 15
+
+
+# -- TTS -------------------------------------------------------------------------------------------
+
+def test_tts_sentence_pcm16(bridge, fakes):
+    resp = bridge.post("/v1/tts/sentence", headers=AUTH, json={"text": "Bonjour *toi*", "format": "pcm16"})
+    assert resp.status_code == 200
+    assert resp.content == pcm_for("Bonjour toi.")
+    assert resp.headers["x-sample-rate"] == "24000" and resp.headers["x-channels"] == "1"
+    assert resp.headers["x-sample-format"] == "s16le" and resp.headers["x-cache"] == "miss"
+    assert resp.headers["cache-control"] == "no-store"
+    assert resp.headers["content-type"] == "application/octet-stream"
+    assert fakes.pocket.inputs[-1]["voice"] == "ours"
+    again = bridge.post("/v1/tts/sentence", headers=AUTH, json={"text": "Bonjour *toi*"})
+    assert again.headers["x-cache"] == "hit" and again.content == resp.content
+
+
+def test_tts_sentence_agent_voice_and_formats(bridge, fakes):
+    resp = bridge.post("/v1/tts/sentence", headers=AUTH, json={"text": "Salut.", "agent": "Wellness", "format": "opus"})
+    assert resp.status_code == 200 and resp.headers["content-type"] == "audio/ogg"
+    assert fakes.pocket.inputs[-1] == {"model": "pocket-tts", "input": "Salut.", "voice": "colibri",
+                                       "response_format": "opus"}
+    assert "x-sample-format" not in resp.headers
+    flac = bridge.post("/v1/tts/sentence", headers=AUTH, json={"text": "x", "format": "flac"})
+    assert flac.status_code == 400 and flac.json() == {"detail": "format must be pcm16, opus or wav"}
+    unknown = bridge.post("/v1/tts/sentence", headers=AUTH, json={"text": "x", "agent": "zzz"})
+    assert unknown.status_code == 404 and unknown.json() == {"detail": "unknown agent"}
+    assert bridge.post("/v1/tts/sentence", headers=AUTH, json={"text": "---"}).status_code == 400
+    wav = bridge.post("/v1/tts/sentence", headers=AUTH, json={"text": "Un wav.", "format": "wav"})
+    assert wav.status_code == 200 and wav.content[:4] == b"RIFF" and wav.headers["content-type"] == "audio/wav"
+
+
+def test_a_bip_s_text_is_prepared_for_the_phone_to_speak_it(bridge):
+    resp = bridge.post("/v1/tts/prepare", headers=AUTH, json={"text": "Rendez-vous à 9h30 avec *Garmin* (le RDV).",
+                                                               "voice": "pocket:galet"})
+    data = resp.json()
+    assert resp.status_code == 200 and data["local"] is True and data["language"] == "fr" and data["bip"] == "galet"
+    assert "neuf" in data["text"] and "*" not in data["text"]
+    assert data == {"local": True, "voice": "pocket:galet", "text": "Rendez-vous à neuf heures trente avec Garmine, le rendez-vous.",
+                    "language": "fr", "bip": "galet"}
+    # Pocket 4 (every phone pack): names as written, an `engine` an older app sends is ignored
+    text = "Mets Spotify avec ta Garmin, le PDF, allure 5:10 par km."
+    new = bridge.post("/v1/tts/prepare", headers=AUTH, json={"text": text, "voice": "pocket:galet", "engine": "4.0.1"}).json()
+    assert new["text"] == "Mets Spotify avec ta Garmine, le pé dé èffe, allure cinq minutes dix par kilomètre."
+    assert bridge.post("/v1/tts/prepare", headers=AUTH, json={"text": text, "voice": "pocket:galet"}).json() == new
+    english = bridge.post("/v1/tts/prepare", headers=AUTH, json={"text": "See you at 5.", "voice": "pocket:en/lumen"})
+    assert english.json()["language"] == "en" and english.json()["bip"] == "lumen"
+    other = bridge.post("/v1/tts/prepare", headers=AUTH, json={"text": "Salut.", "voice": "server:fr/af_bella"})
+    assert other.json() == {"local": False, "voice": "server:fr/af_bella"}    # not a Bip: audio from the bridge
+    assert bridge.post("/v1/tts/prepare", headers=AUTH, json={"text": "---", "voice": "pocket:galet"}).status_code == 400
+    assert bridge.post("/v1/tts/prepare", json={"text": "x"}).status_code == 401
+    assert bridge.post("/v1/tts/prepare", headers=AUTH, json={"text": "x", "agent": "nope"}).status_code == 404
+
+
+# -- files -----------------------------------------------------------------------------------------
+
+def test_upload_maps_path_into_container(bridge):
+    resp = bridge.post("/v1/files", headers=AUTH, data={"agent": "wellness"},
+                       files={"file": ("Relevé de compte (oct).pdf", b"%PDF-1.4 data", "application/pdf")})
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    month = time.strftime("%Y-%m", time.gmtime())
+    assert body["filename"] == "Relevé_de_compte_(oct).pdf"
+    assert body["size"] == len(b"%PDF-1.4 data") and body["content_type"] == "application/pdf"
+    prefix = f"/home/hermes/.hermes/profiles/wellness/uploads/{month}/"
+    assert body["path"].startswith(prefix)
+    stored = body["path"][len(prefix):]
+    assert stored.endswith("-Relevé_de_compte_(oct).pdf") and len(stored.split("-", 1)[0]) == 12
+    host_path = os.path.join(bridge.config["agents"]["Wellness"]["upload_dir_host"], month, stored)
+    with open(host_path, "rb") as fh:
+        assert fh.read() == b"%PDF-1.4 data"
+    assert stat.S_IMODE(os.stat(host_path).st_mode) == 0o640
+    assert set(body) == {"path", "filename", "size", "content_type"}
+
+
+@pytest.mark.parametrize("raw,expected", [
+    ("../../etc/passwd", "passwd"),
+    ("C:\\Users\\alex\\notes.txt", "notes.txt"),
+    (".bashrc", "bashrc"),
+    ("rapport  final 2026.xlsx", "rapport_final_2026.xlsx"),
+    ("a;b|c$(rm).sh", "a_b_c_(rm).sh"),
+    ("..", "fichier"),
+    ("é" * 200 + ".pdf", "é" * 116 + ".pdf"),
+])
+def test_uploaded_names_are_sanitized(bridge, raw, expected):
+    """files.sanitize_filename, seen from the route's answer."""
+    resp = bridge.post("/v1/files", headers=AUTH, data={"agent": "wellness"},
+                       files={"file": (raw, b"x", "text/plain")})
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["filename"] == expected
+    assert resp.json()["path"].endswith("-" + expected)
+
+
+def test_upload_size_limit(bridge):
+    too_big = b"x" * (1024 * 1024 + 1)
+    resp = bridge.post("/v1/files", headers=AUTH, data={"agent": "wellness"},
+                       files={"file": ("big.bin", too_big, "application/octet-stream")})
+    assert resp.status_code == 413
+    assert resp.json() == {"detail": f"file too large (max {1024 * 1024} bytes)"}
+    month_dir = os.path.join(bridge.config["agents"]["Wellness"]["upload_dir_host"], time.strftime("%Y-%m", time.gmtime()))
+    assert not os.path.isdir(month_dir) or os.listdir(month_dir) == []
+
+
+def test_upload_size_limit_by_content_length(bridge):
+    big = b"y" * (1024 * 1024 + 70 * 1024)
+    resp = bridge.post("/v1/files", headers={**AUTH, "content-type": "multipart/form-data; boundary=b0undary"},
+                       content=big)
+    assert resp.status_code == 413 and resp.json()["detail"].startswith("file too large")
+
+
+def test_upload_size_limit_without_content_length(bridge):
+    limit = 1024 * 1024
+
+    def body():
+        boundary = b"--b0undary"
+        yield boundary + b'\r\nContent-Disposition: form-data; name="agent"\r\n\r\nwellness\r\n'
+        yield boundary + b'\r\nContent-Disposition: form-data; name="file"; filename="a.bin"\r\n\r\n'
+        for _ in range(3):
+            yield b"y" * (limit // 2)
+        yield b"\r\n" + boundary + b"--\r\n"
+
+    resp = bridge.post("/v1/files", headers={**AUTH, "content-type": "multipart/form-data; boundary=b0undary"},
+                       content=body())
+    assert resp.status_code == 413
+
+
+def test_bodies_are_limited_except_where_large_ones_are_needed(bridges):
+    """Audit 2026-10-27 #10: 4 MB for every route (open ones included, read before any key), the uploads keeping
+    their own limit; the open household route reads 64 KiB at most."""
+    bridge = bridges.new("limits", change=lambda c: c["limits"].update({"upload_max_mb": 8})).start()
+    big = b"{" + b" " * (5 * 1024 * 1024) + b"}"
+    for path in ("/family/accept", "/v1/import/hello", "/peer/p/vie/v1/runs", "/v1/agents"):
+        refused = bridge.post(path, content=big, headers={"content-type": "application/json"})
+        assert refused.status_code == 413, path
+        assert refused.json() == {"detail": "request body too large"}
+
+    def chunks():  # no Content-Length: stopped while it is read
+        for _ in range(6):
+            yield b" " * (1024 * 1024)
+    assert bridge.post("/family/accept", content=chunks(), headers={"content-type": "application/json"}).status_code == 413
+    medium = b'{"code": "' + b"x" * (100 * 1024) + b'"}'
+    assert bridge.post("/family/accept", content=medium, headers={"content-type": "application/json"}).status_code == 413
+    # a 6 MB file still goes up
+    sent = bridge.post("/v1/files", headers=AUTH, data={"agent": "wellness"},
+                       files={"file": ("photo.jpg", b"j" * (6 * 1024 * 1024), "image/jpeg")})
+    assert sent.status_code == 200, sent.text
+    assert sent.json()["size"] == 6 * 1024 * 1024
+
+
+def test_upload_errors(bridge):
+    unknown = bridge.post("/v1/files", headers=AUTH, data={"agent": "inconnu"}, files={"file": ("a.txt", b"x", "text/plain")})
+    assert unknown.status_code == 404 and unknown.json() == {"detail": "unknown agent"}
+    missing = bridge.post("/v1/files", headers=AUTH, data={"agent": "wellness"})
+    assert missing.status_code == 400
+    garbage = bridge.post("/v1/files", headers={**AUTH, "content-type": "multipart/form-data; boundary=zz"},
+                          content=b"not multipart at all")
+    assert garbage.status_code in (400, 404)
+
+
+def test_upload_to_an_agent_without_uploads(bridges, fakes):
+    b = bridges.new()
+    b.config["agents"]["Vie"] = {"hermes_url": fakes.hermes.url + "/p/vie", "hermes_key": "v" * 32}
+    b.start()
+    resp = b.post("/v1/files", headers=AUTH, data={"agent": "vie"}, files={"file": ("a.txt", b"x", "text/plain")})
+    assert resp.status_code == 409 and resp.json() == {"detail": "uploads not configured for this agent"}
+
+
+# -- devices ---------------------------------------------------------------------------------------
+
+TOKEN = "a" * 64
+
+
+def test_device_register_update_delete(bridge):
+    resp = bridge.post("/v1/devices", headers=AUTH, json={"token": TOKEN.upper(), "environment": "sandbox",
+                                                           "agent_ids": ["Wellness"]})
+    assert resp.status_code == 200
+    device = resp.json()
+    assert device["token"] == TOKEN and device["agent_ids"] == ["wellness"] and device["environment"] == "sandbox"
+    assert set(device) == {"token", "environment", "agent_ids", "created_at", "updated_at"}
+    assert device["created_at"].endswith("Z") and len(device["created_at"]) == 24
+    resp = bridge.post("/v1/devices", headers=AUTH, json={"token": f"<{TOKEN[:32]} {TOKEN[32:]}>",
+                                                           "environment": "production", "agent_ids": []})
+    assert resp.json()["environment"] == "production" and resp.json()["agent_ids"] == []
+    assert resp.json()["created_at"] == device["created_at"]           # the same device, updated
+    with bridge.db() as db:
+        rows = db.execute("SELECT token, environment, agent_ids FROM devices").fetchall()
+    assert rows == [(TOKEN, "production", "[]")]
+    deleted = bridge.delete(f"/v1/devices/{TOKEN}", headers=AUTH)
+    assert deleted.status_code == 204 and deleted.content == b""
+    assert bridge.delete(f"/v1/devices/{TOKEN}", headers=AUTH).status_code == 204  # idempotent
+    with bridge.db() as db:
+        assert db.execute("SELECT count(*) FROM devices").fetchone()[0] == 0
+
+
+def test_a_new_token_naming_the_previous_one_replaces_it(bridge):
+    """The OS rotated the phone's token: the app names the former one (`previous`), whose row goes at once, in the
+    same environment only (audit 2026-10-27, 20)."""
+    old, new, other = "b" * 64, "c" * 64, "d" * 64
+    for token in (old, other):
+        assert bridge.post("/v1/devices", headers=AUTH, json={"token": token, "environment": "production",
+                                                               "agent_ids": ["wellness"]}).status_code == 200
+    fcm_row = "fcm:" + "b" * 40
+    bridge.post("/v1/devices", headers=AUTH, json={"token": fcm_row, "environment": "fcm"})
+    resp = bridge.post("/v1/devices", headers=AUTH, json={"token": new, "environment": "production",
+                                                           "agent_ids": ["wellness"], "previous": old.upper()})
+    assert resp.status_code == 200 and set(resp.json()) == {"token", "environment", "agent_ids", "created_at", "updated_at"}
+    with bridge.db() as db:
+        rows = sorted(r[0] for r in db.execute("SELECT token FROM devices"))
+    assert rows == sorted([new, other, fcm_row])
+    # another environment's row is not this phone's former token: kept
+    bridge.post("/v1/devices", headers=AUTH, json={"token": "fcm:" + "e" * 40, "environment": "fcm", "previous": other})
+    with bridge.db() as db:
+        assert db.execute("SELECT count(*) FROM devices WHERE token=?", (other,)).fetchone()[0] == 1
+    dropped = bridge.logged("previous device token dropped")
+    assert len(dropped) == 1 and dropped[0]["token"] == "bbbbbb…" and old not in bridge.log_path.read_text()
+    # naming itself, or an empty previous, changes nothing
+    again = bridge.post("/v1/devices", headers=AUTH, json={"token": new, "environment": "production", "previous": new})
+    assert again.status_code == 200
+    assert bridge.post("/v1/devices", headers=AUTH, json={"token": new, "previous": ""}).status_code == 200
+    with bridge.db() as db:
+        assert db.execute("SELECT count(*) FROM devices WHERE token=?", (new,)).fetchone()[0] == 1
+    too_long = bridge.post("/v1/devices", headers=AUTH, json={"token": new, "previous": "x" * 601})
+    assert too_long.status_code == 422
+
+
+def test_an_old_app_without_previous_keeps_both_tokens(bridge):
+    old, new = "b" * 64, "c" * 64
+    for token in (old, new):
+        assert bridge.post("/v1/devices", headers=AUTH, json={"token": token, "environment": "production"}).status_code == 200
+    with bridge.db() as db:
+        assert sorted(r[0] for r in db.execute("SELECT token FROM devices")) == [old, new]
+    assert bridge.logged("previous device token dropped") == []
+
+
+def test_device_validation(bridge):
+    hex_ = bridge.post("/v1/devices", headers=AUTH, json={"token": "not-hex"})
+    assert hex_.status_code == 400 and hex_.json() == {"detail": "invalid device token (hex expected)"}
+    env = bridge.post("/v1/devices", headers=AUTH, json={"token": TOKEN, "environment": "dev"})
+    assert env.status_code == 400 and env.json() == {"detail": "environment must be sandbox, production or fcm"}
+    resp = bridge.post("/v1/devices", headers=AUTH, json={"token": TOKEN, "agent_ids": ["ghost"]})
+    assert resp.status_code == 400 and resp.json()["detail"]["agent_ids"] == ["ghost"]
+    assert resp.json() == {"detail": {"error": "unknown agent_ids", "agent_ids": ["ghost"]}}
+    # environment defaults to [apns].environment
+    assert bridge.post("/v1/devices", headers=AUTH, json={"token": TOKEN}).json()["environment"] == "sandbox"
+    assert bridge.post("/v1/devices", headers=AUTH, json={"agent_ids": []}).status_code == 422
+
+
+def test_device_registration_is_logged_without_the_token(bridge):
+    bridge.post("/v1/devices", headers=AUTH, json={"token": TOKEN, "environment": "sandbox", "agent_ids": ["wellness"]})
+    entry = bridge.logged("device registered")[0]
+    assert entry["level"] == "info" and entry["logger"] == "bipbridge.app"
+    assert entry["token"] == "aaaaaa…" and entry["env"] == "sandbox" and entry["agents"] == ["wellness"]
+    assert TOKEN not in bridge.log_path.read_text()
+    started = bridge.logged("bridge started")[0]
+    assert started["agents"] == ["wellness"] and started["apns"] is True and "version" in started
+    assert started["ts"].endswith("Z")
+
+
+def test_tts_message_returns_one_mp3_for_a_whole_reply(bridge, fakes):
+    text = "Premier conseil : coupe les écrans. " * 30  # well over the per-sentence limit
+    resp = bridge.post("/v1/tts/message", headers=AUTH, json={"text": text, "agent": "Wellness"})
+    assert resp.status_code == 200
+    assert resp.headers["content-type"] == "audio/mpeg"
+    assert resp.headers["x-cache"] == "miss" and resp.headers["cache-control"] == "no-store"
+    assert fakes.pocket.inputs[-1]["response_format"] == "mp3"
+    assert len(fakes.pocket.inputs[-1]["input"]) > 1000
+    long = bridge.post("/v1/tts/message", headers=AUTH, json={"text": "x" * 9000})
+    assert long.status_code == 413
+    flac = bridge.post("/v1/tts/message", headers=AUTH, json={"text": "x", "format": "flac"})
+    assert flac.status_code == 400 and flac.json() == {"detail": "format must be mp3, opus or wav"}
+    assert bridge.post("/v1/tts/message", headers=AUTH, json={"text": "x", "agent": "nope"}).status_code == 404
+
+
+def test_tts_stream_relays_pocket_pcm_chunks(bridge, fakes):
+    text = "Bonjour Alex. On commence doucement."
+    resp = bridge.post("/v1/tts/stream", headers=AUTH, json={"text": text, "agent": "Wellness"})
+    assert resp.status_code == 200
+    assert resp.headers["x-sample-rate"] == "24000" and resp.headers["x-channels"] == "1"
+    assert resp.headers["x-sample-format"] == "s16le" and resp.headers["content-type"] == "application/octet-stream"
+    sent = fakes.pocket.inputs[-1]
+    assert sent["format"] == "pcm16" and "response_format" not in sent
+    assert resp.content == pcm_for(sent["input"])
+    calls = len(fakes.pocket.inputs)
+    again = bridge.post("/v1/tts/stream", headers=AUTH, json={"text": text, "agent": "Wellness"})
+    assert again.content == resp.content and len(fakes.pocket.inputs) == calls  # cached
+
+
+def test_tts_stream_falls_back_to_whole_file_on_an_engine_without_streaming(bridge, fakes):
+    fakes.pocket.streaming = False
+    resp = bridge.post("/v1/tts/stream", headers=AUTH, json={"text": "Un ancien moteur."})
+    assert resp.status_code == 200
+    assert fakes.pocket.inputs[-1]["response_format"] == "wav"
+    assert resp.content == pcm_for(fakes.pocket.inputs[-1]["input"])
+
+
+def test_tts_stream_errors_before_audio_are_http_errors(bridge, fakes):
+    assert bridge.post("/v1/tts/stream", headers=AUTH, json={"text": "  "}).status_code == 400
+    assert bridge.post("/v1/tts/stream", headers=AUTH, json={"text": "x" * 9000}).status_code == 413
+    assert bridge.post("/v1/tts/stream", headers=AUTH, json={"text": "a", "agent": "Nope"}).status_code == 404
+    fakes.pocket.status = 500
+    assert bridge.post("/v1/tts/stream", headers=AUTH, json={"text": "Panne."}).status_code == 502
+
+
+def test_pocket_voices_go_to_pocket_tts(bridge, fakes):
+    text = "Coucou, on marche un peu ?"
+    resp = bridge.post("/v1/tts/stream", headers=AUTH, json={"text": text, "voice": "pocket:loutre"})
+    assert resp.status_code == 200
+    sent = fakes.pocket.inputs[-1]
+    assert sent["voice"] == "loutre" and sent["format"] == "pcm16"
+    assert resp.content == pcm_for(sent["input"])
+    whole = bridge.post("/v1/tts/message", headers=AUTH, json={"text": text, "voice": "pocket:loutre"})
+    assert whole.status_code == 200 and whole.content.startswith(b"ID3")
+    assert fakes.pocket.inputs[-1]["response_format"] == "mp3"
+    assert bridge.get("/health").json()["pocket"] is True
+
+
+def test_pocket_down_is_an_error_the_app_reads_with_the_phones_voice(bridge, fakes):
+    fakes.pocket.status = 503
+    resp = bridge.post("/v1/tts/stream", headers=AUTH, json={"text": "Pocket est en panne.", "voice": "pocket:lutin"})
+    assert resp.status_code >= 500
+    assert bridge.get("/health").json()["pocket"] is False
+
+
+def test_numbers_are_spelled_before_synthesis(bridge, fakes):
+    resp = bridge.post("/v1/tts/stream", headers=AUTH, json={"text": "Ta moyenne : **91** bpm à 14h30.", "voice": "pocket:loutre"})
+    assert resp.status_code == 200
+    assert fakes.pocket.inputs[-1]["input"] == "Ta moyenne : quatre-vingt-onze battements par minute à quatorze heures trente."
+
+
+def test_pocket_hiccup_is_retried(bridge, fakes):
+    fakes.pocket.statuses = [503]
+    resp = bridge.post("/v1/tts/stream", headers=AUTH, json={"text": "Un petit hoquet.", "voice": "pocket:ours"})
+    assert resp.status_code == 200
+    assert resp.content == pcm_for(fakes.pocket.inputs[-1]["input"])
+    assert len(fakes.pocket.inputs) == 2
+
+
+def test_pocket_language_voices_get_their_language(bridge, fakes):
+    resp = bridge.post("/v1/tts/stream", headers=AUTH, json={"text": "You spent **$420.50** at 14:30.", "voice": "pocket:en/loutre"})
+    assert resp.status_code == 200
+    sent = fakes.pocket.inputs[-1]
+    assert sent["voice"] == "en/loutre"
+    assert sent["input"] == "You spent four hundred and twenty dollars and fifty cents at fourteen thirty."
+    bridge.post("/v1/tts/stream", headers=AUTH, json={"text": "Am 3. Oktober um 23:15 Uhr.", "voice": "pocket:de/ours"})
+    assert fakes.pocket.inputs[-1]["input"] == "Am dritten Oktober um dreiundzwanzig Uhr fünfzehn."
+
+
+def test_pocket_down_fails_for_other_languages_instead_of_a_french_voice(bridge, fakes):
+    fakes.pocket.status = 503
+    resp = bridge.post("/v1/tts/stream", headers=AUTH, json={"text": "Hola, ¿qué tal?", "voice": "pocket:es/colibri"})
+    assert resp.status_code >= 500
+
+
+def test_unknown_pocket_language_voice_is_reported_as_unavailable(bridge, fakes):
+    fakes.pocket.status = 404
+    resp = bridge.post("/v1/tts/stream", headers=AUTH, json={"text": "Hallo!", "voice": "pocket:de/ours"})
+    assert resp.status_code >= 500  # the app switches to the iPhone's voice on 5xx only

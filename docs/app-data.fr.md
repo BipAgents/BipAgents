@@ -1,0 +1,459 @@
+[🇬🇧 English](app-data.md) · 🇫🇷 Français
+
+# Ce que les apps BipAgents envoient sur le réseau
+
+**En bref :** les conversations, fichiers, transcriptions de notes vocales, données de santé, rappels, contacts et la mémoire des
+agents ne vont qu’au serveur de la personne (son bridge et Hermes), et, pour un agent de la famille, au serveur du proche qui l’a créé. Les services de Kerfy Studio reçoivent des données
+de compte, d’achat et d’acheminement des notifications, ainsi que des paquets scellés qu’ils ne peuvent pas ouvrir. Les
+apps n’intègrent aucun SDK de mesure d’audience ni de rapport de plantage pour nous ; sur Android, le SDK Google Maps
+(cartes) et le scanner de documents ML Kit envoient à Google leurs propres données techniques (§4). Apple et Google reçoivent ce qu’exigent leurs
+boutiques, la connexion et les notifications, et la voix pour la dictée seulement si la personne a accepté la dictée en
+ligne. Avec l’offre tout compris, l’adresse e-mail propre d’un agent garde ses e-mails sur le
+serveur de messagerie de Kerfy Studio ; c’est le bridge de la place qui parle à ce serveur, pas l’app.
+
+Cette page a été écrite à partir du code de l’app iPhone/iPad (`App/`, `Widgets/`, `NotificationService/`,
+`BipVoices/`, `Packages/`) et de l’app Android (`android/`), dans l’état du 21/10/2026 (après le commit `4b6eb92`).
+**Le code des apps est privé :** les chemins de fichiers des apps cités plus bas sont des références, pas des fichiers
+publics. Les parties publiques sont : le bridge ([`bridge/`](../bridge/), [`bridge-rs/`](../bridge-rs/)),
+l’installateur ([`installer/`](../installer/)), le relais de notifications ([`relay/`](../relay/)) et le code de
+chiffrement du compte ([`App/Features/Account/AccountCrypto.swift`](../App/Features/Account/AccountCrypto.swift),
+[`android/…/account/AccountCrypto.kt`](../android/app/src/main/java/io/github/bipagents/account/AccountCrypto.kt) et
+son test, [`AccountCryptoTest.kt`](../android/app/src/test/java/io/github/bipagents/account/AccountCryptoTest.kt)).
+C’est une lecture du code, pas une capture du trafic réseau. L’adresse e-mail d’agent (§1) a été ajoutée le 22/10/2026
+d’après le contrat d’interface du bridge, avant le code des apps qui s’en sert.
+
+## 0. Bibliothèques : aucun traceur de Kerfy Studio
+
+- **iOS** (`BipAgents.xcodeproj/.../Package.resolved`, `Packages/*/Package.swift`) : un seul paquet externe,
+  `onnxruntime-swift-package-manager` 1.24.2, qui fait tourner les voix des Bips sur le téléphone. Aucun SDK de mesure
+  d’audience, de plantage, de publicité ou d’attribution. Ni MetricKit, ni AdSupport, ni AppTrackingTransparency (pas
+  d’IDFA, pas de question « Autoriser le suivi ? »). L’app utilise une fois le framework AdServices d’Apple
+  (`AAAttribution.attributionToken()`, ci-dessous).
+- **Android** (`android/app/build.gradle.kts`, `android/gradle/libs.versions.toml`) : AndroidX/Compose, OkHttp,
+  kotlinx-serialization, CameraX, Media3, Glance, ZXing, ONNX Runtime, le client Health Connect, et ces bibliothèques
+  Google : Play Billing, Play Asset Delivery, Play Integrity, Play Install Referrer (`installreferrer`, lu une fois,
+  ci-dessous), Credential Manager + Google ID, le scanner de documents et la lecture de texte
+  ML Kit (services Play), la localisation des services Play (les geofences des rappels par lieu), le **SDK Google Maps**
+  (`maps-compose` : les cartes des réponses, dessinées seulement si le build a une clé Maps, ce qu’ont les builds de
+  publication) et **Firebase Cloud Messaging seul** (`firebase-messaging` ; ni Analytics, ni Crashlytics, ni
+  plugin `google-services`).
+- La télémétrie d’usage d’ONNX Runtime vers Microsoft est coupée deux fois sur Android : son `TelemetryInitializer` est
+  retiré du manifeste (`AndroidManifest.xml`) et `PocketEngine.kt` appelle `setTelemetry(false)`. L’app iOS n’a pas
+  d’appel équivalent.
+- Firebase ne démarre qu’une fois les notifications activées (`firebase_messaging_auto_init_enabled=false`,
+  `push/Push.kt`).
+- Transport : HTTPS uniquement dans les versions Android publiées (`res/xml/network_security.xml`, rien en clair). iOS
+  n’a aucune exception App Transport Security (`Config/Info.plist`). Les serveurs de la personne, sur le réseau local ou
+  sur Internet, utilisent des certificats auto-signés : un certificat n’est accepté que si son empreinte correspond à
+  celle épinglée (`App/Model/LocalLink.swift`, `net/Http.kt`, `CloudPairing`).
+
+## 1. Le serveur de la personne : bridge et Hermes
+
+C’est soit la machine ou le VPS de la personne (joint par son tailnet, son réseau local ou sa « porte »), soit sa place
+de l’offre tout compris. Tout ce qui est personnel va ici, avec la clé de ce serveur (`App/Model/BridgeClient.swift`,
+`Packages/HermesKit/Sources/HermesKit/Client/HermesClient.swift`, `Input/DocumentUploader.swift`,
+`android/.../net/Bridge.kt`, `net/Hermes.kt`, `net/Http.kt`). Code public : `bridge/`, `bridge-rs/`.
+
+- **Conversations :** les messages, le texte des notes vocales et des appels Live (reconnu sur le téléphone, ou en
+  ligne seulement si la personne l’a accepté, voir §4), les photos et fichiers (`/v1/runs`, `/v1/files`, `/v1/media`), les approbations et réponses, les
+  événements en direct (SSE). Chaque message dit le type de téléphone d’où il part (`phone` : « ios » ou « android »,
+  rien d’autre sur l’appareil), pour qu’un rappel demandé dans son tour aille sur ce téléphone. **L’audio d’une note
+  vocale reste sur le téléphone** (seule sa transcription part). Le seul WebSocket est celui du passage par le téléphone
+  (ci-dessous).
+- **Agents :** réglages, modèle, langue, apparence, outils, services connectés, pages de mémoire (lues et modifiées),
+  import de notes, pages, tâches de fond, tâches planifiées, partages entre agents, liens familiaux (`/v1/family/*`).
+- **Secrets saisis par la personne :** mots de passe des boîtes mail (`/v1/mail/accounts`, et la boîte propre d’un
+  agent chez le fournisseur de la personne dans `/v1/agents/{id}/email`), éléments du coffre (`/v1/vault` ; sur le serveur de la personne, le numéro, l’expiration, le titulaire et le code
+  postal d’une carte de paiement y vont aussi, `bridge-rs/src/cards.rs` ; sur une place de l’offre, ils restent sur le
+  téléphone et ne partent, avec le code de sécurité (tapé, ou retenu sur ce téléphone derrière Face ID / l’empreinte si la personne l’a
+  choisi : Trousseau / Keystore Android), que pour un paiement que la personne valide), clés SSH
+  publiques (`/v1/ssh/keys`), réglages d’un serveur de voix.
+- **Santé** (`App/Features/Settings/HealthSync.swift`, `android/.../health/HealthSync.kt`) : un résumé par jour,
+  envoyé par `PUT /v1/health-data/days` à chaque bridge dont au moins un agent a « Santé » activé, avec seulement les
+  données des catégories que lisent les agents de ce bridge (`shared` dans `GET /v1/health-data` ; la liste de chaque
+  agent se règle par `PATCH /v1/agents/{id}/settings {"health_categories": […]}` depuis les détails de la tuile
+  « Santé ») : activité (pas, énergie active, minutes d’exercice, séances, distance, étages, heures debout), sommeil
+  (endormi/au lit, heures, phases, respiration, température du poignet), cœur (pouls au repos, VFC, pouls moyen/min/max
+  du jour, oxygène dans le sang, VO2 max), corps (poids, masse grasse, IMC, tension), alimentation et eau (calories
+  mangées, eau, caféine), bien-être (pleine conscience, état d’esprit d’iOS 18), et les plus sensibles, désactivées
+  par défaut et laissées hors de « Tout partager » : glycémie (mmol/L) et cycle (flux, début des règles). Un
+  interrupteur activé commence avec activité, sommeil et cœur. Heures debout, température du poignet, IMC et humeurs
+  n’existent que sur iPhone ; la pleine conscience sur Android seulement là où Health Connect l’a. Chaque catégorie
+  demande l’autorisation du système pour ses types quand on l’active. Seuls les jours nouveaux ou
+  modifiés partent : les 7 derniers jours sont revérifiés à chaque fois, et l’envoi remonte jusqu’à 30 jours. L’iPhone
+  envoie aussi en arrière-plan quand Santé a de nouvelles données (`enableBackgroundDelivery`, quotidien). Android ne
+  lit que lorsque l’app est ouverte. Le téléphone ne garde que des empreintes de ce qu’il a envoyé. Sur le bridge, les
+  journées ne gardent que les catégories qu’au moins un agent lit (une catégorie que plus aucun ne lit en est effacée),
+  et chaque agent qui a l’interrupteur activé ne lit que ses catégories (`bridge-rs/src/health.rs`, `Day::restricted`).
+- **Rappels de l’iPhone** (`App/Features/Settings/RemindersSync.swift`) : une copie des rappels part aux bridges choisis
+  par la personne, et l’app exécute les demandes que les agents ont mises en attente. Un rappel à une heure reçoit sa
+  date avec l’heure, dans le fuseau du téléphone, et une alerte à ce moment-là (`HermesKit/ReminderDue.swift`). Un
+  rappel par lieu (le `place` de `reminders_add`) devient une alarme de lieu EventKit : c’est Rappels qui surveille le
+  lieu, l’app n’a pas accès à la position ; le nom d’un lieu est cherché avec Plans d’Apple (`MKLocalSearch`). Un rappel à
+  une heure ou à une date va sur le téléphone d’où la personne l’a demandé (chaque message dit « ios » ou « android »,
+  ci-dessous), s’il les prend ; sinon, et dans un tour qu’aucun téléphone n’a demandé (une routine), d’abord sur
+  l’iPhone. Jamais sur les deux.
+- **Rappels sur Android** (`reminders/PlaceReminders.kt`, `reminders/CalendarReminders.kt`) : Android n’a pas d’app
+  Rappels. Les rappels des agents qui ont un lieu sont lus dans la file du bridge (`/v1/reminders/queue?phone=android`)
+  et gardés sur le téléphone comme geofences (localisation des services Google Play ; le nom cherché avec le `Geocoder`
+  du téléphone). La permission de position (avec l’arrière-plan) n’est demandée qu’une fois un tel rappel créé, après
+  un écran de l’app qui dit pourquoi (chaînes `places_allow_*`) ; les rappels sont listés et supprimés dans Réglages ›
+  Rappels par lieu. La position ne quitte jamais le téléphone. Un rappel à une heure ou à une date (envoyé au téléphone Android quand la
+  personne l’a demandé depuis lui, ou quand aucun iPhone ne partage ses Rappels avec ce bridge) devient un événement de l’agenda du téléphone
+  (CalendarContract), dans l’agenda synchronisé avec le compte de la personne (jamais un agenda gardé sur le téléphone
+  seul) : un quart d’heure à cette heure-là avec une alerte, ou un événement « toute la journée » avec une alerte à
+  9 h ; sa description dit quel agent l’a demandé (« Rappel de … ») et porte la marque de l’app (`BipAgents ^r…`). Il
+  faut la permission de l’agenda ; sans elle le rappel attend et l’app la demande. L’app envoie au bridge si elle peut
+  écrire dans un agenda, et le titre et l’heure de ses propres rappels à venir (`PUT /v1/reminders/android`), rien
+  d’autre de l’agenda. Coché par un agent : supprimé s’il est à venir, son alerte retirée une fois commencé.
+- **Partagé vers l’app** (`ShareExtension/`, `App/Model/SharedInbox.swift`, Android `ui/SharedMessage.kt`) : un message
+  ou des captures partagés vers BipAgents vont à l’agent que la personne choisit, en brouillon et pièces jointes dans sa
+  conversation, envoyés seulement quand elle touche Envoyer. L’extension de partage iOS les écrit dans l’App Group
+  (`share/<id>/`, effacé à l’ouverture, ou au bout d’une heure). Une réponse que l’agent rédige (un bloc ```draft) a
+  « Envoyer avec… », la feuille de partage du système : l’app ne l’envoie jamais. La feuille de partage liste aussi les
+  agents que des proches partagent avec la personne (lus dans la liste de l’app, dans l’App Group,
+  `share-targets.json`).
+- **Un agent qu’un proche héberge** (`bridge-rs/src/family_thread.rs`, `agent_shares.rs`, `shared_files.rs`,
+  `agent_feed.rs`, `family_relay.rs`) : l’app ne parle qu’au bridge de la personne, qui transmet au bridge du foyer qui
+  héberge l’agent, avec la clé de leur lien famille : directement, ou, pour une installation à la maison injoignable,
+  par la longue attente que le bridge de la maison garde ouverte vers lui. Jamais par les serveurs de Kerfy Studio.
+  **L’agent de la famille** : les messages, photos et fichiers de la personne y vont, dans une conversation commune
+  aux membres choisis par celui qui l’a créé (leur prénom sur leurs messages), ses fichiers gardés là-bas (30 jours
+  par défaut) ; pour un PDF scanné, les mots que le téléphone a lus sur ses pages vont avec (iOS : Vision, sur le
+  téléphone ; Android : reconnaissance de texte ML Kit, §4). **Un agent personnel qu’un proche partage** : en lecture
+  seule, le téléphone ne fait que lire les conversations du propriétaire avec lui (depuis le partage, ou aussi
+  celles d’avant si le propriétaire l’a choisi), jamais sa mémoire. Les notifications des membres viennent de leur
+  propre bridge, scellées pour leurs téléphones (§3).
+- **Contacts** (`App/Features/Settings/ContactsSync.swift`, `android/.../contacts/ContactsSync.kt`) : une copie du
+  carnet d’adresses (`PUT /v1/contacts`) part à chaque bridge où au moins un agent peut le lire, réduite à ce que la
+  personne a choisi pour ce bridge (`PUT /v1/contacts/scope` : tout le carnet ou certains groupes, les notes seulement
+  si elles sont cochées ; jamais de photos), et l’app exécute les demandes que les agents ont mises en attente (un
+  contact ajouté ou modifié, jamais supprimé). Le bridge ne garde que ce que le choix couvre et efface la copie quand
+  plus aucun agent ne peut la lire (`bridge-rs/src/contacts.rs`). Sur l’iPhone, les notes ne sont jamais lues (il
+  faudrait une autorisation spéciale d’Apple que l’app n’a pas).
+- **L’adresse e-mail d’un agent** (`GET/POST/PATCH/DELETE /v1/agents/{id}/email`,
+  `POST /v1/agents/{id}/email/held/{mail}`) : l’activer (une adresse de Kerfy Studio sur une place de l’offre, ou la boîte
+  de la personne chez son fournisseur, avec son adresse, son mot de passe et ses serveurs IMAP/SMTP), les adresses
+  autorisées, la limite par jour, et approuver ou abandonner un e-mail que l’agent veut envoyer à une nouvelle adresse
+  (l’app affiche ses destinataires et son objet). Pour une adresse de Kerfy Studio, c’est le bridge de la place qui
+  demande lui-même la boîte au guichet, avec le jeton de sauvegarde de la place ; le guichet donne le mot de passe une
+  seule fois au bridge, qui le garde dans les réglages de l’agent : **le téléphone ne le voit jamais**. Un e-mail en
+  attente déclenche une notification (`email_held`).
+- **Inscription aux notifications :** le jeton APNs ou Firebase (ou, à la place, un jeton de relais, voir §3), avec les
+  identifiants des agents et la clé publique de notification du téléphone (`/v1/devices`). Le bridge chiffre pour ce
+  téléphone seul le nom de l’agent et le début de sa réponse (`bridge-rs/src/push_runs/seal.rs`) ; l’extension de
+  notification (`NotificationService/NotificationService.swift`) et le service Android (`push/BipMessagingService.kt`)
+  les ouvrent sur le téléphone, et vont chercher sur le bridge la commande à approuver et l’audio (`/v1/replies`,
+  `/v1/outbox`, `/v1/approvals`). Le contenu des notifications ne passe pas en clair par Apple ni par Google.
+- **Voix :** les réponses des agents sont envoyées au bridge pour être lues (`/v1/tts/*`) quand le téléphone ne les lit
+  pas lui-même.
+- **Icônes des sites** devant les liens : demandées au bridge (`/v1/favicon/<hôte>`), qui interroge le service d’icônes
+  de DuckDuckGo pour le seul domaine du site (`a.b.exemple.fr` → `exemple.fr`). Le téléphone ne contacte jamais ce
+  service ni le site. **Les liens des réponses** ne sont jamais chargés par l’app (pas d’aperçu) : un toucher les
+  ouvre. Un lien Google Maps reçoit une carte faite à partir du lien seul : un nom de lieu sans position est cherché
+  avec la recherche d’Apple (iPhone) ou le Geocoder d’Android (celui de Google sur la plupart des téléphones), et la
+  position part chez Apple (MapKit) ou Google (Maps SDK) pour dessiner la carte.
+- **Météo et itinéraires** (`bridge-rs/src/weather.rs`, `routes.rs`) : l’interrupteur « Météo » est un réglage de
+  l’agent (`PATCH /v1/agents/{id}/settings {"weather": bool}`). C’est le bridge, pas le téléphone, qui demande le lieu
+  à Nominatim (OpenStreetMap) et les prévisions à MET Norway, avec seulement le nom du lieu et ses coordonnées
+  arrondies à 2 décimales. Un itinéraire est un lien Google Maps dans la réponse ; l’app iPhone l’ouvre comme un lien
+  Plans (`ChatText.appleMaps`), l’app Android dans Google Maps. Avec `[maps] google_key` sur le bridge, les lieux, le
+  mode et les heures de l’itinéraire partent vers l’API Routes de Google pour sa durée et sa distance ; rien n’en est
+  gardé.
+- **Cartes et trajets** (`bridge-rs/src/maps.rs`, `map_route.rs`) : pour dessiner une carte dans une réponse ou une
+  page, c’est aussi le bridge qui cherche les lieux chez Nominatim (les noms ou adresses que l’agent place, ce qui peut
+  être une adresse personnelle), prend les images chez OpenStreetMap (`tile.openstreetmap.org`, gardées 30 jours en
+  cache) et le trajet par les rues chez FOSSGIS (`routing.openstreetmap.de`, les coordonnées des étapes à 5 décimales).
+  Le téléphone ne contacte aucun de ces services.
+- **Le navigateur visible de l’agent** (`App/Features/Agents/DesktopView.swift`) : une vue web de la page de
+  visualisation du bridge, sans données de site conservées.
+- **Le passage par le téléphone** (`docs/phone-exit.md` ; Android `phoneexit/`, iOS `App/Features/PhoneExit/`) : pour un
+  site que la personne a accepté, le téléphone ouvre un WebSocket sortant vers son bridge et fait sortir par sa propre
+  connexion les flux TLS de l’agent vers ce site. Le site voit l’adresse IP du téléphone ; le TLS reste de bout en bout
+  entre le Chrome de l’agent et le site, et le téléphone ne lit que le nom du serveur. Montré par une notification
+  (Android) ou l’écran « Relais » (iOS), avec « Arrêter » ; jamais pour un agent partagé ou du foyer.
+- **Appairage d’une place de l’offre** (`App/Features/Cloud/CloudPairing.swift`, `android/.../cloud/CloudPairing.kt`) :
+  `GET /v1/setup?nonce=`, puis `POST /v1/setup/claim` sur le certificat prouvé puis épinglé. La demande contient le
+  modèle, **la clé d’IA que le guichet a créée pour cette place** (transmise par le téléphone), les agents à créer et la
+  langue. Pour une restauration, elle contient à la place la clé de sauvegarde que le téléphone a gardée.
+- **Sauvegardes :** le téléphone lit la clé et l’état de sauvegarde de la place (`/v1/backup`) et garde la clé (§7).
+- **Nouvel appareil sur le compte :** le téléphone demande à chacune de ses places une nouvelle clé pour cet appareil
+  (`/v1/device-keys`), puis les scelle (§2).
+
+Les widgets ne font aucun appel réseau. Ils lisent ce que l’app a déjà enregistré dans l’App Group partagé (iOS,
+`Widgets/BipWidgets.swift`) et ouvrent l’app par un lien (Android, `widget/AgentWidget.kt`).
+
+## 2. Le guichet de Kerfy Studio (`https://guichet.bipagents.com`)
+
+C’est le service de l’offre tout compris, avec les comptes et les liens familiaux (`App/Features/Cloud/Guichet.swift`,
+`CloudOffer.swift`, `PlaceRescue.swift`, `App/Features/Account/BipAccount.swift`, `FamilyLinks.swift` ;
+`android/.../cloud/Guichet.kt`, `CloudOffer.kt`, `PlaceRescue.kt`, `DeviceProof.kt`, `account/BipAccount.kt`,
+`account/FamilyLinks.kt`). **Le code du guichet n’est pas dans le dépôt public.**
+
+| Quand | Appel | Ce qui est envoyé |
+|---|---|---|
+| Quand la personne ouvre l’offre (pas sur l’écran d’accueil, pas en démo) | `GET /v1/where?country=` | le code pays de la boutique (storefront de l’App Store, configuration de facturation Play) |
+| Écrans de l’offre, et choix du modèle d’un agent sur une place de l’offre | `GET /v1/models?region=` | la région seule |
+| Avant l’achat | `POST /v1/offer` | forfait, région ; pour la semaine offerte : sur iOS un **jeton DeviceCheck**, sur Android un **jeton Play Integrity + le SHA-256 de `"bipagents-trial:"` + ANDROID_ID** (l’identifiant brut n’est pas envoyé) |
+| Achat, restauration, changement de forfait | `POST /v1/activate` | iOS : la **transaction signée (JWS)** de l’App Store + un jeton DeviceCheck ; Android : le **jeton d’achat** Play ; région, ticket |
+| Crédit d’IA acheté | `POST /v1/subscription/credit` | la preuve de la boutique, l’identifiant du produit |
+| Suivi de l’abonnement et des places | `GET /v1/subscription`, `/v1/places/mine`, `POST …/claimed`, `…/withdraw` | le jeton d’abonnement ou le jeton de la place |
+| Crédit d’IA partagé d’un Duo ou d’une Famille : la personne qui paie fixe la limite mensuelle d’une personne | `POST /v1/subscription/places/{number}/cap` | le jeton d’abonnement, `cap_eur` (un montant, ou null pour aucune). `GET /v1/subscription` renvoie à la personne qui paie seulement l’usage d’IA de chaque place ce mois-ci (`ai.people` : numéro, montant utilisé, limite) ; `GET /v1/places/mine` ne renvoie à une personne invitée que ce qu’il reste pour tout le monde, son propre usage et sa limite. Des montants en euros, jamais de contenu |
+| Avis de panne | `POST /v1/subscription/phone`, `/v1/places/phone` | le **jeton de relais** (jamais le jeton APNs ou Firebase) |
+| Connexion au compte | `POST /v1/account/email`, `/v1/account/signin` | adresse e-mail (et code reçu), ou **jeton d’identité Apple ou Google** ; nom de l’appareil (iOS : « iPhone »/« iPad » ; Android : `Build.MODEL`, par ex. « Pixel 8 »), plateforme, **clé publique P-256 de l’appareil**, langue |
+| Compte | `GET/PUT /v1/account*` | jeton de relais, nom de l’appareil ; approuver ou retirer des appareils ; supprimer ou garder le compte |
+| Approbation d’un nouvel appareil | `POST /v1/account/devices/{id}/approve` | un **paquet scellé** (ci-dessous) |
+| Code de récupération | `PUT/POST /v1/account/recovery` | un **vérificateur** du code (jamais le code lui-même) et le **séquestre** (ci-dessous) |
+| Invitation à une place partagée (Duo, Famille) | `POST /v1/account/invitations` | le numéro de la place, l’e-mail de la personne invitée, le prénom de celle qui invite (`who`), la langue de l’app. Rien sur la place elle-même : l’e-mail du guichet dit seulement d’ouvrir l’app et de se connecter avec cette adresse |
+| Invitations reçues (compte connecté et approuvé) | `GET /v1/account/invitations/received` | le jeton du compte. La réponse contient les places offertes à cette adresse et encore prêtes à être appairées, avec ce qu’il faut pour l’appairage (adresse, port, empreinte du certificat, secret d’appairage, clé d’IA créée par le guichet, jeton de la place), en HTTPS. Une fois la place appairée, `POST /v1/account/places` avec ce jeton la rattache au compte |
+| Liens familiaux | `POST /v1/account/family/devices` (corps `{email, siblings}`), `POST /v1/account/family/invitations` | l’e-mail de l’autre personne (dans le corps de la requête, pas dans l’URL), le nom du foyer (`from`), un **paquet scellé** par appareil de cette personne |
+| D’où vient la personne (une fois ; `App/Features/Cloud/Attribution.swift`, `android/.../cloud/Attribution.kt`) | `POST /v1/attribution` | le jeton de l’abonnement ou du compte et **un seul** de : Android, le nom de la campagne publicitaire tiré du referrer d’installation de Google Play (`utm_campaign` seulement) ; iPhone, le jeton d’attribution d’AdServices (le guichet interroge Apple et ne garde que « asa- » + le numéro de la campagne Apple Search Ads, jamais le jeton) ; la réponse à « Comment nous as-tu connus ? » (Instagram, X, un ami ou la famille, un article ou un podcast, une recherche, autre) si la personne a répondu. Envoyé une fois, seulement quand le téléphone a l’offre ou un compte ; rien pour une installation chez soi sans compte |
+| « Partager en lecture » : la personne commence à partager une conversation | `POST /v1/rshares` | le jeton du compte, la date de fin. La réponse : l’identifiant du partage et un jeton que l’app confie au bridge de la personne, qui fait le reste (ci-dessous) |
+| « Partager en lecture » : quelqu’un ouvre son invitation | `POST /v1/rshares/look`, `/v1/rshares/redeem` | le jeton du compte, l’identifiant de l’invitation, une **clé publique P-256 faite pour ce partage** et une **preuve** (un HMAC de cette clé avec le secret placé après « # » dans le lien, qui lui n’est jamais envoyé) |
+| « Partager en lecture » : la lecture | `GET /v1/rshares/shared`, `/v1/rshares/{id}/items`, `POST …/mute`, `DELETE …/me` | le jeton du compte ; les réponses sont du **texte chiffré** et la clé du contenu **scellée pour cet appareil**, ouverts sur le téléphone seulement |
+
+**Campagnes publicitaires (décidé le 2026-10-29).** Kerfy Studio compte lui-même, au guichet, quelles publicités
+amènent des abonnés : aucun SDK publicitaire (ni SDK Meta, ni pixel, ni Conversions API), pas d’IDFA, pas de question
+ATT, rien n’est envoyé à Meta. Un abonnement et un compte gardent au plus **un nom de campagne** (une étiquette courte
+comme `insta-nov-a`, ou `asa-542370539` pour Apple Search Ads), sa provenance (le lien du site, le referrer de Google
+Play, Apple Search Ads, le lot d’un code bêta, ou la réponse de la personne) et sa date ; le premier reçu est gardé,
+jamais remplacé. Jamais d’identifiant de clic, d’identifiant publicitaire, de jeton Apple ni rien d’autre du referrer.
+Pourquoi : savoir quelles campagnes se remboursent et arrêter les autres. Base légale : l’intérêt légitime de Kerfy
+Studio (art. 6.1.f RGPD). La règle, écrite aussi dans le code du guichet : **des comptes seulement, jamais un autre
+usage, 13 mois.** Lire le referrer d’installation de Google Play et demander un jeton à AdServices passent par le
+téléphone, ce que la règle ePrivacy (art. 82 de la loi Informatique et Libertés) n’admet sans consentement que pour une
+pure mesure d’audience : l’attribution n’est lue que par le rapport hebdomadaire, qui ne contient que des comptes par
+campagne et par semaine, jamais une personne ; elle ne sert à rien d’autre (ni e-mail, ni offre, ni profil, jamais
+transmise à qui que ce soit). Chaque nom de campagne est effacé **13 mois après son enregistrement** (la purge
+quotidienne du guichet), ou avant avec le compte ou l’abonnement ; les semaines plus anciennes du rapport comptent
+alors simplement moins d’abonnements attribués. Chacun peut s’y opposer en écrivant à privacy@bipagents.com : Kerfy
+Studio efface la sienne et marque le compte et ses abonnements pour que rien n’y soit plus jamais enregistré. Les boutiques
+comptent elles-mêmes les installations venues de publicités dans leurs tableaux de bord (App Store Connect, Google
+Play Console), comme pour toute app ; le lien du site transmet la campagne à Stripe Checkout (`metadata`) pour qu’elle
+arrive au guichet avec l’achat.
+
+**Ce qui est chiffré de bout en bout (code public) :** `AccountCrypto`. Un paquet est scellé sur un
+appareil pour la clé P-256 d’un autre : clé ECDH éphémère, HKDF-SHA256 (info `bipagents-box-v1`), puis AES-256-GCM.
+Seul l’appareil qui détient la clé privée peut l’ouvrir. Les paquets contiennent la passation entre appareils (pour
+chaque place : adresse, empreinte du certificat, clé de bridge du nouvel appareil, clé de sauvegarde, jeton de la
+place, et la clé du séquestre) ainsi que les invitations familiales. Le **séquestre** (la clé de sauvegarde de chaque
+place) est scellé en AES-256-GCM avec une clé dérivée du code de récupération de 24 caractères (HKDF, 120 bits). Le
+guichet ne garde qu’une autre valeur dérivée du code.
+
+**Une conversation montrée en lecture (« Partager en lecture » ; code public : `ReadShare.swift`, `ReadShareCrypto.kt`,
+`bridge-rs/src/read_shares.rs`).** Le bridge de la personne chiffre la conversation partagée (ses messages, les
+réponses de l’agent, ses pages et images de cartes de cette conversation ; jamais le détail des outils, les
+approbations, les autres conversations ni le Carnet) en AES-256-GCM avec une clé tirée au hasard qui ne quitte jamais
+le bridge, et envoie ce texte chiffré au guichet. Chaque téléphone invité fait une clé P-256 pour ce partage ; le bridge
+lui scelle la clé du contenu (le paquet ci-dessus) seulement après avoir vérifié la preuve faite avec le secret du
+lien : le guichet ne peut ni lire la conversation ni se donner une clé. Ce que le guichet voit : le compte de la
+personne, les prénoms qu’elle a tapés pour ses invités et le prénom qui leur est montré, qui a rejoint et quand, des
+tailles et des heures, la date de fin. Tout est supprimé à la date de fin, quand la personne arrête le partage, ou
+quand son compte est effacé. Une capture d’écran sur le téléphone d’un invité ne peut pas être empêchée, et l’écran de
+partage le dit.
+
+**Code de comparaison d’un nouvel appareil** (`AccountCrypto.deviceCode`) : l’appareil en attente affiche un code de
+12 chiffres tiré de sa propre clé publique ; l’appareil qui l’approuve affiche le code de la clé que le guichet lui a
+donnée, dans l’alerte et à côté d’« Approuver », et demande de n’approuver que si les deux sont identiques. Le code est
+un SHA-256 de `"bipagents-device-code-v1"` ‖ 0x00 ‖ l’identifiant de l’appareil ‖ 0x00 ‖ sa clé publique (65 octets),
+haché 10 000 fois en tout ; les 8 premiers octets, modulo 10¹², donnent les 12 chiffres. Une clé qui n’est pas une clé
+P-256 valable n’a ni code ni bouton « Approuver ». Un vecteur de référence est vérifié dans les deux apps
+(`AccountCryptoTest.kt`, et une assertion des versions de débogage dans `AccountCrypto.swift`).
+
+**Jamais envoyé au guichet** (aucun appel de ce type n’existe dans le code) : conversations (sauf, chiffrée, celle que
+la personne partage en lecture, ci-dessus), fichiers, mémoire, données
+de santé, rappels, contacts, clés de bridge en clair, le code de récupération lui-même. Les boîtes e-mail des agents
+sont demandées par le bridge de la place, pas par les apps (§1).
+
+## 3. Le relais de notifications de Kerfy Studio (public : `relay/`)
+
+Il n’est utilisé que si la version de l’app définit un hôte de relais (`BIPPushRelayHost` / `push.relayHost`)
+(`App/Features/Push/PushRelay.swift`, `AppDelegate.swift`, `android/.../push/Push.kt`).
+
+- `POST /v1/register` `{platform, token, environment}` : le jeton APNs ou Firebase, échangé contre un **jeton de
+  relais**, c’est-à-dire ce jeton scellé en XChaCha20-Poly1305 avec une clé que seul le relais détient
+  (`relay/src/seal.rs`). Le jeton de relais est donné aux bridges qui n’ont pas leur propre clé de notification, et au
+  guichet. L’inscription a lieu une fois les notifications autorisées, et seulement si un bridge, l’offre ou le compte
+  en a besoin.
+- « Signaler ce message » (le message d'une autre personne dans une conversation partagée) passe par le même `POST /v1/report` : son texte commence par « Message d'une personne (pas de l'agent), écrit par « <prénom affiché> », agent « <nom> » : », suivi du message (7 000 caractères au plus) ; le reste est identique.
+- `POST /v1/report` (« Signaler cette réponse ») : **le texte de la réponse signalée**, le motif, le commentaire
+  facultatif, la catégorie de l’agent, la version de l’app, le modèle du téléphone (iOS : identifiant matériel comme
+  `iPhone17,1` ; Android : fabricant + modèle), la plateforme et la langue. Il n’y a ni nom, ni adresse, ni compte. Le
+  relais transmet le tout à `/v1/reports` sur le guichet (`relay/src/routes.rs`). Si le relais n’est pas configuré ou
+  ne répond pas, l’app ouvre à la place un e-mail à support@bipagents.com avec le même texte. **C’est le seul cas où
+  un texte de conversation arrive chez Kerfy Studio, et seulement quand la personne l’envoie.**
+- Les notifications elles-mêmes sont envoyées par le bridge ou le guichet, pas par l’app. Le relais ne garde que des
+  identifiants, le nom de l’agent dans le titre et une liste fixe de textes génériques (`relay/src/payload.rs`).
+
+## 4. Apple et Google
+
+- **Boutiques :** StoreKit 2 (produits, achats, `Transaction.updates`, codes d’offre, `Storefront`), Play Billing
+  (achats, pays de la configuration de facturation). Les boutiques voient l’achat. Le guichet reçoit la preuve (§2).
+- **D’où vient une installation :** iOS demande à AdServices un jeton d’attribution (`AAAttribution.attributionToken()`,
+  sans ATT ni IDFA) pendant les 30 premiers jours, jusqu’à ce que le guichet l’ait ; le jeton va au guichet, qui
+  interroge Apple (`api-adservices.apple.com`). Android lit une fois, au premier lancement, le referrer d’installation
+  de Google Play (`InstallReferrerClient`) et n’en garde que `utm_campaign` sur le téléphone jusqu’à l’envoi (§2).
+- **Contrôle de la semaine offerte :** DeviceCheck (`DCDevice.generateToken`, `CloudOffer.swift`) ; Play Integrity
+  (`DeviceProof.kt`, seulement si `play.cloudProject` est défini).
+- **Connexion :** Sign in with Apple (portée : e-mail) (`AccountSignIn.swift`). Sur iOS, Google passe par le flux avec
+  code d’autorisation et PKCE dans une session d’authentification web : `accounts.google.com/o/oauth2/v2/auth`, puis
+  `oauth2.googleapis.com/token`, avec la portée `openid email` (`AccountView.swift`, `GoogleSignIn`). Sur Android,
+  Google passe par Credential Manager (`GetSignInWithGoogleOption`, `ui/AccountScreen.kt`). Le jeton d’identité part
+  ensuite au guichet.
+- **Notifications :** inscription APNs (`registerForRemoteNotifications`) et Firebase Messaging (le jeton, plus
+  l’identifiant d’installation propre à Firebase). Les contenus portent des identifiants, pas de texte (§3) ; un bridge
+  qui a sa propre clé de notification envoie directement.
+- **Voix :** les paquets de voix des Bips sont des asset packs hébergés par Apple (`BipVoices/`, `VoicePackages.swift` ;
+  iOS 26.4 et plus) et des packs Play Asset Delivery. Ils sont téléchargés à la demande et ne contiennent aucune donnée
+  de la personne. Les modèles vocaux d’Apple sur l’appareil peuvent aussi être téléchargés (`AssetInventory`).
+- **La reconnaissance vocale reste sur le téléphone par défaut.** iOS : `SpeechAnalyzer` (iOS 26 et plus, modèle de la
+  langue installé), sinon `SFSpeechRecognizer` avec `requiresOnDeviceRecognition`. Pour une langue que le téléphone ne
+  sait pas reconnaître seul, l’app demande une fois, « Dictée en ligne ? », si la voix peut passer par les serveurs
+  d’Apple ; tant que la personne n’a pas dit oui, la dictée est indisponible pour cette langue et l’écrit reste possible
+  (`Packages/VoiceKit/…/SpeechRecognizerBackend.swift`, `App/Features/Conversation/OnlineDictation.swift`). Android : le
+  reconnaisseur sur l’appareil quand la langue est installée (Android 13 et plus) ; si le système peut télécharger la
+  langue, le téléchargement est proposé une fois (Android le demande à la personne) ; sinon, la même question, pour les
+  serveurs de Google, et seul un oui permet d’utiliser le reconnaisseur par défaut du téléphone
+  (`SpeechRecognizer.createSpeechRecognizer`, en général celui de Google, qui peut fonctionner en ligne)
+  (`voice/OnlineDictation.kt`, `voice/Recorder.kt`, `voice/Live.kt`). La réponse est gardée ; le réglage « Dictée en
+  ligne (Apple) » / « (Google) », désactivé par défaut, permet de la changer. Cela vaut pour les notes vocales, les
+  notes vocales rapides et les appels Live.
+- **Vocabulaire de la dictée :** le reconnaisseur reçoit aussi, comme indices, les noms des agents de la personne, de
+  ses applis connectées et des personnes de son Carnet (100 au plus, gardés sur le téléphone), plus une liste fixe de
+  mots anglais courants et de marques (`DictationVocabulary`, `DictationWords` ; Android `voice/DictationVocabulary.kt`).
+  Ils ne vont que là où va déjà la voix : nulle part avec la reconnaissance sur le téléphone, avec la voix chez Apple ou
+  Google avec la dictée en ligne. La dictée précise (Parakeet) ne prend pas d’indices : le téléphone remet ensuite les
+  noms de la personne dans son texte.
+- **Scanner de documents ML Kit sur Android** (services Play) : la numérisation se fait sur le téléphone, et le PDF est
+  joint comme n’importe quel fichier ; pour un papier du Carnet ou un PDF envoyé à un agent de la famille, son texte
+  est lu sur le téléphone avec la reconnaissance de texte ML Kit (`ui/NotebookPapers.kt`, `model/ScanText.kt` ; pour
+  un PDF, seulement une fois le scanner accepté). Selon Google, ML Kit peut envoyer des données d’usage et de
+  diagnostic. L’app ne modifie pas ce comportement.
+- **Cartes des réponses sur Android** (`ui/NativeMaps.kt`, `ui/LinkPreviewCard.kt`) : le SDK Google Maps dessine les
+  lieux et itinéraires d’une réponse (pas de « Ma position » : la position de la personne n’est jamais sur ces cartes).
+  Ce que Google déclare pour ce SDK : métadonnées de l’appareil et de la requête, adresse IP, un identifiant du SDK,
+  traces de plantage, et les déplacements et zooms de la carte quand les API de caméra servent (l’app cadre la carte
+  sur les points). L’iPhone les dessine avec MapKit. Les cartes des pages des agents viennent du bridge (`/v1/maps/…`,
+  OpenFreeMap derrière) ; la personne qui lit un partage en lecture les demande directement à OpenFreeMap
+  (`readshares/ReadShareMaps.kt`). Pour placer les lieux d’une réponse, le téléphone envoie leurs noms au `Geocoder`
+  d’Android (en général le service de Google ; `ui/NativeMaps.kt`) ou, sur iPhone, à Plans d’Apple (`MKLocalSearch`,
+  `NativeMaps.swift`). Un lien Google Maps d’une réponse devient une carte faite à partir du lien seul ; aucun autre
+  lien écrit par un agent n’est ouvert par le téléphone (`LinkPreviewCard`).
+- Les rapports de plantage et d’usage d’Apple et de Google (partagés avec les développeurs si la personne l’a accepté
+  dans les réglages du système) dépendent d’un réglage du système, pas d’un code de l’app.
+
+## 5. Les fournisseurs de modèles d’IA
+
+**Les apps n’appellent jamais un fournisseur de modèle** : aucune adresse d’OpenAI, Anthropic, EUrouter, OpenRouter ou
+autre n’apparaît dans le code des apps. Les messages arrivent au modèle par l’Hermes de la personne. Le fournisseur
+voit ce que l’agent met dans sa requête : la conversation, les fichiers et les résultats de ses outils, y compris **les
+résumés de santé quand un agent qui a « Santé » utilise son outil `health`**. Sur l’offre, l’app ne permet d’activer
+« Santé » qu’avec un modèle que le guichet marque `eu_hosted` (`ToolStates.swift`, `AppsTools.kt`), et le bridge de la
+place refuse l’outil `health` à un agent dont le modèle n’est pas dans `[model] eu_hosted` de sa configuration, à
+chaque appel : un modèle changé après coup (le guichet, le catalogue, SSH) ne lit plus rien de la santé, et l’agent dit
+pourquoi (`bridge-rs/src/health.rs`, `eu_refusal`; 2026-11-01). Depuis `c7535789`, l’offre n’a plus de choix de modèle
+dans l’app.
+La clé d’IA d’une place de l’offre est créée par le guichet et passe par le téléphone pour aller au bridge (§1).
+
+**Le rangement de nuit du Carnet** (bridge, `notebook/tidy.rs`) : une fois par nuit au plus, le bridge de la personne
+envoie les passages des conversations du jour que son pré-filtre gratuit a gardés (ceux que les agents n’ont pas notés et
+qui semblent contenir des faits datés ou personnels), avec les noms des pages du Carnet, à un petit modèle chez le
+fournisseur des agents (ou `[notebook] base_url`), sous un plafond mensuel. Jamais les conversations d’un agent qui a
+« Santé », ni sa mémoire. Les apps n’y jouent aucun rôle.
+
+## 6. Le reste
+
+- **Liens touchés par la personne :** liens des réponses, textes juridiques
+  (`github.com/BipAgents/BipAgents/blob/stable/docs/legal/…`), Hermes Agent et le code source sur GitHub, CC BY 4.0, pages
+  d’abonnement et d’échange de code de Play. Ils s’ouvrent dans le navigateur ou la boutique ; rien d’autre n’est
+  envoyé que l’adresse elle-même.
+- **Commandes d’installation** (`raw.githubusercontent.com/…/install.sh`, `install.ps1`) : affichées, copiées ou
+  partagées. L’app ne les télécharge pas.
+- **Pages créées par les agents** (`AgentPages.swift`) : affichées dans une vue web verrouillée. Tout chargement
+  `http(s)`, `ws(s)`, `ftp` ou `file` est bloqué, de même que la navigation, les fenêtres surgissantes et les données
+  conservées.
+- **E-mail au support** (à l’initiative de la personne, sans l’offre) : un diagnostic avec les versions, les réglages
+  et l’état de chaque agent ; ni conversation, ni nom, ni adresse, ni clé (`Support.swift`, `ui/Support.kt`).
+- **Support et avis avec l’offre** (`SupportDesk.swift`, `cloud/SupportDesk.kt`) : `GET /v1/support/code` (le code
+  d’aide) et `POST /v1/support/message` au guichet, avec le message, l’adresse de réponse si la personne la tape, la
+  version et la langue de l’app ; le guichet y joint le code d’aide, le forfait et l’état des places, et l’envoie par
+  e-mail au support.
+- **Le modèle qui aide le Live à savoir quand la personne a fini de parler** (`VoiceDeciderPackage.swift`, Android
+  `voice/decider/VoiceDeciderPackage.kt`) : environ 35 Mo téléchargés depuis une release GitHub du dépôt public, en
+  Wi-Fi, à l’ouverture de l’app ou au début d’un Live tant qu’il n’est pas sur le téléphone. GitHub voit l’adresse IP
+  du téléphone.
+- **Adresses de test réservées au débogage** (un guichet local, des paquets de voix locaux) : les réglages qui les
+  définissent (`guichetURL` sur iOS et Android, `voicePackagesURL` sur Android) ne sont lus que dans les versions de
+  débogage ; les versions publiées utilisent toujours `guichet.bipagents.com`.
+
+## 7. Ce qui reste sur le téléphone
+
+- Trousseau iOS, `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly` (`App/Model/Keychain.swift`, `OfferVault` dans
+  `Guichet.swift`) : les clés des agents, les jetons du guichet, la clé privée P-256 du compte, la clé du séquestre, et
+  les places avec leurs clés de sauvegarde. Ces éléments ne vont ni dans le trousseau iCloud ni dans les sauvegardes
+  transférables vers un autre appareil.
+- Android : les mêmes secrets dans les préférences privées de l’app, chiffrés avec une clé AES qui reste dans
+  l’Android Keystore (`model/Secrets.kt`). `allowBackup="false"`.
+- Jusqu’à ce que le guichet les ait : le nom de campagne du referrer d’installation et la réponse à « Comment nous
+  as-tu connus ? » (SharedPreferences / UserDefaults `attribution*`), puis effacés. Le jeton AdServices n’est jamais
+  stocké.
+- Les caches de conversation, les enregistrements des notes vocales et les voix téléchargées restent dans le stockage
+  propre à l’app. Le cache du jeton de relais et les empreintes de santé sont dans UserDefaults ou SharedPreferences.
+
+## 8. Le mode démo
+
+La démo (`App/Features/Demo/`, `AgentStore.tour`, `ui/DemoViews.kt`) utilise le fichier `demo.json` et les
+enregistrements fournis avec l’app. Ses agents pointent vers `https://demo.invalid`. En démo, l’app ne demande ni les
+notifications, ni la synchronisation de la santé, des rappels ou des sauvegardes, ni le compte, ni les vérifications de
+places du guichet (`BipAgentsApp.swift`, `HealthSync`) ; les conversations et les appels Live jouent des répliques
+enregistrées. Les écrans de l’offre ne demandent rien au guichet (`OfferFlow.swift`, `OfferScreen.kt`) : les prix
+viennent de la boutique seule (produits et storefront StoreKit, produits et pays de Play Billing, ou région du
+téléphone).
+
+## 9. Limites et écarts, sans détour
+
+- **Le code de comparaison d’un appareil rend la substitution de clé coûteuse, pas impossible.** Les clés publiques des
+  appareils viennent toujours du guichet. Un guichet malhonnête qui donnerait sa propre clé pour « le nouvel appareil »
+  devrait trouver une clé dont le code est le même que celui de la vraie (12 chiffres, 10 000 tours de SHA-256 par
+  essai), et le code ne protège que si la personne le compare. Un échange complet « engagement puis révélation », où
+  aucun des deux côtés ne peut choisir sa clé après avoir vu celle de l’autre, est prévu.
+- **Les invitations familiales n’ont pas de code de comparaison.** Elles sont scellées pour les clés des appareils de
+  l’autre personne telles que le guichet les donne (`POST /v1/account/family/devices`) ; un guichet malhonnête pourrait
+  donner sa propre clé et ouvrir l’invitation.
+- **Un nouvel appareil entre avec la connexion et un code envoyé par e-mail** (et le code d’une appli
+  d’authentification si la personne en a ajouté une). Si un autre appareil approuvé existe, il envoie les clés scellées
+  au nouveau ; sinon, le guichet fait réappairer les places avec le nouvel appareil (nouvelles clés). Le guichet peut
+  donc donner l’accès à qui contrôle l’adresse e-mail (et l’appli d’authentification) : c’est voulu, chaque nouvel
+  appareil est signalé aux autres et par e-mail avec un lien pour le retirer (ce qui change à nouveau les clés), et
+  journalisé. Le secret de l’appli d’authentification est gardé chiffré par le guichet. Une récupération sans aucun
+  code (après 24 heures) reste possible quand l’e-mail ne peut pas être reçu. Le guichet ne lit jamais les
+  conversations.
+- Sur une place de l’offre, le serveur est installé pour Kerfy Studio et tourne chez un hébergeur. Le chiffrement de
+  l’app ne protège pas contre celui qui exploite ce serveur.
+- **Invitations à une place partagée :** le guichet détient le secret d’appairage, la clé d’IA et le jeton de la place
+  (c’est lui qui les a créés) et les donne, en HTTPS, à l’app connectée avec l’adresse invitée. Qui peut se connecter
+  avec cette adresse (par exemple en lisant ses codes reçus par e-mail) peut prendre la place tant qu’elle n’est pas
+  appairée.
+- **« Partager le lien » d’une place** (Duo, Famille) met toujours l’adresse, le port, le secret d’appairage, la clé
+  d’IA et le jeton de la place, en base64 et sans chiffrement, après le `#` du lien. C’est la personne qui choisit à
+  qui l’envoyer ; le lien ne sert qu’une fois.
+- **« Signaler cette réponse »** envoie le texte de la réponse à Kerfy Studio (par le relais jusqu’au guichet, ou par
+  e-mail si le relais ne répond pas), seulement quand la personne envoie le signalement (§3).
+- **La dictée en ligne, une fois acceptée,** envoie la voix à Apple ou au reconnaisseur par défaut du téléphone (en
+  général Google) pour les langues que le téléphone ne sait pas reconnaître seul (§4). Sur Android 12 et avant, l’app
+  ne peut pas vérifier la reconnaissance sur l’appareil : la dictée n’y fonctionne qu’avec ce oui.
+- **Le scanner de documents ML Kit** sur Android peut envoyer des données d’usage et de diagnostic à Google, selon
+  Google. L’app ne modifie pas ce comportement.
+- **« Santé » et le modèle :** la vérification « hébergé dans l’UE » est faite par les apps quand on active
+  l’interrupteur (la marque `eu_hosted` du guichet) et par le bridge de la place à chaque appel de l’outil `health`
+  (`[model] eu_hosted` de sa configuration, vide par défaut : aucun modèle). Les deux listes doivent dire la même chose :
+  marquer un modèle `eu_hosted` au guichet sans l’ajouter aux places laisse « Santé » activable mais muet.
+- **L’adresse e-mail de Kerfy Studio d’un agent** garde ses e-mails sur le serveur de messagerie de Kerfy Studio (un
+  serveur chez Hetzner, à part des places), stockés comme sur tout serveur de messagerie, sans chiffrement pour la
+  personne : celui qui exploite ce serveur peut les lire. Les e-mails sont effacés au bout de 90 jours, et la boîte
+  entière quand l’adresse disparaît. Entre serveurs de messagerie, un e-mail n’est chiffré pendant le trajet que si
+  l’autre serveur le permet.
+- **Le code du guichet est privé.** Ce qu’il garde et fait de ce qu’il reçoit ne peut pas être vérifié dans un code
+  public. Le relais et le bridge sont publics.
+- **Le code des apps est privé lui aussi :** cette page et les fichiers publics `AccountCrypto` sont ce qui peut être
+  vérifié ; le reste décrit un code que les lecteurs ne peuvent pas voir.

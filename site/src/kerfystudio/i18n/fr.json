@@ -1,0 +1,158 @@
+{
+ "meta": {
+  "title": "Kerfy Studio — des apps, pas des usines à données",
+  "description": "Kerfy Studio est un studio logiciel français. Nos apps : BipAgents, des agents IA qui travaillent pour vous, et Tablée, les repas de la famille, réglés. Hébergé en Europe, sans pub ni pistage."
+ },
+ "nav": {
+  "support": "Support",
+  "apps": "Nos apps",
+  "studio": "Le studio",
+  "contact": "Contact"
+ },
+ "foot": {
+  "about": "Kerfy Studio est un petit studio français qui fabrique BipAgents et Tablée.",
+  "privacy": "Confidentialité",
+  "terms": "Conditions d’utilisation",
+  "offer": "Conditions de l’offre tout compris",
+  "acceptableUse": "Usage acceptable",
+  "beta": "Conditions de la bêta",
+  "notice": "Mentions légales",
+  "fine": "Aucun cookie et aucun traceur sur ce site."
+ },
+ "home": {
+  "kicker": "Studio indépendant · France",
+  "title": "On construit des apps.\nPas des usines à données.",
+  "lede": "Kerfy Studio est un studio logiciel français. Nos apps : BipAgents, des agents IA qui travaillent pour vous, et Tablée, les repas de la famille, réglés. Zéro pub. Zéro pistage. Beaucoup de café.",
+  "appsKicker": "Nos apps",
+  "appsTitle": "Deux apps pour la vie de tous les jours.",
+  "bip": {
+   "tag": "Agents IA",
+   "pitch": "Vos propres agents IA, les Bips : ils réservent, trient vos mails, tiennent votre agenda et votre Carnet, et vous demandent avant d’agir. Construit sur Hermes Agent.",
+   "points": [
+    "Écris, parle ou passe en Live",
+    "Votre espace en Europe, que nous ne lisons pas",
+    "Code open source (MIT)"
+   ],
+   "cta": "Découvrir BipAgents"
+  },
+  "tablee": {
+   "tag": "Repas en famille",
+   "pitch": "Les menus de la semaine pensés pour votre famille, des recettes ajustées à qui mange, et une liste de courses partagée entre vos téléphones.",
+   "points": [
+    "Un profil de famille : allergies, goûts, contraintes",
+    "Menus de la semaine, portions adaptées au foyer",
+    "Liste de courses synchronisée, à cocher en magasin",
+    "Vos propres recettes, et l’import aidé par l’IA"
+   ],
+   "cta": "Découvrir Tablée",
+   "mockTitle": "Cette semaine",
+   "family": "2 adultes · 2 enfants",
+   "m1": [
+    "Lun · soir",
+    "Gratin de courgettes"
+   ],
+   "m2": [
+    "Mar · soir",
+    "Curry de pois chiches"
+   ],
+   "m3": [
+    "Mer · midi",
+    "Quiche aux poireaux"
+   ],
+   "list": "Courses · partagée",
+   "i1": "Courgettes",
+   "i2": "Lait de coco",
+   "i3": "Poireaux"
+  },
+  "valuesTitle": "Notre façon de faire",
+  "values": [
+   {
+    "title": "Privé par conception",
+    "text": "Vos données servent à vous rendre service, pas à vous profiler. Pas de publicité, pas de revente, aucun traceur sur nos sites."
+   },
+   {
+    "title": "Hébergé en Europe",
+    "text": "Nos serveurs sont dans l’Union européenne, et le RGPD s’applique à tout ce que nous faisons."
+   },
+   {
+    "title": "Ouvert",
+    "text": "Le code de BipAgents est public, sous licence MIT : chacun peut le lire, le vérifier et l’améliorer."
+   },
+   {
+    "title": "Pour toute la famille",
+    "text": "Des apps simples et chaleureuses, en français, anglais, allemand et espagnol."
+   }
+  ],
+  "companyTitle": "L’entreprise",
+  "companyText": "Kerfy Studio édite et publie ses apps sur l’App Store et Google Play.",
+  "rows": {
+   "name": "Dénomination",
+   "form": "Forme",
+   "formValue": "Société par actions simplifiée (SAS)",
+   "capital": "Capital",
+   "address": "Siège social",
+   "rcs": "Immatriculation",
+   "vat": "TVA intracommunautaire",
+   "president": "Président",
+   "contact": "Contact",
+   "support": "Support"
+  },
+  "contactTitle": "Parlons-en.",
+  "contactText": "Une question, un partenariat, la presse ? Écris-nous, on lit tout.",
+  "supportLine": "Une question sur une app ?"
+ },
+ "support": {
+  "kicker": "Support",
+  "title": "On est là pour t’aider.",
+  "lede": "Une question, un bug, une idée ? Écris-nous : on te répond au plus vite, en français ou en anglais.",
+  "blocks": [
+   {
+    "title": "Depuis l’app",
+    "text": [
+     "Réglages › Contacter le support prépare un e-mail avec un diagnostic de ton téléphone : versions et état de tes agents, sans aucune conversation, aucun nom, aucune adresse ni aucune clé.",
+     "Tu le relis avant de l’envoyer."
+    ]
+   },
+   {
+    "title": "Une réponse te choque ?",
+    "text": [
+     "Dans l’app, appui long sur la réponse › Signaler cette réponse. Le signalement arrive chez nous, avec le texte de la réponse.",
+     "Dis-le aussi à ton agent, pour qu’il ne recommence pas."
+    ]
+   },
+   {
+    "title": "Installer et dépanner",
+    "text": [
+     "Le guide d’installation, les commandes et les réponses aux problèmes courants sont sur <a href=\"https://github.com/BipAgents/BipAgents\">GitHub</a>.",
+     "En cas de doute, écris-nous avec la sortie de la commande : on regarde avec toi."
+    ]
+   },
+   {
+    "title": "Tes données",
+    "text": [
+     "Dans l’app : supprime un agent, ou désinstalle l’app pour tout effacer du téléphone. Sur ton serveur : <code>bipagents uninstall --all</code>.",
+     "Pour les rares données que nous recevons (e-mails, signalements), écris à privacy@bipagents.com : nous les effaçons."
+    ]
+   },
+   {
+    "title": "Sécurité",
+    "text": [
+     "Une faille ? Écris à security@bipagents.com : ces signalements sont traités en priorité.",
+     "Notre contact sécurité est aussi publié dans <a href=\"/.well-known/security.txt\">security.txt</a>."
+    ]
+   },
+   {
+    "title": "Confidentialité",
+    "text": [
+     "Ce que nous recevons, et surtout ce que nous ne recevons pas, est expliqué dans la <a href=\"/privacy/\">politique de confidentialité</a>."
+    ]
+   }
+  ],
+  "whoTitle": "Qui sommes-nous",
+  "who": "Kerfy Studio · <mark class=\"todo\">[adresse du siège]</mark> · <mark class=\"todo\">[numéro de téléphone]</mark> · support@bipagents.com"
+ },
+ "store": {
+  "soon": "Bientôt sur",
+  "get": "Télécharger sur"
+ }
+}

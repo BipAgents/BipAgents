@@ -1,0 +1,872 @@
+"""The fake servers the bridge talks to, each on its own port of 127.0.0.1: Hermes' api_server, Pocket
+TTS, the person's own voice server, APNs, FCM (with Google's OAuth token endpoint), the publisher's push relay
+and a model's /v1/models. They behave like the fakes of tests/conftest.py (same fake audio, same answers), record
+every request (`.requests`, a list of `Seen`) and are driven from the tests by plain attributes.
+
+Started once per test session; `reset()` before each test puts them back to their defaults. Streams they hold open
+(SSE) end when the test sets `release`, or when its own flag in a run's script is set."""
+from __future__ import annotations
+
+import array
+import asyncio
+import hashlib
+import json
+import math
+import re
+import struct
+import threading
+import time
+from typing import Any, Callable, Dict, List, Optional, Tuple
+
+from starlette.requests import Request
+from starlette.responses import JSONResponse, PlainTextResponse, Response, StreamingResponse
+
+from .common import HERMES_KEY, make_wav, pcm_for, sse
+from .servers import Seen, Served, wait_flag
+
+CLOSE = object()   # in a run's script: end the SSE stream here (instead of staying open like Hermes does)
+
+
+class Fake:
+    name = "fake"
+
+    def __init__(self) -> None:
+        self.lock = threading.Lock()
+        self.served: Optional[Served] = None
+        self.reset()
+
+    def reset(self) -> None:
+        self.requests: List[Seen] = []
+        self.release = threading.Event()
+        # A hook for one test: `override(seen) -> Optional[Response]`, tried before the fake's own routes.
+        self.override: Optional[Callable[[Seen], Any]] = None
+
+    @property
+    def url(self) -> str:
+        assert self.served is not None
+        return self.served.url
+
+    @property
+    def port(self) -> int:
+        assert self.served is not None
+        return self.served.port
+
+    def start(self) -> "Fake":
+        self.served = Served(self).start()
+        return self
+
+    def stop(self) -> None:
+        self.release.set()
+        if self.served is not None:
+            self.served.stop()
+
+    def seen(self, path_prefix: str = "", method: Optional[str] = None) -> List[Seen]:
+        return [r for r in list(self.requests) if r.path.startswith(path_prefix) and (method is None or r.method == method)]
+
+    async def __call__(self, scope, receive, send) -> None:
+        if scope["type"] != "http":
+            return
+        request = Request(scope, receive)
+        body = await request.body()
+        seen = Seen(scope["method"], scope["path"], scope.get("query_string", b"").decode("latin-1"),
+                    {k.decode("latin-1").lower(): v.decode("latin-1") for k, v in scope["headers"]}, body)
+        with self.lock:
+            self.requests.append(seen)
+        try:
+            response = None
+            if self.override is not None:
+                response = self.override(seen)
+                if asyncio.iscoroutine(response):
+                    response = await response
+            if response is None:
+                response = await self.handle(seen)
+        except Exception as exc:  # noqa: BLE001 - a fake's own bug shows as an odd status, not a hang
+            response = PlainTextResponse(f"fake {self.name} error: {exc!r}", status_code=599)
+        await response(scope, receive, send)
+
+    async def handle(self, seen: Seen) -> Response:  # pragma: no cover - overridden
+        return PlainTextResponse("no route", status_code=404)
+
+
+# -- TTS ---------------------------------------------------------------------------------------------------------
+
+class FakePocket(Fake):
+    """Pocket TTS: `/health` (its voices), `/v1/audio/speech` (wav: the fake PCM in a WAV; mp3: « ID3 » + the text) and
+    `/v1/audio/stream` (the fake PCM in two chunks)."""
+    name = "pocket"
+
+    def reset(self) -> None:
+        super().reset()
+        self.inputs: List[Dict[str, Any]] = []
+        self.delay = 0.0
+        self.active = 0
+        self.max_active = 0
+        self.status = 200
+        self.statuses: List[int] = []   # one status per synthesis request, then `status`
+        self.streaming = True
+        self.voices = {"fr": ["colibri", "galet", "lumen", "mousse", "ours"]}
+
+    async def handle(self, seen: Seen) -> Response:
+        if seen.path == "/health":
+            return JSONResponse({"status": "ok", "voices": self.voices}, status_code=200 if self.status == 200 else 503)
+        body = seen.json()
+        with self.lock:
+            self.active += 1
+            self.max_active = max(self.max_active, self.active)
+            self.inputs.append(body)
+            status = self.statuses.pop(0) if self.statuses else self.status
+        try:
+            if self.delay:
+                await asyncio.sleep(self.delay)
+        finally:
+            with self.lock:
+                self.active -= 1
+        if status != 200:
+            return PlainTextResponse("pocket down", status_code=status)
+        pcm = pcm_for(body["input"])
+        if seen.path == "/v1/audio/stream":
+            if not self.streaming:
+                return JSONResponse({"detail": "Not Found"}, status_code=404)
+
+            async def chunks():
+                half = len(pcm) // 2 + 1   # odd split on purpose: chunks need not be sample-aligned
+                yield pcm[:half]
+                await asyncio.sleep(0.01)
+                yield pcm[half:]
+
+            return StreamingResponse(chunks(), media_type="application/octet-stream")
+        if body.get("response_format") == "wav":
+            return Response(make_wav(pcm), media_type="audio/wav")
+        return Response(b"ID3" + body["input"].encode(), media_type="audio/mpeg")
+
+
+def tone(seconds: float, rate: int = 44100) -> bytes:
+    n = int(seconds * rate)
+    return array.array("h", (int(8000 * math.sin(2 * math.pi * 440 * i / rate)) for i in range(n))).tobytes()
+
+
+def wav_file(pcm: bytes, rate: int, channels: int = 1) -> bytes:
+    return (b"RIFF" + struct.pack("<I", 36 + len(pcm)) + b"WAVEfmt " +
+            struct.pack("<IHHIIHH", 16, 1, channels, rate, rate * channels * 2, channels * 2, 16) + b"data" +
+            struct.pack("<I", len(pcm)) + pcm)
+
+
+class FakeVoiceServer(Fake):
+    """The person's own voice server (OpenAI's `POST /v1/audio/speech`): Drama 3 on audio.cpp streaming 44.1 kHz PCM,
+    or a server giving whole WAV files. `mode` picks how it answers."""
+    name = "voices"
+
+    def reset(self) -> None:
+        super().reset()
+        self.inputs: List[Dict[str, Any]] = []
+        # stream44k: 1 s of 44.1 kHz PCM in odd chunks; endless: 40 s for any text; wav44k / wav24k: whole files
+        # (0.5 s); mp3: « ID3server »; busy: 5 s before a 24 kHz WAV; steady: 0.15 s before a 0.3 s WAV.
+        self.mode = "stream44k"
+        self.no_mp3 = True              # audio.cpp makes no mp3: 400
+        self.voices_route = "audio"     # audio: /v1/audio/voices; kyutai: /v1/voices; none: neither
+        self.voices = ["fr-naturelle-s15", "fr-mascotte-s17"]
+
+    async def handle(self, seen: Seen) -> Response:
+        if seen.path == "/v1/models":
+            return JSONResponse({"data": [{"id": "voices"}]})
+        if seen.path == "/v1/audio/voices":
+            if self.voices_route == "audio":
+                return JSONResponse({"voices": self.voices})
+            return Response(status_code=404)
+        if seen.path == "/v1/voices":
+            if self.voices_route == "kyutai":
+                return JSONResponse({"default": self.voices[0], "aliases": {v: f"{v}.wav" for v in self.voices}})
+            return Response(status_code=404)
+        if seen.path != "/v1/audio/speech":
+            return Response(status_code=404)
+        body = seen.json()
+        with self.lock:
+            self.inputs.append(body)
+        if body.get("response_format") == "mp3":
+            if self.mode == "mp3":
+                return Response(b"ID3server", media_type="audio/mpeg")
+            if self.no_mp3:
+                return Response(status_code=400)
+        if self.mode == "busy":
+            await asyncio.sleep(5)
+            return Response(wav_file(tone(0.5, 24000), 24000), media_type="audio/wav")
+        if self.mode == "steady":
+            await asyncio.sleep(0.15)
+            return Response(wav_file(tone(0.3, 24000), 24000), media_type="audio/wav")
+        if self.mode in ("wav44k", "wav24k"):
+            rate = 44100 if self.mode == "wav44k" else 24000
+            return Response(wav_file(tone(0.5, rate), rate), media_type="audio/wav")
+        if self.mode == "endless":
+            async def forever():
+                for _ in range(40):
+                    yield tone(1.0)
+                    await asyncio.sleep(0)
+            return StreamingResponse(forever(), media_type="application/octet-stream")
+        audio = tone(1.0)
+
+        async def chunks():
+            for i in range(0, len(audio), 4411):   # odd sizes: chunks need not be sample-aligned
+                yield audio[i:i + 4411]
+
+        return StreamingResponse(chunks(), media_type="application/octet-stream")
+
+
+# -- Hermes --------------------------------------------------------------------------------------------------------
+
+NOW_LINE = re.compile(r"\A<!--bip:now ([^\n]*?)-->(?:\n|\Z)")
+
+
+def split_now(text: Any) -> Tuple[Optional[str], Any]:
+    """The current time the bridge puts at the top of the turns it starts (bridge-rs/src/dates/now.rs): (what it says,
+    the rest); (None, the text) without one. The fake keeps them apart so tests read a turn's own words."""
+    found = NOW_LINE.match(text) if isinstance(text, str) else None
+    return (found.group(1), text[found.end():]) if found else (None, text)
+
+
+NOW_LINE_LAST = re.compile(r"(?:\A|\n\n?)<!--bip:now ([^\n]*?)-->\s*\Z")
+
+
+def split_brief_now(text: Any) -> Tuple[Optional[str], Any]:
+    """A Live brief's current time, last since 3/11 (the stable part first, live_brief.rs): (what it says, the rest);
+    (None, the text) without one."""
+    found = NOW_LINE_LAST.search(text) if isinstance(text, str) else None
+    return (found.group(1), text[:found.start()]) if found else (None, text)
+
+
+def taken_notes(bridge, agent: str = "wellness", session: str = "s1", text: str = "Bonjour", kinds=()) -> str:
+    """What joined the person's next message in `session` (the send route takes it, threads/send.rs), as the bridge
+    wrote it before her words: the current time first, then what waited for the message."""
+    import uuid
+
+    from .common import AUTH
+    from .servers import wait_until
+    hermes = bridge.fakes.hermes
+    thread = bridge.get("/v1/threads/resolve", headers=AUTH, params={"agent": agent, "session_id": session}).json()
+    thread = thread["thread"]["id"]
+    run = f"r{len(hermes.started) + 1}"
+    hermes.runs[run] = [sse("run.completed", run_id=run, output=""), CLOSE]
+    sent = bridge.post(f"/v1/threads/{thread}/messages", headers=AUTH,
+                       json={"agent": agent, "client_id": uuid.uuid4().hex, "text": text, "kinds": list(kinds)})
+    assert sent.status_code == 200 and sent.json()["state"] == "started", sent.text
+    started = hermes.started[sent.json()["run_id"]]
+    page = lambda: bridge.get(f"/v1/threads/{thread}/timeline", headers=AUTH,   # noqa: E731
+                              params={"agent": agent, "limit": 1}).json()
+    assert wait_until(lambda: not page()["pending"]["run"]), "the turn never ended"
+    assert started["input"].endswith(text.strip()), started
+    notes = started["input"][:-len(text.strip())].rstrip("\n")
+    return f"<!--bip:now {started['now']}-->" + (f"\n{notes}" if notes else "")
+
+
+def waiting_notes(recap: Optional[str]) -> Optional[str]:
+    """`taken_notes` without the current time at its top: None when only the time was there."""
+    now, rest = split_now(recap)
+    assert recap is None or now is not None, f"no current time first: {recap!r}"
+    return rest or None
+
+
+def split_agent(path: str) -> Tuple[str, str]:
+    """`/p/<agent>/rest` (a profile of the hub) -> (agent, /rest); anything else is the root agent ("")."""
+    parts = path.split("/")
+    if len(parts) >= 3 and parts[1] == "p" and parts[2]:
+        return parts[2], "/" + "/".join(parts[3:])
+    return "", path
+
+
+class FakeHermes(Fake):
+    """Hermes' api_server for several agents: the root one (`hermes_url` = this server) and the hub's profiles
+    (`<url>/p/<name>`). Runs' event streams follow a script (SSE chunks, `threading.Event` gates, `CLOSE`) and stay
+    open like Hermes' until `release`; runs started with `POST /v1/runs` run for `rounds` polls of their status (and
+    count tokens in their session meanwhile), as the jobs' fake in tests/test_jobs.py."""
+    name = "hermes"
+
+    def reset(self) -> None:
+        super().reset()
+        self.keys: Dict[str, str] = {"": HERMES_KEY}    # agent -> its key (agents not listed: any key)
+        self.runs: Dict[str, List[Any]] = {}
+        self.run_status: Dict[str, int] = {}
+        self.run_info: Dict[str, Dict[str, Any]] = {}   # GET /v1/runs/{id}, as Hermes keeps a run's status
+        self.event_requests: List[Seen] = []
+        self.approvals: List[Dict[str, Any]] = []
+        self.steers: List[Dict[str, Any]] = []          # POST /v1/runs/{id}/steer
+        self.answers: List[Dict[str, Any]] = []         # POST /v1/runs/{id}/clarify
+        self.steer_status = 202                         # 409: the run takes no more words (Hermes' run_not_accepting_steer)
+        self.approval_response: Tuple[int, Any] = (200, {"object": "hermes.run.approval_response", "resolved": 1})
+        self.sessions: Dict[str, Dict[str, Dict[str, Any]]] = {}   # agent -> session id -> session
+        self.messages: Dict[Tuple[str, str], List[Dict[str, Any]]] = {}
+        self.created: List[Tuple[str, Dict[str, Any]]] = []
+        self.chats: List[Dict[str, Any]] = []
+        self.streams: List[Dict[str, Any]] = []          # POST /api/sessions/{id}/chat/stream (a Live call's turns)
+        self.stream_script: List[Any] = [sse("assistant.delta", run_id="run_l1", delta="Salut"),
+                                         sse("run.completed", run_id="run_l1", output="Salut")]
+        self.patched: List[Dict[str, Any]] = []
+        self.deleted: List[str] = []
+        # Hermes' titler writing a deleted session that had a chat back (an empty row titled from the request, source
+        # « unknown »), `revive` times, `revive_after` seconds after its deletion.
+        self.revive, self.revive_after = 0, 1.0
+        self.chat_reply = "- Alex prépare un podcast pour jeudi.\n- Il dort mal depuis lundi."
+        self.capabilities: Dict[str, int] = {}          # agent -> status (default 200)
+        self.busy: Dict[str, int] = {}                  # agent -> the work its gateway counts (GET /health/detailed)
+        self.toolsets = [{"name": "web", "label": "Web", "description": "Search", "enabled": True,
+                          "configured": True, "tools": ["web_search"]}]
+        self.started: Dict[str, Dict[str, Any]] = {}    # runs made by POST /v1/runs
+        self.start_failures = 0   # POST /v1/runs answered 502 this many times first (a gateway restarting)
+        self.rounds, self.step = 3, 40_000
+        self.run_output = "Rapport : trois écoles comparées, page « Écoles »."
+        self.run_outputs: Dict[str, str] = {}   # run id -> its own output (else run_output)
+        self.run_usage = {"input_tokens": 100_000, "output_tokens": 5_000}
+        self.forget_runs = False
+        self.default_session = {"title": "Bot Chat", "message_count": 7}
+        self.unique_titles = False   # as Hermes: a title another conversation holds is refused (400)
+        # Hermes v0.22.5 as the threads see it (test_threads.py): a session continued after a compression (one with a
+        # `parent_session_id`) is listed only with `include_children=1`; every row has a stable `message_uid`.
+        self.v0225 = False
+        self.page_max = 0   # > 0: the list honours `limit` (at most this many) and `offset`, as Hermes' API pages
+        # Hermes v0.22.5 + patch 0021 (gateway/platforms/api_server_bot_chat.py): a « Bot Chat » created with a peer's
+        # source (`hermes peer dm`: bot_peer_dm) is a LOCAL chat (`local-…`, hidden) whose text turns go to Hermes'
+        # peer queue, never an API run: their event stream is only `run.completed` (no text, tools, usage, clarify).
+        # A plain create (no source, or api_server) is an API conversation whose runs stream as any other.
+        self.fifo: List[Dict[str, Any]] = []   # turns that went to the peer queue
+
+    def local_bot_chat(self, agent: str, session_id: Any) -> bool:
+        session = self.sessions.get(agent, {}).get(str(session_id or ""))
+        return bool(session) and str(session.get("chat_id") or "").startswith("local-")
+
+    # what the tests set up
+    def add_session(self, session_id: str, messages: List[Dict[str, Any]], title: str = "Discussion",
+                    last_active: float = 0.0, agent: str = "", **extra: Any) -> None:
+        self.sessions.setdefault(agent, {})[session_id] = {"id": session_id, "title": title,
+                                                           "message_count": len(messages),
+                                                           "last_active": last_active, **extra}
+        self.messages[(agent, session_id)] = messages
+
+    def _session_counters(self, agent: str, session_id: str) -> Dict[str, Any]:
+        session = self.sessions.get(agent, {}).get(session_id)
+        if session is None:
+            return {}
+        if any(r["status"] == "running" and r["agent"] == agent and r["session_id"] == session_id
+               for r in self.started.values()):
+            session["input_tokens"] = session.get("input_tokens", 0) + self.step
+            session["output_tokens"] = session.get("output_tokens", 0) + self.step // 20
+        return session
+
+    async def handle(self, seen: Seen) -> Response:
+        agent, path = split_agent(seen.path)
+        parts = path.strip("/").split("/")
+        if path in ("/health", "/v1/health"):   # Hermes' health needs no key
+            return JSONResponse({"status": "ok"})
+        expected = self.keys.get(agent)
+        if expected is not None and seen.header("authorization") != f"Bearer {expected}":
+            return JSONResponse({"error": "bad key"}, status_code=401)
+        method = seen.method
+        if path == "/v1/capabilities":
+            status = self.capabilities.get(agent, 200)
+            return JSONResponse({"runs": True} if status == 200 else {"error": "down"}, status_code=status)
+        if path == "/v1/toolsets":
+            return JSONResponse({"data": self.toolsets})
+        if path == "/health/detailed":   # Hermes v0.22.5: what its gateway does now, by its own count
+            busy = self.busy.get(agent, 0)
+            return JSONResponse({"status": "ok", "gateway_busy": busy > 0, "active_agents": busy,
+                                 "readiness": {"checks": {"background_queues": {"active_api_runs": busy}}}})
+        if parts[:2] == ["v1", "runs"]:
+            return await self._runs(seen, agent, parts, method)
+        if parts[:2] == ["api", "sessions"]:
+            return self._sessions(seen, agent, parts, method)
+        return JSONResponse({"error": "no route"}, status_code=404)
+
+    async def _runs(self, seen: Seen, agent: str, parts: List[str], method: str) -> Response:
+        if len(parts) == 2 and method == "POST":
+            with self.lock:
+                failing, self.start_failures = self.start_failures > 0, max(0, self.start_failures - 1)
+            if failing:
+                return JSONResponse({"error": "gateway restarting"}, status_code=502)
+            body = seen.json() or {}
+            now, text = split_now(body.get("input"))
+            with self.lock:
+                run_id = f"r{len(self.started) + 1}"
+                self.started[run_id] = {"status": "running", "polls": 0, "input": text, "now": now,
+                                        "session_id": body.get("session_id"), "instructions": body.get("instructions"),
+                                        "agent": agent, "guest_turn": body.get("guest_turn"),
+                                        "model_options": body.get("model_options")}
+                if isinstance(body.get("input"), str) and self.local_bot_chat(agent, body.get("session_id")):
+                    self.fifo.append({"agent": agent, "run_id": run_id, "session_id": body.get("session_id"),
+                                      "input": text})
+                    done = {"event": "run.completed", "run_id": run_id, "output": ""}
+                    self.runs.setdefault(run_id, [f"event: run.completed\ndata: {json.dumps(done)}\n\n", CLOSE])
+            return JSONResponse({"run_id": run_id, "status": "started"}, status_code=202)
+        run_id = parts[2] if len(parts) > 2 else ""
+        if len(parts) == 4 and parts[3] == "events":
+            self.event_requests.append(seen)
+            if run_id not in self.runs:
+                return JSONResponse({"error": "not found"}, status_code=self.run_status.get(run_id, 404))
+            script, release = self.runs[run_id], self.release
+
+            async def stream():
+                for item in script:
+                    if item is CLOSE:
+                        return
+                    if isinstance(item, threading.Event):
+                        await wait_flag(item)
+                        continue
+                    if isinstance(item, (int, float)):
+                        await asyncio.sleep(item)
+                        continue
+                    yield item.encode("utf-8")
+                await wait_flag(release, 60)   # stays open like a real SSE stream until the test ends
+
+            return StreamingResponse(stream(), media_type="text/event-stream")
+        if len(parts) == 4 and parts[3] == "approval" and method == "POST":
+            self.approvals.append({"agent": agent, "run_id": run_id, "body": seen.json()})
+            # Hermes takes exactly the prompt's identity and the choice (gateway/platforms/api_server_authority_runs.py)
+            if set(seen.json() or {}) != {"request_id", "execution_generation", "choice"}:
+                return JSONResponse({"error": {"message": "invalid_params", "code": "invalid_params"}}, status_code=400)
+            status, payload = self.approval_response
+            return JSONResponse(payload, status_code=status)
+        if len(parts) == 4 and parts[3] == "clarify" and method == "POST":
+            self.answers.append({"agent": agent, "run_id": run_id, "body": seen.json()})
+            if set(seen.json() or {}) != {"request_id", "execution_generation", "answer"}:
+                return JSONResponse({"error": {"message": "invalid_params", "code": "invalid_params"}}, status_code=400)
+            return JSONResponse({"object": "hermes.run.clarify_response", "resolved": 1})
+        if len(parts) == 4 and parts[3] == "steer" and method == "POST":
+            self.steers.append({"agent": agent, "run_id": run_id, "body": seen.json()})
+            if self.steer_status != 202:
+                return JSONResponse({"error": {"code": "run_not_accepting_steer"}}, status_code=self.steer_status)
+            return JSONResponse({"object": "hermes.run.steer", "run_id": run_id, "accepted": True}, status_code=202)
+        if len(parts) == 4 and parts[3] == "stop" and method == "POST":
+            run = self.started.get(run_id)
+            if run is not None:
+                run["status"] = "cancelled"
+            return JSONResponse({"status": "stopping"})
+        if len(parts) == 3 and method == "GET":
+            if run_id in self.run_info:
+                return JSONResponse(self.run_info[run_id])
+            run = self.started.get(run_id)
+            if run is None or self.forget_runs:
+                if self._pending_controls(run_id):
+                    return JSONResponse({"status": "waiting_for_approval",
+                                         "pending_controls": self._pending_controls(run_id)})
+                return JSONResponse({"error": "not found"}, status_code=404)
+            run["polls"] += 1
+            if run["status"] == "running" and run["polls"] >= self.rounds:
+                run["status"] = "completed"
+                output = self.run_outputs.get(run_id, self.run_output)
+                return JSONResponse({"status": "completed", "output": output, "usage": self.run_usage})
+            return JSONResponse({"status": run["status"], "pending_controls": self._pending_controls(run_id)})
+        return JSONResponse({"error": "no route"}, status_code=404)
+
+    def _pending_controls(self, run_id: str) -> List[Dict[str, Any]]:
+        """The approvals a run's script asks, as Hermes' status lists the prompts waiting (`pending_controls`): each
+        `approval.request`'s `prompt_id` (or `request_id`) and generation (1 when it has none)."""
+        controls = []
+        for item in self.runs.get(run_id, []):
+            if not isinstance(item, str) or ("approval.request" not in item and "clarify.request" not in item):
+                continue
+            for line in item.splitlines():
+                data = json.loads(line[len("data: "):]) if line.startswith("data: ") else {}
+                if data.get("event") in ("approval.request", "clarify.request"):
+                    kind = "approval" if data["event"] == "approval.request" else "clarify"
+                    controls.append({"kind": kind, "prompt_id": data.get("prompt_id") or data.get("request_id"),
+                                     "execution_generation": data.get("execution_generation", 1),
+                                     "choices": data.get("choices", ["once", "deny"])})
+        return controls
+
+    def _sessions(self, seen: Seen, agent: str, parts: List[str], method: str) -> Response:
+        mine = self.sessions.setdefault(agent, {})
+        if len(parts) == 2 and method == "GET":
+            listed = sorted(mine.values(), key=lambda s: -float(s.get("last_active") or 0))
+            if self.v0225 and "include_children=1" not in seen.query:
+                listed = [s for s in listed if not s.get("parent_session_id")]
+            if self.page_max:
+                offset = int(seen.params.get("offset") or 0)
+                listed = listed[offset:offset + min(int(seen.params.get("limit") or 50), self.page_max)]
+            return JSONResponse({"sessions": listed})
+        if len(parts) == 2 and method == "POST":
+            body = seen.json() or {}
+            if self.unique_titles and any(s.get("title") == body.get("title") for s in mine.values()):
+                return JSONResponse({"error": "title already in use"}, status_code=400)
+            peer_bot_chat = body.get("title") == "Bot Chat" and (body.get("source") or "api_server") != "api_server"
+            with self.lock:
+                self.created.append((agent, body))
+                session_id = f"local-s{len(self.created)}" if peer_bot_chat else f"api_s{len(self.created)}"
+            mine[session_id] = {"id": session_id, "title": body.get("title"), "message_count": 0,
+                                "last_active": time.time(), "input_tokens": 0, "output_tokens": 0,
+                                "cache_read_tokens": 0}
+            if peer_bot_chat:
+                mine[session_id].update({"chat_id": session_id, "source": "cli", "hidden": True})
+            self.messages[(agent, session_id)] = []
+            return JSONResponse({"object": "hermes.session", "session": {"id": session_id, "title": body.get("title")}},
+                                status_code=201)
+        session_id = parts[2] if len(parts) > 2 else ""
+        if len(parts) == 3 and method == "GET":
+            if session_id in mine:
+                return JSONResponse({"session": self._session_counters(agent, session_id)})
+            return JSONResponse({"id": session_id, **self.default_session})
+        if len(parts) == 3 and method == "PATCH":
+            body = seen.json() or {}
+            self.patched.append({"id": session_id, **body})
+            if "title" in body:   # Hermes frees the title an archived hidden Bot Chat holds (hermes_state_titles.py)
+                for other in mine.values():
+                    if other["id"] != session_id and other.get("title") == body["title"] \
+                            and other.get("archived") and other.get("hidden"):
+                        other["title"] = None
+            if session_id in mine:
+                mine[session_id].update(body)
+            return JSONResponse({})
+        if len(parts) == 3 and method == "DELETE":
+            self.deleted.append(session_id)
+            if mine.pop(session_id, None) is None:
+                return JSONResponse({"error": f"Session not found: {session_id}"}, status_code=404)
+            if self.revive and any(c["agent"] == agent and c["session"] == session_id for c in self.chats):
+                self.revive -= 1
+
+                def written_back() -> None:
+                    mine[session_id] = {"id": session_id, "title": "Notes on the podcast", "source": "unknown",
+                                        "message_count": 0, "started_at": time.time(), "last_active": time.time()}
+                    self.messages[(agent, session_id)] = []
+
+                timer = threading.Timer(self.revive_after, written_back)
+                timer.daemon = True
+                timer.start()
+            return JSONResponse({})
+        if len(parts) == 4 and parts[3] == "messages":
+            rows = self.messages.get((agent, session_id), [])
+            if self.v0225:
+                rows = [{"id": i + 1, "message_uid": r.get("message_uid") or hashlib.md5(f"{agent}/{session_id}/{i}".encode()).hexdigest(), **r}
+                        for i, r in enumerate(rows)]
+                if "inline_images=false" in seen.query:   # photos as placeholders, as Hermes without inline images
+                    rows = [{**r, "content": [{"type": "text", "text": "[image]"} if p.get("type") == "image_url" else p
+                                              for p in r["content"]]} if isinstance(r.get("content"), list) else r
+                            for r in rows]
+            return JSONResponse({"messages": rows})
+        if parts[3:] == ["chat", "stream"] and method == "POST":
+            self.streams.append({"agent": agent, "session": session_id, **(seen.json() or {})})
+            script = self.stream_script
+
+            async def turn():
+                for item in script:
+                    if isinstance(item, (int, float)):
+                        await asyncio.sleep(item)
+                    else:
+                        yield item.encode("utf-8")
+
+            return StreamingResponse(turn(), media_type="text/event-stream")
+        if len(parts) == 4 and parts[3] == "chat" and method == "POST":
+            body = seen.json() or {}
+            now, body["message"] = split_now(body.get("message"))
+            self.chats.append({"agent": agent, "session": session_id, **body, "now": now})
+            return JSONResponse({"message": {"role": "assistant", "content": self.chat_reply}})
+        return JSONResponse({"error": "no route"}, status_code=404)
+
+
+def facts_answer(body: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """The mailbox scan's model (tests/test_mail_scan.py's): one line of facts per « E-mail N » it was given, by sender."""
+    text = body["messages"][1]["content"]
+    lines: List[Dict[str, Any]] = []
+    for n, chunk in enumerate(text.split("E-mail ")[1:], start=1):
+        if "Sam" in chunk:
+            lines.append({"n": n, "people": [{"name": "Sam", "email": "sam@example.com", "relation": "friend"}],
+                          "topics": ["repas dimanche"], "facts": ["Repas chez Sam dimanche, apporter le dessert"],
+                          "commitments": [{"what": "Apporter le dessert chez Sam", "due": "2099-10-25"}]})
+        elif "Banque" in chunk:
+            lines.append({"n": n, "orgs": [{"name": "Banque Exemple", "kind": "bank"}], "topics": ["banque"],
+                          "facts": ["Rendez-vous à la banque le 30 octobre"],
+                          "commitments": [{"what": "Rendez-vous banque", "due": "2099-10-30"}]})
+        else:
+            lines.append({"n": n, "skip": True})
+    return lines
+
+
+class FakeModel(Fake):
+    """A model's API: `/v1/models` (for `[model] health_url`) and `/v1/chat/completions` (the mailbox scan, the
+    Carnet's pass, records from archives, a group discussion's router, a memory's translation)."""
+    name = "model"
+
+    def reset(self) -> None:
+        super().reset()
+        self.status = 200
+        self.chats: List[Dict[str, Any]] = []
+        self.streams: List[Dict[str, Any]] = []          # POST /api/sessions/{id}/chat/stream (a Live call's turns)
+        self.stream_script: List[Any] = [sse("assistant.delta", run_id="run_l1", delta="Salut"),
+                                         sse("run.completed", run_id="run_l1", output="Salut")]
+        # the Carnet's nightly pass (its instructions start « You tidy »): the lines it answers
+        self.notebook_lines: List[Dict[str, Any]] = []
+        # records from an archive (its instructions start « You extract precise records »): per document of the
+        # prompt, the records of the first word of `records_by_word` found in it; a document with « BROKEN » spoils the
+        # whole answer (no JSON)
+        self.records_by_word: Dict[str, List[Dict[str, Any]]] = {}
+        # a group discussion's router (its instructions start « You route »): the ids it answers
+        self.route_answer = "coach"
+        # a room's task handed over (its instructions start « Write the handover note »): the note
+        self.note_answer = "Done: the list\nLeft: the shopping"
+        # a WhatsApp chat read for the Carnet (its instructions start « You read a WhatsApp chat »): its answer
+        self.whatsapp_answer: Dict[str, Any] = {"people": [], "subjects": [], "dates": [], "tasks": []}
+        # an agent's memory translated after its language changed (its instructions start « You translate »)
+        self.translation_answer: Dict[str, Any] = {"notes": [], "user": []}
+
+    def records_answer(self, user: str) -> str:
+        documents = []
+        for n, part in enumerate(user.split("Document ")[1:], start=1):
+            if "BROKEN" in part:
+                return "Sorry, here it is: not JSON"
+            found = next((records for word, records in self.records_by_word.items() if word in part), [])
+            documents.append({"doc": n, "records": found})
+        return json.dumps({"documents": documents}, ensure_ascii=False)
+
+    async def handle(self, seen: Seen) -> Response:
+        if seen.path.endswith("/chat/completions"):
+            body = seen.json()
+            self.chats.append({"body": body, "authorization": seen.header("authorization")})
+            if len(body["messages"]) == 1:
+                # a model tried once before an agent uses it (model_choice.rs): a word, or a word about an image
+                return JSONResponse({"choices": [{"message": {"content": "OK"}}],
+                                     "usage": {"prompt_tokens": 12, "completion_tokens": 1}}, status_code=self.status)
+            if body["messages"][0]["content"].startswith("You extract precise records"):
+                return JSONResponse({"choices": [{"message": {"content": self.records_answer(body["messages"][1]["content"])}}],
+                                     "usage": {"prompt_tokens": 2000, "completion_tokens": 200}},
+                                    status_code=self.status)
+            if body["messages"][0]["content"].startswith("You read a WhatsApp chat"):
+                content = json.dumps(self.whatsapp_answer, ensure_ascii=False)
+                return JSONResponse({"choices": [{"message": {"content": content}}],
+                                     "usage": {"prompt_tokens": 3000, "completion_tokens": 300}},
+                                    status_code=self.status)
+            if body["messages"][0]["content"].startswith("You translate"):
+                content = json.dumps(self.translation_answer, ensure_ascii=False)
+                return JSONResponse({"choices": [{"message": {"content": content}}],
+                                     "usage": {"prompt_tokens": 400, "completion_tokens": 380}},
+                                    status_code=self.status)
+            if body["messages"][0]["content"].startswith("Write the handover note"):
+                return JSONResponse({"choices": [{"message": {"content": self.note_answer}}],
+                                     "usage": {"prompt_tokens": 300, "completion_tokens": 20}},
+                                    status_code=self.status)
+            if body["messages"][0]["content"].startswith("You route"):
+                return JSONResponse({"choices": [{"message": {"content": self.route_answer}}],
+                                     "usage": {"prompt_tokens": 120, "completion_tokens": 4}},
+                                    status_code=self.status)
+            if body["messages"][0]["content"].startswith("You tidy"):
+                content = "\n".join(json.dumps(line, ensure_ascii=False) for line in self.notebook_lines)
+                return JSONResponse({"choices": [{"message": {"content": content}}],
+                                     "usage": {"prompt_tokens": 3000, "completion_tokens": 300}},
+                                    status_code=self.status)
+            content = "\n".join(json.dumps(line, ensure_ascii=False) for line in facts_answer(body))
+            return JSONResponse({"choices": [{"message": {"content": content}}],
+                                 "usage": {"prompt_tokens": 1000, "completion_tokens": 100,
+                                           "prompt_tokens_details": {"cached_tokens": 400}}},
+                                status_code=self.status)
+        return JSONResponse({"data": [{"id": "glm"}]}, status_code=self.status)
+
+
+# -- push ----------------------------------------------------------------------------------------------------------
+
+class FakeApns(Fake):
+    """APNs on `/production/3/device/<token>` and `/sandbox/3/device/<token>` (the bridge's `[apns] base_url` and
+    `sandbox_url` point there). Plain HTTP/1.1: real APNs is HTTP/2 over TLS, which both bridges negotiate by ALPN."""
+    name = "apns"
+
+    def reset(self) -> None:
+        super().reset()
+        self.responses: Dict[str, Tuple[int, Optional[str]]] = {}   # token -> (status, reason)
+        self.script: List[Tuple[int, Optional[str]]] = []           # next answers, whatever the token
+
+    def pushes(self) -> List[Seen]:
+        return [r for r in list(self.requests) if "/3/device/" in r.path]
+
+    def payloads(self) -> List[Dict[str, Any]]:
+        return [r.json() for r in self.pushes()]
+
+    @staticmethod
+    def environment(seen: Seen) -> str:
+        return seen.path.split("/")[1]
+
+    @staticmethod
+    def token(seen: Seen) -> str:
+        return seen.path.rsplit("/", 1)[-1]
+
+    async def handle(self, seen: Seen) -> Response:
+        token = self.token(seen)
+        with self.lock:
+            status, reason = self.script.pop(0) if self.script else self.responses.get(token, (200, None))
+        if status == 200:
+            return Response(status_code=200, headers={"apns-id": "abc"})
+        return JSONResponse({"reason": reason}, status_code=status)
+
+
+class FakeFcm(Fake):
+    """FCM HTTP v1 (`/v1/projects/<id>/messages:send`) and Google's OAuth token endpoint (`/token`)."""
+    name = "fcm"
+
+    def reset(self) -> None:
+        super().reset()
+        self.dead: set = set()
+
+    def sends(self) -> List[Seen]:
+        return [r for r in list(self.requests) if r.path.endswith("/messages:send")]
+
+    async def handle(self, seen: Seen) -> Response:
+        if seen.path == "/token":
+            return JSONResponse({"access_token": "ya29.test", "expires_in": 3600, "token_type": "Bearer"})
+        if seen.path.endswith("/messages:send"):
+            if seen.header("authorization") != "Bearer ya29.test":
+                return JSONResponse({"error": {"status": "UNAUTHENTICATED"}}, status_code=401)
+            message = seen.json()["message"]
+            if message["token"] in self.dead:
+                return JSONResponse({"error": {"status": "NOT_FOUND", "details": [{"errorCode": "UNREGISTERED"}]}},
+                                    status_code=404)
+            return JSONResponse({"name": f"projects/x/messages/{len(self.sends())}"})
+        return Response(status_code=404)
+
+
+class FakePushService(Fake):
+    """The publisher's push relay (relay/): `POST /v1/relay/push`; a token ending in « dead » is gone (410)."""
+    name = "push-service"
+
+    async def handle(self, seen: Seen) -> Response:
+        if seen.path != "/v1/relay/push":
+            return Response(status_code=404)
+        body = seen.json()
+        dead = str(body.get("token", "")).endswith("dead")
+        return JSONResponse({"status": 410 if dead else 200, "reason": "Unregistered" if dead else None,
+                             "apns_id": None if dead else "relay-1"})
+
+
+# -- the weather and route tools' services ---------------------------------------------------------------------------
+
+def tiny_png(width: int = 256, height: int = 256, rgb: Tuple[int, int, int] = (0xD0, 0xE4, 0xC8)) -> bytes:
+    """A plain PNG of one colour (an OpenStreetMap raster tile's stand-in), without Pillow."""
+    import zlib
+    raw = b"".join(b"\x00" + bytes(rgb) * width for _ in range(height))
+
+    def chunk(kind: bytes, data: bytes) -> bytes:
+        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF)
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
+
+
+VECTOR_TILE = b"\x1a\x0bfake-vector-tile" * 8   # what a tile's bytes are does not matter to the bridge
+
+
+class FakeMaps(Fake):
+    """MET Norway's Locationforecast (`/weatherapi/locationforecast/2.0/complete`: hourly from the current hour for
+    48 hours, rain in the 3rd and 4th, `Expires` an hour on), OpenStreetMap's Nominatim (`/search`: « Lyon », nothing
+    for a query with « Nowhere »; `/reverse`: land around Lyon only), Google's Routes API (`/directions/v2:computeRoutes`, key `test-maps-key`),
+    OpenStreetMap's raster tiles (`/osm/{z}/{x}/{y}.png`) and OpenFreeMap's vector maps under `/vector` (the positron
+    style with a raster source and a source on another host, which the bridge leaves out; its TileJSON; gzip tiles up
+    to zoom 14; glyphs; the sprite). `vector_down`: every `/vector` answer a 500."""
+    name = "maps"
+
+    def reset(self) -> None:
+        super().reset()
+        self.vector_down = False
+
+    def vector(self, seen: Seen) -> Response:
+        import gzip
+        base = self.url + "/vector"
+        path = seen.path[len("/vector"):]
+        if self.vector_down:
+            return Response(status_code=500)
+        if path == "/styles/positron":
+            return JSONResponse({
+                "version": 8,
+                "sources": {"ne2_shaded": {"type": "raster", "tiles": [base + "/natural_earth/{z}/{x}/{y}.png"]},
+                            "openmaptiles": {"type": "vector", "url": base + "/planet"},
+                            "elsewhere": {"type": "vector", "url": "http://127.0.0.1:9/planet"}},
+                "sprite": base + "/sprites/ofm_f384/ofm",
+                "glyphs": base + "/fonts/{fontstack}/{range}.pbf",
+                "layers": [{"id": "background", "type": "background", "paint": {"background-color": "rgb(242,243,240)"}},
+                           {"id": "relief", "type": "raster", "source": "ne2_shaded"},
+                           {"id": "far", "type": "fill", "source": "elsewhere", "source-layer": "x"},
+                           {"id": "water", "type": "fill", "source": "openmaptiles", "source-layer": "water"},
+                           {"id": "label", "type": "symbol", "source": "openmaptiles", "source-layer": "place",
+                            "layout": {"text-font": ["Noto Sans Regular"]}}]})
+        if path == "/planet":
+            return JSONResponse({"tilejson": "3.0.0", "tiles": [base + "/planet/20261018/{z}/{x}/{y}.pbf"],
+                                 "minzoom": 0, "maxzoom": 14})
+        if path.startswith("/planet/20261018/") and path.endswith(".pbf"):
+            return Response(gzip.compress(VECTOR_TILE), media_type="application/vnd.mapbox-vector-tile",
+                            headers={"Content-Encoding": "gzip"})
+        if path.startswith("/fonts/") and path.endswith(".pbf"):
+            return Response(b"glyphs:" + path.encode(), media_type="application/x-protobuf")
+        if path in ("/sprites/ofm_f384/ofm.json", "/sprites/ofm_f384/ofm@2x.json"):
+            return JSONResponse({"park": {"x": 0, "y": 0, "width": 16, "height": 16, "pixelRatio": 1}})
+        if path in ("/sprites/ofm_f384/ofm.png", "/sprites/ofm_f384/ofm@2x.png"):
+            return Response(tiny_png(16, 16), media_type="image/png")
+        return Response(status_code=404)
+
+    async def handle(self, seen: Seen) -> Response:
+        if seen.path.startswith("/vector/"):
+            return self.vector(seen)
+        if seen.path.startswith("/osm/") and seen.path.endswith(".png"):
+            return Response(tiny_png(), media_type="image/png")
+        if seen.path == "/weatherapi/locationforecast/2.0/complete":
+            start = int(time.time()) // 3600 * 3600
+            series = []
+            for h in range(48):
+                at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(start + h * 3600))
+                rainy = h in (2, 3)
+                series.append({"time": at, "data": {
+                    "instant": {"details": {"air_temperature": 12.0, "wind_speed": 4.0, "relative_humidity": 80.0}},
+                    "next_1_hours": {"summary": {"symbol_code": "rain" if rainy else "cloudy"},
+                                     "details": {"precipitation_amount": 1.5 if rainy else 0.0}}}})
+            body = {"type": "Feature", "properties": {"meta": {"updated_at": series[0]["time"]}, "timeseries": series}}
+            expires = time.strftime("%a, %d %b %Y %H:%M:%S GMT", time.gmtime(time.time() + 3600))
+            return JSONResponse(body, headers={"Expires": expires,
+                                               "Last-Modified": time.strftime("%a, %d %b %Y %H:%M:%S GMT",
+                                                                              time.gmtime(start))})
+        if seen.path == "/search":
+            if "Nowhere" in seen.params.get("q", ""):
+                return JSONResponse([])
+            return JSONResponse([{"lat": "45.7578", "lon": "4.8320", "name": "Lyon", "display_name": "Lyon, France",
+                                  "address": {"state": "Auvergne-Rhône-Alpes", "country": "France",
+                                              "country_code": "fr"}}])
+        if seen.path == "/reverse":
+            # land around Lyon only: anywhere else is the sea
+            lat, lon = float(seen.params.get("lat", 0)), float(seen.params.get("lon", 0))
+            if 45.5 < lat < 46.0 and 4.6 < lon < 5.1:
+                return JSONResponse({"lat": str(lat), "lon": str(lon), "display_name": "Lyon, France",
+                                     "address": {"city": "Lyon", "country": "France"}})
+            return JSONResponse({"error": "Unable to geocode"})
+        if seen.path == "/directions/v2:computeRoutes":
+            if seen.header("x-goog-api-key") != "test-maps-key":
+                return JSONResponse({"error": {"status": "PERMISSION_DENIED"}}, status_code=403)
+            return JSONResponse({"routes": [{"duration": "2700s", "distanceMeters": 3400}]})
+        return Response(status_code=404)
+
+
+class Fakes:
+    """Every fake, started once."""
+
+    def __init__(self) -> None:
+        from .servers import Dropper
+        self.hermes = FakeHermes()
+        self.pocket = FakePocket()
+        self.voices = FakeVoiceServer()
+        self.model = FakeModel()
+        self.apns = FakeApns()
+        self.fcm = FakeFcm()
+        self.push_service = FakePushService()
+        self.maps = FakeMaps()
+        self.all: List[Fake] = [self.hermes, self.pocket, self.voices, self.model, self.apns,
+                                self.fcm, self.push_service, self.maps]
+        self.down = Dropper()
+        from .imap import FakeImap
+        self.imap = FakeImap()
+
+    def start(self) -> "Fakes":
+        for fake in self.all:
+            fake.start()
+        self.down.start()
+        return self
+
+    def reset(self) -> None:
+        for fake in self.all:
+            fake.reset()
+        self.down.reset()
+        self.imap.reset()
+
+    def release(self) -> None:
+        for fake in self.all:
+            fake.release.set()
+
+    def stop(self) -> None:
+        for fake in self.all:
+            fake.stop()
+        self.down.stop()
+        self.imap.stop()

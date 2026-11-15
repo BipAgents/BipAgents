@@ -1,0 +1,880 @@
+import base64
+import json
+import secrets
+import sys
+from pathlib import Path
+
+import yaml
+
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "installer"))
+
+TEMPLATE = ROOT / "installer" / "cloud" / "user-data.yaml"
+
+
+def render(pair: str, language: str = "fr", profile: str = "solo") -> str:
+    """What the apps do: three placeholders, nothing else."""
+    return (TEMPLATE.read_text(encoding="utf-8").replace("{{pair}}", pair).replace("{{language}}", language)
+            .replace("{{profile}}", profile))
+
+
+def test_the_user_data_the_apps_send_sets_up_the_server_and_runs_the_cloud_install(tmp_path):
+    from bipinstall import cloud
+
+    pair = base64.urlsafe_b64encode(secrets.token_bytes(32)).decode().rstrip("=")
+    text = render(pair)
+    assert text.startswith("#cloud-config\n") and "{{" not in text
+    data = yaml.safe_load(text)
+    assert data["users"][1] == {"name": "bip", "shell": "/bin/bash", "lock_passwd": True}   # no sudo
+    assert {"podman", "catatonit", "uidmap", "ufw", "unattended-upgrades"} <= set(data["packages"])
+    files = {f["path"]: f for f in data["write_files"]}
+    setup = files["/etc/bipagents/cloud.json"]
+    assert setup["permissions"] == "0600"
+    (tmp_path / "cloud.json").write_text(setup["content"])
+    assert cloud.read(tmp_path / "cloud.json") == cloud.CloudSetup(pair=pair, language="fr", profile="solo")
+    assert "ip_unprivileged_port_start = 443" in files["/etc/sysctl.d/60-bipagents.conf"]["content"]
+    assert "PasswordAuthentication no" in files["/etc/ssh/sshd_config.d/10-bipagents.conf"]["content"]
+    commands = data["runcmd"]
+    # Nothing in but SSH (by key) and the bridge's door; the install as `bip`, then the secret's copy removed.
+    assert commands.index("ufw default deny incoming") < commands.index("ufw --force enable")
+    assert "ufw allow 443/tcp" in commands and not any("ufw allow 80" in c for c in commands)
+    install = next(c for c in commands if "/install.sh |" in c)
+    assert install.startswith("sudo -iu bip ") and "--cloud /etc/bipagents/cloud.json" in install
+    # Hermes and the agents' images first, ready-made, once for the server (root's own BipAgents), both at once.
+    shared = next(c for c in commands if "bipinstall.shared_hermes enable" in c)
+    assert "bipinstall.shared_images pull --timer" in shared and shared.count(" & ") == 2 and "wait;" in shared
+    clone = next(c for c in commands if "git clone" in c)
+    assert "/usr/local/lib/bipagents/repo" in clone   # where the seat agent keeps root's checkout (SHARED_REPO)
+    assert commands.index(clone) < commands.index(shared) < commands.index(install)
+    # Root's checkout at main's latest, in words a guichet replaces when its update wave pins a commit
+    # (guichet-rs/src/bootstrap.rs, SHARED_AT): the shared Hermes of the version the places install, once, right
+    # after the clone. Its install line keeps the guichet's other marker (INSTALL).
+    at = "checkout --quiet --force origin/main"
+    checkout = next(c for c in commands if at in c)
+    assert checkout.startswith("git -C /usr/local/lib/bipagents/repo ")
+    assert render("x" * 43).count(at) == 1
+    assert commands.index(checkout) == commands.index(clone) + 1 and commands.index(checkout) < commands.index(shared)
+    assert install.count("| bash -s -- --cloud") == 1
+    assert {"zstd", "python3-yaml"} <= set(data["packages"])
+    assert commands.index(install) < next(i for i, c in enumerate(commands) if c.startswith("shred"))
+    assert commands.index("loginctl enable-linger bip") < commands.index(install)
+    # Compressed memory ahead of the swap file, its module installed when the kernel keeps it apart (never failing
+    # the boot); logs kept small.
+    zram = next(c for c in commands if "zram" in c)
+    assert zram.startswith('modprobe zram || apt-get install -y "linux-modules-extra-$(uname -r)"; modprobe zram && ')
+    assert zram.endswith("|| true")
+    # Debian's zram-generator starts the device as it is installed (lz4): set up again with the settings written
+    assert zram.index("zram-generator.conf") < zram.index("systemctl restart systemd-zram-setup@zram0.service") < zram.index(
+        "systemctl start dev-zram0.swap")
+    assert commands.index(zram) < next(i for i, c in enumerate(commands) if "/swapfile" in c) < commands.index(install)
+    assert "SystemMaxUse=200M" in files["/etc/systemd/journald.conf.d/60-bipagents.conf"]["content"]
+
+
+def test_no_model_key_or_other_secret_has_a_place_in_it():
+    text = TEMPLATE.read_text(encoding="utf-8")
+    import re
+    assert text.isascii(), "DigitalOcean ignores a user-data holding non-ASCII characters (accents, guillemets)"
+    assert sorted(set(re.findall(r"\{\{(\w+)\}\}", text))) == ["language", "pair", "profile"]
+    assert "KEY" not in text.replace("SSH", "")
+    # far under the providers' user-data limits (32 KiB at Hetzner, the guichet's USER_DATA_MAX; 64 KB at DigitalOcean),
+    # with room for what the guichet adds (the places' setups)
+    assert len(render("x" * 43).encode()) < 20_000
+
+
+def test_the_server_reboots_at_night_when_an_update_asks_at_a_minute_of_its_own(tmp_path):
+    """unattended-upgrades reboots by itself when an update needs it (a kernel's fixes only count after one), whoever
+    is connected, between 00:00 and 00:44 server time: the minute comes from the machine id, so it is the same each
+    time and the servers of a region don't go down together. Updates run at 23:00-23:30, just before."""
+    import subprocess
+    data = yaml.safe_load(render("x" * 43))
+    files = {f["path"]: f["content"] for f in data["write_files"]}
+    reboot = files["/etc/apt/apt.conf.d/52bipagents-reboot"]
+    assert 'Automatic-Reboot "true";' in reboot and 'Automatic-Reboot-WithUsers "true";' in reboot
+    assert 'Automatic-Reboot-Time "00:20";' in reboot   # until the minute of its own is written
+    timer = files["/etc/systemd/system/apt-daily-upgrade.timer.d/60-bipagents.conf"]
+    assert "OnCalendar=\nOnCalendar=*-*-* 23:00\n" in timer and "RandomizedDelaySec=30min" in timer
+    assert "$nrconf{restart} = 'a';" in files["/etc/needrestart/conf.d/60-bipagents.conf"]
+    # never cloud-init's own units: restarted by runcmd's apt-get on Debian 13, they killed the first boot halfway
+    assert "$nrconf{override_rc}{qr(^cloud-)} = 0;" in files["/etc/needrestart/conf.d/60-bipagents.conf"]
+    commands = data["runcmd"]
+    minute = next(c for c in commands if "53bipagents-reboot-time" in c)
+    assert commands.index(minute) < commands.index("systemctl daemon-reload") < commands.index(
+        "loginctl enable-linger bip")
+    found = set()
+    for machine_id in ("0000aaaa", "ffffffff", "4f3a1b2c", "a1b2c3d4"):
+        (tmp_path / "machine-id").write_text(machine_id + "0" * 24 + "\n")
+        out = tmp_path / "time"
+        command = minute.replace("/etc/machine-id", str(tmp_path / "machine-id")).replace(
+            "/etc/apt/apt.conf.d/53bipagents-reboot-time", str(out))
+        assert subprocess.run(["sh", "-c", command]).returncode == 0
+        text = out.read_text()
+        assert text == 'Unattended-Upgrade::Automatic-Reboot-Time "00:%02d";\n' % (int(machine_id[:4], 16) % 45)
+        found.add(text)
+    assert len(found) > 1
+
+
+def test_servers_installed_before_get_the_same_night_reboot_with_one_command():
+    """nightly-reboot.sh (root, once, on a server installed before 2026-10-22): user-data's settings word for word,
+    the same minute, and on a guichet's server the seat agent taken again with its reboot notice."""
+    import subprocess
+    path = ROOT / "installer" / "cloud" / "nightly-reboot.sh"
+    text = path.read_text(encoding="utf-8")
+    assert text.isascii() and subprocess.run(["bash", "-n", str(path)]).returncode == 0
+    data = yaml.safe_load(render("x" * 43))
+    files = {f["path"]: f["content"] for f in data["write_files"]}
+    for name in ("/etc/apt/apt.conf.d/52bipagents-reboot",
+                 "/etc/systemd/system/apt-daily-upgrade.timer.d/60-bipagents.conf",
+                 "/etc/needrestart/conf.d/60-bipagents.conf"):
+        assert f"cat > {name} <<'EOF'\n{files[name]}EOF\n" in text
+    minute = next(c for c in data["runcmd"] if "53bipagents-reboot-time" in c)
+    assert "\n" + minute + "\n" in text
+    assert "ExecStop=/usr/bin/python3 $lib/seat-agent.py --rebooting" in text
+    assert "systemctl enable --now bipagents-reboot-notice.service" in text
+
+
+def test_the_seat_agent_tells_the_guichet_of_a_reboot_only(monkeypatch):
+    """At shutdown (bipagents-reboot-notice.service): a reboot under way is told to the guichet, a stop is not, and
+    a guichet that doesn't answer never holds the shutdown up beyond the call's timeout."""
+    agent = _seat_agent()
+    calls = []
+    monkeypatch.setattr(agent, "call", lambda conf, method, path, body=None: calls.append((method, path)) or {})
+    jobs = {"text": "1215 reboot.target start waiting\n1216 systemd-reboot.service start waiting\n"}
+
+    class Done:
+        def __init__(self, stdout):
+            self.stdout = stdout
+
+    monkeypatch.setattr(agent.subprocess, "run", lambda *a, **k: Done(jobs["text"]))
+    assert agent.rebooting({"url": "https://g", "token": "t"}) == 0 and calls == [("POST", "/v1/server/rebooting")]
+    jobs["text"] = "1215 poweroff.target start waiting\n"
+    assert agent.rebooting({}) == 0 and len(calls) == 1
+
+    def unreachable(*a, **k):
+        raise OSError("no network")
+
+    jobs["text"] = "1 reboot.target start waiting\n"
+    monkeypatch.setattr(agent, "call", unreachable)
+    assert agent.rebooting({}) == 0
+
+
+def test_the_seat_script_is_ascii_and_refuses_a_wrong_call(tmp_path):
+    """add-seat.sh runs as root at first boot (the guichet's script) and for the seat agent: ASCII like user-data,
+    and nothing done when called without a place number of 1 or more and an existing setup file."""
+    import subprocess
+    path = ROOT / "installer" / "cloud" / "add-seat.sh"
+    text = path.read_text(encoding="utf-8")
+    assert text.isascii() and "--cloud $setup" in text and 'ufw allow "$port/tcp"' in text
+    assert '[ "$n" -eq 1 ] && user="bip"' in text
+    for args in ([], ["0", str(path)], ["x", str(path)], ["2", str(tmp_path / "missing.json")]):
+        assert subprocess.run(["bash", str(path), *args], capture_output=True).returncode == 2
+    # A version the guichet pins is a commit's 40 characters, nothing else (checked before anything is done).
+    assert 'BIPAGENTS_TO=$version' in text and "${pin}bash -s -- --cloud $setup" in text
+    for version in ("main", "x" * 40, "0123abc", "a" * 40 + "; rm -rf /"):
+        setup = tmp_path / "setup.json"
+        setup.write_text(json.dumps({"v": 1, "port": 444, "version": version}))
+        assert subprocess.run(["bash", str(path), "2", str(setup)], capture_output=True).returncode == 2
+
+
+def _seat_agent():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("seat_agent", ROOT / "installer" / "cloud" / "seat-agent.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _signed(key, body):
+    return {"id": body["order"], "body": json.dumps(body, sort_keys=True, separators=(",", ":")),
+            "signature": base64.b64encode(key.sign(json.dumps(body, sort_keys=True, separators=(",", ":")).encode()))
+            .decode()}
+
+
+def test_the_seat_agent_does_only_signed_orders_for_its_server(tmp_path):
+    """installer/cloud/seat-agent.py (root, every two minutes): an order is done only when the guichet's key signed
+    it, for this server, not expired, for a place whose door matches, and not done before."""
+    import shutil
+    import subprocess
+    import time
+    import pytest
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+    agent = _seat_agent()
+    assert (ROOT / "installer" / "cloud" / "seat-agent.py").read_text(encoding="utf-8").isascii()
+    key, other = Ed25519PrivateKey.generate(), Ed25519PrivateKey.generate()
+    pub = tmp_path / "guichet.pub"
+    pub.write_bytes(key.public_key().public_bytes(serialization.Encoding.PEM,
+                                                  serialization.PublicFormat.SubjectPublicKeyInfo))
+    now = time.time()
+    body = {"order": 7, "server": "vps-1", "seat": 2, "action": "reset", "expires": int(now + 3600),
+            "setup": {"v": 1, "pair": "p" * 43, "language": "fr", "profile": "solo", "port": 444}}
+    order = _signed(key, body)
+    assert agent.accepted(order, "vps-1", set(), now) == body
+    assert agent.accepted(order, "vps-1", {7}, now) is None                 # done before
+    assert agent.accepted(order, "vps-2", set(), now) is None               # another server's
+    assert agent.accepted(order, "vps-1", set(), now + 7200) is None        # expired
+    for change in ({"action": "run"}, {"seat": 0}, {"seat": 3}):
+        assert agent.accepted(_signed(key, {**body, **change}), "vps-1", set(), now) is None
+    assert agent.accepted({**order, "id": 8}, "vps-1", set(), now) is None   # signed for another order
+    # A big server's places, up to the 40th (door 482): no further.
+    last = {**body, "seat": 40, "setup": {**body["setup"], "port": 482}}
+    assert agent.accepted(_signed(key, last), "vps-1", set(), now) == last
+    assert agent.accepted(_signed(key, {**last, "seat": 41, "setup": {**body["setup"], "port": 483}}), "vps-1", set(),
+                          now) is None
+    # A version to bring the place to: a full commit, nothing else.
+    update = {"order": 9, "server": "vps-1", "seat": 3, "action": "update", "expires": int(now + 3600),
+              "commit": "0123456789abcdef0123456789abcdef01234567"}
+    assert agent.accepted(_signed(key, update), "vps-1", set(), now) == update
+    for change in ({"commit": "0123456"}, {"commit": "main"}, {"commit": "0123456789abcdef0123456789abcdef0123456; rm"},
+                   {"commit": None}):
+        assert agent.accepted(_signed(key, {**update, **change}), "vps-1", set(), now) is None
+    # ... from the public repository it names (2026-11-15: the switch to the organisation's, and back): a known one only
+    old, new = "https://github.com/Alexbob0/BipAgents.git", "https://github.com/BipAgents/BipAgents.git"  # known-public-repos
+    stranger = "https://github.com/someone/BipAgents.git"  # known-public-repos (not one)
+    for repo in (new, old):
+        assert agent.accepted(_signed(key, {**update, "repo": repo}), "vps-1", set(), now) == {**update, "repo": repo}
+    for repo in (stranger, new[:-4], "", 7, new + "; rm -rf /"):
+        assert agent.accepted(_signed(key, {**update, "repo": repo}), "vps-1", set(), now) is None
+    # A place pairing again: a pairing secret, nothing else.
+    again = {"order": 10, "server": "vps-1", "seat": 1, "action": "reopen", "expires": int(now + 3600), "pair": "q" * 43}
+    assert agent.accepted(_signed(key, again), "vps-1", set(), now) == again
+    for change in ({"pair": "short"}, {"pair": "q" * 42 + "/"}, {"pair": None}, {"pair": "a\nb" * 20}):
+        assert agent.accepted(_signed(key, {**again, **change}), "vps-1", set(), now) is None
+    assert agent.account(1) == "bip" and agent.account(3) == "bip3"
+    probe = subprocess.run(["openssl", "pkeyutl", "-help"], capture_output=True, text=True)
+    if shutil.which("openssl") is None or "-rawin" not in probe.stdout + probe.stderr:
+        pytest.skip("no OpenSSL 3 here")
+    assert agent.verified(order["body"], order["signature"], str(pub))
+    assert not agent.verified(order["body"].replace("vps-1", "vps-2"), order["signature"], str(pub))
+    assert not agent.verified(order["body"], _signed(other, body)["signature"], str(pub))
+    assert not agent.verified(order["body"], "not base64!", str(pub))
+
+
+def test_the_seat_agent_reads_the_last_use_only_when_it_is_a_number(tmp_path):
+    agent = _seat_agent()
+    assert agent.used(str(tmp_path)) is None
+    state = tmp_path / ".local" / "state" / "bipagents"
+    state.mkdir(parents=True)
+    (state / "used").write_text("1762950000")
+    assert agent.used(str(tmp_path)) == 1762950000
+    (state / "used").write_text("")
+    assert agent.used(str(tmp_path)) is None
+
+
+def test_the_seat_agent_s_heartbeat_says_only_states_a_version_a_time_and_numbers(tmp_path, monkeypatch):
+    """Each place: its door answers on the server, its Hermes runs, the BipAgents commit it runs, the time of its last
+    backup that worked; the server: memory, swap, disk, load. Nothing else."""
+    import os
+    import pwd
+    import socket
+    agent = _seat_agent()
+    home = tmp_path / "bip"
+    (home / ".local" / "state" / "bipagents").mkdir(parents=True)
+    (home / ".local" / "state" / "bipagents" / "backup.json").write_text('{"last_ok": 1790000000.5, "note": "x"}')
+    (home / "BipAgents" / ".git").mkdir(parents=True)
+    (home / "BipAgents" / ".git" / "HEAD").write_text("ref: refs/heads/main\n")
+    (home / "BipAgents" / ".git" / "packed-refs").write_text("# pack-refs\n0123456789abcdef0123 refs/heads/main\n")
+    users = {"bip": (home, 1000), "bip2": (tmp_path / "bip2", 1001)}
+
+    def getpwnam(name):
+        if name not in users:
+            raise KeyError(name)
+        return pwd.struct_passwd((name, "x", users[name][1], users[name][1], "", str(users[name][0]), "/bin/bash"))
+
+    monkeypatch.setattr(agent.pwd, "getpwnam", getpwnam)
+    listening = socket.socket()
+    listening.bind(("127.0.0.1", 0))
+    listening.listen()
+    port = listening.getsockname()[1]
+    monkeypatch.setattr(agent, "door_open", lambda p: p == 443)
+    monkeypatch.setattr(agent, "running", lambda uid, words: uid == 1000 and words == ("hermes", "gateway"))
+    (tmp_path / "bip2" / ".local" / "state" / "bipagents").mkdir(parents=True)
+    (tmp_path / "bip2" / ".local" / "state" / "bipagents" / "asleep").write_text("1790000000")
+    # its last person action (bridge-rs/src/used.rs): in the beat; place 1's bridge never wrote one, nothing said
+    (tmp_path / "bip2" / ".local" / "state" / "bipagents" / "used").write_text("1789990000\n")
+    # place 2's encrypted space waits for its key (bridge-rs/src/space.rs): locked, not down
+    (tmp_path / "bip2" / ".local" / "share" / "bipagents" / "space").mkdir(parents=True)
+    (tmp_path / "bip2" / ".local" / "share" / "bipagents" / "space" / "locked.json").write_text(
+        '{"since": 1790000000, "reason": "key service unreachable", "tries": 3}')
+    assert agent.health() == {"1": {"up": True, "hermes": True, "asleep": False, "version": "0123456789ab",
+                                    "backup": 1790000000.5, "locked": None},
+                              "2": {"up": False, "hermes": False, "asleep": True, "version": None, "backup": None,
+                                    "locked": "key service unreachable", "used": 1789990000}}
+    monkeypatch.undo()
+    assert agent.door_open(port) is True
+    listening.close()
+    assert agent.door_open(port) is False
+    # What runs is found by its command line, for the account only.
+    proc = tmp_path / "proc"
+    (proc / "123").mkdir(parents=True)
+    (proc / "123" / "cmdline").write_bytes(b"/home/bip/.hermes/venv/bin/python\0-m\0hermes\0gateway\0run\0")
+    (proc / "self").mkdir()
+    assert agent.running(os.getuid(), ("hermes", "gateway"), proc=str(proc))
+    assert not agent.running(os.getuid(), ("bipbridge",), proc=str(proc))
+    assert not agent.running(os.getuid() + 1, ("hermes",), proc=str(proc))
+    meminfo = tmp_path / "meminfo"
+    meminfo.write_text("MemTotal:        8000000 kB\nMemAvailable:    3000000 kB\nSwapTotal:       2097148 kB\n"
+                       "SwapFree:        1048576 kB\nHugePages_Total:       0\n")
+    (tmp_path / "uptime").write_text("754.31 2900.02\n")
+    numbers = agent.vitals(str(meminfo), str(tmp_path), str(tmp_path / "uptime"))
+    assert set(numbers) == {"memory_mb", "available_mb", "swap_mb", "swap_used_mb", "disk_gb", "disk_free_gb", "load",
+                            "uptime", "space_hardened"}
+    assert numbers["uptime"] == 754 and agent.uptime(str(tmp_path / "missing")) is None
+    assert numbers["memory_mb"] == 7812 and numbers["available_mb"] == 2929 and numbers["swap_used_mb"] == 1023
+
+
+def _places(agent, monkeypatch, uids):
+    import pwd
+
+    def getpwnam(name):
+        if name not in uids:
+            raise KeyError(name)
+        return pwd.struct_passwd((name, "x", uids[name], uids[name], "", "/home/" + name, "/bin/bash"))
+
+    monkeypatch.setattr(agent.pwd, "getpwnam", getpwnam)
+
+
+def test_each_place_gets_a_soft_share_of_the_server_s_memory_and_cpu(tmp_path, monkeypatch):
+    """Each running place's user slice: MemoryHigh = 80 % of the memory shared among the places (never under a
+    place's floor) or the guichet's share, a MemoryMax only well above it, CPUWeight equal, TasksMax generous; set
+    again only when one differs."""
+    agent = _seat_agent()
+    _places(agent, monkeypatch, {"bip": 1000, "bip2": 1001, "bip3": 1002})
+    root = tmp_path / "user.slice"
+    (root / "user-1000.slice").mkdir(parents=True)
+    (root / "user-1000.slice" / "memory.high").write_text("max\n")
+    (root / "user-1001.slice").mkdir()
+    for name, value in (("memory.high", 2133 * 1024 * 1024), ("memory.max", 3199 * 1024 * 1024), ("cpu.weight", 100),
+                        ("pids.max", 8192)):
+        (root / "user-1001.slice" / name).write_text("%d\n" % value)
+    # bip3: no slice (its services not started): nothing set for it
+    calls = []
+    agent.ceiling(8000, {}, str(root), lambda *args: calls.append(args))
+    assert calls == [("systemctl", "set-property", "user-1000.slice", "MemoryHigh=2133M", "MemoryMax=3199M",
+                      "CPUWeight=100", "TasksMax=8192")]
+    calls.clear()
+    agent.ceiling(8000, {"memory_high_share": 0.5}, str(root), lambda *args: calls.append(args))
+    assert [c[3] for c in calls] == ["MemoryHigh=4000M", "MemoryHigh=4000M"]
+    # the shares: two places on a 4 GB server, one alone, many on a small one (the floor, MemoryMax never above
+    # the memory less the system's part)
+    assert agent.limits(3900, 2, {}) == {"MemoryHigh": 1560, "MemoryMax": 2584, "CPUWeight": 100, "TasksMax": 8192}
+    assert agent.limits(3900, 1, {})["MemoryMax"] == 3900 - agent.SYSTEM_MB
+    assert agent.limits(3900, 8, {})["MemoryHigh"] == agent.PLACE_FLOOR_MB
+    assert agent.limits(3900, 0, {}) == agent.limits(3900, 1, {})
+    assert agent.ceiling_mb(8000, {"memory_high_share": 5}) == agent.ceiling_mb(8000, {"memory_high_share": True}) \
+        == 6400
+    # The guichet's answer: a known setting within reason is kept, anything else is not.
+    settings = tmp_path / "settings.json"
+    agent.keep_settings({"orders": []}, str(settings))
+    agent.keep_settings({"settings": {"memory_high_share": 0.02}}, str(settings))
+    agent.keep_settings({"settings": {"memory_max": 1, "place_disk_gib": 500}}, str(settings))
+    assert not settings.exists()
+    agent.keep_settings({"settings": {"memory_high_share": 0.4}}, str(settings))
+    assert json.loads(settings.read_text()) == {"memory_high_share": 0.4}
+    agent.keep_settings({"settings": {"place_disk_gib": 8}}, str(settings))
+    assert json.loads(settings.read_text()) == {"memory_high_share": 0.4, "place_disk_gib": 8}
+
+
+def test_the_beat_says_each_place_s_memory_now_and_its_peak_since_the_last_beat(tmp_path, monkeypatch):
+    """The contract with the guichet: {"places": {"<seat>": {"mem_mb": n, "mem_peak_mb": n}}}, in MB."""
+    import shutil
+    agent = _seat_agent()
+    _places(agent, monkeypatch, {"bip": 1000, "bip2": 1001})
+    root = tmp_path / "user.slice"
+    samples = str(tmp_path / "run" / "memory.json")
+    mb = 1024 * 1024
+    for uid in (1000, 1001):
+        (root / ("user-%d.slice" % uid)).mkdir(parents=True)
+
+    def at(uid, current, peak=None):
+        (root / ("user-%d.slice" % uid) / "memory.current").write_text("%d\n" % (current * mb))
+        if peak is not None:
+            (root / ("user-%d.slice" % uid) / "memory.peak").write_text("%d\n" % (peak * mb))
+
+    at(1000, 900, 1200)
+    at(1001, 300)                 # a kernel without memory.peak: the samples only
+    agent.sample(str(root), samples)
+    at(1000, 2500, 2600)
+    at(1001, 700)
+    agent.sample(str(root), samples)
+    at(1000, 1100, 2600)
+    at(1001, 400)
+    # the first beat: the lifetime peak is not known to be recent, the samples are
+    assert agent.places_memory(str(root), samples) == {"1": {"mem_mb": 1100, "mem_peak_mb": 2500},
+                                                       "2": {"mem_mb": 400, "mem_peak_mb": 700}}
+    # the next: a high between two samples shows in memory.peak (risen since the last beat)
+    at(1000, 1000, 3100)
+    assert agent.places_memory(str(root), samples) == {"1": {"mem_mb": 1000, "mem_peak_mb": 3100},
+                                                       "2": {"mem_mb": 400, "mem_peak_mb": 400}}
+    # and then nothing higher: the peak is now
+    assert agent.places_memory(str(root), samples)["1"] == {"mem_mb": 1000, "mem_peak_mb": 1000}
+    # a place whose services do not run holds nothing
+    shutil.rmtree(root / "user-1001.slice")
+    assert agent.places_memory(str(root), samples)["2"] == {"mem_mb": 0, "mem_peak_mb": 0}
+    # the sampler's units, written once
+    units, ran = tmp_path / "units", []
+    units.mkdir()
+    agent.sampler("/usr/local/lib/bipagents", str(units), lambda *args: ran.append(args))
+    agent.sampler("/usr/local/lib/bipagents", str(units), lambda *args: ran.append(args))
+    assert ran == [("systemctl", "daemon-reload"), ("systemctl", "enable", "--now", "bipagents-memory.timer")]
+    assert "ExecStart=/usr/bin/python3 /usr/local/lib/bipagents/seat-agent.py --sample" in \
+        (units / "bipagents-memory.service").read_text()
+    assert "OnUnitActiveSec=15s" in (units / "bipagents-memory.timer").read_text()
+
+
+def test_the_beat_s_body_and_its_order(tmp_path, monkeypatch):
+    agent = _seat_agent()
+    conf = tmp_path / "guichet.json"
+    conf.write_text('{"url": "https://g", "token": "t", "server": "vps-1"}')
+    monkeypatch.setattr(agent, "CONF", str(conf))
+    monkeypatch.setattr(agent, "SETTINGS", str(tmp_path / "settings.json"))
+    steps, sent = [], []
+    monkeypatch.setattr(agent, "health", lambda: {"1": {"up": True}})
+    monkeypatch.setattr(agent, "vitals", lambda: {"memory_mb": 7812})
+    monkeypatch.setattr(agent, "places_memory", lambda: {"1": {"mem_mb": 812, "mem_peak_mb": 1630}})
+    monkeypatch.setattr(agent, "places_activity", lambda memory: memory)
+    monkeypatch.setattr(agent, "memory_settled", lambda server: steps.append(("settled", server["memory_mb"])))
+    monkeypatch.setattr(agent, "disk_settled", lambda: {"1": {"disk_mb": 900, "disk": "ok"}})
+    monkeypatch.setattr(agent, "zram", lambda: steps.append("zram"))
+
+    def call(conf, method, path, body=None):
+        sent.append((path, body))
+        return {"orders": [], "settings": {"memory_high_share": 0.3}}
+
+    monkeypatch.setattr(agent, "call", call)
+    assert agent.main([]) == 0
+    assert sent == [("/v1/server/beat", {"seats": {"1": {"up": True}}, "server": {"memory_mb": 7812},
+                                         "places": {"1": {"mem_mb": 812, "mem_peak_mb": 1630, "disk_mb": 900,
+                                                          "disk": "ok"}}})]
+    assert steps == [("settled", 7812), ("settled", 7812), "zram"]
+    assert json.loads((tmp_path / "settings.json").read_text()) == {"memory_high_share": 0.3}
+
+
+def test_a_long_order_keeps_the_server_beating(tmp_path, monkeypatch):
+    # 2026-11-07: a place's update waits up to 5 minutes for its turns, several in a row; the timer starts no other
+    # run meanwhile and the guichet takes 10 minutes of silence for down. The run beats again from a thread.
+    import time
+    agent = _seat_agent()
+    conf = tmp_path / "guichet.json"
+    conf.write_text('{"url": "https://g", "token": "t", "server": "vps-1"}')
+    for name, value in (("CONF", conf), ("SETTINGS", tmp_path / "settings.json"), ("DONE", tmp_path / "done")):
+        monkeypatch.setattr(agent, name, str(value))
+    monkeypatch.setattr(agent, "BEAT_EVERY", 0.1)
+    monkeypatch.setattr(agent, "health", lambda: {"1": {"up": True}, "2": {"up": True}})
+    monkeypatch.setattr(agent, "vitals", lambda: {"memory_mb": 7812})
+    monkeypatch.setattr(agent, "places_memory", lambda: {"1": {"mem_mb": 812}})
+    monkeypatch.setattr(agent, "places_activity", lambda memory: memory)
+    monkeypatch.setattr(agent, "memory_settled", lambda server: None)
+    monkeypatch.setattr(agent, "disk_settled", lambda: {"1": {"disk_mb": 900}})
+    monkeypatch.setattr(agent, "zram", lambda: None)
+    monkeypatch.setattr(agent, "add_moves", lambda beat: beat.__setitem__("moves", {"m1": {"phase": "copy"}}))
+    monkeypatch.setattr(agent, "verified", lambda body, signature: True)
+    monkeypatch.setattr(agent, "accepted", lambda order, server, done, now: json.loads(order["body"]))
+    updated = []
+    monkeypatch.setattr(agent, "update_order", lambda seat, commit: updated.append(seat) or time.sleep(0.35) or True)
+    orders = [{"id": n, "body": json.dumps({"action": "update", "seat": n, "commit": "a" * 40}), "signature": "s"}
+              for n in (1, 2)]
+    sent = []
+
+    def call(conf, method, path, body=None):
+        sent.append((path, body))
+        return {"orders": orders if len(sent) == 1 else [{"id": 99}], "settings": {}}
+
+    monkeypatch.setattr(agent, "call", call)
+    assert agent.main([]) == 0
+    assert updated == [1, 2]   # the later beats' orders are left: the first beat's are done
+    paths = [path for path, _ in sent]
+    assert paths[0] == "/v1/server/beat" and sent[0][1]["moves"] == {"m1": {"phase": "copy"}}
+    first_done, second_done = paths.index("/v1/server/orders/1/done"), paths.index("/v1/server/orders/2/done")
+    # during each place's update, and between them: beats again, without the moves (the run's own thread's)
+    assert paths[1:first_done].count("/v1/server/beat") >= 2
+    assert paths[first_done + 1:second_done].count("/v1/server/beat") >= 2
+    again = [body for path, body in sent[1:] if path == "/v1/server/beat"]
+    assert all(body == {"seats": {"1": {"up": True}, "2": {"up": True}}, "server": {"memory_mb": 7812},
+                        "places": {"1": {"mem_mb": 812, "disk_mb": 900}}} for body in again)
+    count = len(sent)
+    time.sleep(0.3)
+    assert len(sent) == count   # the run over: no more beats
+    # a beat that fails never stops the orders
+    agent.log = lambda text: logged.append(text)
+    logged = []
+    with agent.Beating({}, {}, every=0.05, send=lambda: 1 / 0):
+        time.sleep(0.2)
+    assert logged and all(line.startswith("beat between orders not sent") for line in logged)
+
+
+def test_the_beat_carries_the_beta_measures_times_and_counts_only(tmp_path):
+    agent = _seat_agent()
+    home = tmp_path / "bip"
+    data = home / ".local" / "share" / "hermes-bridge"
+    data.mkdir(parents=True)
+    (data / "measures.json").write_text(json.dumps({
+        "guide_message_at": 1793000000.5, "first_accept_at": True, "routine_at": -3,
+        "message_hours": [1793001600, 1792998000, "x", 1793001600], "team_proposed": 2, "team_ticked": 3.0,
+        "team_refused": "1", "text": "never sent"}))
+    assert agent.activity(str(home), now=1793000000)["measures"] == {
+        "guide_message_at": 1793000000.5, "team_proposed": 2, "team_ticked": 3,
+        "message_hours": [1792998000, 1793001600]}
+    (data / "measures.json").write_text("[1]")
+    assert "measures" not in agent.activity(str(home), now=1793000000)
+
+
+def test_the_beat_says_what_each_place_s_bridge_files_say_of_it(tmp_path, monkeypatch):
+    """busy, tz, last_active_at, next_routine_at: read from the bridge's and Hermes' files, left out when unknown."""
+    import os
+    agent = _seat_agent()
+    home = tmp_path / "bip"
+    assert agent.activity(str(home), now=1793000000) == {"busy": False, "own_spaces": 0}
+    state = home / ".local" / "state" / "bipagents"
+    state.mkdir(parents=True)
+    (state / "busy").write_text("1793000000")
+    os.utime(state / "busy", (1792999950, 1792999950))
+    data = home / ".local" / "share" / "hermes-bridge"
+    data.mkdir(parents=True)
+    (data / "time.json").write_text('{"time_zone": "Europe/Paris", "device": "Asia/Tokyo"}')
+    (data / "sleep.json").write_text('{"last": 1792990000.5, "asleep": false}')
+    for agent_name, jobs in (("vie", [{"next_run_at": "2026-10-27T07:00:00+01:00", "enabled": True},
+                                      {"next_run_at": "2026-10-27T05:00:00+01:00", "state": "paused"}]),
+                             ("lea", {"jobs": [{"next_run_at": "2026-10-27T06:30:00+00:00"},
+                                               {"next_run_at": "nonsense"}]})):
+        folder = home / ".hermes" / "profiles" / agent_name / "cron"
+        folder.mkdir(parents=True)
+        (folder / "jobs.json").write_text(json.dumps(jobs))
+    assert agent.activity(str(home), now=1793000000) == {
+        "busy": True, "tz": "Europe/Paris", "last_active_at": "2026-10-26T04:46:40Z",
+        "next_routine_at": "2026-10-27T06:00:00Z", "own_spaces": 0}
+    # a marker the bridge stopped refreshing (it stopped): not busy; a zone that is not one: left out
+    (data / "time.json").write_text('{"time_zone": "", "device": "$(reboot)"}')
+    assert agent.activity(str(home), now=1793000000 + 600) == {
+        "busy": False, "last_active_at": "2026-10-26T04:46:40Z", "next_routine_at": "2026-10-27T06:00:00Z",
+        "own_spaces": 0}
+    # its agents in their own space (a folder with its profiles each; anything else isn't one)
+    for name in ("vie", "ghibli"):
+        (data / "spaces" / name / "profiles").mkdir(parents=True)
+    (data / "spaces" / "half-made").mkdir()
+    assert agent.activity(str(home), now=1793000000 + 600)["own_spaces"] == 2
+    _places(agent, monkeypatch, {"bip": 1000})
+    monkeypatch.setattr(agent.pwd, "getpwnam", lambda name: type("P", (), {"pw_dir": str(home)})()
+                        if name == "bip" else (_ for _ in ()).throw(KeyError(name)))
+    places = agent.places_activity({"1": {"mem_mb": 800, "mem_peak_mb": 900}, "2": {"mem_mb": 0, "mem_peak_mb": 0}})
+    assert places["1"]["mem_mb"] == 800 and "next_routine_at" in places["1"]
+    assert places["2"] == {"mem_mb": 0, "mem_peak_mb": 0}
+
+
+def test_zram_is_set_up_on_a_server_without_it_with_user_data_s_own_settings(tmp_path):
+    import os
+    agent = _seat_agent()
+    data = yaml.safe_load(render("x" * 43))
+    line = next(c for c in data["runcmd"] if "zram-generator.conf" in c)
+    assert "printf '%s'" % agent.ZRAM_CONF.replace("\n", "\\n") in line
+    swaps = tmp_path / "swaps"
+    swaps.write_text("Filename\tType\tSize\tUsed\tPriority\n/swapfile file 2097148 0 -2\n")
+    tried, conf, ran = tmp_path / "lib" / "zram-tried", tmp_path / "zram-generator.conf", []
+
+    def runner(*args):
+        ran.append(args)
+        if args[0] == "systemctl" and args[-1] == "dev-zram0.swap":
+            swaps.write_text(swaps.read_text() + "/dev/zram0 partition 4000000 0 100\n")
+        return 0
+
+    assert agent.zram(str(swaps), str(tried), str(conf), runner) is True
+    assert conf.read_text() == agent.ZRAM_CONF
+    assert ran[:2] == [("modprobe", "zram"), ("apt-get", "install", "-y", "systemd-zram-generator")]
+    # the module kept apart (Ubuntu's cloud kernels): linux-modules-extra for the kernel running, then loaded
+    swaps.write_text("Filename\tType\tSize\tUsed\tPriority\n")
+    tried.unlink()
+    ran.clear()
+    loads = []
+
+    def without_module(*args):
+        ran.append(args)
+        if args[0] == "modprobe":
+            loads.append(1)
+            return 1 if len(loads) == 1 else 0
+        return runner(*args) if args[-1] == "dev-zram0.swap" else 0
+
+    assert agent.zram(str(swaps), str(tried), str(conf), without_module) is True
+    assert ran[:4] == [("modprobe", "zram"), ("apt-get", "install", "-y", "linux-modules-extra-" + os.uname().release),
+                       ("modprobe", "zram"), ("apt-get", "install", "-y", "systemd-zram-generator")]
+    ran.clear()
+    assert agent.zram(str(swaps), str(tried), str(conf), runner) is True and ran == []   # on: nothing more
+    # not possible (apt busy): tried again an hour later, not every two minutes
+    swaps.write_text("Filename\tType\tSize\tUsed\tPriority\n")
+    tried.unlink()
+    assert agent.zram(str(swaps), str(tried), str(conf), lambda *a: ran.append(a) or 1) is False
+    assert agent.zram(str(swaps), str(tried), str(conf), lambda *a: ran.append(a) or 1) is False
+    assert ran == [("modprobe", "zram"), ("apt-get", "install", "-y", "linux-modules-extra-" + os.uname().release)]
+
+
+def test_each_place_s_ai_credit_state_is_written_where_its_bridge_reads_it(tmp_path):
+    """The beat's answer says each place's AI credit state (the guichet's credit_pool.rs); the place's bridge pauses its
+    routines, browser and background tasks while it is "full" or "stopped" (bridge-rs/src/credit.rs)."""
+    import os
+    agent = _seat_agent()
+    uid, gid = os.getuid(), os.getgid()
+    one, two, three = tmp_path / "bip", tmp_path / "bip2", tmp_path / "bip3"
+    for home in (one, two, three):
+        home.mkdir()
+    homes = {1: (str(one), uid, gid), 2: (str(two), uid, gid), 3: (str(three), uid, gid)}
+    agent.keep_credit({"orders": []}, homes)   # an older guichet: nothing written
+    assert not (one / agent.CREDIT).exists()
+    agent.keep_credit({"credit": {"1": {"state": "full", "resumes": 1793491200},
+                                  "2": {"state": "ok", "resumes": 1793491200},
+                                  "3": {"state": "$(reboot)"}}}, homes)
+    assert json.loads((one / agent.CREDIT).read_text()) == {"state": "full", "resumes": 1793491200.0}
+    assert json.loads((two / agent.CREDIT).read_text())["state"] == "ok"
+    assert not (three / agent.CREDIT).exists()
+    assert oct((one / agent.CREDIT).stat().st_mode & 0o777) == "0o644"
+    # a link the place put there is replaced, never followed
+    target = tmp_path / "elsewhere"
+    target.write_text("keep")
+    os.unlink(two / agent.CREDIT)
+    os.symlink(target, two / agent.CREDIT)
+    agent.keep_credit({"credit": {"2": {"state": "stopped"}}}, homes)
+    assert target.read_text() == "keep"
+    assert json.loads((two / agent.CREDIT).read_text()) == {"state": "stopped"}
+    # a place left out (its subscription over): its file removed, ok
+    assert not (one / agent.CREDIT).exists()
+    assert agent.CREDIT == ".local/state/bipagents/credit.json"
+
+
+def test_a_new_place_gets_the_shared_hermes_and_images_of_its_version_first(tmp_path, monkeypatch):
+    """add-seat.sh runs `seat-agent.py --prepare <version>` before a place's install: root's checkout at that version
+    (main when none is pinned), its ready-made Hermes, its images pulled into the server's store (the nightly pull
+    set up once), so the place's install points at them instead of fetching its own."""
+    import io
+    import os
+    agent = _seat_agent()
+    ran = []
+
+    class Done:
+        returncode = 0
+
+    exists = os.path.exists
+    monkeypatch.setattr(agent.subprocess, "run", lambda args, **kw: ran.append(list(args)) or Done())
+    monkeypatch.setattr(agent, "shared_on", lambda: True)
+    monkeypatch.setattr(agent, "SHARED_REPO", str(tmp_path / "repo"))
+    monkeypatch.setattr(agent, "log", lambda text: None)
+    monkeypatch.setattr(agent, "open", lambda *a, **k: io.StringIO(), raising=False)   # its logs in /var/log
+    monkeypatch.setattr(agent.os.path, "exists", lambda p: False if str(p).endswith("image-views.service") else exists(p))
+    assert agent.main(["--prepare", "main"]) == 0
+    assert ran[0][:4] == ["git", "clone", "--quiet", "--filter=blob:none"]
+    assert ran[0][-2] == "https://github.com/BipAgents/BipAgents.git"
+    assert ran[2][-1] == "origin/stable"                     # the latest: stable where the repository has it
+    assert ran[3][-1] == "origin/stable"
+    assert ran[4] == ["python3", "-m", "bipinstall.shared_hermes", "build"]
+    assert ran[5] == ["python3", "-m", "bipinstall.shared_images", "pull", "--timer"]
+    ran.clear()
+    agent.prepare_shared("a" * 40)
+    assert ran[2][-1] == "a" * 40
+    # a repository without stable (the first one): main
+    ran.clear()
+
+    class Missing:
+        returncode = 1
+
+    monkeypatch.setattr(agent.subprocess, "run", lambda args, **kw: ran.append(list(args)) or (
+        Missing() if "rev-parse" in args else Done()))
+    agent.prepare_shared("main")
+    assert ran[3][-1] == "origin/main"
+    # the commit lives in the organisation's repository (an update order, add-seat.sh's setup): root's checkout there
+    (tmp_path / "repo" / ".git").mkdir(parents=True)
+    ran.clear()
+    new = "https://github.com/BipAgents/BipAgents.git"  # known-public-repos
+    assert agent.main(["--prepare", "b" * 40, new]) == 0
+    assert ran[0] == ["git", "-C", str(tmp_path / "repo"), "remote", "set-url", "origin", new]
+    assert ran[2][-1] == "b" * 40
+    ran.clear()
+    other = "https://github.com/someone/BipAgents.git"  # known-public-repos (not one)
+    assert agent.main(["--prepare", "b" * 40, other]) == 0
+    assert not any("set-url" in args for args in ran), "an unknown repository is never taken"
+    text = (ROOT / "installer" / "cloud" / "add-seat.sh").read_text(encoding="utf-8")
+    prepare = text.index('seat-agent.py" --prepare "${version:-main}" $repo')
+    assert 'pin="${pin}BIPAGENTS_TO_REPO=$repo "' in text   # the version's repository, a known one (case above it)
+    assert text.index("--ceiling") < prepare < text.index("install.sh |")
+
+
+def test_an_update_order_naming_a_repository_moves_the_place_there(tmp_path, monkeypatch):
+    """2026-11-15: an update order may name the public repository its commit lives in (the switch to the BipAgents
+    organisation's, and its way back): root's checkout and the place's install go there (install.sh moves its origin
+    for BIPAGENTS_TO_REPO); an order naming none leaves both where they are."""
+    import io
+    import types
+    agent = _seat_agent()
+    prepared, ran = [], []
+    monkeypatch.setattr(agent.pwd, "getpwnam", lambda user: types.SimpleNamespace(pw_uid=1002, pw_dir=str(tmp_path)))
+    monkeypatch.setattr(agent, "prepare_shared", lambda commit, repo=None: prepared.append((commit, repo)))
+    for name in ("refresh_tools", "shared_gc", "log"):
+        monkeypatch.setattr(agent, name, lambda *a, **k: None)
+    monkeypatch.setattr(agent, "own_disk", lambda user, settings: None)
+    monkeypatch.setattr(agent, "read_json", lambda path: {})
+    monkeypatch.setattr(agent, "open", lambda *a, **k: io.StringIO(), raising=False)
+    monkeypatch.setattr(agent.subprocess, "run", lambda args, **kw: ran.append(list(args)))
+    new, commit = "https://github.com/BipAgents/BipAgents.git", "c" * 40  # known-public-repos
+    assert agent.update_order(2, commit, moves=str(tmp_path / "moves"), home=str(tmp_path), repo=new)
+    assert prepared == [(commit, new)]
+    assert ran[-1][:2] == ["sudo", "-iu"] and "BIPAGENTS_TO=" + commit in ran[-1]
+    assert "BIPAGENTS_TO_REPO=" + new in ran[-1]
+    assert ran[-1].index("BIPAGENTS_TO_REPO=" + new) < ran[-1].index("BipAgents/install.sh")
+    prepared.clear(), ran.clear()
+    assert agent.update_order(2, commit, moves=str(tmp_path / "moves"), home=str(tmp_path))
+    assert prepared == [(commit, None)] and not any(a.startswith("BIPAGENTS_TO_REPO") for a in ran[-1])
+
+
+def test_only_root_may_ask_the_provider_s_metadata_service():
+    """The metadata service serves the first-boot script to anyone on the server for its whole life: the places'
+    accounts (uid 1000 and up), their containers (rootless: sent as their uid) and root's containers (forwarded) are
+    refused, from the first boot on, before any place runs anything; root keeps it (cloud-init, the provider's agents)."""
+    text = TEMPLATE.read_text(encoding="utf-8")
+    data = yaml.safe_load(text)
+    assert "nftables" in data["packages"]
+    files = {f["path"]: f["content"] for f in data["write_files"]}
+    rules = files["/etc/bipagents/metadata-block.nft"]
+    assert rules.startswith("table inet bipagents_metadata\ndelete table inet bipagents_metadata\n")   # reloadable
+    assert "meta skuid >= 1000 ip daddr 169.254.0.0/16 reject" in rules
+    assert "meta skuid >= 1000 ip6 daddr { fd00:ec2::254, fe80::a9fe:a9fe } reject" in rules
+    assert "hook forward" in rules and "ip daddr 169.254.0.0/16 drop" in rules
+    assert "flush ruleset" not in rules   # ufw's own tables stay
+    unit = files["/etc/systemd/system/bipagents-metadata-block.service"]
+    assert "ExecStart=/usr/sbin/nft -f /etc/bipagents/metadata-block.nft" in unit
+    assert "Before=network-pre.target" in unit and "WantedBy=sysinit.target" in unit
+    commands = data["runcmd"]
+    block = commands.index("systemctl enable --now bipagents-metadata-block.service")
+    assert commands.index("systemctl daemon-reload") < block
+    assert block < commands.index("loginctl enable-linger bip")
+    assert block < next(i for i, c in enumerate(commands) if "/install.sh |" in c)
+
+
+def test_the_first_boot_fetches_the_places_setups_once_with_a_one_time_token(tmp_path):
+    """seat-agent.py --bootstrap: the script's one-time token, in IPv4 (the guichet checks the server's address), for
+    each place's setup (root's, 0600) and the seat agent's own token, which replaces the one-time one."""
+    import os
+    import socket
+    import urllib.error
+    agent = _seat_agent()
+    conf = tmp_path / "guichet.json"
+    conf.write_text(json.dumps({"url": "https://g.test", "server": "vps-1", "bootstrap": "once" * 11}))
+    pair = lambda c: c * 43
+    answer = {"server": "vps-1", "token": "t" * 43, "seats": {
+        "1": {"v": 1, "pair": pair("a"), "language": "fr", "profile": "solo",
+              "backup": {"url": "https://g.test/v1/backup/", "token": "b" * 43}},
+        "2": {"v": 1, "pair": pair("c"), "language": "fr", "profile": "solo", "port": 444}}}
+    calls = []
+    real = socket.getaddrinfo
+
+    def caller(c, method, path, body=None):
+        calls.append((c["token"], method, path, socket.getaddrinfo is not real))
+        return answer
+    assert agent.bootstrap(str(conf), str(tmp_path), caller=caller) == 0
+    assert calls == [("once" * 11, "POST", "/v1/server/bootstrap", True)] and socket.getaddrinfo is real
+    first, second = tmp_path / "cloud.json", tmp_path / "cloud2.json"
+    assert json.loads(first.read_text()) == answer["seats"]["1"] and json.loads(second.read_text())["port"] == 444
+    assert all(os.stat(p).st_mode & 0o777 == 0o600 for p in (first, second, conf))
+    assert json.loads(conf.read_text()) == {"url": "https://g.test", "token": "t" * 43, "server": "vps-1"}
+    # Done before: nothing asked again.
+    assert agent.bootstrap(str(conf), str(tmp_path), caller=caller) == 0 and len(calls) == 1
+    # Refused (used before, too late, another address, or not recorded yet): asked again, then given up, nothing
+    # written.
+    folder = tmp_path / "refused"
+    conf.write_text(json.dumps({"url": "https://g.test", "server": "vps-1", "bootstrap": "x" * 43}))
+
+    def refusing(*a, **k):
+        calls.append("refused")
+        raise urllib.error.HTTPError("https://g.test/v1/server/bootstrap", 401, "unknown server", {}, None)
+    assert agent.bootstrap(str(conf), str(folder), tries=3, wait=0, caller=refusing) == 1
+    assert calls.count("refused") == 3 and not folder.exists() and "bootstrap" in json.loads(conf.read_text())
+    # Unreachable: tried again, then given up.
+    tries = []
+
+    def down(*a, **k):
+        tries.append(1)
+        raise OSError("no route")
+    assert agent.bootstrap(str(conf), str(folder), tries=3, wait=0, caller=down) == 1 and len(tries) == 3
+    # An answer that isn't this server's places: nothing written.
+    for wrong in ({"server": "vps-2"}, {"token": "short"}, {"seats": {}}, {"seats": {"2": answer["seats"]["2"]}},
+                  {"seats": {"1": dict(answer["seats"]["1"], port=444)}},
+                  {"seats": {"1": dict(answer["seats"]["1"], pair="a/b" * 15)}},
+                  {"seats": {"1": answer["seats"]["1"], "2": dict(answer["seats"]["2"], port=445)}}):
+        assert agent.bootstrap(str(conf), str(folder), caller=lambda *a, **k: dict(answer, **wrong)) == 1
+        assert not folder.exists()
+
+
+def test_the_seat_agent_waits_for_its_token_and_keeps_the_metadata_block(tmp_path, monkeypatch):
+    agent = _seat_agent()
+    conf = tmp_path / "guichet.json"
+    conf.write_text(json.dumps({"url": "https://g.test", "server": "vps-1", "bootstrap": "o" * 43}))
+    monkeypatch.setattr(agent, "CONF", str(conf))
+    monkeypatch.setattr(agent, "call", lambda *a, **k: (_ for _ in ()).throw(AssertionError("called")))
+    assert agent.main([]) == 0   # first boot not finished: no beat with the one-time token
+    rules = tmp_path / "block.nft"
+    ran = []
+
+    def runner(*args):
+        ran.append(args)
+        return 1 if args[:2] == ("nft", "list") else 0
+    agent.metadata_block(str(rules), runner)
+    assert ran == []   # a server installed before it: nothing to load
+    rules.write_text("table inet bipagents_metadata\n")
+    agent.metadata_block(str(rules), runner)
+    assert ran == [("nft", "list", "table", "inet", "bipagents_metadata"), ("nft", "-f", str(rules))]
+    ran.clear()
+    agent.metadata_block(str(rules), lambda *args: ran.append(args) or 0)
+    assert ran == [("nft", "list", "table", "inet", "bipagents_metadata")]   # there: left as it is
+
+
+def test_an_encrypted_place_s_server_is_hardened_before_any_place_runs():
+    """Audit 2026-10-27, 19: space-hardening.sh ships in the first-boot files and runs as root, after the swap file
+    is made and before any place is installed, whenever a place's setup carries "keys"; a failure installs nothing."""
+    script = ROOT / "installer" / "cloud" / "space-hardening.sh"
+    data = yaml.safe_load(render("A" * 43))
+    files = {f["path"]: f for f in data["write_files"]}
+    shipped = files["/usr/local/lib/bipagents/space-hardening.sh"]
+    assert shipped["content"] == script.read_text(encoding="utf-8") and shipped["permissions"] == "0755"
+    commands = data["runcmd"]
+    hardening = next(c for c in commands if "space-hardening.sh" in c)
+    assert hardening.startswith("if grep -qs '\"keys\"' /etc/bipagents/cloud*.json; then bash ")
+    assert "|| exit 1" in hardening and "|| true" not in hardening
+    swap = next(i for i, c in enumerate(commands) if "mkswap /swapfile" in c)
+    install = next(i for i, c in enumerate(commands) if "/install.sh |" in c)
+    shared = next(i for i, c in enumerate(commands) if "bipinstall.shared_hermes enable" in c)
+    assert swap < commands.index(hardening) < min(install, shared)
+    # add-seat.sh (the other places, and any place installed again later): the same, before its account is made.
+    seat = (ROOT / "installer" / "cloud" / "add-seat.sh").read_text(encoding="utf-8")
+    assert seat.index('space-hardening.sh"') < seat.index("useradd") < seat.index("install.sh")
+
+
+def test_add_seat_installs_no_encrypted_place_when_the_hardening_fails(tmp_path):
+    import shutil
+    import subprocess
+    lib = tmp_path / "lib"
+    lib.mkdir()
+    shutil.copy(ROOT / "installer" / "cloud" / "add-seat.sh", lib / "add-seat.sh")
+    ran = tmp_path / "ran"
+    (lib / "space-hardening.sh").write_text(f"#!/bin/bash\necho hardening >> {ran}\nexit 1\n")
+    setup = tmp_path / "cloud2.json"
+    setup.write_text(json.dumps({"v": 1, "port": 444, "keys": {"url": "https://k", "grant": "{}", "signature": "s",
+                                                                "token": "k" * 43}}))
+    result = subprocess.run(["bash", str(lib / "add-seat.sh"), "2", str(setup)], capture_output=True, text=True)
+    assert result.returncode == 1 and ran.read_text() == "hardening\n"
+    assert "not installed" in result.stderr
+
+
+def test_the_hardening_script_empties_the_old_swap_and_hides_no_failure():
+    text = (ROOT / "installer" / "cloud" / "space-hardening.sh").read_text(encoding="utf-8")
+    swap = text[text.index("# Swap"):text.index("# Core dumps")]
+    assert "|| true" not in swap
+    assert swap.index("swapoff /swapfile") < swap.index("dd if=/dev/zero of=/swapfile") \
+        < swap.index("/dev/mapper/bipswap none swap") < swap.index("swapon /dev/mapper/bipswap")
+    journal = text[text.index("# The journal"):]
+    assert journal.index("Storage=volatile") < journal.index("rm -rf /var/log/journal\n")
+    assert '> "$DONE"' in text
+
+
+def test_the_beat_says_whether_the_server_is_hardened(tmp_path):
+    agent = _seat_agent()
+    meminfo = tmp_path / "meminfo"
+    meminfo.write_text("MemTotal:        8000000 kB\n")
+    done = tmp_path / "space-hardened"
+    assert agent.vitals(str(meminfo), str(tmp_path), str(tmp_path / "up"), str(done))["space_hardened"] is False
+    done.write_text("2026-10-28T10:00:00Z\n")
+    assert agent.vitals(str(meminfo), str(tmp_path), str(tmp_path / "up"), str(done))["space_hardened"] is True

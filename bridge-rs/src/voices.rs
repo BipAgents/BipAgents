@@ -1,0 +1,460 @@
+//! Which voice speaks for what: each agent has a Bip (Pocket) and, when the person has their own voice server, a voice
+//! there; `[voice_server]` says which uses go to the server (the Live, the replies to voice notes, the reading of
+//! messages and reports), the Bip speaks for the rest.
+//!
+//! - `GET  /v1/voices`                  -> the server's voices (the app shows them as « Voix 1, Voix 2… ») and its uses
+//! - `PUT  /v1/voices/uses`             `{"live": true, "replies": false, "reading": true}`
+//! - `PUT  /v1/agents/{id}/voices`      `{"voice": "pocket:galet", "server_voice": "server:fr/af_bella"}`
+
+use axum::extract::{Path, State};
+use axum::response::Response;
+use axum::routing::{get, put};
+use axum::Router;
+use indexmap::IndexMap;
+use serde::Deserialize;
+use serde_json::{json, Value};
+
+use crate::app::AppState;
+use crate::config::{AgentConfig, Config, VOICE_USES};
+use crate::py;
+use crate::voice_speech::pystr;
+use crate::web::{self, ApiResult, FieldError, HttpError, Json, Validate};
+
+/// The agent's voice for `use`: its server voice when that use goes to the server, else its Bip.
+pub fn voice_for(config: &Config, agent: Option<&AgentConfig>, r#use: Option<&str>) -> String {
+    if let (Some(agent), Some(u), Some(server)) = (agent, r#use, config.voice_server.as_ref()) {
+        if VOICE_USES.contains(&u) && server.uses.get(u).copied().unwrap_or(true) {
+            if let Some(voice) = agent.server_voice.as_deref().filter(|v| !v.is_empty()) {
+                return voice.to_string();
+            }
+        }
+    }
+    match agent {
+        Some(agent) => agent.voice.clone().filter(|v| !v.is_empty()).unwrap_or_else(|| default_for(config, agent)),
+        None => config.default_voice.clone(),
+    }
+}
+
+/// The Bip an agent of the apps' `category` gets until one is picked (iOS `AgentCategory.defaultVoice`, Android
+/// `defaultVoice`): the same five Bips speak every language (voices/<language>/).
+pub fn category_bip(category: Option<&str>) -> &'static str {
+    match category.unwrap_or("") {
+        "wellness" => "mousse",
+        "creative" | "learning" => "lumen",
+        "work" | "tech" => "galet",
+        _ => "ours",
+    }
+}
+
+/// A French Bip's id (`pocket:ours`) for `lang`: `pocket:en/ours` (`pocket:ours` in French); another voice, or one
+/// already named with its language, as it is.
+pub fn bip_in(voice: &str, lang: &str) -> String {
+    let Some(name) = voice.strip_prefix(crate::tts::POCKET_PREFIX) else { return voice.to_string() };
+    let lang = crate::souls::agent_language(Some(lang));
+    if name.contains('/') || lang == "fr" {
+        voice.to_string()
+    } else {
+        format!("{}{lang}/{name}", crate::tts::POCKET_PREFIX)
+    }
+}
+
+/// The voice of an agent nobody picked one for: its category's Bip in the language it writes in (2026-10-30: the
+/// agents of an English place spoke with the French Bips, the default `pocket:ours`).
+pub fn default_for(config: &Config, agent: &AgentConfig) -> String {
+    let bip = format!("{}{}", crate::tts::POCKET_PREFIX, category_bip(agent.category.as_deref()));
+    bip_in(&bip, &crate::handback::language_of(config, agent))
+}
+
+/// At start: an agent whose voice is still the untouched French default (the install's, or its category's Bip
+/// without a language) while it writes in another language gets that Bip in its language. A voice the person
+/// picked in the app always carries its language (`pocket:en/...`, AgentVoices.spoken), so it is never changed.
+pub fn heal_defaults(shared: &crate::config::SharedConfig) {
+    let config = shared.get();
+    for agent in config.agents.values() {
+        if agent.host_home.as_deref().is_some_and(|h| !h.is_empty()) {
+            continue;
+        }
+        let Some(voice) = agent.voice.clone().filter(|v| !v.is_empty()) else { continue };
+        let category = format!("{}{}", crate::tts::POCKET_PREFIX, category_bip(agent.category.as_deref()));
+        if voice != config.default_voice && voice != category {
+            continue;
+        }
+        let healed = bip_in(&voice, &crate::handback::language_of(&config, agent));
+        if healed == voice {
+            continue;
+        }
+        if let Some(source) = &config.source_path {
+            let values = [("voice".to_string(), Some(Value::String(healed.clone())))];
+            if let Err(exc) = set_section_keys(source, &format!("agents.{}", agent.name), &values) {
+                tracing::warn!(agent = %agent.name, error = %exc, "default voice not brought to its language");
+                continue;
+            }
+        }
+        let mut changed = agent.clone();
+        changed.voice = Some(healed.clone());
+        shared.put_agent(changed);
+        tracing::info!(agent = %agent.name, voice = %healed, "default voice brought to the agent's language");
+    }
+}
+
+/// The Bip standing in for the agent's server voice when the server fails or is too slow: its own, else its
+/// category's in its language (`default_for`), never the install's French one for an English agent.
+pub fn relay_for(config: &Config, agent: Option<&AgentConfig>) -> Option<String> {
+    let agent = agent?;
+    agent.voice.clone().filter(|v| !v.is_empty()).or_else(|| Some(default_for(config, agent))).filter(|v| v.starts_with("pocket:"))
+}
+
+/// `values` written in the `[header]` table of a TOML file (replaced where they are, else added at its end; the
+/// table is created when missing). None removes a key. Other lines stay as they are.
+pub fn set_section_keys(path: &str, header: &str, values: &[(String, Option<Value>)]) -> anyhow::Result<()> {
+    if !std::path::Path::new(path).exists() {
+        return Err(std::io::Error::from(std::io::ErrorKind::NotFound).into());
+    }
+    // read and written under the config's locks (config::update_source): never two rewrites at once
+    crate::config::update_source(path, |text| Ok(with_section_keys(text, header, values)))?;
+    Ok(())
+}
+
+fn with_section_keys(text: &str, header: &str, values: &[(String, Option<Value>)]) -> String {
+    // Python's read_text translates \r\n and \r (universal newlines) before splitlines
+    let mut lines = pystr::splitlines(text);
+    let title = format!("[{header}]");
+    let start = match lines.iter().position(|line| pystr::strip(line) == title) {
+        Some(i) => i,
+        None => {
+            lines.push(String::new());
+            lines.push(title);
+            lines.len() - 1
+        }
+    };
+    let mut end = (start + 1..lines.len()).find(|&i| pystr::strip(&lines[i]).starts_with('[')).unwrap_or(lines.len());
+    while end > start + 1 && pystr::strip(&lines[end - 1]).is_empty() {
+        end -= 1; // new keys go before the blank lines that end the table
+    }
+    let mut pending: IndexMap<String, Option<Value>> = values.iter().cloned().collect();
+    let mut kept: Vec<String> = Vec::new();
+    for line in &lines[start + 1..end] {
+        let key = if line.contains('=') && !pystr::lstrip(line).starts_with('#') {
+            pystr::strip(line.split('=').next().unwrap_or("")).to_string()
+        } else {
+            String::new()
+        };
+        if let Some(value) = pending.shift_remove(&key) {
+            if let Some(value) = value {
+                kept.push(format!("{key} = {}", toml_value(&value)));
+            }
+        } else {
+            kept.push(line.clone());
+        }
+    }
+    for (key, value) in &pending {
+        if let Some(value) = value {
+            kept.push(format!("{key} = {}", toml_value(value)));
+        }
+    }
+    let mut out: Vec<String> = lines[..start + 1].to_vec();
+    out.extend(kept);
+    out.extend_from_slice(&lines[end..]);
+    let joined = out.join("\n");
+    format!("{}\n", joined.trim_end_matches('\n'))
+}
+
+fn toml_value(value: &Value) -> String {
+    match value {
+        Value::Bool(b) => if *b { "true" } else { "false" }.to_string(),
+        other => py::Dumps::new().unicode().dumps(other), // a TOML basic string for str, a number for int
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct Uses {
+    #[serde(default, deserialize_with = "web::lax::opt_bool")]
+    pub live: Option<bool>,
+    #[serde(default, deserialize_with = "web::lax::opt_bool")]
+    pub replies: Option<bool>,
+    #[serde(default, deserialize_with = "web::lax::opt_bool")]
+    pub reading: Option<bool>,
+}
+
+impl Validate for Uses {}
+
+#[derive(Debug, Deserialize)]
+pub struct AgentAppearance {
+    pub category: String,
+    #[serde(default)]
+    pub color: Option<String>,
+    /// The costume chosen for its Bip (« Tenue »): "" clears it; left out (an older app), it stays.
+    #[serde(default)]
+    pub outfit: Option<String>,
+    /// Event costumes (Halloween, Noël…) on or off for it; left out, it stays.
+    #[serde(default, deserialize_with = "web::lax::opt_bool")]
+    pub costumes: Option<bool>,
+}
+
+pub const COLOR_PATTERN: &str = "^#[0-9A-Fa-f]{6}$";
+
+fn is_color(value: &str) -> bool {
+    // pydantic-core checks patterns with Rust's regex: `$` is the very end
+    let chars: Vec<char> = value.chars().collect();
+    chars.len() == 7 && chars[0] == '#' && chars[1..].iter().all(|c| c.is_ascii_hexdigit())
+}
+
+impl Validate for AgentAppearance {
+    fn validate(&self, errors: &mut Vec<FieldError>) {
+        web::check_max_len(errors, "category", Some(&self.category), 20);
+        web::check_max_len(errors, "outfit", self.outfit.as_deref(), 30);
+        if let Some(color) = &self.color {
+            if !is_color(color) {
+                errors.push(
+                    FieldError::new(
+                        "string_pattern_mismatch",
+                        web::body_loc("color"),
+                        format!("String should match pattern '{COLOR_PATTERN}'"),
+                        json!(color),
+                    )
+                    .with_ctx(json!({"pattern": COLOR_PATTERN})),
+                );
+            }
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AgentVoices {
+    #[serde(default)]
+    pub voice: Option<String>,
+    #[serde(default)]
+    pub server_voice: Option<String>,
+}
+
+impl Validate for AgentVoices {
+    fn validate(&self, errors: &mut Vec<FieldError>) {
+        web::check_max_len(errors, "voice", self.voice.as_deref(), 300);
+        web::check_max_len(errors, "server_voice", self.server_voice.as_deref(), 300);
+    }
+}
+
+fn opt(value: &Option<String>) -> Option<String> {
+    value.clone().filter(|v| !v.is_empty())
+}
+
+fn opt_json(value: &Option<String>) -> Value {
+    value.clone().map(Value::String).unwrap_or(Value::Null)
+}
+
+async fn list_voices(State(state): State<AppState>) -> ApiResult<Response> {
+    let config = state.config();
+    let server = match &config.voice_server {
+        None => Value::Null,
+        Some(server) => json!({"voices": state.tts.server_voices(300.0).await, "uses": server.uses}),
+    };
+    Ok(web::ok(json!({"pocket": state.tts.pocket.is_some(), "server": server})))
+}
+
+async fn set_uses(State(state): State<AppState>, Json(body): Json<Uses>) -> ApiResult<Response> {
+    let config = state.config();
+    if config.voice_server.is_none() {
+        return Err(HttpError::new(409, "no voice server"));
+    }
+    let changed: Vec<(String, bool)> = [("live", body.live), ("replies", body.replies), ("reading", body.reading)]
+        .into_iter()
+        .filter_map(|(k, v)| v.map(|v| (k.to_string(), v)))
+        .collect();
+    if let Some(source) = &config.source_path {
+        let values: Vec<(String, Option<Value>)> = changed.iter().map(|(k, v)| (k.clone(), Some(json!(v)))).collect();
+        let source = source.clone();
+        blocking(move || set_section_keys(&source, "voice_server", &values)).await?;
+    }
+    let uses = state.config.update(|c| match c.voice_server.as_mut() {
+        Some(server) => {
+            for (k, v) in &changed {
+                server.uses.insert(k.clone(), *v);
+            }
+            server.uses.clone()
+        }
+        None => IndexMap::new(),
+    });
+    Ok(web::ok(json!(uses)))
+}
+
+async fn set_agent_voices(
+    State(state): State<AppState>,
+    Path(agent_id): Path<String>,
+    Json(body): Json<AgentVoices>,
+) -> ApiResult<Response> {
+    let config = state.config();
+    let Some(agent) = config.agent(Some(&agent_id)).cloned() else {
+        return Err(HttpError::new(404, "unknown agent"));
+    };
+    let (voice, server_voice) = (opt(&body.voice), opt(&body.server_voice));
+    if let Some(source) = &config.source_path {
+        let values = vec![
+            ("voice".to_string(), voice.clone().map(Value::String)),
+            ("server_voice".to_string(), server_voice.clone().map(Value::String)),
+        ];
+        let (source, header) = (source.clone(), format!("agents.{}", agent.name));
+        blocking(move || set_section_keys(&source, &header, &values)).await?;
+    }
+    let mut changed = agent;
+    changed.voice = voice.clone();
+    changed.server_voice = server_voice.clone();
+    state.config.put_agent(changed);
+    Ok(web::ok(json!({"voice": opt_json(&voice), "server_voice": opt_json(&server_voice)})))
+}
+
+/// The agent's Bip as the person chose it in the app (category, custom colour): every app shows the same one.
+pub(crate) async fn set_agent_appearance(
+    State(state): State<AppState>,
+    Path(agent_id): Path<String>,
+    Json(body): Json<AgentAppearance>,
+) -> ApiResult<Response> {
+    let config = state.config();
+    let Some(agent) = config.agent(Some(&agent_id)).cloned() else {
+        return Err(HttpError::new(404, "unknown agent"));
+    };
+    if !crate::souls::CATEGORIES.contains(&body.category.as_str()) {
+        return Err(HttpError::new(400, "unknown category"));
+    }
+    let category = body.category.clone();
+    let color = body.color.as_deref().filter(|c| !c.is_empty()).map(|c| c.to_uppercase());
+    // Costumes: what the app sent, else what was kept (an app from before the costumes sends neither).
+    let outfit = match &body.outfit {
+        Some(o) => Some(o.trim().to_string()).filter(|o| !o.is_empty()),
+        None => agent.outfit.clone(),
+    };
+    let costumes = body.costumes.or(agent.costumes).filter(|on| !on);
+    keep_appearance(&state, agent, &category, color.clone(), outfit.clone(), costumes).await?;
+    Ok(web::ok(json!({"category": category, "color": opt_json(&color), "outfit": outfit.unwrap_or_default(),
+                      "costumes": costumes.unwrap_or(true)})))
+}
+
+/// An agent's Bip kept (its config section and the live config), its tools in view following its category. Also
+/// used when a project agent is made with the look picked on the hand-over card (project_agent.rs).
+pub(crate) async fn keep_appearance(
+    state: &AppState,
+    agent: crate::config::AgentConfig,
+    category: &str,
+    color: Option<String>,
+    outfit: Option<String>,
+    costumes: Option<bool>,
+) -> ApiResult<crate::config::AgentConfig> {
+    let config = state.config();
+    if let Some(source) = &config.source_path {
+        let values = vec![
+            ("category".to_string(), Some(json!(category))),
+            ("color".to_string(), color.clone().map(Value::String)),
+            ("outfit".to_string(), outfit.clone().map(Value::String)),
+            ("costumes".to_string(), costumes.map(Value::Bool)),
+        ];
+        let (source, header) = (source.clone(), format!("agents.{}", agent.name));
+        blocking(move || set_section_keys(&source, &header, &values)).await?;
+    }
+    let mut changed = agent;
+    changed.category = Some(category.to_string());
+    changed.color = color;
+    changed.outfit = outfit;
+    changed.costumes = costumes;
+    state.config.put_agent(changed.clone());
+    // an agent of no kind of ours (« Autre ») keeps in view what its category's agents do (tool_diet.rs)
+    if let Err(exc) = crate::profile_files::reconcile(&state.config(), &changed) {
+        tracing::warn!(agent = %changed.name, error = %exc, "tools in view not set");
+    }
+    Ok(changed)
+}
+
+async fn blocking(work: impl FnOnce() -> anyhow::Result<()> + Send + 'static) -> ApiResult<()> {
+    Ok(tokio::task::spawn_blocking(work).await.map_err(anyhow::Error::from)??)
+}
+
+/// `voices_router()` (mounted under /v1 with the bridge key).
+pub fn router() -> Router<AppState> {
+    Router::new()
+        .route("/voices", get(list_voices))
+        .route("/voices/uses", put(set_uses))
+        .route("/agents/{agent_id}/voices", put(set_agent_voices))
+        .route("/agents/{agent_id}/appearance", put(set_agent_appearance))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_bips_in_the_agents_language() {
+        assert_eq!(bip_in("pocket:ours", "en"), "pocket:en/ours");
+        assert_eq!(bip_in("pocket:ours", "en-US"), "pocket:en/ours");
+        assert_eq!(bip_in("pocket:galet", "nl"), "pocket:nl/galet");
+        assert_eq!(bip_in("pocket:ours", "fr"), "pocket:ours");
+        assert_eq!(bip_in("pocket:es/ours", "en"), "pocket:es/ours"); // already named with its language
+        assert_eq!(bip_in("5476", "en"), "5476");
+        assert_eq!(category_bip(Some("wellness")), "mousse");
+        assert_eq!(category_bip(Some("tech")), "galet");
+        assert_eq!(category_bip(None), "ours");
+    }
+
+    #[test]
+    fn section_keys_replaced_added_removed() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("b.toml");
+        std::fs::write(&path, "[a]\nx = 1\n\n[agents.w]\nvoice = \"old\"\n# c = 2\nname = \"W\"\n\n[z]\n").unwrap();
+        let p = path.to_str().unwrap();
+        set_section_keys(
+            p,
+            "agents.w",
+            &[
+                ("voice".into(), None),
+                ("server_voice".into(), Some(json!("server:fr/é"))),
+                ("name".into(), Some(json!("V"))),
+            ],
+        )
+        .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "[a]\nx = 1\n\n[agents.w]\n# c = 2\nname = \"V\"\nserver_voice = \"server:fr/é\"\n\n[z]\n"
+        );
+        set_section_keys(p, "voice_server", &[("live".into(), Some(json!(false)))]).unwrap();
+        assert!(std::fs::read_to_string(&path).unwrap().ends_with("[z]\n\n[voice_server]\nlive = false\n"));
+    }
+
+    #[test]
+    fn many_agents_voices_written_at_once_keep_the_file_whole() {
+        // aibox 2026-10-26: the new app set every agent's voice at once and the bridge's config was cut in two
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("bridge.toml");
+        let mut text = String::from("# keys inside: chmod 600.\nbridge_key = \"k\"\nport = 9210\n");
+        for i in 0..12 {
+            text.push_str(&format!("\n[agents.a{i}]\ndisplay_name = \"A{i}\"\nhermes_url = \"http://127.0.0.1:{}\"\n", 8600 + i));
+        }
+        std::fs::write(&path, text).unwrap();
+        let p = path.to_str().unwrap().to_string();
+        let threads: Vec<_> = (0..12)
+            .map(|i| {
+                let p = p.clone();
+                std::thread::spawn(move || {
+                    for round in 0..5 {
+                        let values = [("voice".to_string(), Some(json!(format!("pocket:v{i}-{round}"))))];
+                        set_section_keys(&p, &format!("agents.a{i}"), &values).unwrap();
+                    }
+                })
+            })
+            .collect();
+        for t in threads {
+            t.join().unwrap();
+        }
+        let written = std::fs::read_to_string(&path).unwrap();
+        let data: toml::Value = toml::from_str(&written).expect("still valid TOML");
+        assert_eq!(data["port"].as_integer(), Some(9210));
+        for i in 0..12 {
+            assert_eq!(data["agents"][format!("a{i}")]["voice"].as_str(), Some(format!("pocket:v{i}-4").as_str()));
+        }
+        assert!(written.starts_with("# keys inside: chmod 600."));
+    }
+
+    #[test]
+    fn colors() {
+        assert!(is_color("#a1B2c3"));
+        assert!(!is_color("#a1B2c3\n"));
+        assert!(!is_color("#a1B2c"));
+        assert!(!is_color("a1B2c3f"));
+    }
+}

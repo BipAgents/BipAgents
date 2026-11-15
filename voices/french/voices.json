@@ -1,0 +1,80 @@
+{
+ "engine": "pocket-tts 4.0.1",
+ "states": "2026-10-25: each Bip's state recomputed for Pocket TTS 4.0.1 from its own <voice>_source.wav (this language's clip, never another's: a cross-language clone keeps an accent) with the cloning model kyutai/pocket-tts (CC-BY-4.0), french weights, get_state_for_audio_prompt(truncate=True) then export_model_state; checked by ear and with Whisper (the listening bench of 2026-10-25). The 3.3.0 states are in git history (before 2026-10-25).",
+ "language": "french",
+ "sample_rate": 24000,
+ "design": {
+  "model": "Qwen3-TTS-12Hz-1.7B-VoiceDesign",
+  "text": "Bonjour ! Voici le point de la journée. Tu as trois rendez-vous : le premier à neuf heures trente, avec l'équipe. La météo annonce dix-huit degrés et un peu de pluie en fin d'après-midi, pense au parapluie. Côté sommeil, tu as dormi sept heures, c'est mieux qu'hier. Est-ce que tu veux que je te rappelle la réunion un quart d'heure avant ? Je reste disponible si tu as une question.",
+  "note": "galet, lumen, mousse (07/10/2026) : un seul extrait Qwen de 22 à 27 s par voix, description « petite mascotte », choisi parmi 18 candidates ; ours et colibri (04/10/2026) : extrait court de 5 à 8 s"
+ },
+ "measurement_note": "first_sound_s = premier octet PCM de POST /v1/audio/stream du serveur pocket/pocket_server.py (--quantize, 8 fils, Ryzen AI Max+ 395), médiane de 3 essais ; rtf = vitesse par rapport au temps réel — measured with pocket-tts 3.3.0's states (2026-10-15)",
+ "voices": {
+  "galet": {
+   "description": "Petite mascotte posée, voix médium-grave, nette et assurée, débit régulier, ton de guide calme qui explique clairement.",
+   "design_instruct": "Voix de petite mascotte posée, médium-grave, nette et assurée, débit régulier, ton de guide calme qui explique clairement, timbre légèrement stylisé comme un personnage d'animation, jamais robotique, enregistrement studio sans écho.",
+   "seed": 20201,
+   "candidate": "galet_c1",
+   "source_s": 8.11,
+   "safetensors_bytes": 5113656,
+   "short_prompt": {
+    "from_source_s": 26.1,
+    "window_s": [
+     12.01,
+     20.12
+    ],
+    "frames": 104,
+    "old_frames": 328
+   }
+  },
+  "lumen": {
+   "description": "Petite mascotte claire et lumineuse, voix médium, très articulée, neutre et efficace, débit régulier, idéale pour lire des informations.",
+   "design_instruct": "Voix de petite mascotte claire et lumineuse, médium, très articulée, neutre et efficace, débit régulier, idéale pour lire des informations, timbre légèrement stylisé comme un personnage d'animation, jamais robotique, enregistrement studio sans écho.",
+   "seed": 20303,
+   "candidate": "lumen_c3",
+   "source_s": 7.93,
+   "safetensors_bytes": 4966200,
+   "short_prompt": {
+    "from_source_s": 22.0,
+    "window_s": [
+     10.61,
+     18.54
+    ],
+    "frames": 101,
+    "old_frames": 276
+   }
+  },
+  "mousse": {
+   "description": "Petite mascotte ronde et légère, voix médium, souriante mais sobre, chaleureuse, débit naturel, articulation nette.",
+   "design_instruct": "Voix de petite mascotte ronde et légère, médium, souriante mais sobre, chaleureuse, débit naturel, articulation nette, timbre légèrement stylisé comme un personnage d'animation, jamais robotique, enregistrement studio sans écho.",
+   "seed": 20502,
+   "candidate": "mousse_c2",
+   "source_s": 8.05,
+   "safetensors_bytes": 5064504,
+   "short_prompt": {
+    "from_source_s": 22.9,
+    "window_s": [
+     11.53,
+     19.58
+    ],
+    "frames": 103,
+    "old_frames": 288
+   }
+  },
+  "ours": {
+   "description": "Grand ours en peluche calme, voix grave et douce, rassurante, débit lent.",
+   "source_s": 6.5,
+   "safetensors_bytes": 3786544,
+   "first_sound_s": 0.087,
+   "rtf": 9.58
+  },
+  "colibri": {
+   "description": "Petit oiseau vif et enjoué, voix claire et légère, médium, chantante, débit rapide et précis, jamais stridente.",
+   "source_s": 5.6,
+   "safetensors_bytes": 3491632,
+   "first_sound_s": 0.085,
+   "rtf": 9.22
+  }
+ },
+ "prompts": "2026-11-04: the Bips whose clip ran 20-26 s (english: all five; french: galet, lumen, mousse) cloned again from ~8 s of it (voices/onnx/short_prompts.py: pauses over 0.4 s shortened, a 6.5-9 s window of whole phrases closest to 8 s, pocket-tts 4.0.1 with the same recipe), so they speak as fast as the others on a phone (1.2-1.3x, voices/onnx/bench.py); <voice>_source.wav is that cut clip now, the full clips are in git history (before 2026-11-04); approved by ear by Alex on 2026-11-04. `short_prompt`: the window taken in the full clip (s) and its length in frames."
+}

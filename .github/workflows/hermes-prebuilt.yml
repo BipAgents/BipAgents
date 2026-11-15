@@ -1,0 +1,148 @@
+# The shared Hermes of the offer's servers (installer/bipinstall/shared_hermes.py), built once here instead of on each
+# new server, and published as the release `hermes-<version>`. The version is the one `shared-hermes version` prints:
+# Hermes' pinned commit and a hash of BipAgents' patches (hermes/patches/), so a server finds the release of its own
+# checkout without asking anyone.
+#   hermes-<version>-linux-x86_64.tar.zst    the sealed tree of /opt/bipagents/hermes/<version>, as root builds it
+#   hermes-<version>-linux-aarch64.tar.zst   the same on ARM (Hetzner CAX, Netcup ARM...)
+#   SHA256SUMS                               checked by the server before it unpacks anything
+# The tree is built by the very code a server runs (`shared-hermes enable --no-prebuilt`, as root, Hermes' installer run
+# by its own unprivileged account), at the same path, since its Python environment holds absolute paths. Ubuntu 22.04:
+# what it builds also runs on newer systems (glibc).
+name: Shared Hermes (ready-made)
+
+on:
+  push:
+    branches: [main, pre-test]   # pre-test: each publication (stable only ever takes a pre-tested commit)
+    paths:
+      - "hermes/patches/**"
+      - "installer/bipinstall/hermes.py"
+      - "installer/bipinstall/shared_hermes.py"
+      - ".github/workflows/hermes-prebuilt.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read   # the release job alone may write (it publishes)
+
+concurrency:
+  group: hermes-prebuilt-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  version:
+    name: Version
+    if: github.repository == 'BipAgents/BipAgents'   # servers download from the public repository
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      exists: ${{ steps.exists.outputs.exists }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1   # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0   # v7
+        with:
+          python-version: "3.12"
+      - run: pip install --quiet PyYAML==6.0.3
+      - id: version
+        run: echo "version=$(PYTHONPATH=installer python -m bipinstall.shared_hermes version)" >> "$GITHUB_OUTPUT"
+      - id: exists
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "hermes-${{ steps.version.outputs.version }}" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  build:
+    name: Build ${{ matrix.arch }}
+    needs: version
+    if: needs.version.outputs.exists == 'false'
+    strategy:
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-22.04
+          - arch: aarch64
+            runner: ubuntu-22.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1   # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0   # v7
+        with:
+          python-version: "3.12"
+      - run: pip install --quiet PyYAML==6.0.3
+      # What user-data.yaml installs on a server and Hermes' installer can't (no sudo for its account).
+      - run: sudo apt-get update -q && sudo apt-get install -y -q zstd libatomic1 git curl
+      # Where a server keeps root's BipAgents (user-data.yaml), readable by Hermes' own account: the runner's home isn't
+      # (« can't open patch …: Permission denied », 2026-10-27).
+      - name: Place the repository as a server does
+        run: |
+          sudo mkdir -p /usr/local/lib/bipagents
+          sudo cp -a "$GITHUB_WORKSPACE" /usr/local/lib/bipagents/repo
+          sudo chmod -R a+rX /usr/local/lib/bipagents/repo
+      - name: Build it as a server does
+        working-directory: /usr/local/lib/bipagents/repo
+        run: sudo env PYTHONPATH=installer "$(command -v python)" -m bipinstall.shared_hermes enable --no-prebuilt
+      - name: Check that it runs
+        run: |
+          version="${{ needs.version.outputs.version }}"
+          test -f "/opt/bipagents/hermes/$version/.complete"
+          HERMES_HOME="$(mktemp -d)" "/opt/bipagents/hermes/$version/hermes-agent/.hermes/bin/hermes" --version
+      - name: Pack
+        run: |
+          sudo env PYTHONPATH=installer "$(command -v python)" -m bipinstall.shared_hermes pack out
+          sudo chown -R "$(id -u):$(id -g)" out
+          ls -l out
+          du -sh "/opt/bipagents/hermes/${{ needs.version.outputs.version }}"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9   # v7
+        with:
+          name: hermes-${{ matrix.arch }}
+          path: out/*.tar.zst
+          compression-level: 0   # already zstd
+
+  release:
+    name: Release hermes-${{ needs.version.outputs.version }}
+    needs: [version, build]
+    runs-on: ubuntu-latest
+    # The only job that may write to the repository, and the only one given the release key (the environment's
+    # secrets): it runs none of the build's code (Hermes' installer and its dependencies run in `build`, as root).
+    permissions:
+      contents: write
+    environment: release
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333   # v8
+        with:
+          merge-multiple: true
+      # SHA256SUMS signed with BipAgents' release key (installer/bipinstall/release_key.py checks it against the key
+      # pinned in the checkout): a token that can change a release can't swap an archive and its sum together.
+      - name: Sign
+        env:
+          MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
+          MINISIGN_PASSWORD: ${{ secrets.MINISIGN_PASSWORD }}
+        run: |
+          sha256sum hermes-*.tar.zst > SHA256SUMS
+          # Unsigned, nothing is published: installs refuse a release without SHA256SUMS.minisig, and a published one
+          # isn't built again; while it is missing, servers wait for it, then build that Hermes themselves.
+          if [ -z "$MINISIGN_SECRET_KEY" ]; then
+            echo "::error::No MINISIGN_SECRET_KEY secret: not published (installs refuse an unsigned release). Set it, then re-run this job."
+            exit 1
+          fi
+          sudo apt-get update -q >/dev/null && sudo apt-get install -y -q minisign >/dev/null
+          umask 077
+          printf '%s\n' "$MINISIGN_SECRET_KEY" > "$RUNNER_TEMP/release.key"
+          printf '%s\n' "$MINISIGN_PASSWORD" | minisign -S -s "$RUNNER_TEMP/release.key" -m SHA256SUMS \
+            -t "BipAgents hermes-${{ needs.version.outputs.version }} built from ${GITHUB_SHA::12}"
+          rm -f "$RUNNER_TEMP/release.key"
+          test -s SHA256SUMS.minisig
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "hermes-${{ needs.version.outputs.version }}" hermes-*.tar.zst SHA256SUMS SHA256SUMS.minisig \
+            -R "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --prerelease \
+            --title "Hermes ${{ needs.version.outputs.version }} (shared, ready-made)" \
+            --notes "Hermes at its pinned commit with BipAgents' patches, built from ${GITHUB_SHA::12} for the offer's servers (/opt/bipagents/hermes). \`bipagents shared-hermes build\` fetches it by itself."

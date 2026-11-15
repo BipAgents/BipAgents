@@ -1,0 +1,64 @@
+//! The push-runs group's pure functions against the Python's own results (tests/golden/push_runs.json, frozen:
+//! made by the retired Python bridge): push payloads and previews, FCM data messages, MEDIA lines, the cron
+//! watcher's helpers and the run hub's backlog merging. Outputs are compared as JSON text: key order counts.
+
+use std::collections::VecDeque;
+
+use bipbridge::hermes::SSEEvent;
+use bipbridge::{cronwatch, fcm, media, push, runs, Dict};
+use serde_json::{json, Value};
+
+fn dict(v: &Value) -> Dict {
+    v.as_object().cloned().unwrap_or_default()
+}
+
+fn dicts(v: &Value) -> Vec<Dict> {
+    v.as_array().unwrap().iter().map(dict).collect()
+}
+
+fn run(name: &str, a: &[Value]) -> Value {
+    match name {
+        "silent_payload" => {
+            Value::Object(push::silent_payload(a[0].as_str().unwrap(), a[1].as_str().unwrap(), &dict(&a[2])))
+        }
+        "preview" => json!(push::preview(a[0].as_str().unwrap(), a[1].as_u64().unwrap() as usize)),
+        "data_message" => Value::Object(fcm::data_message(&a[0])),
+        "extract_media" => {
+            let (text, paths) = media::extract_media(a[0].as_str().unwrap());
+            json!([text, paths])
+        }
+        "is_cron_session" => json!(cronwatch::is_cron_session(&dict(&a[0]))),
+        "job_id" => json!(cronwatch::job_id(a[0].as_str().unwrap())),
+        "final_reply" => json!(cronwatch::final_reply(&dicts(&a[0]))),
+        "subtask_report" => json!(cronwatch::subtask_report(&dicts(&a[0]))),
+        "answers_another_agent" => json!(cronwatch::answers_another_agent(&dicts(&a[0]))),
+        "message_text" => json!(cronwatch::message_text(&dict(&a[0]))),
+        "report_line" => json!(cronwatch::report_line(a[0].as_str().unwrap())),
+        "is_bot_chat" => json!(cronwatch::is_bot_chat(&dict(&a[0]))),
+        "append_to_backlog" => {
+            let mut backlog = VecDeque::new();
+            for e in a[0].as_array().unwrap() {
+                let event = SSEEvent::new(e[0].as_str().unwrap(), dict(&e[1]), e[2].as_str().unwrap());
+                runs::append_to_backlog(&mut backlog, &event);
+            }
+            Value::Array(backlog.iter().map(|e| json!([e.r#type, e.data, e.raw])).collect())
+        }
+        "clarify_id" => json!(runs::clarify_id(&dict(&a[0]))),
+        other => panic!("unknown function {other}"),
+    }
+}
+
+#[test]
+fn push_runs_helpers_match_python() {
+    let cases: Vec<Value> = serde_json::from_str(include_str!("golden/push_runs.json")).unwrap();
+    let mut failures = Vec::new();
+    for (i, case) in cases.iter().enumerate() {
+        let name = case["fn"].as_str().unwrap();
+        let got = run(name, case["input"].as_array().unwrap());
+        let (got, expected) = (serde_json::to_string(&got).unwrap(), serde_json::to_string(&case["output"]).unwrap());
+        if got != expected {
+            failures.push(format!("case {i} {name}({}):\n  got      {got}\n  expected {expected}", case["input"]));
+        }
+    }
+    assert!(failures.is_empty(), "{} of {} cases differ:\n{}", failures.len(), cases.len(), failures.join("\n"));
+}

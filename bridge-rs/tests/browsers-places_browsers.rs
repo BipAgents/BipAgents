@@ -1,0 +1,670 @@
+//! tests/test_browsers.py: each agent's visible browser (its container, ports, MCP server, on/off switch).
+//!
+//! Python's `save_agent` / `delete_agent` halves (agents_admin) are checked in the agents group's tests; here the
+//! browser side of a deletion is `browsers::remove`.
+
+mod common;
+
+use std::collections::BTreeMap;
+use std::os::unix::fs::PermissionsExt;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
+
+use bipbridge::agents_admin::pyyaml;
+use bipbridge::agents_admin::Run;
+use bipbridge::browsers::{self, BrowserError, Exec, Host};
+use bipbridge::config::{parse_config, Config};
+use serde_json::{json, Value};
+
+type Commands = Arc<Mutex<Vec<(Vec<String>, BTreeMap<String, String>)>>>;
+
+struct Setup {
+    config: Config,
+    hub: PathBuf,
+    run: Run,
+    commands: Commands,
+    tmp: PathBuf,
+    host: Host,
+    _dir: tempfile::TempDir,
+}
+
+fn setup() -> Setup {
+    let dir = tempfile::tempdir().unwrap();
+    let tmp = dir.path().to_path_buf();
+    let hub = tmp.join(".hermes");
+    std::fs::create_dir_all(hub.join("profiles").join("budget")).unwrap();
+    let config_path = tmp.join("bridge.toml");
+    std::fs::write(&config_path, "# bridge\n").unwrap();
+    let mut data = common::config_dict(&tmp, &common::Urls::default());
+    data["hermes"] = json!({"bin": "/opt/hermes", "home": hub.to_string_lossy(), "hub_url": "http://127.0.0.1:8642",
+                            "isolated": true});
+    data["browser"] = json!({"enabled": true, "runtime": "podman", "root": tmp.join("browsers").to_string_lossy(),
+                             "first_port": 19600, "language": "fr-FR", "timezone": "Europe/Paris", "gpu": "none"});
+    data["agents"]["Budget"] = json!({"hermes_url": "http://127.0.0.1:8642/p/budget", "hermes_key": "b".repeat(32)});
+    let config = parse_config(&data, Some(&config_path.to_string_lossy())).unwrap();
+    let commands: Commands = Arc::default();
+    let seen = commands.clone();
+    let run: Run = Arc::new(move |args: Vec<String>, env: BTreeMap<String, String>| {
+        seen.lock().unwrap().push((args, env));
+        Box::pin(async { Ok(String::new()) })
+    });
+    let host = Host {
+        system: "Linux".into(),
+        runtime: Some("/usr/bin/podman".into()),
+        unit_dir: tmp.join("units"),
+        is_free: Arc::new(|_| true),
+        exec: Arc::new(|_| Box::pin(async { 0 })),
+    };
+    Setup { config, hub, run, commands, tmp, host, _dir: dir }
+}
+
+impl Setup {
+    fn ran(&self) -> Vec<Vec<String>> {
+        self.commands.lock().unwrap().iter().map(|c| c.0.clone()).collect()
+    }
+    fn clear(&self) {
+        self.commands.lock().unwrap().clear();
+    }
+    fn home(&self) -> String {
+        self.hub.to_string_lossy().into_owned()
+    }
+    fn host_free(&self, free: impl Fn(u16) -> bool + Send + Sync + 'static) -> Host {
+        Host { is_free: Arc::new(free), ..self.host.clone() }
+    }
+    async fn setup_budget(&self, host: &Host) -> bipbridge::config::AgentConfig {
+        let agent = self.config.agent(Some("budget")).unwrap().clone();
+        browsers::setup_with(host, &self.config, &agent, &self.run, &self.home()).await.unwrap()
+    }
+}
+
+/// The browser's first use (bip-browser-mcp's first start): its container's unit and Chrome profile written.
+fn first_use(s: &Setup) -> bool {
+    let settings = read_json(&s.tmp.join("browsers/budget/mcp.json"));
+    bipbridge::browser_mcp::write_unit(settings.as_object().unwrap()).unwrap()
+}
+
+fn v(items: &[&str]) -> Vec<String> {
+    items.iter().map(|s| s.to_string()).collect()
+}
+
+/// The agent's Hermes config as the bridge wrote it (`browser.cdp_url`, `mcp_servers.stealth`: no `hermes config set`).
+fn written(s: &Setup) -> Value {
+    let text = std::fs::read_to_string(s.hub.join("profiles/budget/config.yaml")).unwrap_or_default();
+    pyyaml::to_json(&pyyaml::load(&text).unwrap())
+}
+
+fn read_json(path: &Path) -> Value {
+    serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
+}
+
+#[tokio::test]
+async fn an_install_hands_out_only_its_own_range_and_moves_a_browser_from_outside_it() {
+    let mut s = setup();
+    s.config.browser.ports = 4;
+    // a range of its own (19700…): the browsers' DevTools secrets are kept per port for the whole test process, and
+    // its « other » place on 19602 made another test's secret there vanish (a flake of
+    // an_agent_gets_its_own_browser_container_and_desktop, second review of select-option-direct, 14/11)
+    s.config.browser.first_port = 19700;
+    let place = s.tmp.join("browsers").join("budget");
+    std::fs::create_dir_all(place.join("profile")).unwrap();
+    std::fs::write(place.join("profile").join("Cookies"), "kept").unwrap();
+    std::fs::write(place.join("ports.json"), json!({"cdp": 9600, "vnc": 9601}).to_string()).unwrap();
+    let outside: indexmap::IndexMap<String, u16> =
+        [("cdp".to_string(), 9600), ("vnc".to_string(), 9601)].into_iter().collect();
+    assert!(!browsers::in_range(&s.config, &outside));
+    let agent = s.setup_budget(&s.host.clone()).await;
+    assert_eq!(read_json(&place.join("ports.json")), json!({"cdp": 19700, "vnc": 19701}));
+    assert_eq!(agent.desktop_vnc.as_deref(), Some("tcp://127.0.0.1:19701"));
+    assert_eq!(std::fs::read_to_string(place.join("profile").join("Cookies")).unwrap(), "kept");
+    let secret = std::fs::read_to_string(place.join("cdp.token")).unwrap().trim().to_string();
+    assert_eq!(written(&s)["browser"]["cdp_url"], json!(format!("http://127.0.0.1:19700/t/{secret}")));
+    std::fs::create_dir_all(s.tmp.join("browsers").join("other")).unwrap();
+    std::fs::write(
+        s.tmp.join("browsers").join("other").join("ports.json"),
+        json!({"cdp": 19702, "vnc": 19703}).to_string(),
+    )
+    .unwrap();
+    // 19700-19703 all handed out: the range is full
+    assert!(browsers::pick_ports(&s.config, &|_| true).is_err());
+}
+
+#[tokio::test]
+async fn an_agent_gets_its_own_browser_container_and_desktop() {
+    let s = setup();
+    let agent = s.setup_budget(&s.host_free(|p| p != 19600)).await;
+    // Its two local ports (19600 is in use), its VNC password and its Chrome profile, kept apart.
+    let place = s.tmp.join("browsers").join("budget");
+    let ports = read_json(&place.join("ports.json"));
+    assert_eq!(ports, json!({"cdp": 19602, "vnc": 19603}));
+    let password = place.join("vnc.pass");
+    assert_eq!(std::fs::read_to_string(&password).unwrap().trim().len(), 8);
+    assert_eq!(std::fs::metadata(&password).unwrap().permissions().mode() & 0o777, 0o600);
+    // Its container and Chrome profile are only set up at its first use (bip-browser-mcp), not with the agent.
+    let unit_file = s.tmp.join("units").join("bipagents-browser-budget.service");
+    assert!(!place.join("profile").exists() && !unit_file.exists());
+    assert!(!s.ran().iter().any(|c| c[0] == "systemctl"));
+    assert!(first_use(&s) && !first_use(&s)); // written once
+    assert!(place.join("profile").is_dir());
+    // The container: nothing of the host but its profile and password, ports on 127.0.0.1 only.
+    let unit = std::fs::read_to_string(&unit_file).unwrap();
+    let start = unit.lines().find(|l| l.starts_with("ExecStart=")).unwrap();
+    assert!(start.contains("--name bipagents-browser-budget") && start.contains("--cap-drop ALL"));
+    assert!(start.contains(&format!("-v {}/browsers/budget/profile:/home/bip/profile:Z", s.tmp.display())));
+    assert!(start.contains("-p 127.0.0.1:19602:9223 -p 127.0.0.1:19603:5900"));
+    assert!(start.contains("--userns=keep-id:uid=1000,gid=1000") && !start.contains("--device"));
+    assert!(start.contains("--accept-lang=fr-FR,fr") && start.contains("TZ=Europe/Paris"));
+    assert!(start.ends_with(" bipagents-browser"));
+    // Not started with the session: the agent's Hermes pointed at it, its MCP server behind bip-browser-mcp.
+    let ran = s.ran();
+    assert!(!ran
+        .iter()
+        .any(|c| c[..3] == v(&["systemctl", "--user", "enable"])[..] || c.contains(&"start".to_string())));
+    // Its DevTools behind a secret of its own (security audit 2026-10-27, 11 and 21): the bridge's alone, mounted
+    // read-only in the container, in Hermes' URL, shown by the bridge's own connections.
+    let secret_file = place.join("cdp.token");
+    let secret = std::fs::read_to_string(&secret_file).unwrap().trim().to_string();
+    assert!(secret.len() == 64 && secret.bytes().all(|b| b.is_ascii_hexdigit()));
+    assert_eq!(std::fs::metadata(&secret_file).unwrap().permissions().mode() & 0o777, 0o600);
+    assert!(start.contains(&format!("-v {}:/run/bipagents/cdp.token:ro,Z", secret_file.display())));
+    // Its downloads in its profile (the policy written before the unit that mounts it).
+    assert!(place.join("policies").join("bipagents-downloads.json").exists());
+    assert!(start.contains("/etc/opt/chrome/policies/managed/bipagents-downloads.json:ro,Z"));
+    assert_eq!(written(&s)["browser"]["cdp_url"], json!(format!("http://127.0.0.1:19602/t/{secret}")));
+    assert_eq!(browsers::ports_of(&s.config, "budget").unwrap()["cdp"], 19602);
+    assert_eq!(browsers::devtools_secret(19602).as_deref(), Some(&*secret));
+    let mcp = written(&s)["mcp_servers"]["stealth"].clone();
+    assert_eq!(
+        mcp,
+        json!({"command": browsers::proxy_binary(), "connect_timeout": 90, "timeout": 120,
+                            "args": [place.join("mcp.json").to_string_lossy()],
+                            "tools": {"exclude": ["get_instance_state"]}})
+    );
+    assert!(mcp["command"].as_str().unwrap().ends_with("bip-browser-mcp"));
+    let proxy = read_json(&place.join("mcp.json"));
+    assert_eq!(
+        proxy["server"],
+        json!(["/usr/bin/podman", "exec", "-i", "bipagents-browser-budget", "/opt/stealth/mcp.sh"])
+    );
+    assert_eq!(
+        proxy["start"].as_array().unwrap()[1..],
+        json!(["--user", "start", "bipagents-browser-budget"]).as_array().unwrap()[..]
+    );
+    assert_eq!(
+        proxy["stop"].as_array().unwrap()[1..],
+        json!(["--user", "stop", "bipagents-browser-budget"]).as_array().unwrap()[..]
+    );
+    assert_eq!(proxy["idle"], 600);
+    assert_eq!(proxy["after_run"], 480);
+    assert_eq!(proxy["ended"], json!(place.join("ended").to_string_lossy()));
+    assert_eq!(proxy["rescue"], json!(place.join("rescue").to_string_lossy())); // the brake's rescue turn (runs.rs)
+    assert_eq!(proxy["cdp_port"], 19602);
+    assert_eq!(proxy["busy"], json!(place.join("busy").to_string_lossy()));
+    assert_eq!(proxy["unit"]["path"], json!(unit_file.to_string_lossy()));
+    assert_eq!(proxy["unit"]["text"], json!(unit));
+    assert_eq!(proxy["reload"].as_array().unwrap()[1..], json!(["--user", "daemon-reload"]).as_array().unwrap()[..]);
+    assert_eq!(proxy["shared_cache"], json!(s.tmp.join("browsers/mcp-cache.json").to_string_lossy()));
+    for (args, env) in s.commands.lock().unwrap().iter() {
+        if args[0] == "/opt/hermes" {
+            assert_eq!(env, &BTreeMap::from([("HERMES_HOME".to_string(), s.home())]));
+        }
+    }
+    let skill = s.hub.join("profiles/budget/skills/visible-browser/SKILL.md");
+    assert!(std::fs::read_to_string(skill).unwrap().starts_with("---"));
+    // Of Hermes' own browser tools only the vault's stay: it browses in the browser « Bureau » shows.
+    assert!(browsers::vault_only(&s.home(), "budget"));
+    // The app's « Bureau »: the bridge logs in to its VNC server.
+    assert_eq!(agent.desktop_vnc.as_deref(), Some("tcp://127.0.0.1:19603"));
+    assert_eq!(agent.desktop_vnc_password_file.as_deref(), Some(&*password.to_string_lossy()));
+    // A second agent takes the next ports; setting one up again keeps its own.
+    let next = browsers::pick_ports(&s.config, &|_| true).unwrap();
+    assert_eq!((next["cdp"], next["vnc"]), (19600, 19601));
+    s.clear();
+    s.setup_budget(&s.host).await;
+    assert_eq!(read_json(&place.join("ports.json")), ports);
+    // its secret kept (a running container has it mounted)
+    assert_eq!(std::fs::read_to_string(&secret_file).unwrap().trim(), secret);
+    assert!(s.ran().contains(&v(&["systemctl", "--user", "disable", "bipagents-browser-budget"])));
+    assert!(!s.ran().contains(&v(&["systemctl", "--user", "restart", "bipagents-browser-budget"])));
+    // A unit written by an earlier bridge (a 1600×900 window): rewritten, and its container restarted with these flags.
+    std::fs::write(
+        &unit_file,
+        std::fs::read_to_string(&unit_file).unwrap().replace("--start-maximized", "--window-size=1600,900"),
+    )
+    .unwrap();
+    s.clear();
+    s.setup_budget(&s.host).await;
+    let text = std::fs::read_to_string(&unit_file).unwrap();
+    assert!(text.contains("--start-maximized") && !text.contains("--window-size"));
+    assert!(s.ran().contains(&v(&["systemctl", "--user", "try-restart", "bipagents-browser-budget"])));
+}
+
+#[tokio::test]
+async fn a_browser_kept_running() {
+    let mut s = setup();
+    s.config.browser.idle_minutes = 0;
+    s.setup_budget(&s.host.clone()).await;
+    let ran = s.ran();
+    assert!(ran.contains(&v(&["systemctl", "--user", "enable", "--now", "bipagents-browser-budget"])));
+    let mcp = written(&s)["mcp_servers"]["stealth"].clone();
+    assert_eq!(mcp["command"], "/usr/bin/podman");
+    assert_eq!(mcp["args"], json!(["exec", "-i", "bipagents-browser-budget", "/opt/stealth/mcp.sh"]));
+}
+
+#[tokio::test]
+async fn the_brakes_rescue_turn_is_told_to_the_agents_browser() {
+    // runs.rs `loop_rescue` (token lab of 2026-11-07): bip-browser-mcp refuses page reads until the deadline written.
+    let mut s = setup();
+    let rescue = s.tmp.join("browsers").join("budget").join("rescue");
+    // a browser never set up (no folder): nothing written
+    assert!(!browsers::rescue_started(&s.config, "budget", 4.0e9));
+    assert!(!rescue.exists());
+    s.setup_budget(&s.host.clone()).await;
+    assert!(browsers::rescue_started(&s.config, "budget", 1_794_047_391.6));
+    assert_eq!(std::fs::read_to_string(&rescue).unwrap(), "1794047392\n");
+    browsers::rescue_ended(&s.config, "budget");
+    assert!(!rescue.exists());
+    browsers::rescue_ended(&s.config, "budget"); // already gone: nothing to do
+                                                 // a browser kept running is driven without bip-browser-mcp: no file
+    s.config.browser.idle_minutes = 0;
+    assert!(!browsers::rescue_started(&s.config, "budget", 4.0e9));
+    assert!(!rescue.exists());
+}
+
+#[tokio::test]
+async fn deleting_the_agent_removes_its_browser() {
+    let s = setup();
+    s.setup_budget(&s.host).await;
+    first_use(&s);
+    s.clear();
+    browsers::remove_with(&s.host, &s.config, "budget", &s.run).await.unwrap();
+    let ran = s.ran();
+    assert!(ran.contains(&v(&["systemctl", "--user", "disable", "--now", "bipagents-browser-budget"])));
+    assert!(ran.contains(&v(&["/usr/bin/podman", "rm", "-f", "bipagents-browser-budget"])));
+    assert!(!s.tmp.join("browsers").join("budget").exists());
+    assert!(!s.tmp.join("units").join("bipagents-browser-budget.service").exists());
+}
+
+#[test]
+fn downloads_go_to_the_profile_through_a_read_only_policy() {
+    let s = setup();
+    let place = s.tmp.join("browsers").join("budget");
+    std::fs::create_dir_all(place.join("profile")).unwrap();
+    // written by the setup before any unit mounts it (and by bip-browser-mcp's first-use unit, and at each start)
+    browsers::write_downloads_policy(&place).unwrap();
+    let policy = place.join("policies").join("bipagents-downloads.json");
+    assert_eq!(
+        read_json(&policy),
+        json!({"DownloadDirectory": "/home/bip/profile/Downloads", "PromptForDownloadLocation": false,
+               "DefaultAutomaticDownloadsSetting": 1, "GenAILocalFoundationalModelSettings": 1,
+               "ComponentUpdatesEnabled": false, "TranslateEnabled": false})
+    );
+    let ports = [("cdp".to_string(), 1), ("vnc".to_string(), 2)].into_iter().collect();
+    let args = browsers::run_args(&s.config, "budget", &ports, "/usr/bin/podman", false, None);
+    for dir in ["/etc/opt/chrome/policies/managed", "/etc/chromium/policies/managed"] {
+        let mount = format!("{}:{dir}/bipagents-downloads.json:ro,Z", policy.to_string_lossy());
+        assert!(args.contains(&mount), "{args:?}");
+    }
+    assert_eq!(browsers::downloads_dir(&s.config, "budget"), place.join("profile").join("Downloads"));
+    // The latest finished downloads, as the agent sees them; never a partial one, a hidden one or a link; the old
+    // ones removed.
+    let downloads = browsers::downloads_dir(&s.config, "budget");
+    std::fs::create_dir_all(&downloads).unwrap();
+    std::fs::write(downloads.join("facture.pdf"), vec![b'x'; 2048]).unwrap();
+    std::fs::write(downloads.join("suite.pdf.crdownload"), "x").unwrap();
+    std::fs::write(downloads.join(".cache"), "x").unwrap();
+    std::os::unix::fs::symlink("/etc/hosts", downloads.join("hosts.pdf")).unwrap();
+    let old = downloads.join("vieux.pdf");
+    std::fs::write(&old, "x").unwrap();
+    let long_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(40 * 86400);
+    std::fs::File::options().write(true).open(&old).unwrap().set_modified(long_ago).unwrap();
+    assert_eq!(browsers::recent_downloads(&s.config, "budget", 8), ["/telechargements/facture.pdf (2 KB)"]);
+    assert!(!old.exists());
+}
+
+#[test]
+fn after_an_update_the_agents_browser_follows_the_bridges_own_proxy() {
+    // 9/11: the wave put the bridge on its new binaries, the agents kept the old version's bip-browser-mcp
+    let s = setup();
+    let new = PathBuf::from("/home/p/.local/share/bipagents/bridge/new/bip-browser-mcp");
+    let old = "/home/p/.local/share/bipagents/bridge/old/bip-browser-mcp";
+    // the profile names the new one, whether the old one is still there or not
+    let mut data = pyyaml::load(&format!("mcp_servers:\n  stealth:\n    command: {old}\n    args: [x]\n")).unwrap();
+    browsers::with_proxy(&mut data, &new.to_string_lossy());
+    assert_eq!(pyyaml::to_json(&data)["mcp_servers"]["stealth"], json!({"command": new.to_string_lossy(), "args": ["x"]}));
+    // a container's own server (no proxy) is left as it is
+    let mut direct = pyyaml::load("mcp_servers:\n  stealth:\n    command: podman\n").unwrap();
+    browsers::with_proxy(&mut direct, &new.to_string_lossy());
+    assert_eq!(pyyaml::to_json(&direct)["mcp_servers"]["stealth"]["command"], "podman");
+    // the running proxies: the agent whose Hermes still runs the old program (or a replaced one) is to restart
+    let settings = s.tmp.join("browsers").join("budget").join("mcp.json").to_string_lossy().into_owned();
+    let proc = |exe: &str, args: &[&str]| (PathBuf::from(exe), args.iter().map(|a| a.to_string()).collect::<Vec<_>>());
+    assert_eq!(browsers::stale_of(&s.config, &new, &[proc(old, &[old, &settings])]), ["budget"]);
+    let replaced = format!("{} (deleted)", new.display());
+    assert_eq!(browsers::stale_of(&s.config, &new, &[proc(&replaced, &[&replaced, &settings])]), ["budget"]);
+    assert!(browsers::stale_of(&s.config, &new, &[proc(&new.to_string_lossy(), &["x", &settings])]).is_empty());
+    // another program, or another install's agent: not this bridge's business
+    assert!(browsers::stale_of(&s.config, &new, &[proc("/usr/bin/python3", &["python3", &settings])]).is_empty());
+    assert!(browsers::stale_of(&s.config, &new, &[proc(old, &[old, "/elsewhere/budget/mcp.json"])]).is_empty());
+    // twice the same agent: once
+    let twice = [proc(old, &[old, &settings]), proc(old, &[old, &settings])];
+    assert_eq!(browsers::stale_of(&s.config, &new, &twice), ["budget"]);
+    // a spare agent (agent_pool.rs): served by the hub's gateway with its own browser, not in [agents]
+    let spare = "agent_0ef89906";
+    let profile = s.hub.join("profiles").join(spare);
+    std::fs::create_dir_all(&profile).unwrap();
+    std::fs::write(profile.join("config.yaml"), format!("mcp_servers:\n  stealth:\n    command: {old}\n")).unwrap();
+    std::fs::write(s.tmp.join("spare-agents.json"), format!(r#"[{{"id": "{spare}", "key": "{}"}}]"#, "s".repeat(32))).unwrap();
+    let spare_settings = s.tmp.join("browsers").join(spare).join("mcp.json").to_string_lossy().into_owned();
+    assert_eq!(browsers::stale_of(&s.config, &new, &[proc(old, &[old, &spare_settings])]), [spare]);
+    browsers::spares_follow(&s.config);
+    let written = pyyaml::to_json(&pyyaml::load(&std::fs::read_to_string(profile.join("config.yaml")).unwrap()).unwrap());
+    if Path::new(&browsers::proxy_binary()).exists() {
+        assert_eq!(written["mcp_servers"]["stealth"]["command"], browsers::proxy_binary());
+    }
+}
+
+#[tokio::test]
+async fn a_spare_cut_short_follows_the_new_proxy_then_goes() {
+    // 12/11 lab: the installer restarted the bridge while a batch of spares was made; agent_06161a63's browser was set
+    // up, the pool file never had it. After the wave the hub's gateway still ran the public release's proxy for it.
+    let s = setup();
+    let new = PathBuf::from("/home/p/.local/share/bipagents/bridge/new/bip-browser-mcp");
+    let old = "/home/p/.local/share/bipagents/bridge/old/bip-browser-mcp";
+    let (cut, pooled, making) = ("agent_06161a63", "agent_1a2b3c4d", "agent_5e6f7a8b");
+    for id in [cut, pooled, making] {
+        let profile = s.hub.join("profiles").join(id);
+        std::fs::create_dir_all(&profile).unwrap();
+        std::fs::write(profile.join("config.yaml"), format!("mcp_servers:\n  stealth:\n    command: {old}\n")).unwrap();
+        std::fs::create_dir_all(s.tmp.join("browsers").join(id)).unwrap();
+    }
+    std::fs::write(s.tmp.join("spare-agents.json"), format!(r#"[{{"id": "{pooled}", "key": "{}"}}]"#, "s".repeat(32))).unwrap();
+    bipbridge::agent_pool::hold(making); // a batch being made now by this bridge: not abandoned
+    // a tombstone (Hermes' profiles/.deleted/) is never an abandoned spare
+    std::fs::create_dir_all(s.hub.join("profiles").join(".deleted").join("agent_99999999")).unwrap();
+    std::fs::create_dir_all(s.hub.join("profiles").join("agent_99999999")).unwrap();
+    assert_eq!(bipbridge::agent_pool::abandoned(&s.config), [cut]);
+    // its proxy is seen as stale (the tick restarts the hub's gateway through a hub agent, once idle)
+    let settings = |id: &str| s.tmp.join("browsers").join(id).join("mcp.json").to_string_lossy().into_owned();
+    let proc = |exe: &str, args: &[&str]| (PathBuf::from(exe), args.iter().map(|a| a.to_string()).collect::<Vec<_>>());
+    assert_eq!(browsers::stale_of(&s.config, &new, &[proc(old, &[old, &settings(cut)])]), [cut]);
+    // and its profile names this bridge's proxy, so the gateway's restart starts the new one
+    browsers::spares_follow(&s.config);
+    let command = |id: &str| {
+        let text = std::fs::read_to_string(s.hub.join("profiles").join(id).join("config.yaml")).unwrap();
+        pyyaml::to_json(&pyyaml::load(&text).unwrap())["mcp_servers"]["stealth"]["command"].clone()
+    };
+    if Path::new(&browsers::proxy_binary()).exists() {
+        assert_eq!(command(cut), browsers::proxy_binary());
+        assert_eq!(command(pooled), browsers::proxy_binary());
+        assert_eq!(command(making), old); // the batch's own, written when made
+    }
+    // then removed as a deleted agent is: its Hermes profile and its browser; the others kept
+    assert_eq!(bipbridge::agent_pool::discard_abandoned(&s.config, &s.run).await, [cut]);
+    let ran = s.ran();
+    assert!(ran.contains(&v(&["/opt/hermes", "profile", "delete", cut, "--yes"])), "{ran:?}");
+    assert!(!ran.iter().any(|c| c.iter().any(|a| a == pooled || a == making)), "{ran:?}");
+    assert!(!s.tmp.join("browsers").join(cut).exists());
+    assert!(s.tmp.join("browsers").join(pooled).exists() && s.tmp.join("browsers").join(making).exists());
+    // once its batch is done, a spare that didn't make it into the pool is abandoned too
+    bipbridge::agent_pool::release(&[making.to_string()]);
+    assert!(bipbridge::agent_pool::abandoned(&s.config).contains(&making.to_string()));
+}
+
+#[test]
+fn a_unit_written_before_the_policy_gets_its_mounts_once() {
+    let place = Path::new("/home/x/.local/share/bipagents/browsers/budget");
+    let old = "ExecStart=/usr/bin/podman run --rm -v /p/profile:/home/bip/profile:Z \
+               -v /p/cdp.token:/run/bipagents/cdp.token:ro,Z -p 127.0.0.1:1:9223 img\n";
+    let new = browsers::with_policy_mounts(old, place).unwrap();
+    let policy = place.join("policies").join("bipagents-downloads.json");
+    assert!(new.contains(&format!(
+        "/p/cdp.token:/run/bipagents/cdp.token:ro,Z -v {}:/etc/opt/chrome/policies/managed/bipagents-downloads.json:ro,Z \
+         -v {}:/etc/chromium/policies/managed/bipagents-downloads.json:ro,Z -p 127.0.0.1:1:9223",
+        policy.display(),
+        policy.display()
+    )));
+    assert_eq!(browsers::with_policy_mounts(&new, place), None); // once
+    assert_eq!(browsers::with_policy_mounts("ExecStart=/usr/bin/podman run img\n", place), None);
+}
+
+#[test]
+fn with_a_gpu_and_docker() {
+    let s = setup();
+    let ports = [("cdp".to_string(), 1), ("vnc".to_string(), 2)].into_iter().collect();
+    let args = browsers::run_args(&s.config, "budget", &ports, "/usr/bin/docker", true, None);
+    assert!(args.contains(&"--device".to_string()) && !args.contains(&"keep-groups".to_string()));
+    assert!(!args.contains(&"--userns=keep-id:uid=1000,gid=1000".to_string()));
+    assert!(args.iter().any(|a| a.contains("--use-angle=vulkan")));
+    assert!(!args.contains(&"--network".to_string()));
+}
+
+#[test]
+fn through_the_agents_proxy_webrtc_kept_to_it() {
+    let s = setup();
+    let ports = [("cdp".to_string(), 9600), ("vnc".to_string(), 9601)].into_iter().collect();
+    let flags = |args: &[String]| -> Vec<String> {
+        let line = args.iter().find(|a| a.starts_with("STEALTH_BROWSER_ARGS=")).unwrap();
+        line["STEALTH_BROWSER_ARGS=".len()..].split(';').map(str::to_string).collect()
+    };
+    // straight out (no isolated sandboxes here): WebRTC limited all the same
+    let direct = browsers::run_args(&s.config, "budget", &ports, "/usr/bin/podman", false, None);
+    assert!(flags(&direct).contains(&browsers::WEBRTC_FLAG.to_string()));
+    assert!(!flags(&direct).iter().any(|f| f.starts_with("--proxy-server")));
+    // no back/forward cache (fix review 11/11, B2: « back » never brings a card payment's page again)
+    assert!(flags(&direct).contains(&"--disable-back-forward-cache".to_string()));
+    // through the proxy: its own address on the browsers' network, Chrome's proxy flag, CONNECT only (no certificate
+    // of ours anywhere)
+    let egress =
+        ("bipagents-browsers:ip=10.233.82.10".to_string(), "--proxy-server=http://10.233.82.2:3128".to_string());
+    let args = browsers::run_args(&s.config, "budget", &ports, "/usr/bin/podman", false, Some(&egress));
+    let at = args.iter().position(|a| a == "--network").unwrap();
+    assert_eq!(args[at + 1], "bipagents-browsers:ip=10.233.82.10");
+    assert!(at + 2 < args.len() && args.last().unwrap() == &s.config.browser.image);
+    assert!(flags(&args).contains(&"--proxy-server=http://10.233.82.2:3128".to_string()));
+    assert!(flags(&args).contains(&browsers::WEBRTC_FLAG.to_string()));
+    assert!(!args.iter().any(|a| a.contains("ignore-certificate") || a.contains("cert")));
+}
+
+#[tokio::test]
+async fn only_on_linux() {
+    let s = setup();
+    let host = Host { system: "Darwin".into(), ..s.host.clone() };
+    let agent = s.config.agent(Some("budget")).unwrap().clone();
+    let err = browsers::setup_with(&host, &s.config, &agent, &s.run, &s.home()).await.unwrap_err();
+    assert!(err.downcast_ref::<BrowserError>().is_some());
+    assert!(s.ran().is_empty());
+}
+
+type Execs = Arc<Mutex<Vec<Vec<String>>>>;
+
+fn recording_exec(screen_up: Arc<Mutex<bool>>) -> (Exec, Execs) {
+    let ran: Execs = Arc::default();
+    let seen = ran.clone();
+    let exec: Exec = Arc::new(move |args: Vec<String>| {
+        seen.lock().unwrap().push(args.clone());
+        let mut up = screen_up.lock().unwrap();
+        if args[..3] == ["systemctl", "--user", "start"] {
+            *up = true;
+        }
+        let code = if *up || args[0] == "systemctl" { 0 } else { 1 };
+        Box::pin(async move { code })
+    });
+    (exec, ran)
+}
+
+#[tokio::test]
+async fn taking_over_the_browser_makes_the_agents_tools_wait() {
+    let s = setup();
+    s.setup_budget(&s.host).await;
+    let (exec, ran) = recording_exec(Arc::new(Mutex::new(true)));
+    let host = Host { exec, ..s.host.clone() };
+    assert_eq!(browsers::hold_with(&host, &s.config, "budget", true).await, browsers::Hold::Done);
+    // Never used: its container set up first. Then its screen checked (a browser stopped while unused starts
+    // again), then the hold.
+    let done = ran.lock().unwrap().clone();
+    assert_eq!(done[0], v(&["systemctl", "--user", "daemon-reload"]));
+    assert!(s.tmp.join("units").join("bipagents-browser-budget.service").exists());
+    assert_eq!(
+        done[1],
+        v(&["/usr/bin/podman", "exec", "bipagents-browser-budget", "test", "-e", "/tmp/.X11-unix/X99"])
+    );
+    // The person's hold, with a token only the bridge knows (its own view of the page still gets through).
+    let token = browsers::hold_token(&s.config, "budget").unwrap();
+    assert_eq!(token.len(), 32);
+    assert_eq!(
+        done.last().unwrap(),
+        &v(&[
+            "/usr/bin/podman",
+            "exec",
+            "bipagents-browser-budget",
+            "sh",
+            "-c",
+            // never over a card payment's hold (security check 11/11, N1)
+            &format!(
+                "[ \"$(head -c 4 /tmp/bipagents-hold 2>/dev/null)\" = card ] && exit 3; umask 077; printf 'human %s' \
+                 {token} > /tmp/bipagents-hold"
+            )
+        ])
+    );
+    let kept = s.tmp.join("browsers").join("budget").join("hold.token");
+    assert_eq!(std::fs::metadata(&kept).unwrap().permissions().mode() & 0o777, 0o600);
+    browsers::hold_with(&host, &s.config, "budget", false).await;
+    assert_eq!(
+        ran.lock().unwrap().last().unwrap().last().unwrap(),
+        "[ -e /tmp/bipagents-hold ] || exit 0; [ \"$(head -c 4 /tmp/bipagents-hold 2>/dev/null)\" = card ] || rm -f \
+         /tmp/bipagents-hold"
+    );
+    assert!(browsers::hold_token(&s.config, "budget").is_none());
+    // no browser of its own
+    assert_eq!(browsers::hold_with(&host, &s.config, "nobody", true).await, browsers::Hold::NoBrowser);
+    assert_eq!(ran.lock().unwrap().len(), 4);
+}
+
+#[tokio::test]
+async fn taking_over_during_a_payment_leaves_its_hold() {
+    // Security check 11/11, N1: the take-over's command finds a payment's flag (exit 3): not taken, no token kept.
+    let s = setup();
+    s.setup_budget(&s.host).await;
+    let seen: Execs = Arc::default();
+    let ran = seen.clone();
+    let exec: Exec = Arc::new(move |args: Vec<String>| {
+        let code = if args.last().is_some_and(|c| c.contains("printf 'human")) { 3 } else { 0 };
+        ran.lock().unwrap().push(args);
+        Box::pin(async move { code })
+    });
+    let host = Host { exec, ..s.host.clone() };
+    assert_eq!(browsers::hold_with(&host, &s.config, "budget", true).await, browsers::Hold::Payment);
+    assert!(browsers::hold_token(&s.config, "budget").is_none());
+    assert!(seen.lock().unwrap().iter().all(|c| !c.last().unwrap().contains("rm -f")));
+}
+
+#[tokio::test]
+async fn the_desktop_wakes_a_stopped_browser() {
+    let s = setup();
+    s.setup_budget(&s.host).await;
+    let (exec, ran) = recording_exec(Arc::new(Mutex::new(false)));
+    let host = Host { exec, ..s.host.clone() };
+    assert!(browsers::wake_with(&host, &s.config, "budget", 60.0).await);
+    assert!(ran.lock().unwrap().contains(&v(&["systemctl", "--user", "start", "bipagents-browser-budget"])));
+    assert!(s.tmp.join("browsers/budget/busy").exists()); // not stopped again right away
+    ran.lock().unwrap().clear();
+    assert!(browsers::wake_with(&host, &s.config, "budget", 60.0).await);
+    assert_eq!(ran.lock().unwrap().len(), 1); // already up: nothing started
+    assert!(!browsers::wake_with(&host, &s.config, "nobody", 60.0).await);
+}
+
+#[tokio::test]
+async fn the_apps_switch_turns_the_browser_off_and_on_keeping_its_profile() {
+    let s = setup();
+    let agent = s.config.agent(Some("budget")).unwrap().clone();
+    let home = s.home();
+    assert_eq!(browsers::state(&home, "budget"), None);
+    assert!(browsers::available_with(&s.host, &s.config));
+    // The first time: set up (its container, its MCP server in the profile).
+    browsers::switch_with(&s.host, &s.config, &agent, true, &s.run, &home).await.unwrap();
+    assert!(written(&s)["mcp_servers"]["stealth"].is_object());
+    first_use(&s);
+    let profile = s.hub.join("profiles/budget/config.yaml"); // what the bridge wrote
+    std::fs::write(&profile, "model:\n  provider: custom\nskills:\n  disabled:\n  - arxiv\nmcp_servers:\n  stealth:\n    command: python3\n    args:\n    - proxy\n").unwrap();
+    assert_eq!(browsers::state(&home, "budget"), Some(true));
+    // Off: its tools and skill off, its Chrome stopped; its profile and its MCP entry stay.
+    s.clear();
+    browsers::switch_with(&s.host, &s.config, &agent, false, &s.run, &home).await.unwrap();
+    let data = pyyaml::to_json(&pyyaml::load(&std::fs::read_to_string(&profile).unwrap()).unwrap());
+    assert_eq!(data["mcp_servers"]["stealth"], json!({"command": "python3", "args": ["proxy"], "enabled": false}));
+    assert_eq!(data["skills"]["disabled"], json!(["arxiv", "visible-browser"]));
+    assert_eq!(data["model"], json!({"provider": "custom"}));
+    let ran = s.ran();
+    assert!(ran.contains(&v(&[
+        "/opt/hermes",
+        "-p",
+        "budget",
+        "tools",
+        "disable",
+        "browser",
+        "--platform",
+        "api_server"
+    ])));
+    assert!(ran.contains(&v(&["systemctl", "--user", "stop", "bipagents-browser-budget"])));
+    assert!(s.tmp.join("browsers/budget/profile").is_dir());
+    assert_eq!(browsers::state(&home, "budget"), Some(false));
+    // On again: instant, nothing set up anew.
+    s.clear();
+    browsers::switch_with(&s.host, &s.config, &agent, true, &s.run, &home).await.unwrap();
+    let data = pyyaml::to_json(&pyyaml::load(&std::fs::read_to_string(&profile).unwrap()).unwrap());
+    assert_eq!(data["mcp_servers"]["stealth"]["enabled"], true);
+    assert_eq!(data["skills"]["disabled"], json!(["arxiv"]));
+    assert_eq!(
+        s.ran(),
+        vec![v(&["/opt/hermes", "-p", "budget", "tools", "enable", "browser", "--platform", "api_server"])]
+    );
+}
+
+#[tokio::test]
+async fn no_browser_to_give_without_the_installers_image() {
+    let mut s = setup();
+    s.config.browser.enabled = false;
+    assert!(!browsers::available_with(&s.host, &s.config));
+    let agent = s.config.agent(Some("budget")).unwrap().clone();
+    let err = browsers::switch_with(&s.host, &s.config, &agent, true, &s.run, &s.home()).await.unwrap_err();
+    assert!(err.downcast_ref::<BrowserError>().is_some());
+    assert!(s.ran().is_empty());
+}
+
+/// The bridge's own DevTools requests show the browser's secret (`X-Bip-Cdp`); its relay lets nothing through
+/// without it (browser/devtools_relay.py; security audit 2026-10-27, 11 and 21).
+#[tokio::test]
+async fn the_bridges_devtools_requests_show_the_browsers_secret() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let s = setup();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let place = s.tmp.join("browsers").join("budget");
+    std::fs::create_dir_all(&place).unwrap();
+    std::fs::write(place.join("ports.json"), json!({"cdp": port, "vnc": port + 1}).to_string()).unwrap();
+    let secret = browsers::ensure_cdp_secret(&place).unwrap();
+    assert_eq!(browsers::ensure_cdp_secret(&place).unwrap(), secret); // made once
+    assert_eq!(browsers::cdp_url(port, &secret), format!("http://127.0.0.1:{port}/t/{secret}"));
+    assert_eq!(browsers::ports_of(&s.config, "budget").unwrap()["cdp"], port);
+    let heard = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut head = Vec::new();
+        let mut buf = [0u8; 4096];
+        while !head.windows(4).any(|w| w == b"\r\n\r\n") {
+            let n = socket.read(&mut buf).await.unwrap();
+            if n == 0 {
+                break;
+            }
+            head.extend_from_slice(&buf[..n]);
+        }
+        let answer = b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n[]";
+        socket.write_all(answer).await.unwrap();
+        String::from_utf8_lossy(&head).to_lowercase()
+    });
+    assert!(bipbridge::desktop_page::tabs(port, None).await.unwrap().is_empty());
+    assert!(heard.await.unwrap().contains(&format!("x-bip-cdp: {secret}")));
+    // a browser without one (set up before it): nothing to show, as before
+    std::fs::remove_file(place.join("cdp.token")).unwrap();
+    browsers::ports_of(&s.config, "budget").unwrap();
+    assert_eq!(browsers::devtools_secret(port), None);
+}
