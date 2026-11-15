@@ -50,7 +50,7 @@ de Hermes qui les branche sur l'api_server, cf. [`hermes-clarify-api.md`](hermes
 ## 3. Le dépôt et Pocket TTS (voix des Bips)
 
 ```bash
-git clone https://github.com/BipAgents/BipAgents ~/BipAgents
+git clone https://github.com/Alexbob0/BipAgents ~/BipAgents
 cd ~/BipAgents/pocket
 python3 -m venv .venv && .venv/bin/pip install -r requirements.txt    # Python ≥ 3.10 (VPS : voir ci-dessous)
 .venv/bin/python pocket_server.py --voices ../voices --languages fr,en,es,de,nl
@@ -93,7 +93,7 @@ cd ~/BipAgents
 key=$(printf '%s' "$(git rev-parse HEAD:bridge-rs)" | sha256sum | cut -c1-12)    # macOS : shasum -a 256
 asset=bipbridge-linux-x86_64.tar.gz    # bipbridge-linux-aarch64.tar.gz (ARM), bipbridge-macos-universal.tar.gz (Mac)
 mkdir -p ~/.local/bin
-curl -fsSL "https://github.com/BipAgents/BipAgents/releases/download/bridge-$key/$asset" | tar -xz -C ~/.local/bin bipbridge bip-browser-mcp
+curl -fsSL "https://github.com/Alexbob0/BipAgents/releases/download/bridge-$key/$asset" | tar -xz -C ~/.local/bin bipbridge bip-browser-mcp
 # Ou le compiler (Rust stable) : cd bridge-rs && cargo build --release && cp target/release/{bipbridge,bip-browser-mcp} ~/.local/bin/
 mkdir -p ~/.config/hermes-ios && chmod 700 ~/.config/hermes-ios
 cp bridge/bridge.example.toml ~/.config/hermes-ios/bridge.toml && chmod 600 ~/.config/hermes-ios/bridge.toml

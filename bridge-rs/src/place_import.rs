@@ -50,7 +50,7 @@ pub const MAX_BYTES: u64 = 10 * (1 << 30);
 pub const SPARE_BYTES: u64 = 2 * (1 << 30);
 pub const FOLDER: &str = ".local/state/bipagents/import";
 pub const UNIT: &str = "bipagents-import";
-pub const INSTALLER: &str = "https://raw.githubusercontent.com/BipAgents/BipAgents/stable/install.sh";
+pub const INSTALLER: &str = "https://raw.githubusercontent.com/Alexbob0/BipAgents/main/install.sh";
 
 pub fn proof(code: &str, parts: &[&str]) -> String {
     pyx::hmac_hex(code.as_bytes(), parts)

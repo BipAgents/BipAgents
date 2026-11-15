@@ -67,8 +67,8 @@ def test_binaries_are_checked_against_the_release_then_kept_two_versions(tmp_pat
     path = rustbridge.fetch(tmp_path, "abc123def456", name, opener)
     assert path.read_bytes() == b"\x7fELF bridge" and path.stat().st_mode & 0o111
     assert (path.parent / "bip-browser-mcp").exists() and not (tmp_path / "evil").exists()
-    assert asked[0] == "https://github.com/BipAgents/BipAgents/releases/download/bridge-abc123def456/SHA256SUMS"
-    assert asked[2] == "https://github.com/BipAgents/BipAgents/releases/download/bridge-abc123def456/SHA256SUMS.minisig"
+    assert asked[0] == "https://github.com/Alexbob0/BipAgents/releases/download/bridge-abc123def456/SHA256SUMS"
+    assert asked[2] == "https://github.com/Alexbob0/BipAgents/releases/download/bridge-abc123def456/SHA256SUMS.minisig"
     with pytest.raises(rustbridge.RustBridgeError, match="doesn't match"):   # signed sums, another archive
         rustbridge.fetch(tmp_path, "000000000002", name, signed_release(signer, b"0" * 64 + f"  {name}".encode(), good))
     with pytest.raises(rustbridge.RustBridgeError, match="isn't out yet"):
