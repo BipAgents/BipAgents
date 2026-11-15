@@ -64,7 +64,7 @@ In the `bip` account:
 
 ```bash
 sudo -iu bip
-curl -fsSL https://raw.githubusercontent.com/BipAgents/BipAgents/stable/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Alexbob0/BipAgents/main/install.sh | bash
 ```
 
 The installer sees it runs on a rented server: no door on a local network, and the model in the cloud is offered
