@@ -43,7 +43,7 @@ Pocket on `:8098`, Hermes api_server on `:8642` (wellness) and `:8644` (vie).
 # 1. The program: a release's archive, or built here (stable Rust)
 cd <repo>
 key=$(printf '%s' "$(git rev-parse HEAD:bridge-rs)" | sha256sum | cut -c1-12)   # macOS: shasum -a 256
-curl -fsSL "https://github.com/BipAgents/BipAgents/releases/download/bridge-$key/bipbridge-linux-x86_64.tar.gz" \
+curl -fsSL "https://github.com/Alexbob0/BipAgents/releases/download/bridge-$key/bipbridge-linux-x86_64.tar.gz" \
   | tar -xz -C ~/.local/bin bipbridge bip-browser-mcp
 # or: (cd bridge-rs && cargo build --release && cp target/release/{bipbridge,bip-browser-mcp} ~/.local/bin/)
 

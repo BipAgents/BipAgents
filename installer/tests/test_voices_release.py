@@ -87,7 +87,7 @@ class GitHub:
         if request.url.host == "api.github.com":
             page = int(request.url.params.get("page", "1"))
             return httpx.Response(200, json=self.listing[page - 1] if page <= len(self.listing) else [])
-        prefix = "/BipAgents/BipAgents/releases/download/"
+        prefix = "/Alexbob0/BipAgents/releases/download/"
         if request.url.host != "github.com" or not request.url.path.startswith(prefix):
             return httpx.Response(404)
         tag, _, asset = request.url.path[len(prefix):].partition("/")
@@ -132,8 +132,8 @@ def test_an_own_install_fetches_its_languages_from_the_latest_release(tmp_path, 
     assert voices.engine_of(target) == "4.0.1" and voices.languages_of(target) == ["fr", "nl"]
     # The newest release of this checkout's Pocket, looked for past a page of the bridge's releases; English and the
     # other assets never fetched.
-    assert github.asked[:2] == ["api.github.com/repos/BipAgents/BipAgents/releases?page=1",
-                                "api.github.com/repos/BipAgents/BipAgents/releases?page=2"]
+    assert github.asked[:2] == ["api.github.com/repos/Alexbob0/BipAgents/releases?page=1",
+                                "api.github.com/repos/Alexbob0/BipAgents/releases?page=2"]
     fetched = sorted(a.rsplit("/", 1)[1] for a in github.asked[2:])
     assert fetched == ["SHA256SUMS", "SHA256SUMS.minisig", "dutch-dut.tar.gz", "french-fre.tar.gz", "index.json",
                        "mimi-aaa.tar.gz"]
