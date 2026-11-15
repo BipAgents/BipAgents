@@ -364,7 +364,7 @@ fournisseur des agents (ou `[notebook] base_url`), sous un plafond mensuel. Jama
 ## 6. Le reste
 
 - **Liens touchés par la personne :** liens des réponses, textes juridiques
-  (`github.com/BipAgents/BipAgents/blob/stable/docs/legal/…`), Hermes Agent et le code source sur GitHub, CC BY 4.0, pages
+  (`github.com/Alexbob0/BipAgents/blob/main/docs/legal/…`), Hermes Agent et le code source sur GitHub, CC BY 4.0, pages
   d’abonnement et d’échange de code de Play. Ils s’ouvrent dans le navigateur ou la boutique ; rien d’autre n’est
   envoyé que l’adresse elle-même.
 - **Commandes d’installation** (`raw.githubusercontent.com/…/install.sh`, `install.ps1`) : affichées, copiées ou

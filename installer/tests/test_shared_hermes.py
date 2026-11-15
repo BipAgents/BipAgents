@@ -436,7 +436,7 @@ def test_the_release_archive_is_named_after_the_version_and_the_processor():
     assert shared_hermes.asset("517b5e10f-abc", "x86_64") == "hermes-517b5e10f-abc-linux-x86_64.tar.zst"
     assert shared_hermes.asset("v", "arm64") == shared_hermes.asset("v", "aarch64") == "hermes-v-linux-aarch64.tar.zst"
     assert shared_hermes.asset("v", "riscv64") is None
-    assert shared_hermes.release_url("v") == "https://github.com/BipAgents/BipAgents/releases/download/hermes-v"
+    assert shared_hermes.release_url("v") == "https://github.com/Alexbob0/BipAgents/releases/download/hermes-v"
 
 
 @needs_zstd

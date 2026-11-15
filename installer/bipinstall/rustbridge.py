@@ -33,10 +33,10 @@ import urllib.request
 from pathlib import Path
 from typing import Callable, List, Optional
 
-from . import public_repo, release_key
+from . import release_key
 
 REPO = Path(__file__).resolve().parents[2]
-SLUG = public_repo.SLUG
+SLUG = "Alexbob0/BipAgents"
 BINARIES = Path(".local") / "share" / "bipagents" / "bridge"
 KEEP = 2                     # binaries kept: this version's and the one before (a quick way back)
 SUMS = "SHA256SUMS"

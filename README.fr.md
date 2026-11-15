@@ -86,13 +86,13 @@ leur mémoire et tes fichiers restent sur ta machine.
    clé d'API) :
 
    ```bash
-   curl -fsSL https://raw.githubusercontent.com/BipAgents/BipAgents/stable/install.sh | bash
+   curl -fsSL https://raw.githubusercontent.com/Alexbob0/BipAgents/main/install.sh | bash
    ```
 
    Sur **Windows 11**, dans PowerShell ouvert en administrateur (il prépare WSL2 et y lance la même installation) :
 
    ```powershell
-   irm https://raw.githubusercontent.com/BipAgents/BipAgents/stable/install.ps1 | iex
+   irm https://raw.githubusercontent.com/Alexbob0/BipAgents/main/install.ps1 | iex
    ```
 
    **🧩 Tu as déjà Hermes Agent ?** La même commande, sur sa machine : elle se branche dessus **sans toucher à ton
