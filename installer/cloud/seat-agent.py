@@ -197,7 +197,7 @@ def reset(number, setup):
 
 SHARED_SETTING = "/etc/bipagents/shared-hermes.json"
 SHARED_REPO = os.path.join(LIB, "repo")   # root's own BipAgents, never a place's (an agent could change those)
-PUBLIC_REPO = "https://github.com/BipAgents/BipAgents.git"
+PUBLIC_REPO = "https://github.com/Alexbob0/BipAgents.git"
 # The public repositories an update order may name (installer/bipinstall/public_repo.py: KNOWN): the guichet moves the
 # places to the BipAgents organisation's through an update, and back; never anywhere else, whatever an order says.
 KNOWN_REPOS = ("https://github.com/Alexbob0/BipAgents.git",  # known-public-repos

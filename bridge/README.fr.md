@@ -45,7 +45,7 @@ tient à jour. Il existe des binaires pour Linux x86_64 et aarch64 (glibc ≥ 2.
 # 1. Le programme : l'archive d'une release, ou compilé ici (Rust stable)
 cd <dépôt>
 key=$(printf '%s' "$(git rev-parse HEAD:bridge-rs)" | sha256sum | cut -c1-12)   # macOS : shasum -a 256
-curl -fsSL "https://github.com/BipAgents/BipAgents/releases/download/bridge-$key/bipbridge-linux-x86_64.tar.gz" \
+curl -fsSL "https://github.com/Alexbob0/BipAgents/releases/download/bridge-$key/bipbridge-linux-x86_64.tar.gz" \
   | tar -xz -C ~/.local/bin bipbridge bip-browser-mcp
 # ou : (cd bridge-rs && cargo build --release && cp target/release/{bipbridge,bip-browser-mcp} ~/.local/bin/)
 

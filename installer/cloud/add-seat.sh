@@ -75,7 +75,7 @@ systemctl start "user@$(id -u "$user").service"
 echo "$(date -u +%FT%TZ) place $n shared start" >> /var/log/bipagents-timeline.log
 [ -f "$here/seat-agent.py" ] && python3 "$here/seat-agent.py" --prepare "${version:-main}" $repo >/dev/null 2>&1
 echo "$(date -u +%FT%TZ) place $n install start" >> /var/log/bipagents-timeline.log
-sudo -iu "$user" bash -c "curl -fsSL https://raw.githubusercontent.com/BipAgents/BipAgents/stable/install.sh | ${pin}bash -s -- --cloud $setup" \
+sudo -iu "$user" bash -c "curl -fsSL https://raw.githubusercontent.com/Alexbob0/BipAgents/main/install.sh | ${pin}bash -s -- --cloud $setup" \
     > "/var/log/bipagents-install$n.log" 2>&1
 echo "$(date -u +%FT%TZ) place $n install done" >> /var/log/bipagents-timeline.log
 # The installer kept the secret for the bridge (deleted once the app has paired); this copy goes.

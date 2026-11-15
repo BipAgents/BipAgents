@@ -10,7 +10,7 @@ name: Bridge binaries (Rust)
 
 on:
   push:
-    branches: [main, rust-bridge, pre-test]   # pre-test: each publication (stable only ever takes a pre-tested commit)
+    branches: [main, rust-bridge, pre-test, stable]   # pre-test: each publication (stable: already built, skipped)
     paths: ["bridge-rs/**", ".github/workflows/bridge-release.yml"]
   workflow_dispatch:
 
@@ -24,7 +24,7 @@ concurrency:
 jobs:
   key:
     name: Release key
-    if: github.repository == 'BipAgents/BipAgents'   # installs download from the public repository
+    if: github.repository == 'Alexbob0/BipAgents'   # installs download from the public repository
     runs-on: ubuntu-latest
     outputs:
       key: ${{ steps.key.outputs.key }}

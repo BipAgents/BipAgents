@@ -1,11 +1,11 @@
 # The agents' container images for the offer's servers (installer/bipinstall/shared_images.py), built here instead
 # of in each account of each server, and pushed to GHCR:
-#   ghcr.io/bipagents/bipagents-browser:<key>        browser/Containerfile, x86_64 and ARM (one manifest list); <key>
+#   ghcr.io/alexbob0/bipagents-browser:<key>        browser/Containerfile, x86_64 and ARM (one manifest list); <key>
 #                                                   is computed like the installer's: sha256 of the tree id of
 #                                                   browser/, 12 characters. Also :<key>-<yyyymmdd> (a way back).
-#   ghcr.io/bipagents/hermes-sandbox:desktop         Hermes' sandbox (docker.io/nousresearch/hermes-sandbox:desktop),
+#   ghcr.io/alexbob0/hermes-sandbox:desktop         Hermes' sandbox (docker.io/nousresearch/hermes-sandbox:desktop),
 #                                                   mirrored: the servers don't depend on Docker Hub's limits.
-#   ghcr.io/bipagents/bipagents-sandbox:<key>        the agents' sandbox: Hermes' plus the styled documents skills'
+#   ghcr.io/alexbob0/bipagents-sandbox:<key>        the agents' sandbox: Hermes' plus the styled documents skills'
 #                                                   Python libraries (sandbox/Containerfile), x86_64 and ARM; <key>
 #                                                   the same hash of sandbox/. Built again when Hermes' image changes.
 # Each night it asks dnf, in the current image, whether Chrome (Chromium on ARM) or Fedora have something new (the same
@@ -16,7 +16,7 @@ name: Server images
 
 on:
   push:
-    branches: [main, pre-test]   # pre-test: each publication (stable only ever takes a pre-tested commit)
+    branches: [main, pre-test, stable]   # pre-test: each publication (stable: already built, skipped)
     paths: ["browser/**", "sandbox/**", ".github/workflows/server-images.yml"]
   schedule:
     - cron: "0 21 * * *"
@@ -36,14 +36,14 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  BROWSER: ghcr.io/bipagents/bipagents-browser
-  AGENT_SANDBOX: ghcr.io/bipagents/bipagents-sandbox
+  BROWSER: ghcr.io/alexbob0/bipagents-browser
+  AGENT_SANDBOX: ghcr.io/alexbob0/bipagents-sandbox
   SANDBOX_BASE: docker.io/nousresearch/hermes-sandbox:desktop
 
 jobs:
   key:
     name: Key, and whether to build
-    if: github.repository == 'BipAgents/BipAgents'
+    if: github.repository == 'Alexbob0/BipAgents'
     runs-on: ubuntu-latest
     outputs:
       key: ${{ steps.key.outputs.key }}
@@ -111,7 +111,7 @@ jobs:
 
   sandbox:
     name: Sandbox mirror
-    if: github.repository == 'BipAgents/BipAgents'
+    if: github.repository == 'Alexbob0/BipAgents'
     runs-on: ubuntu-latest
     steps:
       - name: Copy Hermes' sandbox (every processor it has)
@@ -119,12 +119,12 @@ jobs:
           skopeo copy --all --retry-times 3 \
             --dest-creds "${{ github.actor }}:${{ github.token }}" \
             docker://docker.io/nousresearch/hermes-sandbox:desktop \
-            docker://ghcr.io/bipagents/hermes-sandbox:desktop
+            docker://ghcr.io/alexbob0/hermes-sandbox:desktop
 
   agent-sandbox-key:
     name: Agents' sandbox key, and whether to build
     needs: sandbox
-    if: github.repository == 'BipAgents/BipAgents'
+    if: github.repository == 'Alexbob0/BipAgents'
     runs-on: ubuntu-latest
     outputs:
       key: ${{ steps.key.outputs.key }}
