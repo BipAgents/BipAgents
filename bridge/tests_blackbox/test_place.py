@@ -151,7 +151,7 @@ def test_a_computer_proves_the_code_then_sends_its_export_once(bridges):
     given = bridge.post("/v1/import", headers=AUTH).json()
     assert given["state"] == "waiting" and given["address"] == "203.0.113.7:8701"
     assert given["command"] == f"bipagents send 203.0.113.7:8701 {given['code']}"
-    assert given["command_alone"] == ("curl -fsSL https://raw.githubusercontent.com/BipAgents/BipAgents/stable/install.sh "
+    assert given["command_alone"] == ("curl -fsSL https://raw.githubusercontent.com/Alexbob0/BipAgents/main/install.sh "
                                       f"| bash -s -- send 203.0.113.7:8701 {given['code']}")
     assert abs(given["expires"] - (time.time() + 3600)) < 60
     code = given["code"].replace("-", "")

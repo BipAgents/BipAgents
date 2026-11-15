@@ -5,7 +5,7 @@
 Une commande, lancée dans le compte de la personne à qui sont destinés les agents, sans droits d'administrateur :
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/BipAgents/BipAgents/stable/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Alexbob0/BipAgents/main/install.sh | bash
 ```
 
 Ajouter `--dry-run` pour voir chaque étape et chaque commande sans rien modifier.
@@ -70,7 +70,7 @@ téléphone lui redonne sa clé.
 Windows 11 (22H2 ou plus récent), dans PowerShell ouvert en administrateur :
 
 ```powershell
-irm https://raw.githubusercontent.com/BipAgents/BipAgents/stable/install.ps1 | iex
+irm https://raw.githubusercontent.com/Alexbob0/BipAgents/main/install.ps1 | iex
 ```
 
 Les agents vivent dans **WSL2** (Ubuntu), installés exactement comme sur un serveur Linux — bacs à sable, voix et
@@ -134,7 +134,7 @@ ce que les agents ont manqué, seulement quand il y a quelque chose à ranger et
 
 ## Mettre BipAgents à jour
 
-`bipagents update` (ou `curl -fsSL https://raw.githubusercontent.com/BipAgents/BipAgents/stable/install.sh | bash -s --
+`bipagents update` (ou `curl -fsSL https://raw.githubusercontent.com/Alexbob0/BipAgents/main/install.sh | bash -s --
 update`, comme `bash ~/BipAgents/install.sh update`) met à jour l'installation de ce compte. `bipagents` seul liste ses
 commandes (update, qr, voice, console, hermes-update, bridge, family add, export, resume, send, backup,
 browser-refresh, encrypt, uninstall) ; l'installateur le met dans `~/.local/bin`. Il montre ce qui est nouveau, relance
@@ -171,7 +171,7 @@ de la famille et les connexions des navigateurs.
    et donne son nom à la nouvelle. Même nom et mêmes ports : l'app retrouve ses agents toute seule. Sinon, tu scannes un
    nouveau QR code à la fin.
 3. Copie le fichier sur la nouvelle machine (`scp`), puis lance dessus, dans le compte qui gardera les agents :
-   `curl -fsSL https://raw.githubusercontent.com/BipAgents/BipAgents/stable/install.sh | bash -s -- import <fichier>`. Il
+   `curl -fsSL https://raw.githubusercontent.com/Alexbob0/BipAgents/main/install.sh | bash -s -- import <fichier>`. Il
    demande la phrase secrète et installe BipAgents et Hermes dans les mêmes versions, pour le processeur de cette
    machine. Il remet tout en place en ajustant les chemins, les ports, le nom sur le tailnet et le réseau local,
    démarre tout et vérifie que les agents répondent.
@@ -290,8 +290,8 @@ Ce qui est identique sur chaque serveur est construit une fois par GitHub Action
 | Quoi | Construit par | Où le serveur le prend | Sinon |
 |---|---|---|---|
 | Hermes, partagé par les places du serveur (`shared_hermes.py`) | « Shared Hermes (ready-made) » | release `hermes-<version>`, dépaquetée dans `/opt/bipagents/hermes/<version>` | construit sur le serveur, comme avant |
-| Le navigateur des agents (`browser/`) | « Server images », refait chaque nuit quand Chrome ou Fedora ont du neuf | `ghcr.io/bipagents/bipagents-browser:<clé>` | tiré par le compte, sinon construit par lui |
-| Le bac à sable de Hermes | « Server images » (un miroir) | `ghcr.io/bipagents/hermes-sandbox:desktop` | Docker Hub |
+| Le navigateur des agents (`browser/`) | « Server images », refait chaque nuit quand Chrome ou Fedora ont du neuf | `ghcr.io/alexbob0/bipagents-browser:<clé>` | tiré par le compte, sinon construit par lui |
+| Le bac à sable de Hermes | « Server images » (un miroir) | `ghcr.io/alexbob0/hermes-sandbox:desktop` | Docker Hub |
 | Le bridge | « Bridge binaries (Rust) » | release `bridge-<clé>` | — |
 
 Au premier démarrage, root récupère Hermes et tire les deux images en même temps (`user-data.yaml`) ; chaque place
