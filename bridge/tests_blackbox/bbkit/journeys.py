@@ -25,6 +25,13 @@ from .servers import free_port, wait_until
 
 AGENT = "vie"
 FILES_ROOT = "/home/hermes/.hermes/fichiers"
+# A page that remembers (page_store.rs, J56): a field, « Ajouter », the list kept by the bridge.
+MEMORY_PAGE = ('<h1>Courses</h1><p class="sub">Ce que tu tapes ici est gardé</p>'
+               '<div class="card"><input id="w" aria-label="Article" placeholder="Article"> '
+               '<button id="go">Ajouter</button></div><ul id="l" class="check"></ul>'
+               '<script>function draw(){Bip.rows("#l",Bip.store.items("courses"),function(r){return [r.value]})}'
+               'Bip.store.onChange(draw);document.getElementById("go").onclick=function(){'
+               'var w=document.getElementById("w");if(w.value){Bip.store.add("courses",w.value);w.value=""}}</script>')
 
 
 @dataclass
@@ -94,7 +101,25 @@ def photo(seed: int = 1) -> bytes:
     return tiny_png(256, 256, ((seed * 70) % 256, (120 + seed * 40) % 256, (200 - seed * 30) % 256))
 
 
-def journey_bridge(bridges, fakes, word_gap: float = 0.06, name: str = "journeys") -> Journey:
+def hermes_holds(folder: Path, token: str) -> None:
+    """The journeys' token where an install's Hermes keeps it too: its profile's config.yaml (the bridge's entries,
+    each with the token the bridge minted). The bridge registers an agent's tools again when they change (a tool turned
+    on, a home linked: agent_tools::register_at) and keeps the token Hermes holds; one it does not see there is
+    replaced by a new one, and the journeys' calls as the agent are refused from then on (« unknown agent »: J59–J62
+    after J58's link, J62's Météo, 16/11)."""
+    import yaml
+    path = folder / "config.yaml"
+    data = yaml.safe_load(path.read_text())
+    servers = data["mcp_servers"]
+    minted = servers["bipagents"]["headers"]["Authorization"]
+    for entry in servers.values():
+        if isinstance(entry, dict) and (entry.get("headers") or {}).get("Authorization") == minted:
+            entry["headers"]["Authorization"] = f"Bearer {token}"
+    path.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False))
+
+
+def journey_bridge(bridges, fakes, word_gap: float = 0.06, name: str = "journeys",
+                   family_relay: Optional[str] = None, tool_asks: bool = False) -> Journey:
     from test_connectors import IMAGE, SERVER
     from test_sandbox import TOKENS, isolated, started
     from conftest import profile
@@ -120,12 +145,17 @@ def journey_bridge(bridges, fakes, word_gap: float = 0.06, name: str = "journeys
     bridge.config["lan"] = {"enabled": True, "address": "127.0.0.1", "host": "127.0.0.1", "port": door}
     bridge.config["public_url"] = f"https://127.0.0.1:{door}"
     agent["public_url"] = f"https://127.0.0.1:{door}/hermes/{AGENT}"   # an agent without one is not listed to a phone
+    if family_relay:   # J58: Kerfy Studio's relay, for a home's invitation (bbkit/kerfy_relay.py)
+        bridge.config["family"] = {"relay_url": family_relay}
+    if tool_asks:   # J59–J63: the agent asks for a tool it has off, on a card (tool_asks.rs)
+        bridge.config["tools"] = {"ask_in_conversation": True}
     started(bridge, hub, [AGENT])
     token = TOKENS[AGENT]
     path = bridge.state_dir / "agent-tools.json"
     tokens = json.loads(path.read_text())["tokens"]
     tokens[AGENT] = hashlib.sha256(token.encode()).hexdigest()
     path.write_text(json.dumps({"tokens": tokens}))
+    hermes_holds(profile(hub, AGENT), token)
     main = bridge.get("/v1/threads/main", headers=AUTH, params={"agent": AGENT})
     assert main.status_code == 200, main.text
     journey = Journey(bridge, fakes, None, main.json()["id"], token)   # type: ignore[arg-type]
@@ -137,6 +167,9 @@ def journey_bridge(bridges, fakes, word_gap: float = 0.06, name: str = "journeys
 
     def page_with(run: str, html: str) -> str:
         return journey.mcp("/v1/agent-tools/mcp", "create_page", {"html": html, "title": f"Trajet {run}"})
+
+    def memory_page(run: str) -> str:
+        return journey.mcp("/v1/agent-tools/mcp", "create_page", {"html": MEMORY_PAGE, "title": f"Courses {run}"})
 
     def map_(run: str) -> str:
         try:
@@ -166,7 +199,7 @@ def journey_bridge(bridges, fakes, word_gap: float = 0.06, name: str = "journeys
     inline = os.environ.get("JOURNEYS_PHOTOS") == "inline"
     journey.model = ScriptedModel(fakes.hermes, files, FILES_ROOT, word_gap=word_gap,
                                   calls={"page": page, "map": map_, "secret": secret, "sites": sites,
-                                         "connector": connector, "page_with": page_with},
+                                         "connector": connector, "page_with": page_with, "memory_page": memory_page},
                                   profile=None if inline else profile(hub, AGENT),
                                   profile_seen_as=f"{agent['hermes_home']}/profiles/{AGENT}").install()
     return journey

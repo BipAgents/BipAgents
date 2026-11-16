@@ -39,7 +39,7 @@ def sse(event_type: str, **data: Any) -> str:
 
 def read_sse(resp, timeout: float = 120.0) -> list:
     """(event, data) pairs of an SSE response (httpx streaming response) until it ends; keepalives skipped. A stream
-    that never ends fails after `timeout` s: its keepalives (every 10 s) would keep the client's read timeout from ever
+    that never ends fails after `timeout` s: its keepalives (every 25 s) would keep the client's read timeout from ever
     firing, and the run would hang instead of failing."""
     events, name = [], None
     deadline = time.monotonic() + timeout
@@ -72,18 +72,21 @@ def run_has(bridge, run_id: str, kind: str, agent: str = "wellness", timeout: fl
 
 @contextlib.contextmanager
 def on_screen(bridge, agent: str = "wellness", thread: str = "main"):
-    """The app shows that conversation: its event stream open with `thread=` (presence: nothing pushed for it)."""
-    stop = threading.Event()
+    """The app shows that conversation: its event stream open with `thread=` (presence: nothing pushed for it). Entered
+    once the stream's first line came: the bridge counts the conversation on screen before it answers (a fixed half
+    second was not always enough on a loaded machine, 15/11)."""
+    opened, stop = threading.Event(), threading.Event()
 
     def watch():
         with httpx.Client(base_url=bridge.url, headers=AUTH, timeout=30) as client:
             with client.stream("GET", "/v1/threads/events", params={"agent": agent, "thread": thread}) as resp:
                 for _ in resp.iter_lines():
+                    opened.set()
                     if stop.is_set():
                         return
 
     threading.Thread(target=watch, daemon=True).start()
-    time.sleep(0.5)
+    assert opened.wait(30), "the conversation's event stream never opened"
     try:
         yield
     finally:

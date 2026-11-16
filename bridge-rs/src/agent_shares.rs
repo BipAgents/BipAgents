@@ -44,6 +44,8 @@
 //!     DELETE /family/s/{agent}/conversations/{cid}           409: it is everyone's
 //!     POST   /family/s/{agent}/approval                      {run_id, choice | answer, request_id?}  her turn's cards
 //!     GET    /family/s/{agent}/pages/{page}                  a page of the family's agent
+//!     GET    /family/s/{agent}/pages/{page}/store            its store (page_store.rs), on the same terms;
+//!     POST   /family/s/{agent}/pages/{page}/store            {op…} a write: the family's agent only
 //!
 //! **The relative's side** (Marie's app, her bridge's key; `id` is `<agent>__<household>`, e.g. `cuisine__alex`):
 //!
@@ -878,14 +880,24 @@ pub(crate) fn thread_hints(state: &AppState, thread: String, shown: String) -> R
     let mut events = crate::threads::threads_of(state).subscribe();
     let stream = async_stream::stream! {
         yield Ok::<_, std::io::Error>(Bytes::from_static(b": threads\n\n"));
+        // the keepalive 25 s after the last bytes written, whatever the stream left out meanwhile (review R3, 16/11)
+        let every = Duration::from_secs_f64(crate::app::SSE_KEEPALIVE_SECONDS);
+        let mut due = tokio::time::Instant::now() + every;
         loop {
-            match tokio::time::timeout(Duration::from_secs_f64(crate::app::SSE_KEEPALIVE_SECONDS), events.recv()).await {
-                Err(_) => yield Ok(Bytes::from_static(b": keepalive\n\n")),
+            match tokio::time::timeout_at(due, events.recv()).await {
+                Err(_) => {
+                    due = tokio::time::Instant::now() + every;
+                    yield Ok(Bytes::from_static(b": keepalive\n\n"));
+                }
                 Ok(Ok((_, kind, data))) if kind == "thread" && data.get("thread") == Some(&json!(thread)) => {
+                    due = tokio::time::Instant::now() + every;
                     yield Ok(event_line("thread", &json!({"thread": shown, "version": data.get("version")})));
                 }
                 Ok(Ok(_)) => {}
-                Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(_))) => yield Ok(event_line("lagged", &json!({}))),
+                Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(_))) => {
+                    due = tokio::time::Instant::now() + every;
+                    yield Ok(event_line("lagged", &json!({})));
+                }
                 Ok(Err(tokio::sync::broadcast::error::RecvError::Closed)) => break,
             }
         }
@@ -916,9 +928,15 @@ async fn served_run_events(
 pub(crate) fn turn_words(state: &AppState, agent: &AgentConfig, run_id: &str, prompts: bool, by: Option<Value>) -> Response {
     let mut listener = state.hub.subscribe(agent, run_id, "shared", false);
     let stream = async_stream::stream! {
+        // the keepalive 25 s after the last bytes written, whatever the stream left out meanwhile (review R3, 16/11)
+        let every = Duration::from_secs_f64(crate::app::SSE_KEEPALIVE_SECONDS);
+        let mut due = tokio::time::Instant::now() + every;
         loop {
-            match tokio::time::timeout(Duration::from_secs_f64(crate::app::SSE_KEEPALIVE_SECONDS), listener.queue.recv()).await {
-                Err(_) => yield Ok::<_, std::io::Error>(Bytes::from_static(b": keepalive\n\n")),
+            match tokio::time::timeout_at(due, listener.queue.recv()).await {
+                Err(_) => {
+                    due = tokio::time::Instant::now() + every;
+                    yield Ok::<_, std::io::Error>(Bytes::from_static(b": keepalive\n\n"));
+                }
                 Ok(None) | Ok(Some(None)) => break,
                 Ok(Some(Some(event))) => {
                     let kind = event.r#type.as_str();
@@ -935,6 +953,7 @@ pub(crate) fn turn_words(state: &AppState, agent: &AgentConfig, run_id: &str, pr
                         if let (Some(by), true) = (&by, ["approval.request", "clarify.request"].contains(&kind)) {
                             data.insert("by".into(), by.clone());
                         }
+                        due = tokio::time::Instant::now() + every;
                         yield Ok(event_line(kind, &Value::Object(data)));
                     }
                 }
@@ -1296,6 +1315,7 @@ pub fn household_router() -> Router<AppState> {
         .route("/family/s/{agent}/conversations/{cid}/stop", post(served_stop))
         .route("/family/s/{agent}/approval", post(served_approval))
         .route("/family/s/{agent}/pages/{page}", get(served_page))
+        .merge(crate::page_store::household_router()) // a page's store, on the same terms as the page
         .merge(crate::shared_files::household_router()) // the files she sends in her conversations
         .merge(crate::agent_feed::household_router()) // a personal agent's conversations, read-only
 }
@@ -1741,7 +1761,7 @@ pub async fn relay_stream(state: &AppState, id: &str, cid: &str, path: &str) -> 
         use futures::StreamExt;
         state.presence.touch(&id, &cid);
         while let Some(chunk) = chunks.next().await {
-            state.presence.touch(&id, &cid); // their keepalive every 10 s: still on screen
+            state.presence.touch(&id, &cid); // their keepalive every 25 s (10 s before 16/11): still on screen
             match chunk {
                 Ok(bytes) => {
                     // her turn's end: passed on once the owner's side keeps it over (its reply stored), so the page

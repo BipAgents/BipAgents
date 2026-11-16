@@ -14,6 +14,7 @@ Installed as `FakeHermes.override`, it takes only the runs it starts (every othe
 | (none) | « Bien reçu » and what came: N photos, N documents |
 | `#fichier` | writes a PDF in its files and names it (`MEDIA:` line) |
 | `#page` | makes a page with the bridge's `create_page` tool, names it |
+| `#memoire` | makes a page that remembers (`Bip.store`: a field, « Ajouter », the list) with `create_page`, names it |
 | `#carte` | a map with the bridge's `map_image` tool (else a picture in the maps' folder), names it |
 | `#trajet` | a map with `map_image`, its card pasted into a `create_page` page, names the page only (as agents do) |
 | `#outil` | a tool call (`tool.started` / `tool.completed`, stored as Hermes' tool rows) before its words |
@@ -28,7 +29,7 @@ Installed as `FakeHermes.override`, it takes only the runs it starts (every othe
 | `#reel` | streams as GLM through Hermes: ~1.5 s before the first words, then 1–3 words every 60–200 ms (the same each run), ~50 words, stored with `reasoning` |
 
 `calls`: the agent's own tool calls to the bridge (MCP), given by the harness (`secret`, `sites`, `page`, `map`,
-`page_with`: a page of the given HTML), each a function of the run's words returning the text of its result. They run
+`page_with`: a page of the given HTML, `memory_page`: a page that remembers), each a function of the run's words returning the text of its result. They run
 in the run's thread, while the turn waits."""
 from __future__ import annotations
 
@@ -364,6 +365,13 @@ class ScriptedModel:
             if line:
                 lines.append("J’ai préparé une page.")
                 media.append(line)
+        if "#memoire" in words and "memory_page" in self.calls:
+            made = self.tool(run, "mcp_bipagents_create_page", {"title": f"Courses {run.id}"},
+                             lambda: self.calls["memory_page"](run.id), calls, results)
+            line = self.media_line(made)
+            if line:
+                lines.append("Voici ta liste, elle garde ce que tu y tapes.")
+                media.append(line)
         if "#carte" in words:
             made = self.tool(run, "mcp_bipagents_map_image", {"markers": [{"place": "Tour Eiffel"}], "area": "Paris"},
                              lambda: self.calls["map"](run.id), calls, results) if "map" in self.calls else ""
@@ -478,6 +486,17 @@ def picture(path: Path) -> Path:
 
 # -- the release journeys J32+ (people and this release's features): more markers, in a model of their own ----------
 
+def tool_asked(words: str) -> str:
+    """The tool a `#demande-outil` message asks for (J59–J63)."""
+    if "mails" in words:
+        return "mail"
+    if "meteo" in words or "météo" in words:
+        return "weather"
+    if "calendrier" in words:
+        return "calendar"
+    return "reminders"
+
+
 class PeopleModel(ScriptedModel):
     """The scripted model with this release's turns (test_journeys_people.py, test_journeys_features.py). Every marker
     of `ScriptedModel` still works; these ones call the bridge's own tools as the agent (`calls[name](run)`, the run
@@ -493,10 +512,12 @@ class PeopleModel(ScriptedModel):
 | `#carnet` | reads a page of the Carnet, files a fact, asks the question of the day (`notebook_read`, `notebook_write`) |
 | `#rangement` | files a fact on the Carnet's « Famille » page again (`notebook_write`): J52, after the person moved one like it |
 | `#fichiers` | lists the files everyone sent the agent (`read_sent_file`, no path): J55, a shared agent's pool |
+| `#demande-outil` | asks for a tool it has off (`ask_for_tool`: « rappels », « mails », « meteo » or « calendrier » in the words), waits for the card's answer, then goes on or does without: J59–J63 |
 
     A run started with `message` instead of `input` (another household's agent through `/peer/…`) is read the same."""
 
-    MARKERS = ("#routine", "#tache", "#famille", "#etapes", "#relais", "#carnet", "#rangement", "#fichiers")
+    MARKERS = ("#routine", "#tache", "#famille", "#etapes", "#relais", "#carnet", "#rangement", "#fichiers",
+               "#demande-outil")
 
     @classmethod
     def upgrade(cls, model: ScriptedModel) -> "PeopleModel":
@@ -562,6 +583,16 @@ class PeopleModel(ScriptedModel):
                 except Exception as exc:  # noqa: BLE001 - the 5th is refused: the tool's error is the step's result
                     self.step_results.append({"run": run.id, "tool": "message_agent", "error": str(exc)})
             lines.append("J’ai échangé avec Coach, je te tiens au courant.")
+        if "#demande-outil" in words and "tool_ask" in self.calls:
+            # J59–J63: a tool it has off, asked on a card; the call waits for the person's answer
+            opening += self.say(run, "Il me faut un outil, je te le demande. ")
+            made = step("tool_ask", "mcp_bipagents_ask_for_tool", {"tool": tool_asked(words)})
+            if "is on for you" in made:
+                lines.append("C’est fait, merci.")
+            elif "said no" in made:
+                lines.append("D’accord, je fais sans.")
+            else:
+                lines.append("Une carte t’attend dans l’app.")
         if "#fichiers" in words and "files" in self.calls:
             # the files everyone who uses the agent sent it (its pool), named in the reply
             opening += self.say(run, "Je regarde les fichiers. ")

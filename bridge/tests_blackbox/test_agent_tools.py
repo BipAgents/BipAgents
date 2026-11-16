@@ -48,14 +48,16 @@ def test_the_protocol_and_the_tokens(bridge):
     assert rpc(bridge, "ping", request_id="abc").json() == {"jsonrpc": "2.0", "id": "abc", "result": {}}
     tools = rpc(bridge, "tools/list").json()["result"]["tools"]
     assert [t["name"] for t in tools] == ["create_audio", "create_podcast", "list_voices", "create_page", "list_pages",
-                                          "read_page", "delete_page", "mail_search", "mail_read", "mail_attachment", "mail_draft",
+                                          "read_page", "delete_page", "page_data", "mail_search", "mail_read", "mail_attachment", "mail_draft",
                                           "mail_overview", "mail_bulk",
                                           "knowledge_read", "knowledge_search", "reminders_list", "reminders_add",
                                           "reminders_complete", "propose_task", "after_call", "start_task", "route", "map_image", "upcoming_dates", "space_estimate",
                                           "give_file", "room_history", "routine_trigger", "routine_schedule",
                                           # the Carnet's (on by default)
                                           "notebook_search", "notebook_read", "notebook_write", "notebook_task",
-                                          "notebook_record", "notebook_fill"]
+                                          "notebook_record", "notebook_fill",
+                                          # a tool it has off, asked on a card (tool_asks.rs: on by default, 16/11)
+                                          "ask_for_tool"]
     assert all(set(t) >= {"name", "description", "inputSchema"} for t in tools)
     missing = rpc(bridge, "resources/list").json()
     assert missing == {"jsonrpc": "2.0", "id": 1, "error": {"code": -32601, "message": "method not found: resources/list"}}

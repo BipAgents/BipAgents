@@ -263,7 +263,7 @@ runcmd:
   # at them instead of installing their own, the images through a read-only view of root's store for each account. A failure only costs time: the place installs its own, as before.
   # Each phase's time goes to /var/log/bipagents-timeline.log (installer/README.md, measuring an install).
   - echo "$(date -u +%FT%TZ) shared start" >> /var/log/bipagents-timeline.log
-  - test -d /usr/local/lib/bipagents/repo/.git || git clone --quiet --filter=blob:none https://github.com/BipAgents/BipAgents.git /usr/local/lib/bipagents/repo
+  - test -d /usr/local/lib/bipagents/repo/.git || git clone --quiet --filter=blob:none https://github.com/Alexbob0/BipAgents.git /usr/local/lib/bipagents/repo
   # Root's checkout at the BipAgents commit the places install: the latest of the repository's default branch here
   # (origin/HEAD: stable on the BipAgents organisation's repository, main on the first one). A guichet whose update
   # wave pins a commit writes that commit in its place, as it does in the install line below (BIPAGENTS_TO;

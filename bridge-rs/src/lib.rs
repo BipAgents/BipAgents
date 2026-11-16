@@ -63,6 +63,7 @@ pub mod media;
 pub mod spoken;
 pub mod outbox;
 pub mod live_activities;
+pub mod phone_copy;
 pub mod push;
 pub mod relay;
 pub mod runs;
@@ -112,6 +113,8 @@ pub mod shared_expenses; // a shared project's account: who paid what, balances,
 pub mod project_agent;
 pub mod family_news;
 pub mod family_relay;
+pub mod family_rendezvous;
+pub mod family_seal;
 pub mod body_limit;
 pub mod files;
 pub mod files_kept;
@@ -140,6 +143,7 @@ pub mod steps;
 /// The styled documents skills (decks and Word documents), in place of Hermes' `powerpoint` and `docx`.
 pub mod style_skills;
 /// What each kind of agent keeps in view of Hermes' tools (token diet, phase 2).
+pub mod tool_asks;
 pub mod tool_diet;
 pub mod turn_thinking;
 /// A message sent mid-turn before the agent acted: the turn started again with it.
@@ -193,6 +197,8 @@ pub mod message_search;
 pub mod notebook;
 pub mod notes_import;
 pub mod pages;
+/// Pages that remember: each agent page's own store, its one door, the agent's reading (15/11).
+pub mod page_store;
 pub mod phone_asks;
 /// The phone exit, phase 0 (prototype, off by default): sites listed in `[phone_exit]` leave through the person's phone.
 pub mod phone_exit;
