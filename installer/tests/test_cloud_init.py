@@ -660,7 +660,7 @@ def test_a_new_place_gets_the_shared_hermes_and_images_of_its_version_first(tmp_
     monkeypatch.setattr(agent.os.path, "exists", lambda p: False if str(p).endswith("image-views.service") else exists(p))
     assert agent.main(["--prepare", "main"]) == 0
     assert ran[0][:4] == ["git", "clone", "--quiet", "--filter=blob:none"]
-    assert ran[0][-2] == "https://github.com/Alexbob0/BipAgents.git"
+    assert ran[0][-2] == "https://github.com/BipAgents/BipAgents.git"
     assert ran[2][-1] == "origin/stable"                     # the latest: stable where the repository has it
     assert ran[3][-1] == "origin/stable"
     assert ran[4] == ["python3", "-m", "bipinstall.shared_hermes", "build"]
