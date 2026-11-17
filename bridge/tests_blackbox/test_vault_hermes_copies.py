@@ -497,8 +497,8 @@ def test_a_copy_on_the_disk_is_erased_only_after_a_checked_rebuild(bridges, fake
 
 def test_a_swap_cut_off_before_the_erase_leaves_nothing_on_the_disk_after_the_next_start(bridges, fakes, runtime, keys):
     """Review of 17/11 (B1): the bridge stopped between the swap and the erase (an update, an OOM): the disk's copy set
-    aside beside the link (`.vault-disk-<hex>`, its key in it), a link not renamed yet. At the next start the copy in
-    memory is checked, and what was set aside is erased all the same."""
+    aside beside the link (`.vault-disk-<hex>`, its key in it), a link not renamed yet. At the next start the set-aside
+    copy is read once (what only Hermes held taken into the vault), the copy rebuilt, and what was set aside erased."""
     p = place(bridges, fakes, runtime, keys).start()
     for login in LOGINS.values():
         p.add(login)
@@ -516,9 +516,44 @@ def test_a_swap_cut_off_before_the_erase_leaves_nothing_on_the_disk_after_the_ne
     p.bridge.start()
     said = p.wait_copies()
     assert said.get("failed") in (None, [], "[]"), said
-    assert not [r for r in p.python_runs()[runs:] if r["op"] == "add_many"], "checked, not rebuilt"
+    # the set-aside copy read once (what only Hermes held taken into the vault), then Vie's copy rebuilt; Budget's
+    # only looked at (a leftover link holds nothing)
+    after = p.python_runs()[runs:]
+    assert [r["agent"] for r in after if r["op"] == "export"] == ["vie"], after
+    assert [r["agent"] for r in after if r["op"] == "add_many"] == ["vie"], after
+    assert {m["label"]: m["id"] for m in p.listed("vie")} == p.handles("vie")
     left = [Path(d) / n for d, dirs, files in os.walk(p.bridge.root, followlinks=False)
             for n in dirs + files if n.startswith(".vault-")]
     assert left == [], left
     for path in disk_files(p.bridge.root):
         assert copy["vault.key"].strip() not in path.read_bytes(), path
+
+
+def test_a_login_only_the_agent_s_hermes_holds_is_taken_into_the_vault_before_its_disk_copy_goes(
+        bridges, fakes, runtime, keys):
+    """Second review of 17/11 (A): a login Vie's Hermes saved itself (`browser_vault save_login`, or a Hermes sent to the
+    place, to_place.py) is in no record of the bridge. Its rebuild in memory takes it into the master copy first (one
+    `export` run on the disk copy), gives it back to Vie, and only then erases the disk copy."""
+    p = place(bridges, fakes, runtime, keys).start()
+    for login in LOGINS.values():
+        p.add(login)
+    saved = p.hermes("from pathlib import Path\nfrom agent.vault_store import VaultStore\n"
+                     f"m = VaultStore(base_dir=Path({str(p.link('vie'))!r})).add_item('login', 'Forum', "
+                     "{'identifier_type': 'username', 'identifier': 'alex', 'password': 'F0rum-only-in-Hermes!'}, "
+                     "origin='https://forum.example')\nprint(json.dumps(m.id))", "vie")
+    assert saved.returncode == 0, saved.stderr[-1500:]
+    p.enable()
+    runs = len(p.python_runs())
+    p.bridge.start()
+    said = p.wait_copies()
+    assert said.get("failed") in (None, [], "[]"), said
+    assert [r["agent"] for r in p.python_runs()[runs:] if r["op"] == "export"] == ["vie"]
+    records = p.master()
+    forum = [r for r in records if r["label"] == "Forum"]
+    assert len(forum) == 1 and forum[0]["identifier"] == "alex" and forum[0]["origin"] == "https://forum.example"
+    assert forum[0]["secret"]["password"] == "F0rum-only-in-Hermes!"
+    listed = {m["label"]: m["id"] for m in p.listed("vie")}
+    assert sorted(listed) == ["Forum", "Impôts", "SNCF"] and listed == p.handles("vie", records)
+    assert vault_folders_on_disk(p.hub, p.spaces) == []
+    for path in disk_files(p.bridge.root):
+        assert b"F0rum-only-in-Hermes!" not in path.read_bytes(), path

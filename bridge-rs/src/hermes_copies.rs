@@ -244,6 +244,12 @@ pub(crate) fn set_failed(data: &Path, agent: &str, failed: bool) {
     }
 }
 
+/// Only these agents' failures kept (one deleted, or moved off the place, meanwhile: no longer counted).
+pub(crate) fn keep_failed(data: &Path, agents: &HashSet<String>) {
+    let id = crate::sealed_keys::id(data);
+    failed_map().retain(|(place, agent), _| *place != id || agents.contains(agent));
+}
+
 /// Whether `agent`'s copy failed less than `within` ago (not tried again at each give: the bridge's own retry does).
 pub(crate) fn failed_within(data: &Path, agent: &str, within: Duration) -> bool {
     failed_map()
@@ -309,6 +315,7 @@ fn hermes_homes(config: &Config) -> Vec<PathBuf> {
 /// ([`SET_ASIDE`]). Never a link, and never what the bridge doesn't rebuild:
 /// - the profile of an agent the bridge reaches elsewhere ([`link_of`] None: a Hermes in a container), as a whole;
 /// - an agent's own `vault` (its link; a folder Hermes made since the start is replaced at its next give);
+/// - the `vault` holding items of a live profile (its `config.yaml` there) no agent has: nothing could take them;
 /// - the hub's home when its Hermes is not this place's own (the person's existing Hermes, or one in a container:
 ///   its profiles and its default profile are its own).
 pub fn strays(config: &Config) -> Vec<PathBuf> {
@@ -350,6 +357,13 @@ pub fn strays(config: &Config) -> Vec<PathBuf> {
             }
             let vault = folder.join(LINK);
             if !agents.contains(&folder) && std::fs::symlink_metadata(&vault).is_ok_and(|m| m.is_dir()) {
+                if folder != home && folder.join("config.yaml").is_file() && vault.join("vault.json.enc").is_file() {
+                    // a live Hermes profile no agent has (an imported one the bridge couldn't adopt): its items may be
+                    // only there, with no agent to take them into the vault; left, never erased
+                    tracing::warn!(target: "bipbridge::vault", folder = %vault.display(),
+                        "vault: a Hermes profile without its agent holds a vault on the disk: kept");
+                    continue;
+                }
                 add(vault, &mut found);
             }
             for aside in set_aside_in(&folder) {

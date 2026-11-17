@@ -335,7 +335,10 @@ async fn once_enrolled_each_copy_is_rebuilt_in_memory_in_one_run_and_the_disk_s_
     let mut rebuilt = h.hermes.ops("add_many");
     rebuilt.sort();
     assert_eq!(rebuilt, vec![("budget".to_string(), 1), ("vie".to_string(), 2)]);
-    assert_eq!(h.hermes.count(), runs + 2, "one run per agent holding items, none for Coach");
+    let mut read = h.hermes.ops("export");
+    read.sort();
+    assert_eq!(read, vec![("budget".to_string(), 0), ("vie".to_string(), 0)], "each disk copy read once before it goes");
+    assert_eq!(h.hermes.count(), runs + 4, "one rebuild per agent holding items (and one read of its disk copy)");
     for agent in AGENTS {
         let link = h.link(agent);
         assert!(std::fs::symlink_metadata(&link).unwrap().file_type().is_symlink(), "{agent}");
@@ -526,7 +529,8 @@ async fn a_swap_cut_off_before_the_erase_leaves_no_copy_on_the_disk_once_the_bri
     bipbridge::hermes_copies::forget_checked(&h.place.data);
     let report = h.vault.copies_ready_all(&h.config).await;
     assert!(report.failed.is_empty(), "{report:?}");
-    assert!(report.checked.contains(&"vie".to_string()), "its copy in memory holds its handles: {report:?}");
+    // the set-aside copy read before it goes (anything only its Hermes held taken into the vault), then rebuilt
+    assert!(report.rebuilt.contains(&"vie".to_string()), "{report:?}");
     assert!(report.rebuilt.contains(&"budget".to_string()), "{report:?}");
     let left: Vec<PathBuf> = [h.root.join("data"), h.root.join("hub")].iter().flat_map(|d| left_on_disk(d)).collect();
     assert!(left.is_empty(), "a Hermes copy and its key left on the disk: {left:?}");
