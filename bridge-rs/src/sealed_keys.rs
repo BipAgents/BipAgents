@@ -1298,15 +1298,49 @@ pub fn http_locked() -> crate::web::HttpError {
     crate::web::HttpError::json(503, json!({"code": "vault_locked", "message": "Ton coffre est fermé pour le moment."}))
 }
 
+// -- the export (lot 3) --------------------------------------------------------------------------------------------------
+
+/// For `bipagents export` of an enrolled place (installer/bipinstall/vault_keys.py): `{"v": 1, "keys": {vault, mail,
+/// connections}}`, the data keys the place key opens, so that the import, on another machine, goes back to today's
+/// layout (each key beside its store, no keys.sealed.json). Only while the vault is open, from this process's memory or
+/// the tmpfs: the key service is never asked (a closed vault is refused: export once it has reopened). The place key
+/// itself, this server's half and the key service's token never leave. The export file is sealed by its passphrase.
+pub fn export_keys(place: &Place) -> Result<Value> {
+    if place.journal_dir().join(JOURNAL).exists() {
+        bail!("a sealing of this place's keys is under way or was cut off: the vault is closed for now");
+    }
+    if !place.sealed().exists() {
+        bail!("this place's vault keys are not sealed: the export takes its key files as they are");
+    }
+    let sealed = Sealed::read(&place.data)?;
+    let keys = with_sk(&place.data, |sk| -> Result<Map<String, Value>> {
+        let mut keys = Map::new();
+        for which in DataKey::ALL {
+            let key = sealed.data_key(sk, which)?;
+            keys.insert(which.name().into(), json!(key.as_str()));
+        }
+        Ok(keys)
+    })
+    .ok_or_else(|| anyhow!("the vault is closed (its place key isn't in memory yet): export once it has reopened"))??;
+    Ok(json!({"v": 1, "keys": keys}))
+}
+
 // -- the command line --------------------------------------------------------------------------------------------------
 
-const USAGE: &str = "usage: bipbridge vault-keys status | enable | open [--config FILE]
+const USAGE: &str = "usage: bipbridge vault-keys status | enable | open | export [--config FILE]
 
   status   the vault's keys: off (today's layout), open, or locked (and why)
   enable   seal this place's vault, mailbox and connection keys (the bridge stopped): the key service's settings
            from the space's keyservice.json, else BIPAGENTS_KEYS_URL, BIPAGENTS_KEYS_TOKEN (and _GRANT, _SIGNATURE)
   open     ask the key service now (an operator, once a place is resumed): a running bridge sees it open
+  export   the data keys the place key opens, as JSON (`bipagents export`: the import goes back to today's layout);
+           only while the vault is open, never asking the key service
 ";
+
+/// The command line's help (tests).
+pub fn usage() -> &'static str {
+    USAGE
+}
 
 fn env(name: &str) -> Option<String> {
     std::env::var(name).ok().filter(|v| !v.is_empty())
@@ -1399,6 +1433,7 @@ pub fn cli(argv: &[String]) -> i32 {
                     }
                 }
             }
+            "export" => export_keys(&place),
             other => bail!("unknown action {other}"),
         }
     });
