@@ -812,28 +812,8 @@ def put_back(fetched: Path, base: Path, repo: Path, address: Optional[str]) -> D
 
 
 def vault_layout(came: Path, data: Path, fresh_sealed: bool, base: Path) -> bool:
-    """Once another place's files are over this fresh one (a restore, a planned move: `came` the person's data folder
-    as it came, `data` this place's): the backup's layout of the vault's keys wins (vault_keys.py). Sealed: this
-    fresh place's clear keys go (they open none of the person's stores) and the half and key service it brought are
-    kept private. In today's layout over a fresh place that was sealed: the fresh sealing goes (its keys.sealed.json,
-    its half: they open none of them), its key service stays, and True says to seal again once (`vault_keys.enable`)."""
-    space = vault_keys.space_dir(base)
-    if vault_keys.sealed(came):
-        for store, name in vault_keys.KEY_FILES.items():
-            if not (came / store / name).exists():
-                (data / store / name).unlink(missing_ok=True)
-        if space.is_dir():
-            os.chmod(space, 0o700)
-            for name in vault_keys.SPACE_FILES:
-                if (space / name).is_file() and not (space / name).is_symlink():
-                    os.chmod(space / name, 0o600)
-        return False
-    if not fresh_sealed:
-        return False
-    (data / vault_keys.SEALED).unlink(missing_ok=True)
-    share, service = (space / name for name in vault_keys.SPACE_FILES)
-    share.unlink(missing_ok=True)
-    return service.is_file()
+    """vault_keys.files_came (kept under this name for placemove.py)."""
+    return vault_keys.files_came(came, data, fresh_sealed, base)
 
 
 def settle(info: Dict, base: Path, repo: Path, address: Optional[str], fresh: Dict) -> None:
@@ -881,7 +861,11 @@ def restore(key: str, runner, base: Optional[Path] = None, repo: Optional[Path] 
         for how, name in gateway_units():
             if how == "systemd":
                 runner.run(["systemctl", "--user", "stop", name], check=False)
-        info = put_back(fetched, base, repo, address)
+        try:
+            info = put_back(fetched, base, repo, address)
+        finally:
+            import shutil
+            shutil.rmtree(base / RESTORE_TMP, ignore_errors=True)   # the backup's files (clear keys too) never stay
         progress(base, 3)
         from . import migrations
         for line in migrations.run(runner):

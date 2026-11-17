@@ -33,7 +33,7 @@ import time
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from . import bridgeconf, hermes, moving, ui
+from . import bridgeconf, hermes, moving, ui, vault_keys
 from .existing import profile_label, read_env, read_yaml
 from .sealed import SealedError
 
@@ -532,7 +532,8 @@ def bring_in(archive: Path, passphrase: str, runner: hermes.Runner, base: Option
         _remove(scratch)
         unpacked = {**info, "roots": {name: str(scratch / name) for name in info["roots"]}}
         target = moving.Target(home=base, repo=repo, tailnet_name=None, lan_address=None)
-        moving.restore(tar, unpacked, target)
+        summary = moving.restore(tar, unpacked, target)
+        exported_keys = summary.pop(moving.VAULT_KEYS, None)   # a sealed place's export: its stores' keys
         imported_config = scratch / "config" / "bridge.toml"
         imported_before = imported_config.read_text(encoding="utf-8") if imported_config.is_file() else ""
         if not lone and not imported_before:
@@ -550,9 +551,16 @@ def bring_in(archive: Path, passphrase: str, runner: hermes.Runner, base: Option
         # The place's agents out of the way; the export's in.
         aside.take(profiles)
         data_skip: Tuple[str, ...] = ()
+        was_sealed = vault_keys.sealed(place.data_dir)
         if not lone:
             cert_dir = Path((place.toml.get("lan") or {}).get("cert_dir") or place.data_dir / "lan")
             own = PLACE_DATA | ({cert_dir.name} if cert_dir.parent == place.data_dir else set())
+            space = vault_keys.space_dir(base)
+            if space.parent == place.data_dir:
+                # the space's folder is the place's (its key service, its encrypted space): kept, but for a half that
+                # opens none of the person's stores (put back if the import fails)
+                own |= {space.name}
+                aside.take(space / vault_keys.SPACE_FILES[0])
             aside.clear(place.data_dir, own)
             imported_lan = Path(((tomllib.loads(imported_before).get("lan") or {}).get("cert_dir")) or "lan").name
             data_skip = tuple(own | {imported_lan, "lan"})
@@ -575,8 +583,12 @@ def bring_in(archive: Path, passphrase: str, runner: hermes.Runner, base: Option
                 media[f"{source_hermes}/media"] = str(profiles / root / "media")
         elif (source_hub / "media").is_dir():
             _move_children(source_hub / "media", hub_home / "media")
+        reseal = False
         if not lone:
             _move_children(scratch / "data", place.data_dir, skip=data_skip)
+            if exported_keys is not None:
+                vault_keys.back_to_today(place.data_dir, exported_keys)
+            reseal = vault_keys.files_came(place.data_dir, place.data_dir, was_sealed, base)
         for folder in sorted(profiles.iterdir()):
             if folder.is_dir() and (folder / "config.yaml").is_file():
                 place_profile(folder, hub_yaml, hub_env)
@@ -592,6 +604,8 @@ def bring_in(archive: Path, passphrase: str, runner: hermes.Runner, base: Option
         from . import migrations
         for line in migrations.run(runner, base):
             runner.log.append(line)
+        if reseal:   # the person's stores over a sealed place: sealed again, once, with the place's own key service
+            vault_keys.enable(None, say=runner.log.append, base=base)
         for how, name in gateway_units():
             if how == "systemd":
                 runner.run(["systemctl", "--user", "start", name], check=False)

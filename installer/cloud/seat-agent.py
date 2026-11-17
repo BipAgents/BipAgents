@@ -731,15 +731,37 @@ def place_command(entry, args, timeout=900):
     raise SeatError("%s gave no answer (%d)" % (" ".join(args[:2]), done.returncode))
 
 
-def vault_keys_order(number, settings, order_id, harden=None, run_as=None):
-    """The guichet's `vault_keys` order for place n. True: done (told to the guichet, whatever happened); False: the
-    server was just hardened, the place is enrolled at the next round (neither noted nor told done)."""
+def place_folder(entry, rel):
+    """`rel` under the place's home, each folder made missing made the place's (never root's: its installer writes
+    there). None when one on the way is a link."""
+    path = entry.pw_dir
+    for part in rel.split("/"):
+        path = os.path.join(path, part)
+        if os.path.islink(path):
+            return None
+        if not os.path.isdir(path):
+            os.mkdir(path, 0o700)
+            os.chown(path, entry.pw_uid, entry.pw_gid)
+    return path
+
+
+def vault_keys_order(number, settings, order_id, harden=None, run_as=None, moves=None):
+    """The guichet's `vault_keys` order for place n. True: done (told to the guichet, whatever happened); False: held
+    (the server was just hardened, or the place moves: neither noted nor told done, served again next round). The
+    stopped copy a completed move left is never enrolled (it would start again, sealed, beside the place that moved)."""
     harden = harden or harden_server
     run_as = run_as or place_command
     user = account(number)
     try:
         entry = pwd.getpwnam(user)
     except KeyError:
+        return True
+    under_way = moving(number, moves or MOVES)
+    if under_way:
+        log("vault keys of place %d held: its move %s is under way" % (number, under_way))
+        return False
+    if os.path.exists(os.path.join(entry.pw_dir, MOVED_AWAY)):
+        log("vault keys of place %d dropped: the place moved away (its copy stays stopped)" % number)
         return True
     if str(int(order_id)) in tried_orders():
         return True   # tried already (a run cut off after it, the same order again): never a second enrolment
@@ -756,12 +778,11 @@ def vault_keys_order(number, settings, order_id, harden=None, run_as=None):
         log("place %d (%s): server hardened for the vault keys, sealed at the next round" % (number, user))
         return False
     note_tried(order_id)   # before the try: whatever happens next, never tried again by this agent
-    folder = os.path.join(entry.pw_dir, os.path.dirname(VAULT_STATE))
     path = None
     try:
-        if os.path.islink(folder):
+        folder = place_folder(entry, os.path.dirname(VAULT_STATE))
+        if folder is None:
             raise SeatError("the place's state folder is a link")
-        os.makedirs(folder, exist_ok=True)
         fd, path = tempfile.mkstemp(prefix="vault-keys-order.", suffix=".json", dir=folder)
         with os.fdopen(fd, "w") as fh:
             os.fchmod(fh.fileno(), 0o600)

@@ -147,9 +147,19 @@ def enable(settings: Optional[Dict], runner: Callable = run, say: Callable[[str]
                 "nothing changed.")
             return 1
     config = base / ".config" / "bipagents" / "bridge.toml"
-    if sealed(data_dir(config, base)):
+    data = data_dir(config, base)
+    if sealed(data):
         say("The vault's keys are already sealed: nothing to do.")
         return 0
+    try:
+        owner = (data if data.exists() else base).stat().st_uid
+    except OSError:
+        owner = None
+    if owner is not None and owner != os.getuid():
+        # run by another account (root by hand, `--again`): its HOME, its user manager and its memory folder are not
+        # the place's; nothing stopped, nothing asked
+        say("Run this as the place's own account (its data belongs to another one): nothing changed.")
+        return 1
     if (space_dir(base) / "rollback").exists():
         # the encrypted space's way back keeps the folders as they were, today's keys in them: never sealed beside it
         why = "the encrypted space still keeps its rollback (`bipagents encrypt finish` first)"
@@ -166,11 +176,15 @@ def enable(settings: Optional[Dict], runner: Callable = run, say: Callable[[str]
         return 1
     env = {ENV[k]: v for k, v in (given or {}).items()}
     env["BRIDGE_CONFIG"] = str(config)
-    runner(["systemctl", "--user", "stop", BRIDGE_UNIT])
+    # the bridge started again only if it ran (a restore, a planned move or a move's stopped copy keep theirs stopped)
+    running = getattr(runner(["systemctl", "--user", "is-active", "--quiet", BRIDGE_UNIT]), "returncode", 1) == 0
+    if running:
+        runner(["systemctl", "--user", "stop", BRIDGE_UNIT])
     try:
         done = runner(bridge_command(base) + ["vault-keys", "enable", "--config", str(config)], env=env)
     finally:
-        runner(["systemctl", "--user", "start", BRIDGE_UNIT])
+        if running:
+            runner(["systemctl", "--user", "start", BRIDGE_UNIT])
     now = time.time()
     if getattr(done, "returncode", 1) != 0:
         why = _short(getattr(done, "stderr", "") or getattr(done, "stdout", ""), given)
@@ -189,6 +203,35 @@ def enable(settings: Optional[Dict], runner: Callable = run, say: Callable[[str]
     return 0
 
 
+def files_came(came: Path, data: Path, was_sealed: bool, base: Optional[Path] = None) -> bool:
+    """Once another place's files are over this one (a restore, a planned move, one's own Hermes sent, an import:
+    `came` the person's data folder as it came, `data` this place's): the person's layout of the vault's keys wins.
+    Sealed: this place's clear keys go (they open none of the person's stores) and the half and key service that came
+    are kept private. In today's layout over a place that was sealed: its sealing goes (keys.sealed.json, its half:
+    they open none of them), its key service stays, and True says to seal again once (`enable(None)`)."""
+    space = space_dir(base)
+    share, service = (space / name for name in SPACE_FILES)
+    if sealed(came):
+        for store, name in KEY_FILES.items():
+            if not (came / store / name).exists():
+                (data / store / name).unlink(missing_ok=True)
+        if space.is_dir():
+            os.chmod(space, 0o700)
+            for path in (share, service):
+                if path.is_file() and not path.is_symlink():
+                    os.chmod(path, 0o600)
+        return False
+    if not was_sealed:
+        return False
+    (data / SEALED).unlink(missing_ok=True)
+    share.unlink(missing_ok=True)
+    return service.is_file()
+
+
+# What a cut-off swap of lot 2 sets aside beside an agent's Hermes vault (a copy, or a link to memory): never carried.
+SET_ASIDE = (".vault-disk-", ".vault-link-")
+
+
 # Hermes' own safety backups (`hermes update`'s and a plugin import's: <home>/backups/pre-update-*.zip, pre-migration-*,
 # their *.incomplete.zip salvages; members named from the Hermes home), made before the sealing: the agents' Hermes
 # vaults as they were (`vault/`, its key beside it, at the home's root or in a profile; lot 2's set-aside copies too).
@@ -200,7 +243,7 @@ HERMES_BACKUPS = ("backups/pre-update-*.zip", "backups/pre-migration-*.zip")
 def _a_vault(name: str) -> bool:
     parts = [p for p in name.split("/") if p]
     at = parts[0:1] if parts[:1] != ["profiles"] else parts[2:3]
-    return bool(at) and (at[0] == "vault" or at[0].startswith((".vault-disk-", ".vault-link-")))
+    return bool(at) and (at[0] == "vault" or at[0].startswith(SET_ASIDE))
 
 
 def scrub_hermes_backups(config: Path, base: Optional[Path] = None) -> List[Path]:

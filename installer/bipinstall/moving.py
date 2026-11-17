@@ -336,6 +336,17 @@ def _in_memory(path: Path) -> Optional[Path]:
     return None
 
 
+def _hermes_vault(inv: Inventory, path: Path) -> bool:
+    """An agent's Hermes vault folder: `vault` at a Hermes home's root or in one of its profiles."""
+    if path.name != "vault" or path.is_symlink() or not path.is_dir():
+        return False
+    for hermes_home in inv.hermes_homes():
+        parts = _relative(path, hermes_home)
+        if parts is not None and (len(parts) == 1 or (len(parts) == 3 and parts[0] == "profiles")):
+            return True
+    return False
+
+
 def add_tree(tar: tarfile.TarFile, inv: Inventory, name: str, root: Path, tally: Tally, scratch: Path,
              left_out: Optional[Callable[[Path], bool]] = None, from_memory: bool = False) -> None:
     """`root` into the archive as `name`, but what `Inventory.skipped` and `left_out` leave out. `from_memory` (the
@@ -346,7 +357,13 @@ def add_tree(tar: tarfile.TarFile, inv: Inventory, name: str, root: Path, tally:
         return f"{prefix}/{rel}" if rel else prefix
 
     def kept(path: Path) -> bool:
-        return not inv.skipped(path) and not (left_out and left_out(path))
+        if path.name.startswith(vault_keys.SET_ASIDE):
+            return False   # what a cut-off swap set aside (lot 2): never carried, whatever it is
+        if left_out and left_out(path):
+            return False
+        # an export with the keys (from_memory) takes every agent's Hermes vault, still on the disk too: the import
+        # goes back to today's layout, where nothing rebuilds them
+        return not inv.skipped(path) or (from_memory and _hermes_vault(inv, path))
 
     if left_out and left_out(root):
         return
@@ -358,7 +375,8 @@ def add_tree(tar: tarfile.TarFile, inv: Inventory, name: str, root: Path, tally:
         for folder, dirs, files in os.walk(root, followlinks=False):
             here = Path(folder)
             # before `skipped`, which leaves such links out of backups and moves (the bridge rebuilds them there)
-            memory = {d: target for d in dirs if (target := _in_memory(here / d)) is not None} if from_memory else {}
+            memory = {d: target for d in dirs if not d.startswith(vault_keys.SET_ASIDE)
+                      and (target := _in_memory(here / d)) is not None} if from_memory else {}
             copies += [(here / d, memory[d]) for d in sorted(memory)]
             dirs[:] = sorted(d for d in dirs if d not in memory and kept(here / d))
             entries += [(here / d, arc(here / d, root, name)) for d in dirs]
@@ -730,18 +748,22 @@ def unpack(tar: tarfile.TarFile, info: Dict[str, Any], target: Target, config: P
     """The export's files in place here and its settings adjusted to this machine. Returns the export's summary and
     how many settings files changed."""
     import tomllib
+    # this account's place sealed already (a place of the offer): sealed again over the person's stores, below
+    was_sealed = config.exists() and vault_keys.sealed(vault_keys.data_dir(config, target.home))
     summary = restore(tar, info, target)
     import_volumes(target.home)
     if not config.exists():
         raise SealedError("the export holds no bridge config: it was not made by `bipagents export`")
+    data = rehome(info["roots"]["data"], info, target) if info["roots"].get("data") else None
     if VAULT_KEYS in summary:   # an enrolled place's export: today's layout here (each key beside its store)
-        data = info["roots"].get("data")
-        if not data:
+        if data is None:
             raise SealedError("this export's vault keys have no data folder to go to")
         try:
-            vault_keys.back_to_today(rehome(data, info, target), summary.pop(VAULT_KEYS))
+            vault_keys.back_to_today(data, summary.pop(VAULT_KEYS))
         except vault_keys.VaultKeysError as exc:
             raise SealedError(f"this export's vault keys can't be put back: {exc}") from exc
+    if data is not None and vault_keys.files_came(data, data, was_sealed, target.home):
+        vault_keys.enable(None, say=say, base=target.home)   # once, with this place's own key service
     old_toml = tomllib.loads(config.read_text(encoding="utf-8"))
     roots = [rehome(path, info, target) for path in info["roots"].values()]
     changed = rewrite(settings_files(roots), replacements(info, target))
