@@ -1,0 +1,35 @@
+{
+  "page": {
+    "vault": {
+      "title": "Le coffre — BipAgents",
+      "description": "Quand un de tes agents doit se connecter à un site pour toi, il lui faut ton identifiant et ton mot de passe. Le coffre les garde et les tape à sa place. Voici comment, et ce qu’il ne peut pas empêcher."
+    }
+  },
+  "vault": {
+    "kicker": "Le coffre",
+    "title": "Comment le coffre protège tes mots de passe",
+    "sub": "Quand un de tes agents doit se connecter à un site pour toi, il lui faut ton identifiant et ton mot de passe. Le coffre les garde et les tape à sa place. Voici comment, et ce qu’il ne peut pas empêcher.",
+    "whereTitle": "Où il est gardé",
+    "where1": "<b>Sur ton serveur ou ta place.</b> Sur ton propre ordinateur ou ton serveur, si tu as installé BipAgents toi-même. Avec l’offre tout compris, sur ta place : un serveur que Kerfy Studio loue chez OVHcloud (centres de données dans l’Union européenne) ou chez Hetzner (Allemagne ou Finlande).",
+    "where2": "<b>Chiffré, hors de portée des agents.</b> Le serveur garde la copie principale chiffrée, dans un dossier qu’aucun agent n’atteint : tes agents travaillent dans leur propre conteneur ou bac à sable.",
+    "where3": "<b>Seulement pour les agents que tu choisis.</b> Chaque identifiant n’est donné qu’aux agents que tu coches.",
+    "useTitle": "Comment il sert",
+    "use1": "L’agent ouvre la page de connexion et demande au coffre de se connecter. <b>Le coffre tape lui-même</b> l’identifiant et le mot de passe dans la page. L’agent apprend seulement que c’est rempli.",
+    "use2": "<b>Le coffre ne l’envoie ni au modèle d’IA, ni dans la conversation, ni dans les journaux.</b> Le modèle d’IA qui fait parler tes agents ne le reçoit pas.",
+    "use3": "<b>Seulement sur ce site.</b> L’adresse de la page est lue par le navigateur lui-même, pas dans ce que dit l’agent ou la page. Sur un faux site qui imite le vrai (une lettre changée, un autre domaine), le coffre ne remplit rien.",
+    "use4": "<b>Tu le vois passer.</b> Après chaque connexion, une ligne de la conversation le dit : « Rempli par le coffre sur … ».",
+    "use5": "<b>L’app ne le réaffiche jamais.</b> Tu peux le remplacer ou le supprimer, pas le relire. Seule exception : un mot de passe que le coffre a créé pour un compte ouvert par ton agent. Tu ne l’as jamais tapé, alors l’app te le montre, après Face ID, ton empreinte ou ton code.",
+    "selfTitle": "Si tu préfères le taper toi-même",
+    "self": "Choisis « Je le taperai moi-même » : tu prends la main sur le navigateur de l’agent (son Bureau) et tu te connectes comme sur ton ordinateur. Rien n’est gardé dans le coffre, et l’agent attend tant que tu as la main. Ensuite, le site garde la session ouverte dans ce navigateur, comme il le ferait chez toi, et l’agent continue avec.",
+    "tipsTitle": "Nos conseils",
+    "tip1": "Un mot de passe différent pour chaque site : si l’un fuit, les autres restent sûrs.",
+    "tip2": "Garde tes comptes bancaires pour toi.",
+    "tip3": "Ne donne un identifiant qu’aux agents en qui tu as confiance.",
+    "limitsTitle": "Ce que le coffre ne peut pas empêcher",
+    "limit1": "<b>Un site piraté</b> reçoit ce qu’on y tape, comme avec n’importe quel gestionnaire de mots de passe. Le coffre protège du mauvais site, pas d’un bon site compromis.",
+    "limit2": "<b>Un agent qui chercherait à relire ton mot de passe</b> dans la page en est empêché : son navigateur cache les champs remplis à tous ses outils. Restent de rares cas, ce que le site lui-même affiche ou garde à part (un indicateur de force, une copie dans sa mémoire).",
+    "limit3": "<b>Tes propres agents partagent souvent un même espace</b> sur le serveur : un agent trompé par ce qu’il a lu pourrait y atteindre les identifiants de tes autres agents. Un agent avec qui d’autres personnes parlent a toujours son propre espace.",
+    "limit4": "<b>La clé du chiffrement est sur le même serveur.</b> Elle tient les agents à l’écart, pas quelqu’un qui aurait le disque entier. Si tu loues ton serveur, son hébergeur a techniquement accès à son disque. Comme tout hébergeur, OVHcloud et Hetzner ont un accès physique à leurs serveurs. Kerfy Studio ne lit pas ta place ; il n’y accéderait que pour répondre à une obligation légale, et tu en serais informé quand la loi le permet.",
+    "limit5": "<b>Toutes les pages d’un site comptent comme ce site</b>, y compris, sur un site où chacun publie ses propres pages, celles des autres."
+  }
+}

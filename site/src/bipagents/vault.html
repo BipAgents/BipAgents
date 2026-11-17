@@ -1,0 +1,42 @@
+{{>top}}
+<!-- ============================================================ THE VAULT: how it keeps the passwords. The apps' « Comment c'est
+     protégé ? » opens it in the phone's language (VaultHelp in VaultReassure.swift / VaultReassure.kt: /vault/, /fr/vault/…).
+     The limits are said plainly, in a block of their own. -->
+<section class="section page-section vault-section" id="vault">
+  <div class="section-head">
+    <p class="kicker">{{vault.kicker}}</p>
+    <h1 class="page-h1">{{vault.title}}</h1>
+    <p class="sub">{{vault.sub}}</p>
+  </div>
+  <div class="vault-blocks">
+    <section class="vault-block" aria-labelledby="vault-where">
+      <h2 class="vault-h" id="vault-where">{{vault.whereTitle}}</h2>
+      <ul class="vault-list">
+        <li>{{vault.where1}}</li><li>{{vault.where2}}</li><li>{{vault.where3}}</li>
+      </ul>
+    </section>
+    <section class="vault-block" aria-labelledby="vault-use">
+      <h2 class="vault-h" id="vault-use">{{vault.useTitle}}</h2>
+      <ul class="vault-list">
+        <li>{{vault.use1}}</li><li>{{vault.use2}}</li><li>{{vault.use3}}</li><li>{{vault.use4}}</li><li>{{vault.use5}}</li>
+      </ul>
+    </section>
+    <section class="vault-block" aria-labelledby="vault-self">
+      <h2 class="vault-h" id="vault-self">{{vault.selfTitle}}</h2>
+      <p>{{vault.self}}</p>
+    </section>
+    <section class="vault-block" aria-labelledby="vault-tips">
+      <h2 class="vault-h" id="vault-tips">{{vault.tipsTitle}}</h2>
+      <ul class="vault-list">
+        <li>{{vault.tip1}}</li><li>{{vault.tip2}}</li><li>{{vault.tip3}}</li>
+      </ul>
+    </section>
+    <section class="vault-block vault-limits" aria-labelledby="vault-limits">
+      <h2 class="vault-h" id="vault-limits">{{vault.limitsTitle}}</h2>
+      <ul class="vault-list">
+        <li>{{vault.limit1}}</li><li>{{vault.limit2}}</li><li>{{vault.limit3}}</li><li>{{vault.limit4}}</li><li>{{vault.limit5}}</li>
+      </ul>
+    </section>
+  </div>
+</section>
+{{>foot}}

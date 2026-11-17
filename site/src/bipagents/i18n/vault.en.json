@@ -1,0 +1,35 @@
+{
+  "page": {
+    "vault": {
+      "title": "The vault — BipAgents",
+      "description": "When one of your agents has to sign in to a site for you, it needs your username and your password. The vault keeps them and types them in for it. Here is how, and what it can’t prevent."
+    }
+  },
+  "vault": {
+    "kicker": "The vault",
+    "title": "How the vault protects your passwords",
+    "sub": "When one of your agents has to sign in to a site for you, it needs your username and your password. The vault keeps them and types them in for it. Here is how, and what it can’t prevent.",
+    "whereTitle": "Where it is kept",
+    "where1": "<b>On your server or your place.</b> On your own computer or server, if you installed BipAgents yourself. With the all-included offer, on your place: a server Kerfy Studio rents from OVHcloud (data centres in the European Union) or from Hetzner (Germany or Finland).",
+    "where2": "<b>Encrypted, out of the agents’ reach.</b> The server keeps the main copy encrypted, in a folder no agent can reach: your agents work in their own container or sandbox.",
+    "where3": "<b>Only for the agents you choose.</b> Each login is given only to the agents you tick.",
+    "useTitle": "How it is used",
+    "use1": "The agent opens the sign-in page and asks the vault to sign in. <b>The vault itself types</b> the username and the password into the page. The agent only learns that it’s filled in.",
+    "use2": "<b>The vault doesn’t send it to the AI model, to the conversation or to the logs.</b> The AI model your agents speak through doesn’t receive it.",
+    "use3": "<b>Only on that site.</b> The page’s address is read by the browser itself, not taken from what the agent or the page says. On a fake site that imitates the real one (one letter changed, another domain), the vault fills in nothing.",
+    "use4": "<b>You see it happen.</b> After each sign-in, a line in the conversation says so: “Filled by the vault on …”.",
+    "use5": "<b>The app never shows it again.</b> You can replace or delete it, not read it back. The one exception: a password the vault created for an account your agent opened. You never typed it, so the app shows it to you, after Face ID, your fingerprint or your passcode.",
+    "selfTitle": "If you’d rather type it yourself",
+    "self": "Choose “I’ll type it myself”: you take control of the agent’s browser (its desktop) and sign in as you would on your own computer. Nothing is kept in the vault, and the agent waits while you’re in control. Afterwards, the site keeps the session open in that browser, as it would at home, and the agent carries on with it.",
+    "tipsTitle": "Our advice",
+    "tip1": "A different password for each site: if one leaks, the others stay safe.",
+    "tip2": "Keep your bank accounts to yourself.",
+    "tip3": "Only give a login to agents you trust.",
+    "limitsTitle": "What the vault can’t prevent",
+    "limit1": "<b>A hacked site</b> gets what is typed into it, as with any password manager. The vault protects you from the wrong site, not from a genuine site that has been compromised.",
+    "limit2": "<b>An agent trying to read your password back</b> from the page is stopped: its browser hides filled-in fields from all of its tools. A few rare cases remain: what the site itself shows or keeps aside (a strength meter, a copy in its memory).",
+    "limit3": "<b>Your own agents often share one space</b> on the server: an agent misled by something it read could reach your other agents’ logins there. An agent other people talk to always has its own space.",
+    "limit4": "<b>The encryption key is on the same server.</b> It keeps the agents out, not someone who had the whole disk. If you rent your server, its host technically has access to its disk. Like any hosting provider, OVHcloud and Hetzner have physical access to their servers. Kerfy Studio doesn’t read your place; it would only access it to meet a legal obligation, and you would be told when the law allows it.",
+    "limit5": "<b>Every page of a site counts as that site</b>, including, on a site where everyone publishes their own pages, other people’s pages."
+  }
+}

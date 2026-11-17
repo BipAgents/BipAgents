@@ -682,6 +682,21 @@ a.store:hover { transform: translateY(-2px); }
 /* The checkout card is ink: light in the light theme, so its savings line turns dark green in the dark theme. */
 @media (prefers-color-scheme: dark) { .checkout .save { color: #2F6338; } }
 
+/* -- The vault (/vault/, the apps' « Comment c'est protégé ? »): white cards to read, the limits in a gold one -------- */
+.vault-section { padding-bottom: 48px; }
+.vault-section .section-head { margin-bottom: 30px; }
+.vault-blocks { display: grid; gap: 14px; max-width: 780px; margin: 0 auto; }
+.vault-block { border-radius: 24px; padding: 22px 24px; background: var(--card); box-shadow: var(--shadow); }
+.vault-h { font-size: 21px; letter-spacing: -.01em; }
+.vault-block p, .vault-list { margin: 10px 0 0; line-height: 1.55; }
+.vault-list { list-style: none; padding: 0; display: grid; gap: 10px; }
+.vault-list li { position: relative; padding-left: 20px; }
+.vault-list li::before { content: ""; position: absolute; left: 2px; top: .62em; width: 7px; height: 7px; border-radius: 50%; background: var(--coral-deep); }
+.vault-block b { font-weight: 900; }
+.vault-limits { background: var(--gold-tint); box-shadow: none; }
+.vault-limits .vault-h { color: var(--gold-deep); }
+.vault-limits .vault-list li::before { background: var(--gold-deep); }
+
 /* -- Duo and Family: an agent offers to pass news on to a family member's agent; you send it or not --------------- */
 .fam-mock { position: relative; z-index: 4; margin: 0; width: min(330px, 100%); display: grid; gap: 12px; }
 .fam-card { background: var(--card); border-radius: 26px; padding: 16px; box-shadow: var(--shadow-big); display: grid; gap: 10px; }
