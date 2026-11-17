@@ -160,3 +160,36 @@ def test_a_link_to_the_memory_folder_is_never_carried(place):
     assert b"vie-key-in-memory" not in [data for _, data in members.values()]
     assert b"coach-hermes-copy" in [data for _, data in members.values()], "a copy on the disk goes, as today"
     assert not [f for f in backed_up(place) if f == str(place.hub / "profiles" / "vie" / "vault")]
+
+
+def test_what_a_cut_off_swap_left_beside_a_link_is_never_carried(place):
+    """Review of 17/11 (B1): the bridge stopped between the swap and the erase leaves the disk's copy set aside
+    (`.vault-disk-<hex>`, its key in it) or a link not renamed yet (`.vault-link-<hex>`), beside the agent's vault or
+    a Hermes home's own. The bridge erases them at its next start; till then no export, backup or move takes them, on
+    any place (only the bridge makes them)."""
+    seal(place)
+    aside = place.space / "profiles" / "coach" / ".vault-disk-1a2b3c4d"
+    write(aside / "vault.key", b"coach-key-set-aside")
+    write(aside / "vault.json.enc", b"coach-copy-set-aside")
+    write(place.hub / ".vault-disk-5e6f7a8b" / "vault.key", b"hub-key-set-aside")
+    os.symlink(place.tmp / "run" / "nowhere", place.hub / "profiles" / "vie" / ".vault-link-0badc0de")
+    secrets = (b"coach-key-set-aside", b"coach-copy-set-aside", b"hub-key-set-aside")
+    members = exported(place)
+    assert not [s for s in secrets if s in [data for _, data in members.values()]]
+    assert not [n for n in members if "/.vault-" in n or n.split("/")[-1].startswith(".vault-")], sorted(members)
+    files = backed_up(place)
+    assert not [f for f in files if "/.vault-" in f], files
+    assert not [f for f in looked(place) if "/.vault-" in f]
+    inv = inventory(place)
+    hub_rules = placemove.rules(inv, inv.hermes_home)
+    for rule in ("- /.vault-disk-*", "- /.vault-link-*", "- /profiles/*/.vault-disk-*", "- /profiles/*/.vault-link-*"):
+        assert rule in hub_rules, hub_rules
+    data_rules = placemove.rules(inv, inv.data_dir)
+    assert "- /spaces/coach/profiles/*/.vault-disk-*" in data_rules
+    # a place not enrolled: the same (only a bridge of lot 2 makes them, never a copy to carry)
+    (place.data / "keys.sealed.json").unlink()
+    write(place.data / "vault" / "vault.key", b"the-master-key")
+    assert not [s for s in secrets if s in [data for _, data in exported(place).values()]]
+    assert not [f for f in backed_up(place) if "/.vault-" in f]
+    inv = inventory(place)
+    assert "- /profiles/*/.vault-disk-*" in placemove.rules(inv, inv.hermes_home)

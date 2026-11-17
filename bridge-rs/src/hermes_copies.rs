@@ -32,6 +32,8 @@ use crate::config::{AgentConfig, Config};
 
 /// The folder Hermes keeps an agent's vault in, under its HERMES_HOME.
 pub const LINK: &str = "vault";
+/// What a profile copied into a space leaves out on such a place (spaces.rs). (Tests first: filled in by the fix.)
+pub const NOT_COPIED: [&str; 1] = [LINK];
 /// The place's own folder in memory for the copies.
 const ROOT_PREFIX: &str = "hermes-vault";
 
@@ -178,6 +180,11 @@ pub(crate) fn unset_checked(data: &Path, agent: &str) {
 pub fn forget_checked(data: &Path) {
     let id = crate::sealed_keys::id(data);
     checked_map().retain(|(place, _), _| *place != id);
+}
+
+/// The agents whose copy is not ready (tests first: filled in by the fix).
+pub fn failed(_data: &Path) -> Vec<String> {
+    Vec::new()
 }
 
 /// The copies in memory dropped (the vault closed at a start: nothing to read until it reopens and they are rebuilt).

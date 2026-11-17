@@ -473,6 +473,7 @@ def test_a_copy_on_the_disk_is_erased_only_after_a_checked_rebuild(bridges, fake
     assert {f.name: f.read_bytes() for f in p.link("vie").iterdir() if f.is_file()} == copy
     assert p.handles("vie") == handles
     assert p.link("budget").is_symlink()
+    assert p.bridge.get("/health").json().get("vault_copies_not_ready") == 1, "the place's keeper sees it"
     # its Hermes answers but its copy doesn't hold every item: not trusted either
     p.rule(vie__add_many="short")
     p.bridge.restart()
@@ -489,5 +490,35 @@ def test_a_copy_on_the_disk_is_erased_only_after_a_checked_rebuild(bridges, fake
     assert p.link("vie").is_symlink()
     assert {m["label"]: m["id"] for m in p.listed("vie")} == p.handles("vie")
     assert vault_folders_on_disk(p.hub, p.spaces) == []
+    for path in disk_files(p.bridge.root):
+        assert copy["vault.key"].strip() not in path.read_bytes(), path
+    assert "vault_copies_not_ready" not in p.bridge.get("/health").json()
+
+
+def test_a_swap_cut_off_before_the_erase_leaves_nothing_on_the_disk_after_the_next_start(bridges, fakes, runtime, keys):
+    """Review of 17/11 (B1): the bridge stopped between the swap and the erase (an update, an OOM): the disk's copy set
+    aside beside the link (`.vault-disk-<hex>`, its key in it), a link not renamed yet. At the next start the copy in
+    memory is checked, and what was set aside is erased all the same."""
+    p = place(bridges, fakes, runtime, keys).start()
+    for login in LOGINS.values():
+        p.add(login)
+    copy = {f.name: f.read_bytes() for f in p.link("vie").iterdir() if f.is_file()}
+    p.enable()
+    p.bridge.start()
+    p.wait_copies()
+    p.bridge.stop()
+    aside = p.home("vie") / ".vault-disk-1a2b3c4d"
+    aside.mkdir()
+    for name, data in copy.items():
+        (aside / name).write_bytes(data)
+    os.symlink(os.readlink(p.link("budget")), p.home("budget") / ".vault-link-0badc0de")
+    runs = len(p.python_runs())
+    p.bridge.start()
+    said = p.wait_copies()
+    assert said.get("failed") in (None, [], "[]"), said
+    assert not [r for r in p.python_runs()[runs:] if r["op"] == "add_many"], "checked, not rebuilt"
+    left = [Path(d) / n for d, dirs, files in os.walk(p.bridge.root, followlinks=False)
+            for n in dirs + files if n.startswith(".vault-")]
+    assert left == [], left
     for path in disk_files(p.bridge.root):
         assert copy["vault.key"].strip() not in path.read_bytes(), path

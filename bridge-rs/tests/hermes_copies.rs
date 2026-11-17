@@ -41,6 +41,8 @@ struct Hermes {
     runs: Mutex<Vec<(String, String, usize)>>,
     failing: Mutex<HashSet<String>>,
     short: Mutex<HashSet<String>>,
+    /// Labels its `add_many` refuses (a Hermes that validates more strictly): `null` for them.
+    refused: Mutex<HashSet<String>>,
 }
 
 impl Hermes {
@@ -107,6 +109,10 @@ fn fake_run(hermes: Arc<Hermes>) -> VaultRun {
                     let mut stored = store_of(&folder);
                     let mut ids = Vec::new();
                     for item in &items {
+                        if item["label"].as_str().is_some_and(|l| hermes.refused.lock().unwrap().contains(l)) {
+                            ids.push(Value::Null);
+                            continue;
+                        }
                         let made = new_item(item);
                         ids.push(made["id"].clone());
                         stored.push(made);
@@ -239,6 +245,11 @@ impl Fixture {
 }
 
 fn fixture() -> Fixture {
+    fixture_with(|_, _| {})
+}
+
+/// The place, `extra` changing its config first (the test's root given): the hub's Hermes home is `<root>/hub`.
+fn fixture_with(extra: impl FnOnce(&mut Value, &Path)) -> Fixture {
     std::env::set_var(space::FAKE_ENV, "1");
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().canonicalize().unwrap();
@@ -251,6 +262,9 @@ fn fixture() -> Fixture {
     bipbridge::hermes_copies::forget_checked(&place.data);
     let mut dict = config_dict(&root, &Urls::default());
     dict["hermes"]["isolated"] = json!(true);
+    // the hub's own home here, never the account's ~/.hermes (the copies no agent uses there are erased)
+    dict["hermes"]["home"] = json!(root.join("hub").to_string_lossy());
+    std::fs::create_dir_all(root.join("hub").join("profiles")).unwrap();
     for agent in AGENTS {
         let space = root.join("data").join("spaces").join(agent);
         let home = space.join("profiles").join(agent);
@@ -259,6 +273,7 @@ fn fixture() -> Fixture {
             "isolated": true, "sandboxed": true, "space": space.to_string_lossy(), "python": "/nowhere/python",
             "hermes_home": home.to_string_lossy()});
     }
+    extra(&mut dict, &root);
     let config = bipbridge::config::parse_config(&dict, None).unwrap();
     std::fs::create_dir_all(root.join("data").join("vault")).unwrap();
     let hermes = Arc::new(Hermes::default());
@@ -433,11 +448,269 @@ fn an_agent_moved_into_its_space_leaves_its_copy_behind_when_the_copies_are_in_m
     std::fs::write(source.join("vault").join("vault.key"), "k").unwrap();
     std::fs::write(source.join("SOUL.md"), "Tu es Vie.").unwrap();
     std::fs::create_dir_all(source.join("skills").join("vault")).unwrap();
+    // what a swap cut off leaves beside the link (the disk's copy set aside, a link not renamed yet)
+    std::fs::create_dir_all(source.join(".vault-disk-1a2b3c4d")).unwrap();
+    std::fs::write(source.join(".vault-disk-1a2b3c4d").join("vault.key"), "k").unwrap();
+    std::os::unix::fs::symlink("/nowhere", source.join(".vault-link-0badc0de")).unwrap();
     let kept = dir.path().join("kept");
     bipbridge::spaces::copy_profile_except(&source, &kept, &[]).unwrap();
     assert!(kept.join("vault").join("vault.key").is_file(), "today: copied with the rest");
     let moved = dir.path().join("moved");
-    bipbridge::spaces::copy_profile_except(&source, &moved, &[bipbridge::hermes_copies::LINK]).unwrap();
+    bipbridge::spaces::copy_profile_except(&source, &moved, &bipbridge::hermes_copies::NOT_COPIED).unwrap();
     assert!(!moved.join("vault").exists(), "in memory: never copied");
+    let names: Vec<String> =
+        std::fs::read_dir(&moved).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+    assert!(!names.iter().any(|n| n.starts_with(".vault-")), "nor what a cut-off swap left: {names:?}");
     assert!(moved.join("SOUL.md").is_file() && moved.join("skills").join("vault").is_dir(), "only the profile's own");
+}
+
+// -- review of 17/11 (B1, R1, R2, R6) ------------------------------------------------------------------------------------
+
+/// Files named vault.key under `dir` (links not followed), and entries a swap sets aside (`.vault-*`).
+fn left_on_disk(dir: &Path) -> Vec<PathBuf> {
+    fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
+        let Ok(entries) = std::fs::read_dir(dir) else { return };
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let kind = entry.file_type().unwrap();
+            if name.starts_with(".vault-") || (kind.is_file() && name == "vault.key") {
+                out.push(entry.path());
+            }
+            if kind.is_dir() {
+                walk(&entry.path(), out);
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(dir, &mut out);
+    out
+}
+
+#[tokio::test]
+async fn a_swap_cut_off_before_the_erase_leaves_no_copy_on_the_disk_once_the_bridge_starts_again() {
+    let _guard = SERIAL.lock().await;
+    let h = fixture();
+    given(&h).await;
+    h.enrol().await;
+    let disk_key = std::fs::read(h.link("vie").join("vault.key")).unwrap();
+    let root = bipbridge::hermes_copies::root(&h.place.data, true).unwrap();
+    // Vie: its copy in memory (its items as they were), the link swapped, the bridge stopped before the erase
+    let folder = bipbridge::hermes_copies::new_folder(&root, "vie").unwrap();
+    for file in ["vault.key", "vault.json.enc"] {
+        std::fs::copy(h.link("vie").join(file), folder.join(file)).unwrap();
+    }
+    let aside = bipbridge::hermes_copies::point(&h.link("vie"), &folder).unwrap();
+    assert_eq!(aside.len(), 1);
+    // Budget: its copy set aside and never put back (a put back that failed), no link
+    std::fs::rename(h.link("budget"), h.home("budget").join(".vault-disk-0badc0de")).unwrap();
+    // Coach: a link made, the bridge stopped before its rename
+    std::os::unix::fs::symlink(&folder, h.home("coach").join(".vault-link-0badc0de")).unwrap();
+    // and in the hub's home, beside its default profile
+    std::fs::create_dir_all(h.root.join("hub").join(".vault-disk-12345678")).unwrap();
+    std::fs::write(h.root.join("hub").join(".vault-disk-12345678").join("vault.key"), "hub-key").unwrap();
+    // the next start
+    bipbridge::hermes_copies::forget_checked(&h.place.data);
+    let report = h.vault.copies_ready_all(&h.config).await;
+    assert!(report.failed.is_empty(), "{report:?}");
+    assert!(report.checked.contains(&"vie".to_string()), "its copy in memory holds its handles: {report:?}");
+    assert!(report.rebuilt.contains(&"budget".to_string()), "{report:?}");
+    let left: Vec<PathBuf> = [h.root.join("data"), h.root.join("hub")].iter().flat_map(|d| left_on_disk(d)).collect();
+    assert!(left.is_empty(), "a Hermes copy and its key left on the disk: {left:?}");
+    for file in h.files_on_disk() {
+        let data = std::fs::read(&file).unwrap();
+        assert!(!data.windows(disk_key.len()).any(|w| w == disk_key.as_slice()), "{}", file.display());
+    }
+    for agent in ["vie", "budget"] {
+        assert_eq!(h.copy(agent), h.handles(agent), "{agent}");
+    }
+}
+
+#[tokio::test]
+async fn a_master_copy_not_written_puts_the_disk_s_copy_back_and_leaves_nothing_aside() {
+    use std::os::unix::fs::PermissionsExt;
+    let _guard = SERIAL.lock().await;
+    let h = fixture();
+    given(&h).await;
+    h.enrol().await;
+    let copy = std::fs::read(h.link("vie").join("vault.key")).unwrap();
+    let handles = h.handles("vie");
+    let master = h.root.join("data").join("vault");
+    std::fs::set_permissions(&master, std::fs::Permissions::from_mode(0o500)).unwrap();
+    let report = h.vault.copies_ready_all(&h.config).await;
+    std::fs::set_permissions(&master, std::fs::Permissions::from_mode(0o700)).unwrap();
+    assert!(report.failed.contains(&"vie".to_string()), "{report:?}");
+    let meta = std::fs::symlink_metadata(h.link("vie")).unwrap();
+    assert!(meta.is_dir() && !meta.file_type().is_symlink(), "the disk's copy back in its place");
+    assert_eq!(std::fs::read(h.link("vie").join("vault.key")).unwrap(), copy);
+    assert_eq!(h.handles("vie"), handles);
+    let aside: Vec<_> = left_on_disk(&h.home("vie")).into_iter().filter(|p| p != &h.link("vie").join("vault.key")).collect();
+    assert!(aside.is_empty(), "{aside:?}");
+    // written again: rebuilt, the disk's copy gone
+    let report = h.vault.copies_ready_all(&h.config).await;
+    assert!(report.failed.is_empty(), "{report:?}");
+    assert!(left_on_disk(&h.root.join("data")).is_empty());
+}
+
+#[tokio::test]
+async fn copies_the_bridge_does_not_rebuild_are_never_erased() {
+    let _guard = SERIAL.lock().await;
+    // Perso: an agent of the hub whose Hermes runs in a container (its copy where it is, the bridge can't link it)
+    let h = fixture_with(|dict, root| {
+        let hub = root.join("hub");
+        dict["hermes"]["container_home"] = json!("/opt/data");
+        dict["hermes"]["python"] = json!("/nowhere/python");
+        dict["hermes"]["bin"] = json!("/nowhere/hermes");
+        dict["hermes"]["hub_url"] = json!("http://127.0.0.1:9");
+        dict["agents"]["perso"] = json!({"hermes_url": "http://127.0.0.1:9/p/perso", "hermes_key": "p".repeat(32)});
+        std::fs::create_dir_all(hub.join("profiles").join("perso").join("vault")).unwrap();
+        std::fs::write(hub.join("profiles").join("perso").join("vault").join("vault.key"), "perso-key").unwrap();
+        // a profile of the hub the bridge doesn't know (Hermes in a container: its own), and its default profile's
+        std::fs::create_dir_all(hub.join("profiles").join("jardin").join("vault")).unwrap();
+        std::fs::write(hub.join("profiles").join("jardin").join("vault").join("vault.key"), "jardin-key").unwrap();
+        std::fs::create_dir_all(hub.join("vault")).unwrap();
+        std::fs::write(hub.join("vault").join("vault.key"), "default-key").unwrap();
+    });
+    given(&h).await;
+    h.enrol().await;
+    let report = h.vault.copies_ready_all(&h.config).await;
+    assert!(report.failed.is_empty(), "{report:?}");
+    let hub = h.root.join("hub");
+    for kept in [hub.join("profiles/perso/vault/vault.key"), hub.join("profiles/jardin/vault/vault.key"),
+                 hub.join("vault/vault.key")] {
+        assert!(kept.is_file(), "erased with no rebuild: {} ({report:?})", kept.display());
+    }
+    assert!(h.vault_folders_on_disk().is_empty(), "the agents in memory: none left");
+}
+
+#[tokio::test]
+async fn copies_no_agent_uses_on_a_place_of_the_offer_are_erased_and_memory_tidied() {
+    let _guard = SERIAL.lock().await;
+    let h = fixture();
+    given(&h).await;
+    // a deleted agent's copy in its old space, the hub's default profile's, a moved agent's left in the hub
+    let old = h.root.join("data/spaces/ancien/profiles/ancien/vault");
+    let hub = h.root.join("hub");
+    for folder in [old.clone(), hub.join("vault"), hub.join("profiles/vie/vault")] {
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::write(folder.join("vault.key"), "stray-key").unwrap();
+    }
+    h.enrol().await;
+    let report = h.vault.copies_ready_all(&h.config).await;
+    assert!(report.failed.is_empty(), "{report:?}");
+    for gone in [old, hub.join("vault"), hub.join("profiles/vie/vault")] {
+        assert!(!gone.exists(), "{}", gone.display());
+    }
+    // memory: a folder no link points to (a rebuild cut off) goes at the next pass
+    let root = bipbridge::hermes_copies::root(&h.place.data, false).unwrap();
+    let extra = bipbridge::hermes_copies::new_folder(&root, "vie").unwrap();
+    bipbridge::hermes_copies::forget_checked(&h.place.data);
+    h.vault.copies_ready_all(&h.config).await;
+    assert!(!extra.exists());
+    assert!(std::fs::read_link(h.link("vie")).unwrap().is_dir());
+}
+
+#[tokio::test]
+async fn an_item_hermes_refuses_fails_the_agent_while_a_disk_copy_is_at_stake_else_the_rest_is_rebuilt() {
+    let _guard = SERIAL.lock().await;
+    let h = fixture();
+    given(&h).await;
+    h.enrol().await;
+    let copy = std::fs::read(h.link("vie").join("vault.key")).unwrap();
+    h.hermes.refused.lock().unwrap().insert("Impots".into());
+    // its copy on the disk still works: all or nothing, the disk's kept
+    let report = h.vault.copies_ready_all(&h.config).await;
+    assert_eq!(report.failed, vec!["vie".to_string()], "{report:?}");
+    assert_eq!(std::fs::read(h.link("vie").join("vault.key")).unwrap(), copy);
+    assert!(report.rebuilt.contains(&"budget".to_string()));
+    // no copy on the disk any more (refused only after a server restart): the rest rebuilt, that one not given
+    h.hermes.refused.lock().unwrap().clear();
+    h.vault.copies_ready_all(&h.config).await;
+    h.reboot();
+    assert!(sealed_keys::try_open(&h.place, &Service(h.share.clone())).await);
+    bipbridge::hermes_copies::forget_checked(&h.place.data);
+    h.hermes.refused.lock().unwrap().insert("Impots".into());
+    let report = h.vault.copies_ready_all(&h.config).await;
+    assert!(report.failed.is_empty(), "{report:?}");
+    assert_eq!(h.copy("vie").keys().cloned().collect::<Vec<_>>(), vec!["SNCF".to_string()]);
+    assert_eq!(h.copy("vie"), h.handles("vie"), "Impots no longer Vie's (the app shows it not given)");
+    assert!(bipbridge::hermes_copies::failed(&h.place.data).is_empty());
+}
+
+#[tokio::test]
+async fn an_agent_whose_copy_fails_is_shown_in_health_and_not_retried_at_every_give() {
+    let _guard = SERIAL.lock().await;
+    let h = fixture();
+    given(&h).await;
+    h.enrol().await;
+    h.hermes.failing.lock().unwrap().insert("vie".into());
+    let report = h.vault.copies_ready_all(&h.config).await;
+    assert_eq!(report.failed, vec!["vie".to_string()]);
+    assert_eq!(bipbridge::hermes_copies::failed(&h.place.data), vec!["vie".to_string()]);
+    let health = sealed_keys::health_fields(&h.config);
+    assert_eq!(health.get("vault_copies_not_ready"), Some(&json!(1)), "{health:?}");
+    // a give to another agent meanwhile: Vie's rebuild not run again under the lock
+    let tries = h.hermes.ops("add_many").iter().filter(|(a, _)| a == "vie").count();
+    h.give("Ameli", "ameli.fr", &["budget"]).await;
+    assert_eq!(h.hermes.ops("add_many").iter().filter(|(a, _)| a == "vie").count(), tries);
+    // mended, at the next try (the bridge's own, in the background): gone from /health
+    h.hermes.failing.lock().unwrap().clear();
+    let report = h.vault.copies_ready_all(&h.config).await;
+    assert!(report.failed.is_empty(), "{report:?}");
+    assert!(!sealed_keys::health_fields(&h.config).contains_key("vault_copies_not_ready"));
+}
+
+#[tokio::test]
+async fn an_agent_of_the_hub_has_its_copy_in_memory_too() {
+    let _guard = SERIAL.lock().await;
+    let h = fixture_with(|dict, root| {
+        let home = root.join("hub").join("profiles").join("maison");
+        std::fs::create_dir_all(&home).unwrap();
+        dict["agents"]["maison"] = json!({"hermes_url": "http://127.0.0.1:9/p/maison", "hermes_key": "m".repeat(32),
+            "isolated": true, "sandboxed": true, "python": "/nowhere/python", "hermes_home": home.to_string_lossy()});
+    });
+    h.give("Free", "free.fr", &["maison"]).await;
+    let link = h.root.join("hub/profiles/maison/vault");
+    assert!(link.join("vault.key").is_file());
+    h.enrol().await;
+    let report = h.vault.copies_ready_all(&h.config).await;
+    assert!(report.failed.is_empty() && report.rebuilt.contains(&"maison".to_string()), "{report:?}");
+    assert!(std::fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
+    assert!(std::fs::read_link(&link).unwrap().starts_with(h.runtime.join("bipagents")));
+    assert!(left_on_disk(&h.root.join("hub")).is_empty());
+}
+
+#[tokio::test]
+async fn an_agent_moved_into_another_space_gets_its_copy_rebuilt_there() {
+    let _guard = SERIAL.lock().await;
+    let h = fixture();
+    given(&h).await;
+    h.enrol().await;
+    h.vault.copies_ready_all(&h.config).await;
+    let before = std::fs::read_link(h.link("vie")).unwrap();
+    // its space moved (spaces.rs copies the profile without its vault: NOT_COPIED), its record follows
+    let space = h.root.join("data").join("spaces").join("vie-2");
+    let home = space.join("profiles").join("vie");
+    bipbridge::spaces::copy_profile_except(&h.home("vie"), &home, &bipbridge::hermes_copies::NOT_COPIED).unwrap();
+    assert!(std::fs::symlink_metadata(home.join("vault")).is_err());
+    let mut moved = h.config.agents["vie"].clone();
+    moved.space = Some(space.to_string_lossy().into_owned());
+    moved.hermes_home = Some(home.to_string_lossy().into_owned());
+    let mut config = h.config.clone();
+    config.agents.insert("vie".into(), moved.clone());
+    h.vault.copies_ready_for(&config, &moved).await.unwrap();
+    let link = home.join("vault");
+    assert!(std::fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
+    let now = std::fs::read_link(&link).unwrap();
+    assert_ne!(now, before);
+    let items: BTreeMap<String, String> = store_of(&link)
+        .iter()
+        .map(|i| (i["label"].as_str().unwrap().to_string(), i["id"].as_str().unwrap().to_string()))
+        .collect();
+    assert_eq!(items, h.handles("vie"));
+    // the old folder in memory tidied at the next pass
+    std::fs::remove_dir_all(h.root.join("data").join("spaces").join("vie")).unwrap();
+    bipbridge::hermes_copies::forget_checked(&h.place.data);
+    let report = h.vault.copies_ready_all(&config).await;
+    assert!(report.failed.is_empty(), "{report:?}");
+    assert!(!before.exists());
 }
