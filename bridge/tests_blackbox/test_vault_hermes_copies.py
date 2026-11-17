@@ -558,3 +558,35 @@ def test_a_login_only_the_agent_s_hermes_holds_is_taken_into_the_vault_before_it
     assert vault_folders_on_disk(p.hub, p.spaces) == []
     for path in disk_files(p.bridge.root):
         assert b"F0rum-only-in-Hermes!" not in path.read_bytes(), path
+
+
+def test_a_copy_set_aside_after_its_handles_or_half_erased_is_never_taken_in_again_nor_fails_the_agent(
+        bridges, fakes, runtime, keys):
+    """Third review of 17/11 (C1, C2), with the real Hermes: the bridge stopped after the handles were written but before
+    the erase leaves the disk copy whole with the ids of before; one stopped during the erase leaves it without its key
+    (VaultStore can't read it). Neither duplicates an entry nor fails Vie; both are erased at the next start."""
+    p = place(bridges, fakes, runtime, keys).start()
+    for login in LOGINS.values():
+        p.add(login)
+    copy = {f.name: f.read_bytes() for f in p.link("vie").iterdir() if f.is_file()}
+    p.enable()
+    p.bridge.start()
+    p.wait_copies()
+    count = len(p.master())
+    p.bridge.stop()
+    whole = p.home("vie") / ".vault-disk-1a2b3c4d"
+    whole.mkdir()
+    for name, data in copy.items():
+        (whole / name).write_bytes(data)
+    half = p.home("vie") / ".vault-disk-5e6f7a8b"
+    half.mkdir()
+    (half / "vault.json.enc").write_bytes(copy["vault.json.enc"])
+    for _ in range(2):
+        p.bridge.start()
+        said = p.wait_copies()
+        assert said.get("failed") in (None, [], "[]"), said
+        p.bridge.stop()
+    assert not whole.exists() and not half.exists()
+    assert len(p.master()) == count, [r["label"] for r in p.master()]
+    p.bridge.start()
+    assert {m["label"]: m["id"] for m in p.listed("vie")} == p.handles("vie")

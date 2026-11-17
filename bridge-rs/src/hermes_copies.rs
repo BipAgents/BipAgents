@@ -151,8 +151,16 @@ pub fn erase(folder: &Path) -> Result<usize> {
         crate::sealed_keys::wipe(folder)?;
         return Ok(1);
     }
-    for entry in std::fs::read_dir(folder)? {
-        let path = entry?.path();
+    // the ciphertext first, its key next, the mark last: a cut-off erase leaves a copy nobody reads, still marked
+    let mut paths: Vec<PathBuf> = std::fs::read_dir(folder)?.map(|e| e.map(|e| e.path())).collect::<Result<_, _>>()?;
+    let order = |p: &PathBuf| match p.file_name().and_then(|n| n.to_str()) {
+        Some("vault.json.enc") => 0,
+        Some(HANDLES_WRITTEN) => 3,
+        Some("vault.key") => 1,
+        _ => 2,
+    };
+    paths.sort_by_key(order);
+    for path in paths {
         let kind = std::fs::symlink_metadata(&path)?;
         if kind.is_dir() {
             count += erase(&path)?;
@@ -175,6 +183,30 @@ pub fn set_aside_in(folder: &Path) -> Vec<PathBuf> {
         .collect();
     found.sort();
     found
+}
+
+/// Written in a copy set aside once the handles of its rebuild are in the master copy: it is never read again, only
+/// erased (review of 17/11, pass 3, C1). Erased last ([`erase`]), so a cut-off erase leaves it there.
+pub const HANDLES_WRITTEN: &str = ".bipagents-handles-written";
+
+/// [`HANDLES_WRITTEN`] put in `folder` (a real folder only: a link, or nothing there, is left).
+pub fn mark_handles_written(folder: &Path) {
+    if std::fs::symlink_metadata(folder).is_ok_and(|m| m.is_dir()) {
+        let _ = std::fs::write(folder.join(HANDLES_WRITTEN), b"");
+    }
+}
+
+/// Whether a copy set aside still holds something to read: not marked [`HANDLES_WRITTEN`], and whole (its key and its
+/// file there, the file not zeroed: our own erase cut off leaves one of them gone or zeroed, which no Hermes reads).
+pub fn readable_set_aside(folder: &Path) -> bool {
+    if !std::fs::symlink_metadata(folder).is_ok_and(|m| m.is_dir()) || folder.join(HANDLES_WRITTEN).exists() {
+        return false;
+    }
+    let file = |name: &str| std::fs::symlink_metadata(folder.join(name)).is_ok_and(|m| m.is_file() && m.len() > 0);
+    if !file("vault.key") || !file("vault.json.enc") {
+        return false;
+    }
+    std::fs::read(folder.join("vault.json.enc")).is_ok_and(|data| data.iter().any(|b| *b != 0))
 }
 
 /// [`set_aside_in`] erased (a link removed, never followed). How many files; a failure is logged.

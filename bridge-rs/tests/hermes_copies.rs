@@ -146,6 +146,7 @@ fn fake_run(hermes: Arc<Hermes>) -> VaultRun {
                         .map(|i| {
                             let secret = i["secret"].clone();
                             json!({"id": i["id"], "kind": i["kind"], "label": i["label"], "origin": i["origin"],
+                                   "created_at": i.get("created_at").cloned().unwrap_or(Value::Null),
                                    "identifier_type": i.get("identifier_type").cloned().unwrap_or(secret["identifier_type"].clone()),
                                    "identifier": i.get("identifier").cloned().unwrap_or(secret["identifier"].clone()),
                                    "secret": secret})
@@ -280,6 +281,8 @@ fn fixture_with(extra: impl FnOnce(&mut Value, &Path)) -> Fixture {
     bipbridge::hermes_copies::forget_checked(&place.data);
     let mut dict = config_dict(&root, &Urls::default());
     dict["hermes"]["isolated"] = json!(true);
+    // the person's language (the lines told to them): French
+    dict["browser"] = json!({"language": "fr-FR"});
     // the hub's own home here, never the account's ~/.hermes (the copies no agent uses there are erased)
     dict["hermes"]["home"] = json!(root.join("hub").to_string_lossy());
     std::fs::create_dir_all(root.join("hub").join("profiles")).unwrap();

@@ -119,11 +119,37 @@ pub struct CardFound {
     pub secret: Dict,
 }
 
-/// A line the person is told once about the vault (tests first).
+/// A line the person is told once about the vault (in the app's Coffre, until it is shown: `DELETE
+/// /v1/vault/notices/{id}`): today, a card of an agent's Hermes not taken (never kept with its security code).
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Notice {
     pub id: String,
     pub text: String,
+    /// What it is about, once (`card_not_kept:<agent>:<label>`): never said twice.
+    #[serde(default)]
+    pub key: String,
+    #[serde(default)]
+    pub at: String,
+}
+
+/// « Ta carte « X » n'a pas été reprise : ajoute-la dans le Coffre. », in the person's language.
+pub fn card_not_kept_text(lang: &str, label: &str) -> String {
+    match lang {
+        "de" => format!("Deine Karte „{label}“ wurde nicht übernommen: Füge sie im Tresor hinzu."),
+        "es" => format!("Tu tarjeta «{label}» no se ha conservado: añádela en la Caja fuerte."),
+        "fr" => format!("Ta carte « {label} » n'a pas été reprise : ajoute-la dans le Coffre."),
+        _ => format!("Your card “{label}” wasn't kept: add it in the Vault."),
+    }
+}
+
+/// « Pas donnée à Vie : son Hermes la refuse. », in the person's language (an entry's `refused` mark).
+pub fn refused_text(lang: &str, agent: &str) -> String {
+    match lang {
+        "de" => format!("Nicht an {agent} gegeben: Sein Hermes lehnt sie ab."),
+        "es" => format!("No se ha dado a {agent}: su Hermes la rechaza."),
+        "fr" => format!("Pas donnée à {agent} : son Hermes la refuse."),
+        _ => format!("Not given to {agent}: its Hermes refuses it."),
+    }
 }
 
 /// What [`Vault::copies_ready_all`] did, by agent.
@@ -179,6 +205,10 @@ pub struct Item {
     /// rebuild it accepts, or when the person gives it again.
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     pub refused: IndexMap<String, String>,
+    /// A login an agent's Hermes held for the same site and user name as this one, with another password (taken into
+    /// the vault so neither is lost): the id of the person's own, which `vault_login` fills first.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duplicate_of: Option<String>,
     pub created_at: String,
     pub updated_at: String,
     /// A payment card's public part (cards.rs): last 4 digits, expiry, flags, sites, payments. Never its numbers.
@@ -489,6 +519,9 @@ pub fn holder(config: &Config, agent: &AgentConfig) -> Option<String> {
 /// How the vault reaches an agent's Hermes vault (tests give their own, as Python's `run=`).
 pub type VaultRun = Arc<dyn Fn(AgentConfig, Dict) -> BoxFuture<'static, anyhow::Result<Dict>> + Send + Sync>;
 
+/// At most this much of what an agent's Hermes prints is read (32 MB: an agent's whole vault, `export`).
+pub const HERMES_OUTPUT_MAX: usize = 32 * 1024 * 1024;
+
 /// The request on the agent's own Python, its answer the last line it prints.
 pub async fn run_in_hermes(agent: AgentConfig, request: Dict) -> anyhow::Result<Dict> {
     use tokio::io::AsyncWriteExt;
@@ -522,11 +555,38 @@ pub async fn run_in_hermes(agent: AgentConfig, request: Dict) -> anyhow::Result<
         }
         drop(stdin);
     };
-    let (_, output) =
-        tokio::time::timeout(Duration::from_secs(60), async { tokio::join!(writing, child.wait_with_output()) })
-            .await
-            .map_err(|_| anyhow::anyhow!("TimeoutError"))?;
-    let output = output?;
+    // what it prints, capped (an agent's own vault, read whole by `export`: never more than this kept in memory)
+    let (mut out_pipe, mut err_pipe) = (child.stdout.take(), child.stderr.take());
+    let reading = async {
+        use tokio::io::AsyncReadExt;
+        let (mut out, mut err) = (Vec::new(), Vec::new());
+        let read_out = async {
+            if let Some(pipe) = out_pipe.as_mut() {
+                let _ = pipe.take(HERMES_OUTPUT_MAX as u64 + 1).read_to_end(&mut out).await;
+            }
+        };
+        let read_err = async {
+            if let Some(pipe) = err_pipe.as_mut() {
+                let _ = pipe.take(64 * 1024).read_to_end(&mut err).await;
+            }
+        };
+        tokio::join!(read_out, read_err);
+        (out, err)
+    };
+    let ((), (stdout, stderr)) = tokio::time::timeout(Duration::from_secs(60), async { tokio::join!(writing, reading) })
+        .await
+        .map_err(|_| anyhow::anyhow!("TimeoutError"))?;
+    if stdout.len() > HERMES_OUTPUT_MAX {
+        let _ = child.start_kill();
+        let _ = child.wait().await;
+        tracing::warn!(agent = %agent.name, "vault: the agent's Hermes answered more than the bridge reads");
+        return Err(VaultError::Invalid(format!("{}: Hermes' answer is too long", agent.name)).into());
+    }
+    drop((out_pipe, err_pipe));
+    let status = tokio::time::timeout(Duration::from_secs(60), child.wait())
+        .await
+        .map_err(|_| anyhow::anyhow!("TimeoutError"))??;
+    let output = std::process::Output { status, stdout, stderr };
     if !output.status.success() {
         // Hermes' VaultError messages never contain secrets; keep only the last line.
         let err = String::from_utf8_lossy(&output.stderr).into_owned();
@@ -682,14 +742,59 @@ impl Vault {
         Ok(self.read()?.iter().map(Self::item).collect())
     }
 
-    /// What the person is told once about the vault (tests first: filled in by the fix).
-    pub fn notices(&self) -> Vec<Notice> {
-        Vec::new()
+    fn notices_path(&self) -> PathBuf {
+        self.folder.join("vault-notices.json")
     }
 
-    /// A notice shown by the app (tests first: filled in by the fix).
-    pub fn notice_seen(&self, _id: &str) -> bool {
-        false
+    fn all_notices(&self) -> Vec<Notice> {
+        std::fs::read(self.notices_path()).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default()
+    }
+
+    fn write_notices(&self, notices: &[Notice]) {
+        let text = serde_json::to_vec(notices).unwrap_or_default();
+        let path = self.notices_path();
+        let tmp = path.with_file_name(format!(".vault-notices.{}.tmp", std::process::id()));
+        let done = crate::py::makedirs(&self.folder.to_string_lossy(), 0o700)
+            .and_then(|_| crate::py::write_with_mode(&tmp.to_string_lossy(), &text, 0o600))
+            .and_then(|_| std::fs::rename(&tmp, &path));
+        if let Err(exc) = done {
+            tracing::error!(error = %exc, "vault notices not written");
+        }
+    }
+
+    /// What the person is told once about the vault, not shown yet (the app's listing carries them).
+    pub fn notices(&self) -> Vec<Notice> {
+        self.all_notices().into_iter().filter(|n| !n.text.is_empty()).collect()
+    }
+
+    /// `(key, text)` told to the person, each once ever (a shown one is kept without its text, so never said again).
+    fn add_notices(&self, new: &[(String, String)]) {
+        let mut all = self.all_notices();
+        let mut changed = false;
+        for (key, text) in new {
+            if all.iter().any(|n| &n.key == key) {
+                continue;
+            }
+            all.push(Notice {
+                id: format!("notice_{}", &crate::py::uuid4_hex()[..12]),
+                text: text.clone(),
+                key: key.clone(),
+                at: now(),
+            });
+            changed = true;
+        }
+        if changed {
+            self.write_notices(&all);
+        }
+    }
+
+    /// A notice the app showed: not listed again. Whether it was there.
+    pub fn notice_seen(&self, id: &str) -> bool {
+        let mut all = self.all_notices();
+        let Some(notice) = all.iter_mut().find(|n| n.id == id && !n.text.is_empty()) else { return false };
+        notice.text.clear(); // its key kept: never said twice
+        self.write_notices(&all);
+        true
     }
 
     pub fn items(&self) -> Vec<Item> {
@@ -958,13 +1063,6 @@ impl Vault {
                     }
                 }
             }
-            "payment" => {
-                for key in PAYMENT_FIELDS {
-                    if let Some(v) = text(secret.get(key)) {
-                        body.insert(key.into(), json!(v));
-                    }
-                }
-            }
             k if k == crate::vault_contacts::KIND => {
                 for (key, _) in crate::vault_contacts::TEXT_FIELDS {
                     if let Some(v) = text(secret.get(key)) {
@@ -980,11 +1078,58 @@ impl Vault {
             _ => return Err(invalid("an unknown kind")),
         }
         let mut record = Self::parse_with(&body, None, None)?;
+        // Hermes' own date (when it saved it), so the person sees which of two is the newer
+        let date = Self::hermes_date(item).unwrap_or_else(now);
         record.insert("id".into(), json!(format!("item_{}", &crate::py::uuid4_hex()[..12])));
         record.insert("agents".into(), json!({}));
-        record.insert("created_at".into(), json!(now()));
-        record.insert("updated_at".into(), json!(now()));
+        record.insert("created_at".into(), json!(date));
+        record.insert("updated_at".into(), json!(date));
         Ok(record)
+    }
+
+    /// When Hermes saved `item` (its `created_at`), written as [`now`] writes dates.
+    fn hermes_date(item: &Value) -> Option<String> {
+        let text = item.get("created_at").and_then(Value::as_str)?;
+        let at = chrono::DateTime::parse_from_rfc3339(text).ok()?;
+        Some(at.with_timezone(&chrono::Utc).format("%Y-%m-%dT%H:%M:%S+00:00").to_string())
+    }
+
+    /// A login of the vault for `item`'s site and user name (another password, maybe).
+    fn same_login(record: &Dict, item: &Value) -> bool {
+        let field = |v: Option<&Value>| v.filter(|v| crate::py::truthy(v)).map(crate::py::py_str).unwrap_or_default();
+        let secret = item.get("secret").and_then(Value::as_object);
+        let identifier = Some(field(item.get("identifier")))
+            .filter(|i| !i.is_empty())
+            .unwrap_or_else(|| field(secret.and_then(|s| s.get("identifier"))));
+        let origin = normalize_origin(&field(item.get("origin"))).unwrap_or_default();
+        item.get("kind").and_then(Value::as_str) == Some("login")
+            && record.get("kind").and_then(Value::as_str) == Some("login")
+            && record.get("duplicate_of").is_none()
+            && !origin.is_empty()
+            && record.get("origin").and_then(Value::as_str) == Some(origin.as_str())
+            && !identifier.is_empty()
+            && record.get("identifier").and_then(Value::as_str).is_some_and(|i| i.trim() == identifier.trim())
+    }
+
+    /// The vault's own record of `item` (the same entry: a login's site, user name and password; « Coordonnées »' every
+    /// field Hermes holds).
+    fn same_entry(record: &Dict, item: &Value) -> bool {
+        let secret = item.get("secret").and_then(Value::as_object).cloned().unwrap_or_default();
+        match item.get("kind").and_then(Value::as_str) {
+            Some("login") => {
+                Self::same_login(record, item)
+                    && record.get("secret").and_then(|s| s.get("password")) == secret.get("password")
+            }
+            Some(k) if k == crate::vault_contacts::KIND && is_address(record) => {
+                let ours = Self::to_hermes(record);
+                let strings = |m: &Dict| -> std::collections::BTreeMap<String, String> {
+                    m.iter().map(|(k, v)| (k.clone(), crate::py::py_str(v).trim().to_string())).filter(|(_, v)| !v.is_empty()).collect()
+                };
+                ours.get("label") == item.get("label")
+                    && ours.get("secret").and_then(Value::as_object).map(strings) == Some(strings(&secret))
+            }
+            _ => false,
+        }
     }
 
     fn handles(record: &mut Dict) -> &mut Dict {
@@ -1281,6 +1426,15 @@ impl Vault {
             p.file_name().is_some_and(|n| n.to_string_lossy().starts_with(copies::SET_ASIDE[0]))
                 && std::fs::symlink_metadata(p).is_ok_and(|m| m.is_dir())
         }));
+        // A set-aside copy whose handles were written already (marked: the bridge stopped before its erase, or the erase
+        // failed) or that our own erase left half done (its key, or its file, gone or zeroed): nothing to read, erased
+        // with the rest. Only a whole copy not marked is read.
+        let (readable, spent): (Vec<PathBuf>, Vec<PathBuf>) =
+            disks.iter().cloned().partition(|d| *d == link || copies::readable_set_aside(d));
+        if !spent.is_empty() {
+            tracing::info!(target: "bipbridge::vault", agent = %agent.name, folders = spent.len(),
+                "vault: copies set aside after their handles were written (or half erased): erased, not read");
+        }
         let mut records = self.read()?;
         let mut expected: Vec<(usize, String)> = records
             .iter()
@@ -1295,7 +1449,7 @@ impl Vault {
         let refused: Vec<usize> = (0..records.len())
             .filter(|i| Self::refused_for(&records[*i], &agent.name) && !Self::holds(&records[*i], &agent.name))
             .collect();
-        if let Some(folder) = current.as_ref().filter(|_| disks.is_empty() && refused.is_empty()) {
+        if let Some(folder) = current.as_ref().filter(|_| readable.is_empty() && refused.is_empty()) {
             let fits = if expected.is_empty() && !folder.join("vault.json.enc").exists() {
                 true
             } else {
@@ -1327,13 +1481,25 @@ impl Vault {
         // Hermes' copy on the disk still there (today's layout, before its first rebuild): it keeps working if this one
         // fails, so all or nothing. Without one (a server restart emptied the memory), an item Hermes refuses is left
         // out (no longer given to this agent: the app shows it so) and the rest is rebuilt.
-        let disk_at_stake = !disks.is_empty();
+        let disk_at_stake = !readable.is_empty();
         // What only its Hermes holds on the disk (a login it saved itself, a Hermes sent to the place: to_place.py) is
         // taken into the master copy first, never erased with its copy: read once (`export`), made the vault's own
-        // records given to this agent, rebuilt with the rest. One the vault can't keep: its copy stays as it is.
+        // records given to this agent, rebuilt with the rest. Not taken: what the person took back from it (a removal
+        // waiting: never given again), what the vault holds already (the same entry: given, or kept as it is), a
+        // Hermes card (never kept with its security code: the person is told to add it in the Coffre). One the vault
+        // can't keep: its copy stays as it is.
         let known: std::collections::HashSet<String> = expected.iter().map(|(_, h)| h.clone()).collect();
+        let removed: std::collections::HashSet<String> = self
+            .removals()
+            .iter()
+            .filter(|r| r.get("agent").and_then(Value::as_str) == Some(agent.name.as_str()))
+            .filter_map(|r| r.get("id").map(crate::py::py_str))
+            .collect();
+        let lang = crate::handback::language_of(config, agent);
         let mut taken: std::collections::HashSet<String> = std::collections::HashSet::new();
-        for disk in &disks {
+        let mut notices: Vec<(String, String)> = Vec::new();
+        let mut dated = false;
+        for disk in &readable {
             let mut request = Dict::new();
             request.insert("op".into(), json!("export"));
             request.insert("vault".into(), json!(disk.to_string_lossy()));
@@ -1344,20 +1510,44 @@ impl Vault {
             };
             for item in items {
                 let id = item.get("id").and_then(Value::as_str).unwrap_or("").to_string();
-                if id.is_empty() || known.contains(&id) || !taken.insert(id.clone()) {
+                if id.is_empty() || known.contains(&id) || removed.contains(&id) || !taken.insert(id.clone()) {
                     continue;
                 }
-                let record = Self::from_hermes(&item).map_err(|exc| {
-                    anyhow::anyhow!("{}: an item only its Hermes holds can't be taken into the vault ({exc}): its copy on the \
-                             disk kept", agent.name)
+                let kind = item.get("kind").and_then(Value::as_str).unwrap_or("");
+                let label = item.get("label").map(crate::py::py_str).unwrap_or_default();
+                if kind == "payment" {
+                    notices.push((format!("card_not_kept:{}:{label}", agent.name), card_not_kept_text(&lang, &label)));
+                    continue;
+                }
+                // the same entry the vault holds already (a cut-off swap's copy, Hermes saving it again)
+                if let Some(i) = (0..records.len()).find(|i| Self::same_entry(&records[*i], &item)) {
+                    if let Some(newer) = Self::hermes_date(&item).filter(|d| {
+                        records[i].get("updated_at").and_then(Value::as_str).is_none_or(|u| d.as_str() > u)
+                    }) {
+                        records[i].insert("updated_at".into(), json!(newer));
+                        dated = true;
+                    }
+                    if !expected.iter().any(|(e, _)| *e == i) && !Self::refused_for(&records[i], &agent.name) {
+                        expected.push((i, id));
+                    }
+                    continue;
+                }
+                let mut record = Self::from_hermes(&item).map_err(|_| {
+                    // never the entry's values (a phone, an address): its kind and its name only
+                    anyhow::anyhow!("{}: the entry « {} » ({kind}) only its Hermes holds can't be taken into the vault \
+                                     as it is: its copy on the disk kept", agent.name, pyx::head(&label, 60))
                 })?;
+                // the same login with another password: kept too (never lose either), the person's own filled first
+                if let Some(original) = records.iter().find(|r| Self::same_login(r, &item)) {
+                    record.insert("duplicate_of".into(), original.get("id").cloned().unwrap_or(Value::Null));
+                }
                 records.push(record);
                 expected.push((records.len() - 1, id));
             }
         }
         if !taken.is_empty() {
             tracing::info!(target: "bipbridge::vault", agent = %agent.name, items = taken.len(),
-                "vault: items only the agent's Hermes held taken into the vault");
+                "vault: the items of the agent's Hermes copy on the disk looked at (those only it held taken in)");
         }
         let held = expected.len();
         let wanted: Vec<usize> = expected.iter().map(|(i, _)| *i).chain(refused.iter().copied()).collect();
@@ -1428,7 +1618,7 @@ impl Vault {
         })?;
         let mut left_out = 0;
         if !wanted.is_empty() {
-            let line = format!("Pas donnée à {} : son Hermes la refuse.", agent.display_name);
+            let line = refused_text(&lang, &agent.display_name);
             for (i, id) in wanted.iter().zip(&ids) {
                 let contact = is_address(&records[*i]);
                 match id {
@@ -1452,8 +1642,24 @@ impl Vault {
                 let _ = std::fs::remove_dir_all(&folder);
                 return Err(exc);
             }
+        } else if dated {
+            let _ = self.write(&records); // a date Hermes had newer (nothing given to this agent now)
+        }
+        // the handles written: what was set aside is never read again (erased now, or at the next pass if cut off)
+        for folder in aside.iter().chain(&disks) {
+            copies::mark_handles_written(folder);
         }
         copies::set_checked(&data, &agent.name, &folder);
+        // the removals waiting for this agent are done: its new copy holds only what it is given
+        let removals = self.removals();
+        if removals.iter().any(|r| r.get("agent").and_then(Value::as_str) == Some(agent.name.as_str())) {
+            let left: Vec<Dict> = removals
+                .into_iter()
+                .filter(|r| r.get("agent").and_then(Value::as_str) != Some(agent.name.as_str()))
+                .collect();
+            self.write_removals(&left);
+        }
+        self.add_notices(&notices);
         let mut erased = 0;
         for disk in aside {
             match copies::erase(&disk) {
@@ -1551,6 +1757,14 @@ impl Vault {
         Self::keep_confirmed(config, &mut record, &added);
         if let Some(Value::Array(confirmed)) = record.get_mut("confirmed_for") {
             confirmed.retain(|a| a.as_str().is_some_and(|a| wanted.iter().any(|w| w == a)));
+        }
+        // the person's choice wins over a refusal of an agent's Hermes: not wanted for it now, never given it later
+        let refused_agents: Vec<String> = match record.get("refused") {
+            Some(Value::Object(map)) => map.keys().cloned().collect(),
+            _ => Vec::new(),
+        };
+        for agent in refused_agents.iter().filter(|a| !wanted.contains(a)) {
+            Self::set_refused(&mut record, agent, None);
         }
         let to_take: Vec<String> = had.iter().filter(|a| !wanted.contains(a) || changed).cloned().collect();
         self.take_back(config, &mut record, &to_take).await;
@@ -2144,6 +2358,12 @@ async fn listing(State(state): State<AppState>) -> ApiResult<Response> {
         map.insert("cards_on_phone".into(), json!(true));
         map.insert("card_cap_max_eur".into(), json!(rules.cap_max_cents / 100));
     }
+    let notices = state.vault.notices();
+    if let (false, Value::Object(map)) = (notices.is_empty(), &mut out) {
+        // told once (a card of an agent's Hermes not taken): the app shows each line, then `DELETE …/notices/{id}`
+        let rows: Vec<Value> = notices.iter().map(|n| json!({"id": n.id, "text": n.text})).collect();
+        map.insert("notices".into(), json!(rows));
+    }
     let removing: Vec<Value> =
         state.vault.removing().into_iter().map(|(agent, item)| json!({"agent": agent, "item": item})).collect();
     if let (false, Value::Object(map)) = (removing.is_empty(), &mut out) {
@@ -2151,6 +2371,13 @@ async fn listing(State(state): State<AppState>) -> ApiResult<Response> {
         map.insert("removing".into(), json!(removing));
     }
     Ok(web::ok(out))
+}
+
+async fn notice_seen(State(state): State<AppState>, Path(notice_id): Path<String>) -> ApiResult<Response> {
+    if !state.vault.notice_seen(&notice_id) {
+        return Err(HttpError::new(404, "no such notice"));
+    }
+    Ok(web::ok(json!({"ok": true})))
 }
 
 async fn create(State(state): State<AppState>, body: Bytes) -> ApiResult<Response> {
@@ -2205,6 +2432,7 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/vault", get(listing).post(create))
         .route("/vault/{item_id}", patch(update).delete(delete))
+        .route("/vault/notices/{notice_id}", axum::routing::delete(notice_seen))
         .route("/vault/{item_id}/confirm", axum::routing::post(confirm))
         .route("/vault/{item_id}/reveal", axum::routing::post(reveal))
 }
