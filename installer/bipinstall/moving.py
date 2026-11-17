@@ -70,6 +70,10 @@ DATA_SKIP = {"archive-index"}
 # memory the bridge rebuilds from its master copy (hermes_copies.rs): never carried, nor a copy left on the disk; a link
 # into memory never anywhere (it would point at nothing on another server).
 HERMES_VAULT = "vault"
+# What the bridge's swap of that link leaves beside it when cut off (bridge-rs/src/hermes_copies.rs SET_ASIDE: the bridge
+# stopped, a put back failed): the disk's copy set aside, its Hermes key in it, and a link not renamed yet. The bridge
+# erases them at its next start; never carried, on any place (only the bridge makes them).
+HERMES_SET_ASIDE = (".vault-disk-", ".vault-link-")
 SEALED_MARKS = ("keys.sealed.json", ".keys-migration/journal.json")
 # The bridge's spare agents (bridge-rs/src/agent_pool.rs POOL_FILE), next to bridge.toml.
 SPARES_FILE = "spare-agents.json"
@@ -169,6 +173,8 @@ class Inventory:
             parts = _relative(path, home)
             if parts is None:
                 continue
+            if name.startswith(HERMES_SET_ASIDE) and (len(parts) == 1 or (len(parts) == 3 and parts[0] == "profiles")):
+                return True   # a Hermes copy set aside by a cut-off swap (its key in it): erased by the bridge
             if parts and parts[0] in HERMES_SKIP_ROOT:
                 return True
             if len(parts) >= 3 and parts[0] == "profiles" and parts[2] in HERMES_SKIP_PROFILE:

@@ -69,6 +69,8 @@ def rules(inv: moving.Inventory, root: Path) -> List[str]:
             continue
         found += [f"- {at}{name}" for name in sorted(moving.HERMES_SKIP_ROOT)]
         found += [f"- {at}profiles/*/{name}" for name in sorted(moving.HERMES_SKIP_PROFILE)]
+        # what a cut-off swap of the bridge left beside an agent's vault (its Hermes key in it): never, on any place
+        found += [f"- {at}{where}{prefix_}*" for where in ("", "profiles/*/") for prefix_ in moving.HERMES_SET_ASIDE]
         if inv.vault_in_memory():
             # the agents' Hermes vaults: links into memory (or copies not erased yet), rebuilt by the bridge over there
             found += [f"- {at}{moving.HERMES_VAULT}", f"- {at}profiles/*/{moving.HERMES_VAULT}"]

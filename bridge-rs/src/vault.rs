@@ -37,6 +37,9 @@ use crate::Dict;
 pub const KINDS: [&str; 4] = ["login", "payment", "address", crate::cards::KIND];
 /// A card's handle for an agent allowed to use it: nothing is written into the agent's own vault.
 pub const CARD_HANDLE: &str = "bridge";
+/// An agent whose Hermes copy failed to be made ready (a place enrolled for sealed keys, hermes_copies.rs) is not tried
+/// again by each give or take-back for this long: the bridge's own retry does (sealed_keys.rs `copies_ready_retrying`).
+pub const COPY_RETRY_PAUSE: std::time::Duration = std::time::Duration::from_secs(60);
 pub const IDENTIFIER_TYPES: [&str; 3] = ["email", "phone", "username"];
 pub const PAYMENT_FIELDS: [&str; 6] =
     ["card_number", "cardholder_name", "exp_month", "exp_year", "cvc", "billing_postal_code"];
@@ -113,14 +116,16 @@ pub struct CopiesReport {
     pub checked: Vec<String>,
     /// Copies rebuilt (one Hermes run each).
     pub rebuilt: Vec<String>,
-    /// Copies not ready (its Hermes failing or answering short): its copy on the disk, if any, kept.
+    /// Copies not ready (its Hermes failing or answering short): its copy on the disk, if any, kept; tried again in
+    /// the background (sealed_keys.rs `copies_ready_retrying`), counted in /health.
     pub failed: Vec<String>,
     /// Files erased from the disk (copies whose rebuild was checked, copies no agent uses).
     pub erased: usize,
 }
 
 enum CopyReady {
-    Checked,
+    /// Found right; what a cut-off swap left beside its link erased (how many files).
+    Checked(usize),
     Rebuilt(usize),
     /// A Hermes the bridge reaches in a container: its copy where it is.
     Elsewhere,
@@ -1044,8 +1049,13 @@ impl Vault {
         if crate::sealed_keys::closed(config) {
             return Err(crate::sealed_keys::Locked.into());
         }
+        let data = PathBuf::from(config.data_dir());
         for agent in config.agents.values() {
-            if let Err(exc) = self.copy_ready_locked(config, agent).await {
+            // one that just failed waits for the bridge's own retry: not run again under the lock at each give
+            if crate::hermes_copies::failed_within(&data, &agent.name, COPY_RETRY_PAUSE) {
+                continue;
+            }
+            if let Err(exc) = self.copy_ready_noted(config, agent).await {
                 tracing::warn!(target: "bipbridge::vault", agent = %agent.name, error = %format!("{exc:#}"),
                     "vault: the agent's Hermes copy is not ready in memory");
             }
@@ -1062,7 +1072,14 @@ impl Vault {
             return Err(crate::sealed_keys::Locked.into());
         }
         let _lock = self.lock.lock().await;
-        self.copy_ready_locked(config, agent).await.map(|_| ())
+        self.copy_ready_noted(config, agent).await.map(|_| ())
+    }
+
+    /// [`Self::copy_ready_locked`], its failure noted ([`crate::hermes_copies::failed`]).
+    async fn copy_ready_noted(&self, config: &Config, agent: &AgentConfig) -> anyhow::Result<CopyReady> {
+        let done = self.copy_ready_locked(config, agent).await;
+        crate::hermes_copies::set_failed(std::path::Path::new(&config.data_dir()), &agent.name, done.is_err());
+        done
     }
 
     /// Every agent's copy ready in memory (at the bridge's start, once the vault is open): checked, rebuilt where it is
@@ -1078,8 +1095,11 @@ impl Vault {
         let mut agents: Vec<&AgentConfig> = config.agents.values().collect();
         agents.sort_by(|a, b| a.name.cmp(&b.name));
         for agent in agents {
-            match self.copy_ready_locked(config, agent).await {
-                Ok(CopyReady::Checked) => report.checked.push(agent.name.clone()),
+            match self.copy_ready_noted(config, agent).await {
+                Ok(CopyReady::Checked(erased)) => {
+                    report.checked.push(agent.name.clone());
+                    report.erased += erased;
+                }
                 Ok(CopyReady::Rebuilt(erased)) => {
                     report.rebuilt.push(agent.name.clone());
                     report.erased += erased;
@@ -1099,8 +1119,7 @@ impl Vault {
             crate::hermes_copies::tidy(&root, &keep);
         }
         if report.failed.is_empty() {
-            let keep = links.into_iter().collect();
-            for stray in crate::hermes_copies::strays(config, &keep) {
+            for stray in crate::hermes_copies::strays(config) {
                 match crate::hermes_copies::erase(&stray) {
                     Ok(files) => report.erased += files,
                     Err(exc) => tracing::warn!(target: "bipbridge::vault", folder = %stray.display(), error = %exc,
@@ -1126,8 +1145,9 @@ impl Vault {
         let root = copies::root(&data, true)?;
         let current = copies::current(&link, &root);
         if current.is_some() && copies::checked(&data, &agent.name) == current {
-            return Ok(CopyReady::Checked);
+            return Ok(CopyReady::Checked(0));
         }
+        let profile = link.parent().map(std::path::Path::to_path_buf).unwrap_or_default();
         let mut records = self.read()?;
         let expected: Vec<(usize, String)> = records
             .iter()
@@ -1162,10 +1182,15 @@ impl Vault {
             };
             if fits {
                 copies::set_checked(&data, &agent.name, folder);
-                return Ok(CopyReady::Checked);
+                // a swap cut off before its erase (the bridge stopped, a put back failed): what it set aside goes now
+                return Ok(CopyReady::Checked(copies::erase_set_aside(&profile)));
             }
         }
         copies::unset_checked(&data, &agent.name);
+        // Hermes' copy on the disk still there (today's layout, before its first rebuild): it keeps working if this one
+        // fails, so all or nothing. Without one (a server restart emptied the memory), an item Hermes refuses is left
+        // out (no longer given to this agent: the app shows it so) and the rest is rebuilt.
+        let disk_at_stake = std::fs::symlink_metadata(&link).is_ok_and(|m| m.is_dir());
         let folder = copies::new_folder(&root, &agent.name)?;
         let made: anyhow::Result<Vec<Option<String>>> = async {
             if expected.is_empty() {
@@ -1200,7 +1225,7 @@ impl Vault {
             for (item, id) in items.iter().zip(&ids) {
                 let Some(id) = id else {
                     // refused: only « Coordonnées » stay the bridge's (an older Hermes without patch 0017), as at a give
-                    if item.get("kind").and_then(Value::as_str) == Some(crate::vault_contacts::KIND) {
+                    if item.get("kind").and_then(Value::as_str) == Some(crate::vault_contacts::KIND) || !disk_at_stake {
                         continue;
                     }
                     anyhow::bail!("{}: Hermes refused an item it held", agent.name);
@@ -1228,10 +1253,22 @@ impl Vault {
         let aside = copies::point(&link, &folder).inspect_err(|_| {
             let _ = std::fs::remove_dir_all(&folder);
         })?;
+        let mut left_out = 0;
         if !expected.is_empty() {
             for ((i, _), id) in expected.iter().zip(&ids) {
-                let handle = id.clone().unwrap_or_else(|| CARD_HANDLE.to_string());
-                Self::handles(&mut records[*i]).insert(agent.name.clone(), json!(handle));
+                let contact = is_address(&records[*i]);
+                match id {
+                    Some(id) => {
+                        Self::handles(&mut records[*i]).insert(agent.name.clone(), json!(id));
+                    }
+                    None if contact => {
+                        Self::handles(&mut records[*i]).insert(agent.name.clone(), json!(CARD_HANDLE));
+                    }
+                    None => {
+                        Self::handles(&mut records[*i]).shift_remove(&agent.name);
+                        left_out += 1;
+                    }
+                }
             }
             if let Err(exc) = self.write(&records) {
                 copies::put_back(&link, previous.as_deref(), &aside);
@@ -1247,6 +1284,11 @@ impl Vault {
                 Err(exc) => tracing::warn!(target: "bipbridge::vault", agent = %agent.name, error = %exc,
                     "vault: the agent's Hermes copy on the disk not erased"),
             }
+        }
+        erased += copies::erase_set_aside(&profile); // what an earlier swap cut off left (the bridge stopped)
+        if left_out > 0 {
+            tracing::warn!(target: "bipbridge::vault", agent = %agent.name, items = left_out,
+                "vault: items its Hermes refused are no longer given to the agent (the rest rebuilt)");
         }
         if let Some(previous) = previous.filter(|p| *p != folder) {
             let _ = std::fs::remove_dir_all(previous);

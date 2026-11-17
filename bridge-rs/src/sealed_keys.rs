@@ -283,13 +283,19 @@ pub fn closed(config: &Config) -> bool {
     matches!(state(Path::new(&config.data_dir())), State::Closed(_))
 }
 
-/// What /health adds: nothing when not enrolled (as today), `vault: "open"`, or `vault: "locked"` and `vault_reason`.
+/// What /health adds: nothing when not enrolled (as today), `vault: "open"` (with `vault_copies_not_ready`, how many
+/// agents' Hermes copies are not ready in memory, when some), or `vault: "locked"` and `vault_reason`.
 pub fn health_fields(config: &Config) -> Map<String, Value> {
     let mut out = Map::new();
     match state(Path::new(&config.data_dir())) {
         State::Off => {}
         State::Open => {
             out.insert("vault".into(), json!("open"));
+            // agents whose Hermes copy is not ready in memory (hermes_copies.rs): for the place's keeper, a count only
+            let failed = crate::hermes_copies::failed(Path::new(&config.data_dir())).len();
+            if failed > 0 {
+                out.insert("vault_copies_not_ready".into(), json!(failed));
+            }
         }
         State::Closed(closed) => {
             out.insert("vault".into(), json!("locked"));
@@ -816,8 +822,7 @@ pub fn start(app: &crate::app::AppState) {
             let app = app.clone();
             let checking = app.clone();
             app.spawn(async move {
-                let config = checking.config();
-                checking.vault.copies_ready_all(&config).await;
+                copies_ready_retrying(&checking).await;
             });
             return;
         }
@@ -831,13 +836,49 @@ pub fn start(app: &crate::app::AppState) {
         reopen(place.clone(), source, Duration::from_secs(1)).await;
         crate::hermes_copies::forget_checked(&place.data);
         let config = reopening.config();
-        reopening.vault.copies_ready_all(&config).await;
+        let report = reopening.vault.copies_ready_all(&config).await;
+        if !report.failed.is_empty() {
+            let retrying = reopening.clone();
+            reopening.spawn(async move { retry_copies(&retrying).await });
+        }
         if config.hermes.isolated {
             let _ = reopening.vault.retry_removals(&config).await;
             let _ = reopening.vault.follow_browsers(&config).await;
         }
         crate::profile_files::reconcile_all(&config);
     });
+}
+
+/// Every agent's Hermes copy made ready in memory, then, while some are not (a Hermes failing a while, a rebuild past
+/// its time), tried again in the background ([`retry_copies`]): an agent never stays without its copy until the next
+/// give or start (review of 17/11, R2).
+async fn copies_ready_retrying(app: &crate::app::AppState) {
+    let report = app.vault.copies_ready_all(&app.config()).await;
+    if !report.failed.is_empty() {
+        retry_copies(app).await;
+    }
+}
+
+/// The agents' copies not ready tried again: after 1 minute, then twice as long each time, up to an hour, until none
+/// fails (or the place is no longer enrolled, or closed again: its own start handles it). The diets follow a pass that
+/// rebuilt (an item Hermes refused is no longer given).
+async fn retry_copies(app: &crate::app::AppState) {
+    let mut pause = crate::vault::COPY_RETRY_PAUSE;
+    loop {
+        tokio::time::sleep(pause).await;
+        pause = (pause * 2).min(Duration::from_secs(3600));
+        let config = app.config();
+        if !crate::hermes_copies::in_memory(&config) || closed(&config) {
+            return;
+        }
+        let report = app.vault.copies_ready_all(&config).await;
+        if !report.rebuilt.is_empty() {
+            crate::profile_files::reconcile_all(&config);
+        }
+        if report.failed.is_empty() {
+            return;
+        }
+    }
 }
 
 // -- the enrolment: the migration --------------------------------------------------------------------------------------

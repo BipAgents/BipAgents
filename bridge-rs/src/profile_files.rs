@@ -440,6 +440,8 @@ pub fn reconcile(config: &Config, agent: &AgentConfig) -> anyhow::Result<bool> {
     let chosen = settings(&folder).thinking;
     let thinking = crate::agents_admin::editable(config, &agent.name).is_ok();
     let diet = crate::tool_diet::current(config, agent); // reads SOUL.md and state.db: before the lock
+    // closed (sealed keys): its diet left as it is, but Hermes' vault tool behind the search (tool_diet.rs)
+    let vault_closed = diet.is_none() && crate::sealed_keys::closed(config);
     let proxy = crate::browsers::proxy_binary();
     let proxy = Path::new(&proxy).exists().then_some(proxy);
     let order = &config.model_provider_order;
@@ -455,6 +457,9 @@ pub fn reconcile(config: &Config, agent: &AgentConfig) -> anyhow::Result<bool> {
             if let Some(dieted) = crate::tool_diet::with_diet(data, diet) {
                 *data = dieted;
             }
+        }
+        if vault_closed {
+            crate::tool_diet::vault_out_of_view(data);
         }
         if let Some(proxy) = &proxy {
             crate::browsers::with_proxy(data, proxy);

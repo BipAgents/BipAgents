@@ -322,12 +322,13 @@ class _Area:
 def _may_skip():
     """The names `Inventory.skipped` may skip. Its rules look at a path's components at given places under its roots;
     a walk that never enters a skipped folder has checked every component of a path but its last, so only a path
-    whose name is one of these (or a socket, a SQLite sidecar, a bridge.toml copy) can be skipped: the others aren't
+    whose name is one of these (or a socket, a SQLite sidecar, a bridge.toml copy, a Hermes copy set aside) can be skipped: the others aren't
     asked (pathlib's work, once per file, was most of a look's time). test_backup_activity.py checks the two agree."""
     from . import moving
     names = (set(moving.RUNTIME_FILES) | moving.HERMES_SKIP_ROOT | moving.HERMES_SKIP_PROFILE | moving.DATA_SKIP
              | moving.CHROME_SKIP | {moving.HERMES_VAULT})
-    return lambda name: name in names or name.endswith((".sock", *moving.SIDECARS)) or name.startswith("bridge.toml.")
+    return lambda name: (name in names or name.endswith((".sock", *moving.SIDECARS))
+                         or name.startswith(("bridge.toml.", *moving.HERMES_SET_ASIDE)))
 
 
 def stat_walk(inv, root: Path, rules: bool = True) -> Iterator[Tuple[str, str, os.stat_result]]:
