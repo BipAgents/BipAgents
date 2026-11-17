@@ -119,6 +119,13 @@ pub struct CardFound {
     pub secret: Dict,
 }
 
+/// A line the person is told once about the vault (tests first).
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct Notice {
+    pub id: String,
+    pub text: String,
+}
+
 /// What [`Vault::copies_ready_all`] did, by agent.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct CopiesReport {
@@ -673,6 +680,16 @@ impl Vault {
     /// The items, or what kept them from being read.
     pub fn try_items(&self) -> anyhow::Result<Vec<Item>> {
         Ok(self.read()?.iter().map(Self::item).collect())
+    }
+
+    /// What the person is told once about the vault (tests first: filled in by the fix).
+    pub fn notices(&self) -> Vec<Notice> {
+        Vec::new()
+    }
+
+    /// A notice shown by the app (tests first: filled in by the fix).
+    pub fn notice_seen(&self, _id: &str) -> bool {
+        false
     }
 
     pub fn items(&self) -> Vec<Item> {

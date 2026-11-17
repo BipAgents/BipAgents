@@ -136,6 +136,10 @@ fn fake_run(hermes: Arc<Hermes>) -> VaultRun {
                     out.insert("removed".into(), json!(removed));
                 }
                 "export" => {
+                    // (reviewer, pass 3) as Hermes v0.23.1's VaultStore._key: ciphertext without its key is a VaultError
+                    if folder.join("vault.json.enc").is_file() && !folder.join("vault.key").exists() {
+                        anyhow::bail!("agent.vault_store.VaultError: The vault key could not be found (vault.key is missing)");
+                    }
                     // as HERMES_SCRIPT's: each item with its secret (a disk copy about to be erased, read once)
                     let items: Vec<Value> = store_of(&folder)
                         .iter()
@@ -845,7 +849,13 @@ async fn a_hermes_sent_to_the_place_keeps_the_logins_it_saved_itself_in_the_vaul
     let link = h.root.join("hub/profiles/hermes/vault");
     assert!(std::fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
     let handles = h.handles("hermes");
-    assert_eq!(handles.keys().cloned().collect::<Vec<_>>(), vec!["Carte perso".to_string(), "Forum".to_string()]);
+    // its card is not taken (Alex, 17/11: never a Hermes payment item, its security code with it): the person is told
+    // once to add it in the Coffre; its disk copy goes with the rest
+    assert_eq!(handles.keys().cloned().collect::<Vec<_>>(), vec!["Forum".to_string()]);
+    assert!(!h.records().iter().any(|r| r["kind"] == json!("payment")));
+    let notices = h.vault.notices();
+    assert_eq!(notices.len(), 1, "{notices:?}");
+    assert!(notices[0].text.contains("Carte perso") && notices[0].text.contains("Coffre"), "{notices:?}");
     let copy: BTreeMap<String, String> = store_of(&link)
         .iter()
         .map(|i| (i["label"].as_str().unwrap().to_string(), i["id"].as_str().unwrap().to_string()))
@@ -916,4 +926,199 @@ async fn an_item_hermes_refuses_is_marked_refused_then_given_again_once_it_accep
     let impots = h.vault.items().into_iter().find(|i| i.label == "Impots").unwrap();
     assert!(impots.agents.contains_key("vie") && impots.refused.is_empty(), "{:?}", impots.refused);
     assert_eq!(h.copy("vie"), h.handles("vie"));
+}
+
+// -- third review, 17/11 (the reviewer's, not pushed) -------------------------------------------------------------------
+
+#[tokio::test]
+async fn pass3_a_copy_set_aside_after_its_handles_were_written_is_not_taken_in_twice() {
+    let _guard = SERIAL.lock().await;
+    let h = fixture();
+    given(&h).await;
+    let disk: Vec<(String, Vec<u8>)> = ["vault.key", "vault.json.enc"]
+        .iter()
+        .map(|f| (f.to_string(), std::fs::read(h.link("vie").join(f)).unwrap()))
+        .collect();
+    h.enrol().await;
+    let report = h.vault.copies_ready_all(&h.config).await;
+    assert!(report.failed.is_empty(), "{report:?}");
+    let before = h.records().len();
+    // the bridge stopped after the handles were written, before the erase (or the erase failed): the disk copy, with
+    // the ids of before, still set aside beside the link
+    let aside = h.home("vie").join(".vault-disk-0badc0de");
+    std::fs::create_dir_all(&aside).unwrap();
+    for (name, data) in &disk {
+        std::fs::write(aside.join(name), data).unwrap();
+    }
+    bipbridge::hermes_copies::forget_checked(&h.place.data);
+    let report = h.vault.copies_ready_all(&h.config).await;
+    assert!(report.failed.is_empty(), "{report:?}");
+    let labels: Vec<String> = h.records().iter().map(|r| r["label"].as_str().unwrap_or("").to_string()).collect();
+    assert_eq!(labels.len(), before, "every item of Vie taken into the vault a second time: {labels:?}");
+}
+
+#[tokio::test]
+async fn pass3_a_login_taken_back_while_the_agent_s_copy_fails_is_not_given_again() {
+    let _guard = SERIAL.lock().await;
+    let h = fixture();
+    given(&h).await;
+    h.enrol().await;
+    // Vie's Hermes failing a while: its copy on the disk kept (all or nothing)
+    h.hermes.failing.lock().unwrap().insert("vie".into());
+    let report = h.vault.copies_ready_all(&h.config).await;
+    assert_eq!(report.failed, vec!["vie".to_string()]);
+    // meanwhile the person takes SNCF back from Vie (Budget keeps it)
+    let sncf = h.vault.items().into_iter().find(|i| i.label == "SNCF").unwrap();
+    let body = json!({"agents": ["budget"]});
+    h.vault.update(&h.config, &sncf.id, body.as_object().unwrap()).await.unwrap();
+    assert!(!h.handles("vie").contains_key("SNCF"));
+    // Vie's Hermes mended: its copy rebuilt
+    h.hermes.failing.lock().unwrap().clear();
+    bipbridge::hermes_copies::forget_checked(&h.place.data);
+    let report = h.vault.copies_ready_all(&h.config).await;
+    assert!(report.failed.is_empty(), "{report:?}");
+    assert!(!h.handles("vie").contains_key("SNCF"), "taken back, then given again: {:?} (records: {})",
+        h.handles("vie"), h.records().len());
+}
+
+#[tokio::test]
+async fn pass3_an_entry_the_person_takes_from_a_refused_agent_is_not_given_again_later() {
+    let _guard = SERIAL.lock().await;
+    let h = fixture();
+    given(&h).await;
+    h.enrol().await;
+    h.vault.copies_ready_all(&h.config).await;
+    h.reboot();
+    assert!(sealed_keys::try_open(&h.place, &Service(h.share.clone())).await);
+    bipbridge::hermes_copies::forget_checked(&h.place.data);
+    h.hermes.refused.lock().unwrap().insert("SNCF".into());
+    h.vault.copies_ready_all(&h.config).await;
+    let sncf = h.vault.items().into_iter().find(|i| i.label == "SNCF").unwrap();
+    assert!(sncf.refused.contains_key("vie"));
+    // the person says: SNCF for Budget only
+    let body = json!({"agents": ["budget"]});
+    h.vault.update(&h.config, &sncf.id, body.as_object().unwrap()).await.unwrap();
+    h.hermes.refused.lock().unwrap().clear();
+    bipbridge::hermes_copies::forget_checked(&h.place.data);
+    h.vault.copies_ready_all(&h.config).await;
+    assert!(!h.handles("vie").contains_key("SNCF"), "given to Vie again against the person's choice");
+}
+
+#[tokio::test]
+async fn pass3_a_hermes_payment_item_is_not_kept_with_its_security_code() {
+    let _guard = SERIAL.lock().await;
+    let h = fixture();
+    given(&h).await;
+    let mut items = store_of(&h.link("vie"));
+    items.push(json!({"id": "vault_eeeeeeeeeeee", "kind": "payment", "label": "Carte", "origin": null,
+                      "secret": {"card_number": "4111111111111111", "cardholder_name": "Alex", "exp_month": "12",
+                                 "exp_year": "2030", "cvc": "123"}}));
+    write_store(&h.link("vie"), &items).unwrap();
+    h.enrol().await;
+    h.vault.copies_ready_all(&h.config).await;
+    let kept: Vec<Dict> = h.records().into_iter().filter(|r| r["kind"] == json!("payment")).collect();
+    assert!(kept.is_empty(), "a payment item with its cvc kept and given back to the agent (cards_allowed: never)");
+}
+
+#[tokio::test]
+async fn pass3_a_contact_the_vault_cannot_take_does_not_put_its_details_in_the_error() {
+    let _guard = SERIAL.lock().await;
+    let h = fixture();
+    given(&h).await;
+    let mut items = store_of(&h.link("vie"));
+    items.push(json!({"id": "vault_ffffffffffff", "kind": "address", "label": "Maison", "origin": null,
+                      "secret": {"full_name": "Alex", "city": "Lyon", "phone": "06 12 34 56 78 poste 4"}}));
+    write_store(&h.link("vie"), &items).unwrap();
+    h.enrol().await;
+    let agent = h.config.agents["vie"].clone();
+    let err = h.vault.copies_ready_for(&h.config, &agent).await.unwrap_err();
+    let text = format!("{err:#}");
+    assert!(!text.contains("06 12 34"), "the contact's phone in the error (logged): {text}");
+}
+
+#[tokio::test]
+async fn pass3_a_set_aside_copy_whose_erase_was_cut_off_does_not_fail_the_agent_for_ever() {
+    let _guard = SERIAL.lock().await;
+    let h = fixture();
+    given(&h).await;
+    let enc = std::fs::read(h.link("vie").join("vault.json.enc")).unwrap();
+    h.enrol().await;
+    assert!(h.vault.copies_ready_all(&h.config).await.failed.is_empty());
+    // the bridge stopped while erasing the set-aside copy: its vault.key wiped, its vault.json.enc not yet
+    let aside = h.home("vie").join(".vault-disk-0badc0de");
+    std::fs::create_dir_all(&aside).unwrap();
+    std::fs::write(aside.join("vault.json.enc"), &enc).unwrap();
+    for _ in 0..2 {
+        bipbridge::hermes_copies::forget_checked(&h.place.data); // each start
+        let report = h.vault.copies_ready_all(&h.config).await;
+        assert!(report.failed.is_empty(), "Vie fails at every start, its set-aside never erased: {report:?}");
+    }
+    assert!(!aside.exists());
+}
+
+// -- third review: the fixes' own tests ------------------------------------------------------------------------------
+
+#[tokio::test]
+async fn a_card_notice_is_said_once_and_goes_when_the_app_has_shown_it() {
+    let _guard = SERIAL.lock().await;
+    let h = fixture();
+    given(&h).await;
+    let mut items = store_of(&h.link("vie"));
+    items.push(json!({"id": "vault_eeeeeeeeeeee", "kind": "payment", "label": "Visa", "origin": null,
+                      "secret": {"card_number": "4111111111111111", "cvc": "123"}}));
+    write_store(&h.link("vie"), &items).unwrap();
+    h.enrol().await;
+    h.vault.copies_ready_all(&h.config).await;
+    let notices = h.vault.notices();
+    assert_eq!(notices.len(), 1);
+    assert_eq!(notices[0].text, "Ta carte « Visa » n'a pas été reprise : ajoute-la dans le Coffre.");
+    for file in h.files_on_disk() {
+        let data = std::fs::read(&file).unwrap();
+        assert!(!data.windows(16).any(|w| w == b"4111111111111111"), "{}", file.display());
+    }
+    // the next passes say nothing more; the app's « vu » takes it away
+    bipbridge::hermes_copies::forget_checked(&h.place.data);
+    h.vault.copies_ready_all(&h.config).await;
+    assert_eq!(h.vault.notices().len(), 1);
+    assert!(h.vault.notice_seen(&notices[0].id));
+    assert!(h.vault.notices().is_empty());
+}
+
+#[tokio::test]
+async fn a_login_hermes_holds_twice_is_one_entry_and_another_password_never_wins_over_the_person_s() {
+    let _guard = SERIAL.lock().await;
+    let h = fixture();
+    given(&h).await;
+    // the same SNCF login saved by Hermes itself again (same password: the same entry), and Impots with another
+    // password (the person's in the vault stays the one typed)
+    let mut items = store_of(&h.link("vie"));
+    items.push(json!({"id": "vault_111111111111", "kind": "login", "label": "SNCF bis", "origin": "https://sncf-connect.com",
+                      "identifier_type": "email", "identifier": "alex@example.org",
+                      "created_at": "2030-01-02T03:04:05.000000+00:00",
+                      "secret": {"password": "pw-SNCF-0123456789"}}));
+    items.push(json!({"id": "vault_222222222222", "kind": "login", "label": "Impots", "origin": "https://impots.gouv.fr",
+                      "identifier_type": "email", "identifier": "alex@example.org",
+                      "created_at": "2020-01-02T03:04:05.000000+00:00",
+                      "secret": {"password": "another-impots-password"}}));
+    write_store(&h.link("vie"), &items).unwrap();
+    h.enrol().await;
+    let report = h.vault.copies_ready_all(&h.config).await;
+    assert!(report.failed.is_empty(), "{report:?}");
+    let records = h.records();
+    let sncf: Vec<&Dict> = records.iter().filter(|r| r["origin"] == json!("https://sncf-connect.com")).collect();
+    assert_eq!(sncf.len(), 1, "one entry");
+    assert_eq!(sncf[0]["updated_at"], json!("2030-01-02T03:04:05+00:00"), "Hermes' date kept, the newer");
+    let impots: Vec<&Dict> = records.iter().filter(|r| r["origin"] == json!("https://impots.gouv.fr")).collect();
+    assert_eq!(impots.len(), 2, "never lose either password");
+    let original = impots.iter().find(|r| r.get("duplicate_of").is_none()).unwrap();
+    let copy = impots.iter().find(|r| r.get("duplicate_of").is_some()).unwrap();
+    assert_eq!(copy["duplicate_of"], original["id"]);
+    assert_eq!(copy["created_at"], json!("2020-01-02T03:04:05+00:00"), "Hermes' own date");
+    // vault_login fills the person's own
+    let items = h.vault.items();
+    let given: Vec<bipbridge::vault::Item> = items.into_iter().filter(|i| i.agents.contains_key("vie")).collect();
+    match bipbridge::vault_match::choose(&given, "https://impots.gouv.fr/connexion", None) {
+        bipbridge::vault_match::Choice::One(item) => assert_eq!(Value::String(item.id.clone()), original["id"]),
+        _ => panic!("vault_login can't choose between the person's login and Hermes' copy"),
+    }
 }
