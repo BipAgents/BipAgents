@@ -547,7 +547,8 @@ def test_a_login_only_the_agent_s_hermes_holds_is_taken_into_the_vault_before_it
     p.bridge.start()
     said = p.wait_copies()
     assert said.get("failed") in (None, [], "[]"), said
-    assert [r["agent"] for r in p.python_runs()[runs:] if r["op"] == "export"] == ["vie"]
+    # each disk copy read once before it goes (Budget's holds nothing unknown)
+    assert sorted(r["agent"] for r in p.python_runs()[runs:] if r["op"] == "export") == ["budget", "vie"]
     records = p.master()
     forum = [r for r in records if r["label"] == "Forum"]
     assert len(forum) == 1 and forum[0]["identifier"] == "alex" and forum[0]["origin"] == "https://forum.example"
