@@ -69,6 +69,9 @@ def rules(inv: moving.Inventory, root: Path) -> List[str]:
             continue
         found += [f"- {at}{name}" for name in sorted(moving.HERMES_SKIP_ROOT)]
         found += [f"- {at}profiles/*/{name}" for name in sorted(moving.HERMES_SKIP_PROFILE)]
+        if inv.vault_in_memory():
+            # the agents' Hermes vaults: links into memory (or copies not erased yet), rebuilt by the bridge over there
+            found += [f"- {at}{moving.HERMES_VAULT}", f"- {at}profiles/*/{moving.HERMES_VAULT}"]
     at = prefix(inv.data_dir)
     if at is not None:
         found += [f"- {at}{name}" for name in sorted(moving.DATA_SKIP)]

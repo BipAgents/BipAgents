@@ -326,7 +326,7 @@ def _may_skip():
     asked (pathlib's work, once per file, was most of a look's time). test_backup_activity.py checks the two agree."""
     from . import moving
     names = (set(moving.RUNTIME_FILES) | moving.HERMES_SKIP_ROOT | moving.HERMES_SKIP_PROFILE | moving.DATA_SKIP
-             | moving.CHROME_SKIP)
+             | moving.CHROME_SKIP | {moving.HERMES_VAULT})
     return lambda name: name in names or name.endswith((".sock", *moving.SIDECARS)) or name.startswith("bridge.toml.")
 
 

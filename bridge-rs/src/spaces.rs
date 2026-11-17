@@ -154,13 +154,13 @@ fn copy_stat(source: &Path, target: &Path, link: bool) -> std::io::Result<()> {
 }
 
 /// `shutil.copytree(source, target, symlinks=True, ignore=…)`: links stay links (even dangling ones), files are
-/// copied with their mode and times.
-fn copy_tree(source: &Path, target: &Path) -> std::io::Result<()> {
+/// copied with their mode and times. `except`: names left out at the top only.
+fn copy_tree(source: &Path, target: &Path, except: &[&str]) -> std::io::Result<()> {
     std::fs::create_dir_all(target)?;
     for entry in std::fs::read_dir(source)? {
         let entry = entry?;
         let name = entry.file_name().to_string_lossy().into_owned();
-        if SKIP.contains(&name.as_str()) || name.ends_with(".sock") {
+        if SKIP.contains(&name.as_str()) || name.ends_with(".sock") || except.contains(&name.as_str()) {
             continue;
         }
         let (from, to) = (entry.path(), target.join(&name));
@@ -168,7 +168,7 @@ fn copy_tree(source: &Path, target: &Path) -> std::io::Result<()> {
         if kind.is_symlink() {
             std::os::unix::fs::symlink(std::fs::read_link(&from)?, &to)?;
         } else if kind.is_dir() {
-            copy_tree(&from, &to)?;
+            copy_tree(&from, &to, &[])?;
         } else {
             std::fs::copy(&from, &to)?;
             copy_stat(&from, &to, false)?;
@@ -179,7 +179,13 @@ fn copy_tree(source: &Path, target: &Path) -> std::io::Result<()> {
 
 /// The agent's folder, its database included (SQLite backup: consistent while the hub gateway writes).
 pub fn copy_profile(source: &Path, target: &Path) -> anyhow::Result<()> {
-    copy_tree(source, target)?;
+    copy_profile_except(source, target, &[])
+}
+
+/// [`copy_profile`] without the profile's own `except` (its Hermes vault on a place whose copies are in memory,
+/// hermes_copies.rs: never copied, the bridge rebuilds it for the new home).
+pub fn copy_profile_except(source: &Path, target: &Path, except: &[&str]) -> anyhow::Result<()> {
+    copy_tree(source, target, except)?;
     let database = source.join("state.db");
     if database.exists() {
         let src = rusqlite::Connection::open_with_flags(&database, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
@@ -492,7 +498,10 @@ impl Spaces {
                 ],
             )?;
             let profile = root.join("profiles").join(&agent.name);
-            copy_profile(&source, &profile)?;
+            // its Hermes vault in memory (a place enrolled for sealed keys): never copied, rebuilt for its space
+            let except: &[&str] =
+                if crate::hermes_copies::in_memory(config) { &[crate::hermes_copies::LINK] } else { &[] };
+            copy_profile_except(&source, &profile, except)?;
             let rebound = rebind_api_sessions(&profile, &hermes_profile_id(config, &root, &agent.name))?;
             if rebound > 0 {
                 tracing::info!(agent = %agent.name, conversations = rebound, "its API conversations made its space's");

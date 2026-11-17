@@ -87,9 +87,11 @@ def exported(p):
     moving.export(inventory(p), out, phrase, machine)
     tar, opened, handle = moving.open_archive(out, phrase)
     members = {}
-    for member in tar:
+    member = tar.next()   # (the manifest was read: a stream goes on from there)
+    while member is not None:
         data = tar.extractfile(member).read() if member.isfile() else b""
         members[member.name] = (member, data)
+        member = tar.next()
     tar.close()
     handle.close()
     return members

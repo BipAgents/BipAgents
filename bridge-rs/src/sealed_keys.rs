@@ -203,7 +203,7 @@ fn places() -> std::sync::MutexGuard<'static, HashMap<PathBuf, Memory>> {
 }
 
 /// The data folder as one name (it may be given with a link or `..`).
-fn id(data: &Path) -> PathBuf {
+pub(crate) fn id(data: &Path) -> PathBuf {
     std::fs::canonicalize(data).unwrap_or_else(|_| data.to_path_buf())
 }
 
@@ -270,6 +270,12 @@ pub fn state(data: &Path) -> State {
     let memory = places.entry(id(data)).or_default();
     let closed = memory.closed.get_or_insert_with(|| Closed { reason: "opening".into(), since: now(), tries: 0 });
     State::Closed(closed.clone())
+}
+
+/// Whether the place of `data` is enrolled (its keys sealed, or a sealing under way): what each store and the agents'
+/// Hermes copies (hermes_copies.rs) follow. Reads nothing but two names.
+pub fn enrolled(data: &Path) -> bool {
+    data.join(SEALED_FILE).exists() || data.join(JOURNAL_DIR).join(JOURNAL).exists()
 }
 
 /// The vault of this bridge is sealed and closed now.
@@ -449,7 +455,7 @@ fn private_dir(dir: &Path) -> Result<()> {
 }
 
 /// Removed, its bytes overwritten first (best effort: an SSD or a journaling filesystem may keep a copy).
-fn wipe(path: &Path) -> Result<()> {
+pub(crate) fn wipe(path: &Path) -> Result<()> {
     if let Ok(meta) = std::fs::symlink_metadata(path) {
         if meta.is_file() {
             if let Ok(mut file) = std::fs::OpenOptions::new().write(true).open(path) {
@@ -623,6 +629,25 @@ fn cache_dir(path: &Path, make: bool) -> Result<PathBuf> {
     Ok(dir)
 }
 
+/// A folder of this place's own in memory, beside its place key: `<runtime>/bipagents/<prefix>-<id>` (the agents' Hermes
+/// copies, hermes_copies.rs), made 0700 if `make`. Refused like the place key's own folder: not ours, a link, writable by
+/// others, or not on a memory filesystem.
+pub(crate) fn memory_folder_of(data: &Path, prefix: &str, make: bool) -> Result<PathBuf> {
+    let cache = cache_path(data).ok_or_else(|| anyhow!("no folder in memory (XDG_RUNTIME_DIR on tmpfs) here"))?;
+    let parent = cache_dir(&cache, make)?;
+    let name = cache.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let id = name.trim_start_matches("vault-").trim_end_matches(".sk");
+    let dir = parent.join(format!("{prefix}-{id}"));
+    if make && std::fs::symlink_metadata(&dir).is_err() {
+        std::fs::DirBuilder::new().mode(0o700).create(&dir)?;
+    }
+    if !ours(&dir) || !memory_folder(&dir) {
+        bail!("{} is not this account's own folder in memory", dir.display());
+    }
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))?;
+    Ok(dir)
+}
+
 fn read_cache(data: &Path) -> Option<Box<Zeroizing<[u8; KEY_LEN]>>> {
     let path = cache_path(data)?;
     cache_dir(&path, false).ok()?;
@@ -777,20 +802,36 @@ pub fn at_start(config: &Config) -> Result<()> {
     hold_for_bridge(&Place::of(config), Duration::from_secs(120))
 }
 
-/// Closed at the start: reopened in the background; then what was left as it was meanwhile (the agents' souls and
-/// tool diets, contact details given to the browsers on, removals waiting) brought up to date.
+/// At the bridge's start, an enrolled place: open, its agents' Hermes copies checked in memory (rebuilt where they are
+/// not there or not right: hermes_copies.rs); closed, the copies left in memory dropped (nothing to read until it
+/// reopens: a stale copy never), reopened in the background, the copies rebuilt right after, then what was left as it
+/// was meanwhile (the agents' souls and tool diets, contact details given to the browsers on, removals waiting) brought
+/// up to date. Not enrolled: nothing (today's layout, the copies on the disk).
 pub fn start(app: &crate::app::AppState) {
     let config = app.config();
     let place = Place::of(&config);
-    if !matches!(state(&place.data), State::Closed(_)) {
-        return;
+    match state(&place.data) {
+        State::Off => return,
+        State::Open => {
+            let app = app.clone();
+            let checking = app.clone();
+            app.spawn(async move {
+                let config = checking.config();
+                checking.vault.copies_ready_all(&config).await;
+            });
+            return;
+        }
+        State::Closed(_) => {}
     }
+    crate::hermes_copies::drop_all(&place.data);
     let source: Arc<dyn ShareSource> = Arc::new(FromFile(place.clone()));
     let app = app.clone();
     let reopening = app.clone();
     app.spawn(async move {
-        reopen(place, source, Duration::from_secs(1)).await;
+        reopen(place.clone(), source, Duration::from_secs(1)).await;
+        crate::hermes_copies::forget_checked(&place.data);
         let config = reopening.config();
+        reopening.vault.copies_ready_all(&config).await;
         if config.hermes.isolated {
             let _ = reopening.vault.retry_removals(&config).await;
             let _ = reopening.vault.follow_browsers(&config).await;

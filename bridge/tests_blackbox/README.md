@@ -131,6 +131,14 @@ None of these keys change anything when they are left out.
 - **systemd and launchd services for spaces.** The suite uses `[spaces] start` / `stop`, the administrator's own
   commands. The systemd unit and the launchd plist the bridge writes otherwise depend on the OS.
 
+**Only with the real Hermes and a memory folder:**
+
+- **The agents' Hermes copies in memory** (`test_vault_hermes_copies.py`, a place enrolled for sealed keys): it runs the
+  real Hermes v0.23.1 with BipAgents' patches, `HERMES_SRC=<its checkout>` and `HERMES_PYTHON=<a Python with its
+  dependencies>`, on Linux (a tmpfs stands for `$XDG_RUNTIME_DIR`). Skipped without them. On the build server: the
+  checkout at 3b42157858 with `git apply hermes/patches/0*.patch`, and a venv with Hermes' core pins (cryptography,
+  ruamel.yaml, pydantic, httpx, openai…: `pip install -e` refuses its 3.14 markers).
+
 **Too slow for a test run:**
 
 - **Putting an idle place to sleep.** The bridge checks every 30 minutes, after 14 idle days. Waking a sleeping place
