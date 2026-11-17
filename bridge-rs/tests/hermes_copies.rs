@@ -1110,7 +1110,9 @@ async fn a_login_hermes_holds_twice_is_one_entry_and_another_password_never_wins
     let records = h.records();
     let sncf: Vec<&Dict> = records.iter().filter(|r| r["origin"] == json!("https://sncf-connect.com")).collect();
     assert_eq!(sncf.len(), 1, "one entry");
-    assert_eq!(sncf[0]["updated_at"], json!("2030-01-02T03:04:05+00:00"), "Hermes' date kept, the newer");
+    // Hermes' date in the future (2030): never kept as is, at most now (review pass 4, R-L)
+    let updated = sncf[0]["updated_at"].as_str().unwrap().to_string();
+    assert!(updated.as_str() <= bipbridge::vault::now().as_str() && !updated.starts_with("2030"), "{updated}");
     let impots: Vec<&Dict> = records.iter().filter(|r| r["origin"] == json!("https://impots.gouv.fr")).collect();
     assert_eq!(impots.len(), 2, "never lose either password");
     let original = impots.iter().find(|r| r.get("duplicate_of").is_none()).unwrap();
@@ -1124,4 +1126,93 @@ async fn a_login_hermes_holds_twice_is_one_entry_and_another_password_never_wins
         bipbridge::vault_match::Choice::One(item) => assert_eq!(Value::String(item.id.clone()), original["id"]),
         _ => panic!("vault_login can't choose between the person's login and Hermes' copy"),
     }
+}
+
+// -- fourth review, 17/11 (the reviewer's, not pushed) ------------------------------------------------------------------
+
+#[tokio::test]
+async fn pass4_the_same_login_with_an_authenticator_key_only_hermes_holds_keeps_that_key() {
+    let _guard = SERIAL.lock().await;
+    let h = fixture();
+    given(&h).await;
+    // Hermes saved SNCF again itself, same user and password, with its authenticator (TOTP) key
+    let mut items = store_of(&h.link("vie"));
+    items.push(json!({"id": "vault_333333333333", "kind": "login", "label": "SNCF", "origin": "https://sncf-connect.com",
+                      "identifier_type": "email", "identifier": "alex@example.org",
+                      "secret": {"password": "pw-SNCF-0123456789", "otp_secret": "JBSWY3DPEHPK3PXP"}}));
+    write_store(&h.link("vie"), &items).unwrap();
+    h.enrol().await;
+    let report = h.vault.copies_ready_all(&h.config).await;
+    assert!(report.failed.is_empty(), "{report:?}");
+    let kept = h.records().iter().any(|r| r["secret"]["otp_secret"] == json!("JBSWY3DPEHPK3PXP"));
+    assert!(kept, "the authenticator key only Hermes held erased with its copy");
+}
+
+#[tokio::test]
+async fn pass4_a_take_back_stays_done_when_the_set_aside_copy_could_be_neither_marked_nor_erased() {
+    use std::os::unix::fs::PermissionsExt;
+    let _guard = SERIAL.lock().await;
+    let h = fixture();
+    given(&h).await;
+    h.enrol().await;
+    h.hermes.failing.lock().unwrap().insert("vie".into());
+    assert_eq!(h.vault.copies_ready_all(&h.config).await.failed, vec!["vie".to_string()]);
+    let sncf = h.vault.items().into_iter().find(|i| i.label == "SNCF").unwrap();
+    h.vault.update(&h.config, &sncf.id, json!({"agents": ["budget"]}).as_object().unwrap()).await.unwrap();
+    // mended, but Vie's disk folder can't be written now (its mark and its erase both fail: a full or read-only disk)
+    h.hermes.failing.lock().unwrap().clear();
+    std::fs::set_permissions(h.link("vie"), std::fs::Permissions::from_mode(0o500)).unwrap();
+    bipbridge::hermes_copies::forget_checked(&h.place.data);
+    let report = h.vault.copies_ready_all(&h.config).await;
+    let aside: Vec<PathBuf> = bipbridge::hermes_copies::set_aside_in(&h.home("vie"));
+    for a in &aside {
+        let _ = std::fs::set_permissions(a, std::fs::Permissions::from_mode(0o700));
+    }
+    assert!(report.failed.is_empty(), "{report:?}");
+    // the disk writable again: the next start
+    bipbridge::hermes_copies::forget_checked(&h.place.data);
+    h.vault.copies_ready_all(&h.config).await;
+    assert!(!h.handles("vie").contains_key("SNCF"), "taken back, given again (left aside: {aside:?})");
+}
+
+#[tokio::test]
+async fn pass4_a_hermes_that_writes_much_on_stderr_still_answers() {
+    let dir = tempfile::tempdir().unwrap();
+    let script = dir.path().join("noisy.sh");
+    // 200 KB of warnings on stderr, then its answer (as a Python full of DeprecationWarnings would)
+    std::fs::write(&script, "#!/bin/sh\nhead -c 200000 /dev/zero | tr '\\0' 'w' >&2\necho '{\"items\": []}'\n").unwrap();
+    let mut agent = AgentConfig::default();
+    agent.name = "vie".into();
+    agent.python = vec!["/bin/sh".into(), script.to_string_lossy().into_owned()];
+    agent.hermes_home = Some(dir.path().to_string_lossy().into_owned());
+    let mut request = Dict::new();
+    request.insert("op".into(), json!("list"));
+    let started = std::time::Instant::now();
+    let answer = bipbridge::vault::run_in_hermes(agent, request).await;
+    assert!(answer.is_ok(), "{answer:?} after {:?}", started.elapsed());
+}
+
+// -- fourth review: the fixes' own tests -----------------------------------------------------------------------------
+
+#[test]
+fn a_name_hermes_gave_is_shortened_in_the_line_told_to_the_person() {
+    let text = bipbridge::vault::card_not_kept_text("fr", &"x".repeat(500));
+    assert!(text.chars().count() < 140, "{text}");
+    assert!(text.starts_with("Ta carte « ") && text.ends_with("ajoute-la dans le Coffre."), "{text}");
+}
+
+#[test]
+fn vault_login_says_when_another_password_was_kept_for_the_login_it_typed() {
+    let item = |id: &str, of: Option<&str>| bipbridge::vault::Item {
+        id: id.into(),
+        kind: "login".into(),
+        label: "Impots".into(),
+        duplicate_of: of.map(str::to_string),
+        ..Default::default()
+    };
+    let logins = vec![item("item_person", None), item("item_hermes", Some("item_person")), item("item_other", None)];
+    let said = bipbridge::vault_logins::other_password_hint(&logins, &logins[0]).unwrap();
+    assert!(said.contains("item_hermes") && said.contains("vault_login"), "{said}");
+    assert_eq!(bipbridge::vault_logins::other_password_hint(&logins, &logins[2]), None);
+    assert_eq!(bipbridge::vault_logins::other_password_hint(&logins, &logins[1]), None);
 }

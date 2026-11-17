@@ -849,6 +849,11 @@ fn other_host_text(items: &[&crate::vault::Item], host: &str) -> String {
 /// `vault_login`: the agent's page (Chrome's own address), the login of the vault given to it that fits that page's
 /// site (vault_match.rs), its identifier and its password typed into that site's frames only (login_fill.rs). Neither
 /// is answered nor logged.
+/// The line saying another password was kept for `typed` (tests first: filled in by the fix).
+pub fn other_password_hint(_logins: &[crate::vault::Item], _typed: &crate::vault::Item) -> Option<String> {
+    None
+}
+
 async fn login(state: &AppState, agent: &AgentConfig, arguments: &Dict) -> anyhow::Result<Dict> {
     let config = state.config();
     if crate::vault::holder(&config, agent).is_some() {
