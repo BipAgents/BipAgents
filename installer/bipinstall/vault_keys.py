@@ -176,6 +176,8 @@ def enable(settings: Optional[Dict], runner: Callable = run, say: Callable[[str]
         say(f"This place's vault keys were already tried with these settings and it failed ({last.get('error')}): "
             "nothing tried again (`bipagents vault-keys enable --again` once the cause is known).")
         return 1
+    if given is not None:
+        _take_key_service(given, base)
     env = {ENV[k]: v for k, v in (given or {}).items()}
     env["BRIDGE_CONFIG"] = str(config)
     # the bridge started again only if it ran (a restore, a planned move or a move's stopped copy keep theirs stopped)
@@ -203,6 +205,27 @@ def enable(settings: Optional[Dict], runner: Callable = run, say: Callable[[str]
         say(f"The agents' vaults taken out of {len(scrubbed)} Hermes backup(s) from before.")
     say("The vault's keys are sealed: their key is never written on this server's disk.")
     return 0
+
+
+def _take_key_service(given: Dict[str, str], base: Optional[Path]) -> None:
+    """A guichet's order on a place not sealed: its key service replaces one left in the space's folder (the bridge
+    reads that file first), e.g. a token forgotten at a rebind after a restore of a backup not sealed. Never an
+    encrypted space's own (level 1: space.json enabled), which opens that space."""
+    space = space_dir(base)
+    service = space / SPACE_FILES[1]
+    if not service.is_file() or service.is_symlink():
+        return
+    try:
+        level1 = bool(json.loads((space / "space.json").read_text(encoding="utf-8")).get("enabled"))
+    except (OSError, ValueError, AttributeError):
+        level1 = False
+    if level1:
+        return
+    tmp = service.with_name(service.name + ".tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        json.dump(given, fh)
+    os.replace(tmp, service)
 
 
 def files_came(came: Path, data: Path, was_sealed: bool, base: Optional[Path] = None) -> bool:
