@@ -135,6 +135,20 @@ fn fake_run(hermes: Arc<Hermes>) -> VaultRun {
                     }
                     out.insert("removed".into(), json!(removed));
                 }
+                "export" => {
+                    // as HERMES_SCRIPT's: each item with its secret (a disk copy about to be erased, read once)
+                    let items: Vec<Value> = store_of(&folder)
+                        .iter()
+                        .map(|i| {
+                            let secret = i["secret"].clone();
+                            json!({"id": i["id"], "kind": i["kind"], "label": i["label"], "origin": i["origin"],
+                                   "identifier_type": i.get("identifier_type").cloned().unwrap_or(secret["identifier_type"].clone()),
+                                   "identifier": i.get("identifier").cloned().unwrap_or(secret["identifier"].clone()),
+                                   "secret": secret})
+                        })
+                        .collect();
+                    out.insert("items".into(), json!(items));
+                }
                 _ => {
                     if std::fs::symlink_metadata(&folder).is_ok() && !folder.is_dir() {
                         anyhow::bail!("FileExistsError: [Errno 17] File exists: '{}'", folder.display());
@@ -713,4 +727,189 @@ async fn an_agent_moved_into_another_space_gets_its_copy_rebuilt_there() {
     let report = h.vault.copies_ready_all(&config).await;
     assert!(report.failed.is_empty(), "{report:?}");
     assert!(!before.exists());
+}
+
+// -- second review, 17/11 (the reviewer's, not pushed) ------------------------------------------------------------------
+
+#[tokio::test]
+async fn pass2_a_person_s_existing_hermes_hub_is_never_erased() {
+    let _guard = SERIAL.lock().await;
+    let h = fixture_with(|_, root| {
+        let hub = root.join("hub");
+        std::fs::create_dir_all(hub.join("profiles").join("jardin").join("vault")).unwrap();
+        std::fs::write(hub.join("profiles").join("jardin").join("vault").join("vault.key"), "jardin-key").unwrap();
+        std::fs::create_dir_all(hub.join("vault")).unwrap();
+        std::fs::write(hub.join("vault").join("vault.key"), "default-key").unwrap();
+    });
+    let conf = h.root.join("conf");
+    std::fs::create_dir_all(&conf).unwrap();
+    std::fs::write(conf.join("existing-hermes.json"), r#"{"preexisting": true}"#).unwrap();
+    std::fs::write(conf.join("bridge.toml"), "").unwrap();
+    let mut config = h.config.clone();
+    config.source_path = Some(conf.join("bridge.toml").to_string_lossy().into_owned());
+    given(&h).await;
+    h.enrol().await;
+    let report = h.vault.copies_ready_all(&config).await;
+    assert!(report.failed.is_empty(), "{report:?}");
+    let hub = h.root.join("hub");
+    for kept in [hub.join("profiles/jardin/vault/vault.key"), hub.join("vault/vault.key")] {
+        assert!(kept.is_file(), "the person's own Hermes erased: {}", kept.display());
+    }
+}
+
+#[tokio::test]
+async fn pass2_an_agent_removed_while_its_copy_fails_is_not_counted_in_health_for_ever() {
+    let _guard = SERIAL.lock().await;
+    let h = fixture();
+    given(&h).await;
+    h.enrol().await;
+    h.hermes.failing.lock().unwrap().insert("vie".into());
+    let report = h.vault.copies_ready_all(&h.config).await;
+    assert_eq!(report.failed, vec!["vie".to_string()]);
+    // Vie deleted: the next pass has nothing failing (the retry loop stops)
+    let mut config = h.config.clone();
+    config.agents.retain(|name, _| name != "vie");
+    let report = h.vault.copies_ready_all(&config).await;
+    assert!(report.failed.is_empty(), "{report:?}");
+    assert!(!sealed_keys::health_fields(&config).contains_key("vault_copies_not_ready"),
+        "a deleted agent still counted: {:?}", bipbridge::hermes_copies::failed(&h.place.data));
+}
+
+#[tokio::test]
+async fn pass2_a_disk_copy_set_aside_by_a_cut_off_swap_is_still_at_stake_for_a_refused_item() {
+    let _guard = SERIAL.lock().await;
+    let h = fixture();
+    given(&h).await;
+    h.enrol().await;
+    // a put back that failed (or the bridge stopped between the two renames of `point`): Vie's disk copy set aside,
+    // no link; then its Hermes refuses one item
+    std::fs::rename(h.link("vie"), h.home("vie").join(".vault-disk-0badc0de")).unwrap();
+    h.hermes.refused.lock().unwrap().insert("Impots".into());
+    let report = h.vault.copies_ready_all(&h.config).await;
+    assert!(report.failed.contains(&"vie".to_string()) || h.handles("vie").contains_key("Impots"),
+        "Impots taken from Vie and the disk copy holding it erased: {report:?} {:?}", h.handles("vie"));
+}
+
+#[tokio::test]
+async fn pass2_an_item_only_the_agent_s_hermes_holds_is_not_erased_without_a_trace() {
+    let _guard = SERIAL.lock().await;
+    let h = fixture();
+    given(&h).await;
+    // one its Hermes saved itself (Hermes' browser_vault save_login; or a Hermes alone sent to the place, to_place.py)
+    let mut items = store_of(&h.link("vie"));
+    // (as Hermes v0.23.1 keeps a login: its identifier in the metadata, only the password secret)
+    items.push(json!({"id": "vault_0123456789ab", "kind": "login", "label": "Perso", "origin": "https://perso.example",
+                      "identifier_type": "email", "identifier": "alex@perso.example",
+                      "secret": {"password": "only-in-hermes"}}));
+    write_store(&h.link("vie"), &items).unwrap();
+    h.enrol().await;
+    let report = h.vault.copies_ready_all(&h.config).await;
+    assert!(report.failed.is_empty(), "{report:?}");
+    let in_copy = h.copy("vie").contains_key("Perso");
+    let in_master = h.records().iter().any(|r| r.get("label").and_then(Value::as_str) == Some("Perso"));
+    let on_disk = h.files_on_disk().iter().any(|f| {
+        std::fs::read(f).is_ok_and(|d| d.windows(14).any(|w| w == b"only-in-hermes"))
+    });
+    assert!(in_copy || in_master || on_disk, "the person's own saved login erased, nowhere left: {report:?}");
+}
+
+// -- second review: the fixes' own tests -----------------------------------------------------------------------------
+
+#[tokio::test]
+async fn a_hermes_sent_to_the_place_keeps_the_logins_it_saved_itself_in_the_vault() {
+    let _guard = SERIAL.lock().await;
+    // to_place.py « un Hermes seul »: the person's own profile becomes an agent of the place, its vault the logins it
+    // saved itself (none in the bridge's master copy); the place stays enrolled
+    let h = fixture_with(|dict, root| {
+        let home = root.join("hub").join("profiles").join("hermes");
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::write(home.join("config.yaml"), "model:\n  default: x\n").unwrap();
+        write_store(&home.join("vault"), &[
+            json!({"id": "vault_aaaaaaaaaaaa", "kind": "login", "label": "Forum", "origin": "https://forum.example",
+                   "identifier_type": "username", "identifier": "alex", "secret": {"password": "forum-pw-only-hermes"}}),
+            json!({"id": "vault_bbbbbbbbbbbb", "kind": "payment", "label": "Carte perso", "origin": null,
+                   "secret": {"card_number": "4111111111111111", "cardholder_name": "Alex", "exp_month": "12",
+                              "exp_year": "2030", "cvc": "123"}}),
+        ]).unwrap();
+        dict["agents"]["hermes"] = json!({"hermes_url": "http://127.0.0.1:9/p/hermes", "hermes_key": "h".repeat(32),
+            "isolated": true, "sandboxed": true, "python": "/nowhere/python", "hermes_home": home.to_string_lossy()});
+    });
+    given(&h).await;
+    h.enrol().await;
+    let report = h.vault.copies_ready_all(&h.config).await;
+    assert!(report.failed.is_empty() && report.rebuilt.contains(&"hermes".to_string()), "{report:?}");
+    let link = h.root.join("hub/profiles/hermes/vault");
+    assert!(std::fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
+    let handles = h.handles("hermes");
+    assert_eq!(handles.keys().cloned().collect::<Vec<_>>(), vec!["Carte perso".to_string(), "Forum".to_string()]);
+    let copy: BTreeMap<String, String> = store_of(&link)
+        .iter()
+        .map(|i| (i["label"].as_str().unwrap().to_string(), i["id"].as_str().unwrap().to_string()))
+        .collect();
+    assert_eq!(copy, handles, "in its copy in memory, under the bridge's handles");
+    let forum = h.records().into_iter().find(|r| r["label"] == json!("Forum")).unwrap();
+    assert_eq!(forum["identifier"], json!("alex"));
+    assert_eq!(forum["secret"]["password"], json!("forum-pw-only-hermes"));
+    assert!(left_on_disk(&h.root.join("hub")).is_empty(), "taken into the vault, then erased from the disk");
+}
+
+#[tokio::test]
+async fn an_item_only_hermes_holds_that_the_vault_cannot_take_keeps_its_disk_copy() {
+    let _guard = SERIAL.lock().await;
+    let h = fixture();
+    given(&h).await;
+    let mut items = store_of(&h.link("vie"));
+    items.push(json!({"id": "vault_cccccccccccc", "kind": "login", "label": "Sans site", "origin": null,
+                      "identifier_type": "email", "identifier": "a@b.c", "secret": {"password": "no-site-pw"}}));
+    write_store(&h.link("vie"), &items).unwrap();
+    let copy = std::fs::read(h.link("vie").join("vault.json.enc")).unwrap();
+    h.enrol().await;
+    let report = h.vault.copies_ready_all(&h.config).await;
+    assert_eq!(report.failed, vec!["vie".to_string()], "{report:?}");
+    assert_eq!(std::fs::read(h.link("vie").join("vault.json.enc")).unwrap(), copy, "kept as it was");
+}
+
+#[tokio::test]
+async fn a_profile_left_without_its_agent_keeps_the_logins_its_hermes_holds() {
+    let _guard = SERIAL.lock().await;
+    // an imported Hermes profile the bridge could not adopt (to_place.py `adopt` failed): no agent, a live profile
+    let h = fixture_with(|_, root| {
+        let home = root.join("hub").join("profiles").join("hermes");
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::write(home.join("config.yaml"), "model:\n  default: x\n").unwrap();
+        write_store(&home.join("vault"), &[json!({"id": "vault_dddddddddddd", "kind": "login", "label": "Forum",
+            "origin": "https://forum.example", "identifier": "alex", "secret": {"password": "forum-pw"}})]).unwrap();
+    });
+    given(&h).await;
+    h.enrol().await;
+    let report = h.vault.copies_ready_all(&h.config).await;
+    assert!(report.failed.is_empty(), "{report:?}");
+    assert!(h.root.join("hub/profiles/hermes/vault/vault.json.enc").is_file(), "never erased with no agent to take it");
+}
+
+#[tokio::test]
+async fn an_item_hermes_refuses_is_marked_refused_then_given_again_once_it_accepts() {
+    let _guard = SERIAL.lock().await;
+    let h = fixture();
+    given(&h).await;
+    h.enrol().await;
+    h.vault.copies_ready_all(&h.config).await;
+    h.reboot();
+    assert!(sealed_keys::try_open(&h.place, &Service(h.share.clone())).await);
+    bipbridge::hermes_copies::forget_checked(&h.place.data);
+    h.hermes.refused.lock().unwrap().insert("Impots".into());
+    let report = h.vault.copies_ready_all(&h.config).await;
+    assert!(report.failed.is_empty(), "{report:?}");
+    let impots = h.vault.items().into_iter().find(|i| i.label == "Impots").unwrap();
+    assert!(!impots.agents.contains_key("vie"));
+    let line = impots.refused.get("vie").cloned().unwrap_or_default();
+    assert!(line.starts_with("Pas donnée à ") && line.contains("refuse"), "{line:?}");
+    // its Hermes accepts it again: given back at the next pass (the next start)
+    h.hermes.refused.lock().unwrap().clear();
+    bipbridge::hermes_copies::forget_checked(&h.place.data);
+    let report = h.vault.copies_ready_all(&h.config).await;
+    assert!(report.failed.is_empty() && report.rebuilt.contains(&"vie".to_string()), "{report:?}");
+    let impots = h.vault.items().into_iter().find(|i| i.label == "Impots").unwrap();
+    assert!(impots.agents.contains_key("vie") && impots.refused.is_empty(), "{:?}", impots.refused);
+    assert_eq!(h.copy("vie"), h.handles("vie"));
 }

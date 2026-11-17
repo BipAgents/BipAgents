@@ -157,6 +157,9 @@ pub struct Item {
     pub has_otp: bool,
     /// agent id -> its handle in that agent's Hermes vault
     pub agents: IndexMap<String, String>,
+    /// agent id -> why the entry is not given to it, a short line for the app (tests first: filled in by the fix).
+    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
+    pub refused: IndexMap<String, String>,
     pub created_at: String,
     pub updated_at: String,
     /// A payment card's public part (cards.rs): last 4 digits, expiry, flags, sites, payments. Never its numbers.
