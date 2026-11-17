@@ -132,13 +132,13 @@ def test_the_beat_says_whether_each_vault_is_open_closed_or_failed(tmp_path):
         _Bridge.answer = {"ok": True, "vault": "open"}
         assert agent.vault_state(str(home)) == {"vault": "open"}
         _Bridge.answer = {"ok": True, "vault": "<script>", "vault_reason": "x" * 500}
-        assert agent.vault_state(str(home)) == {}
+        assert agent.vault_state(str(home)) == {"vault": "sealed"}, "an odd answer: sealed, nothing of it repeated"
         _Bridge.answer = {"ok": True, "vault": "locked", "vault_reason": "x" * 500}
         assert agent.vault_state(str(home)) == {"vault": "locked", "vault_reason": "x" * 120}
     finally:
         server.shutdown()
-    # the bridge down: nothing said about the vault (the door's own check says it is down)
-    assert agent.vault_state(str(home)) == {}
+    # the bridge down: sealed all the same (second review, N3: never taken for a place whose sealing failed)
+    assert agent.vault_state(str(home)) == {"vault": "sealed"}
     state = home / ".local" / "state" / "bipagents" / "vault-keys.json"
     state.parent.mkdir(parents=True)
     assert agent.vault_failed(str(home)) is None

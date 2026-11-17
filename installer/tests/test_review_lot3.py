@@ -171,13 +171,14 @@ def test_the_seat_agent_never_makes_the_place_s_state_folder_as_root(seat, monke
     import shutil
     shutil.rmtree(home / ".local")
     owned = []
-    real_chown = os.chown
-    monkeypatch.setattr(agent.os, "chown", lambda path, uid, gid: owned.append(str(path)) or real_chown(path, uid, gid))
+    real_fchown = os.fchown
+    monkeypatch.setattr(agent.os, "fchown", lambda fd, uid, gid: owned.append(os.fstat(fd).st_ino)
+                        or real_fchown(fd, uid, gid))
     seen = []
     assert agent.vault_keys_order(2, SETTINGS, 33, run_as=lambda e, a, timeout=900: seen.append(a) or {}) is True
     assert seen, "enrolled"
     for folder in (home / ".local", home / ".local" / "state", home / ".local" / "state" / "bipagents"):
-        assert str(folder) in owned, f"{folder} made for the place, not left root's"
+        assert os.stat(folder).st_ino in owned, f"{folder} made for the place, not left root's"
 
 
 def test_enable_starts_the_bridge_again_only_when_it_was_running(tmp_path, monkeypatch):

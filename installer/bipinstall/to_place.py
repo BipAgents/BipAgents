@@ -514,6 +514,7 @@ def bring_in(archive: Path, passphrase: str, runner: hermes.Runner, base: Option
     browsers = bool((place.toml.get("browser") or {}).get("enabled"))
 
     progress(base, 1)
+    resealed = False
     tar, info, handle = moving.open_archive(archive, passphrase)
     aside = Aside(work / "aside")
     scratch = work / "in"
@@ -605,6 +606,7 @@ def bring_in(archive: Path, passphrase: str, runner: hermes.Runner, base: Option
         for line in migrations.run(runner, base):
             runner.log.append(line)
         if reseal:   # the person's stores over a sealed place: sealed again, once, with the place's own key service
+            resealed = True
             vault_keys.enable(None, say=runner.log.append, base=base)
         for how, name in gateway_units():
             if how == "systemd":
@@ -617,6 +619,10 @@ def bring_in(archive: Path, passphrase: str, runner: hermes.Runner, base: Option
     except BaseException:
         aside.put_back()
         bridgeconf.write(config, place_text, removing=bridgeconf.ANY)
+        if resealed:
+            # its bridge holds the new sealing's place key in memory: started again, it takes the old one back
+            from .family import bridge_restart
+            runner.run(bridge_restart(base), check=False)
         for how, name in gateway_units():
             if how == "systemd":
                 runner.run(["systemctl", "--user", "start", name], check=False)

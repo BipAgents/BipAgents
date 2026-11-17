@@ -118,7 +118,7 @@ def accepted(order, server, done, now):
             pair = body["pair"]
             ok = ok and isinstance(pair, str) and 40 <= len(pair) <= 64 and all(c in PAIR_CHARS for c in pair)
         elif body.get("action") == "vault_keys":
-            ok = ok and key_service_valid(body["vault_keys"])
+            ok = ok and (key_service_valid(body["vault_keys"]) or body["vault_keys"] == {"reseal": True})
         elif body.get("action") in MOVE_ACTIONS:
             ok = ok and move_valid(body)
         elif body.get("action") == "remove":
@@ -732,17 +732,32 @@ def place_command(entry, args, timeout=900):
 
 
 def place_folder(entry, rel):
-    """`rel` under the place's home, each folder made missing made the place's (never root's: its installer writes
-    there). None when one on the way is a link."""
+    """`rel` under the place's home, by file descriptor: each folder on the way opened without following a link
+    (O_NOFOLLOW, from its parent's descriptor), each one made missing given to the place by its descriptor (fchown),
+    never root's and never another file a link swapped in would name. (descriptor, path); OSError when a link (or
+    anything but a folder) is on the way. The caller closes the descriptor."""
+    flags = os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(entry.pw_dir, flags)
     path = entry.pw_dir
-    for part in rel.split("/"):
-        path = os.path.join(path, part)
-        if os.path.islink(path):
-            return None
-        if not os.path.isdir(path):
-            os.mkdir(path, 0o700)
-            os.chown(path, entry.pw_uid, entry.pw_gid)
-    return path
+    try:
+        for part in rel.split("/"):
+            path = os.path.join(path, part)
+            made = False
+            try:
+                child = os.open(part, flags, dir_fd=fd)
+            except FileNotFoundError:
+                os.mkdir(path, 0o700)
+                made = True
+                child = os.open(part, flags, dir_fd=fd)   # what was made, or a link swapped in: refused (ELOOP)
+            os.close(fd)
+            fd = child
+            if made:
+                os.fchown(fd, entry.pw_uid, entry.pw_gid)
+                os.fchmod(fd, 0o700)
+        return fd, path
+    except BaseException:
+        os.close(fd)
+        raise
 
 
 def vault_keys_order(number, settings, order_id, harden=None, run_as=None, moves=None):
@@ -778,36 +793,45 @@ def vault_keys_order(number, settings, order_id, harden=None, run_as=None, moves
         log("place %d (%s): server hardened for the vault keys, sealed at the next round" % (number, user))
         return False
     note_tried(order_id)   # before the try: whatever happens next, never tried again by this agent
-    path = None
+    folder_fd, name, path = None, None, None
     try:
-        folder = place_folder(entry, os.path.dirname(VAULT_STATE))
-        if folder is None:
-            raise SeatError("the place's state folder is a link")
-        fd, path = tempfile.mkstemp(prefix="vault-keys-order.", suffix=".json", dir=folder)
-        with os.fdopen(fd, "w") as fh:
-            os.fchmod(fh.fileno(), 0o600)
-            try:
-                os.fchown(fh.fileno(), entry.pw_uid, entry.pw_gid)
-            except PermissionError:
-                pass   # not root (tests): the file is already this account's
-            json.dump(settings, fh)
-        result = run_as(entry, ["vault-keys", "enable", "--settings-file", path, "--json"], timeout=900)
+        if settings == {"reseal": True}:
+            # a place sealed once whose reseal failed: its own key service (keyservice.json), nothing to hand over
+            args = ["vault-keys", "enable", "--json"]
+        else:
+            folder_fd, folder = place_folder(entry, os.path.dirname(VAULT_STATE))
+            name = "vault-keys-order.%s.json" % base64.b32encode(os.urandom(10)).decode().lower()
+            fd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600,
+                         dir_fd=folder_fd)
+            with os.fdopen(fd, "w") as fh:
+                os.fchmod(fh.fileno(), 0o600)
+                try:
+                    os.fchown(fh.fileno(), entry.pw_uid, entry.pw_gid)
+                except PermissionError:
+                    pass   # not root (tests): the file is already this account's
+                json.dump(settings, fh)
+            path = os.path.join(folder, name)
+            args = ["vault-keys", "enable", "--settings-file", path, "--json"]
+        result = run_as(entry, args, timeout=900)
         log("place %d (%s): vault keys %s" % (number, user, (result or {}).get("state", "sealed")))
     except (SeatError, OSError) as exc:
         note_vault_failed(entry.pw_dir, str(exc))
         log("place %d (%s): vault keys not sealed: %s" % (number, user, str(exc)[:200]))
     finally:
-        if path:
-            try:
-                os.unlink(path)
-            except OSError:
-                pass
+        if folder_fd is not None:
+            if name:
+                try:
+                    os.unlink(name, dir_fd=folder_fd)
+                except OSError:
+                    pass
+            os.close(folder_fd)
     return True
 
 
 def vault_state(home):
-    """The place's vault, from its bridge's /health, for a place whose keys are sealed only: {"vault": "open"} or
-    {"vault": "locked", "vault_reason": ...}; {} otherwise (not sealed, the bridge down: its door's check says so)."""
+    """The place's vault, for a place whose keys are sealed only (keys.sealed.json): from its bridge's /health,
+    {"vault": "open"} or {"vault": "locked", "vault_reason": ...}; {"vault": "sealed"} when the bridge doesn't say
+    (mute, or an odd answer); {} when not sealed."""
     try:
         import tomllib
         with open(os.path.join(home, ".config", "bipagents", "bridge.toml"), "rb") as fh:
@@ -815,21 +839,25 @@ def vault_state(home):
         data = os.path.expanduser(conf.get("data_dir") or os.path.join(home, BRIDGE_DATA))
         if not os.path.exists(os.path.join(data, SEALED_KEYS)):
             return {}
+    except (OSError, ValueError, TypeError, ImportError):
+        return {}
+    try:
         port = int(conf.get("port", 8643))
         host = str(conf.get("host") or "127.0.0.1")
         if host in ("0.0.0.0", "::", ""):
             host = "127.0.0.1"
         with urllib.request.urlopen("http://%s:%d/health" % (host, port), timeout=3) as answer:
             said = json.loads(answer.read(65536).decode("utf-8"))
-    except (OSError, ValueError, TypeError, ImportError):
-        return {}
+    except (OSError, ValueError, TypeError):
+        # its bridge mute (its door's check says so): sealed all the same, never taken for one whose sealing failed
+        return {"vault": "sealed"}
     vault = said.get("vault") if isinstance(said, dict) else None
     if vault == "open":
         return {"vault": "open"}
     if vault == "locked":
         reason = said.get("vault_reason")
         return {"vault": "locked", **({"vault_reason": reason[:120]} if isinstance(reason, str) and reason else {})}
-    return {}
+    return {"vault": "sealed"}
 
 
 def vault_failed(home):

@@ -762,14 +762,18 @@ def unpack(tar: tarfile.TarFile, info: Dict[str, Any], target: Target, config: P
             vault_keys.back_to_today(data, summary.pop(VAULT_KEYS))
         except vault_keys.VaultKeysError as exc:
             raise SealedError(f"this export's vault keys can't be put back: {exc}") from exc
-    if data is not None and vault_keys.files_came(data, data, was_sealed, target.home):
-        vault_keys.enable(None, say=say, base=target.home)   # once, with this place's own key service
+    # An export never carries keys.sealed.json nor this server's half (`_sealed_left_out`): whatever it came from, the
+    # person's stores are in today's layout now. This place's own sealing opens none of them: it goes, and the place
+    # is sealed again once, over them, with its own key service, after its settings are this machine's (below).
+    reseal = data is not None and was_sealed and vault_keys.drop_sealing(data, target.home)
     old_toml = tomllib.loads(config.read_text(encoding="utf-8"))
     roots = [rehome(path, info, target) for path in info["roots"].values()]
     changed = rewrite(settings_files(roots), replacements(info, target))
     adjust_bridge(config, info, target, old_toml)
     (config.parent / "existing-hermes.json").unlink(missing_ok=True)   # Hermes is BipAgents' own here
     (config.parent / MOVED).unlink(missing_ok=True)
+    if reseal:
+        vault_keys.enable(None, say=say, base=target.home)
     return summary, changed
 
 

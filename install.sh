@@ -72,19 +72,26 @@ to_version() {
   git -C "$DIR" fetch --depth 1 --quiet origin "$BIPAGENTS_TO" || return 1
   # A place whose vault's keys are sealed never goes to a version without them (lots 1 and 2 of the design note
   # « Clé du coffre »): its bridge would make keys again in clear and no longer read its stores. It stays on its own.
-  if vault_sealed && ! { git -C "$DIR" cat-file -e FETCH_HEAD:bridge-rs/src/sealed_keys.rs 2>/dev/null \
-                         && git -C "$DIR" cat-file -e FETCH_HEAD:bridge-rs/src/hermes_copies.rs 2>/dev/null; }; then
-    echo "BipAgents: this place's vault keys are sealed and $BIPAGENTS_TO doesn't carry them: it stays on its version" >&2
-    return 1
+  # The versions that carry them say so in bridge-rs/SEALED_KEYS_VERSION (installer/tests/test_review_lot3_pass2.py).
+  if vault_sealed; then
+    local has
+    has=$(git -C "$DIR" cat-file -p FETCH_HEAD:bridge-rs/SEALED_KEYS_VERSION 2>/dev/null | tr -dc 0-9)
+    if [ "${has:-0}" -lt "$SEALED_KEYS_NEEDED" ]; then
+      echo "BipAgents: this place's vault keys are sealed and $BIPAGENTS_TO doesn't carry them: it stays on its version" >&2
+      return 1
+    fi
   fi
   git -C "$DIR" checkout --quiet -B main FETCH_HEAD
 }
 
+# The sealed keys' format this install.sh needs a version to carry before a sealed place goes to it.
+SEALED_KEYS_NEEDED=1
 # This account's vault keys sealed (bridge-rs/src/sealed_keys.rs: keys.sealed.json, or a sealing under way), in the
-# bridge's data folder as its config says.
+# bridge's data folder as its config says (between double or single quotes, ~ for the home).
 vault_sealed() {
   local data
-  data=$(sed -n 's/^data_dir *= *"\(.*\)" *$/\1/p' "$HOME/.config/bipagents/bridge.toml" 2>/dev/null | head -1)
+  data=$(sed -n "s/^data_dir *= *[\"']\(.*\)[\"'] *\$/\1/p" "$HOME/.config/bipagents/bridge.toml" 2>/dev/null | head -1)
+  case "$data" in "~"/*) data="$HOME/${data#\~/}" ;; esac
   data=${data:-$HOME/.local/share/hermes-bridge}
   [ -e "$data/keys.sealed.json" ] || [ -e "$data/.keys-migration/journal.json" ]
 }

@@ -4,6 +4,7 @@ from pathlib import Path
 
 from bipinstall import moving, vault_keys
 
+from test_to_place import computer, place  # noqa: F401
 from test_vault_keys_lot3 import _exported, offer_place, runtime  # noqa: F401
 
 
@@ -155,3 +156,29 @@ def test_install_sh_s_guard_reads_the_sealed_keys_marker_this_repository_carries
     text = (root / "install.sh").read_text(encoding="utf-8")
     assert "bridge-rs/SEALED_KEYS_VERSION" in text and f"SEALED_KEYS_NEEDED={version}" in text
     assert "hermes_copies.rs" not in text
+
+
+
+
+def test_a_send_that_fails_after_its_reseal_restarts_its_bridge(computer, place, tmp_path, monkeypatch):  # noqa: F811
+    import pytest
+    from bipinstall import hermes, to_place
+    from test_review_lot3 import CODE, _sealed, export
+    home, config = computer
+    _, out = export(to_place.what_to_send(str(config), home), tmp_path)
+    new, _ = place
+    _sealed(new, "token-of-the-place")
+    monkeypatch.setattr(vault_keys, "enable", lambda settings, **kw: 0)
+    runner = hermes.Runner(dry=True)
+    real_run = runner.run
+
+    def run(args, **kw):
+        if "adopt" in [str(a) for a in args]:
+            raise OSError("adopt failed")
+        return real_run(args, **kw)
+
+    monkeypatch.setattr(runner, "run", run)
+    with pytest.raises(OSError):
+        to_place.bring_in(out, CODE, runner, base=new, repo=tmp_path / "repo")
+    from bipinstall.family import bridge_restart
+    assert " ".join(bridge_restart(new)) in runner.log, runner.log
