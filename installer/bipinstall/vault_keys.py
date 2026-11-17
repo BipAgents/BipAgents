@@ -179,8 +179,11 @@ def enable(settings: Optional[Dict], runner: Callable = run, say: Callable[[str]
 def export_keys(inv, runner: Callable = run) -> Dict[str, str]:
     """The keys the place key opens, from the bridge (`bipbridge vault-keys export`): {vault, mail, connections}.
     VaultClosed when the bridge can't give them (the vault closed, a sealing under way)."""
-    done = runner(bridge_command(inv.home) + ["vault-keys", "export", "--config", str(inv.config)],
-                  env={"BRIDGE_CONFIG": str(inv.config)})
+    try:
+        done = runner(bridge_command(inv.home) + ["vault-keys", "export", "--config", str(inv.config)],
+                      env={"BRIDGE_CONFIG": str(inv.config)})
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise VaultClosed(f"the bridge can't be asked ({type(exc).__name__})") from None
     if getattr(done, "returncode", 1) != 0:
         raise VaultClosed(_short(getattr(done, "stderr", ""), None))
     try:

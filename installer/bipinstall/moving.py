@@ -337,9 +337,10 @@ def _in_memory(path: Path) -> Optional[Path]:
 
 
 def add_tree(tar: tarfile.TarFile, inv: Inventory, name: str, root: Path, tally: Tally, scratch: Path,
-             left_out: Optional[Callable[[Path], bool]] = None) -> None:
-    """`root` into the archive as `name`, but what `Inventory.skipped` and `left_out` leave out. An agent's Hermes
-    vault kept in memory goes as the folder it is (no link to a memory the other machine hasn't)."""
+             left_out: Optional[Callable[[Path], bool]] = None, from_memory: bool = False) -> None:
+    """`root` into the archive as `name`, but what `Inventory.skipped` and `left_out` leave out. `from_memory` (the
+    export of a place whose vault's keys are sealed): an agent's Hermes vault kept in memory goes as the folder it
+    is (no link to a memory the other machine hasn't); otherwise such a link is what `skipped` says."""
     def arc(path: Path, base: Path, prefix: str) -> str:
         rel = path.relative_to(base).as_posix() if path != base else ""
         return f"{prefix}/{rel}" if rel else prefix
@@ -357,7 +358,7 @@ def add_tree(tar: tarfile.TarFile, inv: Inventory, name: str, root: Path, tally:
         for folder, dirs, files in os.walk(root, followlinks=False):
             here = Path(folder)
             # before `skipped`, which leaves such links out of backups and moves (the bridge rebuilds them there)
-            memory = {d: target for d in dirs if (target := _in_memory(here / d)) is not None}
+            memory = {d: target for d in dirs if (target := _in_memory(here / d)) is not None} if from_memory else {}
             copies += [(here / d, memory[d]) for d in sorted(memory)]
             dirs[:] = sorted(d for d in dirs if d not in memory and kept(here / d))
             entries += [(here / d, arc(here / d, root, name)) for d in dirs]
@@ -441,7 +442,7 @@ def export(inv: Inventory, out: Path, passphrase: str, machine: Any,
                 entry.size, entry.mode = len(data), 0o600
                 tar.addfile(entry, io.BytesIO(data))
             for name, root in info["roots"].items():
-                add_tree(tar, inv, name, Path(root), tally, Path(scratch), left_out)
+                add_tree(tar, inv, name, Path(root), tally, Path(scratch), left_out, from_memory=keys is not None)
             exported = volumes.export_all(info["volumes"], Path(scratch) / VOLUMES, volumes.podman())
             for path in exported:
                 add_tree(tar, inv, f"{VOLUMES}/{path.name}", path, tally, Path(scratch))
