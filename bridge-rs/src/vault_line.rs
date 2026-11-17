@@ -19,7 +19,9 @@
 //!   connector, nor any text that copies a line's words.
 //! - `sites`: the hosts filled, as the person reads them (no « www. »), in the order of the turn; `item`: the vault
 //!   item when every fill of the turn was that one item (the app opens the vault on it), else left out (the list).
-//! - The words in the agent's language: French and English now (others: English until theirs are written).
+//! - The words in the agent's language (`handback::language_of`, as the bridge's other words): French, German and
+//!   Spanish (the help page's, site vault.<lang>.json `use4`), English for any other (Dutch too, until its words are
+//!   written). Only the words change: the apps read `kind`, never the text, and nothing reads a line back from words.
 //!
 //! No Python counterpart.
 
@@ -279,17 +281,22 @@ fn joined(sites: &[String], and: &str) -> String {
     }
 }
 
-/// The line's words in `lang`.
+/// The line's words in `lang` (« fr », « de-DE »…): French, German, Spanish; English for any other. German and
+/// Spanish as the help page quotes them (site vault.de.json / vault.es.json `use4`).
 pub fn words(lang: &str, sites: &[String], created: bool) -> String {
-    let french = lang.split(['-', '_']).next().is_some_and(|l| l.eq_ignore_ascii_case("fr"));
-    match (french, created) {
-        (true, false) => format!("Rempli par le coffre sur {}, sans le donner à l'agent", joined(sites, "et")),
-        (true, true) => {
-            format!("Mot de passe créé par le coffre sur {}, sans le donner à l'agent", joined(sites, "et"))
+    let code = lang.split(['-', '_']).next().unwrap_or_default().to_ascii_lowercase();
+    // (a login typed, a password the vault made, « and », the end)
+    let (filled, made, and, end) = match code.as_str() {
+        "fr" => ("Rempli par le coffre sur", "Mot de passe créé par le coffre sur", "et", "sans le donner à l'agent"),
+        "de" => {
+            ("Vom Tresor ausgefüllt auf", "Passwort vom Tresor erstellt auf", "und", "ohne es dem Agenten zu geben")
         }
-        (false, false) => format!("Filled by the vault on {}, never given to the agent", joined(sites, "and")),
-        (false, true) => format!("Password made by the vault on {}, never given to the agent", joined(sites, "and")),
-    }
+        "es" => {
+            ("Rellenado por la caja fuerte en", "Contraseña creada por la caja fuerte en", "y", "sin dársela al agente")
+        }
+        _ => ("Filled by the vault on", "Password made by the vault on", "and", "never given to the agent"),
+    };
+    format!("{} {}, {end}", if created { made } else { filled }, joined(sites, and))
 }
 
 /// Under each turn in which the vault typed a password, after its last item, one `vault_line` item; every tool item's
