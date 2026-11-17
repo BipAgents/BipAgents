@@ -68,6 +68,17 @@ def sealed(data_dir: Path) -> bool:
     return (data_dir / SEALED).exists() or (data_dir / JOURNAL).exists()
 
 
+def data_dir(config: Path, base: Optional[Path] = None) -> Path:
+    """The bridge's data folder, as its config says (moving.py's Inventory.data_dir)."""
+    import tomllib
+    try:
+        found = tomllib.loads(config.read_text(encoding="utf-8")).get("data_dir")
+    except (OSError, ValueError):
+        found = None
+    return Path(found).expanduser() if isinstance(found, str) and found else \
+        (base or home()) / ".local" / "share" / "hermes-bridge"
+
+
 def valid(settings) -> Optional[Dict[str, str]]:
     """The key service's settings as the guichet gives them (cloud.py checks a setup's the same way), else None."""
     if not isinstance(settings, dict):
@@ -136,6 +147,9 @@ def enable(settings: Optional[Dict], runner: Callable = run, say: Callable[[str]
                 "nothing changed.")
             return 1
     config = base / ".config" / "bipagents" / "bridge.toml"
+    if sealed(data_dir(config, base)):
+        say("The vault's keys are already sealed: nothing to do.")
+        return 0
     last = read_state(base)
     if last.get("state") == "failed" and last.get("settings") == _token_sha(given) and not again:
         # never a loop: each try is one of the place's daily releases

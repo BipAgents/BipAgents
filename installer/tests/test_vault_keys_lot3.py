@@ -183,9 +183,13 @@ def runtime(tmp_path, monkeypatch):
 
 
 def backed_up(p, tmp_path):
-    stage = tmp_path / f"stage-{p.home.name}"
-    stage.mkdir(exist_ok=True)
-    return [Path(path) for path in backup.files(moving.read_inventory(p.config, p.home), stage, {})]
+    """What a backup of `p` takes, its manifest written in its stage as backup.run does."""
+    stage = p.home / backup.STAGE
+    stage.mkdir(parents=True, exist_ok=True)
+    inv = moving.read_inventory(p.config, p.home)
+    machine = SimpleNamespace(system="linux", tailscale=None, tailnet_name=None)
+    backup.write_private(stage / "manifest.json", {**moving.manifest(inv, machine), "stage": str(stage)})
+    return [Path(path) for path in backup.files(inv, stage, {})]
 
 
 @pytest.mark.parametrize("layout", ["offer", "elsewhere"])
@@ -376,3 +380,57 @@ def test_back_to_today_refuses_keys_that_aren_t_the_three(tmp_path):
         with pytest.raises(vault_keys.VaultKeysError):
             vault_keys.back_to_today(data, wrong)
         assert (data / "keys.sealed.json").exists()
+
+
+def _moved_over(old, new):
+    """What a planned move's rsync (--delete, each root) leaves on the target: the source's roots, nothing else."""
+    import shutil
+    planned = placemove.plan(old.home)
+    for path in map(Path, planned["roots"].values()):
+        dest = moving.rehome(str(path), {"source": {"home": str(old.home), "repo": "/nowhere"}},
+                             moving.Target(home=new.home, repo=Path("/nowhere"), tailnet_name=None, lan_address=None))
+        if path.is_dir():
+            shutil.rmtree(dest, ignore_errors=True)
+            shutil.copytree(path, dest, symlinks=True)
+        elif path.is_file():
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(path, dest)
+    shutil.copytree(planned["stage"], new.home / placemove.MOVE_IN / "stage", dirs_exist_ok=True)
+
+
+@pytest.mark.parametrize("source_sealed", [True, False])
+def test_a_planned_move_over_a_sealed_fresh_place_keeps_the_source_s_layout_and_seals_again_once(
+        tmp_path, runtime, monkeypatch, source_sealed):
+    from bipinstall import hermes as hermes_mod, migrations
+    old = offer_place(tmp_path / "old" / "bip3", sealed_keys=source_sealed)
+    new = offer_place(tmp_path / "new" / "bip", sealed_keys=True)
+    monkeypatch.setattr(migrations, "run", lambda r: [])
+    sealed_with = []
+    monkeypatch.setattr(vault_keys, "enable", lambda settings, **kw: sealed_with.append((settings, kw)) or 0)
+    runner = hermes_mod.Runner(dry=True)
+    assert placemove.prepare(runner, new.home)["prepared"]
+    _moved_over(old, new)   # the fresh place's data folder (its space's folder in it) replaced by the source's
+    placemove.finish(runner, new.home, tmp_path / "checkout", "198.51.100.7")
+    if source_sealed:
+        assert (new.space / "vault.share").read_bytes() == b"half-of-bip3"
+        assert json.loads((new.space / "keyservice.json").read_text())["token"] == "token-of-bip3"
+        assert stat.S_IMODE(new.space.stat().st_mode) == 0o700
+        assert sealed_with == []
+    else:
+        # the person's stores in today's layout; the fresh place's key service back (rsync --delete took it), its
+        # half gone (it opens none of them), sealed again once with this place's own enrolment
+        assert (new.data / "vault" / "vault.key").read_bytes() == b"clear-vault-key-of-bip3"
+        assert not (new.data / "keys.sealed.json").exists() and not (new.space / "vault.share").exists()
+        assert json.loads((new.space / "keyservice.json").read_text())["token"] == "token-of-bip"
+        assert stat.S_IMODE((new.space / "keyservice.json").stat().st_mode) == 0o600
+        assert len(sealed_with) == 1 and sealed_with[0][0] is None and sealed_with[0][1].get("base") == new.home
+    assert not (new.home / placemove.MOVE_IN / "keyservice.json").exists(), "the kept copy never stays"
+
+
+def test_enable_on_a_place_already_sealed_does_nothing(tmp_path, monkeypatch):
+    p = offer_place(tmp_path)
+    monkeypatch.setenv("HOME", str(tmp_path))
+    ran = []
+    assert vault_keys.enable(SETTINGS, runner=lambda args, env=None: ran.append(args), say=lambda _: None,
+                             base=tmp_path) == 0
+    assert ran == [] and (p.data / "keys.sealed.json").exists(), "never a try that the bridge would refuse"

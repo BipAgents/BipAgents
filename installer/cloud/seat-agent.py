@@ -4,7 +4,8 @@
 Run as root every two minutes by bipagents-seats.timer, set up at first boot. Its call to the guichet, with the token
 its first boot gave it, is the server's heartbeat (guichet/bipguichet/watch.py): it says, for each place, whether its
 bridge's door answers here, whether its Hermes runs (or sleeps), the BipAgents version it runs, when its last backup worked
-and whether its encrypted space waits for its key ("locked" and why),
+and whether its encrypted space waits for its key ("locked" and why), whether its vault's sealed keys are open or
+closed (and why) or its last sealing failed (the `vault_keys` order, below),
 and for the server its memory, swap, disk and load, and for each place the memory it holds now and its highest since the
 last beat ("places") -- yes or no, a version, a time and numbers, nothing of anyone. The
 guichet answers with each place's AI credit state ("credit": ok, low, full, stopped; written where the place's bridge
@@ -70,6 +71,9 @@ LOCKED = ".local/share/bipagents/space/locked.json"   # its encrypted space not 
 CREDIT = ".local/state/bipagents/credit.json"   # its plan's AI credit as the guichet says it (bridge-rs/src/credit.rs)
 CREDIT_STATES = ("ok", "low", "full", "stopped")
 HARDENED = "/var/lib/bipagents/space-hardened"   # space-hardening.sh was done (user-data.yaml, add-seat.sh)
+VAULT_TRIED = "/var/lib/bipagents/vault-keys-tried"   # the vault_keys orders tried: each place enrolled once at most
+VAULT_STATE = ".local/state/bipagents/vault-keys.json"   # the place's own last try (installer/bipinstall/vault_keys.py)
+SEALED_KEYS = "keys.sealed.json"   # in its bridge's data_dir: its vault's keys sealed (bridge-rs/src/sealed_keys.rs)
 PAIR_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
 
 
@@ -113,6 +117,8 @@ def accepted(order, server, done, now):
         elif body.get("action") == "reopen":
             pair = body["pair"]
             ok = ok and isinstance(pair, str) and 40 <= len(pair) <= 64 and all(c in PAIR_CHARS for c in pair)
+        elif body.get("action") == "vault_keys":
+            ok = ok and key_service_valid(body["vault_keys"])
         elif body.get("action") in MOVE_ACTIONS:
             ok = ok and move_valid(body)
         elif body.get("action") == "remove":
@@ -632,7 +638,193 @@ def health():
         last_used = used(entry.pw_dir)
         if last_used is not None:
             seats[str(number)]["used"] = last_used
+        seats[str(number)].update(vault_state(entry.pw_dir))
+        failed = vault_failed(entry.pw_dir)
+        if failed:
+            seats[str(number)]["vault_failed"] = failed
     return seats
+
+
+# -- the vault's keys sealed (design note "Cle du coffre", lot 3) ------------------------------------------------------
+#
+# The guichet's `vault_keys` order seals a place's vault, mailbox and connection keys with Kerfy's key service: the
+# server hardened first when it is not yet (space-hardening.sh, as for an encrypted space: the order then waits a round,
+# so that the beat says space_hardened before the guichet's grant is used), then the place's own installer, as its
+# account, once (`bipinstall vault-keys enable`: each try costs one of the place's daily releases at the key service).
+# The order is told done whatever happened: a failure is said in the next beats (`vault_failed`), never tried again.
+# The settings go to the place in a file of its own (0600, deleted after), never on a command line.
+
+class SeatError(Exception):
+    """A place's command failed; its last words, short (no secret in them)."""
+
+
+def key_service_valid(settings):
+    """A key service's settings as the guichet gives them: an https address, a signed grant, a token of the place's
+    own (printable, no spaces: it goes in a header)."""
+    if not isinstance(settings, dict):
+        return False
+    url, grant, signature, token = (settings.get(k) for k in ("url", "grant", "signature", "token"))
+    if not isinstance(url, str) or not url.startswith("https://") or len(url) > 300:
+        return False
+    if not all(isinstance(v, str) and v for v in (grant, signature)):
+        return False
+    return isinstance(token, str) and 16 <= len(token) <= 200 and token.isprintable() and token == token.strip() \
+        and " " not in token
+
+
+def tried_orders(path=None):
+    try:
+        with open(path or VAULT_TRIED) as fh:
+            return set(fh.read().split())
+    except OSError:
+        return set()
+
+
+def note_tried(order_id, path=None):
+    path = path or VAULT_TRIED
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "a") as fh:
+        fh.write("%d\n" % int(order_id))
+
+
+def _agent_notes_path():
+    return VAULT_TRIED + "-why.json"   # root's own: why an order of this agent's ended without sealing, by home
+
+
+def note_vault_failed(home, why):
+    notes = read_json(_agent_notes_path())
+    notes = notes if isinstance(notes, dict) else {}
+    notes[home] = {"error": str(why)[:120], "at": time.time()}
+    write_json(_agent_notes_path(), notes)
+
+
+def harden_server(lib=LIB):
+    """space-hardening.sh, as root (done once: it marks HARDENED)."""
+    with open("/var/log/bipagents-space-hardening.log", "a") as out:
+        done = subprocess.run(["bash", os.path.join(lib, "space-hardening.sh")], stdout=out, stderr=out, timeout=1800)
+    return done.returncode == 0 and os.path.exists(HARDENED)
+
+
+def place_command(entry, args, timeout=900):
+    """`bipinstall <args>` as the place's account (its installer, its systemd user manager): the last JSON line.
+    SeatError when it failed or said an error."""
+    home = entry.pw_dir
+    command = ["sudo", "-u", entry.pw_name, "env", "HOME=" + home, "USER=" + entry.pw_name,
+               "XDG_RUNTIME_DIR=/run/user/%d" % entry.pw_uid,
+               "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/%d/bus" % entry.pw_uid,
+               "PATH=%s/.local/bin:/usr/local/bin:/usr/bin:/bin" % home,
+               "PYTHONPATH=%s/BipAgents/installer" % home,
+               "%s/BipAgents/installer/.venv/bin/python" % home, "-m", "bipinstall"] + list(args)
+    try:
+        done = subprocess.run(command, capture_output=True, text=True, timeout=timeout, cwd=home)
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise SeatError("%s: %s" % (" ".join(args[:2]), exc))
+    for line in reversed(done.stdout.strip().splitlines()):
+        if line.startswith("{"):
+            try:
+                result = json.loads(line)
+            except ValueError:
+                continue
+            if done.returncode != 0 or result.get("error"):
+                raise SeatError("%s: %s" % (" ".join(args[:2]), str(result.get("error") or "failed")[:200]))
+            return result
+    raise SeatError("%s gave no answer (%d)" % (" ".join(args[:2]), done.returncode))
+
+
+def vault_keys_order(number, settings, order_id, harden=None, run_as=None):
+    """The guichet's `vault_keys` order for place n. True: done (told to the guichet, whatever happened); False: the
+    server was just hardened, the place is enrolled at the next round (neither noted nor told done)."""
+    harden = harden or harden_server
+    run_as = run_as or place_command
+    user = account(number)
+    try:
+        entry = pwd.getpwnam(user)
+    except KeyError:
+        return True
+    if str(int(order_id)) in tried_orders():
+        return True   # tried already (a run cut off after it, the same order again): never a second enrolment
+    if not os.path.exists(HARDENED):
+        try:
+            hardened = harden()
+        except (OSError, subprocess.SubprocessError):
+            hardened = False
+        if not hardened:
+            note_tried(order_id)
+            note_vault_failed(entry.pw_dir, "the server's hardening failed: not sealed")
+            log("place %d (%s): vault keys not sealed, the server's hardening failed" % (number, user))
+            return True
+        log("place %d (%s): server hardened for the vault keys, sealed at the next round" % (number, user))
+        return False
+    note_tried(order_id)   # before the try: whatever happens next, never tried again by this agent
+    folder = os.path.join(entry.pw_dir, os.path.dirname(VAULT_STATE))
+    path = None
+    try:
+        if os.path.islink(folder):
+            raise SeatError("the place's state folder is a link")
+        os.makedirs(folder, exist_ok=True)
+        fd, path = tempfile.mkstemp(prefix="vault-keys-order.", suffix=".json", dir=folder)
+        with os.fdopen(fd, "w") as fh:
+            os.fchmod(fh.fileno(), 0o600)
+            try:
+                os.fchown(fh.fileno(), entry.pw_uid, entry.pw_gid)
+            except PermissionError:
+                pass   # not root (tests): the file is already this account's
+            json.dump(settings, fh)
+        result = run_as(entry, ["vault-keys", "enable", "--settings-file", path, "--json"], timeout=900)
+        log("place %d (%s): vault keys %s" % (number, user, (result or {}).get("state", "sealed")))
+    except (SeatError, OSError) as exc:
+        note_vault_failed(entry.pw_dir, str(exc))
+        log("place %d (%s): vault keys not sealed: %s" % (number, user, str(exc)[:200]))
+    finally:
+        if path:
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+    return True
+
+
+def vault_state(home):
+    """The place's vault, from its bridge's /health, for a place whose keys are sealed only: {"vault": "open"} or
+    {"vault": "locked", "vault_reason": ...}; {} otherwise (not sealed, the bridge down: its door's check says so)."""
+    try:
+        import tomllib
+        with open(os.path.join(home, ".config", "bipagents", "bridge.toml"), "rb") as fh:
+            conf = tomllib.load(fh)
+        data = os.path.expanduser(conf.get("data_dir") or os.path.join(home, BRIDGE_DATA))
+        if not os.path.exists(os.path.join(data, SEALED_KEYS)):
+            return {}
+        port = int(conf.get("port", 8643))
+        host = str(conf.get("host") or "127.0.0.1")
+        if host in ("0.0.0.0", "::", ""):
+            host = "127.0.0.1"
+        with urllib.request.urlopen("http://%s:%d/health" % (host, port), timeout=3) as answer:
+            said = json.loads(answer.read(65536).decode("utf-8"))
+    except (OSError, ValueError, TypeError, ImportError):
+        return {}
+    vault = said.get("vault") if isinstance(said, dict) else None
+    if vault == "open":
+        return {"vault": "open"}
+    if vault == "locked":
+        reason = said.get("vault_reason")
+        return {"vault": "locked", **({"vault_reason": reason[:120]} if isinstance(reason, str) and reason else {})}
+    return {}
+
+
+def vault_failed(home):
+    """Why the place's last sealing failed, short, else None: its own note (the installer's), else this agent's."""
+    try:
+        with open(os.path.join(home, VAULT_STATE)) as fh:
+            state = json.load(fh)
+        if isinstance(state, dict) and state.get("state") == "sealed":
+            return None
+        if isinstance(state, dict) and state.get("state") == "failed":
+            return str(state.get("error") or "failed")[:120]
+    except (OSError, ValueError):
+        pass
+    notes = read_json(_agent_notes_path())
+    note = notes.get(home) if isinstance(notes, dict) else None
+    return str(note.get("error"))[:120] if isinstance(note, dict) and note.get("error") else None
 
 
 # -- memory and CPU: each place's soft share, compressed swap, and what each place holds -------------------------------
@@ -2193,6 +2385,9 @@ def main(argv=()):
                         remove(int(body["seat"]), body)
                     except OSError as exc:
                         log("removing place %s stopped: %s" % (body["seat"], exc))
+                elif body["action"] == "vault_keys":
+                    if not vault_keys_order(int(body["seat"]), body["vault_keys"], int(order["id"])):
+                        continue   # the server just hardened: the place sealed at the next round
                 elif body["action"] == "reopen":
                     try:
                         reopen(int(body["seat"]), body["pair"])

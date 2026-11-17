@@ -42,6 +42,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Dict, Iterator, List, Optional, Tuple
 
+from . import vault_keys
+
 SETTINGS = Path(".config") / "bipagents" / "backup.json"
 STATE = Path(".local") / "state" / "bipagents" / "backup.json"
 STAGE = Path(".local") / "state" / "bipagents" / "backup-stage"
@@ -777,10 +779,16 @@ def put_back(fetched: Path, base: Path, repo: Path, address: Optional[str]) -> D
     info, stage = _manifest(fetched)
     fresh = fresh_state(base)
     target = moving.Target(home=base, repo=repo, tailnet_name=None, lan_address=address)
+    own_data = moving.read_inventory(base / ".config" / "bipagents" / "bridge.toml", base).data_dir
+    fresh_sealed = vault_keys.sealed(own_data)
+    came = info["roots"].get("data")
+    backup_data = _inside(fetched, came) if came else None
     for old in info["roots"].values():
         source = _inside(fetched, old)
         if source.exists() or source.is_symlink():
             _copy(source, moving.rehome(old, info, target))
+    if backup_data is not None:
+        info["reseal"] = vault_layout(backup_data, moving.rehome(came, info, target), fresh_sealed, base)
     sqlite_root = _inside(fetched, info.get("stage") or str(stage)) / "sqlite"
     if sqlite_root.is_dir():
         for copy in sqlite_root.rglob("*"):
@@ -801,6 +809,31 @@ def put_back(fetched: Path, base: Path, repo: Path, address: Optional[str]) -> D
         info["volumes_restored"] = moving.import_volumes(base)
     settle(info, base, repo, address, fresh)
     return info
+
+
+def vault_layout(came: Path, data: Path, fresh_sealed: bool, base: Path) -> bool:
+    """Once another place's files are over this fresh one (a restore, a planned move: `came` the person's data folder
+    as it came, `data` this place's): the backup's layout of the vault's keys wins (vault_keys.py). Sealed: this
+    fresh place's clear keys go (they open none of the person's stores) and the half and key service it brought are
+    kept private. In today's layout over a fresh place that was sealed: the fresh sealing goes (its keys.sealed.json,
+    its half: they open none of them), its key service stays, and True says to seal again once (`vault_keys.enable`)."""
+    space = vault_keys.space_dir(base)
+    if vault_keys.sealed(came):
+        for store, name in vault_keys.KEY_FILES.items():
+            if not (came / store / name).exists():
+                (data / store / name).unlink(missing_ok=True)
+        if space.is_dir():
+            os.chmod(space, 0o700)
+            for name in vault_keys.SPACE_FILES:
+                if (space / name).is_file() and not (space / name).is_symlink():
+                    os.chmod(space / name, 0o600)
+        return False
+    if not fresh_sealed:
+        return False
+    (data / vault_keys.SEALED).unlink(missing_ok=True)
+    share, service = (space / name for name in vault_keys.SPACE_FILES)
+    share.unlink(missing_ok=True)
+    return service.is_file()
 
 
 def settle(info: Dict, base: Path, repo: Path, address: Optional[str], fresh: Dict) -> None:
@@ -853,6 +886,8 @@ def restore(key: str, runner, base: Optional[Path] = None, repo: Optional[Path] 
         from . import migrations
         for line in migrations.run(runner):
             runner.log.append(line)
+        if info.get("reseal"):   # today's layout over a sealed fresh place: sealed again, once, with its enrolment
+            vault_keys.enable(None, say=runner.log.append, base=base)
         progress(base, 4)
         for how, name in gateway_units():
             if how == "systemd":
