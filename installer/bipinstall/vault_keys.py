@@ -150,8 +150,16 @@ def enable(settings: Optional[Dict], runner: Callable = run, say: Callable[[str]
     if sealed(data_dir(config, base)):
         say("The vault's keys are already sealed: nothing to do.")
         return 0
+    if (space_dir(base) / "rollback").exists():
+        # the encrypted space's way back keeps the folders as they were, today's keys in them: never sealed beside it
+        why = "the encrypted space still keeps its rollback (`bipagents encrypt finish` first)"
+        _write_state(base, {"state": "failed", "at": time.time(), "error": why, "tried": False,
+                            "settings": _token_sha(given)})
+        say(f"The vault's keys are not sealed, nothing changed: {why}.")
+        return 1
     last = read_state(base)
-    if last.get("state") == "failed" and last.get("settings") == _token_sha(given) and not again:
+    if last.get("state") == "failed" and last.get("tried", True) and last.get("settings") == _token_sha(given) \
+            and not again:
         # never a loop: each try is one of the place's daily releases
         say(f"This place's vault keys were already tried with these settings and it failed ({last.get('error')}): "
             "nothing tried again (`bipagents vault-keys enable --again` once the cause is known).")
@@ -170,8 +178,58 @@ def enable(settings: Optional[Dict], runner: Callable = run, say: Callable[[str]
         say(f"The vault's keys are not sealed, everything is as before: {why}")
         return 1
     _write_state(base, {"state": "sealed", "at": now, "settings": _token_sha(given)})
+    try:
+        scrubbed = scrub_hermes_backups(config, base)
+    except OSError as exc:   # sealed all the same; said, and done again at the next sealing's check
+        scrubbed = []
+        say(f"Hermes' backups from before couldn't all be cleaned: {exc}")
+    if scrubbed:
+        say(f"The agents' vaults taken out of {len(scrubbed)} Hermes backup(s) from before.")
     say("The vault's keys are sealed: their key is never written on this server's disk.")
     return 0
+
+
+# Hermes' own safety backups (`hermes update`'s and a plugin import's: <home>/backups/pre-update-*.zip, pre-migration-*,
+# their *.incomplete.zip salvages; members named from the Hermes home), made before the sealing: the agents' Hermes
+# vaults as they were (`vault/`, its key beside it, at the home's root or in a profile; lot 2's set-aside copies too).
+# Once sealed, the copies live in memory only (lot 2) and Hermes' backups leave links out: these are the last ones on
+# the disk, taken out of each backup, the rest kept.
+HERMES_BACKUPS = ("backups/pre-update-*.zip", "backups/pre-migration-*.zip")
+
+
+def _a_vault(name: str) -> bool:
+    parts = [p for p in name.split("/") if p]
+    at = parts[0:1] if parts[:1] != ["profiles"] else parts[2:3]
+    return bool(at) and (at[0] == "vault" or at[0].startswith((".vault-disk-", ".vault-link-")))
+
+
+def scrub_hermes_backups(config: Path, base: Optional[Path] = None) -> List[Path]:
+    """Every Hermes home's pre-update backups rewritten without the agents' Hermes vaults (a vault/ folder at the
+    home's root or in a profile). Returns the backups changed."""
+    import zipfile
+    from . import moving
+    inv = moving.read_inventory(config, base or home())
+    changed = []
+    for hermes_home in inv.hermes_homes():
+        for path in sorted({p for pattern in HERMES_BACKUPS for p in hermes_home.glob(pattern)}):
+            if path.is_symlink() or not path.is_file():
+                continue
+            try:
+                with zipfile.ZipFile(path) as old:
+                    names = old.namelist()
+                    if not any(_a_vault(n) for n in names):
+                        continue
+                    tmp = path.with_name(path.name + ".tmp")
+                    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+                    with os.fdopen(fd, "wb") as raw, zipfile.ZipFile(raw, "w", zipfile.ZIP_DEFLATED) as new:
+                        for info in old.infolist():
+                            if not _a_vault(info.filename):
+                                new.writestr(info, old.read(info))
+            except zipfile.BadZipFile:
+                continue   # not a zip Hermes wrote: left as it is
+            os.replace(tmp, path)
+            changed.append(path)
+    return changed
 
 
 # -- the export and the import (moving.py) ------------------------------------------------------------------------------

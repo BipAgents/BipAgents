@@ -434,3 +434,59 @@ def test_enable_on_a_place_already_sealed_does_nothing(tmp_path, monkeypatch):
     assert vault_keys.enable(SETTINGS, runner=lambda args, env=None: ran.append(args), say=lambda _: None,
                              base=tmp_path) == 0
     assert ran == [] and (p.data / "keys.sealed.json").exists(), "never a try that the bridge would refuse"
+
+
+# -- nothing left holding the vault's keys from before the enrolment (review of lot 2, pass 2: « hors du pont ») ------
+
+def test_enable_refuses_while_the_encrypted_space_keeps_its_rollback_and_can_be_tried_once_it_is_gone(
+        tmp_path, monkeypatch):
+    rollback = tmp_path / ".local" / "share" / "bipagents" / "space" / "rollback"
+    write(rollback / "data" / "vault" / "vault.key", b"the-key-before-the-space")
+    status, calls, said = _enrolling(tmp_path, monkeypatch, 0)
+    assert status == 1 and calls == [], "nothing stopped, the key service not asked"
+    state = vault_keys.read_state(tmp_path)
+    assert state["state"] == "failed" and "rollback" in state["error"] and state["tried"] is False
+    import shutil
+    shutil.rmtree(rollback)   # `bipagents encrypt finish`
+    status, calls, said = _enrolling(tmp_path, monkeypatch, 0)
+    assert status == 0, "a refusal that asked nothing is no try: it never blocks the next one"
+
+
+def _pre_update_zip(path: Path, members: dict):
+    import zipfile
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(path, "w") as z:
+        for name, data in members.items():
+            z.writestr(name, data)
+
+
+def test_a_sealing_leaves_no_hermes_pre_update_backup_holding_a_vault_and_its_key(tmp_path, monkeypatch):
+    import zipfile
+    p = offer_place(tmp_path, sealed_keys=False)
+    hub = tmp_path / ".hermes" / "backups" / "pre-update-20261117-101500.zip"
+    _pre_update_zip(hub, {"config.yaml": "model: x", "profiles/vie/SOUL.md": "Tu es Vie.",
+                          "profiles/vie/vault/vault.key": "vie-key-before", "profiles/vie/vault/vault.json.enc": "c",
+                          "vault/vault.key": "hub-key-before"})
+    space = tmp_path / ".local" / "share" / "hermes-bridge" / "spaces" / "coach" / "backups" / "pre-migration-1.zip"
+    _pre_update_zip(space, {"profiles/coach/.vault-disk-0badc0de/vault.key": "set-aside", "skills/vault/x.md": "kept"})
+    other = tmp_path / ".hermes" / "backups" / "manual-note.zip"   # not Hermes' safety backup: left as it is
+    _pre_update_zip(other, {"vault/vault.key": "kept"})
+    status, calls, said = _enrolling(tmp_path, monkeypatch, 0)
+    assert status == 0
+    with zipfile.ZipFile(hub) as z:
+        names = z.namelist()
+        assert sorted(names) == ["config.yaml", "profiles/vie/SOUL.md"]
+        assert z.read("profiles/vie/SOUL.md") == "Tu es Vie.".encode()
+    assert stat.S_IMODE(hub.stat().st_mode) == 0o600
+    assert zipfile.ZipFile(space).namelist() == ["skills/vault/x.md"], "an agent's own space's Hermes too"
+    assert zipfile.ZipFile(other).namelist() == ["vault/vault.key"]
+    assert not list(hub.parent.glob("*.tmp*"))
+
+
+def test_a_failed_sealing_leaves_the_pre_update_backups_as_they_are(tmp_path, monkeypatch):
+    import zipfile
+    offer_place(tmp_path, sealed_keys=False)
+    hub = tmp_path / ".hermes" / "backups" / "pre-update-1.zip"
+    _pre_update_zip(hub, {"vault/vault.key": "hub-key-before"})
+    status, calls, said = _enrolling(tmp_path, monkeypatch, 1)
+    assert status == 1 and zipfile.ZipFile(hub).namelist() == ["vault/vault.key"], "today's layout: nothing to hide"
