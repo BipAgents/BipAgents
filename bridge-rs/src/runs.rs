@@ -3815,6 +3815,63 @@ mod tests {
         assert_eq!(run_of_call(&hub, "paul", vault, READ), None);
     }
 
+    /// Review of vault-journeys-apps, B1 (17/11): an agent without its browser reaches the vault's tools through the tool
+    /// search (`tool_call`, tool_diet.rs): its turn is inside the call it wraps, seen from the call's arguments or its
+    /// preview (perhaps cut). And `call_run`, the production path: the call's own turn at once, or once the hub sees it
+    /// start, a relative's turn left out, nobody: None after its wait.
+    #[tokio::test]
+    async fn a_call_through_the_tool_search_is_its_wrapped_calls() {
+        use crate::vault_contacts::{call_run_in, run_of_call, READ};
+        let hub = Arc::new(RunHub::new(HermesClient::new(reqwest::Client::new()), None, 7200, None));
+        let event = |kind: &str, data: Value| SSEEvent::new(kind, data.as_object().cloned().unwrap(), "{}");
+        let turn = |run: &str| {
+            let sub = Arc::new(RunSubscription::new(AgentConfig { name: "lettres".into(), ..Default::default() }, run));
+            lock(&sub.state).session_id = Some(format!("api_{run}"));
+            lock(&hub.inner).subs.insert(sub.key(), sub.clone());
+            sub
+        };
+        let vault = crate::vault_logins::SERVER_NAME;
+        let none = |_: &str| false;
+        // its arguments, a whole preview, a preview cut short
+        let wrapped = r#"{"calls": [{"name": "mcp__bipagents_vault__vault_contact_details", "arguments": {}}]}"#;
+        let one = turn("run_one");
+        hub.dispatch(&one, event("tool.started", json!({"tool": "tool_call", "tool_call_id": "a", "preview": wrapped})));
+        assert_eq!(run_of_call(&hub, "lettres", vault, READ).as_deref(), Some("run_one"));
+        let started = std::time::Instant::now();
+        assert_eq!(call_run_in(&hub, "lettres", vault, READ, none).await.as_deref(), Some("run_one"));
+        assert!(started.elapsed() < std::time::Duration::from_millis(500), "seen at once: no wait");
+        hub.dispatch(&one, event("tool.completed", json!({"tool": "tool_call", "tool_call_id": "a"})));
+        let cut = turn("run_cut");
+        hub.dispatch(&cut, event("tool.started", json!({"tool": "tool_call", "tool_call_id": "b",
+            "preview": r#"{"calls": [{"name": "mcp_bipagents_vault_vault_contact_details", "argum"#})));
+        assert_eq!(run_of_call(&hub, "lettres", vault, READ).as_deref(), Some("run_cut"));
+        hub.dispatch(&cut, event("tool.completed", json!({"tool": "tool_call", "tool_call_id": "b"})));
+        // the tool search wrapping another tool: not inside the vault's
+        let web = turn("run_web");
+        hub.dispatch(&web, event("tool.started", json!({"tool": "tool_call", "tool_call_id": "c",
+            "args": {"calls": [{"name": "web_search", "arguments": {"query": "mairie"}}]}})));
+        assert_eq!(run_of_call(&hub, "lettres", vault, READ), None);
+        // the call reaches the bridge before the hub sees it start: found once it does
+        let late = turn("run_late");
+        let (hub2, late2) = (hub.clone(), late.clone());
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+            hub2.dispatch(&late2, SSEEvent::new("tool.started",
+                json!({"tool": "mcp_bipagents_vault_vault_contact_details", "tool_call_id": "d"}).as_object().cloned().unwrap(), "{}"));
+        });
+        assert_eq!(call_run_in(&hub, "lettres", vault, READ, none).await.as_deref(), Some("run_late"));
+        // a relative's turn inside it too (a shared agent): left out, the person's own turn kept
+        let lea = turn("run_lea");
+        hub.dispatch(&lea, event("tool.started", json!({"tool": "mcp__bipagents_vault__vault_contact_details", "tool_call_id": "e"})));
+        assert_eq!(call_run_in(&hub, "lettres", vault, READ, |run| run == "run_lea").await.as_deref(), Some("run_late"));
+        // both the person's: nobody can tell
+        assert_eq!(call_run_in(&hub, "lettres", vault, READ, none).await, None);
+        // nobody inside: none, after the wait
+        hub.dispatch(&late, event("tool.completed", json!({"tool": "mcp_bipagents_vault_vault_contact_details", "tool_call_id": "d"})));
+        hub.dispatch(&lea, event("tool.completed", json!({"tool": "mcp__bipagents_vault__vault_contact_details", "tool_call_id": "e"})));
+        assert_eq!(call_run_in(&hub, "lettres", vault, READ, none).await, None);
+    }
+
     /// Le coffre rassure, review R3 (17/11): whose call of the vault it is — the turns of the agent inside a call of
     /// that very tool now (its last `tool.started`, not completed), by Hermes' own names, never « the turn that called a
     /// tool last ».

@@ -422,6 +422,17 @@ pub fn run_of_call(hub: &crate::runs::RunHub, agent: &str, server: &str, tool: &
 /// reach the bridge a moment after the call).
 const SEEN_WAIT: std::time::Duration = std::time::Duration::from_millis(1500);
 
+/// `call_run` on this hub, `relative` saying which runs are a relative's turn (left out: their vault calls are closed).
+pub async fn call_run_in(
+    _hub: &crate::runs::RunHub,
+    _agent: &str,
+    _server: &str,
+    _tool: &str,
+    _relative: impl Fn(&str) -> bool,
+) -> Option<String> {
+    None
+}
+
 /// `run_of_call`, the hub given `SEEN_WAIT` to see the call start; several turns inside it: None at once.
 pub async fn call_run(state: &crate::app::AppState, agent: &str, server: &str, tool: &str) -> Option<String> {
     let deadline = tokio::time::Instant::now() + SEEN_WAIT;
