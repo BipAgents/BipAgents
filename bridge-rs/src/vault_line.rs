@@ -20,8 +20,9 @@
 //! - `sites`: the hosts filled, as the person reads them (no « www. »), in the order of the turn; `item`: the vault
 //!   item when every fill of the turn was that one item (the app opens the vault on it), else left out (the list).
 //! - The words in the agent's language (`handback::language_of`, as the bridge's other words): French, German and
-//!   Spanish (the help page's, site vault.<lang>.json `use4`), English for any other (Dutch too, until its words are
-//!   written). Only the words change: the apps read `kind`, never the text, and nothing reads a line back from words.
+//!   Spanish (their beginnings the help page's, site vault.<lang>.json `use4`; Spanish « e » for « y » before a site
+//!   in « i… »), English for any other (Dutch too, until its words are written). Only the words change: the apps read
+//!   `kind`, never the text, and nothing reads a line back from words.
 //!
 //! No Python counterpart.
 
@@ -282,21 +283,38 @@ fn joined(sites: &[String], and: &str) -> String {
 }
 
 /// The line's words in `lang` (« fr », « de-DE »…): French, German, Spanish; English for any other. German and
-/// Spanish as the help page quotes them (site vault.de.json / vault.es.json `use4`).
+/// Spanish begin as the help page quotes them (site vault.de.json / vault.es.json `use4`).
 pub fn words(lang: &str, sites: &[String], created: bool) -> String {
     let code = lang.split(['-', '_']).next().unwrap_or_default().to_ascii_lowercase();
-    // (a login typed, a password the vault made, « and », the end)
-    let (filled, made, and, end) = match code.as_str() {
-        "fr" => ("Rempli par le coffre sur", "Mot de passe créé par le coffre sur", "et", "sans le donner à l'agent"),
-        "de" => {
-            ("Vom Tresor ausgefüllt auf", "Passwort vom Tresor erstellt auf", "und", "ohne es dem Agenten zu geben")
-        }
-        "es" => {
-            ("Rellenado por la caja fuerte en", "Contraseña creada por la caja fuerte en", "y", "sin dársela al agente")
-        }
-        _ => ("Filled by the vault on", "Password made by the vault on", "and", "never given to the agent"),
+    // a login typed names the password at the end (its pronoun would refer to nothing); a password made, first
+    let (head, end) = match (code.as_str(), created) {
+        ("fr", false) => ("Rempli par le coffre sur", "sans le donner à l'agent"),
+        ("fr", true) => ("Mot de passe créé par le coffre sur", "sans le donner à l'agent"),
+        ("de", false) => ("Vom Tresor ausgefüllt auf", "ohne dem Agenten das Passwort zu geben"),
+        ("de", true) => ("Passwort vom Tresor erstellt auf", "ohne es dem Agenten zu geben"),
+        ("es", false) => ("Rellenado por la caja fuerte en", "sin darle la contraseña al agente"),
+        ("es", true) => ("Contraseña creada por la caja fuerte en", "sin dársela al agente"),
+        (_, false) => ("Filled by the vault on", "never given to the agent"),
+        (_, true) => ("Password made by the vault on", "never given to the agent"),
     };
-    format!("{} {}, {end}", if created { made } else { filled }, joined(sites, and))
+    let and = match code.as_str() {
+        "fr" => "et",
+        "de" => "und",
+        "es" if sites.last().is_some_and(|last| sounds_i(last)) => "e",
+        "es" => "y",
+        _ => "and",
+    };
+    format!("{head} {}, {end}", joined(sites, and))
+}
+
+/// A name that starts with the sound « i » in Spanish (« ikea.es », « hipercor.es »), so « y » before it is « e »;
+/// never « hie… », « hia… », « hio… », « hiu… » (« y hielo.es »).
+fn sounds_i(name: &str) -> bool {
+    let name = name.to_lowercase();
+    match name.strip_prefix("hi") {
+        Some(rest) => !rest.starts_with(['a', 'e', 'o', 'u']),
+        None => name.starts_with('i'),
+    }
 }
 
 /// Under each turn in which the vault typed a password, after its last item, one `vault_line` item; every tool item's
