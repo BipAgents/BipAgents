@@ -113,3 +113,24 @@ def test_the_sealed_keys_marker_never_goes_down_from_the_last_release_that_carri
             assert now >= int(first), f"lower than {tag}'s: every sealed place would stop updating"
             return
 
+
+
+def test_an_order_s_key_service_replaces_a_forgotten_one_left_on_a_place_not_sealed(tmp_path, monkeypatch):
+    """A restore of a backup not sealed over a place whose grant was forgotten at the rebind: its keyservice.json
+    names a token the key service no longer knows. The guichet's new order (a new grant) replaces it, unless the space
+    itself is encrypted (level 1: that file is its own)."""
+    import json
+    from test_vault_keys_lot3 import SETTINGS, _enrolling
+    space = tmp_path / ".local" / "share" / "bipagents" / "space"
+    write(space / "keyservice.json", json.dumps({**SETTINGS, "token": "a-forgotten-token-0123456789"}).encode())
+    status, calls, said = _enrolling(tmp_path, monkeypatch, 0)
+    assert status == 0
+    assert json.loads((space / "keyservice.json").read_text())["token"] == SETTINGS["token"]
+    import stat
+    assert stat.S_IMODE((space / "keyservice.json").stat().st_mode) == 0o600
+    # an encrypted space's own: never touched
+    write(space / "keyservice.json", json.dumps({**SETTINGS, "token": "the-space-s-own-token-0123456"}).encode())
+    write(space / "space.json", b'{"enabled": true}')
+    (tmp_path / vault_keys.STATE).unlink()
+    _enrolling(tmp_path, monkeypatch, 0)
+    assert json.loads((space / "keyservice.json").read_text())["token"] == "the-space-s-own-token-0123456"
