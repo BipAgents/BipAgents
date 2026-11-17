@@ -259,14 +259,18 @@ def test_a_sealed_place_never_goes_to_a_version_without_its_sealed_keys(tmp_path
     before = world.head()
     older = commit(world.old, "a version before the vault's sealed keys")
     data = tmp_path / "data"
-    write(tmp_path / ".config" / "bipagents" / "bridge.toml", f'port = 8643\ndata_dir = "{data}"\n'.encode())
+    # written with single quotes and ~ (by hand): read all the same
+    write(tmp_path / ".config" / "bipagents" / "bridge.toml", b"port = 8643\ndata_dir = '~/data'\n")
     write(data / "keys.sealed.json", b'{"v": 1}')
     done = world.install_sh("update", "--auto", BIPAGENTS_TO=older)
     assert world.head() == before, "its sealed stores would be read with keys made again in clear"
     assert "sealed" in done.stderr
-    # a version that carries them (lots 1 and 2): it goes
-    for name in ("sealed_keys.rs", "hermes_copies.rs"):
-        write(world.old / "bridge-rs" / "src" / name, b"// the vault's sealed keys")
+    # a version that carries them (lots 1 and 2: its marker), not an older marker
+    write(world.old / "bridge-rs" / "SEALED_KEYS_VERSION", b"0\n")
+    stale = commit(world.old, "an older marker")
+    world.install_sh("update", "--auto", BIPAGENTS_TO=stale)
+    assert world.head() == before
+    write(world.old / "bridge-rs" / "SEALED_KEYS_VERSION", b"1\n")
     ready = commit(world.old, "with the vault's sealed keys")
     done = world.install_sh("update", "--auto", BIPAGENTS_TO=ready)
     assert world.head() == ready, done.stderr
