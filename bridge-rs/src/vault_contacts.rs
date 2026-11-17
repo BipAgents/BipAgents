@@ -417,7 +417,13 @@ enum Calling {
     Several,
 }
 
-fn calling(hub: &crate::runs::RunHub, agent: &str, server: &str, tool: &str, relative: &dyn Fn(&str) -> bool) -> Calling {
+fn calling(
+    hub: &crate::runs::RunHub,
+    agent: &str,
+    server: &str,
+    tool: &str,
+    relative: &dyn Fn(&str) -> bool,
+) -> Calling {
     let runs = hub.runs_in_call(agent, |name| crate::vault_line::names_bridge_tool(name, server, tool));
     let mut runs = runs.into_iter().map(|(run, _)| run).filter(|run| !relative(run));
     match (runs.next(), runs.next()) {

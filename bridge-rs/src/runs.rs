@@ -3489,15 +3489,17 @@ touche « Démarrer » pour reprendre."
 }
 
 /// The calls a `tool.started` of the tool search (`tool_call`) wraps, bare names: from its arguments
-/// (`{"calls": [{"name": …}]}` or `{"name": …}`, like vault_line.rs `wrapped_call` and steps.rs `action_of`), or from
-/// its preview, perhaps cut short (each `"name": "…"` in it).
+/// (`{"calls": [{"name": …}]}` or `{"name": …}`, like vault_line.rs `wrapped_call` and steps.rs `action_of`), or
+/// from its preview, perhaps cut short (each `"name": "…"` in it).
 fn wrapped_names(data: &serde_json::Map<String, Value>) -> Vec<String> {
     static NAME: std::sync::LazyLock<regex::Regex> =
         std::sync::LazyLock::new(|| regex::Regex::new(r#""name"\s*:\s*"([^"\\]+)""#).expect("name pattern"));
     let Some(text) = crate::loop_brake::event_signature(data) else { return Vec::new() };
     let names: Vec<String> = match serde_json::from_str::<Value>(&text) {
         Ok(args) => match args.get("calls").and_then(Value::as_array) {
-            Some(calls) => calls.iter().filter_map(|call| call.get("name").and_then(Value::as_str)).map(str::to_string).collect(),
+            Some(calls) => {
+                calls.iter().filter_map(|call| call.get("name").and_then(Value::as_str)).map(str::to_string).collect()
+            }
             None => args.get("name").and_then(Value::as_str).map(str::to_string).into_iter().collect(),
         },
         Err(_) => NAME.captures_iter(&text).map(|found| found[1].to_string()).collect(),
@@ -3838,10 +3840,10 @@ mod tests {
         assert_eq!(run_of_call(&hub, "paul", vault, READ), None);
     }
 
-    /// Review of vault-journeys-apps, B1 (17/11): an agent without its browser reaches the vault's tools through the tool
-    /// search (`tool_call`, tool_diet.rs): its turn is inside the call it wraps, seen from the call's arguments or its
-    /// preview (perhaps cut). And `call_run`, the production path: the call's own turn at once, or once the hub sees it
-    /// start, a relative's turn left out, nobody: None after its wait.
+    /// Review of vault-journeys-apps, B1 (17/11): an agent without its browser reaches the vault's tools through the
+    /// tool search (`tool_call`, tool_diet.rs): its turn is inside the call it wraps, seen from the call's arguments
+    /// or its preview (perhaps cut). And `call_run`, the production path: the call's own turn at once, or once the hub
+    /// sees it start, a relative's turn left out, nobody: None after its wait.
     #[tokio::test]
     async fn a_call_through_the_tool_search_is_its_wrapped_calls() {
         use crate::vault_contacts::{call_run_in, run_of_call, READ};
@@ -3855,43 +3857,50 @@ mod tests {
         };
         let vault = crate::vault_logins::SERVER_NAME;
         let none = |_: &str| false;
+        let (start, done) = (
+            |sub: &Arc<RunSubscription>, data: Value| hub.dispatch(sub, event("tool.started", data)),
+            |sub: &Arc<RunSubscription>, data: Value| hub.dispatch(sub, event("tool.completed", data)),
+        );
+        let contacts = "mcp_bipagents_vault_vault_contact_details";
+        let contacts_mcp = "mcp__bipagents_vault__vault_contact_details";
         // its arguments, a whole preview, a preview cut short
-        let wrapped = r#"{"calls": [{"name": "mcp__bipagents_vault__vault_contact_details", "arguments": {}}]}"#;
+        let wrapped = format!(r#"{{"calls": [{{"name": "{contacts_mcp}", "arguments": {{}}}}]}}"#);
         let one = turn("run_one");
-        hub.dispatch(&one, event("tool.started", json!({"tool": "tool_call", "tool_call_id": "a", "preview": wrapped})));
+        start(&one, json!({"tool": "tool_call", "tool_call_id": "a", "preview": wrapped}));
         assert_eq!(run_of_call(&hub, "lettres", vault, READ).as_deref(), Some("run_one"));
         let started = std::time::Instant::now();
         assert_eq!(call_run_in(&hub, "lettres", vault, READ, none).await.as_deref(), Some("run_one"));
         assert!(started.elapsed() < std::time::Duration::from_millis(500), "seen at once: no wait");
-        hub.dispatch(&one, event("tool.completed", json!({"tool": "tool_call", "tool_call_id": "a"})));
+        done(&one, json!({"tool": "tool_call", "tool_call_id": "a"}));
         let cut = turn("run_cut");
-        hub.dispatch(&cut, event("tool.started", json!({"tool": "tool_call", "tool_call_id": "b",
-            "preview": r#"{"calls": [{"name": "mcp_bipagents_vault_vault_contact_details", "argum"#})));
+        let preview = format!(r#"{{"calls": [{{"name": "{contacts}", "argum"#);
+        start(&cut, json!({"tool": "tool_call", "tool_call_id": "b", "preview": preview}));
         assert_eq!(run_of_call(&hub, "lettres", vault, READ).as_deref(), Some("run_cut"));
-        hub.dispatch(&cut, event("tool.completed", json!({"tool": "tool_call", "tool_call_id": "b"})));
+        done(&cut, json!({"tool": "tool_call", "tool_call_id": "b"}));
         // the tool search wrapping another tool: not inside the vault's
         let web = turn("run_web");
-        hub.dispatch(&web, event("tool.started", json!({"tool": "tool_call", "tool_call_id": "c",
-            "args": {"calls": [{"name": "web_search", "arguments": {"query": "mairie"}}]}})));
+        let search = json!({"calls": [{"name": "web_search", "arguments": {"query": "mairie"}}]});
+        start(&web, json!({"tool": "tool_call", "tool_call_id": "c", "args": search}));
         assert_eq!(run_of_call(&hub, "lettres", vault, READ), None);
         // the call reaches the bridge before the hub sees it start: found once it does
         let late = turn("run_late");
         let (hub2, late2) = (hub.clone(), late.clone());
         tokio::spawn(async move {
             tokio::time::sleep(std::time::Duration::from_millis(300)).await;
-            hub2.dispatch(&late2, SSEEvent::new("tool.started",
-                json!({"tool": "mcp_bipagents_vault_vault_contact_details", "tool_call_id": "d"}).as_object().cloned().unwrap(), "{}"));
+            let data = json!({"tool": contacts, "tool_call_id": "d"}).as_object().cloned().unwrap();
+            hub2.dispatch(&late2, SSEEvent::new("tool.started", data, "{}"));
         });
         assert_eq!(call_run_in(&hub, "lettres", vault, READ, none).await.as_deref(), Some("run_late"));
         // a relative's turn inside it too (a shared agent): left out, the person's own turn kept
         let lea = turn("run_lea");
-        hub.dispatch(&lea, event("tool.started", json!({"tool": "mcp__bipagents_vault__vault_contact_details", "tool_call_id": "e"})));
-        assert_eq!(call_run_in(&hub, "lettres", vault, READ, |run| run == "run_lea").await.as_deref(), Some("run_late"));
+        start(&lea, json!({"tool": contacts_mcp, "tool_call_id": "e"}));
+        let relative = |run: &str| run == "run_lea";
+        assert_eq!(call_run_in(&hub, "lettres", vault, READ, relative).await.as_deref(), Some("run_late"));
         // both the person's: nobody can tell
         assert_eq!(call_run_in(&hub, "lettres", vault, READ, none).await, None);
         // nobody inside: none, after the wait
-        hub.dispatch(&late, event("tool.completed", json!({"tool": "mcp_bipagents_vault_vault_contact_details", "tool_call_id": "d"})));
-        hub.dispatch(&lea, event("tool.completed", json!({"tool": "mcp__bipagents_vault__vault_contact_details", "tool_call_id": "e"})));
+        done(&late, json!({"tool": contacts, "tool_call_id": "d"}));
+        done(&lea, json!({"tool": contacts_mcp, "tool_call_id": "e"}));
         assert_eq!(call_run_in(&hub, "lettres", vault, READ, none).await, None);
     }
 
