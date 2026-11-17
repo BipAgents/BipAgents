@@ -155,10 +155,13 @@ def journey_bridge(bridges, fakes, word_gap: float = 0.06, name: str = "journeys
     chrome = None
     if browser:
         # J64–J65: a visible browser of its own (its container's ports, its desktop the person can take over), its
-        # DevTools a fake Chrome on the supplier's login page (test_vault_login.py), for vault_login to type into
+        # DevTools a fake Chrome on the supplier's login page (test_vault_login.py), for vault_login to type into.
+        # Served to the apps too (serve_journeys.py): their J64 and J65 (docs/release-journeys.md)
         from test_vault_login import FakeChrome
+        from .fake_screen import FakeScreen
         chrome = FakeChrome(LOGIN_PAGE)
-        agent["desktop_vnc"] = f"tcp://127.0.0.1:{free_port()}"
+        # its screen, a fake VNC the bridge logs in to (security « None »): the apps' Bureau live, the hand taken there
+        agent["desktop_vnc"] = FakeScreen().address
         folder = bridge.data / "browsers" / AGENT
         folder.mkdir(parents=True, exist_ok=True)
         (folder / "ports.json").write_text(json.dumps({"cdp": chrome.port, "vnc": free_port()}))

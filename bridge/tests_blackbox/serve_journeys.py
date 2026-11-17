@@ -21,7 +21,9 @@ from bbkit.journeys import AGENT, journey_bridge
 
 
 def test_serve(bridges, fakes):
-    journey = journey_bridge(bridges, fakes, word_gap=float(os.environ.get("JOURNEYS_WORD_GAP", "0.12")))
+    # browser=True: Vie's own (fake) Chrome and screen, for the vault's journeys J64 (vault_login types, the line under
+    # the turn) and J65 (« Je le taperai moi-même »: the Bureau, the hand taken and given back)
+    journey = journey_bridge(bridges, fakes, word_gap=float(os.environ.get("JOURNEYS_WORD_GAP", "0.12")), browser=True)
     pairing = journey.pairing()
     out = {"url": journey.bridge.url, "door": journey.bridge.config["public_url"], "key": BRIDGE_KEY, "agent": AGENT,
            "thread": journey.thread, "pairing": pairing, "log": str(journey.bridge.log_path)}
