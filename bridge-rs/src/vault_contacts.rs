@@ -408,6 +408,13 @@ fn closed_now(state: &crate::app::AppState, agent: &str, tool: &str) -> bool {
 const CLOSED: &str = "Your person's own data, the vault included, is closed in this conversation: someone else is talking to you. \
 Answer from what you know.";
 
+/// The run of the agent's one turn inside a call of the bridge's `server`'s `tool` now (runs.rs `runs_in_call`, by
+/// Hermes' own names); none, or several (a relative's turn on a shared agent calling it too): None, so the mark goes to
+/// no reply rather than another conversation's (le coffre rassure, review R3, 17/11).
+pub fn run_of_call(_hub: &crate::runs::RunHub, _agent: &str, _server: &str, _tool: &str) -> Option<String> {
+    None
+}
+
 /// The entry's mark noted for the reply that ends the agent's turn (made_files.rs): « Coordonnées » saved or used, a
 /// login an agent created (vault_logins.rs), a card it paid with (card_pay.rs).
 pub fn note_mark(state: &crate::app::AppState, agent: &str, tool: &str, mark: &str) {

@@ -3782,6 +3782,39 @@ mod tests {
         assert_eq!(st.steps.as_ref().unwrap()["total"], 2, "kept for a background task's card");
     }
 
+    /// The 🔒 chip of « Coordonnées » read or kept, of a login an agent created, of a card it paid with (vault_contacts.rs
+    /// `note_mark`): the reply of the turn inside that call, never another conversation's (review R3's follow-up, 17/11).
+    #[tokio::test]
+    async fn a_chip_goes_to_the_turn_inside_its_call() {
+        use crate::vault_contacts::{run_of_call, READ, SAVE};
+        let hub = RunHub::new(HermesClient::new(reqwest::Client::new()), None, 7200, None);
+        let event = |kind: &str, data: Value| SSEEvent::new(kind, data.as_object().cloned().unwrap(), "{}");
+        let turn = |run: &str, session: &str| {
+            let sub = Arc::new(RunSubscription::new(AgentConfig { name: "vie".into(), ..Default::default() }, run));
+            lock(&sub.state).session_id = Some(session.into());
+            lock(&hub.inner).subs.insert(sub.key(), sub.clone());
+            sub
+        };
+        let started = |sub: &Arc<RunSubscription>, tool: &str, id: &str| {
+            hub.dispatch(sub, event("tool.started", json!({"tool": tool, "tool_call_id": id})));
+        };
+        let vault = crate::vault_logins::SERVER_NAME;
+        let mine = turn("run_mine", "api_mine");
+        started(&mine, "mcp_bipagents_vault_vault_contact_details", "a");
+        // another conversation's turn of Vie that called a tool after it: the chip is still the reader's
+        started(&turn("run_other", "api_other"), "web_search", "b");
+        assert_eq!(run_of_call(&hub, "vie", vault, READ).as_deref(), Some("run_mine"));
+        // a card paid with in a third turn: that one's
+        started(&turn("run_pay", "api_pay"), "mcp__bipagents_pay__pay_with_card", "c");
+        assert_eq!(run_of_call(&hub, "vie", crate::card_pay::SERVER_NAME, crate::card_pay::PAY).as_deref(), Some("run_pay"));
+        // a relative's conversation with the shared agent reading its contact details too: nobody can tell
+        started(&turn("run_lea", "api_lea"), "mcp__bipagents_vault__vault_contact_details", "d");
+        assert_eq!(run_of_call(&hub, "vie", vault, READ), None);
+        // no turn inside a call of it: none
+        assert_eq!(run_of_call(&hub, "vie", vault, SAVE), None);
+        assert_eq!(run_of_call(&hub, "paul", vault, READ), None);
+    }
+
     /// Le coffre rassure, review R3 (17/11): whose call of the vault it is — the turns of the agent inside a call of
     /// that very tool now (its last `tool.started`, not completed), by Hermes' own names, never « the turn that called a
     /// tool last ».
