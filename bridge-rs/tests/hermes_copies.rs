@@ -1181,10 +1181,12 @@ async fn pass4_a_hermes_that_writes_much_on_stderr_still_answers() {
     let script = dir.path().join("noisy.sh");
     // 200 KB of warnings on stderr, then its answer (as a Python full of DeprecationWarnings would)
     std::fs::write(&script, "#!/bin/sh\nhead -c 200000 /dev/zero | tr '\\0' 'w' >&2\necho '{\"items\": []}'\n").unwrap();
-    let mut agent = AgentConfig::default();
-    agent.name = "vie".into();
-    agent.python = vec!["/bin/sh".into(), script.to_string_lossy().into_owned()];
-    agent.hermes_home = Some(dir.path().to_string_lossy().into_owned());
+    let agent = AgentConfig {
+        name: "vie".into(),
+        python: vec!["/bin/sh".into(), script.to_string_lossy().into_owned()],
+        hermes_home: Some(dir.path().to_string_lossy().into_owned()),
+        ..Default::default()
+    };
     let mut request = Dict::new();
     request.insert("op".into(), json!("list"));
     let started = std::time::Instant::now();

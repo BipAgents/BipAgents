@@ -134,11 +134,22 @@ pub struct Notice {
 
 /// « Ta carte « X » n'a pas été reprise : ajoute-la dans le Coffre. », in the person's language.
 pub fn card_not_kept_text(lang: &str, label: &str) -> String {
+    let label = cut_name(label);
     match lang {
         "de" => format!("Deine Karte „{label}“ wurde nicht übernommen: Füge sie im Tresor hinzu."),
         "es" => format!("Tu tarjeta «{label}» no se ha conservado: añádela en la Caja fuerte."),
         "fr" => format!("Ta carte « {label} » n'a pas été reprise : ajoute-la dans le Coffre."),
         _ => format!("Your card “{label}” wasn't kept: add it in the Vault."),
+    }
+}
+
+/// A name Hermes gave, at most 60 characters in a line told to the person.
+fn cut_name(name: &str) -> String {
+    let name = name.trim();
+    if name.chars().count() <= 60 {
+        name.to_string()
+    } else {
+        format!("{}…", name.chars().take(59).collect::<String>().trim_end())
     }
 }
 
@@ -560,14 +571,33 @@ pub async fn run_in_hermes(agent: AgentConfig, request: Dict) -> anyhow::Result<
     let reading = async {
         use tokio::io::AsyncReadExt;
         let (mut out, mut err) = (Vec::new(), Vec::new());
+        // both read to their end (a pipe left full would block Hermes until the timeout, under the vault's lock):
+        // stdout kept up to the cap (past it, only how long), stderr's last 64 KB
         let read_out = async {
             if let Some(pipe) = out_pipe.as_mut() {
-                let _ = pipe.take(HERMES_OUTPUT_MAX as u64 + 1).read_to_end(&mut out).await;
+                let mut chunk = vec![0u8; 64 * 1024];
+                while let Ok(n) = pipe.read(&mut chunk).await {
+                    if n == 0 {
+                        break;
+                    }
+                    if out.len() <= HERMES_OUTPUT_MAX {
+                        out.extend_from_slice(&chunk[..n]);
+                    }
+                }
             }
         };
         let read_err = async {
             if let Some(pipe) = err_pipe.as_mut() {
-                let _ = pipe.take(64 * 1024).read_to_end(&mut err).await;
+                let mut chunk = vec![0u8; 16 * 1024];
+                while let Ok(n) = pipe.read(&mut chunk).await {
+                    if n == 0 {
+                        break;
+                    }
+                    err.extend_from_slice(&chunk[..n]);
+                    if err.len() > 64 * 1024 {
+                        err.drain(..err.len() - 64 * 1024);
+                    }
+                }
             }
         };
         tokio::join!(read_out, read_err);
@@ -1090,8 +1120,9 @@ impl Vault {
     /// When Hermes saved `item` (its `created_at`), written as [`now`] writes dates.
     fn hermes_date(item: &Value) -> Option<String> {
         let text = item.get("created_at").and_then(Value::as_str)?;
-        let at = chrono::DateTime::parse_from_rfc3339(text).ok()?;
-        Some(at.with_timezone(&chrono::Utc).format("%Y-%m-%dT%H:%M:%S+00:00").to_string())
+        let at = chrono::DateTime::parse_from_rfc3339(text).ok()?.with_timezone(&chrono::Utc);
+        // never later than now (a clock wrong on the machine Hermes ran on)
+        Some(at.min(chrono::Utc::now()).format("%Y-%m-%dT%H:%M:%S+00:00").to_string())
     }
 
     /// A login of the vault for `item`'s site and user name (another password, maybe).
@@ -1117,8 +1148,13 @@ impl Vault {
         let secret = item.get("secret").and_then(Value::as_object).cloned().unwrap_or_default();
         match item.get("kind").and_then(Value::as_str) {
             Some("login") => {
+                // its authenticator key too: one only Hermes holds is taken over below; two different keys are two
+                // entries (the import kept beside, `duplicate_of`)
+                let otp = |v: Option<&Value>| v.map(crate::py::py_str).map(|t| t.trim().to_string()).filter(|t| !t.is_empty());
+                let (ours, theirs) = (otp(record.get("secret").and_then(|s| s.get("otp_secret"))), otp(secret.get("otp_secret")));
                 Self::same_login(record, item)
                     && record.get("secret").and_then(|s| s.get("password")) == secret.get("password")
+                    && (ours.is_none() || theirs.is_none() || ours == theirs)
             }
             Some(k) if k == crate::vault_contacts::KIND && is_address(record) => {
                 let ours = Self::to_hermes(record);
@@ -1521,6 +1557,16 @@ impl Vault {
                 }
                 // the same entry the vault holds already (a cut-off swap's copy, Hermes saving it again)
                 if let Some(i) = (0..records.len()).find(|i| Self::same_entry(&records[*i], &item)) {
+                    // an authenticator key only Hermes held: kept in the vault's entry (review pass 4, R-I)
+                    let theirs = item.get("secret").and_then(|s| s.get("otp_secret")).map(crate::py::py_str);
+                    let has_ours = records[i].get("secret").and_then(|s| s.get("otp_secret")).is_some_and(crate::py::truthy);
+                    if let (Some(otp), false) = (theirs.filter(|t| !t.trim().is_empty()), has_ours) {
+                        if let Some(Value::Object(secret)) = records[i].get_mut("secret") {
+                            secret.insert("otp_secret".into(), json!(otp.trim()));
+                        }
+                        records[i].insert("has_otp".into(), json!(true));
+                        dated = true;
+                    }
                     if let Some(newer) = Self::hermes_date(&item).filter(|d| {
                         records[i].get("updated_at").and_then(Value::as_str).is_none_or(|u| d.as_str() > u)
                     }) {
