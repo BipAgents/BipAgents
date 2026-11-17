@@ -248,3 +248,29 @@ def test_enable_refuses_an_account_that_doesn_t_own_the_place_s_data(tmp_path, m
     monkeypatch.setattr(vault_keys.os, "getuid", lambda: os.stat(data).st_uid + 1)
     status, calls, said = _enrolling(tmp_path, monkeypatch, 0)
     assert status == 1 and calls == [], "root (or anyone else) by hand: nothing stopped, nothing asked"
+
+
+# -- B3: a sealed place never goes to a BipAgents without the vault's sealed keys (lots 1 and 2) ---------------------
+
+def test_a_sealed_place_never_goes_to_a_version_without_its_sealed_keys(tmp_path):
+    from test_channels import OLD, World, commit, git
+    world = World(tmp_path)
+    world.installed_from(OLD)
+    before = world.head()
+    older = commit(world.old, "a version before the vault's sealed keys")
+    data = tmp_path / "data"
+    write(tmp_path / ".config" / "bipagents" / "bridge.toml", f'port = 8643\ndata_dir = "{data}"\n'.encode())
+    write(data / "keys.sealed.json", b'{"v": 1}')
+    done = world.install_sh("update", "--auto", BIPAGENTS_TO=older)
+    assert world.head() == before, "its sealed stores would be read with keys made again in clear"
+    assert "sealed" in done.stderr
+    # a version that carries them (lots 1 and 2): it goes
+    for name in ("sealed_keys.rs", "hermes_copies.rs"):
+        write(world.old / "bridge-rs" / "src" / name, b"// the vault's sealed keys")
+    ready = commit(world.old, "with the vault's sealed keys")
+    done = world.install_sh("update", "--auto", BIPAGENTS_TO=ready)
+    assert world.head() == ready, done.stderr
+    # a place not sealed goes anywhere, as before
+    (data / "keys.sealed.json").unlink()
+    assert world.install_sh("update", "--auto", BIPAGENTS_TO=older).returncode == 0 and world.head() == older
+    assert git(world.dir, "rev-parse", "HEAD") == older
