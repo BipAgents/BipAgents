@@ -525,6 +525,9 @@ pub struct SubscriptionState {
     /// The run's last tool call (bare name) and when: which run a call of the bridge's tools belongs to (`turn_of`).
     pub last_tool: String,
     pub last_tool_at: f64,
+    /// A call through the tool search (`tool_call`, tool_diet.rs): the calls it wraps (bare names), from its arguments
+    /// or its preview; the run is inside those too (`runs_in_call`). Empty for any other tool.
+    pub last_wrapped: Vec<String>,
     /// The run's real tokens so far (`model.usage`): None from a Hermes without patch 0020.
     pub usage: Option<RunUsage>,
     /// A room's turn (rooms.rs), a background task's run (jobs.rs): the tokens it may take. Once its real ones and its
@@ -607,6 +610,7 @@ impl Default for SubscriptionState {
             ever_followed: false,
             last_tool: String::new(),
             last_tool_at: 0.0,
+            last_wrapped: Vec::new(),
             usage: None,
             token_limit: None,
             cost_limit: None,
@@ -1756,6 +1760,7 @@ impl RunHub {
             let tool = crate::loop_brake::event_tool(&event.data);
             st.last_tool = crate::loop_brake::bare(&tool).to_string();
             st.last_tool_at = crate::py::time_time();
+            st.last_wrapped = if st.last_tool == "tool_call" { wrapped_names(&event.data) } else { Vec::new() };
             self.cap(sub, &mut st);
             self.brake(sub, &mut st, &event);
             // a use of a feature to discover (feature_tips.rs: a podcast made, the Carnet filled…)
@@ -2903,7 +2908,8 @@ more steps in this turn. Don't repeat what failed: change approach.", crate::loo
         let mut out: Vec<(String, Option<String>)> = Vec::new();
         for sub in inner.subs.values().filter(|sub| sub.agent.name == agent) {
             let st = lock(&sub.state);
-            let inside = !st.finished && st.terminal.is_none() && st.tools_open > 0 && is(&st.last_tool);
+            let named = is(&st.last_tool) || st.last_wrapped.iter().any(|name| is(name));
+            let inside = !st.finished && st.terminal.is_none() && st.tools_open > 0 && named;
             if inside && !out.iter().any(|(run, _)| *run == sub.run_id) {
                 out.push((sub.run_id.clone(), st.session_id.clone()));
             }
@@ -3480,6 +3486,23 @@ touche « Démarrer » pour reprendre."
             .await;
         });
     }
+}
+
+/// The calls a `tool.started` of the tool search (`tool_call`) wraps, bare names: from its arguments
+/// (`{"calls": [{"name": …}]}` or `{"name": …}`, like vault_line.rs `wrapped_call` and steps.rs `action_of`), or from
+/// its preview, perhaps cut short (each `"name": "…"` in it).
+fn wrapped_names(data: &serde_json::Map<String, Value>) -> Vec<String> {
+    static NAME: std::sync::LazyLock<regex::Regex> =
+        std::sync::LazyLock::new(|| regex::Regex::new(r#""name"\s*:\s*"([^"\\]+)""#).expect("name pattern"));
+    let Some(text) = crate::loop_brake::event_signature(data) else { return Vec::new() };
+    let names: Vec<String> = match serde_json::from_str::<Value>(&text) {
+        Ok(args) => match args.get("calls").and_then(Value::as_array) {
+            Some(calls) => calls.iter().filter_map(|call| call.get("name").and_then(Value::as_str)).map(str::to_string).collect(),
+            None => args.get("name").and_then(Value::as_str).map(str::to_string).into_iter().collect(),
+        },
+        Err(_) => NAME.captures_iter(&text).map(|found| found[1].to_string()).collect(),
+    };
+    names.iter().map(|name| crate::loop_brake::bare(name).to_string()).collect()
 }
 
 #[cfg(test)]

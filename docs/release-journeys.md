@@ -232,6 +232,7 @@ des parcours ; Android le vérifie) ; Quick Talk dans les apps (sa voix : manuel
 scripts/release-journeys.sh                 # tout : pont + iPhone + Android (≈ 20 min)
 scripts/release-journeys.sh --no-ios        # sans le simulateur
 scripts/release-journeys.sh --expected J02,J03,J06   # rapport : ces échecs connus marqués ⚠️ (jamais pour une sortie)
+scripts/release-journeys.sh --expected J64/apps:raison   # seulement les colonnes iPhone et Android (aussi J64/iPhone, J64/Pont, J64/iPhone+Pont) : un rouge du pont compte
 JOURNEYS_IOS_PEOPLE_TESTS=testJ32AFriendOpensTheSharedProjectAndSeesItsMessages scripts/release-journeys.sh   # quelques-uns
 JOURNEYS_IOS_TESTS=ReleaseJourneysTurnTests JOURNEYS_ANDROID_TESTS='*ReleaseJourneysTest.j45*' scripts/release-journeys.sh   # J45 seul
 ```

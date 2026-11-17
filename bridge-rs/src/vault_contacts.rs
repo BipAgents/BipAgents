@@ -408,12 +408,31 @@ fn closed_now(state: &crate::app::AppState, agent: &str, tool: &str) -> bool {
 const CLOSED: &str = "Your person's own data, the vault included, is closed in this conversation: someone else is talking to you. \
 Answer from what you know.";
 
-/// The run of the agent's one turn inside a call of the bridge's `server`'s `tool` now (runs.rs `runs_in_call`, by
-/// Hermes' own names); none, or several (a relative's turn on a shared agent calling it too): None, so the mark goes to
-/// no reply rather than another conversation's (le coffre rassure, review R3, 17/11).
+/// Who is inside a call of the bridge's `server`'s `tool` now, among the agent's turns (runs.rs `runs_in_call`, by
+/// Hermes' own names, the tool search's wrapped calls too), a relative's turn left out (`relative`): its vault calls
+/// are closed (`closed_now`), so a mark is never its.
+enum Calling {
+    Nobody,
+    One(String),
+    Several,
+}
+
+fn calling(hub: &crate::runs::RunHub, agent: &str, server: &str, tool: &str, relative: &dyn Fn(&str) -> bool) -> Calling {
+    let runs = hub.runs_in_call(agent, |name| crate::vault_line::names_bridge_tool(name, server, tool));
+    let mut runs = runs.into_iter().map(|(run, _)| run).filter(|run| !relative(run));
+    match (runs.next(), runs.next()) {
+        (None, _) => Calling::Nobody,
+        (Some(run), None) => Calling::One(run),
+        _ => Calling::Several,
+    }
+}
+
+/// The run of the agent's one turn inside a call of the bridge's `server`'s `tool` now; none, or several (two
+/// conversations of the person calling it): None, so the mark goes to no reply rather than another conversation's
+/// (le coffre rassure, review R3, 17/11). No relative known here: `call_run_in` leaves theirs out.
 pub fn run_of_call(hub: &crate::runs::RunHub, agent: &str, server: &str, tool: &str) -> Option<String> {
-    match hub.runs_in_call(agent, |name| crate::vault_line::names_bridge_tool(name, server, tool)).as_slice() {
-        [(run, _)] => Some(run.clone()),
+    match calling(hub, agent, server, tool, &|_| false) {
+        Calling::One(run) => Some(run),
         _ => None,
     }
 }
@@ -422,28 +441,33 @@ pub fn run_of_call(hub: &crate::runs::RunHub, agent: &str, server: &str, tool: &
 /// reach the bridge a moment after the call).
 const SEEN_WAIT: std::time::Duration = std::time::Duration::from_millis(1500);
 
-/// `call_run` on this hub, `relative` saying which runs are a relative's turn (left out: their vault calls are closed).
+/// `run_of_call`, the hub given `SEEN_WAIT` to see the call start, `relative` saying which runs are a relative's turn
+/// (left out); several turns inside it: None at once.
 pub async fn call_run_in(
-    _hub: &crate::runs::RunHub,
-    _agent: &str,
-    _server: &str,
-    _tool: &str,
-    _relative: impl Fn(&str) -> bool,
+    hub: &crate::runs::RunHub,
+    agent: &str,
+    server: &str,
+    tool: &str,
+    relative: impl Fn(&str) -> bool,
 ) -> Option<String> {
-    None
-}
-
-/// `run_of_call`, the hub given `SEEN_WAIT` to see the call start; several turns inside it: None at once.
-pub async fn call_run(state: &crate::app::AppState, agent: &str, server: &str, tool: &str) -> Option<String> {
     let deadline = tokio::time::Instant::now() + SEEN_WAIT;
     loop {
-        let calling = state.hub.runs_in_call(agent, |name| crate::vault_line::names_bridge_tool(name, server, tool));
-        match calling.as_slice() {
-            [(run, _)] => return Some(run.clone()),
-            [] if tokio::time::Instant::now() < deadline => tokio::time::sleep(std::time::Duration::from_millis(100)).await,
+        let now = calling(hub, agent, server, tool, &relative);
+        match now {
+            Calling::One(run) => return Some(run),
+            Calling::Nobody if tokio::time::Instant::now() < deadline => {
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await
+            }
             _ => return None,
         }
     }
+}
+
+/// The turn a call of the bridge's tool by `agent` belongs to (`call_run_in` on the bridge's hub, its relatives' turns
+/// from agent_shares.rs).
+pub async fn call_run(state: &crate::app::AppState, agent: &str, server: &str, tool: &str) -> Option<String> {
+    let config = state.config.get();
+    call_run_in(&state.hub, agent, server, tool, |run| crate::agent_shares::relative_run(&config, run)).await
 }
 
 /// The entry's mark noted for the reply that ends the agent's turn (made_files.rs): « Coordonnées » saved or used, a

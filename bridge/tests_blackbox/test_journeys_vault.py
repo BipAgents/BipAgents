@@ -101,33 +101,36 @@ def test_j65_the_agents_screen_is_live_in_the_bureau_and_the_hand_is_taken_there
     from bbkit.ws import open_ws
     desktop = journey.bridge.post(f"/v1/agents/{AGENT}/desktop", headers=AUTH)
     assert desktop.status_code == 200 and desktop.json()["kind"] == "novnc", desktop.text
-    with open_ws(journey.bridge.ws_url("/" + desktop.json()["path"] + "ws")) as ws:
-        held = bytearray()
+    try:
+        with open_ws(journey.bridge.ws_url("/" + desktop.json()["path"] + "ws")) as ws:
+            held = bytearray()
 
-        def recv_bytes(_ws, n, timeout=10):
-            """Exactly `n` bytes of the stream, whatever messages they came in (the rest kept for the next read)."""
-            while len(held) < n:
-                message = ws.recv(timeout=timeout)
-                held.extend(message if isinstance(message, bytes) else message.encode())
-            out = bytes(held[:n])
-            del held[:n]
-            return out
+            def recv_bytes(_ws, n, timeout=10):
+                """Exactly `n` bytes of the stream, whatever messages they came in (the rest kept for the next read)."""
+                while len(held) < n:
+                    message = ws.recv(timeout=timeout)
+                    held.extend(message if isinstance(message, bytes) else message.encode())
+                out = bytes(held[:n])
+                del held[:n]
+                return out
 
-        assert recv_bytes(ws, 12) == b"RFB 003.008\n"        # the bridge's own handshake to the app (Face ID passed)
-        ws.send(b"RFB 003.008\n")
-        assert recv_bytes(ws, 2) == b"\x01\x01"
-        ws.send(b"\x01")
-        assert recv_bytes(ws, 4) == b"\x00\x00\x00\x00"
-        ws.send(b"\x00")                                     # ClientInit
-        init = recv_bytes(ws, 24)
-        width, height = struct.unpack(">HH", init[:4])
-        assert (width, height) == (320, 200), init
-        name = recv_bytes(ws, struct.unpack(">I", init[20:24])[0])
-        assert name.startswith(b"Bureau de Vie"), name
-        ws.send(b"\x03\x00" + struct.pack(">HHHH", 0, 0, width, height))   # FramebufferUpdateRequest
-        update = recv_bytes(ws, 16 + width * height * 4, timeout=20)
-        assert update[:4] == b"\x00\x00\x00\x01" and set(update[16:16 + 64]) == {0xD8}, update[:20]
-        taken = journey.bridge.post(f"/v1/agents/{AGENT}/desktop/control", headers=AUTH, json={"take": True})
-        assert taken.status_code == 200 and taken.json()["you_hold"] is True, taken.text
-    back = journey.bridge.post(f"/v1/agents/{AGENT}/desktop/control", headers=AUTH, json={"take": False})
+            assert recv_bytes(ws, 12) == b"RFB 003.008\n"  # the bridge's own handshake to the app (Face ID passed)
+            ws.send(b"RFB 003.008\n")
+            assert recv_bytes(ws, 2) == b"\x01\x01"
+            ws.send(b"\x01")
+            assert recv_bytes(ws, 4) == b"\x00\x00\x00\x00"
+            ws.send(b"\x00")                                     # ClientInit
+            init = recv_bytes(ws, 24)
+            width, height = struct.unpack(">HH", init[:4])
+            assert (width, height) == (320, 200), init
+            name = recv_bytes(ws, struct.unpack(">I", init[20:24])[0])
+            assert name.startswith(b"Bureau de Vie"), name
+            ws.send(b"\x03\x00" + struct.pack(">HHHH", 0, 0, width, height))   # FramebufferUpdateRequest
+            update = recv_bytes(ws, 16 + width * height * 4, timeout=20)
+            assert update[:4] == b"\x00\x00\x00\x01" and set(update[16:16 + 64]) == {0xD8}, update[:20]
+            taken = journey.bridge.post(f"/v1/agents/{AGENT}/desktop/control", headers=AUTH, json={"take": True})
+            assert taken.status_code == 200 and taken.json()["you_hold"] is True, taken.text
+    finally:
+        # given back even when a check above fails: the module's next journeys start with the hand free
+        back = journey.bridge.post(f"/v1/agents/{AGENT}/desktop/control", headers=AUTH, json={"take": False})
     assert back.status_code == 200 and back.json()["you_hold"] is False, back.text
