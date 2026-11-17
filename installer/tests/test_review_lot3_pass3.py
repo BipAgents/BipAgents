@@ -103,12 +103,13 @@ def test_the_sealed_keys_marker_never_goes_down_from_the_last_release_that_carri
     """Removing or lowering bridge-rs/SEALED_KEYS_VERSION makes every sealed place refuse every update (install.sh)."""
     import subprocess
     root = Path(__file__).resolve().parents[2]
-    now = int((root / "bridge-rs" / "SEALED_KEYS_VERSION").read_text().strip())
+    now = int((root / "bridge-rs" / "SEALED_KEYS_VERSION").read_text().splitlines()[0])
     tags = subprocess.run(["git", "-C", str(root), "tag", "--sort=-creatordate"], capture_output=True, text=True)
     for tag in tags.stdout.split()[:50] if tags.returncode == 0 else []:
         shown = subprocess.run(["git", "-C", str(root), "show", f"{tag}:bridge-rs/SEALED_KEYS_VERSION"],
                                capture_output=True, text=True)
-        if shown.returncode == 0 and shown.stdout.strip().isdigit():
-            assert now >= int(shown.stdout.strip()), f"lower than {tag}'s: every sealed place would stop updating"
+        first = shown.stdout.splitlines()[0].strip() if shown.returncode == 0 and shown.stdout else ""
+        if first.isdigit():
+            assert now >= int(first), f"lower than {tag}'s: every sealed place would stop updating"
             return
 

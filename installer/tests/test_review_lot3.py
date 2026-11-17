@@ -110,7 +110,7 @@ def test_an_export_of_a_sealed_place_sent_to_a_place_brings_its_keys(computer, p
 # -- B1 bis: `bipagents import` ------------------------------------------------------------------------------------
 
 @pytest.mark.parametrize("target_sealed", [True, False])
-def test_an_import_over_a_sealed_place_seals_it_again(tmp_path, runtime, monkeypatch, target_sealed):
+def test_an_import_over_a_sealed_place_is_refused_and_over_another_brings_the_keys(tmp_path, runtime, monkeypatch, target_sealed):
     source = offer_place(tmp_path / "old" / "bip3")
     out, phrase, _ = _exported(source, tmp_path, monkeypatch)
     target_home = tmp_path / "new" / "bip"
@@ -118,17 +118,20 @@ def test_an_import_over_a_sealed_place_seals_it_again(tmp_path, runtime, monkeyp
     sealed_with = _counting_enable(monkeypatch)
     tar, info, handle = moving.open_archive(out, phrase)
     target = moving.Target(home=target_home, repo=tmp_path / "checkout", tailnet_name=None, lan_address=None)
+    data, space = target_place.data, target_place.space
+    if target_sealed:
+        # third review: refused (`bipagents send` sets the place's own aside and puts it back on a failure)
+        from bipinstall.sealed import SealedError
+        with pytest.raises(SealedError, match="bipagents send"):
+            moving.unpack(tar, info, target, target_place.config)
+        handle.close()
+        assert (data / "keys.sealed.json").exists() and (space / "vault.share").exists() and sealed_with == []
+        return
     moving.unpack(tar, info, target, target_place.config)
     handle.close()
-    data, space = target_place.data, target_place.space
     assert (data / "vault" / "vault.key").read_text() == DATA_KEYS["vault"]
     assert not (data / "keys.sealed.json").exists()
-    if target_sealed:
-        assert not (space / "vault.share").exists(), "a half that opens none of the person's stores"
-        assert json.loads((space / "keyservice.json").read_text())["token"] == "token-of-bip"
-        assert len(sealed_with) == 1 and sealed_with[0][0] is None and sealed_with[0][1].get("base") == target_home
-    else:
-        assert sealed_with == []
+    assert sealed_with == []
 
 
 # -- B2: the seat agent's order and a planned move -----------------------------------------------------------------

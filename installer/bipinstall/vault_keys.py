@@ -230,21 +230,6 @@ def files_came(came: Path, data: Path, was_sealed: bool, base: Optional[Path] = 
     return service.is_file()
 
 
-def drop_sealing(data: Path, base: Optional[Path] = None) -> bool:
-    """A sealed place whose data the person's files (in today's layout) just replaced (an import): its keys.sealed.json,
-    a sealing's journal, this server's half and its own stores no clear key opens now go (none of them opens anything
-    of the person's). True when its key service stays, to seal again once (`enable(None)`)."""
-    import shutil
-    (data / SEALED).unlink(missing_ok=True)
-    shutil.rmtree(data / JOURNAL.parent, ignore_errors=True)
-    for store, name in KEY_FILES.items():
-        if (data / store).is_dir() and not (data / store / name).exists():
-            shutil.rmtree(data / store, ignore_errors=True)   # the place's own, sealed: unreadable from now on
-    space = space_dir(base)
-    (space / SPACE_FILES[0]).unlink(missing_ok=True)
-    return (space / SPACE_FILES[1]).is_file()
-
-
 # What a cut-off swap of lot 2 sets aside beside an agent's Hermes vault (a copy, or a link to memory): never carried.
 SET_ASIDE = (".vault-disk-", ".vault-link-")
 

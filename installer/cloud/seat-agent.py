@@ -746,7 +746,7 @@ def place_folder(entry, rel):
             try:
                 child = os.open(part, flags, dir_fd=fd)
             except FileNotFoundError:
-                os.mkdir(path, 0o700)
+                os.mkdir(part, 0o700, dir_fd=fd)   # in the parent held open: never where a link would point
                 made = True
                 child = os.open(part, flags, dir_fd=fd)   # what was made, or a link swapped in: refused (ELOOP)
             os.close(fd)

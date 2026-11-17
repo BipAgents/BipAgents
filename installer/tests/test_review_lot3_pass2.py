@@ -8,8 +8,11 @@ from test_to_place import computer, place  # noqa: F401
 from test_vault_keys_lot3 import _exported, offer_place, runtime  # noqa: F401
 
 
-def test_an_import_of_an_unsealed_export_over_a_sealed_place_is_readable_and_sealed_again(tmp_path, runtime,  # noqa
-                                                                                          monkeypatch):
+def test_an_import_of_an_unsealed_export_over_a_sealed_place_is_refused(tmp_path, runtime, monkeypatch):  # noqa
+    """Second review, C1; third review's decision: refused before anything is unpacked (`bipagents send` is the way
+    onto a place of the offer), the place as it was."""
+    import pytest
+    from bipinstall.sealed import SealedError
     source = offer_place(tmp_path / "old" / "bip3", sealed_keys=False)       # a computer's, or a place before lot 3
     out, phrase, _ = _exported(source, tmp_path, monkeypatch)
     target_home = tmp_path / "new" / "bip"
@@ -17,15 +20,13 @@ def test_an_import_of_an_unsealed_export_over_a_sealed_place_is_readable_and_sea
     resealed = []
     monkeypatch.setattr(vault_keys, "enable", lambda settings, **kw: resealed.append(kw) or 0)
     tar, info, handle = moving.open_archive(out, phrase)
-    moving.unpack(tar, info, moving.Target(home=target_home, repo=tmp_path / "checkout", tailnet_name=None,
-                                           lan_address=None), target.config)
+    with pytest.raises(SealedError):
+        moving.unpack(tar, info, moving.Target(home=target_home, repo=tmp_path / "checkout", tailnet_name=None,
+                                               lan_address=None), target.config)
     handle.close()
     data = target.data
-    left = {"keys.sealed.json (the place's own)": (data / "keys.sealed.json").exists(),
-            "clear vault.key (the person's)": (data / "vault" / "vault.key").exists(),
-            "the place's half": (target.space / "vault.share").exists(), "resealed": bool(resealed)}
-    assert not (data / "keys.sealed.json").exists(), f"the place's sealing over the person's stores: unreadable {left}"
-    assert resealed, left
+    assert (data / "keys.sealed.json").exists() and (target.space / "vault.share").exists() and not resealed
+    assert not (data / "vault" / "vault.key").exists(), "nothing of the export unpacked"
 
 
 def test_a_reseal_that_failed_once_is_tried_again_at_the_next_import(tmp_path, monkeypatch):
@@ -52,26 +53,6 @@ def test_a_reseal_that_failed_once_is_tried_again_at_the_next_import(tmp_path, m
     assert len(asked) == 2
 
 
-def test_the_import_s_reseal_reads_this_place_s_config_not_the_export_s(tmp_path, runtime, monkeypatch):  # noqa
-    """`unpack` reseals before it rewrites the export's settings for this machine: the bridge's config then still names
-    the source's data folder (another home), which `bipbridge vault-keys enable` refuses (« no data folder »)."""
-    source = offer_place(tmp_path / "old" / "bip3")
-    out, phrase, _ = _exported(source, tmp_path, monkeypatch)
-    target_home = tmp_path / "new" / "bip"
-    target = offer_place(target_home, sealed_keys=True)
-    seen = []
-
-    def enable(settings, base=None, **kw):
-        seen.append(vault_keys.data_dir(base / ".config" / "bipagents" / "bridge.toml", base))
-        return 0
-    monkeypatch.setattr(vault_keys, "enable", enable)
-    tar, info, handle = moving.open_archive(out, phrase)
-    moving.unpack(tar, info, moving.Target(home=target_home, repo=tmp_path / "checkout", tailnet_name=None,
-                                           lan_address=None), target.config)
-    handle.close()
-    assert seen == [target.data], f"the reseal would seal {seen}, not this place's {target.data}"
-
-
 def test_the_seat_agent_never_chowns_through_a_link_swapped_in_after_its_mkdir(tmp_path, monkeypatch):
     """`place_folder` (R6) runs as root: `mkdir` then `chown(path)`, which follows a link. The place's account owns the
     parent, so it can swap the new folder for a link to any file between the two (root's chown then gives it away)."""
@@ -85,11 +66,12 @@ def test_the_seat_agent_never_chowns_through_a_link_swapped_in_after_its_mkdir(t
     entry = type("Entry", (), {"pw_dir": str(home), "pw_uid": os.getuid(), "pw_gid": os.getgid(), "pw_name": "bip2"})
     real_mkdir = os.mkdir
 
-    def racing_mkdir(path, mode=0o777):
-        real_mkdir(path, mode)
-        if path.endswith("/.local"):          # the place's own process, at that very moment
-            os.rmdir(path)
-            os.symlink(victim, path)
+    def racing_mkdir(path, mode=0o777, *, dir_fd=None):   # by descriptor since the third review (C4)
+        real_mkdir(path, mode, dir_fd=dir_fd)
+        full = os.path.join(str(home), path) if dir_fd is not None else path
+        if full.endswith("/.local"):          # the place's own process, at that very moment
+            os.rmdir(full)
+            os.symlink(victim, full)
     monkeypatch.setattr(agent.os, "mkdir", racing_mkdir)
     chowned = []
     monkeypatch.setattr(agent.os, "chown", lambda path, uid, gid, **kw: chowned.append(
@@ -152,7 +134,7 @@ def test_install_sh_s_guard_reads_the_sealed_keys_marker_this_repository_carries
     root = Path(__file__).resolve().parents[2]
     marker = root / "bridge-rs" / "SEALED_KEYS_VERSION"
     assert marker.is_file(), "removing it would make every sealed place refuse every update"
-    version = int(marker.read_text().strip())
+    version = int(marker.read_text().splitlines()[0])
     text = (root / "install.sh").read_text(encoding="utf-8")
     assert "bridge-rs/SEALED_KEYS_VERSION" in text and f"SEALED_KEYS_NEEDED={version}" in text
     assert "hermes_copies.rs" not in text

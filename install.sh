@@ -75,7 +75,7 @@ to_version() {
   # The versions that carry them say so in bridge-rs/SEALED_KEYS_VERSION (installer/tests/test_review_lot3_pass2.py).
   if vault_sealed; then
     local has
-    has=$(git -C "$DIR" cat-file -p FETCH_HEAD:bridge-rs/SEALED_KEYS_VERSION 2>/dev/null | tr -dc 0-9)
+    has=$(git -C "$DIR" cat-file -p FETCH_HEAD:bridge-rs/SEALED_KEYS_VERSION 2>/dev/null | sed -n 1p | tr -dc 0-9)
     if [ "${has:-0}" -lt "$SEALED_KEYS_NEEDED" ]; then
       echo "BipAgents: this place's vault keys are sealed and $BIPAGENTS_TO doesn't carry them: it stays on its version" >&2
       return 1
