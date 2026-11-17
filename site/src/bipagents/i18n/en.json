@@ -398,6 +398,10 @@
     ]
   },
   "page": {
+    "privacy": {
+      "title": "Privacy policy — BipAgents",
+      "description": "How BipAgents handles your data: what stays on your phone and your place, what Kerfy Studio receives, Google data, your rights."
+    },
     "demo": {
       "title": "The demo — BipAgents",
       "description": "The BipAgents app, filmed on a phone playing its own demo: five short examples where your Bips search, suggest and wait for your OK."

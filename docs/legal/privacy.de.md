@@ -2,7 +2,7 @@
 
 # Datenschutzerklärung von BipAgents
 
-> Zuletzt aktualisiert: 16. November 2026.
+> Zuletzt aktualisiert: 17. November 2026.
 
 ## Kurz gesagt
 
@@ -945,6 +945,10 @@ Telefon verlässt; jeder Dienst ist dann für das verantwortlich, was er damit m
 - **Links, die du öffnest** (Websites, die deine Agenten nennen, die Seite von Hermes Agent), öffnen sich in deinem
   Browser. Dein Telefon öffnet nie von selbst einen Link, den ein Agent geschrieben hat: Nur ein Google-Maps-Link wird
   zu einer kleinen Karte, aus dem Link selbst gemacht, wie die Karten in Antworten (oben).
+
+## 7 bis. Google-Daten (Gmail, Google Kalender, Google Drive)
+
+Wenn du dein Google-Konto verbindest, erhält dein Platz von Google nur, was du erlaubst: deine Kalender und ihre Termine; die Dateien, die deine Agenten für dich erstellen, und die, die du ihnen auswählst; deine E-Mails, um sie auf deine Bitte hin zu suchen, zu lesen, Entwürfe vorzubereiten und dein Postfach aufzuräumen. Diese Daten bleiben verschlüsselt auf deinem Platz und gehen nur an das KI-Modell, das deinen Agenten antwortet, über EUrouter und seine Hoster in der Europäischen Union, mit der Anweisung, nichts zu speichern und nichts zu trainieren. Kerfy Studio liest sie nicht, verkauft sie nicht und verwendet sie weder für Werbung noch zum Training eines KI-Modells. Du kannst Google jederzeit in der App trennen: Dein Platz löscht dann seine Tokens und widerruft den Zugriff bei Google. Die Nutzung und die Weitergabe der von Google-APIs erhaltenen Informationen an jede andere App durch BipAgents entsprechen der [Nutzerdatenrichtlinie der Google-API-Dienste](https://developers.google.com/terms/api-services-user-data-policy), einschließlich der Anforderungen zur eingeschränkten Nutzung (Limited Use).
 
 ## 8. Die Demo
 
