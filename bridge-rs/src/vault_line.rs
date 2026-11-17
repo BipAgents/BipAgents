@@ -171,14 +171,19 @@ pub fn calls_the_vault(name: &str) -> bool {
 /// A turn's last tool, as the hub keeps it (`loop_brake::bare`), is the bridge's `server`'s `tool`: `<rest>_<tool>` once
 /// `mcp_bipagents_` is off (`bipagents_vault` → `vault_<tool>`, `bipagents_pay` → `pay_<tool>`), or
 /// `mcp__<server>__<tool>` / `mcp_<server>_<tool>` kept whole; never a connector's tool of that name.
-pub fn names_bridge_tool(_name: &str, _server: &str, _tool: &str) -> bool {
-    false
+pub fn names_bridge_tool(name: &str, server: &str, tool: &str) -> bool {
+    let entry = |open: &str, between: &str| {
+        name.strip_prefix(open).and_then(|r| r.strip_prefix(server)).and_then(|r| r.strip_prefix(between)) == Some(tool)
+    };
+    let bare = server
+        .strip_prefix("bipagents_")
+        .is_some_and(|rest| name.strip_prefix(rest).and_then(|r| r.strip_prefix('_')) == Some(tool));
+    entry("mcp__", "__") || entry("mcp_", "_") || bare
 }
 
 /// A turn's last tool, as the hub keeps it (`loop_brake::bare`), is the bridge vault's `tool`.
 pub fn names_vault_tool(name: &str, tool: &str) -> bool {
-    // `mcp_bipagents_vault_<tool>` once `mcp_bipagents_` is off; `mcp__bipagents_vault__<tool>` kept whole
-    is_vault_tool(name, tool) || name.strip_prefix("vault_") == Some(tool)
+    names_bridge_tool(name, SERVER_NAME, tool)
 }
 
 /// The run and session of the call, from the agent's turns inside a call of the vault's tool now: one, its own; none

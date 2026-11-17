@@ -99,10 +99,20 @@ def test_j65_the_agents_screen_is_live_in_the_bureau_and_the_hand_is_taken_there
     and given back."""
     import struct
     from bbkit.ws import open_ws
-    from test_desktop import recv_bytes
     desktop = journey.bridge.post(f"/v1/agents/{AGENT}/desktop", headers=AUTH)
     assert desktop.status_code == 200 and desktop.json()["kind"] == "novnc", desktop.text
     with open_ws(journey.bridge.ws_url("/" + desktop.json()["path"] + "ws")) as ws:
+        held = bytearray()
+
+        def recv_bytes(_ws, n, timeout=10):
+            """Exactly `n` bytes of the stream, whatever messages they came in (the rest kept for the next read)."""
+            while len(held) < n:
+                message = ws.recv(timeout=timeout)
+                held.extend(message if isinstance(message, bytes) else message.encode())
+            out = bytes(held[:n])
+            del held[:n]
+            return out
+
         assert recv_bytes(ws, 12) == b"RFB 003.008\n"        # the bridge's own handshake to the app (Face ID passed)
         ws.send(b"RFB 003.008\n")
         assert recv_bytes(ws, 2) == b"\x01\x01"

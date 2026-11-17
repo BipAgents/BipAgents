@@ -789,7 +789,8 @@ async fn create(state: &AppState, agent: &AgentConfig, arguments: &Dict) -> anyh
         Err(say) => return Ok(refusal(&say)),
     };
     tracing::info!(agent = %agent.name, site = %host, fields = filled, item = %item.id, retry = granted, "account password typed and kept");
-    crate::vault_contacts::note_mark(state, &agent.name, CREATE, &crate::vault_contacts::mark(&item.id, &item.label));
+    crate::vault_contacts::note_mark(state, &agent.name, SERVER_NAME, CREATE, &crate::vault_contacts::mark(&item.id, &item.label))
+        .await;
     crate::vault_used::note(&state.vault.folder, &item.id, &agent.name);
     crate::vault_line::note(state, &agent.name, CREATE, &item.id, &host, crate::vault_line::How::Created);
     let fields = if filled > 1 { "the password field and its confirmation" } else { "the password field" };
