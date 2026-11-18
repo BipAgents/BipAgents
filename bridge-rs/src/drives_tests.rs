@@ -941,7 +941,7 @@ async fn google_on_android_through_kerfy_s_exchange_or_an_own_project() {
     // withdrawn: the Google Drive that relied on it disconnected too
     let gone = forget_android(&config).await.unwrap();
     assert_eq!((gone["android"].as_str(), gone["disconnected"].as_bool()), (Some("choose"), Some(true)));
-    assert!(read_stored(&config).unwrap().drives.get("google_drive").is_none());
+    assert!(!read_stored(&config).unwrap().drives.contains_key("google_drive"));
     // their own project
     let own = AndroidBody {
         mode: "own".into(),
