@@ -928,3 +928,65 @@ def test_the_beat_says_whether_the_server_is_hardened(tmp_path):
     assert agent.vitals(str(meminfo), str(tmp_path), str(tmp_path / "up"), str(done))["space_hardened"] is False
     done.write_text("2026-10-28T10:00:00Z\n")
     assert agent.vitals(str(meminfo), str(tmp_path), str(tmp_path / "up"), str(done))["space_hardened"] is True
+
+
+def test_kerfy_s_card_payments_switch_is_written_where_each_place_s_bridge_reads_it(tmp_path):
+    """The beat's answer says, per place, whether the agents' card payments may go on (the guichet's offer_cards.rs,
+    `bipguichet cards off`): `{"offer_cards": false}` in the place's own file, root's, outside its home, removed when
+    it may again (bridge-rs/src/cards.rs `remote_off`); an older guichet's answer changes nothing."""
+    import os
+    agent = _seat_agent()
+    assert agent.OFFER_CARDS_DIR == "/var/lib/bipagents/offer-cards"
+    folder = tmp_path / "offer-cards"
+    me = (os.getuid(), os.getgid())
+    uids = {1: 1001, 2: 1002, 3: 1003}
+    keep = lambda answer: agent.keep_offer_cards(answer, uids, str(folder), me)   # noqa: E731
+    keep({"orders": [], "credit": {}})   # an older guichet: nothing made
+    assert not folder.exists()
+    keep({"offer_cards": {"1": False, "2": True}})   # place 3 left out: no cut
+    assert sorted(p.name for p in folder.iterdir()) == ["1001.json"]
+    assert json.loads((folder / "1001.json").read_text()) == {"offer_cards": False}
+    assert oct((folder / "1001.json").stat().st_mode & 0o777) == "0o644"
+    assert oct(folder.stat().st_mode & 0o777) == "0o755"
+    # written only when it changes (the bridge reads it again only then)
+    before = (folder / "1001.json").stat()
+    keep({"offer_cards": {"1": False, "2": True}})
+    after = (folder / "1001.json").stat()
+    assert (after.st_ino, after.st_mtime_ns) == (before.st_ino, before.st_mtime_ns)
+    # only false cuts: anything else is no cut
+    keep({"offer_cards": {"1": False, "2": "false", "3": 0}})
+    assert sorted(p.name for p in folder.iterdir()) == ["1001.json"]
+    # an older guichet again: the cut stays as it is
+    keep({"orders": []})
+    keep({"offer_cards": None})
+    assert (folder / "1001.json").exists()
+    # a link put in its stead is replaced, never followed
+    target = tmp_path / "elsewhere"
+    target.write_text("keep")
+    os.symlink(target, folder / "1002.json")
+    keep({"offer_cards": {"1": False, "2": False}})
+    assert target.read_text() == "keep"
+    assert not (folder / "1002.json").is_symlink()
+    assert json.loads((folder / "1002.json").read_text()) == {"offer_cards": False}
+    # back on: the files removed
+    keep({"offer_cards": {"1": True}})
+    assert list(folder.iterdir()) == []
+    # the folder replaced by a link: never written through it
+    elsewhere = tmp_path / "other"
+    elsewhere.mkdir()
+    folder.rmdir()
+    os.symlink(elsewhere, folder)
+    keep({"offer_cards": {"1": False}})
+    assert list(elsewhere.iterdir()) == [] and folder.is_dir() and not folder.is_symlink()
+    assert json.loads((folder / "1001.json").read_text()) == {"offer_cards": False}
+
+
+def test_a_beat_between_long_orders_keeps_the_card_payments_switch_too(tmp_path, monkeypatch):
+    agent = _seat_agent()
+    kept = []
+    monkeypatch.setattr(agent, "call", lambda *a, **k: {"offer_cards": {"1": False}})
+    monkeypatch.setattr(agent, "vitals", lambda: {})
+    monkeypatch.setattr(agent, "beat_of", lambda *a, **k: {})
+    monkeypatch.setattr(agent, "keep_offer_cards", lambda answer: kept.append(answer))
+    agent.Beating({}, {})._beat()
+    assert kept == [{"offer_cards": {"1": False}}]

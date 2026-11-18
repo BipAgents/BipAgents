@@ -77,14 +77,106 @@ fn switch_path(config: &Config) -> std::path::PathBuf {
     std::path::PathBuf::from(config.data_dir()).join("vault").join("payments.json")
 }
 
-/// Card payments are on: allowed here, and switched on by the person. Off, nothing is paid and no card is added.
+/// Card payments are on: allowed here, switched on by the person, and not cut by Kerfy Studio (`remote_off`). Off,
+/// nothing is paid and no card is added.
 pub fn enabled(config: &Config) -> bool {
     allowed(config)
+        && !remote_off()
         && std::fs::read(switch_path(config))
             .ok()
             .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
             .and_then(|v| v.get("enabled").and_then(Value::as_bool))
             .unwrap_or(false)
+}
+
+// -- Kerfy Studio's remote switch (decided 2026-11-18) ------------------------------------------------------------
+//
+// To cut the agents' card payments on the offer's places at once, without a release nor an update wave: `bipguichet
+// cards off [--place <id>]` (Guichet repo, guichet-rs/src/offer_cards.rs). Each server's beat (every two minutes)
+// brings it back to its seat agent, which writes `{"offer_cards": false}` into this place's file, root's, outside the
+// place's home, and removes it when card payments may go on again (installer/cloud/seat-agent.py `keep_offer_cards`).
+// Off wins over everything here (bridge.toml, the person's switch, which is kept as they set it: back on, their
+// payments come back as they were); read live, its content read again only when the file changes. A missing,
+// unreadable or other file: no override. `follow_remote_switch` stops the payments under way within seconds.
+
+/// The switch's folder: `<uid>.json` for each place's account (root's, 0644, seat-agent.py `OFFER_CARDS_DIR`).
+pub const REMOTE_SWITCH_DIR: &str = "/var/lib/bipagents/offer-cards";
+
+/// This place's file: `REMOTE_SWITCH_DIR/<uid>.json` (the black-box tests point `BIP_TEST_OFFER_SWITCH` elsewhere).
+fn remote_switch_path() -> &'static std::path::Path {
+    static PATH: std::sync::LazyLock<std::path::PathBuf> = std::sync::LazyLock::new(|| {
+        if let Some(path) = std::env::var_os("BIP_TEST_OFFER_SWITCH").filter(|p| !p.is_empty()) {
+            tracing::warn!(path = ?path, "card payments: Kerfy Studio's switch read from a test file");
+            return path.into();
+        }
+        // SAFETY: getuid has no preconditions and cannot fail.
+        let uid = unsafe { libc::getuid() };
+        std::path::Path::new(REMOTE_SWITCH_DIR).join(format!("{uid}.json"))
+    });
+    &PATH
+}
+
+/// Kerfy Studio cut the agents' card payments on this place (`bipguichet cards off`).
+pub fn remote_off() -> bool {
+    remote_off_at(remote_switch_path())
+}
+
+/// What the file at `path` says, read again only when it changed (its inode, size or time: the seat agent replaces
+/// it whole). Only `{"offer_cards": false}` cuts.
+pub fn remote_off_at(path: &std::path::Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    type Seen = Option<(std::path::PathBuf, (u64, u64, i64, i64), bool)>;
+    static SEEN: std::sync::Mutex<Seen> = std::sync::Mutex::new(None);
+    let Ok(meta) = std::fs::metadata(path) else { return false };
+    let stamp = (meta.ino(), meta.len(), meta.mtime(), meta.mtime_nsec());
+    let mut seen = SEEN.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((at, was, off)) = seen.as_ref() {
+        if at == path && *was == stamp {
+            return *off;
+        }
+    }
+    let off = std::fs::read(path)
+        .ok()
+        .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
+        .and_then(|v| v.get("offer_cards").and_then(Value::as_bool))
+        == Some(false);
+    *seen = Some((path.to_path_buf(), stamp, off));
+    off
+}
+
+/// What the person reads in the app while Kerfy Studio's switch is off.
+pub const REMOTE_OFF_NOTICE: &str = "Les paiements par carte sont suspendus pour le moment.";
+
+/// How often `follow_remote_switch` looks (a stat, the file read only when it changed).
+const REMOTE_LOOK: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Kerfy Studio's switch followed: once it goes off, the payments under way are stopped as « Suspendre tous les
+/// paiements » stops them (asked ones refused, held browsers given back, the card's fields emptied) and noted in the
+/// journal; off or back on, the agents' payment rules follow (souls.rs `Shopping`). At start, off: the rules only.
+pub async fn follow_remote_switch(config: crate::config::SharedConfig) {
+    let mut was_off = remote_off();
+    if was_off {
+        tracing::warn!("card payments: cut by Kerfy Studio");
+        crate::profile_files::reconcile_all(&config.get());
+    }
+    loop {
+        tokio::time::sleep(REMOTE_LOOK).await;
+        let off = remote_off();
+        if off == was_off {
+            continue;
+        }
+        was_off = off;
+        let config = config.get();
+        if off {
+            tracing::warn!("card payments: cut by Kerfy Studio, the payments under way stopped");
+            journal(&config, json!({"outcome": "payments_suspended", "by": "kerfy"}));
+            crate::profile_files::reconcile_all(&config);
+            crate::card_pay::stop_all(&config).await;
+        } else {
+            tracing::info!("card payments: Kerfy Studio's cut lifted");
+            crate::profile_files::reconcile_all(&config);
+        }
+    }
 }
 
 /// The person turns payments on or off (« Suspendre tous les paiements »: off at once).
@@ -1007,6 +1099,33 @@ mod tests {
         config.payments.offer_cards = true;
         assert!(allowed_on(&config, true)); // switched on: cards offered, numbers on the phone
         assert!(!allowed_on(&config, false)); // a cloud server without the guichet's token: never
+    }
+
+    #[test]
+    fn kerfy_s_switch_cuts_only_when_it_says_false_and_is_read_again_when_it_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("1000.json");
+        assert!(!remote_off_at(&path)); // no file: bridge.toml decides
+        let write = |text: &str| {
+            let tmp = dir.path().join("tmp");
+            std::fs::write(&tmp, text).unwrap();
+            std::fs::rename(&tmp, &path).unwrap(); // as the seat agent does: a new file each time
+        };
+        write(r#"{"offer_cards": false}"#);
+        assert!(remote_off_at(&path));
+        assert!(remote_off_at(&path)); // the same file: from memory
+        write(r#"{"offer_cards": true}"#);
+        assert!(!remote_off_at(&path));
+        for other in ["", "not json", "[]", r#"{"offer_cards": "false"}"#, r#"{"offer_cards": 0}"#, "{}"] {
+            write(other);
+            assert!(!remote_off_at(&path), "{other:?}");
+        }
+        write(r#"{"offer_cards": false}"#);
+        assert!(remote_off_at(&path));
+        std::fs::remove_file(&path).unwrap();
+        assert!(!remote_off_at(&path)); // removed: back to bridge.toml at once
+        std::fs::create_dir(&path).unwrap();
+        assert!(!remote_off_at(&path)); // unreadable: no override
     }
 
     const RULES: PhoneRules = PhoneRules { cap_max_cents: 15_000 };

@@ -1674,6 +1674,11 @@ async fn listing(State(state): State<AppState>) -> ApiResult<Response> {
         .collect();
     let mut out = json!({"protected": config.hermes.isolated, "items": items, "agents": agents,
                          "cards": crate::cards::enabled(&config), "cards_allowed": crate::cards::allowed(&config)});
+    if crate::cards::remote_off() {
+        // Kerfy Studio's cut (cards.rs `remote_off`): `cards` false meanwhile, a plain line for the app
+        out["cards_suspended"] = json!(true);
+        out["cards_notice"] = json!(crate::cards::REMOTE_OFF_NOTICE);
+    }
     if let (Some(rules), Value::Object(map)) = (crate::cards::phone_rules(&config), &mut out) {
         // A place of the offer: cards' numbers stay on the phone, a cap is required (cards.rs).
         map.insert("cards_on_phone".into(), json!(true));

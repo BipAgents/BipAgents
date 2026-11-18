@@ -199,7 +199,8 @@ pub fn offered(config: &Config, agent: &AgentConfig) -> bool {
 /// the hand-over (payments not allowed here, or suspended by the person).
 pub fn shopping(config: &Config, agent: &AgentConfig) -> crate::souls::Shopping {
     use crate::souls::Shopping;
-    if !offered(config, agent) {
+    // Kerfy Studio's cut (cards.rs `remote_off`): the person pays, never a card to set up meanwhile
+    if !offered(config, agent) || cards::remote_off() {
         return Shopping::HandOver;
     }
     let vault = crate::vault::Vault::new(&py::join(&config.data_dir(), "vault"));
@@ -1141,9 +1142,34 @@ const OFF: &str =
     "Payments by the agents are off: the person turns « Paiements par tes agents » on in the app (Réglages \
 › Coffre des agents).";
 
+/// Kerfy Studio cut the agents' card payments on its service (cards.rs `remote_off`): what the agent is told, before
+/// or after the person's approval, whatever step the payment was at.
+pub const SUSPENDED: &str = "Card payments are suspended for the moment on this service, for every agent (not the \
+person's choice): nothing of the card was typed, or it was erased from the page. Don't pay and don't try again now; \
+tell the person « Les paiements par carte sont suspendus pour le moment » (in their language): they can buy it \
+themselves on the site.";
+
+/// Why payments are off: Kerfy Studio's cut (`SUSPENDED`), else the person's switch or the install (`OFF`).
+fn off_text() -> &'static str {
+    if cards::remote_off() {
+        SUSPENDED
+    } else {
+        OFF
+    }
+}
+
+/// How a payment stopped on its way is told: `SUSPENDED` while Kerfy Studio's cut is on, else `why`.
+fn stopped_text(why: &str) -> &str {
+    if cards::remote_off() {
+        SUSPENDED
+    } else {
+        why
+    }
+}
+
 fn list(state: &AppState, agent: &AgentConfig) -> Dict {
     if !cards::enabled(&state.config()) {
-        return text(OFF);
+        return text(off_text());
     }
     let cards = state.vault.cards_of(&agent.name);
     if cards.is_empty() {
@@ -1282,7 +1308,7 @@ fn delivery_note(entries: &[crate::vault_contacts::Entry], name: &str) -> Result
 async fn pay(state: &AppState, agent: &AgentConfig, arguments: &Dict, asker: &Asker) -> anyhow::Result<Dict> {
     let config = state.config();
     if !offered(&config, agent) || !cards::enabled(&config) {
-        return Ok(refusal(OFF));
+        return Ok(refusal(off_text()));
     }
     let (label, merchant) = (arg(arguments, "card"), cards::quoted(&arg(arguments, "merchant"), 80));
     if merchant.is_empty() {
@@ -1444,6 +1470,11 @@ async fn pay(state: &AppState, agent: &AgentConfig, arguments: &Dict, asker: &As
             crate::urgent_pay::too_late(state, agent, &about, run.as_deref(), session.as_deref()).await;
             return Ok(refusal(crate::urgent_pay::TOO_LATE));
         }
+        Err(_) if cards::remote_off() => {
+            // Kerfy Studio's cut while the person was asked (`follow_remote_switch` refused the approval)
+            journal(&config, &entry, &agent.name, "suspended");
+            return Ok(refusal(SUSPENDED));
+        }
         Err(why) => {
             journal(&config, &entry, &agent.name, if why == "no_code" { "no_code" } else { "denied" });
             let say = if why == "no_code" {
@@ -1460,7 +1491,7 @@ async fn pay(state: &AppState, agent: &AgentConfig, arguments: &Dict, asker: &As
     // read before the switch: « Suspendre » writes the switch, then counts (`stop_all`)
     entry.epoch = suspends();
     if !cards::enabled(&state.config()) {
-        return Ok(refusal(OFF));
+        return Ok(refusal(off_text()));
     }
     // From here the agent can't read the page: its browser tools wait, DevTools only let the bridge in.
     if let Some(folder) = crate::desktop::desktop_dir(&config, agent).filter(|f| f.is_dir()) {
@@ -1513,7 +1544,7 @@ async fn pay(state: &AppState, agent: &AgentConfig, arguments: &Dict, asker: &As
     }
     if switched_off || !typing_into(&agent.name, token, &mut page).await {
         drop(code);
-        return Ok(give_up(&config, &agent.name, token, "failed", STOPPED).await);
+        return Ok(give_up(&config, &agent.name, token, "failed", stopped_text(STOPPED)).await);
     }
     let typed = type_card(&card, code, &mut page, &fields, &still).await;
     kept_typed(&agent.name, token, &mut page);
@@ -1852,12 +1883,13 @@ async fn confirm(state: &AppState, agent: &AgentConfig, arguments: &Dict) -> any
     if entry.clicked {
         return Ok(text(ALREADY_PRESSED));
     }
-    // « Suspendre tous les paiements » since the hold was asked (audit 17/11, 2.5): given up, nothing pressed.
-    let switched_off = entry.vault && !cards::enabled(&config);
+    // « Suspendre tous les paiements » since the hold was asked (audit 17/11, 2.5): given up, nothing pressed. Kerfy
+    // Studio's cut too, for any card (a Link one-time card as well).
+    let switched_off = (entry.vault && !cards::enabled(&config)) || cards::remote_off();
     if switched_off || held().get_mut(&agent.name).is_some_and(suspended) {
         ask_stop(&agent.name, "suspended");
         release(&config, &agent.name, "suspended").await;
-        return Ok(refusal(STOPPED));
+        return Ok(refusal(stopped_text(STOPPED)));
     }
     let mut page = match Page::open(entry.port, Some(&entry.token)).await {
         Ok(page) => page,
@@ -1888,8 +1920,8 @@ async fn confirm(state: &AppState, agent: &AgentConfig, arguments: &Dict) -> any
         drop(page);
         return Ok(amount_differs(state, agent, &entry, shown).await);
     }
-    // The switch read again right before the press (review 18/11): a « Suspendre » meanwhile wins.
-    let switched_off = entry.vault && !cards::enabled(&config);
+    // The switch read again right before the press (review 18/11): a « Suspendre » meanwhile wins, Kerfy's cut too.
+    let switched_off = (entry.vault && !cards::enabled(&config)) || cards::remote_off();
     let pressing = {
         let mut table = held();
         match table.get_mut(&agent.name).filter(|e| e.token == entry.token) {
@@ -1908,7 +1940,7 @@ async fn confirm(state: &AppState, agent: &AgentConfig, arguments: &Dict) -> any
     if !pressing {
         let why = stopped(&agent.name, &entry.token).unwrap_or("suspended");
         release(&config, &agent.name, why).await;
-        return Ok(refusal(STOPPED));
+        return Ok(refusal(stopped_text(STOPPED)));
     }
     if let Err(exc) = page.press(&button).await {
         return Ok(refusal(&unreachable_text(&exc)));
@@ -1991,6 +2023,9 @@ pub(crate) async fn pay_with_values(
     (url, port, host): (String, u16, String),
 ) -> Dict {
     let config = state.config();
+    if cards::remote_off() {
+        return refusal(SUSPENDED);
+    }
     let _one_at_a_time = lock_of(&agent.name).lock_owned().await;
     if held().contains_key(&agent.name) {
         return refusal("A payment is already in progress: confirm_payment or cancel_payment first.");
@@ -2051,9 +2086,12 @@ pub(crate) async fn pay_with_values(
             return give_up(&config, &agent.name, token, "failed", &say).await;
         }
     };
+    if cards::remote_off() {
+        ask_stop(agent_name, "suspended");
+    }
     if !typing_into(&agent.name, token, &mut page).await {
         drop(values);
-        return give_up(&config, &agent.name, token, "failed", STOPPED).await;
+        return give_up(&config, &agent.name, token, "failed", stopped_text(STOPPED)).await;
     }
     let typed = type_values(values, &mut page, &fields, &still).await;
     kept_typed(&agent.name, token, &mut page);
@@ -2318,9 +2356,15 @@ fn overview(config: &Config) -> Value {
         })
         .collect();
     let phone = cards::phone_rules(config);
-    json!({"allowed": cards::allowed(config), "enabled": cards::enabled(config), "active": active,
+    let mut out = json!({"allowed": cards::allowed(config), "enabled": cards::enabled(config), "active": active,
            "journal": cards::journal_entries(config, 300), "numbers_on_phone": phone.is_some(),
-           "cap_max_eur": phone.map(|r| r.cap_max_cents / 100)})
+           "cap_max_eur": phone.map(|r| r.cap_max_cents / 100)});
+    // Kerfy Studio's cut (cards.rs `remote_off`): `enabled` false meanwhile, the person's own switch kept as it is
+    if cards::remote_off() {
+        out["suspended"] = json!(true);
+        out["notice"] = json!(cards::REMOTE_OFF_NOTICE);
+    }
+    out
 }
 
 async fn payments(State(state): State<AppState>) -> ApiResult<Response> {
@@ -2336,6 +2380,10 @@ async fn switch(State(state): State<AppState>, body: Bytes) -> ApiResult<Respons
     };
     if on && !cards::allowed(&config) {
         return Err(HttpError::json(409, json!({"code": "cards_not_allowed"})));
+    }
+    if on && cards::remote_off() {
+        // the person's switch left as it is: once Kerfy Studio lifts its cut, their payments are as they set them
+        return Err(HttpError::json(409, json!({"code": "cards_suspended", "message": cards::REMOTE_OFF_NOTICE})));
     }
     cards::set_enabled(&config, on).map_err(anyhow::Error::from)?;
     cards::journal(&config, json!({"outcome": if on { "payments_on" } else { "payments_suspended" }}));
@@ -2368,6 +2416,12 @@ fn accept(id: &str, body: Zeroized) -> Result<(), HttpError> {
     let Some(entry) = table.get_mut(id) else { return Err(HttpError::new(404, "no such payment waiting")) };
     if entry.denied {
         return Err(HttpError::new(409, "this payment was refused"));
+    }
+    if cards::remote_off() {
+        // Kerfy Studio's cut: never approved now, the payment told so (`SUSPENDED`), the numbers sent dropped
+        entry.denied = true;
+        entry.notify.notify_waiters();
+        return Err(HttpError::json(409, json!({"code": "cards_suspended", "message": cards::REMOTE_OFF_NOTICE})));
     }
     let sent_numbers = body.0.get("number").is_some_and(|v| !v.is_null());
     match &entry.phone {

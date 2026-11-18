@@ -634,6 +634,10 @@ async fn pay(state: &AppState, agent: &AgentConfig, arguments: &Dict, asker: &As
     if !offered(&config, agent) {
         return Ok(refusal("Link isn't connected for you: the person connects it in the app (your tools, « Link »)."));
     }
+    if cards::remote_off() {
+        // Kerfy Studio's cut of the agents' card payments (cards.rs): Link's one-time cards too, before Link is asked
+        return Ok(refusal(crate::card_pay::SUSPENDED));
+    }
     let items = cards::quoted(&arg(arguments, "items"), 120);
     let merchant = cards::quoted(&arg(arguments, "merchant_name"), 80);
     if items.is_empty() || merchant.is_empty() {
