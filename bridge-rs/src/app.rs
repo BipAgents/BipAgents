@@ -1901,6 +1901,7 @@ fn assemble(state: &AppState, config: &Config) -> Router {
         .merge(crate::page_store::router()) // the pages' stores, through the apps' door (15/11)
         .merge(crate::message_search::router())
         .merge(crate::connections::router())
+        .merge(crate::drives::router()) // « Documents en ligne », 404 while `[drives]` is off
         .merge(crate::live_activities::router())
         .merge(crate::skill_library::router());
     if !config.cloud {

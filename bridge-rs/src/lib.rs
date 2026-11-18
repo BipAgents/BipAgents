@@ -226,6 +226,7 @@ pub mod browser_mcp;
 pub mod browsers;
 pub mod caldav;
 pub mod connections;
+pub mod drives;
 pub mod calendar;
 pub mod card_details;
 pub mod card_fill;

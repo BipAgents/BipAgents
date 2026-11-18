@@ -276,6 +276,9 @@ pub struct Stored {
     /// Registered clients, by `service redirect_uri issuer`: a new sign-in doesn't register again.
     #[serde(default)]
     pub clients: BTreeMap<String, Client>,
+    /// « Documents en ligne » (drives.rs): Google Drive, OneDrive, Dropbox, by their id. Same file and key.
+    #[serde(default)]
+    pub drives: BTreeMap<String, crate::drives::Link>,
 }
 
 /// The encrypted file (Fernet, as mailbox.rs) and its key.
@@ -334,7 +337,7 @@ pub fn store_of(config: &Config) -> Store {
 }
 
 /// One change at a time (the routes and the renewals), across the HTTP calls they make.
-static LOCK: LazyLock<tokio::sync::Mutex<()>> = LazyLock::new(|| tokio::sync::Mutex::new(()));
+pub(crate) static LOCK: LazyLock<tokio::sync::Mutex<()>> = LazyLock::new(|| tokio::sync::Mutex::new(()));
 
 // -- sign-ins on their way ---------------------------------------------------------------------------------------------
 
@@ -583,7 +586,7 @@ pub fn authorize_url(server: &Server, client: &Client, state: &str, challenge: &
 }
 
 /// The token endpoint's form, with the client's authentication.
-async fn token_request(
+pub(crate) async fn token_request(
     http: &reqwest::Client,
     server: &Server,
     client: &Client,
@@ -610,7 +613,7 @@ async fn token_request(
     }
 }
 
-fn tokens_of(answer: &serde_json::Map<String, Value>, previous: Option<&Tokens>) -> Tokens {
+pub(crate) fn tokens_of(answer: &serde_json::Map<String, Value>, previous: Option<&Tokens>) -> Tokens {
     let expires_in = answer.get("expires_in").and_then(|v| v.as_f64().or_else(|| v.as_str()?.parse().ok()));
     Tokens {
         access_token: s(answer, "access_token").unwrap_or_default(),
