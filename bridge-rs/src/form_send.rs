@@ -193,14 +193,50 @@ pub fn after_vault_fill(config: &Config, agent: &str, host: &str) {
     }
 }
 
-/// The card's sentence, in the agent's language.
+/// The card's sentence, in the agent's language: what its « Oui » allows, for how long (review of 18/11, F2).
 pub fn sentence(lang: &str, shown: &str, host: &str) -> String {
-    pick(lang, "Envoyer sur ce site ? {n} veut envoyer un formulaire à {h}",
-         "Send to this site? {n} wants to send a form to {h}",
-         "An diese Website senden? {n} möchte ein Formular an {h} senden",
-         "¿Enviar a este sitio? {n} quiere enviar un formulario a {h}")
+    pick(lang, "Envoyer sur ce site ? {n} veut envoyer un formulaire à {h} : si tu dis oui, ses envois vers {h} passent \
+                sans te redemander pendant {m} minutes",
+         "Send to this site? {n} wants to send a form to {h}: if you say yes, its sendings to {h} go through without \
+          asking you again for {m} minutes",
+         "An diese Website senden? {n} möchte ein Formular an {h} senden: Wenn du ja sagst, gehen seine Sendungen an \
+          {h} {m} Minuten lang ohne erneute Nachfrage durch",
+         "¿Enviar a este sitio? {n} quiere enviar un formulario a {h}: si dices que sí, sus envíos a {h} pasan sin \
+          volver a preguntarte durante {m} minutos")
         .replace("{n}", shown)
         .replace("{h}", host)
+        .replace("{m}", &((ONCE_SECONDS / 60.0) as u64).to_string())
+}
+
+/// The agent stopped (its conversation's « Stop », payments suspended): its « Oui » for now end at once (review of
+/// 18/11, F3); a vault fill's grant and the sites allowed for good stay.
+pub fn end_windows(config: &Config, agent: &str) {
+    let path = file_of(config, agent);
+    let Some(mut file) = std::fs::read_to_string(&path).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok()) else {
+        return;
+    };
+    let Some(once) = file.get("once").and_then(Value::as_array).cloned() else { return };
+    let kept: Vec<Value> = once.iter().filter(|g| g.get("window").and_then(Value::as_bool) != Some(true)).cloned().collect();
+    if kept.len() == once.len() {
+        return;
+    }
+    file["once"] = Value::Array(kept);
+    let Some(dir) = path.parent() else { return };
+    let partial = dir.join(format!("{}.part", crate::browser_mcp::SEND_SITES_FILE));
+    let written = py::write_with_mode(&partial.to_string_lossy(), file.to_string().as_bytes(), 0o600)
+        .and_then(|_| py::chmod(&partial.to_string_lossy(), 0o600))
+        .and_then(|_| std::fs::rename(&partial, &path));
+    match written {
+        Ok(()) => tracing::info!(agent, "the person's « Oui » for sending forms ended: the agent was stopped"),
+        Err(exc) => tracing::warn!(agent, error = %exc, "the person's « Oui » for sending forms not ended"),
+    }
+}
+
+/// `end_windows` for every agent.
+pub fn end_all_windows(config: &Config) {
+    for agent in config.agents.keys() {
+        end_windows(config, agent);
+    }
 }
 
 /// The « Toujours » button's words.
@@ -300,8 +336,12 @@ mod tests {
     #[test]
     fn the_card_says_it_plainly_in_four_languages() {
         assert_eq!(sentence("fr", "Vie", "contact.example"),
-                   "Envoyer sur ce site ? Vie veut envoyer un formulaire à contact.example");
-        assert_eq!(sentence("en", "Vie", "x.example"), "Send to this site? Vie wants to send a form to x.example");
+                   "Envoyer sur ce site ? Vie veut envoyer un formulaire à contact.example : si tu dis oui, ses envois \
+                    vers contact.example passent sans te redemander pendant 10 minutes");
+        assert_eq!(sentence("en", "Vie", "x.example"), "Send to this site? Vie wants to send a form to x.example: if \
+                   you say yes, its sendings to x.example go through without asking you again for 10 minutes");
+        assert!(sentence("de", "Vie", "x.example").contains("10 Minuten"));
+        assert!(sentence("es", "Vie", "x.example").contains("10 minutos"));
         assert!(sentence("de", "Vie", "x.example").starts_with("An diese Website senden?"));
         assert!(sentence("es", "Vie", "x.example").starts_with("¿Enviar a este sitio?"));
         assert_eq!(always_words("fr"), "Toujours pour ce site");
@@ -340,6 +380,11 @@ mod tests {
         assert_eq!(crate::browser_mcp::send_allowed(&path, "login.shop.example", &used, now), None, "used once");
         assert_eq!(crate::browser_mcp::send_allowed(&path, "other.example", &used, now), None);
         assert_eq!(crate::browser_mcp::send_allowed(&path, "contact.example", &Default::default(), now + 601.0), None);
+        // the agent stopped: its « Oui » for now ends at once, the vault's grant and the sites for good stay
+        end_windows(&config, "vie");
+        assert_eq!(crate::browser_mcp::send_allowed(&path, "contact.example", &Default::default(), now), None, "ended");
+        assert!(crate::browser_mcp::send_allowed(&path, "login.shop.example", &Default::default(), now).is_some());
+        assert_eq!(crate::browser_mcp::send_allowed(&path, "forum.example", &Default::default(), now), Some(None));
         let mode = std::os::unix::fs::PermissionsExt::mode(&std::fs::metadata(&path).unwrap().permissions());
         assert_eq!(mode & 0o777, 0o600);
     }
