@@ -146,8 +146,9 @@ pub fn card_not_kept_text(lang: &str, label: &str) -> String {
 /// A card's name as Hermes gave it, for its notice: cut, and never with a card's number in it (an agent may have named
 /// it so): its last four digits only then.
 pub fn card_name(label: &str) -> String {
-    if crate::card_details::holds_card_number(label) {
-        let digits: String = label.chars().filter(char::is_ascii_digit).collect();
+    if let Some(&(start, end)) = crate::card_details::card_numbers(label).last() {
+        // the last four digits of the number found, never of what follows it (a security code, a date)
+        let digits: String = label[start..end].chars().filter(char::is_ascii_digit).collect();
         return format!("•••• {}", &digits[digits.len().saturating_sub(4)..]);
     }
     cut_name(label)

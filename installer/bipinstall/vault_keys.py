@@ -147,6 +147,7 @@ def enable(settings: Optional[Dict], runner: Callable = run, say: Callable[[str]
                 "nothing changed.")
             return 1
     config = base / ".config" / "bipagents" / "bridge.toml"
+    _tidy_set_aside(base)
     data = data_dir(config, base)
     if sealed(data):
         say("The vault's keys are already sealed: nothing to do.")
@@ -239,6 +240,20 @@ def _take_key_service(given: Dict[str, str], base: Optional[Path]) -> Optional[P
     os.link(service, before)
     os.replace(tmp, service)
     return before
+
+
+def _tidy_set_aside(base: Optional[Path]) -> None:
+    """A run cut off between `_take_key_service` and `_after_try` (killed, a restart) left the file it set aside: with
+    keyservice.json there, the order's (a token the guichet knows) is the right one and the copy goes; without it, the
+    copy is put back."""
+    space = space_dir(base)
+    before = space / (SPACE_FILES[1] + ".before")
+    if not before.is_file() or before.is_symlink():
+        return
+    if (space / SPACE_FILES[1]).is_file():
+        before.unlink(missing_ok=True)
+    else:
+        os.replace(before, space / SPACE_FILES[1])
 
 
 def _after_try(before: Optional[Path], worked: bool) -> None:
