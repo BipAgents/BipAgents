@@ -64,3 +64,24 @@ def test_each_beat_cites_the_last_vault_keys_order_done_for_its_place(seat, monk
     agent.vault_keys_order(2, SETTINGS, 41, run_as=lambda e, a, timeout=900: {"state": "sealed"})
     agent.vault_keys_order(2, SETTINGS, 45, run_as=lambda e, a, timeout=900: {"state": "sealed"})
     assert agent.health()["2"]["vault_done"] == 45
+
+
+def test_the_outcomes_file_is_root_s_alone_and_stays_small(seat):
+    """Review pass 4: made 0600 (whatever root's umask), and only what is still needed kept: each place's last order
+    (what its beat cites) and the last ones, whose done may not have reached the guichet yet."""
+    import stat
+    agent, home = seat
+    old = os.umask(0o022)
+    try:
+        agent.note_vault_outcome(7, 5, True, key_service="ab" * 32)   # another place's, long ago
+        for order in range(100, 100 + agent.VAULT_OUTCOMES_KEPT + 50):
+            agent.note_vault_outcome(order, 2, False, "can't be reached")
+    finally:
+        os.umask(old)
+    path = Path(agent.VAULT_TRIED + "-done")
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    lines = path.read_text().splitlines()
+    assert len(lines) <= agent.VAULT_OUTCOMES_KEPT + 1, len(lines)
+    last = 100 + agent.VAULT_OUTCOMES_KEPT + 49
+    assert agent.vault_done_of(5) == 7 and agent.vault_done_of(2) == last
+    assert agent.vault_outcome(last)["sealed"] is False and agent.vault_outcome(100) is None
