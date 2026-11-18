@@ -203,7 +203,7 @@ fn places() -> std::sync::MutexGuard<'static, HashMap<PathBuf, Memory>> {
 }
 
 /// The data folder as one name (it may be given with a link or `..`).
-fn id(data: &Path) -> PathBuf {
+pub(crate) fn id(data: &Path) -> PathBuf {
     std::fs::canonicalize(data).unwrap_or_else(|_| data.to_path_buf())
 }
 
@@ -272,18 +272,33 @@ pub fn state(data: &Path) -> State {
     State::Closed(closed.clone())
 }
 
+/// Whether the place of `data` is enrolled (its keys sealed, or a sealing under way): what each store and the agents'
+/// Hermes copies (hermes_copies.rs) follow. Reads nothing but two names.
+pub fn enrolled(data: &Path) -> bool {
+    data.join(SEALED_FILE).exists() || data.join(JOURNAL_DIR).join(JOURNAL).exists()
+}
+
 /// The vault of this bridge is sealed and closed now.
 pub fn closed(config: &Config) -> bool {
     matches!(state(Path::new(&config.data_dir())), State::Closed(_))
 }
 
-/// What /health adds: nothing when not enrolled (as today), `vault: "open"`, or `vault: "locked"` and `vault_reason`.
+/// What /health adds: nothing when not enrolled (as today), `vault: "open"` (with `vault_copies_not_ready`, how many
+/// agents' Hermes copies are not ready in memory, when some), or `vault: "locked"` and `vault_reason`.
 pub fn health_fields(config: &Config) -> Map<String, Value> {
     let mut out = Map::new();
     match state(Path::new(&config.data_dir())) {
         State::Off => {}
         State::Open => {
             out.insert("vault".into(), json!("open"));
+            // agents whose Hermes copy is not ready in memory (hermes_copies.rs): for the place's keeper, a count only
+            let failed = crate::hermes_copies::failed(Path::new(&config.data_dir()))
+                .iter()
+                .filter(|name| config.agents.values().any(|a| &a.name == *name))
+                .count();
+            if failed > 0 {
+                out.insert("vault_copies_not_ready".into(), json!(failed));
+            }
         }
         State::Closed(closed) => {
             out.insert("vault".into(), json!("locked"));
@@ -449,10 +464,11 @@ fn private_dir(dir: &Path) -> Result<()> {
 }
 
 /// Removed, its bytes overwritten first (best effort: an SSD or a journaling filesystem may keep a copy).
-fn wipe(path: &Path) -> Result<()> {
+pub(crate) fn wipe(path: &Path) -> Result<()> {
     if let Ok(meta) = std::fs::symlink_metadata(path) {
         if meta.is_file() {
-            if let Ok(mut file) = std::fs::OpenOptions::new().write(true).open(path) {
+            // never through a link put there between the look and the open
+            if let Ok(mut file) = std::fs::OpenOptions::new().write(true).custom_flags(libc::O_NOFOLLOW).open(path) {
                 let _ = file.write_all(&vec![0u8; meta.len() as usize]);
                 let _ = file.sync_all();
             }
@@ -623,6 +639,25 @@ fn cache_dir(path: &Path, make: bool) -> Result<PathBuf> {
     Ok(dir)
 }
 
+/// A folder of this place's own in memory, beside its place key: `<runtime>/bipagents/<prefix>-<id>` (the agents' Hermes
+/// copies, hermes_copies.rs), made 0700 if `make`. Refused like the place key's own folder: not ours, a link, writable by
+/// others, or not on a memory filesystem.
+pub(crate) fn memory_folder_of(data: &Path, prefix: &str, make: bool) -> Result<PathBuf> {
+    let cache = cache_path(data).ok_or_else(|| anyhow!("no folder in memory (XDG_RUNTIME_DIR on tmpfs) here"))?;
+    let parent = cache_dir(&cache, make)?;
+    let name = cache.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let id = name.trim_start_matches("vault-").trim_end_matches(".sk");
+    let dir = parent.join(format!("{prefix}-{id}"));
+    if make && std::fs::symlink_metadata(&dir).is_err() {
+        std::fs::DirBuilder::new().mode(0o700).create(&dir)?;
+    }
+    if !ours(&dir) || !memory_folder(&dir) {
+        bail!("{} is not this account's own folder in memory", dir.display());
+    }
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))?;
+    Ok(dir)
+}
+
 fn read_cache(data: &Path) -> Option<Box<Zeroizing<[u8; KEY_LEN]>>> {
     let path = cache_path(data)?;
     cache_dir(&path, false).ok()?;
@@ -777,26 +812,78 @@ pub fn at_start(config: &Config) -> Result<()> {
     hold_for_bridge(&Place::of(config), Duration::from_secs(120))
 }
 
-/// Closed at the start: reopened in the background; then what was left as it was meanwhile (the agents' souls and
-/// tool diets, contact details given to the browsers on, removals waiting) brought up to date.
+/// At the bridge's start, an enrolled place: open, its agents' Hermes copies checked in memory (rebuilt where they are
+/// not there or not right: hermes_copies.rs); closed, the copies left in memory dropped (nothing to read until it
+/// reopens: a stale copy never), reopened in the background, the copies rebuilt right after, then what was left as it
+/// was meanwhile (the agents' souls and tool diets, contact details given to the browsers on, removals waiting) brought
+/// up to date. Not enrolled: nothing (today's layout, the copies on the disk).
 pub fn start(app: &crate::app::AppState) {
     let config = app.config();
     let place = Place::of(&config);
-    if !matches!(state(&place.data), State::Closed(_)) {
-        return;
+    match state(&place.data) {
+        State::Off => return,
+        State::Open => {
+            let app = app.clone();
+            let checking = app.clone();
+            app.spawn(async move {
+                copies_ready_retrying(&checking).await;
+            });
+            return;
+        }
+        State::Closed(_) => {}
     }
+    crate::hermes_copies::drop_all(&place.data);
     let source: Arc<dyn ShareSource> = Arc::new(FromFile(place.clone()));
     let app = app.clone();
     let reopening = app.clone();
     app.spawn(async move {
-        reopen(place, source, Duration::from_secs(1)).await;
+        reopen(place.clone(), source, Duration::from_secs(1)).await;
+        crate::hermes_copies::forget_checked(&place.data);
         let config = reopening.config();
+        reopening.vault.copies_ready_all(&config).await;
+        let retrying = reopening.clone();
+        reopening.spawn(async move { retry_copies(&retrying).await });
         if config.hermes.isolated {
             let _ = reopening.vault.retry_removals(&config).await;
             let _ = reopening.vault.follow_browsers(&config).await;
         }
         crate::profile_files::reconcile_all(&config);
     });
+}
+
+/// Every agent's Hermes copy made ready in memory, then [`retry_copies`] for as long as the bridge runs.
+async fn copies_ready_retrying(app: &crate::app::AppState) {
+    app.vault.copies_ready_all(&app.config()).await;
+    retry_copies(app).await;
+}
+
+/// The agents' copies not ready tried again in the background, whenever one fails (at the start, at a give, after a
+/// move into a space: review of 17/11, R2 and R-C): 1 minute after, then twice as long each time, up to an hour, until
+/// none fails; then it watches again (a look at what failed each minute, nothing run). Ends once the place is no longer
+/// enrolled; closed again, it waits. The diets follow a pass that rebuilt (an item Hermes refused is marked so).
+async fn retry_copies(app: &crate::app::AppState) {
+    let mut pause = crate::vault::COPY_RETRY_PAUSE;
+    loop {
+        tokio::time::sleep(pause).await;
+        let config = app.config();
+        if !crate::hermes_copies::in_memory(&config) {
+            return;
+        }
+        let failing = crate::hermes_copies::failed(Path::new(&config.data_dir()));
+        if closed(&config) || !failing.iter().any(|name| config.agents.values().any(|a| &a.name == name)) {
+            pause = crate::vault::COPY_RETRY_PAUSE;
+            continue;
+        }
+        let report = app.vault.copies_ready_all(&config).await;
+        if !report.rebuilt.is_empty() {
+            crate::profile_files::reconcile_all(&config);
+        }
+        pause = if report.failed.is_empty() {
+            crate::vault::COPY_RETRY_PAUSE
+        } else {
+            (pause * 2).min(Duration::from_secs(3600))
+        };
+    }
 }
 
 // -- the enrolment: the migration --------------------------------------------------------------------------------------

@@ -849,6 +849,21 @@ fn other_host_text(items: &[&crate::vault::Item], host: &str) -> String {
 /// `vault_login`: the agent's page (Chrome's own address), the login of the vault given to it that fits that page's
 /// site (vault_match.rs), its identifier and its password typed into that site's frames only (login_fill.rs). Neither
 /// is answered nor logged.
+/// When another password was kept for the login just typed (an agent's Hermes held the same login with it: vault.rs
+/// `duplicate_of`), the line telling the agent how to try it if the site refuses this one (review pass 4, R-K).
+pub fn other_password_hint(logins: &[crate::vault::Item], typed: &crate::vault::Item) -> Option<String> {
+    let others: Vec<&str> = logins
+        .iter()
+        .filter(|i| i.duplicate_of.as_deref() == Some(typed.id.as_str()))
+        .map(|i| i.id.as_str())
+        .collect();
+    let first = others.first()?;
+    Some(format!(
+        "Another password was kept for this login. If the site says this one is wrong, call {LOGIN} again with id \
+         {first} on the login page, once; if that one fails too, tell the person."
+    ))
+}
+
 async fn login(state: &AppState, agent: &AgentConfig, arguments: &Dict) -> anyhow::Result<Dict> {
     let config = state.config();
     if crate::vault::holder(&config, agent).is_some() {
@@ -974,9 +989,11 @@ async fn login(state: &AppState, agent: &AgentConfig, arguments: &Dict) -> anyho
         crate::vault_used::note(&state.vault.folder, &item.id, &agent.name);
         crate::vault_line::note(state, &agent.name, LOGIN, &item.id, &host, crate::vault_line::How::Login);
     }
+    let other = if typed_password { other_password_hint(&logins, &item).map(|l| format!(" {l}")) } else { None };
     Ok(text(&format!(
         "{done} You never see the password: don't read the fields back. Now submit the form yourself (its button). If \
-         the site then asks for a verification code, use browser_vault action=enter_code."
+         the site then asks for a verification code, use browser_vault action=enter_code.{}",
+        other.unwrap_or_default()
     )))
 }
 

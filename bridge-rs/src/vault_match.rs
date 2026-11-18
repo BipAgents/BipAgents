@@ -165,6 +165,12 @@ pub fn choose<'a>(items: &'a [Item], page: &str, id: Option<&str>) -> Choice<'a>
     }
     // only the logins the person gave this host for are ever typed here: the choice by login page is among them
     let given: Vec<&Item> = fitting.iter().copied().filter(|i| own_host(i, &here)).collect();
+    // a login an agent's Hermes held with another password (vault.rs `duplicate_of`): the person's own fills first
+    let given: Vec<&Item> = given
+        .iter()
+        .copied()
+        .filter(|i| i.duplicate_of.as_ref().is_none_or(|of| !given.iter().any(|g| &g.id == of)))
+        .collect();
     match given.len() {
         0 => return Choice::OtherHost(fitting),
         1 => return Choice::One(given[0]),

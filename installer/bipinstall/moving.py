@@ -71,6 +71,16 @@ TEXT_SUFFIXES = {".toml", ".yaml", ".yml", ".json", ".env", ".conf", ".txt", ".s
 TEXT_NAMES = {".env"}
 # The bridge's derived data, made again after a restore or a move: the archives' search indexes (bridge-rs/src/archives/).
 DATA_SKIP = {"archive-index"}
+# An agent's Hermes vault (its own copy of the items it was given), at a Hermes home's root or in a profile. On a place
+# whose vault keys are sealed (bridge-rs/src/sealed_keys.rs: keys.sealed.json, or a sealing under way) it is a link into
+# memory the bridge rebuilds from its master copy (hermes_copies.rs): never carried, nor a copy left on the disk; a link
+# into memory never anywhere (it would point at nothing on another server).
+HERMES_VAULT = "vault"
+# What the bridge's swap of that link leaves beside it when cut off (bridge-rs/src/hermes_copies.rs SET_ASIDE: the bridge
+# stopped, a put back failed): the disk's copy set aside, its Hermes key in it, and a link not renamed yet. The bridge
+# erases them at its next start; never carried, on any place (only the bridge makes them).
+HERMES_SET_ASIDE = (".vault-disk-", ".vault-link-")
+SEALED_MARKS = ("keys.sealed.json", ".keys-migration/journal.json")
 # The bridge's spare agents (bridge-rs/src/agent_pool.rs POOL_FILE), next to bridge.toml.
 SPARES_FILE = "spare-agents.json"
 NOT_SETTINGS = {"profile", "uploads", "media", "audio", "agent-audio", "image_store", "image_cache", "audio_cache",
@@ -104,6 +114,14 @@ class Inventory:
             if isinstance(data, list) else frozenset()
         self.__dict__["_spares"] = found
         return found
+
+    def vault_in_memory(self) -> bool:
+        """Whether the place's vault keys are sealed (its agents' Hermes copies in memory). Read once per inventory."""
+        cached = self.__dict__.get("_vault_in_memory")
+        if cached is None:
+            cached = any((self.data_dir / mark).exists() for mark in SEALED_MARKS)
+            self.__dict__["_vault_in_memory"] = cached
+        return cached
 
     @property
     def data_dir(self) -> Path:
@@ -168,12 +186,17 @@ class Inventory:
             parts = _relative(path, home)
             if parts is None:
                 continue
+            if name.startswith(HERMES_SET_ASIDE) and (len(parts) == 1 or (len(parts) == 3 and parts[0] == "profiles")):
+                return True   # a Hermes copy set aside by a cut-off swap (its key in it): erased by the bridge
             if parts and parts[0] in HERMES_SKIP_ROOT:
                 return True
             if len(parts) >= 3 and parts[0] == "profiles" and parts[2] in HERMES_SKIP_PROFILE:
                 return True
             if len(parts) >= 2 and parts[0] == "profiles" and parts[1] in self.spares():
                 return True   # blank agents the bridge keeps ready (bridge-rs/src/agent_pool.rs), made again
+            if name == HERMES_VAULT and (len(parts) == 1 or (len(parts) == 3 and parts[0] == "profiles")) \
+                    and (path.is_symlink() or self.vault_in_memory()):
+                return True   # an agent's Hermes vault in memory (or left on the disk of such a place): rebuilt
         parts = _relative(path, self.data_dir)
         if parts and parts[0] in DATA_SKIP:
             return True
