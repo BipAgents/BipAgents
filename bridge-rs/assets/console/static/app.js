@@ -5,6 +5,7 @@ import { call, events, blobURL, HttpError } from "./api.js";
 import { render as markdown, visible } from "./markdown.js";
 import { attach, category, CATEGORIES } from "./bips.js";
 import { T, lang } from "./text.js";
+import { vaultNews } from "./vault.js";
 
 // ------------------------------------------------------------------------------------------------------------------
 // Small helpers
@@ -471,31 +472,14 @@ function InboxAudio({ item }) {
 
 // ------------------------------------------------------------------------------------------------------------------
 // The vault's news (vault keys, lot 2; bridge-rs/src/vault.rs): the lines told once (`notices`, closed with
-// `DELETE /v1/vault/notices/{id}`), the entries an agent's Hermes refuses (`refused`: the bridge's own line) and a second
-// password kept for a login (`duplicate_of`). Only what needs the person: the vault itself stays in the phone's app.
+// `DELETE /v1/vault/notices/{id}`), the entries an agent could not take (`refused`: a code) and a second
+// password kept for a login (`duplicate_of`): read in vault.js. Only what needs the person; the vault is managed in the
+// phone's app.
 // ------------------------------------------------------------------------------------------------------------------
-export function vaultNews(listing) {
-  const items = listing?.items || [];
-  const byId = Object.fromEntries(items.map(i => [i.id, i]));
-  const notices = (listing?.notices || []).filter(n => n?.id && n.text?.trim());
-  const entries = items.map(item => {
-    const lines = Object.keys(item.refused || {}).sort().map(a => (item.refused[a] || "").trim()).filter(Boolean)
-      .map(text => ({ text, refused: true }));
-    const first = item.duplicate_of && byId[item.duplicate_of];
-    if (first) lines.push({ text: T.triedFirst(first.label), refused: false });
-    return { id: item.id, label: item.label, site: item.domain || hostOf(item.origin), lines };
-  }).filter(e => e.lines.length);
-  return { notices, entries };
-}
-
-function hostOf(origin) {
-  try { return origin ? new URL(origin).host : ""; } catch { return ""; }
-}
-
 function VaultNews() {
   const [news, setNews] = useState(null);
   const [error, setError] = useState(null);
-  useEffect(() => { call("/v1/vault").then(r => setNews(vaultNews(r))).catch(() => setNews(null)); }, []);
+  useEffect(() => { call("/v1/vault").then(r => setNews(vaultNews(r, T))).catch(() => setNews(null)); }, []);
   if (!news || (!news.notices.length && !news.entries.length)) return null;
   async function close(id) {
     setNews(n => ({ ...n, notices: n.notices.filter(x => x.id !== id) }));

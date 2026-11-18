@@ -46,6 +46,8 @@ const TEXT = {
     vault: "Coffre",
     close: "Fermer",
     triedFirst: label => `Autre mot de passe : « ${label} » est essayé en premier.`,
+    triedFirstSame: "Un autre mot de passe pour ce site est essayé en premier.",
+    cannotUseYet: name => `${name} ne peut pas encore s’en servir.`,
     cats: { wellness: "Bien-être", finance: "Finance", daily: "Quotidien", work: "Travail", learning: "Apprendre", home: "Maison", creative: "Créatif", tech: "Tech" },
   },
   en: {
@@ -94,6 +96,8 @@ const TEXT = {
     vault: "Vault",
     close: "Close",
     triedFirst: label => `Another password: “${label}” is tried first.`,
+    triedFirstSame: "Another password for this site is tried first.",
+    cannotUseYet: name => `${name} can’t use it yet.`,
     cats: { wellness: "Wellness", finance: "Finance", daily: "Everyday", work: "Work", learning: "Learning", home: "Home", creative: "Creative", tech: "Tech" },
   },
 };

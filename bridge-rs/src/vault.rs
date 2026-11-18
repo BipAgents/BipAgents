@@ -164,15 +164,9 @@ fn cut_name(name: &str) -> String {
     }
 }
 
-/// « Pas donnée à Vie : son Hermes la refuse. », in the person's language (an entry's `refused` mark).
-pub fn refused_text(lang: &str, agent: &str) -> String {
-    match lang {
-        "de" => format!("Nicht an {agent} gegeben: Sein Hermes lehnt sie ab."),
-        "es" => format!("No se ha dado a {agent}: su Hermes la rechaza."),
-        "fr" => format!("Pas donnée à {agent} : son Hermes la refuse."),
-        _ => format!("Not given to {agent}: its Hermes refuses it."),
-    }
-}
+/// Why an entry is not given to an agent (an entry's `refused` mark): its Hermes refused it at a rebuild of its copy in
+/// memory. A code: the apps write the sentence in the phone's language, in plain words (never « Hermes »).
+pub const AGENT_REFUSED: &str = "agent_refused";
 
 /// What [`Vault::copies_ready_all`] did, by agent.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -222,9 +216,9 @@ pub struct Item {
     pub has_otp: bool,
     /// agent id -> its handle in that agent's Hermes vault
     pub agents: IndexMap<String, String>,
-    /// agent id -> why the entry is not given to it, a plain short line for the app (« Pas donnée à Vie : son Hermes la
-    /// refuse. »): its Hermes refused it at a rebuild of its copy in memory (hermes_copies.rs); given again at the next
-    /// rebuild it accepts, or when the person gives it again.
+    /// agent id -> why the entry is not given to it, a code ([`AGENT_REFUSED`]): its Hermes refused it at a rebuild of
+    /// its copy in memory (hermes_copies.rs); given again at the next rebuild it accepts, or when the person gives it
+    /// again.
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     pub refused: IndexMap<String, String>,
     /// A login an agent's Hermes held for the same site and user name as this one, with another password (taken into
@@ -266,8 +260,10 @@ impl Item {
                "identifier_type": self.identifier_type, "identifier": self.identifier, "has_otp": self.has_otp,
                "agents": agents, "created_at": self.created_at, "updated_at": self.updated_at});
         if let (false, Value::Object(map)) = (self.refused.is_empty(), &mut out) {
-            // the app shows each line under the entry (« Pas donnée à Vie : son Hermes la refuse. »)
-            map.insert("refused".into(), json!(self.refused));
+            // agent id -> its code; the app writes the line under the entry (« Coach ne peut pas encore s'en servir. »)
+            // (a mark of before the code, its line, read as the code)
+            let codes: IndexMap<&String, &str> = self.refused.keys().map(|agent| (agent, AGENT_REFUSED)).collect();
+            map.insert("refused".into(), json!(codes));
         }
         if let (Some(of), Value::Object(map)) = (&self.duplicate_of, &mut out) {
             // another password for the same login, kept from an agent's Hermes: the app names the entry tried first
@@ -1697,7 +1693,6 @@ impl Vault {
         })?;
         let mut left_out = 0;
         if !wanted.is_empty() {
-            let line = refused_text(&lang, &agent.display_name);
             for (i, id) in wanted.iter().zip(&ids) {
                 let contact = is_address(&records[*i]);
                 match id {
@@ -1711,7 +1706,7 @@ impl Vault {
                     }
                     None => {
                         Self::handles(&mut records[*i]).shift_remove(&agent.name);
-                        Self::set_refused(&mut records[*i], &agent.name, Some(line.clone()));
+                        Self::set_refused(&mut records[*i], &agent.name, Some(AGENT_REFUSED.to_string()));
                         left_out += 1;
                     }
                 }
