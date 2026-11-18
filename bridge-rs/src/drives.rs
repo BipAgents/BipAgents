@@ -279,6 +279,9 @@ pub struct Endpoints {
     pub content: String,
     pub revoke: Option<String>,
     pub client: Client,
+    /// Kerfy's exchange (the guichet's /v1/drive-exchange/token, `token`) and this install's key: the code and the
+    /// renewals go through it, with Kerfy's Web client secret, when the person chose it (Alex 18/11).
+    pub exchange_key: Option<String>,
 }
 
 /// The phone's own client (the one signing in through a web page).
@@ -287,16 +290,29 @@ pub fn endpoints(config: &Config, provider: Provider) -> Option<Endpoints> {
 }
 
 /// `client` "": the phone's own; "web": Google's Web client (Android's sign-in hands over a code for it).
+/// For "web": the place's own Web client (Kerfy's places get it from the guichet), else what the person chose on an
+/// install without it (`AndroidGoogle`: Kerfy's exchange, or their own Google project).
 fn endpoints_for(config: &Config, provider: Provider, client: &str) -> Option<Endpoints> {
     let c = config.drives.clients.get(provider.id())?;
+    let mut exchange_key = None;
+    let mut token = c.token_url.clone().unwrap_or_else(|| provider.token_url().into());
     let (client_id, client_secret, redirect_uri) = match client {
-        "web" => (c.web_client_id.clone()?, c.web_client_secret.clone(), String::new()),
+        "web" => match (&c.web_client_id, android_google(config)) {
+            (Some(id), _) => (id.clone(), c.web_client_secret.clone(), String::new()),
+            (None, Some(chosen)) if chosen.mode == "own" => (chosen.client_id, chosen.client_secret, String::new()),
+            (None, Some(chosen)) if chosen.mode == "kerfy" => {
+                exchange_key = chosen.key.clone();
+                token = format!("{}/v1/drive-exchange/token", chosen.guichet.trim_end_matches('/'));
+                (chosen.client_id, None, String::new())
+            }
+            _ => return None,
+        },
         _ => (c.client_id.clone(), c.client_secret.clone(), c.redirect_uri.clone()),
     };
     Some(Endpoints {
         provider,
         auth: c.auth_url.clone().unwrap_or_else(|| provider.auth_url().into()),
-        token: c.token_url.clone().unwrap_or_else(|| provider.token_url().into()),
+        token,
         api: c.api_url.clone().unwrap_or_else(|| provider.api_url().into()),
         content: c.content_url.clone().or_else(|| c.api_url.clone()).unwrap_or_else(|| provider.content_url().into()),
         revoke: c.revoke_url.clone().or_else(|| provider.revoke_url().map(str::to_string)),
@@ -306,12 +322,82 @@ fn endpoints_for(config: &Config, provider: Provider, client: &str) -> Option<En
             client_secret,
             redirect_uri,
         },
+        exchange_key,
     })
 }
 
 impl Endpoints {
     fn token_server(&self) -> Server {
         Server { token_endpoint: self.token.clone(), ..Server::default() }
+    }
+
+    /// A code exchanged or a token renewed: at the service, or through Kerfy's exchange (the same form as JSON, with
+    /// the install's key; the guichet adds the client and its secret, keeps nothing).
+    async fn token_call(
+        &self,
+        http: &reqwest::Client,
+        form: Vec<(&str, String)>,
+    ) -> Result<serde_json::Map<String, Value>, (u16, String)> {
+        let Some(key) = &self.exchange_key else {
+            return connections::token_request(http, &self.token_server(), &self.client, form).await;
+        };
+        let body: serde_json::Map<String, Value> = form
+            .into_iter()
+            .filter(|(k, _)| *k != "redirect_uri")
+            .map(|(k, v)| (k.to_string(), Value::String(v)))
+            .collect();
+        let resp = http
+            .post(&self.token)
+            .bearer_auth(key)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| (0, format!("unreachable ({})", e.without_url())))?;
+        let status = resp.status().as_u16();
+        let answer: Value = resp.json().await.unwrap_or(Value::Null);
+        match answer {
+            Value::Object(map) if (200..300).contains(&status) && map.contains_key("access_token") => Ok(map),
+            other => {
+                let why = other.get("detail").and_then(Value::as_str).unwrap_or("refused").to_string();
+                // the guichet's 401 (an unknown key) and 400 (Google refused): the connection ended; its 429 and 5xx
+                // say nothing of the connection
+                Err((if status == 401 { 400 } else { status }, why))
+            }
+        }
+    }
+}
+
+/// What the person chose for Google Drive on Android on an install without Kerfy's Web client (Alex 18/11): `kerfy`,
+/// the code and renewals through Kerfy's exchange (their consent given in the app, its key kept here, encrypted);
+/// `own`, their own Google Cloud project's Web client.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct AndroidGoogle {
+    pub mode: String,
+    pub client_id: String,
+    #[serde(default)]
+    pub client_secret: Option<String>,
+    #[serde(default)]
+    pub key: Option<String>,
+    #[serde(default)]
+    pub guichet: String,
+    pub chosen_at: f64,
+}
+
+fn android_google(config: &Config) -> Option<AndroidGoogle> {
+    read_stored(config).ok()?.drives_google_android
+}
+
+/// How Google Drive works from Android here: `place` (this place's own Web client), `kerfy` or `own` (the person's
+/// choice), `choose` (nothing yet: the app asks).
+pub fn android_way(config: &Config) -> &'static str {
+    let place = config.drives.clients.get(Provider::Google.id()).is_some_and(|c| c.web_client_id.is_some());
+    if place {
+        return "place";
+    }
+    match android_google(config).map(|a| a.mode) {
+        Some(m) if m == "kerfy" => "kerfy",
+        Some(m) if m == "own" => "own",
+        _ => "choose",
     }
 }
 
@@ -583,7 +669,10 @@ pub fn start(config: &Config, id: &str, agents: &[String], pick: Pick, client: &
     let state = py::token_hex(16);
     let started = std::time::Instant::now();
     if provider == Provider::Google && client == "android" {
-        let web = endpoints_for(config, provider, "web").ok_or_else(not_configured)?;
+        // no Web client here and nothing chosen yet: the app asks the person (Kerfy's exchange or their own project)
+        let web = endpoints_for(config, provider, "web").ok_or_else(|| {
+            coded(409, "android_choice", "Google Drive on Android: Kerfy's exchange or your own Google project")
+        })?;
         keep_flow(&state, Flow { provider, verifier: String::new(), agents, client: "web".into(), started });
         let token_params: serde_json::Map<String, Value> =
             picker_params(pick).into_iter().map(|(k, v)| (k.to_string(), Value::String(v.to_string()))).collect();
@@ -635,11 +724,10 @@ pub async fn finish_query(config: &Config, query: HashMap<String, String>) -> Ap
     } else {
         form.push(("redirect_uri", String::new())); // an Android server code: Google wants an empty redirect
     }
-    let answer =
-        connections::token_request(&http, &ep.token_server(), &ep.client, form).await.map_err(|(status, why)| {
-            tracing::warn!(service = flow.provider.id(), status, why = %why, "drives: code exchange refused");
-            coded(502, "exchange_failed", &format!("{} refused the sign-in ({status} {why})", flow.provider.label()))
-        })?;
+    let answer = ep.token_call(&http, form).await.map_err(|(status, why)| {
+        tracing::warn!(service = flow.provider.id(), status, why = %why, "drives: code exchange refused");
+        coded(502, "exchange_failed", &format!("{} refused the sign-in ({status} {why})", flow.provider.label()))
+    })?;
     let tokens = connections::tokens_of(&answer, None);
     // nothing kept yet: no renewal for this one
     let api = Api::new(ep.clone(), tokens.access_token.clone(), None);
@@ -672,6 +760,8 @@ pub async fn finish_query(config: &Config, query: HashMap<String, String>) -> Ap
     let old_tokens = previous
         .as_ref()
         .filter(|l| flow.provider == Provider::Dropbox && l.tokens.access_token != tokens.access_token)
+        // the same renewal token is the same grant: nothing to end
+        .filter(|l| l.tokens.refresh_token.is_none() || l.tokens.refresh_token != tokens.refresh_token)
         .map(|l| l.tokens.clone());
     // the same account signed in again (« Reconnecter », Google's « Ajouter… »): its folders stay; another account:
     // they were the other account's, forgotten
@@ -704,8 +794,18 @@ pub async fn finish_query(config: &Config, query: HashMap<String, String>) -> Ap
     store.write(&stored)?;
     tracing::info!(service = flow.provider.id(), folders = link.folders.len(), "drives: connected");
     drop(_guard);
-    if let Some(old) = old_tokens {
-        let revoked = revoke(flow.provider, ep.revoke.as_deref(), &old).await;
+    if let Some(mut old) = old_tokens {
+        // an ended access token can't be revoked: renewed first with its own renewal token (review pass 2)
+        let ended = old.expires_at.is_none_or(|at| at - py::time_time() < connections::RENEW_MARGIN);
+        if let (true, Some(refresh)) = (ended, old.refresh_token.clone()) {
+            let form = vec![("grant_type", "refresh_token".to_string()), ("refresh_token", refresh)];
+            if let Ok(answer) = ep.token_call(&http, form).await {
+                old = connections::tokens_of(&answer, Some(&old));
+            }
+        }
+        // never the new connection's own key
+        let revoked =
+            old.access_token != link.tokens.access_token && revoke(flow.provider, ep.revoke.as_deref(), &old).await;
         tracing::info!(service = flow.provider.id(), revoked, "drives: the previous connection's key revoked");
     }
     Ok(view(flow.provider, true, Some(&link)))
@@ -736,7 +836,7 @@ async fn renew(config: &Config, provider: Provider, refused: Option<&str>) -> Re
         return Err(Fault::Expired);
     };
     let form = vec![("grant_type", "refresh_token".to_string()), ("refresh_token", refresh)];
-    match connections::token_request(&http(), &ep.token_server(), &ep.client, form).await {
+    match ep.token_call(&http(), form).await {
         Ok(answer) => {
             link.tokens = connections::tokens_of(&answer, Some(&link.tokens));
             let token = link.tokens.access_token.clone();
@@ -1532,7 +1632,10 @@ async fn search(config: &Config, mine: &[(Provider, Folder)], words: &str, folde
                 lines.push(format!("- [file] {} — {}", defused(&f.name), reference(provider, &f.id)));
             }
         }
-        for target in &targets {
+        // Google: one query over everything visible (every level at once), not one per folder (review pass 2)
+        let asked: Vec<&Folder> =
+            if provider == Provider::Google { targets.iter().take(1).collect() } else { targets.iter().collect() };
+        for target in asked {
             match api.search(target, words).await {
                 Ok(hits) => {
                     for hit in hits {
@@ -1540,7 +1643,11 @@ async fn search(config: &Config, mine: &[(Provider, Folder)], words: &str, folde
                             break;
                         }
                         let reference = reference(provider, &hit.id);
-                        if !lines.iter().any(|l| l.ends_with(&reference)) && inside(&api, &hit, &folders).await {
+                        // the access barrier (the agent's folders), then what was asked (`folder`, or all of them)
+                        if !lines.iter().any(|l| l.ends_with(&reference))
+                            && inside(&api, &hit, &folders).await
+                            && inside(&api, &hit, &targets).await
+                        {
                             lines.push(line_of(provider, &hit));
                         }
                     }
@@ -1719,9 +1826,120 @@ pub fn listing(config: &Config) -> anyhow::Result<Value> {
     let drives: Vec<Value> = SERVICES
         .iter()
         .filter_map(|id| Provider::of(id))
-        .map(|p| view(p, endpoints(config, p).is_some(), stored.drives.get(p.id())))
+        .map(|p| {
+            let mut v = view(p, endpoints(config, p).is_some(), stored.drives.get(p.id()));
+            if p == Provider::Google {
+                v["android"] = json!(android_way(config));
+            }
+            v
+        })
         .collect();
     Ok(json!({"enabled": config.drives.enabled, "drives": drives}))
+}
+
+/// `PUT /v1/drives/google_drive/android`: the person's choice for Google Drive on Android on an install without
+/// Kerfy's Web client. `kerfy`: the key the app got from the guichet once they agreed (POST /v1/drive-exchange/install)
+/// and the Web client's id it gave; `own`: their own Google project's Web client.
+#[derive(Debug, Deserialize)]
+pub struct AndroidBody {
+    pub mode: String,
+    pub client_id: String,
+    #[serde(default)]
+    pub client_secret: String,
+    #[serde(default)]
+    pub key: String,
+    #[serde(default)]
+    pub guichet: String,
+}
+
+impl Validate for AndroidBody {
+    fn validate(&self, errors: &mut Vec<FieldError>) {
+        web::check_max_len(errors, "mode", Some(self.mode.as_str()), 8);
+        web::check_max_len(errors, "client_id", Some(self.client_id.as_str()), 256);
+        web::check_max_len(errors, "client_secret", Some(self.client_secret.as_str()), 256);
+        web::check_max_len(errors, "key", Some(self.key.as_str()), 256);
+        web::check_max_len(errors, "guichet", Some(self.guichet.as_str()), 300);
+    }
+}
+
+fn https_or_local(url: &str) -> bool {
+    match url::Url::parse(url) {
+        Ok(u) if u.scheme() == "https" => u.host_str().is_some(),
+        Ok(u) if u.scheme() == "http" => matches!(u.host_str(), Some("127.0.0.1") | Some("localhost")),
+        _ => false,
+    }
+}
+
+pub async fn set_android(config: &Config, body: &AndroidBody) -> ApiResult<Value> {
+    if !config.drives.enabled {
+        return Err(off());
+    }
+    let client_id = body.client_id.trim();
+    if !client_id.ends_with(".apps.googleusercontent.com") {
+        return Err(coded(422, "client_id", "a Google client id (….apps.googleusercontent.com)"));
+    }
+    let chosen = match body.mode.as_str() {
+        "kerfy" => {
+            let guichet = if body.guichet.trim().is_empty() {
+                crate::templates::DEFAULT_GUICHET.to_string()
+            } else {
+                body.guichet.trim().trim_end_matches('/').to_string()
+            };
+            if !body.key.starts_with("dx1.") || !https_or_local(&guichet) {
+                return Err(coded(422, "key", "the key the guichet gave, and its https address"));
+            }
+            AndroidGoogle {
+                mode: "kerfy".into(),
+                client_id: client_id.into(),
+                client_secret: None,
+                key: Some(body.key.clone()),
+                guichet,
+                chosen_at: py::time_time(),
+            }
+        }
+        "own" => {
+            if body.client_secret.trim().is_empty() {
+                return Err(coded(422, "client_secret", "the Web client's secret of your own Google project"));
+            }
+            AndroidGoogle {
+                mode: "own".into(),
+                client_id: client_id.into(),
+                client_secret: Some(body.client_secret.trim().into()),
+                key: None,
+                guichet: String::new(),
+                chosen_at: py::time_time(),
+            }
+        }
+        _ => return Err(coded(422, "mode", "kerfy or own")),
+    };
+    let _guard = connections::LOCK.lock().await;
+    let store = connections::store_of(config);
+    let mut stored = store.read()?;
+    stored.drives_google_android = Some(chosen);
+    store.write(&stored)?;
+    tracing::info!(mode = body.mode.as_str(), "drives: Google on Android chosen");
+    Ok(json!({"android": android_way(config)}))
+}
+
+/// `DELETE /v1/drives/google_drive/android`: the choice withdrawn. A Google Drive signed in through it can't renew
+/// any more: disconnected too (revoked at Google, which needs no secret).
+pub async fn forget_android(config: &Config) -> ApiResult<Value> {
+    let relied = {
+        let _guard = connections::LOCK.lock().await;
+        let store = connections::store_of(config);
+        let mut stored = store.read()?;
+        if stored.drives_google_android.take().is_none() {
+            return Err(not_connected());
+        }
+        store.write(&stored)?;
+        stored.drives.get(Provider::Google.id()).is_some_and(|l| l.client == "web")
+    };
+    let place = config.drives.clients.get(Provider::Google.id()).is_some_and(|c| c.web_client_id.is_some());
+    let mut disconnected = false;
+    if relied && !place {
+        disconnected = disconnect(config, Provider::Google.id()).await.is_ok();
+    }
+    Ok(json!({"ok": true, "android": android_way(config), "disconnected": disconnected}))
 }
 
 fn connected_link(config: &Config, provider: Provider) -> ApiResult<Link> {
@@ -1841,6 +2059,41 @@ async fn revoke(provider: Provider, url: Option<&str>, tokens: &Tokens) -> bool 
     }
 }
 
+/// The switch turned off with drives still connected (review pass 2: the app hides the screen then, nobody could
+/// disconnect them): at the bridge's start, every one is forgotten here and revoked where the service allows it.
+/// Returns how many ended.
+pub async fn ended_when_off(config: &Config) -> usize {
+    if config.drives.enabled {
+        return 0;
+    }
+    let links = {
+        let _guard = connections::LOCK.lock().await;
+        let store = connections::store_of(config);
+        let Ok(mut stored) = store.read() else { return 0 };
+        if stored.drives.is_empty() {
+            return 0;
+        }
+        let links = std::mem::take(&mut stored.drives);
+        if let Err(e) = store.write(&stored) {
+            tracing::warn!(error = %e, "drives: the connections kept with the switch off can't be forgotten");
+            return 0;
+        }
+        links
+    };
+    for (id, link) in &links {
+        let Some(provider) = Provider::of(id) else { continue };
+        let ep = endpoints(config, provider);
+        let revoked = revoke(provider, ep.as_ref().and_then(|e| e.revoke.as_deref()), &link.tokens).await;
+        tracing::info!(service = id.as_str(), revoked, "drives: ended (the switch is off)");
+    }
+    links.len()
+}
+
+/// [`ended_when_off`] at the bridge's start.
+pub async fn end_when_off(state: AppState) {
+    ended_when_off(&state.config()).await;
+}
+
 /// An agent deleted (agents_admin.rs): taken out of every folder, so that a new agent of the same name never
 /// inherits them (review 18/11).
 pub async fn forget_agent(config: &Config, agent: &str) {
@@ -1908,6 +2161,14 @@ async fn folders_route(
     Ok(web::ok(set_folders(&state.config(), &id, &body.folders).await?))
 }
 
+async fn android_route(State(state): State<AppState>, Json(body): Json<AndroidBody>) -> ApiResult<Response> {
+    Ok(web::ok(set_android(&state.config(), &body).await?))
+}
+
+async fn forget_android_route(State(state): State<AppState>) -> ApiResult<Response> {
+    Ok(web::ok(forget_android(&state.config()).await?))
+}
+
 async fn disconnect_route(State(state): State<AppState>, UrlPath(id): UrlPath<String>) -> ApiResult<Response> {
     Ok(web::ok(disconnect(&state.config(), &id).await?))
 }
@@ -1921,6 +2182,7 @@ pub fn router() -> Router<AppState> {
         .route("/drives/{service}/browse", get(browse_route))
         .route("/drives/{service}/folders", put(folders_route))
         .route("/drives/{service}", axum::routing::delete(disconnect_route))
+        .route("/drives/google_drive/android", put(android_route).delete(forget_android_route))
 }
 
 #[cfg(test)]

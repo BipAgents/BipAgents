@@ -279,6 +279,10 @@ pub struct Stored {
     /// « Documents en ligne » (drives.rs): Google Drive, OneDrive, Dropbox, by their id. Same file and key.
     #[serde(default)]
     pub drives: BTreeMap<String, crate::drives::Link>,
+    /// Google Drive on Android for an install without Kerfy's Web client (drives.rs `AndroidGoogle`): the person's
+    /// choice, Kerfy's exchange (with its key) or their own Google project. Same file and key.
+    #[serde(default)]
+    pub drives_google_android: Option<crate::drives::AndroidGoogle>,
 }
 
 /// The encrypted file (Fernet, as mailbox.rs) and its key.

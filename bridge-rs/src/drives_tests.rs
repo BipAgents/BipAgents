@@ -115,6 +115,20 @@ async fn fake(seen: Seen, method: Method, uri: Uri, headers: HeaderMap, body: St
             _ => reply(400, json!({"error": "invalid_grant"})),
         };
     }
+    // Kerfy's exchange (the guichet's /v1/drive-exchange/token): the install's key, the form as JSON
+    if path == "/dx/v1/drive-exchange/token" {
+        if auth.as_deref() != Some("Bearer dx1.test-key") {
+            return reply(401, json!({"detail": "unknown key"}));
+        }
+        let v: Value = serde_json::from_str(&body).unwrap_or_default();
+        return match (v["grant_type"].as_str(), v["code"].as_str(), v["refresh_token"].as_str()) {
+            (Some("authorization_code"), Some("android"), _) if v.get("redirect_uri").is_none() => {
+                reply(200, json!({"access_token": "at-1", "refresh_token": "rt-1", "expires_in": 3600}))
+            }
+            (Some("refresh_token"), _, Some("rt-1")) => reply(200, json!({"access_token": "at-2", "expires_in": 3600})),
+            _ => reply(400, json!({"detail": "invalid_grant"})),
+        };
+    }
     if path == "/revoke" || path == "/dbx/auth/token/revoke" {
         return reply(200, json!({}));
     }
@@ -568,7 +582,7 @@ async fn google_on_android_through_the_web_client() {
     let mut without = config.clone();
     without.drives.clients.get_mut("google_drive").unwrap().web_client_id = None;
     let e = start(&without, "google_drive", &[], Pick::Folders, "android").unwrap_err();
-    assert_eq!((e.status.as_u16(), e.detail["code"].as_str()), (409, Some("not_configured")));
+    assert_eq!((e.status.as_u16(), e.detail["code"].as_str()), (409, Some("android_choice")));
 }
 
 #[tokio::test]
@@ -820,4 +834,126 @@ async fn review2_google_search_in_a_sub_folder_stays_in_it() {
         text(&call(&config, &vie, "drive_search", &args(json!({"words": "devis", "folder": "google_drive:gs"}))).await);
     assert!(found.contains("google_drive:gsd"), "{found}");
     assert!(!found.contains("google_drive:gd"), "Bail is in Maison, not in Travaux: {found}");
+}
+
+#[tokio::test]
+async fn a_new_dropbox_sign_in_renews_the_ended_old_key_before_revoking_it_never_the_new_one() {
+    let (base, seen) = serve().await;
+    let (_dir, config) = setup(&base);
+    connect(&config, "dropbox", &[], "").await;
+    // the old access token ended
+    let store = connections::store_of(&config);
+    let mut stored = store.read().unwrap();
+    stored.drives.get_mut("dropbox").unwrap().tokens.expires_at = Some(py::time_time() - 10.0);
+    store.write(&stored).unwrap();
+    let started = start(&config, "dropbox", &[], Pick::Folders, "ios").unwrap();
+    let state = started["state"].as_str().unwrap();
+    finish(&config, &format!("bipagents://oauth/callback?code=other&state={state}")).await.unwrap();
+    let revokes: Vec<Option<String>> = seen
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(_, p, _)| p == "/dbx/auth/token/revoke")
+        .map(|(_, _, a)| a.clone())
+        .collect();
+    assert_eq!(revokes, vec![Some("Bearer at-2".to_string())], "the old key renewed then revoked, not the new at-b");
+    assert_eq!(read_stored(&config).unwrap().drives["dropbox"].tokens.access_token, "at-b");
+}
+
+#[tokio::test]
+async fn the_switch_turned_off_ends_the_connections_kept() {
+    let (base, seen) = serve().await;
+    let (_dir, mut config) = setup(&base);
+    connect(&config, "dropbox", &[], "").await;
+    connect(&config, "onedrive", &[], "").await;
+    config.drives.enabled = false;
+    assert_eq!(ended_when_off(&config).await, 2);
+    assert!(read_stored(&config).unwrap().drives.is_empty());
+    assert!(seen.lock().unwrap().iter().any(|(_, p, _)| p == "/dbx/auth/token/revoke"));
+    // on: nothing ended
+    connect_on(&mut config).await;
+    assert_eq!(ended_when_off(&config).await, 0);
+    assert_eq!(read_stored(&config).unwrap().drives.len(), 1);
+}
+
+async fn connect_on(config: &mut Config) {
+    config.drives.enabled = true;
+    connect(config, "onedrive", &[], "").await;
+}
+
+/// A self-hosted install (no Web client of Kerfy's here): the person chooses, then Android's Google code and the
+/// renewals go through Kerfy's exchange with the install's key (Alex 18/11).
+#[tokio::test]
+async fn google_on_android_through_kerfy_s_exchange_or_an_own_project() {
+    let (base, seen) = serve().await;
+    let (_dir, mut config) = setup(&base);
+    config.drives.clients.get_mut("google_drive").unwrap().web_client_id = None;
+    config.drives.clients.get_mut("google_drive").unwrap().web_client_secret = None;
+    let google = |c: &Config| listing(c).unwrap()["drives"][0].clone();
+    assert_eq!(google(&config)["android"], "choose");
+    let e = start(&config, "google_drive", &["vie".into()], Pick::Folders, "android").unwrap_err();
+    assert_eq!(e.detail["code"], "android_choice");
+    // refused: not a Google client id, not a key, an http address elsewhere
+    let bad = |mode: &str, id: &str, key: &str, guichet: &str| AndroidBody {
+        mode: mode.into(),
+        client_id: id.into(),
+        client_secret: String::new(),
+        key: key.into(),
+        guichet: guichet.into(),
+    };
+    assert!(set_android(&config, &bad("kerfy", "x", "dx1.test-key", "")).await.is_err());
+    assert!(set_android(&config, &bad("kerfy", "k.apps.googleusercontent.com", "nope", "")).await.is_err());
+    assert!(set_android(&config, &bad("kerfy", "k.apps.googleusercontent.com", "dx1.a", "http://evil.example"))
+        .await
+        .is_err());
+    assert!(set_android(&config, &bad("own", "k.apps.googleusercontent.com", "", "")).await.is_err(), "no secret");
+    // Kerfy's exchange, agreed in the app
+    let chosen = set_android(
+        &config,
+        &bad("kerfy", "kerfy-web.apps.googleusercontent.com", "dx1.test-key", &format!("{base}/dx")),
+    )
+    .await
+    .unwrap();
+    assert_eq!(chosen["android"], "kerfy");
+    let started = start(&config, "google_drive", &["vie".into()], Pick::Folders, "android").unwrap();
+    assert_eq!(started["server_client_id"], "kerfy-web.apps.googleusercontent.com");
+    let query: HashMap<String, String> =
+        [("state", started["state"].as_str().unwrap()), ("code", "android"), ("picked_file_ids", "gf")]
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+    let shown = finish_query(&config, query).await.unwrap();
+    assert_eq!(shown["state"], "connected");
+    assert!(seen.lock().unwrap().iter().any(|(_, p, _)| p == "/dx/v1/drive-exchange/token"));
+    assert!(!seen.lock().unwrap().iter().any(|(_, p, _)| p == "/token"), "never Google's token endpoint directly");
+    // a renewal goes the same way
+    let store = connections::store_of(&config);
+    let mut stored = store.read().unwrap();
+    stored.drives.get_mut("google_drive").unwrap().tokens.expires_at = Some(py::time_time() + 10.0);
+    store.write(&stored).unwrap();
+    let vie = config.agents["vie"].clone();
+    let read = call(&config, &vie, "drive_read", &args(json!({"file": "google_drive:gd"}))).await;
+    assert_eq!(read["isError"], false, "{}", text(&read));
+    assert_eq!(read_stored(&config).unwrap().drives["google_drive"].tokens.access_token, "at-2");
+    // the key and the tokens never in the listing
+    let listed = listing(&config).unwrap().to_string();
+    assert!(!listed.contains("dx1.") && !listed.contains("at-2"));
+    // withdrawn: the Google Drive that relied on it disconnected too
+    let gone = forget_android(&config).await.unwrap();
+    assert_eq!((gone["android"].as_str(), gone["disconnected"].as_bool()), (Some("choose"), Some(true)));
+    assert!(read_stored(&config).unwrap().drives.get("google_drive").is_none());
+    // their own project
+    let own = AndroidBody {
+        mode: "own".into(),
+        client_id: "mine.apps.googleusercontent.com".into(),
+        client_secret: "my-secret".into(),
+        key: String::new(),
+        guichet: String::new(),
+    };
+    assert_eq!(set_android(&config, &own).await.unwrap()["android"], "own");
+    let started = start(&config, "google_drive", &[], Pick::Files, "android").unwrap();
+    assert_eq!(started["server_client_id"], "mine.apps.googleusercontent.com");
+    // a place with Kerfy's Web client: its own, whatever was chosen
+    config.drives.clients.get_mut("google_drive").unwrap().web_client_id = Some("g-web".into());
+    assert_eq!(google(&config)["android"], "place");
 }
