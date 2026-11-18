@@ -768,6 +768,9 @@ def place_folder(entry, rel):
         raise
 
 
+VAULT_OUTCOMES_KEPT = 200   # the last vault_keys outcomes kept (with each place's last one, whatever its age)
+
+
 def _vault_done_path():
     return VAULT_TRIED + "-done"   # root's own, beside VAULT_TRIED: each vault_keys order ended, one JSON line
 
@@ -780,9 +783,24 @@ def note_vault_outcome(order_id, number, sealed, error=None, key_service=None):
         line["error"] = str(error)[:300]
     if key_service:
         line["key_service"] = key_service
-    os.makedirs(os.path.dirname(_vault_done_path()), exist_ok=True)
-    with open(_vault_done_path(), "a") as fh:
-        fh.write(json.dumps(line) + "\n")
+    # kept: each place's last order (what its beats cite) and the last VAULT_OUTCOMES_KEPT (a done told again while
+    # the guichet still lists it: two days at most); written whole, root's alone (0600 whatever the umask)
+    items = _vault_outcomes() + [line]
+    recent = items[-VAULT_OUTCOMES_KEPT:]
+    last_of = {}
+    for item in items:
+        last_of[item.get("seat")] = item
+    kept = [item for item in items if item in recent or last_of.get(item.get("seat")) is item]
+    path = _vault_done_path()
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + ".tmp"
+    if os.path.lexists(tmp):
+        os.unlink(tmp)
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    with os.fdopen(fd, "w") as fh:
+        os.fchmod(fh.fileno(), 0o600)
+        fh.write("".join(json.dumps(item) + "\n" for item in kept))
+    os.replace(tmp, path)
 
 
 def _vault_outcomes():
