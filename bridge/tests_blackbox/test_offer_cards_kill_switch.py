@@ -149,3 +149,55 @@ def test_a_payment_typed_then_confirmed_before_the_watcher_looks_is_never_presse
         assert chrome.clicks == [] and chrome.values[("F-psp", 0)] == ""
     finally:
         chrome.stop()
+
+
+def test_a_cut_while_the_card_is_being_filled_tells_the_agent_the_cut(bridges, fakes, tmp_path):
+    """Review 18/11 F1: stopped half-way (the page reloading under the hold), the agent is told the cut, never « the
+    person suspended the payments »."""
+    chrome = FakeChrome()
+    try:
+        bridge, switch = offer_place(bridges, fakes, chrome, tmp_path)
+        chrome.reload_delay = 8   # past the watcher's 5 s, under the bridge's 10 s for one call
+        paid = {}
+        paying = threading.Thread(target=lambda: paid.update(result=pay_from_phone(bridge, ARGS, [FROM_PHONE_A])))
+        paying.start()
+        assert wait_until(lambda: chrome.reloading, timeout=60), "the payment page was never reloaded"
+        cut(switch)
+        paying.join(60)
+        result, _, answers = paid["result"]
+        assert answers == [(204, "")]
+        text = result["content"][0]["text"]
+        assert result["isError"] is True and SAID in text and "the person suspended" not in text, result
+        assert chrome.typed == [] and chrome.clicks == []
+    finally:
+        chrome.stop()
+
+
+class CutAtTheButton(FakeChrome):
+    """Kerfy Studio's cut lands while confirm_payment looks for the pay button: after its first check, before the
+    press (review 18/11: the second check right before the click)."""
+
+    def __init__(self, switch):
+        super().__init__()
+        self.switch, self.armed = switch, False
+
+    def _evaluate(self, params, session):
+        if self.armed and "__bipPay.findButton" in params.get("expression", ""):
+            cut(self.switch)
+        return super()._evaluate(params, session)
+
+
+def test_a_cut_between_confirm_s_first_check_and_the_press_presses_nothing(bridges, fakes, tmp_path):
+    chrome = CutAtTheButton(tmp_path / "offer-cards.json")
+    try:
+        bridge, switch = offer_place(bridges, fakes, chrome, tmp_path)
+        assert switch == chrome.switch
+        result, _, _ = pay_from_phone(bridge, ARGS, [FROM_PHONE_A])
+        assert result["isError"] is False, result
+        chrome.armed = True
+        confirm = tool(bridge, "confirm_payment", {"button": "Payer 12,50 €"})
+        assert switch.exists(), "the pay button was never looked for"
+        assert confirm["isError"] is True and SAID in confirm["content"][0]["text"], confirm
+        assert chrome.clicks == [] and chrome.values[("F-psp", 0)] == ""
+    finally:
+        chrome.stop()

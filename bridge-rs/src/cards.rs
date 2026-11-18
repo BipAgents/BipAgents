@@ -102,36 +102,51 @@ pub fn enabled(config: &Config) -> bool {
 /// The switch's folder: `<uid>.json` for each place's account (root's, 0644, seat-agent.py `OFFER_CARDS_DIR`).
 pub const REMOTE_SWITCH_DIR: &str = "/var/lib/bipagents/offer-cards";
 
-/// This place's file: `REMOTE_SWITCH_DIR/<uid>.json` (the black-box tests point `BIP_TEST_OFFER_SWITCH` elsewhere).
-fn remote_switch_path() -> &'static std::path::Path {
-    static PATH: std::sync::LazyLock<std::path::PathBuf> = std::sync::LazyLock::new(|| {
-        if let Some(path) = std::env::var_os("BIP_TEST_OFFER_SWITCH").filter(|p| !p.is_empty()) {
-            tracing::warn!(path = ?path, "card payments: Kerfy Studio's switch read from a test file");
-            return path.into();
-        }
-        // SAFETY: getuid has no preconditions and cannot fail.
-        let uid = unsafe { libc::getuid() };
-        std::path::Path::new(REMOTE_SWITCH_DIR).join(format!("{uid}.json"))
+/// This place's file: `REMOTE_SWITCH_DIR/<uid>.json`.
+fn remote_switch_path() -> std::path::PathBuf {
+    // SAFETY: getuid has no preconditions and cannot fail.
+    let uid = unsafe { libc::getuid() };
+    std::path::Path::new(REMOTE_SWITCH_DIR).join(format!("{uid}.json"))
+}
+
+/// The black-box tests' own file (`BIP_TEST_OFFER_SWITCH`, review 18/11 F5): only ever one more way to cut, never
+/// instead of this place's file, so whoever can change the bridge's environment can't lift Kerfy Studio's cut with
+/// it (the suite runs the release build: no test-only build of its own to put it behind).
+fn test_switch_path() -> Option<&'static std::path::Path> {
+    static PATH: std::sync::LazyLock<Option<std::path::PathBuf>> = std::sync::LazyLock::new(|| {
+        let path = std::env::var_os("BIP_TEST_OFFER_SWITCH").filter(|p| !p.is_empty())?;
+        tracing::warn!(path = ?path, "card payments: a test file may cut them too");
+        Some(path.into())
     });
-    &PATH
+    PATH.as_deref()
+}
+
+#[cfg(test)]
+thread_local! {
+    /// The unit tests' cut, for their own thread only (a `#[tokio::test]` runs on it): never another test's.
+    pub(crate) static TEST_CUT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// Kerfy Studio cut the agents' card payments on this place (`bipguichet cards off`).
 pub fn remote_off() -> bool {
-    remote_off_at(remote_switch_path())
+    #[cfg(test)]
+    if TEST_CUT.with(|c| c.get()) {
+        return true;
+    }
+    remote_off_at(&remote_switch_path()) || test_switch_path().is_some_and(remote_off_at)
 }
 
 /// What the file at `path` says, read again only when it changed (its inode, size or time: the seat agent replaces
 /// it whole). Only `{"offer_cards": false}` cuts.
 pub fn remote_off_at(path: &std::path::Path) -> bool {
     use std::os::unix::fs::MetadataExt;
-    type Seen = Option<(std::path::PathBuf, (u64, u64, i64, i64), bool)>;
-    static SEEN: std::sync::Mutex<Seen> = std::sync::Mutex::new(None);
+    type Seen = std::collections::HashMap<std::path::PathBuf, ((u64, u64, i64, i64), bool)>;
+    static SEEN: std::sync::LazyLock<std::sync::Mutex<Seen>> = std::sync::LazyLock::new(Default::default);
     let Ok(meta) = std::fs::metadata(path) else { return false };
     let stamp = (meta.ino(), meta.len(), meta.mtime(), meta.mtime_nsec());
     let mut seen = SEEN.lock().unwrap_or_else(|e| e.into_inner());
-    if let Some((at, was, off)) = seen.as_ref() {
-        if at == path && *was == stamp {
+    if let Some((was, off)) = seen.get(path) {
+        if *was == stamp {
             return *off;
         }
     }
@@ -140,7 +155,7 @@ pub fn remote_off_at(path: &std::path::Path) -> bool {
         .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
         .and_then(|v| v.get("offer_cards").and_then(Value::as_bool))
         == Some(false);
-    *seen = Some((path.to_path_buf(), stamp, off));
+    seen.insert(path.to_path_buf(), (stamp, off));
     off
 }
 
@@ -150,11 +165,33 @@ pub const REMOTE_OFF_NOTICE: &str = "Les paiements par carte sont suspendus pour
 /// How often `follow_remote_switch` looks (a stat, the file read only when it changed).
 const REMOTE_LOOK: std::time::Duration = std::time::Duration::from_secs(5);
 
+/// What this bridge applies of Kerfy Studio's switch, for the seat agent's beat (review 18/11 F2: `bipguichet cards
+/// status` tells the places that apply a cut from those whose bridge doesn't read it yet):
+/// `~/.local/state/bipagents/offer-cards-seen.json`, `{"off": true|false}`, written at start and at each change.
+pub const SEEN_FILE: &str = ".local/state/bipagents/offer-cards-seen.json";
+
+fn tell_seen(off: bool) {
+    if !on_offer() {
+        return; // only the offer's places have a seat agent to tell
+    }
+    let path = crate::place_backup::home().join(SEEN_FILE);
+    let written = (|| -> std::io::Result<()> {
+        crate::py::makedirs(&path.parent().unwrap_or(&path).to_string_lossy(), 0o755)?;
+        let tmp = path.with_extension("tmp");
+        crate::py::write_with_mode(&tmp.to_string_lossy(), crate::py::dumps(&json!({"off": off})).as_bytes(), 0o644)?;
+        std::fs::rename(&tmp, &path)
+    })();
+    if let Err(err) = written {
+        tracing::warn!(error = %err, "card payments: what Kerfy Studio's switch does here not written");
+    }
+}
+
 /// Kerfy Studio's switch followed: once it goes off, the payments under way are stopped as « Suspendre tous les
 /// paiements » stops them (asked ones refused, held browsers given back, the card's fields emptied) and noted in the
 /// journal; off or back on, the agents' payment rules follow (souls.rs `Shopping`). At start, off: the rules only.
 pub async fn follow_remote_switch(config: crate::config::SharedConfig) {
     let mut was_off = remote_off();
+    tell_seen(was_off);
     if was_off {
         tracing::warn!("card payments: cut by Kerfy Studio");
         crate::profile_files::reconcile_all(&config.get());
@@ -166,6 +203,7 @@ pub async fn follow_remote_switch(config: crate::config::SharedConfig) {
             continue;
         }
         was_off = off;
+        tell_seen(off);
         let config = config.get();
         if off {
             tracing::warn!("card payments: cut by Kerfy Studio, the payments under way stopped");

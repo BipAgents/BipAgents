@@ -576,7 +576,8 @@ async fn amount_differs(state: &AppState, agent: &AgentConfig, entry: &Held, sho
 async fn give_up(config: &Config, agent: &str, token: &str, outcome: &'static str, say: &str) -> Dict {
     let why = stopped(agent, token);
     release(config, agent, why.unwrap_or(outcome)).await;
-    refusal(if why.is_some() { STOPPED } else { say })
+    // asked to stop (cancel, « Suspendre », Kerfy Studio's cut): what stopped it, in the words for the person
+    refusal(if why.is_some() { stopped_text(STOPPED) } else { say })
 }
 
 fn journal(config: &Config, held: &Held, agent: &str, outcome: &str) {
@@ -1148,6 +1149,11 @@ pub const SUSPENDED: &str = "Card payments are suspended for the moment on this 
 person's choice): nothing of the card was typed, or it was erased from the page. Don't pay and don't try again now; \
 tell the person « Les paiements par carte sont suspendus pour le moment » (in their language): they can buy it \
 themselves on the site.";
+
+/// Kerfy Studio's cut, before anything is asked or typed (Link's `pay_with_link`, `pay_with_values`): the refusal.
+pub(crate) fn refused_while_cut() -> Option<Dict> {
+    cards::remote_off().then(|| refusal(SUSPENDED))
+}
 
 /// Why payments are off: Kerfy Studio's cut (`SUSPENDED`), else the person's switch or the install (`OFF`).
 fn off_text() -> &'static str {
@@ -1876,8 +1882,10 @@ async fn confirm(state: &AppState, agent: &AgentConfig, arguments: &Dict) -> any
         return Ok(refusal("No payment is waiting: call pay_with_card first."));
     };
     if entry.stop.is_some() {
-        return Ok(refusal("This payment is being given up (cancel_payment, or the person suspended the payments): \
-                           nothing is clicked. Don't pay."));
+        return Ok(refusal(stopped_text(
+            "This payment is being given up (cancel_payment, or the person suspended the payments): nothing is \
+             clicked. Don't pay.",
+        )));
     }
     // Pressed once only (audit 17/11, 2.1): a shop slow to answer is waited for (`watch`), never paid twice.
     if entry.clicked {
@@ -2023,8 +2031,8 @@ pub(crate) async fn pay_with_values(
     (url, port, host): (String, u16, String),
 ) -> Dict {
     let config = state.config();
-    if cards::remote_off() {
-        return refusal(SUSPENDED);
+    if let Some(refused) = refused_while_cut() {
+        return refused;
     }
     let _one_at_a_time = lock_of(&agent.name).lock_owned().await;
     if held().contains_key(&agent.name) {
@@ -2498,6 +2506,21 @@ pub fn app_router() -> Router<AppState> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Kerfy Studio's cut (review 18/11): Link's one-time cards are refused before Link is asked, a fill's stop and
+    /// a payment being given up tell the agent the cut, not « the person suspended ».
+    #[test]
+    fn kerfy_s_cut_is_what_the_agent_is_told() {
+        assert!(refused_while_cut().is_none());
+        assert_eq!(stopped_text(STOPPED), STOPPED);
+        cards::TEST_CUT.with(|c| c.set(true));
+        let refused = refused_while_cut().expect("refused while cut");
+        assert!(py::dumps(&Value::Object(refused)).contains("Les paiements par carte sont suspendus pour le moment"));
+        assert_eq!(stopped_text(STOPPED), SUSPENDED);
+        assert_eq!(off_text(), SUSPENDED);
+        cards::TEST_CUT.with(|c| c.set(false));
+        assert_eq!(off_text(), OFF);
+    }
 
     #[test]
     fn the_test_interval_of_the_sweep_is_only_ever_shorter() {

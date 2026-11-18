@@ -990,3 +990,36 @@ def test_a_beat_between_long_orders_keeps_the_card_payments_switch_too(tmp_path,
     monkeypatch.setattr(agent, "keep_offer_cards", lambda answer: kept.append(answer))
     agent.Beating({}, {})._beat()
     assert kept == [{"offer_cards": {"1": False}}]
+
+
+def test_review_a_place_installed_again_leaves_no_cut_behind(tmp_path):
+    """Review 18/11 (info): a place installed again gets a new account, another uid (shared_images.py); the cut written
+    for its old uid is never removed (only the uids of today's accounts are looked at), and comes back for any later
+    account given that uid while an older guichet answers without `offer_cards`."""
+    import os
+    agent = _seat_agent()
+    folder = tmp_path / "offer-cards"
+    me = (os.getuid(), os.getgid())
+    agent.keep_offer_cards({"offer_cards": {"1": False}}, {1: 1001}, str(folder), me)
+    assert (folder / "1001.json").exists()
+    # place 1 installed again (new uid 2001), the cut lifted
+    agent.keep_offer_cards({"offer_cards": {"1": True}}, {1: 2001}, str(folder), me)
+    assert not (folder / "1001.json").exists(), "the old uid's cut stays behind"
+
+
+def test_the_beat_says_what_each_place_s_bridge_applies_of_the_card_payments_switch(tmp_path):
+    """Review 18/11 F2: the bridge writes what it applies (`{"off": …}`); the beat says it per place ("cards"), absent
+    for a bridge that doesn't read the switch yet, so `bipguichet cards status` can tell them apart."""
+    agent = _seat_agent()
+    home = tmp_path / "bip"
+    assert agent.cards_seen(str(home)) is None
+    seen = home / agent.OFFER_CARDS_SEEN
+    seen.parent.mkdir(parents=True)
+    seen.write_text('{"off": true}')
+    assert agent.cards_seen(str(home)) == "off"
+    seen.write_text('{"off": false}')
+    assert agent.cards_seen(str(home)) == "on"
+    for other in ('{"off": "yes"}', "[]", "not json", "{}"):
+        seen.write_text(other)
+        assert agent.cards_seen(str(home)) is None
+    assert agent.OFFER_CARDS_SEEN == ".local/state/bipagents/offer-cards-seen.json"

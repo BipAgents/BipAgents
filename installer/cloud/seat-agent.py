@@ -638,7 +638,20 @@ def health():
         last_used = used(entry.pw_dir)
         if last_used is not None:
             seats[str(number)]["used"] = last_used
+        cards = cards_seen(entry.pw_dir)
+        if cards is not None:
+            seats[str(number)]["cards"] = cards
     return seats
+
+
+OFFER_CARDS_SEEN = ".local/state/bipagents/offer-cards-seen.json"   # what its bridge applies (bridge-rs/src/cards.rs)
+
+
+def cards_seen(home):
+    """What the place's bridge applies of Kerfy Studio's card payments switch: "off" (cut), "on", or None (a bridge
+    that doesn't read the switch yet: `bipguichet cards status` says so)."""
+    off = read_json(os.path.join(home, OFFER_CARDS_SEEN)).get("off")
+    return None if not isinstance(off, bool) else ("off" if off else "on")
 
 
 # -- memory and CPU: each place's soft share, compressed swap, and what each place holds -------------------------------
@@ -825,6 +838,21 @@ def keep_offer_cards(answer, uids=None, folder=None, owner=(0, 0)):
     except OSError as exc:
         log("card payments switch: folder not ready: %s" % exc)
         return
+    # a place installed again has a new account, another uid (review 18/11 F3): the old uid's file goes, never to cut
+    # a later account given that uid
+    known = set(uids.values())
+    try:
+        for name in os.listdir(folder):
+            stem = name[:-len(".json")] if name.endswith(".json") else None
+            if stem is not None and stem.isdigit() and int(stem) in known:
+                continue
+            try:
+                os.unlink(os.path.join(folder, name))
+            except IsADirectoryError:
+                continue
+            log("card payments switch: %s removed (no place has that account any more)" % name)
+    except OSError as exc:
+        log("card payments switch: old files not removed: %s" % exc)
     for number, uid in sorted(uids.items()):
         path = os.path.join(folder, "%d.json" % uid)
         off = given.get(str(number)) is False
