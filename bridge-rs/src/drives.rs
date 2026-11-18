@@ -342,7 +342,9 @@ impl Fault {
         match self {
             Fault::NotFound => format!("not found on {label} (moved, deleted, or not shared with BipAgents)"),
             Fault::Expired => {
-                format!("the connection to {label} ended: your person connects it again in the app (Documents en ligne)")
+                format!(
+                    "the connection to {label} ended: your person connects it again in the app (Documents en ligne)"
+                )
             }
             Fault::RateLimited(Some(s)) => format!("{label} asks to slow down: try again in {s} seconds"),
             Fault::RateLimited(None) => format!("{label} asks to slow down: try again in a minute"),
@@ -508,7 +510,11 @@ fn agents_checked(config: &Config, agents: &[String]) -> ApiResult<Vec<String>> 
             return Err(coded(422, "agent", &format!("no agent {name:?}")));
         }
         if crate::family_agent::is_family(config, name) || crate::project_agent::is_project(config, name) {
-            return Err(coded(422, "agent", &format!("{name:?} is shared with others: it can't read a person's drive")));
+            return Err(coded(
+                422,
+                "agent",
+                &format!("{name:?} is shared with others: it can't read a person's drive"),
+            ));
         }
         if !out.contains(name) {
             out.push(name.clone());
@@ -944,7 +950,8 @@ impl Api {
     async fn get(&self, url: &str, query: &[(&str, &str)]) -> Result<Value, Fault> {
         let query: Vec<(String, String)> = query.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
         let url = url.to_string();
-        self.json(Box::new(move |http: &reqwest::Client, token: &str| http.get(&url).bearer_auth(token).query(&query))).await
+        self.json(Box::new(move |http: &reqwest::Client, token: &str| http.get(&url).bearer_auth(token).query(&query)))
+            .await
     }
 
     async fn post(&self, url: &str, body: Value) -> Result<Value, Fault> {
@@ -1006,8 +1013,12 @@ impl Api {
                 ))?;
                 let q = format!("'{}' in parents and trashed = false", google_quoted(&folder.id));
                 let fields = format!("nextPageToken,files({GOOGLE_FIELDS})");
-                let mut query =
-                    vec![("q", q.as_str()), ("fields", fields.as_str()), ("pageSize", "100"), ("orderBy", "folder,name")];
+                let mut query = vec![
+                    ("q", q.as_str()),
+                    ("fields", fields.as_str()),
+                    ("pageSize", "100"),
+                    ("orderBy", "folder,name"),
+                ];
                 if let Some(c) = cursor {
                     query.push(("pageToken", c));
                 }
@@ -1153,7 +1164,9 @@ impl Api {
                 }
                 None => (
                     (Box::new(move |http: &reqwest::Client, token: &str| {
-                        http.get(format!("{api}/files/{}", path_segment(&id))).bearer_auth(token).query(&[("alt", "media")])
+                        http.get(format!("{api}/files/{}", path_segment(&id)))
+                            .bearer_auth(token)
+                            .query(&[("alt", "media")])
                     }) as Build<'_>),
                     item.name.clone(),
                     item.mime.clone(),
