@@ -91,6 +91,10 @@ pub struct Decision {
     /// The bridge process that started its resumed turn (`BOOT`): another one's means the bridge restarted meanwhile.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resuming: Option<String>,
+    /// « Je le taperai moi-même » (secrets.rs, 17/11): the person was seen holding the agent's browser since; the agent
+    /// goes on once they hand it back.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub held: bool,
 }
 
 impl Place {
@@ -156,6 +160,7 @@ pub fn bridge_cards(state: &AppState, config: &Config, agent: Option<&str>) -> V
     items.extend(crate::sandbox_sites::pending_items(config, agent));
     items.extend(crate::vault_logins::pending_items(config, agent));
     items.extend(crate::terms_consent::pending_items(config, agent));
+    items.extend(crate::person_ok::pending_items(config, agent));
     items.extend(crate::secrets::pending_items(config, agent));
     items.extend(crate::connectors::pending_items(state, config, agent));
     items.extend(crate::storage_watch::pending_items(config, agent));
@@ -205,8 +210,12 @@ fn fold_key(item: &Dict) -> Option<String> {
         return Some(format!("{agent}\u{1f}mailrule\u{1f}{action}\u{1f}{mailbox}"));
     }
     if run.starts_with(crate::held_approvals::RUN_PREFIX) {
-        // what a turn nobody followed asked, of the same kind (held_approvals.rs): one card
+        // what a turn nobody followed asked, of the same kind (held_approvals.rs): one card; a critical kind never
+        // (review R3, 18/11: one « Oui » must not delete an event, send a form and run a command at once)
         let kind = field("bip_held", "kind")?;
+        if crate::approval_level::rule_of(&kind).critical {
+            return None;
+        }
         return Some(format!("{agent}\u{1f}held\u{1f}{kind}"));
     }
     None
@@ -687,6 +696,27 @@ pub fn taken(config: &Config, run_id: &str) {
     update(config, run_id, |p| p.taken = true);
 }
 
+/// A card answered before `watch` placed it (within its first second), whose waiting call could not tell the agent
+/// (« Je le taperai moi-même », the browser still held when the call ended: secrets.rs): placed now in the turn of
+/// the call, its answer kept for `settle` (`summary`: what it asked).
+pub async fn answered_unplaced(state: &AppState, agent: &AgentConfig, run_id: &str, tool: &str, choice: &str, summary: &str) {
+    let config = state.config();
+    if of(&config, run_id).is_none() {
+        place_made(state, agent, run_id, tool).await;
+    }
+    let Some(place) = update(&config, run_id, |p| {
+        if p.summary.is_empty() {
+            p.summary = summary.to_string();
+        }
+        p.clone()
+    }) else {
+        return;
+    };
+    if place.decided.is_none() && !place.taken {
+        decide(state, run_id, &place, choice);
+    }
+}
+
 /// The card `place` answered with `choice`: kept until the agent knows it (`settle`). A card never placed was asked
 /// in no conversation: nobody to tell.
 fn decide(state: &AppState, run_id: &str, place: &Place, choice: &str) {
@@ -698,7 +728,8 @@ fn decide(state: &AppState, run_id: &str, place: &Place, choice: &str) {
         (st.followed_since, st.tool_calls)
     });
     let (followed_since, calls) = followed.unwrap_or_default();
-    let decision = Decision { choice: choice.to_string(), at: py::time_time(), followed_since, calls, resuming: None };
+    let decision =
+        Decision { choice: choice.to_string(), at: py::time_time(), followed_since, calls, resuming: None, held: false };
     let config = state.config();
     if update(&config, run_id, |p| p.decided = Some(decision.clone())).is_none() {
         // its place dropped meanwhile (`watch` read it before): kept again
@@ -899,6 +930,21 @@ async fn settle(state: &AppState) {
         if now - decision.at < take_grace(&card, &place) {
             continue;
         }
+        // « Je le taperai moi-même »: once the person has taken the agent's browser and handed it back (secrets.rs)
+        match crate::secrets::self_hand(state, &card, &place.agent, &decision.choice, decision.held, now - decision.at) {
+            Some(crate::secrets::Hand::Taken) => {
+                update(&config, &card, |p| p.decided.iter_mut().for_each(|d| d.held = true));
+                continue;
+            }
+            Some(crate::secrets::Hand::Wait) => continue,
+            Some(crate::secrets::Hand::Closed) => {
+                // never taken while the agent waited, or kept too long: nothing told (review of 17/11)
+                tracing::info!(agent = %place.agent, card = %card, "« Je le taperai moi-même »: closed, the hand never came back");
+                forget(&config, &card);
+                continue;
+            }
+            Some(crate::secrets::Hand::Back) | None => {}
+        }
         match turn_now(state, &card, &place, &decision).await {
             TurnNow::Going => {}
             TurnNow::Told => {
@@ -936,8 +982,11 @@ fn resume(state: &AppState, card: &str, place: &Place, decision: &Decision) {
     let first = {
         let mut waiting = RESUMES.lock().unwrap_or_else(|e| e.into_inner());
         let list = waiting.entry(key.clone()).or_default();
-        let ok = allowed(&decision.choice);
-        list.push((card.to_string(), told_words(&config, card, &place.summary, ok), ok));
+        // « Je le taperai moi-même »: the person signed in themselves, the agent goes on (secrets.rs)
+        let ok = allowed(&decision.choice) || decision.choice == crate::secrets::SELF;
+        let words = crate::secrets::resume_words(card, &decision.choice, &place.summary)
+            .unwrap_or_else(|| told_words(&config, card, &place.summary, ok));
+        list.push((card.to_string(), words, ok));
         list.len() == 1
     };
     if !first {
@@ -1108,7 +1157,7 @@ mod tests {
     }
 
     fn decision(followed_since: f64, calls: u32) -> Decision {
-        Decision { choice: "once".into(), at: 10.0, followed_since, calls, resuming: None }
+        Decision { choice: "once".into(), at: 10.0, followed_since, calls, resuming: None, held: false }
     }
 
     #[test]

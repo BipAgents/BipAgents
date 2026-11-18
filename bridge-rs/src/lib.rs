@@ -146,9 +146,15 @@ pub mod style_skills;
 pub mod tool_asks;
 pub mod tool_diet;
 pub mod turn_thinking;
+/// What the agent does now, for the apps (`turn.status`, 16/11).
+pub mod turn_status;
 /// A message sent mid-turn before the agent acted: the turn started again with it.
 pub mod turn_restart;
 pub mod terms_consent;
+/// A card « Oui / Non » while an agent's call waits: a form to a new site, an event deleted (audit 17/11).
+pub mod person_ok;
+/// The first form an agent's browser sends to a site: « Envoyer sur ce site ? » (audit 1.2).
+pub mod form_send;
 pub mod tool_kinds;
 /// The providers EUrouter tries first, for its prompt cache.
 pub mod model_route;
@@ -245,8 +251,10 @@ pub mod used;
 pub mod place_import;
 pub mod vault;
 pub mod vault_contacts;
+pub mod vault_line;
 pub mod vault_logins;
 pub mod vault_match;
+pub mod vault_used;
 // connectors an agent makes on request (2026-10-28): their secrets, their store and approval, their runs
 pub mod connectors;
 pub mod connectors_run;
@@ -259,5 +267,8 @@ pub mod agent_restart;
 /// « Ce que tes agents font tout seuls »: routines, tasks, scans and scheduled connectors in one list (2026-10-28).
 pub mod autonomous;
 pub mod secrets;
+/// The vault's keys sealed by a place key, under both halves (this server's, the key service's): lot 1 of « Clé du
+/// coffre » (16/11), off unless the place is enrolled (`bipbridge vault-keys enable`).
+pub mod sealed_keys;
 
 pub use app::AppState;

@@ -734,6 +734,9 @@ pub struct Config {
     /// `[brake]` (loop_brake.rs): a turn going round in circles stopped. Not in the serialized form either.
     #[serde(skip)]
     pub brake: crate::loop_brake::Settings,
+    /// `[status]` (turn_status.rs): what the agent does now, for the apps that ask. Not in the serialized form either.
+    #[serde(skip)]
+    pub status: crate::turn_status::Settings,
     /// `[rooms]` (rooms.rs): not in the serialized form either.
     #[serde(skip)]
     pub rooms: RoomsConfig,
@@ -836,13 +839,13 @@ pub struct PaymentsConfig {
     /// `offer_cards`: false by default. Off: the apps don't show card payments on the offer's places, and no agent
     /// pays with a card there (the hand-over, handover.rs, stays).
     pub offer_cards: bool,
-    /// `offer_cap_max_eur`: the highest cap a person may set on a card there (150 € by default, 1 to 1000).
+    /// `offer_cap_max_eur`: the highest cap a person may set on a card there (1 000 € by default: Alex 18/11, a concert ticket at 160 € must go through; 1 to 1000).
     pub offer_cap_max_eur: i64,
 }
 
 impl Default for PaymentsConfig {
     fn default() -> Self {
-        PaymentsConfig { offer_cards: false, offer_cap_max_eur: 150 }
+        PaymentsConfig { offer_cards: false, offer_cap_max_eur: 1000 }
     }
 }
 
@@ -880,6 +883,7 @@ impl Config {
             notebook: NotebookConfig::default(),
             jobs: JobsConfig::default(),
             brake: crate::loop_brake::Settings::default(),
+            status: crate::turn_status::Settings::default(),
             rooms: RoomsConfig::default(),
             guide: GuideConfig::default(),
             place_agents_max: None,
@@ -1925,6 +1929,7 @@ pub fn parse_config(data: &Value, source_path: Option<&str>) -> Result<Config> {
         notebook,
         jobs,
         brake: crate::loop_brake::Settings::from_table(table(data, "brake")),
+        status: crate::turn_status::Settings::from_table(table(data, "status")),
         rooms,
         guide,
         place_agents_max,

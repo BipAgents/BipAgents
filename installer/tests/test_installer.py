@@ -744,6 +744,80 @@ def test_every_install_gets_the_publishers_push_relay(tmp_path, monkeypatch):
     assert "push.mine.org" in config.read_text()
 
 
+def test_card_payments_open_on_the_offers_places_only(tmp_path, monkeypatch):
+    """Alex 18/11: `[payments] offer_cards = true` on the offer's places (guichet token in backup.json, as the bridge
+    tells them), the rest of bridge.toml kept, the bridge restarted only when it changed; self-hosted never touched."""
+    import json as _json
+    from bipinstall import bridgeconf, drain, migrations
+    config = tmp_path / ".config" / "bipagents" / "bridge.toml"
+    config.parent.mkdir(parents=True)
+    runner = hermes.Runner()
+    runner.dry = False
+    ran = []
+    runner.run = lambda args, **kw: ran.append(list(args)) or ""
+    monkeypatch.setattr(drain, "until_quiet", lambda path, what: ran.append(["drain", what]) or "")
+    body = 'bridge_key = "k"\ncloud = true\n\n[cron]\nwatch = true\n\n[agents.vie]\nurl = "http://127.0.0.1:1/v1"\n'
+    # self-hosted (no guichet token, or an empty one): untouched, nothing restarted
+    config.write_text(body)
+    assert "not a place" in migrations.offer_cards_on(runner, tmp_path)
+    settings = config.parent / "backup.json"
+    settings.write_text(_json.dumps({"url": "https://g.example", "token": ""}))
+    assert "not a place" in migrations.offer_cards_on(runner, tmp_path)
+    assert config.read_text() == body and ran == []
+    # an offer place without [payments]: added, drained, restarted
+    settings.write_text(_json.dumps({"url": "https://g.example/v1/backup", "token": "t", "password": "p"}))
+    assert "open on this place" in migrations.offer_cards_on(runner, tmp_path)
+    assert config.read_text() == body + "\n[payments]\noffer_cards = true\n"
+    assert ran[0] == ["drain", "bridge"] and len(ran) == 2
+    # idempotent: a second run changes and restarts nothing
+    ran.clear()
+    assert "already" in migrations.offer_cards_on(runner, tmp_path) and ran == []
+    # a false one is turned true, the cap and other tables kept
+    config.write_text('bridge_key = "k"\n\n[payments]\noffer_cards = false\noffer_cap_max_eur = 80\n\n[cron]\nwatch = true\n')
+    migrations.offer_cards_on(runner, tmp_path)
+    assert config.read_text() == ('bridge_key = "k"\n\n[payments]\noffer_cards = true\noffer_cap_max_eur = 80\n'
+                                  '\n[cron]\nwatch = true\n')
+    # a bridge.toml that doesn't parse: left as it is, said, not marked done (tried again next update)
+    ran.clear()
+    config.write_text('bridge_key = "k"\n[payments\n')
+    with pytest.raises(migrations.NotYet) as said:
+        migrations.offer_cards_on(runner, tmp_path)
+    assert "doesn't parse" in str(said.value) and any("offer-cards-on" in line for line in runner.log)
+    assert config.read_text() == 'bridge_key = "k"\n[payments\n' and ran == []
+    # review 18/11 (R2): headers with comments or spaces, an inline table, an array after it: one [payments], true
+    settings.write_text(_json.dumps({"url": "https://g.example", "token": "t"}))
+    for given in ('bridge_key = "k"\n\n[ payments ]  # Kerfy\noffer_cards = false\n\n[[x]]\nn = 1\n',
+                  'bridge_key = "k"\npayments = { offer_cap_max_eur = 80 }\n\n[cron]\nwatch = true\n',
+                  'bridge_key = "k"\npayments = {offer_cards = false}  # off\n',
+                  'bridge_key = "k"\n\n[[x]]\npayments = { a = 1 }\n'):
+        config.write_text(given)
+        migrations.offer_cards_on(runner, tmp_path)
+        doc = bridgeconf.tomllib.loads(config.read_text())
+        assert doc["payments"]["offer_cards"] is True, given
+        assert config.read_text().count("offer_cards") == 1, given
+    # a shape the edit can't change (dotted key): NotYet, the file kept, the update goes on
+    config.write_text('bridge_key = "k"\npayments.offer_cards = false\n')
+    with pytest.raises(migrations.NotYet):
+        migrations.offer_cards_on(runner, tmp_path)
+    assert config.read_text() == 'bridge_key = "k"\npayments.offer_cards = false\n'
+    # a refusal by bridgeconf (e.g. the agents' addresses lost) becomes NotYet too, never a stopped update
+    monkeypatch.setattr(bridgeconf, "update", lambda *a, **k: (_ for _ in ()).throw(bridgeconf.BridgeConfigError("refused")))
+    config.write_text('bridge_key = "k"\n')
+    with pytest.raises(migrations.NotYet):
+        migrations.offer_cards_on(runner, tmp_path)
+    monkeypatch.undo()
+    # a token made of spaces is no token: a home install, untouched
+    settings.write_text(_json.dumps({"url": "https://g.example", "token": "   "}))
+    assert "not a place" in migrations.offer_cards_on(runner, tmp_path)
+    # a home install without [payments] (no backup.json at all): stays without it
+    settings.unlink()
+    home_body = 'bridge_key = "k"\n\n[vault]\ncards = "auto"\n'
+    config.write_text(home_body)
+    assert "not a place" in migrations.offer_cards_on(runner, tmp_path) and config.read_text() == home_body
+    assert "2026-11-18-offer-cards-on" in [mid for mid, _ in migrations.MIGRATIONS]
+    assert "2026-11-18-offer-cards-on" in migrations.BRIDGE_ONLY
+
+
 def test_bridge_settings_migrations_apply_over_the_persons_own_hermes(tmp_path, monkeypatch):
     from bipinstall import migrations
     monkeypatch.setattr(migrations, "STATE", tmp_path / "migrations.json")
@@ -1095,6 +1169,7 @@ def test_a_server_the_app_created_installs_without_a_question(monkeypatch, tmp_p
     assert 'cloud = true\npublic_url = "https://164.90.10.20"' in out
     assert '[lan]\nenabled = true\nport = 443\naddress = "164.90.10.20"' in out
     assert f'[setup]\nfile = "{tmp_path}/.config/bipagents/setup.json"' in out
+    assert '[payments]\noffer_cards = true' in out   # agent card payments open on the offer (18/11), opt-in per person
     # the offer's model from the start, with a placeholder key until the claim writes the person's
     assert "config set model.provider custom" in out and "config set model.default glm-5.3-flash" in out
     # (the dry run hides every *_KEY value as <key>; the value itself is the installer's placeholder)

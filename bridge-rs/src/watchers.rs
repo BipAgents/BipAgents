@@ -219,6 +219,12 @@ pub fn parse_purchase(map: &Dict) -> Result<connectors::Purchase, String> {
     if site.is_empty() || !site.contains('.') {
         return Err("watch.purchase.site: the shop's site, e.g. ticketmaster.fr.".into());
     }
+    // its browser sends forms there with no card (form_send.rs `purchase_sites`): one host's name, never a wildcard
+    if site.parse::<std::net::IpAddr>().is_err() && !crate::form_send::plain_host(&site) {
+        return Err("watch.purchase.site: one shop's host name (letters, digits, dashes; no *), e.g. ticketmaster.fr; \
+an accented name in its xn-- form."
+            .into());
+    }
     let what = crate::cards::quoted(&map.get("what").map(py::py_str).unwrap_or_default(), 80);
     if what.is_empty() {
         return Err("watch.purchase.what: what to buy, in a few words.".into());
@@ -711,7 +717,10 @@ fn push_run(rt: &mut Runtime, run: RunRecord) {
 
 /// Errors that are not the watcher's own failures (off, waiting for approval, changed since): not counted.
 fn not_its_fault(err: &RunError) -> bool {
-    matches!(err, RunError::Unknown | RunError::NotApproved | RunError::Off | RunError::Changed)
+    matches!(
+        err,
+        RunError::Unknown | RunError::NotApproved | RunError::Off | RunError::Changed | RunError::VaultClosed(_)
+    )
 }
 
 struct Running(String);

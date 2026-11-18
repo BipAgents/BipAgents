@@ -1249,6 +1249,13 @@ pub fn purge_audio(config: &Config, retention_days: i64, now: Option<f64>) -> us
 
 // --- MCP (streamable HTTP, JSON-RPC) ------------------------------------------------------------------------------
 
+/// The tools of this server that read the mailboxes' passwords (sealed with the vault's keys, sealed_keys.rs).
+fn reads_sealed_stores(name: &str) -> bool {
+    mailbox::MAIL_TOOL_NAMES.contains(&name)
+        || crate::mail_tidy::TOOL_NAMES.contains(&name)
+        || crate::archives::TOOL_NAMES.contains(&name)
+}
+
 fn rpc_result(request_id: &Value, result: Value) -> Value {
     json!({"jsonrpc": "2.0", "id": request_id, "result": result})
 }
@@ -1453,6 +1460,43 @@ fn carnet_turn(state: &AppState, agent: &str, turn: Option<&crate::loop_brake::T
     let routine = session.as_deref().is_some_and(|s| s.starts_with("cron_"));
     let busy = turn.background || live || routine;
     reads::Turn { run: Some(turn.run_id.clone()), session, cap, busy }
+}
+
+/// Before `calendar_delete` (audit 1.3, Alex 17/11: critical, as `mail_trash`): the person's card « Oui / Non » for
+/// an event that would be deleted now (the phone's copy, a mailbox's calendar: deleted at once there, no trash). None:
+/// go on (« Oui », or nothing to delete: the tool says why). A family agent's: the card goes to the calendar's owner
+/// instead, never to whoever asked (family_calendar.rs `owner_card`, Alex 18/11).
+async fn delete_card(state: &AppState, agent: &AgentConfig, arguments: &Dict, family: bool) -> Option<Dict> {
+    if family {
+        return None;
+    }
+    let config = state.config();
+    let id = tk::strip(&tk::str_or_empty(arguments.get("id"))).to_string();
+    let found = if id.starts_with("mail:") {
+        let (c, a) = (config.clone(), agent.name.clone());
+        let sources = tokio::task::spawn_blocking(move || crate::caldav::sources(&c, &a)).await.ok()?;
+        crate::caldav::deletable(&id, &sources).await.map(|(title, start, label)| (title, format!("{start} ({label})")))
+    } else {
+        let (c, a, i) = (config.clone(), agent.name.clone(), id.clone());
+        tokio::task::spawn_blocking(move || crate::calendar::deletable(&c, &a, &i)).await.ok().flatten()
+    };
+    let (title, when) = found?;
+    let lang = crate::mail_tidy::language(&config, &agent.name);
+    let shown = crate::mail_tidy::shown_agent(&config, &agent.name);
+    let card = crate::person_ok::Card {
+        kind: crate::person_ok::CALENDAR_DELETE,
+        tool: "calendar_delete",
+        command: format!("calendar_delete {id}"),
+        summary: crate::calendar::delete_sentence(&lang, &shown, &title),
+        detail: format!("{when}\n{}", crate::cards::quoted(&title, 300)),
+        always: None,
+    };
+    match crate::person_ok::ask(state, agent, card).await {
+        crate::person_ok::Answer::Once | crate::person_ok::Answer::Always => None,
+        crate::person_ok::Answer::Deny => Some(tool_text(crate::calendar::DELETE_REFUSED, true)),
+        crate::person_ok::Answer::NoAnswer => Some(tool_text(crate::calendar::DELETE_NO_ANSWER, true)),
+        crate::person_ok::Answer::Held => Some(tool_text(crate::calendar::DELETE_HELD, false)),
+    }
 }
 
 /// One tool call. Err: what Python lets through (a store that cannot be read or written): a 500.
@@ -2026,6 +2070,12 @@ async fn mcp(
     };
     // a deferred tool's call that the model's constrained names ended on an in-view tool (tool_diet.rs)
     let name = crate::tool_diet::reroute(&state.config(), &agent, &name, &arguments);
+    if crate::sealed_keys::closed(&state.config()) && reads_sealed_stores(&name) {
+        // the vault's keys sealed and not reopened yet (a server restart): plain words, never « give me the password »
+        tracing::info!(agent = %agent.name, tool = %name, "a mail tool called while the vault is closed");
+        let result = crate::sealed_keys::closed_result(&state.config(), &lang);
+        return Ok(crate::web::json_response(200, &rpc_result(&request_id, result)));
+    }
     if crate::family_agent::is_family(&state.config(), &agent.name) {
         // the family's agent: only the family's tools, in every turn, its creator's too (family_agent.rs)
         // the calendars family members share with it are answered below, once whose turn it is is known
@@ -2222,6 +2272,12 @@ async fn mcp(
         }
         wrote(&agent.name, &name, &arguments, &mut result);
         return Ok(answer(result));
+    }
+    if name == "calendar_delete" {
+        // critical (audit 1.3, Alex 17/11: as mail_trash): a card before each event deleted (person_ok.rs)
+        if let Some(refused) = delete_card(&state, &agent, &arguments, family).await {
+            return Ok(answer(refused));
+        }
     }
     if family && crate::calendar::TOOL_NAMES.contains(&name.as_str()) {
         // the calendars its members chose to share with it, each asked on her own place (family_calendar.rs); `who`

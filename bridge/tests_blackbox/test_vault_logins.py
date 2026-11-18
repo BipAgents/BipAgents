@@ -224,7 +224,7 @@ def test_the_tools_are_listed_for_an_agent_that_may_hold_credentials(bridges, fa
     body = {"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}}
     listed = bridge.post(VAULT, json=body, headers={"Authorization": f"Bearer {TOKEN}"}).json()["result"]["tools"]
     assert [t["name"] for t in listed] == ["vault_create_login", "vault_confirm_login", "vault_contact_details",
-                                         "vault_save_contact_details", "accept_terms", "vault_login"]
+                                         "vault_save_contact_details", "accept_terms", "ask_to_send", "vault_login"]
     assert "captchas stay the person's" in listed[0]["description"]
     assert bridge.post(VAULT, json=body, headers={"Authorization": "Bearer nope"}).status_code == 401
 
@@ -263,6 +263,12 @@ def test_a_card_first_then_the_password_typed_into_password_fields_only_never_re
             "kind": "login", "label": "shop.example", "origin": "https://shop.example", "identifier": "alex@example.org",
             "identifier_type": "email", "agents": ["vie"], "created_by": "vie", "pending": True}
         assert password.encode() not in (bridge.state_dir / "vault" / "vault.json.enc").read_bytes()
+        # recorded by the bridge for the conversation's vault line (« Mot de passe créé par le coffre… »), never in
+        # the answer; the vault list's « Récents » from the use kept (le coffre rassure, 17/11)
+        assert "bip:" not in text
+        [fill] = [json.loads(l) for l in (bridge.data / "vault-fills.jsonl").read_text().splitlines()]
+        assert (fill["item"], fill["host"], fill["how"]) == (item["id"], "shop.example", "created")
+        assert item["last_used_by"] == "vie" and item["last_used_at"] and item["domain"] == "shop.example"
         assert vault_records(bridge)[0]["secret"] == {"password": password}
         [add] = [json.loads(e["stdin"]) for e in bridge.commands.entries("podman") if e["argv"][:3] == ["exec", "-i", "hermes-vie"]]
         assert add["op"] == "add" and add["origin"] == "https://shop.example" and add["secret"]["password"] == password

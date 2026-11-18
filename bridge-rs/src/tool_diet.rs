@@ -129,7 +129,7 @@ pub const CREDENTIALS_DIRECT: [&str; 2] =
 /// Flash, 20 sign-ups on a fake shop): `vault_create_login` was called in 10, the agent otherwise looking for the
 /// person's details in the Carnet until the brake stopped it, asking `ask_secret` or `browser_vault` to keep a password,
 /// typing one of its own, or asking the person to type it.
-pub const VAULT_DIRECT: [&str; 6] = [
+pub const VAULT_DIRECT: [&str; 7] = [
     "!mcp__bipagents_vault__vault_create_login",
     "!mcp__bipagents_vault__vault_confirm_login",
     "!mcp__bipagents_vault__vault_contact_details",
@@ -137,6 +137,8 @@ pub const VAULT_DIRECT: [&str; 6] = [
     "!mcp__bipagents_vault__accept_terms",
     // logging in with a saved login (16/11): identifier and password typed by the vault
     "!mcp__bipagents_vault__vault_login",
+    // the first form sent to a site, with the person's « Oui » (form_send.rs, audit 1.2): asked by the browser itself
+    "!mcp__bipagents_vault__ask_to_send",
 ];
 
 /// Paying with the person's card (card_pay.rs), in view for an agent its person lets pay, with its browser (a card for
@@ -611,6 +613,11 @@ fn profile_folder(config: &Config, agent: &AgentConfig) -> Option<PathBuf> {
 
 /// The diet of `agent` as things are now (None: an agent whose profile this bridge doesn't reach).
 pub fn current(config: &Config, agent: &AgentConfig) -> Option<Diet> {
+    if crate::sealed_keys::closed(config) {
+        // the vault's keys sealed and not reopened yet: what it holds and the mailboxes unknown, the diet left as it
+        // is (sealed_keys::start brings it up to date once open)
+        return None;
+    }
     let folder = profile_folder(config, agent)?;
     let soul = std::fs::read_to_string(folder.join("SOUL.md")).unwrap_or_default();
     let kind = kind_of(config, agent, &soul);
@@ -796,6 +803,7 @@ mod tests {
         assert_eq!(VAULT_DIRECT[3], entry(crate::vault_contacts::SAVE));
         assert_eq!(VAULT_DIRECT[4], entry(crate::terms_consent::TOOL));
         assert_eq!(VAULT_DIRECT[5], entry(crate::vault_logins::LOGIN));
+        assert_eq!(VAULT_DIRECT[6], entry(crate::form_send::TOOL));
         let tools: Vec<String> =
             crate::vault_logins::tools().iter().filter_map(|t| t["name"].as_str().map(str::to_string)).collect();
         for name in VAULT_DIRECT {

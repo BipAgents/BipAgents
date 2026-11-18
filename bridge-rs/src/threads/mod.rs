@@ -163,6 +163,8 @@ pub struct Threads {
     on_screen: std::sync::Mutex<std::collections::HashMap<String, usize>>,
     /// The agents' queues (msg_queue.rs): a message waiting there shows in `pending.queue`, not as a sent item.
     queued: std::sync::OnceLock<Weak<crate::msg_queue::Queues>>,
+    /// The vault: the item a fill of Hermes' named by its handle (vault_line.rs).
+    vault: Option<Arc<crate::vault::Vault>>,
 }
 
 /// One app showing a thread, for as long as its event stream is open.
@@ -189,6 +191,7 @@ pub fn threads_of(state: &AppState) -> Arc<Threads> {
         .get_or_init(|| {
             let mut threads = Threads::new(state.config.clone(), state.store.clone(), state.hermes.clone());
             threads.briefs = Some(state.briefs.clone());
+            threads.vault = Some(state.vault.clone());
             let _ = threads.queued.set(Arc::downgrade(&crate::msg_queue::queues_of(state)));
             let threads = Arc::new(threads);
             let _ = state.hub.threads.set(Arc::downgrade(&threads));
@@ -212,6 +215,7 @@ impl Threads {
             briefs: None,
             on_screen: Default::default(),
             queued: Default::default(),
+            vault: None,
         }
     }
 
@@ -702,6 +706,7 @@ impl Threads {
         }
         with_services(&self.config.get(), &agent.name, &mut items);
         crate::steps::fold(&mut items, &crate::handback::language_of(&self.config.get(), agent));
+        self.with_vault_lines(agent, &mut items);
         with_carnet_lines(&self.config.get(), agent, &mut items);
         if thread.kind != "main" {
             // a run without the person that had nothing to tell (« [SILENT] », or the code word translated): no reply
@@ -718,10 +723,71 @@ impl Threads {
         });
         self.with_sends(agent, thread, &mut items, &queued).await?;
         self.with_files(agent, thread, &mut items).await?;
+        self.with_took(agent, &mut items).await?;
         with_maps_once(self.config.get(), agent, &mut items).await;
         without_missing_pages(self.config.get(), &mut items).await;
         with_document_sizes(agent, &mut items).await;
         Ok(items)
+    }
+
+    /// Where a long turn's time went (turn_status.rs `took`, kept by the run hub): on its last reply, for the apps'
+    /// line under it (« 4 min 10 · surtout sncf-connect.com »). Only the segments of this page.
+    async fn with_took(&self, agent: &AgentConfig, items: &mut [Item]) -> anyhow::Result<()> {
+        let segments: HashSet<&str> = items.iter().map(|i| i.segment.as_str()).filter(|s| !s.is_empty()).collect();
+        if segments.is_empty() {
+            return Ok(());
+        }
+        let marks = vec!["?"; segments.len()].join(",");
+        let sql = format!("SELECT session_id, started, ended, took FROM turn_times WHERE agent = ? AND session_id IN ({marks})");
+        let mut params = vec![text(&agent.name)];
+        params.extend(segments.iter().map(|s| text(s)));
+        let rows = self.store.run(&sql, params).await?;
+        let turns: Vec<(String, f64, f64, Value)> = rows
+            .iter()
+            .filter_map(|r| {
+                let took = r["took"].as_str().and_then(|t| serde_json::from_str(t).ok())?;
+                Some((r["session_id"].as_str()?.to_string(), r["started"].as_f64()?, r["ended"].as_f64()?, took))
+            })
+            .collect();
+        let found: Vec<(&str, f64, bool)> = items
+            .iter()
+            .map(|i| {
+                let agent_says = i.body.get("kind").and_then(Value::as_str) == Some("message")
+                    && i.body.get("role").and_then(Value::as_str) == Some("agent");
+                (i.segment.as_str(), i.at, agent_says)
+            })
+            .collect();
+        for (i, took) in crate::turn_status::place_took(&found, &turns) {
+            items[i].body.insert("took".into(), took);
+        }
+        Ok(())
+    }
+
+    /// Under each turn in which the vault typed a password, its line « Rempli par le coffre sur … » (vault_line.rs),
+    /// before the Carnet's: from the bridge's record of its fills, and Hermes' own fills of one of this agent's logins
+    /// kept for that host. Read only when a turn called the vault or Hermes filled.
+    fn with_vault_lines(&self, agent: &AgentConfig, items: &mut Vec<Item>) {
+        let vault_call = |i: &Item| {
+            i.body.contains_key(crate::vault_line::STASH)
+                || (i.kind() == "tool"
+                    && i.body.get("tool").and_then(|t| t.get("name")).and_then(Value::as_str).is_some_and(|n| {
+                        crate::vault_line::calls_the_vault(n) || n == "tool_call"
+                    }))
+        };
+        if !items.iter().any(vault_call) {
+            return;
+        }
+        let config = self.config.get();
+        let lang = crate::handback::language_of(&config, agent);
+        let recorded = crate::vault_line::recorded_for(&config, &agent.name);
+        let mut known: Option<Vec<crate::vault::Item>> = None;
+        crate::vault_line::with_vault_lines(items, &lang, &recorded, |handle, host| {
+            let all = known.get_or_insert_with(|| self.vault.as_ref().and_then(|v| v.try_items().ok()).unwrap_or_default());
+            all.iter()
+                .filter(|i| i.kind == "login" && i.agents.get(&agent.name).is_some_and(|h| h == handle))
+                .find(|i| i.origin.as_deref().and_then(crate::vault_match::site_of).is_some_and(|s| s.host == host))
+                .map(|i| i.id.clone())
+        });
     }
 
     /// The files kept for the agent's messages (`attach`): added to those its `MEDIA:` lines give, stale ones left

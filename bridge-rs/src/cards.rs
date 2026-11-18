@@ -19,10 +19,11 @@
 //! switched it on there (`[payments] offer_cards`, off by default), and with the numbers on the phone: the card's
 //! number, expiry, cardholder name and postcode stay on the device that added it (iOS Keychain / Android Keystore,
 //! behind Face ID or the phone's lock). The bridge keeps a record without them (`on_phone`): label, brand, last 4
-//! digits, a cap in euros the person must set (`[payments] offer_cap_max_eur` at most), allowed sites, agents, spent,
-//! single-use state, and which device holds it. At each payment the person approves, that device sends them with the
-//! security code (card_pay.rs `approve`), held in memory for that one fill and wiped when it ends. The person also
-//! ticks that it is a virtual card with a cap, not their main card: the bank's cap is the real limit, ours a second.
+//! digits, a cap in euros the person must set (`[payments] offer_cap_max_eur` at most; a limit for each payment, not
+//! a total: Alex 18/11), allowed sites, agents, spent, single-use state, and which device holds it. At each payment
+//! the person approves, that device sends them with the security code (card_pay.rs `approve`), held in memory for
+//! that one fill and wiped when it ends. The person also ticks that it is a virtual card with a cap, not their main
+//! card: the bank's cap is the real limit, ours a second.
 
 use indexmap::IndexMap;
 use serde_json::{json, Value};
@@ -33,21 +34,23 @@ use crate::vault::VaultError;
 use crate::Dict;
 
 pub const KIND: &str = "card";
-/// The payments kept on a card (the newest; older ones still count in « spent so far » through `spent`).
+/// The payments kept on a card (the newest; `spent` keeps the totals per currency, shown in the app: not a limit).
 pub const PAYMENTS_KEPT: usize = 50;
 /// The largest amount an agent may ask for at once (the card's own limit, set at the bank, is the real one).
 pub const MAX_AMOUNT_CENTS: i64 = 10_000_000;
 
-/// Whether this install may offer card payments at all: not when `[vault] cards = "off"`, nor on a « no computer »
-/// server (`cloud`); on a place of the all-included offer (its guichet token, `place_backup::SETTINGS`) only when
-/// Kerfy Studio switched it on (`[payments] offer_cards`), with the numbers on the phone (`phone_rules`).
+/// Whether this install may offer card payments at all: not when `[vault] cards = "off"`; on a place of the
+/// all-included offer (its guichet token, `place_backup::SETTINGS`) only when Kerfy Studio switched it on
+/// (`[payments] offer_cards`), with the numbers on the phone (`phone_rules`); never on another server on the Internet
+/// (`cloud` without the guichet's token: no phone rules there, the numbers would sit in its vault). Every offer place
+/// is also `cloud = true` (stack.py): before 18/11 `!cloud` came first and kept cards off there even when switched on.
 pub fn allowed(config: &Config) -> bool {
     allowed_on(config, on_offer())
 }
 
 /// `allowed`, with whether this is a place of the offer given.
 pub fn allowed_on(config: &Config, offer: bool) -> bool {
-    config.hermes.isolated && config.cards != "off" && !config.cloud && (!offer || config.payments.offer_cards)
+    config.hermes.isolated && config.cards != "off" && if offer { config.payments.offer_cards } else { !config.cloud }
 }
 
 /// A place of the all-included offer (Kerfy Studio's servers).
@@ -258,15 +261,37 @@ fn text_of(body: &Dict, keys: &[&str]) -> Option<String> {
     keys.iter().find_map(|k| body.get(*k).filter(|v| !v.is_null()).map(crate::py::py_str))
 }
 
+/// What the person reads when a card's site is a public suffix (the apps show it in their words: it starts so).
+pub const SITE_IS_PUBLIC_SUFFIX: &str = "give the shop's own address";
+
 /// A site the card may be used on, as typed: its host (« www.sncf-connect.com » also allows « sncf-connect.com »'s
-/// other subdomains only when the person typed the bare domain).
+/// other subdomains only when the person typed the bare domain). Never a public suffix itself (audit 17/11, 2.4):
+/// « myshopify.com », « github.io » or « co.uk » would let the card pay on every shop or page under it; the shop's own
+/// address (« ma-boutique.myshopify.com ») is what to give. A name the Public Suffix List doesn't know
+/// (« shop.example », « localhost ») and an IP address are no suffix: accepted.
 pub fn site_host(text: &str) -> Result<String, VaultError> {
     let origin = crate::vault::normalize_origin(text)?;
     let host = origin.split("://").nth(1).unwrap_or("").split(':').next().unwrap_or("").to_string();
     if host.is_empty() {
         return Err(invalid("site must be a web address"));
     }
+    if is_public_suffix(&host) {
+        return Err(VaultError::Invalid(format!(
+            "{SITE_IS_PUBLIC_SUFFIX} (for example my-shop.{host}), not only « {host} »: a card allowed on « {host} » \
+             would pay on every site under it"
+        )));
+    }
     Ok(host)
+}
+
+/// `host` is, whole, a public suffix the Public Suffix List knows (its private section included: « myshopify.com »,
+/// « github.io »): not a site of its own. Unknown names (« shop.example », « localhost ») and IP addresses are not.
+pub fn is_public_suffix(host: &str) -> bool {
+    let host = host.trim_end_matches('.').to_ascii_lowercase();
+    if host.is_empty() || host.parse::<std::net::IpAddr>().is_ok() {
+        return false;
+    }
+    psl::suffix(host.as_bytes()).is_some_and(|s| s.is_known() && s.as_bytes() == host.as_bytes())
 }
 
 /// The page's host is one the card allows (the host itself or one of its subdomains). No sites: any.
@@ -495,8 +520,9 @@ pub fn is_on_phone(meta: &Value) -> bool {
     meta.get("on_phone").and_then(Value::as_bool) == Some(true)
 }
 
-/// Why a payment of `cents` in `currency` goes over the card's cap (spent so far included), in plain words for the
-/// agent; None when the card has no cap or the payment fits.
+/// Why a payment of `cents` in `currency` goes over the card's cap, in plain words for the agent; None when the card
+/// has no cap or the payment fits. The cap is a limit for each payment (Alex 18/11), not a total: what was paid with
+/// the card before, or is being paid with it, doesn't count. The same on a self-hosted install, where a cap is optional.
 pub fn over_cap(meta: &Value, label: &str, cents: i64, currency: &str) -> Option<String> {
     let cap = meta.get("cap_cents").and_then(Value::as_i64)?;
     if currency != "EUR" {
@@ -505,17 +531,175 @@ pub fn over_cap(meta: &Value, label: &str, cents: i64, currency: &str) -> Option
              person with hand_over_payment."
         ));
     }
-    let spent = meta.get("spent").and_then(|s| s.get("EUR")).and_then(Value::as_i64).unwrap_or(0);
-    (spent.saturating_add(cents) > cap).then(|| {
+    (cents > cap).then(|| {
         format!(
-            "The card « {label} » has a cap of {} EUR and {} EUR were already paid with it: {} EUR is over it. Don't \
-             pay; tell the person (they can raise the cap in the app, up to what their bank allows) or hand the \
-             payment over with hand_over_payment.",
+            "The card « {label} » allows at most {} EUR per payment: {} EUR is over it. Don't pay; tell the person \
+             (they can raise the card's cap in the app) or hand the payment over with hand_over_payment.",
             format_cents(cap),
-            format_cents(spent),
             format_cents(cents)
         )
     })
+}
+
+// --- payments in flight (audit 17/11, 2.3) ---------------------------------------------------------------------------
+
+/// The approved payments whose card is about to be typed: payment id → card id. Taken and counted only under the
+/// vault's lock (`Vault::reserve_card_payment`), so that a single-use card is never typed for two payments at once. A
+/// reservation ends when its card is typed (`Vault::record_card_payment`, the card then used) or when its payment ends
+/// before that (`Reservation`'s drop). The cap is per payment: what is in flight doesn't count against it.
+static IN_FLIGHT: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<String, String>>> =
+    std::sync::LazyLock::new(Default::default);
+
+fn in_flight() -> std::sync::MutexGuard<'static, std::collections::HashMap<String, String>> {
+    IN_FLIGHT.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// How many payments with the card `card` are in flight.
+pub fn in_flight_on(card: &str) -> usize {
+    in_flight().values().filter(|c| *c == card).count()
+}
+
+/// A payment kept on its card until its card is typed or it ends (`Vault::reserve_card_payment`).
+#[derive(Debug)]
+pub struct Reservation(String);
+
+impl Reservation {
+    /// Only under the vault's lock, once the card was checked (single use, cap).
+    pub fn take(payment: &str, card: &str) -> Reservation {
+        in_flight().insert(payment.to_string(), card.to_string());
+        Reservation(payment.to_string())
+    }
+}
+
+impl Drop for Reservation {
+    fn drop(&mut self) {
+        in_flight().remove(&self.0);
+    }
+}
+
+// --- the pay button's amount (audit 17/11, 2.2) ----------------------------------------------------------------------
+
+/// Currency marks, the longest first (a mark is taken whole: « us$ » before « $ »), with the codes each may stand for.
+const CURRENCY_MARKS: &[(&str, &[&str])] = &[
+    ("euros", &["EUR"]),
+    ("euro", &["EUR"]),
+    ("us$", &["USD"]),
+    ("ca$", &["CAD"]),
+    ("eur", &["EUR"]),
+    ("usd", &["USD"]),
+    ("gbp", &["GBP"]),
+    ("chf", &["CHF"]),
+    ("ils", &["ILS"]),
+    ("nis", &["ILS"]),
+    ("sgd", &["SGD"]),
+    ("cad", &["CAD"]),
+    ("aud", &["AUD"]),
+    ("c$", &["CAD"]),
+    ("s$", &["SGD"]),
+    ("a$", &["AUD"]),
+    ("€", &["EUR"]),
+    ("£", &["GBP"]),
+    ("₪", &["ILS"]),
+    ("$", &["USD", "CAD", "SGD", "AUD", "NZD", "HKD", "MXN"]),
+];
+
+/// The currency mark right before a number (`before`: the text up to it) or right after it (`after`: the text from its
+/// end), spaces allowed between: the codes it stands for. A mark in letters is a word of its own (« eur », never the
+/// end of « valeur »).
+fn mark_near(before: &str, after: &str) -> Option<&'static [&'static str]> {
+    let (before, after) = (before.trim_end(), after.trim_start());
+    for &(mark, codes) in CURRENCY_MARKS {
+        let starts_word = mark.chars().next().is_some_and(char::is_alphabetic);
+        let ends_word = mark.chars().next_back().is_some_and(char::is_alphabetic);
+        if let Some(rest) = before.strip_suffix(mark) {
+            if !(starts_word && rest.chars().next_back().is_some_and(char::is_alphanumeric)) {
+                return Some(codes);
+            }
+        }
+        if let Some(rest) = after.strip_prefix(mark) {
+            if !(ends_word && rest.chars().next().is_some_and(char::is_alphanumeric)) {
+                return Some(codes);
+            }
+        }
+    }
+    None
+}
+
+/// A number as shops write it, in cents: « 1 250,00 » (French, a space or a narrow one), « 1,250.00 » (English),
+/// « 1.250,00 » (German, Spanish), « 1'250.00 » (Swiss), « 12,5 », « 12.50 », « 1250 ». The decimal mark is the last
+/// « , » or « . » followed by one or two digits; every other mark groups thousands, the same one throughout, in groups
+/// of three. None when it reads any other way (« 1 25,00 », « 1.250.00,5 »): not read for sure.
+fn amount_of(number: &str) -> Option<i64> {
+    let mut groups: Vec<String> = vec![String::new()];
+    let mut marks: Vec<char> = Vec::new();
+    for c in number.chars() {
+        if c.is_ascii_digit() {
+            groups.last_mut()?.push(c);
+        } else {
+            marks.push(c);
+            groups.push(String::new());
+        }
+    }
+    if groups.iter().any(String::is_empty) {
+        return None; // two marks in a row, or one at an end
+    }
+    let decimal = match (marks.last(), groups.last()) {
+        (Some(&m), Some(last)) if (m == ',' || m == '.') && (1..=2).contains(&last.len()) => Some(m),
+        _ => None,
+    };
+    let (integer, fraction) = match decimal {
+        Some(_) => (&groups[..groups.len() - 1], groups[groups.len() - 1].as_str()),
+        None => (&groups[..], ""),
+    };
+    let thousands = &marks[..marks.len() - usize::from(decimal.is_some())];
+    if let Some(&first) = thousands.first() {
+        let same = thousands.iter().all(|&m| m == first);
+        let shaped = (1..=3).contains(&integer[0].len()) && integer[1..].iter().all(|g| g.len() == 3);
+        if !same || !shaped || Some(first) == decimal {
+            return None;
+        }
+    }
+    let whole = integer.concat();
+    if whole.len() > 12 {
+        return None;
+    }
+    let units: i64 = whole.parse().ok()?;
+    let cents: i64 = format!("{fraction:0<2}").parse().ok()?;
+    units.checked_mul(100)?.checked_add(cents)
+}
+
+/// The one clear amount a pay button shows in `currency` (its text as the bridge read it, under the payment's hold),
+/// in cents: a number next to a currency mark, in French, English, German or Spanish writing. None when it shows no
+/// amount, several, one in another currency, an instalment (« 3 x 4,17 € »), or a number next to a mark that can't be
+/// read for sure: the button is then pressed as before (never a refusal on « 12,5 € » for 12.50, nor on « Payer »).
+pub fn button_amount(text: &str, currency: &str) -> Option<i64> {
+    // the Swiss apostrophe in its typographic forms too (review 18/11, R2: « CHF 1’250.00 »)
+    static NUMBER: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(r"\d(?:[\d.,'\x{2019}\x{02bc}\x{a0}\x{202f} ]*\d)?").expect("number pattern")
+    });
+    static INSTALMENT: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        // whole words only (review 18/11: « mall », « timeslot » are none)
+        regex::Regex::new(
+            r"(?i)\d\s*[x×]\s*\d|\b(fois|times|mal|raten|cuotas|plazos|installments?|instalments?)\b|\bmensualit|/\s*(mois|month|monat|mes)\b",
+        )
+        .expect("instalment pattern")
+    });
+    let text = text.to_lowercase();
+    if INSTALMENT.is_match(&text) {
+        return None;
+    }
+    let mut found: Vec<(i64, &'static [&'static str])> = Vec::new();
+    for number in NUMBER.find_iter(&text) {
+        let Some(codes) = mark_near(&text[..number.start()], &text[number.end()..]) else { continue };
+        let cents = amount_of(number.as_str())?;
+        if !found.contains(&(cents, codes)) {
+            found.push((cents, codes));
+        }
+    }
+    match found.as_slice() {
+        [(cents, codes)] if codes.contains(&currency) => Some(*cents),
+        _ => None,
+    }
 }
 
 /// The card's numbers the phone sent with an approval (a card kept on the phone): checked against the card (the
@@ -623,6 +807,24 @@ pub fn record_payment(meta: &mut Dict, payment: Value) {
     if meta.get("single_use").and_then(Value::as_bool).unwrap_or(false) {
         meta.insert("used".into(), json!(true));
     }
+}
+
+/// The payment `payment` (its id, `record_payment`'s « payment ») taken off the card: out of its payments, its cents
+/// out of `spent`. `used` is left as it is (a single-use card's number was seen by the page). False when it isn't there.
+pub fn unrecord_payment(meta: &mut Dict, payment: &str) -> bool {
+    let Some(Value::Array(payments)) = meta.get_mut("payments") else { return false };
+    let Some(at) = payments.iter().rposition(|p| p.get("payment").and_then(Value::as_str) == Some(payment)) else {
+        return false;
+    };
+    let gone = payments.remove(at);
+    let cents = gone.get("cents").and_then(Value::as_i64);
+    let (Some(cents), Some(cur)) = (cents, gone.get("currency").and_then(Value::as_str)) else { return true };
+    if let Some(Value::Object(spent)) = meta.get_mut("spent") {
+        if let Some(left) = spent.get(cur).and_then(Value::as_i64) {
+            spent.insert(cur.to_string(), json!((left - cents).max(0)));
+        }
+    }
+    true
 }
 
 /// What the person reads when asked, and what the apps parse to show their payment card (both apps:
@@ -777,9 +979,19 @@ mod tests {
         assert_eq!(phone_rules_on(&config, false), None);
         config.payments.offer_cards = true;
         assert!(allowed_on(&config, true));
-        assert_eq!(phone_rules_on(&config, true), Some(PhoneRules { cap_max_cents: 15_000 }));
+        assert_eq!(phone_rules_on(&config, true), Some(PhoneRules { cap_max_cents: 100_000 }));
         config.cards = "off".into();
         assert!(!allowed_on(&config, true) && !allowed_on(&config, false));
+    }
+
+    #[test]
+    fn a_real_offer_place_is_cloud_too_and_follows_the_switch() {
+        let mut config = isolated();
+        config.cloud = true; // what stack.py writes on every offer place
+        assert!(!allowed_on(&config, true)); // switched off
+        config.payments.offer_cards = true;
+        assert!(allowed_on(&config, true)); // switched on: cards offered, numbers on the phone
+        assert!(!allowed_on(&config, false)); // a cloud server without the guichet's token: never
     }
 
     const RULES: PhoneRules = PhoneRules { cap_max_cents: 15_000 };
@@ -839,11 +1051,13 @@ mod tests {
     }
 
     #[test]
-    fn the_cap_counts_what_was_already_paid() {
-        let mut meta = json!({"cap_cents": 5000, "spent": {"EUR": 4000}});
-        assert_eq!(over_cap(&meta, "Petits achats", 1000, "EUR"), None);
-        let over = over_cap(&meta, "Petits achats", 1001, "EUR").unwrap();
-        assert!(over.contains("cap of 50.00 EUR") && over.contains("40.00 EUR were already paid"), "{over}");
+    fn the_cap_is_for_each_payment_not_a_total() {
+        // Alex 18/11: what was paid with the card before doesn't count
+        let mut meta = json!({"cap_cents": 5000, "spent": {"EUR": 40000}});
+        assert_eq!(over_cap(&meta, "Petits achats", 5000, "EUR"), None);
+        let over = over_cap(&meta, "Petits achats", 5001, "EUR").unwrap();
+        assert!(over.contains("allows at most 50.00 EUR per payment: 50.01 EUR is over it"), "{over}");
+        assert!(!over.contains("already paid"), "{over}");
         assert!(over_cap(&meta, "Petits achats", 100, "USD").unwrap().contains("only pays in EUR"));
         meta.as_object_mut().unwrap().remove("cap_cents");
         assert_eq!(over_cap(&meta, "x", 9_999_999, "USD"), None); // no cap (self-hosted): as before
@@ -921,5 +1135,98 @@ mod tests {
             "for \"Billet Paris-Lyon\". Card ref item_0123456789ab. Delivery \"Perso\". Approve in the BipAgents app with \
              the card's security code."
         ));
+    }
+
+    #[test]
+    fn a_pay_buttons_one_clear_amount_is_read_in_every_writing() {
+        // audit 17/11, 2.2: what the button the bridge would press shows, in cents
+        for (text, cents) in [
+            ("payer 12,50 €", 1250),
+            ("payer 12,5 €", 1250),
+            ("payer 12 €", 1200),
+            ("payer 1 250,00 €", 125_000),
+            ("payer 1\u{a0}250,00\u{a0}€", 125_000),
+            ("payer 1\u{202f}250,00 €", 125_000),
+            ("pay €1,250.00", 125_000),
+            ("pay eur 1,250", 125_000),
+            ("jetzt bezahlen 1.250,00 eur", 125_000),
+            ("pagar 1.250,00 €", 125_000),
+            ("payer 1'250.00 €", 125_000),
+            ("payer 1250 €", 125_000),
+            ("payer 125000 €", 12_500_000),
+            ("payer 12,50 € (12,50 eur)", 1250),
+            ("payer 12,50 euros", 1250),
+        ] {
+            assert_eq!(button_amount(text, "EUR"), Some(cents), "{text}");
+        }
+        // review 18/11: the Swiss apostrophe in every form, « mall » and « timeslot » are no instalments
+        assert_eq!(button_amount("bezahlen chf 1’250.00", "CHF"), Some(125_000));
+        assert_eq!(button_amount("bezahlen chf 1ʼ250.00", "CHF"), Some(125_000));
+        assert_eq!(button_amount("bezahlen chf 1'250.00", "CHF"), Some(125_000));
+        assert_eq!(button_amount("pay at the mall 12.50 eur", "EUR"), Some(1250));
+        assert_eq!(button_amount("book timeslot, pay €12.50", "EUR"), Some(1250));
+        assert_eq!(button_amount("pay us$12.50", "USD"), Some(1250));
+        assert_eq!(button_amount("pay $12.50", "USD"), Some(1250));
+        assert_eq!(button_amount("pay $12.50", "CAD"), Some(1250));
+        assert_eq!(button_amount("pay £12.50", "GBP"), Some(1250));
+    }
+
+    #[test]
+    fn a_pay_button_without_one_clear_amount_is_pressed_as_before() {
+        for text in [
+            "payer",
+            "valider",
+            "payer 1250", // no currency: not an amount for sure
+            "commander (2 articles)",
+            "payer 3 x 4,17 €", // an instalment
+            "payer en 3 fois 4,17 €",
+            "pay 4,17 € / month",
+            "payer 12,50 € (dont 2,08 € de tva)", // two amounts
+            "payer 1 25,00 €",                    // not read for sure
+            "payer 1.250.00,5 €",
+            "valeur 12", // « eur » inside a word
+        ] {
+            assert_eq!(button_amount(text, "EUR"), None, "{text}");
+        }
+        assert_eq!(button_amount("pay $12.50", "EUR"), None); // another currency: as before
+        assert_eq!(button_amount("payer 12,50 €", "USD"), None);
+    }
+
+    #[test]
+    fn a_card_s_site_is_never_a_public_suffix() {
+        // audit 17/11, 2.4
+        for suffix in ["myshopify.com", "github.io", "co.uk", "com", "https://github.io/", "MyShopify.com"] {
+            let refused = site_host(suffix).unwrap_err().to_string();
+            assert!(refused.starts_with(SITE_IS_PUBLIC_SUFFIX), "{suffix}: {refused}");
+        }
+        let sites = ["shop-a.myshopify.com", "sncf-connect.com", "www.sncf-connect.com", "shop.example", "localhost"];
+        for site in sites.into_iter().chain(["127.0.0.1"]) {
+            assert!(site_host(site).is_ok(), "{site}");
+        }
+        assert!(site_host("http://127.0.0.1:8080").is_ok());
+    }
+
+    #[test]
+    fn a_payment_never_pressed_is_taken_off_the_card_but_a_single_use_card_stays_used() {
+        // review 18/11, R1
+        let mut meta = json!({"cap_cents": 2000, "single_use": true}).as_object().unwrap().clone();
+        record_payment(&mut meta, json!({"cents": 1250, "currency": "EUR", "payment": "pay_a"}));
+        record_payment(&mut meta, json!({"cents": 300, "currency": "EUR", "payment": "pay_b"}));
+        assert_eq!(meta["spent"], json!({"EUR": 1550}));
+        assert!(unrecord_payment(&mut meta, "pay_a"));
+        assert!(!unrecord_payment(&mut meta, "pay_a"), "once");
+        assert_eq!(meta["spent"], json!({"EUR": 300}));
+        assert_eq!(meta["payments"].as_array().unwrap().len(), 1);
+        assert_eq!(meta["used"], json!(true));
+    }
+
+    #[test]
+    fn payments_in_flight_are_counted_until_they_end_but_not_against_the_cap() {
+        let meta = json!({"cap_cents": 2000, "spent": {"EUR": 0}});
+        let first = Reservation::take("pay_test_flight_a", "item_test_flight");
+        assert_eq!(in_flight_on("item_test_flight"), 1);
+        assert_eq!(over_cap(&meta, "Petits achats", 1250, "EUR"), None, "per payment: the one in flight doesn't count");
+        drop(first);
+        assert_eq!(in_flight_on("item_test_flight"), 0);
     }
 }

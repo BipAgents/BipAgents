@@ -174,6 +174,8 @@ impl Item {
         }
         if let (true, Value::Object(map)) = (self.kind == "login", &mut out) {
             map.insert("login_url".into(), json!(self.login_url));
+            // the site the vault fills on, the apps' groups (vault_used.rs, 17/11)
+            map.insert("domain".into(), json!(self.origin.as_deref().and_then(crate::vault_used::domain_of)));
         }
         if let (Some(agent), Value::Object(map)) = (&self.created_by, &mut out) {
             map.insert("created_by".into(), json!(agent));
@@ -551,6 +553,11 @@ impl Vault {
 
     fn fernet(&self) -> anyhow::Result<fernet::Fernet> {
         crate::py::makedirs(&self.folder.to_string_lossy(), 0o700)?;
+        // a place enrolled for sealed keys: its key from keys.sealed.json, never a file (sealed_keys.rs)
+        if let Some(key) = crate::sealed_keys::data_key(&self.folder, crate::sealed_keys::DataKey::Vault)? {
+            return fernet::Fernet::new(&key)
+                .ok_or_else(|| anyhow::anyhow!("the vault's sealed key is not a Fernet key"));
+        }
         if !self.key_path.exists() {
             use std::io::Write;
             use std::os::unix::fs::OpenOptionsExt;
@@ -1111,9 +1118,48 @@ impl Vault {
             .collect()
     }
 
-    /// A payment made with card `item_id`, kept on it (a single-use card is then used).
-    pub async fn record_card_payment(&self, item_id: &str, payment: Value) -> anyhow::Result<()> {
+    /// The payment `payment` of `cents` in `currency` with card `item_id` kept on it, its card about to be typed
+    /// (audit 17/11, 2.3): under the vault's lock, the card read again (removed, or its cap lowered, meanwhile) and its
+    /// cap checked for this payment alone (a limit per payment, Alex 18/11); a single-use card used meanwhile, or being
+    /// used by another payment, is refused. Err: what to tell the agent (nothing is typed).
+    pub async fn reserve_card_payment(
+        &self,
+        item_id: &str,
+        payment: &str,
+        cents: i64,
+        currency: &str,
+    ) -> anyhow::Result<Result<crate::cards::Reservation, String>> {
         let _lock = self.lock.lock().await;
+        let records = self.read()?;
+        let Some(record) = records.iter().find(|r| r.get("id").and_then(Value::as_str) == Some(item_id)) else {
+            return Ok(Err("The card was removed from the vault meanwhile: nothing was typed. Don't pay.".into()));
+        };
+        let label = record.get("label").map(crate::py::py_str).unwrap_or_default();
+        let meta = record.get("card").cloned().unwrap_or(Value::Null);
+        let others = crate::cards::in_flight_on(item_id);
+        let single_use = meta.get("single_use").and_then(Value::as_bool) == Some(true);
+        if single_use && (meta.get("used").and_then(Value::as_bool) == Some(true) || others > 0) {
+            return Ok(Err(format!(
+                "The single-use card « {label} » was used by another payment meanwhile: nothing was typed. Don't pay; \
+                 tell the person."
+            )));
+        }
+        if let Some(why) = crate::cards::over_cap(&meta, &label, cents, currency) {
+            return Ok(Err(format!("Nothing was typed. {why}")));
+        }
+        Ok(Ok(crate::cards::Reservation::take(payment, item_id)))
+    }
+
+    /// A payment made with card `item_id`, kept on it (a single-use card is then used); its reservation
+    /// (`reserve_card_payment`) ends under the same lock, counted in `spent` (shown in the app) from now on.
+    pub async fn record_card_payment(
+        &self,
+        item_id: &str,
+        payment: Value,
+        reservation: Option<crate::cards::Reservation>,
+    ) -> anyhow::Result<()> {
+        let _lock = self.lock.lock().await;
+        let _ends_here = reservation;
         let mut records = self.read()?;
         let Some(record) = records.iter_mut().find(|r| r.get("id").and_then(Value::as_str) == Some(item_id)) else {
             return Err(NoSuchItem(item_id.to_string()).into());
@@ -1125,6 +1171,23 @@ impl Vault {
         crate::cards::record_payment(&mut meta, payment);
         record.insert("card".into(), Value::Object(meta));
         self.write(&records)
+    }
+
+    /// The payment `payment` of card `item_id` taken off its `spent` and its payments, under the vault's lock: its pay
+    /// button was never pressed (review 18/11, R1). A single-use card stays used. False: no such payment on it.
+    pub async fn unrecord_card_payment(&self, item_id: &str, payment: &str) -> anyhow::Result<bool> {
+        let _lock = self.lock.lock().await;
+        let mut records = self.read()?;
+        let Some(record) = records.iter_mut().find(|r| r.get("id").and_then(Value::as_str) == Some(item_id)) else {
+            return Ok(false);
+        };
+        let Some(Value::Object(mut meta)) = record.get("card").cloned() else { return Ok(false) };
+        if !crate::cards::unrecord_payment(&mut meta, payment) {
+            return Ok(false);
+        }
+        record.insert("card".into(), Value::Object(meta));
+        self.write(&records)?;
+        Ok(true)
     }
 
     // -- « Coordonnées » (vault_contacts.rs) ------------------------------------------------------------------
@@ -1582,7 +1645,7 @@ fn as_dict(value: Value) -> ApiResult<Dict> {
 
 async fn listing(State(state): State<AppState>) -> ApiResult<Response> {
     let config = state.config();
-    let items: Vec<Value> = state
+    let mut items: Vec<Value> = state
         .vault
         .try_items()?
         .iter()
@@ -1594,6 +1657,7 @@ async fn listing(State(state): State<AppState>) -> ApiResult<Response> {
             out
         })
         .collect();
+    crate::vault_used::decorate(&state.vault.folder, &mut items); // « Récents » (vault_used.rs, 17/11)
     let agents: Vec<Value> = config
         .agents
         .values()
@@ -1920,5 +1984,53 @@ mod tests {
         let again = Vault::parse(json!({"otp_secret": ""}).as_object().unwrap(), Some(&record)).unwrap();
         assert_eq!(again["secret"], json!({"password": "p"}));
         assert_eq!(again["has_otp"], json!(false));
+    }
+
+    // review offer-cap-per-payment (18/11): what `reserve_card_payment` still guards once the cap is per payment.
+    fn card_record(id: &str, card: Value) -> Dict {
+        json!({"id": id, "kind": "card", "label": "Petits achats", "card": card}).as_object().unwrap().clone()
+    }
+
+    #[tokio::test]
+    async fn review_cap_per_payment_two_payments_at_the_cap_at_once_but_a_single_use_card_never_twice() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::new(&dir.path().to_string_lossy());
+        // per payment: two at the cap at once, a big `spent` ignored
+        vault.write(&[card_record("item_rv_multi", json!({"cap_cents": 2000, "spent": {"EUR": 90000}}))]).unwrap();
+        let a = vault.reserve_card_payment("item_rv_multi", "pay_rv_m1", 2000, "EUR").await.unwrap().unwrap();
+        let b = vault.reserve_card_payment("item_rv_multi", "pay_rv_m2", 2000, "EUR").await.unwrap().unwrap();
+        let over = vault.reserve_card_payment("item_rv_multi", "pay_rv_m3", 2001, "EUR").await.unwrap().unwrap_err();
+        assert!(over.contains("at most 20.00 EUR per payment"), "{over}");
+        drop((a, b));
+        // single use: the second payment approved meanwhile is refused while the first one is in flight
+        vault.write(&[card_record("item_rv_single", json!({"cap_cents": 2000, "single_use": true}))]).unwrap();
+        let first = vault.reserve_card_payment("item_rv_single", "pay_rv_s1", 1000, "EUR").await.unwrap().unwrap();
+        let second = vault.reserve_card_payment("item_rv_single", "pay_rv_s2", 1000, "EUR").await.unwrap().unwrap_err();
+        assert!(second.contains("used by another payment meanwhile"), "{second}");
+        // typed: used from now on, the reservation gone with it
+        vault.record_card_payment("item_rv_single", json!({"cents": 1000, "currency": "EUR", "payment": "pay_rv_s1"}),
+                                  Some(first)).await.unwrap();
+        assert_eq!(crate::cards::in_flight_on("item_rv_single"), 0);
+        let third = vault.reserve_card_payment("item_rv_single", "pay_rv_s3", 1000, "EUR").await.unwrap().unwrap_err();
+        assert!(third.contains("used by another payment meanwhile"), "{third}");
+        // an error path (give_up, timeout, stop_all): the reservation dropped, nothing stays in flight
+        vault.write(&[card_record("item_rv_single2", json!({"cap_cents": 2000, "single_use": true}))]).unwrap();
+        drop(vault.reserve_card_payment("item_rv_single2", "pay_rv_t1", 1000, "EUR").await.unwrap().unwrap());
+        assert_eq!(crate::cards::in_flight_on("item_rv_single2"), 0);
+        let again = vault.reserve_card_payment("item_rv_single2", "pay_rv_t2", 1000, "EUR").await.unwrap();
+        assert!(again.is_ok(), "never typed: the single-use card is still free");
+    }
+
+    #[tokio::test]
+    async fn review_cap_per_payment_card_removed_or_cap_lowered_after_approval_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = Vault::new(&dir.path().to_string_lossy());
+        vault.write(&[card_record("item_rv_low", json!({"cap_cents": 1000}))]).unwrap();
+        let low = vault.reserve_card_payment("item_rv_low", "pay_rv_l1", 1500, "EUR").await.unwrap().unwrap_err();
+        assert!(low.starts_with("Nothing was typed.") && low.contains("at most 10.00 EUR per payment"), "{low}");
+        assert_eq!(crate::cards::in_flight_on("item_rv_low"), 0);
+        vault.write(&[]).unwrap();
+        let gone = vault.reserve_card_payment("item_rv_low", "pay_rv_l2", 500, "EUR").await.unwrap().unwrap_err();
+        assert!(gone.contains("removed from the vault meanwhile"), "{gone}");
     }
 }

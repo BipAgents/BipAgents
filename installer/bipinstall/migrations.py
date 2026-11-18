@@ -209,6 +209,105 @@ def hub_key(runner: hermes.Runner, home: Path) -> str:
     return "the hub's key made again: its agents are served (gateway restarted)"
 
 
+def on_offer(home: Path) -> bool:
+    """A place of the all-included offer, as the bridge tells it (bridge-rs handover.rs `on_offer`,
+    agent_email.rs `place_token`): the guichet's address and this place's token in backup.json, both non-empty."""
+    from . import backup
+    data = backup.read_json(home / backup.SETTINGS)
+    return all(isinstance(data.get(k), str) and data[k].strip() for k in ("url", "token"))
+
+
+# A table's header, comments and spaces allowed (`[payments]  # Kerfy`, `[ payments ]`); `[[x]]` an array's.
+_HEADER = re.compile(r"^\s*(\[\[?)\s*([^\[\]#]+?)\s*\]\]?\s*(#.*)?$")
+_INLINE = re.compile(r"^(\s*payments\s*=\s*\{)(.*)(\}\s*(#.*)?)$")
+
+
+def _offer_cards(text: str) -> bool:
+    """`[payments] offer_cards = true` in this text (False when it doesn't parse)."""
+    try:
+        payments = bridgeconf.tomllib.loads(text).get("payments")
+    except ValueError:
+        return False
+    return isinstance(payments, dict) and payments.get("offer_cards") is True
+
+
+def _with_offer_cards(text: str) -> str:
+    """`offer_cards = true` put in `[payments]` (its table, its inline table at the top, or a new table at the end),
+    a false one replaced; every other line as it is."""
+    out, section, put = [], "", False
+    for row in text.splitlines():
+        header = _HEADER.match(row)
+        if header:
+            section = ("[[" if header.group(1) == "[[" else "") + header.group(2).strip()
+            out.append(row)
+            if section == "payments" and not put:
+                out.append("offer_cards = true")
+                put = True
+            continue
+        if section == "payments" and re.match(r"\s*offer_cards\s*=", row):
+            continue   # a false one, replaced by the line above
+        inline = _INLINE.match(row) if section == "" and not put else None
+        if inline:
+            inner = inline.group(2)
+            if re.search(r"\boffer_cards\s*=", inner):
+                inner = re.sub(r"\boffer_cards\s*=\s*\w+", "offer_cards = true", inner, count=1)
+            else:
+                inner = " offer_cards = true" + ("," if inner.strip() else " ") + inner
+            row, put = inline.group(1) + inner + inline.group(3), True
+        out.append(row)
+    body = "\n".join(out).rstrip("\n") + "\n"
+    return body if put else body + "\n[payments]\noffer_cards = true\n"
+
+
+def offer_cards_on(runner: hermes.Runner, home: Path) -> str:
+    """Agent card payments open on the offer's places (Alex 18/11; « expérimental » since 27/10): `[payments]
+    offer_cards = true` in bridge.toml when it is absent or false, the rest of the file kept, then the bridge restarted
+    (its turns first, drain.py) to read it. Nothing turns on by itself: each person still turns « Paiements par tes
+    agents » on in the app after its warning and adds a capped virtual card whose numbers stay on the phone (cards.rs).
+    A self-hosted install is never touched (it follows `[vault] cards`); a bridge.toml that doesn't parse is left as it
+    is, said in the update's output and tried again at the next one. Off again everywhere: `offer_cards = false` and a wave (no remote switch yet)."""
+    from .family import bridge_restart
+    config = home / ".config" / "bipagents" / "bridge.toml"
+    if not on_offer(home):
+        return "not a place of the all-included offer: card payments left as they are"
+    if not config.is_file():
+        return "no bridge here"
+    try:
+        bridgeconf.tomllib.loads(config.read_text(encoding="utf-8"))
+    except (ValueError, OSError) as exc:
+        message = f"bridge.toml doesn't parse ({exc}): card payments left off, the file as it is; tried again next update"
+        runner.log.append(f"offer-cards-on: {message}")
+        raise NotYet(message)
+    if _offer_cards(config.read_text(encoding="utf-8")):
+        return "card payments already open on this place"
+
+    def changed(text: str) -> str:
+        if _offer_cards(text):
+            return text
+        body = _with_offer_cards(text)
+        if not _offer_cards(body):   # a shape this edit doesn't know (dotted keys…): the file left as it is
+            raise NotYet("bridge.toml's [payments] has a shape this update can't change safely: card payments left "
+                         "off, the file as it is; tried again next update")
+        return body
+    runner.log.append(f"write {config}")
+    if runner.dry:
+        return "card payments would open on this place (dry run)"
+    try:
+        if not bridgeconf.update(config, changed):
+            return "card payments already open on this place"
+    except (NotYet, bridgeconf.BridgeConfigError) as exc:
+        message = str(exc) if isinstance(exc, NotYet) else f"{exc}; tried again next update"
+        runner.log.append(f"offer-cards-on: {message}")
+        raise NotYet(message) from exc
+    from . import drain
+    drain.until_quiet(config, "bridge")   # the turns going on end first (drain.py)
+    runner.run(bridge_restart(home), check=False)
+    return ("card payments open on this place: each person may turn them on in the app, with a capped virtual card "
+            "kept on their phone (bridge restarted)")
+
+
+OFFER_CARDS_ON = "2026-11-18-offer-cards-on"
+
 # In order; an id never changes once released. The ones from 2026-10-15 to 2026-11-02 left on 2026-11-04 (every
 # install had them from that day's release): their code is in git history.
 MIGRATIONS: List[Tuple[str, Callable[[hermes.Runner, Path], str]]] = [
@@ -216,10 +315,11 @@ MIGRATIONS: List[Tuple[str, Callable[[hermes.Runner, Path], str]]] = [
     ("2026-11-10-clarify-hour", clarify_hour),
     ("2026-11-12-push-service-everywhere", push_service_everywhere),
     ("2026-11-13-hub-key", hub_key),
+    (OFFER_CARDS_ON, offer_cards_on),
 ]
 
 # BipAgents' own settings (bridge.toml), never the person's Hermes: applied on an install over their own Hermes too.
-BRIDGE_ONLY = {"2026-11-04-push-relay-service", "2026-11-12-push-service-everywhere"}
+BRIDGE_ONLY = {"2026-11-04-push-relay-service", "2026-11-12-push-service-everywhere", "2026-11-18-offer-cards-on"}
 
 
 def done() -> List[str]:
@@ -235,6 +335,13 @@ def mark(ids: List[str], runner: hermes.Runner) -> None:
         return
     STATE.parent.mkdir(parents=True, exist_ok=True)
     STATE.write_text(json.dumps({"done": sorted(set(done()) | set(ids))}, indent=2) + "\n", encoding="utf-8")
+
+
+def unmark(ids: List[str]) -> None:
+    """These ids to do again at the next update (a restore that couldn't apply what one sets: backup.py settle)."""
+    if not STATE.is_file():
+        return
+    STATE.write_text(json.dumps({"done": sorted(set(done()) - set(ids))}, indent=2) + "\n", encoding="utf-8")
 
 
 def pending() -> List[str]:

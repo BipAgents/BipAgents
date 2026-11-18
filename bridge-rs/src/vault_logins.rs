@@ -31,6 +31,10 @@
 //! 5. the site refused that password: the agent calls again with corrected rules within 15 minutes, for the same site
 //!    and identifier, without a new card; the waiting login is replaced. After that, a new card;
 //! 6. the site accepted: `vault_confirm_login(site, username)` (or the person in the app) ends the waiting.
+//!
+//! A success of `vault_login` (its password typed) or `vault_create_login` is recorded by the bridge for the
+//! conversation's « Rempli par le coffre » line (vault_line.rs `note`: never read back from the answer's text, which
+//! may quote the agent's words) and for the vault list's « Récents » (vault_used.rs), le coffre rassure 17/11.
 
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock, Mutex};
@@ -72,6 +76,8 @@ pub const RUN_PREFIX: &str = "bip-login-";
 const ASK_TIMEOUT: Duration = Duration::from_secs(330);
 /// After a « yes », the agent may try again for the same site and identifier without a new card for so long.
 pub const RETRY_WINDOW: Duration = Duration::from_secs(15 * 60);
+/// The tools whose call waits for the person's answer on this card (turn_status.rs `HOLDING`: the person's wait).
+pub const HOLDS_THE_CALL: &[&str] = &[CREATE, CONFIRM];
 
 /// A password's default length, and the bounds of any.
 pub const DEFAULT_LENGTH: usize = 20;
@@ -131,6 +137,7 @@ pub fn tools() -> Vec<Value> {
     .into_iter()
     .chain(crate::vault_contacts::tools()) // « Coordonnées » (vault_contacts.rs)
     .chain(std::iter::once(crate::terms_consent::tool())) // a site's terms, with the person's « Oui » (terms_consent.rs)
+    .chain(std::iter::once(crate::form_send::tool())) // the first form sent to a site, with the person's « Oui » (audit 1.2)
     // logging in with a saved login: identifier and password (16/11)
     .chain(std::iter::once(json!({
         "name": LOGIN,
@@ -784,6 +791,10 @@ async fn create(state: &AppState, agent: &AgentConfig, arguments: &Dict) -> anyh
     };
     tracing::info!(agent = %agent.name, site = %host, fields = filled, item = %item.id, retry = granted, "account password typed and kept");
     crate::vault_contacts::note_mark(state, &agent.name, CREATE, &crate::vault_contacts::mark(&item.id, &item.label));
+    crate::vault_used::note(&state.vault.folder, &item.id, &agent.name);
+    crate::vault_line::note(state, &agent.name, CREATE, &item.id, &host, crate::vault_line::How::Created);
+    // the sign-up form the person approved may be sent once with no other card (form_send.rs, audit 1.2)
+    crate::form_send::after_vault_fill(&config, &agent.name, &host);
     let fields = if filled > 1 { "the password field and its confirmation" } else { "the password field" };
     Ok(text(&format!(
         "Filled {fields} and saved as « {} » in the vault (waiting for confirmation). You never see the password: \
@@ -960,6 +971,14 @@ async fn login(state: &AppState, agent: &AgentConfig, arguments: &Dict) -> anyho
             )))
         }
     };
+    // the login form the vault filled may be sent once with no other card (form_send.rs, audit 1.2)
+    crate::form_send::after_vault_fill(&state.config(), &agent.name, &host);
+    // the password typed: recorded for the conversation's vault line (vault_line.rs) and the vault list's « Récents »
+    // (vault_used.rs), le coffre rassure 17/11
+    if typed_password {
+        crate::vault_used::note(&state.vault.folder, &item.id, &agent.name);
+        crate::vault_line::note(state, &agent.name, LOGIN, &item.id, &host, crate::vault_line::How::Login);
+    }
     Ok(text(&format!(
         "{done} You never see the password: don't read the fields back. Now submit the form yourself (its button). If \
          the site then asks for a verification code, use browser_vault action=enter_code."
@@ -1002,6 +1021,7 @@ pub async fn call(
             Ok(crate::vault_contacts::call(state, agent, name, arguments).await)
         }
         crate::terms_consent::TOOL => Ok(crate::terms_consent::call(state, agent, arguments).await),
+        crate::form_send::TOOL => Ok(crate::form_send::call(state, agent, arguments).await),
         other => Ok(refusal(&format!("unknown tool: {other}"))),
     }
 }
