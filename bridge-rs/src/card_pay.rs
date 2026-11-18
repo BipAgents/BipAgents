@@ -830,6 +830,8 @@ impl Drop for Ending {
 /// Every payment stopped: those asked are refused, the held browsers given back (« Suspendre tous les paiements »).
 /// A payment still reloading its page or typing is asked to stop first, then given back once it has (its lock).
 pub async fn stop_all(config: &Config) {
+    // and the person's « Oui » for sending forms (form_send.rs, review of 18/11, F3)
+    crate::form_send::end_all_windows(config);
     // first: a payment setting its hold right now (in neither table) stops at its next step
     SUSPENDS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     for entry in pending().values_mut() {

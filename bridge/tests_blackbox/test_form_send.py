@@ -50,16 +50,24 @@ def test_oui_grants_one_sending_toujours_keeps_the_site_and_non_nothing(bridges,
     # « Oui »: this once
     result, card = answered(bridge, "https://contact.example/nous-ecrire", "once")
     # in the agent's language (French, else English here)
-    assert card["description"] in ("Envoyer sur ce site ? Vie veut envoyer un formulaire à contact.example",
-                                   "Send to this site? Vie wants to send a form to contact.example"), card
+    # what its « Oui » allows, for how long (review of 18/11, F2)
+    assert card["description"] in (
+        "Envoyer sur ce site ? Vie veut envoyer un formulaire à contact.example : si tu dis oui, ses envois vers "
+        "contact.example passent sans te redemander pendant 10 minutes",
+        "Send to this site? Vie wants to send a form to contact.example: if you say yes, its sendings to "
+        "contact.example go through without asking you again for 10 minutes"), card
     assert card["choices"] == ["once", "deny"], card
     assert card["bip_always"] in ("Toujours pour ce site", "Always for this site"), card
     assert card["bip_detail"].endswith("« un message au service client »"), card
     assert result["isError"] is False and "do the same step again" in result["content"][0]["text"], result
     file = allowed(bridge)
     assert [g["host"] for g in file["once"]] == ["contact.example"] and "contact.example" not in file["always"], file
+    assert file["once"][0]["window"] is True, file   # the site's sendings for ten minutes, not one
     sites = bridge.get("/v1/agents/vie/sandbox/sites", headers=AUTH).json()
     assert "contact.example" not in json.dumps(sites["sites"]), sites
+    # the person suspends the payments (the kill switch): the « Oui » for now ends at once (review of 18/11, F3)
+    assert bridge.post("/v1/vault/payments", headers=AUTH, json={"enabled": False}).status_code == 200
+    assert allowed(bridge)["once"] == [], allowed(bridge)
     # « Non »: nothing more
     result, _ = answered(bridge, "forum.example", "deny")
     assert result["isError"] is True and "said no" in result["content"][0]["text"], result
