@@ -265,6 +265,14 @@ impl Item {
         let mut out = json!({"id": self.id, "kind": self.kind, "label": self.label, "origin": self.origin,
                "identifier_type": self.identifier_type, "identifier": self.identifier, "has_otp": self.has_otp,
                "agents": agents, "created_at": self.created_at, "updated_at": self.updated_at});
+        if let (false, Value::Object(map)) = (self.refused.is_empty(), &mut out) {
+            // the app shows each line under the entry (« Pas donnée à Vie : son Hermes la refuse. »)
+            map.insert("refused".into(), json!(self.refused));
+        }
+        if let (Some(of), Value::Object(map)) = (&self.duplicate_of, &mut out) {
+            // another password for the same login, kept from an agent's Hermes: the app names the entry tried first
+            map.insert("duplicate_of".into(), json!(of));
+        }
         if let (Some(card), Value::Object(map)) = (&self.card, &mut out) {
             map.insert("card".into(), crate::cards::public(card));
         }

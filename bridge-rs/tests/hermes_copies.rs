@@ -921,6 +921,8 @@ async fn an_item_hermes_refuses_is_marked_refused_then_given_again_once_it_accep
     assert!(!impots.agents.contains_key("vie"));
     let line = impots.refused.get("vie").cloned().unwrap_or_default();
     assert!(line.starts_with("Pas donnée à ") && line.contains("refuse"), "{line:?}");
+    // the apps see the line under the entry (GET /v1/vault: Item::public)
+    assert_eq!(impots.public()["refused"]["vie"], json!(line));
     // its Hermes accepts it again: given back at the next pass (the next start)
     h.hermes.refused.lock().unwrap().clear();
     bipbridge::hermes_copies::forget_checked(&h.place.data);
@@ -928,6 +930,7 @@ async fn an_item_hermes_refuses_is_marked_refused_then_given_again_once_it_accep
     assert!(report.failed.is_empty() && report.rebuilt.contains(&"vie".to_string()), "{report:?}");
     let impots = h.vault.items().into_iter().find(|i| i.label == "Impots").unwrap();
     assert!(impots.agents.contains_key("vie") && impots.refused.is_empty(), "{:?}", impots.refused);
+    assert!(impots.public().get("refused").is_none(), "no mark once given");
     assert_eq!(h.copy("vie"), h.handles("vie"));
 }
 
@@ -1119,6 +1122,11 @@ async fn a_login_hermes_holds_twice_is_one_entry_and_another_password_never_wins
     let copy = impots.iter().find(|r| r.get("duplicate_of").is_some()).unwrap();
     assert_eq!(copy["duplicate_of"], original["id"]);
     assert_eq!(copy["created_at"], json!("2020-01-02T03:04:05+00:00"), "Hermes' own date");
+    // the apps see which entry is tried first (GET /v1/vault: Item::public); the person's own has no mark
+    let public: Vec<serde_json::Value> = h.vault.items().iter().filter(|i| i.origin.as_deref() == Some("https://impots.gouv.fr"))
+        .map(|i| i.public()).collect();
+    assert_eq!(public.iter().filter(|p| p["duplicate_of"] == original["id"]).count(), 1, "{public:?}");
+    assert_eq!(public.iter().filter(|p| p.get("duplicate_of").is_none()).count(), 1, "{public:?}");
     // vault_login fills the person's own
     let items = h.vault.items();
     let given: Vec<bipbridge::vault::Item> = items.into_iter().filter(|i| i.agents.contains_key("vie")).collect();
