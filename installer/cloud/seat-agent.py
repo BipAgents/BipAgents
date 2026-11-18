@@ -642,6 +642,9 @@ def health():
         failed = vault_failed(entry.pw_dir)
         if failed:
             seats[str(number)]["vault_failed"] = failed
+        held = vault_key_service(entry.pw_dir)
+        if held:
+            seats[str(number)]["vault_key_service"] = held
     return seats
 
 
@@ -858,6 +861,22 @@ def vault_state(home):
         reason = said.get("vault_reason")
         return {"vault": "locked", **({"vault_reason": reason[:120]} if isinstance(reason, str) and reason else {})}
     return {"vault": "sealed"}
+
+
+SPACE_KEY_SERVICE = ".local/share/bipagents/space/keyservice.json"   # the place's key service (vault_keys.py)
+
+
+def vault_key_service(home):
+    """The SHA-256 (hex) of the key-service token the place holds (its keyservice.json), what the guichet keeps of
+    each grant: it tells a reseal with a token still known from one whose token was forgotten. Never the token."""
+    import hashlib
+    try:
+        fd = os.open(os.path.join(home, SPACE_KEY_SERVICE), os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        with os.fdopen(fd, "rb") as fh:
+            token = json.loads(fh.read(65536).decode("utf-8")).get("token")
+    except (OSError, ValueError, AttributeError):
+        return None
+    return hashlib.sha256(token.encode()).hexdigest() if isinstance(token, str) and token else None
 
 
 def vault_failed(home):
