@@ -143,6 +143,16 @@ pub fn card_not_kept_text(lang: &str, label: &str) -> String {
     }
 }
 
+/// A card's name as Hermes gave it, for its notice: cut, and never with a card's number in it (an agent may have named
+/// it so): its last four digits only then.
+pub fn card_name(label: &str) -> String {
+    if crate::card_details::holds_card_number(label) {
+        let digits: String = label.chars().filter(char::is_ascii_digit).collect();
+        return format!("•••• {}", &digits[digits.len().saturating_sub(4)..]);
+    }
+    cut_name(label)
+}
+
 /// A name Hermes gave, at most 60 characters in a line told to the person.
 fn cut_name(name: &str) -> String {
     let name = name.trim();
@@ -545,6 +555,7 @@ pub async fn run_in_hermes(agent: AgentConfig, request: Dict) -> anyhow::Result<
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true) // a timeout (or any early return) never leaves it running
         .spawn();
     let mut child = match spawned {
         Ok(child) => child,
@@ -568,11 +579,14 @@ pub async fn run_in_hermes(agent: AgentConfig, request: Dict) -> anyhow::Result<
     };
     // what it prints, capped (an agent's own vault, read whole by `export`: never more than this kept in memory)
     let (mut out_pipe, mut err_pipe) = (child.stdout.take(), child.stderr.take());
+    let child_ref = &mut child;
+    let past_cap = tokio::sync::Notify::new();
     let reading = async {
         use tokio::io::AsyncReadExt;
         let (mut out, mut err) = (Vec::new(), Vec::new());
         // both read to their end (a pipe left full would block Hermes until the timeout, under the vault's lock):
-        // stdout kept up to the cap (past it, only how long), stderr's last 64 KB
+        // stdout kept up to the cap, then Hermes stopped at once (an answer that long is no answer: review pass 5, 1;
+        // its pipes close with it), stderr's last 64 KB
         let read_out = async {
             if let Some(pipe) = out_pipe.as_mut() {
                 let mut chunk = vec![0u8; 64 * 1024];
@@ -580,8 +594,11 @@ pub async fn run_in_hermes(agent: AgentConfig, request: Dict) -> anyhow::Result<
                     if n == 0 {
                         break;
                     }
-                    if out.len() <= HERMES_OUTPUT_MAX {
-                        out.extend_from_slice(&chunk[..n]);
+                    out.extend_from_slice(&chunk[..n]);
+                    if out.len() > HERMES_OUTPUT_MAX {
+                        let _ = child_ref.start_kill();
+                        past_cap.notify_one(); // stderr not waited for (a process it started may hold it open)
+                        break;
                     }
                 }
             }
@@ -589,10 +606,14 @@ pub async fn run_in_hermes(agent: AgentConfig, request: Dict) -> anyhow::Result<
         let read_err = async {
             if let Some(pipe) = err_pipe.as_mut() {
                 let mut chunk = vec![0u8; 16 * 1024];
-                while let Ok(n) = pipe.read(&mut chunk).await {
-                    if n == 0 {
-                        break;
-                    }
+                loop {
+                    let n = tokio::select! {
+                        read = pipe.read(&mut chunk) => match read {
+                            Ok(n) if n > 0 => n,
+                            _ => break,
+                        },
+                        () = past_cap.notified() => break,
+                    };
                     err.extend_from_slice(&chunk[..n]);
                     if err.len() > 64 * 1024 {
                         err.drain(..err.len() - 64 * 1024);
@@ -1552,7 +1573,10 @@ impl Vault {
                 let kind = item.get("kind").and_then(Value::as_str).unwrap_or("");
                 let label = item.get("label").map(crate::py::py_str).unwrap_or_default();
                 if kind == "payment" {
-                    notices.push((format!("card_not_kept:{}:{label}", agent.name), card_not_kept_text(&lang, &label)));
+                    // its name as the person is told it, never a card's number, cut (the key is kept in clear in
+                    // vault-notices.json: review pass 5, 4)
+                    let named = card_name(&label);
+                    notices.push((format!("card_not_kept:{}:{named}", agent.name), card_not_kept_text(&lang, &named)));
                     continue;
                 }
                 // the same entry the vault holds already (a cut-off swap's copy, Hermes saving it again)
@@ -1689,7 +1713,13 @@ impl Vault {
                 return Err(exc);
             }
         } else if dated {
-            let _ = self.write(&records); // a date Hermes had newer (nothing given to this agent now)
+            // what Hermes had newer (a date, an authenticator key only it held: nothing given to this agent now): its
+            // copy on the disk is erased only once this is written (review pass 5, 3)
+            if let Err(exc) = self.write(&records) {
+                copies::put_back(&link, previous.as_deref(), &aside);
+                let _ = std::fs::remove_dir_all(&folder);
+                return Err(exc);
+            }
         }
         // the handles written: what was set aside is never read again (erased now, or at the next pass if cut off)
         for folder in aside.iter().chain(&disks) {
