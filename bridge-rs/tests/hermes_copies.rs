@@ -1213,8 +1213,99 @@ fn vault_login_says_when_another_password_was_kept_for_the_login_it_typed() {
         ..Default::default()
     };
     let logins = vec![item("item_person", None), item("item_hermes", Some("item_person")), item("item_other", None)];
-    let said = bipbridge::vault_logins::other_password_hint(&logins, &logins[0]).unwrap();
+    let differs = |_: &bipbridge::vault::Item| false;
+    let said = bipbridge::vault_logins::other_password_hint(&logins, &logins[0], differs).unwrap();
     assert!(said.contains("item_hermes") && said.contains("vault_login"), "{said}");
-    assert_eq!(bipbridge::vault_logins::other_password_hint(&logins, &logins[2]), None);
-    assert_eq!(bipbridge::vault_logins::other_password_hint(&logins, &logins[1]), None);
+    assert!(said.contains("password"), "{said}");
+    assert_eq!(bipbridge::vault_logins::other_password_hint(&logins, &logins[2], differs), None);
+    assert_eq!(bipbridge::vault_logins::other_password_hint(&logins, &logins[1], differs), None);
+    // the same password, only the authenticator key differs (review pass 5, 2): it is the code that may be wrong
+    let said = bipbridge::vault_logins::other_password_hint(&logins, &logins[0], |_| true).unwrap();
+    assert!(said.contains("item_hermes") && said.contains("code") && !said.contains("password"), "{said}");
+}
+
+// -- fifth review, 18/11 (the reviewer's, not pushed) -------------------------------------------------------------------
+
+#[tokio::test]
+async fn pass5_two_different_authenticator_keys_are_two_entries_and_neither_key_is_lost() {
+    let _guard = SERIAL.lock().await;
+    let h = fixture();
+    let body = json!({"label": "Ameli", "site": "ameli.fr", "identifier": "alex@example.org",
+                      "password": "pw-Ameli-0123456789", "otp_secret": "AAAAAAAAAAAAAAAA", "agents": ["vie"]});
+    h.vault.create(&h.config, body.as_object().unwrap()).await.unwrap();
+    given(&h).await;
+    let mut items = store_of(&h.link("vie"));
+    // same site, user and password, another authenticator key
+    items.push(json!({"id": "vault_444444444444", "kind": "login", "label": "Ameli", "origin": "https://ameli.fr",
+                      "identifier_type": "email", "identifier": "alex@example.org",
+                      "secret": {"password": "pw-Ameli-0123456789", "otp_secret": "BBBBBBBBBBBBBBBB"}}));
+    // same as SNCF, no key: one entry, nothing changed
+    items.push(json!({"id": "vault_555555555555", "kind": "login", "label": "SNCF", "origin": "https://sncf-connect.com",
+                      "identifier_type": "email", "identifier": "alex@example.org",
+                      "secret": {"password": "pw-SNCF-0123456789"}}));
+    write_store(&h.link("vie"), &items).unwrap();
+    h.enrol().await;
+    let report = h.vault.copies_ready_all(&h.config).await;
+    assert!(report.failed.is_empty(), "{report:?}");
+    let records = h.records();
+    let ameli: Vec<&Dict> = records.iter().filter(|r| r["origin"] == json!("https://ameli.fr")).collect();
+    assert_eq!(ameli.len(), 2, "two keys, two entries");
+    let original = ameli.iter().find(|r| r.get("duplicate_of").is_none()).unwrap();
+    let copy = ameli.iter().find(|r| r.get("duplicate_of").is_some()).unwrap();
+    assert_eq!(copy["duplicate_of"], original["id"]);
+    assert_eq!(original["secret"]["otp_secret"], json!("AAAAAAAAAAAAAAAA"), "the person's key unchanged");
+    assert_eq!(copy["secret"]["otp_secret"], json!("BBBBBBBBBBBBBBBB"), "Hermes' key kept on its entry");
+    assert_eq!(copy["has_otp"], json!(true));
+    let sncf: Vec<&Dict> = records.iter().filter(|r| r["origin"] == json!("https://sncf-connect.com")).collect();
+    assert_eq!(sncf.len(), 1);
+    assert!(sncf[0]["secret"].get("otp_secret").is_none() && sncf[0]["has_otp"] == json!(false), "{:?}", sncf[0]);
+}
+
+#[tokio::test]
+async fn pass5_a_hermes_whose_stdout_passes_the_cap_and_stays_open_is_stopped_quickly() {
+    let dir = tempfile::tempdir().unwrap();
+    let script = dir.path().join("big.sh");
+    // 33 MB on stdout, then it keeps the pipe open (a Hermes stuck after a huge answer)
+    std::fs::write(&script, "#!/bin/sh\nhead -c 34000000 /dev/zero | tr '\\0' 'x'\nexec sleep 101\n").unwrap();
+    let agent = AgentConfig {
+        name: "vie".into(),
+        python: vec!["/bin/sh".into(), script.to_string_lossy().into_owned()],
+        hermes_home: Some(dir.path().to_string_lossy().into_owned()),
+        ..Default::default()
+    };
+    let mut request = Dict::new();
+    request.insert("op".into(), json!("list"));
+    let started = std::time::Instant::now();
+    let answer = bipbridge::vault::run_in_hermes(agent, request).await;
+    let took = started.elapsed();
+    let alive = std::process::Command::new("pgrep").args(["-f", "^sleep 10[1]$"]).output().map(|o| !o.stdout.is_empty());
+    assert!(answer.is_err(), "{answer:?}");
+    assert!(took < std::time::Duration::from_secs(20), "{answer:?} after {took:?}; its process left running: {alive:?}");
+}
+
+// -- fifth review, the fixes' own tests ---------------------------------------------------------------------------------
+
+#[tokio::test]
+async fn pass5_a_card_s_name_holding_its_number_never_reaches_the_notices_file() {
+    let _guard = SERIAL.lock().await;
+    let h = fixture();
+    given(&h).await;
+    let mut items = store_of(&h.link("vie"));
+    let label = format!("Visa 4111 1111 1111 1111 {}", "y".repeat(200));
+    items.push(json!({"id": "vault_ffffffffffff", "kind": "payment", "label": label, "origin": null,
+                      "secret": {"card_number": "4111111111111111", "cvc": "123"}}));
+    write_store(&h.link("vie"), &items).unwrap();
+    h.enrol().await;
+    h.vault.copies_ready_all(&h.config).await;
+    let notices = h.vault.notices();
+    assert_eq!(notices.len(), 1, "{notices:?}");
+    for said in [&notices[0].key, &notices[0].text] {
+        assert!(!bipbridge::card_details::holds_card_number(said) && !said.contains("1111 1111"), "{said}");
+        assert!(said.chars().count() < 160, "{said}");
+    }
+    for file in h.files_on_disk() {
+        let data = String::from_utf8_lossy(&std::fs::read(&file).unwrap()).into_owned();
+        assert!(!data.contains("4111 1111 1111 1111") && !data.contains("yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy"),
+                "{}", file.display());
+    }
 }
