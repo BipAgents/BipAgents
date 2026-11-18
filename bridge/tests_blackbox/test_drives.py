@@ -477,8 +477,18 @@ def test_what_is_refused(bridges, fakes):
         # Not connected yet: no folders to set.
         nothing = bridge.put("/v1/drives/dropbox/folders", headers=AUTH, json={"folders": []})
         assert nothing.status_code == 404 and nothing.json()["detail"]["code"] == "not_connected"
-        # Android asking Google's way without the Web client on this bridge: the web sign-in instead.
+        # Android asking Google's way without the Web client on this bridge: the person chooses first (Kerfy's
+        # exchange or their own project), the listing says so
         android = bridge.post("/v1/drives/google_drive/start", headers=AUTH, json={"client": "android"})
-        assert android.status_code == 409 and android.json()["detail"]["code"] == "not_configured"
+        assert android.status_code == 409 and android.json()["detail"]["code"] == "android_choice"
+        assert bridge.get("/v1/drives", headers=AUTH).json()["drives"][0]["android"] == "choose"
+        own = bridge.put("/v1/drives/google_drive/android", headers=AUTH,
+                         json={"mode": "own", "client_id": "mine.apps.googleusercontent.com", "client_secret": "s"})
+        assert own.status_code == 200 and own.json() == {"android": "own"}
+        assert "\"s\"" not in bridge.get("/v1/drives", headers=AUTH).text
+        started = bridge.post("/v1/drives/google_drive/start", headers=AUTH, json={"client": "android"}).json()
+        assert started["server_client_id"] == "mine.apps.googleusercontent.com"
+        gone = bridge.delete("/v1/drives/google_drive/android", headers=AUTH)
+        assert gone.status_code == 200 and gone.json()["android"] == "choose"
     finally:
         service.close()
