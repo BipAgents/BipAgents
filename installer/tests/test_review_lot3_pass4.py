@@ -79,3 +79,20 @@ def test_the_beat_says_which_key_service_token_the_place_holds(tmp_path):
     assert said == hashlib.sha256(b"the-place-s-token-0123456789").hexdigest()
     write(space / "keyservice.json", b"{not json")
     assert agent.vault_key_service(str(home)) is None
+
+
+def test_a_run_cut_off_between_the_replacement_and_its_end_leaves_nothing_aside_at_the_next(tmp_path, monkeypatch):
+    """Review of the merged vault-keys, M2: killed after the order's key service took the place's (the right state:
+    the guichet knows that token), keyservice.json.before stays; the next run tidies it."""
+    space = _space(tmp_path)
+    write(space / "keyservice.json", json.dumps(SETTINGS).encode())
+    write(space / "keyservice.json.before", json.dumps({**SETTINGS, "token": "an-older-token-0123456789"}).encode())
+    data = tmp_path / ".local" / "share" / "hermes-bridge"
+    write(data / vault_keys.SEALED, b"{}")              # sealed meanwhile: nothing else to do but tidy
+    status, _, _ = _enrolling(tmp_path, monkeypatch, 0)
+    assert status == 0 and sorted(p.name for p in space.iterdir()) == ["keyservice.json"]
+    assert json.loads((space / "keyservice.json").read_text())["token"] == SETTINGS["token"]
+    # cut off before the replacement (only the copy aside, keyservice.json gone by hand): put back
+    (space / "keyservice.json").rename(space / "keyservice.json.before")
+    _enrolling(tmp_path, monkeypatch, 0)
+    assert (space / "keyservice.json").is_file() and not (space / "keyservice.json.before").exists()

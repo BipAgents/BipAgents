@@ -1309,3 +1309,17 @@ async fn pass5_a_card_s_name_holding_its_number_never_reaches_the_notices_file()
                 "{}", file.display());
     }
 }
+
+// -- review of the merged vault-keys (18/11), M1 ------------------------------------------------------------------------
+
+#[test]
+fn a_card_s_notice_shows_the_last_four_digits_of_its_number_never_of_what_follows() {
+    for (label, shown) in [
+        ("4111 1111 1111 1111 CVV 123", "•••• 1111"),
+        ("Visa 4012888888881881 exp 12/29", "•••• 1881"),
+    ] {
+        let named = bipbridge::vault::card_name(label);
+        assert!(named.ends_with(shown) && !bipbridge::card_details::holds_card_number(&named), "{label} -> {named}");
+    }
+    assert_eq!(bipbridge::vault::card_name("Carte perso"), "Carte perso");
+}
