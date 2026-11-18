@@ -289,3 +289,26 @@ def test_through_the_relay_the_scripted_page_is_reloaded_under_the_persons_hold(
     scripted(folder, "unknown")
     taken(bridge)
     take(bridge, False)
+
+
+def test_a_slow_page_no_script_ran_on_keeps_its_tabs(bridges, fakes, chromium, shop):
+    # review of 18/11, F4: a script ran once on another site's page; this page only answers slowly: its document can't
+    # be read, but no script of the agent's ran on its site, so its tabs stay as they are
+    bridge, folder = browser_bridge(bridges, fakes, chromium)
+    go(chromium, shop + "/hang.html")
+    scripted(folder, "https://other.example", doc="0123456789ABCDEF0123456789ABCDEF")
+    old = {t["id"] for t in tabs(chromium)}
+    run_in_page(chromium, "/hang.html", "while (true) {}")
+    taken(bridge, chromium)
+    assert {t["id"] for t in tabs(chromium)} == old, "its tab kept"
+    take(bridge, False)
+
+
+def test_a_document_scripted_more_than_a_day_ago_is_not_reloaded_any_more(bridges, fakes, chromium, shop):
+    # review of 18/11, F4: the documents scripts ran on are kept a day, not for ever
+    bridge, folder = browser_bridge(bridges, fakes, chromium)
+    assert page(chromium, "window.__mark = 1") == 1
+    scripted(folder, shop, ago=25 * 3600, doc=loader(chromium))
+    taken(bridge, chromium)
+    assert page(chromium, "window.__mark") == 1, "left as it is"
+    take(bridge, False)

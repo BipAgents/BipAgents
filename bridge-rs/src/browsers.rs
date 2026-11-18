@@ -505,26 +505,50 @@ const SCRIPTED_FOR_PERSON: f64 = 3600.0;
 static FRESH_FOR_PERSON: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<String, (f64, String)>>> =
     std::sync::LazyLock::new(Default::default);
 
-/// What the agent's scripts ran on (scripts.jsonl, bip-browser-mcp's `note_script`): the documents (DevTools' loader
-/// ids, whenever they ran: hotfix v2 of 15/11), and for lines that name none (an earlier proxy's), the sites within
-/// the hour (« unknown » when the page couldn't say) and when the latest ran.
-fn scripted(config: &Config, agent: &str) -> (HashSet<String>, HashSet<String>, f64) {
+/// How long the document a script of the agent's ran on is reloaded before the person's hand (review of 18/11, F4:
+/// a record kept for ever sent every take-over through the reload, a merely slow page then lost its tabs). A tab kept
+/// open longer than this under the same document is rare.
+const SCRIPTED_DOCUMENT_FOR_PERSON: f64 = 24.0 * 3600.0;
+
+/// What the agent's scripts ran on (scripts.jsonl, bip-browser-mcp's `note_script`).
+#[derive(Debug, Default)]
+struct Scripted {
+    /// The documents (DevTools' loader ids) within `SCRIPTED_DOCUMENT_FOR_PERSON` (hotfix v2 of 15/11).
+    documents: HashSet<String>,
+    /// Those documents' sites (« unknown » when the page couldn't say).
+    document_sites: HashSet<String>,
+    /// For lines that name no document (an earlier proxy's): the sites within the hour, and when the latest ran.
+    sites: HashSet<String>,
+    latest: f64,
+}
+
+fn scripted(config: &Config, agent: &str) -> Scripted {
     let text = std::fs::read_to_string(folder(config, agent).join(crate::browser_mcp::SCRIPTS_FILE)).unwrap_or_default();
-    let since = crate::py::time_time() - SCRIPTED_FOR_PERSON;
-    let (mut documents, mut sites) = (HashSet::new(), HashSet::new());
-    let mut latest: f64 = 0.0;
+    let now = crate::py::time_time();
+    let mut out = Scripted::default();
     for line in text.lines().filter_map(|l| serde_json::from_str::<Value>(l).ok()) {
+        let t = line.get("t").and_then(Value::as_f64).unwrap_or(0.0);
+        let origin = line.get("origin").and_then(Value::as_str).unwrap_or("unknown").to_string();
         if let Some(doc) = line.get("doc").and_then(Value::as_str).filter(|d| !d.is_empty()) {
-            documents.insert(doc.to_string());
+            if t >= now - SCRIPTED_DOCUMENT_FOR_PERSON {
+                out.documents.insert(doc.to_string());
+                out.document_sites.insert(origin);
+            }
             continue;
         }
-        let t = line.get("t").and_then(Value::as_f64).unwrap_or(0.0);
-        if t >= since {
-            sites.insert(line.get("origin").and_then(Value::as_str).unwrap_or("unknown").to_string());
-            latest = latest.max(t);
+        if t >= now - SCRIPTED_FOR_PERSON {
+            out.sites.insert(origin);
+            out.latest = out.latest.max(t);
         }
     }
-    (documents, sites, latest)
+    out
+}
+
+impl Scripted {
+    /// A script of the agent's may have run on a page of `origin` (or somewhere it couldn't say).
+    fn on_site(&self, origin: &str) -> bool {
+        self.document_sites.iter().chain(&self.sites).any(|s| s == origin || s == "unknown" || s == "null")
+    }
 }
 
 /// Before the person takes the agent's browser (« Payer dans le navigateur de l'agent », the Bureau): the page is
@@ -539,25 +563,32 @@ fn scripted(config: &Config, agent: &str) -> (HashSet<String>, HashSet<String>, 
 /// (card_fill.rs `Page::fresh_tab`), the scripted documents gone all the same. Each failure says why in the log. False
 /// only when even that can't be done (DevTools out of reach, a tab that won't close).
 async fn fresh_for_person(config: &Config, agent: &str, token: &str) -> bool {
-    let (documents, sites, latest) = scripted(config, agent);
-    if documents.is_empty() && sites.is_empty() {
+    let done = scripted(config, agent);
+    if done.documents.is_empty() && done.sites.is_empty() {
         return true;
     }
     let Some(port) = ports_of(config, agent).and_then(|p| p.get("cdp").copied()) else {
         tracing::warn!(agent = %agent, "page not made fresh before the person takes the browser: no DevTools port");
         return false;
     };
-    let why = match reload_for_person(agent, port, token, &documents, &sites, latest).await {
+    let (why, known) = match reload_for_person(agent, port, token, &done).await {
         Ok(()) => return true,
-        Err(why) => why,
+        Err(failed) => failed,
     };
+    // the tabs' addresses as Chrome's tab list says them (no renderer asked: a busy page can't answer)
+    let listed = crate::desktop_page::tabs(port, Some(token)).await.ok();
+    let addresses: Vec<String> = listed.iter().flatten().map(|t| t.url.clone()).collect();
+    // its document unknown (the page didn't answer): the tabs are only closed when a script ran on one of their sites
+    // (review of 18/11, F4: a merely slow page after a script elsewhere keeps its tabs); not even listed: never told
+    let origin_of = |u: &String| url::Url::parse(u).map(|u| u.origin().ascii_serialization()).unwrap_or_default();
+    if !known && listed.is_some() && !addresses.iter().any(|u| done.on_site(&origin_of(u))) {
+        tracing::info!(agent = %agent, reason = %why,
+                       "page not looked at before the person takes the browser: no script ran on its site");
+        return true;
+    }
     tracing::warn!(agent = %agent, reason = %why,
                    "page not reloaded before the person takes the browser: opened again in a fresh tab");
-    // its address as Chrome's tab list says it (no renderer asked: a busy page can't answer)
-    let url = crate::desktop_page::tabs(port, Some(token))
-        .await
-        .ok()
-        .and_then(|tabs| tabs.into_iter().map(|t| t.url).find(|u| u.starts_with("https://") || u.starts_with("http://")));
+    let url = addresses.into_iter().find(|u| u.starts_with("https://") || u.starts_with("http://"));
     match crate::card_fill::Page::fresh_tab(port, Some(token), url.as_deref()).await {
         Ok(_) => {
             FRESH_FOR_PERSON.lock().unwrap_or_else(|e| e.into_inner()).remove(agent);
@@ -571,26 +602,22 @@ async fn fresh_for_person(config: &Config, agent: &str, token: &str) -> bool {
     }
 }
 
-/// `fresh_for_person`'s reload in the tab itself: Ok when done or not needed, else why not.
-async fn reload_for_person(
-    agent: &str,
-    port: u16,
-    token: &str,
-    documents: &HashSet<String>,
-    sites: &HashSet<String>,
-    latest: f64,
-) -> Result<(), String> {
+/// `fresh_for_person`'s reload in the tab itself: Ok when done or not needed, else why not and whether the page was
+/// known to need it (false: it couldn't be looked at).
+async fn reload_for_person(agent: &str, port: u16, token: &str, done: &Scripted) -> Result<(), (String, bool)> {
+    let unknown = |why: String| (why, false);
     let mut page = match crate::card_fill::Page::open(port, Some(token)).await {
         Ok(page) => page,
         // no web page open: nothing a script ran on
         Err(crate::card_fill::FillError::NoPage) => return Ok(()),
-        Err(e) => return Err(format!("its tab not reached: {e}")),
+        Err(e) => return Err(unknown(format!("its tab not reached: {e}"))),
     };
-    let url = page.url().await.map_err(|e| format!("its address not read: {e}"))?;
+    let url = page.url().await.map_err(|e| unknown(format!("its address not read: {e}")))?;
     let origin = url::Url::parse(&url).map(|u| u.origin().ascii_serialization()).unwrap_or_default();
-    let document = page.loader().await.map_err(|e| format!("its document not read: {e}"))?;
+    let document = page.loader().await.map_err(|e| unknown(format!("its document not read: {e}")))?;
+    let (documents, latest) = (&done.documents, done.latest);
     let ran_here = !document.is_empty() && documents.contains(&document);
-    let site_ran = sites.iter().any(|s| *s == origin || s == "unknown" || s == "null");
+    let site_ran = done.sites.iter().any(|s| *s == origin || s == "unknown" || s == "null");
     if !ran_here && !site_ran {
         return Ok(());
     }
@@ -615,7 +642,7 @@ async fn reload_for_person(
             tracing::info!(agent = %agent, "page reloading before the person takes the browser: the old document is gone");
             Ok(())
         }
-        Err(e) => Err(format!("its reload: {e}")),
+        Err(e) => Err((format!("its reload: {e}"), true)),
     }
 }
 

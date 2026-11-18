@@ -624,6 +624,12 @@ async fn tab_targets(cdp: &mut Cdp) -> Result<Vec<String>, FillError> {
     Ok(tabs)
 }
 
+/// A web address's origin (`https://shop.example`), None for anything else (about:, chrome:, data:…).
+fn web_origin(address: &str) -> Option<String> {
+    let parsed = url::Url::parse(address).ok()?;
+    matches!(parsed.scheme(), "http" | "https").then(|| parsed.origin().ascii_serialization())
+}
+
 impl Page {
     /// The tab the agent is on: the only web page, else the visible one.
     pub async fn open(port: u16, hold: Option<&str>) -> Result<Page, FillError> {
@@ -777,6 +783,15 @@ impl Page {
         let mut cdp = Cdp::connect(port, hold).await?;
         let created = cdp.call("Target.createTarget", json!({"url": "about:blank"}), None).await?;
         let fresh = created.get("targetId").and_then(Value::as_str).ok_or_else(|| protocol("no new tab"))?.to_string();
+        // the sites the tabs show (Chrome's own list, no renderer asked), their service workers removed below
+        let mut origins: Vec<String> = Vec::new();
+        let listed = cdp.call("Target.getTargets", json!({}), None).await?;
+        let shown = listed.get("targetInfos").and_then(Value::as_array).cloned().unwrap_or_default();
+        for address in shown.iter().filter_map(|t| t.get("url").and_then(Value::as_str)).chain(url) {
+            if let Some(origin) = web_origin(address).filter(|o| !origins.contains(o)) {
+                origins.push(origin);
+            }
+        }
         // Each tab asked to close once (a second `Target.closeTarget` starts its closing again: asked every 300 ms, a
         // busy page's tab never closed), then, still there, its page stopped and asked once more.
         let started = tokio::time::Instant::now();
@@ -814,9 +829,25 @@ impl Page {
             }
             cdp.drain(Duration::from_millis(300)).await?;
         }
+        // A service worker the agent's script registered would answer the address opened again and plant its script
+        // under the person's hand (review of 18/11, F1): every such site's workers and their caches removed first, as
+        // `fresh` does before its reload; when that can't be done the new tab stays empty.
+        // (through the new tab: Chrome's browser endpoint answers « Internal error » to it)
+        let mut page = Page::attach_with(cdp, &fresh).await?;
+        let session = page.session.clone();
+        let mut cleared = true;
+        for origin in &origins {
+            let clear = json!({"origin": origin, "storageTypes": "service_workers,cache_storage"});
+            if let Err(e) = page.cdp.call("Storage.clearDataForOrigin", clear, Some(&session)).await {
+                tracing::warn!(origin = %origin, error = %e, "fresh tab: a site's service workers not removed");
+                cleared = false;
+            }
+        }
+        if !cleared {
+            tracing::warn!("fresh tab: left empty (a site's service workers could not be removed)");
+            return Ok(fresh);
+        }
         if let Some(url) = url.filter(|u| u.starts_with("https://") || u.starts_with("http://")) {
-            let mut page = Page::attach_with(cdp, &fresh).await?;
-            let session = page.session.clone();
             // the scripted documents are gone already: an address that won't load leaves the person an empty tab
             if let Err(e) = page.cdp.call("Page.navigate", json!({"url": url}), Some(&session)).await {
                 tracing::warn!(error = %e, "fresh tab: its page not opened again");
