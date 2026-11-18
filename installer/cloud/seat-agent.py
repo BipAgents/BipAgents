@@ -638,6 +638,11 @@ def health():
         last_used = used(entry.pw_dir)
         if last_used is not None:
             seats[str(number)]["used"] = last_used
+        # the last vault_keys order ended here, read BEFORE the place's vault: what follows is at least that recent
+        # (the guichet leaves out the vault fields of a beat citing an older one than it knows done)
+        cited = vault_done_of(number)
+        if cited is not None:
+            seats[str(number)]["vault_done"] = cited
         seats[str(number)].update(vault_state(entry.pw_dir))
         failed = vault_failed(entry.pw_dir)
         if failed:
@@ -763,6 +768,54 @@ def place_folder(entry, rel):
         raise
 
 
+def _vault_done_path():
+    return VAULT_TRIED + "-done"   # root's own, beside VAULT_TRIED: each vault_keys order ended, one JSON line
+
+
+def note_vault_outcome(order_id, number, sealed, error=None, key_service=None):
+    """A vault_keys order ended: what it did, told with its done (the guichet marks the grant sealed from it) and
+    cited by the beats (`vault_done`). Never the token, only its hash."""
+    line = {"order": int(order_id), "seat": int(number), "sealed": bool(sealed)}
+    if error:
+        line["error"] = str(error)[:300]
+    if key_service:
+        line["key_service"] = key_service
+    os.makedirs(os.path.dirname(_vault_done_path()), exist_ok=True)
+    with open(_vault_done_path(), "a") as fh:
+        fh.write(json.dumps(line) + "\n")
+
+
+def _vault_outcomes():
+    try:
+        with open(_vault_done_path()) as fh:
+            lines = fh.read().splitlines()
+    except OSError:
+        return []
+    found = []
+    for line in lines:
+        try:
+            item = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(item, dict) and isinstance(item.get("order"), int):
+            found.append(item)
+    return found
+
+
+def vault_outcome(order_id):
+    """What a vault_keys order did ({"sealed": ..., "key_service" or "error"}), None while it hasn't ended."""
+    for item in reversed(_vault_outcomes()):
+        if item["order"] == int(order_id):
+            return {k: v for k, v in item.items() if k in ("sealed", "error", "key_service")}
+    return None
+
+
+def vault_done_of(number):
+    """The last vault_keys order ended for place n (what its beat cites), else None."""
+    ids = [item["order"] for item in _vault_outcomes() if item.get("seat") == int(number)]
+    return max(ids) if ids else None
+
+
 def vault_keys_order(number, settings, order_id, harden=None, run_as=None, moves=None):
     """The guichet's `vault_keys` order for place n. True: done (told to the guichet, whatever happened); False: held
     (the server was just hardened, or the place moves: neither noted nor told done, served again next round). The
@@ -780,8 +833,12 @@ def vault_keys_order(number, settings, order_id, harden=None, run_as=None, moves
         return False
     if os.path.exists(os.path.join(entry.pw_dir, MOVED_AWAY)):
         log("vault keys of place %d dropped: the place moved away (its copy stays stopped)" % number)
+        note_vault_outcome(order_id, number, False, "the place moved away: not sealed here")
         return True
     if str(int(order_id)) in tried_orders():
+        if vault_outcome(order_id) is None:   # cut off during its try: whatever the place says now
+            note_vault_outcome(order_id, number, vault_state(entry.pw_dir).get("vault") is not None,
+                               "cut off during its try", vault_key_service(entry.pw_dir))
         return True   # tried already (a run cut off after it, the same order again): never a second enrolment
     if not os.path.exists(HARDENED):
         try:
@@ -791,6 +848,7 @@ def vault_keys_order(number, settings, order_id, harden=None, run_as=None, moves
         if not hardened:
             note_tried(order_id)
             note_vault_failed(entry.pw_dir, "the server's hardening failed: not sealed")
+            note_vault_outcome(order_id, number, False, "the server's hardening failed: not sealed")
             log("place %d (%s): vault keys not sealed, the server's hardening failed" % (number, user))
             return True
         log("place %d (%s): server hardened for the vault keys, sealed at the next round" % (number, user))
@@ -817,9 +875,11 @@ def vault_keys_order(number, settings, order_id, harden=None, run_as=None, moves
             args = ["vault-keys", "enable", "--settings-file", path, "--json"]
         result = run_as(entry, args, timeout=900)
         log("place %d (%s): vault keys %s" % (number, user, (result or {}).get("state", "sealed")))
+        note_vault_outcome(order_id, number, True, key_service=vault_key_service(entry.pw_dir))
     except (SeatError, OSError) as exc:
         note_vault_failed(entry.pw_dir, str(exc))
         log("place %d (%s): vault keys not sealed: %s" % (number, user, str(exc)[:200]))
+        note_vault_outcome(order_id, number, False, str(exc), vault_key_service(entry.pw_dir))
     finally:
         if folder_fd is not None:
             if name:
@@ -2467,7 +2527,8 @@ def main(argv=()):
                 with open(DONE, "a") as fh:
                     fh.write("%d\n" % int(order["id"]))
             try:
-                call(conf, "POST", "/v1/server/orders/%d/done" % int(order["id"]))
+                # a vault_keys order's outcome with its done (the guichet marks the grant sealed from it)
+                call(conf, "POST", "/v1/server/orders/%d/done" % int(order["id"]), vault_outcome(order["id"]))
             except (OSError, ValueError) as exc:
                 log("done not told yet (next round): %s" % exc)
     zram()   # last: installing it may take a minute, once

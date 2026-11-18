@@ -17,8 +17,7 @@ def seat(tmp_path, monkeypatch):
     agent = _seat_agent()
     home = tmp_path / "home" / "bip2"
     (home / ".local" / "state" / "bipagents").mkdir(parents=True)
-    for name, file in (("VAULT_TRIED", "tried"), ("HARDENED", "hardened"), ("MOVES", "moves"),
-                       ("VAULT_DONE", "vault-done")):
+    for name, file in (("VAULT_TRIED", "tried"), ("HARDENED", "hardened"), ("MOVES", "moves")):
         monkeypatch.setattr(agent, name, str(tmp_path / file))
     Path(agent.HARDENED).write_text("done")
     entry = type("Entry", (), {"pw_dir": str(home), "pw_uid": os.getuid(), "pw_gid": os.getgid(), "pw_name": "bip2"})
@@ -38,7 +37,7 @@ def test_a_sealed_order_is_noted_with_the_token_the_place_holds_then(seat):
     assert agent.vault_keys_order(2, SETTINGS, 41, run_as=lambda e, a, timeout=900: {"state": "sealed"}) is True
     said = agent.vault_outcome(41)
     assert said == {"sealed": True, "key_service": hashlib.sha256(b"the-new-token-0123456789abc").hexdigest()}
-    assert SETTINGS["token"] not in Path(agent.VAULT_DONE).read_text()
+    assert SETTINGS["token"] not in Path(agent.VAULT_TRIED + "-done").read_text()
 
 
 def test_a_failed_order_is_noted_with_why(seat):
