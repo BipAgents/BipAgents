@@ -43,6 +43,9 @@ const TEXT = {
     yourAnswer: "Ta réponse…",
     answer: "Répondre",
     skip: "Passer",
+    vault: "Coffre",
+    close: "Fermer",
+    triedFirst: label => `Autre mot de passe : « ${label} » est essayé en premier.`,
     cats: { wellness: "Bien-être", finance: "Finance", daily: "Quotidien", work: "Travail", learning: "Apprendre", home: "Maison", creative: "Créatif", tech: "Tech" },
   },
   en: {
@@ -88,6 +91,9 @@ const TEXT = {
     yourAnswer: "Your answer…",
     answer: "Answer",
     skip: "Skip",
+    vault: "Vault",
+    close: "Close",
+    triedFirst: label => `Another password: “${label}” is tried first.`,
     cats: { wellness: "Wellness", finance: "Finance", daily: "Everyday", work: "Work", learning: "Learning", home: "Home", creative: "Creative", tech: "Tech" },
   },
 };
