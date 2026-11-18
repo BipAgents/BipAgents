@@ -1093,6 +1093,8 @@ pub fn reading_kind(tool: &str) -> Option<&'static str> {
         b if b.starts_with("browser_") || ["navigate", "get_page_content"].contains(&b) => Some("web"),
         "read_page" | "page_data" => Some("page"),
         "read_sent_file" | "archive_read" | "archive_search" | "read_file" | "search_files" => Some("file"),
+        // a drive's documents and names, written by anyone (drives.rs)
+        "drive_read" | "drive_search" | "drive_list" | "drive_folders" => Some("file"),
         // another agent's answer, a sub-agent's report: whatever they read (review R4)
         "message_agent" | "ask_agent" | "delegate_task" => Some("agent"),
         _ => None,

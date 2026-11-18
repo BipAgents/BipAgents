@@ -340,6 +340,10 @@ pub fn private_tools(config: &Config, agent: &str) -> Vec<&'static str> {
     if crate::agent_files::offered(config, agent) {
         out.push("files");
     }
+    // folders of the person's online documents it reads (drives.rs): what it read is in its conversations
+    if crate::drives::offered(config, agent) {
+        out.push("drives");
+    }
     out
 }
 
@@ -356,6 +360,7 @@ pub fn confirm_text(config: &Config, agent: &AgentConfig, private: &[&str]) -> S
             "contacts" => ["tes contacts", "your contacts", "deine Kontakte", "tus contactos"],
             "notebook" => ["ton Carnet", "your Notebook", "dein Notizbuch", "tu Cuaderno"],
             "archives" => ["tes archives", "your archives", "deine Archive", "tus documentos archivados"],
+            "drives" => ["tes documents en ligne", "your online documents", "deine Online-Dokumente", "tus documentos en línea"],
             _ => ["tes fichiers", "your files", "deine Dateien", "tus archivos"],
         };
         words[match lang.as_str() { "en" => 1, "de" => 2, "es" => 3, _ => 0 }]

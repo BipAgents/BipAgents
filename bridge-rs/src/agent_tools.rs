@@ -85,7 +85,7 @@ pub const PROPOSE_TASK: &str = "propose_task";
 pub const KNOWLEDGE_TOOLS: [&str; 2] = [KNOWLEDGE_READ, KNOWLEDGE_SEARCH];
 pub const PAGE_TOOLS: [&str; 4] = [CREATE_PAGE, LIST_PAGES, READ_PAGE, DELETE_PAGE];
 /// The tools that make files in the place: refused plainly when it is full (storage_watch.rs).
-pub const WRITING_TOOLS: [&str; 3] = [CREATE_AUDIO, CREATE_PODCAST, CREATE_PAGE];
+pub const WRITING_TOOLS: [&str; 4] = [CREATE_AUDIO, CREATE_PODCAST, CREATE_PAGE, "drive_save"];
 
 fn create_audio_tool() -> Value {
     json!({

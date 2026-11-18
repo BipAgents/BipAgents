@@ -582,7 +582,7 @@ pub fn tools(config: &Config, agent: &str) -> Vec<Value> {
 }
 
 /// What came from outside, its markers made harmless (a document can't close the block itself).
-fn defused(text: &str) -> String {
+pub(crate) fn defused(text: &str) -> String {
     text.replace("<<<", "‹‹‹").replace(">>>", "›››")
 }
 

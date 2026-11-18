@@ -667,6 +667,12 @@ pub async fn finish_query(config: &Config, query: HashMap<String, String>) -> Ap
     let store = connections::store_of(config);
     let mut stored = store.read()?;
     let previous = stored.drives.remove(flow.provider.id());
+    // signed in again: Dropbox's previous token ended (Google gives the same grant again: revoking its old renewal
+    // token would end the new one too; Microsoft has no revocation)
+    let old_tokens = previous
+        .as_ref()
+        .filter(|l| flow.provider == Provider::Dropbox && l.tokens.access_token != tokens.access_token)
+        .map(|l| l.tokens.clone());
     // the same account signed in again (« Reconnecter », Google's « Ajouter… »): its folders stay; another account:
     // they were the other account's, forgotten
     let mut folders = previous
@@ -697,6 +703,11 @@ pub async fn finish_query(config: &Config, query: HashMap<String, String>) -> Ap
     stored.drives.insert(flow.provider.id().to_string(), link.clone());
     store.write(&stored)?;
     tracing::info!(service = flow.provider.id(), folders = link.folders.len(), "drives: connected");
+    drop(_guard);
+    if let Some(old) = old_tokens {
+        let revoked = revoke(flow.provider, ep.revoke.as_deref(), &old).await;
+        tracing::info!(service = flow.provider.id(), revoked, "drives: the previous connection's key revoked");
+    }
     Ok(view(flow.provider, true, Some(&link)))
 }
 
@@ -1018,6 +1029,9 @@ impl Api {
                     ("fields", fields.as_str()),
                     ("pageSize", "100"),
                     ("orderBy", "folder,name"),
+                    // a folder of a shared drive too
+                    ("includeItemsFromAllDrives", "true"),
+                    ("supportsAllDrives", "true"),
                 ];
                 if let Some(c) = cursor {
                     query.push(("pageToken", c));
@@ -1091,15 +1105,21 @@ impl Api {
         let p = self.provider();
         let items: Vec<Value> = match p {
             Provider::Google => {
-                let q = format!(
-                    "'{}' in parents and trashed = false and fullText contains '{}'",
-                    google_quoted(&folder.id),
-                    google_quoted(words)
-                );
+                // every level at once (drive.file sees only what was picked and what it holds), shared drives too;
+                // the hits are kept only inside the chosen folders (the caller's `inside`)
+                let _ = folder;
+                let q = format!("trashed = false and fullText contains '{}'", google_quoted(words));
                 let fields = format!("files({GOOGLE_FIELDS})");
                 self.get(
                     &format!("{}/files", self.ep.api),
-                    &[("q", q.as_str()), ("fields", fields.as_str()), ("pageSize", "25")],
+                    &[
+                        ("q", q.as_str()),
+                        ("fields", fields.as_str()),
+                        ("pageSize", "100"),
+                        ("corpora", "allDrives"),
+                        ("includeItemsFromAllDrives", "true"),
+                        ("supportsAllDrives", "true"),
+                    ],
                 )
                 .await?["files"]
                     .as_array()
@@ -1124,7 +1144,8 @@ impl Api {
             }
         };
         let mut hits = Vec::new();
-        for v in items.iter().take(HITS_MAX) {
+        let max = if p == Provider::Google { 100 } else { HITS_MAX };
+        for v in items.iter().take(max) {
             let mut hit = item_of(p, v);
             // Graph's search hits may come without their parent: the item itself says it
             if p == Provider::Microsoft && hit.parents.is_empty() && !hit.id.is_empty() {
@@ -1319,7 +1340,17 @@ fn line_of(provider: Provider, item: &Item) -> String {
         extra.push(day.to_string());
     }
     let extra = if extra.is_empty() { String::new() } else { format!(" ({})", extra.join(", ")) };
-    format!("- [{kind}] {}{extra} — {}", item.name, reference(provider, &item.id))
+    format!("- [{kind}] {}{extra} — {}", defused(&item.name), reference(provider, &item.id))
+}
+
+/// Names and texts from a drive, written by anyone: its markers made harmless (a name can't close the block).
+fn defused(text: &str) -> String {
+    crate::archives::defused(text)
+}
+
+/// Lines of names from a drive, between the markers that say they are data.
+fn marked(head: &str, lines: &[String]) -> String {
+    format!("{head}\n{UNTRUSTED}\n<<<\n{}\n>>>", lines.join("\n"))
 }
 
 fn arg(arguments: &Dict, key: &str) -> String {
@@ -1356,14 +1387,14 @@ pub async fn call(config: &Config, agent: &AgentConfig, name: &str, arguments: &
                 format!(
                     "- [{}] {} ({}{}) — {}",
                     if f.file { "file" } else { "folder" },
-                    f.name,
+                    defused(&f.name),
                     p.label(),
                     if ended { ", connection ended: your person connects it again in the app" } else { "" },
                     reference(*p, &f.id)
                 )
             })
             .collect();
-        return tool_text(&format!("Folders you may read:\n{}", lines.join("\n")), false);
+        return tool_text(&marked("Folders you may read:", &lines), false);
     }
     match name {
         "drive_list" => list(config, &mine, &arg(arguments, "folder")).await,
@@ -1445,7 +1476,7 @@ des fichiers).",
             } else {
                 String::new()
             };
-            tool_text(&format!("{}:\n{}{more}", item.name, lines.join("\n")), false)
+            tool_text(&format!("{}{more}", marked(&format!("{}:", defused(&item.name)), &lines)), false)
         }
         Err(fault) => told(provider, &format!("{} can't be listed", item.name), &fault),
     }
@@ -1498,7 +1529,7 @@ async fn search(config: &Config, mine: &[(Provider, Folder)], words: &str, folde
         if wanted.is_none() {
             let lower = words.to_lowercase();
             for f in folders.iter().filter(|f| f.file && f.name.to_lowercase().contains(&lower)) {
-                lines.push(format!("- [file] {} — {}", f.name, reference(provider, &f.id)));
+                lines.push(format!("- [file] {} — {}", defused(&f.name), reference(provider, &f.id)));
             }
         }
         for target in &targets {
@@ -1521,11 +1552,7 @@ async fn search(config: &Config, mine: &[(Provider, Folder)], words: &str, folde
     if let (Some(provider), true) = (ended, lines.is_empty()) {
         return told(provider, "Not searched", &Fault::Expired);
     }
-    let mut out = if lines.is_empty() {
-        format!("Nothing found for {words:?}.")
-    } else {
-        format!("Found:\n{}", lines.join("\n"))
-    };
+    let mut out = if lines.is_empty() { format!("Nothing found for {words:?}.") } else { marked("Found:", &lines) };
     if !failures.is_empty() {
         out.push_str(&format!("\nNot searched: {}", failures.join("; ")));
     }
@@ -1552,7 +1579,14 @@ async fn read(config: &Config, mine: &[(Provider, Folder)], file: &str, page: us
     let (part, pages) = page_of(&text, page);
     let page = page.clamp(1, pages);
     let next = if page < pages { format!("\n(next: page {})", page + 1) } else { String::new() };
-    tool_text(&format!("{UNTRUSTED}\n<<<document {} — page {page}/{pages}\n{part}\n>>>{next}", item.name), false)
+    tool_text(
+        &format!(
+            "{UNTRUSTED}\n<<<document {} — page {page}/{pages}\n{}\n>>>{next}",
+            defused(&item.name),
+            defused(&part)
+        ),
+        false,
+    )
 }
 
 /// A downloaded file's words (doc_text.rs reads from a path: a private temporary file, removed after).
@@ -1706,7 +1740,10 @@ pub async fn set_folders(config: &Config, id: &str, chosen: &[Chosen]) -> ApiRes
     let mut folders: Vec<Folder> = Vec::new();
     let mut api: Option<Api> = None;
     for c in chosen {
-        let agents = agents_checked(config, &c.agents)?;
+        // an agent deleted since the app listed the folders: left out, never a refusal (review 18/11)
+        let present: Vec<String> =
+            c.agents.iter().filter(|a| config.agent(Some(a.as_str())).is_some()).cloned().collect();
+        let agents = agents_checked(config, &present)?;
         if let Some(old) = previous.iter().find(|f| f.id == c.id) {
             folders.retain(|f| f.id != old.id);
             folders.push(Folder { agents, ..old.clone() });
@@ -1765,11 +1802,13 @@ pub async fn browse(config: &Config, id: &str, folder: Option<&str>) -> ApiResul
 
 /// Forgets the drive here and revokes its grant where the service allows it (Dropbox: its access token, renewed
 /// first when it ended; Google: the renewal token, which ends every token of the grant).
+/// Works with the switch off too (review 18/11): keys kept from before are still forgotten and revoked.
 pub async fn disconnect(config: &Config, id: &str) -> ApiResult<Value> {
-    let (provider, ep) = ready(config, id)?;
+    let provider = Provider::of(id).ok_or_else(|| coded(404, "unknown_service", "no such drive"))?;
     if !read_stored(config)?.drives.contains_key(provider.id()) {
-        return Err(not_connected());
+        return Err(if config.drives.enabled { not_connected() } else { off() });
     }
+    let ep = endpoints(config, provider);
     // an ended Dropbox access token can't be revoked: renewed first (best effort)
     if provider == Provider::Dropbox {
         let _ = renew(config, provider, None).await;
@@ -1782,18 +1821,45 @@ pub async fn disconnect(config: &Config, id: &str) -> ApiResult<Value> {
         store.write(&stored)?;
         link
     };
-    let revoked = match (provider, ep.revoke.as_deref()) {
+    let revoked = revoke(provider, ep.as_ref().and_then(|e| e.revoke.as_deref()), &link.tokens).await;
+    tracing::info!(service = provider.id(), revoked, "drives: disconnected");
+    Ok(json!({"ok": true, "revoked": revoked}))
+}
+
+/// Asks the service to end a grant (Google: by its renewal token, which ends every token of it; Dropbox: by the
+/// access token). Microsoft has none.
+async fn revoke(provider: Provider, url: Option<&str>, tokens: &Tokens) -> bool {
+    match (provider, url) {
         (Provider::Google, Some(url)) => {
-            let token = link.tokens.refresh_token.clone().unwrap_or(link.tokens.access_token.clone());
+            let token = tokens.refresh_token.clone().unwrap_or(tokens.access_token.clone());
             http().post(url).form(&[("token", token)]).send().await.is_ok_and(|r| r.status().is_success())
         }
         (Provider::Dropbox, Some(url)) => {
-            http().post(url).bearer_auth(&link.tokens.access_token).send().await.is_ok_and(|r| r.status().is_success())
+            http().post(url).bearer_auth(&tokens.access_token).send().await.is_ok_and(|r| r.status().is_success())
         }
         _ => false,
-    };
-    tracing::info!(service = provider.id(), revoked, "drives: disconnected");
-    Ok(json!({"ok": true, "revoked": revoked}))
+    }
+}
+
+/// An agent deleted (agents_admin.rs): taken out of every folder, so that a new agent of the same name never
+/// inherits them (review 18/11).
+pub async fn forget_agent(config: &Config, agent: &str) {
+    let _guard = connections::LOCK.lock().await;
+    let store = connections::store_of(config);
+    let Ok(mut stored) = store.read() else { return };
+    let mut changed = false;
+    for link in stored.drives.values_mut() {
+        for f in &mut link.folders {
+            let before = f.agents.len();
+            f.agents.retain(|a| a != agent);
+            changed |= f.agents.len() != before;
+        }
+    }
+    if changed {
+        if let Err(e) = store.write(&stored) {
+            tracing::warn!(error = %e, "drives: a deleted agent's folders can't be updated");
+        }
+    }
 }
 
 async fn listing_route(State(state): State<AppState>) -> ApiResult<Response> {
