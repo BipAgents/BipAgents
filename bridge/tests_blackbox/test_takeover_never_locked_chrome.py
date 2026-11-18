@@ -142,9 +142,10 @@ def run_in_page(port, url, expression):
     browser_call(port, "Runtime.evaluate", {"expression": expression}, url=url)
 
 
-def taken(bridge):
+def taken(bridge, port=None):
     answer = take(bridge, True)
-    assert answer.status_code == 200 and answer.json()["you_hold"] is True, answer.text
+    shown = tabs(port) if port else None
+    assert answer.status_code == 200 and answer.json()["you_hold"] is True, (answer.text, shown)
     return answer
 
 
@@ -193,8 +194,9 @@ def test_a_page_whose_script_never_yields_is_taken_over_and_closed(bridges, fake
     scripted(folder, shop, doc=loader(chromium))
     old = {t["id"] for t in tabs(chromium)}
     run_in_page(chromium, "/hang.html", "window.__reader = 1; while (true) {}")
+    print("before", tabs(chromium))
     started = time.monotonic()
-    taken(bridge)
+    taken(bridge, chromium)
     assert time.monotonic() - started < 60
     # the busy tab closed, a fresh one at its address in its place
     assert wait_until(lambda: not ({t["id"] for t in tabs(chromium)} & old), timeout=15), tabs(chromium)

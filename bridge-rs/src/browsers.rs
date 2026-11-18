@@ -532,31 +532,72 @@ fn scripted(config: &Config, agent: &str) -> (HashSet<String>, HashSet<String>, 
 /// 15/11; a line of an earlier proxy, naming no document: its site within the hour), every other tab closed and the
 /// site's service workers removed first (card_fill.rs `fresh`, as before a payment), so nothing a script could have
 /// set up there sees what the person types. Done under the person's hold (`token`: the agent's tools and DevTools
-/// wait meanwhile). False when it had to and couldn't (DevTools out of reach, no reload).
+/// wait meanwhile).
+///
+/// The person is never locked out by a page that can't be reloaded (18/11, Alex and Vie's checkout that kept
+/// redirecting: 409 at every try): then its address is opened again in a fresh tab and every older tab closed
+/// (card_fill.rs `Page::fresh_tab`), the scripted documents gone all the same. Each failure says why in the log. False
+/// only when even that can't be done (DevTools out of reach, a tab that won't close).
 async fn fresh_for_person(config: &Config, agent: &str, token: &str) -> bool {
     let (documents, sites, latest) = scripted(config, agent);
     if documents.is_empty() && sites.is_empty() {
         return true;
     }
-    let Some(port) = ports_of(config, agent).and_then(|p| p.get("cdp").copied()) else { return false };
+    let Some(port) = ports_of(config, agent).and_then(|p| p.get("cdp").copied()) else {
+        tracing::warn!(agent = %agent, "page not made fresh before the person takes the browser: no DevTools port");
+        return false;
+    };
+    let why = match reload_for_person(agent, port, token, &documents, &sites, latest).await {
+        Ok(()) => return true,
+        Err(why) => why,
+    };
+    tracing::warn!(agent = %agent, reason = %why,
+                   "page not reloaded before the person takes the browser: opened again in a fresh tab");
+    // its address as Chrome's tab list says it (no renderer asked: a busy page can't answer)
+    let url = crate::desktop_page::tabs(port, Some(token))
+        .await
+        .ok()
+        .and_then(|tabs| tabs.into_iter().map(|t| t.url).find(|u| u.starts_with("https://") || u.starts_with("http://")));
+    match crate::card_fill::Page::fresh_tab(port, Some(token), url.as_deref()).await {
+        Ok(_) => {
+            FRESH_FOR_PERSON.lock().unwrap_or_else(|e| e.into_inner()).remove(agent);
+            tracing::info!(agent = %agent, "page opened again in a fresh tab before the person takes the browser");
+            true
+        }
+        Err(e) => {
+            tracing::warn!(agent = %agent, error = %e, "page not opened again in a fresh tab either");
+            false
+        }
+    }
+}
+
+/// `fresh_for_person`'s reload in the tab itself: Ok when done or not needed, else why not.
+async fn reload_for_person(
+    agent: &str,
+    port: u16,
+    token: &str,
+    documents: &HashSet<String>,
+    sites: &HashSet<String>,
+    latest: f64,
+) -> Result<(), String> {
     let mut page = match crate::card_fill::Page::open(port, Some(token)).await {
         Ok(page) => page,
         // no web page open: nothing a script ran on
-        Err(crate::card_fill::FillError::NoPage) => return true,
-        Err(_) => return false,
+        Err(crate::card_fill::FillError::NoPage) => return Ok(()),
+        Err(e) => return Err(format!("its tab not reached: {e}")),
     };
-    let Ok(url) = page.url().await else { return false };
+    let url = page.url().await.map_err(|e| format!("its address not read: {e}"))?;
     let origin = url::Url::parse(&url).map(|u| u.origin().ascii_serialization()).unwrap_or_default();
-    let Ok(document) = page.loader().await else { return false };
+    let document = page.loader().await.map_err(|e| format!("its document not read: {e}"))?;
     let ran_here = !document.is_empty() && documents.contains(&document);
     let site_ran = sites.iter().any(|s| *s == origin || s == "unknown" || s == "null");
     if !ran_here && !site_ran {
-        return true;
+        return Ok(());
     }
     // an earlier proxy's line: not again for the same document until another script
     let done = FRESH_FOR_PERSON.lock().unwrap_or_else(|e| e.into_inner()).get(agent).cloned();
     if !ran_here && done.is_some_and(|(when, fresh)| when >= latest && !fresh.is_empty() && fresh == document) {
-        return true;
+        return Ok(());
     }
     match page.fresh(Duration::from_secs(15), &|| true).await {
         Ok(_) => {
@@ -566,18 +607,15 @@ async fn fresh_for_person(config: &Config, agent: &str, token: &str) -> bool {
                 .unwrap_or_else(|e| e.into_inner())
                 .insert(agent.to_string(), (crate::py::time_time(), document));
             tracing::info!(agent = %agent, "page reloaded before the person takes the browser: a script ran on it");
-            true
+            Ok(())
         }
         // the new document not loaded in time, but the old one gone (its loader replaced): what a script set up there
         // is gone with it; the person sees the page finish loading
         Err(_) if page.loader().await.is_ok_and(|now| !now.is_empty() && now != document) => {
             tracing::info!(agent = %agent, "page reloading before the person takes the browser: the old document is gone");
-            true
+            Ok(())
         }
-        Err(e) => {
-            tracing::warn!(agent = %agent, error = ?e, "page not reloaded before the person takes the browser");
-            false
-        }
+        Err(e) => Err(format!("its reload: {e}")),
     }
 }
 
