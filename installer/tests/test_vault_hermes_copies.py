@@ -3,19 +3,23 @@
 (placemove.py) takes `<HERMES_HOME>/vault` or `<HERMES_HOME>/profiles/<agent>/vault` there; the bridge rebuilds them in
 memory from its master copy, which goes as before. A link to the memory folder is never carried anywhere (it would
 point at nothing on another server). A place not enrolled keeps today's layout: its copies go as they always did."""
+import json
 import os
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
-from bipinstall import backup, hermes, moving, placemove, sealed
+from bipinstall import backup, hermes, moving, placemove, sealed, vault_keys
 
 
 def write(path: Path, data: bytes = b"x", mode: int = 0o600):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(data)
     os.chmod(path, mode)
+
+
+EXPORTED_KEYS = {"vault": "V" * 43 + "=", "mail": "M" * 43 + "=", "connections": "C" * 43 + "="}
 
 
 @pytest.fixture
@@ -56,6 +60,9 @@ space = "{data}/spaces/coach"
     write(data / "vault" / "vault.key", b"the-master-key")
     monkeypatch.setattr(hermes, "sandbox_runtime", lambda: "/usr/bin/podman")
     monkeypatch.setattr(hermes, "hermes_checkout", lambda: tmp_path / "no-git")
+    # lot 3: a sealed place's export asks its bridge for the keys (never the real bridge here), the memory folder
+    monkeypatch.setattr(vault_keys, "export_keys", lambda inv: dict(EXPORTED_KEYS))
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path / "run"))
     return SimpleNamespace(home=home, config=config, data=data, hub=hub, space=space, tmp=tmp_path)
 
 
@@ -128,13 +135,14 @@ def test_a_sealed_place_carries_no_hermes_copy_in_its_export_backups_or_move(pla
     members = exported(place)
     names = sorted(members)
     datas = [data for _, data in members.values()]
+    # lot 3: the export carries the keys and every agent's Hermes copy, in memory (as a folder) or still on the disk
+    # (the import goes back to today's layout, where nothing rebuilds them); never keys.sealed.json
     for secret in (b"vie-key-in-memory", b"vie-copy-in-memory", b"coach-hermes-key", b"coach-hermes-copy",
                    b"default-profile-copy"):
-        assert secret not in datas
-    assert not [n for n in names if n.endswith("/vault") and "/profiles/" in n], names
-    assert not [n for n in names if n.split("/")[0] == "hermes" and n.split("/")[-1] == "vault"]
-    # the bridge's master copy and its sealed keys go as before
-    assert b"the-master-copy" in datas and b'{"v": 1}' in datas
+        assert secret in datas, secret
+    assert not [n for n, (m, _) in members.items() if m.issym() and n.endswith("/vault")], names
+    assert b"the-master-copy" in datas and b'{"v": 1}' not in datas
+    assert json.loads(members[vault_keys.EXPORT_MEMBER][1]) == {"v": 1, "keys": EXPORTED_KEYS}
     files = backed_up(place)
     assert not [f for f in files if "/profiles/" in f and "/vault" in f], files
     assert not [f for f in files if f.startswith(str(place.hub / "vault"))]
