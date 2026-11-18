@@ -209,7 +209,7 @@ async fn fake(seen: Seen, method: Method, uri: Uri, headers: HeaderMap, body: St
     if path == "/g/files" {
         // a search of every level: hits inside and outside the picked folders
         if query.get("q").is_some_and(|q| q.contains("fullText")) {
-            return reply(200, json!({"files": [google_item("gsd"), google_item("gp")]}));
+            return reply(200, json!({"files": [google_item("gsd"), google_item("gp"), google_item("gd")]}));
         }
         // a folder's content: none (as Google's drive.file may show a picked folder)
         return reply(200, json!({"files": []}));
@@ -803,4 +803,21 @@ async fn a_deleted_agent_is_taken_out_of_every_folder() {
         .unwrap();
     forget_agent(&config, "vie").await;
     assert_eq!(read_stored(&config).unwrap().drives["onedrive"].folders[0].agents, vec!["kerfy".to_string()]);
+}
+
+// -- review 18/11, pass 2 (red first) ------------------------------------------------------------------------------------
+
+/// drive_search with `folder`: only inside that folder. Google's search is now one query over everything visible,
+/// its hits checked against ALL the agent's folders (drives.rs search → inside(&api, &hit, &folders)), so a hit of the
+/// picked folder outside the asked sub-folder comes back too.
+#[tokio::test]
+async fn review2_google_search_in_a_sub_folder_stays_in_it() {
+    let (base, _seen) = serve().await;
+    let (_dir, config) = setup(&base);
+    connect(&config, "google_drive", &["vie"], "&picked_file_ids=gf").await;
+    let vie = config.agents["vie"].clone();
+    let found =
+        text(&call(&config, &vie, "drive_search", &args(json!({"words": "devis", "folder": "google_drive:gs"}))).await);
+    assert!(found.contains("google_drive:gsd"), "{found}");
+    assert!(!found.contains("google_drive:gd"), "Bail is in Maison, not in Travaux: {found}");
 }
