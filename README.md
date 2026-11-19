@@ -78,13 +78,13 @@ WSL2). No GPU, no beta code, no limit. Your agents, their memory and your files 
    EUrouter, European, is recommended):
 
    ```bash
-   curl -fsSL https://raw.githubusercontent.com/Alexbob0/BipAgents/main/install.sh | bash
+   curl -fsSL https://raw.githubusercontent.com/BipAgents/BipAgents/stable/install.sh | bash
    ```
 
    On **Windows 11**, in PowerShell opened as administrator (it sets up WSL2 and runs the same install inside):
 
    ```powershell
-   irm https://raw.githubusercontent.com/Alexbob0/BipAgents/main/install.ps1 | iex
+   irm https://raw.githubusercontent.com/BipAgents/BipAgents/stable/install.ps1 | iex
    ```
 
    **🧩 Already running Hermes Agent?** Same command, on its machine: it plugs into it **without touching your model,

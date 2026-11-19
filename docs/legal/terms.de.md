@@ -2,7 +2,7 @@
 
 # Nutzungsbedingungen von BipAgents
 
-> Zuletzt aktualisiert: 12. November 2026.
+> Zuletzt aktualisiert: 18. November 2026.
 
 ## 1. Gegenstand
 
@@ -75,7 +75,7 @@ diese Änderung wird wie in Abschnitt 19 vorgesehen angekündigt.
 
 ## 6. Lizenz und freie Software
 
-- Der **Quellcode** von BipAgents ist unter der **MIT-Lizenz** veröffentlicht: https://github.com/Alexbob0/BipAgents. Du darfst ihn
+- Der **Quellcode** von BipAgents ist unter der **MIT-Lizenz** veröffentlicht: https://github.com/BipAgents/BipAgents. Du darfst ihn
   nach dieser Lizenz nutzen, kopieren, ändern und weitergeben; sie hat für alles, was den Quellcode betrifft, Vorrang
   vor diesen Bedingungen.
 - Die **Bips selbst** stehen nicht unter der MIT-Lizenz: ihre Zeichnungen, das Icon der App, ihr Geplapper, ihre
@@ -155,6 +155,10 @@ Dienste, die du mit deinen Agenten verbindest, und für das, was du per SSH tust
 - Die E-Mails und Nachrichten, die deine Agenten an andere Personen schicken, geben standardmäßig an, dass ein
   KI-Agent sie verfasst hat, und für wen. Entferne diesen Hinweis nicht, um glauben zu machen, ein Mensch habe sie
   geschrieben.
+- **Zahlungen durch deine Agenten** (standardmäßig ausgeschaltet, beim Alles-inklusive-Angebot experimentell während der
+  Beta): Ein Agent bezahlt nur mit einer virtuellen Karte mit Limit, die du ihm anvertraut hast, auf den Websites, die
+  du erlaubst, und jede Zahlung wird dir vorgelegt. Da du sie bestätigst, kann deine Bank eine Erstattung als Betrug
+  verweigern. Nutze nie deine Hauptkarte.
 
 ## 10. Zulässige Nutzung
 

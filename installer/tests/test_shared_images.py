@@ -70,7 +70,7 @@ def test_the_browser_key_is_the_workflow_hash_of_the_browser_folder():
     if tree.returncode != 0:
         pytest.skip("not a git checkout")
     assert shared_images.browser_key(ROOT) == hashlib.sha256(tree.stdout.strip().encode()).hexdigest()[:12]
-    assert shared_images.browser_ref("abc") == "ghcr.io/alexbob0/bipagents-browser:abc"
+    assert shared_images.browser_ref("abc") == "ghcr.io/bipagents/bipagents-browser:abc"
     workflow = (ROOT / ".github" / "workflows" / "server-images.yml").read_text(encoding="utf-8")
     assert "git rev-parse HEAD:browser" in workflow and "sha256sum | cut -c1-12" in workflow
 
@@ -210,7 +210,7 @@ def test_root_pulls_the_agents_sandbox_of_this_checkout_when_the_registry_has_it
     podman.registry[shared_images.agent_sandbox_ref("s9")] = "a1"
     assert shared_images.pull(store=tmp_path, run=podman) == 0
     assert podman.images[shared_images.AGENT_SANDBOX] == "a1"
-    assert shared_images.agent_sandbox_ref("s9") == "ghcr.io/alexbob0/bipagents-sandbox:s9"
+    assert shared_images.agent_sandbox_ref("s9") == "ghcr.io/bipagents/bipagents-sandbox:s9"
     assert json.loads(setting.read_text())["agent_sandbox"] == {"key": "s9", "id": "a1"}
     # not built yet for this checkout: the agents keep Hermes' own sandbox, nothing fails, last night's is kept
     assert shared_images.pull(store=tmp_path, run=Podman(images=dict(podman.images))) == 0
@@ -419,9 +419,9 @@ def test_without_the_store_the_browser_is_pulled_from_ghcr_else_built(tmp_path, 
     home = tmp_path / "home"
     runner = Engine()
     assert shared_images.browser(runner, ENGINE, home=home, run=Podman(), say=lambda t: None) == "registry"
-    assert runner.log[:3] == [f"{ENGINE} pull --quiet ghcr.io/alexbob0/bipagents-browser:k1",
-                              f"{ENGINE} tag ghcr.io/alexbob0/bipagents-browser:k1 bipagents-browser",
-                              f"{ENGINE} rmi ghcr.io/alexbob0/bipagents-browser:k1"]
+    assert runner.log[:3] == [f"{ENGINE} pull --quiet ghcr.io/bipagents/bipagents-browser:k1",
+                              f"{ENGINE} tag ghcr.io/bipagents/bipagents-browser:k1 bipagents-browser",
+                              f"{ENGINE} rmi ghcr.io/bipagents/bipagents-browser:k1"]
     assert shared_images.source_of(home)["source"] == "registry"
     runner, said = Engine(pull_fails=True), []
     assert shared_images.browser(runner, ENGINE, home=home, run=Podman(), say=said.append) == "built"
@@ -449,5 +449,5 @@ def test_the_nightly_refresh_follows_where_the_browser_came_from(tmp_path, monke
             return 0, "Google Chrome 156.0.8100.12"
         return podman(args, timeout)
     assert browser_refresh.refresh(ENGINE, Path("/repo"), home, run=answer) == 0
-    assert podman.did("pull", "--quiet", "ghcr.io/alexbob0/bipagents-browser:k1")
+    assert podman.did("pull", "--quiet", "ghcr.io/bipagents/bipagents-browser:k1")
     assert podman.images["bipagents-browser"] == "b2" and not podman.did("build")

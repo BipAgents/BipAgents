@@ -660,7 +660,7 @@ def test_a_new_place_gets_the_shared_hermes_and_images_of_its_version_first(tmp_
     monkeypatch.setattr(agent.os.path, "exists", lambda p: False if str(p).endswith("image-views.service") else exists(p))
     assert agent.main(["--prepare", "main"]) == 0
     assert ran[0][:4] == ["git", "clone", "--quiet", "--filter=blob:none"]
-    assert ran[0][-2] == "https://github.com/Alexbob0/BipAgents.git"
+    assert ran[0][-2] == "https://github.com/BipAgents/BipAgents.git"
     assert ran[2][-1] == "origin/stable"                     # the latest: stable where the repository has it
     assert ran[3][-1] == "origin/stable"
     assert ran[4] == ["python3", "-m", "bipinstall.shared_hermes", "build"]
@@ -769,6 +769,33 @@ def test_a_pretest_order_updates_that_place_alone_and_leaves_what_the_server_sha
     calls.clear()
     assert agent.update_order(2, commit, moves=str(tmp_path / "moves"), home=str(tmp_path))
     assert calls == ["prepare_shared", "refresh_tools"]
+
+
+def test_an_update_order_naming_a_repository_moves_the_place_there(tmp_path, monkeypatch):
+    """2026-11-15: an update order may name the public repository its commit lives in (the switch to the BipAgents
+    organisation's, and its way back): root's checkout and the place's install go there (install.sh moves its origin
+    for BIPAGENTS_TO_REPO); an order naming none leaves both where they are."""
+    import io
+    import types
+    agent = _seat_agent()
+    prepared, ran = [], []
+    monkeypatch.setattr(agent.pwd, "getpwnam", lambda user: types.SimpleNamespace(pw_uid=1002, pw_dir=str(tmp_path)))
+    monkeypatch.setattr(agent, "prepare_shared", lambda commit, repo=None: prepared.append((commit, repo)))
+    for name in ("refresh_tools", "shared_gc", "log"):
+        monkeypatch.setattr(agent, name, lambda *a, **k: None)
+    monkeypatch.setattr(agent, "own_disk", lambda user, settings: None)
+    monkeypatch.setattr(agent, "read_json", lambda path: {})
+    monkeypatch.setattr(agent, "open", lambda *a, **k: io.StringIO(), raising=False)
+    monkeypatch.setattr(agent.subprocess, "run", lambda args, **kw: ran.append(list(args)))
+    new, commit = "https://github.com/BipAgents/BipAgents.git", "c" * 40  # known-public-repos
+    assert agent.update_order(2, commit, moves=str(tmp_path / "moves"), home=str(tmp_path), repo=new)
+    assert prepared == [(commit, new)]
+    assert ran[-1][:2] == ["sudo", "-iu"] and "BIPAGENTS_TO=" + commit in ran[-1]
+    assert "BIPAGENTS_TO_REPO=" + new in ran[-1]
+    assert ran[-1].index("BIPAGENTS_TO_REPO=" + new) < ran[-1].index("BipAgents/install.sh")
+    prepared.clear(), ran.clear()
+    assert agent.update_order(2, commit, moves=str(tmp_path / "moves"), home=str(tmp_path))
+    assert prepared == [(commit, None)] and not any(a.startswith("BIPAGENTS_TO_REPO") for a in ran[-1])
 
 
 def test_only_root_may_ask_the_provider_s_metadata_service():
