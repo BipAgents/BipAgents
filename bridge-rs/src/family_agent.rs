@@ -438,22 +438,21 @@ fn cut(value: Option<&Value>, max: usize) -> String {
 
 /// A new Carnet's three lists, when it has none yet.
 fn seed(config: &Config, lang: &str, by: &str) -> anyhow::Result<()> {
-    update(&notebook_path(config), |data| {
-        if data.get("lists").and_then(Value::as_array).is_some_and(|l| !l.is_empty()) {
-            return;
-        }
-        let at = now();
-        let lists: Vec<Value> = words(lang)
-            .iter()
-            .zip(KINDS)
-            .map(|(title, kind)| {
-                json!({"id": new_id("l"), "title": title, "kind": kind, "items": [], "updated": at, "by": by})
-            })
-            .collect();
-        data.insert("lists".into(), json!(lists));
-        data.entry("pages").or_insert(json!([]));
-        data.insert("updated".into(), json!(at));
-    })
+    update(&notebook_path(config), |data| seed_in(data, lang, by, now()))
+}
+
+fn seed_in(data: &mut Dict, lang: &str, by: &str, at: f64) {
+    if data.get("lists").and_then(Value::as_array).is_some_and(|l| !l.is_empty()) {
+        return;
+    }
+    let lists: Vec<Value> = words(lang)
+        .iter()
+        .zip(KINDS)
+        .map(|(title, kind)| json!({"id": new_id("l"), "title": title, "kind": kind, "items": [], "updated": at, "by": by}))
+        .collect();
+    data.insert("lists".into(), json!(lists));
+    data.entry("pages").or_insert(json!([]));
+    data.insert("updated".into(), json!(at));
 }
 
 /// The Carnet as the apps get it.
@@ -617,6 +616,139 @@ pub fn change(config: &Config, body: &Dict, by: &str) -> anyhow::Result<Result<V
     update(&notebook_path(config), |data| apply(data, body, by, now()).map(|_| view_of(data)))
 }
 
+/// The agent's change (`call_tool`): its arguments as a model writes them made into `apply`'s, in the same lock as the
+/// change. Filming 18/11 (GLM-5.3 Flash, a family of three households): « no such list » to every write until Hermes'
+/// loop brake. The read shows « ## Shopping (list, list id l…) », and a model names that list by its title, by
+/// `list_id`, `listId`, by `id` like the list ops do, with the read's words around the id; an item by `item_id`, or
+/// with the id of another list. Each lands where it was meant; what still names nothing answers with the lists' ids.
+/// The apps' own changes stay strict (`apply`: ids only).
+fn agent_apply(data: &mut Dict, arguments: &Dict, by: &str, at: f64) -> Result<(), String> {
+    let lists = data.get("lists").and_then(Value::as_array).cloned().unwrap_or_default();
+    let body = agent_arguments(&lists, arguments);
+    // where a list's id goes: `id` for the list ops, `list` for the item ops
+    let field = match tk::str_or_empty(arguments.get("op")).as_str() {
+        "list_save" | "list_delete" => "id",
+        _ => "list",
+    };
+    apply(data, &body, by, at).map_err(|message| match message.as_str() {
+        "no such list" => {
+            let known: Vec<String> = lists
+                .iter()
+                .map(|l| format!("« {} » (list id {})", str_of(l, "title"), str_of(l, "id")))
+                .collect();
+            format!(
+                "no such list: give `{field}` one of these ids: {}; or read the Carnet again with family_notebook_read",
+                if known.is_empty() { "none yet (make one with list_save)".into() } else { known.join(", ") }
+            )
+        }
+        "no such item" => "no such item in that list: read the Carnet again with family_notebook_read for the items' \
+                           ids (« id i… »)"
+            .into(),
+        _ => message,
+    })
+}
+
+const LIST_NAMES: [&str; 5] = ["list", "list_id", "listId", "list_title", "list_name"];
+/// An item op's item: the explicit names first (`id` may then hold the list's id, as the list ops use it); `id` alone
+/// is the item.
+const ITEM_NAMES: [&str; 4] = ["item_id", "itemId", "item", "id"];
+
+fn first_of(arguments: &Dict, names: &[&str]) -> String {
+    names.iter().map(|n| tk::strip(&tk::str_or_empty(arguments.get(*n))).to_string()).find(|v| !v.is_empty()).unwrap_or_default()
+}
+
+/// The list `reference` names: its id, an id written inside it (« list id l… »), or its title (« Shopping »,
+/// « shopping list », « Shopping (list, list id …) »), any case.
+fn list_named(lists: &[Value], reference: &str) -> Option<String> {
+    if reference.is_empty() {
+        return None;
+    }
+    let ids: Vec<String> = lists.iter().map(|l| str_of(l, "id")).filter(|i| !i.is_empty()).collect();
+    if let Some(id) = ids.iter().find(|i| i.as_str() == reference) {
+        return Some(id.clone());
+    }
+    let inside: Vec<&String> = ids
+        .iter()
+        .filter(|id| reference.split(|c: char| !c.is_alphanumeric()).any(|word| word == id.as_str()))
+        .collect();
+    if let [id] = inside.as_slice() {
+        return Some((*id).clone());
+    }
+    let plain = |text: &str| {
+        let text = text.split(" (").next().unwrap_or(text).trim().to_lowercase();
+        let text = text.trim_matches(|c: char| matches!(c, '«' | '»' | '"' | '\'' | '“' | '”')).trim().to_string();
+        match text.strip_suffix(" list") {
+            Some(rest) if !rest.trim().is_empty() => rest.trim().to_string(),
+            _ => text,
+        }
+    };
+    let wanted = plain(reference);
+    let titled: Vec<String> = lists.iter().filter(|l| plain(&str_of(l, "title")) == wanted).map(|l| str_of(l, "id")).collect();
+    match titled.as_slice() {
+        [id] => Some(id.clone()),
+        _ => None,
+    }
+}
+
+fn agent_arguments(lists: &[Value], arguments: &Dict) -> Dict {
+    let mut body = arguments.clone();
+    let op = tk::str_or_empty(arguments.get("op"));
+    let list_ref = first_of(arguments, &LIST_NAMES);
+    match op.as_str() {
+        "item_add" | "clear_done" => {
+            // their only id is the list's: `id` names it when nothing else does (`item` may be the new item's text)
+            let reference = if list_ref.is_empty() { first_of(arguments, &["id"]) } else { list_ref };
+            if let Some(id) = list_named(lists, &reference) {
+                body.insert("list".into(), json!(id));
+            }
+        }
+        "item_save" | "item_delete" => {
+            let named = list_named(lists, &list_ref);
+            let holds_id = |list: &Value, id: &str| {
+                list.get("items").and_then(Value::as_array).is_some_and(|items| items.iter().any(|i| str_of(i, "id") == id))
+            };
+            // the candidate that really is an item's id (in the list named, else in any), not the first key present:
+            // `item` is also the new text a model gives (review 19/11), `id` the list's id
+            let candidates: Vec<String> = ITEM_NAMES
+                .iter()
+                .map(|n| tk::strip(&tk::str_or_empty(arguments.get(*n))).to_string())
+                .filter(|v| !v.is_empty())
+                .collect();
+            let in_named = |c: &&String| {
+                named.as_ref().is_some_and(|n| lists.iter().any(|l| str_of(l, "id") == *n && holds_id(l, c)))
+            };
+            let item = candidates
+                .iter()
+                .find(in_named)
+                .or_else(|| candidates.iter().find(|c| lists.iter().any(|l| holds_id(l, c))))
+                .or(candidates.first())
+                .cloned()
+                .unwrap_or_default();
+            body.insert("id".into(), json!(item));
+            let holds = |list: &Value| holds_id(list, &item);
+            let home = lists.iter().find(|l| holds(l)).map(|l| str_of(l, "id"));
+            // the list that holds the item, when the one named doesn't (or none was)
+            let list = match (named, home) {
+                (Some(named), _) if lists.iter().any(|l| str_of(l, "id") == named && holds(l)) => Some(named),
+                (_, Some(home)) => Some(home),
+                (named, None) => named,
+            };
+            if let Some(id) = list {
+                body.insert("list".into(), json!(id));
+            }
+        }
+        "list_save" | "list_delete" => {
+            let id = tk::strip(&tk::str_or_empty(arguments.get("id"))).to_string();
+            let reference = if id.is_empty() { list_ref } else { id };
+            if let Some(id) = list_named(lists, &reference) {
+                body.insert("id".into(), json!(id));
+            }
+        }
+        _ => {}
+    }
+    body
+}
+
 /// The Carnet as plain text for the agent.
 pub fn as_text(view: &Value) -> String {
     let mut out = Vec::new();
@@ -673,7 +805,10 @@ fn write_tool() -> Value {
         "inputSchema": {"type": "object", "properties": {
             "op": {"type": "string", "enum": ["item_add", "item_save", "item_delete", "clear_done", "list_save",
                                               "list_delete", "page_save", "page_delete"]},
-            "list": {"type": "string"}, "id": {"type": "string"}, "title": {"type": "string"},
+            "list": {"type": "string", "description": "The list's id (« list id l… » in family_notebook_read)"},
+            "id": {"type": "string", "description": "The item's id for item_save / item_delete; the list's or the \
+    page's for list_* / page_*"},
+            "title": {"type": "string"},
             "text": {"type": "string"}, "kind": {"type": "string", "enum": KINDS},
             "done": {"type": "boolean"}, "due": {"type": "string", "description": "YYYY-MM-DD"}},
             "required": ["op"]},
@@ -686,7 +821,8 @@ pub fn call_tool(config: &Config, agent: &AgentConfig, name: &str, arguments: &D
         return Ok(tk::tool_text(&as_text(&notebook_view(config)), false));
     }
     let by = if agent.display_name.is_empty() { agent.name.clone() } else { agent.display_name.clone() };
-    Ok(match change(config, arguments, &by)? {
+    let changed = update(&notebook_path(config), |data| agent_apply(data, arguments, &by, now()).map(|_| view_of(data)))?;
+    Ok(match changed {
         Ok(view) => tk::tool_text(&format!("Done. The Carnet now:\n{}", as_text(&view)), false),
         Err(message) => tk::tool_text(&message, true),
     })
@@ -1406,6 +1542,102 @@ mod tests {
         assert!(text.contains("Pain 📅 2026-11-02") && text.contains("Bretagne, juillet"));
         apply(&mut data, &body(json!({"op": "page_delete", "id": page})), "Léa", 8.0).unwrap();
         assert!(apply(&mut data, &body(json!({"op": "nope"})), "A", 9.0).is_err());
+    }
+
+    /// Filming 18/11: the agent's writes answered « no such list » again and again until Hermes' loop brake. A model
+    /// names the list as the read showed it (« Shopping (list, list id l…) »): by its title, `list_id`, `id`…
+    #[test]
+    fn the_agent_names_a_list_or_an_item_the_ways_a_model_does() {
+        let mut data = Dict::new();
+        seed_in(&mut data, "en", "Alex", 1.0);
+        let shopping = str_of(&data["lists"][0], "id");
+        let tasks = str_of(&data["lists"][1], "id");
+        let write = |data: &mut Dict, args: Value| agent_apply(data, &body(args), "Family", 2.0);
+        for args in [
+            json!({"op": "item_add", "list": shopping, "text": "Milk"}),
+            json!({"op": "item_add", "list": "Shopping", "text": "Eggs"}),
+            json!({"op": "item_add", "list": "shopping list", "text": "Rice"}),
+            json!({"op": "item_add", "list": "Shopping (list, list id x)", "text": "Tea"}),
+            json!({"op": "item_add", "list": format!("list id {shopping}"), "text": "Pears"}),
+            json!({"op": "item_add", "list_id": shopping, "text": "Bread"}),
+            json!({"op": "item_add", "listId": shopping, "text": "Butter"}),
+            json!({"op": "item_add", "id": shopping, "text": "Jam"}),
+        ] {
+            write(&mut data, args.clone()).unwrap_or_else(|e| panic!("{args}: {e}"));
+        }
+        let texts = |data: &Dict, at: usize| -> Vec<String> {
+            data["lists"][at]["items"].as_array().unwrap().iter().map(|i| str_of(i, "text")).collect()
+        };
+        assert_eq!(texts(&data, 0), ["Milk", "Eggs", "Rice", "Tea", "Pears", "Bread", "Butter", "Jam"]);
+        // an item by its id alone, or with another list's id: found where it is
+        let milk = str_of(&data["lists"][0]["items"][0], "id");
+        write(&mut data, json!({"op": "item_save", "id": milk, "done": true})).unwrap();
+        write(&mut data, json!({"op": "item_save", "list": tasks, "item_id": milk, "text": "Oat milk"})).unwrap();
+        assert_eq!((data["lists"][0]["items"][0]["done"].clone(), texts(&data, 0)[0].as_str()), (json!(true), "Oat milk"));
+        write(&mut data, json!({"op": "item_delete", "itemId": milk})).unwrap();
+        assert_eq!(texts(&data, 0).len(), 7);
+        // a list op by its title
+        write(&mut data, json!({"op": "list_save", "list": "Tasks", "title": "Chores"})).unwrap();
+        assert_eq!(str_of(&data["lists"][1], "title"), "Chores");
+        assert_eq!(data["lists"].as_array().unwrap().len(), 3, "renamed, not a new list");
+        // truly no such list: the answer gives the lists' ids, so the next call can't be the same mistake
+        let wrong = write(&mut data, json!({"op": "item_add", "list": "l00000000", "text": "x"})).unwrap_err();
+        assert!(wrong.contains("no such list") && wrong.contains(&shopping) && wrong.contains("Chores"), "{wrong}");
+        let wrong = write(&mut data, json!({"op": "item_save", "id": "i00000000", "done": true})).unwrap_err();
+        assert!(wrong.contains("family_notebook_read"), "{wrong}");
+        // the apps' own changes stay strict: only ids
+        assert!(apply(&mut data, &body(json!({"op": "item_add", "list": "Shopping", "text": "x"})), "Léa", 3.0).is_err());
+    }
+
+    /// Review of fix-family-carnet-write: `id` given with the list's id beside an explicit `item_id` must not take
+    /// the list as the item; `id` alone stays the item.
+    #[test]
+    fn an_item_op_with_the_list_in_id_takes_the_explicit_item() {
+        let mut data = Dict::new();
+        seed_in(&mut data, "en", "Alex", 1.0);
+        let shopping = str_of(&data["lists"][0], "id");
+        let write = |data: &mut Dict, args: Value| agent_apply(data, &body(args), "Family", 2.0);
+        for text in ["Milk", "Eggs", "Rice"] {
+            write(&mut data, json!({"op": "item_add", "list": shopping, "text": text})).unwrap();
+        }
+        let item = |data: &Dict, at: usize| str_of(&data["lists"][0]["items"][at], "id");
+        let (milk, eggs, rice) = (item(&data, 0), item(&data, 1), item(&data, 2));
+        write(&mut data, json!({"op": "item_save", "id": shopping, "item_id": milk, "done": true}))
+            .unwrap_or_else(|e| panic!("item_id: {e}"));
+        write(&mut data, json!({"op": "item_save", "id": shopping, "itemId": eggs, "text": "Brown eggs"}))
+            .unwrap_or_else(|e| panic!("itemId: {e}"));
+        assert_eq!(data["lists"][0]["items"][0]["done"], true);
+        assert_eq!(str_of(&data["lists"][0]["items"][1], "text"), "Brown eggs");
+        write(&mut data, json!({"op": "item_delete", "id": shopping, "item": rice}))
+            .unwrap_or_else(|e| panic!("item: {e}"));
+        assert_eq!(data["lists"][0]["items"].as_array().unwrap().len(), 2);
+        assert_eq!(data["lists"].as_array().unwrap().len(), 3, "no list touched");
+        assert_eq!(str_of(&data["lists"][0], "id"), shopping);
+        // `id` alone is still the item
+        write(&mut data, json!({"op": "item_save", "id": eggs, "done": true})).unwrap();
+        assert_eq!(data["lists"][0]["items"][1]["done"], true);
+    }
+
+    /// Review 19/11: `item` is also the new text a model gives (« Oat milk »), beside the item's id in `id`; the
+    /// candidate that really is an item's id wins. A list op's « no such list » names the field its id goes in.
+    #[test]
+    fn the_item_is_the_candidate_that_is_an_items_id() {
+        let mut data = Dict::new();
+        seed_in(&mut data, "en", "Alex", 1.0);
+        let shopping = str_of(&data["lists"][0], "id");
+        let write = |data: &mut Dict, args: Value| agent_apply(data, &body(args), "Family", 2.0);
+        write(&mut data, json!({"op": "item_add", "list": shopping, "text": "Milk"})).unwrap();
+        let milk = str_of(&data["lists"][0]["items"][0], "id");
+        write(&mut data, json!({"op": "item_save", "list": shopping, "id": milk, "item": "Oat milk", "done": true}))
+            .unwrap_or_else(|e| panic!("item as text: {e}"));
+        assert_eq!(data["lists"][0]["items"][0]["done"], true);
+        // the list's id in `id`, the item in `item`, no `list`
+        write(&mut data, json!({"op": "item_save", "id": shopping, "item": milk, "done": false})).unwrap();
+        assert_eq!(data["lists"][0]["items"][0]["done"], false);
+        let wrong = write(&mut data, json!({"op": "list_delete", "id": "l00000000"})).unwrap_err();
+        assert!(wrong.contains("give `id` one of these"), "{wrong}");
+        let wrong = write(&mut data, json!({"op": "item_add", "list": "l00000000", "text": "x"})).unwrap_err();
+        assert!(wrong.contains("give `list` one of these"), "{wrong}");
     }
 
     #[test]
