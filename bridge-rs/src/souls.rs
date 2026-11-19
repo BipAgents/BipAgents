@@ -21,7 +21,9 @@
 //! (2026-10-31, `FACTS_RULE`, by hand in the golden too); and work of more than three steps keeps a short task list
 //! the apps show live (« Étapes », 2026-11-06, `STEPS_RULE`, the golden rewritten with `GOLDEN_SOULS_OUT`); and at
 //! the end of a task it deletes the working files it no longer needs, never the person's own (2026-11-07,
-//! `TIDY_RULE`, the golden rewritten the same way; space_tidy.rs removes what is temporary by itself).
+//! `TIDY_RULE`, the golden rewritten the same way; space_tidy.rs removes what is temporary by itself); and when the
+//! person must pick between a few options, it asks with Hermes' clarify card, never a numbered list (2026-11-19,
+//! `CHOICE_RULE`, the golden rewritten the same way).
 //! `heal_souls` brings existing agents' blocks up to date. An agent given the person's
 //! health data has a second block (`with_health`): use it to help, never to diagnose. An agent in the person's
 //! circle (shared_memory.rs) knows that what it remembers of them is common to their own agents
@@ -239,6 +241,21 @@ pub const STEPS_RULE: &str = concat!(
     "your person sees the list live. Never for a question or a quick task."
 );
 
+/// A real choice card, not a numbered list (Alex 19/11: « quand tu as besoin que la personne choisisse, pose la
+/// question avec une carte de choix plutôt qu'une liste »; the apps no longer guess reply buttons from a list).
+/// Hermes v0.23.1's `clarify` (always in view, first of `tool_diet::COMMON_FIRST`): up to 4 choices, the first marked
+/// « (Recommended) », an « Other » row added by the app. Not for ideas or results with nothing to pick now, never to
+/// confirm what the bridge's approval cards already ask. In a voice call `clarify` is closed (live_turns.rs
+/// `ASK_ALOUD`). Rust bridge only (tests/golden/souls.json rewritten with `GOLDEN_SOULS_OUT`). Short: it is paid on
+/// every call. Bench: internal/notes/choice-card-rule.md.
+pub const CHOICE_RULE: &str = concat!(
+    "Choices: when your person must pick one of a few options before you can go on (which place, slot, train or ",
+    "version), ask with clarify: one short question, 2 to 4 short choices (your best first), the options not also ",
+    "written as a list; then wait. Ideas, results or steps with nothing to decide now: a normal list, no question ",
+    "card. Never use clarify to confirm a payment, a sending or an action they already asked for: the app asks its ",
+    "own approvals."
+);
+
 /// A quick word before slow work (owner's request 2026-10-25, like Grok's app: « Bonne idée, je lance une recherche… »
 /// then the answer later), and a short line before each main step of long work (« deux, trois petites bulles » that make
 /// the wait shorter): the apps show these as bubbles above the working line, never read aloud. Rust bridge only,
@@ -406,7 +423,7 @@ pub fn language_block(lang: Option<&str>) -> String {
     for_language(
         &format!(
             "{BLOCK_START}\nLanguage: answer in the language your person writes in. Always write it with its accents and usual punctuation (routines and notes too), never an ASCII-only version. When you write first (a routine, \
-             a report, a reminder), write in {name}.{names} The current time is at the top of each message (a bip:now line): trust it, never check it in the terminal.\n{CONTENT_RULE}\n{SENDING_RULE}\n{AI_RULE}\n{CARE_RULE}\n{FAMILY_RULE}\n{PROJECT_RULE}\n{DRAFT_RULE}\n{PLAIN_RULE}\n{FILES_RULE}\n{TIDY_RULE}\n{LONG_WORK_RULE}\n{VISUAL_RULE}\n{FACTS_RULE}\n{CALC_RULE}\n{SPACE_RULE}\n{ACK_RULE}\n{STEPS_RULE}\n{SAY_RULE}\n{STYLE_RULE}\n{BLOCK_END}"
+             a report, a reminder), write in {name}.{names} The current time is at the top of each message (a bip:now line): trust it, never check it in the terminal.\n{CONTENT_RULE}\n{SENDING_RULE}\n{AI_RULE}\n{CARE_RULE}\n{FAMILY_RULE}\n{PROJECT_RULE}\n{DRAFT_RULE}\n{PLAIN_RULE}\n{FILES_RULE}\n{TIDY_RULE}\n{LONG_WORK_RULE}\n{VISUAL_RULE}\n{FACTS_RULE}\n{CALC_RULE}\n{SPACE_RULE}\n{ACK_RULE}\n{STEPS_RULE}\n{CHOICE_RULE}\n{SAY_RULE}\n{STYLE_RULE}\n{BLOCK_END}"
         ),
         Some(&code),
     )
@@ -1303,6 +1320,34 @@ mod tests {
             let en = soul_for("Bip", category, Some("en")).unwrap();
             assert!(en.contains("(never « wait, no »)") && !en.contains("non attends"), "{category}");
         }
+    }
+
+    #[test]
+    fn every_agent_asks_a_real_choice_with_the_clarify_card() {
+        // Alex 19/11: « quand tu as besoin que la personne choisisse, pose la question avec une carte de choix
+        // plutôt qu'une liste »
+        for needed in [
+            "ask with clarify",
+            "2 to 4 short choices",
+            "not also written as a list",
+            "a normal list, no question card",
+            "Never use clarify to confirm a payment, a sending",
+        ] {
+            assert!(CHOICE_RULE.contains(needed), "missing {needed}");
+        }
+        assert!(CHOICE_RULE.len() < 460, "short: paid on every call");
+        for lang in LANGUAGES.iter().chain(["de", "es", "nl"].iter()) {
+            for category in CATEGORIES {
+                let soul = soul_for("Bip", category, Some(lang)).unwrap();
+                assert_eq!(soul.matches(CHOICE_RULE).count(), 1, "{category} {lang}");
+                assert!(soul.contains(&format!("{STEPS_RULE}\n{CHOICE_RULE}\n")), "{category} {lang}");
+            }
+        }
+        // an agent made before the rule gets it in place, once
+        let old = with_language("Tu es Vie.\n", Some("fr")).replace(&format!("\n{CHOICE_RULE}"), "");
+        assert!(!old.contains(CHOICE_RULE));
+        let fresh = with_language(&old, Some("fr"));
+        assert_eq!(fresh.matches(CHOICE_RULE).count(), 1);
     }
 
     #[test]
