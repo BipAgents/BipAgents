@@ -625,6 +625,11 @@ pub fn change(config: &Config, body: &Dict, by: &str) -> anyhow::Result<Result<V
 fn agent_apply(data: &mut Dict, arguments: &Dict, by: &str, at: f64) -> Result<(), String> {
     let lists = data.get("lists").and_then(Value::as_array).cloned().unwrap_or_default();
     let body = agent_arguments(&lists, arguments);
+    // where a list's id goes: `id` for the list ops, `list` for the item ops
+    let field = match tk::str_or_empty(arguments.get("op")).as_str() {
+        "list_save" | "list_delete" => "id",
+        _ => "list",
+    };
     apply(data, &body, by, at).map_err(|message| match message.as_str() {
         "no such list" => {
             let known: Vec<String> = lists
@@ -632,7 +637,7 @@ fn agent_apply(data: &mut Dict, arguments: &Dict, by: &str, at: f64) -> Result<(
                 .map(|l| format!("« {} » (list id {})", str_of(l, "title"), str_of(l, "id")))
                 .collect();
             format!(
-                "no such list: give `list` one of these ids: {}; or read the Carnet again with family_notebook_read",
+                "no such list: give `{field}` one of these ids: {}; or read the Carnet again with family_notebook_read",
                 if known.is_empty() { "none yet (make one with list_save)".into() } else { known.join(", ") }
             )
         }
@@ -698,12 +703,29 @@ fn agent_arguments(lists: &[Value], arguments: &Dict) -> Dict {
             }
         }
         "item_save" | "item_delete" => {
-            let item = first_of(arguments, &ITEM_NAMES);
-            body.insert("id".into(), json!(item));
-            let holds = |list: &Value| {
-                list.get("items").and_then(Value::as_array).is_some_and(|items| items.iter().any(|i| str_of(i, "id") == item))
-            };
             let named = list_named(lists, &list_ref);
+            let holds_id = |list: &Value, id: &str| {
+                list.get("items").and_then(Value::as_array).is_some_and(|items| items.iter().any(|i| str_of(i, "id") == id))
+            };
+            // the candidate that really is an item's id (in the list named, else in any), not the first key present:
+            // `item` is also the new text a model gives (review 19/11), `id` the list's id
+            let candidates: Vec<String> = ITEM_NAMES
+                .iter()
+                .map(|n| tk::strip(&tk::str_or_empty(arguments.get(*n))).to_string())
+                .filter(|v| !v.is_empty())
+                .collect();
+            let in_named = |c: &&String| {
+                named.as_ref().is_some_and(|n| lists.iter().any(|l| str_of(l, "id") == *n && holds_id(l, c)))
+            };
+            let item = candidates
+                .iter()
+                .find(in_named)
+                .or_else(|| candidates.iter().find(|c| lists.iter().any(|l| holds_id(l, c))))
+                .or(candidates.first())
+                .cloned()
+                .unwrap_or_default();
+            body.insert("id".into(), json!(item));
+            let holds = |list: &Value| holds_id(list, &item);
             let home = lists.iter().find(|l| holds(l)).map(|l| str_of(l, "id"));
             // the list that holds the item, when the one named doesn't (or none was)
             let list = match (named, home) {
