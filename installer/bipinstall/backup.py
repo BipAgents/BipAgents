@@ -899,49 +899,71 @@ def settle(info: Dict, base: Path, repo: Path, address: Optional[str], fresh: Di
 
 
 # The fresh install's config folder (its bridge.toml, its backup settings with this seat's token, its pairing secret)
-# as it was before a restore put the backup's over it: put back when the restore fails, so the app's next try works
-# (lab round trip 19/11: the half-done restore had left the dead seat's token, refused by the guichet, for good).
+# and its door's certificate (the one the guichet lists, which the app checks before giving the key) as they were
+# before a restore put the backup's over them: put back when the restore fails, so the app's next try works (lab
+# round trip 19/11: the half-done restore had left the dead seat's token, refused by the guichet, for good).
 FRESH_COPY = Path(".local") / "state" / "bipagents" / "restore-fresh"
 CONFIG_DIR = Path(".config") / "bipagents"
-# What the bridge and the restore itself write there while it runs: never part of the fresh copy, never undone.
+WHERE = "where.json"   # in FRESH_COPY: each kept folder's place (the restored bridge.toml may say another)
+# What the bridge and the restore itself write in the config folder while it runs: never kept, never undone.
 LIVE = {MARKER.name, "setup-progress.json", "restore-key"}
 
 
 def _live(rel: Path) -> bool:
-    return rel.parts[0] in LIVE or rel.parts[0].startswith("bridge.toml.")   # its lock and copies (bridgeconf)
+    return bool(rel.parts) and (rel.parts[0] in LIVE or rel.parts[0].startswith("bridge.toml."))   # its lock, copies
+
+
+def _fresh_folders(base: Path) -> Dict[str, Path]:
+    import tomllib
+    from . import moving
+    config = base / CONFIG_DIR
+    try:
+        toml = tomllib.loads((config / "bridge.toml").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {"config": config}   # no fresh install to speak of: put_back says what is wrong
+    inv = moving.Inventory(config / "bridge.toml", toml, base)
+    return {"config": config, "lan": Path((toml.get("lan") or {}).get("cert_dir") or inv.data_dir / "lan").expanduser()}
 
 
 def keep_fresh(base: Path) -> None:
-    """The fresh config folder kept aside (written whole, then renamed: a copy is complete or absent)."""
+    """The fresh folders kept aside (written whole, then renamed: the copy is complete or absent)."""
     import shutil
-    kept, config = base / FRESH_COPY, base / CONFIG_DIR
+    kept = base / FRESH_COPY
     if kept.exists():
         return
     partial = kept.with_name(kept.name + ".part")
     shutil.rmtree(partial, ignore_errors=True)
     partial.mkdir(parents=True)
-    for child in sorted(config.iterdir()):
-        if not _live(Path(child.name)):
-            _copy(child, partial / child.name)
+    where = _fresh_folders(base)
+    for name, folder in where.items():
+        (partial / name).mkdir()
+        for child in sorted(folder.iterdir()) if folder.is_dir() else []:
+            if name != "config" or not _live(Path(child.name)):
+                _copy(child, partial / name / child.name)
+    write_private(partial / WHERE, {name: str(folder) for name, folder in where.items()})
     os.replace(partial, kept)
 
 
 def back_to_fresh(base: Path) -> bool:
-    """A restore that failed (or was killed: the next try calls it first): the fresh config folder as it was, what
-    the backup brought there removed. False when nothing was kept (no restore started putting files back)."""
+    """A restore that failed (or was killed: the next try calls it first): the fresh folders as they were, what the
+    backup brought there removed. False when nothing was kept (no restore started putting files back)."""
     import shutil
-    kept, config = base / FRESH_COPY, base / CONFIG_DIR
-    if not kept.is_dir():
+    kept = base / FRESH_COPY
+    if not (kept / WHERE).is_file():
+        shutil.rmtree(kept, ignore_errors=True)   # a copy never finished: the files hadn't come yet
         return False
-    for path in sorted(config.rglob("*"), key=lambda p: len(p.parts), reverse=True):   # children first
-        rel = path.relative_to(config)
-        if _live(rel) or (kept / rel).exists() or (kept / rel).is_symlink():
-            continue
-        if path.is_dir() and not path.is_symlink():
-            shutil.rmtree(path, ignore_errors=True)
-        else:
-            path.unlink(missing_ok=True)
-    _copy(kept, config)
+    for name, place in read_json(kept / WHERE).items():
+        folder, copy = Path(place), kept / name
+        live = _live if name == "config" else (lambda rel: False)
+        for path in sorted(folder.rglob("*") if folder.is_dir() else [], key=lambda p: len(p.parts), reverse=True):
+            rel = path.relative_to(folder)   # children first
+            if live(rel) or (copy / rel).exists() or (copy / rel).is_symlink():
+                continue
+            if path.is_dir() and not path.is_symlink():
+                shutil.rmtree(path, ignore_errors=True)
+            else:
+                path.unlink(missing_ok=True)
+        _copy(copy, folder)
     shutil.rmtree(kept)
     return True
 

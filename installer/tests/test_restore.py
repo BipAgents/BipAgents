@@ -286,7 +286,7 @@ def test_a_restore_that_fails_halfway_can_be_tried_again(tmp_path, monkeypatch):
 
     def breaks_on_the_data(src, dst, *args, **kwargs):
         calls.append(dst)
-        if "data" in Path(dst).parts and len(calls) > 1:
+        if "data" in Path(dst).parts and "tools" in Path(dst).parts:   # after the door's certificate came
             raise OSError(26, "Text file busy", str(dst))
         return real_copy(src, dst, *args, **kwargs)
 
@@ -296,6 +296,7 @@ def test_a_restore_that_fails_halfway_can_be_tried_again(tmp_path, monkeypatch):
     assert backup.settings(new)["token"] == "new-seat-token"                       # this seat's, not the dead one's
     assert (new / ".config" / "bipagents" / "bridge.toml").read_text() == fresh_toml
     assert (new / ".config" / "bipagents" / "setup.json").read_text() == '{"pair": "fresh"}'   # the app may claim
+    assert (new / "data" / "lan" / "cert.pem").read_text() == "FRESH CERTIFICATE"   # the one the guichet lists
     state = json.loads((new / ".config" / "bipagents" / "setup-progress.json").read_text())
     assert state["error"] and not state["done"]
     monkeypatch.setattr(backup, "_copy", real_copy)
