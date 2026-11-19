@@ -338,6 +338,16 @@ pub fn page_language(html: &str) -> Option<String> {
     ["fr", "en", "de", "es", "nl"].contains(&code.as_str()).then_some(code)
 }
 
+static NOT_TEXT: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?is)<(script|style)\b.*?</(script|style)\s*>|<[^>]*>").expect("valid regex"));
+
+/// The language a page's own words are clearly in (memory_language.rs `detect`: its scripts and styles left out),
+/// for a page that doesn't say it in `<html lang>`.
+pub fn text_language(html: &str) -> Option<String> {
+    let text = NOT_TEXT.replace_all(html, " ");
+    crate::memory_language::detect(&text).map(str::to_string)
+}
+
 /// « Faite à la demande de Marie » in the agent's language.
 pub fn asked_line(name: &str, lang: &str) -> String {
     let name = escape(name);
@@ -449,7 +459,10 @@ pub fn save_marked(
             .and_then(|m| m.asked_by.clone())
             .or_else(|| Some(tk::str_or_empty(known.get("asked_by"))).filter(|n| !n.is_empty())),
         // the page's own language first (filming 18/11: a family agent made in French, a conversation in English)
+        // then its words (a page of only a body), then the conversation's mark: the bridge doesn't know the asking
+        // member's own language (the member's bridge doesn't send it)
         lang: page_language(html)
+            .or_else(|| text_language(html))
             .or_else(|| mark.map(|m| m.lang.clone()))
             .unwrap_or_else(|| crate::names::agent_language(config, agent)),
     };
