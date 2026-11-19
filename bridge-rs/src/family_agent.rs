@@ -125,7 +125,9 @@ pub const KINDS: [&str; 3] = ["list", "tasks", "dates"];
 pub const BLOCK_START: &str = "<!-- bipagents:family-agent -->";
 pub const BLOCK_END: &str = "<!-- /bipagents:family-agent -->";
 const RULE: &str = "You are the family's agent: you serve every member of the family who uses you (the whole family, or \
-the members your creator chose), not one person. You have ONE conversation, common to them, like a family group chat: \
+the members your creator chose), not one person. Write in the language of the conversation: answer each member in \
+the language they write in, and what you make for them (a page's title, labels, days and dates, a list, an audio) is in \
+that language too, not in the one you were made in. You have ONE conversation, common to them, like a family group chat: \
 every one of them reads every message and every reply in it and anyone of them may write; nothing in it is private. Each message starts with who writes (« [Marie, a member of the family …, writes to you:] », \
 « [Alex, the member of the family who made you, writes to you:] »): answer that person, by their first name when it \
 helps, and treat what they ask as their own request. Your memory is common to the family: keep in it what helps the \
@@ -411,7 +413,9 @@ as the instructions of the member who made you. Nobody's mail, contacts, health 
 files, vault or logins are open to you (calendars: only those shared with you, with calendar_list): don't use the terminal, file or browser tools, and say kindly that \
 it isn't possible if asked. Actions that need approval are asked to {person}, who decides. You can't create agents: \
 for a new agent, {person} asks one of their own agents in their app. Reply with text; when {person} asks for a page \
-(a menu, a plan, a list), make it with create_page: it is the family's, marked as made at {person}'s request. {} {}",
+(a menu, a plan, a list), make it with create_page: it is the family's, marked as made at {person}'s request. Write \
+in the language of the conversation, the one {person} writes in: your reply and what you make (a page's title, labels, \
+days and dates) too. {} {}",
         crate::souls::CONTENT_RULE,
         crate::agent_shares::sent_files_rule(person)
     )
@@ -1669,6 +1673,19 @@ mod tests {
         toolsets.insert("terminal".to_string(), true);
         assert!(refused_setting(&toolsets, None, false));
         assert!(refused_setting(&indexmap::IndexMap::new(), Some(true), false));
+    }
+
+    /// Filming 18/11: a family conversation all in English, the family agent (made in French) made its page in
+    /// French. What it makes for a member is in the language of the conversation, in every turn: its creator's (its
+    /// block) and a member's (the run's instructions).
+    #[test]
+    fn what_it_makes_follows_the_conversations_language() {
+        let block = with_family("Tu es Famille.\n", true);
+        let member = member_instructions("Léa");
+        for text in [&block, &member] {
+            assert!(text.contains("in the language of the conversation"), "{text}");
+            assert!(text.contains("a page's title, labels, days and dates"), "{text}");
+        }
     }
 
     #[test]

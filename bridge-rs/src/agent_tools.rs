@@ -146,7 +146,7 @@ fn list_voices_tool() -> Value {
 
 /// create_page's description: what a page is for, its locks, and the page kit with short examples to copy (the
 /// quality lever: a small model writes a polished page in a few lines of HTML; pages.rs puts the kit inline).
-pub const CREATE_PAGE_DESCRIPTION: &str = r##"Make a small live web page for the person, shown INSIDE your reply where you put its MEDIA: line (and kept in their Carnet): a dashboard, a comparison, a plan, a progression, a budget, a routine, a diagram, a calculator, a quiz, a checklist. Always use this for a page (never an .html file of your own: it would not open). Write ONE HTML file (or just its body): the data inline in a <script>. It runs locked, with no network at all: no CDN, no fetch, no external images or fonts (emoji, inline SVG, CSS or data: URIs), no <form> (buttons with onclick). Phone first, a clear title and the date or source of the data in a .sub line. To change it later, call again with its page id. Link it to the Carnet page of its subject (notebook; search the Carnet first).
+pub const CREATE_PAGE_DESCRIPTION: &str = r##"Make a small live web page for the person, shown INSIDE your reply where you put its MEDIA: line (and kept in their Carnet): a dashboard, a comparison, a plan, a progression, a budget, a routine, a diagram, a calculator, a quiz, a checklist. Always use this for a page (never an .html file of your own: it would not open). Write ONE HTML file (or just its body): the data inline in a <script>. It runs locked, with no network at all: no CDN, no fetch, no external images or fonts (emoji, inline SVG, CSS or data: URIs), no <form> (buttons with onclick). Phone first, a clear title and the date or source of the data in a .sub line. Write all its words (title, labels, days, months, dates, buttons) in the language of the conversation it is for (the one the person writes in), never the examples' language (they are French), and say it in <html lang="en"> (or fr, de, es, nl: the kit formats numbers and dates in it). To change it later, call again with its page id. Link it to the Carnet page of its subject (notebook; search the Carnet first).
 THE KIT is always there (no link needed), in the app's look, light and dark, in your colour; use it rather than your own CSS:
 - text: h1, .sub (date, source), h2, .muted, .good/.warn/.bad; .note (a tinted tip), .chip (.good .warn .bad .plain)
 - .card (a rounded block); .grid (tiles side by side; .grid.two: two columns); .row (.between)
@@ -2448,6 +2448,16 @@ pub fn router() -> Router<AppState> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Filming 18/11: in a family conversation all in English, the family agent's first page came out in French
+    /// (« samedi », « Départ »): the page kit's examples are French and nothing said which language a page is in.
+    #[test]
+    fn a_page_is_written_in_the_conversations_language() {
+        let d = CREATE_PAGE_DESCRIPTION;
+        assert!(d.contains("in the language of the conversation it is for"), "{d}");
+        assert!(d.contains("never the examples' language"));
+        assert!(d.contains("<html lang="));
+    }
 
     /// Alex, 2026-11-01: an English person's agents said « in your Carnet (Notebook) ». What an agent writing in
     /// English, German or Spanish reads — its personality's blocks, its tools' descriptions, their answers, a
