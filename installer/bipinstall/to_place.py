@@ -35,13 +35,18 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from . import bridgeconf, hermes, moving, ui
 from .existing import profile_label, read_env, read_yaml
+from .souls import RESERVED_PROFILES
 from .sealed import SealedError
 
 IMPORT_CONTEXT = "bipagents-import-v1"
 UPLOAD_CONTEXT = "bipagents-import-upload-v1"
 ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"   # Crockford's: no I, L, O or U to misread
 CODE_LENGTH = 16                                # 80 bits: no guessing, even offline from a proof
-ROOT_AGENT = "hermes"                           # the main profile of a Hermes alone, as one of the place's agents
+# The main profile (a Hermes alone's, or the agent a BipAgents install serves at its hub's root) as one of the place's
+# agents: its own id when Hermes takes it as a profile name, else this one (never « hermes »: Hermes v0.23.1 refuses
+# it, hermes_cli/profiles.py _RESERVED_NAMES; the lab's send of 19/11 lost the main profile that way).
+ROOT_AGENT = "perso"
+PROFILE_ID = re.compile(r"[a-z0-9][a-z0-9_-]{0,63}")   # Hermes' PROFILE_ID_RE (hermes_constants.py)
 FOLDER = Path(".local") / "state" / "bipagents" / "import"
 STEPS = ("Opening your export", "Putting your agents in", "Adjusting them to this server", "Restarting your agents")
 MODEL_KEYS = ("OPENROUTER_API_KEY", "CUSTOM_MODEL_API_KEY")   # the offer's model key (bridge-rs/src/cloud_setup.rs)
@@ -494,6 +499,31 @@ def _free_name(profiles: Path, wanted: str) -> str:
     return name
 
 
+def profile_ok(name: str) -> bool:
+    """A name Hermes takes for a profile (`hermes -p <name>`: its validate_profile_name)."""
+    return bool(PROFILE_ID.fullmatch(name)) and name not in RESERVED_PROFILES
+
+
+def root_name(profiles: Path, main: Optional[str]) -> str:
+    """The profile the main profile becomes: the agent's own id when Hermes takes it, else ROOT_AGENT; free."""
+    if main and profile_ok(main):
+        name = _free_name(profiles, main)
+        if profile_ok(name):
+            return name
+    return _free_name(profiles, ROOT_AGENT)
+
+
+SET_UP = "your agents couldn't be set up on your place, which is as it was"   # what the app shows (plain words)
+
+
+def _step(runner: hermes.Runner, args: List[str], what: str, **kwargs: Any) -> str:
+    """A command the import needs: its failure is the import's (never « done » with agents missing)."""
+    try:
+        return runner.run(args, **kwargs)
+    except RuntimeError as exc:
+        raise PlaceError(f"{SET_UP} ({what})") from exc
+
+
 def bring_in(archive: Path, passphrase: str, runner: hermes.Runner, base: Optional[Path] = None,
              repo: Optional[Path] = None) -> Dict[str, Any]:
     """The whole import, as the bridge starts it. Returns the export's manifest."""
@@ -524,10 +554,10 @@ def bring_in(archive: Path, passphrase: str, runner: hermes.Runner, base: Option
         progress(base, 2)
         for how, name in gateway_units():
             if how == "systemd":
-                runner.run(["systemctl", "--user", "stop", name], check=False)
+                _step(runner, ["systemctl", "--user", "stop", name], "the agents' gateway didn't stop")
         if browsers:   # the place's agents' browsers (services, containers) go with them
-            runner.run(bridge + ["browser", "remove", "--all", "--config", str(config)], cwd=repo / "bridge",
-                       check=False)
+            _step(runner, bridge + ["browser", "remove", "--all", "--config", str(config)],
+                  "the agents' browsers didn't stop", cwd=repo / "bridge")
             place_text = config.read_text(encoding="utf-8")
         _remove(scratch)
         unpacked = {**info, "roots": {name: str(scratch / name) for name in info["roots"]}}
@@ -566,7 +596,7 @@ def bring_in(archive: Path, passphrase: str, runner: hermes.Runner, base: Option
                 if imported_before else []:
             media[str(old)] = str(moving.rehome(str(new), info, target))
         keep, main = brought(tomllib.loads(imported_before)) if imported_before else ([], None)
-        root = _free_name(profiles, ROOT_AGENT) if lone or main else None
+        root = root_name(profiles, main) if lone or main else None
         if root:
             # The main profile's own (its memory, conversations, skills, routines) becomes a profile of its own,
             # served by the place's hub under /p/<root>/ with its key.
@@ -594,12 +624,14 @@ def bring_in(archive: Path, passphrase: str, runner: hermes.Runner, base: Option
             runner.log.append(line)
         for how, name in gateway_units():
             if how == "systemd":
-                runner.run(["systemctl", "--user", "start", name], check=False)
+                _step(runner, ["systemctl", "--user", "start", name], "the agents' gateway didn't start")
         # Every profile served to the app as the place's agents are (its key, uploads in the sandbox, the bridge's
-        # tools, Bot Mode; those of a Hermes alone claimed), then their browsers from the place's own ports.
-        runner.run(bridge + ["adopt", "--config", str(config)], cwd=repo / "bridge", check=False)
+        # tools, Bot Mode; those of a Hermes alone claimed), then their browsers from the place's own ports. Each
+        # checked: an agent not claimed is a failed import (the lab, 19/11: « done » with no agent at all).
+        _step(runner, bridge + ["adopt", "--config", str(config)], "an agent couldn't be served", cwd=repo / "bridge")
         if browsers:
-            runner.run(bridge + ["browser", "add", "--all", "--config", str(config)], cwd=repo / "bridge", check=False)
+            _step(runner, bridge + ["browser", "add", "--all", "--config", str(config)],
+                  "the agents' browsers didn't start", cwd=repo / "bridge")
     except BaseException:
         aside.put_back()
         bridgeconf.write(config, place_text, removing=bridgeconf.ANY)
