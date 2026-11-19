@@ -1,14 +1,14 @@
 #!/bin/bash
 # BipAgents: the night's reboot on a server of the all-included offer installed before 2026-10-22 (the newer ones have
 # it from their first boot: user-data.yaml, whose settings these are, word for word). Run once as root:
-#     curl -fsSL https://raw.githubusercontent.com/Alexbob0/BipAgents/main/installer/cloud/nightly-reboot.sh | bash
+#     curl -fsSL https://raw.githubusercontent.com/BipAgents/BipAgents/stable/installer/cloud/nightly-reboot.sh | bash
 # unattended-upgrades then reboots the server by itself when an update asks for it, at 00:00-00:44 server time (a
 # minute of its own, from its machine id), after the updates at 23:00-23:30. On a server of the guichet, the seat agent
 # is taken again and tells the guichet of each reboot as the server shuts down (a planned reboot is not an outage).
 # Running it again changes nothing. ASCII only, like user-data.yaml (installer/tests/test_cloud_init.py checks it).
 set -eu
 lib=/usr/local/lib/bipagents
-repo=https://raw.githubusercontent.com/Alexbob0/BipAgents/main/installer/cloud
+repo=https://raw.githubusercontent.com/BipAgents/BipAgents/stable/installer/cloud
 
 cat > /etc/apt/apt.conf.d/52bipagents-reboot <<'EOF'
 Unattended-Upgrade::Automatic-Reboot "true";

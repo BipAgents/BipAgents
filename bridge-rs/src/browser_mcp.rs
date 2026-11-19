@@ -1256,7 +1256,7 @@ pub const VAULT_TYPED_SECONDS: f64 = 1800.0;
 // ce site ? » (« Oui »: this one sending; « Toujours pour ce site »: kept in « Sites autorisés »), then it does the
 // same step again. A search form (role=search, a search field, or a `get` form with one text field) is reading. The
 // bridge writes what is allowed beside `busy` (`SEND_SITES_FILE`: the sites validated for sending, and each « Oui »'s
-// one-use grant, `ONCE`); a grant is used once by this proxy (`Proxy::may_send`). The vault's fills (vault_login,
+// grant for its ten minutes, `window`; a vault fill's one-use grant, used once by this proxy, `first_refused`). The vault's fills (vault_login,
 // vault_create_login) grant their site's next sending, and a card payment never passes here (the bridge presses the
 // pay button itself, card_pay.rs).
 
@@ -1288,8 +1288,8 @@ pub fn send_covered(sites: &[String], host: &str) -> bool {
         })
 }
 
-/// What `SEND_SITES_FILE` allows for `host` now: `Some(None)` always, `Some(Some(id))` a one-use grant not used yet
-/// (`used`), None nothing.
+/// What `SEND_SITES_FILE` allows for `host` now: `Some(None)` always or for now (a person's « Oui », `window`, for its
+/// ten minutes), `Some(Some(id))` a one-use grant not used yet (`used`: a vault fill's), None nothing.
 pub fn send_allowed(path: &Path, host: &str, used: &std::collections::HashSet<String>, now: f64) -> Option<Option<String>> {
     let file = std::fs::read_to_string(path).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok())?;
     let list = |v: Option<&Value>| -> Vec<String> {
@@ -1302,7 +1302,9 @@ pub fn send_allowed(path: &Path, host: &str, used: &std::collections::HashSet<St
         let id = grant.get("id").and_then(Value::as_str)?;
         let until = grant.get("until").and_then(Value::as_f64).unwrap_or(0.0);
         let site = grant.get("host").and_then(Value::as_str)?.to_string();
-        (until > now && !used.contains(id) && send_covered(&[site], host)).then(|| Some(id.to_string()))
+        let window = grant.get("window").and_then(Value::as_bool) == Some(true);
+        (until > now && (window || !used.contains(id)) && send_covered(&[site], host))
+            .then(|| (!window).then(|| id.to_string()))
     })
 }
 

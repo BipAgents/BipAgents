@@ -49,13 +49,14 @@ def opened(items):
 def test_j32_a_friend_opens_the_shared_project_and_sees_its_messages(journey, guichet):
     """Alex shows his project « Pour les queens » to Léa: her link opens (« Alex te montre un projet »), « Voir », and
     she reads the conversation (his words, the agent's replies), sealed for her phone only; Alex's « Visible par
-    N personnes » goes from the open invitation to her, once she is in."""
+    N personnes » counts her from her invitation on (1), and still 1 once she is in."""
     shared = project_share(journey, guichet)
     link = shared.link(journey.bridge, "Léa")
     assert link.startswith("https://bipagents.com/v#i=") and "&k=" in link
     before = share_view(journey.bridge, shared.agent)
     assert not shown.owner_view_problems(before), shown.owner_view_problems(before)
-    assert before["count"] == 0 and [i["name"] for i in before["invites"]] == ["Léa"], before
+    # « Visible par 1 personne » from the invitation on (18/11: « 0 personnes » with two friends invited)
+    assert before["count"] == 1 and [i["name"] for i in before["invites"]] == ["Léa"], before
 
     lea = Friend(guichet)
     looked = lea.open_link(link)
@@ -71,9 +72,11 @@ def test_j32_a_friend_opens_the_shared_project_and_sees_its_messages(journey, gu
     assert "week-end à Barcelone" in messages[0]["text"]
     assert messages[1]["text"].startswith("Voici la carte") and "MEDIA:" not in messages[1]["text"]
 
-    # the owner's count follows: « Visible par 1 personne », Léa among the guests
-    assert wait_until(lambda: share_view(journey.bridge, shared.agent)["count"] == 1, timeout=30)
+    # the owner's view follows: Léa among the guests, « Visible par 1 personne » (invited, then seeing it: still 1)
+    assert wait_until(lambda: [v["state"] for v in share_view(journey.bridge, shared.agent)["viewers"]] == ["ok"],
+                      timeout=30)
     after = share_view(journey.bridge, shared.agent)
+    assert after["count"] == 1 and after["invites"] == [], after
     assert not shown.owner_view_problems(after), shown.owner_view_problems(after)
     assert [(v["name"], v["state"]) for v in after["viewers"]] == [("Léa", "ok")], after
     project = {p["agent"]: p for p in journey.bridge.get("/v1/project-agents", headers=AUTH).json()["projects"]}

@@ -720,8 +720,11 @@ pub async fn sync(state: &AppState, id: &str, notify: bool) -> Result<Option<Val
     if people_before != (share.get("viewers").cloned(), share.get("invites_open").cloned()) {
         // someone joined, left or was invited: the owner's open conversation reads the share again (a hint only)
         let agent = s(&share, "agent");
+        // `seen`: the friends keyed (a hint about a friend coming in tells itself from an invitation's, same count)
         let count = view(&share)["count"].clone();
-        crate::threads::threads_of(state).publish(&agent, "share", json!({"agent": agent, "share": id, "count": count}));
+        let seen = share["viewers"].as_array().map(|v| v.iter().filter(|x| x["state"] == "ok").count()).unwrap_or(0);
+        crate::threads::threads_of(state)
+            .publish(&agent, "share", json!({"agent": agent, "share": id, "count": count, "seen": seen}));
     }
     // the items: what changed since last time
     let messages = match config.agent(Some(&s(&share, "agent"))) {
@@ -861,13 +864,12 @@ pub async fn run_forever(state: AppState) {
 
 // -- the owner's app ----------------------------------------------------------------------------------------------------
 
-/// The share as the owner's app shows it.
+/// The share as the owner's app shows it. `count` (« Visible par N personnes »): everyone invited and everyone who
+/// sees it — the friends who opened their link (a key the link didn't vouch for never counts) and the open links.
 pub fn view(share: &Value) -> Value {
-    let count = share
-        .get("viewers")
-        .and_then(Value::as_array)
-        .map(|v| v.iter().filter(|x| x["state"] == "ok").count())
-        .unwrap_or(0);
+    let len = |name: &str| share.get(name).and_then(Value::as_array);
+    let count = len("viewers").map(|v| v.iter().filter(|x| x["state"] != "refused").count()).unwrap_or(0)
+        + len("invites_open").map(Vec::len).unwrap_or(0);
     json!({
         "id": share["id"], "agent": share["agent"], "session": share.get("session").cloned().unwrap_or(Value::Null),
         "thread": is_thread(share), "title": share["title"],
@@ -1263,6 +1265,20 @@ mod tests {
         assert!(!viewers_changed(&refused, &joined));
         // the friend left (or was removed): a sync
         assert!(viewers_changed(&keyed, &json!({"viewers": []})));
+    }
+
+    #[test]
+    fn the_count_is_everyone_invited_and_everyone_who_sees_it() {
+        // 18/11: Noah and Ava invited, neither opened their link yet → « Visible par 0 personnes » in the apps
+        let invited = json!({"id": "s", "agent": "a", "title": "t", "ends": 2.0e9, "viewers": [],
+            "invites_open": [{"invite": "i1", "name": "Noah"}, {"invite": "i2", "name": "Ava"}]});
+        assert_eq!(view(&invited)["count"], json!(2));
+        // Noah opened his (keyed), Léo is being keyed, a key the link didn't vouch for is never counted
+        let mixed = json!({"id": "s", "agent": "a", "title": "t", "ends": 2.0e9,
+            "viewers": [{"id": "1", "state": "ok"}, {"id": "2", "state": "waiting"}, {"id": "3", "state": "refused"}],
+            "invites_open": [{"invite": "i2", "name": "Ava"}]});
+        assert_eq!(view(&mixed)["count"], json!(3));
+        assert_eq!(view(&json!({"id": "s"}))["count"], json!(0));
     }
 
     #[test]

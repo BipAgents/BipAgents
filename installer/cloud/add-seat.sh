@@ -76,9 +76,9 @@ echo "$(date -u +%FT%TZ) place $n shared start" >> /var/log/bipagents-timeline.l
 [ -f "$here/seat-agent.py" ] && python3 "$here/seat-agent.py" --prepare "${version:-main}" $repo >/dev/null 2>&1
 echo "$(date -u +%FT%TZ) place $n install start" >> /var/log/bipagents-timeline.log
 # install.sh of the version it installs, when the guichet pins one (review R10: the branch's tip may be a pre-test's)
-installer=https://raw.githubusercontent.com/Alexbob0/BipAgents/main/install.sh
+installer=https://raw.githubusercontent.com/BipAgents/BipAgents/stable/install.sh
 if [ -n "$version" ]; then
-    slug=${repo:-https://github.com/Alexbob0/BipAgents.git}
+    slug=${repo:-https://github.com/BipAgents/BipAgents.git}
     slug=${slug#https://github.com/}
     installer="https://raw.githubusercontent.com/${slug%.git}/$version/install.sh"
 fi

@@ -347,7 +347,7 @@ The apps play no part in it.
 
 ## 6. Anything else
 
-- **Links the person taps:** links in replies, the legal texts (`github.com/Alexbob0/BipAgents/blob/main/docs/legal/…`),
+- **Links the person taps:** links in replies, the legal texts (`github.com/BipAgents/BipAgents/blob/stable/docs/legal/…`),
   Hermes Agent and the source on GitHub, CC BY 4.0, Play's subscription and redeem pages. These open in the browser or
   the store; nothing is sent except the address itself.
 - **Install commands** (`raw.githubusercontent.com/…/install.sh`, `install.ps1`): shown, copied or shared. The app does

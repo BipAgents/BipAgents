@@ -63,16 +63,17 @@ def test_a_friend_opening_their_link_reaches_the_open_conversation_in_seconds(br
                 kind, data = hints.get(timeout=max(0.1, deadline - time.time()))
             except queue.Empty:
                 break
-            if kind == "share" and data.get("count") == 1:   # (the invitation itself may be hinted before: count 0)
+            # (her invitation may be hinted before, with the same count since 19/11: « seen » tells them apart)
+            if kind == "share" and data.get("seen") == 1:
                 hint = data
                 break
-        assert hint is not None, "no share hint while the conversation is open"
-        assert hint == {"agent": agent, "share": SHARE, "count": 1}
+        assert hint is not None, "no share hint of Léa in while the conversation is open"
+        assert hint == {"agent": agent, "share": SHARE, "count": 1, "seen": 1}
         assert time.time() - opened < 6   # within a couple of the bridge's looks (every 2 s)
-        # keyed meanwhile: the friend can read, and the owner's next read says 1
+        # keyed meanwhile: the friend can read, and the owner's next read says 1, Léa seeing it
         assert next(v for v in guichet.viewers if v["viewer"] == "1").get("wrapped")
         listed = bridge.get(f"/v1/read-shares?agent={agent}", headers=AUTH).json()["shares"]
-        assert [s["count"] for s in listed] == [1]
+        assert [(s["count"], [v["state"] for v in s["viewers"]], s["invites"]) for s in listed] == [(1, ["ok"], [])]
     finally:
         stop.set()
         guichet.stop()

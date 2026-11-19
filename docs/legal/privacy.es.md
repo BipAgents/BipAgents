@@ -1016,7 +1016,7 @@ Scaleway, en Francia, sin transferencia fuera de la Unión. Puedes pedirnos una 
 El relé solo acepta conexiones cifradas (HTTPS), sella los tokens (XChaCha20-Poly1305), no tiene base de datos y
 nunca escribe un token en claro. En la app, las claves de tus agentes están protegidas por el Llavero o el Keystore,
 y la conexión con tu servidor pasa por Tailscale o por una puerta HTTPS en tu red local, que solo acepta el
-certificado de tu servidor. El código de la app, del servidor y del relé es público: https://github.com/Alexbob0/BipAgents. Para
+certificado de tu servidor. El código de la app, del servidor y del relé es público: https://github.com/BipAgents/BipAgents. Para
 informar de un fallo de seguridad: **security@bipagents.com** (consulta el archivo SECURITY.md del repositorio).
 
 Con la oferta todo incluido, cada plaza es una cuenta separada del servidor, sin derechos de administrador; Kerfy

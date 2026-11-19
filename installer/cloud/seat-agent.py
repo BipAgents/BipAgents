@@ -8,7 +8,9 @@ and whether its encrypted space waits for its key ("locked" and why),
 and for the server its memory, swap, disk and load, and for each place the memory it holds now and its highest since the
 last beat ("places") -- yes or no, a version, a time and numbers, nothing of anyone. The
 guichet answers with each place's AI credit state ("credit": ok, low, full, stopped; written where the place's bridge
-reads it, which pauses its routines, browser and background tasks while the month's credit is used) and its orders, and the agent does one only when the guichet's Ed25519 key signed it (checked with
+reads it, which pauses its routines, browser and background tasks while the month's credit is used), whether each
+place's agents may pay by card ("offer_cards": Kerfy Studio's remote switch, `bipguichet cards off`; a false written
+for the place's bridge in OFFER_CARDS_DIR, which stops card payments there) and its orders, and the agent does one only when the guichet's Ed25519 key signed it (checked with
 openssl against /etc/bipagents/guichet.pub), for this server, not expired, not done before. There are three orders:
 install place n again for its next person -- its account bip<n> (bip for place 1), everything in it and its
 services go, then installer/cloud/add-seat.sh sets it up again with the new pairing secret; bring place n to a
@@ -43,6 +45,7 @@ import os
 import pwd
 import shutil
 import socket
+import stat as stat_mod
 import subprocess
 import sys
 import tempfile
@@ -69,6 +72,10 @@ SETUP = ".config/bipagents/setup.json"     # its bridge's pairing secret while i
 LOCKED = ".local/share/bipagents/space/locked.json"   # its encrypted space not open yet, and why (space.rs)
 CREDIT = ".local/state/bipagents/credit.json"   # its plan's AI credit as the guichet says it (bridge-rs/src/credit.rs)
 CREDIT_STATES = ("ok", "low", "full", "stopped")
+# Kerfy Studio's remote switch for the agents' card payments (guichet-rs/src/offer_cards.rs, bridge-rs/src/cards.rs
+# `remote_off`): <uid>.json per place, root's, outside the places' homes (nothing of the place can remove it, never in
+# its backups nor moved with it, kept across reboots)
+OFFER_CARDS_DIR = "/var/lib/bipagents/offer-cards"
 HARDENED = "/var/lib/bipagents/space-hardened"   # space-hardening.sh was done (user-data.yaml, add-seat.sh)
 PAIR_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
 
@@ -201,7 +208,7 @@ SHARED_REPO = os.path.join(LIB, "repo")   # root's own BipAgents, never a place'
 # A pre-test's checkout of root's, apart: a pre-test place's shared Hermes is made from it, and root's own checkout
 # (the images' nightly pull, the seat tools) stays on production's version until the production waves (review R11)
 PRETEST_REPO = os.path.join(LIB, "repo-pretest")
-PUBLIC_REPO = "https://github.com/Alexbob0/BipAgents.git"
+PUBLIC_REPO = "https://github.com/BipAgents/BipAgents.git"
 # The public repositories an update order may name (installer/bipinstall/public_repo.py: KNOWN): the guichet moves the
 # places to the BipAgents organisation's through an update, and back; never anywhere else, whatever an order says.
 KNOWN_REPOS = ("https://github.com/Alexbob0/BipAgents.git",  # known-public-repos
@@ -349,6 +356,7 @@ def update(number, commit, repo=None, pretest=False):
     except OSError as exc:
         log("place %d: own disk not made: %s" % (number, exc))
     log("place %d (%s): BipAgents %s%s" % (number, user, commit[:12], " from " + repo if repo else ""))
+    forget_cards_seen(pwd.getpwnam(user).pw_dir)   # the card payments switch: said again by the bridge that starts
     where = ["BIPAGENTS_TO_REPO=" + repo] if repo in KNOWN_REPOS else []
     with open("/var/log/bipagents-update%d.log" % number, "a") as out:
         subprocess.run(["sudo", "-iu", user, "env", "XDG_RUNTIME_DIR=/run/user/%d" % uid,
@@ -632,7 +640,62 @@ def health():
         last_used = used(entry.pw_dir)
         if last_used is not None:
             seats[str(number)]["used"] = last_used
+        cards = cards_seen(entry.pw_dir, entry.pw_uid)
+        if cards is not None:
+            seats[str(number)]["cards"] = cards
     return seats
+
+
+OFFER_CARDS_SEEN = ".local/state/bipagents/offer-cards-seen.json"   # what its bridge applies (bridge-rs/src/cards.rs)
+
+
+# The bridge rewrites it every minute (bridge-rs/src/cards.rs `follow_remote_switch`): an older one is a bridge that
+# stopped (review 18/11 pass 5, H1/H2), never trusted.
+SEEN_FRESH = 180
+
+
+def bridge_alive(pid, uid, proc="/proc"):
+    """`pid` is a bridge of the account `uid` running now (its /proc entry, its owner, its command's name)."""
+    try:
+        if os.stat(os.path.join(proc, str(pid))).st_uid != uid:
+            return False
+        with open(os.path.join(proc, str(pid), "comm")) as fh:
+            return fh.read().strip().startswith("bipbridge")
+    except (OSError, ValueError):
+        return False
+
+
+def cards_seen(home, uid=None, now=None, alive=None):
+    """What the place's bridge applies of Kerfy Studio's card payments switch: "off" (cut), "on", or None (a bridge
+    that doesn't read the switch yet: `bipguichet cards status` says so). Only from the bridge running now (review
+    18/11 pass 5, H1/H2): the file names its process, which must still be a bridge of this account, and is rewritten
+    every minute, so a file left by a bridge that stopped (a wave back to an older one, even one cut in the middle of
+    it) says nothing, while a bridge that kept running through an update (an installer-only wave) is still counted."""
+    path = os.path.join(home, OFFER_CARDS_SEEN)
+    try:
+        info = os.lstat(path)
+    except OSError:
+        return None
+    if not stat_mod.S_ISREG(info.st_mode):
+        return None
+    age = (time.time() if now is None else now) - info.st_mtime
+    if not -60 <= age < SEEN_FRESH:
+        return None
+    seen = read_json(path)
+    off, pid = seen.get("off"), seen.get("pid")
+    if not isinstance(off, bool) or not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
+        return None
+    if not (alive or bridge_alive)(pid, info.st_uid if uid is None else uid):
+        return None
+    return "off" if off else "on"
+
+
+def forget_cards_seen(home):
+    """An update: what the place's bridge said it applies goes, until the bridge that starts says it again."""
+    try:
+        os.unlink(os.path.join(home, OFFER_CARDS_SEEN))
+    except OSError:
+        pass
 
 
 # -- memory and CPU: each place's soft share, compressed swap, and what each place holds -------------------------------
@@ -790,6 +853,74 @@ def keep_credit(answer, homes=None):
             write_credit(path, value, uid, gid, home)
         except OSError as exc:
             log("place %d: credit state not written: %s" % (number, exc))
+
+
+def keep_offer_cards(answer, uids=None, folder=None, owner=(0, 0)):
+    """Kerfy Studio's switch for the agents' card payments, per place, from the guichet's answer (`offer_cards`: number
+    -> true/false): `{"offer_cards": false}` written where the place's bridge reads it, the file removed when true or
+    when the answer leaves the place out; written or removed only when that changes. An older guichet's answer (no
+    `offer_cards`) changes nothing. `uids`: number -> uid, the places' accounts by default; `owner`: the folder's
+    (root's)."""
+    given = answer.get("offer_cards") if isinstance(answer, dict) else None
+    if not isinstance(given, dict):
+        return
+    folder = folder or OFFER_CARDS_DIR
+    if uids is None:
+        uids = {}
+        for number in range(1, MAX_SEATS + 1):
+            try:
+                uids[number] = pwd.getpwnam(account(number)).pw_uid
+            except KeyError:
+                continue
+    try:
+        if not os.path.isdir(folder) or os.path.islink(folder):
+            if os.path.lexists(folder):
+                os.unlink(folder)
+            os.makedirs(folder, mode=0o755, exist_ok=True)
+        os.chown(folder, owner[0], owner[1], follow_symlinks=False)
+        os.chmod(folder, 0o755)
+    except OSError as exc:
+        log("card payments switch: folder not ready: %s" % exc)
+        return
+    # a place installed again has a new account, another uid (review 18/11 F3): the old uid's file goes, never to cut
+    # a later account given that uid
+    known = set(uids.values())
+    try:
+        for name in os.listdir(folder):
+            stem = name[:-len(".json")] if name.endswith(".json") else None
+            if stem is not None and stem.isdigit() and int(stem) in known:
+                continue
+            try:
+                os.unlink(os.path.join(folder, name))
+            except IsADirectoryError:
+                continue
+            log("card payments switch: %s removed (no place has that account any more)" % name)
+    except OSError as exc:
+        log("card payments switch: old files not removed: %s" % exc)
+    for number, uid in sorted(uids.items()):
+        path = os.path.join(folder, "%d.json" % uid)
+        off = given.get(str(number)) is False
+        try:
+            if not off:
+                if os.path.lexists(path):
+                    os.unlink(path)
+                    log("place %d: card payments no longer cut by Kerfy Studio" % number)
+                continue
+            if not os.path.islink(path) and read_json(path) == {"offer_cards": False}:
+                continue
+            tmp = path + ".tmp"
+            if os.path.lexists(tmp):
+                os.unlink(tmp)
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o644)
+            with os.fdopen(fd, "w") as fh:
+                json.dump({"offer_cards": False}, fh)
+                fh.flush()
+                os.fsync(fh.fileno())
+                os.fchmod(fh.fileno(), 0o644)
+            os.replace(tmp, path)
+            log("place %d: card payments cut by Kerfy Studio" % number)
+        except OSError as exc:
+            log("place %d: card payments switch not written: %s" % (number, exc))
 
 
 def places():
@@ -2087,7 +2218,8 @@ class Beating(object):
         self.thread = threading.Thread(target=self._loop, name="beat", daemon=True)
 
     def _beat(self):
-        call(self.conf, "POST", "/v1/server/beat", beat_of(vitals(), self.disk, moves=False))
+        answer = call(self.conf, "POST", "/v1/server/beat", beat_of(vitals(), self.disk, moves=False))
+        keep_offer_cards(answer)   # Kerfy Studio's cut of card payments, even while a long order runs
 
     def _loop(self):
         while not self.stop.wait(self.every):
@@ -2160,6 +2292,7 @@ def main(argv=()):
     except OSError as exc:
         log("settings not kept: %s" % exc)
     keep_credit(answer)
+    keep_offer_cards(answer)
     try:
         doors(answer)
     except (OSError, ValueError, subprocess.SubprocessError) as exc:

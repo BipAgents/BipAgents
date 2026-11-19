@@ -660,7 +660,7 @@ def test_a_new_place_gets_the_shared_hermes_and_images_of_its_version_first(tmp_
     monkeypatch.setattr(agent.os.path, "exists", lambda p: False if str(p).endswith("image-views.service") else exists(p))
     assert agent.main(["--prepare", "main"]) == 0
     assert ran[0][:4] == ["git", "clone", "--quiet", "--filter=blob:none"]
-    assert ran[0][-2] == "https://github.com/Alexbob0/BipAgents.git"
+    assert ran[0][-2] == "https://github.com/BipAgents/BipAgents.git"
     assert ran[2][-1] == "origin/stable"                     # the latest: stable where the repository has it
     assert ran[3][-1] == "origin/stable"
     assert ran[4] == ["python3", "-m", "bipinstall.shared_hermes", "build"]
@@ -769,6 +769,33 @@ def test_a_pretest_order_updates_that_place_alone_and_leaves_what_the_server_sha
     calls.clear()
     assert agent.update_order(2, commit, moves=str(tmp_path / "moves"), home=str(tmp_path))
     assert calls == ["prepare_shared", "refresh_tools"]
+
+
+def test_an_update_order_naming_a_repository_moves_the_place_there(tmp_path, monkeypatch):
+    """2026-11-15: an update order may name the public repository its commit lives in (the switch to the BipAgents
+    organisation's, and its way back): root's checkout and the place's install go there (install.sh moves its origin
+    for BIPAGENTS_TO_REPO); an order naming none leaves both where they are."""
+    import io
+    import types
+    agent = _seat_agent()
+    prepared, ran = [], []
+    monkeypatch.setattr(agent.pwd, "getpwnam", lambda user: types.SimpleNamespace(pw_uid=1002, pw_dir=str(tmp_path)))
+    monkeypatch.setattr(agent, "prepare_shared", lambda commit, repo=None: prepared.append((commit, repo)))
+    for name in ("refresh_tools", "shared_gc", "log"):
+        monkeypatch.setattr(agent, name, lambda *a, **k: None)
+    monkeypatch.setattr(agent, "own_disk", lambda user, settings: None)
+    monkeypatch.setattr(agent, "read_json", lambda path: {})
+    monkeypatch.setattr(agent, "open", lambda *a, **k: io.StringIO(), raising=False)
+    monkeypatch.setattr(agent.subprocess, "run", lambda args, **kw: ran.append(list(args)))
+    new, commit = "https://github.com/BipAgents/BipAgents.git", "c" * 40  # known-public-repos
+    assert agent.update_order(2, commit, moves=str(tmp_path / "moves"), home=str(tmp_path), repo=new)
+    assert prepared == [(commit, new)]
+    assert ran[-1][:2] == ["sudo", "-iu"] and "BIPAGENTS_TO=" + commit in ran[-1]
+    assert "BIPAGENTS_TO_REPO=" + new in ran[-1]
+    assert ran[-1].index("BIPAGENTS_TO_REPO=" + new) < ran[-1].index("BipAgents/install.sh")
+    prepared.clear(), ran.clear()
+    assert agent.update_order(2, commit, moves=str(tmp_path / "moves"), home=str(tmp_path))
+    assert prepared == [(commit, None)] and not any(a.startswith("BIPAGENTS_TO_REPO") for a in ran[-1])
 
 
 def test_only_root_may_ask_the_provider_s_metadata_service():
@@ -928,3 +955,143 @@ def test_the_beat_says_whether_the_server_is_hardened(tmp_path):
     assert agent.vitals(str(meminfo), str(tmp_path), str(tmp_path / "up"), str(done))["space_hardened"] is False
     done.write_text("2026-10-28T10:00:00Z\n")
     assert agent.vitals(str(meminfo), str(tmp_path), str(tmp_path / "up"), str(done))["space_hardened"] is True
+
+
+def test_kerfy_s_card_payments_switch_is_written_where_each_place_s_bridge_reads_it(tmp_path):
+    """The beat's answer says, per place, whether the agents' card payments may go on (the guichet's offer_cards.rs,
+    `bipguichet cards off`): `{"offer_cards": false}` in the place's own file, root's, outside its home, removed when
+    it may again (bridge-rs/src/cards.rs `remote_off`); an older guichet's answer changes nothing."""
+    import os
+    agent = _seat_agent()
+    assert agent.OFFER_CARDS_DIR == "/var/lib/bipagents/offer-cards"
+    folder = tmp_path / "offer-cards"
+    me = (os.getuid(), os.getgid())
+    uids = {1: 1001, 2: 1002, 3: 1003}
+    keep = lambda answer: agent.keep_offer_cards(answer, uids, str(folder), me)   # noqa: E731
+    keep({"orders": [], "credit": {}})   # an older guichet: nothing made
+    assert not folder.exists()
+    keep({"offer_cards": {"1": False, "2": True}})   # place 3 left out: no cut
+    assert sorted(p.name for p in folder.iterdir()) == ["1001.json"]
+    assert json.loads((folder / "1001.json").read_text()) == {"offer_cards": False}
+    assert oct((folder / "1001.json").stat().st_mode & 0o777) == "0o644"
+    assert oct(folder.stat().st_mode & 0o777) == "0o755"
+    # written only when it changes (the bridge reads it again only then)
+    before = (folder / "1001.json").stat()
+    keep({"offer_cards": {"1": False, "2": True}})
+    after = (folder / "1001.json").stat()
+    assert (after.st_ino, after.st_mtime_ns) == (before.st_ino, before.st_mtime_ns)
+    # only false cuts: anything else is no cut
+    keep({"offer_cards": {"1": False, "2": "false", "3": 0}})
+    assert sorted(p.name for p in folder.iterdir()) == ["1001.json"]
+    # an older guichet again: the cut stays as it is
+    keep({"orders": []})
+    keep({"offer_cards": None})
+    assert (folder / "1001.json").exists()
+    # a link put in its stead is replaced, never followed
+    target = tmp_path / "elsewhere"
+    target.write_text("keep")
+    os.symlink(target, folder / "1002.json")
+    keep({"offer_cards": {"1": False, "2": False}})
+    assert target.read_text() == "keep"
+    assert not (folder / "1002.json").is_symlink()
+    assert json.loads((folder / "1002.json").read_text()) == {"offer_cards": False}
+    # back on: the files removed
+    keep({"offer_cards": {"1": True}})
+    assert list(folder.iterdir()) == []
+    # the folder replaced by a link: never written through it
+    elsewhere = tmp_path / "other"
+    elsewhere.mkdir()
+    folder.rmdir()
+    os.symlink(elsewhere, folder)
+    keep({"offer_cards": {"1": False}})
+    assert list(elsewhere.iterdir()) == [] and folder.is_dir() and not folder.is_symlink()
+    assert json.loads((folder / "1001.json").read_text()) == {"offer_cards": False}
+
+
+def test_a_beat_between_long_orders_keeps_the_card_payments_switch_too(tmp_path, monkeypatch):
+    agent = _seat_agent()
+    kept = []
+    monkeypatch.setattr(agent, "call", lambda *a, **k: {"offer_cards": {"1": False}})
+    monkeypatch.setattr(agent, "vitals", lambda: {})
+    monkeypatch.setattr(agent, "beat_of", lambda *a, **k: {})
+    monkeypatch.setattr(agent, "keep_offer_cards", lambda answer: kept.append(answer))
+    agent.Beating({}, {})._beat()
+    assert kept == [{"offer_cards": {"1": False}}]
+
+
+def test_review_a_place_installed_again_leaves_no_cut_behind(tmp_path):
+    """Review 18/11 (info): a place installed again gets a new account, another uid (shared_images.py); the cut written
+    for its old uid is never removed (only the uids of today's accounts are looked at), and comes back for any later
+    account given that uid while an older guichet answers without `offer_cards`."""
+    import os
+    agent = _seat_agent()
+    folder = tmp_path / "offer-cards"
+    me = (os.getuid(), os.getgid())
+    agent.keep_offer_cards({"offer_cards": {"1": False}}, {1: 1001}, str(folder), me)
+    assert (folder / "1001.json").exists()
+    # place 1 installed again (new uid 2001), the cut lifted
+    agent.keep_offer_cards({"offer_cards": {"1": True}}, {1: 2001}, str(folder), me)
+    assert not (folder / "1001.json").exists(), "the old uid's cut stays behind"
+
+
+def test_the_beat_says_what_each_place_s_bridge_applies_of_the_card_payments_switch(tmp_path):
+    """Review 18/11 F2, pass 5: the bridge writes what it applies (`{"off": …, "pid": …}`, every minute); the beat says
+    it per place ("cards") only while that process is still a bridge of the place and the file is fresh."""
+    import os
+    import time
+    agent = _seat_agent()
+    home = tmp_path / "bip"
+    alive = lambda pid, uid: pid == 4242   # noqa: E731
+    assert agent.cards_seen(str(home), alive=alive) is None
+    seen = home / agent.OFFER_CARDS_SEEN
+    seen.parent.mkdir(parents=True)
+    seen.write_text('{"off": true, "pid": 4242, "version": "abc123def456"}')
+    assert agent.cards_seen(str(home), alive=alive) == "off"
+    seen.write_text('{"off": false, "pid": 4242}')
+    assert agent.cards_seen(str(home), alive=alive) == "on"
+    seen.write_text('{"off": true, "pid": 5151}')   # that bridge stopped
+    assert agent.cards_seen(str(home), alive=alive) is None
+    for other in ('{"off": "yes", "pid": 4242}', '{"off": true, "pid": true}', '{"off": true}', "[]", "not json", "{}"):
+        seen.write_text(other)
+        assert agent.cards_seen(str(home), alive=alive) is None, other
+    seen.write_text('{"off": true, "pid": 4242}')
+    old = time.time() - agent.SEEN_FRESH - 1   # not rewritten for 3 minutes: a bridge that stopped
+    os.utime(seen, (old, old))
+    assert agent.cards_seen(str(home), alive=alive) is None
+    seen.unlink()
+    os.symlink(tmp_path / "elsewhere", seen)   # never through a link
+    (tmp_path / "elsewhere").write_text('{"off": true, "pid": 4242}')
+    assert agent.cards_seen(str(home), alive=alive) is None
+    assert agent.OFFER_CARDS_SEEN == ".local/state/bipagents/offer-cards-seen.json"
+
+
+def test_a_bridge_is_alive_by_its_proc_entry_its_owner_and_its_name(tmp_path):
+    agent = _seat_agent()
+    import os
+    proc = tmp_path / "proc"
+    (proc / "77").mkdir(parents=True)
+    (proc / "77" / "comm").write_text("bipbridge\n")
+    (proc / "78").mkdir()
+    (proc / "78" / "comm").write_text("python3\n")
+    me = os.getuid()
+    assert agent.bridge_alive(77, me, str(proc))
+    assert not agent.bridge_alive(77, me + 1, str(proc))   # another account's
+    assert not agent.bridge_alive(78, me, str(proc))       # not a bridge
+    assert not agent.bridge_alive(79, me, str(proc))       # gone
+
+def test_review2_g1_a_wave_back_to_an_older_bridge_is_never_counted_as_switched(tmp_path):
+    """Review 18/11 pass 2, G1 (pass 5 terms): after a cut, a wave back to a bridge older than the switch left the
+    « seen » file {"off": true} behind. Now the file names the bridge's process: once it stopped, nothing is said;
+    and an update removes the file until the bridge that runs says it again."""
+    agent = _seat_agent()
+    home = tmp_path / "bip"
+    seen = home / agent.OFFER_CARDS_SEEN
+    seen.parent.mkdir(parents=True)
+    seen.write_text('{"off": true, "pid": 4242, "version": "aaaaaaaaaaaa"}')
+    assert agent.cards_seen(str(home), alive=lambda pid, uid: pid == 4242) == "off"
+    # the wave back: the newer bridge stopped, the older one never writes the file
+    assert agent.cards_seen(str(home), alive=lambda pid, uid: pid == 5151) is None
+    # an update removes it, before the place's updater runs
+    agent.forget_cards_seen(str(home))
+    assert not seen.exists()
+    agent.forget_cards_seen(str(home))   # nothing there: fine

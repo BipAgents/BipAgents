@@ -1,6 +1,6 @@
 # BipAgents on Windows: the Linux install, in WSL2 (Ubuntu) — the same as on a Linux server, sandboxes included.
 # In PowerShell opened as administrator (right-click › Run as administrator):
-#   irm https://raw.githubusercontent.com/Alexbob0/BipAgents/main/install.ps1 | iex
+#   irm https://raw.githubusercontent.com/BipAgents/BipAgents/stable/install.ps1 | iex
 # Run it again at any time: what is done already is skipped. Options, through the environment:
 #   $env:BIPAGENTS_DISTRO = 'Ubuntu-24.04'   the WSL distribution (created if missing)
 #   $env:BIPAGENTS_ARGS = '--dry-run'        passed on to the installer
@@ -19,7 +19,7 @@ function Install-BipAgents {
     $ErrorActionPreference = 'Continue'
     $env:WSL_UTF8 = '1'   # wsl.exe answers in UTF-8, not UTF-16
     $distro = if ($env:BIPAGENTS_DISTRO) { $env:BIPAGENTS_DISTRO } else { 'Ubuntu-24.04' }
-    $installer = 'https://raw.githubusercontent.com/Alexbob0/BipAgents/main/install.sh'
+    $installer = 'https://raw.githubusercontent.com/BipAgents/BipAgents/stable/install.sh'
     $tailscale = Join-Path $env:ProgramFiles 'Tailscale\tailscale.exe'
 
     function Say([string]$text) { Write-Host $text }

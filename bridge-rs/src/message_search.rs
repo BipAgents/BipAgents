@@ -253,7 +253,8 @@ fn row_text(content: &str) -> String {
             },
             false => return text,
         },
-        _ => return content.to_string(),
+        // a `\x00json:` object or number: no words (never the mark and its JSON)
+        _ => return String::new(),
     };
     let texts: Vec<&str> = items
         .iter()
@@ -501,7 +502,10 @@ pub fn search_store(
             rusqlite::types::ValueRef::Text(t) => String::from_utf8_lossy(t).into_owned(),
             _ => continue,
         };
-        if !matches_all(&content, words) {
+        // the raw column first (cheap): not for a row Hermes kept as JSON (`\x00json:`), whose words are escaped
+        // there (Python's ensure_ascii: « église » is `\u00e9glise`): its decoded words decide below
+        let raw_parts = content.starts_with(crate::threads::source::CONTENT_JSON_PREFIX);
+        if !raw_parts && !matches_all(&content, words) {
             continue;
         }
         let role: String = row.get(2)?;
@@ -735,6 +739,33 @@ mod tests {
         let json = found.to_json();
         assert_eq!(json["results"][0]["parts"][1], json!({"text": "piscine", "hit": true}));
         assert_eq!(json["results"][0]["date"], "1970-01-01T00:00:20.000Z");
+    }
+
+    /// Review fix-image-black-space (18/11): a person's row Hermes kept as `\x00json:` parts is written by Python's
+    /// `json.dumps` (ensure_ascii): « église » is `\u00e9glise` in the column. The prefilter on the raw column must not
+    /// drop the row before its words are decoded.
+    #[test]
+    fn a_raw_parts_row_is_found_by_its_accented_words() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("state.db");
+        let conn = make_store(&path);
+        session(&conn, "s1", None, None, Some("Vie"), 0);
+        let parts = r#"[{"type": "text", "text": "Regarde l'\u00e9glise pr\u00e8s du march\u00e9"}, {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,AAAA"}}]"#;
+        message(&conn, "s1", "user", &format!("\u{0}json:{parts}"), 1.0);
+        // the decoded words are right (message_text)
+        assert_eq!(message_text(&format!("\u{0}json:{parts}")), "Regarde l'église près du marché");
+        let (hits, _) = search_store("vie", &path, &words("eglise"), 10, far()).unwrap();
+        assert_eq!(hits.len(), 1, "the photo's message is found by « église »");
+        let (hits, _) = search_store("vie", &path, &words("marché"), 10, far()).unwrap();
+        assert_eq!(hits.len(), 1, "and by « marché »");
+    }
+
+    /// Review fix-image-black-space (18/11, F2): a `\x00json:` column that decodes to neither parts nor text (an
+    /// object) has no words: never the raw column, its mark and JSON.
+    #[test]
+    fn a_raw_parts_object_has_no_words() {
+        assert_eq!(message_text("\u{0}json:{\"type\": \"text\", \"text\": \"x\"}"), "");
+        assert_eq!(message_text("\u{0}json:42"), "");
     }
 
     /// 50k messages: `cargo test --release message_search -- --ignored --nocapture`.

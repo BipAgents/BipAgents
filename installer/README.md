@@ -5,7 +5,7 @@
 One command, run in the account of the person the agents are for — no admin rights:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Alexbob0/BipAgents/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/BipAgents/BipAgents/stable/install.sh | bash
 ```
 
 Add `--dry-run` to see every step and command without changing anything.
@@ -75,7 +75,7 @@ guichet, which can't read it. After an outage the place moves to another server 
 Windows 11 (22H2 or later), in PowerShell opened as administrator:
 
 ```powershell
-irm https://raw.githubusercontent.com/Alexbob0/BipAgents/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/BipAgents/BipAgents/stable/install.ps1 | iex
 ```
 
 The agents live in **WSL2** (Ubuntu), installed exactly as on a Linux server — sandboxes, voices and browsers
@@ -133,7 +133,7 @@ see docs/self-hosting.md.
 
 ## Updating BipAgents
 
-`bipagents update` (or `curl -fsSL https://raw.githubusercontent.com/Alexbob0/BipAgents/main/install.sh | bash -s --
+`bipagents update` (or `curl -fsSL https://raw.githubusercontent.com/BipAgents/BipAgents/stable/install.sh | bash -s --
 update`, the same as `bash ~/BipAgents/install.sh update`) brings this account's install up to date. `bipagents` alone
 lists its commands (update, qr, voice, console, hermes-update, bridge, family add, export, resume, send, backup,
 browser-refresh, encrypt, uninstall); the installer puts it in `~/.local/bin`. It shows what is new, restarts only
@@ -165,7 +165,7 @@ key, the phones' keys and notifications, the vault, shared data, the family's li
 2. For your phones to need nothing: in Tailscale's admin, rename the old machine (`aibox-old`) and give the new one its
    name. Same name and same ports: the app finds its agents by itself. Otherwise you scan a new QR code at the end.
 3. Copy the file to the new machine (`scp`), then run there, in the account that will hold the agents:
-   `curl -fsSL https://raw.githubusercontent.com/Alexbob0/BipAgents/main/install.sh | bash -s -- import <file>`. It
+   `curl -fsSL https://raw.githubusercontent.com/BipAgents/BipAgents/stable/install.sh | bash -s -- import <file>`. It
    asks for the passphrase and installs BipAgents and Hermes in the same versions, for this machine's processor. It
    puts everything back with paths, ports, the tailnet name and the local network adjusted, starts it all and checks
    the agents answer.
@@ -273,8 +273,8 @@ What is the same on every server is built once by GitHub Actions, not on each se
 | What | Built by | Where a server gets it | If it can't |
 |---|---|---|---|
 | Hermes, shared by the server's places (`shared_hermes.py`) | « Shared Hermes (ready-made) » | release `hermes-<version>` (`shared-hermes version`), unpacked into `/opt/bipagents/hermes/<version>` | built on the server, as before |
-| The agents' browser (`browser/`) | « Server images », again each night when Chrome or Fedora have news | `ghcr.io/alexbob0/bipagents-browser:<key>` (`shared-images key`) | pulled by the account, else built by it |
-| Hermes' sandbox | « Server images » (a mirror) | `ghcr.io/alexbob0/hermes-sandbox:desktop` | Docker Hub |
+| The agents' browser (`browser/`) | « Server images », again each night when Chrome or Fedora have news | `ghcr.io/bipagents/bipagents-browser:<key>` (`shared-images key`) | pulled by the account, else built by it |
+| Hermes' sandbox | « Server images » (a mirror) | `ghcr.io/bipagents/hermes-sandbox:desktop` | Docker Hub |
 | The bridge | « Bridge binaries (Rust) » | release `bridge-<key>` | — |
 
 At first boot root fetches Hermes and pulls both images at once (`user-data.yaml`), into `/opt/bipagents/hermes` and
