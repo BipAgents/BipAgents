@@ -1502,3 +1502,45 @@ fn a_site_allowed_for_good_covers_its_subdomains_only() {
     assert!(!browser_mcp::send_covered(&["*.example.com".into()], "badexample.com"));
     assert!(!browser_mcp::send_covered(&["shop.example".into()], ""));
 }
+
+/// One browser per running task (19/11): through the one proxy Hermes keeps, a task's calls (its Hermes session in
+/// the agent's `sessions.json`, patch 0028) start and reach that task's own browser; the person's reach the agent's.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_tasks_calls_start_and_reach_its_own_browser_the_persons_the_agents() {
+    let dir = tempfile::tempdir().unwrap();
+    let (agent, task) = (dir.path().join("vie"), dir.path().join("vie--t1"));
+    std::fs::create_dir_all(&agent).unwrap();
+    std::fs::create_dir_all(&task).unwrap();
+    let agent_config = config(&agent);
+    let mut task_config = config(&task);
+    // the task's browser answers in its own words
+    std::fs::write(task.join("server.py"), FAKE_SERVER.replace("\"did \"", "\"task did \"")).unwrap();
+    task_config.insert("server".into(), json!([python(), task.join("server.py").to_string_lossy()]));
+    std::fs::write(task.join("mcp.json"), Value::Object(task_config).to_string()).unwrap();
+    let sessions = json!({"api_task": task.join("mcp.json").to_string_lossy()});
+    std::fs::write(agent.join(bipbridge::browsers::SESSIONS_FILE), sessions.to_string()).unwrap();
+    let call = |id: i64, session: Option<&str>| {
+        let mut params = json!({"name": "navigate", "arguments": {"url": "https://shop.example"}});
+        if let Some(session) = session {
+            params["_meta"] = json!({bipbridge::agent_tools::CALL_SESSION_META: session});
+        }
+        json!({"jsonrpc": "2.0", "id": id, "method": "tools/call", "params": params})
+    };
+    let lines: String = [init(), call(1, Some("api_task")), call(2, None), call(3, Some("api_other"))]
+        .iter()
+        .map(|m| format!("{m}\n"))
+        .collect();
+    let out = Out::default();
+    let proxy = Proxy::new(agent_config, Box::new(out.clone()));
+    proxy.serve(lines.as_bytes()).await;
+    let answers: std::collections::HashMap<i64, String> = out
+        .messages()
+        .iter()
+        .filter_map(|m| Some((m["id"].as_i64()?, m["result"]["content"][0]["text"].as_str()?.to_string())))
+        .collect();
+    assert_eq!(answers.get(&1).map(String::as_str), Some("task did navigate"), "{answers:?}");
+    assert_eq!(answers.get(&2).map(String::as_str), Some("did navigate"));
+    assert_eq!(answers.get(&3).map(String::as_str), Some("did navigate"), "a session nobody announced: the agent's");
+    assert_eq!(ran(&task), vec!["start"], "the task's own browser started");
+    assert_eq!(ran(&agent), vec!["start"]);
+}
