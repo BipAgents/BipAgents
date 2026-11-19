@@ -201,3 +201,55 @@ def test_a_cut_between_confirm_s_first_check_and_the_press_presses_nothing(bridg
         assert chrome.clicks == [] and chrome.values[("F-psp", 0)] == ""
     finally:
         chrome.stop()
+
+
+def _seat_agent():
+    import importlib.util
+    from pathlib import Path
+    path = Path(__file__).resolve().parents[2] / "installer" / "cloud" / "seat-agent.py"
+    spec = importlib.util.spec_from_file_location("seat_agent", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_the_bridge_tells_the_seat_agent_what_it_applies(bridges, fakes, tmp_path):
+    """Review 18/11 pass 5, I2: the real bridge writes the « seen » file (its process, the commit it started from) and
+    the seat agent's own reading of it says what the beat will say: off while this bridge cuts, nothing once it
+    stopped."""
+    import os
+    agent = _seat_agent()
+    commit = "0123456789abcdef0123456789abcdef01234567"
+
+    def checkout(bridge):
+        git = bridge.home / "BipAgents" / ".git"
+        git.mkdir(parents=True)
+        (git / "HEAD").write_text(commit + "\n")
+
+    switch = tmp_path / "offer-cards.json"
+
+    def prepare(bridge):
+        checkout(bridge)
+        bridge.env_extra["BIP_TEST_OFFER_SWITCH"] = str(switch)
+
+    bridge = pay_bridge(bridges, fakes, None, place="place", prepare=prepare,
+                        change=lambda c: c.update({"payments": {"offer_cards": True}}))
+    seen = bridge.home / agent.OFFER_CARDS_SEEN
+    assert wait_until(seen.exists, timeout=10), "the bridge never said what it applies"
+    told = json.loads(seen.read_text())
+    assert told["off"] is False and told["version"] == commit[:12] and isinstance(told["pid"], int)
+    assert agent.cards_seen(str(bridge.home), os.getuid()) == "on"
+    cut(switch)
+    assert wait_until(lambda: json.loads(seen.read_text())["off"] is True, timeout=15)
+    assert agent.cards_seen(str(bridge.home), os.getuid()) == "off"
+    # HEAD moves (an update that doesn't restart the bridge): it still says it, with the commit it started from
+    (bridge.home / "BipAgents" / ".git" / "HEAD").write_text("f" * 40 + "\n")
+    seen.unlink()   # what an update order does (seat-agent.py forget_cards_seen)
+    assert wait_until(seen.exists, timeout=75), "the bridge never said it again (every minute, H1)"
+    again = json.loads(seen.read_text())
+    assert again["off"] is True and again["version"] == commit[:12] and again["pid"] == told["pid"]   # H2
+    assert agent.cards_seen(str(bridge.home), os.getuid()) == "off"
+    bridge.stop()
+    # stopped: what it left says nothing
+    seen.write_text(json.dumps(told | {"off": True}))
+    assert agent.cards_seen(str(bridge.home), os.getuid()) is None

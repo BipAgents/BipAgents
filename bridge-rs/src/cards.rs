@@ -168,10 +168,16 @@ const REMOTE_LOOK: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// What this bridge applies of Kerfy Studio's switch, for the seat agent's beat (review 18/11 F2: `bipguichet cards
 /// status` tells the places that apply a cut from those whose bridge doesn't read it yet):
-/// `~/.local/state/bipagents/offer-cards-seen.json`, `{"off": true|false}`, written at start and at each change.
+/// `~/.local/state/bipagents/offer-cards-seen.json`, `{"off": true|false, "pid": <this process>, "version": <the
+/// commit it started from>}`, written at start, at each change and every minute (`SEEN_AGAIN`).
 pub const SEEN_FILE: &str = ".local/state/bipagents/offer-cards-seen.json";
 
-fn tell_seen(off: bool) {
+/// How often the bridge says it again, unchanged (review 18/11 pass 5): the seat agent trusts the file only while it
+/// is fresh (seat-agent.py `SEEN_FRESH`, 3 minutes) and its process still runs, so a bridge that kept running through
+/// an update is counted again within the minute, and a file a stopped bridge left says nothing.
+const SEEN_AGAIN: std::time::Duration = std::time::Duration::from_secs(60);
+
+fn tell_seen(off: bool, commit: Option<&str>) {
     if !on_offer() {
         return; // only the offer's places have a seat agent to tell
     }
@@ -179,9 +185,10 @@ fn tell_seen(off: bool) {
     let written = (|| -> std::io::Result<()> {
         crate::py::makedirs(&path.parent().unwrap_or(&path).to_string_lossy(), 0o755)?;
         let tmp = path.with_extension("tmp");
-        // with the commit this place runs (review 18/11 pass 2, G1): the seat agent says nothing for a file another
-        // bridge wrote (a wave back to a bridge older than the switch)
-        let seen = json!({"off": off, "version": running_commit(&crate::place_backup::home())});
+        // this process (review 18/11 pass 5, H2: the seat agent says nothing once it stopped), and the commit it
+        // started from, read once at start (not HEAD now: a wave back checks the older commit out before this bridge
+        // stops), for the guichet's eyes
+        let seen = json!({"off": off, "pid": std::process::id(), "version": commit});
         crate::py::write_with_mode(&tmp.to_string_lossy(), crate::py::dumps(&seen).as_bytes(), 0o644)?;
         std::fs::rename(&tmp, &path)
     })();
@@ -217,8 +224,10 @@ pub fn running_commit(home: &std::path::Path) -> Option<String> {
 /// paiements » stops them (asked ones refused, held browsers given back, the card's fields emptied) and noted in the
 /// journal; off or back on, the agents' payment rules follow (souls.rs `Shopping`). At start, off: the rules only.
 pub async fn follow_remote_switch(config: crate::config::SharedConfig) {
+    let commit = running_commit(&crate::place_backup::home());
     let mut was_off = remote_off();
-    tell_seen(was_off);
+    tell_seen(was_off, commit.as_deref());
+    let mut told = std::time::Instant::now();
     if was_off {
         tracing::warn!("card payments: cut by Kerfy Studio");
         crate::profile_files::reconcile_all(&config.get());
@@ -227,10 +236,15 @@ pub async fn follow_remote_switch(config: crate::config::SharedConfig) {
         tokio::time::sleep(REMOTE_LOOK).await;
         let off = remote_off();
         if off == was_off {
+            if told.elapsed() >= SEEN_AGAIN {
+                tell_seen(off, commit.as_deref()); // said again: still this bridge, still applying it (H1)
+                told = std::time::Instant::now();
+            }
             continue;
         }
         was_off = off;
-        tell_seen(off);
+        tell_seen(off, commit.as_deref());
+        told = std::time::Instant::now();
         let config = config.get();
         if off {
             tracing::warn!("card payments: cut by Kerfy Studio, the payments under way stopped");

@@ -45,6 +45,7 @@ import os
 import pwd
 import shutil
 import socket
+import stat as stat_mod
 import subprocess
 import sys
 import tempfile
@@ -639,7 +640,7 @@ def health():
         last_used = used(entry.pw_dir)
         if last_used is not None:
             seats[str(number)]["used"] = last_used
-        cards = cards_seen(entry.pw_dir)
+        cards = cards_seen(entry.pw_dir, entry.pw_uid)
         if cards is not None:
             seats[str(number)]["cards"] = cards
     return seats
@@ -648,14 +649,43 @@ def health():
 OFFER_CARDS_SEEN = ".local/state/bipagents/offer-cards-seen.json"   # what its bridge applies (bridge-rs/src/cards.rs)
 
 
-def cards_seen(home):
+# The bridge rewrites it every minute (bridge-rs/src/cards.rs `follow_remote_switch`): an older one is a bridge that
+# stopped (review 18/11 pass 5, H1/H2), never trusted.
+SEEN_FRESH = 180
+
+
+def bridge_alive(pid, uid, proc="/proc"):
+    """`pid` is a bridge of the account `uid` running now (its /proc entry, its owner, its command's name)."""
+    try:
+        if os.stat(os.path.join(proc, str(pid))).st_uid != uid:
+            return False
+        with open(os.path.join(proc, str(pid), "comm")) as fh:
+            return fh.read().strip().startswith("bipbridge")
+    except (OSError, ValueError):
+        return False
+
+
+def cards_seen(home, uid=None, now=None, alive=None):
     """What the place's bridge applies of Kerfy Studio's card payments switch: "off" (cut), "on", or None (a bridge
-    that doesn't read the switch yet: `bipguichet cards status` says so). Only while the commit the bridge wrote is
-    the one the place runs (review 18/11 pass 2, G1): after a wave back to a bridge older than the switch, the file the
-    newer one left says nothing."""
-    seen = read_json(os.path.join(home, OFFER_CARDS_SEEN))
-    off, wrote, runs = seen.get("off"), seen.get("version"), version(home)
-    if not isinstance(off, bool) or not isinstance(wrote, str) or not wrote or not runs or wrote[:12] != runs[:12]:
+    that doesn't read the switch yet: `bipguichet cards status` says so). Only from the bridge running now (review
+    18/11 pass 5, H1/H2): the file names its process, which must still be a bridge of this account, and is rewritten
+    every minute, so a file left by a bridge that stopped (a wave back to an older one, even one cut in the middle of
+    it) says nothing, while a bridge that kept running through an update (an installer-only wave) is still counted."""
+    path = os.path.join(home, OFFER_CARDS_SEEN)
+    try:
+        info = os.lstat(path)
+    except OSError:
+        return None
+    if not stat_mod.S_ISREG(info.st_mode):
+        return None
+    age = (time.time() if now is None else now) - info.st_mtime
+    if not -60 <= age < SEEN_FRESH:
+        return None
+    seen = read_json(path)
+    off, pid = seen.get("off"), seen.get("pid")
+    if not isinstance(off, bool) or not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
+        return None
+    if not (alive or bridge_alive)(pid, info.st_uid if uid is None else uid):
         return None
     return "off" if off else "on"
 

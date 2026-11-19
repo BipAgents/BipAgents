@@ -1035,48 +1035,63 @@ def test_review_a_place_installed_again_leaves_no_cut_behind(tmp_path):
 
 
 def test_the_beat_says_what_each_place_s_bridge_applies_of_the_card_payments_switch(tmp_path):
-    """Review 18/11 F2: the bridge writes what it applies (`{"off": …}`); the beat says it per place ("cards"), absent
-    for a bridge that doesn't read the switch yet, so `bipguichet cards status` can tell them apart."""
+    """Review 18/11 F2, pass 5: the bridge writes what it applies (`{"off": …, "pid": …}`, every minute); the beat says
+    it per place ("cards") only while that process is still a bridge of the place and the file is fresh."""
+    import os
+    import time
     agent = _seat_agent()
     home = tmp_path / "bip"
-    assert agent.cards_seen(str(home)) is None
-    git = home / "BipAgents" / ".git"
-    git.mkdir(parents=True)
-    (git / "HEAD").write_text("abc123def4560000000000000000000000000000\n")
+    alive = lambda pid, uid: pid == 4242   # noqa: E731
+    assert agent.cards_seen(str(home), alive=alive) is None
     seen = home / agent.OFFER_CARDS_SEEN
     seen.parent.mkdir(parents=True)
-    seen.write_text('{"off": true, "version": "abc123def456"}')
-    assert agent.cards_seen(str(home)) == "off"
-    seen.write_text('{"off": false, "version": "abc123def456"}')
-    assert agent.cards_seen(str(home)) == "on"
-    for other in ('{"off": "yes", "version": "abc123def456"}', "[]", "not json", "{}"):
+    seen.write_text('{"off": true, "pid": 4242, "version": "abc123def456"}')
+    assert agent.cards_seen(str(home), alive=alive) == "off"
+    seen.write_text('{"off": false, "pid": 4242}')
+    assert agent.cards_seen(str(home), alive=alive) == "on"
+    seen.write_text('{"off": true, "pid": 5151}')   # that bridge stopped
+    assert agent.cards_seen(str(home), alive=alive) is None
+    for other in ('{"off": "yes", "pid": 4242}', '{"off": true, "pid": true}', '{"off": true}', "[]", "not json", "{}"):
         seen.write_text(other)
-        assert agent.cards_seen(str(home)) is None
+        assert agent.cards_seen(str(home), alive=alive) is None, other
+    seen.write_text('{"off": true, "pid": 4242}')
+    old = time.time() - agent.SEEN_FRESH - 1   # not rewritten for 3 minutes: a bridge that stopped
+    os.utime(seen, (old, old))
+    assert agent.cards_seen(str(home), alive=alive) is None
+    seen.unlink()
+    os.symlink(tmp_path / "elsewhere", seen)   # never through a link
+    (tmp_path / "elsewhere").write_text('{"off": true, "pid": 4242}')
+    assert agent.cards_seen(str(home), alive=alive) is None
     assert agent.OFFER_CARDS_SEEN == ".local/state/bipagents/offer-cards-seen.json"
 
 
+def test_a_bridge_is_alive_by_its_proc_entry_its_owner_and_its_name(tmp_path):
+    agent = _seat_agent()
+    import os
+    proc = tmp_path / "proc"
+    (proc / "77").mkdir(parents=True)
+    (proc / "77" / "comm").write_text("bipbridge\n")
+    (proc / "78").mkdir()
+    (proc / "78" / "comm").write_text("python3\n")
+    me = os.getuid()
+    assert agent.bridge_alive(77, me, str(proc))
+    assert not agent.bridge_alive(77, me + 1, str(proc))   # another account's
+    assert not agent.bridge_alive(78, me, str(proc))       # not a bridge
+    assert not agent.bridge_alive(79, me, str(proc))       # gone
+
 def test_review2_g1_a_wave_back_to_an_older_bridge_is_never_counted_as_switched(tmp_path):
-    """Review 18/11 pass 2, G1: after a cut, a wave back to a bridge older than the switch left the « seen » file
-    {"off": true} behind (only the newer bridge writes it), so `cards status` counted the place as cut while its
-    agents could pay. The bridge now writes the commit it runs; the beat says what it applies only while that is the
-    commit the place runs, and an update removes the file."""
+    """Review 18/11 pass 2, G1 (pass 5 terms): after a cut, a wave back to a bridge older than the switch left the
+    « seen » file {"off": true} behind. Now the file names the bridge's process: once it stopped, nothing is said;
+    and an update removes the file until the bridge that runs says it again."""
     agent = _seat_agent()
     home = tmp_path / "bip"
-    git = home / "BipAgents" / ".git"
-    git.mkdir(parents=True)
-    (git / "HEAD").write_text("aaaaaaaaaaaa1111111111111111111111111111\n")
     seen = home / agent.OFFER_CARDS_SEEN
     seen.parent.mkdir(parents=True)
-    seen.write_text('{"off": true, "version": "aaaaaaaaaaaa"}')
-    assert agent.cards_seen(str(home)) == "off"
-    # the wave back: the place runs an older commit, whose bridge never writes the file
-    (git / "HEAD").write_text("bbbbbbbbbbbb2222222222222222222222222222\n")
-    assert agent.cards_seen(str(home)) is None
-    # a file without the commit (the bridge of 18/11): not trusted either
-    seen.write_text('{"off": true}')
-    assert agent.cards_seen(str(home)) is None
+    seen.write_text('{"off": true, "pid": 4242, "version": "aaaaaaaaaaaa"}')
+    assert agent.cards_seen(str(home), alive=lambda pid, uid: pid == 4242) == "off"
+    # the wave back: the newer bridge stopped, the older one never writes the file
+    assert agent.cards_seen(str(home), alive=lambda pid, uid: pid == 5151) is None
     # an update removes it, before the place's updater runs
-    seen.write_text('{"off": true, "version": "bbbbbbbbbbbb"}')
     agent.forget_cards_seen(str(home))
     assert not seen.exists()
     agent.forget_cards_seen(str(home))   # nothing there: fine
