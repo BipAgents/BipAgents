@@ -1,6 +1,6 @@
 """The agent's line said at once to a message sent while it works (instant_reply.rs, Alex 19/11 « comme Grok Bot »): one
 short sentence from the agent's own model, shown as the agent's line right after the person's message, the turn told
-it was answered already (a hidden `[bipagents:answered]` note joined to its words); a sentence of the bridge's table
+it was answered already (a hidden `<!--bip:answered` note joined to its words); a sentence of the bridge's table
 when the model can't answer in time; one per conversation every 20 s; never for a turn restarted with the words."""
 import threading
 import time
@@ -10,7 +10,7 @@ from bbkit.servers import wait_until
 from conftest import managed_install, profile, wait_registered
 
 SESSION = "api_main"
-MARK = "[bipagents:answered]"
+MARK = "<!--bip:answered"
 
 
 def user(text):

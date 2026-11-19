@@ -202,7 +202,8 @@ pub fn person_request(messages: &[Dict]) -> String {
         if role != "user" {
             continue;
         }
-        let text = crate::cronwatch::message_text(message);
+        // the app's note that it answered at once (instant_reply.rs) is not the request
+        let text = crate::instant_reply::without_note(&crate::cronwatch::message_text(message));
         if text.is_empty()
             || text.contains("[bipagents:")
             || crate::cronwatch::REPORT_PREFIXES.iter().any(|p| text.starts_with(p))
@@ -4442,5 +4443,21 @@ mod tests {
         RunHub::forget_pending(&mut inner, "a", "r", Some(&json!("")));
         let left: Vec<&String> = inner.pending.keys().map(|k| &k.2).collect();
         assert_eq!(left, ["4"]);
+    }
+
+    /// Review instant-ack (19/11): a message that waited behind a turn starts its own turn with the bridge's note
+    /// (`[bipagents:answered] …`); a rescue of that turn hands over THAT request, not the one before it.
+    #[test]
+    fn review_a_rescued_task_takes_a_request_answered_at_once() {
+        let queued = crate::instant_reply::with_note("Trouve-moi un dentiste à Lyon", crate::instant_reply::Mode::Queued);
+        let messages: Vec<Dict> = serde_json::from_value(json!([
+            {"role": "user", "content": "Cherche-moi une veste en laine bleue"},
+            {"role": "assistant", "content": "Voilà trois vestes."},
+            {"role": "user", "content": queued},
+            {"role": "user", "content": "[bipagents:handoff] This is long: hand the rest over"},
+        ]))
+        .unwrap();
+        let request = person_request(&messages);
+        assert!(request.starts_with("Trouve-moi un dentiste"), "the task would continue the wrong request: {request:?}");
     }
 }

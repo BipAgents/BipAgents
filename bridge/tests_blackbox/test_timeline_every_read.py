@@ -211,13 +211,18 @@ def test_one_stored_exchange_reads_every_way(journey):
 def test_a_turn_going_on_reads_every_way(journey):
     """The page of 7/11 (J19): a phone reopened mid-turn catches up after its copy's last item, nothing new."""
     exchange(journey, 1)
-    sent(journey, 2, "Raconte-moi tout #lent")
+    # a turn that acted already (a note to its memory): words sent now go into it at its next step, never restart it
+    sent(journey, 2, "Raconte-moi tout #note #lent")
     stored(journey, cid(2))
+    assert wait_until(lambda: any(i["kind"] == "tool" for i in journey.page()["items"]), timeout=30)
     reader = conversation(journey)
     every_read(reader, running=True, label="a turn going on")
-    # words steered into it: a message being sent, after every item, until the turn takes it
-    assert sent(journey, 3, "Et aussi la météo ?")["state"] == "steered"
-    assert wait_until(lambda: reader.whole()["items"][-1].get("client_id") == cid(3), timeout=10)
+    # words steered into it: a message being sent, after every item (then the agent's line said at once to it,
+    # instant_reply.rs), until the turn takes it
+    answer = sent(journey, 3, "Et aussi la météo ?")
+    assert answer["state"] == "steered" and "restarted" not in answer, answer
+    assert wait_until(lambda: reader.whole()["items"][-1]["id"] in (f"s_{cid(3)}", f"i_{cid(3)}"), timeout=10)
+    assert wait_until(lambda: reader.whole()["items"][-1]["id"] == f"i_{cid(3)}", timeout=10)
     every_read(reader, running=True, label="a turn going on, words steered into it")
     stop(journey)
     # nothing runs now: the words no turn took are « Pas envoyé », and still come in every catch-up

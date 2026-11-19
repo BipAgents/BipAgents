@@ -191,8 +191,18 @@ impl Threads {
             return Ok(());
         }
         let s = |row: &crate::store::Row, k: &str| row.get(k).and_then(Value::as_str).unwrap_or("").to_string();
-        let mut claimed: std::collections::HashMap<String, String> =
-            rows.iter().filter(|r| !s(r, "message_id").is_empty()).map(|r| (s(r, "message_id"), s(r, "client_id"))).collect();
+        // a stored row → the first message it holds (Hermes joins the steers held until its next step into one row:
+        // the others it holds are noted `joined` on it)
+        let mut claimed: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+        let mut joined: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+        for r in rows.iter().filter(|r| !s(r, "message_id").is_empty()) {
+            match claimed.entry(s(r, "message_id")) {
+                std::collections::hash_map::Entry::Vacant(e) => {
+                    e.insert(s(r, "client_id"));
+                }
+                std::collections::hash_map::Entry::Occupied(e) => joined.entry(e.key().clone()).or_default().push(s(r, "client_id")),
+            }
+        }
         let since = |row: &crate::store::Row| {
             crate::store::parse_since(&s(row, "created_at")).map(|d| d.timestamp_micros() as f64 / 1e6).unwrap_or(0.0)
         };
@@ -220,6 +230,24 @@ impl Threads {
                         vec![text(&item.id), text(&agent.name), text(&client_id)],
                     )
                     .await?;
+            } else if let Some(row) = items.iter().find(|i| {
+                // words steered with others the turn read at once: Hermes stored them in the same row (19/11, review
+                // of instant-ack H1: the second message came back « Pas envoyé », and a tap sent it twice)
+                !words.is_empty()
+                    && i.kind() == "message"
+                    && i.body.get("role") == Some(&json!("person"))
+                    && i.body.get("added_during_run") == Some(&json!(true))
+                    && claimed.contains_key(&i.id)
+                    && (i.at == 0.0 || i.at >= at - CLOCK_SLACK)
+                    && i.text().contains(words)
+            }) {
+                joined.entry(row.id.clone()).or_default().push(client_id.clone());
+                self.store
+                    .run(
+                        "UPDATE thread_sends SET message_id = ? WHERE agent = ? AND client_id = ?",
+                        vec![text(&row.id), text(&agent.name), text(&client_id)],
+                    )
+                    .await?;
             } else if now - at < SENDS_KEPT_SECONDS as f64 && !queued.contains(&client_id) {
                 waiting.push((client_id, words.to_string(), at, s(row, "attachments")));
             }
@@ -237,6 +265,10 @@ impl Threads {
         for item in items.iter_mut() {
             if let Some(c) = claimed.get(&item.id) {
                 item.body.insert("client_id".into(), json!(c));
+                if let Some(others) = joined.get(&item.id) {
+                    // the other messages this row holds: their `s_` items are replaced by it too (`Page::replaced`)
+                    item.body.insert("joined".into(), json!(others));
+                }
                 if let Some(kept) = photos.get(c) {
                     with_kept_photos(item, kept);
                 }
@@ -642,10 +674,16 @@ pub async fn send(state: &AppState, agent: &AgentConfig, thread: Option<Thread>,
         // (instant_reply.rs), the turn told so with them, so it does not acknowledge them again
         instant = instant || crate::instant_reply::reserve(&agent.name, &cap_key, crate::py::time_time());
         let steer = if instant { crate::instant_reply::with_note(&said, Mode::Steered) } else { said.clone() };
-        let steered = queues
-            .steer(agent, tip, Some(run), &steer, Some(&body.client_id))
-            .await
-            .map_err(|_| HttpError::new(502, "your agent isn't answering right now: try again in a moment"))?;
+        let steered = match queues.steer(agent, tip, Some(run), &steer, Some(&body.client_id)).await {
+            Ok(steered) => steered,
+            Err(_) => {
+                // nothing said: the conversation's slot for a line stays free
+                if instant {
+                    crate::instant_reply::release(&agent.name, &cap_key);
+                }
+                return Err(HttpError::new(502, "your agent isn't answering right now: try again in a moment"));
+            }
+        };
         if let Some(run) = steered {
             // the latest words decide where a reminder asked in this turn goes
             state.hub.set_phone(&agent.name, &run, phone);

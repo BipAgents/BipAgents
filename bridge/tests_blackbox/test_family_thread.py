@@ -113,7 +113,7 @@ def test_the_family_writes_in_one_conversation(bridges, fakes):
         return line in ids and ids[ids.index(line) - 1] in (f"s_{client_id}",) and items[ids.index(line)]["instant"]
     assert wait(lambda: instant_after("C0FFEE00-0000-4000-8000-0000000000B1"), 10)
     assert wait(lambda: instant_after("C0FFEE00-0000-4000-8000-0000000000A2"), 10)
-    assert "[bipagents:answered]" in fakes.hermes.steers[0]["body"]["input"]
+    assert "<!--bip:answered" in fakes.hermes.steers[0]["body"]["input"]
 
     # the others are told (their conversation not on their screen): Alex's devices and Paul's of Marie's message,
     # Marie's of Paul's, never one's own

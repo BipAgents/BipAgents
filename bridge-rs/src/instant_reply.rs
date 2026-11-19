@@ -6,7 +6,9 @@
 //! (`queued` while a turn runs: files, « Après », a family member's message during someone else's turn), the bridge
 //! asks the agent's own model (its address and key, as the voice escalation does: the offer's GLM through EUrouter,
 //! a self-install's own model) for ONE short sentence in the conversation's language that restates what was added and
-//! says it is taken into account (or « right after » when it waits). No tools, no thinking, a few tokens, `TIMEOUT`.
+//! says it is taken into account (or « right after » when it waits). No tools, no thinking, 60 tokens (GLM through EUrouter
+//! thinks at its floor: 400), `TIMEOUT`; past it the request is dropped, its connection closed (a server of the
+//! person's stops generating).
 //! A failed, empty, too long or questioning answer, or a model the bridge can't call: a sentence from a small table
 //! (`CANNED`), turning. A turn restarted with the words (turn_restart.rs) answers by itself at once: nothing here.
 //!
@@ -15,7 +17,8 @@
 //! message it answers (its `s_` item, then Hermes' stored row: matched by `client_id`), or at its time while that
 //! message waits in the queue. It survives a reload and shows on every device, but it never enters Hermes' history:
 //! the agent's memory and context hold no line it did not write. The agent knows of it from a hidden note joined to
-//! the words it gets (`MARK`, a `[bipagents:` line the timeline never shows): it was answered already, so it does
+//! the words it gets (`MARK`, a `<!--bip:answered …-->` note: every reader of a person's row strips such notes wherever
+//! they are, also inside the one row Hermes makes of several steers held until its next step): it was answered, so it does
 //! not acknowledge again (Alex's « never repeat »), it acts.
 //!
 //! **Taken (the check).** Hermes stores a steered message when its turn reads it (after the tool calls going on,
@@ -46,13 +49,15 @@ use crate::config::AgentConfig;
 use crate::threads::{threads_of, Thread};
 
 /// The hidden note's mark, joined to the words the agent gets (the timeline cuts a person's row at such a line).
-pub const MARK: &str = "[bipagents:answered]";
+pub const MARK: &str = "<!--bip:answered";
 /// The agent's model is given this long; past it, a sentence of the table.
 pub const TIMEOUT: Duration = Duration::from_millis(3000);
 /// One sentence per conversation at most this often.
 pub const GAP_SECONDS: f64 = 20.0;
 /// The longest sentence kept (characters); a longer answer is not one short sentence.
 pub const SENTENCE_MAX: usize = 140;
+/// The sentence's tokens at most (a model that cannot be told not to think gets its floor instead: GLM via EUrouter).
+pub const MAX_TOKENS: i64 = 60;
 /// A turn's steps watched for the stored row this long at most after a steer.
 const TAKEN_WATCH: Duration = Duration::from_secs(15 * 60);
 
@@ -108,11 +113,11 @@ pub fn note(mode: Mode) -> String {
     match mode {
         Mode::Steered => format!(
             "{MARK} The app already answered this message at once, in your name, with one short line saying you take \
-it into account. Don't acknowledge, thank for or restate it again: just use it in your work and your answer."
+it into account. Don't acknowledge, thank for or restate it again: just use it in your work and your answer.-->"
         ),
         Mode::Queued => format!(
             "{MARK} The app already answered this message at once, in your name, with one short line saying you deal \
-with it right after. Don't acknowledge or restate it again: start on it directly."
+with it right after. Don't acknowledge or restate it again: start on it directly.-->"
         ),
     }
 }
@@ -123,10 +128,14 @@ pub fn with_note(words: &str, mode: Mode) -> String {
 }
 
 static NOTE_LINE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?m)^[ \t]*\[bipagents:answered\][^\n]*\n?").expect("valid regex"));
+    LazyLock::new(|| Regex::new(r"\n*<!--bip:answered[\s\S]*?(?:-->|$)").expect("valid regex"));
 
-/// Words without the note (a steer the turn did not take, back in the queue: msg_queue.rs).
+/// Words without the note (a steer the turn did not take, back in the queue: msg_queue.rs; what search, the Carnet
+/// and the safety net read of a person's row).
 pub fn without_note(text: &str) -> String {
+    if !text.contains(MARK) {
+        return text.to_string();
+    }
     NOTE_LINE.replace_all(text, "").trim_end().to_string()
 }
 
@@ -142,6 +151,11 @@ pub fn reserve(agent: &str, thread: &str, now: f64) -> bool {
     last.retain(|_, at| now - *at < GAP_SECONDS);
     last.insert(key, now);
     true
+}
+
+/// The slot taken by `reserve` given back (the words never went anywhere: no line was said).
+pub fn release(agent: &str, thread: &str) {
+    LAST.lock().unwrap_or_else(|e| e.into_inner()).remove(&(agent.to_string(), thread.to_string()));
 }
 
 /// The model's instructions.
@@ -161,12 +175,11 @@ Reply with the sentence only."
 }
 
 /// What the model reads: the last lines of the conversation (oldest first), then the new message.
-pub fn user_message(lines: &[(bool, String)], words: &str) -> String {
+pub fn user_message(lines: &[(String, String)], words: &str) -> String {
     let mut out = String::new();
     if !lines.is_empty() {
         out.push_str("The conversation so far (latest last):\n");
-        for (person, text) in lines {
-            let who = if *person { "Person" } else { "You" };
+        for (who, text) in lines {
             out.push_str(&format!("{who}: {}\n", cut(text, 300)));
         }
         out.push('\n');
@@ -217,9 +230,9 @@ pub struct Call {
     pub model: String,
 }
 
-/// The request's body: a few tokens, no thinking (GLM through EUrouter can't switch it off: its floor, with room).
+/// The request's body: 60 tokens, no thinking (GLM through EUrouter can't switch it off: its floor, with room).
 pub fn body(call: &Call, system: &str, user: &str, provider_order: &[String]) -> Value {
-    let mut body = json!({"model": call.model, "temperature": 0.3, "max_tokens": 80,
+    let mut body = json!({"model": call.model, "temperature": 0.3, "max_tokens": MAX_TOKENS,
                           "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}]});
     if crate::agents_admin::keeps_thinking_on(&call.model, &call.base_url) {
         // « low »: about one token of thinking on so short a task (agents_admin.rs); room to answer all the same
@@ -227,7 +240,8 @@ pub fn body(call: &Call, system: &str, user: &str, provider_order: &[String]) ->
     } else {
         // asked not to think, as Hermes' patch 0010 and the rooms' router do (a thinking model answered nothing)
         body["chat_template_kwargs"] = json!({"enable_thinking": false, "thinking": false});
-        body["max_tokens"] = json!(crate::rooms::SMALL_THINKING_TOKENS);
+        // one sentence of 15 words at most: a self-hosted single GPU the running turn shares does little for it
+        body["max_tokens"] = json!(MAX_TOKENS);
         if crate::model_route::pins(&call.base_url) {
             // the router ignores the template's switch: DeepSeek V4.1 Flash thought ~160 tokens (+1 s) without this
             // (bench 19/11); « none » there answers at once
@@ -257,17 +271,27 @@ pub async fn ask(http: &reqwest::Client, call: &Call, body: &Value) -> Option<(S
 }
 
 /// The conversation's last visible lines, for the model (none in a family agent's common conversation).
-async fn last_lines(state: &AppState, agent: &AgentConfig, thread: &Thread, client_id: &str) -> Vec<(bool, String)> {
+async fn last_lines(state: &AppState, agent: &AgentConfig, thread: &Thread, client_id: &str) -> Vec<(String, String)> {
     let Ok(items) = crate::threads::items_of(state, agent, thread).await else { return Vec::new() };
-    let mut lines: Vec<(bool, String)> = items
+    let mut lines: Vec<(String, String)> = items
         .iter()
         .filter(|i| i.kind() == "message" && !i.text().trim().is_empty() && !is_instant(&i.body))
         .filter(|i| i.body.get("client_id").and_then(Value::as_str) != Some(client_id))
-        .map(|i| (i.body.get("role").and_then(Value::as_str) != Some("agent"), i.text().to_string()))
+        .map(|i| (author(&i.body), i.text().to_string()))
         .collect();
     let from = lines.len().saturating_sub(6);
     lines.drain(..from);
     lines
+}
+
+/// Who wrote a line, as the model reads it: the person, the agent itself, or another agent (Bot Chat: its name).
+pub fn author(body: &serde_json::Map<String, Value>) -> String {
+    let s = |k: &str| body.get(k).and_then(Value::as_str).unwrap_or("");
+    match s("role") {
+        "agent" => "You".into(),
+        "peer" => format!("Another agent ({})", if s("from_name").is_empty() { s("from") } else { s("from_name") }),
+        _ => "Person".into(),
+    }
 }
 
 /// An item that is one of these sentences.
@@ -370,8 +394,12 @@ mod tests {
     #[test]
     fn the_note_is_hidden_from_the_timeline_and_taken_off_again() {
         let steer = with_note("Plus de langue ni de dents", Mode::Steered);
-        assert!(steer.starts_with("Plus de langue ni de dents\n\n[bipagents:answered] "));
-        assert_eq!(crate::threads::timeline::before_bridge_mark(&steer).trim(), "Plus de langue ni de dents");
+        assert!(steer.starts_with("Plus de langue ni de dents\n\n<!--bip:answered ") && steer.ends_with("-->"));
+        // a note every reader strips wherever it is: two steers Hermes joined into one row keep both words
+        let joined = format!("{steer}\net pas trop loin");
+        assert_eq!(crate::live_brief::visible(&joined), "Plus de langue ni de dents\n\net pas trop loin");
+        assert_eq!(without_note(&joined), "Plus de langue ni de dents\net pas trop loin");
+        assert_eq!(without_note("rien à ôter"), "rien à ôter");
         assert_eq!(without_note(&steer), "Plus de langue ni de dents");
         assert!(note(Mode::Queued).contains("right after"));
     }
@@ -386,11 +414,14 @@ mod tests {
 
     #[test]
     fn the_model_reads_the_last_lines_and_the_new_message() {
-        let lines = vec![(true, "Trouve un dentiste".to_string()), (false, "Je cherche à Lyon.".to_string())];
+        let lines = vec![("Person".to_string(), "Trouve un dentiste".to_string()), ("You".to_string(), "Je cherche à Lyon.".to_string())];
         let user = user_message(&lines, "  plutôt le samedi ");
         assert_eq!(user, "The conversation so far (latest last):\nPerson: Trouve un dentiste\nYou: Je cherche à Lyon.\n\n\
 Their new message: plutôt le samedi");
         assert_eq!(user_message(&[], "x"), "Their new message: x");
+        let peer = json!({"role": "peer", "from": "vie", "from_name": "Vie"});
+        assert_eq!(author(peer.as_object().unwrap()), "Another agent (Vie)");
+        assert_eq!(author(json!({"role": "agent"}).as_object().unwrap()), "You");
         let s = system("Vie", "French", Mode::Queued);
         assert!(s.contains("right after") && s.contains("Never ask a question") && s.contains("in French"));
     }

@@ -56,7 +56,7 @@ def started_inputs(fakes):
 
 def without_note(words):
     """The words without the bridge's note that the app answered them at once (instant_reply.rs)."""
-    return words.split("\n\n[bipagents:answered]")[0]
+    return words.split("\n\n<!--bip:answered")[0]
 
 
 def turn(run_id, gate=None, end="run.completed", **end_data):
@@ -90,7 +90,7 @@ def test_a_message_for_after_waits_for_the_turn_then_starts(bridges, fakes):
     assert wait_until(lambda: len(fakes.hermes.started) == 2, timeout=15)
     second = fakes.hermes.started["r2"]
     assert without_note(words_of(second["input"])) == "Ensuite range le Carnet" and second["session_id"] == SESSION
-    assert "[bipagents:answered]" in words_of(second["input"]), "answered at once while the turn went on"
+    assert "<!--bip:answered" in words_of(second["input"]), "answered at once while the turn went on"
     assert wait_until(lambda: queue(bridge)["items"] == [] and queue(bridge)["running"] is None, timeout=15)
     assert bridge.logged("queue: next message started")
     # the turn the bridge started is followed like the app's (one Hermes subscription)

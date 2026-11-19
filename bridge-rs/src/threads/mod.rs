@@ -724,7 +724,7 @@ impl Threads {
             q.get(&agent.name).items.into_iter().filter_map(|i| i.client_id).collect()
         });
         self.with_sends(agent, thread, &mut items, &queued).await?;
-        self.with_instant(agent, thread, &mut items).await?;
+        self.with_instant(agent, thread, &mut items, &queued).await?;
         self.with_files(agent, thread, &mut items).await?;
         self.with_took(agent, &mut items).await?;
         with_maps_once(self.config.get(), agent, &mut items).await;
