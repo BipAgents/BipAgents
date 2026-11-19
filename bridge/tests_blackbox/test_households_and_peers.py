@@ -157,8 +157,8 @@ def test_invitations_are_one_time_and_expire(bridges, fakes):
     used = a.post("/family/accept", json={"code": code, "name": "Paul", "url": "https://c.ts.net", "key": key})
     assert used.status_code == 403 and used.json() == {"detail": "this invitation is unknown or expired"}
     agents = a.get("/family/agents", headers={"Authorization": f"Bearer {key}"}).json()
-    # `tell`: its family news may name it (the first agent always, audit 11/11 PI-11)
-    assert agents == {"name": "Alex", "agents": [{"id": "vie", "name": "Vie", "tell": True}]}
+    # `told_by`: that household's agents whose family news it reads (its person's links: none yet, option B 19/11)
+    assert agents == {"name": "Alex", "agents": [{"id": "vie", "name": "Vie", "told_by": []}]}
     late = a.post("/v1/family/invite", headers=AUTH).json()["code"]
     path = a.state_dir / "households.json"
     data = json.loads(path.read_text())
