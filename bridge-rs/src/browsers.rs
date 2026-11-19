@@ -1689,6 +1689,26 @@ pub async fn remove_with(host: &Host, config: &Config, agent: &str, run: &Run) -
 mod tests {
     use super::*;
 
+    /// Review 19/11: every take-over cleared the workers and caches of every site in the whole record (~200 lines,
+    /// any age), a PWA the person uses on a site the agent once scripted with them. Only the recent sites now.
+    #[test]
+    fn only_recently_scripted_sites_lose_their_workers() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = Config::with_key("k");
+        config.browser.root = dir.path().to_string_lossy().into_owned();
+        std::fs::create_dir_all(folder(&config, "vie")).unwrap();
+        let now = crate::py::time_time();
+        let lines = [
+            json!({"t": now - 8.0 * 86400.0, "origin": "https://old.example", "doc": "d1"}),
+            json!({"t": now - 6.0 * 86400.0, "origin": "https://week.example", "doc": "d2"}),
+            json!({"t": now - 60.0, "origin": "https://now.example:8443"}),
+            json!({"t": now - 60.0, "origin": "unknown"}),
+        ];
+        let text: String = lines.iter().map(|l| format!("{l}\n")).collect();
+        std::fs::write(folder(&config, "vie").join(crate::browser_mcp::SCRIPTS_FILE), text).unwrap();
+        assert_eq!(scripted(&config, "vie").origins, ["https://week.example", "https://now.example:8443"]);
+    }
+
     /// `command` run by a real shell against a flag file of its own (in place of the container's): its exit code and
     /// what the flag reads after it (None: no flag).
     fn run_on(flag: &Path, before: Option<&str>, command: &str) -> (i32, Option<String>) {
