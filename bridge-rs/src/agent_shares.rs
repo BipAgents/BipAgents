@@ -1218,6 +1218,9 @@ async fn served_approval(
         .map_err(|_| HttpError::new(502, "the agent can't be reached"))?;
     // answered, or a question nothing waits for any more (409): gone from every phone
     if (200..300).contains(&status) || (status == 409 && kind == "clarify" && request_id.is_some()) {
+        if (200..300).contains(&status) && kind == "clarify" {
+            state.hub.question_answered(&agent.name, &run_id, request_id.as_deref(), &value);
+        }
         state.hub.forget_approval(&agent.name, &run_id, request_id.as_deref());
         let session = object(&read(&owner_path(&config)), "conversations")
             .and_then(|all| all.values().find(|c| c.get("run").is_some_and(|r| str_of(r, "id") == run_id)).map(|c| str_of(c, "session")));
