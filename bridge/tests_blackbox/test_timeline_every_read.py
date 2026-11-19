@@ -217,7 +217,9 @@ def test_a_turn_going_on_reads_every_way(journey):
     every_read(reader, running=True, label="a turn going on")
     # words steered into it: a message being sent, after every item, until the turn takes it
     assert sent(journey, 3, "Et aussi la météo ?")["state"] == "steered"
-    assert wait_until(lambda: reader.whole()["items"][-1].get("client_id") == cid(3), timeout=10)
+    assert wait_until(lambda: any(i.get("client_id") == cid(3) for i in reader.whole()["items"]), timeout=10)
+    # and the agent's line said at once to them (instant_reply.rs), right after
+    assert wait_until(lambda: reader.whole()["items"][-1]["id"] == f"i_{cid(3)}", timeout=10)
     every_read(reader, running=True, label="a turn going on, words steered into it")
     stop(journey)
     # nothing runs now: the words no turn took are « Pas envoyé », and still come in every catch-up
