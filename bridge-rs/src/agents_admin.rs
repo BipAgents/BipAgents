@@ -1720,14 +1720,46 @@ pub fn render_soul(config: &Config, agent: &AgentConfig) -> anyhow::Result<bool>
     crate::profile_files::edit_text(&profile_folder(config, agent).join("SOUL.md"), |_| Some(text))
 }
 
-/// [`render_soul`] for every agent (at start: profile_files::reconcile_all); a failure is logged.
-pub fn render_souls(config: &Config) {
+/// [`render_soul`] for every agent (at start and hourly: dates::run_forever); a failure is logged. Returns the agents
+/// whose SOUL.md really changed (for [`refresh_rewritten`]).
+pub fn render_souls(config: &Config) -> Vec<AgentConfig> {
+    let mut changed = Vec::new();
     for agent in config.agents.values() {
         match render_soul(config, agent) {
-            Ok(true) => tracing::info!(target: "bipbridge::agents", agent = %agent.name, "personality's bridge rules brought up to date"),
+            Ok(true) => {
+                tracing::info!(target: "bipbridge::agents", agent = %agent.name, "personality's bridge rules brought up to date");
+                changed.push(agent.clone());
+            }
             Ok(false) => {}
             Err(err) => tracing::warn!(target: "bipbridge::agents", agent = %agent.name, error = %format!("{err:#}"), "personality not rendered"),
         }
+    }
+    changed
+}
+
+/// Whether a turn of the agent goes on now (`runs::Hub::agent_running`), replaceable in tests.
+pub type Busy = Arc<dyn Fn(&str) -> bool + Send + Sync>;
+
+/// How often [`refresh_rewritten`] looks whether a running turn ended.
+pub const REFRESH_IDLE_POLL: Duration = Duration::from_secs(5);
+/// At most this long waiting for a turn's end (a Live call, a long task): asked then anyway, Hermes still applies it
+/// at the start of the next turn only.
+const REFRESH_IDLE_MAX: Duration = Duration::from_secs(30 * 60);
+
+/// After the bridge's own rewrite of the souls ([`render_souls`] at start, hourly, after a dates change): the agents
+/// whose SOUL.md really changed (a new rule in a release, the day's line) have their ongoing conversations' prompts
+/// refreshed ([`refresh_prompts`]), so the change reaches their one thread without waiting for « /new » (the gap of
+/// 15/11). An identical rewrite writes nothing and asks nothing (the prompt cache stays). Cost: one prompt-cache miss
+/// per changed agent's conversation, on its next turn (Hermes keeps the history). One agent after the other (each
+/// `hermes` command is ~90 MB), each once its running turn (`busy`) ended: never asked during a turn.
+pub async fn refresh_rewritten(config: Arc<Config>, changed: Vec<AgentConfig>, run: Run, busy: Busy, poll: Duration) {
+    for agent in &changed {
+        let mut waited = Duration::ZERO;
+        while busy(&agent.name) && waited < REFRESH_IDLE_MAX {
+            tokio::time::sleep(poll).await;
+            waited += poll;
+        }
+        refresh_prompts(&config, agent, &run).await;
     }
 }
 
@@ -2312,8 +2344,9 @@ pub fn open_agent(config: &Config, agent: &AgentConfig) -> bool {
 /// conversation's stored system prompt every turn (the prefix cache), so a change of its personality never reached
 /// the agent's one thread before (15/11, Alex: « elle n'a pas été prise en compte », the apps saying « … s'en sert dès
 /// le prochain message »). `hermes sessions refresh-prompts` records a refresh in its profile's state.db: each of its
-/// conversations rebuilds its prompt once, on its next turn (one prompt-cache miss each, the history kept). Only for a
-/// change the person made (its personality, answer style, name, a card they tapped), not for the bridge's own blocks.
+/// conversations rebuilds its prompt once, on its next turn (one prompt-cache miss each, the history kept; nothing
+/// changes mid-turn: agent/prompt_refresh.py). After a change the person made (its personality, answer style, name, a
+/// card they tapped), and after the bridge's own rewrite when the text really changed ([`refresh_rewritten`]).
 /// A profile of the person's own Hermes, or of an agent set up by hand, is left alone; a failure is logged.
 pub async fn refresh_prompts(config: &Config, agent: &AgentConfig, run: &Run) {
     if managed(config, &agent.name).is_err() || crate::profile_files::hands_off(&profile_folder(config, agent)) {

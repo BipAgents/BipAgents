@@ -668,24 +668,38 @@ pub fn agent_line(config: &Config, person: &Person, soul: &str) -> Option<String
 }
 
 /// Each agent's personality carries today's line, or none (its SOUL.md rendered again; agents set up by hand are left
-/// as they are).
-pub fn refresh_souls(config: &Config) {
-    crate::agents_admin::render_souls(config);
+/// as they are). Returns the agents whose SOUL.md changed.
+pub fn refresh_souls(config: &Config) -> Vec<AgentConfig> {
+    crate::agents_admin::render_souls(config)
+}
+
+/// The agents whose SOUL.md the bridge just changed: their ongoing conversations take it from their next turn, each
+/// once its running turn ended (agents_admin::refresh_rewritten), in the background.
+fn refresh_conversations(state: &AppState, config: std::sync::Arc<Config>, souls: Vec<AgentConfig>) {
+    if souls.is_empty() || !config.hermes.enabled() {
+        return;
+    }
+    let hub = state.hub.clone();
+    let busy: crate::agents_admin::Busy = std::sync::Arc::new(move |agent: &str| hub.agent_running(agent));
+    let run = crate::agents_admin::default_run();
+    state.spawn(crate::agents_admin::refresh_rewritten(config, souls, run, busy, crate::agents_admin::REFRESH_IDLE_POLL));
 }
 
 /// At start, then each hour: the agents' profiles carry the person's zones (an agent created since gets them) and
-/// their personality today's line.
+/// their personality today's line (and the bridge's rules of this release); a personality that changed reaches the
+/// agent's ongoing conversations at their next turn.
 pub async fn run_forever(state: AppState) {
     tokio::time::sleep(Duration::from_secs(20)).await;
     loop {
         let config = state.config();
         let c = config.clone();
-        let changed = tokio::task::spawn_blocking(move || {
-            refresh_souls(&c);
-            write_profiles(&c, &load(&c))
+        let (souls, changed) = tokio::task::spawn_blocking(move || {
+            let souls = refresh_souls(&c);
+            (souls, write_profiles(&c, &load(&c)))
         })
         .await
         .unwrap_or_default();
+        refresh_conversations(&state, config.clone(), souls);
         restart_where_needed(&config, &changed).await;
         tokio::time::sleep(Duration::from_secs(3600)).await;
     }
@@ -778,7 +792,7 @@ fn has_routines(config: &Config) -> bool {
 /// dates line refreshed (a new country brings other holidays).
 fn applied(state: &AppState, config: &Config, person: &Person) {
     let changed = write_profiles(config, person);
-    refresh_souls(config);
+    refresh_conversations(state, state.config(), refresh_souls(config));
     if !changed.is_empty() {
         let config = config.clone();
         state.spawn(async move { restart_where_needed(&config, &changed).await });

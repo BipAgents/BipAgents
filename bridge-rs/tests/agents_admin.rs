@@ -757,6 +757,64 @@ fn an_earlier_bridge_block_gets_the_rule_about_what_agents_read() {
     assert_eq!(read_soul(&c, &agent).unwrap(), ""); // none at all: Hermes' own stays
 }
 
+/// The bridge's own rewrite of the souls (start, hourly): an agent whose SOUL.md really changed has its ongoing
+/// conversations' prompts refreshed once (a new rule reaches its one thread without waiting for « /new »); an
+/// identical rewrite asks nothing (the prompt cache stays); a turn going on is never touched, the refresh waits for
+/// its end (Hermes rebuilds the prompt at the start of the next turn anyway).
+#[tokio::test]
+async fn a_changed_soul_refreshes_its_conversations_once_and_waits_for_a_running_turn() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let dir = tempfile::tempdir().unwrap();
+    let (config, _) = managed_config(dir.path(), "http://127.0.0.1:8642");
+    let agent = hub_agent(&config);
+    let c = config.get();
+    let folder = profiles(dir.path()).join(&agent.name);
+    std::fs::create_dir_all(&folder).unwrap();
+    let refresh = vec![
+        "/opt/hermes".to_string(),
+        "-p".into(),
+        agent.name.clone(),
+        "sessions".into(),
+        "refresh-prompts".into(),
+        "--json".into(),
+    ];
+    let idle: agents_admin::Busy = Arc::new(|_: &str| false);
+    let poll = std::time::Duration::from_millis(2);
+
+    // a soul of an earlier bridge (no choice rule): rewritten, its conversations refreshed once
+    let earlier = souls::language_block(Some("fr")).replace(&format!("\n{}", souls::CHOICE_RULE), "");
+    hand_soul(&folder, format!("Tu es Vie.\n\n{earlier}\n"));
+    let changed = render_souls(&c);
+    assert_eq!(changed.iter().map(|a| a.name.clone()).collect::<Vec<_>>(), vec![agent.name.clone()]);
+    assert!(read_soul(&c, &agent).unwrap().contains(souls::CHOICE_RULE));
+    let (run, commands) = recorder();
+    agents_admin::refresh_rewritten(c.clone(), changed, run, idle.clone(), poll).await;
+    assert_eq!(*commands.lock().unwrap(), vec![refresh.clone()]);
+
+    // the same text written again (the hourly pass): nothing changed, nothing asked
+    let changed = render_souls(&c);
+    assert!(changed.is_empty(), "{changed:?}");
+    let (run, commands) = recorder();
+    agents_admin::refresh_rewritten(c.clone(), changed, run, idle, poll).await;
+    assert!(commands.lock().unwrap().is_empty());
+
+    // a turn going on: the refresh waits for its end, then is asked once
+    hand_soul(&folder, format!("Tu es Vie.\n\n{earlier}\n"));
+    let changed = render_souls(&c);
+    assert_eq!(changed.len(), 1);
+    let turn = Arc::new(AtomicBool::new(true));
+    let running = turn.clone();
+    let name = agent.name.clone();
+    let busy: agents_admin::Busy = Arc::new(move |a: &str| a == name && running.load(Ordering::SeqCst));
+    let (run, commands) = recorder();
+    let task = tokio::spawn(agents_admin::refresh_rewritten(c.clone(), changed, run, busy, poll));
+    tokio::time::sleep(std::time::Duration::from_millis(60)).await;
+    assert!(commands.lock().unwrap().is_empty(), "never during the turn");
+    turn.store(false, Ordering::SeqCst);
+    task.await.unwrap();
+    assert_eq!(*commands.lock().unwrap(), vec![refresh]);
+}
+
 /// The bridge's blocks of a rendered SOUL.md, in order.
 fn blocks(soul: &str) -> Vec<String> {
     soul.split("<!-- bipagents:").skip(1).map(|b| b.split(" -->").next().unwrap_or("").to_string()).collect()
