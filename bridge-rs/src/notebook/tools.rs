@@ -92,8 +92,8 @@ page; others are one line on their group's area page. fix corrects; forget only 
 (they confirm in the app). ask (not clarify): one question for a fact this page lacks, never health or money unless they \
 raised it. Never passwords, codes or ID numbers.",
             "inputSchema": {"type": "object", "properties": {
-                "page": {"type": "string", "description": "« Léa Martin », « Rénovation cuisine », « Maison »"},
-                "kind": {"type": "string", "description": "for a new page; self: « Toi »; trip: one journey, « Kyoto, avr. 2026 »", "enum": kinds},
+                "page": {"type": "string", "description": "« Léa Martin » (person), « Rénovation cuisine » (subject), « Maison » (area: the home)"},
+                "kind": {"type": "string", "description": "for a new page, always: person only for a human being; a home, a place, a group or a part of life is an area, a project a subject; self: « Toi »; trip: one journey, « Kyoto, avr. 2026 »", "enum": kinds},
                 "section": {"type": "string", "description": sections_described(), "enum": super::template::all_ids()},
                 "facts": {"type": "array", "items": {"type": "string"}, "maxItems": 20},
                 "summary": {"type": "string", "description": "new « En bref », 2–3 lines"},

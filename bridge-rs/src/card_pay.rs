@@ -152,7 +152,7 @@ pub fn tools() -> Vec<Value> {
                 "card": {"type": "string", "description": "the card's name, as list_cards gives it"},
                 "amount": {"type": "string", "description": "the total to pay as the page shows it, e.g. 12.50"},
                 "currency": {"type": "string", "description": "e.g. EUR"},
-                "merchant": {"type": "string", "description": "what you pay for and to whom, in a few words, e.g. « Billet Paris-Lyon, SNCF »"},
+                "merchant": {"type": "string", "description": "what you pay for and to whom, in a few words, in the language the person writes in in this conversation (the card shows it to them as written), e.g. « Train ticket Paris-Lyon, SNCF » in English, « Billet Paris-Lyon, SNCF » in French"},
                 "delivery": {"type": "string", "description": "the label of the « Coordonnées » entry you filled for delivery, e.g. « Perso » (leave out when none)"},
             }, "required": ["card", "amount", "currency", "merchant"]},
             "annotations": {"readOnlyHint": false, "destructiveHint": true, "openWorldHint": true},
