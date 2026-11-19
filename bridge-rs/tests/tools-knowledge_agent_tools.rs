@@ -23,7 +23,7 @@ fn registered(profile: &std::path::Path) -> BTreeMap<String, String> {
     let data: Value = serde_yaml::from_str(&text).unwrap_or(Value::Null);
     let entry = &data["mcp_servers"]["bipagents"];
     let mut out = BTreeMap::new();
-    for (key, value) in [("url", &entry["url"]), ("headers.Authorization", &entry["headers"]["Authorization"]), ("timeout", &entry["timeout"])] {
+    for (key, value) in [("url", &entry["url"]), ("headers.Authorization", &entry["headers"]["Authorization"]), ("timeout", &entry["timeout"]), ("call_context", &entry["call_context"])] {
         let text = match value {
             Value::String(s) => s.clone(),
             Value::Null => continue,
@@ -68,6 +68,8 @@ async fn each_agent_of_the_install_gets_the_tools_with_a_token_of_its_own() {
         )
     );
     assert_eq!(values["mcp_servers.bipagents.timeout"], agent_tools::TOOL_TIMEOUT.to_string());
+    // each call says its Hermes session (patch 0028): several runs of the agent told apart
+    assert_eq!(values["mcp_servers.bipagents.call_context"], "true", "{values:?}");
     let token = values["mcp_servers.bipagents.headers.Authorization"].strip_prefix("Bearer ").unwrap().to_string();
     assert_eq!(agent_tools::agent_for(&config, &token).unwrap().name, "vie");
     assert!(agent_tools::agent_for(&config, "nope").is_none());
@@ -77,7 +79,7 @@ async fn each_agent_of_the_install_gets_the_tools_with_a_token_of_its_own() {
     std::fs::write(
         hub.join("profiles/vie/config.yaml"),
         format!(
-            "mcp_servers:\n  bipagents:\n    url: {}\n    headers:\n      Authorization: Bearer {token}\n    timeout: {}\n\
+            "mcp_servers:\n  bipagents:\n    url: {}\n    headers:\n      Authorization: Bearer {token}\n    timeout: {}\n    call_context: true\n\
              \x20 bipagents_checkout:\n    url: {}\n    headers:\n      Authorization: Bearer {token}\n    timeout: {}\n",
             values["mcp_servers.bipagents.url"],
             agent_tools::TOOL_TIMEOUT,

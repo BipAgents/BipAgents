@@ -727,6 +727,13 @@ struct HubInner {
     pending: IndexMap<(String, String, String), Dict>,
 }
 
+tokio::task_local! {
+    /// The Hermes session a call of the bridge's tools comes from, as Hermes says it in the call's `_meta` (patch
+    /// 0028, agent_tools.rs `mcp`): `turn_of` then takes that session's run instead of telling runs apart by their
+    /// last tool. None: an older Hermes, or a call from no session.
+    pub static CALL_SESSION: Option<String>;
+}
+
 pub struct RunHub {
     pub hermes: HermesClient,
     pub push: Option<Arc<PushService>>,
@@ -2977,6 +2984,15 @@ more steps in this turn. Don't repeat what failed: change approach.", crate::loo
     pub fn turn_of(&self, agent: &str, tool: &str) -> Option<crate::loop_brake::Turn> {
         let tool = crate::loop_brake::bare(tool);
         let inner = lock(&self.inner);
+        // the call said its session (Hermes patch 0028): that session's run, or none — never a guess
+        if let Some(session) = CALL_SESSION.try_with(|s| s.clone()).ok().flatten() {
+            return inner.subs.values().filter(|sub| sub.agent.name == agent).find_map(|sub| {
+                let st = lock(&sub.state);
+                (st.session_id.as_deref() == Some(session.as_str()) && !st.finished && st.terminal.is_none()).then(|| {
+                    crate::loop_brake::Turn { run_id: sub.run_id.clone(), background: st.background, banned: st.turn.banned.clone() }
+                })
+            });
+        }
         let mut live: Vec<(bool, crate::loop_brake::Turn)> = Vec::new();
         for sub in inner.subs.values().filter(|sub| sub.agent.name == agent) {
             let st = lock(&sub.state);
@@ -4231,6 +4247,33 @@ mod tests {
         // task A's create_page reaches the bridge now: which turn is it?
         let turn = hub.turn_of("daily", "mcp__bipagents__create_page").map(|t| t.run_id);
         assert_eq!(turn, None, "a guess between two tasks inside the same tool: {turn:?}");
+    }
+
+    /// Hermes patch 0028: a call of the bridge's tools says its Hermes session (`_meta`, agent_tools.rs `CALL_SESSION`):
+    /// the turn is that session's run, whatever the others do, and no guess at all when the session has none here.
+    #[tokio::test]
+    async fn a_call_that_says_its_session_is_that_sessions_turn() {
+        let hub = RunHub::new(HermesClient::new(reqwest::Client::new()), None, 7200, None);
+        let agent = AgentConfig { name: "daily".into(), ..Default::default() };
+        let run = |id: &str, session: &str| {
+            let sub = Arc::new(RunSubscription::new(agent.clone(), id));
+            lock(&sub.state).session_id = Some(session.into());
+            lock(&hub.inner).subs.insert(sub.key(), sub.clone());
+            sub
+        };
+        let started = |tool: &str| SSEEvent::new("tool.started", json!({"tool": tool}).as_object().cloned().unwrap(), "{}");
+        let (a, b) = (run("run_task_a", "api_a"), run("run_task_b", "api_b"));
+        hub.mark_background("daily", "run_task_a");
+        hub.mark_background("daily", "run_task_b");
+        hub.dispatch(&a, started("mcp__bipagents__create_page"));
+        hub.dispatch(&b, started("mcp__bipagents__create_page"));
+        let of = |session: &'static str| {
+            let hub = &hub;
+            CALL_SESSION.sync_scope(Some(session.to_string()), || hub.turn_of("daily", "mcp__bipagents__create_page").map(|t| t.run_id))
+        };
+        assert_eq!(of("api_a").as_deref(), Some("run_task_a"));
+        assert_eq!(of("api_b").as_deref(), Some("run_task_b"));
+        assert_eq!(of("api_gone"), None, "a session with no run here: no guess");
     }
 
     /// urgent_pay.rs `refuses_payment` tells the rehearsal's own pay_with_card from another turn of the agent by the

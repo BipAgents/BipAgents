@@ -37,6 +37,7 @@ upstream PRs: 0027, 0025, 0020, 0026, 0011, 0017, 0009's `!name`, 0013.
 | 0025 a colon mid-sentence no longer holds back a streamed reply | `agent/chat_completion_helpers.py` |
 | 0026 Runs API: `todo.updated`, the agent's task list (backport) | `gateway/platforms/api_server_runs.py` |
 | 0027 a safety-refused API turn no longer locks its conversation | `gateway/run_turn_runner.py` |
+| 0028 MCP calls carry their session to a server that asks (`call_context`) | `tools/mcp_tool.py`, `tools/mcp_tool_handlers.py`, `tools/mcp_tool_registration.py` |
 
 ## How the patches are kept
 
@@ -862,3 +863,17 @@ the row on; an `internal_notification` refused row is retained by its boundary, 
 `test_compression_failure_session_sync.py`: 17 passed. The agent core alone (a fake model refusing a marked message,
 a real `SessionDB`) already returned the boundary and retained the turn with the series applied: the gap is only in
 the gateway's projection. Candidate for a small upstream PR.
+
+## 0028 — MCP calls carry their session to a server that asks
+
+**Problem.** The bridge's tools are one MCP server per agent. Since 19/11 one agent runs up to three background tasks
+at once beside the person's conversation; a tools/call says nothing of the conversation it comes from, so the bridge
+guessed the run (« the one that called this tool last »): two tasks inside the same tool were mixed up (loop brake,
+files joined to a report, Carnet line, approval cards).
+
+**What the patch does.** A server whose config says `call_context: true` gets, in each tools/call's `_meta`, the Hermes
+session the call comes from (`hermes-agent/session_id`, from the dispatcher's own `session_id`). Off by default: no
+other server ever sees a session id. The bridge writes `call_context: true` in its own entry (agent_tools.rs) and,
+with it, takes that session's run (runs.rs `CALL_SESSION`); without it (an older Hermes) it refuses to guess between
+several runs. Tests: `tests/tools/test_mcp_call_context.py`.
+

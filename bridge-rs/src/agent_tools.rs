@@ -651,7 +651,11 @@ pub async fn register_at(config: &Config, agent: &AgentConfig, _run: &Run, url: 
     let mut same = false;
     if let Value::Object(map) = &entry {
         let timeout = py::py_str(map.get("timeout").unwrap_or(&Value::Null));
-        same = map.get("url") == Some(&Value::String(url.to_string())) && known && timeout == TOOL_TIMEOUT.to_string();
+        // `call_context`: each call says its Hermes session (patch 0028), so several runs of the agent are told apart
+        same = map.get("url") == Some(&Value::String(url.to_string()))
+            && known
+            && timeout == TOOL_TIMEOUT.to_string()
+            && map.get("call_context") == Some(&json!(true));
     }
     // An isolated sandbox's file tools (sandbox.rs): a second entry, « untrusted » so Hermes asks the person before
     // each write or delete, with the same token.
@@ -678,7 +682,8 @@ pub async fn register_at(config: &Config, agent: &AgentConfig, _run: &Run, url: 
         }
         if !same {
             let entry =
-                [("url", Yaml::str(url)), ("headers.Authorization", bearer), ("timeout", Yaml::Int(TOOL_TIMEOUT.into()))];
+                [("url", Yaml::str(url)), ("headers.Authorization", bearer), ("timeout", Yaml::Int(TOOL_TIMEOUT.into())),
+                 ("call_context", Yaml::Bool(true))];
             crate::profile_files::set_server(data, SERVER_NAME, Some(&entry));
         }
     })?;
@@ -1996,7 +2001,24 @@ fn session_of(headers: &HeaderMap, query: Option<&str>, agent: &str) -> ApiResul
     }
 }
 
+/// The `_meta` key Hermes puts the call's session in (patch 0028, servers with `call_context: true`).
+pub const CALL_SESSION_META: &str = "hermes-agent/session_id";
+
+/// The MCP endpoint: a `tools/call` that says its Hermes session (`_meta`, patch 0028) runs with it known
+/// (`runs::CALL_SESSION`), so its turn is that session's run, never a guess between the agent's runs.
 async fn mcp(
+    state: State<AppState>,
+    uri: axum::http::Uri,
+    headers: HeaderMap,
+    body: Bytes,
+) -> ApiResult<Response> {
+    let session = serde_json::from_slice::<Value>(&body).ok().and_then(|m| {
+        m.get("params")?.get("_meta")?.get(CALL_SESSION_META)?.as_str().filter(|s| !s.is_empty()).map(str::to_string)
+    });
+    crate::runs::CALL_SESSION.scope(session, mcp_call(state, uri, headers, body)).await
+}
+
+async fn mcp_call(
     State(state): State<AppState>,
     uri: axum::http::Uri,
     headers: HeaderMap,
