@@ -708,18 +708,38 @@ def _inside(fetched: Path, path: str) -> Path:
     return fetched / path.lstrip("/")
 
 
-def _copy(src: Path, dst: Path) -> None:
+def _copy(src: Path, dst: Path, skip=None) -> None:
+    """`src` (a file, a link or a folder, whole) at `dst`, over what is there. Each file and link is written beside
+    its place then renamed over it, never written into: a program running from the old file (the bridge, a helper:
+    « Text file busy » on Linux) or a reader holding it keeps its own, and a stop halfway leaves no half file.
+    `skip(dst)`: paths left as they are here."""
     import shutil
-    if src.is_symlink():
-        dst.parent.mkdir(parents=True, exist_ok=True)
-        if dst.is_symlink() or dst.exists():
+    if skip is not None and skip(dst):
+        return
+    if src.is_dir() and not src.is_symlink():
+        if dst.is_symlink() or (dst.exists() and not dst.is_dir()):
             dst.unlink()
-        os.symlink(os.readlink(src), dst)
-    elif src.is_dir():
-        shutil.copytree(src, dst, symlinks=True, dirs_exist_ok=True)
-    elif src.is_file():
-        dst.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(src, dst)
+        dst.mkdir(parents=True, exist_ok=True)
+        for child in sorted(src.iterdir()):
+            _copy(child, dst / child.name, skip)
+        shutil.copystat(src, dst, follow_symlinks=False)
+        return
+    if not (src.is_symlink() or src.is_file()):
+        return   # sockets, pipes: never in a backup
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    if dst.is_dir() and not dst.is_symlink():
+        shutil.rmtree(dst)
+    partial = dst.with_name(f".{dst.name}.restoring-{os.getpid()}")
+    partial.unlink(missing_ok=True)
+    try:
+        if src.is_symlink():
+            os.symlink(os.readlink(src), partial)
+        else:
+            shutil.copy2(src, partial)
+        os.replace(partial, dst)
+    except BaseException:
+        partial.unlink(missing_ok=True)
+        raise
 
 
 FRESH_WINS = (("", "public_url"), ("browser", "first_port"), ("browser", "ports"), ("lan", "enabled"),
@@ -802,10 +822,19 @@ def put_back(fetched: Path, base: Path, repo: Path, address: Optional[str]) -> D
     info, stage = _manifest(fetched)
     fresh = fresh_state(base)
     target = moving.Target(home=base, repo=repo, tailnet_name=None, lan_address=address)
+    binaries = moving.own_binaries(base)
+    data_dir = moving.read_inventory(base / CONFIG_DIR / "bridge.toml", base).data_dir
+
+    def own(dst: Path) -> bool:
+        """This server's own: its bridge binaries (a backup from before 19/11 holds the dead place's), what the
+        bridge derives again in its data folder."""
+        parts = moving._relative(dst, data_dir)
+        return moving._relative(dst, binaries) is not None or bool(parts and parts[0] in moving.DATA_SKIP)
+
     for old in info["roots"].values():
         source = _inside(fetched, old)
         if source.exists() or source.is_symlink():
-            _copy(source, moving.rehome(old, info, target))
+            _copy(source, moving.rehome(old, info, target), own)
     sqlite_root = _inside(fetched, info.get("stage") or str(stage)) / "sqlite"
     if sqlite_root.is_dir():
         for copy in sqlite_root.rglob("*"):
@@ -869,20 +898,71 @@ def settle(info: Dict, base: Path, repo: Path, address: Optional[str], fresh: Di
                                         or own_backup.get("password")})
 
 
+# The fresh install's config folder (its bridge.toml, its backup settings with this seat's token, its pairing secret)
+# as it was before a restore put the backup's over it: put back when the restore fails, so the app's next try works
+# (lab round trip 19/11: the half-done restore had left the dead seat's token, refused by the guichet, for good).
+FRESH_COPY = Path(".local") / "state" / "bipagents" / "restore-fresh"
+CONFIG_DIR = Path(".config") / "bipagents"
+# What the bridge and the restore itself write there while it runs: never part of the fresh copy, never undone.
+LIVE = {MARKER.name, "setup-progress.json", "restore-key"}
+
+
+def _live(rel: Path) -> bool:
+    return rel.parts[0] in LIVE or rel.parts[0].startswith("bridge.toml.")   # its lock and copies (bridgeconf)
+
+
+def keep_fresh(base: Path) -> None:
+    """The fresh config folder kept aside (written whole, then renamed: a copy is complete or absent)."""
+    import shutil
+    kept, config = base / FRESH_COPY, base / CONFIG_DIR
+    if kept.exists():
+        return
+    partial = kept.with_name(kept.name + ".part")
+    shutil.rmtree(partial, ignore_errors=True)
+    partial.mkdir(parents=True)
+    for child in sorted(config.iterdir()):
+        if not _live(Path(child.name)):
+            _copy(child, partial / child.name)
+    os.replace(partial, kept)
+
+
+def back_to_fresh(base: Path) -> bool:
+    """A restore that failed (or was killed: the next try calls it first): the fresh config folder as it was, what
+    the backup brought there removed. False when nothing was kept (no restore started putting files back)."""
+    import shutil
+    kept, config = base / FRESH_COPY, base / CONFIG_DIR
+    if not kept.is_dir():
+        return False
+    for path in sorted(config.rglob("*"), key=lambda p: len(p.parts), reverse=True):   # children first
+        rel = path.relative_to(config)
+        if _live(rel) or (kept / rel).exists() or (kept / rel).is_symlink():
+            continue
+        if path.is_dir() and not path.is_symlink():
+            shutil.rmtree(path, ignore_errors=True)
+        else:
+            path.unlink(missing_ok=True)
+    _copy(kept, config)
+    shutil.rmtree(kept)
+    return True
+
+
 def restore(key: str, runner, base: Optional[Path] = None, repo: Optional[Path] = None,
             address: Optional[str] = None) -> Dict:
-    """The whole restore, as the bridge starts it (a unit of its own, so restarting the bridge doesn't stop it)."""
+    """The whole restore, as the bridge starts it (a unit of its own, so restarting the bridge doesn't stop it).
+    Failed, it can be tried again: the fresh install's settings come back (`back_to_fresh`)."""
     from .__main__ import REPO
     from .update import gateway_units
     base = base or home()
     repo = repo or REPO
     try:
         progress(base, 1)
+        back_to_fresh(base)   # a try killed halfway: its fresh settings first (this seat's token fetches)
         fetched = fetch(base, key)
         progress(base, 2)
         for how, name in gateway_units():
             if how == "systemd":
                 runner.run(["systemctl", "--user", "stop", name], check=False)
+        keep_fresh(base)
         info = put_back(fetched, base, repo, address)
         progress(base, 3)
         from . import migrations
@@ -898,10 +978,16 @@ def restore(key: str, runner, base: Optional[Path] = None, repo: Optional[Path] 
             runner.run(cli(base, repo) + ["browser", "add", "--all", "--config", str(config)], cwd=repo / "bridge",
                        check=False)
     except Exception as exc:   # any failure, not only a BackupError: never left « restoring » without a word
+        try:
+            back_to_fresh(base)
+        except Exception as undo:   # noqa: BLE001 - said, and the next try undoes it first
+            print(f"bipinstall: the fresh settings couldn't be put back yet: {type(undo).__name__}: {undo}",
+                  file=sys.stderr)
         progress(base, 0, error=str(exc) if isinstance(exc, BackupError) else f"{type(exc).__name__}: {exc}")
         (base / MARKER).unlink(missing_ok=True)
         raise
     import shutil
+    shutil.rmtree(base / FRESH_COPY, ignore_errors=True)   # restored: nothing to go back to
     shutil.rmtree(base / RESTORE_TMP, ignore_errors=True)
     (base / ".config" / "bipagents" / "setup.json").unlink(missing_ok=True)   # claimed: the pairing secret goes
     (base / MARKER).unlink(missing_ok=True)
