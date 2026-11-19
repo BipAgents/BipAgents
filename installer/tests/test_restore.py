@@ -2,6 +2,7 @@
 over a fresh install, with the key the phone gives back."""
 import errno
 import json
+import os
 import shutil
 import sqlite3
 import subprocess
@@ -195,11 +196,42 @@ def test_a_restore_of_an_older_backup_leaves_this_server_s_bridge_alone_and_repl
     assert (new / ".hermes" / "memories" / "MEMORY.md").read_text() == "Le chat s'appelle Pixel.\n"
 
 
-@pytest.mark.skipif(shutil.which("restic") is None or not sys.platform.startswith("linux"),
-                    reason="« Text file busy » is Linux's, and restic is needed")
+class FakeRestic:
+    """Just enough restic for a machine without it (the build server): a snapshot is a copy of the listed files at
+    their full paths, restored the way restic does (under the target, at their full paths)."""
+
+    def __init__(self, store):
+        self.store = store
+
+    def __call__(self, args, env, timeout=3600):
+        done = lambda code=0, out="": subprocess.CompletedProcess(args, code, out, "")   # noqa: E731
+        if args[0] == "backup":
+            listing = Path(args[args.index("--files-from-raw") + 1]).read_bytes().split(b"\0")
+            shutil.rmtree(self.store, ignore_errors=True)
+            for raw in filter(None, listing):
+                path = Path(os.fsdecode(raw))
+                copy = self.store / str(path).lstrip("/")
+                copy.parent.mkdir(parents=True, exist_ok=True)
+                if path.is_symlink():
+                    os.symlink(os.readlink(path), copy)
+                else:
+                    shutil.copy2(path, copy)
+            return done(out=json.dumps({"message_type": "summary", "snapshot_id": "s1", "total_files_processed":
+                                        len(listing), "total_bytes_processed": 1, "data_added": 1}))
+        if args[0] == "restore":
+            shutil.copytree(self.store, Path(args[args.index("--target") + 1]), symlinks=True, dirs_exist_ok=True)
+        return done()
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="« Text file busy » is Linux's")
 def test_a_restore_over_running_programs_works_on_linux(tmp_path, monkeypatch):
     """The lab's failure for real: the data folder's programs running while the restore puts the files back."""
+    fake = FakeRestic(tmp_path / "snapshot")
+    if shutil.which("restic") is None:
+        monkeypatch.setattr(backup, "restic", fake)
     repo_dir, old, key = a_dead_place_backed_up(tmp_path, monkeypatch, old_skip=True)
+    if shutil.which("restic") is None:
+        monkeypatch.setattr(backup, "restic", fake)
     new = a_fresh_place(tmp_path, monkeypatch, repo_dir)
     sleeper = shutil.which("sleep")
     running = []
