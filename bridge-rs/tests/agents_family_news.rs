@@ -333,3 +333,54 @@ async fn a_proposal_waits_a_day_and_an_unreachable_family_keeps_it() {
     assert!(family_news::propose(&config, &agent, &family, &["lea".into()], &"x".repeat(1001), now).is_err());
     assert!(family_news::propose(&config, &agent, &family, &["lea".into()], "", now).is_err());
 }
+
+/// Alex, 19/11 ~13:38: in Vie's « Peut écrire aux agents de Chi », « Tous » and « Bip » OFF (only Vie → Famille, his
+/// own family agent, ON); Chi has allowed nothing either. Yet Chi's Bip got Vie's words: Vie's `tell_family`, Alex's
+/// « Envoyer », Chi's bridge keeping it for her first agent (`reachable_by`) and noting it for Bip's next turn, Chi
+/// seeing a card « Alex … Transmis par Vie » with its « OK ». Family news ignore the agent links by design (2026-10-21);
+/// whether they should follow them is Alex's call (status-fix-agent-links.md, options A/B/C). This is the red test of
+/// B and C, the two options that keep Bip's turns free of words its person didn't allow: ignored until he decides.
+#[tokio::test]
+#[ignore = "waits for Alex's decision on family news vs the agent links (status-fix-agent-links.md)"]
+async fn an_unlinked_agents_family_news_never_reach_the_other_agents_turn() {
+    let hermes = common::spawn_fake(Router::new().fallback(any(|| async { axum::Json(json!({"ok": true})) }))).await;
+    let dir = tempfile::tempdir().unwrap();
+    let (_, alex) = serve_bridge(dir.path(), "a", &["vie", "famille"], &hermes).await;
+    let (_, chi) = serve_bridge(dir.path(), "b", &["bip", "cuisine"], &hermes).await;
+    let (k, v) = auth();
+    let h = [(k, v.as_str())];
+    give_token(&alex, "vie", "vie-token");
+    assert_eq!(alex.send_json("PUT", "/v1/family/name", &h, &json!({"name": "Alex"})).await.status, 200);
+    assert_eq!(chi.send_json("PUT", "/v1/family/name", &h, &json!({"name": "Chi"})).await.status, 200);
+    let invitation = alex.send_json("POST", "/v1/family/invite", &h, &json!({"days": 7})).await.json();
+    let joined = chi
+        .send_json("POST", "/v1/family/join", &h, &json!({"url": invitation["url"], "code": invitation["code"]}))
+        .await;
+    assert_eq!(joined.status, 200, "{}", joined.text());
+    // Alex's screen: Vie writes to Famille only; Chi's: nothing allowed
+    let set = alex.send_json("PUT", "/v1/agent-links", &h, &json!({"links": [{"from": "vie", "to": "famille"}]})).await;
+    assert_eq!(set.status, 200, "{}", set.text());
+    assert_eq!(alex.get("/v1/agent-links", &h).await.json()["links"], json!([{"from": "vie", "to": "famille"}]));
+    assert_eq!(chi.get("/v1/agent-links", &h).await.json()["links"], json!([]));
+
+    for to in ["bip__chi", "chi"] {
+        // by the agent's name, then to the household (whose first agent is Bip)
+        let proposed = mcp(
+            &alex,
+            "vie-token",
+            "tools/call",
+            json!({"name": "tell_family", "arguments": {"to": [to], "message": format!("Mot de Vie ({to})")}}),
+        )
+        .await;
+        let refused_here = proposed["isError"] == true;
+        let proposal = alex.get("/v1/family/news?agent=vie", &h).await.json()["proposals"][0].clone();
+        if !refused_here {
+            if let Some(id) = proposal["id"].as_str() {
+                // Alex's « Envoyer »
+                alex.send_json("POST", &format!("/v1/family/proposals/{id}/send"), &h, &json!({})).await;
+            }
+        }
+        let note = common::without_now(&common::notes(&chi, "bip", "s1", "").await);
+        assert!(!note.contains("Mot de Vie"), "{to}: Chi's Bip got Vie's words without a link: {note}");
+    }
+}
