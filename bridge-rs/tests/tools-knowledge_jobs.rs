@@ -801,6 +801,13 @@ async fn a_task_of_an_agent_with_a_browser_gets_a_browser_of_its_own() {
     assert!(ports["cdp"] != 19600 && ports["vnc"] != 19601, "ports of its own: {ports:?}");
     let sessions: Value = serde_json::from_str(&std::fs::read_to_string(place.join("sessions.json")).unwrap()).unwrap();
     assert_eq!(sessions["s1"], json!(theirs.join("mcp.json").to_string_lossy()));
+    // the task's own calls are told from the person's (patch 0028): a payment never happens in its browser
+    let task_call = bipbridge::runs::CALL_SESSION
+        .sync_scope(Some("s1".into()), || bipbridge::browsers::task_of_call(&config, "coach"));
+    assert_eq!(task_call, Some(theirs.join("mcp.json")));
+    let person_call = bipbridge::runs::CALL_SESSION
+        .sync_scope(Some("api_person".into()), || bipbridge::browsers::task_of_call(&config, "coach"));
+    assert_eq!(person_call, None);
     board.wait(&id).await;
     assert!(!theirs.exists(), "its browser removed with the task's end");
     let sessions: Value = serde_json::from_str(&std::fs::read_to_string(place.join("sessions.json")).unwrap()).unwrap();

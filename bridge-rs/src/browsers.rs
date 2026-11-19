@@ -156,6 +156,14 @@ pub fn task_browser_agent(name: &str) -> Option<&str> {
 /// (`{session: <its mcp.json>}`); bip-browser-mcp routes that session's calls there, the others to the agent's own.
 pub const SESSIONS_FILE: &str = "sessions.json";
 
+/// The settings of the task's own browser the current call comes from (`runs::CALL_SESSION` in the agent's
+/// `SESSIONS_FILE`), None: the agent's own browser.
+pub fn task_of_call(config: &Config, agent: &str) -> Option<PathBuf> {
+    let session = crate::runs::CALL_SESSION.try_with(|s| s.clone()).ok().flatten()?;
+    let map: Value = serde_json::from_str(&std::fs::read_to_string(sessions_path(config, agent)).ok()?).ok()?;
+    Some(PathBuf::from(map.get(&session)?.as_str()?)).filter(|p| p.is_file())
+}
+
 fn sessions_path(config: &Config, agent: &str) -> PathBuf {
     folder(config, agent).join(SESSIONS_FILE)
 }

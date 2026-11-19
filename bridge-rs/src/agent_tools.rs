@@ -2012,10 +2012,14 @@ async fn mcp(
     headers: HeaderMap,
     body: Bytes,
 ) -> ApiResult<Response> {
-    let session = serde_json::from_slice::<Value>(&body).ok().and_then(|m| {
+    crate::runs::CALL_SESSION.scope(call_session_of(&body), mcp_call(state, uri, headers, body)).await
+}
+
+/// The Hermes session an MCP message says it comes from (patch 0028), None without.
+pub fn call_session_of(body: &[u8]) -> Option<String> {
+    serde_json::from_slice::<Value>(body).ok().and_then(|m| {
         m.get("params")?.get("_meta")?.get(CALL_SESSION_META)?.as_str().filter(|s| !s.is_empty()).map(str::to_string)
-    });
-    crate::runs::CALL_SESSION.scope(session, mcp_call(state, uri, headers, body)).await
+    })
 }
 
 async fn mcp_call(

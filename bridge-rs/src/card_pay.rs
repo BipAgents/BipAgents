@@ -91,6 +91,11 @@ pub const HOLDS_THE_CALL: &[&str] = &[PAY];
 /// Seconds Hermes waits for a call: the person may take a while to answer (a watcher's payment: `URGENT_WINDOW`,
 /// then the fill and the bank).
 pub const TOOL_TIMEOUT: u32 = 900;
+
+/// A payment asked from a background task that browses in a browser of its own (one browser per task, 19/11).
+pub const TASK_PAY_TEXT: &str = "Not paid: you work in a background task, in a browser of its own, and payments are \
+made only in your person's conversation. End your task with what to buy, where and for how much: your person pays \
+from there.";
 /// A payment asked in a turn nobody follows (a watcher, a routine) waits this long for the person, from its push
 /// (`urgent`; internal/notes/watcher-urgent-pay.md).
 pub const URGENT_WINDOW: Duration = Duration::from_secs(600);
@@ -250,14 +255,17 @@ pub async fn register_entry(
     let entry = servers.get(server).cloned().unwrap_or(Value::Null);
     let same = entry.get("url") == Some(&json!(url))
         && entry.get("headers").and_then(|h| h.get("Authorization")) == Some(&json!(header))
-        && entry.get("timeout").map(py::py_str) == Some(timeout.to_string());
+        && entry.get("timeout").map(py::py_str) == Some(timeout.to_string())
+        && entry.get("call_context") == Some(&json!(true));
     if same {
         return Ok(false);
     }
+    // each call says its Hermes session (patch 0028): whose turn, and whose browser (a task's own, browsers.rs)
     let entry = [
         ("url", Yaml::str(url)),
         ("headers.Authorization", Yaml::str(header)),
         ("timeout", Yaml::Int(timeout.into())),
+        ("call_context", Yaml::Bool(true)),
     ];
     crate::profile_files::edit(&folder.join("config.yaml"), |data| {
         crate::profile_files::set_server(data, server, Some(&entry))
@@ -1319,6 +1327,10 @@ async fn pay(state: &AppState, agent: &AgentConfig, arguments: &Dict, asker: &As
     if !offered(&config, agent) || !cards::enabled(&config) {
         return Ok(refusal(off_text()));
     }
+    // a background task with a browser of its own: the bridge pays in the agent's browser only, never there
+    if crate::browsers::task_of_call(&config, &agent.name).is_some() {
+        return Ok(refusal(TASK_PAY_TEXT));
+    }
     let (label, merchant) = (arg(arguments, "card"), cards::quoted(&arg(arguments, "merchant"), 80));
     if merchant.is_empty() {
         return Ok(refusal("Say what you pay for (merchant), in a few words."));
@@ -2210,8 +2222,19 @@ async fn mcp(State(state): State<AppState>, headers: HeaderMap, body: Bytes) -> 
     serve(state, headers, body, &PAY_SERVER).await
 }
 
-/// One MCP message for `server`, from the agent whose token it shows.
+/// One MCP message for `server`, from the agent whose token it shows, run with the Hermes session it says it comes
+/// from (patch 0028, `runs::CALL_SESSION`).
 pub async fn serve(
+    state: AppState,
+    headers: HeaderMap,
+    body: Bytes,
+    server: &'static ToolServer,
+) -> ApiResult<Response> {
+    let session = crate::agent_tools::call_session_of(&body);
+    crate::runs::CALL_SESSION.scope(session, serve_call(state, headers, body, server)).await
+}
+
+async fn serve_call(
     state: AppState,
     headers: HeaderMap,
     body: Bytes,
