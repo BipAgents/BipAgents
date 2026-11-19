@@ -2,7 +2,7 @@
 
 # Conditions générales d'utilisation de BipAgents
 
-> Dernière mise à jour : 12 novembre 2026.
+> Dernière mise à jour : 18 novembre 2026.
 
 ## 1. Objet
 
@@ -71,7 +71,7 @@ comme prévu à la section 19.
 
 ## 6. Licence et logiciel libre
 
-- Le **code source** de BipAgents est publié sous **licence MIT** : https://github.com/Alexbob0/BipAgents. Tu peux l'utiliser, le copier, le
+- Le **code source** de BipAgents est publié sous **licence MIT** : https://github.com/BipAgents/BipAgents. Tu peux l'utiliser, le copier, le
   modifier et le redistribuer selon cette licence, qui prime sur les présentes conditions pour tout ce qui concerne le
   code source.
 - Les **Bips eux-mêmes** ne sont pas sous licence MIT : leurs dessins, l'icône de l'app, leur babil, leurs voix, les
@@ -148,6 +148,10 @@ restes responsable de tes appareils, de ton code de récupération, du respect d
   à les détourner : garde les demandes d'accord activées et ne donne à chaque agent que les accès dont il a besoin.
 - Les e-mails et messages que tes agents envoient à d'autres personnes indiquent par défaut qu'ils ont été rédigés
   par un agent IA et pour qui. Ne retire pas cette mention pour faire croire qu'un humain les a écrits.
+- **Paiements par tes agents** (désactivé par défaut, expérimental pendant la bêta sur l'offre tout compris) : un agent
+  ne paie qu'avec une carte virtuelle avec un plafond que tu lui as confiée, sur les sites que tu autorises, et chaque
+  paiement t'est demandé. Comme c'est toi qui le valides, ta banque peut refuser de le rembourser comme une fraude. N'y
+  mets jamais ta carte principale.
 
 ## 10. Usage acceptable
 

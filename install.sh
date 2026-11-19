@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # BipAgents — install for the person running it, in their own account (no sudo):
-#   curl -fsSL https://raw.githubusercontent.com/Alexbob0/BipAgents/main/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/BipAgents/BipAgents/stable/install.sh | bash
 # Options are passed on to the installer: --dry-run, --ports 9200, --languages fr,en
 # Later: `bash ~/BipAgents/install.sh update` brings it up to date (and offers to do it each night).
 # Channels: an install follows `stable` (what was promoted after the pre-test) where the repository has it, else `main`;
@@ -11,7 +11,7 @@
 # One's agents (or a Hermes alone) sent to a place of the all-included offer: `… | bash -s -- send <address> <code>`.
 set -euo pipefail
 
-REPO_URL="${BIPAGENTS_REPO:-https://github.com/Alexbob0/BipAgents.git}"
+REPO_URL="${BIPAGENTS_REPO:-https://github.com/BipAgents/BipAgents.git}"
 DIR="${BIPAGENTS_DIR:-$HOME/BipAgents}"
 # Every public repository an install may follow or be moved to (installer/bipinstall/public_repo.py: KNOWN), newest last.
 KNOWN_REPOS="https://github.com/Alexbob0/BipAgents.git https://github.com/BipAgents/BipAgents.git"  # known-public-repos

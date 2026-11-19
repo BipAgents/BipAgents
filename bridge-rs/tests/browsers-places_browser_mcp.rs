@@ -1470,7 +1470,7 @@ async fn the_first_form_sent_to_a_site_waits_for_the_persons_ok() {
     proxy.handle(tool(3, "press_key", json!({"instance_id": "i", "selector": "#message", "key": "Enter"}))).await;
     assert!(text_of(&last(&out)).starts_with("Not done: this sends a form to contact.example"), "Enter sends too");
     assert_eq!(real("press_key"), 0);
-    // the person's « Oui »: one sending, then asked again
+    // a vault fill's grant: one sending, then asked again
     let file = tmp.join(browser_mcp::SEND_SITES_FILE);
     let until = bipbridge::py::time_time() + 600.0;
     let once = json!({"always": [], "once": [{"id": "g1", "host": "contact.example", "until": until}]});
@@ -1478,13 +1478,20 @@ async fn the_first_form_sent_to_a_site_waits_for_the_persons_ok() {
     proxy.handle(tool(4, "click_element", submit.clone())).await;
     assert_eq!(text_of(&last(&out)), "did click_element");
     proxy.handle(tool(5, "click_element", submit.clone())).await;
-    assert!(text_of(&last(&out)).starts_with("Not done: this sends a form to"), "a « Oui » serves once");
+    assert!(text_of(&last(&out)).starts_with("Not done: this sends a form to"), "a vault fill's grant serves once");
+    // the person's « Oui » (18/11: a checkout's steps asked again and again): every sending there for its minutes
+    let window = json!({"always": [], "once": [{"id": "g2", "host": "contact.example", "until": until, "window": true}]});
+    std::fs::write(&file, window.to_string()).unwrap();
+    proxy.handle(tool(51, "click_element", submit.clone())).await;
+    assert_eq!(text_of(&last(&out)), "did click_element");
+    proxy.handle(tool(52, "press_key", json!({"instance_id": "i", "selector": "#message", "key": "Enter"}))).await;
+    assert_eq!(text_of(&last(&out)), "did press_key", "a « Oui » covers the site for now, not one sending");
     // « Toujours pour ce site »
     std::fs::write(&file, json!({"always": ["*.example"], "once": []}).to_string()).unwrap();
     proxy.handle(tool(6, "click_element", submit.clone())).await;
     proxy.handle(tool(7, "press_key", json!({"instance_id": "i", "selector": "#message", "key": "Enter"}))).await;
     assert_eq!(text_of(&last(&out)), "did press_key");
-    assert_eq!((real("click_element"), real("press_key")), (2, 1));
+    assert_eq!((real("click_element"), real("press_key")), (3, 2));
     proxy.stop_child().await;
 }
 

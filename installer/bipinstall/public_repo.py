@@ -13,10 +13,10 @@ installs follow as before. The guichet's places follow no branch: each update or
 repository, among KNOWN only)."""
 from __future__ import annotations
 
-SLUG = "Alexbob0/BipAgents"
+SLUG = "BipAgents/BipAgents"
 URL = f"https://github.com/{SLUG}.git"
 # The default branch: what the install line and the docs' links name, what an install follows unless told otherwise.
-BRANCH = "main"
+BRANCH = "stable"
 # The servers' container images (shared_images.py, .github/workflows/server-images.yml): GHCR wants it in lower case.
 REGISTRY = f"ghcr.io/{SLUG.split('/')[0].lower()}"
 

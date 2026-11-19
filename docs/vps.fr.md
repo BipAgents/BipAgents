@@ -66,7 +66,7 @@ Dans le compte `bip` :
 
 ```bash
 sudo -iu bip
-curl -fsSL https://raw.githubusercontent.com/Alexbob0/BipAgents/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/BipAgents/BipAgents/stable/install.sh | bash
 ```
 
 L'installateur voit qu'il est sur un serveur loué : pas de porte sur un réseau local, et le modèle dans le cloud est

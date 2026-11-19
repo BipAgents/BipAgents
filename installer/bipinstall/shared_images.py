@@ -6,10 +6,10 @@ and Hermes' sandbox (docker.io/nousresearch/hermes-sandbox:desktop, pulled by ea
 start, which the registries' proxy runs too). Since 2026-10-27:
 
 - GitHub Actions builds the browser (.github/workflows/server-images.yml) and pushes it to
-  ghcr.io/alexbob0/bipagents-browser:<key>, the key a hash of browser/ (made like the bridge's release key), for
+  ghcr.io/bipagents/bipagents-browser:<key>, the key a hash of browser/ (made like the bridge's release key), for
   x86_64 and ARM. Each night it asks dnf in that image whether Chrome or Fedora have something new (the same check
   as browser_refresh.py) and if so builds it again under the same key. It also mirrors Hermes' sandbox to
-  ghcr.io/alexbob0/hermes-sandbox:desktop (no Docker Hub limits for the servers).
+  ghcr.io/bipagents/hermes-sandbox:desktop (no Docker Hub limits for the servers).
 - root pulls them once into a store of the server, /var/lib/bipagents/images (`shared-images pull`: at first boot,
   each night after the workflow's build, and when the seat agent prepares a BipAgents version), under the names the
   places use (localhost/bipagents-browser:latest, docker.io/nousresearch/hermes-sandbox:desktop). The image before is

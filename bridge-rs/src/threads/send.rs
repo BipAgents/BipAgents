@@ -725,6 +725,8 @@ pub async fn send(state: &AppState, agent: &AgentConfig, thread: Option<Thread>,
 
 /// `POST /v1/threads/{thread}/stop`: the turn going on in the conversation stopped (Hermes then ends it cancelled).
 pub async fn stop(state: &AppState, agent: &AgentConfig, thread: &Thread) -> ApiResult<Value> {
+    // the person stopped it: their « Oui » for sending forms ends with it (form_send.rs, review of 18/11, F3)
+    crate::form_send::end_windows(&state.config(), &agent.name);
     let threads = threads_of(state);
     let tip = threads.line(agent, thread).await.map_err(unavailable)?.last().map(|s| s.session_id.clone());
     let Some(run) = tip.as_deref().and_then(|t| state.hub.session_run(&agent.name, t)) else {

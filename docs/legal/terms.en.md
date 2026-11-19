@@ -2,7 +2,7 @@ English · [Français](terms.fr.md) · [Deutsch](terms.de.md) · [Español](term
 
 # BipAgents terms of use
 
-> Last updated: 12 November 2026.
+> Last updated: 18 November 2026.
 
 ## 1. Purpose
 
@@ -67,7 +67,7 @@ and whether any payment influences their order; this change will be announced as
 
 ## 6. Licence and open source
 
-- BipAgents' **source code** is published under the **MIT licence**: https://github.com/Alexbob0/BipAgents. You may use, copy, modify and
+- BipAgents' **source code** is published under the **MIT licence**: https://github.com/BipAgents/BipAgents. You may use, copy, modify and
   redistribute it under that licence, which prevails over these terms for everything about the source code.
 - The **Bips themselves** are not under the MIT licence: their drawings, the app's icon, their babble, their voices,
   the demo's recordings (the podcast, recorded with Fish Audio Drama 3 — "Built with Fish Audio") and the screenshots.
@@ -138,6 +138,9 @@ and what you do over SSH ([terms of the offer](offer.en.md)).
   approvals on and give each agent only the access it needs.
 - The emails and messages your agents send to other people state by default that they were written by an AI agent,
   and on whose behalf. Do not remove this statement to make people believe a human wrote them.
+- **Payments by your agents** (off by default, experimental during the beta on the all-included offer): an agent pays
+  only with a virtual card with a cap you gave it, on the sites you allow, and each payment asks you. Since you approve
+  it, your bank may refuse to refund it as fraud. Never use your main card.
 
 ## 10. Acceptable use
 

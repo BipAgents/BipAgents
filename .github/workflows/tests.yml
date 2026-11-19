@@ -12,7 +12,7 @@ permissions:
 jobs:
   python:
     name: Bridge and installer
-    if: github.repository == 'Alexbob0/BipAgents'   # free there; the private copy would count minutes
+    if: github.repository == 'BipAgents/BipAgents'   # free there; the private copy would count minutes
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1   # v7
@@ -66,7 +66,7 @@ jobs:
 
   relay:
     name: Push relay (Rust)
-    if: github.repository == 'Alexbob0/BipAgents'   # free there; the private copy would count minutes
+    if: github.repository == 'BipAgents/BipAgents'   # free there; the private copy would count minutes
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -83,7 +83,7 @@ jobs:
 
   windows:
     name: Windows install script
-    if: github.repository == 'Alexbob0/BipAgents'   # free there; the private copy would count minutes
+    if: github.repository == 'BipAgents/BipAgents'   # free there; the private copy would count minutes
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1   # v7

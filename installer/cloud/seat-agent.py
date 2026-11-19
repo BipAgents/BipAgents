@@ -207,7 +207,7 @@ SHARED_REPO = os.path.join(LIB, "repo")   # root's own BipAgents, never a place'
 # A pre-test's checkout of root's, apart: a pre-test place's shared Hermes is made from it, and root's own checkout
 # (the images' nightly pull, the seat tools) stays on production's version until the production waves (review R11)
 PRETEST_REPO = os.path.join(LIB, "repo-pretest")
-PUBLIC_REPO = "https://github.com/Alexbob0/BipAgents.git"
+PUBLIC_REPO = "https://github.com/BipAgents/BipAgents.git"
 # The public repositories an update order may name (installer/bipinstall/public_repo.py: KNOWN): the guichet moves the
 # places to the BipAgents organisation's through an update, and back; never anywhere else, whatever an order says.
 KNOWN_REPOS = ("https://github.com/Alexbob0/BipAgents.git",  # known-public-repos
