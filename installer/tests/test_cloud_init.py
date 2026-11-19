@@ -1095,3 +1095,29 @@ def test_review2_g1_a_wave_back_to_an_older_bridge_is_never_counted_as_switched(
     agent.forget_cards_seen(str(home))
     assert not seen.exists()
     agent.forget_cards_seen(str(home))   # nothing there: fine
+
+
+def test_the_hardening_installs_the_swap_s_encryption_unit_where_the_distro_splits_it(tmp_path):
+    """Lab round trip 19/11: on Debian 13 (every partner's image) systemd 257 ships the crypttab generator in its own
+    package, systemd-cryptsetup; with cryptsetup-bin alone « systemd-cryptsetup@bipswap.service not found » stopped
+    every new server's first boot (vault_keys or encrypt on). Ubuntu 24.04 has no such package (its systemd has it):
+    asked only where the distro has it."""
+    import subprocess
+    text = (ROOT / "installer" / "cloud" / "space-hardening.sh").read_text(encoding="utf-8")
+    block = text[text.index("if command -v apt-get"):]
+    block = block[:block.index("\nfi\n") + 4]
+    for distro, has_it in (("debian13", True), ("ubuntu2404", False)):
+        bin_dir = tmp_path / distro
+        bin_dir.mkdir()
+        asked = tmp_path / f"{distro}.apt"
+        (bin_dir / "apt-get").write_text(f'#!/bin/bash\necho "$@" >> {asked}\n')
+        (bin_dir / "apt-cache").write_text(
+            "#!/bin/bash\n" + ('[ "$1 $2" = "show systemd-cryptsetup" ] && exit 0\n' if has_it else "") + "exit 100\n")
+        for tool in bin_dir.iterdir():
+            tool.chmod(0o755)
+        done = subprocess.run(["bash", "-euc", block], capture_output=True, text=True,
+                              env={"PATH": f"{bin_dir}:/usr/bin:/bin"})
+        assert done.returncode == 0, done.stderr
+        packages = asked.read_text().split()
+        assert {"gocryptfs", "fuse3", "cryptsetup-bin"} <= set(packages)
+        assert ("systemd-cryptsetup" in packages) == has_it
