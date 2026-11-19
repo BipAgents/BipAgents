@@ -108,6 +108,9 @@ pub struct Services {
     pub guard: Guard,
     /// The web consoles (console.py): Python's `app.state.console`.
     pub console: ConsoleStore,
+    /// Every SOUL.md as it was before the start rewrote any (agents_admin::souls_now), taken by the first pass of
+    /// dates::run_forever: what the start changed reaches the agents' ongoing conversations.
+    pub start_souls: Mutex<Option<std::collections::BTreeMap<String, String>>>,
     tasks: Mutex<Vec<JoinHandle<()>>>,
 }
 
@@ -234,6 +237,7 @@ impl Services {
             threads: OnceLock::new(),
             guard: Guard::default(),
             console: ConsoleStore::new(&py::join(&data_dir, "console.json")),
+            start_souls: Mutex::new(None),
             tasks: Mutex::new(Vec::new()),
         })
     }
@@ -1820,6 +1824,8 @@ pub fn create_app(config: Config, options: AppOptions) -> anyhow::Result<App> {
     crate::profile_files::set_hands_off(crate::profile_files::hands_off_home(&config));
     // before anything reads the vault: the data folder held (no sealing meanwhile), the place key from memory if sealed
     crate::sealed_keys::at_start(&config)?;
+    // the souls as this start finds them, before it rewrites any (dates::run_forever tells the conversations)
+    *state.start_souls.lock().unwrap_or_else(|e| e.into_inner()) = Some(crate::agents_admin::souls_now(&config));
     crate::profile_files::reconcile_all(&config); // what the bridge decides in each profile, as this bridge renders it
     crate::voices::heal_defaults(&state.config); // after the souls: their language says the Bip's
     let config = state.config();

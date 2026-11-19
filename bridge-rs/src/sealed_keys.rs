@@ -795,7 +795,14 @@ pub fn start(app: &crate::app::AppState) {
             let _ = reopening.vault.retry_removals(&config).await;
             let _ = reopening.vault.follow_browsers(&config).await;
         }
+        let before = crate::agents_admin::souls_now(&config);
         crate::profile_files::reconcile_all(&config);
+        // a soul brought up to date only now (its cards' names were sealed): its conversations take it too
+        let souls = crate::agents_admin::souls_changed(&config, &before);
+        if config.hermes.enabled() {
+            let run = crate::agents_admin::default_run();
+            crate::agents_admin::refresh_rewritten(config, souls, run, crate::agents_admin::refresh_jitter()).await;
+        }
     });
 }
 
