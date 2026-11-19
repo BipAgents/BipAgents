@@ -78,14 +78,184 @@ fn switch_path(config: &Config) -> std::path::PathBuf {
     std::path::PathBuf::from(config.data_dir()).join("vault").join("payments.json")
 }
 
-/// Card payments are on: allowed here, and switched on by the person. Off, nothing is paid and no card is added.
+/// Card payments are on: allowed here, switched on by the person, and not cut by Kerfy Studio (`remote_off`). Off,
+/// nothing is paid and no card is added.
 pub fn enabled(config: &Config) -> bool {
     allowed(config)
+        && !remote_off()
         && std::fs::read(switch_path(config))
             .ok()
             .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
             .and_then(|v| v.get("enabled").and_then(Value::as_bool))
             .unwrap_or(false)
+}
+
+// -- Kerfy Studio's remote switch (decided 2026-11-18) ------------------------------------------------------------
+//
+// To cut the agents' card payments on the offer's places at once, without a release nor an update wave: `bipguichet
+// cards off [--place <id>]` (Guichet repo, guichet-rs/src/offer_cards.rs). Each server's beat (every two minutes)
+// brings it back to its seat agent, which writes `{"offer_cards": false}` into this place's file, root's, outside the
+// place's home, and removes it when card payments may go on again (installer/cloud/seat-agent.py `keep_offer_cards`).
+// Off wins over everything here (bridge.toml, the person's switch, which is kept as they set it: back on, their
+// payments come back as they were); read live, its content read again only when the file changes. A missing,
+// unreadable or other file: no override. `follow_remote_switch` stops the payments under way within seconds.
+
+/// The switch's folder: `<uid>.json` for each place's account (root's, 0644, seat-agent.py `OFFER_CARDS_DIR`).
+pub const REMOTE_SWITCH_DIR: &str = "/var/lib/bipagents/offer-cards";
+
+/// This place's file: `REMOTE_SWITCH_DIR/<uid>.json`.
+fn remote_switch_path() -> std::path::PathBuf {
+    // SAFETY: getuid has no preconditions and cannot fail.
+    let uid = unsafe { libc::getuid() };
+    std::path::Path::new(REMOTE_SWITCH_DIR).join(format!("{uid}.json"))
+}
+
+/// The black-box tests' own file (`BIP_TEST_OFFER_SWITCH`, review 18/11 F5): only ever one more way to cut, never
+/// instead of this place's file, so whoever can change the bridge's environment can't lift Kerfy Studio's cut with
+/// it (the suite runs the release build: no test-only build of its own to put it behind).
+fn test_switch_path() -> Option<&'static std::path::Path> {
+    static PATH: std::sync::LazyLock<Option<std::path::PathBuf>> = std::sync::LazyLock::new(|| {
+        let path = std::env::var_os("BIP_TEST_OFFER_SWITCH").filter(|p| !p.is_empty())?;
+        tracing::warn!(path = ?path, "card payments: a test file may cut them too");
+        Some(path.into())
+    });
+    PATH.as_deref()
+}
+
+#[cfg(test)]
+thread_local! {
+    /// The unit tests' cut, for their own thread only (a `#[tokio::test]` runs on it): never another test's.
+    pub(crate) static TEST_CUT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Kerfy Studio cut the agents' card payments on this place (`bipguichet cards off`).
+pub fn remote_off() -> bool {
+    #[cfg(test)]
+    if TEST_CUT.with(|c| c.get()) {
+        return true;
+    }
+    remote_off_at(&remote_switch_path()) || test_switch_path().is_some_and(remote_off_at)
+}
+
+/// What the file at `path` says, read again only when it changed (its inode, size or time: the seat agent replaces
+/// it whole). Only `{"offer_cards": false}` cuts.
+pub fn remote_off_at(path: &std::path::Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    type Seen = std::collections::HashMap<std::path::PathBuf, ((u64, u64, i64, i64), bool)>;
+    static SEEN: std::sync::LazyLock<std::sync::Mutex<Seen>> = std::sync::LazyLock::new(Default::default);
+    let Ok(meta) = std::fs::metadata(path) else { return false };
+    let stamp = (meta.ino(), meta.len(), meta.mtime(), meta.mtime_nsec());
+    let mut seen = SEEN.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((was, off)) = seen.get(path) {
+        if *was == stamp {
+            return *off;
+        }
+    }
+    let off = std::fs::read(path)
+        .ok()
+        .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
+        .and_then(|v| v.get("offer_cards").and_then(Value::as_bool))
+        == Some(false);
+    seen.insert(path.to_path_buf(), (stamp, off));
+    off
+}
+
+/// What the person reads in the app while Kerfy Studio's switch is off.
+pub const REMOTE_OFF_NOTICE: &str = "Les paiements par carte sont suspendus pour le moment.";
+
+/// How often `follow_remote_switch` looks (a stat, the file read only when it changed).
+const REMOTE_LOOK: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// What this bridge applies of Kerfy Studio's switch, for the seat agent's beat (review 18/11 F2: `bipguichet cards
+/// status` tells the places that apply a cut from those whose bridge doesn't read it yet):
+/// `~/.local/state/bipagents/offer-cards-seen.json`, `{"off": true|false, "pid": <this process>, "version": <the
+/// commit it started from>}`, written at start, at each change and every minute (`SEEN_AGAIN`).
+pub const SEEN_FILE: &str = ".local/state/bipagents/offer-cards-seen.json";
+
+/// How often the bridge says it again, unchanged (review 18/11 pass 5): the seat agent trusts the file only while it
+/// is fresh (seat-agent.py `SEEN_FRESH`, 3 minutes) and its process still runs, so a bridge that kept running through
+/// an update is counted again within the minute, and a file a stopped bridge left says nothing.
+const SEEN_AGAIN: std::time::Duration = std::time::Duration::from_secs(60);
+
+fn tell_seen(off: bool, commit: Option<&str>) {
+    if !on_offer() {
+        return; // only the offer's places have a seat agent to tell
+    }
+    let path = crate::place_backup::home().join(SEEN_FILE);
+    let written = (|| -> std::io::Result<()> {
+        crate::py::makedirs(&path.parent().unwrap_or(&path).to_string_lossy(), 0o755)?;
+        let tmp = path.with_extension("tmp");
+        // this process (review 18/11 pass 5, H2: the seat agent says nothing once it stopped), and the commit it
+        // started from, read once at start (not HEAD now: a wave back checks the older commit out before this bridge
+        // stops), for the guichet's eyes
+        let seen = json!({"off": off, "pid": std::process::id(), "version": commit});
+        crate::py::write_with_mode(&tmp.to_string_lossy(), crate::py::dumps(&seen).as_bytes(), 0o644)?;
+        std::fs::rename(&tmp, &path)
+    })();
+    if let Err(err) = written {
+        tracing::warn!(error = %err, "card payments: what Kerfy Studio's switch does here not written");
+    }
+}
+
+/// The BipAgents commit this place runs, 12 characters, as the seat agent reads it (seat-agent.py `version`): the
+/// checkout's HEAD, through its ref or packed-refs, without git.
+pub fn running_commit(home: &std::path::Path) -> Option<String> {
+    let git = home.join("BipAgents").join(".git");
+    let head = std::fs::read_to_string(git.join("HEAD")).ok()?;
+    let head = head.trim();
+    let full = match head.strip_prefix("ref: ") {
+        None => head.to_string(),
+        Some(name) => match std::fs::read_to_string(git.join(name)) {
+            Ok(text) => text.trim().to_string(),
+            Err(_) => std::fs::read_to_string(git.join("packed-refs"))
+                .ok()?
+                .lines()
+                .find(|l| l.trim_end().ends_with(&format!(" {name}")))?
+                .split_whitespace()
+                .next()?
+                .to_string(),
+        },
+    };
+    let short: String = full.chars().take(12).collect();
+    (!short.is_empty()).then_some(short)
+}
+
+/// Kerfy Studio's switch followed: once it goes off, the payments under way are stopped as « Suspendre tous les
+/// paiements » stops them (asked ones refused, held browsers given back, the card's fields emptied) and noted in the
+/// journal; off or back on, the agents' payment rules follow (souls.rs `Shopping`). At start, off: the rules only.
+pub async fn follow_remote_switch(config: crate::config::SharedConfig) {
+    let commit = running_commit(&crate::place_backup::home());
+    let mut was_off = remote_off();
+    tell_seen(was_off, commit.as_deref());
+    let mut told = std::time::Instant::now();
+    if was_off {
+        tracing::warn!("card payments: cut by Kerfy Studio");
+        crate::profile_files::reconcile_all(&config.get());
+    }
+    loop {
+        tokio::time::sleep(REMOTE_LOOK).await;
+        let off = remote_off();
+        if off == was_off {
+            if told.elapsed() >= SEEN_AGAIN {
+                tell_seen(off, commit.as_deref()); // said again: still this bridge, still applying it (H1)
+                told = std::time::Instant::now();
+            }
+            continue;
+        }
+        was_off = off;
+        tell_seen(off, commit.as_deref());
+        told = std::time::Instant::now();
+        let config = config.get();
+        if off {
+            tracing::warn!("card payments: cut by Kerfy Studio, the payments under way stopped");
+            journal(&config, json!({"outcome": "payments_suspended", "by": "kerfy"}));
+            crate::profile_files::reconcile_all(&config);
+            crate::card_pay::stop_all(&config).await;
+        } else {
+            tracing::info!("card payments: Kerfy Studio's cut lifted");
+            crate::profile_files::reconcile_all(&config);
+        }
+    }
 }
 
 /// The person turns payments on or off (« Suspendre tous les paiements »: off at once).
@@ -992,6 +1162,52 @@ mod tests {
         config.payments.offer_cards = true;
         assert!(allowed_on(&config, true)); // switched on: cards offered, numbers on the phone
         assert!(!allowed_on(&config, false)); // a cloud server without the guichet's token: never
+    }
+
+    #[test]
+    fn kerfy_s_switch_cuts_only_when_it_says_false_and_is_read_again_when_it_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("1000.json");
+        assert!(!remote_off_at(&path)); // no file: bridge.toml decides
+        let write = |text: &str| {
+            let tmp = dir.path().join("tmp");
+            std::fs::write(&tmp, text).unwrap();
+            std::fs::rename(&tmp, &path).unwrap(); // as the seat agent does: a new file each time
+        };
+        write(r#"{"offer_cards": false}"#);
+        assert!(remote_off_at(&path));
+        assert!(remote_off_at(&path)); // the same file: from memory
+        write(r#"{"offer_cards": true}"#);
+        assert!(!remote_off_at(&path));
+        for other in ["", "not json", "[]", r#"{"offer_cards": "false"}"#, r#"{"offer_cards": 0}"#, "{}"] {
+            write(other);
+            assert!(!remote_off_at(&path), "{other:?}");
+        }
+        write(r#"{"offer_cards": false}"#);
+        assert!(remote_off_at(&path));
+        std::fs::remove_file(&path).unwrap();
+        assert!(!remote_off_at(&path)); // removed: back to bridge.toml at once
+        std::fs::create_dir(&path).unwrap();
+        assert!(!remote_off_at(&path)); // unreadable: no override
+    }
+
+    #[test]
+    fn the_commit_this_place_runs_as_the_seat_agent_reads_it() {
+        let home = tempfile::tempdir().unwrap();
+        assert_eq!(running_commit(home.path()), None);
+        let git = home.path().join("BipAgents/.git");
+        std::fs::create_dir_all(git.join("refs/heads")).unwrap();
+        std::fs::write(git.join("HEAD"), "0123456789abcdef0123456789abcdef01234567\n").unwrap();
+        assert_eq!(running_commit(home.path()).as_deref(), Some("0123456789ab"));
+        std::fs::write(git.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+        std::fs::write(
+            git.join("packed-refs"),
+            "# pack-refs\nfedcba9876543210fedcba9876543210fedcba98 refs/heads/main\n",
+        )
+        .unwrap();
+        assert_eq!(running_commit(home.path()).as_deref(), Some("fedcba987654"));
+        std::fs::write(git.join("refs/heads/main"), "aaaabbbbccccdddd\n").unwrap();
+        assert_eq!(running_commit(home.path()).as_deref(), Some("aaaabbbbcccc"));
     }
 
     const RULES: PhoneRules = PhoneRules { cap_max_cents: 15_000 };
