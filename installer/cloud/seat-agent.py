@@ -355,6 +355,7 @@ def update(number, commit, repo=None, pretest=False):
     except OSError as exc:
         log("place %d: own disk not made: %s" % (number, exc))
     log("place %d (%s): BipAgents %s%s" % (number, user, commit[:12], " from " + repo if repo else ""))
+    forget_cards_seen(pwd.getpwnam(user).pw_dir)   # the card payments switch: said again by the bridge that starts
     where = ["BIPAGENTS_TO_REPO=" + repo] if repo in KNOWN_REPOS else []
     with open("/var/log/bipagents-update%d.log" % number, "a") as out:
         subprocess.run(["sudo", "-iu", user, "env", "XDG_RUNTIME_DIR=/run/user/%d" % uid,
@@ -649,9 +650,22 @@ OFFER_CARDS_SEEN = ".local/state/bipagents/offer-cards-seen.json"   # what its b
 
 def cards_seen(home):
     """What the place's bridge applies of Kerfy Studio's card payments switch: "off" (cut), "on", or None (a bridge
-    that doesn't read the switch yet: `bipguichet cards status` says so)."""
-    off = read_json(os.path.join(home, OFFER_CARDS_SEEN)).get("off")
-    return None if not isinstance(off, bool) else ("off" if off else "on")
+    that doesn't read the switch yet: `bipguichet cards status` says so). Only while the commit the bridge wrote is
+    the one the place runs (review 18/11 pass 2, G1): after a wave back to a bridge older than the switch, the file the
+    newer one left says nothing."""
+    seen = read_json(os.path.join(home, OFFER_CARDS_SEEN))
+    off, wrote, runs = seen.get("off"), seen.get("version"), version(home)
+    if not isinstance(off, bool) or not isinstance(wrote, str) or not wrote or not runs or wrote[:12] != runs[:12]:
+        return None
+    return "off" if off else "on"
+
+
+def forget_cards_seen(home):
+    """An update: what the place's bridge said it applies goes, until the bridge that starts says it again."""
+    try:
+        os.unlink(os.path.join(home, OFFER_CARDS_SEEN))
+    except OSError:
+        pass
 
 
 # -- memory and CPU: each place's soft share, compressed swap, and what each place holds -------------------------------

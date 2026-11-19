@@ -179,12 +179,38 @@ fn tell_seen(off: bool) {
     let written = (|| -> std::io::Result<()> {
         crate::py::makedirs(&path.parent().unwrap_or(&path).to_string_lossy(), 0o755)?;
         let tmp = path.with_extension("tmp");
-        crate::py::write_with_mode(&tmp.to_string_lossy(), crate::py::dumps(&json!({"off": off})).as_bytes(), 0o644)?;
+        // with the commit this place runs (review 18/11 pass 2, G1): the seat agent says nothing for a file another
+        // bridge wrote (a wave back to a bridge older than the switch)
+        let seen = json!({"off": off, "version": running_commit(&crate::place_backup::home())});
+        crate::py::write_with_mode(&tmp.to_string_lossy(), crate::py::dumps(&seen).as_bytes(), 0o644)?;
         std::fs::rename(&tmp, &path)
     })();
     if let Err(err) = written {
         tracing::warn!(error = %err, "card payments: what Kerfy Studio's switch does here not written");
     }
+}
+
+/// The BipAgents commit this place runs, 12 characters, as the seat agent reads it (seat-agent.py `version`): the
+/// checkout's HEAD, through its ref or packed-refs, without git.
+pub fn running_commit(home: &std::path::Path) -> Option<String> {
+    let git = home.join("BipAgents").join(".git");
+    let head = std::fs::read_to_string(git.join("HEAD")).ok()?;
+    let head = head.trim();
+    let full = match head.strip_prefix("ref: ") {
+        None => head.to_string(),
+        Some(name) => match std::fs::read_to_string(git.join(name)) {
+            Ok(text) => text.trim().to_string(),
+            Err(_) => std::fs::read_to_string(git.join("packed-refs"))
+                .ok()?
+                .lines()
+                .find(|l| l.trim_end().ends_with(&format!(" {name}")))?
+                .split_whitespace()
+                .next()?
+                .to_string(),
+        },
+    };
+    let short: String = full.chars().take(12).collect();
+    (!short.is_empty()).then_some(short)
 }
 
 /// Kerfy Studio's switch followed: once it goes off, the payments under way are stopped as « Suspendre tous les
@@ -1149,6 +1175,25 @@ mod tests {
         assert!(!remote_off_at(&path)); // removed: back to bridge.toml at once
         std::fs::create_dir(&path).unwrap();
         assert!(!remote_off_at(&path)); // unreadable: no override
+    }
+
+    #[test]
+    fn the_commit_this_place_runs_as_the_seat_agent_reads_it() {
+        let home = tempfile::tempdir().unwrap();
+        assert_eq!(running_commit(home.path()), None);
+        let git = home.path().join("BipAgents/.git");
+        std::fs::create_dir_all(git.join("refs/heads")).unwrap();
+        std::fs::write(git.join("HEAD"), "0123456789abcdef0123456789abcdef01234567\n").unwrap();
+        assert_eq!(running_commit(home.path()).as_deref(), Some("0123456789ab"));
+        std::fs::write(git.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+        std::fs::write(
+            git.join("packed-refs"),
+            "# pack-refs\nfedcba9876543210fedcba9876543210fedcba98 refs/heads/main\n",
+        )
+        .unwrap();
+        assert_eq!(running_commit(home.path()).as_deref(), Some("fedcba987654"));
+        std::fs::write(git.join("refs/heads/main"), "aaaabbbbccccdddd\n").unwrap();
+        assert_eq!(running_commit(home.path()).as_deref(), Some("aaaabbbbcccc"));
     }
 
     const RULES: PhoneRules = PhoneRules { cap_max_cents: 15_000 };
