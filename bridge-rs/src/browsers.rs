@@ -198,7 +198,8 @@ fn copy_tree(from: &Path, to: &Path) -> std::io::Result<()> {
 /// policy, the agent's sites for sending), its settings for bip-browser-mcp (its container started at its first use,
 /// its unit written then) and the session announced in the agent's `SESSIONS_FILE`. None: the agent has no browser.
 pub fn setup_task(config: &Config, agent: &str, job: &str, session: &str) -> anyhow::Result<Option<PathBuf>> {
-    if ports_of(config, agent).is_none() {
+    // only where bip-browser-mcp starts the browsers when used (`on_demand`): it is what routes a task's calls
+    if ports_of(config, agent).is_none() || !on_demand(config) {
         return Ok(None);
     }
     let parent = folder(config, agent);
