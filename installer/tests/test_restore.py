@@ -337,3 +337,39 @@ def test_a_restore_killed_halfway_is_undone_by_the_next_try(tmp_path, monkeypatc
     backup.restore(key, QuietRunner(), base=new, repo=tmp_path / "checkout", address="198.51.100.7")
     assert backup.settings(new)["token"] == "new-seat-token"
     assert (new / ".hermes" / "memories" / "MEMORY.md").read_text() == "Le chat s'appelle Pixel.\n"
+
+
+@pytest.mark.skipif(shutil.which("restic") is None, reason="no restic here")
+def test_a_failed_restore_puts_the_fresh_folders_back_as_private_as_they_were(tmp_path, monkeypatch):
+    """Review 1 of fix-restore-import (19/11): `keep_fresh` makes each kept folder with mkdir's default mode and
+    `back_to_fresh` copies that mode over the real one (`_copy`'s copystat): the door's certificate folder (0700,
+    bridge-rs/src/lan.rs) and the config folder come back 0755 after a failed restore."""
+    import stat
+    repo_dir, old, key = a_dead_place_backed_up(tmp_path, monkeypatch)
+    new = a_fresh_place(tmp_path, monkeypatch, repo_dir)
+    quiet_restore(monkeypatch)
+    folders = (new / ".config" / "bipagents", new / "data" / "lan")
+    for folder in folders:
+        os.chmod(folder, 0o700)
+    real_copy = backup._copy
+
+    def breaks_on_the_data(src, dst, *args, **kwargs):
+        if "tools" in Path(dst).parts:
+            raise OSError(28, "No space left on device", str(dst))
+        return real_copy(src, dst, *args, **kwargs)
+
+    monkeypatch.setattr(backup, "_copy", breaks_on_the_data)
+    with pytest.raises(OSError):
+        backup.restore(key, QuietRunner(), base=new, repo=tmp_path / "checkout", address="198.51.100.7")
+    assert [stat.S_IMODE(folder.stat().st_mode) for folder in folders] == [0o700, 0o700]
+
+
+def test_a_file_left_half_written_by_a_killed_restore_is_cleaned_and_never_backed_up(tmp_path, monkeypatch):
+    """Review 1 (F3): `_copy` writes beside the file then renames; killed in between, the partial file stays."""
+    from bipinstall import moving
+    home = make_home(tmp_path, "bip", 8643, 443, "198.51.100.7", 9600)
+    partial = home / ".hermes" / "memories" / ".bip-restoring-123-abcd1234"
+    partial.write_text("half")
+    inv = moving.read_inventory(home / ".config" / "bipagents" / "bridge.toml", home)
+    assert inv.skipped(partial) and backup._may_skip()(partial.name)
+    assert backup.clean_partials(inv) == 1 and not partial.exists()
