@@ -239,6 +239,46 @@
       this.button.click();
       return true;
     },
+    // The frame's visible text, for the bridge to read the payment's total in it (card_pay.rs, page_total.rs): text
+    // nodes only, never a field's value (no input, select, option or textarea is read), nothing hidden; one line per
+    // block, the pieces of one line joined by a space (« 27,97 » and « € » in two spans, a split « 27,<sup>97</sup> »
+    // glued back). 60 000 characters at most.
+    pageText() {
+      const SKIP = "script, style, noscript, template, input, select, option, textarea, datalist";
+      const blockOf = (el) => {
+        for (let at = el; at && at !== document.body; at = at.parentElement) {
+          const display = getComputedStyle(at).display;
+          if (!display.startsWith("inline") && display !== "contents") return at;
+        }
+        return document.body;
+      };
+      const lines = [];
+      let size = 0, block = null;
+      const walk = (root) => {
+        const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT);
+        for (let node = walker.nextNode(); node && size < 60000; node = walker.nextNode()) {
+          if (node.nodeType === 1) {
+            if (node.shadowRoot) walk(node.shadowRoot);
+            continue;
+          }
+          const at = node.parentElement, text = (node.nodeValue || "").replace(/\s+/g, " ").trim();
+          if (!text || !at || at.closest(SKIP)) continue;
+          if (at.checkVisibility && !at.checkVisibility({opacityProperty: true, visibilityProperty: true})) continue;
+          const here = blockOf(at), last = lines.length ? lines[lines.length - 1] : null;
+          if (last !== null && here === block) {
+            const glue = (/\d$/.test(last) && (/^[.,]\d*$/.test(text) || (at.closest("sup") && /^\d{2}\b/.test(text))))
+              || (/\d[.,]$/.test(last) && /^\d/.test(text));
+            lines[lines.length - 1] = last + (glue ? (at.closest("sup") && !/[.,]$/.test(last) && /^\d/.test(text) ? "," : "") : " ") + text;
+          } else {
+            lines.push(text);
+          }
+          block = here;
+          size += text.length + 1;
+        }
+      };
+      if (document.body) walk(document.body);
+      return lines.join("\n").slice(0, 60000);
+    },
     // The bank asks the person (3-D Secure, « confirm in your banking app »).
     bankAsks() {
       const text = (document.body && document.body.innerText || "").slice(0, 20000);

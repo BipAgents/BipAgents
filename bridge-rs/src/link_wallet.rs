@@ -500,9 +500,10 @@ pub fn tools() -> Vec<Value> {
         }),
         json!({
             "name": CANCEL,
-            "description": "Give up the payment in progress: the card is erased from the page and your browser is \
-        yours again.",
-            "inputSchema": {"type": "object", "properties": {}},
+            "description": crate::card_pay::CANCEL_TEXT,
+            "inputSchema": {"type": "object", "properties": {
+                "reason": {"type": "string", "description": crate::card_pay::CANCEL_REASON},
+            }},
             "annotations": {"readOnlyHint": false, "destructiveHint": false, "openWorldHint": false},
         }),
     ]
@@ -803,7 +804,7 @@ pub async fn call(
     match name {
         PAY => pay(state, agent, arguments, asker).await,
         CONFIRM => crate::card_pay::confirm_held(state, agent, arguments).await,
-        CANCEL => Ok(crate::card_pay::cancel_held(state, agent).await),
+        CANCEL => Ok(crate::card_pay::cancel_held(state, agent, arguments).await),
         other => Ok(refusal(&format!("unknown tool: {other}"))),
     }
 }

@@ -98,9 +98,42 @@ def test_2_2_the_pay_button_for_another_total_is_never_pressed_chromium(bridges,
         turn_on(bridge)
         bridge.post("/v1/vault", headers=AUTH, json={**CARD, "sites": ["127.0.0.1"]})
         result, asked = pay(bridge, ARGS)
-        assert result["isError"] is False and " 12.50 EUR on 127.0.0.1" in asked, (result, asked)
+        assert " 12.50 EUR on 127.0.0.1" in asked, (result, asked)
+        # since fix-pay-total-check (19/11) the page's « Total de la commande : 1 250,00 € » is read once the card is
+        # typed: the bridge cancels by itself, before any pay button is looked for
+        said = result["content"][0]["text"]
+        assert result["isError"] is True and "BipAgents cancelled the payment itself" in said, said
         confirmed = tool(bridge, "confirm_payment", {"button": "Payer 12,50 €"})["content"][0]["text"]
         assert "moved on" not in confirmed and [u.split("/")[-1] for u in browser.pages()] == ["pay.html"], (
+            f"approved 12.50 EUR, the page's own « Payer 1 250,00 € » was pressed: {confirmed}; pages {browser.pages()}")
+    finally:
+        browser.stop()
+        shop.shutdown()
+
+
+def test_2_2_the_pay_button_alone_for_another_total_is_never_pressed_chromium(bridges, fakes, tmp_path):
+    # no total written outside the button (an unlabelled amount: not read for sure by the page's check): the pay
+    # button's own check still stops it
+    from test_card_payments_chrome import CHROME, Browser
+    import pytest
+    if CHROME is None:
+        pytest.skip("no Chromium")
+    (tmp_path / "pay.html").write_text(PAGE.replace('<p id="total">Total de la commande : 1 250,00 €</p>', ""),
+                                       encoding="utf-8")
+    (tmp_path / "done.html").write_text("<!doctype html><title>Merci</title><p>Commande payée", encoding="utf-8")
+    handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=str(tmp_path))
+    handler.log_message = lambda *a: None
+    shop = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    threading.Thread(target=shop.serve_forever, daemon=True).start()
+    browser = Browser(f"http://127.0.0.1:{shop.server_port}/pay.html")
+    try:
+        bridge = pay_bridge(bridges, fakes, browser)
+        turn_on(bridge)
+        bridge.post("/v1/vault", headers=AUTH, json={**CARD, "sites": ["127.0.0.1"]})
+        result, asked = pay(bridge, ARGS)
+        assert result["isError"] is False and "could not read the total" in result["content"][0]["text"], result
+        confirmed = tool(bridge, "confirm_payment", {"button": "Payer 12,50 €"})["content"][0]["text"]
+        assert "was not pressed" in confirmed and [u.split("/")[-1] for u in browser.pages()] == ["pay.html"], (
             f"approved 12.50 EUR, the page's own « Payer 1 250,00 € » was pressed: {confirmed}; pages {browser.pages()}")
     finally:
         browser.stop()

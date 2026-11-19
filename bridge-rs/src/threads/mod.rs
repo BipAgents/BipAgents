@@ -707,6 +707,7 @@ impl Threads {
         with_services(&self.config.get(), &agent.name, &mut items);
         crate::steps::fold(&mut items, &crate::handback::language_of(&self.config.get(), agent));
         self.with_vault_lines(agent, &mut items);
+        with_pay_lines(&self.config.get(), agent, &mut items);
         with_carnet_lines(&self.config.get(), agent, &mut items);
         if thread.kind != "main" {
             // a run without the person that had nothing to tell (« [SILENT] », or the code word translated): no reply
@@ -1496,6 +1497,21 @@ async fn item_route(
 /// · Noté dans Léa » (notebook/reads.rs `lines`, contract.md §4), then its `carnet_card` items (an « Oublie ça »
 /// to confirm, the question of the day: notebook/forget.rs `cards`); a follow-up's card at the head of its turn
 /// (notebook/followups.rs). Only for a timeline with a Carnet tool call or a Carnet card in it.
+/// The bridge's own lines on a card payment it gave up (pay_line.rs: « Paiement annulé : la page demandait … »), as
+/// notices in their turns. Read only when a turn called a payment tool.
+fn with_pay_lines(config: &crate::config::Config, agent: &AgentConfig, items: &mut Vec<Item>) {
+    let paid = |i: &Item| {
+        i.kind() == "tool"
+            && i.body.get("tool").and_then(|t| t.get("name")).and_then(Value::as_str).is_some_and(|n| {
+                crate::pay_line::is_pay_tool(n) || n == "tool_call"
+            })
+    };
+    if !items.iter().any(paid) {
+        return;
+    }
+    crate::pay_line::with_pay_lines(items, &crate::pay_line::recorded_for(config, &agent.name));
+}
+
 fn with_carnet_lines(config: &crate::config::Config, agent: &AgentConfig, items: &mut Vec<Item>) {
     let carnet = |i: &Item| {
         i.kind() == "tool"
