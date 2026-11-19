@@ -690,41 +690,71 @@
         },
         {
           "say": {
-            "fr": "Voilà ton plan sur 6 semaines 🏃\n\n| Semaine | Mardi | Jeudi | Dimanche |\n|---|---|---|---|\n| 1 | 5 km tranquille | 4 × 1 km | 6 km |\n| 2 | 5 km | 5 × 1 km | 7 km |\n| 3 | 6 km | 30 min tempo | 8 km |\n| 4 | 5 km (récup) | 4 × 1 km | 6 km |\n| 5 | 6 km | 35 min tempo | 9 km |\n| 6 | 5 km | 3 km léger | **10 km 🎉** |\n\nTu préfères courir à quel moment ?\n\n1. Le matin avant le travail\n2. Le midi\n3. Le soir après le travail",
-            "en": "Here’s your 6-week plan 🏃\n\n| Week | Tue | Thu | Sun |\n|---|---|---|---|\n| 1 | Easy 5 km | 4 × 1 km | 6 km |\n| 2 | 5 km | 5 × 1 km | 7 km |\n| 3 | 6 km | 30 min tempo | 8 km |\n| 4 | 5 km (recovery) | 4 × 1 km | 6 km |\n| 5 | 6 km | 35 min tempo | 9 km |\n| 6 | 5 km | Light 3 km | **10 km 🎉** |\n\nWhen do you prefer to run?\n\n1. In the morning before work\n2. At lunchtime\n3. In the evening after work",
-            "de": "Hier ist dein 6-Wochen-Plan 🏃\n\n| Woche | Di | Do | So |\n|---|---|---|---|\n| 1 | 5 km locker | 4 × 1 km | 6 km |\n| 2 | 5 km | 5 × 1 km | 7 km |\n| 3 | 6 km | 30 Min. Tempo | 8 km |\n| 4 | 5 km (Erholung) | 4 × 1 km | 6 km |\n| 5 | 6 km | 35 Min. Tempo | 9 km |\n| 6 | 5 km | 3 km locker | **10 km 🎉** |\n\nWann läufst du am liebsten?\n\n1. Morgens vor der Arbeit\n2. In der Mittagspause\n3. Abends nach der Arbeit",
-            "es": "Este es tu plan de 6 semanas 🏃\n\n| Semana | Mar | Jue | Dom |\n|---|---|---|---|\n| 1 | 5 km suave | 4 × 1 km | 6 km |\n| 2 | 5 km | 5 × 1 km | 7 km |\n| 3 | 6 km | 30 min a ritmo | 8 km |\n| 4 | 5 km (recuperación) | 4 × 1 km | 6 km |\n| 5 | 6 km | 35 min a ritmo | 9 km |\n| 6 | 5 km | 3 km suave | **10 km 🎉** |\n\n¿Cuándo prefieres correr?\n\n1. Por la mañana antes del trabajo\n2. A mediodía\n3. Por la tarde después del trabajo"
-          }
-        }
-      ],
-      "followup": [
-        {
-          "tool": "cronjob",
-          "seconds": 1.0,
-          "preview": {
-            "fr": "3 rappels par semaine · {answer}",
-            "en": "3 reminders a week · {answer}",
-            "de": "3 Erinnerungen pro Woche · {answer}",
-            "es": "3 recordatorios por semana · {answer}"
+            "fr": "Voilà ton plan sur 6 semaines 🏃\n\n| Semaine | Mardi | Jeudi | Dimanche |\n|---|---|---|---|\n| 1 | 5 km tranquille | 4 × 1 km | 6 km |\n| 2 | 5 km | 5 × 1 km | 7 km |\n| 3 | 6 km | 30 min tempo | 8 km |\n| 4 | 5 km (récup) | 4 × 1 km | 6 km |\n| 5 | 6 km | 35 min tempo | 9 km |\n| 6 | 5 km | 3 km léger | **10 km 🎉** |",
+            "en": "Here’s your 6-week plan 🏃\n\n| Week | Tue | Thu | Sun |\n|---|---|---|---|\n| 1 | Easy 5 km | 4 × 1 km | 6 km |\n| 2 | 5 km | 5 × 1 km | 7 km |\n| 3 | 6 km | 30 min tempo | 8 km |\n| 4 | 5 km (recovery) | 4 × 1 km | 6 km |\n| 5 | 6 km | 35 min tempo | 9 km |\n| 6 | 5 km | Light 3 km | **10 km 🎉** |",
+            "de": "Hier ist dein 6-Wochen-Plan 🏃\n\n| Woche | Di | Do | So |\n|---|---|---|---|\n| 1 | 5 km locker | 4 × 1 km | 6 km |\n| 2 | 5 km | 5 × 1 km | 7 km |\n| 3 | 6 km | 30 Min. Tempo | 8 km |\n| 4 | 5 km (Erholung) | 4 × 1 km | 6 km |\n| 5 | 6 km | 35 Min. Tempo | 9 km |\n| 6 | 5 km | 3 km locker | **10 km 🎉** |",
+            "es": "Este es tu plan de 6 semanas 🏃\n\n| Semana | Mar | Jue | Dom |\n|---|---|---|---|\n| 1 | 5 km suave | 4 × 1 km | 6 km |\n| 2 | 5 km | 5 × 1 km | 7 km |\n| 3 | 6 km | 30 min a ritmo | 8 km |\n| 4 | 5 km (recuperación) | 4 × 1 km | 6 km |\n| 5 | 6 km | 35 min a ritmo | 9 km |\n| 6 | 5 km | 3 km suave | **10 km 🎉** |"
           }
         },
         {
-          "tool": "calendar",
-          "seconds": 0.8,
-          "preview": {
-            "fr": "18 séances ajoutées",
-            "en": "18 sessions added",
-            "de": "18 Einheiten eingetragen",
-            "es": "18 sesiones añadidas"
-          }
-        },
-        {
-          "say": {
-            "fr": "C’est calé : **18 séances** dans ton agenda, et je te préviens la veille avec la météo. Si une nuit est trop courte, j’allège la séance du lendemain 💪",
-            "en": "All set: **18 sessions** in your calendar, and I’ll remind you the day before with the weather. If a night is too short, I’ll lighten the next day’s session 💪",
-            "de": "Steht: **18 Einheiten** in deinem Kalender, und ich erinnere dich am Vortag mit dem Wetter. War eine Nacht zu kurz, mache ich die nächste Einheit leichter 💪",
-            "es": "Listo: **18 sesiones** en tu agenda y te aviso el día antes con el tiempo. Si una noche duermes poco, aligero la sesión del día siguiente 💪"
-          }
+          "ask": {
+            "question": {
+              "fr": "Tu préfères courir à quel moment ?",
+              "en": "When do you prefer to run?",
+              "de": "Wann läufst du am liebsten?",
+              "es": "¿Cuándo prefieres correr?"
+            },
+            "choices": [
+              {
+                "fr": "Le matin avant le travail",
+                "en": "In the morning before work",
+                "de": "Morgens vor der Arbeit",
+                "es": "Por la mañana antes del trabajo"
+              },
+              {
+                "fr": "Le midi",
+                "en": "At lunchtime",
+                "de": "In der Mittagspause",
+                "es": "A mediodía"
+              },
+              {
+                "fr": "Le soir après le travail",
+                "en": "In the evening after work",
+                "de": "Abends nach der Arbeit",
+                "es": "Por la tarde después del trabajo"
+              }
+            ]
+          },
+          "then": [
+            {
+              "tool": "cronjob",
+              "seconds": 1.0,
+              "preview": {
+                "fr": "3 rappels par semaine · {answer}",
+                "en": "3 reminders a week · {answer}",
+                "de": "3 Erinnerungen pro Woche · {answer}",
+                "es": "3 recordatorios por semana · {answer}"
+              }
+            },
+            {
+              "tool": "calendar",
+              "seconds": 0.8,
+              "preview": {
+                "fr": "18 séances ajoutées",
+                "en": "18 sessions added",
+                "de": "18 Einheiten eingetragen",
+                "es": "18 sesiones añadidas"
+              }
+            },
+            {
+              "say": {
+                "fr": "C’est calé : **18 séances** dans ton agenda, et je te préviens la veille avec la météo. Si une nuit est trop courte, j’allège la séance du lendemain 💪",
+                "en": "All set: **18 sessions** in your calendar, and I’ll remind you the day before with the weather. If a night is too short, I’ll lighten the next day’s session 💪",
+                "de": "Steht: **18 Einheiten** in deinem Kalender, und ich erinnere dich am Vortag mit dem Wetter. War eine Nacht zu kurz, mache ich die nächste Einheit leichter 💪",
+                "es": "Listo: **18 sesiones** en tu agenda y te aviso el día antes con el tiempo. Si una noche duermes poco, aligero la sesión del día siguiente 💪"
+              }
+            }
+          ]
         }
       ],
       "spoken": {
