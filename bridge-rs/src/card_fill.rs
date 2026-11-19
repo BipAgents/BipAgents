@@ -516,6 +516,29 @@ impl Cdp {
     }
 }
 
+/// The frame owners (`IFRAME`, `FRAME`) of a DevTools node tree, shadow roots included: (the frame's id, the owner's
+/// backend node id).
+fn frame_owners(node: &Value, out: &mut Vec<(String, i64)>) {
+    let name = node.get("nodeName").and_then(Value::as_str).unwrap_or("");
+    if matches!(name, "IFRAME" | "FRAME") {
+        if let (Some(frame), Some(id)) =
+            (node.get("frameId").and_then(Value::as_str), node.get("backendNodeId").and_then(Value::as_i64))
+        {
+            out.push((frame.to_string(), id));
+        }
+    }
+    for key in ["children", "shadowRoots"] {
+        for child in node.get(key).and_then(Value::as_array).into_iter().flatten() {
+            frame_owners(child, out);
+        }
+    }
+    for key in ["contentDocument", "root"] {
+        if let Some(inner) = node.get(key) {
+            frame_owners(inner, out);
+        }
+    }
+}
+
 /// The text nodes of the closed shadow roots in a DevTools node tree (`DOM.getDocument` with `pierce`), scripts and
 /// styles left out, card-like digit runs dropped (page_total.rs drops them again).
 fn closed_texts(node: &Value, inside: bool, out: &mut Vec<String>) {
@@ -1269,18 +1292,14 @@ impl Page {
         let seen = self.frames().await?;
         let mut texts = Vec::new();
         let mut done: Vec<String> = Vec::new();
-        // each read frame: its id and how many visible frames of real size its document holds (`pageText`)
-        let mut big: Vec<(String, u64)> = Vec::new();
-        let mut sessions: Vec<(String, bool)> = Vec::new();
+        // Every frame is read (Relecture 5, e4): the page's own and the providers' as such; any other site's (a
+        // captcha, a wallet button, a trust badge, a summary in a frame) as text that is not shown: a total in it above
+        // the approved amount blocks « approved », it never supports it.
         for FrameSeen { session, id, url, .. } in seen.clone() {
             if done.contains(&id) {
                 continue;
             }
-            // a frame not read (not the page's own site nor a provider's, or not readable) is never left out silently:
-            // its parent counts it (`frames`), and a visible one of real size makes the page not read for sure
-            if id != main && !(rule.allows(&url) && ancestors_of(&id, &seen).iter().all(|a| rule.allows(a))) {
-                continue;
-            }
+            let allowed = id == main || (rule.allows(&url) && ancestors_of(&id, &seen).iter().all(|a| rule.allows(a)));
             let world = json!({"frameId": id, "worldName": WORLD, "grantUniveralAccess": false});
             let Ok(created) = self.cdp.call("Page.createIsolatedWorld", world, Some(&session)).await else { continue };
             let Some(context) = created.get("executionContextId").and_then(Value::as_i64) else { continue };
@@ -1291,44 +1310,61 @@ impl Page {
                 continue;
             };
             let host = origin_of(&url).map(|(_, h)| h).unwrap_or_default();
-            let provider = provider_frame(&host).is_some()
-                || provider_page(&host).is_some()
-                || rule.test.iter().any(|t| at_or_below(&host, t));
-            done.push(id.clone());
-            big.push((id, read.get("frames").and_then(Value::as_u64).unwrap_or(0)));
-            if !sessions.iter().any(|(s, _)| *s == session) {
-                sessions.push((session.clone(), provider));
-            }
+            let provider = allowed
+                && (provider_frame(&host).is_some()
+                    || provider_page(&host).is_some()
+                    || rule.test.iter().any(|t| at_or_below(&host, t)));
+            done.push(id);
             let truncated = read.get("truncated").and_then(Value::as_bool).unwrap_or(true);
-            texts.push(crate::page_total::PageText { shown: shown.to_string(), all: all.to_string(), provider, truncated });
+            let shown = if allowed { shown.to_string() } else { String::new() };
+            texts.push(crate::page_total::PageText { shown, all: all.to_string(), provider, truncated, closed: false });
         }
-        // every visible frame of real size read (Relecture 4, d2): else the page's total is not read for sure
-        let missing = big.iter().any(|(id, count)| {
-            let read = seen.iter().filter(|f| f.parent.as_deref() == Some(id.as_str()) && done.contains(&f.id)).count();
-            (read as u64) < *count
-        });
-        if missing {
-            tracing::info!(frames = texts.len(), "card payment: a visible frame of the page not read, its total not read for sure");
-            for text in &mut texts {
-                text.truncated = true;
+        // Each frame process's DevTools tree (`pierce`: shadow roots included, closed ones too): every visible frame
+        // of real size (≥ 120×40 px), wherever it sits, must be among the frames read, matched by its id (Relecture 5,
+        // e1, e2: never by a count); and the text of closed shadow roots, where any amount above the approved one
+        // blocks « approved » (e3).
+        let mut sessions: Vec<String> = Vec::new();
+        for frame in &seen {
+            if !sessions.contains(&frame.session) {
+                sessions.push(frame.session.clone());
             }
         }
-        // closed shadow roots (a web component's own text, out of the page script's reach, Relecture 3 c1 / 4 d3):
-        // their text read through DevTools, as laid out but not shown (it can block « approved », never support it)
-        for (session, provider) in sessions {
+        let mut sure = true;
+        for session in sessions {
             let Ok(doc) = self.cdp.call("DOM.getDocument", json!({"depth": -1, "pierce": true}), Some(&session)).await
             else {
-                for text in &mut texts {
-                    text.truncated = true;
-                }
+                sure = false;
                 continue;
             };
+            let mut owners = Vec::new();
+            frame_owners(&doc, &mut owners);
+            for (frame, node) in owners {
+                if done.contains(&frame) {
+                    continue;
+                }
+                let model = self.cdp.call("DOM.getBoxModel", json!({"backendNodeId": node}), Some(&session)).await;
+                let size = model.ok().and_then(|m| {
+                    let model = m.get("model")?;
+                    Some((model.get("width")?.as_f64()?, model.get("height")?.as_f64()?))
+                });
+                // no box: not laid out (display: none); a box of real size not read: not sure
+                if size.is_some_and(|(w, h)| w >= 120.0 && h >= 40.0) {
+                    tracing::info!(width = ?size.map(|s| s.0), height = ?size.map(|s| s.1),
+                                   "card payment: a visible frame of the page not read, its total not read for sure");
+                    sure = false;
+                }
+            }
             let mut closed = Vec::new();
             closed_texts(&doc, false, &mut closed);
             if !closed.is_empty() {
                 tracing::info!(pieces = closed.len(), "card payment: text of a closed shadow root read");
                 let all = closed.join("\n");
-                texts.push(crate::page_total::PageText { shown: String::new(), all, provider, truncated: false });
+                texts.push(crate::page_total::PageText { all, closed: true, ..Default::default() });
+            }
+        }
+        if !sure {
+            for text in &mut texts {
+                text.truncated = true;
             }
         }
         Ok(texts)

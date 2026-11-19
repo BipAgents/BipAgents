@@ -49,12 +49,15 @@ pub struct PageText {
     pub provider: bool,
     /// The frame's text was longer than what is read (`pageText`'s cap): never « approved » (Relecture 2, 3).
     pub truncated: bool,
+    /// The text of closed shadow roots (read through DevTools, apart from its labels): any amount above the approved one
+    /// in it blocks « approved » (Relecture 5, e3).
+    pub closed: bool,
 }
 
 impl PageText {
     /// A text read as wholly visible, of the shop's page.
     pub fn plain(text: &str) -> PageText {
-        PageText { shown: text.to_string(), all: text.to_string(), provider: false, truncated: false }
+        PageText { shown: text.to_string(), all: text.to_string(), provider: false, truncated: false, closed: false }
     }
 }
 
@@ -337,6 +340,8 @@ pub fn page_total(texts: &[String], cents: i64, currency: &str) -> PageTotal {
 struct Read {
     amount: Amount,
     provider: bool,
+    /// Read in a closed shadow root (`PageText::closed`).
+    closed: bool,
     /// The frame's place in the texts (for the log).
     frame: usize,
 }
@@ -348,7 +353,7 @@ fn read_all(texts: &[PageText], shown: bool) -> Vec<Read> {
         .flat_map(|(frame, t)| {
             amounts(if shown { &t.shown } else { &t.all })
                 .into_iter()
-                .map(move |amount| Read { amount, provider: t.provider, frame })
+                .map(move |amount| Read { amount, provider: t.provider, closed: t.closed, frame })
         })
         .collect()
 }
@@ -409,7 +414,8 @@ pub fn page_total_of(texts: &[PageText], cents: i64, currency: &str) -> PageTota
     // an amount above it: visible (not a mention), or hidden but labelled as a total, or anywhere in the provider's own
     // frame or page (never relaxed there); hidden product prices (a menu, a drawer) are no doubt (Relecture 3, c5)
     let blocks = |r: &&&Read| {
-        r.amount.cents > cents && r.amount.class != Class::Mention && (r.amount.class >= Class::Total || r.provider)
+        r.amount.cents > cents
+            && (r.closed || (r.amount.class != Class::Mention && (r.amount.class >= Class::Total || r.provider)))
     };
     let visible_higher = shown_ours.iter().filter(|r| r.amount.cents > cents && r.amount.class != Class::Mention);
     if let Some(higher) = visible_higher.chain(all_ours.iter().filter(blocks)).map(|r| r.amount.cents).max() {
@@ -504,7 +510,7 @@ mod correction_1 {
     use super::*;
 
     fn text(shown: &str, all: &str, provider: bool) -> PageText {
-        PageText { shown: shown.into(), all: all.into(), provider, truncated: false }
+        PageText { shown: shown.into(), all: all.into(), provider, truncated: false, closed: false }
     }
 
     #[test]
@@ -568,6 +574,22 @@ mod correction_1 {
         let before = page_total(&["Total à payer:\nEUR 27.97".to_string()], 2797, "EUR");
         let now = page_total(&["Frais carte : EUR 1.50\nTotal à payer:\nEUR 29.47".to_string()], 2797, "EUR");
         assert_eq!(recheck(&before, &now), Recheck::Changed);
+    }
+
+    #[test]
+    fn correction_5_an_amount_above_the_approved_one_in_a_closed_root_blocks_whatever_its_label() {
+        let shop = PageText::plain("Montant de votre panier : 27,97 €\nTotal à payer");
+        let closed = PageText { all: "32,87 €".into(), closed: true, ..Default::default() };
+        assert_eq!(page_total_of(&[shop.clone(), closed], 2797, "EUR"), PageTotal::Doubt(Doubt::Higher(3287)));
+        // a closed widget without amounts, or with a lower one: nothing blocked
+        let help = PageText { all: "Besoin d'aide ?\n4,90 €".into(), closed: true, ..Default::default() };
+        let page = PageText::plain("Total à payer: EUR 27.97");
+        assert_eq!(page_total_of(&[page, help], 2797, "EUR"), PageTotal::Approved);
+        // another site's frame (read as not shown): its unlabelled amounts are ignored, a labelled higher total blocks
+        let frame = |text: &str| PageText { all: text.into(), ..Default::default() };
+        let page = PageText::plain("Total à payer: EUR 27.97");
+        assert_eq!(page_total_of(&[page.clone(), frame("protected by reCAPTCHA\nPayPal 49,90 €")], 2797, "EUR"), PageTotal::Approved);
+        assert_eq!(page_total_of(&[page, frame("Total à payer 32,87 €")], 2797, "EUR"), PageTotal::Doubt(Doubt::Higher(3287)));
     }
 
     #[test]
@@ -709,7 +731,7 @@ mod review_2 {
     use super::*;
 
     fn text(shown: &str, provider: bool) -> PageText {
-        PageText { shown: shown.into(), all: shown.into(), provider, truncated: false }
+        PageText { shown: shown.into(), all: shown.into(), provider, truncated: false, closed: false }
     }
 
     #[test]
