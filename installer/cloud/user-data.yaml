@@ -174,8 +174,11 @@ write_files:
           exit 0
       fi
 
+      # Debian 13's systemd (257) ships the crypttab generator (systemd-cryptsetup@.service, for the swap below) in a package
+      # of its own; Ubuntu 24.04's has it built in and no such package (lab 2026-11-19: "Unit ... not found" without it).
       if command -v apt-get >/dev/null 2>&1; then
-          DEBIAN_FRONTEND=noninteractive apt-get install -y gocryptfs fuse3 cryptsetup-bin >/dev/null
+          DEBIAN_FRONTEND=noninteractive apt-get install -y gocryptfs fuse3 cryptsetup-bin \
+              $(apt-cache show systemd-cryptsetup >/dev/null 2>&1 && echo systemd-cryptsetup) >/dev/null
       elif command -v dnf >/dev/null 2>&1; then
           dnf install -y gocryptfs fuse3 cryptsetup >/dev/null
       fi
