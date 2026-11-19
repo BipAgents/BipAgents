@@ -43,7 +43,9 @@ def test_status_tells_server_from_model(bridges, fakes):
     assert status["agents"]["vie"] == {"ok": False, "error": "HermesHTTPError"}
     assert status["agents"]["panne"] == {"ok": False, "error": "ConnectError"}
     assert status["model"] == {"ok": False, "error": "ConnectError"}
-    assert status["protected"] is False and list(status) == ["agents", "model", "protected"]
+    # `jobs`: the home's sub-tasks (jobs.rs home_jobs, 19/11), none here
+    assert status["protected"] is False and list(status) == ["agents", "model", "protected", "jobs"]
+    assert status["jobs"] == []
     # one agent: only its Hermes is asked
     asked = len(fakes.hermes.seen("/p/vie/v1/capabilities"))
     one = bridge.get("/v1/status", headers=AUTH, params={"agent": "Panne"}).json()
