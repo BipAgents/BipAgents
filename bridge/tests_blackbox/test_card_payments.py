@@ -279,6 +279,7 @@ class FakeChrome:
 
 
 def pay_bridge(bridges, fakes, chrome=None, change=None, place=None, prepare=None):
+    LAST_ASKED.clear()   # a new test: confirm_payment's default `total` is ARGS' until it pays (`tool`)
     bridge = bridges.new(place or "bridge")
     if prepare:   # before it starts (its fake commands' rules)
         prepare(bridge)
@@ -307,8 +308,17 @@ def turn_on(bridge):
     return on.json()
 
 
+# The amount of the last pay_with_card asked (`pay`): what an agent reading the page right gives confirm_payment's
+# `total` when a test doesn't say (fix-pay-total-check, Correction 2: `total` is required, the bridge compares it).
+LAST_ASKED = {}
+
+
 def tool(bridge, name, arguments=None):
-    body = {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": name, "arguments": arguments or {}}}
+    arguments = dict(arguments or {})
+    if name == "confirm_payment" and "total" not in arguments:
+        asked = LAST_ASKED or {"amount": "12,50", "currency": "eur"}
+        arguments["total"] = f"{asked['amount']} {asked['currency']}"
+    body = {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": name, "arguments": arguments}}
     resp = bridge.post(PAY, json=body, headers={"Authorization": f"Bearer {TOKEN}"}, timeout=60)
     return resp.json()["result"]
 
@@ -318,6 +328,7 @@ def pay(bridge, arguments, hermes="accept", app=CODE):
     code first (`app`: the code, "deny", or None). Returns (result, the question's message or None)."""
     body = {"jsonrpc": "2.0", "id": 7, "method": "tools/call", "params": {"name": "pay_with_card", "arguments": arguments}}
     headers = {"Authorization": f"Bearer {TOKEN}", "Accept": "application/json, text/event-stream"}
+    LAST_ASKED.update(amount=arguments.get("amount", ""), currency=arguments.get("currency", ""))
     asked = None
     with httpx.Client(timeout=90) as client, client.stream("POST", bridge.url + PAY, json=body, headers=headers) as resp:
         for line in resp.iter_lines():

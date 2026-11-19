@@ -246,9 +246,11 @@
     // visible (in the page's box, not clipped nor hidden by an ancestor, not transparent, not tiny, not aria-hidden),
     // and `all`, everything laid out (off-screen text included): visible text alone may say the total is the approved
     // one, any laid-out amount above it is a doubt. A digit run of 12 or more (a card number the page shows back) is
-    // never returned. 60 000 characters each at most.
+    // never returned. 200 000 characters each at most; past them, `truncated` (never « approved »). Text drawn by CSS
+    // (::before, ::after) and open shadow roots are read; closed shadow roots, images and canvases are not.
     pageText() {
       const SKIP = "script, style, noscript, template, input, select, option, textarea, datalist";
+      const LIMIT = 200000;
       const blockOf = (el) => {
         for (let at = el; at && at !== document.body; at = at.parentElement) {
           const display = getComputedStyle(at).display;
@@ -296,10 +298,30 @@
         into.size += text.length + 1;
       };
       const all = builder(), shown = builder();
+      let truncated = false;
+      // text drawn by CSS (`::before` / `::after { content: "32,87 €" }`, Relecture 2, 6): read with its element
+      const generated = (el) => {
+        for (const pseudo of ["::before", "::after"]) {
+          const content = getComputedStyle(el, pseudo).content;
+          const quoted = content && /^["'].*["']$/.test(content) ? content.slice(1, -1).replace(/\\a/g, " ") : "";
+          const text = quoted.replace(/\s+/g, " ").trim();
+          if (!text || el.closest(SKIP)) continue;
+          const rects = [...el.getClientRects()];
+          if (!rects.length) continue;
+          const here = blockOf(el);
+          add(all, here, el, text);
+          if (visible(el, el, rects)) add(shown, here, el, text);
+        }
+      };
       const walk = (root) => {
         const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT);
-        for (let node = walker.nextNode(); node && all.size < 60000; node = walker.nextNode()) {
+        for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+          if (all.size >= LIMIT) {
+            truncated = true; // never « approved » on a page not read to its end
+            break;
+          }
           if (node.nodeType === 1) {
+            generated(node);
             if (node.shadowRoot) walk(node.shadowRoot);
             continue;
           }
@@ -311,12 +333,12 @@
           if (!rects.length) continue; // not laid out (display: none)
           const here = blockOf(at);
           add(all, here, at, text);
-          if (shown.size < 60000 && visible(node, at, rects)) add(shown, here, at, text);
+          if (visible(node, at, rects)) add(shown, here, at, text);
         }
       };
       if (document.body) walk(document.body);
-      const out = (b) => b.lines.join("\n").replace(/\d(?:[ -]?\d){11,18}/g, " ").slice(0, 60000);
-      return {shown: out(shown), all: out(all)};
+      const out = (b) => b.lines.join("\n").replace(/\d(?:[ -]?\d){11,18}/g, " ").slice(0, LIMIT);
+      return {shown: out(shown), all: out(all), truncated};
     },
     // The bank asks the person (3-D Secure, « confirm in your banking app »).
     bankAsks() {

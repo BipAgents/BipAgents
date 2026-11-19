@@ -1263,7 +1263,8 @@ impl Page {
                 || provider_page(&host).is_some()
                 || rule.test.iter().any(|t| at_or_below(&host, t));
             done.push(id);
-            texts.push(crate::page_total::PageText { shown: shown.to_string(), all: all.to_string(), provider });
+            let truncated = read.get("truncated").and_then(Value::as_bool).unwrap_or(true);
+            texts.push(crate::page_total::PageText { shown: shown.to_string(), all: all.to_string(), provider, truncated });
         }
         Ok(texts)
     }

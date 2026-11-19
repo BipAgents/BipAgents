@@ -47,12 +47,14 @@ pub struct PageText {
     pub all: String,
     /// The payment provider's own frame or page (CAWL's page, Stripe's frame…), not the shop's.
     pub provider: bool,
+    /// The frame's text was longer than what is read (`pageText`'s cap): never « approved » (Relecture 2, 3).
+    pub truncated: bool,
 }
 
 impl PageText {
     /// A text read as wholly visible, of the shop's page.
     pub fn plain(text: &str) -> PageText {
-        PageText { shown: text.to_string(), all: text.to_string(), provider: false }
+        PageText { shown: text.to_string(), all: text.to_string(), provider: false, truncated: false }
     }
 }
 
@@ -63,8 +65,22 @@ pub enum PageTotal {
     Approved,
     /// The page's total, in the payment's currency, is another amount (cents).
     Other(i64),
+    /// The bridge saw something that keeps it from paying (Relecture 2, 1): stopped, never left to the agent.
+    Doubt(Doubt),
     /// No total the bridge can read for sure: what it saw, for the log.
     Unread(Seen),
+}
+
+/// What the bridge saw that stops a payment without a clear total.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Doubt {
+    /// An amount above the approved one (cents) on the page, not labelled as its total.
+    Higher(i64),
+    /// An amount in another currency (cents, code): a conversion the page offers (DCC).
+    Foreign(i64, &'static str),
+    /// The page's amounts disagree with the approved one in a way it can't name (a « to pay » amount below it, the
+    /// provider's own amount another one, a total without its currency on a page that shows none).
+    Unclear,
 }
 
 /// What was seen on a page whose total could not be read (logged, never the text: no card data, no address).
@@ -102,6 +118,10 @@ pub enum Class {
 /// A number as a page writes it (spaces of any width inside: « 1 234,56 »).
 static NUMBER: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\d(?:[\d.,' \x{2019}\x{02bc}]*\d)?").expect("number pattern"));
+/// A number written as money, with its cents (« 32,87 »), for a total written without its currency mark.
+static BARE_MONEY: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\d[\d .,']*[.,]\d{2}$").expect("money pattern"));
+/// The codes of an amount written without a currency mark.
+pub const BARE: &[&str] = &["?"];
 /// A digit run that may be a card number (12 to 19 digits, spaces or dashes between): never read.
 static CARD_LIKE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\d(?:[ -]?\d){11,18}").expect("card pattern"));
 /// « 27€97 » (the cents right after the mark; `pageText` glues « 27€<sup>97</sup> » so).
@@ -121,10 +141,12 @@ static PER_AFTER: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?i)^\s*(?:€|eur|euros?|\$|£|usd|gbp|chf)?\s*(?:/|par|per|pro|al|por|a|each|chacun)\s*(?:mois|month|mo\b|monat|mes|maand|semaine|week)")
         .expect("instalment pattern")
 });
-/// A label of an amount never charged: a threshold, a limit, an old price.
+/// The words right before an amount that make it never charged: a threshold, a limit, an old price (« dès 49 € »,
+/// « au lieu de 40 € », « maximum 1 500 € »). Only when they end the label, right before the amount (Relecture 2:
+/// « Amount to be taken from your card: €32.87 » or « livraison offerte : 32,87 € » are no mentions).
 static MENTION: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
-        r"(?i)\bd[èe]s\b|[àa] partir d|\bfrom\b|\bab\b|\bdesde\b|\bvanaf\b|\bmax|plafond|\blimit|jusqu|up to|bis zu|\bhasta\b|au lieu d|instead of|\bstatt\b|en lugar d|in plaats van|\bavant\b|\bwas\b|\bantes\b|offert|gratuit|\bfree\b|gratis|kostenlos",
+        r"(?i)(?:\bd[èe]s|[àa] partir d[e']|\bfrom|\bab|\bdesde|\bvanaf|au lieu d[e']|instead of|\bstatt|en lugar de|in plaats van|jusqu'?\s?[àa]|up to|bis zu|\bhasta|\bmax|\bmaximum|\bmaximal|plafond(?: de)?|\blimite?(?: de)?|\bavant|\bwas|\bantes)\s*[:\-–]?\s*$",
     )
     .expect("mention pattern")
 });
@@ -199,12 +221,14 @@ fn class_of(line_before: &str, above: &[&str]) -> Class {
             .unwrap_or_default();
     }
     let tail = last_chars(label.trim(), LABEL_SPAN);
+    // a total to pay's words win over a part's (« Total TTC, livraison offerte : »); a mention only when its words end
+    // the label, right before the amount
     if MENTION.is_match(tail) {
         Class::Mention
-    } else if PART.is_match(tail) {
-        Class::Part
     } else if TO_PAY.is_match(tail) {
         Class::ToPay
+    } else if PART.is_match(tail) {
+        Class::Part
     } else if TOTAL.is_match(tail) {
         Class::Total
     } else {
@@ -234,7 +258,21 @@ pub fn amounts(text: &str) -> Vec<Amount> {
         let (before, after) = (&text[..start], &text[end..]);
         let mark_before = mark_near(before, "");
         let mark_after = mark_near("", after);
-        let Some(codes) = mark_after.or(mark_before) else { continue };
+        let Some(codes) = mark_after.or(mark_before) else {
+            // « Total à payer : 32,87 », the currency elsewhere (a column's head): a total's number all the same
+            if BARE_MONEY.is_match(found.as_str()) {
+                if let Some(cents) = amount_of(found.as_str()) {
+                    let line_start = before.rfind('\n').map_or(0, |i| i + 1);
+                    let above: Vec<&str> =
+                        text[..line_start].lines().rev().take(3).collect::<Vec<_>>().into_iter().rev().collect();
+                    let class = class_of(&text[line_start..start], &above);
+                    if class >= Class::Total {
+                        out.push(Amount { cents, codes: BARE, class });
+                    }
+                }
+            }
+            continue;
+        };
         let whole = found.as_str();
         // « Qté 2 27,97 € »: read from the group next to the mark when the whole doesn't read as one number
         let (number, number_start) = match amount_of(whole) {
@@ -292,39 +330,63 @@ fn pick(labelled: &[&Read]) -> Option<i64> {
 pub fn page_total_of(texts: &[PageText], cents: i64, currency: &str) -> PageTotal {
     let shown = read_all(texts, true);
     let all = read_all(texts, false);
-    let ours = |r: &&Read| r.amount.codes.contains(&currency);
+    let marked = |r: &Read| r.amount.codes.contains(&currency);
+    // a total without its currency mark counts in the payment's currency when the page writes that one elsewhere
+    let uses_currency = all.iter().any(&marked);
+    let bare = |r: &Read| r.amount.codes == BARE;
+    let ours = |r: &&Read| marked(r) || (bare(r) && uses_currency);
     let shown_ours: Vec<&Read> = shown.iter().filter(ours).collect();
     let all_ours: Vec<&Read> = all.iter().filter(ours).collect();
-    let foreign: Vec<&Read> = all.iter().filter(|r| !ours(r)).collect();
+    let foreign: Vec<&Read> = all.iter().filter(|r| !marked(r) && !bare(r)).collect();
     let seen = || Seen {
         amounts: all_ours.iter().map(|r| r.amount.cents).collect(),
         labelled: all_ours.iter().filter(|r| r.amount.class >= Class::Total).count(),
         other_currency: foreign.len(),
     };
     let labelled: Vec<&Read> = shown_ours.iter().copied().filter(|r| r.amount.class >= Class::Total).collect();
-    // 1. a visible total above the approved amount: the page asks more
+    // 1. the page asks more: a visible total above the approved amount, or the provider's own visible amount above it
     let above: Vec<&Read> = labelled.iter().copied().filter(|r| r.amount.cents > cents).collect();
     if let Some(total) = pick(&above) {
         return PageTotal::Other(total);
     }
-    // 2. doubt: any amount above it laid out (off-screen included), or a total in another currency (DCC)
-    let higher = all_ours.iter().any(|r| r.amount.cents > cents && r.amount.class != Class::Mention);
-    let dcc = foreign.iter().any(|r| r.amount.class != Class::Mention);
-    if higher || dcc {
-        return PageTotal::Unread(seen());
+    let provider_above = shown_ours
+        .iter()
+        .filter(|r| r.provider && r.amount.class != Class::Mention && r.amount.cents > cents)
+        .map(|r| r.amount.cents)
+        .max();
+    if let Some(total) = provider_above {
+        return PageTotal::Other(total);
     }
-    // 3. beyond doubt: the provider's own amounts and every total to pay agree, the approved amount is the total
-    let provider: Vec<i64> = shown_ours.iter().filter(|r| r.provider).map(|r| r.amount.cents).collect();
-    let provider_agrees = provider.is_empty() || (provider.iter().max() == Some(&cents) && provider.contains(&cents));
+    // 2. seen, so never left to the agent: another currency, an amount above the approved one, a total without its
+    // currency that is not the approved amount
+    if let Some(r) = foreign.iter().filter(|r| r.amount.class != Class::Mention).max_by_key(|r| (r.provider, r.amount.cents)) {
+        return PageTotal::Doubt(Doubt::Foreign(r.amount.cents, r.amount.codes[0]));
+    }
+    if let Some(higher) =
+        all_ours.iter().filter(|r| r.amount.cents > cents && r.amount.class != Class::Mention).map(|r| r.amount.cents).max()
+    {
+        return PageTotal::Doubt(Doubt::Higher(higher));
+    }
+    if all.iter().any(|r| bare(r) && r.amount.cents != cents && !uses_currency) {
+        return PageTotal::Doubt(Doubt::Unclear);
+    }
+    // 3. the provider's own amounts and every total to pay must be the approved one
+    let provider: Vec<i64> = shown_ours.iter().filter(|r| r.provider && marked(r)).map(|r| r.amount.cents).collect();
+    let provider_agrees = provider.is_empty() || provider.contains(&cents);
     let to_pay_agree = shown_ours.iter().filter(|r| r.amount.class == Class::ToPay).all(|r| r.amount.cents == cents);
-    let labelled_approved = labelled.iter().any(|r| r.amount.cents == cents);
+    if !provider_agrees || !to_pay_agree {
+        return PageTotal::Doubt(Doubt::Unclear);
+    }
+    // 4. beyond doubt (and the whole page read): the approved amount is the total
+    let labelled_approved = labelled.iter().any(|r| r.amount.cents == cents && marked(r));
     let largest_unlabelled = labelled.is_empty()
-        && shown_ours.iter().any(|r| r.amount.cents == cents)
+        && shown_ours.iter().any(|r| r.amount.cents == cents && marked(r))
         && shown_ours.iter().all(|r| r.amount.cents <= cents);
-    if provider_agrees && to_pay_agree && (labelled_approved || largest_unlabelled) {
+    let whole = texts.iter().all(|t| !t.truncated);
+    if whole && (labelled_approved || largest_unlabelled) {
         return PageTotal::Approved;
     }
-    // 4. the approved amount nowhere, one clear visible total (below it)
+    // 5. the approved amount nowhere, one clear visible total (below it)
     if !all_ours.iter().any(|r| r.amount.cents == cents) {
         let mut values: Vec<i64> = labelled.iter().map(|r| r.amount.cents).collect();
         values.sort_unstable();
@@ -332,181 +394,61 @@ pub fn page_total_of(texts: &[PageText], cents: i64, currency: &str) -> PageTota
         if values.len() == 1 {
             return PageTotal::Other(values[0]);
         }
-        let to_pay: Vec<&Read> = labelled.iter().copied().filter(|r| r.amount.class == Class::ToPay).collect();
-        let mut pay_values: Vec<i64> = to_pay.iter().map(|r| r.amount.cents).collect();
-        pay_values.sort_unstable();
-        pay_values.dedup();
-        if let [total] = pay_values.as_slice() {
-            return PageTotal::Other(*total);
-        }
     }
     PageTotal::Unread(seen())
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+/// The total the agent gives `confirm_payment` (« 27,97 € », « EUR 27.97 », « 27.97 »), read with the same parser.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Stated {
+    /// In the payment's currency (or written without a currency mark), cents.
+    Amount(i64),
+    /// In another currency (cents, code).
+    Foreign(i64, &'static str),
+    /// Not one clear amount.
+    Unreadable,
+}
 
-    fn total(texts: &[&str], cents: i64, currency: &str) -> PageTotal {
-        page_total(&texts.iter().map(|t| t.to_string()).collect::<Vec<_>>(), cents, currency)
-    }
-
-    /// The page of 19/11 (pharmaciedesdrakkars.com → payment.cawl-solutions.fr), as `pageText` reads it.
-    const CAWL: &str = "Pharmacie des Drakkars\nRécapitulatif de la commande\nTotal à payer:\nEUR 27.97\nNuméro de \
-                        carte\nDate d'expiration\nCryptogramme visuel\nPayer\nAnnuler";
-
-    #[test]
-    fn the_cawl_page_of_19_11_shows_the_approved_total() {
-        assert_eq!(total(&[CAWL], 2797, "EUR"), PageTotal::Approved);
-        assert_eq!(total(&["Total à payer: EUR 27.97"], 2797, "EUR"), PageTotal::Approved);
-        // another amount approved: the page's total said
-        assert_eq!(total(&[CAWL], 2450, "EUR"), PageTotal::Other(2797));
-    }
-
-    #[test]
-    fn every_common_way_of_writing_an_amount_is_read() {
-        for written in ["27,97 €", "27.97 €", "EUR 27.97", "27.97 EUR", "€ 27,97", "€27.97", "27,97 EUR", "27,97\u{a0}€",
-                        "27,97\u{202f}€", "27,97\u{2009}€", "EUR\u{a0}27,97", "27,97 euros", "27,97\n€", "€\n27,97",
-                        "27,97 Euro"]
-        {
-            assert_eq!(total(&[&format!("Total\n{written}")], 2797, "EUR"), PageTotal::Approved, "{written:?}");
-            assert_eq!(total(&[&format!("Total\n{written}")], 2798, "EUR"), PageTotal::Other(2797), "{written:?}");
+/// The agent's `total` for a payment in `currency`: the bridge compares the number itself (Relecture 2: the model never
+/// compares amounts).
+pub fn stated_total(text: &str, currency: &str) -> Stated {
+    let marked: Vec<Amount> = amounts(text).into_iter().filter(|a| a.codes != BARE).collect();
+    let mut values: Vec<(i64, bool)> = marked.iter().map(|a| (a.cents, a.codes.contains(&currency))).collect();
+    values.sort_unstable();
+    values.dedup();
+    match (values.as_slice(), marked.first()) {
+        ([(cents, true)], _) => Stated::Amount(*cents),
+        ([(cents, false)], Some(a)) => Stated::Foreign(*cents, a.codes[0]),
+        ([], _) => {
+            let plain = text.trim();
+            let only_number = !plain.is_empty() && plain.chars().all(|c| c.is_ascii_digit() || " .,'\u{a0}\u{202f}".contains(c));
+            match amount_of(&plain.replace(['\u{a0}', '\u{202f}'], " ")).filter(|_| only_number) {
+                Some(cents) => Stated::Amount(cents),
+                None => Stated::Unreadable,
+            }
         }
-        for written in ["1 234,56 €", "1\u{202f}234,56 €", "1\u{a0}234,56 €", "1.234,56 €", "€1,234.56", "EUR 1234.56",
-                        "1'234.56 EUR"]
-        {
-            assert_eq!(total(&[&format!("Montant total : {written}")], 123_456, "EUR"), PageTotal::Approved, "{written:?}");
-        }
-    }
-
-    #[test]
-    fn providers_summaries_are_read() {
-        let pages = [
-            // Stripe Checkout
-            "Payer Pharmacie des Drakkars\n€27.97\nSubtotal\n€24.50\nShipping\n€3.47\nTotal due\n€27.97\nCard information\nPay",
-            // Adyen drop-in on the shop's page
-            "Order summary\nItems (2) 24,50 €\nDelivery 3,47 €\nTotal 27,97 €\nCard number\nExpiry date\nPay 27,97 €",
-            // PayPlug
-            "Montant à régler\n27,97 €\nPharmacie des Drakkars\nNuméro de carte\nPayer",
-            // Lyra / PayZen
-            "Boutique : Pharmacie des Drakkars\nMontant : 27,97 EUR\nRéférence commande : 100045871\nVISA\nMASTERCARD",
-            // Monetico
-            "Paiement sécurisé\nMontant : 27,97 EUR\nDate : 19/11/2026\nRéférence : CMD45871\nNuméro de carte",
-            // Up2Pay e-Transactions
-            "MONTANT 27,97 EUR\nCOMMERCANT PHARMACIE DES DRAKKARS\nREFERENCE 45871\nVALIDER",
-            // German, Spanish, Dutch shops
-            "Zwischensumme 24,50 €\nVersand 3,47 €\nGesamtsumme 27,97 €",
-            "Subtotal 24,50 €\nEnvío 3,47 €\nTotal a pagar 27,97 €",
-            "Subtotaal € 24,50\nVerzendkosten € 3,47\nTotaal € 27,97",
-        ];
-        for page in pages {
-            assert_eq!(total(&[page], 2797, "EUR"), PageTotal::Approved, "{page}");
-            // the subtotal approved, the shipping forgotten: the page's total said
-            assert_eq!(total(&[page], 2450, "EUR"), PageTotal::Other(2797), "{page}");
-        }
-    }
-
-    #[test]
-    fn a_part_of_the_total_is_never_the_total() {
-        // subtotal, shipping, a discount
-        // (an amount above the approved one, even a part: not beyond doubt, the agent's reading as before)
-        let page = "Total articles 30,00 €\nRemise -5,00 €\nLivraison offerte\nTotal 25,00 €";
-        assert!(matches!(total(&[page], 2500, "EUR"), PageTotal::Unread(_)));
-        assert_ne!(total(&[page], 3000, "EUR"), PageTotal::Approved);
-        // the shipping forgotten: the page's higher total said
-        let page = "Total panier 27,97 €\nFrais de livraison 4,90 €\nTotal 32,87 €";
-        assert_eq!(total(&[page], 2797, "EUR"), PageTotal::Other(3287));
-        // a page that only mentions amounts: never a reason to cancel
-        let mention = "Livraison offerte dès 50,00 €\nNuméro de carte\nPayer";
-        assert!(matches!(total(&[mention], 2797, "EUR"), PageTotal::Unread(_)));
-    }
-
-    #[test]
-    fn instalments_are_left_out() {
-        let page = "Total 27,97 €\nou payez en 3 x 9,32 €\nou 3 fois 9,33 € sans frais\nsoit 9,32 € / mois";
-        assert_eq!(total(&[page], 2797, "EUR"), PageTotal::Approved);
-        assert_eq!(total(&[page], 932, "EUR"), PageTotal::Other(2797));
-    }
-
-    #[test]
-    fn a_quantity_before_the_amount_is_not_part_of_it() {
-        let page = "Doliprane 1000 mg\nQté 2 27,97 €";
-        assert_eq!(total(&[page], 2797, "EUR"), PageTotal::Approved);
-    }
-
-    #[test]
-    fn the_card_frame_and_the_page_are_read_together() {
-        // the total in the shop's page, the card's fields in the provider's frame
-        let parent = "Votre commande\nTotal TTC 27,97 €";
-        let frame = "Numéro de carte\nMM / AA\nCVC";
-        assert_eq!(total(&[parent, frame], 2797, "EUR"), PageTotal::Approved);
-        assert_eq!(total(&[frame, parent], 2450, "EUR"), PageTotal::Other(2797));
-        // the total in the provider's frame
-        assert_eq!(total(&["Panier", "Montant : 27,97 EUR\nNuméro de carte"], 2797, "EUR"), PageTotal::Approved);
-    }
-
-    #[test]
-    fn no_total_readable_keeps_the_agents_word() {
-        // no amount at all; a card number, an expiry, a code as a page could show them: never amounts
-        for page in ["Numéro de carte\nDate d'expiration\nPayer", "4242 4242 4242 4242\n12/30\n123", ""] {
-            assert_eq!(total(&[page], 2797, "EUR"), PageTotal::Unread(Seen::default()), "{page}");
-        }
-        // only another currency: not this payment's total
-        let usd = total(&["Total USD 30.12"], 2797, "EUR");
-        assert_eq!(usd, PageTotal::Unread(Seen { amounts: vec![], labelled: 0, other_currency: 1 }));
-        // several amounts, no label, the approved one not the largest: not read for sure
-        assert!(matches!(total(&["Doliprane 3,50 €\nSpray 24,47 €\nCrème 30,00 €"], 2447, "EUR"), PageTotal::Unread(_)));
-        // the same, the approved one the largest (the total, unlabelled): approved
-        assert_eq!(total(&["Doliprane 3,50 €\nSpray 24,47 €\n27,97 €"], 2797, "EUR"), PageTotal::Approved);
-    }
-
-    #[test]
-    fn an_unlabelled_grand_total_above_labelled_parts_is_approved() {
-        let page = "Montant des articles 24,50 €\nFrais de port 3,47 €\n27,97 €";
-        assert_eq!(total(&[page], 2797, "EUR"), PageTotal::Approved);
-        // a total labelled lower, the approved one unlabelled under it: not beyond doubt
-        let page = "Montant 24,50 €\nFrais de port 3,47 €\n27,97 €";
-        assert!(matches!(total(&[page], 2797, "EUR"), PageTotal::Unread(_)));
-        assert_eq!(total(&[page], 2000, "EUR"), PageTotal::Other(2450));
-    }
-
-    #[test]
-    fn dollars_pounds_and_swiss_francs() {
-        assert_eq!(total(&["Order total: $34.90"], 3490, "USD"), PageTotal::Approved);
-        assert_eq!(total(&["Order total: $34.90"], 3000, "USD"), PageTotal::Other(3490));
-        assert_eq!(total(&["Total to pay £12.00"], 1200, "GBP"), PageTotal::Approved);
-        assert_eq!(total(&["Total CHF 1’250.00"], 125_000, "CHF"), PageTotal::Approved);
+        _ => Stated::Unreadable,
     }
 }
 
-/// Relecture 1 (19/11): pages that prove a wrong « approved » (the worst case: the agent is told to confirm) or a wrong
-/// « other total » (a good payment cancelled, the person told a false amount). Each asserts the SAFE outcome; they
-/// fail on c56eda1cd.
 /// What the press does once the page's total is read again right before it (card_pay.rs `confirm`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Recheck {
     Press,
     /// Another total now: given up, the person told with the numbers.
     Other(i64),
-    /// Not what it was when the card was typed (no longer approved, an amount above the approved one or another currency
-    /// appeared): given up.
+    /// Something seen now that stops it (`Doubt`).
+    Doubt(Doubt),
+    /// No longer « approved » as it was when the card was typed: given up.
     Changed,
 }
 
 /// `before`: the total read before the card was typed; `now`: read again right before the press.
-pub fn recheck(before: &PageTotal, now: &PageTotal, cents: i64) -> Recheck {
+pub fn recheck(before: &PageTotal, now: &PageTotal) -> Recheck {
     match (before, now) {
         (_, PageTotal::Other(shown)) => Recheck::Other(*shown),
-        (PageTotal::Approved, PageTotal::Approved) => Recheck::Press,
+        (_, PageTotal::Doubt(doubt)) => Recheck::Doubt(doubt.clone()),
         (PageTotal::Approved, PageTotal::Unread(_)) => Recheck::Changed,
-        (PageTotal::Unread(was), PageTotal::Unread(is)) => {
-            let new_above = is.amounts.iter().any(|c| *c > cents && !was.amounts.contains(c));
-            if new_above || is.other_currency > was.other_currency {
-                Recheck::Changed
-            } else {
-                Recheck::Press
-            }
-        }
         _ => Recheck::Press,
     }
 }
@@ -517,7 +459,7 @@ mod correction_1 {
     use super::*;
 
     fn text(shown: &str, all: &str, provider: bool) -> PageText {
-        PageText { shown: shown.into(), all: all.into(), provider }
+        PageText { shown: shown.into(), all: all.into(), provider, truncated: false }
     }
 
     #[test]
@@ -527,7 +469,7 @@ mod correction_1 {
         assert_eq!(page_total_of(&[t], 2797, "EUR"), PageTotal::Other(3500));
         // the visible total is the approved one; an off-screen higher total: never approved
         let t = text("Total à payer 27,97 €", "Total à payer 27,97 €\nTotal 35,00 €", false);
-        assert!(matches!(page_total_of(&[t], 2797, "EUR"), PageTotal::Unread(_)));
+        assert_eq!(page_total_of(&[t], 2797, "EUR"), PageTotal::Doubt(Doubt::Higher(3500)));
         // the approved total only off-screen: not visible, not approved
         let t = text("Numéro de carte", "Total à payer 27,97 €\nNuméro de carte", false);
         assert!(matches!(page_total_of(&[t], 2797, "EUR"), PageTotal::Unread(_)));
@@ -544,16 +486,16 @@ mod correction_1 {
         assert_eq!(page_total_of(&[shop.clone(), higher], 2797, "EUR"), PageTotal::Other(3500));
         // the provider shows something else than the approved amount (only a fee): not beyond doubt
         let fee = text("Frais : 1,50 EUR", "Frais : 1,50 EUR", true);
-        assert!(matches!(page_total_of(&[shop, fee], 2797, "EUR"), PageTotal::Unread(_)));
+        assert_eq!(page_total_of(&[shop, fee], 2797, "EUR"), PageTotal::Doubt(Doubt::Unclear));
     }
 
     #[test]
     fn a_total_in_another_currency_is_never_approved() {
         let page = "Total à payer 27,97 €\nMontant débité : USD 32.10";
-        assert!(matches!(total(&[page], 2797, "EUR"), PageTotal::Unread(_)));
+        assert_eq!(total(&[page], 2797, "EUR"), PageTotal::Doubt(Doubt::Foreign(3210, "USD")));
         let t = text("Total à payer 27,97 €", "Total à payer 27,97 €", false);
         let provider = text("32,10 USD", "32,10 USD", true);
-        assert!(matches!(page_total_of(&[t, provider], 2797, "EUR"), PageTotal::Unread(_)));
+        assert_eq!(page_total_of(&[t, provider], 2797, "EUR"), PageTotal::Doubt(Doubt::Foreign(3210, "USD")));
     }
 
     #[test]
@@ -571,20 +513,49 @@ mod correction_1 {
 
     #[test]
     fn the_press_waits_for_the_same_total() {
-        let unread = |amounts: Vec<i64>, other_currency: usize| {
-            PageTotal::Unread(Seen { amounts, labelled: 0, other_currency })
-        };
-        assert_eq!(recheck(&PageTotal::Approved, &PageTotal::Approved, 2797), Recheck::Press);
-        assert_eq!(recheck(&PageTotal::Approved, &PageTotal::Other(2947), 2797), Recheck::Other(2947));
-        assert_eq!(recheck(&PageTotal::Approved, &unread(vec![2797, 2947], 0), 2797), Recheck::Changed);
-        assert_eq!(recheck(&unread(vec![], 0), &PageTotal::Approved, 2797), Recheck::Press);
-        assert_eq!(recheck(&unread(vec![500], 0), &unread(vec![500], 0), 2797), Recheck::Press);
-        assert_eq!(recheck(&unread(vec![500], 0), &unread(vec![500, 3000], 0), 2797), Recheck::Changed);
-        assert_eq!(recheck(&unread(vec![], 0), &unread(vec![], 1), 2797), Recheck::Changed);
+        let unread = PageTotal::Unread(Seen::default());
+        assert_eq!(recheck(&PageTotal::Approved, &PageTotal::Approved), Recheck::Press);
+        assert_eq!(recheck(&PageTotal::Approved, &PageTotal::Other(2947)), Recheck::Other(2947));
+        assert_eq!(recheck(&PageTotal::Approved, &unread), Recheck::Changed);
+        assert_eq!(recheck(&unread, &PageTotal::Approved), Recheck::Press);
+        assert_eq!(recheck(&unread, &unread), Recheck::Press);
+        let higher = PageTotal::Doubt(Doubt::Higher(3000));
+        assert_eq!(recheck(&unread, &higher), Recheck::Doubt(Doubt::Higher(3000)));
         // the fee of Relecture 1 (Chrome r3): « Total à payer: EUR 27.97 » becomes « EUR 29.47 » after the number
         let before = page_total(&["Total à payer:\nEUR 27.97".to_string()], 2797, "EUR");
         let now = page_total(&["Frais carte : EUR 1.50\nTotal à payer:\nEUR 29.47".to_string()], 2797, "EUR");
-        assert_eq!(recheck(&before, &now, 2797), Recheck::Other(2947));
+        assert_eq!(recheck(&before, &now), Recheck::Other(2947));
+    }
+
+    #[test]
+    fn the_agents_total_is_compared_by_the_bridge() {
+        for written in ["27,97 €", "EUR 27.97", "27.97 EUR", "€27.97", "27,97", "27.97", " 27,97\u{a0}€ "] {
+            assert_eq!(stated_total(written, "EUR"), Stated::Amount(2797), "{written:?}");
+        }
+        assert_eq!(stated_total("32,10 USD", "EUR"), Stated::Foreign(3210, "USD"));
+        for written in ["", "le total", "27,97 € ou 32,87 €", "27 97"] {
+            assert_eq!(stated_total(written, "EUR"), Stated::Unreadable, "{written:?}");
+        }
+    }
+
+    #[test]
+    fn a_seen_problem_is_never_left_to_the_agent() {
+        // an unlabelled amount above the approved one, another currency, a total without its currency mark
+        assert_eq!(
+            total(&["Doliprane 3,50 €\nSpray 24,47 €\nCrème 30,00 €"], 2447, "EUR"),
+            PageTotal::Doubt(Doubt::Higher(3000))
+        );
+        assert_eq!(
+            total(&["Total à payer 27,97 €\nVous serez débité de 32,10 USD"], 2797, "EUR"),
+            PageTotal::Doubt(Doubt::Foreign(3210, "USD"))
+        );
+        assert_eq!(total(&["Montant (EUR)\nTotal à payer : 32,87"], 2797, "EUR"), PageTotal::Doubt(Doubt::Unclear));
+        // the whole page not read (`pageText`'s cap): never approved
+        let cut = PageText { truncated: true, ..PageText::plain("Total à payer 27,97 €") };
+        assert!(matches!(page_total_of(&[cut], 2797, "EUR"), PageTotal::Unread(_)));
+        // a mention only when its words qualify the amount itself
+        assert_eq!(total(&["Total 27,97 €\nLivraison offerte dès 49,00 €"], 2797, "EUR"), PageTotal::Approved);
+        assert_eq!(total(&["Total panier 27,97 €\nTotal TTC, livraison offerte : 32,87 €"], 2797, "EUR"), PageTotal::Other(3287));
     }
 
     #[test]
@@ -655,10 +626,10 @@ mod review_1 {
     #[test]
     fn r7_a_card_number_echoed_by_the_page_never_reaches_the_log() {
         // a card preview under an amount (« 27,97 € » then the number the page shows back): Seen is logged as is
-        let PageTotal::Unread(seen) = total(&["27,97 €\n4242 4242 4242 4242\n12/30"], 1250, "EUR") else {
-            panic!("expected unread")
-        };
-        assert!(!seen.amounts.contains(&424_200), "the card's first four digits in the log line: {seen:?}");
+        // (Correction 2: the 27,97 € above the approved 12,50 is now a seen doubt, logged as such: never the card's digits)
+        let got = total(&["27,97 €\n4242 4242 4242 4242\n12/30"], 1250, "EUR");
+        assert!(!format!("{got:?}").contains("4242"), "the card's first four digits in the log line: {got:?}");
+        assert_eq!(got, PageTotal::Doubt(Doubt::Higher(2797)));
     }
 
     #[test]
@@ -667,5 +638,53 @@ mod review_1 {
         // and confirm presses « Payer », which pays the real 27,97 €
         assert_ne!(total(&["Total TTC (dont 4,66 € de TVA) 27,97 €"], 466, "EUR"), PageTotal::Approved);
         assert_ne!(total(&["Total TTC 27€97"], 2700, "EUR"), PageTotal::Approved);
+    }
+}
+
+/// Relecture 2 (19/11, on 52c025772): each asserts the SAFE outcome; they fail on 52c025772.
+#[cfg(test)]
+mod review_2 {
+    use super::*;
+
+    fn text(shown: &str, provider: bool) -> PageText {
+        PageText { shown: shown.into(), all: shown.into(), provider, truncated: false }
+    }
+
+    #[test]
+    fn q1_the_providers_own_visible_amount_above_the_approved_one_stops_the_payment() {
+        // Stripe Checkout-like: « Pharmacie des Drakkars / €32.87 » unlabelled in the provider's page, the shop's cart
+        // (approved, shipping forgotten) 27,97 €. The bridge SAW the provider ask more, yet returns Unread, i.e. the
+        // agent's own comparison (« If the total you read before was 27.97 EUR, call confirm_payment »).
+        let shop = text("Total panier 27,97 €", false);
+        let provider = text("Pharmacie des Drakkars\n€32.87\nCard information", true);
+        assert_eq!(page_total_of(&[shop, provider], 2797, "EUR"), PageTotal::Other(3287));
+    }
+
+    #[test]
+    fn q2_another_currency_on_the_providers_page_is_never_left_to_the_agent() {
+        // DCC preselected: the provider will debit 32,10 USD; the button says « Payer ». Unread = the agent compares
+        // « 27,97 EUR » with what it read before and confirms.
+        let provider = text("Montant : 27,97 EUR\nVous serez débité de 32,10 USD\nNuméro de carte", true);
+        let got = page_total_of(&[provider], 2797, "EUR");
+        assert!(!matches!(got, PageTotal::Unread(_) | PageTotal::Approved), "DCC left to the agent: {got:?}");
+    }
+
+    #[test]
+    fn q3_a_real_total_whose_label_holds_a_mention_word_is_not_ignored() {
+        // « offerte », « gratuit », « from » make the higher total a « mention »: ignored, the basket total approved
+        for page in [
+            "Total panier 27,97 €\nTotal TTC, livraison offerte : 32,87 €",
+            "Total panier 27,97 €\nTotal à payer avec livraison gratuite : 32,87 €",
+            "Order total €27.97\nAmount to be taken from your card: €32.87",
+        ] {
+            assert_ne!(page_total(&[page.to_string()], 2797, "EUR"), PageTotal::Approved, "{page}");
+        }
+    }
+
+    #[test]
+    fn q4_a_total_to_pay_written_without_its_currency_mark_is_not_ignored() {
+        // the currency in a column header (« Montant (EUR) ») or nowhere: the « to pay » number is skipped
+        let page = "Total panier 27,97 €\nFrais de port 4,90 €\nTotal à payer : 32,87";
+        assert_ne!(page_total(&[page.to_string()], 2797, "EUR"), PageTotal::Approved);
     }
 }

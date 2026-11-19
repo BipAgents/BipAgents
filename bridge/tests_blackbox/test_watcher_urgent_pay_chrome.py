@@ -90,7 +90,7 @@ def test_in_stock_urgent_push_code_paid_in_the_real_page(bridges, fakes):
         assert side.done.wait(60) and side.result["isError"] is False, side.result
         values = browser.values()["selects.html"]
         assert values["numero"] == NUMBER and values["crypto"] == CODE and values["mois"] == "12"
-        confirmed = tool(bridge, "confirm_payment", {"button": "Valider le paiement"})
+        confirmed = tool(bridge, "confirm_payment", {"button": "Valider le paiement", "total": "45,00 €"})
         assert "moved on" in confirmed["content"][0]["text"], confirmed
         assert list(browser.values()) == ["done.html"]
         print(f"\nfrom the push to the page paid: {time.monotonic() - started:.1f} s")

@@ -93,7 +93,12 @@ def chromium_pay(bridges, fakes, tmp_path, page, arguments, button):
         turn_on(bridge)
         bridge.post("/v1/vault", headers=AUTH, json={**CARD, "sites": ["127.0.0.1"]})
         result, asked = pay(bridge, arguments)
-        assert result["isError"] is False, (result, asked)
+        if result["isError"]:
+            # fix-pay-total-check (Correction 2): an amount above the approved one seen on the page stops the payment
+            # before the card is typed; nothing waits to be pressed then
+            said = result["content"][0]["text"]
+            assert "BipAgents cancelled the payment itself" in said, (result, asked)
+            return said, [u.split("/")[-1] for u in browser.pages()]
         confirmed = tool(bridge, "confirm_payment", {"button": button})["content"][0]["text"]
         return confirmed, [u.split("/")[-1] for u in browser.pages()]
     finally:

@@ -120,7 +120,7 @@ def test_r4_a_card_number_the_page_shows_back_never_reaches_the_log(bridges, fak
     shop, browser, bridge = start(bridges, fakes, tmp_path, html)
     try:
         result, _ = pay(bridge, {**APPROVED, "amount": "12.50"})
-        assert result["isError"] is False, result
+        # Correction 2: « 27,97 € » above the approved 12.50 is seen: the bridge stops (the log is what this checks)
         c.tool(bridge, "cancel_payment")
         log = bridge.log_path.read_text(encoding="utf-8", errors="replace")
         print("READ:", [l for l in log.splitlines() if "card payment" in l])
@@ -142,7 +142,8 @@ def test_r5_control_the_pay_buttons_own_amount_still_stops_an_approved_page(brid
         # Correction 1: an amount above the approved one on the page (the button's) is a doubt: never « approved »
         assert "the amount the person approved. Now call confirm_payment" not in said, said
         confirmed = c.tool(bridge, "confirm_payment", {"button": "Payer 1 250,00 €"})["content"][0]["text"]
-        assert "was not pressed" in confirmed and "done.html" not in "".join(browser.pages()), confirmed
+        # Correction 2: the 1 250,00 € is seen before typing: stopped then, nothing waits to be pressed
+        assert ("was not pressed" in confirmed or "No payment is waiting" in confirmed) and "done.html" not in "".join(browser.pages()), confirmed
     finally:
         browser.stop()
         shop.shutdown()

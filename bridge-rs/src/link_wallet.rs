@@ -492,10 +492,8 @@ pub fn tools() -> Vec<Value> {
         json!({
             "name": CONFIRM,
             "description": format!("After {PAY}: press the page's pay button (you can't use your browser \
-        meanwhile). Give the button's text as you read it before, e.g. « Pay $34.90 »."),
-            "inputSchema": {"type": "object", "properties": {
-                "button": {"type": "string", "description": "the pay button's text"},
-            }},
+        meanwhile). Give the button's text as you read it before, e.g. « Pay », and {}", crate::card_pay::CONFIRM_TOTAL),
+            "inputSchema": crate::card_pay::confirm_schema(),
             "annotations": {"readOnlyHint": false, "destructiveHint": true, "openWorldHint": true},
         }),
         json!({

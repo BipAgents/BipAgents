@@ -131,9 +131,12 @@ def test_2_2_the_pay_button_alone_for_another_total_is_never_pressed_chromium(br
         turn_on(bridge)
         bridge.post("/v1/vault", headers=AUTH, json={**CARD, "sites": ["127.0.0.1"]})
         result, asked = pay(bridge, ARGS)
-        assert result["isError"] is False and "could not read the total" in result["content"][0]["text"], result
+        said = result["content"][0]["text"]
+        # Correction 2: the button's 1 250,00 € is an amount above the approved one, seen on the page: stopped at once
+        # (the button's own check stays covered by the FakeChrome test above)
+        assert result["isError"] is True and "more than the 12.50 EUR the person approved" in said, said
         confirmed = tool(bridge, "confirm_payment", {"button": "Payer 12,50 €"})["content"][0]["text"]
-        assert "was not pressed" in confirmed and [u.split("/")[-1] for u in browser.pages()] == ["pay.html"], (
+        assert "No payment is waiting" in confirmed and [u.split("/")[-1] for u in browser.pages()] == ["pay.html"], (
             f"approved 12.50 EUR, the page's own « Payer 1 250,00 € » was pressed: {confirmed}; pages {browser.pages()}")
     finally:
         browser.stop()

@@ -68,11 +68,12 @@ pub fn record(file: &Path, line: &Value) {
     }
 }
 
-/// A call the line may belong to: a payment tool, or the tool search's `tool_call` that wraps one (the Link tools are
-/// reached through it: tool_diet.rs keeps only `bipagents_pay` direct). Only one turn of the agent inside such a call
-/// counts (`turn_of_call`): never another conversation's.
+/// A call the line may belong to: a payment tool, by its own name or by the one the tool search's `tool_call` wraps
+/// (the Link tools are reached through it: tool_diet.rs keeps only `bipagents_pay` direct; the hub reads the wrapped
+/// call's name, runs.rs `wrapped_tool`, never « any tool_call »: Relecture 2, 5). Only one turn of the agent inside
+/// such a call counts (`turn_of_call`): never another conversation's.
 fn in_pay_call(name: &str) -> bool {
-    is_pay_tool(name) || name == "tool_call" || name.ends_with("_tool_call")
+    is_pay_tool(name)
 }
 
 /// The bridge says `text` in the conversation of the payment tool's call going on for `agent` now. False when that
@@ -229,6 +230,61 @@ pub fn total_changed(lang: &str) -> String {
     .to_string()
 }
 
+/// The page showed an amount above the approved one, not labelled as its total (Relecture 2, 1).
+pub fn higher_amount(lang: &str, shown: &str, approved: &str) -> String {
+    match lang_key(lang) {
+        "fr" => format!(
+            "Paiement arrêté : la page affichait un montant plus élevé ({shown}) que celui que tu avais accepté ({approved}). Rien n'a été payé."
+        ),
+        "de" => format!(
+            "Zahlung gestoppt: Die Seite zeigte einen höheren Betrag ({shown}) als den, den du genehmigt hattest ({approved}). Es wurde nichts bezahlt."
+        ),
+        "es" => format!(
+            "Pago detenido: la página mostraba un importe mayor ({shown}) que el que habías aceptado ({approved}). No se ha pagado nada."
+        ),
+        "nl" => format!(
+            "Betaling gestopt: de pagina toonde een hoger bedrag ({shown}) dan het bedrag dat je had goedgekeurd ({approved}). Er is niets betaald."
+        ),
+        _ => format!(
+            "Payment stopped: the page showed a higher amount ({shown}) than the one you had approved ({approved}). Nothing was paid."
+        ),
+    }
+}
+
+/// The page's total could not be checked against the approved amount (amounts that disagree in a way the bridge can't
+/// name).
+pub fn unverified(lang: &str) -> String {
+    match lang_key(lang) {
+        "fr" => "Paiement arrêté : BipAgents n'a pas pu vérifier le total de la page. Rien n'a été payé.",
+        "de" => "Zahlung gestoppt: BipAgents konnte den Gesamtbetrag der Seite nicht prüfen. Es wurde nichts bezahlt.",
+        "es" => "Pago detenido: BipAgents no pudo comprobar el total de la página. No se ha pagado nada.",
+        "nl" => "Betaling gestopt: BipAgents kon het totaal van de pagina niet controleren. Er is niets betaald.",
+        _ => "Payment stopped: BipAgents could not check the page's total. Nothing was paid.",
+    }
+    .to_string()
+}
+
+/// The total the agent read on the page (`confirm_payment`'s `total`) was not the approved amount.
+pub fn stated_differs(lang: &str, stated: &str, approved: &str) -> String {
+    match lang_key(lang) {
+        "fr" => format!(
+            "Paiement arrêté : le total lu sur la page ({stated}) n'est pas celui que tu avais accepté ({approved}). Rien n'a été payé."
+        ),
+        "de" => format!(
+            "Zahlung gestoppt: Der auf der Seite gelesene Gesamtbetrag ({stated}) ist nicht der, den du genehmigt hattest ({approved}). Es wurde nichts bezahlt."
+        ),
+        "es" => format!(
+            "Pago detenido: el total leído en la página ({stated}) no es el que habías aceptado ({approved}). No se ha pagado nada."
+        ),
+        "nl" => format!(
+            "Betaling gestopt: het op de pagina gelezen totaal ({stated}) is niet het bedrag dat je had goedgekeurd ({approved}). Er is niets betaald."
+        ),
+        _ => format!(
+            "Payment stopped: the total read on the page ({stated}) is not the one you had approved ({approved}). Nothing was paid."
+        ),
+    }
+}
+
 /// The pay button asked for another currency (`shown`, e.g. « 32,10 USD »).
 pub fn foreign_currency(lang: &str, shown: &str) -> String {
     match lang_key(lang) {
@@ -260,7 +316,15 @@ mod tests {
             assert!(!is_pay_tool(name), "{name}");
         }
         // the Link tools come through the tool search (tool_diet.rs): its call counts, one turn only (`turn_of_call`)
-        assert!(in_pay_call("tool_call") && !in_pay_call("browser_click"));
+        assert!(!in_pay_call("tool_call") && !in_pay_call("browser_click"));
+        let wrapped = |args: Value| {
+            let Value::Object(data) = json!({"tool": "tool_call", "args": args}) else { unreachable!() };
+            crate::runs::wrapped_tool(&data)
+        };
+        assert_eq!(wrapped(json!({"calls": [{"name": "mcp_bipagents_link_cancel_payment", "arguments": {}}]})), "link_cancel_payment");
+        assert!(in_pay_call(&wrapped(json!({"name": "mcp__bipagents_link__pay_with_link"}))));
+        assert_eq!(wrapped(json!({"calls": [{"name": "a"}, {"name": "b"}]})), "");
+        assert_eq!(wrapped(json!(r#"{"calls": [{"name": "mcp_bipagents_link_confirm_payment"}]}"#)), "link_confirm_payment");
     }
 
     #[test]
@@ -320,6 +384,9 @@ mod tests {
         for lang in ["fr", "en", "de", "es", "nl"] {
             assert!(suspended(lang).len() > 20 && total_changed(lang).len() > 20, "{lang}");
             assert!(foreign_currency(lang, "32,10 $").contains("32,10 $"), "{lang}");
+            assert!(higher_amount(lang, "32,87 €", "27,97 €").contains("32,87 €"), "{lang}");
+            assert!(stated_differs(lang, "32,87 €", "27,97 €").contains("27,97 €"), "{lang}");
+            assert!(unverified(lang).len() > 20, "{lang}");
         }
         assert_eq!(suspended("fr"), "Paiement arrêté : tu as suspendu les paiements. Rien n'a été payé.");
     }
