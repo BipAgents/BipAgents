@@ -276,7 +276,8 @@ async fn a_households_message_reaches_an_agent_only_along_its_persons_link() {
     assert_eq!(note("budget").await, "");
 
     // Léa lets Vie (Alex) write to Budget: Budget reads Vie's news, only Vie's, only when named
-    let set = b.send_json("PUT", "/v1/agent-links", &h, &json!({"links": [{"from": "vie__alex", "to": "budget"}]})).await;
+    let set =
+        b.send_json("PUT", "/v1/agent-links", &h, &json!({"links": [{"from": "vie__alex", "to": "budget"}]})).await;
     assert_eq!(set.status, 200, "{}", set.text());
     let listed = b.get("/family/agents", &theirs).await.json();
     let told_by: Vec<(String, Value)> = listed["agents"]
@@ -447,4 +448,89 @@ async fn family_news_reach_the_relatives_agent_only_along_both_links() {
     assert_eq!(alex.send_json("POST", &format!("/v1/family/proposals/{id}/send"), &h, &json!({})).await.status, 200);
     assert_eq!(card("bip").await[4]["told"], false);
     assert_eq!(note("bip").await, "");
+}
+
+/// Review 1 (19/11): Alex turns Vie → Bip (Chi) OFF on his side after Vie proposed it (« Chi et Bip » on the card),
+/// Chi's side still ON: at « Envoyer » his bridge names no agent any more, so Chi gets the card only and Bip reads
+/// nothing (family_news.rs `send`, `sends_to` checked again).
+#[tokio::test]
+async fn review_the_senders_link_turned_off_before_envoyer_tells_the_person_only() {
+    let hermes = common::spawn_fake(Router::new().fallback(any(|| async { axum::Json(json!({"ok": true})) }))).await;
+    let dir = tempfile::tempdir().unwrap();
+    let (_, alex) = serve_bridge(dir.path(), "a", &["vie"], &hermes).await;
+    let (_, chi) = serve_bridge(dir.path(), "b", &["bip", "cuisine"], &hermes).await;
+    let (k, v) = auth();
+    let h = [(k, v.as_str())];
+    give_token(&alex, "vie", "vie-token");
+    assert_eq!(alex.send_json("PUT", "/v1/family/name", &h, &json!({"name": "Alex"})).await.status, 200);
+    assert_eq!(chi.send_json("PUT", "/v1/family/name", &h, &json!({"name": "Chi"})).await.status, 200);
+    let invitation = alex.send_json("POST", "/v1/family/invite", &h, &json!({"days": 7})).await.json();
+    let joined = chi
+        .send_json("POST", "/v1/family/join", &h, &json!({"url": invitation["url"], "code": invitation["code"]}))
+        .await;
+    assert_eq!(joined.status, 200, "{}", joined.text());
+    let links = json!({"links": [{"from": "vie", "to": "bip__chi"}]});
+    assert_eq!(alex.send_json("PUT", "/v1/agent-links", &h, &links).await.status, 200);
+    let links = json!({"links": [{"from": "vie__alex", "to": "bip"}]});
+    assert_eq!(chi.send_json("PUT", "/v1/agent-links", &h, &links).await.status, 200);
+    let proposed = mcp(
+        &alex,
+        "vie-token",
+        "tools/call",
+        json!({"name": "tell_family", "arguments": {"to": ["bip__chi"], "message": "Avant que je coupe"}}),
+    )
+    .await;
+    assert_eq!(proposed["isError"], false, "{proposed}");
+    let proposal = alex.get("/v1/family/news?agent=vie", &h).await.json()["proposals"][0].clone();
+    assert_eq!(proposal["to"], json!([{"id": "bip__chi", "name": "Chi", "agent": "Bip"}]));
+    // Alex turns his side off, then « Envoyer »
+    assert_eq!(alex.send_json("PUT", "/v1/agent-links", &h, &json!({"links": []})).await.status, 200);
+    let id = proposal["id"].as_str().unwrap();
+    let sent = alex.send_json("POST", &format!("/v1/family/proposals/{id}/send"), &h, &json!({})).await;
+    assert_eq!(sent.json(), json!({"sent": ["Chi"], "failed": []}));
+    let cards = chi.get("/v1/family/news?agent=bip", &h).await.json()["received"].clone();
+    assert_eq!(cards.as_array().unwrap().len(), 1, "{cards}");
+    assert_eq!(cards[0]["told"], false);
+    assert_eq!(common::without_now(&common::notes(&chi, "bip", "s1", "").await), "", "Bip read it without Alex's link");
+}
+
+/// Review 1 (19/11), finding: when Bip did not read it (a link turned off between the proposal and « Envoyer », on
+/// either side), Alex's « Nouvelles passées » still says it went to « Chi (Bip) »: `send` ignores the receiver's
+/// `told` and `recipient_end` takes the proposal's agent. Expected: no other agent on that line. Fails on e7776c5cf.
+#[tokio::test]
+async fn review_past_news_name_the_relatives_agent_only_when_it_read_it() {
+    let hermes = common::spawn_fake(Router::new().fallback(any(|| async { axum::Json(json!({"ok": true})) }))).await;
+    let dir = tempfile::tempdir().unwrap();
+    let (_, alex) = serve_bridge(dir.path(), "a", &["vie"], &hermes).await;
+    let (_, chi) = serve_bridge(dir.path(), "b", &["bip"], &hermes).await;
+    let (k, v) = auth();
+    let h = [(k, v.as_str())];
+    give_token(&alex, "vie", "vie-token");
+    assert_eq!(alex.send_json("PUT", "/v1/family/name", &h, &json!({"name": "Alex"})).await.status, 200);
+    assert_eq!(chi.send_json("PUT", "/v1/family/name", &h, &json!({"name": "Chi"})).await.status, 200);
+    let invitation = alex.send_json("POST", "/v1/family/invite", &h, &json!({"days": 7})).await.json();
+    let joined = chi
+        .send_json("POST", "/v1/family/join", &h, &json!({"url": invitation["url"], "code": invitation["code"]}))
+        .await;
+    assert_eq!(joined.status, 200, "{}", joined.text());
+    let links = json!({"links": [{"from": "vie", "to": "bip__chi"}]});
+    assert_eq!(alex.send_json("PUT", "/v1/agent-links", &h, &links).await.status, 200);
+    let links = json!({"links": [{"from": "vie__alex", "to": "bip"}]});
+    assert_eq!(chi.send_json("PUT", "/v1/agent-links", &h, &links).await.status, 200);
+    let proposed = mcp(
+        &alex,
+        "vie-token",
+        "tools/call",
+        json!({"name": "tell_family", "arguments": {"to": ["bip__chi"], "message": "Je rentre tard"}}),
+    )
+    .await;
+    assert_eq!(proposed["isError"], false, "{proposed}");
+    // Chi turns hers off before Alex's « Envoyer »
+    assert_eq!(chi.send_json("PUT", "/v1/agent-links", &h, &json!({"links": []})).await.status, 200);
+    let proposal = alex.get("/v1/family/news?agent=vie", &h).await.json()["proposals"][0].clone();
+    let id = proposal["id"].as_str().unwrap();
+    assert_eq!(alex.send_json("POST", &format!("/v1/family/proposals/{id}/send"), &h, &json!({})).await.status, 200);
+    assert_eq!(chi.get("/v1/family/news?agent=bip", &h).await.json()["received"][0]["told"], false);
+    let past = alex.get("/v1/family/history", &h).await.json();
+    assert_eq!(past["items"][0]["other_agent"], Value::Null, "« Chi (Bip) » though Bip did not get it: {past}");
 }

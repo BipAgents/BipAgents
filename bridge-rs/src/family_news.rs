@@ -225,7 +225,14 @@ fn recipient_end(linked: &Households, recipient: &Value) -> (String, String, Opt
         .and_then(|h| h.get("name").map(py::py_str))
         .filter(|n| !n.is_empty())
         .unwrap_or_else(|| str_of(recipient, "name"));
-    let agent = agent.map(|a| Some(str_of(recipient, "agent")).filter(|n| !n.is_empty()).unwrap_or(a));
+    // its shown name: `agent` since 19/11, « Cuisine (Léa) » in a proposal kept from before, else its id
+    let agent = agent.map(|a| match str_of(recipient, "agent") {
+        shown if !shown.is_empty() => shown,
+        _ => {
+            let old = str_of(recipient, "name");
+            old.split_once(" (").map(|(shown, _)| shown.to_string()).filter(|s| !s.is_empty()).unwrap_or(a)
+        }
+    });
     (household, name, agent)
 }
 
@@ -394,7 +401,8 @@ pub fn resolve(
             push(json!({"id": m.id, "name": m.name}), &mut out);
             continue;
         }
-        let found = split(&target).and_then(|(agent, household)| Some((agent, members.iter().find(|m| m.id == household)?)));
+        let found =
+            split(&target).and_then(|(agent, household)| Some((agent, members.iter().find(|m| m.id == household)?)));
         match found {
             Some((agent, m)) if sends_to(links, sender, &target) && m.takes(&agent, sender) => {
                 push(json!({"id": target, "name": m.name, "agent": m.shown(&agent)}), &mut out);
@@ -689,11 +697,13 @@ pub async fn send(
             None => (rid.clone(), None),
         };
         let entry = linked.get(&household);
+        let named = target.is_some();
         // escaped going out too, for a recipient's older bridge (audit 2026-10-27 #15)
         let body = json!({"agent": target, "sender": agent_name, "from_agent": tk::in_note_line(&shown),
                           "text": tk::in_note(&text)});
+        // (reached, named here, her agent read it: her answer's `told`)
         async move {
-            let Some(entry) = entry else { return false };
+            let Some(entry) = entry else { return (false, named, false) };
             let url = crate::family_relay::reach_url(&entry);
             let key = entry.get("key_out").map(py::py_str).unwrap_or_default();
             match crate::door_tls::household_client(http, &entry)
@@ -704,16 +714,19 @@ pub async fn send(
                 .send()
                 .await
             {
-                Ok(resp) => resp.status().is_success(),
-                Err(_) => false,
+                Ok(resp) if resp.status().is_success() => {
+                    let told = resp.json::<Value>().await.ok().and_then(|a| a.get("told")?.as_bool()).unwrap_or(false);
+                    (true, named, told)
+                }
+                _ => (false, named, false),
             }
         }
     });
     let results = futures::future::join_all(calls).await;
     let mut delivery = Delivery { sent: Vec::new(), failed: Vec::new() };
     let mut failed_ids: Vec<String> = Vec::new();
-    for (r, ok) in recipients.iter().zip(results) {
-        if ok {
+    for (r, (ok, _, _)) in recipients.iter().zip(&results) {
+        if *ok {
             delivery.sent.push(str_of(r, "name"));
         } else {
             delivery.failed.push(str_of(r, "name"));
@@ -721,8 +734,11 @@ pub async fn send(
         }
     }
     update(config, now, |data| {
-        for r in &recipients {
+        for (r, (ok, named, told)) in recipients.iter().zip(&results) {
             let (household, household_name, other) = recipient_end(&linked, r);
+            // « Nouvelles passées » names her agent only when it read it (sent), or when it was the one asked
+            // (failed: « Envoyer » again tries it)
+            let other = other.filter(|_| *named && (*told || !*ok));
             let state = if failed_ids.contains(&str_of(r, "id")) { "failed" } else { "sent" };
             add_history(
                 data,
@@ -835,7 +851,8 @@ pub fn receive(
             now,
         );
         if told {
-            let via = if from_agent.is_empty() { String::new() } else { format!(" (through their agent {from_agent})") };
+            let via =
+                if from_agent.is_empty() { String::new() } else { format!(" (through their agent {from_agent})") };
             add_note(data, &agent.name, format!("- {} — {from}{via}: « {text} »", clock(now)));
         }
     })?;
@@ -942,7 +959,12 @@ pub fn router() -> Router<AppState> {
 /// Her other agents, the first one included, never read that household's news: the person gets the card only.
 pub fn told_by(links: &[(String, String)], household: &str, agent: &str) -> Vec<String> {
     let theirs = format!("{SEPARATOR}{household}");
-    links.iter().filter(|(_, to)| to == agent).filter_map(|(from, _)| from.strip_suffix(&theirs)).map(str::to_string).collect()
+    links
+        .iter()
+        .filter(|(_, to)| to == agent)
+        .filter_map(|(from, _)| from.strip_suffix(&theirs))
+        .map(str::to_string)
+        .collect()
 }
 
 /// `POST /family/tell`: a linked household's bridge hands a message over, with the key we gave it. The person always
@@ -1047,7 +1069,11 @@ mod tests {
         let (to, _) = resolve(&family, &["cuisine__lea".into()], "jardin", &ours).unwrap();
         assert_eq!(to, [json!({"id": "lea", "name": "Léa"})], "another sender of ours");
         let err = resolve(&family, &["marc".into()], "vie", &ours).unwrap_err();
-        assert!(err.0.contains("`lea`") && err.0.contains("cuisine__lea") && !err.0.contains("budget__lea"), "{}", err.0);
+        assert!(
+            err.0.contains("`lea`") && err.0.contains("cuisine__lea") && !err.0.contains("budget__lea"),
+            "{}",
+            err.0
+        );
         assert!(resolve(&family, &[], "vie", &ours).is_err());
     }
 
