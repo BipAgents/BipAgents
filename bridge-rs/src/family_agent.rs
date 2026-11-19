@@ -644,7 +644,9 @@ fn agent_apply(data: &mut Dict, arguments: &Dict, by: &str, at: f64) -> Result<(
 }
 
 const LIST_NAMES: [&str; 5] = ["list", "list_id", "listId", "list_title", "list_name"];
-const ITEM_NAMES: [&str; 4] = ["id", "item_id", "itemId", "item"];
+/// An item op's item: the explicit names first (`id` may then hold the list's id, as the list ops use it); `id` alone
+/// is the item.
+const ITEM_NAMES: [&str; 4] = ["item_id", "itemId", "item", "id"];
 
 fn first_of(arguments: &Dict, names: &[&str]) -> String {
     names.iter().map(|n| tk::strip(&tk::str_or_empty(arguments.get(*n))).to_string()).find(|v| !v.is_empty()).unwrap_or_default()
@@ -689,8 +691,8 @@ fn agent_arguments(lists: &[Value], arguments: &Dict) -> Dict {
     let list_ref = first_of(arguments, &LIST_NAMES);
     match op.as_str() {
         "item_add" | "clear_done" => {
-            // their only id is the list's: `id` names it when nothing else does
-            let reference = if list_ref.is_empty() { first_of(arguments, &ITEM_NAMES) } else { list_ref };
+            // their only id is the list's: `id` names it when nothing else does (`item` may be the new item's text)
+            let reference = if list_ref.is_empty() { first_of(arguments, &["id"]) } else { list_ref };
             if let Some(id) = list_named(lists, &reference) {
                 body.insert("list".into(), json!(id));
             }
@@ -1587,7 +1589,8 @@ mod tests {
         write(&mut data, json!({"op": "item_delete", "id": shopping, "item": rice}))
             .unwrap_or_else(|e| panic!("item: {e}"));
         assert_eq!(data["lists"][0]["items"].as_array().unwrap().len(), 2);
-        assert_eq!(data["lists"].as_array().unwrap().len(), 2, "no list touched");
+        assert_eq!(data["lists"].as_array().unwrap().len(), 3, "no list touched");
+        assert_eq!(str_of(&data["lists"][0], "id"), shopping);
         // `id` alone is still the item
         write(&mut data, json!({"op": "item_save", "id": eggs, "done": true})).unwrap();
         assert_eq!(data["lists"][0]["items"][1]["done"], true);
