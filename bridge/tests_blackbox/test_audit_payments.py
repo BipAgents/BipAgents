@@ -98,7 +98,7 @@ def test_2_2_the_pay_button_for_another_total_is_never_pressed_chromium(bridges,
         turn_on(bridge)
         bridge.post("/v1/vault", headers=AUTH, json={**CARD, "sites": ["127.0.0.1"]})
         result, asked = pay(bridge, ARGS)
-        assert " 12.50 EUR on 127.0.0.1" in asked, (result, asked)
+        assert asked is None, (result, asked)   # Correction 4: read before the person is asked
         # since fix-pay-total-check (19/11) the page's « Total de la commande : 1 250,00 € » is read once the card is
         # typed: the bridge cancels by itself, before any pay button is looked for
         said = result["content"][0]["text"]

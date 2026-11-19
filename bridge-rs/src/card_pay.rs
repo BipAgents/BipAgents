@@ -1461,6 +1461,12 @@ async fn pay(state: &AppState, agent: &AgentConfig, arguments: &Dict, asker: &As
     if let Err(refused) = form_on(&mut page, &card_fill::Frames::new(&url).with_tests(&config), &host).await {
         return Ok(refused);
     }
+    // The page's total read once before the person is asked (no card involved, Relecture 4): a page whose total can't
+    // be read « approved » is handed over before any approval is spent on it. Read again under the hold, before
+    // typing, and right before the press.
+    if let Some(handed) = read_before_asking(state, agent, &entry, &mut page).await {
+        return Ok(handed);
+    }
     drop(page);
     if let Some(refused) = browser_cannot_pay(&config, &agent.name).await {
         return Ok(refused);
@@ -1681,6 +1687,60 @@ fn next_step(cents: i64, currency: &str) -> String {
     )
 }
 
+/// The first read of the page's total, before the person is asked (no card typed, no hold yet): None when it reads
+/// « approved »; else the payment handed over at once (« Panier prêt », the person's line), what the agent is told.
+async fn read_before_asking(state: &AppState, agent: &AgentConfig, entry: &Held, page: &mut Page) -> Option<Dict> {
+    let config = state.config();
+    let total = read_total(&config, &agent.name, entry, page, false).await;
+    if total == PageTotal::Approved {
+        return None;
+    }
+    journal(&config, entry, &agent.name, "failed");
+    Some(stop_for(state, agent, entry, &total).await)
+}
+
+/// `read_before_asking` for a payment of another entry (link_wallet.rs, before the person approves and Link makes a
+/// one-time card): `page` the checked payment page, `(url, host)` its address.
+pub(crate) async fn total_before_asking(
+    state: &AppState,
+    agent: &AgentConfig,
+    page: &mut Page,
+    (url, port, host): (&str, u16, &str),
+    cents: i64,
+    currency: &str,
+    merchant: &str,
+) -> Option<Dict> {
+    let entry = Held {
+        token: String::new(),
+        port,
+        url: url.to_string(),
+        payment: format!("pay_{}", &py::uuid4_hex()[..12]),
+        card: "Link".into(),
+        last4: String::new(),
+        site: host.to_string(),
+        cents,
+        currency: currency.to_string(),
+        since: Instant::now(),
+        since_text: crate::vault::now(),
+        lease: None,
+        sites: vec![host.to_string()],
+        hosted: None,
+        target: String::new(),
+        typed: false,
+        loader: String::new(),
+        stop: None,
+        fields: Vec::new(),
+        merchant: merchant.to_string(),
+        vault: false,
+        clicked: false,
+        epoch: suspends(),
+        spent_on: None,
+        taken_over: false,
+        total: PageTotal::Unread(Default::default()),
+    };
+    read_before_asking(state, agent, &entry, page).await
+}
+
 /// The page's total read by the bridge (`read_total`) for this payment, kept with its hold for the press.
 fn keep_total(agent: &str, token: &str, total: &PageTotal) {
     if let Some(entry) = held().get_mut(agent).filter(|e| e.token == token) {
@@ -1785,11 +1845,13 @@ async fn stop_for(state: &AppState, agent: &AgentConfig, entry: &Held, total: &P
                 cards::format_cents(entry.cents),
                 cur = entry.currency
             );
-            bridge_stops(state, agent, entry, (&line, &why), entry.cents, "amount_differs").await
+            // the « Panier prêt » with the page's amount (Relecture 4): what the person would pay there
+            bridge_stops(state, agent, entry, (&line, &why), *shown, "amount_differs").await
         }
         PageTotal::Doubt(Doubt::Unclear) | PageTotal::Unread(_) => {
             tracing::warn!(agent = %agent.name, site = %entry.site, "card payment: the page's total can't be checked, handed over");
             let line = crate::pay_line::unverified(&lang);
+            // (the « Panier prêt » card needs an amount: the approved one, the page's could not be read)
             let why = "BipAgents could not check the payment page's total against the approved amount: nothing was typed.";
             bridge_stops(state, agent, entry, (&line, why), entry.cents, "handed_over").await
         }

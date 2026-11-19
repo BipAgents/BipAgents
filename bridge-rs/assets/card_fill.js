@@ -298,15 +298,24 @@
         into.size += text.length + 1;
       };
       // an old price struck out, a product suggested (« Ajouter au panier » in its box): never the total (Relecture 3)
-      const ADD = /ajouter au panier|add to (cart|bag|basket)|in den warenkorb|a[ñn]adir al carrito|in (de )?winkel(wagen|mand)|toevoegen aan (winkelwagen|winkelmand)/i;
+      // A product suggested: the SMALLEST box around the amount that holds an add button (« Ajouter au panier »,
+      // « + Ajouter », « Add », FR/EN/DE/ES/NL), only when that box holds one price and no total's words (Relecture 4,
+      // d1: an order summary with a cross-sell box inside is never a suggestion).
+      const ADD = /^[\s+]*(ajouter( au panier)?|add( to (cart|bag|basket))?|in den warenkorb|hinzuf[üu]gen|a[ñn]adir( al carrito)?|toevoegen( aan (winkelwagen|winkelmand))?|in (de )?winkel(wagen|mand))[\s!]*$/i;
+      const TOTAL_WORDS = /total|[àa] payer|montant|amount|betrag|gesamt|summe|importe|totaal|bedrag|te betalen|zu zahlen|a pagar/i;
+      const PRICE = /\d[\d .,'\u00a0\u202f]*[.,]\d{2}|\d+\s?(€|eur|\$|£|chf)/gi;
       const boxes = new Map();
+      const addButton = (box) => [...box.querySelectorAll("button, a, input[type=button], input[type=submit], [role=button]")]
+        .some((b) => ADD.test((b.value || b.textContent || b.getAttribute("aria-label") || "").trim()));
       const suggests = (el) => {
         for (let up = el, level = 0; up && up !== document.body && level < 5; up = up.parentElement, level++) {
           if (!boxes.has(up)) {
             const words = up.textContent || "";
-            boxes.set(up, words.length < 3000 && ADD.test(words));
+            const holds = words.length < 3000 && addButton(up);
+            boxes.set(up, holds ? ((words.match(PRICE) || []).length <= 1 && !TOTAL_WORDS.test(words)) : null);
           }
-          if (boxes.get(up)) return true;
+          const box = boxes.get(up);
+          if (box !== null) return box; // the smallest box with an add button decides
         }
         return false;
       };
@@ -360,7 +369,13 @@
       };
       if (document.body) walk(document.body);
       const out = (b) => b.lines.join("\n").replace(/\d(?:[ -]?\d){11,18}/g, " ").slice(0, LIMIT);
-      return {shown: out(shown), all: out(all), truncated};
+      // the visible frames of real size in this document (Relecture 4, d2): each must be read, else not read for sure
+      const frames = [...document.querySelectorAll("iframe, frame")].filter((f) => {
+        const r = f.getBoundingClientRect(), st = getComputedStyle(f);
+        return r.width >= 120 && r.height >= 40 && st.visibility !== "hidden" && st.display !== "none"
+          && (!f.checkVisibility || f.checkVisibility({opacityProperty: true, visibilityProperty: true}));
+      }).length;
+      return {shown: out(shown), all: out(all), truncated, frames};
     },
     // The bank asks the person (3-D Secure, « confirm in your banking app »).
     bankAsks() {

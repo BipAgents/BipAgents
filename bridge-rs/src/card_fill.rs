@@ -516,6 +516,33 @@ impl Cdp {
     }
 }
 
+/// The text nodes of the closed shadow roots in a DevTools node tree (`DOM.getDocument` with `pierce`), scripts and
+/// styles left out, card-like digit runs dropped (page_total.rs drops them again).
+fn closed_texts(node: &Value, inside: bool, out: &mut Vec<String>) {
+    let name = node.get("nodeName").and_then(Value::as_str).unwrap_or("");
+    if matches!(name, "SCRIPT" | "STYLE" | "NOSCRIPT" | "TEMPLATE" | "INPUT" | "SELECT" | "OPTION" | "TEXTAREA") {
+        return;
+    }
+    if inside && node.get("nodeType").and_then(Value::as_u64) == Some(3) {
+        let text = node.get("nodeValue").and_then(Value::as_str).unwrap_or("").split_whitespace().collect::<Vec<_>>().join(" ");
+        if !text.is_empty() && out.len() < 2000 {
+            out.push(text);
+        }
+    }
+    for key in ["children", "shadowRoots"] {
+        for child in node.get(key).and_then(Value::as_array).into_iter().flatten() {
+            let closed = child.get("shadowRootType").and_then(Value::as_str) == Some("closed");
+            closed_texts(child, inside || closed, out);
+        }
+    }
+    if let Some(content) = node.get("contentDocument") {
+        closed_texts(content, inside, out);
+    }
+    if let Some(root) = node.get("root") {
+        closed_texts(root, inside, out);
+    }
+}
+
 /// The agent's current tab, attached.
 pub struct Page {
     pub cdp: Cdp,
@@ -1242,11 +1269,15 @@ impl Page {
         let seen = self.frames().await?;
         let mut texts = Vec::new();
         let mut done: Vec<String> = Vec::new();
-        let mut closed_roots: Vec<(String, bool)> = Vec::new();
+        // each read frame: its id and how many visible frames of real size its document holds (`pageText`)
+        let mut big: Vec<(String, u64)> = Vec::new();
+        let mut sessions: Vec<(String, bool)> = Vec::new();
         for FrameSeen { session, id, url, .. } in seen.clone() {
             if done.contains(&id) {
                 continue;
             }
+            // a frame not read (not the page's own site nor a provider's, or not readable) is never left out silently:
+            // its parent counts it (`frames`), and a visible one of real size makes the page not read for sure
             if id != main && !(rule.allows(&url) && ancestors_of(&id, &seen).iter().all(|a| rule.allows(a))) {
                 continue;
             }
@@ -1263,23 +1294,42 @@ impl Page {
             let provider = provider_frame(&host).is_some()
                 || provider_page(&host).is_some()
                 || rule.test.iter().any(|t| at_or_below(&host, t));
-            done.push(id);
-            // a closed shadow root (a web component's own text: not reachable by the page's script, Relecture 3, c1)
-            // makes the frame unread for sure: never « approved » (images and canvases stay a known limit)
-            let closed = match closed_roots.iter().find(|(s, _)| *s == session) {
-                Some((_, closed)) => *closed,
-                None => {
-                    let doc = self.cdp.call("DOM.getDocument", json!({"depth": -1, "pierce": true}), Some(&session)).await;
-                    let closed = doc.map(|d| d.to_string().contains("\"shadowRootType\":\"closed\"")).unwrap_or(true);
-                    if closed {
-                        tracing::info!(frame = %host, "card payment: a closed shadow root in the page, its total not read for sure");
-                    }
-                    closed_roots.push((session.clone(), closed));
-                    closed
-                }
-            };
-            let truncated = read.get("truncated").and_then(Value::as_bool).unwrap_or(true) || closed;
+            done.push(id.clone());
+            big.push((id, read.get("frames").and_then(Value::as_u64).unwrap_or(0)));
+            if !sessions.iter().any(|(s, _)| *s == session) {
+                sessions.push((session.clone(), provider));
+            }
+            let truncated = read.get("truncated").and_then(Value::as_bool).unwrap_or(true);
             texts.push(crate::page_total::PageText { shown: shown.to_string(), all: all.to_string(), provider, truncated });
+        }
+        // every visible frame of real size read (Relecture 4, d2): else the page's total is not read for sure
+        let missing = big.iter().any(|(id, count)| {
+            let read = seen.iter().filter(|f| f.parent.as_deref() == Some(id.as_str()) && done.contains(&f.id)).count();
+            (read as u64) < *count
+        });
+        if missing {
+            tracing::info!(frames = texts.len(), "card payment: a visible frame of the page not read, its total not read for sure");
+            for text in &mut texts {
+                text.truncated = true;
+            }
+        }
+        // closed shadow roots (a web component's own text, out of the page script's reach, Relecture 3 c1 / 4 d3):
+        // their text read through DevTools, as laid out but not shown (it can block « approved », never support it)
+        for (session, provider) in sessions {
+            let Ok(doc) = self.cdp.call("DOM.getDocument", json!({"depth": -1, "pierce": true}), Some(&session)).await
+            else {
+                for text in &mut texts {
+                    text.truncated = true;
+                }
+                continue;
+            };
+            let mut closed = Vec::new();
+            closed_texts(&doc, false, &mut closed);
+            if !closed.is_empty() {
+                tracing::info!(pieces = closed.len(), "card payment: text of a closed shadow root read");
+                let all = closed.join("\n");
+                texts.push(crate::page_total::PageText { shown: String::new(), all, provider, truncated: false });
+            }
         }
         Ok(texts)
     }
@@ -1473,6 +1523,20 @@ mod tests {
     /// `fresh` waited for it to close (« another tab would not close ») and every payment was handed over, nothing
     /// typed. Those addresses are then asked for their window (`tab_targets`; a real tab on one is closed, the
     /// black-box test_card_payments_chrome.py).
+    #[test]
+    fn only_the_text_of_closed_shadow_roots_is_taken_from_the_devtools_tree() {
+        let doc = json!({"root": {"nodeName": "#document", "children": [{"nodeName": "BODY", "children": [
+            {"nodeName": "#text", "nodeType": 3, "nodeValue": "Total panier 27,97 €"},
+            {"nodeName": "DIV", "shadowRoots": [{"nodeName": "#document-fragment", "shadowRootType": "closed", "children": [
+                {"nodeName": "P", "children": [{"nodeName": "#text", "nodeType": 3, "nodeValue": " Total à payer  32,87 € "}]},
+                {"nodeName": "SCRIPT", "children": [{"nodeName": "#text", "nodeType": 3, "nodeValue": "var x = 1"}]}]}]},
+            {"nodeName": "SPAN", "shadowRoots": [{"nodeName": "#document-fragment", "shadowRootType": "open", "children": [
+                {"nodeName": "#text", "nodeType": 3, "nodeValue": "open root, read by pageText"}]}]}]}]}});
+        let mut out = Vec::new();
+        closed_texts(&doc, false, &mut out);
+        assert_eq!(out, ["Total à payer 32,87 €"]);
+    }
+
     #[test]
     fn chromes_own_ui_is_no_tab_to_close_or_blank() {
         let targets = json!({"targetInfos": [

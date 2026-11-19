@@ -63,7 +63,8 @@ def test_another_total_on_the_page_is_cancelled_by_the_bridge_and_the_person_tol
     try:
         result, asked = pay(bridge, {**CAWL, "amount": "24.50"})
         said = result["content"][0]["text"]
-        assert asked and " 24.50 EUR on 127.0.0.1" in asked, asked
+        # Correction 4: read before the person is asked: handed over before any approval
+        assert asked is None, asked
         assert result["isError"] is True, result
         assert "its total is 27.97 EUR, but the person approved 24.50 EUR" in said, said
         assert "BipAgents cancelled the payment itself" in said and "nothing was paid" in said, said

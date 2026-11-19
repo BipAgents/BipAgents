@@ -668,13 +668,20 @@ async fn pay(state: &AppState, agent: &AgentConfig, arguments: &Dict, asker: &As
         )));
     }
     let fields = page.fields().await.unwrap_or_default();
-    drop(page);
     if !fields.iter().any(|f| f.kind == "number") {
         return Ok(refusal(&format!(
             "No card number field on this page ({host}). Go to the payment step (where the card number is asked), \
              then call {PAY} again."
         )));
     }
+    // the page's total read before the person approves and Link makes a one-time card (Relecture 4): a page whose total
+    // can't be read « approved » spends neither
+    if let Some(handed) =
+        crate::card_pay::total_before_asking(state, agent, &mut page, (&url, port, &host), cents, &currency, &items).await
+    {
+        return Ok(handed);
+    }
+    drop(page);
     // before the person approves and Link makes a one-time card for it (security check 11/11, N5)
     if let Some(refused) = crate::card_pay::browser_cannot_pay(&config, &agent.name).await {
         return Ok(refused);
