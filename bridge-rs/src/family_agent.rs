@@ -1596,6 +1596,28 @@ mod tests {
         assert_eq!(data["lists"][0]["items"][1]["done"], true);
     }
 
+    /// Review 19/11: `item` is also the new text a model gives (« Oat milk »), beside the item's id in `id`; the
+    /// candidate that really is an item's id wins. A list op's « no such list » names the field its id goes in.
+    #[test]
+    fn the_item_is_the_candidate_that_is_an_items_id() {
+        let mut data = Dict::new();
+        seed_in(&mut data, "en", "Alex", 1.0);
+        let shopping = str_of(&data["lists"][0], "id");
+        let write = |data: &mut Dict, args: Value| agent_apply(data, &body(args), "Family", 2.0);
+        write(&mut data, json!({"op": "item_add", "list": shopping, "text": "Milk"})).unwrap();
+        let milk = str_of(&data["lists"][0]["items"][0], "id");
+        write(&mut data, json!({"op": "item_save", "list": shopping, "id": milk, "item": "Oat milk", "done": true}))
+            .unwrap_or_else(|e| panic!("item as text: {e}"));
+        assert_eq!(data["lists"][0]["items"][0]["done"], true);
+        // the list's id in `id`, the item in `item`, no `list`
+        write(&mut data, json!({"op": "item_save", "id": shopping, "item": milk, "done": false})).unwrap();
+        assert_eq!(data["lists"][0]["items"][0]["done"], false);
+        let wrong = write(&mut data, json!({"op": "list_delete", "id": "l00000000"})).unwrap_err();
+        assert!(wrong.contains("give `id` one of these"), "{wrong}");
+        let wrong = write(&mut data, json!({"op": "item_add", "list": "l00000000", "text": "x"})).unwrap_err();
+        assert!(wrong.contains("give `list` one of these"), "{wrong}");
+    }
+
     #[test]
     fn only_the_familys_tools_answer() {
         // pages, audio and routines for the family since 12/11 (family_thread.rs: everyone's)
