@@ -1074,7 +1074,9 @@ async fn status(State(state): State<AppState>, q: QueryMap) -> ApiResult<Respons
             (name, result)
         })
         .collect();
-    Ok(web::ok(json!({"agents": agents, "model": model, "protected": config.hermes.isolated})))
+    // the home's sub-tasks (jobs.rs `home_jobs`): no request of its own, the home asks this one anyway
+    let jobs = crate::jobs::home_jobs(&config);
+    Ok(web::ok(json!({"agents": agents, "model": model, "protected": config.hermes.isolated, "jobs": jobs})))
 }
 
 /// The LAN door as it is now (address, certificate): the app refreshes it while the tailnet works.

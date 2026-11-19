@@ -252,8 +252,7 @@ async fn the_person_pauses_resumes_and_forgets_a_task() {
     let board = board(&config, None);
     let job = board.create(&agent, "Long", "Fais-le.", 0.50, None).await.unwrap();
     let id = id_of(&job);
-    let again = board.create(&agent, "Autre", "Encore.", 0.50, None).await.unwrap_err();
-    assert!(again.to_string().contains("already"));
+    // (several at once since 19/11: `several_tasks_of_one_agent_run_at_once`)
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     assert_eq!(board.pause(&id).await.unwrap()["state"], "stopping");
     board.wait(&id).await;
@@ -670,4 +669,69 @@ async fn a_task_counts_its_euros_as_the_month_s_credit_does_cache_reads_included
     assert_eq!((resumed["state"].as_str(), resumed["budget_eur"].as_f64()), (Some("running"), Some(0.215)));
     board.wait(&id).await;
     assert_eq!(board.view(&id).unwrap()["state"], "done");
+}
+
+type Hinted = Arc<Mutex<Vec<(String, String, String)>>>;
+
+fn hinted(board: Arc<Jobs>, hints: &Hinted) -> Arc<Jobs> {
+    let mut jobs = Arc::try_unwrap(board).ok().unwrap();
+    let hints = hints.clone();
+    let hint: jobs::HintJob = Arc::new(move |agent, job, why| {
+        hints.lock().unwrap().push((agent, job, why));
+        Box::pin(async {})
+    });
+    jobs.hint = Some(hint);
+    Arc::new(jobs)
+}
+
+/// Sub-tasks (Alex 19/11): one agent runs up to three tasks at once (the install's three too), the fourth refused.
+#[tokio::test]
+async fn several_tasks_of_one_agent_run_at_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_fake, url) = gateway(1000, 10).await;
+    let (config, agent) = setup(dir.path(), &url);
+    let board = board(&config, None);
+    let mut ids = Vec::new();
+    for title in ["Mails", "Assurances", "Vacances"] {
+        let job = board.create(&agent, title, "Fais-le en entier.", 0.50, None).await.unwrap();
+        assert_eq!(job["state"], "running", "{title}");
+        ids.push(id_of(&job));
+    }
+    let fourth = board.create(&agent, "Encore", "Encore une.", 0.50, None).await.unwrap_err();
+    assert!(fourth.to_string().contains("three background tasks"), "{fourth}");
+    assert_eq!(jobs::AGENT_RUNNING_MAX, 3);
+    for id in ids {
+        board.forget(&id).await.unwrap();
+    }
+}
+
+/// The apps are told (a silent « jobs » hint, no polling) when a task starts, ends and is seen; a finished task stays
+/// « not seen » for every device until one of them opened its result, and the home's list (`/v1/status`) says so.
+#[tokio::test]
+async fn a_finished_task_waits_to_be_seen_and_the_apps_are_hinted() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_fake, url) = gateway(3, 40_000).await;
+    let (config, agent) = setup(dir.path(), &url);
+    let hints: Hinted = Default::default();
+    let board = hinted(board(&config, None), &hints);
+    let job = board.create(&agent, "Plan 10 km", "Prépare mon plan pour un 10 km.", 0.50, None).await.unwrap();
+    let id = id_of(&job);
+    let home = jobs::home_jobs(&config);
+    assert_eq!((home.len(), home[0]["state"].as_str()), (1, Some("running")));
+    board.wait(&id).await;
+    let done = board.view(&id).unwrap();
+    assert_eq!((done["state"].as_str(), done["seen"].as_bool()), (Some("done"), Some(false)));
+    let home = jobs::home_jobs(&config);
+    assert_eq!((home.len(), home[0]["id"].as_str(), home[0]["seen"].as_bool()), (1, Some(id.as_str()), Some(false)));
+    assert!(!home[0].contains_key("report") && !home[0].contains_key("prompt"), "the home's list stays small");
+    board.seen(&id).await.unwrap();
+    assert_eq!(board.view(&id).unwrap()["seen"], true);
+    assert!(jobs::home_jobs(&config).is_empty());
+    let whys: Vec<String> = hints.lock().unwrap().iter().filter(|(a, j, _)| a == "coach" && *j == id).map(|h| h.2.clone()).collect();
+    assert_eq!(whys, vec!["started", "ended", "seen"]);
+    // a task finished before 19/11 (no `seen`) is not « new » on the home
+    let mut old = jobs::load(&config, &id).unwrap();
+    old.remove("seen");
+    jobs::save(&config, &old).unwrap();
+    assert!(jobs::home_jobs(&config).is_empty());
 }

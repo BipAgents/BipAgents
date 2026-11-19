@@ -30,7 +30,12 @@
 //!     POST   /v1/jobs/{id}/pause
 //!     POST   /v1/jobs/{id}/resume            {budget_eur?, message?}   a bigger budget (its new total), the words
 //!                                            that resume it (a mail scan: {max_tokens?})
+//!     POST   /v1/jobs/{id}/seen              a finished task's result opened (any device): off the home everywhere
 //!     DELETE /v1/jobs/{id}                   stopped if it runs, then forgotten (its conversation and pages stay)
+//!
+//! Sub-tasks (19/11): up to `AGENT_RUNNING_MAX` tasks of one agent at once; the apps hinted by a silent push
+//! (`reason: jobs`, `HintJob`) when one starts, moves a step, ends, is seen or forgotten; `GET /v1/status` lists the
+//! home's (`home_jobs`); a done step's one line after « ⇒ » (steps.rs `RESULT_MARK`), kept in the task's `steps`.
 //!
 //! Mail scans keep their own routes for their steps (/v1/agents/{id}/mail-scan…); their job id here is
 //! `mail-scan:<agent>`.
@@ -71,6 +76,10 @@ pub const POLL_SECONDS: f64 = 10.0;
 pub const MAX_STEP_SECONDS: f64 = 3.0 * 3600.0;
 /// Tasks running at once on this install (one per agent).
 pub const RUNNING_MAX: usize = 3;
+/// Tasks of one agent running at once (sub-tasks, Alex 19/11: « 2 petits Bips travaillent pour Vie »). The install's
+/// `RUNNING_MAX` stays 3: each task is a run of the agent's Hermes beside the person's conversations, measured at about
+/// 320 MB a person on a VPS-2 (2026-10-19) and gated by heavy_work's room; one agent may take all three.
+pub const AGENT_RUNNING_MAX: usize = 3;
 /// An agent's proposals waiting for the person.
 pub const PROPOSALS_MAX: usize = 5;
 /// A task paused because the place was too full (heavy_work.rs).
@@ -112,7 +121,9 @@ cannot go on: choose sensible defaults and say which in your report. Keep what y
 page (create_page) for a table, a comparison or a dashboard; a file you make (a deck, a Word document, a spreadsheet, a
 PDF, each version or style asked) given with give_file, and the MEDIA line it gives you put in your report. Your work
 has a budget; if you are told to continue, pick up where you stopped instead of starting again. End with a short
-report in the person's language: what you did, what you found or made and where it is, what is left or uncertain.";
+report in the person's language: what you did, what you found or made and where it is, what is left or uncertain.
+When you mark a step of your task list completed, end its text with « ⇒ » and what it found in a few words (\
+« Read the current contract ⇒ MAIF, 312 € a year »): the person sees that line under the step.";
 pub const CONTINUE: &str = "Continue the task where you stopped (don't start again), then end with your report.";
 
 /// The task's own drafts folder, for an agent whose tools run in Hermes' docker sandbox (its persistent
@@ -351,7 +362,7 @@ fn counted_tokens(job: &Dict) -> Option<Value> {
 
 /// `task_view`, on a place of the offer (the tokens as Hermes counts them) or at home (`counted_tokens`).
 pub fn task_view_on(job: &Dict, offer: bool) -> Dict {
-    const KEEP: [&str; 20] = [
+    const KEEP: [&str; 22] = [
         "id",
         "kind",
         "agent",
@@ -372,6 +383,9 @@ pub fn task_view_on(job: &Dict, offer: bool) -> Dict {
         "proposed_by",
         "runs",
         "from_session",
+        // seen by the person (a finished task, 19/11); its list as it last was (its screen once it ended)
+        "seen",
+        "steps",
     ];
     // an extraction from an archive (archives/records_fill.rs): its euros, its cap, the documents read
     const EXTRACT: [&str; 5] = ["archive", "progress", "model", "counts", "max_tokens"];
@@ -398,6 +412,33 @@ pub fn task_view_on(job: &Dict, offer: bool) -> Dict {
     view
 }
 
+/// The home's sub-tasks (`GET /v1/status` `jobs`, 19/11): the tasks running, paused or waiting for room, and the ones
+/// finished whose result nobody opened yet (`seen: false`), each in a few fields (the home shows mini Bips and a line;
+/// a task's screen asks `/v1/jobs` for the rest). Newest first.
+pub fn home_jobs(config: &crate::config::Config) -> Vec<Dict> {
+    const FIELDS: [&str; 9] = ["id", "kind", "agent", "title", "state", "reason", "started", "finished", "seen"];
+    let mut out: Vec<Dict> = tasks(config)
+        .into_iter()
+        .filter(|j| !crate::archives::records_fill::is_extract(j) && config.agent(Some(&agent_of(j))).is_some())
+        .filter(|j| match state_of(j).as_str() {
+            "running" | "stopping" | "paused" => true,
+            "done" => j.get("seen") == Some(&json!(false)),
+            _ => false,
+        })
+        .map(|j| FIELDS.iter().map(|k| (k.to_string(), j.get(*k).cloned().unwrap_or(Value::Null))).collect())
+        .collect();
+    out.sort_by(|a, b| {
+        first_number(b, &["started", "created"]).partial_cmp(&first_number(a, &["started", "created"])).unwrap_or(std::cmp::Ordering::Equal)
+    });
+    out
+}
+
+/// A task's list moved on (a step done, another begun): what hints the apps; its words changing alone don't.
+fn steps_moved(before: Option<&Value>, now: &Value) -> bool {
+    let Some(before) = before.filter(|b| b.is_object()) else { return true };
+    crate::steps::counts(before) != crate::steps::counts(now) || crate::steps::current(before) != crate::steps::current(now)
+}
+
 fn state_of(job: &Dict) -> String {
     tk::str_or_empty(job.get("state"))
 }
@@ -416,6 +457,11 @@ fn first_number(job: &Dict, keys: &[&str]) -> f64 {
     0.0
 }
 
+/// The apps told that a task changed (`push.notify_silent(agent, "jobs", {job, why})`): `(agent, job_id, why)`, why
+/// `started`, `step`, `ended`, `paused`, `seen`, `forgotten`. The home and an open task's screen read again on it,
+/// instead of asking every few seconds (Alex 19/11: nothing asked while no task runs).
+pub type HintJob = Arc<dyn Fn(String, String, String) -> BoxFuture<'static, ()> + Send + Sync>;
+
 /// `push.notify_job(agent, session_id, line, job_id, body)`.
 pub type TellJob = Arc<dyn Fn(String, Option<String>, String, String, String) -> BoxFuture<'static, ()> + Send + Sync>;
 
@@ -432,6 +478,8 @@ pub struct Jobs {
     pub followers: std::sync::Mutex<std::collections::HashMap<String, tokio::task::JoinHandle<()>>>,
     /// How a task's end or an agent's proposal is told (`push.notify_job`; tests give their own).
     pub tell: Option<TellJob>,
+    /// How the apps are hinted that a task changed (`HintJob`; tests give their own).
+    pub hint: Option<HintJob>,
     /// « Remplir mon Carnet » for every agent, one after another (notebook/fill.rs).
     pub filler: std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
     /// A finished task's result handed back to the conversation it came from (handback.rs); None: only the push.
@@ -458,8 +506,21 @@ impl Jobs {
             });
             tell
         });
+        let hint: Option<HintJob> = push.clone().map(|push| {
+            let hint: HintJob = Arc::new(move |agent, job_id, why| {
+                let push = push.clone();
+                Box::pin(async move {
+                    let mut extra = Dict::new();
+                    extra.insert("job".into(), json!(job_id));
+                    extra.insert("why".into(), json!(why));
+                    push.notify_silent(&agent, "jobs", extra).await;
+                })
+            });
+            hint
+        });
         Jobs {
             config,
+            hint,
             hermes,
             hub,
             push,
@@ -785,8 +846,8 @@ impl Jobs {
             .filter(|j| ["running", "stopping"].contains(&state_of(j).as_str()))
             .filter(|j| !crate::archives::records_fill::is_extract(j)) // no Hermes run: apart
             .collect();
-        if running.iter().any(|j| agent_of(j) == agent) {
-            return Err(JobError("this agent is already on a background task".into()));
+        if running.iter().filter(|j| agent_of(j) == agent).count() >= AGENT_RUNNING_MAX {
+            return Err(JobError("this agent already has three background tasks running".into()));
         }
         if running.len() >= RUNNING_MAX {
             return Err(JobError("enough background tasks are running here for now".into()));
@@ -837,15 +898,17 @@ impl Jobs {
 
     /// `heavy_work` answered « later » to the agent's own background task: that task stopped at its next step,
     /// paused for room (started again by `resume_after_space`). False when the agent has none running.
+    /// Several may run (19/11) and the call doesn't say which asked: all of the agent's, the asking one among them.
     pub async fn pause_running_for_space(&self, agent: &str) -> bool {
-        let Some(mut job) = tasks(&self.config.get()).into_iter().find(|j| {
-            state_of(j) == "running" && agent_of(j) == agent && !crate::archives::records_fill::is_extract(j)
-        }) else {
-            return false;
-        };
+        let running: Vec<Dict> = tasks(&self.config.get())
+            .into_iter()
+            .filter(|j| state_of(j) == "running" && agent_of(j) == agent && !crate::archives::records_fill::is_extract(j))
+            .collect();
         let Ok(agent) = self.agent(agent) else { return false };
-        self.stop(&agent, &mut job, SPACE_REASON).await;
-        true
+        for mut job in running.iter().cloned() {
+            self.stop(&agent, &mut job, SPACE_REASON).await;
+        }
+        !running.is_empty()
     }
 
     /// The credit back (a pack, the new month): the tasks and mail scans paused for it go on by themselves.
@@ -978,6 +1041,7 @@ impl Jobs {
         let id = tk::str_or_empty(job.get("id"));
         self.follow(&id);
         tracing::info!(agent = %agent.name, job = %id, budget_eur = task_budget(&self.config.get(), job), "job started");
+        self.hint_apps(&agent.name, &id, "started").await;
         Ok(())
     }
 
@@ -1051,6 +1115,18 @@ impl Jobs {
                 }
                 Err(_) => {}
             }
+            // its list moved on (a step done, the next begun): kept with the task (its screen once it ended) and the apps hinted
+            let moved = match self.run_steps(&agent.name, &run_id) {
+                Some(steps) if steps_moved(job.get("steps"), &steps) => {
+                    job.insert("steps".into(), steps);
+                    true
+                }
+                Some(steps) => {
+                    job.insert("steps".into(), steps); // its words, without a hint
+                    false
+                }
+                None => false,
+            };
             if let Some(end) = end {
                 self.ended(&agent, &mut job, end).await;
                 return;
@@ -1082,7 +1158,37 @@ impl Jobs {
                 continue;
             }
             let _ = save(&config, &job);
+            if moved {
+                self.hint_apps(&agent.name, job_id, "step").await;
+            }
         }
+    }
+
+    /// The task's run's list as the hub follows it (steps.rs), None without a hub or a list.
+    fn run_steps(&self, agent: &str, run_id: &str) -> Option<Value> {
+        let sub = self.hub.as_ref()?.subscription(agent, run_id)?;
+        let state = sub.state.lock().unwrap_or_else(|e| e.into_inner());
+        state.steps.clone().filter(|s| s["items"].as_array().is_some_and(|i| !i.is_empty()))
+    }
+
+    /// The apps told that this task changed (`HintJob`).
+    async fn hint_apps(&self, agent: &str, job_id: &str, why: &str) {
+        if let Some(hint) = &self.hint {
+            hint(agent.to_string(), job_id.to_string(), why.to_string()).await;
+        }
+    }
+
+    /// The person saw a finished task's result (its screen, its card in the conversation, on any device): off the
+    /// home everywhere. Its view.
+    pub async fn seen(&self, job_id: &str) -> anyhow::Result<Dict> {
+        let config = self.config.get();
+        let Some(mut job) = load(&config, job_id) else { return Err(job_error("unknown job")) };
+        if job.get("seen") == Some(&json!(false)) {
+            job.insert("seen".into(), json!(true));
+            save(&config, &job)?;
+            self.hint_apps(&agent_of(&job), job_id, "seen").await;
+        }
+        Ok(self.view_of(&job))
     }
 
     async fn stop(&self, agent: &AgentConfig, job: &mut Dict, reason: &str) {
@@ -1139,6 +1245,9 @@ impl Jobs {
             job.insert("state".into(), json!("done"));
             job.insert("report".into(), if report.is_empty() { Value::Null } else { json!(report) });
             job.insert("finished".into(), json!(now));
+            // new on the home until the person opens its result (`seen`); a task without the field (ended before
+            // 19/11) never is
+            job.insert("seen".into(), json!(false));
         } else {
             let error = if error.is_empty() { "the task failed" } else { error.as_str() };
             job.insert("state".into(), json!("failed"));
@@ -1149,6 +1258,7 @@ impl Jobs {
         job.insert("stop_asked".into(), Value::Null);
         job.insert("run_id".into(), Value::Null);
         let _ = save(&self.config.get(), job);
+        self.hint_apps(&agent.name, &tk::str_or_empty(job.get("id")), "ended").await;
         let reason = job.get("reason").cloned().unwrap_or(Value::Null);
         tracing::info!(agent = %agent.name, job = %tk::str_or_empty(job.get("id")), state = %state_of(job),
             reason = ?crate::logs::J(&reason), tokens = spent(job), eur = eur_spent(&self.config.get(), job), "job ended");
@@ -1353,6 +1463,7 @@ impl Jobs {
         }
         // its « Validé pour toi » line: « Annulé », no « Annuler » left on a task that is gone
         crate::approval_level::task_forgotten(&config, job_id);
+        self.hint_apps(&agent_of(&job), job_id, "forgotten").await;
         Ok(())
     }
 
@@ -1834,6 +1945,11 @@ async fn resume_route(
     Ok(web::ok(Value::Object(job)))
 }
 
+async fn seen_route(State(state): State<AppState>, UrlPath(job_id): UrlPath<String>) -> ApiResult<Response> {
+    let job = jobs_of(&state).seen(&job_id).await.map_err(refused)?;
+    Ok(web::ok(Value::Object(job)))
+}
+
 async fn forget_route(State(state): State<AppState>, UrlPath(job_id): UrlPath<String>) -> ApiResult<Response> {
     jobs_of(&state).forget(&job_id).await.map_err(refused)?;
     Ok(web::ok(json!({"ok": true})))
@@ -1847,12 +1963,25 @@ pub fn router() -> Router<AppState> {
         .route("/jobs/{job_id}/start", post(start_route))
         .route("/jobs/{job_id}/pause", post(pause_route))
         .route("/jobs/{job_id}/resume", post(resume_route))
+        .route("/jobs/{job_id}/seen", post(seen_route))
         .route("/jobs/{job_id}", delete(forget_route))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The apps are hinted when a task's list moves on: a step done, another started; not for its words alone.
+    #[test]
+    fn a_step_moving_on_is_a_change_its_words_are_not() {
+        let list = |done: u64, now: &str| {
+            json!({"items": [{"text": "Lire", "status": "done"}, {"text": now, "status": "in_progress"}], "done": done, "total": 3})
+        };
+        assert!(steps_moved(None, &list(1, "Trier")));
+        assert!(!steps_moved(Some(&list(1, "Trier")), &list(1, "Trier")));
+        assert!(steps_moved(Some(&list(1, "Trier")), &list(2, "Trier")));
+        assert!(steps_moved(Some(&list(1, "Trier")), &list(1, "Ranger")));
+    }
 
     #[test]
     fn numbers_and_counters() {

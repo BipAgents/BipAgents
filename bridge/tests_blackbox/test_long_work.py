@@ -50,11 +50,13 @@ def test_start_task_starts_a_task_within_the_direct_budget(bridges, fakes):
     run = fakes.hermes.started["r1"]
     assert run["input"].startswith("Tri des mails\n\nTrie mes mails de la semaine.\n\n<!--bip:task-rules\nThis is a background task")
     assert not run.get("instructions")
-    # one task per agent: the next one is refused, with what to do instead
-    again = call(bridge, "start_task", {"title": "Autre", "instructions": "Encore."})
-    assert again["isError"] and text_of(again) == ("Not started: this agent is already on a background task. "
-                                                  "Propose it with propose_task instead, and tell your person so.")
-    assert bridge.delete(f"/v1/jobs/{job['id']}", headers=AUTH).status_code == 200
+    # three tasks of one agent at once (19/11): the fourth is refused, with what to do instead
+    more = [call(bridge, "start_task", {"title": f"Autre {n}", "instructions": "Encore."}) for n in (2, 3, 4)]
+    assert [m["isError"] for m in more] == [False, False, True]
+    assert text_of(more[2]) == ("Not started: this agent already has three background tasks running. "
+                                "Propose it with propose_task instead, and tell your person so.")
+    for one in jobs(bridge):
+        assert bridge.delete(f"/v1/jobs/{one['id']}", headers=AUTH).status_code == 200
 
 
 def test_start_task_refuses_more_than_the_direct_budget(bridges, fakes):
@@ -321,9 +323,9 @@ def test_a_refused_start_task_is_proposed_and_said(bridges, fakes):
     bridge = with_device(bridges, {"handoff_tool_calls": 3})
     fakes.hermes.rounds = 1000
     fakes.hermes.add_session("api_c", [{"role": "user", "content": ASKED}])
-    busy = bridge.post("/v1/agents/wellness/jobs", headers=AUTH,
-                       json={"title": "Tri des mails", "prompt": "Trie.", "budget_eur": 0.50}).json()
-    refused = "Not started: this agent is already on a background task. Propose it with propose_task instead."
+    busy = [bridge.post("/v1/agents/wellness/jobs", headers=AUTH,
+                        json={"title": f"Tri des mails {n}", "prompt": "Trie.", "budget_eur": 0.50}).json() for n in (1, 2, 3)]
+    refused = "Not started: this agent already has three background tasks running. Propose it with propose_task instead."
     fakes.hermes.runs["run_f"] = (tools("run_f", 3)
                                   + [sse("tool.started", run_id="run_f", tool="mcp_bipagents_start_task", preview="x"),
                                      sse("tool.completed", run_id="run_f", tool="mcp_bipagents_start_task", error=True,
@@ -331,12 +333,13 @@ def test_a_refused_start_task_is_proposed_and_said(bridges, fakes):
                                      sse("run.completed", run_id="run_f", output="")])
     events = follow(bridge, "run_f")
     notice = dict(events)["bridge.notice"]
-    assert notice["code"] == "handoff_proposed" and "already on a background task" in notice["reason"]
+    assert notice["code"] == "handoff_proposed" and "already has three background tasks" in notice["reason"]
     assert "Démarrer" in notice["text"]
     proposed = [j for j in jobs(bridge) if j["state"] == "proposed"]
     assert len(proposed) == 1 and proposed[0]["id"] == notice["job_id"] and ASKED in proposed[0]["prompt"]
     assert bridge.logged("long run: hand-over refused")
-    assert bridge.delete(f"/v1/jobs/{busy['id']}", headers=AUTH).status_code == 200
+    for one in busy:
+        assert bridge.delete(f"/v1/jobs/{one['id']}", headers=AUTH).status_code == 200
 
 
 def test_a_steered_run_that_answered_after_all_is_not_rescued(bridges, fakes):

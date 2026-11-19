@@ -675,8 +675,21 @@ class FakeApns(Fake):
         self.responses: Dict[str, Tuple[int, Optional[str]]] = {}   # token -> (status, reason)
         self.script: List[Tuple[int, Optional[str]]] = []           # next answers, whatever the token
 
-    def pushes(self) -> List[Seen]:
-        return [r for r in list(self.requests) if "/3/device/" in r.path]
+    def pushes(self, hints: bool = False) -> List[Seen]:
+        """The pushes sent; the sub-tasks' silent hints (`reason: jobs`, jobs.rs `HintJob`, 19/11) only with `hints`."""
+        return [r for r in list(self.requests) if "/3/device/" in r.path and (hints or not self.is_hint(r))]
+
+    def hints(self) -> List[Dict[str, Any]]:
+        """The sub-tasks' silent hints: {agent, reason: "jobs", job, why}."""
+        return [r.json() for r in list(self.requests) if "/3/device/" in r.path and self.is_hint(r)]
+
+    @staticmethod
+    def is_hint(seen: Seen) -> bool:
+        try:
+            body = seen.json()
+        except Exception:
+            return False
+        return isinstance(body, dict) and body.get("reason") == "jobs" and "alert" not in body.get("aps", {})
 
     def payloads(self) -> List[Dict[str, Any]]:
         return [r.json() for r in self.pushes()]

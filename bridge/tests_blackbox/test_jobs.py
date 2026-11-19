@@ -55,7 +55,7 @@ def test_a_task_runs_in_its_own_conversation_and_ends_with_its_report(bridges, f
     assert re.fullmatch(r"t[0-9a-f]{12}", job["id"]) and job["state"] == "running" and job["session_id"] == "api_s1"
     assert set(job) == {"id", "kind", "agent", "title", "prompt", "template", "state", "reason", "error", "created",
                         "started", "finished", "tokens", "budget_eur", "eur", "max_tokens", "session_id", "report",
-                        "proposed_by", "runs", "from_session"}
+                        "proposed_by", "runs", "from_session", "seen", "steps"}
     assert (job["kind"], job["proposed_by"], job["runs"], job["template"]) == ("task", "person", 1, "research")
     assert fakes.hermes.created == [("", {"title": "🧩 Écoles du quartier"})]
     run = fakes.hermes.seen("/v1/runs", "POST")[0].json()
@@ -71,8 +71,10 @@ def test_a_task_runs_in_its_own_conversation_and_ends_with_its_report(bridges, f
     assert "Tâches de fond" not in words
     stored = bridge.state_dir / "jobs" / f"{job['id']}.json"
     assert oct(os.stat(stored).st_mode & 0o777) == "0o600" and json.loads(stored.read_text())["run_id"] == "r1"
+    # several tasks of one agent at once (sub-tasks, 19/11): a second one runs beside it
     twice = bridge.post("/v1/agents/wellness/jobs", headers=AUTH, json=TASK)
-    assert twice.status_code == 409 and twice.json() == {"detail": "this agent is already on a background task"}
+    assert twice.status_code == 200 and twice.json()["state"] == "running"
+    assert bridge.delete(f"/v1/jobs/{twice.json()['id']}", headers=AUTH).status_code == 200
     assert wait_until(lambda: view(bridge, job["id"])["state"] == "done", timeout=25)
     done = view(bridge, job["id"])
     assert done["report"].startswith("Rapport") and done["finished"]
@@ -83,6 +85,14 @@ def test_a_task_runs_in_its_own_conversation_and_ends_with_its_report(bridges, f
     payload = fakes.apns.payloads()[0]
     assert payload["aps"]["alert"]["body"] == "notif.task" and payload["r"] == job["id"]
     assert payload["t"] == "task" and in_session(bridge, payload, "api_s1")
+    # the apps hinted silently (no alert) when it started and ended: they read again then, never every few seconds
+    whys = [(h["agent"], h["why"]) for h in fakes.apns.hints() if h["job"] == job["id"]]
+    assert ("wellness", "started") in whys and ("wellness", "ended") in whys, whys
+    assert done["seen"] is False
+    status = bridge.get("/v1/status", headers=AUTH).json()
+    assert [j["id"] for j in status["jobs"]] == [job["id"]]
+    assert bridge.post(f"/v1/jobs/{job['id']}/seen", headers=AUTH).json()["seen"] is True
+    assert bridge.get("/v1/status", headers=AUTH).json()["jobs"] == []
     assert fakes.apns.pushes()[0].header("apns-collapse-id") == f"job:{job['id']}"
     listed = bridge.get("/v1/jobs", headers=AUTH).json()
     # a home install (this suite): five times the offer's budgets (jobs.rs HOME_BUDGET_SCALE, Alex 2026-11-12)

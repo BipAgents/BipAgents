@@ -25,6 +25,20 @@ pub const HERMES_EVENT: &str = "todo.updated";
 pub const TEXT_MAX: usize = 200;
 /// Steps at most in a card (Hermes allows 256).
 pub const STEPS_MAX: usize = 30;
+/// Between a step's words and what it found (« Lire ton contrat ⇒ MAIF, 312 € par an »): a background task's rules
+/// ask it of a step marked done (jobs.rs `INSTRUCTIONS`); the card shows that line under the step (sub-tasks, 19/11).
+pub const RESULT_MARK: &str = " ⇒ ";
+/// What a step found, at most: one line.
+pub const RESULT_MAX: usize = 120;
+
+fn cut(text: &str, max: usize) -> String {
+    if text.chars().count() > max {
+        format!("{}…", text.chars().take(max - 1).collect::<String>())
+    } else {
+        text.to_string()
+    }
+}
+
 /// Sub-steps deeper than this are drawn at this depth.
 const DEPTH_MAX: u64 = 3;
 
@@ -80,7 +94,13 @@ pub fn of_todos(todos: &[Value]) -> Value {
     let mut items = Vec::new();
     let (mut done, mut total) = (0, 0);
     for todo in todos {
-        let text = todo.get("content").and_then(Value::as_str).unwrap_or("").trim();
+        let whole = todo.get("content").and_then(Value::as_str).unwrap_or("").trim();
+        // « Lire ton contrat ⇒ MAIF, 312 € par an »: the step and what it found (a background task's rules, jobs.rs)
+        let whole = whole.strip_suffix(RESULT_MARK.trim_end()).map(str::trim_end).unwrap_or(whole);
+        let (text, result) = match whole.rsplit_once(RESULT_MARK) {
+            Some((text, result)) if !text.trim().is_empty() => (text.trim(), result.trim()),
+            _ => (whole, ""),
+        };
         if text.is_empty() {
             continue;
         }
@@ -103,6 +123,9 @@ pub fn of_todos(todos: &[Value]) -> Value {
                 text.to_string()
             };
             let mut item = json!({"text": text, "status": status});
+            if !result.is_empty() {
+                item["result"] = json!(cut(result, RESULT_MAX));
+            }
             let level = depth(todo.get("id").and_then(Value::as_str));
             if level > 0 {
                 item["depth"] = json!(level);
@@ -422,6 +445,26 @@ mod tests {
         );
         assert_eq!(current(&steps).as_deref(), Some("Trier par urgence"));
         assert_eq!(counts(&steps), (1, 4));
+    }
+
+    /// Sub-tasks (19/11): a step marked done says what it found after « ⇒ » (the task's rules ask it); the card keeps
+    /// the step's words and that one line apart. A « ⇒ » with nothing after it, or none, leaves the words whole.
+    #[test]
+    fn a_done_step_says_what_it_found_after_the_arrow() {
+        let steps = of_todos(&todos(json!([
+            {"id": "1", "content": "Lire ton contrat actuel ⇒ MAIF, 312 € par an, franchise 150 €", "status": "completed"},
+            {"id": "2", "content": "Trouver 3 offres ⇒ ", "status": "in_progress"},
+            {"id": "3", "content": "Train Paris → Lyon", "status": "completed"}
+        ])));
+        assert_eq!(
+            steps["items"],
+            json!([
+                {"text": "Lire ton contrat actuel", "status": "done", "result": "MAIF, 312 € par an, franchise 150 €"},
+                {"text": "Trouver 3 offres", "status": "in_progress"},
+                {"text": "Train Paris → Lyon", "status": "done"}
+            ])
+        );
+        assert_eq!(current(&steps).as_deref(), Some("Trouver 3 offres"));
     }
 
     #[test]
