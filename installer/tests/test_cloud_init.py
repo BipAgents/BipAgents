@@ -1110,7 +1110,11 @@ def test_the_hardening_installs_the_swap_s_encryption_unit_where_the_distro_spli
         bin_dir = tmp_path / distro
         bin_dir.mkdir()
         asked = tmp_path / f"{distro}.apt"
-        (bin_dir / "apt-get").write_text(f'#!/bin/bash\necho "$@" >> {asked}\n')
+        (bin_dir / "apt-get").write_text(f'#!/bin/bash\necho "$@" >> {asked}\n'
+                                          # the index of a server hardened long after its first boot: stale until
+                                          # fetched again (Review 1, remark)
+                                          f'[ "$1" = update ] && touch {asked}.fresh\n'
+                                          f'[ "$1" = install ] && [ ! -e {asked}.fresh ] && exit 100\nexit 0\n')
         (bin_dir / "apt-cache").write_text(
             "#!/bin/bash\n" + ('[ "$1 $2" = "show systemd-cryptsetup" ] && exit 0\n' if has_it else "") + "exit 100\n")
         for tool in bin_dir.iterdir():
@@ -1118,6 +1122,8 @@ def test_the_hardening_installs_the_swap_s_encryption_unit_where_the_distro_spli
         done = subprocess.run(["bash", "-euc", block], capture_output=True, text=True,
                               env={"PATH": f"{bin_dir}:/usr/bin:/bin"})
         assert done.returncode == 0, done.stderr
-        packages = asked.read_text().split()
+        lines = asked.read_text().splitlines()
+        assert [line.split()[0] for line in lines] == ["install", "update", "install"]   # fetched again, once
+        packages = lines[-1].split()
         assert {"gocryptfs", "fuse3", "cryptsetup-bin"} <= set(packages)
         assert ("systemd-cryptsetup" in packages) == has_it
