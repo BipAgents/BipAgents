@@ -1565,6 +1565,34 @@ mod tests {
         assert!(apply(&mut data, &body(json!({"op": "item_add", "list": "Shopping", "text": "x"})), "Léa", 3.0).is_err());
     }
 
+    /// Review of fix-family-carnet-write: `id` given with the list's id beside an explicit `item_id` must not take
+    /// the list as the item; `id` alone stays the item.
+    #[test]
+    fn an_item_op_with_the_list_in_id_takes_the_explicit_item() {
+        let mut data = Dict::new();
+        seed_in(&mut data, "en", "Alex", 1.0);
+        let shopping = str_of(&data["lists"][0], "id");
+        let write = |data: &mut Dict, args: Value| agent_apply(data, &body(args), "Family", 2.0);
+        for text in ["Milk", "Eggs", "Rice"] {
+            write(&mut data, json!({"op": "item_add", "list": shopping, "text": text})).unwrap();
+        }
+        let item = |data: &Dict, at: usize| str_of(&data["lists"][0]["items"][at], "id");
+        let (milk, eggs, rice) = (item(&data, 0), item(&data, 1), item(&data, 2));
+        write(&mut data, json!({"op": "item_save", "id": shopping, "item_id": milk, "done": true}))
+            .unwrap_or_else(|e| panic!("item_id: {e}"));
+        write(&mut data, json!({"op": "item_save", "id": shopping, "itemId": eggs, "text": "Brown eggs"}))
+            .unwrap_or_else(|e| panic!("itemId: {e}"));
+        assert_eq!(data["lists"][0]["items"][0]["done"], true);
+        assert_eq!(str_of(&data["lists"][0]["items"][1], "text"), "Brown eggs");
+        write(&mut data, json!({"op": "item_delete", "id": shopping, "item": rice}))
+            .unwrap_or_else(|e| panic!("item: {e}"));
+        assert_eq!(data["lists"][0]["items"].as_array().unwrap().len(), 2);
+        assert_eq!(data["lists"].as_array().unwrap().len(), 2, "no list touched");
+        // `id` alone is still the item
+        write(&mut data, json!({"op": "item_save", "id": eggs, "done": true})).unwrap();
+        assert_eq!(data["lists"][0]["items"][1]["done"], true);
+    }
+
     #[test]
     fn only_the_familys_tools_answer() {
         // pages, audio and routines for the family since 12/11 (family_thread.rs: everyone's)
