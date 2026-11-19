@@ -520,6 +520,9 @@ struct Scripted {
     /// For lines that name no document (an earlier proxy's): the sites within the hour, and when the latest ran.
     sites: HashSet<String>,
     latest: f64,
+    /// Every web site of the record, whenever its script ran (the record keeps its last lines): their service workers
+    /// removed before the person's hand, a worker outlives the tab that registered it.
+    origins: Vec<String>,
 }
 
 fn scripted(config: &Config, agent: &str) -> Scripted {
@@ -529,6 +532,10 @@ fn scripted(config: &Config, agent: &str) -> Scripted {
     for line in text.lines().filter_map(|l| serde_json::from_str::<Value>(l).ok()) {
         let t = line.get("t").and_then(Value::as_f64).unwrap_or(0.0);
         let origin = line.get("origin").and_then(Value::as_str).unwrap_or("unknown").to_string();
+        let site = url::Url::parse(&origin).ok().filter(|u| matches!(u.scheme(), "http" | "https"));
+        if let Some(site) = site.map(|u| u.origin().ascii_serialization()).filter(|s| !out.origins.contains(s)) {
+            out.origins.push(site);
+        }
         if let Some(doc) = line.get("doc").and_then(Value::as_str).filter(|d| !d.is_empty()) {
             if t >= now - SCRIPTED_DOCUMENT_FOR_PERSON {
                 out.documents.insert(doc.to_string());
@@ -562,17 +569,26 @@ impl Scripted {
 /// redirecting: 409 at every try): then its address is opened again in a fresh tab and every older tab closed
 /// (card_fill.rs `Page::fresh_tab`), the scripted documents gone all the same. Each failure says why in the log. False
 /// only when even that can't be done (DevTools out of reach, a tab that won't close).
+///
+/// Every site the agent's scripts ran on, whenever, loses its service workers and cache storage too (never cookies,
+/// localStorage nor IndexedDB): a worker registered by one of them outlives the tab, and would answer that site later.
 async fn fresh_for_person(config: &Config, agent: &str, token: &str) -> bool {
     let done = scripted(config, agent);
-    if done.documents.is_empty() && done.sites.is_empty() {
+    let recent = !(done.documents.is_empty() && done.sites.is_empty());
+    if !recent && done.origins.is_empty() {
         return true;
     }
     let Some(port) = ports_of(config, agent).and_then(|p| p.get("cdp").copied()) else {
         tracing::warn!(agent = %agent, "page not made fresh before the person takes the browser: no DevTools port");
-        return false;
+        return !recent;
     };
-    let (why, known) = match reload_for_person(agent, port, token, &done).await {
-        Ok(()) => return true,
+    let reloaded = if recent { reload_for_person(agent, port, token, &done).await } else { Ok(()) };
+    let (why, known) = match reloaded {
+        Ok(()) => {
+            // its scripts' sites, shown in a tab or not: their workers removed once the page is fresh
+            clear_scripted_workers(agent, port, token, &done).await;
+            return true;
+        }
         Err(failed) => failed,
     };
     // the tabs' addresses as Chrome's tab list says them (no renderer asked: a busy page can't answer)
@@ -584,12 +600,13 @@ async fn fresh_for_person(config: &Config, agent: &str, token: &str) -> bool {
     if !known && listed.is_some() && !addresses.iter().any(|u| done.on_site(&origin_of(u))) {
         tracing::info!(agent = %agent, reason = %why,
                        "page not looked at before the person takes the browser: no script ran on its site");
+        clear_scripted_workers(agent, port, token, &done).await;
         return true;
     }
     tracing::warn!(agent = %agent, reason = %why,
                    "page not reloaded before the person takes the browser: opened again in a fresh tab");
     let url = addresses.into_iter().find(|u| u.starts_with("https://") || u.starts_with("http://"));
-    match crate::card_fill::Page::fresh_tab(port, Some(token), url.as_deref()).await {
+    match crate::card_fill::Page::fresh_tab(port, Some(token), url.as_deref(), &done.origins).await {
         Ok(_) => {
             FRESH_FOR_PERSON.lock().unwrap_or_else(|e| e.into_inner()).remove(agent);
             tracing::info!(agent = %agent, "page opened again in a fresh tab before the person takes the browser");
@@ -599,6 +616,21 @@ async fn fresh_for_person(config: &Config, agent: &str, token: &str) -> bool {
             tracing::warn!(agent = %agent, error = %e, "page not opened again in a fresh tab either");
             false
         }
+    }
+}
+
+/// The service workers and cache storage of every site the agent's scripts ran on (card_fill.rs `clear_workers`),
+/// once the person's page is fresh: one registered on a site no tab shows any more is removed too (review pass 2 of
+/// fix-takeover-not-fresh). What can't be removed is said in the log; the person still gets the browser.
+async fn clear_scripted_workers(agent: &str, port: u16, token: &str, done: &Scripted) {
+    match crate::card_fill::Page::clear_workers(port, Some(token), &done.origins).await {
+        Ok(()) if !done.origins.is_empty() => {
+            tracing::info!(agent = %agent, sites = done.origins.len(),
+                           "the scripted sites' service workers removed before the person takes the browser");
+        }
+        Ok(()) => {}
+        Err(e) => tracing::warn!(agent = %agent, error = %e,
+                                 "a scripted site's service workers not removed before the person takes the browser"),
     }
 }
 
