@@ -1034,6 +1034,12 @@ impl Jobs {
         let title = format!("{TITLE_MARK}{}", tk::str_or_empty(job.get("title")));
         let session_id = if kept.is_empty() { pipeline.work_session(&agent, &title, "").await.map_err(refused)? } else { kept };
         job.insert("session_id".into(), json!(session_id));
+        // a browser of its own when the agent has one (browsers.rs `setup_task`): its calls go there (patch 0028)
+        let (c, a, j, sess) = (self.config.get(), agent.name.clone(), tk::str_or_empty(job.get("id")), session_id.clone());
+        match tokio::task::spawn_blocking(move || crate::browsers::setup_task(&c, &a, &j, &sess)).await? {
+            Ok(_) => {}
+            Err(exc) => tracing::warn!(agent = %agent.name, error = %format!("{exc:#}"), "a task's own browser not set up: it uses the agent's"),
+        }
         let base = counters(&self.hermes.session(&agent, &session_id).await.map_err(refused)?);
         // the task's rules in its message (a note the apps hide), never as run instructions: the system prompt stays
         // the agent's conversations' own, and so does the model server's prompt cache; « Tâches de fond » by its name
@@ -1308,6 +1314,9 @@ impl Jobs {
         job.insert("stop_asked".into(), Value::Null);
         job.insert("run_id".into(), Value::Null);
         let _ = save(&self.config.get(), job);
+        if ["done", "failed"].contains(&state_of(job).as_str()) {
+            crate::browsers::remove_task(&self.config.get(), &agent.name, &tk::str_or_empty(job.get("id"))).await;
+        }
         self.hint_apps(&agent.name, &tk::str_or_empty(job.get("id")), "ended").await;
         let reason = job.get("reason").cloned().unwrap_or(Value::Null);
         tracing::info!(agent = %agent.name, job = %tk::str_or_empty(job.get("id")), state = %state_of(job),
@@ -1511,6 +1520,7 @@ impl Jobs {
                 _ => {}
             }
         }
+        crate::browsers::remove_task(&config, &agent_of(&job), job_id).await;
         // its « Validé pour toi » line: « Annulé », no « Annuler » left on a task that is gone
         crate::approval_level::task_forgotten(&config, job_id);
         self.hint_apps(&agent_of(&job), job_id, "forgotten").await;

@@ -764,3 +764,39 @@ async fn starts_at_once_never_pass_the_agent_s_cap() {
     assert!(running.len() <= jobs::AGENT_RUNNING_MAX, "{} tasks of one agent started at once", running.len());
     assert!(on_disk <= jobs::AGENT_RUNNING_MAX, "{on_disk} running on disk");
 }
+
+/// One browser per running task (Alex 19/11, « vraiment en parallèle »): an agent with its own browser gets, for each
+/// task it starts, a browser of the task's own (its container, its ports, a copy of the agent's profile with its
+/// logins, its folder), announced to the agent's browser tools by the task's Hermes session (`sessions.json` beside
+/// the agent's `busy`, patch 0028), and removed when the task ends. The person's conversations keep the agent's.
+#[tokio::test]
+async fn a_task_of_an_agent_with_a_browser_gets_a_browser_of_its_own() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_fake, url) = gateway(3, 10).await;
+    let (mut config, agent) = setup(dir.path(), &url);
+    config.browser.root = dir.path().join("browsers").to_string_lossy().into_owned();
+    let place = bipbridge::browsers::folder(&config, "coach");
+    std::fs::create_dir_all(place.join("profile").join("Default")).unwrap();
+    std::fs::write(place.join("profile").join("Default").join("Cookies"), "logged in").unwrap();
+    std::fs::write(place.join("ports.json"), r#"{"cdp": 19600, "vnc": 19601}"#).unwrap();
+    std::fs::write(place.join("mcp.json"), r#"{"server": ["/usr/bin/podman", "exec", "-i", "bipagents-browser-coach", "/opt/stealth/mcp.sh"]}"#).unwrap();
+    let board = board(&config, None);
+    let job = board.create(&agent, "Comparer", "Compare trois offres sur leurs sites.", 0.50, None).await.unwrap();
+    let id = id_of(&job);
+    let own = bipbridge::browsers::task_browser("coach", &id);
+    let theirs = bipbridge::browsers::folder(&config, &own);
+    let settings: Value = serde_json::from_str(&std::fs::read_to_string(theirs.join("mcp.json")).unwrap()).unwrap();
+    assert_eq!(settings["server"][3], json!(bipbridge::browsers::container(&own)), "{settings}");
+    assert_eq!(std::fs::read_to_string(theirs.join("profile/Default/Cookies")).unwrap(), "logged in", "the agent's logins");
+    let ports = bipbridge::browsers::ports_of(&config, &own).unwrap();
+    assert!(ports["cdp"] != 19600 && ports["vnc"] != 19601, "ports of its own: {ports:?}");
+    let sessions: Value = serde_json::from_str(&std::fs::read_to_string(place.join("sessions.json")).unwrap()).unwrap();
+    assert_eq!(sessions["s1"], json!(theirs.join("mcp.json").to_string_lossy()));
+    board.wait(&id).await;
+    assert!(!theirs.exists(), "its browser removed with the task's end");
+    let sessions: Value = serde_json::from_str(&std::fs::read_to_string(place.join("sessions.json")).unwrap()).unwrap();
+    assert_eq!(sessions, json!({}));
+    // an agent without a browser: nothing of the kind
+    let other = bipbridge::browsers::folder(&config, &bipbridge::browsers::task_browser("vie", "t0"));
+    assert!(!other.exists());
+}
