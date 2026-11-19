@@ -1006,6 +1006,11 @@ async fn confirm(state: &AppState, agent: &AgentConfig, arguments: &Dict) -> any
     )))
 }
 
+/// A login or an account asked from a background task that browses in a browser of its own.
+pub const TASK_LOGIN_TEXT: &str = "Not done: you work in a background task, in a browser of its own that has your \
+logins from when it started, and new logins or accounts are made only in your person's conversation. Go on without \
+it if you can, else end your task saying which site needs it.";
+
 pub async fn call(
     state: &AppState,
     agent: &AgentConfig,
@@ -1013,6 +1018,11 @@ pub async fn call(
     arguments: &Dict,
     _asker: &Asker,
 ) -> anyhow::Result<Dict> {
+    // a background task with a browser of its own: the vault types only into the agent's browser (one browser per
+    // task, 19/11); its copied profile keeps the agent's logins
+    if [LOGIN, CREATE].contains(&name) && crate::browsers::task_of_call(&state.config(), &agent.name).is_some() {
+        return Ok(refusal(TASK_LOGIN_TEXT));
+    }
     match name {
         LOGIN => login(state, agent, arguments).await,
         CREATE => create(state, agent, arguments).await,

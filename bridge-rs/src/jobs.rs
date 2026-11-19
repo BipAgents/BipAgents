@@ -1036,10 +1036,13 @@ impl Jobs {
         job.insert("session_id".into(), json!(session_id));
         // a browser of its own when the agent has one (browsers.rs `setup_task`): its calls go there (patch 0028)
         let (c, a, j, sess) = (self.config.get(), agent.name.clone(), tk::str_or_empty(job.get("id")), session_id.clone());
-        match tokio::task::spawn_blocking(move || crate::browsers::setup_task(&c, &a, &j, &sess)).await? {
-            Ok(_) => {}
-            Err(exc) => tracing::warn!(agent = %agent.name, error = %format!("{exc:#}"), "a task's own browser not set up: it uses the agent's"),
-        }
+        let own_browser = match tokio::task::spawn_blocking(move || crate::browsers::setup_task(&c, &a, &j, &sess)).await? {
+            Ok(found) => found.is_some(),
+            Err(exc) => {
+                tracing::warn!(agent = %agent.name, error = %format!("{exc:#}"), "a task's own browser not set up: it uses the agent's");
+                false
+            }
+        };
         let base = counters(&self.hermes.session(&agent, &session_id).await.map_err(refused)?);
         // the task's rules in its message (a note the apps hide), never as run instructions: the system prompt stays
         // the agent's conversations' own, and so does the model server's prompt cache; « Tâches de fond » by its name
@@ -1052,6 +1055,13 @@ impl Jobs {
         let mut turn = Turn::new(&agent, Kind::Task, &session_id, format!("{text}\n\n<!--bip:task-rules\n{rules}\n-->"));
         // GLM through EUrouter thinks at « low » in chat since 2026-10-28; tasks stay at « medium » until measured.
         turn.options = crate::agents_admin::task_turn_options(&self.config.get(), &agent);
+        if own_browser {
+            // Hermes' own browser tools (its vault's fill) act on the agent's Chrome (`browser.cdp_url`): closed in a
+            // task that has its own (patch 0024), which browses with its `stealth` tools
+            let mut options = turn.options.take().unwrap_or_else(|| json!({}));
+            options["closed_tools"] = json!(["browser_*"]);
+            turn.options = Some(options);
+        }
         turn.busy_wait = 0.0; // its own conversation: a route never waits here
         let run_id = match pipeline.start(&turn).await {
             Ok((run_id, _)) => run_id,

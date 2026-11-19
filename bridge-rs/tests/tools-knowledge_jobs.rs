@@ -772,7 +772,7 @@ async fn starts_at_once_never_pass_the_agent_s_cap() {
 #[tokio::test]
 async fn a_task_of_an_agent_with_a_browser_gets_a_browser_of_its_own() {
     let dir = tempfile::tempdir().unwrap();
-    let (_fake, url) = gateway(3, 10).await;
+    let (fake, url) = gateway(3, 10).await;
     let (mut config, agent) = setup(dir.path(), &url);
     config.browser.root = dir.path().join("browsers").to_string_lossy().into_owned();
     let place = bipbridge::browsers::folder(&config, "coach");
@@ -801,6 +801,9 @@ async fn a_task_of_an_agent_with_a_browser_gets_a_browser_of_its_own() {
     assert!(ports["cdp"] != 19600 && ports["vnc"] != 19601, "ports of its own: {ports:?}");
     let sessions: Value = serde_json::from_str(&std::fs::read_to_string(place.join("sessions.json")).unwrap()).unwrap();
     assert_eq!(sessions["s1"], json!(theirs.join("mcp.json").to_string_lossy()));
+    // Hermes' own browser tools (its vault fill, on the agent's Chrome) closed in its turns (patch 0024)
+    let run = posted_runs(&fake).last().cloned().unwrap();
+    assert_eq!(run["model_options"]["closed_tools"], json!(["browser_*"]), "{run}");
     // the task's own calls are told from the person's (patch 0028): a payment never happens in its browser
     let task_call = bipbridge::runs::CALL_SESSION
         .sync_scope(Some("s1".into()), || bipbridge::browsers::task_of_call(&config, "coach"));
