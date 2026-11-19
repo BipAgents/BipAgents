@@ -84,6 +84,9 @@ fn lines(items: &[Item]) -> Vec<Line<'_>> {
         let line = |key: String, kind| Line { key, items: vec![n], kind, peer: None };
         match item.kind() {
             "message" => match s(item, "role") {
+                // the line said at once to a message added meanwhile (instant_reply.rs): in sight, never the
+                // turn's work nor its reply
+                "agent" if crate::instant_reply::is_instant(&item.body) => out.push(line(item.id.clone(), Kind::Other)),
                 "agent" | "assistant" => {
                     if !s(item, "reasoning").trim().is_empty() {
                         out.push(line(format!("{}.r", item.id), Kind::Reasoning));
@@ -455,6 +458,23 @@ mod tests {
     }
 
     /// The apps' TurnLayoutTests `steeredTurnKeepsItsAnswerAndMessageInSight`, on items.
+    #[test]
+    fn the_line_said_at_once_is_never_work_nor_the_reply() {
+        let mut said = agent("i_c3", "Compris, je l'intègre.");
+        said.body.insert("instant".into(), json!(true));
+        let items = vec![
+            person("m_0", "Trouve un dentiste"),
+            tool("m_0.t0", "web_search", "{}"),
+            added("m_3", "plutôt le samedi"),
+            said,
+            tool("m_3.t0", "web_search", "{}"),
+            agent("m_4", "Voilà trois cabinets."),
+        ];
+        let l = all(&items, false);
+        assert!(!l.get(&3).is_some_and(|f| f.contains_key("work") || f.contains_key("turn_end")));
+        assert_eq!(field(&l, 5, "turn_end"), Some(&json!(true)));
+    }
+
     #[test]
     fn a_steered_turn_keeps_its_answer_and_message_in_sight() {
         let items = vec![

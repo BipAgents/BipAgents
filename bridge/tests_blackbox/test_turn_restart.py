@@ -119,7 +119,7 @@ def test_words_after_an_action_go_into_the_turn_at_its_next_step(bridges, fakes)
     assert run_has(bridge, "r1", "tool.completed")
     sent = send(bridge, thread, P1, "Et mets Paul en copie")
     assert (sent["state"], sent["run_id"]) == ("steered", "r1") and "restarted" not in sent
-    assert fakes.hermes.steers[-1]["body"] == {"input": "Et mets Paul en copie"}
+    assert fakes.hermes.steers[-1]["body"]["input"].split("\n\n<!--bip:answered")[0] == "Et mets Paul en copie"
     assert fakes.hermes.started["r1"]["status"] == "running", "an action is never cut in the middle"
     gate.set()
     assert wait_until(lambda: page(bridge, thread)["pending"]["run"] is None, timeout=15)

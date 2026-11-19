@@ -104,6 +104,16 @@ def test_the_family_writes_in_one_conversation(bridges, fakes):
                         "text": "Avec les enfants"})
     assert more.status_code == 200 and more.json()["state"] == "steered", more.text
     assert len(fakes.hermes.steers) == 1 and "Marie" in json.dumps(fakes.hermes.steers[0]["body"], ensure_ascii=False)
+    # each answered at once by the agent's line (instant_reply.rs): Paul's « right after », Marie's into her turn; in
+    # the common conversation, right after the message it answers, which everyone already sees
+    def instant_after(client_id):
+        items = page(a, "famille")["items"]
+        ids = [i["id"] for i in items]
+        line = f"i_{client_id}"
+        return line in ids and ids[ids.index(line) - 1] in (f"s_{client_id}",) and items[ids.index(line)]["instant"]
+    assert wait(lambda: instant_after("C0FFEE00-0000-4000-8000-0000000000B1"), 10)
+    assert wait(lambda: instant_after("C0FFEE00-0000-4000-8000-0000000000A2"), 10)
+    assert "<!--bip:answered" in fakes.hermes.steers[0]["body"]["input"]
 
     # the others are told (their conversation not on their screen): Alex's devices and Paul's of Marie's message,
     # Marie's of Paul's, never one's own
