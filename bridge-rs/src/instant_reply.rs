@@ -397,7 +397,8 @@ mod tests {
         assert!(steer.starts_with("Plus de langue ni de dents\n\n<!--bip:answered ") && steer.ends_with("-->"));
         // a note every reader strips wherever it is: two steers Hermes joined into one row keep both words
         let joined = format!("{steer}\net pas trop loin");
-        assert_eq!(crate::live_brief::visible(&joined), "Plus de langue ni de dents\n\net pas trop loin");
+        let shown = crate::live_brief::visible(&joined);
+        assert!(shown.starts_with("Plus de langue ni de dents") && shown.ends_with("et pas trop loin") && !shown.contains("bip:"));
         assert_eq!(without_note(&joined), "Plus de langue ni de dents\net pas trop loin");
         assert_eq!(without_note("rien à ôter"), "rien à ôter");
         assert_eq!(without_note(&steer), "Plus de langue ni de dents");

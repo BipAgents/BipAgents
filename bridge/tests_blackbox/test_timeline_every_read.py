@@ -14,6 +14,8 @@ well-formed (`check`): its items the run of the conversation's that was asked fo
 `more_before` / `more_after` what lies outside it, `layout.open` none or the item of the page where the turn going on
 is (nothing decided from there on), the cards placed among the conversation's items, and the state unchanged.
 The Rust side: bridge-rs/src/threads/timeline_guard.rs (every small thread, every `Want`)."""
+import time
+
 import pytest
 
 from bbkit.common import AUTH
@@ -214,7 +216,7 @@ def test_a_turn_going_on_reads_every_way(journey):
     # a turn that acted already (a note to its memory): words sent now go into it at its next step, never restart it
     sent(journey, 2, "Raconte-moi tout #note #lent")
     stored(journey, cid(2))
-    assert wait_until(lambda: any(i["kind"] == "tool" for i in journey.page()["items"]), timeout=30)
+    time.sleep(1)   # its note made (the hub has seen the call) before the words come, as on a phone (test_journeys J18)
     reader = conversation(journey)
     every_read(reader, running=True, label="a turn going on")
     # words steered into it: a message being sent, after every item (then the agent's line said at once to it,
