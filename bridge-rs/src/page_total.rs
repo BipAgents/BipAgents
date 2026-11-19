@@ -122,6 +122,9 @@ static NUMBER: LazyLock<Regex> =
 static BARE_MONEY: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\d[\d .,']*[.,]\d{2}$").expect("money pattern"));
 /// The codes of an amount written without a currency mark.
 pub const BARE: &[&str] = &["?"];
+/// A line holding only groups of four digits (« 4242 », « 4242 4242 »): a card's groups shown back.
+static CARD_GROUPS: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?m)^[ \t]*\d{4}(?:[ -]\d{4}){0,4}[ \t]*$").expect("card groups pattern"));
 /// A digit run that may be a card number (12 to 19 digits, spaces or dashes between): never read.
 static CARD_LIKE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\d(?:[ -]?\d){11,18}").expect("card pattern"));
 /// « 27€97 » (the cents right after the mark; `pageText` glues « 27€<sup>97</sup> » so).
@@ -146,7 +149,7 @@ static PER_AFTER: LazyLock<Regex> = LazyLock::new(|| {
 /// « Amount to be taken from your card: €32.87 » or « livraison offerte : 32,87 € » are no mentions).
 static MENTION: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
-        r"(?i)(?:\bd[èe]s|[àa] partir d[e']|\bfrom|\bab|\bdesde|\bvanaf|au lieu d[e']|instead of|\bstatt|en lugar de|in plaats van|jusqu'?\s?[àa]|up to|bis zu|\bhasta|\bmax|\bmaximum|\bmaximal|plafond(?: de)?|\blimite?(?: de)?|\bavant|\bwas|\bantes)\s*[:\-–]?\s*$",
+        r"(?i)(?:\[barré\]|\[suggestion\]|\bd[èe]s|[àa] partir d[e']|\bfrom|\bab|\bdesde|\bvanaf|au lieu d[e']|instead of|\bstatt|en lugar de|in plaats van|jusqu'?\s?[àa]|up to|bis zu|\bhasta|\bmax|\bmaximum|\bmaximal|plafond(?: de)?|\blimite?(?: de)?|\bavant|\bwas|\bantes)\s*[:\-–]?\s*$",
     )
     .expect("mention pattern")
 });
@@ -154,6 +157,14 @@ static MENTION: LazyLock<Regex> = LazyLock::new(|| {
 static PART: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
         r"(?i)sous[- ]?total|sub[- ]?total|zwischensumme|subtotaal|articles|produits|\bitems?\b|artikel|productos|hors taxe|\bht\b|\btva\b|\bvat\b|mwst|\biva\b|\bbtw\b|livraison|shipping|delivery|versand|env[ií]o|verzend|remise|discount|[ée]conomi|saving|rabatt|descuento|korting|r[ée]duction|frais|\bfees?\b|gebühr|cargo|kosten|acompte|deposit|anzahlung|aanbetaling",
+    )
+    .expect("part pattern")
+});
+/// A label that makes the amount a part whatever total words it holds: before tax (« Montant total HT », « Order
+/// total (excl. VAT) », « netto »), a subtotal (Relecture 3, s1).
+static PART_ALWAYS: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"(?i)sous[- ]?total|sub[- ]?total|zwischensumme|subtotaal|\bht\b|hors tax|\bexcl|exkl|\bnetto|\bnet\b|before tax|pre-tax|sans tva|ohne mwst|sin iva|zonder btw|excluding",
     )
     .expect("part pattern")
 });
@@ -204,6 +215,22 @@ fn class_of(line_before: &str, above: &[&str]) -> Class {
     if line_before.matches('(').count() > line_before.matches(')').count() {
         return Class::Part;
     }
+    // before tax, a subtotal: a part, whatever else the label says (its brackets included: « (excl. VAT) »)
+    let raw_label = {
+        let own = after_last_digit(line_before);
+        if mark_only(own) {
+            above.iter().rev().map(|l| l.trim()).find(|l| !l.is_empty() && !mark_only(l)).unwrap_or("").to_string()
+        } else {
+            own.to_string()
+        }
+    };
+    // `pageText`'s marks: an old price struck out, a product suggested (anywhere on its piece of text)
+    if raw_label.contains("[barré]") || raw_label.contains("[suggestion]") {
+        return Class::Mention;
+    }
+    if PART_ALWAYS.is_match(last_chars(raw_label.trim(), LABEL_SPAN)) && !MENTION.is_match(raw_label.trim()) {
+        return Class::Part;
+    }
     let mut cleaned = line_before.to_string();
     while BRACKETS.is_match(&cleaned) {
         cleaned = BRACKETS.replace_all(&cleaned, " ").into_owned();
@@ -245,6 +272,8 @@ fn normalised(text: &str) -> String {
         .map(|c| if matches!(c, '\u{a0}' | '\u{202f}' | '\u{2009}' | '\u{2007}' | '\u{200a}') { ' ' } else { c })
         .collect();
     let text = CARD_LIKE.replace_all(&text, " ");
+    // a line of digit groups alone (a card shown back group by group, Relecture 3, c3): never read
+    let text = CARD_GROUPS.replace_all(&text, "");
     let text = EURO_CENTS.replace_all(&text, "$1,$2 €$3");
     LOOSE_CENTS.replace_all(&text, "$1$2").into_owned()
 }
@@ -308,15 +337,30 @@ pub fn page_total(texts: &[String], cents: i64, currency: &str) -> PageTotal {
 struct Read {
     amount: Amount,
     provider: bool,
+    /// The frame's place in the texts (for the log).
+    frame: usize,
 }
 
 fn read_all(texts: &[PageText], shown: bool) -> Vec<Read> {
     texts
         .iter()
-        .flat_map(|t| {
-            amounts(if shown { &t.shown } else { &t.all }).into_iter().map(|amount| Read { amount, provider: t.provider })
+        .enumerate()
+        .flat_map(|(frame, t)| {
+            amounts(if shown { &t.shown } else { &t.all })
+                .into_iter()
+                .map(move |amount| Read { amount, provider: t.provider, frame })
         })
         .collect()
+}
+
+/// Where a doubt was seen, for the log (never the page's text): the frame's place among the texts and whether it is
+/// the provider's.
+pub fn doubt_where(texts: &[PageText], doubt: &Doubt) -> Option<(usize, bool)> {
+    let cents = match doubt {
+        Doubt::Higher(c) | Doubt::Foreign(c, _) => *c,
+        Doubt::Unclear => return None,
+    };
+    read_all(texts, false).into_iter().find(|r| r.amount.cents == cents).map(|r| (r.frame, r.provider))
 }
 
 /// The total to name among `labelled` (visible totals and totals to pay): the provider's first, a total to pay before
@@ -362,9 +406,13 @@ pub fn page_total_of(texts: &[PageText], cents: i64, currency: &str) -> PageTota
     if let Some(r) = foreign.iter().filter(|r| r.amount.class != Class::Mention).max_by_key(|r| (r.provider, r.amount.cents)) {
         return PageTotal::Doubt(Doubt::Foreign(r.amount.cents, r.amount.codes[0]));
     }
-    if let Some(higher) =
-        all_ours.iter().filter(|r| r.amount.cents > cents && r.amount.class != Class::Mention).map(|r| r.amount.cents).max()
-    {
+    // an amount above it: visible (not a mention), or hidden but labelled as a total, or anywhere in the provider's own
+    // frame or page (never relaxed there); hidden product prices (a menu, a drawer) are no doubt (Relecture 3, c5)
+    let blocks = |r: &&&Read| {
+        r.amount.cents > cents && r.amount.class != Class::Mention && (r.amount.class >= Class::Total || r.provider)
+    };
+    let visible_higher = shown_ours.iter().filter(|r| r.amount.cents > cents && r.amount.class != Class::Mention);
+    if let Some(higher) = visible_higher.chain(all_ours.iter().filter(blocks)).map(|r| r.amount.cents).max() {
         return PageTotal::Doubt(Doubt::Higher(higher));
     }
     if all.iter().any(|r| bare(r) && r.amount.cents != cents && !uses_currency) {
@@ -435,21 +483,18 @@ pub fn stated_total(text: &str, currency: &str) -> Stated {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Recheck {
     Press,
-    /// Another total now: given up, the person told with the numbers.
-    Other(i64),
-    /// Something seen now that stops it (`Doubt`).
-    Doubt(Doubt),
-    /// No longer « approved » as it was when the card was typed: given up.
+    /// Not « approved » as it was before the card was typed: given up, with no number at all (what appeared after the
+    /// card was typed may be the card shown back: Relecture 3, c3).
     Changed,
 }
 
-/// `before`: the total read before the card was typed; `now`: read again right before the press.
+/// `before`: the total read before the card was typed (only « approved » reaches the press); `now`: read again right
+/// before the press.
 pub fn recheck(before: &PageTotal, now: &PageTotal) -> Recheck {
-    match (before, now) {
-        (_, PageTotal::Other(shown)) => Recheck::Other(*shown),
-        (_, PageTotal::Doubt(doubt)) => Recheck::Doubt(doubt.clone()),
-        (PageTotal::Approved, PageTotal::Unread(_)) => Recheck::Changed,
-        _ => Recheck::Press,
+    if *before == PageTotal::Approved && *now == PageTotal::Approved {
+        Recheck::Press
+    } else {
+        Recheck::Changed
     }
 }
 
@@ -515,16 +560,33 @@ mod correction_1 {
     fn the_press_waits_for_the_same_total() {
         let unread = PageTotal::Unread(Seen::default());
         assert_eq!(recheck(&PageTotal::Approved, &PageTotal::Approved), Recheck::Press);
-        assert_eq!(recheck(&PageTotal::Approved, &PageTotal::Other(2947)), Recheck::Other(2947));
+        assert_eq!(recheck(&PageTotal::Approved, &PageTotal::Other(2947)), Recheck::Changed);
         assert_eq!(recheck(&PageTotal::Approved, &unread), Recheck::Changed);
-        assert_eq!(recheck(&unread, &PageTotal::Approved), Recheck::Press);
-        assert_eq!(recheck(&unread, &unread), Recheck::Press);
-        let higher = PageTotal::Doubt(Doubt::Higher(3000));
-        assert_eq!(recheck(&unread, &higher), Recheck::Doubt(Doubt::Higher(3000)));
+        assert_eq!(recheck(&PageTotal::Approved, &PageTotal::Doubt(Doubt::Higher(3000))), Recheck::Changed);
+        assert_eq!(recheck(&unread, &PageTotal::Approved), Recheck::Changed);
         // the fee of Relecture 1 (Chrome r3): « Total à payer: EUR 27.97 » becomes « EUR 29.47 » after the number
         let before = page_total(&["Total à payer:\nEUR 27.97".to_string()], 2797, "EUR");
         let now = page_total(&["Frais carte : EUR 1.50\nTotal à payer:\nEUR 29.47".to_string()], 2797, "EUR");
-        assert_eq!(recheck(&before, &now), Recheck::Other(2947));
+        assert_eq!(recheck(&before, &now), Recheck::Changed);
+    }
+
+    #[test]
+    fn correction_3_struck_prices_suggestions_hidden_menus_card_groups_and_before_tax() {
+        // struck-out old price (`pageText` marks it « [barré] »), a product suggestion (« [suggestion] »)
+        let page = "Crème solaire SPF50 [barré] 35,00 € 27,97 €\n[suggestion] Coffret soin 49,90 €\nTotal à payer 27,97 €";
+        assert_eq!(total(&[page], 2797, "EUR"), PageTotal::Approved);
+        // a hidden menu with prices blocks nothing; a hidden total does; the provider's hidden amounts always do
+        let menu = PageText { shown: "Total à payer 27,97 €".into(), all: "Coffret soin 49,90 €\nTotal à payer 27,97 €".into(), ..Default::default() };
+        assert_eq!(page_total_of(&[menu], 2797, "EUR"), PageTotal::Approved);
+        let hidden_total = PageText { shown: "Total à payer 27,97 €".into(), all: "Total à payer 27,97 €\nTotal 32,87 €".into(), ..Default::default() };
+        assert_eq!(page_total_of(&[hidden_total], 2797, "EUR"), PageTotal::Doubt(Doubt::Higher(3287)));
+        let shop = PageText::plain("Total à payer 27,97 €");
+        let provider = PageText { shown: "Numéro de carte".into(), all: "Coffret 49,90 €\nNuméro de carte".into(), provider: true, ..Default::default() };
+        assert_eq!(page_total_of(&[shop, provider], 2797, "EUR"), PageTotal::Doubt(Doubt::Higher(4990)));
+        // a card shown back group by group under the amount: never an amount
+        assert_eq!(total(&["Total à payer 27,97 €\n4242\n4242\n4242\n4242"], 2797, "EUR"), PageTotal::Approved);
+        // before tax stays a part
+        assert_eq!(total(&["Montant total HT 23,31 €\nTVA 4,66 €\nMontant total TTC 27,97 €"], 2797, "EUR"), PageTotal::Approved);
     }
 
     #[test]
@@ -686,5 +748,24 @@ mod review_2 {
         // the currency in a column header (« Montant (EUR) ») or nowhere: the « to pay » number is skipped
         let page = "Total panier 27,97 €\nFrais de port 4,90 €\nTotal à payer : 32,87";
         assert_ne!(page_total(&[page.to_string()], 2797, "EUR"), PageTotal::Approved);
+    }
+}
+
+/// Relecture 3 (19/11, on a502ce997): each asserts the expected outcome; they fail on a502ce997.
+#[cfg(test)]
+mod review_3 {
+    use super::*;
+
+    #[test]
+    fn s1_a_total_before_tax_labelled_total_is_not_a_second_total_to_pay() {
+        // « to pay » words now win over a part's: « Montant total HT » is read as a total to pay of 23,31 €, which
+        // disagrees with the approved 27,97 € → Doubt::Unclear → a good payment stopped (B2B and many EU pages)
+        for page in [
+            "Montant total HT 23,31 €\nTVA 4,66 €\nMontant total TTC 27,97 €",
+            "Order total (excl. VAT) €23.31\nVAT €4.66\nOrder total €27.97",
+            "Grand total excl. VAT €23.31\nVAT €4.66\nGrand total €27.97",
+        ] {
+            assert_eq!(page_total(&[page.to_string()], 2797, "EUR"), PageTotal::Approved, "{page}");
+        }
     }
 }

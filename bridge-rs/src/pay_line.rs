@@ -264,23 +264,23 @@ pub fn unverified(lang: &str) -> String {
     .to_string()
 }
 
-/// The total the agent read on the page (`confirm_payment`'s `total`) was not the approved amount.
-pub fn stated_differs(lang: &str, stated: &str, approved: &str) -> String {
+/// The total the agent gave `confirm_payment` was above the approved amount (its own reading: « donné par Vie »).
+pub fn stated_differs(lang: &str, agent: &str, stated: &str, approved: &str) -> String {
     match lang_key(lang) {
         "fr" => format!(
-            "Paiement arrêté : le total lu sur la page ({stated}) n'est pas celui que tu avais accepté ({approved}). Rien n'a été payé."
+            "Paiement arrêté : le total donné par {agent} ({stated}) n'est pas celui que tu avais accepté ({approved}). Rien n'a été payé."
         ),
         "de" => format!(
-            "Zahlung gestoppt: Der auf der Seite gelesene Gesamtbetrag ({stated}) ist nicht der, den du genehmigt hattest ({approved}). Es wurde nichts bezahlt."
+            "Zahlung gestoppt: Der von {agent} genannte Gesamtbetrag ({stated}) ist nicht der, den du genehmigt hattest ({approved}). Es wurde nichts bezahlt."
         ),
         "es" => format!(
-            "Pago detenido: el total leído en la página ({stated}) no es el que habías aceptado ({approved}). No se ha pagado nada."
+            "Pago detenido: el total indicado por {agent} ({stated}) no es el que habías aceptado ({approved}). No se ha pagado nada."
         ),
         "nl" => format!(
-            "Betaling gestopt: het op de pagina gelezen totaal ({stated}) is niet het bedrag dat je had goedgekeurd ({approved}). Er is niets betaald."
+            "Betaling gestopt: het totaal dat {agent} opgaf ({stated}) is niet het bedrag dat je had goedgekeurd ({approved}). Er is niets betaald."
         ),
         _ => format!(
-            "Payment stopped: the total read on the page ({stated}) is not the one you had approved ({approved}). Nothing was paid."
+            "Payment stopped: the total given by {agent} ({stated}) is not the one you had approved ({approved}). Nothing was paid."
         ),
     }
 }
@@ -385,7 +385,7 @@ mod tests {
             assert!(suspended(lang).len() > 20 && total_changed(lang).len() > 20, "{lang}");
             assert!(foreign_currency(lang, "32,10 $").contains("32,10 $"), "{lang}");
             assert!(higher_amount(lang, "32,87 €", "27,97 €").contains("32,87 €"), "{lang}");
-            assert!(stated_differs(lang, "32,87 €", "27,97 €").contains("27,97 €"), "{lang}");
+            assert!(stated_differs(lang, "Vie", "32,87 €", "27,97 €").contains("Vie"), "{lang}");
             assert!(unverified(lang).len() > 20, "{lang}");
         }
         assert_eq!(suspended("fr"), "Paiement arrêté : tu as suspendu les paiements. Rien n'a été payé.");

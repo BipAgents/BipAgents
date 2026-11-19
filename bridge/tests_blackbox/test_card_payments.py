@@ -70,6 +70,7 @@ class FakeChrome:
         #                         "navigate" (leaving the page)
         self.slowed = False     # that step was reached
         self.button = "payer 12,50 €"   # the pay button found (None: none)
+        self.page_text = ""      # the main frame's text (« »: the approved amount as the total; None: none read)
         self.split = False      # after a reload, the provider's expiry and code appear one look after its number
         self.looks = 0          # the provider frame's card fields looked for since the last reload
         self.others = []        # other tabs (their target ids)
@@ -270,9 +271,20 @@ class FakeChrome:
                 value = True
             elif name == "bankAsks":
                 value = self.bank_asks
+            elif name == "pageText":
+                # what the bridge reads of the page's total (fix-pay-total-check): the main frame says the amount the
+                # test approves (`page_text` to say something else; None: no text read at all)
+                if frame != "F-main":
+                    value = {"shown": "", "all": "", "truncated": False}
+                elif self.page_text is None:
+                    value = None
+                else:
+                    asked = LAST_ASKED or {"amount": "12,50", "currency": "eur"}
+                    text = self.page_text or f"Total à payer : {asked['amount']} {asked['currency']}"
+                    value = {"shown": text, "all": text, "truncated": False}
             else:
                 value = True
-        return {"result": {"type": "object" if isinstance(value, list) else "string", "value": value}}
+        return {"result": {"type": "object" if isinstance(value, (list, dict)) else "string", "value": value}}
 
     def stop(self):
         self.loop.call_soon_threadsafe(lambda: self.done.done() or self.done.set_result(None))

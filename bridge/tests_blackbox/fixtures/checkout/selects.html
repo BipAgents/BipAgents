@@ -2,6 +2,8 @@
 <html lang="fr"><head><meta charset="utf-8"><title>Paiement</title></head>
 <body>
 <!-- A French form without autocomplete tokens: labels, names, the expiry in two selects. -->
+<!-- The order's total (fix-pay-total-check: the bridge reads it before typing): `?total=` another one, empty: none. -->
+<p id="total-line">Total à payer : <span id="total">12,50 €</span></p>
 <form onsubmit="event.preventDefault(); location.href='done.html'">
   <p><label for="numero">Numéro de carte</label> <input id="numero" name="numero_carte" maxlength="19"></p>
   <p><label for="mois">Mois</label>
@@ -21,4 +23,9 @@
   <p><label for="nom">Nom (livraison)</label> <input id="nom" name="nom"></p>
   <p><button type="submit">Valider le paiement</button> <a href="/aide">Aide</a></p>
 </form>
+<script>
+  const total = new URLSearchParams(location.search).get("total");
+  if (total === "") document.getElementById("total-line").remove();
+  else if (total) document.getElementById("total").textContent = total;
+</script>
 </body></html>

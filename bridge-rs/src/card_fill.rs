@@ -1242,6 +1242,7 @@ impl Page {
         let seen = self.frames().await?;
         let mut texts = Vec::new();
         let mut done: Vec<String> = Vec::new();
+        let mut closed_roots: Vec<(String, bool)> = Vec::new();
         for FrameSeen { session, id, url, .. } in seen.clone() {
             if done.contains(&id) {
                 continue;
@@ -1263,7 +1264,21 @@ impl Page {
                 || provider_page(&host).is_some()
                 || rule.test.iter().any(|t| at_or_below(&host, t));
             done.push(id);
-            let truncated = read.get("truncated").and_then(Value::as_bool).unwrap_or(true);
+            // a closed shadow root (a web component's own text: not reachable by the page's script, Relecture 3, c1)
+            // makes the frame unread for sure: never « approved » (images and canvases stay a known limit)
+            let closed = match closed_roots.iter().find(|(s, _)| *s == session) {
+                Some((_, closed)) => *closed,
+                None => {
+                    let doc = self.cdp.call("DOM.getDocument", json!({"depth": -1, "pierce": true}), Some(&session)).await;
+                    let closed = doc.map(|d| d.to_string().contains("\"shadowRootType\":\"closed\"")).unwrap_or(true);
+                    if closed {
+                        tracing::info!(frame = %host, "card payment: a closed shadow root in the page, its total not read for sure");
+                    }
+                    closed_roots.push((session.clone(), closed));
+                    closed
+                }
+            };
+            let truncated = read.get("truncated").and_then(Value::as_bool).unwrap_or(true) || closed;
             texts.push(crate::page_total::PageText { shown: shown.to_string(), all: all.to_string(), provider, truncated });
         }
         Ok(texts)

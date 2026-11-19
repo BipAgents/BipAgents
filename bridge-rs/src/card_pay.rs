@@ -128,7 +128,7 @@ nowhere else). If pay_with_card can't fill the payment form, stop and hand the p
 (« Panier prêt »): the person pays themselves.";
 
 /// confirm_payment's `total` (card_pay.rs and link_wallet.rs): the bridge compares it with the approved amount itself.
-pub const CONFIRM_TOTAL: &str = "in `total`, the payment page's total exactly as the page writes it (e.g. « 27,97 € »): \
+pub const CONFIRM_TOTAL: &str = "in `total`, the payment page's total exactly as the page writes it (e.g. « <amount> <currency> »): \
 BipAgents compares it with the approved amount itself and never presses when they differ; don't compare amounts \
 yourself.";
 
@@ -136,7 +136,7 @@ yourself.";
 pub fn confirm_schema() -> Value {
     json!({"type": "object", "properties": {
         "button": {"type": "string", "description": "the pay button's text"},
-        "total": {"type": "string", "description": "the payment page's total as written there, e.g. « 27,97 € »"},
+        "total": {"type": "string", "description": "the payment page's total as written there: an amount and its currency"},
     }, "required": ["total"]})
 }
 
@@ -743,7 +743,7 @@ async fn release_entry(config: &Config, agent: &str, outcome: &str, entry: Held)
                 if let Err(exc) = page.forget_history().await {
                     tracing::warn!(agent = %agent, exc = %exc, "card payment: history not forgotten, tab closed");
                     let _ = page.close().await;
-                } else if blanked && outcome == "amount_differs" {
+                } else if blanked && matches!(outcome, "amount_differs" | "handed_over") {
                     // handed over to the person (« Panier prêt »): the checkout page again, a new document with
                     // nothing typed, for them to pay in the agent's browser if they want to
                     if let Err(exc) = page.go_to(&entry.url).await {
@@ -767,7 +767,7 @@ async fn release_entry(config: &Config, agent: &str, outcome: &str, entry: Held)
     }
     // Never pressed, nor taken over by the person, and given up (review 18/11, R1): nothing was paid, taken off what
     // the card shows as spent (a single-use card stays used: the page saw its number).
-    if !entry.clicked && !entry.taken_over && matches!(outcome, "amount_differs" | "cancelled" | "suspended") {
+    if !entry.clicked && !entry.taken_over && matches!(outcome, "amount_differs" | "handed_over" | "cancelled" | "suspended") {
         if let Some((vault, card)) = &entry.spent_on {
             match vault.unrecord_card_payment(card, &entry.payment).await {
                 Ok(true) => tracing::info!(agent = %agent, "card payment: never pressed, taken off the card's spent"),
@@ -776,7 +776,8 @@ async fn release_entry(config: &Config, agent: &str, outcome: &str, entry: Held)
             }
         }
     }
-    journal(config, &entry, agent, outcome);
+    // handed over (the page's total could not be checked): « Échec : rien payé » in the apps' journal
+    journal(config, &entry, agent, if outcome == "handed_over" { "failed" } else { outcome });
     tracing::info!(agent = %agent, outcome = outcome, blanked = blanked, "card payment: browser given back");
     blanked
 }
@@ -1562,8 +1563,10 @@ async fn pay(state: &AppState, agent: &AgentConfig, arguments: &Dict, asker: &As
     };
     // The page's total, read before the card is typed (no card in the page to echo back; Relecture 1, 19/11, 10)
     // and again right before the press (`confirm`).
-    let total = read_total(&config, &agent.name, &entry, &mut page).await;
-    if matches!(total, PageTotal::Other(_) | PageTotal::Doubt(_)) {
+    let total = read_total(&config, &agent.name, &entry, &mut page, false).await;
+    if total != PageTotal::Approved {
+        // anything but a total read for sure: never typed, never left to the agent (Relecture 3: models repeat the
+        // approved amount), handed over to the person (« Panier prêt »)
         drop(code);
         drop(page);
         return Ok(stop_for(state, agent, &entry, &total).await);
@@ -1610,7 +1613,7 @@ async fn pay(state: &AppState, agent: &AgentConfig, arguments: &Dict, asker: &As
         cards::format_cents(cents),
         card.label,
         filled.join(", "),
-        next_step(&total, cents, &currency)
+        next_step(cents, &currency)
     );
     let has = |kind: &str| filled.iter().any(|f| f == kind);
     if !(has("exp") || (has("exp_month") && has("exp_year"))) || !has("csc") {
@@ -1628,7 +1631,7 @@ async fn pay(state: &AppState, agent: &AgentConfig, arguments: &Dict, asker: &As
 /// The page's total (page_total.rs), read by the bridge in the page under the hold, before the card is typed and again
 /// right before the press: its own text and its card frames', never a field's value nor a card-like digit run. Not read
 /// for sure: logged (what was seen, no card data, never the text), so that pages written another way are learnt.
-async fn read_total(config: &Config, agent: &str, entry: &Held, page: &mut Page) -> PageTotal {
+async fn read_total(config: &Config, agent: &str, entry: &Held, page: &mut Page, typed: bool) -> PageTotal {
     let rule = card_fill::Frames::new(&entry.url).with_tests(config);
     let texts = match page.page_texts(&rule).await {
         Ok(texts) => texts,
@@ -1638,6 +1641,17 @@ async fn read_total(config: &Config, agent: &str, entry: &Held, page: &mut Page)
         }
     };
     let total = crate::page_total::page_total_of(&texts, entry.cents, &entry.currency);
+    if typed {
+        // after the card was typed: no number in the log (the page may show the card back, Relecture 3, c3)
+        let kind = match &total {
+            PageTotal::Approved => "approved",
+            PageTotal::Other(_) => "another total",
+            PageTotal::Doubt(_) => "a doubt",
+            PageTotal::Unread(_) => "not read",
+        };
+        tracing::info!(agent = %agent, site = %entry.site, read = kind, "card payment: the page read again before the press");
+        return total;
+    }
     match &total {
         PageTotal::Unread(seen) => tracing::info!(agent = %agent, site = %entry.site, frames = texts.len(),
             chars = texts.iter().map(|t| t.all.chars().count()).sum::<usize>(), approved = entry.cents,
@@ -1646,28 +1660,25 @@ async fn read_total(config: &Config, agent: &str, entry: &Held, page: &mut Page)
         PageTotal::Approved => tracing::info!(agent = %agent, site = %entry.site, "card payment: the page's total is the approved one"),
         PageTotal::Other(shown) => tracing::info!(agent = %agent, site = %entry.site, approved = entry.cents, shown = shown,
             "card payment: the page's total is another amount"),
-        PageTotal::Doubt(doubt) => tracing::info!(agent = %agent, site = %entry.site, approved = entry.cents,
-            doubt = ?doubt, "card payment: the page shows what stops the payment"),
+        PageTotal::Doubt(doubt) => {
+            let place = crate::page_total::doubt_where(&texts, doubt);
+            tracing::info!(agent = %agent, site = %entry.site, approved = entry.cents, doubt = ?doubt,
+                frame = ?place.map(|(i, _)| i), provider = ?place.map(|(_, p)| p), frames = texts.len(),
+                "card payment: the page shows what stops the payment")
+        }
     }
     total
 }
 
-/// What the agent does once the card is typed: the bridge read the page's total (`read_total`) and it is the
-/// approved amount, so confirm; or it could not read it, so the agent's own reading decides, as before.
-fn next_step(total: &PageTotal, cents: i64, currency: &str) -> String {
+/// What the agent does once the card is typed: the bridge read the page's total (`read_total`), the approved amount
+/// (only then is a card typed), so confirm.
+fn next_step(cents: i64, currency: &str) -> String {
     let amount = cards::format_cents(cents);
-    match total {
-        PageTotal::Approved => format!(
-            "BipAgents read the payment page: its total is {amount} {currency}, the amount the person approved. Now \
-             call confirm_payment with the pay button's text and, in `total`, the total as the page writes it (e.g. \
-             « 27,97 € »)."
-        ),
-        _ => "BipAgents could not read the total on this page itself. Call confirm_payment with the pay button's text \
-              and, in `total`, the payment page's total exactly as it was written when you read the page before \
-              pay_with_card (e.g. « 27,97 € »). Don't compare amounts yourself: BipAgents compares that total with \
-              the approved amount and stops the payment if they differ."
-            .to_string(),
-    }
+    format!(
+        "BipAgents read the payment page: its total is {amount} {currency}, the amount the person approved. Now call \
+         confirm_payment with the pay button's text and, in `total`, the total as the page writes it (e.g. « <amount> \
+         <currency> »)."
+    )
 }
 
 /// The page's total read by the bridge (`read_total`) for this payment, kept with its hold for the press.
@@ -1705,17 +1716,37 @@ fn told(placed: bool, line: &str) -> String {
 
 /// The bridge gives the payment up by itself, never pressed (the card's fields emptied, the typed-into document left
 /// and forgotten, the tab on the payment page again, the payment taken off the card's spent: `release_entry`), the
-/// person told `line` in the conversation (pay_line.rs). `why`: what the bridge saw, for the agent; `then`: what the
-/// agent does next.
-async fn bridge_stops(state: &AppState, agent: &AgentConfig, line: &str, why: &str, then: &str) -> Dict {
+/// person told `line` in the conversation (pay_line.rs) and handed the cart (« Panier prêt » of `cart_cents`, to pay
+/// themselves if they want to: Relecture 3, no dead stop). `why`: what the bridge saw, for the agent; `outcome`: the
+/// journal's (`amount_differs`: the page asked another amount; `handed_over`: it could not be checked).
+async fn bridge_stops(
+    state: &AppState,
+    agent: &AgentConfig,
+    entry: &Held,
+    (line, why): (&str, &str),
+    cart_cents: i64,
+    outcome: &'static str,
+) -> Dict {
     let config = state.config();
-    ask_stop(&agent.name, "amount_differs");
-    release(&config, &agent.name, "amount_differs").await;
+    ask_stop(&agent.name, outcome);
+    release(&config, &agent.name, outcome).await;
     let placed = crate::pay_line::note(state, &agent.name, line);
+    let about = About {
+        message: String::new(),
+        merchant: entry.merchant.clone(),
+        site: entry.hosted.as_ref().map_or_else(|| entry.site.clone(), |(shop, _)| shop.clone()),
+        url: entry.url.clone(),
+        cents: cart_cents,
+        currency: entry.currency.clone(),
+    };
+    crate::urgent_pay::hand_over(state, agent, &about, line).await;
     refusal(&format!(
         "{why} BipAgents cancelled the payment itself: the pay button was not pressed and nothing was paid; nothing of \
-         the card stays in the page and your browser shows the payment page again. {} {then}",
-        told(placed, line)
+         the card stays in the page and your browser shows the payment page again. {} A « Panier prêt » card now \
+         waits for the person, to pay themselves if they want to: don't call {} or hand_over_payment again for it. \
+         Tell them in one short sentence and stop there.",
+        told(placed, line),
+        pay_tool(entry)
     ))
 }
 
@@ -1726,28 +1757,27 @@ async fn total_differs(state: &AppState, agent: &AgentConfig, entry: &Held, show
     let lang = crate::handback::language_of(&state.config(), agent);
     let money = |cents: i64| crate::urgent_pay::money(&lang, cents, &entry.currency);
     let line = crate::pay_line::total_differs(&lang, &money(shown), &money(entry.cents));
-    let (shown, approved, cur) = (cards::format_cents(shown), cards::format_cents(entry.cents), &entry.currency);
-    let why = format!("BipAgents read the payment page: its total is {shown} {cur}, but the person approved {approved} {cur}.");
-    let then = format!(
-        "Tell them in one short sentence that the page's total was not the amount they approved, and ask whether they \
-         want to pay {shown} {cur}: only if they say yes, call {} again with that amount (they approve it again).",
-        pay_tool(entry)
+    let why = format!(
+        "BipAgents read the payment page: its total is {} {cur}, but the person approved {} {cur}.",
+        cards::format_cents(shown),
+        cards::format_cents(entry.cents),
+        cur = entry.currency
     );
-    bridge_stops(state, agent, &line, &why, &then).await
+    bridge_stops(state, agent, entry, (&line, &why), shown, "amount_differs").await
 }
 
-/// The page's reading stops the payment (`Other` or `Doubt`, page_total.rs): given up by the bridge, the person told
-/// with the numbers it has.
+/// The page's reading, before the card is typed, is not « approved » (page_total.rs `Other`, `Doubt`, `Unread`):
+/// nothing typed, the payment handed over to the person, told with the numbers the bridge has.
 async fn stop_for(state: &AppState, agent: &AgentConfig, entry: &Held, total: &PageTotal) -> Dict {
     use crate::page_total::Doubt;
+    let lang = crate::handback::language_of(&state.config(), agent);
+    let money = |cents: i64| crate::urgent_pay::money(&lang, cents, &entry.currency);
     match total {
+        PageTotal::Approved => refusal("Nothing to stop."),
         PageTotal::Other(shown) => total_differs(state, agent, entry, *shown).await,
         PageTotal::Doubt(Doubt::Foreign(cents, code)) => foreign_stop(state, agent, entry, (*cents, code), "the payment page").await,
         PageTotal::Doubt(Doubt::Higher(shown)) => {
-            tracing::warn!(agent = %agent.name, site = %entry.site, approved = entry.cents, shown = shown,
-                           "card payment: a higher amount on the page, cancelled by the bridge");
-            let lang = crate::handback::language_of(&state.config(), agent);
-            let money = |cents: i64| crate::urgent_pay::money(&lang, cents, &entry.currency);
+            tracing::warn!(agent = %agent.name, site = %entry.site, "card payment: a higher amount on the page, handed over");
             let line = crate::pay_line::higher_amount(&lang, &money(*shown), &money(entry.cents));
             let why = format!(
                 "BipAgents saw {} {cur} on the payment page, more than the {} {cur} the person approved.",
@@ -1755,55 +1785,41 @@ async fn stop_for(state: &AppState, agent: &AgentConfig, entry: &Held, total: &P
                 cards::format_cents(entry.cents),
                 cur = entry.currency
             );
-            bridge_stops(state, agent, &line, &why, &ask_again(entry)).await
+            bridge_stops(state, agent, entry, (&line, &why), entry.cents, "amount_differs").await
         }
-        _ => {
-            tracing::warn!(agent = %agent.name, site = %entry.site, "card payment: the page's amounts can't be checked, cancelled");
-            let lang = crate::handback::language_of(&state.config(), agent);
+        PageTotal::Doubt(Doubt::Unclear) | PageTotal::Unread(_) => {
+            tracing::warn!(agent = %agent.name, site = %entry.site, "card payment: the page's total can't be checked, handed over");
             let line = crate::pay_line::unverified(&lang);
-            let why = "BipAgents could not check the payment page's total against the approved amount.";
-            bridge_stops(state, agent, &line, why, &ask_again(entry)).await
+            let why = "BipAgents could not check the payment page's total against the approved amount: nothing was typed.";
+            bridge_stops(state, agent, entry, (&line, why), entry.cents, "handed_over").await
         }
     }
 }
 
-/// What the agent does after a stop of the bridge: ask the person, and only pay again on their word.
-fn ask_again(entry: &Held) -> String {
-    format!(
-        "Tell the person in one short sentence and ask what they want: only if they want to pay what the page asks, \
-         call {} again with that amount (they approve it again).",
-        pay_tool(entry)
-    )
-}
-
-/// The total the agent read on the page (`confirm_payment`'s `total`) is `stated` cents, not the approved amount.
+/// The total the agent gave `confirm_payment` is `stated` cents, above the approved amount the bridge read.
 async fn stated_differs(state: &AppState, agent: &AgentConfig, entry: &Held, stated: i64) -> Dict {
-    tracing::warn!(agent = %agent.name, site = %entry.site, approved = entry.cents, stated = stated,
-                   "card payment: the total the agent read is another amount, cancelled by the bridge");
+    tracing::warn!(agent = %agent.name, site = %entry.site, "card payment: the agent's total is above the approved one, cancelled");
     let lang = crate::handback::language_of(&state.config(), agent);
     let money = |cents: i64| crate::urgent_pay::money(&lang, cents, &entry.currency);
-    let line = crate::pay_line::stated_differs(&lang, &money(stated), &money(entry.cents));
+    let name = if agent.display_name.trim().is_empty() { agent.name.as_str() } else { agent.display_name.as_str() };
+    let line = crate::pay_line::stated_differs(&lang, name, &money(stated), &money(entry.cents));
     let why = format!(
-        "The total you gave ({} {cur}) is not the {} {cur} the person approved.",
+        "The total you gave ({} {cur}) is above the {} {cur} the person approved.",
         cards::format_cents(stated),
         cards::format_cents(entry.cents),
         cur = entry.currency
     );
-    bridge_stops(state, agent, &line, &why, &ask_again(entry)).await
+    bridge_stops(state, agent, entry, (&line, &why), entry.cents, "amount_differs").await
 }
 
-/// Right before the press, the page's total read again (`read_total`) is no longer what it was when the card was typed
-/// (a fee or another currency added once the card was known: Relecture 1, 19/11, 4).
+/// Right before the press, the page read again (`read_total`) is no longer « approved »: whatever appeared (a fee, a
+/// currency, the card shown back), no number is said anywhere (Relecture 3, c3).
 async fn total_changed(state: &AppState, agent: &AgentConfig, entry: &Held) -> Dict {
-    tracing::warn!(agent = %agent.name, site = %entry.site, "card payment: the page's total changed before the press, cancelled");
+    tracing::warn!(agent = %agent.name, site = %entry.site, "card payment: the page changed before the press, cancelled");
     let lang = crate::handback::language_of(&state.config(), agent);
     let line = crate::pay_line::total_changed(&lang);
-    let then = format!(
-        "Look at the payment page again and tell the person what it asks now; only if they want to pay that, call {} \
-         again (they approve it again).",
-        pay_tool(entry)
-    );
-    bridge_stops(state, agent, &line, "The amount on the payment page changed after the card was typed.", &then).await
+    let why = "The payment page changed after the card was typed.";
+    bridge_stops(state, agent, entry, (&line, why), entry.cents, "handed_over").await
 }
 
 /// An amount in another currency than the payment's (`what`: where it was seen: the pay button, the page, the total
@@ -1817,8 +1833,7 @@ async fn foreign_stop(state: &AppState, agent: &AgentConfig, entry: &Held, (cent
         cards::format_cents(cents),
         entry.currency
     );
-    let then = "If the page offers to pay in the payment's own currency, tell the person; never pay in another one.";
-    bridge_stops(state, agent, &line, &why, then).await
+    bridge_stops(state, agent, entry, (&line, &why), entry.cents, "amount_differs").await
 }
 
 /// The card's form on the page the agent is on, before the person is asked: a card number field in a frame the card
@@ -2167,8 +2182,14 @@ async fn confirm(state: &AppState, agent: &AgentConfig, arguments: &Dict) -> any
     // The page's total read again right before the press (Relecture 1, 19/11, 4): a fee or another currency the page
     // added once it knew the card stops it.
     // The total the agent read on the page, compared by the bridge itself (Relecture 2: the model never compares).
+    // The bridge read the page « approved » (only then is a card typed): a stated total below it (a subtotal the agent
+    // saw before) never cancels a right payment, it is only logged (Relecture 3, c2); a higher one stops it.
     match crate::page_total::stated_total(&arg(arguments, "total"), &entry.currency) {
-        crate::page_total::Stated::Amount(cents) if cents == entry.cents => {}
+        crate::page_total::Stated::Amount(cents) if cents <= entry.cents => {
+            if cents != entry.cents {
+                tracing::info!(agent = %agent.name, site = %entry.site, "card payment: the agent's total is below the approved one read on the page, pressed");
+            }
+        }
         crate::page_total::Stated::Amount(cents) => {
             drop(page);
             return Ok(stated_differs(state, agent, &entry, cents).await);
@@ -2180,19 +2201,15 @@ async fn confirm(state: &AppState, agent: &AgentConfig, arguments: &Dict) -> any
         crate::page_total::Stated::Unreadable => {
             // nothing pressed, nothing given up: the agent gives it again
             return Ok(refusal(
-                "Nothing was pressed. Give `total`: the payment page's total exactly as it is written there (e.g. \
-                 « 27,97 € » or « EUR 27.97 »), one amount, then call confirm_payment again. BipAgents compares it \
-                 with the approved amount itself.",
+                "Nothing was pressed. Give `total`: the payment page's total exactly as it is written there (an amount \
+                 and its currency, e.g. « <amount> <currency> »), one amount, then call confirm_payment again. \
+                 BipAgents compares it with the approved amount itself.",
             ));
         }
     }
-    let now = read_total(&config, &agent.name, &entry, &mut page).await;
+    let now = read_total(&config, &agent.name, &entry, &mut page, true).await;
     match crate::page_total::recheck(&entry.total, &now) {
         crate::page_total::Recheck::Press => {}
-        crate::page_total::Recheck::Other(_) | crate::page_total::Recheck::Doubt(_) => {
-            drop(page);
-            return Ok(stop_for(state, agent, &entry, &now).await);
-        }
         crate::page_total::Recheck::Changed => {
             drop(page);
             return Ok(total_changed(state, agent, &entry).await);
@@ -2393,8 +2410,8 @@ pub(crate) async fn pay_with_values(
             return give_up(&config, &agent.name, token, "failed", &say).await;
         }
     };
-    let total = read_total(&config, &agent.name, &entry, &mut page).await;
-    if matches!(total, PageTotal::Other(_) | PageTotal::Doubt(_)) {
+    let total = read_total(&config, &agent.name, &entry, &mut page, false).await;
+    if total != PageTotal::Approved {
         drop(values);
         drop(page);
         return stop_for(state, agent, &entry, &total).await;
@@ -2421,7 +2438,7 @@ pub(crate) async fn pay_with_values(
         "The one-time card « {label} » is typed into the page ({}). Your browser is paused until the payment ends \
          (nobody may read the card). {}",
         filled.join(", "),
-        next_step(&total, cents, currency)
+        next_step(cents, currency)
     ))
 }
 

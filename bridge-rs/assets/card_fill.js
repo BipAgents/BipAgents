@@ -297,6 +297,27 @@
         into.block = here;
         into.size += text.length + 1;
       };
+      // an old price struck out, a product suggested (« Ajouter au panier » in its box): never the total (Relecture 3)
+      const ADD = /ajouter au panier|add to (cart|bag|basket)|in den warenkorb|a[ñn]adir al carrito|in (de )?winkel(wagen|mand)|toevoegen aan (winkelwagen|winkelmand)/i;
+      const boxes = new Map();
+      const suggests = (el) => {
+        for (let up = el, level = 0; up && up !== document.body && level < 5; up = up.parentElement, level++) {
+          if (!boxes.has(up)) {
+            const words = up.textContent || "";
+            boxes.set(up, words.length < 3000 && ADD.test(words));
+          }
+          if (boxes.get(up)) return true;
+        }
+        return false;
+      };
+      const struck = (el) => {
+        if (el.closest("del, s, strike")) return true;
+        for (let up = el, level = 0; up && level < 3; up = up.parentElement, level++) {
+          if (/line-through/.test(getComputedStyle(up).textDecorationLine)) return true;
+        }
+        return false;
+      };
+      const marked = (el) => (struck(el) ? "[barré] " : suggests(el) ? "[suggestion] " : "");
       const all = builder(), shown = builder();
       let truncated = false;
       // text drawn by CSS (`::before` / `::after { content: "32,87 €" }`, Relecture 2, 6): read with its element
@@ -332,8 +353,9 @@
           const rects = [...range.getClientRects()];
           if (!rects.length) continue; // not laid out (display: none)
           const here = blockOf(at);
-          add(all, here, at, text);
-          if (visible(node, at, rects)) add(shown, here, at, text);
+          const said = /\d/.test(text) ? marked(at) + text : text;
+          add(all, here, at, said);
+          if (visible(node, at, rects)) add(shown, here, at, said);
         }
       };
       if (document.body) walk(document.body);

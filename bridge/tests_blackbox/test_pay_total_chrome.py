@@ -68,7 +68,7 @@ def test_another_total_on_the_page_is_cancelled_by_the_bridge_and_the_person_tol
         assert "its total is 27.97 EUR, but the person approved 24.50 EUR" in said, said
         assert "BipAgents cancelled the payment itself" in said and "nothing was paid" in said, said
         # read before the card was typed: nothing of it ever reached the page
-        assert "call pay_with_card again" in said, said
+        assert "Panier prêt" in said and "don't call pay_with_card" in said, said
         assert "never say the bank" in said, said
         # the person's line, from the bridge, with both numbers (the agent's language here is English)
         line = "Payment cancelled: the page asked for €27.97, you had approved €24.50. Nothing was paid."
@@ -87,16 +87,21 @@ def test_another_total_on_the_page_is_cancelled_by_the_bridge_and_the_person_tol
         shop.shutdown()
 
 
-def test_no_total_on_the_page_keeps_the_agents_reading(bridges, fakes):
-    shop, browser, bridge = start(bridges, fakes, "selects.html")   # a form with no amount at all
+def test_no_total_on_the_page_is_handed_over_never_typed(bridges, fakes):
+    # Correction 3: models repeat the approved amount when asked for a page's total they could not see (bench U3), so a
+    # page whose total the bridge can't read is never typed into: « Panier prêt » for the person
+    shop, browser, bridge = start(bridges, fakes, "selects.html?total=")   # a form with no amount at all
     try:
         result, _ = pay(bridge, ARGS)
         said = result["content"][0]["text"]
-        assert result["isError"] is False, result
-        assert "could not read the total on this page itself" in said and "Don't compare amounts yourself" in said, said
-        assert "If the total you read" not in said, said
-        assert lines(bridge) == []
-        assert c.tool(bridge, "cancel_payment")["content"][0]["text"].startswith("The payment is given up")
+        assert result["isError"] is True and "nothing was typed" in said and "Panier prêt" in said, said
+        assert "If the total you read" not in said and "confirm_payment" not in said, said
+        line = "Payment stopped: BipAgents could not check the page's total. Nothing was paid."
+        assert [l["text"] for l in lines(bridge)] == [line], lines(bridge)
+        assert browser.values()["selects.html"]["numero"] == ""
+        carts = [i for i in bridge.get("/v1/approvals", headers=AUTH, params={"agent": "vie"}).json()["items"]
+                 if i["run_id"].startswith("bip-cart-")]
+        assert len(carts) == 1, carts
     finally:
         browser.stop()
         shop.shutdown()
@@ -214,27 +219,23 @@ def test_a_pay_button_in_another_currency_is_never_pressed(bridges, fakes, tmp_p
         shop.shutdown()
 
 
-def test_without_a_readable_total_the_bridge_compares_the_agents_total_itself(bridges, fakes):
-    # Correction 2: no amount on the page (selects.html); the agent gives the total it read, the bridge compares
-    shop, browser, bridge = start(bridges, fakes, "selects.html")
+def test_the_agents_total_only_stops_a_verified_payment_when_higher(bridges, fakes):
+    # Correction 3 (c2): the bridge read the page « approved »; a lower total from the agent (a subtotal) is logged and
+    # pressed; a higher one stops it, the person told it was the agent's figure
+    shop, browser, bridge = start(bridges, fakes, "cawl.html")
     try:
-        result, _ = pay(bridge, ARGS)
+        result, _ = pay(bridge, CAWL)
         assert result["isError"] is False, result
-        # no total given, or not one amount: nothing pressed, the payment still waits
-        for total in ["", "le total de la page"]:
-            said = c.tool(bridge, "confirm_payment", {"button": "Valider le paiement", "total": total})["content"][0]["text"]
-            assert said.startswith("Nothing was pressed") and "selects.html" in "".join(browser.pages()), said
-        # another amount than the approved one: stopped by the bridge, the person told with both numbers
-        said = c.tool(bridge, "confirm_payment", {"button": "Valider le paiement", "total": "15,00 €"})["content"][0]["text"]
-        assert "BipAgents cancelled the payment itself" in said, said
-        line = "Payment stopped: the total read on the page (€15.00) is not the one you had approved (€12.50). Nothing was paid."
+        # not one amount: nothing pressed, the payment still waits
+        said = c.tool(bridge, "confirm_payment", {"button": "Payer", "total": "le total"})["content"][0]["text"]
+        assert said.startswith("Nothing was pressed") and "cawl.html" in "".join(browser.pages()), said
+        said = c.tool(bridge, "confirm_payment", {"button": "Payer", "total": "35,00 €"})["content"][0]["text"]
+        assert "BipAgents cancelled the payment itself" in said and "Panier prêt" in said, said
+        line = "Payment stopped: the total given by Vie (€35.00) is not the one you had approved (€27.97). Nothing was paid."
         assert [l["text"] for l in lines(bridge)] == [line], lines(bridge)
-        assert "done.html" not in "".join(browser.pages())
-        # paid again, the right total: pressed
-        browser.open(f"http://127.0.0.1:{shop.server_port}/selects.html")
-        result, _ = pay(bridge, ARGS)
-        assert result["isError"] is False, result
-        said = c.tool(bridge, "confirm_payment", {"button": "Valider le paiement", "total": "12,50 €"})["content"][0]["text"]
+        browser.open(f"http://127.0.0.1:{shop.server_port}/cawl.html")
+        result, _ = pay(bridge, CAWL)
+        said = c.tool(bridge, "confirm_payment", {"button": "Payer", "total": "24,50 €"})["content"][0]["text"]
         assert "moved on" in said, said
     finally:
         browser.stop()
