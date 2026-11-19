@@ -1134,6 +1134,10 @@ async fn review5_an_offer_place_never_renews_through_kerfy_s_exchange() {
     let vie = config.agents["vie"].clone();
     let _ = call(&config, &vie, "drive_read", &args(json!({"file": "google_drive:gd"}))).await;
     let after = seen.lock().unwrap().iter().filter(|(_, p, _)| p.contains("drive-exchange")).count();
-    TEST_OFFER.with(|o| *o.borrow_mut() = None);
     assert_eq!(after, before, "a place of the offer renewed through Kerfy's exchange");
+    // and the choice is erased once the bridge asks the guichet (its start, a listing)
+    assert!(read_stored(&config).unwrap().drives_google_android.is_some());
+    ask_place_web(&config, true).await;
+    assert!(read_stored(&config).unwrap().drives_google_android.is_none());
+    TEST_OFFER.with(|o| *o.borrow_mut() = None);
 }

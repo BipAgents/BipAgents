@@ -303,7 +303,8 @@ fn endpoints_for(config: &Config, provider: Provider, client: &str) -> Option<En
     let mut exchange_key = None;
     let mut token = c.token_url.clone().unwrap_or_else(|| provider.token_url().into());
     let (client_id, client_secret, redirect_uri) = match client {
-        "web" => match (place_web(config), android_google(config)) {
+        // a place of the offer: its own Web client only, never a choice carried from a home install (review pass 5)
+        "web" => match (place_web(config), android_google(config).filter(|_| offer_guichet().is_none())) {
             (Some((id, secret)), _) => (id, secret, String::new()),
             (None, Some(chosen)) if chosen.mode == "own" => (chosen.client_id, chosen.client_secret, String::new()),
             (None, Some(chosen)) if chosen.mode == "kerfy" => {
@@ -457,6 +458,7 @@ pub async fn ask_place_web(config: &Config, force: bool) -> bool {
         return place_web(config).is_some();
     }
     let Some((base, token)) = offer_guichet() else { return false };
+    forget_choice_on_offer(config).await;
     {
         let mut asked = ASKED.lock().unwrap_or_else(|e| e.into_inner());
         let folder = std::path::PathBuf::from(config.data_dir());
@@ -501,6 +503,24 @@ pub async fn ask_place_web(config: &Config, force: bool) -> bool {
         }
     }
     place_web(config).is_some()
+}
+
+/// A place of the offer holding a choice made at home (an install moved to the offer with its encrypted store): the
+/// choice erased, so that nothing ever goes through Kerfy's exchange from the offer (review pass 5). A Google Drive
+/// signed in through it is reconnected with the place's own Web client.
+async fn forget_choice_on_offer(config: &Config) {
+    if android_google(config).is_none() {
+        return;
+    }
+    let _guard = connections::LOCK.lock().await;
+    let store = connections::store_of(config);
+    let Ok(mut stored) = store.read() else { return };
+    if stored.drives_google_android.take().is_some() {
+        match store.write(&stored) {
+            Ok(()) => tracing::info!("drives: a place of the offer: the Android choice made before is erased"),
+            Err(e) => tracing::warn!(error = %e, "drives: the Android choice made before can't be erased"),
+        }
+    }
 }
 
 /// [`ask_place_web`] at the bridge's start.
