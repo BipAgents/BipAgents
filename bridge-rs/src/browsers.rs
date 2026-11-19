@@ -147,6 +147,11 @@ pub fn task_browser(agent: &str, job: &str) -> String {
     format!("{agent}--{job}")
 }
 
+/// The agent a task's browser belongs to (`task_browser`'s name back), None for an agent's own.
+pub fn task_browser_agent(name: &str) -> Option<&str> {
+    name.split_once("--").map(|(agent, _)| agent).filter(|a| !a.is_empty())
+}
+
 /// Beside the agent's `busy`: which Hermes session (a task's run, patch 0028) uses which task browser's settings
 /// (`{session: <its mcp.json>}`); bip-browser-mcp routes that session's calls there, the others to the agent's own.
 pub const SESSIONS_FILE: &str = "sessions.json";
@@ -229,8 +234,13 @@ pub fn setup_task(config: &Config, agent: &str, job: &str, session: &str) -> any
     if sites.exists() {
         std::fs::copy(&sites, place.join(crate::browser_mcp::SEND_SITES_FILE))?;
     }
-    // (no egress proxy for a task's browser yet: its address isn't in the proxy's policy, send_guard.rs)
-    let text = systemd_unit(&id, &engine, &run_args(config, &id, &ports, &engine, gpu_available(config), None));
+    // through the agents' proxy as the agent's own browser is (send_guard.rs): its address in the proxy's policy,
+    // as the agent's (`browsers_map`), before it ever starts
+    let egress = crate::send_guard::browser_egress(config, &engine, ports.get("cdp").copied().unwrap_or(0));
+    if egress.is_some() {
+        crate::sandbox_sites::ensure_agent(config, agent)?;
+    }
+    let text = systemd_unit(&id, &engine, &run_args(config, &id, &ports, &engine, gpu_available(config), egress.as_ref()));
     let unit = Host::real(config).unit_path(&id);
     let systemctl = pyx::which("systemctl").unwrap_or_else(|| "systemctl".into());
     let mut settings = proxy_config(config, &id, &engine, &ports);
@@ -278,6 +288,10 @@ pub async fn remove_task(config: &Config, agent: &str, job: &str) {
     let _ = edit_sessions(config, agent, |map| map.retain(|_, v| v.as_str() != Some(shown.as_str())));
     if let Err(exc) = std::fs::remove_dir_all(&place) {
         tracing::warn!(agent = %agent, job = %job, error = %exc, "a task's browser folder not removed");
+    }
+    // its address out of the proxy's policy
+    if crate::send_guard::browser_routed(config) {
+        let _ = crate::sandbox_sites::ensure_policy(config);
     }
     tracing::info!(agent = %agent, job = %job, "a task's own browser removed");
 }

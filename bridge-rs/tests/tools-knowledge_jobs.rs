@@ -784,6 +784,9 @@ async fn a_task_of_an_agent_with_a_browser_gets_a_browser_of_its_own() {
     let job = board.create(&agent, "Comparer", "Compare trois offres sur leurs sites.", 0.50, None).await.unwrap();
     let id = id_of(&job);
     let own = bipbridge::browsers::task_browser("coach", &id);
+    // its agent read back from its name (the egress proxy's policy gives it the agent's rules, send_guard.rs)
+    assert_eq!(bipbridge::browsers::task_browser_agent(&own), Some("coach"));
+    assert_eq!(bipbridge::browsers::task_browser_agent("coach"), None);
     let theirs = bipbridge::browsers::folder(&config, &own);
     let settings: Value = serde_json::from_str(&std::fs::read_to_string(theirs.join("mcp.json")).unwrap()).unwrap();
     assert_eq!(settings["server"][3], json!(bipbridge::browsers::container(&own)), "{settings}");
