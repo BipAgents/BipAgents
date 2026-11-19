@@ -861,13 +861,12 @@ pub async fn run_forever(state: AppState) {
 
 // -- the owner's app ----------------------------------------------------------------------------------------------------
 
-/// The share as the owner's app shows it.
+/// The share as the owner's app shows it. `count` (« Visible par N personnes »): everyone invited and everyone who
+/// sees it — the friends who opened their link (a key the link didn't vouch for never counts) and the open links.
 pub fn view(share: &Value) -> Value {
-    let count = share
-        .get("viewers")
-        .and_then(Value::as_array)
-        .map(|v| v.iter().filter(|x| x["state"] == "ok").count())
-        .unwrap_or(0);
+    let len = |name: &str| share.get(name).and_then(Value::as_array);
+    let count = len("viewers").map(|v| v.iter().filter(|x| x["state"] != "refused").count()).unwrap_or(0)
+        + len("invites_open").map(Vec::len).unwrap_or(0);
     json!({
         "id": share["id"], "agent": share["agent"], "session": share.get("session").cloned().unwrap_or(Value::Null),
         "thread": is_thread(share), "title": share["title"],
