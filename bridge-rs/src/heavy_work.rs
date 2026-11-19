@@ -434,12 +434,20 @@ pub async fn call_with(
     arguments: Dict,
     jobs: Option<Arc<crate::jobs::Jobs>>,
 ) -> anyhow::Result<Dict> {
-    let (c, a) = (config.clone(), agent.clone());
+    let (c, a, tool) = (config.clone(), agent.clone(), name.clone());
     let mut out = tokio::task::spawn_blocking(move || call(&c, &a, &name, &arguments)).await?;
     let later = out.get("structuredContent").and_then(|v| v.get("answer")) == Some(&json!("later"));
     let Some(jobs) = jobs.filter(|_| later) else { return Ok(out) };
-    let in_turn = jobs.hub.as_ref().and_then(|hub| hub.asking_session(&agent.name)).is_some();
-    if in_turn || !jobs.pause_running_for_space(&agent.name).await {
+    // the call said its session (Hermes patch 0028): its own turn tells a person's from a task's, and that task alone
+    // pauses; else (an older Hermes) any person's turn going on, and all of the agent's tasks
+    let said = crate::runs::CALL_SESSION.try_with(|s| s.is_some()).unwrap_or(false);
+    let (in_turn, run) = if said {
+        let turn = jobs.hub.as_ref().and_then(|hub| hub.turn_of(&agent.name, &tool));
+        (turn.as_ref().is_some_and(|t| !t.background), turn.filter(|t| t.background).map(|t| t.run_id))
+    } else {
+        (jobs.hub.as_ref().and_then(|hub| hub.asking_session(&agent.name)).is_some(), None)
+    };
+    if in_turn || !jobs.pause_running_for_space(&agent.name, run.as_deref()).await {
         return Ok(out);
     }
     let busy = out["structuredContent"]["busy"] == json!(true);

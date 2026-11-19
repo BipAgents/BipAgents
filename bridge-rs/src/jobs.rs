@@ -937,11 +937,13 @@ impl Jobs {
 
     /// `heavy_work` answered « later » to the agent's own background task: that task stopped at its next step,
     /// paused for room (started again by `resume_after_space`). False when the agent has none running.
-    /// Several may run (19/11) and the call doesn't say which asked: all of the agent's, the asking one among them.
-    pub async fn pause_running_for_space(&self, agent: &str) -> bool {
+    /// `run`: the asking task's run when the call said its session (Hermes patch 0028): that task only. Without it
+    /// (an older Hermes) all of the agent's, the asking one among them.
+    pub async fn pause_running_for_space(&self, agent: &str, run: Option<&str>) -> bool {
         let running: Vec<Dict> = tasks(&self.config.get())
             .into_iter()
             .filter(|j| state_of(j) == "running" && agent_of(j) == agent && !crate::archives::records_fill::is_extract(j))
+            .filter(|j| run.is_none_or(|r| j.get("run_id").and_then(Value::as_str) == Some(r)))
             .collect();
         let Ok(agent) = self.agent(agent) else { return false };
         for mut job in running.iter().cloned() {
