@@ -3,7 +3,8 @@ installed at first boot with nobody at the keyboard (installer/cloud/user-data.y
 
 FILE, written at first boot from that setup: {"v": 1, "pair": "<base64url>", "language": "fr", "profile": "solo"}, and "port" when the door isn't on 443 (a server shared by two people).
 "keys": {"url", "grant", "signature", "token"} encrypts the space at rest from the start (space.py); "token" is the
-place's own key-service token (no other use at the guichet), never the backups' one.
+place's own key-service token (no other use at the guichet), never the backups' one. "vault_keys", the same settings,
+seals the vault's keys with the key service once the place is installed (vault_keys.py).
 `pair` is the one-time pairing secret the guichet hands to the app that bought the server; the profile is « mini »
 (no visible browser, for a 2 GB server) or « solo » (the default, 4 GB). No model key: the app sends it to the bridge
 once paired (bridge-rs/src/cloud_setup.rs), since the provider keeps that setup.
@@ -41,6 +42,26 @@ class CloudSetup:
     # it (kept beside the encrypted folder, so it opens nothing else at the guichet: audit 2026-10-27, 17) and the
     # guichet's signed grant for that token. Absent: not encrypted (this first version's default).
     keys: Optional[Dict[str, str]] = None
+    # The vault's, mailboxes' and connections' keys sealed with the key service from the start (vault_keys.py, design
+    # note « Clé du coffre », lot 3): the same settings as `keys`, checked the same way (one grant and one token when
+    # both are given). Absent: today's layout.
+    vault_keys: Optional[Dict[str, str]] = None
+
+
+def _key_service(given, backup: Optional[Dict[str, str]], refused: str) -> Optional[Dict[str, str]]:
+    """A key service's settings from the guichet ({url, grant, signature, token}), None when absent."""
+    if given is None:
+        return None
+    fields = (given.get("url"), given.get("grant"), given.get("signature"), given.get("token")) \
+        if isinstance(given, dict) else (None,) * 4
+    if not isinstance(fields[0], str) or not fields[0].startswith("https://") \
+            or not all(isinstance(f, str) and f for f in fields[1:3]):
+        raise CloudError("the key service settings are not an https address and a signed grant")
+    token = fields[3]
+    if not isinstance(token, str) or len(token) < 16 or (backup is not None and token == backup["token"]):
+        # an older guichet's setup (the backups' token at the key service): not used that way
+        raise CloudError(f"the key service settings have no token of their own: {refused}")
+    return {"url": fields[0], "grant": fields[1], "signature": fields[2], "token": token}
 
 
 def read(path: Path) -> CloudSetup:
@@ -71,20 +92,11 @@ def read(path: Path) -> CloudSetup:
         if not isinstance(url, str) or not url.startswith("https://") or not isinstance(token, str) or len(token) < 16:
             raise CloudError("the backup settings are not an https address and a token")
         backup = {"url": url, "token": token}
-    keys = data.get("keys")
-    if keys is not None:
-        fields = (keys.get("url"), keys.get("grant"), keys.get("signature"), keys.get("token")) \
-            if isinstance(keys, dict) else (None,) * 4
-        if not isinstance(fields[0], str) or not fields[0].startswith("https://") \
-                or not all(isinstance(f, str) and f for f in fields[1:3]):
-            raise CloudError("the key service settings are not an https address and a signed grant")
-        token = fields[3]
-        if not isinstance(token, str) or len(token) < 16 or (backup is not None and token == backup["token"]):
-            # an older guichet's setup (the backups' token at the key service): not encrypted that way
-            raise CloudError("the key service settings have no token of their own: encryption refused")
-        keys = {"url": fields[0], "grant": fields[1], "signature": fields[2], "token": token}
+    keys = _key_service(data.get("keys"), backup, "encryption refused")
+    vault_keys = _key_service(data.get("vault_keys"), backup, "the vault's keys stay as they are")
     return CloudSetup(pair=pair, language=language if language in LANGUAGES else "en",
-                      profile=profile if profile in PROFILES else "solo", port=port, backup=backup, keys=keys)
+                      profile=profile if profile in PROFILES else "solo", port=port, backup=backup, keys=keys,
+                      vault_keys=vault_keys)
 
 
 def _global(address: str) -> bool:

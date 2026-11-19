@@ -11,6 +11,11 @@ machine's name, starts it all and checks the agents answer.
 two places); `bipagents resume` starts it again here if the move is called off.
 
 Nothing goes through a third party: the file goes from one machine to the other as the person copies it.
+
+A place whose vault's keys are sealed (vault_keys.py): the export carries the keys its place key opens (asked of its
+bridge, only while the vault is open) and its agents' Hermes copies kept in memory as folders, never this server's
+half, the key service's settings and token, nor keys.sealed.json; the import puts each key beside its store (today's
+layout). An import over a place whose vault is sealed is refused (`bipagents send` is the way onto such a place). Backups and planned moves carry the half and the key service's settings with the data instead.
 """
 from __future__ import annotations
 
@@ -30,9 +35,9 @@ import tarfile
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
 
-from . import bridgeconf, hermes, public_repo, ui, volumes
+from . import bridgeconf, hermes, public_repo, ui, vault_keys, volumes
 from .sealed import SealedError, SealedReader, SealedWriter, new_passphrase
 
 REPO = Path(__file__).resolve().parents[2]
@@ -41,6 +46,7 @@ MANIFEST = "manifest.json"
 SUMMARY = "summary.json"
 SQLITE = b"SQLite format 3\x00"
 SMALL = 64 * 1024 * 1024        # read whole before archiving: a file growing meanwhile cannot break the archive
+VAULT_KEYS = "vault_keys"       # in restore()'s answer only (never printed): an enrolled place's exported keys
 MOVED = "moved.json"            # in the config folder: what `--moving` stopped, for `bipagents resume`
 # The agents' own podman volumes (volumes.py): `podman-volumes/<name>.tar` in the archive, put in this folder of the
 # target's home on the way in, then imported.
@@ -65,6 +71,16 @@ TEXT_SUFFIXES = {".toml", ".yaml", ".yml", ".json", ".env", ".conf", ".txt", ".s
 TEXT_NAMES = {".env"}
 # The bridge's derived data, made again after a restore or a move: the archives' search indexes (bridge-rs/src/archives/).
 DATA_SKIP = {"archive-index"}
+# An agent's Hermes vault (its own copy of the items it was given), at a Hermes home's root or in a profile. On a place
+# whose vault keys are sealed (bridge-rs/src/sealed_keys.rs: keys.sealed.json, or a sealing under way) it is a link into
+# memory the bridge rebuilds from its master copy (hermes_copies.rs): never carried, nor a copy left on the disk; a link
+# into memory never anywhere (it would point at nothing on another server).
+HERMES_VAULT = "vault"
+# What the bridge's swap of that link leaves beside it when cut off (bridge-rs/src/hermes_copies.rs SET_ASIDE: the bridge
+# stopped, a put back failed): the disk's copy set aside, its Hermes key in it, and a link not renamed yet. The bridge
+# erases them at its next start; never carried, on any place (only the bridge makes them).
+HERMES_SET_ASIDE = (".vault-disk-", ".vault-link-")
+SEALED_MARKS = ("keys.sealed.json", ".keys-migration/journal.json")
 # The bridge's spare agents (bridge-rs/src/agent_pool.rs POOL_FILE), next to bridge.toml.
 SPARES_FILE = "spare-agents.json"
 NOT_SETTINGS = {"profile", "uploads", "media", "audio", "agent-audio", "image_store", "image_cache", "audio_cache",
@@ -98,6 +114,14 @@ class Inventory:
             if isinstance(data, list) else frozenset()
         self.__dict__["_spares"] = found
         return found
+
+    def vault_in_memory(self) -> bool:
+        """Whether the place's vault keys are sealed (its agents' Hermes copies in memory). Read once per inventory."""
+        cached = self.__dict__.get("_vault_in_memory")
+        if cached is None:
+            cached = any((self.data_dir / mark).exists() for mark in SEALED_MARKS)
+            self.__dict__["_vault_in_memory"] = cached
+        return cached
 
     @property
     def data_dir(self) -> Path:
@@ -136,6 +160,13 @@ class Inventory:
                         if Path(v).expanduser().is_file() and not _inside(Path(v).expanduser(), list(found.values()))})
         for i, path in enumerate(loose):
             found[f"file-{i}"] = path
+        # The vault's sealed keys (vault_keys.py): this server's half and the key service's settings, in the space's
+        # folder; inside the data folder on a place of the offer, else here (never the place key, kept in memory).
+        space = vault_keys.space_dir(self.home)
+        for name in vault_keys.SPACE_FILES:
+            path = space / name
+            if path.is_file() and not path.is_symlink() and not _inside(path, list(found.values())):
+                found[f"space-{path.stem.replace('.', '-')}"] = path
         return found
 
     def ports(self) -> Dict[str, int]:
@@ -155,12 +186,17 @@ class Inventory:
             parts = _relative(path, home)
             if parts is None:
                 continue
+            if name.startswith(HERMES_SET_ASIDE) and (len(parts) == 1 or (len(parts) == 3 and parts[0] == "profiles")):
+                return True   # a Hermes copy set aside by a cut-off swap (its key in it): erased by the bridge
             if parts and parts[0] in HERMES_SKIP_ROOT:
                 return True
             if len(parts) >= 3 and parts[0] == "profiles" and parts[2] in HERMES_SKIP_PROFILE:
                 return True
             if len(parts) >= 2 and parts[0] == "profiles" and parts[1] in self.spares():
                 return True   # blank agents the bridge keeps ready (bridge-rs/src/agent_pool.rs), made again
+            if name == HERMES_VAULT and (len(parts) == 1 or (len(parts) == 3 and parts[0] == "profiles")) \
+                    and (path.is_symlink() or self.vault_in_memory()):
+                return True   # an agent's Hermes vault in memory (or left on the disk of such a place): rebuilt
         parts = _relative(path, self.data_dir)
         if parts and parts[0] in DATA_SKIP:
             return True
@@ -310,20 +346,74 @@ def _is_sqlite(path: Path) -> bool:
         return False
 
 
-def add_tree(tar: tarfile.TarFile, inv: Inventory, name: str, root: Path, tally: Tally, scratch: Path) -> None:
+def _in_memory(path: Path) -> Optional[Path]:
+    """An agent's Hermes vault kept in memory (a link into $XDG_RUNTIME_DIR/bipagents/hermes-vault-*, lot 2 of the
+    vault's sealed keys): the folder it points to, else None."""
+    if not path.is_symlink():
+        return None
+    runtime = Path(os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}") / "bipagents"
+    target = Path(os.path.realpath(path))
+    parts = _relative(target, Path(os.path.realpath(runtime)))
+    if parts and parts[0].startswith("hermes-vault-") and target.is_dir():
+        return target
+    return None
+
+
+def _hermes_vault(inv: Inventory, path: Path) -> bool:
+    """An agent's Hermes vault folder: `vault` at a Hermes home's root or in one of its profiles."""
+    if path.name != "vault" or path.is_symlink() or not path.is_dir():
+        return False
+    for hermes_home in inv.hermes_homes():
+        parts = _relative(path, hermes_home)
+        if parts is not None and (len(parts) == 1 or (len(parts) == 3 and parts[0] == "profiles")):
+            return True
+    return False
+
+
+def add_tree(tar: tarfile.TarFile, inv: Inventory, name: str, root: Path, tally: Tally, scratch: Path,
+             left_out: Optional[Callable[[Path], bool]] = None, from_memory: bool = False) -> None:
+    """`root` into the archive as `name`, but what `Inventory.skipped` and `left_out` leave out. `from_memory` (the
+    export of a place whose vault's keys are sealed): an agent's Hermes vault kept in memory goes as the folder it
+    is (no link to a memory the other machine hasn't); otherwise such a link is what `skipped` says."""
+    def arc(path: Path, base: Path, prefix: str) -> str:
+        rel = path.relative_to(base).as_posix() if path != base else ""
+        return f"{prefix}/{rel}" if rel else prefix
+
+    def kept(path: Path) -> bool:
+        if path.name.startswith(vault_keys.SET_ASIDE):
+            return False   # what a cut-off swap set aside (lot 2): never carried, whatever it is
+        if left_out and left_out(path):
+            return False
+        # an export with the keys (from_memory) takes every agent's Hermes vault, still on the disk too: the import
+        # goes back to today's layout, where nothing rebuilds them
+        return not inv.skipped(path) or (from_memory and _hermes_vault(inv, path))
+
+    if left_out and left_out(root):
+        return
     if root.is_file():
-        entries: List[Path] = [root]
+        entries: List[Tuple[Path, str]] = [(root, name)]
     elif root.is_dir():
-        entries = [root]
+        entries = [(root, name)]
+        copies: List[Tuple[Path, Path]] = []
         for folder, dirs, files in os.walk(root, followlinks=False):
             here = Path(folder)
-            dirs[:] = sorted(d for d in dirs if not inv.skipped(here / d))
-            entries += [here / d for d in dirs] + [here / f for f in sorted(files) if not inv.skipped(here / f)]
+            # before `skipped`, which leaves such links out of backups and moves (the bridge rebuilds them there)
+            memory = {d: target for d in dirs if not d.startswith(vault_keys.SET_ASIDE)
+                      and (target := _in_memory(here / d)) is not None} if from_memory else {}
+            copies += [(here / d, memory[d]) for d in sorted(memory)]
+            dirs[:] = sorted(d for d in dirs if d not in memory and kept(here / d))
+            entries += [(here / d, arc(here / d, root, name)) for d in dirs]
+            entries += [(here / f, arc(here / f, root, name)) for f in sorted(files) if kept(here / f)]
+        for link, target in copies:
+            prefix = arc(link, root, name)
+            for folder, dirs, files in os.walk(target, followlinks=False):
+                here = Path(folder)
+                dirs.sort()
+                entries.append((here, arc(here, target, prefix)))
+                entries += [(here / f, arc(here / f, target, prefix)) for f in sorted(files)]
     else:
         return
-    for path in entries:
-        rel = path.relative_to(root).as_posix() if path != root else ""
-        arcname = f"{name}/{rel}" if rel else name
+    for path, arcname in entries:
         try:
             if path.is_symlink() or path.is_dir():
                 tar.addfile(_info(tar, path, arcname))
@@ -348,11 +438,34 @@ def add_tree(tar: tarfile.TarFile, inv: Inventory, name: str, root: Path, tally:
             tally.skipped.append(str(path))   # e.g. written by a sandbox under another user id
 
 
+def _sealed_left_out(inv: Inventory) -> Callable[[Path], bool]:
+    """What an export never carries of the vault's sealed keys: the space's own folder (this server's half, the key
+    service's settings and token; an encrypted space's open folder excepted) and keys.sealed.json, of no use without
+    them. The import goes back to today's layout from the keys the export carries."""
+    space = vault_keys.space_dir(inv.home)
+    sealed_file = inv.data_dir / vault_keys.SEALED
+
+    def left_out(path: Path) -> bool:
+        if path == sealed_file:
+            return True
+        parts = _relative(path, space)
+        return parts is not None and not (parts and parts[0] == "open")
+    return left_out
+
+
 def export(inv: Inventory, out: Path, passphrase: str, machine: Any,
            extra: Optional[Dict[str, Any]] = None) -> Tuple[Dict[str, Any], Tally]:
     """`extra`: more in the manifest (an export for a place says so: to_place.py)."""
     info = {**manifest(inv, machine), **(extra or {})}
     info["volumes"] = volumes.kept(inv.data_dir)
+    keys = None
+    if vault_keys.sealed(inv.data_dir):   # sealed: the keys asked of the bridge first (nothing written if it can't)
+        try:
+            keys = vault_keys.export_keys(inv)
+        except vault_keys.VaultKeysError as exc:
+            raise SealedError(f"the vault's keys can't be exported now ({exc}): the vault is closed or being sealed; "
+                              "try again in a few minutes") from exc
+    left_out = _sealed_left_out(inv)
     tally = Tally()
     out.parent.mkdir(parents=True, exist_ok=True)
     partial = out.with_name(out.name + ".part")
@@ -364,8 +477,13 @@ def export(inv: Inventory, out: Path, passphrase: str, machine: Any,
             entry = tarfile.TarInfo(MANIFEST)
             entry.size, entry.mode = len(data), 0o600
             tar.addfile(entry, io.BytesIO(data))
+            if keys is not None:
+                data = json.dumps({"v": 1, "keys": keys}).encode()
+                entry = tarfile.TarInfo(vault_keys.EXPORT_MEMBER)
+                entry.size, entry.mode = len(data), 0o600
+                tar.addfile(entry, io.BytesIO(data))
             for name, root in info["roots"].items():
-                add_tree(tar, inv, name, Path(root), tally, Path(scratch))
+                add_tree(tar, inv, name, Path(root), tally, Path(scratch), left_out, from_memory=keys is not None)
             exported = volumes.export_all(info["volumes"], Path(scratch) / VOLUMES, volumes.podman())
             for path in exported:
                 add_tree(tar, inv, f"{VOLUMES}/{path.name}", path, tally, Path(scratch))
@@ -492,7 +610,13 @@ def restore(tar: tarfile.TarFile, info: Dict[str, Any], target: Target) -> Dict[
     while (member := tar.next()) is not None:
         tar.members = []   # a stream: nothing to go back to, nothing kept
         if member.name == SUMMARY:
-            summary = json.loads(tar.extractfile(member).read())   # type: ignore[union-attr]
+            summary = {**json.loads(tar.extractfile(member).read()), **summary}   # type: ignore[union-attr]
+            continue
+        if member.name == vault_keys.EXPORT_MEMBER:   # a sealed place's keys: unpack() puts them beside their stores
+            try:
+                summary[VAULT_KEYS] = json.loads(tar.extractfile(member).read()).get("keys")   # type: ignore
+            except (ValueError, AttributeError):
+                raise SealedError("this export's vault keys can't be read") from None
             continue
         name, _, rel = member.name.partition("/")
         if name not in roots:
@@ -647,10 +771,24 @@ def unpack(tar: tarfile.TarFile, info: Dict[str, Any], target: Target, config: P
     """The export's files in place here and its settings adjusted to this machine. Returns the export's summary and
     how many settings files changed."""
     import tomllib
+    if config.exists() and vault_keys.sealed(vault_keys.data_dir(config, target.home)):
+        # a place whose vault is sealed (a place of the offer): its data is never merged under an import (what the
+        # export doesn't bring would stay sealed with keys nothing opens any more); `bipagents send` sets the place's
+        # own aside and puts it back if anything fails
+        raise SealedError("This place's vault is sealed: an import can't go over it. Send your agents to it with "
+                          "`bipagents send` instead (nothing here is lost if it fails).")
     summary = restore(tar, info, target)
     import_volumes(target.home)
     if not config.exists():
         raise SealedError("the export holds no bridge config: it was not made by `bipagents export`")
+    data = rehome(info["roots"]["data"], info, target) if info["roots"].get("data") else None
+    if VAULT_KEYS in summary:   # an enrolled place's export: today's layout here (each key beside its store)
+        if data is None:
+            raise SealedError("this export's vault keys have no data folder to go to")
+        try:
+            vault_keys.back_to_today(data, summary.pop(VAULT_KEYS))
+        except vault_keys.VaultKeysError as exc:
+            raise SealedError(f"this export's vault keys can't be put back: {exc}") from exc
     old_toml = tomllib.loads(config.read_text(encoding="utf-8"))
     roots = [rehome(path, info, target) for path in info["roots"].values()]
     changed = rewrite(settings_files(roots), replacements(info, target))

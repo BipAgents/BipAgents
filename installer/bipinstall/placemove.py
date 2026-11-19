@@ -15,7 +15,9 @@ only the place itself knows is done here, as its account:
     bipinstall move-in finish     (target) the settings moved to this place (as a restore does: backup.settle), the
                                   volumes imported, the migrations run, the services started again
 
-Each prints one line of JSON (the seat agent reads it). Unlike a restore after an outage, nothing needs the person's
+A fresh place whose vault's keys were sealed and a person's files in today's layout: its own key service kept
+aside in `prepare`, its sealing undone and done again once over the person's stores in `finish` (vault_keys.py), as a
+restore does. Each prints one line of JSON (the seat agent reads it). Unlike a restore after an outage, nothing needs the person's
 phone: the files come from the living place, the backup key with them.
 """
 from __future__ import annotations
@@ -27,11 +29,12 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from . import moving
+from . import moving, vault_keys
 
 STAGE = Path(".local") / "state" / "bipagents" / "move-stage"        # the source's manifest and volumes
 MOVE_IN = Path(".local") / "state" / "bipagents" / "move-in"         # the target's notes and the stage's copy
 CONFIG = Path(".config") / "bipagents" / "bridge.toml"
+KEPT_SERVICE = "keyservice.json"   # in MOVE_IN: a sealed fresh place's key service, while the person's files come
 # Copied, unlike in backups: a stopped place's SQLite write-ahead logs hold its last writes.
 KEEP_SIDECARS = True
 
@@ -69,6 +72,11 @@ def rules(inv: moving.Inventory, root: Path) -> List[str]:
             continue
         found += [f"- {at}{name}" for name in sorted(moving.HERMES_SKIP_ROOT)]
         found += [f"- {at}profiles/*/{name}" for name in sorted(moving.HERMES_SKIP_PROFILE)]
+        # what a cut-off swap of the bridge left beside an agent's vault (its Hermes key in it): never, on any place
+        found += [f"- {at}{where}{prefix_}*" for where in ("", "profiles/*/") for prefix_ in moving.HERMES_SET_ASIDE]
+        if inv.vault_in_memory():
+            # the agents' Hermes vaults: links into memory (or copies not erased yet), rebuilt by the bridge over there
+            found += [f"- {at}{moving.HERMES_VAULT}", f"- {at}profiles/*/{moving.HERMES_VAULT}"]
     at = prefix(inv.data_dir)
     if at is not None:
         found += [f"- {at}{name}" for name in sorted(moving.DATA_SKIP)]
@@ -161,9 +169,34 @@ def prepare(runner, base: Optional[Path] = None) -> Dict:
     fresh = backup.fresh_state(base)
     found = moving.services(base, "linux" if os.uname().sysname == "Linux" else "macos")
     fresh["services"] = [list(item) for item in found]
+    # Its vault's keys sealed (vault_keys.py): its key service kept aside, which the copy (rsync --delete) takes away,
+    # to seal the person's stores again with it if they come in today's layout.
+    data = moving.read_inventory(base / CONFIG, base).data_dir
+    fresh["vault_sealed"] = vault_keys.sealed(data)
+    service = vault_keys.space_dir(base) / vault_keys.SPACE_FILES[1]
+    if fresh["vault_sealed"] and service.is_file() and not service.is_symlink():
+        _write(base / MOVE_IN / KEPT_SERVICE, json.loads(service.read_text(encoding="utf-8")))
     _write(notes, fresh)
     moving.stop(runner, found, base)
     return {"prepared": True, "ports": fresh["ports"]}
+
+
+def _vault_layout(base: Path, fresh: Dict) -> bool:
+    """The source's layout of the vault's keys wins, as in a restore (backup.vault_layout); a fresh place that was
+    sealed gets its key service back first (the copy took it away). True: seal again once."""
+    from . import backup
+    kept = base / MOVE_IN / KEPT_SERVICE
+    try:
+        data = moving.read_inventory(base / CONFIG, base).data_dir
+        space = vault_keys.space_dir(base)
+        service = space / vault_keys.SPACE_FILES[1]
+        if fresh.get("vault_sealed") and not vault_keys.sealed(data) and kept.is_file() and not service.exists():
+            space.mkdir(parents=True, exist_ok=True)
+            os.chmod(space, 0o700)
+            _write(service, json.loads(kept.read_text(encoding="utf-8")))
+        return backup.vault_layout(data, data, bool(fresh.get("vault_sealed")), base)
+    finally:
+        kept.unlink(missing_ok=True)
 
 
 def finish(runner, base: Optional[Path] = None, repo: Optional[Path] = None, address: Optional[str] = None) -> Dict:
@@ -176,6 +209,7 @@ def finish(runner, base: Optional[Path] = None, repo: Optional[Path] = None, add
     fresh = json.loads((folder / "fresh.json").read_text(encoding="utf-8"))
     info = json.loads((folder / "stage" / "manifest.json").read_text(encoding="utf-8"))
     backup.settle(info, base, repo, address, fresh)
+    reseal = _vault_layout(base, fresh)
     config = base / ".config" / "bipagents"
     for name in (moving.MOVED, "existing-hermes.json", "setup.json", "restoring.json"):
         (config / name).unlink(missing_ok=True)   # the source's notes of its own stop; claimed: no pairing secret
@@ -189,6 +223,8 @@ def finish(runner, base: Optional[Path] = None, repo: Optional[Path] = None, add
         filled = moving.import_volumes(base)
     for line in migrations.run(runner):
         runner.log.append(line)
+    if reseal:   # the person's stores in today's layout over a sealed fresh place: sealed again, once
+        vault_keys.enable(None, say=runner.log.append, base=base)
     from .family import bridge_restart
     # What `prepare` stopped starts again, the way `bipagents resume` does (gateways, then the bridge).
     (config / moving.MOVED).write_text(json.dumps({"stopped": fresh.get("services", [])}), encoding="utf-8")

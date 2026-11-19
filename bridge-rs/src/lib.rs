@@ -270,5 +270,7 @@ pub mod secrets;
 /// The vault's keys sealed by a place key, under both halves (this server's, the key service's): lot 1 of « Clé du
 /// coffre » (16/11), off unless the place is enrolled (`bipbridge vault-keys enable`).
 pub mod sealed_keys;
+/// The agents' Hermes copies of the vault in memory, on a place enrolled for sealed keys: lot 2 of « Clé du coffre ».
+pub mod hermes_copies;
 
 pub use app::AppState;

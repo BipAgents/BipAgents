@@ -849,6 +849,31 @@ fn other_host_text(items: &[&crate::vault::Item], host: &str) -> String {
     )
 }
 
+/// When another entry was kept for the login just typed (an agent's Hermes held the same login: vault.rs
+/// `duplicate_of`), the line telling the agent how to try it if the site refuses this one (review pass 4, R-K).
+/// `same_password`: whether that other entry has the very password typed (then only its authenticator key differs,
+/// and it is the code the site may refuse: review pass 5, 2).
+pub fn other_password_hint(
+    logins: &[crate::vault::Item],
+    typed: &crate::vault::Item,
+    same_password: impl Fn(&crate::vault::Item) -> bool,
+) -> Option<String> {
+    let other = logins.iter().find(|i| i.duplicate_of.as_deref() == Some(typed.id.as_str()))?;
+    let first = other.id.as_str();
+    Some(if same_password(other) {
+        format!(
+            "Another authenticator key was kept for this login. If the site says the verification code is wrong, call \
+             {LOGIN} again with id {first} on the login page, once, then its code; if that one fails too, tell the \
+             person."
+        )
+    } else {
+        format!(
+            "Another password was kept for this login. If the site says this one is wrong, call {LOGIN} again with id \
+             {first} on the login page, once; if that one fails too, tell the person."
+        )
+    })
+}
+
 /// `vault_login`: the agent's page (Chrome's own address), the login of the vault given to it that fits that page's
 /// site (vault_match.rs), its identifier and its password typed into that site's frames only (login_fill.rs). Neither
 /// is answered nor logged.
@@ -934,8 +959,9 @@ async fn login(state: &AppState, agent: &AgentConfig, arguments: &Dict) -> anyho
         Err(e) => return Ok(unreachable(e)),
     };
     let mut typed_password = false;
+    let mut password = zeroize::Zeroizing::new(String::new());
     if !form.fields.indexes.is_empty() {
-        let password = state.vault.login_password(&item.id, &agent.name)?;
+        password = state.vault.login_password(&item.id, &agent.name)?;
         match crate::login_fill::fill(&mut page, &form.fields, &password).await {
             Ok(n) if n > 0 => typed_password = true,
             Ok(_) => {
@@ -979,9 +1005,15 @@ async fn login(state: &AppState, agent: &AgentConfig, arguments: &Dict) -> anyho
         crate::vault_used::note(&state.vault.folder, &item.id, &agent.name);
         crate::vault_line::note(state, &agent.name, LOGIN, &item.id, &host, crate::vault_line::How::Login);
     }
+    let same_password = |other: &crate::vault::Item| {
+        state.vault.login_password(&other.id, &agent.name).is_ok_and(|p| *p == *password)
+    };
+    let other =
+        if typed_password { other_password_hint(&logins, &item, same_password).map(|l| format!(" {l}")) } else { None };
     Ok(text(&format!(
         "{done} You never see the password: don't read the fields back. Now submit the form yourself (its button). If \
-         the site then asks for a verification code, use browser_vault action=enter_code."
+         the site then asks for a verification code, use browser_vault action=enter_code.{}",
+        other.unwrap_or_default()
     )))
 }
 

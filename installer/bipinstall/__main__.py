@@ -285,6 +285,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     if argv and argv[0] == "restore":   # backup.py: a place moved after an outage, from its last backup
         from .backup import restore_main
         return restore_main(argv[1:])
+    if argv and argv[0] == "vault-keys":   # vault_keys.py: the vault's keys sealed with the key service
+        from .vault_keys import main as vault_keys_main
+        return vault_keys_main(argv[1:])
     if argv and argv[0] == "encrypt":   # space.py: this account's space encrypted at rest
         from .space import main as space_main
         return space_main(argv[1:])
@@ -509,6 +512,9 @@ def cloud_install(args, runner: hermes.Runner, machine: Machine) -> int:
         if not runner.dry:
             cloud._write_private(Path.home() / space.KEYS, setup.keys)
             status = space.encrypt(None, say=say)
+    if status == 0 and setup.vault_keys and not runner.dry:   # vault_keys.py: sealed once; a failure is noted, not fatal
+        from . import vault_keys
+        vault_keys.enable(setup.vault_keys, say=say)
     return status
 
 

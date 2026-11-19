@@ -45,7 +45,7 @@ here=$(dirname "$0")
 # A place to be encrypted at rest (its setup carries "keys"): the server hardened first, as root (swap emptied and
 # encrypted, no core dumps, the journal in memory; done once, space-hardening.sh beside this script). If that fails,
 # the place is not installed: no encrypted place on an unhardened server.
-if grep -qs '"keys"' "$setup"; then
+if grep -qsE '"(vault_)?keys"' "$setup"; then
     bash "$here/space-hardening.sh" \
         || { echo "add-seat.sh: the server's hardening for encrypted spaces failed: place $n not installed" >&2; exit 1; }
 fi
