@@ -957,3 +957,24 @@ async fn google_on_android_through_kerfy_s_exchange_or_an_own_project() {
     config.drives.clients.get_mut("google_drive").unwrap().web_client_id = Some("g-web".into());
     assert_eq!(google(&config)["android"], "place");
 }
+
+// -- review 18/11, pass 3 (red: to prove, not fixed) ------------------------------------------------------------------
+
+/// Google « Ajouter des fichiers » (pick: files, Alex 18/11): the words inside a picked file are never searched.
+/// search() asks Google only for `targets` (folders, `!f.file`), so with only files picked no query goes out, and with a
+/// folder too a full-text hit on a picked file is dropped by `inside(&api, &hit, &targets)`.
+#[tokio::test]
+async fn review3_google_search_finds_words_inside_a_picked_file() {
+    let (base, _seen) = serve().await;
+    let (_dir, config) = setup(&base);
+    // only a file picked (the fake's full-text search answers gsd, gp, gd)
+    connect(&config, "google_drive", &["vie"], "&picked_file_ids=gp").await;
+    let vie = config.agents["vie"].clone();
+    let found = text(&call(&config, &vie, "drive_search", &args(json!({"words": "kwh"}))).await);
+    assert!(found.contains("google_drive:gp"), "a word inside the picked file only: {found}");
+    assert!(!found.contains("google_drive:gsd") && !found.contains("google_drive:gd"), "{found}");
+    // a folder and a file picked
+    connect(&config, "google_drive", &["vie"], "&picked_file_ids=gf").await;
+    let found = text(&call(&config, &vie, "drive_search", &args(json!({"words": "kwh"}))).await);
+    assert!(found.contains("google_drive:gp"), "the picked file's text, beside the folder's hits: {found}");
+}
