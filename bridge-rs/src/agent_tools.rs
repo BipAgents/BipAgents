@@ -1524,9 +1524,12 @@ pub async fn call_tool(
             return Ok(crate::jobs::already_there(&title, &state));
         }
         // a small task under « Seulement le critique »: started at once (approval_level.rs)
+        // (never from a background task: it proposes, the person starts, jobs.rs `from_background`)
         if let Some(started) = match jobs.as_ref() {
-            Some(jobs) => crate::approval_level::auto_task(jobs, agent, arguments).await,
-            None => None,
+            Some(jobs) if !crate::jobs::from_background(jobs, agent, PROPOSE_TASK) => {
+                crate::approval_level::auto_task(jobs, agent, arguments).await
+            }
+            _ => None,
         } {
             return Ok(started);
         }

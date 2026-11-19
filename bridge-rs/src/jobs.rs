@@ -80,6 +80,10 @@ pub const RUNNING_MAX: usize = 3;
 /// `RUNNING_MAX` stays 3: each task is a run of the agent's Hermes beside the person's conversations, measured at about
 /// 320 MB a person on a VPS-2 (2026-10-19) and gated by heavy_work's room; one agent may take all three.
 pub const AGENT_RUNNING_MAX: usize = 3;
+/// Seconds between two « step » hints of one agent's tasks (the others go at once).
+pub const HINT_STEP_GAP: f64 = 60.0;
+/// A finished task stays new on the home this long at most (an app that never says « seen », Android, an older iPhone).
+pub const UNSEEN_DAYS: f64 = 7.0;
 /// An agent's proposals waiting for the person.
 pub const PROPOSALS_MAX: usize = 5;
 /// A task paused because the place was too full (heavy_work.rs).
@@ -122,8 +126,9 @@ page (create_page) for a table, a comparison or a dashboard; a file you make (a 
 PDF, each version or style asked) given with give_file, and the MEDIA line it gives you put in your report. Your work
 has a budget; if you are told to continue, pick up where you stopped instead of starting again. End with a short
 report in the person's language: what you did, what you found or made and where it is, what is left or uncertain.
-When you mark a step of your task list completed, end its text with « ⇒ » and what it found in a few words (\
-« Read the current contract ⇒ MAIF, 312 € a year »): the person sees that line under the step.";
+Write the steps of your task list without « ⇒ ». Only when you mark a step completed, rewrite its text to end with \
+« ⇒ » and what it found in a few words (« Read the current contract ⇒ MAIF, 312 € a year »): the person sees that line \
+under the step.";
 pub const CONTINUE: &str = "Continue the task where you stopped (don't start again), then end with your report.";
 
 /// The task's own drafts folder, for an agent whose tools run in Hermes' docker sandbox (its persistent
@@ -422,7 +427,10 @@ pub fn home_jobs(config: &crate::config::Config) -> Vec<Dict> {
         .filter(|j| !crate::archives::records_fill::is_extract(j) && config.agent(Some(&agent_of(j))).is_some())
         .filter(|j| match state_of(j).as_str() {
             "running" | "stopping" | "paused" => true,
-            "done" => j.get("seen") == Some(&json!(false)),
+            "done" => {
+                j.get("seen") == Some(&json!(false))
+                    && py::time_time() - first_number(j, &["finished"]) < UNSEEN_DAYS * 86_400.0
+            }
             _ => false,
         })
         .map(|j| FIELDS.iter().map(|k| (k.to_string(), j.get(*k).cloned().unwrap_or(Value::Null))).collect())
@@ -460,6 +468,24 @@ fn first_number(job: &Dict, keys: &[&str]) -> f64 {
 /// The apps told that a task changed (`push.notify_silent(agent, "jobs", {job, why})`): `(agent, job_id, why)`, why
 /// `started`, `step`, `ended`, `paused`, `seen`, `forgotten`. The home and an open task's screen read again on it,
 /// instead of asking every few seconds (Alex 19/11: nothing asked while no task runs).
+/// A start's place held by `Jobs::may_run` until dropped.
+pub struct Slot {
+    reserved: Arc<std::sync::Mutex<HashMap<String, usize>>>,
+    agent: String,
+}
+
+impl Drop for Slot {
+    fn drop(&mut self) {
+        let mut reserved = self.reserved.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(n) = reserved.get_mut(&self.agent) {
+            *n = n.saturating_sub(1);
+            if *n == 0 {
+                reserved.remove(&self.agent);
+            }
+        }
+    }
+}
+
 pub type HintJob = Arc<dyn Fn(String, String, String) -> BoxFuture<'static, ()> + Send + Sync>;
 
 /// `push.notify_job(agent, session_id, line, job_id, body)`.
@@ -480,6 +506,11 @@ pub struct Jobs {
     pub tell: Option<TellJob>,
     /// How the apps are hinted that a task changed (`HintJob`; tests give their own).
     pub hint: Option<HintJob>,
+    /// Starts under way, by agent: counted with the running tasks until their run is saved, so starts at once never
+    /// pass a cap (review 1, 19/11: `may_run` read the disk, then `launch` awaited Hermes before writing « running »).
+    pub reserved: Arc<std::sync::Mutex<HashMap<String, usize>>>,
+    /// When each agent's last « step » hint went (at most one a minute: `HINT_STEP_GAP`).
+    pub step_hinted: std::sync::Mutex<HashMap<String, f64>>,
     /// « Remplir mon Carnet » for every agent, one after another (notebook/fill.rs).
     pub filler: std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
     /// A finished task's result handed back to the conversation it came from (handback.rs); None: only the push.
@@ -521,6 +552,8 @@ impl Jobs {
         Jobs {
             config,
             hint,
+            reserved: Default::default(),
+            step_hinted: Default::default(),
             hermes,
             hub,
             push,
@@ -743,7 +776,7 @@ impl Jobs {
         by: &str,
         from_session: Option<&str>,
     ) -> anyhow::Result<Dict> {
-        self.may_run(&agent.name)?;
+        let _slot = self.may_run(&agent.name)?;
         let mut job = self.new_task(agent, title, prompt, budget_eur, template, by, from_session)?;
         let text = format!("{}\n\n{}", tk::str_or_empty(job.get("title")), tk::str_or_empty(job.get("prompt")));
         if let Err(err) = self.launch(&mut job, &text).await {
@@ -817,7 +850,7 @@ impl Jobs {
             }
             return crate::archives::records_fill::resume(self.config.get(), job_id, None, self.tell.clone());
         }
-        self.may_run(&agent_of(&job))?;
+        let _slot = self.may_run(&agent_of(&job))?;
         if let Some(euros) = budget_eur.filter(|e| *e > 0.0) {
             job.insert("budget_eur".into(), json!(euros));
         }
@@ -836,23 +869,29 @@ impl Jobs {
         }
     }
 
-    pub(crate) fn may_run(&self, agent: &str) -> Result<(), JobError> {
+    /// A place to start a task of `agent` now, held until the returned slot is dropped (after `launch` saved it
+    /// running, or failed): the running tasks and the starts under way together never pass `AGENT_RUNNING_MAX` for the
+    /// agent nor `RUNNING_MAX` for the install.
+    pub(crate) fn may_run(&self, agent: &str) -> Result<Slot, JobError> {
         if self.credit_used() {
             return Err(JobError(crate::credit::JOBS_REFUSED.into()));
         }
         // (a place too full or pressed doesn't refuse: the task is queued at its start, `launch`, heavy_work.rs)
+        let mut reserved = self.reserved.lock().unwrap_or_else(|e| e.into_inner());
         let running: Vec<Dict> = tasks(&self.config.get())
             .into_iter()
             .filter(|j| ["running", "stopping"].contains(&state_of(j).as_str()))
             .filter(|j| !crate::archives::records_fill::is_extract(j)) // no Hermes run: apart
             .collect();
-        if running.iter().filter(|j| agent_of(j) == agent).count() >= AGENT_RUNNING_MAX {
+        let mine = running.iter().filter(|j| agent_of(j) == agent).count() + reserved.get(agent).copied().unwrap_or(0);
+        if mine >= AGENT_RUNNING_MAX {
             return Err(JobError("this agent already has three background tasks running".into()));
         }
-        if running.len() >= RUNNING_MAX {
+        if running.len() + reserved.values().sum::<usize>() >= RUNNING_MAX {
             return Err(JobError("enough background tasks are running here for now".into()));
         }
-        Ok(())
+        *reserved.entry(agent.to_string()).or_default() += 1;
+        Ok(Slot { reserved: self.reserved.clone(), agent: agent.to_string() })
     }
 
     /// The month's AI credit used (credit.rs): what runs by itself pauses.
@@ -1171,8 +1210,17 @@ impl Jobs {
         state.steps.clone().filter(|s| s["items"].as_array().is_some_and(|i| !i.is_empty()))
     }
 
-    /// The apps told that this task changed (`HintJob`).
+    /// The apps told that this task changed (`HintJob`): a step at most once a minute per agent (review 1: a hint per
+    /// step woke every phone, against the relay's 300 an hour shared with real alerts); start, end, seen at once.
     async fn hint_apps(&self, agent: &str, job_id: &str, why: &str) {
+        if why == "step" {
+            let now = py::time_time();
+            let mut last = self.step_hinted.lock().unwrap_or_else(|e| e.into_inner());
+            if last.get(agent).is_some_and(|at| now - at < HINT_STEP_GAP) {
+                return;
+            }
+            last.insert(agent.to_string(), now);
+        }
         if let Some(hint) = &self.hint {
             hint(agent.to_string(), job_id.to_string(), why.to_string()).await;
         }
@@ -1382,7 +1430,7 @@ impl Jobs {
             Some(Value::String(text)) if !text.is_empty() => text,
             _ => CONTINUE.to_string(),
         };
-        self.may_run(&agent_of(&job))?;
+        let _slot = self.may_run(&agent_of(&job))?;
         self.launch(&mut job, &text).await?;
         Ok(task_view(&job))
     }
@@ -1415,7 +1463,7 @@ impl Jobs {
         let Some(mut job) = job.filter(|j| ["paused", "failed", "done"].contains(&state_of(j).as_str())) else {
             return Err(job_error("nothing to resume"));
         };
-        self.may_run(&agent_of(&job))?;
+        let _slot = self.may_run(&agent_of(&job))?;
         let config = self.config.get();
         let spent_now = eur_spent(&config, &job);
         match budget_eur.filter(|e| *e > 0.0) {
@@ -1720,6 +1768,15 @@ instead (they start it with one tap) and tell them so in one plain sentence.",
         }
         Some(Some(euros)) => euros.max(0.01),
     };
+    // only the person starts tasks, or the agent in their turn: a background task never starts its siblings (review
+    // 1, 19/11: three at once per agent now); it proposes them, the person starts them
+    if from_background(jobs, agent, START_TASK) {
+        return Ok(tool_text(
+            "Not started: you are working in a background task, which never starts other tasks itself. Propose it with \
+propose_task instead; your person starts it.",
+            true,
+        ));
+    }
     let prompt = tk::str_or_empty(arguments.get("instructions"));
     let title = tk::str_or_empty(arguments.get("title"));
     let from = jobs.hub.as_ref().and_then(|hub| hub.asking_session(&agent.name));
@@ -1734,6 +1791,15 @@ instead (they start it with one tap) and tell them so in one plain sentence.",
         }
     }
     started(made, &config, agent)
+}
+
+/// The call of `tool` comes from a background task's run, or can't be told from one while such a run goes on.
+pub fn from_background(jobs: &Jobs, agent: &AgentConfig, tool: &str) -> bool {
+    let Some(hub) = jobs.hub.as_ref() else { return false };
+    match hub.turn_of(&agent.name, tool) {
+        Some(turn) => turn.background,
+        None => hub.background_running(&agent.name),
+    }
 }
 
 /// A task's budget as the agent may tell its person: in euros on a place of the offer (« 0.20 € »), in tokens only on

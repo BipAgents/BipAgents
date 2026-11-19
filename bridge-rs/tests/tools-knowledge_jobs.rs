@@ -729,9 +729,38 @@ async fn a_finished_task_waits_to_be_seen_and_the_apps_are_hinted() {
     assert!(jobs::home_jobs(&config).is_empty());
     let whys: Vec<String> = hints.lock().unwrap().iter().filter(|(a, j, _)| a == "coach" && *j == id).map(|h| h.2.clone()).collect();
     assert_eq!(whys, vec!["started", "ended", "seen"]);
+    // unseen for more than a week (an app that never says « seen »): not « new » any more
+    let mut stale = jobs::load(&config, &id).unwrap();
+    stale.insert("seen".into(), json!(false));
+    stale.insert("finished".into(), json!(bipbridge::py::time_time() - 8.0 * 86_400.0));
+    jobs::save(&config, &stale).unwrap();
+    assert!(jobs::home_jobs(&config).is_empty(), "a week-old unseen task");
     // a task finished before 19/11 (no `seen`) is not « new » on the home
     let mut old = jobs::load(&config, &id).unwrap();
     old.remove("seen");
     jobs::save(&config, &old).unwrap();
     assert!(jobs::home_jobs(&config).is_empty());
+}
+
+/// Review 1 (subtasks-redesign): the per-agent cap holds when the starts come at once (a model's parallel `start_task`
+/// calls, two devices): `may_run` reads the running tasks, then `launch` awaits Hermes (heavy_work's check, the session,
+/// the run) before the task is saved « running »; every start in between passes the same check.
+#[tokio::test]
+async fn starts_at_once_never_pass_the_agent_s_cap() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_fake, url) = gateway(1000, 10).await;
+    let (config, agent) = setup(dir.path(), &url);
+    let board = board(&config, None);
+    let starts = (0..5).map(|n| {
+        let (board, agent) = (board.clone(), agent.clone());
+        async move { board.create(&agent, &format!("Tâche {n}"), "Fais-le en entier.", 0.50, None).await }
+    });
+    let outcomes = futures::future::join_all(starts).await;
+    let running: Vec<String> = outcomes.iter().filter_map(|o| o.as_ref().ok()).map(id_of).collect();
+    let on_disk = jobs::tasks(&config).into_iter().filter(|j| j["state"] == "running").count();
+    for id in &running {
+        board.forget(id).await.unwrap();
+    }
+    assert!(running.len() <= jobs::AGENT_RUNNING_MAX, "{} tasks of one agent started at once", running.len());
+    assert!(on_disk <= jobs::AGENT_RUNNING_MAX, "{on_disk} running on disk");
 }

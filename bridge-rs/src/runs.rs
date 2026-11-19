@@ -2903,6 +2903,15 @@ more steps in this turn. Don't repeat what failed: change approach.", crate::loo
     }
 
     /// A background task's run (jobs.rs): the brake's higher limits.
+    /// A background task's run of `agent` goes on (jobs.rs: such a run never starts other tasks itself).
+    pub fn background_running(&self, agent: &str) -> bool {
+        let inner = lock(&self.inner);
+        inner.subs.values().filter(|sub| sub.agent.name == agent).any(|sub| {
+            let st = lock(&sub.state);
+            st.background && !st.finished && st.terminal.is_none()
+        })
+    }
+
     pub fn mark_background(&self, agent: &str, run_id: &str) {
         let inner = lock(&self.inner);
         if let Some(sub) = inner.subs.get(&(agent.to_string(), run_id.to_string())) {
@@ -2961,28 +2970,29 @@ more steps in this turn. Don't repeat what failed: change approach.", crate::loo
     }
 
     /// The turn a call of the bridge's tool `tool` by `agent` belongs to (loop_brake.rs, its MCP counts): the agent's
-    /// run going on that the hub follows; with several, the one whose last call was this tool, else the one that
-    /// called a tool last. None: no run of the agent followed (a routine, Hermes' cron).
+    /// run going on that the hub follows; with several, the one run inside a call of this tool right now. Never a
+    /// guess (Alex 19/11, sub-tasks: several tasks of one agent run at once): two runs inside this tool, or several
+    /// runs and none in it, give None, as no run followed does (a routine, Hermes' cron) — until Hermes says the run
+    /// in the call itself.
     pub fn turn_of(&self, agent: &str, tool: &str) -> Option<crate::loop_brake::Turn> {
         let tool = crate::loop_brake::bare(tool);
         let inner = lock(&self.inner);
-        let mut best: Option<((bool, f64), crate::loop_brake::Turn)> = None;
+        let mut live: Vec<(bool, crate::loop_brake::Turn)> = Vec::new();
         for sub in inner.subs.values().filter(|sub| sub.agent.name == agent) {
             let st = lock(&sub.state);
-            if st.finished || st.terminal.is_some() || st.braked {
+            if st.finished || st.terminal.is_some() || st.braked || live.iter().any(|(_, t)| t.run_id == sub.run_id) {
                 continue;
             }
-            let key = (st.last_tool == tool, st.last_tool_at.max(st.followed_since));
-            if best.as_ref().is_none_or(|(k, _)| key > *k) {
-                let turn = crate::loop_brake::Turn {
-                    run_id: sub.run_id.clone(),
-                    background: st.background,
-                    banned: st.turn.banned.clone(),
-                };
-                best = Some((key, turn));
-            }
+            let turn =
+                crate::loop_brake::Turn { run_id: sub.run_id.clone(), background: st.background, banned: st.turn.banned.clone() };
+            live.push((st.last_tool == tool, turn));
         }
-        best.map(|(_, turn)| turn)
+        let inside: Vec<&crate::loop_brake::Turn> = live.iter().filter(|(i, _)| *i).map(|(_, t)| t).collect();
+        match (inside.as_slice(), live.as_slice()) {
+            ([one], _) => Some((*one).clone()),
+            ([], [(_, only)]) => Some(only.clone()),
+            _ => None,
+        }
     }
 
     /// The long-work safety net (decided 2026-10-22, independent of the model): a run in a person's conversation (not a
@@ -4191,10 +4201,36 @@ mod tests {
         let turn = |tool: &str| hub.turn_of("daily", tool).map(|t| (t.run_id, t.background));
         assert_eq!(turn("mcp__bipagents__reminders_add"), Some(("run_chat".into(), false)));
         assert_eq!(turn("notebook_search"), Some(("run_task".into(), true)));
-        assert_eq!(turn("calendar_add"), Some(("run_task".into(), true)), "else the one that called a tool last");
+        // several runs, none in this tool: no guess (19/11, several tasks of one agent at once)
+        assert_eq!(turn("calendar_add"), None);
         assert_eq!(hub.turn_of("other", "calendar_add"), None);
         lock(&task.state).finished = true;
         assert_eq!(turn("notebook_search"), Some(("run_chat".into(), false)));
+    }
+
+    /// Review 1 (subtasks-redesign, 19/11): two background tasks of ONE agent run at once and both call the same bridge
+    /// tool (two research tasks making their page, two tasks searching the Carnet). `turn_of` picks the run that called
+    /// it last, so the first task's call is counted, braked, filed (made_files, the Carnet's line) and its card placed in
+    /// the second task's turn. A guess between two runs inside the same tool must not be made (vault_line.rs
+    /// `turn_of_call` refuses it): no turn rather than the wrong one.
+    #[tokio::test]
+    async fn two_tasks_of_one_agent_in_the_same_tool_are_not_told_apart_by_a_guess() {
+        let hub = RunHub::new(HermesClient::new(reqwest::Client::new()), None, 7200, None);
+        let agent = AgentConfig { name: "daily".into(), ..Default::default() };
+        let run = |id: &str| {
+            let sub = Arc::new(RunSubscription::new(agent.clone(), id));
+            lock(&hub.inner).subs.insert(sub.key(), sub.clone());
+            sub
+        };
+        let started = |tool: &str| SSEEvent::new("tool.started", json!({"tool": tool}).as_object().cloned().unwrap(), "{}");
+        let (a, b) = (run("run_task_a"), run("run_task_b"));
+        hub.mark_background("daily", "run_task_a");
+        hub.mark_background("daily", "run_task_b");
+        hub.dispatch(&a, started("mcp__bipagents__create_page"));
+        hub.dispatch(&b, started("mcp__bipagents__create_page"));
+        // task A's create_page reaches the bridge now: which turn is it?
+        let turn = hub.turn_of("daily", "mcp__bipagents__create_page").map(|t| t.run_id);
+        assert_eq!(turn, None, "a guess between two tasks inside the same tool: {turn:?}");
     }
 
     /// urgent_pay.rs `refuses_payment` tells the rehearsal's own pay_with_card from another turn of the agent by the

@@ -94,22 +94,24 @@ pub fn of_todos(todos: &[Value]) -> Value {
     let mut items = Vec::new();
     let (mut done, mut total) = (0, 0);
     for todo in todos {
-        let whole = todo.get("content").and_then(Value::as_str).unwrap_or("").trim();
-        // « Lire ton contrat ⇒ MAIF, 312 € par an »: the step and what it found (a background task's rules, jobs.rs)
-        let whole = whole.strip_suffix(RESULT_MARK.trim_end()).map(str::trim_end).unwrap_or(whole);
-        let (text, result) = match whole.rsplit_once(RESULT_MARK) {
-            Some((text, result)) if !text.trim().is_empty() => (text.trim(), result.trim()),
-            _ => (whole, ""),
-        };
-        if text.is_empty() {
-            continue;
-        }
         let status = match todo.get("status").and_then(Value::as_str).unwrap_or("") {
             "completed" | "done" => "done",
             "in_progress" => "in_progress",
             "cancelled" => "cancelled",
             _ => "pending",
         };
+        let whole = todo.get("content").and_then(Value::as_str).unwrap_or("").trim();
+        // « Lire ton contrat ⇒ MAIF, 312 € par an »: the step and what it found (a background task's rules, jobs.rs)
+        let whole = whole.strip_suffix(RESULT_MARK.trim_end()).map(str::trim_end).unwrap_or(whole);
+        // (a done step's only: « Convertir 100 € ⇒ USD » still to do keeps its words)
+        let (text, result) = match whole.rsplit_once(RESULT_MARK) {
+            Some((text, result)) if status == "done" && !text.trim().is_empty() => (text.trim(), result.trim()),
+            _ => (whole, ""),
+        };
+        if text.is_empty() {
+            continue;
+        }
+
         if status != "cancelled" {
             total += 1;
         }
@@ -454,14 +456,16 @@ mod tests {
         let steps = of_todos(&todos(json!([
             {"id": "1", "content": "Lire ton contrat actuel ⇒ MAIF, 312 € par an, franchise 150 €", "status": "completed"},
             {"id": "2", "content": "Trouver 3 offres ⇒ ", "status": "in_progress"},
-            {"id": "3", "content": "Train Paris → Lyon", "status": "completed"}
+            {"id": "3", "content": "Train Paris → Lyon", "status": "completed"},
+            {"id": "4", "content": "Convertir 100 € ⇒ USD", "status": "pending"}
         ])));
         assert_eq!(
             steps["items"],
             json!([
                 {"text": "Lire ton contrat actuel", "status": "done", "result": "MAIF, 312 € par an, franchise 150 €"},
                 {"text": "Trouver 3 offres", "status": "in_progress"},
-                {"text": "Train Paris → Lyon", "status": "done"}
+                {"text": "Train Paris → Lyon", "status": "done"},
+                {"text": "Convertir 100 € ⇒ USD", "status": "pending"}
             ])
         );
         assert_eq!(current(&steps).as_deref(), Some("Trouver 3 offres"));
