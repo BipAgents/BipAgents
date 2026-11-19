@@ -329,9 +329,13 @@ pub const ASKED_CLASS: &str = "bip-asked";
 
 static BODY_TAG: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)<body\b[^>]*>").expect("valid regex"));
 
+static HTML_LANG: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"(?i)<html\b[^>]*?\slang\s*=\s*["']?([A-Za-z]{2,3})(?:[-_][A-Za-z0-9]+)*["']?"#).expect("valid regex"));
+
 /// The language a page says it is in (`<html lang>`), when it is one the app speaks.
-pub fn page_language(_html: &str) -> Option<String> {
-    None
+pub fn page_language(html: &str) -> Option<String> {
+    let code = HTML_LANG.captures(html)?.get(1)?.as_str().to_lowercase();
+    ["fr", "en", "de", "es", "nl"].contains(&code.as_str()).then_some(code)
 }
 
 /// « Faite à la demande de Marie » in the agent's language.
@@ -444,7 +448,10 @@ pub fn save_marked(
         asked_by: mark
             .and_then(|m| m.asked_by.clone())
             .or_else(|| Some(tk::str_or_empty(known.get("asked_by"))).filter(|n| !n.is_empty())),
-        lang: mark.map(|m| m.lang.clone()).unwrap_or_else(|| crate::names::agent_language(config, agent)),
+        // the page's own language first (filming 18/11: a family agent made in French, a conversation in English)
+        lang: page_language(html)
+            .or_else(|| mark.map(|m| m.lang.clone()))
+            .unwrap_or_else(|| crate::names::agent_language(config, agent)),
     };
     let locked = apply_mark(&locked, &kept);
     std::fs::create_dir_all(&folder)?;
