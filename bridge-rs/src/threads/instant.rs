@@ -79,17 +79,26 @@ pub fn place(items: &mut Vec<Item>, said: &[Said], queued: &[String]) {
         if s.text.trim().is_empty() || items.iter().any(|i| i.id == format!("i_{}", s.client_id)) {
             continue;
         }
-        let anchor = items
-            .iter()
-            .position(|i| i.kind() == "message" && i.body.get("client_id").and_then(Value::as_str) == Some(s.client_id.as_str()));
+        // its message's row: by its `client_id`, or among the others that row holds (`joined`: Hermes stored several
+        // steers read at one step as one row, review 2)
+        let holds = |i: &Item| {
+            i.body.get("client_id").and_then(Value::as_str) == Some(s.client_id.as_str())
+                || i.body.get("joined").and_then(Value::as_array).is_some_and(|j| j.iter().any(|c| c.as_str() == Some(&s.client_id)))
+        };
+        let anchor = items.iter().position(|i| i.kind() == "message" && holds(i));
         let mut when = s.at;
         let (at, pos, turn, segment) = match anchor {
             Some(n) => {
                 let a = &items[n];
+                // after the lines already said to that row's messages (one row, several messages)
+                let mut after = n + 1;
+                while after < items.len() && items[after].id.starts_with("i_") && (items[after].pos.0, items[after].pos.1) == (a.pos.0, a.pos.1) {
+                    after += 1;
+                }
                 // a person's row draws one line (sub 0); the Boîte's messages after it are at 100 and on
-                let sub = if a.id.starts_with("s_") { a.pos.2 + 1 } else { 50 };
+                let sub = if a.id.starts_with("s_") { a.pos.2 + 1 } else { 50 + (after - n - 1) as u32 };
                 when = when.max(a.at);
-                (n + 1, (a.pos.0, a.pos.1, sub), a.turn.clone(), a.segment.clone())
+                (after, (a.pos.0, a.pos.1, sub), a.turn.clone(), a.segment.clone())
             }
             None if !queued.contains(&s.client_id) => continue,
             None => {
@@ -188,6 +197,18 @@ mod tests {
         let mut alone = vec![person("m_1", (0, 1, 0), 10.0, "c1")];
         place(&mut alone, &[said("c9", 20.0)], &[]);
         assert_eq!(ids(&alone), ["m_1"]);
+    }
+
+    #[test]
+    fn two_lines_for_one_joined_row_both_stay_after_it() {
+        // two messages steered more than 20 s apart during one long step: Hermes stores them as ONE row (the first's
+        // client id, the second `joined`), each had its line
+        let mut row = person("m_3", (0, 3, 0), 61.0, "c2");
+        row.body.insert("joined".into(), json!(["c3"]));
+        let mut items = vec![person("m_1", (0, 1, 0), 10.0, "c1"), row, item("m_4", (0, 4, 0), 70.0, json!({"kind": "message", "role": "agent", "text": "Fini."}))];
+        place(&mut items, &[said("c2", 21.0), said("c3", 45.0)], &[]);
+        assert_eq!(ids(&items), ["m_1", "m_3", "i_c2", "i_c3", "m_4"]);
+        assert!(items.windows(2).all(|w| w[0].pos < w[1].pos));
     }
 
     #[test]
