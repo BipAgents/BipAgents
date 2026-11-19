@@ -510,6 +510,13 @@ static FRESH_FOR_PERSON: std::sync::LazyLock<std::sync::Mutex<std::collections::
 /// open longer than this under the same document is rare.
 const SCRIPTED_DOCUMENT_FOR_PERSON: f64 = 24.0 * 3600.0;
 
+/// How long a site the agent's scripts ran on loses its service workers and Cache Storage at each take-over (review of
+/// 19/11: the whole record, any age, wiped at every take-over a web app the person uses on a site the agent once
+/// scripted). A worker one of its scripts registered is removed at the first take-over after it, so only one older
+/// than this with no take-over in between is left; a week covers an agent's task left for a weekend or a few days
+/// off, and the sites the agent scripted that long ago are the person's own again.
+const SCRIPTED_WORKERS_FOR_PERSON: f64 = 7.0 * 86400.0;
+
 /// What the agent's scripts ran on (scripts.jsonl, bip-browser-mcp's `note_script`).
 #[derive(Debug, Default)]
 struct Scripted {
@@ -520,8 +527,8 @@ struct Scripted {
     /// For lines that name no document (an earlier proxy's): the sites within the hour, and when the latest ran.
     sites: HashSet<String>,
     latest: f64,
-    /// Every web site of the record, whenever its script ran (the record keeps its last lines): their service workers
-    /// removed before the person's hand, a worker outlives the tab that registered it.
+    /// The web sites scripted within `SCRIPTED_WORKERS_FOR_PERSON`: their service workers removed before the person's
+    /// hand, a worker outlives the tab that registered it.
     origins: Vec<String>,
 }
 
@@ -532,7 +539,9 @@ fn scripted(config: &Config, agent: &str) -> Scripted {
     for line in text.lines().filter_map(|l| serde_json::from_str::<Value>(l).ok()) {
         let t = line.get("t").and_then(Value::as_f64).unwrap_or(0.0);
         let origin = line.get("origin").and_then(Value::as_str).unwrap_or("unknown").to_string();
-        let site = url::Url::parse(&origin).ok().filter(|u| matches!(u.scheme(), "http" | "https"));
+        let site = url::Url::parse(&origin)
+            .ok()
+            .filter(|u| matches!(u.scheme(), "http" | "https") && t >= now - SCRIPTED_WORKERS_FOR_PERSON);
         if let Some(site) = site.map(|u| u.origin().ascii_serialization()).filter(|s| !out.origins.contains(s)) {
             out.origins.push(site);
         }
@@ -570,7 +579,7 @@ impl Scripted {
 /// (card_fill.rs `Page::fresh_tab`), the scripted documents gone all the same. Each failure says why in the log. False
 /// only when even that can't be done (DevTools out of reach, a tab that won't close).
 ///
-/// Every site the agent's scripts ran on, whenever, loses its service workers and cache storage too (never cookies,
+/// Every site the agent's scripts ran on this week loses its service workers and cache storage too (never cookies,
 /// localStorage nor IndexedDB): a worker registered by one of them outlives the tab, and would answer that site later.
 async fn fresh_for_person(config: &Config, agent: &str, token: &str) -> bool {
     let done = scripted(config, agent);
