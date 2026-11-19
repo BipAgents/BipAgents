@@ -2334,7 +2334,8 @@ pub struct Proxy {
     pub rescue_path: PathBuf,
     pub cache_path: PathBuf,
     pub cache: Mutex<Dict>,
-    output: Mutex<Box<dyn Write + Send>>,
+    /// Hermes' stdout, shared with the tasks' own browsers' proxies (`task_proxy`).
+    output: Arc<Mutex<Box<dyn Write + Send>>>,
     server: Mutex<Option<Arc<Server>>>,
     client_init: Mutex<Value>,
     pending: Arc<Mutex<Pending>>,
@@ -2360,10 +2361,19 @@ pub struct Proxy {
     sent_once: Mutex<std::collections::HashSet<String>>,
     /// The current call's Hermes session (patch 0028; Hermes sends this server's calls one at a time).
     call_session: Mutex<Option<String>>,
+    /// Beside `busy`: which session uses which task's own browser (browsers.rs `SESSIONS_FILE`).
+    sessions_path: PathBuf,
+    /// The tasks' own browsers this proxy relays to, by their settings' path (one per running task, browsers.rs
+    /// `setup_task`): a task's calls never reach the agent's browser nor another task's.
+    tasks: Mutex<HashMap<PathBuf, Arc<Proxy>>>,
 }
 
 impl Proxy {
     pub fn new(config: Dict, output: Box<dyn Write + Send>) -> Arc<Proxy> {
+        Self::with_output(config, Arc::new(Mutex::new(output)))
+    }
+
+    fn with_output(config: Dict, output: Arc<Mutex<Box<dyn Write + Send>>>) -> Arc<Proxy> {
         let idle = config.get("idle").and_then(|v| crate::py::py_float(v).ok()).unwrap_or(600.0);
         let after_run =
             config.get("after_run").and_then(|v| crate::py::py_float(v).ok()).unwrap_or(AFTER_RUN_SECONDS as f64);
@@ -2377,6 +2387,7 @@ impl Proxy {
             None => busy.parent().map(|p| p.join("rescue")).unwrap_or_else(|| PathBuf::from("rescue")),
         };
         let send_sites_path = busy.parent().map(|p| p.join(SEND_SITES_FILE)).unwrap_or_else(|| PathBuf::from(SEND_SITES_FILE));
+        let sessions_path = busy.parent().map(|p| p.join(crate::browsers::SESSIONS_FILE)).unwrap_or_default();
         let cache_path = PathBuf::from(config.get("cache").map(crate::py::py_str).unwrap_or_default());
         let mut cache = read_cache(&cache_path);
         if !cache.contains_key("initialize") {
@@ -2393,7 +2404,7 @@ impl Proxy {
             rescue_path,
             cache_path,
             cache: Mutex::new(cache),
-            output: Mutex::new(output),
+            output,
             server: Mutex::new(None),
             client_init: Mutex::new(json!({})),
             pending: Arc::new(Mutex::new(HashMap::new())),
@@ -2409,7 +2420,52 @@ impl Proxy {
             send_sites_path,
             sent_once: Mutex::new(std::collections::HashSet::new()),
             call_session: Mutex::new(None),
+            sessions_path,
+            tasks: Mutex::new(HashMap::new()),
         })
+    }
+
+    /// The settings of the task's own browser a call goes to: a tools/call whose Hermes session (patch 0028) a task
+    /// of this agent runs in (`sessions_path`); None: the agent's own browser (the person's conversations, an older
+    /// Hermes, an agent's task without a browser of its own).
+    pub fn route_of(&self, message: &Value) -> Option<PathBuf> {
+        if message.get("method").and_then(Value::as_str) != Some("tools/call") {
+            return None;
+        }
+        let session = message.get("params")?.get("_meta")?.get(crate::agent_tools::CALL_SESSION_META)?.as_str()?;
+        let map: Value = serde_json::from_str(&std::fs::read_to_string(&self.sessions_path).ok()?).ok()?;
+        let path = PathBuf::from(map.get(session)?.as_str()?);
+        path.is_file().then_some(path)
+    }
+
+    /// The proxy of a task's own browser (its settings at `settings`), made at its first call: Hermes' stdout shared,
+    /// its handshake the agent's. Those whose task ended (settings gone) are stopped and dropped.
+    async fn task_proxy(self: &Arc<Self>, settings: &Path) -> Option<Arc<Proxy>> {
+        let ended: Vec<Arc<Proxy>> = {
+            let mut tasks = self.tasks.lock().unwrap_or_else(|e| e.into_inner());
+            let gone: Vec<PathBuf> = tasks.keys().filter(|p| !p.is_file()).cloned().collect();
+            gone.iter().filter_map(|p| tasks.remove(p)).collect()
+        };
+        for proxy in ended {
+            proxy.stop_child().await;
+        }
+        if let Some(known) = self.tasks.lock().unwrap_or_else(|e| e.into_inner()).get(settings) {
+            return Some(known.clone());
+        }
+        let mut config = match serde_json::from_str::<Value>(&std::fs::read_to_string(settings).ok()?).ok()? {
+            Value::Object(map) => map,
+            _ => return None,
+        };
+        config.insert("config_path".into(), json!(settings.to_string_lossy()));
+        let proxy = Self::with_output(config, self.output.clone());
+        *proxy.client_init.lock().unwrap_or_else(|e| e.into_inner()) =
+            self.client_init.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        if proxy.idle > 0.0 {
+            tokio::spawn(proxy.clone().watch_idle(15.0));
+        }
+        log(&format!("a task's own browser: {}", settings.display()));
+        self.tasks.lock().unwrap_or_else(|e| e.into_inner()).insert(settings.to_path_buf(), proxy.clone());
+        Some(proxy)
     }
 
     /// Whether this browser may send a form to `host` now (`SEND_SITES_FILE`): a site allowed for good, or a one-use
@@ -3779,7 +3835,11 @@ impl Proxy {
                 Ok(_) => {}
             }
             let Ok(message) = serde_json::from_slice::<Value>(&buf) else { continue };
-            let this = self.clone();
+            // a task's call to its own browser (browsers.rs `setup_task`), every other to the agent's
+            let this = match self.route_of(&message) {
+                Some(settings) => self.task_proxy(&settings).await.unwrap_or_else(|| self.clone()),
+                None => self.clone(),
+            };
             tasks.push(tokio::spawn(async move { this.handle(message).await }));
             tasks.retain(|t| !t.is_finished());
         }
@@ -3792,6 +3852,10 @@ impl Proxy {
         }
         // Hermes gone: its server too. The browser stays for whoever else uses it, until it is unused.
         self.stop_child().await;
+        let tasks: Vec<Arc<Proxy>> = self.tasks.lock().unwrap_or_else(|e| e.into_inner()).drain().map(|(_, p)| p).collect();
+        for proxy in tasks {
+            proxy.stop_child().await;
+        }
     }
 }
 
@@ -3927,6 +3991,35 @@ pub fn main(args: Vec<String>) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// One browser per running task (19/11): a task's tools/call (its Hermes session, patch 0028, in the agent's
+    /// `sessions.json`) goes to its own browser's settings; the person's calls, a session nobody announced, an older
+    /// Hermes (no session) and the handshake stay with the agent's browser.
+    #[test]
+    fn a_tasks_call_goes_to_its_own_browser() {
+        let dir = tempfile::tempdir().unwrap();
+        let task = dir.path().join("vie--t1");
+        std::fs::create_dir_all(&task).unwrap();
+        std::fs::write(task.join("mcp.json"), "{}").unwrap();
+        let sessions = json!({"api_task": task.join("mcp.json").to_string_lossy()});
+        std::fs::write(dir.path().join(crate::browsers::SESSIONS_FILE), sessions.to_string()).unwrap();
+        let mut config = Dict::new();
+        config.insert("busy".into(), json!(dir.path().join("busy").to_string_lossy()));
+        let proxy = Proxy::new(config, Box::new(std::io::sink()));
+        let call = |session: Option<&str>| {
+            let mut params = json!({"name": "navigate", "arguments": {"url": "https://shop.example"}});
+            if let Some(session) = session {
+                params["_meta"] = json!({crate::agent_tools::CALL_SESSION_META: session});
+            }
+            json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": params})
+        };
+        assert_eq!(proxy.route_of(&call(Some("api_task"))), Some(task.join("mcp.json")));
+        assert_eq!(proxy.route_of(&call(Some("api_person"))), None);
+        assert_eq!(proxy.route_of(&call(None)), None);
+        assert_eq!(proxy.route_of(&json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})), None);
+        std::fs::remove_file(task.join("mcp.json")).unwrap();
+        assert_eq!(proxy.route_of(&call(Some("api_task"))), None, "its task ended");
+    }
 
     #[test]
     fn devtools_connections_are_read_from_the_tcp_tables() {
