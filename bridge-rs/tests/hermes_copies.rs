@@ -920,7 +920,9 @@ async fn an_item_hermes_refuses_is_marked_refused_then_given_again_once_it_accep
     let impots = h.vault.items().into_iter().find(|i| i.label == "Impots").unwrap();
     assert!(!impots.agents.contains_key("vie"));
     let line = impots.refused.get("vie").cloned().unwrap_or_default();
-    assert!(line.starts_with("Pas donnée à ") && line.contains("refuse"), "{line:?}");
+    // a code, never a sentence with « Hermes » in it: the apps write it in the phone's language
+    assert_eq!(line, bipbridge::vault::AGENT_REFUSED);
+    assert_eq!(impots.public()["refused"], json!({"vie": "agent_refused"}));
     // its Hermes accepts it again: given back at the next pass (the next start)
     h.hermes.refused.lock().unwrap().clear();
     bipbridge::hermes_copies::forget_checked(&h.place.data);
@@ -928,6 +930,7 @@ async fn an_item_hermes_refuses_is_marked_refused_then_given_again_once_it_accep
     assert!(report.failed.is_empty() && report.rebuilt.contains(&"vie".to_string()), "{report:?}");
     let impots = h.vault.items().into_iter().find(|i| i.label == "Impots").unwrap();
     assert!(impots.agents.contains_key("vie") && impots.refused.is_empty(), "{:?}", impots.refused);
+    assert!(impots.public().get("refused").is_none(), "no mark once given");
     assert_eq!(h.copy("vie"), h.handles("vie"));
 }
 
@@ -1119,6 +1122,11 @@ async fn a_login_hermes_holds_twice_is_one_entry_and_another_password_never_wins
     let copy = impots.iter().find(|r| r.get("duplicate_of").is_some()).unwrap();
     assert_eq!(copy["duplicate_of"], original["id"]);
     assert_eq!(copy["created_at"], json!("2020-01-02T03:04:05+00:00"), "Hermes' own date");
+    // the apps see which entry is tried first (GET /v1/vault: Item::public); the person's own has no mark
+    let public: Vec<serde_json::Value> = h.vault.items().iter().filter(|i| i.origin.as_deref() == Some("https://impots.gouv.fr"))
+        .map(|i| i.public()).collect();
+    assert_eq!(public.iter().filter(|p| p["duplicate_of"] == original["id"]).count(), 1, "{public:?}");
+    assert_eq!(public.iter().filter(|p| p.get("duplicate_of").is_none()).count(), 1, "{public:?}");
     // vault_login fills the person's own
     let items = h.vault.items();
     let given: Vec<bipbridge::vault::Item> = items.into_iter().filter(|i| i.agents.contains_key("vie")).collect();
@@ -1322,4 +1330,15 @@ fn a_card_s_notice_shows_the_last_four_digits_of_its_number_never_of_what_follow
         assert!(named.ends_with(shown) && !bipbridge::card_details::holds_card_number(&named), "{label} -> {named}");
     }
     assert_eq!(bipbridge::vault::card_name("Carte perso"), "Carte perso");
+}
+
+// -- vault-keys-apps review (18/11): the apps get a code, never a sentence naming Hermes ----------------------------------
+
+#[test]
+fn a_refused_mark_is_listed_as_a_code_even_one_written_as_a_line_before() {
+    let mut item = bipbridge::vault::Item { id: "item_1".into(), kind: "login".into(), ..Default::default() };
+    item.refused.insert("coach".into(), "Pas donnée à Coach : son Hermes la refuse.".into());
+    item.refused.insert("vie".into(), bipbridge::vault::AGENT_REFUSED.into());
+    assert_eq!(item.public()["refused"], json!({"coach": "agent_refused", "vie": "agent_refused"}));
+    assert!(!item.public().to_string().contains("Hermes"));
 }

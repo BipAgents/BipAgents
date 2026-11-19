@@ -5,6 +5,7 @@ import { call, events, blobURL, HttpError } from "./api.js";
 import { render as markdown, visible } from "./markdown.js";
 import { attach, category, CATEGORIES } from "./bips.js";
 import { T, lang } from "./text.js";
+import { vaultNews } from "./vault.js";
 
 // ------------------------------------------------------------------------------------------------------------------
 // Small helpers
@@ -470,10 +471,40 @@ function InboxAudio({ item }) {
 }
 
 // ------------------------------------------------------------------------------------------------------------------
+// The vault's news (vault keys, lot 2; bridge-rs/src/vault.rs): the lines told once (`notices`, closed with
+// `DELETE /v1/vault/notices/{id}`), the entries an agent could not take (`refused`: a code) and a second
+// password kept for a login (`duplicate_of`): read in vault.js. Only what needs the person; the vault is managed in the
+// phone's app.
+// ------------------------------------------------------------------------------------------------------------------
+function VaultNews() {
+  const [news, setNews] = useState(null);
+  const [error, setError] = useState(null);
+  useEffect(() => { call("/v1/vault").then(r => setNews(vaultNews(r, T))).catch(() => setNews(null)); }, []);
+  if (!news || (!news.notices.length && !news.entries.length)) return null;
+  async function close(id) {
+    setNews(n => ({ ...n, notices: n.notices.filter(x => x.id !== id) }));
+    try { await call(`/v1/vault/notices/${q(id)}`, { method: "DELETE" }); }
+    catch (e) { if (e.status !== 404) setError(errorText(e)); }
+  }
+  return html`<section class="vault-news">
+    <h2>${T.vault}</h2>
+    ${news.notices.map(n => html`<div key=${n.id} class="card vault-notice">
+      <p>${n.text}</p><button class="ghost" title=${T.close} aria-label=${T.close} onClick=${() => close(n.id)}>×</button>
+    </div>`)}
+    ${news.entries.length > 0 && html`<div class="card vault-entries">${news.entries.map(e => html`<div key=${e.id} class="vault-entry">
+      <strong>${e.label}</strong>${e.site && html`<span class="muted small"> · ${e.site}</span>`}
+      ${e.lines.map(l => html`<p class=${l.refused ? "warn small" : "muted small"}>${l.text}</p>`)}
+    </div>`)}</div>`}
+    ${error && html`<p class="error">${error}</p>`}
+  </section>`;
+}
+
+// ------------------------------------------------------------------------------------------------------------------
 // Home: the Bips
 // ------------------------------------------------------------------------------------------------------------------
 function Home({ agents, onPick, moods }) {
   return html`<section class="home">
+    <${VaultNews}/>
     <h1>${T.hello}</h1>
     <div class="grid">${agents.map(a => html`<button key=${a.id} class="agent-card" style=${{ "--main": a.c.main, "--deep": a.c.deep, "--tint": a.c.tint }} onClick=${() => onPick(a.id)}>
       <${Bip} agent=${a} size=${120} mood=${moods[a.id] || "idle"}/>
