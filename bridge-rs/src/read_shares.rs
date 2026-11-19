@@ -1266,6 +1266,20 @@ mod tests {
     }
 
     #[test]
+    fn the_count_is_everyone_invited_and_everyone_who_sees_it() {
+        // 18/11: Noah and Ava invited, neither opened their link yet → « Visible par 0 personnes » in the apps
+        let invited = json!({"id": "s", "agent": "a", "title": "t", "ends": 2.0e9, "viewers": [],
+            "invites_open": [{"invite": "i1", "name": "Noah"}, {"invite": "i2", "name": "Ava"}]});
+        assert_eq!(view(&invited)["count"], json!(2));
+        // Noah opened his (keyed), Léo is being keyed, a key the link didn't vouch for is never counted
+        let mixed = json!({"id": "s", "agent": "a", "title": "t", "ends": 2.0e9,
+            "viewers": [{"id": "1", "state": "ok"}, {"id": "2", "state": "waiting"}, {"id": "3", "state": "refused"}],
+            "invites_open": [{"invite": "i2", "name": "Ava"}]});
+        assert_eq!(view(&mixed)["count"], json!(3));
+        assert_eq!(view(&json!({"id": "s"}))["count"], json!(0));
+    }
+
+    #[test]
     fn only_the_typed_messages_and_final_replies_go_without_their_media_lines() {
         let dir = std::env::temp_dir().join(format!("rshare-{}", std::process::id()));
         let mut config = Config::with_key("k");
