@@ -729,8 +729,7 @@ def _copy(src: Path, dst: Path, skip=None) -> None:
     dst.parent.mkdir(parents=True, exist_ok=True)
     if dst.is_dir() and not dst.is_symlink():
         shutil.rmtree(dst)
-    partial = dst.with_name(f".{dst.name}.restoring-{os.getpid()}")
-    partial.unlink(missing_ok=True)
+    partial = dst.with_name(f".bip-restoring-{os.getpid()}-{secrets.token_hex(4)}")   # short: any name fits
     try:
         if src.is_symlink():
             os.symlink(os.readlink(src), partial)
@@ -933,7 +932,8 @@ def keep_fresh(base: Path) -> None:
         return
     partial = kept.with_name(kept.name + ".part")
     shutil.rmtree(partial, ignore_errors=True)
-    partial.mkdir(parents=True)
+    partial.parent.mkdir(parents=True, exist_ok=True)
+    partial.mkdir(mode=0o700)   # this seat's backup token and pairing secret inside
     where = _fresh_folders(base)
     for name, folder in where.items():
         (partial / name).mkdir()
