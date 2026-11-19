@@ -69,6 +69,10 @@ TEXT_NAMES = {".env"}
 # a restore failed « Text file busy » (lab round trip 19/11), and a planned move left the target's bridge unable to
 # start (26/10: placemove.py's rule).
 DATA_SKIP = {"archive-index", "bridge"}
+# A file being written by a restore beside its place (backup._copy) or by an import (`restore` here), renamed over it
+# once whole: left there only by a killed run, never backed up, removed by the next restore or backup.
+PARTIAL_PREFIX = ".bip-restoring-"
+PARTIAL_SUFFIX = ".bipagents-part"
 # The bridge's spare agents (bridge-rs/src/agent_pool.rs POOL_FILE), next to bridge.toml.
 SPARES_FILE = "spare-agents.json"
 NOT_SETTINGS = {"profile", "uploads", "media", "audio", "agent-audio", "image_store", "image_cache", "audio_cache",
@@ -154,6 +158,8 @@ class Inventory:
             return True
         if name.startswith("bridge.toml."):
             return True   # its lock, its last good copy and broken ones (bridgeconf): this machine's, not the place's
+        if name.startswith(PARTIAL_PREFIX) or name.endswith(PARTIAL_SUFFIX):
+            return True
 
         for home in self.hermes_homes():
             parts = _relative(path, home)
@@ -528,7 +534,7 @@ def restore(tar: tarfile.TarFile, info: Dict[str, Any], target: Target) -> Dict[
             dest.parent.mkdir(parents=True, exist_ok=True)
             source = tar.extractfile(member)
             assert source is not None
-            partial = dest.with_name(dest.name + ".bipagents-part")
+            partial = dest.with_name(dest.name + PARTIAL_SUFFIX)
             with open(partial, "wb") as out:
                 shutil.copyfileobj(source, out, 1 << 20)
             os.chmod(partial, member.mode & 0o777 | 0o600)

@@ -51,7 +51,11 @@ FOLDER = Path(".local") / "state" / "bipagents" / "import"
 STEPS = ("Opening your export", "Putting your agents in", "Adjusting them to this server", "Restarting your agents")
 MODEL_KEYS = ("OPENROUTER_API_KEY", "CUSTOM_MODEL_API_KEY")   # the offer's model key (bridge-rs/src/cloud_setup.rs)
 HUB_SERVER = ("API_SERVER_ENABLED", "API_SERVER_HOST", "API_SERVER_PORT")
-PLACE_DATA = {"sleep.json"}   # the place's own in its data folder (with its door's certificate)
+# The place's own in its data folder (with its door's certificate), never the export's: its bridge's programs
+# (rustbridge.py BINARIES, bridge/<key>/: the running bridge's, for this server's processor; exports don't carry them),
+# its voices (fetched for its own voice engine: voices.py, pocketunit.py) and migrations.json (what its installer did
+# to its own settings, the hub and bridge.toml's machine part, which the send keeps: every migration's target).
+PLACE_DATA = {"sleep.json", "bridge", "voices", "migrations.json"}
 
 
 class PlaceError(Exception):
@@ -513,15 +517,13 @@ def root_name(profiles: Path, main: Optional[str]) -> str:
     return _free_name(profiles, ROOT_AGENT)
 
 
-SET_UP = "your agents couldn't be set up on your place, which is as it was"   # what the app shows (plain words)
-
-
-def _step(runner: hermes.Runner, args: List[str], what: str, **kwargs: Any) -> str:
-    """A command the import needs: its failure is the import's (never « done » with agents missing)."""
+def _step(runner: hermes.Runner, args: List[str], cause: str, **kwargs: Any) -> str:
+    """A command the import needs: its failure is the import's (never « done » with agents missing). `cause`: what
+    the app shows under its own « L'import n'a pas abouti : tes agents sont restés comme avant. », in plain words."""
     try:
         return runner.run(args, **kwargs)
     except RuntimeError as exc:
-        raise PlaceError(f"{SET_UP} ({what})") from exc
+        raise PlaceError(cause) from exc
 
 
 def bring_in(archive: Path, passphrase: str, runner: hermes.Runner, base: Optional[Path] = None,
@@ -554,10 +556,10 @@ def bring_in(archive: Path, passphrase: str, runner: hermes.Runner, base: Option
         progress(base, 2)
         for how, name in gateway_units():
             if how == "systemd":
-                _step(runner, ["systemctl", "--user", "stop", name], "the agents' gateway didn't stop")
+                _step(runner, ["systemctl", "--user", "stop", name], "your agents couldn't be paused for the import")
         if browsers:   # the place's agents' browsers (services, containers) go with them
             _step(runner, bridge + ["browser", "remove", "--all", "--config", str(config)],
-                  "the agents' browsers didn't stop", cwd=repo / "bridge")
+                  "your agents' browsers couldn't be closed", cwd=repo / "bridge")
             place_text = config.read_text(encoding="utf-8")
         _remove(scratch)
         unpacked = {**info, "roots": {name: str(scratch / name) for name in info["roots"]}}
@@ -624,14 +626,17 @@ def bring_in(archive: Path, passphrase: str, runner: hermes.Runner, base: Option
             runner.log.append(line)
         for how, name in gateway_units():
             if how == "systemd":
-                _step(runner, ["systemctl", "--user", "start", name], "the agents' gateway didn't start")
+                _step(runner, ["systemctl", "--user", "start", name], "your agents couldn't be started again")
         # Every profile served to the app as the place's agents are (its key, uploads in the sandbox, the bridge's
         # tools, Bot Mode; those of a Hermes alone claimed), then their browsers from the place's own ports. Each
         # checked: an agent not claimed is a failed import (the lab, 19/11: « done » with no agent at all).
-        _step(runner, bridge + ["adopt", "--config", str(config)], "an agent couldn't be served", cwd=repo / "bridge")
-        if browsers:
-            _step(runner, bridge + ["browser", "add", "--all", "--config", str(config)],
-                  "the agents' browsers didn't start", cwd=repo / "bridge")
+        _step(runner, bridge + ["adopt", "--config", str(config)], "an agent you sent couldn't be set up here", cwd=repo / "bridge")
+        if browsers:   # the agents are in and served: a browser not starting is said, the import kept (the bridge's
+            # `browser add --all` at the next update, or the app's switch, brings it)
+            try:
+                runner.run(bridge + ["browser", "add", "--all", "--config", str(config)], cwd=repo / "bridge")
+            except RuntimeError as exc:
+                say(f"Imported, but an agent's browser didn't start: {str(exc)[-300:]}")
     except BaseException:
         aside.put_back()
         bridgeconf.write(config, place_text, removing=bridgeconf.ANY)
@@ -671,7 +676,8 @@ def import_place_main(argv: List[str]) -> int:
     except (PlaceError, SealedError, OSError, ValueError, KeyError) as exc:
         message = str(exc) if isinstance(exc, (PlaceError, SealedError)) else "the export couldn't be put in"
         progress(base, 0, error=message)
-        print(f"Import failed: {exc}", flush=True)
+        cause = f" ({exc.__cause__})" if exc.__cause__ else ""
+        print(f"Import failed: {exc}{cause}", flush=True)   # the journal's; the app shows `message`
         archive.unlink(missing_ok=True)
         from .family import bridge_restart
         runner.run(bridge_restart(base), check=False)

@@ -240,6 +240,23 @@ def personal_runtime_bytes(inv, base: Path) -> int:
     return size(paths)
 
 
+def clean_partials(inv) -> int:
+    """The files a killed restore or import left half-written (moving.PARTIAL_PREFIX, PARTIAL_SUFFIX) removed from
+    the install's folders. Returns how many."""
+    from . import moving
+    removed = 0
+    for root in inv.roots().values():
+        for folder, _, names in os.walk(root, followlinks=False) if root.is_dir() else []:
+            for name in names:
+                if name.startswith(moving.PARTIAL_PREFIX) or name.endswith(moving.PARTIAL_SUFFIX):
+                    try:
+                        os.unlink(os.path.join(folder, name))
+                        removed += 1
+                    except OSError:
+                        pass
+    return removed
+
+
 def _walk(inv, root: Path) -> Iterator[Path]:
     for folder, dirs, names in os.walk(root, followlinks=False):
         here = Path(folder)
@@ -327,7 +344,8 @@ def _may_skip():
     from . import moving
     names = (set(moving.RUNTIME_FILES) | moving.HERMES_SKIP_ROOT | moving.HERMES_SKIP_PROFILE | moving.DATA_SKIP
              | moving.CHROME_SKIP)
-    return lambda name: name in names or name.endswith((".sock", *moving.SIDECARS)) or name.startswith("bridge.toml.")
+    return lambda name: (name in names or name.endswith((".sock", moving.PARTIAL_SUFFIX, *moving.SIDECARS))
+                         or name.startswith(("bridge.toml.", moving.PARTIAL_PREFIX)))
 
 
 def stat_walk(inv, root: Path, rules: bool = True) -> Iterator[Tuple[str, str, os.stat_result]]:
@@ -553,6 +571,7 @@ def run(base: Optional[Path] = None, config: Optional[Path] = None, now: Optiona
             if made.returncode != 0:
                 raise BackupError("the repository couldn't be made: " + _short(made.stderr))
         inv = moving.read_inventory(config or base / ".config" / "bipagents" / "bridge.toml", base)
+        clean_partials(inv)   # what a killed restore left half-written
         stage = base / STAGE
         stage.mkdir(parents=True, exist_ok=True)
         seen = {k: v for k, v in read_json(stage / "seen.json").items() if isinstance(v, list)}
@@ -729,7 +748,8 @@ def _copy(src: Path, dst: Path, skip=None) -> None:
     dst.parent.mkdir(parents=True, exist_ok=True)
     if dst.is_dir() and not dst.is_symlink():
         shutil.rmtree(dst)
-    partial = dst.with_name(f".bip-restoring-{os.getpid()}-{secrets.token_hex(4)}")   # short: any name fits
+    from . import moving
+    partial = dst.with_name(f"{moving.PARTIAL_PREFIX}{os.getpid()}-{secrets.token_hex(4)}")   # short: any name fits
     try:
         if src.is_symlink():
             os.symlink(os.readlink(src), partial)
@@ -936,7 +956,9 @@ def keep_fresh(base: Path) -> None:
     partial.mkdir(mode=0o700)   # this seat's backup token and pairing secret inside
     where = _fresh_folders(base)
     for name, folder in where.items():
-        (partial / name).mkdir()
+        (partial / name).mkdir(mode=0o700)
+        if folder.is_dir():
+            shutil.copystat(folder, partial / name)   # its mode (0700) comes back with it (`_copy`'s copystat)
         for child in sorted(folder.iterdir()) if folder.is_dir() else []:
             if name != "config" or not _live(Path(child.name)):
                 _copy(child, partial / name / child.name)
@@ -985,6 +1007,9 @@ def restore(key: str, runner, base: Optional[Path] = None, repo: Optional[Path] 
             if how == "systemd":
                 runner.run(["systemctl", "--user", "stop", name], check=False)
         keep_fresh(base)
+        from . import moving
+        with contextlib.suppress(OSError, ValueError):   # a killed try's half-written files
+            clean_partials(moving.read_inventory(base / CONFIG_DIR / "bridge.toml", base))
         info = put_back(fetched, base, repo, address)
         progress(base, 3)
         from . import migrations
