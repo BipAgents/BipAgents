@@ -287,7 +287,7 @@
         const last = into.lines.length ? into.lines[into.lines.length - 1] : null;
         if (last !== null && here === into.block) {
           const sup = at.closest("sup");
-          const glue = (/\d$/.test(last) && (/^[.,]\d*$/.test(text) || (sup && /^\d{2}\b/.test(text))))
+          const glue = (/\d$/.test(last) && (/^[.,]\d*$/.test(text) || (sup && /^\d{2}\b/.test(text)) || (sup && /^€\d{2}$/.test(text))))
             || (/\d[.,]$/.test(last) && /^\d/.test(text)) || (/\d€$/.test(last) && sup && /^\d{2}$/.test(text));
           const comma = sup && /\d$/.test(last) && /^\d/.test(text);
           into.lines[into.lines.length - 1] = last + (glue ? (comma ? "," : "") : " ") + text;
@@ -343,6 +343,17 @@
           if (visible(el, el, rects)) add(shown, here, el, text);
         }
       };
+      // a total shown in a read-only or disabled field (never a card field): laid out, never « shown » (it can only
+      // block « approved »: Relecture 6, f2)
+      const readonlyValue = (el) => {
+        if (el.tagName !== "INPUT" && el.tagName !== "TEXTAREA") return;
+        if (!(el.readOnly || el.disabled) || /cc-/.test(el.getAttribute("autocomplete") || "")) return;
+        const type = (el.getAttribute("type") || "text").toLowerCase();
+        if (["hidden", "password", "checkbox", "radio", "submit", "button", "image", "file"].includes(type)) return;
+        const value = (el.value || "").replace(/\s+/g, " ").trim();
+        if (!value || !/\d/.test(value) || !el.getClientRects().length) return;
+        add(all, blockOf(el), el, "[champ] " + value);
+      };
       const walk = (root) => {
         const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT);
         for (let node = walker.nextNode(); node; node = walker.nextNode()) {
@@ -351,6 +362,7 @@
             break;
           }
           if (node.nodeType === 1) {
+            readonlyValue(node);
             generated(node);
             if (node.shadowRoot) walk(node.shadowRoot);
             continue;

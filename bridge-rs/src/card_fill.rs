@@ -516,6 +516,10 @@ impl Cdp {
     }
 }
 
+/// The most text pieces of closed shadow roots read per frame process; past it the read is not sure (`CLOSED_CUT`).
+const CLOSED_PIECES: usize = 5000;
+const CLOSED_CUT: &str = "\u{0}cut";
+
 /// The frame owners (`IFRAME`, `FRAME`) of a DevTools node tree, shadow roots included: (the frame's id, the owner's
 /// backend node id).
 fn frame_owners(node: &Value, out: &mut Vec<(String, i64)>) {
@@ -542,14 +546,18 @@ fn frame_owners(node: &Value, out: &mut Vec<(String, i64)>) {
 /// The text nodes of the closed shadow roots in a DevTools node tree (`DOM.getDocument` with `pierce`), scripts and
 /// styles left out, card-like digit runs dropped (page_total.rs drops them again).
 fn closed_texts(node: &Value, inside: bool, out: &mut Vec<String>) {
+    // past `CLOSED_PIECES`, a « cut » mark: the read is not complete (Relecture 6, f3: never a silent cap)
+    if out.len() > CLOSED_PIECES {
+        return;
+    }
     let name = node.get("nodeName").and_then(Value::as_str).unwrap_or("");
     if matches!(name, "SCRIPT" | "STYLE" | "NOSCRIPT" | "TEMPLATE" | "INPUT" | "SELECT" | "OPTION" | "TEXTAREA") {
         return;
     }
     if inside && node.get("nodeType").and_then(Value::as_u64) == Some(3) {
         let text = node.get("nodeValue").and_then(Value::as_str).unwrap_or("").split_whitespace().collect::<Vec<_>>().join(" ");
-        if !text.is_empty() && out.len() < 2000 {
-            out.push(text);
+        if !text.is_empty() {
+            out.push(if out.len() < CLOSED_PIECES { text } else { CLOSED_CUT.to_string() });
         }
     }
     for key in ["children", "shadowRoots"] {
@@ -1299,7 +1307,9 @@ impl Page {
             if done.contains(&id) {
                 continue;
             }
-            let allowed = id == main || (rule.allows(&url) && ancestors_of(&id, &seen).iter().all(|a| rule.allows(a)));
+            // the shop's own srcdoc / about:blank frames are read as the page they belong to (Relecture 6, f10)
+            let own = |u: &str| rule.allows(u) || u.starts_with("about:");
+            let allowed = id == main || (own(&url) && ancestors_of(&id, &seen).iter().all(|a| own(a)));
             let world = json!({"frameId": id, "worldName": WORLD, "grantUniveralAccess": false});
             let Ok(created) = self.cdp.call("Page.createIsolatedWorld", world, Some(&session)).await else { continue };
             let Some(context) = created.get("executionContextId").and_then(Value::as_i64) else { continue };
@@ -1329,7 +1339,11 @@ impl Page {
                 sessions.push(frame.session.clone());
             }
         }
-        let mut sure = true;
+        // the page's own frame not read (a timeout, an exception): never sure (Relecture 6)
+        let mut sure = done.contains(&main);
+        if !sure {
+            tracing::info!("card payment: the page's main frame not read, its total not read for sure");
+        }
         for session in sessions {
             let Ok(doc) = self.cdp.call("DOM.getDocument", json!({"depth": -1, "pierce": true}), Some(&session)).await
             else {
@@ -1356,6 +1370,11 @@ impl Page {
             }
             let mut closed = Vec::new();
             closed_texts(&doc, false, &mut closed);
+            if closed.last().is_some_and(|t| t == CLOSED_CUT) {
+                tracing::info!("card payment: too much text in closed shadow roots, the total not read for sure");
+                sure = false;
+                closed.pop();
+            }
             if !closed.is_empty() {
                 tracing::info!(pieces = closed.len(), "card payment: text of a closed shadow root read");
                 let all = closed.join("\n");

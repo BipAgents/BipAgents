@@ -102,6 +102,9 @@ pub struct Amount {
     pub cents: i64,
     pub codes: &'static [&'static str],
     pub class: Class,
+    /// The value of a read-only field (`pageText` marks it « [champ] »): any one above the approved amount blocks
+    /// « approved » unless its own words make it a part or a mention (« Remise 99,99 € ») (Relecture 6, f2).
+    pub field: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -132,14 +135,15 @@ static CARD_GROUPS: LazyLock<Regex> =
 static CARD_LIKE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\d(?:[ -]?\d){11,18}").expect("card pattern"));
 /// « 27€97 » (the cents right after the mark; `pageText` glues « 27€<sup>97</sup> » so).
 static EURO_CENTS: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(\d)€(\d{2})([^\d.,]|$)").expect("euro cents pattern"));
-/// « 27 ,97 » (the cents in a piece of their own).
-static LOOSE_CENTS: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(\d) ([.,]\d{2})\b").expect("cents pattern"));
+    LazyLock::new(|| Regex::new(r"(\d) ?€(\d{2})([^\d.,]|$)").expect("euro cents pattern"));
+/// « 27 ,97 », « 32⏎,05 € » (the cents in a piece of their own, on the same line or the next: a flex item, Relecture 6).
+static LOOSE_CENTS: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(\d)[ \n]([.,]\d{2})\b").expect("cents pattern"));
 /// A bracketed piece of a line (« (dont 4,66 € de TVA) »).
 static BRACKETS: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\([^()]*\)").expect("brackets pattern"));
 /// An instalment right before the amount (« 3 x 9,32 € », « 3 fois 9,32 € », « 4x € 9,32 »).
 static PER_BEFORE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)\d\s*(?:[x×]|fois|times|mal|veces|cuotas|termijnen|keer)\s*(?:€|eur|\$|£)?\s*$")
+    // two or more (« 1x », « 1 fois » is the whole total: Relecture 6, u1)
+    Regex::new(r"(?i)(?:^|[^\d])(?:[2-9]|[1-9]\d)\s*(?:[x×]|fois|times|mal|veces|cuotas|termijnen|keer)\s*(?:€|eur|\$|£)?\s*$")
         .expect("instalment pattern")
 });
 /// An instalment right after it (« 9,32 € / mois », « 9,32 € par mois », « $9.32/mo »).
@@ -299,7 +303,7 @@ pub fn amounts(text: &str) -> Vec<Amount> {
                         text[..line_start].lines().rev().take(3).collect::<Vec<_>>().into_iter().rev().collect();
                     let class = class_of(&text[line_start..start], &above);
                     if class >= Class::Total {
-                        out.push(Amount { cents, codes: BARE, class });
+                        out.push(Amount { cents, codes: BARE, class, field: false });
                     }
                 }
             }
@@ -325,7 +329,9 @@ pub fn amounts(text: &str) -> Vec<Amount> {
         }
         let line_start = before.rfind('\n').map_or(0, |i| i + 1);
         let above: Vec<&str> = text[..line_start].lines().rev().take(3).collect::<Vec<_>>().into_iter().rev().collect();
-        out.push(Amount { cents, codes, class: class_of(&text[line_start..number_start], &above) });
+        let line_before = &text[line_start..number_start];
+        let field = after_last_digit(line_before).contains("[champ]");
+        out.push(Amount { cents, codes, class: class_of(line_before, &above), field });
     }
     out
 }
@@ -415,7 +421,9 @@ pub fn page_total_of(texts: &[PageText], cents: i64, currency: &str) -> PageTota
     // frame or page (never relaxed there); hidden product prices (a menu, a drawer) are no doubt (Relecture 3, c5)
     let blocks = |r: &&&Read| {
         r.amount.cents > cents
-            && (r.closed || (r.amount.class != Class::Mention && (r.amount.class >= Class::Total || r.provider)))
+            && (r.closed
+                || (r.amount.field && r.amount.class >= Class::None)
+                || (r.amount.class != Class::Mention && (r.amount.class >= Class::Total || r.provider)))
     };
     let visible_higher = shown_ours.iter().filter(|r| r.amount.cents > cents && r.amount.class != Class::Mention);
     if let Some(higher) = visible_higher.chain(all_ours.iter().filter(blocks)).map(|r| r.amount.cents).max() {
@@ -574,6 +582,14 @@ mod correction_1 {
         let before = page_total(&["Total à payer:\nEUR 27.97".to_string()], 2797, "EUR");
         let now = page_total(&["Frais carte : EUR 1.50\nTotal à payer:\nEUR 29.47".to_string()], 2797, "EUR");
         assert_eq!(recheck(&before, &now), Recheck::Changed);
+    }
+
+    #[test]
+    fn correction_6_a_read_only_field_above_the_approved_amount_blocks() {
+        let page = PageText { shown: "Total à payer: EUR 27.97".into(), all: "Total à payer: EUR 27.97\n[champ] 32,87 €".into(), ..Default::default() };
+        assert_eq!(page_total_of(&[page], 2797, "EUR"), PageTotal::Doubt(Doubt::Higher(3287)));
+        let promo = PageText { shown: "Total à payer: EUR 27.97".into(), all: "Total à payer: EUR 27.97\n[champ] Remise 99,99 €".into(), ..Default::default() };
+        assert_eq!(page_total_of(&[promo], 2797, "EUR"), PageTotal::Approved);
     }
 
     #[test]
@@ -789,5 +805,38 @@ mod review_3 {
         ] {
             assert_eq!(page_total(&[page.to_string()], 2797, "EUR"), PageTotal::Approved, "{page}");
         }
+    }
+}
+
+/// Relecture 6 (19/11, on ea52bd0fa): each asserts the expected outcome; they fail on ea52bd0fa.
+#[cfg(test)]
+mod review_6 {
+    use super::*;
+
+    #[test]
+    fn u1_paying_in_one_instalment_is_the_whole_total_not_an_instalment() {
+        // Alma / Oney / Floa choice « Payer en 1x » (the whole amount) beside « 3x sans frais »: PER_BEFORE takes « 1x »
+        // for an instalment and drops the real total, the basket line reads « approved »
+        for page in [
+            "Montant de votre panier : 27,97 €\nPayer en 1x\n32,87 €\nPayer en 3x sans frais\n3 x 10,96 €",
+            "Montant de votre panier : 27,97 €\nPayer en 1x 32,87 €\nPayer en 3x 10,96 €",
+            "Montant de votre panier : 27,97 €\nPaiement en 1 fois 32,87 €",
+        ] {
+            assert_ne!(page_total(&[page.to_string()], 2797, "EUR"), PageTotal::Approved, "{page}");
+        }
+    }
+
+    #[test]
+    fn u2_a_total_whose_cents_sit_on_a_line_of_their_own_is_not_read_as_its_cents() {
+        // pageText's lines for « 32,05 € » drawn as flex items (« 32 » / « ,05 € », Chrome f1): read as 5,00 €
+        let page = "Montant de votre panier : 27,97 €\nFrais de livraison 4,08 €\nTotal à payer\n32\n,05 €";
+        assert_ne!(page_total(&[page.to_string()], 2797, "EUR"), PageTotal::Approved);
+    }
+
+    #[test]
+    fn u3_euros_then_superscript_mark_and_cents_is_one_amount() {
+        // « 156<sup>€90</sup> » (French marketplaces' style), joined by pageText as « 156 €90 »: read 156,00 € and
+        // 90,00 € → « la page demandait 156,00 € » for a right payment of 156,90 €
+        assert_eq!(page_total(&["Total à payer 156 €90".to_string()], 15690, "EUR"), PageTotal::Approved);
     }
 }
