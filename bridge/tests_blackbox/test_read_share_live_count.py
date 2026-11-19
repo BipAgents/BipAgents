@@ -51,13 +51,7 @@ def test_a_friend_opening_their_link_reaches_the_open_conversation_in_seconds(br
                             hints.put((kind, json.loads(line[6:])))
 
         threading.Thread(target=watch, daemon=True).start()
-        time.sleep(3.0)
-        # Léa invited: « Visible par 1 personne » already (everyone invited counts, 19/11); her invitation's own hint
-        # (if any) set aside, the next one is about her opening the link
-        assert [s["count"] for s in bridge.get(f"/v1/read-shares?agent={agent}", headers=AUTH).json()["shares"]] == [1]
-        time.sleep(0.5)
-        while not hints.empty():
-            hints.get_nowait()
+        time.sleep(1.0)
         # the friend opens their link on their phone: the guichet knows them, nobody calls the owner's bridge
         lea = Phone(link["link"])
         guichet.redeem(lea.invite, lea.public, lea.proof(), "1")
@@ -69,11 +63,12 @@ def test_a_friend_opening_their_link_reaches_the_open_conversation_in_seconds(br
                 kind, data = hints.get(timeout=max(0.1, deadline - time.time()))
             except queue.Empty:
                 break
-            if kind == "share":
+            # (her invitation may be hinted before, with the same count since 19/11: « seen » tells them apart)
+            if kind == "share" and data.get("seen") == 1:
                 hint = data
                 break
-        assert hint is not None, "no share hint while the conversation is open"
-        assert hint == {"agent": agent, "share": SHARE, "count": 1}
+        assert hint is not None, "no share hint of Léa in while the conversation is open"
+        assert hint == {"agent": agent, "share": SHARE, "count": 1, "seen": 1}
         assert time.time() - opened < 6   # within a couple of the bridge's looks (every 2 s)
         # keyed meanwhile: the friend can read, and the owner's next read says 1, Léa seeing it
         assert next(v for v in guichet.viewers if v["viewer"] == "1").get("wrapped")
