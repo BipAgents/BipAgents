@@ -345,6 +345,14 @@ async fn push(
     {
         return refuse(StatusCode::BAD_REQUEST, "invalid push");
     }
+    // The bridges' silent sub-task hints (reason « jobs ») are the iPhone's only: Android reads its tasks itself.
+    // Answered done, the phone never woken, no quota spent (19/11).
+    if matches!(device.platform, Platform::Fcm)
+        && body.push_type == "background"
+        && body.payload.get("reason").and_then(Value::as_str) == Some("jobs")
+    {
+        return Json(json!({"status": 200, "reason": "not for Android", "apns_id": null})).into_response();
+    }
     if relay.is_blocked(&device.token) || relay.blocked.contains(&claims.id) {
         tracing::info!(device = %fingerprint(&device.token), token = %claims.id, "push refused: device blocked");
         return refuse(StatusCode::FORBIDDEN, "this device is blocked on the relay: write to support@bipagents.com");

@@ -486,3 +486,23 @@ async fn after_the_transition_first_format_tokens_are_gone() {
     assert!(health.get("warning").is_none());
     assert!(h.seen.lock().unwrap().apple.is_empty());
 }
+
+/// Sub-tasks (19/11): the bridges' silent « jobs » hints are the iPhone's only (Android reads its tasks itself); one
+/// to an Android phone behind the relay is answered done without waking the phone, and counts in no quota.
+#[tokio::test]
+async fn a_sub_tasks_hint_never_wakes_an_android_phone() {
+    let h = harness(100).await;
+    let android = h.register("fcm", "fcm-token_ABCDEFGHIJKLMNOPQRSTUVWXYZ:0123").await;
+    let hint = json!({"aps": {"content-available": 1}, "agent": "vie", "reason": "jobs", "job": "t1", "why": "step"});
+    let (status, body) = h
+        .post("/v1/relay/push", json!({"token": android, "payload": hint, "push_type": "background", "priority": 5}))
+        .await;
+    assert_eq!((status, body["status"].as_u64()), (200, Some(200)), "{body}");
+    assert!(h.seen.lock().unwrap().google.is_empty(), "the Android phone was woken");
+    // an iPhone still gets it
+    let iphone = h.register("apns", &"ab".repeat(32)).await;
+    let (_, body) = h
+        .post("/v1/relay/push", json!({"token": iphone, "payload": hint, "push_type": "background", "priority": 5}))
+        .await;
+    assert_eq!(body["status"].as_u64(), Some(200), "{body}");
+}
