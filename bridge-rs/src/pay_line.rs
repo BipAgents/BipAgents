@@ -4,10 +4,11 @@
 //! agent called `cancel_payment`. The person reads what happened from the bridge, not an explanation the agent makes up
 //! (Vie, 19/11: « la banque refuse que je remplisse la carte automatiquement », invented).
 //!
-//! Like the vault's line (vault_line.rs), the line is the bridge's testimony: its words are the bridge's (the agent's
-//! reason, when it gives one, is quoted as its own), recorded when the bridge gives the payment up, with the turn of
-//! that very call (the one turn of the agent the hub sees inside a payment tool's call; none or several: recorded with
-//! no conversation, so shown nowhere): `<data_dir>/pay-lines.jsonl`, one line `{at, agent, session, run, text}` (no
+//! Like the vault's line (vault_line.rs), the line is the bridge's testimony: its words are the bridge's only (never
+//! the agent's reason: Relecture 1, 19/11), recorded when the bridge gives the payment up, with the turn of that very
+//! call (the one turn of the agent the hub sees inside a payment tool's call, or inside the tool search's call that
+//! wraps the Link tools; none or several: recorded with no conversation, shown nowhere, and the agent is told to say
+//! the sentence itself): `<data_dir>/pay-lines.jsonl`, one line `{at, agent, session, run, text}` (no
 //! card data; 0600, the last `KEEP` lines). The thread shows each as a `notice` item (code `card_pay`) right after the
 //! last item of its turn written before it, which every app already shows as the bridge wrote it: no app change.
 //!
@@ -67,15 +68,26 @@ pub fn record(file: &Path, line: &Value) {
     }
 }
 
-/// The bridge says `text` in the conversation of the payment tool's call going on for `agent` now.
-pub fn note(state: &crate::app::AppState, agent: &str, text: &str) {
-    let calling = state.hub.runs_in_call(agent, is_pay_tool);
+/// A call the line may belong to: a payment tool, or the tool search's `tool_call` that wraps one (the Link tools are
+/// reached through it: tool_diet.rs keeps only `bipagents_pay` direct). Only one turn of the agent inside such a call
+/// counts (`turn_of_call`): never another conversation's.
+fn in_pay_call(name: &str) -> bool {
+    is_pay_tool(name) || name == "tool_call" || name.ends_with("_tool_call")
+}
+
+/// The bridge says `text` in the conversation of the payment tool's call going on for `agent` now. False when that
+/// conversation is not known for sure (a routine's turn the hub doesn't follow, two turns in a call at once): the line
+/// is then shown nowhere, and the agent must say it itself (card_pay.rs `told`).
+pub fn note(state: &crate::app::AppState, agent: &str, text: &str) -> bool {
+    let calling = state.hub.runs_in_call(agent, in_pay_call);
     let (run, session) = crate::vault_line::turn_of_call(&calling);
     if session.is_none() {
         tracing::info!(agent, turns = calling.len(), "card payment line recorded with no conversation");
     }
+    let placed = session.is_some();
     let line = json!({"at": crate::py::time_time(), "agent": agent, "session": session, "run": run, "text": text});
     record(&path(&state.config()), &line);
+    placed
 }
 
 /// A line recorded: when, in which Hermes session, its words.
@@ -154,52 +166,77 @@ pub fn total_differs(lang: &str, shown: &str, approved: &str) -> String {
     }
 }
 
-/// The agent called `cancel_payment`. `reason`: its own words, quoted (empty: none); `pressed`: the pay button had been
-/// pressed (the payment may have gone through); `taken_over`: the person took the browser over meanwhile (they may
-/// have paid themselves: « nothing was paid » is not said).
-pub fn agent_cancelled(lang: &str, agent: &str, reason: &str, pressed: bool, taken_over: bool) -> String {
+/// The agent called `cancel_payment` (its reason is never quoted here: the line is the bridge's own, Relecture 1, 9).
+/// `pressed`: the pay button had been pressed (the payment may have gone through); `taken_over`: the person took the
+/// browser over meanwhile (they may have paid themselves: « nothing was paid » is not said).
+pub fn agent_cancelled(lang: &str, agent: &str, pressed: bool, taken_over: bool) -> String {
     let lang = lang_key(lang);
-    let why = if reason.is_empty() {
-        String::new()
-    } else {
-        match lang {
-            "fr" | "es" => format!(" (« {reason} »)"),
-            "de" => format!(" („{reason}“)"),
-            "nl" => format!(" (‘{reason}’)"),
-            _ => format!(" (“{reason}”)"),
-        }
-    };
     if pressed {
         return match lang {
             "fr" => format!(
-                "Paiement arrêté à la demande de {agent}{why}, après l'appui sur le bouton de paiement : vérifie sur le \
-                 site ou auprès de ta banque s'il est passé."
+                "Paiement arrêté à la demande de {agent}, après l'appui sur le bouton de paiement : vérifie sur le site \
+                 ou auprès de ta banque s'il est passé."
             ),
             "de" => format!(
-                "Zahlung auf Wunsch von {agent} gestoppt{why}, nachdem der Bezahlknopf gedrückt wurde: Prüfe auf der \
-                 Seite oder bei deiner Bank, ob sie durchgegangen ist."
+                "Zahlung auf Wunsch von {agent} gestoppt, nachdem der Bezahlknopf gedrückt wurde: Prüfe auf der Seite \
+                 oder bei deiner Bank, ob sie durchgegangen ist."
             ),
             "es" => format!(
-                "Pago detenido a petición de {agent}{why}, después de pulsar el botón de pago: comprueba en el sitio o \
-                 con tu banco si se ha realizado."
+                "Pago detenido a petición de {agent}, después de pulsar el botón de pago: comprueba en el sitio o con \
+                 tu banco si se ha realizado."
             ),
             "nl" => format!(
-                "Betaling gestopt op verzoek van {agent}{why}, nadat op de betaalknop was gedrukt: kijk op de site of \
-                 bij je bank of ze gelukt is."
+                "Betaling gestopt op verzoek van {agent}, nadat op de betaalknop was gedrukt: kijk op de site of bij je \
+                 bank of ze gelukt is."
             ),
             _ => format!(
-                "Payment stopped at {agent}'s request{why}, after the pay button was pressed: check on the site or with \
-                 your bank whether it went through."
+                "Payment stopped at {agent}'s request, after the pay button was pressed: check on the site or with your \
+                 bank whether it went through."
             ),
         };
     }
     let nothing = !taken_over;
     match lang {
-        "fr" => format!("Paiement annulé à la demande de {agent}{why}.{}", if nothing { " Rien n'a été payé." } else { "" }),
-        "de" => format!("Zahlung auf Wunsch von {agent} abgebrochen{why}.{}", if nothing { " Es wurde nichts bezahlt." } else { "" }),
-        "es" => format!("Pago cancelado a petición de {agent}{why}.{}", if nothing { " No se ha pagado nada." } else { "" }),
-        "nl" => format!("Betaling geannuleerd op verzoek van {agent}{why}.{}", if nothing { " Er is niets betaald." } else { "" }),
-        _ => format!("Payment cancelled at {agent}'s request{why}.{}", if nothing { " Nothing was paid." } else { "" }),
+        "fr" => format!("Paiement annulé à la demande de {agent}.{}", if nothing { " Rien n'a été payé." } else { "" }),
+        "de" => format!("Zahlung auf Wunsch von {agent} abgebrochen.{}", if nothing { " Es wurde nichts bezahlt." } else { "" }),
+        "es" => format!("Pago cancelado a petición de {agent}.{}", if nothing { " No se ha pagado nada." } else { "" }),
+        "nl" => format!("Betaling geannuleerd op verzoek van {agent}.{}", if nothing { " Er is niets betaald." } else { "" }),
+        _ => format!("Payment cancelled at {agent}'s request.{}", if nothing { " Nothing was paid." } else { "" }),
+    }
+}
+
+/// The person's « Suspendre tous les paiements » stopped it (the agent's cancel came after).
+pub fn suspended(lang: &str) -> String {
+    match lang_key(lang) {
+        "fr" => "Paiement arrêté : tu as suspendu les paiements. Rien n'a été payé.",
+        "de" => "Zahlung gestoppt: Du hast die Zahlungen ausgesetzt. Es wurde nichts bezahlt.",
+        "es" => "Pago detenido: has suspendido los pagos. No se ha pagado nada.",
+        "nl" => "Betaling gestopt: je hebt de betalingen gepauzeerd. Er is niets betaald.",
+        _ => "Payment stopped: you suspended payments. Nothing was paid.",
+    }
+    .to_string()
+}
+
+/// Right before the press, the amount on the page was no longer the one read when the card was typed.
+pub fn total_changed(lang: &str) -> String {
+    match lang_key(lang) {
+        "fr" => "Paiement arrêté : le montant affiché sur la page a changé au dernier moment. Rien n'a été payé.",
+        "de" => "Zahlung gestoppt: Der Betrag auf der Seite hat sich im letzten Moment geändert. Es wurde nichts bezahlt.",
+        "es" => "Pago detenido: el importe de la página cambió en el último momento. No se ha pagado nada.",
+        "nl" => "Betaling gestopt: het bedrag op de pagina veranderde op het laatste moment. Er is niets betaald.",
+        _ => "Payment stopped: the amount on the page changed at the last moment. Nothing was paid.",
+    }
+    .to_string()
+}
+
+/// The pay button asked for another currency (`shown`, e.g. « 32,10 USD »).
+pub fn foreign_currency(lang: &str, shown: &str) -> String {
+    match lang_key(lang) {
+        "fr" => format!("Paiement arrêté : la page demandait une autre devise ({shown}). Rien n'a été payé."),
+        "de" => format!("Zahlung gestoppt: Die Seite verlangte eine andere Währung ({shown}). Es wurde nichts bezahlt."),
+        "es" => format!("Pago detenido: la página pedía otra moneda ({shown}). No se ha pagado nada."),
+        "nl" => format!("Betaling gestopt: de pagina vroeg een andere munteenheid ({shown}). Er is niets betaald."),
+        _ => format!("Payment stopped: the page asked for another currency ({shown}). Nothing was paid."),
     }
 }
 
@@ -222,6 +259,8 @@ mod tests {
         for name in ["list_cards", "mcp_bipagents_pay_list_cards", "browser_click", "cancel_payments_now"] {
             assert!(!is_pay_tool(name), "{name}");
         }
+        // the Link tools come through the tool search (tool_diet.rs): its call counts, one turn only (`turn_of_call`)
+        assert!(in_pay_call("tool_call") && !in_pay_call("browser_click"));
     }
 
     #[test]
@@ -274,13 +313,14 @@ mod tests {
             let line = total_differs(lang, "27,97 €", "24,50 €");
             assert!(line.contains("27,97 €") && line.contains("24,50 €"), "{lang}: {line}");
         }
-        assert_eq!(agent_cancelled("fr", "Vie", "", false, false), "Paiement annulé à la demande de Vie. Rien n'a été payé.");
-        assert_eq!(
-            agent_cancelled("fr", "Vie", "la carte n'est pas acceptée ici", false, false),
-            "Paiement annulé à la demande de Vie (« la carte n'est pas acceptée ici »). Rien n'a été payé."
-        );
-        assert_eq!(agent_cancelled("en", "Vie", "", false, true), "Payment cancelled at Vie's request.");
-        assert!(agent_cancelled("de", "Vie", "", true, false).contains("Bank"));
-        assert!(!agent_cancelled("nl", "Vie", "", true, false).contains("niets betaald"));
+        assert_eq!(agent_cancelled("fr", "Vie", false, false), "Paiement annulé à la demande de Vie. Rien n'a été payé.");
+        assert_eq!(agent_cancelled("en", "Vie", false, true), "Payment cancelled at Vie's request.");
+        assert!(agent_cancelled("de", "Vie", true, false).contains("Bank"));
+        assert!(!agent_cancelled("nl", "Vie", true, false).contains("niets betaald"));
+        for lang in ["fr", "en", "de", "es", "nl"] {
+            assert!(suspended(lang).len() > 20 && total_changed(lang).len() > 20, "{lang}");
+            assert!(foreign_currency(lang, "32,10 $").contains("32,10 $"), "{lang}");
+        }
+        assert_eq!(suspended("fr"), "Paiement arrêté : tu as suspendu les paiements. Rien n'a été payé.");
     }
 }

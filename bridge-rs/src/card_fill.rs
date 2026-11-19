@@ -1232,11 +1232,12 @@ impl Page {
         self.cdp.call("Runtime.callFunctionOn", empty, Some(session)).await.is_ok()
     }
 
-    /// The visible text of the page's main frame and of each frame a card may be typed into (`rule`: the page's own
-    /// site and the known payment providers, every frame above it one of these too), read in the bridge's own world
-    /// (`pageText`: text nodes only, never a field's value): where card_pay.rs reads the payment's total
-    /// (page_total.rs). A frame that can't be read is left out; an empty list when none can.
-    pub async fn page_texts(&mut self, rule: &Frames) -> Result<Vec<String>, FillError> {
+    /// The text of the page's main frame and of each frame a card may be typed into (`rule`: the page's own site and
+    /// the known payment providers, every frame above it one of these too), read in the bridge's own world (`pageText`:
+    /// text nodes only, never a field's value nor a card-like digit run; what is really visible, and everything laid
+    /// out): where card_pay.rs reads the payment's total (page_total.rs). Each frame says whether it is the payment
+    /// provider's own (its frame, or its hosted page), never the shop's. A frame that can't be read is left out.
+    pub async fn page_texts(&mut self, rule: &Frames) -> Result<Vec<crate::page_total::PageText>, FillError> {
         let main = self.main_frame().await?;
         let seen = self.frames().await?;
         let mut texts = Vec::new();
@@ -1252,10 +1253,17 @@ impl Page {
             let Ok(created) = self.cdp.call("Page.createIsolatedWorld", world, Some(&session)).await else { continue };
             let Some(context) = created.get("executionContextId").and_then(Value::as_i64) else { continue };
             let expression = format!("{SCRIPT}\n;globalThis.__bipPay.pageText()");
-            if let Ok(Value::String(text)) = self.cdp.evaluate(&session, context, &expression).await {
-                done.push(id);
-                texts.push(text);
-            }
+            let Ok(read) = self.cdp.evaluate(&session, context, &expression).await else { continue };
+            let (Some(shown), Some(all)) = (read.get("shown").and_then(Value::as_str), read.get("all").and_then(Value::as_str))
+            else {
+                continue;
+            };
+            let host = origin_of(&url).map(|(_, h)| h).unwrap_or_default();
+            let provider = provider_frame(&host).is_some()
+                || provider_page(&host).is_some()
+                || rule.test.iter().any(|t| at_or_below(&host, t));
+            done.push(id);
+            texts.push(crate::page_total::PageText { shown: shown.to_string(), all: all.to_string(), provider });
         }
         Ok(texts)
     }

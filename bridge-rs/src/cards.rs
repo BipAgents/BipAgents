@@ -872,6 +872,22 @@ pub fn button_amount(text: &str, currency: &str) -> Option<i64> {
     }
 }
 
+/// An amount in another currency than `currency` on a pay button (a conversion the page offers, DCC: « Payer 32,10 USD »
+/// for a payment in EUR): (cents, the code it is read in). Never pressed (Relecture 1, 19/11, 11).
+pub fn foreign_amount(text: &str, currency: &str) -> Option<(i64, &'static str)> {
+    static NUMBER: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(r"\d(?:[\d.,'\x{2019}\x{02bc}\x{a0}\x{202f} ]*\d)?").expect("number pattern")
+    });
+    let text = text.to_lowercase();
+    NUMBER.find_iter(&text).find_map(|number| {
+        let codes = mark_near(&text[..number.start()], &text[number.end()..])?;
+        if codes.contains(&currency) {
+            return None;
+        }
+        Some((amount_of(number.as_str())?, codes[0]))
+    })
+}
+
 /// The card's numbers the phone sent with an approval (a card kept on the phone): checked against the card (the
 /// device that holds it, its last 4 digits), with the security code typed in the approval. Err: (status, what the
 /// app reads). Nothing of `body` is logged.

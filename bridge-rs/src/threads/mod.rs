@@ -1491,12 +1491,6 @@ async fn item_route(
     Ok(web::ok(found.to_json(&thread, q.get("debug").is_some_and(|d| d == "1"))))
 }
 
-/// A connector's calls with their connector's name (`tool.service`, connectors::service_in): the apps and the
-/// automatic « Étapes » say it instead of the tool's own name. A call through the tool search by the call it wraps.
-/// Under each turn that read or wrote in the Carnet, after its last item, one `carnet_line` item: « A consulté 2 pages
-/// · Noté dans Léa » (notebook/reads.rs `lines`, contract.md §4), then its `carnet_card` items (an « Oublie ça »
-/// to confirm, the question of the day: notebook/forget.rs `cards`); a follow-up's card at the head of its turn
-/// (notebook/followups.rs). Only for a timeline with a Carnet tool call or a Carnet card in it.
 /// The bridge's own lines on a card payment it gave up (pay_line.rs: « Paiement annulé : la page demandait … »), as
 /// notices in their turns. Read only when a turn called a payment tool.
 fn with_pay_lines(config: &crate::config::Config, agent: &AgentConfig, items: &mut Vec<Item>) {
@@ -1512,6 +1506,12 @@ fn with_pay_lines(config: &crate::config::Config, agent: &AgentConfig, items: &m
     crate::pay_line::with_pay_lines(items, &crate::pay_line::recorded_for(config, &agent.name));
 }
 
+/// A connector's calls with their connector's name (`tool.service`, connectors::service_in): the apps and the
+/// automatic « Étapes » say it instead of the tool's own name. A call through the tool search by the call it wraps.
+/// Under each turn that read or wrote in the Carnet, after its last item, one `carnet_line` item: « A consulté 2 pages
+/// · Noté dans Léa » (notebook/reads.rs `lines`, contract.md §4), then its `carnet_card` items (an « Oublie ça »
+/// to confirm, the question of the day: notebook/forget.rs `cards`); a follow-up's card at the head of its turn
+/// (notebook/followups.rs). Only for a timeline with a Carnet tool call or a Carnet card in it.
 fn with_carnet_lines(config: &crate::config::Config, agent: &AgentConfig, items: &mut Vec<Item>) {
     let carnet = |i: &Item| {
         i.kind() == "tool"

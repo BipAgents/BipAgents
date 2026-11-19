@@ -67,6 +67,8 @@ def test_another_total_on_the_page_is_cancelled_by_the_bridge_and_the_person_tol
         assert result["isError"] is True, result
         assert "its total is 27.97 EUR, but the person approved 24.50 EUR" in said, said
         assert "BipAgents cancelled the payment itself" in said and "nothing was paid" in said, said
+        # read before the card was typed: nothing of it ever reached the page
+        assert "call pay_with_card again" in said, said
         assert "never say the bank" in said, said
         # the person's line, from the bridge, with both numbers (the agent's language here is English)
         line = "Payment cancelled: the page asked for €27.97, you had approved €24.50. Nothing was paid."
@@ -118,15 +120,18 @@ def test_the_total_beside_the_providers_frame_is_read(bridges, fakes):
         provider.shutdown()
 
 
-def test_cancel_payment_tells_the_person_itself_with_the_agents_reason(bridges, fakes):
+def test_cancel_payment_tells_the_person_itself_never_in_the_agents_words(bridges, fakes):
     shop, browser, bridge = start(bridges, fakes, "cawl.html")
     try:
         result, _ = pay(bridge, CAWL)
         assert result["isError"] is False, result
-        answer = c.tool(bridge, "cancel_payment", {"reason": "the person changed their mind"})["content"][0]["text"]
-        line = "Payment cancelled at Vie's request (“the person changed their mind”). Nothing was paid."
+        answer = c.tool(bridge, "cancel_payment", {"reason": "la banque refuse"})["content"][0]["text"]
+        # the bridge's own words only: the agent's reason is never in the person's line (Relecture 1, 9)
+        line = "Payment cancelled at Vie's request. Nothing was paid."
         assert [l["text"] for l in lines(bridge)] == [line], lines(bridge)
-        assert answer.startswith("The payment is given up") and f"« {line} »" in answer, answer
+        assert "banque" not in json.dumps(lines(bridge)), lines(bridge)
+        # no conversation followed here (no turn of the hub): the agent is told to say the sentence itself
+        assert answer.startswith("The payment is given up") and f"start your next message to the person with exactly this sentence: « {line} »" in answer, answer
         assert "never say the bank, the card or the site refused" in answer, answer
         assert spent(bridge).get("EUR", 0) == 0 and "4242" not in json.dumps(browser.values())
         # nothing in progress: nothing said
@@ -174,6 +179,36 @@ def test_an_amount_split_in_several_elements_is_read_whole(bridges, fakes, tmp_p
         result, _ = pay(bridge, {**CAWL, "amount": "24.50"})
         said = result["content"][0]["text"]
         assert result["isError"] is True and "its total is 27.97 EUR, but the person approved 24.50 EUR" in said, said
+    finally:
+        browser.stop()
+        shop.shutdown()
+
+
+def test_a_pay_button_in_another_currency_is_never_pressed(bridges, fakes, tmp_path):
+    # the page offers to pay in dollars (DCC): « Payer 32,10 USD » for a payment approved in euros
+    import functools
+    import http.server
+    import threading
+    html = SPLIT.replace("<button type=\"submit\">Payer</button>", "<button type=\"submit\">Payer 32,10 USD</button>")
+    (tmp_path / "pay.html").write_text(html, encoding="utf-8")
+    (tmp_path / "done.html").write_text("<!doctype html><title>Merci</title><p>Commande payée", encoding="utf-8")
+    handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=str(tmp_path))
+    handler.log_message = lambda *a: None
+    shop = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    threading.Thread(target=shop.serve_forever, daemon=True).start()
+    browser = Browser(f"http://127.0.0.1:{shop.server_port}/pay.html")
+    try:
+        bridge = pay_bridge(bridges, fakes, browser)
+        turn_on(bridge)
+        bridge.post("/v1/vault", headers=AUTH, json={**CARD, "sites": ["127.0.0.1"]})
+        result, _ = pay(bridge, CAWL)
+        said = result["content"][0]["text"]
+        # an amount in another currency on the page: never « approved »
+        assert result["isError"] is False and "could not read the total" in said, said
+        confirmed = c.tool(bridge, "confirm_payment", {"button": "Payer"})["content"][0]["text"]
+        assert "not the payment's currency" in confirmed and "done.html" not in "".join(browser.pages()), confirmed
+        line = "Payment stopped: the page asked for another currency ($32.10). Nothing was paid."
+        assert [l["text"] for l in lines(bridge)] == [line], lines(bridge)
     finally:
         browser.stop()
         shop.shutdown()

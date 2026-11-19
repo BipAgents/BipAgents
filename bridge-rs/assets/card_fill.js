@@ -239,10 +239,14 @@
       this.button.click();
       return true;
     },
-    // The frame's visible text, for the bridge to read the payment's total in it (card_pay.rs, page_total.rs): text
-    // nodes only, never a field's value (no input, select, option or textarea is read), nothing hidden; one line per
-    // block, the pieces of one line joined by a space (« 27,97 » and « € » in two spans, a split « 27,<sup>97</sup> »
-    // glued back). 60 000 characters at most.
+    // The frame's text, for the bridge to read the payment's total in it (card_pay.rs, page_total.rs): text nodes only,
+    // never a field's value (no input, select, option or textarea is read), nothing that is not laid out (display:
+    // none); one line per block, the pieces of one line joined by a space (« 27,97 » and « € » in two spans, a split
+    // « 27,<sup>97</sup> » or « 27€<sup>97</sup> » glued back). Twice (Relecture 1, 19/11): `shown`, only what is really
+    // visible (in the page's box, not clipped nor hidden by an ancestor, not transparent, not tiny, not aria-hidden),
+    // and `all`, everything laid out (off-screen text included): visible text alone may say the total is the approved
+    // one, any laid-out amount above it is a doubt. A digit run of 12 or more (a card number the page shows back) is
+    // never returned. 60 000 characters each at most.
     pageText() {
       const SKIP = "script, style, noscript, template, input, select, option, textarea, datalist";
       const blockOf = (el) => {
@@ -252,32 +256,67 @@
         }
         return document.body;
       };
-      const lines = [];
-      let size = 0, block = null;
+      const W = Math.max(document.documentElement.scrollWidth, innerWidth);
+      const H = Math.max(document.documentElement.scrollHeight, innerHeight);
+      const visible = (node, at, rects) => {
+        if (at.checkVisibility && !at.checkVisibility({opacityProperty: true, visibilityProperty: true})) return false;
+        if (at.closest("[aria-hidden=true]")) return false;
+        const box = rects.find((r) => r.width >= 1 && r.height >= 1);
+        if (!box) return false;
+        const x = box.left + scrollX, y = box.top + scrollY;
+        if (x + box.width <= 0 || y + box.height <= 0 || x >= W || y >= H) return false;
+        const own = getComputedStyle(at);
+        if (parseFloat(own.fontSize) < 6) return false;
+        const rgba = (own.color.match(/[\d.]+/g) || []).map(Number);
+        if (rgba.length === 4 && rgba[3] < 0.2) return false;
+        for (let up = at; up && up !== document.documentElement; up = up.parentElement) {
+          const st = getComputedStyle(up);
+          if ((st.clipPath && st.clipPath !== "none") || (st.clip && st.clip !== "auto")) return false;
+          if (up !== at && up !== document.body && /hidden|clip|scroll|auto/.test(st.overflowX + " " + st.overflowY)) {
+            const b = up.getBoundingClientRect();
+            if (b.width < 1 || b.height < 1) return false;
+            if (box.right <= b.left || box.left >= b.right || box.bottom <= b.top || box.top >= b.bottom) return false;
+          }
+        }
+        return true;
+      };
+      const builder = () => ({lines: [], block: null, size: 0});
+      const add = (into, here, at, text) => {
+        const last = into.lines.length ? into.lines[into.lines.length - 1] : null;
+        if (last !== null && here === into.block) {
+          const sup = at.closest("sup");
+          const glue = (/\d$/.test(last) && (/^[.,]\d*$/.test(text) || (sup && /^\d{2}\b/.test(text))))
+            || (/\d[.,]$/.test(last) && /^\d/.test(text)) || (/\d€$/.test(last) && sup && /^\d{2}$/.test(text));
+          const comma = sup && /\d$/.test(last) && /^\d/.test(text);
+          into.lines[into.lines.length - 1] = last + (glue ? (comma ? "," : "") : " ") + text;
+        } else {
+          into.lines.push(text);
+        }
+        into.block = here;
+        into.size += text.length + 1;
+      };
+      const all = builder(), shown = builder();
       const walk = (root) => {
         const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT);
-        for (let node = walker.nextNode(); node && size < 60000; node = walker.nextNode()) {
+        for (let node = walker.nextNode(); node && all.size < 60000; node = walker.nextNode()) {
           if (node.nodeType === 1) {
             if (node.shadowRoot) walk(node.shadowRoot);
             continue;
           }
           const at = node.parentElement, text = (node.nodeValue || "").replace(/\s+/g, " ").trim();
           if (!text || !at || at.closest(SKIP)) continue;
-          if (at.checkVisibility && !at.checkVisibility({opacityProperty: true, visibilityProperty: true})) continue;
-          const here = blockOf(at), last = lines.length ? lines[lines.length - 1] : null;
-          if (last !== null && here === block) {
-            const glue = (/\d$/.test(last) && (/^[.,]\d*$/.test(text) || (at.closest("sup") && /^\d{2}\b/.test(text))))
-              || (/\d[.,]$/.test(last) && /^\d/.test(text));
-            lines[lines.length - 1] = last + (glue ? (at.closest("sup") && !/[.,]$/.test(last) && /^\d/.test(text) ? "," : "") : " ") + text;
-          } else {
-            lines.push(text);
-          }
-          block = here;
-          size += text.length + 1;
+          const range = document.createRange();
+          range.selectNodeContents(node);
+          const rects = [...range.getClientRects()];
+          if (!rects.length) continue; // not laid out (display: none)
+          const here = blockOf(at);
+          add(all, here, at, text);
+          if (shown.size < 60000 && visible(node, at, rects)) add(shown, here, at, text);
         }
       };
       if (document.body) walk(document.body);
-      return lines.join("\n").slice(0, 60000);
+      const out = (b) => b.lines.join("\n").replace(/\d(?:[ -]?\d){11,18}/g, " ").slice(0, 60000);
+      return {shown: out(shown), all: out(all)};
     },
     // The bank asks the person (3-D Secure, « confirm in your banking app »).
     bankAsks() {
