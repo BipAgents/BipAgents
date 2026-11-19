@@ -1365,6 +1365,21 @@ fn conversation_page(
 ) -> (timeline::Page, Option<String>) {
     // how each turn that is over lays out (its work, its reply, the app's first word, exchanges), decided once for every
     // app on the whole thread (thin apps, brick 7); `layout.open`: the first item of the turn going on, undecided
+    // a lost message's line said at once goes with it, out of every page (its `s_` item reads « Pas envoyé »)
+    let kept_days: Vec<Option<(chrono::NaiveDate, bool)>>;
+    let days = match running {
+        true => days,
+        false => {
+            let gone = timeline::lost_lines(&items);
+            if gone.is_empty() {
+                days
+            } else {
+                kept_days = items.iter().zip(days).filter(|(i, _)| !gone.contains(&i.id)).map(|(_, d)| *d).collect();
+                items.retain(|i| !gone.contains(&i.id));
+                &kept_days
+            }
+        }
+    };
     let shown = timeline::range(&items, want);
     let decided = layout::layout(&items, shown.clone(), running);
     let open = open_on_page(&items, decided.open, &shown);

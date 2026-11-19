@@ -727,6 +727,19 @@ pub fn merge(items: Vec<Item>, mut boite: Vec<Item>) -> Vec<Item> {
     out
 }
 
+/// The ids of the lines said at once to lost messages (instant_reply.rs): left out of the thread before any page is
+/// cut from it, the turn never took those words. For a conversation where no turn runs (`Page::with_lost` then marks
+/// the messages « Pas envoyé »).
+pub fn lost_lines(items: &[Item]) -> HashSet<String> {
+    let lost: HashSet<&str> =
+        items.iter().filter(|i| super::send::lost(i)).filter_map(|i| i.body.get("client_id").and_then(Value::as_str)).collect();
+    items
+        .iter()
+        .filter(|i| i.body.get("answers").and_then(Value::as_str).is_some_and(|c| lost.contains(c)))
+        .map(|i| i.id.clone())
+        .collect()
+}
+
 /// How long a stored message names the `s_` item it replaces (`Page::replaced`): its send's two days, and a day more.
 const REPLACED_SECONDS: f64 = 3.0 * 86_400.0;
 
@@ -792,16 +805,10 @@ impl Page {
 
     /// Its `s_` items lost (send.rs `lost`): `not_sent` instead of `sending` (the apps draw « Pas envoyé », a tap sends
     /// it again under the same id). Called when no turn runs in the conversation.
-    /// The line said at once to a lost message (instant_reply.rs) goes with it: the turn never took those words.
     pub fn with_lost(mut self) -> Self {
-        let mut lost = HashSet::new();
         for item in self.items.iter_mut().filter(|i| super::send::lost(i)) {
             item.body.remove("sending");
             item.body.insert("not_sent".into(), json!(true));
-            lost.extend(item.body.get("client_id").and_then(Value::as_str).map(str::to_string));
-        }
-        if !lost.is_empty() {
-            self.items.retain(|i| !i.body.get("answers").and_then(Value::as_str).is_some_and(|c| lost.contains(c)));
         }
         self
     }
