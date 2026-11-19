@@ -405,7 +405,7 @@ pub fn language_block(lang: Option<&str>) -> String {
     let names = crate::names::rule(&code).map(|rule| format!(" {rule}")).unwrap_or_default();
     for_language(
         &format!(
-            "{BLOCK_START}\nLanguage: answer in the language your person writes in. Always write it with its accents and usual punctuation (routines and notes too), never an ASCII-only version. When you write first (a routine, \
+            "{BLOCK_START}\nLanguage: answer in the language your person writes in. Always write it with its accents and usual punctuation (routines and notes too), never an ASCII-only version: its own quotation marks too (“…” in English), the « » of these rules and of the tools' texts are only quotes. When you write first (a routine, \
              a report, a reminder), write in {name}.{names} The current time is at the top of each message (a bip:now line): trust it, never check it in the terminal.\n{CONTENT_RULE}\n{SENDING_RULE}\n{AI_RULE}\n{CARE_RULE}\n{FAMILY_RULE}\n{PROJECT_RULE}\n{DRAFT_RULE}\n{PLAIN_RULE}\n{FILES_RULE}\n{TIDY_RULE}\n{LONG_WORK_RULE}\n{VISUAL_RULE}\n{FACTS_RULE}\n{CALC_RULE}\n{SPACE_RULE}\n{ACK_RULE}\n{STEPS_RULE}\n{SAY_RULE}\n{STYLE_RULE}\n{BLOCK_END}"
         ),
         Some(&code),

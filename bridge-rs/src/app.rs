@@ -1549,6 +1549,10 @@ async fn approve(State(state): State<AppState>, Json(body): Json<ApproveRequest>
     };
     // a question nothing waits for any more (409: Hermes settled it, its turn moved on) goes from every phone too
     if ((200..300).contains(&status) || (status == 409 && request_id.is_some())) && kind == "clarify" {
+        if (200..300).contains(&status) {
+            // its run's `clarify.settled` says it, for a screen that draws the run again (runs.rs `with_answer`)
+            state.hub.question_answered(&agent.name, &run_id, request_id, &value);
+        }
         let asked = state.hub.pending_questions(&agent.name).into_iter().find(waiting);
         state.hub.forget_approval(&agent.name, &run_id, request_id);
         // answered on one device: gone from the others' (the thread's `pending.questions`)
