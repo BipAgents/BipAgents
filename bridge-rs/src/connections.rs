@@ -283,6 +283,10 @@ pub struct Stored {
     /// choice, Kerfy's exchange (with its key) or their own Google project. Same file and key.
     #[serde(default)]
     pub drives_google_android: Option<crate::drives::AndroidGoogle>,
+    /// Google Drive on a place of the offer: the offer's Web client as the guichet gave it to this place
+    /// (`GET /v1/places/drive-client`, drives.rs `PlaceWeb`). Same file and key; never in bridge.toml.
+    #[serde(default)]
+    pub drives_google_place: Option<crate::drives::PlaceWeb>,
 }
 
 /// The encrypted file (Fernet, as mailbox.rs) and its key.

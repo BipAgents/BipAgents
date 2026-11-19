@@ -104,8 +104,10 @@ async fn fake(seen: Seen, method: Method, uri: Uri, headers: HeaderMap, body: St
             (Some("authorization_code"), Some(code), _)
                 if code == "android"
                     && !form.contains_key("code_verifier")
-                    && form.get("client_id").map(String::as_str) == Some("g-web")
-                    && form.get("client_secret").map(String::as_str) == Some("web-secret") =>
+                    && matches!(
+                        (form.get("client_id").map(String::as_str), form.get("client_secret").map(String::as_str)),
+                        (Some("g-web"), Some("web-secret")) | (Some("offer-web"), Some("offer-secret"))
+                    ) =>
             {
                 reply(200, json!({"access_token": "at-1", "refresh_token": "rt-1", "expires_in": 3600}))
             }
@@ -114,6 +116,16 @@ async fn fake(seen: Seen, method: Method, uri: Uri, headers: HeaderMap, body: St
             }
             _ => reply(400, json!({"error": "invalid_grant"})),
         };
+    }
+    // the guichet's Web client for a place of the offer (its place token); `/gx-off`: not open there
+    if path == "/gx/v1/places/drive-client" {
+        if auth.as_deref() != Some("Bearer place-tok") {
+            return reply(401, json!({"detail": "unknown token"}));
+        }
+        return reply(200, json!({"web_client_id": "offer-web", "web_client_secret": "offer-secret"}));
+    }
+    if path == "/gx-off/v1/places/drive-client" {
+        return reply(404, json!({"detail": "Not Found"}));
     }
     // Kerfy's exchange (the guichet's /v1/drive-exchange/token): the install's key, the form as JSON
     if path == "/dx/v1/drive-exchange/token" {
@@ -889,6 +901,7 @@ async fn google_on_android_through_kerfy_s_exchange_or_an_own_project() {
     let (_dir, mut config) = setup(&base);
     config.drives.clients.get_mut("google_drive").unwrap().web_client_id = None;
     config.drives.clients.get_mut("google_drive").unwrap().web_client_secret = None;
+    TEST_OFFER.with(|o| *o.borrow_mut() = Some(None)); // a self-hosted install
     let google = |c: &Config| listing(c).unwrap()["drives"][0].clone();
     assert_eq!(google(&config)["android"], "choose");
     let e = start(&config, "google_drive", &["vie".into()], Pick::Folders, "android").unwrap_err();
@@ -977,4 +990,111 @@ async fn review3_google_search_finds_words_inside_a_picked_file() {
     connect(&config, "google_drive", &["vie"], "&picked_file_ids=gf").await;
     let found = text(&call(&config, &vie, "drive_search", &args(json!({"words": "kwh"}))).await);
     assert!(found.contains("google_drive:gp"), "the picked file's text, beside the folder's hits: {found}");
+}
+
+// -- review 19/11, pass 4 (the fixes of pass 3) ------------------------------------------------------------------------
+
+fn android_body(mode: &str, client_id: &str, key: &str, guichet: &str) -> AndroidBody {
+    AndroidBody {
+        mode: mode.into(),
+        client_id: client_id.into(),
+        client_secret: if mode == "own" { "my-secret".into() } else { String::new() },
+        key: key.into(),
+        guichet: guichet.into(),
+    }
+}
+
+/// P3-3: a place of the offer never asks its subscriber how Google signs in on Android (Kerfy's exchange or their own
+/// project); its own Web client comes from the guichet with the place token, kept encrypted, never in bridge.toml.
+#[tokio::test]
+async fn review3_a_place_of_the_offer_gets_its_web_client_from_the_guichet_and_never_asks() {
+    let (base, seen) = serve().await;
+    let (_dir, mut config) = setup(&base);
+    let g = config.drives.clients.get_mut("google_drive").unwrap();
+    g.web_client_id = None;
+    g.web_client_secret = None;
+    let google = |c: &Config| listing(c).unwrap()["drives"][0].clone();
+    let offer =
+        |path: &str| TEST_OFFER.with(|o| *o.borrow_mut() = Some(Some((format!("{base}{path}"), "place-tok".into()))));
+    // the guichet has none to give (404): « not configured », never « choose »
+    offer("/gx-off");
+    assert!(!ask_place_web(&config, true).await);
+    assert_eq!(google(&config)["android"], "not_configured");
+    let e = start(&config, "google_drive", &["vie".into()], Pick::Folders, "android").unwrap_err();
+    assert_eq!(e.detail["code"], "not_configured");
+    for body in [
+        android_body("kerfy", "kerfy-web.apps.googleusercontent.com", "dx1.test-key", &format!("{base}/dx")),
+        android_body("own", "mine.apps.googleusercontent.com", "", ""),
+    ] {
+        assert_eq!(set_android(&config, &body).await.unwrap_err().detail["code"], "offer");
+    }
+    assert!(read_stored(&config).unwrap().drives_google_android.is_none());
+    // the guichet gives it: kept, then Android's code exchanged with it (the fake checks the secret)
+    offer("/gx");
+    assert!(ask_place_web(&config, true).await);
+    assert!(seen
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|(_, p, a)| p == "/gx/v1/places/drive-client" && a.as_deref() == Some("Bearer place-tok")));
+    assert_eq!(google(&config)["android"], "place");
+    let started = start(&config, "google_drive", &["vie".into()], Pick::Folders, "android").unwrap();
+    assert_eq!(started["server_client_id"], "offer-web");
+    let query: HashMap<String, String> =
+        [("state", started["state"].as_str().unwrap()), ("code", "android"), ("picked_file_ids", "gf")]
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+    assert_eq!(finish_query(&config, query).await.unwrap()["state"], "connected");
+    assert!(!seen.lock().unwrap().iter().any(|(_, p, _)| p.contains("drive-exchange")), "never Kerfy's exchange");
+    let listed = listing(&config).unwrap().to_string();
+    assert!(!listed.contains("offer-secret"), "{listed}");
+    // asked again within 10 minutes only when forced; the guichet closing it (404) forgets it
+    offer("/gx-off");
+    assert!(ask_place_web(&config, false).await, "asked a moment ago: kept as it is");
+    assert!(!ask_place_web(&config, true).await);
+    assert_eq!(google(&config)["android"], "not_configured");
+    TEST_OFFER.with(|o| *o.borrow_mut() = None);
+}
+
+/// P3-7: Kerfy's exchange no longer takes the install's key (too old, or ended: 401): the person is asked again (a new
+/// consent, a new check of the phone), at the sign-in as at a renewal.
+#[tokio::test]
+async fn review3_a_key_the_exchange_no_longer_takes_asks_the_choice_again() {
+    let (base, _seen) = serve().await;
+    let (_dir, mut config) = setup(&base);
+    let g = config.drives.clients.get_mut("google_drive").unwrap();
+    g.web_client_id = None;
+    g.web_client_secret = None;
+    TEST_OFFER.with(|o| *o.borrow_mut() = Some(None));
+    let google = |c: &Config| listing(c).unwrap()["drives"][0].clone();
+    let kerfy = |key: &str| android_body("kerfy", "kerfy-web.apps.googleusercontent.com", key, &format!("{base}/dx"));
+    let sign_in = |config: Config| async move {
+        let started = start(&config, "google_drive", &["vie".into()], Pick::Folders, "android").unwrap();
+        let query: HashMap<String, String> =
+            [("state", started["state"].as_str().unwrap()), ("code", "android"), ("picked_file_ids", "gf")]
+                .into_iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect();
+        finish_query(&config, query).await
+    };
+    // at the sign-in
+    set_android(&config, &kerfy("dx1.old-key")).await.unwrap();
+    let e = sign_in(config.clone()).await.unwrap_err();
+    assert_eq!(e.detail["code"], "android_choice");
+    assert_eq!(google(&config)["android"], "choose");
+    // at a renewal
+    set_android(&config, &kerfy("dx1.test-key")).await.unwrap();
+    assert_eq!(sign_in(config.clone()).await.unwrap()["state"], "connected");
+    let store = connections::store_of(&config);
+    let mut stored = store.read().unwrap();
+    stored.drives.get_mut("google_drive").unwrap().tokens.expires_at = Some(py::time_time() + 10.0);
+    stored.drives_google_android.as_mut().unwrap().key = Some("dx1.old-key".into());
+    store.write(&stored).unwrap();
+    let vie = config.agents["vie"].clone();
+    let read = call(&config, &vie, "drive_read", &args(json!({"file": "google_drive:gd"}))).await;
+    assert_eq!(read["isError"], true);
+    assert_eq!(google(&config)["state"], "expired");
+    assert_eq!(google(&config)["android"], "choose");
+    TEST_OFFER.with(|o| *o.borrow_mut() = None);
 }

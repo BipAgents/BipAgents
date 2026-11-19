@@ -30,14 +30,20 @@
 //!     [drives.google_drive]
 //!     client_id = "…apps.googleusercontent.com"          # the iOS client
 //!     redirect_uri = "com.googleusercontent.apps.…:/oauth2redirect"
-//!     web_client_id = "…apps.googleusercontent.com"      # Android: the Web client and its secret
-//!     web_client_secret = "…"
+//!     web_client_id = "…apps.googleusercontent.com"      # Android: the Web client and its secret (an install's
+//!     web_client_secret = "…"                            # own Google project)
 //!     [drives.onedrive]
 //!     client_id = "…"
 //!     redirect_uri = "bipagents://oauth/callback"
 //!
 //! (`client_secret` where the client type has one; `auth_url`, `token_url`, `api_url`, `content_url`, `revoke_url`
 //! override the services' addresses: tests.)
+//!
+//! Google on Android needs a Web client and its secret. A place of the offer asks the guichet for Kerfy's (its place
+//! token, `GET /v1/places/drive-client`; at the start, then when the app lists or starts Google while none is kept)
+//! and keeps it in the encrypted store, never in bridge.toml; its subscriber is never asked how to sign in (review
+//! pass 3). Any other install without one asks the person once: Kerfy's exchange (another Web client of Kerfy's,
+//! guichet `drive_exchange.rs`) or their own Google project (`AndroidGoogle`).
 //!
 //! App routes (the bridge key; 404 while off). Errors: `{"detail": {"code", "message"}}`, codes off, not_configured,
 //! not_connected, expired, unreachable, rate_limited, not_found, refused, not_folder, not_picked, agent, denied,
@@ -290,15 +296,15 @@ pub fn endpoints(config: &Config, provider: Provider) -> Option<Endpoints> {
 }
 
 /// `client` "": the phone's own; "web": Google's Web client (Android's sign-in hands over a code for it).
-/// For "web": the place's own Web client (Kerfy's places get it from the guichet), else what the person chose on an
-/// install without it (`AndroidGoogle`: Kerfy's exchange, or their own Google project).
+/// For "web": the place's own Web client (bridge.toml's, or the offer's from the guichet), else what the person chose
+/// on an install without it (`AndroidGoogle`: Kerfy's exchange, or their own Google project).
 fn endpoints_for(config: &Config, provider: Provider, client: &str) -> Option<Endpoints> {
     let c = config.drives.clients.get(provider.id())?;
     let mut exchange_key = None;
     let mut token = c.token_url.clone().unwrap_or_else(|| provider.token_url().into());
     let (client_id, client_secret, redirect_uri) = match client {
-        "web" => match (&c.web_client_id, android_google(config)) {
-            (Some(id), _) => (id.clone(), c.web_client_secret.clone(), String::new()),
+        "web" => match (place_web(config), android_google(config)) {
+            (Some((id, secret)), _) => (id, secret, String::new()),
             (None, Some(chosen)) if chosen.mode == "own" => (chosen.client_id, chosen.client_secret, String::new()),
             (None, Some(chosen)) if chosen.mode == "kerfy" => {
                 exchange_key = chosen.key.clone();
@@ -359,9 +365,9 @@ impl Endpoints {
             Value::Object(map) if (200..300).contains(&status) && map.contains_key("access_token") => Ok(map),
             other => {
                 let why = other.get("detail").and_then(Value::as_str).unwrap_or("refused").to_string();
-                // the guichet's 401 (an unknown key) and 400 (Google refused): the connection ended; its 429 and 5xx
-                // say nothing of the connection
-                Err((if status == 401 { 400 } else { status }, why))
+                // the guichet's 401 (a key it doesn't take any more: too old, or ended) and 400 (Google refused):
+                // the connection ended; its 429 and 5xx say nothing of the connection
+                Err((status, why))
             }
         }
     }
@@ -387,18 +393,119 @@ fn android_google(config: &Config) -> Option<AndroidGoogle> {
     read_stored(config).ok()?.drives_google_android
 }
 
+/// The offer's Web client, as the guichet gave it to this place of the offer (`GET /v1/places/drive-client`).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct PlaceWeb {
+    pub client_id: String,
+    pub client_secret: String,
+    pub given_at: f64,
+}
+
+/// This place's own Web client and its secret: bridge.toml's, else the offer's kept from the guichet.
+fn place_web(config: &Config) -> Option<(String, Option<String>)> {
+    let c = config.drives.clients.get(Provider::Google.id())?;
+    if let Some(id) = &c.web_client_id {
+        return Some((id.clone(), c.web_client_secret.clone()));
+    }
+    read_stored(config).ok()?.drives_google_place.map(|p| (p.client_id, Some(p.client_secret)))
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Tests: this bridge on a place of the offer (the guichet's address and the place token), or not.
+    pub static TEST_OFFER: std::cell::RefCell<Option<Option<(String, String)>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// The guichet's address and this place's token, on a place of the offer (handover::on_offer's test).
+fn offer_guichet() -> Option<(String, String)> {
+    #[cfg(test)]
+    if let Some(offer) = TEST_OFFER.with(|o| o.borrow().clone()) {
+        return offer;
+    }
+    crate::agent_email::place_token(&crate::place_backup::home())
+}
+
 /// How Google Drive works from Android here: `place` (this place's own Web client), `kerfy` or `own` (the person's
-/// choice), `choose` (nothing yet: the app asks).
+/// choice), `choose` (nothing yet: the app asks), `not_configured` (a place of the offer the guichet gave no Web client
+/// yet: its subscriber is never asked to choose, review pass 3).
 pub fn android_way(config: &Config) -> &'static str {
-    let place = config.drives.clients.get(Provider::Google.id()).is_some_and(|c| c.web_client_id.is_some());
-    if place {
+    if place_web(config).is_some() {
         return "place";
+    }
+    if offer_guichet().is_some() {
+        return "not_configured";
     }
     match android_google(config).map(|a| a.mode) {
         Some(m) if m == "kerfy" => "kerfy",
         Some(m) if m == "own" => "own",
         _ => "choose",
     }
+}
+
+/// When the offer's Web client was last asked of the guichet, by data folder: at most every 10 minutes unless forced.
+static ASKED: LazyLock<std::sync::Mutex<HashMap<std::path::PathBuf, std::time::Instant>>> =
+    LazyLock::new(Default::default);
+const ASK_AGAIN: Duration = Duration::from_secs(600);
+
+/// On a place of the offer, its Web client asked of the guichet (with the place's token) and kept; the guichet's 404
+/// (not open: secrets/drive-places.json missing) forgets a kept one. Not on a place of the offer, nor when bridge.toml
+/// has one. `force`: even if asked within 10 minutes (the bridge's start; a Google sign-in from Android). Returns
+/// whether a Web client is there now.
+pub async fn ask_place_web(config: &Config, force: bool) -> bool {
+    let own = config.drives.clients.get(Provider::Google.id()).is_some_and(|c| c.web_client_id.is_some());
+    if !config.drives.enabled || own || !config.drives.clients.contains_key(Provider::Google.id()) {
+        return place_web(config).is_some();
+    }
+    let Some((base, token)) = offer_guichet() else { return false };
+    {
+        let mut asked = ASKED.lock().unwrap_or_else(|e| e.into_inner());
+        let folder = std::path::PathBuf::from(config.data_dir());
+        if !force && asked.get(&folder).is_some_and(|at| at.elapsed() < ASK_AGAIN) {
+            return place_web(config).is_some();
+        }
+        asked.insert(folder, std::time::Instant::now());
+    }
+    let answer = http().get(format!("{base}/v1/places/drive-client")).bearer_auth(token).send().await;
+    let given: Option<Option<PlaceWeb>> = match answer {
+        Ok(resp) if resp.status().as_u16() == 200 => {
+            let data: Value = resp.json().await.unwrap_or(Value::Null);
+            let text = |k: &str| data.get(k).and_then(Value::as_str).map(str::trim).filter(|v| !v.is_empty());
+            match (text("web_client_id"), text("web_client_secret")) {
+                (Some(id), Some(secret)) => Some(Some(PlaceWeb {
+                    client_id: id.into(),
+                    client_secret: secret.into(),
+                    given_at: py::time_time(),
+                })),
+                _ => None,
+            }
+        }
+        Ok(resp) if resp.status().as_u16() == 404 => Some(None),
+        Ok(resp) => {
+            tracing::info!(status = resp.status().as_u16(), "drives: the guichet gave no Google Web client");
+            None
+        }
+        Err(_) => None,
+    };
+    if let Some(given) = given {
+        let _guard = connections::LOCK.lock().await;
+        let store = connections::store_of(config);
+        if let Ok(mut stored) = store.read() {
+            if stored.drives_google_place != given {
+                let kept = given.is_some();
+                stored.drives_google_place = given;
+                match store.write(&stored) {
+                    Ok(()) => tracing::info!(kept, "drives: the offer's Google Web client from the guichet"),
+                    Err(e) => tracing::warn!(error = %e, "drives: the offer's Google Web client can't be kept"),
+                }
+            }
+        }
+    }
+    place_web(config).is_some()
+}
+
+/// [`ask_place_web`] at the bridge's start.
+pub async fn ask_place_web_at_start(state: AppState) {
+    ask_place_web(&state.config(), true).await;
 }
 
 // -- what goes wrong, in plain words -----------------------------------------------------------------------------------
@@ -669,9 +776,14 @@ pub fn start(config: &Config, id: &str, agents: &[String], pick: Pick, client: &
     let state = py::token_hex(16);
     let started = std::time::Instant::now();
     if provider == Provider::Google && client == "android" {
-        // no Web client here and nothing chosen yet: the app asks the person (Kerfy's exchange or their own project)
+        // no Web client here and nothing chosen yet: the app asks the person (Kerfy's exchange or their own project);
+        // never on a place of the offer (its Web client comes from the guichet, review pass 3)
         let web = endpoints_for(config, provider, "web").ok_or_else(|| {
-            coded(409, "android_choice", "Google Drive on Android: Kerfy's exchange or your own Google project")
+            if offer_guichet().is_some() {
+                not_configured()
+            } else {
+                coded(409, "android_choice", "Google Drive on Android: Kerfy's exchange or your own Google project")
+            }
         })?;
         keep_flow(&state, Flow { provider, verifier: String::new(), agents, client: "web".into(), started });
         let token_params: serde_json::Map<String, Value> =
@@ -724,10 +836,22 @@ pub async fn finish_query(config: &Config, query: HashMap<String, String>) -> Ap
     } else {
         form.push(("redirect_uri", String::new())); // an Android server code: Google wants an empty redirect
     }
-    let answer = ep.token_call(&http, form).await.map_err(|(status, why)| {
-        tracing::warn!(service = flow.provider.id(), status, why = %why, "drives: code exchange refused");
-        coded(502, "exchange_failed", &format!("{} refused the sign-in ({status} {why})", flow.provider.label()))
-    })?;
+    let answer = match ep.token_call(&http, form).await {
+        Ok(answer) => answer,
+        Err((401, _)) if ep.exchange_key.is_some() => {
+            // Kerfy's exchange doesn't take this install's key any more (too old, or ended): asked again
+            forget_ended_key(config).await;
+            return Err(coded(409, "android_choice", "Kerfy's exchange: agree again"));
+        }
+        Err((status, why)) => {
+            tracing::warn!(service = flow.provider.id(), status, why = %why, "drives: code exchange refused");
+            return Err(coded(
+                502,
+                "exchange_failed",
+                &format!("{} refused the sign-in ({status} {why})", flow.provider.label()),
+            ));
+        }
+    };
     let tokens = connections::tokens_of(&answer, None);
     // nothing kept yet: no renewal for this one
     let api = Api::new(ep.clone(), tokens.access_token.clone(), None);
@@ -846,6 +970,11 @@ async fn renew(config: &Config, provider: Provider, refused: Option<&str>) -> Re
         Err((0, _)) => Err(Fault::Unreachable),
         Err((status, why)) if (400..500).contains(&status) => {
             link.state = "expired".into();
+            if status == 401 && ep.exchange_key.is_some() {
+                // Kerfy's exchange doesn't take this install's key any more (too old, or ended): the app asks the
+                // person again (a new consent, a new check of the phone), then « Reconnecter »
+                stored.drives_google_android = None;
+            }
             let _ = store.write(&stored);
             tracing::warn!(service = provider.id(), status, why = %why, "drives: renewal refused");
             Err(Fault::Expired)
@@ -1586,7 +1715,8 @@ des fichiers).",
 async fn targets_of(api: &Api, folders: &[Folder], wanted: Option<&str>) -> Option<Vec<Folder>> {
     let Some(id) = wanted else { return Some(folders.iter().filter(|f| !f.file).cloned().collect()) };
     if let Some(f) = folders.iter().find(|f| f.id == id) {
-        return Some(if f.file { Vec::new() } else { vec![f.clone()] });
+        // a file picked on its own: its own words only (Google's files, review pass 3)
+        return Some(vec![f.clone()]);
     }
     let item = api.item(id).await.ok()?;
     if !item.folder || !inside(api, &item, folders).await {
@@ -1632,9 +1762,19 @@ async fn search(config: &Config, mine: &[(Provider, Folder)], words: &str, folde
                 lines.push(format!("- [file] {} — {}", defused(&f.name), reference(provider, &f.id)));
             }
         }
-        // Google: one query over everything visible (every level at once), not one per folder (review pass 2)
-        let asked: Vec<&Folder> =
-            if provider == Provider::Google { targets.iter().take(1).collect() } else { targets.iter().collect() };
+        // Google: one query over everything visible (every level at once), not one per folder (review pass 2). With
+        // drive.file, Google only answers what the app may see (what was picked and what it holds); the hits are then
+        // kept inside the agent's folders and files. The files picked on their own are searched too (their words,
+        // not only their names: review pass 3), never anything else.
+        let mut scope = targets.clone();
+        if wanted.is_none() {
+            scope.extend(folders.iter().filter(|f| f.file).cloned());
+        }
+        let asked: Vec<&Folder> = if provider == Provider::Google {
+            scope.iter().take(1).collect()
+        } else {
+            targets.iter().filter(|f| !f.file).collect()
+        };
         for target in asked {
             match api.search(target, words).await {
                 Ok(hits) => {
@@ -1646,7 +1786,7 @@ async fn search(config: &Config, mine: &[(Provider, Folder)], words: &str, folde
                         // the access barrier (the agent's folders), then what was asked (`folder`, or all of them)
                         if !lines.iter().any(|l| l.ends_with(&reference))
                             && inside(&api, &hit, &folders).await
-                            && inside(&api, &hit, &targets).await
+                            && inside(&api, &hit, &scope).await
                         {
                             lines.push(line_of(provider, &hit));
                         }
@@ -1874,6 +2014,10 @@ pub async fn set_android(config: &Config, body: &AndroidBody) -> ApiResult<Value
     if !config.drives.enabled {
         return Err(off());
     }
+    if offer_guichet().is_some() {
+        // a subscriber of the offer is never asked how Google signs in: the place's own Web client (review pass 3)
+        return Err(coded(409, "offer", "a place of the offer uses its own Google Web client"));
+    }
     let client_id = body.client_id.trim();
     if !client_id.ends_with(".apps.googleusercontent.com") {
         return Err(coded(422, "client_id", "a Google client id (….apps.googleusercontent.com)"));
@@ -1934,9 +2078,8 @@ pub async fn forget_android(config: &Config) -> ApiResult<Value> {
         store.write(&stored)?;
         stored.drives.get(Provider::Google.id()).is_some_and(|l| l.client == "web")
     };
-    let place = config.drives.clients.get(Provider::Google.id()).is_some_and(|c| c.web_client_id.is_some());
     let mut disconnected = false;
-    if relied && !place {
+    if relied && place_web(config).is_none() {
         disconnected = disconnect(config, Provider::Google.id()).await.is_ok();
     }
     Ok(json!({"ok": true, "android": android_way(config), "disconnected": disconnected}))
@@ -2120,7 +2263,22 @@ async fn listing_route(State(state): State<AppState>) -> ApiResult<Response> {
     if !config.drives.enabled {
         return Err(off());
     }
+    if place_web(&config).is_none() && offer_guichet().is_some() {
+        ask_place_web(&config, false).await;
+    }
     Ok(web::ok(listing(&config)?))
+}
+
+/// Kerfy's exchange refused this install's key (401): the person's choice forgotten, the app asks again.
+async fn forget_ended_key(config: &Config) {
+    let _guard = connections::LOCK.lock().await;
+    let store = connections::store_of(config);
+    let Ok(mut stored) = store.read() else { return };
+    if stored.drives_google_android.as_ref().is_some_and(|a| a.mode == "kerfy") {
+        stored.drives_google_android = None;
+        let _ = store.write(&stored);
+        tracing::info!("drives: Kerfy's exchange ended this install's key, the choice is asked again");
+    }
 }
 
 async fn start_route(
@@ -2128,7 +2286,12 @@ async fn start_route(
     UrlPath(id): UrlPath<String>,
     Json(body): Json<StartBody>,
 ) -> ApiResult<Response> {
-    Ok(web::ok(start(&state.config(), &id, &body.agents, body.pick, &body.client)?))
+    let config = state.config();
+    if id == Provider::Google.id() && body.client == "android" && offer_guichet().is_some() {
+        // the offer's Web client asked again (new, or changed at Kerfy's) before Google's window
+        ask_place_web(&config, true).await;
+    }
+    Ok(web::ok(start(&config, &id, &body.agents, body.pick, &body.client)?))
 }
 
 async fn callback_route(State(state): State<AppState>, Json(body): Json<CallbackBody>) -> ApiResult<Response> {

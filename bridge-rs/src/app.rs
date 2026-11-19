@@ -325,6 +325,7 @@ impl AppState {
         self.spawn(crate::project_agent::run_forever(self.clone())); // projects past their end: archived
         self.spawn(crate::connections::run_forever(self.clone())); // renews the services' access tokens
         self.spawn(crate::drives::end_when_off(self.clone())); // the switch off: drives still connected ended
+        self.spawn(crate::drives::ask_place_web_at_start(self.clone())); // a place of the offer: its Google Web client
         self.spawn(crate::connectors_run::scheduler(self.clone())); // the connectors' mechanical schedules
         self.spawn(crate::watchers::scheduler(self.clone())); // the watchers: checks with no model call
         self.spawn(crate::routines::scheduler(self.clone())); // routines on a clock (Hermes' cron runs none)
