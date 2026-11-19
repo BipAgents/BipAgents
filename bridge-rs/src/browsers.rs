@@ -1247,8 +1247,13 @@ pub fn mcp_server(engine: &str, agent: &str, proxy: Option<&Path>) -> Value {
         Some(p) => vec![proxy_binary(), p.to_string_lossy().into_owned()],
         None => vec![engine.into(), "exec".into(), "-i".into(), container(agent), "/opt/stealth/mcp.sh".into()],
     };
-    json!({"command": command[0], "args": command[1..], "connect_timeout": 90, "timeout": 120,
-           "tools": {"exclude": ["get_instance_state"]}})
+    let mut server = json!({"command": command[0], "args": command[1..], "connect_timeout": 90, "timeout": 120,
+           "tools": {"exclude": ["get_instance_state"]}});
+    if proxy.is_some() {
+        // each call says its Hermes session (patch 0028): a task's « Oui » to « Envoyer sur ce site ? » is its own
+        server["call_context"] = json!(true);
+    }
+    server
 }
 
 /// bip-browser-mcp's settings for the agent.
@@ -1522,6 +1527,10 @@ pub fn with_proxy(data: &mut Yaml, proxy: &str) {
     let Some(command) = server.get("command").and_then(|c| c.as_str()) else { return };
     if command.ends_with(PROXY_BINARY) && command != proxy {
         server.insert("command", Yaml::str(proxy));
+    }
+    // our proxy reads each call's Hermes session (patch 0028): asked of Hermes for the older entries too
+    if server.get("command").and_then(|c| c.as_str()).is_some_and(|c| c.ends_with(PROXY_BINARY)) {
+        server.insert("call_context", Yaml::Bool(true));
     }
 }
 

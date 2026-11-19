@@ -64,7 +64,7 @@ fn file_of(config: &Config, agent: &str) -> PathBuf {
 /// The agent's file written again: the sites validated for sending (`always`), the grants still valid, and `grant`
 /// added when given (the host, and whether it lasts its whole time, `window`, or is used by one sending). Only for an
 /// agent whose browser was set up (its folder there).
-fn write(config: &Config, agent: &str, always: Vec<String>, grant: Option<(&str, bool)>) -> std::io::Result<()> {
+fn write(config: &Config, agent: &str, always: Vec<String>, grant: Option<(&str, bool, Option<&str>)>) -> std::io::Result<()> {
     let path = file_of(config, agent);
     let Some(dir) = path.parent().filter(|d| d.is_dir()) else { return Ok(()) };
     let now = py::time_time();
@@ -76,10 +76,15 @@ fn write(config: &Config, agent: &str, always: Vec<String>, grant: Option<(&str,
         .into_iter()
         .filter(|g| g.get("until").and_then(Value::as_f64).is_some_and(|u| u > now))
         .collect();
-    if let Some((host, window)) = grant {
+    if let Some((host, window, session)) = grant {
         let mut item = json!({"id": py::token_hex(8), "host": host, "until": now + ONCE_SECONDS});
         if window {
             item["window"] = json!(true);
+        }
+        // the conversation (Hermes session) whose « Envoyer sur ce site ? » it answers: that one's sendings only, never
+        // a sibling task's (sub-tasks, 19/11; Hermes patch 0028)
+        if let Some(session) = session {
+            item["session"] = json!(session);
         }
         once.push(item);
     }
@@ -173,12 +178,12 @@ pub fn refresh_all(config: &Config, store: &crate::sandbox_sites::Store) {
 
 /// One sending to `host` granted (a vault fill's form).
 pub fn grant_once(config: &Config, agent: &str, host: &str) -> std::io::Result<()> {
-    write(config, agent, with_shops(config, agent, crate::sandbox_sites::send_hosts(config, agent)), Some((host, false)))
+    write(config, agent, with_shops(config, agent, crate::sandbox_sites::send_hosts(config, agent)), Some((host, false, None)))
 }
 
-/// The person's « Oui »: the sendings to `host` let through for `ONCE_SECONDS`.
-pub fn grant_for_now(config: &Config, agent: &str, host: &str) -> std::io::Result<()> {
-    write(config, agent, with_shops(config, agent, crate::sandbox_sites::send_hosts(config, agent)), Some((host, true)))
+/// The person's « Oui »: the sendings to `host` let through for `ONCE_SECONDS`, from `session` only when known.
+pub fn grant_for_now(config: &Config, agent: &str, host: &str, session: Option<&str>) -> std::io::Result<()> {
+    write(config, agent, with_shops(config, agent, crate::sandbox_sites::send_hosts(config, agent)), Some((host, true, session)))
 }
 
 /// The vault typed a login or a new account's password into the agent's page on `host` (vault_logins.rs): the form
@@ -302,8 +307,10 @@ pub async fn call(state: &AppState, agent: &AgentConfig, arguments: &Dict) -> Di
         always: Some(always_words(&lang).to_string()),
     };
     tracing::info!(agent = %agent.name, site = %host, "a form's sending asked of the person");
+    // the asking conversation, when the call said it (Hermes patch 0028): its « Oui » is that one's
+    let asking = crate::runs::CALL_SESSION.try_with(|s| s.clone()).ok().flatten();
     match person_ok::ask(state, agent, card).await {
-        Answer::Once => match grant_for_now(&config, &agent.name, &host) {
+        Answer::Once => match grant_for_now(&config, &agent.name, &host, asking.as_deref()) {
             Ok(()) => tool_text(
                 &format!("Your person said yes, for now: do the same step again now; your sendings to {host} go \
                           through for the next {} minutes (the rest of this task there), then ask again.",
@@ -363,30 +370,48 @@ mod tests {
         grant_once(&config, "vie", "contact.example").unwrap();
         assert!(!file_of(&config, "vie").exists());
         std::fs::create_dir_all(crate::browsers::folder(&config, "vie")).unwrap();
-        grant_for_now(&config, "vie", "contact.example").unwrap();
+        grant_for_now(&config, "vie", "contact.example", None).unwrap();
         crate::sandbox_sites::add(&config, "vie", "forum.example", "person").unwrap();
         after_vault_fill(&config, "vie", "www.shop.example");
         let path = file_of(&config, "vie");
         let used = std::collections::HashSet::new();
         let now = py::time_time();
-        assert_eq!(crate::browser_mcp::send_allowed(&path, "forum.example", &used, now), Some(None), "for good");
+        assert_eq!(crate::browser_mcp::send_allowed(&path, "forum.example", &used, now, None), Some(None), "for good");
         // the person's « Oui »: every sending there for its ten minutes (18/11: a checkout's steps, a page's own
         // form after the agent's click), never used up
-        assert_eq!(crate::browser_mcp::send_allowed(&path, "contact.example", &used, now), Some(None), "for now");
-        assert_eq!(crate::browser_mcp::send_allowed(&path, "contact.example", &used, now + 300.0), Some(None));
+        assert_eq!(crate::browser_mcp::send_allowed(&path, "contact.example", &used, now, None), Some(None), "for now");
+        assert_eq!(crate::browser_mcp::send_allowed(&path, "contact.example", &used, now + 300.0, None), Some(None));
         // the vault's fill: its one form
-        let once = crate::browser_mcp::send_allowed(&path, "login.shop.example", &used, now).unwrap().unwrap();
+        let once = crate::browser_mcp::send_allowed(&path, "login.shop.example", &used, now, None).unwrap().unwrap();
         let used: std::collections::HashSet<String> = [once].into();
-        assert_eq!(crate::browser_mcp::send_allowed(&path, "login.shop.example", &used, now), None, "used once");
-        assert_eq!(crate::browser_mcp::send_allowed(&path, "other.example", &used, now), None);
-        assert_eq!(crate::browser_mcp::send_allowed(&path, "contact.example", &Default::default(), now + 601.0), None);
+        assert_eq!(crate::browser_mcp::send_allowed(&path, "login.shop.example", &used, now, None), None, "used once");
+        assert_eq!(crate::browser_mcp::send_allowed(&path, "other.example", &used, now, None), None);
+        assert_eq!(crate::browser_mcp::send_allowed(&path, "contact.example", &Default::default(), now + 601.0, None), None);
         // the agent stopped: its « Oui » for now ends at once, the vault's grant and the sites for good stay
         end_windows(&config, "vie");
-        assert_eq!(crate::browser_mcp::send_allowed(&path, "contact.example", &Default::default(), now), None, "ended");
-        assert!(crate::browser_mcp::send_allowed(&path, "login.shop.example", &Default::default(), now).is_some());
-        assert_eq!(crate::browser_mcp::send_allowed(&path, "forum.example", &Default::default(), now), Some(None));
+        assert_eq!(crate::browser_mcp::send_allowed(&path, "contact.example", &Default::default(), now, None), None, "ended");
+        assert!(crate::browser_mcp::send_allowed(&path, "login.shop.example", &Default::default(), now, None).is_some());
+        assert_eq!(crate::browser_mcp::send_allowed(&path, "forum.example", &Default::default(), now, None), Some(None));
         let mode = std::os::unix::fs::PermissionsExt::mode(&std::fs::metadata(&path).unwrap().permissions());
         assert_eq!(mode & 0o777, 0o600);
+    }
+
+    /// Sub-tasks (19/11): two tasks of one agent browse at once; the person's « Oui » to one task's « Envoyer sur ce
+    /// site ? » lets that task's sendings through, never its sibling's (the call's session, Hermes patch 0028). A
+    /// call that says no session (an older Hermes) keeps the agent-wide « Oui ».
+    #[test]
+    fn a_tasks_yes_is_that_tasks_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = Config::with_key("k");
+        config.outbox.db_path = dir.path().join("bridge.db").to_string_lossy().into_owned();
+        config.browser.root = dir.path().join("browsers").to_string_lossy().into_owned();
+        std::fs::create_dir_all(crate::browsers::folder(&config, "vie")).unwrap();
+        grant_for_now(&config, "vie", "contact.example", Some("api_task_a")).unwrap();
+        let (path, used, now) = (file_of(&config, "vie"), std::collections::HashSet::new(), py::time_time());
+        let allowed = |session| crate::browser_mcp::send_allowed(&path, "contact.example", &used, now, session);
+        assert_eq!(allowed(Some("api_task_a")), Some(None));
+        assert_eq!(allowed(Some("api_task_b")), None, "the sibling task asks for itself");
+        assert_eq!(allowed(None), Some(None), "an older Hermes: the agent's « Oui »");
     }
 
     /// The release battery's cards lab, 18/11 (rc-1119): the rehearsal of a purchase watcher stopped at its first cart
@@ -428,7 +453,7 @@ mod tests {
         connectors::change(&config, |store| store.agents.insert("vie".into(), list)).unwrap();
         let path = file_of(&config, "vie");
         let used = std::collections::HashSet::new();
-        let allowed = |host: &str| crate::browser_mcp::send_allowed(&path, host, &used, py::time_time()) == Some(None);
+        let allowed = |host: &str| crate::browser_mcp::send_allowed(&path, host, &used, py::time_time(), None) == Some(None);
         let shops = ["www.shop.example", "shop.example", "checkout.shop.example", "127.0.0.1", "maboutique.myshopify.com"];
         for host in shops {
             assert!(allowed(host), "{host}: the shop its person approved the watcher to buy on");
@@ -491,7 +516,7 @@ mod tests {
         connectors::change(&config, |store| store.agents.insert("vie".into(), list)).unwrap();
         let path = file_of(&config, "vie");
         let used = std::collections::HashSet::new();
-        let allowed = |host: &str| crate::browser_mcp::send_allowed(&path, host, &used, py::time_time()) == Some(None);
+        let allowed = |host: &str| crate::browser_mcp::send_allowed(&path, host, &used, py::time_time(), None) == Some(None);
         for host in ["evil.com", "attacker.myshopify.com"] {
             assert!(!allowed(host), "{host}: opened by a watcher's purchase site {:?}", purchase_sites(&config, "vie"));
             assert!(!sends_without_card(&config, "vie", host), "{host}: no card");

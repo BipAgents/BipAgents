@@ -1290,7 +1290,14 @@ pub fn send_covered(sites: &[String], host: &str) -> bool {
 
 /// What `SEND_SITES_FILE` allows for `host` now: `Some(None)` always or for now (a person's « Oui », `window`, for its
 /// ten minutes), `Some(Some(id))` a one-use grant not used yet (`used`: a vault fill's), None nothing.
-pub fn send_allowed(path: &Path, host: &str, used: &std::collections::HashSet<String>, now: f64) -> Option<Option<String>> {
+/// `session`: the call's Hermes session (patch 0028); a « Oui » given to another session's question doesn't count.
+pub fn send_allowed(
+    path: &Path,
+    host: &str,
+    used: &std::collections::HashSet<String>,
+    now: f64,
+    session: Option<&str>,
+) -> Option<Option<String>> {
     let file = std::fs::read_to_string(path).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok())?;
     let list = |v: Option<&Value>| -> Vec<String> {
         v.and_then(Value::as_array).map(|a| a.iter().filter_map(|h| h.as_str().map(str::to_string)).collect()).unwrap_or_default()
@@ -1303,7 +1310,11 @@ pub fn send_allowed(path: &Path, host: &str, used: &std::collections::HashSet<St
         let until = grant.get("until").and_then(Value::as_f64).unwrap_or(0.0);
         let site = grant.get("host").and_then(Value::as_str)?.to_string();
         let window = grant.get("window").and_then(Value::as_bool) == Some(true);
-        (until > now && (window || !used.contains(id)) && send_covered(&[site], host))
+        let other = match (grant.get("session").and_then(Value::as_str), session) {
+            (Some(granted), Some(calling)) => granted != calling,
+            _ => false,
+        };
+        (until > now && !other && (window || !used.contains(id)) && send_covered(&[site], host))
             .then(|| (!window).then(|| id.to_string()))
     })
 }
@@ -2347,6 +2358,8 @@ pub struct Proxy {
     pub send_sites_path: PathBuf,
     /// The one-use grants of that file this proxy used already.
     sent_once: Mutex<std::collections::HashSet<String>>,
+    /// The current call's Hermes session (patch 0028; Hermes sends this server's calls one at a time).
+    call_session: Mutex<Option<String>>,
 }
 
 impl Proxy {
@@ -2395,6 +2408,7 @@ impl Proxy {
             secrets: Mutex::new(Secrets::default()),
             send_sites_path,
             sent_once: Mutex::new(std::collections::HashSet::new()),
+            call_session: Mutex::new(None),
         })
     }
 
@@ -2407,7 +2421,8 @@ impl Proxy {
         let now = crate::py::time_time();
         let mut grants = Vec::new();
         for host in hosts {
-            match send_allowed(&self.send_sites_path, host, &used, now) {
+            let session = self.call_session.lock().unwrap_or_else(|e| e.into_inner()).clone();
+            match send_allowed(&self.send_sites_path, host, &used, now, session.as_deref()) {
                 Some(None) => {}
                 Some(Some(id)) => grants.push((host.clone(), id)),
                 None => return Some(host.clone()),
@@ -2598,6 +2613,13 @@ impl Proxy {
         }
         let calling = method == "tools/call";
         let mut params = message.get("params").cloned();
+        if calling {
+            // the call's Hermes session (patch 0028, `call_context`): whose « Oui » counts; kept from the real server
+            let session = params.as_mut().and_then(|p| p.get_mut("_meta")).and_then(Value::as_object_mut).and_then(|m| {
+                m.remove(crate::agent_tools::CALL_SESSION_META).and_then(|v| v.as_str().map(str::to_string))
+            });
+            *self.call_session.lock().unwrap_or_else(|e| e.into_inner()) = session;
+        }
         let named = params.as_ref().and_then(|p| p.get("name")).and_then(Value::as_str).unwrap_or("").to_string();
         if calling && params.as_mut().is_some_and(|p| script_meant(&named, p)) {
             log(&format!("{named}: called with a script, run as execute_script"));
