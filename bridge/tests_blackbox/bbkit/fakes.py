@@ -601,6 +601,10 @@ class FakeModel(Fake):
         self.whatsapp_answer: Dict[str, Any] = {"people": [], "subjects": [], "dates": [], "tasks": []}
         # an agent's memory translated after its language changed (its instructions start « You translate »)
         self.translation_answer: Dict[str, Any] = {"notes": [], "user": []}
+        # the line said at once to a message sent while the agent works (instant_reply.rs: its instructions say « They
+        # just sent a new message while you work »): its answer, and how long it takes
+        self.instant_answer = "Compris, plus de langue ni de dents, je l'intègre."
+        self.instant_delay = 0.0
 
     def records_answer(self, user: str) -> str:
         documents = []
@@ -619,6 +623,11 @@ class FakeModel(Fake):
                 # a model tried once before an agent uses it (model_choice.rs): a word, or a word about an image
                 return JSONResponse({"choices": [{"message": {"content": "OK"}}],
                                      "usage": {"prompt_tokens": 12, "completion_tokens": 1}}, status_code=self.status)
+            if "They just sent a new message while you work" in body["messages"][0]["content"]:
+                if self.instant_delay:
+                    await asyncio.sleep(self.instant_delay)
+                return JSONResponse({"choices": [{"message": {"content": self.instant_answer}}],
+                                     "usage": {"prompt_tokens": 180, "completion_tokens": 14}}, status_code=self.status)
             if body["messages"][0]["content"].startswith("You extract precise records"):
                 return JSONResponse({"choices": [{"message": {"content": self.records_answer(body["messages"][1]["content"])}}],
                                      "usage": {"prompt_tokens": 2000, "completion_tokens": 200}},

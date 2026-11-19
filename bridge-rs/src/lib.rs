@@ -43,6 +43,7 @@ pub mod feature_tips;
 pub mod beta_measures;
 pub mod store;
 pub mod threads;
+pub mod instant_reply;
 pub mod notifications;
 
 // -- push-runs -------------------------------------------------------------------------------------

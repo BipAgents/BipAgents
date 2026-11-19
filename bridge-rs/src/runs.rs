@@ -652,6 +652,12 @@ impl RunSubscription {
         lock(&self.state).acted
     }
 
+    /// The run's tool steps so far (one model answer asking for tools each): words steered in are read at a step's
+    /// end (instant_reply.rs `watch_taken`).
+    pub fn tool_steps(&self) -> u32 {
+        lock(&self.state).tool_steps
+    }
+
     /// The run is to start again with the person's new words at its end (`RunHub::interrupt`).
     pub fn restarting(&self) -> bool {
         lock(&self.state).restart.is_some()

@@ -29,6 +29,7 @@
 //! No Python counterpart.
 
 pub mod follow;
+mod instant;
 pub mod layout;
 pub mod send;
 pub mod source;
@@ -475,6 +476,7 @@ impl Threads {
             self.store.run("DELETE FROM thread_segments WHERE thread_id = ?", vec![text(&thread.id)]).await?;
             self.store.run("DELETE FROM notifications WHERE thread_id = ?", vec![text(&thread.id)]).await?;
             self.store.run("DELETE FROM thread_sends WHERE thread_id = ?", vec![text(&thread.id)]).await?;
+            self.store.run("DELETE FROM thread_instant WHERE thread_id = ?", vec![text(&thread.id)]).await?;
             if thread.kind != "main" {
                 self.store.run("DELETE FROM threads WHERE id = ?", vec![text(&thread.id)]).await?;
             }
@@ -722,6 +724,7 @@ impl Threads {
             q.get(&agent.name).items.into_iter().filter_map(|i| i.client_id).collect()
         });
         self.with_sends(agent, thread, &mut items, &queued).await?;
+        self.with_instant(agent, thread, &mut items).await?;
         self.with_files(agent, thread, &mut items).await?;
         self.with_took(agent, &mut items).await?;
         with_maps_once(self.config.get(), agent, &mut items).await;
@@ -967,6 +970,7 @@ impl Threads {
                     .iter()
                     .rev()
                     .filter(|i| i.kind() == "message" && i.body.get("role") == Some(&json!("agent")))
+                    .filter(|i| !crate::instant_reply::is_instant(&i.body))
                     .find(|i| match (&wanted, &head) {
                         (Some(w), Some(h)) => i.text() == w || i.text().starts_with(h.as_str()),
                         _ => true,
@@ -1235,6 +1239,7 @@ async fn delete_thread(
     // its messages sent and never stored go with it: kept, they came back as « Pas envoyé » in the main thread
     // started again under the same id (6/11, release journeys)
     threads.store.run("DELETE FROM thread_sends WHERE thread_id = ?", vec![text(&thread.id)]).await?;
+    threads.store.run("DELETE FROM thread_instant WHERE thread_id = ?", vec![text(&thread.id)]).await?;
     if thread.kind != "main" {
         threads.store.run("DELETE FROM threads WHERE id = ?", vec![text(&thread.id)]).await?;
     }

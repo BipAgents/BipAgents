@@ -235,8 +235,11 @@ impl AgentQueue {
         self.steers.retain(|s| s.run_id != run_id);
         if let (Some(s), Some(pending)) = (session.as_deref(), pending_steer.map(str::trim).filter(|p| !p.is_empty())) {
             if let Some(first) = steered.iter().find(|t| pending.contains(t.text.trim())) {
-                let sent = Sent { client_id: first.client_id.clone(), ..Sent::default() };
-                self.items.insert(0, new_item(s, pending, true, sent));
+                // shown without the bridge's note to the agent (instant_reply.rs), which still goes with the words
+                let shown = crate::instant_reply::without_note(pending);
+                let input = (shown != pending).then(|| Value::String(pending.to_string()));
+                let sent = Sent { client_id: first.client_id.clone(), input, ..Sent::default() };
+                self.items.insert(0, new_item(s, &shown, true, sent));
                 changed = true;
             }
         }
@@ -1065,6 +1068,13 @@ mod tests {
         let mut q = AgentQueue::default();
         assert_eq!(q.run_ended("r2", Some("s1"), "run.completed", Some("autre chose")), (false, false));
         assert!(q.items.is_empty());
+        // words answered at once (instant_reply.rs): shown without the bridge's note, which still goes with them
+        let steer = crate::instant_reply::with_note("sans gluten", crate::instant_reply::Mode::Steered);
+        let mut q = queue_of(&[]);
+        q.steers.push(Steer { run_id: "r3".into(), text: steer.clone(), client_id: Some("c-steer-2".into()) });
+        q.run_ended("r3", Some("s1"), "run.completed", Some(&steer));
+        assert_eq!(q.items[0].text, "sans gluten");
+        assert_eq!(q.items[0].input, Some(Value::String(steer)));
     }
 
     #[test]

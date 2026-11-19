@@ -1652,7 +1652,7 @@ pub(crate) async fn follow_from_here(state: AppState, id: String, cid: String, r
             let reply = page
                 .get("items")
                 .and_then(Value::as_array)
-                .and_then(|m| m.last())
+                .and_then(|m| m.iter().rev().find(|m| m.get("instant").and_then(Value::as_bool) != Some(true)))
                 .filter(|m| str_of(m, "role") == "agent")
                 .map(|m| str_of(m, "text"));
             // a family conversation's replies are pushed to every member by its owner's bridge (family_thread.rs)
