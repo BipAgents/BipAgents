@@ -329,6 +329,11 @@ pub const ASKED_CLASS: &str = "bip-asked";
 
 static BODY_TAG: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)<body\b[^>]*>").expect("valid regex"));
 
+/// The language a page says it is in (`<html lang>`), when it is one the app speaks.
+pub fn page_language(_html: &str) -> Option<String> {
+    None
+}
+
 /// « Faite à la demande de Marie » in the agent's language.
 pub fn asked_line(name: &str, lang: &str) -> String {
     let name = escape(name);
@@ -749,5 +754,29 @@ mod tests {
                              &Mark { group: false, asked_by: Some("Paul".into()), lang: "en".into() });
         assert!(doc.starts_with("<html><body class=\"x\"><div class=\"bip-asked\""));
         assert!(doc.contains("Made at Paul\u{2019}s request</div><p>a</p>"));
+    }
+
+    /// Filming 18/11: a family conversation all in English, the family agent (made on a French place) made its first
+    /// page in French. The page's line about who asked follows the page's own language (`<html lang>`), not the
+    /// agent's default; a page that says none keeps the agent's.
+    #[test]
+    fn the_request_line_follows_the_pages_own_language() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = Config::with_key("k");
+        config.outbox.db_path = dir.path().join("bridge.db").to_string_lossy().into_owned();
+        let mark = Mark { group: true, asked_by: Some("Lea".into()), lang: "fr".into() };
+        let html = "<!doctype html><html lang=\"en-GB\"><body><h1>Saturday</h1></body></html>";
+        let made = save_marked(&config, "famille", html, "Trip", None, Some(&mark)).unwrap();
+        let page = made["page"].as_str().unwrap().to_string();
+        let kept = std::fs::read_to_string(root(&config).join("famille").join(format!("{page}.html"))).unwrap();
+        assert!(kept.contains("Made at Lea\u{2019}s request"), "{kept}");
+        assert!(!kept.contains("Faite à la demande"));
+        let made = save_marked(&config, "famille", "<h1>Samedi</h1>", "Sortie", None, Some(&mark)).unwrap();
+        let page = made["page"].as_str().unwrap().to_string();
+        let kept = std::fs::read_to_string(root(&config).join("famille").join(format!("{page}.html"))).unwrap();
+        assert!(kept.contains("Faite à la demande de Lea"));
+        assert_eq!(page_language("<HTML class=x lang='de'>"), Some("de".to_string()));
+        assert_eq!(page_language("<html lang=\"xx\">"), None);
+        assert_eq!(page_language("<p>no html tag</p>"), None);
     }
 }

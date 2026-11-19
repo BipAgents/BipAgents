@@ -2449,6 +2449,16 @@ pub fn router() -> Router<AppState> {
 mod tests {
     use super::*;
 
+    /// Filming 18/11: in a family conversation all in English, the family agent's first page came out in French
+    /// (« samedi », « Départ »): the page kit's examples are French and nothing said which language a page is in.
+    #[test]
+    fn a_page_is_written_in_the_conversations_language() {
+        let d = CREATE_PAGE_DESCRIPTION;
+        assert!(d.contains("in the language of the conversation it is for"), "{d}");
+        assert!(d.contains("never the examples' language"));
+        assert!(d.contains("<html lang="));
+    }
+
     /// Alex, 2026-11-01: an English person's agents said « in your Carnet (Notebook) ». What an agent writing in
     /// English, German or Spanish reads — its personality's blocks, its tools' descriptions, their answers, a
     /// background task's instructions — names the app's parts in its language (names.rs); a French agent's are as

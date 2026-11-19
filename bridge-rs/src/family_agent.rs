@@ -1439,6 +1439,19 @@ mod tests {
         assert!(refused_setting(&indexmap::IndexMap::new(), Some(true), false));
     }
 
+    /// Filming 18/11: a family conversation all in English, the family agent (made in French) made its page in
+    /// French. What it makes for a member is in the language of the conversation, in every turn: its creator's (its
+    /// block) and a member's (the run's instructions).
+    #[test]
+    fn what_it_makes_follows_the_conversations_language() {
+        let block = with_family("Tu es Famille.\n", true);
+        let member = member_instructions("Léa");
+        for text in [&block, &member] {
+            assert!(text.contains("in the language of the conversation"), "{text}");
+            assert!(text.contains("a page's title, labels, days and dates"), "{text}");
+        }
+    }
+
     #[test]
     fn its_block_comes_and_goes() {
         let soul = with_family("Tu es Famille.\n", true);
