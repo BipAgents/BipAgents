@@ -778,6 +778,9 @@ async fn a_task_of_an_agent_with_a_browser_gets_a_browser_of_its_own() {
     let place = bipbridge::browsers::folder(&config, "coach");
     std::fs::create_dir_all(place.join("profile").join("Default")).unwrap();
     std::fs::write(place.join("profile").join("Default").join("Cookies"), "logged in").unwrap();
+    std::fs::create_dir_all(place.join("profile/Default/Cache")).unwrap();
+    std::fs::write(place.join("profile/Default/Cache/data_1"), "x".repeat(4096)).unwrap();
+    std::fs::write(place.join("profile/Local State"), "{\"os_crypt\": {}}").unwrap();
     std::fs::write(place.join("ports.json"), r#"{"cdp": 19600, "vnc": 19601}"#).unwrap();
     std::fs::write(place.join("mcp.json"), r#"{"server": ["/usr/bin/podman", "exec", "-i", "bipagents-browser-coach", "/opt/stealth/mcp.sh"]}"#).unwrap();
     let board = board(&config, None);
@@ -791,6 +794,9 @@ async fn a_task_of_an_agent_with_a_browser_gets_a_browser_of_its_own() {
     let settings: Value = serde_json::from_str(&std::fs::read_to_string(theirs.join("mcp.json")).unwrap()).unwrap();
     assert_eq!(settings["server"][3], json!(bipbridge::browsers::container(&own)), "{settings}");
     assert_eq!(std::fs::read_to_string(theirs.join("profile/Default/Cookies")).unwrap(), "logged in", "the agent's logins");
+    // only what keeps the logins (its cookies' key in « Local State »), never the agent's caches (disk)
+    assert!(theirs.join("profile/Local State").exists());
+    assert!(!theirs.join("profile/Default/Cache").exists(), "the agent's cache copied");
     let ports = bipbridge::browsers::ports_of(&config, &own).unwrap();
     assert!(ports["cdp"] != 19600 && ports["vnc"] != 19601, "ports of its own: {ports:?}");
     let sessions: Value = serde_json::from_str(&std::fs::read_to_string(place.join("sessions.json")).unwrap()).unwrap();

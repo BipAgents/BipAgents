@@ -193,6 +193,35 @@ fn copy_tree(from: &Path, to: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
+/// What of a Chrome profile keeps its logins: its cookies (and their key, in « Local State »), saved logins, site
+/// storage and preferences; never its caches, history or service workers (hundreds of MB, disk).
+const LOGIN_PARTS: [&str; 10] = [
+    "Local State",
+    "Default/Preferences",
+    "Default/Secure Preferences",
+    "Default/Cookies",
+    "Default/Network",
+    "Default/Login Data",
+    "Default/Login Data For Account",
+    "Default/Web Data",
+    "Default/Local Storage",
+    "Default/Session Storage",
+];
+
+/// The agent's profile's logins (`LOGIN_PARTS`) copied into a task's own profile.
+fn copy_logins(from: &Path, to: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(to.join("Default"))?;
+    for part in LOGIN_PARTS {
+        let source = from.join(part);
+        if source.is_dir() {
+            copy_tree(&source, &to.join(part))?;
+        } else if source.is_file() {
+            std::fs::copy(&source, to.join(part))?;
+        }
+    }
+    Ok(())
+}
+
 /// The task `job` of `agent` (its Hermes session `session`) gets a browser of its own when the agent has one: its
 /// folder (a copy of the agent's profile, logins included; its DevTools secret, VNC password, ports, downloads
 /// policy, the agent's sites for sending), its settings for bip-browser-mcp (its container started at its first use,
@@ -219,7 +248,7 @@ pub fn setup_task(config: &Config, agent: &str, job: &str, session: &str) -> any
     std::fs::create_dir_all(&place)?;
     crate::py::chmod(&place.to_string_lossy(), 0o700)?;
     if !place.join("profile").exists() {
-        copy_tree(&parent.join("profile"), &place.join("profile"))?;
+        copy_logins(&parent.join("profile"), &place.join("profile"))?;
     }
     write_downloads_policy(&place)?;
     let password = place.join("vnc.pass");
