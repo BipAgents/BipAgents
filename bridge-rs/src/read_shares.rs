@@ -720,8 +720,11 @@ pub async fn sync(state: &AppState, id: &str, notify: bool) -> Result<Option<Val
     if people_before != (share.get("viewers").cloned(), share.get("invites_open").cloned()) {
         // someone joined, left or was invited: the owner's open conversation reads the share again (a hint only)
         let agent = s(&share, "agent");
+        // `seen`: the friends keyed (a hint about a friend coming in tells itself from an invitation's, same count)
         let count = view(&share)["count"].clone();
-        crate::threads::threads_of(state).publish(&agent, "share", json!({"agent": agent, "share": id, "count": count}));
+        let seen = share["viewers"].as_array().map(|v| v.iter().filter(|x| x["state"] == "ok").count()).unwrap_or(0);
+        crate::threads::threads_of(state)
+            .publish(&agent, "share", json!({"agent": agent, "share": id, "count": count, "seen": seen}));
     }
     // the items: what changed since last time
     let messages = match config.agent(Some(&s(&share, "agent"))) {
