@@ -1098,3 +1098,42 @@ async fn review3_a_key_the_exchange_no_longer_takes_asks_the_choice_again() {
     assert_eq!(google(&config)["android"], "choose");
     TEST_OFFER.with(|o| *o.borrow_mut() = None);
 }
+
+// -- review 19/11, pass 5 (red: to prove, not fixed) ------------------------------------------------------------------
+
+/// A place of the offer that still holds a « kerfy » choice (an install moved from home to the offer, agent-move /
+/// own-Hermes import carry connections.json.enc): `android_way` says « not_configured », but endpoints_for("web")
+/// falls through to `android_google` and the renewals still go through Kerfy's exchange.
+#[tokio::test]
+async fn review5_an_offer_place_never_renews_through_kerfy_s_exchange() {
+    let (base, seen) = serve().await;
+    let (_dir, config) = setup(&base);
+    let mut config = config;
+    let g = config.drives.clients.get_mut("google_drive").unwrap();
+    g.web_client_id = None;
+    g.web_client_secret = None;
+    // at home: Kerfy's exchange chosen, Google Drive connected through it
+    TEST_OFFER.with(|o| *o.borrow_mut() = Some(None));
+    let body = android_body("kerfy", "kerfy-web.apps.googleusercontent.com", "dx1.test-key", &format!("{base}/dx"));
+    set_android(&config, &body).await.unwrap();
+    let started = start(&config, "google_drive", &["vie".into()], Pick::Folders, "android").unwrap();
+    let query: HashMap<String, String> =
+        [("state", started["state"].as_str().unwrap()), ("code", "android"), ("picked_file_ids", "gf")]
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+    assert_eq!(finish_query(&config, query).await.unwrap()["state"], "connected");
+    // moved to a place of the offer (the guichet has no Web client to give yet)
+    TEST_OFFER.with(|o| *o.borrow_mut() = Some(Some((format!("{base}/gx-off"), "place-tok".into()))));
+    assert_eq!(listing(&config).unwrap()["drives"][0]["android"], "not_configured");
+    let before = seen.lock().unwrap().iter().filter(|(_, p, _)| p.contains("drive-exchange")).count();
+    let store = connections::store_of(&config);
+    let mut stored = store.read().unwrap();
+    stored.drives.get_mut("google_drive").unwrap().tokens.expires_at = Some(py::time_time() + 10.0);
+    store.write(&stored).unwrap();
+    let vie = config.agents["vie"].clone();
+    let _ = call(&config, &vie, "drive_read", &args(json!({"file": "google_drive:gd"}))).await;
+    let after = seen.lock().unwrap().iter().filter(|(_, p, _)| p.contains("drive-exchange")).count();
+    TEST_OFFER.with(|o| *o.borrow_mut() = None);
+    assert_eq!(after, before, "a place of the offer renewed through Kerfy's exchange");
+}
