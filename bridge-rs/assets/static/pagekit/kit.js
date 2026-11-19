@@ -111,13 +111,13 @@
     if (spec.min == null) { var pad = (hi - lo) * 0.15 || 1; lo = lo - pad < 0 && lo >= 0 ? 0 : lo - pad; hi += pad; }
     var left = 34, top = 14, bottom = c.h - 22, step = (c.w - left - 12) / Math.max(1, n - 1);
     var x = function (i) { return left + 6 + i * step; }, y = function (v) { return bottom - (bottom - top) * (v - lo) / (hi - lo || 1); };
-    var out = "";
+    // a page's own formatter gets the tick rounded within 15 % of the step, never closer to another line (it got
+    // 338.55000000000001: « 5:38.55000000000001 »); the lines stay where they are
+    var out = "", d = Math.min(9, Math.max(0, Math.ceil(-Math.log10(0.3 * ((hi - lo) / 3 || 1)))));
     for (var k = 0; k <= 3; k++) {
-      // a page's own formatter gets the tick to 3 digits (it got 338.55000000000001: « 5:38.55000000000001 »); the
-      // line stays where it is
       var v = lo + (hi - lo) * k / 3, gy = y(v);
       out += '<line class="bip-grid" x1="' + left + '" x2="' + c.w + '" y1="' + gy + '" y2="' + gy + '"/>' +
-        '<text class="bip-axis" x="' + (left - 6) + '" y="' + (gy + 3.5) + '" text-anchor="end">' + esc(spec.format ? spec.format(+v.toPrecision(3)) : fmt(v, Math.abs(hi - lo) < 10 ? 1 : 0)) + "</text>";
+        '<text class="bip-axis" x="' + (left - 6) + '" y="' + (gy + 3.5) + '" text-anchor="end">' + esc(spec.format ? spec.format(+v.toFixed(d)) : fmt(v, Math.abs(hi - lo) < 10 ? 1 : 0)) + "</text>";
     }
     if (spec.goal != null) out += '<line x1="' + left + '" x2="' + c.w + '" y1="' + y(spec.goal) + '" y2="' + y(spec.goal) + '" style="stroke:var(--good);stroke-width:1.5;stroke-dasharray:5 4"/>';
     series.forEach(function (s, j) {
