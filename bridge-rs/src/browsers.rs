@@ -510,6 +510,13 @@ static FRESH_FOR_PERSON: std::sync::LazyLock<std::sync::Mutex<std::collections::
 /// open longer than this under the same document is rare.
 const SCRIPTED_DOCUMENT_FOR_PERSON: f64 = 24.0 * 3600.0;
 
+/// How long a site the agent's scripts ran on loses its service workers and Cache Storage at each take-over (review of
+/// 19/11: the whole record, any age, wiped at every take-over a web app the person uses on a site the agent once
+/// scripted). A worker one of its scripts registered is removed at the first take-over after it, so only one older
+/// than this with no take-over in between is left; a week covers an agent's task left for a weekend or a few days
+/// off, and the sites the agent scripted that long ago are the person's own again.
+const SCRIPTED_WORKERS_FOR_PERSON: f64 = 7.0 * 86400.0;
+
 /// What the agent's scripts ran on (scripts.jsonl, bip-browser-mcp's `note_script`).
 #[derive(Debug, Default)]
 struct Scripted {
@@ -520,6 +527,9 @@ struct Scripted {
     /// For lines that name no document (an earlier proxy's): the sites within the hour, and when the latest ran.
     sites: HashSet<String>,
     latest: f64,
+    /// The web sites scripted within `SCRIPTED_WORKERS_FOR_PERSON`: their service workers removed before the person's
+    /// hand, a worker outlives the tab that registered it.
+    origins: Vec<String>,
 }
 
 fn scripted(config: &Config, agent: &str) -> Scripted {
@@ -529,6 +539,12 @@ fn scripted(config: &Config, agent: &str) -> Scripted {
     for line in text.lines().filter_map(|l| serde_json::from_str::<Value>(l).ok()) {
         let t = line.get("t").and_then(Value::as_f64).unwrap_or(0.0);
         let origin = line.get("origin").and_then(Value::as_str).unwrap_or("unknown").to_string();
+        let site = url::Url::parse(&origin)
+            .ok()
+            .filter(|u| matches!(u.scheme(), "http" | "https") && t >= now - SCRIPTED_WORKERS_FOR_PERSON);
+        if let Some(site) = site.map(|u| u.origin().ascii_serialization()).filter(|s| !out.origins.contains(s)) {
+            out.origins.push(site);
+        }
         if let Some(doc) = line.get("doc").and_then(Value::as_str).filter(|d| !d.is_empty()) {
             if t >= now - SCRIPTED_DOCUMENT_FOR_PERSON {
                 out.documents.insert(doc.to_string());
@@ -562,17 +578,26 @@ impl Scripted {
 /// redirecting: 409 at every try): then its address is opened again in a fresh tab and every older tab closed
 /// (card_fill.rs `Page::fresh_tab`), the scripted documents gone all the same. Each failure says why in the log. False
 /// only when even that can't be done (DevTools out of reach, a tab that won't close).
+///
+/// Every site the agent's scripts ran on this week loses its service workers and cache storage too (never cookies,
+/// localStorage nor IndexedDB): a worker registered by one of them outlives the tab, and would answer that site later.
 async fn fresh_for_person(config: &Config, agent: &str, token: &str) -> bool {
     let done = scripted(config, agent);
-    if done.documents.is_empty() && done.sites.is_empty() {
+    let recent = !(done.documents.is_empty() && done.sites.is_empty());
+    if !recent && done.origins.is_empty() {
         return true;
     }
     let Some(port) = ports_of(config, agent).and_then(|p| p.get("cdp").copied()) else {
         tracing::warn!(agent = %agent, "page not made fresh before the person takes the browser: no DevTools port");
-        return false;
+        return !recent;
     };
-    let (why, known) = match reload_for_person(agent, port, token, &done).await {
-        Ok(()) => return true,
+    let reloaded = if recent { reload_for_person(agent, port, token, &done).await } else { Ok(()) };
+    let (why, known) = match reloaded {
+        Ok(()) => {
+            // its scripts' sites, shown in a tab or not: their workers removed once the page is fresh
+            clear_scripted_workers(agent, port, token, &done).await;
+            return true;
+        }
         Err(failed) => failed,
     };
     // the tabs' addresses as Chrome's tab list says them (no renderer asked: a busy page can't answer)
@@ -584,12 +609,13 @@ async fn fresh_for_person(config: &Config, agent: &str, token: &str) -> bool {
     if !known && listed.is_some() && !addresses.iter().any(|u| done.on_site(&origin_of(u))) {
         tracing::info!(agent = %agent, reason = %why,
                        "page not looked at before the person takes the browser: no script ran on its site");
+        clear_scripted_workers(agent, port, token, &done).await;
         return true;
     }
     tracing::warn!(agent = %agent, reason = %why,
                    "page not reloaded before the person takes the browser: opened again in a fresh tab");
     let url = addresses.into_iter().find(|u| u.starts_with("https://") || u.starts_with("http://"));
-    match crate::card_fill::Page::fresh_tab(port, Some(token), url.as_deref()).await {
+    match crate::card_fill::Page::fresh_tab(port, Some(token), url.as_deref(), &done.origins).await {
         Ok(_) => {
             FRESH_FOR_PERSON.lock().unwrap_or_else(|e| e.into_inner()).remove(agent);
             tracing::info!(agent = %agent, "page opened again in a fresh tab before the person takes the browser");
@@ -599,6 +625,21 @@ async fn fresh_for_person(config: &Config, agent: &str, token: &str) -> bool {
             tracing::warn!(agent = %agent, error = %e, "page not opened again in a fresh tab either");
             false
         }
+    }
+}
+
+/// The service workers and cache storage of every site the agent's scripts ran on (card_fill.rs `clear_workers`),
+/// once the person's page is fresh: one registered on a site no tab shows any more is removed too (review pass 2 of
+/// fix-takeover-not-fresh). What can't be removed is said in the log; the person still gets the browser.
+async fn clear_scripted_workers(agent: &str, port: u16, token: &str, done: &Scripted) {
+    match crate::card_fill::Page::clear_workers(port, Some(token), &done.origins).await {
+        Ok(()) if !done.origins.is_empty() => {
+            tracing::info!(agent = %agent, sites = done.origins.len(),
+                           "the scripted sites' service workers removed before the person takes the browser");
+        }
+        Ok(()) => {}
+        Err(e) => tracing::warn!(agent = %agent, error = %e,
+                                 "a scripted site's service workers not removed before the person takes the browser"),
     }
 }
 
@@ -1656,6 +1697,26 @@ pub async fn remove_with(host: &Host, config: &Config, agent: &str, run: &Run) -
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Review 19/11: every take-over cleared the workers and caches of every site in the whole record (~200 lines,
+    /// any age), a PWA the person uses on a site the agent once scripted with them. Only the recent sites now.
+    #[test]
+    fn only_recently_scripted_sites_lose_their_workers() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = Config::with_key("k");
+        config.browser.root = dir.path().to_string_lossy().into_owned();
+        std::fs::create_dir_all(folder(&config, "vie")).unwrap();
+        let now = crate::py::time_time();
+        let lines = [
+            json!({"t": now - 8.0 * 86400.0, "origin": "https://old.example", "doc": "d1"}),
+            json!({"t": now - 6.0 * 86400.0, "origin": "https://week.example", "doc": "d2"}),
+            json!({"t": now - 60.0, "origin": "https://now.example:8443"}),
+            json!({"t": now - 60.0, "origin": "unknown"}),
+        ];
+        let text: String = lines.iter().map(|l| format!("{l}\n")).collect();
+        std::fs::write(folder(&config, "vie").join(crate::browser_mcp::SCRIPTS_FILE), text).unwrap();
+        assert_eq!(scripted(&config, "vie").origins, ["https://week.example", "https://now.example:8443"]);
+    }
 
     /// `command` run by a real shell against a flag file of its own (in place of the container's): its exit code and
     /// what the flag reads after it (None: no flag).

@@ -779,7 +779,15 @@ impl Page {
     /// them, as `fresh` closes the others), then the new tab sent to `url` by a plain GET when it is a web address
     /// (not waited for: a page that loops goes on looping in the person's hand, its own « continue » link to click).
     /// Only through the browser's endpoint, never a renderer's answer: a busy page can't hold it up. The new tab's id.
-    pub async fn fresh_tab(port: u16, hold: Option<&str>, url: Option<&str>) -> Result<String, FillError> {
+    ///
+    /// `scripted`: the sites the agent's scripts ran on (browsers.rs `Scripted::origins`), their service workers removed
+    /// too, though no tab shows them any more.
+    pub async fn fresh_tab(
+        port: u16,
+        hold: Option<&str>,
+        url: Option<&str>,
+        scripted: &[String],
+    ) -> Result<String, FillError> {
         let mut cdp = Cdp::connect(port, hold).await?;
         let created = cdp.call("Target.createTarget", json!({"url": "about:blank"}), None).await?;
         let fresh = created.get("targetId").and_then(Value::as_str).ok_or_else(|| protocol("no new tab"))?.to_string();
@@ -787,7 +795,8 @@ impl Page {
         let mut origins: Vec<String> = Vec::new();
         let listed = cdp.call("Target.getTargets", json!({}), None).await?;
         let shown = listed.get("targetInfos").and_then(Value::as_array).cloned().unwrap_or_default();
-        for address in shown.iter().filter_map(|t| t.get("url").and_then(Value::as_str)).chain(url) {
+        let addresses = shown.iter().filter_map(|t| t.get("url").and_then(Value::as_str)).chain(url);
+        for address in addresses.chain(scripted.iter().map(String::as_str)) {
             if let Some(origin) = web_origin(address).filter(|o| !origins.contains(o)) {
                 origins.push(origin);
             }
@@ -854,6 +863,41 @@ impl Page {
             }
         }
         Ok(fresh)
+    }
+
+    /// The service workers and cache storage of `origins` removed (the sites the agent's scripts ran on, browsers.rs
+    /// `fresh_for_person`): a worker one of its scripts registered answers that site's pages and requests later, under
+    /// the person's hand, even once no tab shows the site (review pass 2 of fix-takeover-not-fresh). Never cookies,
+    /// localStorage or IndexedDB: the person's logins stay. Through a tab's session (Chrome's browser endpoint answers
+    /// « Internal error » to it); an empty one opened for it, then closed, when there is no tab. Every origin tried;
+    /// the last failure said.
+    pub async fn clear_workers(port: u16, hold: Option<&str>, origins: &[String]) -> Result<(), FillError> {
+        if origins.is_empty() {
+            return Ok(());
+        }
+        let mut cdp = Cdp::connect(port, hold).await?;
+        let (target, opened) = match tab_targets(&mut cdp).await?.into_iter().next() {
+            Some(tab) => (tab, false),
+            None => {
+                let created = cdp.call("Target.createTarget", json!({"url": "about:blank"}), None).await?;
+                let id = created.get("targetId").and_then(Value::as_str).ok_or_else(|| protocol("no new tab"))?;
+                (id.to_string(), true)
+            }
+        };
+        let mut page = Page::attach_with(cdp, &target).await?;
+        let session = page.session.clone();
+        let mut failed = None;
+        for origin in origins {
+            let clear = json!({"origin": origin, "storageTypes": "service_workers,cache_storage"});
+            if let Err(e) = page.cdp.call("Storage.clearDataForOrigin", clear, Some(&session)).await {
+                tracing::warn!(origin = %origin, error = %e, "a scripted site's service workers not removed");
+                failed = Some(e);
+            }
+        }
+        if opened {
+            let _ = page.cdp.call("Target.closeTarget", json!({"targetId": target}), None).await;
+        }
+        failed.map_or(Ok(()), Err)
     }
 
     /// The browser's other tabs (and windows, popups): their target ids.
