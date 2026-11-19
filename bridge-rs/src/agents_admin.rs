@@ -440,6 +440,9 @@ fn check_agent_id(args: &[String]) -> anyhow::Result<()> {
     }
 }
 
+/// How long a command may run (`run_hermes`, `run_hermes_blocking`).
+const COMMAND_TIMEOUT: Duration = Duration::from_secs(120);
+
 pub async fn run_hermes(args: Vec<String>, env: BTreeMap<String, String>) -> anyhow::Result<String> {
     let Some(program) = args.first() else { anyhow::bail!("no command") };
     check_agent_id(&args)?;
@@ -450,9 +453,18 @@ pub async fn run_hermes(args: Vec<String>, env: BTreeMap<String, String>) -> any
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()?;
-    let output = match tokio::time::timeout(Duration::from_secs(120), child.wait_with_output()).await {
+    let pid = child.id();
+    let output = match tokio::time::timeout(COMMAND_TIMEOUT, child.wait_with_output()).await {
         Ok(output) => output?,
-        Err(_) => return Err(CommandTimeout.into()),
+        Err(_) => {
+            // killed at the timeout: never a `hermes` (~90 MB) left running beside the retry (review 19/11). Only
+            // then: a command whose request went away (the app closed) still ends its work, as before.
+            if let Some(pid) = pid {
+                // SAFETY: a signal to the child this function started; tokio reaps it (its orphan queue)
+                unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) };
+            }
+            return Err(CommandTimeout.into());
+        }
     };
     if !output.status.success() {
         let shown = args.iter().take(4).cloned().collect::<Vec<_>>().join(" ");
@@ -1737,28 +1749,58 @@ pub fn render_souls(config: &Config) -> Vec<AgentConfig> {
     changed
 }
 
-/// Whether a turn of the agent goes on now (`runs::Hub::agent_running`), replaceable in tests.
-pub type Busy = Arc<dyn Fn(&str) -> bool + Send + Sync>;
+/// Every agent's SOUL.md as it is now (an agent without one, or whose profile isn't here: left out). Taken by
+/// `app::create_app` before anything at start writes a soul (profile_files::reconcile_all, guide::refresh, the
+/// voices, a sealed place's opening…), so that the first pass ([`souls_changed`]) sees what the start rewrote: a
+/// release's new rule (review 19/11: every SOUL.md was already rewritten at start, so the pass 20 s later found
+/// nothing to change and no conversation was told).
+pub fn souls_now(config: &Config) -> BTreeMap<String, String> {
+    config
+        .agents
+        .values()
+        .filter_map(|agent| read_soul(config, agent).ok().map(|soul| (agent.name.clone(), soul)))
+        .collect()
+}
 
-/// How often [`refresh_rewritten`] looks whether a running turn ended.
-pub const REFRESH_IDLE_POLL: Duration = Duration::from_secs(5);
-/// At most this long waiting for a turn's end (a Live call, a long task): asked then anyway, Hermes still applies it
-/// at the start of the next turn only.
-const REFRESH_IDLE_MAX: Duration = Duration::from_secs(30 * 60);
+/// The agents whose SOUL.md differs from `before` ([`souls_now`]); an agent made since (not in `before`) has no
+/// conversation from before to tell.
+pub fn souls_changed(config: &Config, before: &BTreeMap<String, String>) -> Vec<AgentConfig> {
+    config
+        .agents
+        .values()
+        .filter(|agent| {
+            before.get(&agent.name).is_some_and(|was| read_soul(config, agent).is_ok_and(|now| now != *was))
+        })
+        .cloned()
+        .collect()
+}
 
-/// After the bridge's own rewrite of the souls ([`render_souls`] at start, hourly, after a dates change): the agents
-/// whose SOUL.md really changed (a new rule in a release, the day's line) have their ongoing conversations' prompts
-/// refreshed ([`refresh_prompts`]), so the change reaches their one thread without waiting for « /new » (the gap of
-/// 15/11). An identical rewrite writes nothing and asks nothing (the prompt cache stays). Cost: one prompt-cache miss
-/// per changed agent's conversation, on its next turn (Hermes keeps the history). One agent after the other (each
-/// `hermes` command is ~90 MB), each once its running turn (`busy`) ended: never asked during a turn.
-pub async fn refresh_rewritten(config: Arc<Config>, changed: Vec<AgentConfig>, run: Run, busy: Busy, poll: Duration) {
+/// At most this long, chosen at random, before [`refresh_rewritten`] runs its commands: an update wave restarts the
+/// bridges of several people on one server together, and their `hermes` commands (~90 MB each) are spread over these
+/// minutes instead of all at once (review 19/11). `BIP_TEST_SOUL_REFRESH_JITTER_SECONDS` sets it for the black-box
+/// tests.
+pub fn refresh_jitter() -> Duration {
+    let max = std::env::var("BIP_TEST_SOUL_REFRESH_JITTER_SECONDS")
+        .ok()
+        .and_then(|s| s.trim().parse::<u64>().ok())
+        .unwrap_or(300);
+    Duration::from_millis(rand::Rng::gen_range(&mut rand::thread_rng(), 0..=max * 1000))
+}
+
+/// After the bridge's own rewrite of the souls (at start: [`souls_changed`] since `create_app`; hourly and after a
+/// dates change: [`render_souls`]): the agents whose SOUL.md really changed (a new rule in a release, the day's line)
+/// have their ongoing conversations' prompts refreshed ([`refresh_prompts`]), so the change reaches their one thread
+/// without waiting for « /new » (the gap of 15/11). An identical rewrite writes nothing and asks nothing (the prompt
+/// cache stays). Cost: one prompt-cache miss per changed agent's conversation, on its next turn (Hermes keeps the
+/// history). After `delay` ([`refresh_jitter`]), one agent after the other. A running turn is never touched and is
+/// not waited for: the command only records an epoch, which Hermes reads at the start of the next turn (« nothing
+/// changes mid-turn », agent/prompt_refresh.py); a settings change and this pass asking both cost nothing more.
+pub async fn refresh_rewritten(config: Arc<Config>, changed: Vec<AgentConfig>, run: Run, delay: Duration) {
+    if changed.is_empty() {
+        return;
+    }
+    tokio::time::sleep(delay).await;
     for agent in &changed {
-        let mut waited = Duration::ZERO;
-        while busy(&agent.name) && waited < REFRESH_IDLE_MAX {
-            tokio::time::sleep(poll).await;
-            waited += poll;
-        }
         refresh_prompts(&config, agent, &run).await;
     }
 }

@@ -759,11 +759,10 @@ fn an_earlier_bridge_block_gets_the_rule_about_what_agents_read() {
 
 /// The bridge's own rewrite of the souls (start, hourly): an agent whose SOUL.md really changed has its ongoing
 /// conversations' prompts refreshed once (a new rule reaches its one thread without waiting for « /new »); an
-/// identical rewrite asks nothing (the prompt cache stays); a turn going on is never touched, the refresh waits for
-/// its end (Hermes rebuilds the prompt at the start of the next turn anyway).
+/// identical rewrite asks nothing (the prompt cache stays). What the start rewrote is seen against the souls taken
+/// before it (`souls_now`): review 19/11, the start's own render left nothing for the pass 20 s later.
 #[tokio::test]
-async fn a_changed_soul_refreshes_its_conversations_once_and_waits_for_a_running_turn() {
-    use std::sync::atomic::{AtomicBool, Ordering};
+async fn a_changed_soul_refreshes_its_conversations_once() {
     let dir = tempfile::tempdir().unwrap();
     let (config, _) = managed_config(dir.path(), "http://127.0.0.1:8642");
     let agent = hub_agent(&config);
@@ -778,8 +777,7 @@ async fn a_changed_soul_refreshes_its_conversations_once_and_waits_for_a_running
         "refresh-prompts".into(),
         "--json".into(),
     ];
-    let idle: agents_admin::Busy = Arc::new(|_: &str| false);
-    let poll = std::time::Duration::from_millis(2);
+    let now = std::time::Duration::ZERO;
 
     // a soul of an earlier bridge (no choice rule): rewritten, its conversations refreshed once
     let earlier = souls::language_block(Some("fr")).replace(&format!("\n{}", souls::CHOICE_RULE), "");
@@ -788,31 +786,37 @@ async fn a_changed_soul_refreshes_its_conversations_once_and_waits_for_a_running
     assert_eq!(changed.iter().map(|a| a.name.clone()).collect::<Vec<_>>(), vec![agent.name.clone()]);
     assert!(read_soul(&c, &agent).unwrap().contains(souls::CHOICE_RULE));
     let (run, commands) = recorder();
-    agents_admin::refresh_rewritten(c.clone(), changed, run, idle.clone(), poll).await;
+    agents_admin::refresh_rewritten(c.clone(), changed, run, now).await;
     assert_eq!(*commands.lock().unwrap(), vec![refresh.clone()]);
 
     // the same text written again (the hourly pass): nothing changed, nothing asked
     let changed = render_souls(&c);
     assert!(changed.is_empty(), "{changed:?}");
     let (run, commands) = recorder();
-    agents_admin::refresh_rewritten(c.clone(), changed, run, idle, poll).await;
+    agents_admin::refresh_rewritten(c.clone(), changed, run, now).await;
     assert!(commands.lock().unwrap().is_empty());
 
-    // a turn going on: the refresh waits for its end, then is asked once
+    // the start: the souls taken first, then rewritten by someone else (reconcile_all, the guide…): seen as changed
     hand_soul(&folder, format!("Tu es Vie.\n\n{earlier}\n"));
-    let changed = render_souls(&c);
-    assert_eq!(changed.len(), 1);
-    let turn = Arc::new(AtomicBool::new(true));
-    let running = turn.clone();
-    let name = agent.name.clone();
-    let busy: agents_admin::Busy = Arc::new(move |a: &str| a == name && running.load(Ordering::SeqCst));
+    let before = agents_admin::souls_now(&c);
+    assert!(before.contains_key(&agent.name));
+    assert!(agents_admin::souls_changed(&c, &before).is_empty(), "nothing rewritten yet");
+    bipbridge::profile_files::reconcile_all(&c);
+    assert!(render_souls(&c).is_empty(), "the start's own render left nothing to the pass");
+    let changed = agents_admin::souls_changed(&c, &before);
+    assert_eq!(changed.iter().map(|a| a.name.clone()).collect::<Vec<_>>(), vec![agent.name.clone()]);
     let (run, commands) = recorder();
-    let task = tokio::spawn(agents_admin::refresh_rewritten(c.clone(), changed, run, busy, poll));
-    tokio::time::sleep(std::time::Duration::from_millis(60)).await;
-    assert!(commands.lock().unwrap().is_empty(), "never during the turn");
-    turn.store(false, Ordering::SeqCst);
-    task.await.unwrap();
+    agents_admin::refresh_rewritten(c.clone(), changed, run, now).await;
     assert_eq!(*commands.lock().unwrap(), vec![refresh]);
+    // an agent without a soul before (made since): no conversation of before to tell
+    assert!(agents_admin::souls_changed(&c, &Default::default()).is_empty());
+}
+
+#[test]
+fn the_start_refresh_waits_a_random_while_of_five_minutes_at_most() {
+    for _ in 0..50 {
+        assert!(agents_admin::refresh_jitter() <= std::time::Duration::from_secs(300));
+    }
 }
 
 /// The bridge's blocks of a rendered SOUL.md, in order.

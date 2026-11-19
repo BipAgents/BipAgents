@@ -524,6 +524,35 @@ def test_the_agents_model_is_switched_in_its_config(bridges, fakes):
     assert bridge.logged("agent model changed")[0]["model"] == "deepseek-v4-flash-0731"
 
 
+def test_a_rule_a_new_bridge_brings_reaches_the_ongoing_conversation_once(bridges, fakes):
+    """19/11 (review of choice-card-rule): a release's new rule is written into every SOUL.md by the start itself
+    (reconcile_all, the guide), so the pass 20 s later found nothing to change and never asked Hermes to rebuild the
+    ongoing conversations' prompt. Now the souls are taken before the start rewrites them: a soul the start changed is
+    refreshed once (after a random delay, 0 here), an unchanged one never (the prompt cache stays)."""
+    bridge, home = managed(bridges, fakes)
+    bridge.env_extra["BIP_TEST_SOUL_REFRESH_JITTER_SECONDS"] = "0"
+    assert bridge.post("/v1/agents", headers=AUTH, json={"name": "Budget", "kind": "finance"}).status_code == 201
+    soul_path = home / "profiles" / "budget" / "SOUL.md"
+    refresh = ["-p", "budget", "sessions", "refresh-prompts", "--json"]
+    rule = next(line for line in soul_path.read_text().splitlines() if line.startswith("Choices: when your person"))
+    # an unchanged soul: a restart asks nothing, past the first pass (20 s)
+    bridge.stop()
+    bridge.commands.clear()
+    bridge.start(write=False)
+    time.sleep(24)
+    assert refresh not in hermes_args(bridge), hermes_args(bridge)
+    # the soul of an earlier bridge (without the rule): the start puts it back, and the conversations are told once
+    bridge.stop()
+    soul_path.write_text(soul_path.read_text().replace(rule + "\n", ""))
+    assert rule not in soul_path.read_text()
+    bridge.commands.clear()
+    bridge.start(write=False)
+    assert wait_until(lambda: rule in soul_path.read_text(), timeout=5)
+    assert wait_until(lambda: refresh in hermes_args(bridge), timeout=40), hermes_args(bridge)
+    time.sleep(3)
+    assert hermes_args(bridge).count(refresh) == 1, hermes_args(bridge)
+
+
 def test_a_personality_saved_in_the_app_reaches_its_ongoing_conversation(bridges, fakes):
     """15/11 (Alex: « elle n'a pas été prise en compte »): Hermes v0.23.1 replays a continuing conversation's stored
     system prompt every turn (prefix cache), so a SOUL.md change never reached the agent's one thread, whatever the
