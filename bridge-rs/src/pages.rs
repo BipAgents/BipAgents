@@ -782,6 +782,14 @@ mod tests {
         let page = made["page"].as_str().unwrap().to_string();
         let kept = std::fs::read_to_string(root(&config).join("famille").join(format!("{page}.html"))).unwrap();
         assert!(kept.contains("Faite à la demande de Lea"));
+        // review 19/11: a body-only page (no <html lang>) in English, its words tell
+        let english = "<h1>Saturday at the lake</h1><p class=\"sub\">For the whole family</p><ol class=\"timeline\">\
+<li><b>Departure</b> at 9:00 from the house, with the bikes</li><li><b>Lunch</b> on the beach: bring the sandwiches and \
+your hats</li><li>Back by 18:00, they have school on Monday</li></ol><script>var x = 'le les des et';</script>";
+        let made = save_marked(&config, "famille", english, "Lake", None, Some(&mark)).unwrap();
+        let page = made["page"].as_str().unwrap().to_string();
+        let kept = std::fs::read_to_string(root(&config).join("famille").join(format!("{page}.html"))).unwrap();
+        assert!(kept.contains("Made at Lea\u{2019}s request"), "{kept}");
         assert_eq!(page_language("<HTML class=x lang='de'>"), Some("de".to_string()));
         assert_eq!(page_language("<html lang=\"xx\">"), None);
         assert_eq!(page_language("<p>no html tag</p>"), None);
