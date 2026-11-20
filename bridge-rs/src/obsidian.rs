@@ -41,16 +41,17 @@
 //! into the chosen agents' profiles, and taken out when an agent loses the vault. Not their `obsidian-cli` (the desktop
 //! app) nor `obsidian-headless` (the bridge runs it, the agents never do).
 //!
-//! App routes (the bridge key; 404 while `[obsidian] enabled` is false). Errors `{"detail": {"code", "message"}}`:
+//! App routes (the bridge key; 404 while `[obsidian] enabled` is false). Errors `{"detail": {"code", "message"}}`,
+//! never a 401 (the apps read a 401 as their key refused):
 //!
 //!     GET    /v1/obsidian                    the connection (`view`)
 //!     POST   /v1/obsidian/prepare            the place's tool prepared in the background → the connection
 //!     POST   /v1/obsidian/login              {email, password, code?} → {step: "signed_in", vaults: [...]}
-//!                                            | {step: "code_needed", flow}     401 wrong_login | wrong_code
+//!                                            | {step: "code_needed", flow}     422 wrong_login | wrong_code
 //!     POST   /v1/obsidian/login/code         {flow, code} → the same           404 unknown_flow
-//!     GET    /v1/obsidian/vaults             {vaults: [{id, name, shared}]}    401 signed_out
+//!     GET    /v1/obsidian/vaults             {vaults: [{id, name, shared}]}    409 signed_out
 //!     POST   /v1/obsidian/vault              {vault, agents} → {step: "connected", obsidian}
-//!                                            | {step: "password_needed", flow} 401 wrong_vault_password, 404 not_found
+//!                                            | {step: "password_needed", flow} 422 wrong_vault_password, 404 not_found
 //!     POST   /v1/obsidian/vault/password     {flow, password} → the same
 //!     PUT    /v1/obsidian/agents             {agents} → the connection
 //!     POST   /v1/obsidian/sync               a sync now (in the background) → the connection
@@ -1283,9 +1284,9 @@ async fn tool_ready(config: &Config) -> ApiResult<()> {
 
 fn refused(code: &str, said: &str) -> HttpError {
     match code {
-        "wrong_login" => coded(401, code, "Obsidian refused this e-mail and password"),
-        "wrong_code" => coded(401, code, "Obsidian refused this code"),
-        "wrong_vault_password" => coded(401, code, "this vault's encryption password is not the right one"),
+        "wrong_login" => coded(422, code, "Obsidian refused this e-mail and password"),
+        "wrong_code" => coded(422, code, "Obsidian refused this code"),
+        "wrong_vault_password" => coded(422, code, "this vault's encryption password is not the right one"),
         "not_found" => coded(404, code, "no such vault on this account"),
         _ => coded(502, "failed", &crate::cards::quoted(said, 300)),
     }
@@ -1516,7 +1517,7 @@ async fn vaults_route(State(state): State<AppState>) -> ApiResult<Response> {
         Ok(vaults) => Ok(web::ok(json!({"vaults": vaults_view(&vaults)}))),
         Err(why) if why == "signed_out" => {
             let _ = change(&config, |s| s.signed_out = !s.account_email.is_empty());
-            Err(coded(401, "signed_out", "sign in to Obsidian first"))
+            Err(coded(409, "signed_out", "sign in to Obsidian first"))
         }
         Err(why) => Err(coded(502, "failed", &crate::cards::quoted(&why, 300))),
     }
@@ -1531,7 +1532,7 @@ async fn vault_route(State(state): State<AppState>, Json(body): Json<VaultBody>)
     let runner = Runner::of(&config.obsidian);
     let vaults = match ob::vaults(&runner, &paths(&config)).await {
         Ok(v) => v,
-        Err(why) if why == "signed_out" => return Err(coded(401, "signed_out", "sign in to Obsidian first")),
+        Err(why) if why == "signed_out" => return Err(coded(409, "signed_out", "sign in to Obsidian first")),
         Err(why) => return Err(coded(502, "failed", &crate::cards::quoted(&why, 300))),
     };
     let vault = vaults.into_iter().find(|v| v.id == body.vault.trim()).ok_or_else(|| refused("not_found", ""))?;

@@ -202,7 +202,7 @@ async fn signing_in_from_the_app_sets_up_the_vault_and_syncs_both_ways() {
 
     // a wrong password: refused, plainly
     let wrong = app.send_json("POST", "/v1/obsidian/login", &h, &json!({"email": "alex@example.org", "password": "nope"})).await;
-    assert_eq!(wrong.status, 401, "{}", wrong.text());
+    assert_eq!(wrong.status, 422, "{}", wrong.text());
     assert_eq!(wrong.json()["detail"]["code"], "wrong_login");
 
     // the account has 2FA: the code is asked, then typed into the same `ob`
@@ -226,7 +226,7 @@ async fn signing_in_from_the_app_sets_up_the_vault_and_syncs_both_ways() {
     assert_eq!(chosen.json()["step"], "password_needed");
     let flow = chosen.json()["flow"].as_str().unwrap().to_string();
     let wrong = app.send_json("POST", "/v1/obsidian/vault/password", &h, &json!({"flow": flow, "password": "x"})).await;
-    assert_eq!(wrong.status, 401);
+    assert_eq!(wrong.status, 422);
     assert_eq!(wrong.json()["detail"]["code"], "wrong_vault_password");
     let again = app.send_json("POST", "/v1/obsidian/vault", &h, &json!({"vault": "v2", "agents": ["coach"]})).await;
     let flow = again.json()["flow"].as_str().unwrap().to_string();
