@@ -51,6 +51,27 @@ Details, module by module, and the Hermes patches we carry: [what the bridge add
 ([FR](docs/what-the-bridge-adds.fr.md) · [DE](docs/what-the-bridge-adds.de.md) ·
 [ES](docs/what-the-bridge-adds.es.md) · [NL](docs/what-the-bridge-adds.nl.md)).
 
+## 🔒 Security
+
+- ✅ **Nothing that matters happens without your OK**: paying, sending in your name, deleting for good, using a
+  password, a form to a new site. A card on your phone, every time.
+- 🔑 **Your agents never see your passwords or card numbers**: the vault types them itself, only on the right site.
+- 🤖 **The AI model sees the messages it answers**, nothing from the vault.
+- 📦 **Each agent works in its own box**: it reads the web, and can't send more than a little to a site you didn't
+  allow.
+- ⚠️ **Said plainly**: an agent can still be fooled within what needs no card, and whoever runs the server (on the
+  offer, Kerfy Studio) could technically reach it.
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/security/who-sees-what.en.dark.svg">
+    <img src="docs/security/who-sees-what.en.light.svg" width="440" alt="Who sees what: the AI model sees the messages it answers, never your passwords or cards; websites see your agent's visits; the push relay sees a neutral line only; Kerfy Studio, on the offer, sees your account and backups it can't read; the key service holds half a key and is off until a place is sealed.">
+  </picture>
+</p>
+
+Details, what is enforced by code and what isn't: [the security model](docs/security-model.md) ·
+[how to report a vulnerability](SECURITY.md).
+
 ## Two ways to use BipAgents
 
 ### ☁️ All included, by Kerfy Studio — *coming soon*

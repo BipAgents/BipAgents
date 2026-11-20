@@ -56,6 +56,28 @@ Le détail, module par module, et les patches Hermes que nous portons : [ce que 
 ([EN](docs/what-the-bridge-adds.md) · [DE](docs/what-the-bridge-adds.de.md) ·
 [ES](docs/what-the-bridge-adds.es.md) · [NL](docs/what-the-bridge-adds.nl.md)).
 
+## 🔒 Sécurité
+
+- ✅ **Rien d'important sans ton accord** : payer, envoyer en ton nom, supprimer définitivement, utiliser un mot de
+  passe, un formulaire vers un nouveau site. Une carte sur ton téléphone, à chaque fois.
+- 🔑 **Tes agents ne voient jamais tes mots de passe ni tes numéros de carte** : le coffre les tape lui-même,
+  seulement sur le bon site.
+- 🤖 **Le modèle d'IA voit les messages auxquels il répond**, rien du coffre.
+- 📦 **Chaque agent travaille dans sa propre boîte** : il lit le web, et ne peut pas envoyer plus qu'un peu de données à
+  un site que tu n'as pas autorisé.
+- ⚠️ **Dit franchement** : un agent peut encore être trompé dans ce qui ne demande pas de carte, et qui gère le serveur
+  (sur l'offre, Kerfy Studio) pourrait techniquement y accéder.
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/security/who-sees-what.fr.dark.svg">
+    <img src="docs/security/who-sees-what.fr.light.svg" width="440" alt="Qui voit quoi : le modèle d'IA voit les messages auxquels il répond, jamais tes mots de passe ni tes cartes ; les sites web voient les visites de ton agent ; le relais de notifications ne voit qu'une ligne neutre ; Kerfy Studio, sur l'offre, voit ton compte et des sauvegardes qu'il ne lit pas ; le service de clés garde une moitié de clé et reste éteint tant qu'aucune place n'est scellée.">
+  </picture>
+</p>
+
+Les détails, ce que le code impose et ce qu'il n'impose pas : [le modèle de sécurité](docs/security-model.fr.md) ·
+[signaler une faille](SECURITY.md).
+
 ## Deux façons d'utiliser BipAgents
 
 ### ☁️ Tout compris, par Kerfy Studio — *bientôt*
