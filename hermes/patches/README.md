@@ -37,6 +37,7 @@ upstream PRs: 0027, 0025, 0020, 0026, 0011, 0017, 0009's `!name`, 0013.
 | 0025 a colon mid-sentence no longer holds back a streamed reply | `agent/chat_completion_helpers.py` |
 | 0026 Runs API: `todo.updated`, the agent's task list (backport) | `gateway/platforms/api_server_runs.py` |
 | 0027 a safety-refused API turn no longer locks its conversation | `gateway/run_turn_runner.py` |
+| 0030 Bot Desktop in the sandbox: its env file allowlisted, its values kept in the sandbox (security backport) | `tools/bot_desktop/sandbox_host.py`, `tools/bot_desktop/runtime.py`, `tools/computer_use/cua_backend.py`, `tools/environments/local.py` |
 
 ## How the patches are kept
 
@@ -862,3 +863,39 @@ the row on; an `internal_notification` refused row is retained by its boundary, 
 `test_compression_failure_session_sync.py`: 17 passed. The agent core alone (a fake model refusing a marked message,
 a real `SessionDB`) already returned the boundary and retained the turn with the series applied: the gap is only in
 the gateway's projection. Candidate for a small upstream PR.
+
+## 0030 — Bot Desktop in the sandbox: its env file allowlisted, its values kept there (security backport)
+
+**Problem.** GHSA-p22p-9ph6-gmrh / CVE-2026-130164 (High), fixed upstream in v0.23.2 by #154487. With the terminal in a
+`docker` (podman included) or `ssh` backend, `bot_desktop.placement: auto` (the default) puts the agent's screen inside
+the sandbox, and the first `browser_exec` with no `browser.cdp_url` (or a `computer_use` call) starts it there, with no
+`auto_start` needed. v0.23.1 then reads the screen's `env` file back from the sandbox
+(`<sandbox tmp>/hermes-bot-desktop/<profile>/env`, writable by the agent's own terminal: root in the container with
+`DAC_OVERRIDE`) and keeps every `KEY=VALUE` line, and merges them into the processes it starts on this machine: the
+`browser_exec` harness (`browser_use_cli._base_subprocess_env` → `build_browser_env` → `desktop_env`), a host
+cua-driver, local terminal children. A command run in the sandbox (prompt-injected, or a package's install script;
+none of it is on Hermes' dangerous-command list) appends `LD_PRELOAD=<host path of a file it wrote in a mounted
+folder>` and gets code execution as the gateway's user, outside the sandbox. Proven on the build server (20/11:
+v0.23.1 with the series, rootless podman, `hermes-sandbox:desktop`, a library written into an outbox-like named volume,
+its host path read from `/proc/self/mountinfo`): the library ran on the host. Reached by BipAgents where an agent has
+Hermes' `browser` toolset without its own visible browser (`browser.cdp_url` + `vault_only`): a Linux install with
+podman whose owner declined the visible browser (the installer's `setup_desktop`, bridge-rs/src/sandbox.rs
+`desktop_in_sandbox`), an offer place without the visible browser (`mini`, under 3.5 GiB), an agent whose browser setup
+failed. Not with the visible browser (0007 drops `browser_exec`; vault fills go through CDP), nor without a sandbox
+(macOS, Linux without podman: the screen stays on this machine, nothing to cross).
+
+**What the patch does.** Upstream's fix, its four commits squashed as is: only the six keys `launcher.sh` writes are
+read back (`DISPLAY` a plain X display, the others printable and non-empty; any other line dropped, logged once by
+name, never by value); values from a sandbox-hosted screen go only to processes run inside the sandbox
+(`host_published_env()` is empty while the host-side marker routes the screen there), and host GUI children get no
+display then instead of this machine's seat; the cached cua-driver keeps the sandbox screen's identity.
+
+**Files.** `tools/bot_desktop/sandbox_host.py`, `tools/bot_desktop/runtime.py`, `tools/computer_use/cua_backend.py`,
+`tools/environments/local.py`; new `tests/tools/test_bot_desktop_published_env.py` (upstream's).
+
+**Tests.** The new file: 17 passed with the patch, 14 failed without it (the 3 that pass are the unchanged-behaviour
+controls). With `tests/tools/test_bot_desktop_*.py`, `test_browser_session*.py`, `test_browser_use_cli*.py`,
+`test_browser_headed_mode.py`, `test_browser_env_loopback_no_proxy.py`, `test_computer_use*.py`, `test_local*.py`:
+673 passed, 29 skipped; the same 2 failures as without the patch (`test_local_persistent_shell.py`, the build server's
+shell). Dropped at the move to v0.23.2 or later (upstream has it).
+
