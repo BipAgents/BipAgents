@@ -1815,3 +1815,86 @@ async fn after_an_overrun_the_stuck_door_is_ended_in_the_container_and_a_cancell
     let asked = std::fs::read_to_string(&ran).unwrap_or_default();
     assert!(asked.contains("[h]old_gate.py") && asked.contains("/tmp/bipagents-calls/"), "the stuck door left in the container: {asked:?}");
 }
+
+/// A stealth server that writes down (`seen.log`) every `notifications/cancelled` it gets, with the ids of the calls
+/// it is running at that moment; each call takes 1.5 s.
+const CANCEL_LOG_SERVER: &str = r#"
+import json, sys, threading, time
+log = sys.argv[1]
+out = threading.Lock()
+running = set()
+def answer(m, r):
+    with out:
+        print(json.dumps({"jsonrpc": "2.0", "id": m["id"], "result": r}), flush=True)
+def call(m):
+    running.add(m["id"])
+    time.sleep(1.5)
+    running.discard(m["id"])
+    answer(m, {"content": [{"type": "text", "text": "did " + m["params"]["name"]}]})
+for line in sys.stdin:
+    m = json.loads(line)
+    if m.get("method") == "notifications/cancelled":
+        with open(log, "a") as f:
+            f.write(json.dumps({"cancelled": m["params"]["requestId"], "running": sorted(running)}) + "\n")
+        continue
+    if "id" not in m:
+        continue
+    if m["method"] == "initialize":
+        answer(m, {"protocolVersion": m["params"]["protocolVersion"], "capabilities": {"tools": {}},
+                   "serverInfo": {"name": "stealth", "version": "1"}})
+    elif m["method"] == "tools/list":
+        answer(m, {"tools": [{"name": "navigate", "inputSchema": {"type": "object"}}]})
+    else:
+        threading.Thread(target=call, args=(m,)).start()
+"#;
+
+/// Review 7 (cancellation path, 2cf58bc40): Hermes' MCP SDK 2.3.0 sends `notifications/cancelled` with ITS request
+/// id whenever it abandons a call (the person's new message, its tool timeout: `cancel_on_abandon`, mcp/shared/
+/// dispatcher.py). The proxy numbers its own requests to the real server (`next_id`) but passes the notification on
+/// unchanged, so the id names whatever call of the real server has that number: the stealth server (SDK 1.30) cancels
+/// that one — another conversation's call — and hold_gate.py ends ITS count (`calls.end(requestId)`), the count card
+/// payments wait on (card_pay.rs `calls_check_command`). Expected: a cancellation reaches the real server only for
+/// the call it names, in the real server's numbering (or not at all): Hermes cancelling requests that are not in
+/// flight never cancels the call that is.
+#[tokio::test(flavor = "multi_thread")]
+async fn review7_hermes_cancelling_its_own_request_never_cancels_another_call_of_the_real_server() {
+    let dir = tempfile::tempdir().unwrap();
+    let tmp = dir.path();
+    let log = tmp.join("seen.log");
+    let mut settings = config(tmp);
+    std::fs::write(tmp.join("cancel.py"), CANCEL_LOG_SERVER).unwrap();
+    settings.insert("server".into(), json!([python(), tmp.join("cancel.py").to_string_lossy(), log.to_string_lossy()]));
+    let out = Out::default();
+    let proxy = Proxy::new(settings, Box::new(out.clone()));
+    proxy.handle(init()).await;
+    // Hermes' call 40, in flight on the real server under the proxy's own number
+    let running = tokio::spawn({
+        let proxy = proxy.clone();
+        let message = json!({"jsonrpc": "2.0", "id": 40, "method": "tools/call", "params": {"name": "navigate",
+                             "arguments": {}, "_meta": {bipbridge::agent_tools::CALL_SESSION_META: "api_a"}}});
+        async move { proxy.handle(message).await }
+    });
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    // Hermes abandons requests of its own that are not in flight here (answered, or other sessions' it gave up on)
+    for id in 1..=12 {
+        proxy.handle(json!({"jsonrpc": "2.0", "method": "notifications/cancelled",
+                            "params": {"requestId": id, "reason": "abandoned"}})).await;
+    }
+    let _ = tokio::time::timeout(Duration::from_secs(10), running).await;
+    let messages = out.messages();
+    proxy.stop_child().await;
+    let seen: Vec<Value> = std::fs::read_to_string(&log)
+        .unwrap_or_default()
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    let hit: Vec<&Value> = seen
+        .iter()
+        .filter(|s| s["running"].as_array().unwrap().iter().any(|r| r == &s["cancelled"]))
+        .collect();
+    assert!(hit.is_empty(), "Hermes' cancellations of other requests reached the real server and named its running call: {hit:?}");
+    assert!(
+        messages.iter().any(|m| m["id"] == json!(40) && m["result"]["content"][0]["text"] == json!("did navigate")),
+        "{messages:?}"
+    );
+}
