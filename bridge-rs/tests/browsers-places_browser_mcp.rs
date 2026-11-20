@@ -1612,3 +1612,88 @@ fn review3_an_own_hermes_without_patch_0028_gives_no_task_browsers() {
         "its Hermes (<home>/hermes-agent) has no patch 0028: no task browser"
     );
 }
+
+/// A stealth server answering its calls side by side (each in a thread, 0.4 s each), writing when each call ran
+/// (`calls.log`: `<name> <start> <end>`) to the file named by its first argument.
+const CONCURRENT_SERVER: &str = r#"
+import json, sys, threading, time
+log, name = sys.argv[1], sys.argv[2]
+out = threading.Lock()
+def answer(m, r):
+    with out:
+        print(json.dumps({"jsonrpc": "2.0", "id": m["id"], "result": r}), flush=True)
+def call(m):
+    start = time.time()
+    time.sleep(0.4)
+    with out, open(log, "a") as f:
+        f.write(f"{name} {start} {time.time()}\n")
+    answer(m, {"content": [{"type": "text", "text": "did " + m["params"]["name"]}]})
+for line in sys.stdin:
+    m = json.loads(line)
+    if "id" not in m:
+        continue
+    if m["method"] == "initialize":
+        answer(m, {"protocolVersion": m["params"]["protocolVersion"], "capabilities": {"tools": {}},
+                   "serverInfo": {"name": "stealth", "version": "1"}})
+    elif m["method"] == "tools/list":
+        answer(m, {"tools": [{"name": "navigate", "inputSchema": {"type": "object"}}]})
+    else:
+        threading.Thread(target=call, args=(m,)).start()
+"#;
+
+/// Lab of 20/11 (the places' real browser image): the stealth server (nodriver) is not safe with calls overlapping on
+/// one Chrome — `KeyError: FrameStoppedLoading` in its handler table, a navigate answered with the other call's page.
+/// Since Hermes patch 0029 sends the calls of several sessions side by side, the agent's own browser takes them one at
+/// a time again (as before 0029); the tasks' own browsers, one Chrome each, still run side by side.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_agents_browser_takes_its_calls_one_at_a_time_the_tasks_browsers_side_by_side() {
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("calls.log");
+    let place = |name: &str| {
+        let folder = dir.path().join(name);
+        std::fs::create_dir_all(&folder).unwrap();
+        let mut settings = config(&folder);
+        std::fs::write(folder.join("server.py"), CONCURRENT_SERVER).unwrap();
+        settings.insert(
+            "server".into(),
+            json!([python(), folder.join("server.py").to_string_lossy(), log.to_string_lossy(), name]),
+        );
+        std::fs::write(folder.join("mcp.json"), Value::Object(settings.clone()).to_string()).unwrap();
+        (folder, settings)
+    };
+    let (agent, agent_settings) = place("vie");
+    let (t1, _) = place("vie--t1");
+    let (t2, _) = place("vie--t2");
+    let sessions = json!({"api_t1": t1.join("mcp.json").to_string_lossy(), "api_t2": t2.join("mcp.json").to_string_lossy()});
+    std::fs::write(agent.join(bipbridge::browsers::SESSIONS_FILE), sessions.to_string()).unwrap();
+    let call = |id: i64, session: &str| {
+        json!({"jsonrpc": "2.0", "id": id, "method": "tools/call", "params": {"name": "navigate", "arguments": {},
+               "_meta": {bipbridge::agent_tools::CALL_SESSION_META: session}}})
+    };
+    let lines: String = [init(), call(1, "api_a"), call(2, "api_b"), call(3, "api_c"), call(4, "api_t1"), call(5, "api_t2")]
+        .iter()
+        .map(|m| format!("{m}\n"))
+        .collect();
+    let out = Out::default();
+    let proxy = Proxy::new(agent_settings, Box::new(out.clone()));
+    proxy.serve(lines.as_bytes()).await;
+    let answered: Vec<i64> = out.messages().iter().filter(|m| m["result"]["content"].is_array()).map(|m| m["id"].as_i64().unwrap()).collect();
+    assert_eq!(answered.len(), 5, "every call answered: {:?}", out.messages());
+    let ran: Vec<(String, f64, f64)> = std::fs::read_to_string(&log)
+        .unwrap()
+        .lines()
+        .map(|l| {
+            let p: Vec<&str> = l.split(' ').collect();
+            (p[0].to_string(), p[1].parse().unwrap(), p[2].parse().unwrap())
+        })
+        .collect();
+    let of = |name: &str| ran.iter().filter(|r| r.0 == name).map(|r| (r.1, r.2)).collect::<Vec<_>>();
+    let mut own = of("vie");
+    own.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+    assert_eq!(own.len(), 3);
+    for pair in own.windows(2) {
+        assert!(pair[1].0 >= pair[0].1 - 0.01, "two calls on the agent's own Chrome at once: {own:?}");
+    }
+    let (a, b) = (of("vie--t1")[0], of("vie--t2")[0]);
+    assert!(a.0 < b.1 && b.0 < a.1, "the tasks' own browsers waited for each other: {a:?} {b:?}");
+}

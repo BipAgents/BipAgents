@@ -2359,6 +2359,11 @@ pub struct Proxy {
     pub send_sites_path: PathBuf,
     /// The one-use grants of that file this proxy used already.
     sent_once: Mutex<std::collections::HashSet<String>>,
+    /// Held for each tools/call: one Chrome takes one call at a time. The stealth server (nodriver) is not safe with
+    /// calls overlapping on one Chrome (lab of 20/11: its handler table broken, a navigate answered with the other
+    /// call's page), and Hermes patch 0029 sends several sessions' calls side by side. Each task's own browser has its
+    /// own proxy, so the tasks still browse side by side.
+    one_call: tokio::sync::Mutex<()>,
     /// Beside `busy`: which session uses which task's own browser (browsers.rs `SESSIONS_FILE`).
     sessions_path: PathBuf,
     /// The tasks' own browsers this proxy relays to, by their settings' path (one per running task, browsers.rs
@@ -2421,6 +2426,7 @@ impl Proxy {
             secrets: Mutex::new(Secrets::default()),
             send_sites_path,
             sent_once: Mutex::new(std::collections::HashSet::new()),
+            one_call: tokio::sync::Mutex::new(()),
             sessions_path,
             tasks: Mutex::new(HashMap::new()),
         })
@@ -2606,6 +2612,10 @@ impl Proxy {
             .and_then(|m| m.get(crate::agent_tools::CALL_SESSION_META))
             .and_then(Value::as_str)
             .map(str::to_string);
+        let _one = match message.get("method").and_then(Value::as_str) {
+            Some("tools/call") => Some(self.one_call.lock().await),
+            _ => None,
+        };
         crate::runs::CALL_SESSION.scope(session, self.handle_call(message)).await
     }
 
