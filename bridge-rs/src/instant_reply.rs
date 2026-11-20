@@ -73,7 +73,6 @@ pub const GAP_SECONDS: f64 = 20.0;
 pub const SENTENCE_MAX: usize = 140;
 /// The sentence's tokens at most (a model that cannot be told not to think gets its floor instead: GLM via EUrouter).
 pub const MAX_TOKENS: i64 = 60;
-
 /// The longest first-message line kept (characters): 1 to 3 short sentences.
 pub const FIRST_MAX: usize = 360;
 /// A first-message line's tokens at most (non-GLM: no thinking).
