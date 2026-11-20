@@ -130,6 +130,7 @@ impl Households {
         if let Some(parent) = self.path.parent() {
             std::fs::create_dir_all(parent)?;
         }
+        self.drop_stale_temporaries();
         // a temporary file of its own (another process may write the same file: the CLI)
         static COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let n = COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -141,6 +142,39 @@ impl Households {
         )?;
         std::fs::rename(&tmp, &self.path)?;
         Ok(())
+    }
+
+    /// Once per file and process, before its first write: the temporary files a crash between write and rename left
+    /// (0600, the link keys of that moment), and the shared one of before 20/11. Only those older than a minute: a
+    /// write of another process going on right now (the CLI) keeps its own.
+    fn drop_stale_temporaries(&self) {
+        static DONE: std::sync::Mutex<Vec<PathBuf>> = std::sync::Mutex::new(Vec::new());
+        let mut done = DONE.lock().unwrap_or_else(|e| e.into_inner());
+        if done.contains(&self.path) {
+            return;
+        }
+        done.push(self.path.clone());
+        let (Some(folder), Some(name)) = (self.path.parent(), self.path.file_name().and_then(|n| n.to_str())) else {
+            return;
+        };
+        let Ok(entries) = std::fs::read_dir(folder) else { return };
+        let prefix = format!("{name}.");
+        for entry in entries.flatten() {
+            let file = entry.file_name();
+            let Some(file) = file.to_str() else { continue };
+            if !(file.starts_with(&prefix) && file.ends_with(".tmp")) {
+                continue;
+            }
+            let old = entry
+                .metadata()
+                .and_then(|m| m.modified())
+                .ok()
+                .and_then(|t| t.elapsed().ok())
+                .is_some_and(|age| age > std::time::Duration::from_secs(60));
+            if old {
+                let _ = std::fs::remove_file(entry.path());
+            }
+        }
     }
 
     pub fn name(&self) -> String {
@@ -546,8 +580,31 @@ mod tests {
         assert!(households.accept(&late, "Paul", "https://c.ts.net", &"p".repeat(40), None, None).is_err());
     }
 
-    /// R8 (review of R5): a link removed and the others marked to renew their passes are one write; a write that
-    /// fails changes nothing and says so (never the household gone with the others' old passes still said).
+    /// Relecture 2 of fix-flaky-group-names (20/11): a crash between write and rename leaves a temporary file holding
+    /// the link keys; the next process's first write drops it (one written just now, another process's, is kept).
+    #[test]
+    fn temporary_files_a_crash_left_go_at_the_first_write() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("households.json");
+        let stale = [dir.path().join("households.json.4242.0.tmp"), dir.path().join("households.json.tmp")];
+        let fresh = dir.path().join("households.json.4343.0.tmp");
+        let other = dir.path().join("peers.json.4242.0.tmp");
+        let hour_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+        for file in stale.iter().chain([&other]) {
+            std::fs::write(file, "{}").unwrap();
+            std::fs::File::options().write(true).open(file).unwrap().set_modified(hour_ago).unwrap();
+        }
+        std::fs::write(&fresh, "{}").unwrap();
+        let households = Households::new(&path.to_string_lossy());
+        households.set_name("Léa").unwrap();
+        for file in &stale {
+            assert!(!file.exists(), "{file:?} left");
+        }
+        assert!(fresh.exists(), "a write going on now is kept");
+        assert!(other.exists(), "another file's are not this one's");
+        assert_eq!(households.name(), "Léa");
+    }
+
     /// Relecture 1 of fix-flaky-group-names (20/11): a withdrawal racing another write (renew_passes' `mark_all`, on
     /// the multi-thread runtime) never brings the household back with its pass; each read-change-write whole, the
     /// other two Households of the same file (other modules make their own) included.
@@ -589,6 +646,8 @@ mod tests {
         }
     }
 
+    /// R8 (review of R5): a link removed and the others marked to renew their passes are one write; a write that
+    /// fails changes nothing and says so (never the household gone with the others' old passes still said).
     #[test]
     fn a_link_removed_marks_the_others_in_the_same_write_or_changes_nothing() {
         let dir = tempfile::tempdir().unwrap();
