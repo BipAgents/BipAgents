@@ -1604,3 +1604,61 @@ mod correction_11 {
         }
     }
 }
+
+/// Relecture 11 (20/11, on 221a9ea8e).
+#[cfg(test)]
+mod review_11 {
+    use super::*;
+
+    fn total(page: &str, cents: i64, currency: &str) -> PageTotal {
+        page_total(&[page.to_string()], cents, currency)
+    }
+
+    #[test]
+    fn o_regression_innocent_numbers_beside_a_free_currency_mark_block_good_payments() {
+        // Correction 11's orphan (`orphan_number`): any number with no mark beside it, on or next to a line holding a
+        // currency mark beside no number (« Prix en € TTC », « Devise : EUR », PayPal's « 32,87 € EUR »), is an amount and
+        // blocks above the approved one. Phone numbers, references, SIRET, postcodes, « 48h », « Copyright 2026 », review
+        // counts, loyalty points: good payments that main pays are handed over. Asserts the good outcome.
+        let cases: &[(&str, i64)] = &[
+            ("Sous-total 27,97 €\nLivraison 4,90 €\nTotal à payer 32,87 €\nPrix en € TTC\nService client : 01 23 45 67 89", 3287),
+            ("Boutique : Pharmacie Exemple\nRéférence : 100045678\nDevise : EUR\nMontant à régler : 32,87 €", 3287),
+            ("Sous-total 27,97 €\nTotal à payer 27,97 €\nPrix en € TTC\nExpédition sous 48h", 2797),
+            ("Total à payer 32,87 €\nCopyright 2026 Boutique Exemple · Prix en € TTC", 3287),
+            ("Crème 27,97 €\nTotal 27,97 € EUR\nLivraison prévue le 28 novembre", 2797),
+            ("Total à payer 32,87 €\nPrix en € TTC\nSIRET 123 456 789 00012", 3287),
+            ("Crème solaire (128 avis)\nPrix en € TTC\nTotal à payer 27,97 €", 2797),
+            ("Livraison à : 12 rue de la Paix\n75011 Paris\nMontant en €\nTotal à payer 27,97 €", 2797),
+        ];
+        let handed: Vec<String> =
+            cases.iter().filter(|(p, c)| total(p, *c, "EUR") != PageTotal::Approved).map(|(p, _)| format!("{p:?}")).collect();
+        assert!(handed.is_empty(), "{} of {} good pages handed over:\n{}", handed.len(), cases.len(), handed.join("\n"));
+    }
+
+    #[test]
+    fn t_lesser_a_threshold_word_ending_a_real_totals_label_on_a_free_delivery_line_exempts_it() {
+        // à durcir: Correction 11's new THRESHOLD words (« pour », « encore », « spend »…) with free-delivery words
+        // anywhere on the line make a real higher total a mention (« dès » was already one)
+        for page in [
+            "Montant de votre panier : 27,97 €\nTotal pour : 32,87 € (livraison offerte)",
+            "Montant de votre panier : 27,97 €\nLivraison offerte ! Reste encore : 32,87 €",
+        ] {
+            assert_ne!(total(page, 2797, "EUR"), PageTotal::Approved, "{page}");
+        }
+    }
+
+    #[test]
+    fn a_lesser_any_part_equal_to_a_quantitys_low_reading_makes_it_agree() {
+        // à durcir: « Récapitulatif × 1 249,00 € » (a close button on the total's own line) read 249,00 because a part
+        // (« Remise 249,00 € ») happens to be that price
+        let page = "Montant de votre panier : 1 199,00 €\nLivraison 50,00 €\nRécapitulatif × 1 249,00 €\nRemise 249,00 €";
+        assert_ne!(total(page, 119_900, "EUR"), PageTotal::Approved);
+    }
+
+    #[test]
+    fn q_measure_a_quantity_column_before_an_item_of_100_to_999_euros() {
+        // pre-existing (amount_of reads « 2 249,00 » as 2 249,00): a good payment handed over; printed, never failing
+        let page = "Produit Qté Prix\nTéléviseur 2 249,00 €\nLivraison 4,90 €\nTotal à payer 502,90 €";
+        println!("qty column: {:?}", total(page, 50_290, "EUR"));
+    }
+}
