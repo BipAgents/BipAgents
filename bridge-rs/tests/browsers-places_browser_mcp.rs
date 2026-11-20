@@ -1898,3 +1898,33 @@ async fn review7_hermes_cancelling_its_own_request_never_cancels_another_call_of
         "{messages:?}"
     );
 }
+
+/// Review 7, the other half: Hermes cancelling the very call in flight reaches the real server under the proxy's
+/// own id of that call (the one it is running), so the server stops it and hold_gate.py ends its count.
+#[tokio::test(flavor = "multi_thread")]
+async fn hermes_cancelling_the_call_in_flight_cancels_it_on_the_real_server_under_its_own_id() {
+    let dir = tempfile::tempdir().unwrap();
+    let tmp = dir.path();
+    let log = tmp.join("seen.log");
+    let mut settings = config(tmp);
+    std::fs::write(tmp.join("cancel.py"), CANCEL_LOG_SERVER).unwrap();
+    settings.insert("server".into(), json!([python(), tmp.join("cancel.py").to_string_lossy(), log.to_string_lossy()]));
+    let out = Out::default();
+    let proxy = Proxy::new(settings, Box::new(out.clone()));
+    proxy.handle(init()).await;
+    let running = tokio::spawn({
+        let proxy = proxy.clone();
+        let message = json!({"jsonrpc": "2.0", "id": 40, "method": "tools/call", "params": {"name": "navigate",
+                             "arguments": {}, "_meta": {bipbridge::agent_tools::CALL_SESSION_META: "api_a"}}});
+        async move { proxy.handle(message).await }
+    });
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    proxy.handle(json!({"jsonrpc": "2.0", "method": "notifications/cancelled", "params": {"requestId": 40, "reason": "new message"}})).await;
+    let _ = tokio::time::timeout(Duration::from_secs(10), running).await;
+    proxy.stop_child().await;
+    let seen: Vec<Value> = std::fs::read_to_string(&log).unwrap_or_default().lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+    assert_eq!(seen.len(), 1, "{seen:?}");
+    let named = &seen[0]["cancelled"];
+    assert!(seen[0]["running"].as_array().unwrap().contains(named), "the cancellation named the call running: {seen:?}");
+    assert_ne!(named, &json!(40), "Hermes' own id passed on as it is: {seen:?}");
+}

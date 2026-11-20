@@ -2375,9 +2375,15 @@ pub struct Proxy {
     /// call's page), and Hermes patch 0029 sends several sessions' calls side by side. Each task's own browser has its
     /// own proxy, so the tasks still browse side by side.
     one_call: tokio::sync::Mutex<()>,
-    /// Calls Hermes cancelled (`notifications/cancelled`: the person sent a new message, its tool timeout): one still
-    /// waiting its turn here never starts (its JSON-RPC id, as text).
+    /// Calls Hermes cancelled (`notifications/cancelled`: the person sent a new message, its tool timeout) while they
+    /// waited their turn here: never started (Hermes' JSON-RPC id, as text). Only ids of `waiting`, each removed when
+    /// its call takes its turn.
     cancelled: Mutex<std::collections::HashSet<String>>,
+    /// The calls waiting their turn (`one_call`), by Hermes' id.
+    waiting: Mutex<std::collections::HashSet<String>>,
+    /// The call holding `one_call`: Hermes' id, and the ids of the tools/call requests this proxy sent the real
+    /// server for it (its own numbering, `next_id`). A cancellation of that call reaches the real server under those.
+    in_flight: Mutex<Option<(String, Vec<i64>)>>,
     /// Beside `busy`: which session uses which task's own browser (browsers.rs `SESSIONS_FILE`).
     sessions_path: PathBuf,
     /// The tasks' own browsers this proxy relays to, by their settings' path (one per running task, browsers.rs
@@ -2442,6 +2448,8 @@ impl Proxy {
             sent_once: Mutex::new(std::collections::HashSet::new()),
             one_call: tokio::sync::Mutex::new(()),
             cancelled: Mutex::new(Default::default()),
+            waiting: Mutex::new(Default::default()),
+            in_flight: Mutex::new(None),
             sessions_path,
             tasks: Mutex::new(HashMap::new()),
         })
@@ -2608,6 +2616,12 @@ impl Proxy {
         let number = self.next_id.fetch_add(1, Ordering::SeqCst);
         let (tx, rx) = oneshot::channel();
         self.pending.lock().unwrap_or_else(|e| e.into_inner()).insert(number, tx);
+        if method == "tools/call" {
+            // the call in flight's own requests (`in_flight`): what a cancellation of it reaches
+            if let Some((_, sent)) = self.in_flight.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
+                sent.push(number);
+            }
+        }
         let mut message = json!({"jsonrpc": "2.0", "id": number, "method": method});
         if let Some(params) = params.filter(|p| !p.is_null()) {
             message["params"] = params.clone();
@@ -2629,36 +2643,75 @@ impl Proxy {
             .map(str::to_string);
         let method = message.get("method").and_then(Value::as_str);
         if method == Some("notifications/cancelled") {
-            if let Some(id) = message.get("params").and_then(|p| p.get("requestId")) {
-                let mut cancelled = self.cancelled.lock().unwrap_or_else(|e| e.into_inner());
-                if cancelled.len() > 256 {
-                    cancelled.clear();
-                }
-                cancelled.insert(id.to_string());
+            // Hermes' id, never passed on as it is: the real server numbers this proxy's requests (review 7)
+            if let Some(id) = message.get("params").and_then(|p| p.get("requestId")).map(Value::to_string) {
+                self.cancel(&id, message.get("params").and_then(|p| p.get("reason")).cloned()).await;
             }
+            return;
         }
-        let _one = match method {
-            // waited longer than a call may last: the one before is stuck; answered « busy », never run late
-            Some("tools/call") => match tokio::time::timeout(self.call_limit(), self.one_call.lock()).await {
-                Ok(held) => {
+        let id = message.get("id").map(Value::to_string).unwrap_or_default();
+        let turn_held = match method {
+            Some("tools/call") => {
+                self.waiting.lock().unwrap_or_else(|e| e.into_inner()).insert(id.clone());
+                let turn = tokio::time::timeout(self.call_limit(), self.one_call.lock()).await;
+                self.waiting.lock().unwrap_or_else(|e| e.into_inner()).remove(&id);
+                let cancelled = self.cancelled.lock().unwrap_or_else(|e| e.into_inner()).remove(&id);
+                match turn {
                     // cancelled by Hermes while it waited its turn: never started (and, cancelled, never answered)
-                    let id = message.get("id").map(Value::to_string).unwrap_or_default();
-                    if self.cancelled.lock().unwrap_or_else(|e| e.into_inner()).remove(&id) {
+                    Ok(_) if cancelled => {
                         log("tools/call: cancelled while it waited, not run");
                         return;
                     }
-                    Some(held)
+                    Ok(held) => {
+                        *self.in_flight.lock().unwrap_or_else(|e| e.into_inner()) = Some((id.clone(), Vec::new()));
+                        Some(held)
+                    }
+                    // waited longer than a call may last: the one before is stuck; answered « busy », never run late
+                    Err(_) => {
+                        let mut answer = refused(BUSY);
+                        answer.insert("id".into(), message.get("id").cloned().unwrap_or(Value::Null));
+                        self.to_client(&Value::Object(answer));
+                        return;
+                    }
                 }
-                Err(_) => {
-                    let mut answer = refused(BUSY);
-                    answer.insert("id".into(), message.get("id").cloned().unwrap_or(Value::Null));
-                    self.to_client(&Value::Object(answer));
-                    return;
-                }
-            },
+            }
             _ => None,
         };
-        crate::runs::CALL_SESSION.scope(session, self.handle_call(message)).await
+        crate::runs::CALL_SESSION.scope(session, self.handle_call(message)).await;
+        if turn_held.is_some() {
+            *self.in_flight.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        }
+    }
+
+    /// Hermes cancelled its call `id` (its JSON-RPC id, as text): the call in flight here, cancelled on the real
+    /// server under this proxy's own ids of its requests still unanswered; a call waiting its turn, never started;
+    /// any other id (answered already, not this browser's): nothing at all.
+    async fn cancel(&self, id: &str, reason: Option<Value>) {
+        let ours: Vec<i64> = {
+            let flight = self.in_flight.lock().unwrap_or_else(|e| e.into_inner());
+            match flight.as_ref() {
+                Some((current, sent)) if current == id => {
+                    let pending = self.pending.lock().unwrap_or_else(|e| e.into_inner());
+                    sent.iter().copied().filter(|n| pending.contains_key(n)).collect()
+                }
+                _ => Vec::new(),
+            }
+        };
+        if ours.is_empty() {
+            if self.waiting.lock().unwrap_or_else(|e| e.into_inner()).contains(id) {
+                self.cancelled.lock().unwrap_or_else(|e| e.into_inner()).insert(id.to_string());
+            }
+            return;
+        }
+        if self.running() {
+            for number in ours {
+                let mut params = json!({"requestId": number});
+                if let Some(reason) = reason.clone() {
+                    params["reason"] = reason;
+                }
+                let _ = self.to_server(&json!({"jsonrpc": "2.0", "method": "notifications/cancelled", "params": params})).await;
+            }
+        }
     }
 
     /// How long one call may hold this browser (`call_seconds`, default `CALL_SECONDS`).
