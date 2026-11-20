@@ -141,3 +141,30 @@ def test_an_older_app_and_a_read_only_share_get_none(bridges, fakes):
     assert not first_chats(fakes)
     assert instant(bridge, thread, "F1D00000-0000-4000-8000-0000000001E1") is None
     assert instant(bridge, thread, "F1D00000-0000-4000-8000-0000000001E2") is None
+
+
+def test_a_second_message_during_the_wait_never_starts_a_turn_of_its_own(bridges, fakes):
+    # Relecture 1 (20/11): « Trouve-moi un train Lyon Paris » then « samedi matin » a second later — the usual way to
+    # write. The first send waits up to 2.5 s for its line before its turn starts; the second one sees no turn going on
+    # and nothing queued (and gets no line: the 20 s slot is taken), so it started its own turn at once, before the
+    # first: two turns in the same conversation, the second message answered first.
+    bridge, thread = setup(bridges, fakes)
+    fakes.model.first_delay = 2.0
+    gate = threading.Event()
+    slow_turn(fakes, gate, run="r1")
+    slow_turn(fakes, gate, run="r2", output="Samedi matin.")
+    answers = {}
+    first = threading.Thread(target=lambda: answers.__setitem__("first", send(
+        bridge, thread, "F1D00000-0000-4000-8000-0000000001F1", "Trouve-moi un train Lyon Paris pas trop cher",
+        instant_first=True)))
+    first.start()
+    time.sleep(0.6)
+    answers["second"] = send(bridge, thread, "F1D00000-0000-4000-8000-0000000001F2", "samedi matin de préférence",
+                             instant_first=True)
+    first.join(timeout=10)
+    gate.set()
+    states = sorted(a["state"] for a in answers.values())
+    assert states.count("started") == 1, (states, list(fakes.hermes.started))
+    # and the first message's turn is the one that started first
+    first_run = fakes.hermes.started[min(fakes.hermes.started)]["input"]
+    assert "Trouve-moi un train Lyon Paris" in str(first_run), first_run

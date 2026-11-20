@@ -18,6 +18,8 @@ pub struct Said {
     pub client_id: String,
     pub text: String,
     pub at: f64,
+    /// A first message's line (instant_reply.rs `first`: `by_model` 2), served with `first: true`.
+    pub first: bool,
 }
 
 impl Threads {
@@ -33,11 +35,24 @@ impl Threads {
     }
 
     /// The thread's sentences placed among its items.
+    /// A first message's line (instant_reply.rs `first`), kept with `by_model` 2: the layout gives its turn no app first
+    /// word (threads/layout.rs), which a queued message's line never took (apps before 20/11 keep today's layout).
+    pub async fn keep_first(&self, agent: &str, thread: &str, client_id: &str, said: &str) -> anyhow::Result<()> {
+        self.store
+            .run(
+                "INSERT OR IGNORE INTO thread_instant (agent, client_id, thread_id, text, by_model, created_at) \
+                 VALUES (?,?,?,?,2,?)",
+                vec![text(agent), text(client_id), text(thread), text(said), text(&iso(utcnow()))],
+            )
+            .await?;
+        Ok(())
+    }
+
     pub(super) async fn with_instant(&self, agent: &AgentConfig, thread: &Thread, items: &mut Vec<Item>, queued: &[String]) -> anyhow::Result<()> {
         let rows = self
             .store
             .run(
-                "SELECT client_id, text, created_at FROM thread_instant WHERE agent = ? AND thread_id = ? ORDER BY created_at",
+                "SELECT client_id, text, created_at, by_model FROM thread_instant WHERE agent = ? AND thread_id = ? ORDER BY created_at",
                 vec![text(&agent.name), text(&thread.id)],
             )
             .await?;
@@ -54,6 +69,7 @@ impl Threads {
                     .and_then(|c| crate::store::parse_since(c).ok())
                     .map(|d| d.timestamp_micros() as f64 / 1e6)
                     .unwrap_or(0.0),
+                first: r["by_model"].as_i64() == Some(2),
             })
             .collect();
         place(items, &said, queued);
@@ -68,6 +84,9 @@ fn body_of(said: &Said) -> Map<String, Value> {
     body.insert("text".into(), json!(said.text));
     body.insert("instant".into(), json!(true));
     body.insert("answers".into(), json!(said.client_id));
+    if said.first {
+        body.insert("first".into(), json!(true));
+    }
     body
 }
 
@@ -143,7 +162,7 @@ mod tests {
     }
 
     fn said(client: &str, at: f64) -> Said {
-        Said { client_id: client.into(), text: "Noté, j'en tiens compte.".into(), at }
+        Said { client_id: client.into(), text: "Noté, j'en tiens compte.".into(), at, first: false }
     }
 
     fn ids(items: &[Item]) -> Vec<&str> {
