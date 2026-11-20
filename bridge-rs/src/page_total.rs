@@ -1363,3 +1363,102 @@ mod correction_10 {
         assert_eq!(total("Total 27,97 €\nTotal à payer 1249\n€ TTC", 2797, "EUR"), PageTotal::Doubt(Doubt::Unclear));
     }
 }
+
+/// Relecture 10 (20/11, on f4d65a5bb): each asserts the SAFE outcome (never « approved » when the page asks more); they
+/// fail on f4d65a5bb.
+#[cfg(test)]
+mod review_10 {
+    use super::*;
+
+    fn total(page: &str, cents: i64, currency: &str) -> PageTotal {
+        page_total(&[page.to_string()], cents, currency)
+    }
+
+    const BASKET: &str = "Montant de votre panier : 1 199,00 €\nLivraison 50,00 €\n";
+
+    #[test]
+    fn n1_a_number_before_a_thousands_total_on_its_line_leaves_only_its_last_group() {
+        // amounts(): when the whole number doesn't read (« 2 1 249,00 »), the group next to the mark is taken if it reads
+        // alone with its cents (Relecture 7's « Qté 2 27,97 € » exception) — with the French thousands space that group
+        // is « 249,00 »: a quantity column, a footnote digit on the label, cut a 1 249,00 € total to 249,00 €. A low
+        // reading wins alone (the principle Correction 10 states for « × »), so « approved » on the basket → pressed.
+        for page in [
+            "Montant de votre panier : 1 199,00 €\nArticle Qté Montant\nTéléviseur 1 1 199,00 €\nLivraison 1 50,00 €\nTotal 2 1 249,00 €".to_string(),
+            format!("{BASKET}Prix total1 1 249,00 €"),
+            format!("{BASKET}Total 3 1 249,00 €"),
+        ] {
+            assert_ne!(total(&page, 119_900, "EUR"), PageTotal::Approved, "{page}");
+        }
+    }
+
+    #[test]
+    fn n2_an_integer_total_whose_mark_line_has_a_digit_or_whose_own_line_has_words_is_not_read() {
+        // Correction 10's orphan: only when the mark's line has no digit and the number's own line nothing else. The
+        // small line under a big integer price often has one (« € TTC (TVA 20 %) », « € TTC ou 4x 312,25 € », « dont
+        // 0,50 € d'éco-participation »), the label line above too (« (2 articles) »), the number a word or a star after
+        // it: « 1249 » is then no amount at all (no cents: no bare money either) → « approved » on the basket
+        for tail in [
+            "Total à payer 1249\n€ TTC (TVA 20 %)",
+            "Total à payer 1249\n€ TTC ou 4x 312,25 €",
+            "Total à payer 1249\n€ TTC dont 0,50 € d'éco-participation",
+            "Total TTC en € (2 articles)\n1249",
+            "Total TTC en €\n1249 TTC",
+            "Total à payer 1249*\n€ TTC",
+        ] {
+            let page = format!("{BASKET}{tail}");
+            assert_ne!(total(&page, 119_900, "EUR"), PageTotal::Approved, "{page}");
+        }
+    }
+
+    #[test]
+    fn n3_a_labelled_integer_total_without_its_mark_right_beside_it_is_not_read() {
+        // « Total TTC (€) : 1249 », « Total à payer en € : 1 249 », « Total à payer : 1249 » (the € in a column's head):
+        // labelled bare totals are read only with cents (BARE_MONEY, Correction 2) → nothing read → « approved »
+        for tail in ["Total TTC (€) : 1249", "Total à payer en € : 1 249", "Total à payer : 1249"] {
+            let page = format!("{BASKET}{tail}");
+            assert_ne!(total(&page, 119_900, "EUR"), PageTotal::Approved, "{page}");
+        }
+    }
+
+    #[test]
+    fn n4_lesser_an_unlabelled_visible_amount_without_mark_and_an_id_mark_on_the_line_above() {
+        // LOW: « 32,87 » written big without its mark (an icon font's €) under the parts: ignored; « Facture n° » ending
+        // the line above a lone total: the total is taken for an id
+        assert_ne!(total("Total panier 27,97 €\nLivraison 4,90 €\n32,87", 2797, "EUR"), PageTotal::Approved);
+        assert_ne!(total(&format!("{BASKET}Total à payer\nFacture n°\n1249,00 €"), 119_900, "EUR"), PageTotal::Approved);
+    }
+
+    #[test]
+    fn g_regression_woocommerce_items_of_100_to_999_euros_with_shipping_are_said_higher() {
+        // Correction 10's quantity agreement: « Téléviseur × 1 249,00 € » keeps 1 249,00 unless a labelled total is
+        // 249,00 — never true once shipping or a second item is added → Doubt::Higher(1 249,00 €), the person told « la
+        // page affichait un montant plus élevé (1 249,00 €) »: a FALSE sentence and a good payment handed over (on
+        // 1fe82c895: approved). Asserts the good outcome.
+        let woo = "Votre commande\nProduit Sous-total\nTéléviseur × 1 249,00 €\nSous-total 249,00 €\nExpédition Colissimo : 4,90 €\nTotal 253,90 €";
+        assert_eq!(total(woo, 25_390, "EUR"), PageTotal::Approved);
+        let two = "Votre commande\nProduit Sous-total\nCrème × 1 129,00 €\nGel × 1 120,00 €\nSous-total 249,00 €\nTotal 249,00 €";
+        assert_eq!(total(two, 24_900, "EUR"), PageTotal::Approved);
+    }
+
+    #[test]
+    fn m_more_good_payments_measured() {
+        // good payments, printed when handed over (a measure, never failing)
+        let cases: &[(&str, i64, &str)] = &[
+            ("Livraison offerte pour 50 € d'achat\nSous-total 27,97 €\nTotal à payer 27,97 €", 2797, "EUR"),
+            ("Free shipping on orders €50+\nSubtotal €27.97\nOrder total €27.97", 2797, "EUR"),
+            ("Spend €50 for free shipping\nSubtotal €27.97\nOrder total €27.97", 2797, "EUR"),
+            ("Add a gift box €39.90 Add to order\nSubtotal €27.97\nOrder total €27.97", 2797, "EUR"),
+            ("Sous-total 35,00 €\nVous économisez 7,03 €\nTotal à payer 27,97 €", 2797, "EUR"),
+            ("EUR €\n2\nSous-total 27,97 €\nTotal à payer 27,97 €", 2797, "EUR"),
+            ("Zwischensumme CHF 1’199.00\nVersand CHF 50.00\nTotal CHF 1’249.00", 124_900, "CHF"),
+            ("Subtotaal € 1.199,-\nVerzendkosten € 50,-\nTotaal € 1.249,-", 124_900, "EUR"),
+            ("סכום ביניים ₪27.97\nמשלוח ₪4.90\nסה״כ לתשלום ₪32.87\nכולל מע״מ ₪4.78", 3287, "ILS"),
+            ("Total à payer 32,87 €\nOu 4 paiements de 8,22 € sans frais", 3287, "EUR"),
+        ];
+        let handed: Vec<String> = cases
+            .iter()
+            .filter_map(|(p, c, cur)| Some(total(p, *c, cur)).filter(|t| *t != PageTotal::Approved).map(|t| format!("{p:?} → {t:?}")))
+            .collect();
+        println!("handed over: {}/{}\n{}", handed.len(), cases.len(), handed.join("\n"));
+    }
+}
