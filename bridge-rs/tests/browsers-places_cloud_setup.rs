@@ -616,9 +616,23 @@ async fn spare_agents_make_new_agents_files_only() {
     use axum::routing::{any, get};
     use bipbridge::agent_pool;
     use bipbridge::agents_admin::{self, NewAgent};
+    // The prepared agent's « served » answer, held while the claim's own commands are read: the agents made after
+    // the claim start once it answers (`after_claim`, in the background) and would otherwise race that reading.
+    let (served, held) = tokio::sync::watch::channel(true);
     let gateway = common::spawn_fake(
         Router::new()
-            .route("/p/{profile}/v1/capabilities", get(|| async { axum::Json(json!({})) }))
+            .route(
+                "/p/{profile}/v1/capabilities",
+                get(move |axum::extract::Path(profile): axum::extract::Path<String>| {
+                    let mut held = held.clone();
+                    async move {
+                        if profile == "agent" {
+                            let _ = held.wait_for(|open| *open).await;
+                        }
+                        axum::Json(json!({}))
+                    }
+                }),
+            )
             .fallback(any(|| async { (axum::http::StatusCode::CREATED, axum::Json(json!({"id": "s1"}))) })),
     )
     .await;
@@ -677,6 +691,7 @@ async fn spare_agents_make_new_agents_files_only() {
                    {"name": "Sport", "kind": "daily"}, {"name": "Cuisine", "kind": "daily"}], "language": "fr"}))
     .unwrap();
     let started = std::time::Instant::now();
+    served.send_replace(false);
     let agents = cloud_setup::claim_server(&shared, &wanted, &http, Some(run.clone())).await.unwrap();
     let claim_time = started.elapsed();
     let ids: Vec<String> = agents.iter().map(|a| a["id"].as_str().unwrap().to_string()).collect();
@@ -686,6 +701,7 @@ async fn spare_agents_make_new_agents_files_only() {
     assert_eq!(agents[1]["name"], "Maison");
     let ran = commands.lock().unwrap().clone();
     assert!(!ran.iter().any(|c| is_restart(c) || c.get(1) == Some(&"profile".to_string())), "{ran:?}");
+    served.send_replace(true);
     // the agent answers at once: nothing held for a restart
     let started = std::time::Instant::now();
     cloud_setup::READINESS.wait("agent", std::time::Duration::from_secs(5)).await;
