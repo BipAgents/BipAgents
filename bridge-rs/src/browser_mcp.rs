@@ -2359,8 +2359,6 @@ pub struct Proxy {
     pub send_sites_path: PathBuf,
     /// The one-use grants of that file this proxy used already.
     sent_once: Mutex<std::collections::HashSet<String>>,
-    /// The current call's Hermes session (patch 0028; Hermes sends this server's calls one at a time).
-    call_session: Mutex<Option<String>>,
     /// Beside `busy`: which session uses which task's own browser (browsers.rs `SESSIONS_FILE`).
     sessions_path: PathBuf,
     /// The tasks' own browsers this proxy relays to, by their settings' path (one per running task, browsers.rs
@@ -2423,7 +2421,6 @@ impl Proxy {
             secrets: Mutex::new(Secrets::default()),
             send_sites_path,
             sent_once: Mutex::new(std::collections::HashSet::new()),
-            call_session: Mutex::new(None),
             sessions_path,
             tasks: Mutex::new(HashMap::new()),
         })
@@ -2481,7 +2478,7 @@ impl Proxy {
         let now = crate::py::time_time();
         let mut grants = Vec::new();
         for host in hosts {
-            let session = self.call_session.lock().unwrap_or_else(|e| e.into_inner()).clone();
+            let session = crate::runs::CALL_SESSION.try_with(|s| s.clone()).ok().flatten();
             match send_allowed(&self.send_sites_path, host, &used, now, session.as_deref()) {
                 Some(None) => {}
                 Some(Some(id)) => grants.push((host.clone(), id)),
@@ -2601,6 +2598,18 @@ impl Proxy {
     // -- Hermes' messages ----------------------------------------------------------------------------------------
 
     pub async fn handle(self: &Arc<Self>, message: Value) {
+        // the call's Hermes session (patch 0028), its own for the whole call: since patch 0029 calls of several
+        // sessions reach this proxy side by side, so whose « Oui » counts is never a slot they share
+        let session = message
+            .get("params")
+            .and_then(|p| p.get("_meta"))
+            .and_then(|m| m.get(crate::agent_tools::CALL_SESSION_META))
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        crate::runs::CALL_SESSION.scope(session, self.handle_call(message)).await
+    }
+
+    async fn handle_call(self: &Arc<Self>, message: Value) {
         let Value::Object(message) = message else { return };
         let ident = message.get("id").cloned().unwrap_or(Value::Null);
         let method = match message.get("method") {
@@ -2674,11 +2683,10 @@ impl Proxy {
         let calling = method == "tools/call";
         let mut params = message.get("params").cloned();
         if calling {
-            // the call's Hermes session (patch 0028, `call_context`): whose « Oui » counts; kept from the real server
-            let session = params.as_mut().and_then(|p| p.get_mut("_meta")).and_then(Value::as_object_mut).and_then(|m| {
-                m.remove(crate::agent_tools::CALL_SESSION_META).and_then(|v| v.as_str().map(str::to_string))
-            });
-            *self.call_session.lock().unwrap_or_else(|e| e.into_inner()) = session;
+            // the call's Hermes session (`handle`): kept from the real server
+            if let Some(meta) = params.as_mut().and_then(|p| p.get_mut("_meta")).and_then(Value::as_object_mut) {
+                meta.remove(crate::agent_tools::CALL_SESSION_META);
+            }
         }
         let named = params.as_ref().and_then(|p| p.get("name")).and_then(Value::as_str).unwrap_or("").to_string();
         if calling && params.as_mut().is_some_and(|p| script_meant(&named, p)) {

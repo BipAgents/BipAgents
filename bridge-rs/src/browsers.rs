@@ -242,23 +242,25 @@ pub fn gives_task_browsers(config: &Config, agent: &str) -> bool {
 
 /// The Hermes this bridge runs says each MCP call's session (patch 0028): without it the task's calls can't be told
 /// from the agent's (bip-browser-mcp routes by session), so a task browses in the agent's browser as before. Read
-/// from its code (`[hermes] root`) once; unknown (no code folder here): yes.
+/// from its code once: `[hermes] root` (a shared Hermes), else `<hermes home>/hermes-agent` (the official install's
+/// folder, a self-install's own Hermes); no code found here: yes.
 pub fn hermes_says_call_session(config: &Config) -> bool {
-    static KNOWN: std::sync::Mutex<Option<(String, bool)>> = std::sync::Mutex::new(None);
-    let root = config.hermes.root.trim().to_string();
-    if root.is_empty() {
-        return true;
-    }
+    static KNOWN: std::sync::Mutex<Option<(PathBuf, bool)>> = std::sync::Mutex::new(None);
+    let root = match config.hermes.root.trim() {
+        "" if config.hermes.home.trim().is_empty() => return true,
+        "" => Path::new(config.hermes.home.trim()).join("hermes-agent"),
+        root => PathBuf::from(root),
+    };
+    let code = root.join("tools").join("mcp_tool_handlers.py");
     let mut known = KNOWN.lock().unwrap_or_else(|e| e.into_inner());
-    if let Some((_, says)) = known.as_ref().filter(|(seen, _)| *seen == root) {
+    if let Some((_, says)) = known.as_ref().filter(|(seen, _)| *seen == code) {
         return *says;
     }
-    let code = Path::new(&root).join("tools").join("mcp_tool_handlers.py");
     let says = std::fs::read_to_string(&code).map(|text| text.contains("hermes-agent/session_id")).unwrap_or(true);
     if !says {
         tracing::info!(code = %code.display(), "Hermes without the call's session (patch 0028): tasks use their agent's browser");
     }
-    *known = Some((root, says));
+    *known = Some((code, says));
     says
 }
 

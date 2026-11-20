@@ -986,21 +986,21 @@ impl Jobs {
         waiting.sort_by(|a, b| {
             first_number(a, &["created"]).partial_cmp(&first_number(b, &["created"])).unwrap_or(std::cmp::Ordering::Equal)
         });
-        let Some(first) = waiting.first() else { return 0 };
-        if self.memory_short(&agent_of(first)) {
-            return 0;
-        }
-        let id = tk::str_or_empty(first.get("id"));
-        match self.resume(&id, None, None).await {
-            Ok(_) => {
-                tracing::info!(job = %id, "task started: free memory again");
-                1
+        // the oldest that can start: one that can't (its agent gone, at its cap) never holds the others back
+        for job in &waiting {
+            if self.memory_short(&agent_of(job)) {
+                return 0; // the oldest one's turn: no room for it yet
             }
-            Err(e) => {
-                tracing::debug!(job = %id, error = %format!("{e:#}"), "task not resumed after waiting for memory");
-                0
+            let id = tk::str_or_empty(job.get("id"));
+            match self.resume(&id, None, None).await {
+                Ok(_) => {
+                    tracing::info!(job = %id, "task started: free memory again");
+                    return 1;
+                }
+                Err(e) => tracing::debug!(job = %id, error = %format!("{e:#}"), "task not resumed after waiting for memory"),
             }
         }
+        0
     }
 
     /// The credit back (a pack, the new month): the tasks and mail scans paused for it go on by themselves.
@@ -1996,11 +1996,12 @@ const ASK_TEXT_MAX: usize = 300;
 /// Requests one task may hand over.
 const HANDOVERS_PER_TASK: usize = 3;
 
-/// Some(true): this task already handed this request over (same kind and site); Some(false): a new one, now counted;
+/// Some(true): this task already handed this request over (the same request: kind, site, what and why); Some(false): a new one, now counted;
 /// None: the task handed `HANDOVERS_PER_TASK` over already.
 fn handed_over_before(job: &str, ask: &Ask) -> Option<bool> {
     static SENT: std::sync::LazyLock<std::sync::Mutex<HashMap<String, Vec<String>>>> = std::sync::LazyLock::new(Default::default);
-    let key = format!("{:?} {}", ask.kind, ask.site.trim().to_lowercase());
+    // the request whole: a payment's site is empty, its shop and amount are in `what` (card_pay.rs)
+    let key = format!("{:?} {} {} {}", ask.kind, ask.site.trim().to_lowercase(), ask.what.trim(), ask.why.trim());
     let mut sent = SENT.lock().unwrap_or_else(|e| e.into_inner());
     if sent.len() > 1000 {
         sent.clear();
@@ -2306,6 +2307,21 @@ pub async fn sweep_task_browsers(config: &crate::config::Config) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Review 3 of subtasks-redesign (20/11, head 357a87a0c): a task's two DIFFERENT payments (two shops, two amounts)
+    /// are one « same request » for the dedupe (`handed_over_before` keys a payment by its kind and its site, and a
+    /// payment's `site` is always empty, card_pay.rs): the second is answered « Handed over » and never reaches the
+    /// main conversation — the task ends saying it was handed over, the person never hears of it.
+    #[test]
+    fn review3_a_tasks_second_different_payment_is_handed_over_for_real() {
+        let pay = |what: &str| Ask { kind: AskKind::Pay, what: what.into(), site: String::new(), why: String::new() };
+        assert_eq!(handed_over_before("review3-job", &pay("Boulangerie Paul, 12.40 EUR")), Some(false));
+        assert_eq!(
+            handed_over_before("review3-job", &pay("SNCF Connect, 89.00 EUR")),
+            Some(false),
+            "another shop and amount taken for a repeat: never handed over"
+        );
+    }
 
     /// The apps are hinted when a task's list moves on: a step done, another started; not for its words alone.
     #[test]
