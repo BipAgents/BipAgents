@@ -48,7 +48,7 @@
 //!     browser_calls = 40      page_reads = 15        discovery_same = 5   discovery_calls = 8  same_failure = 3
 //!     task_same_tool = 40     task_tool_calls = 120  task_same_call = 5   task_same_lookup = 8 task_writes = 40
 //!     task_browser_calls = 80 task_page_reads = 30   task_discovery_same = 5 task_discovery_calls = 15 task_same_failure = 5
-//!     web_searches = 15       task_web_searches = 40 live_web_searches = 4
+//!     web_searches = 20       task_web_searches = 40 live_web_searches = 6
 //!     live_same_tool = 5      live_tool_calls = 12   live_same_call = 2   live_same_lookup = 3 live_writes = 5
 //!     live_browser_calls = 5  live_page_reads = 3    live_discovery_same = 2 live_discovery_calls = 3 live_same_failure = 2
 //!     routine_tool_calls = 120 idle_seconds = 120
@@ -84,8 +84,8 @@
 //! (Hermes' `chat/stream`, live_turns.rs): their stream is braked there, with the `live` limits.
 //!
 //! Searching the web again and again, every search answered (the same 20/11 call, seen in the place's log: no search
-//! failed, the model kept trying new words; once already on 19/11): more than `web_searches` in a turn (15; a task 40,
-//! a call 4) stops it, told at about two thirds with « answer with what you found, or offer a background task »
+//! failed, the model kept trying new words; once already on 19/11): more than `web_searches` in a turn (20; a task 40,
+//! a call 6: Alex, 20/11) stops it, told at about two thirds with « answer with what you found, or offer a background task »
 //! (`Warning::Searches`), then « J'ai fait beaucoup de recherches sur le web sans trouver de réponse sûre. Dis-moi si
 //! tu veux que j'en fasse une recherche approfondie en tâche de fond. » and the rescue turn (no more searching).
 //!
@@ -172,7 +172,7 @@ impl Default for Settings {
                 same_failure: 3,
                 // the bench's longest legitimate research turn makes 12 (brake-traces `web_research_long`), the real
                 // day's 5 or 6
-                web_searches: 15,
+                web_searches: 20,
             },
             // under Hermes' own cap of 150 model calls (tool_diet.rs), so the brake speaks first
             task: Limits {
@@ -201,8 +201,8 @@ impl Default for Settings {
                 discovery_same: 2,
                 discovery_calls: 3,
                 same_failure: 2,
-                // a call's good turn makes one search (the lab, 20/11), two or three to refine
-                web_searches: 4,
+                // a call's good turn makes one search (the lab, 20/11), two or three to refine; Alex 20/11: 6
+                web_searches: 6,
             },
             // a routine is scheduled work (the task's limits): as many bridge calls as a task, under Hermes' cap of 150
             routine_tool_calls: 120,
@@ -2167,36 +2167,36 @@ exactly the same session_search call 3 times in this turn; at 5 the turn is stop
     }
 
     /// 20/11 (and 19/11): Vie on the Spark searched the web 50 times in one turn, every search answered, new words each
-    /// time: Hermes' own cap stopped it. The brake stops a turn past 15 searches (a call past 4), told before at 10 (3).
+    /// time: Hermes' own cap stopped it. The brake stops a turn past 20 searches (a call past 6), told before at 13 (4).
     #[test]
     fn many_web_searches_stop_the_turn_even_when_they_all_answer() {
         let limits = Settings::default().conversation;
         let mut turn = TurnCount::default();
         let mut warned = None;
-        for i in 1..=15 {
+        for i in 1..=20 {
             assert_eq!(turn.note("web_search", Some(&format!("jeu DJ PS1 {i}")), false, &limits), None, "{i}");
             assert_eq!(turn.completed("web_search", false, &limits), None);
             if let Some(w) = turn.take_warning() {
                 warned.get_or_insert((i, w));
             }
         }
-        assert_eq!(warned, Some((10, Warning::Searches(10, 15))));
-        assert!(Warning::Searches(10, 15).text().contains("propose_task"));
-        assert_eq!(turn.note("web_search", Some("jeu DJ PS1 16"), false, &limits), Some(Over::Searches));
-        // a call: the fifth
+        assert_eq!(warned, Some((13, Warning::Searches(13, 20))));
+        assert!(Warning::Searches(13, 20).text().contains("propose_task"));
+        assert_eq!(turn.note("web_search", Some("jeu DJ PS1 21"), false, &limits), Some(Over::Searches));
+        // a call: the seventh
         let live = Settings::default().live;
         let mut turn = TurnCount::default();
-        for i in 1..=4 {
+        for i in 1..=6 {
             assert_eq!(turn.note("web_search", Some(&format!("q{i}")), false, &live), None, "{i}");
         }
-        assert_eq!(turn.note("web_search", Some("q5"), false, &live), Some(Over::Searches));
+        assert_eq!(turn.note("web_search", Some("q7"), false, &live), Some(Over::Searches));
         // a background task goes much further; « Continuer » raises it once
         let task = Settings::default().task;
         let mut turn = TurnCount::default();
         for i in 1..=40 {
             assert_eq!(turn.note("web_search", Some(&format!("q{i}")), false, &task), None, "{i}");
         }
-        assert_eq!(limits.raised().web_searches, 23);
+        assert_eq!(limits.raised().web_searches, 30);
         // other lookups don't count as web searches
         let mut turn = TurnCount::default();
         for i in 1..=20 {
@@ -2259,7 +2259,7 @@ une recherche approfondie en tâche de fond."
         // a call: well under a conversation's limits, under Hermes' own cap of 50 web searches
         assert!(d.live.tool_calls < d.conversation.tool_calls && d.live.tool_calls < 50);
         // web searches: all under Hermes' own cap of 50 (its English halt never comes first)
-        assert_eq!((d.conversation.web_searches, d.task.web_searches, d.live.web_searches), (15, 40, 4));
+        assert_eq!((d.conversation.web_searches, d.task.web_searches, d.live.web_searches), (20, 40, 6));
         assert_eq!(Settings::from_table(&json!({"web_searches": 20, "live_web_searches": 6})).live.web_searches, 6);
     }
 }
