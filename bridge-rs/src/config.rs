@@ -1984,7 +1984,13 @@ pub fn parse_config(data: &Value, source_path: Option<&str>) -> Result<Config> {
             }
             _ => Vec::new(),
         },
-        model_instant_line: opt_s(model_t, "instant_line"),
+        model_instant_line: {
+            let line = opt_s(model_t, "instant_line");
+            if line.is_none() && opt_s(model_t, "instant_line_url").is_some() {
+                tracing::warn!("[model] instant_line_url is set without instant_line: ignored (the agent's own model says the line)");
+            }
+            line
+        },
         model_instant_line_url: opt_s(model_t, "instant_line_url").map(|u| py::rstrip_slash(&u)),
         model_instant_line_key: secret(model_t, "instant_line_key", "model", false)?,
         public_url: opt_s(data, "public_url").map(|u| py::rstrip_slash(&u)),
