@@ -552,9 +552,12 @@ pub fn first_outcome(config: &crate::config::Config, agent: &AgentConfig, mode: 
 /// The note joined to a first message whose turn starts before its line: one may be shown at once, its words come
 /// at the next step (steered: `first_note`).
 pub fn standing_note() -> String {
+    // said plainly (bench 20/11: with « don't announce your plan », GLM still wrote the ACK rule's opening sentence 14
+    // times in 16 and the line came after it; with this one, 4 in 16, the line shown 13 in 16, never said twice)
     format!(
-        "{MARK} A short line is being shown to the person at once, in your name, saying what you start on. Don't open \
-with an acknowledgement or announce your plan: go straight to work. Its words reach you at your next step.-->"
+        "{MARK} The app is showing the person a short line in your name saying what you start on. So skip the sentence \
+your rules ask before work: no acknowledgement, no plan, no « Je cherche… »; call your first tool directly. If you \
+answer without tools, give the answer itself. The line's words reach you at your next step.-->"
     )
 }
 
@@ -965,8 +968,8 @@ Their new message: plutôt le samedi");
     #[test]
     fn the_standing_note_is_hidden_and_constant() {
         let words = with_standing_note("Trouve-moi un train pour samedi");
-        assert!(words.starts_with("Trouve-moi un train pour samedi\n\n<!--bip:answered A short line"));
-        assert!(words.contains("go straight to work") && words.ends_with("-->"));
+        assert!(words.starts_with("Trouve-moi un train pour samedi\n\n<!--bip:answered The app is showing the person"));
+        assert!(words.contains("call your first tool directly") && words.ends_with("-->"));
         assert_eq!(without_note(&words), "Trouve-moi un train pour samedi");
         // byte-stable: the same note for every message (the turn's stored history never changes, its cache stays)
         assert_eq!(standing_note(), standing_note());

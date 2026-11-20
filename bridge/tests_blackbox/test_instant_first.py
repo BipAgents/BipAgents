@@ -22,7 +22,7 @@ def slow_turn(fakes, gate, run="r1", output="Voici trois trains."):
                               sse("message.delta", run_id=run, delta=output), sse("run.completed", run_id=run, output=output)]
 
 
-STANDING = "<!--bip:answered A short line is being shown"
+STANDING = "<!--bip:answered The app is showing the person a short line"
 
 
 def words_of(fakes, run):
@@ -42,7 +42,7 @@ def test_a_slow_turn_starts_at_once_shows_the_line_then_its_real_reply(bridges, 
     # the turn got the words and the standing note (no line yet)
     words = words_of(fakes, "r1")
     assert words.startswith("Trouve-moi un train Lyon Paris samedi matin pas trop cher\n\n" + STANDING)
-    assert "go straight to work" in words and LINE not in words
+    assert "call your first tool directly" in words and LINE not in words
     # the model was asked with the agent's key and name, the time, the conversation's last lines and the words
     chat = first_chats(fakes)[-1]
     assert chat["authorization"] == "Bearer sk-test-key" and "tools" not in chat["body"]
