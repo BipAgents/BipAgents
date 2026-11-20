@@ -1928,3 +1928,64 @@ async fn hermes_cancelling_the_call_in_flight_cancels_it_on_the_real_server_unde
     assert!(seen[0]["running"].as_array().unwrap().contains(named), "the cancellation named the call running: {seen:?}");
     assert_ne!(named, &json!(40), "Hermes' own id passed on as it is: {seen:?}");
 }
+
+/// A stealth server that writes down (`calls.log`) the name of every tools/call it receives, and answers at once.
+const CALL_LOG_SERVER: &str = r#"
+import json, sys
+log = sys.argv[1]
+for line in sys.stdin:
+    m = json.loads(line)
+    if "id" not in m:
+        continue
+    if m["method"] == "initialize":
+        r = {"protocolVersion": m["params"]["protocolVersion"], "capabilities": {"tools": {}},
+             "serverInfo": {"name": "stealth", "version": "1"}}
+    elif m["method"] == "tools/list":
+        r = {"tools": [{"name": "navigate", "inputSchema": {"type": "object"}}]}
+    else:
+        with open(log, "a") as f:
+            f.write(m["params"]["name"] + "\n")
+        r = {"content": [{"type": "text", "text": "did " + m["params"]["name"]}]}
+    print(json.dumps({"jsonrpc": "2.0", "id": m["id"], "result": r}), flush=True)
+"#;
+
+/// Review 8 (d775376ee): a call is `in_flight` from the moment it takes its turn, but its requests to the real server
+/// are recorded only when sent. Before that — its browser still starting (`ensure_server`: the container's start and
+/// `ready`, up to `ready_seconds`; after every overrun restart), the guard's own looks — a cancellation from Hermes
+/// finds no unanswered request and the call is no longer `waiting`: it is dropped, and the call then runs in full
+/// although Hermes abandoned it (the person's new message). Expected: a call cancelled after it took its turn but
+/// before it reached the real server never reaches it.
+#[tokio::test(flavor = "multi_thread")]
+async fn review8_a_call_cancelled_while_its_browser_starts_never_reaches_the_real_server() {
+    let dir = tempfile::tempdir().unwrap();
+    let tmp = dir.path();
+    let log = tmp.join("calls.log");
+    let mut settings = config(tmp);
+    std::fs::write(tmp.join("calllog.py"), CALL_LOG_SERVER).unwrap();
+    settings.insert("server".into(), json!([python(), tmp.join("calllog.py").to_string_lossy(), log.to_string_lossy()]));
+    let running = tmp.join("running").to_string_lossy().into_owned();
+    // the container takes 1.5 s to start (a cold start, or the restart after an overrun)
+    settings.insert("start".into(), json!(["sh", "-c", format!("sleep 1.5; touch {running}")]));
+    let out = Out::default();
+    let proxy = Proxy::new(settings, Box::new(out.clone()));
+    proxy.handle(init()).await;
+    proxy.stop_child().await;
+    let _ = std::fs::remove_file(tmp.join("running"));
+    let call = tokio::spawn({
+        let proxy = proxy.clone();
+        let message = json!({"jsonrpc": "2.0", "id": 9, "method": "tools/call", "params": {"name": "navigate",
+                             "arguments": {}, "_meta": {bipbridge::agent_tools::CALL_SESSION_META: "api_a"}}});
+        async move { proxy.handle(message).await }
+    });
+    tokio::time::sleep(Duration::from_millis(400)).await; // it has its turn, its browser is starting
+    proxy.handle(json!({"jsonrpc": "2.0", "method": "notifications/cancelled",
+                        "params": {"requestId": 9, "reason": "the person sent a new message"}})).await;
+    let _ = tokio::time::timeout(Duration::from_secs(15), call).await;
+    let received = std::fs::read_to_string(&log).unwrap_or_default();
+    let messages = out.messages();
+    proxy.stop_child().await;
+    assert!(
+        !received.contains("navigate"),
+        "the cancelled call still reached the real server once its browser had started: {received:?} {messages:?}"
+    );
+}
