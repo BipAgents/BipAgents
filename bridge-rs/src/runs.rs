@@ -727,6 +727,12 @@ struct HubInner {
     pending: IndexMap<(String, String, String), Dict>,
 }
 
+/// The long-work safety net (`handoff`, `rescue`) may hand this run to a background task: never a family agent's nor
+/// a relative's turn, where tasks are closed (family_agent.rs, agent_shares.rs).
+pub fn may_hand_off(config: &crate::config::Config, agent: &str, run_id: &str) -> bool {
+    !crate::family_agent::is_family(config, agent) && !crate::agent_shares::relative_run(config, run_id)
+}
+
 tokio::task_local! {
     /// The Hermes session a call of the bridge's tools comes from, as Hermes says it in the call's `_meta` (patch
     /// 0028, agent_tools.rs `mcp`): `turn_of` then takes that session's run instead of telling runs apart by their
@@ -3082,7 +3088,7 @@ more steps in this turn. Don't repeat what failed: change approach.", crate::loo
         }
         let Some(shared) = self.config.as_ref() else { return };
         let jobs = shared.get().jobs.clone();
-        if !jobs.handoff {
+        if !jobs.handoff || !may_hand_off(&shared.get(), &sub.agent.name, &sub.run_id) {
             return;
         }
         let window = jobs.handoff_browser_window.max(1) as usize;
@@ -3124,7 +3130,7 @@ more steps in this turn. Don't repeat what failed: change approach.", crate::loo
         }
         let Some(shared) = self.config.clone() else { return };
         let config = shared.get();
-        if !config.jobs.handoff || !config.jobs.handoff_rescue {
+        if !config.jobs.handoff || !config.jobs.handoff_rescue || !may_hand_off(&config, &sub.agent.name, &sub.run_id) {
             return;
         }
         let output = terminal.final_text();
@@ -4274,6 +4280,29 @@ mod tests {
         assert_eq!(of("api_a").as_deref(), Some("run_task_a"));
         assert_eq!(of("api_b").as_deref(), Some("run_task_b"));
         assert_eq!(of("api_gone"), None, "a session with no run here: no guess");
+    }
+
+    /// Tasks are closed to a family agent and in a relative's turn (family_agent.rs `TOOLS`, agent_shares.rs
+    /// `closed_tool`): the long-work safety net never steers nor starts one there either (its task would have been the
+    /// place owner's alone, unseen by the member who asked, review 1 of subtasks-redesign).
+    #[test]
+    fn the_safety_net_never_hands_a_family_agents_or_a_relatives_turn_to_a_task() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = crate::config::parse_config(
+            &json!({"bridge_key": "k".repeat(32), "data_dir": dir.path().to_string_lossy()}),
+            None,
+        )
+        .unwrap();
+        assert!(may_hand_off(&config, "vie", "run_1"));
+        std::fs::write(dir.path().join("family-agent.json"), json!({"agent": "maison", "agents": ["maison"]}).to_string()).unwrap();
+        assert!(!may_hand_off(&config, "maison", "run_2"), "the family's agent");
+        assert!(may_hand_off(&config, "vie", "run_3"));
+        std::fs::write(
+            dir.path().join("agent-shares.json"),
+            json!({"conversations": {"c1": {"run": {"id": "run_4"}}}}).to_string(),
+        )
+        .unwrap();
+        assert!(!may_hand_off(&config, "vie", "run_4"), "a relative's turn");
     }
 
     /// urgent_pay.rs `refuses_payment` tells the rehearsal's own pay_with_card from another turn of the agent by the
