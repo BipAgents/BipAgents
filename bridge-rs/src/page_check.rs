@@ -482,10 +482,34 @@ pub fn note(agent: &str, page: &str, found: Option<&[Found]>, now: f64) -> Strin
     asked.insert(key, now);
     times.push(now);
     format!(
-        "\nLayout check {data}, the page is shown already: {list}. Fix it now: let text wrap (no white-space:nowrap, \
-fixed widths or overflow:hidden on words), stack boxes that don't fit side by side, then call create_page again with \
-page \"{page}\" (once)."
+        "\nLayout check {data}, the page is shown already: {list}. Fix it now: {}, then call create_page again with \
+page \"{page}\" (once).",
+        fixes(&lines)
     )
+}
+
+/// What to do about the problems found, in a few words each (the second bench, 20/11: a layout hint for HTML shown as
+/// words left the model doing the same again).
+fn fixes(lines: &[String]) -> String {
+    let has = |kind: &str| lines.iter().any(|l| l.starts_with(kind));
+    let mut out = Vec::new();
+    let layout = ["past the screen", "the page scrolls", "text cut off", "text on top", "a number"];
+    if layout.iter().any(|k| has(k)) {
+        out.push("let text wrap (no white-space:nowrap, fixed widths or overflow:hidden on words) and stack boxes that don't fit side by side");
+    }
+    if has("HTML shown as words") {
+        out.push("Bip.set writes text only: make elements yourself (innerHTML only with your own markup, Bip.esc on what people typed) or use Bip.rows");
+    }
+    if has("Bip.store writes refused") {
+        out.push("keep the starting data in a JS constant and draw it with the stored lines");
+    }
+    if has("script error") {
+        out.push("fix the script error");
+    }
+    if has("empty block") {
+        out.push("fill or remove the empty block");
+    }
+    out.join("; ")
 }
 
 #[cfg(test)]
@@ -642,6 +666,18 @@ id=\"l\"></ul><script>Bip.store.onChange(function(){})</script>";
         assert!(all.contains("Bip.store writes refused"), "{all}");
         assert!(all.contains("script error") && all.contains("nope"), "{all}");
         assert!(all.contains("a number broken over two lines"), "{all}");
+    }
+
+    /// The bench of correction 1 (20/11): told only to « let text wrap », Spark's Tricount drew HTML with Bip.set
+    /// again; the request names what to do for each kind of problem.
+    #[test]
+    fn the_request_says_what_to_do_for_each_kind_of_problem() {
+        let mut phone = found(390);
+        phone.markup = vec!["<div> « <label class='toggle'> »".into()];
+        phone.unsaved = 2;
+        let n = note("tricount", "durbuy", Some(&[phone]), 0.0);
+        assert!(n.contains("Bip.set writes text only") && n.contains("JS constant"), "{n}");
+        assert!(!n.contains("let text wrap"), "no layout problem here: {n}");
     }
 
     /// Review 20/11 n1: a page that posts its own messages to the frame (a model's `{height: …}` for its iframe) is
