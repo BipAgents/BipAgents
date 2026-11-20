@@ -119,6 +119,10 @@ upload_dir_container = "/home/hermes/.hermes/profiles/wellness/uploads"   # the 
 
 Then run `~/.local/bin/bipbridge check --config ~/.config/hermes-ios/bridge.toml`.
 
+Optional: the short line the agent says at once to a new request uses the agent's own model. To use another (small)
+model, set `[model] instant_line = "<model>"` (and `instant_line_url` / `instant_line_key` for another server). That
+model receives the person's new message and their last few messages in the conversation (never the agent's replies).
+
 All options: [`bridge/README.md`](../bridge/README.md).
 
 ### The agents' sandboxes (Linux with podman)
