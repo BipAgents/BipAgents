@@ -38,6 +38,7 @@ upstream PRs: 0027, 0025, 0020, 0026, 0011, 0017, 0009's `!name`, 0013.
 | 0026 Runs API: `todo.updated`, the agent's task list (backport) | `gateway/platforms/api_server_runs.py` |
 | 0027 a safety-refused API turn no longer locks its conversation | `gateway/run_turn_runner.py` |
 | 0028 MCP calls carry their session to a server that asks (`call_context`) | `tools/mcp_tool.py`, `tools/mcp_tool_handlers.py`, `tools/mcp_tool_registration.py` |
+| 0029 calls to a `call_context` server go side by side per session | `tools/mcp_tool.py`, `tools/mcp_tool_handlers.py`, `tools/mcp_tool_sampling.py`, `tools/mcp_tool_server_run.py` |
 
 ## How the patches are kept
 
@@ -876,4 +877,23 @@ session the call comes from (`hermes-agent/session_id`, from the dispatcher's ow
 other server ever sees a session id. The bridge writes `call_context: true` in its own entry (agent_tools.rs) and,
 with it, takes that session's run (runs.rs `CALL_SESSION`); without it (an older Hermes) it refuses to guess between
 several runs. Tests: `tests/tools/test_mcp_call_context.py`.
+
+## 0029 — calls to a `call_context` server go side by side per session
+
+**Problem.** Hermes sends one tools/call at a time to each MCP server (`server._rpc_lock`). With three background tasks
+beside the person's conversation (Alex, 20/11: « vraiment en parallèle »), a call waiting minutes for its person (an
+approval card of the bridge's vault or pay server) held every other conversation's calls to that server, the person's
+own included.
+
+**What the patch does.** For a server whose config says `call_context: true` (0028), a tools/call that carries its
+session takes `_rpc_lock.for_session(<session>)`: one call at a time per session, different sessions side by side. The
+MCP SDK (2.3.0) tells requests apart by their JSON-RPC id on one connection, stdio and streamable HTTP alike
+(`JSONRPCDispatcher._pending`), so no transport needs to stay serialised; the bridge's servers answer concurrently
+(HTTP: one request each; bip-browser-mcp: a task per message). The server's own RPCs (tools/list, keepalive, tool
+refresh, a call without a session) keep the lock exclusive: they wait for the calls in flight without holding new
+sessions' calls back (a refresh may wait while a card is open), and `locked()` stays true while any call runs (stdio
+recycling and keepalive see a busy server). The elicitation callback finds its call's context by the session the
+elicitation's `_meta` names (the bridge's pay server says it back, card_pay.rs `Asker`), else the only call in
+flight; several calls and no session named: declined, never asked in the wrong conversation. Every other server:
+unchanged. Tests: `tests/tools/test_mcp_call_context_parallel.py`.
 
