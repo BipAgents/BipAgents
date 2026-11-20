@@ -926,6 +926,13 @@ pub fn script_answer(answer: Value) -> Dict {
 }
 
 /// A refusal of the proxy's own, as the real server would answer (softened like any, `soften`).
+/// A browser call's longest time here: just under Hermes' own tool timeout for this server (120 s, browsers.rs
+/// `mcp_server`), so the proxy answers first and nothing runs after Hermes gave up.
+pub const CALL_SECONDS: f64 = 115.0;
+/// The answer to a call that waited its turn longer than `CALL_SECONDS`: not run at all.
+pub const BUSY: &str = "Not done: your browser is still busy with an action that did not finish in time; nothing was \
+done. Try again in a moment.";
+
 fn refused(text: &str) -> Dict {
     json!({"jsonrpc": "2.0", "result": {"content": [{"type": "text", "text": text}], "isError": true}})
         .as_object()
@@ -2613,10 +2620,25 @@ impl Proxy {
             .and_then(Value::as_str)
             .map(str::to_string);
         let _one = match message.get("method").and_then(Value::as_str) {
-            Some("tools/call") => Some(self.one_call.lock().await),
+            // waited longer than a call may last: the one before is stuck; answered « busy », never run late
+            Some("tools/call") => match tokio::time::timeout(self.call_limit(), self.one_call.lock()).await {
+                Ok(held) => Some(held),
+                Err(_) => {
+                    let mut answer = refused(BUSY);
+                    answer.insert("id".into(), message.get("id").cloned().unwrap_or(Value::Null));
+                    self.to_client(&Value::Object(answer));
+                    return;
+                }
+            },
             _ => None,
         };
         crate::runs::CALL_SESSION.scope(session, self.handle_call(message)).await
+    }
+
+    /// How long one call may hold this browser (`call_seconds`, default `CALL_SECONDS`).
+    fn call_limit(&self) -> Duration {
+        let seconds = self.config.get("call_seconds").and_then(|v| crate::py::py_float(v).ok()).unwrap_or(CALL_SECONDS);
+        Duration::from_secs_f64(seconds.max(0.1))
     }
 
     async fn handle_call(self: &Arc<Self>, message: Value) {
@@ -2732,7 +2754,20 @@ impl Proxy {
         let result: Result<(), String> = async {
             self.ensure_server().await?;
             let mut response = if calling {
-                self.call_tool(&tool, params.as_ref()).await?
+                // bounded: a call the server never answers (a page's alert(), a promise that never settles, a frozen
+                // DevTools link) never holds this browser for the other conversations (review 5)
+                match tokio::time::timeout(self.call_limit(), self.call_tool(&tool, params.as_ref())).await {
+                    Ok(answer) => answer?,
+                    Err(_) => {
+                        log(&format!("{tool}: no answer in {:.0} s, the browser's server started again", self.call_limit().as_secs_f64()));
+                        self.stop_child().await;
+                        refused(&format!(
+                            "Not done in time: this browser action took longer than {:.0} s and was stopped (your \
+                             browser's tools started again; the pages stay open). Look at the page before doing it again.",
+                            self.call_limit().as_secs_f64()
+                        ))
+                    }
+                }
             } else {
                 self.request(&method, params.as_ref()).await?
             };
