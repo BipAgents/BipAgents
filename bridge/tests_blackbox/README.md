@@ -35,7 +35,9 @@ scripts/blackbox-parallel.sh [--workers 10] [--junit out.xml] [tests_blackbox/te
 without `serve`, followed by the subcommand they need: `check`, `genkey`, `qr --json [--agent X]`, `console`,
 `peer-token --agent X`, `shares-mounts --agent X`, `agent-tools --agent X`, `spaces start`, `adopt`, `browser remove --agent X`. The suite
 needs no network and runs nothing as root. It uses about 30 local ports: `bind(0)` ones serially; under pytest-xdist each worker takes its ports from a block of
-500 of its own below Linux's ephemeral range (`bbkit/servers.py` `free_port`), so workers never pick the same port.
+500 of its own below Linux's ephemeral range (`bbkit/servers.py` `free_port`), so workers never pick the same port. A
+worker holds its block with a lock file (`flock`, `<tmp>/bipagents-blackbox-ports/`, or `BB_PORT_LOCKS`) while it
+lives, so two runs at once on one machine (agents sharing the build server) never share a block either.
 
 ## What a test sees
 
@@ -56,7 +58,8 @@ No wait is unbounded: `wait_until` takes a timeout, the HTTP client 60 s, `read_
 ends (its keepalives would keep the read timeout from firing). Read a run's progress from a log file, not through
 `| tail`: the tail shows nothing until pytest ends, so a run looks stalled while it goes on.
 
-The suite waits for `GET /health` to answer 200, then sends SIGTERM at the end of the test. The default config is
+The suite waits for the bridge's own log to say it listens on its port (« Uvicorn running on … », once the bind
+succeeded: a 200 from a process that took the port first is never taken for it) and for `GET /health` to answer 200, then sends SIGTERM at the end of the test. The default config is
 `tests/conftest.py`'s `config_dict`, pointed at the fakes, with `[cron] watch = false`. Tests that need the cron
 watcher turn it back on.
 
