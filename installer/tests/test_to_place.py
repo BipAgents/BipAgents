@@ -204,15 +204,15 @@ def test_a_bipagents_computer_s_agents_replace_the_place_s(computer, place, tmp_
     to_place.bring_in(out, CODE.lower(), runner, base=new, repo=tmp_path / "repo")
     hub, profiles = new / ".hermes", new / ".hermes" / "profiles"
     # The computer's agents, the place's gone; the main profile now a profile of its own.
-    assert sorted(p.name for p in profiles.iterdir()) == ["coach", "hermes"]
+    assert sorted(p.name for p in profiles.iterdir()) == ["coach", "perso"]
     assert (profiles / "coach" / "memories" / "MEMORY.md").read_text() == "Alex court le dimanche."
-    assert (profiles / "hermes" / "memories" / "MEMORY.md").read_text() == "Le chat s'appelle Pixel."
-    assert sqlite3.connect(profiles / "hermes" / "state.db").execute("SELECT v FROM t").fetchall()[0] == (
+    assert (profiles / "perso" / "memories" / "MEMORY.md").read_text() == "Le chat s'appelle Pixel."
+    assert sqlite3.connect(profiles / "perso" / "state.db").execute("SELECT v FROM t").fetchall()[0] == (
         "rappelle-moi le vétérinaire",)
-    assert not (profiles / "hermes" / "hermes-agent").exists()
+    assert not (profiles / "perso" / "hermes-agent").exists()
     assert (hub / "hermes-agent" / "run_agent.py").read_text() == "the place's Hermes"       # its Hermes stays
     # The place's model and sandbox for every one; their own keys stay.
-    for name, key in (("coach", "coach-key"), ("hermes", "root-key")):
+    for name, key in (("coach", "coach-key"), ("perso", "root-key")):
         settings = yaml.safe_load((profiles / name / "config.yaml").read_text())
         assert settings["model"]["base_url"] == "https://api.eurouter.ai/v1"
         assert settings["terminal"] == {"backend": "docker"} and settings["approvals"]["mode"] == "manual"
@@ -225,11 +225,11 @@ def test_a_bipagents_computer_s_agents_replace_the_place_s(computer, place, tmp_
         env = (profiles / name / ".env").read_text()
         assert f"API_SERVER_KEY={key}" in env and "CUSTOM_MODEL_API_KEY=offer-key" in env
         assert "HERMES_DOCKER_BINARY=/usr/bin/podman" in env and "API_SERVER_PORT" not in env
-    assert yaml.safe_load((profiles / "hermes" / "config.yaml").read_text())["auxiliary"]["vision"] == {
+    assert yaml.safe_load((profiles / "perso" / "config.yaml").read_text())["auxiliary"]["vision"] == {
         "provider": "auto", "model": ""}
     assert "delegation" not in yaml.safe_load((profiles / "coach" / "config.yaml").read_text()) or \
         "model" not in yaml.safe_load((profiles / "coach" / "config.yaml").read_text())["delegation"]
-    assert "OPENROUTER_API_KEY=alex-own" in (profiles / "hermes" / ".env").read_text()   # theirs, unused here
+    assert "OPENROUTER_API_KEY=alex-own" in (profiles / "perso" / ".env").read_text()   # theirs, unused here
     # The place's hub as it was.
     assert "API_SERVER_KEY=place-hub" in (hub / ".env").read_text()
     # The bridge's data: the person's, with the place's door certificate.
@@ -245,14 +245,14 @@ def test_a_bipagents_computer_s_agents_replace_the_place_s(computer, place, tmp_
     parsed = __import__("tomllib").loads(text)
     assert parsed["bridge_key"] == "place-key" and parsed["public_url"] == "https://203.0.113.7:8701"
     assert parsed["lan"]["port"] == 8701 and parsed["browser"]["first_port"] == 9620
-    assert sorted(parsed["agents"]) == ["coach", "hermes"]
+    assert sorted(parsed["agents"]) == ["coach", "perso"]
     assert parsed["agents"]["coach"]["hermes_url"] == "http://127.0.0.1:8672/p/coach"
     assert parsed["agents"]["coach"]["voice"] == "pocket:colibri" and "public_url" not in parsed["agents"]["coach"]
-    assert parsed["agents"]["hermes"]["hermes_url"] == "http://127.0.0.1:8672/p/hermes"
-    assert parsed["agents"]["hermes"]["hermes_key"] == "root-key"
-    assert parsed["agents"]["hermes"]["upload_dir_host"] == str(profiles / "hermes" / "uploads")
+    assert parsed["agents"]["perso"]["hermes_url"] == "http://127.0.0.1:8672/p/perso"
+    assert parsed["agents"]["perso"]["hermes_key"] == "root-key"
+    assert parsed["agents"]["perso"]["upload_dir_host"] == str(profiles / "perso" / "uploads")
     assert parsed["pronunciations"]["fr"] == {"Pixel": "Pixèle"}
-    assert parsed["media"]["roots"][f"{home}/.hermes/media"] == str(profiles / "hermes" / "media")
+    assert parsed["media"]["roots"][f"{home}/.hermes/media"] == str(profiles / "perso" / "media")
     assert parsed["media"]["roots"][f"{home}/.hermes/profiles"] == str(profiles)
     assert str(home) not in "\n".join(line for line in text.splitlines() if not line.startswith('"'))
     # Put in, its browsers again, nothing left lying around.
@@ -301,14 +301,80 @@ def test_a_hermes_alone_comes_in_as_profiles_the_bridge_then_claims(place, tmp_p
     runner = hermes.Runner(dry=True)
     to_place.bring_in(out, CODE, runner, base=new, repo=tmp_path / "repo")
     profiles = new / ".hermes" / "profiles"
-    assert sorted(p.name for p in profiles.iterdir()) == ["cuisine", "hermes"]
-    assert (profiles / "hermes" / "memories" / "MEMORY.md").read_text() == "Sam a deux chats."
+    assert sorted(p.name for p in profiles.iterdir()) == ["cuisine", "perso"]
+    assert (profiles / "perso" / "memories" / "MEMORY.md").read_text() == "Sam a deux chats."
     assert yaml.safe_load((profiles / "cuisine" / "config.yaml").read_text())["model"]["default"] == "mistral-medium"
     parsed = __import__("tomllib").loads(new_config.read_text())
     assert "agents" not in parsed and parsed["bridge_key"] == "place-key"       # claimed by `bipbridge adopt`
     data = new / ".local" / "share" / "bipagents"
     assert sqlite3.connect(data / "bridge.db").execute("SELECT v FROM t").fetchall() == [("place phone token",)]
-    assert parsed["media"]["roots"][f"{hub}/media"] == str(profiles / "hermes" / "media")
+    assert parsed["media"]["roots"][f"{hub}/media"] == str(profiles / "perso" / "media")
+
+
+class Answers(hermes.Runner):
+    """A runner whose commands answer as told: `fails` maps a word of a command to its error (Runner.run's own)."""
+
+    def __init__(self, fails=None):
+        super().__init__()
+        self.fails = fails or {}
+
+    def run(self, args, *, check=True, **kwargs):
+        shown = " ".join(args) if not isinstance(args, str) else args
+        self.log.append(shown)
+        for word, said in self.fails.items():
+            if word in shown.split() and check:
+                raise RuntimeError(f"{shown} failed (1): {said}")
+        return ""
+
+
+def test_the_main_profile_s_name_is_never_one_hermes_refuses(tmp_path):
+    """Hermes v0.23.1 refuses `hermes -p hermes …` (« Profile name 'hermes' is reserved »: hermes_cli/profiles.py
+    _RESERVED_NAMES): the lab's send of a Hermes alone (19/11) lost its main profile that way."""
+    import re
+    profiles = tmp_path / "profiles"
+    (profiles / "perso").mkdir(parents=True)
+    for main in (None, "hermes", "default", "test", "tmp", "root", "sudo", "Vie Perso", "-x", "a" * 70):
+        name = to_place.root_name(profiles, main)
+        assert re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,63}", name) and name not in to_place.RESERVED_PROFILES
+        assert name == "perso-2"                       # « perso » taken by one of the person's own profiles
+    assert to_place.root_name(profiles, "vie") == "vie"   # the person's own agent keeps its id
+
+
+def test_a_hermes_alone_whose_profile_can_t_be_claimed_is_a_failed_import(place, tmp_path, monkeypatch):
+    """`bipbridge adopt` failing (the lab: the reserved name) was ignored: the import said « done » with no agent.
+    Now the import fails, the place stays as it was, and the person is told in plain words."""
+    alone = tmp_path / "home" / "sam"
+    hub = alone / ".hermes"
+    write(hub / "config.yaml", yaml.safe_dump({"model": {"provider": "anthropic", "default": "claude"}}))
+    write(hub / "memories" / "MEMORY.md", "Sam a deux chats.")
+    _, out = export(to_place.LoneHermes(hub, alone), tmp_path, lone=True)
+    new, new_config = place
+    before = new_config.read_text()
+    runner = Answers({"adopt": "perso: `hermes -p perso config` failed"})
+    with pytest.raises(to_place.PlaceError, match="couldn't be set up here"):
+        to_place.bring_in(out, CODE, runner, base=new, repo=tmp_path / "repo")
+    profiles = new / ".hermes" / "profiles"
+    assert sorted(p.name for p in profiles.iterdir()) == ["assistant"] and new_config.read_text() == before
+    # what the app shows (GET /v1/import): the failure, never « done »
+    archive, secret = tmp_path / "again.bipagents", tmp_path / "code"
+    archive.write_bytes(out.read_bytes())
+    secret.write_text(CODE)
+    monkeypatch.setattr(hermes, "Runner", lambda: Answers({"adopt": "failed"}))
+    assert to_place.import_place_main(["--archive", str(archive), "--passphrase-file", str(secret)]) == 1
+    shown = json.loads((new / to_place.FOLDER / "progress.json").read_text())
+    assert not shown["done"] and shown["error"] == "an agent you sent couldn't be set up here"
+
+
+def test_every_step_of_an_import_is_checked(computer, place, tmp_path):
+    """The gateway not starting again, the browsers not coming back: a failed import, not « done »."""
+    home, config = computer
+    for word in ("start",):
+        _, out = export(to_place.what_to_send(str(config), home), tmp_path)
+        new, new_config = place
+        before = new_config.read_text()
+        with pytest.raises(to_place.PlaceError):
+            to_place.bring_in(out, CODE, Answers({word: "failed"}), base=new, repo=tmp_path / "repo")
+        assert new_config.read_text() == before
 
 
 def certificate(tmp_path):
@@ -395,3 +461,64 @@ def test_meeting_a_place_checks_its_proof_and_certificate(tmp_path):
     assert answer == {"started": True} and sent["body"] == archive.read_bytes()
     assert sent["headers"]["content-length"] == "3000000" and "transfer-encoding" not in sent["headers"]
     assert sent["headers"]["x-import-proof"] == to_place.proof(CODE, to_place.UPLOAD_CONTEXT, "c2", "3000000")
+
+
+def test_a_send_leaves_the_place_its_own_bridge_programs(computer, place, tmp_path):
+    """Review 1 of fix-restore-import (19/11): the place's data folder is its bridge's binaries' folder too
+    (rustbridge.py BINARIES, ~/.local/share/bipagents/bridge/<key>/). Exports no longer carry the computer's (B3), and
+    `Aside.clear` takes everything of the place's data folder but PLACE_DATA and the door: after a send of a whole
+    BipAgents install the place had no bridge program left (on origin/main: the computer's, a macOS one)."""
+    home, config = computer
+    new, _ = place
+    data = new / ".local" / "share" / "bipagents"
+    key = "a541c5a6b27e"
+    write(data / "bridge" / key / "bipbridge", "THE PLACE'S RUNNING BRIDGE")
+    write(home / ".local" / "share" / "bipagents" / "bridge" / key / "bipbridge", "THE COMPUTER'S (MACOS) BRIDGE")
+    _, out = export(to_place.what_to_send(str(config), home), tmp_path)
+    to_place.bring_in(out, CODE, hermes.Runner(dry=True), base=new, repo=tmp_path / "repo")
+    program = data / "bridge" / key / "bipbridge"
+    assert program.is_file() and program.read_text() == "THE PLACE'S RUNNING BRIDGE"
+
+
+def test_a_send_leaves_the_place_its_voices_and_its_migrations_record(computer, place, tmp_path):
+    """Both belong to the place's install, not to the person: its voices are fetched for its own voice engine
+    (voices.py, pocketunit.py), and migrations.json records what its installer did to its own settings (the hub,
+    bridge.toml's machine part: every migration's target), which the send keeps."""
+    home, config = computer
+    new, _ = place
+    data = new / ".local" / "share" / "bipagents"
+    write(data / "voices" / "pocket-4" / "fr" / "colibri.safetensors", "THE PLACE'S VOICE")
+    write(data / "migrations.json", '{"done": ["the-place-s"]}')
+    theirs = home / ".local" / "share" / "bipagents"
+    write(theirs / "voices" / "pocket-3" / "fr" / "old.safetensors", "THE COMPUTER'S VOICE")
+    write(theirs / "migrations.json", '{"done": ["the-computer-s"]}')
+    _, out = export(to_place.what_to_send(str(config), home), tmp_path)
+    to_place.bring_in(out, CODE, hermes.Runner(dry=True), base=new, repo=tmp_path / "repo")
+    assert (data / "voices" / "pocket-4" / "fr" / "colibri.safetensors").read_text() == "THE PLACE'S VOICE"
+    assert not (data / "voices" / "pocket-3").exists()
+    assert (data / "migrations.json").read_text() == '{"done": ["the-place-s"]}'
+
+
+def test_a_browser_that_doesn_t_start_again_leaves_the_import_done(computer, place, tmp_path, capsys):
+    """Review 1 (F4): the agents are in and served; a browser not starting is said, the import not undone (the
+    bridge's `browser add --all` at its next update brings it)."""
+    home, config = computer
+    _, out = export(to_place.what_to_send(str(config), home), tmp_path)
+    new, new_config = place
+    to_place.bring_in(out, CODE, Answers({"add": "failed"}), base=new, repo=tmp_path / "repo")
+    assert sorted(p.name for p in (new / ".hermes" / "profiles").iterdir()) == ["coach", "perso"]
+    assert "browser" in capsys.readouterr().out
+
+
+def test_an_import_s_failure_says_its_cause_plainly(place, tmp_path):
+    """Review 1 (F5): the app's headline already says « L'import n'a pas abouti : tes agents sont restés comme
+    avant. »; the detail under it says the cause only, in plain words (no « gateway », nothing said twice)."""
+    alone = tmp_path / "home" / "sam"
+    write(alone / ".hermes" / "config.yaml", yaml.safe_dump({"model": {"provider": "anthropic"}}))
+    _, out = export(to_place.LoneHermes(alone / ".hermes", alone), tmp_path, lone=True)
+    new, _ = place
+    for word in ("stop", "start", "adopt"):
+        with pytest.raises(to_place.PlaceError) as said:
+            to_place.bring_in(out, CODE, Answers({word: "failed"}), base=new, repo=tmp_path / "repo")
+        text = str(said.value)
+        assert "gateway" not in text and "as it was" not in text and "couldn't" in text, text

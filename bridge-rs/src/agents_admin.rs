@@ -440,6 +440,9 @@ fn check_agent_id(args: &[String]) -> anyhow::Result<()> {
     }
 }
 
+/// How long a command may run (`run_hermes`, `run_hermes_blocking`).
+const COMMAND_TIMEOUT: Duration = Duration::from_secs(120);
+
 pub async fn run_hermes(args: Vec<String>, env: BTreeMap<String, String>) -> anyhow::Result<String> {
     let Some(program) = args.first() else { anyhow::bail!("no command") };
     check_agent_id(&args)?;
@@ -450,9 +453,18 @@ pub async fn run_hermes(args: Vec<String>, env: BTreeMap<String, String>) -> any
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()?;
-    let output = match tokio::time::timeout(Duration::from_secs(120), child.wait_with_output()).await {
+    let pid = child.id();
+    let output = match tokio::time::timeout(COMMAND_TIMEOUT, child.wait_with_output()).await {
         Ok(output) => output?,
-        Err(_) => return Err(CommandTimeout.into()),
+        Err(_) => {
+            // killed at the timeout: never a `hermes` (~90 MB) left running beside the retry (review 19/11). Only
+            // then: a command whose request went away (the app closed) still ends its work, as before.
+            if let Some(pid) = pid {
+                // SAFETY: a signal to the child this function started; tokio reaps it (its orphan queue)
+                unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) };
+            }
+            return Err(CommandTimeout.into());
+        }
     };
     if !output.status.success() {
         let shown = args.iter().take(4).cloned().collect::<Vec<_>>().join(" ");
@@ -1720,14 +1732,76 @@ pub fn render_soul(config: &Config, agent: &AgentConfig) -> anyhow::Result<bool>
     crate::profile_files::edit_text(&profile_folder(config, agent).join("SOUL.md"), |_| Some(text))
 }
 
-/// [`render_soul`] for every agent (at start: profile_files::reconcile_all); a failure is logged.
-pub fn render_souls(config: &Config) {
+/// [`render_soul`] for every agent (at start and hourly: dates::run_forever); a failure is logged. Returns the agents
+/// whose SOUL.md really changed (for [`refresh_rewritten`]).
+pub fn render_souls(config: &Config) -> Vec<AgentConfig> {
+    let mut changed = Vec::new();
     for agent in config.agents.values() {
         match render_soul(config, agent) {
-            Ok(true) => tracing::info!(target: "bipbridge::agents", agent = %agent.name, "personality's bridge rules brought up to date"),
+            Ok(true) => {
+                tracing::info!(target: "bipbridge::agents", agent = %agent.name, "personality's bridge rules brought up to date");
+                changed.push(agent.clone());
+            }
             Ok(false) => {}
             Err(err) => tracing::warn!(target: "bipbridge::agents", agent = %agent.name, error = %format!("{err:#}"), "personality not rendered"),
         }
+    }
+    changed
+}
+
+/// Every agent's SOUL.md as it is now (an agent without one, or whose profile isn't here: left out). Taken by
+/// `app::create_app` before anything at start writes a soul (profile_files::reconcile_all, guide::refresh, the
+/// voices, a sealed place's opening…), so that the first pass ([`souls_changed`]) sees what the start rewrote: a
+/// release's new rule (review 19/11: every SOUL.md was already rewritten at start, so the pass 20 s later found
+/// nothing to change and no conversation was told).
+pub fn souls_now(config: &Config) -> BTreeMap<String, String> {
+    config
+        .agents
+        .values()
+        .filter_map(|agent| read_soul(config, agent).ok().map(|soul| (agent.name.clone(), soul)))
+        .collect()
+}
+
+/// The agents whose SOUL.md differs from `before` ([`souls_now`]); an agent made since (not in `before`) has no
+/// conversation from before to tell.
+pub fn souls_changed(config: &Config, before: &BTreeMap<String, String>) -> Vec<AgentConfig> {
+    config
+        .agents
+        .values()
+        .filter(|agent| {
+            before.get(&agent.name).is_some_and(|was| read_soul(config, agent).is_ok_and(|now| now != *was))
+        })
+        .cloned()
+        .collect()
+}
+
+/// At most this long, chosen at random, before [`refresh_rewritten`] runs its commands: an update wave restarts the
+/// bridges of several people on one server together, and their `hermes` commands (~90 MB each) are spread over these
+/// minutes instead of all at once (review 19/11). `BIP_TEST_SOUL_REFRESH_JITTER_SECONDS` sets it for the black-box
+/// tests.
+pub fn refresh_jitter() -> Duration {
+    let max = std::env::var("BIP_TEST_SOUL_REFRESH_JITTER_SECONDS")
+        .ok()
+        .and_then(|s| s.trim().parse::<u64>().ok())
+        .unwrap_or(300);
+    Duration::from_millis(rand::Rng::gen_range(&mut rand::thread_rng(), 0..=max * 1000))
+}
+
+/// After the bridge's own rewrite of the souls (at start: [`souls_changed`] since `create_app`; hourly and after a
+/// dates change: [`render_souls`]): the agents whose SOUL.md really changed (a new rule in a release, the day's line)
+/// have their ongoing conversations' prompts refreshed ([`refresh_prompts`]), so the change reaches their one thread
+/// without waiting for « /new » (the gap of 15/11). An identical rewrite writes nothing and asks nothing (the prompt
+/// cache stays). Cost: one prompt-cache miss per changed agent's conversation, on its next turn (Hermes keeps the
+/// history). After `delay` ([`refresh_jitter`]), one agent after the other. A running turn is never touched and is
+/// not waited for: the command only records an epoch, which Hermes reads at the start of the next turn (« nothing
+/// changes mid-turn », agent/prompt_refresh.py); a settings change and this pass asking both cost nothing more.
+pub async fn refresh_rewritten(config: Arc<Config>, changed: Vec<AgentConfig>, run: Run, delay: Duration) {
+    if changed.is_empty() {
+        return;
+    }
+    tokio::time::sleep(delay).await;
+    for agent in &changed {
+        refresh_prompts(&config, agent, &run).await;
     }
 }
 
@@ -2312,8 +2386,9 @@ pub fn open_agent(config: &Config, agent: &AgentConfig) -> bool {
 /// conversation's stored system prompt every turn (the prefix cache), so a change of its personality never reached
 /// the agent's one thread before (15/11, Alex: « elle n'a pas été prise en compte », the apps saying « … s'en sert dès
 /// le prochain message »). `hermes sessions refresh-prompts` records a refresh in its profile's state.db: each of its
-/// conversations rebuilds its prompt once, on its next turn (one prompt-cache miss each, the history kept). Only for a
-/// change the person made (its personality, answer style, name, a card they tapped), not for the bridge's own blocks.
+/// conversations rebuilds its prompt once, on its next turn (one prompt-cache miss each, the history kept; nothing
+/// changes mid-turn: agent/prompt_refresh.py). After a change the person made (its personality, answer style, name, a
+/// card they tapped), and after the bridge's own rewrite when the text really changed ([`refresh_rewritten`]).
 /// A profile of the person's own Hermes, or of an agent set up by hand, is left alone; a failure is logged.
 pub async fn refresh_prompts(config: &Config, agent: &AgentConfig, run: &Run) {
     if managed(config, &agent.name).is_err() || crate::profile_files::hands_off(&profile_folder(config, agent)) {

@@ -514,6 +514,8 @@ pub fn search_store(
             // the bridge's words to the agent in a person's row (a continuation's note quoting the reply): not theirs
             let theirs = crate::threads::timeline::before_bridge_mark(&text).trim_end().len();
             text.truncate(theirs);
+            // nor the app's note that it answered at once (instant_reply.rs)
+            text = crate::instant_reply::without_note(&text);
         }
         if !matches_all(&text, words) {
             continue;

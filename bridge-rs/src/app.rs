@@ -108,6 +108,9 @@ pub struct Services {
     pub guard: Guard,
     /// The web consoles (console.py): Python's `app.state.console`.
     pub console: ConsoleStore,
+    /// Every SOUL.md as it was before the start rewrote any (agents_admin::souls_now), taken by the first pass of
+    /// dates::run_forever: what the start changed reaches the agents' ongoing conversations.
+    pub start_souls: Mutex<Option<std::collections::BTreeMap<String, String>>>,
     tasks: Mutex<Vec<JoinHandle<()>>>,
 }
 
@@ -234,6 +237,7 @@ impl Services {
             threads: OnceLock::new(),
             guard: Guard::default(),
             console: ConsoleStore::new(&py::join(&data_dir, "console.json")),
+            start_souls: Mutex::new(None),
             tasks: Mutex::new(Vec::new()),
         })
     }
@@ -1549,6 +1553,10 @@ async fn approve(State(state): State<AppState>, Json(body): Json<ApproveRequest>
     };
     // a question nothing waits for any more (409: Hermes settled it, its turn moved on) goes from every phone too
     if ((200..300).contains(&status) || (status == 409 && request_id.is_some())) && kind == "clarify" {
+        if (200..300).contains(&status) {
+            // its run's `clarify.settled` says it, for a screen that draws the run again (runs.rs `with_answer`)
+            state.hub.question_answered(&agent.name, &run_id, request_id, &value);
+        }
         let asked = state.hub.pending_questions(&agent.name).into_iter().find(waiting);
         state.hub.forget_approval(&agent.name, &run_id, request_id);
         // answered on one device: gone from the others' (the thread's `pending.questions`)
@@ -1816,6 +1824,8 @@ pub fn create_app(config: Config, options: AppOptions) -> anyhow::Result<App> {
     crate::profile_files::set_hands_off(crate::profile_files::hands_off_home(&config));
     // before anything reads the vault: the data folder held (no sealing meanwhile), the place key from memory if sealed
     crate::sealed_keys::at_start(&config)?;
+    // the souls as this start finds them, before it rewrites any (dates::run_forever tells the conversations)
+    *state.start_souls.lock().unwrap_or_else(|e| e.into_inner()) = Some(crate::agents_admin::souls_now(&config));
     crate::profile_files::reconcile_all(&config); // what the bridge decides in each profile, as this bridge renders it
     crate::voices::heal_defaults(&state.config); // after the souls: their language says the Bip's
     let config = state.config();

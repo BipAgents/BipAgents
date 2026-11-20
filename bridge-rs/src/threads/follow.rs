@@ -191,7 +191,11 @@ pub fn state_of(
         return out;
     }
     let answer: Vec<&&Item> =
-        turn.iter().filter(|i| role(i) == "agent" && (!i.text().is_empty() || !files(i).is_empty())).collect();
+        // never the line said at once to a message added meanwhile (instant_reply.rs): not the turn's reply
+        turn.iter()
+            .filter(|i| role(i) == "agent" && !crate::instant_reply::is_instant(&i.body))
+            .filter(|i| !i.text().is_empty() || !files(i).is_empty())
+            .collect();
     let Some(last) = answer.last() else {
         // its turn over with no words yet (stored a moment later): asked again soon
         out["state"] = json!("running");

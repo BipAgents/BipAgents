@@ -202,7 +202,8 @@ pub fn person_request(messages: &[Dict]) -> String {
         if role != "user" {
             continue;
         }
-        let text = crate::cronwatch::message_text(message);
+        // the app's note that it answered at once (instant_reply.rs) is not the request
+        let text = crate::instant_reply::without_note(&crate::cronwatch::message_text(message));
         if text.is_empty()
             || text.contains("[bipagents:")
             || crate::cronwatch::REPORT_PREFIXES.iter().any(|p| text.starts_with(p))
@@ -325,6 +326,20 @@ fn with_item_id(sub: &RunSubscription, event: SSEEvent) -> SSEEvent {
     let request = if event.r#type == "clarify.request" { clarify_id(&event.data) } else { as_str(event.data.get("request_id")) };
     let mut data = event.data;
     data.insert("item_id".into(), json!(crate::threads::answered_id(Some(&sub.run_id), request.as_deref())));
+    let raw = crate::py::Dumps::new().unicode().dumps(&Value::Object(data.clone()));
+    SSEEvent::new(event.r#type, data, raw)
+}
+
+/// A question's `clarify.settled` with the person's answer the bridge forwarded (`answer`), when it knows it: Hermes'
+/// settled says only that the prompt ended, and an app that draws the run again from its start (a reconnection, the
+/// screen opened again) read it as « Question close · Sans réponse » after « Réponse envoyée » (19/11, the video shoot).
+fn with_answer(st: &SubscriptionState, event: SSEEvent) -> SSEEvent {
+    let Some(answer) = clarify_id(&event.data).and_then(|id| st.answers.get(&id)).cloned() else { return event };
+    if event.data.get("answer").and_then(Value::as_str) == Some(answer.as_str()) {
+        return event;
+    }
+    let mut data = event.data;
+    data.insert("answer".into(), json!(answer));
     let raw = crate::py::Dumps::new().unicode().dumps(&Value::Object(data.clone()));
     SSEEvent::new(event.r#type, data, raw)
 }
@@ -551,6 +566,9 @@ pub struct SubscriptionState {
     pub brake_raised: bool,
     /// The stop the brake's last warning announced (« Arrêter » takes it at once).
     pub loop_over: Option<crate::loop_brake::Over>,
+    /// The person's answers to the run's questions, by request id (`question_answered`): its `clarify.settled` carries
+    /// it (`answer`), so a replay of the run draws the card answered, never « Question close · Sans réponse ».
+    pub answers: HashMap<String, String>,
     listeners: Vec<Slot>,
     cancel: Option<CancellationToken>,
     task: Option<JoinHandle<()>>,
@@ -598,6 +616,7 @@ impl Default for SubscriptionState {
             go_on_of: None,
             continued_by: None,
             stop_asked: false,
+            answers: HashMap::new(),
             guest: false,
             resumed: false,
             dropped: false,
@@ -650,6 +669,12 @@ impl RunSubscription {
     /// The turn did something already (turn_restart.rs): a call that changes things, a card asked.
     pub fn acted(&self) -> bool {
         lock(&self.state).acted
+    }
+
+    /// The run's tool steps so far (one model answer asking for tools each): words steered in are read at a step's
+    /// end (instant_reply.rs `watch_taken`).
+    pub fn tool_steps(&self) -> u32 {
+        lock(&self.state).tool_steps
     }
 
     /// The run is to start again with the person's new words at its end (`RunHub::interrupt`).
@@ -1205,6 +1230,29 @@ impl RunHub {
         items
     }
 
+    /// The person answered the run's question `request_id` (`/v1/approve`, a relative's answer relayed): its
+    /// `clarify.settled` says so (`with_answer`), the one already in the backlog too (Hermes may settle it before its
+    /// answer to the bridge comes back). A skip (no words) is no answer: its card stays « Sans réponse ».
+    pub fn question_answered(&self, agent: &str, run_id: &str, request_id: Option<&str>, answer: &str) {
+        let (Some(request_id), answer) = (request_id.filter(|r| !r.is_empty()), answer.trim()) else { return };
+        if answer.is_empty() || answer == crate::hermes_prompts::SKIPPED {
+            return;
+        }
+        let Some(sub) = lock(&self.inner).subs.get(&(agent.to_string(), run_id.to_string())).cloned() else { return };
+        let mut st = lock(&sub.state);
+        st.answers.insert(request_id.to_string(), answer.to_string());
+        let settled: Vec<usize> = (0..st.backlog.len())
+            .filter(|&i| {
+                st.backlog[i].r#type == crate::hermes_prompts::CLARIFY_SETTLED
+                    && clarify_id(&st.backlog[i].data).as_deref() == Some(request_id)
+            })
+            .collect();
+        for i in settled {
+            let answered = with_answer(&st, st.backlog[i].clone());
+            st.backlog[i] = answered;
+        }
+    }
+
     pub fn forget_approval(&self, agent: &str, run_id: &str, request_id: Option<&str>) {
         let request_id = request_id.map(|r| json!(r));
         Self::forget_pending(&mut lock(&self.inner), agent, run_id, request_id.as_ref());
@@ -1683,6 +1731,7 @@ impl RunHub {
         } else {
             event
         };
+        let event = if event.r#type == crate::hermes_prompts::CLARIFY_SETTLED { with_answer(&st, event) } else { event };
         let event = if matches!(event.r#type.as_str(), "tool.started" | "tool.completed" | "tool.failed") {
             self.with_service(sub, event)
         } else {
@@ -4422,6 +4471,50 @@ mod tests {
         assert!(prompt.contains("- … 10 earlier steps\n- web_search: 10\n") && prompt.contains("(their last request"));
     }
 
+    /// 19/11 (the video shoot): « Réponse envoyée », then « Question close · Sans réponse »: an app drawing the run
+    /// again from its start read Hermes' `clarify.settled` (no answers) as a question nobody answered. The answer the
+    /// bridge forwarded rides on it now, whether Hermes settles before or after its answer to the bridge comes back.
+    #[tokio::test]
+    async fn a_settled_question_carries_the_persons_answer() {
+        let hub = RunHub::new(HermesClient::new(reqwest::Client::new()), None, 7200, None);
+        let agent = AgentConfig { name: "vie".into(), ..Default::default() };
+        let sub = Arc::new(RunSubscription::new(agent, "run_q"));
+        lock(&hub.inner).subs.insert(sub.key(), sub.clone());
+        let event = |kind: &str, data: Value| SSEEvent::new(kind, data.as_object().cloned().unwrap(), "{}");
+        let settled = |id: &str| event(crate::hermes_prompts::CLARIFY_SETTLED, json!({"run_id": "run_q", "prompt_id": id, "request_id": id}));
+        let ask = |id: &str| event("clarify.request", json!({"run_id": "run_q", "prompt_id": id, "request_id": id,
+                                                              "execution_generation": 1, "question": "Quand ?",
+                                                              "choices": ["Samedi", "Dimanche"]}));
+        // answered, then settled (the usual order)
+        hub.dispatch(&sub, ask("c1"));
+        hub.question_answered("vie", "run_q", Some("c1"), " Samedi ");
+        hub.dispatch(&sub, settled("c1"));
+        // settled before Hermes' answer to the bridge came back: the backlog's settled gets it afterwards
+        hub.dispatch(&sub, ask("c2"));
+        hub.dispatch(&sub, settled("c2"));
+        hub.question_answered("vie", "run_q", Some("c2"), "Dimanche");
+        // skipped (Hermes' skip word, or no words): no answer, the card stays « Sans réponse »
+        hub.dispatch(&sub, ask("c3"));
+        hub.question_answered("vie", "run_q", Some("c3"), crate::hermes_prompts::SKIPPED);
+        hub.question_answered("vie", "run_q", Some("c3"), "  ");
+        hub.dispatch(&sub, settled("c3"));
+        // another run's answer is not this run's
+        hub.question_answered("vie", "run_other", Some("c4"), "Lyon");
+        hub.dispatch(&sub, ask("c4"));
+        hub.dispatch(&sub, settled("c4"));
+        let st = lock(&sub.state);
+        let answers: Vec<(Option<String>, Option<&str>)> = st
+            .backlog
+            .iter()
+            .filter(|e| e.r#type == crate::hermes_prompts::CLARIFY_SETTLED)
+            .map(|e| (clarify_id(&e.data), e.data.get("answer").and_then(Value::as_str)))
+            .collect();
+        let id = |s: &str| Some(s.to_string());
+        assert_eq!(answers, [(id("c1"), Some("Samedi")), (id("c2"), Some("Dimanche")), (id("c3"), None), (id("c4"), None)]);
+        let raw: Value = serde_json::from_str(&st.backlog.iter().find(|e| clarify_id(&e.data) == id("c2") && e.r#type != "clarify.request").unwrap().raw).unwrap();
+        assert_eq!(raw["answer"], "Dimanche", "the replayed bytes say it too");
+    }
+
     #[test]
     fn forgetting_approvals() {
         let mut inner = HubInner::default();
@@ -4436,5 +4529,21 @@ mod tests {
         RunHub::forget_pending(&mut inner, "a", "r", Some(&json!("")));
         let left: Vec<&String> = inner.pending.keys().map(|k| &k.2).collect();
         assert_eq!(left, ["4"]);
+    }
+
+    /// Review instant-ack (19/11): a message that waited behind a turn starts its own turn with the bridge's note
+    /// (`[bipagents:answered] …`); a rescue of that turn hands over THAT request, not the one before it.
+    #[test]
+    fn review_a_rescued_task_takes_a_request_answered_at_once() {
+        let queued = crate::instant_reply::with_note("Trouve-moi un dentiste à Lyon", crate::instant_reply::Mode::Queued);
+        let messages: Vec<Dict> = serde_json::from_value(json!([
+            {"role": "user", "content": "Cherche-moi une veste en laine bleue"},
+            {"role": "assistant", "content": "Voilà trois vestes."},
+            {"role": "user", "content": queued},
+            {"role": "user", "content": "[bipagents:handoff] This is long: hand the rest over"},
+        ]))
+        .unwrap();
+        let request = person_request(&messages);
+        assert!(request.starts_with("Trouve-moi un dentiste"), "the task would continue the wrong request: {request:?}");
     }
 }

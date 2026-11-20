@@ -23,6 +23,8 @@ from bbkit.fakes import Fakes  # noqa: E402
 
 def pytest_configure(config):
     config.addinivalue_line("markers", "slow: waits for the bridge's own timers (10 s and more); -m 'not slow' skips them")
+    config.addinivalue_line("markers", "serial: never beside other tests (scripts/blackbox-parallel.sh runs these after "
+                                       "the parallel pass, alone)")
     # A run stopped with `kill` ends like Ctrl-C: the test's bridges are stopped. They run in a session of their own
     # (`start_new_session`), so a run killed plainly left its bridge running on, timers and ports (2026-11-01).
     signal.signal(signal.SIGTERM, _interrupted)
@@ -30,6 +32,28 @@ def pytest_configure(config):
 
 def _interrupted(signum, frame):
     raise KeyboardInterrupt(f"signal {signum}")
+
+
+# In parallel (pytest-xdist, `--dist loadfile`: a file's tests stay together, in their order, on one worker), the
+# longest files are handed out first, so the run does not end on one long file started last: `durations.json` holds
+# each file's seconds on the build server (scripts/blackbox-parallel.sh --durations writes it again). A file not in it
+# counts as a long one (a new file: early rather than last). A serial run keeps the files' own order.
+DURATIONS = Path(__file__).with_name("durations.json")
+
+
+def pytest_collection_modifyitems(config, items):
+    if not os.environ.get("PYTEST_XDIST_WORKER"):
+        return
+    try:
+        seconds = json.loads(DURATIONS.read_text())
+    except (OSError, ValueError):
+        return
+    unknown = max(seconds.values(), default=0)
+    first = {}
+    for i, item in enumerate(items):
+        first.setdefault(item.nodeid.split("::")[0], i)
+    items.sort(key=lambda item: (-seconds.get(Path(item.nodeid.split("::")[0]).name, unknown),
+                                 first[item.nodeid.split("::")[0]]))
 
 
 @pytest.fixture(scope="session")

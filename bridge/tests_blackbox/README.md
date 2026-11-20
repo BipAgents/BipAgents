@@ -23,6 +23,10 @@ BRIDGE_CMD="/path/to/bipbridge serve" python -m pytest tests_blackbox -q -p no:c
 # One file, or one test, with the bridge's log when it fails (printed under « Captured stdout teardown »)
 ... -m pytest tests_blackbox/test_voice_and_approvals.py -q -k follow
 
+# In parallel on the build server (pytest-xdist, whole files per worker, longest first from durations.json; tests
+# marked `serial` after, alone): from the repository's root, after the release builds of bridge-rs/ and relay/
+scripts/blackbox-parallel.sh [--workers 10] [--junit out.xml] [tests_blackbox/test_x.py …]
+
 # Without the 29 tests that wait for the bridge's own timers (jobs' 10 s polls, the cron watcher, keepalives…)
 ... -m pytest tests_blackbox -q -p no:cacheprovider -m "not slow"
 ```
@@ -30,7 +34,8 @@ BRIDGE_CMD="/path/to/bipbridge serve" python -m pytest tests_blackbox -q -p no:c
 `BRIDGE_CMD` is split like a shell command line and must end with `serve`. The CLI tests use the same command
 without `serve`, followed by the subcommand they need: `check`, `genkey`, `qr --json [--agent X]`, `console`,
 `peer-token --agent X`, `shares-mounts --agent X`, `agent-tools --agent X`, `spaces start`, `adopt`, `browser remove --agent X`. The suite
-needs no network and runs nothing as root. It uses about 30 local ports.
+needs no network and runs nothing as root. It uses about 30 local ports: `bind(0)` ones serially; under pytest-xdist each worker takes its ports from a block of
+500 of its own below Linux's ephemeral range (`bbkit/servers.py` `free_port`), so workers never pick the same port.
 
 ## What a test sees
 

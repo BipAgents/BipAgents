@@ -242,6 +242,23 @@ def personal_runtime_bytes(inv, base: Path) -> int:
     return size(paths)
 
 
+def clean_partials(inv) -> int:
+    """The files a killed restore or import left half-written (moving.PARTIAL_PREFIX, PARTIAL_SUFFIX) removed from
+    the install's folders. Returns how many."""
+    from . import moving
+    removed = 0
+    for root in inv.roots().values():
+        for folder, _, names in os.walk(root, followlinks=False) if root.is_dir() else []:
+            for name in names:
+                if name.startswith(moving.PARTIAL_PREFIX) or name.endswith(moving.PARTIAL_SUFFIX):
+                    try:
+                        os.unlink(os.path.join(folder, name))
+                        removed += 1
+                    except OSError:
+                        pass
+    return removed
+
+
 def _walk(inv, root: Path) -> Iterator[Path]:
     for folder, dirs, names in os.walk(root, followlinks=False):
         here = Path(folder)
@@ -329,8 +346,8 @@ def _may_skip():
     from . import moving
     names = (set(moving.RUNTIME_FILES) | moving.HERMES_SKIP_ROOT | moving.HERMES_SKIP_PROFILE | moving.DATA_SKIP
              | moving.CHROME_SKIP | {moving.HERMES_VAULT})
-    return lambda name: (name in names or name.endswith((".sock", *moving.SIDECARS))
-                         or name.startswith(("bridge.toml.", *moving.HERMES_SET_ASIDE)))
+    return lambda name: (name in names or name.endswith((".sock", moving.PARTIAL_SUFFIX, *moving.SIDECARS))
+                         or name.startswith(("bridge.toml.", moving.PARTIAL_PREFIX, *moving.HERMES_SET_ASIDE)))
 
 
 def stat_walk(inv, root: Path, rules: bool = True) -> Iterator[Tuple[str, str, os.stat_result]]:
@@ -556,6 +573,7 @@ def run(base: Optional[Path] = None, config: Optional[Path] = None, now: Optiona
             if made.returncode != 0:
                 raise BackupError("the repository couldn't be made: " + _short(made.stderr))
         inv = moving.read_inventory(config or base / ".config" / "bipagents" / "bridge.toml", base)
+        clean_partials(inv)   # what a killed restore left half-written
         stage = base / STAGE
         stage.mkdir(parents=True, exist_ok=True)
         seen = {k: v for k, v in read_json(stage / "seen.json").items() if isinstance(v, list)}
@@ -711,18 +729,38 @@ def _inside(fetched: Path, path: str) -> Path:
     return fetched / path.lstrip("/")
 
 
-def _copy(src: Path, dst: Path) -> None:
+def _copy(src: Path, dst: Path, skip=None) -> None:
+    """`src` (a file, a link or a folder, whole) at `dst`, over what is there. Each file and link is written beside
+    its place then renamed over it, never written into: a program running from the old file (the bridge, a helper:
+    « Text file busy » on Linux) or a reader holding it keeps its own, and a stop halfway leaves no half file.
+    `skip(dst)`: paths left as they are here."""
     import shutil
-    if src.is_symlink():
-        dst.parent.mkdir(parents=True, exist_ok=True)
-        if dst.is_symlink() or dst.exists():
+    if skip is not None and skip(dst):
+        return
+    if src.is_dir() and not src.is_symlink():
+        if dst.is_symlink() or (dst.exists() and not dst.is_dir()):
             dst.unlink()
-        os.symlink(os.readlink(src), dst)
-    elif src.is_dir():
-        shutil.copytree(src, dst, symlinks=True, dirs_exist_ok=True)
-    elif src.is_file():
-        dst.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(src, dst)
+        dst.mkdir(parents=True, exist_ok=True)
+        for child in sorted(src.iterdir()):
+            _copy(child, dst / child.name, skip)
+        shutil.copystat(src, dst, follow_symlinks=False)
+        return
+    if not (src.is_symlink() or src.is_file()):
+        return   # sockets, pipes: never in a backup
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    if dst.is_dir() and not dst.is_symlink():
+        shutil.rmtree(dst)
+    from . import moving
+    partial = dst.with_name(f"{moving.PARTIAL_PREFIX}{os.getpid()}-{secrets.token_hex(4)}")   # short: any name fits
+    try:
+        if src.is_symlink():
+            os.symlink(os.readlink(src), partial)
+        else:
+            shutil.copy2(src, partial)
+        os.replace(partial, dst)
+    except BaseException:
+        partial.unlink(missing_ok=True)
+        raise
 
 
 FRESH_WINS = (("", "public_url"), ("browser", "first_port"), ("browser", "ports"), ("lan", "enabled"),
@@ -805,14 +843,22 @@ def put_back(fetched: Path, base: Path, repo: Path, address: Optional[str]) -> D
     info, stage = _manifest(fetched)
     fresh = fresh_state(base)
     target = moving.Target(home=base, repo=repo, tailnet_name=None, lan_address=address)
-    own_data = moving.read_inventory(base / ".config" / "bipagents" / "bridge.toml", base).data_dir
-    fresh_sealed = vault_keys.sealed(own_data)
+    binaries = moving.own_binaries(base)
+    data_dir = moving.read_inventory(base / CONFIG_DIR / "bridge.toml", base).data_dir
+    fresh_sealed = vault_keys.sealed(data_dir)
     came = info["roots"].get("data")
     backup_data = _inside(fetched, came) if came else None
+
+    def own(dst: Path) -> bool:
+        """This server's own: its bridge binaries (a backup from before 19/11 holds the dead place's), what the
+        bridge derives again in its data folder."""
+        parts = moving._relative(dst, data_dir)
+        return moving._relative(dst, binaries) is not None or bool(parts and parts[0] in moving.DATA_SKIP)
+
     for old in info["roots"].values():
         source = _inside(fetched, old)
         if source.exists() or source.is_symlink():
-            _copy(source, moving.rehome(old, info, target))
+            _copy(source, moving.rehome(old, info, target), own)
     if backup_data is not None:
         info["reseal"] = vault_layout(backup_data, moving.rehome(came, info, target), fresh_sealed, base)
     sqlite_root = _inside(fetched, info.get("stage") or str(stage)) / "sqlite"
@@ -883,20 +929,99 @@ def settle(info: Dict, base: Path, repo: Path, address: Optional[str], fresh: Di
                                         or own_backup.get("password")})
 
 
+# The fresh install's config folder (its bridge.toml, its backup settings with this seat's token, its pairing secret)
+# and its door's certificate (the one the guichet lists, which the app checks before giving the key) as they were
+# before a restore put the backup's over them: put back when the restore fails, so the app's next try works (lab
+# round trip 19/11: the half-done restore had left the dead seat's token, refused by the guichet, for good).
+FRESH_COPY = Path(".local") / "state" / "bipagents" / "restore-fresh"
+CONFIG_DIR = Path(".config") / "bipagents"
+WHERE = "where.json"   # in FRESH_COPY: each kept folder's place (the restored bridge.toml may say another)
+# What the bridge and the restore itself write in the config folder while it runs: never kept, never undone.
+LIVE = {MARKER.name, "setup-progress.json", "restore-key"}
+
+
+def _live(rel: Path) -> bool:
+    return bool(rel.parts) and (rel.parts[0] in LIVE or rel.parts[0].startswith("bridge.toml."))   # its lock, copies
+
+
+def _fresh_folders(base: Path) -> Dict[str, Path]:
+    import tomllib
+    from . import moving
+    config = base / CONFIG_DIR
+    try:
+        toml = tomllib.loads((config / "bridge.toml").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {"config": config}   # no fresh install to speak of: put_back says what is wrong
+    inv = moving.Inventory(config / "bridge.toml", toml, base)
+    return {"config": config, "lan": Path((toml.get("lan") or {}).get("cert_dir") or inv.data_dir / "lan").expanduser()}
+
+
+def keep_fresh(base: Path) -> None:
+    """The fresh folders kept aside (written whole, then renamed: the copy is complete or absent)."""
+    import shutil
+    kept = base / FRESH_COPY
+    if kept.exists():
+        return
+    partial = kept.with_name(kept.name + ".part")
+    shutil.rmtree(partial, ignore_errors=True)
+    partial.parent.mkdir(parents=True, exist_ok=True)
+    partial.mkdir(mode=0o700)   # this seat's backup token and pairing secret inside
+    where = _fresh_folders(base)
+    for name, folder in where.items():
+        (partial / name).mkdir(mode=0o700)
+        if folder.is_dir():
+            shutil.copystat(folder, partial / name)   # its mode (0700) comes back with it (`_copy`'s copystat)
+        for child in sorted(folder.iterdir()) if folder.is_dir() else []:
+            if name != "config" or not _live(Path(child.name)):
+                _copy(child, partial / name / child.name)
+    write_private(partial / WHERE, {name: str(folder) for name, folder in where.items()})
+    os.replace(partial, kept)
+
+
+def back_to_fresh(base: Path) -> bool:
+    """A restore that failed (or was killed: the next try calls it first): the fresh folders as they were, what the
+    backup brought there removed. False when nothing was kept (no restore started putting files back)."""
+    import shutil
+    kept = base / FRESH_COPY
+    if not (kept / WHERE).is_file():
+        shutil.rmtree(kept, ignore_errors=True)   # a copy never finished: the files hadn't come yet
+        return False
+    for name, place in read_json(kept / WHERE).items():
+        folder, copy = Path(place), kept / name
+        live = _live if name == "config" else (lambda rel: False)
+        for path in sorted(folder.rglob("*") if folder.is_dir() else [], key=lambda p: len(p.parts), reverse=True):
+            rel = path.relative_to(folder)   # children first
+            if live(rel) or (copy / rel).exists() or (copy / rel).is_symlink():
+                continue
+            if path.is_dir() and not path.is_symlink():
+                shutil.rmtree(path, ignore_errors=True)
+            else:
+                path.unlink(missing_ok=True)
+        _copy(copy, folder)
+    shutil.rmtree(kept)
+    return True
+
+
 def restore(key: str, runner, base: Optional[Path] = None, repo: Optional[Path] = None,
             address: Optional[str] = None) -> Dict:
-    """The whole restore, as the bridge starts it (a unit of its own, so restarting the bridge doesn't stop it)."""
+    """The whole restore, as the bridge starts it (a unit of its own, so restarting the bridge doesn't stop it).
+    Failed, it can be tried again: the fresh install's settings come back (`back_to_fresh`)."""
     from .__main__ import REPO
     from .update import gateway_units
     base = base or home()
     repo = repo or REPO
     try:
         progress(base, 1)
+        back_to_fresh(base)   # a try killed halfway: its fresh settings first (this seat's token fetches)
         fetched = fetch(base, key)
         progress(base, 2)
         for how, name in gateway_units():
             if how == "systemd":
                 runner.run(["systemctl", "--user", "stop", name], check=False)
+        keep_fresh(base)
+        from . import moving
+        with contextlib.suppress(OSError, ValueError):   # a killed try's half-written files
+            clean_partials(moving.read_inventory(base / CONFIG_DIR / "bridge.toml", base))
         try:
             info = put_back(fetched, base, repo, address)
         finally:
@@ -918,10 +1043,16 @@ def restore(key: str, runner, base: Optional[Path] = None, repo: Optional[Path] 
             runner.run(cli(base, repo) + ["browser", "add", "--all", "--config", str(config)], cwd=repo / "bridge",
                        check=False)
     except Exception as exc:   # any failure, not only a BackupError: never left « restoring » without a word
+        try:
+            back_to_fresh(base)
+        except Exception as undo:   # noqa: BLE001 - said, and the next try undoes it first
+            print(f"bipinstall: the fresh settings couldn't be put back yet: {type(undo).__name__}: {undo}",
+                  file=sys.stderr)
         progress(base, 0, error=str(exc) if isinstance(exc, BackupError) else f"{type(exc).__name__}: {exc}")
         (base / MARKER).unlink(missing_ok=True)
         raise
     import shutil
+    shutil.rmtree(base / FRESH_COPY, ignore_errors=True)   # restored: nothing to go back to
     shutil.rmtree(base / RESTORE_TMP, ignore_errors=True)
     (base / ".config" / "bipagents" / "setup.json").unlink(missing_ok=True)   # claimed: the pairing secret goes
     (base / MARKER).unlink(missing_ok=True)

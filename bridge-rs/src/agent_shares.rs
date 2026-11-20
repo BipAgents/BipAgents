@@ -965,9 +965,7 @@ pub(crate) fn turn_words(state: &AppState, agent: &AgentConfig, run_id: &str, pr
                         || (prompts && ["approval.request", "clarify.request", crate::hermes_prompts::APPROVAL_SETTLED,
                             crate::hermes_prompts::CLARIFY_SETTLED].contains(&kind));
                     if crosses {
-                        let mut data = event.data.clone();
-                        data.retain(|k, _| ["event", "run_id", "delta", "text", "request_id", "command", "description",
-                                            "choices", "questions", "question", "item_id", "bip_summary", "error", "output"].contains(&k.as_str()));
+                        let mut data = crossing_fields(kind, &event.data);
                         if let Some(Value::String(output)) = data.get_mut("output") {
                             *output = crate::rooms::room_text(output).0;
                         }
@@ -983,6 +981,19 @@ pub(crate) fn turn_words(state: &AppState, agent: &AgentConfig, run_id: &str, pr
         listener.close();
     };
     sse(stream)
+}
+
+/// The fields of a turn's event that cross to the relative (`turn_words`): its words and its cards', nothing else. A
+/// question's `clarify.settled` keeps the bridge's `answer` (runs.rs `with_answer`): her own answer, already in her
+/// conversation, so her other device or a screen opened again draws « Réponse envoyée », never « Question close ».
+fn crossing_fields(kind: &str, data: &Map<String, Value>) -> Map<String, Value> {
+    const FIELDS: [&str; 14] = ["event", "run_id", "delta", "text", "request_id", "command", "description", "choices",
+                                "questions", "question", "item_id", "bip_summary", "error", "output"];
+    let mut out = data.clone();
+    out.retain(|k, _| {
+        FIELDS.contains(&k.as_str()) || (k == "answer" && kind == crate::hermes_prompts::CLARIFY_SETTLED)
+    });
+    out
 }
 
 /// A shared agent's thread `main`: the relative's latest conversation with it (the one it opens on, as one's own
@@ -1218,6 +1229,9 @@ async fn served_approval(
         .map_err(|_| HttpError::new(502, "the agent can't be reached"))?;
     // answered, or a question nothing waits for any more (409): gone from every phone
     if (200..300).contains(&status) || (status == 409 && kind == "clarify" && request_id.is_some()) {
+        if (200..300).contains(&status) && kind == "clarify" {
+            state.hub.question_answered(&agent.name, &run_id, request_id.as_deref(), &value);
+        }
         state.hub.forget_approval(&agent.name, &run_id, request_id.as_deref());
         let session = object(&read(&owner_path(&config)), "conversations")
             .and_then(|all| all.values().find(|c| c.get("run").is_some_and(|r| str_of(r, "id") == run_id)).map(|c| str_of(c, "session")));
@@ -1652,7 +1666,7 @@ pub(crate) async fn follow_from_here(state: AppState, id: String, cid: String, r
             let reply = page
                 .get("items")
                 .and_then(Value::as_array)
-                .and_then(|m| m.last())
+                .and_then(|m| m.iter().rev().find(|m| m.get("instant").and_then(Value::as_bool) != Some(true)))
                 .filter(|m| str_of(m, "role") == "agent")
                 .map(|m| str_of(m, "text"));
             // a family conversation's replies are pushed to every member by its owner's bridge (family_thread.rs)
@@ -1971,6 +1985,25 @@ pub async fn drop_relative_conversations(state: AppState) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Review of fix-question-closed (19/11): the relay dropped `answer` from a settled question, so a relative's other
+    /// device drew her answered card « Question close · Sans réponse » after a replay. Only a settled question's
+    /// answer crosses; the run's other fields stay on the owner's side.
+    #[test]
+    fn a_settled_questions_answer_crosses_to_the_relative() {
+        let event = |v: Value| v.as_object().cloned().unwrap();
+        let settled = event(json!({"run_id": "r1", "request_id": "c1", "prompt_id": "c1", "answer": "Samedi",
+                                   "execution_generation": 2}));
+        let crossed = crossing_fields(crate::hermes_prompts::CLARIFY_SETTLED, &settled);
+        assert_eq!(Value::Object(crossed), json!({"run_id": "r1", "request_id": "c1", "answer": "Samedi"}));
+        // an `answer` on any other event stays home
+        let asked = event(json!({"run_id": "r1", "request_id": "c1", "question": "Quand ?", "answer": "x", "seq": 4}));
+        assert_eq!(Value::Object(crossing_fields("clarify.request", &asked)),
+                   json!({"run_id": "r1", "request_id": "c1", "question": "Quand ?"}));
+        let approval = event(json!({"run_id": "r1", "request_id": "a1", "answer": "x"}));
+        assert_eq!(Value::Object(crossing_fields(crate::hermes_prompts::APPROVAL_SETTLED, &approval)),
+                   json!({"run_id": "r1", "request_id": "a1"}));
+    }
 
     #[test]
     fn the_guest_turn_check_looks_for_what_patch_0018_really_writes() {

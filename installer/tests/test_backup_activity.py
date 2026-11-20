@@ -172,7 +172,8 @@ def test_the_look_walks_exactly_what_a_backup_takes(tmp_path):
                   data / "browsers" / "vie" / "profile" / "Default", home / ".config" / "bipagents")):
         for i, name in enumerate(names):   # each name a file here, a folder there
             target = where / name
-            if (i + j) % 2:
+            # what is already there keeps its kind: the place's Hermes cache, « Cache » on a case-blind disk (macOS)
+            if target.is_dir() if target.exists() else (i + j) % 2:
                 target.mkdir(parents=True, exist_ok=True)
                 (target / "inside.txt").write_text("x")
             else:

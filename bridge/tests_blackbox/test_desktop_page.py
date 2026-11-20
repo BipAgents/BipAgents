@@ -4,7 +4,6 @@ they hold the browser, the tab rendered as on a phone meanwhile and given back a
 fake DevTools server playing the container's relay (its hold lets only the bridge's own token through)."""
 import base64
 import json
-import socket
 import threading
 import time
 
@@ -12,7 +11,7 @@ import pytest
 from websockets.sync.server import serve
 
 from bbkit.common import AUTH
-from bbkit.servers import wait_until
+from bbkit.servers import free_port, wait_until
 from bbkit.ws import open_ws
 
 JPEG = b"\xff\xd8\xff\xe0fake-jpeg"
@@ -159,12 +158,6 @@ class FakeChrome:
 
     def close(self):
         self.server.shutdown()
-
-
-def free_port():
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
 
 
 @pytest.fixture
