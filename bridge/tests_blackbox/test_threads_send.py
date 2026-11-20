@@ -286,7 +286,8 @@ def test_words_during_a_turn_go_into_it_files_wait(bridges, fakes):
     assert run_has(bridge, "r1", "tool.started")
     steered = send(bridge, thread, "C1D00000-0000-4000-8000-0000000000B2", "Seulement les publiques")
     assert steered.json()["state"] == "steered" and steered.json()["run_id"] == "r1"
-    assert fakes.hermes.steers[-1]["body"] == {"input": "Seulement les publiques"}
+    # with the note that the app answered them at once (instant_reply.rs, test_instant_reply.py)
+    assert fakes.hermes.steers[-1]["body"]["input"].startswith("Seulement les publiques\n\n<!--bip:answered ")
     photo = {"kind": "image", "mime": "image/png", "data": "AAAA"}
     queued = send(bridge, thread, "C1D00000-0000-4000-8000-0000000000B3", "Et celle-ci", attachments=[photo])
     assert queued.json()["state"] == "queued"

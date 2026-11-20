@@ -1062,16 +1062,15 @@ async fn family_door(State(state): State<AppState>, request: Request) -> ApiResu
 async fn family_agents(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<Response> {
     let household = household_caller(&state, &headers)?;
     let config = state.config();
-    // every agent (the pairing screen lists those not paired yet); `tell`: whether that household's family news may
-    // name it (family_news::reachable_by), so its tell_family proposes no agent that /family/tell would refuse
+    // every agent (the pairing screen lists those not paired yet); `told_by`: that household's agents whose family
+    // news it reads (this person's links, family_news::told_by), so their tell_family names it only along them
     let links = links_of(&state.links.load());
-    let first = config.agents.values().next();
     let agents: Vec<Value> = config
         .agents
         .values()
         .map(|a| {
-            let tell = crate::family_news::reachable_by(&config, &links, &household, a, first);
-            json!({"id": a.name, "name": a.display_name, "tell": tell})
+            let told_by = crate::family_news::told_by(&links, &household, &a.name);
+            json!({"id": a.name, "name": a.display_name, "told_by": told_by})
         })
         .collect();
     Ok(web::ok(json!({"name": state.households.name(), "agents": agents})))

@@ -727,6 +727,19 @@ pub fn merge(items: Vec<Item>, mut boite: Vec<Item>) -> Vec<Item> {
     out
 }
 
+/// The ids of the lines said at once to lost messages (instant_reply.rs): left out of the thread before any page is
+/// cut from it, the turn never took those words. For a conversation where no turn runs (`Page::with_lost` then marks
+/// the messages « Pas envoyé »).
+pub fn lost_lines(items: &[Item]) -> HashSet<String> {
+    let lost: HashSet<&str> =
+        items.iter().filter(|i| super::send::lost(i)).filter_map(|i| i.body.get("client_id").and_then(Value::as_str)).collect();
+    items
+        .iter()
+        .filter(|i| i.body.get("answers").and_then(Value::as_str).is_some_and(|c| lost.contains(c)))
+        .map(|i| i.id.clone())
+        .collect()
+}
+
 /// How long a stored message names the `s_` item it replaces (`Page::replaced`): its send's two days, and a day more.
 const REPLACED_SECONDS: f64 = 3.0 * 86_400.0;
 
@@ -782,7 +795,10 @@ impl Page {
         self.items
             .iter()
             .filter(|i| i.kind() == "message" && !i.body.contains_key("sending") && (i.at >= since || i.at == 0.0))
-            .filter_map(|i| i.body.get("client_id").and_then(Value::as_str))
+            .flat_map(|i| {
+                let joined = i.body.get("joined").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str);
+                i.body.get("client_id").and_then(Value::as_str).into_iter().chain(joined)
+            })
             .map(|c| format!("s_{c}"))
             .collect()
     }
@@ -1669,5 +1685,18 @@ not from your person: you have read the page 5 times\n[/OUT-OF-BAND USER MESSAGE
         let after: Vec<Value> = rows.iter().map(|r| r["after"].clone()).collect();
         // m_3 draws nothing: the card asked at 1030 goes after m_2
         assert_eq!(after, vec![json!("m_2"), Value::Null, json!("m_4"), json!("m_4"), json!("m_4")]);
+    }
+
+    /// Review instant-ack (19/11): Hermes joins the steers it holds before its next step with newlines into ONE user
+    /// row (agent/interrupt_control.py `steer`: « multiple calls concatenate with newlines »). The first carries the
+    /// bridge's `[bipagents:answered]` note, the second (within 20 s) none: the person's row must still show both.
+    #[test]
+    fn review_two_steers_joined_by_hermes_both_shown() {
+        let first = crate::instant_reply::with_note("plutôt le samedi", crate::instant_reply::Mode::Steered);
+        let joined = format!("[OUT-OF-BAND USER MESSAGE from the user]\n{first}\net pas trop loin\n[/OUT-OF-BAND USER MESSAGE]");
+        let got = items(&[row(1, "user", json!("Trouve un dentiste")), row(2, "user", json!(joined))]);
+        assert_eq!(got[1].body["added_during_run"], true);
+        assert!(!got[1].text().contains("[bipagents:"), "{}", got[1].text());
+        assert!(got[1].text().contains("et pas trop loin"), "the second message vanished: {:?}", got[1].text());
     }
 }

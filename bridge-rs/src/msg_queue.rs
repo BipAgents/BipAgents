@@ -235,8 +235,11 @@ impl AgentQueue {
         self.steers.retain(|s| s.run_id != run_id);
         if let (Some(s), Some(pending)) = (session.as_deref(), pending_steer.map(str::trim).filter(|p| !p.is_empty())) {
             if let Some(first) = steered.iter().find(|t| pending.contains(t.text.trim())) {
-                let sent = Sent { client_id: first.client_id.clone(), ..Sent::default() };
-                self.items.insert(0, new_item(s, pending, true, sent));
+                // shown without the bridge's note to the agent (instant_reply.rs), which still goes with the words
+                let shown = crate::instant_reply::without_note(pending);
+                let input = (shown != pending).then(|| Value::String(pending.to_string()));
+                let sent = Sent { client_id: first.client_id.clone(), input, ..Sent::default() };
+                self.items.insert(0, new_item(s, &shown, true, sent));
                 changed = true;
             }
         }
@@ -764,8 +767,14 @@ impl Queues {
         let item = queue.items.iter().find(|i| i.id == item_id).cloned().ok_or_else(HttpError::not_found)?;
         let steerable = item.input.as_ref().is_none_or(Value::is_string) && item.attachments.is_empty();
         if steerable {
+            // answered at once « right after » when it was queued (instant_reply.rs): now in the turn, it says so too
+            let answered = item.input.as_ref().and_then(Value::as_str).is_some_and(|i| i.contains(crate::instant_reply::MARK));
+            let words = match answered {
+                true => crate::instant_reply::with_note(&item.text, crate::instant_reply::Mode::Steered),
+                false => item.text.clone(),
+            };
             let steered =
-                self.steer(agent, &item.session_id, None, &item.text, item.client_id.as_deref()).await.map_err(hermes_error)?;
+                self.steer(agent, &item.session_id, None, &words, item.client_id.as_deref()).await.map_err(hermes_error)?;
             if let Some(run) = steered {
                 self.hub.set_phone(&agent.name, &run, item.phone.as_deref());
                 let queue = self.remove(&agent.name, item_id).unwrap_or_else(|| self.get(&agent.name));
@@ -912,7 +921,17 @@ async fn send_now(
     UrlPath((agent_id, item_id)): UrlPath<(String, String)>,
 ) -> ApiResult<Response> {
     let agent = agent_of(&state, &agent_id)?;
-    Ok(web::ok(queues_of(&state).send_now(&agent, &item_id).await?))
+    let queues = queues_of(&state);
+    let item = queues.get(&agent.name).items.into_iter().find(|i| i.id == item_id);
+    let answer = queues.send_now(&agent, &item_id).await?;
+    // words into the turn: the phones told once it has taken them (their ✓), as for any steer (instant_reply.rs)
+    if let (Some(item), Some(run), true) = (item, answer["run_id"].as_str(), answer["steered"] == json!(true)) {
+        let threads = crate::threads::threads_of(&state);
+        if let (Some(client_id), Ok(Some(thread))) = (item.client_id.as_deref(), threads.resolve(&agent, &item.session_id).await) {
+            crate::instant_reply::watch_taken(&state, &agent, &thread, run, client_id);
+        }
+    }
+    Ok(web::ok(answer))
 }
 
 async fn pause(State(state): State<AppState>, UrlPath(agent_id): UrlPath<String>) -> ApiResult<Response> {
@@ -1065,6 +1084,13 @@ mod tests {
         let mut q = AgentQueue::default();
         assert_eq!(q.run_ended("r2", Some("s1"), "run.completed", Some("autre chose")), (false, false));
         assert!(q.items.is_empty());
+        // words answered at once (instant_reply.rs): shown without the bridge's note, which still goes with them
+        let steer = crate::instant_reply::with_note("sans gluten", crate::instant_reply::Mode::Steered);
+        let mut q = queue_of(&[]);
+        q.steers.push(Steer { run_id: "r3".into(), text: steer.clone(), client_id: Some("c-steer-2".into()) });
+        q.run_ended("r3", Some("s1"), "run.completed", Some(&steer));
+        assert_eq!(q.items[0].text, "sans gluten");
+        assert_eq!(q.items[0].input, Some(Value::String(steer)));
     }
 
     #[test]

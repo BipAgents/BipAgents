@@ -1310,4 +1310,16 @@ mod tests {
         );
         assert!(instructions(4).contains("4 people") && instructions(1).contains("1 person"));
     }
+
+    /// Review instant-ack (19/11): words added during a turn carry the bridge's hidden note for the agent
+    /// (`[bipagents:answered] …`, instant_reply.rs); a read-only share's viewer never reads it.
+    #[test]
+    fn review_a_viewer_never_reads_the_answered_note() {
+        let steer = crate::instant_reply::with_note("plutôt le samedi", crate::instant_reply::Mode::Steered);
+        let steered = format!("[OUT-OF-BAND USER MESSAGE from the user]\n{steer}\n[/OUT-OF-BAND USER MESSAGE]");
+        assert_eq!(typed_words(&steered).as_deref(), Some("plutôt le samedi"));
+        // a message that waited behind the turn, then started its own (msg_queue.rs)
+        let queued = crate::instant_reply::with_note("Trouve un dentiste", crate::instant_reply::Mode::Queued);
+        assert_eq!(typed_words(&format!("<!--bip:now x-->\n{queued}")).as_deref(), Some("Trouve un dentiste"));
+    }
 }

@@ -108,6 +108,9 @@ pub struct Services {
     pub guard: Guard,
     /// The web consoles (console.py): Python's `app.state.console`.
     pub console: ConsoleStore,
+    /// Every SOUL.md as it was before the start rewrote any (agents_admin::souls_now), taken by the first pass of
+    /// dates::run_forever: what the start changed reaches the agents' ongoing conversations.
+    pub start_souls: Mutex<Option<std::collections::BTreeMap<String, String>>>,
     tasks: Mutex<Vec<JoinHandle<()>>>,
 }
 
@@ -234,6 +237,7 @@ impl Services {
             threads: OnceLock::new(),
             guard: Guard::default(),
             console: ConsoleStore::new(&py::join(&data_dir, "console.json")),
+            start_souls: Mutex::new(None),
             tasks: Mutex::new(Vec::new()),
         })
     }
@@ -324,6 +328,8 @@ impl AppState {
         self.spawn(crate::read_shares::run_forever(self.clone())); // shared conversations' encrypted copies
         self.spawn(crate::project_agent::run_forever(self.clone())); // projects past their end: archived
         self.spawn(crate::connections::run_forever(self.clone())); // renews the services' access tokens
+        self.spawn(crate::drives::end_when_off(self.clone())); // the switch off: drives still connected ended
+        self.spawn(crate::drives::ask_place_web_at_start(self.clone())); // a place of the offer: its Google Web client
         self.spawn(crate::connectors_run::scheduler(self.clone())); // the connectors' mechanical schedules
         self.spawn(crate::watchers::scheduler(self.clone())); // the watchers: checks with no model call
         self.spawn(crate::routines::scheduler(self.clone())); // routines on a clock (Hermes' cron runs none)
@@ -1547,6 +1553,10 @@ async fn approve(State(state): State<AppState>, Json(body): Json<ApproveRequest>
     };
     // a question nothing waits for any more (409: Hermes settled it, its turn moved on) goes from every phone too
     if ((200..300).contains(&status) || (status == 409 && request_id.is_some())) && kind == "clarify" {
+        if (200..300).contains(&status) {
+            // its run's `clarify.settled` says it, for a screen that draws the run again (runs.rs `with_answer`)
+            state.hub.question_answered(&agent.name, &run_id, request_id, &value);
+        }
         let asked = state.hub.pending_questions(&agent.name).into_iter().find(waiting);
         state.hub.forget_approval(&agent.name, &run_id, request_id);
         // answered on one device: gone from the others' (the thread's `pending.questions`)
@@ -1814,6 +1824,8 @@ pub fn create_app(config: Config, options: AppOptions) -> anyhow::Result<App> {
     crate::profile_files::set_hands_off(crate::profile_files::hands_off_home(&config));
     // before anything reads the vault: the data folder held (no sealing meanwhile), the place key from memory if sealed
     crate::sealed_keys::at_start(&config)?;
+    // the souls as this start finds them, before it rewrites any (dates::run_forever tells the conversations)
+    *state.start_souls.lock().unwrap_or_else(|e| e.into_inner()) = Some(crate::agents_admin::souls_now(&config));
     crate::profile_files::reconcile_all(&config); // what the bridge decides in each profile, as this bridge renders it
     crate::voices::heal_defaults(&state.config); // after the souls: their language says the Bip's
     let config = state.config();
@@ -1903,6 +1915,7 @@ fn assemble(state: &AppState, config: &Config) -> Router {
         .merge(crate::page_store::router()) // the pages' stores, through the apps' door (15/11)
         .merge(crate::message_search::router())
         .merge(crate::connections::router())
+        .merge(crate::drives::router()) // « Documents en ligne », 404 while `[drives]` is off
         .merge(crate::live_activities::router())
         .merge(crate::skill_library::router());
     if !config.cloud {

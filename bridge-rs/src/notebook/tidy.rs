@@ -123,7 +123,12 @@ pub fn turns(messages: &[Dict]) -> Vec<Turn> {
             continue;
         }
         match role {
-            "user" => out.push(Turn { person: tk::squeeze(&content(message)), reply: String::new(), covered: false }),
+            // without the app's note that it answered at once (instant_reply.rs): not the person's words
+            "user" => out.push(Turn {
+                person: tk::squeeze(&crate::instant_reply::without_note(&content(message))),
+                reply: String::new(),
+                covered: false,
+            }),
             "assistant" => {
                 if let Some(turn) = out.last_mut() {
                     if wrote_notebook(message) {

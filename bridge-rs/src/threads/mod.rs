@@ -29,6 +29,7 @@
 //! No Python counterpart.
 
 pub mod follow;
+mod instant;
 pub mod layout;
 pub mod send;
 pub mod source;
@@ -475,6 +476,7 @@ impl Threads {
             self.store.run("DELETE FROM thread_segments WHERE thread_id = ?", vec![text(&thread.id)]).await?;
             self.store.run("DELETE FROM notifications WHERE thread_id = ?", vec![text(&thread.id)]).await?;
             self.store.run("DELETE FROM thread_sends WHERE thread_id = ?", vec![text(&thread.id)]).await?;
+            self.store.run("DELETE FROM thread_instant WHERE thread_id = ?", vec![text(&thread.id)]).await?;
             if thread.kind != "main" {
                 self.store.run("DELETE FROM threads WHERE id = ?", vec![text(&thread.id)]).await?;
             }
@@ -723,6 +725,7 @@ impl Threads {
             q.get(&agent.name).items.into_iter().filter_map(|i| i.client_id).collect()
         });
         self.with_sends(agent, thread, &mut items, &queued).await?;
+        self.with_instant(agent, thread, &mut items, &queued).await?;
         self.with_files(agent, thread, &mut items).await?;
         self.with_took(agent, &mut items).await?;
         with_maps_once(self.config.get(), agent, &mut items).await;
@@ -968,6 +971,7 @@ impl Threads {
                     .iter()
                     .rev()
                     .filter(|i| i.kind() == "message" && i.body.get("role") == Some(&json!("agent")))
+                    .filter(|i| !crate::instant_reply::is_instant(&i.body))
                     .find(|i| match (&wanted, &head) {
                         (Some(w), Some(h)) => i.text() == w || i.text().starts_with(h.as_str()),
                         _ => true,
@@ -1236,6 +1240,7 @@ async fn delete_thread(
     // its messages sent and never stored go with it: kept, they came back as « Pas envoyé » in the main thread
     // started again under the same id (6/11, release journeys)
     threads.store.run("DELETE FROM thread_sends WHERE thread_id = ?", vec![text(&thread.id)]).await?;
+    threads.store.run("DELETE FROM thread_instant WHERE thread_id = ?", vec![text(&thread.id)]).await?;
     if thread.kind != "main" {
         threads.store.run("DELETE FROM threads WHERE id = ?", vec![text(&thread.id)]).await?;
     }
@@ -1361,6 +1366,21 @@ fn conversation_page(
 ) -> (timeline::Page, Option<String>) {
     // how each turn that is over lays out (its work, its reply, the app's first word, exchanges), decided once for every
     // app on the whole thread (thin apps, brick 7); `layout.open`: the first item of the turn going on, undecided
+    // a lost message's line said at once goes with it, out of every page (its `s_` item reads « Pas envoyé »)
+    let kept_days: Vec<Option<(chrono::NaiveDate, bool)>>;
+    let days = match running {
+        true => days,
+        false => {
+            let gone = timeline::lost_lines(&items);
+            if gone.is_empty() {
+                days
+            } else {
+                kept_days = items.iter().zip(days).filter(|(i, _)| !gone.contains(&i.id)).map(|(_, d)| *d).collect();
+                items.retain(|i| !gone.contains(&i.id));
+                &kept_days
+            }
+        }
+    };
     let shown = timeline::range(&items, want);
     let decided = layout::layout(&items, shown.clone(), running);
     let open = open_on_page(&items, decided.open, &shown);

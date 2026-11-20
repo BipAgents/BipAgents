@@ -76,6 +76,8 @@ pub const KINDS: &[Kind] = &[
     Kind { id: "notebookRecord", names: &["notebook_record"], prefixes: &[], step: Some("notebookRecord") },
     Kind { id: "archiveSearch", names: &["archive_search"], prefixes: &[], step: Some("archiveSearch") },
     Kind { id: "archiveRead", names: &["archive_read"], prefixes: &[], step: Some("archiveRead") },
+    Kind { id: "driveSearch", names: &["drive_search", "drive_list", "drive_folders"], prefixes: &[], step: Some("driveSearch") },
+    Kind { id: "driveRead", names: &["drive_read", "drive_save"], prefixes: &[], step: Some("driveRead") },
     Kind { id: "archiveRecords", names: &["archive_records"], prefixes: &[], step: Some("archiveRecords") },
     Kind { id: "upcomingDates", names: &["upcoming_dates"], prefixes: &[], step: Some("upcomingDates") },
     Kind { id: "findDate", names: &["find_date"], prefixes: &[], step: Some("findDate") },
@@ -449,6 +451,18 @@ pub const STEPS: &[Step] = &[
         id: "archiveRead",
         one: ["Lire un document archivé", "Read an archived document", "Ein archiviertes Dokument lesen", "Leer un documento archivado"],
         many: ["Lire {n} documents archivés", "Read {n} archived documents", "{n} archivierte Dokumente lesen", "Leer {n} documentos archivados"],
+        backstage: false,
+    },
+    Step {
+        id: "driveSearch",
+        one: ["Chercher dans tes documents en ligne", "Search your online documents", "In deinen Online-Dokumenten suchen", "Buscar en tus documentos en línea"],
+        many: ["Chercher dans tes documents en ligne", "Search your online documents", "In deinen Online-Dokumenten suchen", "Buscar en tus documentos en línea"],
+        backstage: false,
+    },
+    Step {
+        id: "driveRead",
+        one: ["Lire un document en ligne", "Read an online document", "Ein Online-Dokument lesen", "Leer un documento en línea"],
+        many: ["Lire {n} documents en ligne", "Read {n} online documents", "{n} Online-Dokumente lesen", "Leer {n} documentos en línea"],
         backstage: false,
     },
     Step {

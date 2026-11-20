@@ -54,6 +54,11 @@ def started_inputs(fakes):
     return [words_of(run["input"]) for run in fakes.hermes.started.values()]
 
 
+def without_note(words):
+    """The words without the bridge's note that the app answered them at once (instant_reply.rs)."""
+    return words.split("\n\n<!--bip:answered")[0]
+
+
 def turn(run_id, gate=None, end="run.completed", **end_data):
     script = [sse("run.started", run_id=run_id)]
     if gate is not None:
@@ -84,7 +89,8 @@ def test_a_message_for_after_waits_for_the_turn_then_starts(bridges, fakes):
     gate.set()
     assert wait_until(lambda: len(fakes.hermes.started) == 2, timeout=15)
     second = fakes.hermes.started["r2"]
-    assert words_of(second["input"]) == "Ensuite range le Carnet" and second["session_id"] == SESSION
+    assert without_note(words_of(second["input"])) == "Ensuite range le Carnet" and second["session_id"] == SESSION
+    assert "<!--bip:answered" in words_of(second["input"]), "answered at once while the turn went on"
     assert wait_until(lambda: queue(bridge)["items"] == [] and queue(bridge)["running"] is None, timeout=15)
     assert bridge.logged("queue: next message started")
     # the turn the bridge started is followed like the app's (one Hermes subscription)
@@ -115,7 +121,7 @@ def test_words_steered_reach_the_running_turn(bridges, fakes):
     answer = send(bridge, "Seulement les publiques")
     assert answer.status_code == 200, answer.text
     assert answer.json()["state"] == "steered" and answer.json()["run_id"] == "r1"
-    assert fakes.hermes.steers == [{"agent": "", "run_id": "r1", "body": {"input": "Seulement les publiques"}}]
+    assert [(s["run_id"], without_note(s["body"]["input"])) for s in fakes.hermes.steers] == [("r1", "Seulement les publiques")]
     assert queue(bridge)["items"] == [], "into the turn, not the queue"
     # the turn no longer takes words (it is ending): first in line instead, and it goes right after
     fakes.hermes.steer_status = 409
@@ -124,7 +130,7 @@ def test_words_steered_reach_the_running_turn(bridges, fakes):
     assert texts(queue(bridge)) == ["Et près de chez nous"]
     fakes.hermes.runs["r2"] = turn("r2", output="Deux.")
     gate.set()
-    assert wait_until(lambda: started_inputs(fakes)[1:] == ["Et près de chez nous"], timeout=15)
+    assert wait_until(lambda: [without_note(w) for w in started_inputs(fakes)[1:]] == ["Et près de chez nous"], timeout=15)
     # bad requests
     assert send(bridge, "x", agent="nope").status_code == 404
     assert send(bridge, "x", client_id="../x").status_code == 422

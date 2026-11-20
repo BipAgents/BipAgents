@@ -33,6 +33,7 @@ use serde_json::{json, Value};
 use super::{text, threads_of, timeline::Item, unavailable, Param, Thread, Threads};
 use crate::app::AppState;
 use crate::config::AgentConfig;
+use crate::instant_reply::Mode;
 use crate::msg_queue::{queues_of, Sent};
 use crate::store::{iso, utcnow};
 use crate::web::{check_max_len, ApiResult, FieldError, HttpError, Validate};
@@ -190,8 +191,18 @@ impl Threads {
             return Ok(());
         }
         let s = |row: &crate::store::Row, k: &str| row.get(k).and_then(Value::as_str).unwrap_or("").to_string();
-        let mut claimed: std::collections::HashMap<String, String> =
-            rows.iter().filter(|r| !s(r, "message_id").is_empty()).map(|r| (s(r, "message_id"), s(r, "client_id"))).collect();
+        // a stored row → the first message it holds (Hermes joins the steers held until its next step into one row:
+        // the others it holds are noted `joined` on it)
+        let mut claimed: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+        let mut joined: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+        for r in rows.iter().filter(|r| !s(r, "message_id").is_empty()) {
+            match claimed.entry(s(r, "message_id")) {
+                std::collections::hash_map::Entry::Vacant(e) => {
+                    e.insert(s(r, "client_id"));
+                }
+                std::collections::hash_map::Entry::Occupied(e) => joined.entry(e.key().clone()).or_default().push(s(r, "client_id")),
+            }
+        }
         let since = |row: &crate::store::Row| {
             crate::store::parse_since(&s(row, "created_at")).map(|d| d.timestamp_micros() as f64 / 1e6).unwrap_or(0.0)
         };
@@ -219,6 +230,24 @@ impl Threads {
                         vec![text(&item.id), text(&agent.name), text(&client_id)],
                     )
                     .await?;
+            } else if let Some(row) = items.iter().find(|i| {
+                // words steered with others the turn read at once: Hermes stored them in the same row (19/11, review
+                // of instant-ack H1: the second message came back « Pas envoyé », and a tap sent it twice)
+                !words.is_empty()
+                    && i.kind() == "message"
+                    && i.body.get("role") == Some(&json!("person"))
+                    && i.body.get("added_during_run") == Some(&json!(true))
+                    && claimed.contains_key(&i.id)
+                    && (i.at == 0.0 || i.at >= at - CLOCK_SLACK)
+                    && i.text().contains(words)
+            }) {
+                joined.entry(row.id.clone()).or_default().push(client_id.clone());
+                self.store
+                    .run(
+                        "UPDATE thread_sends SET message_id = ? WHERE agent = ? AND client_id = ?",
+                        vec![text(&row.id), text(&agent.name), text(&client_id)],
+                    )
+                    .await?;
             } else if now - at < SENDS_KEPT_SECONDS as f64 && !queued.contains(&client_id) {
                 waiting.push((client_id, words.to_string(), at, s(row, "attachments")));
             }
@@ -236,6 +265,10 @@ impl Threads {
         for item in items.iter_mut() {
             if let Some(c) = claimed.get(&item.id) {
                 item.body.insert("client_id".into(), json!(c));
+                if let Some(others) = joined.get(&item.id) {
+                    // the other messages this row holds: their `s_` items are replaced by it too (`Page::replaced`)
+                    item.body.insert("joined".into(), json!(others));
+                }
                 if let Some(kept) = photos.get(c) {
                     with_kept_photos(item, kept);
                 }
@@ -498,6 +531,14 @@ pub fn photo_bytes(data: &str) -> Option<Vec<u8>> {
     base64::engine::general_purpose::STANDARD.decode(clean.as_bytes()).ok().filter(|b| !b.is_empty())
 }
 
+/// What the line said at once restates (instant_reply.rs): the words, else what the message carries.
+fn said_for_ack(words: &str, attachments: &[Attachment]) -> String {
+    match words.trim().is_empty() {
+        true => format!("({})", crate::msg_queue::files_said(&attachments.iter().map(Attachment::shown).collect::<Vec<_>>())),
+        false => words.to_string(),
+    }
+}
+
 /// `POST /v1/threads/{thread}/messages`.
 pub async fn send(state: &AppState, agent: &AgentConfig, thread: Option<Thread>, body: NewMessage) -> ApiResult<Value> {
     let threads = threads_of(state);
@@ -515,13 +556,15 @@ pub async fn send(state: &AppState, agent: &AgentConfig, thread: Option<Thread>,
             Some(answer) => return Ok(answer),
             None => {
                 // lost: sent again for real, in its own conversation, under the same id
-                state
-                    .store
-                    .run(
-                        "DELETE FROM thread_sends WHERE agent = ? AND client_id = ?",
-                        vec![text(&agent.name), text(&body.client_id)],
-                    )
-                    .await?;
+                for table in ["thread_sends", "thread_instant"] {
+                    state
+                        .store
+                        .run(
+                            &format!("DELETE FROM {table} WHERE agent = ? AND client_id = ?"),
+                            vec![text(&agent.name), text(&body.client_id)],
+                        )
+                        .await?;
+                }
                 tracing::info!(agent = %agent.name, thread = %thread_id, "a lost message sent again");
             }
         }
@@ -579,6 +622,13 @@ pub async fn send(state: &AppState, agent: &AgentConfig, thread: Option<Thread>,
     };
     // what waited for this message (a Live call's recap, the time, the family's news, a feature to propose…)
     let mut waited = None;
+    // this message gets the agent's line said at once (instant_reply.rs): reserved once, kept if the steer fails; one
+    // per conversation every 20 s (in the family's, per writer: Paul's line never takes Marie's)
+    let mut instant = false;
+    let cap_key = match &author {
+        Some(a) => format!("{}#{}", thread.id, a.household),
+        None => thread.id.clone(),
+    };
     // a turn about to start again with earlier words (runs.rs `restart` starting it): Hermes ended it, it takes no
     // words; these wait first in line, for the turn after
     let restarting = |r: &str| state.hub.subscription(&agent.name, r).is_some_and(|sub| sub.restarting());
@@ -620,17 +670,30 @@ pub async fn send(state: &AppState, agent: &AgentConfig, thread: Option<Thread>,
                 }
             }
         }
-        // words into the turn going on (Hermes takes them at its next step)
-        let steered = queues
-            .steer(agent, tip, Some(run), &said, Some(&body.client_id))
-            .await
-            .map_err(|_| HttpError::new(502, "your agent isn't answering right now: try again in a moment"))?;
+        // words into the turn going on (Hermes takes them at its next step); answered at once by a short line
+        // (instant_reply.rs), the turn told so with them, so it does not acknowledge them again
+        instant = instant || crate::instant_reply::reserve(&agent.name, &cap_key, crate::py::time_time());
+        let steer = if instant { crate::instant_reply::with_note(&said, Mode::Steered) } else { said.clone() };
+        let steered = match queues.steer(agent, tip, Some(run), &steer, Some(&body.client_id)).await {
+            Ok(steered) => steered,
+            Err(_) => {
+                // nothing said: the conversation's slot for a line stays free
+                if instant {
+                    crate::instant_reply::release(&agent.name, &cap_key);
+                }
+                return Err(HttpError::new(502, "your agent isn't answering right now: try again in a moment"));
+            }
+        };
         if let Some(run) = steered {
             // the latest words decide where a reminder asked in this turn goes
             state.hub.set_phone(&agent.name, &run, phone);
             threads.bump(&thread, "sent").await?;
             tell_if_lost(state, agent, &thread, tip, &body.client_id);
             told(tip);
+            if instant {
+                crate::instant_reply::answer(state, agent, &thread, &body.client_id, &said_for_ack(&words, &body.attachments), Mode::Steered, author.is_some());
+            }
+            crate::instant_reply::watch_taken(state, agent, &thread, &run, &body.client_id);
             return Ok(answer("steered", Some(&run)));
         }
     }
@@ -639,7 +702,13 @@ pub async fn send(state: &AppState, agent: &AgentConfig, thread: Option<Thread>,
         None => crate::live_brief::message_notes(state, agent, tip, &words, &body.kinds).await,
     };
     let notes = [waited, body.notes.clone()].into_iter().flatten().collect::<Vec<_>>().join("\n");
-    let input = input_of(Some(&notes), &said, &body.attachments);
+    // a message that waits behind a turn going on: answered at once too (« right after »), its turn told so
+    let instant = running.is_some()
+        && (instant || crate::instant_reply::reserve(&agent.name, &cap_key, crate::py::time_time()));
+    let input = match instant {
+        true => input_of(Some(&notes), &crate::instant_reply::with_note(&said, Mode::Queued), &body.attachments),
+        false => input_of(Some(&notes), &said, &body.attachments),
+    };
     let by = crate::family_thread::by_value(author.as_ref());
     if running.is_some() || waits || body.after {
         // first in line when the turn just stopped taking words, else after what waits (someone else's turn too)
@@ -667,6 +736,9 @@ pub async fn send(state: &AppState, agent: &AgentConfig, thread: Option<Thread>,
         }
         threads.bump(&thread, "sent").await?;
         told(tip);
+        if instant {
+            crate::instant_reply::answer(state, agent, &thread, &body.client_id, &said_for_ack(&words, &body.attachments), Mode::Queued, author.is_some());
+        }
         return Ok(answer("queued", None));
     }
     crate::cloud_setup::READINESS.wait(&agent.name, crate::cloud_setup::READY_WAIT).await;

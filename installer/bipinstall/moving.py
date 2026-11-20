@@ -64,7 +64,15 @@ CHROME_SKIP = {"Cache", "Code Cache", "GPUCache", "ShaderCache", "GrShaderCache"
 TEXT_SUFFIXES = {".toml", ".yaml", ".yml", ".json", ".env", ".conf", ".txt", ".service", ".plist", ".sh"}
 TEXT_NAMES = {".env"}
 # The bridge's derived data, made again after a restore or a move: the archives' search indexes (bridge-rs/src/archives/).
-DATA_SKIP = {"archive-index"}
+# And the bridge's own binaries (rustbridge.py BINARIES, ~/.local/share/bipagents/bridge/<key>/: the data folder of a
+# place of the offer): each machine has its own from its install, for its processor; written over a running bridge,
+# a restore failed « Text file busy » (lab round trip 19/11), and a planned move left the target's bridge unable to
+# start (26/10: placemove.py's rule).
+DATA_SKIP = {"archive-index", "bridge"}
+# A file being written by a restore beside its place (backup._copy) or by an import (`restore` here), renamed over it
+# once whole: left there only by a killed run, never backed up, removed by the next restore or backup.
+PARTIAL_PREFIX = ".bip-restoring-"
+PARTIAL_SUFFIX = ".bipagents-part"
 # The bridge's spare agents (bridge-rs/src/agent_pool.rs POOL_FILE), next to bridge.toml.
 SPARES_FILE = "spare-agents.json"
 NOT_SETTINGS = {"profile", "uploads", "media", "audio", "agent-audio", "image_store", "image_cache", "audio_cache",
@@ -150,6 +158,8 @@ class Inventory:
             return True
         if name.startswith("bridge.toml."):
             return True   # its lock, its last good copy and broken ones (bridgeconf): this machine's, not the place's
+        if name.startswith(PARTIAL_PREFIX) or name.endswith(PARTIAL_SUFFIX):
+            return True
 
         for home in self.hermes_homes():
             parts = _relative(path, home)
@@ -168,6 +178,12 @@ class Inventory:
         if parts and len(parts) >= 3 and parts[1] == "profile" and any(p in CHROME_SKIP for p in parts[2:]):
             return True
         return False
+
+
+def own_binaries(home: Path) -> Path:
+    """This machine's bridge binaries (rustbridge.py BINARIES): never taken from an export, a backup or a move."""
+    from .rustbridge import BINARIES
+    return home / BINARIES
 
 
 def _relative(path: Path, root: Path) -> Optional[Tuple[str, ...]]:
@@ -501,6 +517,8 @@ def restore(tar: tarfile.TarFile, info: Dict[str, Any], target: Target) -> Dict[
         dest = base / rel if rel else base
         if rel and (".." in Path(rel).parts or Path(rel).is_absolute()):
             continue
+        if _relative(dest, own_binaries(target.home)) is not None:
+            continue   # an export from before 19/11 carries the source machine's: this one has its own
         if member.isdir():
             dest.mkdir(parents=True, exist_ok=True)
             os.chmod(dest, member.mode & 0o777 | 0o700)
@@ -516,7 +534,7 @@ def restore(tar: tarfile.TarFile, info: Dict[str, Any], target: Target) -> Dict[
             dest.parent.mkdir(parents=True, exist_ok=True)
             source = tar.extractfile(member)
             assert source is not None
-            partial = dest.with_name(dest.name + ".bipagents-part")
+            partial = dest.with_name(dest.name + PARTIAL_SUFFIX)
             with open(partial, "wb") as out:
                 shutil.copyfileobj(source, out, 1 << 20)
             os.chmod(partial, member.mode & 0o777 | 0o600)

@@ -50,11 +50,11 @@
    "properties": {
     "page": {
      "type": "string",
-     "description": "« Léa Martin », « Rénovation cuisine », « Maison »"
+     "description": "« Léa Martin » (person), « Rénovation cuisine » (subject), « Maison » (area: the home)"
     },
     "kind": {
      "type": "string",
-     "description": "for a new page; self: « Toi »; trip: one journey, « Kyoto, avr. 2026 »",
+     "description": "for a new page, always: person only for a human being; a home, a place, a group or a part of life is an area, a project a subject; self: « Toi »; trip: one journey, « Kyoto, avr. 2026 »",
      "enum": [
       "person",
       "subject",

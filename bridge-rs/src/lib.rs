@@ -43,6 +43,7 @@ pub mod feature_tips;
 pub mod beta_measures;
 pub mod store;
 pub mod threads;
+pub mod instant_reply;
 pub mod notifications;
 
 // -- push-runs -------------------------------------------------------------------------------------
@@ -226,6 +227,7 @@ pub mod browser_mcp;
 pub mod browsers;
 pub mod caldav;
 pub mod connections;
+pub mod drives;
 pub mod calendar;
 pub mod card_details;
 pub mod card_fill;
