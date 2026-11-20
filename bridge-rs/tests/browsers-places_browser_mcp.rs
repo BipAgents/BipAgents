@@ -1697,3 +1697,74 @@ async fn the_agents_browser_takes_its_calls_one_at_a_time_the_tasks_browsers_sid
     let (a, b) = (of("vie--t1")[0], of("vie--t2")[0]);
     assert!(a.0 < b.1 && b.0 < a.1, "the tasks' own browsers waited for each other: {a:?} {b:?}");
 }
+
+/// A stealth server where one call never comes back (a page's `alert()` or a script's promise that never settles holds
+/// nodriver's evaluate; a wedged CDP connection): `hang` is never answered, every other call at once.
+const HANGING_SERVER: &str = r#"
+import json, sys
+for line in sys.stdin:
+    m = json.loads(line)
+    if "id" not in m:
+        continue
+    if m["method"] == "initialize":
+        r = {"protocolVersion": m["params"]["protocolVersion"], "capabilities": {"tools": {}},
+             "serverInfo": {"name": "stealth", "version": "1"}}
+    elif m["method"] == "tools/list":
+        r = {"tools": [{"name": "navigate", "inputSchema": {"type": "object"}}]}
+    elif m["method"] == "tools/call" and m["params"]["name"] == "hang":
+        continue
+    else:
+        r = {"content": [{"type": "text", "text": "did " + m["params"]["name"]}]}
+    print(json.dumps({"jsonrpc": "2.0", "id": m["id"], "result": r}), flush=True)
+"#;
+
+/// Review 5 (d834ce434, `Proxy::one_call`): the agent's browser takes one call at a time, and nothing bounds how long
+/// one call holds it. A call the stealth server never answers keeps the lock for ever (`request` waits on its oneshot
+/// with no deadline; `calls` stays 1, so `watch_idle` never stops the server either): every later call of every
+/// conversation of that agent (crons, Live, the person's own) queues behind it until Hermes restarts, each one timing
+/// out in Hermes at 120 s and still queued afterwards. Before d834ce434 only the stuck call was lost.
+/// Expected: a call is bounded (here the settings' `call_seconds`, 2 s; in production about Hermes' own 120 s tool
+/// timeout, `browsers.rs` `proxy_config`): the stuck call is answered plainly (the server restarted if need be) and
+/// the next session's call is served.
+#[tokio::test(flavor = "multi_thread")]
+async fn review5_a_call_that_never_comes_back_does_not_hold_the_agents_browser_for_ever() {
+    let dir = tempfile::tempdir().unwrap();
+    let tmp = dir.path();
+    let mut settings = config(tmp);
+    std::fs::write(tmp.join("hang.py"), HANGING_SERVER).unwrap();
+    settings.insert("server".into(), json!([python(), tmp.join("hang.py").to_string_lossy()]));
+    settings.insert("call_seconds".into(), json!(2));
+    let out = Out::default();
+    let proxy = Proxy::new(settings, Box::new(out.clone()));
+    proxy.handle(init()).await;
+    let call = |id: i64, name: &str, session: &str| {
+        json!({"jsonrpc": "2.0", "id": id, "method": "tools/call", "params": {"name": name, "arguments": {},
+               "_meta": {bipbridge::agent_tools::CALL_SESSION_META: session}}})
+    };
+    let stuck = tokio::spawn({
+        let proxy = proxy.clone();
+        let message = call(1, "hang", "api_a");
+        async move { proxy.handle(message).await }
+    });
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let next = tokio::spawn({
+        let proxy = proxy.clone();
+        let message = call(2, "navigate", "api_b");
+        async move { proxy.handle(message).await }
+    });
+    let answered = |id: i64| out.messages().iter().any(|m| m["id"] == json!(id));
+    let deadline = std::time::Instant::now() + Duration::from_secs(20);
+    while !(answered(1) && answered(2)) && std::time::Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    let messages = out.messages();
+    stuck.abort();
+    next.abort();
+    proxy.stop_child().await;
+    assert!(answered(2), "another conversation's call waited for ever behind the stuck one: {messages:?}");
+    assert!(
+        messages.iter().any(|m| m["id"] == json!(2) && m["result"]["content"][0]["text"] == json!("did navigate")),
+        "the next call served: {messages:?}"
+    );
+    assert!(answered(1), "the stuck call was never answered: {messages:?}");
+}
