@@ -1544,3 +1544,71 @@ async fn a_tasks_calls_start_and_reach_its_own_browser_the_persons_the_agents() 
     assert_eq!(ran(&task), vec!["start"], "the task's own browser started");
     assert_eq!(ran(&agent), vec!["start"]);
 }
+
+/// Review 3 of subtasks-redesign (20/11, head 357a87a0c): Hermes patch 0029 sends the `stealth` entry's calls of
+/// different sessions side by side (`call_context: true`), but the agent's proxy keeps ONE `call_session` for « the
+/// current call » (browser_mcp.rs `Proxy::call_session`, « Hermes sends this server's calls one at a time »). A call
+/// of another session that arrives while a form-sending click is being checked (its page read) overwrites it: the
+/// click is judged with the other session's « Oui » — refused although its own conversation said Oui (or let through
+/// on the other conversation's).
+#[tokio::test(flavor = "multi_thread")]
+async fn review3_two_sessions_calls_at_once_each_keep_their_own_oui() {
+    let dir = tempfile::tempdir().unwrap();
+    let tmp = dir.path();
+    let config = config(tmp);
+    // the page read of the send button takes a second (a slow page): the other conversation's call arrives meanwhile
+    let slow = GUARD_SERVER.replace(
+        "                if '\"button[type=submit]\"' in script:\n",
+        "                if '\"#slow-send\"' in script:\n                    time.sleep(1.0)\n                    target[\"send\"] = \"contact.example\"\n                if '\"button[type=submit]\"' in script:\n",
+    );
+    assert_ne!(slow, GUARD_SERVER);
+    std::fs::write(tmp.join("server.py"), slow).unwrap();
+    let out = Out::default();
+    let proxy = Proxy::new(config, Box::new(out.clone()));
+    proxy.handle(init()).await;
+    proxy.handle(json!({"jsonrpc": "2.0", "id": 99, "method": "tools/list"})).await;
+    // the person said « Oui » to « Envoyer sur ce site ? » in conversation api_a (form_send.rs `grant_for_now`)
+    let until = bipbridge::py::time_time() + 600.0;
+    let grant = json!({"always": [], "once": [{"id": "g1", "host": "contact.example", "until": until, "window": true, "session": "api_a"}]});
+    std::fs::write(tmp.join(browser_mcp::SEND_SITES_FILE), grant.to_string()).unwrap();
+    let call = |id: i64, name: &str, arguments: Value, session: &str| {
+        json!({"jsonrpc": "2.0", "id": id, "method": "tools/call", "params": {"name": name, "arguments": arguments,
+               "_meta": {bipbridge::agent_tools::CALL_SESSION_META: session}}})
+    };
+    let a = {
+        let proxy = proxy.clone();
+        let message = call(1, "click_element", json!({"instance_id": "i", "selector": "#slow-send"}), "api_a");
+        tokio::spawn(async move { proxy.handle(message).await })
+    };
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    // another conversation of the same agent (a routine, the person's other conversation) uses the browser meanwhile
+    proxy.handle(call(2, "navigate", json!({"instance_id": "j", "url": "https://news.example/"}), "api_b")).await;
+    a.await.unwrap();
+    let answer = out.messages().into_iter().find(|m| m["id"] == json!(1)).expect("an answer to api_a's click");
+    assert_eq!(text_of(&answer), "did click_element", "api_a's own « Oui » not seen: judged as api_b's call: {answer}");
+    proxy.stop_child().await;
+}
+
+/// Review 3 of subtasks-redesign (20/11, head 357a87a0c): a self-install's bridge.toml has no `[hermes] root` (only a
+/// shared Hermes writes one, installer stack.py), so `hermes_says_call_session` answers « yes » without looking, and
+/// every task of an agent with a browser gets a browser of its own (a copy of its logins, the memory wait) on a
+/// person's own Hermes without patch 0028, where no call says its session and the task browses in the agent's anyway.
+/// agent_shares.rs `guest_turns_closed` looks in `<home>/hermes-agent`, the official install's folder.
+#[test]
+fn review3_an_own_hermes_without_patch_0028_gives_no_task_browsers() {
+    let dir = tempfile::tempdir().unwrap();
+    let code = dir.path().join("hermes-agent").join("tools");
+    std::fs::create_dir_all(&code).unwrap();
+    std::fs::write(code.join("mcp_tool_handlers.py"), "def _make_tool_handler(server_name, tool_name, tool_timeout):\n    pass\n").unwrap();
+    let mut config = bipbridge::config::parse_config(
+        &json!({"bridge_key": "k".repeat(32), "data_dir": dir.path().join("data").to_string_lossy()}),
+        None,
+    )
+    .unwrap();
+    config.hermes.home = dir.path().to_string_lossy().into_owned();
+    assert!(config.hermes.root.is_empty(), "a self-install: no [hermes] root");
+    assert!(
+        !bipbridge::browsers::hermes_says_call_session(&config),
+        "its Hermes (<home>/hermes-agent) has no patch 0028: no task browser"
+    );
+}

@@ -1075,3 +1075,41 @@ async fn a_call_to_the_bridges_pay_and_vault_servers_keeps_its_session() {
     let seen = SEEN.lock().unwrap().clone();
     assert_eq!(seen, Some(Some("api_task".to_string())), "the call's Hermes session inside the server's call");
 }
+
+// -- Review 3 (subtasks-redesign, 20/11, head 357a87a0c) ---------------------------------------------------------------
+
+/// Alex 20/11: short of memory a task « attend de la place », never refused, and starts again by itself. The queue
+/// (`resume_after_memory`) only ever tries its OLDEST task: when that one can't be started (its agent deleted while it
+/// waited, its agent at its cap of running tasks), the call returns 0 every minute and every task behind it waits
+/// for ever, memory free or not.
+#[tokio::test]
+async fn review3_a_waiting_task_that_cant_start_never_holds_the_others_back() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_fake, url) = gateway(1000, 10).await;
+    let (mut config, agent) = setup(dir.path(), &url);
+    config.browser.root = dir.path().join("browsers").to_string_lossy().into_owned();
+    let place = bipbridge::browsers::folder(&config, "coach");
+    std::fs::create_dir_all(place.join("profile")).unwrap();
+    std::fs::write(place.join("ports.json"), r#"{"cdp": 19600, "vnc": 19601}"#).unwrap();
+    std::fs::write(place.join("mcp.json"), r#"{"server": ["/usr/bin/podman"]}"#).unwrap();
+    let free = Arc::new(Mutex::new(Some(600u64)));
+    let mut jobs = Arc::try_unwrap(board(&config, None)).ok().unwrap();
+    let probe = free.clone();
+    jobs.memory = Arc::new(move || *probe.lock().unwrap());
+    let board = Arc::new(jobs);
+    let first = id_of(&board.create(&agent, "Comparer", "Compare trois offres.", 0.50, None).await.unwrap());
+    // the oldest waiting task's agent deleted meanwhile (its task files stay: agents_admin.rs deletes no task)
+    let mut orphan = bipbridge::jobs::load(&config, &first).unwrap();
+    orphan.insert("agent".into(), json!("ancien"));
+    let created = orphan.get("created").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    orphan.insert("created".into(), json!(created - 100.0));
+    bipbridge::jobs::save(&config, &orphan).unwrap();
+    let second = id_of(&board.create(&agent, "Réserver", "Trouve un créneau chez le dentiste.", 0.50, None).await.unwrap());
+    assert_eq!(bipbridge::jobs::load(&config, &second).unwrap()["reason"], json!("memory"));
+    *free.lock().unwrap() = Some(4096);
+    for _ in 0..3 {
+        board.resume_after_memory().await; // three minutes
+    }
+    assert_eq!(board.view(&second).unwrap()["state"], "running", "memory free again, the second task still waits behind the first");
+    let _ = board.forget(&second).await;
+}
