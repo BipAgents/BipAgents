@@ -572,3 +572,25 @@ def test_a_task_its_conversation_already_answered_lands_nothing(bridges, fakes):
     assert not [p for p in fakes.apns.payloads() if p.get("r") != "run_c"]
     assert not boite_items(bridge) and not [e for e in bridge.logged("reply push") if e.get("run_id") == "r2"]
     assert jobs(bridge)[0]["state"] == "done", "its report stays with the task (« Tâches de fond »)"
+
+
+def test_review2_the_persons_start_task_beside_a_followed_task_is_never_refused(bridges, fakes):
+    """Review 2 (subtasks-redesign, 20/11): the flaky `test_start_task_starts_a_task_within_the_direct_budget`, made
+    deterministic. The person's start_task says its session (patch 0028), but agent_tools.rs runs the tool in a spawned
+    task (`let work = tokio::spawn(… call_tool …)`) where `runs::CALL_SESSION` is gone: `from_background` guesses, and
+    while the first task's run is followed live by the hub (here its event stream stays open, as Hermes' does) the
+    person's own start_task is refused « you are working in a background task ». In the old test the fake's events
+    answer 404, so whether the run is still followed when the next call comes is a matter of timing (1 in 20 here)."""
+    bridge = bridges.new().start()
+    give_token(bridge)
+    fakes.hermes.rounds = 1000
+    fakes.hermes.runs["r1"] = []   # the first task's events: an open stream, as a real Hermes run's
+    first = call(bridge, "start_task", {"title": "Tri des mails", "instructions": "Trie mes mails."}, session="api_person")
+    assert not first["isError"], text_of(first)
+    time.sleep(1.0)   # the hub follows its run
+    second = call(bridge, "start_task", {"title": "Comparer", "instructions": "Compare."}, session="api_person")
+    try:
+        assert not second["isError"], text_of(second)
+    finally:
+        for one in jobs(bridge):
+            bridge.delete(f"/v1/jobs/{one['id']}", headers=AUTH)

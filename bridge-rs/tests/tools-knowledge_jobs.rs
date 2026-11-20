@@ -876,3 +876,202 @@ async fn a_browsing_task_waits_for_free_memory_and_starts_once_there_is() {
     assert!(words(&posted_runs(&fake)[0]["input"]).starts_with("Comparer\n\nCompare trois offres"), "its own words");
     board.forget(&id).await.unwrap();
 }
+
+// -- Review 2 (subtasks-redesign, 20/11, head 347bdad19): one browser per task ------------------------------------------
+
+/// An agent with a browser of its own, as `a_task_of_an_agent_with_a_browser_gets_a_browser_of_its_own` makes it
+/// (`big`: a site storage of that many bytes in its profile, what makes its copy take a while).
+fn agent_browser(config: &mut Config, dir: &std::path::Path, big: usize) -> std::path::PathBuf {
+    config.browser.root = dir.join("browsers").to_string_lossy().into_owned();
+    let place = bipbridge::browsers::folder(config, "coach");
+    std::fs::create_dir_all(place.join("profile/Default/Local Storage")).unwrap();
+    std::fs::write(place.join("profile/Default/Cookies"), "logged in").unwrap();
+    std::fs::write(place.join("profile/Default/Local Storage/big.ldb"), vec![b'x'; big]).unwrap();
+    std::fs::write(place.join("profile/Local State"), "{\"os_crypt\": {}}").unwrap();
+    std::fs::write(place.join("ports.json"), r#"{"cdp": 19600, "vnc": 19601}"#).unwrap();
+    std::fs::write(
+        place.join("mcp.json"),
+        r#"{"server": ["/usr/bin/podman", "exec", "-i", "bipagents-browser-coach", "/opt/stealth/mcp.sh"]}"#,
+    )
+    .unwrap();
+    place
+}
+
+/// Review 2: the person's « Oui » to a task's « Envoyer sur ce site ? » (form_send.rs `call` → `grant_for_now`, the
+/// task's session) and the sites allowed for good are written to the AGENT's `send-sites.json`; the task's own
+/// browser's proxy reads the copy made in its own folder at its start (browsers.rs `setup_task`, `Proxy::send_sites_path`
+/// beside its `busy`). The task asks, the person says yes, « do the same step again », refused again: a task with a
+/// browser of its own never sends a form to a new site.
+#[tokio::test]
+async fn a_persons_yes_to_a_tasks_sending_reaches_the_tasks_own_browser() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_fake, url) = gateway(1000, 10).await;
+    let (mut config, agent) = setup(dir.path(), &url);
+    agent_browser(&mut config, dir.path(), 16);
+    let board = board(&config, None);
+    let job = board.create(&agent, "Écrire au service client", "Envoie ma réclamation.", 0.50, None).await.unwrap();
+    let id = id_of(&job);
+    let own = bipbridge::browsers::folder(&config, &bipbridge::browsers::task_browser("coach", &id));
+    assert!(own.join("mcp.json").is_file(), "no browser of its own");
+    // « Oui » to the task's question (its Hermes session is the fake's s1)
+    bipbridge::form_send::grant_for_now(&config, "coach", "contact.example", Some("s1")).unwrap();
+    // what the task's own browser's proxy reads before it lets a form through
+    let settings: Dict = serde_json::from_str(&std::fs::read_to_string(own.join("mcp.json")).unwrap()).unwrap();
+    let proxy = bipbridge::browser_mcp::Proxy::new(settings, Box::new(std::io::sink()));
+    let now = bipbridge::py::time_time();
+    let allowed = bipbridge::browser_mcp::send_allowed(&proxy.send_sites_path, "contact.example", &Default::default(), now, Some("s1"));
+    board.forget(&id).await.unwrap();
+    assert_eq!(allowed, Some(None), "the task's own browser still refuses after the « Oui » ({})", proxy.send_sites_path.display());
+}
+
+/// Review 2: what a task's own browser downloads lands in ITS profile's Downloads (`downloads_dir(<agent>--<task>)`)
+/// and is moved to the agent's only at the task's end (`remove_task`); meanwhile the task's `give_file` /
+/// `send_file_to_service` of « /telechargements/… » (sent_files.rs `places`, service_files.rs `recent_downloads`) read
+/// the agent's: an invoice fetched by a task can't be handed over by that task (it was, when tasks used the agent's
+/// browser).
+#[tokio::test]
+async fn a_tasks_download_can_be_given_while_the_task_runs() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_fake, url) = gateway(1000, 10).await;
+    let (mut config, agent) = setup(dir.path(), &url);
+    agent_browser(&mut config, dir.path(), 16);
+    let board = board(&config, None);
+    let job = board.create(&agent, "Facture EDF", "Télécharge ma dernière facture et donne-la moi.", 0.50, None).await.unwrap();
+    let id = id_of(&job);
+    let downloads = bipbridge::browsers::downloads_dir(&config, &bipbridge::browsers::task_browser("coach", &id));
+    std::fs::create_dir_all(&downloads).unwrap();
+    std::fs::write(downloads.join("facture-2026-11.pdf"), "%PDF-1.4 facture").unwrap();
+    let given = bipbridge::runs::CALL_SESSION.sync_scope(Some("s1".into()), || {
+        bipbridge::sent_files::capture(&config, &agent, "/telechargements/facture-2026-11.pdf")
+    });
+    board.forget(&id).await.unwrap();
+    assert!(given.is_ok(), "the task's own download, given by the task: {given:?}");
+}
+
+/// Review 2: two tasks of one agent set up at once (a model's parallel start_task, two devices; `may_run` lets both
+/// through) read the ports taken (`pick_ports`) before either writes its `ports.json`, the profile's copy in between:
+/// the same two ports for both browsers (the second can't start, its DevTools secret shadows the first's in
+/// `SECRETS`).
+#[test]
+fn two_tasks_set_up_at_once_get_ports_of_their_own() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut config, _agent) = setup(dir.path(), "http://127.0.0.1:9");
+    agent_browser(&mut config, dir.path(), 64 * 1024 * 1024);
+    let gate = Arc::new(std::sync::Barrier::new(2));
+    let starts: Vec<_> = ["t1", "t2"]
+        .into_iter()
+        .map(|job| {
+            let (config, gate) = (config.clone(), gate.clone());
+            std::thread::spawn(move || {
+                gate.wait();
+                bipbridge::browsers::setup_task(&config, "coach", job, &format!("s_{job}")).unwrap()
+            })
+        })
+        .collect();
+    for start in starts {
+        assert!(start.join().unwrap().is_some());
+    }
+    let ports = |job: &str| bipbridge::browsers::ports_of(&config, &bipbridge::browsers::task_browser("coach", job)).unwrap();
+    let (a, b) = (ports("t1"), ports("t2"));
+    assert!(a["cdp"] != b["cdp"] && a["vnc"] != b["vnc"], "the same ports for two tasks' browsers: {a:?} {b:?}");
+}
+
+/// Review 2: an agent deleted while its task runs: the task fails (« this agent isn't on this install any more »,
+/// `watch`) but its own browser (a copy of the agent's logins, its unit) is never removed — neither there nor by
+/// `delete_agent` (browsers.rs `remove` takes the agent's folder only).
+#[tokio::test]
+async fn a_deleted_agents_task_leaves_no_copy_of_its_logins() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_fake, url) = gateway(1000, 10).await;
+    let (mut config, agent) = setup(dir.path(), &url);
+    agent_browser(&mut config, dir.path(), 16);
+    let shared = SharedConfig::new(config.clone());
+    let mut jobs = Jobs::new(shared.clone(), HermesClient::new(reqwest::Client::new()), None, None, None);
+    jobs.poll = 0.01;
+    let board = Arc::new(jobs);
+    let job = board.create(&agent, "Comparer", "Compare trois offres.", 0.50, None).await.unwrap();
+    let id = id_of(&job);
+    let own = bipbridge::browsers::folder(&config, &bipbridge::browsers::task_browser("coach", &id));
+    assert!(own.join("profile/Default/Cookies").is_file());
+    shared.remove_agent("coach");
+    for _ in 0..200 {
+        if jobs::tasks(&config).iter().any(|j| j["id"] == json!(id) && j["state"] == "failed") {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    assert!(jobs::tasks(&config).iter().any(|j| j["id"] == json!(id) && j["state"] == "failed"), "the task didn't end");
+    assert!(!own.exists(), "the deleted agent's logins copied for its task are still there: {}", own.display());
+}
+
+/// Review 2 (focus 4: measured 0.5–0.8 GB per browsing task, 20/11): the only room check is at a task's start,
+/// « pressed » at 90 % of the place's memory.high (heavy_work.rs `task_gate`); the browser of the task starts later,
+/// on its first call, with no check. A place at 75 % of a 1.6 GB memory.high (a VPS-2 shared by four people: 80 % of
+/// 8 GB ÷ 4, MemoryMax 1.5×) starts a task of an agent with a browser, and three of them at once: each browser takes
+/// 0.5–0.8 GB more, past memory.high (throttled) and MemoryMax (the kernel kills in the place). A task whose browser
+/// can't fit must wait for room (queued, never refused).
+#[test]
+fn a_task_whose_browser_cant_fit_in_the_room_waits_for_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut config, _agent) = setup(dir.path(), "http://127.0.0.1:9");
+    agent_browser(&mut config, dir.path(), 16);
+    let gb = 1_000_000_000u64;
+    let room = bipbridge::heavy_work::Room {
+        disk_total: Some(50 * gb),
+        disk_free: Some(40 * gb),
+        memory: bipbridge::heavy_work::Memory {
+            current: Some(1_200_000_000),
+            high: Some(1_600_000_000),
+            stalled: Some(0.0),
+            high_events: Some(0),
+            anon: Some(1_000_000_000),
+        },
+        ..Default::default()
+    };
+    assert!(!room.memory.pressed(), "not pressed: the case is the browser's room, not the pressure");
+    let gate = bipbridge::heavy_work::task_gate(&config, "coach", &room, bipbridge::py::time_time());
+    assert!(gate.is_some(), "0.4 GB left under memory.high, a browsing task takes 0.5–0.8 GB: started anyway");
+}
+
+/// Review 2: the bridge's MCP servers run each call in a spawned task (card_pay.rs `serve_call`: `let mut work =
+/// tokio::spawn(… (server.call)(…) …)`, used by bipagents_pay, bipagents_vault — vault_login, vault_create_login,
+/// ask_to_send —, connectors, handover, link_wallet; agent_tools.rs `mcp_call`: `let work = tokio::spawn(… call_tool
+/// …)`). The task-local `runs::CALL_SESSION` set around the handler (patch 0028) is gone inside: `browsers::task_of_call`
+/// is always None there, so pay_with_card / vault_login / vault_create_login from a task with a browser of its own are
+/// never handed over to the main conversation (Alex 20/11) but done in the AGENT's browser, the « Oui » of
+/// ask_to_send is never the task's own, and `from_background` / heavy_work's pause fall back on guessing. (The unit
+/// tests call `task_of_call` in `sync_scope` directly; `a_tasks_payment_is_handed_over…` calls `hand_over` directly.)
+#[tokio::test]
+async fn a_call_to_the_bridges_pay_and_vault_servers_keeps_its_session() {
+    static SEEN: Mutex<Option<Option<String>>> = Mutex::new(None);
+    fn probe<'a>(
+        _state: &'a bipbridge::AppState,
+        _agent: &'a AgentConfig,
+        _name: &'a str,
+        _arguments: &'a Dict,
+        _asker: &'a bipbridge::card_pay::Asker,
+    ) -> futures::future::BoxFuture<'a, anyhow::Result<Dict>> {
+        Box::pin(async move {
+            *SEEN.lock().unwrap() = Some(bipbridge::runs::CALL_SESSION.try_with(|s| s.clone()).ok().flatten());
+            Ok(Dict::new())
+        })
+    }
+    static PROBE: bipbridge::card_pay::ToolServer =
+        bipbridge::card_pay::ToolServer { name: "probe", instructions: "", tools: Vec::new, call: probe };
+    let dir = tempfile::tempdir().unwrap();
+    let (config, _agent) = setup(dir.path(), "http://127.0.0.1:9");
+    let mut tokens = indexmap::IndexMap::new();
+    tokens.insert("coach".to_string(), bipbridge::agent_tools::digest("tok-coach-0123456789abcdef"));
+    bipbridge::agent_tools::save_tokens(&config, &tokens).unwrap();
+    let app = common::TestApp::new(config);
+    let body = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {
+        "name": "vault_login", "arguments": {"site": "shop.example"},
+        "_meta": {bipbridge::agent_tools::CALL_SESSION_META: "api_task"}}});
+    let mut headers = axum::http::HeaderMap::new();
+    headers.insert("authorization", "Bearer tok-coach-0123456789abcdef".parse().unwrap());
+    headers.insert("accept", "application/json".parse().unwrap());
+    let _ = bipbridge::card_pay::serve(app.app.state.clone(), headers, Bytes::from(body.to_string()), &PROBE).await;
+    let seen = SEEN.lock().unwrap().clone();
+    assert_eq!(seen, Some(Some("api_task".to_string())), "the call's Hermes session inside the server's call");
+}
