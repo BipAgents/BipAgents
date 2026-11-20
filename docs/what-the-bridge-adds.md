@@ -59,7 +59,7 @@ that do it, and what it deliberately leaves to Hermes.
   agent is ready in about 2 seconds; `souls.rs` gives each kind of agent its starting personality; `guide.rs` and
   `guide_team.rs` propose the first agents or a whole team in one card; `agent_groups.rs` sorts them (Perso, Pro…).
 - `spaces.rs` moves an agent into its own Hermes when it must hold secrets; `own_space.rs` does it by itself at the
-  first secret. `sandbox.rs` gives each agent an isolated sandbox (no host folder, only package registries).
+  first secret. `sandbox.rs` gives each agent an isolated sandbox (no host folder; the web through the bridge's proxy: reading open, sending guarded).
 - `browsers.rs` runs each agent's real Chrome in its own container; `browser_mcp.rs` starts its tools when used;
   `desktop.rs`, `desktop_page.rs` and `desktop_read.rs` show it in the app and let the person take over.
 - Between agents: `peers.rs` (only along links the person turned on), `agent_messages.rs`, `agent_pairs.rs` (a
@@ -72,7 +72,7 @@ that do it, and what it deliberately leaves to Hermes.
   answered ones in the conversation (`approvals_log.rs`) and follows Hermes' prompt protocol
   (`hermes_prompts.rs`).
 - **Prompt injection.** Every agent's personality says that what it reads (pages, mail, files, other agents) is
-  information, never orders (`souls.rs`). Peers only reach a « Bot Chat » (`peers.rs`). Guest turns get closed tools
+  information, never orders (`souls.rs`). Agents write to each other only along links, in the two agents' own conversation, at most 4 messages before the person is asked (`agent_messages.rs`, `agent_pairs.rs`, `agent_hops.rs`; another household's through `peers.rs`). Guest turns get closed tools
   (patch 0018).
 - **What leaves.** `sandbox_sites.rs` and `send_guard.rs`: reading the web is open, but sending data to sites the
   person did not validate is capped (64 KB per site per hour) and then asked; `heavy_work.rs` makes agents ask before

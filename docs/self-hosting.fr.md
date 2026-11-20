@@ -134,8 +134,11 @@ root), le bridge le garde isolé : Hermes y fait alors le travail sans risque (`
   lui (les sauvegardes et les exports prennent ce dossier) ; la première fois, le contenu de ce dossier est copié dans
   le volume et le dossier gardé sous le nom `<agent>.before-volume`. Les outils `shared_files_*` atteignent les mêmes
   dossiers (tu approuves les suppressions depuis l'app).
-- **Pas d'internet, sauf les dépôts de paquets** : le bac à sable est sur `bipagents-sandbox`, un réseau podman sans
-  route vers l'extérieur, et n'atteint que PyPI, npm, les crates Rust, Go et Debian, par un petit conteneur proxy
+- **Internet seulement par le proxy du bridge** : le bac à sable est sur `bipagents-sandbox`, un réseau podman sans
+  route vers l'extérieur. Lire n'importe quel site public en HTTPS est libre ; envoyer plus qu'un peu de données
+  (64 Ko par heure vers un site, 256 Ko par jour) à un site que tu n'as pas autorisé est coupé et te demande d'abord ;
+  les dépôts de paquets (PyPI, npm, crates Rust, Go, Debian) ont leur propre allocation. Tout passe par un petit
+  conteneur proxy
   (`bipagents-egress` ; `podman logs bipagents-egress` montre ce qu'il a laissé passer ou bloqué). Quand le bridge
   tourne en service systemd utilisateur, ce proxy tourne dans son propre scope (`systemd-run --user --scope`) :
   redémarrer ou mettre à jour le bridge le laisse en marche. La recherche web et

@@ -63,8 +63,8 @@ solo programa en Rust, `bipbridge`). Esta página recoge lo que añade, área po
   y `guide_team.rs` proponen los primeros agentes o un equipo entero en una tarjeta; `agent_groups.rs` los ordena
   (Personal, Trabajo…).
 - `spaces.rs` lleva un agente a su propio Hermes cuando debe guardar secretos; `own_space.rs` lo hace solo con el
-  primer secreto. `sandbox.rs` da a cada agente un sandbox aislado (ninguna carpeta de la máquina, solo los
-  repositorios de paquetes).
+  primer secreto. `sandbox.rs` da a cada agente un sandbox aislado (ninguna carpeta de la máquina; la web a
+  través del proxy del bridge: leer es libre, enviar está vigilado).
 - `browsers.rs` ejecuta el Chrome real de cada agente en su propio contenedor; `browser_mcp.rs` arranca sus
   herramientas cuando se usan; `desktop.rs`, `desktop_page.rs` y `desktop_read.rs` lo muestran en la app y dejan que
   la persona tome el control.
@@ -78,8 +78,9 @@ solo programa en Rust, `bipbridge`). Esta página recoge lo que añade, área po
   claridad, guarda las ya respondidas en la conversación (`approvals_log.rs`) y sigue el protocolo de peticiones de
   Hermes (`hermes_prompts.rs`).
 - **Inyección de instrucciones.** La personalidad de cada agente dice que lo que lee (páginas, correos, archivos,
-  otros agentes) es información, nunca órdenes (`souls.rs`). Los demás agentes solo llegan a un « Bot Chat »
-  (`peers.rs`). Los turnos de invitados tienen herramientas cerradas (parche 0018).
+  otros agentes) es información, nunca órdenes (`souls.rs`). Los agentes solo se escriben a lo largo de los
+  vínculos, en la conversación propia de los dos agentes, como mucho 4 mensajes antes de preguntarte
+  (`agent_messages.rs`, `agent_pairs.rs`, `agent_hops.rs`; los de otro hogar por `peers.rs`). Los turnos de invitados tienen herramientas cerradas (parche 0018).
 - **Lo que sale.** `sandbox_sites.rs` y `send_guard.rs`: leer la web es libre, pero enviar datos a sitios que la
   persona no ha validado tiene un límite (64 KB por sitio y hora) y luego se pregunta; `heavy_work.rs` hace que los
   agentes pregunten antes de grandes instalaciones o compilaciones en servidores compartidos; `body_limit.rs` limita

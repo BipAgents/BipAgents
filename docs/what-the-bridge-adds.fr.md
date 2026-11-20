@@ -63,8 +63,8 @@ domaine, avec les modules (`bridge-rs/src/<nom>.rs`) qui le font, et ce qu'il la
   départ ; `guide.rs` et `guide_team.rs` proposent les premiers agents ou toute une équipe en une carte ;
   `agent_groups.rs` les range (Perso, Pro…).
 - `spaces.rs` installe un agent dans son propre Hermes quand il doit garder des secrets ; `own_space.rs` le fait tout
-  seul au premier secret. `sandbox.rs` donne à chaque agent un bac à sable isolé (aucun dossier de la machine, seulement
-  les dépôts de paquets).
+  seul au premier secret. `sandbox.rs` donne à chaque agent un bac à sable isolé (aucun dossier de la machine ; le web par le
+  proxy du bridge : lecture libre, envoi surveillé).
 - `browsers.rs` lance le vrai Chrome de chaque agent dans son conteneur ; `browser_mcp.rs` démarre ses outils à
   l'usage ; `desktop.rs`, `desktop_page.rs` et `desktop_read.rs` le montrent dans l'app et laissent la personne
   reprendre la main.
@@ -78,8 +78,9 @@ domaine, avec les modules (`bridge-rs/src/<nom>.rs`) qui le font, et ce qu'il la
   simplement, garde celles déjà répondues dans la conversation (`approvals_log.rs`) et suit le protocole de demandes
   de Hermes (`hermes_prompts.rs`).
 - **Injection de consignes.** La personnalité de chaque agent dit que ce qu'il lit (pages, mails, fichiers, autres
-  agents) est une information, jamais un ordre (`souls.rs`). Les autres agents n'atteignent qu'un « Bot Chat »
-  (`peers.rs`). Les tours d'invités ont des outils fermés (patch 0018).
+  agents) est une information, jamais un ordre (`souls.rs`). Les agents ne s'écrivent que le long des liens,
+  dans la conversation propre aux deux agents, 4 messages au plus avant qu'on te demande (`agent_messages.rs`,
+  `agent_pairs.rs`, `agent_hops.rs` ; ceux d'un autre foyer par `peers.rs`). Les tours d'invités ont des outils fermés (patch 0018).
 - **Ce qui sort.** `sandbox_sites.rs` et `send_guard.rs` : lire le web est libre, mais envoyer des données à des sites
   que la personne n'a pas validés est plafonné (64 Ko par site et par heure), puis demandé ; `heavy_work.rs` fait
   demander les agents avant une grosse installation ou compilation sur un serveur partagé ; `body_limit.rs` limite la
