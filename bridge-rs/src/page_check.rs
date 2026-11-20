@@ -168,7 +168,8 @@ pub fn command(runner: &Runner, dir: &Path, name: &str) -> Command {
             c.args(["run", "--rm", "--pull=never", "--name", name, "--network", "none", "--cap-drop", "ALL"]);
             c.args(["--security-opt", "no-new-privileges", "--memory", "1g", "--shm-size", "256m", "-e", "HOME=/tmp"]);
             if podman {
-                c.args(["--userns", "keep-id"]);
+                // the image runs as its user bip (1000): the host user is them (as browsers.rs)
+                c.args(["--userns", "keep-id:uid=1000,gid=1000"]);
             } else {
                 // SAFETY: getuid/getgid cannot fail.
                 let (uid, gid) = unsafe { (libc::getuid(), libc::getgid()) };
@@ -191,7 +192,8 @@ pub fn command(runner: &Runner, dir: &Path, name: &str) -> Command {
 pub fn parse(dump: &str) -> Option<Vec<Found>> {
     let start = dump.find("<pre id=\"bip-check\">")? + "<pre id=\"bip-check\">".len();
     let end = start + dump[start..].find("</pre>")?;
-    let text = dump[start..end].replace("&lt;", "<").replace("&gt;", ">").replace("&nbsp;", "\u{a0}").replace("&amp;", "&");
+    let text =
+        dump[start..end].replace("&lt;", "<").replace("&gt;", ">").replace("&nbsp;", "\u{a0}").replace("&amp;", "&");
     let mut found: Vec<Found> = serde_json::from_str(&text).ok()?;
     found.sort_by_key(|f| f.width);
     Some(found)
@@ -266,7 +268,11 @@ fn run(runner: &Runner, dir: &Path, name: &str, locked: &str) -> Result<Vec<Foun
                 let _ = child.kill();
                 let _ = child.wait();
                 if let Runner::Image { engine, .. } = runner {
-                    let _ = Command::new(engine).args(["rm", "-f", name]).stdout(Stdio::null()).stderr(Stdio::null()).status();
+                    let _ = Command::new(engine)
+                        .args(["rm", "-f", name])
+                        .stdout(Stdio::null())
+                        .stderr(Stdio::null())
+                        .status();
                 }
                 return Err(Skip::Slow);
             }
@@ -284,7 +290,8 @@ pub fn problems(found: &[Found]) -> Vec<String> {
         let w = f.width;
         let mut add = |kind: &str, item: &str| {
             // the same element at both widths (its width aside): once
-            let same = item.trim_end_matches(" px").trim_end_matches(|c: char| c.is_ascii_digit()).trim_end().to_string();
+            let same =
+                item.trim_end_matches(" px").trim_end_matches(|c: char| c.is_ascii_digit()).trim_end().to_string();
             if !said.contains(&same) {
                 said.push(same);
                 lines.push(format!("{kind} at {w} px: {item}"));
@@ -413,7 +420,8 @@ mod tests {
     #[test]
     fn the_container_has_no_network_and_no_file_policy() {
         let dir = Path::new("/tmp/bip-page-check-1-0");
-        let c = command(&Runner::Image { engine: "/usr/bin/podman".into(), image: "bipagents-browser".into() }, dir, "n");
+        let c =
+            command(&Runner::Image { engine: "/usr/bin/podman".into(), image: "bipagents-browser".into() }, dir, "n");
         let args: Vec<String> = c.get_args().map(|a| a.to_string_lossy().into_owned()).collect();
         let joined = args.join(" ");
         assert!(joined.contains("--network none"), "{joined}");

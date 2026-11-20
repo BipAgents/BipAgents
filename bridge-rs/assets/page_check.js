@@ -54,7 +54,7 @@
       if (w > 4 && h > 4) { overlap.push(name(x[0]) + " / " + name(y[0])); break; }
     }
     var out = {
-      width: width, page: document.documentElement.scrollWidth, wide: wide.slice(0, 5), cut: cut.slice(0, 5),
+      width: width, page: document.documentElement.scrollWidth, height: document.documentElement.scrollHeight, wide: wide.slice(0, 5), cut: cut.slice(0, 5),
       overlap: overlap, empty: empty.slice(0, 5), errors: errors.slice(0, 5), text: words(document.body || document.documentElement).length,
     };
     // the checker's frame (page_check.rs) hears it; alone, the page shows it
