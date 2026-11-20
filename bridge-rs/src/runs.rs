@@ -1737,6 +1737,7 @@ impl RunHub {
         } else {
             event
         };
+        let event = self.halts_in_plain_words(sub, event);
         let event = if event.r#type == "run.completed" { self.no_reply_in_plain_words(sub, event) } else { event };
         let event = if event.r#type == "run.failed" { self.reply_cut_in_plain_words(sub, &st, event) } else { event };
         let event = if event.r#type == "run.failed" { self.account_failure_in_plain_words(sub, event) } else { event };
@@ -1818,9 +1819,9 @@ impl RunHub {
                 });
             }
         } else if kind == "tool.completed" {
-            // a call that failed: the identical call right after is a retry, not « the same call again »
-            let tool = crate::loop_brake::event_tool(&event.data);
-            st.turn.completed(&tool, crate::loop_brake::completed_with_error(&event.data));
+            // a call that failed: the identical call right after is a retry, not « the same call again »; the same
+            // tool failing again and again stops the turn (`same_failure`)
+            self.brake_failure(sub, &mut st, &event);
         }
         if kind == "tool.started" {
             let tool = event.data.get("tool").or_else(|| event.data.get("name")).and_then(Value::as_str).unwrap_or("");
@@ -1979,6 +1980,38 @@ impl RunHub {
         });
     }
 
+    /// The limits of this run's turn now (its kind, the browser used, « Continuer » said).
+    fn turn_limits(st: &SubscriptionState, settings: &crate::loop_brake::Settings, browser: bool) -> crate::loop_brake::Limits {
+        let rescuing = st.rescue_of.is_some();
+        let mut limits = if rescuing { settings.rescue_limits() } else { settings.limits(st.background) };
+        if (browser || st.used_browser) && !st.background && !rescuing {
+            // a browsing turn: the browser's own calls on top (its own limits, browser_calls and page_reads, well
+            // under Hermes' cap of 150, so a page it can't read ends on the plain line, not a silent failure)
+            limits.tool_calls += limits.browser_calls;
+        }
+        if st.brake_raised {
+            limits = limits.raised();
+        }
+        limits
+    }
+
+    /// A tool's answer (`tool.completed`): noted for the retries, and the same tool failing again and again stops the
+    /// run (loop_brake.rs `same_failure`: 20/11, a Live call's web search retried 50 times until Hermes' own guard).
+    fn brake_failure(&self, sub: &RunSubscription, st: &mut SubscriptionState, event: &SSEEvent) {
+        let tool = crate::loop_brake::event_tool(&event.data);
+        let failed = crate::loop_brake::completed_with_error(&event.data);
+        let settings = self.config.as_ref().map(|c| c.get().brake.clone()).unwrap_or_default();
+        let limits = Self::turn_limits(st, &settings, browser_tool(&tool));
+        let over = st.turn.completed(&tool, failed, &limits);
+        if !settings.enabled || st.braked || st.finished || st.delegating > 0 || st.subagents > 0 {
+            return;
+        }
+        if let Some(over) = over {
+            let rescuing = st.rescue_of.is_some();
+            self.stop_looping(sub, st, over, rescuing, &settings);
+        }
+    }
+
     fn brake(&self, sub: &RunSubscription, st: &mut SubscriptionState, event: &SSEEvent) {
         if st.braked || st.finished || st.delegating > 0 || st.subagents > 0 {
             return;
@@ -1994,15 +2027,7 @@ impl RunHub {
         }
         let browser = browser_tool(&tool);
         let rescuing = st.rescue_of.is_some();
-        let mut limits = if rescuing { settings.rescue_limits() } else { settings.limits(st.background) };
-        if (browser || st.used_browser) && !st.background && !rescuing {
-            // a browsing turn: the browser's own calls on top (its own limits, browser_calls and page_reads, well
-            // under Hermes' cap of 150, so a page it can't read ends on the plain line, not a silent failure)
-            limits.tool_calls += limits.browser_calls;
-        }
-        if st.brake_raised {
-            limits = limits.raised();
-        }
+        let limits = Self::turn_limits(st, &settings, browser);
         let signature = crate::loop_brake::event_signature(&event.data);
         let noted = st.turn.note(&tool, signature.as_deref(), browser, &limits);
         // a limit getting close (about two thirds): the agent is told once, in a steer (after its current tool calls,
@@ -3331,6 +3356,24 @@ touche « Démarrer » pour reprendre."
         data.insert("bip_always_kind".into(), json!(key));
         let raw = crate::py::Dumps::new().unicode().dumps(&Value::Object(data.clone()));
         SSEEvent::new(event.r#type, data, raw)
+    }
+
+    /// Hermes' own halt as the turn's reply (its tool-loop guard's « I stopped retrying… », a reply cut for repeating
+    /// itself: hermes_halts.rs), in its last delta and its end: the plain line in the agent's language instead.
+    fn halts_in_plain_words(&self, sub: &RunSubscription, event: SSEEvent) -> SSEEvent {
+        if !crate::hermes_halts::carries(&event) {
+            return event;
+        }
+        let lang = match &self.config {
+            Some(shared) => {
+                let config = shared.get();
+                let agent = config.agent(Some(&sub.agent.name)).cloned().unwrap_or_else(|| sub.agent.clone());
+                crate::handback::language_of(&config, &agent)
+            }
+            None => "en".to_string(),
+        };
+        tracing::warn!(agent = %sub.agent.name, run_id = %sub.run_id, "Hermes halted the turn: plain line shown");
+        crate::hermes_halts::scrub_event(event, &lang)
     }
 
     /// A run that ended on Hermes' own « ⚠️ No reply: … /model » explanation, alone or after a fragment of an answer,

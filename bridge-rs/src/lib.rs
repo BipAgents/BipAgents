@@ -59,6 +59,7 @@ pub mod cronwatch;
 pub mod no_reply;
 pub mod reply_cut;
 pub mod hermes_footer;
+pub mod hermes_halts;
 pub mod fcm;
 pub mod media;
 pub mod spoken;

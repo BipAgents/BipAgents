@@ -288,6 +288,17 @@ pub fn call_lines(messages: &[Dict]) -> (Vec<(String, String)>, Vec<String>) {
     (lines, media)
 }
 
+/// The agent's lines that are Hermes' own halts, in plain words (the record, the recap, the push read them).
+pub fn halts_in_plain_words(lines: Vec<(String, String)>, lang: &str) -> Vec<(String, String)> {
+    lines
+        .into_iter()
+        .map(|(role, text)| match crate::hermes_halts::in_plain_words(&text, lang).filter(|_| role == "assistant") {
+            Some(plain) => (role, plain),
+            None => (role, text),
+        })
+        .collect()
+}
+
 /// A turn of the call is going on: the last message is the person's, a tool's, or the agent calling a tool.
 pub fn turn_open(messages: &[Dict]) -> bool {
     let Some(last) = messages
@@ -419,6 +430,7 @@ pub async fn end_call(state: &AppState, ending: Ending) -> Option<Value> {
 
 async fn end_inner(state: &AppState, ending: &Ending) -> anyhow::Result<Option<Value>> {
     let agent = &ending.agent;
+    let lang = crate::handback::language_of(&state.config(), agent);
     let calls = LiveCalls::of(&state.briefs);
     let opened = calls.take_open(&agent.name, &ending.live_session);
     let started_hermes = match state.hermes.session(agent, &ending.live_session).await {
@@ -453,6 +465,7 @@ async fn end_inner(state: &AppState, ending: &Ending) -> anyhow::Result<Option<V
     if still_running(state, ending).await {
         if let Ok(messages) = state.hermes.session_messages(agent, &ending.live_session).await {
             let (lines, media) = call_lines(&messages);
+            let lines = halts_in_plain_words(lines, &lang);
             if lines.iter().any(|(role, _)| role == "user") {
                 calls.keep(&agent.name, &ending.session, build(&lines, &media, true, false, recapped))?;
                 told(state, ending).await;
@@ -478,6 +491,8 @@ async fn end_inner(state: &AppState, ending: &Ending) -> anyhow::Result<Option<V
         Err(err) => return Err(err.into()),
     };
     let (lines, media) = call_lines(&messages);
+    // Hermes' own halt as the agent's last words (« I stopped retrying… »): the plain line the call said (hermes_halts.rs)
+    let lines = halts_in_plain_words(lines, &lang);
     if !lines.iter().any(|(role, _)| role == "user") && media.is_empty() {
         return Ok(None); // the person said nothing (as the apps did: no recap then)
     }
@@ -785,6 +800,22 @@ mod tests {
 
     fn m(v: Value) -> Dict {
         v.as_object().unwrap().clone()
+    }
+
+    /// 20/11: Alex's call record ended on Hermes' guard line, in English.
+    #[test]
+    fn hermes_halt_as_the_last_words_of_a_call_is_plain() {
+        let messages = vec![
+            m(json!({"role": "user", "content": "Tu peux me trouver un jeu de DJ sur PS1 ?"})),
+            m(json!({"role": "assistant", "content": "I stopped retrying because I kept running web_search 50 times without \
+making progress. The last result above shows what blocked it. Tell me how you'd like to proceed, or send `continue` and \
+I'll try a different approach."})),
+        ];
+        let lines = halts_in_plain_words(call_lines(&messages).0, "fr");
+        assert_eq!(lines[1].1, "Je n'arrive pas à chercher sur le web pour l'instant. Tu veux que je réessaie plus tard ?");
+        // the person's own words, even quoting it, as they are
+        let quoted = vec![("user".to_string(), "I stopped retrying because I kept running web_search 2 times without making progress".to_string())];
+        assert_eq!(halts_in_plain_words(quoted.clone(), "fr"), quoted);
     }
 
     #[test]
