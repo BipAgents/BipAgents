@@ -1876,6 +1876,14 @@ async fn stop_for(state: &AppState, agent: &AgentConfig, entry: &Held, total: &P
             // the « Panier prêt » with the page's amount (Relecture 4): what the person would pay there
             bridge_stops(state, agent, entry, (&line, &why), *shown, "amount_differs").await
         }
+        PageTotal::Doubt(Doubt::Unlabelled(shown)) => {
+            // an unlabelled amount above the approved one (a product offered, a field): « could not check », never said
+            // to be what the page asks (Relecture 10); the « Panier prêt » carries it, not the lower approved amount
+            tracing::warn!(agent = %agent.name, site = %entry.site, "card payment: an unlabelled higher amount on the page, handed over");
+            let line = crate::pay_line::unverified(&lang);
+            let why = "BipAgents could not check the payment page's total against the approved amount: nothing was typed.";
+            bridge_stops(state, agent, entry, (&line, why), *shown, "handed_over").await
+        }
         PageTotal::Doubt(Doubt::Unclear) | PageTotal::Unread(_) => {
             tracing::warn!(agent = %agent.name, site = %entry.site, "card payment: the page's total can't be checked, handed over");
             let line = crate::pay_line::unverified(&lang);

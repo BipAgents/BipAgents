@@ -74,7 +74,7 @@ pub struct DocText {
 /// An add button's words (FR/EN/DE/ES/NL), its whole text.
 static ADD: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
-        r"(?i)^[\s+]*(ajouter( au panier)?|add( to (cart|bag|basket))?|in den warenkorb|hinzuf[üu]gen|a[ñn]adir( al carrito)?|toevoegen( aan (winkelwagen|winkelmand))?|in (de )?winkel(wagen|mand))[\s!]*$",
+        r"(?i)^[\s+]*(ajouter( au panier)?|add( to (cart|bag|basket|order|my order))?|ajouter( à la commande| [àa] ma commande)|zur bestellung hinzuf[üu]gen|in den warenkorb|hinzuf[üu]gen|a[ñn]adir( al carrito)?|toevoegen( aan (winkelwagen|winkelmand))?|in (de )?winkel(wagen|mand))[\s!]*$",
     )
     .expect("add pattern")
 });
