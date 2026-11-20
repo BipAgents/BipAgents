@@ -83,6 +83,15 @@ pub struct Households {
     pub path: PathBuf,
 }
 
+/// Every read-change-write of a households file, one at a time in the process (several modules make their own
+/// `Households` of the same file; renew_passes, a link removed, a join run side by side on the multi-thread runtime):
+/// before 20/11 a withdrawal racing another write could be undone, the household back with its pass.
+static WRITING: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn writing() -> std::sync::MutexGuard<'static, ()> {
+    WRITING.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 /// `data.get(key, default)` of the file's dict (Python keeps whatever type the file holds).
 fn field(data: &Value, key: &str) -> Option<Value> {
     data.as_object().and_then(|d| d.get(key)).cloned()
@@ -121,7 +130,10 @@ impl Households {
         if let Some(parent) = self.path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let tmp = PathBuf::from(format!("{}.tmp", self.path.display()));
+        // a temporary file of its own (another process may write the same file: the CLI)
+        static COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let tmp = PathBuf::from(format!("{}.{}.{n}.tmp", self.path.display(), std::process::id()));
         crate::py::write_with_mode(
             &tmp.to_string_lossy(),
             crate::py::dumps(&Value::Object(data.clone())).as_bytes(),
@@ -140,6 +152,7 @@ impl Households {
         if name.is_empty() {
             return Err(HouseholdError("a name is needed".into()).into());
         }
+        let _writing = writing();
         let mut data = self.load();
         data.insert("name".into(), json!(name));
         self.save(&data)
@@ -156,6 +169,7 @@ impl Households {
             return Err(HouseholdError("set this household's name first".into()).into());
         }
         let code = format!("{SEALED}{}", crate::py::token_urlsafe(24));
+        let _writing = writing();
         let mut data = self.load();
         if let Some(Value::Object(invites)) = data.get_mut("invites") {
             invites.insert(digest(&code), json!(crate::py::time_time() + seconds));
@@ -177,6 +191,7 @@ impl Households {
         fingerprint: Option<&str>,
         current: Option<&str>,
     ) -> Result<Dict, HouseholdError> {
+        let _writing = writing();
         let mut data = self.load();
         // checked before the invitation is used, so that it still works once the name is sorted out
         let replace = current.and_then(|token| caller_in(&data, token));
@@ -206,6 +221,7 @@ impl Households {
         key_in: &str,
         fingerprint: Option<&str>,
     ) -> anyhow::Result<String> {
+        let _writing = writing();
         let mut data = self.load();
         // the household we already reach at this very address (we called it ourselves) is linking again
         let replace = linked_at(&data, url);
@@ -271,6 +287,7 @@ impl Households {
     pub fn set_fingerprint(&self, household: &str, fingerprint: &str, url: Option<&str>) -> anyhow::Result<bool> {
         let fingerprint = crate::door_tls::normalize(fingerprint)
             .ok_or_else(|| anyhow::Error::from(HouseholdError("invalid fingerprint".into())))?;
+        let _writing = writing();
         let mut data = self.load();
         let Some(entry) = data
             .get_mut("households")
@@ -295,6 +312,7 @@ impl Households {
     /// One field of a linked household's entry (family_relay.rs: `relay`, `pull`); false when there is no such
     /// household.
     pub fn mark(&self, household: &str, key: &str, value: Value) -> anyhow::Result<bool> {
+        let _writing = writing();
         let mut data = self.load();
         let Some(entry) = data
             .get_mut("households")
@@ -316,6 +334,7 @@ impl Households {
 
     /// These fields of a household's entry, in one write (false: no such household).
     pub fn mark_all(&self, household: &str, fields: &[(&str, Value)]) -> anyhow::Result<bool> {
+        let _writing = writing();
         let mut data = self.load();
         let Some(entry) = data
             .get_mut("households")
@@ -337,6 +356,7 @@ impl Households {
     /// one), so that no moment, crash or full disk leaves the withdrawn pass taken. Its entry as it was (None: no such
     /// household); the write's error when it fails, nothing changed.
     pub fn withdraw(&self, household: &str) -> anyhow::Result<Option<Dict>> {
+        let _writing = writing();
         let mut data = self.load();
         let Some(households) = data.get_mut("households").and_then(Value::as_object_mut) else { return Ok(None) };
         let Some(gone) = households.shift_remove(household) else { return Ok(None) };
@@ -354,6 +374,7 @@ impl Households {
 
     /// Python's `KeyError` when there is no such household.
     pub fn remove(&self, household: &str) -> anyhow::Result<()> {
+        let _writing = writing();
         let mut data = self.load();
         let removed = match data.get_mut("households") {
             Some(Value::Object(households)) => households.shift_remove(household).is_some(),
@@ -527,6 +548,47 @@ mod tests {
 
     /// R8 (review of R5): a link removed and the others marked to renew their passes are one write; a write that
     /// fails changes nothing and says so (never the household gone with the others' old passes still said).
+    /// Relecture 1 of fix-flaky-group-names (20/11): a withdrawal racing another write (renew_passes' `mark_all`, on
+    /// the multi-thread runtime) never brings the household back with its pass; each read-change-write whole, the
+    /// other two Households of the same file (other modules make their own) included.
+    #[test]
+    fn a_withdrawal_racing_other_writes_is_never_undone() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("households.json").to_string_lossy().to_string();
+        for round in 0..200 {
+            let households = Households::new(&path);
+            let mut data = households.load();
+            let mut linked = Dict::new();
+            for n in 0..6 {
+                linked.insert(format!("h{n}"), json!({"name": format!("H{n}"), "given_pass": format!("p{n}")}));
+            }
+            data.insert("households".into(), Value::Object(linked));
+            households.save(&data).unwrap();
+            let writers: Vec<_> = (1..6)
+                .map(|n| {
+                    let path = path.clone();
+                    std::thread::spawn(move || {
+                        let mine = Households::new(&path);
+                        for i in 0..5 {
+                            mine.mark_all(&format!("h{n}"), &[("given_pass_at", json!(i))]).unwrap();
+                        }
+                    })
+                })
+                .collect();
+            let gone = Households::new(&path).withdraw("h0").unwrap();
+            for w in writers {
+                w.join().unwrap();
+            }
+            assert!(gone.is_some(), "round {round}");
+            let after = Households::new(&path).load();
+            assert!(after["households"].get("h0").is_none(), "round {round}: the withdrawn household came back: {after:?}");
+            for n in 1..6 {
+                assert_eq!(after["households"][format!("h{n}")]["given_pass_at"], 4, "round {round}: h{n}'s last write lost");
+                assert_eq!(after["households"][format!("h{n}")]["renew_pass"], true, "round {round}: h{n} not marked");
+            }
+        }
+    }
+
     #[test]
     fn a_link_removed_marks_the_others_in_the_same_write_or_changes_nothing() {
         let dir = tempfile::tempdir().unwrap();
