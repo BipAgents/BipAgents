@@ -14,9 +14,15 @@
 //! - a reply stopped for repeating itself (`agent/turn_truncation.py` `repetition_copy`): « ⚠️ **Response Stopped —
 //!   Repetition Detected** … `/model` … »;
 //! - a reply whose thinking used every output token (`_THINKING_EXHAUSTED`): « ⚠️ **Thinking Budget Exhausted** …
-//!   `/reasoning low` … `/model` »;
-//! - a turn interrupted while the model had not answered yet (`INTERRUPT_WAITING_FOR_MODEL_PREFIX`): « Operation
-//!   interrupted: waiting for model response (12.3s elapsed). » (a Live turn the bridge stopped ends on it).
+//!   `/reasoning low` … `/model` ».
+//!
+//! Not « Operation interrupted: waiting for model response (12.3s elapsed). » (`INTERRUPT_WAITING_FOR_MODEL_PREFIX`):
+//! a person's own Stop ends on it, and the apps tell it already (`isInterruptionLine`); a Live turn the bridge's brake
+//! stopped ends on it too, and there the brake's line replaces it (live_turns.rs `LiveBrake`, live_calls.rs).
+//!
+//! The guard's halt of `web_search` is its per-turn cap (`loop_web_search_cap`: 50, the only halt of a person's turn,
+//! whose hard stops are off) unless its count is small: the searches answered, the model kept searching, so it reads
+//! as the brake's « too many searches » line; a small count (a routine's failures) reads « can't search the web ».
 //!
 //! Only a reply that IS one of them (its text starts with it, or it is the last paragraph after the agent's own words)
 //! is swapped: an agent quoting one mid-sentence keeps its words.
@@ -29,21 +35,23 @@ use crate::loop_brake::bare;
 /// Which of Hermes' halts a reply is.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Halt {
-    /// The tool-loop guardrail stopped the turn: the tool it kept calling (bare name, « » when Hermes named none).
-    ToolLoop(String),
+    /// The tool-loop guardrail stopped the turn: the tool it kept calling (bare name, « » when Hermes named none) and
+    /// how many times.
+    ToolLoop(String, u32),
     /// The reply kept repeating itself and was cut.
     Repetition,
     /// The model's thinking used all its output tokens: no answer.
     ThinkingExhausted,
-    /// The turn was interrupted before the model answered.
-    Interrupted,
 }
+
+/// Hermes' guard halting `web_search` this many times or more: its per-turn cap, the searches answered (above the
+/// brake's own web search limits, 20 and 6, and Hermes' failure halts, 5 and 8).
+const MANY_SEARCHES: u32 = 10;
 
 const TOOL_LOOP: &str = "I stopped retrying because I kept running ";
 const TOOL_LOOP_END: &str = " times without making progress";
 const REPETITION: &str = "⚠️ **Response Stopped — Repetition Detected**";
 const THINKING: &str = "⚠️ **Thinking Budget Exhausted**";
-const INTERRUPTED: &str = "Operation interrupted: waiting for model response (";
 
 /// The halt `text` starts with (spaces before it aside), if any.
 fn starts_as(text: &str) -> Option<Halt> {
@@ -52,18 +60,15 @@ fn starts_as(text: &str) -> Option<Halt> {
         let named = rest.find(TOOL_LOOP_END).map(|end| &rest[..end])?;
         // « <tool> <n> »: Hermes' `decision.tool_name or 'the same tool'`, then the count
         let (tool, count) = named.rsplit_once(' ')?;
-        count.parse::<u32>().ok()?;
+        let count = count.parse::<u32>().ok()?;
         let tool = if tool == "the same tool" { "" } else { tool };
-        return Some(Halt::ToolLoop(bare(tool).to_string()));
+        return Some(Halt::ToolLoop(bare(tool).to_string(), count));
     }
     if text.starts_with(REPETITION) {
         return Some(Halt::Repetition);
     }
     if text.starts_with(THINKING) {
         return Some(Halt::ThinkingExhausted);
-    }
-    if text.starts_with(INTERRUPTED) && text.len() < 120 {
-        return Some(Halt::Interrupted);
     }
     None
 }
@@ -93,7 +98,10 @@ fn pick(lang: &str, fr: &str, en: &str, de: &str, es: &str, nl: &str) -> String 
 /// The line the person reads (and hears in a Live call) instead, in `lang` (fr, en, de, es, nl; others read English).
 pub fn plain(halt: &Halt, lang: &str) -> String {
     match halt {
-        Halt::ToolLoop(tool) => crate::loop_brake::notice_text(&crate::loop_brake::Over::Failing(tool.clone()), lang),
+        Halt::ToolLoop(tool, count) if tool == "web_search" && *count >= MANY_SEARCHES => {
+            crate::loop_brake::notice_text(&crate::loop_brake::Over::Searches, lang)
+        }
+        Halt::ToolLoop(tool, _) => crate::loop_brake::notice_text(&crate::loop_brake::Over::Failing(tool.clone()), lang),
         Halt::Repetition => pick(
             lang,
             "Ma réponse partait en boucle, je l'ai arrêtée. Tu peux me reposer la question ?",
@@ -109,14 +117,6 @@ pub fn plain(halt: &Halt, lang: &str) -> String {
             "Ich habe diesmal keine Antwort zustande gebracht. Kannst du mich noch einmal fragen?",
             "Esta vez no he conseguido formular una respuesta. ¿Me lo puedes volver a preguntar?",
             "Het is me deze keer niet gelukt een antwoord te geven. Kun je het me opnieuw vragen?",
-        ),
-        Halt::Interrupted => pick(
-            lang,
-            "Je me suis arrêté avant d'avoir pu répondre. Tu veux que je réessaie ?",
-            "I stopped before I could answer. Do you want me to try again?",
-            "Ich habe aufgehört, bevor ich antworten konnte. Soll ich es noch einmal versuchen?",
-            "Me he detenido antes de poder responder. ¿Quieres que lo intente de nuevo?",
-            "Ik ben gestopt voordat ik kon antwoorden. Wil je dat ik het opnieuw probeer?",
         ),
     }
 }
@@ -196,23 +196,24 @@ to a different model with `/model`\n→ Or resend your message (your conversatio
 
     #[test]
     fn hermes_halts_are_told_and_answers_are_not() {
-        assert_eq!(find(SEEN), Some(("", Halt::ToolLoop("web_search".into()))));
-        assert_eq!(find(&format!("\n\n{SEEN}")), Some(("", Halt::ToolLoop("web_search".into()))));
+        assert_eq!(find(SEEN), Some(("", Halt::ToolLoop("web_search".into(), 50))));
+        assert_eq!(find(&format!("\n\n{SEEN}")), Some(("", Halt::ToolLoop("web_search".into(), 50))));
         assert_eq!(
             find("I stopped retrying because I kept running the same tool 8 times without making progress. x"),
-            Some(("", Halt::ToolLoop(String::new())))
+            Some(("", Halt::ToolLoop(String::new(), 8)))
         );
         assert_eq!(
             find("I stopped retrying because I kept running mcp_bipagents_calendar_add 5 times without making progress."),
-            Some(("", Halt::ToolLoop("calendar_add".into())))
+            Some(("", Halt::ToolLoop("calendar_add".into(), 5)))
         );
         assert_eq!(find(REPEATED), Some(("", Halt::Repetition)));
         assert_eq!(find("⚠️ **Thinking Budget Exhausted**\n\nThe model used all its output tokens"), Some(("", Halt::ThinkingExhausted)));
-        assert_eq!(find("Operation interrupted: waiting for model response (12.3s elapsed)."), Some(("", Halt::Interrupted)));
+        // a person's own Stop: the apps tell it (`isInterruptionLine`), as it is here
+        assert_eq!(find("Operation interrupted: waiting for model response (12.3s elapsed)."), None);
         // after the agent's own words, in the same reply
         assert_eq!(
             find(&format!("Laisse-moi vérifier sur le web, deux secondes.\n\n{SEEN}")),
-            Some(("Laisse-moi vérifier sur le web, deux secondes.", Halt::ToolLoop("web_search".into())))
+            Some(("Laisse-moi vérifier sur le web, deux secondes.", Halt::ToolLoop("web_search".into(), 50)))
         );
         for said in [
             "Voilà, c'est Beatmania.",
@@ -226,17 +227,19 @@ to a different model with `/model`\n→ Or resend your message (your conversatio
 
     #[test]
     fn the_person_reads_a_plain_line_in_their_language() {
+        // Alex's 20/11: Hermes' cap of 50, every search answered (the place's log): the « too many searches » line
+        let many = "J'ai fait beaucoup de recherches sur le web sans trouver de réponse sûre. Dis-moi si tu veux que j'en fasse une recherche approfondie en tâche de fond.";
+        assert_eq!(in_plain_words(SEEN, "fr").as_deref(), Some(many));
+        assert_eq!(in_plain_words(&format!("Je regarde.\n\n{SEEN}"), "fr"), Some(format!("Je regarde.\n\n{many}")));
+        // a few failures (a routine's hard stop at 8): « can't search the web »
         assert_eq!(
-            in_plain_words(SEEN, "fr").as_deref(),
+            in_plain_words("I stopped retrying because I kept running web_search 8 times without making progress.", "fr")
+                .as_deref(),
             Some("Je n'arrive pas à chercher sur le web pour l'instant. Tu veux que je réessaie plus tard ?")
         );
-        assert_eq!(
-            in_plain_words(&format!("Je regarde.\n\n{SEEN}"), "fr").as_deref(),
-            Some("Je regarde.\n\nJe n'arrive pas à chercher sur le web pour l'instant. Tu veux que je réessaie plus tard ?")
-        );
         for lang in ["fr", "en", "de", "es", "nl", "it"] {
-            for halt in [Halt::ToolLoop("web_search".into()), Halt::ToolLoop(String::new()), Halt::Repetition,
-                Halt::ThinkingExhausted, Halt::Interrupted]
+            for halt in [Halt::ToolLoop("web_search".into(), 50), Halt::ToolLoop("web_search".into(), 3),
+                Halt::ToolLoop(String::new(), 8), Halt::Repetition, Halt::ThinkingExhausted]
             {
                 let line = plain(&halt, lang);
                 assert!(!line.contains('`') && !line.contains("/model") && !line.contains("web_search"), "{lang} {halt:?}");
@@ -250,10 +253,10 @@ to a different model with `/model`\n→ Or resend your message (your conversatio
     fn a_stream_says_the_plain_line_in_its_delta_and_its_end() {
         let delta = SSEEvent::new("assistant.delta", json!({"delta": format!("\n\n{SEEN}")}).as_object().unwrap().clone(), String::new());
         let said = scrub_event(delta, "fr");
-        assert_eq!(said.data["delta"], json!("\n\nJe n'arrive pas à chercher sur le web pour l'instant. Tu veux que je réessaie plus tard ?"));
-        assert!(said.raw.contains("chercher sur le web"));
+        assert!(said.data["delta"].as_str().unwrap().starts_with("\n\nJ'ai fait beaucoup de recherches sur le web"));
+        assert!(said.raw.contains("recherches sur le web"));
         let end = SSEEvent::new("assistant.completed", json!({"content": SEEN, "run_id": "r"}).as_object().unwrap().clone(), String::new());
-        assert!(scrub_event(end, "en").data["content"].as_str().unwrap().starts_with("I can't search the web right now."));
+        assert!(scrub_event(end, "en").data["content"].as_str().unwrap().starts_with("I ran a lot of web searches"));
         // an answer's delta, and a tool's event, as they are
         let words = SSEEvent::new("assistant.delta", json!({"delta": "Beatmania"}).as_object().unwrap().clone(), "raw");
         assert_eq!(scrub_event(words, "fr").raw, "raw");

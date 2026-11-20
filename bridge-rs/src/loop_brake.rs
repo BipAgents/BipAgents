@@ -121,8 +121,8 @@ pub struct Limits {
     pub discovery_same: u32,
     /// … and more discovery calls than this in all, whatever the queries.
     pub discovery_calls: u32,
-    /// One tool that failed this many times in a row (whatever its arguments, retries included, no success of it in
-    /// between) stops the turn (20/11: a Live call's web search failing, retried 50 times). Not the work tools whose
+    /// One tool that failed this many times in a row (whatever its arguments, retries included, no call of any tool
+    /// that went through in between) stops the turn (20/11: a Live call's web search failing, retried 50 times). Not the work tools whose
     /// failure is work output (`FAILURE_TOLERANT_TOOLS`: a red test run), nor the visible browser (its own limits).
     pub same_failure: u32,
     /// More web searches than this in one turn, answered or not, stop it (20/11: Vie on the Spark searched 50 times with
@@ -517,7 +517,7 @@ pub struct TurnCount {
     last_call: Option<String>,
     last_tool: String,
     last_failed: bool,
-    /// Each tool's failures since its last success (bare name): `same_failure`.
+    /// Each tool's failures since the turn's last call that went through (bare name): `same_failure`.
     failures: HashMap<String, u32>,
     /// Web searches in this turn, answered or not: `web_searches`.
     pub searches: u32,
@@ -757,11 +757,13 @@ impl TurnCount {
         if name == self.last_tool {
             self.last_failed = failed;
         }
-        if name.is_empty() || FAILURE_TOLERANT_TOOLS.contains(&name.as_str()) || crate::runs::browser_tool(&name) {
+        if !failed {
+            // any call that went through is progress (an edit, then the test run again): the failures start again
+            // (review 20/11: Hermes' own guard resets on its progress tools; here on any success, Live included)
+            self.failures.clear();
             return None;
         }
-        if !failed {
-            self.failures.remove(&name);
+        if name.is_empty() || FAILURE_TOLERANT_TOOLS.contains(&name.as_str()) || crate::runs::browser_tool(&name) {
             return None;
         }
         let count = self.failures.entry(name.clone()).or_insert(0);
@@ -2141,12 +2143,28 @@ exactly the same session_search call 3 times in this turn; at 5 the turn is stop
         let mut turn = TurnCount::default();
         assert_eq!(turn.completed("web_search", true, &live), None);
         assert_eq!(turn.completed("web_search", true, &live), Some(Over::Failing("web_search".into())));
-        // a success of that tool in between starts again; other tools' failures don't count for it
+        // a success of that tool in between starts again
         let mut turn = TurnCount::default();
         for ok in [false, false, true, false, false] {
             assert_eq!(turn.completed("web_search", !ok, &limits), None);
+        }
+        assert_eq!(turn.completed("web_search", true, &limits), Some(Over::Failing("web_search".into())));
+        // so does any other call that went through (review 20/11: patch fails, the terminal runs, patch fails…)
+        let mut turn = TurnCount::default();
+        for _ in 0..5 {
+            assert_eq!(turn.completed("patch", true, &limits), None);
+            assert_eq!(turn.completed("terminal", false, &limits), None);
+        }
+        let mut turn = TurnCount::default();
+        for _ in 0..5 {
+            assert_eq!(turn.completed("web_search", true, &limits), None);
             assert_eq!(turn.completed("mcp_bipagents_calendar_list", false, &limits), None);
         }
+        // another tool's failure is no success: it doesn't start them again
+        let mut turn = TurnCount::default();
+        turn.completed("web_search", true, &limits);
+        turn.completed("web_extract", true, &limits);
+        turn.completed("web_search", true, &limits);
         assert_eq!(turn.completed("web_search", true, &limits), Some(Over::Failing("web_search".into())));
         // the bridge's tools by their bare name
         let mut turn = TurnCount::default();

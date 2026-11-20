@@ -180,7 +180,7 @@ async fn turn(State(state): State<AppState>, Json(body): Json<Turn>) -> ApiResul
     })?;
     let lang = crate::handback::language_of(&config, &agent);
     let name = if agent.display_name.trim().is_empty() { &agent.name } else { &agent.display_name };
-    let brake = LiveBrake::new(&config.brake, &lang, name);
+    let brake = LiveBrake::new(&config.brake, &lang, name, &body.live_session);
     let events = without_media(upstream.bytes_stream(), agent.clone(), brake, state.hermes.clone());
     // read to its end whoever listens (the brake still works after a hang-up); the phone gets what it can
     let (tx, rx) = tokio::sync::mpsc::channel(256);
@@ -208,19 +208,22 @@ pub struct LiveBrake {
     lang: String,
     /// The agent's shown name (its « No reply » line).
     name: String,
+    /// The call's session: what the brake says is kept for the call's record (live_calls.rs `brake_said`).
+    live_session: String,
     run_id: Option<String>,
     /// The line said once the turn was stopped: Hermes' words after it are left out, its end says this.
     said: Option<String>,
 }
 
 impl LiveBrake {
-    pub fn new(settings: &crate::loop_brake::Settings, lang: &str, name: &str) -> Self {
+    pub fn new(settings: &crate::loop_brake::Settings, lang: &str, name: &str, live_session: &str) -> Self {
         LiveBrake {
             enabled: settings.enabled,
             limits: settings.live,
             turn: Default::default(),
             lang: lang.to_string(),
             name: name.to_string(),
+            live_session: live_session.to_string(),
             run_id: None,
             said: None,
         }
@@ -272,7 +275,7 @@ impl LiveBrake {
         let final_answer = crate::hermes::is_terminal(&event.r#type) || event.r#type == "assistant.completed";
         if let Some(line) = &self.said {
             if event.r#type.ends_with(".delta") {
-                return None; // Hermes' words after the stop (« Operation interrupted… »)
+                return None; // Hermes' words after the stop (« Operation interrupted… »: replaced only here)
             }
             if final_answer && event.data.get("content").is_some_and(Value::is_string) {
                 let mut data = event.data;
@@ -335,6 +338,8 @@ where
             let event = crate::hermes_footer::scrub_event(event, &agent.name);
             if let Some(over) = brake.event(&event) {
                 let line = brake.stopped(&over);
+                // what the person heard, for the call's record (Hermes keeps its own words, not these)
+                crate::live_calls::brake_said(&agent.name, &brake.live_session, &line);
                 tracing::warn!(agent = %agent.name, reason = %crate::loop_brake::reason(&over),
                     "live call going round in circles: turn stopped, said out loud");
                 // said now, after what the agent said so far; then Hermes' run stopped
@@ -433,7 +438,7 @@ mod tests {
     async fn through(events: &[(&str, Value)], lang: &str, hermes_url: &str) -> Vec<(String, Value)> {
         let agent = crate::config::AgentConfig { name: "vie".into(), display_name: "Vie".into(), hermes_url: hermes_url.into(),
             ..Default::default() };
-        let brake = LiveBrake::new(&crate::loop_brake::Settings::default(), lang, "Vie");
+        let brake = LiveBrake::new(&crate::loop_brake::Settings::default(), lang, "Vie", "api_test_call");
         let http = reqwest::Client::new();
         let out = without_media(futures::stream::iter(sse(events)), agent, brake, crate::hermes::HermesClient::new(http));
         let bytes: Vec<u8> = out.map(|c| c.unwrap().to_vec()).concat().await;
@@ -479,6 +484,8 @@ mod tests {
         // the third search is never started by the agent's words: the stop went at the second failure
         let stop = tokio::time::timeout(std::time::Duration::from_secs(5), seen.recv()).await.unwrap().unwrap();
         assert_eq!(stop, "POST /v1/runs/run_1/stop HTTP/1.1");
+        // what the person heard is kept for the call's record (live_calls.rs)
+        assert!(crate::live_calls::said_in("vie", "api_test_call").iter().any(|(_, l)| l == line));
     }
 
     /// 20/11, the real place: every search answered, new words each time, 50 of them. A call stops past 6.
@@ -514,8 +521,10 @@ result above shows what blocked it. Tell me how you'd like to proceed, or send `
         ];
         // no stop asked: an address nobody answers
         let got = through(&events, "en", "http://127.0.0.1:9").await;
-        assert_eq!(got[0].1["delta"], json!("\n\nI can't search the web right now. Do you want me to try again later?"));
-        assert_eq!(got[1].1["content"], json!("I can't search the web right now. Do you want me to try again later?"));
+        let many = "I ran a lot of web searches without finding a sure answer. Tell me if you want me to make it a deeper \
+search in the background.";
+        assert_eq!(got[0].1["delta"], json!(format!("\n\n{many}")));
+        assert_eq!(got[1].1["content"], json!(many));
         let no_reply = [("assistant.completed", json!({"content": "⚠️ No reply: GLM-5.3-Flash-EXL3 didn't produce a reply this time."}))];
         let got = through(&no_reply, "fr", "http://127.0.0.1:9").await;
         assert_eq!(got[0].1["content"], json!("Vie n'a pas réussi à répondre cette fois. Réessaie, ou écris « continue »."));
