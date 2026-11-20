@@ -296,10 +296,15 @@ impl Asker {
         let id = format!("bip-ask-{}", py::uuid4_hex());
         let (tx, rx) = oneshot::channel();
         waiting().insert(id.clone(), (self.agent.clone(), tx));
-        let request = json!({"jsonrpc": "2.0", "id": id, "method": "elicitation/create", "params": {
+        let mut request = json!({"jsonrpc": "2.0", "id": id, "method": "elicitation/create", "params": {
             "message": message,
             "requestedSchema": {"type": "object", "properties": {}},
         }});
+        // the call's session said back (Hermes patch 0029: calls of several sessions run side by side, Hermes asks
+        // in the conversation it names)
+        if let Some(session) = crate::runs::CALL_SESSION.try_with(|s| s.clone()).ok().flatten() {
+            request["params"]["_meta"] = json!({ crate::agent_tools::CALL_SESSION_META: session });
+        }
         let answer = if out.send(request).is_ok() { tokio::time::timeout(ASK_TIMEOUT, rx).await.ok() } else { None };
         waiting().remove(&id);
         let action =
@@ -2727,6 +2732,29 @@ mod tests {
         let task = tokio::spawn(async move { approval(&id, &asker, "Card payment …", phone, None).await });
         let question = rx.recv().await.unwrap();
         (question["id"].as_str().unwrap().to_string(), task, rx)
+    }
+
+    /// Hermes patch 0029: a call_context server's calls of several sessions run side by side, so its question names
+    /// the call's session (`_meta`, as the call did): Hermes asks it in that conversation, never another's.
+    #[tokio::test]
+    async fn the_question_names_the_calls_session() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let asker = Asker { agent: "lea".into(), out: Some(tx) };
+        let task = tokio::spawn(crate::runs::CALL_SESSION.scope(Some("api_s7".into()), async move {
+            asker.ask("Payer 12 € ?").await
+        }));
+        let question = rx.recv().await.unwrap();
+        assert_eq!(question["params"]["_meta"]["hermes-agent/session_id"], "api_s7", "{question}");
+        hermes_says(question["id"].as_str().unwrap(), "accept");
+        assert!(task.await.unwrap());
+        // no session said: no _meta
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let asker = Asker { agent: "lea".into(), out: Some(tx) };
+        let task = tokio::spawn(async move { asker.ask("Payer 12 € ?").await });
+        let question = rx.recv().await.unwrap();
+        assert!(question["params"].get("_meta").is_none(), "{question}");
+        hermes_says(question["id"].as_str().unwrap(), "decline");
+        assert!(!task.await.unwrap());
     }
 
     fn hermes_says(question: &str, action: &str) {
