@@ -1,7 +1,6 @@
-/* BipAgents page kit (pages.rs puts it inline in every page, before the agent's own scripts): charts drawn in SVG in
-   the app's colours, a small diagram renderer, sortable tables, tabs, what-ifs, number formatting, and the app's
-   colours for Chart.js when the page uses it. No network, no storage (Bip.store, in store.js, comes only in the pages
-   that use it). window.Bip is the whole API. */
+/* BipAgents page kit (pages.rs puts it inline in every page, before the agent's own scripts): SVG charts in the app's
+   colours, diagrams, sortable tables, tabs, what-ifs, number formatting, Chart.js colours. No network, no storage
+   (Bip.store, store.js, only in the pages that use it). window.Bip is the whole API. */
 (function () {
   "use strict";
   var doc = document, root = doc.documentElement, NS = "http://www.w3.org/2000/svg";
@@ -25,7 +24,7 @@
     return unit ? text + (/^[%°]/.test(unit) ? "" : " ") + unit : text;
   }
 
-  // A <svg> filling the target (a <div>, or the element itself when it is an <svg>).
+  // A <svg> filling the target (or the target itself, an <svg>).
   function canvas(target, height) {
     var host = $(target);
     if (!host) return null;
@@ -111,8 +110,7 @@
     if (spec.min == null) { var pad = (hi - lo) * 0.15 || 1; lo = lo - pad < 0 && lo >= 0 ? 0 : lo - pad; hi += pad; }
     var left = 34, top = 14, bottom = c.h - 22, step = (c.w - left - 12) / Math.max(1, n - 1);
     var x = function (i) { return left + 6 + i * step; }, y = function (v) { return bottom - (bottom - top) * (v - lo) / (hi - lo || 1); };
-    // a page's own formatter gets the tick rounded within 15 % of the step, never closer to another line (it got
-    // 338.55000000000001: « 5:38.55000000000001 »); the lines stay where they are
+    // a formatter gets ticks rounded within 15 % of the step (not « 5:38.55000000000001 »); lines stay put
     var out = "", d = Math.min(9, Math.max(0, Math.ceil(-Math.log10(0.3 * ((hi - lo) / 3 || 1)))));
     for (var k = 0; k <= 3; k++) {
       var v = lo + (hi - lo) * k / 3, gy = y(v);
@@ -179,7 +177,8 @@
     draw(c.svg, '<path d="' + path + '" style="fill:none;stroke:' + (spec.color || "var(--accent)") + ';stroke-width:2.5;stroke-linecap:round;stroke-linejoin:round"/>');
   }
 
-  // Diagram: lines « A -> B » (or « A -> B: label »), drawn top-down in layers, boxes and arrows.
+  // Diagram: lines « A -> B » (or « A -> B: label »), top-down layers of boxes, each label whole on up to 3 lines
+  // (20/11: « Bas… » on a phone); too many side by side: steps one under the other, each with where it leads.
   function diagram(target, text) {
     var host = $(target);
     if (!host) return;
@@ -206,39 +205,68 @@
     var layers = [];
     nodes.forEach(function (n, i) { (layers[n.layer] = layers[n.layer] || []).push(i); });
     layers = layers.filter(Boolean);
-    var width = Math.max(260, Math.min(720, host.clientWidth || 320)), boxH = 38, gapY = 34;
-    var height = layers.length * boxH + (layers.length - 1) * gapY + 8, out = "", pos = {};
-    var measure = function (s) { return Math.min(width - 8, Math.max(64, s.length * 7.4 + 24)); };
-    layers.forEach(function (layer, li) {
-      var slot = width / layer.length;
-      layer.forEach(function (i, k) {
-        var w = Math.min(measure(nodes[i].name), slot - 8);
-        pos[i] = { x: slot * k + slot / 2, y: 4 + li * (boxH + gapY), w: w };
+    var width = Math.max(260, Math.min(720, host.clientWidth || 320)), gapY = 34, out = "", pos = {}, y = 4, fits = true;
+    var wrap = function (s, chars) {
+      var lines = [], line = "";
+      s.split(/\s+/).forEach(function (w) {
+        if (w.length > chars) fits = false;
+        line = line && (line + " " + w).length > chars ? (lines.push(line), w) : line ? line + " " + w : w;
       });
+      if (line) lines.push(line);
+      return lines;
+    };
+    layers.forEach(function (layer) {
+      var slot = width / layer.length, chars = Math.floor((slot - 30) / 7.4), h = 0;
+      if (chars < 8) fits = false;
+      layer.forEach(function (i, k) {
+        var lines = wrap(nodes[i].name, Math.max(chars, 1));
+        if (lines.length > 3) fits = false;
+        var w = Math.min(slot - 8, Math.max(64, Math.max.apply(null, lines.map(function (l) { return l.length; })) * 7.4 + 24));
+        pos[i] = { x: slot * k + slot / 2, y: y, w: w, lines: lines, h: lines.length * 17 + 21 };
+        h = Math.max(h, pos[i].h);
+      });
+      layer.forEach(function (i) { pos[i].y += (h - pos[i].h) / 2; });
+      y += h + gapY;
     });
+    if (!fits) {
+      var list = doc.createElement("ol");
+      list.className = "flowlist";
+      layers.forEach(function (layer) {
+        layer.forEach(function (i) {
+          var li = doc.createElement("li"), next = edges.filter(function (e) { return e.from === i && e.to !== i; });
+          li.textContent = nodes[i].name;
+          if (next.length) {
+            var to = doc.createElement("small");
+            to.textContent = "→ " + next.map(function (e) { return nodes[e.to].name + (e.label ? " (" + e.label + ")" : ""); }).join(" · ");
+            li.appendChild(to);
+          }
+          list.appendChild(li);
+        });
+      });
+      return host.replaceWith(list);
+    }
     edges.forEach(function (e) {
       var a = pos[e.from], b = pos[e.to];
       if (!a || !b || e.from === e.to) return;
-      var y1 = a.y + boxH, y2 = b.y - 3;
-      if (b.y <= a.y) { y1 = a.y + boxH / 2; y2 = b.y + boxH / 2; }
+      var y1 = a.y + a.h, y2 = b.y - 3;
+      if (b.y <= a.y) { y1 = a.y + a.h / 2; y2 = b.y + b.h / 2; }
       var mid = (y1 + y2) / 2;
       out += '<path class="bip-edge" marker-end="url(#bip-arrow)" d="M' + a.x + " " + y1 + "C" + a.x + " " + mid + " " + b.x + " " + mid + " " + b.x + " " + y2 + '"/>';
       if (e.label) out += '<text class="bip-axis" x="' + ((a.x + b.x) / 2 + 6) + '" y="' + (mid + 3) + '">' + esc(e.label) + "</text>";
     });
     nodes.forEach(function (n, i) {
       var p = pos[i];
-      var label = n.name.length * 7.4 + 24 > p.w ? n.name.slice(0, Math.max(3, Math.floor((p.w - 24) / 7.4) - 1)) + "…" : n.name;
-      out += '<g class="bip-node"><rect x="' + (p.x - p.w / 2) + '" y="' + p.y + '" width="' + p.w + '" height="' + boxH + '" rx="12"/>' +
-        '<text x="' + p.x + '" y="' + (p.y + boxH / 2 + 4.5) + '" text-anchor="middle"><title>' + esc(n.name) + "</title>" + esc(label) + "</text></g>";
+      out += '<g class="bip-node"><rect x="' + (p.x - p.w / 2) + '" y="' + p.y + '" width="' + p.w + '" height="' + p.h + '" rx="12"/><text text-anchor="middle">' +
+        p.lines.map(function (l, k) { return '<tspan x="' + p.x + '" y="' + (p.y + 25 + k * 17) + '">' + esc(l) + "</tspan>"; }).join("") + "</text></g>";
     });
-    var svg = '<svg class="diagram" viewBox="0 0 ' + width + " " + height + '" role="img"><defs><marker id="bip-arrow" viewBox="0 0 10 10" refX="8" refY="5" ' +
+    var svg = '<svg class="diagram" viewBox="0 0 ' + width + " " + (y - gapY + 4) + '" role="img"><defs><marker id="bip-arrow" viewBox="0 0 10 10" refX="8" refY="5" ' +
       'markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" style="fill:var(--muted)"/></marker></defs>' + out + "</svg>";
-    var wrap = doc.createElement("div");
-    wrap.innerHTML = svg;
-    host.replaceWith(wrap.firstChild);
+    var box = doc.createElement("div");
+    box.innerHTML = svg;
+    host.replaceWith(box.firstChild);
   }
 
-  // Tables with class « sort »: a tap on a header sorts by that column (numbers as numbers).
+  // Tables with class « sort »: a tap on a header sorts by it.
   function sortable(table) {
     var heads = table.querySelectorAll("th");
     var number = function (text) {
@@ -277,8 +305,7 @@
     show(0);
   }
 
-  // What-ifs: render(values) runs now and after every change of an input with an id (numbers as numbers,
-  // switches as true/false); <output for="id"> elements show their input's value.
+  // What-ifs: render(values) now and at every change of an input with an id; <output for="id"> shows its value.
   function whatIf(render) {
     var run = function () {
       var values = {};
@@ -297,9 +324,8 @@
 
   function set(target, text) { var el = $(target); if (el) el.textContent = text; }
 
-  // What people typed, drawn as TEXT only (a friend's « <img onerror=…> » stays words, never a script in everyone's
-  // page): rows(target, list, cells) — cells(item, i) gives the row's cells (text or numbers); a <table>/<tbody> gets
-  // one <tr> per item (a number's cell right-aligned), anything else one <li> (in a list) or <div>.
+  // What people typed, drawn as TEXT only (never a script in everyone's page): rows(target, list, cells), cells(item,
+  // i) its cells; a <table>/<tbody> gets one <tr> per item (numbers right-aligned), else one <li> or <div>.
   function rows(target, list, cells) {
     var host = $(target);
     if (!host) return;
@@ -327,9 +353,8 @@
     });
   }
 
-  // An amount as typed (« 42,50 », « 1 234,56 », « 1.234,56 », « 1,234.56 », « 1 200 », « 12 € ») → whole cents
-  // (an integer), or null. The last « , » or « . » followed by 1 or 2 digits is the decimal mark; any other is a
-  // thousands one (money has no 3 decimals).
+  // An amount as typed (« 1 234,56 », « 1,234.56 », « 12 € ») → whole cents, or null: the last « , » or « . » before
+  // 1 or 2 digits is the decimal mark, any other a thousands one.
   function cents(typed) {
     var t = String(typed == null ? "" : typed).replace(/[\s\u00a0\u202f'’€$£]/g, "").replace(/^\+/, "");
     var minus = /^[-−]/.test(t);
@@ -371,10 +396,8 @@
     });
   }
 
-  // A map card (the bridge's map_image): its picture, and a list where a tap on a line rings its marker. Inside the
-  // app the picture becomes a live map (MapLibre, which the app ships; the map's files come through the bridge, never
-  // from here): pan, pinch, double tap, a tap on a line flies to its marker, and « Open in Maps » links the app
-  // answers itself (bipmaps:, only numbers and a short name). Elsewhere (a browser, an export) the picture stays.
+  // A map card (map_image): its picture, a tap on a line rings its marker. In the app, a live map (MapLibre, shipped
+  // by the app, its files through the bridge) and « Open in Maps » links (bipmaps:); elsewhere the picture stays.
   var ANDROID = /Android/i.test(navigator.userAgent || "");
   var MAP_BASE = ANDROID ? "https://bipmap.invalid/" : "bipmap://map/";
   var MAP_WORDS = {
@@ -470,8 +493,7 @@
         "CooperativeGesturesHandler.WindowsHelpText": mapWord("fingers"), "CooperativeGesturesHandler.MacHelpText": mapWord("fingers") },
     };
     var spots = points.map(function (p) { return [p.lon, p.lat]; });
-    // an itinerary's way along the streets (the map's data, map_route.rs, 2026-11-01), else the straight line, dashed
-    // when the way was not found (`streets: false`), solid on an older map
+    // the way along the streets (map_route.rs), else a straight line, dashed when not found (`streets: false`)
     var route = {};
     try { route = (JSON.parse((card.querySelector("script.map-data") || {}).textContent || "{}").route) || {}; } catch (e) { route = {}; }
     var way = route.streets === true && Array.isArray(route.path) ? route.path.filter(function (p) {

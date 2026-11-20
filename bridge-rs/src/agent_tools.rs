@@ -1427,9 +1427,14 @@ inline, or do without, and update the page.",
     if link.is_some() || health {
         pages::set_link(config, &agent.name, &id, link.as_ref().map(|(i, p)| (i.as_str(), *p)), health)?;
     }
+    // its layout at a phone's and a tablet's width, in this turn (page_check.rs): never in the way of the page
+    let layout = std::fs::read_to_string(pages::root(config).join(&agent.name).join(format!("{id}.html")))
+        .ok()
+        .map(|locked| crate::page_check::check(config, &locked));
+    let layout = crate::page_check::note(&agent.name, &id, layout.flatten().as_deref(), py::time_time());
     Ok(tool_text(
         &format!(
-            "MEDIA:{path}\nPage {}: id {id}, version {version}.{warning}{linked}\nTo show it to the person, put the MEDIA \
+            "MEDIA:{path}\nPage {}: id {id}, version {version}.{warning}{linked}{layout}\nTo show it to the person, put the MEDIA \
 line above alone on its own line in your reply, exactly as it is, where the page belongs in your text (the app shows it \
 there, live): keep a sentence or two before it and the rest after.",
             if version > 1 { "updated" } else { "ready" }
