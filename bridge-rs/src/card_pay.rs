@@ -2321,7 +2321,8 @@ async fn serve_call(
             let (out_tx, mut out_rx) = mpsc::unbounded_channel::<Value>();
             let asker = Asker { agent: agent.name.clone(), out: stream.then_some(out_tx) };
             let worker_state = state.clone();
-            let mut work = tokio::spawn(async move {
+            // (the call's session kept in its work: patch 0028, `runs::CALL_SESSION`)
+            let mut work = crate::runs::spawn_with_call_session(async move {
                 let mut result = (server.call)(&worker_state, &agent, &name, &arguments, &asker).await;
                 if let Ok(done) = &mut result {
                     crate::names::localize_result(done, &lang);

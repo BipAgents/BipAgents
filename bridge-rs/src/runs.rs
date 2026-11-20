@@ -733,6 +733,17 @@ pub fn may_hand_off(config: &crate::config::Config, agent: &str, run_id: &str) -
     !crate::family_agent::is_family(config, agent) && !crate::agent_shares::relative_run(config, run_id)
 }
 
+/// `tokio::spawn` keeping the call's session (`CALL_SESSION`, a task-local a spawned task does not inherit): the MCP
+/// endpoints run a call's work this way.
+pub fn spawn_with_call_session<F>(work: F) -> tokio::task::JoinHandle<F::Output>
+where
+    F: std::future::Future + Send + 'static,
+    F::Output: Send + 'static,
+{
+    let session = CALL_SESSION.try_with(|s| s.clone()).ok().flatten();
+    tokio::spawn(CALL_SESSION.scope(session, work))
+}
+
 tokio::task_local! {
     /// The Hermes session a call of the bridge's tools comes from, as Hermes says it in the call's `_meta` (patch
     /// 0028, agent_tools.rs `mcp`): `turn_of` then takes that session's run instead of telling runs apart by their
@@ -4303,6 +4314,21 @@ mod tests {
         )
         .unwrap();
         assert!(!may_hand_off(&config, "vie", "run_4"), "a relative's turn");
+    }
+
+    /// The MCP endpoints run a call's work in a task of its own (`tokio::spawn`): a task-local is not inherited, so
+    /// the call's session (patch 0028) was lost there and a person's `start_task` beside a running task was taken
+    /// for the task's own, by timing (the parallel black-box run's 1-in-5 failure, 20/11). The work keeps it.
+    #[tokio::test]
+    async fn the_work_of_a_call_keeps_its_session() {
+        let seen = CALL_SESSION
+            .scope(Some("api_person".into()), async {
+                spawn_with_call_session(async { CALL_SESSION.try_with(|s| s.clone()).ok().flatten() }).await.unwrap()
+            })
+            .await;
+        assert_eq!(seen.as_deref(), Some("api_person"));
+        let none = spawn_with_call_session(async { CALL_SESSION.try_with(|s| s.clone()).ok().flatten() }).await.unwrap();
+        assert_eq!(none, None, "no call session: none in the work either");
     }
 
     /// urgent_pay.rs `refuses_payment` tells the rehearsal's own pay_with_card from another turn of the agent by the

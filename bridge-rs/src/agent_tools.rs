@@ -2338,7 +2338,8 @@ async fn mcp_call(
     let note_config = state.config();
     // the phone the person asked from in this turn (threads/send.rs): where a reminder goes (reminders.rs)
     let asking = turn_run.as_deref().and_then(|r| state.hub.subscription(&agent.name, r)).and_then(|s| s.phone());
-    let work = tokio::spawn(async move {
+    // (the call's session kept in its work: patch 0028, `runs::CALL_SESSION`)
+    let work = crate::runs::spawn_with_call_session(async move {
         let mut result = match page_mark {
             // a page made in a shared conversation: its mark (shared_pages.rs)
             Some(mark) if name == CREATE_PAGE => {
