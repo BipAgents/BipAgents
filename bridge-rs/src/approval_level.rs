@@ -103,6 +103,7 @@ pub const TABLE: &[Rule] = &[
     rule("vault_login", true, false, "bip-login-", "uses one of the person's logins and passwords"),
     rule("connector", true, false, "bip-conn-", "runs new code with the person's secrets"),
     rule("mail_trash", true, false, "bip-mail- trash", "deletes (to the trash, then gone)"),
+    rule("notes_change", true, false, "bip-ok- notes_change", "Alex 20/11: changes text already in one of the person's Obsidian notes, synced to all their devices (a copy is kept first)"),
     rule("calendar_delete", true, false, "bip-ok- calendar_delete", "audit 1.3, Alex 17/11: deletes an event of the person's calendar (a mailbox's at once, no trash), like mail_trash"),
     rule("site_form", true, false, "bip-ok- site_form (ask_to_send)", "audit 1.2, Alex 17/11 « Oui, 1re fois par site »: the agent's browser sends a form to a site not allowed yet for it; « Toujours pour ce site » keeps it in « Sites autorisés »"),
     rule("mail_rule_trash", true, false, "bip-mailrule- trash", "deletes every new matching mail"),

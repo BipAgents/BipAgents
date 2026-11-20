@@ -18,7 +18,11 @@
 //! routine…): the card is held as the night's other approvals (held_approvals.rs) and its « Oui » later lets that very
 //! call (its command and what it showed) through once.
 //!
-//! The kinds are critical (approval_level.rs: always asked, whatever the level). Not a Python module.
+//! - **a write in the person's Obsidian vault** (obsidian.rs, Alex 20/11): a new note or added text (kind
+//!   `service_write`, as a write in their other services: their level or a « Toujours » may let it through, checked
+//!   by obsidian.rs before asking), or text already there changed (`notes_change`, critical).
+//!
+//! The other kinds are critical (approval_level.rs: always asked, whatever the level). Not a Python module.
 
 use std::collections::HashMap;
 use std::sync::{Arc, LazyLock, Mutex};
@@ -34,16 +38,21 @@ use crate::{py, Dict};
 /// The run id of a card (the apps show it as any card of the bridge's).
 pub const RUN_PREFIX: &str = "bip-ok-";
 /// The tools whose call waits for the person's answer on this card (turn_status.rs `HOLDING`).
-pub const HOLDS_THE_CALL: &[&str] = &[crate::form_send::TOOL, "calendar_delete"];
+pub const HOLDS_THE_CALL: &[&str] =
+    &[crate::form_send::TOOL, "calendar_delete", "obsidian_create", "obsidian_append", "obsidian_edit"];
 /// A form sent to a site not allowed yet for this agent.
 pub const SITE_FORM: &str = "site_form";
 /// An event deleted from the person's calendar.
 pub const CALENDAR_DELETE: &str = "calendar_delete";
+/// A new note, or text added to one, in the person's Obsidian vault (obsidian.rs): a write in their own service.
+pub const NOTES_WRITE: &str = "service_write";
+/// Text already in one of the person's notes changed (obsidian.rs): critical.
+pub const NOTES_CHANGE: &str = "notes_change";
 
 /// What the card shows and what it is for.
 #[derive(Debug, Clone)]
 pub struct Card {
-    /// `SITE_FORM` or `CALENDAR_DELETE`.
+    /// `SITE_FORM`, `CALENDAR_DELETE`, `NOTES_WRITE` or `NOTES_CHANGE`.
     pub kind: &'static str,
     /// The tool whose call waits (its turn found by it).
     pub tool: &'static str,
@@ -98,6 +107,8 @@ fn asks() -> std::sync::MutexGuard<'static, HashMap<String, Ask>> {
 pub fn kind_of(item: &Dict) -> &'static str {
     match item.get("bip_ok").and_then(|o| o.get("kind")).and_then(Value::as_str) {
         Some(CALENDAR_DELETE) => CALENDAR_DELETE,
+        Some(NOTES_WRITE) => NOTES_WRITE,
+        Some(NOTES_CHANGE) => NOTES_CHANGE,
         _ => SITE_FORM,
     }
 }

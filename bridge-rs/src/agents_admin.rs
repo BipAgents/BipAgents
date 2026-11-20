@@ -3047,6 +3047,7 @@ async fn remove_agent(state: AppState, agent_id: String) -> ApiResult<Response> 
         crate::agent_groups::set_group(&state.config(), &agent.name, "")?;
         crate::connectors::forget(&state.config(), &agent.name); // its connectors (connectors.rs)
         crate::drives::forget_agent(&state.config(), &agent.name).await; // its online documents' folders
+        crate::obsidian::forget_agent(&state.config(), &agent.name); // the Obsidian vault's agents
         crate::secrets::forget(&agent);
         state.vault.forget_agent(&state.config(), &agent.name).await
     }

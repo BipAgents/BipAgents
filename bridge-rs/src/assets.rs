@@ -20,6 +20,8 @@ pub static CONSOLE: Dir<'static> = include_dir!("$CARGO_MANIFEST_DIR/assets/cons
 pub static STATIC: Dir<'static> = include_dir!("$CARGO_MANIFEST_DIR/assets/static");
 /// `assets/skills/` (visible-browser/SKILL.md, shared-data/SKILL.md).
 pub static SKILLS: Dir<'static> = include_dir!("$CARGO_MANIFEST_DIR/assets/skills");
+/// `assets/obsidian-skills/` (obsidian.rs: Obsidian's own format skills, MIT, and ours).
+pub static OBSIDIAN_SKILLS: Dir<'static> = include_dir!("$CARGO_MANIFEST_DIR/assets/obsidian-skills");
 /// `assets/catalogue/` (Kerfy's ready-made agents, templates_catalogue.rs).
 pub static CATALOGUE: Dir<'static> = include_dir!("$CARGO_MANIFEST_DIR/assets/catalogue");
 /// `assets/agent_templates.yaml` (souls.rs; the installer reads it too).

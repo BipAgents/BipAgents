@@ -458,6 +458,10 @@ fn own_tools(config: &Config, agent: &AgentConfig, offer: bool) -> Vec<Value> {
     if crate::drives::offered(config, &agent.name) {
         tools.extend(crate::drives::tools());
     }
+    // the person's Obsidian vault, for the agents they chose (obsidian.rs)
+    if crate::obsidian::offered(config, &agent.name) {
+        tools.extend(crate::obsidian::tools());
+    }
     // the guide's (propose_agent, suggest_switch), propose_agent when asked for the person's other own agents, or
     // propose_profile while it has no role or a generic name
     tools.extend(crate::guide::tools(config, agent));
@@ -626,7 +630,12 @@ pub async fn register(config: &Config, agent: &AgentConfig, run: &Run) -> anyhow
         tracing::warn!(agent = %agent.name, error = %last_chars(&exc.to_string(), 200), "styled documents skills not set");
         false
     });
-    Ok(changed || paying || accounts || connecting || handing || link || reconciled || styled)
+    // Obsidian's format skills and ours, for an agent given the person's vault (obsidian.rs); out otherwise.
+    let notes = crate::obsidian::apply_skills(config, agent).unwrap_or_else(|exc| {
+        tracing::warn!(agent = %agent.name, error = %last_chars(&exc.to_string(), 200), "Obsidian skills not set");
+        false
+    });
+    Ok(changed || paying || accounts || connecting || handing || link || reconciled || styled || notes)
 }
 
 /// `register` with the tools' URL given (tests: a later version of the tools).
@@ -2280,6 +2289,12 @@ async fn mcp(
         wrote(&agent.name, &name, &arguments, &mut result);
         return Ok(answer(result));
     }
+    if crate::obsidian::TOOL_NAMES.contains(&name.as_str()) {
+        // the person's Obsidian notes: each write with its card (obsidian.rs, person_ok.rs)
+        let mut result = crate::obsidian::call(&state, &agent, &name, &arguments).await;
+        wrote(&agent.name, &name, &arguments, &mut result);
+        return Ok(answer(result));
+    }
     if name == "calendar_delete" {
         // critical (audit 1.3, Alex 17/11: as mail_trash): a card before each event deleted (person_ok.rs)
         if let Some(refused) = delete_card(&state, &agent, &arguments, family).await {
@@ -2553,6 +2568,7 @@ mod tests {
         tools.extend(crate::archives::tools(&config, &agent.name));
         tools.push(crate::archives::records_fill::tool(&config, &agent.name));
         tools.extend(crate::drives::tools());
+        tools.extend(crate::obsidian::tools());
         tools.extend(crate::guide::every_tool(&config));
         tools.push(json!({"name": crate::templates::FIND_TOOL})); // the guide's only (templates::tools)
         tools.push(crate::skill_library::tool());
