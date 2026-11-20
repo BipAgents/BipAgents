@@ -685,10 +685,14 @@ pub async fn accept(
 
 // -- their calls to us ------------------------------------------------------------------------------------------
 
-/// What this bridge saw (family_seal.rs `Seen`), made once.
-fn seen(config: &Config) -> &'static Seen {
-    static SEEN: OnceLock<Seen> = OnceLock::new();
-    SEEN.get_or_init(|| Seen::new(&config.data_dir()))
+/// What this bridge saw (family_seal.rs `Seen`), made once per data folder: never another bridge's file (two bridges
+/// in one process, as the tests' households, or a data folder that moved).
+fn seen(config: &Config) -> std::sync::Arc<Seen> {
+    static SEEN: LazyLock<Mutex<std::collections::HashMap<String, std::sync::Arc<Seen>>>> =
+        LazyLock::new(Default::default);
+    let dir = config.data_dir();
+    let mut all = SEEN.lock().unwrap_or_else(|e| e.into_inner());
+    all.entry(dir).or_insert_with_key(|dir| std::sync::Arc::new(Seen::new(dir))).clone()
 }
 
 /// Rings when this bridge may have to poll now (an invitation made, a link through the relay): no wait for the next
