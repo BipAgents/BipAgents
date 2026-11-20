@@ -233,14 +233,17 @@ def test_a_restore_over_running_programs_works_on_linux(tmp_path, monkeypatch):
     if shutil.which("restic") is None:
         monkeypatch.setattr(backup, "restic", fake)
     new = a_fresh_place(tmp_path, monkeypatch, repo_dir)
-    sleeper = shutil.which("sleep")
+    # bash, not sleep: Ubuntu 26.04's sleep is one multi-call program that picks its job from its file name, so a
+    # copy named bipbridge exits at once. The copied bash keeps running its own image while it waits on stdin.
+    stand_in = shutil.which("bash")
     running = []
     (new / "data" / "tools").mkdir()
     for path in (new / "data" / "bridge" / KEY / "bipbridge", new / "data" / "tools" / "helper"):
-        shutil.copy2(sleeper, path)
-        running.append(subprocess.Popen([str(path), "30"]))
+        shutil.copy2(stand_in, path)
+        running.append(subprocess.Popen([str(path), "-c", "read -r _"], stdin=subprocess.PIPE))
     try:
         time.sleep(0.2)
+        assert all(proc.poll() is None for proc in running), "the stand-in programs must still be running"
         with pytest.raises(OSError) as busy:   # what the restore did before: written in place
             with open(new / "data" / "tools" / "helper", "wb") as fh:
                 fh.write(b"x")
@@ -248,7 +251,7 @@ def test_a_restore_over_running_programs_works_on_linux(tmp_path, monkeypatch):
         fetched = backup.fetch(new, key)
         backup.put_back(fetched, new, tmp_path / "checkout", "198.51.100.7")
         assert (new / "data" / "tools" / "helper").read_bytes() == b"OLD HELPER"
-        assert (new / "data" / "bridge" / KEY / "bipbridge").read_bytes() == Path(sleeper).read_bytes()
+        assert (new / "data" / "bridge" / KEY / "bipbridge").read_bytes() == Path(stand_in).read_bytes()
     finally:
         for proc in running:
             proc.kill()
