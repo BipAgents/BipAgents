@@ -1,5 +1,5 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
-From: Alexbob0 <alextsmail@pm.me>
+From: BipAgents <patches@bipagents.local>
 Date: Thu, 19 Nov 2026 17:41:06 +0100
 Subject: MCP calls carry their session to a server that asks (call_context)
 
