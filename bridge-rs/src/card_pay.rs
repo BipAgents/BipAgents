@@ -1646,7 +1646,20 @@ async fn read_total(config: &Config, agent: &str, entry: &Held, page: &mut Page,
             return PageTotal::Unread(Default::default());
         }
     };
+    let mut texts = texts;
     let total = crate::page_total::page_total_of(&texts, entry.cents, &entry.currency);
+    let frames = texts.len();
+    let chars = texts.iter().map(|t| t.all.chars().count()).sum::<usize>();
+    let place = match &total {
+        PageTotal::Doubt(doubt) => crate::page_total::doubt_where(&texts, doubt),
+        _ => None,
+    };
+    // the page's text wiped once read (it may show the card back after typing: its digit runs are already dropped)
+    for text in &mut texts {
+        use zeroize::Zeroize;
+        text.shown.zeroize();
+        text.all.zeroize();
+    }
     if typed {
         // after the card was typed: no number in the log (the page may show the card back, Relecture 3, c3)
         let kind = match &total {
@@ -1659,17 +1672,16 @@ async fn read_total(config: &Config, agent: &str, entry: &Held, page: &mut Page,
         return total;
     }
     match &total {
-        PageTotal::Unread(seen) => tracing::info!(agent = %agent, site = %entry.site, frames = texts.len(),
-            chars = texts.iter().map(|t| t.all.chars().count()).sum::<usize>(), approved = entry.cents,
+        PageTotal::Unread(seen) => tracing::info!(agent = %agent, site = %entry.site, frames = frames,
+            chars = chars, approved = entry.cents,
             currency = %entry.currency, amounts = ?seen.amounts, labelled = seen.labelled,
             other_currency = seen.other_currency, "card payment: no total read for sure on the page"),
         PageTotal::Approved => tracing::info!(agent = %agent, site = %entry.site, "card payment: the page's total is the approved one"),
         PageTotal::Other(shown) => tracing::info!(agent = %agent, site = %entry.site, approved = entry.cents, shown = shown,
             "card payment: the page's total is another amount"),
         PageTotal::Doubt(doubt) => {
-            let place = crate::page_total::doubt_where(&texts, doubt);
             tracing::info!(agent = %agent, site = %entry.site, approved = entry.cents, doubt = ?doubt,
-                frame = ?place.map(|(i, _)| i), provider = ?place.map(|(_, p)| p), frames = texts.len(),
+                frame = ?place.map(|(i, _)| i), provider = ?place.map(|(_, p)| p), frames = frames,
                 "card payment: the page shows what stops the payment")
         }
     }

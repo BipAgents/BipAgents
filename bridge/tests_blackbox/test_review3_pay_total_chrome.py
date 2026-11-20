@@ -66,7 +66,8 @@ def test_c3_the_cards_digits_never_reach_the_persons_line_nor_the_log(bridges, f
         const groups = v.match(/.{1,4}/g) || [];
         document.getElementById("preview").innerHTML = groups.map((g) => "<span>" + g + "</span>").join("");
       }, 50);"""
-    html = page('<div>27,97 €</div><div id="preview" style="display:flex;gap:8px"></div>', script)
+    # (Correction 8: « approved » needs a labelled total, so the amount is labelled; the point stays the card's digits)
+    html = page('<div>Total à payer 27,97 €</div><div id="preview" style="display:flex;gap:8px"></div>', script)
     shop, browser, bridge = start(bridges, fakes, tmp_path, html)
     try:
         result, _ = pay(bridge, APPROVED)
