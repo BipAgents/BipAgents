@@ -1359,7 +1359,7 @@ impl Vault {
             return Ok(());
         }
         if crate::sealed_keys::closed(config) {
-            return Err(crate::sealed_keys::Locked.into());
+            return Err(crate::sealed_keys::Locked::now(config).into());
         }
         match crate::hermes_copies::checked(std::path::Path::new(&config.data_dir()), &agent.name) {
             Some(_) => Ok(()),
@@ -1375,7 +1375,7 @@ impl Vault {
             return Ok(());
         }
         if crate::sealed_keys::closed(config) {
-            return Err(crate::sealed_keys::Locked.into());
+            return Err(crate::sealed_keys::Locked::now(config).into());
         }
         let data = PathBuf::from(config.data_dir());
         for agent in config.agents.values() {
@@ -1397,7 +1397,7 @@ impl Vault {
             return Ok(());
         }
         if crate::sealed_keys::closed(config) {
-            return Err(crate::sealed_keys::Locked.into());
+            return Err(crate::sealed_keys::Locked::now(config).into());
         }
         let _lock = self.lock.lock().await;
         self.copy_ready_noted(config, agent).await.map(|_| ())

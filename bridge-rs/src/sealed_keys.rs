@@ -71,13 +71,40 @@ const TMPFS_MAGIC: i64 = 0x0102_1994;
 const RAMFS_MAGIC: i64 = 0x8584_58f6;
 
 /// The vault is closed (sealed, its place key not in memory yet, or a sealing under way): nothing is read or written.
+/// `soon`: it reopens by itself in a few minutes ([`soon`]); else it waits for a check or for someone, no delay told.
 #[derive(Debug, Clone, Copy, thiserror::Error)]
-#[error("the vault is closed: it reopens by itself in a few minutes")]
-pub struct Locked;
+#[error("the vault is closed for now")]
+pub struct Locked {
+    pub soon: bool,
+}
+
+impl Locked {
+    /// The vault of `data` (the bridge's data folder) as it is closed now.
+    pub fn of(data: &Path) -> Locked {
+        Locked { soon: matches!(state(data), State::Closed(c) if soon(&c.reason)) }
+    }
+
+    /// [`Locked::of`] for this bridge's vault.
+    pub fn now(config: &Config) -> Locked {
+        Locked::of(Path::new(&config.data_dir()))
+    }
+}
 
 /// Whether `err` is (or carries) [`Locked`].
 pub fn is_locked(err: &anyhow::Error) -> bool {
-    err.chain().any(|e| e.is::<Locked>())
+    locked_of(err).is_some()
+}
+
+/// The [`Locked`] `err` is or carries.
+pub fn locked_of(err: &anyhow::Error) -> Option<Locked> {
+    err.chain().find_map(|e| e.downcast_ref::<Locked>().copied())
+}
+
+/// A closed vault that reopens by itself in a few minutes: not asked yet (`opening`) or the key service out of reach
+/// (`unreachable`), the bridge asking again. Any other reason (held, stopped, a wrong or unreadable half, a sealing cut
+/// off) waits for a check or for someone: no delay is ever promised for it (the agents' words, the apps' words).
+pub fn soon(reason: &str) -> bool {
+    matches!(reason, "opening" | "unreachable")
 }
 
 /// The three stores whose keys are sealed.
@@ -313,7 +340,7 @@ pub fn health_fields(config: &Config) -> Map<String, Value> {
 pub fn data_key(folder: &Path, which: DataKey) -> Result<Option<Zeroizing<String>>> {
     let Some(data) = folder.parent() else { return Ok(None) };
     if data.join(JOURNAL_DIR).join(JOURNAL).exists() {
-        return Err(Locked.into());
+        return Err(Locked { soon: false }.into());
     }
     let sealed_path = data.join(SEALED_FILE);
     if !sealed_path.exists() {
@@ -322,7 +349,7 @@ pub fn data_key(folder: &Path, which: DataKey) -> Result<Option<Zeroizing<String
     let sealed = Sealed::read(data)?;
     match with_sk(data, |sk| sealed.data_key(sk, which)) {
         Some(key) => Ok(Some(key?)),
-        None => Err(Locked.into()),
+        None => Err(Locked::of(data).into()),
     }
 }
 
@@ -1361,8 +1388,7 @@ tu persona: dile simplemente que la caja fuerte está cerrada y que se volverá 
 
 /// The words for an agent speaking `lang`, the vault closed for `reason` ([`Closed::reason`]).
 pub fn agent_text(lang: &str, reason: &str) -> &'static str {
-    let soon = matches!(reason, "opening" | "unreachable");
-    match (lang, soon) {
+    match (lang, soon(reason)) {
         ("fr", true) => SOON_FR,
         ("de", true) => SOON_DE,
         ("es", true) => SOON_ES,
@@ -1387,9 +1413,13 @@ pub fn closed_result(config: &Config, lang: &str) -> Value {
     json!({"content": [{"type": "text", "text": closed_text(config, lang)}], "isError": false})
 }
 
-/// What the app's routes answer while it is closed (the app says it in its own words).
-pub fn http_locked() -> crate::web::HttpError {
-    crate::web::HttpError::json(503, json!({"code": "vault_locked", "message": "Ton coffre est fermé pour le moment."}))
+/// What the app's routes answer while it is closed: `soon` as [`Locked`] says it; the apps say it in their own words
+/// (« Ton coffre se rouvre dans quelques minutes » only when `soon`, a text without a delay otherwise).
+pub fn http_locked(locked: Locked) -> crate::web::HttpError {
+    crate::web::HttpError::json(
+        503,
+        json!({"code": "vault_locked", "soon": locked.soon, "message": "Ton coffre est fermé pour le moment."}),
+    )
 }
 
 // -- the export (lot 3) --------------------------------------------------------------------------------------------------
@@ -1585,8 +1615,9 @@ mod tests {
 
     #[test]
     fn locked_is_found_through_context() {
-        let e = anyhow::Error::from(Locked).context("reading the mailboxes");
+        let e = anyhow::Error::from(Locked { soon: true }).context("reading the mailboxes");
         assert!(is_locked(&e));
+        assert!(locked_of(&e).unwrap().soon);
         assert!(!is_locked(&anyhow!("other")));
     }
 }

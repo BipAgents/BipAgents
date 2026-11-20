@@ -647,6 +647,7 @@ async fn after_a_server_restart_the_vault_stays_closed_until_the_service_answers
         let response = app.get(route, &[(k, v.as_str())]).await;
         assert_eq!(response.status, 503, "{route}");
         assert_eq!(response.json()["detail"]["code"], "vault_locked", "{route}");
+        assert_eq!(response.json()["detail"]["soon"], true, "{route}: not asked yet, it reopens by itself");
     }
     // the rest of the place works
     assert_eq!(app.get("/v1/agents", &[(k, v.as_str())]).await.status, 200);
@@ -699,6 +700,11 @@ async fn refused_held_or_unreachable_it_stays_closed_says_why_then_reopens() {
         let text = tool_text(&app, "/v1/agent-tools/vault", "vault_contact_details").await;
         let expected = if reason == "unreachable" { sealed_keys::SOON_TEXTS } else { sealed_keys::CHECK_TEXTS };
         assert!(expected.contains(&text.as_str()), "{answer}: {text}");
+        // the apps' words the same way (lot 5): `soon` only then
+        let (k, v) = auth();
+        let got = app.get("/v1/vault", &[(k, v.as_str())]).await;
+        assert_eq!(got.status, 503, "{answer}");
+        assert_eq!(got.json()["detail"]["soon"], json!(reason == "unreachable"), "{answer}");
         assert!(h.vault().try_items().is_err());
     }
     // nothing of it reached the disk
