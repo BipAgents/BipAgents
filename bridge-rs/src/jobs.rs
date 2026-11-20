@@ -90,6 +90,8 @@ pub const PROPOSALS_MAX: usize = 5;
 pub const SPACE_REASON: &str = "space";
 /// A task that would browse in a browser of its own, waiting for free memory (`[jobs] browser_free_mb`).
 pub const MEMORY_REASON: &str = "memory";
+/// Why a task ends when its agent was deleted (while it ran, or while it waited its turn).
+pub const AGENT_GONE: &str = "this agent isn't on this install any more";
 
 /// The place's free memory in MB (MemAvailable of /proc/meminfo), None where it can't be read (no limit then).
 pub type MemoryProbe = Arc<dyn Fn() -> Option<u64> + Send + Sync>;
@@ -933,6 +935,9 @@ impl Jobs {
     pub async fn resume_after_space(self: &Arc<Self>, config: &crate::config::Config) {
         for job in tasks(config) {
             if state_of(&job) == "paused" && job.get("reason") == Some(&json!(SPACE_REASON)) {
+                if self.ended_without_agent(&job) {
+                    continue;
+                }
                 let (id, agent) = (tk::str_or_empty(job.get("id")), agent_of(&job));
                 let c = self.config.get();
                 let waits = tokio::task::spawn_blocking(move || crate::heavy_work::task_waits(&c, &agent))
@@ -976,6 +981,24 @@ impl Jobs {
             && (self.memory)().is_some_and(|free| free < floor)
     }
 
+    /// A waiting task whose agent was deleted: ended as failed (« this agent isn't on this install any more »), its
+    /// own browser removed. True when it was.
+    fn ended_without_agent(&self, job: &Dict) -> bool {
+        let config = self.config.get();
+        if config.agent(Some(&agent_of(job))).is_some() {
+            return false;
+        }
+        let mut job = job.clone();
+        job.insert("state".into(), json!("failed"));
+        job.insert("error".into(), json!(AGENT_GONE));
+        job.insert("finished".into(), json!(py::time_time()));
+        let _ = save(&config, &job);
+        let (agent, id) = (agent_of(&job), tk::str_or_empty(job.get("id")));
+        tokio::spawn(async move { crate::browsers::remove_task(&config, &agent, &id).await });
+        tracing::info!(job = %tk::str_or_empty(job.get("id")), "a waiting task ended: its agent is gone");
+        true
+    }
+
     /// The tasks waiting for free memory: the oldest one started once there is room (one per call, so the next one
     /// sees what it took; called every minute, storage_watch.rs). How many started.
     pub async fn resume_after_memory(self: &Arc<Self>) -> usize {
@@ -988,6 +1011,9 @@ impl Jobs {
         });
         // the oldest that can start: one that can't (its agent gone, at its cap) never holds the others back
         for job in &waiting {
+            if self.ended_without_agent(job) {
+                continue;
+            }
             if self.memory_short(&agent_of(job)) {
                 return 0; // the oldest one's turn: no room for it yet
             }
@@ -1225,7 +1251,7 @@ impl Jobs {
             }
             let Some(agent) = config.agent(Some(&agent_of(&job))).cloned() else {
                 job.insert("state".into(), json!("failed"));
-                job.insert("error".into(), json!("this agent isn't on this install any more"));
+                job.insert("error".into(), json!(AGENT_GONE));
                 job.insert("finished".into(), json!(py::time_time()));
                 let _ = save(&config, &job);
                 // its own browser (a copy of the deleted agent's logins) gone with it

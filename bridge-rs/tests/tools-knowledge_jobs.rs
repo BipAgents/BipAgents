@@ -1111,5 +1111,9 @@ async fn review3_a_waiting_task_that_cant_start_never_holds_the_others_back() {
         board.resume_after_memory().await; // three minutes
     }
     assert_eq!(board.view(&second).unwrap()["state"], "running", "memory free again, the second task still waits behind the first");
+    // review 4: the task of the deleted agent ends, plainly, instead of waiting for ever
+    let orphan = bipbridge::jobs::load(&config, &first).unwrap();
+    assert_eq!(orphan["state"], "failed", "{orphan:?}");
+    assert_eq!(orphan["error"], json!(bipbridge::jobs::AGENT_GONE));
     let _ = board.forget(&second).await;
 }
