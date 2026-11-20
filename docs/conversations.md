@@ -649,13 +649,24 @@ restarted turn answers by itself: none. It is a row of the bridge's (`thread_ins
 serves it as an agent message `i_<client_id>` with `instant: true` and `answers: <client_id>`, right after the person's
 message (its `s_` item, then the stored row), or at its time while that message waits in the queue; the layout never
 makes it work nor a turn's reply, the quick talk's reply and the voice reply leave it out, a lost message (`not_sent`)
-takes it away. The words the agent gets carry a hidden note (`[bipagents:answered] …`, cut from the person's row like
-every `[bipagents:` line, taken off a late steer's « En attente » text): it was answered already, so it does not
+takes it away. The words the agent gets carry a hidden note (`<!--bip:answered …-->`, stripped from the person's row
+like every `<!--bip:` note, taken off a late steer's « En attente » text): it was answered already, so it does not
 acknowledge again. A `thread` hint `instant` tells the phones; another, `taken`, once Hermes has stored steered words
 (the turn's next step read them): the apps draw a small check on that message (a stored person item with
 `added_during_run`). One sentence per conversation every 20 s; its tokens count with the agent's key (the offer:
 the place's AI key, metered by the router). A family agent's common conversation: a member's message during someone
 else's turn is queued (never steered); her sentence is asked without the conversation's other lines.
+**The first message too** (instant_reply.rs `first`, 20/11, Alex « dès le premier message »): an app that sends
+`instant_first: true` (iOS and Android from 20/11; an older app gets none) gets a line for a message that STARTS a turn.
+The agent's model is asked at once (its name, the time, the conversation's last lines, the message) for 1 to 3 short
+sentences: what it starts on with the person's specifics, or a short direct answer from general knowledge, or « - »
+(nothing yet: thanks, a greeting). Never a fact it cannot know, never « done », never a question. The turn starts once
+the line is there, or 2.5 s after the send without it (then none is ever shown). With the line, its words go to the turn
+in the hidden note (`<!--bip:answered … « line » …-->`), so the real reply continues from it; the line is kept and
+served like the others (`i_<client_id>` right under the message), before any word of the turn's. The layout gives that
+turn no app first word (`ack`), and both apps keep the line right under the message during the turn and drop their own
+first word too. No call for « merci », « ok »… (`trivial`), none in a family agent's common conversation or for a
+read-only share's turn (`instructions`); Live, routines and tasks never go through this send.
 
 The bridge takes what waited for the message (`live_brief::message_notes`: the time, a Live call's recap, the
 family's news…), adds the app's `notes` (its 👍 / 👎), builds Hermes' input (photos as image parts of one user message,

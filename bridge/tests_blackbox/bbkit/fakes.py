@@ -605,6 +605,10 @@ class FakeModel(Fake):
         # just sent a new message while you work »): its answer, and how long it takes
         self.instant_answer = "Compris, plus de langue ni de dents, je l'intègre."
         self.instant_delay = 0.0
+        # the line said at once to a message that starts a turn (instant_reply.rs `first`: « Your full answer (with
+        # your tools »): its answer, and how long it takes
+        self.first_answer = "Je compare les trains Lyon–Paris de samedi matin, les moins chers d'abord."
+        self.first_delay = 0.0
 
     def records_answer(self, user: str) -> str:
         documents = []
@@ -623,6 +627,11 @@ class FakeModel(Fake):
                 # a model tried once before an agent uses it (model_choice.rs): a word, or a word about an image
                 return JSONResponse({"choices": [{"message": {"content": "OK"}}],
                                      "usage": {"prompt_tokens": 12, "completion_tokens": 1}}, status_code=self.status)
+            if "Your full answer (with your tools" in body["messages"][0]["content"]:
+                if self.first_delay:
+                    await asyncio.sleep(self.first_delay)
+                return JSONResponse({"choices": [{"message": {"content": self.first_answer}}],
+                                     "usage": {"prompt_tokens": 420, "completion_tokens": 30}}, status_code=self.status)
             if "They just sent a new message while you work" in body["messages"][0]["content"]:
                 if self.instant_delay:
                     await asyncio.sleep(self.instant_delay)

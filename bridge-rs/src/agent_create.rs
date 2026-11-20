@@ -247,6 +247,7 @@ pub async fn start(
         phone: None,
         thinking: None,
         by: None,
+        instant_first: false,
     };
     let sent = crate::threads::send::send(state, &agent, Some(thread.clone()), message).await?;
     let config = state.config();

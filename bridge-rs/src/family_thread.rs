@@ -434,6 +434,7 @@ pub async fn member_post(state: &AppState, agent: &AgentConfig, household: &str,
         phone: None,
         thinking: None,
         by: Some(author.clone()),
+        instant_first: false,
     };
     let threads = crate::threads::threads_of(state);
     let thread = threads.main(agent).await.map_err(|_| HttpError::new(502, "the agent can't be reached"))?;

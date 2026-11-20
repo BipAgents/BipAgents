@@ -31,6 +31,18 @@
 //! logged. At most one sentence per conversation every `GAP_SECONDS`: a burst of messages gets one sentence, then one
 //! again only once spaced (the others get no line, and no note: the turn takes them as before).
 //!
+//! **The first message of a turn** (Alex 20/11, « dès le premier message »): an app that says it draws such a line
+//! (`instant_first` in the message) gets one for a message that starts a turn too. The agent's model is asked at once,
+//! in parallel with what the send does before starting the turn (`first`), for 1 to 3 short sentences: what the agent
+//! starts on with the person's specifics (« Je compare les trains Lyon–Paris de samedi matin… »), or a short direct
+//! answer when general knowledge is enough; « - » when the message needs no words yet (thanks, ok, a greeting). The
+//! turn starts once the line is there or `FIRST_WAIT` (2.5 s) after the send at the latest: with the line, its words go to the
+//! turn in the note (`first_note`), so the real reply continues from it and never says it again, and the line is kept
+//! and shown at once (before any word of the turn's: none can come before its start). Past `FIRST_WAIT`, nothing is
+//! shown and the turn starts as before. No canned line here (a « Noté » to a first message says nothing). Never in a
+//! family agent's common conversation, a read-only share's turn (`instructions`), a « thanks » or « ok » (`trivial`:
+//! no call at all), Live, crons or tasks (none of them goes through threads/send.rs).
+//!
 //! **Shared conversations.** A family agent's common conversation: a member's words wait behind someone else's turn
 //! (never steer it, family_thread.rs); her sentence answers her message alone and is asked without the conversation's
 //! other lines, so it says nothing the timeline doesn't already show next to her message. A relative's conversation
@@ -58,6 +70,12 @@ pub const GAP_SECONDS: f64 = 20.0;
 pub const SENTENCE_MAX: usize = 140;
 /// The sentence's tokens at most (a model that cannot be told not to think gets its floor instead: GLM via EUrouter).
 pub const MAX_TOKENS: i64 = 60;
+/// A first message's line is waited for this long at most after the send before its turn starts without it.
+pub const FIRST_WAIT: Duration = Duration::from_millis(2500);
+/// The longest first-message line kept (characters): 1 to 3 short sentences.
+pub const FIRST_MAX: usize = 360;
+/// A first-message line's tokens at most (non-GLM: no thinking).
+pub const FIRST_MAX_TOKENS: i64 = 160;
 /// A turn's steps watched for the stored row this long at most after a steer.
 const TAKEN_WATCH: Duration = Duration::from_secs(15 * 60);
 
@@ -120,6 +138,151 @@ it into account. Don't acknowledge, thank for or restate it again: just use it i
 with it right after. Don't acknowledge or restate it again: start on it directly.-->"
         ),
     }
+}
+
+/// The note joined to a first message: the line already shown, word for word, so the reply continues from it.
+pub fn first_note(line: &str) -> String {
+    // the line inside an HTML note: never a `-->` of its own
+    let line = line.replace("--", "–");
+    format!(
+        "{MARK} The app already showed this at once, in your name, as the start of your reply: « {line} ». Continue \
+from it: don't repeat, restate or acknowledge it, and skip your opening sentence; go straight to the work and the rest \
+of the answer. If it already answers the message fully, never give that answer again: add only something new, in one \
+short line.-->"
+    )
+}
+
+/// A first message's words with the line's note after them.
+pub fn with_first_note(words: &str, line: &str) -> String {
+    format!("{}\n\n{}", words.trim_end(), first_note(line))
+}
+
+/// Words that need no line (thanks, ok, a greeting, an emoji): no call at all. A message with a file always gets one.
+pub fn trivial(words: &str, files: bool) -> bool {
+    const SMALL: &[&str] = &[
+        "merci", "beaucoup", "ok", "okay", "oki", "d'accord", "dac", "daccord", "super", "cool", "top", "parfait", "génial",
+        "nickel", "oui", "non", "bien", "très", "bonjour", "salut", "coucou", "bonsoir", "bravo", "yes", "no", "thanks",
+        "thank", "you", "thx", "great", "perfect", "nice", "good", "hi", "hello", "hey", "sure", "fine", "danke", "schön",
+        "gut", "ja", "nein", "hallo", "prima", "gracias", "vale", "sí", "si", "hola", "genial", "perfecto", "bedankt",
+        "dank", "je", "dankjewel", "dankje", "oké", "goed", "hoi", "top", "mais", "ah", "oh", "ha", "haha", "mdr", "lol",
+        "à", "plus", "toi", "a", "so", "much", "vielen", "muchas", "wel", "c'est", "ça", "marche", "très", "bien",
+    ];
+    if files {
+        return false;
+    }
+    let lower = words.to_lowercase().replace('’', "'");
+    let parts: Vec<&str> = lower
+        .split(|c: char| c.is_whitespace() || matches!(c, '!' | '.' | ',' | '?' | ';' | ':'))
+        .map(|w| w.trim_matches(|c: char| !c.is_alphanumeric() && c != '\''))
+        .filter(|w| !w.is_empty())
+        .collect();
+    parts.len() <= 4 && parts.iter().all(|w| SMALL.contains(w))
+}
+
+/// The first message's instructions: what the agent says at once, in its language.
+pub fn first_system(agent_name: &str, role: &str, language: &str, now: &str) -> String {
+    let role = if role.trim().is_empty() { String::new() } else { format!(" ({})", role.trim()) };
+    format!(
+        "You are {agent_name}{role}, a personal assistant working for your person through a chat app. They just sent \
+the message below. Your full answer (with your tools, your memory, their accounts and the web) starts right after; \
+first write what you say at once, in {language} (or in the language of their message if it is another).\n\
+- If the message asks for work (searching, comparing, booking, browsing, writing or sending something, their mail, \
+calendar, files or memory): 1 or 2 short sentences saying what you are starting on, with their specifics (places, \
+dates, people, criteria). Example: « Je compare les trains Lyon–Paris de samedi matin, en évitant les correspondances. » \
+Say only what you start on now (searching, comparing, reading), never what you will deliver, prepare, send or book \
+(no « je te prépare… », « je t'envoie… », « je réserve… »).\n\
+- If you can fully answer it now in 1 to 3 short sentences from general knowledge and the conversation alone (a word, \
+a definition, a quick calculation, a simple tip): answer it directly. Money, health and legal questions are never \
+quick: say what you will look at.\n\
+- If it needs no words from you yet (thanks, ok, a greeting, a short reaction) or you are unsure: reply with a single -\n\
+Never invent what you cannot know here: prices, times, schedules, availability, opening hours, news, weather, search \
+results, anything from their mail, calendar, files, accounts or your memory. Never say that something is done, found, \
+sent or booked. Never promise a time. Never ask a question. No greeting, no name, no emoji, no markdown, no list. \
+Reply with the text only.\n\
+It is now {now}."
+    )
+}
+
+static SENTENCE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"[.!…](?:\s|$)").expect("valid regex"));
+
+/// The model's answer to a first message as the line shown, or None (« - », empty, a question, too long, too short).
+pub fn clean_first(answer: &str) -> Option<String> {
+    let text = THINK.replace_all(answer, "");
+    let flat = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let flat = flat.replace(['*', '`', '#'], "");
+    let mut line = flat.trim().trim_start_matches(['-', '–']).trim();
+    // quotes around the whole line only (« Grazie mille » se dit… keeps its own)
+    for (open, close) in [('«', '»'), ('“', '”'), ('"', '"')] {
+        if let Some(inner) = line.strip_prefix(open).and_then(|l| l.strip_suffix(close)) {
+            if !inner.contains(open) && !inner.contains(close) {
+                line = inner.trim();
+            }
+        }
+    }
+    if line.contains('?') || line.contains('¿') || !line.chars().any(char::is_alphabetic) {
+        return None;
+    }
+    // its first three sentences
+    let cut = SENTENCE.find_iter(line).nth(2).map_or(line.len(), |m| m.start() + m.as_str().trim_end().len());
+    let line = line[..cut].trim();
+    if line.chars().count() > FIRST_MAX || line.split_whitespace().count() < 3 {
+        return None;
+    }
+    let mut out = line.to_string();
+    if !out.ends_with(['.', '!', '…']) {
+        out.push('.');
+    }
+    Some(out)
+}
+
+/// The first message's request body: 1 to 3 sentences, no thinking (GLM through EUrouter: its floor, with room).
+pub fn first_body(call: &Call, system: &str, user: &str, provider_order: &[String]) -> Value {
+    let mut b = body(call, system, user, provider_order);
+    if !crate::agents_admin::keeps_thinking_on(&call.model, &call.base_url) {
+        b["max_tokens"] = json!(FIRST_MAX_TOKENS);
+    }
+    b
+}
+
+/// A first message's line, asked at once in the background: its words and tokens (input, output), or None past
+/// `FIRST_WAIT` (the request dropped then), « - », an answer cut by its token cap, a refusal or a model the bridge
+/// can't call. Awaited before the turn
+/// starts (threads/send.rs).
+pub fn first(state: &AppState, agent: &AgentConfig, thread: &Thread, client_id: &str, words: &str) -> tokio::task::JoinHandle<Option<(String, i64, i64)>> {
+    let (state, agent, thread, client_id, words) =
+        (state.clone(), agent.clone(), thread.clone(), client_id.to_string(), words.to_string());
+    tokio::spawn(async move {
+        let started = Instant::now();
+        let config = state.config();
+        let asked = async {
+            let model = crate::mail_scan::model_of(&config, &agent).ok()?;
+            let call = Call { base_url: model["base_url"].clone(), key: model["key"].clone(), model: model["model"].clone() };
+            let lang = crate::handback::language_of(&config, &agent);
+            let lines = last_lines(&state, &agent, &thread, &client_id).await;
+            let shown = if agent.display_name.is_empty() { agent.name.clone() } else { agent.display_name.clone() };
+            let now = crate::dates::now::line(&config, &agent);
+            let now = now.trim_start_matches(crate::dates::now::OPEN).trim_end_matches("-->");
+            let system = first_system(&shown, agent.category.as_deref().unwrap_or(""), crate::souls::language_name(&lang), now);
+            let body = first_body(&call, &system, &user_message(&lines, &words), &config.model_provider_order);
+            ask_raw(&state.http, &call, &body).await
+        };
+        let got = tokio::time::timeout(FIRST_WAIT, asked).await;
+        let ms = started.elapsed().as_millis() as u64;
+        match got {
+            Ok(Some((raw, input, output, cut))) => {
+                // cut by its token cap (GLM thinking at length): half a sentence, never shown
+                let said = if cut { None } else { clean_first(&raw) };
+                tracing::info!(agent = %agent.name, tokens_in = input, tokens_out = output, ms, kept = said.is_some(),
+                               "instant reply (first message): the agent's model asked");
+                said.map(|s| (s, input, output))
+            }
+            Ok(None) => None,
+            Err(_) => {
+                tracing::info!(agent = %agent.name, ms, "instant reply (first message): too slow, none");
+                None
+            }
+        }
+    })
 }
 
 /// The words with the note (after them: the timeline cuts the row there).
@@ -254,6 +417,13 @@ pub fn body(call: &Call, system: &str, user: &str, provider_order: &[String]) ->
 
 /// One call: the sentence (cleaned) and the tokens, or None.
 pub async fn ask(http: &reqwest::Client, call: &Call, body: &Value) -> Option<(String, i64, i64)> {
+    let (raw, input, output, _) = ask_raw(http, call, body).await?;
+    Some((clean(&raw)?, input, output))
+}
+
+/// One call: the model's words as they came, the tokens, and whether its token cap cut them; None (refused,
+/// unreachable).
+pub async fn ask_raw(http: &reqwest::Client, call: &Call, body: &Value) -> Option<(String, i64, i64, bool)> {
     let mut request = http.post(format!("{}/chat/completions", call.base_url.trim_end_matches('/'))).json(body);
     if !call.key.is_empty() {
         request = request.header("Authorization", format!("Bearer {}", call.key));
@@ -266,8 +436,9 @@ pub async fn ask(http: &reqwest::Client, call: &Call, body: &Value) -> Option<(S
     }
     let data: Value = response.json().await.ok()?;
     let n = |k: &str| data.pointer(&format!("/usage/{k}")).and_then(Value::as_i64).unwrap_or(0);
-    let said = clean(data.pointer("/choices/0/message/content").and_then(Value::as_str).unwrap_or(""))?;
-    Some((said, n("prompt_tokens"), n("completion_tokens")))
+    let said = data.pointer("/choices/0/message/content").and_then(Value::as_str).unwrap_or("").to_string();
+    let cut = data.pointer("/choices/0/finish_reason").and_then(Value::as_str) == Some("length");
+    Some((said, n("prompt_tokens"), n("completion_tokens"), cut))
 }
 
 /// The conversation's last visible lines, for the model (none in a family agent's common conversation).
@@ -441,5 +612,56 @@ Their new message: plutôt le samedi");
         let own = Call { base_url: "http://192.168.1.20:8888/v1".into(), key: String::new(), model: "GLM-5.3-Flash".into() };
         let b = body(&own, "s", "u", &[]);
         assert!(b.get("reasoning_effort").is_none() && b["chat_template_kwargs"]["enable_thinking"] == false);
+    }
+
+    #[test]
+    fn a_first_message_line_is_one_to_three_sentences_or_nothing() {
+        assert_eq!(clean_first("Je compare les trains Lyon–Paris de samedi matin, en évitant les correspondances.").as_deref(),
+                   Some("Je compare les trains Lyon–Paris de samedi matin, en évitant les correspondances."));
+        // the model's « nothing to say yet », a question, too short: none
+        assert!(clean_first("-").is_none() && clean_first(" - ").is_none() && clean_first("").is_none());
+        assert!(clean_first("Tu pars de quelle gare ?").is_none());
+        assert!(clean_first("D'accord.").is_none());
+        // three sentences at most, kept on one line, markdown dropped
+        let long = "Ciao se dit en italien.\nC'est informel. On l'emploie entre amis. Pour être poli, dis plutôt « buongiorno ».";
+        assert_eq!(clean_first(long).as_deref(), Some("Ciao se dit en italien. C'est informel. On l'emploie entre amis."));
+        assert_eq!(clean_first("<think>hm</think>**Je regarde** tes mails de la semaine").as_deref(),
+                   Some("Je regarde tes mails de la semaine."));
+        assert!(clean_first(&"mot ".repeat(120)).is_none());
+        // quotes of its own kept, quotes around the whole line dropped
+        assert_eq!(clean_first("« Merci beaucoup » se dit « grazie mille » en italien.").as_deref(),
+                   Some("« Merci beaucoup » se dit « grazie mille » en italien."));
+        assert_eq!(clean_first("« Je regarde tes mails de la semaine. »").as_deref(), Some("Je regarde tes mails de la semaine."));
+    }
+
+    #[test]
+    fn thanks_and_ok_get_no_line_at_all() {
+        for words in ["merci", "Merci beaucoup !", "ok super", "d’accord", "👍", "Thanks!", "danke schön", "top merci", "salut"] {
+            assert!(trivial(words, false), "{words}");
+        }
+        for words in ["Trouve-moi un train pour samedi", "merci de regarder mes mails", "ok, et pour Lyon ?"] {
+            assert!(!trivial(words, false), "{words}");
+        }
+        // a photo with « ok »: something to look at
+        assert!(!trivial("ok", true));
+    }
+
+    #[test]
+    fn the_first_note_carries_the_line_and_is_hidden_like_the_others() {
+        let words = with_first_note("Trouve-moi un train pour samedi", "Je regarde les trains de samedi -- matin.");
+        assert!(words.starts_with("Trouve-moi un train pour samedi\n\n<!--bip:answered "));
+        assert!(words.contains("« Je regarde les trains de samedi – matin. »") && words.ends_with("-->"));
+        assert_eq!(words.matches("-->").count(), 1, "the line never closes the note early");
+        assert_eq!(without_note(&words), "Trouve-moi un train pour samedi");
+        assert_eq!(crate::live_brief::visible(&words), "Trouve-moi un train pour samedi");
+        let s = first_system("Vie", "voyage", "French", "vendredi 20 novembre 2026, 17:05");
+        assert!(s.starts_with("You are Vie (voyage),") && s.contains("in French") && s.contains("single -")
+                && s.contains("Never ask a question") && s.contains("Money, health and legal questions are never quick")
+                && s.ends_with("It is now vendredi 20 novembre 2026, 17:05."));
+        assert!(first_system("Vie", " ", "French", "x").starts_with("You are Vie, a personal"));
+        let ds = Call { base_url: "https://api.eurouter.ai/api/v1".into(), key: "k".into(), model: "deepseek-v4.1-flash".into() };
+        assert_eq!(first_body(&ds, "s", "u", &[])["max_tokens"], FIRST_MAX_TOKENS);
+        let glm = Call { base_url: "https://api.eurouter.ai/api/v1".into(), key: "k".into(), model: "glm-5.3-flash".into() };
+        assert_eq!(first_body(&glm, "s", "u", &[])["max_tokens"], 400);
     }
 }

@@ -96,6 +96,10 @@ pub struct NewMessage {
     /// none, the bridge's rule (turn_thinking.rs). Followed only for an agent whose level the person never chose.
     #[serde(default)]
     pub thinking: Option<bool>,
+    /// The app draws a line said at once under a message that starts a turn (instant_reply.rs `first`): apps from
+    /// 20/11 on. An older app (it would draw it out of place, with its own first word too) gets none.
+    #[serde(default)]
+    pub instant_first: bool,
     /// Who writes in a family agent's common conversation (family_thread.rs): a member's message relayed by her
     /// bridge; none, the creator's own. Never from an app.
     #[serde(skip)]
@@ -629,6 +633,17 @@ pub async fn send(state: &AppState, agent: &AgentConfig, thread: Option<Thread>,
         Some(a) => format!("{}#{}", thread.id, a.household),
         None => thread.id.clone(),
     };
+    // a message that starts a turn: its line asked at once, while the rest of the send goes on; the turn starts with
+    // it, or without it `FIRST_WAIT` after now (instant_reply.rs `first`)
+    let first_line = (body.instant_first
+        && running.is_none()
+        && !waits
+        && !body.after
+        && author.is_none()
+        && body.instructions.as_deref().is_none_or(|i| i.trim().is_empty())
+        && !crate::instant_reply::trivial(&words, !body.attachments.is_empty())
+        && crate::instant_reply::reserve(&agent.name, &cap_key, crate::py::time_time()))
+    .then(|| crate::instant_reply::first(state, agent, &thread, &body.client_id, &said_for_ack(&words, &body.attachments)));
     // a turn about to start again with earlier words (runs.rs `restart` starting it): Hermes ended it, it takes no
     // words; these wait first in line, for the turn after
     let restarting = |r: &str| state.hub.subscription(&agent.name, r).is_some_and(|sub| sub.restarting());
@@ -746,7 +761,22 @@ pub async fn send(state: &AppState, agent: &AgentConfig, thread: Option<Thread>,
     let instructions = body.instructions.as_deref().filter(|i| !i.trim().is_empty());
     let options = crate::turn_thinking::turn_options(&state.config(), agent, &words, body.thinking);
     let thinks = crate::turn_thinking::thought(options.as_ref());
-    let run = match state.hermes.start_run_input(agent, input.clone(), tip, instructions, options.clone()).await {
+    // the first message's line, if it came in time: its words go to the turn in the note (the reply continues from it)
+    let line = match first_line {
+        Some(asked) => match asked.await.ok().flatten() {
+            Some(line) => Some(line),
+            None => {
+                crate::instant_reply::release(&agent.name, &cap_key);
+                None
+            }
+        },
+        None => None,
+    };
+    let start_input = match &line {
+        Some((said_now, _, _)) => input_of(Some(&notes), &crate::instant_reply::with_first_note(&said, said_now), &body.attachments),
+        None => input.clone(),
+    };
+    let run = match state.hermes.start_run_input(agent, start_input, tip, instructions, options.clone()).await {
         Ok(run) => run,
         Err(exc) => match exc.status() {
             Some(status @ (400 | 413 | 415 | 422)) => {
@@ -790,7 +820,18 @@ pub async fn send(state: &AppState, agent: &AgentConfig, thread: Option<Thread>,
     // its continuation, if it ends on a promise, keeps them (runs.rs `go_on`)
     state.hub.set_turn(&agent.name, &run, instructions, options);
     tracing::info!(agent = %agent.name, run_id = %run, "message sent: a turn started");
+    if let Some((said_now, tokens_in, tokens_out)) = &line {
+        // shown at once under the message, before any word of the turn's
+        match threads.keep_instant(&agent.name, &thread.id, &body.client_id, said_now, true).await {
+            Ok(()) => tracing::info!(agent = %agent.name, thread = %thread.id, tokens_in, tokens_out, "instant reply (first message) said"),
+            Err(exc) => tracing::warn!(agent = %agent.name, error = %format!("{exc:#}"), "instant reply (first message) not kept"),
+        }
+    }
     threads.bump(&thread, "sent").await?;
+    if line.is_some() {
+        // the phones read the line as they read one said during a turn
+        let _ = threads.bump(&thread, "instant").await;
+    }
     told(tip);
     Ok(answer("started", Some(&run)))
 }

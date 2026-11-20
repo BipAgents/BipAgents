@@ -311,6 +311,11 @@ fn acknowledgement(lines: &[Line], turn: Range<usize>) -> Option<(usize, usize, 
     if lines[turn.start].kind != Kind::Prompt {
         return None;
     }
+    // the line said at once right under the message (instant_reply.rs: a first message's, or a queued one's whose turn
+    // this is) already said what the agent starts on: no first word of the app's on top of it
+    if lines.get(turn.start + 1).is_some_and(|l| l.kind == Kind::Other && l.key.starts_with("i_")) {
+        return None;
+    }
     for i in turn.start + 1..turn.end {
         match &lines[i].kind {
             Kind::Reply { length, interruption: false, .. } if *length > 0 => return None,
@@ -455,6 +460,21 @@ mod tests {
     }
     fn field<'a>(l: &'a HashMap<usize, Map<String, Value>>, n: usize, key: &str) -> Option<&'a Value> {
         l.get(&n).and_then(|f| f.get(key))
+    }
+
+    /// A first message's line said at once (instant_reply.rs `first`) is the agent's first word: none of the app's.
+    #[test]
+    fn a_line_said_at_once_under_the_message_takes_the_apps_first_word() {
+        let mut said = agent("i_c1", "Je compare les trains Lyon–Paris de samedi matin.");
+        said.body.insert("instant".into(), json!(true));
+        let items = vec![person("m_0", "Trouve un train"), said, tool("m_0.t0", "web_search", "{}"), agent("m_1", "Voici trois trains.")];
+        let l = all(&items, false);
+        assert!(l.values().all(|f| !f.contains_key("ack")));
+        assert!(!l.get(&1).is_some_and(|f| f.contains_key("work") || f.contains_key("turn_end")));
+        assert_eq!(field(&l, 3, "turn_end"), Some(&json!(true)));
+        // without the line: the app's first word before the search
+        let items = vec![person("m_0", "Trouve un train"), tool("m_0.t0", "web_search", "{}"), agent("m_1", "Voici trois trains.")];
+        assert!(field(&all(&items, false), 1, "ack").is_some());
     }
 
     /// The apps' TurnLayoutTests `steeredTurnKeepsItsAnswerAndMessageInSight`, on items.
