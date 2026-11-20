@@ -88,6 +88,17 @@ pub const UNSEEN_DAYS: f64 = 7.0;
 pub const PROPOSALS_MAX: usize = 5;
 /// A task paused because the place was too full (heavy_work.rs).
 pub const SPACE_REASON: &str = "space";
+/// A task that would browse in a browser of its own, waiting for free memory (`[jobs] browser_free_mb`).
+pub const MEMORY_REASON: &str = "memory";
+
+/// The place's free memory in MB (MemAvailable of /proc/meminfo), None where it can't be read (no limit then).
+pub type MemoryProbe = Arc<dyn Fn() -> Option<u64> + Send + Sync>;
+
+pub fn mem_available_mb() -> Option<u64> {
+    let text = std::fs::read_to_string("/proc/meminfo").ok()?;
+    let line = text.lines().find(|l| l.starts_with("MemAvailable:"))?;
+    line.split_whitespace().nth(1)?.parse::<u64>().ok().map(|kb| kb / 1024)
+}
 /// Seconds a stop may take before the task is counted as paused anyway.
 pub const STOP_GRACE: f64 = 120.0;
 /// Finished tasks kept in the list, per agent.
@@ -511,6 +522,8 @@ pub struct Jobs {
     pub reserved: Arc<std::sync::Mutex<HashMap<String, usize>>>,
     /// When each agent's last « step » hint went (at most one a minute: `HINT_STEP_GAP`).
     pub step_hinted: std::sync::Mutex<HashMap<String, f64>>,
+    /// The place's free memory (`mem_available_mb`; tests give their own).
+    pub memory: MemoryProbe,
     /// « Remplir mon Carnet » for every agent, one after another (notebook/fill.rs).
     pub filler: std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
     /// A finished task's result handed back to the conversation it came from (handback.rs); None: only the push.
@@ -554,6 +567,7 @@ impl Jobs {
             hint,
             reserved: Default::default(),
             step_hinted: Default::default(),
+            memory: Arc::new(mem_available_mb),
             hermes,
             hub,
             push,
@@ -952,6 +966,43 @@ impl Jobs {
         !running.is_empty()
     }
 
+    /// Whether a task of `agent` would get a browser of its own (browsers.rs `setup_task`) and the place's free memory
+    /// is under `[jobs] browser_free_mb`.
+    fn memory_short(&self, agent: &str) -> bool {
+        let config = self.config.get();
+        let floor = config.jobs.browser_free_mb;
+        floor > 0
+            && crate::browsers::gives_task_browsers(&config, agent)
+            && (self.memory)().is_some_and(|free| free < floor)
+    }
+
+    /// The tasks waiting for free memory: the oldest one started once there is room (one per call, so the next one
+    /// sees what it took; called every minute, storage_watch.rs). How many started.
+    pub async fn resume_after_memory(self: &Arc<Self>) -> usize {
+        let mut waiting: Vec<Dict> = tasks(&self.config.get())
+            .into_iter()
+            .filter(|j| state_of(j) == "paused" && j.get("reason") == Some(&json!(MEMORY_REASON)))
+            .collect();
+        waiting.sort_by(|a, b| {
+            first_number(a, &["created"]).partial_cmp(&first_number(b, &["created"])).unwrap_or(std::cmp::Ordering::Equal)
+        });
+        let Some(first) = waiting.first() else { return 0 };
+        if self.memory_short(&agent_of(first)) {
+            return 0;
+        }
+        let id = tk::str_or_empty(first.get("id"));
+        match self.resume(&id, None, None).await {
+            Ok(_) => {
+                tracing::info!(job = %id, "task started: free memory again");
+                1
+            }
+            Err(e) => {
+                tracing::debug!(job = %id, error = %format!("{e:#}"), "task not resumed after waiting for memory");
+                0
+            }
+        }
+    }
+
     /// The credit back (a pack, the new month): the tasks and mail scans paused for it go on by themselves.
     pub async fn resume_after_credit(self: &Arc<Self>, config: &crate::config::Config) {
         for job in tasks(config) {
@@ -1017,6 +1068,17 @@ impl Jobs {
             job.insert("queued_text".into(), json!(text));
             save(&self.config.get(), job)?;
             tracing::info!(agent = %agent.name, job = %tk::str_or_empty(job.get("id")), why, "job queued: no room now");
+            return Ok(());
+        }
+        // a browser of its own (browsers.rs `setup_task`) needs free memory: short of it, the task waits its turn
+        // (Alex 20/11, never refused), started by `resume_after_memory` once there is room
+        if self.memory_short(&agent.name) {
+            job.insert("state".into(), json!("paused"));
+            job.insert("reason".into(), json!(MEMORY_REASON));
+            job.insert("queued_text".into(), json!(text));
+            save(&self.config.get(), job)?;
+            tracing::info!(agent = %agent.name, job = %tk::str_or_empty(job.get("id")), "job queued: free memory short for its browser");
+            self.hint_apps(&agent.name, &tk::str_or_empty(job.get("id")), "paused").await;
             return Ok(());
         }
         let refused = |err: HermesError| -> anyhow::Error {

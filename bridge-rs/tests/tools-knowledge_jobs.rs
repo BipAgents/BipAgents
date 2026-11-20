@@ -845,3 +845,34 @@ async fn a_tasks_payment_is_handed_over_to_the_agents_main_conversation() {
     assert!(input.contains("approval"), "the person's usual approval: {input}");
     board.forget(&id).await.unwrap();
 }
+
+/// Alex 20/11, « no blocking for capacity »: a task that would browse in a browser of its own waits its turn when the
+/// place's free memory (MemAvailable) is under `[jobs] browser_free_mb` (a browsing task measured 0.5–0.8 GB): queued,
+/// « memory », never refused; it starts by itself once there is room again.
+#[tokio::test]
+async fn a_browsing_task_waits_for_free_memory_and_starts_once_there_is() {
+    let dir = tempfile::tempdir().unwrap();
+    let (fake, url) = gateway(1000, 10).await;
+    let (mut config, agent) = setup(dir.path(), &url);
+    config.browser.root = dir.path().join("browsers").to_string_lossy().into_owned();
+    assert_eq!(config.jobs.browser_free_mb, 1024, "the default threshold");
+    let place = bipbridge::browsers::folder(&config, "coach");
+    std::fs::create_dir_all(place.join("profile")).unwrap();
+    std::fs::write(place.join("ports.json"), r#"{"cdp": 19600, "vnc": 19601}"#).unwrap();
+    std::fs::write(place.join("mcp.json"), r#"{"server": ["/usr/bin/podman"]}"#).unwrap();
+    let free = Arc::new(Mutex::new(Some(600u64)));
+    let mut jobs = Arc::try_unwrap(board(&config, None)).ok().unwrap();
+    let probe = free.clone();
+    jobs.memory = Arc::new(move || *probe.lock().unwrap());
+    let board = Arc::new(jobs);
+    let job = board.create(&agent, "Comparer", "Compare trois offres sur leurs sites.", 0.50, None).await.unwrap();
+    let id = id_of(&job);
+    assert_eq!((job["state"].as_str(), job["reason"].as_str()), (Some("paused"), Some("memory")), "{job:?}");
+    assert!(posted_runs(&fake).is_empty(), "nothing started while memory is short");
+    assert_eq!(board.resume_after_memory().await, 0, "still short: it keeps waiting");
+    *free.lock().unwrap() = Some(4096);
+    assert_eq!(board.resume_after_memory().await, 1);
+    assert_eq!(board.view(&id).unwrap()["state"], "running");
+    assert!(words(&posted_runs(&fake)[0]["input"]).starts_with("Comparer\n\nCompare trois offres"), "its own words");
+    board.forget(&id).await.unwrap();
+}

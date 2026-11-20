@@ -554,6 +554,9 @@ pub struct JobsConfig {
     pub handoff_browser_window: u32,
     /// A steered run that ended without handing over: the bridge starts (or proposes) the task itself.
     pub handoff_rescue: bool,
+    /// The place's free memory (MemAvailable, MB) a task with a browser of its own needs to start: under it, it waits
+    /// its turn (jobs.rs `MEMORY_REASON`, never refused). A browsing task measured 0.5–0.8 GB (aibox, 20/11). 0: none.
+    pub browser_free_mb: u64,
     /// The offer's region whose model prices the guichet gives (task_cost.rs).
     #[serde(skip)]
     pub region: String,
@@ -577,6 +580,7 @@ impl Default for JobsConfig {
             handoff_browser_seconds: 0.0,
             handoff_browser_window: 5,
             handoff_rescue: true,
+            browser_free_mb: 1024,
             region: "eu".into(),
             price_in: 0.0,
             price_cached: 0.0,
@@ -1799,6 +1803,7 @@ pub fn parse_config(data: &Value, source_path: Option<&str>) -> Result<Config> {
         handoff_browser_window: i(jobs_t, "handoff_browser_window", jd.handoff_browser_window as i64)?.clamp(1, 100)
             as u32,
         handoff_rescue: b(jobs_t, "handoff_rescue", jd.handoff_rescue),
+        browser_free_mb: i(jobs_t, "browser_free_mb", jd.browser_free_mb as i64)?.clamp(0, 1 << 20) as u64,
         region: s(jobs_t, "region", &jd.region),
         price_in: f(jobs_t, "price_in", 0.0)?.clamp(0.0, 1000.0),
         price_cached: f(jobs_t, "price_cached", 0.0)?.clamp(0.0, 1000.0),

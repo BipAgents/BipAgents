@@ -535,6 +535,8 @@ pub fn holding() -> bool {
 
 /// Sampled every minute (storage_watch.rs `run_forever`), on the offer only.
 pub async fn backstop(state: &crate::app::AppState) {
+    // tasks waiting for free memory for their own browser (jobs.rs `MEMORY_REASON`), on any install
+    crate::jobs::jobs_of(state).resume_after_memory().await;
     if !crate::handover::on_offer() {
         return;
     }

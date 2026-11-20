@@ -234,9 +234,14 @@ fn copy_logins(from: &Path, to: &Path) -> std::io::Result<()> {
 /// folder (a copy of the agent's profile, logins included; its DevTools secret, VNC password, ports, downloads
 /// policy, the agent's sites for sending), its settings for bip-browser-mcp (its container started at its first use,
 /// its unit written then) and the session announced in the agent's `SESSIONS_FILE`. None: the agent has no browser.
+/// A task of `agent` gets a browser of its own: the agent has one, started when used (`on_demand`, bip-browser-mcp
+/// routes the task's calls).
+pub fn gives_task_browsers(config: &Config, agent: &str) -> bool {
+    ports_of(config, agent).is_some() && on_demand(config)
+}
+
 pub fn setup_task(config: &Config, agent: &str, job: &str, session: &str) -> anyhow::Result<Option<PathBuf>> {
-    // only where bip-browser-mcp starts the browsers when used (`on_demand`): it is what routes a task's calls
-    if ports_of(config, agent).is_none() || !on_demand(config) {
+    if !gives_task_browsers(config, agent) {
         return Ok(None);
     }
     let parent = folder(config, agent);
