@@ -6,9 +6,10 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import vm from "node:vm";
 
-const REPO = process.env.REPO || path.resolve(path.dirname(new URL(import.meta.url).pathname), "../..");
+const REPO = process.env.REPO || path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const STORE_JS = fs.readFileSync(path.join(REPO, "bridge-rs/assets/static/pagekit/store.js"), "utf8");
 
 /** A page with the kit's store, its door answered by `door(op) -> {status, body}`, time in our hands. */
