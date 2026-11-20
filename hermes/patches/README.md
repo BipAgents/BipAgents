@@ -891,9 +891,11 @@ MCP SDK (2.3.0) tells requests apart by their JSON-RPC id on one connection, std
 (`JSONRPCDispatcher._pending`), so no transport needs to stay serialised; the bridge's servers answer concurrently
 (HTTP: one request each; bip-browser-mcp: a task per message). The server's own RPCs (tools/list, keepalive, tool
 refresh, a call without a session) keep the lock exclusive: they wait for the calls in flight without holding new
-sessions' calls back (a refresh may wait while a card is open), and `locked()` stays true while any call runs (stdio
+sessions' calls back for up to `_RpcLock.PATIENCE_SECONDS` (30 s; then new calls wait for them, so overlapping calls
+never starve them), and `locked()` stays true while any call runs (stdio
 recycling and keepalive see a busy server). The elicitation callback finds its call's context by the session the
-elicitation's `_meta` names (the bridge's pay server says it back, card_pay.rs `Asker`), else the only call in
-flight; several calls and no session named: declined, never asked in the wrong conversation. Every other server:
+elicitation's `_meta` names (the bridge's pay server says it back, card_pay.rs `Asker`; that session has no call in
+flight any more: declined), else the only call in flight; several calls and no session named: declined, never asked
+in the wrong conversation. Every other server:
 unchanged. Tests: `tests/tools/test_mcp_call_context_parallel.py`.
 

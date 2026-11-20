@@ -16,20 +16,20 @@ BipAgents patch, documented in hermes/patches/README.md of the BipAgents reposit
 
 Bip-Patch: 0029-mcp-call-context-per-session
 ---
- tests/tools/test_mcp_call_context_parallel.py | 154 ++++++++++++++++++
- tools/mcp_tool.py                             |  72 +++++++-
+ tests/tools/test_mcp_call_context_parallel.py | 191 ++++++++++++++++++
+ tools/mcp_tool.py                             |  90 ++++++++-
  tools/mcp_tool_handlers.py                    |  16 +-
  tools/mcp_tool_sampling.py                    |   8 +-
  tools/mcp_tool_server_run.py                  |   2 +-
- 5 files changed, 244 insertions(+), 8 deletions(-)
+ 5 files changed, 299 insertions(+), 8 deletions(-)
  create mode 100644 tests/tools/test_mcp_call_context_parallel.py
 
 diff --git a/tests/tools/test_mcp_call_context_parallel.py b/tests/tools/test_mcp_call_context_parallel.py
 new file mode 100644
-index 0000000000000000000000000000000000000000..3a78bae2d380c205b4fe585c8bfc6dc9753a2cd3
+index 0000000000000000000000000000000000000000..bc0f2516c73bfd031122076e8a9c37a57530545b
 --- /dev/null
 +++ b/tests/tools/test_mcp_call_context_parallel.py
-@@ -0,0 +1,154 @@
+@@ -0,0 +1,191 @@
 +"""Calls to a server that asks for its calls' context (``call_context: true``) are serialised per Hermes session, not
 +per server: one session's call blocked for minutes (a card waiting for its person) never holds up another session's
 +calls to the same server. Any other server keeps one call at a time; the server's own RPCs (tools/list, keepalive)
@@ -184,8 +184,45 @@ index 0000000000000000000000000000000000000000..3a78bae2d380c205b4fe585c8bfc6dc9
 +    # the server said the call's session back in the elicitation's _meta (the bridge's pay and vault servers do)
 +    assert server._elicitation_call_context({"hermes-agent/session_id": "b"}) is two
 +    assert server._elicitation_call_context({"hermes-agent/session_id": "a"}) is one
++
++
++def test_calls_that_keep_overlapping_never_starve_the_servers_own_rpc(place, monkeypatch):
++    monkeypatch.setattr(core._RpcLock, "PATIENCE_SECONDS", 0.3)
++    server = place("bipagents", call_context=True)
++    first, _ = call(server.name, "ask", "s1", {"wait": True})
++    assert server.started.wait(5)
++    lock = server.server._rpc_lock
++
++    async def exclusive():
++        async with lock:
++            return time.monotonic()
++
++    future = asyncio.run_coroutine_threadsafe(exclusive(), core._mcp_loop)
++    time.sleep(0.6)  # past its patience: a new session's call now waits for it
++    late, box = call(server.name, "other", "s2")
++    late.join(0.5)
++    assert late.is_alive() and "text" not in box, "a new call went in before the starved RPC"
++    server.release.set()
++    assert future.result(5)
++    late.join(5)
++    assert json.loads(box["text"]).get("result") == "done other"
++    first.join(5)
++
++
++def test_an_elicitation_naming_a_session_not_in_flight_never_lands_in_another_sessions_call():
++    """The bridge names the asking call's session (card_pay.rs `Asker::ask`). If that call is no longer in flight here
++    (its turn stopped, its tool timeout passed: Hermes popped its context while the bridge still asks), the one other
++    call in flight is NOT the asker: its conversation must never get the approval."""
++    server = core.MCPServerTask("bipagents_pay")
++    persons = contextvars.copy_context()
++    server._session_call_contexts["api_person"] = persons
++    try:
++        got = server._elicitation_call_context({"hermes-agent/session_id": "api_task"})
++    except RuntimeError:
++        got = None
++    assert got is not persons, "the task's approval routed to the person's other conversation"
 diff --git a/tools/mcp_tool.py b/tools/mcp_tool.py
-index 04d20749603eab5c86abf068ba29918e85f04f5d..fa6418c0903e14cff98c14baf7e70417b002ef5c 100644
+index 04d20749603eab5c86abf068ba29918e85f04f5d..6efcf1e6f8479d13fdfc6730de50e263cafd984c 100644
 --- a/tools/mcp_tool.py
 +++ b/tools/mcp_tool.py
 @@ -10,6 +10,7 @@ all shared state; the ``mcp_tool_*`` siblings read that state back through ``too
@@ -196,7 +233,7 @@ index 04d20749603eab5c86abf068ba29918e85f04f5d..fa6418c0903e14cff98c14baf7e70417
  import contextvars
  import importlib
  import importlib.util
-@@ -308,6 +309,56 @@ async def _paginate_full_list(list_method, items_attr: str, server_name: str,
+@@ -308,6 +309,71 @@ async def _paginate_full_list(list_method, items_attr: str, server_name: str,
  
  # ---- Server task -- each MCP server lives in one long-lived asyncio Task ----
  
@@ -208,23 +245,37 @@ index 04d20749603eab5c86abf068ba29918e85f04f5d..fa6418c0903e14cff98c14baf7e70417
 +    flight without holding new sessions' calls back: a call blocked for minutes on its person never stops the
 +    others. ``locked()`` is True while anything holds it, so recycling and keepalive see a busy server."""
 +
++    # How long an exclusive RPC lets new sessions' calls in before it waits only for those in flight (calls that keep
++    # overlapping never starve a tool refresh or a call without a session).
++    PATIENCE_SECONDS = 30.0
++
 +    def __init__(self):
 +        self._lock = asyncio.Lock()
 +        self._shared = 0
 +        self._idle = asyncio.Event()
 +        self._idle.set()
++        self._admit = asyncio.Event()  # cleared while an exclusive RPC ran out of patience
++        self._admit.set()
 +        self._sessions: dict[str, list] = {}  # session -> [its lock, how many hold or wait for it]
 +
 +    def locked(self) -> bool:
 +        return self._lock.locked() or self._shared > 0
 +
 +    async def __aenter__(self):
-+        while True:
-+            await self._idle.wait()
-+            await self._lock.acquire()
-+            if self._shared == 0:
-+                return self
-+            self._lock.release()
++        deadline = time.monotonic() + self.PATIENCE_SECONDS
++        try:
++            while True:
++                try:
++                    await asyncio.wait_for(self._idle.wait(), timeout=max(0.0, deadline - time.monotonic()))
++                except TimeoutError:
++                    self._admit.clear()  # no new session's call until this one ran
++                    await self._idle.wait()
++                await self._lock.acquire()
++                if self._shared == 0:
++                    return self
++                self._lock.release()
++        finally:
++            self._admit.set()
 +
 +    async def __aexit__(self, *exc):
 +        self._lock.release()
@@ -235,6 +286,7 @@ index 04d20749603eab5c86abf068ba29918e85f04f5d..fa6418c0903e14cff98c14baf7e70417
 +        entry[1] += 1
 +        try:
 +            async with entry[0]:
++                await self._admit.wait()
 +                async with self._lock:  # never during an exclusive RPC
 +                    self._shared += 1
 +                    self._idle.clear()
@@ -253,7 +305,7 @@ index 04d20749603eab5c86abf068ba29918e85f04f5d..fa6418c0903e14cff98c14baf7e70417
  class MCPServerTask(MCPServerRunMixin, MCPServerTransportMixin, MCPServerHealthMixin):
      """One MCP server connection in one long-lived asyncio Task (the transport's anyio cancel
      scopes must enter/exit in the same Task). Run state machine, transport bring-up and
-@@ -329,6 +380,7 @@ class MCPServerTask(MCPServerRunMixin, MCPServerTransportMixin, MCPServerHealthM
+@@ -329,6 +395,7 @@ class MCPServerTask(MCPServerRunMixin, MCPServerTransportMixin, MCPServerHealthM
          "_max_lifetime_seconds",
          "_park_reason",
          "_pending_call_context",
@@ -261,7 +313,7 @@ index 04d20749603eab5c86abf068ba29918e85f04f5d..fa6418c0903e14cff98c14baf7e70417
          "_pending_refresh_tasks",
          "_permanent_grace_used",
          "_ping_unsupported",
-@@ -426,11 +478,14 @@ class MCPServerTask(MCPServerRunMixin, MCPServerTransportMixin, MCPServerHealthM
+@@ -426,11 +493,14 @@ class MCPServerTask(MCPServerRunMixin, MCPServerTransportMixin, MCPServerHealthM
          self._refresh_lock = asyncio.Lock()
          # A stdio session is one JSON-RPC stream (a concurrent list_tools can wedge a tool
          # call): serialize client-initiated RPCs per server (HTTP too, for ordering).
@@ -277,20 +329,23 @@ index 04d20749603eab5c86abf068ba29918e85f04f5d..fa6418c0903e14cff98c14baf7e70417
          self._lifecycle_started_at = self._last_tool_call_at = time.monotonic()
          self._idle_timeout_seconds = self._max_lifetime_seconds = self._recycled_reason = None
          # Handshake InitializeResult: the server's REAL advertised capabilities.
-@@ -444,6 +499,21 @@ class MCPServerTask(MCPServerRunMixin, MCPServerTransportMixin, MCPServerHealthM
+@@ -444,6 +514,24 @@ class MCPServerTask(MCPServerRunMixin, MCPServerTransportMixin, MCPServerHealthM
          # Latched when ``ping`` returns -32601; keepalives then use list_tools. Reset per connect.
          self._ping_unsupported: bool = False
  
 +    def _elicitation_call_context(self, meta: Optional[dict] = None) -> Optional[contextvars.Context]:
 +        """The snapshot of the call an elicitation comes from: the session its ``_meta`` names (a call_context server
-+        says it back), else the only call in flight. Several sessions' calls and no session named: it can't be told
-+        whose it is, so the elicitation is declined rather than shown in the wrong conversation."""
++        says it back; no call of that session in flight: declined), else the only call in flight. Several sessions'
++        calls and no session named: it can't be told whose it is, so the elicitation is declined rather than shown in
++        the wrong conversation."""
 +        if self._pending_call_context is not None:
 +            return self._pending_call_context
 +        from tools.mcp_tool_handlers import CALL_CONTEXT_SESSION
 +        session = meta.get(CALL_CONTEXT_SESSION) if isinstance(meta, dict) else None
-+        if session in self._session_call_contexts:
-+            return self._session_call_contexts[session]
++        if session:  # the session it names, or none: never another session's call
++            if session in self._session_call_contexts:
++                return self._session_call_contexts[session]
++            raise RuntimeError(f"MCP server '{self.name}': an elicitation of a session with no call in flight")
 +        contexts = list(self._session_call_contexts.values())
 +        if len(contexts) > 1:
 +            raise RuntimeError(f"MCP server '{self.name}': an elicitation during several sessions' calls names none")
