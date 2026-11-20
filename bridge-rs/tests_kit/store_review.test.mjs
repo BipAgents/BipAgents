@@ -5,9 +5,10 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import vm from "node:vm";
 
-const REPO = process.env.REPO || path.resolve(path.dirname(new URL(import.meta.url).pathname), "../..");
+const REPO = process.env.REPO || path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const STORE_JS = fs.readFileSync(path.join(REPO, "bridge-rs/assets/static/pagekit/store.js"), "utf8");
 const TOOLS_RS = fs.readFileSync(path.join(REPO, "bridge-rs/src/agent_tools.rs"), "utf8");
 
