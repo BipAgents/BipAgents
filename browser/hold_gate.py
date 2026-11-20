@@ -198,10 +198,29 @@ def main(command: list, calls: Calls | None = None) -> int:
         child.stdin.close()
     except BrokenPipeError:
         pass
-    code = child.wait()
+    code = stop(child)
     reader.join(timeout=5)   # its last answers out before this process ends
     calls.close()
     return code
+
+
+STOP_SECONDS = 3
+
+
+def stop(child: subprocess.Popen) -> int:
+    """The server, its stdin closed: ended by itself within `STOP_SECONDS`, else terminated, else killed. A server
+    stuck on a call (a frozen DevTools link) never ends by itself; it would outlive this gate's caller (the bridge
+    restarts the server after a call ran over) with its count left at 1, and every card payment in this browser would
+    wait for it (review 6)."""
+    try:
+        return child.wait(timeout=STOP_SECONDS)
+    except subprocess.TimeoutExpired:
+        child.terminate()
+    try:
+        return child.wait(timeout=STOP_SECONDS)
+    except subprocess.TimeoutExpired:
+        child.kill()
+        return child.wait()
 
 
 if __name__ == "__main__":
