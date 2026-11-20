@@ -202,9 +202,13 @@ fn places_of(config: &Config, agent: &AgentConfig, everything: bool) -> Vec<(Str
         }
     }
     // What its visible browser downloaded (browsers.rs: Chrome's download folder, in its profile).
-    let downloads = crate::browsers::downloads_dir(config, &agent.name);
-    if downloads.parent().is_some_and(Path::is_dir) {
-        out.push((crate::browsers::DOWNLOADS.into(), vec![downloads]));
+    // (a task's own browser's first, while the task runs)
+    let downloads: Vec<PathBuf> = crate::browsers::downloads_dirs(config, &agent.name)
+        .into_iter()
+        .filter(|d| d.parent().is_some_and(Path::is_dir))
+        .collect();
+    if !downloads.is_empty() {
+        out.push((crate::browsers::DOWNLOADS.into(), downloads));
     }
     let host = agent.upload_dir_host.as_deref().filter(|h| !h.is_empty());
     if let Some(host) = host {

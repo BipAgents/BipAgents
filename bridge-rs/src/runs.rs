@@ -744,6 +744,17 @@ where
     tokio::spawn(CALL_SESSION.scope(session, work))
 }
 
+/// `tokio::task::spawn_blocking` keeping the call's session (`CALL_SESSION`): a task's file reads find its own
+/// browser's downloads (browsers.rs `downloads_dirs`).
+pub fn blocking_with_call_session<F, R>(work: F) -> tokio::task::JoinHandle<R>
+where
+    F: FnOnce() -> R + Send + 'static,
+    R: Send + 'static,
+{
+    let session = CALL_SESSION.try_with(|s| s.clone()).ok().flatten();
+    tokio::task::spawn_blocking(move || CALL_SESSION.sync_scope(session, work))
+}
+
 tokio::task_local! {
     /// The Hermes session a call of the bridge's tools comes from, as Hermes says it in the call's `_meta` (patch
     /// 0028, agent_tools.rs `mcp`): `turn_of` then takes that session's run instead of telling runs apart by their
@@ -2927,15 +2938,6 @@ more steps in this turn. Don't repeat what failed: change approach.", crate::loo
     }
 
     /// A background task's run (jobs.rs): the brake's higher limits.
-    /// A background task's run of `agent` goes on (jobs.rs: such a run never starts other tasks itself).
-    pub fn background_running(&self, agent: &str) -> bool {
-        let inner = lock(&self.inner);
-        inner.subs.values().filter(|sub| sub.agent.name == agent).any(|sub| {
-            let st = lock(&sub.state);
-            st.background && !st.finished && st.terminal.is_none()
-        })
-    }
-
     pub fn mark_background(&self, agent: &str, run_id: &str) {
         let inner = lock(&self.inner);
         if let Some(sub) = inner.subs.get(&(agent.to_string(), run_id.to_string())) {
@@ -3018,7 +3020,7 @@ more steps in this turn. Don't repeat what failed: change approach.", crate::loo
             }
             let turn =
                 crate::loop_brake::Turn { run_id: sub.run_id.clone(), background: st.background, banned: st.turn.banned.clone() };
-            live.push((st.last_tool == tool, turn));
+            live.push((st.tools_open > 0 && st.last_tool == tool, turn));
         }
         let inside: Vec<&crate::loop_brake::Turn> = live.iter().filter(|(i, _)| *i).map(|(_, t)| t).collect();
         match (inside.as_slice(), live.as_slice()) {
@@ -4264,6 +4266,30 @@ mod tests {
         // task A's create_page reaches the bridge now: which turn is it?
         let turn = hub.turn_of("daily", "mcp__bipagents__create_page").map(|t| t.run_id);
         assert_eq!(turn, None, "a guess between two tasks inside the same tool: {turn:?}");
+    }
+
+    /// Review 2 (subtasks-redesign, 20/11): without the call's session (an older Hermes, an own Hermes without patch
+    /// 0028) `turn_of` takes « the one run inside a call of this tool right now » by its LAST tool started, not by a
+    /// call still open: a task that called start_task a minute ago (refused, or proposed) and thinks now, while the
+    /// person's own start_task reaches the bridge before its `tool.started` event: the person's call is the task's
+    /// (refused « you are working in a background task », counted on its brake). `runs_in_tool` checks `tools_open`.
+    #[tokio::test]
+    async fn without_the_calls_session_a_run_out_of_the_tool_is_never_its_caller() {
+        let hub = RunHub::new(HermesClient::new(reqwest::Client::new()), None, 7200, None);
+        let agent = AgentConfig { name: "daily".into(), ..Default::default() };
+        let run = |id: &str| {
+            let sub = Arc::new(RunSubscription::new(agent.clone(), id));
+            lock(&hub.inner).subs.insert(sub.key(), sub.clone());
+            sub
+        };
+        let event = |kind: &str, tool: &str| SSEEvent::new(kind, json!({"tool": tool}).as_object().cloned().unwrap(), "{}");
+        let (_chat, task) = (run("run_chat"), run("run_task"));
+        hub.mark_background("daily", "run_task");
+        hub.dispatch(&task, event("tool.started", "mcp__bipagents__start_task"));
+        hub.dispatch(&task, event("tool.completed", "mcp__bipagents__start_task"));
+        // the person's start_task now, its event not seen yet
+        let turn = hub.turn_of("daily", "mcp__bipagents__start_task").map(|t| t.run_id);
+        assert_ne!(turn.as_deref(), Some("run_task"), "a run out of the tool taken for the caller");
     }
 
     /// Hermes patch 0028: a call of the bridge's tools says its Hermes session (`_meta`, agent_tools.rs `CALL_SESSION`):

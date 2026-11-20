@@ -1098,8 +1098,15 @@ impl Jobs {
         job.insert("session_id".into(), json!(session_id));
         // a browser of its own when the agent has one (browsers.rs `setup_task`): its calls go there (patch 0028)
         let (c, a, j, sess) = (self.config.get(), agent.name.clone(), tk::str_or_empty(job.get("id")), session_id.clone());
+        // removed again when the task doesn't start after all (a refusal below): no copy of the logins left behind
+        let mut unstarted = TaskBrowserUnused::default();
         let own_browser = match tokio::task::spawn_blocking(move || crate::browsers::setup_task(&c, &a, &j, &sess)).await? {
-            Ok(found) => found.is_some(),
+            Ok(found) => {
+                if found.is_some() {
+                    unstarted.arm(&self.config.get(), &agent.name, &tk::str_or_empty(job.get("id")));
+                }
+                found.is_some()
+            }
             Err(exc) => {
                 tracing::warn!(agent = %agent.name, error = %format!("{exc:#}"), "a task's own browser not set up: it uses the agent's");
                 false
@@ -1157,6 +1164,7 @@ impl Jobs {
             job.insert(key.into(), value);
         }
         save(&self.config.get(), job)?;
+        unstarted.disarm();
         let id = tk::str_or_empty(job.get("id"));
         self.follow(&id);
         tracing::info!(agent = %agent.name, job = %id, budget_eur = task_budget(&self.config.get(), job), "job started");
@@ -1175,6 +1183,7 @@ impl Jobs {
     /// After a restart: the running tasks followed again.
     pub async fn resume_following(self: Arc<Self>) -> usize {
         let config = self.config.get();
+        sweep_task_browsers(&config).await;
         let mut count = 0;
         for job in tasks(&config) {
             let state = state_of(&job);
@@ -1219,6 +1228,8 @@ impl Jobs {
                 job.insert("error".into(), json!("this agent isn't on this install any more"));
                 job.insert("finished".into(), json!(py::time_time()));
                 let _ = save(&config, &job);
+                // its own browser (a copy of the deleted agent's logins) gone with it
+                crate::browsers::remove_task(&config, &agent_of(&job), job_id).await;
                 return;
             };
             let (run_id, session_id) = (tk::str_or_empty(job.get("run_id")), tk::str_or_empty(job.get("session_id")));
@@ -1963,11 +1974,46 @@ pub async fn hand_over_call(state: &AppState, agent: &AgentConfig, settings: &st
         return tool_text("Not done: you work in a background task in a browser of its own, which never pays nor logs \
 in, and your main conversation can't be reached now. End your task saying what is needed and on which site.", true);
     };
+    // what the task wrote, bounded; the same request once (a task retrying its step), a few per task at most
+    let bound = |text: &str| tk::head(text, ASK_TEXT_MAX).to_string();
+    let ask = Ask { what: bound(&ask.what), site: bound(&ask.site), why: bound(&ask.why), ..ask };
+    match handed_over_before(&job, &ask) {
+        Some(true) => return tool_text(HANDED_OVER, false),
+        None => {
+            return tool_text("Not done: this task already handed several requests over to your main conversation. End your task saying what is still needed and on which site.", true);
+        }
+        Some(false) => {}
+    }
     let (jobs, agent) = (jobs_of(state), agent.clone());
     tokio::spawn(async move {
         jobs.hand_over(&agent, &job, &ask, &main).await;
     });
     tool_text(HANDED_OVER, false)
+}
+
+/// A task's request text in the main conversation's note, at most so long.
+const ASK_TEXT_MAX: usize = 300;
+/// Requests one task may hand over.
+const HANDOVERS_PER_TASK: usize = 3;
+
+/// Some(true): this task already handed this request over (same kind and site); Some(false): a new one, now counted;
+/// None: the task handed `HANDOVERS_PER_TASK` over already.
+fn handed_over_before(job: &str, ask: &Ask) -> Option<bool> {
+    static SENT: std::sync::LazyLock<std::sync::Mutex<HashMap<String, Vec<String>>>> = std::sync::LazyLock::new(Default::default);
+    let key = format!("{:?} {}", ask.kind, ask.site.trim().to_lowercase());
+    let mut sent = SENT.lock().unwrap_or_else(|e| e.into_inner());
+    if sent.len() > 1000 {
+        sent.clear();
+    }
+    let mine = sent.entry(job.to_string()).or_default();
+    if mine.contains(&key) {
+        return Some(true);
+    }
+    if mine.len() >= HANDOVERS_PER_TASK {
+        return None;
+    }
+    mine.push(key);
+    Some(false)
 }
 
 /// The call of `tool` comes from a background task's run, or can't be told from one while such a run goes on.
@@ -1977,10 +2023,8 @@ pub fn from_background(jobs: &Jobs, agent: &AgentConfig, tool: &str) -> bool {
     if crate::runs::CALL_SESSION.try_with(|s| s.is_some()).unwrap_or(false) {
         return hub.turn_of(&agent.name, tool).is_some_and(|turn| turn.background);
     }
-    match hub.turn_of(&agent.name, tool) {
-        Some(turn) => turn.background,
-        None => hub.background_running(&agent.name),
-    }
+    // without it (an older or own Hermes): a task's only when it can be told; never the person's call refused by a guess
+    hub.turn_of(&agent.name, tool).is_some_and(|turn| turn.background)
 }
 
 /// A task's budget as the agent may tell its person: in euros on a place of the offer (« 0.20 € »), in tokens only on
@@ -2212,6 +2256,51 @@ pub fn router() -> Router<AppState> {
         .route("/jobs/{job_id}/resume", post(resume_route))
         .route("/jobs/{job_id}/seen", post(seen_route))
         .route("/jobs/{job_id}", delete(forget_route))
+}
+
+/// A task's own browser set up by `launch`, removed again unless the task started (`disarm`).
+#[derive(Default)]
+struct TaskBrowserUnused(Option<(crate::config::Config, String, String)>);
+
+impl TaskBrowserUnused {
+    fn arm(&mut self, config: &crate::config::Config, agent: &str, job: &str) {
+        self.0 = Some((config.clone(), agent.to_string(), job.to_string()));
+    }
+    fn disarm(&mut self) {
+        self.0 = None;
+    }
+}
+
+impl Drop for TaskBrowserUnused {
+    fn drop(&mut self) {
+        if let Some((config, agent, job)) = self.0.take() {
+            if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+                runtime.spawn(async move { crate::browsers::remove_task(&config, &agent, &job).await });
+            }
+        }
+    }
+}
+
+/// At the bridge's start: the task browsers left by a task that is gone, ended, or of an agent no longer here (a
+/// bridge stopped mid-way) removed. A paused task keeps its own.
+pub async fn sweep_task_browsers(config: &crate::config::Config) {
+    let Ok(entries) = std::fs::read_dir(&config.browser.root) else { return };
+    let mut stale = Vec::new();
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let (Some(agent), Some((_, job))) = (crate::browsers::task_browser_agent(&name), name.split_once("--")) else {
+            continue;
+        };
+        let alive = config.agent(Some(agent)).is_some()
+            && load(config, job).is_some_and(|j| !["done", "failed"].contains(&state_of(&j).as_str()));
+        if !alive {
+            stale.push((agent.to_string(), job.to_string()));
+        }
+    }
+    for (agent, job) in stale {
+        tracing::info!(agent = %agent, job = %job, "a stale task browser removed");
+        crate::browsers::remove_task(config, &agent, &job).await;
+    }
 }
 
 #[cfg(test)]

@@ -2386,7 +2386,11 @@ impl Proxy {
             Some(path) => PathBuf::from(path),
             None => busy.parent().map(|p| p.join("rescue")).unwrap_or_else(|| PathBuf::from("rescue")),
         };
-        let send_sites_path = busy.parent().map(|p| p.join(SEND_SITES_FILE)).unwrap_or_else(|| PathBuf::from(SEND_SITES_FILE));
+        // a task's own browser reads its agent's (browsers.rs `setup_task`): the person's « Oui » is written there
+        let send_sites_path = match config.get("send_sites").map(crate::py::py_str).filter(|p| !p.is_empty()) {
+            Some(path) => PathBuf::from(path),
+            None => busy.parent().map(|p| p.join(SEND_SITES_FILE)).unwrap_or_else(|| PathBuf::from(SEND_SITES_FILE)),
+        };
         let sessions_path = busy.parent().map(|p| p.join(crate::browsers::SESSIONS_FILE)).unwrap_or_default();
         let cache_path = PathBuf::from(config.get("cache").map(crate::py::py_str).unwrap_or_default());
         let mut cache = read_cache(&cache_path);

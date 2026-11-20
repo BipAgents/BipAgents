@@ -467,7 +467,36 @@ pub fn task_gate(config: &Config, agent: &str, room: &Room, now: f64) -> Option<
     if room.memory.pressed() || held(config, now).is_some_and(|l| l.agent != agent) {
         return Some("busy");
     }
+    if !browser_fits(config, agent, &room.memory) {
+        return Some("busy");
+    }
     None
+}
+
+/// A task of `agent` with a browser of its own (browsers.rs `setup_task`, 0.5–0.8 GB measured 20/11) fits under the
+/// place's `memory.high`: `[jobs] browser_free_mb` for it and for each task browser set up but not started yet
+/// (no unit: it starts on its first call), on top of the programs' memory (`anon`, else all of it). Otherwise it
+/// waits for room, never refused (Alex 20/11).
+fn browser_fits(config: &Config, agent: &str, memory: &Memory) -> bool {
+    let need = config.jobs.browser_free_mb * 1024 * 1024;
+    if need == 0 || !crate::browsers::gives_task_browsers(config, agent) {
+        return true;
+    }
+    let (Some(high), Some(used)) = (memory.high, memory.anon.or(memory.current)) else { return true };
+    let host = crate::browsers::Host::real(config);
+    let pending = std::fs::read_dir(&config.browser.root)
+        .map(|entries| {
+            entries
+                .flatten()
+                .filter(|e| {
+                    let name = e.file_name().to_string_lossy().into_owned();
+                    crate::browsers::task_browser_agent(&name).is_some()
+                        && !host.unit_path(&name).exists()
+                })
+                .count() as u64
+        })
+        .unwrap_or(0);
+    high.saturating_sub(used) >= need * (1 + pending)
 }
 
 /// `task_gate` measured now, on the offer only (a self-install's tasks always start).
