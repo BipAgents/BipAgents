@@ -25,6 +25,7 @@
 //! soon as this module has read it; nothing of it is logged.
 
 use std::collections::HashMap;
+use std::hash::BuildHasher;
 
 use regex::Regex;
 use serde_json::Value;
@@ -84,10 +85,44 @@ static TOTAL_WORDS: LazyLock<Regex> = LazyLock::new(|| {
 static NUMBER_START: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\d[\d.,'\x{2019}\x{a0}\x{202f} ]*").expect("number start pattern"));
 
-/// A piece without the digit runs a card could be (12 or more digits, a line of 4-digit groups).
-fn drop_card(text: &str) -> String {
-    let text = crate::page_total::CARD_LIKE.replace_all(text, " ");
-    crate::page_total::CARD_GROUPS.replace_all(&text, "").trim().to_string()
+/// The card being typed, as the reader may recognise it on the page (a preview of the number, « •••• 4242 »): a keyed
+/// hash of its digits (the number itself is never kept) and its last 4 digits. Only it is ever taken out of the page's
+/// text (Relecture 8: no other digit is removed, whatever it looks like).
+#[derive(Debug, Clone)]
+pub struct CardSeen {
+    pub mark: u64,
+    pub last4: String,
+}
+
+static CARD_KEY: LazyLock<std::collections::hash_map::RandomState> = LazyLock::new(Default::default);
+
+/// The card's keyed mark from its number (`CardSeen::mark`), computed when the card is typed.
+pub fn card_mark(number: &str) -> u64 {
+    let digits: String = number.chars().filter(char::is_ascii_digit).collect();
+    CARD_KEY.hash_one(&digits)
+}
+
+/// A digit run with separators that may be a card number (12 to 19 digits).
+static DIGIT_RUN: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\d(?:[ \-]?\d){11,18}").expect("digit run pattern"));
+/// A masked preview's last 4 digits (« •••• 4242 », « **** 4242 », « XXXX-4242 »).
+static MASKED_LAST4: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"[•*·xX]{2,}[ \-]?(\d{4})\b").expect("masked pattern"));
+
+/// A visual line without the card being typed: the run of its digits (whole, or its 4-digit groups in sequence on the
+/// line), and its masked last-4 preview. Nothing else is touched.
+fn drop_card(line: &str, card: Option<&CardSeen>) -> String {
+    let Some(card) = card else { return line.to_string() };
+    let line = DIGIT_RUN.replace_all(line, |c: &regex::Captures| {
+        let digits: String = c[0].chars().filter(char::is_ascii_digit).collect();
+        if CARD_KEY.hash_one(&digits) == card.mark {
+            " ".to_string()
+        } else {
+            c[0].to_string()
+        }
+    });
+    MASKED_LAST4
+        .replace_all(&line, |c: &regex::Captures| if c[1] == card.last4 { " ".to_string() } else { c[0].to_string() })
+        .into_owned()
 }
 
 static PRICE: LazyLock<Regex> = LazyLock::new(|| {
@@ -170,13 +205,13 @@ impl<'a> Doc<'a> {
 }
 
 /// The documents of a `DOMSnapshot.captureSnapshot` answer, read (its `strings` and `documents`).
-pub fn read_snapshot(snapshot: &Value) -> Vec<DocText> {
+pub fn read_snapshot(snapshot: &Value, card: Option<&CardSeen>) -> Vec<DocText> {
     let strings = snapshot.get("strings").and_then(Value::as_array).map(Vec::as_slice).unwrap_or(&[]);
     let docs = snapshot.get("documents").and_then(Value::as_array).cloned().unwrap_or_default();
-    docs.iter().map(|doc| read_document(strings, doc)).collect()
+    docs.iter().map(|doc| read_document(strings, doc, card)).collect()
 }
 
-fn read_document(strings: &[Value], doc: &Value) -> DocText {
+fn read_document(strings: &[Value], doc: &Value, card: Option<&CardSeen>) -> DocText {
     let nodes = &doc["nodes"];
     let parent = ints(nodes.get("parentIndex"));
     let names = ints(nodes.get("nodeName"));
@@ -245,7 +280,8 @@ fn read_document(strings: &[Value], doc: &Value) -> DocText {
             let clipping = a != n
                 && name != "BODY"
                 && name != "HTML"
-                && ["hidden", "clip", "scroll", "auto"].iter().any(|o| overflow.contains(o));
+                // a scrollable box (auto, scroll) is reachable: only hidden / clip clip (Relecture 8)
+                && ["hidden", "clip"].iter().any(|o| overflow.contains(o));
             let outside = bw < 1.0 || bh < 1.0 || x + w <= bx || x >= bx + bw || y + h <= by || y >= by + bh;
             if clipping && !escaped && !(absolute && position == "static") && outside {
                 return true;
@@ -258,6 +294,18 @@ fn read_document(strings: &[Value], doc: &Value) -> DocText {
             }
         }
         opacity < 0.1
+    };
+    // an ancestor (below the page itself) that scrolls: what it holds is reachable, wherever it is laid out
+    let in_scroller = |n: usize| -> bool {
+        d.ancestors(n).any(|a| {
+            let name = d.node_name[a].as_str();
+            name != "BODY"
+                && name != "HTML"
+                && d.layout_of.get(&a).is_some_and(|&li| {
+                    let overflow = format!("{} {}", d.style(li, OVERFLOW_X), d.style(li, OVERFLOW_Y));
+                    overflow.contains("auto") || overflow.contains("scroll")
+                })
+        })
     };
     let struck = |n: usize| -> bool {
         for (level, a) in std::iter::once(n).chain(d.ancestors(n)).enumerate() {
@@ -289,6 +337,9 @@ fn read_document(strings: &[Value], doc: &Value) -> DocText {
             if out.len() > limit {
                 break;
             }
+            if out_of_reach[n] {
+                continue; // never a form control's own text (a card field's typed number)
+            }
             if d.node_name[n] == "#TEXT" {
                 out.push_str(d.string(*values.get(n).unwrap_or(&-1)));
                 out.push(' ');
@@ -304,8 +355,10 @@ fn read_document(strings: &[Value], doc: &Value) -> DocText {
                 break;
             }
             let decided = *boxes.entry(a).or_insert_with(|| {
-                let words = subtree_text(a, 3000);
+                let mut words = zeroize::Zeroizing::new(subtree_text(a, 3000));
                 if words.len() > 3000 {
+                    use zeroize::Zeroize;
+                    words.zeroize();
                     return None;
                 }
                 let mut stack = vec![a];
@@ -316,11 +369,11 @@ fn read_document(strings: &[Value], doc: &Value) -> DocText {
                     let input_button = name == "INPUT" && matches!(d.attr(m, "type"), Some("button" | "submit"));
                     if name == "BUTTON" || name == "A" || role || input_button {
                         // a button input's own words only (never another input's value)
-                        let own = if input_button {
+                        let own = zeroize::Zeroizing::new(if input_button {
                             d.attr(m, "value").unwrap_or_default().to_string()
                         } else {
                             subtree_text(m, 200)
-                        };
+                        });
                         if ADD.is_match(own.trim()) {
                             button = true;
                             break;
@@ -358,8 +411,9 @@ fn read_document(strings: &[Value], doc: &Value) -> DocText {
         let Some(slice) = full.get(start..(start + length).min(full.len())) else { continue };
         let mut raw = String::from_utf16_lossy(slice);
         let (lead, trail) = (raw.starts_with(char::is_whitespace), raw.ends_with(char::is_whitespace));
-        // a card shown back (a preview of the number typed) dropped as soon as it is read, before any copy
-        let text = drop_card(&raw.split_whitespace().collect::<Vec<_>>().join(" "));
+        // the card being typed, when the piece holds it whole (a preview in one box); its groups in several boxes are
+        // taken out of the joined line (`lines`)
+        let text = drop_card(&raw.split_whitespace().collect::<Vec<_>>().join(" "), card);
         {
             use zeroize::Zeroize;
             raw.zeroize();
@@ -378,7 +432,13 @@ fn read_document(strings: &[Value], doc: &Value) -> DocText {
         let visibility = d.style(style_li, VISIBILITY);
         let font: f64 = d.style(style_li, FONT_SIZE).trim_end_matches("px").parse().unwrap_or(16.0);
         let alpha = opacities.get(li).and_then(Value::as_f64).unwrap_or_else(|| color_alpha(d.style(style_li, COLOR)));
-        let in_page = w >= 1.0 && h >= 1.0 && x + w > 0.0 && y + h > 0.0 && x < d.width && y < d.height;
+        // beyond the document's size, only inside a scrollable box (an app shell's « height:100vh; overflow:auto »):
+        // reachable by scrolling it (Relecture 8)
+        let in_page = w >= 1.0
+            && h >= 1.0
+            && x + w > 0.0
+            && y + h > 0.0
+            && ((x < d.width && y < d.height) || in_scroller(owner));
         let shown = in_page
             && visibility != "hidden"
             && visibility != "collapse"
@@ -417,11 +477,11 @@ fn read_document(strings: &[Value], doc: &Value) -> DocText {
         {
             continue;
         }
-        let value = d.string(*vi).split_whitespace().collect::<Vec<_>>().join(" ");
+        let value = zeroize::Zeroizing::new(drop_card(&d.string(*vi).split_whitespace().collect::<Vec<_>>().join(" "), card));
         let Some(&li) = d.layout_of.get(&n) else { continue };
         let Some((x, y, w, h)) = d.bounds("layout", li) else { continue };
         if value.chars().any(|c| c.is_ascii_digit()) && w >= 1.0 && h >= 1.0 {
-            fields.push(Piece { x, y, w, h, text: format!("[champ] {value}"), shown: false, closed: false, lead: true, trail: true });
+            fields.push(Piece { x, y, w, h, text: format!("[champ] {}", value.as_str()), shown: false, closed: false, lead: true, trail: true });
         }
     }
     // a folded <details> (a mobile checkout's « Récapitulatif »): its text has no layout, but it is the page's (the
@@ -451,9 +511,15 @@ fn read_document(strings: &[Value], doc: &Value) -> DocText {
             });
         }
     }
-    let all = lines(pieces.iter().chain(fields.iter()).chain(folded.iter()));
-    let shown = lines(pieces.iter().filter(|p| p.shown));
-    let closed = lines(pieces.iter().filter(|p| p.closed));
+    let wiped = |mut line: String| {
+        let kept = drop_card(&line, card);
+        use zeroize::Zeroize;
+        line.zeroize();
+        kept
+    };
+    let all = wiped(lines(pieces.iter().chain(fields.iter()).chain(folded.iter())));
+    let shown = wiped(lines(pieces.iter().filter(|p| p.shown)));
+    let closed = wiped(lines(pieces.iter().filter(|p| p.closed)));
     {
         use zeroize::Zeroize;
         for p in pieces.iter_mut().chain(fields.iter_mut()).chain(folded.iter_mut()) {
@@ -718,7 +784,7 @@ mod tests {
     }
 
     fn read(b: &Build) -> DocText {
-        read_snapshot(&b.snapshot()).remove(0)
+        read_snapshot(&b.snapshot(), None).remove(0)
     }
 
     #[test]
@@ -870,6 +936,81 @@ mod tests {
             let got = read(&b);
             assert!(got.truncated || got.all.contains("32,87"), "cut silently ({} chars of all)", got.all.len());
         }
+    }
+
+    /// Relecture 8 (20/11, on bbc703ce4): each asserts the SAFE outcome; they fail on bbc703ce4.
+    mod review_8 {
+        use super::*;
+        use crate::page_total::{page_total_of, PageText, PageTotal};
+
+        fn total(got: &DocText, cents: i64) -> PageTotal {
+            let text = PageText { shown: got.shown.clone(), all: got.all.clone(), truncated: got.truncated, ..Default::default() };
+            page_total_of(&[text], cents, "EUR")
+        }
+
+        #[test]
+        fn x1_a_four_digit_total_in_its_own_text_box_is_dropped_as_a_card_group() {
+            // « 1249<sup>€00</sup> » (French marketplaces' style) for a total of 1 249 €: drop_card removes the piece
+            // « 1249 » (CARD_GROUPS: a line of 4-digit groups), only « €00 » is left (0,00 €) → « approved » on the
+            // basket line of 1 199,00 €
+            let mut b = Build::new();
+            b.text(1, "P", "Montant de votre panier : 1 199,00 €", (8.0, 10.0, 280.0, 19.0), &[]);
+            b.text(1, "P", "Frais de livraison 50,00 €", (8.0, 40.0, 200.0, 19.0), &[]);
+            b.text(1, "SPAN", "Total ", (8.0, 84.0, 44.0, 19.0), &[]);
+            b.text(1, "B", "1249", (52.0, 76.0, 62.0, 30.0), &[]);
+            b.text(1, "SUP", "€00", (114.0, 76.0, 24.0, 17.0), &[]);
+            let got = read(&b);
+            assert_ne!(total(&got, 119_900), PageTotal::Approved, "{}", got.shown);
+        }
+
+        #[test]
+        fn x2_a_four_digit_total_without_cents_beside_its_currency_piece_is_not_read() {
+            // WooCommerce with no decimals and no thousands mark: « <bdi>1249&nbsp;<span>€</span></bdi> » → the text box
+            // « 1249 » is dropped, « Total € » holds no amount
+            let mut b = Build::new();
+            b.text(1, "P", "Montant de votre panier : 1 199 €", (8.0, 10.0, 280.0, 19.0), &[]);
+            b.text(1, "P", "Frais de livraison 50 €", (8.0, 40.0, 200.0, 19.0), &[]);
+            b.text(1, "SPAN", "Total ", (8.0, 70.0, 44.0, 19.0), &[]);
+            b.text(1, "BDI", "1249\u{a0}", (52.0, 70.0, 40.0, 19.0), &[]);
+            b.text(1, "SPAN", "€", (92.0, 70.0, 10.0, 19.0), &[]);
+            let got = read(&b);
+            assert_ne!(total(&got, 119_900), PageTotal::Approved, "{}", got.shown);
+        }
+    }
+
+    #[test]
+    fn what_a_scrollable_box_holds_below_the_page_is_shown() {
+        // an app shell (« height:100vh; overflow:auto »): the document is the screen's size (2000 here), the total
+        // laid out further down, in the box: reachable by scrolling it
+        let mut b = Build::new();
+        let shell = b.node(1, "DIV", &[], Some((&[(OVERFLOW_Y, "auto")], (0.0, 0.0, 800.0, 2000.0))));
+        b.text(shell, "SPAN", "Total à payer 32,87 €", (8.0, 2300.0, 200.0, 19.0), &[]);
+        // beyond the page and in no scrollable box: still laid out only
+        let plain = b.node(1, "DIV", &[], Some((&[], (0.0, 0.0, 800.0, 2000.0))));
+        b.text(plain, "SPAN", "Promo 99,00 €", (8.0, 2400.0, 200.0, 19.0), &[]);
+        let got = read(&b);
+        assert_eq!(got.shown, "Total à payer 32,87 €");
+        assert!(got.all.contains("Promo 99,00 €"), "{}", got.all);
+    }
+
+    #[test]
+    fn only_the_card_being_typed_is_taken_out() {
+        let card = CardSeen { mark: card_mark("4242 4242 4242 4242"), last4: "4242".into() };
+        let mut b = Build::new();
+        b.text(1, "P", "Total à payer 27,97 €", (8.0, 10.0, 200.0, 19.0), &[]);
+        // its preview group by group in a flex row, a masked preview, another long number, a 4-digit total
+        for (i, g) in ["4242", "4242", "4242", "4242"].iter().enumerate() {
+            b.text(1, "SPAN", g, (8.0 + 50.0 * i as f64, 40.0, 40.0, 19.0), &[]);
+        }
+        b.text(1, "P", "Carte •••• 4242", (8.0, 70.0, 150.0, 19.0), &[]);
+        b.text(1, "P", "Commande 4000123456789010", (8.0, 100.0, 250.0, 19.0), &[]);
+        b.text(1, "P", "Total 1249 €", (8.0, 130.0, 150.0, 19.0), &[]);
+        let got = read_snapshot(&b.snapshot(), Some(&card)).remove(0);
+        assert!(!got.all.contains("4242"), "{}", got.all);
+        assert!(got.all.contains("4000123456789010") && got.all.contains("Total 1249 €"), "{}", got.all);
+        // before the card is typed nothing is taken out
+        let before = read_snapshot(&b.snapshot(), None).remove(0);
+        assert!(before.all.contains("4242 4242 4242 4242"), "{}", before.all);
     }
 
     #[test]

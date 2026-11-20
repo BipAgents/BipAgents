@@ -132,11 +132,6 @@ static NUMBER: LazyLock<Regex> =
 static BARE_MONEY: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\d[\d .,']*[.,]\d{2}$").expect("money pattern"));
 /// The codes of an amount written without a currency mark.
 pub const BARE: &[&str] = &["?"];
-/// A line holding only groups of four digits (« 4242 », « 4242 4242 »): a card's groups shown back.
-pub(crate) static CARD_GROUPS: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?m)^[ \t]*\d{4}(?:[ -]\d{4}){0,4}[ \t]*$").expect("card groups pattern"));
-/// A digit run that may be a card number (12 to 19 digits, spaces or dashes between): never read.
-pub(crate) static CARD_LIKE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\d(?:[ -]?\d){11,18}").expect("card pattern"));
 /// « 27€97 » (the cents right after the mark; the rendered boxes « 27 » « €97 » touch so).
 static EURO_CENTS: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(\d) ?€(\d{2})([^\d.,]|$)").expect("euro cents pattern"));
@@ -152,7 +147,8 @@ static PER_BEFORE: LazyLock<Regex> = LazyLock::new(|| {
 });
 /// An instalment right after it (« 9,32 € / mois », « 9,32 € par mois », « $9.32/mo »).
 static PER_AFTER: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)^\s*(?:€|eur|euros?|\$|£|usd|gbp|chf)?\s*(?:/|par|per|pro|al|por|a|each|chacun)\s*(?:mois|month|mo\b|monat|mes|maand|semaine|week)")
+    // whole words, on the amount's own line right after it (Relecture 8, p1: « €⏎Promo code » is no « per month »)
+    Regex::new(r"(?i)^[ \t]*(?:€|eur|euros?|\$|£|usd|gbp|chf)?[ \t]*(?:(?:/[ \t]*|\b(?:par|per|pro|al|por|a|each|chacun)[ \t]+)(?:mois|month|mo|monat|mes|maand|semaine|week)\b|(?:mensuel(?:le)?s?|monthly|monatlich|mensual(?:es)?|maandelijks)\b)")
         .expect("instalment pattern")
 });
 /// The words right before an amount that make it never charged: a threshold, a limit, an old price (« dès 49 € »,
@@ -160,7 +156,7 @@ static PER_AFTER: LazyLock<Regex> = LazyLock::new(|| {
 /// « Amount to be taken from your card: €32.87 » or « livraison offerte : 32,87 € » are no mentions).
 static MENTION: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
-        r"(?i)(?:\[barré\]|\[suggestion\]|\bd[èe]s|[àa] partir d[e']|\bfrom|\bab|\bdesde|\bvanaf|au lieu d[e']|instead of|\bstatt|en lugar de|in plaats van|jusqu'?\s?[àa]|up to|bis zu|\bhasta|\bmax|\bmaximum|\bmaximal|plafond(?: de)?|\blimite?(?: de)?|\bavant|\bwas|\bantes)\s*[:\-–]?\s*$",
+        r"(?i)(?:\[barré\]|\[suggestion\]|\bd[èe]s|[àa] partir d[e']|\bfrom|\bab|\bdesde|\bvanaf|au lieu d[e']|instead of|\bstatt|en lugar de|in plaats van|jusqu'?\s?[àa]|up to|bis zu|\bhasta|\bmax|\bmaximum|\bmaximal|plafond(?: de)?|\blimite?(?: de)?|\bavant|\bwas|\bantes|sup[ée]rieure? [àa]|\bover|\babove|more than|plus de|bestellwert(?: von)?|m[áa]s de|disponible|available|verf[üu]gbar|guthaben|saldo|beschikbaar)\s*[:\-–]?\s*(?:€|\$|£|eur|usd|gbp|chf)?\s*$",
     )
     .expect("mention pattern")
 });
@@ -175,22 +171,48 @@ static PART: LazyLock<Regex> = LazyLock::new(|| {
 /// total (excl. VAT) », « netto »), a subtotal (Relecture 3, s1).
 static PART_ALWAYS: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
-        r"(?i)sous[- ]?total|sub[- ]?total|zwischensumme|subtotaal|\bht\b|hors tax|\bexcl|exkl|\bnetto|\bnet\b|before tax|pre-tax|sans tva|ohne mwst|sin iva|zonder btw|excluding",
+        r"(?i)sous[- ]?total|sub[- ]?total|zwischensumme|subtotaal|\bht\b|hors tax|\bexcl|exkl|\bnetto|before tax|pre-tax|sans tva|ohne mwst|sin iva|zonder btw|excluding",
     )
     .expect("part pattern")
 });
 /// A total to pay's label.
 static TO_PAY: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
-        r"(?i)[àa] payer|to pay|\bdue\b|zu zahlen|a pagar|te betalen|[àa] r[ée]gler|grand total|order total|total ttc|montant total|gesamtbetrag|gesamtsumme|endbetrag|importe total|total amount|totaalbedrag",
+        r"(?i)net [àa] payer|[àa] payer|to pay|\bdue\b|zu zahlen|a pagar|te betalen|[àa] r[ée]gler|grand total|order total|total ttc|montant total|gesamtbetrag|gesamtsumme|endbetrag|importe total|total amount|totaalbedrag",
     )
     .expect("to pay pattern")
+});
+/// What a total includes (« inkl. MwSt. », « incl. VAT », « TVA incluse », « IVA incluido », « incl. btw »,
+/// « livraison comprise »): left out of a label, so that it never makes the total a part.
+static INCLUDED: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"(?i)\b(?:incl\.?|inkl\.?|including|inclusief|y?\s?compris)\s+(?:la\s+|de\s+)?(?:tva|vat|mwst\.?|ust\.?|iva|btw|tax(?:es)?|livraison|shipping|versand|frais de port)\b\.?|\b(?:tva|vat|mwst|iva|btw|taxes?|livraison|frais de port)\s+(?:incluse?s?|comprise?s?|incluid[oa]s?|inbegrepen|included)\b",
+    )
+    .expect("included pattern")
 });
 /// A pay button's word right before its amount (« Payer 12,50 € », « Pay $34.90 »): what will be charged.
 static PAY_WORD: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?i)(?:^|\s)(?:payer|pay|bezahlen|pagar|betalen|r[ée]gler)\s*(?:€|\$|£|eur|usd|gbp|chf)?\s*[:\-–]?\s*$")
         .expect("pay word pattern")
 });
+/// A hosted payment page's heading right above its amount (Stripe Checkout's « Pay Pharmacie Exemple » then
+/// « €32.87 »): the amount to pay. Never « Pay later », « Pay in 4 », « Pay with card », « Payer en 3 fois ».
+static PAY_HEADING: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)^(?:pay|payer|bezahlen an|pagar a|betalen aan)\s+(\S+)").expect("pay heading pattern")
+});
+/// The words after « Pay » that make it no shop's name.
+const NOT_A_SHOP: &[&str] = &[
+    "later", "in", "with", "by", "over", "after", "now", "monthly", "en", "par", "avec", "plus", "après", "apres",
+    "mit", "später", "spater", "con", "más", "mas", "met", "the", "le", "la", "les", "your", "votre",
+];
+
+/// Whether `line` is a hosted page's « Pay <shop> » heading.
+fn pay_heading(line: &str) -> bool {
+    PAY_HEADING
+        .captures(line.trim())
+        .and_then(|c| c.get(1))
+        .is_some_and(|w| !NOT_A_SHOP.contains(&w.as_str().to_lowercase().as_str()))
+}
 /// Cents on the line under their euros, with no decimal mark (« 32⏎05 € »): joined, read at their largest.
 static CENTS_NEXT_LINE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(\d)\n(\d{2})(\s*(?:€|eur))").expect("cents next line pattern"));
@@ -225,6 +247,18 @@ fn mark_only(piece: &str) -> bool {
 }
 
 /// The words of a line after its last digit (and the marks right after it): a label's own words.
+/// The words of a line after its last AMOUNT (a number next to a currency mark): a label's own words, numbers that
+/// are no amount kept (« Total pour 2 passagers : », « Total à payer le 20/11 : », Relecture 8).
+fn after_last_amount(line: &str) -> &str {
+    let mut cut = 0;
+    for m in NUMBER.find_iter(line) {
+        if mark_near(&line[..m.start()], "").is_some() || mark_near("", &line[m.end()..]).is_some() {
+            cut = m.end();
+        }
+    }
+    &line[cut..]
+}
+
 fn after_last_digit(line: &str) -> &str {
     match line.rfind(|c: char| c.is_ascii_digit()) {
         Some(at) => &line[at + 1..],
@@ -233,43 +267,48 @@ fn after_last_digit(line: &str) -> &str {
 }
 
 /// The class of an amount whose line, up to it, is `line_before`, the lines above being `above` (latest last).
-fn class_of(line_before: &str, above: &[&str]) -> Class {
+fn class_of(line_before: &str, above: &[&str], below: Option<&str>) -> Class {
     // Exemptions (part, mention, struck, suggestion) come only from the amount's own words, on its own line, right
     // before it (Relecture 7, w1: never from the line above); the line above may only name a total.
     // inside brackets: « (dont 4,66 € de TVA) »
     if line_before.matches('(').count() > line_before.matches(')').count() {
         return Class::Part;
     }
-    let own = after_last_digit(line_before);
+    let own = after_last_amount(line_before);
     // page_snapshot.rs's marks, put right before each number of the piece that carries them
     let marked = own.trim_end();
     if marked.ends_with("[barré]") || marked.ends_with("[suggestion]") {
         return Class::Mention;
     }
     // before tax, a subtotal: a part, whatever else its own label says (its brackets included: « (excl. VAT) »)
-    if !mark_only(own) && PART_ALWAYS.is_match(last_chars(own.trim(), LABEL_SPAN)) && !MENTION.is_match(own.trim()) {
+    let own_words = INCLUDED.replace_all(own, " ");
+    if !mark_only(own) && PART_ALWAYS.is_match(last_chars(own_words.trim(), LABEL_SPAN)) && !MENTION.is_match(own.trim()) {
         return Class::Part;
     }
     let mut cleaned = line_before.to_string();
     while BRACKETS.is_match(&cleaned) {
         cleaned = BRACKETS.replace_all(&cleaned, " ").into_owned();
     }
-    let label = after_last_digit(&cleaned).to_string();
+    let label = after_last_amount(&cleaned).to_string();
     if mark_only(&label) {
         // the line above, when it holds no amount of its own (« Total à payer: » then « EUR 27.97 »): a total's name
-        // only, never an exemption
-        let above = above
-            .iter()
-            .rev()
-            .map(|l| l.trim())
-            .find(|l| !l.is_empty() && !mark_only(l))
-            .filter(|l| !l.chars().any(|c| c.is_ascii_digit()))
-            .unwrap_or("");
-        let tail = last_chars(above, LABEL_SPAN);
+        // only, never an exemption; with no line of words above, the line right below (« 32,87 € » then « Total TTC »)
+        let above = above.iter().rev().map(|l| l.trim()).find(|l| !l.is_empty() && !mark_only(l));
+        let named = match above {
+            Some(l) if !l.chars().any(|c| c.is_ascii_digit()) => l.to_string(),
+            Some(_) => String::new(),
+            None => below
+                .map(str::trim)
+                .filter(|l| !l.is_empty() && !l.chars().any(|c| c.is_ascii_digit()))
+                .unwrap_or("")
+                .to_string(),
+        };
+        let named = INCLUDED.replace_all(&named, " ");
+        let tail = last_chars(named.trim(), LABEL_SPAN);
         if tail.contains('[') || PART_ALWAYS.is_match(tail) || PART.is_match(tail) {
             return Class::None;
         }
-        return if TO_PAY.is_match(tail) || PAY_WORD.is_match(tail) {
+        return if TO_PAY.is_match(tail) || PAY_WORD.is_match(tail) || pay_heading(&named) {
             Class::ToPay
         } else if TOTAL.is_match(tail) {
             Class::Total
@@ -277,6 +316,8 @@ fn class_of(line_before: &str, above: &[&str]) -> Class {
             Class::None
         };
     }
+    // « inkl. MwSt. », « TVA incluse », « livraison comprise »: what a total includes, never a part (Relecture 8)
+    let label = INCLUDED.replace_all(&label, " ");
     let tail = last_chars(label.trim(), LABEL_SPAN);
     // a total to pay's words win over a part's (« Total TTC, livraison offerte : »); a mention only when its words end
     // the label, right before the amount
@@ -301,12 +342,31 @@ fn normalised(text: &str) -> String {
         .chars()
         .map(|c| if matches!(c, '\u{a0}' | '\u{202f}' | '\u{2009}' | '\u{2007}' | '\u{200a}') { ' ' } else { c })
         .collect();
-    let text = CARD_LIKE.replace_all(&text, " ");
-    // a line of digit groups alone (a card shown back group by group, Relecture 3, c3): never read
-    let text = CARD_GROUPS.replace_all(&text, "");
+    // (no digit is ever removed here, Relecture 8: the card being typed is taken out by page_snapshot.rs, and only it)
     let text = EURO_CENTS.replace_all(&text, "$1,$2 €$3");
     let text = LOOSE_CENTS.replace_all(&text, "$1$2");
     CENTS_NEXT_LINE.replace_all(&text, "$1 $2$3").into_owned()
+}
+
+/// A currency mark separated from its number by `gap`: on the same line, or alone on its own line (`text`: the text up
+/// to the mark when it is before, from the mark when it is after).
+fn mark_line_ok(text: &str, gap: &str, before: bool) -> bool {
+    if !gap.contains('\n') {
+        return true;
+    }
+    let line = if before { text.rsplit('\n').next().unwrap_or("") } else { text.split('\n').next().unwrap_or("") };
+    mark_only(line)
+}
+
+/// The line after the one `at` is on, when the rest of that line holds no words (only marks).
+fn next_line(text: &str, at: usize) -> Option<&str> {
+    let rest = &text[at..];
+    let end = rest.find('\n')?;
+    if !mark_only(&rest[..end]) {
+        return None;
+    }
+    let after = &rest[end + 1..];
+    Some(after.split('\n').next().unwrap_or(""))
 }
 
 /// Every amount next to a currency mark in a page's text, in order.
@@ -316,8 +376,13 @@ pub fn amounts(text: &str) -> Vec<Amount> {
     for found in NUMBER.find_iter(&text) {
         let (start, end) = (found.start(), found.end());
         let (before, after) = (&text[..start], &text[end..]);
-        let mark_before = mark_near(before, "");
-        let mark_after = mark_near("", after);
+        // a mark on another line counts only when it stands alone on its line (« Total » / « € » / « 27,97 »): a number
+        // on the line under « … 27,97 € » (a reference, a year, a card group) is no amount of that euro sign
+        let mark_before = mark_near(before, "").filter(|_| mark_line_ok(before.trim_end(), &before[before.trim_end().len()..], true));
+        let mark_after = mark_near("", after).filter(|_| {
+            let gap = &after[..after.len() - after.trim_start().len()];
+            mark_line_ok(after.trim_start(), gap, false)
+        });
         let Some(codes) = mark_after.or(mark_before) else {
             // « Total à payer : 32,87 », the currency elsewhere (a column's head): a total's number all the same
             if BARE_MONEY.is_match(found.as_str()) {
@@ -325,7 +390,7 @@ pub fn amounts(text: &str) -> Vec<Amount> {
                     let line_start = before.rfind('\n').map_or(0, |i| i + 1);
                     let above: Vec<&str> =
                         text[..line_start].lines().rev().take(3).collect::<Vec<_>>().into_iter().rev().collect();
-                    let class = class_of(&text[line_start..start], &above);
+                    let class = class_of(&text[line_start..start], &above, next_line(&text, end));
                     if class >= Class::Total {
                         out.push(Amount { cents, codes: BARE, class, field: false });
                     }
@@ -338,7 +403,19 @@ pub fn amounts(text: &str) -> Vec<Amount> {
         // are 3 205 € and 32,87 €, never 5 € or 7 €): only blocking can come of over-reading. The one exception, a
         // quantity before a whole price (« Qté 2 27,97 € »), keeps the price next to the mark when it reads alone with
         // its cents.
+        // a quantity right before a whole price (« Crème × 1 249,00 € », « 2 x 27,97 € »): the price
+        let quantity = {
+            let b = before.trim_end();
+            b.ends_with('×') || b.ends_with(" x") || b.ends_with("\nx") || b == "x"
+        };
         let cents = match amount_of(whole) {
+            Some(cents) if !(quantity && whole.contains(' ')) => cents,
+            _ if quantity && whole.find(' ').is_some_and(|at| WHOLE_PRICE.is_match(&whole[at + 1..])) => {
+                match whole.find(' ').and_then(|at| amount_of(&whole[at + 1..])) {
+                    Some(cents) => cents,
+                    None => continue,
+                }
+            }
             Some(cents) => cents,
             None => {
                 let next_to_mark = if mark_after.is_some() {
@@ -371,7 +448,7 @@ pub fn amounts(text: &str) -> Vec<Amount> {
         let above: Vec<&str> = text[..line_start].lines().rev().take(3).collect::<Vec<_>>().into_iter().rev().collect();
         let line_before = &text[line_start..number_start];
         let field = after_last_digit(line_before).contains("[champ]");
-        out.push(Amount { cents, codes, class: class_of(line_before, &above), field });
+        out.push(Amount { cents, codes, class: class_of(line_before, &above, next_line(&text, end)), field });
     }
     out
 }
@@ -440,9 +517,20 @@ pub fn page_total_of(texts: &[PageText], cents: i64, currency: &str) -> PageTota
     };
     let labelled: Vec<&Read> = shown_ours.iter().copied().filter(|r| r.amount.class >= Class::Total).collect();
     // 1. the page asks more: a visible total above the approved amount, or the provider's own visible amount above it
+    // The amount is NAMED to the person (« la page demandait … ») only when it is beyond doubt what the page asks: the
+    // one visible labelled total above, and the approved amount not itself labelled a total to pay on the page (a
+    // gift card's « Reste à payer », a deposit's « À payer maintenant », Relecture 8); else a doubt, still a stop.
     let above: Vec<&Read> = labelled.iter().copied().filter(|r| r.amount.cents > cents).collect();
+    let approved_to_pay = labelled.iter().any(|r| r.amount.cents == cents && r.amount.class == Class::ToPay);
+    let mut above_values: Vec<i64> = above.iter().map(|r| r.amount.cents).collect();
+    above_values.sort_unstable();
+    above_values.dedup();
     if let Some(total) = pick(&above) {
-        return PageTotal::Other(total);
+        let providers_own = above.iter().any(|r| r.provider && r.amount.cents == total);
+        if (above_values.len() == 1 && !approved_to_pay) || providers_own {
+            return PageTotal::Other(total);
+        }
+        return PageTotal::Doubt(Doubt::Unclear);
     }
     let provider_above = shown_ours
         .iter()
@@ -466,8 +554,12 @@ pub fn page_total_of(texts: &[PageText], cents: i64, currency: &str) -> PageTota
                 || (r.amount.class != Class::Mention && (r.amount.class >= Class::Total || r.provider)))
     };
     let visible_higher = shown_ours.iter().filter(|r| r.amount.cents > cents && r.amount.class != Class::Mention);
-    if let Some(higher) = visible_higher.chain(all_ours.iter().filter(blocks)).map(|r| r.amount.cents).max() {
-        return PageTotal::Doubt(Doubt::Higher(higher));
+    if let Some(higher) = visible_higher.chain(all_ours.iter().filter(blocks)).max_by_key(|r| r.amount.cents) {
+        // a part above it (a subtotal before a discount) is not « a higher amount » the page asks: « could not check »
+        if higher.amount.class == Class::Part {
+            return PageTotal::Doubt(Doubt::Unclear);
+        }
+        return PageTotal::Doubt(Doubt::Higher(higher.amount.cents));
     }
     if all.iter().any(|r| bare(r) && r.amount.cents != cents && !uses_currency) {
         return PageTotal::Doubt(Doubt::Unclear);
@@ -482,7 +574,10 @@ pub fn page_total_of(texts: &[PageText], cents: i64, currency: &str) -> PageTota
     // 4. beyond doubt (and the whole page read): the approved amount, visible and labelled as the total (a total, a
     // total to pay, a pay button's amount), its currency written (Relecture 7: approval stays narrow; an unlabelled
     // largest amount is no longer enough)
-    let labelled_approved = labelled.iter().any(|r| r.amount.cents == cents && marked(r));
+    // `$` alone stands for USD, CAD, SGD, AUD…: it approves only a payment in USD; any other needs its own code (« CA$ »,
+    // « CAD », « S$ ») (Relecture 8)
+    let labelled_approved =
+        labelled.iter().any(|r| r.amount.cents == cents && marked(r) && (r.amount.codes.len() == 1 || currency == "USD"));
     let whole = texts.iter().all(|t| !t.truncated);
     if whole && labelled_approved {
         return PageTotal::Approved;
@@ -698,10 +793,12 @@ mod correction_1 {
     }
 
     #[test]
-    fn a_card_number_shown_back_is_never_read() {
-        let PageTotal::Unread(seen) = total(&["Total : €\n4242 4242 4242 4242"], 1250, "EUR") else { panic!() };
-        assert!(seen.amounts.is_empty(), "{seen:?}");
-        assert_eq!(total(&["Total 12,50 €\n4242424242424242\n12/30"], 1250, "EUR"), PageTotal::Approved);
+    fn no_digit_is_ever_removed_here() {
+        // Relecture 8: a long digit run next to a mark is read (at its worst); only the card being typed is taken out,
+        // by page_snapshot.rs, which knows it
+        assert_ne!(total(&["Total : €\n4242 4242 4242 4242"], 1250, "EUR"), PageTotal::Approved);
+        assert_ne!(total(&["Total 1249 €"], 119_900, "EUR"), PageTotal::Approved);
+        assert_eq!(total(&["Total 1249 €"], 124_900, "EUR"), PageTotal::Approved);
     }
 
     fn total(texts: &[&str], cents: i64, currency: &str) -> PageTotal {
@@ -898,5 +995,94 @@ mod review_7 {
         ] {
             assert_ne!(page_total(&[page.to_string()], 2797, "EUR"), PageTotal::Approved, "{page}");
         }
+    }
+}
+
+/// Relecture 8 (20/11, on bbc703ce4): `p*` assert the SAFE outcome and fail on bbc703ce4 (a page that asks more read
+/// « approved »); `b*` measure good payments handed over (product side, not blockers).
+#[cfg(test)]
+mod review_8 {
+    use super::*;
+
+    fn total(page: &str, cents: i64, currency: &str) -> PageTotal {
+        page_total(&[page.to_string()], cents, currency)
+    }
+
+    #[test]
+    fn a_hosted_pages_pay_heading_names_its_amount() {
+        // Stripe Checkout: « Pay <shop> » right above the amount
+        assert_eq!(total("Pay Pharmacie Exemple\n€32.87\nOrdonnance\nPay with card", 3287, "EUR"), PageTotal::Approved);
+        // « Pay later », « Pay with card », « Payer en 3 fois » name no amount to pay
+        for heading in ["Pay later", "Pay with card", "Payer en plusieurs fois", "Pay monthly"] {
+            assert_ne!(total(&format!("{heading}\n€32.87"), 3287, "EUR"), PageTotal::Approved, "{heading}");
+        }
+    }
+
+    #[test]
+    fn p1_a_line_starting_with_promo_right_after_the_total_makes_it_an_instalment() {
+        // PER_AFTER: « pro » + « mo\b » matches « €⏎Promo code » (a coupon link right under the total): the real total is
+        // dropped as « per month », the basket line reads « approved »
+        for page in [
+            "Montant de votre panier : 27,97 €\nFrais de livraison 4,90 €\nTotal à payer 32,87 €\nPromo code ?",
+            "Total panier 27,97 €\nVersand 4,90 €\nGesamtsumme 32,87 €\nPromo-Code einlösen",
+        ] {
+            assert_ne!(total(page, 2797, "EUR"), PageTotal::Approved, "{page}");
+        }
+    }
+
+    #[test]
+    fn b_labels_of_good_payments_measured() {
+        // each page's total IS the approved amount: a good payment. Printed: which ones are handed over.
+        let cases: &[(&str, i64, &str)] = &[
+            ("Sous-total 27,97 €\nExpédition 4,90 €\nTotal EUR 32,87 €", 3287, "EUR"),
+            ("Total à payer: EUR 27.97", 2797, "EUR"),
+            ("Montant : 32,87 EUR", 3287, "EUR"),
+            ("Montant à régler 214,00 €", 21400, "EUR"),
+            ("Zwischensumme 27,97 €\nVersand 4,90 €\nGesamtsumme 32,87 €", 3287, "EUR"),
+            ("Subtotal 27,97 €\nEnvío 4,90 €\nTotal a pagar 32,87 €", 3287, "EUR"),
+            ("Subtotaal € 27,97\nVerzendkosten € 4,90\nTotaal € 32,87", 3287, "EUR"),
+            ("Subtotal £27.97\nDelivery £4.90\nOrder total £32.87", 3287, "GBP"),
+            ("Subtotal $27.97\nShipping $4.90\nTotal USD $32.87", 3287, "USD"),
+            ("Total TTC 32,87 €", 3287, "EUR"),
+            ("Reste à payer 32,87 €", 3287, "EUR"),
+            ("Total de la commande 32,87 €", 3287, "EUR"),
+            ("Prix total 32,87 €", 3287, "EUR"),
+            ("Importe total 32,87 €", 3287, "EUR"),
+            ("Te betalen € 32,87", 3287, "EUR"),
+            ("Zu zahlender Betrag 32,87 €", 3287, "EUR"),
+            ("Total due €32.87", 3287, "EUR"),
+            ("Amount due £32.87", 3287, "GBP"),
+            // labels expected to hand over (measured)
+            ("Montant des articles 27,97 €\nFrais de port 4,90 €\nNet à payer 32,87 €", 3287, "EUR"),
+            ("Zwischensumme 27,97 €\nVersandkosten 4,90 €\nGesamt inkl. MwSt. 32,87 €", 3287, "EUR"),
+            ("Summe inkl. MwSt. 32,87 €", 3287, "EUR"),
+            ("Total incl. VAT £32.87", 3287, "GBP"),
+            ("Total TVA incluse 32,87 €", 3287, "EUR"),
+            ("Total IVA incluido 32,87 €", 3287, "EUR"),
+            ("Totaal incl. btw € 32,87", 3287, "EUR"),
+            ("Total livraison comprise 32,87 €", 3287, "EUR"),
+            ("Total pour 2 passagers : 64,00 €", 6400, "EUR"),
+            ("Total for 2 nights €214.00", 21400, "EUR"),
+            ("Total à payer le 20/11 : 32,87 €", 3287, "EUR"),
+            ("Votre commande 32,87 €", 3287, "EUR"),
+            ("Sous-total 35,00 €\nCode promo BIENVENUE −7,03 €\nTotal 27,97 €", 2797, "EUR"),
+            ("Total articles 35,00 €\nRemise fidélité -7,03 €\nTotal à payer 27,97 €", 2797, "EUR"),
+            ("Livraison offerte pour toute commande supérieure à 49 €\nTotal à payer 27,97 €", 2797, "EUR"),
+            ("Free shipping on orders over €50\nOrder total €27.97", 2797, "EUR"),
+            ("Cagnotte disponible : 50,00 €\nTotal à payer 27,97 €", 2797, "EUR"),
+            ("Total 50,00 €\nCarte cadeau -22,03 €\nReste à payer 27,97 €", 2797, "EUR"),
+            ("Prix total 214,00 €\nÀ payer maintenant 64,20 €\nÀ payer sur place 149,80 €", 6420, "EUR"),
+            ("Crème solaire × 1 249,00 €\nSous-total 249,00 €\nTotal 249,00 €", 24900, "EUR"),
+            ("Total 1249 €", 124900, "EUR"),
+            ("Total CA$ 45.00", 4500, "CAD"),
+        ];
+        let mut handed = Vec::new();
+        for (page, cents, currency) in cases {
+            let got = total(page, *cents, currency);
+            if got != PageTotal::Approved {
+                handed.push(format!("{page:?} → {got:?}"));
+            }
+        }
+        println!("handed over: {}/{}\n{}", handed.len(), cases.len(), handed.join("\n"));
     }
 }

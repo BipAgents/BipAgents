@@ -442,6 +442,8 @@ struct Held {
     taken_over: bool,
     /// The page's total as the bridge read it before typing (page_total.rs): read again right before the press.
     total: PageTotal,
+    /// The typed card's keyed mark (never its number): the reader takes only it out of the page (page_snapshot.rs).
+    card_mark: Option<u64>,
 }
 
 /// « Suspendre tous les paiements » so far (`stop_all`). A payment reads it before its hold is asked and stops at its
@@ -1425,6 +1427,7 @@ async fn pay(state: &AppState, agent: &AgentConfig, arguments: &Dict, asker: &As
         spent_on: Some((state.vault.clone(), card.id.clone())),
         taken_over: false,
         total: PageTotal::Unread(Default::default()),
+        card_mark: None,
     };
     if let Some(why) = cards::over_cap(&meta, &card.label, cents, &currency) {
         journal(&config, &entry, &agent.name, "refused_cap");
@@ -1596,7 +1599,9 @@ async fn pay(state: &AppState, agent: &AgentConfig, arguments: &Dict, asker: &As
         drop(code);
         return Ok(give_up(&config, &agent.name, token, "failed", stopped_text(STOPPED)).await);
     }
-    let typed = type_card(&card, code, &mut page, &fields, &still).await;
+    let mut mark = None;
+    let typed = type_card(&card, code, &mut page, &fields, &still, &mut mark).await;
+    keep_mark(&agent.name, token, mark);
     kept_typed(&agent.name, token, &mut page);
     drop(page);
     let filled = match typed {
@@ -1639,7 +1644,9 @@ async fn pay(state: &AppState, agent: &AgentConfig, arguments: &Dict, asker: &As
 /// for sure: logged (what was seen, no card data, never the text), so that pages written another way are learnt.
 async fn read_total(config: &Config, agent: &str, entry: &Held, page: &mut Page, typed: bool) -> PageTotal {
     let rule = card_fill::Frames::new(&entry.url).with_tests(config);
-    let texts = match page.page_texts(&rule).await {
+    // after typing, the card is in the page: only it is taken out of the text (a preview of the number)
+    let card = typed.then(|| entry.card_mark.map(|mark| crate::page_snapshot::CardSeen { mark, last4: entry.last4.clone() })).flatten();
+    let texts = match page.page_texts(&rule, card.as_ref()).await {
         Ok(texts) => texts,
         Err(exc) => {
             tracing::info!(agent = %agent, site = %entry.site, exc = %exc, "card payment: the page's text not read");
@@ -1749,8 +1756,17 @@ pub(crate) async fn total_before_asking(
         spent_on: None,
         taken_over: false,
         total: PageTotal::Unread(Default::default()),
+        card_mark: None,
     };
     read_before_asking(state, agent, &entry, page).await
+}
+
+/// The typed card's keyed mark (page_snapshot.rs `card_mark`), kept with the payment's hold for the read before the
+/// press.
+fn keep_mark(agent: &str, token: &str, mark: Option<u64>) {
+    if let Some(entry) = held().get_mut(agent).filter(|e| e.token == token) {
+        entry.card_mark = mark;
+    }
 }
 
 /// The page's total read by the bridge (`read_total`) for this payment, kept with its hold for the press.
@@ -2154,9 +2170,10 @@ async fn type_card(
     page: &mut Page,
     fields: &[card_fill::Field],
     still: card_fill::Still<'_>,
+    mark: &mut Option<u64>,
 ) -> Result<Vec<String>, String> {
     let code = match approved {
-        Approved::Card(values) => return type_values(values, page, fields, still).await,
+        Approved::Card(values) => return type_values(values, page, fields, still, mark).await,
         Approved::Code(code) => code,
     };
     let num = |key: &str| card.secret.get(key).and_then(Value::as_u64).unwrap_or(0) as u32;
@@ -2170,6 +2187,7 @@ async fn type_card(
         postal_code: string("postal_code"),
     };
     drop(code);
+    *mark = Some(crate::page_snapshot::card_mark(&values.number));
     let filled = page.fill(fields, &values, still).await;
     drop(values);
     filled_or_why(filled)
@@ -2454,6 +2472,7 @@ pub(crate) async fn pay_with_values(
         spent_on: None,
         taken_over: false,
         total: PageTotal::Unread(Default::default()),
+        card_mark: None,
     };
     if let Some(folder) = crate::desktop::desktop_dir(&config, agent).filter(|f| f.is_dir()) {
         if crate::desktop::app_holds(&folder) {
@@ -2498,7 +2517,9 @@ pub(crate) async fn pay_with_values(
         drop(values);
         return give_up(&config, &agent.name, token, "failed", stopped_text(STOPPED)).await;
     }
-    let typed = type_values(values, &mut page, &fields, &still).await;
+    let mut mark = None;
+    let typed = type_values(values, &mut page, &fields, &still, &mut mark).await;
+    keep_mark(&agent.name, token, mark);
     kept_typed(&agent.name, token, &mut page);
     drop(page);
     let filled = match typed {
@@ -2522,7 +2543,10 @@ async fn type_values(
     page: &mut Page,
     fields: &[card_fill::Field],
     still: card_fill::Still<'_>,
+    mark: &mut Option<u64>,
 ) -> Result<Vec<String>, String> {
+    // the card's keyed mark (never its number), for the reader to take its preview out of the page (page_snapshot.rs)
+    *mark = Some(crate::page_snapshot::card_mark(&values.number));
     let filled = page.fill(fields, &values, still).await;
     drop(values);
     filled_or_why(filled)

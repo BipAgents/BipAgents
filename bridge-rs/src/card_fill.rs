@@ -494,7 +494,11 @@ impl Cdp {
     /// `DOMSnapshot.captureSnapshot` in `session` (page_snapshot.rs `STYLES`), read at once and wiped: the answer holds
     /// every input's live value (the card's fields once typed), never kept, logged or passed on. Its raw frame is
     /// overwritten too when the connection holds it alone (best effort: the websocket's own buffers are not reachable).
-    pub async fn snapshot(&mut self, session: &str) -> Result<Vec<crate::page_snapshot::DocText>, FillError> {
+    pub async fn snapshot(
+        &mut self,
+        session: &str,
+        card: Option<&crate::page_snapshot::CardSeen>,
+    ) -> Result<Vec<crate::page_snapshot::DocText>, FillError> {
         self.next += 1;
         let id = self.next;
         let params = json!({"computedStyles": crate::page_snapshot::STYLES, "includeDOMRects": true,
@@ -508,7 +512,7 @@ impl Cdp {
             };
             if answer.get("id").and_then(Value::as_u64) == Some(id) {
                 let read = match answer.get("result") {
-                    Some(result) if answer.get("error").is_none() => Ok(crate::page_snapshot::read_snapshot(result)),
+                    Some(result) if answer.get("error").is_none() => Ok(crate::page_snapshot::read_snapshot(result, card)),
                     _ => Err(protocol("DOMSnapshot.captureSnapshot: refused")),
                 };
                 crate::page_snapshot::wipe(&mut answer);
@@ -1280,7 +1284,11 @@ impl Page {
     /// frame above one of these too) are read as such, each saying whether it is the provider's; any other site's only
     /// as text not shown. A frame process not read, the main frame not read, or a visible frame of real size not read
     /// (matched by its id) makes every text `truncated`: never « approved ».
-    pub async fn page_texts(&mut self, rule: &Frames) -> Result<Vec<crate::page_total::PageText>, FillError> {
+    pub async fn page_texts(
+        &mut self,
+        rule: &Frames,
+        card: Option<&crate::page_snapshot::CardSeen>,
+    ) -> Result<Vec<crate::page_total::PageText>, FillError> {
         let main = self.main_frame().await?;
         let seen = self.frames().await?;
         let mut sessions: Vec<String> = Vec::new();
@@ -1296,7 +1304,7 @@ impl Page {
         // site (Relecture 5, e4): the page's own and the providers' as such; any other site's (a captcha, a wallet
         // button, a badge) as text not shown: a total in it above the approved amount blocks, it never supports.
         for session in sessions {
-            let docs = match self.cdp.snapshot(&session).await {
+            let docs = match self.cdp.snapshot(&session, card).await {
                 Ok(docs) => docs,
                 Err(exc) => {
                     tracing::info!(exc = %exc, "card payment: a frame process's page not read, its total not read for sure");
