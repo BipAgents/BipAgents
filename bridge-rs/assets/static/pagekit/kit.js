@@ -56,7 +56,6 @@
   }
   function grid(c, top, bottom, left, max, unit) {
     var out = "";
-    // round steps (0, 10, 20, 30 rather than 0, 16,7, 33,3)
     var step = nice(max / 4), count = Math.round(max / step);
     for (var k = 0; k <= count; k++) {
       var y = bottom - (bottom - top) * k / count, v = step * k;
@@ -167,7 +166,7 @@
     draw(c.svg, out);
   }
 
-  // A sparkline in a small element (a KPI tile): Bip.spark("#s", [3, 5, 4, 7])
+  // Sparkline: Bip.spark("#s", [3, 5, 4, 7])
   function spark(target, values, spec) {
     spec = spec || {};
     var c = canvas(target, spec.height || 36);
@@ -293,7 +292,7 @@
     });
   }
 
-  // <div class="tabs"><button>…</button>…</div> followed by as many <section class="tab">.
+  // .tabs buttons, then one <section class="tab"> each.
   function tabs(bar) {
     var buttons = Array.prototype.slice.call(bar.querySelectorAll("button")), sections = [], el = bar.nextElementSibling;
     while (el && sections.length < buttons.length) { if (el.matches("section.tab")) sections.push(el); el = el.nextElementSibling; }
@@ -322,7 +321,9 @@
     doc.readyState === "loading" ? doc.addEventListener("DOMContentLoaded", run) : run();
   }
 
-  function set(target, text) { var el = $(target); if (el) el.textContent = text; }
+  function set(target, text) { var el = $(target); if (el) { el.textContent = text; if (el.closest(".kpi")) fit(); } }
+  // a KPI value shrinks to its tile, never breaks inside a number (Bip.fmt's spaces don't break)
+  function fit() { doc.querySelectorAll(".kpi .v").forEach(function (v) { v.style.fontSize = ""; for (var s = 28; v.scrollWidth > v.clientWidth + 1 && s > 13; s -= 3) v.style.fontSize = s + "px"; }); }
 
   // What people typed, drawn as TEXT only (never a script in everyone's page): rows(target, list, cells), cells(item,
   // i) its cells; a <table>/<tbody> gets one <tr> per item (numbers right-aligned), else one <li> or <div>.
@@ -367,7 +368,7 @@
     return isFinite(n) ? (minus ? -n : n) : null;
   }
 
-  // The app's colours and font for Chart.js (called right after it, when the page uses it).
+  // The app's colours and font for Chart.js.
   function chartDefaults() {
     var C = window.Chart;
     if (!C || !C.defaults) return;
@@ -426,7 +427,6 @@
       script.src = MAP_BASE + "lib.js";
       (doc.head || root).appendChild(script);
     }).then(function (ml) {
-      // every map file asked from the page's own thread, through the app's door
       ml.addProtocol("bipmap", function (params, abort) {
         var url = MAP_BASE + String(params.url).replace(/^bipmap:\/\/map\//, "");
         return fetch(url, { signal: abort && abort.signal }).then(function (r) {
@@ -540,7 +540,7 @@
           layout: { "line-cap": route.streets === false ? "butt" : "round", "line-join": "round" }, paint: paint });
       }
       card.classList.add("live");
-      // the credits folded into their ⓘ once the map has drawn (MapLibre shows them open at first)
+      // credits folded into their ⓘ once drawn
       map.once("idle", function () {
         var credits = box.querySelector(".maplibregl-ctrl-attrib");
         if (credits) { credits.removeAttribute("open"); credits.classList.remove("maplibregl-compact-show"); }
@@ -556,7 +556,7 @@
         open.addEventListener("click", function (event) { event.stopPropagation(); });
         p.li.appendChild(open);
       });
-      // the whole map: its itinerary, else the way through its places (`via`; links of 600 signs at most)
+      // its itinerary, else the way through its places (links ≤ 600 signs)
       var mode = card.dataset.directions;
       if (points.length > 1) {
         var first = points[0], last = points[points.length - 1], route = doc.createElement("a");
@@ -584,6 +584,8 @@
     doc.querySelectorAll("table.sort").forEach(sortable);
     doc.querySelectorAll(".tabs").forEach(tabs);
     doc.querySelectorAll("pre.diagram,div.diagram[data-src]").forEach(function (el) { diagram(el, el.dataset.src || null); });
+    fit();
+    addEventListener("resize", fit);
   }
   doc.readyState === "loading" ? doc.addEventListener("DOMContentLoaded", enhance) : enhance();
 

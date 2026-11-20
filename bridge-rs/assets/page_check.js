@@ -6,6 +6,9 @@
   var errors = [];
   addEventListener("error", function (e) { errors.push(String(e.message || e.type).slice(0, 120)); });
   addEventListener("unhandledrejection", function (e) { errors.push(String(e.reason && e.reason.message || e.reason).slice(0, 120)); });
+  // the store's writes made when the page opened (refused: only what the person does is written, store.js)
+  var unsaved = 0, warn = console.warn;
+  console.warn = function (m) { if (/^Bip\.store: not saved/.test(String(m))) unsaved++; return warn.apply(console, arguments); };
   function words(el) { return (el.innerText || el.textContent || "").replace(/\s+/g, " ").trim(); }
   function name(el) {
     var cls = typeof el.className === "string" && el.className.trim() ? "." + el.className.trim().split(/\s+/).slice(0, 2).join(".") : "";
@@ -57,9 +60,34 @@
       }); });
       if (hit) { overlap.push(name(x[0]) + " / " + name(y[0])); break; }
     }
+    // a number broken over two lines (« 12 345,6 » / « 7 € »: two numbers to the eye), and markup shown as words
+    var split = [], markup = [], walk = document.createTreeWalker(document.body || document.documentElement, NodeFilter.SHOW_TEXT), t, seenNodes = 0;
+    while ((t = walk.nextNode()) && seenNodes < 600) {
+      var up2 = t.parentElement;
+      if (!up2 || /^(SCRIPT|STYLE|TEXTAREA|PRE|CODE)$/.test(up2.tagName) || up2.closest("svg") || !t.data.trim()) continue;
+      seenNodes++;
+      if (/<\/?[a-z][a-z0-9]*(\s+[a-z-]+=|\s*\/?>)/i.test(t.data) && markup.length < 3) markup.push(name(up2));
+      var re = /\d[\d\u00a0\u202f\u2009 ,.]*\d/g, m2;
+      while ((m2 = re.exec(t.data)) && split.length < 3) {
+        var top = null, broken = false;
+        for (var k = m2.index; k < m2.index + m2[0].length; k++) {
+          if (!/\d/.test(t.data[k])) continue;
+          var rg = document.createRange(); rg.setStart(t, k); rg.setEnd(t, k + 1);
+          var b2 = rg.getBoundingClientRect();
+          if (!b2.width) continue;
+          if (top !== null && Math.abs(b2.top - top) > 4) { broken = true; break; }
+          top = b2.top;
+        }
+        if (broken) split.push(name(up2));
+      }
+    }
+    // the first button pressed once: what breaks at the first tap (a script error) is heard too
+    var first = document.querySelector("button:not([disabled])");
+    if (first) try { first.click(); } catch (e) { errors.push(String(e && e.message || e).slice(0, 120)); }
     var out = {
       width: width, page: document.documentElement.scrollWidth, height: document.documentElement.scrollHeight, wide: wide.slice(0, 5), cut: cut.slice(0, 5),
       overlap: overlap, empty: empty.slice(0, 5), errors: errors.slice(0, 5), text: words(document.body || document.documentElement).length,
+      split: split, markup: markup, unsaved: unsaved,
     };
     // the checker's frame (page_check.rs) hears it; alone, the page shows it
     if (window.parent !== window) return window.parent.postMessage(out, "*");

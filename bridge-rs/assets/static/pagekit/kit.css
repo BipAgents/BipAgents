@@ -44,7 +44,7 @@ max-width:760px;margin-inline:auto;-webkit-font-smoothing:antialiased;overflow-w
 :where(.kpi){background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:12px 14px;min-width:0}
 :where(.kpi .l){display:block;color:var(--muted);font-size:12.5px;font-weight:700}
 :where(.kpi .v){display:block;font-size:28px;font-weight:900;line-height:1.1;margin-top:2px;letter-spacing:-.02em;
-font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+font-variant-numeric:tabular-nums;overflow-wrap:normal}
 :where(.kpi .v small){white-space:nowrap}
 :where(.kpi .v small){font-size:14px;font-weight:800;color:var(--ink2);margin-left:2px}
 :where(.kpi .d){display:inline-block;margin-top:4px;font-size:12px;font-weight:800;border-radius:99px;padding:2px 8px;
@@ -135,7 +135,7 @@ background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.25);transition:transform .2s}
 :where(.toggle input:checked)::after{transform:translateX(18px)}
 :where(label.field){display:block;font-size:13px;font-weight:700;color:var(--ink2);margin:8px 0 2px}
 :where(output){font-weight:900;color:var(--deep);font-variant-numeric:tabular-nums}
-:where(select,input[type=number],input[type=text]){font:inherit;color:var(--ink);background:var(--field);
+:where(select,input:not([type]),input[type=number],input[type=text],input[type=search],input[type=email],input[type=tel]){font:inherit;color:var(--ink);background:var(--field);
 border:1px solid var(--line);border-radius:12px;padding:8px 10px;width:100%}
 :where(button){font:800 14px var(--font);color:var(--deep);background:var(--tint);border:0;border-radius:99px;padding:8px 14px}
 /* tabs: <div class="tabs"><button>Week</button><button>Month</button></div> then one <section class="tab"> each */
