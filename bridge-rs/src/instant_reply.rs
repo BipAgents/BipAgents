@@ -250,8 +250,10 @@ pub const SLOW_FIRST_WORDS: f64 = 3.0;
 /// The last turns' first-words delays kept per agent and conversation.
 const FIRST_WORDS_KEPT: usize = 5;
 
-static FIRST_WORDS: LazyLock<Mutex<HashMap<(String, String), std::collections::VecDeque<f64>>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
+/// The last first-words delays per (agent, conversation).
+type FirstWords = HashMap<(String, String), std::collections::VecDeque<f64>>;
+
+static FIRST_WORDS: LazyLock<Mutex<FirstWords>> = LazyLock::new(|| Mutex::new(HashMap::new()));
 
 /// A turn of this agent in this conversation showed its first words (or ended) this long after it started.
 pub fn note_first_words(agent: &str, thread: &str, secs: f64) {
@@ -984,7 +986,7 @@ Their new message: plutôt le samedi");
         }
         assert!(wants_line("et ça ?", true, None), "a file");
         assert!(wants_line("https://www.sncf-connect.com/x", false, None), "a link");
-        assert!(wants_line(&"je me demandais si c'était une bonne idée de partir en mai ou plutôt en juin cette année".to_string(), false, None));
+        assert!(wants_line("je me demandais si c'était une bonne idée de partir en mai ou plutôt en juin cette année", false, None));
         // short, no work, no measure or a fast back-and-forth: no; where turns were slow: yes
         assert!(!wants_line("Combien font 18 % de 240 ?", false, None));
         assert!(!wants_line("Une idée de prénom pour un chat roux ?", false, Some(false)));
