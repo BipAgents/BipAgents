@@ -932,6 +932,19 @@ pub const CALL_SECONDS: f64 = 115.0;
 /// killed (the bracket keeps pkill from matching this shell's own command line), their call counts removed.
 pub const END_STUCK_SERVER: &str = "pkill -KILL -f '/opt/stealth/[h]old_gate.py'; pkill -KILL -f 'python [s]erver.py'; \
 rm -f /tmp/bipagents-calls/* /tmp/bipagents-calls/.[0-9]*; exit 0";
+/// The call holding a browser's turn (`Proxy::in_flight`).
+struct InFlight {
+    /// Hermes' JSON-RPC id, as text
+    id: String,
+    /// this proxy's ids of the tools/call requests it sent the real server for it
+    sent: Vec<i64>,
+    /// Hermes cancelled it
+    cancelled: bool,
+}
+
+/// What a request of a cancelled call ends with: the call then ends with no answer (Hermes cancelled it).
+const CANCELLED: &str = "cancelled by Hermes";
+
 /// The answer to a call that waited its turn longer than `CALL_SECONDS`: not run at all.
 pub const BUSY: &str = "Not done: your browser is still busy with an action that did not finish in time; nothing was \
 done. Try again in a moment.";
@@ -2383,7 +2396,9 @@ pub struct Proxy {
     waiting: Mutex<std::collections::HashSet<String>>,
     /// The call holding `one_call`: Hermes' id, and the ids of the tools/call requests this proxy sent the real
     /// server for it (its own numbering, `next_id`). A cancellation of that call reaches the real server under those.
-    in_flight: Mutex<Option<(String, Vec<i64>)>>,
+    /// And whether Hermes cancelled it: then none of its requests go to the real server any more (review 8: a cancel
+    /// that comes while its browser starts, before its first request).
+    in_flight: Mutex<Option<InFlight>>,
     /// Beside `busy`: which session uses which task's own browser (browsers.rs `SESSIONS_FILE`).
     sessions_path: PathBuf,
     /// The tasks' own browsers this proxy relays to, by their settings' path (one per running task, browsers.rs
@@ -2617,9 +2632,14 @@ impl Proxy {
         let (tx, rx) = oneshot::channel();
         self.pending.lock().unwrap_or_else(|e| e.into_inner()).insert(number, tx);
         if method == "tools/call" {
-            // the call in flight's own requests (`in_flight`): what a cancellation of it reaches
-            if let Some((_, sent)) = self.in_flight.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
-                sent.push(number);
+            // the call in flight's own requests (`in_flight`): what a cancellation of it reaches; cancelled, none goes
+            let mut flight = self.in_flight.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(current) = flight.as_mut() {
+                if current.cancelled {
+                    self.pending.lock().unwrap_or_else(|e| e.into_inner()).remove(&number);
+                    return Err(CANCELLED.into());
+                }
+                current.sent.push(number);
             }
         }
         let mut message = json!({"jsonrpc": "2.0", "id": number, "method": method});
@@ -2654,18 +2674,21 @@ impl Proxy {
             Some("tools/call") => {
                 self.waiting.lock().unwrap_or_else(|e| e.into_inner()).insert(id.clone());
                 let turn = tokio::time::timeout(self.call_limit(), self.one_call.lock()).await;
+                if turn.is_ok() {
+                    // in flight before it stops waiting: a cancel in between finds it one way or the other
+                    *self.in_flight.lock().unwrap_or_else(|e| e.into_inner()) =
+                        Some(InFlight { id: id.clone(), sent: Vec::new(), cancelled: false });
+                }
                 self.waiting.lock().unwrap_or_else(|e| e.into_inner()).remove(&id);
-                let cancelled = self.cancelled.lock().unwrap_or_else(|e| e.into_inner()).remove(&id);
+                let cancelled = self.cancelled.lock().unwrap_or_else(|e| e.into_inner()).remove(&id) || self.in_flight_cancelled();
                 match turn {
                     // cancelled by Hermes while it waited its turn: never started (and, cancelled, never answered)
                     Ok(_) if cancelled => {
+                        *self.in_flight.lock().unwrap_or_else(|e| e.into_inner()) = None;
                         log("tools/call: cancelled while it waited, not run");
                         return;
                     }
-                    Ok(held) => {
-                        *self.in_flight.lock().unwrap_or_else(|e| e.into_inner()) = Some((id.clone(), Vec::new()));
-                        Some(held)
-                    }
+                    Ok(held) => Some(held),
                     // waited longer than a call may last: the one before is stuck; answered « busy », never run late
                     Err(_) => {
                         let mut answer = refused(BUSY);
@@ -2683,26 +2706,31 @@ impl Proxy {
         }
     }
 
+    fn in_flight_cancelled(&self) -> bool {
+        self.in_flight.lock().unwrap_or_else(|e| e.into_inner()).as_ref().is_some_and(|f| f.cancelled)
+    }
+
     /// Hermes cancelled its call `id` (its JSON-RPC id, as text): the call in flight here, cancelled on the real
     /// server under this proxy's own ids of its requests still unanswered; a call waiting its turn, never started;
     /// any other id (answered already, not this browser's): nothing at all.
     async fn cancel(&self, id: &str, reason: Option<Value>) {
-        let ours: Vec<i64> = {
-            let flight = self.in_flight.lock().unwrap_or_else(|e| e.into_inner());
-            match flight.as_ref() {
-                Some((current, sent)) if current == id => {
+        let ours: Option<Vec<i64>> = {
+            let mut flight = self.in_flight.lock().unwrap_or_else(|e| e.into_inner());
+            match flight.as_mut() {
+                Some(current) if current.id == id => {
+                    current.cancelled = true; // its next request never goes (`request`)
                     let pending = self.pending.lock().unwrap_or_else(|e| e.into_inner());
-                    sent.iter().copied().filter(|n| pending.contains_key(n)).collect()
+                    Some(current.sent.iter().copied().filter(|n| pending.contains_key(n)).collect())
                 }
-                _ => Vec::new(),
+                _ => None,
             }
         };
-        if ours.is_empty() {
+        let Some(ours) = ours else {
             if self.waiting.lock().unwrap_or_else(|e| e.into_inner()).contains(id) {
                 self.cancelled.lock().unwrap_or_else(|e| e.into_inner()).insert(id.to_string());
             }
             return;
-        }
+        };
         if self.running() {
             for number in ours {
                 let mut params = json!({"requestId": number});
@@ -2881,21 +2909,26 @@ impl Proxy {
                     self.add_hint(&instance, &mut response).await;
                 }
             }
+            if calling && self.in_flight_cancelled() {
+                return Err(CANCELLED.to_string()); // Hermes cancelled it: no answer
+            }
             self.to_client(&Value::Object(response));
             Ok(())
         }
         .await;
-        if let Err(exc) = result {
-            if calling && !ident.is_null() {
+        if let Err(exc) = result.as_ref().map_err(String::as_str) {
+            if exc == CANCELLED || (calling && self.in_flight_cancelled()) {
+                log(&format!("{tool}: cancelled by Hermes, not run on (no answer)"));
+            } else if calling && !ident.is_null() {
                 // never a JSON-RPC error for a tool call: Hermes counts one against the whole server (review 13/11)
-                let mut answer = refused(&could_not_start(&exc));
+                let mut answer = refused(&could_not_start(exc));
                 if self.answered_call(&named, named != tool, &mut answer) {
                     self.add_hint("", &mut answer).await;
                 }
                 answer.insert("id".into(), ident.clone());
                 self.to_client(&Value::Object(answer));
             } else {
-                self.fail(&ident, &exc);
+                self.fail(&ident, exc);
             }
         }
         if calling {
