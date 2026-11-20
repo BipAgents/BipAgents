@@ -48,6 +48,7 @@
 //!     browser_calls = 40      page_reads = 15        discovery_same = 5   discovery_calls = 8  same_failure = 3
 //!     task_same_tool = 40     task_tool_calls = 120  task_same_call = 5   task_same_lookup = 8 task_writes = 40
 //!     task_browser_calls = 80 task_page_reads = 30   task_discovery_same = 5 task_discovery_calls = 15 task_same_failure = 5
+//!     web_searches = 15       task_web_searches = 40 live_web_searches = 4
 //!     live_same_tool = 5      live_tool_calls = 12   live_same_call = 2   live_same_lookup = 3 live_writes = 5
 //!     live_browser_calls = 5  live_page_reads = 3    live_discovery_same = 2 live_discovery_calls = 3 live_same_failure = 2
 //!     routine_tool_calls = 120 idle_seconds = 120
@@ -81,6 +82,12 @@
 //! retries included, stops the turn with « Je n'arrive pas à chercher sur le web pour l'instant. Tu veux que je
 //! réessaie plus tard ? » (`Over::Failing`), then the rescue turn. A Live call's turns are not runs the hub follows
 //! (Hermes' `chat/stream`, live_turns.rs): their stream is braked there, with the `live` limits.
+//!
+//! Searching the web again and again, every search answered (the same 20/11 call, seen in the place's log: no search
+//! failed, the model kept trying new words; once already on 19/11): more than `web_searches` in a turn (15; a task 40,
+//! a call 4) stops it, told at about two thirds with « answer with what you found, or offer a background task »
+//! (`Warning::Searches`), then « J'ai fait beaucoup de recherches sur le web sans trouver de réponse sûre. Dis-moi si
+//! tu veux que j'en fasse une recherche approfondie en tâche de fond. » and the rescue turn (no more searching).
 //!
 //! No Python counterpart (owner group: push-runs).
 
@@ -118,6 +125,10 @@ pub struct Limits {
     /// between) stops the turn (20/11: a Live call's web search failing, retried 50 times). Not the work tools whose
     /// failure is work output (`FAILURE_TOLERANT_TOOLS`: a red test run), nor the visible browser (its own limits).
     pub same_failure: u32,
+    /// More web searches than this in one turn, answered or not, stop it (20/11: Vie on the Spark searched 50 times with
+    /// new words each time, every search answered, never settling: Hermes' own cap, twice that day and once the day
+    /// before). A long research belongs in a background task (`task_web_searches`).
+    pub web_searches: u32,
 }
 
 /// `[brake]`.
@@ -159,6 +170,9 @@ impl Default for Settings {
                 discovery_same: 5,
                 discovery_calls: 8,
                 same_failure: 3,
+                // the bench's longest legitimate research turn makes 12 (brake-traces `web_research_long`), the real
+                // day's 5 or 6
+                web_searches: 15,
             },
             // under Hermes' own cap of 150 model calls (tool_diet.rs), so the brake speaks first
             task: Limits {
@@ -172,6 +186,7 @@ impl Default for Settings {
                 discovery_same: 5,
                 discovery_calls: 15,
                 same_failure: 5,
+                web_searches: 40,
             },
             // a call: a few quick lookups, then speak (the media, long and browser tools are closed there:
             // live_turns.rs `LIVE_CLOSED_TOOLS`); a tool failing twice in a row is said out loud at once
@@ -186,6 +201,8 @@ impl Default for Settings {
                 discovery_same: 2,
                 discovery_calls: 3,
                 same_failure: 2,
+                // a call's good turn makes one search (the lab, 20/11), two or three to refine
+                web_searches: 4,
             },
             // a routine is scheduled work (the task's limits): as many bridge calls as a task, under Hermes' cap of 150
             routine_tool_calls: 120,
@@ -215,6 +232,7 @@ impl Limits {
             discovery_same: up(self.discovery_same),
             discovery_calls: up(self.discovery_calls),
             same_failure: up(self.same_failure),
+            web_searches: up(self.web_searches),
         }
     }
 }
@@ -227,6 +245,7 @@ pub fn over_of(warning: &Warning) -> Over {
         Warning::TooMany(..) => Over::TooMany,
         Warning::PageReads(..) => Over::PageReads,
         Warning::Browser(..) => Over::Browser,
+        Warning::Searches(..) => Over::Searches,
         Warning::DiscoverySame(..) | Warning::Discovery(..) => Over::Discovery,
     }
 }
@@ -251,6 +270,7 @@ impl Settings {
             discovery_same: n(&format!("{prefix}discovery_same"), d.discovery_same, 2),
             discovery_calls: n(&format!("{prefix}discovery_calls"), d.discovery_calls, 2),
             same_failure: n(&format!("{prefix}same_failure"), d.same_failure, 2),
+            web_searches: n(&format!("{prefix}web_searches"), d.web_searches, 2),
         };
         Settings {
             enabled: table.get("enabled").and_then(Value::as_bool).unwrap_or(d.enabled),
@@ -285,6 +305,7 @@ impl Settings {
             discovery_same: 2,
             discovery_calls: 2,
             same_failure: 2,
+            web_searches: 2,
         }
     }
 
@@ -476,6 +497,8 @@ pub enum Over {
     Discovery,
     /// One tool failing again and again (its bare name; « » for a tool Hermes did not name).
     Failing(String),
+    /// Too many web searches in one turn, answered or not.
+    Searches,
 }
 
 /// A turn's tool calls so far.
@@ -496,6 +519,8 @@ pub struct TurnCount {
     last_failed: bool,
     /// Each tool's failures since its last success (bare name): `same_failure`.
     failures: HashMap<String, u32>,
+    /// Web searches in this turn, answered or not: `web_searches`.
+    pub searches: u32,
     /// A rescue turn's stopped tool (bare name): its second call stops the turn (the first is refused at the MCP for
     /// the bridge's tools, and the rescue's instruction says not to call it).
     pub banned: Option<String>,
@@ -522,6 +547,8 @@ pub enum Warning {
     TooMany(u32, u32),
     PageReads(u32, u32),
     Browser(u32, u32),
+    /// Many web searches (how many, the hard limit it is stopped past).
+    Searches(u32, u32),
     /// Tool searches: the same query (how many times, the hard limit it is stopped at)…
     DiscoverySame(u32, u32),
     /// … or many in all (how many, the hard limit it is stopped past).
@@ -539,6 +566,7 @@ impl Warning {
             Warning::TooMany(..) => "total".into(),
             Warning::PageReads(..) => "page_reads".into(),
             Warning::Browser(..) => "browser".into(),
+            Warning::Searches(..) => "web_searches".into(),
             Warning::DiscoverySame(..) => "discovery_same".into(),
             Warning::Discovery(..) => "discovery".into(),
         }
@@ -552,6 +580,7 @@ impl Warning {
             Warning::TooMany(n, _) => format!("{n} tool calls"),
             Warning::PageReads(n, _) => format!("the browser read the page {n} times"),
             Warning::Browser(n, _) => format!("{n} browser calls"),
+            Warning::Searches(n, _) => format!("{n} web searches"),
             Warning::DiscoverySame(n, _) => format!("the same tool search {n} times"),
             Warning::Discovery(n, _) => format!("{n} tool searches"),
         }
@@ -572,6 +601,11 @@ impl Warning {
             Warning::PageReads(count, hard) => {
                 format!("you have read the page {count} times in this turn; past {hard} the turn is stopped")
             }
+            Warning::Searches(count, hard) => format!(
+                "you have made {count} web searches in this turn; past {hard} the turn is stopped. Searching again with \
+other words rarely settles it: answer the person now with what you found and say plainly what is still uncertain, or, \
+for a long research, offer to carry it on as a background task (propose_task)"
+            ),
             Warning::Browser(count, hard) => {
                 format!("you have made {count} browser steps in this turn; past {hard} the turn is stopped")
             }
@@ -668,6 +702,14 @@ impl TurnCount {
                 return Some(Over::Discovery);
             }
             near(discovery, limits.discovery_calls, false, &|| Warning::Discovery(discovery, limits.discovery_calls));
+        }
+        if name == "web_search" {
+            self.searches += 1;
+            if self.searches > limits.web_searches {
+                return Some(Over::Searches);
+            }
+            let searches = self.searches;
+            near(searches, limits.web_searches, false, &|| Warning::Searches(searches, limits.web_searches));
         }
         let work = browser || WORK_TOOLS.contains(&name.as_str()) || proposing_tool(&name);
         let same = self.per_tool.entry(name.clone()).or_insert(0);
@@ -814,6 +856,16 @@ pub fn notice_head(over: &Over, lang: &str) -> String {
     if let Over::Failing(tool) = over {
         return failing_head(tool, lang);
     }
+    if let Over::Searches = over {
+        return match lang {
+            "fr" => "J'ai fait beaucoup de recherches sur le web sans trouver de réponse sûre.",
+            "de" => "Ich habe viele Websuchen gemacht, ohne eine sichere Antwort zu finden.",
+            "es" => "He hecho muchas búsquedas en la web sin encontrar una respuesta segura.",
+            "nl" => "Ik heb veel op het web gezocht zonder een zeker antwoord te vinden.",
+            _ => "I ran a lot of web searches without finding a sure answer.",
+        }
+        .to_string();
+    }
     if let Some(what) = repeated_lookup(over, lang) {
         return match lang {
             "fr" => format!("Je me suis arrêté : je relançais {what}."),
@@ -862,6 +914,7 @@ pub fn notice_head(over: &Over, lang: &str) -> String {
         }
         .to_string(),
         Over::Failing(tool) => failing_head(tool, lang),
+        Over::Searches => String::new(), // above
     }
 }
 
@@ -909,6 +962,16 @@ fn failing_head(tool: &str, lang: &str) -> String {
 pub fn notice_tail(over: &Over, lang: &str) -> &'static str {
     let lang = language(lang);
     let lang = lang.as_str();
+    if let Over::Searches = over {
+        // a long research is a background task's (the long-work rule, runs.rs `handoff`)
+        return match lang {
+            "fr" => "Dis-moi si tu veux que j'en fasse une recherche approfondie en tâche de fond.",
+            "de" => "Sag mir, ob ich daraus eine gründliche Suche im Hintergrund machen soll.",
+            "es" => "Dime si quieres que haga una búsqueda más a fondo en segundo plano.",
+            "nl" => "Zeg het als je wilt dat ik er op de achtergrond grondiger naar zoek.",
+            _ => "Tell me if you want me to make it a deeper search in the background.",
+        };
+    }
     if let Over::Failing(_) = over {
         // what failed is outside: later, not « another way »
         return match lang {
@@ -963,6 +1026,7 @@ pub fn stopped_tool(over: &Over) -> Option<String> {
     match over {
         Over::SameTool(tool) | Over::SameCall(tool) => Some(tool.clone()),
         Over::Discovery => Some("tool_search".into()),
+        Over::Searches => Some("web_search".into()),
         Over::Failing(tool) if !tool.is_empty() => Some(tool.clone()),
         _ => None,
     }
@@ -981,6 +1045,7 @@ pub fn rescue_input(over: &Over, lang: &str) -> String {
         Over::PageReads => "kept reading the same page in the browser without managing to".to_string(),
         Over::Browser => "made too many browser steps without getting anywhere".to_string(),
         Over::Discovery => "kept searching your tools (tool_search, tool_describe) for one to do it".to_string(),
+        Over::Searches => "made far too many web searches in one turn, new words each time, without settling".to_string(),
         Over::Failing(tool) => format!("kept calling {tool} although it failed every time (it looks unavailable now)"),
     };
     let dont = match over {
@@ -990,6 +1055,9 @@ pub fn rescue_input(over: &Over, lang: &str) -> String {
         Over::Discovery => {
             "Don't search your tools again in this turn: if none you have does it, say so plainly.".to_string()
         }
+        Over::Searches => "Don't search the web again in this turn. Give what you found, with what is still \
+uncertain, and offer to carry the research on as a background task (propose_task) if it needs more."
+            .to_string(),
         Over::Failing(tool) => format!("Don't call {tool} again in this turn, nor work around it with another tool."),
     };
     format!(
@@ -1010,6 +1078,7 @@ pub fn reason(over: &Over) -> String {
         Over::PageReads => "the browser read the page too many times".to_string(),
         Over::Browser => "too many browser calls".to_string(),
         Over::Discovery => "too many tool searches".to_string(),
+        Over::Searches => "too many web searches".to_string(),
         Over::Failing(tool) => format!("the same tool failing again and again ({tool})"),
     }
 }
@@ -1971,8 +2040,9 @@ réessaie autrement."
 exactly the same session_search call 3 times in this turn; at 5 the turn is stopped. Change approach"));
         // it changes approach: other searches, other tools; never stopped, told once more when the total gets close
         let mut told = Vec::new();
+        // (no web search: 13 of them would get the web searches' own note, `web_searches`)
         for i in 0..50 {
-            let tool = ["web_search", "read_file", "search_files", "terminal"][i % 4];
+            let tool = ["web_extract", "read_file", "search_files", "terminal"][i % 4];
             assert_eq!(turn.note(tool, Some(&format!("autre piste {i}")), false, &limits), None, "{i}");
             told.extend(turn.take_warning());
         }
@@ -2096,6 +2166,55 @@ exactly the same session_search call 3 times in this turn; at 5 the turn is stop
         assert_eq!((Settings::default().task.same_failure, limits.raised().same_failure), (5, 5));
     }
 
+    /// 20/11 (and 19/11): Vie on the Spark searched the web 50 times in one turn, every search answered, new words each
+    /// time: Hermes' own cap stopped it. The brake stops a turn past 15 searches (a call past 4), told before at 10 (3).
+    #[test]
+    fn many_web_searches_stop_the_turn_even_when_they_all_answer() {
+        let limits = Settings::default().conversation;
+        let mut turn = TurnCount::default();
+        let mut warned = None;
+        for i in 1..=15 {
+            assert_eq!(turn.note("web_search", Some(&format!("jeu DJ PS1 {i}")), false, &limits), None, "{i}");
+            assert_eq!(turn.completed("web_search", false, &limits), None);
+            if let Some(w) = turn.take_warning() {
+                warned.get_or_insert((i, w));
+            }
+        }
+        assert_eq!(warned, Some((10, Warning::Searches(10, 15))));
+        assert!(Warning::Searches(10, 15).text().contains("propose_task"));
+        assert_eq!(turn.note("web_search", Some("jeu DJ PS1 16"), false, &limits), Some(Over::Searches));
+        // a call: the fifth
+        let live = Settings::default().live;
+        let mut turn = TurnCount::default();
+        for i in 1..=4 {
+            assert_eq!(turn.note("web_search", Some(&format!("q{i}")), false, &live), None, "{i}");
+        }
+        assert_eq!(turn.note("web_search", Some("q5"), false, &live), Some(Over::Searches));
+        // a background task goes much further; « Continuer » raises it once
+        let task = Settings::default().task;
+        let mut turn = TurnCount::default();
+        for i in 1..=40 {
+            assert_eq!(turn.note("web_search", Some(&format!("q{i}")), false, &task), None, "{i}");
+        }
+        assert_eq!(limits.raised().web_searches, 23);
+        // other lookups don't count as web searches
+        let mut turn = TurnCount::default();
+        for i in 1..=20 {
+            assert_eq!(turn.note("web_extract", Some(&format!("u{i}")), false, &limits), None, "{i}");
+        }
+        // said plainly, the rescue turn may not search again
+        assert_eq!(
+            notice_text(&Over::Searches, "fr"),
+            "J'ai fait beaucoup de recherches sur le web sans trouver de réponse sûre. Dis-moi si tu veux que j'en fasse \
+une recherche approfondie en tâche de fond."
+        );
+        for lang in ["en", "de", "es", "nl", "it"] {
+            assert!(!notice_text(&Over::Searches, lang).contains('_'), "{lang}");
+        }
+        assert_eq!(stopped_tool(&Over::Searches), Some("web_search".into()));
+        assert!(rescue_input(&Over::Searches, "fr").contains("Don't search the web again"));
+    }
+
     #[test]
     fn a_failing_tool_is_said_plainly_in_five_languages() {
         let web = Over::Failing("web_search".into());
@@ -2139,5 +2258,8 @@ exactly the same session_search call 3 times in this turn; at 5 the turn is stop
         assert_eq!((d.conversation.same_failure, d.task.same_failure, d.live.same_failure), (3, 5, 2));
         // a call: well under a conversation's limits, under Hermes' own cap of 50 web searches
         assert!(d.live.tool_calls < d.conversation.tool_calls && d.live.tool_calls < 50);
+        // web searches: all under Hermes' own cap of 50 (its English halt never comes first)
+        assert_eq!((d.conversation.web_searches, d.task.web_searches, d.live.web_searches), (15, 40, 4));
+        assert_eq!(Settings::from_table(&json!({"web_searches": 20, "live_web_searches": 6})).live.web_searches, 6);
     }
 }

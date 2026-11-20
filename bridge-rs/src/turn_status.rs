@@ -150,6 +150,8 @@ impl Loop {
             Warning::Browser(n, hard) => ("browser", Some("browser"), *n, hard + 1),
             Warning::DiscoverySame(n, hard) => ("discovery", None, *n, *hard),
             Warning::Discovery(n, hard) => ("discovery", None, *n, hard + 1),
+            // many web searches: the apps' « one tool again and again » (no new kind for them to know)
+            Warning::Searches(n, hard) => ("same_tool", kind("web_search"), *n, hard + 1),
         };
         Loop { over, kind, count, stop_at }
     }

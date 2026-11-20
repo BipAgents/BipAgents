@@ -15,7 +15,8 @@
 //! A call's turn is braked here (20/11, Alex: « Laisse-moi vérifier sur le web, deux secondes », then minutes of
 //! silence while the web search failed again and again, until Hermes' own guard at 50 searches and its English line in
 //! the conversation). Its stream is no run the hub follows (runs.rs), so the bridge counts its tool calls as they pass
-//! (loop_brake.rs, the `live` limits: a tool failing twice in a row, 12 calls…): past one, Hermes' run is stopped and
+//! (loop_brake.rs, the `live` limits: a tool failing twice in a row, 4 web searches, 12 calls…; told to the agent at
+//! about two thirds, a steer: answer with what you have): past one, Hermes' run is stopped and
 //! the agent says the brake's plain line out loud (« Je n'arrive pas à chercher sur le web pour l'instant. Tu veux que
 //! je réessaie plus tard ? »: an `assistant.delta`, then the turn's end with it as its text), Hermes' words after the
 //! stop left out. Hermes' own halts (its guard's « I stopped retrying… », a reply cut for repeating itself:
@@ -253,6 +254,12 @@ impl LiveBrake {
         }
     }
 
+    /// A limit the last call brought close: the note for the agent (a steer, out of the person's sight), once per kind.
+    pub fn warning(&mut self) -> Option<String> {
+        let warning = self.turn.take_warning()?;
+        (self.enabled && self.said.is_none()).then(|| warning.text())
+    }
+
     /// The turn stopped for `over`: the line to say (kept for its end).
     pub fn stopped(&mut self, over: &crate::loop_brake::Over) -> String {
         let line = crate::loop_brake::notice_text(over, &self.lang);
@@ -346,6 +353,15 @@ where
                         }
                     });
                 }
+            }
+            // a limit getting close (the third web search…): the agent told to answer with what it has
+            if let (Some(text), Some(run_id)) = (brake.warning(), brake.run_id.clone()) {
+                let (hermes, agent) = (hermes.clone(), agent.clone());
+                tokio::spawn(async move {
+                    if let Err(err) = hermes.steer_run(&agent, &run_id, &text).await {
+                        tracing::info!(agent = %agent.name, run_id = %run_id, error = %err, "live call's steer refused");
+                    }
+                });
             }
             let Some(event) = brake.shown(event) else { continue };
             let mut shown = Vec::new();
@@ -463,6 +479,29 @@ mod tests {
         // the third search is never started by the agent's words: the stop went at the second failure
         let stop = tokio::time::timeout(std::time::Duration::from_secs(5), seen.recv()).await.unwrap().unwrap();
         assert_eq!(stop, "POST /v1/runs/run_1/stop HTTP/1.1");
+    }
+
+    /// 20/11, the real place: every search answered, new words each time, 50 of them. A call stops past 4.
+    #[tokio::test]
+    async fn a_call_searching_again_and_again_is_stopped_even_when_searches_answer() {
+        let (tx, mut seen) = tokio::sync::mpsc::unbounded_channel();
+        let url = fake_hermes(tx).await;
+        let mut events = vec![("assistant.delta", json!({"delta": "Laisse-moi vérifier.", "run_id": "run_2"}))];
+        for i in 0..6 {
+            events.push(("tool.started", json!({"tool_name": "web_search", "args": {"query": format!("jeu DJ PS1 {i}")}})));
+            events.push(("tool.completed", json!({"tool_name": "web_search", "preview": ""})));
+        }
+        events.push(("assistant.completed", json!({"content": "Operation interrupted: waiting for model response (1.0s elapsed)."})));
+        let got = through(&events, "fr", &url).await;
+        let end = got.iter().find(|(k, _)| k == "assistant.completed").unwrap();
+        assert!(end.1["content"].as_str().unwrap().starts_with("J'ai fait beaucoup de recherches sur le web"));
+        let mut asked = Vec::new();
+        while let Ok(Some(line)) = tokio::time::timeout(std::time::Duration::from_millis(500), seen.recv()).await {
+            asked.push(line);
+        }
+        // told at the third search (a steer: answer with what you have), stopped at the fifth
+        assert!(asked.contains(&"POST /v1/runs/run_2/steer HTTP/1.1".to_string()), "{asked:?}");
+        assert!(asked.contains(&"POST /v1/runs/run_2/stop HTTP/1.1".to_string()), "{asked:?}");
     }
 
     #[tokio::test]
