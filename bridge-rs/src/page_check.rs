@@ -334,6 +334,8 @@ fn probe(runner: Runner, key: String) {
         return;
     }
     std::thread::spawn(move || {
+        // one of the browsers at once too (relecture 3, f2): none free, no probe this time
+        let Some(_slot) = Slot::take() else { return PROBING.store(false, Ordering::SeqCst) };
         let late = match private_folder() {
             Ok((dir, name)) => {
                 // twice the time a page gets: a busy moment is not a slow browser
@@ -813,6 +815,23 @@ id=\"l\"></ul><script>Bip.store.onChange(function(){})</script>";
         };
         let n = note("review", "gros", Some(&[forged]), 0.0);
         assert!(n.len() < 2_000, "{} characters of the page's own text in the tool result", n.len());
+    }
+
+    /// Relecture 3 f1: a dialog when the page opens (not on a button) stopped the headless page: no report.
+    #[test]
+    fn a_dialog_at_open_never_stops_the_check() {
+        let Some(config) = real_config() else { return };
+        let _one = fresh();
+        for open in
+            ["alert('Bienvenue')", "if(!confirm('Continuer ?'))document.title='non'", "prompt('Ton nom ?')", "print()"]
+        {
+            let html = format!("<html lang=\"fr\"><h1>Accueil</h1><script>{open}</script><p>Bonjour</p>");
+            let (locked, _) = crate::pages::lock_with(&html, "Accueil", None);
+            let started = Instant::now();
+            let found = check(&config, &locked);
+            assert!(found.is_some(), "{open}: no report ({:?})", started.elapsed());
+            assert!(started.elapsed() < Duration::from_secs(2), "{open}: {:?}", started.elapsed());
+        }
     }
 
     /// Review 2 n7: a page that never stops, and its retry by the agent, are that page's: the next page is checked (only

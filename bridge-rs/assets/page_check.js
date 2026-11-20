@@ -7,6 +7,10 @@
   // page's own script can't read it to post a « clean » report first; the frame as it is now, before the page runs
   var TOKEN = "__BIP_CHECK_TOKEN__", frameWin = window.parent, self = document.currentScript;
   if (self) self.remove();
+  // a dialog or a print stops the page in this browser (no report): none in this copy, from the start (relecture 3)
+  window.alert = window.print = function () {};
+  window.confirm = function () { return false; };
+  window.prompt = function () { return null; };
   var errors = [];
   addEventListener("error", function (e) { errors.push(String(e.message || e.type).slice(0, 120)); });
   addEventListener("unhandledrejection", function (e) { errors.push(String(e.reason && e.reason.message || e.reason).slice(0, 120)); });
@@ -86,12 +90,8 @@
       }
     }
     // the first button pressed once: what breaks at the first tap (a script error) is heard too. Only the opening's
-    // store writes count (a « +1 » button writes, rightly, and is refused here: no person pressed it), and a dialog
-    // or a print would stop the page in this browser: none in this copy (review 2, 20/11)
+    // store writes count (a « +1 » button writes, rightly, and is refused here: no person pressed it; review 2)
     opening = false;
-    window.alert = window.print = function () {};
-    window.confirm = function () { return false; };
-    window.prompt = function () { return null; };
     var first = document.querySelector("button:not([disabled])");
     if (first) try { first.click(); } catch (e) { errors.push(String(e && e.message || e).slice(0, 120)); }
     var out = {
