@@ -1326,7 +1326,7 @@ async fn signed_in(config: &Config, step: Step) -> ApiResult<Value> {
             let vaults = ob::vaults(&Runner::of(&config.obsidian), &paths(config)).await.unwrap_or_default();
             Ok(json!({"step": "signed_in", "vaults": vaults_view(&vaults), "obsidian": view(config)}))
         }
-        Step::Waiting(dialog) => Ok(json!({"step": "code_needed", "flow": keep_flow(config, dialog, FlowKind::Login)})),
+        Step::Waiting(dialog) => Ok(json!({"step": "code_needed", "flow": keep_flow(config, *dialog, FlowKind::Login)})),
         Step::Refused(code, said) => Err(refused(code, &said)),
         Step::Configured => Err(coded(502, "failed", "unexpected answer")),
     }
@@ -1363,7 +1363,7 @@ async fn configured(state: &AppState, step: Step, vault: ob::Remote, agents: Vec
             Ok(json!({"step": "connected", "obsidian": view(&config)}))
         }
         Step::Waiting(dialog) => {
-            Ok(json!({"step": "password_needed", "flow": keep_flow(&config, dialog, FlowKind::Setup { vault, agents })}))
+            Ok(json!({"step": "password_needed", "flow": keep_flow(&config, *dialog, FlowKind::Setup { vault, agents })}))
         }
         Step::Refused(code, said) => Err(refused(code, &said)),
         Step::SignedIn(..) => Err(coded(502, "failed", "unexpected answer")),

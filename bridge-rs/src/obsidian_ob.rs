@@ -94,12 +94,19 @@ impl Runner {
 
     /// The command line of `ob <args>`: `{vault}` in an argument is the vault's folder as `ob` sees it.
     pub fn argv(&self, paths: &Paths, tty: bool, args: &[&str]) -> Vec<String> {
+        self.argv_named(paths, tty, args, "bip-obsidian")
+    }
+
+    /// `argv` with the container's name (`name`: so a run killed on the bridge's side is removed too: a killed
+    /// `podman run` leaves its container running).
+    pub fn argv_named(&self, paths: &Paths, tty: bool, args: &[&str], name: &str) -> Vec<String> {
         let vault_seen = if self.contained() { "/vault".to_string() } else { paths.vault.to_string_lossy().into_owned() };
         let args = args.iter().map(|a| a.replace("{vault}", &vault_seen));
         if !self.contained() {
             return self.command.iter().cloned().chain(args).collect();
         }
-        let mut argv: Vec<String> = vec![self.podman.clone(), "run".into(), "--rm".into(), "-i".into()];
+        let mut argv: Vec<String> =
+            vec![self.podman.clone(), "run".into(), "--rm".into(), "-i".into(), format!("--name={name}")];
         if tty {
             argv.push("-t".into());
         }
@@ -268,7 +275,8 @@ pub struct Ran {
 
 /// `ob <args>`, no terminal, its standard input closed.
 pub async fn run(runner: &Runner, paths: &Paths, args: &[&str], timeout: Duration) -> Result<Ran, String> {
-    let argv = runner.argv(paths, false, args);
+    let name = container_name();
+    let argv = runner.argv_named(paths, false, args, &name);
     let mut command = tokio::process::Command::new(&argv[0]);
     command
         .args(&argv[1..])
@@ -279,7 +287,10 @@ pub async fn run(runner: &Runner, paths: &Paths, args: &[&str], timeout: Duratio
         .kill_on_drop(true);
     let child = command.spawn().map_err(|e| format!("Obsidian's tool can't start ({e})"))?;
     match tokio::time::timeout(timeout, child.wait_with_output()).await {
-        Err(_) => Err("Obsidian's tool didn't answer in time".into()),
+        Err(_) => {
+            runner.remove(&name).await;
+            Err("Obsidian's tool didn't answer in time".into())
+        }
         Ok(Err(e)) => Err(e.to_string()),
         Ok(Ok(out)) => Ok(Ran {
             ok: out.status.success(),
@@ -303,12 +314,35 @@ pub enum Waited {
 
 /// One `ob` run on a pseudo-terminal of ours: what it writes is read as it comes, an answer is typed when its question
 /// shows.
+/// A run's container name, unique.
+fn container_name() -> String {
+    format!("bip-obsidian-{}", crate::py::token_hex(6))
+}
+
+impl Runner {
+    /// The container `name` gone (a run stopped by the bridge: its `podman run` killed, the container not).
+    pub async fn remove(&self, name: &str) {
+        if !self.contained() {
+            return;
+        }
+        let _ = tokio::process::Command::new(&self.podman)
+            .args(["rm", "-f", "-t", "2", name])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .await;
+    }
+}
+
 pub struct Dialog {
     child: tokio::process::Child,
     writer: std::fs::File,
     out: Arc<Mutex<String>>,
     notify: Arc<Notify>,
     seen: usize,
+    runner: Runner,
+    name: String,
 }
 
 fn openpty() -> std::io::Result<(OwnedFd, OwnedFd)> {
@@ -327,7 +361,8 @@ fn openpty() -> std::io::Result<(OwnedFd, OwnedFd)> {
 impl Dialog {
     /// `ob <args>` started on a new pseudo-terminal.
     pub fn start(runner: &Runner, paths: &Paths, args: &[&str]) -> std::io::Result<Dialog> {
-        let argv = runner.argv(paths, true, args);
+        let name = container_name();
+        let argv = runner.argv_named(paths, true, args, &name);
         let (master, slave) = openpty()?;
         let mut command = tokio::process::Command::new(&argv[0]);
         command
@@ -372,7 +407,7 @@ impl Dialog {
             }
             n.notify_waiters();
         });
-        Ok(Dialog { child, writer, out, notify, seen: 0 })
+        Ok(Dialog { child, writer, out, notify, seen: 0, runner: runner.clone(), name })
     }
 
     fn text(&self) -> String {
@@ -424,6 +459,26 @@ impl Dialog {
     pub async fn stop(mut self) {
         let _ = self.child.start_kill();
         let _ = tokio::time::timeout(Duration::from_secs(5), self.child.wait()).await;
+        self.runner.remove(&self.name).await;
+        self.name.clear();
+    }
+}
+
+impl Drop for Dialog {
+    /// A dialog dropped without `stop` (a sign-in nobody finished): its container removed in the background.
+    fn drop(&mut self) {
+        if self.name.is_empty() || !self.runner.contained() {
+            return;
+        }
+        let (podman, name) = (self.runner.podman.clone(), std::mem::take(&mut self.name));
+        std::thread::spawn(move || {
+            let _ = std::process::Command::new(podman)
+                .args(["rm", "-f", "-t", "2", &name])
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status();
+        });
     }
 }
 
@@ -436,7 +491,7 @@ pub enum Step {
     /// The vault is set up on this place.
     Configured,
     /// `ob` waits for the person's code (sign-in) or the vault's password (setup).
-    Waiting(Dialog),
+    Waiting(Box<Dialog>),
     /// Refused: a code (`wrong_login`, `wrong_code`, `wrong_vault_password`, `not_found`, `failed`) and `ob`'s words.
     Refused(&'static str, String),
 }
@@ -499,7 +554,7 @@ pub async fn login_result(mut dialog: Dialog, code: Option<&str>) -> Step {
                         return Step::Refused("failed", e.to_string());
                     }
                 }
-                None => return Step::Waiting(dialog),
+                None => return Step::Waiting(Box::new(dialog)),
             },
             Waited::Found(1) => {
                 let _ = dialog.wait_for(&["\n"], Duration::from_secs(5)).await;
@@ -585,7 +640,7 @@ pub async fn setup_result(mut dialog: Dialog, mut password: Option<Zeroizing<Str
                         return Step::Refused("failed", e.to_string());
                     }
                 }
-                None => return Step::Waiting(dialog),
+                None => return Step::Waiting(Box::new(dialog)),
             },
             Waited::Found(1) => {
                 let _ = dialog.wait_for(&["sync"], Duration::from_secs(10)).await;
@@ -678,7 +733,7 @@ mod tests {
         let paths = Paths { state: "/d/obsidian/state".into(), vault: "/d/obsidian/vault".into() };
         let runner = Runner { command: Vec::new(), podman: "podman".into() };
         let argv = runner.argv(&paths, true, &["sync", "--path", "{vault}"]);
-        assert_eq!(&argv[..5], ["podman", "run", "--rm", "-i", "-t"]);
+        assert_eq!(&argv[..6], ["podman", "run", "--rm", "-i", "--name=bip-obsidian", "-t"]);
         assert!(argv.contains(&"/d/obsidian/state:/state".to_string()));
         assert!(argv.contains(&"/d/obsidian/vault:/vault".to_string()));
         assert!(argv.contains(&"--cap-drop=all".to_string()) && argv.contains(&"--read-only".to_string()));
@@ -720,6 +775,11 @@ mod tests {
         dialog.answer("nobody@example.invalid").await.unwrap();
         assert_eq!(dialog.wait_for(&[Q_PASSWORD], Duration::from_secs(30)).await, Waited::Found(0), "{}", dialog.text());
         dialog.stop().await;
+        let left = std::process::Command::new("podman")
+            .args(["ps", "-a", "--filter", "name=bip-obsidian-", "--format", "{{.Names}}"])
+            .output()
+            .unwrap();
+        assert_eq!(String::from_utf8_lossy(&left.stdout).trim(), "", "a stopped dialog leaves no container");
         let listed = run(&runner, &paths, &["sync-list-remote", "--json"], Duration::from_secs(60)).await.unwrap();
         assert!(!listed.ok && listed.stderr.contains("No account logged in"), "{listed:?}");
     }
