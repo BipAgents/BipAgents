@@ -775,6 +775,50 @@ id=\"l\"></ul><script>Bip.store.onChange(function(){})</script>";
         assert!(n.len() < 2_000, "{} characters of the page's own text in the tool result", n.len());
     }
 
+    /// Review 2 (20/11): the synthetic press on the first button runs after the measure but before the report, without
+    /// the person's activation — a button that writes to the store (« +1 », « Remettre à zéro ») must not be reported
+    /// as « writes made when the page opened » on a right page: the agent would be asked to rewrite it.
+    #[test]
+    fn review2_a_button_that_writes_is_no_write_on_open() {
+        let Some(config) = real_config() else { return };
+        let _one = REAL.lock().unwrap_or_else(|e| e.into_inner());
+        let html = "<html lang=\"fr\"><h1>Verres d'eau</h1><p class=\"big\" id=\"n\"></p><button onclick=\"Bip.store.set('n',(Bip.store.get('n')||0)+1)\">+1</button>\
+<script>Bip.store.onChange(function(){Bip.set('#n',String(Bip.store.get('n')||0))})</script>";
+        let (locked, _) = crate::pages::lock_with(html, "Eau", Some("home"));
+        let found = check(&config, &locked).expect("checked");
+        let all = problems(&found).join("\n");
+        eprintln!("{all}");
+        assert!(!all.contains("Bip.store writes refused"), "a right page asked to be rewritten: {all}");
+    }
+
+    /// Review 2: what the first button may do in the checked copy — a dialog, a print, a navigation — never keeps the
+    /// report from coming, and never pauses the check for the place.
+    #[test]
+    fn review2_what_the_first_button_does_never_stops_the_check() {
+        let Some(config) = real_config() else { return };
+        let _one = REAL.lock().unwrap_or_else(|e| e.into_inner());
+        let mut stopped = Vec::new();
+        for press in [
+            "if(confirm('Tout effacer ?'))document.body.textContent=''",
+            "alert('Ajouté')",
+            "print()",
+            "location.href='file:///etc/passwd'",
+            "window.open('https://example.com/')",
+            "parent.postMessage({width:390,page:390},'*')",
+        ] {
+            FAILED.lock().unwrap().clear();
+            let html = format!("<html lang=\"fr\"><h1>Liste</h1><button onclick=\"{press}\">Bouton</button><ul class=\"check\"><li>Pain</li></ul>");
+            let (locked, _) = crate::pages::lock_with(&html, "Liste", Some("home"));
+            let started = Instant::now();
+            let found = check(&config, &locked);
+            eprintln!("{press}: {:?} {:?}", started.elapsed(), found.as_ref().map(|f| problems(f)));
+            if found.is_none() {
+                stopped.push(press);
+            }
+        }
+        assert!(stopped.is_empty(), "no report when the first button does: {stopped:?}");
+    }
+
     #[test]
     fn the_frame_holds_one_iframe_per_width() {
         let f = frame();
