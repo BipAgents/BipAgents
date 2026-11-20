@@ -38,7 +38,7 @@ use regex::Regex;
 
 use crate::cards::{amount_of, mark_near};
 
-/// One frame's text as card_fill.rs `pageText` reads it.
+/// One frame's text as page_snapshot.rs reads it (what Chrome rendered).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PageText {
     /// What is really visible.
@@ -47,7 +47,7 @@ pub struct PageText {
     pub all: String,
     /// The payment provider's own frame or page (CAWL's page, Stripe's frame…), not the shop's.
     pub provider: bool,
-    /// The frame's text was longer than what is read (`pageText`'s cap): never « approved » (Relecture 2, 3).
+    /// The frame's text was longer than what is read (page_snapshot.rs `MAX_CHARS`): never « approved » (Relecture 2, 3).
     pub truncated: bool,
     /// The text of closed shadow roots (read through DevTools, apart from its labels): any amount above the approved one
     /// in it blocks « approved » (Relecture 5, e3).
@@ -102,7 +102,7 @@ pub struct Amount {
     pub cents: i64,
     pub codes: &'static [&'static str],
     pub class: Class,
-    /// The value of a read-only field (`pageText` marks it « [champ] »): any one above the approved amount blocks
+    /// The value of a read-only field (page_snapshot.rs marks it « [champ] »): any one above the approved amount blocks
     /// « approved » unless its own words make it a part or a mention (« Remise 99,99 € ») (Relecture 6, f2).
     pub field: bool,
 }
@@ -133,7 +133,7 @@ static CARD_GROUPS: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?m)^[ \t]*\d{4}(?:[ -]\d{4}){0,4}[ \t]*$").expect("card groups pattern"));
 /// A digit run that may be a card number (12 to 19 digits, spaces or dashes between): never read.
 static CARD_LIKE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\d(?:[ -]?\d){11,18}").expect("card pattern"));
-/// « 27€97 » (the cents right after the mark; `pageText` glues « 27€<sup>97</sup> » so).
+/// « 27€97 » (the cents right after the mark; the rendered boxes « 27 » « €97 » touch so).
 static EURO_CENTS: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(\d) ?€(\d{2})([^\d.,]|$)").expect("euro cents pattern"));
 /// « 27 ,97 », « 32⏎,05 € » (the cents in a piece of their own, on the same line or the next: a flex item, Relecture 6).
@@ -231,7 +231,7 @@ fn class_of(line_before: &str, above: &[&str]) -> Class {
             own.to_string()
         }
     };
-    // `pageText`'s marks: an old price struck out, a product suggested (anywhere on its piece of text)
+    // page_snapshot.rs's marks: an old price struck out, a product suggested (anywhere on its piece of text)
     if raw_label.contains("[barré]") || raw_label.contains("[suggestion]") {
         return Class::Mention;
     }
@@ -650,7 +650,7 @@ mod correction_1 {
             PageTotal::Doubt(Doubt::Foreign(3210, "USD"))
         );
         assert_eq!(total(&["Montant (EUR)\nTotal à payer : 32,87"], 2797, "EUR"), PageTotal::Doubt(Doubt::Unclear));
-        // the whole page not read (`pageText`'s cap): never approved
+        // the whole page not read (page_snapshot.rs `MAX_CHARS`): never approved
         let cut = PageText { truncated: true, ..PageText::plain("Total à payer 27,97 €") };
         assert!(matches!(page_total_of(&[cut], 2797, "EUR"), PageTotal::Unread(_)));
         // a mention only when its words qualify the amount itself

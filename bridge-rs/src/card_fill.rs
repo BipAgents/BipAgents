@@ -434,6 +434,12 @@ impl Cdp {
     }
 
     async fn read_one(&mut self, deadline: tokio::time::Instant) -> Result<Option<Value>, FillError> {
+        self.read_one_wiping(deadline, false).await
+    }
+
+    /// `read_one`; `wipe`: the frame's raw text overwritten once parsed, when the bridge holds it alone (a snapshot
+    /// holds the page's input values, the card's fields once typed: `snapshot`).
+    async fn read_one_wiping(&mut self, deadline: tokio::time::Instant, wipe: bool) -> Result<Option<Value>, FillError> {
         loop {
             let message = match tokio::time::timeout_at(deadline, self.ws.next()).await {
                 Err(_) => return Ok(None),
@@ -443,7 +449,14 @@ impl Cdp {
             };
             match message {
                 WsMessage::Text(text) => {
-                    return serde_json::from_str::<Value>(text.as_str()).map(Some).map_err(|e| protocol(e.to_string()))
+                    let parsed = serde_json::from_str::<Value>(text.as_str()).map(Some).map_err(|e| protocol(e.to_string()));
+                    if wipe {
+                        if let Ok(mut raw) = bytes::Bytes::from(text).try_into_mut() {
+                            use zeroize::Zeroize;
+                            raw.as_mut().zeroize();
+                        }
+                    }
+                    return parsed;
                 }
                 WsMessage::Close(_) => return Err(FillError::Unreachable),
                 _ => continue,
@@ -471,6 +484,35 @@ impl Cdp {
                     return Err(protocol(format!("{method}: {text}")));
                 }
                 return Ok(answer.get("result").cloned().unwrap_or(json!({})));
+            }
+            if answer.get("method").is_some() {
+                self.note(answer).await?;
+            }
+        }
+    }
+
+    /// `DOMSnapshot.captureSnapshot` in `session` (page_snapshot.rs `STYLES`), read at once and wiped: the answer holds
+    /// every input's live value (the card's fields once typed), never kept, logged or passed on. Its raw frame is
+    /// overwritten too when the connection holds it alone (best effort: the websocket's own buffers are not reachable).
+    pub async fn snapshot(&mut self, session: &str) -> Result<Vec<crate::page_snapshot::DocText>, FillError> {
+        self.next += 1;
+        let id = self.next;
+        let params = json!({"computedStyles": crate::page_snapshot::STYLES, "includeDOMRects": true,
+                            "includeTextColorOpacities": true});
+        let message = json!({"id": id, "method": "DOMSnapshot.captureSnapshot", "params": params, "sessionId": session});
+        self.ws.send(WsMessage::text(message.to_string())).await.map_err(|_| FillError::Unreachable)?;
+        let deadline = tokio::time::Instant::now() + CALL_TIMEOUT;
+        loop {
+            let Some(mut answer) = self.read_one_wiping(deadline, true).await? else {
+                return Err(protocol("DOMSnapshot.captureSnapshot: no answer"));
+            };
+            if answer.get("id").and_then(Value::as_u64) == Some(id) {
+                let read = match answer.get("result") {
+                    Some(result) if answer.get("error").is_none() => Ok(crate::page_snapshot::read_snapshot(result)),
+                    _ => Err(protocol("DOMSnapshot.captureSnapshot: refused")),
+                };
+                crate::page_snapshot::wipe(&mut answer);
+                return read;
             }
             if answer.get("method").is_some() {
                 self.note(answer).await?;
@@ -513,64 +555,6 @@ impl Cdp {
             return Err(protocol(format!("script: {text}")));
         }
         Ok(result.get("result").and_then(|r| r.get("value")).cloned().unwrap_or(Value::Null))
-    }
-}
-
-/// The most text pieces of closed shadow roots read per frame process; past it the read is not sure (`CLOSED_CUT`).
-const CLOSED_PIECES: usize = 5000;
-const CLOSED_CUT: &str = "\u{0}cut";
-
-/// The frame owners (`IFRAME`, `FRAME`) of a DevTools node tree, shadow roots included: (the frame's id, the owner's
-/// backend node id).
-fn frame_owners(node: &Value, out: &mut Vec<(String, i64)>) {
-    let name = node.get("nodeName").and_then(Value::as_str).unwrap_or("");
-    if matches!(name, "IFRAME" | "FRAME") {
-        if let (Some(frame), Some(id)) =
-            (node.get("frameId").and_then(Value::as_str), node.get("backendNodeId").and_then(Value::as_i64))
-        {
-            out.push((frame.to_string(), id));
-        }
-    }
-    for key in ["children", "shadowRoots"] {
-        for child in node.get(key).and_then(Value::as_array).into_iter().flatten() {
-            frame_owners(child, out);
-        }
-    }
-    for key in ["contentDocument", "root"] {
-        if let Some(inner) = node.get(key) {
-            frame_owners(inner, out);
-        }
-    }
-}
-
-/// The text nodes of the closed shadow roots in a DevTools node tree (`DOM.getDocument` with `pierce`), scripts and
-/// styles left out, card-like digit runs dropped (page_total.rs drops them again).
-fn closed_texts(node: &Value, inside: bool, out: &mut Vec<String>) {
-    // past `CLOSED_PIECES`, a « cut » mark: the read is not complete (Relecture 6, f3: never a silent cap)
-    if out.len() > CLOSED_PIECES {
-        return;
-    }
-    let name = node.get("nodeName").and_then(Value::as_str).unwrap_or("");
-    if matches!(name, "SCRIPT" | "STYLE" | "NOSCRIPT" | "TEMPLATE" | "INPUT" | "SELECT" | "OPTION" | "TEXTAREA") {
-        return;
-    }
-    if inside && node.get("nodeType").and_then(Value::as_u64) == Some(3) {
-        let text = node.get("nodeValue").and_then(Value::as_str).unwrap_or("").split_whitespace().collect::<Vec<_>>().join(" ");
-        if !text.is_empty() {
-            out.push(if out.len() < CLOSED_PIECES { text } else { CLOSED_CUT.to_string() });
-        }
-    }
-    for key in ["children", "shadowRoots"] {
-        for child in node.get(key).and_then(Value::as_array).into_iter().flatten() {
-            let closed = child.get("shadowRootType").and_then(Value::as_str) == Some("closed");
-            closed_texts(child, inside || closed, out);
-        }
-    }
-    if let Some(content) = node.get("contentDocument") {
-        closed_texts(content, inside, out);
-    }
-    if let Some(root) = node.get("root") {
-        closed_texts(root, inside, out);
     }
 }
 
@@ -1290,95 +1274,90 @@ impl Page {
         self.cdp.call("Runtime.callFunctionOn", empty, Some(session)).await.is_ok()
     }
 
-    /// The text of the page's main frame and of each frame a card may be typed into (`rule`: the page's own site and
-    /// the known payment providers, every frame above it one of these too), read in the bridge's own world (`pageText`:
-    /// text nodes only, never a field's value nor a card-like digit run; what is really visible, and everything laid
-    /// out): where card_pay.rs reads the payment's total (page_total.rs). Each frame says whether it is the payment
-    /// provider's own (its frame, or its hosted page), never the shop's. A frame that can't be read is left out.
+    /// The text of every frame of the page as Chrome rendered it (page_snapshot.rs: visual lines, what is really
+    /// visible and everything laid out, never a form control's own text, read-only fields' values marked): where
+    /// card_pay.rs reads the payment's total (page_total.rs). The page's own frames and the providers' (`rule`, every
+    /// frame above one of these too) are read as such, each saying whether it is the provider's; any other site's only
+    /// as text not shown. A frame process not read, the main frame not read, or a visible frame of real size not read
+    /// (matched by its id) makes every text `truncated`: never « approved ».
     pub async fn page_texts(&mut self, rule: &Frames) -> Result<Vec<crate::page_total::PageText>, FillError> {
         let main = self.main_frame().await?;
         let seen = self.frames().await?;
-        let mut texts = Vec::new();
-        let mut done: Vec<String> = Vec::new();
-        // Every frame is read (Relecture 5, e4): the page's own and the providers' as such; any other site's (a
-        // captcha, a wallet button, a trust badge, a summary in a frame) as text that is not shown: a total in it above
-        // the approved amount blocks « approved », it never supports it.
-        for FrameSeen { session, id, url, .. } in seen.clone() {
-            if done.contains(&id) {
-                continue;
-            }
-            // the shop's own srcdoc / about:blank frames are read as the page they belong to (Relecture 6, f10)
-            let own = |u: &str| rule.allows(u) || u.starts_with("about:");
-            let allowed = id == main || (own(&url) && ancestors_of(&id, &seen).iter().all(|a| own(a)));
-            let world = json!({"frameId": id, "worldName": WORLD, "grantUniveralAccess": false});
-            let Ok(created) = self.cdp.call("Page.createIsolatedWorld", world, Some(&session)).await else { continue };
-            let Some(context) = created.get("executionContextId").and_then(Value::as_i64) else { continue };
-            let expression = format!("{SCRIPT}\n;globalThis.__bipPay.pageText()");
-            let Ok(read) = self.cdp.evaluate(&session, context, &expression).await else { continue };
-            let (Some(shown), Some(all)) = (read.get("shown").and_then(Value::as_str), read.get("all").and_then(Value::as_str))
-            else {
-                continue;
-            };
-            let host = origin_of(&url).map(|(_, h)| h).unwrap_or_default();
-            let provider = allowed
-                && (provider_frame(&host).is_some()
-                    || provider_page(&host).is_some()
-                    || rule.test.iter().any(|t| at_or_below(&host, t)));
-            done.push(id);
-            let truncated = read.get("truncated").and_then(Value::as_bool).unwrap_or(true);
-            let shown = if allowed { shown.to_string() } else { String::new() };
-            texts.push(crate::page_total::PageText { shown, all: all.to_string(), provider, truncated, closed: false });
-        }
-        // Each frame process's DevTools tree (`pierce`: shadow roots included, closed ones too): every visible frame
-        // of real size (≥ 120×40 px), wherever it sits, must be among the frames read, matched by its id (Relecture 5,
-        // e1, e2: never by a count); and the text of closed shadow roots, where any amount above the approved one
-        // blocks « approved » (e3).
         let mut sessions: Vec<String> = Vec::new();
         for frame in &seen {
             if !sessions.contains(&frame.session) {
                 sessions.push(frame.session.clone());
             }
         }
-        // the page's own frame not read (a timeout, an exception): never sure (Relecture 6)
-        let mut sure = done.contains(&main);
-        if !sure {
-            tracing::info!("card payment: the page's main frame not read, its total not read for sure");
-        }
+        let mut texts = Vec::new();
+        let mut done: Vec<String> = Vec::new();
+        let mut sure = true;
+        // What Chrome rendered, one snapshot per frame process (page_snapshot.rs): every frame's document, from any
+        // site (Relecture 5, e4): the page's own and the providers' as such; any other site's (a captcha, a wallet
+        // button, a badge) as text not shown: a total in it above the approved amount blocks, it never supports.
         for session in sessions {
-            let Ok(doc) = self.cdp.call("DOM.getDocument", json!({"depth": -1, "pierce": true}), Some(&session)).await
-            else {
+            let docs = match self.cdp.snapshot(&session).await {
+                Ok(docs) => docs,
+                Err(exc) => {
+                    tracing::info!(exc = %exc, "card payment: a frame process's page not read, its total not read for sure");
+                    sure = false;
+                    continue;
+                }
+            };
+            for doc in docs {
+                if doc.frame.is_empty() || done.contains(&doc.frame) {
+                    continue;
+                }
+                let url = if doc.url.is_empty() {
+                    seen.iter().find(|f| f.id == doc.frame).map(|f| f.url.clone()).unwrap_or_default()
+                } else {
+                    doc.url.clone()
+                };
+                // the shop's own srcdoc / about:blank frames are read as the page they belong to (Relecture 6, f10)
+                let own = |u: &str| rule.allows(u) || u.starts_with("about:");
+                let allowed =
+                    doc.frame == main || (own(&url) && ancestors_of(&doc.frame, &seen).iter().all(|a| own(a)));
+                let host = origin_of(&url).map(|(_, h)| h).unwrap_or_default();
+                let provider = allowed
+                    && (provider_frame(&host).is_some()
+                        || provider_page(&host).is_some()
+                        || rule.test.iter().any(|t| at_or_below(&host, t)));
+                done.push(doc.frame.clone());
+                if doc.truncated {
+                    tracing::info!(frame = %host, "card payment: a frame's text past the reader's cap, not read for sure");
+                }
+                let shown = if allowed { doc.shown } else { String::new() };
+                if !doc.closed.is_empty() {
+                    texts.push(crate::page_total::PageText { all: doc.closed, closed: true, ..Default::default() });
+                }
+                texts.push(crate::page_total::PageText { shown, all: doc.all, provider, truncated: doc.truncated, closed: false });
+            }
+        }
+        // the page's own frame not read (a timeout, an exception): never sure (Relecture 6)
+        if !done.contains(&main) {
+            tracing::info!("card payment: the page's main frame not read, its total not read for sure");
+            sure = false;
+        }
+        // every frame not read, matched by its id (Relecture 5, e1, e2): its owner's box in its parent's page; a visible
+        // one of real size (≥ 120×40 px) makes the read not sure, a tiny one (a chat launcher) does not
+        for frame in seen.iter().filter(|f| !done.contains(&f.id)) {
+            let parent = frame.parent.as_deref().and_then(|p| seen.iter().find(|f| f.id == p));
+            let session = parent.map_or(frame.session.clone(), |p| p.session.clone());
+            let owner = self.cdp.call("DOM.getFrameOwner", json!({"frameId": frame.id}), Some(&session)).await;
+            let Some(node) = owner.ok().and_then(|o| o.get("backendNodeId").and_then(Value::as_i64)) else {
+                tracing::info!("card payment: a frame not read and not placed, its total not read for sure");
                 sure = false;
                 continue;
             };
-            let mut owners = Vec::new();
-            frame_owners(&doc, &mut owners);
-            for (frame, node) in owners {
-                if done.contains(&frame) {
-                    continue;
-                }
-                let model = self.cdp.call("DOM.getBoxModel", json!({"backendNodeId": node}), Some(&session)).await;
-                let size = model.ok().and_then(|m| {
-                    let model = m.get("model")?;
-                    Some((model.get("width")?.as_f64()?, model.get("height")?.as_f64()?))
-                });
-                // no box: not laid out (display: none); a box of real size not read: not sure
-                if size.is_some_and(|(w, h)| w >= 120.0 && h >= 40.0) {
-                    tracing::info!(width = ?size.map(|s| s.0), height = ?size.map(|s| s.1),
-                                   "card payment: a visible frame of the page not read, its total not read for sure");
-                    sure = false;
-                }
-            }
-            let mut closed = Vec::new();
-            closed_texts(&doc, false, &mut closed);
-            if closed.last().is_some_and(|t| t == CLOSED_CUT) {
-                tracing::info!("card payment: too much text in closed shadow roots, the total not read for sure");
+            let model = self.cdp.call("DOM.getBoxModel", json!({"backendNodeId": node}), Some(&session)).await;
+            let size = model.ok().and_then(|m| {
+                let model = m.get("model")?;
+                Some((model.get("width")?.as_f64()?, model.get("height")?.as_f64()?))
+            });
+            if size.is_some_and(|(w, h)| w >= 120.0 && h >= 40.0) {
+                tracing::info!(width = ?size.map(|s| s.0), height = ?size.map(|s| s.1),
+                               "card payment: a visible frame of the page not read, its total not read for sure");
                 sure = false;
-                closed.pop();
-            }
-            if !closed.is_empty() {
-                tracing::info!(pieces = closed.len(), "card payment: text of a closed shadow root read");
-                let all = closed.join("\n");
-                texts.push(crate::page_total::PageText { all, closed: true, ..Default::default() });
             }
         }
         if !sure {
@@ -1578,20 +1557,6 @@ mod tests {
     /// `fresh` waited for it to close (« another tab would not close ») and every payment was handed over, nothing
     /// typed. Those addresses are then asked for their window (`tab_targets`; a real tab on one is closed, the
     /// black-box test_card_payments_chrome.py).
-    #[test]
-    fn only_the_text_of_closed_shadow_roots_is_taken_from_the_devtools_tree() {
-        let doc = json!({"root": {"nodeName": "#document", "children": [{"nodeName": "BODY", "children": [
-            {"nodeName": "#text", "nodeType": 3, "nodeValue": "Total panier 27,97 €"},
-            {"nodeName": "DIV", "shadowRoots": [{"nodeName": "#document-fragment", "shadowRootType": "closed", "children": [
-                {"nodeName": "P", "children": [{"nodeName": "#text", "nodeType": 3, "nodeValue": " Total à payer  32,87 € "}]},
-                {"nodeName": "SCRIPT", "children": [{"nodeName": "#text", "nodeType": 3, "nodeValue": "var x = 1"}]}]}]},
-            {"nodeName": "SPAN", "shadowRoots": [{"nodeName": "#document-fragment", "shadowRootType": "open", "children": [
-                {"nodeName": "#text", "nodeType": 3, "nodeValue": "open root, read by pageText"}]}]}]}]}});
-        let mut out = Vec::new();
-        closed_texts(&doc, false, &mut out);
-        assert_eq!(out, ["Total à payer 32,87 €"]);
-    }
-
     #[test]
     fn chromes_own_ui_is_no_tab_to_close_or_blank() {
         let targets = json!({"targetInfos": [

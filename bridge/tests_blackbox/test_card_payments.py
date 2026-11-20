@@ -185,6 +185,17 @@ class FakeChrome:
         if method == "Page.resetNavigationHistory":
             self.resets.append(self.url)
             return {}
+        if method == "DOMSnapshot.captureSnapshot":
+            # what the bridge reads of the page's total (fix-pay-total-check, page_snapshot.rs): the main frame says the
+            # amount the test approves (`page_text` to say something else; None: the page can't be read)
+            frame = self.sessions[session]
+            if frame == "F-main" and self.page_text is None:
+                return {"strings": [], "documents": []}
+            text = ""
+            if frame == "F-main":
+                asked = LAST_ASKED or {"amount": "12,50", "currency": "eur"}
+                text = self.page_text or f"Total à payer : {asked['amount']} {asked['currency']}"
+            return snapshot_of(frame, self.url if frame == "F-main" else self.frame_urls.get(frame) or "", text)
         if method == "DOM.getFrameOwner":
             return {"backendNodeId": 500 + list(self.sessions.values()).index(params["frameId"])}
         if method == "DOM.resolveNode" and "backendNodeId" in params and params["backendNodeId"] >= 500:
@@ -271,17 +282,6 @@ class FakeChrome:
                 value = True
             elif name == "bankAsks":
                 value = self.bank_asks
-            elif name == "pageText":
-                # what the bridge reads of the page's total (fix-pay-total-check): the main frame says the amount the
-                # test approves (`page_text` to say something else; None: no text read at all)
-                if frame != "F-main":
-                    value = {"shown": "", "all": "", "truncated": False}
-                elif self.page_text is None:
-                    value = None
-                else:
-                    asked = LAST_ASKED or {"amount": "12,50", "currency": "eur"}
-                    text = self.page_text or f"Total à payer : {asked['amount']} {asked['currency']}"
-                    value = {"shown": text, "all": text, "truncated": False}
             else:
                 value = True
         return {"result": {"type": "object" if isinstance(value, (list, dict)) else "string", "value": value}}
@@ -318,6 +318,20 @@ def turn_on(bridge):
     on = bridge.post("/v1/vault/payments", headers=AUTH, json={"enabled": True})
     assert on.status_code == 200, on.text
     return on.json()
+
+
+def snapshot_of(frame, url, text):
+    """A `DOMSnapshot.captureSnapshot` answer of one document holding one line of text (none when empty)."""
+    strings = ["#document", "BODY", "#text", url or "", frame, text]
+    length = len(text.encode("utf-16-le")) // 2
+    boxes = {"layoutIndex": [1], "bounds": [[8, 8, 300, 19]], "start": [0], "length": [length]} if text else \
+        {"layoutIndex": [], "bounds": [], "start": [], "length": []}
+    return {"strings": strings, "documents": [{
+        "documentURL": 3, "frameId": 4, "contentWidth": 800, "contentHeight": 600,
+        "nodes": {"parentIndex": [-1, 0, 1], "nodeName": [0, 1, 2], "nodeValue": [-1, -1, 5], "attributes": [[], [], []]},
+        "layout": {"nodeIndex": [1, 2], "styles": [[-1] * 8, [-1] * 8], "bounds": [[0, 0, 800, 600], [8, 8, 300, 19]],
+                   "text": [-1, 5]},
+        "textBoxes": boxes}]}
 
 
 # The amount of the last pay_with_card asked (`pay`): what an agent reading the page right gives confirm_payment's

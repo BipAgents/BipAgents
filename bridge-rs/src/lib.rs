@@ -232,6 +232,7 @@ pub mod calendar;
 pub mod card_details;
 pub mod card_fill;
 pub mod card_pay;
+pub mod page_snapshot;
 pub mod page_total;
 pub mod pay_line;
 pub mod handover;
