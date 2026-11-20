@@ -42,7 +42,8 @@
       var hides = /hidden|clip/.test(s.overflowX) || s.textOverflow === "ellipsis";
       if (own && hides && el.scrollWidth > el.clientWidth + 2 && el.clientWidth > 0) cut.push(name(el));
       if (own && /hidden|clip/.test(s.overflowY) && el.scrollHeight > el.clientHeight * 1.3 + 4) cut.push(name(el));
-      if (own && s.position !== "absolute" && s.position !== "fixed" && texts.length < 400) texts.push([el, r]);
+      // its line boxes (a word run over two lines is two boxes, not the block they span)
+      if (own && s.position !== "absolute" && s.position !== "fixed" && texts.length < 400) texts.push([el, [].slice.call(el.getClientRects())]);
       if (/\b(card|kpi|tab)\b/.test(el.className) || /^(SECTION|TABLE|UL|OL)$/.test(el.tagName)) {
         if (!words(el) && !el.querySelector("img,svg,canvas,input,select,textarea,button,video,audio,iframe")) empty.push(name(el));
       }
@@ -50,8 +51,10 @@
     for (var a = 0; a < texts.length && overlap.length < 5; a++) for (var b = a + 1; b < texts.length; b++) {
       var x = texts[a], y = texts[b];
       if (x[0].contains(y[0]) || y[0].contains(x[0])) continue;
-      var w = Math.min(x[1].right, y[1].right) - Math.max(x[1].left, y[1].left), h = Math.min(x[1].bottom, y[1].bottom) - Math.max(x[1].top, y[1].top);
-      if (w > 4 && h > 4) { overlap.push(name(x[0]) + " / " + name(y[0])); break; }
+      var hit = x[1].some(function (p) { return y[1].some(function (q) {
+        return Math.min(p.right, q.right) - Math.max(p.left, q.left) > 4 && Math.min(p.bottom, q.bottom) - Math.max(p.top, q.top) > 4;
+      }); });
+      if (hit) { overlap.push(name(x[0]) + " / " + name(y[0])); break; }
     }
     var out = {
       width: width, page: document.documentElement.scrollWidth, height: document.documentElement.scrollHeight, wide: wide.slice(0, 5), cut: cut.slice(0, 5),

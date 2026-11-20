@@ -434,6 +434,8 @@ mod tests {
     /// With a real Chromium (the build server: `BIP_PAGE_CHECK_IMAGE=<the agents' browser image>`, or
     /// `BIP_PAGE_CHROME`): Alex's page of 20/11 as a model wrote it (its own pills that never wrap, its own boxes that
     /// cut their words) is caught at 390 px, the same page in the kit's parts passes, each check within the deadline.
+    /// Words run over two lines next to a chip are no overlap (the bench's first run, 20/11: an inline <b>'s box
+    /// spans both lines).
     #[test]
     fn a_real_browser_catches_the_broken_trip_page() {
         if std::env::var("BIP_PAGE_CHECK_IMAGE").is_err() && std::env::var("BIP_PAGE_CHROME").is_err() {
@@ -455,7 +457,8 @@ gratuit le premier dimanche)</span></div></div><div class=\"flow\"><div>Bastogne
 <div>Ostende (via Courtrai)</div><div>J2 La Panne</div></div><pre class=\"diagram\">Bastogne -> J1 Bruxelles-Midi
 J1 Bruxelles-Midi -> Ostende (via Courtrai)
 J1 Bruxelles-Midi -> Bruges (arrêt déjeuner)
-J1 Bruxelles-Midi -> Gand (Saint-Bavon)</pre>";
+J1 Bruxelles-Midi -> Gand (Saint-Bavon)</pre><p><span class=\"muted\">Soir ·</span> <b>Curry de pois chiches et \
+épinards au lait de coco, riz basmati et naan maison</b> <span class=\"chip\">20 min</span></p>";
         for (html, bad) in [(broken, true), (fixed, false)] {
             let (locked, _) = crate::pages::lock_with(html, "Côte belge", Some("home"));
             let started = Instant::now();
