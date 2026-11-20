@@ -32,16 +32,20 @@
 //! again only once spaced (the others get no line, and no note: the turn takes them as before).
 //!
 //! **The first message of a turn** (Alex 20/11, « dès le premier message »): an app that says it draws such a line
-//! (`instant_first` in the message) gets one for a message that starts a turn too. The agent's model is asked at once,
-//! in parallel with what the send does before starting the turn (`first`), for 1 to 3 short sentences: what the agent
-//! starts on with the person's specifics (« Je compare les trains Lyon–Paris de samedi matin… »), or a short direct
-//! answer when general knowledge is enough; « - » when the message needs no words yet (thanks, ok, a greeting). The
-//! turn starts once the line is there or `FIRST_WAIT` (2.5 s) after the send at the latest: with the line, its words go to the
-//! turn in the note (`first_note`), so the real reply continues from it and never says it again, and the line is kept
-//! and shown at once (before any word of the turn's: none can come before its start). Past `FIRST_WAIT`, nothing is
-//! shown and the turn starts as before. No canned line here (a « Noté » to a first message says nothing). Never in a
-//! family agent's common conversation, a read-only share's turn (`instructions`), a « thanks » or « ok » (`trivial`:
-//! no call at all), Live, crons or tasks (none of them goes through threads/send.rs).
+//! (`instant_first` in the message) gets one for a message that starts a turn too, when the message calls for it
+//! (`wants_line`: work verbs, a file or link, a long request, or a conversation whose turns are slow to speak; never
+//! « merci », « ok »). It is asked of the agent's own model (same address, key and pinned provider as its turns: the
+//! router's prompt cache stays on one provider; `[model] instant_line` can name another for a self-install) for 1 to
+//! 3 short sentences: what the agent starts on with the person's specifics, or a short direct answer from general
+//! knowledge; « - » when nothing is needed yet. No canned line here.
+//! Parallel (Alex's choice, `FirstMode::Parallel`): the turn starts at once with a constant hidden note (`standing_note`:
+//! a line may be shown, go straight to work); the line is shown only if it comes while the turn has shown no words
+//! yet, and its words are then steered into the turn's next step (`first_note`, a new message after the tool results:
+//! append-only, the turn's prompt cache is never broken). An agent whose lines keep coming too late beside its turns
+//! (a server that serialises, a slow model) goes « line first » (the turn waits `FIRST_WAIT` for it, its words in the
+//! turn's first message), then off if even that keeps failing; the parallel mode is tried again after `RECHECK`
+//! (`Adapt`). Never in a family agent's common conversation, a read-only share's turn (`instructions`), Live, crons or
+//! tasks (none of them goes through threads/send.rs).
 //!
 //! **Shared conversations.** A family agent's common conversation: a member's words wait behind someone else's turn
 //! (never steer it, family_thread.rs); her sentence answers her message alone and is asked without the conversation's
@@ -152,6 +156,11 @@ short line.-->"
     )
 }
 
+/// A first message's words with the standing note after them (its turn starts before its line).
+pub fn with_standing_note(words: &str) -> String {
+    format!("{}\n\n{}", words.trim_end(), standing_note())
+}
+
 /// A first message's words with the line's note after them.
 pub fn with_first_note(words: &str, line: &str) -> String {
     format!("{}\n\n{}", words.trim_end(), first_note(line))
@@ -177,6 +186,100 @@ pub fn trivial(words: &str, files: bool) -> bool {
         .filter(|w| !w.is_empty())
         .collect();
     parts.len() <= 4 && parts.iter().all(|w| SMALL.contains(w))
+}
+
+static WORK: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(concat!(
+        r"(?i)(?:^|[\s,;:(«'’-])(?:",
+        // fr
+        r"cherch|trouv|réserv|reserv|compar|envoi|envoy|regard|prépar|prepar|organis|planifi|vérifi|verifi|résum|resum|rédig|",
+        r"redig|écri|ecri|lis |lire|range|trie|contact|command|achèt|achet|programm|rappelle|ajoute|crée|cree|fais-moi|",
+        r"faites-moi|consult|télécharg|telecharg|traduis|réponds|reponds|",
+        // en
+        r"search|find|look up|look for|book|compare|send|check|prepare|plan |organi|summari|write|draft|read |order|buy|",
+        r"schedule|remind|add |create|download|email|translate|reply|",
+        // de
+        r"such|finde|buch|vergleich|schick|prüf|pruf|bereite|organisier|fass|schreib|lies|bestell|kauf|erinner|",
+        // es
+        r"busca|encuentra|reserva|compara|envía|envia|mira|revisa|prepara|planifica|organiza|resume|escribe|lee |pide|",
+        r"compra|recuérda|recuerda|",
+        // nl
+        r"zoek|vind|boek|vergelijk|stuur|bekijk|controleer|bereid|organiseer|vat |schrijf|lees|bestel|koop|herinner",
+        r")",
+    ))
+    .expect("valid regex")
+});
+
+/// Whether a message that starts a turn gets a line asked at all (Alex 20/11, « décider ou non de demander une
+/// pré-réponse »; no model call to decide). In order:
+/// 1. « merci », « ok », « salut », 👍 (`trivial`): no.
+/// 2. a file or a link: yes (something to look at).
+/// 3. a verb of work (search, find, book, compare, send, check, prepare, write, read…, in fr/en/de/es/nl): yes.
+/// 4. a long request (15 words or more): yes.
+/// 5. else (a short question, a remark): only where this agent's turns in this conversation were slow to say their
+///    first words lately (`slow_here`, `FirstWords`); a fast back-and-forth or no measure yet: no.
+pub fn wants_line(words: &str, files: bool, slow_here: Option<bool>) -> bool {
+    if trivial(words, files) {
+        return false;
+    }
+    let lower = words.to_lowercase();
+    if files || lower.contains("http://") || lower.contains("https://") || lower.contains("www.") {
+        return true;
+    }
+    if WORK.is_match(&format!("{lower} ")) || words.split_whitespace().count() >= 15 {
+        return true;
+    }
+    slow_here == Some(true)
+}
+
+/// Turns slower than this before their first visible words make a conversation « slow » for rule 5.
+pub const SLOW_FIRST_WORDS: f64 = 3.0;
+/// The last turns' first-words delays kept per agent and conversation.
+const FIRST_WORDS_KEPT: usize = 5;
+
+static FIRST_WORDS: LazyLock<Mutex<HashMap<(String, String), std::collections::VecDeque<f64>>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// A turn of this agent in this conversation showed its first words (or ended) this long after it started.
+pub fn note_first_words(agent: &str, thread: &str, secs: f64) {
+    let mut all = FIRST_WORDS.lock().unwrap_or_else(|e| e.into_inner());
+    let last = all.entry((agent.to_string(), thread.to_string())).or_default();
+    if last.len() == FIRST_WORDS_KEPT {
+        last.pop_front();
+    }
+    last.push_back(secs);
+}
+
+/// Whether this agent's last turns here were slow to say their first words (median past `SLOW_FIRST_WORDS`); None
+/// with fewer than 2 measures.
+pub fn slow_here(agent: &str, thread: &str) -> Option<bool> {
+    let all = FIRST_WORDS.lock().unwrap_or_else(|e| e.into_inner());
+    let last = all.get(&(agent.to_string(), thread.to_string()))?;
+    if last.len() < 2 {
+        return None;
+    }
+    let mut v: Vec<f64> = last.iter().copied().collect();
+    v.sort_by(|a, b| a.total_cmp(b));
+    Some(v[v.len() / 2] > SLOW_FIRST_WORDS)
+}
+
+/// Watches a turn just started until its first visible words (or its end, 60 s at most) and notes the delay
+/// (`note_first_words`). A glance every 300 ms at what the hub already holds.
+pub fn watch_first_words(state: &AppState, agent: &str, thread: &str, run: &str) {
+    let (state, agent, thread, run) = (state.clone(), agent.to_string(), thread.to_string(), run.to_string());
+    tokio::spawn(async move {
+        let started = Instant::now();
+        while started.elapsed() < Duration::from_secs(60) {
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            let over = state.hub.subscription(&agent, &run).is_none_or(|sub| sub.finished() || sub.terminal().is_some());
+            let said = state.hub.glance(&agent, &run).is_some_and(|(_, words)| !words.trim().is_empty());
+            if said || over {
+                note_first_words(&agent, &thread, started.elapsed().as_secs_f64());
+                return;
+            }
+        }
+        note_first_words(&agent, &thread, 60.0);
+    });
 }
 
 /// The first message's instructions: what the agent says at once, in its language.
@@ -244,19 +347,27 @@ pub fn first_body(call: &Call, system: &str, user: &str, provider_order: &[Strin
     b
 }
 
-/// A first message's line, asked at once in the background: its words and tokens (input, output), or None past
-/// `FIRST_WAIT` (the request dropped then), « - », an answer cut by its token cap, a refusal or a model the bridge
-/// can't call. Awaited before the turn
-/// starts (threads/send.rs).
-pub fn first(state: &AppState, agent: &AgentConfig, thread: &Thread, client_id: &str, words: &str) -> tokio::task::JoinHandle<Option<(String, i64, i64)>> {
+/// The answer to a first message's ask, when it came: the line (None: « - », a cut or unusable answer).
+#[derive(Debug, Clone, PartialEq)]
+pub struct FirstLine {
+    pub said: Option<String>,
+    pub tokens_in: i64,
+    pub tokens_out: i64,
+    /// Seconds after the ask.
+    pub secs: f64,
+}
+
+/// A first message's line, asked at once in the background: None for a refusal, a model the bridge can't call, or past
+/// `LATE` (the request dropped then); its `said` None for « - », an answer cut by its token cap or unusable. The caller
+/// decides whether it is still shown when it comes (threads/send.rs, `Adapt`).
+pub fn first(state: &AppState, agent: &AgentConfig, thread: &Thread, client_id: &str, words: &str) -> tokio::task::JoinHandle<Option<FirstLine>> {
     let (state, agent, thread, client_id, words) =
         (state.clone(), agent.clone(), thread.clone(), client_id.to_string(), words.to_string());
     tokio::spawn(async move {
         let started = Instant::now();
         let config = state.config();
         let asked = async {
-            let model = crate::mail_scan::model_of(&config, &agent).ok()?;
-            let call = Call { base_url: model["base_url"].clone(), key: model["key"].clone(), model: model["model"].clone() };
+            let call = line_call(&config, &agent)?;
             let lang = crate::handback::language_of(&config, &agent);
             let lines = last_lines(&state, &agent, &thread, &client_id).await;
             let shown = if agent.display_name.is_empty() { agent.name.clone() } else { agent.display_name.clone() };
@@ -266,23 +377,152 @@ pub fn first(state: &AppState, agent: &AgentConfig, thread: &Thread, client_id: 
             let body = first_body(&call, &system, &user_message(&lines, &words), &config.model_provider_order);
             ask_raw(&state.http, &call, &body).await
         };
-        let got = tokio::time::timeout(FIRST_WAIT, asked).await;
-        let ms = started.elapsed().as_millis() as u64;
+        let got = tokio::time::timeout(LATE, asked).await;
+        let secs = started.elapsed().as_secs_f64();
         match got {
-            Ok(Some((raw, input, output, cut))) => {
+            Ok(Some((raw, tokens_in, tokens_out, cut))) => {
                 // cut by its token cap (GLM thinking at length): half a sentence, never shown
                 let said = if cut { None } else { clean_first(&raw) };
-                tracing::info!(agent = %agent.name, tokens_in = input, tokens_out = output, ms, kept = said.is_some(),
-                               "instant reply (first message): the agent's model asked");
-                said.map(|s| (s, input, output))
+                tracing::info!(agent = %agent.name, tokens_in, tokens_out, ms = (secs * 1000.0) as u64, kept = said.is_some(),
+                               "instant reply (first message): the line's model asked");
+                Some(FirstLine { said, tokens_in, tokens_out, secs })
             }
             Ok(None) => None,
             Err(_) => {
-                tracing::info!(agent = %agent.name, ms, "instant reply (first message): too slow, none");
+                tracing::info!(agent = %agent.name, ms = (secs * 1000.0) as u64, "instant reply (first message): too slow, none");
                 None
             }
         }
     })
+}
+
+/// The model a first message's line is asked of: the agent's own model, through the same address, key and pinned
+/// provider as its turns (Alex 20/11: « ce sera plus simple », and the router's prompt cache stays on one provider),
+/// unless the bridge's setting names another (`[model] instant_line`, with `instant_line_url` / `instant_line_key` for
+/// another server: a self-install's small model beside its big one; no app setting).
+pub fn line_call(config: &crate::config::Config, agent: &AgentConfig) -> Option<Call> {
+    let model = crate::mail_scan::model_of(config, agent).ok();
+    let own = model.as_ref().map(|m| Call { base_url: m["base_url"].clone(), key: m["key"].clone(), model: m["model"].clone() });
+    match config.model_instant_line.as_deref().map(str::trim).filter(|m| !m.is_empty()) {
+        Some(line) => {
+            let (base_url, key) = match &config.model_instant_line_url {
+                Some(url) => (url.clone(), config.model_instant_line_key.clone().unwrap_or_default()),
+                None => {
+                    let own = own.as_ref()?;
+                    (own.base_url.clone(), own.key.clone())
+                }
+            };
+            Some(Call { base_url, key, model: line.to_string() })
+        }
+        None => own,
+    }
+}
+
+/// How a first message's line goes with its turn, per agent (`Adapt`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FirstMode {
+    /// The turn starts at once with a standing note; the line is shown only if it comes while the turn has shown no
+    /// words yet, and its words are steered into the turn's next step (a new message after the tool results: the
+    /// turn's prompt cache is never broken).
+    Parallel,
+    /// The line first, then the turn (`FIRST_WAIT` at most): a server that serialises its requests, where a line asked
+    /// beside the turn comes after the whole turn.
+    LineFirst,
+    /// No line: they keep coming too late. Tried again after `RECHECK`.
+    Off,
+}
+
+/// A line still coming past this is dropped, whatever the mode.
+pub const LATE: Duration = Duration::from_secs(6);
+/// Lines watched per agent and line model.
+pub const WINDOW: usize = 8;
+/// A mode that failed is left for this long, then the parallel mode is tried again.
+pub const RECHECK: f64 = 30.0 * 60.0;
+
+/// The last lines' fate, per agent and line model: parallel lines repeatedly too late (the turn spoke first, or past
+/// `LATE`) → « line first »; lines first repeatedly past `FIRST_WAIT` → off; either way the parallel mode again after
+/// `RECHECK` (a server that got faster, a model changed).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Adapt {
+    pub mode: FirstMode,
+    since: f64,
+    /// true: in time.
+    last: std::collections::VecDeque<bool>,
+}
+
+impl Default for Adapt {
+    fn default() -> Self {
+        Adapt { mode: FirstMode::Parallel, since: 0.0, last: std::collections::VecDeque::new() }
+    }
+}
+
+impl Adapt {
+    /// The mode for a message now.
+    pub fn mode(&mut self, now: f64) -> FirstMode {
+        if self.mode != FirstMode::Parallel && now - self.since >= RECHECK {
+            self.switch(FirstMode::Parallel, now);
+        }
+        self.mode
+    }
+
+    /// A line asked in `mode` came in time or not (never shown).
+    pub fn record(&mut self, mode: FirstMode, in_time: bool, now: f64) {
+        if mode != self.mode {
+            return;
+        }
+        if self.last.len() == WINDOW {
+            self.last.pop_front();
+        }
+        self.last.push_back(in_time);
+        let late = self.last.iter().filter(|ok| !**ok).count();
+        // most of the last lines too late (at least 4 seen)
+        if self.last.len() >= 4 && late * 4 >= self.last.len() * 3 {
+            let next = match self.mode {
+                FirstMode::Parallel => FirstMode::LineFirst,
+                _ => FirstMode::Off,
+            };
+            self.switch(next, now);
+        }
+    }
+
+    fn switch(&mut self, mode: FirstMode, now: f64) {
+        self.mode = mode;
+        self.since = now;
+        self.last.clear();
+    }
+}
+
+static ADAPT: LazyLock<Mutex<HashMap<(String, String), Adapt>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
+
+fn adapt_key(agent: &str, call: Option<&Call>) -> (String, String) {
+    (agent.to_string(), call.map(|c| format!("{} {}", c.base_url, c.model)).unwrap_or_default())
+}
+
+/// This agent's mode for a first message's line now.
+pub fn first_mode(config: &crate::config::Config, agent: &AgentConfig, now: f64) -> FirstMode {
+    let key = adapt_key(&agent.name, line_call(config, agent).as_ref());
+    ADAPT.lock().unwrap_or_else(|e| e.into_inner()).entry(key).or_default().mode(now)
+}
+
+/// A first message's line in `mode`: in time or not.
+pub fn first_outcome(config: &crate::config::Config, agent: &AgentConfig, mode: FirstMode, in_time: bool, now: f64) {
+    let key = adapt_key(&agent.name, line_call(config, agent).as_ref());
+    let mut all = ADAPT.lock().unwrap_or_else(|e| e.into_inner());
+    let adapt = all.entry(key).or_default();
+    let before = adapt.mode;
+    adapt.record(mode, in_time, now);
+    if adapt.mode != before {
+        tracing::info!(agent = %agent.name, from = ?before, to = ?adapt.mode, "instant reply (first message): mode changed");
+    }
+}
+
+/// The note joined to a first message whose turn starts before its line: one may be shown at once, its words come
+/// at the next step (steered: `first_note`).
+pub fn standing_note() -> String {
+    format!(
+        "{MARK} A short line is being shown to the person at once, in your name, saying what you start on. Don't open \
+with an acknowledgement or announce your plan: go straight to work. Its words reach you at your next step.-->"
+    )
 }
 
 /// The words with the note (after them: the timeline cuts the row there).
@@ -663,5 +903,79 @@ Their new message: plutôt le samedi");
         assert_eq!(first_body(&ds, "s", "u", &[])["max_tokens"], FIRST_MAX_TOKENS);
         let glm = Call { base_url: "https://api.eurouter.ai/api/v1".into(), key: "k".into(), model: "glm-5.3-flash".into() };
         assert_eq!(first_body(&glm, "s", "u", &[])["max_tokens"], 400);
+    }
+
+    #[test]
+    fn lines_too_late_beside_the_turn_go_first_then_off_then_parallel_again() {
+        let mut a = Adapt::default();
+        assert_eq!(a.mode(0.0), FirstMode::Parallel);
+        // in time mostly: stays parallel
+        for (n, ok) in [true, false, true, true, false, true, true, true].into_iter().enumerate() {
+            a.record(FirstMode::Parallel, ok, n as f64);
+        }
+        assert_eq!(a.mode(10.0), FirstMode::Parallel);
+        // a server that serialises: late again and again (6 of the last 8) → line first
+        for n in 0..6 {
+            a.record(FirstMode::Parallel, false, 20.0 + n as f64);
+        }
+        assert_eq!(a.mode(30.0), FirstMode::LineFirst);
+        // a late line asked before the switch counts no more
+        a.record(FirstMode::Parallel, false, 31.0);
+        assert_eq!(a.mode(32.0), FirstMode::LineFirst);
+        // lines first past the wait, three of four → off
+        for (n, ok) in [false, true, false, false].into_iter().enumerate() {
+            a.record(FirstMode::LineFirst, ok, 40.0 + n as f64);
+        }
+        assert_eq!(a.mode(50.0), FirstMode::Off);
+        // re-checked later: parallel again, from a clean slate
+        assert_eq!(a.mode(43.0 + RECHECK - 1.0), FirstMode::Off);
+        assert_eq!(a.mode(43.0 + RECHECK + 1.0), FirstMode::Parallel);
+        a.record(FirstMode::Parallel, false, 43.0 + RECHECK + 2.0);
+        assert_eq!(a.mode(43.0 + RECHECK + 3.0), FirstMode::Parallel);
+    }
+
+    #[test]
+    fn the_standing_note_is_hidden_and_constant() {
+        let words = with_standing_note("Trouve-moi un train pour samedi");
+        assert!(words.starts_with("Trouve-moi un train pour samedi\n\n<!--bip:answered A short line"));
+        assert!(words.contains("go straight to work") && words.ends_with("-->"));
+        assert_eq!(without_note(&words), "Trouve-moi un train pour samedi");
+        // byte-stable: the same note for every message (the turn's stored history never changes, its cache stays)
+        assert_eq!(standing_note(), standing_note());
+    }
+
+    #[test]
+    fn a_line_is_asked_for_work_files_links_long_requests_or_where_turns_are_slow() {
+        for words in ["Trouve-moi un train Lyon Paris samedi", "Regarde mes mails de la semaine", "Book a table for 4 tonight",
+                      "Such mir ein Restaurant in Berlin", "Busca un piso en Madrid", "Zoek een tandarts in Utrecht",
+                      "Fais-moi un résumé de la réunion d'hier", "tu peux comparer ces deux offres ?"] {
+            assert!(wants_line(words, false, None), "{words}");
+        }
+        assert!(wants_line("et ça ?", true, None), "a file");
+        assert!(wants_line("https://www.sncf-connect.com/x", false, None), "a link");
+        assert!(wants_line(&"je me demandais si c'était une bonne idée de partir en mai ou plutôt en juin cette année".to_string(), false, None));
+        // short, no work, no measure or a fast back-and-forth: no; where turns were slow: yes
+        assert!(!wants_line("Combien font 18 % de 240 ?", false, None));
+        assert!(!wants_line("Une idée de prénom pour un chat roux ?", false, Some(false)));
+        assert!(wants_line("Une idée de prénom pour un chat roux ?", false, Some(true)));
+        assert!(!wants_line("merci beaucoup", false, Some(true)));
+    }
+
+    #[test]
+    fn a_conversation_is_slow_from_its_last_turns_first_words() {
+        assert_eq!(slow_here("vie", "t_fw"), None);
+        note_first_words("vie", "t_fw", 0.8);
+        assert_eq!(slow_here("vie", "t_fw"), None);
+        note_first_words("vie", "t_fw", 1.2);
+        assert_eq!(slow_here("vie", "t_fw"), Some(false));
+        for s in [9.0, 12.0, 7.0] {
+            note_first_words("vie", "t_fw", s);
+        }
+        assert_eq!(slow_here("vie", "t_fw"), Some(true));
+        // five kept: fast again
+        for s in [0.5, 0.6, 0.7] {
+            note_first_words("vie", "t_fw", s);
+        }
+        assert_eq!(slow_here("vie", "t_fw"), Some(false));
     }
 }

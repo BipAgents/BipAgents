@@ -820,6 +820,15 @@ pub struct Config {
     /// key: the golden config).
     #[serde(skip)]
     pub model_eu_hosted: Vec<String>,
+    /// `[model] instant_line` (and `instant_line_url`, `instant_line_key`): another model for the line said at once to
+    /// a first message (instant_reply.rs `line_call`), a self-install's small model; none: the agent's own. Not in the
+    /// serialized form (the golden config).
+    #[serde(skip)]
+    pub model_instant_line: Option<String>,
+    #[serde(skip)]
+    pub model_instant_line_url: Option<String>,
+    #[serde(skip)]
+    pub model_instant_line_key: Option<String>,
     /// The bridge's address on the tailnet (`tailscale serve`), for the pairing QR code.
     pub public_url: Option<String>,
     /// The bridge as the agents reach it, for messages between agents (peers.py). Default:
@@ -912,6 +921,9 @@ impl Config {
             model_health_key: None,
             model_provider_order: crate::model_route::DEFAULT_ORDER.iter().map(|s| s.to_string()).collect(),
             model_eu_hosted: Vec::new(),
+            model_instant_line: None,
+            model_instant_line_url: None,
+            model_instant_line_key: None,
             public_url: None,
             peer_url: None,
             cloud: false,
@@ -1972,6 +1984,9 @@ pub fn parse_config(data: &Value, source_path: Option<&str>) -> Result<Config> {
             }
             _ => Vec::new(),
         },
+        model_instant_line: opt_s(model_t, "instant_line"),
+        model_instant_line_url: opt_s(model_t, "instant_line_url").map(|u| py::rstrip_slash(&u)),
+        model_instant_line_key: secret(model_t, "instant_line_key", "model", false)?,
         public_url: opt_s(data, "public_url").map(|u| py::rstrip_slash(&u)),
         peer_url: opt_s(data, "peer_url").map(|u| py::rstrip_slash(&u)),
         cloud: b(data, "cloud", false),

@@ -633,17 +633,22 @@ pub async fn send(state: &AppState, agent: &AgentConfig, thread: Option<Thread>,
         Some(a) => format!("{}#{}", thread.id, a.household),
         None => thread.id.clone(),
     };
-    // a message that starts a turn: its line asked at once, while the rest of the send goes on; the turn starts with
-    // it, or without it `FIRST_WAIT` after now (instant_reply.rs `first`)
-    let first_line = (body.instant_first
+    // a message that starts a turn: its line asked at once, while the rest of the send goes on. Parallel (the default):
+    // the turn starts at once, the line shown only if it comes before the turn's first words; « line first » (an
+    // endpoint where lines kept coming too late beside the turn): the turn waits for it `FIRST_WAIT` at most; off: none
+    // (instant_reply.rs `Adapt`)
+    let first_mode = (body.instant_first
         && running.is_none()
         && !waits
         && !body.after
         && author.is_none()
         && body.instructions.as_deref().is_none_or(|i| i.trim().is_empty())
-        && !crate::instant_reply::trivial(&words, !body.attachments.is_empty())
-        && crate::instant_reply::reserve(&agent.name, &cap_key, crate::py::time_time()))
-    .then(|| crate::instant_reply::first(state, agent, &thread, &body.client_id, &said_for_ack(&words, &body.attachments)));
+        && crate::instant_reply::wants_line(&words, !body.attachments.is_empty(), crate::instant_reply::slow_here(&agent.name, &thread.id)))
+    .then(|| crate::instant_reply::first_mode(&config, agent, crate::py::time_time()))
+    .filter(|m| *m != crate::instant_reply::FirstMode::Off)
+    .filter(|_| crate::instant_reply::reserve(&agent.name, &cap_key, crate::py::time_time()));
+    let first_line = first_mode
+        .map(|_| crate::instant_reply::first(state, agent, &thread, &body.client_id, &said_for_ack(&words, &body.attachments)));
     // a turn about to start again with earlier words (runs.rs `restart` starting it): Hermes ended it, it takes no
     // words; these wait first in line, for the turn after
     let restarting = |r: &str| state.hub.subscription(&agent.name, r).is_some_and(|sub| sub.restarting());
@@ -761,20 +766,32 @@ pub async fn send(state: &AppState, agent: &AgentConfig, thread: Option<Thread>,
     let instructions = body.instructions.as_deref().filter(|i| !i.trim().is_empty());
     let options = crate::turn_thinking::turn_options(&state.config(), agent, &words, body.thinking);
     let thinks = crate::turn_thinking::thought(options.as_ref());
-    // the first message's line, if it came in time: its words go to the turn in the note (the reply continues from it)
-    let line = match first_line {
-        Some(asked) => match asked.await.ok().flatten() {
-            Some(line) => Some(line),
-            None => {
-                crate::instant_reply::release(&agent.name, &cap_key);
-                None
+    // « line first »: the line awaited before the turn (its words go to the turn in the note, the reply continues from
+    // it); parallel: the turn starts now with a standing note, the line comes after (`line_after`)
+    let mut line_after = None;
+    let line = match (first_mode, first_line) {
+        (Some(crate::instant_reply::FirstMode::LineFirst), Some(mut asked)) => {
+            let got = tokio::time::timeout(crate::instant_reply::FIRST_WAIT, &mut asked).await;
+            if got.is_err() {
+                asked.abort();
             }
-        },
-        None => None,
+            let got = got.ok().and_then(Result::ok).flatten();
+            crate::instant_reply::first_outcome(&config, agent, crate::instant_reply::FirstMode::LineFirst, got.is_some(), crate::py::time_time());
+            got.filter(|l| l.said.is_some())
+        }
+        (Some(_), Some(asked)) => {
+            line_after = Some(asked);
+            None
+        }
+        _ => None,
     };
-    let start_input = match &line {
-        Some((said_now, _, _)) => input_of(Some(&notes), &crate::instant_reply::with_first_note(&said, said_now), &body.attachments),
-        None => input.clone(),
+    if first_mode.is_some() && line.is_none() && line_after.is_none() {
+        crate::instant_reply::release(&agent.name, &cap_key);
+    }
+    let start_input = match (&line, &line_after) {
+        (Some(l), _) => input_of(Some(&notes), &crate::instant_reply::with_first_note(&said, l.said.as_deref().unwrap_or("")), &body.attachments),
+        (None, Some(_)) => input_of(Some(&notes), &crate::instant_reply::with_standing_note(&said), &body.attachments),
+        (None, None) => input.clone(),
     };
     let run = match state.hermes.start_run_input(agent, start_input, tip, instructions, options.clone()).await {
         Ok(run) => run,
@@ -820,10 +837,11 @@ pub async fn send(state: &AppState, agent: &AgentConfig, thread: Option<Thread>,
     // its continuation, if it ends on a promise, keeps them (runs.rs `go_on`)
     state.hub.set_turn(&agent.name, &run, instructions, options);
     tracing::info!(agent = %agent.name, run_id = %run, "message sent: a turn started");
-    if let Some((said_now, tokens_in, tokens_out)) = &line {
+    if let Some(l) = &line {
         // shown at once under the message, before any word of the turn's
-        match threads.keep_instant(&agent.name, &thread.id, &body.client_id, said_now, true).await {
-            Ok(()) => tracing::info!(agent = %agent.name, thread = %thread.id, tokens_in, tokens_out, "instant reply (first message) said"),
+        match threads.keep_instant(&agent.name, &thread.id, &body.client_id, l.said.as_deref().unwrap_or(""), true).await {
+            Ok(()) => tracing::info!(agent = %agent.name, thread = %thread.id, tokens_in = l.tokens_in, tokens_out = l.tokens_out,
+                                     "instant reply (first message) said"),
             Err(exc) => tracing::warn!(agent = %agent.name, error = %format!("{exc:#}"), "instant reply (first message) not kept"),
         }
     }
@@ -832,8 +850,47 @@ pub async fn send(state: &AppState, agent: &AgentConfig, thread: Option<Thread>,
         // the phones read the line as they read one said during a turn
         let _ = threads.bump(&thread, "instant").await;
     }
+    if body.instant_first && author.is_none() {
+        // how fast this agent's turns here say their first words (rule 5 of instant_reply::wants_line)
+        crate::instant_reply::watch_first_words(state, &agent.name, &thread.id, &run);
+    }
+    if let Some(asked) = line_after {
+        line_beside(state, agent, &thread, &run, &body.client_id, &cap_key, asked);
+    }
     told(tip);
     Ok(answer("started", Some(&run)))
+}
+
+/// The parallel mode's line, once it comes: shown only while the turn has shown no words yet (and is not over), its
+/// words then steered into the turn's next step (a new message after the tool results: the turn's prompt cache stays
+/// whole); else dropped. Its fate tells `Adapt` whether lines come in time beside this agent's turns.
+fn line_beside(state: &AppState, agent: &AgentConfig, thread: &Thread, run: &str, client_id: &str, cap_key: &str,
+               asked: tokio::task::JoinHandle<Option<crate::instant_reply::FirstLine>>) {
+    let (state, agent, thread, run, client_id, cap_key) =
+        (state.clone(), agent.clone(), thread.clone(), run.to_string(), client_id.to_string(), cap_key.to_string());
+    tokio::spawn(async move {
+        let got = asked.await.ok().flatten();
+        let config = state.config();
+        let silent = state.hub.subscription(&agent.name, &run).is_some_and(|sub| !sub.finished() && sub.terminal().is_none())
+            && state.hub.glance(&agent.name, &run).is_some_and(|(_, words)| words.trim().is_empty());
+        let mode = crate::instant_reply::FirstMode::Parallel;
+        crate::instant_reply::first_outcome(&config, &agent, mode, got.is_some() && silent, crate::py::time_time());
+        let Some(said) = got.and_then(|l| l.said).filter(|_| silent) else {
+            crate::instant_reply::release(&agent.name, &cap_key);
+            tracing::info!(agent = %agent.name, run_id = %run, "instant reply (first message): none or too late, not shown");
+            return;
+        };
+        let threads = threads_of(&state);
+        if let Err(exc) = threads.keep_instant(&agent.name, &thread.id, &client_id, &said, true).await {
+            tracing::warn!(agent = %agent.name, error = %format!("{exc:#}"), "instant reply (first message) not kept");
+            return;
+        }
+        let _ = threads.bump(&thread, "instant").await;
+        if let Err(exc) = state.hermes.steer_run(&agent, &run, &crate::instant_reply::first_note(&said)).await {
+            tracing::info!(agent = %agent.name, run_id = %run, error = %exc, "the turn not told of its line");
+        }
+        tracing::info!(agent = %agent.name, run_id = %run, "instant reply (first message) said beside the turn");
+    });
 }
 
 /// `POST /v1/threads/{thread}/stop`: the turn going on in the conversation stopped (Hermes then ends it cancelled).
