@@ -92,10 +92,7 @@ pub const HOLDS_THE_CALL: &[&str] = &[PAY];
 /// then the fill and the bank).
 pub const TOOL_TIMEOUT: u32 = 900;
 
-/// A payment asked from a background task that browses in a browser of its own (one browser per task, 19/11).
-pub const TASK_PAY_TEXT: &str = "Not paid: you work in a background task, in a browser of its own, and payments are \
-made only in your person's conversation. End your task with what to buy, where and for how much: your person pays \
-from there.";
+
 /// A payment asked in a turn nobody follows (a watcher, a routine) waits this long for the person, from its push
 /// (`urgent`; internal/notes/watcher-urgent-pay.md).
 pub const URGENT_WINDOW: Duration = Duration::from_secs(600);
@@ -1327,11 +1324,19 @@ async fn pay(state: &AppState, agent: &AgentConfig, arguments: &Dict, asker: &As
     if !offered(&config, agent) || !cards::enabled(&config) {
         return Ok(refusal(off_text()));
     }
-    // a background task with a browser of its own: the bridge pays in the agent's browser only, never there
-    if crate::browsers::task_of_call(&config, &agent.name).is_some() {
-        return Ok(refusal(TASK_PAY_TEXT));
-    }
     let (label, merchant) = (arg(arguments, "card"), cards::quoted(&arg(arguments, "merchant"), 80));
+    // a background task with a browser of its own never pays there (Alex 20/11): handed over to the agent's main
+    // conversation, which pays in the agent's browser with the person's usual approval
+    if let Some(settings) = crate::browsers::task_of_call(&config, &agent.name) {
+        let total = format!("{} {}", arg(arguments, "amount"), arg(arguments, "currency")).trim().to_string();
+        let ask = crate::jobs::Ask {
+            kind: crate::jobs::AskKind::Pay,
+            what: [merchant.clone(), total].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join(", "),
+            site: String::new(),
+            why: String::new(),
+        };
+        return Ok(crate::jobs::hand_over_call(state, agent, &settings, ask).await);
+    }
     if merchant.is_empty() {
         return Ok(refusal("Say what you pay for (merchant), in a few words."));
     }

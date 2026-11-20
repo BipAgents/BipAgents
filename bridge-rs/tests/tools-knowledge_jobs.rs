@@ -819,3 +819,29 @@ async fn a_task_of_an_agent_with_a_browser_gets_a_browser_of_its_own() {
     let other = bipbridge::browsers::folder(&config, &bipbridge::browsers::task_browser("vie", "t0"));
     assert!(!other.exists());
 }
+
+/// Alex 20/11: a task never pays nor logs in inside its own browser: it hands over to the agent's main conversation,
+/// which gets the request (what, which site, why) in the agent's own turn there and does it in the agent's browser
+/// with the person's usual approval. The task is told it was handed over.
+#[tokio::test]
+async fn a_tasks_payment_is_handed_over_to_the_agents_main_conversation() {
+    let dir = tempfile::tempdir().unwrap();
+    let (fake, url) = gateway(1000, 10).await;
+    let (config, agent) = setup(dir.path(), &url);
+    let told: Told = Default::default();
+    let board = with_handback(&config, &told);
+    let job = board.create(&agent, "Courses de la semaine", "Remplis le panier Leclerc Drive.", 0.50, None).await.unwrap();
+    let id = id_of(&job);
+    let ask = jobs::Ask { kind: jobs::AskKind::Pay, what: "le panier de la semaine, 38,40 €".into(),
+                          site: "leclercdrive.fr".into(), why: "payer la commande avant 18 h".into() };
+    assert!(jobs::HANDED_OVER.starts_with("Handed over"));
+    let outcome = board.hand_over(&agent, &id, &ask, "api_main").await;
+    assert!(outcome.is_some(), "nothing delivered");
+    let run = posted_runs(&fake).into_iter().find(|r| r["session_id"] == "api_main").expect("a turn in the main conversation");
+    let input = run["input"].as_str().unwrap();
+    for part in ["Courses de la semaine", "38,40 €", "leclercdrive.fr", "payer la commande avant 18 h"] {
+        assert!(input.contains(part), "{part} missing: {input}");
+    }
+    assert!(input.contains("approval"), "the person's usual approval: {input}");
+    board.forget(&id).await.unwrap();
+}
