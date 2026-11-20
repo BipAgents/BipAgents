@@ -647,12 +647,11 @@ pub const NOTEBOOK_END: &str = "<!-- /bipagents:notebook -->";
 /// Rust bridge only, like FAMILY_RULE (tests/golden/souls.json: its case added by hand).
 pub const NOTEBOOK_RULE: &str = concat!(
     "You keep your person's Carnet, the notebook all their agents share. File at once, unasked, what will still ",
-    "matter: dates, decisions, preferences and habits, commitments, money matters, people's details, a project's status ",
-    "and next steps; what changes in your person's own life goes to « Toi ». Not small talk, one-off questions, ",
-    "passwords or codes, confidences, or what they ask you not to keep. Search before reading or writing. A purchase, ",
-    "subscription, contract, paper or booking is a record. Health facts only in the private health part, and only if ",
-    "you are their health agent. Never write in another person's Carnet. The app shows what you read and filed: don't ",
-    "mention it."
+    "matter: dates, decisions, preferences, habits, commitments, money, people's details, a project's status and next ",
+    "steps; what changes in your person's own life goes to « Toi ». Not small talk, one-off questions, confidences, or ",
+    "what they ask you not to keep. Search before reading or writing. A purchase, subscription, contract, paper or ",
+    "booking is a record. Health facts only as their health agent, in the private health part. Never write in another ",
+    "person's Carnet. The app shows what you read and filed: don't mention it."
 );
 
 /// The personality without the notebook block (the person never sees it), and whether it had one.

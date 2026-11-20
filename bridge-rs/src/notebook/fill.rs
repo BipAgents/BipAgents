@@ -48,8 +48,8 @@ pub fn title(config: &Config, agent: &str) -> &'static str {
 pub fn tool() -> Value {
     json!({
         "name": TOOL_NAME,
-        "description": "When the person asks you to fill or update their Carnet from what you know: starts it in the \
-background (your memory and past conversations). Say so in one sentence and stop.",
+        "description": "When asked to fill or update their Carnet from what you know: starts it in the background \
+(memory, past conversations). Say so in one sentence and stop.",
         "inputSchema": {"type": "object", "properties": {}},
     })
 }

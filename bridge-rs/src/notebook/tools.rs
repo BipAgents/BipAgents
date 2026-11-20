@@ -68,57 +68,55 @@ pub fn tools(health: bool) -> Vec<Value> {
     let mut list = vec![
         json!({
             "name": SEARCH,
-            "description": "Search the person's Carnet (the notebook all their agents share). Gives direct answers first \
-(label, answer, page), then up to 5 pages with their matching lines. Without words: pages per kind and the 10 latest.",
+            "description": "Search the Carnet: direct answers first (label, answer, page), then up to 5 pages with \
+matching lines. No words: pages per kind and the 10 latest.",
             "inputSchema": {"type": "object", "properties": {
                 "words": {"type": "string", "description": "names or a few words"},
                 "kind": {"type": "string", "enum": kinds}}},
         }),
         json!({
             "name": READ,
-            "description": "Read one page: its « En bref » and the section asked, or the whole page. Only pages that help \
-answer: 6 a turn at most.",
+            "description": "Read one page: « En bref » and the section asked, or all of it. Only pages that help, 6 a turn \
+at most.",
             "inputSchema": {"type": "object", "properties": {
                 "page": {"type": "string", "description": "name, nickname or path"},
-                "section": {"type": "string", "description": "a section id, as in notebook_write"}},
+                "section": {"type": "string", "description": "as in notebook_write"}},
                 "required": ["page"]},
         }),
         json!({
             "name": WRITE,
-            "description": "Write on a Carnet page, found by name, nickname, contact id, e-mail or phone (made if missing; \
-several match: ask which). One section per call, one short fact per item, « Label : value » when \
-short (« Pointure : 36 »): a label already there is replaced, nothing is repeated. Close family and friends get a person \
-page; others are one line on their group's area page. fix corrects; forget only shows the person what would be erased \
-(they confirm in the app). ask (not clarify): one question for a fact this page lacks, never health or money unless they \
-raised it. Never passwords, codes or ID numbers.",
+            "description": "Write on a Carnet page, by name, nickname or contact (made if missing; several match: ask \
+which). One section a call, one short fact an item, « Label : value » when short (« Pointure : 36 »): a label already \
+there is replaced, nothing is repeated. Close family and friends (close) get a person page; others, a line on their \
+group's area page. fix corrects; forget shows what would be erased (they confirm in the app). ask (not clarify): one \
+question for a fact this page lacks, never health or money unless they raised it. Never passwords, codes or ID numbers.",
             "inputSchema": {"type": "object", "properties": {
-                "page": {"type": "string", "description": "« Léa Martin » (person), « Rénovation cuisine » (subject), « Maison » (area: the home)"},
-                "kind": {"type": "string", "description": "for a new page, always: person only for a human being; a home, a place, a group or a part of life is an area, a project a subject; self: « Toi »; trip: one journey, « Kyoto, avr. 2026 »", "enum": kinds},
+                "page": {"type": "string", "description": "« Léa Martin » (person), « Rénovation cuisine » (subject), « Maison » (area)"},
+                "kind": {"type": "string", "description": "always for a new page. person: a human only; area: a home, place, group or part of life; subject: a project; self: « Toi »; trip: one journey, « Kyoto, avr. 2026 »", "enum": kinds},
                 "section": {"type": "string", "description": sections_described(), "enum": super::template::all_ids()},
                 "facts": {"type": "array", "items": {"type": "string"}, "maxItems": 20},
-                "summary": {"type": "string", "description": "new « En bref », 2–3 lines"},
+                "summary": {"type": "string", "description": "« En bref », 2–3 lines"},
                 "fix": {"type": "array", "items": {"type": "object", "properties": {
                     "old": {"type": "string"}, "new": {"type": "string", "description": "empty removes"}},
                     "required": ["old", "new"]}},
-                "forget": {"type": "array", "items": {"type": "string"}, "maxItems": 5, "description": "facts to forget; the page's name: all of it"},
+                "forget": {"type": "array", "items": {"type": "string"}, "maxItems": 5, "description": "the page's name: all of it"},
                 "ask": {"type": "object", "properties": {
                     "question": {"type": "string"},
                     "chips": {"type": "array", "items": {"type": "string"}, "minItems": 2, "maxItems": 4}},
                     "required": ["question", "chips"]},
                 "aliases": {"type": "array", "items": {"type": "string"}},
                 "contact": {"type": "string", "description": "contact id, e-mail or phone"},
-                "close": {"type": "boolean", "description": "family or close friend"},
-                "start": {"type": "string", "description": "trip, YYYY-MM-DD"},
-                "end": {"type": "string", "description": "trip, YYYY-MM-DD"}},
+                "close": {"type": "boolean"},
+                "start": {"type": "string", "description": "trip dates, YYYY-MM-DD"},
+                "end": {"type": "string"}},
                 "required": ["page"]},
         }),
         json!({
             "name": TASK,
-            "description": "The person's tasks, few and real (a birthday or someone else's deadline is a fact). add only \
-when they ask (origin asked) or commit to a deadline (own); title in the infinitive; due also sets a phone reminder when \
-shared; important only when they insisted. An idea of yours: propose first (the answer says if you may), ask in one \
-sentence, then add with origin accepted and its proposal id, or decline (never: not this kind again). done and list \
-(open tasks, waiting proposals).",
+            "description": "Their tasks, few and real (a birthday or another's deadline is a fact). add only when they ask \
+(origin asked) or commit to a deadline (own); title in the infinitive; due also sets a phone reminder when shared; \
+important only if they insisted. Your own idea: propose first (the answer says if you may), ask in one sentence, then add \
+(origin accepted, proposal id) or decline (never: not this kind again). done; list: open tasks, waiting proposals.",
             "inputSchema": {"type": "object", "properties": {
                 "action": {"type": "string", "enum": ["add", "done", "list", "propose", "decline"]},
                 "title": {"type": "string"},
@@ -137,8 +135,8 @@ sentence, then add with origin accepted and its proposal id, or decline (never: 
             "description": "Precise records, merged when given twice. Fields by type: purchase date item store price class \
 (goods, service, ticket, food, digital, travel, fee, other) warranty_end (only if known); subscription service price \
 period renewal cancel; contract what provider number end; paper document holder expires (never its number); booking date \
-(YYYY-MM-DD HH:MM) what with reference trip. Dates YYYY-MM-DD; source: the document's reference. list gives short lines, \
-get one record. Reminders come by themselves. Never card numbers or codes.",
+(YYYY-MM-DD HH:MM) what with reference trip. Dates YYYY-MM-DD; source: the document's reference. list: short lines; \
+get: one. Reminders are automatic. Never card numbers or codes.",
             "inputSchema": {"type": "object", "properties": {
                 "action": {"type": "string", "enum": ["add", "update", "remove", "list", "get"]},
                 "type": {"type": "string", "enum": super::records::TYPES.iter().map(|t| t.id).collect::<Vec<_>>()},
