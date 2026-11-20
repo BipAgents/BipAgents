@@ -116,7 +116,7 @@ machine. All of it in the [installer's guide](installer/README.md); by hand: [se
 - 📊 **Pages and mini apps** right in the replies — charts, trackers, **interactive maps** with « Open in Maps » —
   and **podcasts** read by two Bips.
 - 🔒 **Each agent in its own sandbox**: its own files, folders it shares with the agents you choose (read-only for
-  them), and only the websites you allowed.
+  them), and data sent only to the websites you allowed (beyond a small amount).
 - 👨‍👩‍👧 **The whole family**: one private space per person; relatives' agents talk to each other only along links you
   turned on. Agents sorted into groups on the home screen (Personal, Pro, Family, or your own).
 - 💻 **On a computer too**: the web console opens your agents, their conversations and the Inbox in a browser.
@@ -164,7 +164,8 @@ flowchart LR
 
 What leaves your space: each message goes to the AI model you chose, to be answered; the services an agent uses for
 you (web search, maps, weather) see its requests. Details: [what the apps send, and to whom](docs/app-data.md) ·
-[how this compares with ChatGPT and others](docs/privacy-compare.md).
+[how this compares with ChatGPT and others](docs/privacy-compare.md) ·
+[the security model: what is enforced, and its limits](docs/security-model.md).
 
 ## 🗂️ The repository
 

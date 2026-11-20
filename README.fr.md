@@ -129,7 +129,8 @@ autre machine. Tout est dans le [guide de l'installateur](installer/README.fr.md
 - 📊 **Des pages et mini-apps** dans les réponses — graphiques, suivis, **cartes interactives** avec « Ouvrir dans
   Plans » — et des **podcasts** lus par deux Bips.
 - 🔒 **Chaque agent dans son bac à sable** : ses propres fichiers, des dossiers qu'il partage avec les agents que tu
-  choisis (en lecture seule pour eux), et seulement les sites que tu as autorisés.
+  choisis (en lecture seule pour eux), et des données envoyées seulement aux sites que tu as autorisés (au-delà d'une
+  petite quantité).
 - 👨‍👩‍👧 **Toute la famille** : un espace privé par personne ; les agents de tes proches ne se parlent que là où tu l'as
   permis. Des agents rangés en groupes sur l'accueil (Perso, Pro, Famille, ou le tien).
 - 💻 **Sur un ordinateur aussi** : la console web ouvre tes agents, leurs conversations et la Boîte dans un
@@ -180,7 +181,8 @@ flowchart LR
 Ce qui sort de ton espace : chaque message part au modèle d'IA que tu as choisi, pour qu'il y réponde ; les services
 qu'un agent utilise pour toi (recherche web, cartes, météo) voient ses requêtes. Détails :
 [ce que les apps envoient, et à qui](docs/app-data.fr.md) · [la comparaison avec ChatGPT et les
-autres](docs/privacy-compare.fr.md).
+autres](docs/privacy-compare.fr.md) · [le modèle de sécurité : ce qui est imposé, et ses
+limites](docs/security-model.fr.md).
 
 ## 🗂️ Le dépôt
 
