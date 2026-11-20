@@ -355,7 +355,7 @@ pub fn clean_first(answer: &str) -> Option<String> {
 
 static UNSAFE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(concat!(
-        r"(?i)",
+        r"(?i)(?:",
         // a link, a domain, an e-mail address, a phone number
         r"https?://|www\.|\b[a-z0-9-]+\.(?:com|fr|de|es|nl|be|ch|eu|org|net|io|co|uk|it|ly|me|app|example)\b|",
         r"[\w.+-]+@[\w-]+\.[\w.]+|\+?\d[\d .-]{7,}\d|",
@@ -367,7 +367,7 @@ static UNSAFE: LazyLock<Regex> = LazyLock::new(|| {
         // advice on money, health or law (the turn answers those, with its tools)
         r"médicament|posologie|paracétamol|ibuprofène|\b\d+ ?mg\b|ordonnance|dosage|medication|ibuprofen|",
         r"\bimpôts?\b|fiscal|défiscal|plafond de versement|placement|rendement|invest|tax (?:return|relief)|",
-        r"avocat|tribunal|juridique|légalement|lawyer|legally|court\b|",
+        r"avocat|tribunal|juridique|légalement|lawyer|legally|court\b",
         r")",
     ))
     .expect("valid regex")
