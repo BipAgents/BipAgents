@@ -29,6 +29,7 @@ use std::hash::BuildHasher;
 
 use regex::Regex;
 use serde_json::Value;
+use zeroize::Zeroizing;
 use std::sync::LazyLock;
 
 /// The computed styles asked of the snapshot, in this order (`STYLE_*`).
@@ -98,30 +99,39 @@ static CARD_KEY: LazyLock<std::collections::hash_map::RandomState> = LazyLock::n
 
 /// The card's keyed mark from its number (`CardSeen::mark`), computed when the card is typed.
 pub fn card_mark(number: &str) -> u64 {
-    let digits: String = number.chars().filter(char::is_ascii_digit).collect();
-    CARD_KEY.hash_one(&digits)
+    let digits: Zeroizing<String> = Zeroizing::new(number.chars().filter(char::is_ascii_digit).collect());
+    CARD_KEY.hash_one(digits.as_str())
 }
 
 /// A digit run with separators that may be a card number (12 to 19 digits).
 static DIGIT_RUN: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\d(?:[ \-]?\d){11,18}").expect("digit run pattern"));
-/// A masked preview's last 4 digits (« •••• 4242 », « **** 4242 », « XXXX-4242 »).
-static MASKED_LAST4: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"[•*·xX]{2,}[ \-]?(\d{4})\b").expect("masked pattern"));
+/// A masked preview's last 4 digits (« •••• 4242 », « **** 4242 », « XXXX-4242 », « **** **** **** 4242 »): a real
+/// mask only, 4 or more mask characters, never dot leaders (« Total ····· 4242,00 € », Relecture 9, z1); the decimal
+/// part after it, when there is one, makes it an amount (kept).
+static MASKED_LAST4: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"[•●*xX]{4,}(?:[ \-][•●*xX]{4})*[ \-]?(\d{4})([.,]\d)?").expect("masked pattern")
+});
 
 /// A visual line without the card being typed: the run of its digits (whole, or its 4-digit groups in sequence on the
 /// line), and its masked last-4 preview. Nothing else is touched.
 fn drop_card(line: &str, card: Option<&CardSeen>) -> String {
     let Some(card) = card else { return line.to_string() };
     let line = DIGIT_RUN.replace_all(line, |c: &regex::Captures| {
-        let digits: String = c[0].chars().filter(char::is_ascii_digit).collect();
-        if CARD_KEY.hash_one(&digits) == card.mark {
+        let digits: Zeroizing<String> = Zeroizing::new(c[0].chars().filter(char::is_ascii_digit).collect());
+        if CARD_KEY.hash_one(digits.as_str()) == card.mark {
             " ".to_string()
         } else {
             c[0].to_string()
         }
     });
     MASKED_LAST4
-        .replace_all(&line, |c: &regex::Captures| if c[1] == card.last4 { " ".to_string() } else { c[0].to_string() })
+        .replace_all(&line, |c: &regex::Captures| {
+            if &c[1] == card.last4.as_str() && c.get(2).is_none() {
+                " ".to_string()
+            } else {
+                c[0].to_string()
+            }
+        })
         .into_owned()
 }
 
@@ -975,6 +985,26 @@ mod tests {
             b.text(1, "SPAN", "€", (92.0, 70.0, 10.0, 19.0), &[]);
             let got = read(&b);
             assert_ne!(total(&got, 119_900), PageTotal::Approved, "{}", got.shown);
+        }
+    }
+
+    /// Relecture 9 (20/11, on 1fe82c895), LOW: asserts the safe outcome, fails on 1fe82c895.
+    mod review_9 {
+        use super::*;
+        use crate::page_total::{page_total_of, PageText, PageTotal};
+
+        #[test]
+        fn z1_a_total_after_dot_leaders_equal_to_the_cards_last4_is_taken_out() {
+            // MASKED_LAST4 takes any 2+ « · * x » then 4 digits equal to the card's last 4: dot leaders (« Total ····
+            // 4242,00 € ») lose the total's euros at the read before the press → « ,00 € » → « approved » on the basket
+            let card = CardSeen { mark: card_mark("4242 4242 4242 4242"), last4: "4242".into() };
+            let mut b = Build::new();
+            b.text(1, "P", "Montant de votre panier : 4 199,00 €", (8.0, 10.0, 280.0, 19.0), &[]);
+            b.text(1, "P", "Frais de livraison 43,00 €", (8.0, 40.0, 200.0, 19.0), &[]);
+            b.text(1, "P", "Total ··········· 4242,00 €", (8.0, 70.0, 260.0, 19.0), &[]);
+            let got = read_snapshot(&b.snapshot(), Some(&card)).remove(0);
+            let text = PageText { shown: got.shown.clone(), all: got.all.clone(), ..Default::default() };
+            assert_ne!(page_total_of(&[text], 419_900, "EUR"), PageTotal::Approved, "{}", got.shown);
         }
     }
 
