@@ -71,13 +71,40 @@ const TMPFS_MAGIC: i64 = 0x0102_1994;
 const RAMFS_MAGIC: i64 = 0x8584_58f6;
 
 /// The vault is closed (sealed, its place key not in memory yet, or a sealing under way): nothing is read or written.
+/// `soon`: it reopens by itself in a few minutes ([`soon`]); else it waits for a check or for someone, no delay told.
 #[derive(Debug, Clone, Copy, thiserror::Error)]
-#[error("the vault is closed: it reopens by itself in a few minutes")]
-pub struct Locked;
+#[error("the vault is closed for now")]
+pub struct Locked {
+    pub soon: bool,
+}
+
+impl Locked {
+    /// The vault of `data` (the bridge's data folder) as it is closed now.
+    pub fn of(data: &Path) -> Locked {
+        Locked { soon: matches!(state(data), State::Closed(c) if soon(&c.reason)) }
+    }
+
+    /// [`Locked::of`] for this bridge's vault.
+    pub fn now(config: &Config) -> Locked {
+        Locked::of(Path::new(&config.data_dir()))
+    }
+}
 
 /// Whether `err` is (or carries) [`Locked`].
 pub fn is_locked(err: &anyhow::Error) -> bool {
-    err.chain().any(|e| e.is::<Locked>())
+    locked_of(err).is_some()
+}
+
+/// The [`Locked`] `err` is or carries.
+pub fn locked_of(err: &anyhow::Error) -> Option<Locked> {
+    err.chain().find_map(|e| e.downcast_ref::<Locked>().copied())
+}
+
+/// A closed vault that reopens by itself in a few minutes: not asked yet (`opening`) or the key service out of reach
+/// (`unreachable`), the bridge asking again. Any other reason (held, stopped, a wrong or unreadable half, a sealing cut
+/// off) waits for a check or for someone: no delay is ever promised for it (the agents' words, the apps' words).
+pub fn soon(reason: &str) -> bool {
+    matches!(reason, "opening" | "unreachable")
 }
 
 /// The three stores whose keys are sealed.
@@ -203,7 +230,7 @@ fn places() -> std::sync::MutexGuard<'static, HashMap<PathBuf, Memory>> {
 }
 
 /// The data folder as one name (it may be given with a link or `..`).
-fn id(data: &Path) -> PathBuf {
+pub(crate) fn id(data: &Path) -> PathBuf {
     std::fs::canonicalize(data).unwrap_or_else(|_| data.to_path_buf())
 }
 
@@ -272,18 +299,33 @@ pub fn state(data: &Path) -> State {
     State::Closed(closed.clone())
 }
 
+/// Whether the place of `data` is enrolled (its keys sealed, or a sealing under way): what each store and the agents'
+/// Hermes copies (hermes_copies.rs) follow. Reads nothing but two names.
+pub fn enrolled(data: &Path) -> bool {
+    data.join(SEALED_FILE).exists() || data.join(JOURNAL_DIR).join(JOURNAL).exists()
+}
+
 /// The vault of this bridge is sealed and closed now.
 pub fn closed(config: &Config) -> bool {
     matches!(state(Path::new(&config.data_dir())), State::Closed(_))
 }
 
-/// What /health adds: nothing when not enrolled (as today), `vault: "open"`, or `vault: "locked"` and `vault_reason`.
+/// What /health adds: nothing when not enrolled (as today), `vault: "open"` (with `vault_copies_not_ready`, how many
+/// agents' Hermes copies are not ready in memory, when some), or `vault: "locked"` and `vault_reason`.
 pub fn health_fields(config: &Config) -> Map<String, Value> {
     let mut out = Map::new();
     match state(Path::new(&config.data_dir())) {
         State::Off => {}
         State::Open => {
             out.insert("vault".into(), json!("open"));
+            // agents whose Hermes copy is not ready in memory (hermes_copies.rs): for the place's keeper, a count only
+            let failed = crate::hermes_copies::failed(Path::new(&config.data_dir()))
+                .iter()
+                .filter(|name| config.agents.values().any(|a| &a.name == *name))
+                .count();
+            if failed > 0 {
+                out.insert("vault_copies_not_ready".into(), json!(failed));
+            }
         }
         State::Closed(closed) => {
             out.insert("vault".into(), json!("locked"));
@@ -298,7 +340,7 @@ pub fn health_fields(config: &Config) -> Map<String, Value> {
 pub fn data_key(folder: &Path, which: DataKey) -> Result<Option<Zeroizing<String>>> {
     let Some(data) = folder.parent() else { return Ok(None) };
     if data.join(JOURNAL_DIR).join(JOURNAL).exists() {
-        return Err(Locked.into());
+        return Err(Locked { soon: false }.into());
     }
     let sealed_path = data.join(SEALED_FILE);
     if !sealed_path.exists() {
@@ -307,7 +349,7 @@ pub fn data_key(folder: &Path, which: DataKey) -> Result<Option<Zeroizing<String
     let sealed = Sealed::read(data)?;
     match with_sk(data, |sk| sealed.data_key(sk, which)) {
         Some(key) => Ok(Some(key?)),
-        None => Err(Locked.into()),
+        None => Err(Locked::of(data).into()),
     }
 }
 
@@ -449,10 +491,11 @@ fn private_dir(dir: &Path) -> Result<()> {
 }
 
 /// Removed, its bytes overwritten first (best effort: an SSD or a journaling filesystem may keep a copy).
-fn wipe(path: &Path) -> Result<()> {
+pub(crate) fn wipe(path: &Path) -> Result<()> {
     if let Ok(meta) = std::fs::symlink_metadata(path) {
         if meta.is_file() {
-            if let Ok(mut file) = std::fs::OpenOptions::new().write(true).open(path) {
+            // never through a link put there between the look and the open
+            if let Ok(mut file) = std::fs::OpenOptions::new().write(true).custom_flags(libc::O_NOFOLLOW).open(path) {
                 let _ = file.write_all(&vec![0u8; meta.len() as usize]);
                 let _ = file.sync_all();
             }
@@ -623,6 +666,25 @@ fn cache_dir(path: &Path, make: bool) -> Result<PathBuf> {
     Ok(dir)
 }
 
+/// A folder of this place's own in memory, beside its place key: `<runtime>/bipagents/<prefix>-<id>` (the agents' Hermes
+/// copies, hermes_copies.rs), made 0700 if `make`. Refused like the place key's own folder: not ours, a link, writable by
+/// others, or not on a memory filesystem.
+pub(crate) fn memory_folder_of(data: &Path, prefix: &str, make: bool) -> Result<PathBuf> {
+    let cache = cache_path(data).ok_or_else(|| anyhow!("no folder in memory (XDG_RUNTIME_DIR on tmpfs) here"))?;
+    let parent = cache_dir(&cache, make)?;
+    let name = cache.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let id = name.trim_start_matches("vault-").trim_end_matches(".sk");
+    let dir = parent.join(format!("{prefix}-{id}"));
+    if make && std::fs::symlink_metadata(&dir).is_err() {
+        std::fs::DirBuilder::new().mode(0o700).create(&dir)?;
+    }
+    if !ours(&dir) || !memory_folder(&dir) {
+        bail!("{} is not this account's own folder in memory", dir.display());
+    }
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))?;
+    Ok(dir)
+}
+
 fn read_cache(data: &Path) -> Option<Box<Zeroizing<[u8; KEY_LEN]>>> {
     let path = cache_path(data)?;
     cache_dir(&path, false).ok()?;
@@ -777,20 +839,37 @@ pub fn at_start(config: &Config) -> Result<()> {
     hold_for_bridge(&Place::of(config), Duration::from_secs(120))
 }
 
-/// Closed at the start: reopened in the background; then what was left as it was meanwhile (the agents' souls and
-/// tool diets, contact details given to the browsers on, removals waiting) brought up to date.
+/// At the bridge's start, an enrolled place: open, its agents' Hermes copies checked in memory (rebuilt where they are
+/// not there or not right: hermes_copies.rs); closed, the copies left in memory dropped (nothing to read until it
+/// reopens: a stale copy never), reopened in the background, the copies rebuilt right after, then what was left as it
+/// was meanwhile (the agents' souls and tool diets, contact details given to the browsers on, removals waiting) brought
+/// up to date. Not enrolled: nothing (today's layout, the copies on the disk).
 pub fn start(app: &crate::app::AppState) {
     let config = app.config();
     let place = Place::of(&config);
-    if !matches!(state(&place.data), State::Closed(_)) {
-        return;
+    match state(&place.data) {
+        State::Off => return,
+        State::Open => {
+            let app = app.clone();
+            let checking = app.clone();
+            app.spawn(async move {
+                copies_ready_retrying(&checking).await;
+            });
+            return;
+        }
+        State::Closed(_) => {}
     }
+    crate::hermes_copies::drop_all(&place.data);
     let source: Arc<dyn ShareSource> = Arc::new(FromFile(place.clone()));
     let app = app.clone();
     let reopening = app.clone();
     app.spawn(async move {
-        reopen(place, source, Duration::from_secs(1)).await;
+        reopen(place.clone(), source, Duration::from_secs(1)).await;
+        crate::hermes_copies::forget_checked(&place.data);
         let config = reopening.config();
+        reopening.vault.copies_ready_all(&config).await;
+        let retrying = reopening.clone();
+        reopening.spawn(async move { retry_copies(&retrying).await });
         if config.hermes.isolated {
             let _ = reopening.vault.retry_removals(&config).await;
             let _ = reopening.vault.follow_browsers(&config).await;
@@ -804,6 +883,41 @@ pub fn start(app: &crate::app::AppState) {
             crate::agents_admin::refresh_rewritten(config, souls, run, crate::agents_admin::refresh_jitter()).await;
         }
     });
+}
+
+/// Every agent's Hermes copy made ready in memory, then [`retry_copies`] for as long as the bridge runs.
+async fn copies_ready_retrying(app: &crate::app::AppState) {
+    app.vault.copies_ready_all(&app.config()).await;
+    retry_copies(app).await;
+}
+
+/// The agents' copies not ready tried again in the background, whenever one fails (at the start, at a give, after a
+/// move into a space: review of 17/11, R2 and R-C): 1 minute after, then twice as long each time, up to an hour, until
+/// none fails; then it watches again (a look at what failed each minute, nothing run). Ends once the place is no longer
+/// enrolled; closed again, it waits. The diets follow a pass that rebuilt (an item Hermes refused is marked so).
+async fn retry_copies(app: &crate::app::AppState) {
+    let mut pause = crate::vault::COPY_RETRY_PAUSE;
+    loop {
+        tokio::time::sleep(pause).await;
+        let config = app.config();
+        if !crate::hermes_copies::in_memory(&config) {
+            return;
+        }
+        let failing = crate::hermes_copies::failed(Path::new(&config.data_dir()));
+        if closed(&config) || !failing.iter().any(|name| config.agents.values().any(|a| &a.name == name)) {
+            pause = crate::vault::COPY_RETRY_PAUSE;
+            continue;
+        }
+        let report = app.vault.copies_ready_all(&config).await;
+        if !report.rebuilt.is_empty() {
+            crate::profile_files::reconcile_all(&config);
+        }
+        pause = if report.failed.is_empty() {
+            crate::vault::COPY_RETRY_PAUSE
+        } else {
+            (pause * 2).min(Duration::from_secs(3600))
+        };
+    }
 }
 
 // -- the enrolment: the migration --------------------------------------------------------------------------------------
@@ -1274,8 +1388,7 @@ tu persona: dile simplemente que la caja fuerte está cerrada y que se volverá 
 
 /// The words for an agent speaking `lang`, the vault closed for `reason` ([`Closed::reason`]).
 pub fn agent_text(lang: &str, reason: &str) -> &'static str {
-    let soon = matches!(reason, "opening" | "unreachable");
-    match (lang, soon) {
+    match (lang, soon(reason)) {
         ("fr", true) => SOON_FR,
         ("de", true) => SOON_DE,
         ("es", true) => SOON_ES,
@@ -1300,20 +1413,58 @@ pub fn closed_result(config: &Config, lang: &str) -> Value {
     json!({"content": [{"type": "text", "text": closed_text(config, lang)}], "isError": false})
 }
 
-/// What the app's routes answer while it is closed (the app says it in its own words).
-pub fn http_locked() -> crate::web::HttpError {
-    crate::web::HttpError::json(503, json!({"code": "vault_locked", "message": "Ton coffre est fermé pour le moment."}))
+/// What the app's routes answer while it is closed: `soon` as [`Locked`] says it; the apps say it in their own words
+/// (« Ton coffre se rouvre dans quelques minutes » only when `soon`, a text without a delay otherwise).
+pub fn http_locked(locked: Locked) -> crate::web::HttpError {
+    crate::web::HttpError::json(
+        503,
+        json!({"code": "vault_locked", "soon": locked.soon, "message": "Ton coffre est fermé pour le moment."}),
+    )
+}
+
+// -- the export (lot 3) --------------------------------------------------------------------------------------------------
+
+/// For `bipagents export` of an enrolled place (installer/bipinstall/vault_keys.py): `{"v": 1, "keys": {vault, mail,
+/// connections}}`, the data keys the place key opens, so that the import, on another machine, goes back to today's
+/// layout (each key beside its store, no keys.sealed.json). Only while the vault is open, from this process's memory or
+/// the tmpfs: the key service is never asked (a closed vault is refused: export once it has reopened). The place key
+/// itself, this server's half and the key service's token never leave. The export file is sealed by its passphrase.
+pub fn export_keys(place: &Place) -> Result<Value> {
+    if place.journal_dir().join(JOURNAL).exists() {
+        bail!("a sealing of this place's keys is under way or was cut off: the vault is closed for now");
+    }
+    if !place.sealed().exists() {
+        bail!("this place's vault keys are not sealed: the export takes its key files as they are");
+    }
+    let sealed = Sealed::read(&place.data)?;
+    let keys = with_sk(&place.data, |sk| -> Result<Map<String, Value>> {
+        let mut keys = Map::new();
+        for which in DataKey::ALL {
+            let key = sealed.data_key(sk, which)?;
+            keys.insert(which.name().into(), json!(key.as_str()));
+        }
+        Ok(keys)
+    })
+    .ok_or_else(|| anyhow!("the vault is closed (its place key isn't in memory yet): export once it has reopened"))??;
+    Ok(json!({"v": 1, "keys": keys}))
 }
 
 // -- the command line --------------------------------------------------------------------------------------------------
 
-const USAGE: &str = "usage: bipbridge vault-keys status | enable | open [--config FILE]
+const USAGE: &str = "usage: bipbridge vault-keys status | enable | open | export [--config FILE]
 
   status   the vault's keys: off (today's layout), open, or locked (and why)
   enable   seal this place's vault, mailbox and connection keys (the bridge stopped): the key service's settings
            from the space's keyservice.json, else BIPAGENTS_KEYS_URL, BIPAGENTS_KEYS_TOKEN (and _GRANT, _SIGNATURE)
   open     ask the key service now (an operator, once a place is resumed): a running bridge sees it open
+  export   the data keys the place key opens, as JSON (`bipagents export`: the import goes back to today's layout);
+           only while the vault is open, never asking the key service
 ";
+
+/// The command line's help (tests).
+pub fn usage() -> &'static str {
+    USAGE
+}
 
 fn env(name: &str) -> Option<String> {
     std::env::var(name).ok().filter(|v| !v.is_empty())
@@ -1406,6 +1557,7 @@ pub fn cli(argv: &[String]) -> i32 {
                     }
                 }
             }
+            "export" => export_keys(&place),
             other => bail!("unknown action {other}"),
         }
     });
@@ -1463,8 +1615,9 @@ mod tests {
 
     #[test]
     fn locked_is_found_through_context() {
-        let e = anyhow::Error::from(Locked).context("reading the mailboxes");
+        let e = anyhow::Error::from(Locked { soon: true }).context("reading the mailboxes");
         assert!(is_locked(&e));
+        assert!(locked_of(&e).unwrap().soon);
         assert!(!is_locked(&anyhow!("other")));
     }
 }

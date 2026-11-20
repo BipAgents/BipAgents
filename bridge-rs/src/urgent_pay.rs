@@ -922,7 +922,8 @@ async fn account_route(State(state): State<AppState>, Path((agent, id)): Path<(S
     let config = state.config();
     let (agent, conn, purchase) = purchase_of(&config, &agent, &id)?;
     if crate::sealed_keys::closed(&config) {
-        return Err(crate::sealed_keys::http_locked()); // its logins and « Coordonnées » wait for the vault to reopen
+        // its logins and « Coordonnées » wait for the vault to reopen
+        return Err(crate::sealed_keys::http_locked(crate::sealed_keys::Locked::now(&config)));
     }
     let email = signup_email(&state, &config, &agent.name);
     let note = account_note(&purchase, email.as_ref().map(|(l, m)| (l.as_str(), m.as_str())));
@@ -944,7 +945,8 @@ async fn rehearse_route(State(state): State<AppState>, Path((agent, id)): Path<(
     let config = state.config();
     let (agent, conn, purchase) = purchase_of(&config, &agent, &id)?;
     if crate::sealed_keys::closed(&config) {
-        return Err(crate::sealed_keys::http_locked()); // a rehearsal reads the card and the login: once reopened
+        // a rehearsal reads the card and the login: once reopened
+        return Err(crate::sealed_keys::http_locked(crate::sealed_keys::Locked::now(&config)));
     }
     let Some(marked) = Rehearsal::start(&agent.name) else {
         return Err(HttpError::json(409, json!({"code": "rehearsal_running"})));

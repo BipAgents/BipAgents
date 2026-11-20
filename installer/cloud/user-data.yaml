@@ -254,7 +254,7 @@ runcmd:
   # A place to be encrypted at rest (its setup, written by the seat agent's --bootstrap above on the guichet's servers,
   # carries "keys"): the server hardened before any place runs (the swap file just made is emptied and encrypted,
   # the journal goes to memory). If that fails nothing is installed: no encrypted place on an unhardened server.
-  - if grep -qs '"keys"' /etc/bipagents/cloud*.json; then bash /usr/local/lib/bipagents/space-hardening.sh >> /var/log/bipagents-space-hardening.log 2>&1 || exit 1; fi
+  - if grep -qsE '"(vault_)?keys"' /etc/bipagents/cloud*.json; then bash /usr/local/lib/bipagents/space-hardening.sh >> /var/log/bipagents-space-hardening.log 2>&1 || exit 1; fi
   - systemctl restart ssh
   - ufw default deny incoming
   - ufw default allow outgoing

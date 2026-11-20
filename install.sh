@@ -69,7 +69,31 @@ to_version() {
   if [ -n "${BIPAGENTS_TO_REPO:-}" ] && install_clone && [ "$(origin)" != "$REPO_URL" ]; then
     git -C "$DIR" remote set-url origin "$REPO_URL"   # the commit lives there (its way back: the one before)
   fi
-  git -C "$DIR" fetch --depth 1 --quiet origin "$BIPAGENTS_TO" && git -C "$DIR" checkout --quiet -B main FETCH_HEAD
+  git -C "$DIR" fetch --depth 1 --quiet origin "$BIPAGENTS_TO" || return 1
+  # A place whose vault's keys are sealed never goes to a version without them (lots 1 and 2 of the design note
+  # « Clé du coffre »): its bridge would make keys again in clear and no longer read its stores. It stays on its own.
+  # The versions that carry them say so in bridge-rs/SEALED_KEYS_VERSION (installer/tests/test_review_lot3_pass2.py).
+  if vault_sealed; then
+    local has
+    has=$(git -C "$DIR" cat-file -p FETCH_HEAD:bridge-rs/SEALED_KEYS_VERSION 2>/dev/null | sed -n 1p | tr -dc 0-9)
+    if [ "${has:-0}" -lt "$SEALED_KEYS_NEEDED" ]; then
+      echo "BipAgents: this place's vault keys are sealed and $BIPAGENTS_TO doesn't carry them: it stays on its version" >&2
+      return 1
+    fi
+  fi
+  git -C "$DIR" checkout --quiet -B main FETCH_HEAD
+}
+
+# The sealed keys' format this install.sh needs a version to carry before a sealed place goes to it.
+SEALED_KEYS_NEEDED=1
+# This account's vault keys sealed (bridge-rs/src/sealed_keys.rs: keys.sealed.json, or a sealing under way), in the
+# bridge's data folder as its config says (between double or single quotes, ~ for the home).
+vault_sealed() {
+  local data
+  data=$(sed -n "s/^data_dir *= *[\"']\(.*\)[\"'] *\$/\1/p" "$HOME/.config/bipagents/bridge.toml" 2>/dev/null | head -1)
+  case "$data" in "~"/*) data="$HOME/${data#\~/}" ;; esac
+  data=${data:-$HOME/.local/share/hermes-bridge}
+  [ -e "$data/keys.sealed.json" ] || [ -e "$data/.keys-migration/journal.json" ]
 }
 
 origin() { git -C "$DIR" config --get remote.origin.url 2>/dev/null | sed 's|\.git$||; s|$|.git|'; }

@@ -3018,6 +3018,11 @@ pub async fn move_into_space(state: &AppState, agent: &AgentConfig, keep_hub: bo
         }
     };
     give_tools(&state.config(), &moved, &run).await?; // its profile is a new one, in its space
+    // its Hermes vault in memory (a place enrolled for sealed keys): rebuilt for its space's profile (not copied)
+    if let Err(exc) = state.vault.copies_ready_for(&state.config(), &moved).await {
+        tracing::warn!(target: "bipbridge::agents", agent = %moved.name, error = %format!("{exc:#}"),
+            "the moved agent's Hermes copy not rebuilt in memory yet (the next give or start does)");
+    }
     Ok(moved)
 }
 

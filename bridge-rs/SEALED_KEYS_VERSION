@@ -1,0 +1,6 @@
+1
+# The first line: the format of the vault's sealed keys this BipAgents carries (design note « Clé du coffre », lots 1
+# and 2: bridge-rs/src/sealed_keys.rs, hermes_copies.rs). install.sh refuses, on a place whose vault is sealed, any
+# version whose first line here is missing or lower than SEALED_KEYS_NEEDED: removing this file, or lowering it, makes
+# every sealed place refuse every update (installer/tests/test_review_lot3_pass3.py checks it never goes down from the
+# last release that carries it). Raise it only with a format a sealed place can't go back from.

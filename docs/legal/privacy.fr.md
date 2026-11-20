@@ -2,7 +2,7 @@
 
 # Politique de confidentialité de BipAgents
 
-> Dernière mise à jour : 18 novembre 2026.
+> Dernière mise à jour : 20 novembre 2026.
 
 ## En bref
 
@@ -725,6 +725,7 @@ BipAgents n'y efface rien et Kerfy Studio n'en garde rien.
 | EUrouter B.V. (Amsterdam, Pays-Bas) | Routeur d'IA | Messages envoyés au modèle, métadonnées | Union européenne |
 | Hébergeurs des modèles, partenaires d'EUrouter | Font tourner le modèle (aujourd'hui GLM-5.3 Flash) | Messages envoyés au modèle, avec les fichiers et les photos qu'il voit | Union européenne, selon EUrouter |
 | Scaleway SAS (Paris, France) | Stockage objet des sauvegardes (région fr-par, Paris) | Sauvegardes chiffrées des places, illisibles pour lui et pour Kerfy Studio ; copies chiffrées de la base du guichet ; une version remplacée ou effacée est gardée 1 jour | Union européenne (France) |
+| Scaleway SAS (Paris, France) | Service de clés du coffre (keys.bipagents.com) : garde une moitié de la clé du coffre de chaque place dont le coffre est scellé ; l'autre moitié reste sur la place, et aucune des deux n'ouvre le coffre seule | Pour chaque place scellée : sa moitié de clé, une empreinte de son jeton, l'adresse IP de son serveur et le journal de ses demandes (heure, adresse, résultat), gardé 90 jours ; le nom d'une place supprimée et l'empreinte de son jeton restent, pour refuser toute nouvelle demande | Union européenne (Pays-Bas) |
 | OVHcloud (OVH SAS, Roubaix, France) | Héberge le guichet et le relais, sur un VPS en France | Compte, abonnement, données techniques ; jetons scellés et journaux du relais (sections 4.1 et 5.6) | France |
 | Proton AG (Genève, Suisse) | Envoie, depuis une adresse bipagents.com, les codes, les avis de sécurité, les invitations, la confirmation d'achat, l'accusé de rétractation, les avis de suppression, l'avis du 5e jour d'une place bêta inutilisée et l'avis de fin de la bêta ; héberge aussi la boîte du support (section 4.2) | Adresse e-mail, contenu de ces e-mails ; Proton garde le message envoyé le temps que nous l'effacions de la boîte d'envoi | Suisse (décision d'adéquation, section 11) |
 | Stripe Payments Europe, Ltd. (Dublin, Irlande) | Paiement des achats sur le site bipagents.com, calcul des taxes, contrôles contre la fraude, factures | Adresse e-mail, adresse ou pays de facturation, données de carte, adresse IP | Union européenne ; possiblement hors de l'Union (section 11) |

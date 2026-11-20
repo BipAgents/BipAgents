@@ -670,6 +670,30 @@ fn strings(items: &[String]) -> Yaml {
     Yaml::Seq(items.iter().map(|s| Yaml::str(s.clone())).collect())
 }
 
+/// While the vault's keys are sealed and closed (sealed_keys.rs; [`current`] None: the diet left as it is), Hermes'
+/// `browser_vault` behind the search in a defer list this bridge wrote: its copy in memory is not there to read
+/// (hermes_copies.rs), and it would answer « No saved logins » (v0.23.1 `browser_vault_tool.py`: the folder's error
+/// caught, an empty list); the bridge's `vault_login` says the vault is closed for a while (review of 17/11, R3). The
+/// diet brings it back once open. Whether it changed.
+pub fn vault_out_of_view(data: &mut Yaml) -> bool {
+    let Some(Yaml::Seq(items)) =
+        data.get_mut("tools").and_then(|t| t.get_mut("tool_search")).and_then(|s| s.get_mut("defer"))
+    else {
+        return false;
+    };
+    if !items.iter().any(|i| i.as_str() == Some(MARK)) {
+        return false; // the person's own list
+    }
+    let mut changed = false;
+    for name in VAULT_TOOLS {
+        if !items.iter().any(|i| i.as_str() == Some(name)) {
+            items.push(Yaml::str(name));
+            changed = true;
+        }
+    }
+    changed
+}
+
 /// `data` with the diet in it; None when nothing changes, or when the person wrote their own defer list.
 pub fn with_diet(data: &Yaml, diet: &Diet) -> Option<Yaml> {
     let mut data = if data.is_map() { data.clone() } else { Yaml::map() };
@@ -768,6 +792,20 @@ pub const CRON_TOOLSET: &str = "cronjob";
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn while_closed_the_vault_tool_goes_behind_the_search_in_the_bridge_s_list_only() {
+        let ours = format!("tools:\n  tool_search:\n    defer:\n    - '{MARK}'\n    - delegate_task\n");
+        let mut data = crate::agents_admin::pyyaml::load(&ours).unwrap();
+        assert!(vault_out_of_view(&mut data));
+        let defer = data.get("tools").and_then(|t| t.get("tool_search")).and_then(|s| s.get("defer")).unwrap();
+        assert!(matches!(defer, Yaml::Seq(items) if items.iter().any(|i| i.as_str() == Some("browser_vault"))));
+        assert!(!vault_out_of_view(&mut data), "once");
+        let mut theirs = crate::agents_admin::pyyaml::load("tools:\n  tool_search:\n    defer:\n    - web\n").unwrap();
+        assert!(!vault_out_of_view(&mut theirs));
+        let mut none = crate::agents_admin::pyyaml::load("model:\n  default: x\n").unwrap();
+        assert!(!vault_out_of_view(&mut none));
+    }
     use crate::agents_admin::pyyaml;
 
     fn names(list: &[&str]) -> Vec<String> {

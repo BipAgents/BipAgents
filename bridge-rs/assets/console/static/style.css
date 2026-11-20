@@ -88,6 +88,18 @@ a { color: var(--accent); }
 .chip { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 999px; background: var(--card); color: var(--deep); font-size: 12.5px; font-weight: 800; }
 .chip::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--main); }
 
+/* The vault's news, over the Bips */
+.vault-news { max-width: 860px; margin-bottom: 28px; }
+.vault-news h2 { margin: 0 0 10px; font-size: 15px; font-weight: 900; color: var(--ink2); }
+.vault-notice { display: flex; align-items: flex-start; gap: 10px; margin-bottom: 10px; padding: 12px 12px 12px 20px; }
+.vault-notice p { margin: 4px 0; flex: 1; font-weight: 600; }
+.vault-entries { padding: 4px 20px; }
+.vault-entry { padding: 12px 0; }
+.vault-entry + .vault-entry { border-top: 1px solid var(--line); }
+.vault-entry p { margin: 4px 0 0; font-weight: 600; }
+.warn { color: #9A5B00; }
+@media (prefers-color-scheme: dark) { .warn { color: #FFC46B; } }
+
 /* Inbox */
 .inbox { max-width: 860px; width: 100%; }
 .inbox-item { margin-bottom: 14px; }

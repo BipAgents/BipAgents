@@ -909,7 +909,7 @@ def test_an_encrypted_place_s_server_is_hardened_before_any_place_runs():
     assert shipped["content"] == script.read_text(encoding="utf-8") and shipped["permissions"] == "0755"
     commands = data["runcmd"]
     hardening = next(c for c in commands if "space-hardening.sh" in c)
-    assert hardening.startswith("if grep -qs '\"keys\"' /etc/bipagents/cloud*.json; then bash ")
+    assert hardening.startswith("if grep -qsE '\"(vault_)?keys\"' /etc/bipagents/cloud*.json; then bash ")
     assert "|| exit 1" in hardening and "|| true" not in hardening
     swap = next(i for i, c in enumerate(commands) if "mkswap /swapfile" in c)
     install = next(i for i, c in enumerate(commands) if "/install.sh |" in c)

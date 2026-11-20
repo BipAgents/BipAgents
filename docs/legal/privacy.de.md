@@ -2,7 +2,7 @@
 
 # Datenschutzerklärung von BipAgents
 
-> Zuletzt aktualisiert: 18. November 2026.
+> Zuletzt aktualisiert: 20. November 2026.
 
 ## Kurz gesagt
 
@@ -764,6 +764,7 @@ dieses Anbieters, BipAgents löscht darin nichts, und Kerfy Studio bewahrt nicht
 | EUrouter B.V. (Amsterdam, Niederlande) | KI-Router | An das Modell geschickte Nachrichten, Metadaten | Europäische Union |
 | Hoster der Modelle, Partner von EUrouter | Betreiben das Modell (heute GLM-5.3 Flash) | An das Modell geschickte Nachrichten, mit den Dateien und Fotos, die es sieht | Europäische Union, laut EUrouter |
 | Scaleway SAS (Paris, Frankreich) | Objektspeicher für die Sicherungen (Region fr-par, Paris) | Verschlüsselte Sicherungen der Plätze, für ihn und für Kerfy Studio unlesbar; verschlüsselte Kopien der Datenbank des Guichets; eine ersetzte oder gelöschte Version wird 1 Tag aufbewahrt | Europäische Union (Frankreich) |
+| Scaleway SAS (Paris, Frankreich) | Schlüsseldienst des Tresors (keys.bipagents.com): bewahrt eine Hälfte des Tresorschlüssels jedes Platzes auf, dessen Tresor versiegelt ist; die andere Hälfte bleibt auf dem Platz, und keine der beiden öffnet den Tresor allein | Für jeden versiegelten Platz: seine Schlüsselhälfte, ein Fingerabdruck seines Tokens, die IP-Adresse seines Servers und das Protokoll seiner Anfragen (Uhrzeit, Adresse, Ergebnis), 90 Tage aufbewahrt; der Name eines gelöschten Platzes und der Fingerabdruck seines Tokens bleiben, um jede neue Anfrage abzulehnen | Europäische Union (Niederlande) |
 | OVHcloud (OVH SAS, Roubaix, Frankreich) | Hostet den Guichet und das Relay, auf einem VPS in Frankreich | Konto, Abo, technische Daten; versiegelte Tokens und die Protokolle des Relays (Abschnitte 4.1 und 5.6) | Frankreich |
 | Proton AG (Genf, Schweiz) | Verschickt von einer bipagents.com-Adresse die Codes, die Sicherheitshinweise, die Einladungen, die Kaufbestätigung, die Eingangsbestätigung eines Widerrufs, die Hinweise zur Löschung, den Hinweis am 5. Tag für einen ungenutzten Beta-Platz und den Hinweis zum Ende der Beta; hostet auch das Support-Postfach (Abschnitt 4.2) | E-Mail-Adresse, Inhalt dieser E-Mails; Proton bewahrt die gesendete Nachricht auf, bis wir sie aus dem Postausgang löschen | Schweiz (Angemessenheitsbeschluss, Abschnitt 11) |
 | Stripe Payments Europe, Ltd. (Dublin, Irland) | Zahlung der Käufe auf der Website bipagents.com, Steuerberechnung, Betrugsprüfung, Rechnungen | E-Mail-Adresse, Rechnungsadresse oder -land, Kartendaten, IP-Adresse | Europäische Union; möglicherweise außerhalb der Union (Abschnitt 11) |

@@ -1,0 +1,203 @@
+"""The agents' Hermes copies of the vault are never carried away from a place whose vault keys are sealed (design note
+« Clé du coffre », lot 2): neither the export (`bipagents export`), nor the backups (backup.py), nor a planned move
+(placemove.py) takes `<HERMES_HOME>/vault` or `<HERMES_HOME>/profiles/<agent>/vault` there; the bridge rebuilds them in
+memory from its master copy, which goes as before. A link to the memory folder is never carried anywhere (it would
+point at nothing on another server). A place not enrolled keeps today's layout: its copies go as they always did."""
+import json
+import os
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+
+from bipinstall import backup, hermes, moving, placemove, sealed, vault_keys
+
+
+def write(path: Path, data: bytes = b"x", mode: int = 0o600):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(data)
+    os.chmod(path, mode)
+
+
+EXPORTED_KEYS = {"vault": "V" * 43 + "=", "mail": "M" * 43 + "=", "connections": "C" * 43 + "="}
+
+
+@pytest.fixture
+def place(tmp_path, monkeypatch):
+    """A place of the offer: Vie in the hub, Coach in its own space, each with its Hermes copy on the disk (today's
+    layout), the bridge's master copy in its data folder."""
+    home = tmp_path / "home" / "bip"
+    data, hub = home / ".local" / "share" / "bipagents", home / ".hermes"
+    config = home / ".config" / "bipagents" / "bridge.toml"
+    config.parent.mkdir(parents=True)
+    config.write_text(f'''bridge_key = "k"
+port = 8643
+data_dir = "{data}"
+
+[hermes]
+home = "{hub}"
+hub_url = "http://127.0.0.1:8642"
+isolated = true
+
+[agents.vie]
+hermes_url = "http://127.0.0.1:8642/p/vie"
+hermes_key = "vie-key"
+
+[agents.coach]
+hermes_url = "http://127.0.0.1:8660/p/coach"
+hermes_key = "coach-key"
+space = "{data}/spaces/coach"
+''')
+    write(hub / "profiles" / "vie" / "SOUL.md", b"Tu es Vie.")
+    write(hub / "profiles" / "vie" / "vault" / "vault.key", b"vie-hermes-key")
+    write(hub / "profiles" / "vie" / "vault" / "vault.json.enc", b"vie-hermes-copy")
+    write(hub / "vault" / "vault.json.enc", b"default-profile-copy")
+    space = data / "spaces" / "coach"
+    write(space / "profiles" / "coach" / "SOUL.md", b"Tu es Coach.")
+    write(space / "profiles" / "coach" / "vault" / "vault.key", b"coach-hermes-key")
+    write(space / "profiles" / "coach" / "vault" / "vault.json.enc", b"coach-hermes-copy")
+    write(data / "vault" / "vault.json.enc", b"the-master-copy")
+    write(data / "vault" / "vault.key", b"the-master-key")
+    monkeypatch.setattr(hermes, "sandbox_runtime", lambda: "/usr/bin/podman")
+    monkeypatch.setattr(hermes, "hermes_checkout", lambda: tmp_path / "no-git")
+    # lot 3: a sealed place's export asks its bridge for the keys (never the real bridge here), the memory folder
+    monkeypatch.setattr(vault_keys, "export_keys", lambda inv: dict(EXPORTED_KEYS))
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path / "run"))
+    return SimpleNamespace(home=home, config=config, data=data, hub=hub, space=space, tmp=tmp_path)
+
+
+def seal(p):
+    """The place enrolled (lot 1: keys.sealed.json, no clear key) and its copies moved into memory by the bridge:
+    Vie's vault a link to the memory folder; Coach's still on the disk (not rebuilt yet: the bridge erases it once
+    its rebuild is checked)."""
+    (p.data / "vault" / "vault.key").unlink()
+    write(p.data / "keys.sealed.json", b'{"v": 1}')
+    memory = p.tmp / "run" / "bipagents" / "hermes-vault-0123456789abcdef" / "vie.a1b2c3d4"
+    write(memory / "vault.key", b"vie-key-in-memory")
+    write(memory / "vault.json.enc", b"vie-copy-in-memory")
+    vault = p.hub / "profiles" / "vie" / "vault"
+    for f in vault.iterdir():
+        f.unlink()
+    vault.rmdir()
+    os.symlink(memory, vault)
+
+
+def inventory(p):
+    return moving.read_inventory(p.config, p.home)
+
+
+def exported(p):
+    """The export's file names and contents, read back from the sealed archive."""
+    phrase = sealed.new_passphrase()
+    out = p.tmp / "export.bipagents"
+    machine = SimpleNamespace(system="linux", tailnet_name=None, tailscale=None)
+    moving.export(inventory(p), out, phrase, machine)
+    tar, opened, handle = moving.open_archive(out, phrase)
+    members = {}
+    member = tar.next()   # (the manifest was read: a stream goes on from there)
+    while member is not None:
+        data = tar.extractfile(member).read() if member.isfile() else b""
+        members[member.name] = (member, data)
+        member = tar.next()
+    tar.close()
+    handle.close()
+    return members
+
+
+def backed_up(p):
+    stage = p.tmp / "stage"
+    stage.mkdir(exist_ok=True)
+    return [str(path) for path in backup.files(inventory(p), stage, {})]
+
+
+def looked(p):
+    inv = inventory(p)
+    return {path for root in inv.roots().values() if root.is_dir() for path, _, _ in backup.stat_walk(inv, root)}
+
+
+def test_today_s_layout_still_carries_the_hermes_copies(place):
+    members = exported(place)
+    datas = [data for _, data in members.values()]
+    assert b"vie-hermes-copy" in datas and b"coach-hermes-copy" in datas and b"default-profile-copy" in datas
+    assert b"the-master-copy" in datas and b"the-master-key" in datas
+    files = backed_up(place)
+    for path in (place.hub / "profiles" / "vie" / "vault" / "vault.key",
+                 place.space / "profiles" / "coach" / "vault" / "vault.json.enc", place.hub / "vault" / "vault.json.enc"):
+        assert str(path) in files
+    inv = inventory(place)
+    for root in inv.roots().values():
+        if root.is_dir():
+            assert not [r for r in placemove.rules(inv, root) if r.endswith("/vault")]
+
+
+def test_a_sealed_place_carries_no_hermes_copy_in_its_export_backups_or_move(place):
+    seal(place)
+    members = exported(place)
+    names = sorted(members)
+    datas = [data for _, data in members.values()]
+    # lot 3: the export carries the keys and every agent's Hermes copy, in memory (as a folder) or still on the disk
+    # (the import goes back to today's layout, where nothing rebuilds them); never keys.sealed.json
+    for secret in (b"vie-key-in-memory", b"vie-copy-in-memory", b"coach-hermes-key", b"coach-hermes-copy",
+                   b"default-profile-copy"):
+        assert secret in datas, secret
+    assert not [n for n, (m, _) in members.items() if m.issym() and n.endswith("/vault")], names
+    assert b"the-master-copy" in datas and b'{"v": 1}' not in datas
+    assert json.loads(members[vault_keys.EXPORT_MEMBER][1]) == {"v": 1, "keys": EXPORTED_KEYS}
+    files = backed_up(place)
+    assert not [f for f in files if "/profiles/" in f and "/vault" in f], files
+    assert not [f for f in files if f.startswith(str(place.hub / "vault"))]
+    assert str(place.data / "vault" / "vault.json.enc") in files and str(place.data / "keys.sealed.json") in files
+    seen = looked(place)
+    assert not [f for f in seen if "/profiles/" in f and "/vault" in f]
+    assert str(place.data / "vault" / "vault.json.enc") in seen
+    inv = inventory(place)
+    hub_rules = placemove.rules(inv, inv.hermes_home)
+    assert "- /vault" in hub_rules and "- /profiles/*/vault" in hub_rules
+    data_rules = placemove.rules(inv, inv.data_dir)
+    assert "- /spaces/coach/vault" in data_rules and "- /spaces/coach/profiles/*/vault" in data_rules
+    assert "- /vault" not in data_rules, "the bridge's own master copy is moved"
+
+
+def test_a_link_to_the_memory_folder_is_never_carried(place):
+    """Even on a place not (or no longer) enrolled: carried, the link would point at nothing on the other server."""
+    seal(place)
+    (place.data / "keys.sealed.json").unlink()
+    write(place.data / "vault" / "vault.key", b"the-master-key")
+    members = exported(place)
+    assert not [n for n, (m, _) in members.items() if m.issym() and n.endswith("/vault")]
+    assert b"vie-key-in-memory" not in [data for _, data in members.values()]
+    assert b"coach-hermes-copy" in [data for _, data in members.values()], "a copy on the disk goes, as today"
+    assert not [f for f in backed_up(place) if f == str(place.hub / "profiles" / "vie" / "vault")]
+
+
+def test_what_a_cut_off_swap_left_beside_a_link_is_never_carried(place):
+    """Review of 17/11 (B1): the bridge stopped between the swap and the erase leaves the disk's copy set aside
+    (`.vault-disk-<hex>`, its key in it) or a link not renamed yet (`.vault-link-<hex>`), beside the agent's vault or
+    a Hermes home's own. The bridge erases them at its next start; till then no export, backup or move takes them, on
+    any place (only the bridge makes them)."""
+    seal(place)
+    aside = place.space / "profiles" / "coach" / ".vault-disk-1a2b3c4d"
+    write(aside / "vault.key", b"coach-key-set-aside")
+    write(aside / "vault.json.enc", b"coach-copy-set-aside")
+    write(place.hub / ".vault-disk-5e6f7a8b" / "vault.key", b"hub-key-set-aside")
+    os.symlink(place.tmp / "run" / "nowhere", place.hub / "profiles" / "vie" / ".vault-link-0badc0de")
+    secrets = (b"coach-key-set-aside", b"coach-copy-set-aside", b"hub-key-set-aside")
+    members = exported(place)
+    assert not [s for s in secrets if s in [data for _, data in members.values()]]
+    assert not [n for n in members if "/.vault-" in n or n.split("/")[-1].startswith(".vault-")], sorted(members)
+    files = backed_up(place)
+    assert not [f for f in files if "/.vault-" in f], files
+    assert not [f for f in looked(place) if "/.vault-" in f]
+    inv = inventory(place)
+    hub_rules = placemove.rules(inv, inv.hermes_home)
+    for rule in ("- /.vault-disk-*", "- /.vault-link-*", "- /profiles/*/.vault-disk-*", "- /profiles/*/.vault-link-*"):
+        assert rule in hub_rules, hub_rules
+    data_rules = placemove.rules(inv, inv.data_dir)
+    assert "- /spaces/coach/profiles/*/.vault-disk-*" in data_rules
+    # a place not enrolled: the same (only a bridge of lot 2 makes them, never a copy to carry)
+    (place.data / "keys.sealed.json").unlink()
+    write(place.data / "vault" / "vault.key", b"the-master-key")
+    assert not [s for s in secrets if s in [data for _, data in exported(place).values()]]
+    assert not [f for f in backed_up(place) if "/.vault-" in f]
+    inv = inventory(place)
+    assert "- /profiles/*/.vault-disk-*" in placemove.rules(inv, inv.hermes_home)

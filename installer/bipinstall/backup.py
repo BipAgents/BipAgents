@@ -42,6 +42,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Dict, Iterator, List, Optional, Tuple
 
+from . import vault_keys
+
 SETTINGS = Path(".config") / "bipagents" / "backup.json"
 STATE = Path(".local") / "state" / "bipagents" / "backup.json"
 STAGE = Path(".local") / "state" / "bipagents" / "backup-stage"
@@ -339,13 +341,13 @@ class _Area:
 def _may_skip():
     """The names `Inventory.skipped` may skip. Its rules look at a path's components at given places under its roots;
     a walk that never enters a skipped folder has checked every component of a path but its last, so only a path
-    whose name is one of these (or a socket, a SQLite sidecar, a bridge.toml copy) can be skipped: the others aren't
+    whose name is one of these (or a socket, a SQLite sidecar, a bridge.toml copy, a Hermes copy set aside) can be skipped: the others aren't
     asked (pathlib's work, once per file, was most of a look's time). test_backup_activity.py checks the two agree."""
     from . import moving
     names = (set(moving.RUNTIME_FILES) | moving.HERMES_SKIP_ROOT | moving.HERMES_SKIP_PROFILE | moving.DATA_SKIP
-             | moving.CHROME_SKIP)
+             | moving.CHROME_SKIP | {moving.HERMES_VAULT})
     return lambda name: (name in names or name.endswith((".sock", moving.PARTIAL_SUFFIX, *moving.SIDECARS))
-                         or name.startswith(("bridge.toml.", moving.PARTIAL_PREFIX)))
+                         or name.startswith(("bridge.toml.", moving.PARTIAL_PREFIX, *moving.HERMES_SET_ASIDE)))
 
 
 def stat_walk(inv, root: Path, rules: bool = True) -> Iterator[Tuple[str, str, os.stat_result]]:
@@ -843,6 +845,9 @@ def put_back(fetched: Path, base: Path, repo: Path, address: Optional[str]) -> D
     target = moving.Target(home=base, repo=repo, tailnet_name=None, lan_address=address)
     binaries = moving.own_binaries(base)
     data_dir = moving.read_inventory(base / CONFIG_DIR / "bridge.toml", base).data_dir
+    fresh_sealed = vault_keys.sealed(data_dir)
+    came = info["roots"].get("data")
+    backup_data = _inside(fetched, came) if came else None
 
     def own(dst: Path) -> bool:
         """This server's own: its bridge binaries (a backup from before 19/11 holds the dead place's), what the
@@ -854,6 +859,8 @@ def put_back(fetched: Path, base: Path, repo: Path, address: Optional[str]) -> D
         source = _inside(fetched, old)
         if source.exists() or source.is_symlink():
             _copy(source, moving.rehome(old, info, target), own)
+    if backup_data is not None:
+        info["reseal"] = vault_layout(backup_data, moving.rehome(came, info, target), fresh_sealed, base)
     sqlite_root = _inside(fetched, info.get("stage") or str(stage)) / "sqlite"
     if sqlite_root.is_dir():
         for copy in sqlite_root.rglob("*"):
@@ -874,6 +881,11 @@ def put_back(fetched: Path, base: Path, repo: Path, address: Optional[str]) -> D
         info["volumes_restored"] = moving.import_volumes(base)
     settle(info, base, repo, address, fresh)
     return info
+
+
+def vault_layout(came: Path, data: Path, fresh_sealed: bool, base: Path) -> bool:
+    """vault_keys.files_came (kept under this name for placemove.py)."""
+    return vault_keys.files_came(came, data, fresh_sealed, base)
 
 
 def settle(info: Dict, base: Path, repo: Path, address: Optional[str], fresh: Dict) -> None:
@@ -1010,11 +1022,17 @@ def restore(key: str, runner, base: Optional[Path] = None, repo: Optional[Path] 
         from . import moving
         with contextlib.suppress(OSError, ValueError):   # a killed try's half-written files
             clean_partials(moving.read_inventory(base / CONFIG_DIR / "bridge.toml", base))
-        info = put_back(fetched, base, repo, address)
+        try:
+            info = put_back(fetched, base, repo, address)
+        finally:
+            import shutil
+            shutil.rmtree(base / RESTORE_TMP, ignore_errors=True)   # the backup's files (clear keys too) never stay
         progress(base, 3)
         from . import migrations
         for line in migrations.run(runner):
             runner.log.append(line)
+        if info.get("reseal"):   # today's layout over a sealed fresh place: sealed again, once, with its enrolment
+            vault_keys.enable(None, say=runner.log.append, base=base)
         progress(base, 4)
         for how, name in gateway_units():
             if how == "systemd":

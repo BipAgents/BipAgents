@@ -115,9 +115,9 @@ impl From<anyhow::Error> for HttpError {
         if crate::agents_admin::too_many(&err) {
             return HttpError::json(409, serde_json::json!({"code": crate::agents_admin::TOO_MANY_AGENTS}));
         }
-        // the vault sealed and not reopened yet (sealed_keys.rs): « Ton coffre se rouvre », not an error
-        if crate::sealed_keys::is_locked(&err) {
-            return crate::sealed_keys::http_locked();
+        // the vault sealed and not reopened yet (sealed_keys.rs): the apps' words for a closed vault, not an error
+        if let Some(locked) = crate::sealed_keys::locked_of(&err) {
+            return crate::sealed_keys::http_locked(locked);
         }
         tracing::error!(exc = %format!("{err:#}"), "Exception in ASGI application");
         HttpError::internal()
