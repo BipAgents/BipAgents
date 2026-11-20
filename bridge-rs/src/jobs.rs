@@ -1911,6 +1911,10 @@ in, and your main conversation can't be reached now. End your task saying what i
 /// The call of `tool` comes from a background task's run, or can't be told from one while such a run goes on.
 pub fn from_background(jobs: &Jobs, agent: &AgentConfig, tool: &str) -> bool {
     let Some(hub) = jobs.hub.as_ref() else { return false };
+    // the call said its session (patch 0028): a task's own run, or not a task at all (every task runs in the hub)
+    if crate::runs::CALL_SESSION.try_with(|s| s.is_some()).unwrap_or(false) {
+        return hub.turn_of(&agent.name, tool).is_some_and(|turn| turn.background);
+    }
     match hub.turn_of(&agent.name, tool) {
         Some(turn) => turn.background,
         None => hub.background_running(&agent.name),

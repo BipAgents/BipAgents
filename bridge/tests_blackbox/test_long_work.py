@@ -50,8 +50,10 @@ def test_start_task_starts_a_task_within_the_direct_budget(bridges, fakes):
     run = fakes.hermes.started["r1"]
     assert run["input"].startswith("Tri des mails\n\nTrie mes mails de la semaine.\n\n<!--bip:task-rules\nThis is a background task")
     assert not run.get("instructions")
-    # three tasks of one agent at once (19/11): the fourth is refused, with what to do instead
-    more = [call(bridge, "start_task", {"title": f"Autre {n}", "instructions": "Encore."}) for n in (2, 3, 4)]
+    # three tasks of one agent at once (19/11): the fourth is refused, with what to do instead (asked from the person's
+    # conversation, which says its session: patch 0028)
+    more = [call(bridge, "start_task", {"title": f"Autre {n}", "instructions": "Encore."}, session="api_person")
+            for n in (2, 3, 4)]
     assert [m["isError"] for m in more] == [False, False, True]
     assert text_of(more[2]) == ("Not started: this agent already has three background tasks running. "
                                 "Propose it with propose_task instead, and tell your person so.")
