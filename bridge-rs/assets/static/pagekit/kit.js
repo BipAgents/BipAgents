@@ -304,7 +304,7 @@
     show(0);
   }
 
-  // What-ifs: render(values) now and at every change of an input with an id; <output for="id"> shows its value.
+  // What-ifs: render(values) now and at each input's change; <output for="id"> shows its value.
   function whatIf(render) {
     var run = function () {
       var values = {};
@@ -321,8 +321,8 @@
     doc.readyState === "loading" ? doc.addEventListener("DOMContentLoaded", run) : run();
   }
 
-  function set(target, text) { var el = $(target); if (el) { el.textContent = text; if (el.closest(".kpi")) fit(); } }
-  // a KPI value shrinks to its tile, never breaks inside a number (Bip.fmt's spaces don't break)
+  function set(target, text) { var el = $(target); if (el) el.textContent = text; }
+  // a KPI value shrinks to its tile, never breaks in a number; again at each change of the page
   function fit() { doc.querySelectorAll(".kpi .v").forEach(function (v) { v.style.fontSize = ""; for (var s = 28; v.scrollWidth > v.clientWidth + 1 && s > 13; s -= 3) v.style.fontSize = s + "px"; }); }
 
   // What people typed, drawn as TEXT only (never a script in everyone's page): rows(target, list, cells), cells(item,
@@ -493,7 +493,7 @@
         "CooperativeGesturesHandler.WindowsHelpText": mapWord("fingers"), "CooperativeGesturesHandler.MacHelpText": mapWord("fingers") },
     };
     var spots = points.map(function (p) { return [p.lon, p.lat]; });
-    // the way along the streets (map_route.rs), else a straight line, dashed when not found (`streets: false`)
+    // the way along the streets, else a straight line (dashed: not found)
     var route = {};
     try { route = (JSON.parse((card.querySelector("script.map-data") || {}).textContent || "{}").route) || {}; } catch (e) { route = {}; }
     var way = route.streets === true && Array.isArray(route.path) ? route.path.filter(function (p) {
@@ -586,6 +586,7 @@
     doc.querySelectorAll("pre.diagram,div.diagram[data-src]").forEach(function (el) { diagram(el, el.dataset.src || null); });
     fit();
     addEventListener("resize", fit);
+    new MutationObserver(fit).observe(doc.body, { childList: true, subtree: true, characterData: true });
   }
   doc.readyState === "loading" ? doc.addEventListener("DOMContentLoaded", enhance) : enhance();
 

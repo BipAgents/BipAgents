@@ -3,12 +3,16 @@
    the document with its findings (JSON in <pre id="bip-check">), read from Chromium's --dump-dom. Never shipped to a
    person: only the copy the checker opens carries it. */
 (function () {
+  // the check's own token (the frame keeps only reports that carry it), then this script gone from the page: the
+  // page's own script can't read it to post a « clean » report first; the frame as it is now, before the page runs
+  var TOKEN = "__BIP_CHECK_TOKEN__", frameWin = window.parent, self = document.currentScript;
+  if (self) self.remove();
   var errors = [];
   addEventListener("error", function (e) { errors.push(String(e.message || e.type).slice(0, 120)); });
   addEventListener("unhandledrejection", function (e) { errors.push(String(e.reason && e.reason.message || e.reason).slice(0, 120)); });
   // the store's writes made when the page opened (refused: only what the person does is written, store.js)
-  var unsaved = 0, warn = console.warn;
-  console.warn = function (m) { if (/^Bip\.store: not saved/.test(String(m))) unsaved++; return warn.apply(console, arguments); };
+  var unsaved = 0, opening = true, warn = console.warn;
+  console.warn = function (m) { if (opening && /^Bip\.store: not saved/.test(String(m))) unsaved++; return warn.apply(console, arguments); };
   function words(el) { return (el.innerText || el.textContent || "").replace(/\s+/g, " ").trim(); }
   function name(el) {
     var cls = typeof el.className === "string" && el.className.trim() ? "." + el.className.trim().split(/\s+/).slice(0, 2).join(".") : "";
@@ -81,16 +85,22 @@
         if (broken) split.push(name(up2));
       }
     }
-    // the first button pressed once: what breaks at the first tap (a script error) is heard too
+    // the first button pressed once: what breaks at the first tap (a script error) is heard too. Only the opening's
+    // store writes count (a « +1 » button writes, rightly, and is refused here: no person pressed it), and a dialog
+    // or a print would stop the page in this browser: none in this copy (review 2, 20/11)
+    opening = false;
+    window.alert = window.print = function () {};
+    window.confirm = function () { return false; };
+    window.prompt = function () { return null; };
     var first = document.querySelector("button:not([disabled])");
     if (first) try { first.click(); } catch (e) { errors.push(String(e && e.message || e).slice(0, 120)); }
     var out = {
       width: width, page: document.documentElement.scrollWidth, height: document.documentElement.scrollHeight, wide: wide.slice(0, 5), cut: cut.slice(0, 5),
       overlap: overlap, empty: empty.slice(0, 5), errors: errors.slice(0, 5), text: words(document.body || document.documentElement).length,
-      split: split, markup: markup, unsaved: unsaved,
+      split: split, markup: markup, unsaved: unsaved, token: TOKEN,
     };
     // the checker's frame (page_check.rs) hears it; alone, the page shows it
-    if (window.parent !== window) return window.parent.postMessage(out, "*");
+    if (frameWin !== window) return frameWin.postMessage(out, "*");
     var pre = document.createElement("pre");
     pre.id = "bip-check";
     pre.textContent = JSON.stringify(out);

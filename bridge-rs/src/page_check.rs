@@ -122,8 +122,9 @@ static FAILED: LazyLock<Mutex<HashMap<String, Instant>>> = LazyLock::new(|| Mute
 
 /// The page's copy for the check: the script first in its head (before the kit and the page's own scripts, so their
 /// errors are heard), and the call last (after the kit's and the page's own drawing at DOMContentLoaded).
-pub fn checked_copy(locked: &str) -> String {
-    let script = format!("<script>{}</script>", SCRIPT.replace("</script", "<\\/script"));
+pub fn checked_copy(locked: &str, token: &str) -> String {
+    let script =
+        format!("<script>{}</script>", SCRIPT.replace("__BIP_CHECK_TOKEN__", token).replace("</script", "<\\/script"));
     let head = &*crate::pages::HEAD;
     let mut copy = match locked.find(head.as_str()) {
         Some(at) => format!("{}{script}{}", &locked[..at + head.len()], &locked[at + head.len()..]),
@@ -134,15 +135,17 @@ pub fn checked_copy(locked: &str) -> String {
 }
 
 /// The frame page: one iframe per width, their findings written in `<pre id="bip-check">` once all came.
-pub fn frame() -> String {
+/// Only the reports carrying `token` (the checked copy's, page_check.js) are kept: a message the page posts itself,
+/// a « clean » report before the real one included, never is.
+pub fn frame(token: &str) -> String {
     let frames: String = WIDTHS
         .iter()
         .map(|w| format!("<iframe src=\"p.html\" style=\"width:{w}px;height:900px;border:0\"></iframe>"))
         .collect();
     format!(
         "<!doctype html><meta charset=\"utf-8\"><body style=\"margin:0\"><pre id=\"bip-check\"></pre>{frames}<script>\
-var got=[];addEventListener(\"message\",function(e){{got.push(e.data);document.getElementById(\"bip-check\")\
-.textContent=JSON.stringify(got)}})</script>"
+var got=[];addEventListener(\"message\",function(e){{var d=e.data;if(!d||d.token!==\"{token}\")return;delete d.token;\
+got.push(d);document.getElementById(\"bip-check\").textContent=JSON.stringify(got)}})</script>"
     )
 }
 
@@ -236,8 +239,10 @@ pub fn parse(dump: &str) -> Option<Vec<Found>> {
 }
 
 static RUNNING: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-/// Checks too slow in a row, per runner.
-static SLOW: LazyLock<Mutex<HashMap<String, u32>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
+/// A probe of the browser running (after a check too slow).
+static PROBING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// The probe's page: nothing to draw, so only a slow or stuck browser makes it late.
+const PROBE_PAGE: &str = "<!doctype html><p>ok</p>";
 
 /// One check running (the count back down when it ends, however it ends).
 struct Slot;
@@ -296,26 +301,17 @@ pub fn check(config: &Config, locked: &str) -> Option<Vec<Found>> {
             failed.insert(key.clone(), Instant::now());
         }
     };
-    let slow_in_a_row = |slow: bool| {
-        let mut counts = SLOW.lock().ok()?;
-        let n = counts.entry(key.clone()).or_insert(0);
-        *n = if slow { *n + 1 } else { 0 };
-        Some(*n)
-    };
     match result {
         Ok(found) => {
-            slow_in_a_row(false);
             tracing::info!(ms = ms, widths = found.len(), "page layout checked");
             Some(found)
         }
         Err(Skip::Slow) => {
-            // a small server where the browser starts too slowly: each page would wait for nothing
-            if slow_in_a_row(true).is_some_and(|n| n >= 2) {
-                slow_in_a_row(false);
-                pause("too slow twice in a row");
-            } else {
-                tracing::info!(ms = ms, "page layout check: too slow, skipped");
-            }
+            // the page (a loop, its retry too: review 2 n7) or the browser (a small server where it starts too slowly,
+            // each page waiting for nothing)? A page with nothing in it tells, in the background: only a slow browser
+            // pauses the check
+            tracing::info!(ms = ms, "page layout check: too slow, skipped");
+            probe(runner.clone(), key.clone());
             None
         }
         Err(Skip::Page) => {
@@ -330,6 +326,33 @@ pub fn check(config: &Config, locked: &str) -> Option<Vec<Found>> {
     }
 }
 
+/// After a check too slow: the browser checked on an empty page, off the person's turn; late or silent there too, the
+/// check pauses for every page a while.
+fn probe(runner: Runner, key: String) {
+    use std::sync::atomic::Ordering;
+    if PROBING.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    std::thread::spawn(move || {
+        let late = match private_folder() {
+            Ok((dir, name)) => {
+                // twice the time a page gets: a busy moment is not a slow browser
+                let result = run_within(&runner, &dir, &name, PROBE_PAGE, DEADLINE * 2);
+                let _ = std::fs::remove_dir_all(&dir);
+                matches!(result, Err(Skip::Slow) | Err(Skip::Broken))
+            }
+            Err(_) => false,
+        };
+        if late {
+            tracing::info!(runner = %key, "page layout check: the browser is too slow here, not tried again for a while");
+            if let Ok(mut failed) = FAILED.lock() {
+                failed.insert(key, Instant::now());
+            }
+        }
+        PROBING.store(false, Ordering::SeqCst);
+    });
+}
+
 enum Skip {
     Slow,
     /// The browser ran, this page gave no report.
@@ -339,11 +362,16 @@ enum Skip {
 }
 
 fn run(runner: &Runner, dir: &Path, name: &str, locked: &str) -> Result<Vec<Found>, Skip> {
+    run_within(runner, dir, name, locked, DEADLINE)
+}
+
+fn run_within(runner: &Runner, dir: &Path, name: &str, locked: &str, deadline: Duration) -> Result<Vec<Found>, Skip> {
     let pages: PathBuf = dir.join("c");
+    let token = uuid::Uuid::new_v4().simple().to_string();
     let written = std::fs::create_dir(&pages)
         .and_then(|_| std::fs::create_dir(dir.join("empty")))
-        .and_then(|_| write_new(&pages.join("p.html"), &checked_copy(locked)))
-        .and_then(|_| write_new(&pages.join("f.html"), &frame()));
+        .and_then(|_| write_new(&pages.join("p.html"), &checked_copy(locked, &token)))
+        .and_then(|_| write_new(&pages.join("f.html"), &frame(&token)));
     written.map_err(|_| Skip::Broken)?;
     let mut child = command(runner, dir, name)
         .stdin(Stdio::null())
@@ -359,7 +387,7 @@ fn run(runner: &Runner, dir: &Path, name: &str, locked: &str) -> Result<Vec<Foun
         let _ = std::io::copy(&mut out, &mut std::io::sink());
         String::from_utf8_lossy(&bytes).into_owned()
     });
-    let deadline = Instant::now() + DEADLINE;
+    let deadline = Instant::now() + deadline;
     loop {
         match child.try_wait() {
             Ok(Some(_)) => break,
@@ -575,7 +603,8 @@ mod tests {
     #[test]
     fn the_checked_copy_hears_errors_before_the_kit_and_measures_after_it() {
         let (locked, _) = crate::pages::lock_with("<h1>Hi</h1><script>Bip.bars('#c',{})</script>", "Hi", None);
-        let copy = checked_copy(&locked);
+        let copy = checked_copy(&locked, "t0k3n");
+        assert!(copy.contains("var TOKEN = \"t0k3n\"") && !SCRIPT.contains("t0k3n"));
         let at = |t: &str| copy.find(t).unwrap_or_else(|| panic!("{t} missing"));
         assert!(at("Content-Security-Policy") < at("window.__bipCheck = check"), "the policy first, always");
         assert!(at("window.__bipCheck = check") < at("id=\"bip-kit-js\""));
@@ -609,7 +638,7 @@ mod tests {
             return;
         }
         let mut config = Config::with_key("k".repeat(40));
-        let _one = REAL.lock().unwrap_or_else(|e| e.into_inner());
+        let _one = fresh();
         config.browser.enabled = true;
         let broken = "<html lang=\"fr\"><style>.pills{display:flex;gap:6px}.pill{white-space:nowrap;padding:4px 10px;\
 border-radius:99px;background:var(--tint)}.steps{display:flex;gap:8px}.steps div{flex:1;min-width:0;overflow:hidden;\
@@ -654,7 +683,7 @@ id=\"l\"></ul><script>Bip.store.onChange(function(){})</script>";
     #[test]
     fn a_real_browser_catches_what_the_second_bench_found() {
         let Some(config) = real_config() else { return };
-        let _one = REAL.lock().unwrap_or_else(|e| e.into_inner());
+        let _one = fresh();
         let html = "<html lang=\"fr\"><h1>Tricount</h1><p id=\"x\"></p><button onclick=\"nope()\">Ajouter</button>\
 <p style=\"width:40px;overflow-wrap:anywhere;font-size:20px\">12345678</p><script>Bip.set(\"#x\",\
 \"<div class='row'>Sam doit 12 €</div>\");Bip.store.add(\"depenses\",{what:\"Gîte\",cents:48000})</script>";
@@ -708,6 +737,17 @@ id=\"l\"></ul><script>Bip.store.onChange(function(){})</script>";
     /// The real-browser tests one at a time (the check runs [`AT_ONCE`] at most and skips past it).
     static REAL: Mutex<()> = Mutex::new(());
 
+    /// One real-browser test at a time, after the last one's probe, with no pause left from it.
+    fn fresh() -> std::sync::MutexGuard<'static, ()> {
+        let one = REAL.lock().unwrap_or_else(|e| e.into_inner());
+        let waited = Instant::now();
+        while PROBING.load(std::sync::atomic::Ordering::SeqCst) && waited.elapsed() < Duration::from_secs(15) {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        FAILED.lock().unwrap().clear();
+        one
+    }
+
     fn real_config() -> Option<Config> {
         if std::env::var("BIP_PAGE_CHECK_IMAGE").is_err() && std::env::var("BIP_PAGE_CHROME").is_err() {
             eprintln!("no BIP_PAGE_CHECK_IMAGE / BIP_PAGE_CHROME: skipped");
@@ -733,7 +773,7 @@ id=\"l\"></ul><script>Bip.store.onChange(function(){})</script>";
     #[test]
     fn review_a_page_that_never_stops_costs_the_deadline_and_leaves_nothing() {
         let Some(config) = real_config() else { return };
-        let _one = REAL.lock().unwrap_or_else(|e| e.into_inner());
+        let _one = fresh();
         let (locked, _) = crate::pages::lock_with("<h1>Boucle</h1><script>for(;;){}</script>", "Boucle", Some("home"));
         let started = Instant::now();
         let found = check(&config, &locked);
@@ -775,13 +815,32 @@ id=\"l\"></ul><script>Bip.store.onChange(function(){})</script>";
         assert!(n.len() < 2_000, "{} characters of the page's own text in the tool result", n.len());
     }
 
+    /// Review 2 n7: a page that never stops, and its retry by the agent, are that page's: the next page is checked (only
+    /// a browser too slow on an empty page pauses the check).
+    #[test]
+    fn a_page_that_loops_twice_does_not_pause_the_check() {
+        let Some(config) = real_config() else { return };
+        let _one = fresh();
+        FAILED.lock().unwrap().clear();
+        for _ in 0..2 {
+            let (locked, _) = crate::pages::lock_with("<h1>Boucle</h1><script>for(;;){}</script>", "Boucle", None);
+            assert!(check(&config, &locked).is_none());
+        }
+        let waited = Instant::now();
+        while PROBING.load(std::sync::atomic::Ordering::SeqCst) && waited.elapsed() < Duration::from_secs(10) {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        let (locked, _) = crate::pages::lock_with("<h1>Liste</h1><p>Pain</p>", "Liste", None);
+        assert!(check(&config, &locked).is_some(), "the check paused for everyone after one page's loops");
+    }
+
     /// Review 2 (20/11): the synthetic press on the first button runs after the measure but before the report, without
     /// the person's activation — a button that writes to the store (« +1 », « Remettre à zéro ») must not be reported
     /// as « writes made when the page opened » on a right page: the agent would be asked to rewrite it.
     #[test]
     fn review2_a_button_that_writes_is_no_write_on_open() {
         let Some(config) = real_config() else { return };
-        let _one = REAL.lock().unwrap_or_else(|e| e.into_inner());
+        let _one = fresh();
         let html = "<html lang=\"fr\"><h1>Verres d'eau</h1><p class=\"big\" id=\"n\"></p><button onclick=\"Bip.store.set('n',(Bip.store.get('n')||0)+1)\">+1</button>\
 <script>Bip.store.onChange(function(){Bip.set('#n',String(Bip.store.get('n')||0))})</script>";
         let (locked, _) = crate::pages::lock_with(html, "Eau", Some("home"));
@@ -796,7 +855,7 @@ id=\"l\"></ul><script>Bip.store.onChange(function(){})</script>";
     #[test]
     fn review2_what_the_first_button_does_never_stops_the_check() {
         let Some(config) = real_config() else { return };
-        let _one = REAL.lock().unwrap_or_else(|e| e.into_inner());
+        let _one = fresh();
         let mut stopped = Vec::new();
         for press in [
             "if(confirm('Tout effacer ?'))document.body.textContent=''",
@@ -821,7 +880,8 @@ id=\"l\"></ul><script>Bip.store.onChange(function(){})</script>";
 
     #[test]
     fn the_frame_holds_one_iframe_per_width() {
-        let f = frame();
+        let f = frame("t0k3n");
+        assert!(f.contains("d.token!==\"t0k3n\""), "{f}");
         for w in WIDTHS {
             assert!(f.contains(&format!("width:{w}px")));
         }
