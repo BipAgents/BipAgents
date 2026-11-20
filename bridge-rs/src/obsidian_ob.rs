@@ -704,4 +704,23 @@ mod tests {
         ]);
         assert!(parse_vaults("Fetching vaults...").is_none());
     }
+
+    /// Obsidian's real `ob` in the place's image asks its questions on our terminal (run on a machine with podman and
+    /// the image: `cargo test --lib obsidian_ob -- --ignored`). Stops at the password: nothing reaches Obsidian.
+    #[tokio::test]
+    #[ignore = "needs podman and localhost/bipagents-obsidian:0.0.14"]
+    async fn the_real_ob_asks_its_questions_on_our_terminal() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths { state: dir.path().join("state"), vault: dir.path().join("vault") };
+        std::fs::create_dir_all(&paths.state).unwrap();
+        std::fs::create_dir_all(&paths.vault).unwrap();
+        let runner = Runner { command: Vec::new(), podman: "podman".into() };
+        let mut dialog = Dialog::start(&runner, &paths, &["login"]).unwrap();
+        assert_eq!(dialog.wait_for(&[Q_EMAIL], Duration::from_secs(60)).await, Waited::Found(0), "{}", dialog.text());
+        dialog.answer("nobody@example.invalid").await.unwrap();
+        assert_eq!(dialog.wait_for(&[Q_PASSWORD], Duration::from_secs(30)).await, Waited::Found(0), "{}", dialog.text());
+        dialog.stop().await;
+        let listed = run(&runner, &paths, &["sync-list-remote", "--json"], Duration::from_secs(60)).await.unwrap();
+        assert!(!listed.ok && listed.stderr.contains("No account logged in"), "{listed:?}");
+    }
 }

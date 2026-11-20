@@ -772,7 +772,7 @@ pub fn card_sentence(lang: &str, who: &str, what: Write, title: &str) -> String 
                              "{n} möchte die Notiz « {t} » in Obsidian ändern", "{n} quiere cambiar la nota « {t} » en Obsidian",
                              "{n} wil de notitie « {t} » wijzigen in Obsidian"),
     };
-    said.replace("{n}", who).replace("{t}", &crate::cards::quoted(title, 80).trim_matches(['«', '»', ' ']).to_string())
+    said.replace("{n}", who).replace("{t}", crate::cards::quoted(title, 80).trim_matches(['«', '»', ' ']))
 }
 
 fn cut(text: &str) -> String {
