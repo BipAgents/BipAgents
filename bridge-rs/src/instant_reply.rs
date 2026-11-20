@@ -1142,6 +1142,6 @@ Their new message: plutôt le samedi");
         let left = without_first_note(&pending);
         assert!(left.starts_with("plutôt samedi") && !left.contains("already showed") && left.contains("already answered"));
         // the kept characters: letters, digits, simple punctuation; quotes of any kind become spaces
-        assert!(first_note("Ok 《 x 》「y」 ❝z❞").contains("« Ok   x    y   z  »"));
+        assert!(first_note("Ok 《 x 》「y」 ❝z❞").contains("« Ok   x   y   z  »"));
     }
 }
