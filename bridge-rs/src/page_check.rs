@@ -435,7 +435,7 @@ mod tests {
     /// `BIP_PAGE_CHROME`): Alex's page of 20/11 as a model wrote it (its own pills that never wrap, its own boxes that
     /// cut their words) is caught at 390 px, the same page in the kit's parts passes, each check within the deadline.
     /// Words run over two lines next to a chip are no overlap (the bench's first run, 20/11: an inline <b>'s box
-    /// spans both lines).
+    /// spans both lines), and a list a page fills from its store is not empty (the store answers in the app only).
     #[test]
     fn a_real_browser_catches_the_broken_trip_page() {
         if std::env::var("BIP_PAGE_CHECK_IMAGE").is_err() && std::env::var("BIP_PAGE_CHROME").is_err() {
@@ -458,7 +458,8 @@ gratuit le premier dimanche)</span></div></div><div class=\"flow\"><div>Bastogne
 J1 Bruxelles-Midi -> Ostende (via Courtrai)
 J1 Bruxelles-Midi -> Bruges (arrêt déjeuner)
 J1 Bruxelles-Midi -> Gand (Saint-Bavon)</pre><p><span class=\"muted\">Soir ·</span> <b>Curry de pois chiches et \
-épinards au lait de coco, riz basmati et naan maison</b> <span class=\"chip\">20 min</span></p>";
+épinards au lait de coco, riz basmati et naan maison</b> <span class=\"chip\">20 min</span></p><ul class=\"check\" \
+id=\"l\"></ul><script>Bip.store.onChange(function(){})</script>";
         for (html, bad) in [(broken, true), (fixed, false)] {
             let (locked, _) = crate::pages::lock_with(html, "Côte belge", Some("home"));
             let started = Instant::now();

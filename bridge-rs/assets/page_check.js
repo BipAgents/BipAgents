@@ -27,7 +27,7 @@
   }
   function check() {
     var width = innerWidth, wide = [], cut = [], overlap = [], empty = [], all = document.body ? document.body.querySelectorAll("*") : [];
-    var texts = [];
+    var texts = [], stored = !!(window.Bip && Bip.store);
     for (var i = 0; i < all.length; i++) {
       var el = all[i], s = getComputedStyle(el);
       if (/^(SCRIPT|STYLE|TEMPLATE|BR)$/.test(el.tagName) || !seen(el, s)) continue;
@@ -44,7 +44,8 @@
       if (own && /hidden|clip/.test(s.overflowY) && el.scrollHeight > el.clientHeight * 1.3 + 4) cut.push(name(el));
       // its line boxes (a word run over two lines is two boxes, not the block they span)
       if (own && s.position !== "absolute" && s.position !== "fixed" && texts.length < 400) texts.push([el, [].slice.call(el.getClientRects())]);
-      if (/\b(card|kpi|tab)\b/.test(el.className) || /^(SECTION|TABLE|UL|OL)$/.test(el.tagName)) {
+      // a page that keeps its data in its store draws it once the store answers (none here): not empty for that
+      if (!stored && (/\b(card|kpi|tab)\b/.test(el.className) || /^(SECTION|TABLE|UL|OL)$/.test(el.tagName))) {
         if (!words(el) && !el.querySelector("img,svg,canvas,input,select,textarea,button,video,audio,iframe")) empty.push(name(el));
       }
     }
