@@ -295,3 +295,71 @@ async fn off_by_default() {
     assert_eq!(answer.status, 404);
     assert_eq!(answer.json()["detail"]["code"], "off");
 }
+
+/// Review 20/11 (blocker): « add to a note » never replaces what the note says. A note that isn't valid UTF-8 (a file
+/// saved in Latin-1, a stray byte) was read as empty, so the « added » text replaced the whole note — synced to every
+/// device, and without a card under « Seulement le critique » or a « Toujours ».
+#[tokio::test]
+async fn adding_to_a_note_that_cant_be_read_never_replaces_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let vault = dir.path().join("Coffre");
+    std::fs::create_dir_all(&vault).unwrap();
+    let original: &[u8] = b"# Recettes\n\nCr\xe8me br\xfbl\xe9e de grand-m\xe8re\n- 6 jaunes\n";
+    std::fs::write(vault.join("Recettes.md"), original).unwrap();
+    let config = with_agent(dir.path(), json!({"enabled": true, "folder": vault.to_string_lossy()}));
+    let app = TestApp::new(config.clone());
+    let (k, v) = auth();
+    let h = [(k, v.as_str())];
+    assert_eq!(app.send_json("PUT", "/v1/obsidian/agents", &h, &json!({"agents": ["coach"]})).await.status, 200);
+    assert_eq!(app.send_json("PUT", "/v1/approval-level", &h, &json!({"level": "critical"})).await.status, 200);
+    let (_failed, said) = tool(&app, "obsidian_append", json!({"note": "Recettes", "text": "- sucre"})).await;
+    let now = std::fs::read(vault.join("Recettes.md")).unwrap();
+    assert!(now.starts_with(original), "the note's text is gone ({said}): {:?}", String::from_utf8_lossy(&now));
+}
+
+/// Review 20/11: a « Oui » given after the person disconnected the vault writes nothing (and makes no folder again).
+#[tokio::test]
+async fn a_yes_after_the_vault_was_disconnected_writes_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let vault = dir.path().join("Coffre");
+    std::fs::create_dir_all(&vault).unwrap();
+    let config = with_agent(dir.path(), json!({"enabled": true, "folder": vault.to_string_lossy()}));
+    let app = TestApp::new(config.clone());
+    let (k, v) = auth();
+    let h = [(k, v.as_str())];
+    assert_eq!(app.send_json("PUT", "/v1/obsidian/agents", &h, &json!({"agents": ["coach"]})).await.status, 200);
+    let late_yes = async {
+        let card = loop {
+            let items = app.get("/v1/approvals", &h).await.json()["items"].clone();
+            if let Some(c) = items.as_array().and_then(|a| a.iter().find(|i| i["run_id"].as_str().is_some_and(|r| r.starts_with("bip-ok-"))).cloned()) {
+                break c;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        };
+        assert_eq!(app.send_json("DELETE", "/v1/obsidian", &h, &json!({})).await.status, 200);
+        let body = json!({"agent": card["agent"], "run_id": card["run_id"], "choice": "once"});
+        assert_eq!(app.send_json("POST", "/v1/approve", &h, &body).await.status, 200);
+    };
+    let ((failed, said), _) = tokio::join!(tool(&app, "obsidian_create", json!({"note": "Tard", "text": "x"})), late_yes);
+    assert!(failed && said.contains("no longer connected"), "{said}");
+    assert!(!vault.join("Tard.md").exists());
+}
+
+/// Review 20/11: a change's card shows all it writes; too long a change is refused instead of cut.
+#[tokio::test]
+async fn writes_are_never_longer_than_their_card() {
+    let dir = tempfile::tempdir().unwrap();
+    let vault = dir.path().join("Coffre");
+    std::fs::create_dir_all(&vault).unwrap();
+    std::fs::write(vault.join("Long.md"), "a".repeat(5000)).unwrap();
+    let config = with_agent(dir.path(), json!({"enabled": true, "folder": vault.to_string_lossy()}));
+    let app = TestApp::new(config.clone());
+    let (k, v) = auth();
+    let h = [(k, v.as_str())];
+    assert_eq!(app.send_json("PUT", "/v1/obsidian/agents", &h, &json!({"agents": ["coach"]})).await.status, 200);
+    let (failed, said) = tool(&app, "obsidian_create", json!({"note": "Gros", "text": "b".repeat(4001)})).await;
+    assert!(failed && said.contains("too long"), "{said}");
+    let (failed, said) = tool(&app, "obsidian_edit", json!({"note": "Long", "find": "a".repeat(5000), "replace": "b"})).await;
+    assert!(failed && said.contains("too long"), "{said}");
+    assert!(!vault.join("Gros.md").exists());
+}

@@ -20,8 +20,8 @@
 //!
 //! **Where it runs**: Node ≥ 22 is not on the places (nor in the agents' sandbox image), and the package's licence is
 //! « UNLICENSED » (Obsidian's), so it is never in our images nor our repository: the place builds its own small image
-//! the first time the person connects (`prepare`: `node:22-bookworm-slim` + `npm install -g obsidian-headless@<pin>`,
-//! as the person would install it), `localhost/bipagents-obsidian:<pin>`, and runs each `ob` command in a short-lived
+//! the first time the person connects (`prepare_marked`: assets/obsidian-image, Node 22 by digest + `npm ci` on our lock
+//! file, as the person would install it), `localhost/bipagents-obsidian:<pin>`, and runs each `ob` command in a short-lived
 //! container of it (rootless podman, as the connectors' runs: no capabilities, read-only root, small limits), with
 //! only two folders: its state and the vault's copy. `[obsidian] command = ["ob"]` runs an `ob` already installed
 //! instead (a self-install that has Node), and the tests run a fake one the same way.
@@ -42,14 +42,16 @@ use zeroize::Zeroizing;
 
 /// The version of Obsidian Headless the bridge installs (read before each change: its questions are matched here).
 pub const PACKAGE_VERSION: &str = "0.0.14";
-pub const IMAGE: &str = "localhost/bipagents-obsidian:0.0.14";
+pub const IMAGE: &str = "localhost/bipagents-obsidian:0.0.14-2";
 /// What this machine's copy of the vault is called in Obsidian's version history.
 pub const DEVICE_NAME: &str = "BipAgents";
 /// The settings that come with the vault: the core plugins' (daily notes, templates), never the community plugins'.
 pub const CONFIGS: &str = "core-plugin,core-plugin-data";
-const CONTAINERFILE: &str = "FROM docker.io/library/node:22-bookworm-slim\n\
-RUN npm install -g --no-fund --no-audit obsidian-headless@0.0.14 && ob --help > /dev/null\n\
-ENTRYPOINT [\"ob\"]\n";
+/// The image's recipe (bridge-rs/assets/obsidian-image): both Node images by digest, `npm ci` on our lock file (every
+/// tarball's integrity checked), the native module built from its sources.
+const CONTAINERFILE: &str = include_str!("../assets/obsidian-image/Containerfile");
+const PACKAGE_JSON: &str = include_str!("../assets/obsidian-image/package.json");
+const PACKAGE_LOCK: &str = include_str!("../assets/obsidian-image/package-lock.json");
 /// How long the image may take to build (a node image and one npm package).
 const PREPARE_TIMEOUT: Duration = Duration::from_secs(900);
 /// A question that waits for the person (a code, a vault's password): how long its `ob` is kept waiting.
@@ -239,7 +241,9 @@ pub async fn prepare_marked(place: String, runner: Runner, work: PathBuf) -> Too
 
 async fn build(runner: &Runner, work: &Path) -> Result<(), String> {
     std::fs::create_dir_all(work).map_err(|e| e.to_string())?;
-    std::fs::write(work.join("Containerfile"), CONTAINERFILE).map_err(|e| e.to_string())?;
+    for (name, text) in [("Containerfile", CONTAINERFILE), ("package.json", PACKAGE_JSON), ("package-lock.json", PACKAGE_LOCK)] {
+        std::fs::write(work.join(name), text).map_err(|e| e.to_string())?;
+    }
     let mut command = tokio::process::Command::new(&runner.podman);
     command
         .args(["build", "--pull=missing", "-t", IMAGE, "-f"])
@@ -286,7 +290,11 @@ pub async fn run(runner: &Runner, paths: &Paths, args: &[&str], timeout: Duratio
         .stderr(Stdio::piped())
         .kill_on_drop(true);
     let child = command.spawn().map_err(|e| format!("Obsidian's tool can't start ({e})"))?;
-    match tokio::time::timeout(timeout, child.wait_with_output()).await {
+    // a call cut short (its future dropped) kills `podman run`, not its container: removed then too
+    let mut leftover = Leftover { podman: runner.contained().then(|| runner.podman.clone()), name: name.clone() };
+    let waited = tokio::time::timeout(timeout, child.wait_with_output()).await;
+    leftover.podman = None;
+    match waited {
         Err(_) => {
             runner.remove(&name).await;
             Err("Obsidian's tool didn't answer in time".into())
@@ -314,6 +322,50 @@ pub enum Waited {
 
 /// One `ob` run on a pseudo-terminal of ours: what it writes is read as it comes, an answer is typed when its question
 /// shows.
+/// A container to remove if its run is dropped before it ends.
+struct Leftover {
+    podman: Option<String>,
+    name: String,
+}
+
+impl Drop for Leftover {
+    fn drop(&mut self) {
+        if let Some(podman) = self.podman.take() {
+            remove_in_background(podman, std::mem::take(&mut self.name));
+        }
+    }
+}
+
+fn remove_in_background(podman: String, name: String) {
+    std::thread::spawn(move || {
+        let _ = std::process::Command::new(podman)
+            .args(["rm", "-f", "-t", "2", &name])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    });
+}
+
+/// The `ob` containers a stopped bridge left behind (at its start), removed.
+pub async fn remove_leftovers(runner: &Runner) {
+    if !runner.contained() {
+        return;
+    }
+    let Ok(out) = tokio::process::Command::new(&runner.podman)
+        .args(["ps", "-a", "-q", "--filter", "name=^bip-obsidian-"])
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .await
+    else {
+        return;
+    };
+    for id in String::from_utf8_lossy(&out.stdout).split_whitespace() {
+        runner.remove(id).await;
+    }
+}
+
 /// A run's container name, unique.
 fn container_name() -> String {
     format!("bip-obsidian-{}", crate::py::token_hex(6))
@@ -470,15 +522,7 @@ impl Drop for Dialog {
         if self.name.is_empty() || !self.runner.contained() {
             return;
         }
-        let (podman, name) = (self.runner.podman.clone(), std::mem::take(&mut self.name));
-        std::thread::spawn(move || {
-            let _ = std::process::Command::new(podman)
-                .args(["rm", "-f", "-t", "2", &name])
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status();
-        });
+        remove_in_background(self.runner.podman.clone(), std::mem::take(&mut self.name));
     }
 }
 
@@ -546,7 +590,7 @@ pub async fn login(runner: &Runner, paths: &Paths, email: &str, password: Zeroiz
 pub async fn login_result(mut dialog: Dialog, code: Option<&str>) -> Step {
     let mut code = code.map(str::to_string);
     loop {
-        match dialog.wait_for(&[Q_CODE, "Logged in as", "Login failed"], STEP_TIMEOUT).await {
+        match dialog.wait_for(&[Q_CODE, "Logged in as ", "Login failed:"], STEP_TIMEOUT).await {
             Waited::Found(0) => match code.take() {
                 Some(c) => {
                     if let Err(e) = dialog.answer(c.trim()).await {
@@ -626,12 +670,16 @@ pub async fn setup(runner: &Runner, paths: &Paths, vault: &str, password: Option
         Ok(d) => d,
         Err(e) => return Step::Refused("failed", format!("Obsidian's tool can't start ({e})")),
     };
-    setup_result(dialog, password).await
+    setup_result(dialog, password, vault).await
 }
 
-pub async fn setup_result(mut dialog: Dialog, mut password: Option<Zeroizing<String>>) -> Step {
+/// After `sync-setup` started (or the vault's password typed). Only `ob`'s own whole sentences are matched (0.0.14's
+/// cli.js), never a word that a vault's or a note's name could hold.
+pub async fn setup_result(mut dialog: Dialog, mut password: Option<Zeroizing<String>>, vault: &str) -> Step {
+    let not_found = format!("Vault \"{vault}\" not found.");
     loop {
-        let texts = [Q_VAULT_PASSWORD, "configured successfully", "Failed to validate password", "not found", "failed"];
+        let texts = [Q_VAULT_PASSWORD, "\nVault configured successfully!", "Failed to validate password.", &not_found,
+                     "Setup failed:", "Password not provided."];
         match dialog.wait_for(&texts, STEP_TIMEOUT).await {
             Waited::Found(0) => match password.take() {
                 Some(p) => {
@@ -670,13 +718,13 @@ pub async fn setup_result(mut dialog: Dialog, mut password: Option<Zeroizing<Str
 }
 
 /// The vault's password typed into a waiting setup.
-pub async fn setup_password(mut dialog: Dialog, password: Zeroizing<String>) -> Step {
+pub async fn setup_password(mut dialog: Dialog, password: Zeroizing<String>, vault: &str) -> Step {
     if let Err(e) = dialog.answer(password.as_str()).await {
         dialog.stop().await;
         return Step::Refused("failed", e.to_string());
     }
     drop(password);
-    setup_result(dialog, None).await
+    setup_result(dialog, None, vault).await
 }
 
 /// Only the core plugins' settings come with the vault (the daily notes' folder and format).
@@ -745,6 +793,23 @@ mod tests {
         assert!(env.contains(&("XDG_CONFIG_HOME".into(), "/d/obsidian/state/.config".into())));
     }
 
+    /// Review 20/11 (supply chain): the image is built from pinned parts only.
+    #[test]
+    fn the_image_is_built_from_pinned_parts_only() {
+        let froms: Vec<&str> = CONTAINERFILE.lines().filter(|l| l.starts_with("FROM ")).collect();
+        assert_eq!(froms.len(), 2);
+        assert!(froms.iter().all(|l| l.contains("docker.io/library/node@sha256:")), "{froms:?}");
+        assert!(CONTAINERFILE.contains("npm ci") && !CONTAINERFILE.contains("npm install"));
+        assert!(CONTAINERFILE.contains("npm_config_build_from_source=true"), "no prebuilt binary downloaded");
+        let lock: Value = serde_json::from_str(PACKAGE_LOCK).unwrap();
+        let ob = &lock["packages"]["node_modules/obsidian-headless"];
+        assert_eq!(ob["version"], PACKAGE_VERSION);
+        assert_eq!(ob["integrity"], "sha512-S1d/hxLKvCUG2g5tRyXFkzPqMs3Ntw1tDyzoF2yfHGRuB4B+Mi3X2vgT8LbfQKrkEEi3LfJRdXtYzAVHcbpccw==");
+        let packages = lock["packages"].as_object().unwrap();
+        assert!(packages.iter().filter(|(k, _)| !k.is_empty()).all(|(_, p)| p["integrity"].as_str().is_some_and(|i| i.starts_with("sha512-"))));
+        assert!(IMAGE.contains(PACKAGE_VERSION));
+    }
+
     #[test]
     fn obsidians_words_are_read() {
         assert_eq!(signed_in_as("Logged in as Alex B (alex@example.org)\n"), Some(("Alex B".into(), "alex@example.org".into())));
@@ -763,7 +828,7 @@ mod tests {
     /// Obsidian's real `ob` in the place's image asks its questions on our terminal (run on a machine with podman and
     /// the image: `cargo test --lib obsidian_ob -- --ignored`). Stops at the password: nothing reaches Obsidian.
     #[tokio::test]
-    #[ignore = "needs podman and localhost/bipagents-obsidian:0.0.14"]
+    #[ignore = "needs podman and the localhost/bipagents-obsidian image"]
     async fn the_real_ob_asks_its_questions_on_our_terminal() {
         let dir = tempfile::tempdir().unwrap();
         let paths = Paths { state: dir.path().join("state"), vault: dir.path().join("vault") };

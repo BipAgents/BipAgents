@@ -1,0 +1,19 @@
+# Obsidian Headless (npm obsidian-headless, Obsidian's own client of Obsidian Sync) as a place builds it for itself the
+# first time its person connects Obsidian (bridge-rs/src/obsidian_ob.rs `prepare_marked`). Never published by us: the
+# package is Obsidian's (« UNLICENSED »), installed from npm on the place as the person would.
+# - both images pinned by digest, the same Node (22.23.5: the native module's ABI);
+# - `npm ci`: exactly the versions of package-lock.json, each tarball checked against its integrity hash;
+# - better-sqlite3's native module built here from its checked sources (no prebuilt binary downloaded from GitHub),
+#   against the image's own Node headers.
+FROM docker.io/library/node@sha256:69c6e263db01e9946c7743bbbe9f7b1ba0df384d27ec09e08e5832d6acd3daf3 AS build
+WORKDIR /opt/ob
+COPY package.json package-lock.json ./
+RUN npm_config_build_from_source=true npm_config_nodedir=/usr/local \
+        npm ci --omit=dev --no-fund --no-audit --foreground-scripts \
+    && node node_modules/obsidian-headless/cli.js --help > /dev/null \
+    && node -e "require('better-sqlite3')(':memory:').close()"
+
+FROM docker.io/library/node@sha256:47725aca53d3295ec2d3be8f62726599b3033cc262edc2c7e429909b3ac599fc
+COPY --from=build /opt/ob /opt/ob
+RUN node /opt/ob/node_modules/obsidian-headless/cli.js --help > /dev/null
+ENTRYPOINT ["node", "/opt/ob/node_modules/obsidian-headless/cli.js"]

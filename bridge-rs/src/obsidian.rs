@@ -96,13 +96,15 @@ pub const AGENTS_MAX: usize = 32;
 /// The notes read by a search, at most (a bigger vault: the first ones by path).
 pub const FILES_MAX: usize = 20_000;
 pub const NOTE_MAX_BYTES: u64 = 2 * 1024 * 1024;
-/// What an agent writes at once, at most.
-pub const WRITE_MAX_CHARS: usize = 20_000;
+/// What an agent writes at once, at most (a new note, added text, each side of a change): the card shows all of it.
+pub const WRITE_MAX_CHARS: usize = 4_000;
+/// The backups' folder, at most (the oldest days go first; today's never).
+pub const BACKUPS_MAX_BYTES: u64 = 200 * 1024 * 1024;
 pub const BACKUP_DAYS: i64 = 30;
 /// A write syncs the copy first when its last sync is older.
 pub const FRESH_BEFORE_WRITE: f64 = 120.0;
-/// The card's text, cut.
-const CARD_CHARS: usize = 1500;
+/// The text shown around a change on its card, each side.
+const CONTEXT_CHARS: usize = 80;
 /// The extensions an agent may write: notes, bases, canvases.
 const WRITABLE: [&str; 3] = ["md", "base", "canvas"];
 const READABLE: [&str; 4] = ["md", "base", "canvas", "txt"];
@@ -663,8 +665,14 @@ pub fn daily_note(root: &Path, today: chrono::NaiveDate) -> (String, String) {
 pub fn back_up(config: &Config, relative: &str, path: &Path) -> std::io::Result<()> {
     let backups = base(config).join("backups");
     let day = chrono::Local::now().format("%Y-%m-%d").to_string();
-    let stamp = chrono::Local::now().format("%H%M%S").to_string();
-    let target = backups.join(&day).join(format!("{relative}.{stamp}"));
+    let stamp = chrono::Local::now().format("%H%M%S%.3f").to_string();
+    let mut target = backups.join(&day).join(format!("{relative}.{stamp}"));
+    for n in 2.. {
+        if !target.exists() {
+            break;
+        }
+        target = backups.join(&day).join(format!("{relative}.{stamp}-{n}"));
+    }
     if let Some(parent) = target.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -678,7 +686,95 @@ pub fn back_up(config: &Config, relative: &str, path: &Path) -> std::io::Result<
             let _ = std::fs::remove_dir_all(entry.path());
         }
     }
+    // at most `BACKUPS_MAX_BYTES`: the oldest days go first, today's stays
+    let mut days: Vec<(String, u64)> = std::fs::read_dir(&backups)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| (e.file_name().to_string_lossy().into_owned(), folder_bytes(&e.path())))
+        .filter(|(n, _)| n.len() == 10)
+        .collect();
+    days.sort();
+    let mut total: u64 = days.iter().map(|(_, b)| b).sum();
+    for (name, bytes) in &days {
+        if total <= BACKUPS_MAX_BYTES || *name == day {
+            break;
+        }
+        let _ = std::fs::remove_dir_all(backups.join(name));
+        total = total.saturating_sub(*bytes);
+    }
     Ok(())
+}
+
+fn folder_bytes(path: &Path) -> u64 {
+    let mut total = 0;
+    for entry in std::fs::read_dir(path).into_iter().flatten().flatten() {
+        let Ok(meta) = std::fs::symlink_metadata(entry.path()) else { continue };
+        total += if meta.is_dir() { folder_bytes(&entry.path()) } else { meta.len() };
+    }
+    total
+}
+
+/// A note as text: None when there is none. Never « empty » for a note that can't be read: an unreadable note, one
+/// that isn't UTF-8 text or is too big is refused, so a write never replaces what it couldn't read.
+pub fn read_note(path: &Path) -> Result<Option<String>, &'static str> {
+    let meta = match std::fs::symlink_metadata(path) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(_) => return Err("That note can't be read now: nothing was written."),
+        Ok(m) => m,
+    };
+    if !meta.is_file() {
+        return Err("That is not a note: nothing was written.");
+    }
+    if meta.len() > NOTE_MAX_BYTES {
+        return Err("That note is too big to be changed here: nothing was written. Your person can do it in Obsidian.");
+    }
+    let bytes = std::fs::read(path).map_err(|_| "That note can't be read now: nothing was written.")?;
+    String::from_utf8(bytes).map(Some).map_err(|_| {
+        "That note isn't plain text Obsidian can read (its characters aren't UTF-8): nothing was written. Your \
+         person can open it in Obsidian and save it again."
+    })
+}
+
+/// The part of `before` → `after` that changes, with a little of what is around it: (shown before, shown after).
+pub fn change_shown(before: &str, after: &str) -> (String, String) {
+    let (a, b): (Vec<char>, Vec<char>) = (before.chars().collect(), after.chars().collect());
+    let mut start = 0;
+    while start < a.len() && start < b.len() && a[start] == b[start] {
+        start += 1;
+    }
+    let mut end = 0;
+    while end < a.len() - start && end < b.len() - start && a[a.len() - 1 - end] == b[b.len() - 1 - end] {
+        end += 1;
+    }
+    let from = start.saturating_sub(CONTEXT_CHARS);
+    let show = |chars: &[char]| {
+        let to = (chars.len() - end + CONTEXT_CHARS).min(chars.len());
+        let mut out = String::new();
+        if from > 0 {
+            out.push('…');
+        }
+        out.extend(&chars[from..to]);
+        if to < chars.len() {
+            out.push('…');
+        }
+        out
+    };
+    (show(&a), show(&b))
+}
+
+/// The characters a change really replaces, and those it writes instead.
+pub fn change_size(before: &str, after: &str) -> (usize, usize) {
+    let (a, b): (Vec<char>, Vec<char>) = (before.chars().collect(), after.chars().collect());
+    let mut start = 0;
+    while start < a.len() && start < b.len() && a[start] == b[start] {
+        start += 1;
+    }
+    let mut end = 0;
+    while end < a.len() - start && end < b.len() - start && a[a.len() - 1 - end] == b[b.len() - 1 - end] {
+        end += 1;
+    }
+    (a.len() - start - end, b.len() - start - end)
 }
 
 /// `text` added at the end of `current`, or at the end of the section under `heading` (a line `# heading`…).
@@ -775,15 +871,6 @@ pub fn card_sentence(lang: &str, who: &str, what: Write, title: &str) -> String 
     said.replace("{n}", who).replace("{t}", crate::cards::quoted(title, 80).trim_matches(['«', '»', ' ']))
 }
 
-fn cut(text: &str) -> String {
-    let chars: Vec<char> = text.chars().collect();
-    if chars.len() <= CARD_CHARS {
-        text.to_string()
-    } else {
-        format!("{}…", chars[..CARD_CHARS].iter().collect::<String>())
-    }
-}
-
 /// What the card shows under its sentence: where, and what changes word for word.
 pub fn card_detail(lang: &str, what: Write, relative: &str, text: &str, heading: &str, before: &str) -> String {
     let folder = relative.rsplit_once('/').map(|(f, _)| f).unwrap_or("");
@@ -794,7 +881,7 @@ pub fn card_detail(lang: &str, what: Write, relative: &str, text: &str, heading:
     match what {
         Write::Create => {
             out.push(pick5(lang, "Nouvelle note :", "New note:", "Neue Notiz:", "Nota nueva:", "Nieuwe notitie:").to_string());
-            out.push(cut(text));
+            out.push(text.to_string());
         }
         Write::Append => {
             let at = if heading.trim().is_empty() {
@@ -805,21 +892,24 @@ pub fn card_detail(lang: &str, what: Write, relative: &str, text: &str, heading:
                       "Toegevoegd onder « {h} »:").replace("{h}", heading.trim().trim_start_matches('#').trim())
             };
             out.push(at);
-            out.push(cut(text));
+            out.push(text.to_string());
         }
         Write::Edit => {
+            // the words that change, with a little around them (never cut away: the person sees the whole change)
+            let (old, new) = change_shown(before, text);
             out.push(pick5(lang, "Avant :", "Before:", "Vorher:", "Antes:", "Voor:").to_string());
-            out.push(cut(before));
+            out.push(old);
             out.push(pick5(lang, "Après :", "After:", "Nachher:", "Después:", "Na:").to_string());
-            out.push(cut(text));
+            out.push(new);
         }
     }
     out.join("\n")
 }
 
 /// The person's answer to a write's card (or their level's, or their « Toujours »): None to go on, else the result.
-async fn approved(state: &AppState, agent: &AgentConfig, tool: &'static str, what: Write, relative: &str, summary: String,
-                  detail: String) -> Option<Dict> {
+#[allow(clippy::too_many_arguments)]
+async fn approved(state: &AppState, agent: &AgentConfig, tool: &'static str, what: Write, relative: &str, written: &str,
+                  summary: String, detail: String) -> Option<Dict> {
     let config = state.config();
     let kind = if what == Write::Edit { KIND_CHANGE } else { KIND_WRITE };
     let lang = crate::mail_tidy::language(&config, &agent.name);
@@ -838,7 +928,12 @@ async fn approved(state: &AppState, agent: &AgentConfig, tool: &'static str, wha
     let always = (kind == KIND_WRITE).then(|| crate::approval_level::always_button(&lang, &shown, ALWAYS_KEY)).flatten();
     let digest = {
         use sha2::{Digest, Sha256};
-        hex::encode(&Sha256::digest(detail.as_bytes())[..6])
+        // the whole note as it would be written: a kept « Oui » lets exactly this write through, nothing else
+        let mut hash = Sha256::new();
+        hash.update(relative.as_bytes());
+        hash.update([0]);
+        hash.update(written.as_bytes());
+        hex::encode(&hash.finalize()[..12])
     };
     let card = crate::person_ok::Card {
         kind: if kind == KIND_CHANGE { crate::person_ok::NOTES_CHANGE } else { crate::person_ok::NOTES_WRITE },
@@ -933,22 +1028,22 @@ pub async fn call(state: &AppState, agent: &AgentConfig, name: &str, arguments: 
     }
 }
 
-/// One write, serialized per place: read, card, write, all on the same file state.
+/// One write at a time on this place, from the note read again to its file written (never held during a card).
 static WRITING: LazyLock<tokio::sync::Mutex<()>> = LazyLock::new(Default::default);
 
 async fn write_call(state: &AppState, agent: &AgentConfig, name: &str, arguments: &Dict) -> Dict {
     let config = state.config();
     let root = vault_dir(&config);
     let text = raw_arg(arguments, if name == "obsidian_edit" { "replace" } else { "text" });
-    if text.chars().count() > WRITE_MAX_CHARS {
-        return tool_text(&format!("That is too long for one write (at most {WRITE_MAX_CHARS} characters): split it."), true);
+    if name != "obsidian_edit" && text.chars().count() > WRITE_MAX_CHARS {
+        return tool_text(&format!("That is too long for one write (at most {WRITE_MAX_CHARS} characters, so your \
+person can read all of it on the card): split it."), true);
     }
     if name != "obsidian_edit" && text.trim().is_empty() {
         return tool_text("Give the text to write.", true);
     }
     // the copy as fresh as can be before it changes (another device may have just written)
     fresh_enough(state).await;
-    let _one = WRITING.lock().await;
     let lang = crate::mail_tidy::language(&config, &agent.name);
     let who = crate::mail_tidy::shown_agent(&config, &agent.name);
     let daily = arguments.get("daily").is_some_and(py::truthy) && name == "obsidian_append";
@@ -962,8 +1057,12 @@ async fn write_call(state: &AppState, agent: &AgentConfig, name: &str, arguments
         Ok(p) => p,
         Err(bad) => return tool_text(bad.said(), true),
     };
-    let exists = path.is_file();
-    let current = if exists { std::fs::read_to_string(&path).unwrap_or_default() } else { String::new() };
+    let read = match read_note(&path) {
+        Ok(r) => r,
+        Err(why) => return tool_text(why, true),
+    };
+    let exists = read.is_some();
+    let current = read.unwrap_or_default();
     let heading = arg(arguments, "heading");
     let (what, new_text, shown_text, before) = match name {
         "obsidian_create" => {
@@ -987,6 +1086,11 @@ async fn write_call(state: &AppState, agent: &AgentConfig, name: &str, arguments
                 return tool_text(&format!("No note « {relative} »."), true);
             }
             let find = raw_arg(arguments, "find");
+            let (gone, put) = change_size(&find, &text);
+            if gone > WRITE_MAX_CHARS || put > WRITE_MAX_CHARS {
+                return tool_text(&format!("That change is too long for one card (at most {WRITE_MAX_CHARS} characters \
+replaced and written): change a smaller passage at a time."), true);
+            }
             match edited(&current, &find, &text) {
                 Ok(t) => (Write::Edit, t, text.clone(), find),
                 Err(why) => return tool_text(&why, true),
@@ -1002,12 +1106,21 @@ async fn write_call(state: &AppState, agent: &AgentConfig, name: &str, arguments
         "obsidian_append" => "obsidian_append",
         _ => "obsidian_edit",
     };
-    if let Some(refused) = approved(state, agent, tool, what, &relative, summary, detail).await {
+    if let Some(refused) = approved(state, agent, tool, what, &relative, &new_text, summary, detail).await {
         return refused;
     }
+    let _one = WRITING.lock().await;
+    // still this agent's vault (the person may have disconnected it or taken it away while the card waited)
+    let config = state.config();
+    if !offered(&config, &agent.name) || vault_dir(&config) != root || !root.is_dir() {
+        return tool_text("Your person's Obsidian vault is no longer connected for you: nothing was written.", true);
+    }
     // written as approved: the file must not have changed meanwhile (a sync during the card)
-    let now = if path.is_file() { std::fs::read_to_string(&path).unwrap_or_default() } else { String::new() };
-    if now != current || (what == Write::Create && exists != path.is_file()) {
+    let now = match read_note(&path) {
+        Ok(r) => r,
+        Err(why) => return tool_text(why, true),
+    };
+    if now.is_some() != exists || now.unwrap_or_default() != current {
         return tool_text("The note changed while your person was answering (another device wrote to it): nothing was \
 written. Read it again and ask once more.", true);
     }
@@ -1056,23 +1169,49 @@ pub fn sync_soon(config: &Config) {
     WANTED.notify_waiters();
 }
 
+/// Marks a sync running, unmarked however it ends (a call cut short included).
+struct Running(String);
+
+impl Running {
+    fn start(place: String) -> Running {
+        SYNCING.lock().unwrap_or_else(|e| e.into_inner()).insert(place.clone(), true);
+        Running(place)
+    }
+}
+
+impl Drop for Running {
+    fn drop(&mut self) {
+        SYNCING.lock().unwrap_or_else(|e| e.into_inner()).insert(self.0.clone(), false);
+    }
+}
+
 /// Syncs now (one at a time): whether it went through.
 pub async fn sync_now(state: &AppState) -> bool {
+    sync_within(state, None).await
+}
+
+/// `sync_now`, its `ob` stopped (and its container removed) after `limit`.
+pub async fn sync_within(state: &AppState, limit: Option<Duration>) -> bool {
     let config = state.config();
     let stored = load(&config);
     if local(&config) || stored.vault_id.is_empty() || stored.signed_out {
         return false;
     }
     let _one = SYNC_LOCK.lock().await;
-    SYNCING.lock().unwrap_or_else(|e| e.into_inner()).insert(config.data_dir(), true);
+    let running = Running::start(config.data_dir());
     let runner = Runner::of(&config.obsidian);
     let timeout = if stored.first_sync_done { ob::SYNC_TIMEOUT } else { ob::FIRST_SYNC_TIMEOUT };
+    let timeout = limit.map_or(timeout, |l| l.min(timeout));
     let synced = ob::sync(&runner, &paths(&config), timeout).await;
-    SYNCING.lock().unwrap_or_else(|e| e.into_inner()).insert(config.data_dir(), false);
+    drop(running);
     let ok = synced == ob::Synced::Done;
     let _ = change(&config, |s| {
         match &synced {
-            ob::Synced::Busy => return,
+            // another `ob` holds the vault: tried again at the next turn, not at once
+            ob::Synced::Busy => {
+                s.last_sync = py::time_time();
+                return;
+            }
             ob::Synced::SignedOut => {
                 s.signed_out = true;
                 s.sync_error = "signed_out".into();
@@ -1096,16 +1235,27 @@ pub async fn sync_now(state: &AppState) -> bool {
 async fn fresh_enough(state: &AppState) {
     let config = state.config();
     let stored = load(&config);
-    if local(&config) || stored.vault_id.is_empty() || py::time_time() - stored.last_sync < FRESH_BEFORE_WRITE {
+    if local(&config) || stored.vault_id.is_empty() || !stored.first_sync_done || syncing(&config)
+        || py::time_time() - stored.last_sync < FRESH_BEFORE_WRITE
+    {
         return;
     }
-    let _ = tokio::time::timeout(Duration::from_secs(90), sync_now(state)).await;
+    // its own limit: `ob` stopped and its container removed then, never a future dropped halfway
+    sync_within(state, Some(Duration::from_secs(90))).await;
 }
 
 /// Every `every_minutes`, and a few seconds after each write.
 pub async fn scheduler(state: AppState) {
+    {
+        // containers a stopped bridge left behind
+        let config = state.config();
+        if config.obsidian.enabled && !local(&config) {
+            ob::remove_leftovers(&Runner::of(&config.obsidian)).await;
+        }
+    }
     loop {
         let wake = WANTED.notified();
+        sweep_flows(); // a sign-in nobody finished: its `ob` stopped, its container removed
         let config = state.config();
         if config.obsidian.enabled && !local(&config) {
             let runner = Runner::of(&config.obsidian);
@@ -1240,6 +1390,25 @@ fn keep_flow(config: &Config, dialog: ob::Dialog, kind: FlowKind) -> String {
     flows.insert(id.clone(), Flow { place: config.data_dir(), dialog, kind,
                                      until: now + Duration::from_secs(ob::FLOW_SECONDS) });
     id
+}
+
+/// The flows past their time (or of `place`), dropped: their `ob` killed and their container removed (Dialog's Drop).
+fn sweep_flows_of(place: Option<&str>) {
+    let now = Instant::now();
+    let gone: Vec<Flow> = {
+        let mut flows = FLOWS.lock().unwrap_or_else(|e| e.into_inner());
+        let ids: Vec<String> = flows
+            .iter()
+            .filter(|(_, f)| f.until <= now || place.is_some_and(|p| f.place == p))
+            .map(|(id, _)| id.clone())
+            .collect();
+        ids.iter().filter_map(|id| flows.remove(id)).collect()
+    };
+    drop(gone);
+}
+
+fn sweep_flows() {
+    sweep_flows_of(None);
 }
 
 fn take_flow(config: &Config, id: &str) -> Option<Flow> {
@@ -1549,7 +1718,7 @@ async fn vault_password_route(State(state): State<AppState>, Json(body): Json<Pa
     let FlowKind::Setup { vault, agents } = flow.kind else {
         return Err(coded(404, "unknown_flow", "choose the vault again"));
     };
-    let step = ob::setup_password(flow.dialog, Zeroizing::new(body.password)).await;
+    let step = ob::setup_password(flow.dialog, Zeroizing::new(body.password), &vault.id).await;
     Ok(web::ok(configured(&state, step, vault, agents).await?))
 }
 
@@ -1579,6 +1748,8 @@ async fn disconnect_route(State(state): State<AppState>) -> ApiResult<Response> 
     let config = state.config();
     on(&config)?;
     let before = load(&config).agents;
+    sweep_flows_of(Some(&config.data_dir()));
+    let _writing = WRITING.lock().await; // no write lands in a copy being deleted
     if local(&config) {
         let _ = change(&config, |s| s.agents.clear());
     } else {

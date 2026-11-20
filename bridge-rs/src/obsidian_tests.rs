@@ -109,7 +109,8 @@ fn the_card_says_what_changes_in_the_persons_language() {
     let detail = card_detail("fr", Write::Edit, "Maison.md", "- toiture (devis)", "", "- toiture");
     assert_eq!(detail, "Avant :\n- toiture\nAprès :\n- toiture (devis)");
     let long = "x".repeat(3000);
-    assert!(card_detail("en", Write::Create, "a.md", &long, "", "").ends_with('…'));
+    // never cut (review 20/11): a write is at most WRITE_MAX_CHARS, all of it on the card
+    assert!(card_detail("en", Write::Create, "a.md", &long, "", "").ends_with(&long));
 }
 
 #[test]
@@ -181,4 +182,70 @@ fn the_settings_and_who_gets_the_tools() {
     use std::os::unix::fs::PermissionsExt;
     let mode = std::fs::metadata(store_path(&config)).unwrap().permissions().mode() & 0o777;
     assert_eq!(mode, 0o600);
+}
+
+/// Review 20/11 (blocker): a `notes_change` card is critical: it must show the words that change, even when the
+/// passage is longer than the card's cut — two different changes must never look the same on the card.
+#[test]
+fn a_change_card_shows_the_words_that_change_even_in_a_long_passage() {
+    let common = "Budget de la maison, ligne après ligne. ".repeat(40); // 1600 characters, past the card's cut
+    let before = format!("{common}Virement mensuel : 100 €");
+    let small = format!("{common}Virement mensuel : 120 €");
+    let big = format!("{common}Virement mensuel : 9000 €");
+    let detail = card_detail("fr", Write::Edit, "Maison.md", &big, "", &before);
+    assert!(detail.contains("100 €") && detail.contains("9000 €"), "the change isn't on the card: {detail}");
+    assert_ne!(
+        card_detail("fr", Write::Edit, "Maison.md", &small, "", &before),
+        detail,
+        "two different changes give the same card (and the same held « Oui »)"
+    );
+}
+
+/// Review 20/11: a note that can't be read as text is never taken for an empty one.
+#[test]
+fn a_note_is_read_as_text_or_refused_never_as_empty() {
+    let dir = tempfile::tempdir().unwrap();
+    assert_eq!(read_note(&dir.path().join("absente.md")), Ok(None));
+    std::fs::write(dir.path().join("ok.md"), "é").unwrap();
+    assert_eq!(read_note(&dir.path().join("ok.md")), Ok(Some("é".into())));
+    std::fs::write(dir.path().join("latin1.md"), b"cr\xe8me").unwrap();
+    assert!(read_note(&dir.path().join("latin1.md")).unwrap_err().contains("UTF-8"));
+    std::fs::write(dir.path().join("gros.md"), vec![b'a'; NOTE_MAX_BYTES as usize + 1]).unwrap();
+    assert!(read_note(&dir.path().join("gros.md")).unwrap_err().contains("too big"));
+    std::fs::create_dir(dir.path().join("dossier.md")).unwrap();
+    assert!(read_note(&dir.path().join("dossier.md")).is_err());
+}
+
+#[test]
+fn a_change_shows_only_what_changes_with_a_little_around_it() {
+    assert_eq!(change_shown("- toiture", "- toiture (devis)"), ("- toiture".into(), "- toiture (devis)".into()));
+    let long = "x".repeat(300);
+    let (old, new) = change_shown(&format!("{long}A{long}"), &format!("{long}B{long}"));
+    assert_eq!(old, format!("…{}A{}…", "x".repeat(80), "x".repeat(80)));
+    assert_eq!(new, format!("…{}B{}…", "x".repeat(80), "x".repeat(80)));
+    assert_eq!(change_size(&format!("{long}A{long}"), &format!("{long}BB{long}")), (1, 2));
+    assert_eq!(change_size("abc", "abc"), (0, 0));
+    assert_eq!(change_size("aa", "a"), (1, 0));
+}
+
+#[test]
+fn backups_stay_under_their_size_and_never_overwrite_each_other() {
+    let data = tempfile::tempdir().unwrap();
+    let mut config = Config::with_key("k");
+    config.outbox.db_path = data.path().join("bridge.db").to_string_lossy().into_owned();
+    let dir = vault();
+    let note = dir.path().join("Courses.md");
+    back_up(&config, "Courses.md", &note).unwrap();
+    back_up(&config, "Courses.md", &note).unwrap();
+    let today = base(&config).join("backups").join(chrono::Local::now().format("%Y-%m-%d").to_string());
+    assert_eq!(std::fs::read_dir(&today).unwrap().count(), 2, "two copies in the same second both kept");
+    // an older day past the cap goes, today's stays
+    let older = base(&config).join("backups").join(
+        (chrono::Local::now() - chrono::Duration::days(2)).format("%Y-%m-%d").to_string());
+    std::fs::create_dir_all(&older).unwrap();
+    let big = std::fs::File::create(older.join("gros")).unwrap();
+    big.set_len(BACKUPS_MAX_BYTES + 1).unwrap();
+    back_up(&config, "Courses.md", &note).unwrap();
+    assert!(!older.exists(), "the oldest day went");
+    assert!(today.exists());
 }
