@@ -2,7 +2,7 @@
 
 # Política de privacidad de BipAgents
 
-> Última actualización: 18 de noviembre de 2026.
+> Última actualización: 20 de noviembre de 2026.
 
 ## En resumen
 
@@ -710,6 +710,7 @@ no borra nada en él y Kerfy Studio no guarda nada de él.
 | EUrouter B.V. (Ámsterdam, Países Bajos) | Enrutador de IA | Mensajes enviados al modelo, metadatos | Unión Europea |
 | Proveedores de alojamiento de los modelos, socios de EUrouter | Hacen funcionar el modelo (hoy GLM-5.3 Flash) | Mensajes enviados al modelo, con los archivos y las fotos que ve | Unión Europea, según EUrouter |
 | Scaleway SAS (París, Francia) | Almacenamiento de objetos de las copias de seguridad (región fr-par, París) | Copias de seguridad cifradas de las plazas, ilegibles para él y para Kerfy Studio; copias cifradas de la base de datos del guichet; una versión sustituida o borrada se guarda 1 día | Unión Europea (Francia) |
+| Scaleway SAS (París, Francia) | Servicio de claves de la caja fuerte (keys.bipagents.com): guarda una mitad de la clave de la caja fuerte de cada plaza cuya caja fuerte está sellada; la otra mitad se queda en la plaza, y ninguna de las dos abre la caja fuerte por sí sola | Para cada plaza sellada: su mitad de la clave, una huella de su token, la dirección IP de su servidor y el registro de sus solicitudes (hora, dirección, resultado), guardado 90 días; el nombre de una plaza borrada y la huella de su token se quedan, para rechazar cualquier nueva solicitud | Unión Europea (Países Bajos) |
 | OVHcloud (OVH SAS, Roubaix, Francia) | Aloja el guichet y el relé, en un VPS en Francia | Cuenta, suscripción, datos técnicos; tokens sellados y los registros del relé (secciones 4.1 y 5.6) | Francia |
 | Proton AG (Ginebra, Suiza) | Envía, desde una dirección bipagents.com, los códigos, los avisos de seguridad, las invitaciones, la confirmación de compra, el acuse de desistimiento, los avisos de eliminación, el aviso del 5.º día de una plaza beta sin usar y el aviso de fin de la beta; también aloja el buzón de soporte (sección 4.2) | Dirección de correo, contenido de esos correos; Proton guarda el mensaje enviado hasta que lo borramos de la bandeja de salida | Suiza (decisión de adecuación, sección 11) |
 | Stripe Payments Europe, Ltd. (Dublín, Irlanda) | Pago de las compras en el sitio bipagents.com, cálculo de impuestos, controles contra el fraude, facturas | Dirección de correo, dirección o país de facturación, datos de tarjeta, dirección IP | Unión Europea; posiblemente fuera de la Unión (sección 11) |

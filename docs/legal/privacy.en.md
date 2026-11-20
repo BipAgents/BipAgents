@@ -2,7 +2,7 @@ English · [Français](privacy.fr.md) · [Deutsch](privacy.de.md) · [Español](
 
 # BipAgents privacy policy
 
-> Last updated: 18 November 2026.
+> Last updated: 20 November 2026.
 
 ## In short
 
@@ -688,6 +688,7 @@ Kerfy Studio keeps nothing of it.
 | EUrouter B.V. (Amsterdam, Netherlands) | AI router | Messages sent to the model, metadata | European Union |
 | Model hosting providers, EUrouter's partners | Run the model (today GLM-5.3 Flash) | Messages sent to the model, with the files and photos it is shown | European Union, according to EUrouter |
 | Scaleway SAS (Paris, France) | Object storage for the backups (region fr-par, Paris) | The places' encrypted backups, unreadable for it and for Kerfy Studio; encrypted copies of the guichet's database; a replaced or deleted version is kept 1 day | European Union (France) |
+| Scaleway SAS (Paris, France) | The vault's key service (keys.bipagents.com): keeps one half of the vault key of each place whose vault is sealed; the other half stays on the place, and neither half opens the vault on its own | For each sealed place: its half of the key, a fingerprint of its token, its server's IP address and the log of its requests (time, address, outcome), kept 90 days; a deleted place's name and its token's fingerprint stay, to refuse any new request | European Union (Netherlands) |
 | OVHcloud (OVH SAS, Roubaix, France) | Hosts the guichet and the relay, on a VPS in France | Account, subscription, technical data; sealed tokens and the relay's logs (sections 4.1 and 5.6) | France |
 | Proton AG (Geneva, Switzerland) | Sends, from a bipagents.com address, the codes, the security notices, the invitations, the purchase confirmation, the withdrawal acknowledgement, the deletion notices, the day-5 notice of an unused beta place and the end-of-beta notice; also hosts the support mailbox (section 4.2) | Email address, content of these emails; Proton keeps the sent message until we delete it from the outbox | Switzerland (adequacy decision, section 11) |
 | Stripe Payments Europe, Ltd. (Dublin, Ireland) | Payment of purchases on the bipagents.com website, tax calculation, fraud checks, invoices | Email address, billing address or country, card details, IP address | European Union; possibly outside the Union (section 11) |
