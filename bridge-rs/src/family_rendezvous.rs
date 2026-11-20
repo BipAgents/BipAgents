@@ -982,6 +982,27 @@ pub async fn accept_sealed(state: &AppState, wire: Bytes) -> Response {
 mod tests {
     use super::*;
 
+    /// 2026-11-20: the calls seen were kept in the first bridge's folder for the whole process, so another bridge
+    /// of the same process (the tests' two households) refused every sealed call once that folder was gone (« not
+    /// written down as seen »): `agents_family_tls` failed 28 runs out of 200.
+    #[test]
+    fn each_bridge_keeps_the_calls_it_saw_in_its_own_folder() {
+        let (first, second) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let config_in = |dir: &std::path::Path| {
+            let mut config = Config::with_key("k".repeat(40));
+            config.outbox.db_path = dir.join("bridge.db").to_string_lossy().into_owned();
+            config
+        };
+        let (a, b) = (config_in(first.path()), config_in(second.path()));
+        let now = crate::py::time_time();
+        assert_eq!(seen(&a).take(&[1u8; SALT_LEN], now, now), Ok(()));
+        drop(first); // that bridge's folder gone (its test over)
+        assert_eq!(seen(&b).take(&[2u8; SALT_LEN], now, now), Ok(()));
+        assert!(second.path().join("family-relay-seen").is_file());
+        assert_eq!(seen(&b).take(&[2u8; SALT_LEN], now, now), Err(Stale::Replay));
+        assert_eq!(seen(&b).take(&[1u8; SALT_LEN], now, now), Ok(())); // what the other saw is new here
+    }
+
     #[test]
     fn the_relay_is_the_push_relay_unless_set_or_off() {
         let mut config = Config::with_key("k".repeat(40));
