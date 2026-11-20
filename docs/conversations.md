@@ -313,7 +313,7 @@ something, `answers: <name>` on the first reply to that request. The apps keep t
 
 | `kind` | Fields | From |
 |---|---|---|
-| `message` | `role` (`person` \| `agent`), `text` (visible words only), `attachments`, `client_id`?, `added_during_run`? (a steer), `reasoning`? , `sending`? (`s_<client_id>`: sent, not stored by Hermes yet), `instant`? + `answers` (`i_<client_id>`: the agent's line said at once, §6.7) | Hermes user / assistant rows, the bridge's sends and instant lines |
+| `message` | `role` (`person` \| `agent`), `text` (visible words only), `attachments`, `client_id`?, `added_during_run`? (a steer), `reasoning`? , `sending`? (`s_<client_id>`: sent, not stored by Hermes yet), `instant`? + `answers` + `first`? (`i_<client_id>`: the agent's line said at once, §6.7; `first`: to the message that started the turn) | Hermes user / assistant rows, the bridge's sends and instant lines |
 | `tool` | `tool: {name, call_id, arguments, result, status (done \| failed \| running), via}` | assistant `tool_calls` + their tool rows |
 | `notice` | `notice: {code, text, stopped?}`: `failed_turn` (Hermes' failed-turn row; `stopped`: `partial` \| `not_processed`, which of Hermes' two lines, the apps say it in their words), `loop_rescue` (the bridge's rescue turn) | Hermes rows the bridge recognizes |
 | `boite` | `text`, `title`, `attachments`, `boite: {outbox_id, audio: bool}` | the bridge's outbox (routine reports, hand-backs, credit, storage, imports) |
@@ -656,17 +656,19 @@ acknowledge again. A `thread` hint `instant` tells the phones; another, `taken`,
 `added_during_run`). One sentence per conversation every 20 s; its tokens count with the agent's key (the offer:
 the place's AI key, metered by the router). A family agent's common conversation: a member's message during someone
 else's turn is queued (never steered); her sentence is asked without the conversation's other lines.
-**The first message too** (instant_reply.rs `first`, 20/11, Alex « dès le premier message »): an app that sends
-`instant_first: true` (iOS and Android from 20/11; an older app gets none) gets a line for a message that STARTS a turn.
-The agent's model is asked at once (its name, the time, the conversation's last lines, the message) for 1 to 3 short
-sentences: what it starts on with the person's specifics, or a short direct answer from general knowledge, or « - »
-(nothing yet: thanks, a greeting). Never a fact it cannot know, never « done », never a question. The turn starts once
-the line is there, or 2.5 s after the send without it (then none is ever shown). With the line, its words go to the turn
-in the hidden note (`<!--bip:answered … « line » …-->`), so the real reply continues from it; the line is kept and
-served like the others (`i_<client_id>` right under the message), before any word of the turn's. The layout gives that
-turn no app first word (`ack`), and both apps keep the line right under the message during the turn and drop their own
-first word too. No call for « merci », « ok »… (`trivial`), none in a family agent's common conversation or for a
-read-only share's turn (`instructions`); Live, routines and tasks never go through this send.
+**The first message too** (instant_reply.rs `first`, 20/11, Alex « dès le premier message », design « en parallèle »):
+an app that sends `instant_first: true` (iOS and Android from 20/11; an older app gets none) gets a line for a message
+that STARTS a turn, when the message calls for it (`wants_line`, no model call: a file, link or code, a verb of work in
+fr/en/de/es/nl, a long request or several questions, « vas-y »…, or a conversation whose turns were slow to speak; never
+« merci », « ok »). The turn starts at once with a constant hidden note (« a short line is being shown… go straight to
+work »). The line is asked of the agent's own model (same key and pinned provider; `[model] instant_line` can name
+another on a self-install): 1 to 3 short sentences, or « - ». It is shown (`i_<client_id>`, `instant: true`, `first:
+true`, right under the message) only if it comes while the turn has shown no words yet; its words then go to the turn at
+its next step (a steered note, a new message: append-only, the prompt cache stays whole). Never a link, an address, a
+phone number, « done », or money/health/law advice (dropped in code). An agent whose lines keep coming too late gets
+none for 30 min (`Adapt`). The layout gives a turn with a `first` line no app first word (`ack`); a queued message's
+line keeps the layout it had. None in a family agent's common conversation or for a read-only share's turn
+(`instructions`); Live, routines and tasks never go through this send.
 
 The bridge takes what waited for the message (`live_brief::message_notes`: the time, a Live call's recap, the
 family's news…), adds the app's `notes` (its 👍 / 👎), builds Hermes' input (photos as image parts of one user message,
