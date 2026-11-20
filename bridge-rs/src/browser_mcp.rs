@@ -925,14 +925,18 @@ pub fn script_answer(answer: Value) -> Dict {
         .unwrap_or_default()
 }
 
-/// A refusal of the proxy's own, as the real server would answer (softened like any, `soften`).
 /// A browser call's longest time here: just under Hermes' own tool timeout for this server (120 s, browsers.rs
 /// `mcp_server`), so the proxy answers first and nothing runs after Hermes gave up.
 pub const CALL_SECONDS: f64 = 115.0;
+/// Run in the browser's container after a call ran over (`end_stuck_server`): every server door and its server
+/// killed (the bracket keeps pkill from matching this shell's own command line), their call counts removed.
+pub const END_STUCK_SERVER: &str = "pkill -KILL -f '/opt/stealth/[h]old_gate.py'; pkill -KILL -f 'python [s]erver.py'; \
+rm -f /tmp/bipagents-calls/* /tmp/bipagents-calls/.[0-9]*; exit 0";
 /// The answer to a call that waited its turn longer than `CALL_SECONDS`: not run at all.
 pub const BUSY: &str = "Not done: your browser is still busy with an action that did not finish in time; nothing was \
 done. Try again in a moment.";
 
+/// A refusal of the proxy's own, as the real server would answer (softened like any, `soften`).
 fn refused(text: &str) -> Dict {
     json!({"jsonrpc": "2.0", "result": {"content": [{"type": "text", "text": text}], "isError": true}})
         .as_object()
@@ -2371,6 +2375,9 @@ pub struct Proxy {
     /// call's page), and Hermes patch 0029 sends several sessions' calls side by side. Each task's own browser has its
     /// own proxy, so the tasks still browse side by side.
     one_call: tokio::sync::Mutex<()>,
+    /// Calls Hermes cancelled (`notifications/cancelled`: the person sent a new message, its tool timeout): one still
+    /// waiting its turn here never starts (its JSON-RPC id, as text).
+    cancelled: Mutex<std::collections::HashSet<String>>,
     /// Beside `busy`: which session uses which task's own browser (browsers.rs `SESSIONS_FILE`).
     sessions_path: PathBuf,
     /// The tasks' own browsers this proxy relays to, by their settings' path (one per running task, browsers.rs
@@ -2434,6 +2441,7 @@ impl Proxy {
             send_sites_path,
             sent_once: Mutex::new(std::collections::HashSet::new()),
             one_call: tokio::sync::Mutex::new(()),
+            cancelled: Mutex::new(Default::default()),
             sessions_path,
             tasks: Mutex::new(HashMap::new()),
         })
@@ -2619,10 +2627,28 @@ impl Proxy {
             .and_then(|m| m.get(crate::agent_tools::CALL_SESSION_META))
             .and_then(Value::as_str)
             .map(str::to_string);
-        let _one = match message.get("method").and_then(Value::as_str) {
+        let method = message.get("method").and_then(Value::as_str);
+        if method == Some("notifications/cancelled") {
+            if let Some(id) = message.get("params").and_then(|p| p.get("requestId")) {
+                let mut cancelled = self.cancelled.lock().unwrap_or_else(|e| e.into_inner());
+                if cancelled.len() > 256 {
+                    cancelled.clear();
+                }
+                cancelled.insert(id.to_string());
+            }
+        }
+        let _one = match method {
             // waited longer than a call may last: the one before is stuck; answered « busy », never run late
             Some("tools/call") => match tokio::time::timeout(self.call_limit(), self.one_call.lock()).await {
-                Ok(held) => Some(held),
+                Ok(held) => {
+                    // cancelled by Hermes while it waited its turn: never started (and, cancelled, never answered)
+                    let id = message.get("id").map(Value::to_string).unwrap_or_default();
+                    if self.cancelled.lock().unwrap_or_else(|e| e.into_inner()).remove(&id) {
+                        log("tools/call: cancelled while it waited, not run");
+                        return;
+                    }
+                    Some(held)
+                }
                 Err(_) => {
                     let mut answer = refused(BUSY);
                     answer.insert("id".into(), message.get("id").cloned().unwrap_or(Value::Null));
@@ -2761,6 +2787,7 @@ impl Proxy {
                     Err(_) => {
                         log(&format!("{tool}: no answer in {:.0} s, the browser's server started again", self.call_limit().as_secs_f64()));
                         self.stop_child().await;
+                        self.end_stuck_server().await;
                         refused(&format!(
                             "Not done in time: this browser action took longer than {:.0} s and was stopped (your \
                              browser's tools started again; the pages stay open). Look at the page before doing it again.",
@@ -3545,20 +3572,38 @@ impl Proxy {
         log(&format!("page settled in {:.2} s", crate::py::monotonic() - started));
     }
 
+    /// The command prefix that runs one in the browser's container: the config's `exec` (`[]`: on this machine), else
+    /// the one `server` gives (`podman exec -i <container> …`).
+    fn container_prefix(&self) -> Option<Vec<String>> {
+        match self.config.get("exec") {
+            Some(v) => Some(strs(Some(v))),
+            None => {
+                let server = self.command("server");
+                let i = server.iter().position(|a| a == "exec")?;
+                let container = server.iter().skip(i + 1).find(|a| !a.starts_with('-'))?;
+                Some(vec![server[0].clone(), "exec".into(), container.clone()])
+            }
+        }
+    }
+
+    /// After a call ran over: the server's door (hold_gate.py) and its stuck server ended inside the container, and
+    /// the doors' call counts cleared. `stop_child` ends only `podman exec`; an image before review 6 keeps its door
+    /// waiting for ever on the stuck server, its count at 1 (card_pay.rs `calls_check_command` then never lets a card
+    /// payment start) and the stuck call able to act in Chrome later. Never on this machine (`exec` `[]`).
+    async fn end_stuck_server(&self) {
+        let Some(mut command) = self.container_prefix().filter(|p| !p.is_empty()) else { return };
+        command.extend(["sh".to_string(), "-c".to_string(), END_STUCK_SERVER.to_string()]);
+        if tokio::time::timeout(Duration::from_secs(10), run(&command, false)).await.is_err() {
+            log("the stuck server's door could not be ended in its container");
+        }
+    }
+
     /// A file the real server saved in its container (`CLONES_IN_CONTAINER`), as base64, then removed there: through
     /// the config's `exec` (the command prefix that runs one in the container; `[]`: on this machine), else the one
     /// `server` gives (`podman exec -i <container> …`).
     async fn fetch_from_container(&self, path: &str) -> Option<String> {
         use base64::Engine;
-        let prefix: Vec<String> = match self.config.get("exec") {
-            Some(v) => strs(Some(v)),
-            None => {
-                let server = self.command("server");
-                let i = server.iter().position(|a| a == "exec")?;
-                let container = server.iter().skip(i + 1).find(|a| !a.starts_with('-'))?;
-                vec![server[0].clone(), "exec".into(), container.clone()]
-            }
-        };
+        let prefix = self.container_prefix()?;
         let mut cat = prefix.clone();
         cat.extend(["cat".to_string(), path.to_string()]);
         let (program, rest) = cat.split_first()?;

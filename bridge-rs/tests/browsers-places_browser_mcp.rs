@@ -1768,3 +1768,50 @@ async fn review5_a_call_that_never_comes_back_does_not_hold_the_agents_browser_f
     );
     assert!(answered(1), "the stuck call was never answered: {messages:?}");
 }
+
+/// Review 6: after a call ran over, `stop_child` ends only `podman exec`; in an image before review 6 the server's
+/// door (hold_gate.py) waits for ever on its stuck server, its call count at 1 (card payments never start again). The
+/// proxy then ends them in the container (its `exec` prefix) and clears the counts; a call Hermes cancelled while it
+/// waited its turn never starts.
+#[tokio::test(flavor = "multi_thread")]
+async fn after_an_overrun_the_stuck_door_is_ended_in_the_container_and_a_cancelled_waiting_call_never_runs() {
+    let dir = tempfile::tempdir().unwrap();
+    let tmp = dir.path();
+    let mut settings = config(tmp);
+    std::fs::write(tmp.join("hang.py"), HANGING_SERVER).unwrap();
+    settings.insert("server".into(), json!([python(), tmp.join("hang.py").to_string_lossy()]));
+    settings.insert("call_seconds".into(), json!(2));
+    // the container's command prefix: what it is asked to run is written down
+    let ran = tmp.join("in-container.txt");
+    std::fs::write(tmp.join("record.py"), format!("import sys\nopen({:?}, 'a').write(' '.join(sys.argv[1:]) + '\\n')\n", ran.to_string_lossy())).unwrap();
+    settings.insert("exec".into(), json!([python(), tmp.join("record.py").to_string_lossy()]));
+    let out = Out::default();
+    let proxy = Proxy::new(settings, Box::new(out.clone()));
+    proxy.handle(init()).await;
+    let call = |id: i64, name: &str| {
+        json!({"jsonrpc": "2.0", "id": id, "method": "tools/call", "params": {"name": name, "arguments": {},
+               "_meta": {bipbridge::agent_tools::CALL_SESSION_META: "api_a"}}})
+    };
+    let stuck = tokio::spawn({
+        let proxy = proxy.clone();
+        let message = call(1, "hang");
+        async move { proxy.handle(message).await }
+    });
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let queued = tokio::spawn({
+        let proxy = proxy.clone();
+        let message = call(2, "navigate");
+        async move { proxy.handle(message).await }
+    });
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    // the person sent a new message: Hermes cancels the call still waiting its turn
+    proxy.handle(json!({"jsonrpc": "2.0", "method": "notifications/cancelled", "params": {"requestId": 2, "reason": "new message"}})).await;
+    let _ = tokio::time::timeout(Duration::from_secs(20), stuck).await;
+    let _ = tokio::time::timeout(Duration::from_secs(20), queued).await;
+    let messages = out.messages();
+    proxy.stop_child().await;
+    assert!(messages.iter().any(|m| m["id"] == json!(1)), "the stuck call answered: {messages:?}");
+    assert!(!messages.iter().any(|m| m["id"] == json!(2)), "a cancelled call ran after the stuck one: {messages:?}");
+    let asked = std::fs::read_to_string(&ran).unwrap_or_default();
+    assert!(asked.contains("[h]old_gate.py") && asked.contains("/tmp/bipagents-calls/"), "the stuck door left in the container: {asked:?}");
+}
