@@ -35,10 +35,14 @@ use crate::config::{AgentConfig, Config};
 const JOURNAL: &str = "own-space-back.json";
 /// How long a turn going on in its space may keep the space after the switch.
 const SPACE_WAIT: Duration = Duration::from_secs(30 * 60);
-/// Between two rounds of the start's tidy while an agent is busy.
-const BUSY_AGAIN: Duration = Duration::from_secs(30);
-/// After a failed way back, that agent is tried again so much later.
-const FAILED_AGAIN: Duration = Duration::from_secs(15 * 60);
+/// Between two tries at an agent still busy (a routine due every few minutes keeps it so) or whose way back failed:
+/// 15 minutes, then an hour, then 4 hours each time (coordinator 21/11: never an endless retry every 15 minutes). The
+/// place's night window (`[agent_restart] window_start..window_end`, its quiet hours) gives it one more try each night.
+const BACK_OFF: [f64; 3] = [15.0 * 60.0, 3600.0, 4.0 * 3600.0];
+/// An agent waiting to come back is said in the log at most this often.
+const SAID_EVERY: f64 = 24.0 * 3600.0;
+/// The start's loop looks this often (cheap: a few small files read per agent).
+const TICK: Duration = Duration::from_secs(60);
 
 /// Whether `agent` comes back into the shared hub now (module doc).
 pub fn comes_back(config: &Config, agent: &AgentConfig) -> bool {
@@ -121,14 +125,89 @@ fn note(config: &Config, agent: &str, space: Option<&str>) {
 // --- the way back ----------------------------------------------------------------------------------------------------
 
 /// What one try at bringing an agent back did.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 enum Back {
     /// Back, or nothing to do (gone, in the hub already, not one that comes back).
     Done,
-    /// Busy (a turn, a Live call, a background task, a scan, a watcher, a routine): later.
-    Busy,
-    /// The way back failed (logged), the agent served by its space as before: later.
-    Failed,
+    /// Busy (a turn, a Live call, a background task, a scan, a watcher, a routine): later. Why.
+    Busy(&'static str),
+    /// The way back failed (its details logged where it failed), the agent served by its space as before: later.
+    Failed(String),
+}
+
+/// An agent that waits to come back: how many tries in a row didn't bring it, when the next is due (`time_time`), the
+/// night it was last tried in, when it was last said in the log.
+#[derive(Debug, Clone, Default, PartialEq)]
+struct Waiting {
+    tries: u32,
+    next: f64,
+    night: Option<i32>,
+    said: Option<f64>,
+}
+
+/// The start loop's agents waiting to come back (`BACK_OFF`, `SAID_EVERY`).
+#[derive(Debug, Default)]
+struct Waits(BTreeMap<String, Waiting>);
+
+impl Waits {
+    /// Whether `name` is tried now: never tried yet, its wait over, or a night (`night`: its id while in the window)
+    /// it wasn't tried in.
+    fn due(&self, name: &str, now: f64, night: Option<i32>) -> bool {
+        match self.0.get(name) {
+            None => true,
+            Some(w) => now >= w.next || (night.is_some() && w.night != night),
+        }
+    }
+
+    /// After a try at `name`: back (`done`), forgotten; else its next wait. Returns that wait when it is to be said in
+    /// the log now (at most once in `SAID_EVERY`).
+    fn after(&mut self, name: &str, done: bool, now: f64, night: Option<i32>) -> Option<f64> {
+        if done {
+            self.0.remove(name);
+            return None;
+        }
+        let w = self.0.entry(name.to_string()).or_default();
+        let wait = BACK_OFF[(w.tries as usize).min(BACK_OFF.len() - 1)];
+        w.tries += 1;
+        w.next = now + wait;
+        if night.is_some() {
+            w.night = night;
+        }
+        let say = w.said.is_none_or(|at| now - at >= SAID_EVERY);
+        if say {
+            w.said = Some(now);
+        }
+        say.then_some(wait)
+    }
+
+    /// Only the agents still to bring back are remembered.
+    fn keep(&mut self, names: &[String]) {
+        self.0.retain(|name, _| names.contains(name));
+    }
+}
+
+/// The night `minute` (of the day `day`) is in, as an id, when it is in the window `start..end` (hours; one that
+/// crosses midnight belongs to the day it began).
+fn night_id(minute: u32, day: i32, start: u32, end: u32) -> Option<i32> {
+    let (from, to) = (start * 60, end * 60);
+    if from == to {
+        None
+    } else if from < to {
+        (minute >= from && minute < to).then_some(day)
+    } else if minute >= from {
+        Some(day)
+    } else {
+        (minute < to).then_some(day - 1)
+    }
+}
+
+/// The place's night now (`[agent_restart]` window, in its time zone), as `night_id` says it.
+fn night_now(config: &Config) -> Option<i32> {
+    use chrono::{Datelike, TimeZone, Timelike};
+    let zone = crate::dates::load(config).zone();
+    let local = zone.from_utc_datetime(&chrono::Utc::now().naive_utc());
+    let s = &config.agent_restart;
+    night_id(local.hour() * 60 + local.minute(), local.num_days_from_ce(), s.window_start, s.window_end)
 }
 
 /// One try: the agent comes back now if it should and does nothing (agent_restart.rs `activity`, the way out's checks).
@@ -139,11 +218,10 @@ async fn back_once(state: &AppState, name: &str) -> Back {
         return Back::Done;
     }
     if state.hub.agent_runs_at(name, &agent.hermes_url) > 0 {
-        return Back::Busy;
+        return Back::Busy("a turn is going on");
     }
     if let Some(why) = crate::agent_restart::activity(state, &config, &agent, crate::py::time_time()).await.busy() {
-        tracing::debug!(target: "bipbridge::own_space", agent = %name, why, "busy: comes back into the shared hub later");
-        return Back::Busy;
+        return Back::Busy(why);
     }
     let lock = crate::own_space::lock_of(name);
     let _one_at_a_time = lock.lock_owned().await;
@@ -153,7 +231,7 @@ async fn back_once(state: &AppState, name: &str) -> Back {
         return Back::Done;
     }
     if state.hub.agent_runs_at(name, &agent.hermes_url) > 0 {
-        return Back::Busy;
+        return Back::Busy("a turn is going on");
     }
     let space = agent.space.clone().unwrap_or_default();
     note(&config, name, Some(&space));
@@ -166,8 +244,7 @@ async fn back_once(state: &AppState, name: &str) -> Back {
         }
         Err(exc) => {
             note(&config, name, None);
-            tracing::warn!(target: "bipbridge::own_space", agent = %name, error = ?exc, "the way back into the shared hub failed: its space serves it as before");
-            Back::Failed
+            Back::Failed(format!("{exc:?}"))
         }
     }
 }
@@ -250,42 +327,40 @@ async fn settle_journal(state: &AppState) {
 }
 
 /// At start (app.rs): a way back a restart cut off settled first, then the agents that come back (`to_bring_back`), one
-/// at a time, each once it does nothing; a busy one looked at again a bit later, a failed one 15 minutes later.
+/// at a time, each once it does nothing. One still busy, or whose way back failed, is tried again 15 minutes later,
+/// then an hour, then every 4 hours, and once more each night in the place's quiet hours (`Waits`); while it waits it
+/// is said in the log at most once a day.
 pub async fn at_start(state: AppState) {
     settle_journal(&state).await;
     if to_bring_back(&state.config()).is_empty() {
         return;
     }
     tokio::time::sleep(Duration::from_secs_f64(state.config().spaces.tidy_after)).await;
-    let mut failed: BTreeMap<String, Instant> = BTreeMap::new();
+    let mut waits = Waits::default();
     loop {
-        let names = to_bring_back(&state.config());
+        let config = state.config();
+        let names = to_bring_back(&config);
         if names.is_empty() {
             return;
         }
-        let mut busy = false;
+        waits.keep(&names);
+        let night = night_now(&config);
         for name in &names {
-            if failed.get(name).is_some_and(|at| at.elapsed() < FAILED_AGAIN) {
+            if !waits.due(name, crate::py::time_time(), night) {
                 continue;
             }
-            match back_once(&state, name).await {
-                Back::Done => {
-                    failed.remove(name);
-                }
-                Back::Busy => busy = true,
-                Back::Failed => {
-                    failed.insert(name.clone(), Instant::now());
-                }
+            let back = back_once(&state, name).await;
+            let Some(wait) = waits.after(name, back == Back::Done, crate::py::time_time(), night) else { continue };
+            let minutes = (wait / 60.0).round() as u64;
+            match back {
+                Back::Busy(why) => tracing::info!(target: "bipbridge::own_space", agent = %name, why, minutes,
+                    "waits to come back into the shared hub: tried again later (said at most once a day)"),
+                Back::Failed(error) => tracing::warn!(target: "bipbridge::own_space", agent = %name, error = %error, minutes,
+                    "the way back into the shared hub failed: its space serves it as before, tried again later (said at most once a day)"),
+                Back::Done => {}
             }
         }
-        let next = if busy {
-            BUSY_AGAIN
-        } else if failed.is_empty() {
-            Duration::from_secs(1)
-        } else {
-            failed.values().map(|at| FAILED_AGAIN.saturating_sub(at.elapsed())).min().unwrap_or(BUSY_AGAIN)
-        };
-        tokio::time::sleep(next.max(Duration::from_secs(1))).await;
+        tokio::time::sleep(TICK).await;
     }
 }
 
@@ -406,6 +481,59 @@ mod tests {
         let mut hosted = config.clone();
         hosted.agents.get_mut("fete").unwrap().host_home = Some("/home/x/.hermes".into());
         assert!(!back(&hosted, "fete"));
+    }
+
+    /// Coordinator 21/11: a busy agent is tried again 15 min, 1 h, then every 4 h, once more each night, said at most
+    /// once a day; never an endless retry every 15 minutes.
+    #[test]
+    fn a_busy_agent_is_tried_again_less_and_less_often_and_each_night() {
+        let mut waits = Waits::default();
+        let t0 = 1_000_000.0;
+        assert!(waits.due("fete", t0, None));
+        // busy: 15 min, then 1 h, then 4 h each time; said the first time only (once a day)
+        assert_eq!(waits.after("fete", false, t0, None), Some(900.0));
+        assert!(!waits.due("fete", t0 + 899.0, None) && waits.due("fete", t0 + 900.0, None));
+        assert_eq!(waits.after("fete", false, t0 + 900.0, None), None);
+        assert!(!waits.due("fete", t0 + 900.0 + 3599.0, None) && waits.due("fete", t0 + 4500.0, None));
+        let mut at = t0 + 4500.0;
+        let mut gaps = Vec::new();
+        for _ in 0..4 {
+            assert_eq!(waits.after("fete", false, at, None), None);
+            let next = waits.0["fete"].next;
+            gaps.push(next - at);
+            at = next;
+        }
+        assert_eq!(gaps, [14_400.0; 4]);
+        // a day after it was said: said again, with its wait
+        assert_eq!(waits.after("fete", false, t0 + 86_400.0, None), Some(14_400.0));
+        // the night's window: one more try whatever the wait, once per night
+        let now = t0 + 86_400.0 + 60.0;
+        assert!(!waits.due("fete", now, None));
+        assert!(waits.due("fete", now, Some(42)));
+        waits.after("fete", false, now, Some(42));
+        assert!(!waits.due("fete", now + 60.0, Some(42)));
+        assert!(waits.due("fete", now + 86_400.0 - 14_400.0 + 1.0, Some(43)));
+        // back: forgotten (a new wait starts at 15 min)
+        assert_eq!(waits.after("fete", true, now, None), None);
+        assert!(waits.due("fete", now, None));
+        assert_eq!(waits.after("fete", false, now, None), Some(900.0));
+        // an agent no longer to bring back is forgotten
+        waits.keep(&[]);
+        assert!(waits.0.is_empty());
+    }
+
+    #[test]
+    fn the_night_window_has_one_id_per_night() {
+        // 1:00–6:00 (the restarts' window by default)
+        assert_eq!(night_id(59, 10, 1, 6), None);
+        assert_eq!(night_id(60, 10, 1, 6), Some(10));
+        assert_eq!(night_id(359, 10, 1, 6), Some(10));
+        assert_eq!(night_id(360, 10, 1, 6), None);
+        // 22:00–5:00: the night belongs to the day it began
+        assert_eq!(night_id(23 * 60, 10, 22, 5), Some(10));
+        assert_eq!(night_id(4 * 60, 11, 22, 5), Some(10));
+        assert_eq!(night_id(12 * 60, 11, 22, 5), None);
+        assert_eq!(night_id(120, 10, 3, 3), None);
     }
 
     #[test]
