@@ -4095,7 +4095,7 @@ mod tests {
                                                             "preview": "https://www.sncf-connect.com/home?x=1"})));
             hub.dispatch(&sub, event("message.delta", json!({"delta": "…"})));
             if !enabled {
-                assert!(statuses(&sub).is_empty(), "off by default");
+                assert!(statuses(&sub).is_empty(), "switched off");
                 assert!(!hub.status_tick(&sub), "off: no clock (review B4)");
                 continue;
             }
@@ -4120,17 +4120,17 @@ mod tests {
         }
     }
 
-    /// Review (17/11, blocking): `[status]` off (the default), nothing new runs. Today each followed run gets a clock
+    /// Review (17/11, blocking): `[status]` off (`enabled = false`; on by default since 21/11), nothing new runs. Today each followed run gets a clock
     /// waking every 2 s for its whole life (`upstream`'s ticker), taking the run's lock to say nothing. Off: no clock
     /// (not spawned, and `status_tick` says it is over at once).
     #[tokio::test]
     async fn review_statuses_off_no_clock_ticks_for_a_run() {
-        let data = json!({"bridge_key": "k".repeat(40)});
+        let data = json!({"bridge_key": "k".repeat(40), "status": {"enabled": false}});
         let config = SharedConfig::new(crate::config::parse_config(&data, None).unwrap());
         let hub = RunHub::new(HermesClient::new(reqwest::Client::new()), None, 7200, None).with_config(config);
         let sub = Arc::new(RunSubscription::new(AgentConfig { name: "vie".into(), ..Default::default() }, "run_off"));
         lock(&hub.inner).subs.insert(sub.key(), sub.clone());
-        assert!(!hub.status_tick(&sub), "off by default: no clock every 2 s for each run");
+        assert!(!hub.status_tick(&sub), "off: no clock every 2 s for each run");
     }
 
     /// Review (17/11, blocking): R3 (review-battery-settings, 16/11) again. `listener_events_with` used to write every

@@ -25,7 +25,8 @@
 //!
 //! Sent only to an app that asks (`GET /v1/runs/{id}/events?…&status=1`): an iPhone app from before it takes any unknown
 //! event for « not words » and drops its working line during a pause in the reply (ConversationModel.watchWordsPause).
-//! Off by default (`[status] enabled = false`) until both apps read it.
+//! On by default since 21/11 (both apps read it since rc-1118, the review's R1-R9 done); `[status] enabled = false`
+//! switches it off.
 //!
 //! No Python counterpart (owner group: push-runs).
 
@@ -50,7 +51,7 @@ pub fn crosses(kind: &str, asked: bool) -> bool {
 /// `[status]` in bridge.toml (every value optional). The thresholds come from the token lab's measures
 /// (the token lab, 16/11): a model call's p90 is 5 s (max 14.5 s), a heavy page's p90 14 s.
 ///
-///     enabled = false     model_slow = 20     model_stuck = 90     page_slow = 15     tool_slow = 20
+///     enabled = true      model_slow = 20     model_stuck = 90     page_slow = 15     tool_slow = 20
 ///     agent_slow = 15     local_factor = 3
 #[derive(Debug, Clone, PartialEq)]
 pub struct Settings {
@@ -67,7 +68,7 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Settings {
-            enabled: false,
+            enabled: true,
             model_slow: 20.0,
             model_stuck: 90.0,
             page_slow: 15.0,
@@ -1280,7 +1281,8 @@ mod tests {
 
     #[test]
     fn settings_from_the_config() {
-        assert!(!Settings::default().enabled, "off until both apps read it");
+        assert!(Settings::default().enabled, "on since 21/11: both apps read it");
+        assert!(!Settings::from_table(&json!({"enabled": false})).enabled, "a place may switch it off");
         let s = Settings::from_table(&json!({"enabled": true, "model_slow": 30, "page_slow": 0.1, "local_factor": 50}));
         assert!(s.enabled);
         assert_eq!((s.model_slow, s.page_slow, s.local_factor, s.tool_slow), (30.0, 1.0, 20.0, 20.0));

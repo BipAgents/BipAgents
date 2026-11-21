@@ -98,12 +98,19 @@ def test_the_live_list_reaches_the_runs_stream_and_the_open_screens(bridges, fak
     assert "todo.updated" not in names, "Hermes' own event is not passed on"
     live = seen[-1][1]
     assert live["run_id"] == "r1"
-    assert live["steps"]["items"][1] == {"text": "Trier par urgence", "status": "in_progress"}
+
+    def bare(steps):
+        """The list without its times (turn_status.rs `steps_with_times`, on by default since 21/11: the run's
+        stream only)."""
+        return {**{k: v for k, v in steps.items() if k != "time"},
+                "items": [{k: v for k, v in i.items() if k != "secs"} for i in steps["items"]]}
+
+    assert bare(live["steps"])["items"][1] == {"text": "Trier par urgence", "status": "in_progress"}
     assert (live["steps"]["done"], live["steps"]["total"]) == (1, 3)
     # the open screen's hint: the list, the run, the version it already holds (apps from before skip it)
     assert wait_until(lambda: any(h.get("reason") == "steps" for h in hints), timeout=10)
     hint = next(h for h in hints if h.get("reason") == "steps")
-    assert hint["run_id"] == "r1" and hint["steps"] == live["steps"] and hint["version"] <= version + 1
+    assert hint["run_id"] == "r1" and bare(hint["steps"]) == bare(live["steps"]) and hint["version"] <= version + 1
     gate.set()
     stop.set()
 
