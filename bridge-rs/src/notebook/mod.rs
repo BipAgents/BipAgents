@@ -546,16 +546,26 @@ pub struct Who {
     pub name: String,
     /// The agent the fact came from (the nightly pass files what an agent heard).
     pub agent: Option<String>,
+    /// The phone the change was asked from (« ios », « android »: the turn's message, threads/send.rs, or the app's
+    /// request): where a dated task's reminder goes (`link_reminder`). None: no phone asked (a routine, the nightly pass).
+    pub phone: Option<String>,
 }
 
 impl Who {
     pub fn agent(config: &Config, name: &str) -> Who {
         let shown = config.agent(Some(name)).map(|a| a.display_name.clone()).unwrap_or_else(|| name.to_string());
-        Who { by: name.to_string(), name: shown, agent: Some(name.to_string()) }
+        Who { by: name.to_string(), name: shown, agent: Some(name.to_string()), phone: None }
     }
 
     pub fn you(config: &Config) -> Who {
-        Who { by: "you".into(), name: words(&language(config)).you.into(), agent: None }
+        Who { by: "you".into(), name: words(&language(config)).you.into(), agent: None, phone: None }
+    }
+
+    /// The same, asked from `phone` as the apps name it (reminders.rs `phone_named`: « ios », « iPhone », « android »);
+    /// a name no phone has: none.
+    pub fn from_phone(mut self, phone: Option<&str>) -> Who {
+        self.phone = phone.and_then(crate::reminders::phone_named).map(str::to_string);
+        self
     }
 
     pub fn nightly(config: &Config, agent: &str) -> Who {
@@ -566,7 +576,7 @@ impl Who {
 
     /// The re-filing of pages into their outline (« rangement »): no agent, no attribution of its own.
     pub fn tidy(config: &Config) -> Who {
-        Who { by: "nightly".into(), name: words(&language(config)).tidy.into(), agent: None }
+        Who { by: "nightly".into(), name: words(&language(config)).tidy.into(), agent: None, phone: None }
     }
 }
 
@@ -3083,7 +3093,7 @@ pub fn archive_stale(config: &Config, today_date: chrono::NaiveDate) -> anyhow::
         }
         doc.body = lines.join("\n") + "\n";
         doc.touch();
-        let who = Who { by: "nightly".into(), name: w.archived.into(), agent: None };
+        let who = Who { by: "nightly".into(), name: w.archived.into(), agent: None, phone: None };
         commit(
             config,
             part,
@@ -3594,11 +3604,28 @@ fn all_task_ids(config: &Config) -> HashSet<String> {
 
 fn ask_removal(config: &Config, reminder: &str, task: &str) -> anyhow::Result<bool> {
     let args = json!({"id": reminder, "mark": reminder_mark(task)});
-    Ok(crate::reminders::enqueue_once(config, "notebook", "remove", args)?.is_some())
+    Ok(crate::reminders::enqueue_once(config, CARNET, "remove", args)?.is_some())
+}
+
+/// The Carnet's own requests' agent (reminders.rs).
+const CARNET: &str = crate::reminders::CARNET;
+
+/// A link to an event in the Android phone's calendar: the request that made it (the Android app knows its events by
+/// it, CalendarReminders.kt); None for an iPhone's reminder.
+fn in_android_calendar(link: &Value) -> Option<String> {
+    (link.get("phone").and_then(Value::as_str) == Some(crate::reminders::ANDROID))
+        .then(|| tk::str_or_empty(link.get("op")))
+        .filter(|op| !op.is_empty())
+}
+
+/// Whether task `id`'s reminder is in the Android phone's calendar (the agent then says « dans ton agenda »).
+pub fn reminder_in_calendar(config: &Config, id: &str) -> bool {
+    links(&read_state(config)).get(id).and_then(in_android_calendar).is_some()
 }
 
 /// A task gone from the Carnet (deleted, not moved): its add cancelled while it still waits for the phone, else the
-/// phone asked to remove its reminders (only those carrying its mark); its link dropped. Returns the requests made.
+/// phone asked to remove its reminders (only those carrying its mark; in the Android phone's calendar, the event its
+/// request made); its link dropped. Returns the requests made.
 fn remove_reminder(config: &Config, task: &str) -> anyhow::Result<usize> {
     let link = links(&read_state(config)).get(task).cloned();
     let cancelled = match &link {
@@ -3608,7 +3635,12 @@ fn remove_reminder(config: &Config, task: &str) -> anyhow::Result<usize> {
     let mut asked = 0;
     if !cancelled {
         let ids = open_reminders_of(&shared_items(config), task);
-        if ids.is_empty() && link.is_some() {
+        if let Some(made) = link.as_ref().and_then(in_android_calendar) {
+            // in the Android phone's calendar: the « cochée » request, its event taken off (as a task ticked)
+            let args = json!({"id": made});
+            let android = Some(crate::reminders::ANDROID);
+            asked += usize::from(crate::reminders::enqueue_once_on(config, CARNET, "complete", args, android)?.is_some());
+        } else if ids.is_empty() && link.is_some() {
             // added but not shared back yet: the phone finds it by its mark
             asked += usize::from(ask_removal(config, "", task)?);
         }
@@ -3666,8 +3698,10 @@ fn clean_reminders_locked(config: &Config, items: &[Value]) -> anyhow::Result<us
     Ok(asked)
 }
 
-/// A dated task's phone reminder asked for, once: when the phone shares its reminders (with this agent, or any for
-/// the person's own task).
+/// A dated task's phone reminder asked for, once: when a phone takes them here (shared with this agent, or any for
+/// the person's own task). The phone the person asked from first (`who.phone`), else an iPhone sharing its Reminders,
+/// else the Android phone putting them in its calendar (« Dans l'agenda », 7/11), as an agent's reminders_add at a
+/// time (reminders.rs `carnet_phone`); never both: the link says which (`phone` « android »).
 fn link_reminder(config: &Config, task: &Task, due: &str, who: &Who) -> anyhow::Result<bool> {
     let data = crate::reminders::read(config);
     let allowed = strings(data.get("agents"));
@@ -3675,9 +3709,10 @@ fn link_reminder(config: &Config, task: &Task, due: &str, who: &Who) -> anyhow::
         Some(agent) => allowed.contains(agent),
         None => !allowed.is_empty(),
     };
-    // Only an iPhone does a dated reminder (an Android phone, those by place only): without one sharing its
-    // Reminders, the task stays in the Carnet and nobody is told it is on their phone.
-    let ok = ok && crate::reminders::iphone_syncs(&data, py::time_time());
+    // Without a phone that does it now, the task stays in the Carnet and nobody is told it is on their phone.
+    let phone = crate::reminders::carnet_phone(&data, py::time_time(), who.phone.as_deref());
+    let android = phone == crate::reminders::Phone::Android;
+    let ok = ok && (phone == crate::reminders::Phone::Iphone || android);
     if !ok || links(&read_state(config)).contains_key(&task.id) {
         return Ok(false);
     }
@@ -3688,23 +3723,34 @@ fn link_reminder(config: &Config, task: &Task, due: &str, who: &Who) -> anyhow::
         task.due.clone()
     };
     let args = json!({"title": tk::head(&title, 300), "due": tk::head(&due, 40), "list": "", "notes": reminder_mark(&task.id)});
-    let agent = who.agent.clone().unwrap_or_else(|| "notebook".into());
-    let op = crate::reminders::enqueue(config, &agent, "add", args)?;
+    let agent = who.agent.clone().unwrap_or_else(|| CARNET.into());
+    let op = crate::reminders::enqueue_on(config, &agent, "add", args, android.then_some(crate::reminders::ANDROID))?;
     let task_id = task.id.clone();
     update_state(config, |s| {
         let mut map = links(s);
-        map.insert(task_id, json!({"op": op, "part": task.part.as_str(), "complete": false}));
+        let mut link = json!({"op": op, "part": task.part.as_str(), "complete": false});
+        if android {
+            link["phone"] = json!(crate::reminders::ANDROID);
+        }
+        map.insert(task_id, link);
         s.insert("reminders".into(), Value::Object(map));
     })?;
     Ok(true)
 }
 
-/// A task done in the Carnet: its reminder ticked on the phone (asked), or its add still waiting cancelled.
+/// A task done in the Carnet: its reminder ticked on the phone (asked), or its add still waiting cancelled. In the
+/// Android phone's calendar: its event taken off (the « cochée » request, by the request that made it: deleted while
+/// it is to come, its alert taken off once begun).
 fn complete_reminder(config: &Config, task: &str) -> anyhow::Result<()> {
     let state = read_state(config);
     let Some(link) = links(&state).get(task).cloned() else { return Ok(()) };
     let op = tk::str_or_empty(link.get("op"));
-    if crate::reminders::cancel_pending(config, &op)? {
+    let cancelled = crate::reminders::cancel_pending(config, &op)?;
+    if let (false, Some(made)) = (cancelled, in_android_calendar(&link)) {
+        let android = Some(crate::reminders::ANDROID);
+        crate::reminders::enqueue_on(config, CARNET, "complete", json!({"id": made}), android)?;
+    }
+    if cancelled || in_android_calendar(&link).is_some() {
         update_state(config, |s| {
             let mut map = links(s);
             map.remove(task);
@@ -3721,7 +3767,7 @@ fn complete_reminder(config: &Config, task: &str) -> anyhow::Result<()> {
     };
     match item {
         Some(item) if !item.get("completed").map(py::truthy).unwrap_or(false) => {
-            crate::reminders::enqueue(config, "notebook", "complete", json!({"id": tk::str_or_empty(item.get("id"))}))?;
+            crate::reminders::enqueue(config, CARNET, "complete", json!({"id": tk::str_or_empty(item.get("id"))}))?;
             update_state(config, |s| {
                 let mut map = links(s);
                 map.remove(task);
@@ -3762,7 +3808,7 @@ pub fn reminders_synced(config: &Config, items: &[Value]) {
         let result = if completed {
             set_task_done_locked(config, &[Part::Main, Part::Health], &task, true, &you, true).map(|_| ())
         } else if link.get("complete").map(py::truthy).unwrap_or(false) {
-            crate::reminders::enqueue(config, "notebook", "complete", json!({"id": tk::str_or_empty(item.get("id"))}))
+            crate::reminders::enqueue(config, CARNET, "complete", json!({"id": tk::str_or_empty(item.get("id"))}))
                 .map(|_| ())
                 .map_err(anyhow::Error::from)
         } else {
@@ -4206,7 +4252,7 @@ mod tests {
     use super::*;
 
     fn lea() -> Who {
-        Who { by: "lea".into(), name: "Léa".into(), agent: Some("lea".into()) }
+        Who { by: "lea".into(), name: "Léa".into(), agent: Some("lea".into()), phone: None }
     }
 
     #[test]

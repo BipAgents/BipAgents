@@ -489,6 +489,9 @@ pub const NO_PHONE: &str = "Not added: none of the person's phones takes reminde
     steps for a phone. If they want, you can offer to write to them at that time with a one-time routine \
     (routine_schedule), or a reminder by place.";
 
+/// The agent of the Carnet's own requests (the person's tasks, the cleanups: notebook/mod.rs).
+pub const CARNET: &str = "notebook";
+
 /// The request's `phone` for the Android app (`GET /v1/reminders/queue?phone=android`): one only it does (an iPhone
 /// never sees it), at a time or on a day in its calendar, or ticked off there.
 pub const ANDROID: &str = "android";
@@ -529,6 +532,19 @@ pub fn phone_for(data: &Dict, now: f64, asking: Option<&str>) -> Phone {
         (_, true, _) => Phone::Iphone,
         (_, false, Some(android)) => android,
         (_, false, None) => Phone::None,
+    }
+}
+
+/// Who does a Carnet task's reminder (notebook/mod.rs `link_reminder`): as `phone_for`, but only a phone that can
+/// do it now. An Android phone whose calendar BipAgents may not write to (`AndroidWaiting`: the permission refused,
+/// or no calendar synced with an account) leaves it to the iPhone when one shares its Reminders, else to none: the
+/// task stays in the Carnet, and no request waits there for a permission (an iPhone not sharing its Reminders
+/// gets none either).
+pub fn carnet_phone(data: &Dict, now: f64, asking: Option<&str>) -> Phone {
+    match phone_for(data, now, asking) {
+        Phone::AndroidWaiting if iphone_syncs(data, now) => Phone::Iphone,
+        Phone::AndroidWaiting | Phone::Any => Phone::None,
+        phone => phone,
     }
 }
 
@@ -642,13 +658,22 @@ fn doer(op: &Value) -> &'static str {
 /// reminder whose notes carry it), its args as the phone reads them. Returns the request's id. The caller may hold the notebook's lock
 /// (taken before this one, never after).
 pub fn enqueue(config: &Config, agent: &str, op: &str, args: Value) -> std::io::Result<String> {
+    enqueue_on(config, agent, op, args, None)
+}
+
+/// `enqueue` for `phone`: `ANDROID`, a request only the Android app does (in its calendar: « add », or « complete »
+/// by the request that made the event), never an iPhone; None, an iPhone's.
+pub fn enqueue_on(config: &Config, agent: &str, op: &str, args: Value, phone: Option<&str>) -> std::io::Result<String> {
     let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let mut data = read(config);
     let id = py::token_hex(6);
     let mut queue = list_of(&data, "queue");
-    queue.push(
-        json!({"id": id, "op": op, "agent": agent, "created": py::time_time(), "state": "pending", "args": args}),
-    );
+    let mut request =
+        json!({"id": id, "op": op, "agent": agent, "created": py::time_time(), "state": "pending", "args": args});
+    if let Some(phone) = phone {
+        request["phone"] = json!(phone);
+    }
+    queue.push(request);
     data.insert("queue".into(), Value::Array(queue));
     write(config, &data)?;
     Ok(id)
@@ -657,18 +682,30 @@ pub fn enqueue(config: &Config, agent: &str, op: &str, args: Value) -> std::io::
 /// `enqueue`, unless the same request (same op, same args) is already waiting or was done: the cleanups that ask for
 /// it may run again before the phone shares its reminders anew. Returns the new request's id, None when not asked.
 pub fn enqueue_once(config: &Config, agent: &str, op: &str, args: Value) -> std::io::Result<Option<String>> {
+    enqueue_once_on(config, agent, op, args, None)
+}
+
+/// `enqueue_once` for `phone` (`enqueue_on`): the same request for the same phone.
+pub fn enqueue_once_on(
+    config: &Config,
+    agent: &str,
+    op: &str,
+    args: Value,
+    phone: Option<&str>,
+) -> std::io::Result<Option<String>> {
     {
         let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let asked = list_of(&read(config), "queue").iter().any(|o| {
             field(o, "op").and_then(Value::as_str) == Some(op)
                 && field(o, "args") == Some(&args)
+                && field(o, "phone").and_then(Value::as_str) == phone
                 && matches!(field(o, "state").and_then(Value::as_str), Some("pending" | "done"))
         });
         if asked {
             return Ok(None);
         }
     }
-    enqueue(config, agent, op, args).map(Some)
+    enqueue_on(config, agent, op, args, phone).map(Some)
 }
 
 /// What an app older than a request's op answers (`RemindersSync.apply`): the request stays waiting, done once the
@@ -1046,6 +1083,11 @@ async fn queue(State(state): State<AppState>, query: axum::extract::Query<QueueQ
         }
         if for_android {
             out.insert("phone".into(), json!(ANDROID));
+            // the Carnet's own (the person's task, no agent's): no name, the app signs it « BipAgents » (its event's
+            // « Rappel de … », never « de notebook »)
+            if field(&op, "agent").and_then(Value::as_str) == Some(CARNET) {
+                out.insert("agent".into(), json!(""));
+            }
         }
         waiting.push(Value::Object(out));
     }

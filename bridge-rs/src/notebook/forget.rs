@@ -1195,7 +1195,7 @@ mod tests {
         super::super::note(config, Part::Main, "person", "Léa Martin", "", &["Pointure : 36".into(), "Aime le chocolat".into()], &["Léa".into()], "", "", &who).unwrap();
         super::super::note(config, Part::Main, "person", "Marc Dupont", "", &["Pointure : 36".into()], &[], "", "", &who).unwrap();
         let found = super::super::find(config, &[Part::Main], "Léa Martin").unwrap();
-        let turn = super::super::reads::Turn { run: Some("r1".into()), session: Some("s1".into()), cap: 6, busy: false };
+        let turn = super::super::reads::Turn { run: Some("r1".into()), session: Some("s1".into()), cap: 6, busy: false, phone: None };
         super::super::reads::log(config, "quotidien", &turn, Part::Main, &found.page.id(), None, "read");
         memory(config, "cuisine", "user", &["Léa fait du 36", "Alex habite Lyon"]);
         memory(config, "budget", "notes", &["Léa chausse du 36 depuis l'été", "Cadeau : elle fait du 36", "Loyer : 800 €"]);
@@ -1319,7 +1319,7 @@ mod tests {
         let nothing = Request { texts: vec!["Aime le ski".into()], page: Some("Marc Dupont".into()), private: false };
         assert_eq!(view(&config, &nothing, "fr", "").unwrap_err(), Refused::Nothing);
         // the agent: a preview in a card, never a token, nothing erased
-        let turn = super::super::reads::Turn { run: Some("r9".into()), session: Some("s9".into()), cap: 6, busy: false };
+        let turn = super::super::reads::Turn { run: Some("r9".into()), session: Some("s9".into()), cap: 6, busy: false, phone: None };
         let answer = super::super::reads::with_turn(&turn, || {
             ask_from_agent(&config, "quotidien", "Léa Martin", &["Pointure : 36".into()], false).unwrap()
         });
@@ -1354,7 +1354,7 @@ mod tests {
         written(&config);
         let lea = super::super::find(&config, &[Part::Main], "Léa Martin").unwrap().path;
         let marc = super::super::find(&config, &[Part::Main], "Marc Dupont").unwrap().path;
-        let turn = super::super::reads::Turn { run: Some("r9".into()), session: Some("s9".into()), cap: 6, busy: false };
+        let turn = super::super::reads::Turn { run: Some("r9".into()), session: Some("s9".into()), cap: 6, busy: false, phone: None };
         let answers = super::super::reads::with_turn(&turn, || {
             [ask_from_agent(&config, "quotidien", "Léa Martin", &["Pointure : 36".into()], false).unwrap(),
              ask_from_agent(&config, "quotidien", "Léa Martin", &["Léa chausse du 36".into()], false).unwrap()]

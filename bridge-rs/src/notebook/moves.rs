@@ -625,7 +625,7 @@ mod tests {
     use super::*;
 
     fn kerfy() -> Who {
-        Who { by: "kerfy".into(), name: "Kerfy Studio".into(), agent: Some("kerfy".into()) }
+        Who { by: "kerfy".into(), name: "Kerfy Studio".into(), agent: Some("kerfy".into()), phone: None }
     }
 
     fn setup() -> (tempfile::TempDir, Config) {

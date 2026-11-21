@@ -1462,12 +1462,15 @@ where
 }
 
 /// The Carnet's view of a tool call's turn (notebook/reads.rs): its run, its Hermes session, and its page cap — 20
-/// for « Remplir mon Carnet »'s background task (notebook/fill.rs), else 6 — and whether it is busy (a background task,
-/// a routine, a Live call: the Carnet asks no question then, notebook/ask.rs).
+/// for « Remplir mon Carnet »'s background task (notebook/fill.rs), else 6 — whether it is busy (a background task,
+/// a routine, a Live call: the Carnet asks no question then, notebook/ask.rs), and the phone asked from.
 fn carnet_turn(state: &AppState, agent: &str, turn: Option<&crate::loop_brake::Turn>) -> crate::notebook::reads::Turn {
     use crate::notebook::reads;
     let Some(turn) = turn else { return reads::Turn::default() };
-    let session = state.hub.subscription(agent, &turn.run_id).and_then(|s| s.session_id());
+    let subscription = state.hub.subscription(agent, &turn.run_id);
+    let session = subscription.as_ref().and_then(|s| s.session_id());
+    // the phone the person asked from (threads/send.rs): where a dated task's reminder goes (notebook/mod.rs)
+    let phone = subscription.and_then(|s| s.phone());
     let fill = turn.background
         && crate::jobs::tasks(&state.config()).iter().any(|job| {
             tk::str_or_empty(job.get("run_id")) == turn.run_id
@@ -1479,7 +1482,7 @@ fn carnet_turn(state: &AppState, agent: &str, turn: Option<&crate::loop_brake::T
     });
     let routine = session.as_deref().is_some_and(|s| s.starts_with("cron_"));
     let busy = turn.background || live || routine;
-    reads::Turn { run: Some(turn.run_id.clone()), session, cap, busy }
+    reads::Turn { run: Some(turn.run_id.clone()), session, cap, busy, phone }
 }
 
 /// Before `calendar_delete` (audit 1.3, Alex 17/11: critical, as `mail_trash`): the person's card « Oui / Non » for

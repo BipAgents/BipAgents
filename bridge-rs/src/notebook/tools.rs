@@ -233,7 +233,7 @@ fn call_in(config: &Config, agent: &str, name: &str, arguments: &Dict, turn: &Tu
         SEARCH => search(config, agent, arguments, turn, health),
         READ => read(config, agent, arguments, turn, health),
         WRITE => write(config, agent, arguments, turn, health),
-        TASK => task(config, agent, arguments, health),
+        TASK => task(config, agent, arguments, turn, health),
         RECORD => record(config, agent, arguments, turn),
         _ => Ok(tool_text(&format!("unknown tool: {name}"), true)),
     };
@@ -672,10 +672,11 @@ fn write(config: &Config, agent: &str, arguments: &Dict, turn: &Turn, health: bo
 
 // -- tasks -----------------------------------------------------------------------------------------------------------
 
-fn task(config: &Config, agent: &str, arguments: &Dict, health: bool) -> anyhow::Result<Dict> {
+fn task(config: &Config, agent: &str, arguments: &Dict, turn: &Turn, health: bool) -> anyhow::Result<Dict> {
     let private = health && flag(arguments, "private");
     let parts: Vec<Part> = if private { vec![Part::Health] } else { readable(health) };
-    let who = Who::agent(config, agent);
+    // the phone the person asked from: a dated task's reminder goes there (notebook/mod.rs `link_reminder`)
+    let who = Who::agent(config, agent).from_phone(turn.phone.as_deref());
     match s(arguments, "action").as_str() {
         "list" => {
             let mut lines = Vec::new();
@@ -739,7 +740,14 @@ fn task(config: &Config, agent: &str, arguments: &Dict, health: bool) -> anyhow:
             }
             let task = &added.task;
             let due = if task.due.is_empty() { String::new() } else { format!(", due {}", task.due) };
-            let phone = if added.reminder { " Phone reminder too." } else { "" };
+            // (« Phone reminder too » wakes the phone: agent_tools.rs)
+            let phone = if !added.reminder {
+                ""
+            } else if super::reminder_in_calendar(config, &task.id) {
+                " Phone reminder too: in their Android phone's calendar, with an alert (« dans ton agenda »)."
+            } else {
+                " Phone reminder too."
+            };
             if added.existing {
                 let date = if added.dated { " It now has this date." } else { "" };
                 return Ok(tool_text(&format!("Already there [{}]: {}{due}.{date}{phone}", task.id, task.title), false));
@@ -967,7 +975,7 @@ mod tests {
     }
 
     fn turn(run_id: &str) -> Turn {
-        Turn { run: Some(run_id.into()), session: Some(format!("s-{run_id}")), cap: reads::PAGES_PER_TURN, busy: false }
+        Turn { run: Some(run_id.into()), session: Some(format!("s-{run_id}")), cap: reads::PAGES_PER_TURN, busy: false, phone: None }
     }
 
     fn pages(config: &Config) -> Vec<String> {

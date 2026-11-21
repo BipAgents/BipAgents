@@ -265,7 +265,7 @@ mod tests {
             s.insert("language".into(), json!("fr"));
         })
         .unwrap();
-        let lea = Who { by: "lea".into(), name: "Léa".into(), agent: Some("lea".into()) };
+        let lea = Who { by: "lea".into(), name: "Léa".into(), agent: Some("lea".into()), phone: None };
         let n = |kind: &str, title: &str, section: &str, fact: &str| {
             super::super::note(&config, Part::Main, kind, title, section, &[fact.to_string()], &[], "", "", &lea).unwrap()
         };
