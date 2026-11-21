@@ -1027,6 +1027,66 @@ def vault_key_service(home):
     return hashlib.sha256(token.encode()).hexdigest() if isinstance(token, str) and token else None
 
 
+SHUTDOWN_SCHEDULED = "/run/systemd/shutdown/scheduled"   # systemd-logind's: a `shutdown -r HH:MM` waiting
+
+
+def sealed_key_services():
+    """The key services (their https address, keyservice.json's `url`) of this server's places whose vault is sealed
+    (keys.sealed.json in their bridge's data_dir): what a restart of them needs to reopen their vault."""
+    import tomllib
+    urls = set()
+    for number in range(1, MAX_SEATS + 1):
+        try:
+            home = pwd.getpwnam(account(number)).pw_dir
+        except KeyError:
+            continue
+        try:
+            with open(os.path.join(home, ".config", "bipagents", "bridge.toml"), "rb") as fh:
+                conf = tomllib.load(fh)
+            data = os.path.expanduser(conf.get("data_dir") or os.path.join(home, BRIDGE_DATA))
+            if not os.path.exists(os.path.join(data, SEALED_KEYS)):
+                continue
+            fd = os.open(os.path.join(home, SPACE_KEY_SERVICE), os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+            with os.fdopen(fd, "rb") as fh:
+                url = json.loads(fh.read(65536).decode("utf-8")).get("url")
+        except (OSError, ValueError, TypeError, AttributeError):
+            continue
+        if isinstance(url, str) and url.startswith(("https://", "http://")):
+            urls.add(url.rstrip("/"))
+    return urls
+
+
+def key_service_answers(url, timeout=10):
+    """The key service's /health answers 200."""
+    try:
+        with urllib.request.urlopen(url.rstrip("/") + "/health", timeout=timeout) as answer:
+            return answer.status == 200
+    except (OSError, ValueError):
+        return False
+
+
+def hold_reboot(scheduled=SHUTDOWN_SCHEDULED, answers=None, cancel=None):
+    """Alex 21/11: a sealed place is never restarted while its key service doesn't answer (its vault would stay closed
+    until it answers). A planned reboot waiting (unattended-upgrades' `shutdown -r 00:xx` at night) is called off when
+    a key service of this server's sealed places doesn't answer; the reboot stays required, so the next night (or a
+    reboot by hand) tries again. A power-off is never touched. True when it was called off."""
+    try:
+        with open(scheduled) as fh:
+            mode = dict(line.strip().partition("=")[::2] for line in fh if "=" in line).get("MODE")
+    except OSError:
+        return False
+    if mode != "reboot":
+        return False
+    silent = sorted(url for url in sealed_key_services() if not (answers or key_service_answers)(url))
+    if not silent:
+        return False
+    (cancel or (lambda: subprocess.run(["shutdown", "-c", "BipAgents: the key service doesn't answer, the reboot "
+                                         "waits for the next night"], check=False, timeout=30)))()
+    log("planned reboot called off: the key service %s doesn't answer (a sealed place would stay closed)"
+        % ", ".join(silent))
+    return True
+
+
 def vault_failed(home):
     """Why the place's last sealing failed, short, else None: its own note (the installer's), else this agent's."""
     try:
@@ -2618,6 +2678,10 @@ def main(argv=()):
     if "--rebooting" in argv:
         return rebooting(conf)
     metadata_block()
+    try:
+        hold_reboot()   # first: even while the guichet doesn't answer
+    except (OSError, subprocess.SubprocessError) as exc:
+        log("planned reboot not looked at: %s" % exc)
     try:
         backup_lock()
     except OSError as exc:
