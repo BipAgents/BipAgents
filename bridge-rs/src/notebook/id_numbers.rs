@@ -90,6 +90,14 @@ static NIR: LazyLock<Regex> = LazyLock::new(|| {
         .expect("valid regex")
 });
 
+/// A French social security number in one block that its key can't be checked on (`nir_key`; review 4, 21/11): its 13
+/// digits without the key (« adhérent 1850578006084 »), or a Corsican one, department « 2A » or « 2B », with or without
+/// its key (« 185052A12345633 »). By its shape: sex, year, month (20-99: a special case), department, commune, order.
+/// Before 14/11 every run of 13 digits or more was refused; a 13-digit customer number of that shape still is.
+static NIR_BLOCK: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\b[1-478]\d{2}(?:0[1-9]|1[0-2]|[2-9]\d)(?:\d{8}|2[ABab]\d{6}(?:[ .]?\d{2})?)\b").expect("valid regex")
+});
+
 /// A French bank account (RIB) in its groups: bank 5, branch 5, account 11, key 2, apart or not (« 30006-00001-
 /// 12345678901-89 »).
 static RIB: LazyLock<Regex> = LazyLock::new(|| {
@@ -151,7 +159,7 @@ pub fn id_number(text: &str) -> bool {
     let text = ADDRESSES.replace_all(text, " ");
     // the person's own numbers, recognised by their shape or their key, before any exemption (review 3: a mutuelle's
     // member number and an ameli login are the NIR, next to « adhérent » or « client »)
-    if NIR.is_match(&text) || nir_key(&text) || RIB.is_match(&text) || cards(&text) {
+    if NIR.is_match(&text) || NIR_BLOCK.is_match(&text) || nir_key(&text) || RIB.is_match(&text) || cards(&text) {
         return true;
     }
     let text = set_aside(&text);
