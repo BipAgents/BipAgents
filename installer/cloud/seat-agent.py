@@ -52,6 +52,7 @@ import sys
 import tempfile
 import threading
 import time
+import http.client
 import urllib.error
 import urllib.request
 
@@ -634,7 +635,8 @@ def vitals(meminfo="/proc/meminfo", root="/", uptime_path="/proc/uptime", harden
             "swap_mb": info.get("SwapTotal"), "swap_used_mb": info.get("SwapTotal", 0) - info.get("SwapFree", 0),
             "disk_gb": round(disk.total / 1e9, 1), "disk_free_gb": round(disk.free / 1e9, 1),
             "load": [round(load[0], 2), round(load[1], 2)], "uptime": uptime(uptime_path),
-            "space_hardened": os.path.exists(hardened), "vault_agent": VAULT_AGENT}
+            "space_hardened": os.path.exists(hardened), "vault_agent": VAULT_AGENT,
+            "reboot_held": reboot_held_nights()}
 
 
 def health():
@@ -1024,7 +1026,7 @@ def vault_state(home):
             host = "127.0.0.1"
         with urllib.request.urlopen("http://%s:%d/health" % (host, port), timeout=3) as answer:
             said = json.loads(answer.read(65536).decode("utf-8"))
-    except (OSError, ValueError, TypeError):
+    except (OSError, ValueError, TypeError, http.client.HTTPException):
         # its bridge mute (its door's check says so): sealed all the same, never taken for one whose sealing failed
         return {"vault": "sealed"}
     vault = said.get("vault") if isinstance(said, dict) else None
@@ -1053,11 +1055,16 @@ def vault_key_service(home):
 
 
 SHUTDOWN_SCHEDULED = "/run/systemd/shutdown/scheduled"   # systemd-logind's: a `shutdown -r HH:MM` waiting
+# The key services a reboot waits for: the offer's only (review 2 of 21/11: keyservice.json is written by the place's
+# own account, its url must never keep the server from rebooting).
+KEY_SERVICES = ("https://keys.bipagents.com",)
+REBOOT_HELD = "/var/lib/bipagents/reboot-held.json"   # root's: the nights in a row a reboot waited
+REBOOT_HELD_MAX = 3                                    # then it goes (and the beat says it waited)
 
 
 def sealed_key_services():
-    """The key services (their https address, keyservice.json's `url`) of this server's places whose vault is sealed
-    (keys.sealed.json in their bridge's data_dir): what a restart of them needs to reopen their vault."""
+    """The key services (`KEY_SERVICES` only) of this server's places whose vault is sealed (keys.sealed.json in their
+    bridge's data_dir): what a restart of them needs to reopen their vault."""
     import tomllib
     urls = set()
     for number in range(1, MAX_SEATS + 1):
@@ -1076,25 +1083,61 @@ def sealed_key_services():
                 url = json.loads(fh.read(65536).decode("utf-8")).get("url")
         except (OSError, ValueError, TypeError, AttributeError):
             continue
-        if isinstance(url, str) and url.startswith(("https://", "http://")):
+        if isinstance(url, str) and url.rstrip("/") in KEY_SERVICES:
             urls.add(url.rstrip("/"))
     return urls
 
 
 def key_service_answers(url, timeout=10):
-    """The key service's /health answers 200."""
+    """The key service's /health answers 200 (anything else, a non-HTTP answer included: no)."""
+    import http.client
     try:
         with urllib.request.urlopen(url.rstrip("/") + "/health", timeout=timeout) as answer:
             return answer.status == 200
-    except (OSError, ValueError):
+    except (OSError, ValueError, http.client.HTTPException):
         return False
 
 
-def hold_reboot(scheduled=SHUTDOWN_SCHEDULED, answers=None, cancel=None):
+def _night_label(now=None):
+    """A night's name: the day it started (12 hours back), local time."""
+    return time.strftime("%Y-%m-%d", time.localtime((time.time() if now is None else now) - 12 * 3600))
+
+
+def _held_state():
+    data = read_json(REBOOT_HELD)
+    return data if isinstance(data, dict) else {}
+
+
+def _held_write(data):
+    os.makedirs(os.path.dirname(REBOOT_HELD), exist_ok=True)
+    tmp = REBOOT_HELD + ".tmp"
+    with open(tmp, "w") as fh:
+        json.dump(data, fh)
+    os.replace(tmp, REBOOT_HELD)
+
+
+def _day_before(day):
+    return time.strftime("%Y-%m-%d", time.localtime(time.mktime(time.strptime(day, "%Y-%m-%d")) - 12 * 3600))
+
+
+def reboot_held_nights(today=None):
+    """The nights in a row a reboot waited for the key service (said in the beat: `reboot_held`), 0 once it answered
+    or a night passed without waiting."""
+    data = _held_state()
+    last, nights = data.get("last"), data.get("nights", 0)
+    today = today or _night_label()
+    if not isinstance(nights, int) or not isinstance(last, str):
+        return 0
+    return nights if last in (today, _day_before(today)) or data.get("went") == today else 0
+
+
+def hold_reboot(scheduled=SHUTDOWN_SCHEDULED, answers=None, cancel=None, night=None):
     """Alex 21/11: a sealed place is never restarted while its key service doesn't answer (its vault would stay closed
     until it answers). A planned reboot waiting (unattended-upgrades' `shutdown -r 00:xx` at night) is called off when
-    a key service of this server's sealed places doesn't answer; the reboot stays required, so the next night (or a
-    reboot by hand) tries again. A power-off is never touched. True when it was called off."""
+    the key service of this server's sealed places (`KEY_SERVICES`) doesn't answer; the reboot stays required, so the
+    next night tries again. `REBOOT_HELD_MAX` nights in a row at most (review 2 of 21/11), then the reboot goes and
+    the beat says how many nights it waited (the guichet tells Kerfy Studio). A power-off is never touched. True when
+    it was called off."""
     try:
         with open(scheduled) as fh:
             mode = dict(line.strip().partition("=")[::2] for line in fh if "=" in line).get("MODE")
@@ -1102,13 +1145,30 @@ def hold_reboot(scheduled=SHUTDOWN_SCHEDULED, answers=None, cancel=None):
         return False
     if mode != "reboot":
         return False
-    silent = sorted(url for url in sealed_key_services() if not (answers or key_service_answers)(url))
-    if not silent:
+    services = sealed_key_services()
+    if not services:
         return False
+    tonight = night or _night_label()
+    silent = sorted(url for url in services if not (answers or key_service_answers)(url))
+    data = _held_state()
+    if not silent:
+        if data:
+            _held_write({})
+        return False
+    nights = reboot_held_nights(tonight)
+    if data.get("last") == tonight:
+        nights = max(nights, 1)
+    elif nights >= REBOOT_HELD_MAX:
+        _held_write({"last": data.get("last"), "nights": nights, "went": tonight})
+        log("planned reboot let through after %d nights waiting for the key service %s" % (nights, ", ".join(silent)))
+        return False
+    else:
+        nights += 1
+    _held_write({"last": tonight, "nights": nights})
     (cancel or (lambda: subprocess.run(["shutdown", "-c", "BipAgents: the key service doesn't answer, the reboot "
                                          "waits for the next night"], check=False, timeout=30)))()
-    log("planned reboot called off: the key service %s doesn't answer (a sealed place would stay closed)"
-        % ", ".join(silent))
+    log("planned reboot called off (night %d of %d): the key service %s doesn't answer (a sealed place would stay "
+        "closed)" % (nights, REBOOT_HELD_MAX, ", ".join(silent)))
     return True
 
 
