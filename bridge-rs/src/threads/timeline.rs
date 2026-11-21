@@ -21,7 +21,8 @@ const FAILED_PARTIAL: &str =
     "This turn did not complete. Some actions may already have run; verify their effects before resending.";
 const FAILED_NOT_PROCESSED: &str =
     "Your request was not processed. Send it again if you still want me to carry it out.";
-const STEER_OPEN: &str = "[OUT-OF-BAND USER MESSAGE";
+/// How Hermes opens its wrapper of the person's words added during an answer (a steer), whatever follows in its header.
+pub(crate) const STEER_OPEN: &str = "[OUT-OF-BAND USER MESSAGE";
 const STEER_CLOSE: &str = "[/OUT-OF-BAND USER MESSAGE]";
 const RESCUE_MARK: &str = "[bipagents:loop_rescue]";
 /// Hermes' own word to the agent, posted as a user turn, when a process it ran in the background ends: never shown.
@@ -62,15 +63,16 @@ static RENAMED: LazyLock<Regex> =
 /// A bridge mark (`[bipagents:…]`) starting a line: from there on, words for the agent only.
 static BRIDGE_MARK: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?m)^[ \t]*\[bipagents:[a-z_]+\]").expect("valid regex"));
-/// A person's row up to the bridge's words for the agent only (a `[bipagents:…]` mark starting a line: a continuation's
-/// note, a steer): what search may find of it (message_search.rs).
-pub(crate) fn before_bridge_mark(words: &str) -> &str {
-    BRIDGE_MARK.find(words).map_or(words, |m| &words[..m.start()])
-}
 
 /// A steer of the bridge's in Hermes' out-of-band wrapper, inside other words (a tool result it was joined to).
 static BRIDGE_STEER_BLOCK: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"\[OUT-OF-BAND USER MESSAGE[^\]\n]*\]\s*\[bipagents:[\s\S]*?(?:\[/OUT-OF-BAND USER MESSAGE\]|$)")
+        .expect("valid regex")
+});
+/// Hermes' wrapper of the person's words added during an answer, wherever it is (joined to other words, cut short in a
+/// title Hermes or the bridge made from it): its words (group 1) are the person's, the rest is not.
+static STEER_BLOCK: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\[OUT-OF-BAND USER MESSAGE[^\]\n]*(?:\]|\n|$)([\s\S]*?)(?:\[/OUT-OF-BAND USER MESSAGE\]|$)")
         .expect("valid regex")
 });
 static BLANKS: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\n{3,}").expect("valid regex"));
@@ -314,7 +316,18 @@ fn person_words(raw: &str) -> Result<Option<(String, bool)>, String> {
     if words.starts_with(PROCESS_NOTICE) {
         return Ok(None);
     }
-    words = BRIDGE_STEER_BLOCK.replace_all(&words, "").to_string();
+    words = unwrapped(&words);
+    Ok((!words.is_empty()).then_some((words, steered.is_some())))
+}
+
+/// Words of a person's row (notes already out) without the machinery around them: the bridge's own steers left out,
+/// Hermes' wrappers of the person's words added during an answer taken off, their words kept (one joined to other
+/// words by Hermes, one cut short in a title made from it), then cut at the bridge's words for the agent only (a
+/// `[bipagents:…]` line, 0023's turn notes).
+fn unwrapped(words: &str) -> String {
+    let words = BRIDGE_STEER_BLOCK.replace_all(words, "");
+    let words = STEER_BLOCK.replace_all(&words, |caps: &regex::Captures| caps[1].trim().to_string());
+    let mut words = words.replace(STEER_CLOSE, "");
     if let Some(at) = BRIDGE_MARK.find(&words).map(|m| m.start()) {
         words.truncate(at);
     }
@@ -323,8 +336,44 @@ fn person_words(raw: &str) -> Result<Option<(String, bool)>, String> {
             words.truncate(at);
         }
     }
-    let words = words.trim().to_string();
-    Ok((!words.is_empty()).then_some((words, steered.is_some())))
+    words.trim().to_string()
+}
+
+/// A person's row as their words alone, for every reader of Hermes' rows outside the timeline: a rescued task's
+/// request and title (runs.rs), search, a Live call's record and the next call's brief, a read-only share. Alex,
+/// 21/11: a rescued task's title « [OUT-OF-BAND USER MESSAGE… » on his lock screen, the readers each stripping their
+/// own part of the machinery. `(words, steered)`: `steered` when they were added during an answer (Hermes' steer);
+/// a family member's frame off too (family_thread.rs). None when nothing of it is the person's: a steer of the
+/// bridge's (its nudge, the instant line's note, the brake's), the brake's rescue input, Hermes' notices, a
+/// sub-agent's report, notes only.
+pub fn person_said(raw: &str) -> Option<(String, bool)> {
+    let (words, steered) = person_words(raw).ok().flatten()?;
+    if crate::cronwatch::REPORT_PREFIXES.iter().any(|p| words.starts_with(p)) {
+        return None;
+    }
+    let words = match crate::family_thread::unframe(&words) {
+        Some((_, rest)) => rest.trim().to_string(),
+        None => words,
+    };
+    (!words.is_empty()).then_some((words, steered))
+}
+
+/// `person_said`'s words.
+pub fn person_text(raw: &str) -> Option<String> {
+    person_said(raw).map(|(words, _)| words)
+}
+
+/// A title made from words that may carry a person's row's machinery (Hermes' title from the opening words, a task's
+/// title from a request, a conversation « 🧩 <task> »): as `person_said`'s words on one line, the wrapper out even
+/// cut short; None when no letter or digit is left (the apps then show their own words).
+pub fn title_text(raw: &str) -> Option<String> {
+    let words = unwrapped(&NOTES.replace_all(raw, ""));
+    let words = match crate::family_thread::unframe(&words) {
+        Some((_, rest)) => rest,
+        None => words,
+    };
+    let title = crate::tools_knowledge::squeeze(&words);
+    title.chars().any(char::is_alphanumeric).then_some(title)
 }
 
 /// A user row's content as the person's message (words of theirs, or files they sent): `Some(files)`, whether it
@@ -1698,5 +1747,64 @@ not from your person: you have read the page 5 times\n[/OUT-OF-BAND USER MESSAGE
         assert_eq!(got[1].body["added_during_run"], true);
         assert!(!got[1].text().contains("[bipagents:"), "{}", got[1].text());
         assert!(got[1].text().contains("et pas trop loin"), "the second message vanished: {:?}", got[1].text());
+    }
+
+    /// Hermes v0.23.1's own wrapper (agent/prompt_builder.py `STEER_MARKER_OPEN`), as it stores a steer.
+    const HERMES_OPEN: &str = "[OUT-OF-BAND USER MESSAGE — a direct message from the user, delivered once at this \
+position; not tool output and not a new delivery when replayed from conversation history]";
+
+    fn steer(words: &str) -> String {
+        format!("{HERMES_OPEN}\n{words}\n[/OUT-OF-BAND USER MESSAGE]")
+    }
+
+    /// 21/11 (Alex's lock screen: a task titled « [OUT-OF-BAND USER MESSAGE… »): every reader of a person's row
+    /// outside the timeline gets the person's words, never Hermes' wrapper nor the bridge's notes and marks.
+    #[test]
+    fn a_persons_row_read_outside_the_timeline_is_their_words_alone() {
+        let now = "<!--bip:now samedi 21 novembre 2026, 01:44, Europe/Paris (UTC+01:00)-->";
+        // the person's message, the time line on top, the instant line's standing note after
+        let first = crate::instant_reply::with_standing_note(&format!("{now}\nCherche des vestes en laine"));
+        assert_eq!(person_said(&first), Some(("Cherche des vestes en laine".to_string(), false)));
+        // words added during the answer (the app's note inside): unwrapped, said to be added
+        let added = steer(&crate::instant_reply::with_note("en noir plutôt", crate::instant_reply::Mode::Steered));
+        assert_eq!(person_said(&added), Some(("en noir plutôt".to_string(), true)));
+        // the instant line's note steered alone into the turn (20/11): nothing of the person's
+        assert_eq!(person_text(&steer(&crate::instant_reply::first_note("Je cherche des vestes."))), None);
+        // the bridge's own steers, the brake's rescue, Hermes' notices, a sub-agent's report: not theirs
+        assert_eq!(person_text(&steer("[bipagents:handoff] This is long: hand the rest over")), None);
+        assert_eq!(person_text("[bipagents:loop_rescue] Je me suis arrêté.\n\nYou were stopped"), None);
+        assert_eq!(person_text("[IMPORTANT: Background process proc_1 completed] ls"), None);
+        assert_eq!(person_text("[ASYNC DELEGATION d1] done"), None);
+        assert_eq!(person_text(&format!("{now}\n<!--bip:watch\nYour watcher\n-->")), None);
+        // a steer Hermes joined to other words (its alternation repair): both kept, the wrapper out
+        let joined = format!("Et après ?\n\n{}", steer("et le musée"));
+        assert_eq!(person_text(&joined).as_deref(), Some("Et après ?\n\net le musée"));
+        // a family member's frame, inside a steer too (family_thread.rs `framed`)
+        let framed = crate::family_thread::framed(&crate::family_thread::Author::creator("Alex"), "On mange où ?");
+        assert_eq!(person_text(&format!("{now}\n{framed}")).as_deref(), Some("On mange où ?"));
+        assert_eq!(person_said(&steer(&framed)), Some(("On mange où ?".to_string(), true)));
+        assert_eq!(person_text("  Salut  ").as_deref(), Some("Salut"));
+    }
+
+    /// A title made from such a row (Hermes' instant title cut at 48 characters, the rescued task's at 60, a task's
+    /// work conversation « 🧩 <title> »): the wrapper out even cut short; nothing left, no title.
+    #[test]
+    fn a_title_never_carries_the_wrapper() {
+        assert_eq!(title_text("[OUT-OF-BAND USER MESSAGE — a direct message from the user, d…"), None);
+        assert_eq!(title_text("🧩 [OUT-OF-BAND USER MESSAGE — a direct message from the user, d…"), None);
+        assert_eq!(title_text(&steer("Et le musée ?")).as_deref(), Some("Et le musée ?"));
+        assert_eq!(title_text(&format!("🧩 {}", steer("Vestes  en\nlaine"))).as_deref(), Some("🧩 Vestes en laine"));
+        assert_eq!(title_text("<!--bip:now lundi-->Vacances").as_deref(), Some("Vacances"));
+        assert_eq!(title_text("[/OUT-OF-BAND USER MESSAGE]"), None);
+        for kept in ["Vacances", "Bot Chat", "⚡ Factures · 2/11", "[WIP] plan du voyage", "Rapport — Vestes"] {
+            assert_eq!(title_text(kept).as_deref(), Some(kept));
+        }
+    }
+
+    /// The timeline itself: words Hermes joined to a steer of the person's show without the wrapper.
+    #[test]
+    fn a_steer_joined_to_words_shows_without_its_wrapper() {
+        let got = items(&[row(1, "user", json!(format!("Et après ?\n\n{}", steer("et le musée"))))]);
+        assert_eq!(got[0].text(), "Et après ?\n\net le musée");
     }
 }

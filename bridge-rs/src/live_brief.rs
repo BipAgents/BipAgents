@@ -202,6 +202,9 @@ pub fn exchanges(messages: &[Dict]) -> Vec<(String, String)> {
             continue;
         }
         let text = content(message);
+        // the person's own words (threads/timeline.rs): Hermes' wrapper of words added during a turn, the bridge's
+        // steers and a sub-agent's report are not something they said
+        let text = if role == "user" { crate::threads::timeline::person_text(&text).unwrap_or_default() } else { text };
         if !text.is_empty() {
             out.push((role.to_string(), text));
         }

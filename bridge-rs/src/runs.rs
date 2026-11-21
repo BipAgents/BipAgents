@@ -195,24 +195,29 @@ pub const RESCUE_REPLY_CHARS: usize = 600;
 pub const RESCUE_BODY: &str = "Continue en tâche de fond";
 
 /// The person's request in a conversation: its last message from them that is theirs (not the safety net's steer,
-/// another bridge marker or a sub-task's report).
+/// another bridge marker or a sub-task's report), with the words they added during its turn after it.
 pub fn person_request(messages: &[Dict]) -> String {
+    // the person's words only (threads/timeline.rs `person_said`): never the app's notes (the time line on top of every
+    // message, the instant line's), Hermes' wrapper of words added during the answer, nor a steer of the bridge's (its
+    // « hand it over », the instant line's note steered into the turn: an empty wrapper once the note is out — 21/11,
+    // a rescued task titled « [OUT-OF-BAND USER MESSAGE… »)
+    let mut added: Vec<String> = Vec::new();
     for message in messages.iter().rev() {
-        let role = message.get("role").and_then(Value::as_str).unwrap_or("");
-        if role != "user" {
+        if message.get("role").and_then(Value::as_str) != Some("user") {
             continue;
         }
-        // the app's note that it answered at once (instant_reply.rs) is not the request
-        let text = crate::instant_reply::without_note(&crate::cronwatch::message_text(message));
-        if text.is_empty()
-            || text.contains("[bipagents:")
-            || crate::cronwatch::REPORT_PREFIXES.iter().any(|p| text.starts_with(p))
-        {
+        let Some((words, steered)) = crate::threads::timeline::person_said(&crate::cronwatch::message_text(message))
+        else {
             continue;
+        };
+        added.push(words);
+        if !steered {
+            // the message that started the turn, then what they added while it worked
+            break;
         }
-        return text;
     }
-    String::new()
+    added.reverse();
+    added.join("\n")
 }
 
 /// The rescued task's title: the request's beginning (the person's words, so their language).
@@ -4783,5 +4788,43 @@ mod tests {
         .unwrap();
         let request = person_request(&messages);
         assert!(request.starts_with("Trouve-moi un dentiste"), "the task would continue the wrong request: {request:?}");
+    }
+
+    /// 21/11, Alex's lock screen at night: a rescued task's Live Activity titled « [OUT-OF-BAND USER MESSAGE… ». The
+    /// session's last person row before the bridge's nudge was Hermes' row for the instant line's note steered into
+    /// the turn (20/11): only its wrapper was left once the note was out, and it became the task's title and request.
+    /// The time line on top of every message made such titles start with « <!--bip:now … » too.
+    #[test]
+    fn a_rescued_task_never_takes_hermes_wrapper_or_the_apps_notes_for_the_request() {
+        let open = "[OUT-OF-BAND USER MESSAGE — a direct message from the user, delivered once at this position; not \
+tool output and not a new delivery when replayed from conversation history]";
+        let steer = |words: &str| format!("{open}\n{words}\n[/OUT-OF-BAND USER MESSAGE]");
+        let asked = crate::instant_reply::with_standing_note(
+            "<!--bip:now samedi 21 novembre 2026, 01:44, Europe/Paris (UTC+01:00)-->\nCherche-moi une veste en laine bleue",
+        );
+        let tool_call = json!({"role": "assistant", "content": "", "tool_calls": [{"id": "c1", "function": {"name": "web_search"}}]});
+        let messages: Vec<Dict> = serde_json::from_value(json!([
+            {"role": "user", "content": "Bonjour"},
+            {"role": "assistant", "content": "Salut !"},
+            {"role": "user", "content": asked},
+            tool_call,
+            {"role": "tool", "content": "…", "tool_call_id": "c1"},
+            {"role": "user", "content": steer(&crate::instant_reply::first_note("Je cherche des vestes en laine bleue."))},
+            {"role": "user", "content": steer("[bipagents:handoff] This is long: hand the rest over")},
+        ]))
+        .unwrap();
+        let request = person_request(&messages);
+        assert_eq!(request, "Cherche-moi une veste en laine bleue");
+        assert_eq!(rescue_title(&request), "Cherche-moi une veste en laine bleue");
+        // words the person added while it worked go with their request (its title still says what they asked)
+        let mut more = messages.clone();
+        let added = crate::instant_reply::with_note("en noir plutôt", crate::instant_reply::Mode::Steered);
+        more.insert(5, serde_json::from_value(json!({"role": "user", "content": steer(&added)})).unwrap());
+        let request = person_request(&more);
+        assert_eq!(request, "Cherche-moi une veste en laine bleue\nen noir plutôt");
+        assert_eq!(rescue_title(&request), "Cherche-moi une veste en laine bleue en noir plutôt");
+        for said in [&request, &rescue_prompt(&request, &[], "")] {
+            assert!(!said.contains("OUT-OF-BAND") && !said.contains("<!--"), "{said}");
+        }
     }
 }
