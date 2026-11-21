@@ -5,6 +5,7 @@ import base64
 import http.server
 import json
 import os
+import socket
 import threading
 import time
 from pathlib import Path
@@ -167,3 +168,218 @@ def test_health_adds_the_vault_only_for_places_that_have_one(tmp_path, monkeypat
     seats = agent.health()
     assert "vault" not in seats["1"] and seats["1"]["vault_failed"] == "hardening failed"
     assert seats["2"]["vault"] == "open" and "vault_failed" not in seats["2"]
+
+
+def test_every_beat_says_which_vault_orders_this_seat_agent_does(tmp_path):
+    # F2 (final review of 20/11): the guichet orders vault_keys only to a server whose beat says a seat agent that notes
+    # each order's outcome and cites it in its beats (870bc5931, `VAULT_AGENT` 3); an older one says nothing, and a
+    # wave back to one stops saying it
+    agent = _seat_agent()
+    meminfo = tmp_path / "meminfo"
+    meminfo.write_text("MemTotal:        8000000 kB\nMemAvailable:    3000000 kB\n")
+    numbers = agent.vitals(str(meminfo), str(tmp_path), str(tmp_path / "up"), str(tmp_path / "hardened"))
+    assert agent.VAULT_AGENT == 3
+    assert numbers["vault_agent"] == 3
+    assert json.loads(json.dumps(numbers))["vault_agent"] == 3
+
+
+def _sealed_home(root, name, url, sealed=True):
+    home = root / name
+    data = home / ".local" / "share" / "hermes-bridge"
+    data.mkdir(parents=True)
+    (home / ".config" / "bipagents").mkdir(parents=True)
+    (home / ".config" / "bipagents" / "bridge.toml").write_text(f'bridge_key = "k"\ndata_dir = "{data}"\n')
+    if sealed:
+        (data / "keys.sealed.json").write_text("{}")
+    service = home / ".local" / "share" / "bipagents" / "space" / "keyservice.json"
+    service.parent.mkdir(parents=True)
+    service.write_text(json.dumps({"url": url, "token": "t" * 43}))
+    return home
+
+
+def test_a_planned_reboot_waits_while_the_key_service_of_a_sealed_place_does_not_answer(tmp_path, monkeypatch):
+    # Alex 21/11: a sealed place is never restarted at night while the key service doesn't answer (its vault would
+    # stay closed until it answers again): the night's reboot (unattended-upgrades' `shutdown -r 00:xx`) is called
+    # off, the reboot still required, so the next night tries again
+    agent = _seat_agent()
+    homes = {"bip": _sealed_home(tmp_path, "bip", "https://keys.example"),
+             "bip2": _sealed_home(tmp_path, "bip2", "https://keys.example", sealed=False)}
+
+    def entry(name):
+        if name not in homes:
+            raise KeyError(name)
+        return type("Entry", (), {"pw_dir": str(homes[name]), "pw_uid": os.getuid()})
+
+    monkeypatch.setattr(agent.pwd, "getpwnam", entry)
+    monkeypatch.setattr(agent, "KEY_SERVICES", ("https://keys.example",))
+    monkeypatch.setattr(agent, "REBOOT_HELD", str(tmp_path / "reboot-held.json"))
+    assert agent.sealed_key_services() == {"https://keys.example"}, "the sealed places' only"
+    scheduled = tmp_path / "scheduled"
+    asked, cancelled = [], []
+    answers = {"https://keys.example": False}
+
+    def answer(url):
+        asked.append(url)
+        return answers[url]
+
+    def hold(**kw):
+        return agent.hold_reboot(scheduled=str(scheduled), answers=answer, cancel=lambda: cancelled.append(1), **kw)
+
+    # nothing scheduled: nobody asked
+    assert hold() is False and asked == [] and cancelled == []
+    # a reboot scheduled, the key service silent: called off
+    scheduled.write_text("USEC=1700000000000000\nWARN_WALL=1\nMODE=reboot\n")
+    assert hold() is True and cancelled == [1]
+    # it answers: the reboot goes
+    answers["https://keys.example"] = True
+    assert hold() is False and cancelled == [1]
+    # a power-off (Kerfy's own, by hand) is never touched
+    answers["https://keys.example"] = False
+    scheduled.write_text("USEC=1700000000000000\nMODE=poweroff\n")
+    assert hold() is False and cancelled == [1]
+    # no sealed place on the server: nothing asked, nothing held
+    scheduled.write_text("USEC=1700000000000000\nMODE=reboot\n")
+    homes["bip"] = _sealed_home(tmp_path, "bip3", "https://keys.example", sealed=False)
+    asked.clear()
+    assert hold() is False and asked == [] and cancelled == [1]
+
+
+def test_the_key_service_answers_only_with_its_health(tmp_path):
+    agent = _seat_agent()
+
+    class Health(http.server.BaseHTTPRequestHandler):
+        status = 200
+
+        def do_GET(self):
+            self.send_response(Health.status if self.path == "/health" else 404)
+            self.end_headers()
+            self.wfile.write(b'{"ok":true}')
+
+        def log_message(self, *a):
+            pass
+
+    server = http.server.HTTPServer(("127.0.0.1", 0), Health)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        url = "http://127.0.0.1:%d" % server.server_port
+        assert agent.key_service_answers(url) is True
+        Health.status = 503
+        assert agent.key_service_answers(url) is False
+    finally:
+        server.shutdown()
+    assert agent.key_service_answers(url, timeout=1) is False, "nobody listening"
+
+
+def test_a_vault_keys_order_is_done_only_in_the_server_s_night(tmp_path, monkeypatch):
+    # Alex 21/11: sealing restarts the place's bridge (and the first time hardens the server): only at night, like the
+    # night's reboot. The order sent in the evening (or any time) waits, served again each round, valid two days.
+    agent = _seat_agent()
+    at = lambda hour, minute=0: time.struct_time((2026, 11, 21, hour, minute, 0, 5, 325, 0))
+    monkeypatch.setattr(agent, "VAULT_ANYTIME", str(tmp_path / "vault-keys-anytime"))
+    assert [h for h in range(24) if agent.vault_night(clock=lambda h=h: at(h))] == [1, 2, 3, 4]
+    assert agent.vault_night(clock=lambda: at(4, 59)) and not agent.vault_night(clock=lambda: at(5, 0))
+    assert not agent.vault_night(clock=lambda: at(0, 30)), "never during the night's reboot (00:00-00:44)"
+    # a lab says « any time » by a file of root's
+    (tmp_path / "vault-keys-anytime").write_text("")
+    assert agent.vault_night(clock=lambda: at(15))
+
+
+def test_the_round_leaves_a_vault_keys_order_for_the_night(tmp_path, monkeypatch):
+    agent = _seat_agent()
+    seen = []
+    monkeypatch.setattr(agent, "vault_keys_order", lambda *a, **k: seen.append(a) or True)
+    body = {"action": "vault_keys", "seat": 2, "vault_keys": SETTINGS}
+    monkeypatch.setattr(agent, "vault_night", lambda clock=None: False)
+    assert agent.vault_order_round(body, 21) is False and seen == [], "held: neither done nor tried"
+    monkeypatch.setattr(agent, "vault_night", lambda clock=None: True)
+    assert agent.vault_order_round(body, 21) is True and len(seen) == 1
+
+
+
+def test_a_reboot_waits_three_nights_at_most_then_goes_and_the_beat_says_so(tmp_path, monkeypatch):
+    # review 2 of 21/11: never a server kept from its kernel's reboot for ever; the guichet is told (vitals)
+    agent = _seat_agent()
+    homes = {"bip": _sealed_home(tmp_path, "bip", "https://keys.example")}
+    monkeypatch.setattr(agent.pwd, "getpwnam", lambda name: type("E", (), {"pw_dir": str(homes[name]),
+                                                                            "pw_uid": os.getuid()})
+                        if name in homes else (_ for _ in ()).throw(KeyError(name)))
+    monkeypatch.setattr(agent, "KEY_SERVICES", ("https://keys.example",))
+    held = tmp_path / "reboot-held.json"
+    monkeypatch.setattr(agent, "REBOOT_HELD", str(held))
+    scheduled = tmp_path / "scheduled"
+    cancelled = []
+
+    def night(day):
+        scheduled.write_text("USEC=1\nMODE=reboot\n")
+        return agent.hold_reboot(scheduled=str(scheduled), answers=lambda url: False,
+                                 cancel=lambda: cancelled.append(day), night=day)
+
+    assert [night(d) for d in ("2026-11-21", "2026-11-22", "2026-11-23")] == [True, True, True]
+    assert agent.reboot_held_nights(today="2026-11-23") == 3
+    assert night("2026-11-24") is False, "a fourth night: the reboot goes"
+    assert cancelled == ["2026-11-21", "2026-11-22", "2026-11-23"]
+    assert agent.reboot_held_nights(today="2026-11-24") == 3, "said in the beat until it answers again"
+    # the same night asked again: one night only
+    held.unlink()
+    assert night("2026-11-25") and night("2026-11-25") and agent.reboot_held_nights(today="2026-11-25") == 1
+    # it answers: the count starts again
+    scheduled.write_text("USEC=1\nMODE=reboot\n")
+    assert agent.hold_reboot(scheduled=str(scheduled), answers=lambda url: True, cancel=lambda: None,
+                             night="2026-11-26") is False
+    assert agent.reboot_held_nights(today="2026-11-26") == 0
+    # a night skipped (no reboot asked): the next hold counts from one again
+    night("2026-11-27")
+    night("2026-11-29")
+    assert agent.reboot_held_nights(today="2026-11-29") == 1
+
+
+def test_only_kerfy_s_key_service_holds_a_reboot(tmp_path, monkeypatch):
+    # review 2 of 21/11: keyservice.json is the place's own (its account writes it): its url never keeps the server
+    # from rebooting unless it is the key service the offer uses
+    agent = _seat_agent()
+    homes = {"bip": _sealed_home(tmp_path, "bip", "https://somewhere.example")}
+    monkeypatch.setattr(agent.pwd, "getpwnam", lambda name: type("E", (), {"pw_dir": str(homes[name]),
+                                                                            "pw_uid": os.getuid()})
+                        if name in homes else (_ for _ in ()).throw(KeyError(name)))
+    monkeypatch.setattr(agent, "REBOOT_HELD", str(tmp_path / "reboot-held.json"))
+    assert "https://keys.bipagents.com" in agent.KEY_SERVICES
+    assert agent.sealed_key_services() == set()
+    scheduled = tmp_path / "scheduled"
+    scheduled.write_text("MODE=reboot\n")
+    asked = []
+    assert agent.hold_reboot(scheduled=str(scheduled), answers=lambda url: asked.append(url) or False,
+                             cancel=lambda: asked.append("cancel"), night="2026-11-21") is False
+    assert asked == []
+
+
+def test_a_non_http_answer_never_stops_the_seat_agent(tmp_path):
+    # review 2 of 21/11: http.client's errors are no OSError
+    agent = _seat_agent()
+    server = socket.socket()
+    server.bind(("127.0.0.1", 0))
+    server.listen(5)
+
+    def garbage():
+        for _ in range(4):
+            try:
+                conn, _ = server.accept()
+            except OSError:
+                return
+            conn.recv(4096)
+            conn.sendall(b"not http at all\r\n\r\n")
+            conn.close()
+
+    threading.Thread(target=garbage, daemon=True).start()
+    port = server.getsockname()[1]
+    try:
+        assert agent.key_service_answers("http://127.0.0.1:%d" % port, timeout=3) is False
+        home = tmp_path / "bip"
+        data = home / ".local" / "share" / "bipagents"
+        data.mkdir(parents=True)
+        (home / ".config" / "bipagents").mkdir(parents=True)
+        (home / ".config" / "bipagents" / "bridge.toml").write_text(
+            f'bridge_key = "k"\nhost = "127.0.0.1"\nport = {port}\ndata_dir = "{data}"\n')
+        (data / "keys.sealed.json").write_text("{}")
+        assert agent.vault_state(str(home)) == {"vault": "sealed"}
+    finally:
+        server.close()

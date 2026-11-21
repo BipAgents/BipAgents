@@ -52,6 +52,7 @@ import sys
 import tempfile
 import threading
 import time
+import http.client
 import urllib.error
 import urllib.request
 
@@ -609,9 +610,16 @@ def uptime(path="/proc/uptime"):
         return None
 
 
+# What this seat agent does of the guichet's vault_keys orders, said in every beat (F2, final review of 20/11): 3 = it
+# notes each order's outcome, tells it with the done and cites the last one in each place's beat (870bc5931). The
+# guichet's `vault-enrol` orders a server only when its last beat says 3 or more; raise it when that protocol changes.
+VAULT_AGENT = 3
+
+
 def vitals(meminfo="/proc/meminfo", root="/", uptime_path="/proc/uptime", hardened=HARDENED):
-    """The server's own numbers: memory, swap and disk in MB and GB, the load, how long it has been up; and whether
-    space-hardening.sh was done (encrypted places need it: swap encrypted, no core dumps, journal in memory)."""
+    """The server's own numbers: memory, swap and disk in MB and GB, the load, how long it has been up; whether
+    space-hardening.sh was done (encrypted places need it: swap encrypted, no core dumps, journal in memory); and which
+    vault orders this agent does (`VAULT_AGENT`)."""
     info = {}
     try:
         with open(meminfo) as fh:
@@ -627,7 +635,8 @@ def vitals(meminfo="/proc/meminfo", root="/", uptime_path="/proc/uptime", harden
             "swap_mb": info.get("SwapTotal"), "swap_used_mb": info.get("SwapTotal", 0) - info.get("SwapFree", 0),
             "disk_gb": round(disk.total / 1e9, 1), "disk_free_gb": round(disk.free / 1e9, 1),
             "load": [round(load[0], 2), round(load[1], 2)], "uptime": uptime(uptime_path),
-            "space_hardened": os.path.exists(hardened)}
+            "space_hardened": os.path.exists(hardened), "vault_agent": VAULT_AGENT,
+            "reboot_held": reboot_held_nights()}
 
 
 def health():
@@ -897,6 +906,31 @@ def vault_done_of(number):
     return max(ids) if ids else None
 
 
+# Alex 21/11: a vault_keys order (sealing restarts the place's bridge, and the first time hardens the server: swap
+# emptied) is done only at night, server time, after the night's reboot window (00:00-00:44): from 01:00 to 05:00.
+# Sent in the evening or any time, it waits (served again at each round; orders are valid two days). A lab says
+# "any time" with this file of root's.
+VAULT_NIGHT = (1, 5)
+VAULT_ANYTIME = "/etc/bipagents/vault-keys-anytime"
+
+
+def vault_night(clock=None):
+    """Now is the server's night for the vault's orders (`VAULT_NIGHT`, server time), or a lab said any time."""
+    if os.path.exists(VAULT_ANYTIME):
+        return True
+    hour = (clock or time.localtime)().tm_hour
+    return VAULT_NIGHT[0] <= hour < VAULT_NIGHT[1]
+
+
+def vault_order_round(body, order_id):
+    """The round's part of a vault_keys order: done at night only (`vault_night`); True: done (told), False: held."""
+    if not vault_night():
+        log("vault keys of place %s held until the night (%02d:00-%02d:00 server time)"
+            % (body.get("seat"), VAULT_NIGHT[0], VAULT_NIGHT[1]))
+        return False
+    return vault_keys_order(int(body["seat"]), body["vault_keys"], int(order_id))
+
+
 def vault_keys_order(number, settings, order_id, harden=None, run_as=None, moves=None):
     """The guichet's `vault_keys` order for place n. True: done (told to the guichet, whatever happened); False: held
     (the server was just hardened, or the place moves: neither noted nor told done, served again next round). The
@@ -992,7 +1026,7 @@ def vault_state(home):
             host = "127.0.0.1"
         with urllib.request.urlopen("http://%s:%d/health" % (host, port), timeout=3) as answer:
             said = json.loads(answer.read(65536).decode("utf-8"))
-    except (OSError, ValueError, TypeError):
+    except (OSError, ValueError, TypeError, http.client.HTTPException):
         # its bridge mute (its door's check says so): sealed all the same, never taken for one whose sealing failed
         return {"vault": "sealed"}
     vault = said.get("vault") if isinstance(said, dict) else None
@@ -1018,6 +1052,124 @@ def vault_key_service(home):
     except (OSError, ValueError, AttributeError):
         return None
     return hashlib.sha256(token.encode()).hexdigest() if isinstance(token, str) and token else None
+
+
+SHUTDOWN_SCHEDULED = "/run/systemd/shutdown/scheduled"   # systemd-logind's: a `shutdown -r HH:MM` waiting
+# The key services a reboot waits for: the offer's only (review 2 of 21/11: keyservice.json is written by the place's
+# own account, its url must never keep the server from rebooting).
+KEY_SERVICES = ("https://keys.bipagents.com",)
+REBOOT_HELD = "/var/lib/bipagents/reboot-held.json"   # root's: the nights in a row a reboot waited
+REBOOT_HELD_MAX = 3                                    # then it goes (and the beat says it waited)
+
+
+def sealed_key_services():
+    """The key services (`KEY_SERVICES` only) of this server's places whose vault is sealed (keys.sealed.json in their
+    bridge's data_dir): what a restart of them needs to reopen their vault."""
+    import tomllib
+    urls = set()
+    for number in range(1, MAX_SEATS + 1):
+        try:
+            home = pwd.getpwnam(account(number)).pw_dir
+        except KeyError:
+            continue
+        try:
+            with open(os.path.join(home, ".config", "bipagents", "bridge.toml"), "rb") as fh:
+                conf = tomllib.load(fh)
+            data = os.path.expanduser(conf.get("data_dir") or os.path.join(home, BRIDGE_DATA))
+            if not os.path.exists(os.path.join(data, SEALED_KEYS)):
+                continue
+            fd = os.open(os.path.join(home, SPACE_KEY_SERVICE), os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+            with os.fdopen(fd, "rb") as fh:
+                url = json.loads(fh.read(65536).decode("utf-8")).get("url")
+        except (OSError, ValueError, TypeError, AttributeError):
+            continue
+        if isinstance(url, str) and url.rstrip("/") in KEY_SERVICES:
+            urls.add(url.rstrip("/"))
+    return urls
+
+
+def key_service_answers(url, timeout=10):
+    """The key service's /health answers 200 (anything else, a non-HTTP answer included: no)."""
+    import http.client
+    try:
+        with urllib.request.urlopen(url.rstrip("/") + "/health", timeout=timeout) as answer:
+            return answer.status == 200
+    except (OSError, ValueError, http.client.HTTPException):
+        return False
+
+
+def _night_label(now=None):
+    """A night's name: the day it started (12 hours back), local time."""
+    return time.strftime("%Y-%m-%d", time.localtime((time.time() if now is None else now) - 12 * 3600))
+
+
+def _held_state():
+    data = read_json(REBOOT_HELD)
+    return data if isinstance(data, dict) else {}
+
+
+def _held_write(data):
+    os.makedirs(os.path.dirname(REBOOT_HELD), exist_ok=True)
+    tmp = REBOOT_HELD + ".tmp"
+    with open(tmp, "w") as fh:
+        json.dump(data, fh)
+    os.replace(tmp, REBOOT_HELD)
+
+
+def _day_before(day):
+    return time.strftime("%Y-%m-%d", time.localtime(time.mktime(time.strptime(day, "%Y-%m-%d")) - 12 * 3600))
+
+
+def reboot_held_nights(today=None):
+    """The nights in a row a reboot waited for the key service (said in the beat: `reboot_held`), 0 once it answered
+    or a night passed without waiting."""
+    data = _held_state()
+    last, nights = data.get("last"), data.get("nights", 0)
+    today = today or _night_label()
+    if not isinstance(nights, int) or not isinstance(last, str):
+        return 0
+    return nights if last in (today, _day_before(today)) or data.get("went") == today else 0
+
+
+def hold_reboot(scheduled=SHUTDOWN_SCHEDULED, answers=None, cancel=None, night=None):
+    """Alex 21/11: a sealed place is never restarted while its key service doesn't answer (its vault would stay closed
+    until it answers). A planned reboot waiting (unattended-upgrades' `shutdown -r 00:xx` at night) is called off when
+    the key service of this server's sealed places (`KEY_SERVICES`) doesn't answer; the reboot stays required, so the
+    next night tries again. `REBOOT_HELD_MAX` nights in a row at most (review 2 of 21/11), then the reboot goes and
+    the beat says how many nights it waited (the guichet tells Kerfy Studio). A power-off is never touched. True when
+    it was called off."""
+    try:
+        with open(scheduled) as fh:
+            mode = dict(line.strip().partition("=")[::2] for line in fh if "=" in line).get("MODE")
+    except OSError:
+        return False
+    if mode != "reboot":
+        return False
+    services = sealed_key_services()
+    if not services:
+        return False
+    tonight = night or _night_label()
+    silent = sorted(url for url in services if not (answers or key_service_answers)(url))
+    data = _held_state()
+    if not silent:
+        if data:
+            _held_write({})
+        return False
+    nights = reboot_held_nights(tonight)
+    if data.get("last") == tonight:
+        nights = max(nights, 1)
+    elif nights >= REBOOT_HELD_MAX:
+        _held_write({"last": data.get("last"), "nights": nights, "went": tonight})
+        log("planned reboot let through after %d nights waiting for the key service %s" % (nights, ", ".join(silent)))
+        return False
+    else:
+        nights += 1
+    _held_write({"last": tonight, "nights": nights})
+    (cancel or (lambda: subprocess.run(["shutdown", "-c", "BipAgents: the key service doesn't answer, the reboot "
+                                         "waits for the next night"], check=False, timeout=30)))()
+    log("planned reboot called off (night %d of %d): the key service %s doesn't answer (a sealed place would stay "
+        "closed)" % (nights, REBOOT_HELD_MAX, ", ".join(silent)))
+    return True
 
 
 def vault_failed(home):
@@ -2612,6 +2764,10 @@ def main(argv=()):
         return rebooting(conf)
     metadata_block()
     try:
+        hold_reboot()   # first: even while the guichet doesn't answer
+    except (OSError, subprocess.SubprocessError) as exc:
+        log("planned reboot not looked at: %s" % exc)
+    try:
         backup_lock()
     except OSError as exc:
         log("backup lock not made: %s" % exc)
@@ -2665,8 +2821,8 @@ def main(argv=()):
                     except OSError as exc:
                         log("removing place %s stopped: %s" % (body["seat"], exc))
                 elif body["action"] == "vault_keys":
-                    if not vault_keys_order(int(body["seat"]), body["vault_keys"], int(order["id"])):
-                        continue   # the server just hardened: the place sealed at the next round
+                    if not vault_order_round(body, order["id"]):
+                        continue   # not the night yet, or the server just hardened: sealed at a later round
                 elif body["action"] == "reopen":
                     try:
                         reopen(int(body["seat"]), body["pair"])
