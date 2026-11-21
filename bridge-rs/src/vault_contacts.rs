@@ -408,10 +408,80 @@ fn closed_now(state: &crate::app::AppState, agent: &str, tool: &str) -> bool {
 const CLOSED: &str = "Your person's own data, the vault included, is closed in this conversation: someone else is talking to you. \
 Answer from what you know.";
 
+/// Who is inside a call of the bridge's `server`'s `tool` now, among the agent's turns (runs.rs `runs_in_call`, by
+/// Hermes' own names, the tool search's wrapped calls too), a relative's turn left out (`relative`): its vault calls
+/// are closed (`closed_now`), so a mark is never its.
+enum Calling {
+    Nobody,
+    One(String),
+    Several,
+}
+
+fn calling(
+    hub: &crate::runs::RunHub,
+    agent: &str,
+    server: &str,
+    tool: &str,
+    relative: &dyn Fn(&str) -> bool,
+) -> Calling {
+    let runs = hub.runs_in_call(agent, |name| crate::vault_line::names_bridge_tool(name, server, tool));
+    let mut runs = runs.into_iter().map(|(run, _)| run).filter(|run| !relative(run));
+    match (runs.next(), runs.next()) {
+        (None, _) => Calling::Nobody,
+        (Some(run), None) => Calling::One(run),
+        _ => Calling::Several,
+    }
+}
+
+/// The run of the agent's one turn inside a call of the bridge's `server`'s `tool` now; none, or several (two
+/// conversations of the person calling it): None, so the mark goes to no reply rather than another conversation's
+/// (le coffre rassure, review R3, 17/11). No relative known here: `call_run_in` leaves theirs out.
+pub fn run_of_call(hub: &crate::runs::RunHub, agent: &str, server: &str, tool: &str) -> Option<String> {
+    match calling(hub, agent, server, tool, &|_| false) {
+        Calling::One(run) => Some(run),
+        _ => None,
+    }
+}
+
+/// How long a quick call waits for the hub to see it start (Hermes says `tool.started` as it calls; its stream may
+/// reach the bridge a moment after the call).
+const SEEN_WAIT: std::time::Duration = std::time::Duration::from_millis(1500);
+
+/// `run_of_call`, the hub given `SEEN_WAIT` to see the call start, `relative` saying which runs are a relative's turn
+/// (left out); several turns inside it: None at once.
+pub async fn call_run_in(
+    hub: &crate::runs::RunHub,
+    agent: &str,
+    server: &str,
+    tool: &str,
+    relative: impl Fn(&str) -> bool,
+) -> Option<String> {
+    let deadline = tokio::time::Instant::now() + SEEN_WAIT;
+    loop {
+        let now = calling(hub, agent, server, tool, &relative);
+        match now {
+            Calling::One(run) => return Some(run),
+            Calling::Nobody if tokio::time::Instant::now() < deadline => {
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await
+            }
+            _ => return None,
+        }
+    }
+}
+
+/// The turn a call of the bridge's tool by `agent` belongs to (`call_run_in` on the bridge's hub, its relatives' turns
+/// from agent_shares.rs).
+pub async fn call_run(state: &crate::app::AppState, agent: &str, server: &str, tool: &str) -> Option<String> {
+    let config = state.config.get();
+    call_run_in(&state.hub, agent, server, tool, |run| crate::agent_shares::relative_run(&config, run)).await
+}
+
 /// The entry's mark noted for the reply that ends the agent's turn (made_files.rs): « Coordonnées » saved or used, a
-/// login an agent created (vault_logins.rs), a card it paid with (card_pay.rs).
-pub fn note_mark(state: &crate::app::AppState, agent: &str, tool: &str, mark: &str) {
-    let run = state.hub.turn_of(agent, tool).map(|t| t.run_id);
+/// login an agent created (vault_logins.rs), a card it paid with (card_pay.rs). The turn of that very call (`call_run`,
+/// `server`'s `tool`), none when unsure: the chip then shows in no reply, never in another conversation's (a
+/// relative's on a shared agent).
+pub async fn note_mark(state: &crate::app::AppState, agent: &str, server: &str, tool: &str, mark: &str) {
+    let run = call_run(state, agent, server, tool).await;
     crate::made_files::MADE.note(agent, mark, run.as_deref(), py::time_time());
 }
 
@@ -439,7 +509,7 @@ pub async fn call(state: &crate::app::AppState, agent: &AgentConfig, name: &str,
                 );
             }
             if wanted.is_empty() {
-                note_listed(state, &agent.name, name, &entries);
+                note_listed(state, &agent.name, name, &entries).await;
                 let all: Vec<String> = entries.iter().map(|e| describe(&e.label, e.hint.as_deref(), &e.secret)).collect();
                 let secrets: Vec<&Dict> = entries.iter().map(|e| &e.secret).collect();
                 return tool_text(
@@ -458,7 +528,7 @@ pub async fn call(state: &crate::app::AppState, agent: &AgentConfig, name: &str,
                 return tool_text(&format!("No entry « {wanted} ». Yours: {}.", labels.join(", ")), true);
             };
             let mark = mark(&entry.id, &entry.label);
-            note_mark(state, &agent.name, name, &mark);
+            note_mark(state, &agent.name, crate::vault_logins::SERVER_NAME, name, &mark).await;
             tracing::info!(agent = %agent.name, item = %entry.id, "contact details read by the agent");
             tool_text(
                 &format!(
@@ -473,7 +543,7 @@ pub async fn call(state: &crate::app::AppState, agent: &AgentConfig, name: &str,
         SAVE => match state.vault.save_contact(&config, agent, arguments).await {
             Ok(item) => {
                 let mark = mark(&item.id, &item.label);
-                note_mark(state, &agent.name, name, &mark);
+                note_mark(state, &agent.name, crate::vault_logins::SERVER_NAME, name, &mark).await;
                 tracing::info!(agent = %agent.name, item = %item.id, "contact details saved by the agent");
                 tool_text(
                     &format!(
@@ -584,8 +654,8 @@ fn found(needle: &Needle, folded_reply: &str, digit_runs: &[String]) -> bool {
 }
 
 /// The entries one listing gave `agent` in its current turn: the run the hub follows, or none (a routine).
-pub fn note_listed(state: &crate::app::AppState, agent: &str, tool: &str, entries: &[Entry]) {
-    let run = state.hub.turn_of(agent, tool).map(|t| t.run_id);
+pub async fn note_listed(state: &crate::app::AppState, agent: &str, tool: &str, entries: &[Entry]) {
+    let run = call_run(state, agent, crate::vault_logins::SERVER_NAME, tool).await;
     note_listed_in(agent, entries, run.as_deref(), py::time_time());
 }
 

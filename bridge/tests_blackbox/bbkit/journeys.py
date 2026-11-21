@@ -122,6 +122,26 @@ def hermes_holds(folder: Path, token: str) -> None:
 LOGIN_PAGE = "https://www.fournisseur.example/connexion"
 
 
+def journeys_chrome(url: str):
+    """The journeys' fake Chrome (test_vault_login.py's, for `vault_login` to type into), answering also as the agent's
+    browser container does over HTTP: its tabs (`/json/list`, the login page) and its DevTools relay's version
+    (`/bipagents/relay`, as test_desktop_page.py's). Without them the bridge said the browser idle
+    (desktop_page.rs `browser_state`): the apps' Bureau kept its empty state, never went live, and « Je le taperai
+    moi-même » never took the hand (iPhone J65 red, 21/11)."""
+    from test_vault_login import FakeChrome
+
+    class JourneysChrome(FakeChrome):
+        def _http(self, connection, request):
+            if request.path == "/json/list":
+                return connection.respond(200, json.dumps([{"id": "T1", "type": "page", "url": self.frames[0].url,
+                                                            "title": "Connexion · Fournisseur"}]))
+            if request.path == "/bipagents/relay":
+                return connection.respond(200, json.dumps({"relay": 2, "hold_token": True}))
+            return super()._http(connection, request)
+
+    return JourneysChrome(url)
+
+
 def journey_bridge(bridges, fakes, word_gap: float = 0.06, name: str = "journeys",
                    family_relay: Optional[str] = None, tool_asks: bool = False, browser: bool = False) -> Journey:
     from test_connectors import IMAGE, SERVER
@@ -156,10 +176,12 @@ def journey_bridge(bridges, fakes, word_gap: float = 0.06, name: str = "journeys
     chrome = None
     if browser:
         # J64–J65: a visible browser of its own (its container's ports, its desktop the person can take over), its
-        # DevTools a fake Chrome on the supplier's login page (test_vault_login.py), for vault_login to type into
-        from test_vault_login import FakeChrome
-        chrome = FakeChrome(LOGIN_PAGE)
-        agent["desktop_vnc"] = f"tcp://127.0.0.1:{free_port()}"
+        # DevTools a fake Chrome on the supplier's login page (test_vault_login.py), for vault_login to type into.
+        # Served to the apps too (serve_journeys.py): their J64 and J65 (docs/release-journeys.md)
+        from .fake_screen import FakeScreen
+        chrome = journeys_chrome(LOGIN_PAGE)
+        # its screen, a fake VNC the bridge logs in to (security « None »): the apps' Bureau live, the hand taken there
+        agent["desktop_vnc"] = FakeScreen().address
         folder = bridge.data / "browsers" / AGENT
         folder.mkdir(parents=True, exist_ok=True)
         (folder / "ports.json").write_text(json.dumps({"cdp": chrome.port, "vnc": free_port()}))

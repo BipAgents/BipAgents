@@ -612,9 +612,10 @@ pub struct SubscriptionState {
     /// The run's last tool call (bare name) and when: which run a call of the bridge's tools belongs to (`turn_of`).
     pub last_tool: String,
     pub last_tool_at: f64,
-    /// When the last call is the tool search's `tool_call` wrapping exactly one call: that call's (bare) name, else
-    /// empty (`runs_in_call` reads it: the Link payment tools are reached through it, pay_line.rs).
-    pub last_tool_wrapped: String,
+    /// A call through the tool search (`tool_call`, tool_diet.rs): the calls it wraps (bare names), from its arguments
+    /// or its preview; the run is inside those (`runs_in_call`: the vault's and the Link payment tools are reached
+    /// through it, vault_contacts.rs, pay_line.rs), never inside « tool_call » itself. Empty for any other tool.
+    pub last_wrapped: Vec<String>,
     /// The run's real tokens so far (`model.usage`): None from a Hermes without patch 0020.
     pub usage: Option<RunUsage>,
     /// A room's turn (rooms.rs), a background task's run (jobs.rs): the tokens it may take. Once its real ones and its
@@ -705,7 +706,7 @@ impl Default for SubscriptionState {
             ever_followed: false,
             last_tool: String::new(),
             last_tool_at: 0.0,
-            last_tool_wrapped: String::new(),
+            last_wrapped: Vec::new(),
             usage: None,
             token_limit: None,
             cost_limit: None,
@@ -1934,7 +1935,7 @@ impl RunHub {
             let tool = crate::loop_brake::event_tool(&event.data);
             st.last_tool = crate::loop_brake::bare(&tool).to_string();
             st.last_tool_at = crate::py::time_time();
-            st.last_tool_wrapped = if st.last_tool == "tool_call" { wrapped_tool(&event.data) } else { String::new() };
+            st.last_wrapped = if st.last_tool == "tool_call" { wrapped_names(&event.data) } else { Vec::new() };
             self.cap(sub, &mut st);
             self.brake(sub, &mut st, &event);
             // a use of a feature to discover (feature_tips.rs: a podcast made, the Carnet filled…)
@@ -3108,9 +3109,13 @@ more steps in this turn. Don't repeat what failed: change approach.", crate::loo
         let mut out: Vec<(String, Option<String>)> = Vec::new();
         for sub in inner.subs.values().filter(|sub| sub.agent.name == agent) {
             let st = lock(&sub.state);
-            // a call through the tool search counts by the one call it wraps (never as « tool_call » itself)
-            let name = if st.last_tool == "tool_call" { st.last_tool_wrapped.as_str() } else { st.last_tool.as_str() };
-            let inside = !st.finished && st.terminal.is_none() && st.tools_open > 0 && !name.is_empty() && is(name);
+            // a call through the tool search counts by the calls it wraps (never as « tool_call » itself)
+            let named = if st.last_tool == "tool_call" {
+                st.last_wrapped.iter().any(|name| is(name))
+            } else {
+                is(&st.last_tool)
+            };
+            let inside = !st.finished && st.terminal.is_none() && st.tools_open > 0 && named;
             if inside && !out.iter().any(|(run, _)| *run == sub.run_id) {
                 out.push((sub.run_id.clone(), st.session_id.clone()));
             }
@@ -3915,21 +3920,23 @@ touche « Démarrer » pour reprendre."
     }
 }
 
-
-/// The one call a `tool.started` of the tool search's `tool_call` wraps (its arguments `{"calls": [{"name": …}]}` or
-/// `{"name": …}`, as an object or as JSON text), bare; empty when it wraps none or several.
-pub fn wrapped_tool(data: &Map<String, Value>) -> String {
-    let args = match data.get("args").or_else(|| data.get("arguments")) {
-        Some(Value::String(text)) => serde_json::from_str::<Value>(text).unwrap_or(Value::Null),
-        Some(value) => value.clone(),
-        None => Value::Null,
+/// The calls a `tool.started` of the tool search (`tool_call`) wraps, bare names: from its arguments
+/// (`{"calls": [{"name": …}]}` or `{"name": …}`, like vault_line.rs `wrapped_call` and steps.rs `action_of`), or
+/// from its preview, perhaps cut short (each `"name": "…"` in it).
+pub fn wrapped_names(data: &serde_json::Map<String, Value>) -> Vec<String> {
+    static NAME: std::sync::LazyLock<regex::Regex> =
+        std::sync::LazyLock::new(|| regex::Regex::new(r#""name"\s*:\s*"([^"\\]+)""#).expect("name pattern"));
+    let Some(text) = crate::loop_brake::event_signature(data) else { return Vec::new() };
+    let names: Vec<String> = match serde_json::from_str::<Value>(&text) {
+        Ok(args) => match args.get("calls").and_then(Value::as_array) {
+            Some(calls) => {
+                calls.iter().filter_map(|call| call.get("name").and_then(Value::as_str)).map(str::to_string).collect()
+            }
+            None => args.get("name").and_then(Value::as_str).map(str::to_string).into_iter().collect(),
+        },
+        Err(_) => NAME.captures_iter(&text).map(|found| found[1].to_string()).collect(),
     };
-    let call = match args.get("calls").and_then(Value::as_array) {
-        Some(calls) if calls.len() == 1 => calls[0].clone(),
-        Some(_) => return String::new(),
-        None => args,
-    };
-    call.get("name").and_then(Value::as_str).map(|n| crate::loop_brake::bare(n).to_string()).unwrap_or_default()
+    names.iter().map(|name| crate::loop_brake::bare(name).to_string()).collect()
 }
 
 #[cfg(test)]
@@ -4230,6 +4237,103 @@ mod tests {
         assert_eq!(raw["event"], "steps.updated");
         assert_eq!(raw["steps"]["done"], 1);
         assert_eq!(st.steps.as_ref().unwrap()["total"], 2, "kept for a background task's card");
+    }
+
+    /// The 🔒 chip of « Coordonnées » read or kept, of a login an agent created, of a card it paid with (vault_contacts.rs
+    /// `note_mark`): the reply of the turn inside that call, never another conversation's (review R3's follow-up, 17/11).
+    #[tokio::test]
+    async fn a_chip_goes_to_the_turn_inside_its_call() {
+        use crate::vault_contacts::{run_of_call, READ, SAVE};
+        let hub = RunHub::new(HermesClient::new(reqwest::Client::new()), None, 7200, None);
+        let event = |kind: &str, data: Value| SSEEvent::new(kind, data.as_object().cloned().unwrap(), "{}");
+        let turn = |run: &str, session: &str| {
+            let sub = Arc::new(RunSubscription::new(AgentConfig { name: "vie".into(), ..Default::default() }, run));
+            lock(&sub.state).session_id = Some(session.into());
+            lock(&hub.inner).subs.insert(sub.key(), sub.clone());
+            sub
+        };
+        let started = |sub: &Arc<RunSubscription>, tool: &str, id: &str| {
+            hub.dispatch(sub, event("tool.started", json!({"tool": tool, "tool_call_id": id})));
+        };
+        let vault = crate::vault_logins::SERVER_NAME;
+        let mine = turn("run_mine", "api_mine");
+        started(&mine, "mcp_bipagents_vault_vault_contact_details", "a");
+        // another conversation's turn of Vie that called a tool after it: the chip is still the reader's
+        started(&turn("run_other", "api_other"), "web_search", "b");
+        assert_eq!(run_of_call(&hub, "vie", vault, READ).as_deref(), Some("run_mine"));
+        // a card paid with in a third turn: that one's
+        started(&turn("run_pay", "api_pay"), "mcp__bipagents_pay__pay_with_card", "c");
+        assert_eq!(run_of_call(&hub, "vie", crate::card_pay::SERVER_NAME, crate::card_pay::PAY).as_deref(), Some("run_pay"));
+        // a relative's conversation with the shared agent reading its contact details too: nobody can tell
+        started(&turn("run_lea", "api_lea"), "mcp__bipagents_vault__vault_contact_details", "d");
+        assert_eq!(run_of_call(&hub, "vie", vault, READ), None);
+        // no turn inside a call of it: none
+        assert_eq!(run_of_call(&hub, "vie", vault, SAVE), None);
+        assert_eq!(run_of_call(&hub, "paul", vault, READ), None);
+    }
+
+    /// Review of vault-journeys-apps, B1 (17/11): an agent without its browser reaches the vault's tools through the
+    /// tool search (`tool_call`, tool_diet.rs): its turn is inside the call it wraps, seen from the call's arguments
+    /// or its preview (perhaps cut). And `call_run`, the production path: the call's own turn at once, or once the hub
+    /// sees it start, a relative's turn left out, nobody: None after its wait.
+    #[tokio::test]
+    async fn a_call_through_the_tool_search_is_its_wrapped_calls() {
+        use crate::vault_contacts::{call_run_in, run_of_call, READ};
+        let hub = Arc::new(RunHub::new(HermesClient::new(reqwest::Client::new()), None, 7200, None));
+        let event = |kind: &str, data: Value| SSEEvent::new(kind, data.as_object().cloned().unwrap(), "{}");
+        let turn = |run: &str| {
+            let sub = Arc::new(RunSubscription::new(AgentConfig { name: "lettres".into(), ..Default::default() }, run));
+            lock(&sub.state).session_id = Some(format!("api_{run}"));
+            lock(&hub.inner).subs.insert(sub.key(), sub.clone());
+            sub
+        };
+        let vault = crate::vault_logins::SERVER_NAME;
+        let none = |_: &str| false;
+        let (start, done) = (
+            |sub: &Arc<RunSubscription>, data: Value| hub.dispatch(sub, event("tool.started", data)),
+            |sub: &Arc<RunSubscription>, data: Value| hub.dispatch(sub, event("tool.completed", data)),
+        );
+        let contacts = "mcp_bipagents_vault_vault_contact_details";
+        let contacts_mcp = "mcp__bipagents_vault__vault_contact_details";
+        // its arguments, a whole preview, a preview cut short
+        let wrapped = format!(r#"{{"calls": [{{"name": "{contacts_mcp}", "arguments": {{}}}}]}}"#);
+        let one = turn("run_one");
+        start(&one, json!({"tool": "tool_call", "tool_call_id": "a", "preview": wrapped}));
+        assert_eq!(run_of_call(&hub, "lettres", vault, READ).as_deref(), Some("run_one"));
+        let started = std::time::Instant::now();
+        assert_eq!(call_run_in(&hub, "lettres", vault, READ, none).await.as_deref(), Some("run_one"));
+        assert!(started.elapsed() < std::time::Duration::from_millis(500), "seen at once: no wait");
+        done(&one, json!({"tool": "tool_call", "tool_call_id": "a"}));
+        let cut = turn("run_cut");
+        let preview = format!(r#"{{"calls": [{{"name": "{contacts}", "argum"#);
+        start(&cut, json!({"tool": "tool_call", "tool_call_id": "b", "preview": preview}));
+        assert_eq!(run_of_call(&hub, "lettres", vault, READ).as_deref(), Some("run_cut"));
+        done(&cut, json!({"tool": "tool_call", "tool_call_id": "b"}));
+        // the tool search wrapping another tool: not inside the vault's
+        let web = turn("run_web");
+        let search = json!({"calls": [{"name": "web_search", "arguments": {"query": "mairie"}}]});
+        start(&web, json!({"tool": "tool_call", "tool_call_id": "c", "args": search}));
+        assert_eq!(run_of_call(&hub, "lettres", vault, READ), None);
+        // the call reaches the bridge before the hub sees it start: found once it does
+        let late = turn("run_late");
+        let (hub2, late2) = (hub.clone(), late.clone());
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+            let data = json!({"tool": contacts, "tool_call_id": "d"}).as_object().cloned().unwrap();
+            hub2.dispatch(&late2, SSEEvent::new("tool.started", data, "{}"));
+        });
+        assert_eq!(call_run_in(&hub, "lettres", vault, READ, none).await.as_deref(), Some("run_late"));
+        // a relative's turn inside it too (a shared agent): left out, the person's own turn kept
+        let lea = turn("run_lea");
+        start(&lea, json!({"tool": contacts_mcp, "tool_call_id": "e"}));
+        let relative = |run: &str| run == "run_lea";
+        assert_eq!(call_run_in(&hub, "lettres", vault, READ, relative).await.as_deref(), Some("run_late"));
+        // both the person's: nobody can tell
+        assert_eq!(call_run_in(&hub, "lettres", vault, READ, none).await, None);
+        // nobody inside: none, after the wait
+        done(&late, json!({"tool": contacts, "tool_call_id": "d"}));
+        done(&lea, json!({"tool": contacts_mcp, "tool_call_id": "e"}));
+        assert_eq!(call_run_in(&hub, "lettres", vault, READ, none).await, None);
     }
 
     /// Le coffre rassure, review R3 (17/11): whose call of the vault it is — the turns of the agent inside a call of

@@ -441,7 +441,12 @@ no `vault_line`, no `bip_secret_use` / `bip_secret_self` (so no « Je le taperai
   Never for a refusal, a failure, a code or « Coordonnées ». Words: « Rempli par le coffre sur [a] et [b], sans le
   donner à l'agent », « Mot de passe créé par le coffre sur [site], sans le donner à l'agent » when the turn only
   created accounts; English « Filled by the vault on … » / « Password made by the vault on …, never given to the
-  agent »; other languages: English for now. The apps draw it like the Carnet's line; a tap opens the vault on `item`.
+  agent »; German « Vom Tresor ausgefüllt auf …, ohne dem Agenten das Passwort zu geben » / « Passwort vom Tresor
+  erstellt auf …, ohne es dem Agenten zu geben »; Spanish « Rellenado por la caja fuerte en a e ikea.es, sin darle la
+  contraseña al agente » (« e » before a site in « i… » / « hi… », not « hie… », « hia… », « hio… », « hiu… ») /
+  « Contraseña creada por la caja fuerte en …, sin dársela al agente » (the beginnings are the help page's, site
+  vault.de.json / vault.es.json `use4`); any other language: English. The apps draw it like the Carnet's line; a tap
+  opens the vault on `item`.
 - **The secret card** (`GET /v1/approvals`, `bip-secret-`, internal/next/agent-connectors-api.md §1a): `bip_secret_use`
   (`browser`: a site's login for the agent's visible browser; `connector`) and `bip_secret_self` (true: the person may
   type it themselves there). `POST /v1/vault/secrets/requests/{id}` `{"allow": false, "way": "self"}` → 200
