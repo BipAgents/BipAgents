@@ -349,11 +349,12 @@ def demo_clips(t: Dict[str, Any]) -> Dict[str, str]:
 
 # The pages: (name, template, path under the language's root). The home sells, and its prices hold the self-install
 # too (« on my computer », #install); the demo and every question have their own pages, sharing the header and the
-# footer (src/bipagents/partials/). /install/ only sends to the home's #install (old links keep working).
+# footer (src/bipagents/partials/). /install/ only sends to the home's #install (old links keep working). /vault/ is
+# what the apps' « Comment c'est protégé ? » opens (VaultHelp: /vault/, else /fr/, /de/, /es/ by the phone's language).
 PAGES = (("home", "index.html", ""), ("demo", "demo.html", "demo/"), ("faq", "faq.html", "faq/"),
          ("install", "install.html", "install/"), ("beta", "beta.html", "beta/"), ("code", "code.html", "code/"),
          ("grokbot", "grok-bot.html", "grok-bot/"), ("status", "status.html", "status/"),
-         ("privacy", "privacy.html", "privacy/"))
+         ("privacy", "privacy.html", "privacy/"), ("vault", "vault.html", "vault/"))
 # The status page reads the guichet's public snapshot (guichet-rs/src/public_status.rs in the guichet's repo).
 STATUS_API = "https://guichet.bipagents.com/v1/public-status"
 # « Obtenir un code » asks the guichet for its proof of work and sends the address there (guichet-rs/src/beta.rs, altcha.rs).

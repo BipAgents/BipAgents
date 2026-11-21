@@ -10,7 +10,9 @@
   choices first, « I want to use my Hermes » → the home's `#install`, no code; « I want a place » → an e-mail address
   and ALTCHA's « I'm not a robot » (its widget served from `/assets/altcha/`, src/bipagents/altcha/README.txt), the
   code sent by e-mail by the guichet's `POST /v1/beta/request`, never shown; `?api=` for a local guichet or mock as
-  `/status/`); `/install/` only sends to the home's `#install`. English at `/`, French, German and
+  `/status/`); `/vault/` (how the vault keeps the passwords, and what it can't prevent in a block of its own: what the
+  apps' « Comment c'est protégé ? » opens, at `/vault/` or `/fr/`, `/de/`, `/es/vault/` by the phone's language; texts in
+  `i18n/vault.<lang>.json`); `/install/` only sends to the home's `#install`. English at `/`, French, German and
   Spanish at `/fr/`, `/de/`, `/es/` (and `/fr/demo/`, `/fr/faq/`…).
 - **kerfystudio.com** — the publisher: its two apps (BipAgents, Tablée), how it works, the company's details (what Apple
   and Google check for an organization), contact, support, the privacy policy and terms in four languages and the
@@ -54,7 +56,7 @@ One file, read by both sites:
 
 ## Where things come from
 
-The pages are `src/bipagents/{index,demo,faq,beta}.html` (and `install.html`, the redirect to `#install`), sharing `partials/top.html` (head, header) and
+The pages are `src/bipagents/{index,demo,faq,beta,vault}.html` (and `install.html`, the redirect to `#install`), sharing `partials/top.html` (head, header) and
 `partials/foot.html` (footer, script) through `{{>top}}` / `{{>foot}}`; `PAGES` in `build.py` lists them, and
 `FAQ_HOME` picks the home's questions. One `site.js` for all: each part runs where its elements are.
 
