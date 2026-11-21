@@ -307,8 +307,14 @@ fn bookkeeping(tool: &str) -> bool {
 /// The app's own first word (iOS `TurnAcknowledgement.placement`): for a turn whose first real call (not bookkeeping)
 /// came before any word of the agent, the line it goes before (the first of the work leading to that call), the card
 /// and the call's number in it.
-fn acknowledgement(lines: &[Line], turn: Range<usize>) -> Option<(usize, usize, usize)> {
+fn acknowledgement(lines: &[Line], turn: Range<usize>, first_lines: &[&str]) -> Option<(usize, usize, usize)> {
     if lines[turn.start].kind != Kind::Prompt {
+        return None;
+    }
+    // a first message's line said at once right under it (instant_reply.rs `first`, `first: true`: only apps from
+    // 20/11 get one) already said what the agent starts on: no first word of the app's on top of it. A queued
+    // message's line keeps today's layout.
+    if first_lines.contains(&lines.get(turn.start + 1).map(|l| l.key.as_str()).unwrap_or("")) {
         return None;
     }
     for i in turn.start + 1..turn.end {
@@ -353,6 +359,11 @@ pub struct Layout {
 pub fn layout(items: &[Item], page: Range<usize>, running: bool) -> Layout {
     let lines = lines(items);
     let all = turns(&lines);
+    let first_lines: Vec<&str> = items
+        .iter()
+        .filter(|i| i.body.get("first").and_then(Value::as_bool) == Some(true))
+        .map(|i| i.id.as_str())
+        .collect();
     // the items of the turn going on: none (a turn starts at its message's item)
     let open_from = match (running, all.last()) {
         (true, Some(last)) => lines[last.start].items[0],
@@ -381,7 +392,7 @@ pub fn layout(items: &[Item], page: Range<usize>, running: bool) -> Layout {
         }
     }
     for turn in all.iter().filter(|t| lines[t.start..t.end].iter().any(&on_page)) {
-        if let Some((before, card, index)) = acknowledgement(&lines, turn.clone()) {
+        if let Some((before, card, index)) = acknowledgement(&lines, turn.clone(), &first_lines) {
             // on the item whose first line it goes before (a message's reasoning, a card's first tool)
             if let Some(fields) = out.get_mut(&lines[before].items[0]) {
                 fields.insert("ack".into(), json!({"line": lines[card].key, "index": index}));
@@ -455,6 +466,26 @@ mod tests {
     }
     fn field<'a>(l: &'a HashMap<usize, Map<String, Value>>, n: usize, key: &str) -> Option<&'a Value> {
         l.get(&n).and_then(|f| f.get(key))
+    }
+
+    /// A first message's line said at once (instant_reply.rs `first`) is the agent's first word: none of the app's.
+    #[test]
+    fn a_line_said_at_once_under_the_message_takes_the_apps_first_word() {
+        let mut said = agent("i_c1", "Je compare les trains Lyon–Paris de samedi matin.");
+        said.body.insert("instant".into(), json!(true));
+        let queued = said.clone();
+        said.body.insert("first".into(), json!(true));
+        let items = vec![person("m_0", "Trouve un train"), said, tool("m_0.t0", "web_search", "{}"), agent("m_1", "Voici trois trains.")];
+        let l = all(&items, false);
+        assert!(l.values().all(|f| !f.contains_key("ack")));
+        // a queued message's line (« juste après »): today's layout, the app's first word stays
+        let items = vec![person("m_0", "Trouve un train"), queued, tool("m_0.t0", "web_search", "{}"), agent("m_1", "Voici trois trains.")];
+        assert!(field(&all(&items, false), 2, "ack").is_some());
+        assert!(!l.get(&1).is_some_and(|f| f.contains_key("work") || f.contains_key("turn_end")));
+        assert_eq!(field(&l, 3, "turn_end"), Some(&json!(true)));
+        // without the line: the app's first word before the search
+        let items = vec![person("m_0", "Trouve un train"), tool("m_0.t0", "web_search", "{}"), agent("m_1", "Voici trois trains.")];
+        assert!(field(&all(&items, false), 1, "ack").is_some());
     }
 
     /// The apps' TurnLayoutTests `steeredTurnKeepsItsAnswerAndMessageInSight`, on items.

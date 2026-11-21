@@ -2597,7 +2597,9 @@ more steps in this turn. Don't repeat what failed: change approach.", crate::loo
         };
         let said = terminal.final_text();
         // their next words already wait (words steered into the turn): they say what comes next
-        let steered = as_str(terminal.data.get("pending_steer")).is_some_and(|p| !p.trim().is_empty());
+        // (the note of a first message's line steered beside the turn and never read is no words: instant_reply.rs)
+        let steered = as_str(terminal.data.get("pending_steer"))
+            .is_some_and(|p| !crate::instant_reply::without_note(&p).trim().is_empty());
         if !crate::go_on::promises(&said) || steered || self.someone_elses(&sub.run_id) {
             return (terminal, None);
         }

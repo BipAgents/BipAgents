@@ -233,7 +233,9 @@ impl AgentQueue {
         // words steered through the bridge that the turn never took: first in line
         let steered: Vec<Steer> = self.steers.iter().filter(|s| s.run_id == run_id).cloned().collect();
         self.steers.retain(|s| s.run_id != run_id);
-        if let (Some(s), Some(pending)) = (session.as_deref(), pending_steer.map(str::trim).filter(|p| !p.is_empty())) {
+        // a first message's line note steered beside the turn and never read is not the person's (instant_reply.rs)
+        let pending_steer = pending_steer.map(crate::instant_reply::without_first_note);
+        if let (Some(s), Some(pending)) = (session.as_deref(), pending_steer.as_deref().map(str::trim).filter(|p| !p.is_empty())) {
             if let Some(first) = steered.iter().find(|t| pending.contains(t.text.trim())) {
                 // shown without the bridge's note to the agent (instant_reply.rs), which still goes with the words
                 let shown = crate::instant_reply::without_note(pending);
