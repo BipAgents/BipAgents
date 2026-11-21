@@ -4423,6 +4423,54 @@ mod tests {
         assert_eq!(completed_errors(&task)[1..], [json!(false), json!(true)]);
     }
 
+    /// 21/11, the merge onto main: Hermes says each call's session (patch 0028) and, since patch 0029, runs calls of
+    /// several sessions side by side, so two runs of one agent inside the same tool at once is the common case (a
+    /// background task beside the person's conversation), not review 3's rare one. Without the call's id, a request is
+    /// paired within its own session's run: never with another conversation's call that started earlier, never left
+    /// waiting in another run.
+    #[tokio::test]
+    async fn a_request_is_paired_within_the_run_of_the_session_it_says() {
+        let hub = RunHub::new(HermesClient::new(reqwest::Client::new()), None, 7200, None);
+        let agent = AgentConfig { name: "vie".into(), ..Default::default() };
+        let task = Arc::new(RunSubscription::new(agent.clone(), "run_task"));
+        let chat = Arc::new(RunSubscription::new(agent, "run_chat"));
+        lock(&task.state).session_id = Some("api_task".into());
+        lock(&chat.state).session_id = Some("api_chat".into());
+        lock(&hub.inner).subs.insert(task.key(), task.clone());
+        lock(&hub.inner).subs.insert(chat.key(), chat.clone());
+        let claim = |session: &str| CALL_SESSION.sync_scope(Some(session.to_string()), || hub.claim_call("vie", "calendar_add"));
+        let tool = "mcp_bipagents_calendar_add";
+        // both inside calendar_add, the task's call started first; the conversation's request comes first: refused
+        hub.dispatch(&task, review2_event("tool.started", json!({"tool": tool, "tool_call_id": "t1"})));
+        hub.dispatch(&chat, review2_event("tool.started", json!({"tool": tool, "tool_call_id": "c1"})));
+        hub.refuse(&claim("api_chat").expect("the conversation's run is followed"));
+        let _task_request = claim("api_task");
+        hub.dispatch(&task, review2_event("tool.completed", json!({"tool": tool, "tool_call_id": "t1", "error": false})));
+        hub.dispatch(&chat, review2_event("tool.completed", json!({"tool": tool, "tool_call_id": "c1", "error": false})));
+        assert_eq!(
+            (completed_errors(&chat).last().cloned(), completed_errors(&task).last().cloned()),
+            (Some(json!(true)), Some(json!(false))),
+            "(the conversation's refused call, the task's added event) as the apps get them"
+        );
+        // a request before its call's tool.started, the task having called calendar_add last: it waits in its own
+        // session's run, so the task's next call, which goes well, is never relayed failed
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        hub.dispatch(&task, review2_event("tool.started", json!({"tool": tool, "tool_call_id": "t1b"})));
+        let _task_request = claim("api_task");
+        hub.dispatch(&task, review2_event("tool.completed", json!({"tool": tool, "tool_call_id": "t1b", "error": false})));
+        hub.refuse(&claim("api_chat").expect("followed"));
+        hub.dispatch(&task, review2_event("tool.started", json!({"tool": tool, "tool_call_id": "t2"})));
+        let _task_request = claim("api_task");
+        hub.dispatch(&task, review2_event("tool.completed", json!({"tool": tool, "tool_call_id": "t2", "error": false})));
+        hub.dispatch(&chat, review2_event("tool.started", json!({"tool": tool, "tool_call_id": "c2"})));
+        hub.dispatch(&chat, review2_event("tool.completed", json!({"tool": tool, "tool_call_id": "c2", "error": false})));
+        assert_eq!(
+            (completed_errors(&chat).last().cloned(), completed_errors(&task).last().cloned()),
+            (Some(json!(true)), Some(json!(false))),
+            "the early refusal on the conversation's call, not on the task's"
+        );
+    }
+
     #[tokio::test]
     async fn a_run_without_its_own_list_gets_the_automatic_one_until_the_agent_writes_one() {
         let hub = RunHub::new(HermesClient::new(reqwest::Client::new()), None, 7200, None);
