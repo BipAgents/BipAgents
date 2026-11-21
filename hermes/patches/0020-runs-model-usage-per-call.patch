@@ -1,5 +1,5 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
-From: Alexbob0 <190955252+Alexbob0@users.noreply.github.com>
+From: BipAgents <noreply@bipagents.com>
 Date: Sun, 1 Nov 2026 12:44:00 +0100
 Subject: The Runs API reports each model call's usage as it ends (model.usage)
 

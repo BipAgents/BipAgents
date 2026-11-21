@@ -21,6 +21,14 @@ def test_the_patches_are_made_on_the_pinned_hermes():
     assert names[0].startswith("0005-") and not any(n.startswith(("0001-", "0004-", "0006-", "0012-", "0019-")) for n in names)
 
 
+
+def test_the_patches_name_no_person():
+    """The patch files are public: their author is the neutral identity scripts/hermes-patches.sh writes (20/11)."""
+    for patch in hermes.set_patches(ROOT / "hermes" / "patches"):
+        header = patch.read_text(encoding="utf-8").split("\n\n", 1)[0]
+        authors = [line for line in header.splitlines() if line.startswith("From: ")]
+        assert authors == ["From: BipAgents <noreply@bipagents.com>"], patch.name
+
 def moved_context(tmp_path):
     """A patch made on the base, then Hermes moved a line of its context: `git apply` refuses it, a merge doesn't."""
     checkout = tmp_path / "hermes-agent"

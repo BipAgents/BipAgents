@@ -1,5 +1,5 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
-From: BipAgents <patches@bipagents.local>
+From: BipAgents <noreply@bipagents.com>
 Date: Fri, 20 Nov 2026 13:02:07 +0100
 Subject: Bot Desktop: a sandbox-hosted screen's env file read with an
  allowlist, its values kept in the sandbox (GHSA-p22p-9ph6-gmrh)

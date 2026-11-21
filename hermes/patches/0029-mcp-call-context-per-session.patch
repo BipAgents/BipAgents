@@ -1,5 +1,5 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
-From: BipAgents <patches@bipagents.local>
+From: BipAgents <noreply@bipagents.com>
 Date: Fri, 20 Nov 2026 12:00:25 +0100
 Subject: Calls to a call_context server go side by side per session
 
