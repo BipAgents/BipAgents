@@ -3135,12 +3135,18 @@ more steps in this turn. Don't repeat what failed: change approach.", crate::loo
             Some(wanted) => c.call_id.as_deref() == Some(wanted),
             None => !c.early && same_tool(&c.tool, tool),
         };
+        // the call said its session (Hermes patch 0028): only that session's run. Since patch 0029 calls of several
+        // sessions go side by side, so the earliest call of all the agent's runs would often be another conversation's
+        let session = CALL_SESSION.try_with(|s| s.clone()).ok().flatten();
         let open = {
             let inner = lock(&self.inner);
             let mut best: Option<(u64, Arc<RunSubscription>)> = None;
             for sub in inner.subs.values().filter(|sub| sub.agent.name == agent) {
                 let st = lock(&sub.state);
                 if st.finished || st.terminal.is_some() {
+                    continue;
+                }
+                if session.as_deref().is_some_and(|s| st.session_id.as_deref() != Some(s)) {
                     continue;
                 }
                 let earliest = st.bridge_calls.iter().filter(|c| c.claim.is_none() && fits(c)).map(|c| c.seq).min();
@@ -3311,15 +3317,23 @@ more steps in this turn. Don't repeat what failed: change approach.", crate::loo
         }
     }
 
-    /// The followed run a call of the bridge's `tool` by `agent` belongs to: the one whose last call was that tool,
-    /// else the most recent.
+    /// The followed run a request of the bridge's `tool` by `agent` waits in until its call starts (`claim_call_with`):
+    /// the run of the session the call says (Hermes patch 0028, `CALL_SESSION`), or none; without one (a connector's
+    /// entry), the one whose last call was that tool, else the most recent: only a step's mark rides on it.
     fn sub_of(&self, agent: &str, tool: &str) -> Option<Arc<RunSubscription>> {
         let tool = crate::loop_brake::bare(tool);
         let inner = lock(&self.inner);
+        let session = CALL_SESSION.try_with(|s| s.clone()).ok().flatten();
         let mut best: Option<((bool, f64), Arc<RunSubscription>)> = None;
         for sub in inner.subs.values().filter(|sub| sub.agent.name == agent) {
             let st = lock(&sub.state);
             if st.finished || st.terminal.is_some() || st.braked {
+                continue;
+            }
+            if let Some(session) = session.as_deref() {
+                if st.session_id.as_deref() == Some(session) {
+                    return Some(sub.clone());
+                }
                 continue;
             }
             let key = (st.last_tool == tool, st.last_tool_at.max(st.followed_since));
