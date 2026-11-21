@@ -137,8 +137,10 @@ you each time:
   the agents you let read it. The bridge keeps `<data>/shares/<agent>/` in step with it (backups and exports take
   that folder); the first time, that folder's content is copied into the volume and the folder kept as
   `<agent>.before-volume`. The `shared_files_*` tools reach the same folders (you approve deletes from the app);
-- **no internet but the package registries**: the sandbox sits on `bipagents-sandbox`, a podman network without a
-  route out, and reaches PyPI, npm, Rust crates, Go and Debian only, through a small proxy container
+- **the internet only through the bridge's proxy**: the sandbox sits on `bipagents-sandbox`, a podman network
+  without a route out. Reading any public HTTPS site is open; sending more than a little (64 KB an hour to one site,
+  256 KB a day) to a site you didn't allow is cut and asks you first; the package registries (PyPI, npm, Rust crates,
+  Go, Debian) have their own allowance. All of it goes through a small proxy container
   (`bipagents-egress`, `podman logs bipagents-egress` shows what it let through or blocked). When the bridge runs as a
   systemd user service, that proxy runs in its own scope (`systemd-run --user --scope`): restarting or updating the
   bridge leaves it running. Web search and the

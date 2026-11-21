@@ -35,9 +35,10 @@ Add `--dry-run` to see every step and command without changing anything.
    agent is a profile reached at `/p/<agent>/` with its own key. New agents are picked up without a restart.
    On Linux with podman, each agent's tools run in a sandbox the bridge keeps isolated: no folder of the machine
    inside (the files sent to the agent are copied into a podman volume of its own; shared folders between agents are
-   podman volumes too, `/partage` and `/lecture/<agent>`, kept in step with `<data>/shares/` for backups) and no
-   internet but the package registries (PyPI, npm, Rust crates, Go, Debian), through the `bipagents-egress` proxy on
-   a network without a route out. Hermes then runs harmless work there without asking each time. `bipagents update`
+   podman volumes too, `/partage` and `/lecture/<agent>`, kept in step with `<data>/shares/` for backups) and the
+   internet only through the `bipagents-egress` proxy on a network without a route out: reading any public site is
+   open, sending more than a little to a site the person didn't allow asks first (package registries have their own
+   allowance). Hermes then runs harmless work there without asking each time. `bipagents update`
    switches existing installs (`2026-10-22-isolated-sandboxes`, `2026-10-23-share-volumes`). `[sandbox] isolate =
    "off"` in the bridge's config, then a restart of the bridge, steps back: folders mounted as before, the network and
    proxy settings taken out.

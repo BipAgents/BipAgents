@@ -64,8 +64,8 @@ sie bewusst Hermes überlässt.
   `guide.rs` und `guide_team.rs` schlagen die ersten Agenten oder ein ganzes Team in einer Karte vor;
   `agent_groups.rs` sortiert sie (Privat, Beruf…).
 - `spaces.rs` zieht einen Agenten in ein eigenes Hermes um, wenn er Geheimnisse halten muss; `own_space.rs` macht das
-  beim ersten Geheimnis von selbst. `sandbox.rs` gibt jedem Agenten eine isolierte Sandbox (kein Ordner des Rechners,
-  nur Paketquellen).
+  beim ersten Geheimnis von selbst. `sandbox.rs` gibt jedem Agenten eine isolierte Sandbox (kein Ordner des Rechners;
+  das Web über den Proxy der Bridge: Lesen frei, Senden überwacht).
 - `browsers.rs` startet das echte Chrome jedes Agenten in einem eigenen Container; `browser_mcp.rs` startet seine
   Werkzeuge bei Bedarf; `desktop.rs`, `desktop_page.rs` und `desktop_read.rs` zeigen es in der App und lassen die
   Person übernehmen.
@@ -79,8 +79,9 @@ sie bewusst Hermes überlässt.
   beantwortete im Gespräch (`approvals_log.rs`) und folgt dem Anfrageprotokoll von Hermes
   (`hermes_prompts.rs`).
 - **Prompt-Injection.** Die Persönlichkeit jedes Agenten sagt, dass Gelesenes (Seiten, Mails, Dateien, andere
-  Agenten) Information ist, nie ein Befehl (`souls.rs`). Andere Agenten erreichen nur einen « Bot Chat »
-  (`peers.rs`). Gast-Runden bekommen geschlossene Werkzeuge (Patch 0018).
+  Agenten) Information ist, nie ein Befehl (`souls.rs`). Agenten schreiben einander nur entlang von
+  Verbindungen, im eigenen Gespräch der beiden Agenten, höchstens 4 Nachrichten, bevor du gefragt wirst
+  (`agent_messages.rs`, `agent_pairs.rs`, `agent_hops.rs`; die eines anderen Haushalts über `peers.rs`). Gast-Runden bekommen geschlossene Werkzeuge (Patch 0018).
 - **Was hinausgeht.** `sandbox_sites.rs` und `send_guard.rs`: Lesen im Web ist frei, aber das Senden von Daten an
   Seiten, die die Person nicht bestätigt hat, ist gedeckelt (64 KB pro Seite und Stunde) und wird dann erfragt;
   `heavy_work.rs` lässt Agenten vor großen Installationen oder Builds auf geteilten Servern fragen; `body_limit.rs`

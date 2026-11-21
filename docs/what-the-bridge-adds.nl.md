@@ -61,8 +61,8 @@ toevoegt, met de modules (`bridge-rs/src/<naam>.rs`) die het doen, en wat hij be
   startpersoonlijkheid; `guide.rs` en `guide_team.rs` stellen de eerste agents of een heel team voor in één kaart;
   `agent_groups.rs` deelt ze in (Privé, Werk…).
 - `spaces.rs` verhuist een agent naar een eigen Hermes als hij geheimen moet bewaren; `own_space.rs` doet dat
-  vanzelf bij het eerste geheim. `sandbox.rs` geeft elke agent een afgeschermde sandbox (geen map van de machine,
-  alleen pakketbronnen).
+  vanzelf bij het eerste geheim. `sandbox.rs` geeft elke agent een afgeschermde sandbox (geen map van de machine;
+  het web via de proxy van de bridge: lezen vrij, verzenden bewaakt).
 - `browsers.rs` draait de echte Chrome van elke agent in een eigen container; `browser_mcp.rs` start de tools pas
   bij gebruik; `desktop.rs`, `desktop_page.rs` en `desktop_read.rs` tonen hem in de app en laten de persoon het
   overnemen.
@@ -76,8 +76,9 @@ toevoegt, met de modules (`bridge-rs/src/<naam>.rs`) die het doen, en wat hij be
   helder, bewaart beantwoorde in het gesprek (`approvals_log.rs`) en volgt het vraagprotocol van Hermes
   (`hermes_prompts.rs`).
 - **Prompt-injectie.** De persoonlijkheid van elke agent zegt dat wat hij leest (pagina's, mails, bestanden, andere
-  agents) informatie is, nooit een opdracht (`souls.rs`). Andere agents bereiken alleen een « Bot Chat »
-  (`peers.rs`). Gastbeurten krijgen gesloten tools (patch 0018).
+  agents) informatie is, nooit een opdracht (`souls.rs`). Agents schrijven elkaar alleen langs koppelingen,
+  in het eigen gesprek van de twee agents, hoogstens 4 berichten voordat je gevraagd wordt
+  (`agent_messages.rs`, `agent_pairs.rs`, `agent_hops.rs`; die van een ander huishouden via `peers.rs`). Gastbeurten krijgen gesloten tools (patch 0018).
 - **Wat naar buiten gaat.** `sandbox_sites.rs` en `send_guard.rs`: het web lezen is vrij, maar gegevens versturen naar
   sites die de persoon niet heeft goedgekeurd is begrensd (64 KB per site per uur) en wordt dan gevraagd;
   `heavy_work.rs` laat agents vragen voor grote installaties of builds op gedeelde servers; `body_limit.rs` begrenst
