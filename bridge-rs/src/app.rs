@@ -1848,6 +1848,7 @@ pub fn create_app(config: Config, options: AppOptions) -> anyhow::Result<App> {
     crate::peers::write_contacts(&config, &crate::peers::links_of(&state.links.load()), Some(&state.households));
     crate::peers::heal_tokens(&config, &state.links); // Bot Mode only towards other households
     crate::shares::heal_skills(&config);
+    crate::jobs::repair_titles(&config); // tasks titled with Hermes' wrapper of a steer (21/11), before any task runs
     if options.start_background {
         state.start_background();
         state.spawn(queues.run_forever()); // the queues kept before a restart, and looked at again every 10 s

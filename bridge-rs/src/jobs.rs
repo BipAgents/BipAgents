@@ -737,7 +737,9 @@ impl Jobs {
         proposed_by: &str,
         from_session: Option<&str>,
     ) -> anyhow::Result<Dict> {
-        let title = tk::head(&tk::squeeze(title), 80).to_string();
+        // never Hermes' wrapper nor the app's notes (a title made from a person's row: threads/timeline.rs)
+        let title = crate::threads::timeline::title_text(title).unwrap_or_default();
+        let title = tk::head(&title, 80).to_string();
         let prompt = tk::strip(prompt).to_string();
         if title.is_empty() || prompt.is_empty() {
             return Err(job_error("a task needs a title and what to do"));
@@ -2330,6 +2332,32 @@ pub async fn sweep_task_browsers(config: &crate::config::Config) {
     }
 }
 
+/// The tasks kept with Hermes' wrapper or a note of the app's in their title (a rescue before 21/11 took Hermes' row
+/// of a steer for the request: « [OUT-OF-BAND USER MESSAGE — a direct message from the use… » on the lock screen, the
+/// home, the task's conversation and its report; from 29/10 the time line on top of the message: « <!--bip:now … »):
+/// cleaned at start, before any task runs (`create_app`), « Suite de la conversation » (the rescue's own word for no
+/// request) when nothing of the person's is left. How many were changed.
+pub fn repair_titles(config: &crate::config::Config) -> usize {
+    let mut changed = 0;
+    for mut job in tasks(config) {
+        let title = tk::str_or_empty(job.get("title"));
+        if !crate::threads::timeline::has_machinery(&title) {
+            continue;
+        }
+        let clean = crate::threads::timeline::title_text(&title)
+            .unwrap_or_else(|| crate::runs::rescue_title(""));
+        job.insert("title".into(), json!(tk::head(&clean, 80)));
+        match save(config, &job) {
+            Ok(()) => changed += 1,
+            Err(err) => tracing::warn!(job = %tk::str_or_empty(job.get("id")), error = %err, "a task's title not repaired"),
+        }
+    }
+    if changed > 0 {
+        tracing::info!(tasks = changed, "tasks' titles cleaned of Hermes' wrapper");
+    }
+    changed
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2359,6 +2387,43 @@ mod tests {
         assert!(!steps_moved(Some(&list(1, "Trier")), &list(1, "Trier")));
         assert!(steps_moved(Some(&list(1, "Trier")), &list(2, "Trier")));
         assert!(steps_moved(Some(&list(1, "Trier")), &list(1, "Ranger")));
+    }
+
+    /// 21/11: a task titled with Hermes' wrapper (« [OUT-OF-BAND USER MESSAGE — a direct message from the use… », the
+    /// rescue of before) showed so on the lock screen, the home and its conversation « 🧩 … ». A new task never takes
+    /// it; those kept are cleaned once at start (`repair_titles`), « Suite de la conversation » when nothing is left.
+    #[test]
+    fn a_task_title_never_carries_hermes_wrapper() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = crate::config::Config::with_key("k");
+        config.outbox.db_path = dir.path().join("bridge.db").to_string_lossy().into_owned();
+        let shared = crate::config::SharedConfig::new(config.clone());
+        let jobs = Jobs::new(shared, HermesClient::new(reqwest::Client::new()), None, None, None);
+        let agent = AgentConfig { name: "vie".into(), ..Default::default() };
+        let wrapped = "[OUT-OF-BAND USER MESSAGE — a direct message from the user]\nVestes en laine\n[/OUT-OF-BAND USER MESSAGE]";
+        let job = jobs.new_task(&agent, wrapped, "Cherche.", 0.2, None, "agent", None).unwrap();
+        assert_eq!(job["title"], "Vestes en laine");
+        let cut = "[OUT-OF-BAND USER MESSAGE — a direct message from the user, d…";
+        assert!(jobs.new_task(&agent, cut, "Cherche.", 0.2, None, "agent", None).is_err(), "no title left: refused");
+        // kept from before: cleaned once, the others left as they are
+        let mut old = job.clone();
+        old.insert("id".into(), json!("t0000000000aa"));
+        old.insert("title".into(), json!(cut));
+        save(&config, &old).unwrap();
+        let mut mixed = job.clone();
+        mixed.insert("id".into(), json!("t0000000000bb"));
+        mixed.insert("title".into(), json!(format!("Trie {wrapped}")));
+        save(&config, &mixed).unwrap();
+        let mut noted = job.clone();
+        noted.insert("id".into(), json!("t0000000000cc"));
+        noted.insert("title".into(), json!("<!--bip:now samedi 21 novembre 2026, 01:44, Europe/Paris (UTC…"));
+        save(&config, &noted).unwrap();
+        assert_eq!(repair_titles(&config), 3);
+        assert_eq!(load(&config, "t0000000000aa").unwrap()["title"], "Suite de la conversation");
+        assert_eq!(load(&config, "t0000000000cc").unwrap()["title"], "Suite de la conversation");
+        assert_eq!(load(&config, "t0000000000bb").unwrap()["title"], "Trie Vestes en laine");
+        assert_eq!(load(&config, &tk::str_or_empty(job.get("id"))).unwrap()["title"], "Vestes en laine");
+        assert_eq!(repair_titles(&config), 0, "once");
     }
 
     #[test]
