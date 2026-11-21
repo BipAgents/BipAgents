@@ -520,6 +520,17 @@ mod tests {
         assert!(!id_number("Numéro client Free 12345678901234"));
     }
 
+    /// Review 4 (21/11): review 3's NIR next to a customer word, in the forms its key check does not see: a Corsican
+    /// NIR in one block (« 2A »/« 2B » break the digits) and the 13 digits without the key.
+    #[test]
+    fn review4_a_corsican_or_keyless_nir_near_a_customer_word_is_refused() {
+        let kept: Vec<&str> = ["Mutuelle MGEN, adhérent 185052A12345633", "Mutuelle MGEN, adhérent 1850578006084"]
+            .into_iter()
+            .filter(|t| !id_number(t))
+            .collect();
+        assert!(kept.is_empty(), "kept by the Carnet: {kept:#?}");
+    }
+
     /// Review 1 (14/11): ordinary notes the first version refused (a book, an order, a validity, opening hours, a
     /// phone number next to an ID word, a parcel).
     #[test]
