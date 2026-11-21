@@ -1062,6 +1062,8 @@ pub async fn message_notes(state: &AppState, agent: &AgentConfig, session: &str,
                 briefs.take_recap(&agent.name, &session),
                 // its last turn here was cut by the model's length limit (reply_cut.rs)
                 crate::reply_cut::take_note(&agent.name, &session, &lang),
+                // a watcher of its « en panne »: told here, never by a turn of its own (watchers.rs `failed`)
+                crate::watchers::take_broken_note(&agent.name),
                 crate::family_news::take_notes(&config, &agent.name),
                 named(crate::notebook::news::take_now(&config, &agent.name)), // the Carnet's news (notebook/news.rs)
                 crate::rooms_memory::take_note(&config, &agent.name), // what's new in its rooms (rooms_memory.rs)

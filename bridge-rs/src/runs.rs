@@ -2656,6 +2656,9 @@ more steps in this turn. Don't repeat what failed: change approach.", crate::loo
     /// words steered, a message waiting), checked again while it starts. It has the turn's instructions and options.
     /// Returns the end, and this run's own end when that one is the continuation's (handed over already; this run's
     /// files are merged in: `with_own_files`). When it can't start, fails or says nothing: this run's own end.
+    /// The same for a turn, working or not, that ends on a promise to tell later (« je te préviens dès que le prix
+    /// baisse ») with nothing set up in it to notice it (no watcher, routine, trigger, task…: `go_on::nudge`), told to
+    /// set one up now or to say plainly it can't watch that (`go_on::tell_input`; proactive agents, part 1).
     async fn go_on(self: &Arc<Self>, sub: &Arc<RunSubscription>, terminal: SSEEvent) -> (SSEEvent, Option<SSEEvent>) {
         if terminal.r#type != "run.completed" {
             return (terminal, None);
@@ -2665,17 +2668,17 @@ more steps in this turn. Don't repeat what failed: change approach.", crate::loo
         if !shared.get().brake.go_on || crate::family_thread::is_common(&shared.get(), &sub.agent.name) {
             return (terminal, None);
         }
-        let (session, watched, followed, phone, instructions, options) = {
+        let (session, watched, followed, phone, instructions, options, tools) = {
             let st = lock(&sub.state);
+            if !go_on_fits(&st) {
+                return (terminal, None);
+            }
             let tools: Vec<String> = st
                 .backlog
                 .iter()
                 .filter(|e| e.r#type == "tool.started")
                 .map(|e| crate::loop_brake::event_tool(&e.data))
                 .collect();
-            if !go_on_fits(&st) || !crate::go_on::did_nothing(tools.iter().map(String::as_str)) {
-                return (terminal, None);
-            }
             (
                 st.session_id.clone(),
                 st.watched,
@@ -2683,6 +2686,7 @@ more steps in this turn. Don't repeat what failed: change approach.", crate::loo
                 st.phone.clone(),
                 st.instructions.clone(),
                 st.model_options.clone(),
+                tools,
             )
         };
         let said = terminal.final_text();
@@ -2690,7 +2694,9 @@ more steps in this turn. Don't repeat what failed: change approach.", crate::loo
         // (the note of a first message's line steered beside the turn and never read is no words: instant_reply.rs)
         let steered = as_str(terminal.data.get("pending_steer"))
             .is_some_and(|p| !crate::instant_reply::without_note(&p).trim().is_empty());
-        if !crate::go_on::promises(&said) || steered || self.someone_elses(&sub.run_id) {
+        // work announced and none done, or a promise to tell later with nothing set up to notice it (go_on.rs `nudge`)
+        let Some(nudge) = crate::go_on::nudge(&tools, &said) else { return (terminal, None) };
+        if steered || self.someone_elses(&sub.run_id) {
             return (terminal, None);
         }
         let queues = self.queues.get().and_then(std::sync::Weak::upgrade);
@@ -2721,7 +2727,15 @@ more steps in this turn. Don't repeat what failed: change approach.", crate::loo
         if stepped_in() {
             return (terminal, None);
         }
-        let input = crate::dates::now::stamped(&shared.get(), &agent, &crate::go_on::input(&said));
+        let note = match nudge {
+            crate::go_on::Nudge::Work => crate::go_on::input(&said),
+            crate::go_on::Nudge::Tell => {
+                tracing::info!(agent = %agent.name, run_id = %sub.run_id,
+                    "promise to tell later with nothing set up to notice it: continuation");
+                crate::go_on::tell_input(&said, &crate::go_on::already_set_up(&shared.get(), &agent.name))
+            }
+        };
+        let input = crate::dates::now::stamped(&shared.get(), &agent, &note);
         let mut started = None;
         // Hermes may still be closing the turn (the conversation busy for a moment)
         for attempt in 0..4u64 {
