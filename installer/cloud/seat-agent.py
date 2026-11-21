@@ -609,9 +609,16 @@ def uptime(path="/proc/uptime"):
         return None
 
 
+# What this seat agent does of the guichet's vault_keys orders, said in every beat (F2, final review of 20/11): 3 = it
+# notes each order's outcome, tells it with the done and cites the last one in each place's beat (870bc5931). The
+# guichet's `vault-enrol` orders a server only when its last beat says 3 or more; raise it when that protocol changes.
+VAULT_AGENT = 3
+
+
 def vitals(meminfo="/proc/meminfo", root="/", uptime_path="/proc/uptime", hardened=HARDENED):
-    """The server's own numbers: memory, swap and disk in MB and GB, the load, how long it has been up; and whether
-    space-hardening.sh was done (encrypted places need it: swap encrypted, no core dumps, journal in memory)."""
+    """The server's own numbers: memory, swap and disk in MB and GB, the load, how long it has been up; whether
+    space-hardening.sh was done (encrypted places need it: swap encrypted, no core dumps, journal in memory); and which
+    vault orders this agent does (`VAULT_AGENT`)."""
     info = {}
     try:
         with open(meminfo) as fh:
@@ -627,7 +634,7 @@ def vitals(meminfo="/proc/meminfo", root="/", uptime_path="/proc/uptime", harden
             "swap_mb": info.get("SwapTotal"), "swap_used_mb": info.get("SwapTotal", 0) - info.get("SwapFree", 0),
             "disk_gb": round(disk.total / 1e9, 1), "disk_free_gb": round(disk.free / 1e9, 1),
             "load": [round(load[0], 2), round(load[1], 2)], "uptime": uptime(uptime_path),
-            "space_hardened": os.path.exists(hardened)}
+            "space_hardened": os.path.exists(hardened), "vault_agent": VAULT_AGENT}
 
 
 def health():
