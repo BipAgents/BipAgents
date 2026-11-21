@@ -273,7 +273,9 @@ def test_a_running_task_says_what_it_does_now_and_jobs_list_by_agent(bridges, fa
 
     def activity():
         jobs = bridge.get("/v1/jobs?agent=wellness", headers=AUTH).json()["jobs"]
-        return jobs[0].get("activity") if jobs else None
+        found = jobs[0].get("activity") if jobs else None
+        # (what it does now, `status`, test_turn_status.py: on by default since 21/11)
+        return {k: v for k, v in found.items() if k != "status"} if found else found
 
     assert wait_until(lambda: activity() == {"tool": "web_search", "preview": "mutuelle famille 4"}, timeout=15)
     missing = bridge.get("/v1/jobs?agent=nobody", headers=AUTH)

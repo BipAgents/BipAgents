@@ -472,6 +472,7 @@ impl Threads {
     pub async fn forget_agent(&self, agent: &str) -> anyhow::Result<()> {
         let _guard = self.registry.lock().await;
         let rows = self.store.run("SELECT * FROM threads WHERE agent = ?", vec![text(agent)]).await?;
+        self.store.forget_agent_turn_times(agent).await?;
         for thread in rows.iter().map(Thread::of) {
             self.store.run("DELETE FROM thread_segments WHERE thread_id = ?", vec![text(&thread.id)]).await?;
             self.store.run("DELETE FROM notifications WHERE thread_id = ?", vec![text(&thread.id)]).await?;
@@ -1232,12 +1233,16 @@ async fn delete_thread(
         return Err(HttpError::new(409, "the family's conversation is everyone's: it can't be deleted"));
     }
     let _guard = threads.registry.lock().await;
-    for segment in threads.segments(&thread.id).await? {
+    let segments = threads.segments(&thread.id).await?;
+    for segment in &segments {
         match threads.hermes.delete_session(&agent, &segment.session_id).await {
             Ok(()) | Err(crate::hermes::HermesError::Http { status: 404, .. }) => {}
             Err(exc) => return Err(HttpError::new(502, format!("Hermes refused the deletion: {}", exc.type_name()))),
         }
     }
+    // where its long turns' time went (sites): with it (turn_status.rs, review R1)
+    let sessions: Vec<String> = segments.iter().map(|s| s.session_id.clone()).collect();
+    threads.store.forget_turn_times(&agent.name, &sessions).await?;
     threads.store.run("DELETE FROM thread_segments WHERE thread_id = ?", vec![text(&thread.id)]).await?;
     threads.store.run("DELETE FROM notifications WHERE thread_id = ?", vec![text(&thread.id)]).await?;
     // its messages sent and never stored go with it: kept, they came back as « Pas envoyé » in the main thread

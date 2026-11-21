@@ -1,7 +1,7 @@
 """What the agent does now (turn_status.rs, docs/conversations.md §6.5b; Alex 16/11: « on attend 5-6 min et on sait
 pas trop ce que l'agent essaye de faire »): an app that asks (`status=1`) gets one `turn.status` per change in the
 run's stream, with a page's bare domain and never a call's arguments; an app that doesn't ask gets none, live or
-replayed; off by default (`[status] enabled = false`)."""
+replayed; on by default since 21/11, off with `[status] enabled = false`."""
 import json
 
 from bbkit.common import AUTH, read_sse, sse
@@ -16,7 +16,7 @@ def start(bridges, fakes, enabled):
     fakes.hermes.v0225 = True
     fakes.hermes.rounds = 1000
     fakes.hermes.add_session(SESSION, [user("Bonjour"), agent("Salut")], title="Bot Chat", last_active=10, started_at=1)
-    change = (lambda c: c.update(status={"enabled": True})) if enabled else None
+    change = (lambda c: c.update(status={"enabled": enabled})) if enabled is not None else None
     bridge = bridges.new(change=change).start()
     thread = bridge.get("/v1/threads/main", headers=AUTH, params={"agent": "wellness"}).json()["id"]
     fakes.hermes.runs["r1"] = [
@@ -63,9 +63,15 @@ def test_an_app_that_does_not_ask_gets_none_live_or_replayed(bridges, fakes):
     assert "turn.status" not in [name for name, _ in events(bridge, asked=False)]
 
 
-def test_off_by_default(bridges, fakes):
+def test_off_when_switched_off(bridges, fakes):
     bridge = start(bridges, fakes, enabled=False)
     assert "turn.status" not in [name for name, _ in events(bridge, asked=True)]
+
+
+def test_on_by_default(bridges, fakes):
+    """21/11: both apps read them since rc-1118 and the review's points before switching on are done."""
+    bridge = start(bridges, fakes, enabled=None)
+    assert "turn.status" in [name for name, _ in events(bridge, asked=True)]
 
 
 def test_a_background_tasks_activity_says_what_it_does_now(bridges, fakes):
