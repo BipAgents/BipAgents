@@ -216,7 +216,9 @@ def test_an_others_facing_agent_never_gets_credentials_and_its_hub_keeps_moving(
     assert "bipagents_connectors" in entries(hub, "coach")   # offered: its first secret moves it
 
 
-def test_an_agent_linked_to_a_relative_keeps_the_hub_moving(bridges, fakes):
+def test_an_agent_another_household_writes_to_stays_in_the_hub_and_the_hub_stays_private(bridges, fakes):
+    """Alex 21/11: what comes from someone else runs as a guest turn (household_asks.rs), and no agent leaves the hub
+    because others talk to it: the person's agents keep their credentials in the hub."""
     bridge, hub = hub_place(bridges, fakes, agents=("coach", "cuisine"), hub_python=hub_podman)
     bridge.state_dir.mkdir(parents=True, exist_ok=True)
     # a relative's agents may write to Cuisine, both sides agreeing (« Entre tes agents », rules.rs)
@@ -226,7 +228,8 @@ def test_an_agent_linked_to_a_relative_keeps_the_hub_moving(bridges, fakes):
     bridge.start()
     wait_registered(bridge, ["coach", "cuisine"])
     vault = {a["id"]: a.get("why") for a in bridge.get("/v1/vault", headers=AUTH).json()["agents"]}
-    assert {k: vault[k] for k in ("coach", "cuisine")} == dict.fromkeys(("coach", "cuisine"), "needs_own_space")
+    assert {k: vault[k] for k in ("coach", "cuisine")} == {"coach": None, "cuisine": None}
+    assert not (bridge.root / "spaces" / "cuisine").exists()
 
 
 @pytest.mark.slow
@@ -291,10 +294,12 @@ def test_an_unprotected_install_is_never_tidied(bridges, fakes):
 
 
 def test_an_agent_shared_with_a_relative_gets_a_secret_only_once_confirmed(bridges, fakes):
-    """An agent other people talk to (here shared with Léa's household) may keep a secret in its own space, but only
-    once the person confirmed it: the card says who else talks to it, and the bridge refuses an answer without
-    `confirmed_others` (an app from before the confirmation) with a plain refusal."""
-    bridge, hub = hub_place(bridges, fakes, agents=("coach",))
+    """An agent other people talk to (here shared with Léa's household) may keep a secret, but only once the person
+    confirmed it: the card says who else talks to it, and the bridge refuses an answer without `confirmed_others` (an
+    app from before the confirmation) with a plain refusal. It keeps it in the hub (Alex 21/11: their turns are guest
+    turns, no agent leaves the hub because others talk to it)."""
+    bridge, hub = hub_place(bridges, fakes, agents=("coach",), hub_python=hub_podman)
+    bridge.commands.rule("podman", ["exec", "-i", "hermes-hub"], stdout=json.dumps({"id": "vault_1"}) + "\n")
     bridge.state_dir.mkdir(parents=True, exist_ok=True)
     (bridge.state_dir / "households.json").write_text(json.dumps({"households": {"lea": {"name": "Léa"}}}))
     (bridge.state_dir / "agent-shares.json").write_text(json.dumps({"shared": {"coach": ["lea"]}}))
@@ -304,7 +309,7 @@ def test_an_agent_shared_with_a_relative_gets_a_secret_only_once_confirmed(bridg
     with ThreadPoolExecutor(1) as pool:
         call = pool.submit(tool, bridge, "ask_secret", ASK)
         assert wait_until(lambda: secret_cards(bridge), timeout=60), bridge.log_tail(4000)
-        assert tomllib.loads(bridge.toml_text())["agents"]["coach"]["isolated"] is True   # in its own space
+        assert not tomllib.loads(bridge.toml_text())["agents"]["coach"].get("isolated")   # still in the hub
         card = secret_cards(bridge)[0]
         assert card["bip_secret_others"] is True and card["bip_secret_others_names"] == ["Léa"]
         answer = {"allow": True, "value": "Fake-Pa55word", "identifier": "alex@example.org"}

@@ -10,12 +10,10 @@
 //! own conversation « A ⇄ B » (agent_pairs.rs, since 2026-10-29: not in the target's Bot Chat any more, the person's
 //! main conversation with it), signed as Hermes signs a peer's message (« Message from Quotidien (@quotidien): … »,
 //! peers.rs `SIGNATURE`), and gives back the target's answer in the same call: the asker can answer its person in
-//! the same turn. Another household's agents are never reached here (family_news.rs stays the way there). During a
-//! relative's turn or in a shared conversation the tool is closed like the person's other data (agent_shares.rs
-//! `RELATIVE_TOOLS`).
-//! Hermes' own Bot Mode is off between agents of this household (peers.rs, since 2026-11-10): no peer for them, and
-//! the relay refuses a local target. Where an agent also writes to another household (Bot Mode kept for that), Hermes
-//! patch 0016 still leaves Hermes' own out of the Bot Chat when this one is listed: one `message_agent` everywhere.
+//! the same turn. **Another household's agent** too, where both households' rules allow it (Alex 21/11): through the
+//! two bridges (household_asks.rs), its answer back in the same call, never Hermes' Bot Mode (off everywhere since,
+//! peers.rs `drop_bot_mode`: no agent leaves the shared hub for it). During a relative's turn or in a shared
+//! conversation the tool is closed like the person's other data (agent_shares.rs `RELATIVE_TOOLS`).
 //! Since 6/11 (Hermes 0.23 study §4.4-3): at most `agent_hops::MAX_HOPS` messages between agents since the person
 //! last spoke, counted by the bridge, not the model (agent_hops.rs); past them the call is refused at once (`CAPPED`)
 //! and the person gets a « Continuer » card. A message to an agent waiting for this very exchange is answered at once
@@ -38,9 +36,10 @@ pub const ANSWER_SECONDS: f64 = 600.0;
 pub fn tool() -> Value {
     json!({
         "name": TOOL_NAME,
-        "description": "Ask another of your person's agents (one your person lets you write to: see your contacts, \
-e.g. bip/coach) and get its answer back in this same call. Write the message yourself: the point first, the precise \
-question or what you need. Then answer your person with what it said.",
+        "description": "Ask another agent your person lets you write to (see your contacts: one of your person's, \
+e.g. bip/coach, or of a relative's household, e.g. bip/cuisine__lea) and get its answer back in this same call. Write \
+the message yourself: the point first, the precise question or what you need. Then answer your person with what it \
+said.",
         "inputSchema": {"type": "object", "properties": {
             "target": {"type": "string", "description": "the other agent, as in your contacts (e.g. bip/coach) or by its name"},
             "message": {"type": "string", "description": "what you ask or tell it"},
@@ -49,9 +48,12 @@ question or what you need. Then answer your person with what it said.",
     })
 }
 
-/// Whether `agent` gets the tool: the person let it write to another agent of this place.
+/// Whether `agent` gets the tool: the rules let it write to another agent of this place, or of a linked household.
 pub fn offered(config: &Config, agent: &str) -> bool {
-    crate::agent_files::offered(config, agent)
+    crate::agent_files::offered(config, agent) || {
+        let world = crate::rules::World::of(config, false);
+        crate::rules::writes_to_households(&world, &crate::rules::load(config), agent)
+    }
 }
 
 /// The message as the target reads it: signed like a peer's (peers.rs `SIGNATURE`).
@@ -108,12 +110,9 @@ async fn answer(
     if message.chars().count() > MAX_CHARS {
         return tool_text(&format!("The message is too long ({MAX_CHARS} characters at most): shorten it."), true);
     }
-    let bare = wanted.trim().trim_start_matches("bip/");
-    if crate::households::split(bare).is_some() {
-        return tool_failure(
-            "Another household's agents aren't reached from here (tell_family proposes it to your person).",
-            "I can only write to your own agents from here.",
-        );
+    let bare = wanted.trim().trim_start_matches("bip/").trim_start_matches('@').to_lowercase();
+    if config.agent(Some(&bare)).is_none() && crate::households::split(&bare).is_some() {
+        return to_household(http, hub, config, agent, &bare, &message, card).await;
     }
     let Some(target) = crate::agent_files::recipient(config, &wanted).cloned() else {
         let mine: Vec<String> = crate::agent_files::targets(config, &agent.name).map(|t| format!("bip/{t}")).collect();
@@ -192,6 +191,83 @@ again: its answer will be in your conversation with {shown}, which your person c
             false,
         ),
     }
+}
+
+/// `agent` asks `remote`, an agent of a linked household (`cuisine__lea`), through the two bridges
+/// (household_asks.rs), where both households' rules allow it: checked here, then there.
+async fn to_household(
+    http: &reqwest::Client,
+    hub: Option<std::sync::Arc<crate::runs::RunHub>>,
+    config: &Config,
+    agent: &AgentConfig,
+    remote: &str,
+    message: &str,
+    card: &mut Option<CapCard>,
+) -> Dict {
+    let shown = crate::household_asks::shown_remote(config, remote);
+    if !crate::rules::allows(config, &agent.name, remote) {
+        return tool_failure(
+            &format!("The person hasn't let you write to {shown}."),
+            &format!("I can't write to {shown}: you can allow it in the app, under « Entre tes agents »."),
+        );
+    }
+    if let Some(path) = own_folder_path(message) {
+        tracing::info!(agent = %agent.name, target = %remote, "message to another household's agent: refused, a path of its own folders");
+        return tool_text(
+            &format!("Nothing was sent: {shown} sees none of your folders, so {path} means nothing to it (and another \
+household's agents get no files): write what it needs in the message itself."),
+            true,
+        );
+    }
+    let run = hub.as_ref().and_then(|hub| hub.turn_of(&agent.name, TOOL_NAME)).map(|t| t.run_id);
+    match crate::agent_hops::step(&agent.name, run.as_deref(), remote, crate::py::time_time()) {
+        crate::agent_hops::Step::Go { hop, .. } => {
+            tracing::info!(agent = %agent.name, target = %remote, hop, "message to another household's agent");
+        }
+        crate::agent_hops::Step::Capped(chain) => {
+            tracing::info!(agent = %agent.name, target = %remote, chain = %chain.id, "agent hops: at the cap");
+            *card = crate::agent_hops::card_for(config, &chain).map(|run_id| CapCard {
+                run_id,
+                agent: chain.root_agent.clone(),
+                root_run: chain.root_run.clone(),
+            });
+            return capped();
+        }
+    }
+    let kept = format!("its answer will be in your conversation with {shown}, which your person can open");
+    match crate::household_asks::ask(http, config, agent, remote, message).await {
+        crate::household_asks::Outcome::Answered(crate::agent_pairs::Answer::Text(reply)) => {
+            tool_text(&format!("{shown} (bip/{remote}) answered:\n{}", reply.trim()), false)
+        }
+        crate::household_asks::Outcome::Answered(crate::agent_pairs::Answer::Empty) => {
+            tool_text(&format!("{shown} got your message but answered nothing."), false)
+        }
+        crate::household_asks::Outcome::Answered(
+            crate::agent_pairs::Answer::Waiting | crate::agent_pairs::Answer::Queued,
+        ) => tool_text(
+            &format!(
+                "{shown} got your message and is still on it (it may be waiting for its person). Don't send it again: \
+{kept}."
+            ),
+            false,
+        ),
+        crate::household_asks::Outcome::Answered(crate::agent_pairs::Answer::NotDelivered)
+        | crate::household_asks::Outcome::Closed => not_delivered(&shown),
+        crate::household_asks::Outcome::Answered(_) => unreachable(&shown),
+        crate::household_asks::Outcome::Refused => tool_failure(
+            &format!("{shown}'s person hasn't allowed your message (nothing was sent)."),
+            &format!("{shown} can't get messages from me yet: its person has to allow it in their app."),
+        ),
+    }
+}
+
+/// A path of the sender's own folders in a message to another household's agent: it sees none of them.
+fn own_folder_path(message: &str) -> Option<String> {
+    static PATH: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(r#"(?:^|[\s«"'(\[`<])(/(?:envoi|partage|workspace|root|fichiers)/[^\s»"')\]`>]+)"#)
+            .expect("valid regex")
+    });
+    PATH.captures(message).map(|c| c[1].trim_end_matches(['.', ',', ';', ':', '!', '?']).to_string())
 }
 
 /// A path in a message that only the sender sees: its outbox, shared folder or sandbox folders (token lab of

@@ -57,10 +57,10 @@ const MAX_NAMED: usize = 200;
 
 // -- what follows a change ------------------------------------------------------------------------------------------
 
-/// After the rules changed: Bot Mode and the contacts (peers.rs `refresh`), the tools (who may write to whom decides
-/// `send_files_to_agent` and `message_agent`), the agents others now talk to out of the hub once idle, the shared
-/// folders mounted again once (shares.rs `sync`), and the households in `told` told our side (waited for a few
-/// seconds: the screen then says where they stand; one that doesn't answer is told again later).
+/// After the rules changed: the contacts (peers.rs `refresh`), the tools (who may write to whom decides
+/// `send_files_to_agent` and `message_agent`), the shared folders mounted again once (shares.rs `sync`), and the
+/// households in `told` told our side (waited for a few seconds: the screen then says where they stand; one that
+/// doesn't answer is told again later). No agent leaves the hub for a rule (Alex 21/11: guest turns).
 pub async fn follow(state: &AppState, told: &[String]) {
     take_effect(state).await;
     tell_all(state, told).await;
@@ -70,16 +70,11 @@ pub async fn follow(state: &AppState, told: &[String]) {
 async fn take_effect(state: &AppState) {
     let config = state.config();
     if let Err(exc) = crate::peers::refresh(&config, &state.links, Some(&state.households)) {
-        tracing::warn!(error = %exc, "agent rules: Bot Mode or contacts not set");
+        tracing::warn!(error = %exc, "agent rules: contacts not set");
     }
     let run = crate::agents_admin::default_run();
     for agent in config.agents.values() {
         let _ = crate::agents_admin::give_tools(&config, agent, &run).await;
-    }
-    for agent in config.agents.values() {
-        if crate::own_space::should_leave_hub(&config, agent) {
-            crate::own_space::apart_when_idle(state, &agent.name);
-        }
     }
     if let Err(exc) = crate::shares::sync(&config, &run).await {
         tracing::warn!(error = %crate::agents_admin::tail(&exc.to_string(), 200), "agent rules: shared folders not mounted");
@@ -92,28 +87,29 @@ pub async fn tell_all(state: &AppState, households: &[String]) {
     futures::future::join_all(households.iter().map(|h| tell_within(state, h, SCREEN_SECONDS))).await;
 }
 
-/// An agent made or deleted: the rules cover it at once. The contacts and Bot Mode as they now are, the tools of the
-/// agents that just got their first recipient (or lost their last), the shared folders' mounts.
+/// An agent made or deleted: the rules cover it at once. The contacts as they now are, the tools of the agents that
+/// just got their first recipient (or lost their last), the shared folders' mounts.
 pub async fn agents_changed(config: &Config, run: &Run, before: &[(String, bool)]) {
     let links = crate::peers::Links::new(&py::join(&config.data_dir(), "peers.json"));
     let households = crate::households::Households::new(&crate::households::path_for(config));
     if let Err(exc) = crate::peers::refresh(config, &links, Some(&households)) {
-        tracing::warn!(error = %exc, "agent rules: Bot Mode or contacts not set");
+        tracing::warn!(error = %exc, "agent rules: contacts not set");
     }
     for agent in config.agents.values() {
         let had = before.iter().find(|(name, _)| *name == agent.name).map(|(_, offered)| *offered);
-        if had.is_some_and(|had| had != crate::agent_files::offered(config, &agent.name)) {
+        if had.is_some_and(|had| had != crate::agent_messages::offered(config, &agent.name)) {
             let _ = crate::agents_admin::give_tools(config, agent, run).await;
         }
     }
     if let Err(exc) = crate::shares::sync(config, run).await {
         tracing::warn!(error = %crate::agents_admin::tail(&exc.to_string(), 200), "agent rules: shared folders not mounted");
     }
+    // (no agent leaves the hub because a rule lets others write to it, Alex 21/11: their messages are guest turns)
 }
 
 /// Whether each agent writes to another one now (for `agents_changed`).
 pub fn offered_now(config: &Config) -> Vec<(String, bool)> {
-    config.agents.values().map(|a| (a.name.clone(), crate::agent_files::offered(config, &a.name))).collect()
+    config.agents.values().map(|a| (a.name.clone(), crate::agent_messages::offered(config, &a.name))).collect()
 }
 
 // -- between two households -----------------------------------------------------------------------------------------
@@ -210,7 +206,7 @@ async fn received(state: &AppState, household: &str, theirs: &Wire, told_at: Opt
             return;
         }
     };
-    let works = |r: &Rules| (rules::effective_links(&world, r), rules::household_senders(&world, r));
+    let works = |r: &Rules| rules::effective_links(&world, r);
     if works(&before) != works(&after) {
         tracing::info!(household, "agent rules: what works with them changed");
         let later = state.clone();
@@ -436,7 +432,7 @@ async fn answer(state: &AppState, id: &str, way: Way, accept: bool, fingerprint:
         if fingerprint.is_some_and(|f| f != now) {
             return;
         }
-        done = if accept { rules::accept(r, id, way) } else { rules::decline(r, id, way) };
+        done = if accept { rules::accept(&world, r, id, way) } else { rules::decline(r, id, way) };
         if let Some(h) = r.households.get_mut(id).filter(|_| done) {
             h.changed = py::time_time();
         }
@@ -722,7 +718,8 @@ fn wanted_rule(world: &World, rules_now: &Rules, way: Way, body: &Dict) -> ApiRe
     for agent in &agents {
         let fine = match way {
             Way::In => mine.contains(agent),
-            Way::Out => plausible(&Rule::only([agent.clone()])) && world.agent(agent).is_none(),
+            // their agents' ids: one may also be one of yours (every place's guide is « bip »)
+            Way::Out => plausible(&Rule::only([agent.clone()])),
         };
         if !fine {
             return Err(HttpError::new(400, format!("{agent}: not an agent that way")));
@@ -785,6 +782,23 @@ pub fn router() -> Router<AppState> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn their_agent_may_have_the_id_of_one_of_yours() {
+        // every place's guide is « bip »: « seulement à son Bip » is theirs, whatever yours are called (review 1, B3)
+        let world = World {
+            agents: vec![rules::Agent { id: "bip".into(), can_share: true, ..Default::default() }],
+            linked: ["chi".to_string()].into_iter().collect(),
+        };
+        let mut body = Dict::new();
+        body.insert("mode".into(), json!("only"));
+        body.insert("agents".into(), json!(["bip"]));
+        assert_eq!(wanted_rule(&world, &Rules::default(), Way::Out, &body).unwrap(), Rule::only(["bip"]));
+        body.insert("agents".into(), json!(["../x"]));
+        assert!(wanted_rule(&world, &Rules::default(), Way::Out, &body).is_err());
+        body.insert("agents".into(), json!(["sante"]));
+        assert!(wanted_rule(&world, &Rules::default(), Way::In, &body).is_err(), "way in: yours only");
+    }
 
     #[test]
     fn names_are_joined_in_french() {

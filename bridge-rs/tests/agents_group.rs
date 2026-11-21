@@ -643,62 +643,52 @@ fn lea(tmp: &Path) -> Households {
 }
 
 #[test]
-fn bot_mode_only_for_the_agents_that_write_to_another_household() {
+fn bot_mode_is_off_even_towards_another_household() {
     let dir = tempfile::tempdir().unwrap();
     let p = peers_setup(dir.path());
     let households = lea(&PathBuf::from(p.config.data_dir()));
     let (budget, maison, jardin) =
         (p.hub.join("profiles/budget"), p.hub.join("profiles/maison"), p.space.join("profiles/jardin"));
-    // a place made before: every profile marked, the hub with the bridge as its peer
+    // a place made before 21/11: every profile marked, the hub and the space with the bridge as their peer and a key
     for profile in [&budget, &maison, &jardin] {
         std::fs::write(profile.join("profile.yaml"), "description: x\nui_meta:\n  hermes-bots: {}\n").unwrap();
     }
-    // Within this household only: no mark, no peer, no token anywhere.
-    let local = pairs(&[("budget", "jardin"), ("jardin", "budget"), ("budget", "maison")]);
-    let result = peers::apply(&p.config, &p.links, &local, Some(&households)).unwrap();
-    assert_eq!(result["manual"], json!({}));
-    assert!(!marked(&budget) && !marked(&maison) && !marked(&jardin));
-    assert_eq!(std::fs::read_to_string(budget.join("profile.yaml")).unwrap(), "description: x\nui_meta: {}\n");
-    assert!(env_token(&p.hub.join(".env")).is_none() && env_token(&p.space.join(".env")).is_none());
-    assert!(!p.space.join("config.yaml").exists());
-    assert!(rules::allows(&p.config, "budget", "jardin") && !rules::allows(&p.config, "maison", "budget"));
-    // Your agents may write to Léa's Cuisine: nothing yet, Léa has not agreed (rules.rs: both sides).
-    let mut both = local.clone();
-    both.push(("jardin".into(), "cuisine__lea".into()));
+    for gateway in [&p.hub, &p.space] {
+        std::fs::write(gateway.join("config.yaml"), "model:\n  default: glm\nbot_peers:\n  bip:\n    url: http://127.0.0.1:1/peer\n").unwrap();
+        std::fs::write(gateway.join(".env"), "HERMES_PEER_BIP_KEY=old\nOTHER=1\n").unwrap();
+    }
+    let digest = |t: &str| {
+        use sha2::Digest;
+        hex::encode(sha2::Sha256::digest(t.as_bytes()))
+    };
+    let frozen = json!([["jardin", "cuisine__lea"]]);
+    std::fs::write(&p.links_path, json!({"links": frozen, "tokens": {s(&p.hub): digest("old"), s(&p.space): digest("old"),
+        "manual:wellness": digest("w")}}).to_string()).unwrap();
+    // At start: Bot Mode off everywhere, the pairs of before kept as they were
+    peers::drop_bot_mode(&p.config, &p.links);
+    let off = || {
+        !marked(&budget) && !marked(&maison) && !marked(&jardin)
+            && env_token(&p.hub.join(".env")).is_none() && env_token(&p.space.join(".env")).is_none()
+            && ![&p.hub, &p.space].iter().any(|g| std::fs::read_to_string(g.join("config.yaml")).unwrap().contains("bip:"))
+    };
+    assert!(off());
+    assert!(std::fs::read_to_string(p.hub.join(".env")).unwrap().contains("OTHER=1"));
+    assert!(std::fs::read_to_string(p.hub.join("config.yaml")).unwrap().contains("glm"));
+    let kept: Value = serde_json::from_str(&std::fs::read_to_string(&p.links_path).unwrap()).unwrap();
+    assert_eq!((kept["tokens"].clone(), kept["links"].clone()), (json!({}), frozen));
+    // Your agents write to Léa's Cuisine and she agrees: still no Bot Mode (the bridge's message_agent goes there)
+    let both = pairs(&[("budget", "jardin"), ("jardin", "cuisine__lea")]);
     let result = peers::apply(&p.config, &p.links, &both, Some(&households)).unwrap();
-    assert_eq!(result["changed"], json!(["lea"]));
-    assert!(!marked(&jardin) && env_token(&p.space.join(".env")).is_none());
-    // She agrees: every agent of this place writes to Cuisine (the rule is per household), so each gateway gets Bot
-    // Mode; Wellness (set up by hand) needs its token from the administrator.
+    assert_eq!((result["manual"].clone(), result["changed"].clone()), (json!({}), json!(["lea"])));
     rules::change(&p.config, |r| {
         rules::heard(r, "lea", &rules::Wire { from_you: rules::Rule::only(["cuisine"]), ..Default::default() });
     })
     .unwrap();
-    let manual = peers::refresh(&p.config, &p.links, Some(&households)).unwrap();
-    assert_eq!(Value::Object(manual), json!({"wellness": ""}));
-    assert!(marked(&jardin) && marked(&budget) && marked(&maison));
-    let space_token = env_token(&p.space.join(".env")).unwrap();
-    assert_eq!(p.links.caller(&space_token), Some(s(&p.space)));
-    assert!(env_token(&p.hub.join(".env")).is_some());
-    assert!(!std::fs::read_to_string(&p.links_path).unwrap().contains(&space_token)); // only digests are kept
-    let peer = std::fs::read_to_string(p.space.join("config.yaml")).unwrap(); // written by the bridge, no `hermes`
-    assert!(peer.contains("bot_peers:\n  bip:\n    url: http://127.0.0.1:8643/peer\n    note: 'Les agents des autres"), "{peer}");
-    // The hub's agents and Wellness « à l'écart »: Jardin's space alone keeps Bot Mode.
-    rules::change(&p.config, |r| r.aside = vec!["budget".into(), "maison".into(), "wellness".into()]).unwrap();
-    assert_eq!(peers::refresh(&p.config, &p.links, Some(&households)).unwrap(), bipbridge::Dict::new());
-    assert!(marked(&jardin) && !marked(&budget) && !marked(&maison));
-    assert!(env_token(&p.hub.join(".env")).is_none() && env_token(&p.space.join(".env")).is_some());
-    // Back to this household only: the space loses its mark, its peer and its token.
-    rules::change(&p.config, |r| r.aside.clear()).unwrap();
-    peers::apply(&p.config, &p.links, &local, Some(&households)).unwrap();
-    assert!(!marked(&jardin) && env_token(&p.space.join(".env")).is_none() && p.links.caller(&space_token).is_none());
-    assert!(!std::fs::read_to_string(p.space.join("config.yaml")).unwrap().contains("bip"));
-    // Wellness (set up by hand): the administrator gives it a token; turning everything off keeps it, refused anyway.
-    let token = peers::manual_token(&p.config, &p.links, "wellness").unwrap();
-    assert_eq!(p.links.caller(&token).as_deref(), Some("manual:wellness"));
-    assert_eq!(peers::gateway_of(&p.config, p.config.agent(Some("wellness")).unwrap()), "manual:wellness");
-    peers::apply(&p.config, &p.links, &pairs(&[("budget", "jardin")]), Some(&households)).unwrap();
-    assert_eq!(p.links.caller(&token).as_deref(), Some("manual:wellness"));
+    peers::refresh(&p.config, &p.links, Some(&households)).unwrap();
+    assert!(off());
+    assert!(rules::allows(&p.config, "maison", "cuisine__lea"));
+    let contacts = std::fs::read_to_string(p.hub.join("profiles/maison/skills/agent-contacts/SKILL.md")).unwrap();
+    assert!(contacts.contains("`bip/cuisine__lea`: cuisine, an agent of Léa's household"), "{contacts}");
     let err = peers::apply(&p.config, &p.links, &pairs(&[("budget", "budget")]), None).unwrap_err();
     assert!(err.downcast_ref::<peers::InvalidLink>().is_some());
 }
@@ -717,35 +707,20 @@ fn at_start_a_place_loses_bot_mode_between_its_own_agents() {
     };
     std::fs::write(&p.links_path, json!({"links": [["budget", "maison"]], "tokens": {s(&p.hub): digest}}).to_string())
         .unwrap();
-    peers::heal_tokens(&p.config, &p.links);
-    assert!(!marked(&budget) && env_token(&p.hub.join(".env")).is_none() && p.links.caller("old").is_none());
+    peers::drop_bot_mode(&p.config, &p.links);
+    assert!(!marked(&budget) && env_token(&p.hub.join(".env")).is_none());
     assert!(!std::fs::read_to_string(p.hub.join("config.yaml")).unwrap().contains("bip"));
-    // the pairs of before (that file is not the data folder's: no pairs there) become a new account's rules
-    assert!(rules::allows(&p.config, "budget", "maison"));
-}
-
-#[test]
-fn the_sender_is_the_agent_that_signed_from_that_gateway() {
-    let dir = tempfile::tempdir().unwrap();
-    let p = peers_setup(dir.path());
-    let signed = |handle: &str| {
-        json!({"message": format!("Message from 🤖 Budget (@{handle}): bonjour")}).to_string().into_bytes()
-    };
-    assert_eq!(peers::sender_of(&p.config, &s(&p.hub), &signed("budget")).as_deref(), Some("budget"));
-    assert_eq!(peers::sender_of(&p.config, &s(&p.hub), &signed("jardin")), None); // jardin is not served by the hub
-    assert_eq!(peers::sender_of(&p.config, &s(&p.space), &signed("budget")), None);
-    assert_eq!(peers::sender_of(&p.config, &s(&p.hub), br#"{"message": "no signature"}"#), None);
+    // that file is not the data folder's: no pairs there, several agents: nothing allowed (review 1, B2)
+    assert!(!rules::allows(&p.config, "budget", "maison"));
 }
 
 #[tokio::test]
-async fn the_bridge_refuses_what_the_person_did_not_allow() {
+async fn the_bot_modes_doors_are_gone() {
     let dir = tempfile::tempdir().unwrap();
     let app = TestApp::new(common::config(dir.path(), &Urls::default()));
-    let state = &app.app.state;
-    let token = peers::manual_token(&state.config(), &state.links, "wellness").unwrap();
-    assert_eq!(app.get("/peer/p/wellness/api/sessions", &[("authorization", "Bearer nope")]).await.status, 401);
-    let bearer = format!("Bearer {token}");
-    assert_eq!(app.get("/peer/p/wellness/api/sessions", &[("authorization", &bearer)]).await.status, 403);
+    for path in ["/peer/p/wellness/api/sessions", "/family/p/wellness/v1/runs"] {
+        assert_eq!(app.get(path, &[("authorization", "Bearer x")]).await.status, 404, "{path}");
+    }
     let (k, v) = auth();
     assert_eq!(
         app.get("/v1/agent-links", &[(k, &v)]).await.json()["agents"][0],
@@ -790,243 +765,6 @@ fn invitations_are_one_time_and_expire() {
     data.insert("invites".into(), Value::Object(invites));
     households.save(&data).unwrap();
     assert!(households.accept(&late, "Paul", "https://c.ts.net", &"p".repeat(40), None, None).is_err());
-}
-
-type Received = Arc<Mutex<Vec<(String, Option<String>, Value)>>>;
-
-/// A bridge served on a socket of its own (`http://127.0.0.1:<port>`), its agents in a fake Hermes.
-async fn serve_bridge(dir: &Path, name: &str, agents: &[&str], hermes: &str) -> (String, bipbridge::app::App) {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let url = format!("http://{}", listener.local_addr().unwrap());
-    let mut d = config_dict(dir, &Urls::default());
-    d["public_url"] = json!(url);
-    d["outbox"] = json!({"db_path": s(&dir.join(name).join("bridge.db"))});
-    let mut table = serde_json::Map::new();
-    for a in agents {
-        let title = format!("{}{}", a[..1].to_uppercase(), &a[1..]);
-        table.insert(title, json!({"hermes_url": format!("{hermes}/{name}/p/{a}"), "hermes_key": format!("{a}-key-{}", "x".repeat(24))}));
-    }
-    d["agents"] = Value::Object(table);
-    let app = bipbridge::app::create_app(
-        parse_config(&d, None).unwrap(),
-        bipbridge::app::AppOptions { start_background: false },
-    )
-    .unwrap();
-    let router = app.router.clone();
-    tokio::spawn(async move {
-        let _ = axum::serve(listener, router.into_make_service_with_connect_info::<std::net::SocketAddr>()).await;
-    });
-    (url, app)
-}
-
-#[tokio::test]
-async fn two_households_write_to_each_other_only_where_both_allowed() {
-    let received: Received = Arc::default();
-    let seen = received.clone();
-    let hermes = common::spawn_fake(Router::new().fallback(any(move |request: Request| {
-        let seen = seen.clone();
-        async move {
-            let (parts, body) = request.into_parts();
-            if parts.method == "GET" && parts.uri.path().ends_with("/api/sessions") {
-                return axum::Json(
-                    json!({"data": [{"id": "bot-1", "title": "Bot Chat"}, {"id": "s9", "title": "Courses"}]}),
-                );
-            }
-            if parts.method == "POST" && parts.uri.path().ends_with("/api/sessions") {
-                return axum::Json(json!({"session": {"id": "pair-1"}}));
-            }
-            if parts.method == "GET" && parts.uri.path().ends_with("/api/sessions/pair-1/messages") {
-                return axum::Json(json!({"messages": [{"role": "assistant", "content": "Des lasagnes."}]}));
-            }
-            let bytes = axum::body::to_bytes(body, usize::MAX).await.unwrap();
-            let text = if bytes.is_empty() { "{}".to_string() } else { String::from_utf8_lossy(&bytes).into_owned() };
-            let auth = parts.headers.get("authorization").map(|v| v.to_str().unwrap().to_string());
-            seen.lock().unwrap().push((parts.uri.path().to_string(), auth, serde_json::from_str(&text).unwrap()));
-            axum::Json(json!({"ok": true}))
-        }
-    })))
-    .await;
-    let dir = tempfile::tempdir().unwrap();
-    let (a_url, a) = serve_bridge(dir.path(), "a", &["vie", "budget"], &hermes).await;
-    let (b_url, b) = serve_bridge(dir.path(), "b", &["cuisine"], &hermes).await;
-    let (a, b) = (
-        TestApp { app: a, peer: "198.51.100.7:50000".parse().unwrap() },
-        TestApp { app: b, peer: "198.51.100.8:50000".parse().unwrap() },
-    );
-    let (k, v) = auth();
-    let h = [(k, v.as_str())];
-    assert_eq!(a.send_json("PUT", "/v1/family/name", &h, &json!({"name": "Alex"})).await.status, 200);
-    assert_eq!(b.send_json("PUT", "/v1/family/name", &h, &json!({"name": "Léa"})).await.status, 200);
-    let invitation = a.request("POST", "/v1/family/invite", &h, None).await.json();
-    assert_eq!(invitation["kind"], "family");
-    assert_eq!(invitation["url"], json!(a_url));
-    let joined = b
-        .send_json("POST", "/v1/family/join", &h, &json!({"url": invitation["url"], "code": invitation["code"]}))
-        .await;
-    assert_eq!(joined.status, 200);
-    assert_eq!(joined.json(), json!({"id": "alex", "name": "Alex"}));
-    assert_eq!(
-        a.get("/v1/family", &h).await.json()["households"],
-        json!([{"id": "lea", "name": "Léa", "url": b_url, "relink": false}])
-    );
-    // Each side lists the other's agents among its own.
-    let names: BTreeMap<String, String> = a.get("/v1/agent-links", &h).await.json()["agents"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|x| (x["id"].as_str().unwrap().to_string(), x["name"].as_str().unwrap().to_string()))
-        .collect();
-    assert_eq!(names["cuisine__lea"], "Cuisine (Léa)");
-    assert!(names.contains_key("vie"));
-
-    // Alex lets Vie write to Cuisine; Léa has not allowed it yet: her bridge refuses.
-    assert_eq!(
-        a.send_json("PUT", "/v1/agent-links", &h, &json!({"links": [{"from": "vie", "to": "cuisine__lea"}]}))
-            .await
-            .status,
-        200
-    );
-    let digest = |t: &str| {
-        use sha2::Digest;
-        hex::encode(sha2::Sha256::digest(t.as_bytes()))
-    };
-    let token = format!("vie-gateway-token-{}", "z".repeat(20));
-    let links = &a.app.state.links;
-    let mut data = links.load();
-    data["tokens"].as_object_mut().unwrap().insert("manual:vie".into(), json!(digest(&token)));
-    links.save(&data).unwrap();
-    let bearer = format!("Bearer {token}");
-    let message = json!({"session_id": "bot-1", "message": "Message from Vie (@vie): qu'est-ce qu'on mange ce soir ?"});
-    let vie_auth = [("authorization", bearer.as_str())];
-    let send = || a.send_json("POST", "/peer/p/cuisine__lea/v1/runs", &vie_auth, &message);
-    assert_eq!(send().await.status, 403);
-    assert!(received.lock().unwrap().is_empty());
-    // Léa allows « Vie (Alex) → Cuisine »: delivered to Cuisine, signed with its household and its answer address.
-    assert_eq!(
-        b.send_json("PUT", "/v1/agent-links", &h, &json!({"links": [{"from": "vie__alex", "to": "cuisine"}]}))
-            .await
-            .status,
-        200
-    );
-    assert_eq!(send().await.status, 200);
-    let runs =
-        || -> Vec<_> { received.lock().unwrap().iter().filter(|(p, _, _)| p.ends_with("/v1/runs")).cloned().collect() };
-    let (path, auth_header, body) = runs().last().unwrap().clone();
-    assert_eq!(path, "/b/p/cuisine/v1/runs");
-    assert_eq!(auth_header, Some(format!("Bearer cuisine-key-{}", "x".repeat(24))));
-    // Into Cuisine's conversation with Vie (Alex), not its Bot Chat (the id the other side had): the person's
-    // talks with Cuisine stay out of that turn's history. A relative turn: Hermes' guest mark kept.
-    assert_eq!(body["session_id"], json!("pair-1"));
-    assert!(body["guest_turn"].is_object(), "{body}");
-    let (now, message_text) = common::split_now(body["message"].as_str().unwrap());
-    assert!(now.is_some(), "the current time at its top");
-    let (note, message_text) = message_text.split_once("\n-->\n").unwrap();
-    assert!(note.starts_with("<!--bip:pair\nThis is your own conversation with Vie (Alex) (@vie__alex)"), "{note}");
-    assert_eq!(message_text, "Message from Vie (Alex) (@vie__alex): qu'est-ce qu'on mange ce soir ?");
-    // The bridge keeps the pair's thread for Léa's app: the ask, then Cuisine's answer.
-    let pair_id = bipbridge::agent_pairs::pair_id("vie__alex", "cuisine");
-    let mut thread = Value::Null;
-    for _ in 0..50 {
-        thread = b.get(&format!("/v1/agent-pairs/{pair_id}"), &h).await.json();
-        if thread["thread"].as_array().is_some_and(|t| t.len() == 2) {
-            break;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-    }
-    let said: Vec<_> = thread["thread"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|m| {
-            (
-                m["from"].as_str().unwrap().to_string(),
-                m["kind"].as_str().unwrap().to_string(),
-                m["text"].as_str().unwrap().to_string(),
-            )
-        })
-        .collect();
-    assert_eq!(
-        said,
-        [
-            ("vie__alex".to_string(), "ask".to_string(), "qu'est-ce qu'on mange ce soir ?".to_string()),
-            ("cuisine".to_string(), "answer".to_string(), "Des lasagnes.".to_string()),
-        ]
-    );
-    let vie = thread["agents"].as_array().unwrap().iter().find(|x| x["id"] == "vie__alex").unwrap().clone();
-    assert_eq!(
-        (vie["name"].clone(), vie["household"].clone(), vie["gone"].clone()),
-        (json!("Vie (Alex)"), json!(true), json!(false))
-    );
-    assert_eq!(b.get("/v1/agent-pairs?agent=cuisine", &h).await.json()["pairs"][0]["id"], json!(pair_id));
-    // Only Cuisine's Bot Chat: not another of its conversations, nor its sessions' list or its runs' approvals.
-    let mut other = message.clone();
-    other["session_id"] = json!("s9");
-    assert_eq!(
-        a.send_json("POST", "/peer/p/cuisine__lea/v1/runs", &[("authorization", &bearer)], &other).await.status,
-        403
-    );
-    assert_eq!(a.get("/peer/p/cuisine__lea/api/sessions", &[("authorization", &bearer)]).await.status, 403);
-    let listing = a
-        .get("/peer/p/cuisine__lea/api/sessions?title=Bot%20Chat&include_hidden=1", &[("authorization", &bearer)])
-        .await;
-    // the « Bot Chat » it finds is the pair's conversation
-    assert_eq!(listing.json()["data"], json!([{"id": "pair-1", "title": "Bot Chat"}]));
-    let mut pair_run = message.clone();
-    pair_run["session_id"] = json!("pair-1");
-    assert_eq!(
-        a.send_json("POST", "/peer/p/cuisine__lea/v1/runs", &[("authorization", &bearer)], &pair_run).await.status,
-        200
-    );
-    let approval = a
-        .send_json(
-            "POST",
-            "/peer/p/cuisine__lea/v1/runs/run-1/approval",
-            &[("authorization", &bearer)],
-            &json!({"choice": "always"}),
-        )
-        .await;
-    assert_eq!(approval.status, 403);
-    // Budget (its own gateway) writes to Cuisine too: the rule is per household (rules.rs). « À l'écart », it can't;
-    // nor can anything without the household's key.
-    let budget_token = format!("budget-gateway-token-{}", "w".repeat(20));
-    let mut data = links.load();
-    data["tokens"].as_object_mut().unwrap().insert("manual:budget".into(), json!(digest(&budget_token)));
-    links.save(&data).unwrap();
-    let budget_says = json!({"session_id": "bot-1", "message": "Message from Budget (@budget): coucou"});
-    let budget_auth = format!("Bearer {budget_token}");
-    let budget_header = [("authorization", budget_auth.as_str())];
-    let budget = || a.send_json("POST", "/peer/p/cuisine__lea/v1/runs", &budget_header, &budget_says);
-    assert_eq!(budget().await.status, 200);
-    let aside = a.send_json("PUT", "/v1/agent-rules/aside", &h, &json!({"agent": "budget", "on": true})).await;
-    assert_eq!(aside.status, 200, "{}", aside.text());
-    assert_eq!(aside.json()["aside"], json!(["budget"]));
-    assert_eq!(budget().await.status, 403);
-    assert_eq!(
-        b.send_json("POST", "/family/p/cuisine/v1/runs", &[("authorization", "Bearer nope")], &message).await.status,
-        401
-    );
-
-    // Léa's Hermes lost patch 0018 (a plain `hermes update`): Vie's message would be a turn with Cuisine's own tools
-    // and memory, so it is refused there and Hermes never sees it (audit 11/11, BA-2); back once the patch is.
-    let (wired, _) = bipbridge::agent_shares::GUEST_TURN_WIRING;
-    let wiring = dir.path().join("hermes-agent").join(wired);
-    let patched = std::fs::read_to_string(&wiring).unwrap();
-    std::fs::write(&wiring, "# stock Hermes\n").unwrap();
-    let before = runs().len();
-    let refused = b.send_json("POST", "/family/p/cuisine/v1/runs", &[], &message).await;
-    assert_eq!(refused.status, 401, "{}", refused.text()); // the household's key first, as always
-    let open = send().await;
-    assert_eq!(open.status, 503, "{}", open.text());
-    assert_eq!(open.json()["code"], bipbridge::agent_shares::GUEST_TURNS_OPEN);
-    assert_eq!(runs().len(), before, "nothing reached Léa's Hermes");
-    std::fs::write(&wiring, patched).unwrap();
-    assert_eq!(send().await.status, 200);
-    assert_eq!(runs().len(), before + 1);
-
-    // Unlinking the household drops its links.
-    assert_eq!(b.request("DELETE", "/v1/family/alex", &h, None).await.status, 204);
-    assert_eq!(b.get("/v1/agent-links", &h).await.json()["links"], json!([]));
-    assert!([401, 403].contains(&send().await.status.as_u16()));
 }
 
 // -- ssh keys ---------------------------------------------------------------------------------------------------------

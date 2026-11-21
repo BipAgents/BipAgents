@@ -1855,8 +1855,9 @@ pub fn create_app(config: Config, options: AppOptions) -> anyhow::Result<App> {
     if let Err(exc) = crate::rules::at_start(&config) {
         tracing::warn!(error = %exc, "agent rules not made from the pairs (every link closed until they are)");
     }
+    crate::peers::drop_bot_mode(&config, &state.links); // Hermes' Bot Mode off everywhere (Alex 21/11)
     if let Err(exc) = crate::peers::refresh(&config, &state.links, Some(&state.households)) {
-        tracing::warn!(error = %exc, "agent peers not healed");
+        tracing::warn!(error = %exc, "agent contacts not written");
     }
     crate::shares::heal_skills(&config);
     if options.start_background {
@@ -1976,7 +1977,6 @@ fn assemble(state: &AppState, config: &Config) -> Router {
         .merge(Router::new().nest("/v1", open))
         // The agents' Hermes through the bridge: on the LAN door, and for agents in their own space (their gateway
         // listens on a local port only). Hermes checks each agent's own key.
-        .merge(crate::peers::peer_router()) // agents' own tokens, checked against the links the person allowed
         .merge(crate::sandbox::router()) // the agents' file tools (shared folders), same tokens
         .merge(crate::card_pay::router()) // the agents' card payment tools, same tokens
         .merge(crate::vault_logins::router()) // the agents' vault tools (accounts with a vault password), same tokens
@@ -1996,6 +1996,7 @@ fn assemble(state: &AppState, config: &Config) -> Router {
         .merge(crate::rooms_remote::household_router()) // their agents in this person's discussions, the same key
         .merge(crate::meet::household_router()) // a date to find together, the same key
         .merge(crate::rules_live::household_router()) // their side of « Entre tes agents », the same key
+        .merge(crate::household_asks::household_router()) // their agents asking ours, the same key
         .nest("/desktop/static/novnc", crate::desktop::static_files())
         .merge(crate::desktop::desktop_router()); // the page and its stream: a short-lived ticket from the route above
     // The same routes, answering « matched » without running anything: what `redirect_slashes` asks.

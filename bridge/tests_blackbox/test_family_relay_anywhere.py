@@ -26,7 +26,7 @@ from bbkit.common import AUTH
 from bbkit.kerfy_relay import KerfyRelay, RelayProxy, send_again
 from bbkit.servers import wait_until
 from test_family_history import propose
-from test_households_and_peers import give_peer_token
+from test_households_and_peers import agent_token, ask_agent
 
 RECEIVED = []
 
@@ -44,8 +44,10 @@ def echo(seen):
     if seen.method == "GET" and seen.path.endswith("/api/jobs"):
         return JSONResponse({"jobs": []})
     if seen.method == "GET" and "/v1/runs/" in seen.path:
-        return JSONResponse({"status": "running", "session_id": "bot-1"})
+        return JSONResponse({"status": "completed", "output": "D'accord."})
     RECEIVED.append((seen.path, seen.json()))
+    if seen.method == "POST" and seen.path.endswith("/v1/runs"):
+        return JSONResponse({"run_id": f"run-{len(RECEIVED)}", "status": "started"}, status_code=202)
     return JSONResponse({"ok": True, "path": seen.path})
 
 
@@ -101,20 +103,25 @@ def link(scanner, inviter):
 
 
 def allow_messages(a, a_agent, b, b_agent, a_id, b_id):
-    """Both people allow a_agent ⇄ b_agent; each gateway gets a token (as `bipbridge peer-token` gives one)."""
+    """Both people allow a_agent ⇄ b_agent; each agent its token for the bridge's tools (message_agent)."""
     assert a.put("/v1/agent-links", headers=AUTH, json={"links": [
         {"from": a_agent, "to": f"{b_agent}__{b_id}"}, {"from": f"{b_agent}__{b_id}", "to": a_agent}]}).status_code == 200
     assert b.put("/v1/agent-links", headers=AUTH, json={"links": [
         {"from": b_agent, "to": f"{a_agent}__{a_id}"}, {"from": f"{a_agent}__{a_id}", "to": b_agent}]}).status_code == 200
-    tokens = (f"{a_agent}-gateway-" + "a" * 24, f"{b_agent}-gateway-" + "b" * 24)
-    give_peer_token(a, f"manual:{a_agent}", tokens[0])
-    give_peer_token(b, f"manual:{b_agent}", tokens[1])
-    return tokens
+    return agent_token(a, a_agent), agent_token(b, b_agent)
+
+
+class Written:
+    """What an agent's message_agent call said, as an HTTP answer: 200 answered, 403 not allowed, 502 not reached."""
+
+    def __init__(self, text, failed):
+        self.text = text
+        self.status_code = 200 if not failed else 403 if "hasn't" in text else 502
 
 
 def write(bridge, token, target, words, sender):
-    return bridge.post(f"/peer/p/{target}/v1/runs", headers={"Authorization": f"Bearer {token}"},
-                       json={"session_id": "bot-1", "message": f"Message from {sender.title()} (@{sender}): {words}"})
+    """`sender` asks `target` with the bridge's message_agent (through both bridges, never Bot Mode)."""
+    return Written(*ask_agent(bridge, token, f"bip/{target}", words))
 
 
 def two_homes(bridges, fakes, relay_url):
@@ -159,12 +166,13 @@ def test_two_homes_link_through_the_relay_whichever_scans(bridges, fakes, relay,
     # their agents write to each other, both ways
     vie, cuisine = allow_messages(alex, "vie", lea, "cuisine", "alex", "lea")
     sent = write(alex, vie, "cuisine__lea", "on dîne ensemble samedi ?", "vie")
-    assert sent.status_code == 200 and sent.json() == {"ok": True, "path": "/p/cuisine/v1/runs"}, sent.text
+    assert sent.status_code == 200 and "answered:\nD'accord." in sent.text, sent.text
     path, body = RECEIVED[-1]
-    assert path == "/p/cuisine/v1/runs" and "Message from Vie (Alex) (@vie__alex): on dîne ensemble samedi ?" in body["message"]
+    assert path == "/p/cuisine/v1/runs" and "Message from Vie (Alex) (@vie__alex): on dîne ensemble samedi ?" in body["input"]
     back = write(lea, cuisine, "vie__alex", "oui, à 20 h", "cuisine")
-    assert back.status_code == 200 and back.json() == {"ok": True, "path": "/p/vie/v1/runs"}, back.text
-    assert "Message from Cuisine (Léa) (@cuisine__lea): oui, à 20 h" in RECEIVED[-1][1]["message"]
+    assert back.status_code == 200, back.text
+    assert RECEIVED[-1][0] == "/p/vie/v1/runs"
+    assert "Message from Cuisine (Léa) (@cuisine__lea): oui, à 20 h" in RECEIVED[-1][1]["input"]
 
     # family news, both ways
     propose(alex, "n1", [{"id": "lea", "name": "Léa"}], "Je rentre tard")
@@ -221,9 +229,9 @@ def test_a_place_scanning_a_homes_invitation_links_and_needs_the_relay_no_more(b
     relay.stop()
     cuisine, vie = allow_messages(place, "cuisine", home, "vie", "chi", "alex")
     sent = write(place, cuisine, "vie__alex", "des pâtes ce soir ?", "cuisine")
-    assert sent.status_code == 200 and sent.json() == {"ok": True, "path": "/p/vie/v1/runs"}, sent.text
+    assert sent.status_code == 200 and RECEIVED[-1][0] == "/p/vie/v1/runs", sent.text
     back = write(home, vie, "cuisine__chi", "oui !", "vie")
-    assert back.status_code == 200 and back.json() == {"ok": True, "path": "/p/cuisine/v1/runs"}, back.text
+    assert back.status_code == 200 and RECEIVED[-1][0] == "/p/cuisine/v1/runs", back.text
 
 
 def test_the_relay_off_then_back(bridges, fakes, relay):

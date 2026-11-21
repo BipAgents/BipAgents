@@ -14,7 +14,8 @@
 //!   households allow it: what works is what both rules allow (`effective`), the other side's rule as its bridge last
 //!   told it (`theirs`, rules_live.rs: `POST /family/rules`, signed with the link's own key). Until it said, nothing.
 //!   Every agent of the sending side writes along a way that works, but for its agents « à l'écart » and its family's
-//!   agent: each bridge leaves its own out.
+//!   agent: each bridge leaves its own out. The messages go through the two bridges (household_asks.rs), never
+//!   Hermes' Bot Mode: no agent leaves the shared hub for them (Alex 21/11).
 //! - **The family's agent** (`family`, family_agent.rs): the own agents it may ask (« Peut demander à »). It is not one
 //!   of « tes agents » for the rules: no rule makes it write, and your agents write to it only along an explicit pair
 //!   under `some`; it reads no one's shared folder, and is out of the households' rules both ways. A project agent
@@ -23,9 +24,9 @@
 //! - **À l'écart** (`aside`): agents out of everything (they write to no one, no one writes to them or reads their
 //!   folder), whatever the rules.
 //!
-//! Every gate asks this module (`may_write`, `may_read`, through `allows` / `reads_of` for a config): peers.rs (Bot
-//! Mode's tokens, the relay to and from households, the contacts skill), agent_files.rs (`targets`, the one gate of
-//! `send_files_to_agent` and `message_agent`, the family's agent's too), agent_messages.rs, family_news.rs,
+//! Every gate asks this module (`may_write`, `may_read`, through `allows` / `reads_of` for a config): agent_files.rs
+//! (`targets`, the one gate of `send_files_to_agent` and `message_agent`, the family's agent's too), agent_messages.rs
+//! and household_asks.rs (another household's agents, both ways), peers.rs (the contacts skill), family_news.rs,
 //! rooms_remote.rs, vault.rs (who else talks to an agent) and shares.rs (its `load` is `reads_of`). `effective_links`
 //! and `effective_reads` list what the rules allow, for the listings (contacts, the older apps' screens).
 //!
@@ -689,19 +690,15 @@ pub fn effective_reads(world: &World, rules: &Rules) -> Vec<(String, String)> {
     out
 }
 
-/// Your agents that write to another household's along a way that works (Bot Mode, peers.rs `set_tokens`): every
-/// one that takes part, once a way out works with that household.
-pub fn household_senders(world: &World, rules: &Rules) -> BTreeSet<String> {
-    let open = rules.households.iter().any(|(id, h)| world.linked.contains(id) && !h.effective(Way::Out).is_none());
-    if !open {
-        return BTreeSet::new();
-    }
-    eligible(world, rules).into_iter().collect()
-}
+/// Whether an agent another household's agents may write to counts as one other people talk to (vault.rs: out of the
+/// shared hub once idle, its vault logins and Carnet news kept from it). Writing to another household never counts
+/// (Alex 21/11: through the bridge). Receiving: as before until Alex says otherwise (review 1, B1): one line.
+pub const RECEIVERS_FACE_OTHERS: bool = true;
 
-/// Your agents another household's agents talk to, or that talk to theirs (vault.rs `others_facing_agents`).
-pub fn household_facing(world: &World, rules: &Rules) -> BTreeSet<String> {
-    let mut out = household_senders(world, rules);
+/// Your agents another household's agents may write to (both sides agreeing): vault.rs counts them only while
+/// `RECEIVERS_FACE_OTHERS`.
+pub fn household_receivers(world: &World, rules: &Rules) -> BTreeSet<String> {
+    let mut out = BTreeSet::new();
     for (id, household) in &rules.households {
         if !world.linked.contains(id) {
             continue;
@@ -710,6 +707,14 @@ pub fn household_facing(world: &World, rules: &Rules) -> BTreeSet<String> {
         out.extend(eligible(world, rules).into_iter().filter(|a| incoming.contains(a)));
     }
     out
+}
+
+/// Whether `agent` may write to some agent of a linked household (the bridge's `message_agent` is offered then).
+pub fn writes_to_households(world: &World, rules: &Rules, agent: &str) -> bool {
+    let Some(a) = world.agent(agent) else { return false };
+    !a.apart()
+        && !rules.is_aside(agent)
+        && rules.households.iter().any(|(id, h)| world.linked.contains(id) && !h.effective(Way::Out).is_none())
 }
 
 /// The households whose agents may write to `agent`, or `agent` to theirs (vault.rs `others_names`).
@@ -754,6 +759,20 @@ fn universe(world: &World, rules: &Rules, household: &Household, way: Way) -> Op
     }
 }
 
+/// What their side proposes that a « D'accord » may take: for their agents writing to yours (`in`) with a list, only
+/// the agents you have that take part (a name you don't have never opens a future agent of that name); else their
+/// rule as it is.
+fn offered(world: &World, rules: &Rules, household: &Household, way: Way) -> Rule {
+    let theirs = household.theirs_of(way);
+    match (way, theirs.mode) {
+        (Way::In, Scope::Only) => {
+            let mine = eligible(world, rules);
+            Rule::only(theirs.agents.iter().filter(|a| mine.contains(*a)).cloned())
+        }
+        _ => theirs,
+    }
+}
+
 pub fn way_state(world: &World, rules: &Rules, id: &str, way: Way) -> WayState {
     let household = rules.households.get(id).cloned().unwrap_or_default();
     let every = universe(world, rules, &household, way);
@@ -765,7 +784,8 @@ pub fn way_state(world: &World, rules: &Rules, id: &str, way: Way) -> WayState {
     // what their side leaves out on purpose (its « à l'écart ») never waits
     let wish = mine.and(&Rule { mode: Scope::All, agents: Vec::new(), except: their_rule.except.clone() });
     let waiting = !wish.is_none() && !their_rule.covers(&wish, every.as_deref()) && !declined_by_them;
-    let proposed = !their_rule.is_none() && !mine.covers(&their_rule, every.as_deref()) && !declined_by_me;
+    let offer = offered(world, rules, &household, way);
+    let proposed = !offer.is_none() && !mine.covers(&offer, every.as_deref()) && !declined_by_me;
     let effective = mine.and(&their_rule);
     let state = if proposed {
         "proposed"
@@ -792,22 +812,24 @@ pub fn set_mine(world: &World, rules: &mut Rules, id: &str, way: Way, rule: Rule
         household.changed = now;
     }
     let every = universe(world, rules, &rules.households[id], way);
+    let offer = offered(world, rules, &rules.households[id], way);
     let household = rules.households.get_mut(id).expect("just made");
     let theirs = household.theirs_of(way);
-    if !theirs.is_none() && !household.mine(way).covers(&theirs, every.as_deref()) {
+    if !offer.is_none() && !household.mine(way).covers(&offer, every.as_deref()) {
         *household.declined_by_me_mut(way) = Some(theirs.fingerprint());
     }
     changed
 }
 
-/// « D'accord » to their proposal that way: what they propose added to what you allow. False: nothing proposed.
-pub fn accept(rules: &mut Rules, id: &str, way: Way) -> bool {
+/// « D'accord » to their proposal that way: what they propose added to what you allow (for their agents writing to
+/// yours, only the agents you have: `offered`). False: nothing proposed.
+pub fn accept(world: &World, rules: &mut Rules, id: &str, way: Way) -> bool {
+    let Some(offer) = rules.households.get(id).map(|h| offered(world, rules, h, way)) else { return false };
     let Some(household) = rules.households.get_mut(id) else { return false };
-    let theirs = household.theirs_of(way);
-    if theirs.is_none() {
+    if offer.is_none() {
         return false;
     }
-    let mine = household.mine(way).or(&theirs);
+    let mine = household.mine(way).or(&offer);
     *household.mine_mut(way) = mine;
     *household.declined_by_me_mut(way) = None;
     true
@@ -832,7 +854,8 @@ pub fn pending_proposal(world: &World, rules: &Rules, id: &str, way: Way) -> Opt
     let state = way_state(world, rules, id, way);
     let theirs = state.theirs.filter(|_| state.proposed)?;
     let fingerprint = theirs.fingerprint();
-    Some((theirs, fingerprint))
+    let household = rules.households.get(id)?;
+    Some((offered(world, rules, household, way), fingerprint))
 }
 
 /// Whether the person was told of that proposal already; marks it told. (One notification per proposal.)
@@ -903,23 +926,39 @@ pub fn heard(rules: &mut Rules, id: &str, wire: &Wire) -> bool {
 
 type HmacSha256 = Hmac<Sha256>;
 
-/// The key that signs what two households tell each other of their rules: from the link's own key (family_seal.rs).
-pub fn signing_key(seal: &str) -> Option<[u8; 32]> {
+/// A key that signs what two households send each other for `purpose` (`rules`, `ask`, `answer`): from the link's own
+/// key (family_seal.rs). None: a link made before it had one.
+pub fn link_key(seal: &str, purpose: &[u8]) -> Option<[u8; 32]> {
     let base = crate::family_seal::decode_key(seal)?;
-    Some(crate::family_seal::hkdf(b"bip-agent-rules-v1", &base, b"rules"))
+    Some(crate::family_seal::hkdf(b"bip-agent-rules-v1", &base, purpose))
 }
 
-pub fn sign(key: &[u8; 32], wire: &Wire) -> String {
+/// The key that signs what two households tell each other of their rules.
+pub fn signing_key(seal: &str) -> Option<[u8; 32]> {
+    link_key(seal, b"rules")
+}
+
+/// HMAC-SHA256 of `bytes`, in hex.
+pub fn mac(key: &[u8; 32], bytes: &[u8]) -> String {
     let mut mac = <HmacSha256 as Mac>::new_from_slice(key).expect("HMAC takes any key");
-    mac.update(&serde_json::to_vec(wire).unwrap_or_default());
+    mac.update(bytes);
     hex::encode(mac.finalize().into_bytes())
 }
 
-pub fn signed_by(key: &[u8; 32], wire: &Wire, signature: &str) -> bool {
+/// Whether `signature` is `bytes`' HMAC with `key` (in constant time).
+pub fn mac_ok(key: &[u8; 32], bytes: &[u8], signature: &str) -> bool {
     let Ok(given) = hex::decode(signature.trim()) else { return false };
     let mut mac = <HmacSha256 as Mac>::new_from_slice(key).expect("HMAC takes any key");
-    mac.update(&serde_json::to_vec(wire).unwrap_or_default());
+    mac.update(bytes);
     mac.verify_slice(&given).is_ok()
+}
+
+pub fn sign(key: &[u8; 32], wire: &Wire) -> String {
+    mac(key, &serde_json::to_vec(wire).unwrap_or_default())
+}
+
+pub fn signed_by(key: &[u8; 32], wire: &Wire, signature: &str) -> bool {
+    mac_ok(key, &serde_json::to_vec(wire).unwrap_or_default(), signature)
 }
 
 // -- what older apps send and read (PUT /v1/agent-links, /v1/agent-shares) -------------------------------------------
@@ -1020,8 +1059,14 @@ pub struct Before {
 pub fn migrate(world: &World, before: &Before) -> (Rules, Vec<String>) {
     let mut notes = Vec::new();
     if before.links.is_none() && before.reads.is_none() {
-        notes.push("no pairs before: a new account's rules".to_string());
-        return (Rules::new_account(), notes);
+        // a new account is a place's first start, with its first agent at most; a place that has agents and never
+        // allowed anything keeps nothing allowed, as before (review 1, B2)
+        if world.agents.len() <= 1 {
+            notes.push("no pairs before, at most one agent: a new account's rules".to_string());
+            return (Rules::new_account(), notes);
+        }
+        notes.push("no pairs before, several agents: nothing allowed, as before".to_string());
+        return (Rules::default(), notes);
     }
     let mut rules = Rules::default();
     let links = before.links.clone().unwrap_or_default();
@@ -1365,11 +1410,11 @@ mod tests {
         // the way out: Chi opens her Bip to your agents
         heard(&mut r, "chi", &Wire { to_you: Rule::all(), from_you: Rule::only(["bip"]), ..Wire::default() });
         assert_eq!(way_state(&w, &r, "chi", Way::Out).state, "proposed");
-        assert!(accept(&mut r, "chi", Way::Out));
+        assert!(accept(&w, &mut r, "chi", Way::Out));
         assert_eq!(way_state(&w, &r, "chi", Way::Out).state, "agreed");
         assert!(may_write(&w, &r, "vie", "bip__chi") && may_write(&w, &r, "wellness", "bip__chi"));
         assert!(!may_write(&w, &r, "vie", "sum__chi"));
-        assert_eq!(household_senders(&w, &r), ["vie", "wellness"].map(String::from).into_iter().collect());
+        assert!(writes_to_households(&w, &r, "vie") && writes_to_households(&w, &r, "wellness"));
         // unlinked: nothing
         let unlinked = world(&["vie", "wellness"], &[]);
         assert!(!may_write(&unlinked, &r, "vie", "bip__chi") && !may_write(&unlinked, &r, "bip__chi", "vie"));
@@ -1383,6 +1428,29 @@ mod tests {
         heard(&mut r, "chi", &Wire { declined_from_you: true, ..Wire::default() });
         let state = way_state(&w, &r, "chi", Way::Out);
         assert_eq!((state.state, state.waiting, state.declined_by_them), ("declined", false, true));
+    }
+
+    #[test]
+    fn a_proposal_never_opens_an_agent_you_dont_have() {
+        // Chi proposes her agents write to Vie, Santé and Banque; you only have Vie (review 1, B4)
+        let w = world(&["vie"], &["chi"]);
+        let mut r = Rules::default();
+        r.households.insert("chi".into(), chi(Rule::none(), Rule::none(), Some((Rule::only(["vie", "sante", "banque"]), Rule::none()))));
+        let (offer, _) = pending_proposal(&w, &r, "chi", Way::In).unwrap();
+        assert_eq!(offer, Rule::only(["vie"]), "the card names your Vie only");
+        assert!(accept(&w, &mut r, "chi", Way::In));
+        assert_eq!(r.households["chi"].incoming, Rule::only(["vie"]), "never « sante » or « banque » for later");
+        assert_eq!(way_state(&w, &r, "chi", Way::In).state, "agreed");
+        assert!(pending_proposal(&w, &r, "chi", Way::In).is_none(), "no card once Vie is open");
+        // only names you don't have: no card at all
+        let mut r = Rules::default();
+        r.households.insert("chi".into(), chi(Rule::none(), Rule::none(), Some((Rule::only(["sante"]), Rule::none()))));
+        assert!(pending_proposal(&w, &r, "chi", Way::In).is_none());
+        assert!(!accept(&w, &mut r, "chi", Way::In));
+        assert_eq!(way_state(&w, &r, "chi", Way::In).state, "off");
+        // « all of yours » stays all: the card says so
+        r.households.get_mut("chi").unwrap().theirs.as_mut().unwrap().incoming = Rule::all();
+        assert_eq!(pending_proposal(&w, &r, "chi", Way::In).unwrap().0, Rule::all());
     }
 
     #[test]
@@ -1458,8 +1526,12 @@ mod tests {
         let (r, _) = migrate(&w, &Before { links: Some(p(&[("bip__chi", "vie")])), reads: None });
         assert_eq!(r.households["chi"].incoming, Rule::only(["vie"]));
         assert_eq!(r.read, DEFAULT_READ);
-        // no file at all: a new account
-        let (r, _) = migrate(&w, &Before::default());
+        // no file at all: a new account only with its first agent at most (review 1, B2); a place with agents that
+        // never allowed anything keeps nothing allowed
+        let (r, notes) = migrate(&w, &Before::default());
+        assert_eq!((r.write, r.read), (Mode::None, Mode::None), "{notes:?}");
+        assert!(effective_links(&w, &r).is_empty());
+        let (r, _) = migrate(&world(&["vie"], &[]), &Before::default());
         assert_eq!((r.write, r.read), (DEFAULT_WRITE, DEFAULT_READ));
         // a file with no links at all: nothing allowed (as before)
         let (r, _) = migrate(&w, &Before { links: Some(vec![]), reads: None });

@@ -66,9 +66,6 @@ def test_isolated_agents_give_files_along_the_links_the_person_allowed(bridges, 
     bridge.config["brake"] = {"enabled": False}
     started(bridge, hub, ["vie", "wellness", "budget"])
     give_tokens(bridge, ["vie", "wellness", "budget"])
-    # a new account's agents all write to each other (rules.rs): « Aucun » first
-    assert bridge.put("/v1/agent-rules/write", headers=AUTH, json={"mode": "none"}).status_code == 200
-    give_tokens(bridge, ["vie", "wellness", "budget"])
     vie, wellness, budget = (TOKENS[n] for n in ("vie", "wellness", "budget"))
     assert TOOL not in names(bridge, vie)                     # it may write to nobody yet
     before = servers(profile(hub, "vie"))["bipagents"]["url"]

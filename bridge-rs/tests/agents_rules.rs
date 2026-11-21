@@ -50,11 +50,12 @@ async fn the_screen_and_its_small_changes() {
     let app = three(dir.path());
     let (k, v) = auth();
     let h = [(k, v.as_str())];
-    // a new account: every agent writes to every other, none reads another's folder
+    // a place that already has agents and never allowed anything: nothing allowed, as before (review 1, B2); a new
+    // account's defaults are for a first start with one agent (below)
     let screen = app.get("/v1/agent-rules", &h).await.json();
-    assert_eq!((screen["write"].clone(), screen["read"].clone()), (json!("all"), json!("none")));
+    assert_eq!((screen["write"].clone(), screen["read"].clone()), (json!("none"), json!("none")));
     assert_eq!(screen["default"], json!({"write": "all", "read": "none"}));
-    assert_eq!(links(&screen).len(), 6);
+    assert!(links(&screen).is_empty());
     let mut ids: Vec<&str> = screen["agents"].as_array().unwrap().iter().map(|a| a["id"].as_str().unwrap()).collect();
     ids.sort();
     assert_eq!(ids, ["budget", "vie", "wellness"]);
@@ -63,6 +64,8 @@ async fn the_screen_and_its_small_changes() {
         let app = &app;
         async move { app.send_json("PUT", path, &h, &body).await }
     };
+    // « Tous »: every agent writes to every other
+    assert_eq!(links(&put("/v1/agent-rules/write", json!({"mode": "all"})).await.json()).len(), 6);
     let screen = put("/v1/agent-rules/write", json!({"mode": "some"})).await.json();
     assert!(links(&screen).is_empty());
     let screen = put("/v1/agent-rules/pairs", json!({"from": "vie", "to": "budget", "on": true})).await.json();
@@ -98,6 +101,15 @@ async fn the_screen_and_its_small_changes() {
 }
 
 #[tokio::test]
+async fn a_new_account_with_its_first_agent_writes_to_all_and_reads_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let app = TestApp::new(common::config(dir.path(), &Urls::default()));
+    let made = rules::load(&app.app.state.config());
+    assert_eq!((made.write, made.read), (rules::DEFAULT_WRITE, rules::DEFAULT_READ));
+    assert_eq!((rules::DEFAULT_WRITE, rules::DEFAULT_READ), (Mode::All, Mode::None));
+}
+
+#[tokio::test]
 async fn the_familys_agent_asks_only_those_opened_to_it() {
     let dir = tempfile::tempdir().unwrap();
     let mut d = config_dict(dir.path(), &Urls::default());
@@ -111,6 +123,8 @@ async fn the_familys_agent_asks_only_those_opened_to_it() {
     let h = [(k, v.as_str())];
     let config = app.app.state.config();
     // « Tous » is not the family's agent: it asks no one, no one writes to it
+    app.send_json("PUT", "/v1/agent-rules/write", &h, &json!({"mode": "all"})).await;
+    assert!(rules::allows(&config, "vie", "wellness"));
     assert!(!rules::allows(&config, "famille", "vie") && !rules::allows(&config, "vie", "famille"));
     assert!(!bipbridge::agent_messages::offered(&config, "famille"));
     let said = app.send_json("PUT", "/v1/agent-rules/family/famille", &h, &json!({"target": "vie", "on": true})).await;
@@ -328,19 +342,15 @@ fn way<'a>(screen: &'a Value, which: &str) -> &'a Value {
     &screen["households"][0][which]
 }
 
-fn digest(token: &str) -> String {
-    use sha2::Digest;
-    hex::encode(sha2::Sha256::digest(token.as_bytes()))
-}
-
-/// A gateway token for `agent` of this bridge (set up by hand: `manual:<agent>`).
-fn gateway_token(app: &TestApp, agent: &str) -> String {
-    let token = format!("{agent}-gateway-token-{}", "z".repeat(20));
-    let links = &app.app.state.links;
-    let mut data = links.load();
-    data["tokens"].as_object_mut().unwrap().insert(format!("manual:{agent}"), json!(digest(&token)));
-    links.save(&data).unwrap();
-    token
+/// `agent` of this bridge asks `target` with the bridge's `message_agent`: what it is told.
+async fn ask_agent(app: &TestApp, agent: &str, target: &str, message: &str) -> String {
+    let config = app.app.state.config();
+    let asker = config.agent(Some(agent)).unwrap().clone();
+    let mut args = bipbridge::Dict::new();
+    args.insert("target".into(), json!(target));
+    args.insert("message".into(), json!(message));
+    let called = bipbridge::agent_messages::call(&reqwest::Client::new(), None, &config, &asker, &args).await;
+    called.result["content"][0]["text"].as_str().unwrap_or_default().to_string()
 }
 
 #[tokio::test]
@@ -358,9 +368,15 @@ async fn two_households_agree_way_by_way() {
             if parts.method == "POST" && path.ends_with("/api/sessions") {
                 return axum::Json(json!({"session": {"id": "pair-1"}}));
             }
+            if parts.method == "GET" && path.contains("/v1/runs/") {
+                return axum::Json(json!({"status": "completed", "output": "Des pâtes."}));
+            }
             let bytes = axum::body::to_bytes(body, usize::MAX).await.unwrap();
             let body: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
-            seen.lock().unwrap().push((path, body));
+            seen.lock().unwrap().push((path.clone(), body));
+            if parts.method == "POST" && path.ends_with("/v1/runs") {
+                return axum::Json(json!({"run_id": "run-1"}));
+            }
             axum::Json(json!({"ok": true}))
         }
     })))
@@ -413,23 +429,71 @@ async fn two_households_agree_way_by_way() {
     assert!(links(&screen).contains(&("cuisine__lea".into(), "vie".into())));
     assert_eq!(way(&b.get("/v1/agent-rules", &h).await.json(), "out")["state"], "agreed");
 
-    // Cuisine writes to Vie (Alex): delivered; to Budget, refused on Léa's side already
-    let token = gateway_token(&b, "cuisine");
-    let bearer = format!("Bearer {token}");
-    let message = json!({"session_id": "bot-1", "message": "Message from Cuisine (@cuisine): on mange quoi ?"});
-    let sent = b.send_json("POST", "/peer/p/vie__alex/v1/runs", &[("authorization", &bearer)], &message).await;
-    assert_eq!(sent.status, 200, "{}", sent.text());
-    assert!(received.lock().unwrap().iter().any(|(p, _)| p == "/a/p/vie/v1/runs"));
-    let refused = b.send_json("POST", "/peer/p/budget__alex/v1/runs", &[("authorization", &bearer)], &message).await;
-    assert_eq!(refused.status, 403);
-    // and Alex's bridge checks again: Vie taken back on his side, Léa's call is refused there
+    // Cuisine asks Vie (Alex) with the bridge's message_agent: through both bridges, a relative's turn in their pair's
+    // conversation at Alex's, its answer back in the same call; never Hermes' Bot Mode, no agent out of the hub
+    let runs = || -> Vec<(String, Value)> {
+        received.lock().unwrap().iter().filter(|(p, _)| p.ends_with("/v1/runs")).cloned().collect()
+    };
+    let b_config = b.app.state.config();
+    assert!(bipbridge::agent_messages::offered(&b_config, "cuisine") && bipbridge::agent_messages::offered(&b_config, "jardin"));
+    let said = ask_agent(&b, "cuisine", "bip/vie__alex", "On mange quoi ?").await;
+    assert!(said.contains("Vie (Alex) (bip/vie__alex) answered:\nDes pâtes."), "{said}");
+    let (path, run) = runs().last().unwrap().clone();
+    assert_eq!(path, "/a/p/vie/v1/runs");
+    assert_eq!(run["session_id"], "pair-1");
+    assert!(run["guest_turn"]["tools"].as_array().unwrap().iter().any(|t| t == "web_search"), "{run}");
+    let input = run["input"].as_str().unwrap();
+    assert!(input.contains("This is your own conversation with Cuisine (Léa) (@cuisine__lea), an agent of another household"), "{input}");
+    assert!(input.ends_with("Message from Cuisine (Léa) (@cuisine__lea): On mange quoi ?"), "{input}");
+    let thread = |app: &TestApp, x: &str, y: &str| {
+        let pair = bipbridge::agent_pairs::get(&app.app.state.config(), &bipbridge::agent_pairs::pair_id(x, y)).unwrap();
+        pair.messages.iter().map(|m| (m.from.clone(), m.kind.clone(), m.text.clone())).collect::<Vec<_>>()
+    };
+    let both = vec![("cuisine__lea".to_string(), "ask".to_string(), "On mange quoi ?".to_string()),
+                    ("vie".to_string(), "answer".to_string(), "Des pâtes.".to_string())];
+    assert_eq!(thread(&a, "cuisine__lea", "vie"), both);
+    assert_eq!(thread(&b, "cuisine", "vie__alex"), vec![
+        ("cuisine".to_string(), "ask".to_string(), "On mange quoi ?".to_string()),
+        ("vie__alex".to_string(), "answer".to_string(), "Des pâtes.".to_string())]);
+    for app in [&a, &b] {
+        assert_eq!(app.app.state.links.load()["tokens"], json!({}), "no Bot Mode token");
+    }
+    // writing to another household never takes an agent out of the hub; being written to, as RECEIVERS_FACE_OTHERS
+    assert!(!bipbridge::vault::others_facing(&b_config, "cuisine") && !bipbridge::vault::others_facing(&b_config, "jardin"));
+    assert_eq!(bipbridge::vault::others_facing(&a.app.state.config(), "vie"), rules::RECEIVERS_FACE_OTHERS);
+    assert!(!bipbridge::vault::others_facing(&a.app.state.config(), "budget"));
+    // To Budget: Léa's rules don't allow it, nothing leaves her bridge
+    let before = runs().len();
+    let said = ask_agent(&b, "cuisine", "bip/budget__alex", "Et toi ?").await;
+    assert!(said.contains("hasn't let you write to Budget (Alex)"), "{said}");
+    // and Alex's bridge checks again: Vie taken back on his side while Léa's still believes it open
     let set = a.send_json("PUT", "/v1/agent-rules/households/lea", &h, &json!({"way": "in", "mode": "none"})).await;
     assert_eq!(way(&set.json(), "in")["state"], "off");
-    let direct = a
-        .send_json("POST", "/family/p/vie/v1/runs",
-                   &[("authorization", &format!("Bearer {key}")), ("x-bip-sender", "cuisine")], &message)
+    rules::change(&b_config, |r| {
+        r.households.get_mut("alex").unwrap().theirs.as_mut().unwrap().out = rules::Rule::only(["vie"]);
+    })
+    .unwrap();
+    let said = ask_agent(&b, "cuisine", "bip/vie__alex", "Toujours là ?").await;
+    assert!(said.contains("Vie (Alex)'s person hasn't allowed your message (nothing was sent)"), "{said}");
+    assert_eq!(runs().len(), before, "nothing reached Alex's Hermes");
+    // an ask not signed with the link's own key is refused at Alex's
+    let forged = a
+        .send_json("POST", "/family/ask", &[("authorization", &format!("Bearer {key}"))],
+                   &json!({"body": {"v": 1, "sender": "cuisine", "target": "vie", "message": "x"}}))
         .await;
-    assert_eq!(direct.status, 403, "{}", direct.text());
+    assert_eq!(forged.status, 403, "{}", forged.text());
+    // a late answer (its turn waited for its person) comes back signed, into the asker's thread; unsigned: refused
+    let seal = b.app.state.households.get("alex").unwrap()["seal"].as_str().unwrap().to_string();
+    let late = bipbridge::household_asks::Late { v: 1, from: "vie".into(), to: "cuisine".into(), kind: "answer".into(),
+                                                 text: "Finalement, une soupe.".into(), at: 1.0 };
+    let sig = rules::mac(&rules::link_key(&seal, b"answer").unwrap(), &serde_json::to_vec(&late).unwrap());
+    let alex_key = a.app.state.households.get("lea").unwrap()["key_out"].as_str().unwrap().to_string();
+    let bearer = format!("Bearer {alex_key}");
+    let unsigned = b.send_json("POST", "/family/answer", &[("authorization", &bearer)], &json!({"body": late})).await;
+    assert_eq!(unsigned.status, 403);
+    let given = b.send_json("POST", "/family/answer", &[("authorization", &bearer)], &json!({"body": late, "sig": sig})).await;
+    assert_eq!(given.status, 204, "{}", given.text());
+    assert_eq!(thread(&b, "cuisine", "vie__alex").last().unwrap().2, "Finalement, une soupe.");
 
     // Alex proposes his agents write to Léa's Cuisine; she says « Non merci »: he sees it, nothing works
     a.send_json("PUT", "/v1/agent-rules/households/lea", &h, &json!({"way": "out", "mode": "only", "agents": ["cuisine"]})).await;

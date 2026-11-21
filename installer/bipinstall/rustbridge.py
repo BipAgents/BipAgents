@@ -8,7 +8,7 @@ knows which release is its own without asking anyone.
     bipagents bridge rust      this checkout's binaries again (checked against the release's signed SHA256SUMS, into
                                ~/.local/share/bipagents/bridge/<key>/), the service put back on them, restarted
     bipagents bridge browser add --agent vie
-                               the bridge's own command line (check, qr, peer-token, browser, spaces…), on this
+                               the bridge's own command line (check, qr, browser, spaces…), on this
                                account's config
 
 A machine with no build of ours (another processor, another system) can run binaries built on it (`cargo build
@@ -43,8 +43,7 @@ SUMS = "SHA256SUMS"
 BUILD = "BIPAGENTS_BRIDGE_BUILD"   # a folder of binaries built on this machine, for one with no build of ours
 PROGRAMS = ("bipbridge", "bip-browser-mcp")
 # The bridge's own subcommands, passed on by `bipagents bridge <command> …` (bridge-rs/src/main_cli.rs).
-COMMANDS = ("check", "genkey", "qr", "peer-token", "browser", "shares-mounts", "console", "spaces", "adopt",
-            "vault-check")
+COMMANDS = ("check", "genkey", "qr", "browser", "shares-mounts", "console", "spaces", "adopt", "vault-check")
 
 Opener = Callable[[str], bytes]
 

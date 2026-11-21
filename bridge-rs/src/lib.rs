@@ -120,6 +120,7 @@ pub mod family_seal;
 pub mod body_limit;
 pub mod files;
 pub mod files_kept;
+pub mod household_asks;
 pub mod households;
 pub mod own_skills;
 pub mod profile_files;

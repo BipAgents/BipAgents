@@ -216,8 +216,7 @@ async fn a_relative_reads_a_shared_agent_and_never_writes_to_it() {
         view["households"],
         json!([{"id": "marie", "name": "Marie", "shared": false, "history": null, "since": null}])
     );
-    // (« files »: a new account's agents may all write to each other, so it passes files to Budget: rules.rs)
-    assert_eq!(view["warning"], json!({"private_tools": ["notebook", "files"], "confirm": true}));
+    assert_eq!(view["warning"], json!({"private_tools": ["notebook"], "confirm": true}));
     let bad = a.send_json("PUT", "/v1/agents/cuisine/shares", &h, &json!({"households": ["paul"]})).await;
     assert_eq!(bad.status, 400);
     let health = dir.path().join("a").join("health");
@@ -225,7 +224,7 @@ async fn a_relative_reads_a_shared_agent_and_never_writes_to_it() {
     std::fs::write(health.join("agents.json"), r#"{"agents": ["budget"]}"#).unwrap();
     let unconfirmed = a.send_json("PUT", "/v1/agents/budget/shares", &h, &json!({"households": ["marie"]})).await;
     assert_eq!(unconfirmed.status, 409);
-    assert_eq!(unconfirmed.json()["warning"]["private_tools"], json!(["health", "notebook", "files"]));
+    assert_eq!(unconfirmed.json()["warning"]["private_tools"], json!(["health", "notebook"]));
     assert!(unconfirmed.json()["detail"].as_str().unwrap().contains("ta santé"), "{}", unconfirmed.text());
     let asked = a.send_json("PUT", "/v1/agents/cuisine/shares", &h, &json!({"households": ["marie"]})).await;
     assert_eq!(asked.status, 409);

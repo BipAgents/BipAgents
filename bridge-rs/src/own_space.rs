@@ -17,13 +17,15 @@
 //!   the next calls within `RETRY_AFTER` get the same answer without trying.
 //!
 //! **Since 2026-10-28 evening** (Alex: « Fais ce soir »), a person's own agents are no longer separated from each
-//! other: in a hub that only the person's agents use, an agent holds credentials right where it is (vault.rs
-//! `holds_in_hub`), and nothing moves. What must stay apart from the person's passwords is any agent other people
-//! talk to (vault.rs `others_facing`: the family's agent, project agents, agents shared with a relative, agents linked
-//! with another household's). As long as the hub hosts one of those, the move above is what happens, as before; the
-//! credentials already kept in the hub stay there (logged at start and at each move, `Vault::warn_hub_holders`) until
-//! their agent moves or the person takes them back. The trade-off, plainly: one of the person's agents tricked by what
-//! it read could reach another of their agents' passwords; it costs no ~250 MB container per agent.
+//! other: in the hub, an agent holds credentials right where it is (vault.rs `holds_in_hub`), and nothing moves.
+//! **Since 21/11** (Alex: « tout ce qui vient de quelqu'un d'autre tourne en tour d'invité ») an agent other people
+//! talk to (the family's agent, an agent shared with a relative, one another household's agents write to) gets their
+//! messages as guest turns (Hermes patch 0018: no terminal, files, vault, browser) and stays in the hub: no ~250 MB
+//! space for it. Only a project agent leaves it (vault.rs `hub_breakers`: its guests' turns are its own); as long as
+//! the hub hosts one, the move above is what happens, as before; the credentials already kept in the hub stay there
+//! (logged at start and at each move, `Vault::warn_hub_holders`) until their agent moves or the person takes them
+//! back. The trade-off, plainly: one of the person's agents tricked by what it read could reach another of their
+//! agents' passwords; it costs no ~250 MB container per agent.
 //!
 //! No Python counterpart.
 
@@ -175,9 +177,9 @@ const APART_WAIT: Duration = Duration::from_secs(6 * 60 * 60);
 /// waiting behind a move that holds the agents' lock for a minute.
 const APART_SETTLE: Duration = Duration::from_secs(60);
 
-/// An agent other people talk to (vault.rs `others_facing`) leaves the shared hub for its own space once idle, so the
-/// hub stays the person's alone and their agents keep their credentials there (Alex, 2026-10-28). Called when the
-/// family's agent or a project agent is made and when an agent is shared with a relative. Only on an install that
+/// An agent that breaks the hub's privacy (vault.rs `hub_breakers`: a project agent) leaves the shared hub for its own
+/// space once idle, so the hub stays the person's and their agents keep their credentials there (Alex, 2026-10-28).
+/// Called when an agent is made, shared, or linked: since 21/11 only a project agent moves (`should_leave_hub`). Only on an install that
 /// protects the vault (elsewhere nothing holds credentials, nothing to keep apart); a move that fails is logged and
 /// the hub keeps it (its agents then move at their first secret, as before).
 pub fn apart_when_idle(state: &AppState, agent: &str) {
@@ -190,7 +192,7 @@ pub fn should_leave_hub(config: &Config, agent: &AgentConfig) -> bool {
     config.hermes.isolated
         && !agent.isolated
         && crate::vault::in_hub(config, agent)
-        && crate::vault::others_facing(config, &agent.name)
+        && crate::vault::leaves_hub(config, &agent.name)
 }
 
 /// What one try at moving an agent out of the hub did.
@@ -269,7 +271,7 @@ pub fn to_tidy(config: &Config) -> Vec<String> {
     if !config.hermes.isolated {
         return Vec::new();
     }
-    let facing = crate::vault::others_facing_agents(config);
+    let facing = crate::vault::hub_breakers(config);
     let mut names: Vec<String> = config
         .agents
         .values()

@@ -1,14 +1,15 @@
 """« Entre tes agents » as rules (bridge-rs rules.rs, rules_live.rs; Alex 21/11, piste A): the screen and its small
-changes, the migration at start, and two households agreeing way by way — a home (reached only through its own
-long poll, family_relay.rs) and a place — each bridge telling the other its side (`POST /family/rules`, signed with
-the link's own key), a proposal a card in the other person's Boîte."""
+changes, a new account's defaults, the migration at start, and two households agreeing way by way — a home (reached
+only through its own long poll, family_relay.rs) and a place — each bridge telling the other its side (`POST
+/family/rules`, signed with the link's own key), a proposal a card in the other person's Boîte, and their agents
+asking each other with the bridge's message_agent through both bridges (`POST /family/ask`), never Bot Mode."""
 import json
 import os
 
 from bbkit.common import AUTH
 from bbkit.servers import wait_until
-from test_family_relay import echo, households, install, named
-from test_households_and_peers import give_peer_token
+from test_family_relay import RECEIVED, echo, households, install, named
+from test_households_and_peers import agent_token, ask_agent
 
 
 def screen(bridge):
@@ -26,15 +27,23 @@ def rule_cards(bridge):
     return [i for i in items if i["run_id"].startswith("bip-rules-")]
 
 
-def test_a_new_account_writes_to_all_and_reads_nothing_then_small_changes(bridges, fakes):
+def test_a_new_account_writes_to_all_and_reads_nothing(bridges, fakes):
+    """Its first start with one agent at most: its agents (the next ones too) all write to each other."""
+    bridge = bridges.new("alex").start()
+    view = screen(bridge)
+    assert (view["write"], view["read"], view["default"]) == ("all", "none", {"write": "all", "read": "none"})
+    assert oct(os.stat(bridge.state_dir / "agent-rules.json").st_mode & 0o777) == "0o600"
+
+
+def test_a_place_with_agents_and_no_pairs_keeps_nothing_allowed_then_small_changes(bridges, fakes):
     def change(c):
         c["agents"] = {a.title(): {"hermes_url": f"{fakes.hermes.url}/p/{a}", "hermes_key": f"{a}-key-" + "x" * 24}
                        for a in ("vie", "budget", "compta")}
     bridge = bridges.new("alex", change=change).start()
     view = screen(bridge)
-    assert (view["write"], view["read"], view["default"]) == ("all", "none", {"write": "all", "read": "none"})
+    assert (view["write"], view["read"]) == ("none", "none") and links(view) == set()   # as before (review 1, B2)
+    view = bridge.put("/v1/agent-rules/write", headers=AUTH, json={"mode": "all"}).json()
     assert len(links(view)) == 6 and view["effective"]["reads"] == []
-    assert oct(os.stat(bridge.state_dir / "agent-rules.json").st_mode & 0o777) == "0o600"
     view = bridge.put("/v1/agent-rules/aside", headers=AUTH, json={"agent": "compta", "on": True}).json()
     assert links(view) == {("vie", "budget"), ("budget", "vie")} and view["aside"] == ["compta"]
     view = bridge.put("/v1/agent-rules/write", headers=AUTH, json={"mode": "some"}).json()
@@ -94,7 +103,7 @@ def test_a_home_and_a_place_agree_way_by_way_through_the_relay(bridges, fakes):
     assert card["description"] == "Chi ouvre son agent Cuisine à tes agents"
     assert card["bip_rules"]["way"] == "out" and card["bip_rules"]["agents"] == [{"id": "cuisine", "name": "Cuisine"}]
     assert screen(home)["households"][0]["out"]["state"] == "proposed"
-    # « D'accord »: both agree, Alex's agents write to Cuisine (through the place's door, directly)
+    # « D'accord »: both agree; Alex's Vie asks Cuisine with the bridge's message_agent, its answer back in the same call
     answered = home.post("/v1/approve", headers=AUTH, json={"agent": card["agent"], "run_id": card["run_id"], "choice": "once"})
     assert answered.status_code == 200, answered.text
     assert rule_cards(home) == []
@@ -102,11 +111,16 @@ def test_a_home_and_a_place_agree_way_by_way_through_the_relay(bridges, fakes):
     assert view["households"][0]["out"]["state"] == "agreed"
     assert {("vie", "cuisine__chi"), ("budget", "cuisine__chi")} <= links(view)
     assert wait_until(lambda: screen(place)["households"][0]["in"]["state"] == "agreed", timeout=20)
-    token = "vie-gateway-token-" + "y" * 20
-    give_peer_token(home, "manual:vie", token)
-    sent = home.post("/peer/p/cuisine__chi/v1/runs", headers={"Authorization": f"Bearer {token}"},
-                     json={"session_id": "bot-1", "message": "Message from Vie (@vie): on mange quoi ?"})
-    assert sent.status_code == 200 and sent.json() == {"ok": True, "path": "/p/cuisine/v1/runs"}
+    vie = agent_token(home, "vie")
+    text, failed = ask_agent(home, vie, "bip/cuisine__chi", "on mange quoi ?")
+    assert not failed and "Cuisine (Chi) (bip/cuisine__chi) answered:" in text, text
+    path, body = [r for r in RECEIVED if r[0].endswith("/v1/runs")][-1]
+    assert path == "/p/cuisine/v1/runs" and body["guest_turn"], body
+    assert body["input"].endswith("Message from Vie (Alex) (@vie__alex): on mange quoi ?"), body["input"]
+    # no Bot Mode anywhere, on both sides
+    for bridge in (home, place):
+        peers = bridge.state_dir / "peers.json"
+        assert not peers.exists() or json.loads(peers.read_text()).get("tokens", {}) == {}
 
     # Chi proposes her agents write to Alex's Vie; he says « Non merci »: she sees it, nothing works that way
     place.put("/v1/agent-rules/households/alex", headers=AUTH, json={"way": "out", "mode": "only", "agents": ["vie"]})
@@ -116,11 +130,10 @@ def test_a_home_and_a_place_agree_way_by_way_through_the_relay(bridges, fakes):
     assert home.post("/v1/approve", headers=AUTH, json={"agent": card["agent"], "run_id": card["run_id"],
                                                         "choice": "deny"}).status_code == 200
     assert wait_until(lambda: screen(place)["households"][0]["out"]["state"] == "declined", timeout=20)
-    cuisine = "cuisine-gateway-token-" + "z" * 20
-    give_peer_token(place, "manual:cuisine", cuisine)
-    refused = place.post("/peer/p/vie__alex/v1/runs", headers={"Authorization": f"Bearer {cuisine}"},
-                         json={"session_id": "bot-1", "message": "Message from Cuisine (@cuisine): coucou"})
-    assert refused.status_code == 403
+    cuisine = agent_token(place, "cuisine")
+    sent = len(RECEIVED)
+    text, failed = ask_agent(place, cuisine, "bip/vie__alex", "coucou")
+    assert failed and "hasn't let you write to Vie (Alex)" in text and len(RECEIVED) == sent, text
 
     # a side not signed with the link's own key is refused
     key = households(home)["chi"]["key_out"]
