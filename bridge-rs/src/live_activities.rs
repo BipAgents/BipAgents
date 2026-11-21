@@ -772,6 +772,19 @@ pub fn router() -> Router<AppState> {
 
 #[cfg(test)]
 mod tests {
+
+    /// Review R9 (17/11): the « user » part of an address (`https://nom.prenom@hote`) is never taken for its site.
+    #[test]
+    fn review_r9_the_user_part_of_an_address_is_not_its_site() {
+        assert_eq!(site("https://nom.prenom@www.example-shop.fr/compte").as_deref(), Some("example-shop.fr"));
+        assert_eq!(site("{\"url\": \"https://user:secret@intranet.example.org:8443/x\"}").as_deref(), Some("intranet.example.org"));
+        // an @ after the host is the page's, not a user's
+        assert_eq!(site("https://www.example.com/@marie.dupont").as_deref(), Some("example.com"));
+        assert_eq!(site("https://medium.com/@nom.prenom/article").as_deref(), Some("medium.com"));
+        // unchanged: a plain address, an e-mail without a web address
+        assert_eq!(site("https://www.sncf-connect.com/home?from=Paris").as_deref(), Some("sncf-connect.com"));
+        assert_eq!(site("écris à marie.dupont@example.fr"), None);
+    }
     use super::*;
 
     fn data(value: Value) -> Map<String, Value> {

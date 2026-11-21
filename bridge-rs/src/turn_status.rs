@@ -1010,6 +1010,50 @@ mod tests {
         assert_eq!(s(&again, "loop"), &Value::Null);
     }
 
+    /// Review R5 (17/11): « Continuer » raises a turn's limits once only (runs.rs `brake_action`: 409
+    /// `already_continued`). A second warning of the brake in the same turn asks again without « Continuer ».
+    #[test]
+    fn review_r5_a_second_loop_after_continuer_offers_only_stop_and_help() {
+        let mut t = Tracker::new(0.0, "fr", false);
+        started(&mut t, "mcp__stealth__click_element", "a", "https://www.sncf-connect.com/checkout", 1.0);
+        let first = t.looping(Loop::of(&crate::loop_brake::Warning::Browser(27, 40)), 100.0, &on()).unwrap();
+        assert_eq!(s(&first, "actions"), &json!(["continue", "stop", "help"]));
+        t.continued(101.0, &on()).unwrap();
+        let second = t.looping(Loop::of(&crate::loop_brake::Warning::Browser(41, 60)), 200.0, &on()).expect("said again");
+        assert_eq!(s(&second, "state"), "looping");
+        assert_eq!(s(&second, "actions"), &json!(["stop", "help"]), "« Continuer » only once a turn");
+    }
+
+    /// Review R3 (17/11): whether the agent's model is the person's own is read from its profile's `model.base_url`
+    /// alone (never the `.env` with its API key), whatever its provider.
+    #[test]
+    fn review_r3_a_local_model_is_its_profiles_address_whatever_the_provider() {
+        fn config_with(space: &std::path::Path, yaml: &str) -> crate::config::Config {
+            let profile = space.join("profiles").join("vie");
+            std::fs::create_dir_all(&profile).unwrap();
+            std::fs::write(profile.join("config.yaml"), yaml).unwrap();
+            crate::config::parse_config(
+                &json!({"bridge_key": "k".repeat(32), "data_dir": space.join("data").to_string_lossy(),
+                        "agents": {"vie": {"hermes_url": "http://127.0.0.1:9300", "hermes_key": "h".repeat(32),
+                                           "space": space.to_string_lossy()}}}),
+                None,
+            )
+            .unwrap()
+        }
+        for (yaml, local) in [
+            ("model:\n  provider: ollama\n  base_url: http://127.0.0.1:11434/v1\n", true),
+            ("model:\n  base_url: http://192.168.1.20:8000/v1\n", true),
+            ("model:\n  provider: custom\n  base_url: http://spark.local/v1\n  default: big\n", true),
+            ("model:\n  provider: custom\n  base_url: https://models.example.eu/v1\n  default: big\n", false),
+            ("model:\n  provider: openrouter\n  default: z-ai/glm\n", false),
+            ("model: glm\n", false),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let config = config_with(dir.path(), yaml);
+            assert_eq!(local_model(&config, config.agent(Some("vie")).unwrap()), local, "{yaml}");
+        }
+    }
+
     #[test]
     fn each_warning_says_how_many_times_and_where_it_stops() {
         use crate::loop_brake::Warning;
