@@ -20,11 +20,16 @@
 //! last spoke, counted by the bridge, not the model (agent_hops.rs); past them the call is refused at once (`CAPPED`)
 //! and the person gets a « Continuer » card. A message to an agent waiting for this very exchange is answered at once
 //! too (agent_pairs.rs `Cycle`): never a wait on the pair's turn.
+//! The family's agent gets it too since 21/11 (Alex: « si la personne donne le droit à écrire, même pas besoin de
+//! carte »), for its creator's agents the links allow (family_agent.rs `closed_call`): the target's note says it is
+//! the family's agent asking for that member, its answer read by the whole family (agent_pairs.rs `framed_for`); its
+//! texts name the creator, the only one who can allow another agent. Another household's agents stay out of its reach.
 //!
 //! No Python counterpart.
 
 use serde_json::{json, Value};
 
+use crate::agent_pairs::FamilyAsk;
 use crate::config::{AgentConfig, Config};
 use crate::tools_knowledge::{tool_failure, tool_text};
 use crate::Dict;
@@ -47,6 +52,18 @@ question or what you need. Then answer your person with what it said.",
         }, "required": ["target", "message"]},
         "annotations": {"readOnlyHint": false, "destructiveHint": false, "openWorldHint": false},
     })
+}
+
+/// The tool as the family's agent gets it (family_agent.rs, Alex 21/11): the agents of the member who made it that
+/// they let it write to; what it then says, the whole family reads.
+pub fn family_tool() -> Value {
+    let mut tool = tool();
+    tool["description"] = json!(
+        "Ask one of the agents of the member of the family who made you, among those they let you write to (see your \
+contacts, e.g. bip/vie), and get its answer back in this same call. Write the message yourself: the point first, the \
+precise question, and for whom in the family. Then answer here with what it said: every member of the family reads it."
+    );
+    tool
 }
 
 /// Whether `agent` gets the tool: the person let it write to another agent of this place.
@@ -79,16 +96,17 @@ pub struct Called {
     pub card: Option<CapCard>,
 }
 
-/// One call, for `agent`.
+/// One call, for `agent` (`family`: it is the family's agent, asking for that member: agent_pairs.rs `FamilyAsk`).
 pub async fn call(
     http: &reqwest::Client,
     hub: Option<std::sync::Arc<crate::runs::RunHub>>,
     config: &Config,
     agent: &AgentConfig,
     arguments: &Dict,
+    family: Option<&FamilyAsk>,
 ) -> Called {
     let mut card = None;
-    let result = answer(http, hub, config, agent, arguments, &mut card).await;
+    let result = answer(http, hub, config, agent, arguments, family, &mut card).await;
     Called { result, card }
 }
 
@@ -98,6 +116,7 @@ async fn answer(
     config: &Config,
     agent: &AgentConfig,
     arguments: &Dict,
+    family: Option<&FamilyAsk>,
     card: &mut Option<CapCard>,
 ) -> Dict {
     let wanted = arguments.get("target").or_else(|| arguments.get("agent")).map(crate::py::py_str).unwrap_or_default();
@@ -110,10 +129,17 @@ async fn answer(
     }
     let bare = wanted.trim().trim_start_matches("bip/");
     if crate::households::split(bare).is_some() {
-        return tool_failure(
-            "Another household's agents aren't reached from here (tell_family proposes it to your person).",
-            "I can only write to your own agents from here.",
-        );
+        // the family's agent has no tell_family: nothing to propose instead
+        return match family {
+            Some(f) => tool_failure(
+                "Another household's agents aren't reached from here.",
+                &format!("I can only write to the agents of {} from here.", f.creator_or("the member who made me")),
+            ),
+            None => tool_failure(
+                "Another household's agents aren't reached from here (tell_family proposes it to your person).",
+                "I can only write to your own agents from here.",
+            ),
+        };
     }
     let Some(target) = crate::agent_files::recipient(config, &wanted).cloned() else {
         let mine: Vec<String> = crate::agent_files::targets(config, &agent.name).map(|t| format!("bip/{t}")).collect();
@@ -125,10 +151,15 @@ async fn answer(
     }
     let shown = crate::agent_files::shown(&target).to_string();
     if !crate::agent_files::links(config).iter().any(|(from, to)| *from == agent.name && *to == target.name) {
-        return crate::tool_answers::lifted_in_the_app(tool_failure(
-            &format!("The person hasn't let you write to {shown}."),
-            &format!("I can't write to {shown} yet: you can allow it in the app, under « Qui peut écrire à qui »."),
-        ));
+        // the family's agent: only its creator allows it (the member asking can't)
+        let plain = match family {
+            Some(f) => format!(
+                "I can't write to {shown}: {} can allow it in the app, under « Qui peut écrire à qui ».",
+                f.creator_or("the member of the family who made me")
+            ),
+            None => format!("I can't write to {shown} yet: you can allow it in the app, under « Qui peut écrire à qui »."),
+        };
+        return crate::tool_answers::lifted_in_the_app(tool_failure(&format!("The person hasn't let you write to {shown}."), &plain));
     }
     // a path of the sender's own folders: the target sees none of them (not counted as a hop: nothing is sent)
     if let Some(path) = own_path(config, agent, &target, &message) {
@@ -160,7 +191,17 @@ with {} first (it tells you the path {shown} reads it at), then write again with
         }
     };
     let asked =
-        crate::agent_pairs::ask_in(http, hub, config, agent, &target, &message, ANSWER_SECONDS, Some(&chain)).await;
+        crate::agent_pairs::ask_from(http, hub, config, agent, &target, &message, ANSWER_SECONDS, Some(&chain), family)
+            .await;
+    // where its answer is kept when it comes later: the person opens the pair's conversation, the family can't
+    let kept = match family {
+        Some(f) => format!(
+            "tell the family {shown} is on it: its answer will be kept in your conversation with {shown}, which {} can \
+open in the app",
+            f.creator_or("the member of the family who made you")
+        ),
+        None => format!("its answer will be in your conversation with {shown}, which your person can open"),
+    };
     match asked {
         crate::agent_pairs::Answer::Text(reply) => {
             tracing::info!(agent = %agent.name, target = %target.name, "message to an agent answered");
@@ -170,7 +211,7 @@ with {} first (it tells you the path {shown} reads it at), then write again with
         crate::agent_pairs::Answer::Waiting => tool_text(
             &format!(
                 "{shown} got your message and is still on it (it may be waiting for your person's approval). Don't \
-send it again: its answer will be in your conversation with {shown}, which your person can open."
+send it again: {kept}."
             ),
             false,
         ),
@@ -187,7 +228,7 @@ gets it."
         crate::agent_pairs::Answer::Queued => tool_text(
             &format!(
                 "{shown} is busy with another exchange: your message waits its turn, nothing to do. Don't send it \
-again: its answer will be in your conversation with {shown}, which your person can open."
+again: {kept}."
             ),
             false,
         ),

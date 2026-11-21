@@ -16,7 +16,10 @@
 //! sent to it, and pages, audio and routines for the family; mail, contacts, health, the personal Carnet, archives,
 //! files, tasks, family news, cards are closed (`closed_tool`), and `tools/list` gives only those (`tools`). The
 //! calendar tools come only for the calendars their owners chose to share with it, the creator's as any member's
-//! (12/11, family_calendar.rs: each person's stays on her place, asked at each use).
+//! (12/11, family_calendar.rs: each person's stays on her place, asked at each use). `message_agent` comes only while
+//! its creator lets it write to one of their agents in « Qui peut écrire à qui » (Alex 21/11: that link is the
+//! consent, no card): the target answers in their pair's conversation (agent_pairs.rs), told it is the family's agent
+//! asking for that member and that the family reads its answer; another household's agents stay out of its reach.
 //! Hermes' own tools that read the place's disk or drive a browser with someone's logins (`agents_admin::DISK_TOOLS`:
 //! terminal, file, code_execution, browser) are turned off when it is made, isolated install or not, its visible
 //! browser is not set up, and the settings refuse to turn them (or Santé, the Carnet, the browser) back on: with them,
@@ -359,7 +362,17 @@ pub fn closed_tool(name: &str) -> Option<Dict> {
     ))
 }
 
-/// Its `tools/list`: only `TOOLS`, and the calendar's while someone shares theirs with it (family_calendar.rs).
+/// `closed_tool`, and `message_agent` open while its creator lets it write to one of their agents (Alex 21/11: the
+/// link ticked in « Qui peut écrire à qui » is the consent; agent_messages.rs, never another household's agents).
+pub fn closed_call(config: &Config, agent: &str, name: &str) -> Option<Dict> {
+    if name == crate::agent_messages::TOOL_NAME && crate::agent_messages::offered(config, agent) {
+        return None;
+    }
+    closed_tool(name)
+}
+
+/// Its `tools/list`: only `TOOLS`, the calendar's while someone shares theirs with it (family_calendar.rs), and
+/// `message_agent` while it may write to one of its creator's agents (`closed_call`).
 pub fn tools(config: &Config, agent: &str) -> Vec<Value> {
     let mut out: Vec<Value> = crate::agent_tools::install_tools(config)
         .iter()
@@ -371,6 +384,9 @@ pub fn tools(config: &Config, agent: &str) -> Vec<Value> {
     out.push(crate::shared_files::tool());
     if crate::family_calendar::offered(config, agent) {
         out.extend(crate::family_calendar::tools());
+    }
+    if crate::agent_messages::offered(config, agent) {
+        out.push(crate::agent_messages::family_tool());
     }
     out
 }
@@ -1673,6 +1689,50 @@ mod tests {
         toolsets.insert("terminal".to_string(), true);
         assert!(refused_setting(&toolsets, None, false));
         assert!(refused_setting(&indexmap::IndexMap::new(), Some(true), false));
+    }
+
+    /// Alex 21/11 (« Famille » → Vie ticked, « l'outil de messagerie entre agents n'est pas disponible »): the link
+    /// the person ticks in « Qui peut écrire à qui » IS the consent. The family's agent gets `message_agent` only
+    /// while it may write to one of this place's agents; a link to another household's agent never opens it.
+    #[test]
+    fn it_asks_its_creators_agents_the_links_allow() {
+        let dir = tempfile::tempdir().unwrap();
+        let hermes = |a: &str| json!({"hermes_url": format!("http://127.0.0.1:9/{a}"), "hermes_key": "k".repeat(32)});
+        let d = json!({"bridge_key": "k".repeat(40), "data_dir": dir.path().to_string_lossy(),
+                       "agents": {"Famille": hermes("famille"), "Vie": hermes("vie"), "Coach": hermes("coach")}});
+        let config = crate::config::parse_config(&d, None).unwrap();
+        let data_dir = PathBuf::from(config.data_dir());
+        std::fs::create_dir_all(&data_dir).unwrap();
+        std::fs::write(data_dir.join("family-agent.json"), r#"{"agent": "famille", "agents": ["famille"]}"#).unwrap();
+        assert!(is_family(&config, "famille"));
+        let links = crate::peers::Links::new(&data_dir.join("peers.json").to_string_lossy());
+        let listed = |config: &Config| -> Vec<String> {
+            tools(config, "famille").iter().filter_map(|t| t["name"].as_str().map(str::to_string)).collect()
+        };
+        let asks = crate::agent_messages::TOOL_NAME;
+        // no link: neither listed nor answered
+        assert!(!listed(&config).iter().any(|n| n == asks));
+        assert_eq!(closed_call(&config, "famille", asks).unwrap()["isError"], true);
+        // a link to another household's agent only: still closed (its agents stay out of reach from here)
+        let mut data = links.load();
+        data.insert("links".into(), json!([["famille", "cuisine__marie"]]));
+        links.save(&data).unwrap();
+        assert!(!listed(&config).iter().any(|n| n == asks));
+        assert!(closed_call(&config, "famille", asks).is_some());
+        // « Famille » → Vie: listed and open, its own description; the other tools as they were
+        data.insert("links".into(), json!([["famille", "vie"]]));
+        links.save(&data).unwrap();
+        let names = listed(&config);
+        assert_eq!(names.iter().filter(|n| *n == asks).count(), 1, "{names:?}");
+        assert!(closed_call(&config, "famille", asks).is_none());
+        let tool = tools(&config, "famille").into_iter().find(|t| t["name"] == json!(asks)).unwrap();
+        let description = tool["description"].as_str().unwrap();
+        assert!(description.contains("member of the family who made you"), "{description}");
+        assert!(description.contains("every member of the family reads"), "{description}");
+        assert!(!names.iter().any(|n| n == crate::agent_files::TOOL_NAME), "no files given from the family's agent");
+        assert!(closed_call(&config, "famille", "mail_search").is_some());
+        assert!(closed_call(&config, "famille", crate::agent_files::TOOL_NAME).is_some());
+        assert!(closed_call(&config, "famille", "weather").is_none());
     }
 
     /// Filming 18/11: a family conversation all in English, the family agent (made in French) made its page in
