@@ -204,6 +204,7 @@ pub mod memory_language;
 pub mod message_search;
 pub mod notebook;
 pub mod notes_import;
+pub mod page_check;
 pub mod pages;
 /// Pages that remember: each agent page's own store, its one door, the agent's reading (15/11).
 pub mod page_store;
