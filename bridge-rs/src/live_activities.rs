@@ -217,10 +217,17 @@ fn looks_like_web(tool: &str) -> bool {
     tool.contains("browser") || tool.contains("stealth") || tool.contains("web") || tool.contains("fetch")
 }
 
-/// The host of the first web address in a tool's preview, « www. » dropped.
+/// The host of the first web address in a tool's preview, « www. » dropped (never the user's part before an `@`).
 pub fn site(preview: &str) -> Option<String> {
     let start = preview.find("http://").map(|i| i + 7).or_else(|| preview.find("https://").map(|i| i + 8))?;
-    let host: String = preview[start..]
+    // the address's authority (up to its path), and in it what follows a user's part (`nom.prenom@hote`, review R9)
+    let rest = &preview[start..];
+    let end = rest
+        .find(|c: char| !(c.is_ascii_alphanumeric() || ".-_~%:@+!$&*=".contains(c)))
+        .unwrap_or(rest.len());
+    let authority = &rest[..end];
+    let host_part = authority.rsplit_once('@').map_or(authority, |(_, host)| host);
+    let host: String = host_part
         .chars()
         .take_while(|c| c.is_ascii_alphanumeric() || *c == '.' || *c == '-')
         .collect::<String>()
@@ -773,6 +780,19 @@ pub fn router() -> Router<AppState> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Review R9 (17/11): the « user » part of an address (`https://nom.prenom@hote`) is never taken for its site.
+    #[test]
+    fn review_r9_the_user_part_of_an_address_is_not_its_site() {
+        assert_eq!(site("https://nom.prenom@www.example-shop.fr/compte").as_deref(), Some("example-shop.fr"));
+        assert_eq!(site("{\"url\": \"https://user:secret@intranet.example.org:8443/x\"}").as_deref(), Some("intranet.example.org"));
+        // an @ after the host is the page's, not a user's
+        assert_eq!(site("https://www.example.com/@marie.dupont").as_deref(), Some("example.com"));
+        assert_eq!(site("https://medium.com/@nom.prenom/article").as_deref(), Some("medium.com"));
+        // unchanged: a plain address, an e-mail without a web address
+        assert_eq!(site("https://www.sncf-connect.com/home?from=Paris").as_deref(), Some("sncf-connect.com"));
+        assert_eq!(site("écris à marie.dupont@example.fr"), None);
+    }
 
     fn data(value: Value) -> Map<String, Value> {
         value.as_object().cloned().unwrap_or_default()

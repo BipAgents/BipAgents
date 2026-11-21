@@ -266,3 +266,31 @@ def test_a_service_added_or_changed_restarts_its_hermes_once_idle_even_within_th
     assert wait_until(lambda: len(restarts(bridge)) == 3, timeout=15)
     time.sleep(1.5)
     assert len(restarts(bridge)) == 3
+
+
+def test_a_service_changed_while_its_hermes_restarts_restarts_it_again_after(bridges, fakes):
+    """21/11, why the test above failed now and then under load (15/11 to 21/11, 4 times): a service changed while the
+    bridge's restart for the change before still ran was dropped. Its reason, asked again, counted as already asked,
+    and that restart's end then took it off. Its gateway may have read config.yaml before the new change: its Hermes
+    kept the old address, as on 11/11. A change made during a restart gets a restart of its own once that one ends."""
+    bridge = bridges.new()
+    folder = profile(managed_install(bridge, fakes, agents=("compta",)), "compta")
+    bridge.config["agent_restart"] = dict(FAST)
+    bridge.start()
+    wait_registered(bridge, ["compta"])
+    over = bridge.root / "restart-over"
+    bridge.commands.rule("hermes", ["gateway", "restart"], hold=str(over), times=1)   # this restart goes on…
+    added = bridge.post("/v1/agents/compta/services", headers=AUTH,
+                        json={"catalog": "custom", "name": "compta", "address": "http://10.0.0.4:8740/mcp"})
+    assert added.status_code == 201, added.text
+    assert wait_until(lambda: len(restarts(bridge)) == 1, timeout=15)
+    # … while the person corrects its address
+    assert bridge.delete("/v1/agents/compta/services/compta", headers=AUTH).status_code == 204
+    again = bridge.post("/v1/agents/compta/services", headers=AUTH,
+                        json={"catalog": "custom", "name": "compta", "address": "http://10.0.0.5:8740/mcp"})
+    assert again.status_code == 201, again.text
+    assert servers(folder)["compta"]["url"] == "http://10.0.0.5:8740/mcp"
+    over.write_text("")   # the first restart ends
+    assert wait_until(lambda: len(restarts(bridge)) == 2, timeout=15), "the change made during the restart was dropped"
+    time.sleep(1.5)
+    assert len(restarts(bridge)) == 2   # one more for the changes made meanwhile, not one each

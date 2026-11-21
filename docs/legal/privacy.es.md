@@ -887,6 +887,10 @@ cada servicio es responsable de lo que hace con ello.
   teléfono nunca abre por sí solo un enlace escrito por un agente: solo un enlace de Google Maps se convierte en un
   pequeño mapa, hecho a partir del propio enlace, como los mapas de las respuestas (arriba).
 
+## 7 bis. Los datos de Google (Gmail, Google Calendar, Google Drive)
+
+Si conectas tu cuenta de Google, tu espacio recibe de Google solo lo que autorizas: tus calendarios y sus eventos; los archivos que tus agentes crean para ti y los que eliges para ellos; tus correos, para buscarlos, leerlos, preparar borradores y ordenar tu bandeja cuando tú lo pides. Estos datos se quedan cifrados en tu espacio y solo van al modelo de IA que responde a tus agentes, a través de EUrouter y sus proveedores de alojamiento en la Unión Europea, con la instrucción de no conservar nada y no entrenar nada. Kerfy Studio no los lee, no los vende y no los usa ni para publicidad ni para entrenar un modelo de IA. Puedes desconectar Google en cualquier momento en la app: tu espacio borra entonces sus tokens y revoca el acceso en Google. El uso y la transferencia a cualquier otra aplicación de la información recibida de las API de Google por BipAgents cumplen la [Política de datos de usuario de los servicios de las API de Google](https://developers.google.com/terms/api-services-user-data-policy), incluidos los requisitos de uso limitado (Limited Use).
+
 ## 8. La demo
 
 La demo integrada funciona por completo en tu teléfono: agentes y datos inventados, sin cuenta, sin servidor, y no se

@@ -1217,11 +1217,13 @@ async fn restart_hub_when_calm(
     let Some(names) = crate::agent_restart::group_calm(&config, first).await else { return false };
     let new: Vec<&str> = agents.iter().map(|a| a.name.as_str()).collect();
     tracing::info!(target: "bipbridge::agents", agents = %new.join(","), "new agents without their tools: the hub's gateway restarted, all calm");
+    // its agents' restart requests asked by now are done by it; one asked while it runs stays for the loop
+    let upto = crate::agent_restart::asks_so_far();
     if let Err(exc) = restart_gateway(&config, first, run).await {
         tracing::warn!(target: "bipbridge::agents", agent = %first.name, error = %tail(&exc.to_string(), 200), "gateway not restarted");
         return false;
     }
-    crate::agent_restart::restarted(&config, &names, crate::agent_restart::NEW_AGENT_TOOLS);
+    crate::agent_restart::restarted(&config, &names, crate::agent_restart::NEW_AGENT_TOOLS, upto);
     futures::future::join_all(agents.iter().map(|a| wait_served(http, a, false))).await;
     // their first turns still wait for the listing if it comes later (mcp_sessions `first_turn`)
     let started = std::time::Instant::now();
@@ -2798,7 +2800,15 @@ async fn agent_links(State(state): State<AppState>) -> ApiResult<Response> {
     let mut agents: Vec<Value> = config
         .agents
         .values()
-        .map(|a| json!({"id": a.name, "name": a.display_name, "managed": crate::peers::managed_home(&config, a).is_some()}))
+        .map(|a| {
+            let mut agent = json!({"id": a.name, "name": a.display_name, "managed": crate::peers::managed_home(&config, a).is_some()});
+            // the family's agent (Alex 21/11): the apps say under its row that the whole family reads its answers, and
+            // offer it only this place's agents
+            if crate::family_agent::is_family(&config, &a.name) {
+                agent["family"] = json!(true);
+            }
+            agent
+        })
         .collect();
     // The agents of the linked households, as their bridges list them (a household that does not answer is
     // left out for now; its links stay).
@@ -3047,6 +3057,8 @@ async fn remove_agent(state: AppState, agent_id: String) -> ApiResult<Response> 
         crate::agent_groups::set_group(&state.config(), &agent.name, "")?;
         crate::connectors::forget(&state.config(), &agent.name); // its connectors (connectors.rs)
         crate::drives::forget_agent(&state.config(), &agent.name).await; // its online documents' folders
+        crate::obsidian::forget_agent(&state.config(), &agent.name); // the Obsidian vault's agents
+        crate::google_calendar::forget_agent(&state.config(), &agent.name).await; // its Google Calendar
         crate::secrets::forget(&agent);
         state.vault.forget_agent(&state.config(), &agent.name).await
     }

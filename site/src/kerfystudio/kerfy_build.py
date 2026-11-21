@@ -268,6 +268,19 @@ TABLEE_ICON = ('<svg viewBox="0 0 1024 1024" aria-hidden="true"><rect width="102
                '<rect x="185" y="370" width="654" height="70" rx="28" fill="#2D2621"/></svg>')
 
 
+def legal_article(repo: Path, name: str, lang: str, cfg: Dict, links: Dict[str, str]) -> Tuple[str, str]:
+    """A legal text of docs/legal/ as (its title, its HTML): the one source of kerfystudio.com and of bipagents.com
+    (site/build.py reuses it for /privacy/), so the two sites can't drift. The language line at the top is dropped:
+    the pages have their own switch."""
+    text = (repo / "docs" / "legal" / f"{name}.{lang}.md").read_text(encoding="utf-8")
+    first = text.splitlines()[0] if text else ""
+    if ".md)" in first:
+        text = "\n".join(text.splitlines()[1:])
+    text = fill_company(text, cfg)
+    title = re.search(r"^#\s+(.*)$", text, re.M).group(1)
+    return title, markdown(text, links).replace(PHONE_TOKEN, phone_html(cfg, lang))
+
+
 def home_body(t: Dict, lang: str, cfg: Dict) -> str:
     from build import store_badges
     h, company, contact = t["home"], cfg["company"], cfg["contact"]
@@ -413,13 +426,8 @@ def build(root: Path, repo: Path, version: str) -> Path:
         write(supports[lang], shell(t, lang, f"{t['support']['title']} · Kerfy Studio", support_body(t, lang, cfg),
                                     supports[lang], version, supports))
         for name in LEGAL:
-            source = repo / "docs" / "legal" / f"{name}.{lang}.md"
-            text = source.read_text(encoding="utf-8")
-            text = "\n".join(text.splitlines()[1:]) if text.startswith("[") else text   # its language line: the header has one
-            text = fill_company(text, cfg)
-            title = re.search(r"^#\s+(.*)$", text, re.M).group(1)
+            title, body = legal_article(repo, name, lang, cfg, links)
             pages = {l: f"{prefix(l)}/{name}/" for l in LANGS}
-            body = markdown(text, links).replace(PHONE_TOKEN, phone_html(cfg, lang))
             write(pages[lang], shell(t, lang, f"{title} · Kerfy Studio", f'<article class="legal">{body}</article>'
                                      + (PHONE_SCRIPT if "phone-show" in body else ""), pages[lang], version, pages, "doc"))
     notice = fill_company((repo / "docs" / "legal" / "mentions-legales.fr.md").read_text(encoding="utf-8"), cfg)

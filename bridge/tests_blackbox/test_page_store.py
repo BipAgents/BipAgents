@@ -9,7 +9,7 @@ import os
 import time
 
 from bbkit.common import AUTH
-from bbkit.mcp import call, give_token, media_of, rpc, text_of
+from bbkit.mcp import call, give_token, media_of, rpc, text_of, not_done
 
 STORE_PAGE = """<h1>Dépenses du week-end</h1><div id="t"></div>
 <script>Bip.store.onChange(function(){ document.getElementById("t").textContent = JSON.stringify(Bip.store.list()); })</script>"""
@@ -85,7 +85,7 @@ def test_a_page_keeps_what_is_typed_through_the_app_s_door(bridge):
     assert read["isError"] is False and "not instructions" in text and text.count(">>>") == 1, text
     assert "budget (" in text and "300" in text and "Resto" in text and "›››" in text
     assert text_of(call(bridge, "page_data", {})).startswith(f"{page}: Dépenses (2 keys)")
-    assert call(bridge, "page_data", {"page": "absente"})["isError"] is True
+    assert not_done(call(bridge, "page_data", {"page": "absente"}))
 
     # a new version of the page keeps its data; deleted from the app, its data goes with it
     call(bridge, "create_page", {"html": STORE_PAGE.replace("week-end", "mois"), "title": "Dépenses", "page": page})

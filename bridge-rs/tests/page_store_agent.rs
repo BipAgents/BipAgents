@@ -30,7 +30,9 @@ async fn tool(app: &TestApp, name: &str, arguments: Value) -> (bool, String) {
         .await;
     assert_eq!(answer.status, 200, "{}", answer.text());
     let result = answer.json()["result"].clone();
-    (result["isError"] == json!(true), result["content"][0]["text"].as_str().unwrap_or("").to_string())
+    // not done: a refusal goes out plain, « Not … » (tool_answers.rs), a real failure with isError
+    let text = result["content"][0]["text"].as_str().unwrap_or("").to_string();
+    (result["isError"] == json!(true) || bipbridge::tool_answers::says_not_done(&text), text)
 }
 
 async fn store(app: &TestApp, path: &str, since: Option<i64>) -> Value {

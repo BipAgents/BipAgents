@@ -7,7 +7,7 @@ goods, « important » purchases only reminded of. Synthetic data only."""
 from datetime import date, timedelta
 
 from bbkit.common import AUTH
-from bbkit.mcp import call, give_token, text_of
+from bbkit.mcp import call, give_token, not_done, text_of
 from test_notebook import in_french, nightly, notebook, tidy
 
 MONTHS = ["janv.", "févr.", "mars", "avr.", "mai", "juin", "juil.", "août", "sept.", "oct.", "nov.", "déc."]
@@ -152,7 +152,7 @@ def test_the_extractions_trips_are_put_right_and_the_past_archived(bridges, fake
                        headers=AUTH).status_code == 404
     # archiving is the nightly pass's and the person's, not an agent's
     refused = call(bridge, "notebook_record", {"action": "archive", "type": "purchase", "id": "r000012"})
-    assert refused["isError"] and text_of(refused) == "action is add, update, remove, list or get"
+    assert not_done(refused) and text_of(refused) == "Not done: action is add, update, remove, list or get"
 
 
 def test_trips_from_bookings_follow_the_rule(bridges, fakes):

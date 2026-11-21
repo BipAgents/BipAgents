@@ -25,7 +25,8 @@
 //!
 //! Sent only to an app that asks (`GET /v1/runs/{id}/events?…&status=1`): an iPhone app from before it takes any unknown
 //! event for « not words » and drops its working line during a pause in the reply (ConversationModel.watchWordsPause).
-//! Off by default (`[status] enabled = false`) until both apps read it.
+//! On by default since 21/11 (both apps read it since rc-1118, the review's R1-R9 done); `[status] enabled = false`
+//! switches it off.
 //!
 //! No Python counterpart (owner group: push-runs).
 
@@ -50,7 +51,7 @@ pub fn crosses(kind: &str, asked: bool) -> bool {
 /// `[status]` in bridge.toml (every value optional). The thresholds come from the token lab's measures
 /// (the token lab, 16/11): a model call's p90 is 5 s (max 14.5 s), a heavy page's p90 14 s.
 ///
-///     enabled = false     model_slow = 20     model_stuck = 90     page_slow = 15     tool_slow = 20
+///     enabled = true      model_slow = 20     model_stuck = 90     page_slow = 15     tool_slow = 20
 ///     agent_slow = 15     local_factor = 3
 #[derive(Debug, Clone, PartialEq)]
 pub struct Settings {
@@ -67,7 +68,7 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Settings {
-            enabled: false,
+            enabled: true,
             model_slow: 20.0,
             model_stuck: 90.0,
             page_slow: 15.0,
@@ -167,9 +168,12 @@ pub fn local_base(base: &str) -> bool {
     !base.trim().is_empty() && crate::archives::records_fill::is_local(base)
 }
 
-/// Whether the agent's model is the person's own, on this machine or the network (its Hermes profile's).
+/// Whether the agent's model is the person's own, on this machine or the network: its Hermes profile's
+/// `model.base_url`, whatever its provider, and nothing else (never the `.env` with its key: review R3, 17/11). Read
+/// once a run, before its first event (runs.rs `upstream`), never under the run's lock.
 pub fn local_model(config: &crate::config::Config, agent: &crate::config::AgentConfig) -> bool {
-    crate::mail_scan::model_of(config, agent).ok().and_then(|m| m.get("base_url").cloned()).is_some_and(|b| local_base(&b))
+    let profile = crate::shares::profile_config(&crate::agents_admin::profile_folder(config, agent));
+    profile.get("model").and_then(|m| m.get("base_url")).and_then(Value::as_str).is_some_and(local_base)
 }
 
 /// What a family member reads of another's status (agent_shares.rs `turn_words`, D8 B): what kind of thing the agent
@@ -312,6 +316,8 @@ pub struct Tracker {
     last_done_site: Option<String>,
     /// The brake's two thirds, until the person goes on (`continued`), and the site it was on.
     looping: Option<Loop>,
+    /// The person said « Continuer » once this turn: its limits raised, never twice (review R5, 17/11).
+    raised: bool,
     loop_site: Option<String>,
     /// Where the time went: until `mark`, by kind of wait, by site or kind of call (`time`).
     mark: f64,
@@ -343,6 +349,7 @@ impl Tracker {
             step: None,
             last_done_site: None,
             looping: None,
+            raised: false,
             loop_site: None,
             mark: started,
             spent: [0.0; 4],
@@ -473,6 +480,7 @@ impl Tracker {
     pub fn continued(&mut self, now: f64, settings: &Settings) -> Option<Map<String, Value>> {
         self.account(now);
         self.looping.take()?;
+        self.raised = true;
         self.settle(now);
         self.changed(now, settings)
     }
@@ -599,6 +607,8 @@ impl Tracker {
         let model = if self.local { settings.local_factor } else { 1.0 };
         match self.state {
             State::Thinking | State::Model => Some((settings.model_slow * model, Some(settings.model_stuck * model))),
+            // a sub-agent's work (`delegate_task`, held for the run: runs.rs `delegating`) is long by nature: never amber
+            State::Tool if self.open.last().is_some_and(|o| o.kind == "delegate") => None,
             State::Tool if self.open.last().is_some_and(|o| o.kind == "browser") => Some((settings.page_slow, None)),
             State::Tool => Some((settings.tool_slow, None)),
             State::WaitingAgent => Some((settings.agent_slow, None)),
@@ -670,7 +680,12 @@ impl Tracker {
             }
             _ => Value::Null,
         });
-        let actions: &[&str] = if self.state == State::Looping { &["continue", "stop", "help"] } else { &[] };
+        // « Continuer » raises the turn's limits once (runs.rs `brake_action`): a second loop asks without it
+        let actions: &[&str] = match (self.state, self.raised) {
+            (State::Looping, false) => &["continue", "stop", "help"],
+            (State::Looping, true) => &["stop", "help"],
+            _ => &[],
+        };
         status.insert("actions".into(), json!(actions));
         status.insert("text".into(), json!(self.words(open, action, true)));
         // the same without a site, a connector or the agent's step: what a family member reads (`reduced`)
@@ -1010,6 +1025,61 @@ mod tests {
         assert_eq!(s(&again, "loop"), &Value::Null);
     }
 
+    /// 21/11 (sub-tasks): a sub-agent working for the turn (`delegate_task`, minutes) is not a slow tool: no amber,
+    /// no « Où en es-tu ? » for it; the line says the step.
+    #[test]
+    fn a_sub_agent_working_for_the_turn_is_never_slow() {
+        let mut t = Tracker::new(0.0, "fr", false);
+        let status = started(&mut t, "delegate_task", "d", "Compare les trois devis", 1.0).expect("said as it starts");
+        assert_eq!((s(&status, "state"), s(&status, "kind")), (&json!("tool"), &json!("delegate")));
+        assert_eq!(t.tick(60.0, &on()), None);
+        assert_eq!(t.tick(240.0, &on()), None, "never slow");
+    }
+
+    /// Review R5 (17/11): « Continuer » raises a turn's limits once only (runs.rs `brake_action`: 409
+    /// `already_continued`). A second warning of the brake in the same turn asks again without « Continuer ».
+    #[test]
+    fn review_r5_a_second_loop_after_continuer_offers_only_stop_and_help() {
+        let mut t = Tracker::new(0.0, "fr", false);
+        started(&mut t, "mcp__stealth__click_element", "a", "https://www.sncf-connect.com/checkout", 1.0);
+        let first = t.looping(Loop::of(&crate::loop_brake::Warning::Browser(27, 40)), 100.0, &on()).unwrap();
+        assert_eq!(s(&first, "actions"), &json!(["continue", "stop", "help"]));
+        t.continued(101.0, &on()).unwrap();
+        let second = t.looping(Loop::of(&crate::loop_brake::Warning::Browser(41, 60)), 200.0, &on()).expect("said again");
+        assert_eq!(s(&second, "state"), "looping");
+        assert_eq!(s(&second, "actions"), &json!(["stop", "help"]), "« Continuer » only once a turn");
+    }
+
+    /// Review R3 (17/11): whether the agent's model is the person's own is read from its profile's `model.base_url`
+    /// alone (never the `.env` with its API key), whatever its provider.
+    #[test]
+    fn review_r3_a_local_model_is_its_profiles_address_whatever_the_provider() {
+        fn config_with(space: &std::path::Path, yaml: &str) -> crate::config::Config {
+            let profile = space.join("profiles").join("vie");
+            std::fs::create_dir_all(&profile).unwrap();
+            std::fs::write(profile.join("config.yaml"), yaml).unwrap();
+            crate::config::parse_config(
+                &json!({"bridge_key": "k".repeat(32), "data_dir": space.join("data").to_string_lossy(),
+                        "agents": {"vie": {"hermes_url": "http://127.0.0.1:9300", "hermes_key": "h".repeat(32),
+                                           "space": space.to_string_lossy()}}}),
+                None,
+            )
+            .unwrap()
+        }
+        for (yaml, local) in [
+            ("model:\n  provider: ollama\n  base_url: http://127.0.0.1:11434/v1\n", true),
+            ("model:\n  base_url: http://192.168.1.20:8000/v1\n", true),
+            ("model:\n  provider: custom\n  base_url: http://spark.local/v1\n  default: big\n", true),
+            ("model:\n  provider: custom\n  base_url: https://models.example.eu/v1\n  default: big\n", false),
+            ("model:\n  provider: openrouter\n  default: z-ai/glm\n", false),
+            ("model: glm\n", false),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let config = config_with(dir.path(), yaml);
+            assert_eq!(local_model(&config, config.agent(Some("vie")).unwrap()), local, "{yaml}");
+        }
+    }
+
     #[test]
     fn each_warning_says_how_many_times_and_where_it_stops() {
         use crate::loop_brake::Warning;
@@ -1211,7 +1281,8 @@ mod tests {
 
     #[test]
     fn settings_from_the_config() {
-        assert!(!Settings::default().enabled, "off until both apps read it");
+        assert!(Settings::default().enabled, "on since 21/11: both apps read it");
+        assert!(!Settings::from_table(&json!({"enabled": false})).enabled, "a place may switch it off");
         let s = Settings::from_table(&json!({"enabled": true, "model_slow": 30, "page_slow": 0.1, "local_factor": 50}));
         assert!(s.enabled);
         assert_eq!((s.model_slow, s.page_slow, s.local_factor, s.tool_slow), (30.0, 1.0, 20.0, 20.0));

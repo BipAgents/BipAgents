@@ -245,6 +245,7 @@ async fn owner_card(state: &AppState, agent_id: &str, shown: &str, arguments: &D
         summary: summary.clone(),
         detail: format!("{when}\n{}", crate::cards::quoted(&title, 300)),
         always: None,
+        session: false,
     };
     let then = crate::person_ok::Then::DeleteEvent { agent: agent_id.to_string(), id };
     let run = crate::person_ok::ask_owner(&config, &owner, card, then);
@@ -477,7 +478,10 @@ Calendars you may change: {}. Say whose with who.",
             ),
             _ => format!("Whose calendar? Give who: {}.", writers.join(", ")),
         };
-        return Ok(tool_text(&why, true));
+        // her switch, in her app: the same call may go once she allows it
+        let lifted = why.contains("doesn't let you change");
+        let refused = tool_text(&why, true);
+        return Ok(if lifted { crate::tool_answers::lifted_in_the_app(refused) } else { refused });
     }
     match target {
         Some(Target::Member(member)) => {
@@ -491,10 +495,10 @@ Calendars you may change: {}. Say whose with who.",
                     said.insert("content".into(), json!([{"type": "text", "text": text}]));
                     said
                 }
-                _ => tool_text(
+                _ => crate::tool_answers::lifted_in_the_app(tool_text(
                     &format!("{} doesn't let you change their calendar any more.", member.name),
                     true,
-                ),
+                )),
             })
         }
         _ => {

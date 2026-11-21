@@ -11,6 +11,7 @@ import json
 import types
 from concurrent.futures import ThreadPoolExecutor
 
+from bbkit.mcp import not_done
 from bbkit.common import AUTH
 from bbkit.servers import wait_until
 from test_card_payments import TOKEN, pay_bridge
@@ -70,7 +71,7 @@ def test_oui_grants_one_sending_toujours_keeps_the_site_and_non_nothing(bridges,
     assert allowed(bridge)["once"] == [], allowed(bridge)
     # « Non »: nothing more
     result, _ = answered(bridge, "forum.example", "deny")
-    assert result["isError"] is True and "said no" in result["content"][0]["text"], result
+    assert not_done(result) and "said no" in result["content"][0]["text"], result
     assert "forum.example" not in json.dumps(allowed(bridge))
     # « Toujours pour ce site »: in « Sites autorisés » and in the browser's file; asked again, no card
     result, _ = answered(bridge, "forum.example", "always")
@@ -120,4 +121,4 @@ def test_a_tasks_card_waiting_never_holds_up_the_persons_tools(bridges, fakes):
             assert not waiting.done(), "the task's card answered meanwhile"
         [card] = cards(bridge)
         bridge.post("/v1/approve", headers=AUTH, json={"agent": "vie", "run_id": card["run_id"], "choice": "deny"})
-        assert waiting.result(timeout=60)["isError"] is True
+        assert not_done(waiting.result(timeout=60))

@@ -201,9 +201,9 @@ pub fn call_from(
             let task = name == "reminders_add" && crate::notebook::enabled(config, agent);
             if let Some(ask) = crate::tool_asks::ask_hint(config, agent, "reminders") {
                 // a « Non » then says to do without: the Carnet task comes then, not twice
-                return Ok(tool_text(&format!("The person hasn't shared their reminders with you, so nothing was done. {ask}"), true));
+                return Ok(crate::tool_answers::lifted_in_the_app(tool_text(&format!("The person hasn't shared their reminders with you, so nothing was done. {ask}"), true)));
             }
-            return Ok(tool_text(
+            return Ok(crate::tool_answers::lifted_in_the_app(tool_text(
                 &format!(
                     "The person hasn't shared their reminders with you, so nothing was done. {}They can turn on the \
                      « Rappels » tool on your page in the BipAgents app: tell them so in one sentence, without steps for \
@@ -211,7 +211,7 @@ pub fn call_from(
                     if task { "Keep it now as a Carnet task (notebook_task add, its due date, important if they insisted). " } else { "" }
                 ),
                 true,
-            ));
+            )));
         }
         // What the person lets this agent do (phone_rights.rs): reading them, adding and ticking them off.
         let (right, what) = if name == "reminders_list" {
@@ -220,7 +220,7 @@ pub fn call_from(
             (crate::phone_rights::WRITE, "add or tick off their reminders")
         };
         if REMINDER_TOOL_NAMES.contains(&name) && !crate::phone_rights::allows(&data, agent, right) {
-            return Ok(tool_text(&crate::phone_rights::refused(what), true));
+            return Ok(crate::tool_answers::lifted_in_the_app(tool_text(&crate::phone_rights::refused(what), true)));
         }
         let lists: Vec<(Value, Value)> = list_of(&data, "lists")
             .iter()
@@ -311,7 +311,7 @@ pub fn call_from(
                 format!("\nIn the Android phone's calendar (the reminders you added there, to come):\n{}", in_calendar.join("\n"))
             };
             if rows.is_empty() && !asked.is_empty() {
-                return Ok(tool_text(&format!("Not in the phone's copy yet:\n{}{in_calendar}", asked.join("\n")), false));
+                return Ok(tool_text(&format!("Asked, not in the phone's copy yet:\n{}{in_calendar}", asked.join("\n")), false));
             }
             let asked = if asked.is_empty() { String::new() } else { format!("\n{}", asked.join("\n")) };
             if rows.is_empty() && !in_calendar.is_empty() {

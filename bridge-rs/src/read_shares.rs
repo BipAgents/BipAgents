@@ -387,31 +387,6 @@ pub fn images_of(message: &Dict) -> Vec<(String, Vec<u8>)> {
         .collect()
 }
 
-/// The person's own words in a user row, or None for rows the person didn't type (a sub-task's report, the bridge's
-/// nudges). Words added while the agent answered are unwrapped from Hermes' markers. The notes for the agent only
-/// (`<!--bip:…-->`: the current time, a call's recap, family news…) are left out, as the apps do; a row of notes only
-/// is not the person's.
-pub fn typed_words(text: &str) -> Option<String> {
-    const OPEN: &str = "[OUT-OF-BAND USER MESSAGE";
-    const CLOSE: &str = "[/OUT-OF-BAND USER MESSAGE]";
-    let shown = crate::live_brief::visible(text);
-    if shown.is_empty() {
-        return None;
-    }
-    let text = shown.as_str();
-    let text = match text.strip_prefix(OPEN).and_then(|rest| rest.strip_suffix(CLOSE)) {
-        Some(inner) => inner.split_once(']').map(|(_, words)| words.trim()).unwrap_or(""),
-        None => text,
-    };
-    if text.starts_with("[bipagents:")
-        || text.starts_with("[IMPORTANT: Background process")
-        || crate::cronwatch::REPORT_PREFIXES.iter().any(|p| text.starts_with(p))
-    {
-        return None;
-    }
-    Some(text.to_string())
-}
-
 /// The conversation's items: its meta, then the person's messages (with the photos already sealed for them:
 /// `photos` in the share, message key -> photo item ids) and the agent's final replies with their pages and map
 /// pictures.
@@ -439,7 +414,8 @@ pub fn items_of(config: &Config, share: &Value, messages: &[Dict]) -> Vec<(Strin
         let key = message_key(message, n);
         let raw = crate::cronwatch::message_text(message);
         let (text, paths) = if role == "user" {
-            match typed_words(&raw) {
+            // the person's own words (threads/timeline.rs): none of the notes, steers and reports in their rows
+            match crate::threads::timeline::person_text(&raw) {
                 Some(words) => (words, Vec::new()),
                 None => continue,
             }
@@ -1120,6 +1096,7 @@ pub fn router() -> Router<AppState> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::threads::timeline::person_text;
 
     fn open_box(sealed: &str, private: ring::agreement::EphemeralPrivateKey, mine: &[u8]) -> Vec<u8> {
         use ring::aead::{Aad, LessSafeKey, Nonce, UnboundKey, AES_256_GCM};
@@ -1179,27 +1156,27 @@ mod tests {
 
     #[test]
     fn the_person_s_words_and_photos_are_found_and_nothing_they_didn_t_type() {
-        assert_eq!(typed_words("  Salut  ").as_deref(), Some("Salut"));
+        assert_eq!(person_text("  Salut  ").as_deref(), Some("Salut"));
         assert_eq!(
-            typed_words(
+            person_text(
                 "[OUT-OF-BAND USER MESSAGE — sent while you worked]\nEt le musée ?\n[/OUT-OF-BAND USER MESSAGE]"
             )
             .as_deref(),
             Some("Et le musée ?")
         );
-        assert_eq!(typed_words("[bipagents:handoff] hand it over"), None);
-        assert_eq!(typed_words("[SUBAGENT report] done"), None);
-        assert_eq!(typed_words("[IMPORTANT: Background process proc_1 completed normally] ls"), None);
+        assert_eq!(person_text("[bipagents:handoff] hand it over"), None);
+        assert_eq!(person_text("[SUBAGENT report] done"), None);
+        assert_eq!(person_text("[IMPORTANT: Background process proc_1 completed normally] ls"), None);
         // the brake's rescue input, stamped as the bridge sends it (4/11)
         assert_eq!(
-            typed_words("<!--bip:now x-->\n[bipagents:loop_rescue] Je me suis arrêté.\n\nYou were stopped"),
+            person_text("<!--bip:now x-->\n[bipagents:loop_rescue] Je me suis arrêté.\n\nYou were stopped"),
             None
         );
         // the agent's notes never reach a viewer
         let now = "<!--bip:now jeudi 29 octobre 2026, 08:40, Europe/Paris (UTC+01:00)-->";
-        let typed = typed_words(&format!("{now}\n<!--bip:call\nVoice call\n-->\n\nOn part ?"));
+        let typed = person_text(&format!("{now}\n<!--bip:call\nVoice call\n-->\n\nOn part ?"));
         assert_eq!(typed.as_deref(), Some("On part ?"));
-        assert_eq!(typed_words(&format!("{now}\n<!--bip:watch\nYour watcher\n-->")), None);
+        assert_eq!(person_text(&format!("{now}\n<!--bip:watch\nYour watcher\n-->")), None);
         let jpeg = vec![0xffu8, 0xd8, 0xff, 1, 2, 3];
         let message: Dict = json!({"id": 7, "role": "user", "content": [
             {"type": "text", "text": "Regarde"},
@@ -1317,9 +1294,9 @@ mod tests {
     fn review_a_viewer_never_reads_the_answered_note() {
         let steer = crate::instant_reply::with_note("plutôt le samedi", crate::instant_reply::Mode::Steered);
         let steered = format!("[OUT-OF-BAND USER MESSAGE from the user]\n{steer}\n[/OUT-OF-BAND USER MESSAGE]");
-        assert_eq!(typed_words(&steered).as_deref(), Some("plutôt le samedi"));
+        assert_eq!(person_text(&steered).as_deref(), Some("plutôt le samedi"));
         // a message that waited behind the turn, then started its own (msg_queue.rs)
         let queued = crate::instant_reply::with_note("Trouve un dentiste", crate::instant_reply::Mode::Queued);
-        assert_eq!(typed_words(&format!("<!--bip:now x-->\n{queued}")).as_deref(), Some("Trouve un dentiste"));
+        assert_eq!(person_text(&format!("<!--bip:now x-->\n{queued}")).as_deref(), Some("Trouve un dentiste"));
     }
 }

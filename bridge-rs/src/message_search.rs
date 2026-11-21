@@ -511,11 +511,9 @@ pub fn search_store(
         let role: String = row.get(2)?;
         let mut text = message_text(&content);
         if role == "user" {
-            // the bridge's words to the agent in a person's row (a continuation's note quoting the reply): not theirs
-            let theirs = crate::threads::timeline::before_bridge_mark(&text).trim_end().len();
-            text.truncate(theirs);
-            // nor the app's note that it answered at once (instant_reply.rs)
-            text = crate::instant_reply::without_note(&text);
+            // the person's words only (threads/timeline.rs): not the bridge's words to the agent (a continuation's
+            // note quoting the reply, its steers), the app's notes, nor Hermes' wrapper of words added during a turn
+            text = crate::threads::timeline::person_text(&text).unwrap_or_default();
         }
         if !matches_all(&text, words) {
             continue;
@@ -546,7 +544,7 @@ pub fn search_store(
             segment: session_id.clone(),
             thread: None,
             agent: agent.to_string(),
-            session_title: sessions.get(&shown).and_then(|s| s.title.clone()).filter(|t| !t.trim().is_empty()),
+            session_title: sessions.get(&shown).and_then(|s| s.title.as_deref()).and_then(crate::threads::timeline::title_text),
             session_id: shown,
             message_id: id,
             role: if role == "user" { "person" } else { "agent" },
@@ -688,6 +686,27 @@ mod tests {
         assert_eq!(hits.len(), 1);
         let (hits, _) = search_store("coach", &path, &words("mer"), 2, far()).unwrap();
         assert_eq!(hits.len(), 2);
+    }
+
+    /// 21/11: a message written while the agent worked is found as the person wrote it, never with Hermes' wrapper;
+    /// the bridge's own steers (its nudge, the instant line's note) are not the person's; a title Hermes made from
+    /// the wrapper is no title.
+    #[test]
+    fn words_added_during_an_answer_are_found_without_hermes_wrapper() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("state.db");
+        let conn = make_store(&path);
+        let open = "[OUT-OF-BAND USER MESSAGE — a direct message from the user, delivered once at this position]";
+        let steer = |words: &str| format!("{open}\n{words}\n[/OUT-OF-BAND USER MESSAGE]");
+        session(&conn, "bot", None, None, Some("[OUT-OF-BAND USER MESSAGE — a direct message…"), 0);
+        message(&conn, "bot", "user", "Cherche une veste", 1.0);
+        message(&conn, "bot", "user", &steer("une veste en laine bleue"), 2.0);
+        message(&conn, "bot", "user", &steer("[bipagents:handoff] the veste: hand it over"), 3.0);
+        message(&conn, "bot", "user", &steer(&crate::instant_reply::first_note("Je cherche une veste en laine.")), 4.0);
+        let (hits, _) = search_store("coach", &path, &words("veste"), 10, far()).unwrap();
+        let seen: Vec<(f64, &str)> = hits.iter().map(|h| (h.timestamp, h.snippet.as_str())).collect();
+        assert_eq!(seen, vec![(2.0, "une veste en laine bleue"), (1.0, "Cherche une veste")]);
+        assert_eq!(hits[0].session_title, None);
     }
 
     /// A conversation Hermes v0.22.5 compacted in place (internal/notes/history-compaction.md): a message it kept is a

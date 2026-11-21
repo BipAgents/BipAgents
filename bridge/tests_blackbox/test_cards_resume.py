@@ -18,7 +18,7 @@ from concurrent.futures import ThreadPoolExecutor
 import pytest
 
 from bbkit.common import AUTH, sse
-from bbkit.mcp import call as mcp_call
+from bbkit.mcp import call as mcp_call, not_done
 from bbkit.servers import wait_until
 from test_cards_inline import page, waiting_in
 from test_connectors import REGISTER, cards as connectors_cards, setup as connectors_setup, tool as connectors_tool
@@ -372,7 +372,7 @@ def test_a_secret_answered_while_its_call_waits_is_told_by_that_call_only(bridge
             assert not asked.result(timeout=60).get("isError")
         else:
             refuse_from_the_boite(bridge, card)
-            assert asked.result(timeout=60).get("isError")   # « The person refused… »
+            assert not_done(asked.result(timeout=60))   # « The person refused… », plain (tool_answers.rs)
     time.sleep(2)
     gate.set()
     none_for_a_while(fakes, "api_sec")

@@ -476,6 +476,7 @@ pub fn completed_with_error(data: &serde_json::Map<String, Value>) -> bool {
     let head = preview.chars().take(80).collect::<String>().to_ascii_lowercase();
     head.starts_with("error")
         || head.starts_with("{\"error\"")
+        || crate::tool_answers::rendered_not_done(preview)
         || head.contains("\"success\": false")
         || head.contains("\"success\":false")
 }
@@ -1107,6 +1108,9 @@ struct BridgeTurn {
     /// The same write asked again after its « already done »: its calls in all, by signature (the hub stops the run
     /// at `same_call`: `RunHub::same_write_again`).
     again: HashMap<String, u32>,
+    /// The same write the tool refused (its signature: how many times, and the refusal's first line): stopped at its
+    /// `REFUSED_AGAIN`th ask (`check`).
+    refused: HashMap<String, (u32, String)>,
     /// A turn with no run (a routine): all its bridge calls, by tool and in all.
     calls: u32,
     per_tool: HashMap<String, u32>,
@@ -1114,6 +1118,24 @@ struct BridgeTurn {
     /// A routine's limit getting close: the note added to the call's result (`take_note`), once per limit.
     note: Option<String>,
     warned: HashSet<String>,
+}
+
+/// The very same write the tool refused this many times is refused by the brake at the next ask, and the hub told
+/// (`same_write_calls`, `RunHub::same_write_again`). Refusals reach Hermes plain since 14/11 (tool_answers.rs), so
+/// neither its breaker nor its failure warning stops a model asking again and again (review 1: 8 identical refused
+/// notes, all answered).
+pub const REFUSED_AGAIN: u32 = 2;
+
+/// A refusal that invites the same call later (the place full, the browser held, a moment's wait) or once the person
+/// has done something in the app (a switch, a share): not counted. The tools mark the latter themselves
+/// (`tool_answers::lifted_in_the_app`); these words are the net for one they don't.
+fn retry_later(text: &str) -> bool {
+    let t = text.to_lowercase();
+    ["try again", "again in a", "again later", "a bit later", "in a moment", "in a minute", "of the app", "in the app",
+     "in their app", "bipagents app", "the person turns", "the person switches", "they switch", "they can turn",
+     "the person connects", "you can allow it"]
+        .iter()
+        .any(|w| t.contains(w))
 }
 
 /// `note` added to a tool's result (its first text, else a text of its own).
@@ -1254,6 +1276,20 @@ what you have, and say plainly what you couldn't find or do (no limits or tools 
         if !write_call(tool, arguments) {
             return None;
         }
+        // the very same write the tool refused, asked again and again: stopped here, a routine's too (the refusal
+        // would be the same; Hermes doesn't stop it any more)
+        if let Some((times, why)) = entry.refused.get(&signature_of(tool, arguments)).filter(|(n, _)| *n >= REFUSED_AGAIN).cloned() {
+            let calls = entry.again.entry(signature_of(tool, arguments)).or_insert(times);
+            *calls += 1;
+            tracing::info!(agent = %agent, tool = %tool, refused = times, "the same refused write again: stopped");
+            return Some(tool_text(
+                &format!(
+                    "Not done: you asked for exactly this {times} times and it was refused each time (« {why} »). \
+Don't ask for it again: tell your person in plain words what stops it, and go on without it."
+                ),
+                true,
+            ));
+        }
         // Only within a followed run: without one, the « turn » is a guess, and the person may well have asked for
         // the same thing again since (« refais le podcast »).
         if turn.is_some() && bare(tool) != WRITES_WITH_OPS && entry.seen.contains(&signature_of(tool, arguments)) {
@@ -1297,6 +1333,34 @@ what you have, and say plainly what you couldn't find or do (no limits or tools 
             entry.writes += 1;
         }
         entry.seen.insert(signature_of(tool, arguments));
+    }
+
+    /// A write the tool refused (its result's `isError`, before tool_answers.rs sends it plain): counted for `check`,
+    /// unless it invites the same call later or was a real failure of the bridge (its own « don't retry »).
+    pub fn record_refusal(&self, agent: &str, turn: Option<&Turn>, tool: &str, arguments: &Dict, result: &Dict) {
+        if !write_tool(tool)
+            || result.contains_key(crate::tool_answers::FAILURE_MARK)
+            || result.contains_key(crate::tool_answers::LIFTED_MARK)
+        {
+            return;
+        }
+        let text = result
+            .get("content")
+            .and_then(Value::as_array)
+            .and_then(|c| c.iter().find_map(|b| b.get("text").and_then(Value::as_str)))
+            .unwrap_or("");
+        if retry_later(text) {
+            return;
+        }
+        let why = crate::tools_knowledge::head(text.lines().next().unwrap_or("").trim(), 200).to_string();
+        let mut turns = self.turns.lock().unwrap_or_else(|e| e.into_inner());
+        let entry = turns.entry(turn_key(agent, turn)).or_default();
+        // the very same refusal again: another one (the person's settings changed meanwhile) starts the count over
+        let refused = entry.refused.entry(signature_of(tool, arguments)).or_insert((0, why.clone()));
+        if refused.1 != why {
+            *refused = (0, why);
+        }
+        refused.0 += 1;
     }
 
     /// [`record`](Self::record), with what the write answered: kept for the same write asked again (`check`). A page
@@ -1414,6 +1478,98 @@ mod tests {
     fn args(pairs: &[(&str, &str)]) -> Dict {
         pairs.iter().map(|(k, v)| (k.to_string(), json!(v))).collect()
     }
+
+    /// Review 1 (14/11): refusals reach Hermes plain now, so neither its breaker nor its failure warning stops a model
+    /// asking for the very same refused write again and again: the brake does, at the third ask (a routine's too).
+    #[test]
+    fn the_same_refused_write_is_stopped_at_its_third_ask() {
+        let turns = Turns::default();
+        let settings = Settings::default();
+        let note = args(&[("page", "Camille Testeur"), ("facts", "Passeport : 12AB34567")]);
+        let refused = tool_text("Not saved: ID numbers are never kept, and fact 1 holds one.", true);
+        let said = |r: &Dict| r["content"][0]["text"].as_str().unwrap_or("").to_string();
+        for (agent, turn) in [("routine", None), ("conversation", Some(Turn { run_id: "run_r".into(), background: false, banned: None }))] {
+            for _ in 0..2 {
+                assert!(turns.check(&settings, agent, turn.as_ref(), "notebook_write", &note, 0.0).is_none());
+                turns.record_refusal(agent, turn.as_ref(), "notebook_write", &note, &refused);
+            }
+            let third = turns.check(&settings, agent, turn.as_ref(), "mcp__bipagents__notebook_write", &note, 1.0);
+            let third = third.expect("the third identical refused write is stopped");
+            assert!(said(&third).starts_with("Not done: you asked for exactly this 2 times") && said(&third).contains("ID numbers"), "{}", said(&third));
+            assert_eq!(turns.same_write_calls(agent, turn.as_ref(), "notebook_write", &note), 3, "the hub stops the run at same_call");
+            // another write goes on
+            let other = args(&[("page", "Camille Testeur"), ("facts", "Aime le jazz")]);
+            assert!(turns.check(&settings, agent, turn.as_ref(), "notebook_write", &other, 1.0).is_none());
+        }
+        // a different refusal for the same write (the person's settings changed meanwhile) starts the count over
+        let first = tool_text("Not done: The person hasn't shared their reminders with you.", true);
+        let then = tool_text("Not added: a reminder at a time isn't set on any phone.", true);
+        let call = args(&[("title", "Appeler Paul"), ("due", "2026-11-07T14:00")]);
+        for refusal in [&first, &then] {
+            assert!(turns.check(&settings, "settings", None, "reminders_add", &call, 3.0).is_none());
+            turns.record_refusal("settings", None, "reminders_add", &call, refusal);
+        }
+        assert!(turns.check(&settings, "settings", None, "reminders_add", &call, 3.0).is_none());
+        // a refusal meant to be tried again later (the place full, the browser held) is not counted
+        let later = tool_text("Not done: your place is full right now; try again later.", true);
+        let page = args(&[("title", "Menu")]);
+        for _ in 0..4 {
+            assert!(turns.check(&settings, "later", None, "create_page", &page, 2.0).is_none());
+            turns.record_refusal("later", None, "create_page", &page, &later);
+        }
+    }
+
+    /// Review 2 (14/11) — d00246c8d: « a refusal sending the person to the app is not counted » (`retry_later`: « of the app », « in the
+    /// app », « the person turns »…). The write tools' real refusals of that kind say « in the BipAgents app », « of the
+    /// BipAgents app », « They can turn on », « they switch »: counted, so once the person has done it, the third identical
+    /// call is refused by the brake (« you asked for exactly this 2 times »), a routine's and a conversation's alike.
+    #[test]
+    fn a_refusal_the_person_lifts_in_the_app_is_never_counted() {
+        let lifted_in_the_app = [
+            // reminders.rs (reminders_add, the person hasn't shared their reminders)
+            ("reminders_add", "The person hasn't shared their reminders with you, so nothing was done. They can turn on the \
+    « Rappels » tool on your page in the BipAgents app: tell them so in one sentence, without steps for a particular phone."),
+            // calendar.rs (calendar_add, the phone's calendar not shared)
+            ("calendar_add", "The person hasn't shared their phone calendar with you: they switch « Calendrier » on in your \
+    page of the BipAgents app."),
+            // contacts.rs (contacts_add, the address book not shared)
+            ("contacts_add", "The person hasn't shared their address book with you: they switch « Contacts » on in your page \
+    of the BipAgents app."),
+            // mailbox.rs (mail_draft, no mailbox connected)
+            ("mail_draft", "No mailbox is connected for you: the person connects one in the BipAgents app (your settings › \
+    Boîtes mail)."),
+        ];
+        let turns = Turns::default();
+        let settings = Settings::default();
+        let mut blocked = Vec::new();
+        for (tool, text) in lifted_in_the_app {
+            let call = args(&[("title", "Appeler Paul"), ("due", "2026-11-20T14:00")]);
+            let refused = tool_text(text, true);
+            for _ in 0..2 {
+                assert!(turns.check(&settings, "review2", None, tool, &call, 0.0).is_none());
+                turns.record_refusal("review2", None, tool, &call, &refused);
+            }
+            // the person turned it on in the app meanwhile: the same call again must reach the tool
+            if let Some(stopped) = turns.check(&settings, "review2", None, tool, &call, 1.0) {
+                blocked.push((tool, stopped["content"][0]["text"].as_str().unwrap_or("").to_string()));
+            }
+        }
+        assert!(blocked.is_empty(), "refused by the brake after the person lifted it in the app: {blocked:#?}");
+    }
+
+        /// The tools mark these refusals themselves (`tool_answers::lifted_in_the_app`): never counted, whatever their words.
+        #[test]
+        fn a_refusal_its_tool_marks_as_lifted_in_the_app_is_never_counted() {
+            let turns = Turns::default();
+            let settings = Settings::default();
+            let call = args(&[("title", "Appeler Paul")]);
+            let marked = crate::tool_answers::lifted_in_the_app(tool_text("Not done: not shared yet.", true));
+            for _ in 0..3 {
+                assert!(turns.check(&settings, "marked", None, "reminders_add", &call, 0.0).is_none());
+                turns.record_refusal("marked", None, "reminders_add", &call, &marked);
+            }
+            assert!(turns.check(&settings, "marked", None, "reminders_add", &call, 0.0).is_none());
+        }
 
     #[test]
     fn the_lab_loop_is_stopped_at_the_eleventh_add() {

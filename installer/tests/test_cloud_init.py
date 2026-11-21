@@ -319,7 +319,7 @@ def test_the_seat_agent_s_heartbeat_says_only_states_a_version_a_time_and_number
     (tmp_path / "uptime").write_text("754.31 2900.02\n")
     numbers = agent.vitals(str(meminfo), str(tmp_path), str(tmp_path / "uptime"))
     assert set(numbers) == {"memory_mb", "available_mb", "swap_mb", "swap_used_mb", "disk_gb", "disk_free_gb", "load",
-                            "uptime", "space_hardened"}
+                            "uptime", "space_hardened", "vault_agent", "reboot_held"}
     assert numbers["uptime"] == 754 and agent.uptime(str(tmp_path / "missing")) is None
     assert numbers["memory_mb"] == 7812 and numbers["available_mb"] == 2929 and numbers["swap_used_mb"] == 1023
 

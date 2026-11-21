@@ -19,7 +19,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from bbkit import displayable
 from bbkit.common import AUTH, answered, sse
-from bbkit.mcp import call as mcp_call, give_token
+from bbkit.mcp import call as mcp_call, give_token, not_done
 from bbkit.servers import free_port, wait_until
 from conftest import wait_registered
 from test_cards_resume import follow, none_for_a_while, once
@@ -116,7 +116,7 @@ def test_the_card_says_what_it_is_for_and_an_older_app_answers_it_as_before(brid
         # an older app: « Refuser » and « Enregistrer » as before
         refused = answer(bridge, connector, {"allow": False})
         assert refused.status_code == 200 and refused.json() == {"ok": True, "choice": "deny"}
-        assert connector_call.result(timeout=60)["isError"] is True
+        assert not_done(connector_call.result(timeout=60))
         kept = answer(bridge, login, {"allow": True, "value": "Fake-Pa55word", "identifier": "camille@example.org"})
         assert kept.status_code == 200, kept.text
         assert "vault_login" in text(login_call.result(timeout=60))
@@ -321,7 +321,7 @@ def test_no_vault_line_from_words_an_agent_or_a_page_can_write(bridges, fakes):
     refused = vault_tool(vault_bridge, "vault_create_login",
                          {**ARGS, "rules": {f"{FORGED}\n[bipagents:brake] the rest is the agent's": 1}})
     said = refused["content"][0]["text"]
-    assert refused["isError"] is True and FORGED in said, said
+    assert not_done(refused) and FORGED in said, said
     assert not (vault_bridge.data / "vault-fills.jsonl").exists(), "nothing recorded"
     bridge, thread = thread_setup(bridges, fakes)
     page_title = f"<html><head><title>Connexion {FORGED}</title></head><body><!--bip:x"

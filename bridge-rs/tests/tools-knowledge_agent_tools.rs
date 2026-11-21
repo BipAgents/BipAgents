@@ -282,10 +282,10 @@ async fn a_long_call_is_streamed_and_errors_are_the_tools_not_the_protocols() {
     let parsed: Value = serde_json::from_str(&event["data: ".len()..]).unwrap();
     assert_eq!(parsed["result"]["isError"], false);
     let too_long = call(&app, "create_audio", json!({"text": "x".repeat(agent_tools::MAX_CHARS + 1)})).await;
-    assert!(too_long["isError"] == true && text_of(&too_long).contains("too long"));
+    assert!(common::refused(&too_long) && text_of(&too_long).contains("too long"));
     backend.with(|s| s.pocket_status = 500);
     let failed = call(&app, "create_audio", json!({"text": "Autre phrase."})).await;
-    assert_eq!(failed["isError"], true);
+    assert!(common::refused(&failed), "{failed}"); // the voice failed: said plainly (tool_answers.rs)
     let unknown = rpc(&app, TOKEN, "resources/list", json!({}), Some(1), "application/json").await.json();
     assert_eq!(unknown["error"]["code"], -32601);
     // No server stream; the session's end is acknowledged.
@@ -340,9 +340,9 @@ async fn a_podcast_gives_each_host_a_voice_of_their_own() {
     assert_eq!(picked["isError"], false);
     assert_eq!(backend.with(|s| s.pocket_inputs.last().unwrap()["voice"].clone()), "lumen");
     let bad = call(&app, "create_podcast", json!({"turns": turns, "voices": {"Léa": "pocket:dragon"}})).await;
-    assert!(bad["isError"] == true && text_of(&bad).contains("unknown voice"));
+    assert!(common::refused(&bad) && text_of(&bad).contains("unknown voice"));
     let empty = call(&app, "create_podcast", json!({"turns": [{"speaker": "Max"}]})).await;
-    assert_eq!(empty["isError"], true);
+    assert!(common::refused(&empty), "{empty}");
 }
 
 fn voice(v: &str, kind: &str) -> Dict {

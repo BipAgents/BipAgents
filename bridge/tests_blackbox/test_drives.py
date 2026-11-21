@@ -11,7 +11,7 @@ from urllib.parse import parse_qs, urlencode, urlsplit
 import httpx
 
 from bbkit.common import AUTH
-from bbkit.mcp import TOKEN, call, give_token, rpc, text_of
+from bbkit.mcp import TOKEN, call, give_token, rpc, text_of, not_done
 
 GOOGLE_FOLDER = "application/vnd.google-apps.folder"
 
@@ -259,8 +259,9 @@ def names(bridge):
 
 
 def tool(bridge, name, **arguments):
+    """(its text, whether it was refused or failed: a refusal goes out plain, tool_answers.rs)"""
     result = call(bridge, name, arguments)
-    return text_of(result), result["isError"]
+    return text_of(result), result["isError"] or not_done(result)
 
 
 def test_off_by_default(bridges, fakes):
@@ -330,7 +331,7 @@ def test_onedrive_folder_by_folder_for_the_chosen_agent(bridges, fakes):
         # Another agent: nothing.
         give_token(bridge, "budget", "budget-token-0123456789abcdefghijkl")
         budget = call(bridge, "drive_read", {"file": "onedrive:F1"}, token="budget-token-0123456789abcdefghijkl")
-        assert budget["isError"] and "shared no folder" in text_of(budget)
+        assert not_done(budget) and "shared no folder" in text_of(budget)
         # The keys: never in an answer, encrypted on disk.
         everything = json.dumps(bridge.get("/v1/drives", headers=AUTH).json()) + read + saved + folders
         assert "at-1" not in everything and "rt-1" not in everything

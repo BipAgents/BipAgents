@@ -344,6 +344,32 @@ impl Store {
         if has("notifications", "legacy")? {
             conn.execute_batch("ALTER TABLE notifications DROP COLUMN legacy")?;
         }
+        Self::clean_titles(conn)
+    }
+
+    /// Titles kept with Hermes' wrapper of a steer or a note of the app's (21/11: a rescued task « [OUT-OF-BAND USER
+    /// MESSAGE… », and from 29/10 « <!--bip:now … »; its conversation « 🧩 … », its report's Boîte title): cleaned at
+    /// each opening until none is left (one cheap look once they are), NULL when nothing of the person's is left (the
+    /// apps show their own words).
+    fn clean_titles(conn: &Connection) -> anyhow::Result<()> {
+        let like = format!("%{}%", crate::threads::timeline::STEER_OPEN);
+        for table in ["threads", "outbox"] {
+            let rows: Vec<(String, String)> = {
+                let sql = format!("SELECT id, title FROM {table} WHERE title LIKE ?1 OR title LIKE '%<!--%'");
+                let mut stmt = conn.prepare(&sql)?;
+                let found = stmt.query_map([&like], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+                found
+                    .filter(|row| !matches!(row, Ok((_, t)) if !crate::threads::timeline::has_machinery(t)))
+                    .collect::<Result<_, _>>()?
+            };
+            for (id, title) in &rows {
+                let clean = crate::threads::timeline::title_text(title);
+                conn.execute(&format!("UPDATE {table} SET title = ?1 WHERE id = ?2"), rusqlite::params![clean, id])?;
+            }
+            if !rows.is_empty() {
+                tracing::info!(table, titles = rows.len(), "titles cleaned of Hermes' wrapper and the app's notes");
+            }
+        }
         Ok(())
     }
 
@@ -405,7 +431,8 @@ impl Store {
         self.run(&sql, vec![text(agent), text(since)]).await
     }
 
-    /// Where a long turn's time went (turn_status.rs `took`), for its last reply (threads `with_took`): numbers only.
+    /// Where a long turn's time went (turn_status.rs `took`), for its last reply (threads `with_took`): numbers and the
+    /// sites it went to; deleted with its conversation, its agent's, or after a while (`purge_turn_times`).
     pub async fn save_turn_time(&self, agent: &str, run_id: &str, session_id: &str, started: f64, ended: f64, took: &Value)
         -> anyhow::Result<()> {
         self.run(
@@ -414,6 +441,27 @@ impl Store {
         )
         .await?;
         Ok(())
+    }
+
+    /// The long turns' summaries of these conversations' Hermes sessions (their conversation deleted: review R1).
+    pub async fn forget_turn_times(&self, agent: &str, sessions: &[String]) -> anyhow::Result<()> {
+        for session in sessions {
+            self.run("DELETE FROM turn_times WHERE agent=? AND session_id=?", vec![text(agent), text(session)]).await?;
+        }
+        Ok(())
+    }
+
+    /// Every long turn's summary of the agent (all its conversations let go: threads `forget_agent`).
+    pub async fn forget_agent_turn_times(&self, agent: &str) -> anyhow::Result<()> {
+        self.run("DELETE FROM turn_times WHERE agent=?", vec![text(agent)]).await?;
+        Ok(())
+    }
+
+    /// The long turns' summaries ended more than `older_than_days` ago (the outbox's retention, app.rs `purge_loop`):
+    /// they name sites, never kept for ever (review R1). How many went.
+    pub async fn purge_turn_times(&self, older_than_days: i64) -> anyhow::Result<usize> {
+        let cutoff = crate::py::time_time() - older_than_days.max(0) as f64 * 86400.0;
+        self.run_count("DELETE FROM turn_times WHERE ended < ?", vec![Param::Real(cutoff)]).await
     }
 
     pub async fn forget_run(&self, agent: &str, run_id: &str) -> anyhow::Result<()> {
@@ -583,6 +631,46 @@ impl Store {
 mod tests {
     use super::*;
 
+    /// 21/11: titles kept with Hermes' wrapper (a rescued task's conversation « 🧩 [OUT-OF-BAND USER MESSAGE… », its
+    /// report's Boîte title) cleaned when the store opens; the others untouched; nothing left, no title.
+    #[test]
+    fn titles_kept_with_hermes_wrapper_are_cleaned_at_start() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("bridge.db").to_string_lossy().into_owned();
+        let cut = "[OUT-OF-BAND USER MESSAGE — a direct message from the user, d…";
+        let wrapped = "[OUT-OF-BAND USER MESSAGE — a direct message from the user]\nVestes\n[/OUT-OF-BAND USER MESSAGE]";
+        {
+            let store = Store::open(&path).unwrap();
+            let noted = "🧩 <!--bip:now samedi 21 novembre 2026, 01:44, Europe/Paris (UTC…";
+            let titles =
+                [("t_a", format!("🧩 {cut}")), ("t_b", format!("🧩 {wrapped}")), ("t_c", "Vacances".into()), ("t_d", noted.into())];
+            for (id, title) in titles {
+                store
+                    .exec_sync(
+                        "INSERT INTO threads (id, agent, kind, title, hidden, version, created_at, updated_at) \
+                         VALUES (?,?,?,?,0,0,?,?)",
+                        &[text(id), text(&format!("vie{id}")), text("task"), text(&title), text("x"), text("x")],
+                    )
+                    .unwrap();
+            }
+            store
+                .exec_sync(
+                    "INSERT INTO outbox (id, agent, title, text, created_at) VALUES (?,?,?,?,?)",
+                    &[text("o1"), text("vie"), text(cut), text("Fini."), text("x")],
+                )
+                .unwrap();
+        }
+        let store = Store::open(&path).unwrap();
+        let titles: Vec<Value> = store
+            .exec_sync("SELECT title FROM threads ORDER BY id", &[])
+            .unwrap()
+            .into_iter()
+            .map(|r| r["title"].clone())
+            .collect();
+        assert_eq!(titles, [Value::Null, json!("🧩 Vestes"), json!("Vacances"), Value::Null]);
+        assert_eq!(store.exec_sync("SELECT title FROM outbox", &[]).unwrap()[0]["title"], Value::Null);
+    }
+
     #[test]
     fn iso_and_since() {
         let dt = Utc.with_ymd_and_hms(2026, 10, 4, 8, 15, 0).unwrap() + Duration::microseconds(123_999);
@@ -594,6 +682,30 @@ mod tests {
         assert_eq!(iso(parse_since(" 0 ").unwrap()), "1970-01-01T00:00:00.000Z");
         assert_eq!(iso(parse_since("1.5").unwrap()), "1970-01-01T00:00:01.500Z");
         assert!(parse_since("yesterday").is_err());
+    }
+
+    /// Review R1 (17/11): where a long turn's time went (`turn_times`) names sites: never kept for ever. A row goes after
+    /// `days` (the outbox's retention, app.rs `purge_loop`), with its conversation (threads `delete_thread`) and with all
+    /// of the agent's (`forget_agent`).
+    #[tokio::test]
+    async fn review_r1_turn_times_go_after_a_while_with_their_conversation_and_their_agent() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path().join("bridge.db").to_str().unwrap()).unwrap();
+        let now = crate::py::time_time();
+        let took = json!({"secs": 80, "top": [{"what": "site", "site": "pharmacie-exemple.fr", "secs": 60}]});
+        store.save_turn_time("vie", "r_old", "s1", now - 91.0 * 86400.0, now - 91.0 * 86400.0 + 80.0, &took).await.unwrap();
+        store.save_turn_time("vie", "r_new", "s1", now - 100.0, now - 20.0, &took).await.unwrap();
+        store.save_turn_time("vie", "r_side", "s2", now - 100.0, now - 20.0, &took).await.unwrap();
+        store.save_turn_time("budget", "r_b", "s9", now - 100.0, now - 20.0, &took).await.unwrap();
+        let runs = |rows: Vec<Row>| rows.iter().filter_map(|r| r["run_id"].as_str().map(str::to_string)).collect::<Vec<_>>();
+        let all = || async { runs(store.run("SELECT run_id FROM turn_times ORDER BY run_id", vec![]).await.unwrap()) };
+
+        assert_eq!(store.purge_turn_times(90).await.unwrap(), 1);
+        assert_eq!(all().await, ["r_b", "r_new", "r_side"]);
+        store.forget_turn_times("vie", &["s2".to_string()]).await.unwrap();
+        assert_eq!(all().await, ["r_b", "r_new"]);
+        store.forget_agent_turn_times("vie").await.unwrap();
+        assert_eq!(all().await, ["r_b"]);
     }
 
     #[tokio::test]

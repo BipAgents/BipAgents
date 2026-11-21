@@ -312,7 +312,8 @@ impl Threads {
         let now = iso(utcnow());
         let id = new_id("t_");
         let origin = if origin.is_null() { Param::Null } else { text(&origin.to_string()) };
-        let title = title.map(text).unwrap_or(Param::Null);
+        // Hermes' title of an adopted session, a task's conversation « 🧩 <task> »: never its wrapper of a steer
+        let title = title.and_then(timeline::title_text).map(|t| text(&t)).unwrap_or(Param::Null);
         self.store
             .run(
                 "INSERT INTO threads (id, agent, kind, title, origin, hidden, version, created_at, updated_at) \
@@ -472,6 +473,7 @@ impl Threads {
     pub async fn forget_agent(&self, agent: &str) -> anyhow::Result<()> {
         let _guard = self.registry.lock().await;
         let rows = self.store.run("SELECT * FROM threads WHERE agent = ?", vec![text(agent)]).await?;
+        self.store.forget_agent_turn_times(agent).await?;
         for thread in rows.iter().map(Thread::of) {
             self.store.run("DELETE FROM thread_segments WHERE thread_id = ?", vec![text(&thread.id)]).await?;
             self.store.run("DELETE FROM notifications WHERE thread_id = ?", vec![text(&thread.id)]).await?;
@@ -1232,12 +1234,16 @@ async fn delete_thread(
         return Err(HttpError::new(409, "the family's conversation is everyone's: it can't be deleted"));
     }
     let _guard = threads.registry.lock().await;
-    for segment in threads.segments(&thread.id).await? {
+    let segments = threads.segments(&thread.id).await?;
+    for segment in &segments {
         match threads.hermes.delete_session(&agent, &segment.session_id).await {
             Ok(()) | Err(crate::hermes::HermesError::Http { status: 404, .. }) => {}
             Err(exc) => return Err(HttpError::new(502, format!("Hermes refused the deletion: {}", exc.type_name()))),
         }
     }
+    // where its long turns' time went (sites): with it (turn_status.rs, review R1)
+    let sessions: Vec<String> = segments.iter().map(|s| s.session_id.clone()).collect();
+    threads.store.forget_turn_times(&agent.name, &sessions).await?;
     threads.store.run("DELETE FROM thread_segments WHERE thread_id = ?", vec![text(&thread.id)]).await?;
     threads.store.run("DELETE FROM notifications WHERE thread_id = ?", vec![text(&thread.id)]).await?;
     // its messages sent and never stored go with it: kept, they came back as « Pas envoyé » in the main thread
@@ -2183,5 +2189,27 @@ mod keepalive_review_tests {
         let alive = keepalive_within(response.into_body(), Duration::from_secs(32)).await;
         others.abort();
         assert!(alive.is_ok(), "no keepalive in 32 s while the owner's other events came every 5 s: {alive:?}");
+    }
+}
+
+#[cfg(test)]
+mod title_tests {
+    use super::*;
+
+    /// 21/11: a conversation adopted from Hermes keeps a title of the person's words, never Hermes' wrapper of words
+    /// added during an answer (a task's work conversation « 🧩 <title> » made from it, an instant title cut short).
+    #[tokio::test]
+    async fn an_adopted_title_never_carries_hermes_wrapper() {
+        let config = SharedConfig::new(crate::config::Config::with_key("k"));
+        let threads = Threads::new(config, Store::open(":memory:").unwrap(), HermesClient::new(reqwest::Client::new()));
+        let cut = "[OUT-OF-BAND USER MESSAGE — a direct message from the user, d…";
+        let made = threads.create("vie", "task", Some(&format!("🧩 {cut}")), Value::Null, true).await.unwrap();
+        assert_eq!(made.title, None);
+        let wrapped = "[OUT-OF-BAND USER MESSAGE — a direct message from the user]\nVestes\n[/OUT-OF-BAND USER MESSAGE]";
+        let made = threads.create("vie", "side", Some(wrapped), Value::Null, false).await.unwrap();
+        assert_eq!(made.title.as_deref(), Some("Vestes"));
+        assert_eq!(threads.get(&made.id).await.unwrap().unwrap().title.as_deref(), Some("Vestes"));
+        let made = threads.create("vie", "routine", Some("⚡ Factures · 2/11"), Value::Null, true).await.unwrap();
+        assert_eq!(made.title.as_deref(), Some("⚡ Factures · 2/11"));
     }
 }

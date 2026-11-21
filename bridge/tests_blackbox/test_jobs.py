@@ -12,7 +12,7 @@ import pytest
 
 from bbkit.common import AUTH, in_session
 from bbkit.fakes import split_now
-from bbkit.mcp import call, give_token, text_of
+from bbkit.mcp import call, give_token, not_done, text_of
 from bbkit.servers import wait_until
 
 TOKEN = "f" * 64
@@ -175,13 +175,13 @@ def test_an_agent_proposes_a_task_the_person_starts(bridges, fakes):
     # no task in it (5/11, a call meant for ask_secret ended on this name): nothing proposed, the right tools named
     jobs_before = len(bridge.get("/v1/jobs", headers=AUTH).json()["jobs"])
     junk = call(bridge, "propose_task", {"title": "x", "prompt": "No"})
-    assert junk["isError"] and "ask_secret" in text_of(junk) and "sandbox_sites_request" in text_of(junk), junk
+    assert not_done(junk) and "ask_secret" in text_of(junk) and "sandbox_sites_request" in text_of(junk), junk
     assert len(bridge.get("/v1/jobs", headers=AUTH).json()["jobs"]) == jobs_before
     for i in range(5):
         call(bridge, "propose_task", {"title": f"Encore {i}", "prompt": f"Encore un dossier à préparer, le n° {i}."})
     too_many = call(bridge, "propose_task", {"title": "Encore", "prompt": "Encore un dossier à préparer, le dernier."})
     # (a turn no run carries: the brake's note that the same tool comes back often, after the answer)
-    assert too_many["isError"] and text_of(too_many).startswith("enough of your proposals are waiting for the person already")
+    assert not_done(too_many) and text_of(too_many).startswith("Not done: enough of your proposals are waiting for the person already")
 
 
 def test_the_same_proposal_again_is_not_proposed_twice(bridges, fakes):
@@ -273,7 +273,9 @@ def test_a_running_task_says_what_it_does_now_and_jobs_list_by_agent(bridges, fa
 
     def activity():
         jobs = bridge.get("/v1/jobs?agent=wellness", headers=AUTH).json()["jobs"]
-        return jobs[0].get("activity") if jobs else None
+        found = jobs[0].get("activity") if jobs else None
+        # (what it does now, `status`, test_turn_status.py: on by default since 21/11)
+        return {k: v for k, v in found.items() if k != "status"} if found else found
 
     assert wait_until(lambda: activity() == {"tool": "web_search", "preview": "mutuelle famille 4"}, timeout=15)
     missing = bridge.get("/v1/jobs?agent=nobody", headers=AUTH)

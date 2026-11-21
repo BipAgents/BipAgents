@@ -352,7 +352,8 @@ def demo_clips(t: Dict[str, Any]) -> Dict[str, str]:
 # footer (src/bipagents/partials/). /install/ only sends to the home's #install (old links keep working).
 PAGES = (("home", "index.html", ""), ("demo", "demo.html", "demo/"), ("faq", "faq.html", "faq/"),
          ("install", "install.html", "install/"), ("beta", "beta.html", "beta/"), ("code", "code.html", "code/"),
-         ("grokbot", "grok-bot.html", "grok-bot/"), ("status", "status.html", "status/"))
+         ("grokbot", "grok-bot.html", "grok-bot/"), ("status", "status.html", "status/"),
+         ("privacy", "privacy.html", "privacy/"))
 # The status page reads the guichet's public snapshot (guichet-rs/src/public_status.rs in the guichet's repo).
 STATUS_API = "https://guichet.bipagents.com/v1/public-status"
 # « Obtenir un code » asks the guichet for its proof of work and sends the address there (guichet-rs/src/beta.rs, altcha.rs).
@@ -409,6 +410,13 @@ def bipagents(version: str) -> Path:
         for extra in sorted((src / "i18n").glob(f"*.{lang}.json")):
             texts[lang] = merged(texts[lang], json.loads(extra.read_text(encoding="utf-8")))
     paths = {lang: "/" if lang == "en" else f"/{lang}/" for lang in LANGS}
+    # /privacy/: the privacy policy, rendered from docs/legal/privacy.<lang>.md by kerfystudio.com's own renderer
+    # (kerfy_build.legal_article), so the two sites share one source. Google's OAuth verification wants it on the
+    # app's home page's domain. The policy's links to its other texts go to kerfystudio.com; to itself, here.
+    sys.path.insert(0, str(SRC / "kerfystudio"))
+    from kerfy_build import legal_article, prefix as kerfy_prefix, LEGAL as LEGAL_TEXTS
+    legal_links = {f"{name}.{l}.md": f"https://kerfystudio.com{kerfy_prefix(l)}/{name}/" for name in LEGAL_TEXTS for l in LANGS}
+    legal_links.update({f"privacy.{l}.md": f"{paths[l]}privacy/" for l in LANGS})
     prices, company, other = cfg["prices"], cfg["company"], cfg["compare"]
     # Built in the default currency (the one without countries); the script switches to the visitor's.
     currencies = prices["currencies"]
@@ -463,6 +471,7 @@ def bipagents(version: str) -> Path:
             "lang": lang, "home": paths[lang], "version": version,
             "demohref": f"{paths[lang]}demo/", "faqhref": f"{paths[lang]}faq/", "installhref": f"{paths[lang]}#install",
             "legalprefix": "" if lang == "fr" else f"/{lang}",
+            "privacyhref": f"{paths[lang]}privacy/",
             "storebadges": badges,
             "biproster": bip_roster(t), "bipcards": bip_cards(t, f"{paths[lang]}demo/"),
             **demo_clips(t),
@@ -529,6 +538,8 @@ def bipagents(version: str) -> Path:
                 "cur.beta": CURRENT if name == "beta" else "",
                 "data": json.dumps(data.get(name, common), ensure_ascii=False).replace("</", "<\\/"),
             })
+            if name == "privacy":
+                page_values["privacybody"] = legal_article(REPO, "privacy", lang, cfg, legal_links)[1]
             # Twice: the texts themselves may carry {{…}} (the prices).
             page = fill(fill(templates[name], page_values, f"bipagents/{lang}/{name}"), page_values,
                         f"bipagents/{lang}/{name} (texts)")

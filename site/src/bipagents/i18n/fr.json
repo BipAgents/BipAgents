@@ -398,6 +398,10 @@
     ]
   },
   "page": {
+    "privacy": {
+      "title": "Politique de confidentialité — BipAgents",
+      "description": "Comment BipAgents traite tes données : ce qui reste sur ton téléphone et ta place, ce que Kerfy Studio reçoit, les données Google, tes droits."
+    },
     "demo": {
       "title": "La démo — BipAgents",
       "description": "L’app BipAgents filmée sur un téléphone pendant sa propre démo : cinq courts exemples où tes Bips cherchent, proposent et attendent ton accord."

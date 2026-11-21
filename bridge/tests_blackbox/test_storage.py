@@ -8,7 +8,7 @@ import time
 
 from bbkit.fakes import taken_notes, waiting_notes
 from bbkit.common import AUTH, answered, boite_items
-from bbkit.mcp import call, give_token, text_of
+from bbkit.mcp import call, give_token, not_done, text_of
 
 FIVE_GB = 5 * 2**30
 
@@ -112,7 +112,7 @@ def test_a_full_place_a_tool_says_so_plainly(bridge):
     give_token(bridge)
     offer(bridge, FIVE_GB)
     result = call(bridge, "create_page", {"html": "<p>x</p>", "title": "Plan"})
-    assert result["isError"] is True and "no room left" in text_of(result)
+    assert not_done(result) and "no room left" in text_of(result)
     assert "Ton espace est plein" in text_of(result)
     assert len(space_cards(bridge)) == 1
     # the card is not made twice while it waits
@@ -198,7 +198,7 @@ def test_over_its_allowance_the_biggest_agent_s_sandbox_pauses_then_resumes(brid
     assert "en pause tant que l'espace est plein" in cards[0]["description"]
     give_token(bridge)
     refused = call(bridge, "create_audio", {"text": "Bonjour"})
-    assert refused["isError"] is True and "Ton espace est plein" in text_of(refused)
+    assert not_done(refused) and "Ton espace est plein" in text_of(refused)
     # measured again while still over: not paused twice
     bridge.post("/v1/storage/measure", headers=AUTH)
     assert bridge.commands.of("podman").count(["pause", "c0ffee"]) == 1

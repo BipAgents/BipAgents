@@ -70,3 +70,22 @@ def test_a_reader_never_reads_a_site_in_a_long_turns_summary(bridges, fakes):
     assert page.status_code == 200, page.text
     assert [r["text"] for r in replies(page.json())] == ["Voici le menu."], page.json()["items"]
     assert SITE not in json.dumps(page.json(), ensure_ascii=False), replies(page.json())
+
+
+def test_r1_a_long_turns_summary_goes_with_its_conversation(bridges, fakes):
+    """Review R1 (17/11): `turn_times` names sites; deleting the conversation deletes them (and after the outbox's
+    retention, store.rs `purge_turn_times`)."""
+    fakes.hermes.v0225 = True
+    now = time.time()
+    fakes.hermes.add_session(SESSION, [
+        {"id": 1, "role": "user", "content": "Trouve la pharmacie de garde", "timestamp": now - 80},
+        {"id": 2, "role": "assistant", "content": "C'est celle de la place.", "timestamp": now - 5},
+    ], title="Bot Chat", last_active=now - 5, started_at=now - 80)
+    bridge = bridges.new(change=lambda c: c.update(status={"enabled": True})).start()
+    thread = bridge.get("/v1/threads/main", headers=AUTH, params={"agent": "wellness"}).json()["id"]
+    kept(bridge, "wellness", now - 80, now - 6)
+    assert [r for r in replies(timeline(bridge, "wellness")) if r.get("took")], "the row is placed: this test says something"
+    gone = bridge.delete(f"/v1/threads/{thread}", headers=AUTH, params={"agent": "wellness"})
+    assert gone.status_code == 204, gone.text
+    with bridge.db() as db:
+        assert db.execute("SELECT COUNT(*) FROM turn_times WHERE agent = 'wellness'").fetchone()[0] == 0

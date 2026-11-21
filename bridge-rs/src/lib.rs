@@ -221,6 +221,7 @@ pub mod rooms_remote;
 pub mod rooms_tasks;
 pub mod routes;
 #[doc(hidden)]
+pub mod tool_answers; // how the bridge's MCP servers answer: refusals plain, real failures « don't retry » (Hermes' breaker)
 pub mod tools_knowledge; // the group's private helpers (pub for its golden tests)
 pub mod weather;
 
@@ -230,6 +231,9 @@ pub mod browsers;
 pub mod caldav;
 pub mod connections;
 pub mod drives;
+pub mod obsidian;
+pub mod obsidian_ob;
+pub mod google_calendar;
 pub mod calendar;
 pub mod card_details;
 pub mod card_fill;

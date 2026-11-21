@@ -1,7 +1,7 @@
 """The `weather` tool (an agent's « Météo » switch, MET Norway's forecast, Nominatim's places) and the `route` tool
 (a link to open the maps app, Google's travel time with `[maps] google_key`), over HTTP against bbkit's FakeMaps."""
 from bbkit.common import AUTH
-from bbkit.mcp import call, give_token, rpc, text_of
+from bbkit.mcp import call, give_token, not_done, rpc, text_of
 from conftest import managed_install, profile, servers, wait_registered
 
 
@@ -19,7 +19,7 @@ def test_weather_follows_the_agents_switch(bridges, fakes):
     give_token(bridge, "coach")
     assert "weather" not in names(bridge) and "route" in names(bridge)
     off = call(bridge, "weather", {"place": "Lyon"})
-    assert off["isError"] is True and "« Weather »" in text_of(off)  # the switch named in the agent's language
+    assert not_done(off) and "« Weather »" in text_of(off)  # the switch named in the agent's language
     assert fakes.maps.requests == []
 
     before = servers(coach)["bipagents"]["url"]
@@ -45,7 +45,7 @@ def test_weather_follows_the_agents_switch(bridges, fakes):
     call(bridge, "weather", {"place": "lyon"})
     assert len(fakes.maps.requests) == 2
     nowhere = call(bridge, "weather", {"place": "Nowhere"})
-    assert nowhere["isError"] is True and text_of(nowhere).startswith("no place found")
+    assert not_done(nowhere) and text_of(nowhere).startswith("Not done: no place found")
 
     assert bridge.patch("/v1/agents/coach/settings", headers=AUTH, json={"weather": False}).json()["weather"] == {"on": False}
     give_token(bridge, "coach")
@@ -68,4 +68,4 @@ def test_a_route_is_a_maps_link_and_with_a_key_a_travel_time(bridge, bridges, fa
     assert "test-maps-key" not in text_of(result)
     sent = fakes.maps.seen("/directions/")[0]
     assert sent.json()["travelMode"] == "WALK" and sent.header("x-goog-api-key") == "test-maps-key"
-    assert call(keyed, "route", {"destination": "Lyon", "mode": "rocket"})["isError"] is True
+    assert not_done(call(keyed, "route", {"destination": "Lyon", "mode": "rocket"}))

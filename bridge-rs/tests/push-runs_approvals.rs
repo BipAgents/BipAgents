@@ -91,9 +91,20 @@ fn count(apns: &FakeApns) -> usize {
     apns.requests.lock().unwrap().len()
 }
 
+/// The run's next event but what the agent does now (`turn.status`, on by default since 21/11: the hub's stream
+/// carries it, app.rs `listener_events_with` passes it only to an app that asks), which these tests don't read.
+async fn next(listener: &mut Listener) -> Option<bipbridge::hermes::SSEEvent> {
+    loop {
+        let event = listener.next().await?;
+        if event.r#type != "turn.status" {
+            return Some(event);
+        }
+    }
+}
+
 async fn drain(listener: &mut Listener) -> Vec<String> {
     let mut types = Vec::new();
-    while let Ok(Some(event)) = tokio::time::timeout(Duration::from_secs(10), listener.next()).await {
+    while let Ok(Some(event)) = tokio::time::timeout(Duration::from_secs(10), next(listener)).await {
         types.push(event.r#type);
     }
     types
@@ -166,7 +177,7 @@ async fn no_approval_push_while_voice_client_follows() {
     );
     let state = c.state();
     let mut listener = state.hub.subscribe(&c.agent(), "run_f", "voice", true);
-    assert_eq!(listener.next().await.unwrap().r#type, "message.delta");
+    assert_eq!(next(&mut listener).await.unwrap().r#type, "message.delta");
     c.post("/v1/watch", json!({"agent": "wellness", "run_id": "run_f"})).await;
     gate.set();
     assert_eq!(drain(&mut listener).await, ["approval.request", "run.completed"]);
@@ -262,7 +273,7 @@ async fn a_runs_prompts_reach_the_app_with_their_request_id() {
     );
     let mut listener = c.state().hub.subscribe(&c.agent(), "run_c", "app", true);
     asked.set();
-    let event = listener.next().await.unwrap();
+    let event = next(&mut listener).await.unwrap();
     assert_eq!((event.r#type.as_str(), &event.data["request_id"]), ("approval.request", &json!("p3")));
     assert_eq!(event.data["execution_generation"], 2);
     let pending = c.get("/v1/approvals").await.json()["items"].clone();
@@ -270,7 +281,7 @@ async fn a_runs_prompts_reach_the_app_with_their_request_id() {
     assert_eq!(pending[0]["request_id"], "p3");
     settle.set();
     let mut rest = Vec::new();
-    while let Ok(Some(event)) = tokio::time::timeout(Duration::from_secs(10), listener.next()).await {
+    while let Ok(Some(event)) = tokio::time::timeout(Duration::from_secs(10), next(&mut listener)).await {
         rest.push(event);
     }
     let kinds: Vec<&str> = rest.iter().map(|e| e.r#type.as_str()).collect();
@@ -459,7 +470,7 @@ async fn approval_is_pushed_when_the_app_stops_following() {
         ],
     );
     let mut listener = c.state().hub.subscribe(&c.agent(), "run_l", "voice", true);
-    assert_eq!(listener.next().await.unwrap().r#type, "message.delta");
+    assert_eq!(next(&mut listener).await.unwrap().r#type, "message.delta");
     c.post("/v1/watch", json!({"agent": "wellness", "run_id": "run_l"})).await;
     asked.set();
     let mut pending = false;

@@ -136,7 +136,15 @@ CASES = [
 ]
 
 
-@pytest.mark.parametrize("case", CASES, ids=[k[0] for k in CASES])
+# Handed over to the person by design (fix-pay-total-check, corrections 10-12, reviewed « prêt » 20/11): a second total
+# above the approved one (a full price over a deposit, a subtotal over a discount, a total over a gift card's rest)
+# is never guessed away. Strict: one of them approved and pressed one day is a change to look at.
+BY_DESIGN = {"booking_deposit_now", "fr_promo_code_discount", "gift_card_applied"}
+
+
+@pytest.mark.parametrize("case", [
+    pytest.param(k, marks=pytest.mark.xfail(strict=True, reason="handed over to the person by design"))
+    if k[0] in BY_DESIGN else k for k in CASES], ids=[k[0] for k in CASES])
 def test_good_payment_is_approved_and_pressed(bridges, fakes, tmp_path, case):
     _, html, amount, currency, stated = case
     shop, browser, bridge = start(bridges, fakes, tmp_path, page(html))

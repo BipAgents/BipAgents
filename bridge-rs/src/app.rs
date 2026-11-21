@@ -329,6 +329,8 @@ impl AppState {
         self.spawn(crate::project_agent::run_forever(self.clone())); // projects past their end: archived
         self.spawn(crate::connections::run_forever(self.clone())); // renews the services' access tokens
         self.spawn(crate::drives::end_when_off(self.clone())); // the switch off: drives still connected ended
+        self.spawn(crate::obsidian::scheduler(self.clone())); // the Obsidian vault's copy synced (obsidian.rs)
+        self.spawn(crate::google_calendar::end_when_off(self.clone())); // the same for Google Calendar
         self.spawn(crate::drives::ask_place_web_at_start(self.clone())); // a place of the offer: its Google Web client
         self.spawn(crate::connectors_run::scheduler(self.clone())); // the connectors' mechanical schedules
         self.spawn(crate::watchers::scheduler(self.clone())); // the watchers: checks with no model call
@@ -476,6 +478,11 @@ async fn purge_loop(state: AppState) {
             let removed = state.outbox.purge().await?;
             if removed > 0 {
                 tracing::info!(removed = removed, "outbox purged");
+            }
+            // where long turns' time went (turn_status.rs `took`: sites too), kept as long as the outbox (review R1)
+            let removed = state.store.purge_turn_times(config.outbox.retention_days).await?;
+            if removed > 0 {
+                tracing::info!(removed = removed, "turn times purged");
             }
             Ok(())
         }
@@ -1841,6 +1848,7 @@ pub fn create_app(config: Config, options: AppOptions) -> anyhow::Result<App> {
     crate::peers::write_contacts(&config, &crate::peers::links_of(&state.links.load()), Some(&state.households));
     crate::peers::heal_tokens(&config, &state.links); // Bot Mode only towards other households
     crate::shares::heal_skills(&config);
+    crate::jobs::repair_titles(&config); // tasks titled with Hermes' wrapper of a steer (21/11), before any task runs
     if options.start_background {
         state.start_background();
         state.spawn(queues.run_forever()); // the queues kept before a restart, and looked at again every 10 s
@@ -1923,6 +1931,8 @@ fn assemble(state: &AppState, config: &Config) -> Router {
         .merge(crate::message_search::router())
         .merge(crate::connections::router())
         .merge(crate::drives::router()) // « Documents en ligne », 404 while `[drives]` is off
+        .merge(crate::obsidian::router()) // Obsidian, 404 while `[obsidian]` is off
+        .merge(crate::google_calendar::router()) // « Google Calendar », 404 while `[google_calendar]` is off
         .merge(crate::live_activities::router())
         .merge(crate::skill_library::router());
     if !config.cloud {

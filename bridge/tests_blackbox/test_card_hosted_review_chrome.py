@@ -12,6 +12,7 @@ writes it. Only Visa's published test number."""
 import json
 import time
 
+from bbkit.mcp import not_done
 from bbkit.common import AUTH
 from test_card_payments_chrome import ARGS, CARD, Browser, pay, pay_bridge, site, test_providers, turn_on
 import test_card_payments_chrome as c
@@ -47,7 +48,7 @@ def test_rv7_another_merchants_page_at_the_provider_reached_by_the_agents_link_i
         time.sleep(1)
         result, asked = pay(bridge, ARGS)
         filled = browser.values().get("hosted.html")
-        assert asked is None and result["isError"] is True, (
+        assert asked is None and not_done(result), (
             f"the person was asked {asked!r} (the shop shown), and the card went to {filled!r} on {browser.pages()}")
         said = result["content"][0]["text"]
         assert "script" in said and "hand_over_payment" in said and "« Panier prêt »" in said, said

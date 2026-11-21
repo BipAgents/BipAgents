@@ -398,6 +398,21 @@ pub fn tools_url(config: &Config) -> String {
     format!("{}{PATH}?v={}", base_url(config), crate::agent_tools::version_of(&tools()))
 }
 
+/// The tools a connector's entry lists to Hermes: as its program declares them, without their `outputSchema`
+/// (FastMCP declares one for every typed tool). With one, Hermes' MCP client refuses any answer without a fitting
+/// `structuredContent` (an exception, a strike for its breaker, and the model never reads the answer): the bridge's
+/// refusals (the connector off, waiting for approval…) and its plain third failure are text only (review 1, 14/11).
+/// The program's own `structuredContent` still reaches the model (Hermes passes it beside the text).
+pub fn served_tools(tools: &[Value]) -> Vec<Value> {
+    tools
+        .iter()
+        .map(|tool| match tool {
+            Value::Object(map) => Value::Object(map.iter().filter(|(k, _)| *k != "outputSchema").map(|(k, v)| (k.clone(), v.clone())).collect()),
+            other => other.clone(),
+        })
+        .collect()
+}
+
 pub fn entry_name(slug: &str) -> String {
     format!("{ENTRY_PREFIX}{slug}")
 }
@@ -1527,20 +1542,39 @@ async fn connector_mcp(
                                 "instructions": format!("{} (connecteur fait par {}, approuvé par la personne)", conn.description, agent.display_name)})))
         }
         "ping" => Ok(rpc(&rid, json!({}))),
-        "tools/list" => Ok(rpc(&rid, json!({"tools": conn.tools}))),
+        // without their outputSchema: any text answer is then valid for Hermes' MCP client (`served_tools`)
+        "tools/list" => Ok(rpc(&rid, json!({"tools": served_tools(&conn.tools)}))),
         "tools/call" if crate::update_drain::closing() => {
-            Ok(rpc(&rid, crate::update_drain::busy_result(&crate::names::agent_language(&config, &agent.name))))
+            let busy = crate::update_drain::busy_result(&crate::names::agent_language(&config, &agent.name));
+            Ok(rpc(&rid, crate::tool_answers::settle_value_for(&state.hub, None, &entry_name(&conn.slug), &agent.name, busy)))
         }
         "tools/call" => {
             let tool = params.get("name").and_then(Value::as_str).unwrap_or("").to_string();
             let arguments = params.get("arguments").and_then(Value::as_object).cloned().unwrap_or_default();
+            // tool_answers.rs: the bridge's own refusals plain; the connector's failures (its own `isError`, no answer
+            // in time, a crash) kept as failures, « don't retry », never three in a row
+            let server = entry_name(&conn.slug);
+            let call_id = params.as_object().and_then(crate::tool_answers::call_id_of);
+            let claim = state.hub.claim_call_with(&agent.name, &tool, call_id.as_deref());
             let result = match runner::call_tool(&state, &agent, &id, &tool, arguments, "agent").await {
-                Ok(result) => result,
-                // the vault closed: plain words, not an error of the connector's (sealed_keys.rs)
-                Err(err) => json!({"content": [{"type": "text", "text": err.agent_text()}],
-                                   "isError": !matches!(err, runner::RunError::VaultClosed(_))}),
+                Ok(Value::Object(mut result)) => {
+                    crate::tool_answers::mark_failure(&mut result);
+                    Value::Object(result)
+                }
+                Ok(other) => other,
+                Err(err) => {
+                    // the vault closed: plain words, not a refusal nor an error of the connector's (sealed_keys.rs)
+                    let refused = !matches!(err, runner::RunError::VaultClosed(_));
+                    let mut said = crate::tools_knowledge::tool_text(&err.agent_text(), refused);
+                    if err.failed() {
+                        said.insert(crate::tool_answers::FAILURE_MARK.into(), Value::Bool(true));
+                        let more = " Don't retry it in this turn: tell your person simply that it didn't work this time.";
+                        crate::tool_answers::add_text(&mut said, more);
+                    }
+                    Value::Object(said)
+                }
             };
-            Ok(rpc(&rid, result))
+            Ok(rpc(&rid, crate::tool_answers::settle_value_for(&state.hub, claim.as_ref(), &server, &agent.name, result)))
         }
         other => Ok(web::json_response(
             200,
@@ -1789,6 +1823,22 @@ pub fn settings_listing(state: &AppState, config: &Config, agent: &AgentConfig) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Review 1 (14/11): a connector's tool may declare an `outputSchema` (FastMCP does for every typed tool); then
+    /// Hermes' MCP client refuses an answer without `structuredContent` (an exception: a breaker strike, and the model
+    /// never reads the bridge's refusal). Its entry lists the tools without it: any text answer is valid.
+    #[test]
+    fn a_connectors_tools_are_listed_without_their_output_schema() {
+        let tools = vec![json!({"name": "push_workouts", "description": "Pushes workouts",
+                                "inputSchema": {"type": "object"},
+                                "outputSchema": {"type": "object", "required": ["result"]}}),
+                         json!({"name": "list", "inputSchema": {"type": "object"}})];
+        let served = served_tools(&tools);
+        assert_eq!(served.len(), 2);
+        assert!(served.iter().all(|t| t.get("outputSchema").is_none()), "{served:?}");
+        assert_eq!(served[0]["inputSchema"], json!({"type": "object"}));
+        assert_eq!(served[0]["description"], "Pushes workouts");
+    }
 
     #[test]
     fn a_connectors_tool_reads_by_its_connectors_name() {

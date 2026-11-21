@@ -22,7 +22,7 @@ from cryptography.fernet import Fernet
 from websockets.asyncio.server import serve
 
 from bbkit.common import AUTH
-from bbkit.mcp import give_token
+from bbkit.mcp import give_token, not_done
 from bbkit.servers import free_port, wait_until
 
 NUMBER = "4242424242424242"   # Visa's published test number
@@ -507,12 +507,12 @@ def test_only_on_the_cards_sites_and_only_with_both_approvals(bridges, fakes):
         turn_on(bridge)
         bridge.post("/v1/vault", headers=AUTH, json=CARD)
         refused = tool(bridge, "pay_with_card", ARGS)
-        assert refused["isError"] is True and "only for shop.example; this page is on evil.example" in refused["content"][0]["text"]
+        assert not_done(refused) and "only for shop.example; this page is on evil.example" in refused["content"][0]["text"]
         chrome.url = "https://shop.example/checkout"
         denied, asked = pay(bridge, ARGS, hermes="decline", app=None)
-        assert asked and denied["isError"] is True and "did not approve" in denied["content"][0]["text"]
+        assert asked and not_done(denied) and "did not approve" in denied["content"][0]["text"]
         app_no, _ = pay(bridge, ARGS, hermes="accept", app="deny")
-        assert app_no["isError"] is True
+        assert not_done(app_no)
         assert chrome.typed == [] and not [c for c in bridge.commands.of("podman") if "printf" in c[-1]]
         # Not one of its cards: another agent gets nothing.
         other = tool(bridge, "pay_with_card", {**ARGS, "card": "Autre"})
@@ -531,17 +531,17 @@ def test_the_delivery_is_one_of_the_agents_coordonnees_and_shown_with_the_paymen
         bridge.post("/v1/vault", headers=AUTH, json=CARD)
         none_yet = tool(bridge, "pay_with_card", {**ARGS, "delivery": "Perso"})
         # (the agent's language here is English: « Coordonnées » is named « Contact details » to it)
-        assert none_yet["isError"] is True and "entry: leave delivery out" in none_yet["content"][0]["text"]
+        assert not_done(none_yet) and "entry: leave delivery out" in none_yet["content"][0]["text"]
         pro = {"kind": "address", "label": "Kerfy Studio (pro)", "hint": "pour la société", "full_name": "Camille Exemple",
                "address_line1": "1 rue de l'Essai", "city": "Testville", "postal_code": "00100", "country": "fr",
                "agents": ["vie"]}
         made = bridge.post("/v1/vault", headers=AUTH, json=pro)
         assert made.status_code == 201, made.text
         other = tool(bridge, "pay_with_card", {**ARGS, "delivery": "Bureau"})
-        assert other["isError"] is True
+        assert not_done(other)
         assert "entry « Bureau » for you. Yours: « Kerfy Studio (pro) »." in other["content"][0]["text"]
         denied, asked = pay(bridge, {**ARGS, "delivery": "kerfy studio (pro)"}, hermes="decline", app=None)
-        assert denied["isError"] is True
+        assert not_done(denied)
         assert re.search(r"Card ref item_[0-9a-f]{12}\. Delivery \"Kerfy Studio \(pro\)\"\. Approve in the BipAgents app",
                          asked), asked
         assert "Testville" not in asked and chrome.typed == []
@@ -564,7 +564,7 @@ def test_a_single_use_card_waits_for_its_new_numbers(bridges, fakes):
         assert chrome.resets == ["about:blank"]      # and out of the tab's history before the hold is lifted
         assert bridge.get("/v1/vault", headers=AUTH).json()["items"][0]["card"]["used"] is True
         again = tool(bridge, "pay_with_card", ARGS)
-        assert again["isError"] is True and "already used" in again["content"][0]["text"]
+        assert not_done(again) and "already used" in again["content"][0]["text"]
         renewed = bridge.patch(f"/v1/vault/{item['id']}", headers=AUTH, json={"number": "4000056655665556", "expiry": "11/31"})
         assert renewed.json()["card"]["used"] is False and renewed.json()["card"]["last4"] == "5556"
     finally:
@@ -610,7 +610,7 @@ def test_no_pay_button_hands_the_payment_over(bridges, fakes):
         chrome.button = None
         refused = tool(bridge, "confirm_payment", {"button": "Payer 12,50 €"})
         text = refused["content"][0]["text"]
-        assert refused["isError"] is True and "No pay button" in text and "don't try again" in text
+        assert not_done(refused) and "No pay button" in text and "don't try again" in text
         assert "cancel_payment" in text and "hand_over_payment" in text
         # never asked for a card's details, in the chat or in a card (card-guards, 14/11)
         assert "card's number, expiry, holder or security code, in the chat or in a card" in text
@@ -653,7 +653,7 @@ def test_nothing_is_typed_where_the_keyboard_s_focus_is_not_the_field(bridges, f
         bridge.post("/v1/vault", headers=AUTH, json=CARD)
         chrome.focus_trap = True
         result, asked = pay(bridge, ARGS)
-        assert asked and result["isError"] is True
+        assert asked and not_done(result)
         assert "would not take the keyboard" in result["content"][0]["text"]
         assert "hand_over_payment" in result["content"][0]["text"]
         assert chrome.typed == [] and all(v == "" for v in chrome.values.values())
@@ -694,14 +694,14 @@ def test_a_browser_image_that_counts_no_calls_is_never_typed_into(bridges, fakes
         bridge.commands.rule("podman", ["exec", "bipagents-browser-vie", "sh", "-c", CALLS_CHECK], exit=5)
         result, asked = pay(bridge, ARGS)
         # Security check 11/11, N5: found before the person is asked, so nobody approves a payment that can't be typed.
-        assert asked is None and result["isError"] is True
+        assert asked is None and not_done(result)
         text = result["content"][0]["text"]
         assert "must be updated" in text and "hand_over_payment" in text and "nothing was typed" in text
         assert chrome.typed == [] and chrome.reloads == 0 and chrome.navigated == []
         assert not [c for c in bridge.commands.of("podman") if "printf 'card" in c[-1] or lifted(c[-1])]   # no hold
         assert "asked" not in [e["outcome"] for e in bridge.get("/v1/vault/payments", headers=AUTH).json()["journal"]]
         again, asked = pay(bridge, ARGS)
-        assert asked is None and again["isError"] is True and chrome.typed == []
+        assert asked is None and not_done(again) and chrome.typed == []
         assert bridge.log_path.read_text().count("the browser image must be updated") == 1   # said once
     finally:
         chrome.stop()
@@ -733,7 +733,7 @@ def test_a_payment_stopped_while_the_page_reloads_types_nothing(bridges, fakes, 
             assert bridge.post("/v1/vault/payments", headers=AUTH, json={"enabled": False}).json()["active"] == []
         paying.join(60)
         result = paid["result"]
-        assert result["isError"] is True and "stopped" in result["content"][0]["text"], result
+        assert not_done(result) and "stopped" in result["content"][0]["text"], result
         assert chrome.typed == [] and chrome.values == {}
         assert chrome.navigated == ["about:blank"] and chrome.resets == ["about:blank"]
         podman = [c[-1] for c in bridge.commands.of("podman")]
@@ -756,7 +756,7 @@ def test_a_page_that_comes_back_without_its_form_or_elsewhere_is_handed_over(bri
         # A one-page checkout that loses its state when reloaded: nothing typed, the person pays.
         chrome.lose_form = True
         lost, asked = pay(bridge, ARGS)
-        assert asked and lost["isError"] is True
+        assert asked and not_done(lost)
         text = lost["content"][0]["text"]
         assert "without its card form" in text and "hand_over_payment" in text and "nothing was typed" in text
         assert chrome.typed == [] and chrome.reloads == 1
@@ -766,7 +766,7 @@ def test_a_page_that_comes_back_without_its_form_or_elsewhere_is_handed_over(bri
         chrome.lose_form, chrome.fields = False, form
         chrome.reload_to = "https://evil.example/checkout"
         moved, _ = pay(bridge, ARGS)
-        assert moved["isError"] is True and "another address" in moved["content"][0]["text"]
+        assert not_done(moved) and "another address" in moved["content"][0]["text"]
         assert "hand_over_payment" in moved["content"][0]["text"] and chrome.typed == []
         assert bridge.get("/v1/vault", headers=AUTH).json()["items"][0]["card"]["spent"] == {}
         outcomes = [e["outcome"] for e in bridge.get("/v1/vault/payments", headers=AUTH).json()["journal"]]
@@ -782,7 +782,7 @@ def test_a_card_form_in_a_frame_of_an_unknown_site_is_handed_over(bridges, fakes
         turn_on(bridge)
         bridge.post("/v1/vault", headers=AUTH, json=CARD)
         refused, asked = pay(bridge, ARGS)
-        assert asked is None and refused["isError"] is True   # nobody asked: the card could not go there
+        assert asked is None and not_done(refused)   # nobody asked: the card could not go there
         text = refused["content"][0]["text"]
         assert "frame of a payment service" in text and "hand_over_payment" in text
         assert chrome.typed == [] and not [c for c in bridge.commands.of("podman") if "printf" in c[-1]]
@@ -860,7 +860,7 @@ def test_on_a_place_of_the_offer_only_when_switched_on_and_the_number_stays_on_t
         assert f"Card {made.json()['id']}." in asked
         assert answers[0][0] == 409 and json.loads(answers[0][1]) == {
             "detail": {"code": "card_on_other_device", "device_name": "iPhone d'Alex"}}
-        assert refused["isError"] is True and chrome.typed == []
+        assert not_done(refused) and chrome.typed == []
         # From its phone, with its numbers: typed once, then gone.
         result, _, answers = pay_from_phone(bridge, ARGS, [FROM_PHONE_A])
         assert answers == [(204, "")] and result["isError"] is False, result
@@ -877,7 +877,7 @@ def test_on_a_place_of_the_offer_only_when_switched_on_and_the_number_stays_on_t
         chrome.url = "https://shop.example/checkout"
         over = tool(bridge, "pay_with_card", {**ARGS, "amount": "25,00"})
         text = over["content"][0]["text"]
-        assert over["isError"] is True and "at most 20.00 EUR per payment: 25.00 EUR is over it" in text, text
+        assert not_done(over) and "at most 20.00 EUR per payment: 25.00 EUR is over it" in text, text
         journal = bridge.get("/v1/vault/payments", headers=AUTH).json()["journal"]
         assert journal[0]["outcome"] == "refused_cap"
         records = vault_records(bridge)
@@ -1185,7 +1185,7 @@ def test_a_browser_image_found_old_only_under_the_hold_types_nothing(bridges, fa
         bridge.commands.rule("podman", ["exec", "bipagents-browser-vie", "sh", "-c", CALLS_CHECK], exit=0, times=1)
         bridge.commands.rule("podman", ["exec", "bipagents-browser-vie", "sh", "-c", CALLS_CHECK], exit=5)
         result, asked = pay(bridge, ARGS)
-        assert asked and result["isError"] is True
+        assert asked and not_done(result)
         text = result["content"][0]["text"]
         assert "must be updated" in text and "hand_over_payment" in text and "nothing was typed" in text
         assert chrome.typed == [] and chrome.reloads == 0 and chrome.navigated == []

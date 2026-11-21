@@ -333,6 +333,9 @@ pub fn call_lines_with(messages: &[Dict], said: &[(f64, String)]) -> (Vec<(Strin
             }
         }
         let text = visible(&words);
+        // what the person said (threads/timeline.rs): never Hermes' wrapper of words said during a turn, nor the
+        // brake's note steered into it
+        let text = if role == "user" { crate::threads::timeline::person_text(&text).unwrap_or_default() } else { text };
         if !text.is_empty() {
             lines.push((role.to_string(), pystr::head(&text, LINE_CHARS)));
         }
@@ -936,6 +939,31 @@ I'll try a different approach."})),
         assert!(turn_open(&messages[..3]));
         assert!(turn_open(&messages[..4]));
         assert!(turn_open(&messages[..5]));
+    }
+
+    /// 21/11: what the person said during a turn of the call reads as they said it; the brake's note steered into
+    /// the turn (« answer with what you have ») is not a line of theirs; neither shows Hermes' wrapper. The brief of
+    /// the next call reads them the same way.
+    #[test]
+    fn a_calls_record_never_shows_hermes_wrapper() {
+        let steer = |words: &str| {
+            format!("[OUT-OF-BAND USER MESSAGE — a direct message from the user]\n{words}\n[/OUT-OF-BAND USER MESSAGE]")
+        };
+        let messages = vec![
+            m(json!({"role": "user", "content": "Cherche des boulangeries"})),
+            m(json!({"role": "user", "content": steer("ouvertes le dimanche")})),
+            m(json!({"role": "user", "content": steer("[bipagents:brake] A note from the app: answer with what you have")})),
+            m(json!({"role": "assistant", "content": "En voici deux."})),
+        ];
+        let (lines, _) = call_lines(&messages);
+        let said: Vec<(&str, &str)> = lines.iter().map(|(r, t)| (r.as_str(), t.as_str())).collect();
+        assert_eq!(
+            said,
+            [("user", "Cherche des boulangeries"), ("user", "ouvertes le dimanche"), ("assistant", "En voici deux.")]
+        );
+        let brief = crate::live_brief::exchanges(&messages);
+        let brief: Vec<(&str, &str)> = brief.iter().map(|(r, t)| (r.as_str(), t.as_str())).collect();
+        assert_eq!(brief, said);
     }
 
     #[test]

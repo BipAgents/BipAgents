@@ -16,7 +16,7 @@ import threading
 from websockets.asyncio.server import serve
 
 from bbkit.common import AUTH
-from bbkit.mcp import give_token
+from bbkit.mcp import give_token, not_done
 from bbkit.servers import free_port
 
 TOKEN = "agent-token-for-vie-0123456789abcdef"
@@ -265,7 +265,7 @@ def test_two_agencies_on_one_extranet_are_chosen_by_their_login_page_and_never_g
         chrome.frames = [Frame(f"{SITE}/V5/accueil.html")]
         chrome.typed.clear()
         several = vault_login(bridge)
-        assert several["isError"] is True
+        assert not_done(several)
         text = said(several)
         assert "Several logins of the vault fit extranet2.example.fr" in text and "Nothing was typed" in text
         assert f"« Extranet agence A » (id {a['id']}, login page {PAGE_A})" in text
@@ -294,7 +294,7 @@ def test_a_login_fills_on_its_subdomains_never_on_another_site(bridges, fakes):
         # another host of amazon.fr (review R1): not without the person
         chrome.frames = [Frame("https://smile.amazon.fr/ap/signin")]
         other = vault_login(bridge)
-        assert other["isError"] is True and "another host of the same site" in said(other)
+        assert not_done(other) and "another host of the same site" in said(other)
         assert chrome.frames[0].values["mdp"] == ""
         # look-alikes, another country's site, plain http: nothing typed
         for url in ["https://www.amazon.fr.evil.example/ap/signin", "https://www.amazon.com/ap/signin",
@@ -302,12 +302,12 @@ def test_a_login_fills_on_its_subdomains_never_on_another_site(bridges, fakes):
             chrome.frames = [Frame(url)]
             chrome.typed.clear()
             refused = vault_login(bridge)
-            assert refused["isError"] is True and "gives you no login for" in said(refused), url
+            assert not_done(refused) and "gives you no login for" in said(refused), url
             assert chrome.typed == [], url
         # a login asked for by id on another site's page: refused
         chrome.frames = [Frame("https://www.amazon.com/ap/signin")]
         elsewhere = vault_login(bridge, {"id": shop["id"]})
-        assert elsewhere["isError"] is True and "not for www.amazon.com" in said(elsewhere) and chrome.typed == []
+        assert not_done(elsewhere) and "not for www.amazon.com" in said(elsewhere) and chrome.typed == []
     finally:
         chrome.stop()
 
@@ -318,7 +318,7 @@ def test_private_suffixes_keep_two_tenants_apart(bridges, fakes):
         bridge = login_bridge(bridges, fakes, chrome)
         keep(bridge, "Boutique d'Alice", "https://alice-shop.myshopify.com/account/login", "alice@example.org", "Fake-pw-9!")
         refused = vault_login(bridge)
-        assert refused["isError"] is True and "gives you no login for bob-shop.myshopify.com" in said(refused)
+        assert not_done(refused) and "gives you no login for bob-shop.myshopify.com" in said(refused)
         assert chrome.typed == []
     finally:
         chrome.stop()
@@ -333,7 +333,7 @@ def test_a_frame_of_another_site_is_never_written_into(bridges, fakes):
         chrome.frames[0].identifier = chrome.frames[0].password = False
         chrome.frames.append(Frame("https://ads.thirdparty.example/login-widget", context=2))
         refused = vault_login(bridge)
-        assert refused["isError"] is True and "No login form of extranet2.example.fr" in said(refused)
+        assert not_done(refused) and "No login form of extranet2.example.fr" in said(refused)
         assert chrome.typed == [] and chrome.frames[1].values == {"login": "", "mdp": ""}
         # a frame of the extranet's own domain (another host of it) is the site's own: typed there
         chrome.frames[1] = Frame("https://auth.example.fr/form", context=2)
@@ -394,9 +394,9 @@ def test_no_login_no_browser_no_page(bridges, fakes):
     try:
         bridge = login_bridge(bridges, fakes, chrome)
         none = vault_login(bridge)
-        assert none["isError"] is True and "ask_secret" in said(none) and chrome.typed == []
+        assert not_done(none) and "ask_secret" in said(none) and chrome.typed == []
         unknown = vault_login(bridge, {"id": "item_000000000000"})
-        assert unknown["isError"] is True and "No login of yours has this id" in said(unknown)
+        assert not_done(unknown) and "No login of yours has this id" in said(unknown)
     finally:
         chrome.stop()
 
@@ -414,12 +414,12 @@ def test_on_another_host_of_the_site_nothing_is_typed_and_the_person_is_told_wha
         other = keep(bridge, "Extranet 1", "https://extranet1.example.fr/V5/login.html", "x1@example.org", "Fake-x1-pw-1!")
         refused = vault_login(bridge)
         text = said(refused)
-        assert refused["isError"] is True and chrome.typed == []
+        assert not_done(refused) and chrome.typed == []
         assert "another host of the same site" in text and "nothing may be typed on this page" in text
         assert "save this page's address for that login in their vault" in text and "log in themselves" in text
         assert f"« Extranet agence A » is kept for extranet2.example.fr (login page {PAGE_A})" in text
         by_id = vault_login(bridge, {"id": a["id"]})
-        assert by_id["isError"] is True and "another host of the same site" in said(by_id) and chrome.typed == []
+        assert not_done(by_id) and "another host of the same site" in said(by_id) and chrome.typed == []
         # on the agencies' own host, a tie names only that host's logins
         chrome.frames = [Frame(f"{SITE}/V5/accueil.html")]
         several = said(vault_login(bridge))
@@ -460,7 +460,7 @@ def test_the_vault_list_says_each_logins_site_and_when_an_agent_last_used_it(bri
         nowhere_but_the_page(bridge, [kept.read_text()], IDENTIFIER_A, PASSWORD_A)
         # a fill refused (another site's page): no use
         chrome.frames = [Frame("https://www.amazon.com/ap/signin")]
-        assert vault_login(bridge, {"id": b["id"]})["isError"] is True
+        assert not_done(vault_login(bridge, {"id": b["id"]}))
         assert "last_used_at" not in listed()[b["id"]]
         # an older app reads the list as before: the same fields, two more it ignores
         assert set(now[b["id"]]) == set(b)

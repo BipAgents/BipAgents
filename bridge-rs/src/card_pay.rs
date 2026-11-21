@@ -2725,24 +2725,37 @@ async fn serve_call(
             crate::names::localize_tools(&mut tools, &crate::handback::language_of(&config, &agent));
             Ok(web::json_response(200, &rpc(&id, json!({"tools": tools}))))
         }
-        "tools/call" if crate::update_drain::closing() => Ok(web::json_response(
-            200,
-            &rpc(&id, crate::update_drain::busy_result(&crate::handback::language_of(&config, &agent))),
-        )),
+        "tools/call" if crate::update_drain::closing() => {
+            let busy = crate::update_drain::busy_result(&crate::handback::language_of(&config, &agent));
+            let busy = crate::tool_answers::settle_value_for(&state.hub, None, server.name, &agent.name, busy);
+            Ok(web::json_response(200, &rpc(&id, busy)))
+        }
         // the vault's keys sealed and not reopened yet (sealed_keys.rs): cards, connectors, logins and contact details
         // wait, in plain words; a site's terms (asked of the person) don't need it
         "tools/call"
             if params.get("name").and_then(Value::as_str) != Some(crate::terms_consent::TOOL)
                 && crate::sealed_keys::closed(&config) =>
         {
-            Ok(web::json_response(
-                200,
-                &rpc(&id, crate::sealed_keys::closed_result(&config, &crate::handback::language_of(&config, &agent))),
-            ))
+            let closed = crate::sealed_keys::closed_result(&config, &crate::handback::language_of(&config, &agent));
+            let closed = crate::tool_answers::settle_value_for(&state.hub, None, server.name, &agent.name, closed);
+            Ok(web::json_response(200, &rpc(&id, closed)))
         }
         "tools/call" => {
             let lang = crate::handback::language_of(&config, &agent);
             let name = params.get("name").and_then(Value::as_str).unwrap_or("").to_string();
+            // every answer as it goes to Hermes: a refusal plain, a real failure « don't retry » (tool_answers.rs)
+            let (caller, tool, hub) = (agent.name.clone(), name.clone(), state.hub.clone());
+            let call_id = params.as_object().and_then(crate::tool_answers::call_id_of);
+            let claim = hub.claim_call_with(&agent.name, &name, call_id.as_deref());
+            let settled = move |done: Result<anyhow::Result<Dict>, tokio::task::JoinError>| {
+                let mut result = match done {
+                    Ok(Ok(result)) => result,
+                    Ok(Err(err)) => crate::tool_answers::internal_failure(server.name, &tool, &format!("{err:#}")),
+                    Err(err) => crate::tool_answers::internal_failure(server.name, &tool, &err.to_string()),
+                };
+                crate::tool_answers::settle_for(&hub, claim.as_ref(), server.name, &caller, &mut result);
+                Value::Object(result)
+            };
             let arguments = match params.get("arguments") {
                 Some(Value::Object(map)) => map.clone(),
                 _ => Dict::new(),
@@ -2761,8 +2774,8 @@ async fn serve_call(
                 result
             });
             if !stream {
-                let result = (&mut work).await.map_err(anyhow::Error::from)??;
-                return Ok(web::json_response(200, &rpc(&id, Value::Object(result))));
+                let result = settled((&mut work).await);
+                return Ok(web::json_response(200, &rpc(&id, result)));
             }
             let abort = work.abort_handle();
             let events = async_stream::stream! {
@@ -2773,14 +2786,8 @@ async fn serve_call(
                             yield Ok::<Bytes, Infallible>(Bytes::from(format!("event: message\ndata: {}\n\n", py::dumps(&request))));
                         }
                         done = &mut work => {
-                            match done {
-                                Ok(Ok(result)) => {
-                                    let payload = py::dumps(&rpc(&id, Value::Object(result)));
-                                    yield Ok(Bytes::from(format!("event: message\ndata: {payload}\n\n")));
-                                }
-                                Ok(Err(err)) => tracing::error!(server = server.name, exc = %format!("{err:#}"), "bridge tool failed"),
-                                Err(err) => tracing::error!(server = server.name, exc = %err, "bridge tool failed"),
-                            }
+                            let payload = py::dumps(&rpc(&id, settled(done)));
+                            yield Ok(Bytes::from(format!("event: message\ndata: {payload}\n\n")));
                             break;
                         }
                         _ = tokio::time::sleep(KEEPALIVE) => {
