@@ -96,6 +96,8 @@ def test_the_placeholder_becomes_the_guide_that_proposes_and_hands_over(bridges,
     assert soul.startswith("Tu es Sous,") and "Ce que ton utilisateur attend de toi : Suit les dépenses." in soul
     assert "- Sous (" in (home / "profiles" / "agent" / "SOUL.md").read_text()   # the guide's list follows
     assert bridge.get("/v1/guide", headers=AUTH).json()["proposals"] == []
+    # (Bip may write to Sous now, a new account's rule: its tools registered again, the test's token given again)
+    give_token(bridge, "agent", GUIDE_TOKEN)
     # a subject handed over to the new agent
     switch = call(bridge, "suggest_switch", {"agent": "Sous", "summary": "Budget vacances : 800 €."}, token=GUIDE_TOKEN)
     assert not switch["isError"] and "A card to continue with Sous is shown" in text_of(switch)

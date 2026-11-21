@@ -17,7 +17,9 @@
 //!   agent: each bridge leaves its own out.
 //! - **The family's agent** (`family`, family_agent.rs): the own agents it may ask (« Peut demander à »). It is not one
 //!   of « tes agents » for the rules: no rule makes it write, and your agents write to it only along an explicit pair
-//!   under `some`; it reads no one's shared folder, and is out of the households' rules both ways.
+//!   under `some`; it reads no one's shared folder, and is out of the households' rules both ways. A project agent
+//!   (project_agent.rs, shown to friends) is out of « Tous » too: only explicit pairs and reads under `some`, never a
+//!   household's.
 //! - **À l'écart** (`aside`): agents out of everything (they write to no one, no one writes to them or reads their
 //!   folder), whatever the rules.
 //!
@@ -493,6 +495,9 @@ pub struct Agent {
     /// The family's agent (family_agent.rs).
     #[serde(default)]
     pub family: bool,
+    /// A project agent, shown to friends (project_agent.rs).
+    #[serde(default)]
+    pub project: bool,
     /// It can share and read folders (shares.rs `why_not`).
     #[serde(default = "yes")]
     pub can_share: bool,
@@ -500,6 +505,13 @@ pub struct Agent {
 
 fn yes() -> bool {
     true
+}
+
+impl Agent {
+    /// Out of « Tous » and of the households' rules: the family's agent, a project agent.
+    pub fn apart(&self) -> bool {
+        self.family || self.project
+    }
 }
 
 /// This place's agents and the households linked to it.
@@ -520,6 +532,7 @@ impl World {
             .map(|a| Agent {
                 id: a.name.clone(),
                 family: family.contains(&a.name),
+                project: crate::project_agent::is_project(config, &a.name),
                 can_share: !shares || crate::shares::why_not(config, a).is_none(),
             })
             .collect();
@@ -545,9 +558,9 @@ impl World {
     }
 }
 
-/// Your agents that take part in the rules: not « à l'écart », not the family's agent.
+/// Your agents that take part in the rules: not « à l'écart », not the family's agent nor a project agent.
 pub fn eligible(world: &World, rules: &Rules) -> Vec<String> {
-    world.agents.iter().filter(|a| !a.family && !rules.is_aside(&a.id)).map(|a| a.id.clone()).collect()
+    world.agents.iter().filter(|a| !a.apart() && !rules.is_aside(&a.id)).map(|a| a.id.clone()).collect()
 }
 
 /// Whether `from` may write to `to` (an agent of this place by its id, another household's as `agent__household`).
@@ -562,10 +575,10 @@ pub fn may_write(world: &World, rules: &Rules, from: &str, to: &str) -> bool {
             }
             if a.family {
                 // « Peut demander à »: its list alone (never another family's agent)
-                return !b.family && rules.family.get(&a.id).is_some_and(|t| t.contains(&b.id));
+                return !b.apart() && rules.family.get(&a.id).is_some_and(|t| t.contains(&b.id));
             }
             let pair = || rules.pairs.iter().any(|(x, y)| *x == a.id && *y == b.id);
-            if b.family {
+            if a.project || b.apart() {
                 return rules.write == Mode::Some && pair();
             }
             match rules.write {
@@ -576,7 +589,7 @@ pub fn may_write(world: &World, rules: &Rules, from: &str, to: &str) -> bool {
         }
         (Some(a), None) => {
             let Some((agent, household)) = world.remote(to) else { return false };
-            !a.family
+            !a.apart()
                 && !rules.is_aside(&a.id)
                 && world.linked.contains(&household)
                 && rules.households.get(&household).is_some_and(|h| h.effective(Way::Out).contains(&agent))
@@ -592,7 +605,7 @@ pub fn may_write(world: &World, rules: &Rules, from: &str, to: &str) -> bool {
 /// Whether the agents of household `household` may write to your `agent` (any of theirs: their bridge checks which).
 pub fn opens_to(world: &World, rules: &Rules, household: &str, agent: &str) -> bool {
     let Some(b) = world.agent(agent) else { return false };
-    !b.family
+    !b.apart()
         && !rules.is_aside(&b.id)
         && world.linked.contains(household)
         && rules.households.get(household).is_some_and(|h| h.effective(Way::In).contains(&b.id))
@@ -605,7 +618,7 @@ pub fn may_read(world: &World, rules: &Rules, reader: &str, source: &str) -> boo
         return false;
     }
     let pair = || rules.reads.iter().any(|(x, y)| *x == r.id && *y == s.id);
-    if s.family {
+    if s.apart() || r.project {
         return rules.read == Mode::Some && pair();
     }
     match rules.read {
@@ -702,7 +715,7 @@ pub fn household_facing(world: &World, rules: &Rules) -> BTreeSet<String> {
 /// The households whose agents may write to `agent`, or `agent` to theirs (vault.rs `others_names`).
 pub fn households_of(world: &World, rules: &Rules, agent: &str) -> Vec<String> {
     let Some(a) = world.agent(agent) else { return Vec::new() };
-    if a.family || rules.is_aside(agent) {
+    if a.apart() || rules.is_aside(agent) {
         return Vec::new();
     }
     rules
@@ -1025,7 +1038,7 @@ pub fn migrate(world: &World, before: &Before) -> (Rules, Vec<String>) {
             }
             (Some(_), Some(_)) => rules.pairs.push((from.clone(), to.clone())),
             (Some(a), None) => match world.remote(to) {
-                Some(_) if a.family => notes.push(format!("{from} → {to} dropped: the family's agent writes to no household")),
+                Some(_) if a.apart() => notes.push(format!("{from} → {to} dropped: the family's or a project agent writes to no household")),
                 Some((agent, household)) if world.linked.contains(&household) => {
                     out.entry(household.clone()).or_default().insert(agent);
                     senders.entry(household).or_default().insert(a.id.clone());
@@ -1033,7 +1046,7 @@ pub fn migrate(world: &World, before: &Before) -> (Rules, Vec<String>) {
                 _ => notes.push(format!("{from} → {to} dropped: no such agent or household")),
             },
             (None, Some(b)) => match world.remote(from) {
-                Some(_) if b.family => notes.push(format!("{from} → {to} dropped: no household writes to the family's agent")),
+                Some(_) if b.apart() => notes.push(format!("{from} → {to} dropped: no household writes to the family's or a project agent")),
                 Some((_, household)) if world.linked.contains(&household) => {
                     incoming.entry(household).or_default().insert(b.id.clone());
                 }
@@ -1246,7 +1259,12 @@ mod tests {
         World {
             agents: ids
                 .iter()
-                .map(|id| Agent { id: id.to_string(), family: *id == "famille", can_share: !id.starts_with("mac") })
+                .map(|id| Agent {
+                    id: id.to_string(),
+                    family: *id == "famille",
+                    project: *id == "projet",
+                    can_share: !id.starts_with("mac"),
+                })
                 .collect(),
             linked: linked.iter().map(|s| s.to_string()).collect(),
         }
@@ -1286,7 +1304,7 @@ mod tests {
     fn a_new_agent_is_covered_at_once() {
         let mut w = world(&["vie", "wellness"], &[]);
         let r = Rules { read: Mode::All, ..Rules::new_account() };
-        w.agents.push(Agent { id: "jardin".into(), family: false, can_share: true });
+        w.agents.push(Agent { id: "jardin".into(), can_share: true, ..Agent::default() });
         assert!(may_write(&w, &r, "jardin", "vie") && may_write(&w, &r, "vie", "jardin"));
         assert!(may_read(&w, &r, "jardin", "wellness") && may_read(&w, &r, "wellness", "jardin"));
     }

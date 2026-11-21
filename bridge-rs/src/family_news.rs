@@ -1109,7 +1109,9 @@ mod tests {
         assert!(told_by_pairs(&links, "alex", "vie").is_empty());
         // the rules: any agent of Alex's household, where they let them write to Bip
         let world = crate::rules::World {
-            agents: ["bip", "vie"].map(|id| crate::rules::Agent { id: id.into(), family: false, can_share: true }).to_vec(),
+            agents: ["bip", "vie"]
+                .map(|id| crate::rules::Agent { id: id.into(), can_share: true, ..Default::default() })
+                .to_vec(),
             linked: ["alex".to_string()].into_iter().collect(),
         };
         let mut rules = crate::rules::Rules::default();
