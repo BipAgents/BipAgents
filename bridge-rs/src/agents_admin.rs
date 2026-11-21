@@ -1217,11 +1217,13 @@ async fn restart_hub_when_calm(
     let Some(names) = crate::agent_restart::group_calm(&config, first).await else { return false };
     let new: Vec<&str> = agents.iter().map(|a| a.name.as_str()).collect();
     tracing::info!(target: "bipbridge::agents", agents = %new.join(","), "new agents without their tools: the hub's gateway restarted, all calm");
+    // its agents' restart requests asked by now are done by it; one asked while it runs stays for the loop
+    let upto = crate::agent_restart::asks_so_far();
     if let Err(exc) = restart_gateway(&config, first, run).await {
         tracing::warn!(target: "bipbridge::agents", agent = %first.name, error = %tail(&exc.to_string(), 200), "gateway not restarted");
         return false;
     }
-    crate::agent_restart::restarted(&config, &names, crate::agent_restart::NEW_AGENT_TOOLS);
+    crate::agent_restart::restarted(&config, &names, crate::agent_restart::NEW_AGENT_TOOLS, upto);
     futures::future::join_all(agents.iter().map(|a| wait_served(http, a, false))).await;
     // their first turns still wait for the listing if it comes later (mcp_sessions `first_turn`)
     let started = std::time::Instant::now();

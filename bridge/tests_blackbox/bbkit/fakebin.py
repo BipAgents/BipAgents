@@ -9,7 +9,9 @@
 - the others succeed silently.
 
 Rules (a JSON file, read at each run) change that for one test: `{"cmd": "hermes", "prefix": [...], "exit": 1,
-"stderr": "...", "stdout": "...", "times": 1}` — the first rule whose command and argument prefix match wins."""
+"stderr": "...", "stdout": "...", "times": 1}` — the first rule whose command and argument prefix match wins.
+`"hold": "<file>"`: the command, once recorded, goes on until that file exists (60 s at most): a test acts while
+the bridge's command still runs (a gateway restart under way)."""
 from __future__ import annotations
 
 import json
@@ -276,6 +278,10 @@ def gateway():
 
 found = rule()
 record({"rule": bool(found)})
+if found is not None and found.get("hold"):
+    held_until = time.time() + 60
+    while not os.path.exists(found["hold"]) and time.time() < held_until:
+        time.sleep(0.05)
 if found is not None and found.get("exec_image") and found["exec_image"] in ARGS:
     exec_container(found["exec_image"])
 if found is not None:
@@ -336,9 +342,11 @@ class Commands:
             self.log.unlink()
 
     def rule(self, cmd: str, prefix: List[str], exit: int = 0, stdout: str = "", stderr: str = "",
-             times: int = -1, stdout_file: str = "", exec_image: str = "") -> None:
+             times: int = -1, stdout_file: str = "", exec_image: str = "", hold: str = "") -> None:
         rules = json.loads(self.rules_path.read_text(encoding="utf-8"))
         item: Dict[str, Any] = {"cmd": cmd, "prefix": prefix, "exit": exit, "stdout": stdout, "stderr": stderr}
+        if hold:
+            item["hold"] = hold   # the command goes on until this file exists
         if stdout_file:
             item["stdout_file"] = stdout_file   # bytes (a tar stream for `podman cp … -`)
         if exec_image:
