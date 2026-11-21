@@ -140,6 +140,39 @@ async fn the_familys_agent_asks_only_those_opened_to_it() {
     assert!(!rules::allows(&config, "famille", "vie"));
 }
 
+#[tokio::test]
+async fn the_screen_says_which_agent_is_the_familys_and_which_a_project_agent() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut d = config_dict(dir.path(), &Urls::default());
+    for name in ["Vie", "Famille", "Chantier"] {
+        d["agents"][name] = json!({"hermes_url": "http://127.0.0.1:9", "hermes_key": "k".repeat(32)});
+    }
+    let data = dir.path().join("data");
+    std::fs::create_dir_all(&data).unwrap();
+    std::fs::write(data.join("family-agent.json"), r#"{"agent": "famille"}"#).unwrap();
+    std::fs::write(
+        data.join("project-agents.json"),
+        r#"{"projects": {"chantier": {"created": 1.0, "ends": 9999999999.0, "archived": null}}}"#,
+    )
+    .unwrap();
+    let app = TestApp::new(parse_config(&d, None).unwrap());
+    let (k, v) = auth();
+    let h = [(k, v.as_str())];
+    let screen = app.send_json("PUT", "/v1/agent-rules/write", &h, &json!({"mode": "all"})).await.json();
+    let said: BTreeMap<String, (Value, Value)> = screen["agents"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|a| (a["id"].as_str().unwrap().to_string(), (a["family"].clone(), a["project"].clone())))
+        .collect();
+    assert_eq!(said["vie"], (json!(false), json!(false)));
+    assert_eq!(said["wellness"], (json!(false), json!(false)));
+    assert_eq!(said["famille"], (json!(true), json!(false)));
+    assert_eq!(said["chantier"], (json!(false), json!(true)));
+    // the apps show what the bridge does: a project agent is out of « Tous »
+    assert_eq!(links(&screen), pairs(&[("vie", "wellness"), ("wellness", "vie")]));
+}
+
 #[derive(Clone, Default)]
 struct Calls(Arc<Mutex<Vec<(String, String)>>>);
 

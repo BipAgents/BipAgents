@@ -516,7 +516,8 @@ pub async fn screen(state: &AppState, refresh: bool) -> Value {
         .values()
         .map(|a| {
             json!({"id": a.name, "name": a.display_name, "color": a.color,
-                   "family": world.agent(&a.name).is_some_and(|x| x.family), "aside": current.is_aside(&a.name),
+                   "family": world.agent(&a.name).is_some_and(|x| x.family),
+                   "project": world.agent(&a.name).is_some_and(|x| x.project), "aside": current.is_aside(&a.name),
                    "why_not": crate::shares::why_not(&config, a),
                    "managed": crate::peers::managed_home(&config, a).is_some()})
         })
