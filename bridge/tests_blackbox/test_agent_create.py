@@ -25,8 +25,19 @@ def next_run(fakes):
     return run
 
 
+def idle(bridge, agent):
+    """No turn of `agent` running in its main thread any more (the bridge saw the run end): as a person writing again
+    after the answer. Without it, a busy machine had the next message arrive while the bridge still read the end of
+    the previous run: « steered » into it, not « started » (20/11, 6 runs in 60 under load, line 86)."""
+    def over():
+        page = bridge.get("/v1/threads/main/timeline", headers=AUTH, params={"agent": agent}).json()
+        return page["pending"].get("run") is None
+    assert wait_until(over, timeout=30)
+
+
 def send(bridge, fakes, agent, text):
-    """The person's message to `agent`'s main thread; what Hermes got as input."""
+    """The person's message to `agent`'s main thread, once its last turn is over; what Hermes got as input."""
+    idle(bridge, agent)
     next_run(fakes)
     sent = bridge.post("/v1/threads/main/messages", headers=AUTH,
                        json={"agent": agent, "client_id": uuid.uuid4().hex, "text": text})

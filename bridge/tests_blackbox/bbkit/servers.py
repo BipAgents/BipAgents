@@ -3,14 +3,17 @@ server that accepts and drops every connection (an unreachable Hermes)."""
 from __future__ import annotations
 
 import asyncio
+import fcntl
 import hashlib
 import json
 import os
 import socket
 import struct
+import tempfile
 import threading
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Dict, Optional
 from urllib.parse import parse_qs
 
@@ -20,22 +23,48 @@ import uvicorn
 # Under pytest-xdist (`-n N`, PYTEST_XDIST_WORKER=gw<i>), each worker hands out ports from a block of its own, below
 # Linux's ephemeral range (32768+, where the kernel puts every `bind(0)` and the local end of every outgoing
 # connection): a port probed free here, then bound by a bridge a moment later, is never taken in between by another
-# worker's probe or by a connection of any process. The block comes from the run's id (PYTEST_XDIST_TESTRUNUID) plus
-# the worker's number, so two parallel runs on one machine mostly use different blocks; the probe still skips any
-# port in use. Serial runs (no xdist) keep `bind(0)`, as before.
+# worker's probe or by a connection of any process. The worker claims its block for its whole life with a lock file
+# (BB_PORT_LOCKS, default <tmp>/bipagents-blackbox-ports/block-<n>.lock, flock): the first free one from the run's id
+# (PYTEST_XDIST_TESTRUNUID) plus the worker's number, so two runs at once on one machine (other agents on the build
+# server) never share a block. Before (20/11), the block came from the id alone: two runs met in a block most of the
+# time, a port probed free by both was bound by one bridge, the other exited on `[Errno 98]` while `/health` on that
+# port answered 200 from the first, and a test talked to another run's bridge until it stopped (an httpx error).
+# Serial runs (no xdist) keep `bind(0)`, as before.
 _PORT_LOW, _PORT_HIGH, _PORT_BLOCK = 12000, 32000, 500
 _port_next: Dict[str, int] = {}
 _port_lock = threading.Lock()
+_claimed: Dict[str, Any] = {}   # "block": this worker's range, "fd": its lock, held open until the process ends
+
+
+def _claim(index: int) -> bool:
+    folder = Path(os.environ.get("BB_PORT_LOCKS") or Path(tempfile.gettempdir()) / "bipagents-blackbox-ports")
+    try:
+        folder.mkdir(parents=True, exist_ok=True)
+        fd = os.open(folder / f"block-{index}.lock", os.O_CREAT | os.O_RDWR, 0o666)
+    except OSError:
+        return False
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        os.close(fd)
+        return False
+    _claimed["fd"] = fd
+    return True
 
 
 def _worker_block() -> Optional[range]:
     worker = os.environ.get("PYTEST_XDIST_WORKER", "")
     if not worker.startswith("gw") or not worker[2:].isdigit():
         return None
-    blocks = (_PORT_HIGH - _PORT_LOW) // _PORT_BLOCK
-    run = int(hashlib.sha256(os.environ.get("PYTEST_XDIST_TESTRUNUID", "").encode()).hexdigest()[:8], 16)
-    first = _PORT_LOW + ((run + int(worker[2:])) % blocks) * _PORT_BLOCK
-    return range(first, first + _PORT_BLOCK)
+    with _port_lock:
+        if "block" not in _claimed:
+            blocks = (_PORT_HIGH - _PORT_LOW) // _PORT_BLOCK
+            run = int(hashlib.sha256(os.environ.get("PYTEST_XDIST_TESTRUNUID", "").encode()).hexdigest()[:8], 16)
+            first = (run + int(worker[2:])) % blocks
+            # every block held (more than 40 workers on the machine): the run's own one, shared, as before
+            index = next((i % blocks for i in range(first, first + blocks) if _claim(i % blocks)), first)
+            _claimed["block"] = range(_PORT_LOW + index * _PORT_BLOCK, _PORT_LOW + (index + 1) * _PORT_BLOCK)
+        return _claimed["block"]
 
 
 def _bindable(port: int) -> bool:

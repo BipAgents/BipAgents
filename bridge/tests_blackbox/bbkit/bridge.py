@@ -230,11 +230,26 @@ class Bridge:
             self.wait_ready()
         return self
 
+    def listening(self) -> bool:
+        """Its own log says it holds its port (« Uvicorn running on http://host:port », written once the bind
+        succeeded, in this start's part of the log): a 200 on `/health` alone may come from another process that took
+        the port first (another run's bridge, 20/11), while this one exits on `[Errno 98]`."""
+        try:
+            with open(self.log_path, "rb") as log:
+                log.seek(getattr(self, "_log_start", 0))
+                text = log.read().decode("utf-8", errors="replace")
+        except OSError:
+            return False
+        return "Uvicorn running on " in text and f":{self.port} (Press CTRL+C" in text
+
     def wait_ready(self, timeout: float = 30.0) -> None:
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             if self.process is not None and self.process.poll() is not None:
                 raise BridgeFailed(f"{self.name} exited with {self.process.returncode}:\n{self.log_tail()}")
+            if not self.listening():
+                time.sleep(0.05)
+                continue
             try:
                 if httpx.get(f"{self.url}/health", timeout=2.0).status_code == 200:
                     return

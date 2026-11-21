@@ -1478,10 +1478,9 @@ async fn join(State(state): State<AppState>, request: Request) -> ApiResult<Resp
                 state.households.mark(&household, "via", json!("relay"))?;
                 state.households.mark(&household, "route", json!(crate::family_relay::new_token()))?;
                 if reach == Some("relay") {
-                    state.households.mark(&household, "relay_in", json!(true))?;
-                    crate::family_rendezvous::wake(); // they call us through it from now on
-                    // and with a pass we give them for their mailbox only, sent through the link itself
-                    give_pass(&state, &household).await;
+                    // they call us through it from now on, with a pass we give them for their mailbox only, sent
+                    // through the link itself; made before our poll is turned on (`give_pass`)
+                    give_pass(&state, &household).await?;
                 }
             }
         }
@@ -1495,15 +1494,24 @@ async fn join(State(state): State<AppState>, request: Request) -> ApiResult<Resp
 }
 
 /// After a link made through the relay where they call us through it too: a pass to our mailbox, for theirs only,
-/// accepted from now on, and given to them through the link (sealed, with their key: `POST /family/relay-pass`).
-async fn give_pass(state: &AppState, household: &str) {
-    if !make_pass(state, household, true).await {
-        return;
+/// accepted from now on, then our mailbox polled (`relay_in`), then the pass given to them through the link (sealed,
+/// with their key: `POST /family/relay-pass`). The pass comes before the poll: the relay keeps what a mailbox says it
+/// accepts only once it polls, so our first poll must already say it. Turned on first (until 20/11), that poll,
+/// numbered before the pass, said « none »; the pass's own statement reaching the relay before it was dropped, and
+/// for that whole poll (25 s) the mailbox took no pass: their calls were refused, their new pass after a link
+/// removed waited a minute (test_family_relay_first_poll.py).
+async fn give_pass(state: &AppState, household: &str) -> anyhow::Result<()> {
+    let made = make_pass(state, household, true).await;
+    state.households.mark(household, "relay_in", json!(true))?;
+    crate::family_rendezvous::wake();
+    if !made {
+        return Ok(());
     }
     crate::family_rendezvous::announce_passes(state).await;
     if !hand_pass(state, household, 3).await {
         tracing::warn!(household, "family link: our pass not given to them yet (given again later)");
     }
+    Ok(())
 }
 
 /// A household's pass is made again this often (passes sealed with a key the relay retires keep working).

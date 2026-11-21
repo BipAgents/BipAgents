@@ -428,6 +428,7 @@ async fn a_device_key_opens_the_bridge_and_a_reopen_leaves_only_the_recovering_d
 
 #[tokio::test]
 async fn claiming_sets_the_model_and_creates_agents_reached_through_the_door() {
+    let _claims = CLAIMS.lock().await;
     use axum::routing::{any, get};
     // The hub's gateway: its capabilities, and the sessions the new agents make.
     let gateway = common::spawn_fake(
@@ -509,6 +510,7 @@ async fn claiming_sets_the_model_and_creates_agents_reached_through_the_door() {
 /// the bridge's agents only. The profiles' folders count too: the retry makes its agent under another id and succeeds.
 #[tokio::test]
 async fn a_claim_retried_after_a_profile_was_left_makes_its_agent_under_another_id() {
+    let _claims = CLAIMS.lock().await;
     use axum::routing::{any, get};
     let gateway = common::spawn_fake(
         Router::new()
@@ -598,6 +600,13 @@ fn fake_hermes_slow(
     })
 }
 
+/// The tests that prepare or claim a place, one at a time: the bridge keeps one preparation or claim at a time per
+/// process (cloud_setup.rs `PREPARING`), what is not ready yet after a claim (`READINESS`, keyed by agent id: each of
+/// these tests' first agent is « agent ») and its spare agents' pool (agent_pool.rs); one bridge per process, but here
+/// every test of the file shares them. Side by side, a claim waited for another test's (20/11: line 827, « claimed
+/// within 2 s », failed under load with the whole file running).
+static CLAIMS: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 /// Waits until `check` holds (15 s at most).
 async fn until(what: &str, check: impl Fn() -> bool) {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
@@ -613,6 +622,7 @@ async fn until(what: &str, check: impl Fn() -> bool) {
 /// made as before. Each `hermes` command of the fake takes 300 ms, to measure.
 #[tokio::test(flavor = "multi_thread")]
 async fn spare_agents_make_new_agents_files_only() {
+    let _claims = CLAIMS.lock().await;
     use axum::routing::{any, get};
     use bipbridge::agent_pool;
     use bipbridge::agents_admin::{self, NewAgent};
@@ -652,7 +662,22 @@ async fn spare_agents_make_new_agents_files_only() {
     let shared = bipbridge::config::SharedConfig::new(config.clone());
     let commands: Arc<Mutex<Vec<Vec<String>>>> = Arc::default();
     let delay = std::time::Duration::from_millis(300);
-    let run = fake_hermes_slow(home.clone(), commands.clone(), delay);
+    // The pool's refill after the app's new agent starts in the background before `create_agent` returns (its
+    // `refill_soon`): its spares' `profile create` held until the commands of the creation itself are read, or a busy
+    // machine let it in first (20/11, 2 runs in 3: line 729 « a profile command during create_agent »).
+    let (refills, refills_held) = tokio::sync::watch::channel(true);
+    let slow = fake_hermes_slow(home.clone(), commands.clone(), delay);
+    let run: bipbridge::agents_admin::Run = Arc::new(move |args: Vec<String>, env| {
+        let (slow, mut open) = (slow.clone(), refills_held.clone());
+        let spare = args.get(1..3) == Some(&["profile".to_string(), "create".to_string()][..])
+            && args.get(3).is_some_and(|id| agent_pool::is_spare_id(id));
+        Box::pin(async move {
+            if spare {
+                let _ = open.wait_for(|open| *open).await;
+            }
+            slow(args, env).await
+        })
+    });
     let http = reqwest::Client::new();
     done(&config, true);
     // without delay: a preparation holds the claims' lock, which the other tests of this file share
@@ -721,13 +746,16 @@ async fn spare_agents_make_new_agents_files_only() {
     // The app's new agent: a spare, files only.
     commands.lock().unwrap().clear();
     let body = NewAgent { name: "Léa".into(), kind: Some("daily".into()), lang: Some("fr".into()), ..Default::default() };
+    refills.send_replace(false);
     let started = std::time::Instant::now();
     let lea = agents_admin::create_agent(&shared, &body, &http, &run).await.unwrap();
     let spare_time = started.elapsed();
     assert!(agent_pool::is_spare_id(&lea.name) && lea.display_name == "Léa");
     let during: Vec<Vec<String>> = commands.lock().unwrap().clone();
+    refills.send_replace(true);
     assert!(!during.iter().any(|c| is_restart(c) || c.get(1) == Some(&"profile".to_string())), "{during:?}");
-    assert!(spare_time < std::time::Duration::from_millis(1500), "{spare_time:?} {during:?}");
+    // what makes it fast is checked just above (files only: no `profile` command, no restart); its time is only
+    // printed (MEASURE below): a wall clock of 1.5 s failed under load (20/11, load ~9 in a full cargo test)
     assert_eq!(agents_admin::agents_count(&shared.get()), 5);
     until("pool refilled after a creation", || agent_pool::spares(&shared.get()).len() == 2).await;
 
@@ -769,6 +797,7 @@ async fn spare_agents_make_new_agents_files_only() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_prepared_place_is_claimed_with_file_writes_and_its_other_agents_made_after() {
+    let _claims = CLAIMS.lock().await;
     use axum::routing::{any, get};
     let gateway = common::spawn_fake(
         Router::new()
@@ -886,6 +915,7 @@ async fn a_prepared_place_is_claimed_with_file_writes_and_its_other_agents_made_
 /// Alex, 2026-10-30: the place's first agent is « Bip », the guide, and it greets the person first.
 #[tokio::test(flavor = "multi_thread")]
 async fn the_apps_placeholder_claims_bip_the_guide_with_its_welcome() {
+    let _claims = CLAIMS.lock().await;
     use axum::routing::{any, get};
     let gateway = common::spawn_fake(
         Router::new()
@@ -986,6 +1016,7 @@ async fn requests_through_the_door_wait_for_an_agent_the_claim_makes_ready() {
 /// zone and country are the whole place's, nothing French left in what its agents read.
 #[tokio::test(flavor = "multi_thread")]
 async fn an_english_claim_makes_the_whole_place_english_in_the_persons_zone() {
+    let _claims = CLAIMS.lock().await;
     use axum::routing::{any, get};
     let gateway = common::spawn_fake(
         Router::new()
