@@ -287,7 +287,7 @@ pub struct Stored {
     /// (`GET /v1/places/drive-client`, drives.rs `PlaceWeb`). Same file and key; never in bridge.toml.
     #[serde(default)]
     pub drives_google_place: Option<crate::drives::PlaceWeb>,
-    /// « Agenda Google » (google_calendar.rs): the Google account's calendar, its own grant signed in with Google
+    /// « Google Calendar » (google_calendar.rs): the Google account's calendar, its own grant signed in with Google
     /// Drive's clients, and the agents that may use it (`Link.agents`). Same file and key.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub google_calendar: Option<crate::drives::Link>,

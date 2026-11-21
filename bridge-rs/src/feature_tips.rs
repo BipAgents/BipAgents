@@ -266,7 +266,7 @@ const SERVICES: [(&str, &str, &str); 18] = [
     ("gmail", "Gmail", "gmail"),
     ("outlook", "Outlook", "outlook|hotmail"),
     ("google_drive", "Google Drive", "google drive|gdrive"),
-    ("google_calendar", "Google Agenda", "google agenda|google calendar|google kalender"),
+    ("google_calendar", "Google Calendar", "google agenda|google calendar|google kalender"),
     ("dropbox", "Dropbox", "dropbox"),
     ("onedrive", "OneDrive", "onedrive"),
     ("icloud", "iCloud", "icloud"),

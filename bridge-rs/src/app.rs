@@ -1924,7 +1924,7 @@ fn assemble(state: &AppState, config: &Config) -> Router {
         .merge(crate::message_search::router())
         .merge(crate::connections::router())
         .merge(crate::drives::router()) // « Documents en ligne », 404 while `[drives]` is off
-        .merge(crate::google_calendar::router()) // « Agenda Google », 404 while `[google_calendar]` is off
+        .merge(crate::google_calendar::router()) // « Google Calendar », 404 while `[google_calendar]` is off
         .merge(crate::live_activities::router())
         .merge(crate::skill_library::router());
     if !config.cloud {

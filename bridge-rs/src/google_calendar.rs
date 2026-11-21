@@ -1,5 +1,5 @@
-//! « Agenda Google » (Alex 20/11: the catalogue of apps signed in by account, one service at a time; Gmail, Calendar,
-//! Drive first): the person connects their Google account once in the app (« Applis et outils » › Agenda Google) and
+//! « Google Calendar » (Alex 20/11: the catalogue of apps signed in by account, one service at a time; Gmail, Calendar,
+//! Drive first): the person connects their Google account once in the app (« Applis et outils » › Google Calendar) and
 //! chooses the agents that may use its calendar. Those agents read its upcoming events and ask to add, change or
 //! delete one through the same calendar tools as the phone's (calendar.rs): `calendar_list` lists the Google events
 //! beside the phone's and the mailboxes' (source « Google Calendar »), `calendar_add` writes there when it names that
@@ -384,7 +384,7 @@ pub async fn forget_agent(config: &Config, agent: &str) {
 pub fn words(fault: &Fault) -> String {
     match fault {
         Fault::Expired => format!(
-            "the connection to {LABEL} ended: your person connects it again in the app (Applis et outils › Agenda Google)"
+            "the connection to {LABEL} ended: your person connects it again in the app (Applis et outils › {LABEL})"
         ),
         Fault::NotFound => "no such event any more (moved or deleted)".to_string(),
         Fault::RateLimited(Some(s)) => format!("{LABEL} asks to slow down: try again in {s} seconds"),
@@ -611,7 +611,8 @@ pub async fn plan(config: &Config, api: &Api, name: &str, arguments: &Dict) -> R
             };
             if current.get("recurring").and_then(Value::as_bool).unwrap_or(false) {
                 return Err(tool_text(
-                    "a repeating event: the person changes or deletes it in Google Calendar (tell them)",
+                    "a repeating event: the person changes or deletes it in the Google Calendar app (tell them; \
+« Google Calendar » is its name in every language)",
                     true,
                 ));
             }

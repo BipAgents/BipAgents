@@ -163,7 +163,7 @@ fn the_cards_say_it_plainly() {
 
 #[test]
 fn what_goes_wrong_in_plain_words() {
-    assert!(words(&Fault::Expired).contains("Agenda Google"));
+    assert!(words(&Fault::Expired).contains("Applis et outils › Google Calendar"));
     assert!(words(&Fault::RateLimited(Some(3))).contains("3 seconds"));
     assert_eq!(fault_result(&Fault::NotFound)["isError"], true);
 }
