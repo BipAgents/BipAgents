@@ -286,6 +286,7 @@ def test_a_vault_keys_order_is_done_only_in_the_server_s_night(tmp_path, monkeyp
 
 def test_the_round_leaves_a_vault_keys_order_for_the_night(tmp_path, monkeypatch):
     agent = _seat_agent()
+    monkeypatch.setattr(agent, "VAULT_TRIED", str(tmp_path / "vault-keys-tried"))
     seen = []
     monkeypatch.setattr(agent, "vault_keys_order", lambda *a, **k: seen.append(a) or True)
     body = {"action": "vault_keys", "seat": 2, "vault_keys": SETTINGS}
@@ -295,6 +296,44 @@ def test_the_round_leaves_a_vault_keys_order_for_the_night(tmp_path, monkeypatch
     assert agent.vault_order_round(body, 21) is True and len(seen) == 1
 
 
+
+def test_a_vault_keys_order_held_for_the_night_is_said_once_per_order_and_night(tmp_path, monkeypatch):
+    # review 3 of 21/11: the rounds run every 2 min; « held until the night » was written at each one, all day long
+    agent = _seat_agent()
+    monkeypatch.setattr(agent, "VAULT_TRIED", str(tmp_path / "vault-keys-tried"))
+    monkeypatch.setattr(agent, "VAULT_ANYTIME", str(tmp_path / "vault-keys-anytime"))
+    monkeypatch.setattr(agent, "vault_keys_order", lambda *a, **k: True)
+    said = []
+    monkeypatch.setattr(agent, "log", said.append)
+    at = lambda day, hour: time.struct_time((2026, 11, day, hour, 0, 0, 5, 325, 0))
+    held = lambda: [line for line in said if "held until the night" in line]
+    body = {"action": "vault_keys", "seat": 2, "vault_keys": SETTINGS}
+    night = agent.vault_night
+    monkeypatch.setattr(agent, "vault_night", lambda clock=None: False)
+    for _ in range(3):   # three rounds now
+        assert agent.vault_order_round(body, 20) is False
+    assert len(held()) == 1, said
+    monkeypatch.setattr(agent, "vault_night", night)
+    said.clear()
+    for hour in (15, 16, 17, 23):   # sent in the afternoon, served again at each round
+        assert agent.vault_order_round(body, 21, clock=lambda h=hour: at(21, h)) is False
+    assert len(held()) == 1, said
+    assert agent.vault_order_round({**body, "seat": 3}, 22, clock=lambda: at(21, 18)) is False
+    assert len(held()) == 2, "another order: said once too"
+    # after midnight, still the same night's wait (until 01:00): nothing more
+    assert agent.vault_order_round(body, 21, clock=lambda: at(22, 0)) is False
+    assert len(held()) == 2, said
+    assert agent.vault_order_round(body, 21, clock=lambda: at(22, 2)) is True, "done at night"
+    # still waiting a day later (the place was moving that night, say): said once for that night's wait
+    for hour in (14, 15):
+        assert agent.vault_order_round(body, 21, clock=lambda h=hour: at(22, h)) is False
+    assert len(held()) == 3, said
+    # its note can't be written (a full disk): said each time rather than never, the round goes on
+    (tmp_path / "a-file").write_text("")
+    monkeypatch.setattr(agent, "VAULT_TRIED", str(tmp_path / "a-file" / "vault-keys-tried"))
+    for hour in (16, 17):
+        assert agent.vault_order_round(body, 21, clock=lambda h=hour: at(22, h)) is False
+    assert len(held()) == 5, said
 
 def test_a_reboot_waits_three_nights_at_most_then_goes_and_the_beat_says_so(tmp_path, monkeypatch):
     # review 2 of 21/11: never a server kept from its kernel's reboot for ever; the guichet is told (vitals)
