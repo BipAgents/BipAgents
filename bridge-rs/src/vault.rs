@@ -2757,7 +2757,13 @@ mod tests {
         let config = place(dir.path(), &["coach", "fete"]);
         let records: Vec<Dict> = vec![json!({"agents": {"coach": "vault_1"}}).as_object().unwrap().clone()];
         assert!(hub_holders_at_risk(&config, &records).is_empty());
+        // the family's agent in the hub: still private (its members' turns are guest turns, Alex 21/11)
         std::fs::write(dir.path().join("family-agent.json"), r#"{"agent": "fete"}"#).unwrap();
+        assert!(hub_holders_at_risk(&config, &records).is_empty());
+        // a project agent there: no more
+        std::fs::remove_file(dir.path().join("family-agent.json")).unwrap();
+        let projects = r#"{"projects": {"fete": {"created": 1.0, "ends": 9999999999.0, "archived": null}}}"#;
+        std::fs::write(dir.path().join("project-agents.json"), projects).unwrap();
         assert_eq!(hub_holders_at_risk(&config, &records), vec!["coach".to_string()]);
         let cards: Vec<Dict> = vec![json!({"agents": {"coach": CARD_HANDLE}}).as_object().unwrap().clone()];
         assert!(hub_holders_at_risk(&config, &cards).is_empty());

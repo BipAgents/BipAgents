@@ -288,16 +288,18 @@ def test_a_link_removed_stays_removed_and_the_others_keep_calling_even_after_the
     assert lea.delete("/v1/family/alex", headers=AUTH).status_code in (200, 204)
     # Paul has a new pass from Léa, and still writes to her through the relay
     assert wait_until(lambda: households(paul)["lea"].get("pass") not in (None, paul_pass), timeout=40), lea.log_tail()
-    assert wait_until(lambda: write(paul, coach, "cuisine__lea", "tu es là ?", "coach").status_code == 200,
-                      timeout=40), paul.log_tail()
+    assert wait_until(lambda: "cuisine__lea" in link_agents(paul), timeout=40), paul.log_tail()
+    sent = write(paul, coach, "cuisine__lea", "tu es là ?", "coach")
+    assert sent.status_code == 200, sent.text
     assert RECEIVED[-1][0] == "/p/cuisine/v1/runs"
     assert alex_calls().status_code == 503, "Alex's pass, withdrawn, still reaches Léa's bridge"
 
     # the relay restarts: it remembers nothing of anyone; Léa's first poll says again what it takes
     relay.stop()
     relay.start()
-    assert wait_until(lambda: write(paul, coach, "cuisine__lea", "encore", "coach").status_code == 200,
-                      timeout=60), paul.log_tail()
+    assert wait_until(lambda: "cuisine__lea" in link_agents(paul), timeout=60), paul.log_tail()
+    sent = write(paul, coach, "cuisine__lea", "encore", "coach")
+    assert sent.status_code == 200, sent.text
     assert alex_calls().status_code == 503, "after the relay restarted, Alex's withdrawn pass reaches Léa's bridge again"
 
 

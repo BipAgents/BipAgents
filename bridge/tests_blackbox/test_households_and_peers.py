@@ -146,7 +146,8 @@ def test_two_households_write_to_each_other_only_where_both_allowed(bridges, fak
     assert a.post("/peer/p/cuisine__lea/v1/runs", json={}).status_code == 404
     assert b.post("/family/p/cuisine/v1/runs", json={}).status_code == 404
     for bridge in (a, b):
-        assert json.loads((bridge.state_dir / "peers.json").read_text()).get("tokens", {}) == {}
+        peers = bridge.state_dir / "peers.json"
+        assert not peers.exists() or json.loads(peers.read_text()).get("tokens", {}) == {}
     nope = b.post("/family/ask", headers={"Authorization": "Bearer nope"}, json={})
     assert nope.status_code == 401 and nope.json() == {"detail": "unknown household"}
     assert b.get("/family/agents", headers={"Authorization": "Bearer nope"}).status_code == 401
@@ -299,7 +300,8 @@ def test_no_bot_mode_even_towards_another_household_and_each_sender_learns_whom_
     for gateway in (hub, space):
         assert bot_peer(gateway) is None and peer_key(gateway) is None
     assert not any(marked(f) for f in (hub / "profiles" / "budget", hub / "profiles" / "maison", space / "profiles" / "jardin"))
-    assert json.loads((bridge.state_dir / "peers.json").read_text())["tokens"] == {}
+    peers = bridge.state_dir / "peers.json"
+    assert not peers.exists() or json.loads(peers.read_text()).get("tokens", {}) == {}
     # Wellness (set up by hand) writes only to this household: nothing to ask its administrator for
     again = bridge.put("/v1/agent-links", headers=AUTH, json={"links": [{"from": "wellness", "to": "budget"}]}).json()
     assert again["needs_setup"] == []
