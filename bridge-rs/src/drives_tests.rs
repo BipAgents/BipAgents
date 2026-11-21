@@ -306,13 +306,58 @@ async fn connect(config: &Config, service: &str, agents: &[&str], extra: &str) -
 fn off_by_default_and_a_client_needs_its_id() {
     assert_eq!(Settings::from_table(&json!({})), Settings::default());
     let s = Settings::from_table(
-        &json!({"enabled": true, "onedrive": {"client_id": " ms "}, "dropbox": {"redirect_uri": "x"}}),
+        &json!({"enabled": true, "onedrive": {"client_id": " ms "}, "dropbox": {"client_id": ""}, "google_drive": {"client_id": " "}}),
     );
     assert!(s.enabled);
+    // an empty id leaves the service out, Kerfy's included
     assert_eq!(s.clients.keys().collect::<Vec<_>>(), ["onedrive"]);
     assert_eq!(s.clients["onedrive"].client_id, "ms");
     assert_eq!(s.clients["onedrive"].redirect_uri, connections::APP_REDIRECT);
     assert!(s.clients["onedrive"].client_secret.is_none());
+}
+
+/// Kerfy's public clients (20/11) without a line in bridge.toml, still off; bridge.toml's own fields win.
+#[test]
+fn kerfy_clients_by_default_still_off() {
+    let s = Settings::default();
+    assert!(!s.enabled);
+    assert_eq!(s.clients.keys().collect::<Vec<_>>(), ["google_drive", "dropbox"]);
+    let google = &s.clients["google_drive"];
+    assert_eq!(google.client_id, "294378308537-lf952kvkp8c1oi07tsi1g6qe16dbhu78.apps.googleusercontent.com");
+    assert_eq!(
+        google.redirect_uri,
+        "com.googleusercontent.apps.294378308537-lf952kvkp8c1oi07tsi1g6qe16dbhu78:/oauth2redirect"
+    );
+    // the iOS client's redirect is its id reversed (what the app's ASWebAuthenticationSession waits for)
+    let reversed: Vec<&str> = google.client_id.split('.').rev().collect();
+    assert!(google.redirect_uri.starts_with(&format!("{}:/", reversed.join("."))));
+    assert!(google.client_secret.is_none() && google.web_client_id.is_none() && google.web_client_secret.is_none());
+    let dropbox = &s.clients["dropbox"];
+    assert_eq!(
+        (dropbox.client_id.as_str(), dropbox.redirect_uri.as_str()),
+        ("aj18gdrvj9ads60", connections::APP_REDIRECT)
+    );
+    assert!(dropbox.client_secret.is_none());
+    assert_eq!(Settings::from_table(&json!({"enabled": true})).clients, s.clients);
+
+    let s = Settings::from_table(&json!({
+        "enabled": true,
+        "google_drive": {"web_client_id": "own-web", "web_client_secret": "own-secret"},
+        "dropbox": {"client_id": "own-key"},
+    }));
+    assert!(s.enabled);
+    // Kerfy's iOS client with an install's own Web client (Android)
+    assert_eq!(s.clients["google_drive"].client_id, KERFY_CLIENTS[0].1);
+    assert_eq!(s.clients["google_drive"].web_client_id.as_deref(), Some("own-web"));
+    // an own Dropbox app: its id, the app's redirect (not Kerfy's pairing)
+    assert_eq!(s.clients["dropbox"].client_id, "own-key");
+    assert_eq!(s.clients["dropbox"].redirect_uri, connections::APP_REDIRECT);
+    let s = Settings::from_table(&json!({"google_drive": {"client_id": "own.apps.googleusercontent.com"}}));
+    assert_eq!(
+        s.clients["google_drive"].redirect_uri,
+        connections::APP_REDIRECT,
+        "never Kerfy's redirect with another id"
+    );
 }
 
 #[test]
