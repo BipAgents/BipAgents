@@ -31,7 +31,9 @@
 //! restarted by `bipagents update` asked for « tools » restarts while a turn it no longer followed went on.
 //!
 //! Reasons asked for while one waits (tools, a new agent's tools, unhealthy…) make one restart, its record naming them
-//! all (`; `).
+//! all (`; `). One asked for once the restart began, the same reason again included, gets a restart of its own after
+//! it (21/11: a service corrected while the restart for its first address ran was dropped with that restart's
+//! request; its gateway may have read config.yaml before the correction).
 //!
 //! The restart is the bridge's own (`agents_admin::restart_gateway`, the path settings changes take; agents sharing the
 //! hub's gateway restart together, so all of them must be idle), then the agent's browser container with
@@ -178,8 +180,15 @@ pub fn enabled(config: &Config) -> bool {
 
 // --- requests from other code ----------------------------------------------------------------------------------------
 
-/// Each agent's reasons asked for, in order, each once: one restart does them all.
-static REQUESTS: LazyLock<Mutex<HashMap<String, Vec<String>>>> = LazyLock::new(Default::default);
+/// Each agent's reasons asked for, in order, each once, with the number of its last ask: one restart does them all,
+/// and a reason asked again after the restart began (a newer number) stays for the next one.
+#[derive(Default)]
+struct Requests {
+    /// Asks so far (each one numbered).
+    asks: u64,
+    by_agent: HashMap<String, Vec<(String, u64)>>,
+}
+static REQUESTS: LazyLock<Mutex<Requests>> = LazyLock::new(Default::default);
 static LIVE: LazyLock<Mutex<HashMap<String, f64>>> = LazyLock::new(Default::default);
 /// A Live call this recent: the agent is not idle.
 pub const LIVE_SECONDS: f64 = 900.0;
@@ -212,19 +221,32 @@ pub fn loop_running() -> bool {
 }
 
 /// Asks for the agent's Hermes to be restarted soon, once it is idle (at most once per `gap_minutes`). A reason asked
-/// for again while it waits is not asked twice; another one joins it (one restart).
+/// for again while it waits is not asked twice; another one joins it (one restart). Asked again while a restart runs,
+/// it stays for the next one ([`asks_so_far`]).
 pub fn request_restart(agent: &str, reason: &str) {
     let mut all = REQUESTS.lock().unwrap_or_else(|e| e.into_inner());
-    let reasons = all.entry(agent.to_string()).or_default();
-    if !reasons.iter().any(|r| r == reason) {
-        tracing::info!(target: "bipbridge::restart", agent, reason, "restart requested");
-        reasons.push(reason.to_string());
+    all.asks += 1;
+    let ask = all.asks;
+    let reasons = all.by_agent.entry(agent.to_string()).or_default();
+    match reasons.iter_mut().find(|(r, _)| r == reason) {
+        Some(kept) => kept.1 = ask,
+        None => {
+            tracing::info!(target: "bipbridge::restart", agent, reason, "restart requested");
+            reasons.push((reason.to_string(), ask));
+        }
     }
+}
+
+/// The last ask's number so far. Taken right before a restart begins: that restart does the asks up to it, not the
+/// ones made while it runs (the change they follow may come after its Hermes read its config).
+pub fn asks_so_far() -> u64 {
+    REQUESTS.lock().unwrap_or_else(|e| e.into_inner()).asks
 }
 
 /// The agent's reasons waiting (none: empty).
 fn pending(agent: &str) -> Vec<String> {
-    REQUESTS.lock().unwrap_or_else(|e| e.into_inner()).get(agent).cloned().unwrap_or_default()
+    let all = REQUESTS.lock().unwrap_or_else(|e| e.into_inner());
+    all.by_agent.get(agent).map(|reasons| reasons.iter().map(|(r, _)| r.clone()).collect()).unwrap_or_default()
 }
 
 /// Several agents' reasons, each once, in order (the agents sharing one gateway: one restart).
@@ -244,17 +266,14 @@ fn requested(agent: &str) -> Option<String> {
     (!reasons.is_empty()).then(|| reasons.join("; "))
 }
 
-fn clear_request(agent: &str) {
-    REQUESTS.lock().unwrap_or_else(|e| e.into_inner()).remove(agent);
-}
-
-/// The reasons a restart did, taken off (one asked for while it ran stays for the next).
-fn clear_done(agent: &str, done: &[String]) {
+/// The agent's reasons a restart did taken off: the ones `done` names (all of them: None) asked at most `upto`
+/// ([`asks_so_far`] when it began). One asked for, or asked again, while it ran stays for the next.
+fn clear_done(agent: &str, done: Option<&[String]>, upto: u64) {
     let mut all = REQUESTS.lock().unwrap_or_else(|e| e.into_inner());
-    if let Some(reasons) = all.get_mut(agent) {
-        reasons.retain(|r| !done.contains(r));
+    if let Some(reasons) = all.by_agent.get_mut(agent) {
+        reasons.retain(|(r, ask)| *ask > upto || done.is_some_and(|done| !done.contains(r)));
         if reasons.is_empty() {
-            all.remove(agent);
+            all.by_agent.remove(agent);
         }
     }
 }
@@ -507,10 +526,11 @@ pub fn last_restart(config: &Config, agent: &str) -> Option<Value> {
     records(config).get(agent).cloned()
 }
 
-/// A restart other code did (agents_admin.rs `tools_loaded`): recorded and the agents' requests done, as the loop's.
-pub fn restarted(config: &Config, agents: &[String], reason: &str) {
+/// A restart other code did (agents_admin.rs `tools_loaded`), `upto` the [`asks_so_far`] taken right before it began:
+/// recorded and the agents' requests asked by then done, as the loop's.
+pub fn restarted(config: &Config, agents: &[String], reason: &str, upto: u64) {
     record(config, agents, &format!("requested: {reason}"), py::time_time());
-    agents.iter().for_each(|a| clear_request(a));
+    agents.iter().for_each(|a| clear_done(a, None, upto));
 }
 
 fn record(config: &Config, agents: &[String], reason: &str, at: f64) {
@@ -845,12 +865,14 @@ async fn tick(state: &AppState, config: &Config, memory: &mut HashMap<String, Gr
             continue;
         }
         let text = why.text();
+        // what this restart does: the reasons taken above, asked by now (one asked while it runs stays for the next)
+        let upto = asks_so_far();
         match restart(config, &agents).await {
             Ok(()) => {
                 tracing::info!(target: "bipbridge::restart", agents = %names.join(","), reason = %text, "agent restarted");
                 record(config, &names, &text, now);
                 for (name, done) in &taken {
-                    clear_done(name, done);
+                    clear_done(name, Some(done.as_slice()), upto);
                 }
                 *group = Group { last_ping: now, last_measure: now, quiet: group.quiet, ..Group::default() };
             }
@@ -1014,8 +1036,37 @@ mod tests {
     fn requests_are_kept_until_done() {
         request_restart("unit-test-agent", "tools changed");
         assert_eq!(requested("unit-test-agent").as_deref(), Some("tools changed"));
-        clear_request("unit-test-agent");
+        clear_done("unit-test-agent", None, asks_so_far());
         assert_eq!(requested("unit-test-agent"), None);
+    }
+
+    #[test]
+    fn a_reason_asked_again_while_its_restart_runs_stays_for_the_next() {
+        // 21/11: a service corrected while the restart for its first address ran (the flaky « even within the hour »)
+        let agent = "unit-test-again";
+        request_restart(agent, SERVICES);
+        let done = pending(agent);
+        let upto = asks_so_far(); // the restart begins
+        request_restart(agent, SERVICES); // asked again meanwhile: still once…
+        assert_eq!(requested(agent).as_deref(), Some(SERVICES));
+        clear_done(agent, Some(done.as_slice()), upto);
+        assert_eq!(requested(agent).as_deref(), Some(SERVICES)); // … and kept for the next restart
+        clear_done(agent, Some(done.as_slice()), asks_so_far());
+        assert_eq!(requested(agent), None);
+    }
+
+    #[test]
+    fn a_restart_other_code_did_takes_off_only_what_was_asked_before_it() {
+        let agent = "unit-test-other-code";
+        request_restart(agent, TOOLS);
+        request_restart(agent, NEW_AGENT_TOOLS);
+        let upto = asks_so_far(); // agents_admin restarts the hub's gateway
+        request_restart(agent, SERVICES); // a service connected meanwhile
+        request_restart(agent, TOOLS); // its tools changed again meanwhile
+        clear_done(agent, None, upto);
+        assert_eq!(requested(agent).as_deref(), Some("tools; its services changed"));
+        clear_done(agent, None, asks_so_far());
+        assert_eq!(requested(agent), None);
     }
 
     #[test]
@@ -1030,10 +1081,11 @@ mod tests {
         assert_eq!(merged([pending(agent).as_slice(), other.as_slice()]), vec![TOOLS, NEW_AGENT_TOOLS, "settings"]);
         // the restart did these two; one asked for meanwhile stays for the next
         let done = pending(agent);
+        let upto = asks_so_far();
         request_restart(agent, "settings");
-        clear_done(agent, &done);
+        clear_done(agent, Some(done.as_slice()), upto);
         assert_eq!(requested(agent).as_deref(), Some("settings"));
-        clear_done(agent, &["settings".to_string()]);
+        clear_done(agent, Some(["settings".to_string()].as_slice()), asks_so_far());
         assert_eq!(requested(agent), None);
     }
 
