@@ -922,11 +922,34 @@ def vault_night(clock=None):
     return VAULT_NIGHT[0] <= hour < VAULT_NIGHT[1]
 
 
-def vault_order_round(body, order_id):
+def _held_said_path():
+    return VAULT_TRIED + "-held.json"   # root's own: the orders said held, for which night's wait
+
+
+def _held_said_first(order_id, now):
+    """True the first time a round holds this order for the night (review 3 of 21/11: the rounds run every 2 min, the
+    line was written at each one, all day long): once per order and night waited for (the night named as the reboot's
+    are, the day it starts: 12 hours back). A note that can't be kept says it each time rather than never."""
+    night = time.strftime("%Y-%m-%d", time.localtime(time.mktime(now) - 12 * 3600))
+    path = _held_said_path()
+    data = read_json(path)
+    said = data.get("orders") if data.get("night") == night and isinstance(data.get("orders"), list) else []
+    if int(order_id) in said:
+        return False
+    try:
+        write_json(path, {"night": night, "orders": said + [int(order_id)]})
+    except OSError:
+        pass
+    return True
+
+
+def vault_order_round(body, order_id, clock=None):
     """The round's part of a vault_keys order: done at night only (`vault_night`); True: done (told), False: held."""
-    if not vault_night():
-        log("vault keys of place %s held until the night (%02d:00-%02d:00 server time)"
-            % (body.get("seat"), VAULT_NIGHT[0], VAULT_NIGHT[1]))
+    now = (clock or time.localtime)()
+    if not vault_night(clock=lambda: now):
+        if _held_said_first(order_id, now):
+            log("vault keys of place %s held until the night (%02d:00-%02d:00 server time; said once a night)"
+                % (body.get("seat"), VAULT_NIGHT[0], VAULT_NIGHT[1]))
         return False
     return vault_keys_order(int(body["seat"]), body["vault_keys"], int(order_id))
 
