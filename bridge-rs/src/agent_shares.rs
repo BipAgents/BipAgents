@@ -662,7 +662,7 @@ pub fn closed_tool(name: &str, friend: bool) -> Option<Dict> {
     Some(tk::tool_text(
         &format!(
             "A relative of your person is talking to you: your person's own data and tools (mail, calendar, contacts, \
-             health, notebook, archives, files, {pages}tasks) are closed during their turn.{page_ok} Answer from what you \
+             health, notebook, Obsidian notes, archives, files, {pages}tasks) are closed during their turn.{page_ok} Answer from what you \
              know."
         ),
         true,
