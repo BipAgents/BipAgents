@@ -342,20 +342,17 @@ fn unwrapped(words: &str) -> String {
 /// A person's row as their words alone, for every reader of Hermes' rows outside the timeline: a rescued task's
 /// request and title (runs.rs), search, a Live call's record and the next call's brief, a read-only share. Alex,
 /// 21/11: a rescued task's title « [OUT-OF-BAND USER MESSAGE… » on his lock screen, the readers each stripping their
-/// own part of the machinery. `(words, steered)`: `steered` when they were added during an answer (Hermes' steer);
-/// a family member's frame off too (family_thread.rs). None when nothing of it is the person's: a steer of the
-/// bridge's (its nudge, the instant line's note, the brake's), the brake's rescue input, Hermes' notices, a
-/// sub-agent's report, notes only.
+/// own part of the machinery. `(words, steered)`: `steered` when they were added during an answer (Hermes' steer).
+/// A family member's frame stays (family_thread.rs): who wrote what in the family's common thread is what a Live
+/// call's brief and its key points read (relecture 1); the timeline takes it off itself (`with_by`), a title too
+/// (`title_text`). None when nothing of it is the person's: a steer of the bridge's (its nudge, the instant line's
+/// note, the brake's), the brake's rescue input, Hermes' notices, a sub-agent's report, notes only.
 pub fn person_said(raw: &str) -> Option<(String, bool)> {
     let (words, steered) = person_words(raw).ok().flatten()?;
     if crate::cronwatch::REPORT_PREFIXES.iter().any(|p| words.starts_with(p)) {
         return None;
     }
-    let words = match crate::family_thread::unframe(&words) {
-        Some((_, rest)) => rest.trim().to_string(),
-        None => words,
-    };
-    (!words.is_empty()).then_some((words, steered))
+    Some((words, steered))
 }
 
 /// `person_said`'s words.
@@ -365,7 +362,8 @@ pub fn person_text(raw: &str) -> Option<String> {
 
 /// A title made from words that may carry a person's row's machinery (Hermes' title from the opening words, a task's
 /// title from a request, a conversation « 🧩 <task> »): as `person_said`'s words on one line, the wrapper out even
-/// cut short; None when no letter or digit is left (the apps then show their own words).
+/// cut short, a note cut short too (the rescued titles of 29/10-21/11 began with « <!--bip:now … »), a family
+/// member's frame off; None when no letter or digit is left (the apps then show their own words).
 pub fn title_text(raw: &str) -> Option<String> {
     let words = unwrapped(&NOTES.replace_all(raw, ""));
     let words = match crate::family_thread::unframe(&words) {
@@ -374,6 +372,12 @@ pub fn title_text(raw: &str) -> Option<String> {
     };
     let title = crate::tools_knowledge::squeeze(&words);
     title.chars().any(char::is_alphanumeric).then_some(title)
+}
+
+/// Whether a kept title carries a person's row's machinery (`title_text` changes it): Hermes' wrapper of a steer, a note
+/// of the app's (the startup repairs, store.rs and jobs.rs).
+pub(crate) fn has_machinery(title: &str) -> bool {
+    title.contains(STEER_OPEN) || NOTES.is_match(title)
 }
 
 /// A user row's content as the person's message (words of theirs, or files they sent): `Some(files)`, whether it
@@ -1781,8 +1785,10 @@ position; not tool output and not a new delivery when replayed from conversation
         assert_eq!(person_text(&joined).as_deref(), Some("Et après ?\n\net le musée"));
         // a family member's frame, inside a steer too (family_thread.rs `framed`)
         let framed = crate::family_thread::framed(&crate::family_thread::Author::creator("Alex"), "On mange où ?");
-        assert_eq!(person_text(&format!("{now}\n{framed}")).as_deref(), Some("On mange où ?"));
-        assert_eq!(person_said(&steer(&framed)), Some(("On mange où ?".to_string(), true)));
+        // the frame stays (who wrote what, for a Live call's brief: relecture 1); the timeline and titles take it off
+        assert_eq!(person_text(&format!("{now}\n{framed}")).as_deref(), Some(framed.as_str()));
+        assert_eq!(person_said(&steer(&framed)), Some((framed.clone(), true)));
+        assert_eq!(title_text(&steer(&framed)).as_deref(), Some("On mange où ?"));
         assert_eq!(person_text("  Salut  ").as_deref(), Some("Salut"));
     }
 
@@ -1796,6 +1802,12 @@ position; not tool output and not a new delivery when replayed from conversation
         assert_eq!(title_text(&format!("🧩 {}", steer("Vestes  en\nlaine"))).as_deref(), Some("🧩 Vestes en laine"));
         assert_eq!(title_text("<!--bip:now lundi-->Vacances").as_deref(), Some("Vacances"));
         assert_eq!(title_text("[/OUT-OF-BAND USER MESSAGE]"), None);
+        // a rescued title of 29/10-21/11: the time line, cut at 60 characters
+        let old = "<!--bip:now samedi 21 novembre 2026, 01:44, Europe/Paris (UTC…";
+        assert!(has_machinery(old) && has_machinery(&format!("🧩 {old}")));
+        assert_eq!(title_text(old), None);
+        assert_eq!(title_text(&format!("🧩 {old}")), None);
+        assert!(!has_machinery("Vacances <3") && !has_machinery("[WIP] plan"));
         for kept in ["Vacances", "Bot Chat", "⚡ Factures · 2/11", "[WIP] plan du voyage", "Rapport — Vestes"] {
             assert_eq!(title_text(kept).as_deref(), Some(kept));
         }

@@ -1112,6 +1112,29 @@ mod tests {
         assert_eq!(with_suffix("/a/b/a.b.txt", ".tmp"), "/a/b/a.b.tmp");
     }
 
+    /// Relecture 1 of fix-oob-title (21/11): in the family's common thread, a Live call's brief and its key points
+    /// keep who wrote what (each message's frame, family_thread.rs), words added during a turn too; never Hermes'
+    /// wrapper nor the app's notes.
+    #[test]
+    fn the_family_threads_brief_keeps_who_wrote_what() {
+        let marie = crate::family_thread::Author { household: "marie".into(), name: "Marie".into() };
+        let asked = crate::family_thread::framed(&marie, "Le menu de Noël ?");
+        let added = crate::family_thread::framed(&marie, "sans viande");
+        let messages: Vec<Dict> = serde_json::from_value(serde_json::json!([
+            {"role": "user", "content": format!("<!--bip:now dimanche-->\n{asked}")},
+            {"role": "user", "content": format!("[OUT-OF-BAND USER MESSAGE — a direct message from the user]\n{added}\n\
+<!--bip:answered noted-->\n[/OUT-OF-BAND USER MESSAGE]")},
+            {"role": "assistant", "content": "Un gratin de légumes."},
+        ]))
+        .unwrap();
+        let said = exchanges(&messages);
+        assert_eq!(said[0], ("user".to_string(), asked.clone()));
+        assert_eq!(said[1], ("user".to_string(), added.clone()));
+        let brief = transcript(&said, 400);
+        assert!(brief.contains("Marie, a member of the family") && brief.contains("Le menu de Noël ?"), "{brief}");
+        assert!(!brief.contains("OUT-OF-BAND") && !brief.contains("<!--"), "{brief}");
+    }
+
     #[test]
     fn hidden_parts_and_transcript() {
         assert_eq!(visible("Salut <!-- bip:call\nopen --> toi "), "Salut  toi");

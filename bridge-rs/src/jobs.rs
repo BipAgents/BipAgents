@@ -2332,15 +2332,16 @@ pub async fn sweep_task_browsers(config: &crate::config::Config) {
     }
 }
 
-/// The tasks kept with Hermes' wrapper in their title (a rescue before 21/11 took Hermes' row of a steer for the
-/// request: « [OUT-OF-BAND USER MESSAGE — a direct message from the use… » on the lock screen, the home, the task's
-/// conversation and its report): cleaned at start, before any task runs (`create_app`), « Suite de la conversation »
-/// (the rescue's own word for no request) when nothing of the person's is left. How many were changed.
+/// The tasks kept with Hermes' wrapper or a note of the app's in their title (a rescue before 21/11 took Hermes' row
+/// of a steer for the request: « [OUT-OF-BAND USER MESSAGE — a direct message from the use… » on the lock screen, the
+/// home, the task's conversation and its report; from 29/10 the time line on top of the message: « <!--bip:now … »):
+/// cleaned at start, before any task runs (`create_app`), « Suite de la conversation » (the rescue's own word for no
+/// request) when nothing of the person's is left. How many were changed.
 pub fn repair_titles(config: &crate::config::Config) -> usize {
     let mut changed = 0;
     for mut job in tasks(config) {
         let title = tk::str_or_empty(job.get("title"));
-        if !title.contains(crate::threads::timeline::STEER_OPEN) {
+        if !crate::threads::timeline::has_machinery(&title) {
             continue;
         }
         let clean = crate::threads::timeline::title_text(&title)
@@ -2413,8 +2414,13 @@ mod tests {
         mixed.insert("id".into(), json!("t0000000000bb"));
         mixed.insert("title".into(), json!(format!("Trie {wrapped}")));
         save(&config, &mixed).unwrap();
-        assert_eq!(repair_titles(&config), 2);
+        let mut noted = job.clone();
+        noted.insert("id".into(), json!("t0000000000cc"));
+        noted.insert("title".into(), json!("<!--bip:now samedi 21 novembre 2026, 01:44, Europe/Paris (UTC…"));
+        save(&config, &noted).unwrap();
+        assert_eq!(repair_titles(&config), 3);
         assert_eq!(load(&config, "t0000000000aa").unwrap()["title"], "Suite de la conversation");
+        assert_eq!(load(&config, "t0000000000cc").unwrap()["title"], "Suite de la conversation");
         assert_eq!(load(&config, "t0000000000bb").unwrap()["title"], "Trie Vestes en laine");
         assert_eq!(load(&config, &tk::str_or_empty(job.get("id"))).unwrap()["title"], "Vestes en laine");
         assert_eq!(repair_titles(&config), 0, "once");

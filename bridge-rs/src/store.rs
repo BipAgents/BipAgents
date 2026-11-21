@@ -347,23 +347,27 @@ impl Store {
         Self::clean_titles(conn)
     }
 
-    /// Titles kept with Hermes' wrapper of a steer (21/11: a rescued task « [OUT-OF-BAND USER MESSAGE… », its
-    /// conversation « 🧩 … », its report's Boîte title): cleaned at each opening until none is left (one cheap look
-    /// once they are), NULL when nothing of the person's is left (the apps show their own words).
+    /// Titles kept with Hermes' wrapper of a steer or a note of the app's (21/11: a rescued task « [OUT-OF-BAND USER
+    /// MESSAGE… », and from 29/10 « <!--bip:now … »; its conversation « 🧩 … », its report's Boîte title): cleaned at
+    /// each opening until none is left (one cheap look once they are), NULL when nothing of the person's is left (the
+    /// apps show their own words).
     fn clean_titles(conn: &Connection) -> anyhow::Result<()> {
         let like = format!("%{}%", crate::threads::timeline::STEER_OPEN);
         for table in ["threads", "outbox"] {
             let rows: Vec<(String, String)> = {
-                let mut stmt = conn.prepare(&format!("SELECT id, title FROM {table} WHERE title LIKE ?1"))?;
+                let sql = format!("SELECT id, title FROM {table} WHERE title LIKE ?1 OR title LIKE '%<!--%'");
+                let mut stmt = conn.prepare(&sql)?;
                 let found = stmt.query_map([&like], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
-                found.collect::<Result<_, _>>()?
+                found
+                    .filter(|row| !matches!(row, Ok((_, t)) if !crate::threads::timeline::has_machinery(t)))
+                    .collect::<Result<_, _>>()?
             };
             for (id, title) in &rows {
                 let clean = crate::threads::timeline::title_text(title);
                 conn.execute(&format!("UPDATE {table} SET title = ?1 WHERE id = ?2"), rusqlite::params![clean, id])?;
             }
             if !rows.is_empty() {
-                tracing::info!(table, titles = rows.len(), "titles cleaned of Hermes' wrapper");
+                tracing::info!(table, titles = rows.len(), "titles cleaned of Hermes' wrapper and the app's notes");
             }
         }
         Ok(())
@@ -637,7 +641,10 @@ mod tests {
         let wrapped = "[OUT-OF-BAND USER MESSAGE — a direct message from the user]\nVestes\n[/OUT-OF-BAND USER MESSAGE]";
         {
             let store = Store::open(&path).unwrap();
-            for (id, title) in [("t_a", format!("🧩 {cut}")), ("t_b", format!("🧩 {wrapped}")), ("t_c", "Vacances".into())] {
+            let noted = "🧩 <!--bip:now samedi 21 novembre 2026, 01:44, Europe/Paris (UTC…";
+            let titles =
+                [("t_a", format!("🧩 {cut}")), ("t_b", format!("🧩 {wrapped}")), ("t_c", "Vacances".into()), ("t_d", noted.into())];
+            for (id, title) in titles {
                 store
                     .exec_sync(
                         "INSERT INTO threads (id, agent, kind, title, hidden, version, created_at, updated_at) \
@@ -660,7 +667,7 @@ mod tests {
             .into_iter()
             .map(|r| r["title"].clone())
             .collect();
-        assert_eq!(titles, [Value::Null, json!("🧩 Vestes"), json!("Vacances")]);
+        assert_eq!(titles, [Value::Null, json!("🧩 Vestes"), json!("Vacances"), Value::Null]);
         assert_eq!(store.exec_sync("SELECT title FROM outbox", &[]).unwrap()[0]["title"], Value::Null);
     }
 
