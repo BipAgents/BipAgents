@@ -907,6 +907,10 @@ est ensuite responsable de ce qu'il en fait.
   téléphone n'ouvre jamais de lui-même un lien écrit par un agent : seul un lien Google Maps devient une petite carte,
   faite à partir du lien lui-même, comme les cartes des réponses (ci-dessus).
 
+## 7 bis. Les données Google (Gmail, Google Agenda, Google Drive)
+
+Si tu connectes ton compte Google, ta place reçoit de Google seulement ce que tu autorises : tes agendas et leurs événements ; les fichiers que tes agents créent pour toi et ceux que tu leur choisis ; tes e-mails, pour les chercher, les lire, préparer des brouillons et ranger ta boîte à ta demande. Ces données restent sur ta place, chiffrées, et ne vont qu'au modèle d'IA qui répond à tes agents, par EUrouter et ses hébergeurs dans l'Union européenne, avec la consigne de n'en rien garder et de ne rien entraîner. Kerfy Studio ne les lit pas, ne les vend pas et ne s'en sert ni pour la publicité ni pour entraîner un modèle d'IA. Tu peux déconnecter Google à tout moment dans l'app : ta place efface alors ses jetons et révoque l'accès chez Google. L'utilisation et le transfert à toute autre application des informations reçues des API Google par BipAgents respectent la [Politique sur les données utilisateur des services API Google](https://developers.google.com/terms/api-services-user-data-policy), y compris les exigences d'usage limité (Limited Use).
+
 ## 8. La démo
 
 La démo intégrée tourne entièrement sur ton téléphone : des agents et des données inventés, sans compte, sans
