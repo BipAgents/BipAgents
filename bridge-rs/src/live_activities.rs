@@ -779,6 +779,7 @@ pub fn router() -> Router<AppState> {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
 
     /// Review R9 (17/11): the « user » part of an address (`https://nom.prenom@hote`) is never taken for its site.
     #[test]
@@ -792,7 +793,6 @@ mod tests {
         assert_eq!(site("https://www.sncf-connect.com/home?from=Paris").as_deref(), Some("sncf-connect.com"));
         assert_eq!(site("écris à marie.dupont@example.fr"), None);
     }
-    use super::*;
 
     fn data(value: Value) -> Map<String, Value> {
         value.as_object().cloned().unwrap_or_default()
