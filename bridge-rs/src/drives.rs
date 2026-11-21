@@ -547,6 +547,8 @@ pub enum Fault {
     Refused,
     /// No answer at all.
     Unreachable,
+    /// Changed at the service since it was read (412 to an `If-Match`: google_calendar.rs' writes).
+    Changed,
     TooLarge,
     Other(String),
 }
@@ -566,6 +568,7 @@ impl Fault {
             Fault::Unavailable => format!("{label} has trouble right now: try again later"),
             Fault::Refused => format!("{label} refuses to give this one"),
             Fault::Unreachable => format!("{label} can't be reached right now"),
+            Fault::Changed => format!("changed on {label} since it was read: read it again"),
             Fault::TooLarge => format!("too large to read here (over {} MB)", FILE_MAX_BYTES / (1024 * 1024)),
             Fault::Other(why) => why.clone(),
         }
@@ -579,6 +582,7 @@ impl Fault {
             Fault::RateLimited(_) => (429, "rate_limited"),
             Fault::Unavailable | Fault::Unreachable => (502, "unreachable"),
             Fault::Refused => (422, "refused"),
+            Fault::Changed => (409, "changed"),
             Fault::TooLarge => (422, "too_large"),
             Fault::Other(_) => (502, "failed"),
         };
@@ -608,6 +612,7 @@ pub fn fault_of(status: u16, retry_after: Option<u64>, body: &Value) -> Fault {
                 Fault::Refused
             }
         }
+        412 => Fault::Changed,
         429 => Fault::RateLimited(retry_after),
         403 if matches!(reason, "rateLimitExceeded" | "userRateLimitExceeded" | "RESOURCE_EXHAUSTED") => {
             Fault::RateLimited(retry_after)

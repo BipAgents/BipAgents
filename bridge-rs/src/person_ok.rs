@@ -189,6 +189,16 @@ fn allow_session(config: &Config, agent: &str, kind: &'static str, session: &str
     SESSIONS.lock().unwrap_or_else(|e| e.into_inner()).insert(session_key(config, agent, kind, session), until);
 }
 
+/// The « Oui, pour cette conversation » given to this kind on this place forgotten: `agents`' only, or everyone's
+/// (None). Google Calendar disconnected, or an agent taken out of its list (google_calendar.rs).
+pub fn forget_sessions(config: &Config, kind: &'static str, agents: Option<&[String]>) {
+    let place = config.data_dir();
+    SESSIONS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .retain(|(p, agent, k, _), _| !(*p == place && *k == kind && agents.is_none_or(|names| names.contains(agent))));
+}
+
 /// The answer a choice word means here: `always` only where the card offers it; anything not a yes is a no.
 fn answer_of(choice: &str, offers_always: bool) -> Answer {
     let word = choice.trim().to_lowercase();
@@ -476,6 +486,15 @@ mod tests {
         assert!(!session_allows(&config, "coach", CALENDAR_WRITE, Some("h1")), "another agent");
         assert!(!session_allows(&config, "vie", CALENDAR_DELETE, Some("h1")), "another kind");
         assert!(!session_allows(&config, "vie", CALENDAR_WRITE, None), "no session known");
+        // forgotten: one agent's (taken out of Google Calendar's list), then everyone's (disconnected)
+        allow_session(&config, "coach", CALENDAR_WRITE, "h1");
+        allow_session(&config, "coach", SITE_FORM, "h1");
+        forget_sessions(&config, CALENDAR_WRITE, Some(&["vie".to_string()]));
+        assert!(!session_allows(&config, "vie", CALENDAR_WRITE, Some("h1")));
+        assert!(session_allows(&config, "coach", CALENDAR_WRITE, Some("h1")), "another agent's kept");
+        forget_sessions(&config, CALENDAR_WRITE, None);
+        assert!(!session_allows(&config, "coach", CALENDAR_WRITE, Some("h1")));
+        assert!(session_allows(&config, "coach", SITE_FORM, Some("h1")), "another kind's kept");
     }
 
     /// Alex 18/11: an owner's card holds no call, waits for her alone, and only her « Oui » does what it says.

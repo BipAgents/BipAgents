@@ -1,10 +1,12 @@
 //! « Google Calendar » (Alex 20/11: the catalogue of apps signed in by account, one service at a time; Gmail, Calendar,
 //! Drive first): the person connects their Google account once in the app (« Applis et outils » › Google Calendar) and
-//! chooses the agents that may use its calendar. Those agents read its upcoming events and ask to add, change or
-//! delete one through the same calendar tools as the phone's (calendar.rs): `calendar_list` lists the Google events
-//! beside the phone's and the mailboxes' (source « Google Calendar »), `calendar_add` writes there when it names that
-//! calendar (or when the agent has no other calendar), `calendar_update` and `calendar_delete` act on its events
-//! (ids `google:<event id>`).
+//! chooses the agents that may use its calendars. Those agents read the upcoming events of the calendars the person
+//! shows in Google Calendar (Alex 21/11: its other calendars too, not only the primary one) and ask to add, change or
+//! delete one through the same calendar tools as the phone's (calendar.rs): `calendar_list` lists them beside the
+//! phone's and the mailboxes' (« Travail (Google Calendar) », the primary one by its account), `calendar_add` writes
+//! to the one it names when the person may write there (the primary one when it names Google itself, or when the
+//! agent has no other calendar), `calendar_update` and `calendar_delete` act on its events: ids
+//! `google:<calendar>:<event>`, both percent-encoded (a calendar's id holds `@` and `#`), the primary one `primary`.
 //!
 //! **Every write asks the person first**, on the bridge's card (person_ok.rs): « Oui » (this once), « Oui, pour cette
 //! conversation » (adds and changes, for the rest of that Hermes session) or « Non »; a deletion is asked each time
@@ -14,16 +16,20 @@
 //! The sign-in reuses Google Drive's (drives.rs): the same Google clients (`[drives.google_drive]`: the iOS client and
 //! its redirect, Android's Web client from bridge.toml, the guichet or the person's choice), PKCE, the same renewal
 //! (`drives::Slot::Calendar`), its own grant and tokens kept in the connections' encrypted store
-//! (`Stored.google_calendar`). Scope `calendar.events` only, asked incrementally (`include_granted_scopes`); with it
-//! Google gives the primary calendar's events (other calendars would need `calendar.calendarlist.readonly`, a choice
-//! for later). No token ever reaches Hermes nor the model: the bridge calls Calendar API v3 itself and gives the agent
-//! text. What an event says is written by whoever made or sent it: listed between calendar.rs's UNTRUSTED markers,
-//! defused (archives.rs) so it can't close them. Updates are never sent to the guests (`sendUpdates=none`).
+//! (`Stored.google_calendar`). Scopes `calendar.events` (the events of every calendar) and
+//! `calendar.calendarlist.readonly` (which calendars, their names, whether the person may write there), asked
+//! together and incrementally (`include_granted_scopes`); a sign-in that leaves one out is refused. No token ever
+//! reaches Hermes nor the model: the bridge calls Calendar API v3 itself and gives the agent text. What an event and a
+//! calendar's name say is written by whoever made or shared it: listed between calendar.rs's UNTRUSTED markers,
+//! defused (archives.rs) so it can't close them. Updates are never sent to the guests (`sendUpdates=none`); a change
+//! or a deletion carries the event's `etag` (`If-Match`), so an event changed since the card (made repeating…) is
+//! left as it is.
 //!
-//! Off by default: `calendar.events` is a « sensitive » scope, and Google must verify the app (a short video) before
-//! anyone beyond its test users signs in. `[google_calendar] enabled = true` switches it on for one place (a test
-//! user's), with Google Drive's client in `[drives.google_drive]` (drives itself may stay off). Turned off with a
-//! calendar still connected: at the next start it is forgotten here and revoked (`ended_when_off`).
+//! Off by default: `calendar.events` is a « sensitive » scope (the list's is not, Google says), and Google must verify
+//! the app (a short video) before anyone beyond its test users signs in. `[google_calendar] enabled = true` switches
+//! it on for one place (a test user's), with Google Drive's client in `[drives.google_drive]` (drives itself may stay
+//! off). Turned off with a calendar still connected: at the next start it is forgotten here and revoked
+//! (`ended_when_off`).
 //!
 //!     [google_calendar]
 //!     enabled = true
@@ -59,15 +65,25 @@ use crate::tools_knowledge::{self as tk, tool_failure, tool_text};
 use crate::web::{self, check_max_items, ApiResult, FieldError, HttpError, Json, Validate};
 use crate::{py, Dict};
 
+/// The events of every calendar of the account.
 pub const SCOPE: &str = "https://www.googleapis.com/auth/calendar.events";
+/// Which calendars the account has: names, rights, shown or not (Alex 21/11).
+pub const LIST_SCOPE: &str = "https://www.googleapis.com/auth/calendar.calendarlist.readonly";
+pub const SCOPES: [&str; 2] = [SCOPE, LIST_SCOPE];
 const API: &str = "https://www.googleapis.com/calendar/v3";
 /// The calendar's name in the agents' tools.
 pub const LABEL: &str = "Google Calendar";
-/// Its id in `calendar_list`, and its events' prefix.
+/// The primary calendar's id in `calendar_list`; every Google calendar's and event's id starts with the prefix.
 pub const CALENDAR_ID: &str = "google:primary";
 pub const ID_PREFIX: &str = "google:";
-/// Events one listing reads at most (calendar.rs shows 200).
+const PRIMARY: &str = "primary";
+/// Events one listing reads at most from each calendar (calendar.rs shows 200 in all).
 const PAGE: &str = "250";
+/// Calendars listed at most, the primary one first: one Google call each per listing, and an agent has no use for
+/// dozens (subscribed holidays, sports…). Those beyond are left out.
+const MAX_CALENDARS: usize = 20;
+/// What a calendar's or event's id may keep as it is in a URL and in the agents' ids (`:` separates them).
+const ID_SAFE: &percent_encoding::AsciiSet = &percent_encoding::NON_ALPHANUMERIC.remove(b'_').remove(b'-').remove(b'.');
 const AGENTS_MAX: usize = 32;
 const FLOW_SECONDS: u64 = 900;
 
@@ -99,12 +115,39 @@ fn api_base(config: &Config) -> String {
     config.google_calendar.api_url.clone().unwrap_or_else(|| API.to_string())
 }
 
-fn events_url(config: &Config) -> String {
-    format!("{}/calendars/primary/events", api_base(config))
+fn encoded(id: &str) -> String {
+    percent_encoding::utf8_percent_encode(id, ID_SAFE).to_string()
 }
 
-fn event_url(config: &Config, id: &str) -> String {
-    format!("{}/{}", events_url(config), url::form_urlencoded::byte_serialize(id.as_bytes()).collect::<String>())
+/// `calendar`: `primary` or a calendar's id.
+fn events_url(config: &Config, calendar: &str) -> String {
+    format!("{}/calendars/{}/events", api_base(config), encoded(calendar))
+}
+
+fn event_url(config: &Config, calendar: &str, id: &str) -> String {
+    format!("{}/{}", events_url(config, calendar), encoded(id))
+}
+
+fn list_url(config: &Config) -> String {
+    format!("{}/users/me/calendarList", api_base(config))
+}
+
+/// A Google calendar's id in the agents' tools: `google:primary`, `google:<its id, encoded>`.
+pub fn calendar_ref(calendar: &str) -> String {
+    format!("{ID_PREFIX}{}", encoded(calendar))
+}
+
+/// An event's: `google:<calendar>:<event>`.
+pub fn event_ref(calendar: &str, event: &str) -> String {
+    format!("{}:{}", calendar_ref(calendar), encoded(event))
+}
+
+/// The calendar and the event an agent's id names. None: not one of Google's events.
+pub fn split_ref(id: &str) -> Option<(String, String)> {
+    let (calendar, event) = id.trim().strip_prefix(ID_PREFIX)?.split_once(':')?;
+    let decoded = |s: &str| percent_encoding::percent_decode_str(s).decode_utf8().ok().map(|s| s.trim().to_string());
+    let (calendar, event) = (decoded(calendar)?, decoded(event)?);
+    (!calendar.is_empty() && !event.is_empty()).then_some((calendar, event))
 }
 
 // -- what is kept ------------------------------------------------------------------------------------------------------
@@ -172,14 +215,15 @@ fn agents_checked(config: &Config, agents: &[String]) -> ApiResult<Vec<String>> 
 
 // -- sign-in -----------------------------------------------------------------------------------------------------------
 
-/// Google's sign-in address for the calendar: `calendar.events` added to what the person gave already.
+/// Google's sign-in address for the calendar: its two scopes added to what the person gave already.
 pub fn authorize_url(ep: &drives::Endpoints, state: &str, verifier: &str) -> String {
     let challenge = connections::pkce_challenge(verifier);
+    let scopes = SCOPES.join(" ");
     let params: Vec<(&str, &str)> = vec![
         ("response_type", "code"),
         ("client_id", &ep.client.client_id),
         ("redirect_uri", &ep.client.redirect_uri),
-        ("scope", SCOPE),
+        ("scope", &scopes),
         ("state", state),
         ("code_challenge", &challenge),
         ("code_challenge_method", "S256"),
@@ -188,6 +232,11 @@ pub fn authorize_url(ep: &drives::Endpoints, state: &str, verifier: &str) -> Str
         ("include_granted_scopes", "true"),
     ];
     url::Url::parse_with_params(&ep.auth, &params).map(String::from).unwrap_or_default()
+}
+
+/// Whether Google gave both scopes (its list of those given, by spaces or commas).
+fn all_given(scopes: &str) -> bool {
+    SCOPES.iter().all(|want| scopes.split([' ', ',']).any(|x| x == *want))
 }
 
 /// A sign-in for `agents`. `client` "android": what the phone's AuthorizationClient needs (a code for the Web
@@ -219,7 +268,7 @@ pub fn start(config: &Config, agents: &[String], client: &str) -> ApiResult<Valu
             }
         })?;
         drives::keep_flow(&state, flow(String::new(), "web"));
-        return Ok(json!({"state": state, "server_client_id": web.client.client_id, "scopes": [SCOPE],
+        return Ok(json!({"state": state, "server_client_id": web.client.client_id, "scopes": SCOPES,
                          "expires_in": FLOW_SECONDS}));
     }
     let verifier = py::token_hex(32);
@@ -247,8 +296,8 @@ pub async fn finish(config: &Config, query: HashMap<String, String>) -> ApiResul
         .get("code")
         .filter(|c| !c.is_empty())
         .ok_or_else(|| coded(400, "bad_callback", "the sign-in came back without its code"))?;
-    // Google says which scopes it gave: the calendar's must be among them (the person may untick it)
-    if query.get("scope").is_some_and(|s| !s.split([' ', ',']).any(|x| x == SCOPE)) {
+    // Google says which scopes it gave: the calendar's two must be among them (the person may untick one)
+    if query.get("scope").is_some_and(|s| !all_given(s)) {
         return Err(coded(400, "denied", "the calendar was not allowed"));
     }
     let ep = drives::endpoints_for(config, Provider::Google, &flow.client)
@@ -265,11 +314,11 @@ pub async fn finish(config: &Config, query: HashMap<String, String>) -> ApiResul
         coded(502, "exchange_failed", &format!("Google refused the sign-in ({status} {why})"))
     })?;
     let tokens = connections::tokens_of(&answer, None);
-    if tokens.scope.as_deref().is_some_and(|s| !s.split(' ').any(|x| x == SCOPE)) {
+    if tokens.scope.as_deref().is_some_and(|s| !all_given(s)) {
         return Err(coded(400, "denied", "the calendar was not allowed"));
     }
     let api = Api::new(ep, tokens.access_token.clone(), None);
-    let account = match first_page(config, &api).await {
+    let account = match first_page(config, &api, PRIMARY).await {
         Ok(page) => page.get("summary").and_then(Value::as_str).map(str::to_string),
         Err(_) => connections::account_of(&answer),
     };
@@ -314,14 +363,12 @@ pub async fn set_agents(config: &Config, agents: &[String]) -> ApiResult<(Value,
     let mut stored = store.read()?;
     let link = stored.google_calendar.as_mut().ok_or_else(not_connected)?;
     let before = std::mem::replace(&mut link.agents, agents.clone());
-    let changed = agents
-        .iter()
-        .filter(|a| !before.contains(a))
-        .chain(before.iter().filter(|a| !agents.contains(a)))
-        .cloned()
-        .collect();
+    let removed: Vec<String> = before.iter().filter(|a| !agents.contains(a)).cloned().collect();
+    let changed = agents.iter().filter(|a| !before.contains(a)).chain(removed.iter()).cloned().collect();
     let shown = view(config, Some(&*link));
     store.write(&stored)?;
+    // their « Oui, pour cette conversation » goes with the calendar: chosen again, they are asked again
+    crate::person_ok::forget_sessions(config, crate::person_ok::CALENDAR_WRITE, Some(&removed));
     Ok((shown, changed))
 }
 
@@ -343,6 +390,8 @@ pub async fn disconnect(config: &Config) -> ApiResult<(Value, Vec<String>)> {
         let shared = Slot::Calendar.other_google(&stored, &link.client);
         (link, shared)
     };
+    // every « Oui, pour cette conversation » given for it: a new connection asks again
+    crate::person_ok::forget_sessions(config, crate::person_ok::CALENDAR_WRITE, None);
     let ep = drives::endpoints(config, Provider::Google);
     let revoked =
         !shared && drives::revoke(Provider::Google, ep.as_ref().and_then(|e| e.revoke.as_deref()), &link.tokens).await;
@@ -371,6 +420,7 @@ pub async fn forget_agent(config: &Config, agent: &str) {
     let Some(link) = stored.google_calendar.as_mut() else { return };
     let before = link.agents.len();
     link.agents.retain(|a| a != agent);
+    crate::person_ok::forget_sessions(config, crate::person_ok::CALENDAR_WRITE, Some(&[agent.to_string()]));
     if link.agents.len() != before {
         if let Err(e) = store.write(&stored) {
             tracing::warn!(error = %e, "google calendar: a deleted agent can't be taken out");
@@ -392,10 +442,15 @@ pub fn words(fault: &Fault) -> String {
         Fault::Unavailable => format!("{LABEL} has trouble right now: try again later"),
         Fault::Refused => format!("{LABEL} refuses this one"),
         Fault::Unreachable => format!("{LABEL} can't be reached right now"),
+        Fault::Changed => CHANGED.to_string(),
         Fault::TooLarge => "too large".to_string(),
         Fault::Other(why) => why.clone(),
     }
 }
+
+/// The event changed at Google between its check and the person's « Oui » (412 to the `If-Match`).
+pub const CHANGED: &str = "the event changed in Google Calendar since it was read (moved, edited, or made \
+repeating): nothing was changed. Read it again with calendar_list and ask your person again if it still needs doing";
 
 async fn fetch(api: &Api, url: &str, query: Vec<(String, String)>) -> Result<Value, Fault> {
     let url = url.to_string();
@@ -405,11 +460,21 @@ async fn fetch(api: &Api, url: &str, query: Vec<(String, String)>) -> Result<Val
     resp.json().await.map_err(|_| Fault::Unavailable)
 }
 
-async fn write(api: &Api, method: reqwest::Method, url: &str, body: Option<Value>) -> Result<Value, Fault> {
+/// `etag`: the event as it was read (a change or a deletion): Google answers 412 if it changed since.
+async fn write(
+    api: &Api,
+    method: reqwest::Method,
+    url: &str,
+    body: Option<Value>,
+    etag: Option<String>,
+) -> Result<Value, Fault> {
     let url = url.to_string();
     let resp = api
         .send(Box::new(move |http: &reqwest::Client, token: &str| {
-            let request = http.request(method.clone(), &url).bearer_auth(token).query(&[("sendUpdates", "none")]);
+            let mut request = http.request(method.clone(), &url).bearer_auth(token).query(&[("sendUpdates", "none")]);
+            if let Some(etag) = &etag {
+                request = request.header(reqwest::header::IF_MATCH, etag);
+            }
             match &body {
                 Some(body) => request.json(body),
                 None => request,
@@ -419,9 +484,9 @@ async fn write(api: &Api, method: reqwest::Method, url: &str, body: Option<Value
     Ok(resp.json().await.unwrap_or(Value::Null))
 }
 
-/// One event of the primary calendar (its title and time zone known from the listing's head).
-async fn first_page(config: &Config, api: &Api) -> Result<Value, Fault> {
-    fetch(api, &events_url(config), vec![("maxResults".into(), "1".into())]).await
+/// One event of `calendar` (its title and time zone known from the listing's head).
+async fn first_page(config: &Config, api: &Api, calendar: &str) -> Result<Value, Fault> {
+    fetch(api, &events_url(config, calendar), vec![("maxResults".into(), "1".into())]).await
 }
 
 async fn signed_in(config: &Config) -> Result<Api, Fault> {
@@ -432,9 +497,99 @@ fn text(v: &Value, key: &str) -> String {
     v.get(key).and_then(Value::as_str).unwrap_or("").to_string()
 }
 
-/// A Google event as calendar.rs lists them: {id, calendar, title, start, end, all_day, location, notes, recurring}
-/// (an all-day event's `end` its last day: Google's is the day after). None: cancelled, or no start.
-pub fn event_of(v: &Value) -> Option<Value> {
+/// One of the account's calendars.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Calendar {
+    /// `primary`, or its id at Google.
+    pub key: String,
+    /// As the person reads it in Google Calendar (their own name for it first), on one line; the primary one: the
+    /// account. Written by whoever shared it: defused, shown between the markers only.
+    pub name: String,
+    /// The person may add and change events there (owner, writer), not only read them.
+    pub writable: bool,
+    /// Its time zone (empty: not known).
+    pub zone: String,
+}
+
+impl Calendar {
+    pub fn primary(account: Option<&str>) -> Calendar {
+        let name = account.map(|a| a.split_whitespace().collect::<Vec<_>>().join(" ")).filter(|a| !a.is_empty());
+        Calendar {
+            key: PRIMARY.into(),
+            name: crate::archives::defused(tk::head(name.as_deref().unwrap_or("Google"), 120)),
+            writable: true,
+            zone: String::new(),
+        }
+    }
+
+    pub fn is_primary(&self) -> bool {
+        self.key == PRIMARY
+    }
+}
+
+/// An entry of Google's calendar list. None: hidden by the person, deleted, or only its free and busy times shared.
+pub fn calendar_of(v: &Value, account: Option<&str>) -> Option<Calendar> {
+    let flag = |key: &str| v.get(key).and_then(Value::as_bool).unwrap_or(false);
+    let role = text(v, "accessRole");
+    if flag("hidden") || flag("deleted") || !matches!(role.as_str(), "owner" | "writer" | "reader") {
+        return None;
+    }
+    let zone = text(v, "timeZone");
+    if flag("primary") {
+        let summary = text(v, "summary");
+        let named = account.filter(|a| !a.is_empty()).or(Some(summary.as_str()).filter(|s| !s.is_empty()));
+        return Some(Calendar { zone, ..Calendar::primary(named) });
+    }
+    let id = text(v, "id");
+    let own = text(v, "summaryOverride");
+    let name = if own.trim().is_empty() { text(v, "summary") } else { own };
+    let name = crate::archives::defused(tk::head(&name.split_whitespace().collect::<Vec<_>>().join(" "), 120));
+    (!id.is_empty()).then(|| Calendar {
+        key: id.clone(),
+        name: if name.is_empty() { id } else { name },
+        writable: matches!(role.as_str(), "owner" | "writer"),
+        zone,
+    })
+}
+
+/// The calendars the person shows in Google Calendar (`selected`), the primary one first, `MAX_CALENDARS` at most.
+/// (One page of Google's list, 250 entries: nobody has more.)
+pub async fn calendars(config: &Config, api: &Api, account: Option<&str>) -> Result<Vec<Calendar>, Fault> {
+    let query =
+        vec![("minAccessRole".to_string(), "reader".to_string()), ("maxResults".to_string(), "250".to_string())];
+    let page = fetch(api, &list_url(config), query).await?;
+    let items = page.get("items").and_then(Value::as_array).cloned().unwrap_or_default();
+    let flag = |v: &Value, key: &str| v.get(key).and_then(Value::as_bool).unwrap_or(false);
+    let shown = |v: &&Value| flag(v, "selected") || flag(v, "primary");
+    let mut found: Vec<Calendar> = items.iter().filter(shown).filter_map(|v| calendar_of(v, account)).collect();
+    found.sort_by_key(|c| !c.is_primary());
+    if !found.first().is_some_and(Calendar::is_primary) {
+        found.insert(0, Calendar::primary(account));
+    }
+    found.truncate(MAX_CALENDARS);
+    Ok(found)
+}
+
+/// The calendar of an event the agent names (`calendar_update`, `calendar_delete`). None: not one of the person's.
+async fn calendar_named_by_id(
+    config: &Config,
+    api: &Api,
+    key: &str,
+    account: Option<&str>,
+) -> Result<Option<Calendar>, Fault> {
+    if key == PRIMARY {
+        return Ok(Some(Calendar::primary(account)));
+    }
+    match fetch(api, &format!("{}/{}", list_url(config), encoded(key)), Vec::new()).await {
+        Ok(entry) => Ok(calendar_of(&entry, account).filter(|c| c.key == key)),
+        Err(Fault::NotFound) => Ok(None),
+        Err(fault) => Err(fault),
+    }
+}
+
+/// A Google event of `calendar` as calendar.rs lists them: {id, calendar, title, start, end, all_day, location,
+/// notes, recurring} (an all-day event's `end` its last day: Google's is the day after). None: cancelled, no start.
+pub fn event_of(v: &Value, calendar: &str) -> Option<Value> {
     if text(v, "status") == "cancelled" {
         return None;
     }
@@ -460,22 +615,31 @@ pub fn event_of(v: &Value) -> Option<Value> {
     }
     let defused = |s: String, max: usize| crate::archives::defused(tk::head(&s, max));
     Some(json!({
-        "id": format!("{ID_PREFIX}{id}"), "calendar": CALENDAR_ID,
+        "id": event_ref(calendar, &id), "calendar": calendar_ref(calendar),
         "title": defused(text(v, "summary"), 300), "start": start, "end": end, "all_day": all_day,
         "location": defused(text(v, "location"), 300), "notes": defused(text(v, "description"), 2000),
         "recurring": v.get("recurringEventId").is_some() || v.get("recurrence").is_some(),
     }))
 }
 
-/// What Google's calendar adds to `calendar_list` (calendar.rs): its calendar, and its events of the period, read now.
+/// What Google's calendars add to `calendar_list` (calendar.rs): each one shown, and its events of the period, read
+/// now (all at once). Shown « Travail (Google Calendar) », the primary one « alex@gmail.com (Google Calendar) », as a
+/// mailbox's calendars are by their mailbox.
 pub async fn listed(config: &Config, remote: &mut crate::caldav::Remote, from: NaiveDate, to: NaiveDate) {
     remote.any = true;
-    // shown « alex@gmail.com (Google Calendar) », as a mailbox's calendars are by their mailbox
-    let account = stored(config).and_then(|l| l.account).unwrap_or_else(|| "Google".to_string());
-    remote.calendars.push(json!({"id": CALENDAR_ID, "title": account, "source": LABEL}));
+    let account = stored(config).and_then(|l| l.account);
+    let failed = |remote: &mut crate::caldav::Remote, fault: &Fault| {
+        remote.calendars.push(json!({"id": CALENDAR_ID, "title": Calendar::primary(account.as_deref()).name,
+                                     "source": LABEL}));
+        remote.failed.push(format!("{LABEL}: {}", words(fault)));
+    };
     let api = match signed_in(config).await {
         Ok(api) => api,
-        Err(fault) => return remote.failed.push(format!("{LABEL}: {}", words(&fault))),
+        Err(fault) => return failed(remote, &fault),
+    };
+    let found = match calendars(config, &api, account.as_deref()).await {
+        Ok(found) => found,
+        Err(fault) => return failed(remote, &fault),
     };
     let stamp = |d: NaiveDate| d.and_hms_opt(0, 0, 0).map(|t| t.and_utc().to_rfc3339()).unwrap_or_default();
     let query = vec![
@@ -485,12 +649,18 @@ pub async fn listed(config: &Config, remote: &mut crate::caldav::Remote, from: N
         ("orderBy".to_string(), "startTime".to_string()),
         ("maxResults".to_string(), PAGE.to_string()),
     ];
-    match fetch(&api, &events_url(config), query).await {
-        Ok(page) => {
-            let items = page.get("items").and_then(Value::as_array).cloned().unwrap_or_default();
-            remote.events.extend(items.iter().filter_map(event_of));
+    let urls: Vec<String> = found.iter().map(|c| events_url(config, &c.key)).collect();
+    let pages = futures::future::join_all(urls.iter().map(|url| fetch(&api, url, query.clone()))).await;
+    for (calendar, page) in found.iter().zip(pages) {
+        remote.calendars.push(json!({"id": calendar_ref(&calendar.key), "title": calendar.name, "source": LABEL}));
+        match page {
+            Ok(page) => {
+                let items = page.get("items").and_then(Value::as_array).cloned().unwrap_or_default();
+                remote.events.extend(items.iter().filter_map(|v| event_of(v, &calendar.key)));
+            }
+            // (its name stays between the markers: not said here)
+            Err(fault) => remote.failed.push(format!("{LABEL}, one of its calendars: {}", words(&fault))),
         }
-        Err(fault) => remote.failed.push(format!("{LABEL}: {}", words(&fault))),
     }
 }
 
@@ -507,33 +677,97 @@ pub fn google_time(moment: Moment, end: bool, zone: &str) -> Value {
 
 // -- the agents' writes ------------------------------------------------------------------------------------------------
 
-/// Whether this call of a calendar write tool is for Google's calendar: an event of it (`google:`), or an event to
-/// add that names it (« Google Calendar », « google », its account) or has nowhere else to go (no phone calendar, no
-/// mailbox calendar). `account`: the Google account's name.
-pub fn targets(name: &str, arguments: &Dict, phone: bool, mailboxes: bool, account: Option<&str>) -> bool {
+/// Whether a call of a calendar write tool is for Google's calendars.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Aim {
+    /// Not theirs: the phone's queue or a mailbox's calendar takes it.
+    No,
+    /// Theirs: an event of them (`google:`), or an add that names Google, its account, one of its calendars as
+    /// calendar_list shows it (« Travail (Google Calendar) »), or that has nowhere else to go.
+    Google,
+    /// An add naming a calendar neither the phone nor a mailbox has: theirs if one of Google's is named so.
+    IfNamed,
+}
+
+/// The names that mean the primary calendar (the old ones an agent may still use included).
+const GOOGLE_NAMES: [&str; 5] = ["google calendar", "google", "agenda google", "google agenda", CALENDAR_ID];
+
+/// A calendar's name as compared: one line, defused as the listing shows it, lowercase.
+fn folded(name: &str) -> String {
+    crate::archives::defused(&name.split_whitespace().collect::<Vec<_>>().join(" ")).to_lowercase()
+}
+
+/// Which calendar a write tool's call is for. `account`: the Google account's name; `elsewhere`: the names of the
+/// agent's other calendars (the phone's, the mailboxes'), which keep a bare name they share.
+pub fn aim(
+    name: &str,
+    arguments: &Dict,
+    phone: bool,
+    mailboxes: bool,
+    account: Option<&str>,
+    elsewhere: &[String],
+) -> Aim {
     match name {
-        "calendar_update" | "calendar_delete" => tk::str_or_empty(arguments.get("id")).trim().starts_with(ID_PREFIX),
-        "calendar_add" => {
-            let wanted = tk::str_or_empty(arguments.get("calendar")).trim().to_lowercase();
-            if wanted.is_empty() {
-                return !phone && !mailboxes;
+        "calendar_update" | "calendar_delete" => {
+            if tk::str_or_empty(arguments.get("id")).trim().starts_with(ID_PREFIX) {
+                Aim::Google
+            } else {
+                Aim::No
             }
-            let names = ["google calendar", "google", "agenda google", "google agenda", CALENDAR_ID];
-            names.contains(&wanted.as_str())
-                || wanted.ends_with("(google calendar)")
-                || account.is_some_and(|a| a.to_lowercase() == wanted)
         }
-        _ => false,
+        "calendar_add" => {
+            let wanted = folded(&tk::str_or_empty(arguments.get("calendar")));
+            if wanted.is_empty() {
+                return if !phone && !mailboxes { Aim::Google } else { Aim::No };
+            }
+            if GOOGLE_NAMES.contains(&wanted.as_str())
+                || wanted.starts_with(ID_PREFIX)
+                || wanted.ends_with("(google calendar)")
+                || account.is_some_and(|a| folded(a) == wanted)
+            {
+                Aim::Google
+            } else if elsewhere.iter().any(|n| folded(n) == wanted) {
+                Aim::No
+            } else {
+                Aim::IfNamed
+            }
+        }
+        _ => Aim::No,
     }
 }
+
+/// The calendar an add names, among the account's (`calendars`): nothing, Google itself or its account → the
+/// primary one; else the one of that name, « (Google Calendar) » after it or not. None: no such calendar.
+pub fn pick<'a>(found: &'a [Calendar], wanted: &str, account: Option<&str>) -> Option<&'a Calendar> {
+    let wanted = folded(wanted);
+    let base = wanted.strip_suffix("(google calendar)").map(str::trim_end).unwrap_or(&wanted);
+    if base.is_empty() || GOOGLE_NAMES.contains(&base) || account.is_some_and(|a| folded(a) == base) {
+        return found.iter().find(|c| c.is_primary());
+    }
+    found.iter().find(|c| folded(&c.name) == base || calendar_ref(&c.key).to_lowercase() == wanted)
+}
+
+/// A calendar the person may only read (shared with them so, a subscribed one), named by the agent.
+pub const READ_ONLY: &str = "this calendar is read-only for your person (shared with them to read only): nothing was \
+asked nor changed. Tell them; to add an event, name one of their calendars they can write to.";
+pub const NO_SUCH_CALENDAR: &str = "no Google calendar of that name: their names are in calendar_list \
+(« name (Google Calendar) »).";
+/// A day with a time, or the reverse (Google refuses them after the card: never asked).
+pub const MIXED: &str = "start and end: both dates (an all-day event) or both date-times, not one of each";
 
 /// What the card shows and what is sent to Google, once checked.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Planned {
     /// `calendar_add`, `calendar_update`, `calendar_delete`.
     pub tool: &'static str,
+    /// Google's calendar: `primary` or its id.
+    pub calendar: String,
+    /// Its name, shown on the card when it is not the primary one.
+    pub calendar_name: Option<String>,
     /// Google's event id (not for an add).
     pub event: Option<String>,
+    /// The event as it was checked (a change, a deletion): sent as `If-Match`, so it is left as it is if it changed.
+    pub etag: Option<String>,
     /// The event's title and when, as they will be (an add, a change) or are (a deletion).
     pub title: String,
     pub when: String,
@@ -543,12 +777,12 @@ pub struct Planned {
 }
 
 impl Planned {
-    /// What a held « Oui » grants exactly (held_approvals.rs): the tool, the event and what is sent.
+    /// What a held « Oui » grants exactly (held_approvals.rs): the tool, the calendar, the event and what is sent.
     pub fn command(&self) -> String {
         let body = self.body.as_ref().map(|b| b.to_string()).unwrap_or_default();
         match &self.event {
-            Some(id) => format!("{} {ID_PREFIX}{id} {body}", self.tool).trim_end().to_string(),
-            None => format!("{} {CALENDAR_ID} {body}", self.tool),
+            Some(id) => format!("{} {} {body}", self.tool, event_ref(&self.calendar, id)).trim_end().to_string(),
+            None => format!("{} {} {body}", self.tool, calendar_ref(&self.calendar)),
         }
     }
 }
@@ -568,22 +802,49 @@ fn when_of(event: &Value) -> String {
     }
 }
 
-/// The call checked against Google (the event there, not repeating; the times right) before any card: Err the
-/// tool's answer (nothing asked, nothing sent).
-pub async fn plan(config: &Config, api: &Api, name: &str, arguments: &Dict) -> Result<Planned, Dict> {
-    let zone = |head: &Value| text(head, "timeZone");
+fn mixed(start: Moment, end: Moment) -> bool {
+    matches!(start, Moment::Day(_)) != matches!(end, Moment::Day(_))
+}
+
+/// The time zone a local time is read in: the calendar's own (from the list, else its events' head).
+async fn zone_of(config: &Config, api: &Api, calendar: &Calendar) -> Result<String, Dict> {
+    if !calendar.zone.is_empty() {
+        return Ok(calendar.zone.clone());
+    }
+    first_page(config, api, &calendar.key).await.map(|h| text(&h, "timeZone")).map_err(|f| fault_result(&f))
+}
+
+/// The call checked against Google (the event there, not repeating; the times right) before any card, for
+/// `calendar` (one the person may write to): Err the tool's answer (nothing asked, nothing sent).
+pub async fn plan(
+    config: &Config,
+    api: &Api,
+    name: &str,
+    arguments: &Dict,
+    calendar: &Calendar,
+) -> Result<Planned, Dict> {
+    let base = Planned {
+        tool: "calendar_add",
+        calendar: calendar.key.clone(),
+        calendar_name: (!calendar.is_primary()).then(|| calendar.name.clone()),
+        event: None,
+        etag: None,
+        title: String::new(),
+        when: String::new(),
+        location: String::new(),
+        body: None,
+    };
     match name {
         "calendar_add" => {
             let event = crate::calendar::new_event(arguments).map_err(|why| tool_text(&why, true))?;
             let start =
                 Moment::parse(&text(&event, "start")).ok_or_else(|| tool_text("start: an ISO date-time", true))?;
             let end = Moment::parse(&text(&event, "end")).unwrap_or(start);
+            if mixed(start, end) {
+                return Err(tool_text(MIXED, true));
+            }
             let local = matches!(start, Moment::Local(_)) || matches!(end, Moment::Local(_));
-            let tz = if local {
-                first_page(config, api).await.map(|h| zone(&h)).map_err(|f| fault_result(&f))?
-            } else {
-                String::new()
-            };
+            let tz = if local { zone_of(config, api, calendar).await? } else { String::new() };
             let mut body = json!({"summary": text(&event, "title"), "start": google_time(start, false, &tz),
                                   "end": google_time(end, true, &tz)});
             for (key, google) in [("location", "location"), ("notes", "description")] {
@@ -592,21 +853,20 @@ pub async fn plan(config: &Config, api: &Api, name: &str, arguments: &Dict) -> R
                 }
             }
             Ok(Planned {
-                tool: "calendar_add",
-                event: None,
                 title: text(&event, "title"),
                 when: when_of(&event),
                 location: text(&event, "location"),
                 body: Some(body),
+                ..base
             })
         }
         "calendar_update" | "calendar_delete" => {
-            let id = tk::str_or_empty(arguments.get("id")).trim().trim_start_matches(ID_PREFIX).to_string();
-            if id.is_empty() {
+            let Some((_, id)) = split_ref(&tk::str_or_empty(arguments.get("id"))) else {
                 return Err(tool_text("unknown event id (see calendar_list)", true));
-            }
-            let raw = fetch(api, &event_url(config, &id), Vec::new()).await.map_err(|f| fault_result(&f))?;
-            let Some(current) = event_of(&raw) else {
+            };
+            let raw =
+                fetch(api, &event_url(config, &calendar.key, &id), Vec::new()).await.map_err(|f| fault_result(&f))?;
+            let Some(current) = event_of(&raw, &calendar.key) else {
                 return Err(tool_text("no such event any more", true));
             };
             if current.get("recurring").and_then(Value::as_bool).unwrap_or(false) {
@@ -616,14 +876,16 @@ pub async fn plan(config: &Config, api: &Api, name: &str, arguments: &Dict) -> R
                     true,
                 ));
             }
+            let etag = Some(text(&raw, "etag")).filter(|e| !e.is_empty());
             if name == "calendar_delete" {
                 return Ok(Planned {
                     tool: "calendar_delete",
                     event: Some(id),
+                    etag,
                     title: text(&current, "title"),
                     when: when_of(&current),
                     location: text(&current, "location"),
-                    body: None,
+                    ..base
                 });
             }
             let mut merged: Dict = Dict::new();
@@ -662,6 +924,9 @@ pub async fn plan(config: &Config, api: &Api, name: &str, arguments: &Dict) -> R
                 let (Some(s), Some(e)) = (s, e) else {
                     return Err(tool_text("start: an ISO date-time or a date", true));
                 };
+                if mixed(s, e) {
+                    return Err(tool_text(MIXED, true));
+                }
                 if e.wall() < s.wall() {
                     return Err(tool_text("the end must come after the start", true));
                 }
@@ -669,7 +934,7 @@ pub async fn plan(config: &Config, api: &Api, name: &str, arguments: &Dict) -> R
                 let local = matches!(s, Moment::Local(_)) || matches!(e, Moment::Local(_));
                 let tz = match raw.pointer("/start/timeZone").and_then(Value::as_str) {
                     Some(own) if local => own.to_string(),
-                    None if local => first_page(config, api).await.map(|h| zone(&h)).map_err(|f| fault_result(&f))?,
+                    None if local => zone_of(config, api, calendar).await?,
                     _ => String::new(),
                 };
                 body.insert("start".into(), google_time(s, false, &tz));
@@ -687,10 +952,12 @@ pub async fn plan(config: &Config, api: &Api, name: &str, arguments: &Dict) -> R
             Ok(Planned {
                 tool: "calendar_update",
                 event: Some(id),
+                etag,
                 title: text(&shown, "title"),
                 when: when_of(&shown),
                 location: text(&shown, "location"),
                 body: Some(Value::Object(body)),
+                ..base
             })
         }
         _ => Err(tool_text(&format!("unknown tool: {name}"), true)),
@@ -699,7 +966,7 @@ pub async fn plan(config: &Config, api: &Api, name: &str, arguments: &Dict) -> R
 
 fn fault_result(fault: &Fault) -> Dict {
     match fault {
-        Fault::NotFound => tool_text(&words(fault), true),
+        Fault::NotFound | Fault::Changed => tool_text(&words(fault), true),
         Fault::Expired => tool_failure(&words(fault), "Your Google Calendar needs to be connected again in the app."),
         _ => tool_failure(&words(fault), "I can't reach your Google Calendar just now."),
     }
@@ -707,12 +974,16 @@ fn fault_result(fault: &Fault) -> Dict {
 
 /// What was planned, done at Google (after the person's « Oui »).
 pub async fn apply(config: &Config, api: &Api, planned: &Planned) -> Dict {
+    let calendar = &planned.calendar;
+    let (body, etag) = (planned.body.clone(), planned.etag.clone());
     let done = match (planned.tool, &planned.event) {
-        ("calendar_add", _) => write(api, reqwest::Method::POST, &events_url(config), planned.body.clone()).await,
+        ("calendar_add", _) => write(api, reqwest::Method::POST, &events_url(config, calendar), body, None).await,
         ("calendar_update", Some(id)) => {
-            write(api, reqwest::Method::PATCH, &event_url(config, id), planned.body.clone()).await
+            write(api, reqwest::Method::PATCH, &event_url(config, calendar, id), body, etag).await
         }
-        ("calendar_delete", Some(id)) => write(api, reqwest::Method::DELETE, &event_url(config, id), None).await,
+        ("calendar_delete", Some(id)) => {
+            write(api, reqwest::Method::DELETE, &event_url(config, calendar, id), None, etag).await
+        }
         _ => return tool_text("unknown event id (see calendar_list)", true),
     };
     match done {
@@ -722,8 +993,8 @@ pub async fn apply(config: &Config, api: &Api, planned: &Planned) -> Dict {
             match planned.tool {
                 "calendar_add" => tool_text(
                     &format!(
-                        "Added to {LABEL}: id {ID_PREFIX}{} · {} · {title}. The person sees it in their calendar.",
-                        text(&answer, "id"),
+                        "Added to {LABEL}: id {} · {} · {title}. The person sees it in their calendar.",
+                        event_ref(calendar, &text(&answer, "id")),
                         planned.when
                     ),
                     false,
@@ -796,19 +1067,61 @@ pub async fn write_call(state: &AppState, agent: &AgentConfig, name: &str, argum
             .then(|| tool_text("unknown event id (see calendar_list)", true));
     }
     let (c, a) = (config.clone(), agent.name.clone());
-    let (phone, mailboxes, account) = tokio::task::spawn_blocking(move || {
-        (crate::calendar::enabled(&c, &a), crate::caldav::shared_with(&c, &a), stored(&c).and_then(|l| l.account))
+    let (phone, mailboxes, account, elsewhere) = tokio::task::spawn_blocking(move || {
+        let phone = crate::calendar::enabled(&c, &a);
+        let sources = crate::caldav::sources(&c, &a);
+        // the other calendars' names: a bare name they share stays theirs
+        let mut elsewhere: Vec<String> = Vec::new();
+        if phone {
+            let data = crate::calendar::read(&c);
+            let listed = data.get("calendars").and_then(Value::as_array).cloned().unwrap_or_default();
+            elsewhere.extend(listed.iter().map(|x| text(x, "title")));
+        }
+        for source in &sources {
+            for calendar in &source.calendars {
+                elsewhere.push(calendar.title.clone());
+                elsewhere.push(format!("{} ({})", calendar.title, source.label));
+            }
+        }
+        (phone, !sources.is_empty(), stored(&c).and_then(|l| l.account), elsewhere)
     })
     .await
     .ok()?;
-    if !targets(name, arguments, phone, mailboxes, account.as_deref()) {
+    let aim = aim(name, arguments, phone, mailboxes, account.as_deref(), &elsewhere);
+    if aim == Aim::No {
         return None;
     }
+    // a name nobody else has: Google's only if one of its calendars has it, else as before (not reached: not ours)
+    let maybe = aim == Aim::IfNamed;
     let api = match signed_in(&config).await {
         Ok(api) => api,
+        Err(_) if maybe => return None,
         Err(fault) => return Some(fault_result(&fault)),
     };
-    let planned = match plan(&config, &api, name, arguments).await {
+    let calendar = if name == "calendar_add" {
+        let found = match calendars(&config, &api, account.as_deref()).await {
+            Ok(found) => found,
+            Err(_) if maybe => return None,
+            Err(fault) => return Some(fault_result(&fault)),
+        };
+        match pick(&found, &tk::str_or_empty(arguments.get("calendar")), account.as_deref()) {
+            Some(calendar) => calendar.clone(),
+            None if maybe => return None,
+            None => return Some(tool_text(NO_SUCH_CALENDAR, true)),
+        }
+    } else {
+        let unknown = || Some(tool_text("unknown event id (see calendar_list)", true));
+        let Some((key, _)) = split_ref(&tk::str_or_empty(arguments.get("id"))) else { return unknown() };
+        match calendar_named_by_id(&config, &api, &key, account.as_deref()).await {
+            Ok(Some(calendar)) => calendar,
+            Ok(None) => return unknown(),
+            Err(fault) => return Some(fault_result(&fault)),
+        }
+    };
+    if !calendar.writable {
+        return Some(tool_text(READ_ONLY, true));
+    }
+    let planned = match plan(&config, &api, name, arguments, &calendar).await {
         Ok(planned) => planned,
         Err(said) => return Some(said),
     };
@@ -818,7 +1131,12 @@ pub async fn write_call(state: &AppState, agent: &AgentConfig, name: &str, argum
     if !planned.location.is_empty() {
         detail += &format!(" · {}", crate::cards::quoted(&planned.location, 120));
     }
-    detail += &format!(" ({LABEL})\n{}", crate::cards::quoted(&planned.title, 300));
+    // another calendar than the primary one: its name too (« Travail » · Google Calendar)
+    let place = match &planned.calendar_name {
+        Some(other) => format!("« {} » · {LABEL}", crate::cards::quoted(other, 60)),
+        None => LABEL.to_string(),
+    };
+    detail += &format!(" ({place})\n{}", crate::cards::quoted(&planned.title, 300));
     let delete = planned.tool == "calendar_delete";
     let card = crate::person_ok::Card {
         kind: if delete { crate::person_ok::CALENDAR_DELETE } else { crate::person_ok::CALENDAR_WRITE },
