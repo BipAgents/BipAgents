@@ -1,7 +1,8 @@
-"""Messages between agents through the bridge (`/peer/p/…`), only along the links the person turned on
-(`/v1/agent-links`), and two households (two bridge processes) linked by an invitation (`/v1/family…`,
-`/family/…`), their agents writing to each other where both people allowed it (tests/test_households.py and
-test_peers.py, over HTTP; the agents' Hermes is the fake, echoing what it gets)."""
+"""Messages between agents through the bridge (`/peer/p/…`), only where the rules of « Entre tes agents » allow it
+(rules.rs; set here through an older app's `/v1/agent-links`, which become rules), and two households (two bridge
+processes) linked by an invitation (`/v1/family…`, `/family/…`), their agents writing to each other where both people
+allowed it, each bridge telling the other its side (`/family/rules`) (tests/test_households.py and test_peers.py,
+over HTTP; the agents' Hermes is the fake, echoing what it gets)."""
 import hashlib
 import json
 import os
@@ -83,16 +84,19 @@ def test_two_households_write_to_each_other_only_where_both_allowed(bridges, fak
     assert names["cuisine__lea"] == {"id": "cuisine__lea", "name": "Cuisine (Léa)", "managed": False, "household": "lea"}
     assert names["vie"] == {"id": "vie", "name": "Vie", "managed": False}
 
-    # Alex lets Vie write to Cuisine; Léa has not allowed it yet: her bridge refuses.
+    # Alex lets his agents write to Cuisine (the rule is per household: Vie and Budget); Léa has not allowed it yet:
+    # nothing works, no Bot Mode yet.
     set_links = a.put("/v1/agent-links", headers=AUTH, json={"links": [{"from": "vie", "to": "cuisine__lea"}]})
-    assert set_links.json() == {"links": [{"from": "vie", "to": "cuisine__lea"}], "needs_setup": ["vie"]}
+    assert set_links.json() == {"links": [{"from": "budget", "to": "cuisine__lea"}, {"from": "vie", "to": "cuisine__lea"}],
+                                "needs_setup": []}
+    assert a.get("/v1/agent-rules", headers=AUTH).json()["households"][0]["out"]["state"] == "waiting"
     token = "vie-gateway-token-" + "z" * 20
     give_peer_token(a, "manual:vie", token)
     message = {"session_id": "bot-1", "message": "Message from Vie (@vie): qu'est-ce qu'on mange ce soir ?"}
     send = lambda: a.post("/peer/p/cuisine__lea/v1/runs", headers={"Authorization": f"Bearer {token}"}, json=message)  # noqa: E731
     first = send()
     assert first.status_code == 403 and RECEIVED == []
-    assert first.json() == {"detail": "Cuisine does not take messages from vie__alex"}
+    assert first.json() == {"detail": "not allowed to write to cuisine__lea (ask the person)"}
     # Léa allows « Vie (Alex) → Cuisine »: delivered to Cuisine, signed with its household and its answer address.
     assert b.put("/v1/agent-links", headers=AUTH, json={"links": [{"from": "vie__alex", "to": "cuisine"}]}).status_code == 200
     delivered = send()
@@ -130,11 +134,15 @@ def test_two_households_write_to_each_other_only_where_both_allowed(bridges, fak
     assert listing.json() == {"object": "list", "data": [{"id": "pair-1", "title": "Bot Chat"}]}   # the pair's
     assert a.post("/peer/p/cuisine__lea/v1/runs/run-1/approval", headers={"Authorization": f"Bearer {token}"},
                   json={"choice": "always"}).status_code == 403
-    # Budget (its own gateway, not linked) cannot, nor can anything without the household's key.
+    # Budget (its own gateway) writes to Cuisine too: the rule is per household. « À l'écart », it can't; nor can
+    # anything without the household's key.
     budget_token = "budget-gateway-token-" + "w" * 20
     give_peer_token(a, "manual:budget", budget_token)
-    assert a.post("/peer/p/cuisine__lea/v1/runs", headers={"Authorization": f"Bearer {budget_token}"},
-                  json={"message": "Message from Budget (@budget): coucou"}).status_code == 403
+    budget = lambda: a.post("/peer/p/cuisine__lea/v1/runs", headers={"Authorization": f"Bearer {budget_token}"},  # noqa: E731
+                            json={"session_id": "bot-1", "message": "Message from Budget (@budget): coucou"})
+    assert budget().status_code == 200
+    assert a.put("/v1/agent-rules/aside", headers=AUTH, json={"agent": "budget", "on": True}).json()["aside"] == ["budget"]
+    assert budget().status_code == 403
     nope = b.post("/family/p/cuisine/v1/runs", headers={"Authorization": "Bearer nope"}, json=message)
     assert nope.status_code == 401 and nope.json() == {"detail": "unknown household"}
     assert b.get("/family/agents", headers={"Authorization": "Bearer nope"}).status_code == 401
@@ -290,9 +298,22 @@ def test_bot_mode_only_towards_another_household_and_each_sender_learns_whom_it_
     assert {k: managed[k] for k in ("wellness", "budget", "maison", "jardin")} == {
         "wellness": False, "budget": True, "maison": True, "jardin": True}
 
-    # Jardin may also write to Léa's Cuisine: its space's gateway (only) gets the bridge as its peer and a token.
+    # Alex's agents may also write to Léa's Cuisine: nothing until Léa agrees (rules.rs: both sides).
     both = local + [{"from": "jardin", "to": "cuisine__lea"}]
     assert bridge.put("/v1/agent-links", headers=AUTH, json={"links": both}).json()["needs_setup"] == []
+    assert peer_key(space) is None and peer_key(hub) is None
+    # She agrees: every gateway of Alex's agents (the rule is per household) gets the bridge as its peer and a token;
+    # Wellness, set up by hand, its token from the administrator. Bot Mode only for that: Alex's agents on the hub
+    # « à l'écart », the space alone keeps it.
+    agreed = lea.put("/v1/agent-rules/households/alex", headers=AUTH, json={"way": "in", "mode": "only", "agents": ["cuisine"]})
+    assert agreed.status_code == 200 and agreed.json()["households"][0]["in"]["state"] == "agreed"
+    for _ in range(50):
+        if peer_key(space) and peer_key(hub):
+            break
+        time.sleep(0.1)
+    assert peer_key(hub) and marked(hub / "profiles" / "budget") and marked(hub / "profiles" / "maison")
+    for agent in ("budget", "maison", "wellness"):
+        assert bridge.put("/v1/agent-rules/aside", headers=AUTH, json={"agent": agent, "on": True}).status_code == 200
     space_token = peer_key(space)
     assert space_token and bot_peer(space) == {
         "url": f"http://127.0.0.1:{bridge.port}/peer",
@@ -304,7 +325,6 @@ def test_bot_mode_only_towards_another_household_and_each_sender_learns_whom_it_
     stored = json.loads((bridge.state_dir / "peers.json").read_text())
     assert stored["tokens"] == {str(space): hashlib.sha256(space_token.encode()).hexdigest()}
     assert space_token not in (bridge.state_dir / "peers.json").read_text()
-    assert not any(e["argv"][:2] == ["config", "set"] for e in bridge.commands.entries("hermes"))
     # With that token, Bot Mode reaches no agent of this household: the bridge's message_agent is the way there.
     fakes.hermes.override = echo
     for target in ("budget", "maison"):
@@ -315,12 +335,14 @@ def test_bot_mode_only_towards_another_household_and_each_sender_learns_whom_it_
     listing = bridge.get("/peer/p/budget/api/sessions?title=Bot%20Chat", headers={"Authorization": f"Bearer {space_token}"})
     assert listing.status_code == 403 and RECEIVED == []
     assert bridge.get("/peer/p/nobody/api/sessions", headers={"Authorization": f"Bearer {space_token}"}).status_code == 404
-    # …and still Léa's Cuisine (refused there until Léa allows it, as any household message)
+    # …and Léa's Cuisine, as both agreed
     to_lea = bridge.post("/peer/p/cuisine__lea/v1/runs", headers={"Authorization": f"Bearer {space_token}"},
                          json={"session_id": "bot-1", "message": "Message from Jardin (@jardin): bonjour"})
-    assert to_lea.status_code == 403 and to_lea.json() == {"detail": "Cuisine does not take messages from jardin__alex"}
+    assert to_lea.status_code == 200, to_lea.text
 
     # No household link any more: the space loses its peer and its token.
+    for agent in ("budget", "maison", "wellness"):
+        bridge.put("/v1/agent-rules/aside", headers=AUTH, json={"agent": agent, "on": False})
     assert bridge.put("/v1/agent-links", headers=AUTH, json={"links": local}).status_code == 200
     assert bot_peer(space) is None and peer_key(space) is None and not marked(space / "profiles" / "jardin")
     assert json.loads((bridge.state_dir / "peers.json").read_text())["tokens"] == {}

@@ -405,8 +405,8 @@ pub fn write_contacts(config: &Config, links: &[(String, String)], households: O
         let mut targets: Vec<&String> = links.iter().filter(|(s, _)| *s == agent.name).map(|(_, t)| t).collect();
         targets.sort();
         if targets.is_empty() {
-            if skill.exists() {
-                let _ = std::fs::remove_file(&skill);
+            if let Some(folder) = skill.parent().filter(|f| f.exists()) {
+                let _ = std::fs::remove_dir_all(folder);
             }
             continue;
         }

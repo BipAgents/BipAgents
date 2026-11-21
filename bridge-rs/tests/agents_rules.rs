@@ -61,7 +61,6 @@ async fn the_screen_and_its_small_changes() {
     // « Certains »: only the « liens à part »
     let put = |path: &'static str, body: Value| {
         let app = &app;
-        let h = h;
         async move { app.send_json("PUT", path, &h, &body).await }
     };
     let screen = put("/v1/agent-rules/write", json!({"mode": "some"})).await.json();

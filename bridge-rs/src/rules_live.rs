@@ -19,7 +19,7 @@
 //!     POST /family/rules     their side of both ways → ours in the answer, the same shape
 //!
 //! Each bridge tells the other its side after every change of it, at start, when the screen is opened, and again every
-//! few minutes until the other has it (`run_forever`). Only the rules cross (rules.rs `Wire`), never other data.
+//! minute until the other has it (`run_forever`). Only the rules cross (rules.rs `Wire`), never other data.
 //!
 //! A proposal of theirs that asks more than you allow (« Alex ouvre son agent Vie à tes agents ») is a card of the
 //! bridge's own (`bip-rules-<way>-<fingerprint>-<household>`, « D'accord » = once, « Non merci » = deny), in the
@@ -48,8 +48,9 @@ pub const RUN_PREFIX: &str = "bip-rules-";
 const TELL_SECONDS: u64 = 15;
 /// While the screen waits.
 const SCREEN_SECONDS: u64 = 4;
-/// How often the households that don't have our side yet are told again; everyone, this often anyway.
-const AGAIN: Duration = Duration::from_secs(300);
+/// How often the households that don't have our side yet are told again (a home that fetches its calls takes them
+/// at its next poll); everyone, this often anyway.
+const AGAIN: Duration = Duration::from_secs(60);
 const EVERYONE: f64 = 6.0 * 3600.0;
 /// The most agents a rule from another household may name.
 const MAX_NAMED: usize = 200;
@@ -215,7 +216,17 @@ async fn received(state: &AppState, household: &str, theirs: &Wire, told_at: Opt
         let later = state.clone();
         state.spawn(async move { take_effect(&later).await });
     }
-    notify_proposals(state, &world, household).await;
+    // a proposal naming agents of theirs not listed yet: their list first (the card and its notification name them)
+    let (later, id) = (state.clone(), household.to_string());
+    state.spawn(async move {
+        let current = rules::load(&later.config());
+        let listed = current.households.get(&id).map(rules::Household::their_agents).unwrap_or_default();
+        let named = rules::pending_proposal(&world, &current, &id, Way::Out).map(|(p, _)| p.agents).unwrap_or_default();
+        if named.iter().any(|a| !listed.contains(a)) {
+            their_agents(&later, &id, SCREEN_SECONDS).await;
+        }
+        notify_proposals(&later, &world, &id).await;
+    });
 }
 
 /// A proposal of theirs waiting for the person, not notified yet: a notification (one per proposal).
@@ -281,8 +292,8 @@ pub fn household_router() -> Router<AppState> {
     Router::new().route("/family/rules", post(rules_route))
 }
 
-/// Every linked household told our side once at start, then again every few minutes those that don't have its last
-/// change, and everyone every few hours (a change of theirs we missed).
+/// Every linked household told our side once at start, then again every minute those that don't have its last change,
+/// and everyone every few hours (a change of theirs we missed).
 pub async fn run_forever(state: AppState) {
     tokio::time::sleep(Duration::from_secs(5)).await;
     let config = state.config();
@@ -313,6 +324,12 @@ pub async fn run_forever(state: AppState) {
 
 fn shown_of(config: &Config, id: &str) -> String {
     config.agent(Some(id)).map(|a| crate::agent_files::shown(a).to_string()).unwrap_or_else(|| id.to_string())
+}
+
+/// An agent of theirs not listed yet, by its id: « cuisine » → « Cuisine ».
+fn capitalized(id: &str) -> String {
+    let mut chars = id.chars();
+    chars.next().map(|f| f.to_uppercase().collect::<String>() + chars.as_str()).unwrap_or_default()
 }
 
 fn joined(names: &[String]) -> String {
@@ -346,7 +363,7 @@ fn card(config: &Config, world: &World, current: &Rules, id: &str, way: Way, pro
             let listed: Vec<String> = proposal.agents.clone();
             let shown = listed
                 .iter()
-                .map(|a| household.agents.iter().find(|(x, _)| x == a).map(|(_, n)| n.clone()).unwrap_or_else(|| a.clone()))
+                .map(|a| household.agents.iter().find(|(x, _)| x == a).map(|(_, n)| n.clone()).unwrap_or_else(|| capitalized(a)))
                 .collect();
             (listed, shown)
         }
@@ -448,36 +465,38 @@ pub async fn approve(state: &AppState, id: &str, choice: &str) -> ApiResult<Resp
 
 // -- the apps' screen -----------------------------------------------------------------------------------------------
 
-/// Their agents (`/family/agents`, kept for the listings) and their side of the rules, for every linked household at
-/// once, each waiting `SCREEN_SECONDS` at most.
+/// Household `id`'s agents as its bridge lists them (`/family/agents`), kept for the listings.
+async fn their_agents(state: &AppState, id: &str, seconds: u64) {
+    let Some(entry) = state.households.get(id) else { return };
+    let url = crate::family_relay::reach_url(&entry);
+    let key = entry.get("key_out").map(py::py_str).unwrap_or_default();
+    let listed = crate::door_tls::household_client(&state.http, &entry)
+        .get(format!("{url}/family/agents"))
+        .timeout(Duration::from_secs(seconds))
+        .bearer_auth(&key)
+        .send()
+        .await;
+    let Ok(resp) = listed.and_then(|r| r.error_for_status()) else { return };
+    let Ok(answer) = resp.json::<Value>().await else { return };
+    let agents: Vec<(String, String)> = answer
+        .get("agents")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .map(|a| (a.get("id").map(py::py_str).unwrap_or_default(), a.get("name").map(py::py_str).unwrap_or_default()))
+        .filter(|(id, _)| !id.is_empty())
+        .collect();
+    rules::remember_agents(&state.config(), id, &agents);
+}
+
+/// Their agents and their side of the rules, for every linked household at once, each waiting `SCREEN_SECONDS` at
+/// most.
 async fn refresh_households(state: &AppState) {
     let ids: Vec<String> = state.households.public().iter().map(|h| h.get("id").map(py::py_str).unwrap_or_default()).collect();
     let calls = ids.into_iter().map(|id| {
         let state = state.clone();
         async move {
-            let config = state.config();
-            let Some(entry) = state.households.get(&id) else { return };
-            let url = crate::family_relay::reach_url(&entry);
-            let key = entry.get("key_out").map(py::py_str).unwrap_or_default();
-            let listed = crate::door_tls::household_client(&state.http, &entry)
-                .get(format!("{url}/family/agents"))
-                .timeout(Duration::from_secs(SCREEN_SECONDS))
-                .bearer_auth(&key)
-                .send()
-                .await;
-            if let Ok(resp) = listed.and_then(|r| r.error_for_status()) {
-                if let Ok(answer) = resp.json::<Value>().await {
-                    let agents: Vec<(String, String)> = answer
-                        .get("agents")
-                        .and_then(Value::as_array)
-                        .into_iter()
-                        .flatten()
-                        .map(|a| (a.get("id").map(py::py_str).unwrap_or_default(), a.get("name").map(py::py_str).unwrap_or_default()))
-                        .filter(|(id, _)| !id.is_empty())
-                        .collect();
-                    rules::remember_agents(&config, &id, &agents);
-                }
-            }
+            their_agents(&state, &id, SCREEN_SECONDS).await;
             tell_within(&state, &id, SCREEN_SECONDS).await;
         }
     });

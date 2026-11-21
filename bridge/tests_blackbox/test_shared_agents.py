@@ -74,14 +74,15 @@ def test_a_relative_reads_the_owners_conversations_from_the_share_on(bridges, fa
     before = time.time()
     view = a.get("/v1/agents/cuisine/shares", headers=AUTH).json()
     assert view["households"] == [{"id": "marie", "name": "Marie", "shared": False, "history": None, "since": None}]
-    assert view["warning"] == {"private_tools": ["notebook"], "confirm": True}
+    # (« files »: a new account's agents all write to each other, so it passes files to the person's others: rules.rs)
+    assert view["warning"] == {"private_tools": ["notebook", "files"], "confirm": True}
     assert "conversations" not in view and "tokens" not in view
     assert a.put("/v1/agents/cuisine/shares", headers=AUTH, json={"households": ["paul"]}).status_code == 400
     # the confirmation, asked at every share: what she will read, that she can't write, the private tools named
     refused, shared = share(a, b)
     assert "Tes proches pourront lire tes conversations avec Cuisine" in refused["detail"], refused
     assert "ni lui écrire" in refused["detail"] and "ton Carnet" in refused["detail"], refused
-    assert refused["warning"]["private_tools"] == ["notebook"]
+    assert refused["warning"]["private_tools"] == ["notebook", "files"]
     assert shared["told"] == {"marie": True}
     [marie] = shared["households"]
     assert marie["history"] == "from_now" and marie["since"] >= before - 1

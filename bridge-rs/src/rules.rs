@@ -562,7 +562,7 @@ pub fn may_write(world: &World, rules: &Rules, from: &str, to: &str) -> bool {
             }
             if a.family {
                 // « Peut demander à »: its list alone (never another family's agent)
-                return !b.family && rules.family.get(&a.id).is_some_and(|t| t.iter().any(|x| *x == b.id));
+                return !b.family && rules.family.get(&a.id).is_some_and(|t| t.contains(&b.id));
             }
             let pair = || rules.pairs.iter().any(|(x, y)| *x == a.id && *y == b.id);
             if b.family {

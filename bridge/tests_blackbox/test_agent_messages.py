@@ -49,6 +49,9 @@ def test_a_linked_agent_gets_message_agent_and_its_call_brings_the_answer(bridge
     bridge.start()
     wait_registered(bridge, ["quotidien", "coach", "budget"])
     give_tokens(bridge, TOKENS)
+    # a new account's agents all write to each other (rules.rs): « Aucun » first
+    assert bridge.put("/v1/agent-rules/write", headers=AUTH, json={"mode": "none"}).status_code == 200
+    give_tokens(bridge, TOKENS)
     assert "message_agent" not in names(bridge, "quotidien")       # it may write to nobody yet
     refused, failed = ask(bridge, "quotidien", target="bip/coach", message="Combien d'heures ?")
     assert failed and "hasn't let you write to Coach" in refused

@@ -41,7 +41,8 @@ def test_an_agent_reads_what_another_shares_and_nothing_else(bridges, fakes):
     assert volumes_set(bridge, "vie") == ["/home/x/photos:/photos:ro", f"{root}/wellness:/lecture/wellness:ro,z"]
     assert (root / "wellness").is_dir() and oct((root / "wellness").stat().st_mode & 0o777) == "0o777"
     assert (hub / "profiles" / "vie" / "skills" / "shared-data" / "SKILL.md").exists()
-    assert json.loads((bridge.state_dir / "shares.json").read_text()) == {"reads": [["vie", "wellness"]]}
+    rules = json.loads((bridge.state_dir / "agent-rules.json").read_text())   # an explicit read under « Certains »
+    assert rules["read"] == "some" and rules["reads"] == [["vie", "wellness"]]
     assert bridge.get("/v1/agent-shares", headers=AUTH).json()["reads"] == [{"reader": "vie", "source": "wellness"}]
     # Taken back: the mounts go, the person's stays.
     bridge.commands.clear()
@@ -80,7 +81,7 @@ def test_deleting_an_agent_stops_the_others_reading_it(bridges, fakes):
     bridge.commands.clear()
     assert bridge.delete("/v1/agents/wellness", headers=AUTH).status_code == 204
     assert volumes_set(bridge, "vie") == ["/home/x/photos:/photos:ro"]
-    assert json.loads((bridge.state_dir / "shares.json").read_text()) == {"reads": []}
+    assert json.loads((bridge.state_dir / "agent-rules.json").read_text()).get("reads", []) == []
     assert not (bridge.state_dir / "shares" / "wellness").exists()
 
 

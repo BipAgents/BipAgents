@@ -219,8 +219,10 @@ def test_an_others_facing_agent_never_gets_credentials_and_its_hub_keeps_moving(
 def test_an_agent_linked_to_a_relative_keeps_the_hub_moving(bridges, fakes):
     bridge, hub = hub_place(bridges, fakes, agents=("coach", "cuisine"), hub_python=hub_podman)
     bridge.state_dir.mkdir(parents=True, exist_ok=True)
-    # a relative's agent may write to Cuisine (« Qui peut écrire à qui »)
-    (bridge.state_dir / "peers.json").write_text(json.dumps({"links": [["cuisine__lea", "cuisine"]], "tokens": {}}))
+    # a relative's agents may write to Cuisine, both sides agreeing (« Entre tes agents », rules.rs)
+    (bridge.state_dir / "households.json").write_text(json.dumps({"households": {"lea": {"name": "Léa"}}}))
+    (bridge.state_dir / "agent-rules.json").write_text(json.dumps({"households": {"lea": {
+        "in": {"mode": "only", "agents": ["cuisine"]}, "theirs": {"in": {"mode": "all"}}}}}))
     bridge.start()
     wait_registered(bridge, ["coach", "cuisine"])
     vault = {a["id"]: a.get("why") for a in bridge.get("/v1/vault", headers=AUTH).json()["agents"]}
