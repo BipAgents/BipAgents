@@ -245,6 +245,7 @@ async fn owner_card(state: &AppState, agent_id: &str, shown: &str, arguments: &D
         summary: summary.clone(),
         detail: format!("{when}\n{}", crate::cards::quoted(&title, 300)),
         always: None,
+        session: false,
     };
     let then = crate::person_ok::Then::DeleteEvent { agent: agent_id.to_string(), id };
     let run = crate::person_ok::ask_owner(&config, &owner, card, then);

@@ -305,6 +305,7 @@ pub async fn call(state: &AppState, agent: &AgentConfig, arguments: &Dict) -> Di
         summary: sentence(&lang, &shown, &host),
         detail: if what.is_empty() { host.clone() } else { detail(&lang, &what) },
         always: Some(always_words(&lang).to_string()),
+        session: false,
     };
     tracing::info!(agent = %agent.name, site = %host, "a form's sending asked of the person");
     // the asking conversation, when the call said it (Hermes patch 0028): its « Oui » is that one's

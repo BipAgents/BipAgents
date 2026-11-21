@@ -164,13 +164,13 @@ fn text(data: &Map<String, Value>, key: &str) -> String {
 ///
 /// For the MCP gate, the arguments hashed are those Hermes previews in `tool.started` (one argument, cut): two calls
 /// that differ only by another argument share a grant, used once (it is what the card showed). The bridge's own
-/// cards (`ask_to_send`, `calendar_delete`, `accept_terms`) name the whole call in their command (the site, the event,
-/// the box): only it is hashed, never the agent's own words in the detail, so a retry in other words finds its grant
+/// cards (`ask_to_send`, `calendar_delete`, Google Calendar's `calendar_add` / `calendar_update`, `accept_terms`) name
+/// the whole call in their command (the site, the event and what is sent, the box): only it is hashed, never the agent's own words in the detail, so a retry in other words finds its grant
 /// (review R5, 18/11).
 pub fn args_sha(data: &Map<String, Value>) -> String {
     use sha2::{Digest, Sha256};
     let command = text(data, "command");
-    let own = [crate::form_send::TOOL, "calendar_delete", crate::terms_consent::TOOL]
+    let own = [crate::form_send::TOOL, "calendar_delete", "calendar_add", "calendar_update", crate::terms_consent::TOOL]
         .iter()
         .any(|tool| command.starts_with(&format!("{tool} ")));
     let shown = if own {

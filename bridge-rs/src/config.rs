@@ -762,6 +762,9 @@ pub struct Config {
     /// `[drives]` (drives.rs, off by default): not in the serialized form either.
     #[serde(skip)]
     pub drives: crate::drives::Settings,
+    /// `[google_calendar]` (google_calendar.rs, off by default): not in the serialized form either.
+    #[serde(skip)]
+    pub google_calendar: crate::google_calendar::Settings,
     /// `[watchers]` (watchers.rs): not in the serialized form either.
     #[serde(skip)]
     pub watchers: crate::watchers::Settings,
@@ -906,6 +909,7 @@ impl Config {
             place_spare_agents: None,
             connections: crate::connections::Settings::default(),
             drives: crate::drives::Settings::default(),
+            google_calendar: crate::google_calendar::Settings::default(),
             watchers: crate::watchers::Settings::default(),
             triggers: crate::triggers::Settings::default(),
             agent_restart: crate::agent_restart::Settings::default(),
@@ -1957,6 +1961,7 @@ pub fn parse_config(data: &Value, source_path: Option<&str>) -> Result<Config> {
         place_spare_agents,
         connections: crate::connections::Settings::from_table(table(data, "connections")),
         drives: crate::drives::Settings::from_table(table(data, "drives")),
+        google_calendar: crate::google_calendar::Settings::from_table(table(data, "google_calendar")),
         watchers: crate::watchers::Settings::from_table(table(data, "watchers")),
         triggers: crate::triggers::Settings::from_table(table(data, "triggers")),
         agent_restart: crate::agent_restart::Settings::from_table(table(data, "agent_restart")),

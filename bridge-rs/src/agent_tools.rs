@@ -489,9 +489,12 @@ pub fn stale_agents(config: &Config) -> Vec<(String, f64)> {
     )
 }
 
-/// Whether `agent` reads a calendar: the phone's, or one of its mailboxes' (caldav.rs).
+/// Whether `agent` reads a calendar: the phone's, one of its mailboxes' (caldav.rs), or the person's Google Calendar
+/// (google_calendar.rs).
 pub fn calendar_on(config: &Config, agent: &str) -> bool {
-    crate::calendar::enabled(config, agent) || crate::caldav::shared_with(config, agent)
+    crate::calendar::enabled(config, agent)
+        || crate::caldav::shared_with(config, agent)
+        || crate::google_calendar::offered(config, agent)
 }
 
 /// Changes whenever the tools do: Hermes keeps the list it got when it connected, so a new tool needs a new entry.
@@ -1498,6 +1501,7 @@ async fn delete_card(state: &AppState, agent: &AgentConfig, arguments: &Dict, fa
         summary: crate::calendar::delete_sentence(&lang, &shown, &title),
         detail: format!("{when}\n{}", crate::cards::quoted(&title, 300)),
         always: None,
+        session: false,
     };
     match crate::person_ok::ask(state, agent, card).await {
         crate::person_ok::Answer::Once | crate::person_ok::Answer::Always => None,
@@ -1771,10 +1775,16 @@ the BipAgents app.",
         if let Some(done) = crate::caldav::handle(name, arguments, &sources, phone).await {
             return Ok(done);
         }
-        let remote = match crate::calendar::range(arguments, None) {
+        let mut remote = match crate::calendar::range(arguments, None) {
             Ok((from, to)) if name == "calendar_list" => crate::caldav::listed(&sources, from, to).await,
             _ => crate::caldav::Remote::of(&sources),
         };
+        if name == "calendar_list" && crate::google_calendar::offered(&config, &agent.name) {
+            // the person's Google Calendar, read now (its writes are asked on a card first: `mcp_call`)
+            if let Ok((from, to)) = crate::calendar::range(arguments, None) {
+                crate::google_calendar::listed(&config, &mut remote, from, to).await;
+            }
+        }
         let result =
             blocking(move || crate::calendar::call(&config, &agent_c.name, &name_c, &arguments_c, None, &remote))
                 .await?;
@@ -2307,6 +2317,14 @@ async fn mcp_call(
         }
         wrote(&agent.name, &name, &arguments, &mut result);
         return Ok(answer(result));
+    }
+    if !family {
+        // the person's Google Calendar (google_calendar.rs): every add, change or deletion there checked at Google,
+        // then asked on the person's card, done on « Oui »
+        if let Some(mut result) = crate::google_calendar::write_call(&state, &agent, &name, &arguments).await {
+            wrote(&agent.name, &name, &arguments, &mut result);
+            return Ok(answer(result));
+        }
     }
     if name == "calendar_delete" {
         // critical (audit 1.3, Alex 17/11: as mail_trash): a card before each event deleted (person_ok.rs)

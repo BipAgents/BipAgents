@@ -104,6 +104,7 @@ pub const TABLE: &[Rule] = &[
     rule("connector", true, false, "bip-conn-", "runs new code with the person's secrets"),
     rule("mail_trash", true, false, "bip-mail- trash", "deletes (to the trash, then gone)"),
     rule("calendar_delete", true, false, "bip-ok- calendar_delete", "audit 1.3, Alex 17/11: deletes an event of the person's calendar (a mailbox's at once, no trash), like mail_trash"),
+    rule("calendar_write", true, false, "bip-ok- calendar_write (google_calendar.rs)", "Alex 20/11: adds or changes an event of the person's Google Calendar, never silently; « Oui, pour cette conversation » lets the same kind through in that session"),
     rule("site_form", true, false, "bip-ok- site_form (ask_to_send)", "audit 1.2, Alex 17/11 « Oui, 1re fois par site »: the agent's browser sends a form to a site not allowed yet for it; « Toujours pour ce site » keeps it in « Sites autorisés »"),
     rule("mail_rule_trash", true, false, "bip-mailrule- trash", "deletes every new matching mail"),
     rule("held_mail", true, false, "agent_email held", "sends an e-mail in the person's name to a new address"),
