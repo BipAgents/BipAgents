@@ -109,7 +109,8 @@ async fn a_member_asks_the_family_agent_and_it_asks_the_creators_agent_the_links
     let listed = tool_names(&mcp(&app, "famille-token", "tools/list", json!({})).await);
     assert!(!listed.iter().any(|n| n == asks), "{listed:?}");
     let closed = mcp(&app, "famille-token", "tools/call", json!({"name": asks, "arguments": {"target": "vie", "message": "x"}})).await;
-    assert_eq!(closed["isError"], json!(true));
+    // a refusal, plain, « Not done: » (tool_answers.rs, bridge-tools-no-breaker-1121)
+    assert!(common::refused(&closed), "{closed}");
     assert!(runs_of(&fake, "vie").is_empty());
 
     // Alex ticks Famille → Vie in « Qui peut écrire à qui »; the links screen knows Famille is the family's agent
@@ -163,7 +164,7 @@ async fn a_member_asks_the_family_agent_and_it_asks_the_creators_agent_the_links
     let refused =
         mcp(&app, "famille-token", "tools/call", json!({"name": asks, "arguments": {"target": "coach", "message": "Et toi ?"}}))
             .await;
-    assert_eq!(refused["isError"], json!(true));
+    assert!(common::refused(&refused), "{refused}");
     assert!(text_of(&refused).contains("hasn't let you write to Coach"), "{}", text_of(&refused));
     assert!(runs_of(&fake, "coach").is_empty());
 
@@ -175,7 +176,7 @@ async fn a_member_asks_the_family_agent_and_it_asks_the_creators_agent_the_links
         json!({"name": asks, "arguments": {"target": "bip/cuisine__marie", "message": "On mange quoi ?"}}),
     )
     .await;
-    assert_eq!(other["isError"], json!(true));
+    assert!(common::refused(&other), "{other}");
     assert!(text_of(&other).contains("Another household's agents aren't reached from here"), "{}", text_of(&other));
     let posted: Vec<_> = fake.calls.lock().unwrap().iter().filter(|(m, _, _)| m == "POST").map(|(_, p, _)| p.clone()).collect();
     assert!(posted.iter().all(|p| p.starts_with("/p/vie/")), "{posted:?}");
