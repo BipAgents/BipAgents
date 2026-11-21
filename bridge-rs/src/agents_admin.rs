@@ -2798,7 +2798,15 @@ async fn agent_links(State(state): State<AppState>) -> ApiResult<Response> {
     let mut agents: Vec<Value> = config
         .agents
         .values()
-        .map(|a| json!({"id": a.name, "name": a.display_name, "managed": crate::peers::managed_home(&config, a).is_some()}))
+        .map(|a| {
+            let mut agent = json!({"id": a.name, "name": a.display_name, "managed": crate::peers::managed_home(&config, a).is_some()});
+            // the family's agent (Alex 21/11): the apps say under its row that the whole family reads its answers, and
+            // offer it only this place's agents
+            if crate::family_agent::is_family(&config, &a.name) {
+                agent["family"] = json!(true);
+            }
+            agent
+        })
         .collect();
     // The agents of the linked households, as their bridges list them (a household that does not answer is
     // left out for now; its links stay).

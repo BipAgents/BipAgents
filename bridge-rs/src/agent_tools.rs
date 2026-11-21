@@ -2134,7 +2134,8 @@ async fn mcp_call(
         // the family's agent: only the family's tools, in every turn, its creator's too (family_agent.rs)
         // the calendars family members share with it are answered below, once whose turn it is is known
         let calendar = crate::calendar::TOOL_NAMES.contains(&name.as_str());
-        if let Some(closed) = crate::family_agent::closed_tool(&name).filter(|_| !calendar) {
+        let closed = crate::family_agent::closed_call(&state.config(), &agent.name, &name);
+        if let Some(closed) = closed.filter(|_| !calendar) {
             tracing::info!(agent = %agent.name, tool = %name, "tool closed for the family's agent");
             return Ok(answer(closed));
         }
@@ -2261,7 +2262,20 @@ async fn mcp_call(
         return Ok(answer(result));
     }
     if name == crate::agent_messages::TOOL_NAME {
-        let called = crate::agent_messages::call(&state.http, Some(state.hub.clone()), &state.config(), &agent, &arguments).await;
+        // the family's agent asks for the member whose turn it is (None: its creator's): the target is told so
+        let asking = family.then(|| crate::agent_pairs::FamilyAsk {
+            member: member.as_ref().map(|m| m.name.clone()),
+            creator: state.households.name(),
+        });
+        let called = crate::agent_messages::call(
+            &state.http,
+            Some(state.hub.clone()),
+            &state.config(),
+            &agent,
+            &arguments,
+            asking.as_ref(),
+        )
+        .await;
         let mut result = called.result;
         if let Some(card) = called.card {
             // the agents at their cap (agent_hops.rs): « Continuer » in the conversation their chain started from
