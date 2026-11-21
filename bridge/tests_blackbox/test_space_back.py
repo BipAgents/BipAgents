@@ -96,7 +96,7 @@ def test_an_agent_others_talk_to_comes_back_into_the_hub_with_everything(bridges
     assert calls[1]["label"] == "Traiteur" and calls[1]["secret"]["identifier"] == "alex@example.org"
     listing = bridge.get("/v1/vault", headers=AUTH).json()
     assert {a["id"]: a.get("why") for a in listing["agents"]}["fete"] is None
-    assert [i["agents"] for i in listing["items"]] == [{"fete": "vault_1"}]
+    assert [i["agents"] for i in listing["items"]] == [["fete"]]   # (the apps see names, never Hermes' handles)
     # and usable: a new login goes into the hub profile's vault, the hub stays the person's (Coach keeps holding)
     again = bridge.post("/v1/vault", headers=AUTH, json={**LOGIN, "label": "Salle", "site": "salle.example",
                                                          "agents": ["fete", "coach"], "confirmed_others": True})

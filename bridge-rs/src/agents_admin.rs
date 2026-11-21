@@ -3062,7 +3062,8 @@ pub async fn move_into_space(state: &AppState, agent: &AgentConfig, keep_hub: bo
 /// switch when no turn goes on in its space (what one added meanwhile), the switch (its section rewritten: the commit
 /// point; a restart before it finds the agent in its space as it was), then its sandbox's files, its tools and its
 /// credentials in the hub (`settle_back_locked`). The space is left running: the caller removes it once its last turn
-/// there ended. Returns the agent in the hub, and whether all of it settled (else the bridge's next start does it).
+/// there ended. Returns the agent in the hub, and whether it settled (`settle_back`; else the bridge's next start
+/// does it).
 pub async fn move_back_to_hub(state: &AppState, agent: &AgentConfig) -> ApiResult<(AgentConfig, bool)> {
     let _guard = LOCK.lock().await;
     let run = default_run();
@@ -3101,30 +3102,30 @@ pub async fn move_back_to_hub(state: &AppState, agent: &AgentConfig) -> ApiResul
 /// After the switch back to the hub (`move_back_to_hub`, or the bridge's start after a way back cut off): its
 /// sandbox's files mounted for its hub profile, its tools given there, its credentials in its hub profile's Hermes
 /// vault (vault.rs `held_again`). Each step can be done again. Returns the agent as the bridge serves it, and whether
-/// every step went through.
+/// its credentials are there: the one step nothing else does again. Its files and its tools are set up again at every
+/// start for every agent (`mount_all_uploads`, the tools' registration), as after the way out; a mount that failed
+/// here doesn't keep the way back open (own-space-back.json), else each start would settle it and stop its space again.
 pub async fn settle_back(state: &AppState, back: AgentConfig) -> (AgentConfig, bool) {
     let _guard = LOCK.lock().await;
     settle_back_locked(state, back, &default_run()).await
 }
 
 async fn settle_back_locked(state: &AppState, back: AgentConfig, run: &Run) -> (AgentConfig, bool) {
-    let mut settled = true;
     let back = match mount_uploads(&state.config, &back, run, true).await {
         Ok(mounted) => mounted,
         Err(exc) => {
-            tracing::warn!(target: "bipbridge::agents", agent = %back.name, error = %tail(&exc.to_string(), 200), "uploads not mounted in the hub's sandbox of the agent back");
-            settled = false;
+            tracing::warn!(target: "bipbridge::agents", agent = %back.name, error = %tail(&exc.to_string(), 200), "uploads not mounted in the hub's sandbox of the agent back (the bridge's next start tries again)");
             back
         }
     };
-    if let Err(exc) = give_tools(&state.config(), &back, run).await {
-        tracing::warn!(target: "bipbridge::agents", agent = %back.name, error = %tail(&exc.to_string(), 200), "tools not given to the agent back in the hub");
-        settled = false;
-    }
-    if let Err(exc) = state.vault.held_again(&state.config(), &back).await {
-        tracing::warn!(target: "bipbridge::agents", agent = %back.name, error = %format!("{exc:#}"), "the agent back in the hub: its credentials not written there yet");
-        settled = false;
-    }
+    let _ = give_tools(&state.config(), &back, run).await; // (never an error: a failure is logged there)
+    let settled = match state.vault.held_again(&state.config(), &back).await {
+        Ok(_) => true,
+        Err(exc) => {
+            tracing::warn!(target: "bipbridge::agents", agent = %back.name, error = %format!("{exc:#}"), "the agent back in the hub: its credentials not written there yet");
+            false
+        }
+    };
     (back, settled)
 }
 
