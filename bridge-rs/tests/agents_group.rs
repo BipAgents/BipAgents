@@ -203,7 +203,9 @@ async fn an_agent_comes_back_into_the_hub_and_keeps_everything() {
     std::fs::write(space.join(".env"), "API_SERVER_PORT=18660\nAPI_SERVER_KEY=space-key\n").unwrap();
     std::fs::write(folder.join("memories/MEMORY.md"), "Aime les tableaux. Appris dans son espace.").unwrap();
     std::fs::write(folder.join("SOUL.md"), "Tu es Budget.").unwrap();
-    std::fs::write(folder.join("config.yaml"), "terminal:\n  backend: docker\ngateway:\n  strict: true\n").unwrap();
+    // as its way out left it: its space's own settings (spaces.rs SPACE_ONLY) beside its sandbox
+    std::fs::write(folder.join("config.yaml"), "terminal:\n  backend: docker\ngateway:\n  strict: true\nbrowser:\n  backend: 'off'\n")
+        .unwrap();
     std::fs::write(folder.join("vault/vault.json.enc"), "its Hermes vault").unwrap();
     std::fs::write(folder.join("gateway.pid"), "123").unwrap(); // its space's running gateway: never copied
     std::fs::write(folder.join("uploads/releve.pdf"), "%PDF").unwrap();
@@ -281,6 +283,9 @@ async fn an_agent_comes_back_into_the_hub_and_keeps_everything() {
     assert_eq!(std::fs::read_to_string(copied.join("vault/vault.json.enc")).unwrap(), "its Hermes vault");
     assert_eq!(std::fs::read_to_string(copied.join("uploads/releve.pdf")).unwrap(), "%PDF");
     assert!(!copied.join("gateway.pid").exists() && !copied.join("sandboxes").exists());
+    // the hub's settings of an agent that never left (the hub's own profile has neither), its sandbox kept
+    let settings = std::fs::read_to_string(copied.join("config.yaml")).unwrap();
+    assert!(!settings.contains("strict") && !settings.contains("browser") && settings.contains("backend: docker"), "{settings}");
     // its conversations, the API ones the hub's again
     {
         let db = rusqlite::Connection::open(copied.join("state.db")).unwrap();

@@ -310,6 +310,38 @@ fn tombstone(config: &Config, agent: &str) -> PathBuf {
     profiles.join(".deleted").join(agent)
 }
 
+/// What a profile gets for its space only (`move_out`: attachments only from its own files; Hermes' built-in browser
+/// tools, « Browser Use » putting a socket under the agent's folder, too long a path there): section, key.
+pub const SPACE_ONLY: [(&str, &str); 2] = [("gateway", "strict"), ("browser", "backend")];
+
+/// The profile copied back into the hub (`copy_back`) given the hub's settings of an agent that never left: each of
+/// [`SPACE_ONLY`] as the hub's own profile has it (`hub_config`, its `config.yaml`: every hub agent is cloned from it,
+/// agents_admin.rs `hermes profile create --clone-from default`), taken out when the hub has none (a section left
+/// empty goes too). Coordinator 21/11: an agent back must not keep its space's browser setting (Vie would lose its
+/// browser). Whether it changed.
+pub fn hub_settings_again(profile: &Path, hub_config: &Path) -> anyhow::Result<bool> {
+    let hub = crate::profile_files::load(hub_config).unwrap_or_else(|_| Yaml::map());
+    crate::profile_files::edit(&profile.join("config.yaml"), |data| {
+        for (section, key) in SPACE_ONLY {
+            match hub.get(section).filter(|s| s.is_map()).and_then(|s| s.get(key)) {
+                Some(value) => crate::profile_files::set_key(data, &format!("{section}.{key}"), value.clone()),
+                None => {
+                    let empty = match data.get_mut(section).filter(|s| s.is_map()) {
+                        Some(s) => {
+                            s.remove(key);
+                            !s.truthy()
+                        }
+                        None => false,
+                    };
+                    if empty {
+                        data.remove(section);
+                    }
+                }
+            }
+        }
+    })
+}
+
 /// `agent`'s configuration once the shared hub serves it again: its section as the app's own agents have it
 /// (agents_admin.rs `claim_profile`), its key, name, voice and the rest kept.
 pub fn in_hub_again(config: &Config, agent: &AgentConfig) -> AgentConfig {
@@ -558,7 +590,7 @@ impl Spaces {
             // tools, config v52: there, turn the `browser` toolset off for this profile instead.)
             crate::profile_files::set(
                 &root.join("profiles").join(&agent.name).join("config.yaml"),
-                &[("gateway.strict", Yaml::Bool(true)), ("browser.backend", Yaml::str("off"))],
+                &[("gateway.strict", Yaml::Bool(true)), ("browser.backend", Yaml::str("off"))], // SPACE_ONLY
             )?;
             if !has_start && sandbox_available(config) {
                 // Terminal, files, code and the browser's desktop in a container; nothing of the host mounted.
@@ -664,9 +696,11 @@ impl Spaces {
         let except: Vec<&'static str> =
             if crate::hermes_copies::in_memory(config) { not_copied.to_vec() } else { not_copied[1..].to_vec() };
         let profile_id = hub_profile_id(config, &agent.name);
+        let hub_config = profiles.parent().map(|hub| hub.join("config.yaml")).unwrap_or_default();
         let (from, to) = (source.clone(), staging.clone());
         let copied = tokio::task::spawn_blocking(move || -> anyhow::Result<usize> {
             copy_profile_except(&from, &to, &except)?;
+            hub_settings_again(&to, &hub_config)?; // its space's own settings out (SPACE_ONLY)
             Ok(rebind_api_sessions(&to, &profile_id)?)
         })
         .await?;
@@ -727,6 +761,38 @@ impl Spaces {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Coordinator 21/11: an agent back in the hub has the hub's settings of an agent that never left, not its space's
+    /// (`browser.backend: off` would cost Vie its browser where the hub's agents have Hermes' default).
+    #[test]
+    fn an_agent_back_in_the_hub_gets_the_hubs_settings_not_its_spaces() {
+        let dir = tempfile::tempdir().unwrap();
+        let (hub, profile) = (dir.path().join("config.yaml"), dir.path().join("profiles/vie"));
+        std::fs::create_dir_all(&profile).unwrap();
+        let read = || crate::profile_files::load(&profile.join("config.yaml")).unwrap();
+        let space = "terminal:\n  backend: docker\ngateway:\n  strict: true\nbrowser:\n  backend: 'off'\n  vault_only: true\n";
+        // the hub's profile without them: taken out, the rest of their sections kept, an empty section gone
+        std::fs::write(&hub, "model:\n  default: glm\n").unwrap();
+        std::fs::write(profile.join("config.yaml"), space).unwrap();
+        assert!(hub_settings_again(&profile, &hub).unwrap());
+        let back = read();
+        assert!(back.get("gateway").is_none(), "{back:?}");
+        assert_eq!(back.get("browser").and_then(|b| b.get("backend")), None);
+        assert_eq!(back.get("browser").and_then(|b| b.get("vault_only")), Some(&Yaml::Bool(true)));
+        assert_eq!(back.get("terminal").and_then(|t| t.get("backend")).and_then(Yaml::as_str), Some("docker"));
+        assert!(!hub_settings_again(&profile, &hub).unwrap()); // once
+        // the hub's profile with them (the installer's « off » for a visible desktop): as the hub has them
+        std::fs::write(&hub, "browser:\n  backend: camofox\ngateway:\n  strict: false\n").unwrap();
+        std::fs::write(profile.join("config.yaml"), space).unwrap();
+        hub_settings_again(&profile, &hub).unwrap();
+        let back = read();
+        assert_eq!(back.get("browser").and_then(|b| b.get("backend")).and_then(Yaml::as_str), Some("camofox"));
+        assert_eq!(back.get("gateway").and_then(|g| g.get("strict")), Some(&Yaml::Bool(false)));
+        // no hub profile file: as without them
+        std::fs::write(profile.join("config.yaml"), space).unwrap();
+        hub_settings_again(&profile, &dir.path().join("none.yaml")).unwrap();
+        assert!(read().get("gateway").is_none());
+    }
 
     #[test]
     fn the_hubs_api_conversations_become_the_spaces() {

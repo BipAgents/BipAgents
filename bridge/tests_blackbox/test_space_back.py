@@ -11,6 +11,8 @@ import sqlite3
 import time
 import tomllib
 
+import yaml
+
 from bbkit.common import AUTH
 from bbkit.servers import wait_until
 from conftest import wait_registered
@@ -45,6 +47,8 @@ def moved_out(bridges, fakes):
     assert wait_until(lambda: section(bridge).get("space") == str(root), timeout=120), bridge.log_tail(4000)
     assert wait_until(lambda: not folder.exists(), timeout=20)   # the hub forgot it (its tombstone left)
     profile = root / "profiles" / "fete"
+    settings = yaml.safe_load((profile / "config.yaml").read_text())   # its space's own (spaces.rs SPACE_ONLY)
+    assert settings["gateway"]["strict"] is True and settings["browser"]["backend"] == "off", settings
     # what it learned and said in its space
     (profile / "memories" / "MEMORY.md").write_text("Alex court le dimanche. La fête est samedi.")
     with sqlite3.connect(profile / "state.db") as db:
@@ -90,6 +94,10 @@ def test_an_agent_others_talk_to_comes_back_into_the_hub_with_everything(bridges
     assert owner["profile_id"] == str(folder.resolve())   # the hub's again: Hermes runs its conversations there
     assert not (hub / "profiles" / ".deleted" / "fete").exists()   # Hermes serves the name again
     assert not (bridge.state_dir / "own-space-back.json").exists()
+    # the hub's settings of an agent that never left (the hub's profile has neither of its space's), its sandbox kept
+    settings = yaml.safe_load((folder / "config.yaml").read_text())
+    assert "strict" not in (settings.get("gateway") or {}) and "backend" not in (settings.get("browser") or {}), settings
+    assert settings["terminal"]["backend"] == "docker"
     # its login written again into its hub profile's vault from the bridge's master copy (its copy there lacked it)
     calls = vault_calls_in_hub(bridge, hub)
     assert [c["op"] for c in calls] == ["list", "add"], calls
