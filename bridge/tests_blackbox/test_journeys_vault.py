@@ -99,8 +99,15 @@ def test_j65_the_agents_screen_is_live_in_the_bureau_and_the_hand_is_taken_there
     and given back."""
     import struct
     from bbkit.ws import open_ws
+    # what the apps' Bureau reads first: it goes live, then takes the hand, only on a browser with a page open
+    # (DesktopView / DesktopScreen); an idle one keeps its empty state, « Rendre la main » never shown (iPhone J65, 21/11)
+    now = journey.bridge.get(f"/v1/agents/{AGENT}/desktop/state", headers=AUTH)
+    assert now.status_code == 200, now.text
+    assert {k: now.json()[k] for k in ("state", "browser", "page", "site", "update_browser")} == {
+        "state": "active", "browser": True, "page": True, "site": "fournisseur.example", "update_browser": False}, now.json()
     desktop = journey.bridge.post(f"/v1/agents/{AGENT}/desktop", headers=AUTH)
     assert desktop.status_code == 200 and desktop.json()["kind"] == "novnc", desktop.text
+    assert desktop.json()["page_path"], desktop.text     # a phone shows the page alone
     try:
         with open_ws(journey.bridge.ws_url("/" + desktop.json()["path"] + "ws")) as ws:
             held = bytearray()
