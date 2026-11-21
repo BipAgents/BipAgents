@@ -151,8 +151,17 @@ mod adapter {
                         });
                         break;
                     }
-                    // its answer (`tool.completed`): an error makes the identical call right after a retry
-                    count.completed(&call.tool, call.error);
+                    // its answer (`tool.completed`): an error makes the identical call right after a retry; the same
+                    // tool failing again and again stops the turn (runs.rs `brake_failure`)
+                    if let Some(over) = count.completed(&call.tool, call.error, &limits) {
+                        out.push(Decision {
+                            index,
+                            tool: call.tool.clone(),
+                            action: Action::Stop,
+                            reason: loop_brake::reason(&over),
+                        });
+                        break;
+                    }
                 }
                 if !bridge_tool(&call.tool) {
                     continue;

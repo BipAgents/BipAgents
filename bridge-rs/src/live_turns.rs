@@ -12,6 +12,17 @@
 //! hidden note the apps write, LiveLines.prelude); photos come inline and documents by path, as in a written message
 //! (threads/send.rs). Approvals are answered through `POST /v1/approve`.
 //!
+//! A call's turn is braked here (20/11, Alex: « Laisse-moi vérifier sur le web, deux secondes », then minutes of
+//! silence while the web search failed again and again, until Hermes' own guard at 50 searches and its English line in
+//! the conversation). Its stream is no run the hub follows (runs.rs), so the bridge counts its tool calls as they pass
+//! (loop_brake.rs, the `live` limits: a tool failing twice in a row, 6 web searches, 12 calls…; told to the agent at
+//! about two thirds, a steer: answer with what you have): past one, Hermes' run is stopped and
+//! the agent says the brake's plain line out loud (« Je n'arrive pas à chercher sur le web pour l'instant. Tu veux que
+//! je réessaie plus tard ? »: an `assistant.delta`, then the turn's end with it as its text), Hermes' words after the
+//! stop left out. Hermes' own halts (its guard's « I stopped retrying… », a reply cut for repeating itself:
+//! hermes_halts.rs) and its « ⚠️ No reply: » (no_reply.rs) are said in the same plain words. The stream is read to its
+//! end whoever listens: a call hung up while the agent works is still braked (the turn goes on, live_calls.rs waits).
+//!
 //! A turn the phone's voice decider sent to be filed, not answered (`noter`, 9/11), starts with a hidden
 //! `<!--bip:note … -->`: whatever the app wrote in it (the 9/11 apps named a Carnet v1 tool, `notebook_note`, that is
 //! gone), the bridge puts its own words there (`NOTE`), so the tools' names live here only.
@@ -167,18 +178,137 @@ async fn turn(State(state): State<AppState>, Json(body): Json<Turn>) -> ApiResul
         Some(status @ (400..=499)) => HttpError::new(status, "your agent refused this message"),
         _ => HttpError::new(502, UNREACHABLE),
     })?;
-    let mut response =
-        Response::new(axum::body::Body::from_stream(without_media(upstream.bytes_stream(), agent.name.clone())));
+    let lang = crate::handback::language_of(&config, &agent);
+    let name = if agent.display_name.trim().is_empty() { &agent.name } else { &agent.display_name };
+    let brake = LiveBrake::new(&config.brake, &lang, name, &body.live_session);
+    let events = without_media(upstream.bytes_stream(), agent.clone(), brake, state.hermes.clone());
+    // read to its end whoever listens (the brake still works after a hang-up); the phone gets what it can
+    let (tx, rx) = tokio::sync::mpsc::channel(256);
+    tokio::spawn(async move {
+        futures::pin_mut!(events);
+        let mut listening = true;
+        while let Some(item) = events.next().await {
+            if listening && tx.send(item).await.is_err() {
+                listening = false;
+            }
+        }
+    });
+    let mut response = Response::new(axum::body::Body::from_stream(tokio_stream::wrappers::ReceiverStream::new(rx)));
     for (name, value) in [("content-type", "text/event-stream; charset=utf-8"), ("cache-control", "no-store"), ("x-accel-buffering", "no")] {
         response.headers_mut().insert(name, axum::http::HeaderValue::from_static(value));
     }
     Ok(response)
 }
 
+/// A call's turn's brake (see the module's doc): its tool calls counted against the `live` limits.
+pub struct LiveBrake {
+    enabled: bool,
+    limits: crate::loop_brake::Limits,
+    turn: crate::loop_brake::TurnCount,
+    lang: String,
+    /// The agent's shown name (its « No reply » line).
+    name: String,
+    /// The call's session: what the brake says is kept for the call's record (live_calls.rs `brake_said`).
+    live_session: String,
+    run_id: Option<String>,
+    /// The line said once the turn was stopped: Hermes' words after it are left out, its end says this.
+    said: Option<String>,
+}
+
+impl LiveBrake {
+    pub fn new(settings: &crate::loop_brake::Settings, lang: &str, name: &str, live_session: &str) -> Self {
+        LiveBrake {
+            enabled: settings.enabled,
+            limits: settings.live,
+            turn: Default::default(),
+            lang: lang.to_string(),
+            name: name.to_string(),
+            live_session: live_session.to_string(),
+            run_id: None,
+            said: None,
+        }
+    }
+
+    /// One of Hermes' events: the limit it passed, if any (the first only).
+    pub fn event(&mut self, event: &crate::hermes::SSEEvent) -> Option<crate::loop_brake::Over> {
+        if let Some(run) = event.data.get("run_id").and_then(Value::as_str).filter(|r| !r.is_empty()) {
+            self.run_id.get_or_insert_with(|| run.to_string());
+        }
+        if !self.enabled || self.said.is_some() {
+            return None;
+        }
+        let tool = crate::loop_brake::event_tool(&event.data);
+        if tool.is_empty() {
+            return None;
+        }
+        match event.r#type.as_str() {
+            "tool.started" => {
+                let signature = crate::loop_brake::event_signature(&event.data);
+                self.turn.note(&tool, signature.as_deref(), crate::runs::browser_tool(&tool), &self.limits)
+            }
+            // `chat/stream` tells a failed call apart; a run's events mark it in `tool.completed`
+            "tool.failed" => self.turn.completed(&tool, true, &self.limits),
+            "tool.completed" => {
+                let failed = event.data.get("is_error").and_then(Value::as_bool).unwrap_or(false)
+                    || crate::loop_brake::completed_with_error(&event.data);
+                self.turn.completed(&tool, failed, &self.limits)
+            }
+            _ => None,
+        }
+    }
+
+    /// A limit the last call brought close: the note for the agent (a steer, out of the person's sight), once per kind.
+    pub fn warning(&mut self) -> Option<String> {
+        let warning = self.turn.take_warning()?;
+        (self.enabled && self.said.is_none()).then(|| warning.text())
+    }
+
+    /// The turn stopped for `over`: the line to say (kept for its end).
+    pub fn stopped(&mut self, over: &crate::loop_brake::Over) -> String {
+        let line = crate::loop_brake::notice_text(over, &self.lang);
+        self.said = Some(line.clone());
+        line
+    }
+
+    /// An event as the phone gets it once braked (None: left out), else with Hermes' halts in plain words.
+    pub fn shown(&self, event: crate::hermes::SSEEvent) -> Option<crate::hermes::SSEEvent> {
+        let final_answer = crate::hermes::is_terminal(&event.r#type) || event.r#type == "assistant.completed";
+        if let Some(line) = &self.said {
+            if event.r#type.ends_with(".delta") {
+                return None; // Hermes' words after the stop (« Operation interrupted… »: replaced only here)
+            }
+            if final_answer && event.data.get("content").is_some_and(Value::is_string) {
+                let mut data = event.data;
+                data.insert("content".into(), json!(line));
+                let raw = crate::py::Dumps::new().unicode().dumps(&Value::Object(data.clone()));
+                return Some(crate::hermes::SSEEvent::new(event.r#type, data, raw));
+            }
+            return Some(event);
+        }
+        let mut event = crate::hermes_halts::scrub_event(event, &self.lang);
+        if event.r#type == "assistant.completed" {
+            let told = event.data.get("content").and_then(Value::as_str).and_then(|c| {
+                crate::no_reply::in_plain_words(c, &self.name, &self.lang)
+            });
+            if let Some(told) = told {
+                event.data.insert("content".into(), json!(told));
+                let raw = crate::py::Dumps::new().unicode().dumps(&Value::Object(event.data.clone()));
+                event = crate::hermes::SSEEvent::new(event.r#type, event.data, raw);
+            }
+        }
+        Some(event)
+    }
+}
+
 /// Hermes' events as the apps get them: a reply's `MEDIA:` lines out (media.rs), the files at the end as its
-/// `attachments`, its end without Hermes' file-mutation verifier (hermes_footer.rs: never said aloud); its keepalives
-/// passed on.
-fn without_media<S, E>(chunks: S, agent: String) -> impl futures::Stream<Item = Result<bytes::Bytes, std::io::Error>> + Send
+/// `attachments`, its end without Hermes' file-mutation verifier (hermes_footer.rs: never said aloud), the call's brake
+/// (`LiveBrake`); its keepalives passed on.
+fn without_media<S, E>(
+    chunks: S,
+    agent: crate::config::AgentConfig,
+    mut brake: LiveBrake,
+    hermes: crate::hermes::HermesClient,
+) -> impl futures::Stream<Item = Result<bytes::Bytes, std::io::Error>> + Send
 where
     S: futures::Stream<Item = Result<bytes::Bytes, E>> + Send + 'static,
     E: std::error::Error + Send + Sync + 'static,
@@ -205,7 +335,40 @@ where
                 }
             };
             let Some(event) = event else { continue };
-            let event = crate::hermes_footer::scrub_event(event, &agent);
+            let event = crate::hermes_footer::scrub_event(event, &agent.name);
+            if let Some(over) = brake.event(&event) {
+                let line = brake.stopped(&over);
+                // what the person heard, for the call's record (Hermes keeps its own words, not these)
+                crate::live_calls::brake_said(&agent.name, &brake.live_session, &line);
+                tracing::warn!(agent = %agent.name, reason = %crate::loop_brake::reason(&over),
+                    "live call going round in circles: turn stopped, said out loud");
+                // said now, after what the agent said so far; then Hermes' run stopped
+                let mut said = media.flush_events("assistant.delta", event.data.get("run_id").unwrap_or(&Value::Null));
+                let data = json!({"delta": format!("\n\n{line}"), "bip_brake": true});
+                let raw = crate::py::Dumps::new().unicode().dumps(&data);
+                said.push(crate::hermes::SSEEvent::new("assistant.delta", data.as_object().cloned().unwrap_or_default(), raw));
+                for event in said {
+                    yield Ok(frame(&event.r#type, &event.raw));
+                }
+                if let Some(run_id) = brake.run_id.clone() {
+                    let (hermes, agent) = (hermes.clone(), agent.clone());
+                    tokio::spawn(async move {
+                        if let Err(err) = hermes.stop_run(&agent, &run_id).await {
+                            tracing::warn!(agent = %agent.name, run_id = %run_id, error = %err, "live call's stop refused");
+                        }
+                    });
+                }
+            }
+            // a limit getting close (the third web search…): the agent told to answer with what it has
+            if let (Some(text), Some(run_id)) = (brake.warning(), brake.run_id.clone()) {
+                let (hermes, agent) = (hermes.clone(), agent.clone());
+                tokio::spawn(async move {
+                    if let Err(err) = hermes.steer_run(&agent, &run_id, &text).await {
+                        tracing::info!(agent = %agent.name, run_id = %run_id, error = %err, "live call's steer refused");
+                    }
+                });
+            }
+            let Some(event) = brake.shown(event) else { continue };
             let mut shown = Vec::new();
             if crate::hermes::is_terminal(&event.r#type) || event.r#type == "assistant.completed" {
                 shown = media.flush_events("assistant.delta", event.data.get("run_id").unwrap_or(&Value::Null));
@@ -245,6 +408,135 @@ mod tests {
             Some(prefix) => name.starts_with(prefix),
             None => name == *c,
         })
+    }
+
+    /// A Hermes answering every request with 200 `{}` (the stop), each request's first line sent on `seen`.
+    async fn fake_hermes(seen: tokio::sync::mpsc::UnboundedSender<String>) -> String {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            while let Ok((mut socket, _)) = listener.accept().await {
+                let seen = seen.clone();
+                tokio::spawn(async move {
+                    let mut head = [0u8; 4096];
+                    let n = socket.read(&mut head).await.unwrap_or(0);
+                    let first = String::from_utf8_lossy(&head[..n]).lines().next().unwrap_or("").to_string();
+                    let _ = seen.send(first);
+                    let _ = socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}").await;
+                });
+            }
+        });
+        format!("http://127.0.0.1:{port}")
+    }
+
+    fn sse(events: &[(&str, Value)]) -> Vec<Result<bytes::Bytes, std::io::Error>> {
+        events.iter().map(|(kind, data)| Ok(bytes::Bytes::from(format!("event: {kind}\ndata: {data}\n\n")))).collect()
+    }
+
+    /// What the phone gets of `events`: (kind, data) in order.
+    async fn through(events: &[(&str, Value)], lang: &str, hermes_url: &str) -> Vec<(String, Value)> {
+        let agent = crate::config::AgentConfig { name: "vie".into(), display_name: "Vie".into(), hermes_url: hermes_url.into(),
+            ..Default::default() };
+        let brake = LiveBrake::new(&crate::loop_brake::Settings::default(), lang, "Vie", "api_test_call");
+        let http = reqwest::Client::new();
+        let out = without_media(futures::stream::iter(sse(events)), agent, brake, crate::hermes::HermesClient::new(http));
+        let bytes: Vec<u8> = out.map(|c| c.unwrap().to_vec()).concat().await;
+        let text = String::from_utf8(bytes).unwrap();
+        text.split("\n\n")
+            .filter(|f| f.starts_with("event:"))
+            .map(|f| {
+                let (kind, data) = f.split_once('\n').unwrap();
+                let data = data.lines().map(|l| l.strip_prefix("data: ").unwrap_or(l)).collect::<Vec<_>>().join("\n");
+                (kind.trim_start_matches("event: ").to_string(), serde_json::from_str(&data).unwrap_or(Value::Null))
+            })
+            .collect()
+    }
+
+    /// 20/11, Alex's call with Vie: « Laisse-moi vérifier sur le web », then the web search failing again and again.
+    /// The call now stops at its second failure in a row, Hermes' run stopped, the plain line said out loud; Hermes'
+    /// words after the stop never reach the phone and the turn's end says the line.
+    #[tokio::test]
+    async fn a_web_search_failing_in_a_call_is_stopped_and_said_out_loud() {
+        let (tx, mut seen) = tokio::sync::mpsc::unbounded_channel();
+        let url = fake_hermes(tx).await;
+        let failed = json!({"tool_name": "web_search", "preview": ""});
+        let events = [
+            ("assistant.delta", json!({"delta": "Laisse-moi vérifier sur le web, deux secondes.", "run_id": "run_1"})),
+            ("tool.started", json!({"tool_name": "web_search", "args": {"query": "jeu DJ PS1"}, "run_id": "run_1"})),
+            ("tool.failed", failed.clone()),
+            ("tool.started", json!({"tool_name": "web_search", "args": {"query": "PS1 DJ game"}})),
+            ("tool.failed", failed.clone()),
+            ("tool.started", json!({"tool_name": "web_search", "args": {"query": "beatmania"}})),
+            ("tool.failed", failed),
+            ("assistant.delta", json!({"delta": "\n\nOperation interrupted: waiting for model response (3.1s elapsed)."})),
+            ("assistant.completed", json!({"content": "Operation interrupted: waiting for model response (3.1s elapsed).",
+                                           "run_id": "run_1", "interrupted": true})),
+            ("done", json!({"run_id": "run_1"})),
+        ];
+        let got = through(&events, "fr", &url).await;
+        let line = "Je n'arrive pas à chercher sur le web pour l'instant. Tu veux que je réessaie plus tard ?";
+        let said: String = got.iter().filter(|(k, _)| k == "assistant.delta").map(|(_, d)| d["delta"].as_str().unwrap().to_string()).collect();
+        assert_eq!(said, format!("Laisse-moi vérifier sur le web, deux secondes.\n\n{line}"));
+        let end = got.iter().find(|(k, _)| k == "assistant.completed").unwrap();
+        assert_eq!(end.1["content"], json!(line));
+        assert!(got.iter().any(|(k, _)| k == "done"));
+        // the third search is never started by the agent's words: the stop went at the second failure
+        let stop = tokio::time::timeout(std::time::Duration::from_secs(5), seen.recv()).await.unwrap().unwrap();
+        assert_eq!(stop, "POST /v1/runs/run_1/stop HTTP/1.1");
+        // what the person heard is kept for the call's record (live_calls.rs)
+        assert!(crate::live_calls::said_in("vie", "api_test_call").iter().any(|(_, l)| l == line));
+    }
+
+    /// 20/11, the real place: every search answered, new words each time, 50 of them. A call stops past 6.
+    #[tokio::test]
+    async fn a_call_searching_again_and_again_is_stopped_even_when_searches_answer() {
+        let (tx, mut seen) = tokio::sync::mpsc::unbounded_channel();
+        let url = fake_hermes(tx).await;
+        let mut events = vec![("assistant.delta", json!({"delta": "Laisse-moi vérifier.", "run_id": "run_2"}))];
+        for i in 0..8 {
+            events.push(("tool.started", json!({"tool_name": "web_search", "args": {"query": format!("jeu DJ PS1 {i}")}})));
+            events.push(("tool.completed", json!({"tool_name": "web_search", "preview": ""})));
+        }
+        events.push(("assistant.completed", json!({"content": "Operation interrupted: waiting for model response (1.0s elapsed)."})));
+        let got = through(&events, "fr", &url).await;
+        let end = got.iter().find(|(k, _)| k == "assistant.completed").unwrap();
+        assert!(end.1["content"].as_str().unwrap().starts_with("J'ai fait beaucoup de recherches sur le web"));
+        let mut asked = Vec::new();
+        while let Ok(Some(line)) = tokio::time::timeout(std::time::Duration::from_millis(500), seen.recv()).await {
+            asked.push(line);
+        }
+        // told at the fourth search (a steer: answer with what you have), stopped at the seventh
+        assert!(asked.contains(&"POST /v1/runs/run_2/steer HTTP/1.1".to_string()), "{asked:?}");
+        assert!(asked.contains(&"POST /v1/runs/run_2/stop HTTP/1.1".to_string()), "{asked:?}");
+    }
+
+    #[tokio::test]
+    async fn hermes_own_halts_are_said_in_plain_words_in_a_call() {
+        let guard = "I stopped retrying because I kept running web_search 50 times without making progress. The last \
+result above shows what blocked it. Tell me how you'd like to proceed, or send `continue` and I'll try a different approach.";
+        let events = [
+            ("assistant.delta", json!({"delta": format!("\n\n{guard}")})),
+            ("assistant.completed", json!({"content": guard})),
+        ];
+        // no stop asked: an address nobody answers
+        let got = through(&events, "en", "http://127.0.0.1:9").await;
+        let many = "I ran a lot of web searches without finding a sure answer. Tell me if you want me to make it a deeper \
+search in the background.";
+        assert_eq!(got[0].1["delta"], json!(format!("\n\n{many}")));
+        assert_eq!(got[1].1["content"], json!(many));
+        let no_reply = [("assistant.completed", json!({"content": "⚠️ No reply: GLM-5.3-Flash-EXL3 didn't produce a reply this time."}))];
+        let got = through(&no_reply, "fr", "http://127.0.0.1:9").await;
+        assert_eq!(got[0].1["content"], json!("Vie n'a pas réussi à répondre cette fois. Réessaie, ou écris « continue »."));
+        // a turn that searches once and answers: as it is
+        let fine = [
+            ("tool.started", json!({"tool_name": "web_search", "args": {"query": "jeu DJ PS1"}})),
+            ("tool.completed", json!({"tool_name": "web_search", "preview": ""})),
+            ("assistant.completed", json!({"content": "C'est Beatmania !"})),
+        ];
+        let got = through(&fine, "fr", "http://127.0.0.1:9").await;
+        assert_eq!(got.last().unwrap().1["content"], json!("C'est Beatmania !"));
+        assert!(!got.iter().any(|(_, d)| d.get("bip_brake").is_some()));
     }
 
     #[test]

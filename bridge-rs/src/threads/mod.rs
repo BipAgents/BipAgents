@@ -707,7 +707,10 @@ impl Threads {
             previous = Some(rows);
         }
         with_services(&self.config.get(), &agent.name, &mut items);
-        crate::steps::fold(&mut items, &crate::handback::language_of(&self.config.get(), agent));
+        let lang = crate::handback::language_of(&self.config.get(), agent);
+        crate::steps::fold(&mut items, &lang);
+        // Hermes' own halt stored as the reply (« I stopped retrying… »): its plain line (hermes_halts.rs)
+        crate::hermes_halts::fold(&mut items, &lang);
         self.with_vault_lines(agent, &mut items);
         with_carnet_lines(&self.config.get(), agent, &mut items);
         if thread.kind != "main" {

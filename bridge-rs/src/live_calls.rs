@@ -65,6 +65,32 @@ static FILE_LOCK: Mutex<()> = Mutex::new(());
 /// The calls being ended now (data folder, agent, live session): one end at a time per call.
 static ENDING: LazyLock<Mutex<HashSet<(String, String, String)>>> = LazyLock::new(|| Mutex::new(HashSet::new()));
 
+/// What the brake said out loud in a call's turns (live_turns.rs `LiveBrake`), by (agent, call session): (when, line).
+/// Hermes keeps none of it (its stopped turn ends on its own words, or none), so the call's record would not hold what
+/// the person heard (review 20/11). Kept until the call is in its conversation; in memory (a bridge restarted meanwhile
+/// shows Hermes' words, as before).
+type SaidByCall = std::collections::HashMap<(String, String), Vec<(f64, String)>>;
+static BRAKE_SAID: LazyLock<Mutex<SaidByCall>> = LazyLock::new(|| Mutex::new(SaidByCall::new()));
+/// Lines kept per call, at most.
+const BRAKE_SAID_MAX: usize = 20;
+
+/// The brake said `line` in `agent`'s call `live_session`, now.
+pub fn brake_said(agent: &str, live_session: &str, line: &str) {
+    let mut said = lock(&BRAKE_SAID);
+    let lines = said.entry((agent.to_string(), live_session.to_string())).or_default();
+    if lines.len() < BRAKE_SAID_MAX {
+        lines.push((py::time_time(), line.to_string()));
+    }
+}
+
+pub(crate) fn said_in(agent: &str, live_session: &str) -> Vec<(f64, String)> {
+    lock(&BRAKE_SAID).get(&(agent.to_string(), live_session.to_string())).cloned().unwrap_or_default()
+}
+
+fn forget_said(agent: &str, live_session: &str) {
+    lock(&BRAKE_SAID).remove(&(agent.to_string(), live_session.to_string()));
+}
+
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
 }
@@ -263,10 +289,36 @@ fn raw_text(message: &Dict) -> String {
 /// What the call said (the person's and the agent's words, the opening and tools left out) and the files the agent
 /// made in it (its `MEDIA:` paths, in order, once each).
 pub fn call_lines(messages: &[Dict]) -> (Vec<(String, String)>, Vec<String>) {
+    call_lines_with(messages, &[])
+}
+
+/// Hermes' words after a stop of the brake (`Operation interrupted: waiting for model response (…)`).
+const INTERRUPTED: &str = "Operation interrupted: waiting for model response";
+
+/// `call_lines` with what the brake said (`said`: when, line) in its place among them, as the agent's: after the
+/// messages written before it; Hermes' interruption line right after it (the stop's) left out.
+pub fn call_lines_with(messages: &[Dict], said: &[(f64, String)]) -> (Vec<(String, String)>, Vec<String>) {
     let mut lines = Vec::new();
     let mut media: Vec<String> = Vec::new();
+    let mut said = said.iter().peekable();
+    let mut just_said = false;
     for message in messages {
+        let at = message.get("timestamp").and_then(Value::as_f64);
+        while let (Some((when, line)), Some(at)) = (said.peek(), at) {
+            if at <= *when {
+                break;
+            }
+            lines.push(("assistant".to_string(), line.clone()));
+            just_said = true;
+            said.next();
+        }
         let role = message.get("role").and_then(Value::as_str).unwrap_or("");
+        if role == "user" {
+            just_said = false;
+        }
+        if role == "assistant" && just_said && raw_text(message).trim_start().starts_with(INTERRUPTED) {
+            continue;
+        }
         if !(role == "user" || role == "assistant")
             || message.get("display_kind").and_then(Value::as_str) == Some("hidden")
         {
@@ -285,7 +337,19 @@ pub fn call_lines(messages: &[Dict]) -> (Vec<(String, String)>, Vec<String>) {
             lines.push((role.to_string(), pystr::head(&text, LINE_CHARS)));
         }
     }
+    lines.extend(said.map(|(_, line)| ("assistant".to_string(), line.clone())));
     (lines, media)
+}
+
+/// The agent's lines that are Hermes' own halts, in plain words (the record, the recap, the push read them).
+pub fn halts_in_plain_words(lines: Vec<(String, String)>, lang: &str) -> Vec<(String, String)> {
+    lines
+        .into_iter()
+        .map(|(role, text)| match crate::hermes_halts::in_plain_words(&text, lang).filter(|_| role == "assistant") {
+            Some(plain) => (role, plain),
+            None => (role, text),
+        })
+        .collect()
 }
 
 /// A turn of the call is going on: the last message is the person's, a tool's, or the agent calling a tool.
@@ -419,6 +483,7 @@ pub async fn end_call(state: &AppState, ending: Ending) -> Option<Value> {
 
 async fn end_inner(state: &AppState, ending: &Ending) -> anyhow::Result<Option<Value>> {
     let agent = &ending.agent;
+    let lang = crate::handback::language_of(&state.config(), agent);
     let calls = LiveCalls::of(&state.briefs);
     let opened = calls.take_open(&agent.name, &ending.live_session);
     let started_hermes = match state.hermes.session(agent, &ending.live_session).await {
@@ -452,7 +517,8 @@ async fn end_inner(state: &AppState, ending: &Ending) -> anyhow::Result<Option<V
     let mut late = false;
     if still_running(state, ending).await {
         if let Ok(messages) = state.hermes.session_messages(agent, &ending.live_session).await {
-            let (lines, media) = call_lines(&messages);
+            let (lines, media) = call_lines_with(&messages, &said_in(&agent.name, &ending.live_session));
+            let lines = halts_in_plain_words(lines, &lang);
             if lines.iter().any(|(role, _)| role == "user") {
                 calls.keep(&agent.name, &ending.session, build(&lines, &media, true, false, recapped))?;
                 told(state, ending).await;
@@ -474,10 +540,17 @@ async fn end_inner(state: &AppState, ending: &Ending) -> anyhow::Result<Option<V
 
     let messages = match state.hermes.session_messages(agent, &ending.live_session).await {
         Ok(m) => m,
-        Err(HermesError::Http { status: 404 | 410, .. }) => return Ok(None), // the call's session is gone
+        Err(HermesError::Http { status: 404 | 410, .. }) => {
+            forget_said(&agent.name, &ending.live_session);
+            return Ok(None); // the call's session is gone
+        }
         Err(err) => return Err(err.into()),
     };
-    let (lines, media) = call_lines(&messages);
+    // what the brake said out loud (live_turns.rs) in its place: what the person heard
+    let (lines, media) = call_lines_with(&messages, &said_in(&agent.name, &ending.live_session));
+    forget_said(&agent.name, &ending.live_session);
+    // Hermes' own halt as the agent's last words (« I stopped retrying… »): the plain line the call said (hermes_halts.rs)
+    let lines = halts_in_plain_words(lines, &lang);
     if !lines.iter().any(|(role, _)| role == "user") && media.is_empty() {
         return Ok(None); // the person said nothing (as the apps did: no recap then)
     }
@@ -785,6 +858,58 @@ mod tests {
 
     fn m(v: Value) -> Dict {
         v.as_object().unwrap().clone()
+    }
+
+    /// 20/11: Alex's call record ended on Hermes' guard line, in English.
+    #[test]
+    fn hermes_halt_as_the_last_words_of_a_call_is_plain() {
+        let messages = vec![
+            m(json!({"role": "user", "content": "Tu peux me trouver un jeu de DJ sur PS1 ?"})),
+            m(json!({"role": "assistant", "content": "I stopped retrying because I kept running web_search 50 times without \
+making progress. The last result above shows what blocked it. Tell me how you'd like to proceed, or send `continue` and \
+I'll try a different approach."})),
+        ];
+        let lines = halts_in_plain_words(call_lines(&messages).0, "fr");
+        assert!(lines[1].1.starts_with("J'ai fait beaucoup de recherches sur le web sans trouver de réponse sûre."));
+        // the person's own words, even quoting it, as they are
+        let quoted = vec![("user".to_string(), "I stopped retrying because I kept running web_search 2 times without making progress".to_string())];
+        assert_eq!(halts_in_plain_words(quoted.clone(), "fr"), quoted);
+    }
+
+    /// Review 20/11: what the brake said out loud is the call's record, in its place; Hermes' « Operation
+    /// interrupted… » after the brake's stop left out, a person's own stop (no brake line before) kept as it was.
+    #[test]
+    fn what_the_brake_said_in_a_call_is_in_its_record() {
+        let messages = vec![
+            m(json!({"role": "user", "content": "Tu peux me trouver un jeu de DJ sur PS1 ?", "timestamp": 100.0})),
+            m(json!({"role": "assistant", "content": "Laisse-moi vérifier sur le web.", "timestamp": 101.0})),
+            m(json!({"role": "assistant", "content": "Operation interrupted: waiting for model response (0.3s elapsed).",
+                     "timestamp": 110.5})),
+            m(json!({"role": "user", "content": "Bon, laisse tomber. Stop.", "timestamp": 120.0})),
+            m(json!({"role": "assistant", "content": "Operation interrupted: waiting for model response (2.0s elapsed).",
+                     "timestamp": 125.0})),
+        ];
+        let line = "Je n'arrive pas à chercher sur le web pour l'instant. Tu veux que je réessaie plus tard ?";
+        let (lines, _) = call_lines_with(&messages, &[(110.0, line.to_string())]);
+        let texts: Vec<&str> = lines.iter().map(|(_, t)| t.as_str()).collect();
+        assert_eq!(texts, vec![
+            "Tu peux me trouver un jeu de DJ sur PS1 ?",
+            "Laisse-moi vérifier sur le web.",
+            line,
+            "Bon, laisse tomber. Stop.",
+            "Operation interrupted: waiting for model response (2.0s elapsed).",
+        ]);
+        assert_eq!(lines[2].0, "assistant");
+        // said after everything Hermes kept: at the end
+        let (lines, _) = call_lines_with(&messages[..2], &[(200.0, line.to_string())]);
+        assert_eq!(lines.last().unwrap().1, line);
+        // nothing said: as before
+        assert_eq!(call_lines_with(&messages, &[]), call_lines(&messages));
+        // kept per call until the call is in its conversation
+        brake_said("vie", "api_said_test", line);
+        assert_eq!(said_in("vie", "api_said_test").len(), 1);
+        forget_said("vie", "api_said_test");
+        assert!(said_in("vie", "api_said_test").is_empty());
     }
 
     #[test]
