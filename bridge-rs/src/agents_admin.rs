@@ -3057,6 +3057,77 @@ pub async fn move_into_space(state: &AppState, agent: &AgentConfig, keep_hub: bo
     Ok(moved)
 }
 
+/// The way back of an agent of its own space into the shared hub (own_space_back.rs), by itself: its profile copied
+/// back while its space keeps serving (spaces.rs `copy_back`), its conversations copied once more just before the
+/// switch when no turn goes on in its space (what one added meanwhile), the switch (its section rewritten: the commit
+/// point; a restart before it finds the agent in its space as it was), then its sandbox's files, its tools and its
+/// credentials in the hub (`settle_back_locked`). The space is left running: the caller removes it once its last turn
+/// there ended. Returns the agent in the hub, and whether all of it settled (else the bridge's next start does it).
+pub async fn move_back_to_hub(state: &AppState, agent: &AgentConfig) -> ApiResult<(AgentConfig, bool)> {
+    let _guard = LOCK.lock().await;
+    let run = default_run();
+    let spaces = crate::spaces::Spaces::new(run.clone());
+    let config = state.config();
+    let back = match spaces.copy_back(&config, agent, &state.http).await {
+        Ok(back) => back,
+        Err(exc) => {
+            if let Some(e) = exc.downcast_ref::<crate::spaces::SpaceError>() {
+                return Err(HttpError::new(409, e.0.clone()));
+            }
+            tracing::warn!(target: "bipbridge::agents", agent = %agent.name, error = %tail(&exc.to_string(), 200), "move back into the shared hub failed");
+            return Err(HttpError::new(502, "the agent could not come back into the shared hub"));
+        }
+    };
+    if state.hub.agent_runs_at(&agent.name, &agent.hermes_url) == 0 {
+        let source = profile_folder(&config, agent);
+        let target = crate::spaces::hub_profile(&config, &agent.name);
+        let id = crate::spaces::hub_profile_id(&config, &agent.name);
+        let copied = tokio::task::spawn_blocking(move || crate::spaces::resync_database(&source, &target, &id)).await;
+        if !matches!(copied, Ok(Ok(()))) {
+            tracing::warn!(target: "bipbridge::agents", agent = %agent.name, "its conversations not copied once more before the switch");
+        }
+    }
+    if let Err(exc) = save_agent(&state.config, &back) {
+        tracing::warn!(target: "bipbridge::agents", agent = %agent.name, error = %exc, "the switch back to the hub not saved: it stays in its space");
+        if let Err(clear) = spaces.clear_hub_copy(&config, &agent.name).await {
+            tracing::warn!(target: "bipbridge::agents", agent = %agent.name, error = %clear, "the hub's copy not deleted");
+        }
+        return Err(exc.into());
+    }
+    let (back, settled) = settle_back_locked(state, back, &run).await;
+    Ok((back, settled))
+}
+
+/// After the switch back to the hub (`move_back_to_hub`, or the bridge's start after a way back cut off): its
+/// sandbox's files mounted for its hub profile, its tools given there, its credentials in its hub profile's Hermes
+/// vault (vault.rs `held_again`). Each step can be done again. Returns the agent as the bridge serves it, and whether
+/// every step went through.
+pub async fn settle_back(state: &AppState, back: AgentConfig) -> (AgentConfig, bool) {
+    let _guard = LOCK.lock().await;
+    settle_back_locked(state, back, &default_run()).await
+}
+
+async fn settle_back_locked(state: &AppState, back: AgentConfig, run: &Run) -> (AgentConfig, bool) {
+    let mut settled = true;
+    let back = match mount_uploads(&state.config, &back, run, true).await {
+        Ok(mounted) => mounted,
+        Err(exc) => {
+            tracing::warn!(target: "bipbridge::agents", agent = %back.name, error = %tail(&exc.to_string(), 200), "uploads not mounted in the hub's sandbox of the agent back");
+            settled = false;
+            back
+        }
+    };
+    if let Err(exc) = give_tools(&state.config(), &back, run).await {
+        tracing::warn!(target: "bipbridge::agents", agent = %back.name, error = %tail(&exc.to_string(), 200), "tools not given to the agent back in the hub");
+        settled = false;
+    }
+    if let Err(exc) = state.vault.held_again(&state.config(), &back).await {
+        tracing::warn!(target: "bipbridge::agents", agent = %back.name, error = %format!("{exc:#}"), "the agent back in the hub: its credentials not written there yet");
+        settled = false;
+    }
+    (back, settled)
+}
+
 async fn remove(State(state): State<AppState>, UrlPath(agent_id): UrlPath<String>) -> ApiResult<Response> {
     remove_agent(state, agent_id).await
 }

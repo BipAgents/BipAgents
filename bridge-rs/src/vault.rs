@@ -1401,6 +1401,55 @@ impl Vault {
         self.copy_ready_noted(config, agent).await.map(|_| ())
     }
 
+    /// An agent back in the shared hub (own_space_back.rs): what it holds, in its hub profile's Hermes vault. A place
+    /// whose copies are in memory rebuilds its copy from the master copy (`copies_ready_for`: nothing of its space's
+    /// copy is read). Elsewhere its Hermes vault came with its profile (as on the way out): each item its listing
+    /// misses is written again from the master copy, with a new handle, never twice. Returns how many were written.
+    pub async fn held_again(&self, config: &Config, agent: &AgentConfig) -> anyhow::Result<usize> {
+        if crate::hermes_copies::in_memory(config) {
+            self.copies_ready_for(config, agent).await?;
+            return Ok(0);
+        }
+        let _lock = self.lock.lock().await;
+        let mut records = self.read()?;
+        let handle_of = |record: &Dict| -> Option<String> {
+            let handle = record.get("agents")?.get(&agent.name)?.as_str()?;
+            (!handle.is_empty() && handle != CARD_HANDLE).then(|| handle.to_string())
+        };
+        let held: Vec<(usize, String)> =
+            records.iter().enumerate().filter_map(|(i, r)| Some((i, handle_of(r)?))).collect();
+        if held.is_empty() {
+            return Ok(0);
+        }
+        let mut request = Dict::new();
+        request.insert("op".into(), json!("list"));
+        let answer = (self.run)(vault_target(config, agent), request).await?;
+        let listed: std::collections::HashSet<String> = Self::listed(&answer).into_iter().map(|(id, _, _)| id).collect();
+        let mut again = 0;
+        let mut failed = None;
+        for (i, handle) in held {
+            if listed.contains(&handle) {
+                continue;
+            }
+            match self.give(config, &mut records[i], std::slice::from_ref(agent)).await {
+                Ok(()) => again += 1,
+                Err(exc) => {
+                    failed = Some(exc);
+                    break;
+                }
+            }
+        }
+        if again > 0 {
+            self.write(&records)?; // the new handles, those written before a failure too
+            tracing::info!(target: "bipbridge::vault", agent = %agent.name, items = again,
+                "vault: items written again into the agent's Hermes vault in the shared hub");
+        }
+        match failed {
+            Some(exc) => Err(exc),
+            None => Ok(again),
+        }
+    }
+
     /// [`Self::copy_ready_locked`], its failure noted ([`crate::hermes_copies::failed`]).
     async fn copy_ready_noted(&self, config: &Config, agent: &AgentConfig) -> anyhow::Result<CopyReady> {
         let done = self.copy_ready_locked(config, agent).await;

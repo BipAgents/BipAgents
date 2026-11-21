@@ -127,6 +127,7 @@ pub mod profile_files;
 pub mod skill_library;
 /// A hub agent moves into its own space by itself the first time it needs to keep a secret.
 pub mod own_space;
+pub mod own_space_back;
 pub mod peers;
 pub mod beneath;
 pub mod sandbox;

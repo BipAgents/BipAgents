@@ -348,6 +348,7 @@ impl AppState {
         // an agent's Hermes restarted when there is a reason, once idle (agent_restart.rs)
         self.spawn(crate::agent_restart::run_forever(self.clone()));
         self.spawn(crate::own_space::tidy_at_start(self.clone())); // others-facing agents left in the hub: out, once
+        self.spawn(crate::own_space_back::at_start(self.clone())); // agents out only because others talk to them: back
         self.spawn(crate::agent_shares::drop_relative_conversations(self.clone())); // personal shares read-only (12/11)
         self.spawn(crate::phone_exit::serve(self.clone())); // the phone exit's socket for the agents' proxy (off by default)
         if self.sleep.enabled() {

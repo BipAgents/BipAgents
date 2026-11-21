@@ -21,8 +21,8 @@
 //! **Since 21/11** (Alex: « tout ce qui vient de quelqu'un d'autre tourne en tour d'invité ») an agent other people
 //! talk to (the family's agent, an agent shared with a relative, one another household's agents write to) gets their
 //! messages as guest turns (Hermes patch 0018: no terminal, files, vault, browser) and stays in the hub: no ~250 MB
-//! space for it. Only a project agent leaves it (vault.rs `hub_breakers`: its guests' turns are its own); as long as
-//! the hub hosts one, the move above is what happens, as before; the credentials already kept in the hub stay there
+//! space for it (one that moved out before comes back by itself, own_space_back.rs). Only a project agent leaves it
+//! (vault.rs `hub_breakers`: its guests' turns are its own); as long as the hub hosts one, the move above is what happens, as before; the credentials already kept in the hub stay there
 //! (logged at start and at each move, `Vault::warn_hub_holders`) until their agent moves or the person takes them
 //! back. The trade-off, plainly: one of the person's agents tricked by what it read could reach another of their
 //! agents' passwords; it costs no ~250 MB container per agent.
@@ -82,7 +82,7 @@ another way to give you the password), and call again later.";
 static LOCKS: LazyLock<Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>> = LazyLock::new(Default::default);
 static FAILURES: LazyLock<Mutex<HashMap<String, Instant>>> = LazyLock::new(Default::default);
 
-fn lock_of(agent: &str) -> Arc<tokio::sync::Mutex<()>> {
+pub(crate) fn lock_of(agent: &str) -> Arc<tokio::sync::Mutex<()>> {
     LOCKS.lock().unwrap_or_else(|e| e.into_inner()).entry(agent.to_string()).or_default().clone()
 }
 

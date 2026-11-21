@@ -293,6 +293,46 @@ pub fn hub_profile(config: &Config, agent: &str) -> PathBuf {
     hub.join("profiles").join(agent)
 }
 
+/// The profile's home as the hub's Hermes names it (`hermes_profile_id` for the hub: inside its container when it runs
+/// in one, `[hermes] container_home`).
+pub fn hub_profile_id(config: &Config, agent: &str) -> String {
+    if !config.hermes.container_home.is_empty() {
+        return format!("{}/profiles/{agent}", config.hermes.container_home);
+    }
+    let profiles = hub_profile(config, agent).parent().map(Path::to_path_buf).unwrap_or_default();
+    std::fs::canonicalize(&profiles).unwrap_or(profiles).join(agent).to_string_lossy().into_owned()
+}
+
+/// Hermes' mark of a deleted profile (`profiles/.deleted/<name>`, hermes_constants.py `profile_tombstone_path`): while
+/// it is there, Hermes never serves that name.
+fn tombstone(config: &Config, agent: &str) -> PathBuf {
+    let profiles = hub_profile(config, agent).parent().map(Path::to_path_buf).unwrap_or_default();
+    profiles.join(".deleted").join(agent)
+}
+
+/// `agent`'s configuration once the shared hub serves it again: its section as the app's own agents have it
+/// (agents_admin.rs `claim_profile`), its key, name, voice and the rest kept.
+pub fn in_hub_again(config: &Config, agent: &AgentConfig) -> AgentConfig {
+    let folder = hub_profile(config, &agent.name);
+    let uploads = folder.join("uploads").to_string_lossy().into_owned();
+    let mut back = agent.clone();
+    back.hermes_url = format!("{}/p/{}", config.hermes.hub_url, agent.name);
+    back.public_url = crate::agents_admin::public_agent_url(config, &agent.name);
+    back.isolated = false;
+    back.sandboxed = false;
+    back.space = None;
+    back.python = Vec::new();
+    back.hermes_root = None;
+    back.hermes_home = None;
+    back.upload_dir_container = Some(if config.hermes.container_home.is_empty() {
+        uploads.clone()
+    } else {
+        format!("{}/profiles/{}/uploads", config.hermes.container_home, agent.name)
+    });
+    back.upload_dir_host = Some(uploads);
+    back
+}
+
 /// `shutil.which(name)`: an executable of that name on the PATH.
 pub fn which(name: &str) -> Option<PathBuf> {
     use std::os::unix::fs::PermissionsExt;
@@ -587,6 +627,89 @@ impl Spaces {
             BTreeMap::from([("HERMES_HOME".to_string(), config.hermes.home.clone())])
         };
         self.run(&[&config.hermes.bin, "profile", "delete", agent, "--yes"], hub_env).await?;
+        Ok(())
+    }
+
+    /// The way back (own_space_back.rs): an agent of its own space served by the shared hub again, the space still
+    /// running. Its profile copied into the hub as the move copied it out (its database through SQLite's backup,
+    /// consistent while the space keeps serving; runtime files and, on a place whose Hermes copies are in memory, its
+    /// vault left out), its API conversations made the hub's (`rebind_api_sessions`), Hermes' tombstone of it taken
+    /// away and the copy published with one rename (Hermes builds a profile the same way: a running hub never adopts
+    /// half a copy). A copy the hub still has (its delete after the move never done, a way back cut off) is deleted
+    /// first (`clear_hub_copy`). Returns its configuration in the hub once the hub serves it (not saved: the caller
+    /// switches the bridge, then removes the space with `remove`); the hub's copy deleted again when the hub won't
+    /// serve it.
+    pub async fn copy_back(
+        &self,
+        config: &Config,
+        agent: &AgentConfig,
+        http: &reqwest::Client,
+    ) -> anyhow::Result<AgentConfig> {
+        let Some(root) = agent.space.as_deref().filter(|s| !s.is_empty()).map(PathBuf::from) else {
+            return Err(SpaceError(format!("{} has no space of its own", agent.name)).into());
+        };
+        let source = root.join("profiles").join(&agent.name);
+        if !source.is_dir() {
+            return Err(SpaceError("its space has no profile".into()).into());
+        }
+        let target = hub_profile(config, &agent.name);
+        self.clear_hub_copy(config, &agent.name).await?;
+        let profiles = target.parent().map(Path::to_path_buf).unwrap_or_default();
+        std::fs::create_dir_all(&profiles)?;
+        let staging = profiles.join(format!(".{}.bip-back", agent.name)); // a dot first: no profile id, never served
+        if staging.exists() {
+            std::fs::remove_dir_all(&staging)?;
+        }
+        let not_copied = &crate::hermes_copies::NOT_COPIED;
+        let except: Vec<&'static str> =
+            if crate::hermes_copies::in_memory(config) { not_copied.to_vec() } else { not_copied[1..].to_vec() };
+        let profile_id = hub_profile_id(config, &agent.name);
+        let (from, to) = (source.clone(), staging.clone());
+        let copied = tokio::task::spawn_blocking(move || -> anyhow::Result<usize> {
+            copy_profile_except(&from, &to, &except)?;
+            Ok(rebind_api_sessions(&to, &profile_id)?)
+        })
+        .await?;
+        let rebound = match copied {
+            Ok(rebound) => rebound,
+            Err(exc) => {
+                let _ = std::fs::remove_dir_all(&staging);
+                return Err(exc);
+            }
+        };
+        if rebound > 0 {
+            tracing::info!(agent = %agent.name, conversations = rebound, "its API conversations made the hub's again");
+        }
+        let _ = std::fs::remove_file(tombstone(config, &agent.name));
+        std::fs::rename(&staging, &target)?;
+        let back = in_hub_again(config, agent);
+        if let Err(exc) = crate::agents_admin::wait_served(http, &back, false).await {
+            tracing::warn!(agent = %agent.name, error = %exc, "the hub did not serve the agent back: its copy deleted, it stays in its space");
+            if let Err(forget) = self.forget_in_hub(config, &agent.name).await {
+                tracing::warn!(agent = %agent.name, error = %forget, "the hub's copy not deleted: tried again later");
+                self.forget_later(config, &agent.name);
+            }
+            return Err(SpaceError("the hub did not serve it".into()).into());
+        }
+        tracing::info!(agent = %agent.name, "agent copied back into the shared hub");
+        Ok(back)
+    }
+
+    /// A copy of `agent` the hub has: deleted through Hermes (it stops serving it first), or removed when Hermes had
+    /// already marked it deleted. Err when it is still there.
+    pub async fn clear_hub_copy(&self, config: &Config, agent: &str) -> anyhow::Result<()> {
+        let target = hub_profile(config, agent);
+        if !target.exists() {
+            return Ok(());
+        }
+        if tombstone(config, agent).exists() {
+            std::fs::remove_dir_all(&target)?;
+        } else if let Err(exc) = self.forget_in_hub(config, agent).await {
+            tracing::warn!(agent = %agent, error = %exc, "the hub's copy of the agent not deleted");
+        }
+        if target.exists() {
+            return Err(SpaceError("the hub still has a copy of this agent".into()).into());
+        }
         Ok(())
     }
 

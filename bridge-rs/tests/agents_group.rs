@@ -185,6 +185,159 @@ async fn an_agent_moves_into_its_own_space_and_keeps_everything() {
     assert!(!space.exists() && config.get().agent(Some("budget")).is_none());
 }
 
+/// own_space_back.rs: an agent that left the hub only because other people talk to it comes back (Alex 21/11). Its
+/// space as the way out left it (its own .env, its profile with its conversations, memory and Hermes vault, runtime
+/// files); the hub's tombstone of it from that move.
+#[tokio::test]
+async fn an_agent_comes_back_into_the_hub_and_keeps_everything() {
+    let dir = tempfile::tempdir().unwrap();
+    let tmp = dir.path();
+    let hub = tmp.join(".hermes");
+    std::fs::create_dir_all(hub.join("profiles/.deleted")).unwrap();
+    std::fs::write(hub.join("profiles/.deleted/budget"), "deleted\n").unwrap(); // Hermes' mark from the move out
+    let space = tmp.join("spaces/budget");
+    let folder = space.join("profiles/budget");
+    for sub in ["memories", "vault", "sandboxes/s1", "uploads"] {
+        std::fs::create_dir_all(folder.join(sub)).unwrap();
+    }
+    std::fs::write(space.join(".env"), "API_SERVER_PORT=18660\nAPI_SERVER_KEY=space-key\n").unwrap();
+    std::fs::write(folder.join("memories/MEMORY.md"), "Aime les tableaux. Appris dans son espace.").unwrap();
+    std::fs::write(folder.join("SOUL.md"), "Tu es Budget.").unwrap();
+    std::fs::write(folder.join("config.yaml"), "terminal:\n  backend: docker\ngateway:\n  strict: true\n").unwrap();
+    std::fs::write(folder.join("vault/vault.json.enc"), "its Hermes vault").unwrap();
+    std::fs::write(folder.join("gateway.pid"), "123").unwrap(); // its space's running gateway: never copied
+    std::fs::write(folder.join("uploads/releve.pdf"), "%PDF").unwrap();
+    let space_id = std::fs::canonicalize(&folder).unwrap().to_string_lossy().into_owned();
+    {
+        let db = rusqlite::Connection::open(folder.join("state.db")).unwrap();
+        db.execute_batch(
+            "create table messages (content text); insert into messages values ('bonjour'), ('vu depuis mon espace');
+             create table state_meta (key text primary key, value text);",
+        )
+        .unwrap();
+        let receipt = json!({"profile_id": space_id, "session_id": "api_1", "route": "agent:main:api_server:dm:api_1",
+                             "entry": {"session_id": "api_1"}});
+        db.execute(
+            "insert into state_meta values (?1, ?2)",
+            rusqlite::params![format!("{}api_1", bipbridge::spaces::API_BINDING_PREFIX), receipt.to_string()],
+        )
+        .unwrap();
+    }
+    let config_path = tmp.join("bridge.toml");
+    std::fs::write(&config_path, "# bridge\n").unwrap();
+    let mut d = config_dict(tmp, &Urls::default());
+    d["hermes"] = json!({"bin": "/opt/hermes", "home": s(&hub), "hub_url": "http://127.0.0.1:8642",
+                         "python": "/opt/py -I", "root": "/opt/hermes-agent", "isolated": true});
+    d["spaces"] = json!({"root": s(&tmp.join("spaces")), "first_port": 18660, "sandbox": "none",
+                         "start": "start-space {agent} {home}", "stop": "stop-space {agent}"});
+    d["agents"]["Budget"] = json!({"hermes_url": "http://127.0.0.1:18660/p/budget", "hermes_key": "b".repeat(32),
+                                   "isolated": true, "sandboxed": true, "space": s(&space), "python": ["/opt/py", "-I"],
+                                   "hermes_home": s(&folder), "upload_dir_host": s(&folder.join("uploads")),
+                                   "upload_dir_container": s(&folder.join("uploads"))});
+    let config = SharedConfig::new(parse_config(&d, Some(&s(&config_path))).unwrap());
+    let before = config.get().agent(Some("budget")).unwrap().clone();
+    // `hermes profile delete` as Hermes does it: its folder gone, its tombstone written
+    let deleted = hub.clone();
+    let (run, commands) = recorder_with(move |args| {
+        if args.get(1..3) == Some(&["profile".to_string(), "delete".to_string()][..]) {
+            let _ = std::fs::remove_dir_all(deleted.join("profiles").join(&args[3]));
+            std::fs::write(deleted.join("profiles/.deleted").join(&args[3]), "deleted\n").unwrap();
+        }
+        String::new()
+    });
+    // the hub, reached through a proxy: it serves the agent with its own key
+    let keys: Arc<Mutex<Vec<String>>> = Arc::default();
+    let seen = keys.clone();
+    let gateway = common::spawn_fake(Router::new().fallback(any(move |request: Request| {
+        let seen = seen.clone();
+        async move {
+            let key = request.headers().get("authorization").unwrap().to_str().unwrap().to_string();
+            seen.lock().unwrap().push(format!("{} {key}", request.uri()));
+            axum::Json(json!({}))
+        }
+    })))
+    .await;
+    let http = reqwest::Client::builder().proxy(reqwest::Proxy::http(&gateway).unwrap()).build().unwrap();
+    let spaces = bipbridge::spaces::Spaces::new(run.clone());
+    let back = spaces.copy_back(&config.get(), &before, &http).await.unwrap();
+    assert_eq!(
+        keys.lock().unwrap().last().unwrap(),
+        &format!("http://127.0.0.1:8642/p/budget/v1/capabilities Bearer {}", "b".repeat(32))
+    );
+    // its section as the hub's agents have it, the rest kept
+    assert_eq!(back.hermes_url, "http://127.0.0.1:8642/p/budget");
+    assert!(!back.isolated && !back.sandboxed && back.space.is_none() && back.python.is_empty());
+    assert!(back.hermes_home.is_none() && back.hermes_root.is_none());
+    let copied = hub.join("profiles/budget");
+    assert_eq!(back.upload_dir_host.as_deref(), Some(&*s(&copied.join("uploads"))));
+    assert_eq!(back.upload_dir_container.as_deref(), Some(&*s(&copied.join("uploads"))));
+    assert_eq!((back.hermes_key.as_str(), back.display_name.as_str()), (before.hermes_key.as_str(), before.display_name.as_str()));
+    // its memory, personality, files and Hermes vault (not a place whose copies are in memory) with it
+    assert_eq!(
+        std::fs::read_to_string(copied.join("memories/MEMORY.md")).unwrap(),
+        "Aime les tableaux. Appris dans son espace."
+    );
+    assert_eq!(std::fs::read_to_string(copied.join("SOUL.md")).unwrap(), "Tu es Budget.");
+    assert_eq!(std::fs::read_to_string(copied.join("vault/vault.json.enc")).unwrap(), "its Hermes vault");
+    assert_eq!(std::fs::read_to_string(copied.join("uploads/releve.pdf")).unwrap(), "%PDF");
+    assert!(!copied.join("gateway.pid").exists() && !copied.join("sandboxes").exists());
+    // its conversations, the API ones the hub's again
+    {
+        let db = rusqlite::Connection::open(copied.join("state.db")).unwrap();
+        let rows: Vec<String> = db
+            .prepare("select content from messages")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert_eq!(rows, ["bonjour", "vu depuis mon espace"]);
+        let value: String = db.query_row("select value from state_meta", [], |r| r.get(0)).unwrap();
+        let receipt: Value = serde_json::from_str(&value).unwrap();
+        let hub_id = std::fs::canonicalize(&copied).unwrap().to_string_lossy().into_owned();
+        assert_eq!(receipt["profile_id"], json!(hub_id));
+        assert_eq!(receipt["route"], json!("agent:main:api_server:dm:api_1"));
+    }
+    // Hermes serves the name again: its tombstone gone, nothing half copied left beside it
+    assert!(!hub.join("profiles/.deleted/budget").exists());
+    let mut left: Vec<String> = std::fs::read_dir(hub.join("profiles"))
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    left.sort();
+    assert_eq!(left, [".deleted", "budget"]);
+    // its space still serves it until the bridge switches: nothing stopped, nothing deleted
+    assert!(space.join("profiles/budget/SOUL.md").exists());
+    assert!(args(&commands).is_empty(), "{:?}", args(&commands));
+
+    // Again, as after a restart that cut a way back off: the hub's copy deleted through Hermes first, then the space's
+    // copy taken again (what it learned since included).
+    std::fs::write(folder.join("memories/MEMORY.md"), "Aime les tableaux. Et les graphiques.").unwrap();
+    std::fs::write(copied.join("memories/MEMORY.md"), "a copy the hub had").unwrap();
+    let again = spaces.copy_back(&config.get(), &before, &http).await.unwrap();
+    assert_eq!(again, back);
+    assert_eq!(args(&commands), [strs(&["/opt/hermes", "profile", "delete", "budget", "--yes"])]);
+    assert_eq!(commands.lock().unwrap()[0].1, BTreeMap::from([("HERMES_HOME".into(), s(&hub))]));
+    assert_eq!(
+        std::fs::read_to_string(copied.join("memories/MEMORY.md")).unwrap(),
+        "Aime les tableaux. Et les graphiques."
+    );
+    assert!(!hub.join("profiles/.deleted/budget").exists());
+
+    // The bridge switches: its section rewritten as the hub's agents have it, then its space stopped and removed.
+    agents_admin::save_agent(&config, &back).unwrap();
+    let text = std::fs::read_to_string(&config_path).unwrap();
+    assert!(!text.contains("space = ") && !text.contains("isolated = true") && text.contains("hermes_url = \"http://127.0.0.1:8642/p/budget\""), "{text}");
+    let c = config.get();
+    assert!(bipbridge::vault::in_hub(&c, c.agent(Some("budget")).unwrap()));
+    assert_eq!(agents_admin::profile_folder(&c, &back), copied);
+    commands.lock().unwrap().clear();
+    let from = bipbridge::config::AgentConfig { name: "budget".into(), space: Some(s(&space)), ..Default::default() };
+    spaces.remove(&c, &from).await.unwrap();
+    assert!(args(&commands)[0][2].contains("stop-space budget"));
+    assert!(!space.exists() && copied.join("SOUL.md").exists());
+}
+
 // -- own skills -------------------------------------------------------------------------------------------------------
 
 fn skill(folder: &Path, name: &str, description: &str, frontmatter: bool) {
