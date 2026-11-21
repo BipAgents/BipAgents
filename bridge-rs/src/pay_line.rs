@@ -70,7 +70,7 @@ pub fn record(file: &Path, line: &Value) {
 
 /// A call the line may belong to: a payment tool, by its own name or by the one the tool search's `tool_call` wraps
 /// (the Link tools are reached through it: tool_diet.rs keeps only `bipagents_pay` direct; the hub reads the wrapped
-/// call's name, runs.rs `wrapped_tool`, never « any tool_call »: Relecture 2, 5). Only one turn of the agent inside
+/// calls' names, runs.rs `wrapped_names`, never « any tool_call »: Relecture 2, 5). Only one turn of the agent inside
 /// such a call counts (`turn_of_call`): never another conversation's.
 fn in_pay_call(name: &str) -> bool {
     is_pay_tool(name)
@@ -319,12 +319,13 @@ mod tests {
         assert!(!in_pay_call("tool_call") && !in_pay_call("browser_click"));
         let wrapped = |args: Value| {
             let Value::Object(data) = json!({"tool": "tool_call", "args": args}) else { unreachable!() };
-            crate::runs::wrapped_tool(&data)
+            crate::runs::wrapped_names(&data)
         };
-        assert_eq!(wrapped(json!({"calls": [{"name": "mcp_bipagents_link_cancel_payment", "arguments": {}}]})), "link_cancel_payment");
-        assert!(in_pay_call(&wrapped(json!({"name": "mcp__bipagents_link__pay_with_link"}))));
-        assert_eq!(wrapped(json!({"calls": [{"name": "a"}, {"name": "b"}]})), "");
-        assert_eq!(wrapped(json!(r#"{"calls": [{"name": "mcp_bipagents_link_confirm_payment"}]}"#)), "link_confirm_payment");
+        assert_eq!(wrapped(json!({"calls": [{"name": "mcp_bipagents_link_cancel_payment", "arguments": {}}]})), ["link_cancel_payment"]);
+        assert!(wrapped(json!({"name": "mcp__bipagents_link__pay_with_link"})).iter().any(|name| in_pay_call(name)));
+        // several calls at once: the run is inside each of them (still that one turn)
+        assert_eq!(wrapped(json!({"calls": [{"name": "a"}, {"name": "b"}]})), ["a", "b"]);
+        assert_eq!(wrapped(json!(r#"{"calls": [{"name": "mcp_bipagents_link_confirm_payment"}]}"#)), ["link_confirm_payment"]);
     }
 
     #[test]
