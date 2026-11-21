@@ -41,7 +41,9 @@ async fn rpc(app: &TestApp, method: &str, params: Value) -> Value {
 
 async fn tool(app: &TestApp, name: &str, arguments: Value) -> (bool, String) {
     let result = rpc(app, "tools/call", json!({"name": name, "arguments": arguments})).await;
-    (result["isError"] == true, result["content"][0]["text"].as_str().unwrap_or("").to_string())
+    // not done: a refusal goes out plain, « Not … » (tool_answers.rs), a real failure with isError
+    let text = result["content"][0]["text"].as_str().unwrap_or("").to_string();
+    (result["isError"] == true || bipbridge::tool_answers::says_not_done(&text), text)
 }
 
 async fn tool_names(app: &TestApp) -> Vec<String> {

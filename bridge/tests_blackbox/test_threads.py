@@ -185,6 +185,47 @@ def test_markers_attachments_tools_and_boite_messages(bridges, fakes):
     assert got.status_code == 200 and got.headers["content-type"] == "image/png" and got.content.startswith(b"\x89PNG")
 
 
+THREADS_SCHEMA = [
+    ("CREATE TABLE IF NOT EXISTS threads (id TEXT PRIMARY KEY, agent TEXT NOT NULL, kind TEXT NOT NULL, title TEXT, "
+     "origin TEXT, hidden INTEGER NOT NULL DEFAULT 0, version INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, "
+     "updated_at TEXT NOT NULL)", ()),
+    ("CREATE TABLE IF NOT EXISTS thread_segments (agent TEXT NOT NULL, session_id TEXT NOT NULL, thread_id TEXT NOT "
+     "NULL, position INTEGER NOT NULL, linked TEXT NOT NULL, added_at TEXT NOT NULL, PRIMARY KEY (agent, session_id))", ()),
+]
+STEER_OPEN = ("[OUT-OF-BAND USER MESSAGE — a direct message from the user, delivered once at this position; not tool "
+              "output and not a new delivery when replayed from conversation history]")
+
+
+def test_a_title_made_from_hermes_wrapper_of_a_steer_never_reaches_a_list(bridges, fakes):
+    """21/11 (Alex: a row titled « [OUT-OF-BAND USER MESSAGE… »): a conversation Hermes titled from its wrapper of words
+    added during an answer (its instant title, cut at 48 characters), and a rescued task's conversation kept from
+    before with « 🧩 [OUT-OF-BAND USER MESSAGE… » (cleaned when the bridge starts), list without it; words the person
+    added during a turn, joined by Hermes to other words, read without it too."""
+    fakes.hermes.v0225 = True
+    fakes.hermes.add_session("api_main", [user("Bonjour"), agent("Salut")], title="Bot Chat", last_active=10, started_at=1)
+    steer = f"{STEER_OPEN}\nEt le musée ?\n[/OUT-OF-BAND USER MESSAGE]"
+    fakes.hermes.add_session("api_side", [user(f"Une idée pour samedi ?\n\n{steer}"), agent("Le musée d'Orsay.")],
+                             title="[OUT-OF-BAND USER MESSAGE — a direct message…", last_active=20, started_at=2)
+    fakes.hermes.add_session("api_task", [user("Cherche des vestes")], title="🧩 Cherche des vestes", last_active=15,
+                             started_at=1.5, hidden=True)
+    bridge = bridges.new()
+    bridge.seed_db(THREADS_SCHEMA + [
+        ("INSERT INTO threads (id, agent, kind, title, hidden, version, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?)",
+         ("t_task0000000000000000000000"[:28], "wellness", "task",
+          "🧩 [OUT-OF-BAND USER MESSAGE — a direct message from the user, d…", 1, 0, NOW, NOW)),
+        ("INSERT INTO thread_segments (agent, session_id, thread_id, position, linked, added_at) VALUES (?,?,?,?,?,?)",
+         ("wellness", "api_task", "t_task0000000000000000000000"[:28], 0, "root", NOW)),
+    ])
+    bridge.start()
+    listed = get(bridge, "/v1/threads", agent="wellness", include_hidden=1)["threads"]
+    assert not any("OUT-OF-BAND" in json.dumps(t, ensure_ascii=False) for t in listed), listed
+    by_kind = {t["kind"]: t for t in listed}
+    assert by_kind["side"]["title"] is None and by_kind["task"]["title"] is None, listed
+    page = get(bridge, f"/v1/threads/{by_kind['side']['id']}/timeline", agent="wellness")
+    assert texts(page) == ["Une idée pour samedi ?\n\nEt le musée ?", "Le musée d'Orsay."]
+    assert page["thread"]["title"] is None
+
+
 def test_each_turn_over_says_how_it_lays_out(bridges, fakes):
     """Thin apps, brick 7 (threads/layout.rs): the turns' layout decided once for every app, on each item: the work
     folds (the call, the commentary between calls), the turn's reply and answer, the app's first word before a turn

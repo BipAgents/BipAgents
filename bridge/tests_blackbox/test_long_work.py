@@ -15,7 +15,7 @@ import httpx
 import pytest
 
 from bbkit.common import AUTH, read_sse, sse, in_session, boite_items
-from bbkit.mcp import call, give_token, rpc, text_of
+from bbkit.mcp import call, give_token, not_done, rpc, text_of
 from bbkit.servers import wait_until
 
 # 0.20 € five times at home (jobs.rs HOME_BUDGET_SCALE) at 0.95 × 0.50 € + 0.05 × 1.50 € per million tokens
@@ -54,7 +54,7 @@ def test_start_task_starts_a_task_within_the_direct_budget(bridges, fakes):
     # conversation, which says its session: patch 0028)
     more = [call(bridge, "start_task", {"title": f"Autre {n}", "instructions": "Encore."}, session="api_person")
             for n in (2, 3, 4)]
-    assert [m["isError"] for m in more] == [False, False, True]
+    assert [not_done(m) for m in more] == [False, False, True]
     assert text_of(more[2]) == ("Not started: this agent already has three background tasks running. "
                                 "Propose it with propose_task instead, and tell your person so.")
     for one in jobs(bridge):
@@ -66,7 +66,7 @@ def test_start_task_refuses_more_than_the_direct_budget(bridges, fakes):
     give_token(bridge)
     fakes.hermes.rounds = 1000
     above = call(bridge, "start_task", {"title": "Grosse recherche", "instructions": "Cherche.", "budget_eur": 1.5})
-    assert above["isError"]
+    assert not_done(above)
     assert "more than the 1,818,181 tokens a task may take without your person's go" in text_of(above)
     assert "propose_task" in text_of(above)
     assert not fakes.hermes.seen("/v1/runs", "POST") and jobs(bridge) == []
@@ -84,7 +84,7 @@ def test_on_a_place_of_the_offer_the_direct_budget_is_told_in_euros(bridges, fak
     bridge.start()
     give_token(bridge)
     above = call(bridge, "start_task", {"title": "Grosse recherche", "instructions": "Cherche.", "budget_eur": 1.5})
-    assert above["isError"] and "more than the 0.20 € a task may take without your person's go" in text_of(above)
+    assert not_done(above) and "more than the 0.20 € a task may take without your person's go" in text_of(above)
     assert "tokens" not in text_of(above)
     assert not fakes.hermes.seen("/v1/runs", "POST") and jobs(bridge) == []
 
@@ -318,6 +318,56 @@ def test_a_steered_run_that_stops_without_handing_over_gets_its_task_started(bri
     assert bridge.logged("long run: the bridge started the background task")
     # replayed to an app that comes back
     assert [name for name, _ in follow(bridge, "run_r")][-2:] == ["bridge.notice", "run.completed"]
+    assert bridge.delete(f"/v1/jobs/{job['id']}", headers=AUTH).status_code == 200
+
+
+# Hermes v0.23.1's own wrapper of a steer (agent/prompt_builder.py `STEER_MARKER_OPEN`), as it stores one
+STEER_OPEN = ("[OUT-OF-BAND USER MESSAGE — a direct message from the user, delivered once at this position; not tool "
+              "output and not a new delivery when replayed from conversation history]")
+
+
+def steered(words):
+    """A steer as Hermes stores it: its own user row after the turn's tool results."""
+    return {"role": "user", "content": f"{STEER_OPEN}\n{words}\n[/OUT-OF-BAND USER MESSAGE]"}
+
+
+def test_a_rescued_task_takes_the_persons_words_never_hermes_wrapper(bridges, fakes):
+    """21/11, Alex's lock screen at night: a background task's Live Activity titled « [OUT-OF-BAND USER MESSAGE… »,
+    « Je cherche sur le web… » under it. The bridge had taken the session's last person row for the request: Hermes'
+    row of the instant line's note steered into the turn (20/11), an empty wrapper once the note was out (and before
+    that, the time line on top of every message). The task's title and request, the notice and the push now say what
+    the person asked, with what they added while it worked."""
+    bridge = with_device(bridges, {"handoff_tool_calls": 3})
+    fakes.hermes.rounds = 1000
+    now = "<!--bip:now samedi 21 novembre 2026, 01:44, Europe/Paris (UTC+01:00)-->"
+    line = ("<!--bip:answered The app already showed this at once, in your name, as the start of your reply: « Je "
+            "cherche des vestes en laine bleue. ». Continue from it.-->")
+    fakes.hermes.add_session("api_c", [
+        {"role": "user", "content": f"{now}\n{ASKED}\n\n<!--bip:answered The app is showing the person a short line.-->"},
+        {"role": "assistant", "content": "", "tool_calls": [{"id": "c1", "function": {"name": "web_search", "arguments": "{}"}}]},
+        {"role": "tool", "content": "trois vestes", "tool_call_id": "c1"},
+        steered(line),
+        steered("En noir plutôt\n\n<!--bip:answered The app already answered this message at once.-->"),
+        steered("[bipagents:handoff] This is long: hand the rest over to a background task"),
+    ])
+    fakes.hermes.runs["run_r"] = (tools("run_r", 4)
+                                  + [sse("message.delta", run_id="run_r", delta="Je continue en arrière-plan."),
+                                     sse("run.completed", run_id="run_r", output="Je continue en arrière-plan.")])
+    events = follow(bridge, "run_r")
+    assert [name for name, _ in events][-2:] == ["bridge.notice", "run.completed"]
+    notice = events[-2][1]
+    assert notice["code"] == "handoff_started", notice
+    assert notice["title"] == "Cherche-moi une veste en laine bleue, taille M, moins de 150…"
+    job = jobs(bridge)[0]
+    assert job["title"] == notice["title"]
+    assert f"« {ASKED}\nEn noir plutôt »" in job["prompt"], job["prompt"]
+    assert "<!--" not in job["title"] + job["prompt"], job
+    assert ASKED in fakes.hermes.started["r1"]["input"]
+    assert wait_until(lambda: fakes.apns.pushes())
+    row = bridge.get(f"/v1/notifications/{fakes.apns.payloads()[0]['n']}", headers=AUTH).json()
+    for said in (json.dumps(notice, ensure_ascii=False), json.dumps(job, ensure_ascii=False),
+                 json.dumps(row, ensure_ascii=False), fakes.hermes.started["r1"]["input"]):
+        assert "OUT-OF-BAND" not in said and "<!--bip:answered" not in said, said
     assert bridge.delete(f"/v1/jobs/{job['id']}", headers=AUTH).status_code == 200
 
 

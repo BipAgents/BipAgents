@@ -13,7 +13,7 @@ import json
 import yaml
 
 from bbkit.common import AUTH
-from bbkit.mcp import call, text_of
+from bbkit.mcp import call, not_done, text_of
 from test_mailbox import TOKEN, add_mailbox, mail_bridge
 
 IN_VIEW = ["mail_overview", "mail_search", "mail_read", "mail_bulk", "mail_draft"]
@@ -53,10 +53,10 @@ def test_mail_calls_that_ended_on_another_tools_name_reach_the_mailbox(bridges, 
     assert not found.get("isError") and f"{account}|INBOX|102" in text_of(found), found
     # an id map_image can't take and that is no mail's: no map, and what was meant
     refused = call(bridge, "map_image", {"id": "12"}, token=TOKEN)
-    assert refused["isError"] and "only draws maps" in text_of(refused), refused
+    assert not_done(refused) and "only draws maps" in text_of(refused), refused
     # a wrong id: its shape, with this mailbox's own example
     wrong = call(bridge, "mail_read", {"id": "102"}, token=TOKEN)
-    assert wrong["isError"] and f"{account}|INBOX|12" in text_of(wrong) and "« 102 »" in text_of(wrong), wrong
+    assert not_done(wrong) and f"{account}|INBOX|12" in text_of(wrong) and "« 102 »" in text_of(wrong), wrong
     # with mail_bulk in view, the lab's agent filed one sender per call until the brake: told to group them
     # (its domain written as a group id, as the lab's agent did: the domain all the same)
     one = text_of(call(bridge, "mail_bulk", {"action": "archive", "domain": "domain:shop.example"}, token=TOKEN))

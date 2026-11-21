@@ -11,6 +11,7 @@ import time
 
 import httpx
 
+from bbkit.mcp import not_done
 from bbkit.common import AUTH
 from bbkit.servers import wait_until
 from test_card_payments import (ARGS, FROM_PHONE_A, NUMBER, PAY, PHONE_CARD, TOKEN, FakeChrome, pay_bridge, pay_from_phone,
@@ -63,7 +64,7 @@ def test_kerfy_s_cut_wins_live_then_lifts_without_a_restart(bridges, fakes, tmp_
         listed = tool(bridge, "list_cards")
         assert SAID in listed["content"][0]["text"]
         refused = tool(bridge, "pay_with_card", ARGS)
-        assert refused["isError"] is True and SAID in refused["content"][0]["text"]
+        assert not_done(refused) and SAID in refused["content"][0]["text"]
         assert chrome.typed == []
         # {"offer_cards": true} is no cut; the file gone neither: as before, no restart.
         cut(switch, off=False)
@@ -103,7 +104,7 @@ def test_a_payment_waiting_for_the_person_is_refused_once_cut(bridges, fakes, tm
                     result = message["result"]
                     break
         assert approval.status_code == 409, approval.text
-        assert result["isError"] is True and SAID in result["content"][0]["text"], result
+        assert not_done(result) and SAID in result["content"][0]["text"], result
         assert chrome.typed == []
         assert overview(bridge)["journal"][0]["outcome"] == "suspended"
     finally:
@@ -145,7 +146,7 @@ def test_a_payment_typed_then_confirmed_before_the_watcher_looks_is_never_presse
         assert result["isError"] is False, result
         cut(switch)
         confirm = tool(bridge, "confirm_payment", {"button": "Payer 12,50 €"})   # read live, before the watcher
-        assert confirm["isError"] is True and SAID in confirm["content"][0]["text"], confirm
+        assert not_done(confirm) and SAID in confirm["content"][0]["text"], confirm
         assert chrome.clicks == [] and chrome.values[("F-psp", 0)] == ""
     finally:
         chrome.stop()
@@ -167,7 +168,7 @@ def test_a_cut_while_the_card_is_being_filled_tells_the_agent_the_cut(bridges, f
         result, _, answers = paid["result"]
         assert answers == [(204, "")]
         text = result["content"][0]["text"]
-        assert result["isError"] is True and SAID in text and "the person suspended" not in text, result
+        assert not_done(result) and SAID in text and "the person suspended" not in text, result
         assert chrome.typed == [] and chrome.clicks == []
     finally:
         chrome.stop()
@@ -197,7 +198,7 @@ def test_a_cut_between_confirm_s_first_check_and_the_press_presses_nothing(bridg
         chrome.armed = True
         confirm = tool(bridge, "confirm_payment", {"button": "Payer 12,50 €"})
         assert switch.exists(), "the pay button was never looked for"
-        assert confirm["isError"] is True and SAID in confirm["content"][0]["text"], confirm
+        assert not_done(confirm) and SAID in confirm["content"][0]["text"], confirm
         assert chrome.clicks == [] and chrome.values[("F-psp", 0)] == ""
     finally:
         chrome.stop()

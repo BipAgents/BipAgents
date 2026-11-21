@@ -9,7 +9,7 @@ import time
 from starlette.responses import JSONResponse
 
 from bbkit.common import AUTH, sse, boite_items
-from bbkit.mcp import call, give_token, media_of, text_of
+from bbkit.mcp import call, give_token, media_of, not_done, text_of
 from bbkit.servers import wait_until
 
 TOKEN = "c" * 64
@@ -64,8 +64,8 @@ def test_an_agents_routine_starts_with_the_persons_oui_to_its_card(bridges, fake
     # listed, not silent, OFF before any answer: nothing runs, not even through the agent
     job = jobs(bridge)["Archive du soir"]
     assert (job["state"], job["muted"], job["next_run_at"], job["waits_for_answer"]) == ("paused", False, None, True), job
-    assert call(bridge, "routine_schedule", {"action": "run", "name": "Archive du soir"})["isError"]
-    assert call(bridge, "routine_schedule", {"action": "resume", "name": "Archive du soir"})["isError"]
+    assert not_done(call(bridge, "routine_schedule", {"action": "run", "name": "Archive du soir"}))
+    assert not_done(call(bridge, "routine_schedule", {"action": "resume", "name": "Archive du soir"}))
     assert jobs(bridge)["Archive du soir"]["state"] == "paused" and len(routine_cards(bridge)) == 1
     time.sleep(0.5)
     assert not turns(fakes)
@@ -114,14 +114,14 @@ def test_an_agents_routine_shows_all_it_runs_and_a_non_deletes_it(bridges, fakes
     assert longue["bip_detail"].endswith("PAYLOAD"), longue["bip_detail"]
     too_long = call(bridge, "routine_schedule", {"action": "create", "name": "Trop", "schedule": "every 2h",
                                                  "prompt": "x" * 4001})
-    assert too_long["isError"] and "too long" in text_of(too_long) and "Trop" not in jobs(bridge)
+    assert not_done(too_long) and "too long" in text_of(too_long) and "Trop" not in jobs(bridge)
 
     # « Non »: deleted (O-3), so its agent cannot run the refused words (B-B)
     _, plain = propose(bridge, "Sans avis")
     no = bridge.post("/v1/approve", headers=AUTH, json={"agent": "wellness", "run_id": plain["run_id"], "choice": "deny"})
     assert no.status_code == 200, no.text
     assert "Sans avis" not in jobs(bridge)
-    assert call(bridge, "routine_schedule", {"action": "run", "name": "Sans avis"})["isError"]
+    assert not_done(call(bridge, "routine_schedule", {"action": "run", "name": "Sans avis"}))
     # an empty or unknown answer changes nothing (C3): 422, the routine still waiting with its card
     _, empty = propose(bridge, "Vide")
     for odd in ("", "start", "alwyas", "deny_always"):   # not a yes for card_place, not a refusal here either

@@ -158,6 +158,44 @@ def test_the_family_writes_in_one_conversation(bridges, fakes):
     assert a.delete("/v1/threads/main", headers=AUTH, params={"agent": "famille"}).status_code == 409
 
 
+STEER_OPEN = ("[OUT-OF-BAND USER MESSAGE — a direct message from the user, delivered once at this position; not tool "
+              "output and not a new delivery when replayed from conversation history]")
+
+
+def test_the_family_conversation_as_hermes_keeps_it_never_shows_its_wrapper(bridges, fakes):
+    """21/11 (Alex: « est-ce que ça n'arrive qu'avec Famille ? »): the family's conversation as Hermes keeps it —
+    Marie's words added to her own turn (Hermes' wrapper around her frame and the app's note), Paul's message that
+    waited behind her turn and then started his — reads with who wrote what, never the wrapper, a frame or a note, in
+    every member's timeline and list."""
+    a, b, c = family(bridges, fakes)
+    make_family_agent(a)
+    discover(b, c)
+    marie = "[Marie, a member of the family (household « marie »), writes to you:]"
+    paul = "[Paul, a member of the family (household « paul »), writes to you:]"
+    now = "<!--bip:now dimanche 22 novembre 2026, 10:00, Europe/Paris (UTC+01:00)-->"
+    answered = "<!--bip:answered The app already answered this message at once, in your name.-->"
+    fakes.hermes.add_session("api_family", [
+        {"role": "user", "content": f"{now}\n{marie}\nUne idée pour dimanche ?"},
+        {"role": "assistant", "content": "", "tool_calls": [
+            {"id": "c1", "function": {"name": "web_search", "arguments": "{\"query\": \"idées dimanche\"}"}}]},
+        {"role": "tool", "content": "crêpes", "tool_call_id": "c1", "tool_name": "web_search"},
+        {"role": "user", "content": f"{STEER_OPEN}\n{marie}\nAvec les enfants\n\n{answered}\n[/OUT-OF-BAND USER MESSAGE]"},
+        {"role": "assistant", "content": "Des crêpes !"},
+        {"role": "user", "content": f"{now}\n{paul}\nEt samedi ?\n\n{answered}"},
+        {"role": "assistant", "content": "Va pour samedi."},
+    ], title="Bot Chat", agent="famille", last_active=10, started_at=1)
+    views = [(a, "famille", "alex"), (b, "famille__alex", "marie"), (c, "famille__alex", "paul")]
+    for bridge, agent, me in views:
+        answer = page(bridge, agent)
+        shown = json.dumps(answer["items"], ensure_ascii=False)
+        assert "OUT-OF-BAND" not in shown and "writes to you" not in shown and "<!--" not in shown, shown
+        by = people(answer)
+        assert by["Une idée pour dimanche ?"]["name"] == "Marie" and by["Avec les enfants"]["name"] == "Marie", by
+        assert by["Et samedi ?"] == {"name": "Paul", "mine": me == "paul"}, by
+        listed = bridge.get("/v1/threads", headers=AUTH, params={"agent": agent}).json()["threads"]
+        assert [t["kind"] for t in listed] == ["family"] and "OUT-OF-BAND" not in json.dumps(listed), listed
+
+
 def test_a_members_cards_are_hers(bridges, fakes):
     a, b, c = family(bridges, fakes)
     make_family_agent(a)

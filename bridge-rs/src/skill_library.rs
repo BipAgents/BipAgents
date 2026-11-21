@@ -1071,6 +1071,8 @@ pub fn call(config: &Config, agent: &AgentConfig, arguments: &Dict) -> Dict {
                 tool_text(&format!("You now have version {n} of {name}."), false)
             }
             Err(LibraryError::NotFound(_)) | Err(LibraryError::Bad(_)) => tool_text(&not_yours(&library, &name), true),
+            // its store not written: the bridge's failure, not a refusal (tool_answers.rs)
+            Err(LibraryError::Io(why)) => crate::tool_answers::internal_failure(crate::agent_tools::SERVER_NAME, TOOL_NAME, &why),
             Err(e) => tool_text(&format!("{e:?}"), true),
         },
         "propose" => propose(config, agent, &name, &why, &own),

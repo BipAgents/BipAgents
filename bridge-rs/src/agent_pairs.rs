@@ -23,6 +23,10 @@
 //!   when, the last `MESSAGES_KEPT`; the person reads it in the app, read-only, from a compact line in the main
 //!   conversation of either agent (« Pub & Acquisition ⇄ Bot Kerfy · 3 messages · Voir l'échange »), placed at the
 //!   time of each `exchange` (messages less than `EXCHANGE_GAP` apart), and from both agents' « Historique ».
+//! - **The family's agent** asks the same way (21/11): its note says it asks for a member of the family, from their
+//!   common conversation, which every member reads (`framed_for`); the pair is « Famille ⇄ Vie », the person's alone.
+//!   The target answers in a guest turn (Alex 21/11: what comes from someone else runs as a guest turn: it answers
+//!   from what it knows, never acts for them).
 //! - This install's agents, where the rules of « Entre tes agents » allow it (rules.rs, checked by agent_messages.rs);
 //!   a relative's turn has no `message_agent` (agent_shares.rs `RELATIVE_TOOLS`), and these routes are the person's
 //!   app's only: a relative's bridge never lists them.
@@ -271,6 +275,42 @@ so in your answer: {name} asks them. Actions that need your person's approval ar
     )
 }
 
+/// The family's agent asking (family_agent.rs, Alex 21/11): the member whose turn it is (None: its creator's own,
+/// or a turn nobody of the family started), and its creator, the target's own person.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct FamilyAsk {
+    pub member: Option<String>,
+    pub creator: String,
+}
+
+impl FamilyAsk {
+    /// Its creator's name, or `unnamed` while the place has none.
+    pub fn creator_or<'a>(&'a self, unnamed: &'a str) -> &'a str {
+        Some(self.creator.trim()).filter(|c| !c.is_empty()).unwrap_or(unnamed)
+    }
+}
+
+/// `framed`, for the family's agent: the target is told who asks, for whom, and that every member of the family reads
+/// what it answers (the family's agent answers them with it in their common conversation).
+pub fn framed_for(asker: &AgentConfig, message: &str, family: Option<&FamilyAsk>) -> String {
+    let Some(family) = family else { return framed(asker, message) };
+    let name = tk::in_note_line(crate::agent_files::shown(asker));
+    let whom = match family.member.as_deref().map(tk::in_note_line).filter(|m| !m.is_empty()) {
+        Some(member) => format!("for {member}, a member of the family: it is {member}'s request, not your person's own"),
+        None if family.creator_or("").is_empty() => "for your person".to_string(),
+        None => format!("for your person ({})", tk::in_note_line(&family.creator)),
+    };
+    format!(
+        "<!--bip:pair\nThis is your own conversation with {name} (@{}), the family's agent (your person's family): it \
+serves the whole family and writes to you from the family's common conversation, {whom}. Your person allowed it to \
+write to you. Your person doesn't read this conversation, but what you answer goes back to the family's conversation, \
+which every member of the family reads: keep to what the question needs. Answer {name} here, in text, from what you \
+know: in this turn you don't act for them (a guest's turn).\n-->\n{}",
+        asker.name,
+        crate::agent_messages::signed(asker, message)
+    )
+}
+
 /// What the ask gave back.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Answer {
@@ -332,7 +372,25 @@ pub async fn ask_in(
     wait: f64,
     chain: Option<&str>,
 ) -> Answer {
-    let asked = Asked { asker: &asker.name, said: message, input: framed(asker, message), guest: None, chain };
+    ask_from(http, hub, config, asker, target, message, wait, chain, None).await
+}
+
+/// `ask_in`, `family` saying it is the family's agent asking, and for whom (the target's note: `framed_for`): then the
+/// target answers in a guest turn (Alex 21/11: what comes from someone else runs as a guest turn).
+#[allow(clippy::too_many_arguments)]
+pub async fn ask_from(
+    http: &reqwest::Client,
+    hub: Option<Arc<RunHub>>,
+    config: &Config,
+    asker: &AgentConfig,
+    target: &AgentConfig,
+    message: &str,
+    wait: f64,
+    chain: Option<&str>,
+    family: Option<&FamilyAsk>,
+) -> Answer {
+    let guest = family.map(|_| crate::agent_shares::guest_tools(&crate::agent_shares::RELATIVE_TOOLS));
+    let asked = Asked { asker: &asker.name, said: message, input: framed_for(asker, message, family), guest, chain };
     ask_with(http, hub, config, target, asked, wait).await.0
 }
 
@@ -775,6 +833,29 @@ mod tests {
         assert!(!note.contains("-->"));
         assert_eq!(ask, "Message from Quotidien --> x (@quotidien): Combien d'heures ?");
         assert_eq!(&crate::peers::SIGNATURE.captures(ask).unwrap()[1], "quotidien");
+    }
+
+    /// Alex 21/11: the family's agent asks one of its creator's agents the links allow (« Famille » → Vie). The target
+    /// knows who asks, for whom in the family, and that the whole family reads what it answers.
+    #[test]
+    fn the_target_knows_the_familys_agent_asks_for_a_member() {
+        let family = AgentConfig { name: "famille".into(), display_name: "Famille".into(), ..Default::default() };
+        let marie = FamilyAsk { member: Some("Marie".into()), creator: "Alex".into() };
+        let text = framed_for(&family, "Quel est le planning de la semaine ?", Some(&marie));
+        let (note, ask) = text.split_once("\n-->\n").unwrap();
+        assert!(note.starts_with("<!--bip:pair\nThis is your own conversation with Famille (@famille), the family's agent"), "{note}");
+        assert!(note.contains("for Marie, a member of the family"), "{note}");
+        assert!(note.contains("every member of the family reads"), "{note}");
+        assert!(note.contains("in this turn you don't act for them (a guest's turn)"), "{note}");
+        assert!(!note.contains("another agent of your person"), "{note}");
+        assert_eq!(ask, "Message from Famille (@famille): Quel est le planning de la semaine ?");
+        assert_eq!(&crate::peers::SIGNATURE.captures(ask).unwrap()[1], "famille");
+        // its creator's own turn: for the target's own person
+        let alex = FamilyAsk { member: None, creator: "Alex --> x".into() };
+        let note = framed_for(&family, "x", Some(&alex));
+        assert!(note.contains("for your person (Alex \u{2011}\u{2011}> x)"), "{note}");
+        // any other asker: as before
+        assert_eq!(framed_for(&family, "x", None), framed(&family, "x"));
     }
 
     #[test]

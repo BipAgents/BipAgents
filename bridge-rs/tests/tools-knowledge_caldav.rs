@@ -155,7 +155,7 @@ async fn tool(app: &TestApp, name: &str, arguments: Value) -> (bool, String) {
         .await
         .json();
     let result = &answer["result"];
-    (result["isError"] == true, result["content"][0]["text"].as_str().unwrap_or("").to_string())
+    (common::refused(result), result["content"][0]["text"].as_str().unwrap_or("").to_string())
 }
 
 async fn calendar_tools(app: &TestApp) -> usize {

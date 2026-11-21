@@ -7,7 +7,7 @@ import time
 
 from bbkit.common import AUTH
 from bbkit.fakes import taken_notes
-from bbkit.mcp import call, give_token, rpc, text_of
+from bbkit.mcp import call, give_token, not_done, rpc, text_of
 from test_friends_cards import SHARE, tap
 from test_project_agents import share_body
 from test_read_shares import FakeGuichet, Phone, open_item
@@ -39,8 +39,8 @@ def test_the_bridge_keeps_the_account_and_the_friends_read_it(bridges, fakes):
     card = line.rsplit("/", 1)[1]
     taxi = call(bridge, "expense", {"paid_by": "Sam", "amount": "31", "what": "Taxi", "for": ["Sam", "Léa"]}, token=TOKEN)
     assert taxi["isError"] is False and line in text_of(taxi), taxi
-    assert call(bridge, "expense", {"paid_by": "Sam", "amount": 5, "what": "Café", "currency": "USD"},
-                token=TOKEN)["isError"] is True
+    assert not_done(call(bridge, "expense", {"paid_by": "Sam", "amount": 5, "what": "Café", "currency": "USD"},
+                token=TOKEN))
     fakes.hermes.add_session("bot-1", [
         {"id": 1, "role": "user", "content": "Sam a payé le taxi, on en est où ?"},
         {"id": 2, "role": "assistant", "content": f"Voici les comptes :\n{line}"},
@@ -98,6 +98,6 @@ def test_the_bridge_keeps_the_account_and_the_friends_read_it(bridges, fakes):
         path.write_text(json.dumps(data))
         assert bridge.delete(f"/v1/project-agents/{agent}/cards/{card}/expenses/e1",
                              headers=AUTH).status_code in (409, 404)
-        assert call(bridge, "expense", {"paid_by": "Sam", "amount": 5, "what": "Café"}, token=TOKEN)["isError"] is True
+        assert not_done(call(bridge, "expense", {"paid_by": "Sam", "amount": 5, "what": "Café"}, token=TOKEN))
     finally:
         guichet.stop()

@@ -1300,10 +1300,12 @@ pub fn said(text: &str, error: bool) -> Called {
 pub fn call(config: &Config, agent: &str, name: &str, arguments: &Dict, opener: &Connect) -> anyhow::Result<Called> {
     let accounts = mailbox::of(config).of_agent(agent)?;
     if accounts.is_empty() {
-        return Ok(said(
+        let mut none = said(
             "No mailbox is connected for you: the person connects one in the BipAgents app (your settings › Boîtes mail).",
             true,
-        ));
+        );
+        none.result = crate::tool_answers::lifted_in_the_app(none.result);
+        return Ok(none);
     }
     let arg = |k: &str| tk::str_or_empty(arguments.get(k));
     let folder =

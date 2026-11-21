@@ -11,7 +11,7 @@ import zipfile
 from datetime import datetime, timezone
 
 from bbkit.common import AUTH
-from bbkit.mcp import call, give_token, rpc, text_of
+from bbkit.mcp import call, give_token, not_done, rpc, text_of
 from conftest import managed_install, profile
 
 TODAY = datetime.now(timezone.utc).strftime("%Y-%m-%d")
@@ -75,7 +75,8 @@ def test_an_agent_files_facts_that_read_well_in_obsidian(bridge):
     assert "jazz" in (notebook(bridge) / "carnet" / "Personnes" / "Marc Dupont.md").read_text()
     # ID numbers are never kept
     refused = call(bridge, "notebook_write", {"page": "Marc Dupont", "facts": ["Passeport : 12AB34567"]})
-    assert refused["isError"] and text_of(refused) == "Not saved: ID numbers are never kept."
+    assert not_done(refused) and text_of(refused) == ("Not saved: ID numbers are never kept, and fact 1 holds one. "
+                                                     "Write it again without the number (an e-mail address, a login or a date is fine).")
     # The person turned the « Noté » lines off: nothing changes for the agent.
     bridge.patch("/v1/notebook/settings", json={"mentions": False}, headers=AUTH)
     quiet = call(bridge, "notebook_write", {"page": "Rénovation cuisine", "kind": "subject", "section": "decisions",
@@ -85,7 +86,7 @@ def test_an_agent_files_facts_that_read_well_in_obsidian(bridge):
     for args in ({"page": "Santé", "kind": "area", "facts": ["Tension 12/8"]},
                  {"page": "Marc Dupont", "facts": ["x"], "private": True}):
         refused = call(bridge, "notebook_write", args)
-        assert refused["isError"] and "health" in text_of(refused)
+        assert not_done(refused) and "health" in text_of(refused)
     # The language changed later (2026-11-02): the folders and the own pages move to the new names, the sections are
     # re-titled, the people's names and the facts stay; the agents' next writes go there.
     moved = bridge.patch("/v1/notebook/settings", json={"language": "en"}, headers=AUTH)
@@ -275,13 +276,13 @@ def test_tasks_stay_few_and_follow_the_phone_reminders(bridge):
     assert [(o["op"], o["args"]) for o in asked] == [("complete", {"id": "r10"})]
     # Proposals: only with the Carnet's go, a few a week, never a kind the person declined.
     no_id = call(bridge, "notebook_task", {"action": "add", "title": "Cadeau Marc", "origin": "accepted"})
-    assert no_id["isError"]
+    assert not_done(no_id)
     proposed = text_of(call(bridge, "notebook_task", {"action": "propose", "kind": "birthday", "title": "Rappel anniversaire Marc"}))
     proposal = re.search(r"proposal (q[0-9a-f]+)", proposed).group(1)
     declined = call(bridge, "notebook_task", {"action": "decline", "proposal": proposal, "never": True})
     assert "Pas de propositions de tâches pour les anniversaires" in text_of(declined)
     again = call(bridge, "notebook_task", {"action": "propose", "kind": "birthday", "title": "Rappel anniversaire Paul"})
-    assert again["isError"] and "doesn't want proposals of this kind" in text_of(again)
+    assert not_done(again) and "doesn't want proposals of this kind" in text_of(again)
     listed = bridge.get("/v1/notebook/proposals", headers=AUTH).json()
     assert listed["declined"] == ["birthday"] and listed["proposals"][0]["state"] == "declined"
     assert "## Ce que tes agents doivent savoir\n- Pas de propositions" in (notebook(bridge) / "carnet" / "Toi.md").read_text()

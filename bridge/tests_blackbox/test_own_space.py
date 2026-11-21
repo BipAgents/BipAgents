@@ -14,6 +14,7 @@ import pytest
 import yaml
 
 from bbkit.common import AUTH
+from bbkit.mcp import not_done
 from bbkit.servers import free_port, wait_until
 from conftest import managed_install, profile, wait_registered
 
@@ -117,7 +118,7 @@ def test_a_hub_agent_asks_a_secret_moves_by_itself_then_gets_the_card(bridges, f
         card = secret_cards(bridge)[0]
         assert bridge.post(f"/v1/vault/secrets/requests/{card['request_id']}", headers=AUTH,
                            json={"allow": False}).status_code == 200
-        assert again.result(timeout=30)["isError"]
+        assert not_done(again.result(timeout=30))
 
 
 def test_a_move_that_fails_is_one_plain_answer_and_not_retried_at_once(bridges, fakes):
@@ -126,16 +127,16 @@ def test_a_move_that_fails_is_one_plain_answer_and_not_retried_at_once(bridges, 
     wait_registered(bridge, ["coach", "fete"])
     use_token_of(hub)
     first = tool(bridge, "ask_secret", ASK)
-    assert first["isError"] and "try again a bit later" in text(first) and "space" not in text(first)
+    assert not_done(first) and "try again a bit later" in text(first) and "space" not in text(first)
     assert not secret_cards(bridge)
     assert not (bridge.root / "spaces" / "coach").exists() and (hub / "profiles" / "coach").is_dir()
     starts = len(bridge.commands.entries("hermes"))
     second = tool(bridge, "ask_secret", ASK)
-    assert second["isError"] and text(second) == text(first)
+    assert not_done(second) and text(second) == text(first)
     assert len(bridge.commands.entries("hermes")) == starts      # nothing tried again within two minutes
     # a call the tool refuses anyway moves nothing
     bad = tool(bridge, "ask_secret", {**ASK, "name": "G"})
-    assert bad["isError"] and "name:" in text(bad)
+    assert not_done(bad) and "name:" in text(bad)
 
 
 def test_family_project_and_unprotected_agents_are_never_offered_the_tools(bridges, fakes):

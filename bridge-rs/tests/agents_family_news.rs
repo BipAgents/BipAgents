@@ -93,7 +93,7 @@ async fn told_only_after_the_person_says_so() {
         json!({"name": "tell_family", "arguments": {"to": ["lea"], "message": "x"}}),
     )
     .await;
-    assert_eq!(alone["isError"], true);
+    assert!(common::refused(&alone), "{alone}");
     let before = agent_tools::tools_url(&a.app.state.config());
 
     // Linked (Alex invites, Léa joins).
@@ -133,7 +133,7 @@ async fn told_only_after_the_person_says_so() {
         json!({"name": "tell_family", "arguments": {"to": ["marc"], "message": "x"}}),
     )
     .await;
-    assert_eq!(wrong["isError"], true);
+    assert!(common::refused(&wrong), "{wrong}");
 
     // « Envoyer », the words changed: Léa gets it (a card in her first agent's conversation, a push); no link from
     // Vie to any of her agents, so none of them reads it (option B, 19/11).

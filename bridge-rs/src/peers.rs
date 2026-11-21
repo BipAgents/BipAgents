@@ -134,7 +134,13 @@ pub fn apply(
             return Err(InvalidLink(format!("unknown link {sender} → {target}")).into());
         }
     }
-    let unique: BTreeSet<(String, String)> = wanted.iter().cloned().collect();
+    // the family's agent reaches only this place's agents (agent_messages.rs, Alex 21/11): a link of it to another
+    // household's agent is not kept (an older app may still send one; rules.rs leaves it out anyway)
+    let unique: BTreeSet<(String, String)> = wanted
+        .iter()
+        .filter(|(sender, target)| !(split(target).is_some() && crate::family_agent::is_family(config, sender)))
+        .cloned()
+        .collect();
     let pairs: Vec<(String, String)> = unique.into_iter().collect();
     let world = crate::rules::World::of(config, false);
     let mut changed = Vec::new();
@@ -238,6 +244,28 @@ give files to one of your person's agents, use `send_files_to_agent` (it says th
 then tell it with `message_agent`, giving those paths. Another household's agents get no files.
 ";
 
+/// The family's agent's (family_agent.rs, Alex 21/11): its creator's agents it may ask, nothing else (no files, no
+/// other household).
+const FAMILY_CONTACTS: &str = "---
+name: agent-contacts
+description: \"The agents you may ask with message_agent, and how to address them.\"
+version: 1.2.0
+author: BipAgents
+license: MIT
+---
+
+# Agents you may ask
+
+The member of the family who made you lets you write to these agents of theirs with `message_agent` (exactly these;
+any other is refused):
+
+{lines}
+
+They answer in the same call. Say for whom in the family you ask, then answer here with what they said:
+every member of the family reads it. Another household's agents are not reached from here, and you give no files to
+these agents.
+";
+
 pub fn contacts_skill_path(home: &Path, agent: &str) -> PathBuf {
     home.join("profiles").join(agent).join("skills").join("agent-contacts").join("SKILL.md")
 }
@@ -266,7 +294,20 @@ pub fn write_contacts(config: &Config, links: &[(String, String)], households: O
         if crate::profile_files::hands_off(&skill) {
             continue; // the person's own Hermes (profile_files::hands_off)
         }
-        let mut targets: Vec<&String> = links.iter().filter(|(s, _)| *s == agent.name).map(|(_, t)| t).collect();
+        // only those it can reach (Alex 21/11: the family's agent was told it could write to Vie, without the tool):
+        // this place's agents that are still here; another household's only through Bot Mode, never the family's
+        let family = crate::family_agent::is_family(config, &agent.name);
+        let mut targets: Vec<&String> = links
+            .iter()
+            .filter(|(s, t)| {
+                *s == agent.name
+                    && match split(t) {
+                        Some(_) => !family,
+                        None => config.agent(Some(t)).is_some(),
+                    }
+            })
+            .map(|(_, t)| t)
+            .collect();
         targets.sort();
         if targets.is_empty() {
             if let Some(folder) = skill.parent().filter(|f| f.exists()) {
@@ -292,7 +333,10 @@ pub fn write_contacts(config: &Config, links: &[(String, String)], households: O
             .parent()
             .map(std::fs::create_dir_all)
             .unwrap_or(Ok(()))
-            .and_then(|_| std::fs::write(&skill, CONTACTS.replace("{lines}", &lines.join("\n"))));
+            .and_then(|_| {
+                let text = if family { FAMILY_CONTACTS } else { CONTACTS };
+                std::fs::write(&skill, text.replace("{lines}", &lines.join("\n")))
+            });
         if written.is_err() {
             tracing::warn!(agent = %agent.name, "contacts not written");
         }

@@ -343,13 +343,13 @@ pub fn call(config: &Config, agent: &AgentConfig, arguments: &Dict) -> Dict {
         return tool_text("That is you: name another agent.", true);
     }
     if !may_write(config, &agent.name, &target.name) {
-        return tool_failure(
+        return crate::tool_answers::lifted_in_the_app(tool_failure(
             &format!("The person hasn't let you write to {}.", shown(&target)),
             &format!(
                 "I can't pass things on to {} yet: you can allow it in the app, under « Qui peut écrire à qui ».",
                 shown(&target)
             ),
-        );
+        ));
     }
     let seen = match seen_root(config, &target) {
         Ok(root) => root,

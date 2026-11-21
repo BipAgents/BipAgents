@@ -1,6 +1,6 @@
 """Re-check of `page-store` after the second review (15/11, 8d3b18fb6): black-box test for what is still wrong.
 It FAILS on 8d3b18fb6 (`pytest tests_blackbox/test_zz_review3_page_store.py`)."""
-from bbkit.mcp import call, give_token
+from bbkit.mcp import call, give_token, not_done
 from test_page_store import store_get
 from test_zz_review_page_store import project_share
 
@@ -57,4 +57,4 @@ def test_review3_the_page_guard_sees_document_write_through_an_alias_and_a_typed
     give_token(bridge)
     for source in (ALIASED_WRITE, TYPED_LINK):
         made = call(bridge, "create_page", {"html": source, "title": "Notes"})
-        assert made["isError"] is True, f"kept: {source[:60]}…"
+        assert not_done(made), f"kept: {source[:60]}…"

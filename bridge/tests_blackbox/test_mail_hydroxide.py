@@ -6,7 +6,7 @@ internal/notes/hydroxide-moves.md). So: a move or a rule to a folder it doesn't 
 plain words with the folders it can use; one it shows is used under its listed name; a refusal keeps the server's
 answer for the agent (mail_bulk status) and the rule's error."""
 from bbkit.common import AUTH
-from bbkit.mcp import call, text_of
+from bbkit.mcp import call, not_done, text_of
 from bbkit.servers import wait_until
 from test_mail_cards import answer, mail_cards
 from test_mailbox import TOKEN, add_mailbox, mail_bridge
@@ -27,7 +27,7 @@ def test_a_folder_hydroxide_does_not_show_is_refused_in_plain_words_before_any_c
                  {"action": "move:Copro St Ex", "domain": "copro.example", "rule": True}):
         result = call(bridge, "mail_bulk", args, token=TOKEN)
         said = text_of(result)
-        assert result["isError"], result
+        assert not_done(result), result
         assert "hydroxide" in said and "« Archive »" in said and "« All Mail »" not in said, said
         assert "Proton Mail Bridge" in said and "refused part" not in said, said
     assert mail_cards(bridge) == []

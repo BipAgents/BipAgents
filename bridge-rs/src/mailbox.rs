@@ -1192,12 +1192,12 @@ pub fn call(config: &Config, agent: &str, name: &str, arguments: &Dict, opener: 
     let accounts = of(config).of_agent(agent)?;
     if accounts.is_empty() {
         if let Some(ask) = crate::tool_asks::ask_hint(config, agent, "mail") {
-            return Ok(tool_text(&format!("No mailbox is connected for you. {ask}"), true));
+            return Ok(crate::tool_answers::lifted_in_the_app(tool_text(&format!("No mailbox is connected for you. {ask}"), true)));
         }
-        return Ok(tool_text(
+        return Ok(crate::tool_answers::lifted_in_the_app(tool_text(
             "No mailbox is connected for you: the person connects one in the BipAgents app (your settings › Boîtes mail).",
             true,
-        ));
+        )));
     }
     let arg = |k: &str| tk::str_or_empty(arguments.get(k));
     // the mailbox this call reaches (a draft answering a mail goes to that mail's box), one call at a time on it

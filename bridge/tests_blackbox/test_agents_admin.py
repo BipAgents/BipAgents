@@ -10,6 +10,7 @@ import tomllib
 import yaml
 
 from bbkit.common import AUTH
+from bbkit.mcp import not_done
 from bbkit.servers import wait_until
 from conftest import managed_install, marked, profile, servers, wait_registered
 
@@ -211,7 +212,7 @@ def test_the_routines_tile_drives_the_bridges_routines_not_hermes_cron(bridges, 
     assert not [a for a in hermes_args(bridge) if "cronjob" in a]   # Hermes' cron untouched
     assert tile()["enabled"] is False and not offered()
     refused = call(bridge, "routine_schedule", {"action": "list"})
-    assert refused["isError"] is True and "Routines are off" in text_of(refused)
+    assert not_done(refused) and "Routines are off" in text_of(refused)
     assert bridge.patch("/v1/agents/budget/settings", headers=AUTH, json={"toolsets": {"cronjob": True}}).status_code == 200
     assert tile()["enabled"] is True and offered()
 

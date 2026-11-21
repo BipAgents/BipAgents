@@ -5,6 +5,7 @@ The « agent » gives confirm_payment the total the bridge told it (« its total
 Same harness as test_pay_total_chrome.py (real Chromium, BIP_CHROME). Test card only (4242…), never a real shop."""
 import json
 
+from bbkit.mcp import not_done
 from bbkit.common import AUTH
 from test_review_pay_total_chrome import APPROVED, never_pressed, page, start
 import test_card_payments_chrome as c
@@ -87,7 +88,7 @@ def test_d4_a_hand_over_leaves_nothing_typed_the_hold_released_and_the_cart_says
         result, asked = c.pay(bridge, APPROVED)
         said = result["content"][0]["text"]
         # Correction 4: the page is read before the person is asked: handed over before any approval (asked is None)
-        assert asked is None and result["isError"] is True and "Panier prêt" in said, said
+        assert asked is None and not_done(result) and "Panier prêt" in said, said
         values = browser.values()
         assert all(v == "" for v in values["pay.html"].values()), values
         assert "4242" not in json.dumps(values)
@@ -95,7 +96,7 @@ def test_d4_a_hand_over_leaves_nothing_typed_the_hold_released_and_the_cart_says
         spent = bridge.get("/v1/vault", headers=AUTH).json()["items"][0]["card"].get("spent", {})
         assert spent.get("EUR", 0) == 0, spent
         # the browser is the agent's again: its page answers a script (no hold left)
-        assert c.tool(bridge, "confirm_payment", {"button": "Payer"})["content"][0]["text"].startswith("No payment")
+        assert c.tool(bridge, "confirm_payment", {"button": "Payer"})["content"][0]["text"].startswith("Not done: No payment")
         [cart] = carts(bridge)
         # the person's card: it should not offer « 27,97 € » for a page that showed 32,87 €
         assert "27,97" not in cart["command"] and "27.97" not in cart["command"], cart["command"]

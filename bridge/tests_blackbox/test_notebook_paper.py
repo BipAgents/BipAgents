@@ -6,7 +6,7 @@ import base64
 import json
 
 from bbkit.common import AUTH
-from bbkit.mcp import call, give_token, text_of
+from bbkit.mcp import call, give_token, not_done, text_of
 
 # a synthetic passport (ICAO's test MRZ, a made-up person), as the phone reads it
 PASSPORT = """RÉPUBLIQUE FRANÇAISE
@@ -72,5 +72,6 @@ def test_an_agents_paper_is_cleaned_the_same_way(bridges, fakes):
     assert sorted(t["due"] for t in tasks) == ["2034-02-01", "2034-04-01"]
     refused = call(bridge, "notebook_record", {"action": "add", "type": "paper",
                                                "fields": {"document": "Passeport", "number": "19AB12345"}})
-    assert text_of(refused) == "Not saved: ID numbers are never kept."
+    assert not_done(refused) and text_of(refused) == ("Not saved: ID numbers are never kept, and the field « number » "
+                                                      "holds one. Write it again without the number (an e-mail address, a login or a date is fine).")
     assert "19AB12345" not in json.dumps(bridge.get("/v1/notebook/records", headers=AUTH).json())

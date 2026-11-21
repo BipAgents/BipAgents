@@ -312,7 +312,8 @@ impl Threads {
         let now = iso(utcnow());
         let id = new_id("t_");
         let origin = if origin.is_null() { Param::Null } else { text(&origin.to_string()) };
-        let title = title.map(text).unwrap_or(Param::Null);
+        // Hermes' title of an adopted session, a task's conversation « 🧩 <task> »: never its wrapper of a steer
+        let title = title.and_then(timeline::title_text).map(|t| text(&t)).unwrap_or(Param::Null);
         self.store
             .run(
                 "INSERT INTO threads (id, agent, kind, title, origin, hidden, version, created_at, updated_at) \
@@ -2188,5 +2189,27 @@ mod keepalive_review_tests {
         let alive = keepalive_within(response.into_body(), Duration::from_secs(32)).await;
         others.abort();
         assert!(alive.is_ok(), "no keepalive in 32 s while the owner's other events came every 5 s: {alive:?}");
+    }
+}
+
+#[cfg(test)]
+mod title_tests {
+    use super::*;
+
+    /// 21/11: a conversation adopted from Hermes keeps a title of the person's words, never Hermes' wrapper of words
+    /// added during an answer (a task's work conversation « 🧩 <title> » made from it, an instant title cut short).
+    #[tokio::test]
+    async fn an_adopted_title_never_carries_hermes_wrapper() {
+        let config = SharedConfig::new(crate::config::Config::with_key("k"));
+        let threads = Threads::new(config, Store::open(":memory:").unwrap(), HermesClient::new(reqwest::Client::new()));
+        let cut = "[OUT-OF-BAND USER MESSAGE — a direct message from the user, d…";
+        let made = threads.create("vie", "task", Some(&format!("🧩 {cut}")), Value::Null, true).await.unwrap();
+        assert_eq!(made.title, None);
+        let wrapped = "[OUT-OF-BAND USER MESSAGE — a direct message from the user]\nVestes\n[/OUT-OF-BAND USER MESSAGE]";
+        let made = threads.create("vie", "side", Some(wrapped), Value::Null, false).await.unwrap();
+        assert_eq!(made.title.as_deref(), Some("Vestes"));
+        assert_eq!(threads.get(&made.id).await.unwrap().unwrap().title.as_deref(), Some("Vestes"));
+        let made = threads.create("vie", "routine", Some("⚡ Factures · 2/11"), Value::Null, true).await.unwrap();
+        assert_eq!(made.title.as_deref(), Some("⚡ Factures · 2/11"));
     }
 }
