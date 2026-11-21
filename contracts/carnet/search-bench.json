@@ -1,0 +1,6075 @@
+{
+ "about": "The Carnet search bench (plan « Le sommaire », brick S0): realistic queries in fr/en/de/es/nl against the DEMO Carnet only (App/Resources/Demo/notebook-demo.json, notebook-demo-trip.json, family-notebook-demo.json; Dutch: `fixtures.nl`, the English demo in Dutch, folders and section titles left in the bridge's English as today), each with the results that answer it (`expect`: any of them counts; « *dated » = every item with an `offset` in the case's `window`, « *dated:task » its tasks, « *dated:fam » the family's) and the category the person means. One file for the bridge and both apps. Replayed by bridge-rs src/notebook/search_bench.rs (cargo test search_bench -- --ignored --nocapture; BIPAGENTS_BENCH_OUT=<file> writes the report).",
+ "version": 1,
+ "categories": {
+  "personal": [
+   "people",
+   "dates",
+   "money",
+   "home",
+   "papers",
+   "trips",
+   "work",
+   "other",
+   "health"
+  ],
+  "family": [
+   "shopping",
+   "people",
+   "dates",
+   "home",
+   "papers",
+   "holidays",
+   "school",
+   "menus",
+   "other"
+  ]
+ },
+ "ids": "page:<key> (keys in `pages`; page:tasks the tasks page, page:records_<type> a records page), fact:<page>/<section id>/<n>, task:<demo id>, record:<demo id>, doc:<key> (`documents`, the demo's order; agent-made or received), drive:<key> (`fixtures.drives`), fam:list:<list>/<item>, fam:page:<id>. `offset`: the item's date in days from the run day, as the demo dates it.",
+ "pages": [
+  "marc",
+  "claire",
+  "lucas",
+  "sophie",
+  "kitchen",
+  "japan",
+  "ines",
+  "taxes",
+  "car",
+  "family",
+  "home",
+  "money",
+  "work",
+  "me",
+  "health",
+  "trip"
+ ],
+ "documents": [
+  "trip_budget",
+  "japan_pptx",
+  "works_xlsx",
+  "syndic_docx",
+  "quote_pdf",
+  "plan_jpg",
+  "health_runs",
+  "health_blood"
+ ],
+ "windows": {
+  "next_week": "Monday to Sunday of next week",
+  "this_weekend": "today to the coming Sunday",
+  "this_month": "today to the end of the month",
+  "december": "the coming December",
+  "before_christmas": "today to the coming 24 December"
+ },
+ "types": [
+  "exact",
+  "typo",
+  "accent",
+  "synonym",
+  "question",
+  "date",
+  "voice",
+  "document",
+  "agent_page",
+  "drive",
+  "drive_refused",
+  "record",
+  "task",
+  "health"
+ ],
+ "items": {
+  "page:marc": {
+   "categories": [
+    "people"
+   ]
+  },
+  "fact:marc/who/0": {
+   "categories": [
+    "people"
+   ]
+  },
+  "fact:marc/dates/0": {
+   "categories": [
+    "people",
+    "dates"
+   ],
+   "offset": 23
+  },
+  "fact:marc/family/0": {
+   "categories": [
+    "people"
+   ]
+  },
+  "fact:marc/work/0": {
+   "categories": [
+    "people",
+    "work"
+   ]
+  },
+  "fact:marc/tastes/0": {
+   "categories": [
+    "people"
+   ]
+  },
+  "fact:marc/tastes/1": {
+   "categories": [
+    "people"
+   ]
+  },
+  "fact:marc/tastes/2": {
+   "categories": [
+    "people"
+   ]
+  },
+  "fact:marc/gifts/0": {
+   "categories": [
+    "people"
+   ]
+  },
+  "fact:marc/agreed/0": {
+   "categories": [
+    "people"
+   ]
+  },
+  "fact:marc/agreed/1": {
+   "categories": [
+    "people"
+   ]
+  },
+  "fact:marc/exchanges/0": {
+   "categories": [
+    "people"
+   ]
+  },
+  "fact:marc/exchanges/1": {
+   "categories": [
+    "people"
+   ]
+  },
+  "fact:marc/remember/0": {
+   "categories": [
+    "people"
+   ]
+  },
+  "page:claire": {
+   "categories": [
+    "people"
+   ]
+  },
+  "fact:claire/who/0": {
+   "categories": [
+    "people"
+   ]
+  },
+  "fact:claire/dates/0": {
+   "categories": [
+    "people",
+    "dates"
+   ],
+   "offset": 41
+  },
+  "fact:claire/family/0": {
+   "categories": [
+    "people"
+   ]
+  },
+  "fact:claire/work/0": {
+   "categories": [
+    "people",
+    "work"
+   ]
+  },
+  "fact:claire/exchanges/0": {
+   "categories": [
+    "people"
+   ]
+  },
+  "page:lucas": {
+   "categories": [
+    "people"
+   ]
+  },
+  "fact:lucas/who/0": {
+   "categories": [
+    "people"
+   ]
+  },
+  "fact:lucas/dates/0": {
+   "categories": [
+    "people",
+    "dates"
+   ],
+   "offset": 9
+  },
+  "fact:lucas/tastes/0": {
+   "categories": [
+    "people"
+   ]
+  },
+  "fact:lucas/gifts/0": {
+   "categories": [
+    "people"
+   ]
+  },
+  "page:sophie": {
+   "categories": [
+    "people"
+   ]
+  },
+  "fact:sophie/who/0": {
+   "categories": [
+    "people"
+   ]
+  },
+  "fact:sophie/agreed/0": {
+   "categories": [
+    "people"
+   ]
+  },
+  "fact:sophie/agreed/1": {
+   "categories": [
+    "people"
+   ]
+  },
+  "page:kitchen": {
+   "categories": [
+    "home"
+   ]
+  },
+  "fact:kitchen/status/0": {
+   "categories": [
+    "home"
+   ]
+  },
+  "fact:kitchen/decisions/0": {
+   "categories": [
+    "home"
+   ]
+  },
+  "fact:kitchen/decisions/1": {
+   "categories": [
+    "home"
+   ]
+  },
+  "fact:kitchen/next/0": {
+   "categories": [
+    "home"
+   ]
+  },
+  "fact:kitchen/next/1": {
+   "categories": [
+    "home"
+   ]
+  },
+  "fact:kitchen/people/0": {
+   "categories": [
+    "home"
+   ]
+  },
+  "fact:kitchen/people/1": {
+   "categories": [
+    "home"
+   ]
+  },
+  "fact:kitchen/budget/0": {
+   "categories": [
+    "home",
+    "money"
+   ]
+  },
+  "fact:kitchen/budget/1": {
+   "categories": [
+    "home",
+    "money"
+   ]
+  },
+  "fact:kitchen/history/0": {
+   "categories": [
+    "home"
+   ]
+  },
+  "fact:kitchen/history/1": {
+   "categories": [
+    "home"
+   ]
+  },
+  "page:japan": {
+   "categories": [
+    "trips"
+   ]
+  },
+  "fact:japan/status/0": {
+   "categories": [
+    "trips"
+   ]
+  },
+  "fact:japan/decisions/0": {
+   "categories": [
+    "trips"
+   ]
+  },
+  "fact:japan/next/0": {
+   "categories": [
+    "trips"
+   ]
+  },
+  "fact:japan/budget/0": {
+   "categories": [
+    "trips"
+   ]
+  },
+  "page:ines": {
+   "categories": [
+    "people"
+   ],
+   "offset": 12
+  },
+  "fact:ines/status/0": {
+   "categories": [
+    "people"
+   ]
+  },
+  "fact:ines/next/0": {
+   "categories": [
+    "people"
+   ]
+  },
+  "fact:ines/people/0": {
+   "categories": [
+    "people"
+   ]
+  },
+  "page:taxes": {
+   "categories": [
+    "money",
+    "papers"
+   ]
+  },
+  "fact:taxes/status/0": {
+   "categories": [
+    "money",
+    "papers"
+   ]
+  },
+  "fact:taxes/next/0": {
+   "categories": [
+    "money",
+    "papers"
+   ]
+  },
+  "page:car": {
+   "categories": [
+    "money"
+   ]
+  },
+  "fact:car/status/0": {
+   "categories": [
+    "money"
+   ]
+  },
+  "fact:car/budget/0": {
+   "categories": [
+    "money"
+   ]
+  },
+  "page:family": {
+   "categories": [
+    "people"
+   ]
+  },
+  "fact:family/matters/0": {
+   "categories": [
+    "people"
+   ]
+  },
+  "fact:family/habits/0": {
+   "categories": [
+    "people"
+   ]
+  },
+  "fact:family/ongoing/0": {
+   "categories": [
+    "people"
+   ]
+  },
+  "page:home": {
+   "categories": [
+    "home"
+   ]
+  },
+  "fact:home/habits/0": {
+   "categories": [
+    "home"
+   ]
+  },
+  "fact:home/habits/1": {
+   "categories": [
+    "home"
+   ]
+  },
+  "fact:home/contacts/0": {
+   "categories": [
+    "home"
+   ]
+  },
+  "fact:home/contacts/1": {
+   "categories": [
+    "home"
+   ]
+  },
+  "fact:home/ongoing/0": {
+   "categories": [
+    "home"
+   ]
+  },
+  "page:money": {
+   "categories": [
+    "money"
+   ]
+  },
+  "fact:money/matters/0": {
+   "categories": [
+    "money"
+   ]
+  },
+  "fact:money/ongoing/0": {
+   "categories": [
+    "money",
+    "papers",
+    "dates"
+   ]
+  },
+  "page:work": {
+   "categories": [
+    "work"
+   ]
+  },
+  "fact:work/matters/0": {
+   "categories": [
+    "work",
+    "dates"
+   ],
+   "offset": 5
+  },
+  "fact:work/ongoing/0": {
+   "categories": [
+    "work"
+   ]
+  },
+  "page:me": {
+   "categories": [
+    "people"
+   ]
+  },
+  "fact:me/about/0": {
+   "categories": [
+    "people"
+   ]
+  },
+  "fact:me/family/0": {
+   "categories": [
+    "people"
+   ]
+  },
+  "fact:me/family/1": {
+   "categories": [
+    "people"
+   ]
+  },
+  "fact:me/work/0": {
+   "categories": [
+    "people",
+    "work"
+   ]
+  },
+  "fact:me/habits/0": {
+   "categories": [
+    "people"
+   ]
+  },
+  "fact:me/habits/1": {
+   "categories": [
+    "people"
+   ]
+  },
+  "fact:me/goals/0": {
+   "categories": [
+    "people"
+   ]
+  },
+  "fact:me/agents/0": {
+   "categories": [
+    "people"
+   ]
+  },
+  "fact:me/agents/1": {
+   "categories": [
+    "people"
+   ]
+  },
+  "page:health": {
+   "categories": [
+    "health"
+   ]
+  },
+  "fact:health/matters/0": {
+   "categories": [
+    "health"
+   ]
+  },
+  "fact:health/habits/0": {
+   "categories": [
+    "health"
+   ]
+  },
+  "fact:health/ongoing/0": {
+   "categories": [
+    "health"
+   ]
+  },
+  "page:trip": {
+   "categories": [
+    "trips"
+   ],
+   "offset": 12
+  },
+  "fact:trip/dates/0": {
+   "categories": [
+    "trips",
+    "dates"
+   ],
+   "offset": 12
+  },
+  "fact:trip/itinerary/0": {
+   "categories": [
+    "trips"
+   ]
+  },
+  "fact:trip/itinerary/1": {
+   "categories": [
+    "trips"
+   ]
+  },
+  "fact:trip/itinerary/2": {
+   "categories": [
+    "trips"
+   ]
+  },
+  "fact:trip/itinerary/3": {
+   "categories": [
+    "trips"
+   ]
+  },
+  "fact:trip/transport/0": {
+   "categories": [
+    "trips"
+   ]
+  },
+  "fact:trip/transport/1": {
+   "categories": [
+    "trips"
+   ]
+  },
+  "fact:trip/lodging/0": {
+   "categories": [
+    "trips"
+   ]
+  },
+  "fact:trip/packing/0": {
+   "categories": [
+    "trips"
+   ]
+  },
+  "fact:trip/packing/1": {
+   "categories": [
+    "trips"
+   ]
+  },
+  "fact:trip/packing/2": {
+   "categories": [
+    "trips"
+   ]
+  },
+  "fact:trip/packing/3": {
+   "categories": [
+    "trips"
+   ]
+  },
+  "fact:trip/packing/4": {
+   "categories": [
+    "trips"
+   ]
+  },
+  "fact:trip/packing/5": {
+   "categories": [
+    "trips"
+   ]
+  },
+  "fact:trip/budget/0": {
+   "categories": [
+    "trips",
+    "money"
+   ]
+  },
+  "fact:trip/onsite/0": {
+   "categories": [
+    "trips"
+   ]
+  },
+  "fact:trip/onsite/1": {
+   "categories": [
+    "trips"
+   ]
+  },
+  "page:tasks": {
+   "categories": [
+    "other"
+   ],
+   "note": "the tasks page (Tâches.md)"
+  },
+  "task:t0001": {
+   "categories": [
+    "home",
+    "dates"
+   ],
+   "offset": 2
+  },
+  "task:t0002": {
+   "categories": [
+    "trips",
+    "dates"
+   ],
+   "offset": 4
+  },
+  "task:t0003": {
+   "categories": [
+    "money",
+    "dates"
+   ],
+   "offset": 14
+  },
+  "task:t0004": {
+   "categories": [
+    "people",
+    "dates"
+   ],
+   "offset": 21
+  },
+  "task:t0005": {
+   "categories": [
+    "home"
+   ]
+  },
+  "task:t0006": {
+   "categories": [
+    "other"
+   ]
+  },
+  "task:t0007": {
+   "categories": [
+    "other",
+    "dates"
+   ],
+   "offset": 0
+  },
+  "task:t0008": {
+   "categories": [
+    "money",
+    "dates"
+   ],
+   "offset": -3
+  },
+  "task:t0009": {
+   "categories": [
+    "home"
+   ]
+  },
+  "task:t0010": {
+   "categories": [
+    "people",
+    "dates"
+   ],
+   "offset": 3
+  },
+  "task:t0011": {
+   "categories": [
+    "people",
+    "dates"
+   ],
+   "offset": 10
+  },
+  "task:t0012": {
+   "categories": [
+    "people"
+   ]
+  },
+  "task:t0013": {
+   "categories": [
+    "money",
+    "papers",
+    "dates"
+   ],
+   "offset": 6
+  },
+  "task:t0014": {
+   "categories": [
+    "money",
+    "papers"
+   ]
+  },
+  "task:t0015": {
+   "categories": [
+    "money",
+    "dates"
+   ],
+   "offset": 9
+  },
+  "task:t0016": {
+   "categories": [
+    "money"
+   ]
+  },
+  "task:t0017": {
+   "categories": [
+    "work",
+    "dates"
+   ],
+   "offset": 5
+  },
+  "task:t0018": {
+   "categories": [
+    "home"
+   ]
+  },
+  "task:t0019": {
+   "categories": [
+    "health",
+    "dates"
+   ],
+   "offset": 7
+  },
+  "task:t0020": {
+   "categories": [
+    "trips"
+   ]
+  },
+  "page:records_purchase": {
+   "categories": [
+    "money",
+    "papers"
+   ]
+  },
+  "record:rp1": {
+   "categories": [
+    "money",
+    "papers",
+    "dates"
+   ],
+   "offset": 30
+  },
+  "record:rp2": {
+   "categories": [
+    "money",
+    "papers",
+    "dates"
+   ],
+   "offset": 610
+  },
+  "record:rp3": {
+   "categories": [
+    "money",
+    "papers",
+    "dates"
+   ],
+   "offset": -70
+  },
+  "page:records_subscription": {
+   "categories": [
+    "money"
+   ]
+  },
+  "record:rs1": {
+   "categories": [
+    "money",
+    "dates"
+   ],
+   "offset": 9
+  },
+  "record:rs2": {
+   "categories": [
+    "money",
+    "dates"
+   ],
+   "offset": 17
+  },
+  "page:records_contract": {
+   "categories": [
+    "papers"
+   ]
+  },
+  "record:rc1": {
+   "categories": [
+    "papers",
+    "dates"
+   ],
+   "offset": 95
+  },
+  "page:records_paper": {
+   "categories": [
+    "papers"
+   ]
+  },
+  "record:rd1": {
+   "categories": [
+    "papers",
+    "dates"
+   ],
+   "offset": 420
+  },
+  "page:records_booking": {
+   "categories": [
+    "trips"
+   ]
+  },
+  "record:rb1": {
+   "categories": [
+    "trips",
+    "dates"
+   ],
+   "offset": 12
+  },
+  "record:rb2": {
+   "categories": [
+    "trips",
+    "dates"
+   ],
+   "offset": 13
+  },
+  "doc:trip_budget": {
+   "categories": [
+    "trips"
+   ],
+   "note": "agent-made"
+  },
+  "doc:japan_pptx": {
+   "categories": [
+    "trips"
+   ],
+   "note": "agent-made"
+  },
+  "doc:works_xlsx": {
+   "categories": [
+    "home",
+    "money"
+   ],
+   "note": "agent-made"
+  },
+  "doc:syndic_docx": {
+   "categories": [
+    "home",
+    "papers"
+   ],
+   "note": "agent-made"
+  },
+  "doc:quote_pdf": {
+   "categories": [
+    "home",
+    "papers"
+   ],
+   "note": "received"
+  },
+  "doc:plan_jpg": {
+   "categories": [
+    "home"
+   ],
+   "note": "received"
+  },
+  "doc:health_runs": {
+   "categories": [
+    "health"
+   ]
+  },
+  "doc:health_blood": {
+   "categories": [
+    "health"
+   ]
+  },
+  "drive:lease": {
+   "categories": [
+    "papers"
+   ],
+   "note": "connected drive, allowed for the Carnet"
+  },
+  "drive:payslip": {
+   "categories": [
+    "work",
+    "money"
+   ],
+   "note": "connected drive, allowed for the Carnet"
+  },
+  "drive:wedding": {
+   "categories": [
+    "people"
+   ],
+   "note": "connected drive, NOT allowed for the Carnet: never shown"
+  },
+  "fam:list:courses/c1": {
+   "categories": [
+    "shopping"
+   ]
+  },
+  "fam:list:courses/c2": {
+   "categories": [
+    "shopping"
+   ]
+  },
+  "fam:list:courses/c3": {
+   "categories": [
+    "shopping"
+   ]
+  },
+  "fam:list:courses/c4": {
+   "categories": [
+    "shopping"
+   ]
+  },
+  "fam:list:courses/c5": {
+   "categories": [
+    "shopping"
+   ]
+  },
+  "fam:list:taches/t1": {
+   "categories": [
+    "home",
+    "dates"
+   ],
+   "offset": 3
+  },
+  "fam:list:taches/t2": {
+   "categories": [
+    "dates",
+    "menus"
+   ],
+   "offset": 6
+  },
+  "fam:list:taches/t3": {
+   "categories": [
+    "school"
+   ]
+  },
+  "fam:list:taches/t4": {
+   "categories": [
+    "school",
+    "other"
+   ],
+   "offset": -1
+  },
+  "fam:list:dates/d1": {
+   "categories": [
+    "people",
+    "dates"
+   ],
+   "offset": 6
+  },
+  "fam:list:dates/d2": {
+   "categories": [
+    "dates"
+   ],
+   "offset": 39
+  },
+  "fam:list:dates/d3": {
+   "categories": [
+    "people",
+    "dates"
+   ],
+   "offset": 107
+  },
+  "fam:page:p1": {
+   "categories": [
+    "holidays"
+   ]
+  },
+  "fam:page:p2": {
+   "categories": [
+    "home",
+    "papers",
+    "school"
+   ]
+  },
+  "fam:page:p3": {
+   "categories": [
+    "menus"
+   ]
+  }
+ },
+ "fixtures": {
+  "drives": {
+   "fr": [
+    {
+     "id": "drive:lease",
+     "provider": "Google Drive",
+     "name": "Bail appartement Nantes.pdf",
+     "text": "Contrat de location, loyer 780 € charges comprises, préavis d’un mois",
+     "allowed": true
+    },
+    {
+     "id": "drive:payslip",
+     "provider": "OneDrive",
+     "name": "Bulletin de paie octobre 2026.pdf",
+     "text": "Atelier Lumière, salaire net d’octobre",
+     "allowed": true
+    },
+    {
+     "id": "drive:wedding",
+     "provider": "Dropbox",
+     "name": "Photos mariage Claire et Marc",
+     "text": "Album du mariage",
+     "allowed": false
+    }
+   ],
+   "en": [
+    {
+     "id": "drive:lease",
+     "provider": "Google Drive",
+     "name": "Flat tenancy agreement Nantes.pdf",
+     "text": "Tenancy agreement, rent €780 including charges, one month notice",
+     "allowed": true
+    },
+    {
+     "id": "drive:payslip",
+     "provider": "OneDrive",
+     "name": "Payslip October 2026.pdf",
+     "text": "Atelier Lumière, net pay for October",
+     "allowed": true
+    },
+    {
+     "id": "drive:wedding",
+     "provider": "Dropbox",
+     "name": "Claire and Marc wedding photos",
+     "text": "Wedding album",
+     "allowed": false
+    }
+   ],
+   "de": [
+    {
+     "id": "drive:lease",
+     "provider": "Google Drive",
+     "name": "Mietvertrag Wohnung Nantes.pdf",
+     "text": "Mietvertrag, Miete 780 € warm, ein Monat Kündigungsfrist",
+     "allowed": true
+    },
+    {
+     "id": "drive:payslip",
+     "provider": "OneDrive",
+     "name": "Gehaltsabrechnung Oktober 2026.pdf",
+     "text": "Atelier Lumière, Nettolohn Oktober",
+     "allowed": true
+    },
+    {
+     "id": "drive:wedding",
+     "provider": "Dropbox",
+     "name": "Hochzeitsfotos Claire und Marc",
+     "text": "Hochzeitsalbum",
+     "allowed": false
+    }
+   ],
+   "es": [
+    {
+     "id": "drive:lease",
+     "provider": "Google Drive",
+     "name": "Contrato de alquiler piso Nantes.pdf",
+     "text": "Contrato de alquiler, 780 € con gastos, un mes de preaviso",
+     "allowed": true
+    },
+    {
+     "id": "drive:payslip",
+     "provider": "OneDrive",
+     "name": "Nómina octubre 2026.pdf",
+     "text": "Atelier Lumière, sueldo neto de octubre",
+     "allowed": true
+    },
+    {
+     "id": "drive:wedding",
+     "provider": "Dropbox",
+     "name": "Fotos de la boda de Claire y Marc",
+     "text": "Álbum de la boda",
+     "allowed": false
+    }
+   ],
+   "nl": [
+    {
+     "id": "drive:lease",
+     "provider": "Google Drive",
+     "name": "Huurcontract appartement Nantes.pdf",
+     "text": "Huurcontract, huur € 780 inclusief servicekosten, een maand opzegtermijn",
+     "allowed": true
+    },
+    {
+     "id": "drive:payslip",
+     "provider": "OneDrive",
+     "name": "Loonstrook oktober 2026.pdf",
+     "text": "Atelier Lumière, nettoloon oktober",
+     "allowed": true
+    },
+    {
+     "id": "drive:wedding",
+     "provider": "Dropbox",
+     "name": "Trouwfoto's Claire en Marc",
+     "text": "Trouwalbum",
+     "allowed": false
+    }
+   ]
+  },
+  "nl": {
+   "personal": {
+    "pages": [
+     {
+      "path": "People/Marc Durand.md",
+      "kind": "person",
+      "title": "Marc Durand",
+      "aliases": [
+       "Marc"
+      ],
+      "close": true,
+      "contact": "demo-marc",
+      "summary": "De man van Claire, je zus, en de vader van Inès en Tom. Timmerman: hij maakt de offerte voor je keuken. Allergisch voor noten.",
+      "summary_agent": "daily",
+      "summary_days_ago": 0,
+      "sections": [
+       {
+        "id": "who",
+        "title": "Who they are",
+        "facts": [
+         {
+          "text": "Je zwager, getrouwd met [[Claire Durand]]",
+          "agent": "daily",
+          "days_ago": 60
+         }
+        ]
+       },
+       {
+        "id": "dates",
+        "title": "Datums",
+        "facts": [
+         {
+          "text": "Verjaardag: {date+23}",
+          "agent": "daily",
+          "days_ago": 0
+         }
+        ]
+       },
+       {
+        "id": "family",
+        "title": "Family and close ones",
+        "facts": [
+         {
+          "text": "Kinderen: Inès, 7, en Tom, 4",
+          "agent": "daily",
+          "days_ago": 60
+         }
+        ]
+       },
+       {
+        "id": "work",
+        "title": "Werk",
+        "facts": [
+         {
+          "text": "Zelfstandig timmerman, maakt de offerte voor je [[Keukenrenovatie]]",
+          "agent": "home",
+          "days_ago": 13
+         }
+        ]
+       },
+       {
+        "id": "tastes",
+        "title": "Likes and preferences",
+        "facts": [
+         {
+          "text": "Houdt van jazz en natuurwijn",
+          "agent": "daily",
+          "days_ago": 30
+         },
+         {
+          "text": "Allergisch voor noten",
+          "agent": "coach",
+          "days_ago": 49
+         },
+         {
+          "text": "Wordt liever 's avonds gebeld",
+          "agent": "you",
+          "days_ago": 20
+         }
+        ]
+       },
+       {
+        "id": "gifts",
+        "title": "Gift ideas",
+        "facts": [
+         {
+          "text": "Een plaat van Chet Baker",
+          "agent": "daily",
+          "days_ago": 5
+         }
+        ]
+       },
+       {
+        "id": "agreed",
+        "title": "What you agreed",
+        "facts": [
+         {
+          "text": "Leent je zijn schuurmachine tot eind november",
+          "agent": "home",
+          "days_ago": 6
+         },
+         {
+          "text": "Komt zaterdag de keuken opmeten",
+          "agent": "home",
+          "days_ago": 2
+         }
+        ]
+       },
+       {
+        "id": "exchanges",
+        "title": "Latest exchanges",
+        "facts": [
+         {
+          "text": "Telefoon: de offerte komt vanavond",
+          "agent": "home",
+          "days_ago": 1
+         },
+         {
+          "text": "Etentje bij Claire, hij had het over vakantie in Portugal",
+          "agent": "daily",
+          "days_ago": 9
+         }
+        ]
+       },
+       {
+        "id": "remember",
+        "title": "Don't forget",
+        "facts": [
+         {
+          "text": "Geen noten bij het etentje op de 2e",
+          "agent": "coach",
+          "days_ago": 4
+         }
+        ]
+       }
+      ]
+     },
+     {
+      "path": "People/Claire Durand.md",
+      "kind": "person",
+      "title": "Claire Durand",
+      "aliases": [
+       "Claire"
+      ],
+      "close": true,
+      "contact": null,
+      "summary": "Je zus. Verpleegkundige in Nantes, getrouwd met Marc.",
+      "summary_agent": "daily",
+      "summary_days_ago": 12,
+      "sections": [
+       {
+        "id": "who",
+        "title": "Who they are",
+        "facts": [
+         {
+          "text": "Je zus",
+          "agent": "daily",
+          "days_ago": 60
+         }
+        ]
+       },
+       {
+        "id": "dates",
+        "title": "Datums",
+        "facts": [
+         {
+          "text": "Verjaardag: {date+41}",
+          "agent": "daily",
+          "days_ago": 12
+         }
+        ]
+       },
+       {
+        "id": "family",
+        "title": "Family and close ones",
+        "facts": [
+         {
+          "text": "Getrouwd met [[Marc Durand]], twee kinderen: Inès en Tom",
+          "agent": "daily",
+          "days_ago": 60
+         }
+        ]
+       },
+       {
+        "id": "work",
+        "title": "Werk",
+        "facts": [
+         {
+          "text": "Nachtverpleegkundige in Nantes",
+          "agent": "daily",
+          "days_ago": 12
+         }
+        ]
+       },
+       {
+        "id": "exchanges",
+        "title": "Latest exchanges",
+        "facts": [
+         {
+          "text": "Bericht: ze neemt zaterdag een taart mee",
+          "agent": "daily",
+          "days_ago": 3
+         }
+        ]
+       }
+      ]
+     },
+     {
+      "path": "People/Lucas Bernard.md",
+      "kind": "person",
+      "title": "Lucas Bernard",
+      "aliases": [
+       "Lucas"
+      ],
+      "close": true,
+      "contact": null,
+      "summary": "Je hardloopmaatje van de zondagochtend.",
+      "summary_agent": "coach",
+      "summary_days_ago": 2,
+      "sections": [
+       {
+        "id": "who",
+        "title": "Who they are",
+        "facts": [
+         {
+          "text": "Je hardloopmaatje, op zondagochtend",
+          "agent": "coach",
+          "days_ago": 40
+         }
+        ]
+       },
+       {
+        "id": "dates",
+        "title": "Datums",
+        "facts": [
+         {
+          "text": "Verjaardag: {date+9}",
+          "agent": "coach",
+          "days_ago": 40
+         }
+        ]
+       },
+       {
+        "id": "tastes",
+        "title": "Likes and preferences",
+        "facts": [
+         {
+          "text": "Loopt in de lente de halve marathon van Nantes",
+          "agent": "nightly:coach",
+          "days_ago": 2
+         }
+        ]
+       },
+       {
+        "id": "gifts",
+        "title": "Gift ideas",
+        "facts": [
+         {
+          "text": "Een hardloophorloge, daar heeft hij het vaak over",
+          "agent": "coach",
+          "days_ago": 2
+         }
+        ]
+       }
+      ]
+     },
+     {
+      "path": "People/Sophie Laurent.md",
+      "kind": "person",
+      "title": "Sophie Laurent",
+      "aliases": [
+       "Sophie"
+      ],
+      "close": false,
+      "contact": null,
+      "summary": "Je buurvrouw van de 3e verdieping. Ze heeft een reservesleutel van je.",
+      "summary_agent": "you",
+      "summary_days_ago": 3,
+      "sections": [
+       {
+        "id": "who",
+        "title": "Who they are",
+        "facts": [
+         {
+          "text": "Je buurvrouw van de 3e verdieping",
+          "agent": "you",
+          "days_ago": 30
+         }
+        ]
+       },
+       {
+        "id": "agreed",
+        "title": "What you agreed",
+        "facts": [
+         {
+          "text": "Past op de kat tijdens de vakantie",
+          "agent": "you",
+          "days_ago": 3
+         },
+         {
+          "text": "Heeft een reservesleutel van je",
+          "agent": "you",
+          "days_ago": 30
+         }
+        ]
+       }
+      ]
+     },
+     {
+      "path": "Subjects/Keukenrenovatie.md",
+      "kind": "subject",
+      "title": "Keukenrenovatie",
+      "aliases": [],
+      "close": false,
+      "contact": null,
+      "summary": "De offerte van Marc is binnen: € 8.900. Het werkblad moet nog gekozen worden en de datum van de werkzaamheden vastgelegd.",
+      "summary_agent": "home",
+      "summary_days_ago": 1,
+      "sections": [
+       {
+        "id": "status",
+        "title": "Where it stands",
+        "facts": [
+         {
+          "text": "Offerte ontvangen, data vastleggen met Marc",
+          "agent": "home",
+          "days_ago": 1
+         }
+        ]
+       },
+       {
+        "id": "decisions",
+        "title": "Decisions",
+        "facts": [
+         {
+          "text": "Offerte van [[Marc Durand]] geaccepteerd",
+          "agent": "budget",
+          "days_ago": 1
+         },
+         {
+          "text": "Kwarts werkblad, kleur nog kiezen",
+          "agent": "home",
+          "days_ago": 5
+         }
+        ]
+       },
+       {
+        "id": "next",
+        "title": "Next steps",
+        "facts": [
+         {
+          "text": "De kleur van het werkblad kiezen",
+          "agent": "home",
+          "days_ago": 5
+         },
+         {
+          "text": "De data van de werkzaamheden vastleggen",
+          "agent": "home",
+          "days_ago": 1
+         }
+        ]
+       },
+       {
+        "id": "people",
+        "title": "People",
+        "facts": [
+         {
+          "text": "[[Marc Durand]], timmerman",
+          "agent": "home",
+          "days_ago": 13
+         },
+         {
+          "text": "Cuisines Éclat, rue des Halles",
+          "agent": "home",
+          "days_ago": 40
+         }
+        ]
+       },
+       {
+        "id": "budget",
+        "title": "Figures and budget",
+        "facts": [
+         {
+          "text": "Offerte: € 8.900",
+          "agent": "budget",
+          "days_ago": 1
+         },
+         {
+          "text": "Gereserveerd budget: € 10.000",
+          "agent": "budget",
+          "days_ago": 20
+         }
+        ]
+       },
+       {
+        "id": "history",
+        "title": "History",
+        "facts": [
+         {
+          "text": "Offerte geaccepteerd",
+          "agent": "budget",
+          "days_ago": 1
+         },
+         {
+          "text": "Bezoek aan de showroom",
+          "agent": "home",
+          "days_ago": 40
+         }
+        ]
+       }
+      ]
+     },
+     {
+      "path": "Subjects/Reis naar Japan.md",
+      "kind": "subject",
+      "title": "Reis naar Japan",
+      "aliases": [],
+      "close": false,
+      "contact": null,
+      "summary": "April, 12 dagen: Tokio, Kyoto, Osaka. De vluchten moeten binnenkort geboekt worden.",
+      "summary_agent": "daily",
+      "summary_days_ago": 1,
+      "sections": [
+       {
+        "id": "status",
+        "title": "Where it stands",
+        "facts": [
+         {
+          "text": "Route vastgelegd, vluchten nog niet geboekt",
+          "agent": "daily",
+          "days_ago": 1
+         }
+        ]
+       },
+       {
+        "id": "decisions",
+        "title": "Decisions",
+        "facts": [
+         {
+          "text": "April, 12 dagen: Tokio, Kyoto, Osaka",
+          "agent": "daily",
+          "days_ago": 10
+         }
+        ]
+       },
+       {
+        "id": "next",
+        "title": "Next steps",
+        "facts": [
+         {
+          "text": "De vluchten boeken voor het einde van de maand",
+          "agent": "daily",
+          "days_ago": 1
+         }
+        ]
+       },
+       {
+        "id": "budget",
+        "title": "Figures and budget",
+        "facts": [
+         {
+          "text": "Budget: € 4.000 voor twee",
+          "agent": "budget",
+          "days_ago": 10
+         }
+        ]
+       }
+      ]
+     },
+     {
+      "path": "Subjects/Verjaardag van Inès.md",
+      "kind": "subject",
+      "title": "Verjaardag van Inès",
+      "aliases": [],
+      "close": false,
+      "contact": null,
+      "summary": "Inès wordt 8 op zaterdag {date+12}, bij Claire. Thema: eenhoorns.",
+      "summary_agent": "daily",
+      "summary_days_ago": 0,
+      "sections": [
+       {
+        "id": "status",
+        "title": "Where it stands",
+        "facts": [
+         {
+          "text": "Uitnodigingen deze week versturen",
+          "agent": "daily",
+          "days_ago": 0
+         }
+        ]
+       },
+       {
+        "id": "next",
+        "title": "Next steps",
+        "facts": [
+         {
+          "text": "De taart bestellen bij de banketbakker",
+          "agent": "daily",
+          "days_ago": 0
+         }
+        ]
+       },
+       {
+        "id": "people",
+        "title": "People",
+        "facts": [
+         {
+          "text": "[[Claire Durand]] organiseert, [[Marc Durand]] doet de spelletjes",
+          "agent": "daily",
+          "days_ago": 1
+         }
+        ]
+       }
+      ]
+     },
+     {
+      "path": "Subjects/Belastingen 2026.md",
+      "kind": "subject",
+      "title": "Belastingen 2026",
+      "aliases": [],
+      "close": false,
+      "contact": null,
+      "summary": "Online belastingaangifte nakijken voor het einde van de maand.",
+      "summary_agent": "budget",
+      "summary_days_ago": 2,
+      "sections": [
+       {
+        "id": "status",
+        "title": "Where it stands",
+        "facts": [
+         {
+          "text": "Vooraf ingevulde aangifte ontvangen",
+          "agent": "budget",
+          "days_ago": 2
+         }
+        ]
+       },
+       {
+        "id": "next",
+        "title": "Next steps",
+        "facts": [
+         {
+          "text": "De giften en de kosten van de kinderopvang toevoegen",
+          "agent": "budget",
+          "days_ago": 2
+         }
+        ]
+       }
+      ]
+     },
+     {
+      "path": "Subjects/Nieuwe auto.md",
+      "kind": "subject",
+      "title": "Nieuwe auto",
+      "aliases": [],
+      "close": false,
+      "contact": null,
+      "summary": "Een tweedehands hybride, maximaal € 15.000.",
+      "summary_agent": "budget",
+      "summary_days_ago": 4,
+      "sections": [
+       {
+        "id": "status",
+        "title": "Where it stands",
+        "facts": [
+         {
+          "text": "Drie modellen op de shortlist",
+          "agent": "budget",
+          "days_ago": 4
+         }
+        ]
+       },
+       {
+        "id": "budget",
+        "title": "Figures and budget",
+        "facts": [
+         {
+          "text": "Budget: maximaal € 15.000",
+          "agent": "budget",
+          "days_ago": 6
+         }
+        ]
+       }
+      ]
+     },
+     {
+      "path": "Areas/Gezin.md",
+      "kind": "area",
+      "title": "Gezin",
+      "aliases": [],
+      "close": false,
+      "contact": null,
+      "summary": "Je zus [[Claire Durand]], haar man [[Marc Durand]] en hun kinderen.",
+      "summary_agent": "daily",
+      "summary_days_ago": 12,
+      "sections": [
+       {
+        "id": "matters",
+        "title": "What matters",
+        "facts": [
+         {
+          "text": "Je zus [[Claire Durand]], haar man [[Marc Durand]] en hun kinderen",
+          "agent": "daily",
+          "days_ago": 12
+         }
+        ]
+       },
+       {
+        "id": "habits",
+        "title": "Habits and rules",
+        "facts": [
+         {
+          "text": "Eén zaterdag per maand samen eten",
+          "agent": "daily",
+          "days_ago": 30
+         }
+        ]
+       },
+       {
+        "id": "ongoing",
+        "title": "In progress",
+        "facts": [
+         {
+          "text": "Etentje bij jou op zaterdag de 2e",
+          "agent": "daily",
+          "days_ago": 4
+         }
+        ]
+       }
+      ]
+     },
+     {
+      "path": "Areas/Huis.md",
+      "kind": "area",
+      "title": "Huis",
+      "aliases": [],
+      "close": false,
+      "contact": null,
+      "summary": "Het appartement, de keukenverbouwing en de buren.",
+      "summary_agent": "home",
+      "summary_days_ago": 8,
+      "sections": [
+       {
+        "id": "habits",
+        "title": "Habits and rules",
+        "facts": [
+         {
+          "text": "Onderhoud cv-ketel: elk jaar in oktober",
+          "agent": "home",
+          "days_ago": 20
+         },
+         {
+          "text": "Vuilnis buiten op maandagavond",
+          "agent": "home",
+          "days_ago": 15
+         }
+        ]
+       },
+       {
+        "id": "contacts",
+        "title": "Useful contacts",
+        "facts": [
+         {
+          "text": "Een reservesleutel bij [[Sophie Laurent]]",
+          "agent": "you",
+          "days_ago": 3
+         },
+         {
+          "text": "Syndicus: Cabinet Moreau, 02 40 00 00 00",
+          "agent": "home",
+          "days_ago": 25
+         }
+        ]
+       },
+       {
+        "id": "ongoing",
+        "title": "In progress",
+        "facts": [
+         {
+          "text": "De werkzaamheden van de [[Keukenrenovatie]]",
+          "agent": "home",
+          "days_ago": 8
+         }
+        ]
+       }
+      ]
+     },
+     {
+      "path": "Areas/Geld.md",
+      "kind": "area",
+      "title": "Geld",
+      "aliases": [],
+      "close": false,
+      "contact": null,
+      "summary": "Het budget van de maand en de contracten die verlengd moeten worden.",
+      "summary_agent": "budget",
+      "summary_days_ago": 3,
+      "sections": [
+       {
+        "id": "matters",
+        "title": "What matters",
+        "facts": [
+         {
+          "text": "Sparen: € 200 per maand",
+          "agent": "budget",
+          "days_ago": 20
+         }
+        ]
+       },
+       {
+        "id": "ongoing",
+        "title": "In progress",
+        "facts": [
+         {
+          "text": "Autoverzekering verlengen voor de 5e",
+          "agent": "budget",
+          "days_ago": 3
+         }
+        ]
+       }
+      ]
+     },
+     {
+      "path": "Areas/Werk.md",
+      "kind": "area",
+      "title": "Werk",
+      "aliases": [],
+      "close": false,
+      "contact": null,
+      "summary": "Je baan bij Atelier Lumière en je jaargesprek.",
+      "summary_agent": "daily",
+      "summary_days_ago": 3,
+      "sections": [
+       {
+        "id": "matters",
+        "title": "What matters",
+        "facts": [
+         {
+          "text": "Jaargesprek op {date+5}",
+          "agent": "daily",
+          "days_ago": 3
+         }
+        ]
+       },
+       {
+        "id": "ongoing",
+        "title": "In progress",
+        "facts": [
+         {
+          "text": "Excelcursus in november",
+          "agent": "daily",
+          "days_ago": 8
+         }
+        ]
+       }
+      ]
+     }
+    ],
+    "health": [
+     {
+      "path": "Areas/Health.md",
+      "kind": "area",
+      "title": "Gezondheid",
+      "aliases": [],
+      "close": false,
+      "contact": null,
+      "summary": "Wat Coach noteert over je gezondheid. Alleen jij ziet het.",
+      "summary_agent": "coach",
+      "summary_days_ago": 6,
+      "sections": [
+       {
+        "id": "matters",
+        "title": "What matters",
+        "facts": [
+         {
+          "text": "Allergisch voor penicilline",
+          "agent": "coach",
+          "days_ago": 60
+         }
+        ]
+       },
+       {
+        "id": "habits",
+        "title": "Habits and rules",
+        "facts": [
+         {
+          "text": "Bloedonderzoek elke 6 maanden",
+          "agent": "coach",
+          "days_ago": 30
+         }
+        ]
+       },
+       {
+        "id": "ongoing",
+        "title": "In progress",
+        "facts": [
+         {
+          "text": "Griepprik in november",
+          "agent": "coach",
+          "days_ago": 6
+         }
+        ]
+       }
+      ]
+     }
+    ],
+    "tasks": [
+     {
+      "id": "t0001",
+      "title": "Marc terugbellen over de offerte",
+      "due_in": 2,
+      "links": [
+       "Keukenrenovatie"
+      ],
+      "agent": "home",
+      "days_ago": 1,
+      "done_ago": null,
+      "archived": false
+     },
+     {
+      "id": "t0002",
+      "title": "De vluchten naar Osaka boeken",
+      "due_in": 4,
+      "links": [
+       "Reis naar Japan"
+      ],
+      "agent": "daily",
+      "days_ago": 1,
+      "done_ago": null,
+      "archived": false
+     },
+     {
+      "id": "t0003",
+      "title": "De autoverzekering verlengen",
+      "due_in": 14,
+      "links": [
+       "Geld"
+      ],
+      "agent": "budget",
+      "days_ago": 3,
+      "done_ago": null,
+      "archived": false
+     },
+     {
+      "id": "t0004",
+      "title": "Het cadeau voor Marc kopen",
+      "due_in": 21,
+      "links": [
+       "Marc Durand"
+      ],
+      "agent": "daily",
+      "days_ago": 0,
+      "done_ago": null,
+      "archived": false
+     },
+     {
+      "id": "t0005",
+      "title": "Het werkblad kiezen",
+      "due_in": null,
+      "links": [
+       "Keukenrenovatie"
+      ],
+      "agent": "home",
+      "days_ago": 5,
+      "done_ago": null,
+      "archived": false
+     },
+     {
+      "id": "t0006",
+      "title": "De zomerfoto's sorteren",
+      "due_in": null,
+      "links": [],
+      "agent": "you",
+      "days_ago": 9,
+      "done_ago": null,
+      "archived": false
+     },
+     {
+      "id": "t0007",
+      "title": "De schoolkantine betalen",
+      "due_in": 0,
+      "links": [],
+      "agent": "budget",
+      "days_ago": 6,
+      "done_ago": 0,
+      "archived": false
+     },
+     {
+      "id": "t0008",
+      "title": "De papieren naar de bank sturen",
+      "due_in": -3,
+      "links": [
+       "Geld"
+      ],
+      "agent": "budget",
+      "days_ago": 8,
+      "done_ago": 3,
+      "archived": false
+     },
+     {
+      "id": "t0009",
+      "title": "Internetproviders vergelijken",
+      "due_in": null,
+      "links": [
+       "Huis"
+      ],
+      "agent": "home",
+      "days_ago": 70,
+      "done_ago": null,
+      "archived": true
+     },
+     {
+      "id": "t0010",
+      "title": "De uitnodigingen versturen",
+      "due_in": 3,
+      "links": [
+       "Verjaardag van Inès"
+      ],
+      "agent": "daily",
+      "days_ago": 0,
+      "done_ago": null,
+      "archived": false
+     },
+     {
+      "id": "t0011",
+      "title": "De taart bestellen",
+      "due_in": 10,
+      "links": [
+       "Verjaardag van Inès"
+      ],
+      "agent": "daily",
+      "days_ago": 1,
+      "done_ago": null,
+      "archived": false
+     },
+     {
+      "id": "t0012",
+      "title": "De ballonnen kopen",
+      "due_in": null,
+      "links": [
+       "Verjaardag van Inès"
+      ],
+      "agent": "you",
+      "days_ago": 2,
+      "done_ago": null,
+      "archived": false
+     },
+     {
+      "id": "t0013",
+      "title": "De vooraf ingevulde aangifte nakijken",
+      "due_in": 6,
+      "links": [
+       "Belastingen 2026"
+      ],
+      "agent": "budget",
+      "days_ago": 3,
+      "done_ago": null,
+      "archived": false
+     },
+     {
+      "id": "t0014",
+      "title": "De bewijzen van giften zoeken",
+      "due_in": null,
+      "links": [
+       "Belastingen 2026"
+      ],
+      "agent": "budget",
+      "days_ago": 0,
+      "done_ago": null,
+      "archived": false
+     },
+     {
+      "id": "t0015",
+      "title": "Een proefrit met de Yaris boeken",
+      "due_in": 9,
+      "links": [
+       "Nieuwe auto"
+      ],
+      "agent": "budget",
+      "days_ago": 1,
+      "done_ago": null,
+      "archived": false
+     },
+     {
+      "id": "t0016",
+      "title": "Drie tweedehands modellen vergelijken",
+      "due_in": null,
+      "links": [
+       "Nieuwe auto"
+      ],
+      "agent": "budget",
+      "days_ago": 2,
+      "done_ago": null,
+      "archived": false
+     },
+     {
+      "id": "t0017",
+      "title": "Het jaargesprek voorbereiden",
+      "due_in": 5,
+      "links": [
+       "Werk"
+      ],
+      "agent": "daily",
+      "days_ago": 3,
+      "done_ago": null,
+      "archived": false
+     },
+     {
+      "id": "t0018",
+      "title": "De spatwand kiezen",
+      "due_in": null,
+      "links": [
+       "Keukenrenovatie"
+      ],
+      "agent": "home",
+      "days_ago": 0,
+      "done_ago": null,
+      "archived": false
+     },
+     {
+      "id": "t0019",
+      "title": "Een afspraak bij de tandarts maken",
+      "due_in": 7,
+      "links": [
+       "You"
+      ],
+      "agent": "daily",
+      "days_ago": 1,
+      "done_ago": null,
+      "archived": false
+     },
+     {
+      "id": "t0020",
+      "title": "Een reisgids van Kyoto kopen",
+      "due_in": null,
+      "links": [
+       "Reis naar Japan"
+      ],
+      "agent": "daily",
+      "days_ago": 2,
+      "done_ago": null,
+      "archived": false
+     }
+    ],
+    "documents": [
+     {
+      "name": "Reisbudget",
+      "type": "page",
+      "page": "trip_budget",
+      "agent": "budget",
+      "days_ago": 2,
+      "origin": "made",
+      "subjects": [
+       "Subjects/Reis naar Japan.md"
+      ],
+      "linked": "Subjects/Japan trip.md"
+     },
+     {
+      "name": "Reis naar Japan, het programma.pptx",
+      "type": "presentation",
+      "agent": "daily",
+      "days_ago": 0,
+      "origin": "made",
+      "subjects": [
+       "Subjects/Reis naar Japan.md"
+      ]
+     },
+     {
+      "name": "Budget verbouwing.xlsx",
+      "type": "spreadsheet",
+      "agent": "budget",
+      "days_ago": 3,
+      "origin": "made",
+      "subjects": [
+       "Subjects/Keukenrenovatie.md"
+      ]
+     },
+     {
+      "name": "Brief aan de syndicus.docx",
+      "type": "document",
+      "agent": "home",
+      "days_ago": 8,
+      "origin": "made",
+      "subjects": [
+       "Areas/Huis.md"
+      ]
+     },
+     {
+      "name": "Offerte keuken.pdf",
+      "type": "pdf",
+      "agent": "home",
+      "days_ago": 13,
+      "origin": "received",
+      "subjects": [
+       "Subjects/Keukenrenovatie.md"
+      ]
+     },
+     {
+      "name": "Plattegrond keuken.jpg",
+      "type": "image",
+      "agent": "home",
+      "days_ago": 50,
+      "origin": "received",
+      "subjects": [
+       "Subjects/Keukenrenovatie.md"
+      ]
+     }
+    ],
+    "health_documents": [
+     {
+      "name": "Je hardlooprondes",
+      "type": "page",
+      "page": "runs",
+      "agent": "coach",
+      "days_ago": 0,
+      "origin": "made",
+      "subjects": [
+       "Areas/Health.md"
+      ],
+      "linked": "Areas/Health.md"
+     },
+     {
+      "name": "Mijn bloedwaarden",
+      "type": "page",
+      "page": "blood",
+      "agent": "coach",
+      "days_ago": 1,
+      "origin": "made",
+      "subjects": [
+       "Areas/Health.md"
+      ],
+      "linked": "Areas/Health.md"
+     }
+    ],
+    "me": {
+     "path": "You.md",
+     "kind": "self",
+     "title": "You",
+     "aliases": [],
+     "close": false,
+     "contact": null,
+     "summary": "Je woont in Nantes, loopt op zondag hard en plant een reis naar Japan.",
+     "summary_agent": "daily",
+     "summary_days_ago": 5,
+     "sections": [
+      {
+       "id": "about",
+       "title": "Who you are",
+       "facts": [
+        {
+         "text": "Woont in Nantes",
+         "agent": "daily",
+         "days_ago": 60
+        }
+       ]
+      },
+      {
+       "id": "family",
+       "title": "Gezin",
+       "facts": [
+        {
+         "text": "Zus: [[Claire Durand]]",
+         "agent": "daily",
+         "days_ago": 60
+        },
+        {
+         "text": "Zwager: [[Marc Durand]]",
+         "agent": "daily",
+         "days_ago": 60
+        }
+       ]
+      },
+      {
+       "id": "work",
+       "title": "Werk",
+       "facts": [
+        {
+         "text": "Grafisch ontwerper bij een bureau, werkt op vrijdag thuis",
+         "agent": "daily",
+         "days_ago": 30
+        }
+       ]
+      },
+      {
+       "id": "habits",
+       "title": "Likes and habits",
+       "facts": [
+        {
+         "text": "Loopt op zondagochtend hard met [[Lucas Bernard]]",
+         "agent": "coach",
+         "days_ago": 40
+        },
+        {
+         "text": "Koffie zonder suiker",
+         "agent": "you",
+         "days_ago": 20
+        }
+       ]
+      },
+      {
+       "id": "goals",
+       "title": "Goals",
+       "facts": [
+        {
+         "text": "In de lente een halve marathon lopen",
+         "agent": "coach",
+         "days_ago": 10
+        }
+       ]
+      },
+      {
+       "id": "agents",
+       "title": "What your agents should know",
+       "facts": [
+        {
+         "text": "Geen taakvoorstellen voor verjaardagen",
+         "agent": "daily",
+         "days_ago": 15
+        },
+        {
+         "text": "Korte antwoorden in de ochtend",
+         "agent": "you",
+         "days_ago": 5
+        }
+       ]
+      }
+     ]
+    },
+    "folders": {
+     "person": "People",
+     "subject": "Subjects",
+     "area": "Areas"
+    }
+   },
+   "trip": {
+    "trip": {
+     "path": "Subjects/Weekend in Lissabon.md",
+     "title": "Weekend in Lissabon",
+     "summary": "Vier dagen Lissabon met Claire, van {date+12} tot {date+15}. Vluchten en hotel geboekt.",
+     "summary_agent": "daily",
+     "destination": "Lisbon, Portugal",
+     "start_in": 12,
+     "days_count": 4,
+     "icon": "plane",
+     "days": [
+      {
+       "day": 1,
+       "text": "Arrival, hotel and a walk through Alfama",
+       "place": "Alfama"
+      },
+      {
+       "day": 2,
+       "text": "São Jorge Castle in the morning, Baixa and Chiado in the afternoon",
+       "place": "Kasteel São Jorge"
+      },
+      {
+       "day": 3,
+       "text": "Belém: de toren, het klooster en de pastéis",
+       "place": "Belém"
+      },
+      {
+       "day": 4,
+       "text": "Campo de Ourique market, then the flight home",
+       "place": "Campo de Ourique"
+      }
+     ],
+     "bookings": [
+      {
+       "kind": "transport",
+       "text": "Flight TP433 Paris-Orly → Lisbon",
+       "day": 1,
+       "time": "07:15",
+       "number": "TP433",
+       "reference": "X7K2PQ"
+      },
+      {
+       "kind": "lodging",
+       "text": "Hotel Rossio, 3 nights (check-in from 3 pm)",
+       "day": 1,
+       "time": "15:00",
+       "reference": "HR-55821"
+      },
+      {
+       "kind": "booking",
+       "text": "São Jorge Castle visit, 2 tickets",
+       "day": 2,
+       "time": "10:00",
+       "reference": "CSG-2291",
+       "record": "rb2",
+       "source": "Bevestigingsmail van het kasteel"
+      },
+      {
+       "kind": "transport",
+       "text": "Flight TP438 Lisbon → Paris-Orly",
+       "day": 4,
+       "time": "18:40",
+       "number": "TP438",
+       "reference": "X7K2PQ"
+      }
+     ],
+     "packing": [
+      {
+       "text": "Paspoort",
+       "done": true
+      },
+      {
+       "text": "Wandelschoenen",
+       "done": true
+      },
+      {
+       "text": "Kopie van de tickets",
+       "done": true
+      },
+      {
+       "text": "Sunscreen",
+       "done": false
+      },
+      {
+       "text": "Lichte regenjas",
+       "done": false
+      },
+      {
+       "text": "Telefoonoplader",
+       "done": false
+      }
+     ],
+     "places": [
+      {
+       "name": "Alfama",
+       "section": "itinerary"
+      },
+      {
+       "name": "Kasteel São Jorge",
+       "section": "itinerary"
+      },
+      {
+       "name": "Belém Tower",
+       "section": "itinerary"
+      },
+      {
+       "name": "Hotel Rossio",
+       "section": "lodging"
+      },
+      {
+       "name": "Miradouro da Senhora do Monte",
+       "section": "onsite"
+      },
+      {
+       "name": "Time Out Market",
+       "section": "onsite"
+      }
+     ],
+     "sections": [
+      {
+       "id": "dates",
+       "title": "Datums",
+       "facts": [
+        {
+         "text": "Van {date+12} tot {date+15}",
+         "agent": "daily",
+         "days_ago": 1
+        }
+       ]
+      },
+      {
+       "id": "itinerary",
+       "title": "Itinerary",
+       "facts": [
+        {
+         "text": "Dag 1: aankomst, hotel en een wandeling door de Alfama",
+         "agent": "daily",
+         "days_ago": 1
+        },
+        {
+         "text": "Dag 2: kasteel São Jorge, Baixa en Chiado",
+         "agent": "daily",
+         "days_ago": 1
+        },
+        {
+         "text": "Dag 3: Belém",
+         "agent": "daily",
+         "days_ago": 1
+        },
+        {
+         "text": "Dag 4: markt van Campo de Ourique, dan naar huis",
+         "agent": "daily",
+         "days_ago": 1
+        }
+       ]
+      },
+      {
+       "id": "transport",
+       "title": "Transport",
+       "facts": [
+        {
+         "text": "Vlucht TP433 Parijs-Orly → Lissabon, 7.15 uur, ref. X7K2PQ",
+         "agent": "daily",
+         "days_ago": 1
+        },
+        {
+         "text": "Vlucht TP438 Lissabon → Parijs-Orly, 18.40 uur, ref. X7K2PQ",
+         "agent": "daily",
+         "days_ago": 1
+        }
+       ]
+      },
+      {
+       "id": "lodging",
+       "title": "Places to stay",
+       "facts": [
+        {
+         "text": "[[Hotel Rossio]], 3 nachten, ref. HR-55821",
+         "agent": "daily",
+         "days_ago": 1
+        }
+       ]
+      },
+      {
+       "id": "packing",
+       "title": "To pack",
+       "facts": [
+        {
+         "text": "[x] Paspoort",
+         "agent": "daily",
+         "days_ago": 1
+        },
+        {
+         "text": "[x] Wandelschoenen",
+         "agent": "daily",
+         "days_ago": 1
+        },
+        {
+         "text": "[x] Kopie van de tickets",
+         "agent": "daily",
+         "days_ago": 1
+        },
+        {
+         "text": "[ ] Zonnebrand",
+         "agent": "daily",
+         "days_ago": 1
+        },
+        {
+         "text": "[ ] Lichte regenjas",
+         "agent": "daily",
+         "days_ago": 1
+        },
+        {
+         "text": "[ ] Telefoonoplader",
+         "agent": "daily",
+         "days_ago": 1
+        }
+       ]
+      },
+      {
+       "id": "budget",
+       "title": "Budget",
+       "facts": [
+        {
+         "text": "Budget: € 900 voor twee, vluchten en hotel inbegrepen",
+         "agent": "budget",
+         "days_ago": 3
+        }
+       ]
+      },
+      {
+       "id": "onsite",
+       "title": "On site",
+       "facts": [
+        {
+         "text": "Tram 28 stopt voor het hotel",
+         "agent": "daily",
+         "days_ago": 1
+        },
+        {
+         "text": "Miradouro da Senhora do Monte bij zonsondergang",
+         "agent": "daily",
+         "days_ago": 1
+        }
+       ]
+      }
+     ]
+    },
+    "records": [
+     {
+      "type": "purchase",
+      "title": "Purchases",
+      "path": "Records/Purchases.md",
+      "fields": [
+       {
+        "id": "date",
+        "title": "Date"
+       },
+       {
+        "id": "item",
+        "title": "Item"
+       },
+       {
+        "id": "store",
+        "title": "Store"
+       },
+       {
+        "id": "price",
+        "title": "Price"
+       },
+       {
+        "id": "warranty_end",
+        "title": "Warranty ends"
+       },
+       {
+        "id": "source",
+        "title": "Source"
+       }
+      ],
+      "next": "warranty_end",
+      "next_title": "Warranty ends",
+      "items": [
+       {
+        "id": "rp1",
+        "values": {
+         "date": "{day-700}",
+         "item": "Wasmachine",
+         "store": "Electro Plus",
+         "price": "€499",
+         "warranty_end": "{day+30} (legal)",
+         "source": "Factuur per e-mail ontvangen"
+        },
+        "next_in": 30,
+        "legal": true
+       },
+       {
+        "id": "rp2",
+        "values": {
+         "date": "{day-120}",
+         "item": "Tablet",
+         "store": "Webwinkel",
+         "price": "€329",
+         "warranty_end": "{day+610} (legal)",
+         "source": "Orderbevestiging"
+        },
+        "next_in": 610,
+        "legal": true
+       },
+       {
+        "id": "rp3",
+        "values": {
+         "date": "{day-800}",
+         "item": "Koptelefoon",
+         "store": "Warenhuis",
+         "price": "€89",
+         "warranty_end": "{day-70}",
+         "source": ""
+        },
+        "next_in": -70,
+        "legal": false
+       }
+      ]
+     },
+     {
+      "type": "subscription",
+      "title": "Subscriptions",
+      "path": "Records/Subscriptions.md",
+      "fields": [
+       {
+        "id": "service",
+        "title": "Service"
+       },
+       {
+        "id": "price",
+        "title": "Price"
+       },
+       {
+        "id": "period",
+        "title": "Period"
+       },
+       {
+        "id": "renewal",
+        "title": "Next renewal"
+       },
+       {
+        "id": "cancel",
+        "title": "How to cancel"
+       },
+       {
+        "id": "source",
+        "title": "Source"
+       }
+      ],
+      "next": "renewal",
+      "next_title": "Next renewal",
+      "items": [
+       {
+        "id": "rs1",
+        "values": {
+         "service": "Films streamen",
+         "price": "€13.49",
+         "period": "Maandelijks",
+         "renewal": "{day+9}",
+         "cancel": "Online, altijd",
+         "source": "Bankafschrift"
+        },
+        "next_in": 9,
+        "legal": false
+       },
+       {
+        "id": "rs2",
+        "values": {
+         "service": "Sportschool",
+         "price": "€29.90",
+         "period": "Maandelijks",
+         "renewal": "{day+17}",
+         "cancel": "Per brief, een maand van tevoren",
+         "source": "Getekend contract"
+        },
+        "next_in": 17,
+        "legal": false
+       }
+      ]
+     },
+     {
+      "type": "contract",
+      "title": "Contracts and insurance",
+      "path": "Records/Contracts and insurance.md",
+      "fields": [
+       {
+        "id": "what",
+        "title": "Type"
+       },
+       {
+        "id": "provider",
+        "title": "Provider"
+       },
+       {
+        "id": "number",
+        "title": "Number"
+       },
+       {
+        "id": "end",
+        "title": "Ends"
+       },
+       {
+        "id": "source",
+        "title": "Source"
+       }
+      ],
+      "next": "end",
+      "next_title": "Ends",
+      "items": [
+       {
+        "id": "rc1",
+        "values": {
+         "what": "Inboedelverzekering",
+         "provider": "Horizon Verzekeringen",
+         "number": "HAB-448120",
+         "end": "{day+95}",
+         "source": "Verlengingsbericht"
+        },
+        "next_in": 95,
+        "legal": false
+       }
+      ]
+     },
+     {
+      "type": "paper",
+      "title": "Papers",
+      "path": "Records/Papers.md",
+      "fields": [
+       {
+        "id": "document",
+        "title": "Document"
+       },
+       {
+        "id": "expires",
+        "title": "Expires"
+       },
+       {
+        "id": "source",
+        "title": "Source"
+       }
+      ],
+      "next": "expires",
+      "next_title": "Expires",
+      "items": [
+       {
+        "id": "rd1",
+        "values": {
+         "document": "Paspoort",
+         "expires": "{day+420}",
+         "source": "Foto van het paspoort"
+        },
+        "next_in": 420,
+        "legal": false,
+        "photo": "Bekijk de foto"
+       }
+      ]
+     },
+     {
+      "type": "booking",
+      "title": "Bookings",
+      "path": "Records/Bookings.md",
+      "fields": [
+       {
+        "id": "date",
+        "title": "Date"
+       },
+       {
+        "id": "what",
+        "title": "What"
+       },
+       {
+        "id": "provider",
+        "title": "With"
+       },
+       {
+        "id": "reference",
+        "title": "Reference"
+       },
+       {
+        "id": "trip",
+        "title": "Trip"
+       },
+       {
+        "id": "source",
+        "title": "Source"
+       }
+      ],
+      "next": "date",
+      "next_title": "Date",
+      "items": [
+       {
+        "id": "rb1",
+        "values": {
+         "date": "{day+12}",
+         "what": "Hotel, 3 nachten",
+         "provider": "Hotel Rossio",
+         "reference": "HR-55821",
+         "trip": "Weekend in Lissabon",
+         "source": "E-mail van het hotel"
+        },
+        "next_in": 12,
+        "legal": false
+       },
+       {
+        "id": "rb2",
+        "values": {
+         "date": "{day+13}",
+         "what": "Bezoek aan het kasteel, 2 tickets",
+         "provider": "Kasteel São Jorge",
+         "reference": "CSG-2291",
+         "trip": "Weekend in Lissabon",
+         "source": "Bevestigingsmail van het kasteel"
+        },
+        "next_in": 13,
+        "legal": false
+       }
+      ]
+     }
+    ]
+   },
+   "family": {
+    "lists": [
+     {
+      "id": "courses",
+      "title": "Boodschappen",
+      "kind": "list",
+      "items": [
+       {
+        "id": "c1",
+        "text": "Melk",
+        "by": "Marie",
+        "hours_ago": 5
+       },
+       {
+        "id": "c2",
+        "text": "Volkorenpasta",
+        "by": "Léa",
+        "hours_ago": 20
+       },
+       {
+        "id": "c3",
+        "text": "Citroenen",
+        "by": "Maison",
+        "hours_ago": 26
+       },
+       {
+        "id": "c4",
+        "text": "Wc-papier",
+        "by": "Marie",
+        "hours_ago": 30
+       },
+       {
+        "id": "c5",
+        "text": "Koffie",
+        "by": "Léa",
+        "done": true,
+        "hours_ago": 2
+       }
+      ]
+     },
+     {
+      "id": "taches",
+      "title": "Taken",
+      "kind": "tasks",
+      "items": [
+       {
+        "id": "t1",
+        "text": "Afspraak cv-ketel",
+        "due_in": 3,
+        "by": "Léa",
+        "hours_ago": 30
+       },
+       {
+        "id": "t2",
+        "text": "De cateraar voor Kerstmis boeken",
+        "due_in": 6,
+        "by": "Marie",
+        "hours_ago": 48
+       },
+       {
+        "id": "t3",
+        "text": "Tom inschrijven voor judo",
+        "by": "Marie",
+        "hours_ago": 12
+       },
+       {
+        "id": "t4",
+        "text": "De bibliotheekboeken terugbrengen",
+        "due_in": -1,
+        "by": "Léa",
+        "done": true,
+        "hours_ago": 4
+       }
+      ]
+     },
+     {
+      "id": "dates",
+      "title": "Datums",
+      "kind": "dates",
+      "items": [
+       {
+        "id": "d1",
+        "text": "Verjaardag van oma",
+        "due_in": 6,
+        "born": 1948,
+        "by": "Marie",
+        "hours_ago": 200
+       },
+       {
+        "id": "d2",
+        "text": "Kerstdiner bij Marie",
+        "due_in": 39,
+        "by": "Maison",
+        "hours_ago": 72
+       },
+       {
+        "id": "d3",
+        "text": "Verjaardag van Tom",
+        "due_in": 107,
+        "born": 2017,
+        "by": "Léa",
+        "hours_ago": 400
+       }
+      ]
+     }
+    ],
+    "pages": [
+     {
+      "id": "p1",
+      "title": "Voorjaarsvakantie",
+      "text": "Vakantiehuisje in Annecy, 14 tot 21 februari.\nNog te boeken: de trein heen.",
+      "by": "Maison",
+      "hours_ago": 3
+     },
+     {
+      "id": "p2",
+      "title": "Handige codes en nummers",
+      "text": "Wifi: zie de router.\nLoodgieter: dhr. Garnier, 06 00 00 00 00.\nSchool van Tom: 01 00 00 00 00.",
+      "by": "Marie",
+      "hours_ago": 26
+     },
+     {
+      "id": "p3",
+      "title": "Menu van de week",
+      "text": "Maandag: pasta met citroen.\nDinsdag: soep en boterhammen.",
+      "by": "Léa",
+      "hours_ago": 50
+     }
+    ]
+   }
+  }
+ },
+ "cases": [
+  {
+   "id": "fr-p01",
+   "lang": "fr",
+   "carnet": "personal",
+   "type": "exact",
+   "q": "Marc Durand",
+   "expect": [
+    "page:marc"
+   ],
+   "category": "people"
+  },
+  {
+   "id": "en-p01",
+   "lang": "en",
+   "carnet": "personal",
+   "type": "exact",
+   "q": "Marc Durand",
+   "expect": [
+    "page:marc"
+   ],
+   "category": "people"
+  },
+  {
+   "id": "de-p01",
+   "lang": "de",
+   "carnet": "personal",
+   "type": "exact",
+   "q": "Marc Durand",
+   "expect": [
+    "page:marc"
+   ],
+   "category": "people"
+  },
+  {
+   "id": "es-p01",
+   "lang": "es",
+   "carnet": "personal",
+   "type": "exact",
+   "q": "Marc Durand",
+   "expect": [
+    "page:marc"
+   ],
+   "category": "people"
+  },
+  {
+   "id": "nl-p01",
+   "lang": "nl",
+   "carnet": "personal",
+   "type": "exact",
+   "q": "Marc Durand",
+   "expect": [
+    "page:marc"
+   ],
+   "category": "people"
+  },
+  {
+   "id": "fr-p02",
+   "lang": "fr",
+   "carnet": "personal",
+   "type": "exact",
+   "q": "ponceuse",
+   "expect": [
+    "fact:marc/agreed/0"
+   ],
+   "category": "people"
+  },
+  {
+   "id": "en-p02",
+   "lang": "en",
+   "carnet": "personal",
+   "type": "exact",
+   "q": "sander",
+   "expect": [
+    "fact:marc/agreed/0"
+   ],
+   "category": "people"
+  },
+  {
+   "id": "de-p02",
+   "lang": "de",
+   "carnet": "personal",
+   "type": "exact",
+   "q": "Schleifer",
+   "expect": [
+    "fact:marc/agreed/0"
+   ],
+   "category": "people"
+  },
+  {
+   "id": "es-p02",
+   "lang": "es",
+   "carnet": "personal",
+   "type": "exact",
+   "q": "lijadora",
+   "expect": [
+    "fact:marc/agreed/0"
+   ],
+   "category": "people"
+  },
+  {
+   "id": "nl-p02",
+   "lang": "nl",
+   "carnet": "personal",
+   "type": "exact",
+   "q": "schuurmachine",
+   "expect": [
+    "fact:marc/agreed/0"
+   ],
+   "category": "people"
+  },
+  {
+   "id": "fr-p03",
+   "lang": "fr",
+   "carnet": "personal",
+   "type": "exact",
+   "q": "plan de travail quartz",
+   "expect": [
+    "fact:kitchen/decisions/1"
+   ],
+   "category": "home"
+  },
+  {
+   "id": "en-p03",
+   "lang": "en",
+   "carnet": "personal",
+   "type": "exact",
+   "q": "quartz worktop",
+   "expect": [
+    "fact:kitchen/decisions/1"
+   ],
+   "category": "home"
+  },
+  {
+   "id": "de-p03",
+   "lang": "de",
+   "carnet": "personal",
+   "type": "exact",
+   "q": "Arbeitsplatte Quarz",
+   "expect": [
+    "fact:kitchen/decisions/1"
+   ],
+   "category": "home"
+  },
+  {
+   "id": "es-p03",
+   "lang": "es",
+   "carnet": "personal",
+   "type": "exact",
+   "q": "encimera de cuarzo",
+   "expect": [
+    "fact:kitchen/decisions/1"
+   ],
+   "category": "home"
+  },
+  {
+   "id": "nl-p03",
+   "lang": "nl",
+   "carnet": "personal",
+   "type": "exact",
+   "q": "kwarts werkblad",
+   "expect": [
+    "fact:kitchen/decisions/1"
+   ],
+   "category": "home"
+  },
+  {
+   "id": "fr-p04",
+   "lang": "fr",
+   "carnet": "personal",
+   "type": "typo",
+   "q": "aniv marc",
+   "expect": [
+    "fact:marc/dates/0"
+   ],
+   "category": "dates"
+  },
+  {
+   "id": "en-p04",
+   "lang": "en",
+   "carnet": "personal",
+   "type": "typo",
+   "q": "bday marc",
+   "expect": [
+    "fact:marc/dates/0"
+   ],
+   "category": "dates"
+  },
+  {
+   "id": "de-p04",
+   "lang": "de",
+   "carnet": "personal",
+   "type": "typo",
+   "q": "geburtstg marc",
+   "expect": [
+    "fact:marc/dates/0"
+   ],
+   "category": "dates"
+  },
+  {
+   "id": "es-p04",
+   "lang": "es",
+   "carnet": "personal",
+   "type": "typo",
+   "q": "cumple marc",
+   "expect": [
+    "fact:marc/dates/0"
+   ],
+   "category": "dates"
+  },
+  {
+   "id": "nl-p04",
+   "lang": "nl",
+   "carnet": "personal",
+   "type": "typo",
+   "q": "verjaardg marc",
+   "expect": [
+    "fact:marc/dates/0"
+   ],
+   "category": "dates"
+  },
+  {
+   "id": "fr-p05",
+   "lang": "fr",
+   "carnet": "personal",
+   "type": "typo",
+   "q": "anniversiare claire",
+   "expect": [
+    "fact:claire/dates/0"
+   ],
+   "category": "dates"
+  },
+  {
+   "id": "en-p05",
+   "lang": "en",
+   "carnet": "personal",
+   "type": "typo",
+   "q": "claire birthdya",
+   "expect": [
+    "fact:claire/dates/0"
+   ],
+   "category": "dates"
+  },
+  {
+   "id": "de-p05",
+   "lang": "de",
+   "carnet": "personal",
+   "type": "typo",
+   "q": "Claire Geburstag",
+   "expect": [
+    "fact:claire/dates/0"
+   ],
+   "category": "dates"
+  },
+  {
+   "id": "es-p05",
+   "lang": "es",
+   "carnet": "personal",
+   "type": "typo",
+   "q": "cumpleanos clare",
+   "expect": [
+    "fact:claire/dates/0"
+   ],
+   "category": "dates"
+  },
+  {
+   "id": "nl-p05",
+   "lang": "nl",
+   "carnet": "personal",
+   "type": "typo",
+   "q": "claire verjardag",
+   "expect": [
+    "fact:claire/dates/0"
+   ],
+   "category": "dates"
+  },
+  {
+   "id": "fr-p06",
+   "lang": "fr",
+   "carnet": "personal",
+   "type": "typo",
+   "q": "renovasion cuisine",
+   "expect": [
+    "page:kitchen"
+   ],
+   "category": "home"
+  },
+  {
+   "id": "en-p06",
+   "lang": "en",
+   "carnet": "personal",
+   "type": "typo",
+   "q": "kitchen renovaton",
+   "expect": [
+    "page:kitchen"
+   ],
+   "category": "home"
+  },
+  {
+   "id": "de-p06",
+   "lang": "de",
+   "carnet": "personal",
+   "type": "typo",
+   "q": "Küchenrenovirung",
+   "expect": [
+    "page:kitchen"
+   ],
+   "category": "home"
+  },
+  {
+   "id": "es-p06",
+   "lang": "es",
+   "carnet": "personal",
+   "type": "typo",
+   "q": "reforma cosina",
+   "expect": [
+    "page:kitchen"
+   ],
+   "category": "home"
+  },
+  {
+   "id": "nl-p06",
+   "lang": "nl",
+   "carnet": "personal",
+   "type": "typo",
+   "q": "keukenrenovatei",
+   "expect": [
+    "page:kitchen"
+   ],
+   "category": "home"
+  },
+  {
+   "id": "fr-p07",
+   "lang": "fr",
+   "carnet": "personal",
+   "type": "typo",
+   "q": "voyage japn",
+   "expect": [
+    "page:japan"
+   ],
+   "category": "trips"
+  },
+  {
+   "id": "en-p07",
+   "lang": "en",
+   "carnet": "personal",
+   "type": "typo",
+   "q": "japan tirp",
+   "expect": [
+    "page:japan"
+   ],
+   "category": "trips"
+  },
+  {
+   "id": "de-p07",
+   "lang": "de",
+   "carnet": "personal",
+   "type": "typo",
+   "q": "Japanrese",
+   "expect": [
+    "page:japan"
+   ],
+   "category": "trips"
+  },
+  {
+   "id": "es-p07",
+   "lang": "es",
+   "carnet": "personal",
+   "type": "accent",
+   "q": "viaje japon",
+   "expect": [
+    "page:japan"
+   ],
+   "category": "trips"
+  },
+  {
+   "id": "nl-p07",
+   "lang": "nl",
+   "carnet": "personal",
+   "type": "typo",
+   "q": "reis japn",
+   "expect": [
+    "page:japan"
+   ],
+   "category": "trips"
+  },
+  {
+   "id": "fr-p08",
+   "lang": "fr",
+   "carnet": "personal",
+   "type": "accent",
+   "q": "anniversaire ines",
+   "expect": [
+    "page:ines"
+   ],
+   "category": "people"
+  },
+  {
+   "id": "en-p08",
+   "lang": "en",
+   "carnet": "personal",
+   "type": "accent",
+   "q": "ines birthday",
+   "expect": [
+    "page:ines"
+   ],
+   "category": "people"
+  },
+  {
+   "id": "de-p08",
+   "lang": "de",
+   "carnet": "personal",
+   "type": "accent",
+   "q": "Ines Geburtstag",
+   "expect": [
+    "page:ines"
+   ],
+   "category": "people"
+  },
+  {
+   "id": "es-p08",
+   "lang": "es",
+   "carnet": "personal",
+   "type": "accent",
+   "q": "cumpleanos de ines",
+   "expect": [
+    "page:ines"
+   ],
+   "category": "people"
+  },
+  {
+   "id": "nl-p08",
+   "lang": "nl",
+   "carnet": "personal",
+   "type": "accent",
+   "q": "verjaardag ines",
+   "expect": [
+    "page:ines"
+   ],
+   "category": "people"
+  },
+  {
+   "id": "fr-p09",
+   "lang": "fr",
+   "carnet": "personal",
+   "type": "accent",
+   "q": "impots 2026",
+   "expect": [
+    "page:taxes"
+   ],
+   "category": "money"
+  },
+  {
+   "id": "en-p09",
+   "lang": "en",
+   "carnet": "personal",
+   "type": "exact",
+   "q": "taxes 2026",
+   "expect": [
+    "page:taxes"
+   ],
+   "category": "money"
+  },
+  {
+   "id": "de-p09",
+   "lang": "de",
+   "carnet": "personal",
+   "type": "exact",
+   "q": "Steuern 2026",
+   "expect": [
+    "page:taxes"
+   ],
+   "category": "money"
+  },
+  {
+   "id": "es-p09",
+   "lang": "es",
+   "carnet": "personal",
+   "type": "exact",
+   "q": "impuestos 2026",
+   "expect": [
+    "page:taxes"
+   ],
+   "category": "money"
+  },
+  {
+   "id": "nl-p09",
+   "lang": "nl",
+   "carnet": "personal",
+   "type": "exact",
+   "q": "belastingen 2026",
+   "expect": [
+    "page:taxes"
+   ],
+   "category": "money"
+  },
+  {
+   "id": "fr-p10",
+   "lang": "fr",
+   "carnet": "personal",
+   "type": "accent",
+   "q": "entretien chaudiere",
+   "expect": [
+    "fact:home/habits/0"
+   ],
+   "category": "home"
+  },
+  {
+   "id": "en-p10",
+   "lang": "en",
+   "carnet": "personal",
+   "type": "exact",
+   "q": "boiler service",
+   "expect": [
+    "fact:home/habits/0"
+   ],
+   "category": "home"
+  },
+  {
+   "id": "de-p10",
+   "lang": "de",
+   "carnet": "personal",
+   "type": "exact",
+   "q": "Heizungswartung",
+   "expect": [
+    "fact:home/habits/0"
+   ],
+   "category": "home"
+  },
+  {
+   "id": "es-p10",
+   "lang": "es",
+   "carnet": "personal",
+   "type": "accent",
+   "q": "revision caldera",
+   "expect": [
+    "fact:home/habits/0"
+   ],
+   "category": "home"
+  },
+  {
+   "id": "nl-p10",
+   "lang": "nl",
+   "carnet": "personal",
+   "type": "synonym",
+   "q": "cv ketel onderhoud",
+   "expect": [
+    "fact:home/habits/0"
+   ],
+   "category": "home"
+  },
+  {
+   "id": "fr-p11",
+   "lang": "fr",
+   "carnet": "personal",
+   "type": "synonym",
+   "q": "rendez-vous toubib",
+   "expect": [
+    "task:t0019"
+   ],
+   "category": "health"
+  },
+  {
+   "id": "en-p11",
+   "lang": "en",
+   "carnet": "personal",
+   "type": "synonym",
+   "q": "doctor appointment",
+   "expect": [
+    "task:t0019"
+   ],
+   "category": "health"
+  },
+  {
+   "id": "de-p11",
+   "lang": "de",
+   "carnet": "personal",
+   "type": "synonym",
+   "q": "Arzttermin",
+   "expect": [
+    "task:t0019"
+   ],
+   "category": "health"
+  },
+  {
+   "id": "es-p11",
+   "lang": "es",
+   "carnet": "personal",
+   "type": "synonym",
+   "q": "cita médico",
+   "expect": [
+    "task:t0019"
+   ],
+   "category": "health"
+  },
+  {
+   "id": "nl-p11",
+   "lang": "nl",
+   "carnet": "personal",
+   "type": "synonym",
+   "q": "afspraak dokter",
+   "expect": [
+    "task:t0019"
+   ],
+   "category": "health"
+  },
+  {
+   "id": "fr-p12",
+   "lang": "fr",
+   "carnet": "personal",
+   "type": "synonym",
+   "q": "note lave-linge",
+   "expect": [
+    "record:rp1"
+   ],
+   "category": "money"
+  },
+  {
+   "id": "en-p12",
+   "lang": "en",
+   "carnet": "personal",
+   "type": "synonym",
+   "q": "washer receipt",
+   "expect": [
+    "record:rp1"
+   ],
+   "category": "money"
+  },
+  {
+   "id": "de-p12",
+   "lang": "de",
+   "carnet": "personal",
+   "type": "synonym",
+   "q": "Rechnung Waschmaschine",
+   "expect": [
+    "record:rp1"
+   ],
+   "category": "money"
+  },
+  {
+   "id": "es-p12",
+   "lang": "es",
+   "carnet": "personal",
+   "type": "synonym",
+   "q": "factura lavadora",
+   "expect": [
+    "record:rp1"
+   ],
+   "category": "money"
+  },
+  {
+   "id": "nl-p12",
+   "lang": "nl",
+   "carnet": "personal",
+   "type": "synonym",
+   "q": "bon wasmachine",
+   "expect": [
+    "record:rp1"
+   ],
+   "category": "money"
+  },
+  {
+   "id": "fr-p13",
+   "lang": "fr",
+   "carnet": "personal",
+   "type": "synonym",
+   "q": "assurance maison",
+   "expect": [
+    "record:rc1"
+   ],
+   "category": "papers"
+  },
+  {
+   "id": "en-p13",
+   "lang": "en",
+   "carnet": "personal",
+   "type": "synonym",
+   "q": "house insurance",
+   "expect": [
+    "record:rc1"
+   ],
+   "category": "papers"
+  },
+  {
+   "id": "de-p13",
+   "lang": "de",
+   "carnet": "personal",
+   "type": "synonym",
+   "q": "Wohnungsversicherung",
+   "expect": [
+    "record:rc1"
+   ],
+   "category": "papers"
+  },
+  {
+   "id": "es-p13",
+   "lang": "es",
+   "carnet": "personal",
+   "type": "synonym",
+   "q": "seguro de casa",
+   "expect": [
+    "record:rc1"
+   ],
+   "category": "papers"
+  },
+  {
+   "id": "nl-p13",
+   "lang": "nl",
+   "carnet": "personal",
+   "type": "synonym",
+   "q": "woonverzekering",
+   "expect": [
+    "record:rc1"
+   ],
+   "category": "papers"
+  },
+  {
+   "id": "fr-p14",
+   "lang": "fr",
+   "carnet": "personal",
+   "type": "synonym",
+   "q": "abonnement netflix",
+   "expect": [
+    "record:rs1"
+   ],
+   "category": "money"
+  },
+  {
+   "id": "en-p14",
+   "lang": "en",
+   "carnet": "personal",
+   "type": "synonym",
+   "q": "netflix subscription",
+   "expect": [
+    "record:rs1"
+   ],
+   "category": "money"
+  },
+  {
+   "id": "de-p14",
+   "lang": "de",
+   "carnet": "personal",
+   "type": "synonym",
+   "q": "Netflix Abo",
+   "expect": [
+    "record:rs1"
+   ],
+   "category": "money"
+  },
+  {
+   "id": "es-p14",
+   "lang": "es",
+   "carnet": "personal",
+   "type": "synonym",
+   "q": "suscripción netflix",
+   "expect": [
+    "record:rs1"
+   ],
+   "category": "money"
+  },
+  {
+   "id": "nl-p14",
+   "lang": "nl",
+   "carnet": "personal",
+   "type": "synonym",
+   "q": "netflix abonnement",
+   "expect": [
+    "record:rs1"
+   ],
+   "category": "money"
+  },
+  {
+   "id": "fr-p15",
+   "lang": "fr",
+   "carnet": "personal",
+   "type": "synonym",
+   "q": "abonnement salle de gym",
+   "expect": [
+    "record:rs2"
+   ],
+   "category": "money"
+  },
+  {
+   "id": "en-p15",
+   "lang": "en",
+   "carnet": "personal",
+   "type": "synonym",
+   "q": "fitness membership",
+   "expect": [
+    "record:rs2"
+   ],
+   "category": "money"
+  },
+  {
+   "id": "de-p15",
+   "lang": "de",
+   "carnet": "personal",
+   "type": "synonym",
+   "q": "Gym Mitgliedschaft",
+   "expect": [
+    "record:rs2"
+   ],
+   "category": "money"
+  },
+  {
+   "id": "es-p15",
+   "lang": "es",
+   "carnet": "personal",
+   "type": "synonym",
+   "q": "cuota del gym",
+   "expect": [
+    "record:rs2"
+   ],
+   "category": "money"
+  },
+  {
+   "id": "nl-p15",
+   "lang": "nl",
+   "carnet": "personal",
+   "type": "synonym",
+   "q": "fitness abonnement",
+   "expect": [
+    "record:rs2"
+   ],
+   "category": "money"
+  },
+  {
+   "id": "fr-p16",
+   "lang": "fr",
+   "carnet": "personal",
+   "type": "synonym",
+   "q": "charpentier",
+   "expect": [
+    "fact:marc/work/0"
+   ],
+   "category": "people"
+  },
+  {
+   "id": "en-p16",
+   "lang": "en",
+   "carnet": "personal",
+   "type": "synonym",
+   "q": "joiner",
+   "expect": [
+    "fact:marc/work/0"
+   ],
+   "category": "people"
+  },
+  {
+   "id": "de-p16",
+   "lang": "de",
+   "carnet": "personal",
+   "type": "synonym",
+   "q": "Tischler",
+   "expect": [
+    "fact:marc/work/0"
+   ],
+   "category": "people"
+  },
+  {
+   "id": "es-p16",
+   "lang": "es",
+   "carnet": "personal",
+   "type": "synonym",
+   "q": "ebanista",
+   "expect": [
+    "fact:marc/work/0"
+   ],
+   "category": "people"
+  },
+  {
+   "id": "nl-p16",
+   "lang": "nl",
+   "carnet": "personal",
+   "type": "synonym",
+   "q": "schrijnwerker",
+   "expect": [
+    "fact:marc/work/0"
+   ],
+   "category": "people"
+  },
+  {
+   "id": "fr-p17",
+   "lang": "fr",
+   "carnet": "personal",
+   "type": "synonym",
+   "q": "nouvelle bagnole",
+   "expect": [
+    "page:car"
+   ],
+   "category": "money"
+  },
+  {
+   "id": "en-p17",
+   "lang": "en",
+   "carnet": "personal",
+   "type": "synonym",
+   "q": "new vehicle",
+   "expect": [
+    "page:car"
+   ],
+   "category": "money"
+  },
+  {
+   "id": "de-p17",
+   "lang": "de",
+   "carnet": "personal",
+   "type": "synonym",
+   "q": "neuer Wagen",
+   "expect": [
+    "page:car"
+   ],
+   "category": "money"
+  },
+  {
+   "id": "es-p17",
+   "lang": "es",
+   "carnet": "personal",
+   "type": "synonym",
+   "q": "coche nuevo",
+   "expect": [
+    "page:car"
+   ],
+   "category": "money"
+  },
+  {
+   "id": "nl-p17",
+   "lang": "nl",
+   "carnet": "personal",
+   "type": "synonym",
+   "q": "nieuwe wagen",
+   "expect": [
+    "page:car"
+   ],
+   "category": "money"
+  },
+  {
+   "id": "fr-p18",
+   "lang": "fr",
+   "carnet": "personal",
+   "type": "question",
+   "q": "Marc est allergique à quoi ?",
+   "expect": [
+    "fact:marc/tastes/1"
+   ],
+   "category": "people"
+  },
+  {
+   "id": "en-p18",
+   "lang": "en",
+   "carnet": "personal",
+   "type": "question",
+   "q": "What is Marc allergic to?",
+   "expect": [
+    "fact:marc/tastes/1"
+   ],
+   "category": "people"
+  },
+  {
+   "id": "de-p18",
+   "lang": "de",
+   "carnet": "personal",
+   "type": "question",
+   "q": "Wogegen ist Marc allergisch?",
+   "expect": [
+    "fact:marc/tastes/1"
+   ],
+   "category": "people"
+  },
+  {
+   "id": "es-p18",
+   "lang": "es",
+   "carnet": "personal",
+   "type": "question",
+   "q": "¿A qué es alérgico Marc?",
+   "expect": [
+    "fact:marc/tastes/1"
+   ],
+   "category": "people"
+  },
+  {
+   "id": "nl-p18",
+   "lang": "nl",
+   "carnet": "personal",
+   "type": "question",
+   "q": "Waar is Marc allergisch voor?",
+   "expect": [
+    "fact:marc/tastes/1"
+   ],
+   "category": "people"
+  },
+  {
+   "id": "fr-p19",
+   "lang": "fr",
+   "carnet": "personal",
+   "type": "question",
+   "q": "C'est quand l'anniversaire de Lucas ?",
+   "expect": [
+    "fact:lucas/dates/0"
+   ],
+   "category": "dates"
+  },
+  {
+   "id": "en-p19",
+   "lang": "en",
+   "carnet": "personal",
+   "type": "question",
+   "q": "When is Lucas's birthday?",
+   "expect": [
+    "fact:lucas/dates/0"
+   ],
+   "category": "dates"
+  },
+  {
+   "id": "de-p19",
+   "lang": "de",
+   "carnet": "personal",
+   "type": "question",
+   "q": "Wann hat Lucas Geburtstag?",
+   "expect": [
+    "fact:lucas/dates/0"
+   ],
+   "category": "dates"
+  },
+  {
+   "id": "es-p19",
+   "lang": "es",
+   "carnet": "personal",
+   "type": "question",
+   "q": "¿Cuándo es el cumpleaños de Lucas?",
+   "expect": [
+    "fact:lucas/dates/0"
+   ],
+   "category": "dates"
+  },
+  {
+   "id": "nl-p19",
+   "lang": "nl",
+   "carnet": "personal",
+   "type": "question",
+   "q": "Wanneer is Lucas jarig?",
+   "expect": [
+    "fact:lucas/dates/0"
+   ],
+   "category": "dates"
+  },
+  {
+   "id": "fr-p20",
+   "lang": "fr",
+   "carnet": "personal",
+   "type": "question",
+   "q": "Combien coûte la cuisine ?",
+   "expect": [
+    "fact:kitchen/budget/0"
+   ],
+   "category": "money"
+  },
+  {
+   "id": "en-p20",
+   "lang": "en",
+   "carnet": "personal",
+   "type": "question",
+   "q": "How much is the kitchen quote?",
+   "expect": [
+    "fact:kitchen/budget/0"
+   ],
+   "category": "money"
+  },
+  {
+   "id": "de-p20",
+   "lang": "de",
+   "carnet": "personal",
+   "type": "question",
+   "q": "Was kostet die Küche?",
+   "expect": [
+    "fact:kitchen/budget/0"
+   ],
+   "category": "money"
+  },
+  {
+   "id": "es-p20",
+   "lang": "es",
+   "carnet": "personal",
+   "type": "question",
+   "q": "¿Cuánto cuesta la cocina?",
+   "expect": [
+    "fact:kitchen/budget/0"
+   ],
+   "category": "money"
+  },
+  {
+   "id": "nl-p20",
+   "lang": "nl",
+   "carnet": "personal",
+   "type": "question",
+   "q": "Hoeveel kost de keuken?",
+   "expect": [
+    "fact:kitchen/budget/0"
+   ],
+   "category": "money"
+  },
+  {
+   "id": "fr-p21",
+   "lang": "fr",
+   "carnet": "personal",
+   "type": "question",
+   "q": "Qui a un double de mes clés ?",
+   "expect": [
+    "fact:sophie/agreed/1",
+    "fact:home/contacts/0"
+   ],
+   "category": "people"
+  },
+  {
+   "id": "en-p21",
+   "lang": "en",
+   "carnet": "personal",
+   "type": "question",
+   "q": "Who has a spare key?",
+   "expect": [
+    "fact:sophie/agreed/1",
+    "fact:home/contacts/0"
+   ],
+   "category": "people"
+  },
+  {
+   "id": "de-p21",
+   "lang": "de",
+   "carnet": "personal",
+   "type": "question",
+   "q": "Wer hat einen Zweitschlüssel?",
+   "expect": [
+    "fact:sophie/agreed/1",
+    "fact:home/contacts/0"
+   ],
+   "category": "people"
+  },
+  {
+   "id": "es-p21",
+   "lang": "es",
+   "carnet": "personal",
+   "type": "question",
+   "q": "¿Quién tiene un duplicado de mis llaves?",
+   "expect": [
+    "fact:sophie/agreed/1",
+    "fact:home/contacts/0"
+   ],
+   "category": "people"
+  },
+  {
+   "id": "nl-p21",
+   "lang": "nl",
+   "carnet": "personal",
+   "type": "question",
+   "q": "Wie heeft een reservesleutel?",
+   "expect": [
+    "fact:sophie/agreed/1",
+    "fact:home/contacts/0"
+   ],
+   "category": "people"
+  },
+  {
+   "id": "fr-p22",
+   "lang": "fr",
+   "carnet": "personal",
+   "type": "question",
+   "q": "Quel budget pour le Japon ?",
+   "expect": [
+    "fact:japan/budget/0"
+   ],
+   "category": "trips"
+  },
+  {
+   "id": "en-p22",
+   "lang": "en",
+   "carnet": "personal",
+   "type": "question",
+   "q": "What's the budget for Japan?",
+   "expect": [
+    "fact:japan/budget/0"
+   ],
+   "category": "trips"
+  },
+  {
+   "id": "de-p22",
+   "lang": "de",
+   "carnet": "personal",
+   "type": "question",
+   "q": "Wie viel Budget für Japan?",
+   "expect": [
+    "fact:japan/budget/0"
+   ],
+   "category": "trips"
+  },
+  {
+   "id": "es-p22",
+   "lang": "es",
+   "carnet": "personal",
+   "type": "question",
+   "q": "¿Qué presupuesto para Japón?",
+   "expect": [
+    "fact:japan/budget/0"
+   ],
+   "category": "trips"
+  },
+  {
+   "id": "nl-p22",
+   "lang": "nl",
+   "carnet": "personal",
+   "type": "question",
+   "q": "Wat is het budget voor Japan?",
+   "expect": [
+    "fact:japan/budget/0"
+   ],
+   "category": "trips"
+  },
+  {
+   "id": "fr-p23",
+   "lang": "fr",
+   "carnet": "personal",
+   "type": "question",
+   "q": "Je télétravaille quel jour ?",
+   "expect": [
+    "fact:me/work/0"
+   ],
+   "category": "work"
+  },
+  {
+   "id": "en-p23",
+   "lang": "en",
+   "carnet": "personal",
+   "type": "question",
+   "q": "Which day do I work from home?",
+   "expect": [
+    "fact:me/work/0"
+   ],
+   "category": "work"
+  },
+  {
+   "id": "de-p23",
+   "lang": "de",
+   "carnet": "personal",
+   "type": "question",
+   "q": "An welchem Tag bin ich im Homeoffice?",
+   "expect": [
+    "fact:me/work/0"
+   ],
+   "category": "work"
+  },
+  {
+   "id": "es-p23",
+   "lang": "es",
+   "carnet": "personal",
+   "type": "question",
+   "q": "¿Qué día teletrabajo?",
+   "expect": [
+    "fact:me/work/0"
+   ],
+   "category": "work"
+  },
+  {
+   "id": "nl-p23",
+   "lang": "nl",
+   "carnet": "personal",
+   "type": "question",
+   "q": "Op welke dag werk ik thuis?",
+   "expect": [
+    "fact:me/work/0"
+   ],
+   "category": "work"
+  },
+  {
+   "id": "fr-p24",
+   "lang": "fr",
+   "carnet": "personal",
+   "type": "date",
+   "q": "la semaine prochaine",
+   "expect": [
+    "*dated"
+   ],
+   "category": "dates",
+   "window": "next_week"
+  },
+  {
+   "id": "en-p24",
+   "lang": "en",
+   "carnet": "personal",
+   "type": "date",
+   "q": "next week",
+   "expect": [
+    "*dated"
+   ],
+   "category": "dates",
+   "window": "next_week"
+  },
+  {
+   "id": "de-p24",
+   "lang": "de",
+   "carnet": "personal",
+   "type": "date",
+   "q": "nächste Woche",
+   "expect": [
+    "*dated"
+   ],
+   "category": "dates",
+   "window": "next_week"
+  },
+  {
+   "id": "es-p24",
+   "lang": "es",
+   "carnet": "personal",
+   "type": "date",
+   "q": "la semana que viene",
+   "expect": [
+    "*dated"
+   ],
+   "category": "dates",
+   "window": "next_week"
+  },
+  {
+   "id": "nl-p24",
+   "lang": "nl",
+   "carnet": "personal",
+   "type": "date",
+   "q": "volgende week",
+   "expect": [
+    "*dated"
+   ],
+   "category": "dates",
+   "window": "next_week"
+  },
+  {
+   "id": "fr-p25",
+   "lang": "fr",
+   "carnet": "personal",
+   "type": "date",
+   "q": "anniversaires en décembre",
+   "expect": [
+    "fact:marc/dates/0",
+    "fact:claire/dates/0",
+    "fact:lucas/dates/0",
+    "page:ines"
+   ],
+   "category": "dates",
+   "window": "december"
+  },
+  {
+   "id": "en-p25",
+   "lang": "en",
+   "carnet": "personal",
+   "type": "date",
+   "q": "birthdays in December",
+   "expect": [
+    "fact:marc/dates/0",
+    "fact:claire/dates/0",
+    "fact:lucas/dates/0",
+    "page:ines"
+   ],
+   "category": "dates",
+   "window": "december"
+  },
+  {
+   "id": "de-p25",
+   "lang": "de",
+   "carnet": "personal",
+   "type": "date",
+   "q": "Geburtstage im Dezember",
+   "expect": [
+    "fact:marc/dates/0",
+    "fact:claire/dates/0",
+    "fact:lucas/dates/0",
+    "page:ines"
+   ],
+   "category": "dates",
+   "window": "december"
+  },
+  {
+   "id": "es-p25",
+   "lang": "es",
+   "carnet": "personal",
+   "type": "date",
+   "q": "cumpleaños en diciembre",
+   "expect": [
+    "fact:marc/dates/0",
+    "fact:claire/dates/0",
+    "fact:lucas/dates/0",
+    "page:ines"
+   ],
+   "category": "dates",
+   "window": "december"
+  },
+  {
+   "id": "nl-p25",
+   "lang": "nl",
+   "carnet": "personal",
+   "type": "date",
+   "q": "verjaardagen in december",
+   "expect": [
+    "fact:marc/dates/0",
+    "fact:claire/dates/0",
+    "fact:lucas/dates/0",
+    "page:ines"
+   ],
+   "category": "dates",
+   "window": "december"
+  },
+  {
+   "id": "fr-p26",
+   "lang": "fr",
+   "carnet": "personal",
+   "type": "date",
+   "q": "à faire avant Noël",
+   "expect": [
+    "*dated:task"
+   ],
+   "category": "dates",
+   "window": "before_christmas"
+  },
+  {
+   "id": "en-p26",
+   "lang": "en",
+   "carnet": "personal",
+   "type": "date",
+   "q": "to do before Christmas",
+   "expect": [
+    "*dated:task"
+   ],
+   "category": "dates",
+   "window": "before_christmas"
+  },
+  {
+   "id": "de-p26",
+   "lang": "de",
+   "carnet": "personal",
+   "type": "date",
+   "q": "vor Weihnachten erledigen",
+   "expect": [
+    "*dated:task"
+   ],
+   "category": "dates",
+   "window": "before_christmas"
+  },
+  {
+   "id": "es-p26",
+   "lang": "es",
+   "carnet": "personal",
+   "type": "date",
+   "q": "qué hacer antes de Navidad",
+   "expect": [
+    "*dated:task"
+   ],
+   "category": "dates",
+   "window": "before_christmas"
+  },
+  {
+   "id": "nl-p26",
+   "lang": "nl",
+   "carnet": "personal",
+   "type": "date",
+   "q": "voor Kerstmis doen",
+   "expect": [
+    "*dated:task"
+   ],
+   "category": "dates",
+   "window": "before_christmas"
+  },
+  {
+   "id": "fr-p27",
+   "lang": "fr",
+   "carnet": "personal",
+   "type": "date",
+   "q": "à payer ce mois-ci",
+   "expect": [
+    "record:rs1",
+    "record:rs2",
+    "task:t0007",
+    "task:t0003"
+   ],
+   "category": "money",
+   "window": "this_month"
+  },
+  {
+   "id": "en-p27",
+   "lang": "en",
+   "carnet": "personal",
+   "type": "date",
+   "q": "to pay this month",
+   "expect": [
+    "record:rs1",
+    "record:rs2",
+    "task:t0007",
+    "task:t0003"
+   ],
+   "category": "money",
+   "window": "this_month"
+  },
+  {
+   "id": "de-p27",
+   "lang": "de",
+   "carnet": "personal",
+   "type": "date",
+   "q": "diesen Monat zu zahlen",
+   "expect": [
+    "record:rs1",
+    "record:rs2",
+    "task:t0007",
+    "task:t0003"
+   ],
+   "category": "money",
+   "window": "this_month"
+  },
+  {
+   "id": "es-p27",
+   "lang": "es",
+   "carnet": "personal",
+   "type": "date",
+   "q": "a pagar este mes",
+   "expect": [
+    "record:rs1",
+    "record:rs2",
+    "task:t0007",
+    "task:t0003"
+   ],
+   "category": "money",
+   "window": "this_month"
+  },
+  {
+   "id": "nl-p27",
+   "lang": "nl",
+   "carnet": "personal",
+   "type": "date",
+   "q": "deze maand te betalen",
+   "expect": [
+    "record:rs1",
+    "record:rs2",
+    "task:t0007",
+    "task:t0003"
+   ],
+   "category": "money",
+   "window": "this_month"
+  },
+  {
+   "id": "fr-p28",
+   "lang": "fr",
+   "carnet": "personal",
+   "type": "date",
+   "q": "ce week-end",
+   "expect": [
+    "*dated"
+   ],
+   "category": "dates",
+   "window": "this_weekend"
+  },
+  {
+   "id": "en-p28",
+   "lang": "en",
+   "carnet": "personal",
+   "type": "date",
+   "q": "this weekend",
+   "expect": [
+    "*dated"
+   ],
+   "category": "dates",
+   "window": "this_weekend"
+  },
+  {
+   "id": "de-p28",
+   "lang": "de",
+   "carnet": "personal",
+   "type": "date",
+   "q": "dieses Wochenende",
+   "expect": [
+    "*dated"
+   ],
+   "category": "dates",
+   "window": "this_weekend"
+  },
+  {
+   "id": "es-p28",
+   "lang": "es",
+   "carnet": "personal",
+   "type": "date",
+   "q": "este fin de semana",
+   "expect": [
+    "*dated"
+   ],
+   "category": "dates",
+   "window": "this_weekend"
+  },
+  {
+   "id": "nl-p28",
+   "lang": "nl",
+   "carnet": "personal",
+   "type": "date",
+   "q": "dit weekend",
+   "expect": [
+    "*dated"
+   ],
+   "category": "dates",
+   "window": "this_weekend"
+  },
+  {
+   "id": "fr-p29",
+   "lang": "fr",
+   "carnet": "personal",
+   "type": "voice",
+   "q": "euh qu'est-ce que je dois offrir à Marc déjà",
+   "expect": [
+    "task:t0004",
+    "fact:marc/gifts/0"
+   ],
+   "category": "people"
+  },
+  {
+   "id": "en-p29",
+   "lang": "en",
+   "carnet": "personal",
+   "type": "voice",
+   "q": "um what should I get Marc as a present",
+   "expect": [
+    "task:t0004",
+    "fact:marc/gifts/0"
+   ],
+   "category": "people"
+  },
+  {
+   "id": "de-p29",
+   "lang": "de",
+   "carnet": "personal",
+   "type": "voice",
+   "q": "äh was schenke ich Marc nochmal",
+   "expect": [
+    "task:t0004",
+    "fact:marc/gifts/0"
+   ],
+   "category": "people"
+  },
+  {
+   "id": "es-p29",
+   "lang": "es",
+   "carnet": "personal",
+   "type": "voice",
+   "q": "eh qué le regalo a Marc",
+   "expect": [
+    "task:t0004",
+    "fact:marc/gifts/0"
+   ],
+   "category": "people"
+  },
+  {
+   "id": "nl-p29",
+   "lang": "nl",
+   "carnet": "personal",
+   "type": "voice",
+   "q": "eh wat geef ik Marc ook alweer cadeau",
+   "expect": [
+    "task:t0004",
+    "fact:marc/gifts/0"
+   ],
+   "category": "people"
+  },
+  {
+   "id": "fr-p30",
+   "lang": "fr",
+   "carnet": "personal",
+   "type": "voice",
+   "q": "c'est quoi le numéro du syndic",
+   "expect": [
+    "fact:home/contacts/1"
+   ],
+   "category": "home"
+  },
+  {
+   "id": "en-p30",
+   "lang": "en",
+   "carnet": "personal",
+   "type": "voice",
+   "q": "what's the building manager's number",
+   "expect": [
+    "fact:home/contacts/1"
+   ],
+   "category": "home"
+  },
+  {
+   "id": "de-p30",
+   "lang": "de",
+   "carnet": "personal",
+   "type": "voice",
+   "q": "wie ist die Nummer der Hausverwaltung",
+   "expect": [
+    "fact:home/contacts/1"
+   ],
+   "category": "home"
+  },
+  {
+   "id": "es-p30",
+   "lang": "es",
+   "carnet": "personal",
+   "type": "voice",
+   "q": "cuál es el número del administrador",
+   "expect": [
+    "fact:home/contacts/1"
+   ],
+   "category": "home"
+  },
+  {
+   "id": "nl-p30",
+   "lang": "nl",
+   "carnet": "personal",
+   "type": "voice",
+   "q": "wat is het nummer van de syndicus",
+   "expect": [
+    "fact:home/contacts/1"
+   ],
+   "category": "home"
+  },
+  {
+   "id": "fr-p31",
+   "lang": "fr",
+   "carnet": "personal",
+   "type": "voice",
+   "q": "rappelle-moi ce que j'ai convenu avec Marc",
+   "expect": [
+    "fact:marc/agreed/0",
+    "fact:marc/agreed/1"
+   ],
+   "category": "people"
+  },
+  {
+   "id": "en-p31",
+   "lang": "en",
+   "carnet": "personal",
+   "type": "voice",
+   "q": "remind me what I agreed with Marc",
+   "expect": [
+    "fact:marc/agreed/0",
+    "fact:marc/agreed/1"
+   ],
+   "category": "people"
+  },
+  {
+   "id": "de-p31",
+   "lang": "de",
+   "carnet": "personal",
+   "type": "voice",
+   "q": "erinner mich was ich mit Marc ausgemacht habe",
+   "expect": [
+    "fact:marc/agreed/0",
+    "fact:marc/agreed/1"
+   ],
+   "category": "people"
+  },
+  {
+   "id": "es-p31",
+   "lang": "es",
+   "carnet": "personal",
+   "type": "voice",
+   "q": "recuérdame qué quedé con Marc",
+   "expect": [
+    "fact:marc/agreed/0",
+    "fact:marc/agreed/1"
+   ],
+   "category": "people"
+  },
+  {
+   "id": "nl-p31",
+   "lang": "nl",
+   "carnet": "personal",
+   "type": "voice",
+   "q": "herinner me wat ik met Marc heb afgesproken",
+   "expect": [
+    "fact:marc/agreed/0",
+    "fact:marc/agreed/1"
+   ],
+   "category": "people"
+  },
+  {
+   "id": "fr-p32",
+   "lang": "fr",
+   "carnet": "personal",
+   "type": "document",
+   "q": "présentation Japon",
+   "expect": [
+    "doc:japan_pptx"
+   ],
+   "category": "trips"
+  },
+  {
+   "id": "en-p32",
+   "lang": "en",
+   "carnet": "personal",
+   "type": "document",
+   "q": "Japan slides",
+   "expect": [
+    "doc:japan_pptx"
+   ],
+   "category": "trips"
+  },
+  {
+   "id": "de-p32",
+   "lang": "de",
+   "carnet": "personal",
+   "type": "document",
+   "q": "Japan Präsentation",
+   "expect": [
+    "doc:japan_pptx"
+   ],
+   "category": "trips"
+  },
+  {
+   "id": "es-p32",
+   "lang": "es",
+   "carnet": "personal",
+   "type": "document",
+   "q": "presentación Japón",
+   "expect": [
+    "doc:japan_pptx"
+   ],
+   "category": "trips"
+  },
+  {
+   "id": "nl-p32",
+   "lang": "nl",
+   "carnet": "personal",
+   "type": "document",
+   "q": "presentatie Japan",
+   "expect": [
+    "doc:japan_pptx"
+   ],
+   "category": "trips"
+  },
+  {
+   "id": "fr-p33",
+   "lang": "fr",
+   "carnet": "personal",
+   "type": "document",
+   "q": "tableur budget travaux",
+   "expect": [
+    "doc:works_xlsx"
+   ],
+   "category": "home"
+  },
+  {
+   "id": "en-p33",
+   "lang": "en",
+   "carnet": "personal",
+   "type": "document",
+   "q": "building work spreadsheet",
+   "expect": [
+    "doc:works_xlsx"
+   ],
+   "category": "home"
+  },
+  {
+   "id": "de-p33",
+   "lang": "de",
+   "carnet": "personal",
+   "type": "document",
+   "q": "Tabelle Budget Arbeiten",
+   "expect": [
+    "doc:works_xlsx"
+   ],
+   "category": "home"
+  },
+  {
+   "id": "es-p33",
+   "lang": "es",
+   "carnet": "personal",
+   "type": "document",
+   "q": "hoja de cálculo presupuesto obra",
+   "expect": [
+    "doc:works_xlsx"
+   ],
+   "category": "home"
+  },
+  {
+   "id": "nl-p33",
+   "lang": "nl",
+   "carnet": "personal",
+   "type": "document",
+   "q": "spreadsheet budget verbouwing",
+   "expect": [
+    "doc:works_xlsx"
+   ],
+   "category": "home"
+  },
+  {
+   "id": "fr-p34",
+   "lang": "fr",
+   "carnet": "personal",
+   "type": "document",
+   "q": "lettre au syndic",
+   "expect": [
+    "doc:syndic_docx"
+   ],
+   "category": "home"
+  },
+  {
+   "id": "en-p34",
+   "lang": "en",
+   "carnet": "personal",
+   "type": "document",
+   "q": "letter to the building manager",
+   "expect": [
+    "doc:syndic_docx"
+   ],
+   "category": "home"
+  },
+  {
+   "id": "de-p34",
+   "lang": "de",
+   "carnet": "personal",
+   "type": "document",
+   "q": "Brief Hausverwaltung",
+   "expect": [
+    "doc:syndic_docx"
+   ],
+   "category": "home"
+  },
+  {
+   "id": "es-p34",
+   "lang": "es",
+   "carnet": "personal",
+   "type": "document",
+   "q": "carta al administrador",
+   "expect": [
+    "doc:syndic_docx"
+   ],
+   "category": "home"
+  },
+  {
+   "id": "nl-p34",
+   "lang": "nl",
+   "carnet": "personal",
+   "type": "document",
+   "q": "brief aan de syndicus",
+   "expect": [
+    "doc:syndic_docx"
+   ],
+   "category": "home"
+  },
+  {
+   "id": "fr-p35",
+   "lang": "fr",
+   "carnet": "personal",
+   "type": "document",
+   "q": "devis cuisine pdf",
+   "expect": [
+    "doc:quote_pdf"
+   ],
+   "category": "papers"
+  },
+  {
+   "id": "en-p35",
+   "lang": "en",
+   "carnet": "personal",
+   "type": "document",
+   "q": "kitchen quote pdf",
+   "expect": [
+    "doc:quote_pdf"
+   ],
+   "category": "papers"
+  },
+  {
+   "id": "de-p35",
+   "lang": "de",
+   "carnet": "personal",
+   "type": "document",
+   "q": "Küchenangebot PDF",
+   "expect": [
+    "doc:quote_pdf"
+   ],
+   "category": "papers"
+  },
+  {
+   "id": "es-p35",
+   "lang": "es",
+   "carnet": "personal",
+   "type": "document",
+   "q": "presupuesto cocina pdf",
+   "expect": [
+    "doc:quote_pdf"
+   ],
+   "category": "papers"
+  },
+  {
+   "id": "nl-p35",
+   "lang": "nl",
+   "carnet": "personal",
+   "type": "document",
+   "q": "offerte keuken pdf",
+   "expect": [
+    "doc:quote_pdf"
+   ],
+   "category": "papers"
+  },
+  {
+   "id": "fr-p36",
+   "lang": "fr",
+   "carnet": "personal",
+   "type": "agent_page",
+   "q": "page budget du voyage",
+   "expect": [
+    "doc:trip_budget"
+   ],
+   "category": "trips"
+  },
+  {
+   "id": "en-p36",
+   "lang": "en",
+   "carnet": "personal",
+   "type": "agent_page",
+   "q": "trip budget page",
+   "expect": [
+    "doc:trip_budget"
+   ],
+   "category": "trips"
+  },
+  {
+   "id": "de-p36",
+   "lang": "de",
+   "carnet": "personal",
+   "type": "agent_page",
+   "q": "Reisebudget Seite",
+   "expect": [
+    "doc:trip_budget"
+   ],
+   "category": "trips"
+  },
+  {
+   "id": "es-p36",
+   "lang": "es",
+   "carnet": "personal",
+   "type": "agent_page",
+   "q": "página presupuesto del viaje",
+   "expect": [
+    "doc:trip_budget"
+   ],
+   "category": "trips"
+  },
+  {
+   "id": "nl-p36",
+   "lang": "nl",
+   "carnet": "personal",
+   "type": "agent_page",
+   "q": "pagina reisbudget",
+   "expect": [
+    "doc:trip_budget"
+   ],
+   "category": "trips"
+  },
+  {
+   "id": "fr-p37",
+   "lang": "fr",
+   "carnet": "personal",
+   "type": "drive",
+   "q": "bail appartement",
+   "expect": [
+    "drive:lease"
+   ],
+   "category": "papers"
+  },
+  {
+   "id": "en-p37",
+   "lang": "en",
+   "carnet": "personal",
+   "type": "drive",
+   "q": "tenancy agreement",
+   "expect": [
+    "drive:lease"
+   ],
+   "category": "papers"
+  },
+  {
+   "id": "de-p37",
+   "lang": "de",
+   "carnet": "personal",
+   "type": "drive",
+   "q": "Mietvertrag",
+   "expect": [
+    "drive:lease"
+   ],
+   "category": "papers"
+  },
+  {
+   "id": "es-p37",
+   "lang": "es",
+   "carnet": "personal",
+   "type": "drive",
+   "q": "contrato de alquiler",
+   "expect": [
+    "drive:lease"
+   ],
+   "category": "papers"
+  },
+  {
+   "id": "nl-p37",
+   "lang": "nl",
+   "carnet": "personal",
+   "type": "drive",
+   "q": "huurcontract",
+   "expect": [
+    "drive:lease"
+   ],
+   "category": "papers"
+  },
+  {
+   "id": "fr-p38",
+   "lang": "fr",
+   "carnet": "personal",
+   "type": "drive",
+   "q": "fiche de paie octobre",
+   "expect": [
+    "drive:payslip"
+   ],
+   "category": "work"
+  },
+  {
+   "id": "en-p38",
+   "lang": "en",
+   "carnet": "personal",
+   "type": "drive",
+   "q": "October payslip",
+   "expect": [
+    "drive:payslip"
+   ],
+   "category": "work"
+  },
+  {
+   "id": "de-p38",
+   "lang": "de",
+   "carnet": "personal",
+   "type": "drive",
+   "q": "Gehaltsabrechnung Oktober",
+   "expect": [
+    "drive:payslip"
+   ],
+   "category": "work"
+  },
+  {
+   "id": "es-p38",
+   "lang": "es",
+   "carnet": "personal",
+   "type": "drive",
+   "q": "nómina de octubre",
+   "expect": [
+    "drive:payslip"
+   ],
+   "category": "work"
+  },
+  {
+   "id": "nl-p38",
+   "lang": "nl",
+   "carnet": "personal",
+   "type": "drive",
+   "q": "loonstrook oktober",
+   "expect": [
+    "drive:payslip"
+   ],
+   "category": "work"
+  },
+  {
+   "id": "fr-p39",
+   "lang": "fr",
+   "carnet": "personal",
+   "type": "drive_refused",
+   "q": "photos mariage",
+   "expect": [],
+   "never": [
+    "drive:wedding"
+   ]
+  },
+  {
+   "id": "en-p39",
+   "lang": "en",
+   "carnet": "personal",
+   "type": "drive_refused",
+   "q": "wedding photos",
+   "expect": [],
+   "never": [
+    "drive:wedding"
+   ]
+  },
+  {
+   "id": "de-p39",
+   "lang": "de",
+   "carnet": "personal",
+   "type": "drive_refused",
+   "q": "Hochzeitsfotos",
+   "expect": [],
+   "never": [
+    "drive:wedding"
+   ]
+  },
+  {
+   "id": "es-p39",
+   "lang": "es",
+   "carnet": "personal",
+   "type": "drive_refused",
+   "q": "fotos de la boda",
+   "expect": [],
+   "never": [
+    "drive:wedding"
+   ]
+  },
+  {
+   "id": "nl-p39",
+   "lang": "nl",
+   "carnet": "personal",
+   "type": "drive_refused",
+   "q": "trouwfoto's",
+   "expect": [],
+   "never": [
+    "drive:wedding"
+   ]
+  },
+  {
+   "id": "fr-p40",
+   "lang": "fr",
+   "carnet": "personal",
+   "type": "record",
+   "q": "garantie lave-linge",
+   "expect": [
+    "record:rp1"
+   ],
+   "category": "papers"
+  },
+  {
+   "id": "en-p40",
+   "lang": "en",
+   "carnet": "personal",
+   "type": "record",
+   "q": "washing machine warranty",
+   "expect": [
+    "record:rp1"
+   ],
+   "category": "papers"
+  },
+  {
+   "id": "de-p40",
+   "lang": "de",
+   "carnet": "personal",
+   "type": "record",
+   "q": "Garantie Waschmaschine",
+   "expect": [
+    "record:rp1"
+   ],
+   "category": "papers"
+  },
+  {
+   "id": "es-p40",
+   "lang": "es",
+   "carnet": "personal",
+   "type": "record",
+   "q": "garantía lavadora",
+   "expect": [
+    "record:rp1"
+   ],
+   "category": "papers"
+  },
+  {
+   "id": "nl-p40",
+   "lang": "nl",
+   "carnet": "personal",
+   "type": "record",
+   "q": "garantie wasmachine",
+   "expect": [
+    "record:rp1"
+   ],
+   "category": "papers"
+  },
+  {
+   "id": "fr-p41",
+   "lang": "fr",
+   "carnet": "personal",
+   "type": "record",
+   "q": "passeport expire quand",
+   "expect": [
+    "record:rd1"
+   ],
+   "category": "papers"
+  },
+  {
+   "id": "en-p41",
+   "lang": "en",
+   "carnet": "personal",
+   "type": "record",
+   "q": "when does my passport expire",
+   "expect": [
+    "record:rd1"
+   ],
+   "category": "papers"
+  },
+  {
+   "id": "de-p41",
+   "lang": "de",
+   "carnet": "personal",
+   "type": "record",
+   "q": "wann läuft der Reisepass ab",
+   "expect": [
+    "record:rd1"
+   ],
+   "category": "papers"
+  },
+  {
+   "id": "es-p41",
+   "lang": "es",
+   "carnet": "personal",
+   "type": "record",
+   "q": "cuándo caduca el pasaporte",
+   "expect": [
+    "record:rd1"
+   ],
+   "category": "papers"
+  },
+  {
+   "id": "nl-p41",
+   "lang": "nl",
+   "carnet": "personal",
+   "type": "record",
+   "q": "wanneer verloopt mijn paspoort",
+   "expect": [
+    "record:rd1"
+   ],
+   "category": "papers"
+  },
+  {
+   "id": "fr-p42",
+   "lang": "fr",
+   "carnet": "personal",
+   "type": "record",
+   "q": "hôtel Lisbonne",
+   "expect": [
+    "record:rb1",
+    "page:trip"
+   ],
+   "category": "trips"
+  },
+  {
+   "id": "en-p42",
+   "lang": "en",
+   "carnet": "personal",
+   "type": "record",
+   "q": "Lisbon hotel",
+   "expect": [
+    "record:rb1",
+    "page:trip"
+   ],
+   "category": "trips"
+  },
+  {
+   "id": "de-p42",
+   "lang": "de",
+   "carnet": "personal",
+   "type": "record",
+   "q": "Hotel Lissabon",
+   "expect": [
+    "record:rb1",
+    "page:trip"
+   ],
+   "category": "trips"
+  },
+  {
+   "id": "es-p42",
+   "lang": "es",
+   "carnet": "personal",
+   "type": "record",
+   "q": "hotel Lisboa",
+   "expect": [
+    "record:rb1",
+    "page:trip"
+   ],
+   "category": "trips"
+  },
+  {
+   "id": "nl-p42",
+   "lang": "nl",
+   "carnet": "personal",
+   "type": "record",
+   "q": "hotel Lissabon",
+   "expect": [
+    "record:rb1",
+    "page:trip"
+   ],
+   "category": "trips"
+  },
+  {
+   "id": "fr-p43",
+   "lang": "fr",
+   "carnet": "personal",
+   "type": "task",
+   "q": "vols Osaka",
+   "expect": [
+    "task:t0002"
+   ],
+   "category": "trips"
+  },
+  {
+   "id": "en-p43",
+   "lang": "en",
+   "carnet": "personal",
+   "type": "task",
+   "q": "flights Osaka",
+   "expect": [
+    "task:t0002"
+   ],
+   "category": "trips"
+  },
+  {
+   "id": "de-p43",
+   "lang": "de",
+   "carnet": "personal",
+   "type": "task",
+   "q": "Flüge Osaka",
+   "expect": [
+    "task:t0002"
+   ],
+   "category": "trips"
+  },
+  {
+   "id": "es-p43",
+   "lang": "es",
+   "carnet": "personal",
+   "type": "task",
+   "q": "vuelos Osaka",
+   "expect": [
+    "task:t0002"
+   ],
+   "category": "trips"
+  },
+  {
+   "id": "nl-p43",
+   "lang": "nl",
+   "carnet": "personal",
+   "type": "task",
+   "q": "vluchten Osaka",
+   "expect": [
+    "task:t0002"
+   ],
+   "category": "trips"
+  },
+  {
+   "id": "fr-p44",
+   "lang": "fr",
+   "carnet": "personal",
+   "type": "task",
+   "q": "essai Yaris",
+   "expect": [
+    "task:t0015"
+   ],
+   "category": "money"
+  },
+  {
+   "id": "en-p44",
+   "lang": "en",
+   "carnet": "personal",
+   "type": "task",
+   "q": "Yaris test drive",
+   "expect": [
+    "task:t0015"
+   ],
+   "category": "money"
+  },
+  {
+   "id": "de-p44",
+   "lang": "de",
+   "carnet": "personal",
+   "type": "task",
+   "q": "Probefahrt Yaris",
+   "expect": [
+    "task:t0015"
+   ],
+   "category": "money"
+  },
+  {
+   "id": "es-p44",
+   "lang": "es",
+   "carnet": "personal",
+   "type": "task",
+   "q": "prueba Yaris",
+   "expect": [
+    "task:t0015"
+   ],
+   "category": "money"
+  },
+  {
+   "id": "nl-p44",
+   "lang": "nl",
+   "carnet": "personal",
+   "type": "task",
+   "q": "proefrit Yaris",
+   "expect": [
+    "task:t0015"
+   ],
+   "category": "money"
+  },
+  {
+   "id": "fr-p45",
+   "lang": "fr",
+   "carnet": "personal",
+   "type": "health",
+   "q": "allergie pénicilline",
+   "expect": [
+    "fact:health/matters/0"
+   ],
+   "category": "health",
+   "health": true
+  },
+  {
+   "id": "en-p45",
+   "lang": "en",
+   "carnet": "personal",
+   "type": "health",
+   "q": "penicillin allergy",
+   "expect": [
+    "fact:health/matters/0"
+   ],
+   "category": "health",
+   "health": true
+  },
+  {
+   "id": "de-p45",
+   "lang": "de",
+   "carnet": "personal",
+   "type": "health",
+   "q": "Penicillin Allergie",
+   "expect": [
+    "fact:health/matters/0"
+   ],
+   "category": "health",
+   "health": true
+  },
+  {
+   "id": "es-p45",
+   "lang": "es",
+   "carnet": "personal",
+   "type": "health",
+   "q": "alergia penicilina",
+   "expect": [
+    "fact:health/matters/0"
+   ],
+   "category": "health",
+   "health": true
+  },
+  {
+   "id": "nl-p45",
+   "lang": "nl",
+   "carnet": "personal",
+   "type": "health",
+   "q": "penicilline allergie",
+   "expect": [
+    "fact:health/matters/0"
+   ],
+   "category": "health",
+   "health": true
+  },
+  {
+   "id": "fr-f01",
+   "lang": "fr",
+   "carnet": "family",
+   "type": "exact",
+   "q": "lait",
+   "expect": [
+    "fam:list:courses/c1"
+   ],
+   "category": "shopping"
+  },
+  {
+   "id": "en-f01",
+   "lang": "en",
+   "carnet": "family",
+   "type": "exact",
+   "q": "milk",
+   "expect": [
+    "fam:list:courses/c1"
+   ],
+   "category": "shopping"
+  },
+  {
+   "id": "de-f01",
+   "lang": "de",
+   "carnet": "family",
+   "type": "exact",
+   "q": "Milch",
+   "expect": [
+    "fam:list:courses/c1"
+   ],
+   "category": "shopping"
+  },
+  {
+   "id": "es-f01",
+   "lang": "es",
+   "carnet": "family",
+   "type": "exact",
+   "q": "leche",
+   "expect": [
+    "fam:list:courses/c1"
+   ],
+   "category": "shopping"
+  },
+  {
+   "id": "nl-f01",
+   "lang": "nl",
+   "carnet": "family",
+   "type": "exact",
+   "q": "melk",
+   "expect": [
+    "fam:list:courses/c1"
+   ],
+   "category": "shopping"
+  },
+  {
+   "id": "fr-f02",
+   "lang": "fr",
+   "carnet": "family",
+   "type": "typo",
+   "q": "citons",
+   "expect": [
+    "fam:list:courses/c3"
+   ],
+   "category": "shopping"
+  },
+  {
+   "id": "en-f02",
+   "lang": "en",
+   "carnet": "family",
+   "type": "typo",
+   "q": "lemmons",
+   "expect": [
+    "fam:list:courses/c3"
+   ],
+   "category": "shopping"
+  },
+  {
+   "id": "de-f02",
+   "lang": "de",
+   "carnet": "family",
+   "type": "typo",
+   "q": "Zitornen",
+   "expect": [
+    "fam:list:courses/c3"
+   ],
+   "category": "shopping"
+  },
+  {
+   "id": "es-f02",
+   "lang": "es",
+   "carnet": "family",
+   "type": "typo",
+   "q": "limons",
+   "expect": [
+    "fam:list:courses/c3"
+   ],
+   "category": "shopping"
+  },
+  {
+   "id": "nl-f02",
+   "lang": "nl",
+   "carnet": "family",
+   "type": "typo",
+   "q": "citroenn",
+   "expect": [
+    "fam:list:courses/c3"
+   ],
+   "category": "shopping"
+  },
+  {
+   "id": "fr-f03",
+   "lang": "fr",
+   "carnet": "family",
+   "type": "typo",
+   "q": "aniv mamie",
+   "expect": [
+    "fam:list:dates/d1"
+   ],
+   "category": "dates"
+  },
+  {
+   "id": "en-f03",
+   "lang": "en",
+   "carnet": "family",
+   "type": "typo",
+   "q": "grandma bday",
+   "expect": [
+    "fam:list:dates/d1"
+   ],
+   "category": "dates"
+  },
+  {
+   "id": "de-f03",
+   "lang": "de",
+   "carnet": "family",
+   "type": "typo",
+   "q": "Oma Geburtstg",
+   "expect": [
+    "fam:list:dates/d1"
+   ],
+   "category": "dates"
+  },
+  {
+   "id": "es-f03",
+   "lang": "es",
+   "carnet": "family",
+   "type": "typo",
+   "q": "cumple abuela",
+   "expect": [
+    "fam:list:dates/d1"
+   ],
+   "category": "dates"
+  },
+  {
+   "id": "nl-f03",
+   "lang": "nl",
+   "carnet": "family",
+   "type": "typo",
+   "q": "verjaardg oma",
+   "expect": [
+    "fam:list:dates/d1"
+   ],
+   "category": "dates"
+  },
+  {
+   "id": "fr-f04",
+   "lang": "fr",
+   "carnet": "family",
+   "type": "question",
+   "q": "on mange quoi lundi ?",
+   "expect": [
+    "fam:page:p3"
+   ],
+   "category": "menus"
+  },
+  {
+   "id": "en-f04",
+   "lang": "en",
+   "carnet": "family",
+   "type": "question",
+   "q": "what are we eating on Monday?",
+   "expect": [
+    "fam:page:p3"
+   ],
+   "category": "menus"
+  },
+  {
+   "id": "de-f04",
+   "lang": "de",
+   "carnet": "family",
+   "type": "question",
+   "q": "was essen wir am Montag?",
+   "expect": [
+    "fam:page:p3"
+   ],
+   "category": "menus"
+  },
+  {
+   "id": "es-f04",
+   "lang": "es",
+   "carnet": "family",
+   "type": "question",
+   "q": "¿qué comemos el lunes?",
+   "expect": [
+    "fam:page:p3"
+   ],
+   "category": "menus"
+  },
+  {
+   "id": "nl-f04",
+   "lang": "nl",
+   "carnet": "family",
+   "type": "question",
+   "q": "wat eten we maandag?",
+   "expect": [
+    "fam:page:p3"
+   ],
+   "category": "menus"
+  },
+  {
+   "id": "fr-f05",
+   "lang": "fr",
+   "carnet": "family",
+   "type": "accent",
+   "q": "vacances fevrier",
+   "expect": [
+    "fam:page:p1"
+   ],
+   "category": "holidays"
+  },
+  {
+   "id": "en-f05",
+   "lang": "en",
+   "carnet": "family",
+   "type": "exact",
+   "q": "february holidays",
+   "expect": [
+    "fam:page:p1"
+   ],
+   "category": "holidays"
+  },
+  {
+   "id": "de-f05",
+   "lang": "de",
+   "carnet": "family",
+   "type": "exact",
+   "q": "Winterferien",
+   "expect": [
+    "fam:page:p1"
+   ],
+   "category": "holidays"
+  },
+  {
+   "id": "es-f05",
+   "lang": "es",
+   "carnet": "family",
+   "type": "accent",
+   "q": "vacaciones febrero",
+   "expect": [
+    "fam:page:p1"
+   ],
+   "category": "holidays"
+  },
+  {
+   "id": "nl-f05",
+   "lang": "nl",
+   "carnet": "family",
+   "type": "exact",
+   "q": "voorjaarsvakantie",
+   "expect": [
+    "fam:page:p1"
+   ],
+   "category": "holidays"
+  },
+  {
+   "id": "fr-f06",
+   "lang": "fr",
+   "carnet": "family",
+   "type": "synonym",
+   "q": "numéro du plombier",
+   "expect": [
+    "fam:page:p2"
+   ],
+   "category": "home"
+  },
+  {
+   "id": "en-f06",
+   "lang": "en",
+   "carnet": "family",
+   "type": "synonym",
+   "q": "plumber number",
+   "expect": [
+    "fam:page:p2"
+   ],
+   "category": "home"
+  },
+  {
+   "id": "de-f06",
+   "lang": "de",
+   "carnet": "family",
+   "type": "synonym",
+   "q": "Klempner Nummer",
+   "expect": [
+    "fam:page:p2"
+   ],
+   "category": "home"
+  },
+  {
+   "id": "es-f06",
+   "lang": "es",
+   "carnet": "family",
+   "type": "synonym",
+   "q": "teléfono del fontanero",
+   "expect": [
+    "fam:page:p2"
+   ],
+   "category": "home"
+  },
+  {
+   "id": "nl-f06",
+   "lang": "nl",
+   "carnet": "family",
+   "type": "synonym",
+   "q": "nummer loodgieter",
+   "expect": [
+    "fam:page:p2"
+   ],
+   "category": "home"
+  },
+  {
+   "id": "fr-f07",
+   "lang": "fr",
+   "carnet": "family",
+   "type": "exact",
+   "q": "école de Tom",
+   "expect": [
+    "fam:page:p2",
+    "fam:list:taches/t3"
+   ],
+   "category": "school"
+  },
+  {
+   "id": "en-f07",
+   "lang": "en",
+   "carnet": "family",
+   "type": "exact",
+   "q": "Tom's school",
+   "expect": [
+    "fam:page:p2",
+    "fam:list:taches/t3"
+   ],
+   "category": "school"
+  },
+  {
+   "id": "de-f07",
+   "lang": "de",
+   "carnet": "family",
+   "type": "exact",
+   "q": "Toms Schule",
+   "expect": [
+    "fam:page:p2",
+    "fam:list:taches/t3"
+   ],
+   "category": "school"
+  },
+  {
+   "id": "es-f07",
+   "lang": "es",
+   "carnet": "family",
+   "type": "exact",
+   "q": "colegio de Tom",
+   "expect": [
+    "fam:page:p2",
+    "fam:list:taches/t3"
+   ],
+   "category": "school"
+  },
+  {
+   "id": "nl-f07",
+   "lang": "nl",
+   "carnet": "family",
+   "type": "exact",
+   "q": "school van Tom",
+   "expect": [
+    "fam:page:p2",
+    "fam:list:taches/t3"
+   ],
+   "category": "school"
+  },
+  {
+   "id": "fr-f08",
+   "lang": "fr",
+   "carnet": "family",
+   "type": "date",
+   "q": "avant Noël",
+   "expect": [
+    "*dated:fam"
+   ],
+   "category": "dates",
+   "window": "before_christmas"
+  },
+  {
+   "id": "en-f08",
+   "lang": "en",
+   "carnet": "family",
+   "type": "date",
+   "q": "before Christmas",
+   "expect": [
+    "*dated:fam"
+   ],
+   "category": "dates",
+   "window": "before_christmas"
+  },
+  {
+   "id": "de-f08",
+   "lang": "de",
+   "carnet": "family",
+   "type": "date",
+   "q": "vor Weihnachten",
+   "expect": [
+    "*dated:fam"
+   ],
+   "category": "dates",
+   "window": "before_christmas"
+  },
+  {
+   "id": "es-f08",
+   "lang": "es",
+   "carnet": "family",
+   "type": "date",
+   "q": "antes de Navidad",
+   "expect": [
+    "*dated:fam"
+   ],
+   "category": "dates",
+   "window": "before_christmas"
+  },
+  {
+   "id": "nl-f08",
+   "lang": "nl",
+   "carnet": "family",
+   "type": "date",
+   "q": "voor Kerst",
+   "expect": [
+    "*dated:fam"
+   ],
+   "category": "dates",
+   "window": "before_christmas"
+  },
+  {
+   "id": "fr-f09",
+   "lang": "fr",
+   "carnet": "family",
+   "type": "voice",
+   "q": "faut réserver le traiteur pour noël c'est noté",
+   "expect": [
+    "fam:list:taches/t2"
+   ],
+   "category": "dates"
+  },
+  {
+   "id": "en-f09",
+   "lang": "en",
+   "carnet": "family",
+   "type": "voice",
+   "q": "did we write down the christmas caterer",
+   "expect": [
+    "fam:list:taches/t2"
+   ],
+   "category": "dates"
+  },
+  {
+   "id": "de-f09",
+   "lang": "de",
+   "carnet": "family",
+   "type": "voice",
+   "q": "haben wir den Caterer für Weihnachten notiert",
+   "expect": [
+    "fam:list:taches/t2"
+   ],
+   "category": "dates"
+  },
+  {
+   "id": "es-f09",
+   "lang": "es",
+   "carnet": "family",
+   "type": "voice",
+   "q": "apuntamos lo del catering de navidad",
+   "expect": [
+    "fam:list:taches/t2"
+   ],
+   "category": "dates"
+  },
+  {
+   "id": "nl-f09",
+   "lang": "nl",
+   "carnet": "family",
+   "type": "voice",
+   "q": "hebben we de cateraar voor kerst genoteerd",
+   "expect": [
+    "fam:list:taches/t2"
+   ],
+   "category": "dates"
+  }
+ ]
+}
