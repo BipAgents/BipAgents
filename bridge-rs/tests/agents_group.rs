@@ -16,6 +16,7 @@ use bipbridge::agents_admin::{self, pyyaml, AgentSettings, NewAgent, Run};
 use bipbridge::config::{parse_config, Config, SharedConfig};
 use bipbridge::households::{HouseholdError, Households};
 use bipbridge::peers::{self, Links};
+use bipbridge::rules;
 use bipbridge::{files, own_skills, services, shares, ssh_keys};
 use common::{auth, config_dict, TestApp, Urls};
 use indexmap::IndexMap;
@@ -645,7 +646,7 @@ fn lea(tmp: &Path) -> Households {
 fn bot_mode_only_for_the_agents_that_write_to_another_household() {
     let dir = tempfile::tempdir().unwrap();
     let p = peers_setup(dir.path());
-    let households = lea(dir.path());
+    let households = lea(&PathBuf::from(p.config.data_dir()));
     let (budget, maison, jardin) =
         (p.hub.join("profiles/budget"), p.hub.join("profiles/maison"), p.space.join("profiles/jardin"));
     // a place made before: every profile marked, the hub with the bridge as its peer
@@ -660,31 +661,42 @@ fn bot_mode_only_for_the_agents_that_write_to_another_household() {
     assert_eq!(std::fs::read_to_string(budget.join("profile.yaml")).unwrap(), "description: x\nui_meta: {}\n");
     assert!(env_token(&p.hub.join(".env")).is_none() && env_token(&p.space.join(".env")).is_none());
     assert!(!p.space.join("config.yaml").exists());
-    assert!(p.links.allowed("budget", "jardin"));
-    // Jardin also writes to Léa's Cuisine: its space alone gets Bot Mode.
+    assert!(rules::allows(&p.config, "budget", "jardin") && !rules::allows(&p.config, "maison", "budget"));
+    // Your agents may write to Léa's Cuisine: nothing yet, Léa has not agreed (rules.rs: both sides).
     let mut both = local.clone();
     both.push(("jardin".into(), "cuisine__lea".into()));
-    peers::apply(&p.config, &p.links, &both, Some(&households)).unwrap();
-    assert!(marked(&jardin) && !marked(&budget) && !marked(&maison));
+    let result = peers::apply(&p.config, &p.links, &both, Some(&households)).unwrap();
+    assert_eq!(result["changed"], json!(["lea"]));
+    assert!(!marked(&jardin) && env_token(&p.space.join(".env")).is_none());
+    // She agrees: every agent of this place writes to Cuisine (the rule is per household), so each gateway gets Bot
+    // Mode; Wellness (set up by hand) needs its token from the administrator.
+    rules::change(&p.config, |r| {
+        rules::heard(r, "lea", &rules::Wire { from_you: rules::Rule::only(["cuisine"]), ..Default::default() });
+    })
+    .unwrap();
+    let manual = peers::refresh(&p.config, &p.links, Some(&households)).unwrap();
+    assert_eq!(Value::Object(manual), json!({"wellness": ""}));
+    assert!(marked(&jardin) && marked(&budget) && marked(&maison));
     let space_token = env_token(&p.space.join(".env")).unwrap();
     assert_eq!(p.links.caller(&space_token), Some(s(&p.space)));
-    assert!(env_token(&p.hub.join(".env")).is_none());
+    assert!(env_token(&p.hub.join(".env")).is_some());
     assert!(!std::fs::read_to_string(&p.links_path).unwrap().contains(&space_token)); // only digests are kept
     let peer = std::fs::read_to_string(p.space.join("config.yaml")).unwrap(); // written by the bridge, no `hermes`
     assert!(peer.contains("bot_peers:\n  bip:\n    url: http://127.0.0.1:8643/peer\n    note: 'Les agents des autres"), "{peer}");
+    // The hub's agents and Wellness « à l'écart »: Jardin's space alone keeps Bot Mode.
+    rules::change(&p.config, |r| r.aside = vec!["budget".into(), "maison".into(), "wellness".into()]).unwrap();
+    assert_eq!(peers::refresh(&p.config, &p.links, Some(&households)).unwrap(), bipbridge::Dict::new());
+    assert!(marked(&jardin) && !marked(&budget) && !marked(&maison));
+    assert!(env_token(&p.hub.join(".env")).is_none() && env_token(&p.space.join(".env")).is_some());
     // Back to this household only: the space loses its mark, its peer and its token.
+    rules::change(&p.config, |r| r.aside.clear()).unwrap();
     peers::apply(&p.config, &p.links, &local, Some(&households)).unwrap();
     assert!(!marked(&jardin) && env_token(&p.space.join(".env")).is_none() && p.links.caller(&space_token).is_none());
     assert!(!std::fs::read_to_string(p.space.join("config.yaml")).unwrap().contains("bip"));
-    // Wellness (set up by hand) to another household: the administrator gives it a token; to this one, none.
-    let result = peers::apply(&p.config, &p.links, &pairs(&[("wellness", "budget")]), Some(&households)).unwrap();
-    assert_eq!(result["manual"], json!({}));
-    let result = peers::apply(&p.config, &p.links, &pairs(&[("wellness", "cuisine__lea")]), Some(&households)).unwrap();
-    assert_eq!(result["manual"], json!({"wellness": ""}));
+    // Wellness (set up by hand): the administrator gives it a token; turning everything off keeps it, refused anyway.
     let token = peers::manual_token(&p.config, &p.links, "wellness").unwrap();
     assert_eq!(p.links.caller(&token).as_deref(), Some("manual:wellness"));
     assert_eq!(peers::gateway_of(&p.config, p.config.agent(Some("wellness")).unwrap()), "manual:wellness");
-    // Turning its last link off keeps its token; it is refused anyway.
     peers::apply(&p.config, &p.links, &pairs(&[("budget", "jardin")]), Some(&households)).unwrap();
     assert_eq!(p.links.caller(&token).as_deref(), Some("manual:wellness"));
     let err = peers::apply(&p.config, &p.links, &pairs(&[("budget", "budget")]), None).unwrap_err();
@@ -708,7 +720,8 @@ fn at_start_a_place_loses_bot_mode_between_its_own_agents() {
     peers::heal_tokens(&p.config, &p.links);
     assert!(!marked(&budget) && env_token(&p.hub.join(".env")).is_none() && p.links.caller("old").is_none());
     assert!(!std::fs::read_to_string(p.hub.join("config.yaml")).unwrap().contains("bip"));
-    assert!(p.links.allowed("budget", "maison"));
+    // the pairs of before (that file is not the data folder's: no pairs there) become a new account's rules
+    assert!(rules::allows(&p.config, "budget", "maison"));
 }
 
 #[test]
@@ -973,20 +986,21 @@ async fn two_households_write_to_each_other_only_where_both_allowed() {
         )
         .await;
     assert_eq!(approval.status, 403);
-    // Budget (its own gateway, not linked) cannot, nor can anything without the household's key.
+    // Budget (its own gateway) writes to Cuisine too: the rule is per household (rules.rs). « À l'écart », it can't;
+    // nor can anything without the household's key.
     let budget_token = format!("budget-gateway-token-{}", "w".repeat(20));
     let mut data = links.load();
     data["tokens"].as_object_mut().unwrap().insert("manual:budget".into(), json!(digest(&budget_token)));
     links.save(&data).unwrap();
-    let budget = a
-        .send_json(
-            "POST",
-            "/peer/p/cuisine__lea/v1/runs",
-            &[("authorization", &format!("Bearer {budget_token}"))],
-            &json!({"message": "Message from Budget (@budget): coucou"}),
-        )
-        .await;
-    assert_eq!(budget.status, 403);
+    let budget_says = json!({"session_id": "bot-1", "message": "Message from Budget (@budget): coucou"});
+    let budget_auth = format!("Bearer {budget_token}");
+    let budget_header = [("authorization", budget_auth.as_str())];
+    let budget = || a.send_json("POST", "/peer/p/cuisine__lea/v1/runs", &budget_header, &budget_says);
+    assert_eq!(budget().await.status, 200);
+    let aside = a.send_json("PUT", "/v1/agent-rules/aside", &h, &json!({"agent": "budget", "on": true})).await;
+    assert_eq!(aside.status, 200, "{}", aside.text());
+    assert_eq!(aside.json()["aside"], json!(["budget"]));
+    assert_eq!(budget().await.status, 403);
     assert_eq!(
         b.send_json("POST", "/family/p/cuisine/v1/runs", &[("authorization", "Bearer nope")], &message).await.status,
         401

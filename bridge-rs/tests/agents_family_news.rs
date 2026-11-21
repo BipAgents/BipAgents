@@ -275,7 +275,10 @@ async fn a_households_message_reaches_an_agent_only_along_its_persons_link() {
     assert_eq!(note("cuisine").await, "", "nothing noted for its turn");
     assert_eq!(note("budget").await, "");
 
-    // Léa lets Vie (Alex) write to Budget: Budget reads Vie's news, only Vie's, only when named
+    // Alex's agents may write to Budget, and Léa agrees (rules.rs: both sides, per household): Budget reads their
+    // news, only when named
+    let out = json!({"way": "out", "mode": "only", "agents": ["budget"]});
+    assert_eq!(a.send_json("PUT", "/v1/agent-rules/households/lea", &h, &out).await.status, 200);
     let set =
         b.send_json("PUT", "/v1/agent-links", &h, &json!({"links": [{"from": "vie__alex", "to": "budget"}]})).await;
     assert_eq!(set.status, 200, "{}", set.text());
@@ -286,22 +289,24 @@ async fn a_households_message_reaches_an_agent_only_along_its_persons_link() {
         .iter()
         .map(|a| (a["id"].as_str().unwrap().into(), a["told_by"].clone()))
         .collect();
-    assert_eq!(told_by, [("cuisine".to_string(), json!([])), ("budget".to_string(), json!(["vie"]))]);
+    assert_eq!(told_by, [("cuisine".to_string(), json!([])), ("budget".to_string(), json!(["*"]))]);
     let answer = tell(json!({"agent": "budget", "sender": "vie", "text": "Loyer payé"})).await;
     assert_eq!(answer, json!({"ok": true, "told": true}));
     assert_eq!(received("budget").await[0]["text"], "Loyer payé");
     assert_eq!(received("budget").await[0]["told"], true);
     let budget = note("budget").await;
     assert!(budget.contains("Alex: « Loyer payé »"), "{budget}");
-    // another sender of that household, no sender, or Budget not named: the card only
+    // another sender of that household reads it too (the rule is per household); no sender, or Budget not named:
+    // the card only
+    assert_eq!(tell(json!({"agent": "budget", "sender": "jardin", "text": "Autre agent"})).await["told"], true);
+    assert!(note("budget").await.contains("Alex: « Autre agent »"));
     for body in [
-        json!({"agent": "budget", "sender": "jardin", "text": "Autre agent"}),
         json!({"agent": "budget", "text": "Sans signataire"}),
         json!({"agent": null, "sender": "vie", "text": "Au foyer"}),
     ] {
         assert_eq!(tell(body.clone()).await["told"], false, "{body}");
     }
-    assert_eq!(received("budget").await.as_array().unwrap().len(), 1);
+    assert_eq!(received("budget").await.as_array().unwrap().len(), 2);
     assert_eq!(note("budget").await, "");
 
     // shared with Alex's household but not linked: still the card only

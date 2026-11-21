@@ -12,7 +12,8 @@
 //! - the audio files the bridge made for it (`/bipagents/audio/<agent>/…`);
 //! - or a short text the tool writes as a file.
 //!
-//! It checks the link the person allowed (peers.rs: the same as for messages; never another household's agent:
+//! It checks what the rules of « Entre tes agents » allow (rules.rs, through `targets`: the same as for messages;
+//! never another household's agent:
 //! family_news.rs stays the only way there), then stores each file in the recipient's uploads as an upload from the
 //! app would (its « Fichiers », retention, the copy in its isolated sandbox), and gives back where the recipient
 //! reads them, for the message the sender writes it next: the path its tools really see (`seen_root`), readable at
@@ -69,19 +70,15 @@ fn detail(exc: &crate::web::HttpError) -> String {
     crate::py::py_str(&exc.detail)
 }
 
-pub(crate) fn links(config: &Config) -> Vec<(String, String)> {
-    let data = crate::peers::Links::new(&crate::py::join(&config.data_dir(), "peers.json")).load();
-    crate::peers::links_of(&data)
+/// The agents of this place `agent` may write to (rules.rs `may_write`: your agents' rule, its « liens à part », the
+/// family's agent's « Peut demander à », « à l'écart »). The one gate of `send_files_to_agent` and `message_agent`.
+pub(crate) fn targets<'a>(config: &'a Config, agent: &'a str) -> impl Iterator<Item = String> + 'a {
+    crate::rules::local_targets(config, agent).into_iter()
 }
 
-/// The agents of this place `agent` may write to.
-pub(crate) fn targets<'a>(config: &'a Config, agent: &'a str) -> impl Iterator<Item = String> + 'a {
-    links(config)
-        .into_iter()
-        .filter(move |(from, to)| {
-            from == agent && crate::households::split(to).is_none() && config.agent(Some(to)).is_some()
-        })
-        .map(|(_, to)| to)
+/// Whether `from` may write to `to`, both of this place (`targets`' gate, for one target).
+pub(crate) fn may_write(config: &Config, from: &str, to: &str) -> bool {
+    crate::rules::allows(config, from, to) && config.agent(Some(to)).is_some()
 }
 
 /// The outbox of an agent set up by hand: mounted at /envoi by its administrator (`shares-mounts`).
@@ -345,7 +342,7 @@ pub fn call(config: &Config, agent: &AgentConfig, arguments: &Dict) -> Dict {
     if target.name == agent.name {
         return tool_text("That is you: name another agent.", true);
     }
-    if !links(config).iter().any(|(from, to)| *from == agent.name && *to == target.name) {
+    if !may_write(config, &agent.name, &target.name) {
         return tool_failure(
             &format!("The person hasn't let you write to {}.", shown(&target)),
             &format!(

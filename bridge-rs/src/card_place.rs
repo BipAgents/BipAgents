@@ -52,7 +52,8 @@ const FRESH_SECONDS: f64 = 120.0;
 /// A card waiting longer than this: the Boîte only, no more in a conversation.
 const STALE_DAYS: f64 = 3.0;
 /// The cards of the place itself, asked by no conversation: the Boîte only.
-const NOT_IN_CONVERSATIONS: [&str; 2] = [crate::storage_watch::RUN_PREFIX, crate::feature_tips::RUN_PREFIX];
+const NOT_IN_CONVERSATIONS: [&str; 3] =
+    [crate::storage_watch::RUN_PREFIX, crate::feature_tips::RUN_PREFIX, crate::rules_live::RUN_PREFIX];
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Place {
@@ -175,6 +176,7 @@ pub fn bridge_cards(state: &AppState, config: &Config, agent: Option<&str>) -> V
     items.extend(crate::card_pay::pending_items(agent));
     items.extend(crate::urgent_pay::pending_items(config, agent));
     items.extend(crate::tool_asks::pending_items(config, agent));
+    items.extend(crate::rules_live::pending_items(config, agent));
     // the kinds a « Toujours » may cover offer it (approval_level.rs)
     items.into_iter().map(|item| crate::approval_level::with_always(config, item)).collect()
 }

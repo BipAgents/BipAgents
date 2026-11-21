@@ -213,6 +213,8 @@ pub mod phone_asks;
 pub mod phone_exit;
 pub mod phone_rights;
 pub mod reminders;
+pub mod rules;
+pub mod rules_live;
 pub mod rooms;
 pub mod routines;
 pub mod rooms_handoff;

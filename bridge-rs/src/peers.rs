@@ -3,8 +3,9 @@
 //! Hermes' Bot Mode lets an agent message another one (`message_agent`) on a « peer »: an address and a key in
 //! its config (`bot_peers`). Giving an agent another agent's key would let it do anything with that agent. So
 //! the bridge is the only peer: each gateway gets a token of its own, which says who is calling and nothing more,
-//! and the bridge forwards to the other household's bridge (`to_household`), but only along a link the person turned
-//! on in the app (« Qui peut écrire à qui »).
+//! and the bridge forwards to the other household's bridge (`to_household`), but only where the rules of « Entre tes
+//! agents » allow it on both sides (rules.rs `may_write`: this bridge checks its side and what the other side told it,
+//! the other bridge its own).
 //!
 //! Between agents of this household Bot Mode is off (Alex, 2026-11-10): no Bot Mode mark on a profile, no peer, no
 //! token for an agent that writes only to its own household's (`set_tokens`), and the relay refuses a local target.
@@ -64,28 +65,10 @@ fn digest(token: &str) -> String {
 #[error("{0}")]
 pub struct InvalidLink(pub String);
 
-/// The links the person allowed between agents, and the tokens given to their gateways (`peers.json`).
+/// The tokens given to the gateways (`peers.json`). Its `links`, the pairs of before the rules (rules.rs), stay as the
+/// migration found them (a bridge rolled back finds them), never read again.
 pub struct Links {
     pub path: PathBuf,
-}
-
-/// The `links` of a loaded `peers.json` as pairs.
-pub fn links_of(data: &Dict) -> Vec<(String, String)> {
-    data.get("links")
-        .and_then(Value::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(|x| {
-                    x.as_array().filter(|p| p.len() == 2).map(|p| (crate::py::py_str(&p[0]), crate::py::py_str(&p[1])))
-                })
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
-fn pairs_value(pairs: &[(String, String)]) -> Value {
-    Value::Array(pairs.iter().map(|(a, b)| json!([a, b])).collect())
 }
 
 impl Links {
@@ -93,7 +76,7 @@ impl Links {
         Links { path: PathBuf::from(path) }
     }
 
-    /// `{"links": [[from, to]…], "tokens": {gateway: digest}}`.
+    /// `{"tokens": {gateway: digest}}`, and the old `links` as they are.
     pub fn load(&self) -> Dict {
         let data: Value = std::fs::read_to_string(&self.path)
             .ok()
@@ -101,7 +84,9 @@ impl Links {
             .unwrap_or_else(|| json!({}));
         let data = data.as_object().cloned().unwrap_or_default();
         let mut out = Dict::new();
-        out.insert("links".into(), pairs_value(&links_of(&data)));
+        if let Some(old) = data.get("links") {
+            out.insert("links".into(), old.clone());
+        }
         out.insert("tokens".into(), data.get("tokens").cloned().unwrap_or_else(|| json!({})));
         out
     }
@@ -110,10 +95,10 @@ impl Links {
         if let Some(parent) = self.path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let mut links = links_of(data);
-        links.sort();
-        let content =
-            json!({"links": pairs_value(&links), "tokens": data.get("tokens").cloned().unwrap_or_else(|| json!({}))});
+        let mut content = json!({"tokens": data.get("tokens").cloned().unwrap_or_else(|| json!({}))});
+        if let Some(old) = data.get("links") {
+            content["links"] = old.clone();
+        }
         let tmp = format!("{}.tmp", self.path.display());
         crate::py::write_with_mode(&tmp, crate::py::dumps(&content).as_bytes(), 0o600)?;
         std::fs::rename(&tmp, &self.path)?;
@@ -133,9 +118,6 @@ impl Links {
             .map(|(gw, _)| gw.clone())
     }
 
-    pub fn allowed(&self, sender: &str, target: &str) -> bool {
-        links_of(&self.load()).iter().any(|(s, t)| s == sender && t == target)
-    }
 }
 
 /// The HERMES_HOME of the gateway serving an agent this bridge manages (None: set up by hand).
@@ -203,9 +185,10 @@ pub fn peer_url(config: &Config) -> String {
     }
 }
 
-/// The person's links: the skills that list them ([`write_contacts`]), and Bot Mode for the senders to another
-/// household ([`set_tokens`]). Returns `{"manual": {agent: ""}}`: the agents set up by hand that need their token
-/// from the administrator. `InvalidLink` (Python's `ValueError`) for a link that cannot be.
+/// The pairs an older app sends (« Qui peut écrire à qui », the whole list), as rules (rules.rs `from_pairs`), then
+/// what follows from them ([`refresh`]). Returns `{"manual": {agent: ""}, "changed": [household…]}`: the agents set up
+/// by hand that need their token from the administrator, and the households whose rules changed (to tell them).
+/// `InvalidLink` (Python's `ValueError`) for a link that cannot be.
 pub fn apply(
     config: &Config,
     links: &Links,
@@ -232,30 +215,45 @@ pub fn apply(
             return Err(InvalidLink(format!("unknown link {sender} → {target}")).into());
         }
     }
-    let mut data = links.load();
     let unique: BTreeSet<(String, String)> = wanted.iter().cloned().collect();
     let pairs: Vec<(String, String)> = unique.into_iter().collect();
-    let manual = set_tokens(config, &mut data, &pairs)?;
-    data.insert("links".into(), pairs_value(&pairs));
-    links.save(&data)?;
-    write_contacts(config, &pairs, households);
-    tracing::info!(links = pairs.len(), "agent links set");
+    let world = crate::rules::World::of(config, false);
+    let mut changed = Vec::new();
+    crate::rules::change(config, |rules| {
+        changed = crate::rules::from_pairs(&world, rules, &pairs, crate::py::time_time());
+    })?;
+    let manual = refresh(config, links, households)?;
+    tracing::info!(links = pairs.len(), "agent links set (as rules)");
     let mut out = Dict::new();
     out.insert("manual".into(), Value::Object(manual));
+    out.insert("changed".into(), json!(changed));
     Ok(out)
+}
+
+/// What the rules give, set up: Bot Mode for the agents that write to another household ([`set_tokens`]) and the
+/// skills that list whom each agent may write to ([`write_contacts`]). Returns the agents set up by hand that need
+/// their token from the administrator.
+pub fn refresh(config: &Config, links: &Links, households: Option<&Households>) -> anyhow::Result<Dict> {
+    let world = crate::rules::World::of(config, false);
+    let rules = crate::rules::load(config);
+    let mut data = links.load();
+    let before = data.get("tokens").cloned();
+    let manual = set_tokens(config, &mut data, &crate::rules::household_senders(&world, &rules))?;
+    if data.get("tokens") != before.as_ref() || !links.path.exists() {
+        links.save(&data)?;
+    }
+    write_contacts(config, &crate::rules::effective_links(&world, &rules), households);
+    Ok(manual)
 }
 
 /// Hermes' Bot Mode (the profile's mark, `bot_peers.bip` and its key) only for our agents that write to another
 /// household's agent, and their gateways: between agents of this household it is off, the bridge's `message_agent`
 /// is the one way (agent_messages.rs: in the two agents' own conversation, capped). A gateway with no such sender
 /// left loses its token and its peer. Returns the agents set up by hand that need their token from the administrator.
-fn set_tokens(config: &Config, data: &mut Dict, pairs: &[(String, String)]) -> anyhow::Result<Dict> {
+fn set_tokens(config: &Config, data: &mut Dict, senders: &BTreeSet<String>) -> anyhow::Result<Dict> {
     let mut sending: BTreeMap<String, AgentConfig> = BTreeMap::new();
     let mut bots = BTreeSet::new();
-    for (sender, target) in pairs {
-        if split(sender).is_some() || split(target).is_none() {
-            continue;
-        }
+    for sender in senders {
         if let Some(agent) = config.agent(Some(sender)) {
             sending.insert(gateway_of(config, agent), agent.clone());
             bots.insert(agent.name.clone());
@@ -332,13 +330,14 @@ fn mark_bots(config: &Config, bots: &BTreeSet<String>) {
     }
 }
 
-/// At start, the tokens and peers [`set_tokens`] gives for the links kept: a place set up while Bot Mode still ran
+/// At start, the tokens and peers [`set_tokens`] gives for the rules: a place set up while Bot Mode still ran
 /// between its own agents loses them there.
 pub fn heal_tokens(config: &Config, links: &Links) {
     let mut data = links.load();
     let before = data.get("tokens").cloned();
-    let pairs = links_of(&data);
-    match set_tokens(config, &mut data, &pairs) {
+    let world = crate::rules::World::of(config, false);
+    let senders = crate::rules::household_senders(&world, &crate::rules::load(config));
+    match set_tokens(config, &mut data, &senders) {
         Ok(_) if data.get("tokens") != before.as_ref() => {
             if let Err(exc) = links.save(&data) {
                 tracing::warn!(error = %exc, "agent peers not healed");
@@ -396,6 +395,9 @@ pub fn write_contacts(config: &Config, links: &[(String, String)], households: O
         .unwrap_or_default();
     for agent in config.agents.values() {
         let Some(home) = managed_home(config, agent) else { continue };
+        if !home.join("profiles").join(&agent.name).is_dir() {
+            continue; // no profile (yet): nothing to write into, and never a folder made for it
+        }
         let skill = contacts_skill_path(&home, &agent.name);
         if crate::profile_files::hands_off(&skill) {
             continue; // the person's own Hermes (profile_files::hands_off)
@@ -717,7 +719,8 @@ async fn relay(state: AppState, target: String, path: String, request: Request) 
         .await
         .map_err(|_| HttpError::new(400, "There was an error parsing the body"))?;
     let query = QueryMap::parse(parts.uri.query());
-    let links = links_of(&state.links.load());
+    let (world, rules) = (crate::rules::World::of(&config, false), crate::rules::load(&config));
+    let allowed = |sender: &str| crate::rules::may_write(&world, &rules, sender, &target);
     let mine: BTreeSet<String> =
         config.agents.values().filter(|a| gateway_of(&config, a) == gateway).map(|a| a.name.clone()).collect();
     to_household(
@@ -725,7 +728,7 @@ async fn relay(state: AppState, target: String, path: String, request: Request) 
         &config,
         &gateway,
         &mine,
-        &links,
+        &allowed,
         &target,
         &remote_agent,
         &household,
@@ -738,14 +741,15 @@ async fn relay(state: AppState, target: String, path: String, request: Request) 
     .await
 }
 
-/// One of our agents writes to an agent of a linked household: our link checked here, theirs on their bridge.
+/// One of our agents writes to an agent of a linked household: the rules checked here (`linked`: whether that sender
+/// may write to the target), theirs again on their bridge.
 #[allow(clippy::too_many_arguments)]
 async fn to_household(
     state: &AppState,
     config: &Config,
     gateway: &str,
     mine: &BTreeSet<String>,
-    links: &[(String, String)],
+    linked: &(dyn Fn(&str) -> bool + Sync),
     target: &str,
     agent: &str,
     household: &Dict,
@@ -755,7 +759,6 @@ async fn to_household(
     query: &QueryMap,
     body: Bytes,
 ) -> ApiResult<Response> {
-    let linked = |s: &str| links.iter().any(|(a, b)| a == s && b == target);
     let (sender, allowed) = if is_message(method, path) {
         let sender =
             sender_of(config, gateway, &body)
@@ -1063,13 +1066,13 @@ async fn family_agents(State(state): State<AppState>, headers: HeaderMap) -> Api
     let household = household_caller(&state, &headers)?;
     let config = state.config();
     // every agent (the pairing screen lists those not paired yet); `told_by`: that household's agents whose family
-    // news it reads (this person's links, family_news::told_by), so their tell_family names it only along them
-    let links = links_of(&state.links.load());
+    // news it reads (the rules, family_news::told_by), so their tell_family names it only along them
+    let (world, rules) = (crate::rules::World::of(&config, false), crate::rules::load(&config));
     let agents: Vec<Value> = config
         .agents
         .values()
         .map(|a| {
-            let told_by = crate::family_news::told_by(&links, &household, &a.name);
+            let told_by = crate::family_news::told_by(&world, &rules, &household, &a.name);
             json!({"id": a.name, "name": a.display_name, "told_by": told_by})
         })
         .collect();
@@ -1092,11 +1095,11 @@ async fn deliver(state: AppState, target: String, path: String, request: Request
         .map(|v| String::from_utf8_lossy(v.as_bytes()).into_owned())
         .unwrap_or_default();
     let remote = format!("{sender}{SEPARATOR}{household}");
-    let links = links_of(&state.links.load());
+    let (world, rules) = (crate::rules::World::of(&config, false), crate::rules::load(&config));
     let allowed = if is_message(&parts.method, &path) {
-        !sender.is_empty() && links.iter().any(|(s, t)| *s == remote && *t == agent.name)
+        !sender.is_empty() && crate::rules::may_write(&world, &rules, &remote, &agent.name)
     } else {
-        links.iter().any(|(s, t)| s.ends_with(&format!("{SEPARATOR}{household}")) && *t == agent.name)
+        crate::rules::opens_to(&world, &rules, &household, &agent.name)
     };
     if !allowed {
         tracing::info!(sender = %remote, target = %agent.name, "household message refused");
@@ -1670,12 +1673,9 @@ async fn unlink(state: &AppState, household: &str) -> ApiResult<Response> {
     }
     // the family's agent held here: that member gets what is the family's (family_agent.rs)
     crate::family_agent::after_unlink(state, household, entry);
-    let mut data = state.links.load();
-    let suffix = format!("{SEPARATOR}{household}");
-    let kept: Vec<(String, String)> =
-        links_of(&data).into_iter().filter(|(s, t)| !s.ends_with(&suffix) && !t.ends_with(&suffix)).collect();
-    data.insert("links".into(), pairs_value(&kept));
-    state.links.save(&data)?;
+    // its rules go, and what they gave (Bot Mode, the contacts)
+    crate::rules::forget_household(&state.config(), household);
+    refresh(&state.config(), &state.links, Some(&state.households))?;
     family_tools_changed(state);
     Ok(web::no_content())
 }

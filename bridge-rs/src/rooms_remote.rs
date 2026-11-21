@@ -55,7 +55,6 @@ use serde_json::{json, Map, Value};
 use crate::app::AppState;
 use crate::config::Config;
 use crate::households::{split, Households, SEPARATOR};
-use crate::peers::links_of;
 use crate::tools_knowledge as tk;
 use crate::web::{self, ApiResult, HttpError};
 use crate::{py, Dict};
@@ -95,8 +94,8 @@ pub fn allowed_here(config: &Config, id: &str) -> bool {
     if crate::family_agent::is_family_of_household(config, id) {
         return true; // the family's agent: in every member's discussions, no link needed
     }
-    let links = links_of(&crate::peers::Links::new(&py::join(&config.data_dir(), "peers.json")).load());
-    links.iter().any(|(s, t)| s == id || t == id)
+    // this person's side of the rules lets it take part (rules.rs); their bridge checks theirs at each turn
+    crate::rules::my_side_with(&crate::rules::World::of(config, false), &crate::rules::load(config), id)
 }
 
 /// « Cuisine (Léa) », from what the guest's bridge listed (its id when it didn't answer).
@@ -269,10 +268,9 @@ fn guest_agent(state: &AppState, headers: &HeaderMap, agent: &str) -> ApiResult<
     let household = household_of(state, headers)?;
     let config = state.config();
     let agent = config.agent(Some(agent)).cloned().ok_or_else(|| HttpError::new(404, "not found"))?;
-    let suffix = format!("{SEPARATOR}{household}");
-    let links = links_of(&state.links.load());
     let family = crate::family_agent::is_family(&config, &agent.name);
-    if !family && !links.iter().any(|(s, t)| s.ends_with(&suffix) && *t == agent.name) {
+    let (world, rules) = (crate::rules::World::of(&config, false), crate::rules::load(&config));
+    if !family && !crate::rules::opens_to(&world, &rules, &household, &agent.name) {
         tracing::info!(household = %household, agent = %agent.name, "rooms: a relative's discussion refused");
         return Err(HttpError::new(
             403,

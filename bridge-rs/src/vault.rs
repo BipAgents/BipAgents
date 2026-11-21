@@ -379,16 +379,9 @@ pub fn others_facing_agents(config: &Config) -> std::collections::HashSet<String
     for family in crate::family_agent::owns(config) {
         out.insert(family);
     }
-    let links = crate::peers::links_of(&crate::peers::Links::new(&crate::py::join(&config.data_dir(), "peers.json")).load());
-    let remote = |id: &str| config.agent(Some(id)).is_none() && crate::households::split(id).is_some();
-    for (source, target) in &links {
-        if remote(source) {
-            out.insert(target.to_lowercase());
-        }
-        if remote(target) {
-            out.insert(source.to_lowercase());
-        }
-    }
+    // along a way with another household the rules allow (rules.rs), either way
+    let world = crate::rules::World::of(config, false);
+    out.extend(crate::rules::household_facing(&world, &crate::rules::load(config)));
     for name in config.agents.keys() {
         if crate::project_agent::is_project(config, name) || !crate::agent_shares::shared_with(config, name).is_empty() {
             out.insert(name.clone());
@@ -410,21 +403,8 @@ pub fn others_names(config: &Config, agent: &str) -> Vec<String> {
     let agent = agent.trim().to_lowercase();
     let linked = crate::households::Households::new(&crate::households::path_for(config));
     let mut households: Vec<String> = crate::agent_shares::shared_with(config, &agent);
-    let links = crate::peers::links_of(&crate::peers::Links::new(&crate::py::join(&config.data_dir(), "peers.json")).load());
-    for (source, target) in &links {
-        let other = if target.to_lowercase() == agent {
-            source
-        } else if source.to_lowercase() == agent {
-            target
-        } else {
-            continue;
-        };
-        if config.agent(Some(other)).is_none() {
-            if let Some((_, household)) = crate::households::split(other) {
-                households.push(household);
-            }
-        }
-    }
+    let world = crate::rules::World::of(config, false);
+    households.extend(crate::rules::households_of(&world, &crate::rules::load(config), &agent));
     let mut names: Vec<String> = Vec::new();
     for household in households {
         let name = linked
@@ -2685,9 +2665,16 @@ mod tests {
                     "project-agents.json",
                     r#"{"projects": {"fete": {"created": 1.0, "ends": 9999999999.0, "archived": null}}}"#,
                 ),
-                _ => ("peers.json", r#"{"links": [["cuisine__lea", "fete"]]}"#),
+                // Léa's agents may write to Fête, and she agrees (rules.rs)
+                _ => (
+                    "agent-rules.json",
+                    r#"{"households": {"lea": {"in": {"mode": "only", "agents": ["fete"]}, "theirs": {"in": {"mode": "all"}}}}}"#,
+                ),
             };
             std::fs::write(dir.path().join(file), text).unwrap();
+            if which == "peer" {
+                std::fs::write(dir.path().join("households.json"), r#"{"households": {"lea": {"name": "Léa"}}}"#).unwrap();
+            }
             assert!(others_facing(&config, "fete"), "{which}");
             assert!(!others_facing(&config, "coach"), "{which}");
             assert!(!may(&config, "fete") && !may(&config, "coach"), "{which}");
@@ -2723,8 +2710,10 @@ mod tests {
         std::fs::write(data.join("households.json"),
                        r#"{"households": {"lea": {"name": "Léa"}, "marc": {"name": "Marc"}, "anon": {}}}"#).unwrap();
         std::fs::write(data.join("agent-shares.json"), r#"{"shared": {"coach": ["lea", "gone"]}}"#).unwrap();
-        std::fs::write(data.join("peers.json"),
-                       r#"{"links": [["cuisine__marc", "cuisine"], ["cuisine", "x__anon"], ["coach", "notes"]]}"#).unwrap();
+        // Marc's agents and the unnamed household's write to Cuisine, both sides agreeing (rules.rs)
+        std::fs::write(data.join("agent-rules.json"), r#"{"write": "some", "pairs": [["coach", "notes"]], "households": {
+            "marc": {"in": {"mode": "only", "agents": ["cuisine"]}, "theirs": {"in": {"mode": "all"}}},
+            "anon": {"in": {"mode": "only", "agents": ["cuisine"]}, "theirs": {"in": {"mode": "all"}}}}}"#).unwrap();
         assert!(others_facing(&config, "coach") && others_facing(&config, "cuisine"));
         assert_eq!(others_names(&config, "coach"), vec!["Léa".to_string()]);
         assert_eq!(others_names(&config, "Cuisine"), vec!["Marc".to_string()]); // a household with no name: left out

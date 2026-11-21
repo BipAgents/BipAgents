@@ -124,7 +124,7 @@ async fn answer(
         return tool_text("That is you: name another agent.", true);
     }
     let shown = crate::agent_files::shown(&target).to_string();
-    if !crate::agent_files::links(config).iter().any(|(from, to)| *from == agent.name && *to == target.name) {
+    if !crate::agent_files::may_write(config, &agent.name, &target.name) {
         return tool_failure(
             &format!("The person hasn't let you write to {shown}."),
             &format!("I can't write to {shown} yet: you can allow it in the app, under « Qui peut écrire à qui »."),
@@ -204,7 +204,7 @@ fn own_path(config: &Config, sender: &AgentConfig, target: &AgentConfig, message
         regex::Regex::new(r#"(?:^|[\s«"'(\[`<])(/(?:envoi|partage|workspace|root)/[^\s»"')\]`>]+)"#)
             .expect("valid regex")
     });
-    let reads = crate::shares::load(config).iter().any(|(r, s)| *r == target.name && *s == sender.name);
+    let reads = crate::rules::reads_of(config).iter().any(|(r, s)| *r == target.name && *s == sender.name);
     let rooms = crate::rooms::mates(config, &sender.name).remove(&target.name).unwrap_or_default();
     let shared = |path: &str| {
         let Some(rest) = path.strip_prefix("/partage/") else { return false };

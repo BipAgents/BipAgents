@@ -905,10 +905,12 @@ pub async fn from_spare(
     })?;
     let agent = spare.agent(&config, &planned.name);
     wait_served(http, &agent, true).await?;
+    let before = crate::rules_live::offered_now(&config);
     reserve_agent(shared, &agent)?;
     crate::guide::refresh(&shared.get()); // its blocks, and the guide's list of agents
     give_tools(&shared.get(), &agent, run).await?;
     tools_loaded(shared, std::slice::from_ref(&agent), http, run).await;
+    crate::rules_live::agents_changed(&shared.get(), run, &before).await; // the rules cover it at once
     tracing::info!(target: "bipbridge::agents", agent = %agent.name, ms = started.elapsed().as_millis() as u64, "spare agent taken");
     Ok(agent)
 }
@@ -1114,7 +1116,9 @@ async fn finish_profile(
         reserve_agent(shared, &agent)?;
     }
     crate::guide::refresh(&shared.get()); // its blocks, and the guide's list of agents
+    let before = crate::rules_live::offered_now(&config);
     give_tools(&shared.get(), &agent, run).await?;
+    crate::rules_live::agents_changed(&shared.get(), run, &before).await; // the rules cover it at once
     Ok(agent)
 }
 
@@ -1397,8 +1401,10 @@ pub async fn claim_profile(
     if let Some(path) = config.source_path.as_deref() {
         append_agent(path, &agent, &[])?;
     }
+    let before = crate::rules_live::offered_now(&shared.get());
     shared.put_agent(agent.clone());
     give_tools(&shared.get(), &agent, run).await?;
+    crate::rules_live::agents_changed(&shared.get(), run, &before).await; // the rules cover it at once
     tracing::info!(target: "bipbridge::agents", agent = %name, "agent claimed");
     Ok(agent)
 }
@@ -2537,9 +2543,11 @@ pub async fn delete_agent(shared: &SharedConfig, agent: &AgentConfig, run: &Run)
     if let Some(path) = config.source_path.as_deref() {
         remove_agent_section(path, &agent.name)?;
     }
+    let before = crate::rules_live::offered_now(&config);
     shared.remove_agent(&agent.name);
     let config = shared.get();
-    crate::shares::forget(&config, &agent.name, run).await?;
+    crate::shares::forget(&config, &agent.name, run).await?; // out of the rules too (rules.rs `forget_agent`)
+    crate::rules_live::agents_changed(&config, run, &before).await;
     crate::sandbox::forget(&config, &agent.name, run).await;
     crate::sent_files::forget(&config, &agent.name);
     crate::agent_tools::forget(&config, &agent.name);
@@ -2599,14 +2607,14 @@ fn pairs_of(body: &Value, list_key: &str, a: &str, b: &str) -> ApiResult<Vec<(St
     Ok(items.iter().filter_map(Value::as_object).map(|x| (text(x, a), text(x, b))).collect())
 }
 
-fn links_json(links: &Dict) -> Vec<Value> {
-    match links.get("links") {
-        Some(Value::Array(items)) => items
-            .iter()
-            .map(|pair| json!({"from": pair.get(0).cloned().unwrap_or(Value::Null), "to": pair.get(1).cloned().unwrap_or(Value::Null)}))
-            .collect(),
-        _ => Vec::new(),
-    }
+/// « Qui peut écrire à qui » for an older app: the pairs the rules give, your side of each household's way
+/// (rules.rs `own_side_pairs`).
+fn links_json(config: &Config) -> Vec<Value> {
+    let world = crate::rules::World::of(config, false);
+    crate::rules::own_side_pairs(&world, &crate::rules::load(config))
+        .into_iter()
+        .map(|(from, to)| json!({"from": from, "to": to}))
+        .collect()
 }
 
 fn created(config: &Config, agent: &AgentConfig) -> Value {
@@ -2826,6 +2834,7 @@ async fn agent_links(State(state): State<AppState>) -> ApiResult<Response> {
             }
             _ => Vec::new(),
         };
+        let mut theirs = Vec::new();
         for remote in listed {
             let rid = remote.get("id").map(crate::py::py_str).unwrap_or_default();
             let rname = remote.get("name").map(crate::py::py_str).unwrap_or_default();
@@ -2833,9 +2842,15 @@ async fn agent_links(State(state): State<AppState>) -> ApiResult<Response> {
                 json!({"id": format!("{rid}{}{id}", crate::peers::SEPARATOR), "name": format!("{rname} ({hname})"),
                                "managed": false, "household": id}),
             );
+            if !rid.is_empty() {
+                theirs.push((rid, rname));
+            }
+        }
+        if !theirs.is_empty() {
+            crate::rules::remember_agents(&config, &id, &theirs); // the rules' listings name them
         }
     }
-    Ok(web::ok(json!({"agents": agents, "links": links_json(&state.links.load())})))
+    Ok(web::ok(json!({"agents": agents, "links": links_json(&config)})))
 }
 
 async fn set_agent_links(State(state): State<AppState>, request: Request) -> ApiResult<Response> {
@@ -2860,14 +2875,10 @@ async fn set_agent_links(State(state): State<AppState>, request: Request) -> Api
         _ => Vec::new(),
     };
     manual.sort();
-    // An agent linked with another household's: out of the person's hub once idle (own_space.rs).
+    // An agent another household's agents talk to: out of the person's hub once idle (own_space.rs).
     let config = state.config();
-    for (from, to) in &wanted {
-        let (ours, theirs) = if crate::households::split(from).is_some() { (to, from) } else { (from, to) };
-        if crate::households::split(theirs).is_none() {
-            continue;
-        }
-        if let Some(agent) = config.agent(Some(ours)).filter(|a| crate::own_space::should_leave_hub(&config, a)) {
+    for agent in config.agents.values() {
+        if crate::own_space::should_leave_hub(&config, agent) {
             crate::own_space::apart_when_idle(&state, &agent.name);
         }
     }
@@ -2876,7 +2887,17 @@ async fn set_agent_links(State(state): State<AppState>, request: Request) -> Api
     for agent in config.agents.values() {
         give_tools(&config, agent, &run).await?;
     }
-    Ok(web::ok(json!({"links": links_json(&state.links.load()), "needs_setup": manual})))
+    // the households whose rules changed get our side (rules_live.rs)
+    let told: Vec<String> = result
+        .get("changed")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(str::to_string)
+        .collect();
+    crate::rules_live::tell_all(&state, &told).await;
+    Ok(web::ok(json!({"links": links_json(&config), "needs_setup": manual})))
 }
 
 /// Who may read what another agent shares (read-only), and which agents can take part.
