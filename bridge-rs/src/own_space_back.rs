@@ -97,8 +97,13 @@ fn journal(config: &Config) -> BTreeMap<String, String> {
         .unwrap_or_default()
 }
 
+/// One reader-writer of the journal at a time: the start's loop and each way back's `finish` (a task of its own) note
+/// in it (review 3, R1: two at once could lose a line, or mix the file).
+static JOURNAL_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// `agent` noted on its way back from `space` (None: no longer).
 fn note(config: &Config, agent: &str, space: Option<&str>) {
+    let _one_at_a_time = JOURNAL_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let mut agents = journal(config);
     match space {
         Some(space) => agents.insert(agent.to_string(), space.to_string()),
@@ -243,9 +248,21 @@ async fn back_once(state: &AppState, name: &str) -> Back {
             Back::Done
         }
         Err(exc) => {
-            note(&config, name, None);
+            forget_failed(&config, name);
             Back::Failed(format!("{exc:?}"))
         }
+    }
+}
+
+/// A way back that failed, the agent served by its space: the journal forgets it, unless the hub still has a copy of
+/// it (its delete refused, spaces.rs `copy_back`, or the switch not saved, agents_admin.rs `move_back_to_hub`). Then the
+/// journal keeps it, and the next try (`clear_hub_copy`, under the agent's lock) or the next start (`settle_journal`)
+/// deletes that copy: never a delete that waits, which could hit a profile a later way back put there (review 3, B1).
+fn forget_failed(config: &Config, agent: &str) {
+    if crate::spaces::hub_profile(config, agent).exists() {
+        tracing::info!(target: "bipbridge::own_space", agent = %agent, "the hub keeps a copy of it: deleted at the next try or start");
+    } else {
+        note(config, agent, None);
     }
 }
 
@@ -295,6 +312,12 @@ async fn remove_space(config: &Config, from: &AgentConfig) {
 async fn settle_journal(state: &AppState) {
     let config = state.config();
     for (name, space) in journal(&config) {
+        // only a space this bridge made for that agent is ever stopped or removed (as `comes_back_with`; review 3, R9)
+        if config.spaces.root.is_empty() || Path::new(&space) != Path::new(&config.spaces.root).join(&name) {
+            tracing::warn!(target: "bipbridge::own_space", agent = %name, space = %space, "the way back's journal names a space this bridge didn't make: left alone");
+            note(&config, &name, None);
+            continue;
+        }
         let from = AgentConfig { name: name.clone(), space: Some(space.clone()), ..Default::default() };
         match config.agent(Some(&name)).cloned() {
             Some(agent) if agent.space.as_deref() == Some(space.as_str()) => {
@@ -534,6 +557,22 @@ mod tests {
         assert_eq!(night_id(4 * 60, 11, 22, 5), Some(10));
         assert_eq!(night_id(12 * 60, 11, 22, 5), None);
         assert_eq!(night_id(120, 10, 3, 3), None);
+    }
+
+    /// Review 3 (B1): a way back that failed with the hub's copy left keeps its journal line (the next try or start
+    /// deletes that copy, never a delete that waits); without a copy left, the line goes.
+    #[test]
+    fn a_failed_way_back_is_kept_in_the_journal_while_the_hub_has_a_copy() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = place(dir.path(), &[], &["fete"]);
+        note(&config, "fete", Some("/s/fete"));
+        let copy = crate::spaces::hub_profile(&config, "fete");
+        std::fs::create_dir_all(&copy).unwrap();
+        forget_failed(&config, "fete");
+        assert_eq!(journal(&config).keys().collect::<Vec<_>>(), ["fete"]);
+        std::fs::remove_dir_all(&copy).unwrap();
+        forget_failed(&config, "fete");
+        assert!(journal(&config).is_empty());
     }
 
     #[test]

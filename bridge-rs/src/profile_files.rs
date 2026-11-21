@@ -168,9 +168,9 @@ fn write_keeping_owner(
     use std::os::unix::fs::{MetadataExt, PermissionsExt};
     let old = std::fs::metadata(path)?;
     let (mode, uid, gid) = (old.permissions().mode() & 0o7777, old.uid(), old.gid());
-    write_atomic_then(path, bytes, mode, |temporary| {
+    // made 0600 (the bridge's own group never reads it, review 3 R8), given its owner and group, then its mode
+    write_atomic_then(path, bytes, 0o600, |temporary| {
         chown(temporary, uid, gid)?;
-        // (a change of owner may clear set-id bits: the mode once more)
         std::fs::set_permissions(temporary, std::fs::Permissions::from_mode(mode))
     })
 }
@@ -551,9 +551,12 @@ mod tests {
         let asked = std::sync::Mutex::new(None);
         write_keeping_owner(&env, b"A=2\n", |file, uid, gid| {
             *asked.lock().unwrap() = Some((file.file_name().unwrap().to_string_lossy().into_owned(), uid, gid));
+            // until it has its owner and group, only the bridge's user reads it (review 3, R8)
+            assert_eq!(std::fs::metadata(file).unwrap().mode() & 0o7777, 0o600);
             std::os::unix::fs::chown(file, Some(uid), Some(gid))
         })
         .unwrap();
+        assert_eq!(std::fs::metadata(&env).unwrap().mode() & 0o7777, 0o640);
         assert_eq!(asked.into_inner().unwrap(), Some(("..env.bipagents-tmp".to_string(), before.uid(), before.gid())));
         // not allowed (another owner, the bridge not root): nothing written, nothing left beside it
         let refused = write_keeping_owner(&env, b"", |_, _, _| Err(std::io::Error::from_raw_os_error(libc::EPERM)));

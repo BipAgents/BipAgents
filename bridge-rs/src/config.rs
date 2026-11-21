@@ -286,6 +286,10 @@ pub struct SpacesConfig {
     /// (then 4 times longer each time; default 60, the tests shorten it).
     #[serde(skip)]
     pub forget_again: f64,
+    /// spaces.rs `copy_back`: seconds the way back into the hub waits for the hub to serve the agent (default 90, as
+    /// `agents_admin::wait_served`; the tests shorten it).
+    #[serde(skip)]
+    pub served_within: f64,
 }
 
 impl Default for SpacesConfig {
@@ -299,6 +303,7 @@ impl Default for SpacesConfig {
             container_home: String::new(),
             tidy_after: 300.0,
             forget_again: 60.0,
+            served_within: 90.0,
         }
     }
 }
@@ -1699,6 +1704,7 @@ pub fn parse_config(data: &Value, source_path: Option<&str>) -> Result<Config> {
         container_home: py::rstrip_slash(&s(spaces_t, "container_home", "")),
         tidy_after: f(spaces_t, "tidy_after", 300.0)?.max(0.0),
         forget_again: f(spaces_t, "forget_again", 60.0)?.max(0.1),
+        served_within: f(spaces_t, "served_within", 90.0)?.max(1.0),
     };
     if spaces.sandbox != "auto" && spaces.sandbox != "none" {
         return Err(ConfigError::new("spaces.sandbox must be 'auto' or 'none'"));

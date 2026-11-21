@@ -21,7 +21,7 @@ use std::time::Duration;
 use crate::agents_admin::pyyaml::Yaml;
 use crate::agents_admin::Run;
 use crate::browsers::pyx::shlex_quote;
-use crate::config::{AgentConfig, Config};
+use crate::config::{AgentConfig, Config, SharedConfig};
 
 /// Runtime files of a running gateway or sandbox: never copied (the space starts its own).
 pub const SKIP: [&str; 9] = [
@@ -310,6 +310,17 @@ fn tombstone(config: &Config, agent: &str) -> PathBuf {
     profiles.join(".deleted").join(agent)
 }
 
+/// What `Spaces::forget_unless_served` did.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Forgot {
+    /// The hub's copy deleted.
+    Deleted,
+    /// None there.
+    Gone,
+    /// The bridge serves the agent from the hub: its profile there kept.
+    Served,
+}
+
 /// What a profile gets for its space only (`move_out`: attachments only from its own files; Hermes' built-in browser
 /// tools, « Browser Use » putting a socket under the agent's folder, too long a path there): section, key.
 pub const SPACE_ONLY: [(&str, &str); 2] = [("gateway", "strict"), ("browser", "backend")];
@@ -470,40 +481,42 @@ impl Spaces {
         self.service(config, &agent.name, space, true).await
     }
 
-    /// `move`: the agent, from the hub into its own space. Returns its new configuration (the caller saves it).
+    /// `move`: the agent, from the hub into its own space. Returns its new configuration (the caller saves it). `live`:
+    /// the bridge's configuration, which a delete of the hub's copy that waits reads again (`forget_later`).
     pub async fn move_agent(
         &self,
-        config: &Config,
+        live: &SharedConfig,
         agent: &AgentConfig,
         http: &reqwest::Client,
     ) -> anyhow::Result<AgentConfig> {
+        let current = live.get();
+        let config = &*current;
         let moved = self.move_agent_keeping_hub(config, agent, http).await?;
         // Its space serves it now: the move stands. Until 2026-11-07 a failed delete here failed the whole move with
         // the space left running and the bridge still pointing at the hub (whose copy Hermes had already marked
         // deleted), and each try again then met « a space with this name already exists » (token lab).
         if let Err(exc) = self.forget_in_hub(config, &agent.name).await {
             tracing::warn!(agent = %agent.name, error = %exc, "the hub's copy of the moved agent not deleted yet: tried again later");
-            self.forget_later(config, &agent.name);
+            self.forget_later(live, &agent.name);
         }
         Ok(moved)
     }
 
     /// The hub's copy of a moved agent deleted later, a few times (`[spaces] forget_again`, then 4 times longer each
-    /// time): what kept it (« a running gateway still owns this profile ») settles. Done once it is gone.
-    pub fn forget_later(&self, config: &Config, agent: &str) {
-        let (spaces, config, agent) = (Spaces::new(self.run.clone()), config.clone(), agent.to_string());
+    /// time): what kept it (« a running gateway still owns this profile ») settles. Done once it is gone, or once the
+    /// bridge serves the agent from the hub again (`forget_unless_served`: never the profile a way back put there).
+    pub fn forget_later(&self, live: &SharedConfig, agent: &str) {
+        let (spaces, live, agent) = (Spaces::new(self.run.clone()), live.clone(), agent.to_string());
         tokio::spawn(async move {
-            let mut wait = config.spaces.forget_again;
+            let mut wait = live.get().spaces.forget_again;
             for _ in 0..FORGET_TRIES {
                 tokio::time::sleep(Duration::from_secs_f64(wait)).await;
-                if !hub_profile(&config, &agent).is_dir() {
-                    return;
-                }
-                match spaces.forget_in_hub(&config, &agent).await {
-                    Ok(()) => {
+                match spaces.forget_unless_served(&live, &agent).await {
+                    Ok(Forgot::Deleted) => {
                         tracing::info!(agent = %agent, "the hub forgot the moved agent");
                         return;
                     }
+                    Ok(_) => return,
                     Err(exc) => {
                         tracing::warn!(agent = %agent, error = %exc, "the hub's copy of the moved agent still not deleted")
                     }
@@ -512,6 +525,26 @@ impl Spaces {
             }
             tracing::warn!(agent = %agent, "the hub keeps a copy of the moved agent: `hermes profile delete <agent> --yes` removes it");
         });
+    }
+
+    /// The hub's copy of `agent` deleted now, unless the bridge serves the agent from the hub (review 3 of 21/11, B1: a
+    /// delete that waited — after a move, `forget_later`; the way out's `finish`, own_space.rs — deleted the profile a
+    /// way back had put there meanwhile: its conversations, memory, files and Hermes vault, its name tombstoned). Taken
+    /// under the agent's lock (own_space.rs `lock_of`, which the way back holds from its copy to its switch), the
+    /// bridge's live configuration read again then. Never call it while holding that lock.
+    pub async fn forget_unless_served(&self, live: &SharedConfig, agent: &str) -> anyhow::Result<Forgot> {
+        let lock = crate::own_space::lock_of(agent);
+        let _one_at_a_time = lock.lock().await;
+        let config = live.get();
+        if config.agent(Some(agent)).is_some_and(|a| crate::vault::in_hub(&config, a)) {
+            tracing::info!(agent = %agent, "served from the shared hub again: its profile there kept");
+            return Ok(Forgot::Served);
+        }
+        if !hub_profile(&config, agent).is_dir() {
+            return Ok(Forgot::Gone);
+        }
+        self.forget_in_hub(&config, agent).await?;
+        Ok(Forgot::Deleted)
     }
 
     /// The move without its last step: the hub still serves the profile, so a turn going on there ends there (the
@@ -717,11 +750,13 @@ impl Spaces {
         let _ = std::fs::remove_file(tombstone(config, &agent.name));
         std::fs::rename(&staging, &target)?;
         let back = in_hub_again(config, agent);
-        if let Err(exc) = crate::agents_admin::wait_served(http, &back, false).await {
+        if let Err(exc) = crate::agents_admin::wait_served_within(http, &back, false, config.spaces.served_within).await {
             tracing::warn!(agent = %agent.name, error = %exc, "the hub did not serve the agent back: its copy deleted, it stays in its space");
+            // Never a delete that waits (`forget_later`): the next try deletes it under the agent's lock
+            // (`clear_hub_copy`), or the bridge's next start (own_space_back.rs `settle_journal`), the journal keeping
+            // the agent while the copy is there (review 3 of 21/11, B1).
             if let Err(forget) = self.forget_in_hub(config, &agent.name).await {
-                tracing::warn!(agent = %agent.name, error = %forget, "the hub's copy not deleted: tried again later");
-                self.forget_later(config, &agent.name);
+                tracing::warn!(agent = %agent.name, error = %forget, "the hub's copy not deleted: at the next try");
             }
             return Err(SpaceError("the hub did not serve it".into()).into());
         }

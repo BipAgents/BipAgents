@@ -1268,8 +1268,18 @@ pub fn public_agent_url(config: &Config, profile: &str) -> Option<String> {
 }
 
 pub async fn wait_served(http: &reqwest::Client, agent: &AgentConfig, bot_chat: bool) -> anyhow::Result<()> {
+    wait_served_within(http, agent, bot_chat, 90.0).await
+}
+
+/// [`wait_served`], about `seconds` tries (one a second, each at most 3 s).
+pub async fn wait_served_within(
+    http: &reqwest::Client,
+    agent: &AgentConfig,
+    bot_chat: bool,
+    seconds: f64,
+) -> anyhow::Result<()> {
     let auth = format!("Bearer {}", agent.hermes_key);
-    for _ in 0..90 {
+    for _ in 0..(seconds.ceil().max(1.0) as u32) {
         // a new profile is served at once; its key is picked up within ~30 s
         let resp = http
             .get(format!("{}/v1/capabilities", agent.hermes_url))
@@ -3025,7 +3035,7 @@ pub async fn move_into_space(state: &AppState, agent: &AgentConfig, keep_hub: bo
     let moving = if keep_hub {
         spaces.move_agent_keeping_hub(&config, agent, &state.http).await
     } else {
-        spaces.move_agent(&config, agent, &state.http).await
+        spaces.move_agent(&state.config, agent, &state.http).await
     };
     let moved = match moving {
         Ok(moved) => moved,

@@ -113,7 +113,7 @@ async fn an_agent_moves_into_its_own_space_and_keeps_everything() {
     let http = reqwest::Client::builder().proxy(reqwest::Proxy::http(&gateway).unwrap()).build().unwrap();
     let c = config.get();
     let moved = bipbridge::spaces::Spaces::new(run.clone())
-        .move_agent(&c, c.agent(Some("budget")).unwrap(), &http)
+        .move_agent(&config, c.agent(Some("budget")).unwrap(), &http)
         .await
         .unwrap();
     assert!(keys.lock().unwrap().iter().all(|k| *k == format!("Bearer {}", "b".repeat(32))));
@@ -341,6 +341,153 @@ async fn an_agent_comes_back_into_the_hub_and_keeps_everything() {
     spaces.remove(&c, &from).await.unwrap();
     assert!(args(&commands)[0][2].contains("stop-space budget"));
     assert!(!space.exists() && copied.join("SOUL.md").exists());
+}
+
+/// Budget in its own space (`spaces/budget`), the hub at `.hermes` (Hermes' tombstone of it there), the bridge's
+/// configuration in `bridge.toml`; `spaces`: the `[spaces]` table.
+fn budget_in_its_space(tmp: &Path, hub_url: &str, spaces: Value) -> (SharedConfig, PathBuf, PathBuf) {
+    let hub = tmp.join(".hermes");
+    std::fs::create_dir_all(hub.join("profiles/.deleted")).unwrap();
+    std::fs::write(hub.join("profiles/.deleted/budget"), "deleted\n").unwrap();
+    let space = tmp.join("spaces/budget");
+    let folder = space.join("profiles/budget");
+    std::fs::create_dir_all(folder.join("memories")).unwrap();
+    std::fs::write(folder.join("memories/MEMORY.md"), "Appris dans son espace.").unwrap();
+    std::fs::write(folder.join("SOUL.md"), "Tu es Budget.").unwrap();
+    std::fs::write(folder.join("config.yaml"), "terminal:\n  backend: docker\n").unwrap();
+    let config_path = tmp.join("bridge.toml");
+    std::fs::write(&config_path, "# bridge\n").unwrap();
+    let mut d = config_dict(tmp, &Urls::default());
+    d["hermes"] = json!({"bin": "/opt/hermes", "home": s(&hub), "hub_url": hub_url,
+                         "python": "/opt/py -I", "root": "/opt/hermes-agent", "isolated": true});
+    let mut table = json!({"root": s(&tmp.join("spaces")), "first_port": 18660, "sandbox": "none",
+                           "start": "start-space {agent} {home}", "stop": "stop-space {agent}"});
+    for (k, v) in spaces.as_object().unwrap() {
+        table[k] = v.clone();
+    }
+    d["spaces"] = table;
+    d["agents"]["Budget"] = json!({"hermes_url": "http://127.0.0.1:18660/p/budget", "hermes_key": "b".repeat(32),
+                                   "isolated": true, "sandboxed": true, "space": s(&space), "python": ["/opt/py", "-I"],
+                                   "hermes_home": s(&folder)});
+    (SharedConfig::new(parse_config(&d, Some(&s(&config_path))).unwrap()), hub, space)
+}
+
+/// `hermes profile delete` as Hermes does it (its folder gone, its tombstone written), recorded.
+fn deleting_hermes(hub: &Path) -> (Run, Commands) {
+    let deleted = hub.to_path_buf();
+    recorder_with(move |args| {
+        if args.get(1..3) == Some(&["profile".to_string(), "delete".to_string()][..]) {
+            let _ = std::fs::remove_dir_all(deleted.join("profiles").join(&args[3]));
+            std::fs::write(deleted.join("profiles/.deleted").join(&args[3]), "deleted\n").unwrap();
+        }
+        String::new()
+    })
+}
+
+/// Review 3 (B1, 21/11): a delete of the hub's copy still pending (`forget_later`, from a move that failed to delete
+/// it) never deletes the profile a later way back put into the hub, which the bridge serves; the way out's `finish`
+/// deletes through the same gate (`forget_unless_served`). Red before the gate (bc04d3c01): the profile deleted.
+#[tokio::test]
+async fn a_pending_delete_of_the_hubs_copy_never_deletes_an_agent_back_in_the_hub() {
+    let dir = tempfile::tempdir().unwrap();
+    let (config, hub, _space) =
+        budget_in_its_space(dir.path(), "http://127.0.0.1:8642", json!({"forget_again": 0.5}));
+    let before = config.get().agent(Some("budget")).unwrap().clone();
+    let (run, commands) = deleting_hermes(&hub);
+    let gateway = common::spawn_fake(Router::new().fallback(any(|| async { axum::Json(json!({})) }))).await;
+    let http = reqwest::Client::builder().proxy(reqwest::Proxy::http(&gateway).unwrap()).build().unwrap();
+    let spaces = bipbridge::spaces::Spaces::new(run.clone());
+    // what a failed delete left: a retry pending
+    spaces.forget_later(&config, "budget");
+    // the next way back (own_space_back.rs, under the agent's lock) brings it back; the bridge switches to the hub
+    {
+        let lock = bipbridge::own_space::lock_of("budget");
+        let _held = lock.lock().await;
+        let back = spaces.copy_back(&config.get(), &before, &http).await.unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(700)).await; // the retry is due meanwhile: it waits
+        agents_admin::save_agent(&config, &back).unwrap();
+    }
+    assert!(hub.join("profiles/budget/SOUL.md").exists());
+    tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+    // the stale retry deletes nothing: the profile of the agent back in the hub, its name served
+    assert!(args(&commands).is_empty(), "{:?}", args(&commands));
+    assert!(hub.join("profiles/budget/SOUL.md").exists() && !hub.join("profiles/.deleted/budget").exists());
+    // the same gate as the way out's `finish`: served from the hub, kept; served by its space, the hub's copy deleted
+    use bipbridge::spaces::Forgot;
+    assert_eq!(spaces.forget_unless_served(&config, "budget").await.unwrap(), Forgot::Served);
+    assert!(args(&commands).is_empty());
+    agents_admin::save_agent(&config, &before).unwrap();
+    assert_eq!(spaces.forget_unless_served(&config, "budget").await.unwrap(), Forgot::Deleted);
+    assert_eq!(args(&commands), [strs(&["/opt/hermes", "profile", "delete", "budget", "--yes"])]);
+    assert_eq!(spaces.forget_unless_served(&config, "budget").await.unwrap(), Forgot::Gone);
+}
+
+/// Review 3 (R10): the hub doesn't serve the agent back in time. Its copy is deleted once, at once, or left (Hermes
+/// refused) for the next try or start, never by a delete that waits; the agent stays in its space.
+#[tokio::test]
+async fn a_way_back_the_hub_does_not_serve_leaves_the_agent_in_its_space() {
+    let gateway = common::spawn_fake(Router::new().fallback(any(|| async {
+        (axum::http::StatusCode::UNAUTHORIZED, axum::Json(json!({"error": "unknown key"})))
+    })))
+    .await;
+    let http = reqwest::Client::builder().proxy(reqwest::Proxy::http(&gateway).unwrap()).build().unwrap();
+    for refused in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let (config, hub, space) = budget_in_its_space(
+            dir.path(),
+            "http://127.0.0.1:8642",
+            json!({"forget_again": 0.3, "served_within": 1.0}),
+        );
+        let before = config.get().agent(Some("budget")).unwrap().clone();
+        let (run, commands): (Run, Commands) = if refused {
+            let commands: Commands = Arc::default();
+            let seen = commands.clone();
+            let run: Run = Arc::new(move |args: Vec<String>, env: BTreeMap<String, String>| {
+                seen.lock().unwrap().push((args, env));
+                Box::pin(async move { Err(anyhow::anyhow!("a running gateway still owns this profile")) })
+            });
+            (run, commands)
+        } else {
+            deleting_hermes(&hub)
+        };
+        let spaces = bipbridge::spaces::Spaces::new(run);
+        let failed = spaces.copy_back(&config.get(), &before, &http).await;
+        assert!(failed.is_err(), "refused={refused}");
+        tokio::time::sleep(std::time::Duration::from_millis(1500)).await; // (a delete that waited would be due)
+        assert_eq!(args(&commands), [strs(&["/opt/hermes", "profile", "delete", "budget", "--yes"])], "refused={refused}");
+        assert_eq!(hub.join("profiles/budget").exists(), refused);
+        assert!(space.join("profiles/budget/SOUL.md").exists() && config.get().agent(Some("budget")) == Some(&before));
+    }
+}
+
+/// Review 3 (R10): the switch to the hub not saved (`save_agent` fails): the hub's copy deleted again, the agent served
+/// by its space as it was.
+#[tokio::test]
+async fn a_way_back_whose_switch_is_not_saved_leaves_the_agent_in_its_space() {
+    let gateway = common::spawn_fake(Router::new().fallback(any(|| async { axum::Json(json!({})) }))).await;
+    let dir = tempfile::tempdir().unwrap();
+    let tmp = dir.path();
+    let (shared, hub, space) = budget_in_its_space(tmp, &gateway, json!({}));
+    // Hermes' `profile delete` as a program: its folder gone, its tombstone written
+    let bin = tmp.join("hermes");
+    std::fs::write(
+        &bin,
+        "#!/bin/sh\n[ \"$1 $2\" = \"profile delete\" ] || exit 0\nrm -rf \"$HERMES_HOME/profiles/$3\"\n\
+         echo deleted > \"$HERMES_HOME/profiles/.deleted/$3\"\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let mut config = (*shared.get()).clone();
+    config.hermes.bin = s(&bin);
+    let app = TestApp::new(config);
+    let state = &app.app.state;
+    let before = state.config().agent(Some("budget")).unwrap().clone();
+    std::fs::remove_file(tmp.join("bridge.toml")).unwrap(); // its configuration file gone: the switch can't be saved
+    let failed = agents_admin::move_back_to_hub(state, &before).await;
+    assert!(failed.is_err());
+    assert!(!hub.join("profiles/budget").exists() && hub.join("profiles/.deleted/budget").exists());
+    assert_eq!(state.config().agent(Some("budget")), Some(&before));
+    assert!(space.join("profiles/budget/SOUL.md").exists());
 }
 
 // -- own skills -------------------------------------------------------------------------------------------------------

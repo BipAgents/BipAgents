@@ -82,7 +82,9 @@ another way to give you the password), and call again later.";
 static LOCKS: LazyLock<Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>> = LazyLock::new(Default::default);
 static FAILURES: LazyLock<Mutex<HashMap<String, Instant>>> = LazyLock::new(Default::default);
 
-pub(crate) fn lock_of(agent: &str) -> Arc<tokio::sync::Mutex<()>> {
+/// The agent's own lock: one move (out of the hub, back into it) at a time, and a delete of its hub copy that waited
+/// (spaces.rs `forget_unless_served`) never in the middle of one.
+pub fn lock_of(agent: &str) -> Arc<tokio::sync::Mutex<()>> {
     LOCKS.lock().unwrap_or_else(|e| e.into_inner()).entry(agent.to_string()).or_default().clone()
 }
 
@@ -160,12 +162,16 @@ async fn finish(state: AppState, agent: String, hub_url: String, new_url: String
             tracing::warn!(target: "bipbridge::own_space", agent = %agent, "the hub turn's end not copied into the space");
         }
     }
+    // (up to 30 minutes after the move: by then a way back may have put the agent into the hub again, review 3 B1)
     let spaces = crate::spaces::Spaces::new(crate::agents_admin::default_run());
-    match spaces.forget_in_hub(&config, &agent).await {
-        Ok(()) => tracing::info!(target: "bipbridge::own_space", agent = %agent, "the hub forgot the moved agent"),
+    match spaces.forget_unless_served(&state.config, &agent).await {
+        Ok(crate::spaces::Forgot::Deleted) => {
+            tracing::info!(target: "bipbridge::own_space", agent = %agent, "the hub forgot the moved agent")
+        }
+        Ok(_) => {}
         Err(exc) => {
             tracing::warn!(target: "bipbridge::own_space", agent = %agent, error = %exc, "the hub kept the moved agent's profile: tried again later");
-            spaces.forget_later(&config, &agent);
+            spaces.forget_later(&state.config, &agent);
         }
     }
 }
