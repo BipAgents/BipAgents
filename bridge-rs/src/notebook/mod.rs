@@ -56,6 +56,8 @@ pub mod offline;
 pub mod papers;
 pub mod reads;
 pub mod review;
+#[cfg(test)]
+mod search_bench;
 pub mod tidy;
 pub mod tools;
 pub mod trip;
