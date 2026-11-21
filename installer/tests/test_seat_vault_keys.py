@@ -167,3 +167,16 @@ def test_health_adds_the_vault_only_for_places_that_have_one(tmp_path, monkeypat
     seats = agent.health()
     assert "vault" not in seats["1"] and seats["1"]["vault_failed"] == "hardening failed"
     assert seats["2"]["vault"] == "open" and "vault_failed" not in seats["2"]
+
+
+def test_every_beat_says_which_vault_orders_this_seat_agent_does(tmp_path):
+    # F2 (final review of 20/11): the guichet orders vault_keys only to a server whose beat says a seat agent that notes
+    # each order's outcome and cites it in its beats (870bc5931, `VAULT_AGENT` 3); an older one says nothing, and a
+    # wave back to one stops saying it
+    agent = _seat_agent()
+    meminfo = tmp_path / "meminfo"
+    meminfo.write_text("MemTotal:        8000000 kB\nMemAvailable:    3000000 kB\n")
+    numbers = agent.vitals(str(meminfo), str(tmp_path), str(tmp_path / "up"), str(tmp_path / "hardened"))
+    assert agent.VAULT_AGENT == 3
+    assert numbers["vault_agent"] == 3
+    assert json.loads(json.dumps(numbers))["vault_agent"] == 3
