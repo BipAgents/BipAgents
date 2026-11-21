@@ -51,6 +51,27 @@ Details, module by module, and the Hermes patches we carry: [what the bridge add
 ([FR](docs/what-the-bridge-adds.fr.md) · [DE](docs/what-the-bridge-adds.de.md) ·
 [ES](docs/what-the-bridge-adds.es.md) · [NL](docs/what-the-bridge-adds.nl.md)).
 
+## 🔒 Security
+
+- ✅ **Nothing that matters happens without your OK**: paying, sending in your name, deleting for good, using a
+  password, a form to a new site. A card on your phone, every time.
+- 🔑 **Your agents never see your passwords or card numbers**: the vault types them itself, only on the right site.
+- 🤖 **The AI model sees the messages it answers**, nothing from the vault.
+- 📦 **Each agent works in its own box**: it reads the web, and can't send more than a little to a site you didn't
+  allow.
+- ⚠️ **Said plainly**: an agent can still be fooled within what needs no card, and whoever runs the server (on the
+  offer, Kerfy Studio) could technically reach it.
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/security/who-sees-what.en.dark.svg">
+    <img src="docs/security/who-sees-what.en.light.svg" width="440" alt="Who sees what: the AI model sees the messages it answers, never your passwords or cards; websites see your agent's visits; the push relay sees a neutral line only; Kerfy Studio, on the offer, sees your account and backups it can't read; the key service holds half a key and is off until a place is sealed.">
+  </picture>
+</p>
+
+Details, what is enforced by code and what isn't: [the security model](docs/security-model.md) ·
+[how to report a vulnerability](SECURITY.md).
+
 ## Two ways to use BipAgents
 
 ### ☁️ All included, by Kerfy Studio — *coming soon*
@@ -116,7 +137,7 @@ machine. All of it in the [installer's guide](installer/README.md); by hand: [se
 - 📊 **Pages and mini apps** right in the replies — charts, trackers, **interactive maps** with « Open in Maps » —
   and **podcasts** read by two Bips.
 - 🔒 **Each agent in its own sandbox**: its own files, folders it shares with the agents you choose (read-only for
-  them), and only the websites you allowed.
+  them), and data sent only to the websites you allowed (beyond a small amount).
 - 👨‍👩‍👧 **The whole family**: one private space per person; relatives' agents talk to each other only along links you
   turned on. Agents sorted into groups on the home screen (Personal, Pro, Family, or your own).
 - 💻 **On a computer too**: the web console opens your agents, their conversations and the Inbox in a browser.
@@ -164,7 +185,8 @@ flowchart LR
 
 What leaves your space: each message goes to the AI model you chose, to be answered; the services an agent uses for
 you (web search, maps, weather) see its requests. Details: [what the apps send, and to whom](docs/app-data.md) ·
-[how this compares with ChatGPT and others](docs/privacy-compare.md).
+[how this compares with ChatGPT and others](docs/privacy-compare.md) ·
+[the security model: what is enforced, and its limits](docs/security-model.md).
 
 ## 🗂️ The repository
 

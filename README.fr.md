@@ -56,6 +56,28 @@ Le détail, module par module, et les patches Hermes que nous portons : [ce que 
 ([EN](docs/what-the-bridge-adds.md) · [DE](docs/what-the-bridge-adds.de.md) ·
 [ES](docs/what-the-bridge-adds.es.md) · [NL](docs/what-the-bridge-adds.nl.md)).
 
+## 🔒 Sécurité
+
+- ✅ **Rien d'important sans ton accord** : payer, envoyer en ton nom, supprimer définitivement, utiliser un mot de
+  passe, un formulaire vers un nouveau site. Une carte sur ton téléphone, à chaque fois.
+- 🔑 **Tes agents ne voient jamais tes mots de passe ni tes numéros de carte** : le coffre les tape lui-même,
+  seulement sur le bon site.
+- 🤖 **Le modèle d'IA voit les messages auxquels il répond**, rien du coffre.
+- 📦 **Chaque agent travaille dans sa propre boîte** : il lit le web, et ne peut pas envoyer plus qu'un peu de données à
+  un site que tu n'as pas autorisé.
+- ⚠️ **Dit franchement** : un agent peut encore être trompé dans ce qui ne demande pas de carte, et qui gère le serveur
+  (sur l'offre, Kerfy Studio) pourrait techniquement y accéder.
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/security/who-sees-what.fr.dark.svg">
+    <img src="docs/security/who-sees-what.fr.light.svg" width="440" alt="Qui voit quoi : le modèle d'IA voit les messages auxquels il répond, jamais tes mots de passe ni tes cartes ; les sites web voient les visites de ton agent ; le relais de notifications ne voit qu'une ligne neutre ; Kerfy Studio, sur l'offre, voit ton compte et des sauvegardes qu'il ne lit pas ; le service de clés garde une moitié de clé et reste éteint tant qu'aucune place n'est scellée.">
+  </picture>
+</p>
+
+Les détails, ce que le code impose et ce qu'il n'impose pas : [le modèle de sécurité](docs/security-model.fr.md) ·
+[signaler une faille](SECURITY.md).
+
 ## Deux façons d'utiliser BipAgents
 
 ### ☁️ Tout compris, par Kerfy Studio — *bientôt*
@@ -129,7 +151,8 @@ autre machine. Tout est dans le [guide de l'installateur](installer/README.fr.md
 - 📊 **Des pages et mini-apps** dans les réponses — graphiques, suivis, **cartes interactives** avec « Ouvrir dans
   Plans » — et des **podcasts** lus par deux Bips.
 - 🔒 **Chaque agent dans son bac à sable** : ses propres fichiers, des dossiers qu'il partage avec les agents que tu
-  choisis (en lecture seule pour eux), et seulement les sites que tu as autorisés.
+  choisis (en lecture seule pour eux), et des données envoyées seulement aux sites que tu as autorisés (au-delà d'une
+  petite quantité).
 - 👨‍👩‍👧 **Toute la famille** : un espace privé par personne ; les agents de tes proches ne se parlent que là où tu l'as
   permis. Des agents rangés en groupes sur l'accueil (Perso, Pro, Famille, ou le tien).
 - 💻 **Sur un ordinateur aussi** : la console web ouvre tes agents, leurs conversations et la Boîte dans un
@@ -180,7 +203,8 @@ flowchart LR
 Ce qui sort de ton espace : chaque message part au modèle d'IA que tu as choisi, pour qu'il y réponde ; les services
 qu'un agent utilise pour toi (recherche web, cartes, météo) voient ses requêtes. Détails :
 [ce que les apps envoient, et à qui](docs/app-data.fr.md) · [la comparaison avec ChatGPT et les
-autres](docs/privacy-compare.fr.md).
+autres](docs/privacy-compare.fr.md) · [le modèle de sécurité : ce qui est imposé, et ses
+limites](docs/security-model.fr.md).
 
 ## 🗂️ Le dépôt
 
