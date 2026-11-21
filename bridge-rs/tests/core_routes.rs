@@ -276,7 +276,7 @@ async fn status_and_approvals_through_hermes() {
     let (k, v) = auth();
     let h = [(k, v.as_str())];
     let status = app.get("/v1/status", &h).await.json();
-    assert_eq!(status, json!({"agents": {"wellness": {"ok": true}}, "model": null, "protected": false}));
+    assert_eq!(status, json!({"agents": {"wellness": {"ok": true}}, "model": null, "protected": false, "jobs": []}));
 
     // Hermes' answer is passed on as it is (status and JSON)
     let resp = app

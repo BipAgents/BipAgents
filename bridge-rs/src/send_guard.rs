@@ -264,6 +264,20 @@ pub fn browsers_map(config: &Config) -> serde_json::Map<String, Value> {
             out.insert(ip, json!(name));
         }
     }
+    // the tasks' own browsers (browsers.rs `setup_task`): their agent's rules
+    let root = std::path::PathBuf::from(&config.browser.root);
+    for entry in std::fs::read_dir(&root).into_iter().flatten().flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let Some(agent) = crate::browsers::task_browser_agent(&name).filter(|a| config.agents.contains_key(*a)) else {
+            continue;
+        };
+        if let Some(ip) = crate::browsers::ports_of(config, &name)
+            .and_then(|ports| ports.get("cdp").copied())
+            .and_then(|cdp| browser_ip(config, cdp))
+        {
+            out.insert(ip, json!(agent));
+        }
+    }
     out
 }
 

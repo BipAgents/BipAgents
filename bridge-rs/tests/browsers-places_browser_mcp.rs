@@ -1502,3 +1502,490 @@ fn a_site_allowed_for_good_covers_its_subdomains_only() {
     assert!(!browser_mcp::send_covered(&["*.example.com".into()], "badexample.com"));
     assert!(!browser_mcp::send_covered(&["shop.example".into()], ""));
 }
+
+/// One browser per running task (19/11): through the one proxy Hermes keeps, a task's calls (its Hermes session in
+/// the agent's `sessions.json`, patch 0028) start and reach that task's own browser; the person's reach the agent's.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_tasks_calls_start_and_reach_its_own_browser_the_persons_the_agents() {
+    let dir = tempfile::tempdir().unwrap();
+    let (agent, task) = (dir.path().join("vie"), dir.path().join("vie--t1"));
+    std::fs::create_dir_all(&agent).unwrap();
+    std::fs::create_dir_all(&task).unwrap();
+    let agent_config = config(&agent);
+    let mut task_config = config(&task);
+    // the task's browser answers in its own words
+    std::fs::write(task.join("server.py"), FAKE_SERVER.replace("\"did \"", "\"task did \"")).unwrap();
+    task_config.insert("server".into(), json!([python(), task.join("server.py").to_string_lossy()]));
+    std::fs::write(task.join("mcp.json"), Value::Object(task_config).to_string()).unwrap();
+    let sessions = json!({"api_task": task.join("mcp.json").to_string_lossy()});
+    std::fs::write(agent.join(bipbridge::browsers::SESSIONS_FILE), sessions.to_string()).unwrap();
+    let call = |id: i64, session: Option<&str>| {
+        let mut params = json!({"name": "navigate", "arguments": {"url": "https://shop.example"}});
+        if let Some(session) = session {
+            params["_meta"] = json!({bipbridge::agent_tools::CALL_SESSION_META: session});
+        }
+        json!({"jsonrpc": "2.0", "id": id, "method": "tools/call", "params": params})
+    };
+    let lines: String = [init(), call(1, Some("api_task")), call(2, None), call(3, Some("api_other"))]
+        .iter()
+        .map(|m| format!("{m}\n"))
+        .collect();
+    let out = Out::default();
+    let proxy = Proxy::new(agent_config, Box::new(out.clone()));
+    proxy.serve(lines.as_bytes()).await;
+    let answers: std::collections::HashMap<i64, String> = out
+        .messages()
+        .iter()
+        .filter_map(|m| Some((m["id"].as_i64()?, m["result"]["content"][0]["text"].as_str()?.to_string())))
+        .collect();
+    assert_eq!(answers.get(&1).map(String::as_str), Some("task did navigate"), "{answers:?}");
+    assert_eq!(answers.get(&2).map(String::as_str), Some("did navigate"));
+    assert_eq!(answers.get(&3).map(String::as_str), Some("did navigate"), "a session nobody announced: the agent's");
+    assert_eq!(ran(&task), vec!["start"], "the task's own browser started");
+    assert_eq!(ran(&agent), vec!["start"]);
+}
+
+/// Review 3 of subtasks-redesign (20/11, head 357a87a0c): Hermes patch 0029 sends the `stealth` entry's calls of
+/// different sessions side by side (`call_context: true`), but the agent's proxy keeps ONE `call_session` for « the
+/// current call » (browser_mcp.rs `Proxy::call_session`, « Hermes sends this server's calls one at a time »). A call
+/// of another session that arrives while a form-sending click is being checked (its page read) overwrites it: the
+/// click is judged with the other session's « Oui » — refused although its own conversation said Oui (or let through
+/// on the other conversation's).
+#[tokio::test(flavor = "multi_thread")]
+async fn review3_two_sessions_calls_at_once_each_keep_their_own_oui() {
+    let dir = tempfile::tempdir().unwrap();
+    let tmp = dir.path();
+    let config = config(tmp);
+    // the page read of the send button takes a second (a slow page): the other conversation's call arrives meanwhile
+    let slow = GUARD_SERVER.replace(
+        "                if '\"button[type=submit]\"' in script:\n",
+        "                if '\"#slow-send\"' in script:\n                    time.sleep(1.0)\n                    target[\"send\"] = \"contact.example\"\n                if '\"button[type=submit]\"' in script:\n",
+    );
+    assert_ne!(slow, GUARD_SERVER);
+    std::fs::write(tmp.join("server.py"), slow).unwrap();
+    let out = Out::default();
+    let proxy = Proxy::new(config, Box::new(out.clone()));
+    proxy.handle(init()).await;
+    proxy.handle(json!({"jsonrpc": "2.0", "id": 99, "method": "tools/list"})).await;
+    // the person said « Oui » to « Envoyer sur ce site ? » in conversation api_a (form_send.rs `grant_for_now`)
+    let until = bipbridge::py::time_time() + 600.0;
+    let grant = json!({"always": [], "once": [{"id": "g1", "host": "contact.example", "until": until, "window": true, "session": "api_a"}]});
+    std::fs::write(tmp.join(browser_mcp::SEND_SITES_FILE), grant.to_string()).unwrap();
+    let call = |id: i64, name: &str, arguments: Value, session: &str| {
+        json!({"jsonrpc": "2.0", "id": id, "method": "tools/call", "params": {"name": name, "arguments": arguments,
+               "_meta": {bipbridge::agent_tools::CALL_SESSION_META: session}}})
+    };
+    let a = {
+        let proxy = proxy.clone();
+        let message = call(1, "click_element", json!({"instance_id": "i", "selector": "#slow-send"}), "api_a");
+        tokio::spawn(async move { proxy.handle(message).await })
+    };
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    // another conversation of the same agent (a routine, the person's other conversation) uses the browser meanwhile
+    proxy.handle(call(2, "navigate", json!({"instance_id": "j", "url": "https://news.example/"}), "api_b")).await;
+    a.await.unwrap();
+    let answer = out.messages().into_iter().find(|m| m["id"] == json!(1)).expect("an answer to api_a's click");
+    assert_eq!(text_of(&answer), "did click_element", "api_a's own « Oui » not seen: judged as api_b's call: {answer}");
+    proxy.stop_child().await;
+}
+
+/// Review 3 of subtasks-redesign (20/11, head 357a87a0c): a self-install's bridge.toml has no `[hermes] root` (only a
+/// shared Hermes writes one, installer stack.py), so `hermes_says_call_session` answers « yes » without looking, and
+/// every task of an agent with a browser gets a browser of its own (a copy of its logins, the memory wait) on a
+/// person's own Hermes without patch 0028, where no call says its session and the task browses in the agent's anyway.
+/// agent_shares.rs `guest_turns_closed` looks in `<home>/hermes-agent`, the official install's folder.
+#[test]
+fn review3_an_own_hermes_without_patch_0028_gives_no_task_browsers() {
+    let dir = tempfile::tempdir().unwrap();
+    let code = dir.path().join("hermes-agent").join("tools");
+    std::fs::create_dir_all(&code).unwrap();
+    std::fs::write(code.join("mcp_tool_handlers.py"), "def _make_tool_handler(server_name, tool_name, tool_timeout):\n    pass\n").unwrap();
+    let mut config = bipbridge::config::parse_config(
+        &json!({"bridge_key": "k".repeat(32), "data_dir": dir.path().join("data").to_string_lossy()}),
+        None,
+    )
+    .unwrap();
+    config.hermes.home = dir.path().to_string_lossy().into_owned();
+    assert!(config.hermes.root.is_empty(), "a self-install: no [hermes] root");
+    assert!(
+        !bipbridge::browsers::hermes_says_call_session(&config),
+        "its Hermes (<home>/hermes-agent) has no patch 0028: no task browser"
+    );
+}
+
+/// A stealth server answering its calls side by side (each in a thread, 0.4 s each), writing when each call ran
+/// (`calls.log`: `<name> <start> <end>`) to the file named by its first argument.
+const CONCURRENT_SERVER: &str = r#"
+import json, sys, threading, time
+log, name = sys.argv[1], sys.argv[2]
+out = threading.Lock()
+def answer(m, r):
+    with out:
+        print(json.dumps({"jsonrpc": "2.0", "id": m["id"], "result": r}), flush=True)
+def call(m):
+    start = time.time()
+    time.sleep(0.4)
+    with out, open(log, "a") as f:
+        f.write(f"{name} {start} {time.time()}\n")
+    answer(m, {"content": [{"type": "text", "text": "did " + m["params"]["name"]}]})
+for line in sys.stdin:
+    m = json.loads(line)
+    if "id" not in m:
+        continue
+    if m["method"] == "initialize":
+        answer(m, {"protocolVersion": m["params"]["protocolVersion"], "capabilities": {"tools": {}},
+                   "serverInfo": {"name": "stealth", "version": "1"}})
+    elif m["method"] == "tools/list":
+        answer(m, {"tools": [{"name": "navigate", "inputSchema": {"type": "object"}}]})
+    else:
+        threading.Thread(target=call, args=(m,)).start()
+"#;
+
+/// Lab of 20/11 (the places' real browser image): the stealth server (nodriver) is not safe with calls overlapping on
+/// one Chrome — `KeyError: FrameStoppedLoading` in its handler table, a navigate answered with the other call's page.
+/// Since Hermes patch 0029 sends the calls of several sessions side by side, the agent's own browser takes them one at
+/// a time again (as before 0029); the tasks' own browsers, one Chrome each, still run side by side.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_agents_browser_takes_its_calls_one_at_a_time_the_tasks_browsers_side_by_side() {
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("calls.log");
+    let place = |name: &str| {
+        let folder = dir.path().join(name);
+        std::fs::create_dir_all(&folder).unwrap();
+        let mut settings = config(&folder);
+        std::fs::write(folder.join("server.py"), CONCURRENT_SERVER).unwrap();
+        settings.insert(
+            "server".into(),
+            json!([python(), folder.join("server.py").to_string_lossy(), log.to_string_lossy(), name]),
+        );
+        std::fs::write(folder.join("mcp.json"), Value::Object(settings.clone()).to_string()).unwrap();
+        (folder, settings)
+    };
+    let (agent, agent_settings) = place("vie");
+    let (t1, _) = place("vie--t1");
+    let (t2, _) = place("vie--t2");
+    let sessions = json!({"api_t1": t1.join("mcp.json").to_string_lossy(), "api_t2": t2.join("mcp.json").to_string_lossy()});
+    std::fs::write(agent.join(bipbridge::browsers::SESSIONS_FILE), sessions.to_string()).unwrap();
+    let call = |id: i64, session: &str| {
+        json!({"jsonrpc": "2.0", "id": id, "method": "tools/call", "params": {"name": "navigate", "arguments": {},
+               "_meta": {bipbridge::agent_tools::CALL_SESSION_META: session}}})
+    };
+    let lines: String = [init(), call(1, "api_a"), call(2, "api_b"), call(3, "api_c"), call(4, "api_t1"), call(5, "api_t2")]
+        .iter()
+        .map(|m| format!("{m}\n"))
+        .collect();
+    let out = Out::default();
+    let proxy = Proxy::new(agent_settings, Box::new(out.clone()));
+    proxy.serve(lines.as_bytes()).await;
+    let answered: Vec<i64> = out.messages().iter().filter(|m| m["result"]["content"].is_array()).map(|m| m["id"].as_i64().unwrap()).collect();
+    assert_eq!(answered.len(), 5, "every call answered: {:?}", out.messages());
+    let ran: Vec<(String, f64, f64)> = std::fs::read_to_string(&log)
+        .unwrap()
+        .lines()
+        .map(|l| {
+            let p: Vec<&str> = l.split(' ').collect();
+            (p[0].to_string(), p[1].parse().unwrap(), p[2].parse().unwrap())
+        })
+        .collect();
+    let of = |name: &str| ran.iter().filter(|r| r.0 == name).map(|r| (r.1, r.2)).collect::<Vec<_>>();
+    let mut own = of("vie");
+    own.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+    assert_eq!(own.len(), 3);
+    for pair in own.windows(2) {
+        assert!(pair[1].0 >= pair[0].1 - 0.01, "two calls on the agent's own Chrome at once: {own:?}");
+    }
+    let (a, b) = (of("vie--t1")[0], of("vie--t2")[0]);
+    assert!(a.0 < b.1 && b.0 < a.1, "the tasks' own browsers waited for each other: {a:?} {b:?}");
+}
+
+/// A stealth server where one call never comes back (a page's `alert()` or a script's promise that never settles holds
+/// nodriver's evaluate; a wedged CDP connection): `hang` is never answered, every other call at once.
+const HANGING_SERVER: &str = r#"
+import json, sys
+for line in sys.stdin:
+    m = json.loads(line)
+    if "id" not in m:
+        continue
+    if m["method"] == "initialize":
+        r = {"protocolVersion": m["params"]["protocolVersion"], "capabilities": {"tools": {}},
+             "serverInfo": {"name": "stealth", "version": "1"}}
+    elif m["method"] == "tools/list":
+        r = {"tools": [{"name": "navigate", "inputSchema": {"type": "object"}}]}
+    elif m["method"] == "tools/call" and m["params"]["name"] == "hang":
+        continue
+    else:
+        r = {"content": [{"type": "text", "text": "did " + m["params"]["name"]}]}
+    print(json.dumps({"jsonrpc": "2.0", "id": m["id"], "result": r}), flush=True)
+"#;
+
+/// Review 5 (d834ce434, `Proxy::one_call`): the agent's browser takes one call at a time, and nothing bounds how long
+/// one call holds it. A call the stealth server never answers keeps the lock for ever (`request` waits on its oneshot
+/// with no deadline; `calls` stays 1, so `watch_idle` never stops the server either): every later call of every
+/// conversation of that agent (crons, Live, the person's own) queues behind it until Hermes restarts, each one timing
+/// out in Hermes at 120 s and still queued afterwards. Before d834ce434 only the stuck call was lost.
+/// Expected: a call is bounded (here the settings' `call_seconds`, 2 s; in production about Hermes' own 120 s tool
+/// timeout, `browsers.rs` `proxy_config`): the stuck call is answered plainly (the server restarted if need be) and
+/// the next session's call is served.
+#[tokio::test(flavor = "multi_thread")]
+async fn review5_a_call_that_never_comes_back_does_not_hold_the_agents_browser_for_ever() {
+    let dir = tempfile::tempdir().unwrap();
+    let tmp = dir.path();
+    let mut settings = config(tmp);
+    std::fs::write(tmp.join("hang.py"), HANGING_SERVER).unwrap();
+    settings.insert("server".into(), json!([python(), tmp.join("hang.py").to_string_lossy()]));
+    settings.insert("call_seconds".into(), json!(2));
+    let out = Out::default();
+    let proxy = Proxy::new(settings, Box::new(out.clone()));
+    proxy.handle(init()).await;
+    let call = |id: i64, name: &str, session: &str| {
+        json!({"jsonrpc": "2.0", "id": id, "method": "tools/call", "params": {"name": name, "arguments": {},
+               "_meta": {bipbridge::agent_tools::CALL_SESSION_META: session}}})
+    };
+    let stuck = tokio::spawn({
+        let proxy = proxy.clone();
+        let message = call(1, "hang", "api_a");
+        async move { proxy.handle(message).await }
+    });
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let next = tokio::spawn({
+        let proxy = proxy.clone();
+        let message = call(2, "navigate", "api_b");
+        async move { proxy.handle(message).await }
+    });
+    let answered = |id: i64| out.messages().iter().any(|m| m["id"] == json!(id));
+    let deadline = std::time::Instant::now() + Duration::from_secs(20);
+    while !(answered(1) && answered(2)) && std::time::Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    let messages = out.messages();
+    stuck.abort();
+    next.abort();
+    proxy.stop_child().await;
+    assert!(answered(2), "another conversation's call waited for ever behind the stuck one: {messages:?}");
+    assert!(
+        messages.iter().any(|m| m["id"] == json!(2) && m["result"]["content"][0]["text"] == json!("did navigate")),
+        "the next call served: {messages:?}"
+    );
+    assert!(answered(1), "the stuck call was never answered: {messages:?}");
+}
+
+/// Review 6: after a call ran over, `stop_child` ends only `podman exec`; in an image before review 6 the server's
+/// door (hold_gate.py) waits for ever on its stuck server, its call count at 1 (card payments never start again). The
+/// proxy then ends them in the container (its `exec` prefix) and clears the counts; a call Hermes cancelled while it
+/// waited its turn never starts.
+#[tokio::test(flavor = "multi_thread")]
+async fn after_an_overrun_the_stuck_door_is_ended_in_the_container_and_a_cancelled_waiting_call_never_runs() {
+    let dir = tempfile::tempdir().unwrap();
+    let tmp = dir.path();
+    let mut settings = config(tmp);
+    std::fs::write(tmp.join("hang.py"), HANGING_SERVER).unwrap();
+    settings.insert("server".into(), json!([python(), tmp.join("hang.py").to_string_lossy()]));
+    settings.insert("call_seconds".into(), json!(2));
+    // the container's command prefix: what it is asked to run is written down
+    let ran = tmp.join("in-container.txt");
+    std::fs::write(tmp.join("record.py"), format!("import sys\nopen({:?}, 'a').write(' '.join(sys.argv[1:]) + '\\n')\n", ran.to_string_lossy())).unwrap();
+    settings.insert("exec".into(), json!([python(), tmp.join("record.py").to_string_lossy()]));
+    let out = Out::default();
+    let proxy = Proxy::new(settings, Box::new(out.clone()));
+    proxy.handle(init()).await;
+    let call = |id: i64, name: &str| {
+        json!({"jsonrpc": "2.0", "id": id, "method": "tools/call", "params": {"name": name, "arguments": {},
+               "_meta": {bipbridge::agent_tools::CALL_SESSION_META: "api_a"}}})
+    };
+    let stuck = tokio::spawn({
+        let proxy = proxy.clone();
+        let message = call(1, "hang");
+        async move { proxy.handle(message).await }
+    });
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let queued = tokio::spawn({
+        let proxy = proxy.clone();
+        let message = call(2, "navigate");
+        async move { proxy.handle(message).await }
+    });
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    // the person sent a new message: Hermes cancels the call still waiting its turn
+    proxy.handle(json!({"jsonrpc": "2.0", "method": "notifications/cancelled", "params": {"requestId": 2, "reason": "new message"}})).await;
+    let _ = tokio::time::timeout(Duration::from_secs(20), stuck).await;
+    let _ = tokio::time::timeout(Duration::from_secs(20), queued).await;
+    let messages = out.messages();
+    proxy.stop_child().await;
+    assert!(messages.iter().any(|m| m["id"] == json!(1)), "the stuck call answered: {messages:?}");
+    assert!(!messages.iter().any(|m| m["id"] == json!(2)), "a cancelled call ran after the stuck one: {messages:?}");
+    let asked = std::fs::read_to_string(&ran).unwrap_or_default();
+    assert!(asked.contains("[h]old_gate.py") && asked.contains("/tmp/bipagents-calls/"), "the stuck door left in the container: {asked:?}");
+}
+
+/// A stealth server that writes down (`seen.log`) every `notifications/cancelled` it gets, with the ids of the calls
+/// it is running at that moment; each call takes 1.5 s.
+const CANCEL_LOG_SERVER: &str = r#"
+import json, sys, threading, time
+log = sys.argv[1]
+out = threading.Lock()
+running = set()
+def answer(m, r):
+    with out:
+        print(json.dumps({"jsonrpc": "2.0", "id": m["id"], "result": r}), flush=True)
+def call(m):
+    running.add(m["id"])
+    time.sleep(1.5)
+    running.discard(m["id"])
+    answer(m, {"content": [{"type": "text", "text": "did " + m["params"]["name"]}]})
+for line in sys.stdin:
+    m = json.loads(line)
+    if m.get("method") == "notifications/cancelled":
+        with open(log, "a") as f:
+            f.write(json.dumps({"cancelled": m["params"]["requestId"], "running": sorted(running)}) + "\n")
+        continue
+    if "id" not in m:
+        continue
+    if m["method"] == "initialize":
+        answer(m, {"protocolVersion": m["params"]["protocolVersion"], "capabilities": {"tools": {}},
+                   "serverInfo": {"name": "stealth", "version": "1"}})
+    elif m["method"] == "tools/list":
+        answer(m, {"tools": [{"name": "navigate", "inputSchema": {"type": "object"}}]})
+    else:
+        threading.Thread(target=call, args=(m,)).start()
+"#;
+
+/// Review 7 (cancellation path, 2cf58bc40): Hermes' MCP SDK 2.3.0 sends `notifications/cancelled` with ITS request
+/// id whenever it abandons a call (the person's new message, its tool timeout: `cancel_on_abandon`, mcp/shared/
+/// dispatcher.py). The proxy numbers its own requests to the real server (`next_id`) but passes the notification on
+/// unchanged, so the id names whatever call of the real server has that number: the stealth server (SDK 1.30) cancels
+/// that one — another conversation's call — and hold_gate.py ends ITS count (`calls.end(requestId)`), the count card
+/// payments wait on (card_pay.rs `calls_check_command`). Expected: a cancellation reaches the real server only for
+/// the call it names, in the real server's numbering (or not at all): Hermes cancelling requests that are not in
+/// flight never cancels the call that is.
+#[tokio::test(flavor = "multi_thread")]
+async fn review7_hermes_cancelling_its_own_request_never_cancels_another_call_of_the_real_server() {
+    let dir = tempfile::tempdir().unwrap();
+    let tmp = dir.path();
+    let log = tmp.join("seen.log");
+    let mut settings = config(tmp);
+    std::fs::write(tmp.join("cancel.py"), CANCEL_LOG_SERVER).unwrap();
+    settings.insert("server".into(), json!([python(), tmp.join("cancel.py").to_string_lossy(), log.to_string_lossy()]));
+    let out = Out::default();
+    let proxy = Proxy::new(settings, Box::new(out.clone()));
+    proxy.handle(init()).await;
+    // Hermes' call 40, in flight on the real server under the proxy's own number
+    let running = tokio::spawn({
+        let proxy = proxy.clone();
+        let message = json!({"jsonrpc": "2.0", "id": 40, "method": "tools/call", "params": {"name": "navigate",
+                             "arguments": {}, "_meta": {bipbridge::agent_tools::CALL_SESSION_META: "api_a"}}});
+        async move { proxy.handle(message).await }
+    });
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    // Hermes abandons requests of its own that are not in flight here (answered, or other sessions' it gave up on)
+    for id in 1..=12 {
+        proxy.handle(json!({"jsonrpc": "2.0", "method": "notifications/cancelled",
+                            "params": {"requestId": id, "reason": "abandoned"}})).await;
+    }
+    let _ = tokio::time::timeout(Duration::from_secs(10), running).await;
+    let messages = out.messages();
+    proxy.stop_child().await;
+    let seen: Vec<Value> = std::fs::read_to_string(&log)
+        .unwrap_or_default()
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    let hit: Vec<&Value> = seen
+        .iter()
+        .filter(|s| s["running"].as_array().unwrap().iter().any(|r| r == &s["cancelled"]))
+        .collect();
+    assert!(hit.is_empty(), "Hermes' cancellations of other requests reached the real server and named its running call: {hit:?}");
+    assert!(
+        messages.iter().any(|m| m["id"] == json!(40) && m["result"]["content"][0]["text"] == json!("did navigate")),
+        "{messages:?}"
+    );
+}
+
+/// Review 7, the other half: Hermes cancelling the very call in flight reaches the real server under the proxy's
+/// own id of that call (the one it is running), so the server stops it and hold_gate.py ends its count.
+#[tokio::test(flavor = "multi_thread")]
+async fn hermes_cancelling_the_call_in_flight_cancels_it_on_the_real_server_under_its_own_id() {
+    let dir = tempfile::tempdir().unwrap();
+    let tmp = dir.path();
+    let log = tmp.join("seen.log");
+    let mut settings = config(tmp);
+    std::fs::write(tmp.join("cancel.py"), CANCEL_LOG_SERVER).unwrap();
+    settings.insert("server".into(), json!([python(), tmp.join("cancel.py").to_string_lossy(), log.to_string_lossy()]));
+    let out = Out::default();
+    let proxy = Proxy::new(settings, Box::new(out.clone()));
+    proxy.handle(init()).await;
+    let running = tokio::spawn({
+        let proxy = proxy.clone();
+        let message = json!({"jsonrpc": "2.0", "id": 40, "method": "tools/call", "params": {"name": "navigate",
+                             "arguments": {}, "_meta": {bipbridge::agent_tools::CALL_SESSION_META: "api_a"}}});
+        async move { proxy.handle(message).await }
+    });
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    proxy.handle(json!({"jsonrpc": "2.0", "method": "notifications/cancelled", "params": {"requestId": 40, "reason": "new message"}})).await;
+    let _ = tokio::time::timeout(Duration::from_secs(10), running).await;
+    proxy.stop_child().await;
+    let seen: Vec<Value> = std::fs::read_to_string(&log).unwrap_or_default().lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+    assert_eq!(seen.len(), 1, "{seen:?}");
+    let named = &seen[0]["cancelled"];
+    assert!(seen[0]["running"].as_array().unwrap().contains(named), "the cancellation named the call running: {seen:?}");
+    assert_ne!(named, &json!(40), "Hermes' own id passed on as it is: {seen:?}");
+}
+
+/// A stealth server that writes down (`calls.log`) the name of every tools/call it receives, and answers at once.
+const CALL_LOG_SERVER: &str = r#"
+import json, sys
+log = sys.argv[1]
+for line in sys.stdin:
+    m = json.loads(line)
+    if "id" not in m:
+        continue
+    if m["method"] == "initialize":
+        r = {"protocolVersion": m["params"]["protocolVersion"], "capabilities": {"tools": {}},
+             "serverInfo": {"name": "stealth", "version": "1"}}
+    elif m["method"] == "tools/list":
+        r = {"tools": [{"name": "navigate", "inputSchema": {"type": "object"}}]}
+    else:
+        with open(log, "a") as f:
+            f.write(m["params"]["name"] + "\n")
+        r = {"content": [{"type": "text", "text": "did " + m["params"]["name"]}]}
+    print(json.dumps({"jsonrpc": "2.0", "id": m["id"], "result": r}), flush=True)
+"#;
+
+/// Review 8 (d775376ee): a call is `in_flight` from the moment it takes its turn, but its requests to the real server
+/// are recorded only when sent. Before that — its browser still starting (`ensure_server`: the container's start and
+/// `ready`, up to `ready_seconds`; after every overrun restart), the guard's own looks — a cancellation from Hermes
+/// finds no unanswered request and the call is no longer `waiting`: it is dropped, and the call then runs in full
+/// although Hermes abandoned it (the person's new message). Expected: a call cancelled after it took its turn but
+/// before it reached the real server never reaches it.
+#[tokio::test(flavor = "multi_thread")]
+async fn review8_a_call_cancelled_while_its_browser_starts_never_reaches_the_real_server() {
+    let dir = tempfile::tempdir().unwrap();
+    let tmp = dir.path();
+    let log = tmp.join("calls.log");
+    let mut settings = config(tmp);
+    std::fs::write(tmp.join("calllog.py"), CALL_LOG_SERVER).unwrap();
+    settings.insert("server".into(), json!([python(), tmp.join("calllog.py").to_string_lossy(), log.to_string_lossy()]));
+    let running = tmp.join("running").to_string_lossy().into_owned();
+    // the container takes 1.5 s to start (a cold start, or the restart after an overrun)
+    settings.insert("start".into(), json!(["sh", "-c", format!("sleep 1.5; touch {running}")]));
+    let out = Out::default();
+    let proxy = Proxy::new(settings, Box::new(out.clone()));
+    proxy.handle(init()).await;
+    proxy.stop_child().await;
+    let _ = std::fs::remove_file(tmp.join("running"));
+    let call = tokio::spawn({
+        let proxy = proxy.clone();
+        let message = json!({"jsonrpc": "2.0", "id": 9, "method": "tools/call", "params": {"name": "navigate",
+                             "arguments": {}, "_meta": {bipbridge::agent_tools::CALL_SESSION_META: "api_a"}}});
+        async move { proxy.handle(message).await }
+    });
+    tokio::time::sleep(Duration::from_millis(400)).await; // it has its turn, its browser is starting
+    proxy.handle(json!({"jsonrpc": "2.0", "method": "notifications/cancelled",
+                        "params": {"requestId": 9, "reason": "the person sent a new message"}})).await;
+    let _ = tokio::time::timeout(Duration::from_secs(15), call).await;
+    let received = std::fs::read_to_string(&log).unwrap_or_default();
+    let messages = out.messages();
+    proxy.stop_child().await;
+    assert!(
+        !received.contains("navigate"),
+        "the cancelled call still reached the real server once its browser had started: {received:?} {messages:?}"
+    );
+}

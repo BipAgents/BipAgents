@@ -91,6 +91,8 @@ pub const HOLDS_THE_CALL: &[&str] = &[PAY];
 /// Seconds Hermes waits for a call: the person may take a while to answer (a watcher's payment: `URGENT_WINDOW`,
 /// then the fill and the bank).
 pub const TOOL_TIMEOUT: u32 = 900;
+
+
 /// A payment asked in a turn nobody follows (a watcher, a routine) waits this long for the person, from its push
 /// (`urgent`; internal/notes/watcher-urgent-pay.md).
 pub const URGENT_WINDOW: Duration = Duration::from_secs(600);
@@ -250,14 +252,17 @@ pub async fn register_entry(
     let entry = servers.get(server).cloned().unwrap_or(Value::Null);
     let same = entry.get("url") == Some(&json!(url))
         && entry.get("headers").and_then(|h| h.get("Authorization")) == Some(&json!(header))
-        && entry.get("timeout").map(py::py_str) == Some(timeout.to_string());
+        && entry.get("timeout").map(py::py_str) == Some(timeout.to_string())
+        && entry.get("call_context") == Some(&json!(true));
     if same {
         return Ok(false);
     }
+    // each call says its Hermes session (patch 0028): whose turn, and whose browser (a task's own, browsers.rs)
     let entry = [
         ("url", Yaml::str(url)),
         ("headers.Authorization", Yaml::str(header)),
         ("timeout", Yaml::Int(timeout.into())),
+        ("call_context", Yaml::Bool(true)),
     ];
     crate::profile_files::edit(&folder.join("config.yaml"), |data| {
         crate::profile_files::set_server(data, server, Some(&entry))
@@ -291,10 +296,15 @@ impl Asker {
         let id = format!("bip-ask-{}", py::uuid4_hex());
         let (tx, rx) = oneshot::channel();
         waiting().insert(id.clone(), (self.agent.clone(), tx));
-        let request = json!({"jsonrpc": "2.0", "id": id, "method": "elicitation/create", "params": {
+        let mut request = json!({"jsonrpc": "2.0", "id": id, "method": "elicitation/create", "params": {
             "message": message,
             "requestedSchema": {"type": "object", "properties": {}},
         }});
+        // the call's session said back (Hermes patch 0029: calls of several sessions run side by side, Hermes asks
+        // in the conversation it names)
+        if let Some(session) = crate::runs::CALL_SESSION.try_with(|s| s.clone()).ok().flatten() {
+            request["params"]["_meta"] = json!({ crate::agent_tools::CALL_SESSION_META: session });
+        }
         let answer = if out.send(request).is_ok() { tokio::time::timeout(ASK_TIMEOUT, rx).await.ok() } else { None };
         waiting().remove(&id);
         let action =
@@ -1320,6 +1330,18 @@ async fn pay(state: &AppState, agent: &AgentConfig, arguments: &Dict, asker: &As
         return Ok(refusal(off_text()));
     }
     let (label, merchant) = (arg(arguments, "card"), cards::quoted(&arg(arguments, "merchant"), 80));
+    // a background task with a browser of its own never pays there (Alex 20/11): handed over to the agent's main
+    // conversation, which pays in the agent's browser with the person's usual approval
+    if let Some(settings) = crate::browsers::task_of_call(&config, &agent.name) {
+        let total = format!("{} {}", arg(arguments, "amount"), arg(arguments, "currency")).trim().to_string();
+        let ask = crate::jobs::Ask {
+            kind: crate::jobs::AskKind::Pay,
+            what: [merchant.clone(), total].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join(", "),
+            site: String::new(),
+            why: String::new(),
+        };
+        return Ok(crate::jobs::hand_over_call(state, agent, &settings, ask).await);
+    }
     if merchant.is_empty() {
         return Ok(refusal("Say what you pay for (merchant), in a few words."));
     }
@@ -2210,8 +2232,19 @@ async fn mcp(State(state): State<AppState>, headers: HeaderMap, body: Bytes) -> 
     serve(state, headers, body, &PAY_SERVER).await
 }
 
-/// One MCP message for `server`, from the agent whose token it shows.
+/// One MCP message for `server`, from the agent whose token it shows, run with the Hermes session it says it comes
+/// from (patch 0028, `runs::CALL_SESSION`).
 pub async fn serve(
+    state: AppState,
+    headers: HeaderMap,
+    body: Bytes,
+    server: &'static ToolServer,
+) -> ApiResult<Response> {
+    let session = crate::agent_tools::call_session_of(&body);
+    crate::runs::CALL_SESSION.scope(session, serve_call(state, headers, body, server)).await
+}
+
+async fn serve_call(
     state: AppState,
     headers: HeaderMap,
     body: Bytes,
@@ -2293,7 +2326,8 @@ pub async fn serve(
             let (out_tx, mut out_rx) = mpsc::unbounded_channel::<Value>();
             let asker = Asker { agent: agent.name.clone(), out: stream.then_some(out_tx) };
             let worker_state = state.clone();
-            let mut work = tokio::spawn(async move {
+            // (the call's session kept in its work: patch 0028, `runs::CALL_SESSION`)
+            let mut work = crate::runs::spawn_with_call_session(async move {
                 let mut result = (server.call)(&worker_state, &agent, &name, &arguments, &asker).await;
                 if let Ok(done) = &mut result {
                     crate::names::localize_result(done, &lang);
@@ -2698,6 +2732,29 @@ mod tests {
         let task = tokio::spawn(async move { approval(&id, &asker, "Card payment …", phone, None).await });
         let question = rx.recv().await.unwrap();
         (question["id"].as_str().unwrap().to_string(), task, rx)
+    }
+
+    /// Hermes patch 0029: a call_context server's calls of several sessions run side by side, so its question names
+    /// the call's session (`_meta`, as the call did): Hermes asks it in that conversation, never another's.
+    #[tokio::test]
+    async fn the_question_names_the_calls_session() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let asker = Asker { agent: "lea".into(), out: Some(tx) };
+        let task = tokio::spawn(crate::runs::CALL_SESSION.scope(Some("api_s7".into()), async move {
+            asker.ask("Payer 12 € ?").await
+        }));
+        let question = rx.recv().await.unwrap();
+        assert_eq!(question["params"]["_meta"]["hermes-agent/session_id"], "api_s7", "{question}");
+        hermes_says(question["id"].as_str().unwrap(), "accept");
+        assert!(task.await.unwrap());
+        // no session said: no _meta
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let asker = Asker { agent: "lea".into(), out: Some(tx) };
+        let task = tokio::spawn(async move { asker.ask("Payer 12 € ?").await });
+        let question = rx.recv().await.unwrap();
+        assert!(question["params"].get("_meta").is_none(), "{question}");
+        hermes_says(question["id"].as_str().unwrap(), "decline");
+        assert!(!task.await.unwrap());
     }
 
     fn hermes_says(question: &str, action: &str) {

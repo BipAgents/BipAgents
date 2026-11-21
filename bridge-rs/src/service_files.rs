@@ -179,7 +179,7 @@ pub async fn call(config: &Config, agent: &AgentConfig, arguments: &Dict) -> Dic
     // the browser's downloads listed (the agent's terminal does not see them)
     if path.trim().trim_end_matches('/') == crate::browsers::DOWNLOADS {
         let (c, name) = (config.clone(), agent.name.clone());
-        let listed = tokio::task::spawn_blocking(move || crate::browsers::recent_downloads(&c, &name, 20))
+        let listed = crate::runs::blocking_with_call_session(move || crate::browsers::recent_downloads(&c, &name, 20))
             .await
             .unwrap_or_default();
         return tool_text(
@@ -196,7 +196,7 @@ pub async fn call(config: &Config, agent: &AgentConfig, arguments: &Dict) -> Dic
         Err(why) => return tool_text(&why, true),
     };
     let (c, a, p) = (config.clone(), agent.clone(), path.clone());
-    let read = tokio::task::spawn_blocking(move || read_file(&c, &a, &p)).await;
+    let read = crate::runs::blocking_with_call_session(move || read_file(&c, &a, &p)).await;
     let (name, bytes) = match read {
         Ok(Ok(found)) => found,
         Ok(Err(why)) => return tool_text(&why, true),

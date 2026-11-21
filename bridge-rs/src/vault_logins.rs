@@ -1038,6 +1038,8 @@ async fn confirm(state: &AppState, agent: &AgentConfig, arguments: &Dict) -> any
     )))
 }
 
+
+
 pub async fn call(
     state: &AppState,
     agent: &AgentConfig,
@@ -1045,6 +1047,21 @@ pub async fn call(
     arguments: &Dict,
     _asker: &Asker,
 ) -> anyhow::Result<Dict> {
+    // a background task with a browser of its own never logs in there (Alex 20/11): handed over to the agent's main
+    // conversation, which does it in the agent's browser with the person's usual approval
+    if [LOGIN, CREATE].contains(&name) {
+        if let Some(settings) = crate::browsers::task_of_call(&state.config(), &agent.name) {
+            let what = if name == CREATE { "create an account" } else { "log in" };
+            let user = arg(arguments, "username");
+            let ask = crate::jobs::Ask {
+                kind: crate::jobs::AskKind::Login,
+                what: if user.is_empty() { what.to_string() } else { format!("{what} as {user}") },
+                site: arg(arguments, "site"),
+                why: arg(arguments, "reason"),
+            };
+            return Ok(crate::jobs::hand_over_call(state, agent, &settings, ask).await);
+        }
+    }
     match name {
         LOGIN => login(state, agent, arguments).await,
         CREATE => create(state, agent, arguments).await,

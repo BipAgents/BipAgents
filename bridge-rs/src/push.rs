@@ -445,7 +445,13 @@ impl PushService {
                 return 0;
             }
         };
-        let devices: Vec<(Row, Sender)> = devices.into_iter().filter_map(|d| self.sender(&d).map(|s| (d, s))).collect();
+        // the sub-tasks' silent hints are the iPhone's only (Android reads its tasks itself): never an FCM wake-up
+        let hint = payload.get("reason") == Some(&serde_json::json!("jobs")) && push_type == "background";
+        let devices: Vec<(Row, Sender)> = devices
+            .into_iter()
+            .filter(|d| !(hint && d.get("environment").and_then(Value::as_str) == Some("fcm")))
+            .filter_map(|d| self.sender(&d).map(|s| (d, s)))
+            .collect();
         if devices.is_empty() {
             return 0;
         }

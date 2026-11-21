@@ -25,9 +25,14 @@ def rpc(bridge, method: str, params: Optional[Dict[str, Any]] = None, request_id
     return bridge.post("/v1/agent-tools/mcp", json=body, headers={"Authorization": f"Bearer {token}", "Accept": accept})
 
 
-def call(bridge, name: str, arguments: Dict[str, Any], token: str = TOKEN) -> Dict[str, Any]:
-    """A tool's result (`{"content": [{"type": "text", "text": …}], "isError": …}`)."""
-    return rpc(bridge, "tools/call", {"name": name, "arguments": arguments}, token=token).json()["result"]
+def call(bridge, name: str, arguments: Dict[str, Any], token: str = TOKEN,
+         session: Optional[str] = None) -> Dict[str, Any]:
+    """A tool's result (`{"content": [{"type": "text", "text": …}], "isError": …}`); `session`: the Hermes session
+    the call says it comes from (`_meta`, Hermes patch 0028)."""
+    params: Dict[str, Any] = {"name": name, "arguments": arguments}
+    if session:
+        params["_meta"] = {"hermes-agent/session_id": session}
+    return rpc(bridge, "tools/call", params, token=token).json()["result"]
 
 
 def text_of(result: Dict[str, Any]) -> str:

@@ -170,7 +170,7 @@ pub async fn call_with(config: &Config, agent: &AgentConfig, arguments: &Dict, c
         None
     };
     let (c, a, p, for_drive) = (config.clone(), agent.clone(), path.clone(), drive.is_some());
-    let found = match tokio::task::spawn_blocking(move || find(&c, &a, &p, for_drive)).await {
+    let found = match crate::runs::blocking_with_call_session(move || find(&c, &a, &p, for_drive)).await {
         Ok(found) => found,
         Err(e) => Err(NotFound::Missing(e.to_string())),
     };

@@ -1074,7 +1074,14 @@ async fn status(State(state): State<AppState>, q: QueryMap) -> ApiResult<Respons
             (name, result)
         })
         .collect();
-    Ok(web::ok(json!({"agents": agents, "model": model, "protected": config.hermes.isolated})))
+    // the home's sub-tasks (jobs.rs `home_jobs`): no request of its own, the home asks this one anyway
+    // (the tasks' files read off the async threads)
+    let c = config.clone();
+    let mut jobs = tokio::task::spawn_blocking(move || crate::jobs::home_jobs(&c)).await.unwrap_or_default();
+    if let Some(one) = &only {
+        jobs.retain(|j| j.get("agent").and_then(Value::as_str) == Some(one.as_str())); // `?agent=`: its own only
+    }
+    Ok(web::ok(json!({"agents": agents, "model": model, "protected": config.hermes.isolated, "jobs": jobs})))
 }
 
 /// The LAN door as it is now (address, certificate): the app refreshes it while the tailnet works.

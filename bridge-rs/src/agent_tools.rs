@@ -645,7 +645,11 @@ pub async fn register_at(config: &Config, agent: &AgentConfig, _run: &Run, url: 
     let mut same = false;
     if let Value::Object(map) = &entry {
         let timeout = py::py_str(map.get("timeout").unwrap_or(&Value::Null));
-        same = map.get("url") == Some(&Value::String(url.to_string())) && known && timeout == TOOL_TIMEOUT.to_string();
+        // `call_context`: each call says its Hermes session (patch 0028), so several runs of the agent are told apart
+        same = map.get("url") == Some(&Value::String(url.to_string()))
+            && known
+            && timeout == TOOL_TIMEOUT.to_string()
+            && map.get("call_context") == Some(&json!(true));
     }
     // An isolated sandbox's file tools (sandbox.rs): a second entry, « untrusted » so Hermes asks the person before
     // each write or delete, with the same token.
@@ -672,7 +676,8 @@ pub async fn register_at(config: &Config, agent: &AgentConfig, _run: &Run, url: 
         }
         if !same {
             let entry =
-                [("url", Yaml::str(url)), ("headers.Authorization", bearer), ("timeout", Yaml::Int(TOOL_TIMEOUT.into()))];
+                [("url", Yaml::str(url)), ("headers.Authorization", bearer), ("timeout", Yaml::Int(TOOL_TIMEOUT.into())),
+                 ("call_context", Yaml::Bool(true))];
             crate::profile_files::set_server(data, SERVER_NAME, Some(&entry));
         }
     })?;
@@ -1523,9 +1528,12 @@ pub async fn call_tool(
             return Ok(crate::jobs::already_there(&title, &state));
         }
         // a small task under « Seulement le critique »: started at once (approval_level.rs)
+        // (never from a background task: it proposes, the person starts, jobs.rs `from_background`)
         if let Some(started) = match jobs.as_ref() {
-            Some(jobs) => crate::approval_level::auto_task(jobs, agent, arguments).await,
-            None => None,
+            Some(jobs) if !crate::jobs::from_background(jobs, agent, PROPOSE_TASK) => {
+                crate::approval_level::auto_task(jobs, agent, arguments).await
+            }
+            _ => None,
         } {
             return Ok(started);
         }
@@ -1992,7 +2000,28 @@ fn session_of(headers: &HeaderMap, query: Option<&str>, agent: &str) -> ApiResul
     }
 }
 
+/// The `_meta` key Hermes puts the call's session in (patch 0028, servers with `call_context: true`).
+pub const CALL_SESSION_META: &str = "hermes-agent/session_id";
+
+/// The MCP endpoint: a `tools/call` that says its Hermes session (`_meta`, patch 0028) runs with it known
+/// (`runs::CALL_SESSION`), so its turn is that session's run, never a guess between the agent's runs.
 async fn mcp(
+    state: State<AppState>,
+    uri: axum::http::Uri,
+    headers: HeaderMap,
+    body: Bytes,
+) -> ApiResult<Response> {
+    crate::runs::CALL_SESSION.scope(call_session_of(&body), mcp_call(state, uri, headers, body)).await
+}
+
+/// The Hermes session an MCP message says it comes from (patch 0028), None without.
+pub fn call_session_of(body: &[u8]) -> Option<String> {
+    serde_json::from_slice::<Value>(body).ok().and_then(|m| {
+        m.get("params")?.get("_meta")?.get(CALL_SESSION_META)?.as_str().filter(|s| !s.is_empty()).map(str::to_string)
+    })
+}
+
+async fn mcp_call(
     State(state): State<AppState>,
     uri: axum::http::Uri,
     headers: HeaderMap,
@@ -2308,7 +2337,8 @@ async fn mcp(
     let note_config = state.config();
     // the phone the person asked from in this turn (threads/send.rs): where a reminder goes (reminders.rs)
     let asking = turn_run.as_deref().and_then(|r| state.hub.subscription(&agent.name, r)).and_then(|s| s.phone());
-    let work = tokio::spawn(async move {
+    // (the call's session kept in its work: patch 0028, `runs::CALL_SESSION`)
+    let work = crate::runs::spawn_with_call_session(async move {
         let mut result = match page_mark {
             // a page made in a shared conversation: its mark (shared_pages.rs)
             Some(mark) if name == CREATE_PAGE => {

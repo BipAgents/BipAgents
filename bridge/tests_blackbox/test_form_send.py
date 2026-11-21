@@ -85,3 +85,39 @@ def test_oui_grants_one_sending_toujours_keeps_the_site_and_non_nothing(bridges,
     gone = bridge.delete("/v1/agents/vie/sandbox/sites/forum.example", headers=AUTH)
     assert gone.status_code == 200, gone.text
     assert "forum.example" not in allowed(bridge)["always"]
+
+
+def test_a_tasks_card_waiting_never_holds_up_the_persons_tools(bridges, fakes):
+    """Hermes patch 0029 (Alex « vraiment en parallèle », 20/11): a task's « Envoyer sur ce site ? » waits for its
+    person inside its call (minutes); Hermes now sends the other sessions' calls beside it, and the bridge answers
+    them at once: the person's own conversation keeps its bipagents, pay and vault tools meanwhile."""
+    import time
+    from bbkit.mcp import call
+    from test_card_payments import PAY
+
+    bridge = pay_bridge(bridges, fakes, types.SimpleNamespace(port=19410))
+    body = {"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+            "params": {"name": "ask_to_send", "arguments": {"site": "contact.example", "what": "une réclamation"},
+                       "_meta": {"hermes-agent/session_id": "api_task"}}}
+    with ThreadPoolExecutor(1) as pool:
+        waiting = pool.submit(lambda: bridge.post(VAULT, json=body, headers={"Authorization": f"Bearer {TOKEN}"},
+                                                  timeout=120).json()["result"])
+        assert wait_until(lambda: cards(bridge), timeout=30), "no card"
+
+        def person(path, name, arguments):
+            started = time.monotonic()
+            said = bridge.post(path, json={"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+                                           "params": {"name": name, "arguments": arguments,
+                                                      "_meta": {"hermes-agent/session_id": "api_person"}}},
+                               headers={"Authorization": f"Bearer {TOKEN}"}, timeout=30)
+            return said.json()["result"], time.monotonic() - started
+
+        for path, name, arguments in ((VAULT, "ask_to_send", {"site": "not a site"}),   # answered at once
+                                      (PAY, "list_cards", {}),
+                                      ("/v1/agent-tools/mcp", "reminders_list", {})):
+            result, took = person(path, name, arguments)
+            assert took < 5 and result.get("content"), (name, took, result)
+            assert not waiting.done(), "the task's card answered meanwhile"
+        [card] = cards(bridge)
+        bridge.post("/v1/approve", headers=AUTH, json={"agent": "vie", "run_id": card["run_id"], "choice": "deny"})
+        assert waiting.result(timeout=60)["isError"] is True

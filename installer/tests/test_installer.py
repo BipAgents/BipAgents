@@ -244,6 +244,7 @@ def test_hermes_is_pinned_and_patched(tmp_path, monkeypatch):
         "0023-prompt-cache-stable-across-conversations.patch", "0024-closed-tools-per-turn.patch",
         "0025-stream-colon-mid-sentence.patch",
         "0026-runs-todo-updated.patch", "0027-refused-api-turn-unlocks.patch",
+        "0028-mcp-call-context-session.patch", "0029-mcp-call-context-per-session.patch",
         "0030-bot-desktop-sandbox-env-allowlist.patch"]
 
 

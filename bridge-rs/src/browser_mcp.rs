@@ -925,6 +925,30 @@ pub fn script_answer(answer: Value) -> Dict {
         .unwrap_or_default()
 }
 
+/// A browser call's longest time here: just under Hermes' own tool timeout for this server (120 s, browsers.rs
+/// `mcp_server`), so the proxy answers first and nothing runs after Hermes gave up.
+pub const CALL_SECONDS: f64 = 115.0;
+/// Run in the browser's container after a call ran over (`end_stuck_server`): every server door and its server
+/// killed (the bracket keeps pkill from matching this shell's own command line), their call counts removed.
+pub const END_STUCK_SERVER: &str = "pkill -KILL -f '/opt/stealth/[h]old_gate.py'; pkill -KILL -f 'python [s]erver.py'; \
+rm -f /tmp/bipagents-calls/* /tmp/bipagents-calls/.[0-9]*; exit 0";
+/// The call holding a browser's turn (`Proxy::in_flight`).
+struct InFlight {
+    /// Hermes' JSON-RPC id, as text
+    id: String,
+    /// this proxy's ids of the tools/call requests it sent the real server for it
+    sent: Vec<i64>,
+    /// Hermes cancelled it
+    cancelled: bool,
+}
+
+/// What a request of a cancelled call ends with: the call then ends with no answer (Hermes cancelled it).
+const CANCELLED: &str = "cancelled by Hermes";
+
+/// The answer to a call that waited its turn longer than `CALL_SECONDS`: not run at all.
+pub const BUSY: &str = "Not done: your browser is still busy with an action that did not finish in time; nothing was \
+done. Try again in a moment.";
+
 /// A refusal of the proxy's own, as the real server would answer (softened like any, `soften`).
 fn refused(text: &str) -> Dict {
     json!({"jsonrpc": "2.0", "result": {"content": [{"type": "text", "text": text}], "isError": true}})
@@ -1290,7 +1314,14 @@ pub fn send_covered(sites: &[String], host: &str) -> bool {
 
 /// What `SEND_SITES_FILE` allows for `host` now: `Some(None)` always or for now (a person's « Oui », `window`, for its
 /// ten minutes), `Some(Some(id))` a one-use grant not used yet (`used`: a vault fill's), None nothing.
-pub fn send_allowed(path: &Path, host: &str, used: &std::collections::HashSet<String>, now: f64) -> Option<Option<String>> {
+/// `session`: the call's Hermes session (patch 0028); a « Oui » given to another session's question doesn't count.
+pub fn send_allowed(
+    path: &Path,
+    host: &str,
+    used: &std::collections::HashSet<String>,
+    now: f64,
+    session: Option<&str>,
+) -> Option<Option<String>> {
     let file = std::fs::read_to_string(path).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok())?;
     let list = |v: Option<&Value>| -> Vec<String> {
         v.and_then(Value::as_array).map(|a| a.iter().filter_map(|h| h.as_str().map(str::to_string)).collect()).unwrap_or_default()
@@ -1303,7 +1334,11 @@ pub fn send_allowed(path: &Path, host: &str, used: &std::collections::HashSet<St
         let until = grant.get("until").and_then(Value::as_f64).unwrap_or(0.0);
         let site = grant.get("host").and_then(Value::as_str)?.to_string();
         let window = grant.get("window").and_then(Value::as_bool) == Some(true);
-        (until > now && (window || !used.contains(id)) && send_covered(&[site], host))
+        let other = match (grant.get("session").and_then(Value::as_str), session) {
+            (Some(granted), Some(calling)) => granted != calling,
+            _ => false,
+        };
+        (until > now && !other && (window || !used.contains(id)) && send_covered(&[site], host))
             .then(|| (!window).then(|| id.to_string()))
     })
 }
@@ -2323,7 +2358,8 @@ pub struct Proxy {
     pub rescue_path: PathBuf,
     pub cache_path: PathBuf,
     pub cache: Mutex<Dict>,
-    output: Mutex<Box<dyn Write + Send>>,
+    /// Hermes' stdout, shared with the tasks' own browsers' proxies (`task_proxy`).
+    output: Arc<Mutex<Box<dyn Write + Send>>>,
     server: Mutex<Option<Arc<Server>>>,
     client_init: Mutex<Value>,
     pending: Arc<Mutex<Pending>>,
@@ -2347,10 +2383,35 @@ pub struct Proxy {
     pub send_sites_path: PathBuf,
     /// The one-use grants of that file this proxy used already.
     sent_once: Mutex<std::collections::HashSet<String>>,
+    /// Held for each tools/call: one Chrome takes one call at a time. The stealth server (nodriver) is not safe with
+    /// calls overlapping on one Chrome (lab of 20/11: its handler table broken, a navigate answered with the other
+    /// call's page), and Hermes patch 0029 sends several sessions' calls side by side. Each task's own browser has its
+    /// own proxy, so the tasks still browse side by side.
+    one_call: tokio::sync::Mutex<()>,
+    /// Calls Hermes cancelled (`notifications/cancelled`: the person sent a new message, its tool timeout) while they
+    /// waited their turn here: never started (Hermes' JSON-RPC id, as text). Only ids of `waiting`, each removed when
+    /// its call takes its turn.
+    cancelled: Mutex<std::collections::HashSet<String>>,
+    /// The calls waiting their turn (`one_call`), by Hermes' id.
+    waiting: Mutex<std::collections::HashSet<String>>,
+    /// The call holding `one_call`: Hermes' id, and the ids of the tools/call requests this proxy sent the real
+    /// server for it (its own numbering, `next_id`). A cancellation of that call reaches the real server under those.
+    /// And whether Hermes cancelled it: then none of its requests go to the real server any more (review 8: a cancel
+    /// that comes while its browser starts, before its first request).
+    in_flight: Mutex<Option<InFlight>>,
+    /// Beside `busy`: which session uses which task's own browser (browsers.rs `SESSIONS_FILE`).
+    sessions_path: PathBuf,
+    /// The tasks' own browsers this proxy relays to, by their settings' path (one per running task, browsers.rs
+    /// `setup_task`): a task's calls never reach the agent's browser nor another task's.
+    tasks: Mutex<HashMap<PathBuf, Arc<Proxy>>>,
 }
 
 impl Proxy {
     pub fn new(config: Dict, output: Box<dyn Write + Send>) -> Arc<Proxy> {
+        Self::with_output(config, Arc::new(Mutex::new(output)))
+    }
+
+    fn with_output(config: Dict, output: Arc<Mutex<Box<dyn Write + Send>>>) -> Arc<Proxy> {
         let idle = config.get("idle").and_then(|v| crate::py::py_float(v).ok()).unwrap_or(600.0);
         let after_run =
             config.get("after_run").and_then(|v| crate::py::py_float(v).ok()).unwrap_or(AFTER_RUN_SECONDS as f64);
@@ -2363,7 +2424,12 @@ impl Proxy {
             Some(path) => PathBuf::from(path),
             None => busy.parent().map(|p| p.join("rescue")).unwrap_or_else(|| PathBuf::from("rescue")),
         };
-        let send_sites_path = busy.parent().map(|p| p.join(SEND_SITES_FILE)).unwrap_or_else(|| PathBuf::from(SEND_SITES_FILE));
+        // a task's own browser reads its agent's (browsers.rs `setup_task`): the person's « Oui » is written there
+        let send_sites_path = match config.get("send_sites").map(crate::py::py_str).filter(|p| !p.is_empty()) {
+            Some(path) => PathBuf::from(path),
+            None => busy.parent().map(|p| p.join(SEND_SITES_FILE)).unwrap_or_else(|| PathBuf::from(SEND_SITES_FILE)),
+        };
+        let sessions_path = busy.parent().map(|p| p.join(crate::browsers::SESSIONS_FILE)).unwrap_or_default();
         let cache_path = PathBuf::from(config.get("cache").map(crate::py::py_str).unwrap_or_default());
         let mut cache = read_cache(&cache_path);
         if !cache.contains_key("initialize") {
@@ -2380,7 +2446,7 @@ impl Proxy {
             rescue_path,
             cache_path,
             cache: Mutex::new(cache),
-            output: Mutex::new(output),
+            output,
             server: Mutex::new(None),
             client_init: Mutex::new(json!({})),
             pending: Arc::new(Mutex::new(HashMap::new())),
@@ -2395,7 +2461,56 @@ impl Proxy {
             secrets: Mutex::new(Secrets::default()),
             send_sites_path,
             sent_once: Mutex::new(std::collections::HashSet::new()),
+            one_call: tokio::sync::Mutex::new(()),
+            cancelled: Mutex::new(Default::default()),
+            waiting: Mutex::new(Default::default()),
+            in_flight: Mutex::new(None),
+            sessions_path,
+            tasks: Mutex::new(HashMap::new()),
         })
+    }
+
+    /// The settings of the task's own browser a call goes to: a tools/call whose Hermes session (patch 0028) a task
+    /// of this agent runs in (`sessions_path`); None: the agent's own browser (the person's conversations, an older
+    /// Hermes, an agent's task without a browser of its own).
+    pub fn route_of(&self, message: &Value) -> Option<PathBuf> {
+        if message.get("method").and_then(Value::as_str) != Some("tools/call") {
+            return None;
+        }
+        let session = message.get("params")?.get("_meta")?.get(crate::agent_tools::CALL_SESSION_META)?.as_str()?;
+        let map: Value = serde_json::from_str(&std::fs::read_to_string(&self.sessions_path).ok()?).ok()?;
+        let path = PathBuf::from(map.get(session)?.as_str()?);
+        path.is_file().then_some(path)
+    }
+
+    /// The proxy of a task's own browser (its settings at `settings`), made at its first call: Hermes' stdout shared,
+    /// its handshake the agent's. Those whose task ended (settings gone) are stopped and dropped.
+    async fn task_proxy(self: &Arc<Self>, settings: &Path) -> Option<Arc<Proxy>> {
+        let ended: Vec<Arc<Proxy>> = {
+            let mut tasks = self.tasks.lock().unwrap_or_else(|e| e.into_inner());
+            let gone: Vec<PathBuf> = tasks.keys().filter(|p| !p.is_file()).cloned().collect();
+            gone.iter().filter_map(|p| tasks.remove(p)).collect()
+        };
+        for proxy in ended {
+            proxy.stop_child().await;
+        }
+        if let Some(known) = self.tasks.lock().unwrap_or_else(|e| e.into_inner()).get(settings) {
+            return Some(known.clone());
+        }
+        let mut config = match serde_json::from_str::<Value>(&std::fs::read_to_string(settings).ok()?).ok()? {
+            Value::Object(map) => map,
+            _ => return None,
+        };
+        config.insert("config_path".into(), json!(settings.to_string_lossy()));
+        let proxy = Self::with_output(config, self.output.clone());
+        *proxy.client_init.lock().unwrap_or_else(|e| e.into_inner()) =
+            self.client_init.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        if proxy.idle > 0.0 {
+            tokio::spawn(proxy.clone().watch_idle(15.0));
+        }
+        log(&format!("a task's own browser: {}", settings.display()));
+        self.tasks.lock().unwrap_or_else(|e| e.into_inner()).insert(settings.to_path_buf(), proxy.clone());
+        Some(proxy)
     }
 
     /// Whether this browser may send a form to `host` now (`SEND_SITES_FILE`): a site allowed for good, or a one-use
@@ -2407,7 +2522,8 @@ impl Proxy {
         let now = crate::py::time_time();
         let mut grants = Vec::new();
         for host in hosts {
-            match send_allowed(&self.send_sites_path, host, &used, now) {
+            let session = crate::runs::CALL_SESSION.try_with(|s| s.clone()).ok().flatten();
+            match send_allowed(&self.send_sites_path, host, &used, now, session.as_deref()) {
                 Some(None) => {}
                 Some(Some(id)) => grants.push((host.clone(), id)),
                 None => return Some(host.clone()),
@@ -2515,6 +2631,17 @@ impl Proxy {
         let number = self.next_id.fetch_add(1, Ordering::SeqCst);
         let (tx, rx) = oneshot::channel();
         self.pending.lock().unwrap_or_else(|e| e.into_inner()).insert(number, tx);
+        if method == "tools/call" {
+            // the call in flight's own requests (`in_flight`): what a cancellation of it reaches; cancelled, none goes
+            let mut flight = self.in_flight.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(current) = flight.as_mut() {
+                if current.cancelled {
+                    self.pending.lock().unwrap_or_else(|e| e.into_inner()).remove(&number);
+                    return Err(CANCELLED.into());
+                }
+                current.sent.push(number);
+            }
+        }
         let mut message = json!({"jsonrpc": "2.0", "id": number, "method": method});
         if let Some(params) = params.filter(|p| !p.is_null()) {
             message["params"] = params.clone();
@@ -2526,6 +2653,102 @@ impl Proxy {
     // -- Hermes' messages ----------------------------------------------------------------------------------------
 
     pub async fn handle(self: &Arc<Self>, message: Value) {
+        // the call's Hermes session (patch 0028), its own for the whole call: since patch 0029 calls of several
+        // sessions reach this proxy side by side, so whose « Oui » counts is never a slot they share
+        let session = message
+            .get("params")
+            .and_then(|p| p.get("_meta"))
+            .and_then(|m| m.get(crate::agent_tools::CALL_SESSION_META))
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        let method = message.get("method").and_then(Value::as_str);
+        if method == Some("notifications/cancelled") {
+            // Hermes' id, never passed on as it is: the real server numbers this proxy's requests (review 7)
+            if let Some(id) = message.get("params").and_then(|p| p.get("requestId")).map(Value::to_string) {
+                self.cancel(&id, message.get("params").and_then(|p| p.get("reason")).cloned()).await;
+            }
+            return;
+        }
+        let id = message.get("id").map(Value::to_string).unwrap_or_default();
+        let turn_held = match method {
+            Some("tools/call") => {
+                self.waiting.lock().unwrap_or_else(|e| e.into_inner()).insert(id.clone());
+                let turn = tokio::time::timeout(self.call_limit(), self.one_call.lock()).await;
+                if turn.is_ok() {
+                    // in flight before it stops waiting: a cancel in between finds it one way or the other
+                    *self.in_flight.lock().unwrap_or_else(|e| e.into_inner()) =
+                        Some(InFlight { id: id.clone(), sent: Vec::new(), cancelled: false });
+                }
+                self.waiting.lock().unwrap_or_else(|e| e.into_inner()).remove(&id);
+                let cancelled = self.cancelled.lock().unwrap_or_else(|e| e.into_inner()).remove(&id) || self.in_flight_cancelled();
+                match turn {
+                    // cancelled by Hermes while it waited its turn: never started (and, cancelled, never answered)
+                    Ok(_) if cancelled => {
+                        *self.in_flight.lock().unwrap_or_else(|e| e.into_inner()) = None;
+                        log("tools/call: cancelled while it waited, not run");
+                        return;
+                    }
+                    Ok(held) => Some(held),
+                    // waited longer than a call may last: the one before is stuck; answered « busy », never run late
+                    Err(_) => {
+                        let mut answer = refused(BUSY);
+                        answer.insert("id".into(), message.get("id").cloned().unwrap_or(Value::Null));
+                        self.to_client(&Value::Object(answer));
+                        return;
+                    }
+                }
+            }
+            _ => None,
+        };
+        crate::runs::CALL_SESSION.scope(session, self.handle_call(message)).await;
+        if turn_held.is_some() {
+            *self.in_flight.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        }
+    }
+
+    fn in_flight_cancelled(&self) -> bool {
+        self.in_flight.lock().unwrap_or_else(|e| e.into_inner()).as_ref().is_some_and(|f| f.cancelled)
+    }
+
+    /// Hermes cancelled its call `id` (its JSON-RPC id, as text): the call in flight here, cancelled on the real
+    /// server under this proxy's own ids of its requests still unanswered; a call waiting its turn, never started;
+    /// any other id (answered already, not this browser's): nothing at all.
+    async fn cancel(&self, id: &str, reason: Option<Value>) {
+        let ours: Option<Vec<i64>> = {
+            let mut flight = self.in_flight.lock().unwrap_or_else(|e| e.into_inner());
+            match flight.as_mut() {
+                Some(current) if current.id == id => {
+                    current.cancelled = true; // its next request never goes (`request`)
+                    let pending = self.pending.lock().unwrap_or_else(|e| e.into_inner());
+                    Some(current.sent.iter().copied().filter(|n| pending.contains_key(n)).collect())
+                }
+                _ => None,
+            }
+        };
+        let Some(ours) = ours else {
+            if self.waiting.lock().unwrap_or_else(|e| e.into_inner()).contains(id) {
+                self.cancelled.lock().unwrap_or_else(|e| e.into_inner()).insert(id.to_string());
+            }
+            return;
+        };
+        if self.running() {
+            for number in ours {
+                let mut params = json!({"requestId": number});
+                if let Some(reason) = reason.clone() {
+                    params["reason"] = reason;
+                }
+                let _ = self.to_server(&json!({"jsonrpc": "2.0", "method": "notifications/cancelled", "params": params})).await;
+            }
+        }
+    }
+
+    /// How long one call may hold this browser (`call_seconds`, default `CALL_SECONDS`).
+    fn call_limit(&self) -> Duration {
+        let seconds = self.config.get("call_seconds").and_then(|v| crate::py::py_float(v).ok()).unwrap_or(CALL_SECONDS);
+        Duration::from_secs_f64(seconds.max(0.1))
+    }
+
+    async fn handle_call(self: &Arc<Self>, message: Value) {
         let Value::Object(message) = message else { return };
         let ident = message.get("id").cloned().unwrap_or(Value::Null);
         let method = match message.get("method") {
@@ -2598,6 +2821,12 @@ impl Proxy {
         }
         let calling = method == "tools/call";
         let mut params = message.get("params").cloned();
+        if calling {
+            // the call's Hermes session (`handle`): kept from the real server
+            if let Some(meta) = params.as_mut().and_then(|p| p.get_mut("_meta")).and_then(Value::as_object_mut) {
+                meta.remove(crate::agent_tools::CALL_SESSION_META);
+            }
+        }
         let named = params.as_ref().and_then(|p| p.get("name")).and_then(Value::as_str).unwrap_or("").to_string();
         if calling && params.as_mut().is_some_and(|p| script_meant(&named, p)) {
             log(&format!("{named}: called with a script, run as execute_script"));
@@ -2632,7 +2861,21 @@ impl Proxy {
         let result: Result<(), String> = async {
             self.ensure_server().await?;
             let mut response = if calling {
-                self.call_tool(&tool, params.as_ref()).await?
+                // bounded: a call the server never answers (a page's alert(), a promise that never settles, a frozen
+                // DevTools link) never holds this browser for the other conversations (review 5)
+                match tokio::time::timeout(self.call_limit(), self.call_tool(&tool, params.as_ref())).await {
+                    Ok(answer) => answer?,
+                    Err(_) => {
+                        log(&format!("{tool}: no answer in {:.0} s, the browser's server started again", self.call_limit().as_secs_f64()));
+                        self.stop_child().await;
+                        self.end_stuck_server().await;
+                        refused(&format!(
+                            "Not done in time: this browser action took longer than {:.0} s and was stopped (your \
+                             browser's tools started again; the pages stay open). Look at the page before doing it again.",
+                            self.call_limit().as_secs_f64()
+                        ))
+                    }
+                }
             } else {
                 self.request(&method, params.as_ref()).await?
             };
@@ -2666,21 +2909,26 @@ impl Proxy {
                     self.add_hint(&instance, &mut response).await;
                 }
             }
+            if calling && self.in_flight_cancelled() {
+                return Err(CANCELLED.to_string()); // Hermes cancelled it: no answer
+            }
             self.to_client(&Value::Object(response));
             Ok(())
         }
         .await;
-        if let Err(exc) = result {
-            if calling && !ident.is_null() {
+        if let Err(exc) = result.as_ref().map_err(String::as_str) {
+            if exc == CANCELLED || (calling && self.in_flight_cancelled()) {
+                log(&format!("{tool}: cancelled by Hermes, not run on (no answer)"));
+            } else if calling && !ident.is_null() {
                 // never a JSON-RPC error for a tool call: Hermes counts one against the whole server (review 13/11)
-                let mut answer = refused(&could_not_start(&exc));
+                let mut answer = refused(&could_not_start(exc));
                 if self.answered_call(&named, named != tool, &mut answer) {
                     self.add_hint("", &mut answer).await;
                 }
                 answer.insert("id".into(), ident.clone());
                 self.to_client(&Value::Object(answer));
             } else {
-                self.fail(&ident, &exc);
+                self.fail(&ident, exc);
             }
         }
         if calling {
@@ -3410,20 +3658,38 @@ impl Proxy {
         log(&format!("page settled in {:.2} s", crate::py::monotonic() - started));
     }
 
+    /// The command prefix that runs one in the browser's container: the config's `exec` (`[]`: on this machine), else
+    /// the one `server` gives (`podman exec -i <container> …`).
+    fn container_prefix(&self) -> Option<Vec<String>> {
+        match self.config.get("exec") {
+            Some(v) => Some(strs(Some(v))),
+            None => {
+                let server = self.command("server");
+                let i = server.iter().position(|a| a == "exec")?;
+                let container = server.iter().skip(i + 1).find(|a| !a.starts_with('-'))?;
+                Some(vec![server[0].clone(), "exec".into(), container.clone()])
+            }
+        }
+    }
+
+    /// After a call ran over: the server's door (hold_gate.py) and its stuck server ended inside the container, and
+    /// the doors' call counts cleared. `stop_child` ends only `podman exec`; an image before review 6 keeps its door
+    /// waiting for ever on the stuck server, its count at 1 (card_pay.rs `calls_check_command` then never lets a card
+    /// payment start) and the stuck call able to act in Chrome later. Never on this machine (`exec` `[]`).
+    async fn end_stuck_server(&self) {
+        let Some(mut command) = self.container_prefix().filter(|p| !p.is_empty()) else { return };
+        command.extend(["sh".to_string(), "-c".to_string(), END_STUCK_SERVER.to_string()]);
+        if tokio::time::timeout(Duration::from_secs(10), run(&command, false)).await.is_err() {
+            log("the stuck server's door could not be ended in its container");
+        }
+    }
+
     /// A file the real server saved in its container (`CLONES_IN_CONTAINER`), as base64, then removed there: through
     /// the config's `exec` (the command prefix that runs one in the container; `[]`: on this machine), else the one
     /// `server` gives (`podman exec -i <container> …`).
     async fn fetch_from_container(&self, path: &str) -> Option<String> {
         use base64::Engine;
-        let prefix: Vec<String> = match self.config.get("exec") {
-            Some(v) => strs(Some(v)),
-            None => {
-                let server = self.command("server");
-                let i = server.iter().position(|a| a == "exec")?;
-                let container = server.iter().skip(i + 1).find(|a| !a.starts_with('-'))?;
-                vec![server[0].clone(), "exec".into(), container.clone()]
-            }
-        };
+        let prefix = self.container_prefix()?;
         let mut cat = prefix.clone();
         cat.extend(["cat".to_string(), path.to_string()]);
         let (program, rest) = cat.split_first()?;
@@ -3757,7 +4023,11 @@ impl Proxy {
                 Ok(_) => {}
             }
             let Ok(message) = serde_json::from_slice::<Value>(&buf) else { continue };
-            let this = self.clone();
+            // a task's call to its own browser (browsers.rs `setup_task`), every other to the agent's
+            let this = match self.route_of(&message) {
+                Some(settings) => self.task_proxy(&settings).await.unwrap_or_else(|| self.clone()),
+                None => self.clone(),
+            };
             tasks.push(tokio::spawn(async move { this.handle(message).await }));
             tasks.retain(|t| !t.is_finished());
         }
@@ -3770,6 +4040,10 @@ impl Proxy {
         }
         // Hermes gone: its server too. The browser stays for whoever else uses it, until it is unused.
         self.stop_child().await;
+        let tasks: Vec<Arc<Proxy>> = self.tasks.lock().unwrap_or_else(|e| e.into_inner()).drain().map(|(_, p)| p).collect();
+        for proxy in tasks {
+            proxy.stop_child().await;
+        }
     }
 }
 
@@ -3905,6 +4179,35 @@ pub fn main(args: Vec<String>) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// One browser per running task (19/11): a task's tools/call (its Hermes session, patch 0028, in the agent's
+    /// `sessions.json`) goes to its own browser's settings; the person's calls, a session nobody announced, an older
+    /// Hermes (no session) and the handshake stay with the agent's browser.
+    #[test]
+    fn a_tasks_call_goes_to_its_own_browser() {
+        let dir = tempfile::tempdir().unwrap();
+        let task = dir.path().join("vie--t1");
+        std::fs::create_dir_all(&task).unwrap();
+        std::fs::write(task.join("mcp.json"), "{}").unwrap();
+        let sessions = json!({"api_task": task.join("mcp.json").to_string_lossy()});
+        std::fs::write(dir.path().join(crate::browsers::SESSIONS_FILE), sessions.to_string()).unwrap();
+        let mut config = Dict::new();
+        config.insert("busy".into(), json!(dir.path().join("busy").to_string_lossy()));
+        let proxy = Proxy::new(config, Box::new(std::io::sink()));
+        let call = |session: Option<&str>| {
+            let mut params = json!({"name": "navigate", "arguments": {"url": "https://shop.example"}});
+            if let Some(session) = session {
+                params["_meta"] = json!({crate::agent_tools::CALL_SESSION_META: session});
+            }
+            json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": params})
+        };
+        assert_eq!(proxy.route_of(&call(Some("api_task"))), Some(task.join("mcp.json")));
+        assert_eq!(proxy.route_of(&call(Some("api_person"))), None);
+        assert_eq!(proxy.route_of(&call(None)), None);
+        assert_eq!(proxy.route_of(&json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})), None);
+        std::fs::remove_file(task.join("mcp.json")).unwrap();
+        assert_eq!(proxy.route_of(&call(Some("api_task"))), None, "its task ended");
+    }
 
     #[test]
     fn devtools_connections_are_read_from_the_tcp_tables() {

@@ -177,7 +177,7 @@ async fn an_agent_gets_its_own_browser_container_and_desktop() {
         mcp,
         json!({"command": browsers::proxy_binary(), "connect_timeout": 90, "timeout": 120,
                             "args": [place.join("mcp.json").to_string_lossy()],
-                            "tools": {"exclude": ["get_instance_state"]}})
+                            "tools": {"exclude": ["get_instance_state"]}, "call_context": true})
     );
     assert!(mcp["command"].as_str().unwrap().ends_with("bip-browser-mcp"));
     let proxy = read_json(&place.join("mcp.json"));
@@ -330,7 +330,11 @@ fn after_an_update_the_agents_browser_follows_the_bridges_own_proxy() {
     // the profile names the new one, whether the old one is still there or not
     let mut data = pyyaml::load(&format!("mcp_servers:\n  stealth:\n    command: {old}\n    args: [x]\n")).unwrap();
     browsers::with_proxy(&mut data, &new.to_string_lossy());
-    assert_eq!(pyyaml::to_json(&data)["mcp_servers"]["stealth"], json!({"command": new.to_string_lossy(), "args": ["x"]}));
+    // and asked each call's Hermes session (patch 0028: a task's « Oui » is its own)
+    assert_eq!(
+        pyyaml::to_json(&data)["mcp_servers"]["stealth"],
+        json!({"command": new.to_string_lossy(), "args": ["x"], "call_context": true})
+    );
     // a container's own server (no proxy) is left as it is
     let mut direct = pyyaml::load("mcp_servers:\n  stealth:\n    command: podman\n").unwrap();
     browsers::with_proxy(&mut direct, &new.to_string_lossy());

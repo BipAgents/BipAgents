@@ -252,8 +252,7 @@ async fn the_person_pauses_resumes_and_forgets_a_task() {
     let board = board(&config, None);
     let job = board.create(&agent, "Long", "Fais-le.", 0.50, None).await.unwrap();
     let id = id_of(&job);
-    let again = board.create(&agent, "Autre", "Encore.", 0.50, None).await.unwrap_err();
-    assert!(again.to_string().contains("already"));
+    // (several at once since 19/11: `several_tasks_of_one_agent_run_at_once`)
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     assert_eq!(board.pause(&id).await.unwrap()["state"], "stopping");
     board.wait(&id).await;
@@ -670,4 +669,451 @@ async fn a_task_counts_its_euros_as_the_month_s_credit_does_cache_reads_included
     assert_eq!((resumed["state"].as_str(), resumed["budget_eur"].as_f64()), (Some("running"), Some(0.215)));
     board.wait(&id).await;
     assert_eq!(board.view(&id).unwrap()["state"], "done");
+}
+
+type Hinted = Arc<Mutex<Vec<(String, String, String)>>>;
+
+fn hinted(board: Arc<Jobs>, hints: &Hinted) -> Arc<Jobs> {
+    let mut jobs = Arc::try_unwrap(board).ok().unwrap();
+    let hints = hints.clone();
+    let hint: jobs::HintJob = Arc::new(move |agent, job, why| {
+        hints.lock().unwrap().push((agent, job, why));
+        Box::pin(async {})
+    });
+    jobs.hint = Some(hint);
+    Arc::new(jobs)
+}
+
+/// Sub-tasks (Alex 19/11): one agent runs up to three tasks at once (the install's three too), the fourth refused.
+#[tokio::test]
+async fn several_tasks_of_one_agent_run_at_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_fake, url) = gateway(1000, 10).await;
+    let (config, agent) = setup(dir.path(), &url);
+    let board = board(&config, None);
+    let mut ids = Vec::new();
+    for title in ["Mails", "Assurances", "Vacances"] {
+        let job = board.create(&agent, title, "Fais-le en entier.", 0.50, None).await.unwrap();
+        assert_eq!(job["state"], "running", "{title}");
+        ids.push(id_of(&job));
+    }
+    let fourth = board.create(&agent, "Encore", "Encore une.", 0.50, None).await.unwrap_err();
+    assert!(fourth.to_string().contains("three background tasks"), "{fourth}");
+    assert_eq!(jobs::AGENT_RUNNING_MAX, 3);
+    for id in ids {
+        board.forget(&id).await.unwrap();
+    }
+}
+
+/// The apps are told (a silent « jobs » hint, no polling) when a task starts, ends and is seen; a finished task stays
+/// « not seen » for every device until one of them opened its result, and the home's list (`/v1/status`) says so.
+#[tokio::test]
+async fn a_finished_task_waits_to_be_seen_and_the_apps_are_hinted() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_fake, url) = gateway(3, 40_000).await;
+    let (config, agent) = setup(dir.path(), &url);
+    let hints: Hinted = Default::default();
+    let board = hinted(board(&config, None), &hints);
+    let job = board.create(&agent, "Plan 10 km", "Prépare mon plan pour un 10 km.", 0.50, None).await.unwrap();
+    let id = id_of(&job);
+    let home = jobs::home_jobs(&config);
+    assert_eq!((home.len(), home[0]["state"].as_str()), (1, Some("running")));
+    board.wait(&id).await;
+    let done = board.view(&id).unwrap();
+    assert_eq!((done["state"].as_str(), done["seen"].as_bool()), (Some("done"), Some(false)));
+    let home = jobs::home_jobs(&config);
+    assert_eq!((home.len(), home[0]["id"].as_str(), home[0]["seen"].as_bool()), (1, Some(id.as_str()), Some(false)));
+    assert!(!home[0].contains_key("report") && !home[0].contains_key("prompt"), "the home's list stays small");
+    board.seen(&id).await.unwrap();
+    assert_eq!(board.view(&id).unwrap()["seen"], true);
+    assert!(jobs::home_jobs(&config).is_empty());
+    let whys: Vec<String> = hints.lock().unwrap().iter().filter(|(a, j, _)| a == "coach" && *j == id).map(|h| h.2.clone()).collect();
+    assert_eq!(whys, vec!["started", "ended", "seen"]);
+    // unseen for more than a week (an app that never says « seen »): not « new » any more
+    let mut stale = jobs::load(&config, &id).unwrap();
+    stale.insert("seen".into(), json!(false));
+    stale.insert("finished".into(), json!(bipbridge::py::time_time() - 8.0 * 86_400.0));
+    jobs::save(&config, &stale).unwrap();
+    assert!(jobs::home_jobs(&config).is_empty(), "a week-old unseen task");
+    // a task finished before 19/11 (no `seen`) is not « new » on the home
+    let mut old = jobs::load(&config, &id).unwrap();
+    old.remove("seen");
+    jobs::save(&config, &old).unwrap();
+    assert!(jobs::home_jobs(&config).is_empty());
+}
+
+/// Review 1 (subtasks-redesign): the per-agent cap holds when the starts come at once (a model's parallel `start_task`
+/// calls, two devices): `may_run` reads the running tasks, then `launch` awaits Hermes (heavy_work's check, the session,
+/// the run) before the task is saved « running »; every start in between passes the same check.
+#[tokio::test]
+async fn starts_at_once_never_pass_the_agent_s_cap() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_fake, url) = gateway(1000, 10).await;
+    let (config, agent) = setup(dir.path(), &url);
+    let board = board(&config, None);
+    let starts = (0..5).map(|n| {
+        let (board, agent) = (board.clone(), agent.clone());
+        async move { board.create(&agent, &format!("Tâche {n}"), "Fais-le en entier.", 0.50, None).await }
+    });
+    let outcomes = futures::future::join_all(starts).await;
+    let running: Vec<String> = outcomes.iter().filter_map(|o| o.as_ref().ok()).map(id_of).collect();
+    let on_disk = jobs::tasks(&config).into_iter().filter(|j| j["state"] == "running").count();
+    for id in &running {
+        board.forget(id).await.unwrap();
+    }
+    assert!(running.len() <= jobs::AGENT_RUNNING_MAX, "{} tasks of one agent started at once", running.len());
+    assert!(on_disk <= jobs::AGENT_RUNNING_MAX, "{on_disk} running on disk");
+}
+
+/// One browser per running task (Alex 19/11, « vraiment en parallèle »): an agent with its own browser gets, for each
+/// task it starts, a browser of the task's own (its container, its ports, a copy of the agent's profile with its
+/// logins, its folder), announced to the agent's browser tools by the task's Hermes session (`sessions.json` beside
+/// the agent's `busy`, patch 0028), and removed when the task ends. The person's conversations keep the agent's.
+#[tokio::test]
+async fn a_task_of_an_agent_with_a_browser_gets_a_browser_of_its_own() {
+    let dir = tempfile::tempdir().unwrap();
+    let (fake, url) = gateway(3, 10).await;
+    let (mut config, agent) = setup(dir.path(), &url);
+    config.browser.root = dir.path().join("browsers").to_string_lossy().into_owned();
+    let place = bipbridge::browsers::folder(&config, "coach");
+    std::fs::create_dir_all(place.join("profile").join("Default")).unwrap();
+    std::fs::write(place.join("profile").join("Default").join("Cookies"), "logged in").unwrap();
+    std::fs::create_dir_all(place.join("profile/Default/Cache")).unwrap();
+    std::fs::write(place.join("profile/Default/Cache/data_1"), "x".repeat(4096)).unwrap();
+    std::fs::write(place.join("profile/Local State"), "{\"os_crypt\": {}}").unwrap();
+    std::fs::write(place.join("ports.json"), r#"{"cdp": 19600, "vnc": 19601}"#).unwrap();
+    std::fs::write(place.join("mcp.json"), r#"{"server": ["/usr/bin/podman", "exec", "-i", "bipagents-browser-coach", "/opt/stealth/mcp.sh"]}"#).unwrap();
+    let board = board(&config, None);
+    let job = board.create(&agent, "Comparer", "Compare trois offres sur leurs sites.", 0.50, None).await.unwrap();
+    let id = id_of(&job);
+    let own = bipbridge::browsers::task_browser("coach", &id);
+    // its agent read back from its name (the egress proxy's policy gives it the agent's rules, send_guard.rs)
+    assert_eq!(bipbridge::browsers::task_browser_agent(&own), Some("coach"));
+    assert_eq!(bipbridge::browsers::task_browser_agent("coach"), None);
+    let theirs = bipbridge::browsers::folder(&config, &own);
+    let settings: Value = serde_json::from_str(&std::fs::read_to_string(theirs.join("mcp.json")).unwrap()).unwrap();
+    assert_eq!(settings["server"][3], json!(bipbridge::browsers::container(&own)), "{settings}");
+    assert_eq!(std::fs::read_to_string(theirs.join("profile/Default/Cookies")).unwrap(), "logged in", "the agent's logins");
+    // only what keeps the logins (its cookies' key in « Local State »), never the agent's caches (disk)
+    assert!(theirs.join("profile/Local State").exists());
+    assert!(!theirs.join("profile/Default/Cache").exists(), "the agent's cache copied");
+    let ports = bipbridge::browsers::ports_of(&config, &own).unwrap();
+    assert!(ports["cdp"] != 19600 && ports["vnc"] != 19601, "ports of its own: {ports:?}");
+    let sessions: Value = serde_json::from_str(&std::fs::read_to_string(place.join("sessions.json")).unwrap()).unwrap();
+    assert_eq!(sessions["s1"], json!(theirs.join("mcp.json").to_string_lossy()));
+    // Hermes' own browser tools (its vault fill, on the agent's Chrome) closed in its turns (patch 0024)
+    let run = posted_runs(&fake).last().cloned().unwrap();
+    assert_eq!(run["model_options"]["closed_tools"], json!(["browser_*"]), "{run}");
+    // the task's own calls are told from the person's (patch 0028): a payment never happens in its browser
+    let task_call = bipbridge::runs::CALL_SESSION
+        .sync_scope(Some("s1".into()), || bipbridge::browsers::task_of_call(&config, "coach"));
+    assert_eq!(task_call, Some(theirs.join("mcp.json")));
+    let person_call = bipbridge::runs::CALL_SESSION
+        .sync_scope(Some("api_person".into()), || bipbridge::browsers::task_of_call(&config, "coach"));
+    assert_eq!(person_call, None);
+    board.wait(&id).await;
+    assert!(!theirs.exists(), "its browser removed with the task's end");
+    let sessions: Value = serde_json::from_str(&std::fs::read_to_string(place.join("sessions.json")).unwrap()).unwrap();
+    assert_eq!(sessions, json!({}));
+    // an agent without a browser: nothing of the kind
+    let other = bipbridge::browsers::folder(&config, &bipbridge::browsers::task_browser("vie", "t0"));
+    assert!(!other.exists());
+}
+
+/// Alex 20/11: a task never pays nor logs in inside its own browser: it hands over to the agent's main conversation,
+/// which gets the request (what, which site, why) in the agent's own turn there and does it in the agent's browser
+/// with the person's usual approval. The task is told it was handed over.
+#[tokio::test]
+async fn a_tasks_payment_is_handed_over_to_the_agents_main_conversation() {
+    let dir = tempfile::tempdir().unwrap();
+    let (fake, url) = gateway(1000, 10).await;
+    let (config, agent) = setup(dir.path(), &url);
+    let told: Told = Default::default();
+    let board = with_handback(&config, &told);
+    let job = board.create(&agent, "Courses de la semaine", "Remplis le panier Leclerc Drive.", 0.50, None).await.unwrap();
+    let id = id_of(&job);
+    let ask = jobs::Ask { kind: jobs::AskKind::Pay, what: "le panier de la semaine, 38,40 €".into(),
+                          site: "leclercdrive.fr".into(), why: "payer la commande avant 18 h".into() };
+    assert!(jobs::HANDED_OVER.starts_with("Handed over"));
+    let outcome = board.hand_over(&agent, &id, &ask, "api_main").await;
+    assert!(outcome.is_some(), "nothing delivered");
+    let run = posted_runs(&fake).into_iter().find(|r| r["session_id"] == "api_main").expect("a turn in the main conversation");
+    let input = run["input"].as_str().unwrap();
+    for part in ["Courses de la semaine", "38,40 €", "leclercdrive.fr", "payer la commande avant 18 h"] {
+        assert!(input.contains(part), "{part} missing: {input}");
+    }
+    assert!(input.contains("approval"), "the person's usual approval: {input}");
+    board.forget(&id).await.unwrap();
+}
+
+/// Alex 20/11, « no blocking for capacity »: a task that would browse in a browser of its own waits its turn when the
+/// place's free memory (MemAvailable) is under `[jobs] browser_free_mb` (a browsing task measured 0.5–0.8 GB): queued,
+/// « memory », never refused; it starts by itself once there is room again.
+#[tokio::test]
+async fn a_browsing_task_waits_for_free_memory_and_starts_once_there_is() {
+    let dir = tempfile::tempdir().unwrap();
+    let (fake, url) = gateway(1000, 10).await;
+    let (mut config, agent) = setup(dir.path(), &url);
+    config.browser.root = dir.path().join("browsers").to_string_lossy().into_owned();
+    assert_eq!(config.jobs.browser_free_mb, 1024, "the default threshold");
+    let place = bipbridge::browsers::folder(&config, "coach");
+    std::fs::create_dir_all(place.join("profile")).unwrap();
+    std::fs::write(place.join("ports.json"), r#"{"cdp": 19600, "vnc": 19601}"#).unwrap();
+    std::fs::write(place.join("mcp.json"), r#"{"server": ["/usr/bin/podman"]}"#).unwrap();
+    let free = Arc::new(Mutex::new(Some(600u64)));
+    let mut jobs = Arc::try_unwrap(board(&config, None)).ok().unwrap();
+    let probe = free.clone();
+    jobs.memory = Arc::new(move || *probe.lock().unwrap());
+    let board = Arc::new(jobs);
+    let job = board.create(&agent, "Comparer", "Compare trois offres sur leurs sites.", 0.50, None).await.unwrap();
+    let id = id_of(&job);
+    assert_eq!((job["state"].as_str(), job["reason"].as_str()), (Some("paused"), Some("memory")), "{job:?}");
+    assert!(posted_runs(&fake).is_empty(), "nothing started while memory is short");
+    assert_eq!(board.resume_after_memory().await, 0, "still short: it keeps waiting");
+    *free.lock().unwrap() = Some(4096);
+    assert_eq!(board.resume_after_memory().await, 1);
+    assert_eq!(board.view(&id).unwrap()["state"], "running");
+    assert!(words(&posted_runs(&fake)[0]["input"]).starts_with("Comparer\n\nCompare trois offres"), "its own words");
+    board.forget(&id).await.unwrap();
+}
+
+// -- Review 2 (subtasks-redesign, 20/11, head 347bdad19): one browser per task ------------------------------------------
+
+/// An agent with a browser of its own, as `a_task_of_an_agent_with_a_browser_gets_a_browser_of_its_own` makes it
+/// (`big`: a site storage of that many bytes in its profile, what makes its copy take a while).
+fn agent_browser(config: &mut Config, dir: &std::path::Path, big: usize) -> std::path::PathBuf {
+    config.browser.root = dir.join("browsers").to_string_lossy().into_owned();
+    let place = bipbridge::browsers::folder(config, "coach");
+    std::fs::create_dir_all(place.join("profile/Default/Local Storage")).unwrap();
+    std::fs::write(place.join("profile/Default/Cookies"), "logged in").unwrap();
+    std::fs::write(place.join("profile/Default/Local Storage/big.ldb"), vec![b'x'; big]).unwrap();
+    std::fs::write(place.join("profile/Local State"), "{\"os_crypt\": {}}").unwrap();
+    std::fs::write(place.join("ports.json"), r#"{"cdp": 19600, "vnc": 19601}"#).unwrap();
+    std::fs::write(
+        place.join("mcp.json"),
+        r#"{"server": ["/usr/bin/podman", "exec", "-i", "bipagents-browser-coach", "/opt/stealth/mcp.sh"]}"#,
+    )
+    .unwrap();
+    place
+}
+
+/// Review 2: the person's « Oui » to a task's « Envoyer sur ce site ? » (form_send.rs `call` → `grant_for_now`, the
+/// task's session) and the sites allowed for good are written to the AGENT's `send-sites.json`; the task's own
+/// browser's proxy reads the copy made in its own folder at its start (browsers.rs `setup_task`, `Proxy::send_sites_path`
+/// beside its `busy`). The task asks, the person says yes, « do the same step again », refused again: a task with a
+/// browser of its own never sends a form to a new site.
+#[tokio::test]
+async fn a_persons_yes_to_a_tasks_sending_reaches_the_tasks_own_browser() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_fake, url) = gateway(1000, 10).await;
+    let (mut config, agent) = setup(dir.path(), &url);
+    agent_browser(&mut config, dir.path(), 16);
+    let board = board(&config, None);
+    let job = board.create(&agent, "Écrire au service client", "Envoie ma réclamation.", 0.50, None).await.unwrap();
+    let id = id_of(&job);
+    let own = bipbridge::browsers::folder(&config, &bipbridge::browsers::task_browser("coach", &id));
+    assert!(own.join("mcp.json").is_file(), "no browser of its own");
+    // « Oui » to the task's question (its Hermes session is the fake's s1)
+    bipbridge::form_send::grant_for_now(&config, "coach", "contact.example", Some("s1")).unwrap();
+    // what the task's own browser's proxy reads before it lets a form through
+    let settings: Dict = serde_json::from_str(&std::fs::read_to_string(own.join("mcp.json")).unwrap()).unwrap();
+    let proxy = bipbridge::browser_mcp::Proxy::new(settings, Box::new(std::io::sink()));
+    let now = bipbridge::py::time_time();
+    let allowed = bipbridge::browser_mcp::send_allowed(&proxy.send_sites_path, "contact.example", &Default::default(), now, Some("s1"));
+    board.forget(&id).await.unwrap();
+    assert_eq!(allowed, Some(None), "the task's own browser still refuses after the « Oui » ({})", proxy.send_sites_path.display());
+}
+
+/// Review 2: what a task's own browser downloads lands in ITS profile's Downloads (`downloads_dir(<agent>--<task>)`)
+/// and is moved to the agent's only at the task's end (`remove_task`); meanwhile the task's `give_file` /
+/// `send_file_to_service` of « /telechargements/… » (sent_files.rs `places`, service_files.rs `recent_downloads`) read
+/// the agent's: an invoice fetched by a task can't be handed over by that task (it was, when tasks used the agent's
+/// browser).
+#[tokio::test]
+async fn a_tasks_download_can_be_given_while_the_task_runs() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_fake, url) = gateway(1000, 10).await;
+    let (mut config, agent) = setup(dir.path(), &url);
+    agent_browser(&mut config, dir.path(), 16);
+    let board = board(&config, None);
+    let job = board.create(&agent, "Facture EDF", "Télécharge ma dernière facture et donne-la moi.", 0.50, None).await.unwrap();
+    let id = id_of(&job);
+    let downloads = bipbridge::browsers::downloads_dir(&config, &bipbridge::browsers::task_browser("coach", &id));
+    std::fs::create_dir_all(&downloads).unwrap();
+    std::fs::write(downloads.join("facture-2026-11.pdf"), "%PDF-1.4 facture").unwrap();
+    let given = bipbridge::runs::CALL_SESSION.sync_scope(Some("s1".into()), || {
+        bipbridge::sent_files::capture(&config, &agent, "/telechargements/facture-2026-11.pdf")
+    });
+    board.forget(&id).await.unwrap();
+    assert!(given.is_ok(), "the task's own download, given by the task: {given:?}");
+}
+
+/// Review 2: two tasks of one agent set up at once (a model's parallel start_task, two devices; `may_run` lets both
+/// through) read the ports taken (`pick_ports`) before either writes its `ports.json`, the profile's copy in between:
+/// the same two ports for both browsers (the second can't start, its DevTools secret shadows the first's in
+/// `SECRETS`).
+#[test]
+fn two_tasks_set_up_at_once_get_ports_of_their_own() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut config, _agent) = setup(dir.path(), "http://127.0.0.1:9");
+    agent_browser(&mut config, dir.path(), 64 * 1024 * 1024);
+    let gate = Arc::new(std::sync::Barrier::new(2));
+    let starts: Vec<_> = ["t1", "t2"]
+        .into_iter()
+        .map(|job| {
+            let (config, gate) = (config.clone(), gate.clone());
+            std::thread::spawn(move || {
+                gate.wait();
+                bipbridge::browsers::setup_task(&config, "coach", job, &format!("s_{job}")).unwrap()
+            })
+        })
+        .collect();
+    for start in starts {
+        assert!(start.join().unwrap().is_some());
+    }
+    let ports = |job: &str| bipbridge::browsers::ports_of(&config, &bipbridge::browsers::task_browser("coach", job)).unwrap();
+    let (a, b) = (ports("t1"), ports("t2"));
+    assert!(a["cdp"] != b["cdp"] && a["vnc"] != b["vnc"], "the same ports for two tasks' browsers: {a:?} {b:?}");
+}
+
+/// Review 2: an agent deleted while its task runs: the task fails (« this agent isn't on this install any more »,
+/// `watch`) but its own browser (a copy of the agent's logins, its unit) is never removed — neither there nor by
+/// `delete_agent` (browsers.rs `remove` takes the agent's folder only).
+#[tokio::test]
+async fn a_deleted_agents_task_leaves_no_copy_of_its_logins() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_fake, url) = gateway(1000, 10).await;
+    let (mut config, agent) = setup(dir.path(), &url);
+    agent_browser(&mut config, dir.path(), 16);
+    let shared = SharedConfig::new(config.clone());
+    let mut jobs = Jobs::new(shared.clone(), HermesClient::new(reqwest::Client::new()), None, None, None);
+    jobs.poll = 0.01;
+    let board = Arc::new(jobs);
+    let job = board.create(&agent, "Comparer", "Compare trois offres.", 0.50, None).await.unwrap();
+    let id = id_of(&job);
+    let own = bipbridge::browsers::folder(&config, &bipbridge::browsers::task_browser("coach", &id));
+    assert!(own.join("profile/Default/Cookies").is_file());
+    shared.remove_agent("coach");
+    for _ in 0..200 {
+        if jobs::tasks(&config).iter().any(|j| j["id"] == json!(id) && j["state"] == "failed") {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    assert!(jobs::tasks(&config).iter().any(|j| j["id"] == json!(id) && j["state"] == "failed"), "the task didn't end");
+    assert!(!own.exists(), "the deleted agent's logins copied for its task are still there: {}", own.display());
+}
+
+/// Review 2 (focus 4: measured 0.5–0.8 GB per browsing task, 20/11): the only room check is at a task's start,
+/// « pressed » at 90 % of the place's memory.high (heavy_work.rs `task_gate`); the browser of the task starts later,
+/// on its first call, with no check. A place at 75 % of a 1.6 GB memory.high (a VPS-2 shared by four people: 80 % of
+/// 8 GB ÷ 4, MemoryMax 1.5×) starts a task of an agent with a browser, and three of them at once: each browser takes
+/// 0.5–0.8 GB more, past memory.high (throttled) and MemoryMax (the kernel kills in the place). A task whose browser
+/// can't fit must wait for room (queued, never refused).
+#[test]
+fn a_task_whose_browser_cant_fit_in_the_room_waits_for_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut config, _agent) = setup(dir.path(), "http://127.0.0.1:9");
+    agent_browser(&mut config, dir.path(), 16);
+    let gb = 1_000_000_000u64;
+    let room = bipbridge::heavy_work::Room {
+        disk_total: Some(50 * gb),
+        disk_free: Some(40 * gb),
+        memory: bipbridge::heavy_work::Memory {
+            current: Some(1_200_000_000),
+            high: Some(1_600_000_000),
+            stalled: Some(0.0),
+            high_events: Some(0),
+            anon: Some(1_000_000_000),
+        },
+        ..Default::default()
+    };
+    assert!(!room.memory.pressed(), "not pressed: the case is the browser's room, not the pressure");
+    let gate = bipbridge::heavy_work::task_gate(&config, "coach", &room, bipbridge::py::time_time());
+    assert!(gate.is_some(), "0.4 GB left under memory.high, a browsing task takes 0.5–0.8 GB: started anyway");
+}
+
+/// Review 2: the bridge's MCP servers run each call in a spawned task (card_pay.rs `serve_call`: `let mut work =
+/// tokio::spawn(… (server.call)(…) …)`, used by bipagents_pay, bipagents_vault — vault_login, vault_create_login,
+/// ask_to_send —, connectors, handover, link_wallet; agent_tools.rs `mcp_call`: `let work = tokio::spawn(… call_tool
+/// …)`). The task-local `runs::CALL_SESSION` set around the handler (patch 0028) is gone inside: `browsers::task_of_call`
+/// is always None there, so pay_with_card / vault_login / vault_create_login from a task with a browser of its own are
+/// never handed over to the main conversation (Alex 20/11) but done in the AGENT's browser, the « Oui » of
+/// ask_to_send is never the task's own, and `from_background` / heavy_work's pause fall back on guessing. (The unit
+/// tests call `task_of_call` in `sync_scope` directly; `a_tasks_payment_is_handed_over…` calls `hand_over` directly.)
+#[tokio::test]
+async fn a_call_to_the_bridges_pay_and_vault_servers_keeps_its_session() {
+    static SEEN: Mutex<Option<Option<String>>> = Mutex::new(None);
+    fn probe<'a>(
+        _state: &'a bipbridge::AppState,
+        _agent: &'a AgentConfig,
+        _name: &'a str,
+        _arguments: &'a Dict,
+        _asker: &'a bipbridge::card_pay::Asker,
+    ) -> futures::future::BoxFuture<'a, anyhow::Result<Dict>> {
+        Box::pin(async move {
+            *SEEN.lock().unwrap() = Some(bipbridge::runs::CALL_SESSION.try_with(|s| s.clone()).ok().flatten());
+            Ok(Dict::new())
+        })
+    }
+    static PROBE: bipbridge::card_pay::ToolServer =
+        bipbridge::card_pay::ToolServer { name: "probe", instructions: "", tools: Vec::new, call: probe };
+    let dir = tempfile::tempdir().unwrap();
+    let (config, _agent) = setup(dir.path(), "http://127.0.0.1:9");
+    let mut tokens = indexmap::IndexMap::new();
+    tokens.insert("coach".to_string(), bipbridge::agent_tools::digest("tok-coach-0123456789abcdef"));
+    bipbridge::agent_tools::save_tokens(&config, &tokens).unwrap();
+    let app = common::TestApp::new(config);
+    let body = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {
+        "name": "vault_login", "arguments": {"site": "shop.example"},
+        "_meta": {bipbridge::agent_tools::CALL_SESSION_META: "api_task"}}});
+    let mut headers = axum::http::HeaderMap::new();
+    headers.insert("authorization", "Bearer tok-coach-0123456789abcdef".parse().unwrap());
+    headers.insert("accept", "application/json".parse().unwrap());
+    let _ = bipbridge::card_pay::serve(app.app.state.clone(), headers, Bytes::from(body.to_string()), &PROBE).await;
+    let seen = SEEN.lock().unwrap().clone();
+    assert_eq!(seen, Some(Some("api_task".to_string())), "the call's Hermes session inside the server's call");
+}
+
+// -- Review 3 (subtasks-redesign, 20/11, head 357a87a0c) ---------------------------------------------------------------
+
+/// Alex 20/11: short of memory a task « attend de la place », never refused, and starts again by itself. The queue
+/// (`resume_after_memory`) only ever tries its OLDEST task: when that one can't be started (its agent deleted while it
+/// waited, its agent at its cap of running tasks), the call returns 0 every minute and every task behind it waits
+/// for ever, memory free or not.
+#[tokio::test]
+async fn review3_a_waiting_task_that_cant_start_never_holds_the_others_back() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_fake, url) = gateway(1000, 10).await;
+    let (mut config, agent) = setup(dir.path(), &url);
+    config.browser.root = dir.path().join("browsers").to_string_lossy().into_owned();
+    let place = bipbridge::browsers::folder(&config, "coach");
+    std::fs::create_dir_all(place.join("profile")).unwrap();
+    std::fs::write(place.join("ports.json"), r#"{"cdp": 19600, "vnc": 19601}"#).unwrap();
+    std::fs::write(place.join("mcp.json"), r#"{"server": ["/usr/bin/podman"]}"#).unwrap();
+    let free = Arc::new(Mutex::new(Some(600u64)));
+    let mut jobs = Arc::try_unwrap(board(&config, None)).ok().unwrap();
+    let probe = free.clone();
+    jobs.memory = Arc::new(move || *probe.lock().unwrap());
+    let board = Arc::new(jobs);
+    let first = id_of(&board.create(&agent, "Comparer", "Compare trois offres.", 0.50, None).await.unwrap());
+    // the oldest waiting task's agent deleted meanwhile (its task files stay: agents_admin.rs deletes no task)
+    let mut orphan = bipbridge::jobs::load(&config, &first).unwrap();
+    orphan.insert("agent".into(), json!("ancien"));
+    let created = orphan.get("created").and_then(|v| v.as_f64()).unwrap_or(0.0);
+    orphan.insert("created".into(), json!(created - 100.0));
+    bipbridge::jobs::save(&config, &orphan).unwrap();
+    let second = id_of(&board.create(&agent, "Réserver", "Trouve un créneau chez le dentiste.", 0.50, None).await.unwrap());
+    assert_eq!(bipbridge::jobs::load(&config, &second).unwrap()["reason"], json!("memory"));
+    *free.lock().unwrap() = Some(4096);
+    for _ in 0..3 {
+        board.resume_after_memory().await; // three minutes
+    }
+    assert_eq!(board.view(&second).unwrap()["state"], "running", "memory free again, the second task still waits behind the first");
+    // review 4: the task of the deleted agent ends, plainly, instead of waiting for ever
+    let orphan = bipbridge::jobs::load(&config, &first).unwrap();
+    assert_eq!(orphan["state"], "failed", "{orphan:?}");
+    assert_eq!(orphan["error"], json!(bipbridge::jobs::AGENT_GONE));
+    let _ = board.forget(&second).await;
 }

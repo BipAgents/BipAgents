@@ -139,6 +139,242 @@ pub fn folder(config: &Config, agent: &str) -> PathBuf {
     PathBuf::from(&config.browser.root).join(agent)
 }
 
+// -- one browser per running task (Alex 19/11: several tasks of one agent truly in parallel) ---------------------------
+
+/// A task's own browser's name (its folder, container, unit): `<agent>--<task id>`. Never an agent's name: `--` is
+/// not in one (agent ids are lowercase letters, digits and single dashes).
+pub fn task_browser(agent: &str, job: &str) -> String {
+    format!("{agent}--{job}")
+}
+
+/// The agent a task's browser belongs to (`task_browser`'s name back), None for an agent's own.
+pub fn task_browser_agent(name: &str) -> Option<&str> {
+    name.split_once("--").map(|(agent, _)| agent).filter(|a| !a.is_empty())
+}
+
+/// Beside the agent's `busy`: which Hermes session (a task's run, patch 0028) uses which task browser's settings
+/// (`{session: <its mcp.json>}`); bip-browser-mcp routes that session's calls there, the others to the agent's own.
+pub const SESSIONS_FILE: &str = "sessions.json";
+
+/// The settings of the task's own browser the current call comes from (`runs::CALL_SESSION` in the agent's
+/// `SESSIONS_FILE`), None: the agent's own browser.
+pub fn task_of_call(config: &Config, agent: &str) -> Option<PathBuf> {
+    let session = crate::runs::CALL_SESSION.try_with(|s| s.clone()).ok().flatten()?;
+    let map: Value = serde_json::from_str(&std::fs::read_to_string(sessions_path(config, agent)).ok()?).ok()?;
+    Some(PathBuf::from(map.get(&session)?.as_str()?)).filter(|p| p.is_file())
+}
+
+fn sessions_path(config: &Config, agent: &str) -> PathBuf {
+    folder(config, agent).join(SESSIONS_FILE)
+}
+
+fn edit_sessions(config: &Config, agent: &str, change: impl FnOnce(&mut serde_json::Map<String, Value>)) -> std::io::Result<()> {
+    let _one = SETTINGS_WRITING.lock().unwrap_or_else(|e| e.into_inner());
+    let path = sessions_path(config, agent);
+    let mut map = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+        .and_then(|v| v.as_object().cloned())
+        .unwrap_or_default();
+    change(&mut map);
+    let partial = path.with_extension("json.part");
+    crate::py::write_with_mode(&partial.to_string_lossy(), Value::Object(map).to_string().as_bytes(), 0o600)?;
+    std::fs::rename(&partial, &path)
+}
+
+/// A folder copied whole (a profile: its logins, its history), its locks left behind (Chrome's `Singleton*`).
+fn copy_tree(from: &Path, to: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(to)?;
+    for entry in std::fs::read_dir(from)? {
+        let entry = entry?;
+        let name = entry.file_name();
+        if name.to_string_lossy().starts_with("Singleton") {
+            continue;
+        }
+        let kind = entry.file_type()?;
+        if kind.is_dir() {
+            copy_tree(&entry.path(), &to.join(&name))?;
+        } else if kind.is_file() {
+            std::fs::copy(entry.path(), to.join(&name))?;
+        }
+    }
+    Ok(())
+}
+
+/// What of a Chrome profile keeps its logins: its cookies (and their key, in « Local State »), saved logins, site
+/// storage and preferences; never its caches, history or service workers (hundreds of MB, disk).
+const LOGIN_PARTS: [&str; 10] = [
+    "Local State",
+    "Default/Preferences",
+    "Default/Secure Preferences",
+    "Default/Cookies",
+    "Default/Network",
+    "Default/Login Data",
+    "Default/Login Data For Account",
+    "Default/Web Data",
+    "Default/Local Storage",
+    "Default/Session Storage",
+];
+
+/// The agent's profile's logins (`LOGIN_PARTS`) copied into a task's own profile.
+fn copy_logins(from: &Path, to: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(to.join("Default"))?;
+    for part in LOGIN_PARTS {
+        let source = from.join(part);
+        if source.is_dir() {
+            copy_tree(&source, &to.join(part))?;
+        } else if source.is_file() {
+            std::fs::copy(&source, to.join(part))?;
+        }
+    }
+    Ok(())
+}
+
+/// The task `job` of `agent` (its Hermes session `session`) gets a browser of its own when the agent has one: its
+/// folder (a copy of the agent's profile, logins included; its DevTools secret, VNC password, ports, downloads
+/// policy, the agent's sites for sending), its settings for bip-browser-mcp (its container started at its first use,
+/// its unit written then) and the session announced in the agent's `SESSIONS_FILE`. None: the agent has no browser.
+/// A task of `agent` gets a browser of its own: the agent has one, started when used (`on_demand`, bip-browser-mcp
+/// routes the task's calls).
+pub fn gives_task_browsers(config: &Config, agent: &str) -> bool {
+    ports_of(config, agent).is_some() && on_demand(config) && hermes_says_call_session(config)
+}
+
+/// The Hermes this bridge runs says each MCP call's session (patch 0028): without it the task's calls can't be told
+/// from the agent's (bip-browser-mcp routes by session), so a task browses in the agent's browser as before. Read
+/// from its code once: `[hermes] root` (a shared Hermes), else `<hermes home>/hermes-agent` (the official install's
+/// folder, a self-install's own Hermes); no code found here: yes.
+pub fn hermes_says_call_session(config: &Config) -> bool {
+    static KNOWN: std::sync::Mutex<Option<(PathBuf, bool)>> = std::sync::Mutex::new(None);
+    let root = match config.hermes.root.trim() {
+        "" if config.hermes.home.trim().is_empty() => return true,
+        "" => Path::new(config.hermes.home.trim()).join("hermes-agent"),
+        root => PathBuf::from(root),
+    };
+    let code = root.join("tools").join("mcp_tool_handlers.py");
+    let mut known = KNOWN.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((_, says)) = known.as_ref().filter(|(seen, _)| *seen == code) {
+        return *says;
+    }
+    let says = std::fs::read_to_string(&code).map(|text| text.contains("hermes-agent/session_id")).unwrap_or(true);
+    if !says {
+        tracing::info!(code = %code.display(), "Hermes without the call's session (patch 0028): tasks use their agent's browser");
+    }
+    *known = Some((code, says));
+    says
+}
+
+pub fn setup_task(config: &Config, agent: &str, job: &str, session: &str) -> anyhow::Result<Option<PathBuf>> {
+    if !gives_task_browsers(config, agent) {
+        return Ok(None);
+    }
+    let parent = folder(config, agent);
+    // the engine the agent's own browser runs with (its settings), else this machine's
+    let engine = std::fs::read_to_string(parent.join("mcp.json"))
+        .ok()
+        .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+        .and_then(|v| v["server"][0].as_str().map(str::to_string))
+        .or_else(|| runtime(config))
+        .ok_or_else(|| BrowserError("no container runtime for a task's browser".into()))?;
+    let id = task_browser(agent, job);
+    let place = folder(config, &id);
+    std::fs::create_dir_all(&place)?;
+    crate::py::chmod(&place.to_string_lossy(), 0o700)?;
+    // ports picked and written under one lock, before the profile's copy: two tasks set up at once never share them
+    let ports = {
+        let _one = PORTS_PICKING.lock().unwrap_or_else(|e| e.into_inner());
+        match ports_of(config, &id) {
+            Some(p) if !p.is_empty() => p,
+            _ => {
+                let picked = pick_ports(config, &free)?;
+                write_ports(&place, &picked)?;
+                picked
+            }
+        }
+    };
+    if !place.join("profile").exists() {
+        copy_logins(&parent.join("profile"), &place.join("profile"))?;
+    }
+    write_downloads_policy(&place)?;
+    let password = place.join("vnc.pass");
+    if !password.exists() {
+        std::fs::write(&password, format!("{}\n", vnc_password()))?;
+    }
+    crate::py::chmod(&password.to_string_lossy(), 0o600)?;
+    ensure_cdp_secret(&place)?;
+    // through the agents' proxy as the agent's own browser is (send_guard.rs): its address in the proxy's policy,
+    // as the agent's (`browsers_map`), before it ever starts
+    let egress = crate::send_guard::browser_egress(config, &engine, ports.get("cdp").copied().unwrap_or(0));
+    if egress.is_some() {
+        crate::sandbox_sites::ensure_agent(config, agent)?;
+    }
+    let text = systemd_unit(&id, &engine, &run_args(config, &id, &ports, &engine, gpu_available(config), egress.as_ref()));
+    let unit = Host::real(config).unit_path(&id);
+    let systemctl = pyx::which("systemctl").unwrap_or_else(|| "systemctl".into());
+    let mut settings = proxy_config(config, &id, &engine, &ports);
+    settings["unit"] = json!({"path": unit.to_string_lossy(), "text": text});
+    settings["profile"] = json!(place.join("profile").to_string_lossy());
+    settings["reload"] = json!([systemctl, "--user", "daemon-reload"]);
+    settings["task"] = json!({"agent": agent, "job": job});
+    // what it may send forms to: the agent's own file, read live (the person's « Oui » to the task lands there)
+    settings["send_sites"] = json!(parent.join(crate::browser_mcp::SEND_SITES_FILE).to_string_lossy());
+    let path = place.join("mcp.json");
+    {
+        let _one = SETTINGS_WRITING.lock().unwrap_or_else(|e| e.into_inner());
+        write_proxy_settings(&path, &settings)?;
+    }
+    let shown = path.to_string_lossy().into_owned();
+    edit_sessions(config, agent, |map| {
+        map.insert(session.to_string(), json!(shown));
+    })?;
+    tracing::info!(agent = %agent, job = %job, cdp = ports.get("cdp").copied().unwrap_or(0), "a task's own browser set up");
+    Ok(Some(path))
+}
+
+/// Held from `pick_ports` to the `ports.json` written (a task's browser set up, an agent's): no two browsers pick the
+/// same free ports.
+pub static PORTS_PICKING: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn write_ports(place: &Path, ports: &IndexMap<String, u16>) -> std::io::Result<()> {
+    let value = Value::Object(ports.iter().map(|(k, v)| (k.clone(), json!(v))).collect());
+    std::fs::write(place.join("ports.json"), format!("{}\n", crate::py::dumps(&value)))
+}
+
+/// The task's browser gone with it (done, failed, forgotten): its container stopped, its unit removed, what it
+/// downloaded moved to the agent's downloads (`/telechargements`), its folder deleted, its session forgotten.
+pub async fn remove_task(config: &Config, agent: &str, job: &str) {
+    let id = task_browser(agent, job);
+    let place = folder(config, &id);
+    if !place.exists() {
+        return;
+    }
+    let exec = default_exec();
+    let unit = Host::real(config).unit_path(&id);
+    exec(args(&["systemctl", "--user", "stop", &container(&id)])).await;
+    if unit.exists() {
+        let _ = std::fs::remove_file(&unit);
+        exec(args(&["systemctl", "--user", "daemon-reload"])).await;
+    }
+    let downloads = downloads_dir(config, &id);
+    if let Ok(entries) = std::fs::read_dir(&downloads) {
+        let to = downloads_dir(config, agent);
+        let _ = std::fs::create_dir_all(&to);
+        for entry in entries.flatten() {
+            let _ = std::fs::rename(entry.path(), to.join(entry.file_name()));
+        }
+    }
+    let shown = place.join("mcp.json").to_string_lossy().into_owned();
+    let _ = edit_sessions(config, agent, |map| map.retain(|_, v| v.as_str() != Some(shown.as_str())));
+    if let Err(exc) = std::fs::remove_dir_all(&place) {
+        tracing::warn!(agent = %agent, job = %job, error = %exc, "a task's browser folder not removed");
+    }
+    // its address out of the proxy's policy
+    if crate::send_guard::browser_routed(config) {
+        let _ = crate::sandbox_sites::ensure_policy(config);
+    }
+    tracing::info!(agent = %agent, job = %job, "a task's own browser removed");
+}
+
 /// Where the agent finds what its browser downloaded (sent_files.rs, service_files.rs): `/telechargements/<name>`.
 pub const DOWNLOADS: &str = "/telechargements";
 /// Chrome's download folder in the container: inside its profile, so it is on this machine (and kept between starts).
@@ -148,6 +384,17 @@ const POLICY_DIRS: [&str; 2] = ["/etc/opt/chrome/policies/managed", "/etc/chromi
 const POLICY_NAME: &str = "bipagents-downloads.json";
 /// Downloads kept so long (the agent hands them over within its task).
 pub const DOWNLOADS_KEPT_DAYS: u64 = 30;
+
+/// Where `/telechargements` is for the current call: the task's own browser's downloads first (moved to the agent's
+/// at the task's end, `remove_task`), then the agent's.
+pub fn downloads_dirs(config: &Config, agent: &str) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    if let Some(own) = task_of_call(config, agent).and_then(|settings| settings.parent().map(Path::to_path_buf)) {
+        out.push(own.join("profile").join("Downloads"));
+    }
+    out.push(downloads_dir(config, agent));
+    out
+}
 
 /// The agent's browser downloads on this machine.
 pub fn downloads_dir(config: &Config, agent: &str) -> PathBuf {
@@ -324,10 +571,9 @@ pub fn refresh_all_proxy_settings(config: &Config) {
 /// The latest finished downloads, as the agent sees them (« /telechargements/x.pdf (34 KB) »); older than
 /// `DOWNLOADS_KEPT_DAYS` removed on the way. Never through a link.
 pub fn recent_downloads(config: &Config, agent: &str, n: usize) -> Vec<String> {
-    let dir = downloads_dir(config, agent);
-    let Ok(entries) = std::fs::read_dir(&dir) else { return Vec::new() };
     let keep = Duration::from_secs(DOWNLOADS_KEPT_DAYS * 86400);
     let mut files: Vec<(std::time::SystemTime, String, u64)> = Vec::new();
+    let entries = downloads_dirs(config, agent).into_iter().filter_map(|dir| std::fs::read_dir(dir).ok()).flatten();
     for entry in entries.flatten() {
         let Ok(meta) = entry.path().symlink_metadata() else { continue };
         let name = entry.file_name().to_string_lossy().into_owned();
@@ -1247,8 +1493,13 @@ pub fn mcp_server(engine: &str, agent: &str, proxy: Option<&Path>) -> Value {
         Some(p) => vec![proxy_binary(), p.to_string_lossy().into_owned()],
         None => vec![engine.into(), "exec".into(), "-i".into(), container(agent), "/opt/stealth/mcp.sh".into()],
     };
-    json!({"command": command[0], "args": command[1..], "connect_timeout": 90, "timeout": 120,
-           "tools": {"exclude": ["get_instance_state"]}})
+    let mut server = json!({"command": command[0], "args": command[1..], "connect_timeout": 90, "timeout": 120,
+           "tools": {"exclude": ["get_instance_state"]}});
+    if proxy.is_some() {
+        // each call says its Hermes session (patch 0028): a task's « Oui » to « Envoyer sur ce site ? » is its own
+        server["call_context"] = json!(true);
+    }
+    server
 }
 
 /// bip-browser-mcp's settings for the agent.
@@ -1318,10 +1569,18 @@ pub async fn setup_with(
     };
     let name = agent.name.as_str();
     let place = folder(config, name);
-    let ports = match ports_of(config, name) {
-        // none yet, or from before this install had a range of its own
-        Some(p) if !p.is_empty() && in_range(config, &p) => p,
-        _ => pick_ports(config, &*host.is_free)?,
+    let ports = {
+        let _one = PORTS_PICKING.lock().unwrap_or_else(|e| e.into_inner());
+        match ports_of(config, name) {
+            // none yet, or from before this install had a range of its own
+            Some(p) if !p.is_empty() && in_range(config, &p) => p,
+            _ => {
+                let picked = pick_ports(config, &*host.is_free)?;
+                std::fs::create_dir_all(&place)?;
+                write_ports(&place, &picked)?;
+                picked
+            }
+        }
     };
     let unit = host.unit_path(name);
     // With `idle_minutes`, a container never set up is left for its first use (bip-browser-mcp writes its unit).
@@ -1336,8 +1595,7 @@ pub async fn setup_with(
     }
     crate::py::chmod(&password.to_string_lossy(), 0o600)?;
     let secret = ensure_cdp_secret(&place)?;
-    let ports_value = Value::Object(ports.iter().map(|(k, v)| (k.clone(), json!(v))).collect());
-    std::fs::write(place.join("ports.json"), format!("{}\n", crate::py::dumps(&ports_value)))?;
+    write_ports(&place, &ports)?;
     // what its browser may send forms to (form_send.rs, audit 1.2)
     crate::form_send::refresh(config, name);
 
@@ -1523,6 +1781,10 @@ pub fn with_proxy(data: &mut Yaml, proxy: &str) {
     if command.ends_with(PROXY_BINARY) && command != proxy {
         server.insert("command", Yaml::str(proxy));
     }
+    // our proxy reads each call's Hermes session (patch 0028): asked of Hermes for the older entries too
+    if server.get("command").and_then(|c| c.as_str()).is_some_and(|c| c.ends_with(PROXY_BINARY)) {
+        server.insert("call_context", Yaml::Bool(true));
+    }
 }
 
 /// The agents whose browser tools run now through another program than this bridge's `bip-browser-mcp`: a
@@ -1676,6 +1938,17 @@ pub async fn remove(config: &Config, agent: &str, run: &Run) -> anyhow::Result<(
 }
 
 pub async fn remove_with(host: &Host, config: &Config, agent: &str, run: &Run) -> anyhow::Result<()> {
+    // its tasks' own browsers first (copies of its logins)
+    if task_browser_agent(agent).is_none() {
+        let tasks: Vec<String> = std::fs::read_dir(&config.browser.root)
+            .map(|entries| entries.flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect())
+            .unwrap_or_default();
+        for name in tasks.iter().filter(|n| task_browser_agent(n) == Some(agent)) {
+            if let Some((_, job)) = name.split_once("--") {
+                remove_task(config, agent, job).await;
+            }
+        }
+    }
     let unit = host.unit_path(agent);
     let stem = container(agent);
     if unit.exists() {

@@ -727,6 +727,41 @@ struct HubInner {
     pending: IndexMap<(String, String, String), Dict>,
 }
 
+/// The long-work safety net (`handoff`, `rescue`) may hand this run to a background task: never a family agent's nor
+/// a relative's turn, where tasks are closed (family_agent.rs, agent_shares.rs).
+pub fn may_hand_off(config: &crate::config::Config, agent: &str, run_id: &str) -> bool {
+    !crate::family_agent::is_family(config, agent) && !crate::agent_shares::relative_run(config, run_id)
+}
+
+/// `tokio::spawn` keeping the call's session (`CALL_SESSION`, a task-local a spawned task does not inherit): the MCP
+/// endpoints run a call's work this way.
+pub fn spawn_with_call_session<F>(work: F) -> tokio::task::JoinHandle<F::Output>
+where
+    F: std::future::Future + Send + 'static,
+    F::Output: Send + 'static,
+{
+    let session = CALL_SESSION.try_with(|s| s.clone()).ok().flatten();
+    tokio::spawn(CALL_SESSION.scope(session, work))
+}
+
+/// `tokio::task::spawn_blocking` keeping the call's session (`CALL_SESSION`): a task's file reads find its own
+/// browser's downloads (browsers.rs `downloads_dirs`).
+pub fn blocking_with_call_session<F, R>(work: F) -> tokio::task::JoinHandle<R>
+where
+    F: FnOnce() -> R + Send + 'static,
+    R: Send + 'static,
+{
+    let session = CALL_SESSION.try_with(|s| s.clone()).ok().flatten();
+    tokio::task::spawn_blocking(move || CALL_SESSION.sync_scope(session, work))
+}
+
+tokio::task_local! {
+    /// The Hermes session a call of the bridge's tools comes from, as Hermes says it in the call's `_meta` (patch
+    /// 0028, agent_tools.rs `mcp`): `turn_of` then takes that session's run instead of telling runs apart by their
+    /// last tool. None: an older Hermes, or a call from no session.
+    pub static CALL_SESSION: Option<String>;
+}
+
 pub struct RunHub {
     pub hermes: HermesClient,
     pub push: Option<Arc<PushService>>,
@@ -2986,28 +3021,38 @@ more steps in this turn. Don't repeat what failed: change approach.", crate::loo
     }
 
     /// The turn a call of the bridge's tool `tool` by `agent` belongs to (loop_brake.rs, its MCP counts): the agent's
-    /// run going on that the hub follows; with several, the one whose last call was this tool, else the one that
-    /// called a tool last. None: no run of the agent followed (a routine, Hermes' cron).
+    /// run going on that the hub follows; with several, the one run inside a call of this tool right now. Never a
+    /// guess (Alex 19/11, sub-tasks: several tasks of one agent run at once): two runs inside this tool, or several
+    /// runs and none in it, give None, as no run followed does (a routine, Hermes' cron) — until Hermes says the run
+    /// in the call itself.
     pub fn turn_of(&self, agent: &str, tool: &str) -> Option<crate::loop_brake::Turn> {
         let tool = crate::loop_brake::bare(tool);
         let inner = lock(&self.inner);
-        let mut best: Option<((bool, f64), crate::loop_brake::Turn)> = None;
+        // the call said its session (Hermes patch 0028): that session's run, or none — never a guess
+        if let Some(session) = CALL_SESSION.try_with(|s| s.clone()).ok().flatten() {
+            return inner.subs.values().filter(|sub| sub.agent.name == agent).find_map(|sub| {
+                let st = lock(&sub.state);
+                (st.session_id.as_deref() == Some(session.as_str()) && !st.finished && st.terminal.is_none()).then(|| {
+                    crate::loop_brake::Turn { run_id: sub.run_id.clone(), background: st.background, banned: st.turn.banned.clone() }
+                })
+            });
+        }
+        let mut live: Vec<(bool, crate::loop_brake::Turn)> = Vec::new();
         for sub in inner.subs.values().filter(|sub| sub.agent.name == agent) {
             let st = lock(&sub.state);
-            if st.finished || st.terminal.is_some() || st.braked {
+            if st.finished || st.terminal.is_some() || st.braked || live.iter().any(|(_, t)| t.run_id == sub.run_id) {
                 continue;
             }
-            let key = (st.last_tool == tool, st.last_tool_at.max(st.followed_since));
-            if best.as_ref().is_none_or(|(k, _)| key > *k) {
-                let turn = crate::loop_brake::Turn {
-                    run_id: sub.run_id.clone(),
-                    background: st.background,
-                    banned: st.turn.banned.clone(),
-                };
-                best = Some((key, turn));
-            }
+            let turn =
+                crate::loop_brake::Turn { run_id: sub.run_id.clone(), background: st.background, banned: st.turn.banned.clone() };
+            live.push((st.tools_open > 0 && st.last_tool == tool, turn));
         }
-        best.map(|(_, turn)| turn)
+        let inside: Vec<&crate::loop_brake::Turn> = live.iter().filter(|(i, _)| *i).map(|(_, t)| t).collect();
+        match (inside.as_slice(), live.as_slice()) {
+            ([one], _) => Some((*one).clone()),
+            ([], [(_, only)]) => Some(only.clone()),
+            _ => None,
+        }
     }
 
     /// The long-work safety net (decided 2026-10-22, independent of the model): a run in a person's conversation (not a
@@ -3081,7 +3126,7 @@ more steps in this turn. Don't repeat what failed: change approach.", crate::loo
         }
         let Some(shared) = self.config.as_ref() else { return };
         let jobs = shared.get().jobs.clone();
-        if !jobs.handoff {
+        if !jobs.handoff || !may_hand_off(&shared.get(), &sub.agent.name, &sub.run_id) {
             return;
         }
         let window = jobs.handoff_browser_window.max(1) as usize;
@@ -3123,7 +3168,7 @@ more steps in this turn. Don't repeat what failed: change approach.", crate::loo
         }
         let Some(shared) = self.config.clone() else { return };
         let config = shared.get();
-        if !config.jobs.handoff || !config.jobs.handoff_rescue {
+        if !config.jobs.handoff || !config.jobs.handoff_rescue || !may_hand_off(&config, &sub.agent.name, &sub.run_id) {
             return;
         }
         let output = terminal.final_text();
@@ -4234,10 +4279,125 @@ mod tests {
         let turn = |tool: &str| hub.turn_of("daily", tool).map(|t| (t.run_id, t.background));
         assert_eq!(turn("mcp__bipagents__reminders_add"), Some(("run_chat".into(), false)));
         assert_eq!(turn("notebook_search"), Some(("run_task".into(), true)));
-        assert_eq!(turn("calendar_add"), Some(("run_task".into(), true)), "else the one that called a tool last");
+        // several runs, none in this tool: no guess (19/11, several tasks of one agent at once)
+        assert_eq!(turn("calendar_add"), None);
         assert_eq!(hub.turn_of("other", "calendar_add"), None);
         lock(&task.state).finished = true;
         assert_eq!(turn("notebook_search"), Some(("run_chat".into(), false)));
+    }
+
+    /// Review 1 (subtasks-redesign, 19/11): two background tasks of ONE agent run at once and both call the same bridge
+    /// tool (two research tasks making their page, two tasks searching the Carnet). `turn_of` picks the run that called
+    /// it last, so the first task's call is counted, braked, filed (made_files, the Carnet's line) and its card placed in
+    /// the second task's turn. A guess between two runs inside the same tool must not be made (vault_line.rs
+    /// `turn_of_call` refuses it): no turn rather than the wrong one.
+    #[tokio::test]
+    async fn two_tasks_of_one_agent_in_the_same_tool_are_not_told_apart_by_a_guess() {
+        let hub = RunHub::new(HermesClient::new(reqwest::Client::new()), None, 7200, None);
+        let agent = AgentConfig { name: "daily".into(), ..Default::default() };
+        let run = |id: &str| {
+            let sub = Arc::new(RunSubscription::new(agent.clone(), id));
+            lock(&hub.inner).subs.insert(sub.key(), sub.clone());
+            sub
+        };
+        let started = |tool: &str| SSEEvent::new("tool.started", json!({"tool": tool}).as_object().cloned().unwrap(), "{}");
+        let (a, b) = (run("run_task_a"), run("run_task_b"));
+        hub.mark_background("daily", "run_task_a");
+        hub.mark_background("daily", "run_task_b");
+        hub.dispatch(&a, started("mcp__bipagents__create_page"));
+        hub.dispatch(&b, started("mcp__bipagents__create_page"));
+        // task A's create_page reaches the bridge now: which turn is it?
+        let turn = hub.turn_of("daily", "mcp__bipagents__create_page").map(|t| t.run_id);
+        assert_eq!(turn, None, "a guess between two tasks inside the same tool: {turn:?}");
+    }
+
+    /// Review 2 (subtasks-redesign, 20/11): without the call's session (an older Hermes, an own Hermes without patch
+    /// 0028) `turn_of` takes « the one run inside a call of this tool right now » by its LAST tool started, not by a
+    /// call still open: a task that called start_task a minute ago (refused, or proposed) and thinks now, while the
+    /// person's own start_task reaches the bridge before its `tool.started` event: the person's call is the task's
+    /// (refused « you are working in a background task », counted on its brake). `runs_in_tool` checks `tools_open`.
+    #[tokio::test]
+    async fn without_the_calls_session_a_run_out_of_the_tool_is_never_its_caller() {
+        let hub = RunHub::new(HermesClient::new(reqwest::Client::new()), None, 7200, None);
+        let agent = AgentConfig { name: "daily".into(), ..Default::default() };
+        let run = |id: &str| {
+            let sub = Arc::new(RunSubscription::new(agent.clone(), id));
+            lock(&hub.inner).subs.insert(sub.key(), sub.clone());
+            sub
+        };
+        let event = |kind: &str, tool: &str| SSEEvent::new(kind, json!({"tool": tool}).as_object().cloned().unwrap(), "{}");
+        let (_chat, task) = (run("run_chat"), run("run_task"));
+        hub.mark_background("daily", "run_task");
+        hub.dispatch(&task, event("tool.started", "mcp__bipagents__start_task"));
+        hub.dispatch(&task, event("tool.completed", "mcp__bipagents__start_task"));
+        // the person's start_task now, its event not seen yet
+        let turn = hub.turn_of("daily", "mcp__bipagents__start_task").map(|t| t.run_id);
+        assert_ne!(turn.as_deref(), Some("run_task"), "a run out of the tool taken for the caller");
+    }
+
+    /// Hermes patch 0028: a call of the bridge's tools says its Hermes session (`_meta`, agent_tools.rs `CALL_SESSION`):
+    /// the turn is that session's run, whatever the others do, and no guess at all when the session has none here.
+    #[tokio::test]
+    async fn a_call_that_says_its_session_is_that_sessions_turn() {
+        let hub = RunHub::new(HermesClient::new(reqwest::Client::new()), None, 7200, None);
+        let agent = AgentConfig { name: "daily".into(), ..Default::default() };
+        let run = |id: &str, session: &str| {
+            let sub = Arc::new(RunSubscription::new(agent.clone(), id));
+            lock(&sub.state).session_id = Some(session.into());
+            lock(&hub.inner).subs.insert(sub.key(), sub.clone());
+            sub
+        };
+        let started = |tool: &str| SSEEvent::new("tool.started", json!({"tool": tool}).as_object().cloned().unwrap(), "{}");
+        let (a, b) = (run("run_task_a", "api_a"), run("run_task_b", "api_b"));
+        hub.mark_background("daily", "run_task_a");
+        hub.mark_background("daily", "run_task_b");
+        hub.dispatch(&a, started("mcp__bipagents__create_page"));
+        hub.dispatch(&b, started("mcp__bipagents__create_page"));
+        let of = |session: &'static str| {
+            let hub = &hub;
+            CALL_SESSION.sync_scope(Some(session.to_string()), || hub.turn_of("daily", "mcp__bipagents__create_page").map(|t| t.run_id))
+        };
+        assert_eq!(of("api_a").as_deref(), Some("run_task_a"));
+        assert_eq!(of("api_b").as_deref(), Some("run_task_b"));
+        assert_eq!(of("api_gone"), None, "a session with no run here: no guess");
+    }
+
+    /// Tasks are closed to a family agent and in a relative's turn (family_agent.rs `TOOLS`, agent_shares.rs
+    /// `closed_tool`): the long-work safety net never steers nor starts one there either (its task would have been the
+    /// place owner's alone, unseen by the member who asked, review 1 of subtasks-redesign).
+    #[test]
+    fn the_safety_net_never_hands_a_family_agents_or_a_relatives_turn_to_a_task() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = crate::config::parse_config(
+            &json!({"bridge_key": "k".repeat(32), "data_dir": dir.path().to_string_lossy()}),
+            None,
+        )
+        .unwrap();
+        assert!(may_hand_off(&config, "vie", "run_1"));
+        std::fs::write(dir.path().join("family-agent.json"), json!({"agent": "maison", "agents": ["maison"]}).to_string()).unwrap();
+        assert!(!may_hand_off(&config, "maison", "run_2"), "the family's agent");
+        assert!(may_hand_off(&config, "vie", "run_3"));
+        std::fs::write(
+            dir.path().join("agent-shares.json"),
+            json!({"conversations": {"c1": {"run": {"id": "run_4"}}}}).to_string(),
+        )
+        .unwrap();
+        assert!(!may_hand_off(&config, "vie", "run_4"), "a relative's turn");
+    }
+
+    /// The MCP endpoints run a call's work in a task of its own (`tokio::spawn`): a task-local is not inherited, so
+    /// the call's session (patch 0028) was lost there and a person's `start_task` beside a running task was taken
+    /// for the task's own, by timing (the parallel black-box run's 1-in-5 failure, 20/11). The work keeps it.
+    #[tokio::test]
+    async fn the_work_of_a_call_keeps_its_session() {
+        let seen = CALL_SESSION
+            .scope(Some("api_person".into()), async {
+                spawn_with_call_session(async { CALL_SESSION.try_with(|s| s.clone()).ok().flatten() }).await.unwrap()
+            })
+            .await;
+        assert_eq!(seen.as_deref(), Some("api_person"));
+        let none = spawn_with_call_session(async { CALL_SESSION.try_with(|s| s.clone()).ok().flatten() }).await.unwrap();
+        assert_eq!(none, None, "no call session: none in the work either");
     }
 
     /// urgent_pay.rs `refuses_payment` tells the rehearsal's own pay_with_card from another turn of the agent by the

@@ -358,7 +358,9 @@ pub fn build(agent: &str, context: &Context, notice: &Notice, pointer: &Pointer)
         Some(event) => event.push(pointer),
         None => {
             let Notice::Silent { reason, extra } = notice else { unreachable!("only a silent notice has no event") };
-            Built { payload: silent_payload(agent, reason, extra), push_type: "background", priority: 5, collapse_id: None }
+            // the sub-tasks' hints (jobs.rs `HintJob`): one per agent waits on a phone, the latest replacing it
+            let collapse_id = (reason == "jobs").then(|| format!("jobs:{agent}"));
+            Built { payload: silent_payload(agent, reason, extra), push_type: "background", priority: 5, collapse_id }
         }
     }
 }
