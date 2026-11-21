@@ -183,7 +183,8 @@ fn unmark_bots(config: &Config) {
 }
 
 /// `key`'s lines taken out of a gateway's `.env`, the others kept as they are: written only when there is one, through
-/// a temporary file renamed over it with its mode (profile_files.rs `write_atomic`). Each start does this for every
+/// a temporary file renamed over it with its mode, owner and group (profile_files.rs `write_atomic_keeping_owner`:
+/// when the bridge may not keep them, the file stays as it is and the error is logged). Each start does this for every
 /// gateway: until review 2 of 21/11 the file was written again in place each time, and a full disk would have left the
 /// hub's `.env` (its model keys) empty. Whether it was written.
 fn drop_env_line(path: &Path, key: &str) -> std::io::Result<bool> {
@@ -197,7 +198,7 @@ fn drop_env_line(path: &Path, key: &str) -> std::io::Result<bool> {
         return Ok(false);
     }
     let kept: String = text.split_inclusive('\n').filter(|line| !ours(line)).collect();
-    crate::profile_files::write_atomic(path, kept.as_bytes())?;
+    crate::profile_files::write_atomic_keeping_owner(path, kept.as_bytes())?;
     Ok(true)
 }
 
@@ -1167,7 +1168,10 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&env).unwrap(), "CUSTOM_MODEL_API_KEY=sk-hub\nAPI_SERVER_KEY=k\n");
         // with it: only that line out, the rest as it was (no newline added at the end), its mode kept, no leftover
         std::fs::write(&env, "CUSTOM_MODEL_API_KEY=sk-hub\nHERMES_PEER_BIP_KEY=old\n# a note\nAPI_SERVER_KEY=k").unwrap();
+        let owner = |m: std::fs::Metadata| (std::os::unix::fs::MetadataExt::uid(&m), std::os::unix::fs::MetadataExt::gid(&m));
+        let before = owner(std::fs::metadata(&env).unwrap());
         assert!(drop_env_line(&env, key).unwrap());
+        assert_eq!(owner(std::fs::metadata(&env).unwrap()), before); // its owner and group too (profile_files.rs test)
         assert_eq!(std::fs::read_to_string(&env).unwrap(), "CUSTOM_MODEL_API_KEY=sk-hub\n# a note\nAPI_SERVER_KEY=k");
         assert_eq!(std::fs::metadata(&env).unwrap().permissions().mode() & 0o777, 0o640);
         let names: Vec<String> =

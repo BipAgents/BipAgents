@@ -148,6 +148,41 @@ pub fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
 /// `bytes` in `path` with `mode`, through a temporary file beside it synced to disk before the rename, the folder
 /// after it: a reader, or a power cut, finds the old file or the new one, never half of one.
 pub fn write_atomic_with(path: &Path, bytes: &[u8], mode: u32) -> std::io::Result<()> {
+    write_atomic_then(path, bytes, mode, |_| Ok(()))
+}
+
+/// [`write_atomic`] that keeps the old file's owner and group as well as its mode (a gateway's `.env`: its Hermes may
+/// read it as another user, peers.rs `drop_env_line`). The temporary file gets them before the rename; when it can't
+/// (the bridge isn't allowed to give a file to that owner or group), nothing is written and the old file stays as it
+/// was. The file must exist.
+pub fn write_atomic_keeping_owner(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    write_keeping_owner(path, bytes, |file, uid, gid| std::os::unix::fs::chown(file, Some(uid), Some(gid)))
+}
+
+/// [`write_atomic_keeping_owner`] with its `chown` (tests: one that refuses).
+fn write_keeping_owner(
+    path: &Path,
+    bytes: &[u8],
+    chown: impl FnOnce(&Path, u32, u32) -> std::io::Result<()>,
+) -> std::io::Result<()> {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    let old = std::fs::metadata(path)?;
+    let (mode, uid, gid) = (old.permissions().mode() & 0o7777, old.uid(), old.gid());
+    write_atomic_then(path, bytes, mode, |temporary| {
+        chown(temporary, uid, gid)?;
+        // (a change of owner may clear set-id bits: the mode once more)
+        std::fs::set_permissions(temporary, std::fs::Permissions::from_mode(mode))
+    })
+}
+
+/// [`write_atomic_with`], `before_rename` run on the temporary file once written and synced (an error: nothing
+/// renamed, the temporary file removed).
+fn write_atomic_then(
+    path: &Path,
+    bytes: &[u8],
+    mode: u32,
+    before_rename: impl FnOnce(&Path) -> std::io::Result<()>,
+) -> std::io::Result<()> {
     use std::io::Write;
     use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
     let folder = folder_of(path);
@@ -162,6 +197,8 @@ pub fn write_atomic_with(path: &Path, bytes: &[u8], mode: u32) -> std::io::Resul
         fh.set_permissions(std::fs::Permissions::from_mode(mode))?; // whatever the umask
         fh.write_all(bytes)?;
         fh.sync_all()?;
+        drop(fh);
+        before_rename(&temporary)?;
         std::fs::rename(&temporary, path)
     })();
     if written.is_err() {
@@ -487,6 +524,48 @@ pub fn reconcile_all(config: &Config) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A gateway's `.env` rewritten (peers.rs `drop_env_line`) keeps its owner and group as well as its mode; when the
+    /// bridge may not give them to the new file, the old one stays as it was (coordinator 21/11).
+    #[test]
+    fn a_file_written_again_keeps_its_owner_and_group() {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        let dir = tempfile::tempdir().unwrap();
+        let env = dir.path().join(".env");
+        std::fs::write(&env, "A=1\nB=2\n").unwrap();
+        std::fs::set_permissions(&env, std::fs::Permissions::from_mode(0o640)).unwrap();
+        // a group of this user other than the file's (the test's own machine may have none: then only the rest)
+        let mine = std::fs::metadata(&env).unwrap().gid();
+        let mut groups = vec![0 as libc::gid_t; 64];
+        let n = unsafe { libc::getgroups(groups.len() as i32, groups.as_mut_ptr()) };
+        let other = groups[..n.max(0) as usize].iter().copied().find(|g| *g != mine);
+        if let Some(gid) = other {
+            std::os::unix::fs::chown(&env, None, Some(gid)).unwrap();
+        }
+        let before = std::fs::metadata(&env).unwrap();
+        write_atomic_keeping_owner(&env, b"A=1\n").unwrap();
+        let after = std::fs::metadata(&env).unwrap();
+        assert_eq!(std::fs::read_to_string(&env).unwrap(), "A=1\n");
+        assert_eq!((after.uid(), after.gid(), after.mode() & 0o7777), (before.uid(), before.gid(), 0o640), "{other:?}");
+        // the owner asked for is the old file's, given to the temporary file before the rename
+        let asked = std::sync::Mutex::new(None);
+        write_keeping_owner(&env, b"A=2\n", |file, uid, gid| {
+            *asked.lock().unwrap() = Some((file.file_name().unwrap().to_string_lossy().into_owned(), uid, gid));
+            std::os::unix::fs::chown(file, Some(uid), Some(gid))
+        })
+        .unwrap();
+        assert_eq!(asked.into_inner().unwrap(), Some(("..env.bipagents-tmp".to_string(), before.uid(), before.gid())));
+        // not allowed (another owner, the bridge not root): nothing written, nothing left beside it
+        let refused = write_keeping_owner(&env, b"", |_, _, _| Err(std::io::Error::from_raw_os_error(libc::EPERM)));
+        assert!(refused.is_err());
+        assert_eq!(std::fs::read_to_string(&env).unwrap(), "A=2\n");
+        let names: Vec<String> =
+            std::fs::read_dir(dir.path()).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+        assert_eq!(names, [".env"]);
+        // no file: an error, none made
+        assert!(write_atomic_keeping_owner(&dir.path().join("missing"), b"x").is_err());
+        assert!(!dir.path().join("missing").exists());
+    }
 
     #[test]
     fn a_hands_off_profile_gets_only_the_bridge_tools_entry() {
