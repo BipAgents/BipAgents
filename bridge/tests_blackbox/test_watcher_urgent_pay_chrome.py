@@ -32,7 +32,7 @@ class Shop:
                 if self.path.startswith("/produit"):
                     word = "En stock" if shop.in_stock else "Rupture de stock"
                     body = f"<!doctype html><html lang=fr><body><h1>Billet Stromae</h1><p id=stock>{word}</p>" \
-                           f"<p>45,00 €</p><a href=selects.html>Commander</a></body></html>".encode()
+                           f"<p>45,00 €</p><a href=selects.html?total=45,00%20%E2%82%AC>Commander</a></body></html>".encode()
                     self.send_response(200)
                     self.send_header("content-type", "text/html; charset=utf-8")
                     self.send_header("content-length", str(len(body)))
@@ -64,7 +64,7 @@ def journey(bridges, fakes, window=None):
     shop.in_stock = True
     assert shop.watch() == "en stock"
     # its turn: the checkout opened in the agent's browser, then pay_with_card
-    browser.open(shop.base + "/selects.html")
+    browser.open(shop.base + "/selects.html?total=45,00%20%E2%82%AC")
     side = HermesSide(bridge, {**ARGS, "card": "billets"})
     assert side.got_question.wait(30), "no question"
     gate = unattended_ask(fakes, bridge, side.asked, "r1")
@@ -90,7 +90,7 @@ def test_in_stock_urgent_push_code_paid_in_the_real_page(bridges, fakes):
         assert side.done.wait(60) and side.result["isError"] is False, side.result
         values = browser.values()["selects.html"]
         assert values["numero"] == NUMBER and values["crypto"] == CODE and values["mois"] == "12"
-        confirmed = tool(bridge, "confirm_payment", {"button": "Valider le paiement"})
+        confirmed = tool(bridge, "confirm_payment", {"button": "Valider le paiement", "total": "45,00 €"})
         assert "moved on" in confirmed["content"][0]["text"], confirmed
         assert list(browser.values()) == ["done.html"]
         print(f"\nfrom the push to the page paid: {time.monotonic() - started:.1f} s")
@@ -109,7 +109,7 @@ def test_in_stock_nobody_answers_the_cart_waits(bridges, fakes):
         assert values["numero"] == "" and values["crypto"] == ""   # nothing typed, the page as the agent left it
         assert wait_until(lambda: [c for c in approvals(bridge) if c["run_id"].startswith("bip-cart-")], timeout=10)
         [cart] = [c for c in approvals(bridge) if c["run_id"].startswith("bip-cart-")]
-        assert f"<{shop.base}/selects.html>" in cart["command"]
+        assert f"<{shop.base}/selects.html?total=45,00%20%E2%82%AC>" in cart["command"]
         gate.set()
     finally:
         browser.stop()

@@ -15,7 +15,7 @@ import httpx
 
 from bbkit.common import AUTH, HERMES_KEY, sse
 from bbkit.servers import wait_until
-from test_card_payments import CARD, CODE, NUMBER, PAY, TOKEN, FakeChrome, pay_bridge, turn_on
+from test_card_payments import CARD, CODE, LAST_ASKED, NUMBER, PAY, TOKEN, FakeChrome, pay_bridge, turn_on
 
 DEVICE = "d" * 64
 NOW = "2026-11-13T20:00:00.000Z"
@@ -33,6 +33,8 @@ class HermesSide:
 
     def __init__(self, bridge, arguments):
         self.bridge, self.arguments = bridge, arguments
+        # what the fake page shows as its total (FakeChrome `pageText`): the amount this payment asks
+        LAST_ASKED.update(amount=arguments.get("amount", ""), currency=arguments.get("currency", ""))
         self.asked, self.question, self.result = None, None, None
         self.got_question, self.done, self.reply = threading.Event(), threading.Event(), threading.Event()
         self.action = "accept"

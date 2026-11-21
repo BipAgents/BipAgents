@@ -263,6 +263,13 @@ pub async fn amount_changed(state: &AppState, agent: &AgentConfig, about: &About
     tracing::info!(target: "bipbridge::urgent_pay", agent = %agent.name, card = %card, "another amount: the cart waits");
 }
 
+/// A card payment the bridge gave up by itself (card_pay.rs `bridge_stops`): the « Panier prêt » card in the agent's main
+/// conversation, pushed with the bridge's own line, for the person to pay themselves if they want to.
+pub async fn hand_over(state: &AppState, agent: &AgentConfig, about: &About, line: &str) {
+    let card = cart_for(state, agent, about, None, None, None, line).await;
+    tracing::info!(target: "bipbridge::urgent_pay", agent = %agent.name, card = %card, "card payment given up: the cart waits");
+}
+
 /// A « Panier prêt » card of the bridge's own: kept, placed in the turn `run`'s conversation (None: the main one),
 /// pushed with `line`. Its id (`bip-cart-…`).
 async fn cart_for(

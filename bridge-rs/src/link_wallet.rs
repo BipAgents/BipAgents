@@ -492,17 +492,16 @@ pub fn tools() -> Vec<Value> {
         json!({
             "name": CONFIRM,
             "description": format!("After {PAY}: press the page's pay button (you can't use your browser \
-        meanwhile). Give the button's text as you read it before, e.g. « Pay $34.90 »."),
-            "inputSchema": {"type": "object", "properties": {
-                "button": {"type": "string", "description": "the pay button's text"},
-            }},
+        meanwhile). Give the button's text as you read it before, e.g. « Pay », and {}", crate::card_pay::CONFIRM_TOTAL),
+            "inputSchema": crate::card_pay::confirm_schema(),
             "annotations": {"readOnlyHint": false, "destructiveHint": true, "openWorldHint": true},
         }),
         json!({
             "name": CANCEL,
-            "description": "Give up the payment in progress: the card is erased from the page and your browser is \
-        yours again.",
-            "inputSchema": {"type": "object", "properties": {}},
+            "description": crate::card_pay::CANCEL_TEXT,
+            "inputSchema": {"type": "object", "properties": {
+                "reason": {"type": "string", "description": crate::card_pay::CANCEL_REASON},
+            }},
             "annotations": {"readOnlyHint": false, "destructiveHint": false, "openWorldHint": false},
         }),
     ]
@@ -669,13 +668,20 @@ async fn pay(state: &AppState, agent: &AgentConfig, arguments: &Dict, asker: &As
         )));
     }
     let fields = page.fields().await.unwrap_or_default();
-    drop(page);
     if !fields.iter().any(|f| f.kind == "number") {
         return Ok(refusal(&format!(
             "No card number field on this page ({host}). Go to the payment step (where the card number is asked), \
              then call {PAY} again."
         )));
     }
+    // the page's total read before the person approves and Link makes a one-time card (Relecture 4): a page whose total
+    // can't be read « approved » spends neither
+    if let Some(handed) =
+        crate::card_pay::total_before_asking(state, agent, &mut page, (&url, port, &host), cents, &currency, &items).await
+    {
+        return Ok(handed);
+    }
+    drop(page);
     // before the person approves and Link makes a one-time card for it (security check 11/11, N5)
     if let Some(refused) = crate::card_pay::browser_cannot_pay(&config, &agent.name).await {
         return Ok(refused);
@@ -803,7 +809,7 @@ pub async fn call(
     match name {
         PAY => pay(state, agent, arguments, asker).await,
         CONFIRM => crate::card_pay::confirm_held(state, agent, arguments).await,
-        CANCEL => Ok(crate::card_pay::cancel_held(state, agent).await),
+        CANCEL => Ok(crate::card_pay::cancel_held(state, agent, arguments).await),
         other => Ok(refusal(&format!("unknown tool: {other}"))),
     }
 }

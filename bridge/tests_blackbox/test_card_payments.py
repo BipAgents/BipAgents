@@ -70,6 +70,7 @@ class FakeChrome:
         #                         "navigate" (leaving the page)
         self.slowed = False     # that step was reached
         self.button = "payer 12,50 €"   # the pay button found (None: none)
+        self.page_text = ""      # the main frame's text (« »: the approved amount as the total; None: none read)
         self.split = False      # after a reload, the provider's expiry and code appear one look after its number
         self.looks = 0          # the provider frame's card fields looked for since the last reload
         self.others = []        # other tabs (their target ids)
@@ -184,6 +185,17 @@ class FakeChrome:
         if method == "Page.resetNavigationHistory":
             self.resets.append(self.url)
             return {}
+        if method == "DOMSnapshot.captureSnapshot":
+            # what the bridge reads of the page's total (fix-pay-total-check, page_snapshot.rs): the main frame says the
+            # amount the test approves (`page_text` to say something else; None: the page can't be read)
+            frame = self.sessions[session]
+            if frame == "F-main" and self.page_text is None:
+                return {"strings": [], "documents": []}
+            text = ""
+            if frame == "F-main":
+                asked = LAST_ASKED or {"amount": "12,50", "currency": "eur"}
+                text = self.page_text or f"Total à payer : {asked['amount']} {asked['currency']}"
+            return snapshot_of(frame, self.url if frame == "F-main" else self.frame_urls.get(frame) or "", text)
         if method == "DOM.getFrameOwner":
             return {"backendNodeId": 500 + list(self.sessions.values()).index(params["frameId"])}
         if method == "DOM.resolveNode" and "backendNodeId" in params and params["backendNodeId"] >= 500:
@@ -272,13 +284,14 @@ class FakeChrome:
                 value = self.bank_asks
             else:
                 value = True
-        return {"result": {"type": "object" if isinstance(value, list) else "string", "value": value}}
+        return {"result": {"type": "object" if isinstance(value, (list, dict)) else "string", "value": value}}
 
     def stop(self):
         self.loop.call_soon_threadsafe(lambda: self.done.done() or self.done.set_result(None))
 
 
 def pay_bridge(bridges, fakes, chrome=None, change=None, place=None, prepare=None):
+    LAST_ASKED.clear()   # a new test: confirm_payment's default `total` is ARGS' until it pays (`tool`)
     bridge = bridges.new(place or "bridge")
     if prepare:   # before it starts (its fake commands' rules)
         prepare(bridge)
@@ -307,8 +320,31 @@ def turn_on(bridge):
     return on.json()
 
 
+def snapshot_of(frame, url, text):
+    """A `DOMSnapshot.captureSnapshot` answer of one document holding one line of text (none when empty)."""
+    strings = ["#document", "BODY", "#text", url or "", frame, text]
+    length = len(text.encode("utf-16-le")) // 2
+    boxes = {"layoutIndex": [1], "bounds": [[8, 8, 300, 19]], "start": [0], "length": [length]} if text else \
+        {"layoutIndex": [], "bounds": [], "start": [], "length": []}
+    return {"strings": strings, "documents": [{
+        "documentURL": 3, "frameId": 4, "contentWidth": 800, "contentHeight": 600,
+        "nodes": {"parentIndex": [-1, 0, 1], "nodeName": [0, 1, 2], "nodeValue": [-1, -1, 5], "attributes": [[], [], []]},
+        "layout": {"nodeIndex": [1, 2], "styles": [[-1] * 8, [-1] * 8], "bounds": [[0, 0, 800, 600], [8, 8, 300, 19]],
+                   "text": [-1, 5]},
+        "textBoxes": boxes}]}
+
+
+# The amount of the last pay_with_card asked (`pay`): what an agent reading the page right gives confirm_payment's
+# `total` when a test doesn't say (fix-pay-total-check, Correction 2: `total` is required, the bridge compares it).
+LAST_ASKED = {}
+
+
 def tool(bridge, name, arguments=None):
-    body = {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": name, "arguments": arguments or {}}}
+    arguments = dict(arguments or {})
+    if name == "confirm_payment" and "total" not in arguments:
+        asked = LAST_ASKED or {"amount": "12,50", "currency": "eur"}
+        arguments["total"] = f"{asked['amount']} {asked['currency']}"
+    body = {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": name, "arguments": arguments}}
     resp = bridge.post(PAY, json=body, headers={"Authorization": f"Bearer {TOKEN}"}, timeout=60)
     return resp.json()["result"]
 
@@ -318,6 +354,7 @@ def pay(bridge, arguments, hermes="accept", app=CODE):
     code first (`app`: the code, "deny", or None). Returns (result, the question's message or None)."""
     body = {"jsonrpc": "2.0", "id": 7, "method": "tools/call", "params": {"name": "pay_with_card", "arguments": arguments}}
     headers = {"Authorization": f"Bearer {TOKEN}", "Accept": "application/json, text/event-stream"}
+    LAST_ASKED.update(amount=arguments.get("amount", ""), currency=arguments.get("currency", ""))
     asked = None
     with httpx.Client(timeout=90) as client, client.stream("POST", bridge.url + PAY, json=body, headers=headers) as resp:
         for line in resp.iter_lines():

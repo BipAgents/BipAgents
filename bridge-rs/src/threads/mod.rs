@@ -712,6 +712,7 @@ impl Threads {
         // Hermes' own halt stored as the reply (« I stopped retrying… »): its plain line (hermes_halts.rs)
         crate::hermes_halts::fold(&mut items, &lang);
         self.with_vault_lines(agent, &mut items);
+        with_pay_lines(&self.config.get(), agent, &mut items);
         with_carnet_lines(&self.config.get(), agent, &mut items);
         if thread.kind != "main" {
             // a run without the person that had nothing to tell (« [SILENT] », or the code word translated): no reply
@@ -1511,6 +1512,21 @@ async fn item_route(
     let (_, thread, items) = all_items(&state, &id, &q).await?;
     let found = items.iter().find(|i| i.id == item).ok_or_else(HttpError::not_found)?;
     Ok(web::ok(found.to_json(&thread, q.get("debug").is_some_and(|d| d == "1"))))
+}
+
+/// The bridge's own lines on a card payment it gave up (pay_line.rs: « Paiement annulé : la page demandait … »), as
+/// notices in their turns. Read only when a turn called a payment tool.
+fn with_pay_lines(config: &crate::config::Config, agent: &AgentConfig, items: &mut Vec<Item>) {
+    let paid = |i: &Item| {
+        i.kind() == "tool"
+            && i.body.get("tool").and_then(|t| t.get("name")).and_then(Value::as_str).is_some_and(|n| {
+                crate::pay_line::is_pay_tool(n) || n == "tool_call"
+            })
+    };
+    if !items.iter().any(paid) {
+        return;
+    }
+    crate::pay_line::with_pay_lines(items, &crate::pay_line::recorded_for(config, &agent.name));
 }
 
 /// A connector's calls with their connector's name (`tool.service`, connectors::service_in): the apps and the

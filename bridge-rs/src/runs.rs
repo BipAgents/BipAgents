@@ -540,6 +540,9 @@ pub struct SubscriptionState {
     /// The run's last tool call (bare name) and when: which run a call of the bridge's tools belongs to (`turn_of`).
     pub last_tool: String,
     pub last_tool_at: f64,
+    /// When the last call is the tool search's `tool_call` wrapping exactly one call: that call's (bare) name, else
+    /// empty (`runs_in_call` reads it: the Link payment tools are reached through it, pay_line.rs).
+    pub last_tool_wrapped: String,
     /// The run's real tokens so far (`model.usage`): None from a Hermes without patch 0020.
     pub usage: Option<RunUsage>,
     /// A room's turn (rooms.rs), a background task's run (jobs.rs): the tokens it may take. Once its real ones and its
@@ -626,6 +629,7 @@ impl Default for SubscriptionState {
             ever_followed: false,
             last_tool: String::new(),
             last_tool_at: 0.0,
+            last_tool_wrapped: String::new(),
             usage: None,
             token_limit: None,
             cost_limit: None,
@@ -1841,6 +1845,7 @@ impl RunHub {
             let tool = crate::loop_brake::event_tool(&event.data);
             st.last_tool = crate::loop_brake::bare(&tool).to_string();
             st.last_tool_at = crate::py::time_time();
+            st.last_tool_wrapped = if st.last_tool == "tool_call" { wrapped_tool(&event.data) } else { String::new() };
             self.cap(sub, &mut st);
             self.brake(sub, &mut st, &event);
             // a use of a feature to discover (feature_tips.rs: a podcast made, the Carnet filled…)
@@ -3012,7 +3017,9 @@ more steps in this turn. Don't repeat what failed: change approach.", crate::loo
         let mut out: Vec<(String, Option<String>)> = Vec::new();
         for sub in inner.subs.values().filter(|sub| sub.agent.name == agent) {
             let st = lock(&sub.state);
-            let inside = !st.finished && st.terminal.is_none() && st.tools_open > 0 && is(&st.last_tool);
+            // a call through the tool search counts by the one call it wraps (never as « tool_call » itself)
+            let name = if st.last_tool == "tool_call" { st.last_tool_wrapped.as_str() } else { st.last_tool.as_str() };
+            let inside = !st.finished && st.terminal.is_none() && st.tools_open > 0 && !name.is_empty() && is(name);
             if inside && !out.iter().any(|(run, _)| *run == sub.run_id) {
                 out.push((sub.run_id.clone(), st.session_id.clone()));
             }
@@ -3619,6 +3626,23 @@ touche « Démarrer » pour reprendre."
             .await;
         });
     }
+}
+
+
+/// The one call a `tool.started` of the tool search's `tool_call` wraps (its arguments `{"calls": [{"name": …}]}` or
+/// `{"name": …}`, as an object or as JSON text), bare; empty when it wraps none or several.
+pub fn wrapped_tool(data: &Map<String, Value>) -> String {
+    let args = match data.get("args").or_else(|| data.get("arguments")) {
+        Some(Value::String(text)) => serde_json::from_str::<Value>(text).unwrap_or(Value::Null),
+        Some(value) => value.clone(),
+        None => Value::Null,
+    };
+    let call = match args.get("calls").and_then(Value::as_array) {
+        Some(calls) if calls.len() == 1 => calls[0].clone(),
+        Some(_) => return String::new(),
+        None => args,
+    };
+    call.get("name").and_then(Value::as_str).map(|n| crate::loop_brake::bare(n).to_string()).unwrap_or_default()
 }
 
 #[cfg(test)]

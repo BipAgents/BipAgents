@@ -434,6 +434,12 @@ impl Cdp {
     }
 
     async fn read_one(&mut self, deadline: tokio::time::Instant) -> Result<Option<Value>, FillError> {
+        self.read_one_wiping(deadline, false).await
+    }
+
+    /// `read_one`; `wipe`: the frame's raw text overwritten once parsed, when the bridge holds it alone (a snapshot
+    /// holds the page's input values, the card's fields once typed: `snapshot`).
+    async fn read_one_wiping(&mut self, deadline: tokio::time::Instant, wipe: bool) -> Result<Option<Value>, FillError> {
         loop {
             let message = match tokio::time::timeout_at(deadline, self.ws.next()).await {
                 Err(_) => return Ok(None),
@@ -443,7 +449,14 @@ impl Cdp {
             };
             match message {
                 WsMessage::Text(text) => {
-                    return serde_json::from_str::<Value>(text.as_str()).map(Some).map_err(|e| protocol(e.to_string()))
+                    let parsed = serde_json::from_str::<Value>(text.as_str()).map(Some).map_err(|e| protocol(e.to_string()));
+                    if wipe {
+                        if let Ok(mut raw) = bytes::Bytes::from(text).try_into_mut() {
+                            use zeroize::Zeroize;
+                            raw.as_mut().zeroize();
+                        }
+                    }
+                    return parsed;
                 }
                 WsMessage::Close(_) => return Err(FillError::Unreachable),
                 _ => continue,
@@ -471,6 +484,39 @@ impl Cdp {
                     return Err(protocol(format!("{method}: {text}")));
                 }
                 return Ok(answer.get("result").cloned().unwrap_or(json!({})));
+            }
+            if answer.get("method").is_some() {
+                self.note(answer).await?;
+            }
+        }
+    }
+
+    /// `DOMSnapshot.captureSnapshot` in `session` (page_snapshot.rs `STYLES`), read at once and wiped: the answer holds
+    /// every input's live value (the card's fields once typed), never kept, logged or passed on. Its raw frame is
+    /// overwritten too when the connection holds it alone (best effort: the websocket's own buffers are not reachable).
+    pub async fn snapshot(
+        &mut self,
+        session: &str,
+        card: Option<&crate::page_snapshot::CardSeen>,
+    ) -> Result<Vec<crate::page_snapshot::DocText>, FillError> {
+        self.next += 1;
+        let id = self.next;
+        let params = json!({"computedStyles": crate::page_snapshot::STYLES, "includeDOMRects": true,
+                            "includeTextColorOpacities": true});
+        let message = json!({"id": id, "method": "DOMSnapshot.captureSnapshot", "params": params, "sessionId": session});
+        self.ws.send(WsMessage::text(message.to_string())).await.map_err(|_| FillError::Unreachable)?;
+        let deadline = tokio::time::Instant::now() + CALL_TIMEOUT;
+        loop {
+            let Some(mut answer) = self.read_one_wiping(deadline, true).await? else {
+                return Err(protocol("DOMSnapshot.captureSnapshot: no answer"));
+            };
+            if answer.get("id").and_then(Value::as_u64) == Some(id) {
+                let read = match answer.get("result") {
+                    Some(result) if answer.get("error").is_none() => Ok(crate::page_snapshot::read_snapshot(result, card)),
+                    _ => Err(protocol("DOMSnapshot.captureSnapshot: refused")),
+                };
+                crate::page_snapshot::wipe(&mut answer);
+                return read;
             }
             if answer.get("method").is_some() {
                 self.note(answer).await?;
@@ -1230,6 +1276,104 @@ impl Page {
         };
         let empty = json!({"objectId": object, "functionDeclaration": EMPTY_FIELD, "returnByValue": true});
         self.cdp.call("Runtime.callFunctionOn", empty, Some(session)).await.is_ok()
+    }
+
+    /// The text of every frame of the page as Chrome rendered it (page_snapshot.rs: visual lines, what is really
+    /// visible and everything laid out, never a form control's own text, read-only fields' values marked): where
+    /// card_pay.rs reads the payment's total (page_total.rs). The page's own frames and the providers' (`rule`, every
+    /// frame above one of these too) are read as such, each saying whether it is the provider's; any other site's only
+    /// as text not shown. A frame process not read, the main frame not read, or a visible frame of real size not read
+    /// (matched by its id) makes every text `truncated`: never « approved ».
+    pub async fn page_texts(
+        &mut self,
+        rule: &Frames,
+        card: Option<&crate::page_snapshot::CardSeen>,
+    ) -> Result<Vec<crate::page_total::PageText>, FillError> {
+        let main = self.main_frame().await?;
+        let seen = self.frames().await?;
+        let mut sessions: Vec<String> = Vec::new();
+        for frame in &seen {
+            if !sessions.contains(&frame.session) {
+                sessions.push(frame.session.clone());
+            }
+        }
+        let mut texts = Vec::new();
+        let mut done: Vec<String> = Vec::new();
+        let mut sure = true;
+        // What Chrome rendered, one snapshot per frame process (page_snapshot.rs): every frame's document, from any
+        // site (Relecture 5, e4): the page's own and the providers' as such; any other site's (a captcha, a wallet
+        // button, a badge) as text not shown: a total in it above the approved amount blocks, it never supports.
+        for session in sessions {
+            let docs = match self.cdp.snapshot(&session, card).await {
+                Ok(docs) => docs,
+                Err(exc) => {
+                    tracing::info!(exc = %exc, "card payment: a frame process's page not read, its total not read for sure");
+                    sure = false;
+                    continue;
+                }
+            };
+            for doc in docs {
+                if doc.frame.is_empty() || done.contains(&doc.frame) {
+                    continue;
+                }
+                let url = if doc.url.is_empty() {
+                    seen.iter().find(|f| f.id == doc.frame).map(|f| f.url.clone()).unwrap_or_default()
+                } else {
+                    doc.url.clone()
+                };
+                // the shop's own srcdoc / about:blank frames are read as the page they belong to (Relecture 6, f10)
+                let own = |u: &str| rule.allows(u) || u.starts_with("about:");
+                let allowed =
+                    doc.frame == main || (own(&url) && ancestors_of(&doc.frame, &seen).iter().all(|a| own(a)));
+                let host = origin_of(&url).map(|(_, h)| h).unwrap_or_default();
+                let provider = allowed
+                    && (provider_frame(&host).is_some()
+                        || provider_page(&host).is_some()
+                        || rule.test.iter().any(|t| at_or_below(&host, t)));
+                done.push(doc.frame.clone());
+                if doc.truncated {
+                    tracing::info!(frame = %host, "card payment: a frame's text past the reader's cap, not read for sure");
+                }
+                let shown = if allowed { doc.shown } else { String::new() };
+                if !doc.closed.is_empty() {
+                    texts.push(crate::page_total::PageText { all: doc.closed, closed: true, ..Default::default() });
+                }
+                texts.push(crate::page_total::PageText { shown, all: doc.all, provider, truncated: doc.truncated, closed: false });
+            }
+        }
+        // the page's own frame not read (a timeout, an exception): never sure (Relecture 6)
+        if !done.contains(&main) {
+            tracing::info!("card payment: the page's main frame not read, its total not read for sure");
+            sure = false;
+        }
+        // every frame not read, matched by its id (Relecture 5, e1, e2): its owner's box in its parent's page; a visible
+        // one of real size (≥ 120×40 px) makes the read not sure, a tiny one (a chat launcher) does not
+        for frame in seen.iter().filter(|f| !done.contains(&f.id)) {
+            let parent = frame.parent.as_deref().and_then(|p| seen.iter().find(|f| f.id == p));
+            let session = parent.map_or(frame.session.clone(), |p| p.session.clone());
+            let owner = self.cdp.call("DOM.getFrameOwner", json!({"frameId": frame.id}), Some(&session)).await;
+            let Some(node) = owner.ok().and_then(|o| o.get("backendNodeId").and_then(Value::as_i64)) else {
+                tracing::info!("card payment: a frame not read and not placed, its total not read for sure");
+                sure = false;
+                continue;
+            };
+            let model = self.cdp.call("DOM.getBoxModel", json!({"backendNodeId": node}), Some(&session)).await;
+            let size = model.ok().and_then(|m| {
+                let model = m.get("model")?;
+                Some((model.get("width")?.as_f64()?, model.get("height")?.as_f64()?))
+            });
+            if size.is_some_and(|(w, h)| w >= 120.0 && h >= 40.0) {
+                tracing::info!(width = ?size.map(|s| s.0), height = ?size.map(|s| s.1),
+                               "card payment: a visible frame of the page not read, its total not read for sure");
+                sure = false;
+            }
+        }
+        if !sure {
+            for text in &mut texts {
+                text.truncated = true;
+            }
+        }
+        Ok(texts)
     }
 
     /// An isolated world in the page's main frame, with the script loaded.

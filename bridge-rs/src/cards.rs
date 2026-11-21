@@ -760,6 +760,16 @@ const CURRENCY_MARKS: &[(&str, &[&str])] = &[
     ("gbp", &["GBP"]),
     ("chf", &["CHF"]),
     ("ils", &["ILS"]),
+    // other currencies, read so that they are never taken for none (Relecture 6): the payment's is never one of them
+    ("sek", &["SEK"]),
+    ("nok", &["NOK"]),
+    ("dkk", &["DKK"]),
+    ("pln", &["PLN"]),
+    ("jpy", &["JPY"]),
+    ("cny", &["CNY"]),
+    ("zł", &["PLN"]),
+    ("kr", &["SEK", "NOK", "DKK"]),
+    ("¥", &["JPY", "CNY"]),
     ("nis", &["ILS"]),
     ("sgd", &["SGD"]),
     ("cad", &["CAD"]),
@@ -776,7 +786,7 @@ const CURRENCY_MARKS: &[(&str, &[&str])] = &[
 /// The currency mark right before a number (`before`: the text up to it) or right after it (`after`: the text from its
 /// end), spaces allowed between: the codes it stands for. A mark in letters is a word of its own (« eur », never the
 /// end of « valeur »).
-fn mark_near(before: &str, after: &str) -> Option<&'static [&'static str]> {
+pub(crate) fn mark_near(before: &str, after: &str) -> Option<&'static [&'static str]> {
     let (before, after) = (before.trim_end(), after.trim_start());
     for &(mark, codes) in CURRENCY_MARKS {
         let starts_word = mark.chars().next().is_some_and(char::is_alphabetic);
@@ -799,7 +809,7 @@ fn mark_near(before: &str, after: &str) -> Option<&'static [&'static str]> {
 /// « 1.250,00 » (German, Spanish), « 1'250.00 » (Swiss), « 12,5 », « 12.50 », « 1250 ». The decimal mark is the last
 /// « , » or « . » followed by one or two digits; every other mark groups thousands, the same one throughout, in groups
 /// of three. None when it reads any other way (« 1 25,00 », « 1.250.00,5 »): not read for sure.
-fn amount_of(number: &str) -> Option<i64> {
+pub(crate) fn amount_of(number: &str) -> Option<i64> {
     let mut groups: Vec<String> = vec![String::new()];
     let mut marks: Vec<char> = Vec::new();
     for c in number.chars() {
@@ -870,6 +880,22 @@ pub fn button_amount(text: &str, currency: &str) -> Option<i64> {
         [(cents, codes)] if codes.contains(&currency) => Some(*cents),
         _ => None,
     }
+}
+
+/// An amount in another currency than `currency` on a pay button (a conversion the page offers, DCC: « Payer 32,10 USD »
+/// for a payment in EUR): (cents, the code it is read in). Never pressed (Relecture 1, 19/11, 11).
+pub fn foreign_amount(text: &str, currency: &str) -> Option<(i64, &'static str)> {
+    static NUMBER: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(r"\d(?:[\d.,'\x{2019}\x{02bc}\x{a0}\x{202f} ]*\d)?").expect("number pattern")
+    });
+    let text = text.to_lowercase();
+    NUMBER.find_iter(&text).find_map(|number| {
+        let codes = mark_near(&text[..number.start()], &text[number.end()..])?;
+        if codes.contains(&currency) {
+            return None;
+        }
+        Some((amount_of(number.as_str())?, codes[0]))
+    })
 }
 
 /// The card's numbers the phone sent with an approval (a card kept on the phone): checked against the card (the
