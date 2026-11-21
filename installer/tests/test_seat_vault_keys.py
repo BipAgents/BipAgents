@@ -265,3 +265,28 @@ def test_the_key_service_answers_only_with_its_health(tmp_path):
     finally:
         server.shutdown()
     assert agent.key_service_answers(url, timeout=1) is False, "nobody listening"
+
+
+def test_a_vault_keys_order_is_done_only_in_the_server_s_night(tmp_path, monkeypatch):
+    # Alex 21/11: sealing restarts the place's bridge (and the first time hardens the server): only at night, like the
+    # night's reboot. The order sent in the evening (or any time) waits, served again each round, valid two days.
+    agent = _seat_agent()
+    at = lambda hour, minute=0: time.struct_time((2026, 11, 21, hour, minute, 0, 5, 325, 0))
+    monkeypatch.setattr(agent, "VAULT_ANYTIME", str(tmp_path / "vault-keys-anytime"))
+    assert [h for h in range(24) if agent.vault_night(clock=lambda h=h: at(h))] == [1, 2, 3, 4]
+    assert agent.vault_night(clock=lambda: at(4, 59)) and not agent.vault_night(clock=lambda: at(5, 0))
+    assert not agent.vault_night(clock=lambda: at(0, 30)), "never during the night's reboot (00:00-00:44)"
+    # a lab says « any time » by a file of root's
+    (tmp_path / "vault-keys-anytime").write_text("")
+    assert agent.vault_night(clock=lambda: at(15))
+
+
+def test_the_round_leaves_a_vault_keys_order_for_the_night(tmp_path, monkeypatch):
+    agent = _seat_agent()
+    seen = []
+    monkeypatch.setattr(agent, "vault_keys_order", lambda *a, **k: seen.append(a) or True)
+    body = {"action": "vault_keys", "seat": 2, "vault_keys": SETTINGS}
+    monkeypatch.setattr(agent, "vault_night", lambda clock=None: False)
+    assert agent.vault_order_round(body, 21) is False and seen == [], "held: neither done nor tried"
+    monkeypatch.setattr(agent, "vault_night", lambda clock=None: True)
+    assert agent.vault_order_round(body, 21) is True and len(seen) == 1
