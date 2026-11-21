@@ -500,7 +500,7 @@ pub async fn call_tool(
 ) -> anyhow::Result<Dict> {
     let found = members(http, config).await;
     if found.is_empty() {
-        return Ok(tool_text("No family is linked to this install: nobody to tell.", true));
+        return Ok(crate::tool_answers::lifted_in_the_app(tool_text("No family is linked to this install: nobody to tell.", true)));
     }
     let links = own_links(config);
     if name == FAMILY_MEMBERS {

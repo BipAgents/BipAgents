@@ -5,7 +5,7 @@ page sees it — the family through their own bridges, a project's friends in th
 import time
 
 from bbkit.common import AUTH
-from bbkit.mcp import call, give_token, media_of, text_of
+from bbkit.mcp import call, give_token, media_of, text_of, not_done
 from test_page_store import store_get
 
 DASHBOARD = """<h1>🌡️ Le jardin</h1><p class="sub" id="maj"></p><p class="big" id="t"></p><div class="table-wrap">
@@ -57,8 +57,8 @@ def test_a_live_page_is_fed_by_later_turns_without_being_made_again(bridge):
     assert version_of(bridge, "wellness", page) == 1
     # the bridge's own keys (a live page's sources) are not the agent's; another page id is not its page
     refused = call(bridge, "page_data", {"page": page, "ops": [{"op": "set", "key": "_src.weather", "value": {}}]})
-    assert refused["isError"] is True and "_src.weather" in text_of(refused)
-    assert call(bridge, "page_data", {"page": "absente", "ops": [{"op": "set", "key": "k", "value": 1}]})["isError"] is True
+    assert not_done(refused) and "_src.weather" in text_of(refused)
+    assert not_done(call(bridge, "page_data", {"page": "absente", "ops": [{"op": "set", "key": "k", "value": 1}]}))
     assert store_get(bridge, path).json()["rev"] == 2
 
     # read back: data, never instructions, its own lines named as its own
@@ -125,7 +125,7 @@ def test_a_looping_routine_writing_a_page_is_held(bridge):
     told = None
     for n in range(80):
         result = call(bridge, "page_data", {"page": page, "ops": [{"op": "set", "key": "temp", "value": n}]})
-        if result["isError"]:
+        if result["isError"] or not_done(result):
             told = text_of(result)
             break
     assert told is not None, "never held"

@@ -387,13 +387,13 @@ pub fn call(config: &Config, agent: &str, name: &str, arguments: &Dict, now: Opt
     let mut data = read(config);
     if !tk::py_in(agent, data.get("agents").unwrap_or(&json!([]))) {
         if let Some(ask) = crate::tool_asks::ask_hint(config, agent, "contacts") {
-            return Ok(tool_text(&format!("The person hasn't shared their address book with you. {ask}"), true));
+            return Ok(crate::tool_answers::lifted_in_the_app(tool_text(&format!("The person hasn't shared their address book with you. {ask}"), true)));
         }
-        return Ok(tool_text(
+        return Ok(crate::tool_answers::lifted_in_the_app(tool_text(
             "The person hasn't shared their address book with you: they switch « Contacts » on in your page of the \
 BipAgents app.",
             true,
-        ));
+        )));
     }
     // What the person lets this agent see and do (phone_rights.rs): the details taken back are gone from its copy,
     // so they are neither shown nor searched in.
@@ -459,10 +459,10 @@ BipAgents app.",
             Ok(tool_text(&format!("{} found, {since}:\n{}{more}", found.len(), lines.join("\n")), false))
         }
         "contacts_birthdays" if !given[BIRTHDAYS] => {
-            Ok(tool_text(&rights::refused("see their contacts' birthdays"), true))
+            Ok(crate::tool_answers::lifted_in_the_app(tool_text(&rights::refused("see their contacts' birthdays"), true)))
         }
         "contacts_add" | "contacts_update" if !given[WRITE] => {
-            Ok(tool_text(&rights::refused("add or change their contacts"), true))
+            Ok(crate::tool_answers::lifted_in_the_app(tool_text(&rights::refused("add or change their contacts"), true)))
         }
         "contacts_birthdays" => {
             let days = match arguments.get("days").map(|v| py::py_float(v).map(|d| d as i64)) {

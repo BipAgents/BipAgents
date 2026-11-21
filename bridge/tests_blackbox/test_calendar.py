@@ -10,7 +10,7 @@ import threading
 import pytest
 
 from bbkit.common import AUTH
-from bbkit.mcp import call, give_token, rpc, text_of
+from bbkit.mcp import call, give_token, not_done, rpc, text_of
 from conftest import managed_install, profile, wait_registered
 
 PASSWORD = "bridge-password-1234"
@@ -47,7 +47,7 @@ def test_the_phone_shares_its_calendar_and_does_what_the_agents_ask(bridges, fak
     assert bridge.get("/v1/calendar").status_code == 401
     assert not any(n.startswith("calendar_") for n in names(bridge))
     not_yet = call(bridge, "calendar_list", {}, token=TOKEN)
-    assert not_yet["isError"] and "hasn't shared their phone calendar" in text_of(not_yet)
+    assert not_done(not_yet) and "hasn't shared their phone calendar" in text_of(not_yet)
     unknown = bridge.put("/v1/calendar/agents", json={"agents": ["ghost"]}, headers=AUTH)
     assert unknown.status_code == 400 and unknown.json() == {"detail": "unknown agent"}
     assert bridge.put("/v1/calendar/agents", json={"agents": ["Coach"]}, headers=AUTH).json() == {"agents": ["coach"]}
@@ -67,8 +67,8 @@ def test_the_phone_shares_its_calendar_and_does_what_the_agents_ask(bridges, fak
     asked = call(bridge, "calendar_add", {"title": "Banque", "start": "2026-10-30T10:00", "duration_minutes": 30,
                                           "calendar": "Perso"}, token=TOKEN)
     assert not asked["isError"] and "next sync" in text_of(asked)
-    assert call(bridge, "calendar_add", {"title": "x", "start": "plus tard"}, token=TOKEN)["isError"]
-    assert call(bridge, "calendar_delete", {"id": "zz"}, token=TOKEN)["isError"]
+    assert not_done(call(bridge, "calendar_add", {"title": "x", "start": "plus tard"}, token=TOKEN))
+    assert not_done(call(bridge, "calendar_delete", {"id": "zz"}, token=TOKEN))
     assert "repeating" in text_of(call(bridge, "calendar_delete", {"id": "e3"}, token=TOKEN))
     assert not call(bridge, "calendar_update", {"id": "e1", "title": "Dentiste (Dr Roy)"}, token=TOKEN)["isError"]
     queue = bridge.get("/v1/calendar/queue", headers=AUTH).json()["queue"]
@@ -87,7 +87,7 @@ def test_the_phone_shares_its_calendar_and_does_what_the_agents_ask(bridges, fak
     assert bridge.put("/v1/calendar/agents", json={"agents": []}, headers=AUTH).json() == {"agents": []}
     give_token(bridge, "coach", TOKEN)
     assert not any(n.startswith("calendar_") for n in names(bridge))
-    assert call(bridge, "calendar_list", {}, token=TOKEN)["isError"]
+    assert not_done(call(bridge, "calendar_list", {}, token=TOKEN))
     # Shared with no agent any more: the copy goes, as the address book's (the requests stay their 14 days).
     seen = bridge.get("/v1/calendar", headers=AUTH).json()
     assert seen["events"] == 0 and seen["calendars"] == 0 and seen["at"] is None and seen["from"] is None
@@ -189,7 +189,7 @@ def test_what_the_agent_asked_shows_until_the_phone_shares_again(bridges, fakes)
     assert bridge.post(f"/v1/calendar/queue/{op_id}", json={"done": True}, headers=AUTH).json() == {"ok": True}
     listed = text_of(call(bridge, "calendar_list", {"from": "2026-10-27", "to": "2026-10-29"}, token=TOKEN))
     assert "Coiffeur · added by the phone just now" in listed
-    assert call(bridge, "calendar_delete", {"id": op_id}, token=TOKEN)["isError"]
+    assert not_done(call(bridge, "calendar_delete", {"id": op_id}, token=TOKEN))
     shared = {**COPY, "events": COPY["events"] + [
         {"id": "e9", "calendar": "C1", "title": "Coiffeur", "start": "2026-10-28T15:00:00+01:00",
          "end": "2026-10-28T16:00:00+01:00", "all_day": False}]}

@@ -12,7 +12,7 @@ import time
 import httpx
 
 from bbkit.common import AUTH
-from bbkit.mcp import give_token
+from bbkit.mcp import give_token, not_done
 from test_card_payments import ARGS, CARD, CODE, PAY, TOKEN, FakeChrome, pay, pay_bridge, tool, turn_on
 
 TOKEN_LEA = "agent-token-for-lea-0123456789abcdef"
@@ -102,7 +102,7 @@ def test_2_2_the_pay_button_for_another_total_is_never_pressed_chromium(bridges,
         # since fix-pay-total-check (19/11) the page's « Total de la commande : 1 250,00 € » is read once the card is
         # typed: the bridge cancels by itself, before any pay button is looked for
         said = result["content"][0]["text"]
-        assert result["isError"] is True and "BipAgents cancelled the payment itself" in said, said
+        assert not_done(result) and "BipAgents cancelled the payment itself" in said, said
         confirmed = tool(bridge, "confirm_payment", {"button": "Payer 12,50 €"})["content"][0]["text"]
         assert "moved on" not in confirmed and [u.split("/")[-1] for u in browser.pages()] == ["pay.html"], (
             f"approved 12.50 EUR, the page's own « Payer 1 250,00 € » was pressed: {confirmed}; pages {browser.pages()}")
@@ -135,7 +135,7 @@ def test_2_2_the_pay_button_alone_for_another_total_is_never_pressed_chromium(br
         # Correction 2: the button's 1 250,00 € is an amount above the approved one, seen on the page: stopped at once
         # (the button's own check stays covered by the FakeChrome test above)
         # (Correction 8: the button's « Payer 1 250,00 € » is a total to pay: the page's total said)
-        assert result["isError"] is True and "BipAgents cancelled the payment itself" in said and "1250.00 EUR" in said, said
+        assert not_done(result) and "BipAgents cancelled the payment itself" in said and "1250.00 EUR" in said, said
         confirmed = tool(bridge, "confirm_payment", {"button": "Payer 12,50 €"})["content"][0]["text"]
         assert "No payment is waiting" in confirmed and [u.split("/")[-1] for u in browser.pages()] == ["pay.html"], (
             f"approved 12.50 EUR, the page's own « Payer 1 250,00 € » was pressed: {confirmed}; pages {browser.pages()}")

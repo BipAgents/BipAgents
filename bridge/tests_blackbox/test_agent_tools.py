@@ -6,7 +6,7 @@ import re
 import struct
 
 from bbkit.common import AUTH
-from bbkit.mcp import TOKEN, call, give_token, media_of, rpc
+from bbkit.mcp import TOKEN, call, give_token, media_of, not_done, rpc
 
 AI_SOURCE = "http://cv.iptc.org/newscodes/digitalsourcetype/trainedAlgorithmicMedia"
 
@@ -62,7 +62,7 @@ def test_the_protocol_and_the_tokens(bridge):
     missing = rpc(bridge, "resources/list").json()
     assert missing == {"jsonrpc": "2.0", "id": 1, "error": {"code": -32601, "message": "method not found: resources/list"}}
     unknown = call(bridge, "fly", {})
-    assert unknown == {"content": [{"type": "text", "text": "unknown tool: fly"}], "isError": True}
+    assert unknown == {"content": [{"type": "text", "text": "Not done: unknown tool: fly"}], "isError": False}
     parse = bridge.post("/v1/agent-tools/mcp", content=b"{nope", headers={"Authorization": f"Bearer {TOKEN}"})
     assert parse.status_code == 400 and parse.json() == {"jsonrpc": "2.0", "id": None,
                                                           "error": {"code": -32700, "message": "parse error"}}
@@ -140,15 +140,15 @@ def test_a_long_call_is_streamed_and_errors_are_the_tools_not_the_protocols(brid
     assert "event: message" in streamed.text
     assert json.loads(event[len("data: "):])["result"]["isError"] is False
     too_long = call(bridge, "create_audio", {"text": "x" * 20001})
-    assert too_long["isError"] is True and "too long" in too_long["content"][0]["text"]
-    assert too_long["content"][0]["text"] == "the text is too long (20001 characters, at most 20000): split it"
+    assert not_done(too_long) and "too long" in too_long["content"][0]["text"]
+    assert too_long["content"][0]["text"] == "Not done: the text is too long (20001 characters, at most 20000): split it"
     empty = call(bridge, "create_audio", {"text": "  "})
-    assert empty == {"content": [{"type": "text", "text": "the text is empty"}], "isError": True}
+    assert empty == {"content": [{"type": "text", "text": "Not done: the text is empty"}], "isError": False}
     only_media = call(bridge, "create_audio", {"text": "MEDIA:/tmp/x.mp3"})
-    assert only_media["content"][0]["text"] == "nothing to read once MEDIA: lines are removed"
+    assert only_media["content"][0]["text"] == "Not done: nothing to read once MEDIA: lines are removed"
     fakes.pocket.status = 500
     failed = call(bridge, "create_audio", {"text": "Autre phrase."})
-    assert failed["isError"] is True and failed["content"][0]["text"].startswith("the voice failed (")
+    assert not_done(failed) and failed["content"][0]["text"].startswith("Not done: the voice failed (")
 
 
 def test_a_podcast_gives_each_host_a_voice_of_their_own(bridge, fakes):
@@ -170,12 +170,12 @@ def test_a_podcast_gives_each_host_a_voice_of_their_own(bridge, fakes):
     assert picked["isError"] is False and fakes.pocket.inputs[-1]["voice"] == "lumen"
     assert "-podcast.m4a" in picked["content"][0]["text"]
     bad = call(bridge, "create_podcast", {"turns": turns, "voices": {"Léa": "pocket:dragon"}})
-    assert bad["isError"] is True and "unknown voice" in bad["content"][0]["text"]
+    assert not_done(bad) and "unknown voice" in bad["content"][0]["text"]
     empty = call(bridge, "create_podcast", {"turns": [{"speaker": "Max"}]})
-    assert empty["isError"] is True
-    assert empty["content"][0]["text"] == "no turn to read: each turn needs a speaker and a text"
+    assert not_done(empty)
+    assert empty["content"][0]["text"] == "Not done: no turn to read: each turn needs a speaker and a text"
     crowd = call(bridge, "create_podcast", {"turns": [{"speaker": f"S{i}", "text": "Bonjour."} for i in range(5)]})
-    assert crowd["content"][0]["text"] == "too many speakers (5, at most 4)"
+    assert crowd["content"][0]["text"] == "Not done: too many speakers (5, at most 4)"
 
 
 def test_with_a_voice_model_the_hosts_get_its_natural_voices(bridges, fakes):

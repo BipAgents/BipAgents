@@ -5,7 +5,7 @@ conversations; what a project agent never has (mail…) stays closed by its own 
 import time
 
 from bbkit.common import AUTH
-from bbkit.mcp import call, give_token, text_of
+from bbkit.mcp import call, give_token, not_done, text_of
 from test_project_agents import share_body
 from test_read_shares import FakeGuichet
 
@@ -51,7 +51,7 @@ def test_a_shared_project_thread_is_its_persons_with_pages_marked_for_the_group(
         assert card["isError"] is False, text_of(card)
         # what a project agent never reaches stays closed: its own scope, not the share's
         closed = call(bridge, "mail_search", {"query": "banque"}, token=TOKEN)
-        assert closed["isError"] is True
+        assert not_done(closed)
 
         # the person's turn gives the file they ask for, as in their own conversations, the map made before too
         # its received files' folder on this machine: the picture's copy under `cartes/` (the bridge keeps another

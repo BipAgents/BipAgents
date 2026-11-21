@@ -8,6 +8,7 @@ import functools
 import http.server
 import threading
 
+from bbkit.mcp import not_done
 from bbkit.common import AUTH
 from test_card_payments_chrome import ARGS, CARD, Browser, pay, pay_bridge, turn_on
 from test_review_pay_total_chrome import APPROVED, never_pressed, page, start
@@ -58,7 +59,7 @@ def test_q1_the_providers_own_higher_amount_is_left_to_the_agent_and_paid(bridge
         result, _ = pay(bridge, APPROVED)
         said = result["content"][0]["text"]
         # Correction 2: the provider's own €32.87 is seen: stopped by the bridge, the person told
-        assert result["isError"] is True and "32.87" in said, said
+        assert not_done(result) and "32.87" in said, said
         agent_confirms(bridge, browser, said)
         never_pressed(bridge, browser, said)
     finally:

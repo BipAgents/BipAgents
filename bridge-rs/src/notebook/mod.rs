@@ -44,6 +44,7 @@ pub mod followups;
 pub mod forget;
 pub mod groups;
 pub mod known;
+pub mod id_numbers;
 pub mod lexicon;
 pub mod misplaced;
 pub mod moves;
@@ -586,6 +587,29 @@ pub struct Page {
 static ATTRIBUTION: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^(.*?)\s+— \*([^*,]{1,80}), (\d{4}-\d{2}-\d{2})\*\s*$").expect("valid regex"));
 static LINK: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\[\[([^\]|#]+)(?:[#|][^\]]*)?\]\]").expect("valid regex"));
+
+/// What a page holds now, line by line, folded and without the facts' attributions (« - Pointure : 36 — *Vie, date* »
+/// → « pointure 36 »): the person's « Modifier » keeps it without its being judged again (api.rs `write_section`,
+/// review 1: an agent's line an older filter let through never locks the section).
+pub fn page_lines(config: &Config, part: Part, path: &str) -> HashSet<String> {
+    let Some(text) = read_page_text(config, part, path) else { return HashSet::new() };
+    text.lines()
+        .map(|line| {
+            let item = line.trim().strip_prefix("- ").unwrap_or(line.trim());
+            fold(&split_attribution(item).0)
+        })
+        .filter(|line| !line.is_empty())
+        .collect()
+}
+
+/// The lines of the person's new text for a section that hold an ID number and were not on the page already.
+pub fn new_id_number(config: &Config, part: Part, path: &str, text: &str) -> bool {
+    let there = page_lines(config, part, path);
+    text.lines().any(|line| {
+        let item = line.trim().strip_prefix("- ").unwrap_or(line.trim());
+        !there.contains(&fold(&split_attribution(item).0)) && lexicon::id_number(line)
+    })
+}
 
 /// « Anniversaire : 12 mars — *Léa, 2026-10-22* » → (the fact, Some((who, date))).
 pub fn split_attribution(line: &str) -> (String, Option<(String, String)>) {

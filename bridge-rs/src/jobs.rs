@@ -1728,7 +1728,7 @@ fn thousands(n: i64) -> String {
 pub(crate) const MIN_PROMPT: usize = 8;
 
 /// `propose_task` called with no task in it: the tools such a call was meant for, by name.
-const NOT_A_TASK: &str = "Nothing proposed: prompt must say the whole task (the goal, what the person said, what to \
+pub const NOT_A_TASK: &str = "Nothing proposed: prompt must say the whole task (the goal, what the person said, what to \
 make). If you meant something else, call that tool instead: a password, API key or code the person must give → \
 mcp__bipagents_connectors__ask_secret; the sites a connector needs → mcp__bipagents_files__sandbox_sites_request; a \
 connector you built → mcp__bipagents_connectors__connector_register (behind the tool search: tool_call with its name).";

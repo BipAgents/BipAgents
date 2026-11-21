@@ -2,7 +2,7 @@
 (2026-10-28, from a real Carnet: one « Voyages » page shown « 31 déc. 2021 – 20 déc. 2026, jour 1 763 sur 1 816 »,
 its bookings carrying their raw « archive:… » source and a « Me le rappeler » years too late)."""
 from bbkit.common import AUTH
-from bbkit.mcp import call, give_token, text_of
+from bbkit.mcp import call, give_token, not_done, text_of
 from test_notebook import in_french, notebook
 
 
@@ -11,7 +11,7 @@ def test_a_list_of_trips_is_refused_and_read_as_a_subject(bridge):
     in_french(bridge)
     refused = call(bridge, "notebook_write", {"page": "Voyages", "kind": "trip", "section": "transport",
                                              "facts": ["Parking aéroport le 22/07/2022"]})
-    assert refused["isError"] is True and "one trip page per journey" in text_of(refused)
+    assert not_done(refused) and "one trip page per journey" in text_of(refused)
     # A page already of kind trip with such a name (made before the rule) is shown as a subject: no countdown.
     folder = notebook(bridge) / "carnet" / "Voyages"
     folder.mkdir(parents=True, exist_ok=True)

@@ -13,7 +13,7 @@ import zipfile
 from io import BytesIO
 
 from bbkit.common import AUTH, sse
-from bbkit.mcp import TOKEN, call, give_token, rpc, text_of
+from bbkit.mcp import TOKEN, call, give_token, not_done, rpc, text_of
 from test_family_agent import make_family_agent
 from test_shared_agents import link, wait
 
@@ -168,7 +168,7 @@ def test_a_family_agents_files_are_everyones_in_it(bridges, fakes):
     assert photo["content"][0] == {"type": "image", "data": base64.b64encode(PHOTO).decode(), "mimeType": "image/jpeg"}
     assert "bulletin.pdf" in text_of(call(a, "read_sent_file", {}))
     for bad in ["/fichiers/x.pdf", "/famille/../agent-shares.json", "/famille/0123456789ab-autre.pdf"]:
-        assert call(a, "read_sent_file", {"path": bad})["isError"] is True, bad
+        assert not_done(call(a, "read_sent_file", {"path": bad})), bad
 
     # Paul writes with a file while her turn goes on: his message waits behind it (the family's one conversation),
     # his file already in the pool

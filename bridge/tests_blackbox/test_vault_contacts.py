@@ -12,7 +12,7 @@ import yaml
 from cryptography.fernet import Fernet
 
 from bbkit.common import AUTH, app_turn, follow_run, sse
-from bbkit.mcp import TOKEN, give_token
+from bbkit.mcp import TOKEN, give_token, not_done
 from bbkit.servers import wait_until
 from conftest import wait_registered
 
@@ -66,7 +66,7 @@ def tool(bridge, token, name, arguments):
     body = {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": name, "arguments": arguments}}
     resp = bridge.post(VAULT, json=body, headers={"Authorization": f"Bearer {token}"}, timeout=60)
     result = resp.json()["result"]
-    return result["content"][0]["text"], result["isError"]
+    return result["content"][0]["text"], not_done(result)
 
 
 def hermes_requests(bridge, agent):
@@ -141,7 +141,7 @@ def test_per_agent_access_and_what_the_agent_reads(bridges, fakes):
     assert "e-mails: camille@example.org" in used and "country (ISO code): FR" in used
     assert used.endswith(f"<!--bip:vault {item['id']} Kerfy Studio (pro)-->")
     missing, error = tool(bridge, VIE, "vault_contact_details", {"label": "Maison"})
-    assert error and missing == "No entry « Maison ». Yours: « Kerfy Studio (pro) »."
+    assert error and missing == "Not done: No entry « Maison ». Yours: « Kerfy Studio (pro) »."
     coach, _ = tool(bridge, COACH, "vault_contact_details", {})
     assert "Maison" in coach and "Kerfy" not in coach
     # taken back from Vie: nothing to read any more

@@ -241,7 +241,7 @@ async fn weather_is_listed_only_once_switched_on() {
     let names = tool_names(&app).await;
     assert!(names.contains(&"route".to_string()) && !names.contains(&"weather".to_string()), "{names:?}");
     let off = rpc(&app, "tools/call", json!({"name": "weather", "arguments": {"place": "Lyon"}})).await;
-    assert_eq!(off["isError"], true);
+    assert!(common::refused(&off), "{off}");
     assert_eq!(fakes.geocoder.count(), 0);
 
     assert!(weather::set_enabled(&config, "wellness", true).unwrap());

@@ -4,7 +4,7 @@ lists seeded, in English), called over MCP the way the agent's Hermes calls it."
 import re
 
 from bbkit.common import AUTH
-from bbkit.mcp import call, give_token, text_of
+from bbkit.mcp import call, give_token, text_of, not_done
 from test_agents_admin import managed
 
 TOKEN = "agent-token-for-family-0123456789ab"
@@ -68,7 +68,7 @@ def test_the_list_named_the_ways_a_model_names_it(bridges, fakes):
     assert ticked["isError"] is False, text_of(ticked)
     # still refused when there is truly no such list, and the answer says where the ids are
     wrong = call(bridge, "family_notebook_write", {"op": "item_add", "list": "l00000000", "text": "x"}, token=TOKEN)
-    assert wrong["isError"] is True and "family_notebook_read" in text_of(wrong), text_of(wrong)
+    assert not_done(wrong) and "family_notebook_read" in text_of(wrong), text_of(wrong)
 
 
 def test_a_page_the_family_agent_makes_opens_for_its_creator(bridges, fakes):

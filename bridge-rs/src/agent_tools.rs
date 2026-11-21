@@ -1913,6 +1913,11 @@ reply, exactly as it is (a new file each time: never one from an earlier turn).{
     ))
 }
 
+/// A tool's work as its answer: what it gave, or a real failure of the bridge (tool_answers.rs, « don't retry »).
+pub fn or_failure(tool: &str, done: anyhow::Result<Dict>) -> Dict {
+    done.unwrap_or_else(|err| crate::tool_answers::internal_failure(SERVER_NAME, tool, &format!("{err:#}")))
+}
+
 /// Spoken words a minute, roughly, with the place's voices: the podcast's length told to the model. Measured on
 /// 2026-10-30 (Pocket voices, DeepSeek scripts): 302 words → 1 min 36, 249 → 1 min 22, ≈ 185 a minute (was 150).
 pub const WORDS_PER_MINUTE: f64 = 180.0;
@@ -2110,13 +2115,10 @@ async fn mcp_call(
         // the bridge restarts for an update in a moment: « try again in a minute », not an error (update_drain.rs)
         tracing::info!(target: "bipbridge::update", agent = %agent.name, tool = %tk::str_or_empty(params.get("name")),
             "a tool call while the bridge closes for an update: try again in a minute");
-        let result = tool_text(crate::update_drain::busy_text(&lang), false);
+        let mut result = tool_text(crate::update_drain::busy_text(&lang), false);
+        crate::tool_answers::settle(SERVER_NAME, &agent.name, &mut result);
         return Ok(crate::web::json_response(200, &rpc_result(&request_id, Value::Object(result))));
     }
-    let answer = |mut result: Dict| {
-        crate::names::localize_result(&mut result, &lang);
-        crate::web::json_response(200, &rpc_result(&request_id, Value::Object(result)))
-    };
     let name = tk::str_or_empty(params.get("name"));
     let arguments = match params.get("arguments") {
         Some(Value::Object(map)) => map.clone(),
@@ -2124,11 +2126,21 @@ async fn mcp_call(
     };
     // a deferred tool's call that the model's constrained names ended on an in-view tool (tool_diet.rs)
     let name = crate::tool_diet::reroute(&state.config(), &agent, &name, &arguments);
+    // every answer as it goes to Hermes: a refusal plain (the hub told, for its run's events), a real failure « don't
+    // retry » (tool_answers.rs)
+    // the call this request is, in the run the hub follows (`claim_call`): a refusal is relayed on it
+    let (caller, hub) = (agent.name.clone(), state.hub.clone());
+    // (by the name Hermes called: its events', before tool_diet's reroute)
+    let claim = hub.claim_call_with(&agent.name, &tk::str_or_empty(params.get("name")), crate::tool_answers::call_id_of(&params).as_deref());
+    let answer = |mut result: Dict| {
+        crate::names::localize_result(&mut result, &lang);
+        crate::tool_answers::settle_for(&hub, claim.as_ref(), SERVER_NAME, &caller, &mut result);
+        crate::web::json_response(200, &rpc_result(&request_id, Value::Object(result)))
+    };
     if crate::sealed_keys::closed(&state.config()) && reads_sealed_stores(&name) {
         // the vault's keys sealed and not reopened yet (a server restart): plain words, never « give me the password »
         tracing::info!(agent = %agent.name, tool = %name, "a mail tool called while the vault is closed");
-        let result = crate::sealed_keys::closed_result(&state.config(), &lang);
-        return Ok(crate::web::json_response(200, &rpc_result(&request_id, result)));
+        return Ok(answer(tool_text(crate::sealed_keys::closed_text(&state.config(), &lang), false)));
     }
     if crate::family_agent::is_family(&state.config(), &agent.name) {
         // the family's agent: only the family's tools, in every turn, its creator's too (family_agent.rs)
@@ -2139,7 +2151,7 @@ async fn mcp_call(
             return Ok(answer(closed));
         }
         if crate::family_agent::TOOL_NAMES.contains(&name.as_str()) {
-            let result = crate::family_agent::call_tool(&state.config(), &agent, &name, &arguments)?;
+            let result = or_failure(&name, crate::family_agent::call_tool(&state.config(), &agent, &name, &arguments));
             return Ok(answer(result));
         }
     }
@@ -2240,6 +2252,9 @@ async fn mcp_call(
     let wrote = move |agent: &str, name: &str, arguments: &Dict, result: &mut Dict| {
         if !result.get("isError").map(py::truthy).unwrap_or(false) {
             crate::loop_brake::TURNS.record_answer(agent, turn.as_ref(), name, arguments, result);
+        } else {
+            // the same refused write asked again and again: stopped at its third ask (loop_brake.rs)
+            crate::loop_brake::TURNS.record_refusal(agent, turn.as_ref(), name, arguments, result);
         }
         // a routine's limits getting close: told with this call's result
         if let Some(note) = crate::loop_brake::TURNS.take_note(agent, turn.as_ref()) {
@@ -2248,7 +2263,10 @@ async fn mcp_call(
     };
     if name == crate::guide::RENAME_SELF {
         // its name in the bridge's config (the shared one, not this request's copy), and the mark for its reply
-        let (mut result, mark) = crate::guide::rename_yourself_call(&state.config, &agent, &arguments).await?;
+        let (mut result, mark) = match crate::guide::rename_yourself_call(&state.config, &agent, &arguments).await {
+            Ok(done) => done,
+            Err(err) => return Ok(answer(or_failure(&name, Err(err)))),
+        };
         if let Some(mark) = mark {
             crate::made_files::MADE.note(&agent.name, &mark, turn_run.as_deref(), py::time_time());
         }
@@ -2276,9 +2294,10 @@ async fn mcp_call(
         // « Passer par mon téléphone pour <site> ? »: its card in this turn's conversation, then pushed (card_place.rs)
         let cards_before = crate::card_place::waiting(&state, &agent.name);
         let (c, a, args) = (state.config(), agent.clone(), arguments.clone());
-        let (text, is_error, card) = tokio::task::spawn_blocking(move || crate::phone_exit::agent::call(&c, &a, &args))
-            .await
-            .map_err(anyhow::Error::from)?;
+        let (text, is_error, card) = match tokio::task::spawn_blocking(move || crate::phone_exit::agent::call(&c, &a, &args)).await {
+            Ok(done) => done,
+            Err(err) => return Ok(answer(or_failure(&name, Err(err.into())))),
+        };
         if let Some(card) = &card {
             crate::card_place::place_new(&state, &agent, &cards_before, turn_run.as_deref()).await;
             crate::phone_exit::agent::notify(&state.push, &state.config(), card).await;
@@ -2350,12 +2369,12 @@ async fn mcp_call(
     if family && crate::calendar::TOOL_NAMES.contains(&name.as_str()) {
         // the calendars its members chose to share with it, each asked on her own place (family_calendar.rs); `who`
         // defaults to the person writing in this turn (the creator's, a routine's: None)
-        let mut result = crate::family_calendar::call(&state, &agent, &name, &arguments, member.as_ref()).await?;
+        let mut result = or_failure(&name, crate::family_calendar::call(&state, &agent, &name, &arguments, member.as_ref()).await);
         wrote(&agent.name, &name, &arguments, &mut result);
         return Ok(answer(result));
     }
     if crate::family_news::TOOL_NAMES.contains(&name.as_str()) {
-        let mut result = crate::family_news::call_tool(&state.http, &state.config(), &agent, &name, &arguments).await?;
+        let mut result = or_failure(&name, crate::family_news::call_tool(&state.http, &state.config(), &agent, &name, &arguments).await);
         wrote(&agent.name, &name, &arguments, &mut result);
         return Ok(answer(result));
     }
@@ -2368,6 +2387,7 @@ async fn mcp_call(
     let cards_before = crate::card_place::waiting(&state, &agent.name);
     let card_state = state.clone();
     let note_config = state.config();
+    let tool = name.clone();
     // the phone the person asked from in this turn (threads/send.rs): where a reminder goes (reminders.rs)
     let asking = turn_run.as_deref().and_then(|r| state.hub.subscription(&agent.name, r)).and_then(|s| s.phone());
     // (the call's session kept in its work: patch 0028, `runs::CALL_SESSION`)
@@ -2418,7 +2438,10 @@ async fn mcp_call(
     });
     let accept = headers.get("accept").and_then(|v| v.to_str().ok()).unwrap_or("");
     if !accept.contains("text/event-stream") {
-        let result = work.await.map_err(anyhow::Error::from)??;
+        let result = match work.await {
+            Ok(done) => or_failure(&tool, done),
+            Err(err) => or_failure(&tool, Err(err.into())),
+        };
         return Ok(answer(result));
     }
     let guard = AbortOnDrop(work.abort_handle());
@@ -2441,16 +2464,21 @@ async fn mcp_call(
                             }
                         }
                     }
+                    let mut result = result;
+                    crate::tool_answers::settle_for(&tools_of.0.hub, claim.as_ref(), SERVER_NAME, &tools_of.1, &mut result);
                     let payload = py::dumps(&rpc_result(&request_id, Value::Object(result)));
                     yield Ok(Bytes::from(format!("event: message\ndata: {payload}\n\n")));
                     break;
                 }
-                Ok(Ok(Err(err))) => {
-                    tracing::error!(exc = %format!("{err:#}"), "Exception in ASGI application");
-                    break;
-                }
-                Ok(Err(err)) => {
-                    tracing::error!(exc = %err, "Exception in ASGI application");
+                // a real failure: said, « don't retry », never three in a row (tool_answers.rs), not a cut stream
+                Ok(failed) => {
+                    let mut result = match failed {
+                        Ok(done) => or_failure(&tool, done),
+                        Err(err) => or_failure(&tool, Err(err.into())),
+                    };
+                    crate::tool_answers::settle_for(&tools_of.0.hub, claim.as_ref(), SERVER_NAME, &tools_of.1, &mut result);
+                    let payload = py::dumps(&rpc_result(&request_id, Value::Object(result)));
+                    yield Ok(Bytes::from(format!("event: message\ndata: {payload}\n\n")));
                     break;
                 }
             }

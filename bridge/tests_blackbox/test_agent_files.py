@@ -12,6 +12,7 @@ from concurrent.futures import ThreadPoolExecutor
 import yaml
 
 from bbkit.common import AUTH
+from bbkit.mcp import not_done
 from bbkit.servers import wait_until
 from conftest import managed_install, profile, servers, wait_registered
 from test_sandbox import TOKENS, give_tokens, isolated, started
@@ -27,7 +28,7 @@ def rpc(bridge, token, method, params=None):
 
 def send(bridge, token, **arguments):
     result = rpc(bridge, token, "tools/call", {"name": TOOL, "arguments": arguments})["result"]
-    return result["content"][0]["text"], result["isError"]
+    return result["content"][0]["text"], not_done(result)
 
 
 def names(bridge, token):
@@ -111,7 +112,7 @@ def test_isolated_agents_give_files_along_the_links_the_person_allowed(bridges, 
     assert send(bridge, vie, agent="wellness", files=["/envoi/devis.pdf", "/etc/hosts"])[1] is True
     assert stored(uploads) == before
     # Not to itself, nobody unknown, never another household's agent; something to give.
-    assert send(bridge, vie, agent="vie", text="x") == ("That is you: name another agent.", True)
+    assert send(bridge, vie, agent="vie", text="x") == ("Not done: That is you: name another agent.", True)
     text, failed = send(bridge, vie, agent="personne", text="x")
     assert failed and "You may give files to: bip/wellness." in text
     text, failed = send(bridge, vie, agent="bip/cuisine__lea", text="x")

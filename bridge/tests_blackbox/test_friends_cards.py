@@ -15,7 +15,7 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from bbkit.common import AUTH
 from bbkit.fakes import taken_notes
-from bbkit.mcp import call, give_token, text_of
+from bbkit.mcp import call, give_token, not_done, text_of
 from test_project_agents import share_body
 from test_read_shares import FakeGuichet, Phone, open_item
 
@@ -59,8 +59,8 @@ def test_friends_vote_and_tick_the_owner_s_bridge_counts_and_the_agent_hears(bri
 
     vote_line, vote = card("vote", "Où dormir ?", ["Alfama · 92 €/nuit", "Bairro Alto · 80 €/nuit"])
     list_line, todo = card("checklist", "À faire", ["Billets d'avion", "Cartes de tram"])
-    assert call(bridge, "friends_card", {"type": "vote", "title": "x", "options": ["seul"]},
-                token=TOKEN)["isError"] is True
+    assert not_done(call(bridge, "friends_card", {"type": "vote", "title": "x", "options": ["seul"]},
+                token=TOKEN))
     fakes.hermes.add_session("bot-1", [
         {"id": 1, "role": "user", "content": "On choisit le quartier ?"},
         {"id": 2, "role": "assistant", "content": f"Votez ici :\n{vote_line}\nEt la liste :\n{list_line}"},

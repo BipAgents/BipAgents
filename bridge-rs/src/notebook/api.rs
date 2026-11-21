@@ -838,7 +838,12 @@ async fn write_section(State(state): State<AppState>, q: QueryMap, Json(body): J
     let config = state.config();
     let shown = shown_language(&config, &q);
     let part = if body.private { Part::Health } else { Part::Main };
-    if super::lexicon::id_number(&body.text) {
+    // only what the person adds is judged: a line already on the page (an agent's, an older edit's) is kept as it is
+    let (c, path, text) = (config.clone(), body.path.clone(), body.text.clone());
+    let refused = tokio::task::spawn_blocking(move || super::checked(&path).is_ok() && super::new_id_number(&c, part, &path, &text))
+        .await
+        .map_err(anyhow::Error::from)?;
+    if refused {
         return Err(carnet_error(422, "number_refused", &shown, json!({})));
     }
     let lang = shown.clone();

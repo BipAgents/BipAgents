@@ -140,7 +140,7 @@ async fn an_agent_makes_a_page_and_the_app_gets_it_locked() {
     let listed = call(&app, "list_pages", json!({})).await;
     assert!(s(&listed["content"][0]["text"]).starts_with("prises-de-sang: Prises de sang (changed now ago, version 2)"));
     assert_eq!(call(&app, "read_page", json!({"page": "prises-de-sang"})).await["content"][0]["text"], "<p>v2</p>");
-    assert_eq!(call(&app, "read_page", json!({"page": "nope"})).await["isError"], true);
+    assert!(common::refused(&call(&app, "read_page", json!({"page": "nope"})).await));
     let app_list = app.get("/v1/pages?agent=wellness", &[(k, &v)]).await.json()["pages"].clone();
     let rows: Vec<(String, String, i64)> = app_list
         .as_array()

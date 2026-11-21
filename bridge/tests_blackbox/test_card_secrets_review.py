@@ -4,6 +4,7 @@ Failed on the branch: the card was raised, and what the person gives for the exp
 was kept. No real card data (an expiry, a name and a code made up)."""
 import concurrent.futures
 
+from bbkit.mcp import not_done
 from bbkit.common import AUTH
 from test_connectors import cards, setup, text, tool, wait_card
 
@@ -31,7 +32,7 @@ def test_rv_ask_secret_never_raises_a_card_for_a_cards_details_in_other_words(br
                 result = call.result(timeout=4)
             except concurrent.futures.TimeoutError:
                 result = None
-            if result is not None and result.get("isError") and text(result).startswith("Refused"):
+            if result is not None and not_done(result) and text(result).startswith("Not done: Refused"):
                 continue   # refused at once, as it should
             card = wait_card(bridge, "bip-secret-", seen)
             url = f"/v1/vault/secrets/requests/{card['request_id']}"

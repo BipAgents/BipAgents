@@ -15,7 +15,7 @@ import httpx
 import pytest
 
 from bbkit.common import AUTH, read_sse, sse, in_session, boite_items
-from bbkit.mcp import call, give_token, rpc, text_of
+from bbkit.mcp import call, give_token, not_done, rpc, text_of
 from bbkit.servers import wait_until
 
 # 0.20 € five times at home (jobs.rs HOME_BUDGET_SCALE) at 0.95 × 0.50 € + 0.05 × 1.50 € per million tokens
@@ -54,7 +54,7 @@ def test_start_task_starts_a_task_within_the_direct_budget(bridges, fakes):
     # conversation, which says its session: patch 0028)
     more = [call(bridge, "start_task", {"title": f"Autre {n}", "instructions": "Encore."}, session="api_person")
             for n in (2, 3, 4)]
-    assert [m["isError"] for m in more] == [False, False, True]
+    assert [not_done(m) for m in more] == [False, False, True]
     assert text_of(more[2]) == ("Not started: this agent already has three background tasks running. "
                                 "Propose it with propose_task instead, and tell your person so.")
     for one in jobs(bridge):
@@ -66,7 +66,7 @@ def test_start_task_refuses_more_than_the_direct_budget(bridges, fakes):
     give_token(bridge)
     fakes.hermes.rounds = 1000
     above = call(bridge, "start_task", {"title": "Grosse recherche", "instructions": "Cherche.", "budget_eur": 1.5})
-    assert above["isError"]
+    assert not_done(above)
     assert "more than the 1,818,181 tokens a task may take without your person's go" in text_of(above)
     assert "propose_task" in text_of(above)
     assert not fakes.hermes.seen("/v1/runs", "POST") and jobs(bridge) == []
@@ -84,7 +84,7 @@ def test_on_a_place_of_the_offer_the_direct_budget_is_told_in_euros(bridges, fak
     bridge.start()
     give_token(bridge)
     above = call(bridge, "start_task", {"title": "Grosse recherche", "instructions": "Cherche.", "budget_eur": 1.5})
-    assert above["isError"] and "more than the 0.20 € a task may take without your person's go" in text_of(above)
+    assert not_done(above) and "more than the 0.20 € a task may take without your person's go" in text_of(above)
     assert "tokens" not in text_of(above)
     assert not fakes.hermes.seen("/v1/runs", "POST") and jobs(bridge) == []
 

@@ -12,7 +12,7 @@ from test_agent_messages import ask
 from test_agent_pairs import linked
 
 BOTH_WAYS = [{"from": "quotidien", "to": "coach"}, {"from": "coach", "to": "quotidien"}]
-CAPPED = "Limite d'échanges entre agents atteinte : réponds à la personne ou demande-lui de continuer."
+CAPPED = "Not done: Limite d'échanges entre agents atteinte : réponds à la personne ou demande-lui de continuer."
 
 
 def hop_cards(bridge, agent="quotidien"):
