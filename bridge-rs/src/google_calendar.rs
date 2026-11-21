@@ -1145,8 +1145,9 @@ pub async fn write_call(state: &AppState, agent: &AgentConfig, name: &str, argum
         summary: sentence(&lang, planned.tool, &shown, &planned.title),
         detail,
         always: None,
-        // a deletion is asked each time (audit 1.3); adds and changes may be allowed for the conversation
-        session: !delete,
+        // a deletion is asked each time (audit 1.3); adds and changes may be allowed for the conversation, in the
+        // primary calendar only: another one (shared by someone else) is asked each time (review 2, 21/11)
+        session: !delete && planned.calendar_name.is_none(),
     };
     use crate::person_ok::Answer;
     let refused = |a: &'static str, b: &'static str| if delete { a } else { b };

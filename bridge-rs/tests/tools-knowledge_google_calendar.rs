@@ -411,13 +411,15 @@ async fn connected_once_listed_and_every_write_asked_first() {
     assert!(failed && said.contains("did not answer"), "{said}");
     assert_eq!(writes(&google).len(), 2);
 
-    // another calendar, named as the list shows it: its name on the card, written there
+    // another calendar, named as the list shows it: its name on the card, written there; asked even in h1, where
+    // « Oui, pour cette conversation » was given for the primary one, and never offered for it (review 2)
     let work = json!({"title": "Point", "start": "2026-11-27T09:00", "calendar": "travail"});
     let ((failed, said), card) =
-        tokio::join!(tool(&app, "calendar_add", work, "h4"), common::answer_card(&app, "bip-ok-", "once"));
+        tokio::join!(tool(&app, "calendar_add", work, "h1"), common::answer_card(&app, "bip-ok-", "once"));
     assert!(!failed && said.contains(&format!("id {WORK_REF}:n")), "{said}");
     assert_eq!(card["bip_summary"], "Coach wants to add an event to your Google Calendar: « Point »");
     assert!(card["bip_detail"].as_str().unwrap().contains("(« Travail » · Google Calendar)"), "{card}");
+    assert_eq!(card["choices"], json!(["once", "deny"]), "no « for this conversation » for another calendar");
     let posted = writes(&google).last().cloned().unwrap();
     assert_eq!(posted.1, format!("/cal/calendars/{WORK}/events"));
     let body: Value = serde_json::from_str(&posted.3).unwrap();
@@ -457,12 +459,13 @@ async fn connected_once_listed_and_every_write_asked_first() {
     let change: Value = serde_json::from_str(&patched.3).unwrap();
     assert_eq!(change["end"], json!({"dateTime": "2026-11-24T15:00:00+01:00"}));
     assert!(change.get("summary").is_none(), "only what changes: {change}");
-    // the other calendar's event, through its id
-    let ((failed, said), _) = tokio::join!(
-        tool(&app, "calendar_update", json!({"id": format!("{WORK_REF}:t1"), "location": "Salle 2"}), "h3"),
+    // the other calendar's event, through its id: asked in h1 too
+    let ((failed, said), card) = tokio::join!(
+        tool(&app, "calendar_update", json!({"id": format!("{WORK_REF}:t1"), "location": "Salle 2"}), "h1"),
         common::answer_card(&app, "bip-ok-", "once")
     );
     assert!(!failed && said.contains("Changed"), "{said}");
+    assert_eq!(card["choices"], json!(["once", "deny"]), "{card}");
     let key = (WORK.to_string(), "t1".to_string());
     assert_eq!(google.lock().unwrap().events[&key]["location"], "Salle 2");
     // changed at Google between the check and the « Oui » (made repeating, moved…): left as it is, told
