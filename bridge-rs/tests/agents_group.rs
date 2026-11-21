@@ -748,27 +748,28 @@ fn each_sender_learns_whom_it_may_write_to() {
 fn the_familys_agent_learns_only_this_places_agents_it_may_ask() {
     let dir = tempfile::tempdir().unwrap();
     let p = peers_setup(dir.path());
-    let households = lea(dir.path());
+    let households = lea(&PathBuf::from(p.config.data_dir()));
     let data = std::path::PathBuf::from(p.config.data_dir());
     std::fs::create_dir_all(&data).unwrap();
     std::fs::write(data.join("family-agent.json"), r#"{"agent": "budget", "agents": ["budget"]}"#).unwrap();
     let wanted = pairs(&[("budget", "maison"), ("budget", "cuisine__lea"), ("maison", "cuisine__lea")]);
     peers::apply(&p.config, &p.links, &wanted, Some(&households)).unwrap();
-    // the family's agent → Léa's agent: not kept; Maison's is
-    assert!(p.links.allowed("budget", "maison") && p.links.allowed("maison", "cuisine__lea"));
-    assert!(!p.links.allowed("budget", "cuisine__lea"));
-    assert!(!marked(&p.hub.join("profiles/budget")), "no Bot Mode for the family's agent");
-    assert!(marked(&p.hub.join("profiles/maison")));
+    // the family's agent → Léa's agent: not kept (rules.rs: its « Peut demander à » is this place's agents); Maison's
+    // way to Léa's Cuisine is (it works once Léa agrees)
+    assert!(rules::allows(&p.config, "budget", "maison") && !rules::allows(&p.config, "budget", "cuisine__lea"));
+    assert_eq!(rules::load(&p.config).households["lea"].out, rules::Rule::only(["cuisine"]));
+    assert!(!marked(&p.hub.join("profiles/budget")) && !marked(&p.hub.join("profiles/maison")), "no Bot Mode at all");
     let contacts = std::fs::read_to_string(p.hub.join("profiles/budget/skills/agent-contacts/SKILL.md")).unwrap();
     assert!(contacts.contains("`bip/maison`: Maison"), "{contacts}");
     assert!(!contacts.contains("cuisine__lea") && !contacts.contains("send_files_to_agent"), "{contacts}");
     assert!(contacts.contains("every member of the family reads"), "{contacts}");
-    // a link kept from before (made before this rule): still no Bot Mode at the start, still not listed
+    // a link kept from before (made before the rules): still no Bot Mode at the start, still not listed
     std::fs::write(&p.links_path, json!({"links": [["budget", "cuisine__lea"]], "tokens": {}}).to_string()).unwrap();
-    peers::heal_tokens(&p.config, &p.links);
+    peers::drop_bot_mode(&p.config, &p.links);
     assert!(!marked(&p.hub.join("profiles/budget")));
-    peers::write_contacts(&p.config, &peers::links_of(&p.links.load()), Some(&households));
-    assert!(!p.hub.join("profiles/budget/skills/agent-contacts/SKILL.md").exists(), "nobody it may ask");
+    peers::refresh(&p.config, &p.links, Some(&households)).unwrap();
+    let contacts = std::fs::read_to_string(p.hub.join("profiles/budget/skills/agent-contacts/SKILL.md")).unwrap();
+    assert!(!contacts.contains("cuisine__lea"), "{contacts}");
 }
 
 // -- households -------------------------------------------------------------------------------------------------------

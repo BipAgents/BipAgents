@@ -197,19 +197,19 @@ async fn message_agent_and_send_files_obey_the_rules() {
     // « Aucun »: refused, nothing reaches Coach
     rules::change(&config, |r| r.write = Mode::None).unwrap();
     assert!(!bipbridge::agent_messages::offered(&config, "quotidien"));
-    let called = bipbridge::agent_messages::call(&http, None, &config, &quotidien, &ask("Combien ?")).await;
+    let called = bipbridge::agent_messages::call(&http, None, &config, &quotidien, &ask("Combien ?"), None).await;
     assert!(said(&called.result).contains("hasn't let you write to Coach"), "{}", said(&called.result));
     assert!(give(&config).contains("can't pass things on to Coach"), "{}", give(&config));
     assert!(calls.0.lock().unwrap().is_empty());
     // « Tous »: asked, answered
     rules::change(&config, |r| r.write = Mode::All).unwrap();
     assert!(bipbridge::agent_messages::offered(&config, "quotidien"));
-    let called = bipbridge::agent_messages::call(&http, None, &config, &quotidien, &ask("Combien ?")).await;
+    let called = bipbridge::agent_messages::call(&http, None, &config, &quotidien, &ask("Combien ?"), None).await;
     assert!(said(&called.result).contains("Sept heures."), "{}", said(&called.result));
     assert!(!give(&config).contains("can't pass things on"), "{}", give(&config));
     // Coach « à l'écart »: refused again
     rules::change(&config, |r| r.aside = vec!["coach".into()]).unwrap();
-    let called = bipbridge::agent_messages::call(&http, None, &config, &quotidien, &ask("Et demain ?")).await;
+    let called = bipbridge::agent_messages::call(&http, None, &config, &quotidien, &ask("Et demain ?"), None).await;
     assert!(said(&called.result).contains("hasn't let you write to Coach"), "{}", said(&called.result));
     // a new agent is covered at once
     rules::change(&config, |r| r.aside.clear()).unwrap();
@@ -349,7 +349,7 @@ async fn ask_agent(app: &TestApp, agent: &str, target: &str, message: &str) -> S
     let mut args = bipbridge::Dict::new();
     args.insert("target".into(), json!(target));
     args.insert("message".into(), json!(message));
-    let called = bipbridge::agent_messages::call(&reqwest::Client::new(), None, &config, &asker, &args).await;
+    let called = bipbridge::agent_messages::call(&reqwest::Client::new(), None, &config, &asker, &args, None).await;
     called.result["content"][0]["text"].as_str().unwrap_or_default().to_string()
 }
 

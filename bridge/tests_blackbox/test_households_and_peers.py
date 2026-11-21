@@ -14,6 +14,7 @@ import yaml
 from starlette.responses import JSONResponse
 
 from bbkit.common import AUTH
+from bbkit.mcp import not_done
 from bbkit.servers import wait_until
 from bbkit.fakes import split_now
 from conftest import managed_install, marked, profile
@@ -60,7 +61,7 @@ def ask_agent(bridge, token, target, message):
     answer = bridge.post("/v1/agent-tools/mcp", json=body, headers={"Authorization": f"Bearer {token}"})
     assert answer.status_code == 200, answer.text
     result = answer.json()["result"]
-    return result["content"][0]["text"], result["isError"]
+    return result["content"][0]["text"], result["isError"] or not_done(result)
 
 
 def household(bridges, fakes, name, agents):
