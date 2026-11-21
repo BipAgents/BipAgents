@@ -182,6 +182,25 @@ fn unmark_bots(config: &Config) {
     }
 }
 
+/// `key`'s lines taken out of a gateway's `.env`, the others kept as they are: written only when there is one, through
+/// a temporary file renamed over it with its mode (profile_files.rs `write_atomic`). Each start does this for every
+/// gateway: until review 2 of 21/11 the file was written again in place each time, and a full disk would have left the
+/// hub's `.env` (its model keys) empty. Whether it was written.
+fn drop_env_line(path: &Path, key: &str) -> std::io::Result<bool> {
+    let text = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(e) => return Err(e),
+    };
+    let ours = |line: &str| line.split('=').next().unwrap_or("").trim() == key;
+    if !text.split_inclusive('\n').any(ours) {
+        return Ok(false);
+    }
+    let kept: String = text.split_inclusive('\n').filter(|line| !ours(line)).collect();
+    crate::profile_files::write_atomic(path, kept.as_bytes())?;
+    Ok(true)
+}
+
 /// At start: Hermes' Bot Mode off everywhere (21/11, Alex: another household's agents through the bridge only). A
 /// place set up before loses every profile's mark, the bridge as its gateways' `bot_peers.bip` and their key, and the
 /// tokens peers.json gave them (its links of before stay as they were).
@@ -194,11 +213,8 @@ pub fn drop_bot_mode(config: &Config, links: &Links) {
     gateways.extend(tokens.iter().filter(|g| !g.starts_with("manual:")).map(PathBuf::from));
     let key_env = format!("HERMES_PEER_{}_KEY", PEER_NAME.to_uppercase());
     for gateway in gateways.iter().filter(|g| g.is_dir()) {
-        let env = gateway.join(".env");
-        if env.exists() {
-            if let Err(exc) = crate::services::set_env(&env, &key_env, None) {
-                tracing::warn!(gateway = %gateway.display(), error = %exc, "Bot Mode key not taken out");
-            }
+        if let Err(exc) = drop_env_line(&gateway.join(".env"), &key_env) {
+            tracing::warn!(gateway = %gateway.display(), error = %exc, "Bot Mode key not taken out");
         }
         let peers_file = gateway.join("config.yaml");
         if peers_file.exists() {
@@ -1131,6 +1147,36 @@ mod tests {
         assert!(household_turn("cuisine-test") && !household_turn("vie-test"));
         household_turn_ended(turn);
         assert!(!household_turn("cuisine-test"));
+    }
+
+    /// Review 2 of 21/11: a gateway's `.env` (the hub's model keys) is written only when Bot Mode's key is in it, never
+    /// in place.
+    #[test]
+    fn a_gateway_env_is_written_only_to_take_the_bot_mode_key_out() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let env = dir.path().join(".env");
+        let key = "HERMES_PEER_BIP_KEY";
+        // without the line: untouched (not even written again)
+        std::fs::write(&env, "CUSTOM_MODEL_API_KEY=sk-hub\nAPI_SERVER_KEY=k\n").unwrap();
+        std::fs::set_permissions(&env, std::fs::Permissions::from_mode(0o640)).unwrap();
+        let old = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000);
+        std::fs::File::options().write(true).open(&env).unwrap().set_modified(old).unwrap();
+        assert!(!drop_env_line(&env, key).unwrap());
+        assert_eq!(std::fs::metadata(&env).unwrap().modified().unwrap(), old);
+        assert_eq!(std::fs::read_to_string(&env).unwrap(), "CUSTOM_MODEL_API_KEY=sk-hub\nAPI_SERVER_KEY=k\n");
+        // with it: only that line out, the rest as it was (no newline added at the end), its mode kept, no leftover
+        std::fs::write(&env, "CUSTOM_MODEL_API_KEY=sk-hub\nHERMES_PEER_BIP_KEY=old\n# a note\nAPI_SERVER_KEY=k").unwrap();
+        assert!(drop_env_line(&env, key).unwrap());
+        assert_eq!(std::fs::read_to_string(&env).unwrap(), "CUSTOM_MODEL_API_KEY=sk-hub\n# a note\nAPI_SERVER_KEY=k");
+        assert_eq!(std::fs::metadata(&env).unwrap().permissions().mode() & 0o777, 0o640);
+        let names: Vec<String> =
+            std::fs::read_dir(dir.path()).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+        assert_eq!(names, [".env"]);
+        assert!(!drop_env_line(&env, key).unwrap()); // once
+        // no file: none made
+        assert!(!drop_env_line(&dir.path().join("missing.env"), key).unwrap());
+        assert!(!dir.path().join("missing.env").exists());
     }
 
     #[test]
