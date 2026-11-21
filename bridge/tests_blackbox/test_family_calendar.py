@@ -7,7 +7,7 @@ import json
 import threading
 
 from bbkit.common import AUTH, sse
-from bbkit.mcp import TOKEN, call, give_token, rpc, text_of
+from bbkit.mcp import TOKEN, call, give_token, not_done, rpc, text_of
 from test_family_agent import make_family_agent
 from test_family_thread import join
 from test_households_and_peers import household
@@ -105,7 +105,7 @@ def test_the_family_agent_reads_and_writes_only_the_calendars_shared_with_it(bri
     # not hers to change yet: said plainly, nothing queued
     give_token(a, "famille", TOKEN)
     refused = call(a, "calendar_add", {"who": "Marie", "title": "Cinéma", "start": "2026-10-30T20:00"})
-    assert refused["isError"] is True and "Marie doesn't let you change" in text_of(refused), refused
+    assert not_done(refused) and "Marie doesn't let you change" in text_of(refused), refused
     assert b.get("/v1/calendar/queue", headers=AUTH).json()["queue"] == []
     write = b.put("/v1/calendar/rights", headers=AUTH, json={"agent": "famille__alex", "rights": {"write": True}})
     assert write.status_code == 200 and write.json() == {"agent": "famille__alex", "rights": {"read": True, "write": True}}
@@ -146,7 +146,7 @@ def test_the_family_agent_reads_and_writes_only_the_calendars_shared_with_it(bri
     assert wait(lambda: flags(a).get("marie") == {"read": True, "write": False}, 15), flags(a)
     give_token(a, "famille", TOKEN)
     refused = call(a, "calendar_add", {"who": "Marie", "title": "Cinéma", "start": "2026-10-30T20:00"})
-    assert refused["isError"] is True and "Marie doesn't let you change" in text_of(refused), refused
+    assert not_done(refused) and "Marie doesn't let you change" in text_of(refused), refused
     assert "Dentiste de Marie" in listed(a)   # reading still allowed
 
     # her bridge down: one line, never a failure; Alex's own still there

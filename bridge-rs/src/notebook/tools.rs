@@ -43,7 +43,17 @@ pub const LINES: usize = 3;
 /// Pages a search without words lists (the latest).
 pub const LATEST: usize = 10;
 
-const ID_NUMBER: &str = "Not saved: ID numbers are never kept.";
+const ID_NUMBER: &str = "Not saved: ID numbers are never kept";
+
+/// An ID number refused (lexicon::id_number), and where it was: the agent writes it again without it, instead of
+/// guessing what was wrong (14/11 bench: an e-mail taken out three times while a date was the culprit).
+fn id_refused(place: &str) -> Dict {
+    tool_text(
+        &format!("{ID_NUMBER}, and {place} holds one. Write it again without the number (an e-mail address, a login or \
+a date is fine)."),
+        true,
+    )
+}
 const SEVERAL: &str = "Ask which one.";
 
 fn private_property() -> Value {
@@ -201,10 +211,10 @@ pub fn call(config: &Config, agent: &str, name: &str, arguments: &Dict, turn: &T
 
 fn call_in(config: &Config, agent: &str, name: &str, arguments: &Dict, turn: &Turn) -> anyhow::Result<Dict> {
     if !super::enabled(config, agent) {
-        return Ok(tool_text(
+        return Ok(crate::tool_answers::lifted_in_the_app(tool_text(
             "The Carnet is off for you: the person switches « Carnet » on in your page of the app.",
             true,
-        ));
+        )));
     }
     let health = super::health_agent(config, agent);
     if !health && flag(arguments, "private") {
@@ -515,9 +525,18 @@ fn write(config: &Config, agent: &str, arguments: &Dict, turn: &Turn, health: bo
             .collect(),
         _ => Vec::new(),
     };
-    let texts = facts.iter().chain(std::iter::once(&summary)).chain(fixes.iter().map(|(_, new)| new));
-    if texts.into_iter().any(|t| lexicon::id_number(t)) {
-        return Ok(tool_text(ID_NUMBER, true));
+    // every text written: the facts, the summary, the fixes, and the page's name, its aliases and its contact (a
+    // file's name and its front matter: review 1, « Personnes/Passeport de Léa 12AB34567.md »)
+    let (aliases, contact) = (args_list(arguments, "aliases"), s(arguments, "contact"));
+    let places = facts.iter().enumerate().map(|(n, fact)| (format!("fact {}", n + 1), fact));
+    let places = places
+        .chain(std::iter::once(("the summary".to_string(), &summary)))
+        .chain(fixes.iter().map(|(_, new)| ("a fix".to_string(), new)))
+        .chain(std::iter::once(("the page's name".to_string(), &page)))
+        .chain(aliases.iter().map(|alias| ("an alias".to_string(), alias)))
+        .chain(std::iter::once(("the contact".to_string(), &contact)));
+    if let Some((place, _)) = places.into_iter().find(|(_, text)| lexicon::id_number(text)) {
+        return Ok(id_refused(&place));
     }
     let w = super::words(&super::language(config));
     let health_page = super::fold(&page) == super::fold(w.health) || super::fold(&page) == "health";
@@ -533,7 +552,6 @@ fn write(config: &Config, agent: &str, arguments: &Dict, turn: &Turn, health: bo
         k if k.is_empty() => "person".to_string(),
         k => k,
     };
-    let (aliases, contact) = (args_list(arguments, "aliases"), s(arguments, "contact"));
     let (start, end) = (s(arguments, "start"), s(arguments, "end"));
     let close = arguments.get("close").and_then(Value::as_bool);
     let mut out: Vec<String> = Vec::new();
@@ -701,7 +719,10 @@ fn task(config: &Config, agent: &str, arguments: &Dict, health: bool) -> anyhow:
             let part = if private { Part::Health } else { Part::Main };
             let title = s(arguments, "title");
             if lexicon::id_number(&title) {
-                return Ok(tool_text(ID_NUMBER, true));
+                return Ok(id_refused("the title"));
+            }
+            if lexicon::id_number(&s(arguments, "page")) {
+                return Ok(id_refused("the page's name"));
             }
             let added = super::add_task(
                 config,
@@ -851,12 +872,12 @@ fn record(config: &Config, agent: &str, arguments: &Dict, turn: &Turn) -> anyhow
             let Some(kind) = kind.or_else(|| record_by_id(config, None, &s(arguments, "id")).map(|(k, _, _)| k)) else {
                 return Ok(tool_text(types, true));
             };
-            let numbered = fields.iter().any(|(k, v)| {
-                let v = tk::str_or_empty(Some(v));
-                lexicon::id_number(&v) || (kind.id == "paper" && k == "number" && !v.trim().is_empty())
+            let numbered = fields.iter().find(|(k, v)| {
+                let v = tk::str_or_empty(Some(*v));
+                lexicon::id_number(&v) || (kind.id == "paper" && *k == "number" && !v.trim().is_empty())
             });
-            if numbered {
-                return Ok(tool_text(ID_NUMBER, true));
+            if let Some((field, _)) = numbered {
+                return Ok(id_refused(&format!("the field « {field} »")));
             }
             if kind.id == "paper" {
                 super::papers::clean_fields(config, &mut fields);
@@ -1116,7 +1137,53 @@ mod tests {
         assert!(private.contains("Asthme léger"));
         // ID numbers: never kept
         let (said, error) = run(&config, "quotidien", WRITE, json!({"page": "Zoé Roux", "facts": ["Passeport : 12AB34567"]}), &t);
-        assert!(error && said == ID_NUMBER);
+        assert!(error && said.starts_with(ID_NUMBER), "{said}");
+    }
+
+    /// bridge-tools-no-breaker (14/11): DeepSeek's notes after a sign-up on the bench, refused three times in a row
+    /// (« Not saved: ID numbers are never kept ») for an e-mail and a date; Hermes then paused all the bridge's tools.
+    #[test]
+    fn the_benchs_notes_are_kept_and_a_refusal_says_where_the_number_is() {
+        let (_dir, config) = setup();
+        let t = turn("run_bench");
+        let (said, error) = run(&config, "quotidien", WRITE, json!({"page": "Pharmacie des Essais", "kind": "subject",
+            "section": "status", "facts": [
+                "Pharmacie des Essais : compte client créé le 14/11/2026 (Camille Testeur, camille.testeur@example.org) — mot de passe dans le coffre",
+                "Identifiant : camille.testeur@example.org — mot de passe gardé dans le coffre"],
+            "summary": "Compte client créé le 14 novembre 2026 sur la Pharmacie des Essais, pour commander en ligne."}), &t);
+        assert!(!error && said.starts_with("Saved: Pharmacie des Essais"), "{said}");
+        assert!(page_text(&config, "Sujets/Pharmacie des Essais.md").contains("camille.testeur@example.org"));
+        // a real ID number: refused, and the answer says where it is and what to do instead
+        let (said, error) = run(&config, "quotidien", WRITE, json!({"page": "Pharmacie des Essais", "kind": "subject",
+            "facts": ["Compte client créé", "Passeport : 12AB34567"]}), &t);
+        assert!(error, "{said}");
+        assert_eq!(said, "Not saved: ID numbers are never kept, and fact 2 holds one. Write it again without the \
+number (an e-mail address, a login or a date is fine).");
+        let (said, _) = run(&config, "quotidien", WRITE, json!({"page": "Pharmacie des Essais", "facts": ["Compte créé"],
+            "summary": "IBAN FR76 3000 6000 0112 3456 7890 189"}), &t);
+        assert!(said.starts_with("Not saved: ID numbers are never kept, and the summary holds one."), "{said}");
+    }
+
+    /// Review 1 (14/11): the page's name, its aliases, its contact and a task's page are written too: filtered like
+    /// the facts (a passport ended up in « Personnes/Passeport de Léa 12AB34567.md »).
+    #[test]
+    fn no_id_number_reaches_the_carnet_by_a_name_an_alias_or_a_contact() {
+        let (_dir, config) = setup();
+        let t = turn("run_names");
+        for (arguments, place) in [
+            (json!({"page": "Passeport de Léa 12AB34567", "kind": "person", "facts": ["Valable jusqu'en 2031"]}), "the page's name"),
+            (json!({"page": "Léa Martin", "kind": "person", "facts": ["Aime le jazz"],
+                    "aliases": ["IBAN FR76 3000 6000 0112 3456 7890 189"]}), "an alias"),
+            (json!({"page": "Léa Martin", "kind": "person", "facts": ["Aime le jazz"],
+                    "contact": "Carte bancaire 4970 1012 3456 7890"}), "the contact"),
+        ] {
+            let (said, error) = run(&config, "quotidien", WRITE, arguments, &t);
+            assert!(error && said.starts_with(&format!("{ID_NUMBER}, and {place} holds one")), "{said}");
+        }
+        let (said, error) = run(&config, "quotidien", TASK, json!({"action": "add", "title": "Renouveler",
+            "page": "Passeport 12AB34567", "origin": "asked"}), &t);
+        assert!(error && said.starts_with(ID_NUMBER), "{said}");
+        assert!(pages(&config).is_empty(), "{:?}", pages(&config));
     }
 
     #[test]
@@ -1176,7 +1243,7 @@ mod tests {
         assert!(got.contains("number: HAB-778812"), "{got}");
         let (said, error) = run(&config, "quotidien", RECORD, json!({"action": "add", "type": "paper",
             "fields": {"document": "Passeport", "holder": "Léa", "number": "12AB34567"}}), &t);
-        assert!(error && said == ID_NUMBER);
+        assert!(error && said.starts_with(ID_NUMBER), "{said}");
         let (said, _) = run(&config, "quotidien", RECORD, json!({"action": "add", "type": "booking",
             "fields": {"date": "2026-12-01", "what": "Hôtel", "with": "Ibis"}}), &t);
         assert!(said.contains("Ibis"), "a booking's « with » is its provider: {said}");

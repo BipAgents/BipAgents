@@ -11,7 +11,7 @@ from email.utils import format_datetime
 import yaml
 
 from bbkit.common import AUTH, HERMES_KEY
-from bbkit.mcp import call, give_token, rpc, text_of
+from bbkit.mcp import call, give_token, not_done, rpc, text_of
 from bbkit.servers import wait_until
 from conftest import managed_install, profile, wait_registered
 
@@ -130,7 +130,7 @@ def test_a_folder_is_indexed_and_searched_by_its_agent_only(bridges, fakes):
     assert "FIN-UNIQUE" in text_of(call(bridge, "archive_read", {"ref": journal, "page": 3}))
 
     # another agent's reference, a made-up one
-    assert call(bridge, "archive_read", {"ref": "coach/mails/0123456789abcdef"})["isError"] is True
+    assert not_done(call(bridge, "archive_read", {"ref": "coach/mails/0123456789abcdef"}))
     assert "no such document" in text_of(call(bridge, "archive_read", {"ref": "wellness/mails-memoire/0123456789abcdef"}))
     # another agent of the same bridge neither searches nor reads Wellness's archive
     coach = "coach-token-" + "c" * 30
@@ -138,7 +138,7 @@ def test_a_folder_is_indexed_and_searched_by_its_agent_only(bridges, fakes):
     assert "archive_search" not in [t["name"] for t in rpc(bridge, "tools/list", token=coach).json()["result"]["tools"]]
     for name, arguments in (("archive_search", {"query": "velo electrique"}), ("archive_read", {"ref": reference})):
         other = call(bridge, name, arguments, token=coach)
-        assert other["isError"] is True and "No archive is connected to you" in text_of(other), other
+        assert not_done(other) and "No archive is connected to you" in text_of(other), other
 
     # the app opens a document (a Carnet link), read-only
     doc = bridge.get("/v1/archives/document", params={"ref": reference}, headers=AUTH).json()
@@ -161,7 +161,7 @@ def test_a_folder_is_indexed_and_searched_by_its_agent_only(bridges, fakes):
     assert archives_of(bridge) == []
     names = [t["name"] for t in rpc(bridge, "tools/list").json()["result"]["tools"]]
     assert "archive_search" not in names
-    assert call(bridge, "archive_search", {"query": "velo"})["isError"] is True
+    assert not_done(call(bridge, "archive_search", {"query": "velo"}))
     assert bridge.delete("/v1/agents/wellness/archives/mails-memoire", headers=AUTH).status_code == 404
 
 

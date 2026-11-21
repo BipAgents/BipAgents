@@ -169,7 +169,7 @@ async fn the_phone_sends_its_days_only_once_an_agent_has_health_on() {
     );
     assert!(!lines.contains("sleep 7 h") && !lines.contains("kg ·"), "{lines}");
     let wrong = rpc(&app, "tools/call", json!({"name": "health", "arguments": {"from": "hier"}})).await;
-    assert_eq!(wrong["isError"], true);
+    assert!(common::refused(&wrong), "{wrong}");
 
     // Turned off: the tool goes, so do the days.
     agents_admin::set_health(&config, config.agent(Some("coach")).unwrap(), false, &recording_run(&commands))
@@ -177,7 +177,7 @@ async fn the_phone_sends_its_days_only_once_an_agent_has_health_on() {
         .unwrap();
     assert!(!std::fs::read_to_string(folder.join("SOUL.md")).unwrap().contains(souls::HEALTH_START));
     assert!(!tool_names(&app).await.contains(&"health".to_string()));
-    assert_eq!(rpc(&app, "tools/call", json!({"name": "health", "arguments": {}})).await["isError"], true);
+    assert!(common::refused(&rpc(&app, "tools/call", json!({"name": "health", "arguments": {}})).await));
     assert_eq!(app.get("/v1/health-data", &h).await.json()["days"], 0);
     assert!(!dir.path().join("data/health/days").exists());
 }

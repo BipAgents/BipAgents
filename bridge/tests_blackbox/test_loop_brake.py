@@ -7,7 +7,7 @@ import threading
 import time
 
 from bbkit.common import AUTH, app_turn, follow_run, read_sse, sse, in_session
-from bbkit.mcp import call, give_token, media_of, text_of
+from bbkit.mcp import call, give_token, media_of, not_done, text_of
 from bbkit.servers import wait_until
 from test_households_and_peers import give_peer_token, household
 
@@ -83,7 +83,7 @@ def test_writes_in_a_turn_are_capped(bridges, fakes):
     # (the same write twice within a run: the Rust unit tests, loop_brake.rs)
     assert not call(bridge, "create_page", page)["isError"]
     refused = call(bridge, "create_page", {**page, "title": "Plan 3"})
-    assert refused["isError"] and "this run has made 2 changes" in text_of(refused)
+    assert not_done(refused) and "this run has made 2 changes" in text_of(refused)
     # the reason, for the person, in plain words (2026-10-31: « le bridge a refusé la suite »)
     assert "so that a mistake can never spread to everything" in text_of(refused)
     # reading is never capped
@@ -185,7 +185,7 @@ def test_two_reminders_in_a_fresh_conversation_are_accepted(bridges, fakes):
                       headers=AUTH).status_code == 200
     for i in range(40):   # a routine before (no run): its 40 pages (scheduled work, a task's writes), its cap reached
         assert not call(bridge, "create_page", {"title": f"Brief {i}", "html": f"<h1>{i}</h1>"})["isError"]
-    assert call(bridge, "create_page", {"title": "Brief 41", "html": "<h1>41</h1>"})["isError"]
+    assert not_done(call(bridge, "create_page", {"title": "Brief 41", "html": "<h1>41</h1>"}))
     # the person's new conversation: its turn still going on
     gate = threading.Event()
     fakes.hermes.runs["r1"] = [sse("tool.started", run_id="r1", tool="mcp__bipagents__reminders_add", preview="{}"),
@@ -207,7 +207,7 @@ def test_a_routine_going_round_in_circles_is_told_to_stop(bridges, fakes):
     give_token(bridge)
     results = [call(bridge, "list_pages", {}) for _ in range(12)]
     assert not any(r["isError"] for r in results[:10])
-    assert results[10]["isError"] and "answer the person with what you have" in text_of(results[10])
+    assert not_done(results[10]) and "answer the person with what you have" in text_of(results[10])
 
 
 # -- 2026-10-28 09:24, Alex's home server: Vie diagnosing a failing nightly job was stopped after 5 calls, 3 of them the

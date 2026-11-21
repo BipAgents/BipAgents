@@ -39,7 +39,7 @@ async fn rpc(app: &TestApp, method: &str, params: Value) -> Value {
 /// A tool called by coach: (failed, its text).
 async fn tool(app: &TestApp, name: &str, arguments: Value) -> (bool, String) {
     let result = rpc(app, "tools/call", json!({"name": name, "arguments": arguments})).await;
-    (result["isError"] == true, result["content"][0]["text"].as_str().unwrap_or("").to_string())
+    (common::refused(&result), result["content"][0]["text"].as_str().unwrap_or("").to_string())
 }
 
 async fn tool_names(app: &TestApp) -> Vec<String> {

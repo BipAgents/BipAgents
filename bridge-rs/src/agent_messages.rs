@@ -125,10 +125,10 @@ async fn answer(
     }
     let shown = crate::agent_files::shown(&target).to_string();
     if !crate::agent_files::links(config).iter().any(|(from, to)| *from == agent.name && *to == target.name) {
-        return tool_failure(
+        return crate::tool_answers::lifted_in_the_app(tool_failure(
             &format!("The person hasn't let you write to {shown}."),
             &format!("I can't write to {shown} yet: you can allow it in the app, under « Qui peut écrire à qui »."),
-        );
+        ));
     }
     // a path of the sender's own folders: the target sees none of them (not counted as a hop: nothing is sent)
     if let Some(path) = own_path(config, agent, &target, &message) {

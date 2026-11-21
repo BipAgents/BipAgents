@@ -292,6 +292,12 @@ impl RunError {
         }
     }
 
+    /// A failure of the connector (it didn't answer in time, it crashed), not the bridge's refusal: answered as one
+    /// (tool_answers.rs).
+    pub fn failed(&self) -> bool {
+        matches!(self, RunError::Timeout | RunError::Failed(_))
+    }
+
     /// For the person (the connector's last run).
     pub fn person_text(&self) -> String {
         match self {

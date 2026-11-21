@@ -29,6 +29,7 @@ import pytest
 from websockets.sync.client import connect
 
 from bbkit.common import AUTH
+from bbkit.mcp import not_done
 from bbkit.servers import free_port
 from bbkit.ws import open_ws
 from test_card_payments import ARGS, CARD, CODE, NUMBER, control, lifted, pay, pay_bridge, tool, turn_on, with_desktop
@@ -323,7 +324,7 @@ def test_a_checkout_that_loses_its_form_when_reloaded_is_handed_over(bridges, fa
         bridge.post("/v1/vault", headers=AUTH, json={**CARD, "sites": ["127.0.0.1"]})
         browser.run("document.getElementById('next').click()", "steps.html")   # the agent went on to the payment step
         result, asked = pay(bridge, ARGS)
-        assert asked and result["isError"] is True, result
+        assert asked and not_done(result), result
         text = result["content"][0]["text"]
         assert "without its card form" in text and "hand_over_payment" in text
         assert browser.values()["steps.html"] == {"numero": "", "cvc": ""}
@@ -345,7 +346,7 @@ def test_a_card_form_in_a_frame_of_an_unknown_site_is_never_typed_into(bridges, 
         # Not a known provider's frame, even when it is one of the card's sites (strict: card-guards, 14/11).
         bridge.post("/v1/vault", headers=AUTH, json={**CARD, "sites": ["127.0.0.1", "localhost"]})
         result, asked = pay(bridge, ARGS)
-        assert asked is None and result["isError"] is True, result
+        assert asked is None and not_done(result), result
         said = result["content"][0]["text"]
         assert "hand_over_payment" in said and "« Panier prêt »" in said and "never type" in said, said
         values = browser.values()

@@ -7,7 +7,7 @@ import json
 import pytest
 
 from bbkit.common import AUTH
-from bbkit.mcp import call as mcp_call, give_token, rpc, text_of
+from bbkit.mcp import call as mcp_call, give_token, not_done, rpc, text_of
 from conftest import managed_install, profile, wait_registered
 
 COACH = "coach-token-" + "h" * 30
@@ -91,7 +91,7 @@ def test_each_agent_reads_only_the_categories_it_was_given(bridges, fakes):
     assert f"Cycle: period started on {today}; flow on 1 days (medium ×1)" in vie
     assert "Steps" not in vie and "Sleep" not in vie and "Weight" not in vie
     refused = call(bridge, "health", {"categories": ["sleep"]}, token=VIE)
-    assert refused["isError"] and "some of glucose, cycle" in text_of(refused)
+    assert not_done(refused) and "some of glucose, cycle" in text_of(refused)
 
     # The cycle taken back: no agent reads it any more, so the place no longer keeps it.
     assert settings(bridge, "vie", health_categories=["glucose"])["categories"] == ["glucose"]
@@ -104,7 +104,7 @@ def test_each_agent_reads_only_the_categories_it_was_given(bridges, fakes):
     assert settings(bridge, "vie", health=False) == {"on": False, "categories": []}
     assert bridge.patch("/v1/agents/vie/settings", headers=AUTH, json={"health_categories": ["sleep"]}).status_code == 400
     assert tool(bridge, VIE) is None
-    assert call(bridge, "health", {}, token=VIE)["isError"]
+    assert not_done(call(bridge, "health", {}, token=VIE))
 
 
 def test_the_new_figures_are_checked_not_refused(bridges, fakes):
@@ -140,7 +140,7 @@ def test_on_the_offer_only_a_model_run_in_the_union_reads_health(bridges, fakes)
 
     give_token(bridge, "coach", COACH)
     refused = mcp_call(bridge, "health", {"detail": "days"}, token=COACH)
-    assert refused["isError"] and "hosted in the European Union" in text_of(refused)
+    assert not_done(refused) and "hosted in the European Union" in text_of(refused)
     assert "(deepseek/deepseek-v4.1-flash)" in text_of(refused) and "9000 steps" not in text_of(refused)
 
     # Its model changed to one run in the Union: read again.

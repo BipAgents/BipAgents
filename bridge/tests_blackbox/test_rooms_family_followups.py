@@ -5,7 +5,7 @@ before both said yes, and what comes from the other place is checked (key, size,
 import datetime
 
 from bbkit.common import AUTH
-from bbkit.mcp import call, give_token, text_of
+from bbkit.mcp import call, give_token, not_done, text_of
 from test_guide import GUIDE_TOKEN, place
 from test_households_and_peers import household
 from test_shared_agents import link
@@ -36,9 +36,9 @@ def test_the_guide_proposes_a_discussion_and_one_tap_opens_it(bridges, fakes):
     assert bridge.put("/v1/agents/agent/guide", headers=AUTH, json={"on": True}).status_code == 200
     give_token(bridge, "agent", GUIDE_TOKEN)
     too_few = call(bridge, "propose_room", {"agents": ["coach"]}, token=GUIDE_TOKEN)
-    assert too_few["isError"] and "2 to 8" in text_of(too_few)
+    assert not_done(too_few) and "2 to 8" in text_of(too_few)
     ghost = call(bridge, "propose_room", {"agents": ["coach", "Personne"]}, token=GUIDE_TOKEN)
-    assert ghost["isError"] and "Personne" in text_of(ghost)
+    assert not_done(ghost) and "Personne" in text_of(ghost)
     card = call(bridge, "propose_room", {"agents": ["Coach", "maison"], "title": "Les vacances"}, token=GUIDE_TOKEN)
     assert not card["isError"] and "A card to open the discussion" in text_of(card)
     proposal = bridge.get("/v1/guide", headers=AUTH).json()["proposals"][0]

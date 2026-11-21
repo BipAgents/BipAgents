@@ -14,6 +14,7 @@ import time
 import httpx
 
 from bbkit.common import AUTH, HERMES_KEY, sse
+from bbkit.mcp import not_done
 from bbkit.servers import wait_until
 from test_card_payments import CARD, CODE, LAST_ASKED, NUMBER, PAY, TOKEN, FakeChrome, pay_bridge, turn_on
 
@@ -170,7 +171,7 @@ def test_a_payment_nobody_answers_in_time_leaves_a_cart_to_buy_by_hand(bridges, 
         side.answer("accept")
         assert side.done.wait(30)
         text = side.result["content"][0]["text"]
-        assert side.result["isError"] is True and "10 minutes" in text and "Panier prêt" in text
+        assert not_done(side.result) and "10 minutes" in text and "Panier prêt" in text
         assert chrome.typed == [] and chrome.reloads == 0
         # « Panier prêt » in its place: the hand-over's text with the page the bridge read, pushed « trop tard »
         assert wait_until(lambda: [c for c in approvals(bridge) if c["run_id"].startswith("bip-cart-")], timeout=10)
@@ -201,7 +202,7 @@ def test_a_no_ends_the_payment_and_a_test_alert_is_urgent_too(bridges, fakes):
         assert wait_until(lambda: [c for c in approvals(bridge) if c["run_id"] == f"bip-pay-{payment}"], timeout=10)
         # a second payment of the same agent meanwhile: refused at once
         second = HermesSide(bridge, ARGS)
-        assert second.done.wait(30) and second.result["isError"] is True
+        assert second.done.wait(30) and not_done(second.result)
         assert "already waits" in second.result["content"][0]["text"]
         # « Non »: the app's refusal, then the card's answer
         assert bridge.post(f"/v1/vault/payments/{payment}/deny", headers=AUTH).status_code == 204
@@ -209,7 +210,7 @@ def test_a_no_ends_the_payment_and_a_test_alert_is_urgent_too(bridges, fakes):
                                                             "request_id": payment, "choice": "deny"})
         assert no.status_code == 200, no.text
         assert side.done.wait(30)
-        assert side.result["isError"] is True and "did not approve" in side.result["content"][0]["text"]
+        assert not_done(side.result) and "did not approve" in side.result["content"][0]["text"]
         assert chrome.typed == []
         assert not [c for c in approvals(bridge) if c["run_id"].startswith(("bip-pay-", "bip-cart-"))]
         gate.set()

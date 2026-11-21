@@ -6,7 +6,7 @@ new mail stays where it lands."""
 import time
 
 from bbkit.common import AUTH
-from bbkit.mcp import call, text_of
+from bbkit.mcp import call, not_done, text_of
 from bbkit.servers import wait_until
 from test_mailbox import TOKEN, add_mailbox
 from test_triggers import mail, mail_setup
@@ -42,7 +42,7 @@ def test_a_rule_files_what_is_there_then_new_mail_by_itself_until_stopped(bridge
                 {"action": "send", "rule": True, "domain": "hetzner.com"},
                 {"action": "archive", "rule": True, "domain": "hetzner.com", "folder": "Sent"}]:
         result = call(bridge, "mail_bulk", bad, token=TOKEN)
-        assert result["isError"], (bad, result)
+        assert not_done(result), (bad, result)
     assert rule_cards(bridge) == []
 
     result = call(bridge, "mail_bulk", {"action": "move:Serveurs", "mark_read": True, "domain": "hetzner.com",
@@ -123,4 +123,4 @@ def test_the_agent_lists_and_stops_its_rules_and_a_refused_card_goes(bridges, fa
     assert row["id"] in listing and "banque.example" in listing and "1 filed" in listing, listing
     stopped = call(bridge, "mail_bulk", {"action": "stop_rule", "rule_id": row["id"]}, token=TOKEN)
     assert not stopped.get("isError") and rules(bridge) == []
-    assert call(bridge, "mail_bulk", {"action": "stop_rule", "rule_id": row["id"]}, token=TOKEN)["isError"]
+    assert not_done(call(bridge, "mail_bulk", {"action": "stop_rule", "rule_id": row["id"]}, token=TOKEN))

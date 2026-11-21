@@ -376,6 +376,25 @@ fn cut(text: &str, max: usize) -> String {
 }
 
 /// The calls of an assistant row: (call id, name, arguments).
+/// The tool a call reached: its result's own name when Hermes kept one, else, for a call through its tool search
+/// (`tool_call`, the transcript keeps the wrapper: tool_executor.py `_unwrap_tool_search_call`), the tool named in
+/// its arguments (`{"name": …}` or a batch's first `{"calls": [{"name": …}]}`), else the call's name.
+fn called_tool(name: &str, args: &str, answered_by: Option<&str>) -> String {
+    if let Some(by) = answered_by.filter(|b| !b.is_empty() && *b != name) {
+        return by.to_string();
+    }
+    if name != "tool_call" {
+        return name.to_string();
+    }
+    let parsed: Value = serde_json::from_str(args).unwrap_or(Value::Null);
+    parsed
+        .get("name")
+        .or_else(|| parsed.get("calls").and_then(|c| c.get(0)).and_then(|c| c.get("name")))
+        .and_then(Value::as_str)
+        .unwrap_or(name)
+        .to_string()
+}
+
 fn calls_of(row: &Row) -> Vec<(Option<String>, String, String)> {
     let Some(Value::Array(calls)) = &row.tool_calls else { return Vec::new() };
     calls
@@ -635,11 +654,16 @@ pub fn segment_items(
                         }
                         continue;
                     }
-                    let raw = call_id.as_deref().and_then(|c| results.get(c)).map(|r| words_and_images(&r.content).0);
+                    let answered = call_id.as_deref().and_then(|c| results.get(c));
+                    let raw = answered.map(|r| words_and_images(&r.content).0);
                     let result = raw.as_deref().map(result_words);
+                    // the tool that answered: through Hermes' tool search the transcript keeps `tool_call` (review 2)
+                    let called = called_tool(&name, &args, answered.and_then(|r| r.tool_name.as_deref()));
                     let status = match &result {
                         None => "running",
                         Some(r) if r.trim_start().starts_with("{\"error\"") => "failed",
+                        // a refusal of the bridge's tools, plain since 14/11 (tool_answers.rs): a step not done
+                        Some(r) if crate::tool_answers::refused_in_hermes(&called, r) => "failed",
                         Some(_) => "done",
                     };
                     let tool = json!({"name": name, "call_id": call_id, "arguments": cut(&args, RESULT_MAX),
@@ -1278,6 +1302,66 @@ mod tests {
         assert_eq!(shown, [("message", "Bonjour"), ("message", "Salut"), ("message", "Compare trois écoles"), ("tool", ""),
                            ("message", "Seulement les publiques"), ("message", "Les trois écoles publiques : …")]);
         assert!(got[4].body.get("added_during_run").is_none(), "a message of its own, not words added to a turn");
+    }
+
+    /// Review 1 (14/11): the bridge's refusals are plain now (Hermes keeps `{"result": "Not …"}`, no `error`): a
+    /// refused call of the bridge's tools (or a connector's) still shows as a step not done, never ✓.
+    #[test]
+    fn a_refused_call_of_the_bridges_tools_shows_failed() {
+        let mut rows = vec![
+            row(1, "user", json!("Note mon passeport")),
+            row(2, "assistant", json!("")),
+            row(3, "tool", json!("{\"result\": \"Not saved: ID numbers are never kept, and fact 1 holds one.\"}")),
+            row(4, "tool", json!("{\"result\": \"Not done: The person turned this connector off in the app.\"}")),
+            row(5, "tool", json!("{\"result\": \"Saved: Léa Martin › tastes (1 fact).\"}")),
+            row(6, "tool", json!("{\"result\": \"Not much on this subject.\"}")),
+            row(7, "assistant", json!("Je ne peux pas le noter.")),
+        ];
+        rows[1].tool_calls = Some(json!([
+            {"id": "a", "function": {"name": "mcp_bipagents_notebook_write", "arguments": "{}"}},
+            {"id": "b", "function": {"name": "mcp__bipconn_garmin__push_workouts", "arguments": "{}"}},
+            {"id": "c", "function": {"name": "mcp__bipagents__notebook_write", "arguments": "{}"}},
+            {"id": "d", "function": {"name": "web_search", "arguments": "{}"}}]));
+        for (n, id) in ["a", "b", "c", "d"].into_iter().enumerate() {
+            rows[2 + n].tool_call_id = Some(id.into());
+        }
+        let status: Vec<String> = items(&rows)
+            .iter()
+            .filter(|i| i.kind() == "tool")
+            .map(|i| i.body["tool"]["status"].as_str().unwrap_or("").to_string())
+            .collect();
+        assert_eq!(status, ["failed", "failed", "done", "done"]);
+    }
+
+    /// Review 2 (14/11): a bridge tool behind Hermes' tool search is called through `tool_call` (tool_diet.rs: most of the bridge's tools for
+    /// most kinds of agents). Hermes keeps that wrapper in the transcript (tool_executor.py `_unwrap_tool_search_call`:
+    /// « tool_call.function stays untouched for the transcript »), so the history's call is named `tool_call`; its
+    /// refusal (`{"result": "Not done: …"}`) must still show as a step not done, as it does live (the run's events name
+    /// the underlying tool).
+    #[test]
+    fn a_refused_call_through_the_tool_search_shows_failed_in_the_history() {
+        let mut rows = vec![
+            row(1, "user", json!("Prépare un brouillon pour Paul")),
+            row(2, "assistant", json!("")),
+            row(3, "tool", json!("{\"result\": \"Not done: No mailbox is connected for you: the person connects one in the BipAgents app (your settings › Boîtes mail).\"}")),
+            row(4, "tool", json!("{\"result\": \"Not done: The person turned this connector off in the app.\"}")),
+            row(5, "assistant", json!("Je ne peux pas.")),
+        ];
+        let single = json!({"name": "mcp__bipagents__mail_draft", "arguments": {"to": "paul@example.org"}}).to_string();
+        let batch = json!({"calls": [{"name": "mcp__bipconn_garmin__push_workouts", "arguments": {}}]}).to_string();
+        rows[1].tool_calls = Some(json!([{"id": "a", "function": {"name": "tool_call", "arguments": single}},
+                                         {"id": "b", "function": {"name": "tool_call", "arguments": batch}}]));
+        rows[2].tool_call_id = Some("a".into());
+        rows[2].tool_name = Some("mcp__bipagents__mail_draft".into());
+        rows[3].tool_call_id = Some("b".into());
+        rows[3].tool_name = Some("mcp__bipconn_garmin__push_workouts".into());
+        let got = segment_items("vie", 0, "s1", &rows, &HashSet::new(), &mut String::new());
+        let status: Vec<String> = got
+            .iter()
+            .filter(|i| i.kind() == "tool")
+            .map(|i| i.body["tool"]["status"].as_str().unwrap_or("").to_string())
+            .collect();
+        assert_eq!(status, ["failed", "failed"], "a refused call through tool_call shows as a step done");
     }
 
     /// Another agent's message in Bot Mode's conversation: its sender's id, the name it signed with, its words alone

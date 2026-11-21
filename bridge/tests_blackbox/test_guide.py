@@ -5,7 +5,7 @@ that asks then proposes its own."""
 import time
 
 from bbkit.common import AUTH
-from bbkit.mcp import call, give_token, rpc, text_of
+from bbkit.mcp import call, give_token, not_done, rpc, text_of
 from bbkit.servers import wait_until
 from conftest import managed_install, profile, wait_registered
 
@@ -81,7 +81,7 @@ def test_the_placeholder_becomes_the_guide_that_proposes_and_hands_over(bridges,
     assert [(p["type"], p["name"], p["agent_name"]) for p in proposals] == [("agent", "Coach", "Bip")]
     assert bridge.post(f"/v1/guide/proposals/{proposals[0]['id']}/decline", headers=AUTH).json() == {"ok": True}
     again = call(bridge, "propose_agent", {"kind": "wellness", "name": "Forme", "role": "Sport"}, token=GUIDE_TOKEN)
-    assert again["isError"] and "don't propose it again" in text_of(again)
+    assert not_done(again) and "don't propose it again" in text_of(again)
     # another one, accepted under another name: created, its handover in its memory as data
     call(bridge, "propose_agent", {"kind": "finance", "name": "Budget", "role": "Suit les dépenses",
                                    "handover": "Veut économiser pour l'été."}, token=GUIDE_TOKEN)
@@ -106,7 +106,7 @@ def test_the_placeholder_becomes_the_guide_that_proposes_and_hands_over(bridges,
                       "summary": "Budget vacances : 800 €."}
     assert "Budget vacances : 800 €." in (home / "profiles" / "sous" / "memories" / "MEMORY.md").read_text()
     unknown = call(bridge, "suggest_switch", {"agent": "Personne", "summary": "x"}, token=GUIDE_TOKEN)
-    assert unknown["isError"]
+    assert not_done(unknown)
     assert bridge.post("/v1/guide/proposals/gnope/accept", headers=AUTH).status_code == 404
 
 
@@ -119,7 +119,7 @@ def test_only_the_guide_proposes_and_the_switch_moves_the_role(bridges, fakes):
     assert "propose_agent" in names and "suggest_switch" not in names
     assert "Only when they ask" in tool(bridge, COACH_TOKEN, "propose_agent")["description"]
     refused = call(bridge, "suggest_switch", {"agent": "Maison", "summary": "y"}, token=COACH_TOKEN)
-    assert refused["isError"]
+    assert not_done(refused)
     assert bridge.put("/v1/agents/coach/guide", headers=AUTH, json={"on": True}).json() == {"guide": "coach"}
     give_token(bridge, "coach", COACH_TOKEN)   # its entry was registered again (another tools list)
     assert "suggest_switch" in tool_names(bridge, COACH_TOKEN)

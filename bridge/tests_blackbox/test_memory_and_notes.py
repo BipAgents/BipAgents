@@ -9,7 +9,7 @@ import time
 import zipfile
 
 from bbkit.common import AUTH
-from bbkit.mcp import call, give_token, rpc, text_of
+from bbkit.mcp import call, give_token, not_done, rpc, text_of
 from conftest import managed_install, profile, wait_registered
 
 
@@ -119,10 +119,10 @@ def test_the_agent_reads_and_searches_its_knowledge_pages(bridges, fakes):
     assert text_of(call(bridge, "knowledge_read", {}, token=token)) == "mail/index.md"
     assert text_of(call(bridge, "knowledge_read", {"path": "/mail/index.md"}, token=token)).startswith("# Index")
     missing = call(bridge, "knowledge_read", {"path": "../secret.md"}, token=token)
-    assert missing["isError"] and text_of(missing) == "no page ../secret.md (knowledge_read without a path lists them)"
+    assert not_done(missing) and text_of(missing) == "Not done: no page ../secret.md (knowledge_read without a path lists them)"
     assert text_of(call(bridge, "knowledge_search", {"words": "SAM voisin"}, token=token)) == "mail/index.md: Sam est le voisin."
     assert text_of(call(bridge, "knowledge_search", {"words": "zèbre"}, token=token)) == "Nothing found."
-    assert call(bridge, "knowledge_search", {"words": "a"}, token=token)["isError"] is True
+    assert not_done(call(bridge, "knowledge_search", {"words": "a"}, token=token))
 
 
 def takeout():
@@ -175,7 +175,7 @@ def test_the_iphone_shares_its_reminders_and_does_what_the_agents_ask(bridges, f
     token = "coach-token-" + "c" * 30
     give_token(bridge, "coach", token)
     not_yet = call(bridge, "reminders_list", {}, token=token)
-    assert not_yet["isError"] and text_of(not_yet).startswith("The person hasn't shared their reminders with you")
+    assert not_done(not_yet) and text_of(not_yet).startswith("Not done: The person hasn't shared their reminders with you")
     assert bridge.put("/v1/reminders/agents", json={"agents": ["Coach"]}, headers=AUTH).json() == {"agents": ["coach"]}
     unknown = bridge.put("/v1/reminders/agents", json={"agents": ["ghost"]}, headers=AUTH)
     assert unknown.status_code == 400 and unknown.json() == {"detail": "unknown agent"}
@@ -191,8 +191,8 @@ def test_the_iphone_shares_its_reminders_and_does_what_the_agents_ask(bridges, f
     asked = call(bridge, "reminders_add", {"title": "Rendez-vous banque", "due": "2026-10-30T10:00", "list": "Maison"},
                  token=token)
     assert not asked["isError"] and "next sync" in text_of(asked)
-    assert call(bridge, "reminders_complete", {"id": "zz"}, token=token)["isError"]
-    assert call(bridge, "reminders_add", {"title": " "}, token=token)["isError"]
+    assert not_done(call(bridge, "reminders_complete", {"id": "zz"}, token=token))
+    assert not_done(call(bridge, "reminders_add", {"title": " "}, token=token))
     call(bridge, "reminders_complete", {"id": "r1"}, token=token)
     queue = bridge.get("/v1/reminders/queue", headers=AUTH).json()["queue"]
     assert [(op["op"], op["args"].get("title") or op["args"].get("id")) for op in queue] == [
@@ -214,7 +214,7 @@ def test_the_iphone_shares_its_reminders_and_does_what_the_agents_ask(bridges, f
     assert "iPhone" not in by_place
     assert "the Reminders app of their iPhone for 2026-10-30 10:00, with an alert at that time" in text_of(asked)
     give_token(bridge)
-    assert call(bridge, "reminders_add", {"title": "x"})["isError"]   # another agent (wellness): not shared
+    assert not_done(call(bridge, "reminders_add", {"title": "x"}))   # another agent (wellness): not shared
 
     # Shared with no agent any more: the copy goes (the requests stay their 14 days).
     assert bridge.put("/v1/reminders/agents", json={"agents": []}, headers=AUTH).json() == {"agents": []}
@@ -249,11 +249,11 @@ def test_a_reminder_at_two_goes_to_the_phone_that_does_it_and_the_agent_says_whe
 
     # No phone does reminders at a time yet (an Android app from before 7/11): not asked, said plainly.
     none = call(bridge, "reminders_add", {"title": "Appeler Paul", "due": "2026-11-07T14:00"}, token=token)
-    assert none["isError"] and text_of(none).startswith("Not added") and "isn't set" in text_of(none)
+    assert not_done(none) and text_of(none).startswith("Not added") and "isn't set" in text_of(none)
     assert "Settings" not in text_of(none) and queue() == [] and queue("android") == []
     # The time somewhere the bridge doesn't read: refused, not lost.
     lost = call(bridge, "reminders_add", {"title": "Appeler Paul", "due": "2026-11-07", "time": "14:00"}, token=token)
-    assert lost["isError"] and "unknown argument time" in text_of(lost)
+    assert not_done(lost) and "unknown argument time" in text_of(lost)
 
     # The Android app says it may write to its calendar: there, at 14:00, with an alert, for it alone.
     assert bridge.put("/v1/reminders/android", json={"calendar": True, "items": []}, headers=AUTH).json() == {"items": 0}

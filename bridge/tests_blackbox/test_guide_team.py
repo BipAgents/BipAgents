@@ -6,7 +6,7 @@ import threading
 import time
 
 from bbkit.common import AUTH
-from bbkit.mcp import call, give_token, rpc, text_of
+from bbkit.mcp import call, give_token, not_done, rpc, text_of
 from bbkit.servers import wait_until
 from conftest import managed_install, profile, wait_registered
 
@@ -121,21 +121,21 @@ def test_a_declined_team_is_not_proposed_again_and_only_the_guide_proposes(bridg
     assert "propose_team" not in tool_names(bridge, COACH_TOKEN)
     team = {"subject": "Le déménagement", "agents": [member("Cartons", 1), member("Papiers", 2)]}
     refused = call(bridge, "propose_team", team, token=COACH_TOKEN)
-    assert refused["isError"]
+    assert not_done(refused)
     # checked whole: a name they have, a lone agent, a secret
     taken = call(bridge, "propose_team", {**team, "agents": [member("Coach", 1), member("Papiers", 2)]}, token=GUIDE_TOKEN)
-    assert taken["isError"] and "already have an agent named Coach" in text_of(taken)
+    assert not_done(taken) and "already have an agent named Coach" in text_of(taken)
     alone = call(bridge, "propose_team", {**team, "agents": [member("Cartons", 1)]}, token=GUIDE_TOKEN)
-    assert alone["isError"] and "2 to 6" in text_of(alone)
+    assert not_done(alone) and "2 to 6" in text_of(alone)
     secret = member("Cartons", 1)
     secret["brief"] = "Le code est sk-abcdefghijklmnopqrstuvwxyz0123456"
     leaked = call(bridge, "propose_team", {**team, "agents": [secret, member("Papiers", 2)]}, token=GUIDE_TOKEN)
-    assert leaked["isError"] and "keys" in text_of(leaked)
+    assert not_done(leaked) and "keys" in text_of(leaked)
     assert not call(bridge, "propose_team", team, token=GUIDE_TOKEN)["isError"]
     proposal = bridge.get("/v1/guide", headers=AUTH).json()["proposals"][0]
     assert bridge.post(f"/v1/guide/proposals/{proposal['id']}/decline", headers=AUTH).json() == {"ok": True}
     again = call(bridge, "propose_team", {**team, "agents": [member("Boites", 1), member("Banque", 2)]}, token=GUIDE_TOKEN)
-    assert again["isError"] and "don't propose it again" in text_of(again)
+    assert not_done(again) and "don't propose it again" in text_of(again)
     assert bridge.get("/v1/guide", headers=AUTH).json()["proposals"] == []
     assert not fakes.hermes.started
 
@@ -144,7 +144,7 @@ def test_the_place_limit_is_shown_and_kept(bridges, fakes):
     bridge, _ = place(bridges, fakes, guide={"agents_max": 3})   # « Agent », the pre-created placeholder, does not count
     three = {"subject": "Trop", "agents": [member(n, i) for i, n in enumerate(NAMES[:3])]}
     over = call(bridge, "propose_team", three, token=GUIDE_TOKEN)
-    assert over["isError"] and "only 2 more" in text_of(over), text_of(over)
+    assert not_done(over) and "only 2 more" in text_of(over), text_of(over)
     two = {"subject": "Juste", "agents": [member(n, i) for i, n in enumerate(NAMES[:2])]}
     made = call(bridge, "propose_team", two, token=GUIDE_TOKEN)
     assert not made["isError"], text_of(made)
