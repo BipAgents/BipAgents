@@ -128,7 +128,9 @@ test("FINDING 6: create_page's expense example reads French amounts right (whole
   const m = TOOLS_RS.match(/var c=([^;]*);/);
   assert.ok(m, "the example's parsing");
   const kit = { window: { Bip: {} }, document: { documentElement: { getAttribute() {}, setAttribute() {} }, readyState: "complete",
-    querySelectorAll: () => [], addEventListener() {} }, navigator: { userAgent: "" }, getComputedStyle: () => ({ getPropertyValue: () => "" }) };
+    querySelectorAll: () => [], addEventListener() {} }, navigator: { userAgent: "" }, getComputedStyle: () => ({ getPropertyValue: () => "" }),
+    // (since 20/11 the kit fits its KPI values again on resize and on any change of the page: a page's globals)
+    addEventListener() {}, MutationObserver: class { observe() {} } };
   vm.createContext(kit);
   vm.runInContext(fs.readFileSync(path.join(REPO, "bridge-rs/assets/static/pagekit/kit.js"), "utf8"), kit);
   const cents = (typed) => vm.runInNewContext(m[1], { e: { value: typed }, Bip: kit.window.Bip, Math, parseFloat });
