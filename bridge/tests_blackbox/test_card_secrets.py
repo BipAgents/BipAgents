@@ -10,6 +10,7 @@ Spanish), before any card is raised; and a card's number given in any secure-fie
 import json
 from concurrent.futures import ThreadPoolExecutor
 
+from bbkit.mcp import not_done
 from bbkit.common import AUTH
 from test_connectors import cards, rpc, setup, text, tool, wait_card, TOOLS
 
@@ -41,7 +42,7 @@ def test_a_secure_field_card_never_asks_for_a_cards_details(bridges, fakes):
     for arguments in asked:
         result = tool(bridge, "ask_secret", arguments)
         said = text(result)
-        assert result["isError"] and said.startswith("Refused: a card in the app never asks"), (arguments, said)
+        assert not_done(result) and said.startswith("Not done: Refused: a card in the app never asks"), (arguments, said)
         assert "pay_with_card" in said and "hand_over_payment" in said and PANIER in said
     assert cards(bridge, "bip-secret-") == []   # no card was ever raised
 

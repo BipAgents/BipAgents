@@ -13,6 +13,7 @@ the author's fake DevTools (test_vault_login.py for a login page, test_vault_log
   between the two (a frame of the site inside another site's page) gets nothing.
 - R4: an agent that other people talk to (shared with a relative, the family's, a project's) logs in only with a
   login the person confirmed for it, as for « Coordonnées » (vault_contacts.rs `readable_by`)."""
+from bbkit.mcp import not_done
 import json
 import threading
 import time
@@ -51,11 +52,11 @@ def test_r1_a_login_is_not_typed_alone_on_another_host_of_its_domain(bridges, fa
         kept = vl.keep(bridge, "Support Kerfy", "https://kerfy.helpdesk-example.com/access/login",
                        "support@kerfy.example", "Fake-desk-pw-41!")
         refused = vl.vault_login(bridge)
-        assert refused["isError"] is True, refused
+        assert not_done(refused), refused
         assert chrome.typed == [] and chrome.frames[0].values == {"login": "", "mdp": ""}
         # nor when the agent names the login
         named = vl.vault_login(bridge, {"id": kept["id"]})
-        assert named["isError"] is True and chrome.typed == [], named
+        assert not_done(named) and chrome.typed == [], named
         # its own host: as today
         chrome.frames = [vl.Frame("https://kerfy.helpdesk-example.com/access/login")]
         assert vl.vault_login(bridge)["isError"] is False
@@ -90,7 +91,7 @@ def test_r2_a_card_number_the_agent_gives_never_reaches_a_page_through_the_vault
         assert all(CARD not in text for _, _, text in login.typed), (created, logged, login.typed)
         assert not typed_file(bridge).exists()
         # refused before any card reaches the person (the approval would show them the number as « identifiant »)
-        assert card is None and created["isError"] is True, created
+        assert card is None and not_done(created), created
     finally:
         signup.stop()
         login.stop()
@@ -141,7 +142,7 @@ def test_r3_a_page_that_left_the_logins_site_before_the_fields_were_found_gets_n
         vl.keep(bridge, "Extranet agence A", vl.PAGE_A, vl.IDENTIFIER_A, vl.PASSWORD_A)
         result = vl.vault_login(bridge)
         assert chrome.trees >= 2, "the fake's second look never came"
-        assert result["isError"] is True and chrome.typed == [], (result, chrome.typed)
+        assert not_done(result) and chrome.typed == [], (result, chrome.typed)
     finally:
         chrome.stop()
 
@@ -159,7 +160,7 @@ def test_r4_an_agent_other_people_talk_to_logs_in_only_with_a_login_confirmed_fo
         agents = {a["id"]: a for a in bridge.get("/v1/vault", headers=vl.AUTH).json()["agents"]}
         assert agents["vie"]["others"] is True
         result = vl.vault_login(bridge)
-        assert result["isError"] is True and chrome.typed == [], (result, chrome.typed)
+        assert not_done(result) and chrome.typed == [], (result, chrome.typed)
     finally:
         chrome.stop()
 
@@ -200,6 +201,6 @@ def test_r9_a_page_that_moved_to_another_host_of_the_site_before_the_fields_were
         vl.keep(bridge, "Support Kerfy", kept, "support@kerfy.example", "Fake-desk-pw-41!")
         result = vl.vault_login(bridge)
         assert chrome.trees >= 2, "the fake's second look never came"
-        assert result["isError"] is True and chrome.typed == [], (result, chrome.typed)
+        assert not_done(result) and chrome.typed == [], (result, chrome.typed)
     finally:
         chrome.stop()

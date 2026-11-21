@@ -4,7 +4,7 @@ another member. « Non », or no answer, deletes nothing; the card waits for her
 (the agent's call returns at once), and her « Oui » later deletes it. Over three linked bridges, as in
 test_family_calendar.py: Alex holds « Famille », Marie lets it change her calendar, Paul doesn't share his."""
 from bbkit.common import AUTH
-from bbkit.mcp import TOKEN, call, give_token, text_of
+from bbkit.mcp import TOKEN, call, give_token, text_of, not_done
 from test_family_calendar import copy, family, flags
 from test_shared_agents import wait
 
@@ -74,4 +74,4 @@ def test_only_the_calendars_owner_is_asked_and_only_her_yes_deletes(bridges, fak
 
     # no card for what isn't deletable: an unknown event is said so at once
     unknown = delete(a, "Marie", "zz")
-    assert unknown["isError"] is True and cards(b) == [], unknown
+    assert not_done(unknown) and cards(b) == [], unknown

@@ -3,6 +3,7 @@ each level a priced line inside a folded menu, the total « EUR 27.97 » beside 
 answer in bounded time: approved and pressed, or a clean hand-over (« could not check »), never a hang nor a browser
 error with the card left half typed. Prints the times and the answers (run against main too: what today's flow does).
 Real Chromium, test card."""
+from bbkit.mcp import not_done
 import time
 
 from test_review_pay_total_chrome import APPROVED, page, start
@@ -46,7 +47,7 @@ def test_t3_a_3000_deep_page_pays_or_hands_over_in_bounded_time(bridges, fakes, 
         # answer as expected », nothing typed, not pressed. Not a regression of the check. Here: bounded, and pressed only
         # after « approved ».
         # (browser.values() itself gets no answer from that page: the stop came before any typing)
-        assert "moved on" in confirmed or ("done.html" not in pages and result["isError"] is True), said
+        assert "moved on" in confirmed or ("done.html" not in pages and not_done(result)), said
     finally:
         browser.stop()
         shop.shutdown()

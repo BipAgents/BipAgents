@@ -13,6 +13,7 @@ import hashlib
 import json
 from concurrent.futures import ThreadPoolExecutor
 
+from bbkit.mcp import not_done
 from bbkit.common import AUTH
 from bbkit.servers import free_port
 from conftest import wait_registered
@@ -106,7 +107,7 @@ def test_r2_an_agent_never_makes_a_vault_line_out_of_its_own_words_in_a_refusal(
     for why, arguments in asked.items():
         result = vault_tool(vault_bridge, "vault_create_login", arguments)
         said = result["content"][0]["text"]
-        assert result["isError"] is True and FORGED in said, (why, said)
+        assert not_done(result) and FORGED in said, (why, said)
         refusals[why] = said
     assert vault_bridge.get("/v1/vault", headers=AUTH).json()["items"] == [], "nothing made, nothing kept"
     # the same refusals in a conversation, as Hermes keeps them (wrapped or not)

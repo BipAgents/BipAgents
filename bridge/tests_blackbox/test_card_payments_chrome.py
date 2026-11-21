@@ -370,7 +370,7 @@ def test_a_providers_frame_inside_another_sites_frame_is_never_typed_into(bridge
         turn_on(bridge)
         bridge.post("/v1/vault", headers=AUTH, json={**CARD, "sites": ["127.0.0.1"]})
         result, asked = pay(bridge, ARGS)
-        assert asked is None and result["isError"] is True, result
+        assert asked is None and not_done(result), result
         assert "hand_over_payment" in result["content"][0]["text"], result
         assert "4242" not in json.dumps(browser.values())
     finally:
@@ -429,7 +429,7 @@ def test_a_providers_payment_page_not_reached_from_the_cards_site_is_never_typed
         turn_on(bridge)
         bridge.post("/v1/vault", headers=AUTH, json={**CARD, "sites": ["127.0.0.1"]})
         result, asked = pay(bridge, ARGS)
-        assert asked is None and result["isError"] is True, result
+        assert asked is None and not_done(result), result
         said = result["content"][0]["text"]
         assert "did not come to it from 127.0.0.1" in said and "hand_over_payment" in said, said
         # another shop sent the tab there: not this card's site
@@ -437,7 +437,7 @@ def test_a_providers_payment_page_not_reached_from_the_cards_site_is_never_typed
         to_hosted_page(browser, "form")
         bridge.post("/v1/vault", headers=AUTH, json={**CARD, "label": "Autre", "sites": ["shop.example"]})
         result, asked = pay(bridge, {**ARGS, "card": "autre"})
-        assert asked is None and result["isError"] is True, result
+        assert asked is None and not_done(result), result
         assert "did not come to it from shop.example" in result["content"][0]["text"], result
         assert browser.values()["hosted.html"] == {"number": "", "exp": "", "cvc": "", "holder": ""}
     finally:
