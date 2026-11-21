@@ -565,6 +565,9 @@ pub struct SubscriptionState {
     pub restart_of: Option<String>,
     /// What the agent does now, for the apps that ask (turn_status.rs, `[status]`): made at the run's first event.
     pub status: Option<crate::turn_status::Tracker>,
+    /// Whether the agent's model is the person's own (turn_status.rs `local_model`), read once before the run's first
+    /// event (`upstream`), never under this lock (review R3, 17/11).
+    pub status_local: bool,
     /// The person said « Continuer » at the brake's two thirds: this turn's limits raised once (`brake_action`).
     pub brake_raised: bool,
     /// The stop the brake's last warning announced (« Arrêter » takes it at once).
@@ -640,6 +643,7 @@ impl Default for SubscriptionState {
             restarted_as: None,
             restart_of: None,
             status: None,
+            status_local: false,
             brake_raised: false,
             loop_over: None,
             listeners: Vec::new(),
@@ -1476,6 +1480,11 @@ impl RunHub {
         // what the agent does now: a wait grown abnormal is said without an event of the run's (turn_status.rs). Only
         // with `[status] enabled`: off, nothing runs (review B4, 17/11)
         let on = self.config.as_ref().is_some_and(|c| c.get().status.enabled);
+        if let (true, Some(shared)) = (on, self.config.as_ref()) {
+            let (config, agent) = (shared.get(), sub.agent.clone());
+            let local = tokio::task::spawn_blocking(move || crate::turn_status::local_model(&config, &agent)).await;
+            lock(&sub.state).status_local = local.unwrap_or(false);
+        }
         let ticker = on.then(|| {
             let (hub, sub) = (self.clone(), sub.clone());
             tokio::spawn(async move {
@@ -1658,15 +1667,15 @@ impl RunHub {
         let now = crate::py::time_time();
         if st.status.is_none() {
             let lang = crate::handback::language_of(&config, &sub.agent);
-            let local = crate::turn_status::local_model(&config, &sub.agent);
-            st.status = Some(crate::turn_status::Tracker::new(now, &lang, local));
+            st.status = Some(crate::turn_status::Tracker::new(now, &lang, st.status_local));
         }
         let status = st.status.as_mut()?.on_event(&event.r#type, &event.data, now, &config.status)?;
         self.keep_took(sub, st, &status, now);
         Some(self.status_event(sub, status))
     }
 
-    /// A long turn's summary kept for its last reply (threads `with_took`): numbers only.
+    /// A long turn's summary kept for its last reply (threads `with_took`): numbers and the sites it went to (a
+    /// member never reads them: `for_others`), deleted with the conversation or after the outbox's retention (R1).
     fn keep_took(&self, sub: &RunSubscription, st: &SubscriptionState, status: &Map<String, Value>, now: f64) {
         let (Some(took), Some(store), Some(session)) = (status.get("took").cloned(), self.store.clone(), st.session_id.clone())
         else {

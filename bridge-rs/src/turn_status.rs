@@ -167,9 +167,12 @@ pub fn local_base(base: &str) -> bool {
     !base.trim().is_empty() && crate::archives::records_fill::is_local(base)
 }
 
-/// Whether the agent's model is the person's own, on this machine or the network (its Hermes profile's).
+/// Whether the agent's model is the person's own, on this machine or the network: its Hermes profile's
+/// `model.base_url`, whatever its provider, and nothing else (never the `.env` with its key: review R3, 17/11). Read
+/// once a run, before its first event (runs.rs `upstream`), never under the run's lock.
 pub fn local_model(config: &crate::config::Config, agent: &crate::config::AgentConfig) -> bool {
-    crate::mail_scan::model_of(config, agent).ok().and_then(|m| m.get("base_url").cloned()).is_some_and(|b| local_base(&b))
+    let profile = crate::shares::profile_config(&crate::agents_admin::profile_folder(config, agent));
+    profile.get("model").and_then(|m| m.get("base_url")).and_then(Value::as_str).is_some_and(local_base)
 }
 
 /// What a family member reads of another's status (agent_shares.rs `turn_words`, D8 B): what kind of thing the agent
@@ -312,6 +315,8 @@ pub struct Tracker {
     last_done_site: Option<String>,
     /// The brake's two thirds, until the person goes on (`continued`), and the site it was on.
     looping: Option<Loop>,
+    /// The person said « Continuer » once this turn: its limits raised, never twice (review R5, 17/11).
+    raised: bool,
     loop_site: Option<String>,
     /// Where the time went: until `mark`, by kind of wait, by site or kind of call (`time`).
     mark: f64,
@@ -343,6 +348,7 @@ impl Tracker {
             step: None,
             last_done_site: None,
             looping: None,
+            raised: false,
             loop_site: None,
             mark: started,
             spent: [0.0; 4],
@@ -473,6 +479,7 @@ impl Tracker {
     pub fn continued(&mut self, now: f64, settings: &Settings) -> Option<Map<String, Value>> {
         self.account(now);
         self.looping.take()?;
+        self.raised = true;
         self.settle(now);
         self.changed(now, settings)
     }
@@ -599,6 +606,8 @@ impl Tracker {
         let model = if self.local { settings.local_factor } else { 1.0 };
         match self.state {
             State::Thinking | State::Model => Some((settings.model_slow * model, Some(settings.model_stuck * model))),
+            // a sub-agent's work (`delegate_task`, held for the run: runs.rs `delegating`) is long by nature: never amber
+            State::Tool if self.open.last().is_some_and(|o| o.kind == "delegate") => None,
             State::Tool if self.open.last().is_some_and(|o| o.kind == "browser") => Some((settings.page_slow, None)),
             State::Tool => Some((settings.tool_slow, None)),
             State::WaitingAgent => Some((settings.agent_slow, None)),
@@ -670,7 +679,12 @@ impl Tracker {
             }
             _ => Value::Null,
         });
-        let actions: &[&str] = if self.state == State::Looping { &["continue", "stop", "help"] } else { &[] };
+        // « Continuer » raises the turn's limits once (runs.rs `brake_action`): a second loop asks without it
+        let actions: &[&str] = match (self.state, self.raised) {
+            (State::Looping, false) => &["continue", "stop", "help"],
+            (State::Looping, true) => &["stop", "help"],
+            _ => &[],
+        };
         status.insert("actions".into(), json!(actions));
         status.insert("text".into(), json!(self.words(open, action, true)));
         // the same without a site, a connector or the agent's step: what a family member reads (`reduced`)
@@ -1008,6 +1022,17 @@ mod tests {
         assert_eq!(s(&again, "state"), "tool");
         assert_eq!(s(&again, "actions"), &json!([]));
         assert_eq!(s(&again, "loop"), &Value::Null);
+    }
+
+    /// 21/11 (sub-tasks): a sub-agent working for the turn (`delegate_task`, minutes) is not a slow tool: no amber,
+    /// no « Où en es-tu ? » for it; the line says the step.
+    #[test]
+    fn a_sub_agent_working_for_the_turn_is_never_slow() {
+        let mut t = Tracker::new(0.0, "fr", false);
+        let status = started(&mut t, "delegate_task", "d", "Compare les trois devis", 1.0).expect("said as it starts");
+        assert_eq!((s(&status, "state"), s(&status, "kind")), (&json!("tool"), &json!("delegate")));
+        assert_eq!(t.tick(60.0, &on()), None);
+        assert_eq!(t.tick(240.0, &on()), None, "never slow");
     }
 
     /// Review R5 (17/11): « Continuer » raises a turn's limits once only (runs.rs `brake_action`: 409

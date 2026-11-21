@@ -526,7 +526,8 @@ words » and drops its working line during a pause in the reply. `[status] enabl
 
 **A loop** (`state: looping`): at the brake's two thirds (loop_brake.rs, the same moment the agent is told), with
 `loop: {over, kind?, site?, count, stop_at}` (`over`: `same_call`, `same_tool`, `too_many`, `page_reads`, `browser`,
-`discovery`) and `actions: ["continue", "stop", "help"]` (empty in every other state); text « Je tourne en rond sur
+`discovery`) and `actions: ["continue", "stop", "help"]` (`["stop", "help"]` once « Continuer » was said in the turn:
+its limits are raised once only; empty in every other state); text « Je tourne en rond sur
 sncf-connect.com (27 étapes) ». The person's answer:
 
 ```text
@@ -542,8 +543,10 @@ POST /v1/runs/{run_id}/brake?agent=<id>  {"action": "continue" | "stop"}
 was seen done; going on: so far) and the list the turn's `time`: `{secs, model, tools, person, agent, actions, top}`,
 `top` the one or two waits that took a fifth of it or more (`{what: model | person | agent | site | kind, site?, kind?,
 secs}`). A turn of 60 s or more ends on a status `state: done` with `took` (the same shape), sent before the run's
-end; kept in bridge.db (`turn_times`, numbers only), it comes back on the turn's last reply in timeline pages
-(`message.took`), for « 4 min 10 · surtout sncf-connect.com (2 min 30) ».
+end; kept in bridge.db (`turn_times`: numbers and the bare domains its time went to), it comes back on the turn's
+last reply in timeline pages (`message.took`), for « 4 min 10 · surtout sncf-connect.com (2 min 30) ». Its rows go
+with their conversation (`DELETE /v1/threads/{id}`), with all of the agent's conversations, and after the outbox's
+retention (`[outbox] retention_days`, 90).
 
 **Family.** A member's app that asks (`status=1` on her bridge's relay, passed to the owner's) reads a reduced status:
 `state`, `slow`, `stuck`, `since`, `started`, `now`, `kind`, `limit_s`, `took` (its sites' time as browsing:

@@ -477,6 +477,11 @@ async fn purge_loop(state: AppState) {
             if removed > 0 {
                 tracing::info!(removed = removed, "outbox purged");
             }
+            // where long turns' time went (turn_status.rs `took`: sites too), kept as long as the outbox (review R1)
+            let removed = state.store.purge_turn_times(config.outbox.retention_days).await?;
+            if removed > 0 {
+                tracing::info!(removed = removed, "turn times purged");
+            }
             Ok(())
         }
         .await;

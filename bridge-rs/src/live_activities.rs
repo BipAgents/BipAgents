@@ -217,10 +217,17 @@ fn looks_like_web(tool: &str) -> bool {
     tool.contains("browser") || tool.contains("stealth") || tool.contains("web") || tool.contains("fetch")
 }
 
-/// The host of the first web address in a tool's preview, « www. » dropped.
+/// The host of the first web address in a tool's preview, « www. » dropped (never the user's part before an `@`).
 pub fn site(preview: &str) -> Option<String> {
     let start = preview.find("http://").map(|i| i + 7).or_else(|| preview.find("https://").map(|i| i + 8))?;
-    let host: String = preview[start..]
+    // the address's authority (up to its path), and in it what follows a user's part (`nom.prenom@hote`, review R9)
+    let rest = &preview[start..];
+    let end = rest
+        .find(|c: char| !(c.is_ascii_alphanumeric() || ".-_~%:@+!$&*=".contains(c)))
+        .unwrap_or(rest.len());
+    let authority = &rest[..end];
+    let host_part = authority.rsplit_once('@').map_or(authority, |(_, host)| host);
+    let host: String = host_part
         .chars()
         .take_while(|c| c.is_ascii_alphanumeric() || *c == '.' || *c == '-')
         .collect::<String>()

@@ -405,7 +405,8 @@ impl Store {
         self.run(&sql, vec![text(agent), text(since)]).await
     }
 
-    /// Where a long turn's time went (turn_status.rs `took`), for its last reply (threads `with_took`): numbers only.
+    /// Where a long turn's time went (turn_status.rs `took`), for its last reply (threads `with_took`): numbers and the
+    /// sites it went to; deleted with its conversation, its agent's, or after a while (`purge_turn_times`).
     pub async fn save_turn_time(&self, agent: &str, run_id: &str, session_id: &str, started: f64, ended: f64, took: &Value)
         -> anyhow::Result<()> {
         self.run(
@@ -414,6 +415,27 @@ impl Store {
         )
         .await?;
         Ok(())
+    }
+
+    /// The long turns' summaries of these conversations' Hermes sessions (their conversation deleted: review R1).
+    pub async fn forget_turn_times(&self, agent: &str, sessions: &[String]) -> anyhow::Result<()> {
+        for session in sessions {
+            self.run("DELETE FROM turn_times WHERE agent=? AND session_id=?", vec![text(agent), text(session)]).await?;
+        }
+        Ok(())
+    }
+
+    /// Every long turn's summary of the agent (all its conversations let go: threads `forget_agent`).
+    pub async fn forget_agent_turn_times(&self, agent: &str) -> anyhow::Result<()> {
+        self.run("DELETE FROM turn_times WHERE agent=?", vec![text(agent)]).await?;
+        Ok(())
+    }
+
+    /// The long turns' summaries ended more than `older_than_days` ago (the outbox's retention, app.rs `purge_loop`):
+    /// they name sites, never kept for ever (review R1). How many went.
+    pub async fn purge_turn_times(&self, older_than_days: i64) -> anyhow::Result<usize> {
+        let cutoff = crate::py::time_time() - older_than_days.max(0) as f64 * 86400.0;
+        self.run_count("DELETE FROM turn_times WHERE ended < ?", vec![Param::Real(cutoff)]).await
     }
 
     pub async fn forget_run(&self, agent: &str, run_id: &str) -> anyhow::Result<()> {
