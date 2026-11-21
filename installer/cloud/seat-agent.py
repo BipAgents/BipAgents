@@ -904,6 +904,31 @@ def vault_done_of(number):
     return max(ids) if ids else None
 
 
+# Alex 21/11: a vault_keys order (sealing restarts the place's bridge, and the first time hardens the server: swap
+# emptied) is done only at night, server time, after the night's reboot window (00:00-00:44): from 01:00 to 05:00.
+# Sent in the evening or any time, it waits (served again at each round; orders are valid two days). A lab says
+# "any time" with this file of root's.
+VAULT_NIGHT = (1, 5)
+VAULT_ANYTIME = "/etc/bipagents/vault-keys-anytime"
+
+
+def vault_night(clock=None):
+    """Now is the server's night for the vault's orders (`VAULT_NIGHT`, server time), or a lab said any time."""
+    if os.path.exists(VAULT_ANYTIME):
+        return True
+    hour = (clock or time.localtime)().tm_hour
+    return VAULT_NIGHT[0] <= hour < VAULT_NIGHT[1]
+
+
+def vault_order_round(body, order_id):
+    """The round's part of a vault_keys order: done at night only (`vault_night`); True: done (told), False: held."""
+    if not vault_night():
+        log("vault keys of place %s held until the night (%02d:00-%02d:00 server time)"
+            % (body.get("seat"), VAULT_NIGHT[0], VAULT_NIGHT[1]))
+        return False
+    return vault_keys_order(int(body["seat"]), body["vault_keys"], int(order_id))
+
+
 def vault_keys_order(number, settings, order_id, harden=None, run_as=None, moves=None):
     """The guichet's `vault_keys` order for place n. True: done (told to the guichet, whatever happened); False: held
     (the server was just hardened, or the place moves: neither noted nor told done, served again next round). The
@@ -2736,8 +2761,8 @@ def main(argv=()):
                     except OSError as exc:
                         log("removing place %s stopped: %s" % (body["seat"], exc))
                 elif body["action"] == "vault_keys":
-                    if not vault_keys_order(int(body["seat"]), body["vault_keys"], int(order["id"])):
-                        continue   # the server just hardened: the place sealed at the next round
+                    if not vault_order_round(body, order["id"]):
+                        continue   # not the night yet, or the server just hardened: sealed at a later round
                 elif body["action"] == "reopen":
                     try:
                         reopen(int(body["seat"]), body["pair"])
