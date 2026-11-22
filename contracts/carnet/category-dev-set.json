@@ -1,0 +1,2743 @@
+{
+ "about": "The categories' development set (branch carnet-categories, 22/11): pages a person of any age might keep, written for this work without seeing the blind set (briefs/carnet-blind-set-1122.*, never opened), each a new subject page: its title and its first line (its « En bref »), and where the person would look first (`expected`: the first counts; a second where they could look too). `trap`: a word of the page points elsewhere (« cadeau » on a colleague's leaving drinks, « location » for a holiday rental, « week-end » on a work rota…). Conventions: a bill or a contract is Papiers (Argent second), taxes Argent (Papiers second), rent and the building Maison, a car's insurance and registration Papiers, school forms Papiers, the children's school evenings Personnes, a doctor's papers Papiers, hobbies, books, series, sport and learning Autres. Tuned on, with the demo: the fresh blind set is the measure. Played by bridge-rs categories.rs `the_dev_set_is_filed_where_a_person_looks` (floor) and `dev_set_report` (ignored: the misses).",
+ "cases": {
+  "fr": [
+   {
+    "title": "Budget du mois",
+    "first_line": "Loyer, courses, essence : il reste 230 € à la fin du mois.",
+    "expected": [
+     "money"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Livret A des enfants",
+    "first_line": "Verser 50 € par mois sur le livret de Léo et celui de Jade.",
+    "expected": [
+     "money"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Rembourser Paul",
+    "first_line": "Je lui dois 120 € pour les places du concert.",
+    "expected": [
+     "money"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Crédit immobilier",
+    "first_line": "Taux à 3,2 %, renégocier avec la banque en janvier.",
+    "expected": [
+     "money",
+     "home"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Comparer les forfaits mobiles",
+    "first_line": "Free ou Sosh, 10 € par mois avec 100 Go.",
+    "expected": [
+     "money"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Dépenses de Noël",
+    "first_line": "Cadeaux, repas et déco : 400 € maximum cette année.",
+    "expected": [
+     "money"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Épargne pour la moto",
+    "first_line": "Mettre 100 € de côté chaque mois jusqu'en juin.",
+    "expected": [
+     "money"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Prêt à Julien",
+    "first_line": "Prêté 300 € le 4 octobre, il me rend tout en décembre.",
+    "expected": [
+     "money"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Achats Black Friday",
+    "first_line": "Aspirateur, casque audio, chaussures de rando.",
+    "expected": [
+     "money"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Taxe foncière",
+    "first_line": "À payer avant le 15 octobre, mensualiser l'an prochain.",
+    "expected": [
+     "money",
+     "papers"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Entretien d'embauche chez Decathlon",
+    "first_line": "Mardi 10 h, poste de chef de rayon, apporter le CV.",
+    "expected": [
+     "work"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Projet site client Boulanger",
+    "first_line": "Livraison de la maquette vendredi, relire avec Sophie.",
+    "expected": [
+     "work"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Pot de départ de Nadia",
+    "first_line": "Collecte pour son cadeau, 10 € chacun, vendredi 17 h.",
+    "expected": [
+     "work"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Formation Excel",
+    "first_line": "Deux jours en février, payés par l'entreprise.",
+    "expected": [
+     "work"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Négocier mon augmentation",
+    "first_line": "Préparer les chiffres de l'année avant l'entretien annuel.",
+    "expected": [
+     "work"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Planning des gardes",
+    "first_line": "Je suis de nuit le week-end du 14, échanger avec Karim.",
+    "expected": [
+     "work"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Notes de frais",
+    "first_line": "Envoyer les tickets du déplacement à Lyon à la compta.",
+    "expected": [
+     "work"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Chercher un stage",
+    "first_line": "Envoyer ma lettre de motivation à trois cabinets d'architectes.",
+    "expected": [
+     "work"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Renouveler la carte d'identité",
+    "first_line": "Rendez-vous en mairie, photo et justificatif de domicile.",
+    "expected": [
+     "papers"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Carte grise",
+    "first_line": "Changer l'adresse sur le site de l'ANTS après le déménagement.",
+    "expected": [
+     "papers"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Assurance habitation",
+    "first_line": "Contrat à la MAIF, échéance le 1er mars.",
+    "expected": [
+     "papers"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Arrêt maladie",
+    "first_line": "Envoyer le volet 3 à l'employeur sous 48 h.",
+    "expected": [
+     "papers"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Inscription au collège",
+    "first_line": "Dossier à rendre avant le 30 juin avec le certificat de scolarité.",
+    "expected": [
+     "papers"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Garantie du lave-linge",
+    "first_line": "Acheté chez Darty, garanti deux ans, ticket dans le tiroir.",
+    "expected": [
+     "papers"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Feuilles de soins à envoyer",
+    "first_line": "Trois feuilles de l'ostéo pour la mutuelle.",
+    "expected": [
+     "papers"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Procuration pour voter",
+    "first_line": "À faire au commissariat avant le scrutin.",
+    "expected": [
+     "papers"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Résilier la box internet",
+    "first_line": "Lettre recommandée à Orange, préavis d'un mois.",
+    "expected": [
+     "papers",
+     "money"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Fuite sous l'évier",
+    "first_line": "Le plombier passe jeudi entre 8 h et 12 h.",
+    "expected": [
+     "home"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Repeindre la chambre de Léo",
+    "first_line": "Bleu clair, deux pots de peinture, samedi.",
+    "expected": [
+     "home"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Tondre et tailler la haie",
+    "first_line": "Avant les vacances, emprunter le taille-haie du voisin.",
+    "expected": [
+     "home"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Croquettes du chat",
+    "first_line": "Prendre le sac de 10 kg, Minou n'aime plus celles au poisson.",
+    "expected": [
+     "home"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Recette du gratin dauphinois",
+    "first_line": "Un kilo de pommes de terre, crème, ail, une heure au four.",
+    "expected": [
+     "home"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Changer la chaudière",
+    "first_line": "Trois devis demandés, aide de l'État possible.",
+    "expected": [
+     "home"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Assemblée générale de copropriété",
+    "first_line": "Le 12 mai à 18 h, vote du ravalement de façade.",
+    "expected": [
+     "home"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Vider la cave",
+    "first_line": "Donner le vieux vélo et jeter les cartons avant l'hiver.",
+    "expected": [
+     "home"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Ménage de printemps",
+    "first_line": "Vitres, rideaux, placards de la cuisine.",
+    "expected": [
+     "home"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Week-end à Lisbonne",
+    "first_line": "Vol samedi 7 h, hôtel près de l'Alfama.",
+    "expected": [
+     "trips"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Vacances d'été en Bretagne",
+    "first_line": "Location à Quiberon du 12 au 26 juillet.",
+    "expected": [
+     "trips"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Road trip en Écosse",
+    "first_line": "Louer une voiture à Édimbourg, dix jours.",
+    "expected": [
+     "trips"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Séjour au ski",
+    "first_line": "Les Arcs, forfaits à réserver avant le 1er décembre.",
+    "expected": [
+     "trips"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Valise pour la Crète",
+    "first_line": "Crème solaire, maillots, adaptateur.",
+    "expected": [
+     "trips"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Billets de train pour Marseille",
+    "first_line": "Partir le 23 décembre chez tante Odile, retour le 27.",
+    "expected": [
+     "trips"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Anniversaire de Jade",
+    "first_line": "Ses 10 ans le 14 mars, fête à la maison avec ses copines.",
+    "expected": [
+     "people"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Idées cadeaux pour maman",
+    "first_line": "Un foulard, le dernier livre de Musso.",
+    "expected": [
+     "people"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Mariage de Camille et Hugo",
+    "first_line": "Le 6 juin à Annecy, on est témoins.",
+    "expected": [
+     "people"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Baby-sitter du mercredi",
+    "first_line": "Inès, 12 € de l'heure, son numéro est dans le téléphone.",
+    "expected": [
+     "people"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Papi à l'Ehpad",
+    "first_line": "Visite le dimanche, lui apporter des chocolats.",
+    "expected": [
+     "people"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Repas avec les voisins",
+    "first_line": "Samedi soir chez les Martin, apporter un dessert.",
+    "expected": [
+     "people"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Réunion parents-professeurs",
+    "first_line": "Jeudi 18 h avec la maîtresse de Léo.",
+    "expected": [
+     "people"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Livres à lire",
+    "first_line": "Le dernier Joël Dicker et un polar islandais.",
+    "expected": [
+     "other"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Cours de guitare",
+    "first_line": "Le jeudi à 18 h, revoir les accords de Wonderwall.",
+    "expected": [
+     "other"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Séries à regarder",
+    "first_line": "The Bear, Shogun, Slow Horses.",
+    "expected": [
+     "other"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Entraînement semi-marathon",
+    "first_line": "Trois sorties par semaine, 12 km le dimanche.",
+    "expected": [
+     "other"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Idées de sorties",
+    "first_line": "Expo Monet, concert de jazz, escape game.",
+    "expected": [
+     "other"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Apprendre l'espagnol",
+    "first_line": "Duolingo 15 minutes par jour.",
+    "expected": [
+     "other"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Changer de fournisseur d'électricité",
+    "first_line": "EDF ou TotalEnergies, comparer le prix du kWh.",
+    "expected": [
+     "home",
+     "money"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Disney+ et Spotify",
+    "first_line": "Deux abonnements à 25 € par mois, n'en garder qu'un.",
+    "expected": [
+     "money"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Caution de l'appartement",
+    "first_line": "Le bailleur doit rendre les 900 € sous deux mois.",
+    "expected": [
+     "home",
+     "money"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Mutuelle du chien",
+    "first_line": "Contrat chez SantéVet, 18 € par mois.",
+    "expected": [
+     "papers"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Vaccins de Minou chez le véto",
+    "first_line": "Rappel en mars, carnet dans le tiroir.",
+    "expected": [
+     "home"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Panneaux solaires",
+    "first_line": "Devis de 9 000 €, rentable en 12 ans.",
+    "expected": [
+     "home"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Acte de naissance",
+    "first_line": "Demander une copie intégrale à la mairie de Nantes.",
+    "expected": [
+     "papers"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Les 80 ans de mamie",
+    "first_line": "Repas au restaurant le 3 mai, prévenir les cousins.",
+    "expected": [
+     "people"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Obsèques de tonton Jacques",
+    "first_line": "Mardi 14 h à l'église, envoyer des fleurs.",
+    "expected": [
+     "people"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Place en crèche",
+    "first_line": "Dossier déposé, réponse de la commission en juin.",
+    "expected": [
+     "people"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Séminaire à Bordeaux",
+    "first_line": "Train jeudi 8 h, présentation du budget de l'équipe.",
+    "expected": [
+     "work"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Valise perdue",
+    "first_line": "Réclamation faite à l'aéroport de Nice, numéro de dossier noté.",
+    "expected": [
+     "trips"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Tricot",
+    "first_line": "Finir l'écharpe de Paul avant Noël.",
+    "expected": [
+     "other"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Chorale du mardi",
+    "first_line": "Répéter le Requiem de Fauré pour le concert de juin.",
+    "expected": [
+     "other"
+    ],
+    "trap": false
+   }
+  ],
+  "en": [
+   {
+    "title": "Monthly budget",
+    "first_line": "Rent, groceries and petrol leave about £200 spare.",
+    "expected": [
+     "money"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Pay off the credit card",
+    "first_line": "Balance £1,450, pay £300 a month.",
+    "expected": [
+     "money"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Savings for a new bike",
+    "first_line": "Put £50 aside every payday.",
+    "expected": [
+     "money"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Remortgage the flat",
+    "first_line": "Fixed deal ends in March, compare rates with the broker.",
+    "expected": [
+     "money",
+     "home"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Phone contract",
+    "first_line": "Switch to a SIM-only deal, £12 a month.",
+    "expected": [
+     "money"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Pocket money",
+    "first_line": "£5 a week for Tom, £3 for Ella.",
+    "expected": [
+     "money"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Owe Sarah",
+    "first_line": "She paid for the concert tickets, £85.",
+    "expected": [
+     "money"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Christmas spending",
+    "first_line": "Gifts, food and decorations: £500 tops.",
+    "expected": [
+     "money"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Gym membership",
+    "first_line": "Cancel before it renews on 1 February.",
+    "expected": [
+     "money"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Council tax",
+    "first_line": "Pay by direct debit, ten instalments from April.",
+    "expected": [
+     "money",
+     "papers"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Job interview at Tesco",
+    "first_line": "Thursday 10am, store manager role, bring my CV.",
+    "expected": [
+     "work"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Quarterly report",
+    "first_line": "Send the figures to Dave by Friday.",
+    "expected": [
+     "work"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Leaving drinks for Priya",
+    "first_line": "Collection for her present, £10 each.",
+    "expected": [
+     "work"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Expenses claim",
+    "first_line": "Train tickets and hotel from the Leeds visit.",
+    "expected": [
+     "work"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Ask for a pay rise",
+    "first_line": "Prepare my numbers before the annual review.",
+    "expected": [
+     "work"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Night shift rota",
+    "first_line": "I'm on nights the weekend of the 14th, swap with Mo.",
+    "expected": [
+     "work"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Project management course",
+    "first_line": "Six weeks online, the company pays.",
+    "expected": [
+     "work"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Apply for internships",
+    "first_line": "Cover letters to three design studios.",
+    "expected": [
+     "work"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Passport renewal",
+    "first_line": "Photos done, send the form before the summer.",
+    "expected": [
+     "papers"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Car insurance",
+    "first_line": "Policy with Admiral renews on 3 April.",
+    "expected": [
+     "papers"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Home insurance",
+    "first_line": "Contents cover with Aviva, renew in May.",
+    "expected": [
+     "papers"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Dishwasher warranty",
+    "first_line": "Two years, the receipt is in the kitchen drawer.",
+    "expected": [
+     "papers"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Register with the new GP",
+    "first_line": "Fill in the forms for the surgery.",
+    "expected": [
+     "papers"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Secondary school application",
+    "first_line": "Apply for Year 7 places before 31 October.",
+    "expected": [
+     "papers"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Will and power of attorney",
+    "first_line": "Appointment with the solicitor in January.",
+    "expected": [
+     "papers"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Cancel the broadband",
+    "first_line": "Thirty days' notice, send the letter to BT.",
+    "expected": [
+     "papers",
+     "money"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Driving licence address",
+    "first_line": "Update it on the DVLA site after the move.",
+    "expected": [
+     "papers"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Leak under the sink",
+    "first_line": "Plumber coming Thursday morning.",
+    "expected": [
+     "home"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Paint the spare room",
+    "first_line": "Pale green, two tins, Saturday.",
+    "expected": [
+     "home"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Mow the lawn and trim the hedge",
+    "first_line": "Borrow the neighbour's hedge trimmer.",
+    "expected": [
+     "home"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Dog food",
+    "first_line": "Big bag for Biscuit, he hates the salmon one.",
+    "expected": [
+     "home"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Shepherd's pie recipe",
+    "first_line": "Lamb mince, mash, one hour in the oven.",
+    "expected": [
+     "home"
+    ],
+    "trap": false
+   },
+   {
+    "title": "New boiler",
+    "first_line": "Three quotes in, a grant may apply.",
+    "expected": [
+     "home"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Spring clean",
+    "first_line": "Windows, curtains, kitchen cupboards.",
+    "expected": [
+     "home"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Clear out the garage",
+    "first_line": "Give away the old bike, take the boxes to the tip.",
+    "expected": [
+     "home"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Weekend in Lisbon",
+    "first_line": "Flight Saturday 7am, hotel near Alfama.",
+    "expected": [
+     "trips"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Summer holiday in Cornwall",
+    "first_line": "Cottage in St Ives from 12 to 26 July.",
+    "expected": [
+     "trips"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Road trip in Scotland",
+    "first_line": "Hire a car in Edinburgh, ten days.",
+    "expected": [
+     "trips"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Ski week",
+    "first_line": "Val Thorens, book the lift passes before December.",
+    "expected": [
+     "trips"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Packing list for Crete",
+    "first_line": "Sun cream, swimsuits, plug adapter.",
+    "expected": [
+     "trips"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Train to Manchester to see Gran",
+    "first_line": "Leaving on the 23rd, back on the 27th.",
+    "expected": [
+     "trips"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Ella's birthday party",
+    "first_line": "She turns 10 on 14 March, sleepover at home.",
+    "expected": [
+     "people"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Gift ideas for Mum",
+    "first_line": "A scarf, the new Richard Osman book.",
+    "expected": [
+     "people"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Tom and Lucy's wedding",
+    "first_line": "6 June in Bath, we're both witnesses.",
+    "expected": [
+     "people"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Babysitter on Wednesdays",
+    "first_line": "Amy, £12 an hour.",
+    "expected": [
+     "people"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Grandad's care home",
+    "first_line": "Visit on Sundays, bring him biscuits.",
+    "expected": [
+     "people"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Parents' evening",
+    "first_line": "Thursday 6pm with Ella's teacher.",
+    "expected": [
+     "people"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Dinner with the neighbours",
+    "first_line": "Saturday at the Smiths', bring a pudding.",
+    "expected": [
+     "people"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Books to read",
+    "first_line": "The new Richard Osman and an Icelandic thriller.",
+    "expected": [
+     "other"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Guitar lessons",
+    "first_line": "Thursdays at 6, practise the chords.",
+    "expected": [
+     "other"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Shows to watch",
+    "first_line": "The Bear, Slow Horses, Shogun.",
+    "expected": [
+     "other"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Half marathon training",
+    "first_line": "Three runs a week, 12 km on Sundays.",
+    "expected": [
+     "other"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Things to do this winter",
+    "first_line": "Monet exhibition, jazz gig, escape room.",
+    "expected": [
+     "other"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Learning Spanish",
+    "first_line": "Duolingo 15 minutes a day.",
+    "expected": [
+     "other"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Switch energy supplier",
+    "first_line": "Octopus or EDF, compare the unit price.",
+    "expected": [
+     "home",
+     "money"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Netflix and Spotify",
+    "first_line": "Two subscriptions at £25 a month, keep one.",
+    "expected": [
+     "money"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Tenancy deposit",
+    "first_line": "The landlord must return the £900 within ten days.",
+    "expected": [
+     "home",
+     "money"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Pet insurance",
+    "first_line": "Policy with Petplan, £18 a month.",
+    "expected": [
+     "papers"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Cat's jabs at the vet",
+    "first_line": "Booster due in March.",
+    "expected": [
+     "home"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Solar panels",
+    "first_line": "Quote for £7,500, pays for itself in 12 years.",
+    "expected": [
+     "home"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Birth certificate copy",
+    "first_line": "Order one from the register office.",
+    "expected": [
+     "papers"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Nan's 80th",
+    "first_line": "Lunch at the pub on 3 May, tell the cousins.",
+    "expected": [
+     "people"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Uncle Jim's funeral",
+    "first_line": "Tuesday 2pm at the church, send flowers.",
+    "expected": [
+     "people"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Nursery place for Ollie",
+    "first_line": "Application sent, answer in June.",
+    "expected": [
+     "people"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Sales conference in Birmingham",
+    "first_line": "Train Thursday 8am, present the team's numbers.",
+    "expected": [
+     "work"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Lost luggage",
+    "first_line": "Claim made at Gatwick, reference noted.",
+    "expected": [
+     "trips"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Knitting",
+    "first_line": "Finish Paul's scarf before Christmas.",
+    "expected": [
+     "other"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Choir practice",
+    "first_line": "Learn the Fauré Requiem for the June concert.",
+    "expected": [
+     "other"
+    ],
+    "trap": false
+   }
+  ],
+  "de": [
+   {
+    "title": "Haushaltsbuch November",
+    "first_line": "Miete, Einkäufe und Benzin: 230 € bleiben übrig.",
+    "expected": [
+     "money"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Sparplan für die Kinder",
+    "first_line": "Jeden Monat 50 € aufs Depot von Leo.",
+    "expected": [
+     "money"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Kredit für die Küche",
+    "first_line": "Raten von 120 € bis August.",
+    "expected": [
+     "money"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Geld an Jonas zurückzahlen",
+    "first_line": "Er hat die Konzertkarten bezahlt, 85 €.",
+    "expected": [
+     "money"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Handyvertrag wechseln",
+    "first_line": "SIM-only für 10 € im Monat.",
+    "expected": [
+     "money"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Taschengeld",
+    "first_line": "5 € die Woche für Mia.",
+    "expected": [
+     "money"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Weihnachtsausgaben",
+    "first_line": "Geschenke, Essen und Deko: höchstens 400 €.",
+    "expected": [
+     "money"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Tagesgeldkonto",
+    "first_line": "Zinsen vergleichen, 3 % bei der DKB.",
+    "expected": [
+     "money"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Grundsteuer",
+    "first_line": "Bis zum 15. Februar überweisen.",
+    "expected": [
+     "money",
+     "papers"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Vorstellungsgespräch bei Bosch",
+    "first_line": "Dienstag 10 Uhr, Stelle als Projektleiter, Lebenslauf mitnehmen.",
+    "expected": [
+     "work"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Quartalsbericht",
+    "first_line": "Zahlen bis Freitag an Frau Weber schicken.",
+    "expected": [
+     "work"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Abschied von Petra",
+    "first_line": "Sammeln für ihr Geschenk, 10 € pro Person.",
+    "expected": [
+     "work"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Reisekostenabrechnung",
+    "first_line": "Bahnticket und Hotel aus Hamburg einreichen.",
+    "expected": [
+     "work"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Gehaltserhöhung",
+    "first_line": "Zahlen vor dem Jahresgespräch vorbereiten.",
+    "expected": [
+     "work"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Schichtplan Dezember",
+    "first_line": "Nachtdienst am Wochenende, mit Ali tauschen.",
+    "expected": [
+     "work"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Weiterbildung Excel",
+    "first_line": "Zwei Tage im Februar, zahlt die Firma.",
+    "expected": [
+     "work"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Praktikumsplatz suchen",
+    "first_line": "Bewerbungen an drei Architekturbüros.",
+    "expected": [
+     "work"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Personalausweis verlängern",
+    "first_line": "Termin beim Bürgeramt, biometrisches Foto mitbringen.",
+    "expected": [
+     "papers"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Kfz-Versicherung",
+    "first_line": "Vertrag bei der HUK, Kündigung bis 30. November.",
+    "expected": [
+     "papers"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Haftpflichtversicherung",
+    "first_line": "Beitrag 60 € im Jahr, Police im Ordner.",
+    "expected": [
+     "papers"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Garantie Waschmaschine",
+    "first_line": "Zwei Jahre, Kassenbon in der Küchenschublade.",
+    "expected": [
+     "papers"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Krankmeldung",
+    "first_line": "Den gelben Schein an den Arbeitgeber schicken.",
+    "expected": [
+     "papers"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Anmeldung Gymnasium",
+    "first_line": "Unterlagen bis Ende Februar abgeben.",
+    "expected": [
+     "papers"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Steuererklärung 2025",
+    "first_line": "Belege sammeln, Abgabe bis Juli.",
+    "expected": [
+     "money",
+     "papers"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Ummeldung nach dem Umzug",
+    "first_line": "Innerhalb von zwei Wochen beim Einwohnermeldeamt.",
+    "expected": [
+     "papers"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Internet kündigen",
+    "first_line": "Kündigungsschreiben an Vodafone, ein Monat Frist.",
+    "expected": [
+     "papers"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Wasserhahn tropft",
+    "first_line": "Der Klempner kommt am Donnerstag.",
+    "expected": [
+     "home"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Kinderzimmer streichen",
+    "first_line": "Hellblau, zwei Eimer Farbe, Samstag.",
+    "expected": [
+     "home"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Rasen mähen und Hecke schneiden",
+    "first_line": "Heckenschere vom Nachbarn leihen.",
+    "expected": [
+     "home"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Katzenfutter",
+    "first_line": "Den großen Sack für Mimi, kein Fisch mehr.",
+    "expected": [
+     "home"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Rezept Kartoffelsalat",
+    "first_line": "Kartoffeln, Gurke, Essig, Brühe.",
+    "expected": [
+     "home"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Neue Heizung",
+    "first_line": "Drei Angebote eingeholt, Förderung möglich.",
+    "expected": [
+     "home"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Nebenkostenabrechnung",
+    "first_line": "Nachzahlung von 180 € an den Vermieter.",
+    "expected": [
+     "home",
+     "money"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Keller ausmisten",
+    "first_line": "Altes Fahrrad verschenken, Kartons zum Wertstoffhof.",
+    "expected": [
+     "home"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Wochenende in Wien",
+    "first_line": "Flug am Samstag um 7 Uhr, Hotel nahe dem Stephansdom.",
+    "expected": [
+     "trips"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Sommerurlaub an der Ostsee",
+    "first_line": "Ferienwohnung in Zingst vom 12. bis 26. Juli.",
+    "expected": [
+     "trips"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Rundreise durch Schottland",
+    "first_line": "Mietwagen ab Edinburgh, zehn Tage.",
+    "expected": [
+     "trips"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Skiurlaub",
+    "first_line": "Skipass vor Dezember buchen.",
+    "expected": [
+     "trips"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Packliste Kreta",
+    "first_line": "Sonnencreme, Badesachen, Adapter.",
+    "expected": [
+     "trips"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Zugfahrt zu Oma nach Leipzig",
+    "first_line": "Hin am 23., zurück am 27. Dezember.",
+    "expected": [
+     "trips"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Geburtstag von Mia",
+    "first_line": "Sie wird 10, Übernachtungsparty bei uns zu Hause.",
+    "expected": [
+     "people"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Geschenkideen für Mama",
+    "first_line": "Ein Schal, das neue Buch von Juli Zeh.",
+    "expected": [
+     "people"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Hochzeit von Anna und Tobi",
+    "first_line": "6. Juni am Tegernsee, wir sind Trauzeugen.",
+    "expected": [
+     "people"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Babysitter mittwochs",
+    "first_line": "Lena, 12 € die Stunde.",
+    "expected": [
+     "people"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Opa im Pflegeheim",
+    "first_line": "Sonntags besuchen, Pralinen mitbringen.",
+    "expected": [
+     "people"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Elternabend",
+    "first_line": "Donnerstag 19 Uhr mit der Klassenlehrerin.",
+    "expected": [
+     "people"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Grillen mit den Nachbarn",
+    "first_line": "Samstagabend bei Müllers, Salat mitbringen.",
+    "expected": [
+     "people"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Bücher zum Lesen",
+    "first_line": "Der neue Krimi von Nele Neuhaus.",
+    "expected": [
+     "other"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Gitarrenunterricht",
+    "first_line": "Donnerstags 18 Uhr, Akkorde üben.",
+    "expected": [
+     "other"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Serien",
+    "first_line": "The Bear, Slow Horses, Dark.",
+    "expected": [
+     "other"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Halbmarathon-Training",
+    "first_line": "Drei Läufe pro Woche, sonntags 12 km.",
+    "expected": [
+     "other"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Ideen fürs Wochenende",
+    "first_line": "Ausstellung, Jazzkonzert, Escape-Room in der Stadt.",
+    "expected": [
+     "other"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Spanisch lernen",
+    "first_line": "Jeden Tag 15 Minuten Duolingo.",
+    "expected": [
+     "other"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Stromanbieter wechseln",
+    "first_line": "Vergleichen, wer die günstigste Kilowattstunde hat.",
+    "expected": [
+     "home",
+     "money"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Netflix und Spotify",
+    "first_line": "Zwei Abos für 25 € im Monat, eins kündigen.",
+    "expected": [
+     "money"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Mietkaution zurück",
+    "first_line": "Der Vermieter muss die 900 € zurückzahlen.",
+    "expected": [
+     "home",
+     "money"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Tierkrankenversicherung",
+    "first_line": "Vertrag bei der Agila, 18 € im Monat.",
+    "expected": [
+     "papers"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Impfung der Katze beim Tierarzt",
+    "first_line": "Auffrischung im März.",
+    "expected": [
+     "home"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Photovoltaikanlage",
+    "first_line": "Angebot über 9.000 €, rechnet sich in 12 Jahren.",
+    "expected": [
+     "home"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Geburtsurkunde",
+    "first_line": "Beim Standesamt eine Kopie bestellen.",
+    "expected": [
+     "papers"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Omas 80. Geburtstag",
+    "first_line": "Mittagessen im Gasthaus am 3. Mai, die Cousins einladen.",
+    "expected": [
+     "people"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Beerdigung von Onkel Heinz",
+    "first_line": "Dienstag 14 Uhr in der Kirche, Blumen schicken.",
+    "expected": [
+     "people"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Kitaplatz für Ben",
+    "first_line": "Antrag abgegeben, Zusage im Juni.",
+    "expected": [
+     "people"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Messe in Köln",
+    "first_line": "Mit dem Team am Stand, Donnerstag Anreise.",
+    "expected": [
+     "work"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Koffer verloren",
+    "first_line": "Verlustanzeige am Flughafen gemacht.",
+    "expected": [
+     "trips"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Stricken",
+    "first_line": "Pauls Schal vor Weihnachten fertig machen.",
+    "expected": [
+     "other"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Chorprobe",
+    "first_line": "Das Requiem von Fauré für das Konzert im Juni üben.",
+    "expected": [
+     "other"
+    ],
+    "trap": false
+   }
+  ],
+  "es": [
+   {
+    "title": "Presupuesto del mes",
+    "first_line": "Alquiler, compra y gasolina: quedan 200 €.",
+    "expected": [
+     "money"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Ahorro para el coche",
+    "first_line": "Apartar 100 € cada mes hasta junio.",
+    "expected": [
+     "money"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Hipoteca del piso",
+    "first_line": "Revisar el tipo de interés en enero.",
+    "expected": [
+     "money",
+     "home"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Devolver dinero a Lucía",
+    "first_line": "Me pagó las entradas del concierto, 60 €.",
+    "expected": [
+     "money"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Tarifa del móvil",
+    "first_line": "Cambiar a una de 10 € al mes con 50 GB.",
+    "expected": [
+     "money"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Paga de los niños",
+    "first_line": "5 € a la semana para Pablo.",
+    "expected": [
+     "money"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Gastos de Navidad",
+    "first_line": "Regalos, cena y adornos: 400 € como mucho.",
+    "expected": [
+     "money"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Cuenta de ahorro",
+    "first_line": "Comparar intereses, 2 % en ING.",
+    "expected": [
+     "money"
+    ],
+    "trap": false
+   },
+   {
+    "title": "IBI del piso",
+    "first_line": "Pagar antes del 15 de octubre, domiciliarlo el año que viene.",
+    "expected": [
+     "money",
+     "papers"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Entrevista en Mercadona",
+    "first_line": "Martes a las 10, puesto de encargado, llevar el currículum.",
+    "expected": [
+     "work"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Informe trimestral",
+    "first_line": "Mandar las cifras a Marta antes del viernes.",
+    "expected": [
+     "work"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Despedida de Carmen",
+    "first_line": "Bote para su regalo, 10 € cada uno.",
+    "expected": [
+     "work"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Dietas del viaje a Bilbao",
+    "first_line": "Entregar los tickets del tren y del hotel a contabilidad.",
+    "expected": [
+     "work"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Subida de sueldo",
+    "first_line": "Preparar las cifras antes de hablar con mi jefa.",
+    "expected": [
+     "work"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Turnos de diciembre",
+    "first_line": "Me toca noche el fin de semana del 14, cambiar con Andrés.",
+    "expected": [
+     "work"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Curso de Excel",
+    "first_line": "Dos días en febrero, lo paga la empresa.",
+    "expected": [
+     "work"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Buscar prácticas",
+    "first_line": "Mandar cartas de presentación a tres estudios de arquitectura.",
+    "expected": [
+     "work"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Renovar el DNI",
+    "first_line": "Pedir cita previa en la comisaría, llevar foto.",
+    "expected": [
+     "papers"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Seguro del coche",
+    "first_line": "Póliza con Mapfre, vence el 3 de abril.",
+    "expected": [
+     "papers"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Seguro de hogar",
+    "first_line": "Renovar en mayo, cubre el contenido.",
+    "expected": [
+     "papers"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Garantía de la lavadora",
+    "first_line": "Dos años, el ticket está en el cajón de la cocina.",
+    "expected": [
+     "papers"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Baja médica",
+    "first_line": "Mandar el parte de baja a la empresa.",
+    "expected": [
+     "papers"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Matrícula del instituto",
+    "first_line": "Entregar la documentación antes del 30 de junio.",
+    "expected": [
+     "papers"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Declaración de la renta",
+    "first_line": "Revisar el borrador de Hacienda antes de junio.",
+    "expected": [
+     "money",
+     "papers"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Empadronamiento",
+    "first_line": "Ir al ayuntamiento con el contrato de alquiler.",
+    "expected": [
+     "papers"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Testamento de los abuelos",
+    "first_line": "Cita con el notario en enero.",
+    "expected": [
+     "papers"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Fuga en el baño",
+    "first_line": "El fontanero viene el jueves por la mañana.",
+    "expected": [
+     "home"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Pintar el salón",
+    "first_line": "Blanco roto, tres botes, el sábado.",
+    "expected": [
+     "home"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Cortar el césped",
+    "first_line": "Pedir la desbrozadora al vecino.",
+    "expected": [
+     "home"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Pienso del perro",
+    "first_line": "El saco grande para Toby, el de pollo.",
+    "expected": [
+     "home"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Receta de tortilla de patatas",
+    "first_line": "Seis huevos, cuatro patatas y una cebolla.",
+    "expected": [
+     "home"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Cambiar la caldera",
+    "first_line": "Tres presupuestos pedidos, hay ayudas.",
+    "expected": [
+     "home"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Junta de vecinos",
+    "first_line": "El 12 de mayo se vota la reforma de la fachada.",
+    "expected": [
+     "home"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Limpieza a fondo",
+    "first_line": "Ventanas, cortinas y armarios de la cocina.",
+    "expected": [
+     "home"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Fin de semana en Oporto",
+    "first_line": "Vuelo el sábado a las 7, hotel en la Ribeira.",
+    "expected": [
+     "trips"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Vacaciones en Asturias",
+    "first_line": "Casa rural en Llanes del 12 al 26 de julio.",
+    "expected": [
+     "trips"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Ruta por Escocia",
+    "first_line": "Alquilar un coche en Edimburgo, diez días.",
+    "expected": [
+     "trips"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Esquí en Baqueira",
+    "first_line": "Comprar el forfait antes de diciembre.",
+    "expected": [
+     "trips"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Maleta para Creta",
+    "first_line": "Crema solar, bañadores, adaptador.",
+    "expected": [
+     "trips"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Tren a Sevilla para ver a la abuela",
+    "first_line": "Ida el 23, vuelta el 27 de diciembre.",
+    "expected": [
+     "trips"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Cumple de Lucía",
+    "first_line": "Cumple 10 años, fiesta de pijamas en casa.",
+    "expected": [
+     "people"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Ideas de regalo para mamá",
+    "first_line": "Un pañuelo, el último libro de Almudena Grandes.",
+    "expected": [
+     "people"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Boda de Ana y Javi",
+    "first_line": "El 6 de junio en Toledo, somos testigos.",
+    "expected": [
+     "people"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Canguro de los miércoles",
+    "first_line": "Sara, 10 € la hora.",
+    "expected": [
+     "people"
+    ],
+    "trap": true
+   },
+   {
+    "title": "El abuelo en la residencia",
+    "first_line": "Visitarlo los domingos, llevarle bombones.",
+    "expected": [
+     "people"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Reunión de padres",
+    "first_line": "Jueves a las 18 h con la tutora de Pablo.",
+    "expected": [
+     "people"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Cena con los vecinos",
+    "first_line": "El sábado en casa de los García, llevar postre.",
+    "expected": [
+     "people"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Libros pendientes",
+    "first_line": "La última novela de Javier Cercas.",
+    "expected": [
+     "other"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Clases de guitarra",
+    "first_line": "Los jueves a las 18, repasar los acordes.",
+    "expected": [
+     "other"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Series para ver",
+    "first_line": "The Bear, Shogun, La casa de papel.",
+    "expected": [
+     "other"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Entrenamiento media maratón",
+    "first_line": "Tres salidas por semana, 12 km el domingo.",
+    "expected": [
+     "other"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Planes para el finde",
+    "first_line": "Exposición de Sorolla, concierto de jazz.",
+    "expected": [
+     "other"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Aprender inglés",
+    "first_line": "Duolingo 15 minutos al día.",
+    "expected": [
+     "other"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Cambiar de compañía de la luz",
+    "first_line": "Comparar el precio del kWh entre Iberdrola y Endesa.",
+    "expected": [
+     "home",
+     "money"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Netflix y Spotify",
+    "first_line": "Dos suscripciones de 25 € al mes, quedarme con una.",
+    "expected": [
+     "money"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Fianza del piso",
+    "first_line": "El casero tiene que devolver los 900 € en un mes.",
+    "expected": [
+     "home",
+     "money"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Seguro del perro",
+    "first_line": "Póliza con Santévet, 18 € al mes.",
+    "expected": [
+     "papers"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Vacunas del gato en el veterinario",
+    "first_line": "Recordatorio en marzo.",
+    "expected": [
+     "home"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Placas solares",
+    "first_line": "Presupuesto de 7.000 €, se amortiza en 10 años.",
+    "expected": [
+     "home"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Partida de nacimiento",
+    "first_line": "Pedir una copia literal en el Registro Civil.",
+    "expected": [
+     "papers"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Los 80 de la abuela",
+    "first_line": "Comida en el restaurante el 3 de mayo, avisar a los primos.",
+    "expected": [
+     "people"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Funeral del tío Paco",
+    "first_line": "Martes a las 14 h en la iglesia, mandar flores.",
+    "expected": [
+     "people"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Plaza en la guardería",
+    "first_line": "Solicitud entregada, respuesta en junio.",
+    "expected": [
+     "people"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Congreso en Valencia",
+    "first_line": "Tren el jueves a las 8, presentar los resultados del equipo.",
+    "expected": [
+     "work"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Maleta perdida",
+    "first_line": "Reclamación hecha en el aeropuerto de Barajas.",
+    "expected": [
+     "trips"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Punto y ganchillo",
+    "first_line": "Terminar la bufanda de Pablo antes de Navidad.",
+    "expected": [
+     "other"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Ensayo del coro",
+    "first_line": "Preparar el Réquiem de Fauré para el concierto de junio.",
+    "expected": [
+     "other"
+    ],
+    "trap": false
+   }
+  ],
+  "nl": [
+   {
+    "title": "Maandbudget",
+    "first_line": "Huur, boodschappen en benzine: er blijft 200 euro over.",
+    "expected": [
+     "money"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Sparen voor een nieuwe fiets",
+    "first_line": "Elke maand 50 euro opzij zetten.",
+    "expected": [
+     "money"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Hypotheek oversluiten",
+    "first_line": "Rentevast loopt af in maart, vergelijken met de adviseur.",
+    "expected": [
+     "money"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Geld terug aan Sanne",
+    "first_line": "Zij betaalde de concertkaartjes, 60 euro.",
+    "expected": [
+     "money"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Telefoonabonnement",
+    "first_line": "Overstappen naar sim-only, 10 euro per maand.",
+    "expected": [
+     "money"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Zakgeld",
+    "first_line": "5 euro per week voor Daan.",
+    "expected": [
+     "money"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Uitgaven voor de feestdagen",
+    "first_line": "Cadeaus, eten en versiering: maximaal 400 euro.",
+    "expected": [
+     "money"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Spaarrekening",
+    "first_line": "Rente vergelijken, 2 procent bij ASN.",
+    "expected": [
+     "money"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Gemeentelijke belastingen",
+    "first_line": "Betalen in tien termijnen vanaf maart.",
+    "expected": [
+     "money",
+     "papers"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Sollicitatiegesprek bij Albert Heijn",
+    "first_line": "Dinsdag 10 uur, functie als teamleider, cv meenemen.",
+    "expected": [
+     "work"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Kwartaalrapport",
+    "first_line": "Cijfers vrijdag naar Mark sturen.",
+    "expected": [
+     "work"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Afscheid van Ingrid",
+    "first_line": "Inzameling voor haar cadeau, 10 euro per persoon.",
+    "expected": [
+     "work"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Declaratie reiskosten",
+    "first_line": "Treinkaartjes en hotel van Rotterdam indienen.",
+    "expected": [
+     "work"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Salarisverhoging",
+    "first_line": "Cijfers klaarzetten voor het jaargesprek.",
+    "expected": [
+     "work"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Rooster december",
+    "first_line": "Nachtdienst in het weekend van de 14e, ruilen met Mo.",
+    "expected": [
+     "work"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Cursus Excel",
+    "first_line": "Twee dagen in februari, de werkgever betaalt.",
+    "expected": [
+     "work"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Stage zoeken",
+    "first_line": "Motivatiebrieven naar drie architectenbureaus.",
+    "expected": [
+     "work"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Paspoort verlengen",
+    "first_line": "Afspraak bij de gemeente, pasfoto meenemen.",
+    "expected": [
+     "papers"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Autoverzekering",
+    "first_line": "Polis bij Centraal Beheer, loopt af op 3 april.",
+    "expected": [
+     "papers"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Inboedelverzekering",
+    "first_line": "Verlengen in mei.",
+    "expected": [
+     "papers"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Garantie wasmachine",
+    "first_line": "Twee jaar, bonnetje in de keukenla.",
+    "expected": [
+     "papers"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Ziekmelding",
+    "first_line": "Formulier naar de werkgever sturen.",
+    "expected": [
+     "papers"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Inschrijving middelbare school",
+    "first_line": "Papieren inleveren voor 1 maart.",
+    "expected": [
+     "papers"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Belastingaangifte",
+    "first_line": "Voor 1 mei indienen, toeslagen nakijken.",
+    "expected": [
+     "money",
+     "papers"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Verhuizing doorgeven",
+    "first_line": "Binnen vijf dagen aan de gemeente melden.",
+    "expected": [
+     "papers"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Internet opzeggen",
+    "first_line": "Brief naar Ziggo, een maand opzegtermijn.",
+    "expected": [
+     "papers"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Lekkende kraan",
+    "first_line": "De loodgieter komt donderdag.",
+    "expected": [
+     "home"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Slaapkamer schilderen",
+    "first_line": "Lichtblauw, twee potten verf, zaterdag.",
+    "expected": [
+     "home"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Gras maaien en heg knippen",
+    "first_line": "Heggenschaar van de buren lenen.",
+    "expected": [
+     "home"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Kattenvoer",
+    "first_line": "De grote zak voor Poes, geen vis meer.",
+    "expected": [
+     "home"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Recept stamppot boerenkool",
+    "first_line": "Aardappels, boerenkool en rookworst.",
+    "expected": [
+     "home"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Nieuwe cv-ketel",
+    "first_line": "Drie offertes aangevraagd, subsidie mogelijk.",
+    "expected": [
+     "home"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Vergadering van de bewoners",
+    "first_line": "12 mei, stemmen over het schilderwerk van de gevel.",
+    "expected": [
+     "home"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Zolder opruimen",
+    "first_line": "Oude fiets weggeven, dozen naar de milieustraat.",
+    "expected": [
+     "home"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Weekendje Antwerpen",
+    "first_line": "Trein zaterdag om 9 uur, hotel bij de Meir.",
+    "expected": [
+     "trips"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Zomervakantie in Zeeland",
+    "first_line": "Vakantiehuisje in Domburg van 12 tot 26 juli.",
+    "expected": [
+     "trips"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Rondreis Schotland",
+    "first_line": "Huurauto vanaf Edinburgh, tien dagen.",
+    "expected": [
+     "trips"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Wintersport",
+    "first_line": "Skipas boeken voor december.",
+    "expected": [
+     "trips"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Paklijst Kreta",
+    "first_line": "Zonnebrand, zwemkleding, verloopstekker.",
+    "expected": [
+     "trips"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Met de trein naar oma in Groningen",
+    "first_line": "Heen op de 23e, terug op de 27e.",
+    "expected": [
+     "trips"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Verjaardag van Fleur",
+    "first_line": "Ze wordt 10, logeerfeestje bij ons thuis.",
+    "expected": [
+     "people"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Cadeau-ideeën voor mama",
+    "first_line": "Een sjaal en het nieuwe boek van Herman Koch.",
+    "expected": [
+     "people"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Bruiloft van Anouk en Bas",
+    "first_line": "6 juni in Utrecht, wij zijn getuigen.",
+    "expected": [
+     "people"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Oppas op woensdag",
+    "first_line": "Lotte, 10 euro per uur.",
+    "expected": [
+     "people"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Opa in het verzorgingshuis",
+    "first_line": "Zondag langsgaan, bonbons meenemen.",
+    "expected": [
+     "people"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Ouderavond",
+    "first_line": "Donderdag 19 uur met de juf van Daan.",
+    "expected": [
+     "people"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Barbecue met de buren",
+    "first_line": "Zaterdagavond bij de Jansens, salade meenemen.",
+    "expected": [
+     "people"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Boeken om te lezen",
+    "first_line": "De nieuwe thriller van Saskia Noort.",
+    "expected": [
+     "other"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Gitaarles",
+    "first_line": "Donderdag om 18 uur, akkoorden oefenen.",
+    "expected": [
+     "other"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Series kijken",
+    "first_line": "The Bear, Shogun, Undercover.",
+    "expected": [
+     "other"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Training halve marathon",
+    "first_line": "Drie keer per week lopen, zondag 12 km.",
+    "expected": [
+     "other"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Uitjes in de stad",
+    "first_line": "Tentoonstelling, jazzconcert, escape room.",
+    "expected": [
+     "other"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Spaans leren",
+    "first_line": "Elke dag 15 minuten Duolingo.",
+    "expected": [
+     "other"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Energieleverancier wisselen",
+    "first_line": "Vergelijken wie de goedkoopste kilowattuur heeft.",
+    "expected": [
+     "home",
+     "money"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Netflix en Spotify",
+    "first_line": "Twee abonnementen van 25 euro per maand, er een opzeggen.",
+    "expected": [
+     "money"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Borg terug van de verhuurder",
+    "first_line": "Hij moet de 900 euro binnen twee weken terugstorten.",
+    "expected": [
+     "home",
+     "money"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Dierenverzekering",
+    "first_line": "Polis bij Petplan, 18 euro per maand.",
+    "expected": [
+     "papers"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Inenting van de kat bij de dierenarts",
+    "first_line": "Herhaling in maart.",
+    "expected": [
+     "home"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Zonnepanelen",
+    "first_line": "Offerte van 7.000 euro, terugverdiend in 9 jaar.",
+    "expected": [
+     "home"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Geboorteakte",
+    "first_line": "Een uittreksel aanvragen bij de gemeente.",
+    "expected": [
+     "papers"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Oma wordt 80",
+    "first_line": "Lunch in het restaurant op 3 mei, de neven uitnodigen.",
+    "expected": [
+     "people"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Begrafenis van oom Henk",
+    "first_line": "Dinsdag 14 uur in de kerk, bloemen sturen.",
+    "expected": [
+     "people"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Plek bij de kinderopvang",
+    "first_line": "Aanvraag ingediend, antwoord in juni.",
+    "expected": [
+     "people"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Beurs in Utrecht",
+    "first_line": "Met het team op de stand, donderdag opbouwen.",
+    "expected": [
+     "work"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Koffer kwijt",
+    "first_line": "Melding gedaan op Schiphol.",
+    "expected": [
+     "trips"
+    ],
+    "trap": false
+   },
+   {
+    "title": "Breien",
+    "first_line": "De sjaal van Paul voor kerst afmaken.",
+    "expected": [
+     "other"
+    ],
+    "trap": true
+   },
+   {
+    "title": "Koorrepetitie",
+    "first_line": "Het Requiem van Fauré oefenen voor het concert in juni.",
+    "expected": [
+     "other"
+    ],
+    "trap": false
+   }
+  ]
+ }
+}

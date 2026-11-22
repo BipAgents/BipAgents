@@ -1346,6 +1346,156 @@ mod tests {
     /// The floor the held-out titles may not go below (measured on 22/11: see the status).
     const FLOOR: f64 = 0.75;
 
+    /// The categories' development set (contracts/carnet/category-dev-set.json, carnet-categories 22/11: written for
+    /// this work without the blind set): each page read as the blind set's measure reads it, a new subject page with its
+    /// title and its first line as its « En bref ». Per language: the first category right, the one meant among the
+    /// two, « Autres » on a real category, the traps (printed with --nocapture). The floors: the table's measure.
+    #[test]
+    fn the_dev_set_is_filed_where_a_person_looks() {
+        let file = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../contracts/carnet/category-dev-set.json");
+        let set: Value = serde_json::from_str(&std::fs::read_to_string(file).unwrap()).unwrap();
+        let (mut all_n, mut all_first, mut all_among) = (0, 0, 0);
+        let mut lines = Vec::new();
+        let mut low = Vec::new();
+        for (lang, cases) in set["cases"].as_object().unwrap() {
+            let dir = tempfile::tempdir().unwrap();
+            let config = config_in(&dir, lang);
+            let (mut n, mut first, mut among, mut real, mut autres, mut traps, mut traps_right) = (0, 0, 0, 0, 0, 0, 0);
+            let mut misses = Vec::new();
+            for case in cases.as_array().unwrap() {
+                let (title, line) = (case["title"].as_str().unwrap(), case["first_line"].as_str().unwrap_or(""));
+                let want = crate::notebook::strings(case.get("expected"));
+                let got = decided(&config, &page_in(lang, "subject", title, line, ""));
+                n += 1;
+                first += usize::from(got[0] == want[0]);
+                among += usize::from(got.contains(&want[0]));
+                if want[0] != "other" {
+                    real += 1;
+                    autres += usize::from(got == ["other"]);
+                }
+                if case["trap"].as_bool() == Some(true) {
+                    traps += 1;
+                    traps_right += usize::from(got.contains(&want[0]));
+                }
+                if got[0] != want[0] {
+                    misses.push(format!("{title} → {} (want {})", got.join("+"), want.join("+")));
+                }
+            }
+            let pct = |x: usize, of: usize| 100.0 * x as f64 / of.max(1) as f64;
+            lines.push(format!(
+                "DEV {lang}: n {n}, first {:.1} %, among the two {:.1} %, « Autres » on a real category {:.1} %, traps {traps_right}/{traps}; misses: {}",
+                pct(first, n), pct(among, n), pct(autres, real), misses.join(" · ")
+            ));
+            if pct(first, n) < 100.0 * DEV_FLOOR_EACH {
+                low.push(lang.clone());
+            }
+            (all_n, all_first, all_among) = (all_n + n, all_first + first, all_among + among);
+        }
+        let all = all_first as f64 / all_n as f64;
+        lines.push(format!("DEV all: n {all_n}, first {:.1} %, among the two {:.1} %", 100.0 * all, 100.0 * all_among as f64 / all_n as f64));
+        eprintln!("{}", lines.join("\n"));
+        assert!(all >= DEV_FLOOR && low.is_empty(), "{}", lines.join("\n"));
+    }
+
+    /// The development set's floors (first category right): all languages together, and each language.
+    const DEV_FLOOR: f64 = 0.80;
+    const DEV_FLOOR_EACH: f64 = 0.75;
+
+    /// Words a person writes that the table did not know (« Autres » before, carnet-categories): everyday words of
+    /// each category in the five languages, their forms (plurals, verbs), German and Dutch compounds, phrases.
+    #[test]
+    fn everyday_words_and_their_forms() {
+        for (lang, title, want) in [
+            ("fr", "Tondeuse en panne", "home"),
+            ("fr", "Rembourser Sophie", "money"),
+            ("fr", "Procuration de papa", "papers"),
+            ("fr", "Note de frais du salon", "work"),
+            ("fr", "Billets de train", "trips"),
+            ("fr", "Obsèques de tante Rose", "people"),
+            ("en", "Hedge and lawn", "home"),
+            ("en", "Pocket money", "money"),
+            ("en", "Parking permit form", "papers"),
+            ("en", "Night shifts in March", "work"),
+            ("en", "Lift passes", "trips"),
+            ("en", "Nephew's christening", "people"),
+            ("de", "Dachboden entrümpeln", "home"),
+            ("de", "Taschengeld", "money"),
+            ("de", "Geburtsurkunde beantragen", "papers"),
+            ("de", "Praktikum im Sommer", "work"),
+            ("de", "Mietwagen in Portugal", "trips"),
+            ("de", "Beerdigung", "people"),
+            ("es", "Pintar la habitación", "home"),
+            ("es", "Pagar la deuda", "money"),
+            ("es", "Empadronamiento", "papers"),
+            ("es", "Turnos de noche", "work"),
+            ("es", "Billetes de tren", "trips"),
+            ("es", "Bautizo del sobrino", "people"),
+            ("nl", "Zolder en kelder", "home"),
+            ("nl", "Zakgeld", "money"),
+            ("nl", "Uittreksel aanvragen", "papers"),
+            ("nl", "Vacature teamleider", "work"),
+            ("nl", "Huurauto", "trips"),
+            ("nl", "Begrafenis", "people"),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let config = config_in(&dir, lang);
+            assert_eq!(decided(&config, &page_in(lang, "subject", title, "", ""))[0], want, "{lang} {title}");
+        }
+    }
+
+    /// « Maison » and « Argent » pull no more than their share (the blind set's misses, 22/11: 18 « Maison » and 12
+    /// « Argent » too many): a holiday rental is a trip, a ski pass too; an amount alone files nothing; a hobby stays
+    /// in « Autres » whatever its first line says; the title's head (« Dépenses de Noël », « Kredit für die Küche »)
+    /// decides between its words.
+    #[test]
+    fn maison_and_argent_pull_no_more_than_their_share() {
+        for (lang, title, line, want) in [
+            ("fr", "Gîte à Biarritz", "Maison près de la plage, du 3 au 17 août.", &["trips"][..]),
+            ("fr", "Dépenses de Noël", "Cadeaux et repas : 300 € au plus.", &["money"]),
+            ("fr", "Cours de piano", "Le mardi, 25 € la séance.", &["other"]),
+            ("fr", "Assurance de la maison", "", &["papers", "home"]),
+            ("en", "Holiday cottage in Wales", "Three nights in May.", &["trips"]),
+            ("en", "Choir", "Rehearsal at the house of Ann, bring £5.", &["other"]),
+            ("de", "Ferienwohnung am See", "Zwei Wochen im Juli.", &["trips"]),
+            ("de", "Kredit für die Küche", "Raten bis August.", &["money"]),
+            ("de", "Jubiläum von Opa", "Feier im Gasthaus.", &["people"]),
+            ("es", "Casa rural en Cantabria", "Cuatro noches en abril.", &["trips"]),
+            ("es", "Forfait de esquí", "Comprarlo antes de enero.", &["trips"]),
+            ("es", "Seguro de hogar", "", &["papers", "home"]),
+            ("nl", "Vakantiehuis in Frankrijk", "Twee weken in juli.", &["trips"]),
+            ("nl", "Gitaarles", "Elke week 20 euro.", &["other"]),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let config = config_in(&dir, lang);
+            assert_eq!(decided(&config, &page_in(lang, "subject", title, line, "")), want, "{lang} {title}");
+        }
+        // German « nicht » is no niece: a first line saying « not » files nothing
+        let dir = tempfile::tempdir().unwrap();
+        let config = config_in(&dir, "de");
+        assert_eq!(decided(&config, &page_in("de", "subject", "Ideen", "Noch nicht entschieden.", "")), ["other"]);
+    }
+
+    /// The person's rule still wins over the table's new words (a word they filed elsewhere), and a hobby's word is
+    /// learnt like any other.
+    #[test]
+    fn a_rule_wins_over_the_new_words() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = config_in(&dir, "fr");
+        let p = page("subject", "Cours de piano", "Le mardi.", "");
+        assert_eq!(decide(&config, Part::Main, "Sujets/Cours de piano.md", &p, None), (vec!["other".to_string()], Some("piano".to_string())));
+        update_state(&config, |s| {
+            s.insert("category_rules".into(), json!([{"word": "piano", "categories": ["people"], "at": "2026-11-22"}]));
+        })
+        .unwrap();
+        assert_eq!(decided(&config, &p), ["people"]);
+        let q = page("subject", "Billets de train", "", "");
+        update_state(&config, |s| {
+            s.insert("category_rules".into(), json!([{"word": "train", "categories": ["work"], "at": "2026-11-22"}]));
+        })
+        .unwrap();
+        assert_eq!(decided(&config, &q), ["work"]);
+    }
+
     #[test]
     fn other_words_and_nothing() {
         let dir = tempfile::tempdir().unwrap();

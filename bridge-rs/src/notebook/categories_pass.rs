@@ -1009,6 +1009,61 @@ mod tests {
         assert_eq!(read_state(&config).get(KEY_V), Some(&json!(VERSION + 1)));
     }
 
+    /// carnet-categories (22/11): the better table is version 2. A Carnet the pass went through at version 1 is
+    /// re-decided once, `auto` pages only (a page in « Maison » by its first line's « maison » goes to Voyages); the
+    /// agent's and the person's choices stay, the person's rule still wins, nothing moves and the card is not shown
+    /// again.
+    #[test]
+    fn the_better_table_resorts_the_auto_pages_once() {
+        assert_eq!(VERSION, 2);
+        let dir = tempfile::tempdir().unwrap();
+        let config = config_in(&dir, "fr");
+        let root = part_root(&config, Part::Main);
+        let write = |path: &str, text: &str| write_file(&root.join(path), text).unwrap();
+        let page = |cats: &str, by: &str, title: &str, brief: &str| {
+            format!("---\ntype: subject\ncategories:\n  - {cats}\ncategories_by: {by}\n---\n# {title}\n\n## En bref\n{brief}\n")
+        };
+        // as version 1 left them
+        write("Sujets/Gîte à Biarritz.md", &page("home", "auto", "Gîte à Biarritz", "Maison près de la plage, en août."));
+        write("Sujets/Cours de piano.md", &page("money", "auto", "Cours de piano", "Le mardi, 25 € la séance."));
+        write("Sujets/Billets de train.md", &page("other", "auto", "Billets de train", "Pour Lyon."));
+        let chosen = [
+            ("Sujets/Gîte en Ardèche.md", page("home", "person", "Gîte en Ardèche", "Maison près de la rivière.")),
+            ("Sujets/Location de ski.md", page("money", "agent", "Location de ski", "Forfaits à réserver.")),
+        ];
+        for (path, text) in &chosen {
+            write(path, text);
+        }
+        update_state(&config, |s| {
+            s.insert(KEY_V.into(), json!(1));
+            s.insert(KEY_CARD.into(), json!({"v": 1, "at": "2026-11-20", "done": true, "answer": "ok"}));
+            s.insert("category_rules".into(), json!([{"word": "piano", "categories": ["people"], "at": "2026-11-21"}]));
+        })
+        .unwrap();
+        let before = files_in(&root);
+        let sorted = sort(&config).unwrap();
+        assert!(sorted.done && sorted.filed == 3, "{sorted:?}");
+        assert_eq!(stored_of(&config, "Sujets/Gîte à Biarritz.md"), Some((strings(&["trips"]), "auto".into())));
+        assert_eq!(stored_of(&config, "Sujets/Cours de piano.md"), Some((strings(&["people"]), "auto".into())));
+        assert_eq!(stored_of(&config, "Sujets/Billets de train.md"), Some((strings(&["trips"]), "auto".into())));
+        for (path, text) in &chosen {
+            assert_eq!(&read_page_text(&config, Part::Main, path).unwrap(), text, "{path}");
+        }
+        let after = files_in(&root);
+        assert_eq!(after.keys().filter(|k| k.ends_with(".md")).collect::<Vec<_>>(),
+                   before.keys().filter(|k| k.ends_with(".md")).collect::<Vec<_>>());
+        for (path, text) in &after {
+            if path.ends_with(".md") {
+                assert_eq!(without_header(text), without_header(&before[path]), "{path}");
+            }
+        }
+        let state = read_state(&config);
+        assert_eq!(state.get(KEY_V), Some(&json!(2)));
+        assert_eq!(state.get(KEY_CARD).and_then(|c| c.get("v")), Some(&json!(1)));
+        // once: the next night writes nothing
+        assert_eq!(sort(&config).unwrap().filed, 0);
+    }
+
     #[test]
     fn a_page_a_work_agent_made_is_work_not_one_it_wrote_on() {
         let dir = tempfile::tempdir().unwrap();

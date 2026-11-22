@@ -447,7 +447,7 @@ def test_s2_the_carnet_from_before_is_sorted_once_at_night_and_nothing_moves(bri
     assert bridge.get("/v1/notebook", headers=AUTH).json()["sorted"] is None
     before = carnet_files(bridge)
     run = tidy(bridge)
-    assert (run["categorized"], run["categories_v"]) == (4, 1), run
+    assert (run["categorized"], run["categories_v"]) == (4, 2), run
     after = carnet_files(bridge)
     # nothing moved or gone; each page changed by its header lines only; the person's own as they were
     for path, text in before.items():
