@@ -135,7 +135,7 @@ in `routes[].errors`; S1's codes have no text yet: the apps show their own until
 | Brick | Route | What |
 |---|---|---|
 | S1 | `POST /v1/notebook/categorize` | « Ranger ailleurs »: `{item}` (an Item's id) · `{path, private?}` · `{record: {type, id}}` · `{document: {agent, file}}` · `{task}` · `{line: {path, text}}`, with `categories` (1–2 of `person_may_give`) → `Categorized` (`before`, `learnt`, `undo`; S2: `toast`, `undo_title`) |
-| S1 | `POST /v1/notebook/categorize/undo` | `{undo}` → `Undone`; 404 `undo_gone` once undone, after a newer correction of the same target, or after 20 newer corrections (today's stay, 100 at most) |
+| S1 | `POST /v1/notebook/categorize/undo` | `{undo}` → `Undone`; 404 `undo_gone` once undone, after a newer correction of the same target, after 20 newer corrections (today's stay, 100 at most), or when the page is gone (the rule it taught and the undo are forgotten all the same) |
 | S2 | `GET /v1/notebook/categorize/today` | today's re-filings, each still undoable (`RefiledToday`) |
 | S2 | `GET /v1/notebook` `sorted` | the card « Ton Carnet est rangé par catégories » (`SortedCard`), or null |
 | S2 | `POST /v1/notebook/sorted` | `{action: ok\|see}` → `{card: null}`; the card is not shown again |
@@ -171,8 +171,18 @@ The bridge's own search (`/search`'s `groups` and `counts`) is the same rule on 
 
 **The copy's tables** (S3, `notebook/search_words.rs`): about 120 groups of neighbours a language (fr, en, de, es,
 nl; each word of a group has the others), date phrases (about 35 a language), the feasts' rules and Easter for this
-year and the nine after, and the stop words (the lexicon's, Dutch's and those of a spoken question). `?lang=` on
-`/index` adds the app's language's tables to the Carnet's. The fake bridge keeps its draft tables: the parity file's
+year and the nine after, and each language's stop words (its words of the lexicon's, and those of a spoken question).
+`?lang=` on
+`/index` adds the app's language's tables to the Carnet's (stop words included).
+
+**Never in the copy** (S3, review 1 and 2): the private part (Santé), a line holding an ID number or a reference
+(`holds_reference`), an archived mail's link; a page whose **path** holds a reference (its name or a folder's: the page
+and its lines are left out, the phone opening a page by its path), a document whose **file's name** holds one, an
+agent's web page whose title does (a real file's extension is no part of a reference: « Budget 2026.xlsx » stays,
+« 12345.AB1 » does not); a reference in a title, an « En bref », a section's title (`source`), a task's title or a
+document's name is masked (« … »). A document's text: its lines holding a number or a reference left out on the raw
+line, then no word of digits but a year (19xx, 20xx) or a number of one or two digits. Two files of the same name an
+agent received: one item, the newest. The fake bridge keeps its draft tables: the parity file's
 cases are written on them.
 
 ## 4. What the 1.0 apps see

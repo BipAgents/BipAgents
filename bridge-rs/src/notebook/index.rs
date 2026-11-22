@@ -51,12 +51,17 @@ const DOCUMENT_MAX: u64 = 20 * 1024 * 1024;
 
 // -- the items ----------------------------------------------------------------------------------------------------------
 
-/// « Budget 2026.xlsx », « Impôts 2026.md »: a file's extension is no part of a reference.
-static EXTENSION: LazyLock<regex::Regex> =
-    LazyLock::new(|| regex::Regex::new(r"\.[A-Za-z][A-Za-z0-9]{0,4}$").expect("valid regex"));
+/// « Budget 2026.xlsx », « Impôts 2026.md »: a real file's extension is no part of a reference; any other ending
+/// is (« 12345.AB1 » holds one: review 2 of S3).
+static EXTENSION: LazyLock<regex::Regex> = LazyLock::new(|| {
+    regex::Regex::new(
+        r"(?i)\.(?:pdf|docx?|odt|rtf|txt|md|html?|xlsx?|ods|csv|numbers|pptx?|odp|key|pages|jpe?g|png|heic|heif|gif|webp|tiff?|mp3|wav|m4a|aac|ogg|opus|flac|mp4|mov|m4v|webm|zip|json)$",
+    )
+    .expect("valid regex")
+});
 
 /// Whether a word (or a text) of the copy holds a reference (categories.rs `holds_reference`, quantities aside), a
-/// file's extension set aside.
+/// real file's extension set aside.
 pub fn reference(text: &str) -> bool {
     let words: Vec<String> = text.split_whitespace().map(|w| EXTENSION.replace(w, "").into_owned()).collect();
     c::holds_reference(&words.join(" "))
@@ -202,7 +207,7 @@ fn document_text(path: &Path, name: &str) -> String {
 
 /// Where each document of `documents()` is on disk: (agent, file) → its path.
 fn document_files(config: &Config) -> HashMap<(String, String), PathBuf> {
-    let mut out = HashMap::new();
+    let mut out: HashMap<(String, String), PathBuf> = HashMap::new();
     for agent in config.agents.values() {
         if let Some(root) = agent.upload_dir_host.as_deref().filter(|r| !r.is_empty()) {
             for month in std::fs::read_dir(root).into_iter().flatten().flatten() {
@@ -212,7 +217,15 @@ fn document_files(config: &Config) -> HashMap<(String, String), PathBuf> {
                         Some((id, rest)) if id.len() == 12 && !rest.is_empty() => rest.to_string(),
                         _ => name.clone(),
                     };
-                    out.entry((agent.name.clone(), shown)).or_insert_with(|| file.path());
+                    // two files of the same name: the newest (the one the copy lists; review 2 of S3)
+                    let newer = |p: &Path| stamp(p).map(|(_, m)| m).unwrap_or(0);
+                    let path = file.path();
+                    match out.get(&(agent.name.clone(), shown.clone())) {
+                        Some(kept) if newer(kept) >= newer(&path) => {}
+                        _ => {
+                            out.insert((agent.name.clone(), shown), path);
+                        }
+                    }
                 }
             }
         }
@@ -334,7 +347,8 @@ fn page_entries(
                 space: space.clone(),
                 date,
                 yearly,
-                source: some(section.clone()),
+                // its section's title as written can hold one too (review 2 of S3, B4)
+                source: masked(section).and_then(some),
                 who: some(f.who.clone()),
                 noted: some(f.date.clone()),
                 archived,
@@ -373,7 +387,15 @@ fn entries_of(config: &Config, part: Part, documents: &[Value]) -> Vec<Entry> {
     let filing = hash_of(&(lang.clone(), state_key(config)));
     let mut cache = PAGE_ITEMS.lock().unwrap_or_else(|e| e.into_inner());
     let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    // a page whose path holds a reference (its name, or a folder's: « Dossiers/HR-55821/… ») is left out with its
+    // lines: the phone opens a page by its path (`open.path`, `GET /v1/notebook/page?path=`), and a path masked opens
+    // nothing; opening by an item's id (A2/D2) would let them in. Counted, never named, in the log.
+    let mut named_out = 0usize;
     for (path, page) in &main {
+        if !health && named_reference(path) {
+            named_out += 1;
+            continue;
+        }
         let file = root.join(path);
         let anchor = anchor(page, &file);
         if health {
@@ -400,6 +422,9 @@ fn entries_of(config: &Config, part: Part, documents: &[Value]) -> Vec<Entry> {
         cache.retain(|(r, p), _| *r != root || seen.contains(p.as_str()));
     }
     drop(cache);
+    if named_out > 0 {
+        tracing::info!(pages = named_out, "notebook index: pages left out of the phone's copy, a reference in their path");
+    }
     for t in super::open_tasks(config, part) {
         let cats = without_dates(c::of_task(&ctx, &t, &main, &marks, NaiveDate::MIN));
         if !health && cats.iter().any(|x| x == "health") {
