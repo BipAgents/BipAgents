@@ -1,0 +1,399 @@
+{
+ "v": 1,
+ "version": 1,
+ "since": null,
+ "full": true,
+ "lang": "fr",
+ "made": "2026-11-22T07:00:00Z",
+ "limits": {
+  "lines": 20000,
+  "bytes": 8000000
+ },
+ "truncated": false,
+ "online_only": null,
+ "dated": {
+  "before": 90,
+  "after": 730
+ },
+ "items": [
+  {
+   "id": "page:car",
+   "kind": "page",
+   "path": "Sujets/Voiture.md",
+   "title": "Voiture",
+   "line": "La voiture familiale.",
+   "categories": [
+    "money"
+   ],
+   "who": "Daily",
+   "open": {
+    "path": "Sujets/x.md"
+   },
+   "fold": "voiture la voiture familiale"
+  },
+  {
+   "id": "line:car:old",
+   "kind": "line",
+   "path": "Sujets/Voiture.md",
+   "title": "Voiture",
+   "line": "Assurance auto chez Horizon, contrat 2024",
+   "categories": [
+    "money"
+   ],
+   "who": "Daily",
+   "noted": "2026-11-21",
+   "archived": true,
+   "page": "page:car",
+   "open": {
+    "path": "Sujets/x.md"
+   },
+   "fold": "assurance auto chez horizon contrat 2024"
+  },
+  {
+   "id": "line:car:now",
+   "kind": "line",
+   "path": "Sujets/Voiture.md",
+   "title": "Voiture",
+   "line": "Assurance auto",
+   "categories": [
+    "money"
+   ],
+   "who": "Daily",
+   "noted": "2025-01-01",
+   "page": "page:car",
+   "open": {
+    "path": "Sujets/x.md"
+   },
+   "fold": "assurance auto"
+  },
+  {
+   "id": "page:gm",
+   "kind": "page",
+   "path": "Personnes/Jeanne Martin.md",
+   "title": "Jeanne Martin",
+   "line": "Ta grand-mère",
+   "categories": [
+    "people"
+   ],
+   "who": "Daily",
+   "open": {
+    "path": "Sujets/x.md"
+   },
+   "fold": "jeanne martin ta grand mere",
+   "aliases": [
+    "Mamie"
+   ]
+  },
+  {
+   "id": "line:gm:1",
+   "kind": "line",
+   "path": "Personnes/Jeanne Martin.md",
+   "title": "Jeanne Martin",
+   "line": "Anniversaire : 3 mars",
+   "categories": [
+    "people"
+   ],
+   "yearly": "03-03",
+   "who": "Daily",
+   "noted": "2026-10-01",
+   "label": "Anniversaire",
+   "answer": "3 mars",
+   "page": "page:gm",
+   "open": {
+    "path": "Sujets/x.md"
+   },
+   "fold": "anniversaire 3 mars"
+  },
+  {
+   "id": "line:gm:2",
+   "kind": "line",
+   "path": "Personnes/Jeanne Martin.md",
+   "title": "Jeanne Martin",
+   "line": "Fleurs : des roses",
+   "categories": [
+    "people"
+   ],
+   "who": "Daily",
+   "noted": "2025-01-01",
+   "label": "Fleurs",
+   "answer": "des roses",
+   "page": "page:gm",
+   "open": {
+    "path": "Sujets/x.md"
+   },
+   "fold": "fleurs des roses"
+  },
+  {
+   "id": "line:gm:3",
+   "kind": "line",
+   "path": "Personnes/Jeanne Martin.md",
+   "title": "Jeanne Martin",
+   "line": "Aime les roses rouges",
+   "categories": [
+    "people"
+   ],
+   "who": "Daily",
+   "noted": "2026-11-01",
+   "page": "page:gm",
+   "open": {
+    "path": "Sujets/x.md"
+   },
+   "fold": "aime les roses rouges"
+  },
+  {
+   "id": "line:gm:4",
+   "kind": "line",
+   "path": "Personnes/Jeanne Martin.md",
+   "title": "Jeanne Martin",
+   "line": "Née un 29 février",
+   "categories": [
+    "people"
+   ],
+   "yearly": "02-29",
+   "who": "Daily",
+   "noted": "2026-01-01",
+   "page": "page:gm",
+   "open": {
+    "path": "Sujets/x.md"
+   },
+   "fold": "nee un 29 fevrier"
+  },
+  {
+   "id": "line:gm:5",
+   "kind": "line",
+   "path": "Personnes/Jeanne Martin.md",
+   "title": "Jeanne Martin",
+   "line": "Des fleurs et des roses au jardin",
+   "categories": [
+    "people"
+   ],
+   "who": "Daily",
+   "noted": "2026-11-15",
+   "page": "page:gm",
+   "open": {
+    "path": "Personnes/Jeanne Martin.md"
+   },
+   "fold": "des fleurs et des roses au jardin"
+  },
+  {
+   "id": "line:home:1",
+   "kind": "line",
+   "path": "Domaines/Maison.md",
+   "title": "Maison",
+   "line": "Chaudière révisée",
+   "categories": [
+    "home"
+   ],
+   "who": "Daily",
+   "noted": "2026-10-10",
+   "open": {
+    "path": "Sujets/x.md"
+   },
+   "fold": "chaudiere revisee"
+  },
+  {
+   "id": "line:home:2",
+   "kind": "line",
+   "path": "Domaines/Maison.md",
+   "title": "Maison",
+   "line": "Clé du box",
+   "categories": [
+    "home"
+   ],
+   "who": "Daily",
+   "noted": "2026-10-10",
+   "open": {
+    "path": "Sujets/x.md"
+   },
+   "fold": "cle du box"
+  },
+  {
+   "id": "line:gym",
+   "kind": "line",
+   "path": "Sujets/Sport.md",
+   "title": "Sport",
+   "line": "Salle de sport le mardi",
+   "categories": [
+    "money"
+   ],
+   "who": "Daily",
+   "noted": "2026-09-01",
+   "open": {
+    "path": "Sujets/x.md"
+   },
+   "fold": "salle de sport le mardi"
+  },
+  {
+   "id": "line:pro:1",
+   "kind": "line",
+   "path": "Sujets/Client Durand.md",
+   "title": "Client Durand",
+   "line": "Devis envoyé au client",
+   "categories": [
+    "work"
+   ],
+   "space": "pro",
+   "who": "Daily",
+   "noted": "2026-11-10",
+   "open": {
+    "path": "Sujets/x.md"
+   },
+   "fold": "devis envoye au client"
+  },
+  {
+   "id": "line:noel",
+   "kind": "line",
+   "path": "Domaines/Famille.md",
+   "title": "Famille",
+   "line": "Réveillon le 24 décembre",
+   "categories": [
+    "people"
+   ],
+   "yearly": "12-24",
+   "who": "Daily",
+   "noted": "2026-11-01",
+   "open": {
+    "path": "Sujets/x.md"
+   },
+   "fold": "reveillon le 24 decembre"
+  },
+  {
+   "id": "line:jan",
+   "kind": "line",
+   "path": "Domaines/Famille.md",
+   "title": "Famille",
+   "line": "Galette le 2 janvier",
+   "categories": [
+    "people"
+   ],
+   "yearly": "01-02",
+   "who": "Daily",
+   "noted": "2026-11-01",
+   "open": {
+    "path": "Sujets/x.md"
+   },
+   "fold": "galette le 2 janvier"
+  },
+  {
+   "id": "line:sante:1",
+   "kind": "line",
+   "part": "health",
+   "path": "Santé/Traitement.md",
+   "title": "Santé",
+   "line": "Traitement du soir",
+   "categories": [
+    "people"
+   ],
+   "who": "Daily",
+   "noted": "2026-11-01",
+   "open": {
+    "path": "Sujets/x.md"
+   },
+   "fold": "traitement du soir"
+  },
+  {
+   "id": "line:sante:2",
+   "kind": "line",
+   "path": "Domaines/Santé.md",
+   "title": "Médecin",
+   "line": "Prise de sang lundi",
+   "categories": [
+    "health"
+   ],
+   "who": "Daily",
+   "noted": "2026-11-01",
+   "open": {
+    "path": "Sujets/x.md"
+   },
+   "fold": "prise de sang lundi"
+  }
+ ],
+ "removed": [],
+ "stop": [
+  "de",
+  "du",
+  "la",
+  "le",
+  "les",
+  "des",
+  "d",
+  "l",
+  "un",
+  "une",
+  "au",
+  "aux",
+  "et",
+  "a",
+  "en"
+ ],
+ "neighbours": {
+  "salle de gym": [
+   "salle de sport"
+  ],
+  "mamie": [
+   "grand mere"
+  ]
+ },
+ "dates": {
+  "lang": "fr",
+  "phrases": [
+   {
+    "words": "pendant les fetes",
+    "from": {
+     "unit": "day",
+     "n": 0
+    },
+    "to": {
+     "unit": "feast",
+     "feast": "epiphany"
+    }
+   },
+   {
+    "words": "aujourd hui",
+    "from": {
+     "unit": "day",
+     "n": 0
+    },
+    "to": {
+     "unit": "day",
+     "n": 0
+    }
+   },
+   {
+    "words": "depuis noel",
+    "from": {
+     "unit": "feast",
+     "feast": "christmas"
+    },
+    "to": {
+     "unit": "day",
+     "n": 0
+    }
+   }
+  ],
+  "feasts": {
+   "epiphany": {
+    "month": 1,
+    "day": 6
+   },
+   "christmas": {
+    "month": 12,
+    "day": 25
+   }
+  },
+  "easter": {
+   "2026": "2026-04-05",
+   "2027": "2027-03-28",
+   "2028": "2028-04-16",
+   "2029": "2029-04-01",
+   "2030": "2030-04-21",
+   "2031": "2031-04-13",
+   "2032": "2032-03-28",
+   "2033": "2033-04-17",
+   "2034": "2034-04-09",
+   "2035": "2035-03-25"
+  }
+ },
+ "kept": [],
+ "epoch": "edges1"
+}

@@ -164,7 +164,8 @@ on a page, its `aliases`. `categorize` takes an Item's `id` (`{item}`).
 **The phone's search** (A1, D1) follows the rule written once at the bridge (S3: `search-parity.json`, played by the
 three): fold, prefix from 3 letters, one typo from 5 letters and two from 8 (never on names under 4), the
 neighbours' table (`neighbours`), the date phrases (`dates`: an interval computed on the phone, moving feasts as
-absolute dates from the bridge), stop words dropped unless alone; ranking as in the plan §3.3.
+absolute dates from the bridge), stop words dropped unless alone; ranking as in the plan §3.3. The phone never keeps
+Santé (an item whose `part` is not `main`, or filed in `health`, is left out when read), whatever a bridge sends.
 
 ## 4. What the 1.0 apps see
 
