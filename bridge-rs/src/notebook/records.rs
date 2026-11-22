@@ -209,7 +209,7 @@ pub fn kind(name: &str) -> Option<&'static Kind> {
     })
 }
 
-fn kind_of_page(page: &Page) -> Option<&'static Kind> {
+pub(crate) fn kind_of_page(page: &Page) -> Option<&'static Kind> {
     if page.kind() != "records" {
         return None;
     }
@@ -1170,7 +1170,17 @@ pub fn type_view(config: &Config, t: &Kind, today: NaiveDate) -> Value {
             super::date_in(&tk::str_or_empty(r.get("date"))).and_then(|(m, d, y)| NaiveDate::from_ymd_opt(y?, m, d))
         }))
     });
-    let mut views: Vec<Value> = items.iter().map(|r| item_view(t, r, today, min_eur, false, &lang)).collect();
+    // each record's categories (plan « Le sommaire »: its type's, the person's own choice first; Dates when dated)
+    let marks = super::categories::marks(config);
+    let filed = |view: Value, r: &Dict| -> Value {
+        let (cats, by, dated) = super::categories::of_record(t, r, &marks, today);
+        let mut view = view;
+        view["categories"] = json!(super::categories::with_dates(&cats, dated));
+        view["categories_by"] = json!(by);
+        view
+    };
+    let mut views: Vec<Value> =
+        items.iter().map(|r| filed(item_view(t, r, today, min_eur, false, &lang), r)).collect();
     // a paper filed with its photo: « Voir la photo » on its line (papers.rs)
     if t.id == "paper" {
         for (view, record) in views.iter_mut().zip(&items) {
@@ -1186,7 +1196,8 @@ pub fn type_view(config: &Config, t: &Kind, today: NaiveDate) -> Value {
            "next_title": next_title, "count": items.len(), "important_count": important,
            "warranty_min_eur": min_eur, "items": views,
            "archive_path": archive_path_of(&lang, t), "archived_count": archived.len(),
-           "archived": archived.iter().map(|r| item_view(t, r, today, min_eur, true, &lang)).collect::<Vec<_>>()})
+           "archived": archived.iter().map(|r| filed(item_view(t, r, today, min_eur, true, &lang), r)).collect::<Vec<_>>(),
+           "categories": super::categories::of_records_type(Some(t.id))})
 }
 
 /// Every type, for `GET /v1/notebook/records`.

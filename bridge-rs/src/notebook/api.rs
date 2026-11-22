@@ -186,6 +186,7 @@ async fn home(State(state): State<AppState>, q: QueryMap) -> ApiResult<Response>
         let proposals = super::open_proposals(&config);
         let archives = super::archive::counts(&config);
         Ok(json!({"language": lang, "shown_language": shown, "sections": sections, "recent": recent, "upcoming": upcoming, "archives": archives,
+                  "sommaire": SOMMAIRE,
                   "dates": dates.into_iter().take(10).collect::<Vec<_>>(),
                   "inbox": inbox.len(), "settings": settings_view(&config), "trips": trips, "records": records,
                   "proposals": proposals, "known_tile": super::known::tile(&config, &shown, crate::py::time_time()),
@@ -196,13 +197,19 @@ async fn home(State(state): State<AppState>, q: QueryMap) -> ApiResult<Response>
     Ok(web::ok(view))
 }
 
-fn page_summary(path: &str, part: Part, page: &super::Page, brief: &str) -> Value {
+/// The version of the Carnet « Le sommaire » contract this bridge speaks (contracts/carnet/sommaire.json): a new app
+/// reads the sommaire's routes only from a bridge that says it.
+pub const SOMMAIRE: i64 = 1;
+
+fn page_summary(config: &Config, path: &str, part: Part, page: &super::Page, brief: &str) -> Value {
     let archived = super::WORDS.iter().any(|w| w.archived(path));
+    let filed = super::categories::of_page(config, part, path, page);
     json!({"path": path, "part": part.as_str(), "title": page.title, "kind": page.kind(), "aliases": page.aliases(),
            "archived": archived,
            "contact": if page.contact().is_empty() { Value::Null } else { json!(page.contact()) },
            "updated": page.front.get("updated").cloned().unwrap_or(Value::Null), "icon": page.icon(),
-           "summary": super::summary_of(&page.body, brief)})
+           "summary": super::summary_of(&page.body, brief),
+           "categories": filed.categories, "categories_by": filed.by})
 }
 
 async fn list_pages(State(state): State<AppState>, q: QueryMap) -> ApiResult<Response> {
@@ -240,7 +247,7 @@ async fn list_pages(State(state): State<AppState>, q: QueryMap) -> ApiResult<Res
         let pages: Vec<Value> = listed
             .iter()
             .map(|(path, p)| {
-                let mut view = page_summary(path, part, p, w.brief);
+                let mut view = page_summary(&config, path, part, p, w.brief);
                 let shaped = super::Page { body: super::in_outline(&config, p), ..p.clone() };
                 let sections = shaped.sections();
                 let status = super::template::title(&p.kind(), "status", &super::language(&config));
@@ -286,11 +293,24 @@ async fn search(State(state): State<AppState>, q: QueryMap) -> ApiResult<Respons
         let w = super::words(&super::language(&config));
         // the answers by the one rule the agents' search and the offline copy follow (offline.rs): split by the
         // bridge, the apps show them as they come
+        let today = chrono::Local::now().date_naive();
+        let all = super::all_pages(&config, part);
+        let marks = super::categories::marks(&config);
         let answers: Vec<Value> = super::tools::answers(&config, &[part], &words)
             .into_iter()
             .map(|a| {
+                // the line's categories: its page's (the person's choice for this line first), Dates when dated
+                let cats = match all.iter().find(|(p, _)| *p == a.path) {
+                    Some((path, page)) => {
+                        let filed = super::categories::of_page(&config, a.part, path, page);
+                        let id = if page.id().is_empty() { path.clone() } else { page.id() };
+                        let line = format!("{} : {}", a.label, a.answer);
+                        super::categories::of_line(&filed.categories, &id, &line, &marks, today)
+                    }
+                    None => Vec::new(),
+                };
                 json!({"label": a.label, "answer": a.answer, "page": a.page, "path": a.path, "date": a.date,
-                       "when": super::offline::when(&a.date, &shown), "part": a.part.as_str()})
+                       "when": super::offline::when(&a.date, &shown), "part": a.part.as_str(), "categories": cats})
             })
             .collect();
         let found = super::search(&config, &[part], &words, "");
@@ -298,7 +318,7 @@ async fn search(State(state): State<AppState>, q: QueryMap) -> ApiResult<Respons
             .iter()
             .take(50)
             .map(|(part, path, page, lines)| {
-                let mut v = page_summary(path, *part, page, w.brief);
+                let mut v = page_summary(&config, path, *part, page, w.brief);
                 v["lines"] = json!(lines);
                 v
             })
@@ -307,7 +327,7 @@ async fn search(State(state): State<AppState>, q: QueryMap) -> ApiResult<Respons
         let tasks: Vec<Value> = super::tasks(&config, part)
             .iter()
             .filter(|t| !wanted.is_empty() && wanted.iter().all(|x| super::fold(&t.title).contains(x.as_str())))
-            .map(|t| t.view())
+            .map(|t| super::categories::task_view(&config, t, &all, &marks, today))
             .collect();
         Ok(json!({"answers": answers, "pages": pages, "tasks": tasks}))
     })
@@ -630,6 +650,11 @@ pub fn page_view_in(config: &Config, part: Part, path: &str, shown: &str) -> any
             None => json!({"title": name, "path": null}),
         }
     };
+    // its categories (plan « Le sommaire »), each line's: the page's, the person's choice for the line first, Dates
+    let filed = super::categories::of_page(config, part, path, &page);
+    let marks = super::categories::marks(config);
+    let today = chrono::Local::now().date_naive();
+    let line_of = if page.id().is_empty() { path.to_string() } else { page.id() };
     let sections: Vec<Value> = page
         .sections()
         .into_iter()
@@ -640,10 +665,12 @@ pub fn page_view_in(config: &Config, part: Part, path: &str, shown: &str) -> any
                 .map(|f| {
                     let links: Vec<Value> = super::links_in(&f.text).iter().map(|l| resolve(l)).collect();
                     let (label, answer) = super::lexicon::split_label(&f.text).unwrap_or_default();
+                    let cats = super::categories::of_line(&filed.categories, &line_of, &f.text, &marks, today);
                     json!({"text": f.text, "label": label, "answer": answer, "when": super::offline::when(&f.date, shown),
                            "fresh": fresh(&f.date), "noted": noted(&f.who, &f.date, shown),
                            "by": if f.who.is_empty() { Value::Null } else { json!(f.who) },
-                           "date": if f.date.is_empty() { Value::Null } else { json!(f.date) }, "item": f.item, "links": links})
+                           "date": if f.date.is_empty() { Value::Null } else { json!(f.date) }, "item": f.item, "links": links,
+                           "categories": cats})
                 })
                 .collect();
             let id = super::template::resolve(&kind, &name)
@@ -680,13 +707,14 @@ pub fn page_view_in(config: &Config, part: Part, path: &str, shown: &str) -> any
     let tasks: Vec<Value> = super::tasks(config, part)
         .iter()
         .filter(|t| t.links.iter().any(|l| names.iter().any(|n| super::fold(n) == super::fold(l))))
-        .map(|t| t.view())
+        .map(|t| super::categories::task_view(config, t, &all, &marks, today))
         .collect();
     // the web pages the agents made about it (linked to it by `create_page`), shown in its « Documents »
     let documents: Vec<Value> = super::documents(config, part)
         .into_iter()
         .filter(|d| d.get("linked").and_then(|l| l.get("path")).and_then(Value::as_str) == Some(path))
         .collect();
+    let documents = super::categories::with_documents(config, documents, part);
     // a trip's layout, a records page's table (null for the other pages)
     let trip = if kind == "trip" { super::trip::view(config, part, path, &page) } else { Value::Null };
     let records = super::records::page_view(config, &page, chrono::Local::now().date_naive()).unwrap_or(Value::Null);
@@ -701,7 +729,8 @@ pub fn page_view_in(config: &Config, part: Part, path: &str, shown: &str) -> any
               "summary": super::summary_of(&page.body, w.brief), "sections": sections, "outline": outline, "links": links,
               "backlinks": backlinks, "tasks": tasks, "documents": documents, "id": page.id(), "close": page.close(),
               "icon": page.icon(), "shared_with": super::shares_of(config, part, path, &page),
-              "emails": page.emails(), "phones": page.phones(), "rev": super::rev(&text), "text": text}))
+              "emails": page.emails(), "phones": page.phones(), "rev": super::rev(&text), "text": text,
+              "categories": filed.categories, "categories_by": filed.by}))
 }
 
 async fn read_page(State(state): State<AppState>, q: QueryMap) -> ApiResult<Response> {
@@ -934,9 +963,13 @@ async fn list_tasks(State(state): State<AppState>, q: QueryMap) -> ApiResult<Res
     let part = part_of(&q);
     let view = blocking(move || {
         let all = super::tasks(&config, part);
-        let open: Vec<Value> = super::open_tasks(&config, part).iter().map(|t| t.view()).collect();
-        let done: Vec<Value> = all.iter().rev().filter(|t| t.done).take(50).map(|t| t.view()).collect();
-        let archived: Vec<Value> = all.iter().filter(|t| t.archived && !t.done).map(|t| t.view()).collect();
+        // each with its categories (its page's: plan « Le sommaire »)
+        let (pages, marks, today) =
+            (super::all_pages(&config, part), super::categories::marks(&config), chrono::Local::now().date_naive());
+        let view = |t: &super::Task| super::categories::task_view(&config, t, &pages, &marks, today);
+        let open: Vec<Value> = super::open_tasks(&config, part).iter().map(view).collect();
+        let done: Vec<Value> = all.iter().rev().filter(|t| t.done).take(50).map(view).collect();
+        let archived: Vec<Value> = all.iter().filter(|t| t.archived && !t.done).map(view).collect();
         Ok(json!({"open": open, "done": done, "archived": archived}))
     })
     .await?;
@@ -1187,7 +1220,11 @@ async fn check(State(state): State<AppState>, Json(body): Json<Check>) -> ApiRes
 async fn documents(State(state): State<AppState>, q: QueryMap) -> ApiResult<Response> {
     let config = state.config();
     let part = part_of(&q);
-    let view = blocking(move || Ok(json!({"documents": super::documents(&config, part)}))).await?;
+    let view = blocking(move || {
+        let documents = super::documents(&config, part);
+        Ok(json!({"documents": super::categories::with_documents(&config, documents, part)}))
+    })
+    .await?;
     Ok(web::ok(view))
 }
 
@@ -1387,6 +1424,8 @@ pub fn router() -> Router<AppState> {
         .route("/notebook/move", post(move_points))
         .route("/notebook/move/undo", post(move_undo))
         .route("/notebook/misplaced", post(misplaced))
+        .route("/notebook/categorize", post(categorize))
+        .route("/notebook/categorize/undo", post(categorize_undo))
         .route("/notebook/history", get(history))
         .route("/notebook/restore", post(restore))
         .route("/notebook/tasks", get(list_tasks).post(add_task))
@@ -1729,4 +1768,112 @@ async fn misplaced(State(state): State<AppState>, q: QueryMap, Json(body): Json<
     })
     .await?;
     Ok(web::ok(view))
+}
+
+// -- « Ranger ailleurs » (plan « Le sommaire », S1) -------------------------------------------------------------------
+
+#[derive(Debug, Deserialize)]
+pub struct RecordTarget {
+    #[serde(rename = "type")]
+    pub kind: String,
+    pub id: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct DocumentTarget {
+    pub agent: String,
+    pub file: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct LineTarget {
+    pub path: String,
+    pub text: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct Categorize {
+    #[serde(default)]
+    pub path: Option<String>,
+    #[serde(default, deserialize_with = "web::lax::bool")]
+    pub private: bool,
+    #[serde(default)]
+    pub record: Option<RecordTarget>,
+    #[serde(default)]
+    pub document: Option<DocumentTarget>,
+    #[serde(default)]
+    pub task: Option<String>,
+    #[serde(default)]
+    pub line: Option<LineTarget>,
+    #[serde(default)]
+    pub categories: Vec<String>,
+}
+
+impl Validate for Categorize {
+    fn validate(&self, errors: &mut Vec<FieldError>) {
+        check_max_len(errors, "path", self.path.as_deref(), 300);
+        check_max_len(errors, "task", self.task.as_deref(), 40);
+        if let Some(r) = &self.record {
+            check_max_len(errors, "record.type", Some(&r.kind), 40);
+            check_max_len(errors, "record.id", Some(&r.id), 40);
+        }
+        if let Some(d) = &self.document {
+            check_max_len(errors, "document.agent", Some(&d.agent), 80);
+            check_max_len(errors, "document.file", Some(&d.file), 300);
+        }
+        if let Some(l) = &self.line {
+            check_max_len(errors, "line.path", Some(&l.path), 300);
+            check_max_len(errors, "line.text", Some(&l.text), 2000);
+        }
+        if self.categories.len() > 5 || self.categories.iter().any(|c| c.len() > 40) {
+            errors.push(FieldError::new("too_long", web::body_loc("categories"), "1 or 2 categories", json!(self.categories)));
+        }
+    }
+}
+
+/// « Ranger ailleurs »: a page, a record, a document, a task or a line filed in other categories by the person
+/// (categories.rs `categorize`): what it was, the rule it taught, the undo's id. The private part is Santé: its
+/// pages are not filed elsewhere.
+async fn categorize(State(state): State<AppState>, q: QueryMap, Json(body): Json<Categorize>) -> ApiResult<Response> {
+    use super::categories::{Refused, Target};
+    let config = state.config();
+    let shown = shown_language(&config, &q);
+    let target = match (&body.path, &body.record, &body.document, &body.task, &body.line) {
+        (Some(path), None, None, None, None) if !body.private => Target::Page { path: path.clone() },
+        (Some(_), None, None, None, None) => return Err(carnet_error(400, Refused::NotGiven.code(), &shown, json!({}))),
+        (None, Some(r), None, None, None) => Target::Record { kind: r.kind.clone(), id: r.id.clone() },
+        (None, None, Some(d), None, None) => Target::Document { agent: d.agent.clone(), file: d.file.clone() },
+        (None, None, None, Some(t), None) => Target::Task(t.clone()),
+        (None, None, None, None, Some(l)) => Target::Line { path: l.path.clone(), text: l.text.clone() },
+        _ => return Err(carnet_error(400, "target_missing", &shown, json!({}))),
+    };
+    let categories = body.categories.clone();
+    let done = blocking(move || super::categories::categorize(&config, &target, &categories, &Who::you(&config))).await?;
+    match done {
+        Ok(view) => Ok(web::ok(view)),
+        Err(Refused::NotFound) => Err(carnet_error(404, Refused::NotFound.code(), &shown, json!({}))),
+        Err(r) => Err(carnet_error(400, r.code(), &shown, json!({}))),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CategorizeUndo {
+    pub undo: String,
+}
+
+impl Validate for CategorizeUndo {
+    fn validate(&self, errors: &mut Vec<FieldError>) {
+        check_max_len(errors, "undo", Some(&self.undo), 40);
+    }
+}
+
+/// « Annuler » after « Ranger ailleurs »: the categories as they were, the rule forgotten (404 `undo_gone`).
+async fn categorize_undo(State(state): State<AppState>, q: QueryMap, Json(body): Json<CategorizeUndo>) -> ApiResult<Response> {
+    let config = state.config();
+    let shown = shown_language(&config, &q);
+    let undone = blocking(move || super::categories::undo(&config, &body.undo, &Who::you(&config))).await?;
+    match undone {
+        Some(view) => Ok(web::ok(view)),
+        None => Err(carnet_error(404, "undo_gone", &shown, json!({}))),
+    }
 }

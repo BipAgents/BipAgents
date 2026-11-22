@@ -1,0 +1,257 @@
+{
+  "v": 1,
+  "id": "papers",
+  "title": "Papers",
+  "count": 10,
+  "space": "all",
+  "filters": [
+    {
+      "id": "invoices",
+      "title": "Invoices",
+      "count": 1
+    },
+    {
+      "id": "contracts",
+      "title": "Contracts",
+      "count": 1
+    },
+    {
+      "id": "warranties",
+      "title": "Warranties",
+      "count": 3
+    }
+  ],
+  "filter": null,
+  "searched": [
+    {
+      "q": "washing machine warranty",
+      "at": "2026-11-20T18:02:00Z"
+    }
+  ],
+  "recent": [
+    {
+      "id": "task:t000003",
+      "kind": "task",
+      "part": "main",
+      "path": "Tasks/Tasks.md",
+      "title": "Check the pre-filled tax return",
+      "line": "Check the pre-filled tax return",
+      "categories": [
+        "money",
+        "papers",
+        "dates"
+      ],
+      "space": "",
+      "date": "2026-11-28",
+      "source": "Tasks",
+      "who": "Daily",
+      "noted": "2026-11-22",
+      "open": {
+        "task": "t000003"
+      }
+    },
+    {
+      "id": "task:t000004",
+      "kind": "task",
+      "part": "main",
+      "path": "Tasks/Tasks.md",
+      "title": "Find the donation receipts",
+      "line": "Find the donation receipts",
+      "categories": [
+        "money",
+        "papers"
+      ],
+      "space": "",
+      "date": null,
+      "source": "Tasks",
+      "who": "Daily",
+      "noted": "2026-11-22",
+      "open": {
+        "task": "t000004"
+      }
+    },
+    {
+      "id": "line:p000000000a:000000000a",
+      "kind": "line",
+      "part": "main",
+      "path": "Subjects/Taxes 2026.md",
+      "title": "Taxes 2026",
+      "line": "Pre-filled return received",
+      "categories": [
+        "money",
+        "papers"
+      ],
+      "space": "",
+      "date": null,
+      "source": "Where it stands",
+      "who": "Budget",
+      "noted": "2026-11-20",
+      "open": {
+        "path": "Subjects/Taxes 2026.md",
+        "section": "status"
+      }
+    },
+    {
+      "id": "line:p000000000b:000000000b",
+      "kind": "line",
+      "part": "main",
+      "path": "Subjects/Taxes 2026.md",
+      "title": "Taxes 2026",
+      "line": "Add the donations and the childcare costs",
+      "categories": [
+        "money",
+        "papers"
+      ],
+      "space": "",
+      "date": null,
+      "source": "Next steps",
+      "who": "Budget",
+      "noted": "2026-11-20",
+      "open": {
+        "path": "Subjects/Taxes 2026.md",
+        "section": "next"
+      }
+    },
+    {
+      "id": "page:p0000000002",
+      "kind": "page",
+      "part": "main",
+      "path": "Subjects/Taxes 2026.md",
+      "title": "Taxes 2026",
+      "line": "Online tax return to check before the end of the month.",
+      "categories": [
+        "money",
+        "papers"
+      ],
+      "space": "",
+      "date": null,
+      "source": "Taxes 2026",
+      "who": "",
+      "noted": null,
+      "open": {
+        "path": "Subjects/Taxes 2026.md"
+      }
+    },
+    {
+      "id": "record:r000005",
+      "kind": "record",
+      "part": "main",
+      "path": "Records/Purchases.md",
+      "title": "Washing machine",
+      "line": "2024-12-22 · Washing machine · Electro Plus · €499 · durable goods · 2026-12-22 · Invoice received by e-mail",
+      "categories": [
+        "money",
+        "papers",
+        "dates"
+      ],
+      "space": "",
+      "date": "2026-12-22",
+      "source": "Purchases",
+      "who": "",
+      "noted": null,
+      "open": {
+        "record": {
+          "type": "purchase",
+          "id": "r000005"
+        }
+      }
+    },
+    {
+      "id": "record:r000006",
+      "kind": "record",
+      "part": "main",
+      "path": "Records/Purchases.md",
+      "title": "Tablet",
+      "line": "2026-07-25 · Tablet · Online shop · €329 · durable goods · 2028-07-24 · Order confirmation",
+      "categories": [
+        "money",
+        "papers",
+        "dates"
+      ],
+      "space": "",
+      "date": "2028-07-24",
+      "source": "Purchases",
+      "who": "",
+      "noted": null,
+      "open": {
+        "record": {
+          "type": "purchase",
+          "id": "r000006"
+        }
+      }
+    },
+    {
+      "id": "record:r000007",
+      "kind": "record",
+      "part": "main",
+      "path": "Records/Purchases.md",
+      "title": "Headphones",
+      "line": "2024-09-13 · Headphones · Department store · €89 · durable goods · 2026-09-13",
+      "categories": [
+        "money",
+        "papers",
+        "dates"
+      ],
+      "space": "",
+      "date": "2026-09-13",
+      "source": "Purchases",
+      "who": "",
+      "noted": null,
+      "open": {
+        "record": {
+          "type": "purchase",
+          "id": "r000007"
+        }
+      }
+    },
+    {
+      "id": "record:r000008",
+      "kind": "record",
+      "part": "main",
+      "path": "Records/Contracts and insurance.md",
+      "title": "Home insurance",
+      "line": "Home insurance · Horizon Insurance · HAB-448120 · 2027-02-25 · Renewal notice",
+      "categories": [
+        "papers",
+        "dates"
+      ],
+      "space": "",
+      "date": "2027-02-25",
+      "source": "Contracts and insurance",
+      "who": "",
+      "noted": null,
+      "open": {
+        "record": {
+          "type": "contract",
+          "id": "r000008"
+        }
+      }
+    },
+    {
+      "id": "record:r000009",
+      "kind": "record",
+      "part": "main",
+      "path": "Records/Papers.md",
+      "title": "Passport",
+      "line": "Passport · 2028-01-16 · Photo of the passport",
+      "categories": [
+        "papers",
+        "dates"
+      ],
+      "space": "",
+      "date": "2028-01-16",
+      "source": "Papers",
+      "who": "",
+      "noted": null,
+      "open": {
+        "record": {
+          "type": "paper",
+          "id": "r000009"
+        }
+      }
+    }
+  ],
+  "bar": {
+    "placeholder": "Search in Papers"
+  }
+}

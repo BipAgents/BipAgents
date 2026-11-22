@@ -17,7 +17,7 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 from bbkit.common import AUTH
-from bbkit.mcp import call, give_token, text_of
+from bbkit.mcp import call, give_token, rpc, text_of
 
 FIXTURES = Path(__file__).parent / "fixtures" / "carnet_1_0"
 CONTRACT = Path(__file__).resolve().parents[2] / "contracts" / "carnet" / "sommaire.json"
@@ -215,3 +215,146 @@ def test_the_1_0_apps_see_exactly_todays_answers(bridges):
             differ.append(name)
             (bridge.root / f"{name}.got.json").write_text(normalised(as_1_0(route_of(path), answer)) + "\n")
     assert not differ, f"not as before: {differ} (the answers, as a 1.0 app reads them, in {bridge.root})"
+
+
+# -- brick S1: the categories at the bridge -----------------------------------------------------------------------
+
+def pages_by_title(bridge):
+    out = {}
+    for kind in ("person", "subject", "area", "self", "records"):
+        for p in bridge.get(f"/v1/notebook/pages?kind={kind}", headers=AUTH).json()["pages"]:
+            out[p["title"]] = p
+    return out
+
+
+def page_of(bridge, path):
+    got = bridge.get("/v1/notebook/page", params={"path": path}, headers=AUTH)
+    assert got.status_code == 200, got.text
+    return got.json()
+
+
+def facts_of(page):
+    return {f["text"]: f["categories"] for s in page["sections"] for f in s["facts"]}
+
+
+def test_the_bridge_files_pages_records_tasks_and_documents_by_their_words(bridges):
+    bridge = bridges.new().start()
+    write_carnet(bridge)
+    assert bridge.get("/v1/notebook", headers=AUTH).json()["sommaire"] == 1
+    # the pages, by their kind and their words, written in their frontmatter (the app's new page too)
+    pages = pages_by_title(bridge)
+    want = {"Marc Durand": ["people"], "Claire Durand": ["people"], "Rénovation cuisine": ["home"],
+            "Voyage Japon": ["trips"], "Impôts 2026": ["money", "papers"], "Maison": ["home"], "Finances": ["money"],
+            "Travail": ["work"], "Jardin": ["home"], "Achats": ["money", "papers"], "Abonnements": ["money"],
+            "Réservations": ["trips"]}
+    assert {t: pages[t]["categories"] for t in want} == want
+    assert {pages[t]["categories_by"] for t in want} == {"auto"}
+    text = (bridge.state_dir / "notebook" / "carnet" / "Sujets" / "Rénovation cuisine.md").read_text()
+    assert "\ncategories:\n  - home\ncategories_by: auto\nupdated: " in text, text
+    # a page's lines: its categories, and Dates when they carry a date
+    marc = page_of(bridge, "Personnes/Marc Durand.md")
+    assert (marc["categories"], marc["categories_by"]) == (["people"], "auto")
+    facts = facts_of(marc)
+    assert facts[f"Anniversaire : {spoken(23)}"] == ["people", "dates"]
+    assert facts["Un vinyle de Chet Baker"] == ["people"]
+    # the records by their type (Dates: their dates), the tasks by their page, the documents by their words
+    records = {t["type"]: t for t in bridge.get("/v1/notebook/records", headers=AUTH).json()["types"]}
+    assert records["purchase"]["categories"] == ["money", "papers"]
+    assert [(i["item"], i["categories"]) for i in records["purchase"]["items"]] == [("Lave-linge", ["money", "papers", "dates"])]
+    assert records["subscription"]["items"][0]["categories"] == ["money", "dates"]
+    assert records["contract"]["items"][0]["categories"] == ["papers", "dates"]
+    assert records["paper"]["items"][0]["categories"] == ["papers", "dates"]
+    assert records["booking"]["items"][0]["categories"] == ["trips", "dates"]
+    tasks = {t["title"].split(" [[")[0]: t["categories"] for t in bridge.get("/v1/notebook/tasks", headers=AUTH).json()["open"]}
+    assert tasks == {"Rappeler Marc pour le devis": ["home", "dates"], "Trier les photos de l'été": ["other"]}, tasks
+    documents = bridge.get("/v1/notebook/documents", headers=AUTH).json()["documents"]
+    assert [(d["file"], d["categories"], d["categories_by"]) for d in documents] == [("Devis cuisine.pdf", ["home"], "auto")]
+    # the search: the same categories on what it finds
+    found = bridge.get("/v1/notebook/search", params={"q": "anniversaire claire", "lang": "fr"}, headers=AUTH).json()
+    assert found["answers"] and found["answers"][0]["categories"] == ["people", "dates"], found["answers"]
+    assert found["pages"][0]["categories"] == ["people"]
+
+
+def test_the_person_files_elsewhere_and_the_next_write_follows(bridges):
+    bridge = bridges.new().start()
+    write_carnet(bridge)
+    post = lambda body: bridge.post("/v1/notebook/categorize", json=body, headers=AUTH)  # noqa: E731
+    kitchen = "Sujets/Rénovation cuisine.md"
+    for body, status, code in [
+        ({"path": kitchen, "categories": ["dates"]}, 400, "category_not_given"),
+        ({"path": kitchen, "categories": ["health"]}, 400, "category_not_given"),
+        ({"path": kitchen, "categories": ["maison"]}, 400, "category_unknown"),
+        ({"path": kitchen, "categories": []}, 400, "category_count"),
+        ({"path": kitchen, "categories": ["home", "money", "work"]}, 400, "category_count"),
+        ({"categories": ["home"]}, 400, "target_missing"),
+        ({"path": kitchen, "private": True, "categories": ["home"]}, 400, "category_not_given"),
+        ({"path": "Sujets/Rien.md", "categories": ["home"]}, 404, "not_found"),
+        ({"task": "t0000000", "categories": ["home"]}, 404, "not_found"),
+    ]:
+        got = post(body)
+        assert got.status_code == status and got.json()["detail"]["code"] == code, (body, got.text)
+    done = post({"path": kitchen, "categories": ["money"]})
+    assert done.status_code == 200, done.text
+    done = done.json()
+    assert done["before"] == {"categories": ["home"], "categories_by": "auto"}
+    assert (done["categories"], done["categories_by"]) == (["money"], "person")
+    assert done["learnt"] == {"word": "renovation", "categories": ["money"]} and done["undo"].startswith("u")
+    assert done["target"] == {"path": kitchen, "private": False}
+    assert (page_of(bridge, kitchen)["categories"], page_of(bridge, kitchen)["categories_by"]) == (["money"], "person")
+    # an agent writes there again, saying another category: the person's stays; the next page the word decides follows
+    wrote(call(bridge, "notebook_write", {"page": "Rénovation cuisine", "section": "status", "facts": ["Travaux en mars"],
+                                          "category": ["home"]}))
+    assert page_of(bridge, kitchen)["categories"] == ["money"]
+    wrote(call(bridge, "notebook_write", {"page": "Rénovation salle de bain", "kind": "subject", "section": "status",
+                                          "facts": ["Devis demandé"]}))
+    assert page_of(bridge, "Sujets/Rénovation salle de bain.md")["categories"] == ["money"]
+    # not news: « Nouveau » never shows a correction
+    assert all(c["action"] != "categorize" for c in bridge.get("/v1/notebook", headers=AUTH).json()["recent"])
+    # « Annuler »: as it was, the rule forgotten, once
+    undone = bridge.post("/v1/notebook/categorize/undo", json={"undo": done["undo"]}, headers=AUTH)
+    assert undone.status_code == 200, undone.text
+    assert (undone.json()["categories"], undone.json()["unlearnt"]) == (["home"], "renovation")
+    assert page_of(bridge, kitchen)["categories"] == ["home"]
+    again = bridge.post("/v1/notebook/categorize/undo", json={"undo": done["undo"]}, headers=AUTH)
+    assert again.status_code == 404 and again.json()["detail"]["code"] == "undo_gone", again.text
+    # a record, a task, a document and a line: the person's choice kept for them
+    purchase = next(t for t in bridge.get("/v1/notebook/records", headers=AUTH).json()["types"] if t["type"] == "purchase")
+    rid = purchase["items"][0]["id"]
+    assert post({"record": {"type": "purchase", "id": rid}, "categories": ["home"]}).status_code == 200
+    purchase = next(t for t in bridge.get("/v1/notebook/records", headers=AUTH).json()["types"] if t["type"] == "purchase")
+    assert (purchase["items"][0]["categories"], purchase["items"][0]["categories_by"]) == (["home", "dates"], "person")
+    task = next(t for t in bridge.get("/v1/notebook/tasks", headers=AUTH).json()["open"] if t["title"].startswith("Trier"))
+    assert post({"task": task["id"], "categories": ["home"]}).status_code == 200
+    task = next(t for t in bridge.get("/v1/notebook/tasks", headers=AUTH).json()["open"] if t["title"].startswith("Trier"))
+    assert task["categories"] == ["home"]
+    doc = bridge.get("/v1/notebook/documents", headers=AUTH).json()["documents"][0]
+    filed = post({"document": {"agent": doc["agent"], "file": doc["file"]}, "categories": ["papers"]})
+    assert filed.status_code == 200 and filed.json()["learnt"] == {"word": "devis", "categories": ["papers"]}, filed.text
+    assert bridge.get("/v1/notebook/documents", headers=AUTH).json()["documents"][0]["categories"] == ["papers"]
+    line = post({"line": {"path": "Personnes/Marc Durand.md", "text": "Un vinyle de Chet Baker"}, "categories": ["money"]})
+    assert line.status_code == 200, line.text
+    assert facts_of(page_of(bridge, "Personnes/Marc Durand.md"))["Un vinyle de Chet Baker"] == ["money"]
+    gone = post({"line": {"path": "Personnes/Marc Durand.md", "text": "Rien de tel"}, "categories": ["money"]})
+    assert gone.status_code == 404, gone.text
+
+
+def test_an_agent_may_say_the_category(bridges):
+    bridge = bridges.new().start()
+    give_token(bridge)
+    assert bridge.patch("/v1/notebook/settings", json={"language": "fr"}, headers=AUTH).status_code == 200
+    tools = {t["name"]: t for t in rpc(bridge, "tools/list").json()["result"]["tools"]}
+    assert tools["notebook_write"]["inputSchema"]["properties"]["category"] == {
+        "type": "array", "items": {"enum": ["people", "money", "home", "papers", "trips", "work"]}, "maxItems": 2,
+        "description": "only if sure"}
+    path = "Sujets/Atelier poterie.md"
+    wrote(call(bridge, "notebook_write", {"page": "Atelier poterie", "kind": "subject", "section": "status",
+                                          "facts": ["Inscrit le jeudi"], "category": ["home"]}))
+    assert (page_of(bridge, path)["categories"], page_of(bridge, path)["categories_by"]) == (["home"], "agent")
+    # only the categories it may give: anything else is left to the bridge
+    wrote(call(bridge, "notebook_write", {"page": "Cours de piano", "kind": "subject", "section": "status",
+                                          "facts": ["Le mardi"], "category": ["dates"]}))
+    assert page_of(bridge, "Sujets/Cours de piano.md")["categories_by"] == "auto"
+    # the category alone, on a page that exists
+    said = wrote(call(bridge, "notebook_write", {"page": "Atelier poterie", "category": ["work", "money"]}))
+    assert text_of(said) == "Saved: Atelier poterie.", text_of(said)
+    assert page_of(bridge, path)["categories"] == ["work", "money"]

@@ -1,0 +1,257 @@
+{
+  "v": 1,
+  "lang": "en",
+  "title": "Notebook",
+  "space": "all",
+  "spaces": [
+    {
+      "id": "all",
+      "title": "Me",
+      "selected": true
+    },
+    {
+      "id": "family",
+      "title": "Family",
+      "selected": false
+    }
+  ],
+  "kept": [
+    {
+      "id": "k1a2b3c",
+      "q": "to pay this month",
+      "title": "to pay this month",
+      "count": 8,
+      "space": "",
+      "category": "money"
+    }
+  ],
+  "card": null,
+  "total": {
+    "count": 133,
+    "title": "All the Notebook"
+  },
+  "categories": [
+    {
+      "id": "people",
+      "title": "People",
+      "count": 52,
+      "hint": "Family, Claire Durand, Lucas Bernard",
+      "locked": false,
+      "first": {
+        "id": "page:p000000000c",
+        "kind": "page",
+        "part": "main",
+        "path": "Areas/Family.md",
+        "title": "Family",
+        "line": "Your sister [[Claire Durand]], her husband [[Marc Durand]] and their children.",
+        "categories": [
+          "people"
+        ],
+        "space": "",
+        "date": null,
+        "source": "Family",
+        "who": "",
+        "noted": null,
+        "open": {
+          "path": "Areas/Family.md"
+        }
+      }
+    },
+    {
+      "id": "dates",
+      "title": "Dates",
+      "count": 24,
+      "hint": "Work, Claire Durand, Lucas Bernard",
+      "locked": false,
+      "first": {
+        "id": "line:p0000000038:0000000038",
+        "kind": "line",
+        "part": "main",
+        "path": "Areas/Work.md",
+        "title": "Work",
+        "line": "Annual review on November 27",
+        "categories": [
+          "work",
+          "dates"
+        ],
+        "space": "",
+        "date": "2026-11-27",
+        "source": "What matters",
+        "who": "Daily",
+        "noted": "2026-11-19",
+        "open": {
+          "path": "Areas/Work.md",
+          "section": "matters"
+        }
+      }
+    },
+    {
+      "id": "money",
+      "title": "Money",
+      "count": 19,
+      "hint": "Money, New car, Taxes 2026",
+      "locked": false,
+      "first": {
+        "id": "page:p0000000010",
+        "kind": "page",
+        "part": "main",
+        "path": "Areas/Money.md",
+        "title": "Money",
+        "line": "The month’s budget and the contracts to renew.",
+        "categories": [
+          "money"
+        ],
+        "space": "",
+        "date": null,
+        "source": "Money",
+        "who": "",
+        "noted": null,
+        "open": {
+          "path": "Areas/Money.md"
+        }
+      }
+    },
+    {
+      "id": "home",
+      "title": "Home",
+      "count": 26,
+      "hint": "Home, Kitchen renovation, Call Marc back about the quote",
+      "locked": false,
+      "first": {
+        "id": "page:p000000000f",
+        "kind": "page",
+        "part": "main",
+        "path": "Areas/Home.md",
+        "title": "Home",
+        "line": "The flat, the kitchen work and the neighbours.",
+        "categories": [
+          "home"
+        ],
+        "space": "",
+        "date": null,
+        "source": "Home",
+        "who": "",
+        "noted": null,
+        "open": {
+          "path": "Areas/Home.md"
+        }
+      }
+    },
+    {
+      "id": "papers",
+      "title": "Papers",
+      "count": 10,
+      "hint": "Taxes 2026, Check the pre-filled tax return, Find the donation receipts",
+      "locked": false,
+      "first": {
+        "id": "page:p0000000002",
+        "kind": "page",
+        "part": "main",
+        "path": "Subjects/Taxes 2026.md",
+        "title": "Taxes 2026",
+        "line": "Online tax return to check before the end of the month.",
+        "categories": [
+          "money",
+          "papers"
+        ],
+        "space": "",
+        "date": null,
+        "source": "Taxes 2026",
+        "who": "",
+        "noted": null,
+        "open": {
+          "path": "Subjects/Taxes 2026.md"
+        }
+      }
+    },
+    {
+      "id": "trips",
+      "title": "Trips",
+      "count": 29,
+      "hint": "Japan trip, Lisbon weekend, Book the flights to Osaka",
+      "locked": false,
+      "first": {
+        "id": "page:p0000000017",
+        "kind": "page",
+        "part": "main",
+        "path": "Subjects/Japan trip.md",
+        "title": "Japan trip",
+        "line": "April, 12 days: Tokyo, Kyoto, Osaka. The flights are to book soon.",
+        "categories": [
+          "trips"
+        ],
+        "space": "",
+        "date": null,
+        "source": "Japan trip",
+        "who": "",
+        "noted": null,
+        "open": {
+          "path": "Subjects/Japan trip.md"
+        }
+      }
+    },
+    {
+      "id": "work",
+      "title": "Work",
+      "count": 4,
+      "hint": "Work, Prepare the annual review",
+      "locked": false,
+      "first": {
+        "id": "page:p0000000011",
+        "kind": "page",
+        "part": "main",
+        "path": "Areas/Work.md",
+        "title": "Work",
+        "line": "Your job at Atelier Lumière and your annual review.",
+        "categories": [
+          "work"
+        ],
+        "space": "",
+        "date": null,
+        "source": "Work",
+        "who": "",
+        "noted": null,
+        "open": {
+          "path": "Areas/Work.md"
+        }
+      }
+    },
+    {
+      "id": "other",
+      "title": "Other",
+      "count": 1,
+      "hint": "Sort the summer photos",
+      "locked": false,
+      "first": {
+        "id": "task:t000025",
+        "kind": "task",
+        "part": "main",
+        "path": "Tasks/Tasks.md",
+        "title": "Sort the summer photos",
+        "line": "Sort the summer photos",
+        "categories": [
+          "other"
+        ],
+        "space": "",
+        "date": null,
+        "source": "Tasks",
+        "who": "Daily",
+        "noted": "2026-11-22",
+        "open": {
+          "task": "t000025"
+        }
+      }
+    },
+    {
+      "id": "health",
+      "title": "Health",
+      "count": null,
+      "hint": "",
+      "locked": true
+    }
+  ],
+  "bar": {
+    "placeholder": "Search the whole Notebook"
+  },
+  "version": 42
+}

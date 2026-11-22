@@ -39,6 +39,7 @@ pub mod api;
 pub mod archive;
 pub mod assign;
 pub mod ask;
+pub mod categories;
 pub mod fill;
 pub mod followups;
 pub mod forget;
@@ -59,6 +60,8 @@ pub mod reads;
 pub mod review;
 #[cfg(test)]
 mod search_bench;
+#[cfg(test)]
+mod sommaire_contract;
 pub mod tidy;
 pub mod tools;
 pub mod trip;
@@ -1499,7 +1502,8 @@ pub fn recent_changes(config: &Config, part: Part, limit: usize) -> Vec<Dict> {
     for entry in history(config, Some(part), None, usize::MAX) {
         let path = entry.get("path").and_then(Value::as_str).unwrap_or("");
         let action = entry.get("action").and_then(Value::as_str).unwrap_or("");
-        let deleted = action == "delete" || action == relanguage::ACTION; // a language change: housekeeping, not news
+        // a language change, a page filed in other categories: housekeeping, not news
+        let deleted = action == "delete" || action == relanguage::ACTION || action == categories::ACTION;
         let exists = checked(path).map(|p| base.join(p).is_file()).unwrap_or(false);
         if deleted || !exists {
             continue;
@@ -1659,7 +1663,7 @@ pub struct Written {
     pub replaced: usize,
     /// Health facts filed apart: in the private health part, or « À ranger » (never in the shared part).
     pub apart: usize,
-    /// A subject made a trip by this write, or a trip's details changed (trip.rs).
+    /// A subject made a trip by this write, or a trip's details changed (trip.rs), or the agent's category set.
     pub changed: bool,
     /// The pages facts went to instead, by the person's corrections (moves.rs).
     pub elsewhere: Vec<String>,
@@ -1750,6 +1754,43 @@ pub(crate) fn note_locked(
     aliases: &[String],
     contact: &str,
     summary: &str,
+    who: &Who,
+) -> anyhow::Result<Written> {
+    note_locked_with(config, part, kind, title, section, facts, aliases, contact, summary, &[], who)
+}
+
+/// [`note`] with the agent's `category` (notebook_write: 1 or 2 of categories::AGENT_MAY_GIVE), kept on the page
+/// unless the person chose its categories.
+#[allow(clippy::too_many_arguments)]
+pub fn note_with(
+    config: &Config,
+    part: Part,
+    kind: &str,
+    title: &str,
+    section: &str,
+    facts: &[String],
+    aliases: &[String],
+    contact: &str,
+    summary: &str,
+    category: &[String],
+    who: &Who,
+) -> anyhow::Result<Written> {
+    let _guard = lock();
+    note_locked_with(config, part, kind, title, section, facts, aliases, contact, summary, category, who)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn note_locked_with(
+    config: &Config,
+    part: Part,
+    kind: &str,
+    title: &str,
+    section: &str,
+    facts: &[String],
+    aliases: &[String],
+    contact: &str,
+    summary: &str,
+    category: &[String],
     who: &Who,
 ) -> anyhow::Result<Written> {
     let lang = fix_language(config)?;
@@ -2000,7 +2041,9 @@ pub(crate) fn note_locked(
     let summary_changed = summary_of(&body, w.brief) != summary_of(&page.body, w.brief);
     let aliases_changed = before.as_deref().map(|b| Page::parse(b, "").aliases() != page.aliases()).unwrap_or(false)
         || contact_changed;
-    if added.is_empty() && !created && !aliases_changed && !summary_changed && !converted {
+    // the agent's category (plan « Le sommaire »): written even when nothing else is, never over the person's
+    let chosen = part == Part::Main && categories::choose(&mut page, category, who);
+    if added.is_empty() && !created && !aliases_changed && !summary_changed && !converted && !chosen {
         return Ok(Written { part: Some(part), path, title: page.title, created, added, sections, apart, elsewhere, ..Default::default() });
     }
     // no page with nothing in it (an empty card in the app: Alex's « Famille », 2026-11-03)
@@ -2008,6 +2051,8 @@ pub(crate) fn note_locked(
         return refuse("give the facts to file: a page is made with its first facts");
     }
     page.body = body;
+    // its categories, by its words, when it has none yet (categories.rs: no model, no token)
+    categories::on_write(config, part, &path, &mut page, who);
     page.touch();
     let text = page.render();
     let summary = if converted && added.is_empty() {
@@ -2016,6 +2061,8 @@ pub(crate) fn note_locked(
         added.join(" · ")
     } else if summary_changed {
         format!("{} : {}", w.brief, tk::head(&summary_of(&page.body, w.brief), 200))
+    } else if chosen && !aliases_changed {
+        format!("categories: {}", categories::stored(&page).map(|(c, _)| c.join(", ")).unwrap_or_default())
     } else {
         "aliases".to_string()
     };
@@ -2054,7 +2101,7 @@ pub(crate) fn note_locked(
         section_ids,
         replaced,
         apart,
-        changed: converted,
+        changed: converted || chosen,
         elsewhere,
     })
 }
@@ -2234,6 +2281,7 @@ pub fn new_page(config: &Config, part: Part, kind: &str, title: &str, who: &Who)
             return Ok(Err(path));
         }
         let mut page = Page::new("self", w.me);
+        categories::on_write(config, part, &path, &mut page, who);
         page.touch();
         commit(config, part, &path, None, Some(&page.render()), who, "create", "")?;
         return Ok(Ok(path));
@@ -2252,6 +2300,7 @@ pub fn new_page(config: &Config, part: Part, kind: &str, title: &str, who: &Who)
     if kind == "trip" {
         trip::make_trip(&mut page, &lang);
     }
+    categories::on_write(config, part, &path, &mut page, who);
     page.touch();
     commit(config, part, &path, None, Some(&page.render()), who, "create", "")?;
     Ok(Ok(path))
@@ -3381,7 +3430,7 @@ static MONTH_DAY: LazyLock<Regex> = LazyLock::new(|| {
 });
 static NUMERIC: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\b(\d{1,2})/(\d{1,2})(?:/(\d{4}))?\b").expect("valid regex"));
-static YEARLY: LazyLock<Regex> = LazyLock::new(|| {
+pub(crate) static YEARLY: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
         r"(?i)anniv|birthday|geburtstag|cumple|f[eê]te|name ?day|jahrestag|aniversario|mariage|wedding|hochzeit|boda",
     )

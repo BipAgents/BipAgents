@@ -1,0 +1,452 @@
+{
+  "v": 1,
+  "version": 7,
+  "since": null,
+  "full": true,
+  "lang": "en",
+  "made": "2026-11-22T07:00:00Z",
+  "items": [
+    {
+      "id": "fam:list:courses/c1",
+      "kind": "list_item",
+      "title": "Shopping",
+      "line": "Milk",
+      "categories": [
+        "shopping"
+      ],
+      "date": null,
+      "who": "Marie",
+      "noted": null,
+      "open": {
+        "list": "courses",
+        "item": "c1"
+      },
+      "fold": "milk",
+      "done": false
+    },
+    {
+      "id": "fam:list:courses/c2",
+      "kind": "list_item",
+      "title": "Shopping",
+      "line": "Wholewheat pasta",
+      "categories": [
+        "shopping"
+      ],
+      "date": null,
+      "who": "Léa",
+      "noted": null,
+      "open": {
+        "list": "courses",
+        "item": "c2"
+      },
+      "fold": "wholewheat pasta",
+      "done": false
+    },
+    {
+      "id": "fam:list:courses/c3",
+      "kind": "list_item",
+      "title": "Shopping",
+      "line": "Lemons",
+      "categories": [
+        "shopping"
+      ],
+      "date": null,
+      "who": "Maison",
+      "noted": null,
+      "open": {
+        "list": "courses",
+        "item": "c3"
+      },
+      "fold": "lemons",
+      "done": false
+    },
+    {
+      "id": "fam:list:courses/c4",
+      "kind": "list_item",
+      "title": "Shopping",
+      "line": "Toilet paper",
+      "categories": [
+        "shopping"
+      ],
+      "date": null,
+      "who": "Marie",
+      "noted": null,
+      "open": {
+        "list": "courses",
+        "item": "c4"
+      },
+      "fold": "toilet paper",
+      "done": false
+    },
+    {
+      "id": "fam:list:courses/c5",
+      "kind": "list_item",
+      "title": "Shopping",
+      "line": "Coffee",
+      "categories": [
+        "shopping"
+      ],
+      "date": null,
+      "who": "Léa",
+      "noted": null,
+      "open": {
+        "list": "courses",
+        "item": "c5"
+      },
+      "fold": "coffee",
+      "done": true
+    },
+    {
+      "id": "fam:list:taches/t1",
+      "kind": "list_item",
+      "title": "Tasks",
+      "line": "Boiler appointment",
+      "categories": [
+        "home",
+        "dates"
+      ],
+      "date": "2026-11-25",
+      "who": "Léa",
+      "noted": null,
+      "open": {
+        "list": "taches",
+        "item": "t1"
+      },
+      "fold": "boiler appointment",
+      "done": false
+    },
+    {
+      "id": "fam:list:taches/t2",
+      "kind": "list_item",
+      "title": "Tasks",
+      "line": "Book the Christmas caterer",
+      "categories": [
+        "dates",
+        "menus"
+      ],
+      "date": "2026-11-28",
+      "who": "Marie",
+      "noted": null,
+      "open": {
+        "list": "taches",
+        "item": "t2"
+      },
+      "fold": "book the christmas caterer",
+      "done": false
+    },
+    {
+      "id": "fam:list:taches/t3",
+      "kind": "list_item",
+      "title": "Tasks",
+      "line": "Sign Tom up for judo",
+      "categories": [
+        "school"
+      ],
+      "date": null,
+      "who": "Marie",
+      "noted": null,
+      "open": {
+        "list": "taches",
+        "item": "t3"
+      },
+      "fold": "sign tom up for judo",
+      "done": false
+    },
+    {
+      "id": "fam:list:taches/t4",
+      "kind": "list_item",
+      "title": "Tasks",
+      "line": "Return the library books",
+      "categories": [
+        "school",
+        "other"
+      ],
+      "date": "2026-11-21",
+      "who": "Léa",
+      "noted": null,
+      "open": {
+        "list": "taches",
+        "item": "t4"
+      },
+      "fold": "return the library books",
+      "done": true
+    },
+    {
+      "id": "fam:list:dates/d1",
+      "kind": "list_item",
+      "title": "Dates",
+      "line": "Grandma's birthday",
+      "categories": [
+        "people",
+        "dates"
+      ],
+      "date": "2026-11-28",
+      "who": "Marie",
+      "noted": null,
+      "open": {
+        "list": "dates",
+        "item": "d1"
+      },
+      "fold": "grandma s birthday",
+      "done": false
+    },
+    {
+      "id": "fam:list:dates/d2",
+      "kind": "list_item",
+      "title": "Dates",
+      "line": "Christmas dinner at Marie's",
+      "categories": [
+        "dates"
+      ],
+      "date": "2026-12-31",
+      "who": "Maison",
+      "noted": null,
+      "open": {
+        "list": "dates",
+        "item": "d2"
+      },
+      "fold": "christmas dinner at marie s",
+      "done": false
+    },
+    {
+      "id": "fam:list:dates/d3",
+      "kind": "list_item",
+      "title": "Dates",
+      "line": "Tom's birthday",
+      "categories": [
+        "people",
+        "dates"
+      ],
+      "date": "2027-03-09",
+      "who": "Léa",
+      "noted": null,
+      "open": {
+        "list": "dates",
+        "item": "d3"
+      },
+      "fold": "tom s birthday",
+      "done": false
+    },
+    {
+      "id": "fam:page:p1",
+      "kind": "page",
+      "title": "February holidays",
+      "line": "Cottage in Annecy, 14 to 21 February.\nStill to book: the train there.",
+      "categories": [
+        "holidays"
+      ],
+      "date": null,
+      "who": "Maison",
+      "noted": null,
+      "open": {
+        "path": "p1"
+      },
+      "fold": "february holidays cottage in annecy 14 to 21 february still to book the train there"
+    },
+    {
+      "id": "fam:page:p2",
+      "kind": "page",
+      "title": "Useful codes and numbers",
+      "line": "Wifi: see the router.\nPlumber: Mr Garnier, 06 00 00 00 00.\nTom's school: 01 00 00 00 00.",
+      "categories": [
+        "home",
+        "papers",
+        "school"
+      ],
+      "date": null,
+      "who": "Marie",
+      "noted": null,
+      "open": {
+        "path": "p2"
+      },
+      "fold": "useful codes and numbers wifi see the router plumber mr garnier 06 00 00 00 00 tom s school 01 00 00 00 00"
+    },
+    {
+      "id": "fam:page:p3",
+      "kind": "page",
+      "title": "This week's meals",
+      "line": "Monday: lemon pasta.\nTuesday: soup and toast.",
+      "categories": [
+        "menus"
+      ],
+      "date": null,
+      "who": "Léa",
+      "noted": null,
+      "open": {
+        "path": "p3"
+      },
+      "fold": "this week s meals monday lemon pasta tuesday soup and toast"
+    }
+  ],
+  "removed": [],
+  "stop": [
+    "de",
+    "du",
+    "la",
+    "le",
+    "les",
+    "des",
+    "d",
+    "l",
+    "un",
+    "une",
+    "au",
+    "aux",
+    "et",
+    "a",
+    "en",
+    "pour",
+    "sur",
+    "ma",
+    "mon",
+    "mes",
+    "ta",
+    "ton",
+    "tes",
+    "sa",
+    "son",
+    "ses",
+    "quel",
+    "quelle",
+    "quels",
+    "quelles",
+    "est",
+    "c",
+    "qu",
+    "que",
+    "qui",
+    "quoi",
+    "combien",
+    "elle",
+    "il",
+    "quand",
+    "the",
+    "of",
+    "an",
+    "and",
+    "to",
+    "is",
+    "what",
+    "which",
+    "who",
+    "how",
+    "many",
+    "much",
+    "my",
+    "your",
+    "his",
+    "her",
+    "does",
+    "s",
+    "when",
+    "has",
+    "der",
+    "die",
+    "das",
+    "den",
+    "dem",
+    "von",
+    "ein",
+    "eine",
+    "und",
+    "ist",
+    "was",
+    "wie",
+    "welche",
+    "hat",
+    "wann",
+    "el",
+    "los",
+    "las",
+    "del",
+    "y",
+    "es",
+    "cual",
+    "cuanto",
+    "cuando",
+    "tiene"
+  ],
+  "neighbours": {
+    "doc": [
+      "doctor"
+    ],
+    "bill": [
+      "invoice"
+    ],
+    "bday": [
+      "birthday"
+    ],
+    "lease": [
+      "rent"
+    ],
+    "flat": [
+      "apartment"
+    ]
+  },
+  "dates": {
+    "lang": "en",
+    "phrases": [
+      {
+        "words": "next week",
+        "from": {
+          "unit": "week",
+          "n": 1,
+          "edge": "start"
+        },
+        "to": {
+          "unit": "week",
+          "n": 1,
+          "edge": "end"
+        }
+      },
+      {
+        "words": "this month",
+        "from": {
+          "unit": "day",
+          "n": 0
+        },
+        "to": {
+          "unit": "month",
+          "n": 0,
+          "edge": "end"
+        }
+      },
+      {
+        "words": "before christmas",
+        "from": {
+          "unit": "day",
+          "n": 0
+        },
+        "to": {
+          "unit": "feast",
+          "feast": "christmas_eve"
+        }
+      },
+      {
+        "words": "a month ago",
+        "from": {
+          "unit": "month",
+          "n": -1,
+          "edge": "start"
+        },
+        "to": {
+          "unit": "month",
+          "n": -1,
+          "edge": "end"
+        }
+      }
+    ],
+    "feasts": {
+      "christmas_eve": "2026-12-24",
+      "christmas": "2026-12-25",
+      "easter": "2027-03-28"
+    }
+  },
+  "kept": [
+    {
+      "id": "k9f8e7d",
+      "q": "shopping",
+      "title": "shopping"
+    }
+  ]
+}

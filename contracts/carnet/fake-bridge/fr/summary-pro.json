@@ -1,0 +1,89 @@
+{
+  "v": 1,
+  "lang": "fr",
+  "title": "Carnet",
+  "space": "pro",
+  "spaces": [
+    {
+      "id": "perso",
+      "title": "Perso",
+      "selected": false
+    },
+    {
+      "id": "pro",
+      "title": "Pro",
+      "selected": true
+    },
+    {
+      "id": "family",
+      "title": "Famille",
+      "selected": false
+    }
+  ],
+  "kept": [],
+  "card": null,
+  "total": {
+    "count": 4,
+    "title": "Tout le Carnet"
+  },
+  "categories": [
+    {
+      "id": "dates",
+      "title": "Dates",
+      "count": 2,
+      "hint": "Travail, Préparer l’entretien annuel",
+      "locked": false,
+      "first": {
+        "id": "line:p0000000038:0000000038",
+        "kind": "line",
+        "part": "main",
+        "path": "Domaines/Travail.md",
+        "title": "Travail",
+        "line": "Entretien annuel le 27 novembre",
+        "categories": [
+          "work",
+          "dates"
+        ],
+        "space": "pro",
+        "date": "2026-11-27",
+        "source": "Ce qui compte",
+        "who": "Daily",
+        "noted": "2026-11-19",
+        "open": {
+          "path": "Domaines/Travail.md",
+          "section": "matters"
+        }
+      }
+    },
+    {
+      "id": "work",
+      "title": "Travail",
+      "count": 4,
+      "hint": "Travail, Préparer l’entretien annuel",
+      "locked": false,
+      "first": {
+        "id": "page:p0000000011",
+        "kind": "page",
+        "part": "main",
+        "path": "Domaines/Travail.md",
+        "title": "Travail",
+        "line": "Ton poste chez Atelier Lumière et ton entretien annuel.",
+        "categories": [
+          "work"
+        ],
+        "space": "pro",
+        "date": null,
+        "source": "Travail",
+        "who": "",
+        "noted": null,
+        "open": {
+          "path": "Domaines/Travail.md"
+        }
+      }
+    }
+  ],
+  "bar": {
+    "placeholder": "Cherche dans tout le Carnet"
+  },
+  "version": 42
+}

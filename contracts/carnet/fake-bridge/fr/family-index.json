@@ -1,0 +1,453 @@
+{
+  "v": 1,
+  "version": 7,
+  "since": null,
+  "full": true,
+  "lang": "fr",
+  "made": "2026-11-22T07:00:00Z",
+  "items": [
+    {
+      "id": "fam:list:courses/c1",
+      "kind": "list_item",
+      "title": "Courses",
+      "line": "Lait",
+      "categories": [
+        "shopping"
+      ],
+      "date": null,
+      "who": "Marie",
+      "noted": null,
+      "open": {
+        "list": "courses",
+        "item": "c1"
+      },
+      "fold": "lait",
+      "done": false
+    },
+    {
+      "id": "fam:list:courses/c2",
+      "kind": "list_item",
+      "title": "Courses",
+      "line": "Pâtes complètes",
+      "categories": [
+        "shopping"
+      ],
+      "date": null,
+      "who": "Léa",
+      "noted": null,
+      "open": {
+        "list": "courses",
+        "item": "c2"
+      },
+      "fold": "pates completes",
+      "done": false
+    },
+    {
+      "id": "fam:list:courses/c3",
+      "kind": "list_item",
+      "title": "Courses",
+      "line": "Citrons",
+      "categories": [
+        "shopping"
+      ],
+      "date": null,
+      "who": "Maison",
+      "noted": null,
+      "open": {
+        "list": "courses",
+        "item": "c3"
+      },
+      "fold": "citrons",
+      "done": false
+    },
+    {
+      "id": "fam:list:courses/c4",
+      "kind": "list_item",
+      "title": "Courses",
+      "line": "Papier toilette",
+      "categories": [
+        "shopping"
+      ],
+      "date": null,
+      "who": "Marie",
+      "noted": null,
+      "open": {
+        "list": "courses",
+        "item": "c4"
+      },
+      "fold": "papier toilette",
+      "done": false
+    },
+    {
+      "id": "fam:list:courses/c5",
+      "kind": "list_item",
+      "title": "Courses",
+      "line": "Café",
+      "categories": [
+        "shopping"
+      ],
+      "date": null,
+      "who": "Léa",
+      "noted": null,
+      "open": {
+        "list": "courses",
+        "item": "c5"
+      },
+      "fold": "cafe",
+      "done": true
+    },
+    {
+      "id": "fam:list:taches/t1",
+      "kind": "list_item",
+      "title": "Tâches",
+      "line": "Rendez-vous chaudière",
+      "categories": [
+        "home",
+        "dates"
+      ],
+      "date": "2026-11-25",
+      "who": "Léa",
+      "noted": null,
+      "open": {
+        "list": "taches",
+        "item": "t1"
+      },
+      "fold": "rendez vous chaudiere",
+      "done": false
+    },
+    {
+      "id": "fam:list:taches/t2",
+      "kind": "list_item",
+      "title": "Tâches",
+      "line": "Réserver le traiteur pour Noël",
+      "categories": [
+        "dates",
+        "menus"
+      ],
+      "date": "2026-11-28",
+      "who": "Marie",
+      "noted": null,
+      "open": {
+        "list": "taches",
+        "item": "t2"
+      },
+      "fold": "reserver le traiteur pour noel",
+      "done": false
+    },
+    {
+      "id": "fam:list:taches/t3",
+      "kind": "list_item",
+      "title": "Tâches",
+      "line": "Inscrire Tom au judo",
+      "categories": [
+        "school"
+      ],
+      "date": null,
+      "who": "Marie",
+      "noted": null,
+      "open": {
+        "list": "taches",
+        "item": "t3"
+      },
+      "fold": "inscrire tom au judo",
+      "done": false
+    },
+    {
+      "id": "fam:list:taches/t4",
+      "kind": "list_item",
+      "title": "Tâches",
+      "line": "Rendre les livres à la médiathèque",
+      "categories": [
+        "school",
+        "other"
+      ],
+      "date": "2026-11-21",
+      "who": "Léa",
+      "noted": null,
+      "open": {
+        "list": "taches",
+        "item": "t4"
+      },
+      "fold": "rendre les livres a la mediatheque",
+      "done": true
+    },
+    {
+      "id": "fam:list:dates/d1",
+      "kind": "list_item",
+      "title": "Dates",
+      "line": "Anniversaire de Mamie",
+      "categories": [
+        "people",
+        "dates"
+      ],
+      "date": "2026-11-28",
+      "who": "Marie",
+      "noted": null,
+      "open": {
+        "list": "dates",
+        "item": "d1"
+      },
+      "fold": "anniversaire de mamie",
+      "done": false
+    },
+    {
+      "id": "fam:list:dates/d2",
+      "kind": "list_item",
+      "title": "Dates",
+      "line": "Repas de Noël chez Marie",
+      "categories": [
+        "dates"
+      ],
+      "date": "2026-12-31",
+      "who": "Maison",
+      "noted": null,
+      "open": {
+        "list": "dates",
+        "item": "d2"
+      },
+      "fold": "repas de noel chez marie",
+      "done": false
+    },
+    {
+      "id": "fam:list:dates/d3",
+      "kind": "list_item",
+      "title": "Dates",
+      "line": "Anniversaire de Tom",
+      "categories": [
+        "people",
+        "dates"
+      ],
+      "date": "2027-03-09",
+      "who": "Léa",
+      "noted": null,
+      "open": {
+        "list": "dates",
+        "item": "d3"
+      },
+      "fold": "anniversaire de tom",
+      "done": false
+    },
+    {
+      "id": "fam:page:p1",
+      "kind": "page",
+      "title": "Vacances de février",
+      "line": "Gîte à Annecy, du 14 au 21 février.\nReste à réserver : le train aller.",
+      "categories": [
+        "holidays"
+      ],
+      "date": null,
+      "who": "Maison",
+      "noted": null,
+      "open": {
+        "path": "p1"
+      },
+      "fold": "vacances de fevrier gite a annecy du 14 au 21 fevrier reste a reserver le train aller"
+    },
+    {
+      "id": "fam:page:p2",
+      "kind": "page",
+      "title": "Codes et numéros utiles",
+      "line": "Wifi : voir la box.\nPlombier : M. Garnier, 06 00 00 00 00.\nÉcole de Tom : 01 00 00 00 00.",
+      "categories": [
+        "home",
+        "papers",
+        "school"
+      ],
+      "date": null,
+      "who": "Marie",
+      "noted": null,
+      "open": {
+        "path": "p2"
+      },
+      "fold": "codes et numeros utiles wifi voir la box plombier m garnier 06 00 00 00 00 ecole de tom 01 00 00 00 00"
+    },
+    {
+      "id": "fam:page:p3",
+      "kind": "page",
+      "title": "Menus de la semaine",
+      "line": "Lundi : pâtes au citron.\nMardi : soupe et tartines.",
+      "categories": [
+        "menus"
+      ],
+      "date": null,
+      "who": "Léa",
+      "noted": null,
+      "open": {
+        "path": "p3"
+      },
+      "fold": "menus de la semaine lundi pates au citron mardi soupe et tartines"
+    }
+  ],
+  "removed": [],
+  "stop": [
+    "de",
+    "du",
+    "la",
+    "le",
+    "les",
+    "des",
+    "d",
+    "l",
+    "un",
+    "une",
+    "au",
+    "aux",
+    "et",
+    "a",
+    "en",
+    "pour",
+    "sur",
+    "ma",
+    "mon",
+    "mes",
+    "ta",
+    "ton",
+    "tes",
+    "sa",
+    "son",
+    "ses",
+    "quel",
+    "quelle",
+    "quels",
+    "quelles",
+    "est",
+    "c",
+    "qu",
+    "que",
+    "qui",
+    "quoi",
+    "combien",
+    "elle",
+    "il",
+    "quand",
+    "the",
+    "of",
+    "an",
+    "and",
+    "to",
+    "is",
+    "what",
+    "which",
+    "who",
+    "how",
+    "many",
+    "much",
+    "my",
+    "your",
+    "his",
+    "her",
+    "does",
+    "s",
+    "when",
+    "has",
+    "der",
+    "die",
+    "das",
+    "den",
+    "dem",
+    "von",
+    "ein",
+    "eine",
+    "und",
+    "ist",
+    "was",
+    "wie",
+    "welche",
+    "hat",
+    "wann",
+    "el",
+    "los",
+    "las",
+    "del",
+    "y",
+    "es",
+    "cual",
+    "cuanto",
+    "cuando",
+    "tiene"
+  ],
+  "neighbours": {
+    "toubib": [
+      "medecin"
+    ],
+    "note": [
+      "facture"
+    ],
+    "bagnole": [
+      "voiture"
+    ],
+    "aniv": [
+      "anniversaire"
+    ],
+    "bail": [
+      "location",
+      "loyer"
+    ]
+  },
+  "dates": {
+    "lang": "fr",
+    "phrases": [
+      {
+        "words": "la semaine prochaine",
+        "from": {
+          "unit": "week",
+          "n": 1,
+          "edge": "start"
+        },
+        "to": {
+          "unit": "week",
+          "n": 1,
+          "edge": "end"
+        }
+      },
+      {
+        "words": "ce mois ci",
+        "from": {
+          "unit": "day",
+          "n": 0
+        },
+        "to": {
+          "unit": "month",
+          "n": 0,
+          "edge": "end"
+        }
+      },
+      {
+        "words": "avant noel",
+        "from": {
+          "unit": "day",
+          "n": 0
+        },
+        "to": {
+          "unit": "feast",
+          "feast": "christmas_eve"
+        }
+      },
+      {
+        "words": "il y a un mois",
+        "from": {
+          "unit": "month",
+          "n": -1,
+          "edge": "start"
+        },
+        "to": {
+          "unit": "month",
+          "n": -1,
+          "edge": "end"
+        }
+      }
+    ],
+    "feasts": {
+      "christmas_eve": "2026-12-24",
+      "christmas": "2026-12-25",
+      "easter": "2027-03-28"
+    }
+  },
+  "kept": [
+    {
+      "id": "k9f8e7d",
+      "q": "courses",
+      "title": "courses"
+    }
+  ]
+}

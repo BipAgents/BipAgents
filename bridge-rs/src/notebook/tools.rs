@@ -117,6 +117,8 @@ question for a fact this page lacks, never health or money unless they raised it
                 "aliases": {"type": "array", "items": {"type": "string"}},
                 "contact": {"type": "string", "description": "contact id, e-mail or phone"},
                 "close": {"type": "boolean"},
+                "category": {"type": "array", "items": {"enum": super::categories::AGENT_MAY_GIVE}, "maxItems": 2,
+                             "description": "only if sure"},
                 "start": {"type": "string", "description": "trip dates, YYYY-MM-DD"},
                 "end": {"type": "string"}},
                 "required": ["page"]},
@@ -554,6 +556,8 @@ fn write(config: &Config, agent: &str, arguments: &Dict, turn: &Turn, health: bo
     };
     let (start, end) = (s(arguments, "start"), s(arguments, "end"));
     let close = arguments.get("close").and_then(Value::as_bool);
+    // the agent's category (plan « Le sommaire »): only valid ones count, anything else is left to the bridge's words
+    let category = args_list(arguments, "category");
     let mut out: Vec<String> = Vec::new();
     // the question of the day: only for a section still empty before this call (ask.rs)
     let ask = arguments.get("ask").filter(|a| !a.is_null());
@@ -565,9 +569,12 @@ fn write(config: &Config, agent: &str, arguments: &Dict, turn: &Turn, health: bo
         || close.is_some()
         || !start.is_empty()
         || !end.is_empty()
+        || !category.is_empty()
         || kind == "trip";
     if writes {
-        let written = super::note(config, part, &kind, &page, &s(arguments, "section"), &facts, &aliases, &contact, &summary, &who)
+        let written = super::note_with(
+            config, part, &kind, &page, &s(arguments, "section"), &facts, &aliases, &contact, &summary, &category, &who,
+        )
             .and_then(|written| {
                 if written.path.is_empty() {
                     return Ok(written);

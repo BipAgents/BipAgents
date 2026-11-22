@@ -1,0 +1,58 @@
+{
+  "groups": [
+    {
+      "category": "people",
+      "title": "Gens",
+      "count": 5,
+      "top": [
+        {
+          "id": "line:p000000003b:000000003b",
+          "kind": "line",
+          "part": "main",
+          "path": "Personnes/Claire Durand.md",
+          "title": "Claire Durand",
+          "line": "Anniversaire : 2 janvier",
+          "categories": [
+            "people",
+            "dates"
+          ],
+          "space": "",
+          "date": "2027-01-02",
+          "source": "Dates",
+          "who": "Daily",
+          "noted": "2026-11-10",
+          "open": {
+            "path": "Personnes/Claire Durand.md",
+            "section": "dates"
+          }
+        },
+        {
+          "id": "line:p0000000040:0000000040",
+          "kind": "line",
+          "part": "main",
+          "path": "Personnes/Lucas Bernard.md",
+          "title": "Lucas Bernard",
+          "line": "Anniversaire : 1 décembre",
+          "categories": [
+            "people",
+            "dates"
+          ],
+          "space": "",
+          "date": "2026-12-01",
+          "source": "Dates",
+          "who": "Coach",
+          "noted": "2026-10-13",
+          "open": {
+            "path": "Personnes/Lucas Bernard.md",
+            "section": "dates"
+          }
+        }
+      ]
+    }
+  ],
+  "counts": {
+    "all": 5,
+    "people": 5
+  },
+  "online": null
+}

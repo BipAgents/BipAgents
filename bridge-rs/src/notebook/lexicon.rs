@@ -476,6 +476,118 @@ pub fn phone(text: &str, lang: &str) -> Option<String> {
     }
 }
 
+/// The words that file a page in a category (plan « Le sommaire » §2.2, categories.rs), folded, in fr, en, de, es and
+/// nl: the words of the apps' icon table (HermesKit `NotebookIcon`, scripts/notebook-icons.py) copied and extended, the
+/// bridge now the reference. Each entry: its categories (the first the main one, a second one counting a little
+/// less) and its stems: `x` the start of a word, `x=` the whole word. The longest stem a word matches decides it.
+/// Health words file nothing here: a line of the shared Carnet that looks like health stays in its page's category
+/// (Alex's decision 6, 21/11); Santé is the private part.
+pub const CATEGORY_WORDS: &[(&[&str], &[&str])] = &[
+    // trips
+    (&["trips"], &[
+        "voyag", "vacanc", "avion", "vol=", "vols=", "aeroport", "sejour", "trip", "travel", "holiday", "vacation",
+        "flight", "airport", "reise", "urlaub", "flug", "ferien", "viaj", "vacacion", "vuelo", "aeropuerto", "reis=",
+        "reizen", "reisbudget", "reisje", "vakantie", "vlucht", "vliegveld", "luchthaven", "japon", "japan", "italie",
+        "italy", "italien", "italia", "espagne", "spain", "spanien", "portugal", "grece", "greece", "griechenland",
+        "grecia", "maroc", "morocco", "marokko", "marruecos", "mexique", "mexico", "canada", "kanada", "bali=",
+        "thailande", "thailand", "tailandia", "vietnam", "islande", "iceland", "island=", "islandia", "ijsland",
+        "ecosse", "scotland", "schottland", "escocia", "schotland", "irlande", "ireland", "irland", "irlanda",
+        "ierland", "londres", "london", "londen", "rome=", "rom=", "roma=", "barcelone", "barcelona", "tokyo", "tokio",
+        "kyoto", "kioto", "osaka", "lisbonne", "lisbon", "lissabon", "lisboa", "weekend", "hotel", "airbnb",
+        "croisiere", "cruise", "kreuzfahrt", "crucero", "valise", "suitcase", "koffer", "maleta", "passagier",
+        "billet d avion", "camping", "randonn", "hiking", "wander", "senderismo",
+    ]),
+    // home: the house, works, furniture, garden, pets, energy, cleaning, cooking, the building
+    (&["home"], &[
+        "maison", "home=", "house", "haus=", "hause", "zuhause", "casa=", "hogar", "foyer", "domicile", "domotique",
+        "huis", "thuis", "woning", "appart", "apartment", "flat=", "wohnung", "piso=", "departamento", "loyer",
+        "rent=", "miete", "alquiler", "proprio=", "landlord", "vermiet", "coloc", "roommate", "huur", "verhuur",
+        "demenag", "moving", "umzug", "mudanza", "emmenag", "verhuiz", "immobil", "immo=", "inmobil", "propriet",
+        "property", "eigentum", "propiedad", "terrain", "grundstuck", "terreno", "vastgoed", "renovation", "renover",
+        "renov", "travaux", "chantier", "artisan", "plomb", "electricien", "peintur", "carrel", "isolation", "toiture",
+        "toit=", "remodel", "repair", "reparat", "umbau", "sanier", "renovier", "handwerk", "reforma", "obra=",
+        "obras=", "verbouw", "renovatie", "klus", "aannemer", "loodgieter", "kitchen", "kuche", "keuken", "bathroom",
+        "badezimmer", "bano=", "badkamer", "sdb=", "devis", "offerte", "bricol", "diy=", "outil", "tool=", "tools=",
+        "heimwerk", "werkzeug", "bricolaje", "herramienta", "gereedschap", "meuble", "furniture", "mobel", "mueble",
+        "meubel", "ikea", "jardin", "garden", "garten", "plante", "plant", "pflanz", "planta", "potager", "pelouse",
+        "lawn", "rasen", "cesped", "tuin", "gazon", "arbre", "tree=", "baum", "arbol", "compost", "balcon", "terrasse",
+        "chien", "chat=", "chats=", "dog=", "dogs=", "cat=", "cats=", "hund", "katze", "perro", "gato", "hond", "kat=",
+        "katten", "veterin", "vet=", "dierenarts", "haustier", "mascota", "huisdier", "chiot", "puppy", "chaton",
+        "kitten", "croquette", "menage", "cleaning", "putz", "limpieza", "schoonmaak", "nettoy", "lessive", "laundry",
+        "wasche", "colada", "energ", "electricite", "electric", "strom", "stroom", "chauffage", "heating", "heizung",
+        "calefaccion", "verwarming", "chaudiere", "boiler", "caldera", "ketel", "solaire", "solar", "compteur",
+        "thermostat", "climatis", "klima", "cuisine", "cuisiner", "recette", "recipe", "rezept", "receta", "recept",
+        "cocina", "cocinar", "kochen", "koken", "cook", "repas", "meal", "maaltijd", "patisser", "baking", "backen",
+        "hornear", "syndic", "copro", "hausverwaltung", "administrador de fincas", "comunidad de vecinos", "vve=",
+        "poubelle", "bin=", "basura", "vuilnis", "cle=", "cles=", "key=", "keys=", "schlussel", "llave", "sleutel",
+    ]),
+    // money
+    (&["money"], &[
+        "budget", "depense", "epargne", "saving", "expense", "ausgab", "sparen", "gasto", "ahorro", "presupuesto",
+        "uitgave", "spaar", "financ", "finanz", "argent", "money", "geld", "dinero", "banque", "bank", "compte=",
+        "comptes=", "credit", "pret=", "emprunt", "loan", "mortgage", "hypothe", "kredit", "banco", "prestamo",
+        "hipoteca", "hypotheek", "lening", "livret", "retraite", "pension", "pensioen", "rente=", "jubil", "invest",
+        "belegg", "bourse", "stock=", "aktie", "inversion", "crypto", "abonnement", "abonn", "subscription", "abo=",
+        "suscrip", "forfait", "achat", "acheter", "buy=", "kauf", "einkauf", "compra", "comprar", "aankoop", "kopen",
+        "courses=", "shopping", "boodschappen", "commande", "bestell", "pedido", "bestelling", "soldes", "salaire",
+        "salary", "gehalt", "sueldo", "salario", "salaris", "paie", "payslip", "lohn", "nomina", "loonstrook", "payer",
+        "paiement", "payment", "zahlung", "pago", "betaling", "remboursement", "refund", "erstattung", "reembolso",
+        "terugbetaling",
+    ]),
+    // taxes: money, and the papers that go with them
+    (&["money", "papers"], &[
+        "impot", "taxe", "tax=", "taxes=", "fiscal", "steuer", "finanzamt", "impuesto", "hacienda", "belasting",
+        "aangifte", "declaration d impot",
+    ]),
+    // bills: papers (« Factures »), and money
+    (&["papers", "money"], &[
+        "factur", "invoice", "bill=", "bills=", "rechnung", "recibo", "quittance", "factuur", "facturen", "nota=",
+    ]),
+    // papers: admin, contracts, insurance, guarantees, letters
+    (&["papers"], &[
+        "admin", "papier", "paperasse", "paperwork", "document", "dossier", "formulaire", "formular", "formulario",
+        "formulier", "passeport", "passport", "reisepass", "pasaporte", "paspoort", "identite", "identity", "ausweis",
+        "identidad", "identiteit", "visa=", "caf=", "secu=", "prefecture", "mairie", "behord", "amt=", "tramite",
+        "papeles", "papieren", "gemeente", "vergunning", "certificat", "certificate", "zertifikat", "certificado",
+        "attestation", "bescheinigung", "juridique", "legal", "avocat", "lawyer", "anwalt", "abogado", "advocaat",
+        "notaire", "notary", "notar", "notaris", "contrat", "contract", "vertrag", "contrato", "litige", "dispute",
+        "streit", "tribunal", "gericht", "rechtbank", "plainte", "complaint", "succession", "heritage", "inheritance",
+        "erbe=", "erbschaft", "herencia", "erfenis", "testament", "divorce", "scheidung", "divorcio", "scheiding",
+        "assur", "mutuelle", "insurance", "insur", "versicher", "seguro", "verzeker", "garantie", "warranty",
+        "garantia", "lettre", "letter", "carta=", "courrier", "permis", "licence", "license", "fuhrerschein",
+        "rijbewijs", "carnet de conducir",
+    ]),
+    // work
+    (&["work"], &[
+        "travail", "boulot", "job=", "jobs=", "work=", "arbeit", "trabajo", "werk=", "baan=", "emploi", "carriere",
+        "career", "karriere", "bureau", "office", "buro", "oficina", "kantoor", "collegue", "colleague", "kollege",
+        "colega", "collega", "reunion", "meeting", "besprech", "vergader", "interview", "cv=", "lebenslauf",
+        "candidat", "bewerb", "sollicit", "recrut", "recruit", "chomage", "boss", "patron", "baas=", "manager",
+        "teletravail", "homeoffice", "thuiswerk", "client", "customer", "kunde", "klant", "prospect", "vertrieb",
+        "commercial", "entreprise", "societe", "company", "startup", "firma", "empresa", "unternehmen", "bedrijf",
+        "onderneming", "sarl", "kbis", "freelance", "zzp", "business", "negocio", "comptab", "accounting", "buchhalt",
+        "contabil", "boekhoud", "entretien annuel", "annual review", "jahresgesprach", "entrevista anual",
+        "jaargesprek", "formation", "schulung", "formacion", "opleiding", "poste=", "stelle=", "puesto=",
+    ]),
+    // people: the person's own people, their dates, gifts and parties
+    (&["people"], &[
+        "famil", "gezin", "parent", "eltern", "padres", "ouders", "maman", "papa", "mama", "mom=", "dad=", "mere=",
+        "pere=", "mutter", "vater", "madre", "padre", "moeder", "vader", "mamie", "papi=", "grandma", "grandpa",
+        "oma=", "opa=", "abuel", "grootouder", "cousin", "tante", "oncle", "uncle", "aunt", "frere", "soeur",
+        "brother", "sister", "bruder", "schwester", "hermano", "hermana", "broer", "zus=", "zussen", "oom=", "neef",
+        "nicht=", "ami=", "amis=", "amie=", "amies=", "copain", "copine", "pote=", "potes=", "friend", "freund",
+        "amigo", "amiga", "vriend", "voisin", "neighbo", "nachbar", "vecino", "buren", "buurman", "buurvrouw",
+        "kennis", "enfant", "child", "kid=", "kids=", "kinder", "kind=", "kinderen", "nounou", "creche", "kita",
+        "babysit", "garderie", "nanny", "oppas", "hijo", "hija", "fils=", "fille=", "bebe", "baby", "naissance",
+        "birth", "geburt", "nacimiento", "geboorte", "anniv", "birthday", "geburtstag", "cumple", "verjaardag",
+        "jarig", "mariage", "marier", "wedding", "marry", "hochzeit", "heirat", "boda", "casamiento", "bruiloft",
+        "huwelijk", "trouw", "pacs=", "fiancail", "verlob", "temoin", "cadeau", "gift", "geschenk", "regalo",
+        "wishlist", "fete", "party", "soiree", "feier", "fiesta", "feest", "celebr", "apero", "barbecue", "bbq=",
+        "invite", "guest", "gast=", "gaste=", "invitad", "noel", "christmas", "weihnacht", "navidad", "kerst",
+        "reveillon", "ehpad", "elderly", "aidant", "caregiver", "residencia", "mantelzorg",
+    ]),
+];
+
 #[cfg(test)]
 mod tests {
     use super::*;

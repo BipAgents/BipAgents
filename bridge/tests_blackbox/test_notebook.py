@@ -44,7 +44,8 @@ def test_an_agent_files_facts_that_read_well_in_obsidian(bridge):
     assert text_of(filed) == "Saved: Marc Dupont › dates (1 fact, new page)."
     page = (notebook(bridge) / "carnet" / "Personnes" / "Marc Dupont.md").read_text()
     assert re.fullmatch(
-        r"---\nid: p[0-9a-f]{10}\ntype: person\naliases:\n  - Marco\ncontact: C-1\nupdated: " + TODAY + r"\n---\n"
+        r"---\nid: p[0-9a-f]{10}\ntype: person\naliases:\n  - Marco\ncontact: C-1\ncategories:\n  - people\n"
+        r"categories_by: auto\nupdated: " + TODAY + r"\n---\n"
         r"# Marc Dupont\n\n## En bref\nAmi d'enfance\.\n\n## Dates\n- Anniversaire : 14 novembre — \*Wellness, "
         + TODAY + r"\*\n", page), page
     # Found again by a nickname or the contact: the same page, nothing repeated.

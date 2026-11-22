@@ -43,6 +43,11 @@ pub fn group_title(relation: &str, lang: &str) -> &'static str {
     group.1[lang_index(lang)]
 }
 
+/// The relation a group page's title names (any language): family, friend, work or other.
+pub fn group_relation(title: &str) -> Option<&'static str> {
+    GROUPS.iter().find(|g| g.1.iter().any(|t| fold(t) == fold(title))).map(|g| g.0)
+}
+
 /// Whether a page is one of the groups (its title in any language).
 pub fn is_group(title: &str) -> bool {
     GROUPS.iter().any(|g| g.1.iter().any(|t| fold(t) == fold(title)))

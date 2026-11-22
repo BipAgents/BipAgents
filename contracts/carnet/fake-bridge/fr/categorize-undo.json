@@ -1,0 +1,11 @@
+{
+  "target": {
+    "path": "Sujets/Rénovation cuisine.md",
+    "private": false
+  },
+  "categories": [
+    "home"
+  ],
+  "categories_by": "auto",
+  "unlearnt": "renovation"
+}

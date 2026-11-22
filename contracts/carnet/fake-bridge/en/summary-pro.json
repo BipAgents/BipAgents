@@ -1,0 +1,89 @@
+{
+  "v": 1,
+  "lang": "en",
+  "title": "Notebook",
+  "space": "pro",
+  "spaces": [
+    {
+      "id": "perso",
+      "title": "Personal",
+      "selected": false
+    },
+    {
+      "id": "pro",
+      "title": "Work",
+      "selected": true
+    },
+    {
+      "id": "family",
+      "title": "Family",
+      "selected": false
+    }
+  ],
+  "kept": [],
+  "card": null,
+  "total": {
+    "count": 4,
+    "title": "All the Notebook"
+  },
+  "categories": [
+    {
+      "id": "dates",
+      "title": "Dates",
+      "count": 2,
+      "hint": "Work, Prepare the annual review",
+      "locked": false,
+      "first": {
+        "id": "line:p0000000038:0000000038",
+        "kind": "line",
+        "part": "main",
+        "path": "Areas/Work.md",
+        "title": "Work",
+        "line": "Annual review on November 27",
+        "categories": [
+          "work",
+          "dates"
+        ],
+        "space": "pro",
+        "date": "2026-11-27",
+        "source": "What matters",
+        "who": "Daily",
+        "noted": "2026-11-19",
+        "open": {
+          "path": "Areas/Work.md",
+          "section": "matters"
+        }
+      }
+    },
+    {
+      "id": "work",
+      "title": "Work",
+      "count": 4,
+      "hint": "Work, Prepare the annual review",
+      "locked": false,
+      "first": {
+        "id": "page:p0000000011",
+        "kind": "page",
+        "part": "main",
+        "path": "Areas/Work.md",
+        "title": "Work",
+        "line": "Your job at Atelier Lumière and your annual review.",
+        "categories": [
+          "work"
+        ],
+        "space": "pro",
+        "date": null,
+        "source": "Work",
+        "who": "",
+        "noted": null,
+        "open": {
+          "path": "Areas/Work.md"
+        }
+      }
+    }
+  ],
+  "bar": {
+    "placeholder": "Search the whole Notebook"
+  },
+  "version": 42
+}

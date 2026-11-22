@@ -1,0 +1,3051 @@
+{
+  "v": 1,
+  "version": 42,
+  "since": null,
+  "full": true,
+  "lang": "fr",
+  "made": "2026-11-22T07:00:00Z",
+  "limits": {
+    "lines": 20000,
+    "bytes": 8000000
+  },
+  "truncated": false,
+  "online_only": null,
+  "items": [
+    {
+      "id": "page:p000000000c",
+      "kind": "page",
+      "part": "main",
+      "path": "Domaines/Famille.md",
+      "title": "Famille",
+      "line": "Ta sœur [[Claire Durand]], son mari [[Marc Durand]] et leurs enfants.",
+      "categories": [
+        "people"
+      ],
+      "space": "",
+      "date": null,
+      "source": "Famille",
+      "who": "",
+      "noted": null,
+      "open": {
+        "path": "Domaines/Famille.md"
+      },
+      "fold": "famille ta soeur claire durand son mari marc durand et leurs enfants",
+      "aliases": []
+    },
+    {
+      "id": "line:p000000000e:000000000e",
+      "kind": "line",
+      "part": "main",
+      "path": "Domaines/Famille.md",
+      "title": "Famille",
+      "line": "Ta sœur [[Claire Durand]], son mari [[Marc Durand]] et leurs enfants",
+      "categories": [
+        "people"
+      ],
+      "space": "",
+      "date": null,
+      "source": "Ce qui compte",
+      "who": "Daily",
+      "noted": "2026-11-10",
+      "open": {
+        "path": "Domaines/Famille.md",
+        "section": "matters"
+      },
+      "fold": "ta soeur claire durand son mari marc durand et leurs enfants"
+    },
+    {
+      "id": "line:p000000002f:000000002f",
+      "kind": "line",
+      "part": "main",
+      "path": "Domaines/Famille.md",
+      "title": "Famille",
+      "line": "Dîner ensemble un samedi par mois",
+      "categories": [
+        "people"
+      ],
+      "space": "",
+      "date": null,
+      "source": "Habitudes et règles",
+      "who": "Daily",
+      "noted": "2026-10-23",
+      "open": {
+        "path": "Domaines/Famille.md",
+        "section": "habits"
+      },
+      "fold": "diner ensemble un samedi par mois"
+    },
+    {
+      "id": "line:p0000000030:0000000030",
+      "kind": "line",
+      "part": "main",
+      "path": "Domaines/Famille.md",
+      "title": "Famille",
+      "line": "Dîner chez toi le samedi 2",
+      "categories": [
+        "people"
+      ],
+      "space": "",
+      "date": null,
+      "source": "En cours",
+      "who": "Daily",
+      "noted": "2026-11-18",
+      "open": {
+        "path": "Domaines/Famille.md",
+        "section": "ongoing"
+      },
+      "fold": "diner chez toi le samedi 2"
+    },
+    {
+      "id": "page:p000000000f",
+      "kind": "page",
+      "part": "main",
+      "path": "Domaines/Finances.md",
+      "title": "Finances",
+      "line": "Le budget du mois et les contrats à renouveler.",
+      "categories": [
+        "money"
+      ],
+      "space": "",
+      "date": null,
+      "source": "Finances",
+      "who": "",
+      "noted": null,
+      "open": {
+        "path": "Domaines/Finances.md"
+      },
+      "fold": "finances le budget du mois et les contrats a renouveler",
+      "aliases": []
+    },
+    {
+      "id": "line:p0000000031:0000000031",
+      "kind": "line",
+      "part": "main",
+      "path": "Domaines/Finances.md",
+      "title": "Finances",
+      "line": "Épargne : 200 € par mois sur le livret",
+      "categories": [
+        "money"
+      ],
+      "space": "",
+      "date": null,
+      "source": "Ce qui compte",
+      "who": "Budget",
+      "noted": "2026-11-02",
+      "open": {
+        "path": "Domaines/Finances.md",
+        "section": "matters"
+      },
+      "fold": "epargne 200 par mois sur le livret"
+    },
+    {
+      "id": "line:p0000000032:0000000032",
+      "kind": "line",
+      "part": "main",
+      "path": "Domaines/Finances.md",
+      "title": "Finances",
+      "line": "Assurance auto à renouveler avant le 5",
+      "categories": [
+        "money"
+      ],
+      "space": "",
+      "date": null,
+      "source": "En cours",
+      "who": "Budget",
+      "noted": "2026-11-19",
+      "open": {
+        "path": "Domaines/Finances.md",
+        "section": "ongoing"
+      },
+      "fold": "assurance auto a renouveler avant le 5"
+    },
+    {
+      "id": "page:p0000000010",
+      "kind": "page",
+      "part": "main",
+      "path": "Domaines/Maison.md",
+      "title": "Maison",
+      "line": "L’appartement, les travaux de la cuisine et les voisins.",
+      "categories": [
+        "home"
+      ],
+      "space": "",
+      "date": null,
+      "source": "Maison",
+      "who": "",
+      "noted": null,
+      "open": {
+        "path": "Domaines/Maison.md"
+      },
+      "fold": "maison l appartement les travaux de la cuisine et les voisins",
+      "aliases": []
+    },
+    {
+      "id": "line:p0000000033:0000000033",
+      "kind": "line",
+      "part": "main",
+      "path": "Domaines/Maison.md",
+      "title": "Maison",
+      "line": "Entretien de la chaudière : chaque année en octobre",
+      "categories": [
+        "home"
+      ],
+      "space": "",
+      "date": null,
+      "source": "Habitudes et règles",
+      "who": "Home",
+      "noted": "2026-11-02",
+      "open": {
+        "path": "Domaines/Maison.md",
+        "section": "habits"
+      },
+      "fold": "entretien de la chaudiere chaque annee en octobre"
+    },
+    {
+      "id": "line:p0000000034:0000000034",
+      "kind": "line",
+      "part": "main",
+      "path": "Domaines/Maison.md",
+      "title": "Maison",
+      "line": "Poubelles le lundi soir",
+      "categories": [
+        "home"
+      ],
+      "space": "",
+      "date": null,
+      "source": "Habitudes et règles",
+      "who": "Home",
+      "noted": "2026-11-07",
+      "open": {
+        "path": "Domaines/Maison.md",
+        "section": "habits"
+      },
+      "fold": "poubelles le lundi soir"
+    },
+    {
+      "id": "line:p0000000035:0000000035",
+      "kind": "line",
+      "part": "main",
+      "path": "Domaines/Maison.md",
+      "title": "Maison",
+      "line": "Un double des clés chez [[Sophie Laurent]]",
+      "categories": [
+        "home"
+      ],
+      "space": "",
+      "date": null,
+      "source": "Contacts utiles",
+      "who": "toi",
+      "noted": "2026-11-19",
+      "open": {
+        "path": "Domaines/Maison.md",
+        "section": "contacts"
+      },
+      "fold": "un double des cles chez sophie laurent"
+    },
+    {
+      "id": "line:p0000000036:0000000036",
+      "kind": "line",
+      "part": "main",
+      "path": "Domaines/Maison.md",
+      "title": "Maison",
+      "line": "Syndic : Cabinet Moreau, 02 40 00 00 00",
+      "categories": [
+        "home"
+      ],
+      "space": "",
+      "date": null,
+      "source": "Contacts utiles",
+      "who": "Home",
+      "noted": "2026-10-28",
+      "open": {
+        "path": "Domaines/Maison.md",
+        "section": "contacts"
+      },
+      "fold": "syndic cabinet moreau 02 40 00 00 00"
+    },
+    {
+      "id": "line:p0000000037:0000000037",
+      "kind": "line",
+      "part": "main",
+      "path": "Domaines/Maison.md",
+      "title": "Maison",
+      "line": "Les travaux de la [[Rénovation cuisine]]",
+      "categories": [
+        "home"
+      ],
+      "space": "",
+      "date": null,
+      "source": "En cours",
+      "who": "Home",
+      "noted": "2026-11-14",
+      "open": {
+        "path": "Domaines/Maison.md",
+        "section": "ongoing"
+      },
+      "fold": "les travaux de la renovation cuisine"
+    },
+    {
+      "id": "page:p0000000011",
+      "kind": "page",
+      "part": "main",
+      "path": "Domaines/Travail.md",
+      "title": "Travail",
+      "line": "Ton poste chez Atelier Lumière et ton entretien annuel.",
+      "categories": [
+        "work"
+      ],
+      "space": "",
+      "date": null,
+      "source": "Travail",
+      "who": "",
+      "noted": null,
+      "open": {
+        "path": "Domaines/Travail.md"
+      },
+      "fold": "travail ton poste chez atelier lumiere et ton entretien annuel",
+      "aliases": []
+    },
+    {
+      "id": "line:p0000000038:0000000038",
+      "kind": "line",
+      "part": "main",
+      "path": "Domaines/Travail.md",
+      "title": "Travail",
+      "line": "Entretien annuel le 27 novembre",
+      "categories": [
+        "work",
+        "dates"
+      ],
+      "space": "",
+      "date": "2026-11-27",
+      "source": "Ce qui compte",
+      "who": "Daily",
+      "noted": "2026-11-19",
+      "open": {
+        "path": "Domaines/Travail.md",
+        "section": "matters"
+      },
+      "fold": "entretien annuel le 27 novembre"
+    },
+    {
+      "id": "line:p0000000039:0000000039",
+      "kind": "line",
+      "part": "main",
+      "path": "Domaines/Travail.md",
+      "title": "Travail",
+      "line": "Formation Excel en novembre",
+      "categories": [
+        "work"
+      ],
+      "space": "",
+      "date": null,
+      "source": "En cours",
+      "who": "Daily",
+      "noted": "2026-11-14",
+      "open": {
+        "path": "Domaines/Travail.md",
+        "section": "ongoing"
+      },
+      "fold": "formation excel en novembre"
+    },
+    {
+      "id": "page:p0000000012",
+      "kind": "page",
+      "part": "main",
+      "path": "Personnes/Claire Durand.md",
+      "title": "Claire Durand",
+      "line": "Ta sœur. Infirmière à Nantes, mariée à Marc.",
+      "categories": [
+        "people"
+      ],
+      "space": "",
+      "date": null,
+      "source": "Claire Durand",
+      "who": "",
+      "noted": null,
+      "open": {
+        "path": "Personnes/Claire Durand.md"
+      },
+      "fold": "claire durand claire ta soeur infirmiere a nantes mariee a marc",
+      "aliases": [
+        "Claire"
+      ]
+    },
+    {
+      "id": "line:p000000003a:000000003a",
+      "kind": "line",
+      "part": "main",
+      "path": "Personnes/Claire Durand.md",
+      "title": "Claire Durand",
+      "line": "Ta sœur",
+      "categories": [
+        "people"
+      ],
+      "space": "",
+      "date": null,
+      "source": "Qui c'est",
+      "who": "Daily",
+      "noted": "2026-09-23",
+      "open": {
+        "path": "Personnes/Claire Durand.md",
+        "section": "who"
+      },
+      "fold": "ta soeur"
+    },
+    {
+      "id": "line:p000000003b:000000003b",
+      "kind": "line",
+      "part": "main",
+      "path": "Personnes/Claire Durand.md",
+      "title": "Claire Durand",
+      "line": "Anniversaire : 2 janvier",
+      "categories": [
+        "people",
+        "dates"
+      ],
+      "space": "",
+      "date": "2027-01-02",
+      "source": "Dates",
+      "who": "Daily",
+      "noted": "2026-11-10",
+      "open": {
+        "path": "Personnes/Claire Durand.md",
+        "section": "dates"
+      },
+      "fold": "anniversaire 2 janvier"
+    },
+    {
+      "id": "line:p000000003c:000000003c",
+      "kind": "line",
+      "part": "main",
+      "path": "Personnes/Claire Durand.md",
+      "title": "Claire Durand",
+      "line": "Mariée à [[Marc Durand]], deux enfants : Inès et Tom",
+      "categories": [
+        "people"
+      ],
+      "space": "",
+      "date": null,
+      "source": "Famille et proches",
+      "who": "Daily",
+      "noted": "2026-09-23",
+      "open": {
+        "path": "Personnes/Claire Durand.md",
+        "section": "family"
+      },
+      "fold": "mariee a marc durand deux enfants ines et tom"
+    },
+    {
+      "id": "line:p000000003d:000000003d",
+      "kind": "line",
+      "part": "main",
+      "path": "Personnes/Claire Durand.md",
+      "title": "Claire Durand",
+      "line": "Infirmière de nuit à Nantes",
+      "categories": [
+        "people"
+      ],
+      "space": "",
+      "date": null,
+      "source": "Travail",
+      "who": "Daily",
+      "noted": "2026-11-10",
+      "open": {
+        "path": "Personnes/Claire Durand.md",
+        "section": "work"
+      },
+      "fold": "infirmiere de nuit a nantes"
+    },
+    {
+      "id": "line:p000000003e:000000003e",
+      "kind": "line",
+      "part": "main",
+      "path": "Personnes/Claire Durand.md",
+      "title": "Claire Durand",
+      "line": "Message : elle viendra avec un gâteau samedi",
+      "categories": [
+        "people"
+      ],
+      "space": "",
+      "date": null,
+      "source": "Derniers échanges",
+      "who": "Daily",
+      "noted": "2026-11-19",
+      "open": {
+        "path": "Personnes/Claire Durand.md",
+        "section": "exchanges"
+      },
+      "fold": "message elle viendra avec un gateau samedi"
+    },
+    {
+      "id": "page:p0000000013",
+      "kind": "page",
+      "part": "main",
+      "path": "Personnes/Lucas Bernard.md",
+      "title": "Lucas Bernard",
+      "line": "Ton ami de la course à pied, le dimanche matin.",
+      "categories": [
+        "people"
+      ],
+      "space": "",
+      "date": null,
+      "source": "Lucas Bernard",
+      "who": "",
+      "noted": null,
+      "open": {
+        "path": "Personnes/Lucas Bernard.md"
+      },
+      "fold": "lucas bernard lucas ton ami de la course a pied le dimanche matin",
+      "aliases": [
+        "Lucas"
+      ]
+    },
+    {
+      "id": "line:p000000003f:000000003f",
+      "kind": "line",
+      "part": "main",
+      "path": "Personnes/Lucas Bernard.md",
+      "title": "Lucas Bernard",
+      "line": "Ton ami de la course à pied, le dimanche matin",
+      "categories": [
+        "people"
+      ],
+      "space": "",
+      "date": null,
+      "source": "Qui c'est",
+      "who": "Coach",
+      "noted": "2026-10-13",
+      "open": {
+        "path": "Personnes/Lucas Bernard.md",
+        "section": "who"
+      },
+      "fold": "ton ami de la course a pied le dimanche matin"
+    },
+    {
+      "id": "line:p0000000040:0000000040",
+      "kind": "line",
+      "part": "main",
+      "path": "Personnes/Lucas Bernard.md",
+      "title": "Lucas Bernard",
+      "line": "Anniversaire : 1 décembre",
+      "categories": [
+        "people",
+        "dates"
+      ],
+      "space": "",
+      "date": "2026-12-01",
+      "source": "Dates",
+      "who": "Coach",
+      "noted": "2026-10-13",
+      "open": {
+        "path": "Personnes/Lucas Bernard.md",
+        "section": "dates"
+      },
+      "fold": "anniversaire 1 decembre"
+    },
+    {
+      "id": "line:p0000000041:0000000041",
+      "kind": "line",
+      "part": "main",
+      "path": "Personnes/Lucas Bernard.md",
+      "title": "Lucas Bernard",
+      "line": "Court le semi-marathon de Nantes au printemps",
+      "categories": [
+        "people"
+      ],
+      "space": "",
+      "date": null,
+      "source": "Goûts et préférences",
+      "who": "Nightly:coach",
+      "noted": "2026-11-20",
+      "open": {
+        "path": "Personnes/Lucas Bernard.md",
+        "section": "tastes"
+      },
+      "fold": "court le semi marathon de nantes au printemps"
+    },
+    {
+      "id": "line:p0000000042:0000000042",
+      "kind": "line",
+      "part": "main",
+      "path": "Personnes/Lucas Bernard.md",
+      "title": "Lucas Bernard",
+      "line": "Une montre de course, il en parle souvent",
+      "categories": [
+        "people"
+      ],
+      "space": "",
+      "date": null,
+      "source": "Idées cadeaux",
+      "who": "Coach",
+      "noted": "2026-11-20",
+      "open": {
+        "path": "Personnes/Lucas Bernard.md",
+        "section": "gifts"
+      },
+      "fold": "une montre de course il en parle souvent"
+    },
+    {
+      "id": "page:p0000000014",
+      "kind": "page",
+      "part": "main",
+      "path": "Personnes/Marc Durand.md",
+      "title": "Marc Durand",
+      "line": "Le mari de Claire, ta sœur, et le papa d’Inès et Tom. Menuisier : il prépare le devis de ta cuisine. Allergique aux noix.",
+      "categories": [
+        "people"
+      ],
+      "space": "",
+      "date": null,
+      "source": "Marc Durand",
+      "who": "",
+      "noted": null,
+      "open": {
+        "path": "Personnes/Marc Durand.md"
+      },
+      "fold": "marc durand marc le mari de claire ta soeur et le papa d ines et tom menuisier il prepare le devis de ta cuisine allergique aux noix",
+      "aliases": [
+        "Marc"
+      ]
+    },
+    {
+      "id": "line:p0000000043:0000000043",
+      "kind": "line",
+      "part": "main",
+      "path": "Personnes/Marc Durand.md",
+      "title": "Marc Durand",
+      "line": "Ton beau-frère, marié à [[Claire Durand]]",
+      "categories": [
+        "people"
+      ],
+      "space": "",
+      "date": null,
+      "source": "Qui c'est",
+      "who": "Daily",
+      "noted": "2026-09-23",
+      "open": {
+        "path": "Personnes/Marc Durand.md",
+        "section": "who"
+      },
+      "fold": "ton beau frere marie a claire durand"
+    },
+    {
+      "id": "line:p0000000044:0000000044",
+      "kind": "line",
+      "part": "main",
+      "path": "Personnes/Marc Durand.md",
+      "title": "Marc Durand",
+      "line": "Anniversaire : 15 décembre",
+      "categories": [
+        "people",
+        "dates"
+      ],
+      "space": "",
+      "date": "2026-12-15",
+      "source": "Dates",
+      "who": "Daily",
+      "noted": "2026-11-22",
+      "open": {
+        "path": "Personnes/Marc Durand.md",
+        "section": "dates"
+      },
+      "fold": "anniversaire 15 decembre"
+    },
+    {
+      "id": "line:p0000000045:0000000045",
+      "kind": "line",
+      "part": "main",
+      "path": "Personnes/Marc Durand.md",
+      "title": "Marc Durand",
+      "line": "Enfants : Inès, 7 ans, et Tom, 4 ans",
+      "categories": [
+        "people"
+      ],
+      "space": "",
+      "date": null,
+      "source": "Famille et proches",
+      "who": "Daily",
+      "noted": "2026-09-23",
+      "open": {
+        "path": "Personnes/Marc Durand.md",
+        "section": "family"
+      },
+      "fold": "enfants ines 7 ans et tom 4 ans"
+    },
+    {
+      "id": "line:p0000000046:0000000046",
+      "kind": "line",
+      "part": "main",
+      "path": "Personnes/Marc Durand.md",
+      "title": "Marc Durand",
+      "line": "Menuisier à son compte, il fait le devis de ta [[Rénovation cuisine]]",
+      "categories": [
+        "people"
+      ],
+      "space": "",
+      "date": null,
+      "source": "Travail",
+      "who": "Home",
+      "noted": "2026-11-09",
+      "open": {
+        "path": "Personnes/Marc Durand.md",
+        "section": "work"
+      },
+      "fold": "menuisier a son compte il fait le devis de ta renovation cuisine"
+    },
+    {
+      "id": "line:p0000000047:0000000047",
+      "kind": "line",
+      "part": "main",
+      "path": "Personnes/Marc Durand.md",
+      "title": "Marc Durand",
+      "line": "Aime le jazz et les vins nature",
+      "categories": [
+        "people"
+      ],
+      "space": "",
+      "date": null,
+      "source": "Goûts et préférences",
+      "who": "Daily",
+      "noted": "2026-10-23",
+      "open": {
+        "path": "Personnes/Marc Durand.md",
+        "section": "tastes"
+      },
+      "fold": "aime le jazz et les vins nature"
+    },
+    {
+      "id": "line:p0000000048:0000000048",
+      "kind": "line",
+      "part": "main",
+      "path": "Personnes/Marc Durand.md",
+      "title": "Marc Durand",
+      "line": "Allergique aux noix",
+      "categories": [
+        "people"
+      ],
+      "space": "",
+      "date": null,
+      "source": "Goûts et préférences",
+      "who": "Coach",
+      "noted": "2026-10-04",
+      "open": {
+        "path": "Personnes/Marc Durand.md",
+        "section": "tastes"
+      },
+      "fold": "allergique aux noix"
+    },
+    {
+      "id": "line:p0000000049:0000000049",
+      "kind": "line",
+      "part": "main",
+      "path": "Personnes/Marc Durand.md",
+      "title": "Marc Durand",
+      "line": "Préfère qu'on l'appelle le soir",
+      "categories": [
+        "people"
+      ],
+      "space": "",
+      "date": null,
+      "source": "Goûts et préférences",
+      "who": "toi",
+      "noted": "2026-11-02",
+      "open": {
+        "path": "Personnes/Marc Durand.md",
+        "section": "tastes"
+      },
+      "fold": "prefere qu on l appelle le soir"
+    },
+    {
+      "id": "line:p000000004a:000000004a",
+      "kind": "line",
+      "part": "main",
+      "path": "Personnes/Marc Durand.md",
+      "title": "Marc Durand",
+      "line": "Un vinyle de Chet Baker",
+      "categories": [
+        "people"
+      ],
+      "space": "",
+      "date": null,
+      "source": "Idées cadeaux",
+      "who": "Daily",
+      "noted": "2026-11-17",
+      "open": {
+        "path": "Personnes/Marc Durand.md",
+        "section": "gifts"
+      },
+      "fold": "un vinyle de chet baker"
+    },
+    {
+      "id": "line:p000000004b:000000004b",
+      "kind": "line",
+      "part": "main",
+      "path": "Personnes/Marc Durand.md",
+      "title": "Marc Durand",
+      "line": "Te prête sa ponceuse jusqu'à fin novembre",
+      "categories": [
+        "people"
+      ],
+      "space": "",
+      "date": null,
+      "source": "Ce que vous avez convenu",
+      "who": "Home",
+      "noted": "2026-11-16",
+      "open": {
+        "path": "Personnes/Marc Durand.md",
+        "section": "agreed"
+      },
+      "fold": "te prete sa ponceuse jusqu a fin novembre"
+    },
+    {
+      "id": "line:p000000004c:000000004c",
+      "kind": "line",
+      "part": "main",
+      "path": "Personnes/Marc Durand.md",
+      "title": "Marc Durand",
+      "line": "Passe prendre les mesures de la cuisine samedi",
+      "categories": [
+        "people"
+      ],
+      "space": "",
+      "date": null,
+      "source": "Ce que vous avez convenu",
+      "who": "Home",
+      "noted": "2026-11-20",
+      "open": {
+        "path": "Personnes/Marc Durand.md",
+        "section": "agreed"
+      },
+      "fold": "passe prendre les mesures de la cuisine samedi"
+    },
+    {
+      "id": "line:p000000004d:000000004d",
+      "kind": "line",
+      "part": "main",
+      "path": "Personnes/Marc Durand.md",
+      "title": "Marc Durand",
+      "line": "Appel : le devis arrive ce soir",
+      "categories": [
+        "people"
+      ],
+      "space": "",
+      "date": null,
+      "source": "Derniers échanges",
+      "who": "Home",
+      "noted": "2026-11-21",
+      "open": {
+        "path": "Personnes/Marc Durand.md",
+        "section": "exchanges"
+      },
+      "fold": "appel le devis arrive ce soir"
+    },
+    {
+      "id": "line:p000000004e:000000004e",
+      "kind": "line",
+      "part": "main",
+      "path": "Personnes/Marc Durand.md",
+      "title": "Marc Durand",
+      "line": "Dîner chez Claire, il a parlé de vacances au Portugal",
+      "categories": [
+        "people"
+      ],
+      "space": "",
+      "date": null,
+      "source": "Derniers échanges",
+      "who": "Daily",
+      "noted": "2026-11-13",
+      "open": {
+        "path": "Personnes/Marc Durand.md",
+        "section": "exchanges"
+      },
+      "fold": "diner chez claire il a parle de vacances au portugal"
+    },
+    {
+      "id": "line:p000000004f:000000004f",
+      "kind": "line",
+      "part": "main",
+      "path": "Personnes/Marc Durand.md",
+      "title": "Marc Durand",
+      "line": "Pas de noix au dîner du 2",
+      "categories": [
+        "people"
+      ],
+      "space": "",
+      "date": null,
+      "source": "À ne pas oublier",
+      "who": "Coach",
+      "noted": "2026-11-18",
+      "open": {
+        "path": "Personnes/Marc Durand.md",
+        "section": "remember"
+      },
+      "fold": "pas de noix au diner du 2"
+    },
+    {
+      "id": "page:p0000000015",
+      "kind": "page",
+      "part": "main",
+      "path": "Personnes/Sophie Laurent.md",
+      "title": "Sophie Laurent",
+      "line": "Ta voisine du 3e. Elle a un double de tes clés.",
+      "categories": [
+        "people"
+      ],
+      "space": "",
+      "date": null,
+      "source": "Sophie Laurent",
+      "who": "",
+      "noted": null,
+      "open": {
+        "path": "Personnes/Sophie Laurent.md"
+      },
+      "fold": "sophie laurent sophie ta voisine du 3e elle a un double de tes cles",
+      "aliases": [
+        "Sophie"
+      ]
+    },
+    {
+      "id": "line:p0000000050:0000000050",
+      "kind": "line",
+      "part": "main",
+      "path": "Personnes/Sophie Laurent.md",
+      "title": "Sophie Laurent",
+      "line": "Ta voisine du 3e",
+      "categories": [
+        "people"
+      ],
+      "space": "",
+      "date": null,
+      "source": "Qui c'est",
+      "who": "toi",
+      "noted": "2026-10-23",
+      "open": {
+        "path": "Personnes/Sophie Laurent.md",
+        "section": "who"
+      },
+      "fold": "ta voisine du 3e"
+    },
+    {
+      "id": "line:p0000000051:0000000051",
+      "kind": "line",
+      "part": "main",
+      "path": "Personnes/Sophie Laurent.md",
+      "title": "Sophie Laurent",
+      "line": "Garde le chat pendant les vacances",
+      "categories": [
+        "people"
+      ],
+      "space": "",
+      "date": null,
+      "source": "Ce que vous avez convenu",
+      "who": "toi",
+      "noted": "2026-11-19",
+      "open": {
+        "path": "Personnes/Sophie Laurent.md",
+        "section": "agreed"
+      },
+      "fold": "garde le chat pendant les vacances"
+    },
+    {
+      "id": "line:p0000000052:0000000052",
+      "kind": "line",
+      "part": "main",
+      "path": "Personnes/Sophie Laurent.md",
+      "title": "Sophie Laurent",
+      "line": "A un double de tes clés",
+      "categories": [
+        "people"
+      ],
+      "space": "",
+      "date": null,
+      "source": "Ce que vous avez convenu",
+      "who": "toi",
+      "noted": "2026-10-23",
+      "open": {
+        "path": "Personnes/Sophie Laurent.md",
+        "section": "agreed"
+      },
+      "fold": "a un double de tes cles"
+    },
+    {
+      "id": "page:p0000000016",
+      "kind": "page",
+      "part": "main",
+      "path": "Sujets/Anniversaire d’Inès.md",
+      "title": "Anniversaire d’Inès",
+      "line": "Inès fête ses 8 ans samedi 4 décembre, chez Claire. Thème : les licornes.",
+      "categories": [
+        "people"
+      ],
+      "space": "",
+      "date": null,
+      "source": "Anniversaire d’Inès",
+      "who": "",
+      "noted": null,
+      "open": {
+        "path": "Sujets/Anniversaire d’Inès.md"
+      },
+      "fold": "anniversaire d ines ines fete ses 8 ans samedi 4 decembre chez claire theme les licornes",
+      "aliases": []
+    },
+    {
+      "id": "line:p0000000053:0000000053",
+      "kind": "line",
+      "part": "main",
+      "path": "Sujets/Anniversaire d’Inès.md",
+      "title": "Anniversaire d’Inès",
+      "line": "Invitations à envoyer cette semaine",
+      "categories": [
+        "people"
+      ],
+      "space": "",
+      "date": null,
+      "source": "Où on en est",
+      "who": "Daily",
+      "noted": "2026-11-22",
+      "open": {
+        "path": "Sujets/Anniversaire d’Inès.md",
+        "section": "status"
+      },
+      "fold": "invitations a envoyer cette semaine"
+    },
+    {
+      "id": "line:p0000000054:0000000054",
+      "kind": "line",
+      "part": "main",
+      "path": "Sujets/Anniversaire d’Inès.md",
+      "title": "Anniversaire d’Inès",
+      "line": "Commander le gâteau chez le pâtissier",
+      "categories": [
+        "people"
+      ],
+      "space": "",
+      "date": null,
+      "source": "Prochaines étapes",
+      "who": "Daily",
+      "noted": "2026-11-22",
+      "open": {
+        "path": "Sujets/Anniversaire d’Inès.md",
+        "section": "next"
+      },
+      "fold": "commander le gateau chez le patissier"
+    },
+    {
+      "id": "line:p0000000055:0000000055",
+      "kind": "line",
+      "part": "main",
+      "path": "Sujets/Anniversaire d’Inès.md",
+      "title": "Anniversaire d’Inès",
+      "line": "[[Claire Durand]] organise, [[Marc Durand]] anime les jeux",
+      "categories": [
+        "people"
+      ],
+      "space": "",
+      "date": null,
+      "source": "Personnes",
+      "who": "Daily",
+      "noted": "2026-11-21",
+      "open": {
+        "path": "Sujets/Anniversaire d’Inès.md",
+        "section": "people"
+      },
+      "fold": "claire durand organise marc durand anime les jeux"
+    },
+    {
+      "id": "page:p0000000017",
+      "kind": "page",
+      "part": "main",
+      "path": "Sujets/Changer de voiture.md",
+      "title": "Changer de voiture",
+      "line": "Une hybride d’occasion, 15 000 € au maximum.",
+      "categories": [
+        "money"
+      ],
+      "space": "",
+      "date": null,
+      "source": "Changer de voiture",
+      "who": "",
+      "noted": null,
+      "open": {
+        "path": "Sujets/Changer de voiture.md"
+      },
+      "fold": "changer de voiture une hybride d occasion 15 000 au maximum",
+      "aliases": []
+    },
+    {
+      "id": "line:p0000000056:0000000056",
+      "kind": "line",
+      "part": "main",
+      "path": "Sujets/Changer de voiture.md",
+      "title": "Changer de voiture",
+      "line": "Trois modèles retenus",
+      "categories": [
+        "money"
+      ],
+      "space": "",
+      "date": null,
+      "source": "Où on en est",
+      "who": "Budget",
+      "noted": "2026-11-18",
+      "open": {
+        "path": "Sujets/Changer de voiture.md",
+        "section": "status"
+      },
+      "fold": "trois modeles retenus"
+    },
+    {
+      "id": "line:p0000000057:0000000057",
+      "kind": "line",
+      "part": "main",
+      "path": "Sujets/Changer de voiture.md",
+      "title": "Changer de voiture",
+      "line": "Budget : 15 000 € au maximum",
+      "categories": [
+        "money"
+      ],
+      "space": "",
+      "date": null,
+      "source": "Chiffres et budget",
+      "who": "Budget",
+      "noted": "2026-11-16",
+      "open": {
+        "path": "Sujets/Changer de voiture.md",
+        "section": "budget"
+      },
+      "fold": "budget 15 000 au maximum"
+    },
+    {
+      "id": "page:p0000000002",
+      "kind": "page",
+      "part": "main",
+      "path": "Sujets/Impôts 2026.md",
+      "title": "Impôts 2026",
+      "line": "Déclaration en ligne à vérifier avant la fin du mois.",
+      "categories": [
+        "money",
+        "papers"
+      ],
+      "space": "",
+      "date": null,
+      "source": "Impôts 2026",
+      "who": "",
+      "noted": null,
+      "open": {
+        "path": "Sujets/Impôts 2026.md"
+      },
+      "fold": "impots 2026 declaration en ligne a verifier avant la fin du mois",
+      "aliases": []
+    },
+    {
+      "id": "line:p000000000a:000000000a",
+      "kind": "line",
+      "part": "main",
+      "path": "Sujets/Impôts 2026.md",
+      "title": "Impôts 2026",
+      "line": "Déclaration pré-remplie reçue",
+      "categories": [
+        "money",
+        "papers"
+      ],
+      "space": "",
+      "date": null,
+      "source": "Où on en est",
+      "who": "Budget",
+      "noted": "2026-11-20",
+      "open": {
+        "path": "Sujets/Impôts 2026.md",
+        "section": "status"
+      },
+      "fold": "declaration pre remplie recue"
+    },
+    {
+      "id": "line:p000000000b:000000000b",
+      "kind": "line",
+      "part": "main",
+      "path": "Sujets/Impôts 2026.md",
+      "title": "Impôts 2026",
+      "line": "Ajouter les dons et les frais de garde",
+      "categories": [
+        "money",
+        "papers"
+      ],
+      "space": "",
+      "date": null,
+      "source": "Prochaines étapes",
+      "who": "Budget",
+      "noted": "2026-11-20",
+      "open": {
+        "path": "Sujets/Impôts 2026.md",
+        "section": "next"
+      },
+      "fold": "ajouter les dons et les frais de garde"
+    },
+    {
+      "id": "page:p0000000018",
+      "kind": "page",
+      "part": "main",
+      "path": "Sujets/Rénovation cuisine.md",
+      "title": "Rénovation cuisine",
+      "line": "Devis de Marc reçu : 8 900 €. Il reste à choisir le plan de travail et à fixer la date des travaux.",
+      "categories": [
+        "home"
+      ],
+      "space": "",
+      "date": null,
+      "source": "Rénovation cuisine",
+      "who": "",
+      "noted": null,
+      "open": {
+        "path": "Sujets/Rénovation cuisine.md"
+      },
+      "fold": "renovation cuisine devis de marc recu 8 900 il reste a choisir le plan de travail et a fixer la date des travaux",
+      "aliases": []
+    },
+    {
+      "id": "line:p0000000058:0000000058",
+      "kind": "line",
+      "part": "main",
+      "path": "Sujets/Rénovation cuisine.md",
+      "title": "Rénovation cuisine",
+      "line": "Devis reçu, travaux à fixer avec Marc",
+      "categories": [
+        "home"
+      ],
+      "space": "",
+      "date": null,
+      "source": "Où on en est",
+      "who": "Home",
+      "noted": "2026-11-21",
+      "open": {
+        "path": "Sujets/Rénovation cuisine.md",
+        "section": "status"
+      },
+      "fold": "devis recu travaux a fixer avec marc"
+    },
+    {
+      "id": "line:p0000000059:0000000059",
+      "kind": "line",
+      "part": "main",
+      "path": "Sujets/Rénovation cuisine.md",
+      "title": "Rénovation cuisine",
+      "line": "Devis de [[Marc Durand]] accepté",
+      "categories": [
+        "home"
+      ],
+      "space": "",
+      "date": null,
+      "source": "Décisions",
+      "who": "Budget",
+      "noted": "2026-11-21",
+      "open": {
+        "path": "Sujets/Rénovation cuisine.md",
+        "section": "decisions"
+      },
+      "fold": "devis de marc durand accepte"
+    },
+    {
+      "id": "line:p000000005a:000000005a",
+      "kind": "line",
+      "part": "main",
+      "path": "Sujets/Rénovation cuisine.md",
+      "title": "Rénovation cuisine",
+      "line": "Plan de travail en quartz, couleur à choisir",
+      "categories": [
+        "home"
+      ],
+      "space": "",
+      "date": null,
+      "source": "Décisions",
+      "who": "Home",
+      "noted": "2026-11-17",
+      "open": {
+        "path": "Sujets/Rénovation cuisine.md",
+        "section": "decisions"
+      },
+      "fold": "plan de travail en quartz couleur a choisir"
+    },
+    {
+      "id": "line:p000000005b:000000005b",
+      "kind": "line",
+      "part": "main",
+      "path": "Sujets/Rénovation cuisine.md",
+      "title": "Rénovation cuisine",
+      "line": "Choisir la couleur du plan de travail",
+      "categories": [
+        "home"
+      ],
+      "space": "",
+      "date": null,
+      "source": "Prochaines étapes",
+      "who": "Home",
+      "noted": "2026-11-17",
+      "open": {
+        "path": "Sujets/Rénovation cuisine.md",
+        "section": "next"
+      },
+      "fold": "choisir la couleur du plan de travail"
+    },
+    {
+      "id": "line:p000000005c:000000005c",
+      "kind": "line",
+      "part": "main",
+      "path": "Sujets/Rénovation cuisine.md",
+      "title": "Rénovation cuisine",
+      "line": "Fixer la date des travaux",
+      "categories": [
+        "home"
+      ],
+      "space": "",
+      "date": null,
+      "source": "Prochaines étapes",
+      "who": "Home",
+      "noted": "2026-11-21",
+      "open": {
+        "path": "Sujets/Rénovation cuisine.md",
+        "section": "next"
+      },
+      "fold": "fixer la date des travaux"
+    },
+    {
+      "id": "line:p000000005d:000000005d",
+      "kind": "line",
+      "part": "main",
+      "path": "Sujets/Rénovation cuisine.md",
+      "title": "Rénovation cuisine",
+      "line": "[[Marc Durand]], menuisier",
+      "categories": [
+        "home"
+      ],
+      "space": "",
+      "date": null,
+      "source": "Personnes",
+      "who": "Home",
+      "noted": "2026-11-09",
+      "open": {
+        "path": "Sujets/Rénovation cuisine.md",
+        "section": "people"
+      },
+      "fold": "marc durand menuisier"
+    },
+    {
+      "id": "line:p000000005e:000000005e",
+      "kind": "line",
+      "part": "main",
+      "path": "Sujets/Rénovation cuisine.md",
+      "title": "Rénovation cuisine",
+      "line": "Cuisines Éclat, rue des Halles",
+      "categories": [
+        "home"
+      ],
+      "space": "",
+      "date": null,
+      "source": "Personnes",
+      "who": "Home",
+      "noted": "2026-10-13",
+      "open": {
+        "path": "Sujets/Rénovation cuisine.md",
+        "section": "people"
+      },
+      "fold": "cuisines eclat rue des halles"
+    },
+    {
+      "id": "line:p000000005f:000000005f",
+      "kind": "line",
+      "part": "main",
+      "path": "Sujets/Rénovation cuisine.md",
+      "title": "Rénovation cuisine",
+      "line": "Devis : 8 900 €",
+      "categories": [
+        "home"
+      ],
+      "space": "",
+      "date": null,
+      "source": "Chiffres et budget",
+      "who": "Budget",
+      "noted": "2026-11-21",
+      "open": {
+        "path": "Sujets/Rénovation cuisine.md",
+        "section": "budget"
+      },
+      "fold": "devis 8 900"
+    },
+    {
+      "id": "line:p0000000060:0000000060",
+      "kind": "line",
+      "part": "main",
+      "path": "Sujets/Rénovation cuisine.md",
+      "title": "Rénovation cuisine",
+      "line": "Enveloppe prévue : 10 000 €",
+      "categories": [
+        "home"
+      ],
+      "space": "",
+      "date": null,
+      "source": "Chiffres et budget",
+      "who": "Budget",
+      "noted": "2026-11-02",
+      "open": {
+        "path": "Sujets/Rénovation cuisine.md",
+        "section": "budget"
+      },
+      "fold": "enveloppe prevue 10 000"
+    },
+    {
+      "id": "line:p0000000061:0000000061",
+      "kind": "line",
+      "part": "main",
+      "path": "Sujets/Rénovation cuisine.md",
+      "title": "Rénovation cuisine",
+      "line": "Devis accepté",
+      "categories": [
+        "home"
+      ],
+      "space": "",
+      "date": null,
+      "source": "Historique",
+      "who": "Budget",
+      "noted": "2026-11-21",
+      "open": {
+        "path": "Sujets/Rénovation cuisine.md",
+        "section": "history"
+      },
+      "fold": "devis accepte"
+    },
+    {
+      "id": "line:p0000000062:0000000062",
+      "kind": "line",
+      "part": "main",
+      "path": "Sujets/Rénovation cuisine.md",
+      "title": "Rénovation cuisine",
+      "line": "Visite du magasin",
+      "categories": [
+        "home"
+      ],
+      "space": "",
+      "date": null,
+      "source": "Historique",
+      "who": "Home",
+      "noted": "2026-10-13",
+      "open": {
+        "path": "Sujets/Rénovation cuisine.md",
+        "section": "history"
+      },
+      "fold": "visite du magasin"
+    },
+    {
+      "id": "page:p0000000019",
+      "kind": "page",
+      "part": "main",
+      "path": "Sujets/Voyage Japon.md",
+      "title": "Voyage Japon",
+      "line": "Avril, 12 jours : Tokyo, Kyoto, Osaka. Les vols sont à réserver bientôt.",
+      "categories": [
+        "trips"
+      ],
+      "space": "",
+      "date": null,
+      "source": "Voyage Japon",
+      "who": "",
+      "noted": null,
+      "open": {
+        "path": "Sujets/Voyage Japon.md"
+      },
+      "fold": "voyage japon avril 12 jours tokyo kyoto osaka les vols sont a reserver bientot",
+      "aliases": []
+    },
+    {
+      "id": "line:p0000000063:0000000063",
+      "kind": "line",
+      "part": "main",
+      "path": "Sujets/Voyage Japon.md",
+      "title": "Voyage Japon",
+      "line": "Itinéraire fixé, vols pas encore pris",
+      "categories": [
+        "trips"
+      ],
+      "space": "",
+      "date": null,
+      "source": "Où on en est",
+      "who": "Daily",
+      "noted": "2026-11-21",
+      "open": {
+        "path": "Sujets/Voyage Japon.md",
+        "section": "status"
+      },
+      "fold": "itineraire fixe vols pas encore pris"
+    },
+    {
+      "id": "line:p0000000064:0000000064",
+      "kind": "line",
+      "part": "main",
+      "path": "Sujets/Voyage Japon.md",
+      "title": "Voyage Japon",
+      "line": "Avril, 12 jours : Tokyo, Kyoto, Osaka",
+      "categories": [
+        "trips"
+      ],
+      "space": "",
+      "date": null,
+      "source": "Décisions",
+      "who": "Daily",
+      "noted": "2026-11-12",
+      "open": {
+        "path": "Sujets/Voyage Japon.md",
+        "section": "decisions"
+      },
+      "fold": "avril 12 jours tokyo kyoto osaka"
+    },
+    {
+      "id": "line:p0000000065:0000000065",
+      "kind": "line",
+      "part": "main",
+      "path": "Sujets/Voyage Japon.md",
+      "title": "Voyage Japon",
+      "line": "Réserver les vols avant la fin du mois",
+      "categories": [
+        "trips"
+      ],
+      "space": "",
+      "date": null,
+      "source": "Prochaines étapes",
+      "who": "Daily",
+      "noted": "2026-11-21",
+      "open": {
+        "path": "Sujets/Voyage Japon.md",
+        "section": "next"
+      },
+      "fold": "reserver les vols avant la fin du mois"
+    },
+    {
+      "id": "line:p0000000066:0000000066",
+      "kind": "line",
+      "part": "main",
+      "path": "Sujets/Voyage Japon.md",
+      "title": "Voyage Japon",
+      "line": "Budget : 4 000 € pour deux",
+      "categories": [
+        "trips"
+      ],
+      "space": "",
+      "date": null,
+      "source": "Chiffres et budget",
+      "who": "Budget",
+      "noted": "2026-11-12",
+      "open": {
+        "path": "Sujets/Voyage Japon.md",
+        "section": "budget"
+      },
+      "fold": "budget 4 000 pour deux"
+    },
+    {
+      "id": "page:p000000001a",
+      "kind": "page",
+      "part": "main",
+      "path": "Sujets/Week-end à Lisbonne.md",
+      "title": "Week-end à Lisbonne",
+      "line": "Quatre jours à Lisbonne avec Claire, du 4 décembre au 7 décembre. Vols et hôtel réservés.",
+      "categories": [
+        "trips"
+      ],
+      "space": "",
+      "date": null,
+      "source": "Week-end à Lisbonne",
+      "who": "",
+      "noted": null,
+      "open": {
+        "path": "Sujets/Week-end à Lisbonne.md"
+      },
+      "fold": "week end a lisbonne quatre jours a lisbonne avec claire du 4 decembre au 7 decembre vols et hotel reserves",
+      "aliases": []
+    },
+    {
+      "id": "line:p0000000067:0000000067",
+      "kind": "line",
+      "part": "main",
+      "path": "Sujets/Week-end à Lisbonne.md",
+      "title": "Week-end à Lisbonne",
+      "line": "Du 4 décembre au 7 décembre",
+      "categories": [
+        "trips",
+        "dates"
+      ],
+      "space": "",
+      "date": "2026-12-04",
+      "source": "Dates",
+      "who": "Daily",
+      "noted": "2026-11-21",
+      "open": {
+        "path": "Sujets/Week-end à Lisbonne.md",
+        "section": "dates"
+      },
+      "fold": "du 4 decembre au 7 decembre"
+    },
+    {
+      "id": "line:p0000000068:0000000068",
+      "kind": "line",
+      "part": "main",
+      "path": "Sujets/Week-end à Lisbonne.md",
+      "title": "Week-end à Lisbonne",
+      "line": "Jour 1 : arrivée, hôtel et balade dans l’Alfama",
+      "categories": [
+        "trips"
+      ],
+      "space": "",
+      "date": null,
+      "source": "Itinéraire",
+      "who": "Daily",
+      "noted": "2026-11-21",
+      "open": {
+        "path": "Sujets/Week-end à Lisbonne.md",
+        "section": "itinerary"
+      },
+      "fold": "jour 1 arrivee hotel et balade dans l alfama"
+    },
+    {
+      "id": "line:p0000000069:0000000069",
+      "kind": "line",
+      "part": "main",
+      "path": "Sujets/Week-end à Lisbonne.md",
+      "title": "Week-end à Lisbonne",
+      "line": "Jour 2 : château Saint-Georges, Baixa et Chiado",
+      "categories": [
+        "trips"
+      ],
+      "space": "",
+      "date": null,
+      "source": "Itinéraire",
+      "who": "Daily",
+      "noted": "2026-11-21",
+      "open": {
+        "path": "Sujets/Week-end à Lisbonne.md",
+        "section": "itinerary"
+      },
+      "fold": "jour 2 chateau saint georges baixa et chiado"
+    },
+    {
+      "id": "line:p000000006a:000000006a",
+      "kind": "line",
+      "part": "main",
+      "path": "Sujets/Week-end à Lisbonne.md",
+      "title": "Week-end à Lisbonne",
+      "line": "Jour 3 : Belém",
+      "categories": [
+        "trips"
+      ],
+      "space": "",
+      "date": null,
+      "source": "Itinéraire",
+      "who": "Daily",
+      "noted": "2026-11-21",
+      "open": {
+        "path": "Sujets/Week-end à Lisbonne.md",
+        "section": "itinerary"
+      },
+      "fold": "jour 3 belem"
+    },
+    {
+      "id": "line:p000000006b:000000006b",
+      "kind": "line",
+      "part": "main",
+      "path": "Sujets/Week-end à Lisbonne.md",
+      "title": "Week-end à Lisbonne",
+      "line": "Jour 4 : marché de Campo de Ourique, puis retour",
+      "categories": [
+        "trips"
+      ],
+      "space": "",
+      "date": null,
+      "source": "Itinéraire",
+      "who": "Daily",
+      "noted": "2026-11-21",
+      "open": {
+        "path": "Sujets/Week-end à Lisbonne.md",
+        "section": "itinerary"
+      },
+      "fold": "jour 4 marche de campo de ourique puis retour"
+    },
+    {
+      "id": "line:p000000006c:000000006c",
+      "kind": "line",
+      "part": "main",
+      "path": "Sujets/Week-end à Lisbonne.md",
+      "title": "Week-end à Lisbonne",
+      "line": "Vol TP433 Paris-Orly → Lisbonne, 7 h 15, réf. X7K2PQ",
+      "categories": [
+        "trips"
+      ],
+      "space": "",
+      "date": null,
+      "source": "Transports",
+      "who": "Daily",
+      "noted": "2026-11-21",
+      "open": {
+        "path": "Sujets/Week-end à Lisbonne.md",
+        "section": "transport"
+      },
+      "fold": "vol tp433 paris orly lisbonne 7 h 15 ref x7k2pq"
+    },
+    {
+      "id": "line:p000000006d:000000006d",
+      "kind": "line",
+      "part": "main",
+      "path": "Sujets/Week-end à Lisbonne.md",
+      "title": "Week-end à Lisbonne",
+      "line": "Vol TP438 Lisbonne → Paris-Orly, 18 h 40, réf. X7K2PQ",
+      "categories": [
+        "trips"
+      ],
+      "space": "",
+      "date": null,
+      "source": "Transports",
+      "who": "Daily",
+      "noted": "2026-11-21",
+      "open": {
+        "path": "Sujets/Week-end à Lisbonne.md",
+        "section": "transport"
+      },
+      "fold": "vol tp438 lisbonne paris orly 18 h 40 ref x7k2pq"
+    },
+    {
+      "id": "line:p000000006e:000000006e",
+      "kind": "line",
+      "part": "main",
+      "path": "Sujets/Week-end à Lisbonne.md",
+      "title": "Week-end à Lisbonne",
+      "line": "[[Hôtel Rossio]], 3 nuits, réf. HR-55821",
+      "categories": [
+        "trips"
+      ],
+      "space": "",
+      "date": null,
+      "source": "Hébergements",
+      "who": "Daily",
+      "noted": "2026-11-21",
+      "open": {
+        "path": "Sujets/Week-end à Lisbonne.md",
+        "section": "lodging"
+      },
+      "fold": "hotel rossio 3 nuits ref hr 55821"
+    },
+    {
+      "id": "line:p000000006f:000000006f",
+      "kind": "line",
+      "part": "main",
+      "path": "Sujets/Week-end à Lisbonne.md",
+      "title": "Week-end à Lisbonne",
+      "line": "[x] Passeport",
+      "categories": [
+        "trips"
+      ],
+      "space": "",
+      "date": null,
+      "source": "À emporter",
+      "who": "Daily",
+      "noted": "2026-11-21",
+      "open": {
+        "path": "Sujets/Week-end à Lisbonne.md",
+        "section": "packing"
+      },
+      "fold": "x passeport"
+    },
+    {
+      "id": "line:p0000000070:0000000070",
+      "kind": "line",
+      "part": "main",
+      "path": "Sujets/Week-end à Lisbonne.md",
+      "title": "Week-end à Lisbonne",
+      "line": "[x] Chaussures de marche",
+      "categories": [
+        "trips"
+      ],
+      "space": "",
+      "date": null,
+      "source": "À emporter",
+      "who": "Daily",
+      "noted": "2026-11-21",
+      "open": {
+        "path": "Sujets/Week-end à Lisbonne.md",
+        "section": "packing"
+      },
+      "fold": "x chaussures de marche"
+    },
+    {
+      "id": "line:p0000000071:0000000071",
+      "kind": "line",
+      "part": "main",
+      "path": "Sujets/Week-end à Lisbonne.md",
+      "title": "Week-end à Lisbonne",
+      "line": "[x] Copie des billets",
+      "categories": [
+        "trips"
+      ],
+      "space": "",
+      "date": null,
+      "source": "À emporter",
+      "who": "Daily",
+      "noted": "2026-11-21",
+      "open": {
+        "path": "Sujets/Week-end à Lisbonne.md",
+        "section": "packing"
+      },
+      "fold": "x copie des billets"
+    },
+    {
+      "id": "line:p0000000072:0000000072",
+      "kind": "line",
+      "part": "main",
+      "path": "Sujets/Week-end à Lisbonne.md",
+      "title": "Week-end à Lisbonne",
+      "line": "[ ] Crème solaire",
+      "categories": [
+        "trips"
+      ],
+      "space": "",
+      "date": null,
+      "source": "À emporter",
+      "who": "Daily",
+      "noted": "2026-11-21",
+      "open": {
+        "path": "Sujets/Week-end à Lisbonne.md",
+        "section": "packing"
+      },
+      "fold": "creme solaire"
+    },
+    {
+      "id": "line:p0000000073:0000000073",
+      "kind": "line",
+      "part": "main",
+      "path": "Sujets/Week-end à Lisbonne.md",
+      "title": "Week-end à Lisbonne",
+      "line": "[ ] Imperméable léger",
+      "categories": [
+        "trips"
+      ],
+      "space": "",
+      "date": null,
+      "source": "À emporter",
+      "who": "Daily",
+      "noted": "2026-11-21",
+      "open": {
+        "path": "Sujets/Week-end à Lisbonne.md",
+        "section": "packing"
+      },
+      "fold": "impermeable leger"
+    },
+    {
+      "id": "line:p0000000074:0000000074",
+      "kind": "line",
+      "part": "main",
+      "path": "Sujets/Week-end à Lisbonne.md",
+      "title": "Week-end à Lisbonne",
+      "line": "[ ] Chargeur de téléphone",
+      "categories": [
+        "trips"
+      ],
+      "space": "",
+      "date": null,
+      "source": "À emporter",
+      "who": "Daily",
+      "noted": "2026-11-21",
+      "open": {
+        "path": "Sujets/Week-end à Lisbonne.md",
+        "section": "packing"
+      },
+      "fold": "chargeur de telephone"
+    },
+    {
+      "id": "line:p0000000075:0000000075",
+      "kind": "line",
+      "part": "main",
+      "path": "Sujets/Week-end à Lisbonne.md",
+      "title": "Week-end à Lisbonne",
+      "line": "Budget : 900 € pour deux, vols et hôtel compris",
+      "categories": [
+        "trips"
+      ],
+      "space": "",
+      "date": null,
+      "source": "Budget",
+      "who": "Budget",
+      "noted": "2026-11-19",
+      "open": {
+        "path": "Sujets/Week-end à Lisbonne.md",
+        "section": "budget"
+      },
+      "fold": "budget 900 pour deux vols et hotel compris"
+    },
+    {
+      "id": "line:p0000000076:0000000076",
+      "kind": "line",
+      "part": "main",
+      "path": "Sujets/Week-end à Lisbonne.md",
+      "title": "Week-end à Lisbonne",
+      "line": "Le tram 28 passe devant l’hôtel",
+      "categories": [
+        "trips"
+      ],
+      "space": "",
+      "date": null,
+      "source": "Sur place",
+      "who": "Daily",
+      "noted": "2026-11-21",
+      "open": {
+        "path": "Sujets/Week-end à Lisbonne.md",
+        "section": "onsite"
+      },
+      "fold": "le tram 28 passe devant l hotel"
+    },
+    {
+      "id": "line:p0000000077:0000000077",
+      "kind": "line",
+      "part": "main",
+      "path": "Sujets/Week-end à Lisbonne.md",
+      "title": "Week-end à Lisbonne",
+      "line": "Miradouro da Senhora do Monte au coucher du soleil",
+      "categories": [
+        "trips"
+      ],
+      "space": "",
+      "date": null,
+      "source": "Sur place",
+      "who": "Daily",
+      "noted": "2026-11-21",
+      "open": {
+        "path": "Sujets/Week-end à Lisbonne.md",
+        "section": "onsite"
+      },
+      "fold": "miradouro da senhora do monte au coucher du soleil"
+    },
+    {
+      "id": "page:p000000001b",
+      "kind": "page",
+      "part": "main",
+      "path": "Toi.md",
+      "title": "Toi",
+      "line": "Tu vis à Nantes, tu cours le dimanche et tu prépares un voyage au Japon.",
+      "categories": [
+        "people"
+      ],
+      "space": "",
+      "date": null,
+      "source": "Toi",
+      "who": "",
+      "noted": null,
+      "open": {
+        "path": "Toi.md"
+      },
+      "fold": "toi tu vis a nantes tu cours le dimanche et tu prepares un voyage au japon",
+      "aliases": []
+    },
+    {
+      "id": "line:p0000000078:0000000078",
+      "kind": "line",
+      "part": "main",
+      "path": "Toi.md",
+      "title": "Toi",
+      "line": "Vit à Nantes",
+      "categories": [
+        "people"
+      ],
+      "space": "",
+      "date": null,
+      "source": "Qui tu es",
+      "who": "Daily",
+      "noted": "2026-09-23",
+      "open": {
+        "path": "Toi.md",
+        "section": "about"
+      },
+      "fold": "vit a nantes"
+    },
+    {
+      "id": "line:p0000000079:0000000079",
+      "kind": "line",
+      "part": "main",
+      "path": "Toi.md",
+      "title": "Toi",
+      "line": "Sœur : [[Claire Durand]]",
+      "categories": [
+        "people"
+      ],
+      "space": "",
+      "date": null,
+      "source": "Famille",
+      "who": "Daily",
+      "noted": "2026-09-23",
+      "open": {
+        "path": "Toi.md",
+        "section": "family"
+      },
+      "fold": "soeur claire durand"
+    },
+    {
+      "id": "line:p000000007a:000000007a",
+      "kind": "line",
+      "part": "main",
+      "path": "Toi.md",
+      "title": "Toi",
+      "line": "Beau-frère : [[Marc Durand]]",
+      "categories": [
+        "people"
+      ],
+      "space": "",
+      "date": null,
+      "source": "Famille",
+      "who": "Daily",
+      "noted": "2026-09-23",
+      "open": {
+        "path": "Toi.md",
+        "section": "family"
+      },
+      "fold": "beau frere marc durand"
+    },
+    {
+      "id": "line:p000000007b:000000007b",
+      "kind": "line",
+      "part": "main",
+      "path": "Toi.md",
+      "title": "Toi",
+      "line": "Graphiste en agence, télétravail le vendredi",
+      "categories": [
+        "people"
+      ],
+      "space": "",
+      "date": null,
+      "source": "Travail",
+      "who": "Daily",
+      "noted": "2026-10-23",
+      "open": {
+        "path": "Toi.md",
+        "section": "work"
+      },
+      "fold": "graphiste en agence teletravail le vendredi"
+    },
+    {
+      "id": "line:p000000007c:000000007c",
+      "kind": "line",
+      "part": "main",
+      "path": "Toi.md",
+      "title": "Toi",
+      "line": "Course à pied le dimanche matin avec [[Lucas Bernard]]",
+      "categories": [
+        "people"
+      ],
+      "space": "",
+      "date": null,
+      "source": "Goûts et habitudes",
+      "who": "Coach",
+      "noted": "2026-10-13",
+      "open": {
+        "path": "Toi.md",
+        "section": "habits"
+      },
+      "fold": "course a pied le dimanche matin avec lucas bernard"
+    },
+    {
+      "id": "line:p000000007d:000000007d",
+      "kind": "line",
+      "part": "main",
+      "path": "Toi.md",
+      "title": "Toi",
+      "line": "Café sans sucre",
+      "categories": [
+        "people"
+      ],
+      "space": "",
+      "date": null,
+      "source": "Goûts et habitudes",
+      "who": "toi",
+      "noted": "2026-11-02",
+      "open": {
+        "path": "Toi.md",
+        "section": "habits"
+      },
+      "fold": "cafe sans sucre"
+    },
+    {
+      "id": "line:p000000007e:000000007e",
+      "kind": "line",
+      "part": "main",
+      "path": "Toi.md",
+      "title": "Toi",
+      "line": "Courir un semi-marathon au printemps",
+      "categories": [
+        "people"
+      ],
+      "space": "",
+      "date": null,
+      "source": "Objectifs",
+      "who": "Coach",
+      "noted": "2026-11-12",
+      "open": {
+        "path": "Toi.md",
+        "section": "goals"
+      },
+      "fold": "courir un semi marathon au printemps"
+    },
+    {
+      "id": "line:p000000007f:000000007f",
+      "kind": "line",
+      "part": "main",
+      "path": "Toi.md",
+      "title": "Toi",
+      "line": "Pas de propositions de tâches pour les anniversaires",
+      "categories": [
+        "people"
+      ],
+      "space": "",
+      "date": null,
+      "source": "Ce que tes agents doivent savoir",
+      "who": "Daily",
+      "noted": "2026-11-07",
+      "open": {
+        "path": "Toi.md",
+        "section": "agents"
+      },
+      "fold": "pas de propositions de taches pour les anniversaires"
+    },
+    {
+      "id": "line:p0000000080:0000000080",
+      "kind": "line",
+      "part": "main",
+      "path": "Toi.md",
+      "title": "Toi",
+      "line": "Réponses courtes le matin",
+      "categories": [
+        "people"
+      ],
+      "space": "",
+      "date": null,
+      "source": "Ce que tes agents doivent savoir",
+      "who": "toi",
+      "noted": "2026-11-17",
+      "open": {
+        "path": "Toi.md",
+        "section": "agents"
+      },
+      "fold": "reponses courtes le matin"
+    },
+    {
+      "id": "task:t00000d",
+      "kind": "task",
+      "part": "main",
+      "path": "Tâches/Tâches.md",
+      "title": "Rappeler Marc pour le devis",
+      "line": "Rappeler Marc pour le devis",
+      "categories": [
+        "home",
+        "dates"
+      ],
+      "space": "",
+      "date": "2026-11-24",
+      "source": "Tâches",
+      "who": "Daily",
+      "noted": "2026-11-22",
+      "open": {
+        "task": "t00000d"
+      },
+      "fold": "rappeler marc pour le devis",
+      "done": false
+    },
+    {
+      "id": "task:t00001c",
+      "kind": "task",
+      "part": "main",
+      "path": "Tâches/Tâches.md",
+      "title": "Envoyer les invitations",
+      "line": "Envoyer les invitations",
+      "categories": [
+        "people",
+        "dates"
+      ],
+      "space": "",
+      "date": "2026-11-25",
+      "source": "Tâches",
+      "who": "Daily",
+      "noted": "2026-11-22",
+      "open": {
+        "task": "t00001c"
+      },
+      "fold": "envoyer les invitations",
+      "done": false
+    },
+    {
+      "id": "task:t00001d",
+      "kind": "task",
+      "part": "main",
+      "path": "Tâches/Tâches.md",
+      "title": "Réserver les vols pour Osaka",
+      "line": "Réserver les vols pour Osaka",
+      "categories": [
+        "trips",
+        "dates"
+      ],
+      "space": "",
+      "date": "2026-11-26",
+      "source": "Tâches",
+      "who": "Daily",
+      "noted": "2026-11-22",
+      "open": {
+        "task": "t00001d"
+      },
+      "fold": "reserver les vols pour osaka",
+      "done": false
+    },
+    {
+      "id": "task:t00001e",
+      "kind": "task",
+      "part": "main",
+      "path": "Tâches/Tâches.md",
+      "title": "Préparer l’entretien annuel",
+      "line": "Préparer l’entretien annuel",
+      "categories": [
+        "work",
+        "dates"
+      ],
+      "space": "",
+      "date": "2026-11-27",
+      "source": "Tâches",
+      "who": "Daily",
+      "noted": "2026-11-22",
+      "open": {
+        "task": "t00001e"
+      },
+      "fold": "preparer l entretien annuel",
+      "done": false
+    },
+    {
+      "id": "task:t000003",
+      "kind": "task",
+      "part": "main",
+      "path": "Tâches/Tâches.md",
+      "title": "Vérifier la déclaration pré-remplie",
+      "line": "Vérifier la déclaration pré-remplie",
+      "categories": [
+        "money",
+        "papers",
+        "dates"
+      ],
+      "space": "",
+      "date": "2026-11-28",
+      "source": "Tâches",
+      "who": "Daily",
+      "noted": "2026-11-22",
+      "open": {
+        "task": "t000003"
+      },
+      "fold": "verifier la declaration pre remplie",
+      "done": false
+    },
+    {
+      "id": "task:t00001f",
+      "kind": "task",
+      "part": "main",
+      "path": "Tâches/Tâches.md",
+      "title": "Prendre rendez-vous chez le dentiste",
+      "line": "Prendre rendez-vous chez le dentiste",
+      "categories": [
+        "people",
+        "dates"
+      ],
+      "space": "",
+      "date": "2026-11-29",
+      "source": "Tâches",
+      "who": "Daily",
+      "noted": "2026-11-22",
+      "open": {
+        "task": "t00001f"
+      },
+      "fold": "prendre rendez vous chez le dentiste",
+      "done": false
+    },
+    {
+      "id": "task:t000020",
+      "kind": "task",
+      "part": "main",
+      "path": "Tâches/Tâches.md",
+      "title": "Réserver un essai de la Yaris",
+      "line": "Réserver un essai de la Yaris",
+      "categories": [
+        "money",
+        "dates"
+      ],
+      "space": "",
+      "date": "2026-12-01",
+      "source": "Tâches",
+      "who": "Daily",
+      "noted": "2026-11-22",
+      "open": {
+        "task": "t000020"
+      },
+      "fold": "reserver un essai de la yaris",
+      "done": false
+    },
+    {
+      "id": "task:t000021",
+      "kind": "task",
+      "part": "main",
+      "path": "Tâches/Tâches.md",
+      "title": "Commander le gâteau",
+      "line": "Commander le gâteau",
+      "categories": [
+        "people",
+        "dates"
+      ],
+      "space": "",
+      "date": "2026-12-02",
+      "source": "Tâches",
+      "who": "Daily",
+      "noted": "2026-11-22",
+      "open": {
+        "task": "t000021"
+      },
+      "fold": "commander le gateau",
+      "done": false
+    },
+    {
+      "id": "task:t000022",
+      "kind": "task",
+      "part": "main",
+      "path": "Tâches/Tâches.md",
+      "title": "Renouveler l’assurance auto",
+      "line": "Renouveler l’assurance auto",
+      "categories": [
+        "money",
+        "dates"
+      ],
+      "space": "",
+      "date": "2026-12-06",
+      "source": "Tâches",
+      "who": "Daily",
+      "noted": "2026-11-22",
+      "open": {
+        "task": "t000022"
+      },
+      "fold": "renouveler l assurance auto",
+      "done": false
+    },
+    {
+      "id": "task:t000023",
+      "kind": "task",
+      "part": "main",
+      "path": "Tâches/Tâches.md",
+      "title": "Acheter le cadeau de Marc",
+      "line": "Acheter le cadeau de Marc",
+      "categories": [
+        "people",
+        "dates"
+      ],
+      "space": "",
+      "date": "2026-12-13",
+      "source": "Tâches",
+      "who": "Daily",
+      "noted": "2026-11-22",
+      "open": {
+        "task": "t000023"
+      },
+      "fold": "acheter le cadeau de marc",
+      "done": false
+    },
+    {
+      "id": "task:t000024",
+      "kind": "task",
+      "part": "main",
+      "path": "Tâches/Tâches.md",
+      "title": "Choisir le plan de travail",
+      "line": "Choisir le plan de travail",
+      "categories": [
+        "home"
+      ],
+      "space": "",
+      "date": null,
+      "source": "Tâches",
+      "who": "Daily",
+      "noted": "2026-11-22",
+      "open": {
+        "task": "t000024"
+      },
+      "fold": "choisir le plan de travail",
+      "done": false
+    },
+    {
+      "id": "task:t000025",
+      "kind": "task",
+      "part": "main",
+      "path": "Tâches/Tâches.md",
+      "title": "Trier les photos de l’été",
+      "line": "Trier les photos de l’été",
+      "categories": [
+        "other"
+      ],
+      "space": "",
+      "date": null,
+      "source": "Tâches",
+      "who": "Daily",
+      "noted": "2026-11-22",
+      "open": {
+        "task": "t000025"
+      },
+      "fold": "trier les photos de l ete",
+      "done": false
+    },
+    {
+      "id": "task:t000026",
+      "kind": "task",
+      "part": "main",
+      "path": "Tâches/Tâches.md",
+      "title": "Comparer les box internet",
+      "line": "Comparer les box internet",
+      "categories": [
+        "home"
+      ],
+      "space": "",
+      "date": null,
+      "source": "Tâches",
+      "who": "Daily",
+      "noted": "2026-11-22",
+      "open": {
+        "task": "t000026"
+      },
+      "fold": "comparer les box internet",
+      "done": false
+    },
+    {
+      "id": "task:t000027",
+      "kind": "task",
+      "part": "main",
+      "path": "Tâches/Tâches.md",
+      "title": "Acheter les ballons",
+      "line": "Acheter les ballons",
+      "categories": [
+        "people"
+      ],
+      "space": "",
+      "date": null,
+      "source": "Tâches",
+      "who": "Daily",
+      "noted": "2026-11-22",
+      "open": {
+        "task": "t000027"
+      },
+      "fold": "acheter les ballons",
+      "done": false
+    },
+    {
+      "id": "task:t000004",
+      "kind": "task",
+      "part": "main",
+      "path": "Tâches/Tâches.md",
+      "title": "Retrouver les reçus de dons",
+      "line": "Retrouver les reçus de dons",
+      "categories": [
+        "money",
+        "papers"
+      ],
+      "space": "",
+      "date": null,
+      "source": "Tâches",
+      "who": "Daily",
+      "noted": "2026-11-22",
+      "open": {
+        "task": "t000004"
+      },
+      "fold": "retrouver les recus de dons",
+      "done": false
+    },
+    {
+      "id": "task:t000028",
+      "kind": "task",
+      "part": "main",
+      "path": "Tâches/Tâches.md",
+      "title": "Comparer trois modèles d’occasion",
+      "line": "Comparer trois modèles d’occasion",
+      "categories": [
+        "money"
+      ],
+      "space": "",
+      "date": null,
+      "source": "Tâches",
+      "who": "Daily",
+      "noted": "2026-11-22",
+      "open": {
+        "task": "t000028"
+      },
+      "fold": "comparer trois modeles d occasion",
+      "done": false
+    },
+    {
+      "id": "task:t000029",
+      "kind": "task",
+      "part": "main",
+      "path": "Tâches/Tâches.md",
+      "title": "Choisir la crédence",
+      "line": "Choisir la crédence",
+      "categories": [
+        "home"
+      ],
+      "space": "",
+      "date": null,
+      "source": "Tâches",
+      "who": "Daily",
+      "noted": "2026-11-22",
+      "open": {
+        "task": "t000029"
+      },
+      "fold": "choisir la credence",
+      "done": false
+    },
+    {
+      "id": "task:t00002a",
+      "kind": "task",
+      "part": "main",
+      "path": "Tâches/Tâches.md",
+      "title": "Acheter un guide de Kyoto",
+      "line": "Acheter un guide de Kyoto",
+      "categories": [
+        "trips"
+      ],
+      "space": "",
+      "date": null,
+      "source": "Tâches",
+      "who": "Daily",
+      "noted": "2026-11-22",
+      "open": {
+        "task": "t00002a"
+      },
+      "fold": "acheter un guide de kyoto",
+      "done": false
+    },
+    {
+      "id": "record:r000005",
+      "kind": "record",
+      "part": "main",
+      "path": "Fiches/Achats.md",
+      "title": "Lave-linge",
+      "line": "2024-12-22 · Lave-linge · Électro Plus · 499 € · bien durable · 2026-12-22 · Facture reçue par e-mail",
+      "categories": [
+        "money",
+        "papers",
+        "dates"
+      ],
+      "space": "",
+      "date": "2026-12-22",
+      "source": "Achats",
+      "who": "",
+      "noted": null,
+      "open": {
+        "record": {
+          "type": "purchase",
+          "id": "r000005"
+        }
+      },
+      "fold": "2024 12 22 lave linge electro plus 499 bien durable 2026 12 22 facture recue par e mail"
+    },
+    {
+      "id": "record:r000006",
+      "kind": "record",
+      "part": "main",
+      "path": "Fiches/Achats.md",
+      "title": "Tablette",
+      "line": "2026-07-25 · Tablette · Boutique en ligne · 329 € · bien durable · 2028-07-24 · Confirmation de commande",
+      "categories": [
+        "money",
+        "papers",
+        "dates"
+      ],
+      "space": "",
+      "date": "2028-07-24",
+      "source": "Achats",
+      "who": "",
+      "noted": null,
+      "open": {
+        "record": {
+          "type": "purchase",
+          "id": "r000006"
+        }
+      },
+      "fold": "2026 07 25 tablette boutique en ligne 329 bien durable 2028 07 24 confirmation de commande"
+    },
+    {
+      "id": "record:r000007",
+      "kind": "record",
+      "part": "main",
+      "path": "Fiches/Achats.md",
+      "title": "Casque audio",
+      "line": "2024-09-13 · Casque audio · Grand magasin · 89 € · bien durable · 2026-09-13",
+      "categories": [
+        "money",
+        "papers",
+        "dates"
+      ],
+      "space": "",
+      "date": "2026-09-13",
+      "source": "Achats",
+      "who": "",
+      "noted": null,
+      "open": {
+        "record": {
+          "type": "purchase",
+          "id": "r000007"
+        }
+      },
+      "fold": "2024 09 13 casque audio grand magasin 89 bien durable 2026 09 13"
+    },
+    {
+      "id": "record:r00002b",
+      "kind": "record",
+      "part": "main",
+      "path": "Fiches/Abonnements.md",
+      "title": "Films en streaming",
+      "line": "Films en streaming · 13,49 € · mensuel · 2026-12-01 · En ligne, à tout moment · Relevé de compte",
+      "categories": [
+        "money",
+        "dates"
+      ],
+      "space": "",
+      "date": "2026-12-01",
+      "source": "Abonnements",
+      "who": "",
+      "noted": null,
+      "open": {
+        "record": {
+          "type": "subscription",
+          "id": "r00002b"
+        }
+      },
+      "fold": "films en streaming 13 49 mensuel 2026 12 01 en ligne a tout moment releve de compte"
+    },
+    {
+      "id": "record:r00002c",
+      "kind": "record",
+      "part": "main",
+      "path": "Fiches/Abonnements.md",
+      "title": "Salle de sport",
+      "line": "Salle de sport · 29,90 € · mensuel · 2026-12-09 · Lettre, un mois avant · Contrat signé",
+      "categories": [
+        "money",
+        "dates"
+      ],
+      "space": "",
+      "date": "2026-12-09",
+      "source": "Abonnements",
+      "who": "",
+      "noted": null,
+      "open": {
+        "record": {
+          "type": "subscription",
+          "id": "r00002c"
+        }
+      },
+      "fold": "salle de sport 29 90 mensuel 2026 12 09 lettre un mois avant contrat signe"
+    },
+    {
+      "id": "record:r000008",
+      "kind": "record",
+      "part": "main",
+      "path": "Fiches/Contrats et assurances.md",
+      "title": "Assurance habitation",
+      "line": "Assurance habitation · Assureur Horizon · HAB-448120 · 2027-02-25 · Avis d’échéance",
+      "categories": [
+        "papers",
+        "dates"
+      ],
+      "space": "",
+      "date": "2027-02-25",
+      "source": "Contrats et assurances",
+      "who": "",
+      "noted": null,
+      "open": {
+        "record": {
+          "type": "contract",
+          "id": "r000008"
+        }
+      },
+      "fold": "assurance habitation assureur horizon hab 448120 2027 02 25 avis d echeance"
+    },
+    {
+      "id": "record:r000009",
+      "kind": "record",
+      "part": "main",
+      "path": "Fiches/Papiers.md",
+      "title": "Passeport",
+      "line": "Passeport · 2028-01-16 · Photo du passeport",
+      "categories": [
+        "papers",
+        "dates"
+      ],
+      "space": "",
+      "date": "2028-01-16",
+      "source": "Papiers",
+      "who": "",
+      "noted": null,
+      "open": {
+        "record": {
+          "type": "paper",
+          "id": "r000009"
+        }
+      },
+      "fold": "passeport 2028 01 16 photo du passeport"
+    },
+    {
+      "id": "record:r00002d",
+      "kind": "record",
+      "part": "main",
+      "path": "Fiches/Réservations.md",
+      "title": "Hôtel, 3 nuits",
+      "line": "2026-12-04 · Hôtel, 3 nuits · Hôtel Rossio · HR-55821 · Week-end à Lisbonne · E-mail de l’hôtel",
+      "categories": [
+        "trips",
+        "dates"
+      ],
+      "space": "",
+      "date": "2026-12-04",
+      "source": "Réservations",
+      "who": "",
+      "noted": null,
+      "open": {
+        "record": {
+          "type": "booking",
+          "id": "r00002d"
+        }
+      },
+      "fold": "2026 12 04 hotel 3 nuits hotel rossio hr 55821 week end a lisbonne e mail de l hotel"
+    },
+    {
+      "id": "record:r00002e",
+      "kind": "record",
+      "part": "main",
+      "path": "Fiches/Réservations.md",
+      "title": "Visite du château, 2 billets",
+      "line": "2026-12-05 · Visite du château, 2 billets · Château Saint-Georges · CSG-2291 · Week-end à Lisbonne · E-mail de confirmation du château",
+      "categories": [
+        "trips",
+        "dates"
+      ],
+      "space": "",
+      "date": "2026-12-05",
+      "source": "Réservations",
+      "who": "",
+      "noted": null,
+      "open": {
+        "record": {
+          "type": "booking",
+          "id": "r00002e"
+        }
+      },
+      "fold": "2026 12 05 visite du chateau 2 billets chateau saint georges csg 2291 week end a lisbonne e mail de confirmation du chateau"
+    },
+    {
+      "id": "doc:budget/Budget du voyage",
+      "kind": "document",
+      "part": "main",
+      "path": null,
+      "title": "Budget du voyage",
+      "line": "Budget du voyage",
+      "categories": [
+        "trips"
+      ],
+      "space": "",
+      "date": "2026-11-20",
+      "source": "budget",
+      "who": "budget",
+      "noted": "2026-11-20",
+      "open": {
+        "document": {
+          "agent": "budget",
+          "file": "Budget du voyage"
+        }
+      },
+      "fold": "budget du voyage"
+    },
+    {
+      "id": "doc:daily/Voyage Japon, le programme.pptx",
+      "kind": "document",
+      "part": "main",
+      "path": null,
+      "title": "Voyage Japon, le programme.pptx",
+      "line": "Voyage Japon, le programme.pptx",
+      "categories": [
+        "trips"
+      ],
+      "space": "",
+      "date": "2026-11-22",
+      "source": "daily",
+      "who": "daily",
+      "noted": "2026-11-22",
+      "open": {
+        "document": {
+          "agent": "daily",
+          "file": "Voyage Japon, le programme.pptx"
+        }
+      },
+      "fold": "voyage japon le programme pptx"
+    },
+    {
+      "id": "doc:budget/Budget des travaux.xlsx",
+      "kind": "document",
+      "part": "main",
+      "path": null,
+      "title": "Budget des travaux.xlsx",
+      "line": "Budget des travaux.xlsx",
+      "categories": [
+        "home"
+      ],
+      "space": "",
+      "date": "2026-11-19",
+      "source": "budget",
+      "who": "budget",
+      "noted": "2026-11-19",
+      "open": {
+        "document": {
+          "agent": "budget",
+          "file": "Budget des travaux.xlsx"
+        }
+      },
+      "fold": "budget des travaux xlsx"
+    },
+    {
+      "id": "doc:home/Lettre au syndic.docx",
+      "kind": "document",
+      "part": "main",
+      "path": null,
+      "title": "Lettre au syndic.docx",
+      "line": "Lettre au syndic.docx",
+      "categories": [
+        "home"
+      ],
+      "space": "",
+      "date": "2026-11-14",
+      "source": "home",
+      "who": "home",
+      "noted": "2026-11-14",
+      "open": {
+        "document": {
+          "agent": "home",
+          "file": "Lettre au syndic.docx"
+        }
+      },
+      "fold": "lettre au syndic docx"
+    },
+    {
+      "id": "doc:home/Devis cuisine.pdf",
+      "kind": "document",
+      "part": "main",
+      "path": null,
+      "title": "Devis cuisine.pdf",
+      "line": "Devis cuisine.pdf",
+      "categories": [
+        "home"
+      ],
+      "space": "",
+      "date": "2026-11-09",
+      "source": "home",
+      "who": "home",
+      "noted": "2026-11-09",
+      "open": {
+        "document": {
+          "agent": "home",
+          "file": "Devis cuisine.pdf"
+        }
+      },
+      "fold": "devis cuisine pdf"
+    },
+    {
+      "id": "doc:home/Plan de la cuisine.jpg",
+      "kind": "document",
+      "part": "main",
+      "path": null,
+      "title": "Plan de la cuisine.jpg",
+      "line": "Plan de la cuisine.jpg",
+      "categories": [
+        "home"
+      ],
+      "space": "",
+      "date": "2026-10-03",
+      "source": "home",
+      "who": "home",
+      "noted": "2026-10-03",
+      "open": {
+        "document": {
+          "agent": "home",
+          "file": "Plan de la cuisine.jpg"
+        }
+      },
+      "fold": "plan de la cuisine jpg"
+    }
+  ],
+  "removed": [],
+  "stop": [
+    "de",
+    "du",
+    "la",
+    "le",
+    "les",
+    "des",
+    "d",
+    "l",
+    "un",
+    "une",
+    "au",
+    "aux",
+    "et",
+    "a",
+    "en",
+    "pour",
+    "sur",
+    "ma",
+    "mon",
+    "mes",
+    "ta",
+    "ton",
+    "tes",
+    "sa",
+    "son",
+    "ses",
+    "quel",
+    "quelle",
+    "quels",
+    "quelles",
+    "est",
+    "c",
+    "qu",
+    "que",
+    "qui",
+    "quoi",
+    "combien",
+    "elle",
+    "il",
+    "quand",
+    "the",
+    "of",
+    "an",
+    "and",
+    "to",
+    "is",
+    "what",
+    "which",
+    "who",
+    "how",
+    "many",
+    "much",
+    "my",
+    "your",
+    "his",
+    "her",
+    "does",
+    "s",
+    "when",
+    "has",
+    "der",
+    "die",
+    "das",
+    "den",
+    "dem",
+    "von",
+    "ein",
+    "eine",
+    "und",
+    "ist",
+    "was",
+    "wie",
+    "welche",
+    "hat",
+    "wann",
+    "el",
+    "los",
+    "las",
+    "del",
+    "y",
+    "es",
+    "cual",
+    "cuanto",
+    "cuando",
+    "tiene"
+  ],
+  "neighbours": {
+    "toubib": [
+      "medecin"
+    ],
+    "note": [
+      "facture"
+    ],
+    "bagnole": [
+      "voiture"
+    ],
+    "aniv": [
+      "anniversaire"
+    ],
+    "bail": [
+      "location",
+      "loyer"
+    ]
+  },
+  "dates": {
+    "lang": "fr",
+    "phrases": [
+      {
+        "words": "la semaine prochaine",
+        "from": {
+          "unit": "week",
+          "n": 1,
+          "edge": "start"
+        },
+        "to": {
+          "unit": "week",
+          "n": 1,
+          "edge": "end"
+        }
+      },
+      {
+        "words": "ce mois ci",
+        "from": {
+          "unit": "day",
+          "n": 0
+        },
+        "to": {
+          "unit": "month",
+          "n": 0,
+          "edge": "end"
+        }
+      },
+      {
+        "words": "avant noel",
+        "from": {
+          "unit": "day",
+          "n": 0
+        },
+        "to": {
+          "unit": "feast",
+          "feast": "christmas_eve"
+        }
+      },
+      {
+        "words": "il y a un mois",
+        "from": {
+          "unit": "month",
+          "n": -1,
+          "edge": "start"
+        },
+        "to": {
+          "unit": "month",
+          "n": -1,
+          "edge": "end"
+        }
+      }
+    ],
+    "feasts": {
+      "christmas_eve": "2026-12-24",
+      "christmas": "2026-12-25",
+      "easter": "2027-03-28"
+    }
+  },
+  "kept": [
+    {
+      "id": "k1a2b3c",
+      "q": "à payer ce mois-ci",
+      "title": "à payer ce mois-ci"
+    }
+  ]
+}

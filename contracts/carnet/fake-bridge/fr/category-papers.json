@@ -1,0 +1,257 @@
+{
+  "v": 1,
+  "id": "papers",
+  "title": "Papiers",
+  "count": 10,
+  "space": "all",
+  "filters": [
+    {
+      "id": "invoices",
+      "title": "Factures",
+      "count": 1
+    },
+    {
+      "id": "contracts",
+      "title": "Contrats",
+      "count": 1
+    },
+    {
+      "id": "warranties",
+      "title": "Garanties",
+      "count": 3
+    }
+  ],
+  "filter": null,
+  "searched": [
+    {
+      "q": "garantie lave-linge",
+      "at": "2026-11-20T18:02:00Z"
+    }
+  ],
+  "recent": [
+    {
+      "id": "task:t000003",
+      "kind": "task",
+      "part": "main",
+      "path": "Tâches/Tâches.md",
+      "title": "Vérifier la déclaration pré-remplie",
+      "line": "Vérifier la déclaration pré-remplie",
+      "categories": [
+        "money",
+        "papers",
+        "dates"
+      ],
+      "space": "",
+      "date": "2026-11-28",
+      "source": "Tâches",
+      "who": "Daily",
+      "noted": "2026-11-22",
+      "open": {
+        "task": "t000003"
+      }
+    },
+    {
+      "id": "task:t000004",
+      "kind": "task",
+      "part": "main",
+      "path": "Tâches/Tâches.md",
+      "title": "Retrouver les reçus de dons",
+      "line": "Retrouver les reçus de dons",
+      "categories": [
+        "money",
+        "papers"
+      ],
+      "space": "",
+      "date": null,
+      "source": "Tâches",
+      "who": "Daily",
+      "noted": "2026-11-22",
+      "open": {
+        "task": "t000004"
+      }
+    },
+    {
+      "id": "line:p000000000a:000000000a",
+      "kind": "line",
+      "part": "main",
+      "path": "Sujets/Impôts 2026.md",
+      "title": "Impôts 2026",
+      "line": "Déclaration pré-remplie reçue",
+      "categories": [
+        "money",
+        "papers"
+      ],
+      "space": "",
+      "date": null,
+      "source": "Où on en est",
+      "who": "Budget",
+      "noted": "2026-11-20",
+      "open": {
+        "path": "Sujets/Impôts 2026.md",
+        "section": "status"
+      }
+    },
+    {
+      "id": "line:p000000000b:000000000b",
+      "kind": "line",
+      "part": "main",
+      "path": "Sujets/Impôts 2026.md",
+      "title": "Impôts 2026",
+      "line": "Ajouter les dons et les frais de garde",
+      "categories": [
+        "money",
+        "papers"
+      ],
+      "space": "",
+      "date": null,
+      "source": "Prochaines étapes",
+      "who": "Budget",
+      "noted": "2026-11-20",
+      "open": {
+        "path": "Sujets/Impôts 2026.md",
+        "section": "next"
+      }
+    },
+    {
+      "id": "page:p0000000002",
+      "kind": "page",
+      "part": "main",
+      "path": "Sujets/Impôts 2026.md",
+      "title": "Impôts 2026",
+      "line": "Déclaration en ligne à vérifier avant la fin du mois.",
+      "categories": [
+        "money",
+        "papers"
+      ],
+      "space": "",
+      "date": null,
+      "source": "Impôts 2026",
+      "who": "",
+      "noted": null,
+      "open": {
+        "path": "Sujets/Impôts 2026.md"
+      }
+    },
+    {
+      "id": "record:r000005",
+      "kind": "record",
+      "part": "main",
+      "path": "Fiches/Achats.md",
+      "title": "Lave-linge",
+      "line": "2024-12-22 · Lave-linge · Électro Plus · 499 € · bien durable · 2026-12-22 · Facture reçue par e-mail",
+      "categories": [
+        "money",
+        "papers",
+        "dates"
+      ],
+      "space": "",
+      "date": "2026-12-22",
+      "source": "Achats",
+      "who": "",
+      "noted": null,
+      "open": {
+        "record": {
+          "type": "purchase",
+          "id": "r000005"
+        }
+      }
+    },
+    {
+      "id": "record:r000006",
+      "kind": "record",
+      "part": "main",
+      "path": "Fiches/Achats.md",
+      "title": "Tablette",
+      "line": "2026-07-25 · Tablette · Boutique en ligne · 329 € · bien durable · 2028-07-24 · Confirmation de commande",
+      "categories": [
+        "money",
+        "papers",
+        "dates"
+      ],
+      "space": "",
+      "date": "2028-07-24",
+      "source": "Achats",
+      "who": "",
+      "noted": null,
+      "open": {
+        "record": {
+          "type": "purchase",
+          "id": "r000006"
+        }
+      }
+    },
+    {
+      "id": "record:r000007",
+      "kind": "record",
+      "part": "main",
+      "path": "Fiches/Achats.md",
+      "title": "Casque audio",
+      "line": "2024-09-13 · Casque audio · Grand magasin · 89 € · bien durable · 2026-09-13",
+      "categories": [
+        "money",
+        "papers",
+        "dates"
+      ],
+      "space": "",
+      "date": "2026-09-13",
+      "source": "Achats",
+      "who": "",
+      "noted": null,
+      "open": {
+        "record": {
+          "type": "purchase",
+          "id": "r000007"
+        }
+      }
+    },
+    {
+      "id": "record:r000008",
+      "kind": "record",
+      "part": "main",
+      "path": "Fiches/Contrats et assurances.md",
+      "title": "Assurance habitation",
+      "line": "Assurance habitation · Assureur Horizon · HAB-448120 · 2027-02-25 · Avis d’échéance",
+      "categories": [
+        "papers",
+        "dates"
+      ],
+      "space": "",
+      "date": "2027-02-25",
+      "source": "Contrats et assurances",
+      "who": "",
+      "noted": null,
+      "open": {
+        "record": {
+          "type": "contract",
+          "id": "r000008"
+        }
+      }
+    },
+    {
+      "id": "record:r000009",
+      "kind": "record",
+      "part": "main",
+      "path": "Fiches/Papiers.md",
+      "title": "Passeport",
+      "line": "Passeport · 2028-01-16 · Photo du passeport",
+      "categories": [
+        "papers",
+        "dates"
+      ],
+      "space": "",
+      "date": "2028-01-16",
+      "source": "Papiers",
+      "who": "",
+      "noted": null,
+      "open": {
+        "record": {
+          "type": "paper",
+          "id": "r000009"
+        }
+      }
+    }
+  ],
+  "bar": {
+    "placeholder": "Cherche dans Papiers"
+  }
+}
