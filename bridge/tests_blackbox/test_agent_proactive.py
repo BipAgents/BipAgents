@@ -172,22 +172,6 @@ def test_a_turn_another_agent_asked_for_never_turns_it_off(bridges, fakes):
     assert kept(bridge) is None
 
 
-def test_an_app_1_0_sees_its_settings_as_before(bridges, fakes):
-    """What an app 1.0 reads is unchanged: the same keys and values, `proactive` beside them; « Me prévenir » as
-    before; its tools' list keeps every tool it had."""
-    bridge, _ = own_and_project(bridges, fakes)
-    give_token(bridge, "budget", TOKEN)
-    before = settings(bridge, "budget")
-    tools_before = tool_names(bridge)
-    assert put(bridge, "budget", {"level": "off"}).status_code == 200
-    after = settings(bridge, "budget")
-    assert {k: v for k, v in after.items() if k != "proactive"} == {k: v for k, v in before.items() if k != "proactive"}
-    assert bridge.put("/v1/agents/budget/notify", headers=AUTH, json={"on": False}).json() == {"id": "budget", "on": False}
-    assert settings(bridge, "budget")["notify"] == {"on": False}
-    # nothing it had goes (plans and offers come with later branches; off takes only those out)
-    assert set(tools_before) <= set(tool_names(bridge))
-
-
 def test_a_watchers_urgent_message_is_time_sensitive_and_the_same_words_are_pushed_once(bridges, fakes):
     """Review 1 (R3, R4): a watcher's URGENT message reaches the phone at the system's urgent level
     (`aps.interruption-level` time-sensitive, `urgent: 1`: watchers.rs → background_turn.rs `deliver_urgent`); its turn
@@ -217,3 +201,19 @@ def test_a_watchers_urgent_message_is_time_sensitive_and_the_same_words_are_push
     assert wait_until(lambda: len([i for i in boite(bridge) if i["text"] == words]) == 2, timeout=20)
     time.sleep(1.5)
     assert len([p for p in fakes.apns.payloads() if p.get("aps", {}).get("interruption-level")]) == 1
+
+
+def test_an_app_1_0_sees_its_settings_as_before(bridges, fakes):
+    """What an app 1.0 reads is unchanged: the same keys and values, `proactive` beside them; « Me prévenir » as
+    before; its tools' list keeps every tool it had."""
+    bridge, _ = own_and_project(bridges, fakes)
+    give_token(bridge, "budget", TOKEN)
+    before = settings(bridge, "budget")
+    tools_before = tool_names(bridge)
+    assert put(bridge, "budget", {"level": "off"}).status_code == 200
+    after = settings(bridge, "budget")
+    assert {k: v for k, v in after.items() if k != "proactive"} == {k: v for k, v in before.items() if k != "proactive"}
+    assert bridge.put("/v1/agents/budget/notify", headers=AUTH, json={"on": False}).json() == {"id": "budget", "on": False}
+    assert settings(bridge, "budget")["notify"] == {"on": False}
+    # nothing it had goes (plans and offers come with later branches; off takes only those out)
+    assert set(tools_before) <= set(tool_names(bridge))
