@@ -104,6 +104,8 @@ fn the_summary_is_ready_to_show() {
     // the copy's version: the app knows whether its copy is the one counted
     let f = nb::index::answer(&config, &fr(), None, None, "").0;
     assert_eq!(s["version"], f["version"]);
+    // with the copy's epoch: a version number alone means nothing after the bridge started again (review 1, R4)
+    assert_eq!(s["epoch"], f["epoch"]);
     // Santé: never a count, a word or an item outside its lock
     assert!(!s.to_string().contains("Prednisolone"));
     // in the app's language (titles and texts), the Carnet's notes as they are
@@ -300,6 +302,12 @@ fn the_phones_copy_carries_the_kept_searches_and_moves_with_them() {
     assert_eq!(kept[0]["category"], json!("money"));
     assert!(kept[0].get("count").is_none() && kept[0].get("space").is_none(), "{}", kept[0]);
     typed(&after, "Index");
+    // another space's: its `space` (review 1, R8)
+    sm::keep(&config, "claire", None, "pro", None).unwrap();
+    let (again, _) = nb::index::answer(&config, &fr(), None, None, "");
+    assert_eq!(again["kept"][1], json!({"id": again["kept"][1]["id"], "q": "claire", "title": "claire", "space": "pro"}));
+    // renamed to a title holding a number or a reference: refused (never on the phone)
+    assert_eq!(sm::rename(&config, &kept_id(&config, "claire"), "Dossier HR-55821"), Err(Refused::NumberRefused));
 }
 
 #[test]
@@ -372,12 +380,12 @@ fn nothing_searched_reaches_the_carnet_the_copy_or_an_agent() {
 fn oublie_ca_takes_the_searches_with_it() {
     let (_dir, config) = demo("fr");
     // kept and made in every space: Marc's, and others
-    for (q, space) in [("marc", "all"), ("anniversaire", "all"), ("Marc", "pro"), ("garantie lave-linge", "all")] {
+    for (q, space) in [("marc", "all"), ("anniversaire", "all"), ("Marc", "pro"), ("garantie lave-linge", "all"), ("Marcel", "all")] {
         sm::keep(&config, q, None, space, None).unwrap();
     }
     sm::rename(&config, &kept_id(&config, "anniversaire"), "Les anniversaires").unwrap();
     for (q, cat, space) in [("claire", "people", "all"), ("marc", "people", "all"), ("cadeau pour Marc", "people", "perso"),
-                            ("garantie", "papers", "all"), ("MARC", "money", "all")] {
+                            ("garantie", "papers", "all"), ("marché", "money", "all"), ("MARC", "money", "all")] {
         assert!(sm::searched_at(&config, q, Some(cat), space, &fr(), today()).unwrap(), "{q}");
     }
     let (before, _) = nb::index::answer(&config, &fr(), None, None, "");
@@ -389,7 +397,8 @@ fn oublie_ca_takes_the_searches_with_it() {
         sm::kept_at(&config, space, &fr(), today())["kept"].as_array().unwrap().iter().map(|k| k["q"].as_str().unwrap().to_string()).collect()
     };
     // no kept « marc » in any space (accents and case folded as the search folds them); the others untouched
-    assert_eq!(words("all"), ["anniversaire", "garantie lave-linge"]);
+    // (whole words: « Marcel » and « marché » stay)
+    assert_eq!(words("all"), ["anniversaire", "garantie lave-linge", "Marcel"]);
     assert_eq!(words("pro"), Vec::<String>::new());
     let searched = |cat: &str, space: &str| -> Vec<String> {
         sm::category_at(&config, cat, space, None, &fr(), false, today()).unwrap()["searched"].as_array().unwrap()
@@ -397,38 +406,121 @@ fn oublie_ca_takes_the_searches_with_it() {
     };
     assert_eq!(searched("people", "all"), ["claire"]);
     assert_eq!(searched("people", "perso"), Vec::<String>::new());
-    assert_eq!(searched("money", "all"), Vec::<String>::new());
+    assert_eq!(searched("money", "all"), ["marché"]);
     assert_eq!(searched("papers", "all"), ["garantie"]);
     // the grey words of Personnes: no « marc » left
     let s = sm::summary_at(&config, "all", &fr(), today(), now());
     assert_eq!(line(&s, "people").unwrap()["hint"], json!("claire"));
-    assert!(!fold_text(&s["kept"].to_string()).contains("marc"), "{}", s["kept"]);
+    assert!(!has_word(&s["kept"].to_string(), "marc"), "{}", s["kept"]);
     // the phone's copy: a new version, its kept searches without Marc's
     let (after, _) = nb::index::answer(&config, &fr(), Some(before["version"].as_u64().unwrap()), before["epoch"].as_str(), "");
     assert!(after["version"].as_u64().unwrap() > before["version"].as_u64().unwrap());
     let kept: Vec<&str> = after["kept"].as_array().unwrap().iter().map(|k| k["q"].as_str().unwrap()).collect();
-    assert_eq!(kept, ["anniversaire", "garantie lave-linge"]);
+    assert_eq!(kept, ["anniversaire", "garantie lave-linge", "Marcel"]);
     // nothing of it left on disk in the searches' file nor the state's
     let file = std::fs::read_to_string(sm::searched_path(&config)).unwrap();
-    assert!(!fold_text(&file).contains("marc"), "{file}");
+    assert!(!has_word(&file, "marc"), "{file}");
     let state = nb::read_state(&config);
-    assert!(!fold_text(&state["kept_searches"].to_string()).contains("marc"));
+    assert!(!has_word(&state["kept_searches"].to_string(), "marc"));
     // a fact forgotten (no page): the searches holding its words, whole words only
     let request = nb::forget::Request { texts: vec!["lave-linge".into()], ..Default::default() };
     if let Ok(target) = nb::forget::target(&config, &request) {
         nb::forget::apply(&config, &target, "fr", "").unwrap();
     }
-    assert_eq!(words("all"), ["anniversaire"]);
+    assert_eq!(words("all"), ["anniversaire", "Marcel"]);
     assert_eq!(searched("papers", "all"), ["garantie"]);
+}
+
+/// Whether folded `text` holds `word` as a whole word.
+fn has_word(text: &str, word: &str) -> bool {
+    nb::fold(text).split(|c: char| !c.is_alphanumeric()).any(|w| w == word)
+}
+
+#[test]
+fn a_short_first_name_never_wipes_the_searches() {
+    // « La nounou », « Van Damme » forgotten whole: their first word is a stop word; « nounou » is the name (review 1,
+    // R1)
+    let (_dir, config) = demo("fr");
+    for title in ["La nounou", "Van Damme"] {
+        nb::new_page(&config, Part::Main, "person", title, &nb::Who::you(&config)).unwrap().unwrap();
+    }
+    for q in ["la plage", "van gogh", "nounou mercredi", "le marché"] {
+        sm::keep(&config, q, None, "all", None).unwrap();
+    }
+    assert!(sm::searched_at(&config, "la cantine", Some("other"), "all", &fr(), today()).unwrap());
+    for page in ["La nounou", "Van Damme"] {
+        let request = nb::forget::Request { page: Some(page.into()), ..Default::default() };
+        let target = nb::forget::target(&config, &request).unwrap();
+        nb::forget::apply(&config, &target, "fr", "").unwrap();
+    }
+    let words: Vec<String> = sm::kept_at(&config, "all", &fr(), today())["kept"].as_array().unwrap().iter()
+        .map(|k| k["q"].as_str().unwrap().to_string()).collect();
+    assert_eq!(words, ["la plage", "van gogh", "le marché"]);
+    let other = sm::category_at(&config, "other", "all", None, &fr(), false, today()).unwrap();
+    assert_eq!(other["searched"][0]["q"], json!("la cantine"));
+}
+
+#[test]
+fn a_search_made_can_be_dropped() {
+    // one whose words are nowhere in the Carnet: « Oublie ça » has nothing to find, this drops it (review 1, B2)
+    let (_dir, config) = demo("fr");
+    for (q, cat, space) in [("avocat divorce", "papers", "all"), ("garantie", "papers", "all"), ("claire", "people", "all"),
+                            ("avocat divorce", "papers", "pro")] {
+        assert!(sm::searched_at(&config, q, Some(cat), space, &fr(), today()).unwrap(), "{q}");
+    }
+    let searched = |cat: &str, space: &str| -> Vec<String> {
+        sm::category_at(&config, cat, space, None, &fr(), false, today()).unwrap()["searched"].as_array().unwrap()
+            .iter().map(|s| s["q"].as_str().unwrap().to_string()).collect()
+    };
+    // one search (folded as the search folds), in one space
+    assert_eq!(sm::drop_searched(&config, Some("Avocat  Divorce"), Some("all"), None).unwrap(), 1);
+    assert_eq!((searched("papers", "all"), searched("papers", "pro")), (vec!["garantie".to_string()], vec!["avocat divorce".to_string()]));
+    // in every space
+    assert_eq!(sm::drop_searched(&config, Some("avocat divorce"), None, None).unwrap(), 1);
+    assert_eq!(searched("papers", "pro"), Vec::<String>::new());
+    // a category's
+    assert_eq!(sm::drop_searched(&config, None, Some("all"), Some("papers")).unwrap(), 1);
+    assert_eq!(searched("people", "all"), ["claire"]);
+    // all of them
+    assert_eq!(sm::drop_searched(&config, None, None, None).unwrap(), 1);
+    assert_eq!(searched("people", "all"), Vec::<String>::new());
+    assert_eq!(sm::drop_searched(&config, None, None, None).unwrap(), 0);
+}
+
+#[test]
+fn the_moments_card_never_speaks_of_sante() {
+    let (_dir, config) = demo("fr");
+    santé(&config);
+    // the misplaced points' card: never Santé's points, whatever their words (review 1, B1)
+    nb::misplaced::detect(&config).unwrap();
+    let s = sm::summary_at(&config, "all", &fr(), today(), now());
+    assert!(!s.to_string().contains("Prednisolone"), "{}", s["card"]);
+    // the question of the day about health: never on the sommaire (review 1, R2); another one is
+    let day = nb::ask::day_of(now());
+    let ask = |id: &str, question: &str| {
+        json!({"id": id, "card": "ask", "at": now(), "day": day, "agent": "wellness", "session": "s1", "state": "open",
+               "question": question, "chips": ["Oui", "Non"], "path": "Toi.md", "title": "Toi", "kind": "self",
+               "section": "about", "label": "x"})
+    };
+    let health = ask("c1", "Ton allergie à la pénicilline, c'est toujours d'actualité ?");
+    nb::update_state(&config, |st| {
+        st.insert("cards".into(), json!([health.clone()]));
+    })
+    .unwrap();
+    let s = sm::summary_at(&config, "all", &fr(), today(), now());
+    assert!(s["card"].is_null() || s["card"]["kind"] != "ask", "{}", s["card"]);
+    assert!(!s.to_string().contains("pénicilline"));
+    nb::update_state(&config, |st| {
+        st.insert("cards".into(), json!([ask("c2", "Quelle est ta pointure ?"), health.clone()]));
+    })
+    .unwrap();
+    let s = sm::summary_at(&config, "all", &fr(), today(), now());
+    assert_eq!((s["card"]["kind"].clone(), s["card"]["card"]["question"].clone()), (json!("ask"), json!("Quelle est ta pointure ?")));
 }
 
 fn kept_id(config: &Config, q: &str) -> String {
     let all = nb::read_state(config)["kept_searches"].clone();
     all.as_array().unwrap().iter().find(|k| k["q"] == q).unwrap()["id"].as_str().unwrap().to_string()
-}
-
-fn fold_text(text: &str) -> String {
-    nb::fold(text)
 }
 
 #[test]

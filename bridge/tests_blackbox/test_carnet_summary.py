@@ -307,3 +307,29 @@ def test_s4_oublie_ca_takes_the_searches_with_it(bridges):
     after = index_of(bridge, lang="fr", since=str(before["version"]), epoch=before["epoch"]).json()
     assert after["version"] > before["version"] and [k["q"] for k in after["kept"]] == ["anniversaire"]
     assert b"marc" not in (bridge.state_dir / "notebook" / "searched.json").read_bytes().lower()
+
+
+def test_s4_a_search_made_can_be_dropped_sante_open_keeps_none_and_the_version_has_its_epoch(bridges):
+    """Review 1 of S4: B2 (`DELETE /v1/notebook/searched`: a search whose words are nowhere in the Carnet, that
+    « Oublie ça » cannot find), R3 (a search made with Santé open is never kept), R4 (`epoch` with `version`)."""
+    bridge = bridges.new().start()
+    write_carnet(bridge)
+    for q, cat in (("avocat divorce", "papers"), ("garantie", "papers"), ("claire", "people")):
+        searched(bridge, q=q, category=cat)
+    got = bridge.delete("/v1/notebook/searched", params={"q": "Avocat divorce"}, headers=AUTH)
+    assert got.status_code == 204 and not got.content and got.headers.get("cache-control") == "no-store", got.text
+    assert [x["q"] for x in category(bridge, "papers")["searched"]] == ["garantie"]
+    got = bridge.delete("/v1/notebook/searched", headers=AUTH)
+    assert got.status_code == 204 and got.headers.get("cache-control") == "no-store"
+    assert category(bridge, "papers")["searched"] == [] and category(bridge, "people")["searched"] == []
+    for params, code in (({"space": "x"}, "space_unknown"), ({"category": "gens"}, "category_unknown")):
+        got = bridge.delete("/v1/notebook/searched", params=params, headers=AUTH)
+        assert got.status_code == 400 and got.json()["detail"]["code"] == code, (params, got.status_code, got.text)
+    # Santé open: never kept, whatever it finds in the shared Carnet
+    searched(bridge, q="marc", private=True)
+    searched(bridge, q="marc", category="people", private=True)
+    assert category(bridge, "people")["searched"] == []
+    # the sommaire's version with its epoch: the copy's
+    copy = index_of(bridge, lang="fr").json()
+    s = summary(bridge)
+    assert (s["epoch"], s["version"]) == (copy["epoch"], copy["version"])

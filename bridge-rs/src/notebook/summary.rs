@@ -648,6 +648,11 @@ pub fn forget_searched(config: &Config, gone: &dyn Fn(&str) -> bool) -> std::io:
     Ok(n)
 }
 
+/// (tests first: review 1 of S4, B2)
+pub fn drop_searched(_config: &Config, _q: Option<&str>, _space: Option<&str>, _category: Option<&str>) -> std::io::Result<usize> {
+    Ok(0)
+}
+
 /// A search made (`POST /v1/notebook/searched`), kept for « Cherché ici » and the grey words. Whether it was kept.
 pub fn searched_at(config: &Config, q: &str, category: Option<&str>, space: &str, langs: &[String], today: NaiveDate) -> Result<bool, Refused> {
     let category = category.map(str::trim).filter(|c| !c.is_empty());
