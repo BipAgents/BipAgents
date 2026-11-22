@@ -66,11 +66,17 @@ impl Client {
 
 /// conftest's `client` fixture (the background tasks off: none of these tests needs them).
 async fn client() -> Client {
+    client_with(|_| {}).await
+}
+
+/// `client`, its configuration changed first.
+async fn client_with(change: impl FnOnce(&mut Value)) -> Client {
     let dir = tempfile::tempdir().unwrap();
     let backend = FakeBackend::start().await;
     let apns = FakeApns::start().await;
     let mut data = config_dict(dir.path(), &backend.urls());
     data["apns"]["base_url"] = json!(apns.url);
+    change(&mut data);
     let app = TestApp::new(parse_config(&data, None).unwrap());
     Client { _dir: dir, app, backend, apns }
 }
@@ -384,7 +390,10 @@ async fn reply_ready_pushed_when_the_app_left() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn replay_backlog_merges_deltas_so_long_replies_keep_their_start() {
-    let c = client().await;
+    // `turn.status` off: the hub's clock (every 2 s) says what the agent does, and a status inside the reply ends the
+    // merged delta there (the next test). With it on, one delta here held only while the 5,501 deltas went through in
+    // less than one tick: red once on a loaded CI runner (22/11).
+    let c = client_with(|data| data["status"] = json!({"enabled": false})).await;
     let words: Vec<String> = (0..BACKLOG_EVENTS + 500).map(|i| format!("mot{i} ")).collect();
     let mut items = vec![text(sse("message.delta", json!({"run_id": "run_long", "delta": "Début : "})))];
     items.extend(words.iter().map(|w| text(sse("message.delta", json!({"run_id": "run_long", "delta": w})))));
@@ -396,6 +405,46 @@ async fn replay_backlog_merges_deltas_so_long_replies_keep_their_start() {
     let replay = read_sse(&c.get("/v1/runs/run_long/events?agent=wellness").await.text()); // late follower: the backlog
     assert_eq!(names(&replay), ["message.delta", "tool.started", "message.delta", "run.completed"]);
     assert_eq!(replay[0].1["delta"], json!(format!("Début : {}", words.concat())));
+    c.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_status_inside_a_reply_splits_its_backlog_delta_and_loses_nothing() {
+    // The hub's clock says what the agent does (`turn.status`, on since 21/11; its first tick as soon as the run has
+    // an event): a status that falls inside a reply ends the backlog's merged delta there. A late follower (the app
+    // back on the conversation) then gets the reply in two deltas, in order, nothing lost (the apps add deltas up);
+    // one that asks for statuses gets the status between them.
+    let c = client().await;
+    let gate = Flag::new();
+    let delta = |d: &str| text(sse("message.delta", json!({"run_id": "run_split", "delta": d})));
+    c.script(
+        "run_split",
+        vec![
+            delta("Début "),
+            delta("de la réponse, "),
+            RunItem::Wait(gate.clone()),
+            delta("suite "),
+            delta("et fin."),
+            text(sse("run.completed", json!({"run_id": "run_split", "output": "…"}))),
+        ],
+    );
+    let mut first = c.state().hub.subscribe(&c.agent(), "run_split", "app", false);
+    let words = |sub: &bipbridge::runs::RunSubscription| -> String {
+        sub.state.lock().unwrap().backlog.iter().filter(|e| e.r#type == "message.delta").map(|e| e.text()).collect()
+    };
+    assert!(wait_until(|| words(&first.sub) == "Début de la réponse, ", Duration::from_secs(5)).await);
+    // the clock's tick (the real one may come first: the same status, before the gate too)
+    c.state().hub.status_tick(&first.sub);
+    gate.set();
+    let live = drain(&mut first).await; // every delta, live
+    assert_eq!(live, ["message.delta", "message.delta", "message.delta", "message.delta", "run.completed"]);
+    let replay = read_sse(&c.get("/v1/runs/run_split/events?agent=wellness").await.text());
+    assert_eq!(names(&replay), ["message.delta", "message.delta", "run.completed"]);
+    let said: String = replay.iter().filter_map(|(_, d)| d["delta"].as_str()).collect();
+    assert_eq!(said, "Début de la réponse, suite et fin.");
+    let with_status = read_sse(&c.get("/v1/runs/run_split/events?agent=wellness&status=1").await.text());
+    assert_eq!(names(&with_status), ["message.delta", "turn.status", "message.delta", "run.completed"]);
+    assert_eq!(with_status[1].1["state"], "thinking");
     c.close().await;
 }
 
