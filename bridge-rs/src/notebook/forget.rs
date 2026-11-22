@@ -21,7 +21,9 @@
 //! a page of that name again later). `state.json` itself keeps no text of it afterwards (`scrub_state`): the agents'
 //! open « Oublie ça » cards about it closed, the question, follow-up and proposal cards about it removed, the nightly
 //! pass's tried lines kept as fingerprints. The erasure is logged as `forgotten`, without its text. The offline copy's ETag
-//! changes with the content (offline.rs).
+//! changes with the content (offline.rs). The sommaire's searches (summary.rs, S4) that say it go too: the kept ones
+//! (`state.json` `kept_searches`, every space: the phone's copy moves to a new version) and those made
+//! (`searched.json`: « Cherché ici », the grey words).
 //!
 //!     notebook/state.json   forgotten: [{t: [hash], f: [hash], n: [hash], until?}], cards: [{id, at, agent, session,
 //!                           card: "forget", state, request, view}]
@@ -859,8 +861,16 @@ pub fn apply(config: &Config, target: &Target, lang: &str, person: &str) -> anyh
         .filter(|(_, request)| matches!(view(config, request, lang, person), Err(Refused::Nothing | Refused::PageGone)))
         .map(|(id, _)| id)
         .collect();
+    // the searches (summary.rs): kept ones and those made that say it, in every space, as an agent's memory line
+    // (folded, whole words; a person's first name when their page goes whole)
+    let said = |q: &str| target.hit(q, false, true).is_some();
+    match super::summary::forget_searched(config, &said) {
+        Ok(n) => erased += n,
+        Err(err) => tracing::warn!(error = %err, "forgotten searches not taken out of searched.json"),
+    }
     super::update_state(config, |state| {
         erased += scrub_state(state, target, &moot);
+        erased += super::summary::forget_kept(state, &said);
         let list = state.entry("forgotten").or_insert_with(|| json!([]));
         if let Value::Array(items) = list {
             items.retain(|p| p.get("until").and_then(Value::as_f64).is_none_or(|u| u >= now));

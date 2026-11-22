@@ -203,6 +203,9 @@ cases are written on them.
   reference, never Santé; in the phone's copy (`kept`, every space's), the copy's version moving with them.
 - **Searches made**: `searched.json`, 3 a category and a space; without a category, under the best result's; never
   Santé, a number, a single letter; never in a page, the state, the copy, nor anything an agent reads.
+- **« Oublie ça »** takes the searches with it: the kept ones (every space; the copy moves to a new version, the phones
+  drop them) and those made (« Cherché ici », the grey words) whose words, or a kept one's title, say what is forgotten
+  (folded as the search folds, whole words; a person's first name too when their page is forgotten whole).
 - **Spaces until S5**: no note is Pro: `perso` is the whole Carnet, `pro` nothing; `spaces` stays `[]` (the app keeps
   its « Moi | Famille » until S6). Unknown: 400 `space_unknown`.
 - **Errors** (`{"detail": {"code", "text"}}`): no text yet but `number_refused`'s (the apps show their own until

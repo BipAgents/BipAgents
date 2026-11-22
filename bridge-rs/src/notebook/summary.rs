@@ -20,6 +20,9 @@
 //!   words once; without a category, under the category of the search's best result (nothing found: not kept);
 //!   never Santé, never a number or a reference, never a single letter. They are « Cherché ici » on a category's
 //!   page and the sommaire's grey words.
+//! - **« Oublie ça »** (forget.rs `apply`) takes with it the kept searches and the searches made whose words (or a kept
+//!   one's title) are what it forgets, in every space: the rule of an agent's memory line (`Target::hit`, folded, whole
+//!   words; a person's first name too when their page is forgotten whole).
 //! - **Spaces** (`all`, `perso`, `pro`): until S5 no note is Pro: `perso` is the whole Carnet and `pro` nothing; the
 //!   selector (`spaces`) stays empty until S5 (Perso · Pro) and S6 (Famille).
 
@@ -574,6 +577,20 @@ pub fn drop_kept(config: &Config, id: &str) -> Result<String, Refused> {
     Ok(space)
 }
 
+/// « Oublie ça » (forget.rs `apply`, under the Carnet's lock, in its `state.json` change): the kept searches of every
+/// space whose words or title `gone` says (folded as the search folds them); how many left. The copy's version moves
+/// with them (index.rs), so the phones drop them at their next read.
+pub fn forget_kept(state: &mut Dict, gone: &dyn Fn(&str) -> bool) -> usize {
+    let all = kept_all(state);
+    let left: Vec<Dict> =
+        all.iter().filter(|k| !gone(&tk::str_or_empty(k.get("q"))) && !gone(&tk::str_or_empty(k.get("title")))).cloned().collect();
+    let n = all.len() - left.len();
+    if n > 0 {
+        state.insert(KEPT_KEY.into(), json!(left));
+    }
+    n
+}
+
 // -- searches made (searched.json) ------------------------------------------------------------------------------------
 
 static SEARCHED: Mutex<()> = Mutex::new(());
@@ -601,6 +618,34 @@ fn searched_in(config: &Config, space: &str, category: &str) -> Vec<Value> {
         return Vec::new();
     }
     read_searched(config).get(&searched_key(space, category)).and_then(Value::as_array).cloned().unwrap_or_default()
+}
+
+fn write_searched(config: &Config, all: serde_json::Map<String, Value>) -> std::io::Result<()> {
+    let path = searched_path(config);
+    std::fs::create_dir_all(super::root(config))?;
+    let temporary = path.with_extension("tmp");
+    crate::py::write_with_mode(&temporary.to_string_lossy(), Value::Object(all).to_string().as_bytes(), 0o600)?;
+    std::fs::rename(&temporary, &path)
+}
+
+/// « Oublie ça » (forget.rs `apply`): the searches made, in every space and category, whose words `gone` says (« Cherché
+/// ici », the grey words); how many left.
+pub fn forget_searched(config: &Config, gone: &dyn Fn(&str) -> bool) -> std::io::Result<usize> {
+    let _guard = SEARCHED.lock().unwrap_or_else(|e| e.into_inner());
+    let mut all = read_searched(config);
+    let mut n = 0;
+    for list in all.values_mut() {
+        if let Value::Array(items) = list {
+            let before = items.len();
+            items.retain(|s| !gone(s["q"].as_str().unwrap_or_default()));
+            n += before - items.len();
+        }
+    }
+    if n > 0 {
+        all.retain(|_, list| list.as_array().is_some_and(|l| !l.is_empty()));
+        write_searched(config, all)?;
+    }
+    Ok(n)
 }
 
 /// A search made (`POST /v1/notebook/searched`), kept for « Cherché ici » and the grey words. Whether it was kept.
@@ -638,12 +683,5 @@ pub fn searched_at(config: &Config, q: &str, category: Option<&str>, space: &str
     list.insert(0, json!({"q": q, "at": chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string()}));
     list.truncate(SEARCHED_KEPT);
     all.insert(key, json!(list));
-    let path = searched_path(config);
-    let written = (|| -> std::io::Result<()> {
-        std::fs::create_dir_all(super::root(config))?;
-        let temporary = path.with_extension("tmp");
-        crate::py::write_with_mode(&temporary.to_string_lossy(), Value::Object(all).to_string().as_bytes(), 0o600)?;
-        std::fs::rename(&temporary, &path)
-    })();
-    Ok(written.is_ok())
+    Ok(write_searched(config, all).is_ok())
 }
