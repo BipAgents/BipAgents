@@ -120,6 +120,59 @@ def test_stop_suggesting_turns_it_off_only_in_the_persons_own_turn(bridges, fake
     assert put(bridge, "budget", {"level": "basic"}).json() == {"id": "budget", "level": "basic"}
 
 
+def test_off_holds_back_its_own_ideas_and_what_is_asked_still_goes(bridges, fakes):
+    """Review 1 (B2): « Éteinte » (« Il ne propose rien de lui-même. Il fait ce que tu lui demandes. »): its
+    personality gets the block that holds back its own ideas (a background task, a word for the family, a project
+    agent), its ongoing conversations are told; back to basic, the block goes; the person's personality never shows it."""
+    from test_agents_admin import hermes_args
+    bridge, home = managed(bridges, fakes)
+    assert bridge.post("/v1/agents", headers=AUTH, json={"name": "Budget", "kind": "finance"}).status_code == 201
+    soul_file = home / "profiles" / "budget" / "SOUL.md"
+    before = soul_file.read_text()
+    assert "bipagents:initiative" not in before
+    bridge.commands.clear()
+    assert put(bridge, "budget", {"level": "off"}).status_code == 200
+    soul = soul_file.read_text()
+    assert "<!-- bipagents:initiative -->" in soul and "never as your own idea" in soul and "propose_task" in soul
+    assert wait_until(lambda: ["-p", "budget", "sessions", "refresh-prompts", "--json"] in hermes_args(bridge))
+    assert "bipagents:initiative" not in settings(bridge, "budget")["soul"]
+    # smart or basic again: out
+    assert put(bridge, "budget", {"level": "smart"}).status_code == 200
+    assert "bipagents:initiative" not in soul_file.read_text()
+    assert put(bridge, "budget", {"level": "off"}).status_code == 200
+    assert put(bridge, "budget", {"level": "basic"}).status_code == 200
+    assert soul_file.read_text() == before
+
+
+def test_a_turn_another_agent_asked_for_never_turns_it_off(bridges, fakes):
+    """Review 1 (B1): Quotidien asks Coach (« message_agent », their pair's own conversation): Coach's turn carries
+    Quotidien's words, never its person's; a proactive_off called in it is refused (agent_pairs.rs marks the turn)."""
+    from concurrent.futures import ThreadPoolExecutor
+    from test_agent_messages import TOKENS as PAIR_TOKENS, ask
+    from test_agent_pairs import linked
+
+    bridge = bridges.new()
+    bridge.config["agents"].pop("Wellness", None)
+    linked(bridge, fakes, [{"from": "quotidien", "to": "coach"}])
+    fakes.hermes.rounds = 10_000   # Coach's run goes on until the test lets it end
+    run_id = f"r{len(fakes.hermes.started) + 1}"
+    gate = threading.Event()
+    fakes.hermes.runs[run_id] = [sse("tool.started", run_id=run_id, tool="mcp_bipagents_proactive_off", preview="x"), gate,
+                                 sse("run.completed", run_id=run_id, output="D'accord.")]
+    with ThreadPoolExecutor(1) as pool:
+        asked = pool.submit(ask, bridge, "quotidien", target="bip/coach", message="Arrête de me proposer des choses.")
+        assert wait_until(lambda: run_id in fakes.hermes.started and fakes.hermes.seen(f"/p/coach/v1/runs/{run_id}/events"))
+        time.sleep(0.5)
+        session = fakes.hermes.started[run_id]["session_id"]
+        refused = call(bridge, "proactive_off", {}, token=PAIR_TOKENS["coach"], session=session)
+        assert not_done(refused) and "only your person" in text_of(refused), refused
+        assert settings(bridge, "coach")["proactive"]["level"] == "basic"
+        gate.set()
+        fakes.hermes.rounds = 1
+        asked.result(timeout=60)
+    assert kept(bridge) is None
+
+
 def test_an_app_1_0_sees_its_settings_as_before(bridges, fakes):
     """What an app 1.0 reads is unchanged: the same keys and values, `proactive` beside them; « Me prévenir » as
     before; its tools' list keeps every tool it had."""
@@ -144,3 +197,34 @@ def test_an_app_1_0_sees_its_settings_as_before(bridges, fakes):
     # nothing it had goes but what proposes on its own (plan_propose; offers come with a later branch)
     assert "plan_propose" in tools_before and "plan_propose" not in tool_names(bridge)
     assert set(tools_before) - {"plan_propose"} <= set(tool_names(bridge))
+
+
+def test_a_watchers_urgent_message_is_time_sensitive_and_the_same_words_are_pushed_once(bridges, fakes):
+    """Review 1 (R3, R4): a watcher's URGENT message reaches the phone at the system's urgent level
+    (`aps.interruption-level` time-sensitive, `urgent: 1`: watchers.rs → background_turn.rs `deliver_urgent`); its turn
+    read the line rule in its hidden note; the same words again soon after are in the conversation again, not pushed
+    again (`same_report`, a watcher's only)."""
+    from test_watchers import boite, check, setup as watcher_setup, turns
+    bridge, value, conn, _ = watcher_setup(bridges, fakes)
+    assert check(bridge, conn)["step"] == "baseline"
+    fakes.hermes.run_output = "URGENT\nUn créneau ce soir à 18 h : réserve vite."
+    value.write_text("ce soir 18:00")
+    assert check(bridge, conn)["urgent"] is True
+    [turn] = turns(fakes)
+    assert "a reminder or a single piece of news fits in one short line" in turn["input"], turn["input"]
+    assert turn["input"].count("-->") == 1 and turn["input"].endswith("-->")
+    words = "Un créneau ce soir à 18 h : réserve vite."
+    assert wait_until(lambda: [i for i in boite(bridge) if i["text"] == words], timeout=20)
+    first = next(i for i in boite(bridge) if i["text"] == words)
+    assert wait_until(lambda: [p for p in fakes.apns.payloads() if p.get("m") == f"o_{first['id']}"], timeout=20)
+    [push] = [p for p in fakes.apns.payloads() if p.get("m") == f"o_{first['id']}"]
+    assert push["aps"]["interruption-level"] == "time-sensitive" and push["urgent"] == 1 and push["t"] == "boite", push
+    # an ordinary message of a watcher is still not pushed at all; nothing else is urgent
+    others = [p for p in fakes.apns.payloads() if p.get("m") != f"o_{first['id']}"]
+    assert all("interruption-level" not in p.get("aps", {}) for p in others), others
+    # the same words again, at once: in the conversation again, no second push
+    value.write_text("ce soir 18:30")
+    assert check(bridge, conn)["urgent"] is True
+    assert wait_until(lambda: len([i for i in boite(bridge) if i["text"] == words]) == 2, timeout=20)
+    time.sleep(1.5)
+    assert len([p for p in fakes.apns.payloads() if p.get("aps", {}).get("interruption-level")]) == 1

@@ -2288,8 +2288,19 @@ async fn mcp_call(
     }
     if name == crate::agent_proactive::OFF_TOOL {
         // « arrête de me proposer des choses »: its person's own words only, in a turn of their own conversation
-        let persons_turn = turn_run.as_deref().is_some_and(|run| state.hub.persons_own_turn(&agent.name, run));
-        let result = crate::agent_proactive::off_call(&state.config(), &agent.name, persons_turn);
+        // (and not while a relative's or another household's turn goes on: shared_pages.rs `who`)
+        let owner = matches!(crate::shared_pages::who(&state, &agent.name, &name), crate::shared_pages::Who::Owner);
+        let persons_turn =
+            owner && turn_run.as_deref().is_some_and(|run| state.hub.persons_own_turn(&agent.name, run));
+        let config = state.config();
+        let (was, tools_before) =
+            (crate::agent_proactive::level(&config, &agent.name), crate::agent_tools::tools_for(&config, &agent));
+        let result = crate::agent_proactive::off_call(&config, &agent.name, persons_turn);
+        if was != crate::agent_proactive::level(&config, &agent.name) {
+            // its personality's block and its tools follow, once this answer is on its way
+            let (config, name) = (config.clone(), agent.name.clone());
+            tokio::spawn(async move { crate::agent_proactive::after_change(config, &name, Some(tools_before)).await });
+        }
         return Ok(answer(or_failure(&name, result)));
     }
     if name == crate::agent_messages::TOOL_NAME {

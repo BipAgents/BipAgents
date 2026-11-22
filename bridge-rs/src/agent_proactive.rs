@@ -21,8 +21,11 @@
 //!
 //! What follows the level: the tools that propose without being asked (`PROPOSING_TOOLS`: `plan_propose`, `offer_act`,
 //! made by later branches) are listed only while it is not off (agent_tools.rs `own_tools`), and kept in view then
-//! (tool_diet.rs); its prompt cache is lost once, when the level changes. « Arrête de me proposer des choses » turns it
-//! off (`OFF_TOOL`, D3 A): only from a turn of its person's own conversation, never the other way.
+//! (tool_diet.rs); off, its personality gets `OFF_RULE` (`with_block`, agents_admin.rs `soul_text`): what its bridge
+//! rules let it propose of its own idea today (a background task, a word for the family, a project agent) only when
+//! its person asks; and the app's feature suggestions go through another agent (feature_tips.rs `proposer`). Its prompt
+//! cache is lost once, when the level changes. « Arrête de me proposer des choses » turns it off (`OFF_TOOL`, D3 A):
+//! only from a turn of its person's own conversation, never the other way.
 //!
 //! The log says « proactive smart → off · agent X », nothing else. No Python counterpart.
 
@@ -89,6 +92,57 @@ pub const SMART_BENCHED: [&str; 0] = [];
 pub const OTHERS_FACING: &str = "others_facing";
 
 static LOCK: Mutex<()> = Mutex::new(());
+
+/// The personality's block while « Éteinte » (« Il ne propose rien de lui-même. Il fait ce que tu lui demandes. »):
+/// the bridge's rules that let it propose of its own idea (souls.rs LONG_WORK_RULE « or the idea comes from you »,
+/// FAMILY_RULE, PROJECT_RULE, the compact rules' « your own idea: propose_task ») held back; what the person asks, as
+/// usual. In English, the same words each time (the prompt cache).
+pub const BLOCK_START: &str = "<!-- bipagents:initiative -->";
+pub const BLOCK_END: &str = "<!-- /bipagents:initiative -->";
+pub const OFF_RULE: &str = "Your person turned your « Initiative » off: you suggest nothing on your own. A background \
+task (propose_task), a message for their family (tell_family), a project agent or anything else: only when they ask \
+for it, never as your own idea, whatever your other rules say; and don't offer what else you could do for them. \
+Everything they ask, you still do as usual.";
+
+/// The personality without the block.
+pub fn split_block(soul: &str) -> (String, bool) {
+    let (Some(start), Some(end)) = (soul.find(BLOCK_START), soul.find(BLOCK_END)) else {
+        return (soul.to_string(), false);
+    };
+    if end < start {
+        return (soul.to_string(), false);
+    }
+    (format!("{}{}", soul[..start].trim_end(), &soul[end + BLOCK_END.len()..]), true)
+}
+
+/// The personality with the block while `agent` is off (agents_admin.rs `soul_text`); without it otherwise.
+pub fn with_block(config: &Config, agent: &str, soul: &str) -> String {
+    let (body, _) = split_block(soul);
+    if !has_setting(config, agent) || level(config, agent) != Level::Off {
+        return body;
+    }
+    format!("{}\n\n{BLOCK_START}\n{OFF_RULE}\n{BLOCK_END}\n", body.trim_end())
+}
+
+/// The level changed: its personality follows (the block in or out) and its ongoing conversations take it from their
+/// next turn; its tools' list too, when it changed (`tools_before`: the list before), so its Hermes fetches it again.
+pub async fn after_change(config: std::sync::Arc<Config>, agent: &str, tools_before: Option<Vec<Value>>) {
+    let Some(agent) = config.agent(Some(agent)).cloned() else { return };
+    match crate::agents_admin::render_soul(&config, &agent) {
+        Ok(true) => crate::agents_admin::refresh_prompts_soon(
+            config.clone(),
+            agent.clone(),
+            crate::agents_admin::default_run(),
+        ),
+        Ok(false) => {}
+        Err(exc) => tracing::warn!(target: "bipbridge::agents", agent = %agent.name, error = %format!("{exc:#}"), "personality not rendered"),
+    }
+    if tools_before.as_ref() != Some(&crate::agent_tools::tools_for(&config, &agent)) {
+        if let Err(exc) = crate::agent_tools::register(&config, &agent, &crate::agents_admin::default_run()).await {
+            tracing::warn!(target: "bipbridge::agents", agent = %agent.name, error = %exc, "agent tools not registered");
+        }
+    }
+}
 
 fn path(config: &Config) -> PathBuf {
     PathBuf::from(config.data_dir()).join("agent_proactive.json")
@@ -246,17 +300,12 @@ async fn put_proactive(
     }
     let tools_before = config.agent(Some(&agent_id)).map(|a| crate::agent_tools::tools_for(&config, a));
     let (c, id, level) = (config.clone(), agent_id.clone(), body.level);
-    tokio::task::spawn_blocking(move || set_level(&c, &id, level))
+    let before = tokio::task::spawn_blocking(move || set_level(&c, &id, level))
         .await
         .map_err(anyhow::Error::from)?
         .map_err(anyhow::Error::from)?;
-    // its tools' list changed (the proposing tools listed or not): its Hermes fetches it again
-    if let Some(agent) = config.agent(Some(&agent_id)).cloned() {
-        if tools_before.as_ref() != Some(&crate::agent_tools::tools_for(&config, &agent)) {
-            if let Err(exc) = crate::agent_tools::register(&config, &agent, &crate::agents_admin::default_run()).await {
-                tracing::warn!(target: "bipbridge::agents", agent = %agent.name, error = %exc, "agent tools not registered");
-            }
-        }
+    if before != level {
+        after_change(config, &agent_id, tools_before).await;
     }
     Ok(web::ok(json!({"id": agent_id, "level": level.as_str()})))
 }
@@ -381,6 +430,34 @@ mod tests {
         // the default agent too
         off_call(&config, "budget", true).unwrap();
         assert_eq!(level(&config, "budget"), Level::Off);
+    }
+
+    /// Review 1 (B2): « Éteinte » holds back what the bridge's rules let it propose of its own idea today: its
+    /// personality gets the block; basic, smart or an agent others talk to: none; the person's own words untouched.
+    #[test]
+    fn off_holds_back_its_own_ideas_in_its_personality() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = config_in(dir.path());
+        let soul = "Tu es Vie.\n\n<!-- bipagents:language -->\nWrite in French.\n<!-- /bipagents:language -->\n";
+        assert_eq!(with_block(&config, "vie", soul), soul, "basic: as it was");
+        set_level(&config, "vie", Level::Smart).unwrap();
+        assert_eq!(with_block(&config, "vie", soul), soul, "smart: as it was");
+        set_level(&config, "vie", Level::Off).unwrap();
+        let off = with_block(&config, "vie", soul);
+        assert!(off.starts_with(soul.trim_end()) && off.ends_with(&format!("{BLOCK_START}\n{OFF_RULE}\n{BLOCK_END}\n")));
+        assert_eq!(with_block(&config, "vie", &off), off, "once");
+        for own_idea in ["propose_task", "tell_family", "project agent", "only when they ask", "never as your own idea"] {
+            assert!(OFF_RULE.contains(own_idea), "{own_idea}");
+        }
+        assert!(OFF_RULE.contains("Everything they ask, you still do"));
+        // back on: out; the personality the person edits never shows it
+        set_level(&config, "vie", Level::Basic).unwrap();
+        assert_eq!(with_block(&config, "vie", &off), soul);
+        assert_eq!(split_block(&off), (soul.to_string(), true));
+        // an agent others talk to: no setting, no block (its own rules close it: family_agent.rs, project_agent.rs)
+        set_level(&config, "budget", Level::Off).unwrap();
+        make_project(&config, "budget");
+        assert_eq!(with_block(&config, "budget", soul), soul);
     }
 
     #[test]
