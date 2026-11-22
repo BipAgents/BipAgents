@@ -46,6 +46,8 @@ pub struct BoiteMessage {
     pub session_id: Option<String>,
     /// Files given besides the text's `MEDIA:` lines (paths as the agent sees them).
     pub files: Vec<String>,
+    /// Pushed at the system's urgent level (a watcher's URGENT message: push_runs/notices.rs `Message`).
+    pub urgent: bool,
 }
 
 impl BoiteMessage {
@@ -133,8 +135,8 @@ impl OutboxService {
             kept.insert(crate::py::py_str(&item["id"]), said);
         }
         tracing::info!(agent = %agent.name, id = %crate::py::py_str(&item["id"]), chars = pyx::len(&text), "outbox message stored");
-        let (this, agent, delivered) = (self.clone(), agent.clone(), item.clone());
-        let handle = tokio::spawn(async move { this.deliver(&agent, &delivered, notify).await });
+        let (this, agent, delivered, urgent) = (self.clone(), agent.clone(), item.clone(), message.urgent);
+        let handle = tokio::spawn(async move { this.deliver(&agent, &delivered, notify, urgent).await });
         let mut tasks = self.tasks.lock().unwrap_or_else(|e| e.into_inner());
         tasks.retain(|t| !t.is_finished());
         tasks.push(handle);
@@ -142,7 +144,7 @@ impl OutboxService {
     }
 
     /// Wait (bounded) for the pre-synthesized audio, then push.
-    async fn deliver(self: &Arc<Self>, agent: &AgentConfig, item: &Row, notify: bool) {
+    async fn deliver(self: &Arc<Self>, agent: &AgentConfig, item: &Row, notify: bool, urgent: bool) {
         if let Some(task) = self.ensure_audio(item, Some(agent)) {
             let wait = self.config.get().outbox.audio_wait_seconds.max(0.0);
             // push now when it takes longer; the audio route serves it once ready
@@ -163,7 +165,7 @@ impl OutboxService {
         } else {
             BoiteFrom::Other
         };
-        self.push.notify_message(&agent.name, &id, &text, session_id, from, notify).await;
+        self.push.notify_message(&agent.name, &id, &text, session_id, from, notify, urgent).await;
     }
 
     pub async fn close(&self) {

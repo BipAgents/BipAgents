@@ -503,7 +503,8 @@ impl PushService {
     }
 
     /// A Boîte message (outbox.rs): `from` says whose (its rule, notifications.rs); `notify` false: journaled only
-    /// (the Boîte lists it), no push.
+    /// (the Boîte lists it), no push; `urgent`: pushed at the system's urgent level (notices.rs `Message`).
+    #[allow(clippy::too_many_arguments)]
     pub async fn notify_message(
         &self,
         agent: &str,
@@ -512,8 +513,10 @@ impl PushService {
         session_id: Option<&str>,
         from: BoiteFrom,
         notify: bool,
+        urgent: bool,
     ) -> usize {
-        let notice = Notice::Message { outbox_id: outbox_id.into(), text: text.into(), session_id: own(session_id) };
+        let notice =
+            Notice::Message { outbox_id: outbox_id.into(), text: text.into(), session_id: own(session_id), urgent };
         let Some(mut event) = notice.event(agent, &self.context(agent)) else { return 0 };
         event.from = Some(from);
         event.quiet = !notify;
@@ -706,6 +709,35 @@ fn fnv(text: &str) -> u64 {
 mod tests {
     use super::*;
 
+    /// Proactive agents §2.4 (Alex 22/11, Q3 A): a watcher's URGENT message goes at the system's urgent level; nothing
+    /// else does here, an offer's card never (a card of the bridge's, at the normal level). An app 1.0 gets the same
+    /// pointer: the iPhone reads the level from `aps`, Android 1.0 routes by `t` (« Messages »).
+    #[test]
+    fn a_watcher_urgent_message_is_time_sensitive_offers_never_are() {
+        let context = Context { title: "Vie".into(), lang: "fr".into() };
+        let pointer = Pointer { n: "n_1".into(), thread: Some("t_w".into()), message: None, badge: 1 };
+        let message = |urgent: bool| Notice::Message {
+            outbox_id: "o1".into(),
+            text: "Un créneau mardi à 10 h : réserve vite.".into(),
+            session_id: Some("sess_w".into()),
+            urgent,
+        };
+        let urgent = notices::build("vie", &context, &message(true), &pointer).payload;
+        let usual = notices::build("vie", &context, &message(false), &pointer).payload;
+        assert_eq!(urgent["aps"]["interruption-level"], json!("time-sensitive"));
+        assert_eq!(urgent["urgent"], json!(1));
+        // otherwise the very push of a usual Boîte message
+        let mut plain = urgent.clone();
+        plain.remove("urgent");
+        plain["aps"].as_object_mut().unwrap().remove("interruption-level");
+        assert_eq!(plain, usual);
+        assert!(usual["aps"].get("interruption-level").is_none() && usual.get("urgent").is_none());
+        // a card of the bridge's (an offer's, later) is never urgent
+        let card = Notice::Card { line: "Vie propose : Je regarde les hôtels ?".into(), key: "connector_request".into(), id: "c1".into() };
+        let card = notices::build("vie", &context, &card, &pointer).payload;
+        assert!(card["aps"].get("interruption-level").is_none() && card.get("urgent").is_none());
+    }
+
     #[test]
     fn pointer_and_silent_payloads() {
         let extra = Map::new();
@@ -771,14 +803,14 @@ mod tests {
             store.run(sql, vec![]).await.unwrap();
         }
         let shown = threads.show("t_main");
-        assert_eq!(push.notify_message("vie", "o_1", "C'est prêt.", None, BoiteFrom::Other, true).await, 0);
+        assert_eq!(push.notify_message("vie", "o_1", "C'est prêt.", None, BoiteFrom::Other, true, false).await, 0);
         let writes = store.run("SELECT * FROM written", vec![]).await.unwrap();
         assert_eq!(writes.len(), 1, "written once, as it ends: {writes:?}");
         assert_eq!(writes[0]["push"], json!("skipped:on_screen"));
         assert!(writes[0]["read_at"].is_string(), "{writes:?}");
         drop(shown);
         // off the screen: written « pending », then its outcome (no phone here)
-        push.notify_message("vie", "o_2", "Autre chose.", None, BoiteFrom::Other, true).await;
+        push.notify_message("vie", "o_2", "Autre chose.", None, BoiteFrom::Other, true, false).await;
         let writes = store.run("SELECT * FROM written", vec![]).await.unwrap();
         let pushes: Vec<&Value> = writes[1..].iter().map(|w| &w["push"]).collect();
         assert_eq!(pushes, [&json!("pending"), &json!("skipped:no_device")]);

@@ -58,6 +58,8 @@ def test_the_protocol_and_the_tokens(bridge):
                                           "notebook_record", "notebook_fill",
                                           # a plan it proposes on its own (plans.rs: « Initiative » not off)
                                           "plan_propose",
+                                          # « arrête de me proposer des choses » (agent_proactive.rs, 22/11)
+                                          "proactive_off",
                                           # a tool it has off, asked on a card (tool_asks.rs: on by default, 16/11)
                                           "ask_for_tool"]
     assert all(set(t) >= {"name", "description", "inputSchema"} for t in tools)

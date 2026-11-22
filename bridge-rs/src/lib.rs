@@ -90,6 +90,7 @@ pub mod voices;
 // -- agents ----------------------------------------------------------------------------------------
 pub mod agent_groups;
 pub mod agent_notify;
+pub mod agent_proactive;
 pub mod msg_queue;
 pub mod agent_feed;
 pub mod agent_shares;

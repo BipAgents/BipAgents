@@ -481,6 +481,8 @@ fn own_tools(config: &Config, agent: &AgentConfig, offer: bool) -> Vec<Value> {
     if !crate::routines::enabled(config, &agent.name) {
         tools.retain(|t| t["name"] != crate::routines::TOOL_NAME);
     }
+    // « Initiative » (agent_proactive.rs): nothing proposed on its own while off; « arrête de me proposer des choses »
+    crate::agent_proactive::keep_tools(config, &agent.name, &mut tools);
     // a tool it has off, asked for on a card in the conversation (tool_asks.rs): its list closed to what it lacks, and
     // not listed at all when it lacks nothing or the place doesn't offer it
     if let Some(ask) = crate::tool_asks::tool(config, agent) {
@@ -2283,6 +2285,12 @@ async fn mcp_call(
         let mut result = crate::live_calls::after_call(&state, &agent, &arguments);
         wrote(&agent.name, &name, &arguments, &mut result);
         return Ok(answer(result));
+    }
+    if name == crate::agent_proactive::OFF_TOOL {
+        // « arrête de me proposer des choses »: its person's own words only, in a turn of their own conversation
+        let persons_turn = turn_run.as_deref().is_some_and(|run| state.hub.persons_own_turn(&agent.name, run));
+        let result = crate::agent_proactive::off_call(&state.config(), &agent.name, persons_turn);
+        return Ok(answer(or_failure(&name, result)));
     }
     if name == crate::agent_messages::TOOL_NAME {
         // the family's agent asks for the member whose turn it is (None: its creator's): the target is told so

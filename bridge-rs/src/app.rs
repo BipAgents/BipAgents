@@ -1881,6 +1881,7 @@ fn assemble(state: &AppState, config: &Config) -> Router {
         .merge(agents_admin::router())
         .merge(crate::agent_groups::router())
         .merge(crate::agent_notify::router())
+        .merge(crate::agent_proactive::router())
         .merge(crate::msg_queue::router())
         .merge(crate::threads::router())
         .merge(crate::used::router())

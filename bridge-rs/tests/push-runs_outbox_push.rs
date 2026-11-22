@@ -140,7 +140,7 @@ async fn the_boite_keeps_the_arrival_order_whatever_the_push_order() {
     let second = state.store.add_outbox("wellness", "Arrivé le second.", key("m2")).await.unwrap().unwrap();
     for item in [&second, &first] {
         let id = item["id"].as_str().unwrap();
-        state.push.notify_message("wellness", id, "…", None, bipbridge::notifications::BoiteFrom::Other, true).await;
+        state.push.notify_message("wellness", id, "…", None, bipbridge::notifications::BoiteFrom::Other, true, false).await;
         tokio::time::sleep(Duration::from_millis(5)).await; // the second push strictly later
     }
 

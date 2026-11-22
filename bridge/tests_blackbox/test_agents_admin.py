@@ -227,7 +227,7 @@ def test_settings_and_delete(bridges, fakes):
     assert data["toolsets"] == [{"name": "web", "label": "Web", "description": "Search", "enabled": True, "configured": True}]
     assert data["id"] == "budget" and data["name"] == "Budget" and data["thinking"] is None and data["model"] is None
     assert data["isolated"] is False and data["protected"] is False and data["skills"] == []
-    assert set(data) - {"health", "weather", "notebook", "group", "guide", "notify"} == {"id", "name", "soul", "language", "thinking", "model", "toolsets",
+    assert set(data) - {"health", "weather", "notebook", "group", "guide", "notify", "proactive"} == {"id", "name", "soul", "language", "thinking", "model", "toolsets",
                                                "isolated", "protected", "services", "skills", "browser",
                                                "answer_style", "model_choice"}   # Rust: +3
     # its model chosen at home (model_choice.rs): its install's default (test_model_choice.py)
@@ -238,6 +238,8 @@ def test_settings_and_delete(bridges, fakes):
     assert data["notify"] == {"on": True}
     assert bridge.put("/v1/agents/budget/notify", headers=AUTH, json={"on": False}).json() == {"id": "budget", "on": False}
     assert bridge.get("/v1/agents/budget/settings", headers=AUTH).json()["notify"] == {"on": False}
+    # « Initiative » (agent_proactive.rs, test_agent_proactive.py): basic until the person changes it
+    assert data["proactive"] == {"level": "basic", "smart_ok": False}
     assert fakes.hermes.seen("/p/budget/v1/toolsets")
     bridge.commands.clear()
     patched = bridge.patch("/v1/agents/budget/settings", headers=AUTH,
@@ -417,7 +419,8 @@ def test_an_agent_set_up_by_hand_gets_its_personality_and_thinking_changed(bridg
     assert settings.json() == {"id": "vie", "name": "Vie", "soul": "Tu es Vie.", "language": "en", "thinking": "medium",
                                "model": None, "by_hand": True, "toolsets": [], "isolated": True, "protected": True,
                                "services": [], "guide": {"on": False}, "notify": {"on": True},
-                               "answer_style": {"style": "short", "custom": "", "custom_max": 300}}
+                               "answer_style": {"style": "short", "custom": "", "custom_max": 300},
+                               "proactive": {"level": "basic", "smart_ok": False}}
     assert not fakes.hermes.seen("/p/vie/v1/toolsets")   # its gateway isn't asked for its tools
     assert bridge.put("/v1/agents/vie/language", headers=AUTH, json={"lang": "fr"}).json() == {"id": "vie", "language": "fr"}
     bridge.patch("/v1/agents/vie/settings", headers=AUTH, json={"soul": "Tu es Vie, brève."})
