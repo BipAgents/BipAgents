@@ -282,3 +282,28 @@ def test_s4_a_search_made_feeds_searched_here_and_never_reaches_an_agent(bridges
                  "/v1/notebook/index", "/v1/notebook/offline"):
         got = bridge.get(path, headers=AUTH)
         assert got.status_code == 200 and word not in got.text, path
+
+
+def test_s4_oublie_ca_takes_the_searches_with_it(bridges):
+    """« Oublie Marc »: his kept searches (every space) and the searches made about him (« Cherché ici », the grey
+    words) go with the rest; the others stay; the phone's copy moves to a new version without them."""
+    bridge = bridges.new().start()
+    write_carnet(bridge)
+    for q, space in (("marc", None), ("anniversaire", None), ("Marc", "pro")):
+        keep(bridge, q=q, **({"space": space} if space else {}))
+    for q, cat in (("claire", "people"), ("marc", "people"), ("Marc Durand vinyle", "money")):
+        searched(bridge, q=q, category=cat)
+    assert line(summary(bridge), "people")["hint"] == "marc, claire"
+    before = index_of(bridge, lang="fr").json()
+    preview = bridge.post("/v1/notebook/forget/preview", params={"lang": "fr"}, json={"page": "Marc Durand"}, headers=AUTH)
+    assert preview.status_code == 200, preview.text
+    assert bridge.post("/v1/notebook/forget/confirm", json={"token": preview.json()["token"]}, headers=AUTH).status_code == 200
+    assert [k["q"] for k in get(bridge, "/v1/notebook/kept")["kept"]] == ["anniversaire"]
+    assert get(bridge, "/v1/notebook/kept", space="pro")["kept"] == []
+    assert [x["q"] for x in category(bridge, "people")["searched"]] == ["claire"]
+    assert category(bridge, "money")["searched"] == []
+    s = summary(bridge)
+    assert line(s, "people")["hint"] == "claire" and "marc" not in json.dumps(s["kept"]).lower()
+    after = index_of(bridge, lang="fr", since=str(before["version"]), epoch=before["epoch"]).json()
+    assert after["version"] > before["version"] and [k["q"] for k in after["kept"]] == ["anniversaire"]
+    assert b"marc" not in (bridge.state_dir / "notebook" / "searched.json").read_bytes().lower()

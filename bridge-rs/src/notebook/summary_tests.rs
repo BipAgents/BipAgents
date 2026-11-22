@@ -369,6 +369,69 @@ fn nothing_searched_reaches_the_carnet_the_copy_or_an_agent() {
 }
 
 #[test]
+fn oublie_ca_takes_the_searches_with_it() {
+    let (_dir, config) = demo("fr");
+    // kept and made in every space: Marc's, and others
+    for (q, space) in [("marc", "all"), ("anniversaire", "all"), ("Marc", "pro"), ("garantie lave-linge", "all")] {
+        sm::keep(&config, q, None, space, None).unwrap();
+    }
+    sm::rename(&config, &kept_id(&config, "anniversaire"), "Les anniversaires").unwrap();
+    for (q, cat, space) in [("claire", "people", "all"), ("marc", "people", "all"), ("cadeau pour Marc", "people", "perso"),
+                            ("garantie", "papers", "all"), ("MARC", "money", "all")] {
+        assert!(sm::searched_at(&config, q, Some(cat), space, &fr(), today()).unwrap(), "{q}");
+    }
+    let (before, _) = nb::index::answer(&config, &fr(), None, None, "");
+    // « Oublie Marc »: his page, forgotten whole
+    let request = nb::forget::Request { page: Some("Marc Durand".into()), ..Default::default() };
+    let target = nb::forget::target(&config, &request).unwrap();
+    nb::forget::apply(&config, &target, "fr", "").unwrap();
+    let words = |space: &str| -> Vec<String> {
+        sm::kept_at(&config, space, &fr(), today())["kept"].as_array().unwrap().iter().map(|k| k["q"].as_str().unwrap().to_string()).collect()
+    };
+    // no kept « marc » in any space (accents and case folded as the search folds them); the others untouched
+    assert_eq!(words("all"), ["anniversaire", "garantie lave-linge"]);
+    assert_eq!(words("pro"), Vec::<String>::new());
+    let searched = |cat: &str, space: &str| -> Vec<String> {
+        sm::category_at(&config, cat, space, None, &fr(), false, today()).unwrap()["searched"].as_array().unwrap()
+            .iter().map(|s| s["q"].as_str().unwrap().to_string()).collect()
+    };
+    assert_eq!(searched("people", "all"), ["claire"]);
+    assert_eq!(searched("people", "perso"), Vec::<String>::new());
+    assert_eq!(searched("money", "all"), Vec::<String>::new());
+    assert_eq!(searched("papers", "all"), ["garantie"]);
+    // the grey words of Personnes: no « marc » left
+    let s = sm::summary_at(&config, "all", &fr(), today(), now());
+    assert_eq!(line(&s, "people").unwrap()["hint"], json!("claire"));
+    assert!(!fold_text(&s["kept"].to_string()).contains("marc"), "{}", s["kept"]);
+    // the phone's copy: a new version, its kept searches without Marc's
+    let (after, _) = nb::index::answer(&config, &fr(), Some(before["version"].as_u64().unwrap()), before["epoch"].as_str(), "");
+    assert!(after["version"].as_u64().unwrap() > before["version"].as_u64().unwrap());
+    let kept: Vec<&str> = after["kept"].as_array().unwrap().iter().map(|k| k["q"].as_str().unwrap()).collect();
+    assert_eq!(kept, ["anniversaire", "garantie lave-linge"]);
+    // nothing of it left on disk in the searches' file nor the state's
+    let file = std::fs::read_to_string(sm::searched_path(&config)).unwrap();
+    assert!(!fold_text(&file).contains("marc"), "{file}");
+    let state = nb::read_state(&config);
+    assert!(!fold_text(&state["kept_searches"].to_string()).contains("marc"));
+    // a fact forgotten (no page): the searches holding its words, whole words only
+    let request = nb::forget::Request { texts: vec!["lave-linge".into()], ..Default::default() };
+    if let Ok(target) = nb::forget::target(&config, &request) {
+        nb::forget::apply(&config, &target, "fr", "").unwrap();
+    }
+    assert_eq!(words("all"), ["anniversaire"]);
+    assert_eq!(searched("papers", "all"), ["garantie"]);
+}
+
+fn kept_id(config: &Config, q: &str) -> String {
+    let all = nb::read_state(config)["kept_searches"].clone();
+    all.as_array().unwrap().iter().find(|k| k["q"] == q).unwrap()["id"].as_str().unwrap().to_string()
+}
+
+fn fold_text(text: &str) -> String {
+    nb::fold(text)
+}
+
+#[test]
 fn the_sub_filter_titles_are_the_contracts() {
     let contract = nb::sommaire_contract::contract();
     for lang in ["fr", "en", "de", "es", "nl"] {
