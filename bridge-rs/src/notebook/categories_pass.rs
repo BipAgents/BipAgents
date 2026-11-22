@@ -46,8 +46,9 @@ use crate::tools_knowledge as tk;
 use crate::Dict;
 
 /// The categories table's version (lexicon::CATEGORY_WORDS and categories.rs `decide`): one more re-decides the
-/// `auto` pages once.
-pub const VERSION: i64 = 1;
+/// `auto` pages once. 2: carnet-categories (22/11) — the everyday words of the five languages, « Autres » words, a
+/// title's head, the neighbours, an amount alone no longer Argent.
+pub const VERSION: i64 = 2;
 /// Pages written under one hold of the Carnet's lock.
 pub const BATCH: usize = 50;
 /// Pages of « Autres » sent to the small model, a night at most.
@@ -1237,8 +1238,9 @@ mod tests {
     }
 
     /// The held-out sets, the pages filed where a person looks at least, and in a wrong category at most (of 250 each):
-    /// today's table's measure (22/11, with S1's compound words: S1's set 214 and 4, S2's 197 and 14).
-    const OUT_OF_DEMO: [(&str, usize, usize); 2] = [("category-titles.json", 214, 4), ("categories-out-of-demo.json", 197, 14)];
+    /// today's table's measure (22/11, with S1's compound words: S1's set 214 and 4, S2's 197 and 14; carnet-categories'
+    /// table, version 2: 239 and 2, 233 and 9).
+    const OUT_OF_DEMO: [(&str, usize, usize); 2] = [("category-titles.json", 239, 2), ("categories-out-of-demo.json", 233, 9)];
 
     /// A page written by hand (no history) stays the person's once the pass wrote its header: the next nights neither
     /// fold it into its group (groups.rs, a light person page) nor take it out when it is empty (archive.rs).
