@@ -381,6 +381,10 @@ pub(crate) fn sort_with(config: &Config, version: i64, stop_after: Option<usize>
             if done_v == 0 && notes > 0 && !s.contains_key(KEY_CARD) {
                 s.insert(KEY_CARD.into(), json!({"v": version, "at": super::today(), "done": false}));
             }
+            // the model's one-time sort, once per version
+            if s.get(KEY_ONCE).and_then(|o| o.get("v")).and_then(Value::as_i64) != Some(version) {
+                s.insert(KEY_ONCE.into(), json!({"v": version, "left": ONCE_MAX}));
+            }
         })?;
         out.done = true;
     }
