@@ -132,15 +132,16 @@ impl Floor {
     }
 
     /// The stricter of two floors (both [`Floor::at`] the same time): the higher min, and of the nexts still above
-    /// it the earliest (the same date: the higher build). So an app is never told a date later than its real one; a
-    /// later step is told once the first has passed.
+    /// it the highest build at the earliest date: every build under either step is warned in time, never told a date
+    /// later than its real one (a build between the two steps may be told the earlier date; once it has passed, the
+    /// later step is told with its own: review 1, R2).
     pub fn raised_by(self, other: Floor) -> Floor {
         let min = self.min.max(other.min);
-        let next = [self.next, other.next]
-            .into_iter()
-            .flatten()
-            .filter(|step| step.build > min)
-            .min_by(|a, b| a.from.cmp(&b.from).then(b.build.cmp(&a.build)));
+        let steps: Vec<Step> = [self.next, other.next].into_iter().flatten().filter(|step| step.build > min).collect();
+        let next = match (steps.iter().map(|s| s.build).max(), steps.iter().map(|s| s.from).min()) {
+            (Some(build), Some(from)) => Some(Step { build, from }),
+            _ => None,
+        };
         Floor { min, next }
     }
 
@@ -233,10 +234,23 @@ pub fn too_old() -> HttpError {
     HttpError::with_code(426, "update the app", "app_too_old")
 }
 
-/// A retired route's handler, for any method, kept 3 months ([`GONE_FOR`]) after the route went:
-/// `.route("/v1/old", app_floor::gone_for_old_apps())`.
-pub fn gone_for_old_apps<S: Clone + Send + Sync + 'static>() -> MethodRouter<S> {
-    axum::routing::any(|| async { too_old().into_response() })
+/// A retired route's handler, for any method: 426 for 3 months ([`GONE_FOR`]) from `retired` (Unix seconds, the day
+/// the route went), then a plain 404 as any path no route serves: `.route("/v1/old", app_floor::gone_for_old_apps(T))`.
+pub fn gone_for_old_apps<S: Clone + Send + Sync + 'static>(retired: i64) -> MethodRouter<S> {
+    axum::routing::any(move || async move {
+        if crate::py::time_time() as i64 >= retired + GONE_FOR {
+            HttpError::new(404, "Not Found").into_response()
+        } else {
+            too_old().into_response()
+        }
+    })
+}
+
+/// `Vary: X-Bip-App` on the answers that depend on it (`/v1/status`, `/health`): a cache between never mixes an old
+/// app's answer with a new one's (review 1, R1).
+pub fn vary(mut response: Response) -> Response {
+    response.headers_mut().insert(axum::http::header::VARY, axum::http::HeaderValue::from_static("x-bip-app"));
+    response
 }
 
 /// A path `[app_floor] gone` retires (`{name}` matches one segment, the rest exactly).
@@ -289,11 +303,14 @@ mod tests {
         let now = T - 10 * DAY;
         assert_eq!(floor(5, None).raised_by(floor(9, None)), floor(9, None));
         assert_eq!(floor(9, None).raised_by(floor(5, None)), floor(9, None));
-        // the earliest next above the min is the one told (never a date later than the app's real one)
+        // two steps ahead: the highest build at the earliest date, so every build under either is warned in time (never
+        // a date later than its real one; review 1, R2: an earlier, lower step of bridge.toml hid the code's)
         let a = floor(5, Some((20, T)));
         let b = floor(5, Some((30, T + 7 * DAY)));
-        assert_eq!(a.at(now).raised_by(b.at(now)), floor(5, Some((20, T))));
-        assert_eq!(b.at(now).raised_by(a.at(now)), floor(5, Some((20, T))));
+        assert_eq!(a.at(now).raised_by(b.at(now)), floor(5, Some((30, T))));
+        assert_eq!(b.at(now).raised_by(a.at(now)), floor(5, Some((30, T))));
+        // once the first date passed, the second step is told with its own date
+        assert_eq!(a.at(T).raised_by(b.at(T)), floor(20, Some((30, T + 7 * DAY))));
         // same date: the higher build
         assert_eq!(floor(5, Some((20, T))).raised_by(floor(5, Some((30, T)))), floor(5, Some((30, T))));
         // a next under the other's min goes

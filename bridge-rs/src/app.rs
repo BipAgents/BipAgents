@@ -1093,7 +1093,7 @@ async fn status(State(state): State<AppState>, headers: HeaderMap, q: QueryMap) 
     if let Some(floor) = crate::app_floor::for_request(&config.app_floor, &headers) {
         body["app_floor"] = floor;
     }
-    Ok(web::ok(body))
+    Ok(crate::app_floor::vary(web::ok(body)))
 }
 
 /// The LAN door as it is now (address, certificate): the app refreshes it while the tailnet works.
@@ -1733,7 +1733,7 @@ async fn health(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<
         }
         body["app_floor"] = floor;
     }
-    Ok(web::ok(body))
+    Ok(crate::app_floor::vary(web::ok(body)))
 }
 
 /// A request that only asks whether a route matches its path (see `redirect_slashes`): answered before any handler.
