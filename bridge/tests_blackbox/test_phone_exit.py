@@ -9,14 +9,16 @@ import asyncio
 import hashlib
 import json
 import os
+import threading
 import time
 
 import httpx
 import pytest
 
-from bbkit.common import AUTH, BRIDGE_KEY, boite_items
+from bbkit.common import AUTH, BRIDGE_KEY, boite_items, sse
 from bbkit.mcp import call, give_token, rpc, text_of
 from bbkit.phone_exit import END, PAUSE, RESUME, SESSIONS, FakePhone, client_hello, echo_server, exit_stream, hub_line
+from bbkit.servers import wait_until
 from bbkit.ws import InvalidStatus, open_ws
 
 TOKEN = "phone-debug-token-" + "p" * 24
@@ -598,3 +600,54 @@ def test_settings_and_sites(bridges):
     assert bridge.post("/v1/exit/sessions", headers=AUTH, json={"agent": "nobody", "sites": [SITE]}).status_code == 404
     stored = json.loads((bridge.state_dir / "phone-exit.json").read_text())
     assert oct((bridge.state_dir / "phone-exit.json").stat().st_mode & 0o777) == "0o600" and "sites" in stored
+
+
+SENTENCE = "Je t'ai envoyé une carte pour passer par ton téléphone : réponds-y quand tu veux."
+
+
+def test_a_card_still_waiting_stays_under_the_last_words_of_its_turn(bridges, fakes):
+    """22/11 (Alex, Vie on aibox, « Oui, sous la phrase »): `ask_phone_exit` answers at once and the agent writes its
+    sentence after the card. While the turn runs the apps draw the card at its end, under the words; once it is over the
+    page the phones read places it (`after`) under the turn's last words, not between the call and the sentence where
+    its time put it (it jumped up there when the turn ended)."""
+    bridge = exit_bridge(bridges)
+    hermes = fakes.hermes
+    asked = "Passe par mon téléphone pour ameli"
+    hermes.add_session("api_x", [{"role": "user", "content": asked, "timestamp": time.time() - 30}], title="Ameli")
+    gate = threading.Event()
+    hermes.runs["run_x"] = [sse("tool.started", run_id="run_x", tool="mcp_bipagents_ask_phone_exit", preview="x"), gate,
+                            sse("run.completed", run_id="run_x", output=SENTENCE)]
+    assert bridge.post("/v1/watch", headers=AUTH,
+                       json={"agent": "wellness", "run_id": "run_x", "session_id": "api_x"}).status_code == 200
+    assert wait_until(lambda: hermes.seen("/v1/runs/run_x/events"))
+    time.sleep(0.3)
+    answered = call(bridge, "ask_phone_exit", {"site": SITE, "reason": "Cloudflare"})
+    assert not answered.get("isError") and "got a card" in text_of(answered), answered
+    found = bridge.get("/v1/threads/resolve", headers=AUTH, params={"agent": "wellness", "session_id": "api_x"})
+    assert found.status_code == 200, found.text
+    thread = found.json()["thread"]["id"]
+
+    def page():
+        return bridge.get(f"/v1/threads/{thread}/timeline", headers=AUTH, params={"agent": "wellness"}).json()
+
+    def waiting():
+        return [a for a in page()["pending"]["approvals"] or [] if a["run_id"].startswith("bip-exit-")]
+
+    assert wait_until(waiting, timeout=10), page()
+    made = waiting()[0]["created_at"]
+    # Hermes' rows of the turn as it keeps them: its first words and the call (before the card), the sentence after it
+    hermes.add_session("api_x", [
+        {"role": "user", "content": asked, "timestamp": made - 30},
+        {"role": "assistant", "content": "ameli.fr me montre une page « Just a moment ».", "timestamp": made - 2,
+         "tool_calls": [{"id": "x1", "function": {"name": "mcp_bipagents_ask_phone_exit", "arguments": "{}"}}]},
+        {"role": "tool", "content": "Your person got a card.", "tool_call_id": "x1", "timestamp": made - 1},
+        {"role": "assistant", "content": SENTENCE, "timestamp": made + 3},
+    ], title="Ameli")
+    gate.set()
+    assert wait_until(lambda: page()["pending"]["run"] is None, timeout=15), page()
+    seen = page()
+    said = [(i["id"], i["kind"], i.get("text")) for i in seen["items"]]
+    sentence = [i for i in seen["items"] if i.get("text") == SENTENCE]
+    assert len(sentence) == 1, said
+    [card] = waiting()
+    assert card["after"] == sentence[0]["id"], (card["after"], said)

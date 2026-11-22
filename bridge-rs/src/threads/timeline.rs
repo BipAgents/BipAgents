@@ -924,9 +924,14 @@ pub fn draws(item: &Item) -> bool {
 }
 
 /// Where each waiting row (a card, a question, any `pending` item that has a time) goes among the thread's items, as
-/// the apps draw it: `after` — the id of the last item that draws something said at or before its `created_at` (Unix
-/// seconds, or ISO), null when it was asked before all of them; a row without a time goes after the last item. The
-/// apps draw it there (5/11: the iPhone placed cards by time itself, Android showed one card at the bottom).
+/// the apps draw it: `after` — the id of the last item that draws something in the turn it was asked in (its turn: the
+/// one of the last drawing item said at or before its `created_at`, Unix seconds or ISO), null when it was asked before
+/// all of them; a row without a time goes after the last item. The apps draw it there (5/11: the iPhone placed cards
+/// by time itself, Android showed one card at the bottom). Under the turn's last words, not at its own time: while the
+/// turn runs the apps draw a waiting card at its end, under the words written after it (`ask_phone_exit` answers at
+/// once and the agent writes on), and it stays there once the turn is over (22/11, Alex: « Oui, sous la phrase »; at
+/// its time, it jumped up between the call and the sentence when the turn ended). An answered card is an item at its
+/// own time (`kept`), not placed here.
 pub fn place_waiting(items: &[Item], rows: &mut [Value]) {
     let last = items.iter().rev().find(|i| draws(i)).map(|i| i.id.clone());
     for row in rows.iter_mut() {
@@ -937,12 +942,31 @@ pub fn place_waiting(items: &[Item], rows: &mut [Value]) {
             _ => None,
         };
         let after = match asked.filter(|a| *a > 0.0) {
-            // in display order: the last drawing item said by then (an item without its time counts as earlier)
-            Some(at) => items.iter().rev().find(|i| draws(i) && i.at <= at).map(|i| i.id.clone()),
+            // in display order: the last drawing item said by then (an item without its time counts as earlier), then
+            // the last drawing one of its turn
+            Some(at) => items.iter().rposition(|i| draws(i) && i.at <= at).map(|k| items[turn_end(items, k)].id.clone()),
             None => last.clone(),
         };
         fields.insert("after".into(), after.map_or(Value::Null, Value::String));
     }
+}
+
+/// The last item that draws something in the turn of item `k` (from `k` up to the person's next message that starts a
+/// turn: one added to the answer in progress, a steer, does not).
+fn turn_end(items: &[Item], k: usize) -> usize {
+    let mut end = k;
+    for (n, item) in items.iter().enumerate().skip(k + 1) {
+        let person = item.kind() == "message"
+            && matches!(item.body.get("role").and_then(Value::as_str), Some("person" | "peer"))
+            && item.body.get("added_during_run") != Some(&json!(true));
+        if person {
+            break;
+        }
+        if draws(item) {
+            end = n;
+        }
+    }
+    end
 }
 
 /// The day of each item of a thread where the person is (`zone`), and whether it is the first of that day: None for an
@@ -1822,6 +1846,44 @@ not from your person: you have read the page 5 times\n[/OUT-OF-BAND USER MESSAGE
         let after: Vec<Value> = rows.iter().map(|r| r["after"].clone()).collect();
         // m_3 draws nothing: the card asked at 1030 goes after m_2
         assert_eq!(after, vec![json!("m_2"), Value::Null, json!("m_4"), json!("m_4"), json!("m_4")]);
+    }
+
+    /// 22/11 (Alex, « Oui, sous la phrase »): `ask_phone_exit` answers at once and the agent writes its sentence after
+    /// the card. While the turn runs the apps draw the card at its end, under the words; once it is over, a card still
+    /// waiting stays under the turn's last words (no jump up between the call and the sentence, where its time put it).
+    /// The turn goes on across a message added to it (a steer) and ends at the person's next one; rows that draw
+    /// nothing don't count.
+    #[test]
+    fn a_waiting_card_stays_under_the_last_words_of_its_turn() {
+        let all = vec![
+            said("m_1", 1, 1000.0, json!({"kind": "message", "role": "person", "text": "Passe par mon téléphone"})),
+            said("m_2", 2, 1010.0, json!({"kind": "message", "role": "agent", "text": "ameli.fr me bloque."})),
+            said("m_2.t0", 2, 1011.0, json!({"kind": "tool", "tool": {"name": "ask_phone_exit", "status": "done"}})),
+            said("m_3", 3, 1030.0, json!({"kind": "message", "role": "agent", "text": "Je t'ai envoyé une carte."})),
+            said("m_4", 4, 1040.0,
+                 json!({"kind": "message", "role": "person", "text": "Vas-y", "added_during_run": true})),
+            said("m_5", 5, 1050.0, json!({"kind": "message", "role": "agent", "text": "D'accord, j'attends ta réponse."})),
+            said("m_6", 6, 1060.0, json!({"kind": "message", "role": "agent", "text": " "})),
+            said("m_7", 7, 1100.0, json!({"kind": "message", "role": "person", "text": "Et la facture ?"})),
+            said("m_8", 8, 1110.0, json!({"kind": "message", "role": "agent", "text": "La voici."})),
+        ];
+        let mut rows = vec![
+            // asked during the call: under the turn's last words (m_5), not between the call and the sentence
+            json!({"id": "a_exit", "created_at": 1012.0}),
+            // asked before the turn's first word: the same
+            json!({"id": "a_early", "created_at": 1005.0}),
+            // asked in the next turn: under its own last words
+            json!({"id": "a_next", "created_at": 1105.0}),
+            json!({"id": "a_before", "created_at": 500.0}),
+            json!({"id": "q_1", "kind": "question", "created_at": 1012.0}),
+        ];
+        place_waiting(&all, &mut rows);
+        let after: Vec<Value> = rows.iter().map(|r| r["after"].clone()).collect();
+        assert_eq!(after, vec![json!("m_5"), json!("m_5"), json!("m_8"), Value::Null, json!("m_5")]);
+        // the turn going on (its last words not stored yet): its last stored row, at its end as the apps draw it
+        let mut rows = vec![json!({"id": "a_exit", "created_at": 1012.0})];
+        place_waiting(&all[..3], &mut rows);
+        assert_eq!(rows[0]["after"], "m_2.t0");
     }
 
     /// Review instant-ack (19/11): Hermes joins the steers it holds before its next step with newlines into ONE user
