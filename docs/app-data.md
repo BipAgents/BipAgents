@@ -99,7 +99,11 @@ their place on the all-included offer. Everything personal goes here, with that 
   (`BipAgents ^r…`). It needs the calendar permission; without it the reminder waits and the person is asked. The app
   sends the bridge whether it may write to a calendar and the title and time of its own reminder events to come
   (`PUT /v1/reminders/android`), nothing else from the calendar. Ticked off by an agent: deleted while it is to come,
-  its alert taken off once it has begun.
+  its alert taken off once it has begun. A dated Carnet task goes the same way (only to the 1.1 app, which says so in
+  that copy, `carnet`; only once the calendar may be written to; never a health task; the phone it was added from
+  first, never both phones): its description also carries the task's mark
+  (`BipAgents · Carnet ^t…`, « Rappel de BipAgents » for the person's own task); ticked or removed in the Carnet, its
+  event is taken off the same way. The Android app says a task or a proposal's « Oui » comes from it (`phone`).
 - **Shared to the app** (`ShareExtension/`, `App/Model/SharedInbox.swift`, Android `ui/SharedMessage.kt`): a message or
   screenshots shared to BipAgents are handed to the agent the person picks, as a draft and attachments in its
   conversation, sent only when the person taps Send. The iOS share extension writes them to the App Group

@@ -40,15 +40,16 @@
 //!     GET    /v1/notebook/history?path=        changes (a page's, or all), the newest first
 //!     POST   /v1/notebook/restore              {change}   the page as it was after that change
 //!     GET    /v1/notebook/tasks                open and recent tasks
-//!     POST   /v1/notebook/tasks                {title, due?, page?, private?}
+//!     POST   /v1/notebook/tasks                {title, due?, page?, private?, phone?} (phone: « ios », « android »,
+//!                                              the phone it is added from: a dated task's reminder goes there)
 //!     POST   /v1/notebook/tasks/{id}           {done}
 //!     GET    /v1/notebook/dates?days=&all=&standard=   « Dates à venir »: dated facts (close people's by default), not
 //!                                              tasks, and the standard dates (dates/: `computed: true`; standard=0: not)
 //!     POST   /v1/notebook/close                {path, close}   a person marked close (« proche ») or not
 //!     POST   /v1/notebook/icon                 {path, icon}    a subject's or area's icon, the person's choice ("": automatic)
 //!     GET    /v1/notebook/proposals            the agents' task proposals, the kinds declined
-//!     POST   /v1/notebook/proposals/{id}       {accept, never?}   the person's answer to a proposal (yes: its task added;
-//!                                              a split, kind `split`: the page's trips made, trip_split.rs)
+//!     POST   /v1/notebook/proposals/{id}       {accept, never?, phone?}   the person's answer to a proposal (yes: its
+//!                                              task added; a split, kind `split`: the page's trips made, trip_split.rs)
 //!     GET    /v1/notebook/records              the records (purchases, subscriptions, contracts, papers, bookings), by
 //!                                              type, the soonest next date first, their archived ones apart (records.rs)
 //!     POST   /v1/notebook/records/archive      {type, id, archived}   a record archived, or brought back (archive.rs)
@@ -952,6 +953,10 @@ pub struct NewTask {
     pub page: Option<String>,
     #[serde(default, deserialize_with = "web::lax::bool")]
     pub private: bool,
+    /// The phone the person adds it from (« ios », « android »): a dated task's reminder goes there first (an app
+    /// from before 1.1 sends none: an iPhone sharing its Reminders first, then the Android phone's calendar).
+    #[serde(default)]
+    pub phone: Option<String>,
 }
 
 impl Validate for NewTask {
@@ -959,6 +964,14 @@ impl Validate for NewTask {
         check_max_len(errors, "title", Some(&self.title), 300);
         check_max_len(errors, "due", self.due.as_deref(), 40);
         check_max_len(errors, "page", self.page.as_deref(), 200);
+        check_phone(errors, self.phone.as_deref());
+    }
+}
+
+/// `phone`, as a message's (threads/send.rs): « ios » or « android » (also « iPhone »…), anything else refused.
+fn check_phone(errors: &mut Vec<FieldError>, phone: Option<&str>) {
+    if phone.is_some_and(|p| crate::reminders::phone_named(p).is_none()) {
+        errors.push(FieldError::new("value_error", web::body_loc("phone"), "« ios » or « android »", Value::Null));
     }
 }
 
@@ -975,7 +988,7 @@ async fn add_task(State(state): State<AppState>, Json(body): Json<NewTask>) -> A
             body.page.as_deref().unwrap_or(""),
             "asked",
             "",
-            &Who::you(&config),
+            &Who::you(&config).from_phone(body.phone.as_deref()),
         )
     })
     .await?;
@@ -1087,9 +1100,16 @@ pub struct Answer {
     pub accept: bool,
     #[serde(default, deserialize_with = "web::lax::bool")]
     pub never: bool,
+    /// The phone the person answers from (`NewTask::phone`): where the task's reminder goes.
+    #[serde(default)]
+    pub phone: Option<String>,
 }
 
-impl Validate for Answer {}
+impl Validate for Answer {
+    fn validate(&self, errors: &mut Vec<FieldError>) {
+        check_phone(errors, self.phone.as_deref());
+    }
+}
 
 /// The person's answer to a proposal in the app: yes adds its task (with its date: a phone reminder), no closes it
 /// (`never`: that kind is not proposed again).
@@ -1106,7 +1126,8 @@ async fn answer_proposal(
         return Ok(web::ok(json!({"split": split})));
     }
     if body.accept {
-        let (task, reminder) = blocking(move || super::accept(&config, &id, &Who::you(&config))).await?;
+        let who = Who::you(&config).from_phone(body.phone.as_deref());
+        let (task, reminder) = blocking(move || super::accept(&config, &id, &who)).await?;
         if reminder {
             wake(push, &state.config());
         }

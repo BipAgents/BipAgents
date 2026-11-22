@@ -105,7 +105,12 @@ de l’offre tout compris. Tout ce qui est personnel va ici, avec la clé de ce 
   9 h ; sa description dit quel agent l’a demandé (« Rappel de … ») et porte la marque de l’app (`BipAgents ^r…`). Il
   faut la permission de l’agenda ; sans elle le rappel attend et l’app la demande. L’app envoie au bridge si elle peut
   écrire dans un agenda, et le titre et l’heure de ses propres rappels à venir (`PUT /v1/reminders/android`), rien
-  d’autre de l’agenda. Coché par un agent : supprimé s’il est à venir, son alerte retirée une fois commencé.
+  d’autre de l’agenda. Coché par un agent : supprimé s’il est à venir, son alerte retirée une fois commencé. Une tâche
+  datée du Carnet suit le même chemin (seulement vers l’app 1.1, qui le dit dans cette copie, `carnet` ; seulement
+  quand l’agenda est accessible en écriture ; jamais une tâche Santé ; le téléphone d’où elle est ajoutée d’abord,
+  jamais les deux) : sa description porte aussi la marque de la tâche (`BipAgents · Carnet ^t…`,
+  « Rappel de BipAgents » pour une tâche de la personne elle-même) ; cochée ou retirée dans le Carnet, son événement
+  est retiré de la même façon. L’app Android dit qu’une tâche ou le « Oui » à une proposition vient d’elle (`phone`).
 - **Partagé vers l’app** (`ShareExtension/`, `App/Model/SharedInbox.swift`, Android `ui/SharedMessage.kt`) : un message
   ou des captures partagés vers BipAgents vont à l’agent que la personne choisit, en brouillon et pièces jointes dans sa
   conversation, envoyés seulement quand elle touche Envoyer. L’extension de partage iOS les écrit dans l’App Group

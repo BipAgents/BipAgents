@@ -90,7 +90,7 @@ struct Catalogue {
 
 fn who(agent: &str) -> Who {
     let name = if agent == "you" { "toi".to_string() } else { agent[..1].to_uppercase() + &agent[1..] };
-    Who { by: agent.into(), name: name.clone(), agent: Some(name) }
+    Who { by: agent.into(), name: name.clone(), agent: Some(name), phone: None }
 }
 
 #[allow(clippy::too_many_arguments)]

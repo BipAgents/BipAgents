@@ -42,11 +42,14 @@ pub struct Turn {
     pub cap: usize,
     /// A background task's run, a routine's or a Live call's: the Carnet asks nothing then (ask.rs).
     pub busy: bool,
+    /// The phone the person asked from in this turn (« ios », « android »: threads/send.rs): where a dated task's
+    /// reminder goes (notebook/mod.rs `link_reminder`). None: no phone asked.
+    pub phone: Option<String>,
 }
 
 impl Default for Turn {
     fn default() -> Self {
-        Turn { run: None, session: None, cap: PAGES_PER_TURN, busy: false }
+        Turn { run: None, session: None, cap: PAGES_PER_TURN, busy: false, phone: None }
     }
 }
 
@@ -422,13 +425,13 @@ mod tests {
 
     #[test]
     fn a_turn_reads_six_pages_at_most_and_its_reads_are_logged_once() {
-        let turn = Turn { run: Some("run_cap".into()), session: Some("s1".into()), cap: PAGES_PER_TURN, busy: false };
+        let turn = Turn { run: Some("run_cap".into()), session: Some("s1".into()), cap: PAGES_PER_TURN, busy: false, phone: None };
         for i in 0..6 {
             assert!(may_read("cap-agent", &turn, &format!("p{i}")));
         }
         assert!(may_read("cap-agent", &turn, "p0"), "a page read again is no new page");
         assert!(!may_read("cap-agent", &turn, "p6"));
-        let fill = Turn { run: Some("run_fill".into()), session: None, cap: PAGES_PER_FILL, busy: false };
+        let fill = Turn { run: Some("run_fill".into()), session: None, cap: PAGES_PER_FILL, busy: false, phone: None };
         assert!((0..20).all(|i| may_read("cap-agent", &fill, &format!("p{i}"))));
         assert!(!may_read("cap-agent", &fill, "p20"));
         let other = Turn { run: Some("run_other".into()), ..turn.clone() };
@@ -439,7 +442,7 @@ mod tests {
     fn the_journal_keeps_ninety_days() {
         let dir = tempfile::tempdir().unwrap();
         let config = crate::notebook::tests_config(dir.path());
-        let turn = Turn { run: Some("run_j".into()), session: Some("s".into()), cap: 6, busy: false };
+        let turn = Turn { run: Some("run_j".into()), session: Some("s".into()), cap: 6, busy: false, phone: None };
         log(&config, "lea", &turn, Part::Main, "p1", Some("tastes"), "read");
         log(&config, "lea", &turn, Part::Main, "p1", None, "read");
         log(&config, "lea", &turn, Part::Health, "p2", None, "search");
