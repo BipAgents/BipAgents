@@ -27,13 +27,13 @@
   ],
   "card": null,
   "total": {
-    "count": 130,
+    "count": 131,
     "title": "Tout le Carnet"
   },
   "categories": [
     {
       "id": "people",
-      "title": "Gens",
+      "title": "Personnes",
       "count": 52,
       "hint": "Famille, Claire Durand, Lucas Bernard",
       "locked": false,
@@ -69,7 +69,7 @@
       "hint": "Travail, Claire Durand, Lucas Bernard",
       "locked": false,
       "first": {
-        "id": "line:p0000000012:0000000038",
+        "id": "line:p0000000012:0000000039",
         "kind": "line",
         "part": "main",
         "path": "Domaines/Travail.md",
@@ -129,8 +129,8 @@
     {
       "id": "home",
       "title": "Maison",
-      "count": 26,
-      "hint": "Maison, Rénovation cuisine, Rappeler Marc pour le devis",
+      "count": 27,
+      "hint": "Maison, Jardin, Rénovation cuisine",
       "locked": false,
       "first": {
         "id": "page:p0000000011",
@@ -196,7 +196,7 @@
       "hint": "Voyage Japon, Week-end à Lisbonne, Réserver les vols pour Osaka",
       "locked": false,
       "first": {
-        "id": "page:p0000000019",
+        "id": "page:p000000001a",
         "kind": "page",
         "part": "main",
         "path": "Sujets/Voyage Japon.md",
@@ -258,7 +258,7 @@
       "hint": "Trier les photos de l’été",
       "locked": false,
       "first": {
-        "id": "task:t000025",
+        "id": "task:t000026",
         "kind": "task",
         "part": "main",
         "path": "Tâches/Tâches.md",
@@ -278,7 +278,7 @@
         "answer": null,
         "page": null,
         "open": {
-          "task": "t000025"
+          "task": "t000026"
         }
       }
     },
