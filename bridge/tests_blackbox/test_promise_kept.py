@@ -27,8 +27,9 @@ def test_a_promise_to_tell_with_nothing_set_up_goes_on_once_to_set_it_up(bridges
     assert "[bipagents:go_on]" in note and f"« {WATCH} »" in note
     assert "you never wake up by yourself" in note and "make a watcher" in note and "routine_schedule" in note
     assert "say plainly in one short sentence that you can't watch that" in note
-    # not the work's continuation: no background task to start
-    assert "start_task" not in note and "Already set up" not in note
+    # not the work's note (« Do it now »), only its way out when the promise was in fact work
+    assert "Do it now, in this answer" not in note and "If what you promised is in fact your own work" in note
+    assert "Already set up" not in note
     assert bridge.logged("promise to tell later with nothing set up to notice it: continuation")
 
 

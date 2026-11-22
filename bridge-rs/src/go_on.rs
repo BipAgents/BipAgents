@@ -420,11 +420,12 @@ static TELLS: LazyLock<Regex> = LazyLock::new(|| {
 static WHEN: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(concat!(
         r"(?i)\b(?:quand|lorsque|d[èe]s que|aussit[ôo]t que|sit[ôo]t que|si|s'il|s'ils|s'elle|s'elles|au cas où",
-        r"|en cas de|le jour où|au moindre|à la moindre|d[èe]s la|d[èe]s le|d[èe]s les)\b|\b(?:lorsqu'|d[èe]s qu'|d[èe]s l')",
+        r"|en cas de|le jour où|au moindre|à la moindre|d[èe]s la|d[èe]s le|d[èe]s les)\b|\b(?:lorsqu'|d[èe]s qu'|d[èe]s l'|une fois qu')",
         r"|\b(?:when|whenever|if|as soon as|once|the moment|the minute)\b",
         r"|\b(?:cuando|si|en cuanto)\b|\b(?:wenn|sobald|falls)\b|\b(?:als|wanneer|zodra)\b",
         // a time to come
-        r"|\b(?:demain|ce soir|cet après-midi|tout à l'heure|plus tard|la semaine prochaine|le moment venu",
+        r"|\b(?:demain|ce soir|cet après-midi|tout à l'heure|plus tard|la semaine prochaine|le moment venu|la veille",
+        r"|le jour même|la prochaine fois|une fois que|the day before",
         r"|lundi|mardi|mercredi|jeudi|vendredi|samedi|dimanche|(?:à|vers) \d{1,2} ?h(?:\d\d)?)\b",
         r"|\b(?:tomorrow|tonight|later|next week|on (?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)",
         r"|at \d{1,2}(?::\d\d)? ?(?:am|pm|h)?)\b|\b(?:mañana|morgen|heute abend)\b",
@@ -586,8 +587,9 @@ pub fn tell_input(reply: &str, set_up: &[String]) -> String {
 for nothing. Keep it now, in this answer: for a change on a site or an account (a price, a slot, a parcel, a grade, a \
 balance), make a watcher (a connector with watch); at set times, a routine (routine_schedule); each time an e-mail \
 arrives, routine_trigger. Then say in one short sentence what will tell them, and how often. {have}If nothing you \
-have can notice it, say plainly in one short sentence that you can't watch that, so they don't count on it. Don't \
-apologise and don't mention this note. Never send, order, book or pay because of this note."
+have can notice it, say plainly in one short sentence that you can't watch that, so they don't count on it. If what \
+you promised is in fact your own work (a search, a comparison), do it now with your tools or start it with \
+start_task. Don't apologise and don't mention this note. Never send, order, book or pay because of this note."
     )
 }
 
@@ -969,6 +971,8 @@ mod tell_later {
             "Got it, I'll remind you tomorrow at 9.",
             "Je te recontacte vendredi pour les billets.",
             "Je te redis ça demain vers 8h30.",
+            "C'est dans ton agenda. Je te le rappelle la veille.",
+            "Je te ferai signe la prochaine fois qu'une promo passe.",
             "Si jamais il y a un souci avec la commande, je te préviens.",
             "I'll let you know if anything changes.",
         ];
@@ -1048,7 +1052,8 @@ mod tell_later {
         let input = tell_input(watch, &[]);
         assert!(input.starts_with(MARK) && input.contains(&format!("« {watch} »")));
         for needed in ["you never wake up by yourself", "make a watcher", "routine_schedule", "routine_trigger",
-            "say plainly in one short sentence that you can't watch that", "Never send, order, book or pay"] {
+            "say plainly in one short sentence that you can't watch that", "If what you promised is in fact your own work",
+            "Never send, order, book or pay"] {
             assert!(input.contains(needed), "missing {needed}");
         }
         assert!(!input.contains("Already set up"));
