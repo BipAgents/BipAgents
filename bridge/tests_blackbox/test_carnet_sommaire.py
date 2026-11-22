@@ -266,7 +266,9 @@ def test_the_bridge_files_pages_records_tasks_and_documents_by_their_words(bridg
     assert records["paper"]["items"][0]["categories"] == ["papers", "dates"]
     assert records["booking"]["items"][0]["categories"] == ["trips", "dates"]
     tasks = {t["title"].split(" [[")[0]: t["categories"] for t in bridge.get("/v1/notebook/tasks", headers=AUTH).json()["open"]}
-    assert tasks == {"Rappeler Marc pour le devis": ["home", "dates"], "Trier les photos de l'été": ["other"]}, tasks
+    # (a paper's two reminders, made by the bridge: Papiers)
+    assert tasks == {"Rappeler Marc pour le devis": ["home", "dates"], "Trier les photos de l'été": ["other"],
+                     "Penser à renouveler Passeport": ["papers", "dates"], "Renouveler Passeport": ["papers", "dates"]}, tasks
     documents = bridge.get("/v1/notebook/documents", headers=AUTH).json()["documents"]
     assert [(d["file"], d["categories"], d["categories_by"]) for d in documents] == [("Devis cuisine.pdf", ["home"], "auto")]
     # the search: the same categories on what it finds

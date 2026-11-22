@@ -67,7 +67,7 @@
   "Categorized": {"target": "CategorizeTarget", "categories": "[CategoryId]", "categories_by": "By", "before": {"categories": "[CategoryId]", "categories_by": "By"}, "learnt": "Learnt?", "undo": "string", "toast": "string?"},
   "Learnt": {"word": "string", "categories": "[CategoryId]"},
   "Undone": {"target": "CategorizeTarget", "categories": "[CategoryId]", "categories_by": "By", "unlearnt": "string?"},
-  "Error": {"error": "string", "detail": "string"}
+  "Error": {"detail": {"code": "string", "text": "string"}}
  },
  "routes": [
   {"brick": "S1", "method": "POST", "path": "/v1/notebook/categorize", "body": "{path, private?} | {record: RecordRef} | {document: DocumentRef} | {task} | {line: LineRef}, categories: [1–2 of person_may_give]", "answer": "Categorized", "errors": {"400": "category_unknown | category_count | category_not_given (dates, health) | target_missing", "404": "not_found"}, "example": "fake-bridge/fr/categorize.json"},

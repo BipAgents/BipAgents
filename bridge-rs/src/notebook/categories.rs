@@ -470,11 +470,31 @@ pub fn with_dates(categories: &[String], dated: bool) -> Vec<String> {
 
 /// The person's corrections of records, tasks, documents and lines (`category_marks`).
 pub fn marks(config: &Config) -> Dict {
-    marks_in(&super::read_state(config))
+    marks_with_papers(&super::read_state(config))
 }
 
 fn marks_in(state: &Dict) -> Dict {
     state.get("category_marks").and_then(Value::as_object).cloned().unwrap_or_default()
+}
+
+/// [`marks`] and, below the person's, the tasks the bridge made for a paper's expiry (papers.rs: no page, but a
+/// paper's): Papiers.
+fn marks_with_papers(state: &Dict) -> Dict {
+    let mut m = marks_in(state);
+    for ids in state.get("papers").and_then(Value::as_object).into_iter().flat_map(|p| p.values()) {
+        for id in ids.as_array().into_iter().flatten().filter_map(Value::as_str) {
+            m.entry(task_key(id)).or_insert(json!({"categories": ["papers"], "by": "auto"}));
+        }
+    }
+    m
+}
+
+/// Who filed a marked item: the person, or the bridge (a paper's tasks).
+fn marked_by(marks: &Dict, key: &str) -> &'static str {
+    match marks.get(key).and_then(|m| m.get("by")).and_then(Value::as_str) {
+        Some("auto") => "auto",
+        _ => "person",
+    }
 }
 
 fn marked(marks: &Dict, key: &str) -> Option<Vec<String>> {
@@ -731,7 +751,7 @@ pub fn categorize(config: &Config, target: &Target, given: &[String], who: &Who)
             };
             let pages = super::all_pages(config, Part::Main);
             let c: Vec<String> = of_task(config, &task, &pages, &marks, today).into_iter().filter(|c| c != "dates").collect();
-            let by = if marked(&marks, &task_key(id)).is_some() { "person" } else { "auto" };
+            let by = if marked(&marks, &task_key(id)).is_some() { marked_by(&marks, &task_key(id)) } else { "auto" };
             (Filed { categories: c, stored: by == "person", by: by.into() }, Some(task_key(id)), None)
         }
         Target::Line { path, text } => {

@@ -38,7 +38,7 @@ en, de, es, nl for Alex to confirm (visible text).
   next write (and by S2's one pass over the whole Carnet). A record, a task, a document and a single line have no
   frontmatter: theirs are computed, the person's correction kept in `notebook/state.json` (`category_marks`).
 - **What inherits.** A line (point) has its page's categories; a task its page's (its first `[[link]]`), none:
-  `other`; a record its type's (purchase `money` + `papers` when it has a warranty, subscription `money`, contract and
+  `other` (the two reminders the bridge makes for a paper's expiry: `papers`); a record its type's (purchase `money` + `papers` when it has a warranty, subscription `money`, contract and
   paper `papers`, booking `trips`); a document its page's (the page it is linked to or named on), else its name's
   words, else `papers` (Alex's decision 4: what the agents make is found, « Papiers » by default).
 - **Dates is computed, never stored or given.** An item is also in `dates` when it carries a date from 90 days ago to
@@ -71,7 +71,8 @@ decided by a word of its name does. Undo (`/categorize/undo`) puts back the cate
 ## 3. Routes
 
 Types and examples: `sommaire.json` `types`, `routes`, `fake-bridge/`. All under the bridge key, JSON, the app's
-`?lang=` for the texts. Errors: `{"error": code, "detail": text}` with the HTTP status in `routes[].errors`.
+`?lang=` for the texts. Errors: the Carnet's of today (`{"detail": {"code", "text"}}`, the HTTP status and the codes
+in `routes[].errors`; S1's codes have no text yet: the apps show their own until Alex approves the texts).
 
 | Brick | Route | What |
 |---|---|---|
@@ -86,6 +87,9 @@ Types and examples: `sommaire.json` `types`, `routes`, `fake-bridge/`. All under
 | S4 | `POST /v1/notebook/searched` | a search made (3 a category for « Cherché ici », never shown to the agents) → 204 |
 | S5 | `PATCH /v1/notebook/settings {separate_spaces}` | « Séparer Perso, Pro et Famille » (off by default); `?space=perso|pro` on summary/category/search/index |
 | S6 | `/v1/family-agent/notebook/{summary,index,kept,categorize}` | the family Carnet's, relayed by the members' bridges as today (`FamilySummary`, `FamilyIndex`) |
+
+**Counts.** A category's `count` counts its items (pages, lines, tasks, records, documents); `total` all of them.
+The fake bridge counts so; S4 may count otherwise (pages apart), the contract's shape stays.
 
 **Items.** Everything the phone lists (index entries, search groups, a category's recent ones) is an `Item`: `id`
 (stable: `page:<page id>`, `line:<page id>:<hash of the line>`, `task:<id>`, `record:<id>`, `doc:<agent>/<file>`),

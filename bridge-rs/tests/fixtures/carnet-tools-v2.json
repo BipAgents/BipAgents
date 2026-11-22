@@ -169,6 +169,21 @@
     "close": {
      "type": "boolean"
     },
+    "category": {
+     "type": "array",
+     "items": {
+      "enum": [
+       "people",
+       "money",
+       "home",
+       "papers",
+       "trips",
+       "work"
+      ]
+     },
+     "maxItems": 2,
+     "description": "only if sure"
+    },
     "start": {
      "type": "string",
      "description": "trip dates, YYYY-MM-DD"
