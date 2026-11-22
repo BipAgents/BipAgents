@@ -3,7 +3,9 @@ runs.rs `go_on`): an agent never wakes up by itself, so « je te préviens dès 
 turn set up what will notice it (a watcher, a routine, a trigger, a background task, another agent asked, a reminder).
 A person's turn, working or not, that ends on such a promise with none of these gets the same ONE continuation as a
 promise of work (test_promise_stop.py), told out of sight to set one up now or to say plainly it can't watch that."""
-from bbkit.common import AUTH
+import json
+
+from bbkit.common import AUTH, sse
 from test_promise_stop import follow, notices, turn
 
 WATCH = "Le vélo est à 899 € chez Decathlon. Je te préviens dès que le prix baisse."
@@ -72,6 +74,33 @@ def test_a_promise_kept_by_what_the_turn_set_up_ends_the_turn_as_before(bridges,
         assert notices(events) == [], run
         assert events[-1][1]["run_id"] == run and events[-1][1]["output"] == WATCH
     assert list(fakes.hermes.started) == []
+
+
+def test_a_watcher_or_routine_set_up_through_the_tool_search_keeps_the_promise(bridges, fakes):
+    # bench 22/11 (DeepSeek): connector_register and routine_schedule, behind the tool search, were called through
+    # `tool_call`: the turn's tools must be read through it, else « je te préviens… » after a watcher made that way
+    # would get the continuation
+    bridge = bridges.new().start()
+    wrapped = {
+        "run_c": json.dumps({"name": "mcp__bipagents_connectors__connector_register", "arguments": {"name": "Gel"}}),
+        "run_r": json.dumps({"calls": [{"name": "mcp_bipagents_routine_schedule", "arguments": {}}]}),
+    }
+    for run, preview in wrapped.items():
+        fakes.hermes.runs[run] = ([sse("tool.started", run_id=run, tool="tool_call", preview=preview),
+                                   sse("tool.completed", run_id=run, tool="tool_call")]
+                                  + turn(run, WATCH, tools=["web_search"]))
+    for run in wrapped:
+        events = follow(bridge, run)
+        assert notices(events) == [], run
+        assert events[-1][1]["output"] == WATCH
+    assert list(fakes.hermes.started) == []
+    # the tool search used for something else keeps nothing
+    fakes.hermes.runs["run_x"] = ([sse("tool.started", run_id="run_x", tool="tool_call",
+                                       preview=json.dumps({"name": "mcp_bipagents_weather", "arguments": {}})),
+                                   sse("tool.completed", run_id="run_x", tool="tool_call")]
+                                  + turn("run_x", WATCH))
+    fakes.hermes.runs["r1"] = turn("r1", KEPT)
+    assert [n["code"] for n in notices(follow(bridge, "run_x"))] == ["loop_rescue_started"]
 
 
 def test_a_question_an_offer_or_work_to_finish_is_no_promise_to_tell(bridges, fakes):

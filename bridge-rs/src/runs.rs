@@ -2673,12 +2673,7 @@ more steps in this turn. Don't repeat what failed: change approach.", crate::loo
             if !go_on_fits(&st) {
                 return (terminal, None);
             }
-            let tools: Vec<String> = st
-                .backlog
-                .iter()
-                .filter(|e| e.r#type == "tool.started")
-                .map(|e| crate::loop_brake::event_tool(&e.data))
-                .collect();
+            let tools = tools_called(&st.backlog);
             (
                 st.session_id.clone(),
                 st.watched,
@@ -3934,6 +3929,22 @@ touche « Démarrer » pour reprendre."
     }
 }
 
+/// The tools a run called, in order: each `tool.started`'s name, and for the tool search (`tool_call`) also the calls
+/// it wraps (bench 22/11, DeepSeek: connector_register and routine_schedule, behind the search, called through it;
+/// go_on.rs `nudge` must see them).
+pub fn tools_called(backlog: &VecDeque<SSEEvent>) -> Vec<String> {
+    let mut tools = Vec::new();
+    for event in backlog.iter().filter(|e| e.r#type == "tool.started") {
+        let tool = crate::loop_brake::event_tool(&event.data);
+        let wraps = crate::loop_brake::bare(&tool) == "tool_call";
+        tools.push(tool);
+        if wraps {
+            tools.extend(wrapped_names(&event.data));
+        }
+    }
+    tools
+}
+
 /// The calls a `tool.started` of the tool search (`tool_call`) wraps, bare names: from its arguments
 /// (`{"calls": [{"name": …}]}` or `{"name": …}`, like vault_line.rs `wrapped_call` and steps.rs `action_of`), or
 /// from its preview, perhaps cut short (each `"name": "…"` in it).
@@ -3960,6 +3971,25 @@ mod tests {
     fn delta(kind: &str, text: &str) -> SSEEvent {
         let data = json!({"event": kind, "delta": text});
         SSEEvent::new(kind, data.as_object().cloned().unwrap(), crate::py::dumps(&data))
+    }
+
+    #[test]
+    fn the_tools_a_run_called_include_those_the_tool_search_wraps() {
+        let started = |data: Value| SSEEvent::new("tool.started", data.as_object().cloned().unwrap(), "");
+        let mut backlog = VecDeque::new();
+        backlog.push_back(started(json!({"tool": "web_search", "preview": "vélo"})));
+        backlog.push_back(delta("message.delta", "Je le mets en place."));
+        backlog.push_back(started(json!({"tool": "tool_call",
+            "preview": "{\"name\": \"mcp__bipagents_connectors__connector_register\", \"arguments\": {}}"})));
+        backlog.push_back(started(json!({"tool": "mcp_bipagents_tool_call",
+            "args": {"calls": [{"name": "mcp__bipagents__routine_schedule", "arguments": {}}]}})));
+        let tools = tools_called(&backlog);
+        assert_eq!(tools[0], "web_search");
+        assert!(tools.contains(&"mcp__bipagents_connectors__connector_register".to_string()), "{tools:?}");
+        assert!(tools.contains(&"routine_schedule".to_string()), "{tools:?}");
+        assert!(crate::go_on::set_up_something(tools.iter().map(String::as_str)));
+        assert_eq!(crate::go_on::nudge(&tools, "Je te préviens dès que le prix baisse."), None);
+        assert_eq!(tools_called(&VecDeque::new()), Vec::<String>::new());
     }
 
     #[test]
