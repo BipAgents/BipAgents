@@ -3623,6 +3623,19 @@ pub fn reminder_in_calendar(config: &Config, id: &str) -> bool {
     links(&read_state(config)).get(id).and_then(in_android_calendar).is_some()
 }
 
+/// The Carnet tasks whose reminder is an event in the Android phone's calendar, by the request that made it (the
+/// event's id in the Android copy): an agent's reminders_list says so, its reminders_complete points to the task.
+pub fn tasks_in_calendar(config: &Config) -> std::collections::HashMap<String, String> {
+    links(&read_state(config)).iter().filter_map(|(task, link)| Some((in_android_calendar(link)?, task.clone()))).collect()
+}
+
+/// The « cochée » request for a task's event in the Android phone's calendar, once (`made`: the request that made
+/// it; without its event there, the app answers « done »).
+fn tick_in_calendar(config: &Config, made: &str) -> anyhow::Result<bool> {
+    let android = Some(crate::reminders::ANDROID);
+    Ok(crate::reminders::enqueue_once_on(config, CARNET, "complete", json!({"id": made}), android)?.is_some())
+}
+
 /// A task gone from the Carnet (deleted, not moved): its add cancelled while it still waits for the phone, else the
 /// phone asked to remove its reminders (only those carrying its mark; in the Android phone's calendar, the event its
 /// request made); its link dropped. Returns the requests made.
@@ -3633,14 +3646,15 @@ fn remove_reminder(config: &Config, task: &str) -> anyhow::Result<usize> {
         None => false,
     };
     let mut asked = 0;
+    let in_calendar = link.as_ref().and_then(in_android_calendar);
+    if let Some(made) = &in_calendar {
+        // in the Android phone's calendar: the « cochée » request, its event taken off (as a task ticked); also when
+        // its add was still waiting here — the app may have written the event before its `done` (relecture 1, B2)
+        asked += usize::from(tick_in_calendar(config, made)?);
+    }
     if !cancelled {
         let ids = open_reminders_of(&shared_items(config), task);
-        if let Some(made) = link.as_ref().and_then(in_android_calendar) {
-            // in the Android phone's calendar: the « cochée » request, its event taken off (as a task ticked)
-            let args = json!({"id": made});
-            let android = Some(crate::reminders::ANDROID);
-            asked += usize::from(crate::reminders::enqueue_once_on(config, CARNET, "complete", args, android)?.is_some());
-        } else if ids.is_empty() && link.is_some() {
+        if ids.is_empty() && link.is_some() && in_calendar.is_none() {
             // added but not shared back yet: the phone finds it by its mark
             asked += usize::from(ask_removal(config, "", task)?);
         }
@@ -3705,12 +3719,22 @@ fn clean_reminders_locked(config: &Config, items: &[Value]) -> anyhow::Result<us
 fn link_reminder(config: &Config, task: &Task, due: &str, who: &Who) -> anyhow::Result<bool> {
     let data = crate::reminders::read(config);
     let allowed = strings(data.get("agents"));
+    // an agent the person took « write » away from (phone_rights.rs) puts none on a phone (relecture 1, R3)
     let ok = match &who.agent {
-        Some(agent) => allowed.contains(agent),
+        Some(agent) => {
+            allowed.contains(agent) && crate::phone_rights::allows(&data, agent, crate::phone_rights::WRITE)
+        }
         None => !allowed.is_empty(),
     };
-    // Without a phone that does it now, the task stays in the Carnet and nobody is told it is on their phone.
-    let phone = crate::reminders::carnet_phone(&data, py::time_time(), who.phone.as_deref());
+    // Without a phone that does it now, the task stays in the Carnet and nobody is told it is on their phone. A health
+    // task never goes to the Android calendar (a Google calendar is often shared, and its copy is read by any agent
+    // with « Rappels », relecture 1 R2): the iPhone's Reminders as before, else none.
+    let now = py::time_time();
+    let phone = if task.part == Part::Health {
+        crate::reminders::iphone_only(&data, now)
+    } else {
+        crate::reminders::carnet_phone(&data, now, who.phone.as_deref())
+    };
     let android = phone == crate::reminders::Phone::Android;
     let ok = ok && (phone == crate::reminders::Phone::Iphone || android);
     if !ok || links(&read_state(config)).contains_key(&task.id) {
@@ -3746,9 +3770,10 @@ fn complete_reminder(config: &Config, task: &str) -> anyhow::Result<()> {
     let Some(link) = links(&state).get(task).cloned() else { return Ok(()) };
     let op = tk::str_or_empty(link.get("op"));
     let cancelled = crate::reminders::cancel_pending(config, &op)?;
-    if let (false, Some(made)) = (cancelled, in_android_calendar(&link)) {
-        let android = Some(crate::reminders::ANDROID);
-        crate::reminders::enqueue_on(config, CARNET, "complete", json!({"id": made}), android)?;
+    if let Some(made) = in_android_calendar(&link) {
+        // also when its add was still waiting here: the app may have written the event before its `done` reached the
+        // bridge (relecture 1, B2)
+        tick_in_calendar(config, &made)?;
     }
     if cancelled || in_android_calendar(&link).is_some() {
         update_state(config, |s| {

@@ -17,8 +17,9 @@
 //!     POST /v1/reminders/verified        {hash}: the phone's copy unchanged (phone_copy.rs; 409: send it whole)
 //!     PUT  /v1/reminders/agents          {agents}
 //!     PUT  /v1/reminders/rights          {agent, rights: {read?, write?}}: what that agent may do (phone_rights.rs)
-//!     PUT  /v1/reminders/android         {calendar, items: [{id, title, due}]}: the Android app's reminders at a time,
-//!                                        events in its calendar, and whether it may write there
+//!     PUT  /v1/reminders/android         {calendar, items: [{id, title, due}], carnet?}: the Android app's reminders at
+//!                                        a time, events in its calendar, whether it may write there, and (1.1) whether
+//!                                        it takes the Carnet's dated tasks
 //!     GET  /v1/reminders/queue           the agents' requests waiting for the iPhone (`?phone=android`: for the
 //!                                        Android app: those marked `phone` « android », and the reminders by place)
 //!     POST /v1/reminders/queue/{id}      {done: bool, error?} (error « unknown request », from an app older than the
@@ -289,6 +290,8 @@ pub fn call_from(
                     Some(line)
                 })
                 .collect();
+            // a Carnet task's event says so (relecture 1, R5): it is ticked in the Carnet, never here
+            let tasks = if android.is_empty() { Default::default() } else { crate::notebook::tasks_in_calendar(config) };
             let in_calendar: Vec<String> = if wanted.is_empty() {
                 android
                     .iter()
@@ -299,6 +302,11 @@ pub fn call_from(
                         if !text("due").is_empty() {
                             line += &format!(" · due {}", text("due"));
                         }
+                        if let Some(task) = tasks.get(&text("id")) {
+                            line += &format!(
+                                " · Carnet task [{task}]: tick it with notebook_task (action done), not here"
+                            );
+                        }
                         line
                     })
                     .collect()
@@ -308,7 +316,7 @@ pub fn call_from(
             let in_calendar = if in_calendar.is_empty() {
                 String::new()
             } else {
-                format!("\nIn the Android phone's calendar (the reminders you added there, to come):\n{}", in_calendar.join("\n"))
+                format!("\nIn the Android phone's calendar (the reminders added there, to come):\n{}", in_calendar.join("\n"))
             };
             if rows.is_empty() && !asked.is_empty() {
                 return Ok(tool_text(&format!("Asked, not in the phone's copy yet:\n{}{in_calendar}", asked.join("\n")), false));
@@ -450,6 +458,16 @@ pub fn call_from(
             if items.iter().any(is) {
                 (op, ASKED.to_string())
             } else if android.iter().any(is) {
+                // A Carnet task's event: ticked here, the event would go and the task stay open (relecture 1, R5).
+                if let Some(task) = crate::notebook::tasks_in_calendar(config).remove(&reminder) {
+                    return Ok(tool_text(
+                        &format!(
+                            "Not done: this is the reminder of the Carnet task [{task}]. Tick the task with \
+                             notebook_task (action done, id {task}): its event then leaves the calendar."
+                        ),
+                        true,
+                    ));
+                }
                 // In the Android phone's calendar: the event deleted while it is to come (an event past keeps its
                 // place in the calendar, its alert taken off).
                 op["phone"] = json!(ANDROID);
@@ -540,12 +558,32 @@ pub fn phone_for(data: &Dict, now: f64, asking: Option<&str>) -> Phone {
 /// or no calendar synced with an account) leaves it to the iPhone when one shares its Reminders, else to none: the
 /// task stays in the Carnet, and no request waits there for a permission (an iPhone not sharing its Reminders
 /// gets none either).
+/// Only an Android app that says it takes them gets them (`carnet` in its copy, the 1.1 app): an installed 1.0 app,
+/// iPhone or Android, keeps exactly what it did (Alex, 21/11, relecture 1 B1: « A, porte en 1.1 »), the iPhone's
+/// Reminders else none (`iphone_only`).
 pub fn carnet_phone(data: &Dict, now: f64, asking: Option<&str>) -> Phone {
+    if !android_takes_carnet(data) {
+        return iphone_only(data, now);
+    }
     match phone_for(data, now, asking) {
         Phone::AndroidWaiting if iphone_syncs(data, now) => Phone::Iphone,
         Phone::AndroidWaiting | Phone::Any => Phone::None,
         phone => phone,
     }
+}
+
+/// The rule before 1.1 for a Carnet task: an iPhone sharing its Reminders, else none.
+pub fn iphone_only(data: &Dict, now: f64) -> Phone {
+    if iphone_syncs(data, now) {
+        Phone::Iphone
+    } else {
+        Phone::None
+    }
+}
+
+/// Whether the Android app said it takes the Carnet's dated tasks (`PUT /v1/reminders/android` {carnet: true}).
+pub fn android_takes_carnet(data: &Dict) -> bool {
+    data.get(ANDROID).and_then(|a| a.get("carnet")).and_then(Value::as_bool) == Some(true)
 }
 
 /// A phone as the apps name it in their messages: « ios » (also « iphone », « ipad »), « android »; None otherwise.
@@ -868,6 +906,9 @@ pub struct AndroidCopy {
     pub calendar: bool,
     #[serde(default)]
     pub items: Vec<AndroidItem>,
+    /// The app takes the Carnet's dated tasks too (the 1.1 app says so; a 1.0 app never gets them: `carnet_phone`).
+    #[serde(default, deserialize_with = "web::lax::bool")]
+    pub carnet: bool,
 }
 
 impl Validate for AndroidCopy {
@@ -1045,7 +1086,10 @@ async fn android_copy(State(state): State<AppState>, Json(body): Json<AndroidCop
         }
         let items: Vec<Value> = body.items.iter().map(|i| serde_json::to_value(i).unwrap_or(Value::Null)).collect();
         let count = items.len();
-        data.insert(ANDROID.into(), json!({"at": py::time_time(), "calendar": body.calendar, "items": items}));
+        data.insert(
+            ANDROID.into(),
+            json!({"at": py::time_time(), "calendar": body.calendar, "items": items, "carnet": body.carnet}),
+        );
         write(&config, &data)?;
         Ok(count)
     })

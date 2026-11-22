@@ -964,7 +964,14 @@ impl Validate for NewTask {
         check_max_len(errors, "title", Some(&self.title), 300);
         check_max_len(errors, "due", self.due.as_deref(), 40);
         check_max_len(errors, "page", self.page.as_deref(), 200);
-        check_max_len(errors, "phone", self.phone.as_deref(), 20);
+        check_phone(errors, self.phone.as_deref());
+    }
+}
+
+/// `phone`, as a message's (threads/send.rs): « ios » or « android » (also « iPhone »…), anything else refused.
+fn check_phone(errors: &mut Vec<FieldError>, phone: Option<&str>) {
+    if phone.is_some_and(|p| crate::reminders::phone_named(p).is_none()) {
+        errors.push(FieldError::new("value_error", web::body_loc("phone"), "« ios » or « android »", Value::Null));
     }
 }
 
@@ -1100,7 +1107,7 @@ pub struct Answer {
 
 impl Validate for Answer {
     fn validate(&self, errors: &mut Vec<FieldError>) {
-        check_max_len(errors, "phone", self.phone.as_deref(), 20);
+        check_phone(errors, self.phone.as_deref());
     }
 }
 
