@@ -520,6 +520,11 @@ fn by_words(page: &Page, lang: &str, rules: &[Rule]) -> (Vec<String>, Option<Str
     points.result()
 }
 
+/// (carnet-categories, tests first: not built yet)
+pub fn narrow_in(_ctx: &Ctx, _part: Part, _path: &str, _page: &Page) -> bool {
+    false
+}
+
 /// A records page's categories, by its type.
 pub fn of_records_type(t: Option<&str>) -> Vec<String> {
     strings(match t {
@@ -1540,6 +1545,20 @@ mod tests {
         }
         let all = all_first as f64 / all_n as f64;
         lines.push(format!("DEV all: n {all_n}, first {:.1} %, among the two {:.1} %", 100.0 * all, 100.0 * all_among as f64 / all_n as f64));
+        // what filing one page by its words costs (title and first line; the table and neighbours made once before)
+        let dir = tempfile::tempdir().unwrap();
+        let config = config_in(&dir, "fr");
+        let pages: Vec<Page> = set["cases"]["fr"].as_array().unwrap().iter()
+            .map(|c| page_in("fr", "subject", c["title"].as_str().unwrap(), c["first_line"].as_str().unwrap_or(""), "")).collect();
+        let _ = decided(&config, &pages[0]);
+        let ctx = Ctx::new(&config);
+        let started = std::time::Instant::now();
+        for _ in 0..20 {
+            for p in &pages {
+                std::hint::black_box(decide_in(&ctx, Part::Main, "Sujets/x.md", p, None));
+            }
+        }
+        lines.push(format!("DEV cost: {:.1} µs a page (title and first line)", started.elapsed().as_secs_f64() * 1e6 / (20 * pages.len()) as f64));
         eprintln!("{}", lines.join("\n"));
         assert!(all >= DEV_FLOOR && low.is_empty(), "{}", lines.join("\n"));
     }
@@ -1621,6 +1640,98 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let config = config_in(&dir, "de");
         assert_eq!(decided(&config, &page_in("de", "subject", "Ideen", "Noch nicht entschieden.", "")), ["other"]);
+    }
+
+    /// Review 1 of carnet-categories (R1, R2, R3, R7, R8): the weekend says little; a hobby's word never beats a real
+    /// category another word of the title gives; the false friends and too wide words the review found file nothing
+    /// wrong. Written from the review and the development set, never from a blind set.
+    #[test]
+    fn the_reviews_titles_go_where_a_person_looks() {
+        for (lang, title, line, want) in [
+            // R1: the weekend
+            ("fr", "Ménage ce week-end", "", "home"),
+            ("fr", "Chez mamie ce week-end", "", "people"),
+            ("en", "Garden this weekend", "", "home"),
+            ("en", "Kids this weekend", "", "people"),
+            ("nl", "Tuin dit weekend", "", "home"),
+            ("fr", "Week-end à Lisbonne", "", "trips"),
+            // R2: a hobby's word at the head
+            ("fr", "Photos du mariage de Julie", "", "people"),
+            ("fr", "Sortie au zoo avec les enfants", "", "people"),
+            ("es", "Libro de familia", "", "papers"),
+            ("de", "Schachteln für den Umzug", "", "home"),
+            ("fr", "Cours de piano", "Le mardi, 25 € la séance.", "other"),
+            // R8: Spanish feminines
+            ("es", "La inquilina del segundo", "", "home"),
+            ("es", "Jubilada desde enero", "", "money"),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let config = config_in(&dir, lang);
+            assert_eq!(decided(&config, &page_in(lang, "subject", title, line, ""))[0], want, "{lang} {title}");
+        }
+        // R3, R7: never in the category the false friend points to
+        for (lang, title, line, never) in [
+            ("fr", "Stage de poney", "", "work"),
+            ("fr", "Emmener la voiture au garage", "", "home"),
+            ("fr", "Compte rendu IRM", "", "money"),
+            ("fr", "Compte rendu du conseil de classe", "", "work"),
+            ("fr", "Salon de l'auto", "", "home"),
+            ("fr", "Prélèvement sanguin", "", "money"),
+            ("fr", "Disneyland", "", "money"),
+            ("fr", "Colis livré", "", "other"),
+            ("es", "Gran Canaria en abril", "", "people"),
+            ("es", "Tener en cuenta", "", "money"),
+            ("es", "Planta baja", "", "papers"),
+            ("es", "Turno del pediatra", "", "work"),
+            ("es", "Chequeo médico", "", "money"),
+            ("nl", "Overleg met de buren", "", "work"),
+            ("nl", "Zorgdeclaratie", "", "work"),
+            ("nl", "Enkel verstuikt", "", "people"),
+            ("de", "Betriebskosten", "", "work"),
+            ("de", "Heiratsantrag", "", "papers"),
+            ("de", "Akten vernichten", "", "people"),
+            ("de", "Hochzeitsfotograf", "", "other"),
+            ("de", "Familie Zimmermann", "", "home"),
+            ("de", "Wohnung in Berlin", "", "trips"),
+            ("en", "Pea and mint soup", "", "money"),
+            ("en", "Chore rota", "", "work"),
+            ("en", "Meter reading", "", "other"),
+            ("en", "Concrete for the patio", "", "trips"),
+            ("en", "Permission slip", "", "work"),
+            ("en", "Interpreter", "", "money"),
+            ("en", "Cookies for the bake sale", "", "home"),
+            ("fr", "Idées", "Un bon resto à Lyon.", "money"),
+            ("es", "Plantilla del informe", "", "home"),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let config = config_in(&dir, lang);
+            let got = decided(&config, &page_in(lang, "subject", title, line, ""));
+            assert!(!got.iter().any(|c| c == never), "{lang} {title} → {got:?}");
+        }
+    }
+
+    /// Review 1 (R4): no word of the neighbours' health groups (search_words.rs, the five languages: the groups before
+    /// each language's birthday group) is filed by a neighbour.
+    #[test]
+    fn no_health_word_is_filed_by_a_neighbour() {
+        let file = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/notebook/search_words.rs");
+        let source = std::fs::read_to_string(file).unwrap();
+        for lang in ["FR", "EN", "DE", "ES", "NL"] {
+            let block = &source[source.find(&format!("const NEIGHBOURS_{lang}: &[&str] = &[")).unwrap()..];
+            let block = &block[..block.find("\n];").unwrap()];
+            let mut groups = 0;
+            for line in block.lines().skip(1) {
+                let Some(group) = line.trim().strip_prefix('"').and_then(|l| l.strip_suffix("\",")) else { continue };
+                if ["anniv", "birthday", "geburtstag", "cumple", "verjaardag"].iter().any(|b| group.contains(b)) {
+                    break;
+                }
+                groups += 1;
+                for word in group.split('|') {
+                    assert!(!NEIGHBOURS.contains_key(&fold(word)), "{lang}: {word} filed by a neighbour");
+                }
+            }
+            assert!(groups >= 5, "{lang}: {groups} health groups read");
+        }
     }
 
     /// The person's rule still wins over the table's new words (a word they filed elsewhere), and a hobby's word is
