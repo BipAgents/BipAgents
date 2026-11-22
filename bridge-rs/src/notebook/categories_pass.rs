@@ -349,6 +349,8 @@ pub(crate) fn sort_with(config: &Config, version: i64, stop_after: Option<usize>
     let who = Who::tidy(config);
     let mut out = Sorted::default();
     let makers = makers(config);
+    // the words' tables made before the lock is taken (review 1, R5)
+    c::warm();
     let mut work: HashMap<String, bool> = HashMap::new();
     for (n, batch) in paths.chunks(BATCH).enumerate() {
         if stop_after == Some(n) {

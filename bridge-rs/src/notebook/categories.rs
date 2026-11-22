@@ -370,6 +370,15 @@ static NEIGHBOURS: LazyLock<HashMap<String, usize>> = LazyLock::new(|| {
     out
 });
 
+/// The words' tables made now, before a caller holds the Carnet's lock (the neighbours read the five languages'
+/// groups once, a few tenths of a second: measured as the S2 pass's longest hold of the lock, review 1 R5).
+pub fn warm() {
+    LazyLock::force(&STEMS);
+    LazyLock::force(&PHRASES);
+    LazyLock::force(&COMPOUND_HEADS);
+    LazyLock::force(&NEIGHBOURS);
+}
+
 /// What `text`'s words say, each match where it starts — the person's rules first (their word counts double), then
 /// the table's phrases, then each word's longest stem, then a word the table does not know by its neighbours.
 fn matches(text: &str, rules: &[Rule]) -> Vec<Match> {
