@@ -56,6 +56,8 @@ def test_the_protocol_and_the_tokens(bridge):
                                           # the Carnet's (on by default)
                                           "notebook_search", "notebook_read", "notebook_write", "notebook_task",
                                           "notebook_record", "notebook_fill",
+                                          # a plan it proposes on its own (plans.rs: « Initiative » not off)
+                                          "plan_propose",
                                           # a tool it has off, asked on a card (tool_asks.rs: on by default, 16/11)
                                           "ask_for_tool"]
     assert all(set(t) >= {"name", "description", "inputSchema"} for t in tools)
