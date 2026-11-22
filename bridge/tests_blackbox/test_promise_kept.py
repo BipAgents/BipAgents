@@ -120,6 +120,8 @@ def test_a_question_an_offer_or_work_to_finish_is_no_promise_to_tell(bridges, fa
         "run_w2": "Je te préviens aussi : si tu commandes après 14 h, c'est livré lundi.",
         "run_w3": "Je te rappelle juste que la réunion est demain à 9 h.",
         "run_w4": "Je te préviens que si tu prends l'option, c'est 10 € de plus.",
+        # review 2 (C2)
+        "run_w5": "Te aviso que si pides después de las 14 h, llega el lunes.",
     }
     for run, reply in said.items():
         fakes.hermes.runs[run] = turn(run, reply, tools=["web_search"])

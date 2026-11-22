@@ -485,8 +485,15 @@ static DIS_WHEN: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?i)^[ \t]+(?:ça[ \t]+)?(?:dès que|dès qu'|quand|lorsque|lorsqu'|aussitôt que|si|s'il|s'ils)").expect("valid regex")
 });
 
+/// « Te aviso que si pides después de las 14 h… », « le aviso: … »: the Spanish warning said now (review 2, C2).
+static AVISO_NOW: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)^[ \t]*(?:[,:;!—–-]|que\b)").expect("valid regex"));
+
 fn said_now(verb: &str, after: &str) -> bool {
     let verb = verb.to_lowercase();
+    if verb.ends_with("aviso") && AVISO_NOW.is_match(after) {
+        return true;
+    }
     if verb.ends_with(" dis") && !DIS_WHEN.is_match(after) {
         return true; // « je te dis » that tells now (« je te dis tout », « je te dis : … »)
     }
@@ -616,14 +623,26 @@ pub fn kept_by(reply: &str, existing: &[String]) -> bool {
 }
 
 /// The conversation is one of what the agent set up (a watcher's, a routine's run, the conversation a routine was made
-/// in): a promise to tell there is theirs (review 1, B1).
+/// in, that hour: `routine_here`): a promise to tell there is theirs (review 1, B1).
 pub fn conversation_set_up(config: &crate::config::Config, agent: &str, session: &str) -> bool {
     !session.is_empty()
         && (crate::connectors::of_agent(config, agent)
             .iter()
             .filter(|c| c.watch.is_some())
             .any(|c| crate::watchers::load(config, agent, &c.id).session == session)
-            || crate::routines::all(config, Some(agent)).iter().any(|r| r.origin == session || r.last_session == session))
+            || crate::routines::all(config, Some(agent))
+                .iter()
+                .any(|r| routine_here(&r.origin, &r.last_session, r.created, session, crate::py::time_time())))
+}
+
+/// How long the conversation a routine was made in counts as its own (review 2, C1: that conversation is usually the
+/// main one; for good it would turn the net off there for every promise, whatever it is about).
+pub const ORIGIN_SECONDS: f64 = 3600.0;
+
+/// `session` is the conversation of a routine's last run, or the one it was made in less than `ORIGIN_SECONDS` ago
+/// (« Avec plaisir, je te redis ça demain matin ! » right after).
+pub fn routine_here(origin: &str, last_session: &str, created: f64, session: &str, now: f64) -> bool {
+    !session.is_empty() && (last_session == session || (origin == session && now - created < ORIGIN_SECONDS))
 }
 
 /// The agent's watchers, routines and triggers by name (for the continuation's input: one of them may already notice
@@ -1109,6 +1128,10 @@ mod tell_later {
             "Je te rappelle juste que la réunion est demain à 9 h.",
             "Je te rappelle aussi que le dentiste est jeudi.",
             "Je te dis tout demain si tu veux bien ? Non : je te dis tout maintenant.",
+            // review 2 (C2): the Spanish warning said now
+            "Te aviso que si pides después de las 14 h, llega el lunes.",
+            "Le aviso que la tienda cierra a las 19 h.",
+            "Te aviso: si pides hoy, llega el lunes.",
             // the agent's own need or knowledge: work, not watching
             "Je te recontacte si j'ai besoin de précisions.",
             "Je te tiens au courant quand j'en sais plus.",
@@ -1168,6 +1191,19 @@ mod tell_later {
         assert!(!input.contains("Already set up"));
         let named = tell_input(watch, &["watcher « Prix du vélo »".to_string()]);
         assert!(named.contains("Already set up: watcher « Prix du vélo ». If one of these already notices exactly this"));
+    }
+
+    #[test]
+    fn the_conversation_a_routine_was_made_in_is_its_own_for_an_hour_only() {
+        // review 2 (C1): usually the main conversation; for good, the net would be off there for every promise
+        let now = 1_000_000.0;
+        assert!(routine_here("api_main", "", now - 60.0, "api_main", now));
+        assert!(!routine_here("api_main", "", now - ORIGIN_SECONDS, "api_main", now));
+        assert!(!routine_here("api_main", "", now - 86_400.0, "api_main", now));
+        // its run's conversation, whenever
+        assert!(routine_here("api_main", "api_run", now - 86_400.0, "api_run", now));
+        assert!(!routine_here("api_main", "api_run", now - 60.0, "api_other", now));
+        assert!(!routine_here("", "", now, "", now));
     }
 
     #[test]
