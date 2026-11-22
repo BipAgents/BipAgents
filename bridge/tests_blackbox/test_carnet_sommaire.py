@@ -593,7 +593,8 @@ def test_the_index_is_the_phones_copy_without_sante_numbers_or_mails(bridges):
     got = index_of(bridge, lang="fr")
     etag = got.headers["etag"]
     copy = got.json()
-    assert re.fullmatch(r'"e[0-9a-f]{8}-v\d+"', etag) and etag == f'"{copy["epoch"]}-v{copy["version"]}"'
+    # (the tables' languages in it too: review 1 of S3, R2)
+    assert re.fullmatch(r'"e[0-9a-f]{8}-v\d+-fr"', etag) and etag == f'"{copy["epoch"]}-v{copy["version"]}-fr"'
     assert (copy["v"], copy["full"], copy["since"], copy["lang"], copy["truncated"], copy["online_only"]) == (1, True, None, "fr", False, None)
     assert copy["limits"] == {"lines": 20000, "bytes": 8000000} and copy["dated"] == {"before": 90, "after": 730}
     assert copy["removed"] == [] and copy["kept"] == []
