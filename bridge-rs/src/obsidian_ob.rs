@@ -399,9 +399,10 @@ pub struct Dialog {
 
 fn openpty() -> std::io::Result<(OwnedFd, OwnedFd)> {
     let (mut master, mut slave) = (-1, -1);
-    // SAFETY: openpty writes two descriptors it opened; no name, settings or size given.
+    // SAFETY: openpty writes two descriptors it opened; no name, settings or size given. The settings and size are
+    // `*const` on Linux and `*mut` on macOS: a null `*mut` fits both (it coerces to `*const`).
     let done = unsafe {
-        libc::openpty(&mut master, &mut slave, std::ptr::null_mut(), std::ptr::null(), std::ptr::null())
+        libc::openpty(&mut master, &mut slave, std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null_mut())
     };
     if done != 0 {
         return Err(std::io::Error::last_os_error());
