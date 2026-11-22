@@ -1,0 +1,610 @@
+{
+ "as_of": "Hors connexion · à jour du DAY",
+ "facts": [
+  {
+   "answer": "200 € par mois",
+   "date": "D+0",
+   "label": "Épargne",
+   "page": "Finances",
+   "path": "Domaines/Finances.md",
+   "when": "noté le DAY",
+   "words": [
+    "finances",
+    "epargne",
+    "200",
+    "par",
+    "mois"
+   ]
+  },
+  {
+   "answer": "Poubelles le lundi soir",
+   "date": "D+0",
+   "label": "",
+   "page": "Maison",
+   "path": "Domaines/Maison.md",
+   "when": "noté le DAY",
+   "words": [
+    "maison",
+    "poubelles",
+    "lundi",
+    "soir"
+   ]
+  },
+  {
+   "answer": "Entretien annuel le {date+5}",
+   "date": "D+0",
+   "label": "",
+   "page": "Travail",
+   "path": "Domaines/Travail.md",
+   "when": "noté le DAY",
+   "words": [
+    "travail",
+    "entretien",
+    "annuel",
+    "27",
+    "novembre"
+   ]
+  },
+  {
+   "answer": "Ta sœur",
+   "date": "D+0",
+   "label": "",
+   "page": "Claire Durand",
+   "path": "Personnes/Claire Durand.md",
+   "when": "noté le DAY",
+   "words": [
+    "claire",
+    "durand",
+    "soeur"
+   ]
+  },
+  {
+   "answer": "{date+41}",
+   "date": "D+0",
+   "label": "Anniversaire",
+   "page": "Claire Durand",
+   "path": "Personnes/Claire Durand.md",
+   "when": "noté le DAY",
+   "words": [
+    "claire",
+    "durand",
+    "anniversaire",
+    "2",
+    "janvier"
+   ]
+  },
+  {
+   "answer": "{date+23}",
+   "date": "D+0",
+   "label": "Anniversaire",
+   "page": "Marc Durand",
+   "path": "Personnes/Marc Durand.md",
+   "when": "noté le DAY",
+   "words": [
+    "marc",
+    "durand",
+    "anniversaire",
+    "15",
+    "decembre"
+   ]
+  },
+  {
+   "answer": "Menuisier à son compte",
+   "date": "D+0",
+   "label": "",
+   "page": "Marc Durand",
+   "path": "Personnes/Marc Durand.md",
+   "when": "noté le DAY",
+   "words": [
+    "marc",
+    "durand",
+    "menuisier",
+    "compte"
+   ]
+  },
+  {
+   "answer": "Un vinyle de Chet Baker",
+   "date": "D+0",
+   "label": "",
+   "page": "Marc Durand",
+   "path": "Personnes/Marc Durand.md",
+   "when": "noté le DAY",
+   "words": [
+    "marc",
+    "durand",
+    "vinyle",
+    "chet",
+    "baker"
+   ]
+  },
+  {
+   "answer": "Ajouter les dons",
+   "date": "D+0",
+   "label": "",
+   "page": "Impôts 2026",
+   "path": "Sujets/Impôts 2026.md",
+   "when": "noté le DAY",
+   "words": [
+    "impots",
+    "2026",
+    "ajouter",
+    "dons"
+   ]
+  },
+  {
+   "answer": "Devis reçu",
+   "date": "D+0",
+   "label": "",
+   "page": "Rénovation cuisine",
+   "path": "Sujets/Rénovation cuisine.md",
+   "when": "noté le DAY",
+   "words": [
+    "renovation",
+    "cuisine",
+    "devis",
+    "recu"
+   ]
+  },
+  {
+   "answer": "8 900 €",
+   "date": "D+0",
+   "label": "Devis",
+   "page": "Rénovation cuisine",
+   "path": "Sujets/Rénovation cuisine.md",
+   "when": "noté le DAY",
+   "words": [
+    "renovation",
+    "cuisine",
+    "devis",
+    "8",
+    "900"
+   ]
+  },
+  {
+   "answer": "Avril, 12 jours : Tokyo, Kyoto",
+   "date": "D+0",
+   "label": "",
+   "page": "Voyage Japon",
+   "path": "Sujets/Voyage Japon.md",
+   "when": "noté le DAY",
+   "words": [
+    "voyage",
+    "japon",
+    "avril",
+    "12",
+    "jours",
+    "tokyo",
+    "kyoto"
+   ]
+  },
+  {
+   "answer": "Vit à Nantes",
+   "date": "D+0",
+   "label": "",
+   "page": "Toi",
+   "path": "Toi.md",
+   "when": "noté le DAY",
+   "words": [
+    "toi",
+    "vit",
+    "nantes"
+   ]
+  }
+ ],
+ "generated_at": "STAMP",
+ "labels": {
+  "adresse": [
+   "address",
+   "anschrift",
+   "direccion",
+   "domicilio"
+  ],
+  "allergies": [
+   "alergia",
+   "alergias",
+   "allergic",
+   "allergie",
+   "allergien",
+   "allergique",
+   "allergy"
+  ],
+  "animal": [
+   "animal de compagnie",
+   "haustier",
+   "mascota",
+   "pet"
+  ],
+  "anniversaire": [
+   "anniv",
+   "birthday",
+   "born on",
+   "cumpleanos",
+   "date de naissance",
+   "date of birth",
+   "fecha de nacimiento",
+   "geboren am",
+   "geburtstag",
+   "nacida el",
+   "nacido el",
+   "nacio el",
+   "ne le",
+   "nee le"
+  ],
+  "anniversaire de mariage": [
+   "aniversario de boda",
+   "boda",
+   "casados el",
+   "hochzeit",
+   "hochzeitstag",
+   "mariage",
+   "marie le",
+   "mariee le",
+   "maries le",
+   "married on",
+   "verheiratet seit",
+   "wedding",
+   "wedding anniversary"
+  ],
+  "boisson preferee": [
+   "bebida favorita",
+   "favorite drink",
+   "favourite drink",
+   "lieblingsgetrank"
+  ],
+  "classe": [
+   "curso",
+   "grade",
+   "klasse",
+   "school year"
+  ],
+  "conjoint": [
+   "compagne",
+   "compagnon",
+   "conjointe",
+   "ehefrau",
+   "ehemann",
+   "epouse",
+   "epoux",
+   "esposa",
+   "esposo",
+   "husband",
+   "marido",
+   "pareja",
+   "partner",
+   "partnerin",
+   "spouse",
+   "wife"
+  ],
+  "couleur preferee": [
+   "color favorito",
+   "color preferido",
+   "favorite color",
+   "favourite colour",
+   "lieblingsfarbe"
+  ],
+  "e mail": [
+   "adresse e mail",
+   "adresse mail",
+   "correo",
+   "correo electronico",
+   "courriel",
+   "email",
+   "mail"
+  ],
+  "ecole": [
+   "colegio",
+   "college",
+   "escuela",
+   "lycee",
+   "school",
+   "schule"
+  ],
+  "employeur": [
+   "arbeitgeber",
+   "employer",
+   "empresa"
+  ],
+  "enfants": [
+   "children",
+   "hijos",
+   "kids",
+   "kinder"
+  ],
+  "fete": [
+   "fete le",
+   "fetee le",
+   "name day",
+   "name day on",
+   "namenstag",
+   "namenstag am",
+   "onomastica",
+   "santo",
+   "su santo es el"
+  ],
+  "groupe sanguin": [
+   "blood group",
+   "blood type",
+   "blutgruppe",
+   "grupo sanguineo"
+  ],
+  "langue": [
+   "idioma",
+   "language",
+   "sprache"
+  ],
+  "medecin": [
+   "arzt",
+   "docteur",
+   "doctor",
+   "gp",
+   "hausarzt",
+   "medecin traitant",
+   "medico"
+  ],
+  "metier": [
+   "beruf",
+   "job",
+   "occupation",
+   "oficio",
+   "profesion",
+   "profession",
+   "trabajo"
+  ],
+  "plat prefere": [
+   "comida favorita",
+   "favorite dish",
+   "favorite food",
+   "favourite food",
+   "lieblingsessen",
+   "lieblingsgericht",
+   "plato favorito"
+  ],
+  "pointure": [
+   "calza",
+   "calza el",
+   "calza un",
+   "chausse",
+   "chausse du",
+   "schuhgrosse",
+   "shoe size",
+   "taille de chaussures",
+   "talla de zapatos",
+   "wears size"
+  ],
+  "regime alimentaire": [
+   "diet",
+   "dieta",
+   "ernahrung",
+   "regime"
+  ],
+  "surnom": [
+   "apodo",
+   "nickname",
+   "spitzname"
+  ],
+  "taille": [
+   "altura",
+   "grosse",
+   "height",
+   "is tall",
+   "ist gross",
+   "mesure",
+   "mide",
+   "tall"
+  ],
+  "taille de vetements": [
+   "clothes size",
+   "clothing size",
+   "kleidergrosse",
+   "konfektionsgrosse",
+   "taille vetements",
+   "talla de ropa"
+  ],
+  "telephone": [
+   "cell",
+   "celular",
+   "handy",
+   "handynummer",
+   "mobile",
+   "movil",
+   "phone",
+   "portable",
+   "tel",
+   "telefon",
+   "telefono"
+  ],
+  "tour de doigt": [
+   "ring size",
+   "ringgrosse",
+   "taille de bague",
+   "talla de anillo"
+  ],
+  "ville": [
+   "city",
+   "ciudad",
+   "stadt",
+   "wohnort"
+  ],
+  "voiture": [
+   "auto",
+   "car",
+   "coche"
+  ]
+ },
+ "lang": "fr",
+ "none": "Rien trouvé hors connexion.",
+ "pages": [
+  {
+   "aliases": [],
+   "kind": "area",
+   "path": "Domaines/Finances.md",
+   "title": "Finances"
+  },
+  {
+   "aliases": [],
+   "kind": "area",
+   "path": "Domaines/Maison.md",
+   "title": "Maison"
+  },
+  {
+   "aliases": [],
+   "kind": "area",
+   "path": "Domaines/Travail.md",
+   "title": "Travail"
+  },
+  {
+   "aliases": [],
+   "kind": "records",
+   "path": "Fiches/Abonnements.md",
+   "title": "Abonnements"
+  },
+  {
+   "aliases": [],
+   "kind": "records",
+   "path": "Fiches/Achats.md",
+   "title": "Achats"
+  },
+  {
+   "aliases": [],
+   "kind": "records",
+   "path": "Fiches/Contrats et assurances.md",
+   "title": "Contrats et assurances"
+  },
+  {
+   "aliases": [],
+   "kind": "records",
+   "path": "Fiches/Réservations.md",
+   "title": "Réservations"
+  },
+  {
+   "aliases": [],
+   "kind": "person",
+   "path": "Personnes/Claire Durand.md",
+   "title": "Claire Durand"
+  },
+  {
+   "aliases": [],
+   "kind": "person",
+   "path": "Personnes/Marc Durand.md",
+   "title": "Marc Durand"
+  },
+  {
+   "aliases": [],
+   "kind": "subject",
+   "path": "Sujets/Impôts 2026.md",
+   "title": "Impôts 2026"
+  },
+  {
+   "aliases": [],
+   "kind": "subject",
+   "path": "Sujets/Jardin.md",
+   "title": "Jardin"
+  },
+  {
+   "aliases": [],
+   "kind": "subject",
+   "path": "Sujets/Rénovation cuisine.md",
+   "title": "Rénovation cuisine"
+  },
+  {
+   "aliases": [],
+   "kind": "subject",
+   "path": "Sujets/Voyage Japon.md",
+   "title": "Voyage Japon"
+  },
+  {
+   "aliases": [],
+   "kind": "self",
+   "path": "Toi.md",
+   "title": "Toi"
+  }
+ ],
+ "stop": [
+  "de",
+  "du",
+  "la",
+  "le",
+  "les",
+  "des",
+  "d",
+  "l",
+  "un",
+  "une",
+  "au",
+  "aux",
+  "et",
+  "a",
+  "en",
+  "pour",
+  "sur",
+  "ma",
+  "mon",
+  "mes",
+  "ta",
+  "ton",
+  "tes",
+  "sa",
+  "son",
+  "ses",
+  "quel",
+  "quelle",
+  "quels",
+  "quelles",
+  "est",
+  "c",
+  "qu",
+  "que",
+  "qui",
+  "quoi",
+  "combien",
+  "elle",
+  "il",
+  "quand",
+  "the",
+  "of",
+  "an",
+  "and",
+  "to",
+  "is",
+  "what",
+  "which",
+  "who",
+  "how",
+  "many",
+  "much",
+  "my",
+  "your",
+  "his",
+  "her",
+  "does",
+  "s",
+  "when",
+  "has",
+  "der",
+  "die",
+  "das",
+  "den",
+  "dem",
+  "von",
+  "ein",
+  "eine",
+  "und",
+  "ist",
+  "was",
+  "wie",
+  "welche",
+  "hat",
+  "wann",
+  "el",
+  "los",
+  "las",
+  "del",
+  "y",
+  "es",
+  "cual",
+  "cuanto",
+  "cuando",
+  "tiene"
+ ],
+ "v": 1
+}

@@ -1,0 +1,271 @@
+{
+ "types": [
+  {
+   "archive_path": "Archives/Fiches/Achats.md",
+   "archived": [],
+   "archived_count": 0,
+   "count": 1,
+   "fields": [
+    {
+     "id": "date",
+     "title": "Date"
+    },
+    {
+     "id": "item",
+     "title": "Objet"
+    },
+    {
+     "id": "store",
+     "title": "Magasin"
+    },
+    {
+     "id": "price",
+     "title": "Prix"
+    },
+    {
+     "id": "class",
+     "title": "Catégorie"
+    },
+    {
+     "id": "warranty_end",
+     "title": "Fin de garantie"
+    },
+    {
+     "id": "source",
+     "title": "Source"
+    }
+   ],
+   "important_count": 1,
+   "items": [
+    {
+     "archived": false,
+     "class": "bien durable",
+     "class_id": "goods",
+     "date": "D-120",
+     "id": "R1",
+     "important": true,
+     "in_days": 611,
+     "item": "Lave-linge",
+     "legal": true,
+     "next_date": "D+611",
+     "price": "499 €",
+     "source": "",
+     "source_ref": null,
+     "store": "Électro Plus",
+     "warranty_end": "D+611 (légale)"
+    }
+   ],
+   "next": "warranty_end",
+   "next_title": "Fin de garantie",
+   "path": "Fiches/Achats.md",
+   "title": "Achats",
+   "type": "purchase",
+   "warranty_min_eur": 50.0
+  },
+  {
+   "archive_path": "Archives/Fiches/Abonnements.md",
+   "archived": [],
+   "archived_count": 0,
+   "count": 1,
+   "fields": [
+    {
+     "id": "service",
+     "title": "Service"
+    },
+    {
+     "id": "price",
+     "title": "Prix"
+    },
+    {
+     "id": "period",
+     "title": "Période"
+    },
+    {
+     "id": "renewal",
+     "title": "Prochain renouvellement"
+    },
+    {
+     "id": "cancel",
+     "title": "Comment résilier"
+    },
+    {
+     "id": "source",
+     "title": "Source"
+    }
+   ],
+   "important_count": 0,
+   "items": [
+    {
+     "archived": false,
+     "cancel": "",
+     "id": "R2",
+     "in_days": 9,
+     "legal": false,
+     "next_date": "D+9",
+     "period": "mensuel",
+     "price": "13,49 €",
+     "renewal": "D+9",
+     "service": "Films en streaming",
+     "source": "",
+     "source_ref": null
+    }
+   ],
+   "next": "renewal",
+   "next_title": "Prochain renouvellement",
+   "path": "Fiches/Abonnements.md",
+   "title": "Abonnements",
+   "type": "subscription",
+   "warranty_min_eur": 50.0
+  },
+  {
+   "archive_path": "Archives/Fiches/Contrats et assurances.md",
+   "archived": [],
+   "archived_count": 0,
+   "count": 1,
+   "fields": [
+    {
+     "id": "what",
+     "title": "Type"
+    },
+    {
+     "id": "provider",
+     "title": "Organisme"
+    },
+    {
+     "id": "number",
+     "title": "Numéro"
+    },
+    {
+     "id": "end",
+     "title": "Échéance"
+    },
+    {
+     "id": "source",
+     "title": "Source"
+    }
+   ],
+   "important_count": 0,
+   "items": [
+    {
+     "archived": false,
+     "end": "D+95",
+     "id": "R3",
+     "in_days": 95,
+     "legal": false,
+     "next_date": "D+95",
+     "number": "",
+     "provider": "Assureur Horizon",
+     "source": "",
+     "source_ref": null,
+     "what": "Assurance habitation"
+    }
+   ],
+   "next": "end",
+   "next_title": "Échéance",
+   "path": "Fiches/Contrats et assurances.md",
+   "title": "Contrats et assurances",
+   "type": "contract",
+   "warranty_min_eur": 50.0
+  },
+  {
+   "archive_path": "Archives/Fiches/Papiers.md",
+   "archived": [],
+   "archived_count": 0,
+   "count": 1,
+   "fields": [
+    {
+     "id": "document",
+     "title": "Document"
+    },
+    {
+     "id": "holder",
+     "title": "Titulaire"
+    },
+    {
+     "id": "expires",
+     "title": "Expiration"
+    },
+    {
+     "id": "source",
+     "title": "Source"
+    }
+   ],
+   "important_count": 0,
+   "items": [
+    {
+     "archived": false,
+     "document": "Passeport",
+     "expires": "D+420",
+     "holder": "",
+     "id": "R4",
+     "in_days": 420,
+     "legal": false,
+     "next_date": "D+420",
+     "source": "",
+     "source_ref": null
+    }
+   ],
+   "next": "expires",
+   "next_title": "Expiration",
+   "path": "Fiches/Papiers.md",
+   "title": "Papiers",
+   "type": "paper",
+   "warranty_min_eur": 50.0
+  },
+  {
+   "archive_path": "Archives/Fiches/Réservations.md",
+   "archived": [],
+   "archived_count": 0,
+   "count": 1,
+   "fields": [
+    {
+     "id": "date",
+     "title": "Date"
+    },
+    {
+     "id": "what",
+     "title": "Quoi"
+    },
+    {
+     "id": "provider",
+     "title": "Chez"
+    },
+    {
+     "id": "reference",
+     "title": "Référence"
+    },
+    {
+     "id": "trip",
+     "title": "Voyage"
+    },
+    {
+     "id": "source",
+     "title": "Source"
+    }
+   ],
+   "important_count": 0,
+   "items": [
+    {
+     "archived": false,
+     "date": "D+12 10:30",
+     "id": "R5",
+     "in_days": 12,
+     "legal": false,
+     "next_date": "D+12",
+     "provider": "",
+     "reference": "ABC123",
+     "source": "",
+     "source_ref": null,
+     "trip": "",
+     "what": "Vol pour Lisbonne"
+    }
+   ],
+   "next": "date",
+   "next_title": "Date",
+   "path": "Fiches/Réservations.md",
+   "title": "Réservations",
+   "type": "booking",
+   "warranty_min_eur": 50.0
+  }
+ ]
+}

@@ -1,0 +1,18 @@
+{
+ "language": "fr",
+ "mentions": true,
+ "model": "",
+ "monthly_cap": 0.1,
+ "nightly": "nightly",
+ "nightly_choices": [
+  "nightly",
+  "weekly",
+  "never"
+ ],
+ "questions": true,
+ "quiet": {
+  "from": "22:00",
+  "to": "08:00"
+ },
+ "spent_this_month": 0.0
+}

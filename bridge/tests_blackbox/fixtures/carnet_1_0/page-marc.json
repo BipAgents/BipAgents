@@ -1,0 +1,131 @@
+{
+ "aliases": [],
+ "archived": false,
+ "backlinks": [],
+ "close": true,
+ "contact": null,
+ "documents": [],
+ "emails": [],
+ "frontmatter": {
+  "aliases": [],
+  "close": true,
+  "id": "P1",
+  "type": "person",
+  "updated": "D+0"
+ },
+ "icon": null,
+ "id": "P1",
+ "kind": "person",
+ "links": [],
+ "outline": [
+  {
+   "id": "who",
+   "title": "Qui c'est"
+  },
+  {
+   "id": "dates",
+   "title": "Dates"
+  },
+  {
+   "id": "family",
+   "title": "Famille et proches"
+  },
+  {
+   "id": "work",
+   "title": "Travail"
+  },
+  {
+   "id": "tastes",
+   "title": "Goûts et préférences"
+  },
+  {
+   "id": "gifts",
+   "title": "Idées cadeaux"
+  },
+  {
+   "id": "agreed",
+   "title": "Ce que vous avez convenu"
+  },
+  {
+   "id": "exchanges",
+   "title": "Derniers échanges"
+  },
+  {
+   "id": "remember",
+   "title": "À ne pas oublier"
+  },
+  {
+   "id": "other",
+   "title": "Autres"
+  }
+ ],
+ "part": "main",
+ "path": "Personnes/Marc Durand.md",
+ "phones": [],
+ "records": null,
+ "rev": "REV1",
+ "sections": [
+  {
+   "facts": [
+    {
+     "answer": "{date+23}",
+     "by": "Wellness",
+     "date": "D+0",
+     "fresh": true,
+     "item": true,
+     "label": "Anniversaire",
+     "links": [],
+     "noted": "Noté par Wellness le DAY",
+     "text": "Anniversaire : {date+23}",
+     "when": "noté le DAY"
+    }
+   ],
+   "id": "dates",
+   "title": "Dates"
+  },
+  {
+   "facts": [
+    {
+     "answer": "",
+     "by": "Wellness",
+     "date": "D+0",
+     "fresh": true,
+     "item": true,
+     "label": "",
+     "links": [],
+     "noted": "Noté par Wellness le DAY",
+     "text": "Menuisier à son compte",
+     "when": "noté le DAY"
+    }
+   ],
+   "id": "work",
+   "title": "Travail"
+  },
+  {
+   "facts": [
+    {
+     "answer": "",
+     "by": "Wellness",
+     "date": "D+0",
+     "fresh": true,
+     "item": true,
+     "label": "",
+     "links": [],
+     "noted": "Noté par Wellness le DAY",
+     "text": "Un vinyle de Chet Baker",
+     "when": "noté le DAY"
+    }
+   ],
+   "id": "gifts",
+   "title": "Idées cadeaux"
+  }
+ ],
+ "shared_with": [],
+ "split": null,
+ "summary": "Ton beau-frère, menuisier.",
+ "tasks": [],
+ "text": "---\nid: P1\ntype: person\naliases: []\nupdated: D+0\nclose: true\n---\n# Marc Durand\n\n## En bref\nTon beau-frère, menuisier.\n\n## Dates\n- Anniversaire : {date+23} — *Wellness, D+0*\n\n## Travail\n- Menuisier à son compte — *Wellness, D+0*\n\n## Idées cadeaux\n- Un vinyle de Chet Baker — *Wellness, D+0*\n",
+ "title": "Marc Durand",
+ "trip": null,
+ "updated": "D+0"
+}

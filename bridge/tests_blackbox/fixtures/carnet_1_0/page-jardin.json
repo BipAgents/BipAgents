@@ -1,0 +1,67 @@
+{
+ "aliases": [],
+ "archived": false,
+ "backlinks": [],
+ "close": false,
+ "contact": null,
+ "documents": [],
+ "emails": [],
+ "frontmatter": {
+  "aliases": [],
+  "id": "P1",
+  "type": "subject",
+  "updated": "D+0"
+ },
+ "icon": null,
+ "id": "P1",
+ "kind": "subject",
+ "links": [],
+ "outline": [
+  {
+   "id": "status",
+   "title": "Où on en est"
+  },
+  {
+   "id": "decisions",
+   "title": "Décisions"
+  },
+  {
+   "id": "next",
+   "title": "Prochaines étapes"
+  },
+  {
+   "id": "people",
+   "title": "Personnes"
+  },
+  {
+   "id": "budget",
+   "title": "Chiffres et budget"
+  },
+  {
+   "id": "documents",
+   "title": "Documents"
+  },
+  {
+   "id": "history",
+   "title": "Historique"
+  },
+  {
+   "id": "other",
+   "title": "Autres"
+  }
+ ],
+ "part": "main",
+ "path": "Sujets/Jardin.md",
+ "phones": [],
+ "records": null,
+ "rev": "REV1",
+ "sections": [],
+ "shared_with": [],
+ "split": null,
+ "summary": "",
+ "tasks": [],
+ "text": "---\nid: P1\ntype: subject\naliases: []\nupdated: D+0\n---\n# Jardin\n",
+ "title": "Jardin",
+ "trip": null,
+ "updated": "D+0"
+}

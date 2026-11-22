@@ -1,0 +1,16 @@
+{
+ "documents": [
+  {
+   "agent": "wellness",
+   "agent_name": "Wellness",
+   "date": "STAMP",
+   "file": "Devis cuisine.pdf",
+   "name": "Devis cuisine.pdf",
+   "origin": "received",
+   "path": null,
+   "size": 13,
+   "subjects": [],
+   "type": "pdf"
+  }
+ ]
+}

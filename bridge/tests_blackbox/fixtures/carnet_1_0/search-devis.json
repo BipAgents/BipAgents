@@ -1,0 +1,73 @@
+{
+ "answers": [
+  {
+   "answer": "Devis reçu",
+   "date": "D+0",
+   "label": "",
+   "page": "Rénovation cuisine",
+   "part": "main",
+   "path": "Sujets/Rénovation cuisine.md",
+   "when": "noté le DAY"
+  },
+  {
+   "answer": "8 900 €",
+   "date": "D+0",
+   "label": "Devis",
+   "page": "Rénovation cuisine",
+   "part": "main",
+   "path": "Sujets/Rénovation cuisine.md",
+   "when": "noté le DAY"
+  }
+ ],
+ "pages": [
+  {
+   "aliases": [],
+   "archived": false,
+   "contact": null,
+   "icon": null,
+   "kind": "subject",
+   "lines": [
+    "Devis de Marc reçu : 8 900 €.",
+    "- Devis reçu — *Wellness, D+0*",
+    "- Devis : 8 900 € — *Wellness, D+0*"
+   ],
+   "part": "main",
+   "path": "Sujets/Rénovation cuisine.md",
+   "summary": "Devis de Marc reçu : 8 900 €.",
+   "title": "Rénovation cuisine",
+   "updated": "D+0"
+  },
+  {
+   "aliases": [],
+   "archived": false,
+   "contact": null,
+   "icon": null,
+   "kind": "tasks",
+   "lines": [
+    "- [ ] Rappeler Marc pour le devis [[Rénovation cuisine]] 📅 D+2 — *Wellness, D+0* ^T1"
+   ],
+   "part": "main",
+   "path": "Tâches/Tâches.md",
+   "summary": "",
+   "title": "Tâches",
+   "updated": "D+0"
+  }
+ ],
+ "tasks": [
+  {
+   "archived": false,
+   "by": "Wellness",
+   "date": "D+0",
+   "done": false,
+   "done_on": null,
+   "due": "D+2",
+   "id": "T1",
+   "links": [
+    "Rénovation cuisine"
+   ],
+   "origin": "asked",
+   "part": "main",
+   "title": "Rappeler Marc pour le devis [[Rénovation cuisine]]"
+  }
+ ]
+}
