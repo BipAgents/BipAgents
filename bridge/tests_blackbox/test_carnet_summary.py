@@ -167,7 +167,9 @@ def test_s4_a_category_page_with_its_filters_searches_and_latest(bridges):
     # Santé behind the lock: read now, kept nowhere
     health = category(bridge, "health", private="1")
     assert (health["title"], health["filters"], health["searched"]) == ("Santé", [], [])
-    assert [i["line"] for i in health["recent"]] == ["Prednisolone le matin"] and health["recent"][0]["part"] == "health"
+    # (its page and its line)
+    assert [i["line"] for i in health["recent"] if i["kind"] == "line"] == ["Prednisolone le matin"], health["recent"]
+    assert all(i["part"] == "health" for i in health["recent"]) and health["count"] == len(health["recent"])
     # Pro before S5: nothing
     assert category(bridge, "papers", space="pro")["count"] == 0
 
