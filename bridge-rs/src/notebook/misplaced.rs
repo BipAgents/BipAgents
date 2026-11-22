@@ -2,9 +2,10 @@
 //! Carnet looks for points that are clearly in the wrong place and proposes moving them, in one card on the Carnet's
 //! home (never a notification, never a move without the person's « Déplacer »):
 //!
-//! - in the private health part, what the strict health filter does not see as health (lexicon::is_health: « une
-//!   enceinte Bluetooth », a question on the presidential candidates) → the shared part: the page of the same name,
-//!   or « À ranger » for what was on the « Santé » page itself (the nightly pass files it);
+//! - never a point of the private health part (Santé), whatever its words: the card is shown outside the app's lock
+//!   (review 1 of carnet-s4, B1, 22/11: « Prednisolone le matin » has no word of the strict health filter and showed
+//!   on the home with its page « Santé »). A card an older bridge kept with such points is read without them, and
+//!   answering it by their ids moves nothing of Santé;
 //! - on the family's pages (« Famille », « Famille élargie », « Toi »'s family), what a work agent noted (assign.rs)
 //!   → the project's page its label names (« BipAgents : … » → « BipAgents »), else the « Travail » area;
 //! - what goes against a correction of the person (moves.rs): a point like those they moved, by the same agent, back
@@ -108,10 +109,8 @@ fn work_target(config: &Config, text: &str, from: &Page, labels: &[String]) -> V
     }
 }
 
-/// The points to propose now (the left ones aside), the newest rules first.
+/// The points to propose now (the left ones aside), the newest rules first: the shared part's only, never Santé's.
 pub fn find(config: &Config) -> Vec<Value> {
-    let lang = super::language(config);
-    let w = super::words(&lang);
     let state = super::read_state(config);
     let left = super::strings(state.get("misplaced").and_then(|m| m.get("left")));
     let mut out: Vec<Value> = Vec::new();
@@ -121,27 +120,6 @@ pub fn find(config: &Config) -> Vec<Value> {
             out.push(v);
         }
     };
-    // 1. not health, in the private health part
-    for (path, page) in super::all_pages(config, Part::Health) {
-        if !KINDS.contains(&page.kind().as_str()) {
-            continue;
-        }
-        let health_page = super::WORDS.iter().any(|x| fold(x.health) == fold(&page.title));
-        for (_, text, who) in points(config, &page) {
-            if lexicon::is_health(&text) {
-                continue;
-            }
-            let to = if health_page {
-                to_page(Part::Main, &w.inbox_path(), w.inbox, "inbox", "")
-            } else {
-                match super::find(config, &[Part::Main], &page.title) {
-                    Some(f) => to_page(Part::Main, &f.path, &f.page.title, &f.page.kind(), ""),
-                    None => to_page(Part::Main, "", &page.title, &page.kind(), ""),
-                }
-            };
-            push(item(Part::Health, &path, &page, &text, &who, to, "health"), &mut out);
-        }
-    }
     // 2. a work agent's points on the family's pages
     let corrections: Vec<Value> = state.get("corrections").and_then(Value::as_array).cloned().unwrap_or_default();
     for (path, page) in super::all_pages(config, Part::Main) {
@@ -207,12 +185,14 @@ pub fn detect(config: &Config) -> anyhow::Result<usize> {
     Ok(n)
 }
 
+/// The card's points as kept, never one of the private health part (an older bridge's card may hold some: they are
+/// neither shown nor moved, and leave the state at the next answer or night).
 fn kept_items(config: &Config) -> Vec<Value> {
     super::read_state(config)
         .get("misplaced")
         .and_then(|m| m.get("items"))
         .and_then(Value::as_array)
-        .cloned()
+        .map(|items| items.iter().filter(|i| Part::parse(&tk::str_or_empty(i.get("part"))) != Part::Health).cloned().collect())
         .unwrap_or_default()
 }
 
