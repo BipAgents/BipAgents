@@ -134,9 +134,12 @@ pub fn clear_front(page: &mut Page) {
 
 // -- the words ------------------------------------------------------------------------------------------------------
 
-/// The table's one-word stems by their first two letters: (stem, whole word only, entry).
-static STEMS: LazyLock<HashMap<String, Vec<(&'static str, bool, usize)>>> = LazyLock::new(|| {
-    let mut out: HashMap<String, Vec<(&'static str, bool, usize)>> = HashMap::new();
+/// A stem of the table: its text, whether it is a whole word only, its entry.
+type Stem = (&'static str, bool, usize);
+
+/// The table's one-word stems by their first two letters.
+static STEMS: LazyLock<HashMap<String, Vec<Stem>>> = LazyLock::new(|| {
+    let mut out: HashMap<String, Vec<Stem>> = HashMap::new();
     for (i, (_, stems)) in lexicon::CATEGORY_WORDS.iter().enumerate() {
         for stem in stems.iter().filter(|s| !s.contains(' ')) {
             let (body, exact) = match stem.strip_suffix('=') {

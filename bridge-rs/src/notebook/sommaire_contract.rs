@@ -182,7 +182,7 @@ fn demo_index(config: &crate::config::Config, lang: &str) -> Vec<Value> {
             for f in facts {
                 let cats = c::of_line(&filed, &pid, &f.text, &marks, today());
                 let date = c::date_of(&f.text, today()).filter(|d| c::in_window(*d, today())).map(|d| d.to_string());
-                items.push(json!({"id": c::line_key(&pid, &f.text).replacen("line:", "line:", 1), "kind": "line",
+                items.push(json!({"id": c::line_key(&pid, &f.text), "kind": "line",
                                   "part": "main", "path": path, "title": title, "line": crate::tools_knowledge::head(&f.text, 240),
                                   "categories": cats, "space": "", "date": date, "source": section, "who": f.who,
                                   "noted": if f.date.is_empty() { Value::Null } else { json!(f.date) },
