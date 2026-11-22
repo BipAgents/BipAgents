@@ -401,8 +401,10 @@ static TELLS: LazyLock<Regex> = LazyLock::new(|| {
         r"(?i)",
         // French: to tell (now, future, « je vais »)
         r"\bje (?:te |t'|vous )(?:pr[ée]viens|pr[ée]viendrai|tiens au courant|tiendrai au courant|fais signe|ferai signe",
-        r"|recontacte|recontacterai|alerte|alerterai|avertis|avertirai|envoie un (?:message|mot|petit mot)|enverrai un (?:message|mot))\b",
-        r"|\bje vais (?:te |t'|vous )(?:pr[ée]venir|tenir au courant|faire signe|alerter|avertir|recontacter)\b",
+        r"|dirai|redis|redirai|recontacte|recontacterai|alerte|alerterai|avertis|avertirai|envoie un (?:message|mot|petit mot)|enverrai un (?:message|mot))\b",
+        r"|\bje vais (?:te |t'|vous )(?:(?:le |la |les )?rappeler|pr[ée]venir|tenir au courant|faire signe|alerter|avertir|recontacter)\b",
+        r"|\bje (?:te |vous )(?:le |la |les )?(?:rappelle|rappellerai)\b",
+        r"|\bi(?:'ll| will) remind you\b",
         // English
         r"|\bi(?:'ll| will) (?:let you know|tell you|ping you|notify you|alert you|message you|text you|get back to you",
         r"|keep you (?:posted|updated|in the loop))\b",
@@ -419,8 +421,13 @@ static WHEN: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(concat!(
         r"(?i)\b(?:quand|lorsque|d[èe]s que|aussit[ôo]t que|sit[ôo]t que|si|s'il|s'ils|s'elle|s'elles|au cas où",
         r"|en cas de|le jour où|au moindre|à la moindre|d[èe]s la|d[èe]s le|d[èe]s les)\b|\b(?:lorsqu'|d[èe]s qu'|d[èe]s l')",
-        r"|\b(?:when|whenever|if|as soon as|once|the moment|the minute|should)\b",
+        r"|\b(?:when|whenever|if|as soon as|once|the moment|the minute)\b",
         r"|\b(?:cuando|si|en cuanto)\b|\b(?:wenn|sobald|falls)\b|\b(?:als|wanneer|zodra)\b",
+        // a time to come
+        r"|\b(?:demain|ce soir|cet après-midi|tout à l'heure|plus tard|la semaine prochaine|le moment venu",
+        r"|lundi|mardi|mercredi|jeudi|vendredi|samedi|dimanche|(?:à|vers) \d{1,2} ?h(?:\d\d)?)\b",
+        r"|\b(?:tomorrow|tonight|later|next week|on (?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)",
+        r"|at \d{1,2}(?::\d\d)? ?(?:am|pm|h)?)\b|\b(?:mañana|morgen|heute abend)\b",
     ))
     .expect("valid regex")
 });
@@ -429,10 +436,10 @@ static WHEN: LazyLock<Regex> = LazyLock::new(|| {
 static WATCHES: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(concat!(
         r"(?i)\bje (?:surveille|surveillerai|guette|garde (?:un (?:petit )?(?:œ|oe)il|l'(?:œ|oe)il)|garderai un (?:œ|oe)il",
-        r"|reste (?:à l'affût|en veille|attentif|attentive))\b|\bje vais (?:surveiller|guetter|garder un (?:œ|oe)il)\b",
-        r"|\bi(?:'ll| will) (?:keep an eye (?:on|out)|keep watching|keep checking|watch|monitor|track)\b",
-        r"|\bi'm (?:keeping an eye|watching|monitoring|tracking)\b",
-        r"|\b(?:estar[ée] (?:atento|atenta|pendiente)|vigilo|vigilar[ée])\b|\bich behalte\b[^.!?\n]{0,40}\bim auge\b",
+        r"|reste (?:à l'affût|en veille))\b|\bje vais (?:surveiller|guetter|garder un (?:œ|oe)il)\b",
+        r"|\bi(?:'ll| will) (?:keep an eye (?:on|out)|keep watching|keep checking|keep monitoring|keep track of|watch (?:for|out for)",
+        r"|monitor)\b|\bi'm (?:keeping an eye|monitoring|keeping track)\b",
+        r"|\b(?:vigilo|vigilar[ée])\b|\bich behalte\b[^.!?\n]{0,40}\bim auge\b",
         r"|\bik (?:hou|houd) \b[^.!?\n]{0,40}\bin de gaten\b",
     ))
     .expect("valid regex")
@@ -445,11 +452,25 @@ static DONE: LazyLock<Regex> = LazyLock::new(|| {
         r"(?i)\b(?:fini|finie|termin[ée]e?s?|pr[êe]te?s?|trouv[ée]e?s?|boucl[ée]e?)\b|\bc'est fait\b|\bje trouve\b",
         r"|\b(?:done|ready|finished|found|complete)\b|\bi find\b|\bfertig\b|\bklaar\b|\blisto\b|\bterminado\b",
         r"|\bj'ai (?:v[ée]rifi[ée]|regard[ée]|compar[ée]|cherch[ée])\b|\bi(?:'ve| have) (?:checked|looked|compared)\b",
+        r"|\b(?:si j'ai besoin|si j'en ai besoin|if i need|j'en sais plus|j'en saurai plus|i know more|ich mehr wei(?:ß|ss))\b",
         // nothing in particular to notice (« je te tiens au courant si besoin »)
         r"|\b(?:si besoin|au besoin|si n[ée]cessaire|if needed|if necessary|if need be|falls n[öo]tig|si hace falta)\b",
     ))
     .expect("valid regex")
 });
+
+/// « Je te préviens, … / : … » (I warn you), « je te rappelle que / de … » (I remind you now): said in this answer.
+static NOW_SAID: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)^(?:[ \t]+(?:tout de suite|d'avance|juste|quand même|honnêtement))?[ \t]*[,:;!—–-]").expect("valid regex")
+});
+static REMINDS_NOW: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)^[ \t]+(?:que\b|qu'|de\b|d')").expect("valid regex"));
+
+fn said_now(verb: &str, after: &str) -> bool {
+    let verb = verb.to_lowercase();
+    let warns = verb.ends_with("préviens") || verb.ends_with("previens") || verb.ends_with("avertis");
+    (warns && NOW_SAID.is_match(after)) || (verb.ends_with("rappelle") && REMINDS_NOW.is_match(after))
+}
 
 /// The reply's end promises to tell the person later about something it will have to notice, and does not wait for
 /// them (a question, a request, an offer: `stands`).
@@ -465,8 +486,13 @@ pub fn promises_to_tell(reply: &str) -> bool {
         .filter(|m| {
             let (start, stop) = sentence_of(m.start(), m.end());
             let (before, after) = (&tail[start..m.start()], &tail[m.end()..stop]);
-            // what it waits for, in its sentence; the agent's own work finished is a promise of work
-            WHEN.find(after).or_else(|| WHEN.find(before)).is_some() && !DONE.is_match(after) && !DONE.is_match(before)
+            // what it waits for, in its sentence; the agent's own work finished is a promise of work; a warning or a
+            // reminder given now (« Je te préviens, si tu commandes après 14 h… », « je te rappelle que… ») is no
+            // promise
+            !said_now(m.as_str(), &tail[m.end()..])
+                && WHEN.find(after).or_else(|| WHEN.find(before)).is_some()
+                && !DONE.is_match(after)
+                && !DONE.is_match(before)
         })
         .chain(WATCHES.find_iter(&tail))
         .map(|m| m.start())
@@ -937,6 +963,14 @@ mod tell_later {
             "Te aviso cuando baje el precio.",
             "Ich sage dir Bescheid, sobald der Preis fällt.",
             "Ik laat je weten zodra de prijs zakt.",
+            // a time to come, a reminder
+            "C'est noté pour le dentiste. Je te le rappelle demain matin.",
+            "Je te préviens demain à 8 h s'il pleut.",
+            "Got it, I'll remind you tomorrow at 9.",
+            "Je te recontacte vendredi pour les billets.",
+            "Je te redis ça demain vers 8h30.",
+            "Si jamais il y a un souci avec la commande, je te préviens.",
+            "I'll let you know if anything changes.",
         ];
         let missed: Vec<&str> = said.iter().copied().filter(|s| !promises_to_tell(s)).collect();
         assert!(missed.is_empty(), "promises to tell not caught: {missed:#?}");
@@ -960,6 +994,18 @@ mod tell_later {
             "Je te tiens au courant si besoin.",
             "Voilà, c'est réservé pour samedi 20 h. Bonne soirée !",
             "Préviens-moi quand tu es rentrée.",
+            // a warning or a reminder given now
+            "Je te préviens, si tu commandes après 14 h, la livraison sera lundi.",
+            "Je te préviens tout de suite : si tu prends l'option, c'est 10 € de plus.",
+            "Je te rappelle que la réunion est demain à 9 h.",
+            "Je te rappelle de prendre ton parapluie demain.",
+            // the agent's own need or knowledge: work, not watching
+            "Je te recontacte si j'ai besoin de précisions.",
+            "Je te tiens au courant quand j'en sais plus.",
+            // not a watch
+            "I'll watch the video and sum it up for you.",
+            "I'll tell you what you should do next time.",
+            "Je reste attentive à ce que tu me dis.",
             // someone else's words
             "Elle m'a écrit : « je te préviens dès que j'arrive ».",
             "",
