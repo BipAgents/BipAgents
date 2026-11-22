@@ -358,6 +358,7 @@ def test_after_a_refusal_no_second_secret_card_for_that_site_in_the_turn(bridges
     first, card = ask(bridge, {"name": "openmeteo", "site": "api.open-meteo.com", "kind": "token",
                                "reason": "La météo de demain"}, None)
     assert not_done(first) and card["bip_secret_kind"] == "token"
+    assert "  " not in text(first), text(first)     # review 1 R9: a line's end lost in the text
     again = tool(bridge, "ask_secret", {"name": "meteo_key", "site": "https://api.open-meteo.com/v1/forecast",
                                         "kind": "token", "reason": "La météo"})
     assert not_done(again) and "refused" in text(again) and "connector_register" in text(again), text(again)

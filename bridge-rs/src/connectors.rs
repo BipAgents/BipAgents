@@ -1402,7 +1402,9 @@ async fn ask_secret_tool(state: &AppState, agent: &AgentConfig, arguments: &Dict
                 secrets::refuse_in_turn(&agent.name, &refused_site, turn.as_deref());
             }
             refusal(&format!(
-                "The person refused to give « {name} »: don't ask again, under this name or another, unless they tell                  you to. If no secret is needed (a public API), register the connector without `secrets`                  (connector_register)."
+                "The person refused to give « {name} »: don't ask again, under this name or another, unless they tell \
+                 you to. If no secret is needed (a public API), register the connector without `secrets` \
+                 (connector_register)."
             ))
         }
         // « Je le taperai moi-même »: told here once the person hands the browser back, else in a later turn when they

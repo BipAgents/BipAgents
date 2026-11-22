@@ -332,14 +332,15 @@ static REFUSED_IN_TURN: LazyLock<Mutex<HashMap<(String, String), Refused>>> = La
 type Refused = (Option<String>, Instant);
 const REFUSED_KEEP: Duration = Duration::from_secs(3600);
 
-/// The site a refusal is kept for: an origin's registrable name (`https://api.open-meteo.com` → `open-meteo.com`);
-/// empty for none.
+/// The site a refusal is kept for: an origin's registrable name (`https://api.open-meteo.com` → `open-meteo.com`,
+/// `https://a.pages.dev` → `a.pages.dev`); empty for none.
 pub fn refusal_site(origin: &str) -> String {
     let host = url::Url::parse(origin).ok().and_then(|u| u.host_str().map(str::to_lowercase)).unwrap_or_default();
     if host.is_empty() {
         return String::new();
     }
-    crate::mail_tidy::registrable(&host)
+    // the Public Suffix List, its private section included (review 1 R4: `x.pages.dev` is its own site)
+    crate::vault_match::registrable(&host).unwrap_or(host)
 }
 
 /// « Refuser » on an access to `site`, asked in the turn `turn`.
@@ -987,6 +988,7 @@ mod tests {
     #[test]
     fn a_refused_site_is_not_asked_again_in_its_turn() {
         assert_eq!(refusal_site("https://api.open-meteo.com"), "open-meteo.com");
+        assert_eq!(refusal_site("https://meteo.pages.dev"), "meteo.pages.dev");
         assert_eq!(refusal_site(""), "");
         refuse_in_turn("vie-refusal-test", "open-meteo.com", Some("run-1"));
         assert!(refused_in_turn("vie-refusal-test", "open-meteo.com", Some("run-1")));
