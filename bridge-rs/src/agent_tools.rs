@@ -2247,6 +2247,18 @@ async fn mcp_call(
     let turn = state.hub.turn_of(&agent.name, &name);
     // the files made in this turn (audio, pages, maps), for the reply that ends it (made_files.rs)
     let turn_run = turn.as_ref().map(|t| t.run_id.clone());
+    // a plan's e-mail watch reads the headers it was given, never the e-mail (triggers.rs `headers_only`; review 2 of
+    // plans, R10): the mailbox's tools are closed in its turn
+    if name.starts_with("mail_") {
+        let session = turn_run.as_deref().and_then(|r| state.hub.subscription(&agent.name, r)).and_then(|s| s.session_id());
+        if session.is_some_and(|s| crate::triggers::headers_only_session(&state.config(), &agent.name, &s)) {
+            return Ok(answer(tool_text(
+                "Not done: this e-mail watch of a plan gives you the e-mail's headers only (its sender, subject and \
+                 date): don't open it. Tell your person what the subject says, or answer [SILENT].",
+                false,
+            )));
+        }
+    }
     // the Carnet's tools: the turn's pages, capped, and its session for the line under the answer (notebook/reads.rs)
     let carnet = carnet_turn(&state, &agent.name, turn.as_ref());
     if let Some(refused) = crate::loop_brake::TURNS.check(

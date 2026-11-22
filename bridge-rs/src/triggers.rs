@@ -358,6 +358,13 @@ pub fn headers_only(t: &Trigger) -> bool {
     t.by == crate::plans::MAKER
 }
 
+/// `session` is the conversation of `agent`'s plan watch (`headers_only`): its turn reads the headers it was given,
+/// never the e-mail (agent_tools.rs refuses the mailbox's tools there).
+pub fn headers_only_session(config: &Config, agent: &str, session: &str) -> bool {
+    !session.is_empty()
+        && load(config).triggers.iter().any(|t| t.agent == agent && t.session == session && headers_only(t))
+}
+
 /// The address of a From line, lowercased (« TAP <Info@FlyTap.com> » → « info@flytap.com »); None without one.
 pub fn address_of(from: &str) -> Option<String> {
     let inner = match (from.rfind('<'), from.rfind('>')) {

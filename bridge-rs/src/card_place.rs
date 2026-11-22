@@ -291,8 +291,12 @@ pub fn waiting(state: &AppState, agent: &str) -> HashSet<String> {
 }
 
 /// The conversation `session` reports to: itself for a person's conversation, a background task's asker (None: the
-/// main one), None for a routine's run or another hidden conversation.
+/// main one), None for a routine's run, a pair's conversation (agent_pairs.rs: hidden in Hermes, no thread of the
+/// bridge) or another hidden conversation.
 pub async fn report_of(state: &AppState, agent: &AgentConfig, session: &str) -> Option<String> {
+    if crate::agent_pairs::is_pair_session(&state.config(), &agent.name, session) {
+        return None;
+    }
     let (config, name, wanted) = (state.config(), agent.name.clone(), session.to_string());
     let task = tokio::task::spawn_blocking(move || {
         crate::jobs::tasks(&config).into_iter().find(|j| {

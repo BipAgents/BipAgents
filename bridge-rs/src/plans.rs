@@ -7,12 +7,14 @@
 //!   « Prévoir » (routines.rs `create_said`): at its time the bridge delivers the words as written, one Boîte line,
 //!   WITHOUT the model; an urgent one at the system's urgent level (background_turn.rs `deliver_urgent`). A habit is one moment on a rhythm: one routine on a clock per time of day, « vers » that time
 //!   (a stable shift of −10 to +10 min from the plan's id, Alex Q7 A), ending after its weeks (its number of runs).
-//! - **A route moment** is written by the bridge: `to` found as `map_image` finds places (Nominatim, cached), the way's
-//!   time asked as map_route.rs asks it (FOSSGIS's OSRM, coordinates only, cached), the moment at the arrival less the
-//!   way and 5 minutes, urgent. From `from` when the agent gives one: timed at once. Else from the person's home (the
-//!   « Coordonnées » entry this agent reads that is labelled as home, `home_of`), which goes to the geocoder only after
-//!   « Prévoir » (review 1, R1): never while the card waits, never after « Non merci »; the card says « avant 15:00 »
-//!   until then (`Leg`). Not timed then (the home gone, a way not found): left out, one line (`route_failed`).
+//! - **A route moment** is written by the bridge, and found and timed only once the person says « Prévoir » (reviews 1
+//!   and 2, R1, R9: `Leg`, `time_legs`): while the card waits, and after « Non merci », nothing goes to a geocoder or a
+//!   router; the card says « avant 15:00 ». At « Prévoir »: the place to go and where from (the agent's `from`, else
+//!   the person's home: the « Coordonnées » entry this agent reads that is labelled as home, `home_of`) to Nominatim as
+//!   `map_image` finds places (cached in memory); then both points rounded to about 100 m (`ROUTED_DECIMALS`) to
+//!   FOSSGIS's OSRM for the time only (map_route.rs `seconds`: no path, nothing on disk); the moment at the arrival
+//!   less the way and 5 minutes, urgent. Not timed (the home gone, a place not found, no way): left out, one line
+//!   (`route_failed`).
 //! - **What it watches** costs nothing while nothing moves: the senders' e-mails are an e-mail trigger on their domains
 //!   (triggers.rs, made by the plan: on with « Prévoir », gone with the plan), its headers only (`headers_only`: the
 //!   sender's address, the subject, the date; one small turn per e-mail of theirs, §3.8); not made, one line
@@ -115,18 +117,19 @@ pub struct Moment {
     /// Written by the bridge from a route (« Pars pour … »).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub route: bool,
-    /// A route from the person's home, timed at « Prévoir » (its `at` the arrival until then).
+    /// A route, found and timed at « Prévoir » (its `at` the arrival until then: review 2, R9).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub leg: Option<Leg>,
 }
 
-/// A route moment from the person's home, waiting for « Prévoir » to be timed: where to (its words and the place's
-/// coordinates), how, the arrival. The home itself is never kept here: read from « Coordonnées » then.
+/// A route moment waiting for « Prévoir » to be found and timed (review 2, R9: nothing goes to a geocoder or a router
+/// before): where to as the agent wrote it, from where when it gave one (else the person's home, read from
+/// « Coordonnées » then, never kept here), how, the arrival.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Leg {
     pub place: String,
-    pub lat: f64,
-    pub lon: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from: Option<String>,
     pub mode: String,
     pub arrive: f64,
 }
@@ -1081,7 +1084,7 @@ per reply. Say it in one sentence in your reply; the card shows the rest.",
                         "urgent": {"type": "boolean", "description": "only for a moment that must be on time, else \
 the thing is missed: when to leave, a check-in opening. It reaches the phone at the system's urgent level, through Do Not \
 Disturb. 2 at most per plan (a route counts), never for a habit"},
-                        "route": {"type": "object", "description": "instead of at/what/say: the bridge times the way and says when to leave",
+                        "route": {"type": "object", "description": "instead of at/what/say: the bridge times the way and says when to leave (looked up only once your person says « Prévoir »)",
                             "properties": {"to": {"type": "string"}, "arrive_by": {"type": "string"},
                                            "mode": {"type": "string", "enum": MODES},
                                            "from": {"type": "string", "description": "default: your person's home \
@@ -1121,23 +1124,54 @@ async fn locate(config: &Config, place: &str) -> Result<(f64, f64), String> {
     crate::maps::found_of(&answer).map(|f| (f.lat, f.lon)).ok_or_else(|| format!("« {place} » was not found"))
 }
 
-/// The way's minutes by the streets (map_route.rs: coordinates only), rounded up; transit by car, longer.
+/// Decimals of the points the router gets: 3, about 100 m (110 m north-south, 75 m east-west in Paris). The router
+/// snaps them to the nearest street; a minute's walk more or less at most, inside the 5 minutes kept (review 2, R9).
+pub const ROUTED_DECIMALS: i32 = 3;
+
+/// A point as the router gets it (`ROUTED_DECIMALS`).
+pub fn rounded((lat, lon): (f64, f64)) -> (f64, f64) {
+    let k = 10f64.powi(ROUTED_DECIMALS);
+    ((lat * k).round() / k, (lon * k).round() / k)
+}
+
+/// The way's minutes by the streets (map_route.rs `seconds`: both points rounded, no path asked, nothing kept on
+/// disk), rounded up; transit by car, longer.
 async fn way_minutes(config: &Config, from: (f64, f64), to: (f64, f64), mode: &str) -> Result<u32, String> {
     if config.maps.streets == "off" {
         return Err("the street routing is off on this place".into());
     }
     let travel = if mode == "walking" { "walking" } else { "driving" };
-    let way = crate::map_route::way(config, travel, &[from, to]).await?;
-    let seconds = if mode == "transit" { way.seconds * TRANSIT_FACTOR } else { way.seconds };
+    let seconds = crate::map_route::seconds(config, travel, &[rounded(from), rounded(to)]).await?;
+    let seconds = if mode == "transit" { seconds * TRANSIT_FACTOR } else { seconds };
     Ok(((seconds / 60.0).ceil() as u32).max(1))
 }
 
-/// Words a « Coordonnées » entry's label (or its « Indications ») says home with, in the four languages (accents and
-/// case aside); one whose label says work is never home.
-const HOME_WORDS: [&str; 11] =
-    ["domicile", "maison", "chez moi", "home", "house", "zuhause", "zu hause", "daheim", "wohnung", "casa", "hogar"];
-const WORK_WORDS: [&str; 10] =
-    ["pro", "travail", "bureau", "boulot", "work", "office", "arbeit", "buro", "trabajo", "oficina"];
+/// Words a « Coordonnées » entry's label (or its « Indications ») says home with, in the languages a label may be
+/// written in (fr, en, de, es, it; accents and case aside). One whose label says work, someone else's home or a holiday
+/// one never is (`NOT_HOME_WORDS`; review 2, R13).
+const HOME_WORDS: [&str; 38] = [
+    // fr
+    "domicile", "maison", "chez moi", "perso", "personnel", "personnelle", "appartement", "appart", "mon adresse",
+    "residence", // en too
+    // en
+    "home", "house", "personal", "apartment", "flat", "my address",
+    // de
+    "zuhause", "zu hause", "daheim", "wohnung", "privat", "personlich", "meine adresse", "wohnsitz",
+    // es
+    "casa", "hogar", "domicilio", "piso", "apartamento", "departamento", "mi direccion", "residencia",
+    // it
+    "abitazione", "personale", "appartamento", "il mio indirizzo", "residenza", "mia casa",
+];
+const NOT_HOME_WORDS: [&str; 49] = [
+    // work
+    "pro", "travail", "bureau", "boulot", "work", "office", "arbeit", "buro", "trabajo", "oficina", "lavoro", "ufficio",
+    // a holiday or second home
+    "vacances", "secondaire", "campagne", "holiday", "holidays", "vacation", "second", "cottage", "ferien", "urlaub",
+    "zweitwohnung", "vacaciones", "segunda", "vacanze", "vacanza", "seconda", "mare",
+    // someone else's
+    "mere", "pere", "parents", "frere", "soeur", "mother", "mom", "mum", "father", "dad", "mutter", "vater",
+    "eltern", "madre", "padre", "padres", "mamma", "papa", "genitori", "nonna",
+];
 
 /// `text` says one of `words` (whole words, accents and case aside).
 fn says_any(text: &str, words: &[&str]) -> bool {
@@ -1162,7 +1196,7 @@ pub fn home_of(entries: &[crate::vault_contacts::Entry]) -> Option<String> {
         })
     };
     let home = |e: &&crate::vault_contacts::Entry| {
-        !says_any(&e.label, &WORK_WORDS)
+        !says_any(&e.label, &NOT_HOME_WORDS)
             && (says_any(&e.label, &HOME_WORDS) || e.hint.as_deref().is_some_and(|h| says_any(h, &HOME_WORDS)))
     };
     entries.iter().filter(home).find_map(address)
@@ -1178,44 +1212,36 @@ fn leave_at(arrive: f64, minutes: u32) -> f64 {
     ((arrive - (f64::from(minutes) + MARGIN_MINUTES) * 60.0) / 300.0).floor() * 300.0
 }
 
-/// Each route moment written by the bridge: the place to go found now (the agent hears of one not found); timed now
-/// from the agent's `from`; from the person's home, timed at « Prévoir » only (`time_legs`: its address goes to the
-/// geocoder then, never while the card waits).
-async fn resolve_routes(state: &AppState, config: &Config, draft: &mut Draft, lang: &str, now: f64) -> Result<(), String> {
+/// Each route moment written by the bridge, to be found and timed at « Prévoir » only (`time_legs`; review 2, R9):
+/// while the card waits nothing goes to a geocoder or a router, neither the place to go nor where from (the agent's
+/// `from`, else the person's home: only checked here, on the place, that there is one). The card says « avant 15:00 ».
+fn resolve_routes(state: &AppState, config: &Config, draft: &mut Draft, lang: &str) -> Result<(), String> {
     let routes = std::mem::take(&mut draft.routes);
     for r in routes {
         if r.from.is_none() && home_address(state, config, &draft.plan.agent).is_none() {
             return Err("route: no start address: none of your person's contact details you may read is labelled as \
-                        their home (« Domicile », « Home »…): give route.from, or leave the route out"
+                        their home (« Domicile », « Perso », « Home »…): give route.from (like the rest of the route, \
+                        looked up only once your person says « Prévoir »), or leave the route out"
                 .into());
         }
         if config.maps.streets == "off" {
             return Err("route: the street routing is off on this place".into());
         }
-        let to = locate(config, &r.to).await.map_err(|e| format!("route: {e}"))?;
         let m = &mut draft.plan.moments[r.moment];
-        let Some(from) = &r.from else {
-            let words = route_pending_words(lang, &r.to, &r.mode);
-            let leg = Leg { place: r.to.clone(), lat: to.0, lon: to.1, mode: r.mode.clone(), arrive: r.arrive };
-            (m.at, m.what, m.say, m.urgent, m.leg) = (r.arrive, words.clone(), words, true, Some(leg));
-            continue;
-        };
-        let from = locate(config, from).await.map_err(|e| format!("route: {e}"))?;
-        let minutes = way_minutes(config, from, to, &r.mode).await.map_err(|e| format!("route: {e}"))?;
-        let leave = leave_at(r.arrive, minutes);
-        if leave <= now {
-            return Err("route: the time to leave has passed already".into());
-        }
-        let words = route_words(lang, &r.to, minutes, &r.mode);
-        (m.at, m.what, m.say, m.urgent) = (leave, words.clone(), words, true);
+        let words = route_pending_words(lang, &r.to, &r.mode);
+        let leg = Leg { place: r.to.clone(), from: r.from.clone(), mode: r.mode.clone(), arrive: r.arrive };
+        (m.at, m.what, m.say, m.urgent, m.leg) = (r.arrive, words.clone(), words, true, Some(leg));
     }
     Ok(())
 }
 
-/// The way's minutes from the person's home (`home`, None: gone from « Coordonnées ») to a leg's place.
+/// The way's minutes from the leg's `from` (else the person's home, `home`; None: gone from « Coordonnées ») to its
+/// place: each found by the geocoder (cached in memory), then the router.
 async fn leg_minutes(config: &Config, home: Option<&str>, leg: &Leg) -> Result<u32, String> {
-    let from = locate(config, home.ok_or("no home address any more")?).await?;
-    way_minutes(config, from, (leg.lat, leg.lon), &leg.mode).await
+    let start = leg.from.as_deref().or(home).ok_or("no home address any more")?;
+    let to = locate(config, &leg.place).await?;
+    let from = locate(config, start).await?;
+    way_minutes(config, from, to, &leg.mode).await
 }
 
 /// « Prévoir » to a plan with routes from home: each one timed now (the home's address to the geocoder, then its
@@ -1231,7 +1257,7 @@ async fn time_legs(state: &AppState, config: &Config, plan: &Plan, skip: &[Strin
     if legs.is_empty() {
         return Vec::new();
     }
-    let home = home_address(state, config, &plan.agent);
+    let home = if legs.iter().all(|(_, l)| l.from.is_some()) { None } else { home_address(state, config, &plan.agent) };
     let mut timed = Vec::new();
     let mut failed = Vec::new();
     for (id, leg) in legs {
@@ -1295,7 +1321,7 @@ pub async fn call(state: &AppState, agent: &AgentConfig, arguments: &Dict, asked
         Err(why) => return refusal(&format!("Not done: {why}. Nothing was made.")),
     };
     let lang = lang_of(&config, &agent.name);
-    if let Err(why) = resolve_routes(state, &config, &mut draft, lang, now).await {
+    if let Err(why) = resolve_routes(state, &config, &mut draft, lang) {
         return refusal(&format!("Not done: {why}. Nothing was made."));
     }
     let mut notes = Vec::new();
@@ -1531,8 +1557,9 @@ fn watch_trigger(config: &Config, plan: &Plan) -> Option<String> {
         name: Some(format!("{} · {}", plan.title, names.join(", ")).chars().take(crate::triggers::NAME_MAX).collect()),
         prompt: Some(format!(
             "An e-mail from {} about the plan « {} » you set up with your person: you see its sender, subject and date \
-             only, never its text. If they say the plan changed (a new time, a gate, a delay, a cancellation), tell \
-             them in one short line what the subject says; else answer [SILENT].",
+             only, never its text, and you don't open it (the mailbox's tools are closed here). If they say the plan \
+             changed (a new time, a gate, a delay, a cancellation), tell them in one short line what the subject says; \
+             else answer [SILENT].",
             names.join(", "),
             plan.title
         )),
