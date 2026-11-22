@@ -94,12 +94,13 @@ pub const SENDING_RULE: &str = concat!(
 /// credentials, for a watcher). The visible browser keeps getting past checks by itself (Alex: « on veut contourner…
 /// c'est seulement s'il est bloqué quand même »): only a check that still blocks it is the person's, nothing else is
 /// tried. Its browser hands it over by itself (browser_mcp.rs `check_stop_text`); its programs can't reach check
-/// hosts nor captcha services (sandbox_sites.rs, the proxy). Rust bridge only (tests/golden/souls.json rewritten with
-/// `GOLDEN_SOULS_OUT`). Short: it is paid on every call.
+/// hosts nor captcha services (sandbox_sites.rs, the proxy). Review 1 (R7): the case of 22/11 itself too, programs
+/// blocked and the browser through: the browser reads the site, no script goes round the wall. Rust bridge only
+/// (tests/golden/souls.json rewritten with `GOLDEN_SOULS_OUT`). Short: it is paid on every call.
 pub const BOT_CHECK_RULE: &str = concat!(
-    "A bot check or captcha that still blocks your browser: try nothing else (no headless script, other browser, ",
-    "proxy or identity, no captcha service, no watcher on that site). Tell your person in one sentence; they can take ",
-    "over your browser (« Prendre la main »)."
+    "A bot check or captcha blocking your programs: use your browser, never script around it. Still blocking your ",
+    "browser: try nothing else (no headless script, other proxy or identity, captcha service, or watcher on that ",
+    "site). Tell your person in one sentence; they can take over your browser (« Prendre la main »)."
 );
 
 pub const AI_RULE: &str = concat!(
@@ -1174,14 +1175,15 @@ mod tests {
     #[test]
     fn a_bot_check_that_still_blocks_is_handed_over() {
         assert!(BOT_CHECK_RULE.chars().count() < 320, "{}", BOT_CHECK_RULE.chars().count());
-        for needed in ["still blocks your browser", "no headless script", "proxy or identity", "no captcha service", "take over"] {
+        for needed in ["blocking your programs", "use your browser", "never script around it", "Still blocking your browser",
+                       "no headless script", "proxy or identity", "captcha service", "watcher", "take over"] {
             assert!(BOT_CHECK_RULE.contains(needed), "missing {needed}");
         }
         assert!(!BOT_CHECK_RULE.to_lowercase().contains("never get past"));
         for kind in ["daily", "wellness", "finance", "home", "work", "learning", "creative", "tech"] {
             for lang in ["fr", "en"] {
                 let soul = soul_for("Vie", kind, Some(lang)).unwrap();
-                assert_eq!(soul.matches("A bot check or captcha that still blocks").count(), 1, "{kind} {lang}");
+                assert_eq!(soul.matches("A bot check or captcha blocking your programs").count(), 1, "{kind} {lang}");
                 // the button as the other tools' texts name it (card_pay.rs, phone_exit/agent.rs)
                 assert!(soul.contains("« Prendre la main »"), "{kind} {lang}");
             }
