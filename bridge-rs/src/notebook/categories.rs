@@ -77,10 +77,10 @@ const COLLEAGUE: &[&str] = &[
 ];
 
 /// The categories' names as the screens show them (contracts/carnet/sommaire.json `titles_proposed`, the same table:
-/// checked by `the_sommaire_contract_holds_together`), for fr, en, de, es, nl. Visible text, still to be confirmed by
-/// Alex.
+/// checked by `the_sommaire_contract_holds_together`), for fr, en, de, es, nl (Alex, 22/11: « Personnes », the other
+/// French names stand for now; the other languages to be read by a speaker).
 pub const TITLES: [(&str, [&str; 5]); 13] = [
-    ("people", ["Gens", "People", "Menschen", "Personas", "Mensen"]),
+    ("people", ["Personnes", "People", "Personen", "Personas", "Personen"]),
     ("dates", ["Dates", "Dates", "Termine", "Fechas", "Datums"]),
     ("money", ["Argent", "Money", "Geld", "Dinero", "Geld"]),
     ("home", ["Maison", "Home", "Zuhause", "Casa", "Huis"]),
