@@ -1,0 +1,1473 @@
+{
+  "about": "« Entre tes agents » as rules (Alex 21/11, piste A). Each case: this place's agents (`family`: the family's agent; `project`: a project agent, shown to friends; `can_share`: false for one that can't share folders), the households linked, the rules as GET /v1/agent-rules gives them (`write`, `pairs`, `read`, `reads`, `aside`, `family`, `households`), and what they allow: `links` (writer, recipient) and `reads` (reader, source), sorted; `may_write` spot checks [from, to, allowed]; `ways` the state of each way with a household (off | waiting | proposed | agreed | declined). Another household's agent is `agent__household`. The bridge's tests replay every case (bridge-rs/src/rules.rs `the_contract_cases`); the apps reuse them for their screens.",
+  "version": 1,
+  "default": {
+    "write": "all",
+    "read": "none"
+  },
+  "cases": [
+    {
+      "name": "a new account: every agent writes to every other, none reads another's folder",
+      "agents": [
+        {
+          "id": "vie"
+        },
+        {
+          "id": "wellness"
+        },
+        {
+          "id": "kerfy"
+        }
+      ],
+      "linked": [],
+      "rules": {
+        "write": "all",
+        "read": "none"
+      },
+      "links": [
+        [
+          "kerfy",
+          "vie"
+        ],
+        [
+          "kerfy",
+          "wellness"
+        ],
+        [
+          "vie",
+          "kerfy"
+        ],
+        [
+          "vie",
+          "wellness"
+        ],
+        [
+          "wellness",
+          "kerfy"
+        ],
+        [
+          "wellness",
+          "vie"
+        ]
+      ],
+      "reads": [],
+      "may_write": [
+        [
+          "vie",
+          "vie",
+          false
+        ]
+      ]
+    },
+    {
+      "name": "some: only the explicit pairs (« liens à part »)",
+      "agents": [
+        {
+          "id": "vie"
+        },
+        {
+          "id": "wellness"
+        },
+        {
+          "id": "kerfy"
+        }
+      ],
+      "linked": [],
+      "rules": {
+        "write": "some",
+        "pairs": [
+          [
+            "vie",
+            "wellness"
+          ],
+          [
+            "kerfy",
+            "vie"
+          ]
+        ],
+        "read": "none"
+      },
+      "links": [
+        [
+          "kerfy",
+          "vie"
+        ],
+        [
+          "vie",
+          "wellness"
+        ]
+      ],
+      "reads": [],
+      "may_write": [
+        [
+          "wellness",
+          "vie",
+          false
+        ]
+      ]
+    },
+    {
+      "name": "none: nobody writes, the pairs kept for « Certains » later",
+      "agents": [
+        {
+          "id": "vie"
+        },
+        {
+          "id": "wellness"
+        }
+      ],
+      "linked": [],
+      "rules": {
+        "write": "none",
+        "pairs": [
+          [
+            "vie",
+            "wellness"
+          ]
+        ],
+        "read": "none"
+      },
+      "links": [],
+      "reads": []
+    },
+    {
+      "name": "all again: the pairs kept change nothing",
+      "agents": [
+        {
+          "id": "vie"
+        },
+        {
+          "id": "wellness"
+        }
+      ],
+      "linked": [],
+      "rules": {
+        "write": "all",
+        "pairs": [
+          [
+            "vie",
+            "wellness"
+          ]
+        ],
+        "read": "none"
+      },
+      "links": [
+        [
+          "vie",
+          "wellness"
+        ],
+        [
+          "wellness",
+          "vie"
+        ]
+      ],
+      "reads": []
+    },
+    {
+      "name": "reading all: only the agents that can share",
+      "agents": [
+        {
+          "id": "vie"
+        },
+        {
+          "id": "wellness"
+        },
+        {
+          "id": "mac",
+          "can_share": false
+        }
+      ],
+      "linked": [],
+      "rules": {
+        "write": "none",
+        "read": "all"
+      },
+      "links": [],
+      "reads": [
+        [
+          "vie",
+          "wellness"
+        ],
+        [
+          "wellness",
+          "vie"
+        ]
+      ]
+    },
+    {
+      "name": "reading some: the explicit reads",
+      "agents": [
+        {
+          "id": "vie"
+        },
+        {
+          "id": "wellness"
+        },
+        {
+          "id": "kerfy"
+        }
+      ],
+      "linked": [],
+      "rules": {
+        "write": "none",
+        "read": "some",
+        "reads": [
+          [
+            "vie",
+            "wellness"
+          ]
+        ]
+      },
+      "links": [],
+      "reads": [
+        [
+          "vie",
+          "wellness"
+        ]
+      ]
+    },
+    {
+      "name": "à l'écart: out of everything, whatever the rules",
+      "agents": [
+        {
+          "id": "vie"
+        },
+        {
+          "id": "wellness"
+        },
+        {
+          "id": "compta"
+        }
+      ],
+      "linked": [],
+      "rules": {
+        "write": "all",
+        "read": "all",
+        "aside": [
+          "compta"
+        ]
+      },
+      "links": [
+        [
+          "vie",
+          "wellness"
+        ],
+        [
+          "wellness",
+          "vie"
+        ]
+      ],
+      "reads": [
+        [
+          "vie",
+          "wellness"
+        ],
+        [
+          "wellness",
+          "vie"
+        ]
+      ],
+      "may_write": [
+        [
+          "compta",
+          "vie",
+          false
+        ],
+        [
+          "vie",
+          "compta",
+          false
+        ]
+      ]
+    },
+    {
+      "name": "a new agent is covered at once, nothing to tick",
+      "agents": [
+        {
+          "id": "vie"
+        },
+        {
+          "id": "wellness"
+        },
+        {
+          "id": "jardin"
+        }
+      ],
+      "linked": [],
+      "rules": {
+        "write": "all",
+        "read": "all"
+      },
+      "links": [
+        [
+          "jardin",
+          "vie"
+        ],
+        [
+          "jardin",
+          "wellness"
+        ],
+        [
+          "vie",
+          "jardin"
+        ],
+        [
+          "vie",
+          "wellness"
+        ],
+        [
+          "wellness",
+          "jardin"
+        ],
+        [
+          "wellness",
+          "vie"
+        ]
+      ],
+      "reads": [
+        [
+          "jardin",
+          "vie"
+        ],
+        [
+          "jardin",
+          "wellness"
+        ],
+        [
+          "vie",
+          "jardin"
+        ],
+        [
+          "vie",
+          "wellness"
+        ],
+        [
+          "wellness",
+          "jardin"
+        ],
+        [
+          "wellness",
+          "vie"
+        ]
+      ]
+    },
+    {
+      "name": "the family's agent asks its list only; « Tous » is not the family's agent",
+      "agents": [
+        {
+          "id": "vie"
+        },
+        {
+          "id": "wellness"
+        },
+        {
+          "id": "famille",
+          "family": true
+        }
+      ],
+      "linked": [],
+      "rules": {
+        "write": "all",
+        "read": "all",
+        "family": {
+          "famille": [
+            "vie"
+          ]
+        }
+      },
+      "links": [
+        [
+          "famille",
+          "vie"
+        ],
+        [
+          "vie",
+          "wellness"
+        ],
+        [
+          "wellness",
+          "vie"
+        ]
+      ],
+      "reads": [
+        [
+          "vie",
+          "wellness"
+        ],
+        [
+          "wellness",
+          "vie"
+        ]
+      ],
+      "may_write": [
+        [
+          "famille",
+          "wellness",
+          false
+        ],
+        [
+          "vie",
+          "famille",
+          false
+        ]
+      ]
+    },
+    {
+      "name": "your agent writes to the family's agent along an explicit pair under « Certains »",
+      "agents": [
+        {
+          "id": "vie"
+        },
+        {
+          "id": "wellness"
+        },
+        {
+          "id": "famille",
+          "family": true
+        }
+      ],
+      "linked": [],
+      "rules": {
+        "write": "some",
+        "pairs": [
+          [
+            "vie",
+            "famille"
+          ],
+          [
+            "vie",
+            "wellness"
+          ]
+        ],
+        "read": "none",
+        "family": {
+          "famille": [
+            "wellness"
+          ]
+        }
+      },
+      "links": [
+        [
+          "famille",
+          "wellness"
+        ],
+        [
+          "vie",
+          "famille"
+        ],
+        [
+          "vie",
+          "wellness"
+        ]
+      ],
+      "reads": []
+    },
+    {
+      "name": "a project agent (shown to friends) is out of « Tous » and of reading all",
+      "agents": [
+        {
+          "id": "vie"
+        },
+        {
+          "id": "wellness"
+        },
+        {
+          "id": "voyage",
+          "project": true
+        }
+      ],
+      "linked": [],
+      "rules": {
+        "write": "all",
+        "read": "all"
+      },
+      "links": [
+        [
+          "vie",
+          "wellness"
+        ],
+        [
+          "wellness",
+          "vie"
+        ]
+      ],
+      "reads": [
+        [
+          "vie",
+          "wellness"
+        ],
+        [
+          "wellness",
+          "vie"
+        ]
+      ],
+      "may_write": [
+        [
+          "vie",
+          "voyage",
+          false
+        ],
+        [
+          "voyage",
+          "vie",
+          false
+        ]
+      ]
+    },
+    {
+      "name": "a project agent along explicit pairs under « Certains »",
+      "agents": [
+        {
+          "id": "vie"
+        },
+        {
+          "id": "wellness"
+        },
+        {
+          "id": "voyage",
+          "project": true
+        }
+      ],
+      "linked": [],
+      "rules": {
+        "write": "some",
+        "pairs": [
+          [
+            "vie",
+            "voyage"
+          ],
+          [
+            "voyage",
+            "wellness"
+          ]
+        ],
+        "read": "none"
+      },
+      "links": [
+        [
+          "vie",
+          "voyage"
+        ],
+        [
+          "voyage",
+          "wellness"
+        ]
+      ],
+      "reads": []
+    },
+    {
+      "name": "a household: you open Vie to Chi's agents, she has not answered (« en attente de Chi »)",
+      "agents": [
+        {
+          "id": "vie"
+        },
+        {
+          "id": "wellness"
+        }
+      ],
+      "linked": [
+        "chi"
+      ],
+      "rules": {
+        "write": "none",
+        "read": "none",
+        "households": {
+          "chi": {
+            "in": {
+              "mode": "only",
+              "agents": [
+                "vie"
+              ]
+            },
+            "out": {
+              "mode": "none"
+            },
+            "agents": [
+              [
+                "bip",
+                "Bip"
+              ],
+              [
+                "sum",
+                "Summarizer"
+              ]
+            ]
+          }
+        }
+      },
+      "links": [],
+      "reads": [],
+      "may_write": [
+        [
+          "bip__chi",
+          "vie",
+          false
+        ]
+      ],
+      "ways": {
+        "chi": {
+          "in": "waiting",
+          "out": "off"
+        }
+      }
+    },
+    {
+      "name": "a household: both agree on Vie (an agent of hers not listed yet writes too)",
+      "agents": [
+        {
+          "id": "vie"
+        },
+        {
+          "id": "wellness"
+        }
+      ],
+      "linked": [
+        "chi"
+      ],
+      "rules": {
+        "write": "none",
+        "read": "none",
+        "households": {
+          "chi": {
+            "in": {
+              "mode": "only",
+              "agents": [
+                "vie"
+              ]
+            },
+            "out": {
+              "mode": "none"
+            },
+            "agents": [
+              [
+                "bip",
+                "Bip"
+              ],
+              [
+                "sum",
+                "Summarizer"
+              ]
+            ],
+            "theirs": {
+              "in": {
+                "mode": "only",
+                "agents": [
+                  "vie"
+                ]
+              },
+              "out": {
+                "mode": "none"
+              },
+              "at": 1
+            }
+          }
+        }
+      },
+      "links": [
+        [
+          "bip__chi",
+          "vie"
+        ],
+        [
+          "sum__chi",
+          "vie"
+        ]
+      ],
+      "reads": [],
+      "may_write": [
+        [
+          "new__chi",
+          "vie",
+          true
+        ],
+        [
+          "bip__chi",
+          "wellness",
+          false
+        ],
+        [
+          "vie",
+          "bip__chi",
+          false
+        ]
+      ],
+      "ways": {
+        "chi": {
+          "in": "agreed",
+          "out": "off"
+        }
+      }
+    },
+    {
+      "name": "a household: Chi proposes her agents write to all of yours (a card « D'accord / Non merci »)",
+      "agents": [
+        {
+          "id": "vie"
+        },
+        {
+          "id": "wellness"
+        }
+      ],
+      "linked": [
+        "chi"
+      ],
+      "rules": {
+        "write": "none",
+        "read": "none",
+        "households": {
+          "chi": {
+            "in": {
+              "mode": "none"
+            },
+            "out": {
+              "mode": "none"
+            },
+            "agents": [
+              [
+                "bip",
+                "Bip"
+              ]
+            ],
+            "theirs": {
+              "in": {
+                "mode": "all"
+              },
+              "out": {
+                "mode": "none"
+              },
+              "at": 1
+            }
+          }
+        }
+      },
+      "links": [],
+      "reads": [],
+      "ways": {
+        "chi": {
+          "in": "proposed",
+          "out": "off"
+        }
+      }
+    },
+    {
+      "name": "a household: you said « Non merci » to that proposal",
+      "agents": [
+        {
+          "id": "vie"
+        },
+        {
+          "id": "wellness"
+        }
+      ],
+      "linked": [
+        "chi"
+      ],
+      "rules": {
+        "write": "none",
+        "read": "none",
+        "households": {
+          "chi": {
+            "in": {
+              "mode": "none"
+            },
+            "out": {
+              "mode": "none"
+            },
+            "declined_in": "2885692ece9ea50d",
+            "agents": [
+              [
+                "bip",
+                "Bip"
+              ]
+            ],
+            "theirs": {
+              "in": {
+                "mode": "all"
+              },
+              "out": {
+                "mode": "none"
+              },
+              "at": 1
+            }
+          }
+        }
+      },
+      "links": [],
+      "reads": [],
+      "ways": {
+        "chi": {
+          "in": "off",
+          "out": "off"
+        }
+      }
+    },
+    {
+      "name": "a household: she said « Non merci » to what you propose",
+      "agents": [
+        {
+          "id": "vie"
+        }
+      ],
+      "linked": [
+        "chi"
+      ],
+      "rules": {
+        "write": "none",
+        "read": "none",
+        "households": {
+          "chi": {
+            "in": {
+              "mode": "none"
+            },
+            "out": {
+              "mode": "only",
+              "agents": [
+                "bip"
+              ]
+            },
+            "agents": [
+              [
+                "bip",
+                "Bip"
+              ]
+            ],
+            "theirs": {
+              "in": {
+                "mode": "none"
+              },
+              "out": {
+                "mode": "none"
+              },
+              "declined_out": true,
+              "at": 1
+            }
+          }
+        }
+      },
+      "links": [],
+      "reads": [],
+      "ways": {
+        "chi": {
+          "in": "off",
+          "out": "declined"
+        }
+      }
+    },
+    {
+      "name": "a household: yours write to all of hers, she opened Bip only (the rest waits for her)",
+      "agents": [
+        {
+          "id": "vie"
+        },
+        {
+          "id": "wellness"
+        }
+      ],
+      "linked": [
+        "chi"
+      ],
+      "rules": {
+        "write": "none",
+        "read": "none",
+        "households": {
+          "chi": {
+            "in": {
+              "mode": "none"
+            },
+            "out": {
+              "mode": "all"
+            },
+            "agents": [
+              [
+                "bip",
+                "Bip"
+              ],
+              [
+                "sum",
+                "Summarizer"
+              ]
+            ],
+            "theirs": {
+              "in": {
+                "mode": "none"
+              },
+              "out": {
+                "mode": "only",
+                "agents": [
+                  "bip"
+                ]
+              },
+              "at": 1
+            }
+          }
+        }
+      },
+      "links": [
+        [
+          "vie",
+          "bip__chi"
+        ],
+        [
+          "wellness",
+          "bip__chi"
+        ]
+      ],
+      "reads": [],
+      "may_write": [
+        [
+          "vie",
+          "sum__chi",
+          false
+        ]
+      ],
+      "ways": {
+        "chi": {
+          "in": "off",
+          "out": "waiting"
+        }
+      }
+    },
+    {
+      "name": "a household: hers all but the one she put « à l'écart »",
+      "agents": [
+        {
+          "id": "vie"
+        },
+        {
+          "id": "wellness"
+        }
+      ],
+      "linked": [
+        "chi"
+      ],
+      "rules": {
+        "write": "none",
+        "read": "none",
+        "households": {
+          "chi": {
+            "in": {
+              "mode": "none"
+            },
+            "out": {
+              "mode": "all"
+            },
+            "agents": [
+              [
+                "bip",
+                "Bip"
+              ],
+              [
+                "sum",
+                "Summarizer"
+              ]
+            ],
+            "theirs": {
+              "in": {
+                "mode": "none"
+              },
+              "out": {
+                "mode": "all",
+                "except": [
+                  "sum"
+                ]
+              },
+              "at": 1
+            }
+          }
+        }
+      },
+      "links": [
+        [
+          "vie",
+          "bip__chi"
+        ],
+        [
+          "wellness",
+          "bip__chi"
+        ]
+      ],
+      "reads": [],
+      "may_write": [
+        [
+          "vie",
+          "sum__chi",
+          false
+        ]
+      ],
+      "ways": {
+        "chi": {
+          "in": "off",
+          "out": "agreed"
+        }
+      }
+    },
+    {
+      "name": "a household no longer linked: nothing, whatever its rules",
+      "agents": [
+        {
+          "id": "vie"
+        }
+      ],
+      "linked": [],
+      "rules": {
+        "write": "none",
+        "read": "none",
+        "households": {
+          "chi": {
+            "in": {
+              "mode": "all"
+            },
+            "out": {
+              "mode": "all"
+            },
+            "agents": [
+              [
+                "bip",
+                "Bip"
+              ]
+            ],
+            "theirs": {
+              "in": {
+                "mode": "all"
+              },
+              "out": {
+                "mode": "all"
+              },
+              "at": 1
+            }
+          }
+        }
+      },
+      "links": [],
+      "reads": [],
+      "may_write": [
+        [
+          "bip__chi",
+          "vie",
+          false
+        ],
+        [
+          "vie",
+          "bip__chi",
+          false
+        ]
+      ]
+    },
+    {
+      "name": "your agent « à l'écart » and the family's agent stay out of the households' ways",
+      "agents": [
+        {
+          "id": "vie"
+        },
+        {
+          "id": "compta"
+        },
+        {
+          "id": "famille",
+          "family": true
+        }
+      ],
+      "linked": [
+        "chi"
+      ],
+      "rules": {
+        "write": "none",
+        "read": "none",
+        "aside": [
+          "compta"
+        ],
+        "households": {
+          "chi": {
+            "in": {
+              "mode": "all"
+            },
+            "out": {
+              "mode": "all"
+            },
+            "agents": [
+              [
+                "bip",
+                "Bip"
+              ]
+            ],
+            "theirs": {
+              "in": {
+                "mode": "all"
+              },
+              "out": {
+                "mode": "all"
+              },
+              "at": 1
+            }
+          }
+        }
+      },
+      "links": [
+        [
+          "bip__chi",
+          "vie"
+        ],
+        [
+          "vie",
+          "bip__chi"
+        ]
+      ],
+      "reads": [],
+      "may_write": [
+        [
+          "compta",
+          "bip__chi",
+          false
+        ],
+        [
+          "bip__chi",
+          "compta",
+          false
+        ],
+        [
+          "famille",
+          "bip__chi",
+          false
+        ],
+        [
+          "bip__chi",
+          "famille",
+          false
+        ]
+      ],
+      "ways": {
+        "chi": {
+          "in": "agreed",
+          "out": "agreed"
+        }
+      }
+    },
+    {
+      "name": "Alex's place after the migration (made-up pairs of the same shape)",
+      "agents": [
+        {
+          "id": "vie"
+        },
+        {
+          "id": "wellness"
+        },
+        {
+          "id": "kerfy"
+        },
+        {
+          "id": "compta"
+        },
+        {
+          "id": "famille",
+          "family": true
+        }
+      ],
+      "linked": [
+        "chi"
+      ],
+      "rules": {
+        "write": "some",
+        "pairs": [
+          [
+            "kerfy",
+            "vie"
+          ],
+          [
+            "vie",
+            "kerfy"
+          ],
+          [
+            "vie",
+            "wellness"
+          ],
+          [
+            "wellness",
+            "vie"
+          ]
+        ],
+        "read": "some",
+        "reads": [
+          [
+            "vie",
+            "wellness"
+          ]
+        ],
+        "aside": [
+          "compta"
+        ],
+        "family": {
+          "famille": [
+            "vie"
+          ]
+        },
+        "households": {
+          "chi": {
+            "in": {
+              "mode": "only",
+              "agents": [
+                "vie"
+              ]
+            },
+            "out": {
+              "mode": "none"
+            },
+            "agents": [
+              [
+                "bip",
+                "Bip"
+              ]
+            ],
+            "theirs": {
+              "in": {
+                "mode": "only",
+                "agents": [
+                  "vie"
+                ]
+              },
+              "out": {
+                "mode": "none"
+              },
+              "at": 1
+            }
+          }
+        }
+      },
+      "links": [
+        [
+          "bip__chi",
+          "vie"
+        ],
+        [
+          "famille",
+          "vie"
+        ],
+        [
+          "kerfy",
+          "vie"
+        ],
+        [
+          "vie",
+          "kerfy"
+        ],
+        [
+          "vie",
+          "wellness"
+        ],
+        [
+          "wellness",
+          "vie"
+        ]
+      ],
+      "reads": [
+        [
+          "vie",
+          "wellness"
+        ]
+      ],
+      "ways": {
+        "chi": {
+          "in": "agreed",
+          "out": "off"
+        }
+      }
+    },
+    {
+      "name": "both households have a « bip » (every place's guide): « seulement à son Bip » is hers",
+      "agents": [
+        {
+          "id": "vie"
+        },
+        {
+          "id": "bip"
+        }
+      ],
+      "linked": [
+        "chi"
+      ],
+      "rules": {
+        "write": "none",
+        "read": "none",
+        "households": {
+          "chi": {
+            "in": {
+              "mode": "none"
+            },
+            "out": {
+              "mode": "only",
+              "agents": [
+                "bip"
+              ]
+            },
+            "agents": [
+              [
+                "bip",
+                "Bip"
+              ]
+            ],
+            "theirs": {
+              "in": {
+                "mode": "none"
+              },
+              "out": {
+                "mode": "only",
+                "agents": [
+                  "bip"
+                ]
+              },
+              "at": 1
+            }
+          }
+        }
+      },
+      "links": [
+        [
+          "bip",
+          "bip__chi"
+        ],
+        [
+          "vie",
+          "bip__chi"
+        ]
+      ],
+      "reads": [],
+      "may_write": [
+        [
+          "vie",
+          "bip",
+          false
+        ],
+        [
+          "bip__chi",
+          "bip",
+          false
+        ]
+      ],
+      "ways": {
+        "chi": {
+          "in": "off",
+          "out": "agreed"
+        }
+      }
+    },
+    {
+      "name": "she proposes agents you don't have: only yours count, no card for the others",
+      "agents": [
+        {
+          "id": "vie"
+        }
+      ],
+      "linked": [
+        "chi"
+      ],
+      "rules": {
+        "write": "none",
+        "read": "none",
+        "households": {
+          "chi": {
+            "in": {
+              "mode": "only",
+              "agents": [
+                "vie"
+              ]
+            },
+            "out": {
+              "mode": "none"
+            },
+            "agents": [
+              [
+                "bip",
+                "Bip"
+              ]
+            ],
+            "theirs": {
+              "in": {
+                "mode": "only",
+                "agents": [
+                  "banque",
+                  "sante",
+                  "vie"
+                ]
+              },
+              "out": {
+                "mode": "none"
+              },
+              "at": 1
+            }
+          }
+        }
+      },
+      "links": [
+        [
+          "bip__chi",
+          "vie"
+        ]
+      ],
+      "reads": [],
+      "may_write": [
+        [
+          "bip__chi",
+          "sante",
+          false
+        ]
+      ],
+      "ways": {
+        "chi": {
+          "in": "agreed",
+          "out": "off"
+        }
+      }
+    },
+    {
+      "name": "she proposes only agents you don't have: nothing proposed",
+      "agents": [
+        {
+          "id": "vie"
+        }
+      ],
+      "linked": [
+        "chi"
+      ],
+      "rules": {
+        "write": "none",
+        "read": "none",
+        "households": {
+          "chi": {
+            "in": {
+              "mode": "none"
+            },
+            "out": {
+              "mode": "none"
+            },
+            "agents": [
+              [
+                "bip",
+                "Bip"
+              ]
+            ],
+            "theirs": {
+              "in": {
+                "mode": "only",
+                "agents": [
+                  "sante"
+                ]
+              },
+              "out": {
+                "mode": "none"
+              },
+              "at": 1
+            }
+          }
+        }
+      },
+      "links": [],
+      "reads": [],
+      "ways": {
+        "chi": {
+          "in": "off",
+          "out": "off"
+        }
+      }
+    }
+  ],
+  "new_account": "a place's first start with at most one agent; a place with several agents and no pairs before: write none, read none"
+}

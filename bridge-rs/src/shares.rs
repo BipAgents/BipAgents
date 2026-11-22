@@ -6,8 +6,10 @@
 //! not its memory, conversations, keys or other files.
 //!
 //! The mounts are Hermes' own `terminal.docker_volumes` of each profile: entries the person added by hand are kept.
-//! `<data>/shares.json` holds the links. The sandboxes pick the new mounts up when they start again (they are recreated
-//! when their mounts change).
+//! Who reads whom is the rules' (rules.rs: « lisent les dossiers partagés » none | some | all, « à l'écart »; `load`
+//! is what they allow); `<data>/shares.json`, the links of before them, is never read again. A change of the rules
+//! mounts again once (`sync`), for the agents concerned only: the sandboxes pick the new mounts up when they start
+//! again (they are recreated when their mounts change).
 //!
 //! Where the folders live:
 //!
@@ -107,32 +109,21 @@ pub fn share_dir(config: &Config, agent: &str) -> PathBuf {
     shares_root(config).join(agent)
 }
 
-fn store_path(config: &Config) -> PathBuf {
-    PathBuf::from(crate::py::join(&config.data_dir(), "shares.json"))
-}
-
-/// The person's read links: (reader, shared agent).
+/// The read links the rules allow: (reader, shared agent) (rules.rs `reads_of`).
 pub fn load(config: &Config) -> Vec<(String, String)> {
-    let Ok(text) = std::fs::read_to_string(store_path(config)) else { return Vec::new() };
-    let Ok(data) = serde_json::from_str::<Value>(&text) else { return Vec::new() };
-    let reads = data.get("reads").and_then(Value::as_array).cloned().unwrap_or_default();
-    reads
-        .iter()
-        .filter_map(|x| match x.as_array() {
-            Some(pair) if pair.len() == 2 => Some((crate::py::py_str(&pair[0]), crate::py::py_str(&pair[1]))),
-            _ => None,
-        })
-        .collect()
+    crate::rules::reads_of(config)
 }
 
+/// These reads, as the rules' explicit ones under « Certains » (no mount: `apply` mounts).
+#[cfg(test)]
 pub(crate) fn save(config: &Config, reads: &[(String, String)]) -> std::io::Result<()> {
-    let path = store_path(config);
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let unique: BTreeSet<&(String, String)> = reads.iter().collect();
-    let listed: Vec<Value> = unique.into_iter().map(|(r, s)| json!([r, s])).collect();
-    std::fs::write(&path, format!("{}\n", crate::py::dumps(&json!({"reads": listed}))))
+    let wanted = reads.to_vec();
+    crate::rules::change(config, |rules| {
+        rules.read = crate::rules::Mode::Some;
+        rules.reads = wanted;
+    })
+    .map(|_| ())
+    .map_err(std::io::Error::other)
 }
 
 /// The agent's Hermes profile, when this install manages it (its hub, or its own space).
@@ -310,8 +301,9 @@ fn write_skill(folder: &Path, linked: bool, text: &str) -> std::io::Result<()> {
     Ok(())
 }
 
-/// The person's read links, set up in every agent concerned (now or before). `InvalidShare` (Python's
-/// `ValueError`) for an unknown agent, or one that cannot share (see `why_not`).
+/// The reads an older app sends (« Qui peut lire quoi », the whole list): the rules' explicit ones under « Certains »,
+/// set up in every agent concerned (`sync`). `InvalidShare` (Python's `ValueError`) for an unknown agent, or one that
+/// cannot share (see `why_not`).
 pub async fn apply(config: &Config, wanted: &[(String, String)], run: &Run) -> anyhow::Result<Vec<(String, String)>> {
     for (reader, source) in wanted {
         if reader == source {
@@ -327,6 +319,38 @@ pub async fn apply(config: &Config, wanted: &[(String, String)], run: &Run) -> a
         }
     }
     let before = load(config);
+    let reads = wanted.to_vec();
+    crate::rules::change(config, |rules| {
+        if rules.applied_reads.is_none() {
+            rules.applied_reads = Some(before);
+        }
+        rules.read = crate::rules::Mode::Some;
+        rules.reads = reads;
+    })?;
+    sync(config, run).await
+}
+
+/// One `sync` at a time.
+static SYNC: std::sync::LazyLock<tokio::sync::Mutex<()>> = std::sync::LazyLock::new(|| tokio::sync::Mutex::new(()));
+
+/// The mounts as the rules want them now (`load`), set up once for the agents concerned when they differ from what
+/// they were last mounted for (rules.rs `applied_reads`). Returns the reads.
+pub async fn sync(config: &Config, run: &Run) -> anyhow::Result<Vec<(String, String)>> {
+    let _one = SYNC.lock().await;
+    let wanted = load(config);
+    let before = crate::rules::load(config).applied_reads.unwrap_or_else(|| wanted.clone());
+    if before != wanted {
+        mount(config, &before, &wanted, run).await?;
+    }
+    if crate::rules::load(config).applied_reads.as_ref() != Some(&wanted) {
+        let applied = wanted.clone();
+        crate::rules::change(config, |rules| rules.applied_reads = Some(applied))?;
+    }
+    Ok(wanted)
+}
+
+/// The mounts of every agent concerned (now or before) for the reads `wanted` (`before`: what they were mounted for).
+async fn mount(config: &Config, before: &[(String, String)], wanted: &[(String, String)], run: &Run) -> anyhow::Result<()> {
     let concerned: BTreeSet<String> =
         before.iter().chain(wanted.iter()).flat_map(|(a, b)| [a.clone(), b.clone()]).collect();
     let sources: BTreeSet<&String> = wanted.iter().map(|(_, s)| s).collect();
@@ -341,7 +365,7 @@ pub async fn apply(config: &Config, wanted: &[(String, String)], run: &Run) -> a
     for name in &concerned {
         let agent = config.agent(Some(name));
         if let Some(agent) = agent.filter(|a| a.shares == "external") {
-            if mounts(config, name, Some(&before)) != mounts(config, name, Some(wanted)) {
+            if mounts(config, name, Some(before)) != mounts(config, name, Some(wanted)) {
                 changed_external.push(agent.clone());
             }
             continue;
@@ -365,7 +389,6 @@ pub async fn apply(config: &Config, wanted: &[(String, String)], run: &Run) -> a
         set_volumes(config, name, &folder, &volumes, run).await?;
         write_skill(&folder, linked, skill())?;
     }
-    save(config, wanted)?;
     for agent in changed_external {
         // Its administrator's command (e.g. restart its container when it is idle): what it mounts changed.
         if let Some(command) = agent.shares_apply.as_deref().filter(|c| !c.is_empty()) {
@@ -379,8 +402,7 @@ pub async fn apply(config: &Config, wanted: &[(String, String)], run: &Run) -> a
         }
     }
     tracing::info!(reads = wanted.len(), "agent shares set");
-    let unique: BTreeSet<(String, String)> = wanted.iter().cloned().collect();
-    Ok(unique.into_iter().collect())
+    Ok(())
 }
 
 /// At start: the shared folders' mounts of the agents the bridge sets up without isolating them (an install that
@@ -452,11 +474,9 @@ pub fn heal_skills(config: &Config) {
 /// A deleted agent (already out of the config): the others stop reading it, and its shared folder goes (its volume,
 /// the folder kept in step with it, the backup of before the volume).
 pub async fn forget(config: &Config, agent: &str, run: &Run) -> anyhow::Result<()> {
-    let reads = load(config);
-    if reads.iter().any(|(a, b)| a == agent || b == agent) {
-        let kept: Vec<(String, String)> = reads.into_iter().filter(|(a, b)| a != agent && b != agent).collect();
-        apply(config, &kept, run).await?;
-    }
+    // out of the rules' lists, and the others' mounts without it
+    crate::rules::change(config, |rules| rules.forget_agent(agent))?;
+    sync(config, run).await?;
     if volume_folders(config).contains_key(agent) {
         if let Some(podman) = crate::sandbox::engine(config) {
             if let Err(exc) = run(args(&[&podman, "volume", "rm", "-f", &volume_name(agent)]), BTreeMap::new()).await {

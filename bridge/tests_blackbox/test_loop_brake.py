@@ -9,7 +9,7 @@ import time
 from bbkit.common import AUTH, app_turn, follow_run, read_sse, sse, in_session
 from bbkit.mcp import call, give_token, media_of, not_done, text_of
 from bbkit.servers import wait_until
-from test_households_and_peers import give_peer_token, household
+from test_households_and_peers import agent_token, ask_agent, household
 
 
 def follow(bridge, run_id):
@@ -392,8 +392,8 @@ def test_a_rescue_turn_leaves_the_browser_to_another_run_of_the_agent(bridges, f
 
 
 def test_a_turn_nobody_follows_gets_no_rescue_turn(bridges, fakes):
-    # a run nobody follows (another household's agent writing to Cuisine, relayed by peers.rs): stopped as before,
-    # no rescue turn
+    # a run nobody follows (another household's agent asking Cuisine through both bridges, household_asks.rs):
+    # stopped as before, no rescue turn
     alex = household(bridges, fakes, "alex", ["vie"])
     lea = household(bridges, fakes, "lea", ["cuisine"])
     assert alex.put("/v1/family/name", headers=AUTH, json={"name": "Alex"}).status_code == 200
@@ -403,13 +403,12 @@ def test_a_turn_nobody_follows_gets_no_rescue_turn(bridges, fakes):
     assert joined.status_code == 200, joined.text
     assert alex.put("/v1/agent-links", headers=AUTH, json={"links": [{"from": "vie", "to": "cuisine__lea"}]}).status_code == 200
     assert lea.put("/v1/agent-links", headers=AUTH, json={"links": [{"from": "vie__alex", "to": "cuisine"}]}).status_code == 200
-    token = "vie-gateway-token-" + "z" * 20
-    give_peer_token(alex, "manual:vie", token)
-    fakes.hermes.add_session("bot-1", [], title="Bot Chat", agent="cuisine")   # what the other side calls its Bot Chat
+    token = agent_token(alex, "vie")
     fakes.hermes.runs["r1"] = diagnosis("r1", 5)
-    message = {"session_id": "bot-1", "input": "Message from Vie (@vie): tu as vu l'erreur de cette nuit ?"}
-    sent = alex.post("/peer/p/cuisine__lea/v1/runs", headers={"Authorization": f"Bearer {token}"}, json=message)
-    assert sent.status_code in (200, 202), sent.text
+    # the ask waits for Cuisine's answer: in the background, the brake stops its turn meanwhile
+    asking = threading.Thread(target=ask_agent, args=(alex, token, "bip/cuisine__lea", "tu as vu l'erreur de cette nuit ?"),
+                              daemon=True)
+    asking.start()
     assert wait_until(lambda: fakes.hermes.seen("/p/cuisine/v1/runs/r1/stop", "POST"))
     assert wait_until(lambda: lea.logged("going round in circles: run stopped"))
     assert list(fakes.hermes.started) == ["r1"], "no rescue turn started"

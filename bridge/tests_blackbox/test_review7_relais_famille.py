@@ -41,23 +41,25 @@ def test_a_withdrawal_after_a_restore_from_backup_still_holds(bridges, fakes, re
     lea.stop()
     backup = relay_state.read_bytes()
     lea.start()
-    # her bridge runs a while: Paul writes to her (each call, another poll: another statement)
-    for i in range(10):
-        sent = write(paul, coach, "cuisine__lea", f"message {i}", "coach")
-        assert sent.status_code == 200, sent.text
+    # her bridge runs a while: Paul's bridge calls hers (each call, another poll: another statement; his agent's
+    # messages count against its hop cap, agent_hops.rs: the agents' list makes the calls here)
+    for _ in range(10):
+        assert "cuisine__lea" in link_agents(paul)
     # her computer is restored from that backup
     lea.stop()
     relay_state.write_bytes(backup)
     lea.start()
-    assert wait_until(lambda: write(paul, coach, "cuisine__lea", "de retour ?", "coach").status_code == 200,
-                      timeout=60), lea.log_tail()
+    assert wait_until(lambda: "cuisine__lea" in link_agents(paul), timeout=60), lea.log_tail()
+    sent = write(paul, coach, "cuisine__lea", "de retour ?", "coach")
+    assert sent.status_code == 200, sent.text
 
     # she removes Alex: Paul gets a newer pass, the relay is told
     paul_pass = households(paul)["lea"]["pass"]
     assert lea.delete("/v1/family/alex", headers=AUTH).status_code in (200, 204)
     assert wait_until(lambda: households(paul)["lea"].get("pass") not in (None, paul_pass), timeout=40), lea.log_tail()
-    assert wait_until(lambda: write(paul, coach, "cuisine__lea", "toujours là", "coach").status_code == 200,
-                      timeout=40), paul.log_tail()
+    assert wait_until(lambda: "cuisine__lea" in link_agents(paul), timeout=40), paul.log_tail()
+    sent = write(paul, coach, "cuisine__lea", "toujours là", "coach")
+    assert sent.status_code == 200, sent.text
 
     got = httpx.post(f"{relay.url}/v1/family/call/{box}", content=b"\x01" + b"x" * 64, timeout=30,
                      headers={"Authorization": f"Bearer {token}", "x-bip-kind": "call", "x-bip-pass": alex_pass,

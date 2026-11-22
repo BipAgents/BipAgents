@@ -16,7 +16,7 @@ from starlette.responses import JSONResponse
 
 from bbkit.common import AUTH
 from bbkit.servers import wait_until
-from test_households_and_peers import give_peer_token
+from test_households_and_peers import agent_token, ask_agent
 
 RECEIVED = []
 HOME_ADDRESS = "http://100.100.100.1:9"   # a tailnet address: nothing answers there from the place
@@ -35,8 +35,10 @@ def echo(seen):
     if seen.method == "GET" and seen.path.endswith("/api/jobs"):
         return JSONResponse({"jobs": []})
     if seen.method == "GET" and "/v1/runs/" in seen.path:
-        return JSONResponse({"status": "running", "session_id": "bot-1"})
+        return JSONResponse({"status": "completed", "output": "D'accord."})
     RECEIVED.append((seen.path, seen.json()))
+    if seen.method == "POST" and seen.path.endswith("/v1/runs"):
+        return JSONResponse({"run_id": f"run-{len(RECEIVED)}", "status": "started"}, status_code=202)
     return JSONResponse({"ok": True, "path": seen.path})
 
 
@@ -106,29 +108,27 @@ def test_a_home_links_to_a_place_which_reaches_it_through_the_relay(bridges, fak
     # A relay is only for a household that pulls: nobody else gets the place's calls
     assert place.get("/family/relay/next", headers={"Authorization": "Bearer nope"}).status_code == 401
 
-    # Cuisine (Chi) writes to Vie (Alex): both allowed it, delivered at the home through the relay.
+    # Cuisine (Chi) asks Vie (Alex): both allowed it; through both bridges, at the home through the relay, its answer
+    # back in the same call.
     assert place.put("/v1/agent-links", headers=AUTH,
                      json={"links": [{"from": "cuisine", "to": "vie__alex"}]}).status_code == 200
     assert home.put("/v1/agent-links", headers=AUTH,
                     json={"links": [{"from": "cuisine__chi", "to": "vie"}]}).status_code == 200
-    token = "cuisine-gateway-token-" + "z" * 20
-    give_peer_token(place, "manual:cuisine", token)
-    message = {"session_id": "bot-1", "message": "Message from Cuisine (@cuisine): des pâtes ce soir ?"}
-    delivered = place.post("/peer/p/vie__alex/v1/runs", headers={"Authorization": f"Bearer {token}"}, json=message)
-    assert delivered.status_code == 200 and delivered.json() == {"ok": True, "path": "/p/vie/v1/runs"}
-    path, body = RECEIVED[-1]
-    assert path == "/p/vie/v1/runs" and "Message from Cuisine (Chi) (@cuisine__chi): des pâtes ce soir ?" in body["message"]
+    token = agent_token(place, "cuisine")
+    text, failed = ask_agent(place, token, "bip/vie__alex", "des pâtes ce soir ?")
+    assert not failed and "Vie (Alex) (bip/vie__alex) answered:\nD'accord." in text, text
+    path, body = [r for r in RECEIVED if r[0].endswith("/v1/runs")][-1]
+    assert path == "/p/vie/v1/runs" and body["input"].endswith("Message from Cuisine (Chi) (@cuisine__chi): des pâtes ce soir ?")
 
-    # Vie (Alex) answers Cuisine (Chi): the home calls the place directly.
+    # Vie (Alex) asks Cuisine (Chi): the home calls the place directly.
     assert home.put("/v1/agent-links", headers=AUTH, json={"links": [{"from": "cuisine__chi", "to": "vie"},
                                                                      {"from": "vie", "to": "cuisine__chi"}]}).status_code == 200
     assert place.put("/v1/agent-links", headers=AUTH, json={"links": [{"from": "cuisine", "to": "vie__alex"},
                                                                       {"from": "vie__alex", "to": "cuisine"}]}).status_code == 200
-    vie = "vie-gateway-token-" + "y" * 20
-    give_peer_token(home, "manual:vie", vie)
-    back = home.post("/peer/p/cuisine__chi/v1/runs", headers={"Authorization": f"Bearer {vie}"},
-                     json={"session_id": "bot-1", "message": "Message from Vie (@vie): oui !"})
-    assert back.status_code == 200 and back.json() == {"ok": True, "path": "/p/cuisine/v1/runs"}
+    vie = agent_token(home, "vie")
+    text, failed = ask_agent(home, vie, "bip/cuisine__chi", "oui !")
+    assert not failed and "Cuisine (Chi) (bip/cuisine__chi) answered:" in text, text
+    assert [r for r in RECEIVED if r[0].endswith("/v1/runs")][-1][0] == "/p/cuisine/v1/runs"
 
     # The home switched off: the place's pages open at once all the same, the home's call failing plainly.
     home.stop()
@@ -136,14 +136,14 @@ def test_a_home_links_to_a_place_which_reaches_it_through_the_relay(bridges, fak
     assert place.get("/v1/family", headers=AUTH).status_code == 200
     assert "vie__alex" not in link_agents(place)   # at most its 4 s wait, never a hang
     assert time.monotonic() - started < 10
-    gone = place.post("/peer/p/vie__alex/v1/runs", headers={"Authorization": f"Bearer {token}"}, json=message)
-    assert gone.status_code == 502
+    text, failed = ask_agent(place, token, "bip/vie__alex", "tu es là ?")
+    assert failed and "didn't answer" in text, text
     # once its bridge has not polled for a while (10 s), no wait at all: the agent list opens as without the home
     time.sleep(11)
     started = time.monotonic()
     assert "vie__alex" not in link_agents(place)
-    gone = place.post("/peer/p/vie__alex/v1/runs", headers={"Authorization": f"Bearer {token}"}, json=message)
-    assert gone.status_code == 502
+    text, failed = ask_agent(place, token, "bip/vie__alex", "tu es là ?")
+    assert failed and "didn't answer" in text, text
     assert time.monotonic() - started < 1.5, time.monotonic() - started
     # unlinked on the place: nothing kept for it any more, its relay gone with it
     assert place.delete("/v1/family/alex", headers=AUTH).status_code == 204

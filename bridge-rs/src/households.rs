@@ -2,14 +2,14 @@
 //!
 //! Linking two installs: one person shows an invitation (a QR code: this bridge's address and a one-time code, valid ten
 //! minutes); the other scans it, and their bridge introduces itself with the code. Each bridge then gets a key of its
-//! own for the other, which only lets it hand messages over, and only along links each person turned on:
+//! own for the other, which only lets it hand messages over, and only where both people's rules of « Entre tes
+//! agents » allow it (rules.rs: « les tiens écrivent aux siens » on Alex's side, « ses agents écrivent aux tiens » on
+//! Léa's).
 //!
-//! - on Alex's side, « Vie peut écrire à Cuisine (Léa) » (the link vie → cuisine__lea);
-//! - on Léa's side, « Vie (Alex) peut écrire à Cuisine » (the link vie__alex → cuisine).
-//!
-//! An agent writes to `bip/cuisine__lea` (its bridge is its only peer, see peers.py); its bridge checks its own link and
-//! hands the message to Léa's bridge (`/family/p/cuisine/…`), which checks hers and delivers it, signed
-//! « Message from Vie (Alex) (@vie__alex) » so Cuisine can answer the same way. No agent ever gets another's key.
+//! An agent writes to `bip/cuisine__lea` with the bridge's `message_agent`; its bridge checks its rules and asks Léa's
+//! bridge (`POST /family/ask`, household_asks.rs), which checks hers and asks Cuisine in their own conversation, signed
+//! « Message from Vie (Alex) (@vie__alex) », a guest turn; the answer comes back in the same call. No agent ever gets
+//! another's key, and Hermes' Bot Mode is not used (21/11).
 //! `<data>/households.json` holds this install's name, the linked households (their address, the key we send, a digest
 //! of the key they send, and the certificate their address serves when it is a place's door: door_tls.rs) and the
 //! pending invitations.

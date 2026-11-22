@@ -1,4 +1,4 @@
-//! `bipbridge [serve|check|genkey|qr|peer-token|browser]`: `serve`
+//! `bipbridge [serve|check|genkey|qr|browser]`: `serve`
 //! runs the main listener (and the LAN door over HTTPS when it is on) until SIGTERM / Ctrl-C, then stops: event
 //! streams closed at once, requests under way given `STOP_DRAIN`, the services `STOP_SERVICES`, and the process gone
 //! after `STOP_HARD` whatever still runs.
@@ -17,12 +17,11 @@ use crate::config::{config_path, load_config, Config, SharedConfig};
 use crate::logs::setup_logging;
 use crate::py;
 
-const COMMANDS: [&str; 13] = [
+const COMMANDS: [&str; 12] = [
     "serve",
     "check",
     "genkey",
     "qr",
-    "peer-token",
     "browser",
     "shares-mounts",
     "console",
@@ -49,7 +48,7 @@ pub struct Args {
 
 const USAGE: &str = "usage: bipbridge [-h] [--config CONFIG] [--agent AGENT] [--png PNG] [--json]
                  [--all]
-                 [{serve,check,genkey,qr,peer-token,browser,shares-mounts,console,spaces,adopt,sandbox,agent-tools,vault-check}]
+                 [{serve,check,genkey,qr,browser,shares-mounts,console,spaces,adopt,sandbox,agent-tools,vault-check}]
                  [{add,remove,start}]
 ";
 
@@ -57,11 +56,10 @@ const HELP: &str = "
 BipAgents bridge for Hermes agents
 
 positional arguments:
-  {serve,check,genkey,qr,peer-token,browser,shares-mounts,console,spaces,adopt,sandbox,agent-tools,vault-check}
+  {serve,check,genkey,qr,browser,shares-mounts,console,spaces,adopt,sandbox,agent-tools,vault-check}
                         serve (default), check the config, print a new random
                         bridge key, show an agent's pairing QR code for the
-                        app, (peer-token --agent X) give an agent set up by
-                        hand its token for messaging the others, or (browser
+                        app, or (browser
                         add|remove --agent X|--all) set up or remove agents'
                         visible browsers, or (shares-mounts --agent X) print
                         the `-v` mounts an agent set up by hand needs for its
@@ -321,7 +319,6 @@ pub fn main(argv: Vec<String>) -> i32 {
     match args.command.as_str() {
         "check" => check(&config, &args),
         "qr" => qr(&config, &args),
-        "peer-token" => peer_token(&config, &args),
         "shares-mounts" => shares_mounts(&config, &args),
         "agent-tools" => agent_tools_entry(&config, &args),
         "browser" => runtime.block_on(browser(config, &args)),
@@ -368,27 +365,6 @@ fn check(config: &Config, args: &Args) -> i32 {
             or_dash(&agent.upload_dir_container)
         );
     }
-    0
-}
-
-fn peer_token(config: &Config, args: &Args) -> i32 {
-    use crate::peers::{manual_token, peer_url, Links, PEER_NAME};
-    let Some(agent) = args.agent.as_deref() else {
-        eprintln!("peer-token needs --agent");
-        return 2;
-    };
-    let links = Links::new(&py::join(&config.data_dir(), "peers.json"));
-    let token = match manual_token(config, &links, agent) {
-        Ok(t) => t,
-        Err(e) => {
-            eprintln!("{e}");
-            return 1;
-        }
-    };
-    println!("# In the HERMES_HOME of the gateway serving {agent} (the bridge must be reachable from there):");
-    println!("hermes config set bot_peers.{PEER_NAME}.url {}", peer_url(config));
-    println!("# In that agent's profile .env (its old token, if any, stops working):");
-    println!("HERMES_PEER_{}_KEY={token}", PEER_NAME.to_uppercase());
     0
 }
 
@@ -1068,8 +1044,8 @@ mod tests {
             Err(ArgsExit::Error(m)) => m,
             other => panic!("{l}: {other:?}"),
         };
-        assert_eq!(err("add"), "argument command: invalid choice: 'add' (choose from serve, check, genkey, qr, peer-token, browser, shares-mounts, console, spaces, adopt, sandbox, agent-tools, vault-check)");
-        assert_eq!(err("-5"), "argument command: invalid choice: '-5' (choose from serve, check, genkey, qr, peer-token, browser, shares-mounts, console, spaces, adopt, sandbox, agent-tools, vault-check)");
+        assert_eq!(err("add"), "argument command: invalid choice: 'add' (choose from serve, check, genkey, qr, browser, shares-mounts, console, spaces, adopt, sandbox, agent-tools, vault-check)");
+        assert_eq!(err("-5"), "argument command: invalid choice: '-5' (choose from serve, check, genkey, qr, browser, shares-mounts, console, spaces, adopt, sandbox, agent-tools, vault-check)");
         assert_eq!(err("check extra"), "argument action: invalid choice: 'extra' (choose from add, remove, start)");
         assert_eq!(err("spaces start extra"), "unrecognized arguments: extra");
         assert_eq!(err("--bogus"), "unrecognized arguments: --bogus");

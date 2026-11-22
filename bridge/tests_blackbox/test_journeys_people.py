@@ -260,10 +260,10 @@ def test_j37_finding_a_date_with_another_household(homes):
 
 
 def test_j38_agents_of_two_households_write_to_each_other(homes, fakes):
-    """Alex lets Vie write to Coach (Marie), Marie lets Coach take it: Vie's message reaches Coach in their own
-    exchange (not Marie's conversation), and Marie's app shows « Vie (Alex) ⇄ Coach · 2 messages · Voir l'échange »,
-    then the exchange read-only."""
-    from test_households_and_peers import give_peer_token
+    """Alex lets Vie write to Coach (Marie), Marie lets Coach take it: Vie asks Coach with the bridge's message_agent
+    (through both bridges, never Bot Mode), in their own exchange (not Marie's conversation), and Marie's app shows
+    « Vie (Alex) ⇄ Coach · 2 messages · Voir l'échange », then the exchange read-only."""
+    from test_households_and_peers import agent_token, ask_agent
 
     a, b = homes.alex, homes.marie
     # Coach's own conversation with Marie, found by its title in the fake's listing (`{"sessions": [...]}`; Hermes
@@ -272,11 +272,8 @@ def test_j38_agents_of_two_households_write_to_each_other(homes, fakes):
     fakes.hermes.add_session("bot-coach", [], title="Bot Chat", agent="coach")
     assert a.put("/v1/agent-links", headers=AUTH, json={"links": [{"from": "vie", "to": "coach__marie"}]}).status_code == 200
     assert b.put("/v1/agent-links", headers=AUTH, json={"links": [{"from": "vie__alex", "to": "coach"}]}).status_code == 200
-    token = "vie-gateway-token-" + "j" * 22
-    give_peer_token(a, "manual:vie", token)
-    asked = a.post("/peer/p/coach__marie/v1/runs", headers={"Authorization": f"Bearer {token}"},
-                   json={"session_id": "bot-coach", "message": "Message from Vie (@vie): une séance douce samedi ?"})
-    assert asked.status_code in (200, 202), asked.text
+    text, failed = ask_agent(a, agent_token(a, "vie"), "bip/coach__marie", "une séance douce samedi ?")
+    assert not failed and "Coach (Marie) (bip/coach__marie) answered:" in text, text
 
     def pair():
         pairs = b.get("/v1/agent-pairs", headers=AUTH, params={"agent": "coach"}).json()["pairs"]

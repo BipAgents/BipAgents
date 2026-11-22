@@ -90,7 +90,8 @@ def test_a_linked_agent_gets_message_agent_and_its_call_brings_the_answer(bridge
     # the other way round stays closed
     refused, failed = ask(bridge, "coach", target="bip/quotidien", message="Salut")
     assert failed
+    # another household's agent: only where both people's rules allow it (here no household is linked)
     text, failed = ask(bridge, "quotidien", target="bip/coach__lea", message="Salut")
-    assert failed and "household" in text
+    assert failed and "hasn't let you write to Coach (lea)" in text, text
     text, failed = ask(bridge, "quotidien", target="bip/coach", message="  ")
     assert failed

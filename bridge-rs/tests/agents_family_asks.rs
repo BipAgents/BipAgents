@@ -151,6 +151,10 @@ async fn a_member_asks_the_family_agent_and_it_asks_the_creators_agent_the_links
     assert!(input.contains("for Marie, a member of the family"), "{input}");
     assert!(input.contains("every member of the family reads"), "{input}");
     assert!(input.ends_with(&format!("Message from Famille (@famille): {message}")), "{input}");
+    // a guest's turn (Alex 21/11: what comes from someone else): only the relatives' tools, Vie acts for no one
+    let tools: Vec<&str> = runs[0]["guest_turn"]["tools"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
+    assert!(tools.contains(&"web_search") && !tools.iter().any(|t| ["terminal", "read_file", "session_search"].contains(t)), "{tools:?}");
+    assert!(input.contains("you don't act for them (a guest's turn)"), "{input}");
     let id = bipbridge::agent_pairs::pair_id("famille", "vie");
     let pair = bipbridge::agent_pairs::get(&config, &id).unwrap();
     assert_eq!(pair.sessions.get("vie").map(String::as_str), Some("s1"));

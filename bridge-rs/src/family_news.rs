@@ -9,10 +9,11 @@
 //! - Sent: each recipient household's bridge gets it over the household link (`POST /family/tell`, the key it gave
 //!   us), keeps it (who, when, the words) and notifies its person (« Alex : je commande à manger ce midi »): a card
 //!   with « OK » in her agent's conversation, always.
-//! - **Her agent reads it only along the links of « Qui peut écrire à qui »** (Alex 19/11, option B; peers.rs): the
-//!   sender's bridge names one of her agents only along its own link (sending agent → `agent__household`) and when
-//!   her bridge says that agent takes that sender's news (`/family/agents` `told_by`); otherwise the message goes to
-//!   the person, as to her household. Her bridge checks its own link again (`sender__household` → agent): only then
+//! - **Her agent reads it only where the rules of « Entre tes agents » let that sender write to it** (Alex 19/11,
+//!   option B; rules.rs since 21/11): the sender's bridge names one of her agents only when its rules allow it
+//!   (sending agent → `agent__household`) and her bridge says that agent takes that household's news (`/family/agents`
+//!   `told_by`: `*`, any of its agents); otherwise the message goes to the person, as to her household. Her bridge
+//!   checks its rules again (`sender__household` → agent): only then
 //!   a short note for that agent, joined to the next message she writes to it, for the agent only (the Live recaps'
 //!   way, live_brief.rs `take_recap`): no model run is started for it, and the conversation's cache holds. Without
 //!   the link: the card only (in her first agent's conversation), the agent learns nothing (`told: false`). The
@@ -314,7 +315,7 @@ pub struct Member {
 impl Member {
     /// Whether her agent `agent` takes `sender`'s news (her side of the link).
     pub fn takes(&self, agent: &str, sender: &str) -> bool {
-        self.told_by.iter().any(|(a, senders)| a == agent && senders.iter().any(|s| s == sender))
+        self.told_by.iter().any(|(a, senders)| a == agent && senders.iter().any(|s| s == sender || s == ANY))
     }
 
     fn shown(&self, agent: &str) -> String {
@@ -325,9 +326,12 @@ impl Member {
     }
 }
 
-/// Our links (peers.rs), for `sender`'s side of a family message.
+/// What `told_by` says for « any agent of the household asking ».
+pub const ANY: &str = "*";
+
+/// What the rules allow (rules.rs), for `sender`'s side of a family message.
 fn own_links(config: &Config) -> Vec<(String, String)> {
-    crate::peers::links_of(&crate::peers::Links::new(&py::join(&config.data_dir(), "peers.json")).load())
+    crate::rules::links_of(config)
 }
 
 /// Whether our `sender` may name `target` (`agent__household`): its link, on this side.
@@ -357,7 +361,7 @@ pub async fn members(http: &reqwest::Client, config: &Config) -> Vec<Member> {
             };
             let listed: &[Value] = listed.get("agents").and_then(Value::as_array).map(Vec::as_slice).unwrap_or(&[]);
             let listed: Vec<&Value> = listed.iter().filter(|a| !str_of(a, "id").is_empty()).collect();
-            let agents = listed.iter().map(|a| (str_of(a, "id"), str_of(a, "name"))).collect();
+            let agents: Vec<(String, String)> = listed.iter().map(|a| (str_of(a, "id"), str_of(a, "name"))).collect();
             // which of our agents each of hers takes news from (none said: none)
             let told_by = listed
                 .iter()
@@ -369,7 +373,12 @@ pub async fn members(http: &reqwest::Client, config: &Config) -> Vec<Member> {
             Member { id, name, agents, told_by }
         }
     });
-    futures::future::join_all(calls).await
+    let found = futures::future::join_all(calls).await;
+    // their agents as just listed: the rules' listings name them (rules.rs `remember_agents`)
+    for m in found.iter().filter(|m| !m.agents.is_empty()) {
+        crate::rules::remember_agents(config, &m.id, &m.agents);
+    }
+    found
 }
 
 /// The recipients the agent named. A person (`lea`: Léa's household) or `everyone`: `{id, name}`, the person only.
@@ -954,10 +963,21 @@ pub fn router() -> Router<AppState> {
         .route("/family/received/{id}/seen", post(seen_route))
 }
 
-/// The agents of `household` (their ids there) whose family news `agent` reads: the links this person turned on from
-/// them to it (« Qui peut écrire à qui », peers.rs), the same ones Bot Mode's messages need (Alex 19/11, option B).
-/// Her other agents, the first one included, never read that household's news: the person gets the card only.
-pub fn told_by(links: &[(String, String)], household: &str, agent: &str) -> Vec<String> {
+/// The agents of `household` (their ids there) whose family news `agent` reads: `*` (any of theirs) when the rules let
+/// that household's agents write to it (rules.rs `opens_to`), the same ones Bot Mode's messages need (Alex 19/11,
+/// option B). Her other agents, the first one included, never read that household's news: the person gets the card
+/// only.
+pub fn told_by(world: &crate::rules::World, rules: &crate::rules::Rules, household: &str, agent: &str) -> Vec<String> {
+    if crate::rules::opens_to(world, rules, household, agent) {
+        vec![ANY.to_string()]
+    } else {
+        Vec::new()
+    }
+}
+
+/// Before the rules: the senders of `household` along the pairs.
+#[cfg(test)]
+fn told_by_pairs(links: &[(String, String)], household: &str, agent: &str) -> Vec<String> {
     let theirs = format!("{SEPARATOR}{household}");
     links
         .iter()
@@ -994,13 +1014,13 @@ async fn tell_route(State(state): State<AppState>, headers: HeaderMap, request: 
     let sender = Some(sender)
         .filter(|s| s.len() <= 64 && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-'))
         .unwrap_or_default();
-    let links = crate::peers::links_of(&state.links.load());
     let wanted = str_of(&body, "agent");
-    // her agent reads it only along her link from that sender; else the person only, at her first agent
+    // her agent reads it only where the rules let that sender write to it; else the person only, at her first agent
+    let remote = format!("{sender}{SEPARATOR}{household}");
     let told = config
         .agent(Some(&wanted))
         .filter(|_| !wanted.is_empty() && !sender.is_empty())
-        .filter(|a| told_by(&links, &household, &a.name).contains(&sender))
+        .filter(|a| crate::rules::allows(&config, &remote, &a.name))
         .cloned();
     let Some(agent) = told.clone().or_else(|| config.agents.values().next().cloned()) else {
         return Err(HttpError::new(404, "no agent here"));
@@ -1084,9 +1104,25 @@ mod tests {
             ("vie__marc".to_string(), "cuisine".to_string()),
             ("bip".to_string(), "vie__alex".to_string()),
         ];
-        assert_eq!(told_by(&links, "alex", "bip"), ["vie"]);
-        assert!(told_by(&links, "alex", "cuisine").is_empty(), "another household's link");
-        assert!(told_by(&links, "alex", "vie").is_empty());
+        assert_eq!(told_by_pairs(&links, "alex", "bip"), ["vie"]);
+        assert!(told_by_pairs(&links, "alex", "cuisine").is_empty(), "another household's link");
+        assert!(told_by_pairs(&links, "alex", "vie").is_empty());
+        // the rules: any agent of Alex's household, where they let them write to Bip
+        let world = crate::rules::World {
+            agents: ["bip", "vie"]
+                .map(|id| crate::rules::Agent { id: id.into(), can_share: true, ..Default::default() })
+                .to_vec(),
+            linked: ["alex".to_string()].into_iter().collect(),
+        };
+        let mut rules = crate::rules::Rules::default();
+        let mut alex = crate::rules::Household { incoming: crate::rules::Rule::only(["bip"]), ..Default::default() };
+        assert!(told_by(&world, &rules, "alex", "bip").is_empty(), "nothing before both agree");
+        alex.theirs = Some(crate::rules::Theirs { incoming: crate::rules::Rule::all(), ..Default::default() });
+        rules.households.insert("alex".into(), alex);
+        assert_eq!(told_by(&world, &rules, "alex", "bip"), [ANY]);
+        assert!(told_by(&world, &rules, "alex", "vie").is_empty() && told_by(&world, &rules, "marc", "bip").is_empty());
+        let m = member("alex", "Alex", &[("bip", "Bip")], &[("bip", ANY)]);
+        assert!(m.takes("bip", "vie") && m.takes("bip", "jardin") && !m.takes("cuisine", "vie"));
     }
 
     #[test]

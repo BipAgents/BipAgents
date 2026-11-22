@@ -905,10 +905,12 @@ pub async fn from_spare(
     })?;
     let agent = spare.agent(&config, &planned.name);
     wait_served(http, &agent, true).await?;
+    let before = crate::rules_live::offered_now(&config);
     reserve_agent(shared, &agent)?;
     crate::guide::refresh(&shared.get()); // its blocks, and the guide's list of agents
     give_tools(&shared.get(), &agent, run).await?;
     tools_loaded(shared, std::slice::from_ref(&agent), http, run).await;
+    crate::rules_live::agents_changed(&shared.get(), run, &before).await; // the rules cover it at once
     tracing::info!(target: "bipbridge::agents", agent = %agent.name, ms = started.elapsed().as_millis() as u64, "spare agent taken");
     Ok(agent)
 }
@@ -1114,7 +1116,9 @@ async fn finish_profile(
         reserve_agent(shared, &agent)?;
     }
     crate::guide::refresh(&shared.get()); // its blocks, and the guide's list of agents
+    let before = crate::rules_live::offered_now(&config);
     give_tools(&shared.get(), &agent, run).await?;
+    crate::rules_live::agents_changed(&shared.get(), run, &before).await; // the rules cover it at once
     Ok(agent)
 }
 
@@ -1264,8 +1268,18 @@ pub fn public_agent_url(config: &Config, profile: &str) -> Option<String> {
 }
 
 pub async fn wait_served(http: &reqwest::Client, agent: &AgentConfig, bot_chat: bool) -> anyhow::Result<()> {
+    wait_served_within(http, agent, bot_chat, 90.0).await
+}
+
+/// [`wait_served`], about `seconds` tries (one a second, each at most 3 s).
+pub async fn wait_served_within(
+    http: &reqwest::Client,
+    agent: &AgentConfig,
+    bot_chat: bool,
+    seconds: f64,
+) -> anyhow::Result<()> {
     let auth = format!("Bearer {}", agent.hermes_key);
-    for _ in 0..90 {
+    for _ in 0..(seconds.ceil().max(1.0) as u32) {
         // a new profile is served at once; its key is picked up within ~30 s
         let resp = http
             .get(format!("{}/v1/capabilities", agent.hermes_url))
@@ -1399,8 +1413,10 @@ pub async fn claim_profile(
     if let Some(path) = config.source_path.as_deref() {
         append_agent(path, &agent, &[])?;
     }
+    let before = crate::rules_live::offered_now(&shared.get());
     shared.put_agent(agent.clone());
     give_tools(&shared.get(), &agent, run).await?;
+    crate::rules_live::agents_changed(&shared.get(), run, &before).await; // the rules cover it at once
     tracing::info!(target: "bipbridge::agents", agent = %name, "agent claimed");
     Ok(agent)
 }
@@ -2539,9 +2555,11 @@ pub async fn delete_agent(shared: &SharedConfig, agent: &AgentConfig, run: &Run)
     if let Some(path) = config.source_path.as_deref() {
         remove_agent_section(path, &agent.name)?;
     }
+    let before = crate::rules_live::offered_now(&config);
     shared.remove_agent(&agent.name);
     let config = shared.get();
-    crate::shares::forget(&config, &agent.name, run).await?;
+    crate::shares::forget(&config, &agent.name, run).await?; // out of the rules too (rules.rs `forget_agent`)
+    crate::rules_live::agents_changed(&config, run, &before).await;
     crate::sandbox::forget(&config, &agent.name, run).await;
     crate::sent_files::forget(&config, &agent.name);
     crate::agent_tools::forget(&config, &agent.name);
@@ -2601,14 +2619,14 @@ fn pairs_of(body: &Value, list_key: &str, a: &str, b: &str) -> ApiResult<Vec<(St
     Ok(items.iter().filter_map(Value::as_object).map(|x| (text(x, a), text(x, b))).collect())
 }
 
-fn links_json(links: &Dict) -> Vec<Value> {
-    match links.get("links") {
-        Some(Value::Array(items)) => items
-            .iter()
-            .map(|pair| json!({"from": pair.get(0).cloned().unwrap_or(Value::Null), "to": pair.get(1).cloned().unwrap_or(Value::Null)}))
-            .collect(),
-        _ => Vec::new(),
-    }
+/// « Qui peut écrire à qui » for an older app: the pairs the rules give, your side of each household's way
+/// (rules.rs `own_side_pairs`).
+fn links_json(config: &Config) -> Vec<Value> {
+    let world = crate::rules::World::of(config, false);
+    crate::rules::own_side_pairs(&world, &crate::rules::load(config))
+        .into_iter()
+        .map(|(from, to)| json!({"from": from, "to": to}))
+        .collect()
 }
 
 fn created(config: &Config, agent: &AgentConfig) -> Value {
@@ -2836,6 +2854,7 @@ async fn agent_links(State(state): State<AppState>) -> ApiResult<Response> {
             }
             _ => Vec::new(),
         };
+        let mut theirs = Vec::new();
         for remote in listed {
             let rid = remote.get("id").map(crate::py::py_str).unwrap_or_default();
             let rname = remote.get("name").map(crate::py::py_str).unwrap_or_default();
@@ -2843,9 +2862,15 @@ async fn agent_links(State(state): State<AppState>) -> ApiResult<Response> {
                 json!({"id": format!("{rid}{}{id}", crate::peers::SEPARATOR), "name": format!("{rname} ({hname})"),
                                "managed": false, "household": id}),
             );
+            if !rid.is_empty() {
+                theirs.push((rid, rname));
+            }
+        }
+        if !theirs.is_empty() {
+            crate::rules::remember_agents(&config, &id, &theirs); // the rules' listings name them
         }
     }
-    Ok(web::ok(json!({"agents": agents, "links": links_json(&state.links.load())})))
+    Ok(web::ok(json!({"agents": agents, "links": links_json(&config)})))
 }
 
 async fn set_agent_links(State(state): State<AppState>, request: Request) -> ApiResult<Response> {
@@ -2870,14 +2895,10 @@ async fn set_agent_links(State(state): State<AppState>, request: Request) -> Api
         _ => Vec::new(),
     };
     manual.sort();
-    // An agent linked with another household's: out of the person's hub once idle (own_space.rs).
+    // An agent another household's agents talk to: out of the person's hub once idle (own_space.rs).
     let config = state.config();
-    for (from, to) in &wanted {
-        let (ours, theirs) = if crate::households::split(from).is_some() { (to, from) } else { (from, to) };
-        if crate::households::split(theirs).is_none() {
-            continue;
-        }
-        if let Some(agent) = config.agent(Some(ours)).filter(|a| crate::own_space::should_leave_hub(&config, a)) {
+    for agent in config.agents.values() {
+        if crate::own_space::should_leave_hub(&config, agent) {
             crate::own_space::apart_when_idle(&state, &agent.name);
         }
     }
@@ -2886,7 +2907,17 @@ async fn set_agent_links(State(state): State<AppState>, request: Request) -> Api
     for agent in config.agents.values() {
         give_tools(&config, agent, &run).await?;
     }
-    Ok(web::ok(json!({"links": links_json(&state.links.load()), "needs_setup": manual})))
+    // the households whose rules changed get our side (rules_live.rs)
+    let told: Vec<String> = result
+        .get("changed")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(str::to_string)
+        .collect();
+    crate::rules_live::tell_all(&state, &told).await;
+    Ok(web::ok(json!({"links": links_json(&config), "needs_setup": manual})))
 }
 
 /// Who may read what another agent shares (read-only), and which agents can take part.
@@ -3004,7 +3035,7 @@ pub async fn move_into_space(state: &AppState, agent: &AgentConfig, keep_hub: bo
     let moving = if keep_hub {
         spaces.move_agent_keeping_hub(&config, agent, &state.http).await
     } else {
-        spaces.move_agent(&config, agent, &state.http).await
+        spaces.move_agent(&state.config, agent, &state.http).await
     };
     let moved = match moving {
         Ok(moved) => moved,
@@ -3034,6 +3065,78 @@ pub async fn move_into_space(state: &AppState, agent: &AgentConfig, keep_hub: bo
             "the moved agent's Hermes copy not rebuilt in memory yet (the next give or start does)");
     }
     Ok(moved)
+}
+
+/// The way back of an agent of its own space into the shared hub (own_space_back.rs), by itself: its profile copied
+/// back while its space keeps serving (spaces.rs `copy_back`), its conversations copied once more just before the
+/// switch when no turn goes on in its space (what one added meanwhile), the switch (its section rewritten: the commit
+/// point; a restart before it finds the agent in its space as it was), then its sandbox's files, its tools and its
+/// credentials in the hub (`settle_back_locked`). The space is left running: the caller removes it once its last turn
+/// there ended. Returns the agent in the hub, and whether it settled (`settle_back`; else the bridge's next start
+/// does it).
+pub async fn move_back_to_hub(state: &AppState, agent: &AgentConfig) -> ApiResult<(AgentConfig, bool)> {
+    let _guard = LOCK.lock().await;
+    let run = default_run();
+    let spaces = crate::spaces::Spaces::new(run.clone());
+    let config = state.config();
+    let back = match spaces.copy_back(&config, agent, &state.http).await {
+        Ok(back) => back,
+        Err(exc) => {
+            if let Some(e) = exc.downcast_ref::<crate::spaces::SpaceError>() {
+                return Err(HttpError::new(409, e.0.clone()));
+            }
+            tracing::warn!(target: "bipbridge::agents", agent = %agent.name, error = %tail(&exc.to_string(), 200), "move back into the shared hub failed");
+            return Err(HttpError::new(502, "the agent could not come back into the shared hub"));
+        }
+    };
+    if state.hub.agent_runs_at(&agent.name, &agent.hermes_url) == 0 {
+        let source = profile_folder(&config, agent);
+        let target = crate::spaces::hub_profile(&config, &agent.name);
+        let id = crate::spaces::hub_profile_id(&config, &agent.name);
+        let copied = tokio::task::spawn_blocking(move || crate::spaces::resync_database(&source, &target, &id)).await;
+        if !matches!(copied, Ok(Ok(()))) {
+            tracing::warn!(target: "bipbridge::agents", agent = %agent.name, "its conversations not copied once more before the switch");
+        }
+    }
+    if let Err(exc) = save_agent(&state.config, &back) {
+        tracing::warn!(target: "bipbridge::agents", agent = %agent.name, error = %exc, "the switch back to the hub not saved: it stays in its space");
+        if let Err(clear) = spaces.clear_hub_copy(&config, &agent.name).await {
+            tracing::warn!(target: "bipbridge::agents", agent = %agent.name, error = %clear, "the hub's copy not deleted");
+        }
+        return Err(exc.into());
+    }
+    let (back, settled) = settle_back_locked(state, back, &run).await;
+    Ok((back, settled))
+}
+
+/// After the switch back to the hub (`move_back_to_hub`, or the bridge's start after a way back cut off): its
+/// sandbox's files mounted for its hub profile, its tools given there, its credentials in its hub profile's Hermes
+/// vault (vault.rs `held_again`). Each step can be done again. Returns the agent as the bridge serves it, and whether
+/// its credentials are there: the one step nothing else does again. Its files and its tools are set up again at every
+/// start for every agent (`mount_all_uploads`, the tools' registration), as after the way out; a mount that failed
+/// here doesn't keep the way back open (own-space-back.json), else each start would settle it and stop its space again.
+pub async fn settle_back(state: &AppState, back: AgentConfig) -> (AgentConfig, bool) {
+    let _guard = LOCK.lock().await;
+    settle_back_locked(state, back, &default_run()).await
+}
+
+async fn settle_back_locked(state: &AppState, back: AgentConfig, run: &Run) -> (AgentConfig, bool) {
+    let back = match mount_uploads(&state.config, &back, run, true).await {
+        Ok(mounted) => mounted,
+        Err(exc) => {
+            tracing::warn!(target: "bipbridge::agents", agent = %back.name, error = %tail(&exc.to_string(), 200), "uploads not mounted in the hub's sandbox of the agent back (the bridge's next start tries again)");
+            back
+        }
+    };
+    let _ = give_tools(&state.config(), &back, run).await; // (never an error: a failure is logged there)
+    let settled = match state.vault.held_again(&state.config(), &back).await {
+        Ok(_) => true,
+        Err(exc) => {
+            tracing::warn!(target: "bipbridge::agents", agent = %back.name, error = %format!("{exc:#}"), "the agent back in the hub: its credentials not written there yet");
+            false
+        }
+    };
+    (back, settled)
 }
 
 async fn remove(State(state): State<AppState>, UrlPath(agent_id): UrlPath<String>) -> ApiResult<Response> {

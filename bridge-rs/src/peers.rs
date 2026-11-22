@@ -1,91 +1,51 @@
-//! Messages between agents of two households, through the bridge, only where both people allowed them.
+//! Agents of two households writing to each other, and the households' links.
 //!
-//! Hermes' Bot Mode lets an agent message another one (`message_agent`) on a « peer »: an address and a key in
-//! its config (`bot_peers`). Giving an agent another agent's key would let it do anything with that agent. So
-//! the bridge is the only peer: each gateway gets a token of its own, which says who is calling and nothing more,
-//! and the bridge forwards to the other household's bridge (`to_household`), but only along a link the person turned
-//! on in the app (« Qui peut écrire à qui »).
+//! Since 21/11 (Alex: « pas le Bot Mode, par le pont ») an agent writes to another household's agent only with the
+//! bridge's own `message_agent` (agent_messages.rs): this bridge checks its rules (rules.rs: both households must
+//! agree), asks the other household's bridge over the household link (household_asks.rs, `POST /family/ask`, signed
+//! with the link's own key), which checks its own rules and asks its agent in their pair's conversation (agent_pairs.rs),
+//! a relative's turn (patch 0018's guest mark). The answer comes back in the same call. No agent ever leaves the shared
+//! hub for it, and Hermes' Bot Mode is off everywhere: a place set up before loses what it still has at start
+//! (`drop_bot_mode`: the profiles' mark, the bridge as `bot_peers.bip`, the gateways' tokens in peers.json).
 //!
-//! Between agents of this household Bot Mode is off (Alex, 2026-11-10): no Bot Mode mark on a profile, no peer, no
-//! token for an agent that writes only to its own household's (`set_tokens`), and the relay refuses a local target.
-//! Hermes' Bot Mode wrote into the target's Bot Chat, the person's main conversation with it, with no cap; the
-//! bridge's `message_agent` (agent_messages.rs) asks in the two agents' own conversation, counted by agent_hops.rs.
-//!
-//! Another household's agent (`deliver`, since 2026-10-29) doesn't reach the Bot Chat itself: the « Bot Chat » it
-//! finds or opens is the two agents' own conversation (« Vie (Alex) ⇄ Cuisine », agent_pairs.rs, a hidden Hermes
-//! session per pair), and a message to the real Bot Chat (an id its side kept from before) goes there too
-//! (`only_pair_session`). That turn's history is only what those two agents said to each other, never what the
-//! person told their agent; the bridge keeps the thread for the person's app, like the pairs inside a household.
-//!
-//! Hermes delivers these messages as the gateway (`hermes -p default peer dm`): the token says which gateway
-//! calls, and the message's signature (« Message from … (@agent): ») which of its agents. An agent in its own
-//! space is alone in its gateway, so it is known for sure; in the shared hub, an agent could sign as another hub
-//! agent (same person, nothing secret there).
+//! This module also writes each agent's contacts (`write_contacts`: whom the rules let it write to), turns an older
+//! app's pairs into rules (`apply`), and holds what a linked household's bridge may call (introduce itself, list our
+//! agents, its relay pass, its door) and the person's household routes (name, invitations, join, unlink).
 
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, Mutex};
 
-use axum::body::{Body, Bytes};
+use axum::body::Body;
 use axum::extract::{Path as UrlPath, Request, State};
-use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode};
+use axum::http::{HeaderMap, HeaderValue, Method, StatusCode};
 use axum::response::Response;
 use axum::routing::{delete, get, post, put};
 use axum::Router;
-use futures::TryStreamExt;
+use bytes::Bytes;
 use regex::Regex;
 use serde_json::{json, Value};
-use sha2::{Digest, Sha256};
 
-use crate::agents_admin::pyyaml::Yaml;
 use crate::app::AppState;
 use crate::config::{AgentConfig, Config};
 use crate::households::{own_url, split, HouseholdError, Households};
-use crate::web::{self, ApiResult, HttpError, QueryMap};
+use crate::web::{self, ApiResult, HttpError};
 use crate::Dict;
 
 pub use crate::households::SEPARATOR;
 
-/// The permanent conversation where an agent gets its peers' messages (Hermes' Bot Mode).
-pub const BOT_CHAT_TITLE: &str = "Bot Chat";
-/// What agents see in their roster: message_agent target "bip/<agent>".
+/// What agents see in their contacts: message_agent target "bip/<agent>".
 pub const PEER_NAME: &str = "bip";
-/// Headers never forwarded (hop by hop, or the caller's own key).
-const HOP: [&str; 7] =
-    ["host", "content-length", "connection", "keep-alive", "transfer-encoding", "authorization", "upgrade"];
-const ALLOWED_PATHS: [&str; 3] = ["api/sessions", "v1/runs", "v1/capabilities"];
-
-fn digest(token: &str) -> String {
-    hex::encode(Sha256::digest(token.as_bytes()))
-}
 
 /// Python's `ValueError` of `apply` and `manual_token` (safe to show).
 #[derive(Debug, Clone, thiserror::Error)]
 #[error("{0}")]
 pub struct InvalidLink(pub String);
 
-/// The links the person allowed between agents, and the tokens given to their gateways (`peers.json`).
+/// The tokens given to the gateways (`peers.json`). Its `links`, the pairs of before the rules (rules.rs), stay as the
+/// migration found them (a bridge rolled back finds them), never read again.
 pub struct Links {
     pub path: PathBuf,
-}
-
-/// The `links` of a loaded `peers.json` as pairs.
-pub fn links_of(data: &Dict) -> Vec<(String, String)> {
-    data.get("links")
-        .and_then(Value::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(|x| {
-                    x.as_array().filter(|p| p.len() == 2).map(|p| (crate::py::py_str(&p[0]), crate::py::py_str(&p[1])))
-                })
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
-fn pairs_value(pairs: &[(String, String)]) -> Value {
-    Value::Array(pairs.iter().map(|(a, b)| json!([a, b])).collect())
 }
 
 impl Links {
@@ -93,7 +53,7 @@ impl Links {
         Links { path: PathBuf::from(path) }
     }
 
-    /// `{"links": [[from, to]…], "tokens": {gateway: digest}}`.
+    /// `{"tokens": {gateway: digest}}`, and the old `links` as they are.
     pub fn load(&self) -> Dict {
         let data: Value = std::fs::read_to_string(&self.path)
             .ok()
@@ -101,7 +61,9 @@ impl Links {
             .unwrap_or_else(|| json!({}));
         let data = data.as_object().cloned().unwrap_or_default();
         let mut out = Dict::new();
-        out.insert("links".into(), pairs_value(&links_of(&data)));
+        if let Some(old) = data.get("links") {
+            out.insert("links".into(), old.clone());
+        }
         out.insert("tokens".into(), data.get("tokens").cloned().unwrap_or_else(|| json!({})));
         out
     }
@@ -110,31 +72,14 @@ impl Links {
         if let Some(parent) = self.path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let mut links = links_of(data);
-        links.sort();
-        let content =
-            json!({"links": pairs_value(&links), "tokens": data.get("tokens").cloned().unwrap_or_else(|| json!({}))});
+        let mut content = json!({"tokens": data.get("tokens").cloned().unwrap_or_else(|| json!({}))});
+        if let Some(old) = data.get("links") {
+            content["links"] = old.clone();
+        }
         let tmp = format!("{}.tmp", self.path.display());
         crate::py::write_with_mode(&tmp, crate::py::dumps(&content).as_bytes(), 0o600)?;
         std::fs::rename(&tmp, &self.path)?;
         Ok(())
-    }
-
-    /// The gateway (see `gateway_of`) this token was given to.
-    pub fn caller(&self, token: &str) -> Option<String> {
-        let wanted = digest(token);
-        let data = self.load();
-        let tokens = data.get("tokens")?.as_object()?;
-        tokens
-            .iter()
-            .find(|(_, d)| {
-                d.as_str().map(|d| crate::auth::constant_time_eq(d.as_bytes(), wanted.as_bytes())).unwrap_or(false)
-            })
-            .map(|(gw, _)| gw.clone())
-    }
-
-    pub fn allowed(&self, sender: &str, target: &str) -> bool {
-        links_of(&self.load()).iter().any(|(s, t)| s == sender && t == target)
     }
 }
 
@@ -154,72 +99,29 @@ pub fn managed_home(config: &Config, agent: &AgentConfig) -> Option<PathBuf> {
     None
 }
 
-/// Which gateway serves the agent: its HERMES_HOME, or « manual:<agent> » for one set up by hand.
-pub fn gateway_of(config: &Config, agent: &AgentConfig) -> String {
-    match managed_home(config, agent) {
-        Some(home) => home.to_string_lossy().into_owned(),
-        None => format!("manual:{}", agent.name),
-    }
-}
-
+/// How Hermes and this bridge sign an agent's message to another agent: « Message from Vie (@vie): … ».
 pub static SIGNATURE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^Message from .{0,200}? \(@([A-Za-z0-9_-]{1,64})\):").expect("valid regex"));
 
-/// `json.loads(body or b"{}")` as a dict (anything else: empty).
-fn body_json(body: &[u8]) -> Option<Value> {
-    if body.is_empty() {
-        return Some(json!({}));
-    }
-    serde_json::from_slice(body).ok()
-}
 
-/// The agent of `gateway` that signed this message (Hermes puts « Message from … (@agent): » first).
-pub fn sender_of(config: &Config, gateway: &str, body: &[u8]) -> Option<String> {
-    let data = body_json(body)?;
-    let text = match &data {
-        Value::Object(map) => {
-            let value = map
-                .get("message")
-                .filter(|v| crate::py::truthy(v))
-                .or_else(|| map.get("input").filter(|v| crate::py::truthy(v)));
-            value.map(crate::py::py_str).unwrap_or_default()
-        }
-        _ => String::new(),
-    };
-    let found = SIGNATURE.captures(&text)?;
-    let agent = config.agent(Some(&found[1]))?;
-    if gateway_of(config, agent) == gateway {
-        Some(agent.name.clone())
-    } else {
-        None
-    }
-}
-
-/// The bridge as the agents reach it (`peer_url`, default http://127.0.0.1:<port>/peer).
-pub fn peer_url(config: &Config) -> String {
-    match config.peer_url.as_deref().filter(|u| !u.is_empty()) {
-        Some(url) => url.to_string(),
-        None => format!("http://127.0.0.1:{}/peer", config.port),
-    }
-}
-
-/// The person's links: the skills that list them ([`write_contacts`]), and Bot Mode for the senders to another
-/// household ([`set_tokens`]). Returns `{"manual": {agent: ""}}`: the agents set up by hand that need their token
-/// from the administrator. `InvalidLink` (Python's `ValueError`) for a link that cannot be.
+/// The pairs an older app sends (« Qui peut écrire à qui », the whole list), as rules (rules.rs `from_pairs`), then
+/// what follows from them ([`refresh`]). Returns `{"manual": {}, "changed": [household…]}`: the households whose rules
+/// changed (to tell them); `manual` stays for the older apps' `needs_setup` (no token to give any more: no Bot Mode).
+/// `InvalidLink` (Python's `ValueError`) for a link that cannot be.
 pub fn apply(
     config: &Config,
     links: &Links,
     wanted: &[(String, String)],
     households: Option<&Households>,
 ) -> anyhow::Result<Dict> {
-    let linked: HashSet<String> = match households {
+    let linked: BTreeSet<String> = match households {
         Some(h) => h
             .load()
             .get("households")
             .and_then(Value::as_object)
             .map(|m| m.keys().cloned().collect())
             .unwrap_or_default(),
-        None => HashSet::new(),
+        None => BTreeSet::new(),
     };
     let known = |name: &str| match split(name) {
         Some((_, household)) => linked.contains(&household),
@@ -232,138 +134,114 @@ pub fn apply(
             return Err(InvalidLink(format!("unknown link {sender} → {target}")).into());
         }
     }
-    let mut data = links.load();
     // the family's agent reaches only this place's agents (agent_messages.rs, Alex 21/11): a link of it to another
-    // household's agent is not kept (an older app may still send one)
+    // household's agent is not kept (an older app may still send one; rules.rs leaves it out anyway)
     let unique: BTreeSet<(String, String)> = wanted
         .iter()
         .filter(|(sender, target)| !(split(target).is_some() && crate::family_agent::is_family(config, sender)))
         .cloned()
         .collect();
     let pairs: Vec<(String, String)> = unique.into_iter().collect();
-    let manual = set_tokens(config, &mut data, &pairs)?;
-    data.insert("links".into(), pairs_value(&pairs));
-    links.save(&data)?;
-    write_contacts(config, &pairs, households);
-    tracing::info!(links = pairs.len(), "agent links set");
+    let world = crate::rules::World::of(config, false);
+    let mut changed = Vec::new();
+    crate::rules::change(config, |rules| {
+        changed = crate::rules::from_pairs(&world, rules, &pairs, crate::py::time_time());
+    })?;
+    let manual = refresh(config, links, households)?;
+    tracing::info!(links = pairs.len(), "agent links set (as rules)");
     let mut out = Dict::new();
     out.insert("manual".into(), Value::Object(manual));
+    out.insert("changed".into(), json!(changed));
     Ok(out)
 }
 
-/// Hermes' Bot Mode (the profile's mark, `bot_peers.bip` and its key) only for our agents that write to another
-/// household's agent, and their gateways: between agents of this household it is off, the bridge's `message_agent`
-/// is the one way (agent_messages.rs: in the two agents' own conversation, capped). A gateway with no such sender
-/// left loses its token and its peer. Returns the agents set up by hand that need their token from the administrator.
-fn set_tokens(config: &Config, data: &mut Dict, pairs: &[(String, String)]) -> anyhow::Result<Dict> {
-    let mut sending: BTreeMap<String, AgentConfig> = BTreeMap::new();
-    let mut bots = BTreeSet::new();
-    for (sender, target) in pairs {
-        // the family's agent never: Hermes' own message_agent would reach another household from its common
-        // conversation (a link kept from before `apply` dropped them)
-        if split(sender).is_some() || split(target).is_none() || crate::family_agent::is_family(config, sender) {
-            continue;
-        }
-        if let Some(agent) = config.agent(Some(sender)) {
-            sending.insert(gateway_of(config, agent), agent.clone());
-            bots.insert(agent.name.clone());
-        }
-    }
-    mark_bots(config, &bots);
-    let mut tokens = data.get("tokens").and_then(Value::as_object).cloned().unwrap_or_default();
-    let mut manual = Dict::new();
-    let key_env = format!("HERMES_PEER_{}_KEY", PEER_NAME.to_uppercase());
-    for (gateway, agent) in &sending {
-        if tokens.contains_key(gateway) {
-            continue;
-        }
-        if gateway.starts_with("manual:") {
-            manual.insert(agent.name.clone(), json!("")); // the administrator adds it (bipbridge peer-token)
-            continue;
-        }
-        let token = crate::py::token_urlsafe(32);
-        // The gateway's own (default) profile: Hermes reads the peer and its key there when it delivers.
-        crate::profile_files::set(
-            &Path::new(gateway).join("config.yaml"),
-            &[
-                (&format!("bot_peers.{PEER_NAME}.url"), Yaml::str(peer_url(config))),
-                (&format!("bot_peers.{PEER_NAME}.note"), Yaml::str(PEER_NOTE)),
-            ],
-        )?;
-        crate::services::set_env(&Path::new(gateway).join(".env"), &key_env, Some(&token))?;
-        tokens.insert(gateway.clone(), json!(digest(&token)));
-    }
-    // A gateway that sends nothing any more loses its token and its peer, when the bridge can give them again by
-    // itself. An agent set up by hand keeps its token: only its administrator could put a new one in, and without a
-    // link it is refused anyway.
-    let stale: Vec<String> =
-        tokens.keys().filter(|g| !sending.contains_key(*g) && !g.starts_with("manual:")).cloned().collect();
-    for gateway in stale {
-        let folder = Path::new(&gateway);
-        if folder.is_dir() {
-            crate::services::set_env(&folder.join(".env"), &key_env, None)?;
-            let peers_file = folder.join("config.yaml");
-            if peers_file.exists() {
-                crate::profile_files::edit(&peers_file, |yaml| {
-                    if let Some(peers) = yaml.get_mut("bot_peers").filter(|p| p.is_map()) {
-                        peers.remove(PEER_NAME);
-                    }
-                })?;
-            }
-        }
-        tokens.shift_remove(&gateway);
-    }
-    data.insert("tokens".into(), Value::Object(tokens));
-    Ok(manual)
+/// What the rules give, set up: the skills that list whom each agent may write to ([`write_contacts`]). Returns
+/// what `apply` passes on as `manual` (nothing any more).
+pub fn refresh(config: &Config, _links: &Links, households: Option<&Households>) -> anyhow::Result<Dict> {
+    let world = crate::rules::World::of(config, false);
+    let rules = crate::rules::load(config);
+    write_contacts(config, &crate::rules::effective_links(&world, &rules), households);
+    Ok(Dict::new())
 }
 
 /// Hermes turns Bot Mode on for an install where a profile is marked (`ui_meta.hermes-bots` in its profile.yaml):
 /// then each agent's Bot Chat, its main conversation, gets Hermes' `message_agent` with the install's other profiles
-/// as its roster, whatever links the person set (lab of 2026-11-11: Prof, linked to nobody, had it). Only the agents
-/// that write to another household are marked; every other profile this bridge manages loses the mark.
-fn mark_bots(config: &Config, bots: &BTreeSet<String>) {
+/// as its roster, whatever the person allowed (lab of 2026-11-11: Prof, linked to nobody, had it). No profile this
+/// bridge manages keeps the mark.
+fn unmark_bots(config: &Config) {
     for agent in config.agents.values() {
         let Some(folder) = crate::shares::profile_dir(config, agent).filter(|f| f.is_dir()) else { continue };
-        let done = if bots.contains(&agent.name) {
-            crate::agents_admin::mark_as_bot(&folder)
-        } else {
-            crate::profile_files::edit(&folder.join("profile.yaml"), |data| {
-                if let Some(meta) = data.get_mut("ui_meta").filter(|m| m.is_map()) {
-                    meta.remove("hermes-bots");
-                }
-            })
-            .map(|_| ())
-        };
+        let done = crate::profile_files::edit(&folder.join("profile.yaml"), |data| {
+            if let Some(meta) = data.get_mut("ui_meta").filter(|m| m.is_map()) {
+                meta.remove("hermes-bots");
+            }
+        });
         if let Err(exc) = done {
-            tracing::warn!(agent = %agent.name, error = %exc, "Bot Mode mark not set");
+            tracing::warn!(agent = %agent.name, error = %exc, "Bot Mode mark not taken off");
         }
     }
 }
 
-/// At start, the tokens and peers [`set_tokens`] gives for the links kept: a place set up while Bot Mode still ran
-/// between its own agents loses them there.
-pub fn heal_tokens(config: &Config, links: &Links) {
+/// `key`'s lines taken out of a gateway's `.env`, the others kept as they are: written only when there is one, through
+/// a temporary file renamed over it with its mode, owner and group (profile_files.rs `write_atomic_keeping_owner`:
+/// when the bridge may not keep them, the file stays as it is and the error is logged). Each start does this for every
+/// gateway: until review 2 of 21/11 the file was written again in place each time, and a full disk would have left the
+/// hub's `.env` (its model keys) empty. Whether it was written.
+fn drop_env_line(path: &Path, key: &str) -> std::io::Result<bool> {
+    let text = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(e) => return Err(e),
+    };
+    let ours = |line: &str| line.split('=').next().unwrap_or("").trim() == key;
+    if !text.split_inclusive('\n').any(ours) {
+        return Ok(false);
+    }
+    let kept: String = text.split_inclusive('\n').filter(|line| !ours(line)).collect();
+    crate::profile_files::write_atomic_keeping_owner(path, kept.as_bytes())?;
+    Ok(true)
+}
+
+/// At start: Hermes' Bot Mode off everywhere (21/11, Alex: another household's agents through the bridge only). A
+/// place set up before loses every profile's mark, the bridge as its gateways' `bot_peers.bip` and their key, and the
+/// tokens peers.json gave them (its links of before stay as they were).
+pub fn drop_bot_mode(config: &Config, links: &Links) {
+    unmark_bots(config);
     let mut data = links.load();
-    let before = data.get("tokens").cloned();
-    let pairs = links_of(&data);
-    match set_tokens(config, &mut data, &pairs) {
-        Ok(_) if data.get("tokens") != before.as_ref() => {
-            if let Err(exc) = links.save(&data) {
-                tracing::warn!(error = %exc, "agent peers not healed");
+    let tokens: Vec<String> =
+        data.get("tokens").and_then(Value::as_object).map(|t| t.keys().cloned().collect()).unwrap_or_default();
+    let mut gateways: BTreeSet<PathBuf> = config.agents.values().filter_map(|a| managed_home(config, a)).collect();
+    gateways.extend(tokens.iter().filter(|g| !g.starts_with("manual:")).map(PathBuf::from));
+    let key_env = format!("HERMES_PEER_{}_KEY", PEER_NAME.to_uppercase());
+    for gateway in gateways.iter().filter(|g| g.is_dir()) {
+        if let Err(exc) = drop_env_line(&gateway.join(".env"), &key_env) {
+            tracing::warn!(gateway = %gateway.display(), error = %exc, "Bot Mode key not taken out");
+        }
+        let peers_file = gateway.join("config.yaml");
+        if peers_file.exists() {
+            let removed = crate::profile_files::edit(&peers_file, |yaml| {
+                if let Some(peers) = yaml.get_mut("bot_peers").filter(|p| p.is_map()) {
+                    peers.remove(PEER_NAME);
+                }
+            });
+            if let Err(exc) = removed {
+                tracing::warn!(gateway = %gateway.display(), error = %exc, "Bot Mode peer not taken out");
             }
         }
-        Ok(_) => {}
-        Err(exc) => tracing::warn!(error = %exc, "agent peers not healed"),
+    }
+    if !tokens.is_empty() {
+        data.insert("tokens".into(), json!({}));
+        match links.save(&data) {
+            Ok(()) => tracing::info!(tokens = tokens.len(), "Bot Mode's gateway tokens taken out (agents write through the bridge)"),
+            Err(exc) => tracing::warn!(error = %exc, "Bot Mode's gateway tokens not taken out"),
+        }
     }
 }
-
-/// What a gateway's agents read about the bridge as their peer: only other households' agents are reached there.
-const PEER_NOTE: &str = "Les agents des autres foyers, par BipAgents (cible : bip/<agent>__<foyer>)";
 
 const CONTACTS: &str = "---
 name: agent-contacts
 description: \"The other agents you may write to with message_agent or give files to with send_files_to_agent, and how to address them.\"
-version: 1.2.0
+version: 1.3.0
 author: BipAgents
 license: MIT
 ---
@@ -374,9 +252,9 @@ Use `message_agent` with one of these targets (the person allowed exactly these;
 
 {lines}
 
-Your person's own agents answer in the same call. Another household's agent answers in your « Bot Chat »; a
-message from one is signed with its household, for example « Message from Vie (Alex) (@vie__alex) »: answer it at
-`bip/vie__alex`.
+Each one answers in the same call, another household's agent too (through your person's bridge and theirs). A
+message an agent of another household writes to you comes signed with its household, for example « Message from
+Vie (Alex) (@vie__alex) », in your own conversation with it: just answer there, in text.
 
 Another agent never sees your files, your shared folder /partage included, nor a path of yours you write to it. To
 give files to one of your person's agents, use `send_files_to_agent` (it says the path that agent reads them at),
@@ -426,6 +304,9 @@ pub fn write_contacts(config: &Config, links: &[(String, String)], households: O
         .unwrap_or_default();
     for agent in config.agents.values() {
         let Some(home) = managed_home(config, agent) else { continue };
+        if !home.join("profiles").join(&agent.name).is_dir() {
+            continue; // no profile (yet): nothing to write into, and never a folder made for it
+        }
         let skill = contacts_skill_path(&home, &agent.name);
         if crate::profile_files::hands_off(&skill) {
             continue; // the person's own Hermes (profile_files::hands_off)
@@ -446,8 +327,8 @@ pub fn write_contacts(config: &Config, links: &[(String, String)], households: O
             .collect();
         targets.sort();
         if targets.is_empty() {
-            if skill.exists() {
-                let _ = std::fs::remove_file(&skill);
+            if let Some(folder) = skill.parent().filter(|f| f.exists()) {
+                let _ = std::fs::remove_dir_all(folder);
             }
             continue;
         }
@@ -479,407 +360,21 @@ pub fn write_contacts(config: &Config, links: &[(String, String)], households: O
     }
 }
 
-/// A new token for an agent set up by hand (its old one stops working). Printed once, never stored.
-pub fn manual_token(config: &Config, links: &Links, name: &str) -> anyhow::Result<String> {
-    let Some(agent) = config.agent(Some(name)) else {
-        return Err(InvalidLink(format!("unknown agent {name}")).into());
-    };
-    let token = crate::py::token_urlsafe(32);
-    let mut data = links.load();
-    let mut tokens = data.get("tokens").and_then(Value::as_object).cloned().unwrap_or_default();
-    tokens.insert(gateway_of(config, agent), json!(digest(&token)));
-    data.insert("tokens".into(), Value::Object(tokens));
-    links.save(&data)?;
-    Ok(token)
-}
 
-// -- the peer protocol ------------------------------------------------------------------------------------------------
-
-/// `json.loads(body)` as a dict (`_json`): anything else is empty.
-fn json_dict(body: &[u8]) -> Dict {
-    match body_json(body) {
-        Some(Value::Object(map)) => map,
-        _ => Dict::new(),
-    }
-}
-
-/// `urllib.parse.quote_plus`-style encoding of a query, as httpx writes `params=`.
-fn encode_query(pairs: &[(String, String)]) -> String {
-    const SAFE: &percent_encoding::AsciiSet =
-        &percent_encoding::NON_ALPHANUMERIC.remove(b'_').remove(b'.').remove(b'-').remove(b'~').remove(b' ');
-    let enc = |s: &str| percent_encoding::utf8_percent_encode(s, SAFE).to_string().replace(' ', "+");
-    pairs.iter().map(|(k, v)| format!("{}={}", enc(k), enc(v))).collect::<Vec<_>>().join("&")
-}
-
-/// `urllib.parse.quote(text)` (`/` kept).
-fn quote(text: &str) -> String {
-    const SAFE: &percent_encoding::AsciiSet =
-        &percent_encoding::NON_ALPHANUMERIC.remove(b'_').remove(b'.').remove(b'-').remove(b'~').remove(b'/');
-    percent_encoding::utf8_percent_encode(text, SAFE).to_string()
-}
-
-/// `urllib.parse.unquote(text)`.
-fn unquote(text: &str) -> String {
-    percent_encoding::percent_decode_str(text).decode_utf8_lossy().into_owned()
-}
-
-async fn from_target(state: &AppState, agent: &AgentConfig, path: &str, params: &[(String, String)]) -> Option<Value> {
-    let mut url = format!("{}/{path}", agent.hermes_url);
-    if !params.is_empty() {
-        url = format!("{url}?{}", encode_query(params));
-    }
-    let resp = state
-        .http
-        .get(url)
-        .bearer_auth(&agent.hermes_key)
-        .timeout(std::time::Duration::from_secs(15))
-        .send()
-        .await
-        .ok()?;
-    if resp.status().as_u16() != 200 {
-        return None;
-    }
-    let bytes = resp.bytes().await.ok()?;
-    serde_json::from_slice(&bytes).ok()
-}
-
-/// The target's Bot Chat, as its own Hermes lists it (hidden sessions included).
-async fn bot_chat(state: &AppState, agent: &AgentConfig) -> Option<Dict> {
-    let params = [("limit", "200"), ("title", BOT_CHAT_TITLE), ("include_hidden", "1")]
-        .map(|(k, v)| (k.to_string(), v.to_string()));
-    bot_chat_row(from_target(state, agent, "api/sessions", &params).await?)
-}
-
-/// The Bot Chat among a listing of sessions, read as hermes.rs reads every listing: under `data` (Hermes v0.22.5),
-/// `sessions` or `items`.
-fn bot_chat_row(listing: Value) -> Option<Dict> {
-    crate::hermes::HermesClient::session_rows(listing).into_iter().find(|row| {
-        row.get("title").filter(|t| crate::py::truthy(t)).map(crate::py::py_str).unwrap_or_default().trim()
-            == BOT_CHAT_TITLE
-    })
-}
-
-fn id_of(row: &Dict) -> String {
-    row.get("id").filter(|v| crate::py::truthy(v)).map(crate::py::py_str).unwrap_or_default()
-}
-
-static CHAT_PATH: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^api/sessions/([^/]+)/chat\z").expect("valid regex"));
-static RUN_PATH: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^v1/runs/([^/]+)(/stop)?\z").expect("valid regex"));
-
-/// Where a household request about the target's « Bot Chat » goes.
-enum PairRoute {
-    /// Given by the bridge itself.
-    Answer(Response),
-    /// Forwarded to the target's Hermes: this path and body, for this conversation of the pair.
-    Forward { path: String, body: Bytes, session: String },
-}
-
-/// What another household's agent may do with `agent`: the calls of `hermes peer` (dm, send, status, stop), as on
-/// the Bot Chat, but in the two agents' own conversation (agent_pairs.rs): the « Bot Chat » it finds or opens is that
-/// conversation, and a message to the real Bot Chat (an id the other side kept from before) goes there too. The
-/// person's Bot Chat and other conversations stay out of that turn's history. Anything else is refused.
-#[allow(clippy::too_many_arguments)]
-async fn only_pair_session(
-    state: &AppState,
-    agent: &AgentConfig,
-    remote: &str,
-    shown: &str,
-    method: &Method,
-    path: &str,
-    query: &QueryMap,
-    body: Bytes,
-) -> ApiResult<PairRoute> {
-    let refuse = || HttpError::new(403, format!("only {}'s Bot Chat is reachable", agent.name));
-    let config = state.config();
-    let session = || async {
-        crate::agent_pairs::household_session(&state.http, &config, remote, shown, agent).await.map_err(|exc| {
-            tracing::warn!(sender = %remote, target = %agent.name, error = %exc, "household pair: no conversation");
-            HttpError::new(502, format!("{} can't be reached", agent.display_name))
-        })
-    };
-    let row = |id: &str| json!({"id": id, "title": BOT_CHAT_TITLE});
-    if *method == Method::GET && path == "v1/capabilities" {
-        return Ok(PairRoute::Forward { path: path.to_string(), body, session: String::new() });
-    }
-    if *method == Method::GET && path == "api/sessions" {
-        if query.get("title") != Some(BOT_CHAT_TITLE) {
-            return Err(refuse());
-        }
-        let id = session().await?;
-        return Ok(PairRoute::Answer(web::ok(json!({"object": "list", "data": [row(&id)]}))));
-    }
-    if *method == Method::POST && path == "api/sessions" {
-        if json_dict(&body).get("title") != Some(&json!(BOT_CHAT_TITLE)) {
-            return Err(refuse());
-        }
-        let id = session().await?;
-        let mut made = row(&id);
-        made["session"] = row(&id);
-        return Ok(PairRoute::Answer(web::ok(made)));
-    }
-    let chat = CHAT_PATH.captures(path);
-    if *method == Method::POST && (chat.is_some() || path == "v1/runs") {
-        let mut data = json_dict(&body);
-        let wanted = match &chat {
-            Some(c) => unquote(&c[1]),
-            None => data.get("session_id").filter(|v| crate::py::truthy(v)).map(crate::py::py_str).unwrap_or_default(),
-        };
-        let id = session().await?;
-        if wanted.is_empty() || (wanted != id && bot_chat(state, agent).await.map(|r| id_of(&r)) != Some(wanted)) {
-            return Err(refuse());
-        }
-        return Ok(match chat {
-            Some(_) => PairRoute::Forward { path: format!("api/sessions/{}/chat", quote(&id)), body, session: id },
-            None => {
-                data.insert("session_id".into(), json!(id));
-                let body = Bytes::from(crate::py::dumps(&Value::Object(data)).into_bytes());
-                PairRoute::Forward { path: path.to_string(), body, session: id }
-            }
-        });
-    }
-    if let Some(run) = RUN_PATH.captures(path) {
-        if (*method == Method::GET) == run.get(2).is_none() {
-            let status = from_target(state, agent, &format!("v1/runs/{}", &run[1]), &[]).await;
-            let of_run = status.as_ref().and_then(Value::as_object).map(|s| {
-                s.get("session_id").filter(|v| crate::py::truthy(v)).map(crate::py::py_str).unwrap_or_default()
-            });
-            let Some(of_run) = of_run.filter(|s| !s.is_empty()) else { return Err(refuse()) };
-            let known = crate::agent_pairs::household_session_known(&config, remote, &agent.name);
-            // a run started in the Bot Chat before the pairs' conversations may still be followed to its end
-            if known.as_deref() == Some(of_run.as_str())
-                || bot_chat(state, agent).await.map(|r| id_of(&r)).as_deref() == Some(of_run.as_str())
-            {
-                return Ok(PairRoute::Forward { path: path.to_string(), body, session: of_run });
-            }
-        }
-    }
-    Err(refuse())
-}
-
-fn is_message(method: &Method, path: &str) -> bool {
-    *method == Method::POST && (path.ends_with("/chat") || path == "v1/runs")
-}
-
-/// The caller's token (`authorization` without its « Bearer » prefix).
-fn bearer(headers: &HeaderMap) -> String {
-    let header =
-        headers.get("authorization").map(|v| String::from_utf8_lossy(v.as_bytes()).into_owned()).unwrap_or_default();
-    header.strip_prefix("Bearer ").unwrap_or(&header).trim().to_string()
-}
-
-/// The caller's headers to forward: the last value of each, hop-by-hop ones (and `x-bip-*` when asked) left out.
-fn forwarded_headers(headers: &HeaderMap, drop_bip: bool) -> HeaderMap {
-    let mut out = HeaderMap::new();
-    for (name, value) in headers {
-        let lower = name.as_str();
-        if HOP.contains(&lower) || (drop_bip && lower.starts_with("x-bip-")) {
-            continue;
-        }
-        out.insert(name.clone(), value.clone());
-    }
-    out
-}
-
-/// The request to the target streamed back as it comes (a turn can take minutes: no read timeout).
-async fn forward(
-    state: &AppState,
-    method: &Method,
-    url: &str,
-    query: &QueryMap,
-    body: Bytes,
-    headers: HeaderMap,
-) -> ApiResult<Response> {
-    forward_with(&state.http, method, url, query, body, headers).await
-}
-
-/// [`forward`] with another client (a linked household's, door_tls.rs).
-async fn forward_with(
-    http: &reqwest::Client,
-    method: &Method,
-    url: &str,
-    query: &QueryMap,
-    body: Bytes,
-    headers: HeaderMap,
-) -> ApiResult<Response> {
-    let mut target = url.to_string();
-    if !query.pairs.is_empty() {
-        target = format!("{target}?{}", encode_query(&query.pairs));
-    }
-    let mut builder = http.request(method.clone(), target).headers(headers);
-    if !body.is_empty() || matches!(*method, Method::POST | Method::PUT | Method::PATCH) {
-        builder = builder.body(body);
-    }
-    let upstream = builder.send().await.map_err(|_| HttpError::new(502, "this agent isn't answering right now"))?;
-    let status = StatusCode::from_u16(upstream.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
-    // httpx joins a header's values with « , ».
-    let mut merged: Vec<(HeaderName, Vec<u8>)> = Vec::new();
-    for (name, value) in upstream.headers() {
-        let lower = name.as_str();
-        if HOP.contains(&lower) || lower == "content-encoding" {
-            continue;
-        }
-        match merged.iter_mut().find(|(n, _)| n == name) {
-            Some((_, joined)) => {
-                joined.extend_from_slice(b", ");
-                joined.extend_from_slice(value.as_bytes());
-            }
-            None => merged.push((name.clone(), value.as_bytes().to_vec())),
-        }
-    }
-    let stream = upstream.bytes_stream().map_err(std::io::Error::other);
-    let mut response = Response::new(Body::from_stream(stream));
-    *response.status_mut() = status;
-    for (name, value) in merged {
-        if let Ok(value) = HeaderValue::from_bytes(&value) {
-            response.headers_mut().insert(name, value);
-        }
-    }
-    Ok(response)
-}
-
-/// `/peer/p/<target>/<path>`: an agent of ours writing to another household's agent (`to_household`). Our own
-/// agents write to each other with the bridge's `message_agent` (agent_messages.rs), never through Bot Mode: a local
-/// target is refused.
-async fn relay(state: AppState, target: String, path: String, request: Request) -> ApiResult<Response> {
-    let config = state.config();
-    let token = bearer(request.headers());
-    let gateway = if token.is_empty() { None } else { state.links.caller(&token) };
-    let Some(gateway) = gateway else {
-        return Err(HttpError::new(401, "unknown agent"));
-    };
-    let remote = split(&target);
-    let household = remote.as_ref().and_then(|(_, h)| state.households.get(h));
-    let (Some(household), Some((remote_agent, _))) = (household, remote) else {
-        if config.agent(Some(&target)).is_some() {
-            return Err(HttpError::new(403, format!("write to {target} with the bridge's message_agent")));
-        }
-        return Err(HttpError::new(404, "not found"));
-    };
-    if !ALLOWED_PATHS.iter().any(|p| path.starts_with(p)) {
-        return Err(HttpError::new(404, "not found"));
-    }
-    let (parts, body) = request.into_parts();
-    let body = axum::body::to_bytes(body, usize::MAX)
-        .await
-        .map_err(|_| HttpError::new(400, "There was an error parsing the body"))?;
-    let query = QueryMap::parse(parts.uri.query());
-    let links = links_of(&state.links.load());
-    let mine: BTreeSet<String> =
-        config.agents.values().filter(|a| gateway_of(&config, a) == gateway).map(|a| a.name.clone()).collect();
-    to_household(
-        &state,
-        &config,
-        &gateway,
-        &mine,
-        &links,
-        &target,
-        &remote_agent,
-        &household,
-        &path,
-        &parts.method,
-        &parts.headers,
-        &query,
-        body,
-    )
-    .await
-}
-
-/// One of our agents writes to an agent of a linked household: our link checked here, theirs on their bridge.
-#[allow(clippy::too_many_arguments)]
-async fn to_household(
-    state: &AppState,
-    config: &Config,
-    gateway: &str,
-    mine: &BTreeSet<String>,
-    links: &[(String, String)],
-    target: &str,
-    agent: &str,
-    household: &Dict,
-    path: &str,
-    method: &Method,
-    request_headers: &HeaderMap,
-    query: &QueryMap,
-    body: Bytes,
-) -> ApiResult<Response> {
-    let linked = |s: &str| links.iter().any(|(a, b)| a == s && b == target);
-    let (sender, allowed) = if is_message(method, path) {
-        let sender =
-            sender_of(config, gateway, &body)
-                .or_else(|| if mine.len() == 1 { mine.iter().next().cloned() } else { None });
-        let allowed = sender.as_deref().map(linked).unwrap_or(false);
-        (sender, allowed)
-    } else {
-        let sender = mine.iter().find(|n| linked(n)).cloned();
-        let allowed = sender.is_some();
-        (sender, allowed)
-    };
-    let Some(sender) = sender.filter(|_| allowed) else {
-        tracing::info!(sender = %gateway, target = %target, "household message refused");
-        return Err(HttpError::new(403, format!("not allowed to write to {target} (ask the person)")));
-    };
-    let shown = config.agent(Some(&sender)).map(|a| a.display_name.clone()).unwrap_or_else(|| sender.clone());
-    let key_out = household.get("key_out").map(crate::py::py_str).unwrap_or_default();
-    let mut headers = forwarded_headers(request_headers, false);
-    for (name, value) in [
-        ("authorization", format!("Bearer {key_out}")),
-        ("x-bip-sender", sender.clone()),
-        ("x-bip-sender-name", quote(&shown)),
-    ] {
-        if let Ok(value) = HeaderValue::from_str(&value) {
-            headers.insert(name, value);
-        }
-    }
-    tracing::info!(sender = %sender, target = %target, "household message");
-    let url = format!("{}/family/p/{agent}/{path}", crate::family_relay::reach_url(household));
-    let http = crate::door_tls::household_client(&state.http, household);
-    forward_with(&http, method, &url, query, body, headers).await
-}
-
-/// « Message from Vie (@vie): » becomes « Message from Vie (Alex) (@vie__alex): »: the agent sees who writes, from
-/// which household, and the address to answer.
-pub fn resign(body: &[u8], sender: &str, name: &str, household: &str) -> Vec<u8> {
-    let Some(Value::Object(mut data)) = body_json(body) else { return body.to_vec() };
-    for field in ["message", "input"] {
-        if let Some(Value::String(text)) = data.get(field).cloned() {
-            let signed = format!(
-                "Message from {name} ({household}) (@{sender}{SEPARATOR}{}):",
-                crate::households::slug(household)
-            );
-            let resigned = match SIGNATURE.find(&text) {
-                Some(found) => format!("{signed}{}", &text[found.end()..]),
-                None => format!("{signed} {text}"),
-            };
-            data.insert(field.to_string(), Value::String(resigned));
-        }
-    }
-    crate::py::dumps(&Value::Object(data)).into_bytes()
-}
-
-/// A message from another household's agent is a turn someone other than this person drives: it is marked for
-/// Hermes (`guest_turn`, patch 0018: only the bridge tools of `agent_shares::RELATIVE_TOOLS` and `web_search`, no
-/// Hermes tool that reaches the person's data or acts, no USER.md in the prompt), and while it goes on the bridge's
-/// MCP tools answer only `RELATIVE_TOOLS` (`household_turn`, agent_tools.rs).
-pub fn guest_marked(body: &[u8]) -> Vec<u8> {
-    let Some(Value::Object(mut data)) = body_json(body) else { return body.to_vec() };
-    let tools = crate::agent_shares::guest_tools(&crate::agent_shares::RELATIVE_TOOLS);
-    data.insert("guest_turn".into(), crate::hermes::guest_turn(&tools));
-    crate::py::dumps(&Value::Object(data)).into_bytes()
-}
-
-/// A household message's turn is taken as going on for this long at most (Hermes' peer DM waits 600 s).
+/// A household message's turn is taken as going on for this long at most (agent_messages::ANSWER_SECONDS).
 pub const HOUSEHOLD_TURN_SECONDS: f64 = 600.0;
 /// Household messages' turns going on: (id, agent, since).
 static HOUSEHOLD_TURNS: Mutex<Vec<(u64, String, f64)>> = Mutex::new(Vec::new());
 static HOUSEHOLD_TURN_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
-fn household_turn_began(agent: &str) -> u64 {
+pub(crate) fn household_turn_began(agent: &str) -> u64 {
     let id = HOUSEHOLD_TURN_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let mut turns = HOUSEHOLD_TURNS.lock().unwrap_or_else(|e| e.into_inner());
     turns.push((id, agent.to_string(), crate::py::time_time()));
     id
 }
 
-fn household_turn_ended(id: u64) {
+pub(crate) fn household_turn_ended(id: u64) {
     HOUSEHOLD_TURNS.lock().unwrap_or_else(|e| e.into_inner()).retain(|(t, _, _)| *t != id);
 }
 
@@ -892,34 +387,17 @@ pub fn household_turn(agent: &str) -> bool {
     turns.iter().any(|(_, a, _)| a == agent)
 }
 
-async fn relay_path(
-    State(state): State<AppState>,
-    UrlPath((target, path)): UrlPath<(String, String)>,
-    request: Request,
-) -> ApiResult<Response> {
-    relay(state, target, path, request).await
-}
-
-async fn relay_bare(
-    State(state): State<AppState>,
-    UrlPath(target): UrlPath<String>,
-    request: Request,
-) -> ApiResult<Response> {
-    relay(state, target, String::new(), request).await
-}
-
-/// `/peer/p/<target>/…`: Hermes' peer protocol (its sessions and runs API), for the agents (their own tokens).
-/// Mounted at the root.
-pub fn peer_router() -> Router<AppState> {
-    Router::new()
-        .route("/peer/p/{target}/", get(relay_bare).post(relay_bare))
-        .route("/peer/p/{target}/{*path}", get(relay_path).post(relay_path))
-}
-
 // -- between households -----------------------------------------------------------------------------------------------
 
+/// The caller's token (`authorization` without its « Bearer » prefix).
+fn bearer(headers: &HeaderMap) -> String {
+    let header =
+        headers.get("authorization").map(|v| String::from_utf8_lossy(v.as_bytes()).into_owned()).unwrap_or_default();
+    header.strip_prefix("Bearer ").unwrap_or(&header).trim().to_string()
+}
+
 /// The household whose key this request carries (401 otherwise).
-fn household_caller(state: &AppState, headers: &HeaderMap) -> ApiResult<String> {
+pub(crate) fn household_caller(state: &AppState, headers: &HeaderMap) -> ApiResult<String> {
     let token = bearer(headers);
     let household = if token.is_empty() { None } else { state.households.caller(&token) };
     household.ok_or_else(|| HttpError::new(401, "unknown household"))
@@ -1109,143 +587,21 @@ async fn family_agents(State(state): State<AppState>, headers: HeaderMap) -> Api
     let household = household_caller(&state, &headers)?;
     let config = state.config();
     // every agent (the pairing screen lists those not paired yet); `told_by`: that household's agents whose family
-    // news it reads (this person's links, family_news::told_by), so their tell_family names it only along them
-    let links = links_of(&state.links.load());
+    // news it reads (the rules, family_news::told_by), so their tell_family names it only along them
+    let (world, rules) = (crate::rules::World::of(&config, false), crate::rules::load(&config));
     let agents: Vec<Value> = config
         .agents
         .values()
         .map(|a| {
-            let told_by = crate::family_news::told_by(&links, &household, &a.name);
+            let told_by = crate::family_news::told_by(&world, &rules, &household, &a.name);
             json!({"id": a.name, "name": a.display_name, "told_by": told_by})
         })
         .collect();
     Ok(web::ok(json!({"name": state.households.name(), "agents": agents})))
 }
 
-/// `/family/p/<target>/<path>`: a linked household's agent writes to one of ours.
-async fn deliver(state: AppState, target: String, path: String, request: Request) -> ApiResult<Response> {
-    let household = household_caller(&state, request.headers())?;
-    let config = state.config();
-    let Some(agent) =
-        config.agent(Some(&target)).cloned().filter(|_| ALLOWED_PATHS.iter().any(|p| path.starts_with(p)))
-    else {
-        return Err(HttpError::new(404, "not found"));
-    };
-    let (parts, body) = request.into_parts();
-    let sender = parts
-        .headers
-        .get("x-bip-sender")
-        .map(|v| String::from_utf8_lossy(v.as_bytes()).into_owned())
-        .unwrap_or_default();
-    let remote = format!("{sender}{SEPARATOR}{household}");
-    let links = links_of(&state.links.load());
-    let allowed = if is_message(&parts.method, &path) {
-        !sender.is_empty() && links.iter().any(|(s, t)| *s == remote && *t == agent.name)
-    } else {
-        links.iter().any(|(s, t)| s.ends_with(&format!("{SEPARATOR}{household}")) && *t == agent.name)
-    };
-    if !allowed {
-        tracing::info!(sender = %remote, target = %agent.name, "household message refused");
-        return Err(HttpError::new(403, format!("{} does not take messages from {remote}", agent.display_name)));
-    }
-    let body = axum::body::to_bytes(body, usize::MAX)
-        .await
-        .map_err(|_| HttpError::new(400, "There was an error parsing the body"))?;
-    let query = QueryMap::parse(parts.uri.query());
-    let given = parts
-        .headers
-        .get("x-bip-sender-name")
-        .map(|v| String::from_utf8_lossy(v.as_bytes()).into_owned())
-        .unwrap_or_default();
-    let name = Some(unquote(&given)).filter(|n| !n.is_empty()).unwrap_or_else(|| sender.clone());
-    let household_name =
-        state.households.get(&household).and_then(|h| h.get("name").map(crate::py::py_str)).unwrap_or_default();
-    let shown = if household_name.is_empty() { name.clone() } else { format!("{name} ({household_name})") };
-    // the pair's own conversation, never the person's Bot Chat (agent_pairs.rs)
-    let (path, mut body, session) =
-        match only_pair_session(&state, &agent, &remote, &shown, &parts.method, &path, &query, body).await? {
-            PairRoute::Answer(answer) => return Ok(answer),
-            PairRoute::Forward { path, body, session } => (path, body, session),
-        };
-    let message = is_message(&parts.method, &path);
-    if message && !crate::agent_shares::guest_turns_closed(&config, Some(&agent)) {
-        // a turn another household drives, on a Hermes that would run it open (audit 11/11, BA-2)
-        return Ok(crate::agent_shares::guest_turns_refused(&config, 503));
-    }
-    if message {
-        body = Bytes::from(resign(&body, &sender, &name, &household_name));
-        let (framed, said) = crate::agent_pairs::household_framed(&body, &shown, &remote);
-        if let Err(exc) =
-            crate::agent_pairs::record(&config, &remote, &agent.name, "ask", &said, crate::py::time_time())
-        {
-            tracing::warn!(sender = %remote, target = %agent.name, error = %exc, "household pair: the ask not kept");
-        }
-        body = Bytes::from(framed);
-        body = Bytes::from(crate::dates::now::stamped_body_for(&state.config(), &agent, &body));
-        body = Bytes::from(guest_marked(&body));
-    }
-    let mut headers = forwarded_headers(&parts.headers, true);
-    if let Ok(value) = HeaderValue::from_str(&format!("Bearer {}", agent.hermes_key)) {
-        headers.insert("authorization", value);
-    }
-    tracing::info!(sender = %remote, target = %agent.name, "household message");
-    let url = format!("{}/{path}", agent.hermes_url);
-    let starts_run = parts.method == Method::POST && path == "v1/runs";
-    let turn = message.then(|| household_turn_began(&agent.name));
-    let response = forward(&state, &parts.method, &url, &query, body.clone(), headers).await;
-    if let (Some(turn), false) = (turn, starts_run && response.as_ref().is_ok_and(|r| r.status().is_success())) {
-        household_turn_ended(turn); // a session chat answers when its turn is over; a run refused never ran
-    }
-    let response = response?;
-    if !message || !response.status().is_success() {
-        return Ok(response);
-    }
-    // the answer kept in the pair's thread: the run followed to its end, or the session chat's reply once read
-    let (response_parts, response_body) = response.into_parts();
-    let Ok(bytes) = axum::body::to_bytes(response_body, 16 << 20).await else {
-        return Err(HttpError::new(502, "Hermes' answer was lost"));
-    };
-    let run_id = if starts_run {
-        let answer: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
-        let answer = answer.get("run").filter(|r| r.is_object()).unwrap_or(&answer);
-        answer.get("run_id").or_else(|| answer.get("id")).and_then(Value::as_str).map(str::to_string)
-    } else {
-        None
-    };
-    state.spawn(crate::agent_pairs::keep_household_answer(
-        state.http.clone(),
-        (*config).clone(),
-        remote.clone(),
-        agent.clone(),
-        session,
-        run_id,
-    ));
-    let response = Response::from_parts(response_parts, Body::from(bytes));
-    if starts_run {
-        // the turn it started followed by the hub, for the brake (loop_brake.rs)
-        return Ok(crate::runs::keep_started(&state.hub, &agent, &body, response, true).await);
-    }
-    Ok(response)
-}
-
-async fn deliver_path(
-    State(state): State<AppState>,
-    UrlPath((target, path)): UrlPath<(String, String)>,
-    request: Request,
-) -> ApiResult<Response> {
-    deliver(state, target, path, request).await
-}
-
-async fn deliver_bare(
-    State(state): State<AppState>,
-    UrlPath(target): UrlPath<String>,
-    request: Request,
-) -> ApiResult<Response> {
-    deliver(state, target, String::new(), request).await
-}
-
 /// What a linked household's bridge may call (the key each was given): introduce itself with an invitation code,
-/// list our agents, and hand a message over along a link this person turned on. Mounted at the root.
+/// list our agents, its relay pass and its door (its agents' messages: household_asks.rs). Mounted at the root.
 pub fn family_router() -> Router<AppState> {
     Router::new()
         .route("/family/accept", post(family_accept))
@@ -1253,8 +609,6 @@ pub fn family_router() -> Router<AppState> {
         .route("/family/relay-pass", post(family_relay_pass))
         .route("/family/agents", get(family_agents))
         .route("/family/door", post(family_door))
-        .route("/family/p/{target}/", get(deliver_bare).post(deliver_bare))
-        .route("/family/p/{target}/{*path}", get(deliver_path).post(deliver_path))
 }
 
 // -- the app's side -----------------------------------------------------------------------------------------------------
@@ -1716,12 +1070,9 @@ async fn unlink(state: &AppState, household: &str) -> ApiResult<Response> {
     }
     // the family's agent held here: that member gets what is the family's (family_agent.rs)
     crate::family_agent::after_unlink(state, household, entry);
-    let mut data = state.links.load();
-    let suffix = format!("{SEPARATOR}{household}");
-    let kept: Vec<(String, String)> =
-        links_of(&data).into_iter().filter(|(s, t)| !s.ends_with(&suffix) && !t.ends_with(&suffix)).collect();
-    data.insert("links".into(), pairs_value(&kept));
-    state.links.save(&data)?;
+    // its rules go, and what they gave (Bot Mode, the contacts)
+    crate::rules::forget_household(&state.config(), household);
+    refresh(&state.config(), &state.links, Some(&state.households))?;
     family_tools_changed(state);
     Ok(web::no_content())
 }
@@ -1791,13 +1142,7 @@ mod tests {
     }
 
     #[test]
-    fn a_households_message_is_marked_and_closes_the_tools_while_it_goes_on() {
-        let out: Value = serde_json::from_slice(&guest_marked(br#"{"message": "salut"}"#)).unwrap();
-        assert_eq!(out["message"], "salut");
-        let tools: Vec<&str> = out["guest_turn"]["tools"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
-        assert!(tools.contains(&"mcp__bipagents__weather") && tools.contains(&"web_search"));
-        assert!(!tools.iter().any(|t| ["terminal", "session_search", "mcp__bipagents__mail_search"].contains(t)));
-        assert_eq!(guest_marked(b"not json"), b"not json");
+    fn a_households_turn_closes_the_tools_while_it_goes_on() {
         assert!(!household_turn("cuisine-test"));
         let turn = household_turn_began("cuisine-test");
         assert!(household_turn("cuisine-test") && !household_turn("vie-test"));
@@ -1805,38 +1150,43 @@ mod tests {
         assert!(!household_turn("cuisine-test"));
     }
 
+    /// Review 2 of 21/11: a gateway's `.env` (the hub's model keys) is written only when Bot Mode's key is in it, never
+    /// in place.
     #[test]
-    fn the_bot_chat_is_found_under_data_as_hermes_v0225_answers() {
-        // Hermes v0.22.5's `GET /api/sessions` (gateway/platforms/api_server.py `_handle_list_sessions`)
-        let listing = json!({"object": "list", "data": [{"id": "s9", "title": "Courses"},
-                                                        {"id": "bot-1", "title": " Bot Chat "}],
-                             "limit": 200, "offset": 0, "has_more": false});
-        assert_eq!(bot_chat_row(listing).map(|r| id_of(&r)).as_deref(), Some("bot-1"));
-        assert!(bot_chat_row(json!({"object": "list", "data": [{"id": "s9", "title": "Courses"}]})).is_none());
+    fn a_gateway_env_is_written_only_to_take_the_bot_mode_key_out() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let env = dir.path().join(".env");
+        let key = "HERMES_PEER_BIP_KEY";
+        // without the line: untouched (not even written again)
+        std::fs::write(&env, "CUSTOM_MODEL_API_KEY=sk-hub\nAPI_SERVER_KEY=k\n").unwrap();
+        std::fs::set_permissions(&env, std::fs::Permissions::from_mode(0o640)).unwrap();
+        let old = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000);
+        std::fs::File::options().write(true).open(&env).unwrap().set_modified(old).unwrap();
+        assert!(!drop_env_line(&env, key).unwrap());
+        assert_eq!(std::fs::metadata(&env).unwrap().modified().unwrap(), old);
+        assert_eq!(std::fs::read_to_string(&env).unwrap(), "CUSTOM_MODEL_API_KEY=sk-hub\nAPI_SERVER_KEY=k\n");
+        // with it: only that line out, the rest as it was (no newline added at the end), its mode kept, no leftover
+        std::fs::write(&env, "CUSTOM_MODEL_API_KEY=sk-hub\nHERMES_PEER_BIP_KEY=old\n# a note\nAPI_SERVER_KEY=k").unwrap();
+        let owner = |m: std::fs::Metadata| (std::os::unix::fs::MetadataExt::uid(&m), std::os::unix::fs::MetadataExt::gid(&m));
+        let before = owner(std::fs::metadata(&env).unwrap());
+        assert!(drop_env_line(&env, key).unwrap());
+        assert_eq!(owner(std::fs::metadata(&env).unwrap()), before); // its owner and group too (profile_files.rs test)
+        assert_eq!(std::fs::read_to_string(&env).unwrap(), "CUSTOM_MODEL_API_KEY=sk-hub\n# a note\nAPI_SERVER_KEY=k");
+        assert_eq!(std::fs::metadata(&env).unwrap().permissions().mode() & 0o777, 0o640);
+        let names: Vec<String> =
+            std::fs::read_dir(dir.path()).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+        assert_eq!(names, [".env"]);
+        assert!(!drop_env_line(&env, key).unwrap()); // once
+        // no file: none made
+        assert!(!drop_env_line(&dir.path().join("missing.env"), key).unwrap());
+        assert!(!dir.path().join("missing.env").exists());
     }
 
     #[test]
-    fn the_bot_chat_is_found_under_sessions_too() {
-        // the other shape hermes.rs reads (`sessions`, the black-box suite's Hermes), and `items`
-        let listing = json!({"sessions": [{"id": "s9", "title": "Courses"}, {"id": "bot-2", "title": "Bot Chat"}]});
-        assert_eq!(bot_chat_row(listing).map(|r| id_of(&r)).as_deref(), Some("bot-2"));
-        let items = json!({"items": [{"id": "bot-3", "title": "Bot Chat"}]});
-        assert_eq!(bot_chat_row(items).map(|r| id_of(&r)).as_deref(), Some("bot-3"));
-        assert!(bot_chat_row(json!({"sessions": []})).is_none());
-        assert!(bot_chat_row(json!({"detail": "nope"})).is_none());
-    }
-
-    #[test]
-    fn resigning_and_quoting() {
-        let body = br#"{"session_id": "bot-1", "message": "Message from Vie (@vie): bonjour"}"#;
-        let out: Value = serde_json::from_slice(&resign(body, "vie", "Vie", "Alex")).unwrap();
-        assert_eq!(out["message"], "Message from Vie (Alex) (@vie__alex): bonjour");
-        let out: Value = serde_json::from_slice(&resign(br#"{"input": "salut"}"#, "vie", "Vie", "Léa")).unwrap();
-        assert_eq!(out["input"], "Message from Vie (Léa) (@vie__lea): salut");
-        assert_eq!(quote("Vie Ö/x"), "Vie%20%C3%96/x");
-        assert_eq!(
-            encode_query(&[("title".into(), "Bot Chat".into()), ("x".into(), "a~b*c/d".into())]),
-            "title=Bot+Chat&x=a~b%2Ac%2Fd"
-        );
+    fn signatures_are_read() {
+        let found = SIGNATURE.captures("Message from Vie (Alex) (@vie__alex): bonjour").unwrap();
+        assert_eq!(&found[1], "vie__alex");
+        assert!(SIGNATURE.captures("bonjour").is_none());
     }
 }

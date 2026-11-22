@@ -21,7 +21,7 @@ use std::time::Duration;
 use crate::agents_admin::pyyaml::Yaml;
 use crate::agents_admin::Run;
 use crate::browsers::pyx::shlex_quote;
-use crate::config::{AgentConfig, Config};
+use crate::config::{AgentConfig, Config, SharedConfig};
 
 /// Runtime files of a running gateway or sandbox: never copied (the space starts its own).
 pub const SKIP: [&str; 9] = [
@@ -293,6 +293,89 @@ pub fn hub_profile(config: &Config, agent: &str) -> PathBuf {
     hub.join("profiles").join(agent)
 }
 
+/// The profile's home as the hub's Hermes names it (`hermes_profile_id` for the hub: inside its container when it runs
+/// in one, `[hermes] container_home`).
+pub fn hub_profile_id(config: &Config, agent: &str) -> String {
+    if !config.hermes.container_home.is_empty() {
+        return format!("{}/profiles/{agent}", config.hermes.container_home);
+    }
+    let profiles = hub_profile(config, agent).parent().map(Path::to_path_buf).unwrap_or_default();
+    std::fs::canonicalize(&profiles).unwrap_or(profiles).join(agent).to_string_lossy().into_owned()
+}
+
+/// Hermes' mark of a deleted profile (`profiles/.deleted/<name>`, hermes_constants.py `profile_tombstone_path`): while
+/// it is there, Hermes never serves that name.
+fn tombstone(config: &Config, agent: &str) -> PathBuf {
+    let profiles = hub_profile(config, agent).parent().map(Path::to_path_buf).unwrap_or_default();
+    profiles.join(".deleted").join(agent)
+}
+
+/// What `Spaces::forget_unless_served` did.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Forgot {
+    /// The hub's copy deleted.
+    Deleted,
+    /// None there.
+    Gone,
+    /// The bridge serves the agent from the hub: its profile there kept.
+    Served,
+}
+
+/// What a profile gets for its space only (`move_out`: attachments only from its own files; Hermes' built-in browser
+/// tools, « Browser Use » putting a socket under the agent's folder, too long a path there): section, key.
+pub const SPACE_ONLY: [(&str, &str); 2] = [("gateway", "strict"), ("browser", "backend")];
+
+/// The profile copied back into the hub (`copy_back`) given the hub's settings of an agent that never left: each of
+/// [`SPACE_ONLY`] as the hub's own profile has it (`hub_config`, its `config.yaml`: every hub agent is cloned from it,
+/// agents_admin.rs `hermes profile create --clone-from default`), taken out when the hub has none (a section left
+/// empty goes too). Coordinator 21/11: an agent back must not keep its space's browser setting (Vie would lose its
+/// browser). Whether it changed.
+pub fn hub_settings_again(profile: &Path, hub_config: &Path) -> anyhow::Result<bool> {
+    let hub = crate::profile_files::load(hub_config).unwrap_or_else(|_| Yaml::map());
+    crate::profile_files::edit(&profile.join("config.yaml"), |data| {
+        for (section, key) in SPACE_ONLY {
+            match hub.get(section).filter(|s| s.is_map()).and_then(|s| s.get(key)) {
+                Some(value) => crate::profile_files::set_key(data, &format!("{section}.{key}"), value.clone()),
+                None => {
+                    let empty = match data.get_mut(section).filter(|s| s.is_map()) {
+                        Some(s) => {
+                            s.remove(key);
+                            !s.truthy()
+                        }
+                        None => false,
+                    };
+                    if empty {
+                        data.remove(section);
+                    }
+                }
+            }
+        }
+    })
+}
+
+/// `agent`'s configuration once the shared hub serves it again: its section as the app's own agents have it
+/// (agents_admin.rs `claim_profile`), its key, name, voice and the rest kept.
+pub fn in_hub_again(config: &Config, agent: &AgentConfig) -> AgentConfig {
+    let folder = hub_profile(config, &agent.name);
+    let uploads = folder.join("uploads").to_string_lossy().into_owned();
+    let mut back = agent.clone();
+    back.hermes_url = format!("{}/p/{}", config.hermes.hub_url, agent.name);
+    back.public_url = crate::agents_admin::public_agent_url(config, &agent.name);
+    back.isolated = false;
+    back.sandboxed = false;
+    back.space = None;
+    back.python = Vec::new();
+    back.hermes_root = None;
+    back.hermes_home = None;
+    back.upload_dir_container = Some(if config.hermes.container_home.is_empty() {
+        uploads.clone()
+    } else {
+        format!("{}/profiles/{}/uploads", config.hermes.container_home, agent.name)
+    });
+    back.upload_dir_host = Some(uploads);
+    back
+}
+
 /// `shutil.which(name)`: an executable of that name on the PATH.
 pub fn which(name: &str) -> Option<PathBuf> {
     use std::os::unix::fs::PermissionsExt;
@@ -398,40 +481,42 @@ impl Spaces {
         self.service(config, &agent.name, space, true).await
     }
 
-    /// `move`: the agent, from the hub into its own space. Returns its new configuration (the caller saves it).
+    /// `move`: the agent, from the hub into its own space. Returns its new configuration (the caller saves it). `live`:
+    /// the bridge's configuration, which a delete of the hub's copy that waits reads again (`forget_later`).
     pub async fn move_agent(
         &self,
-        config: &Config,
+        live: &SharedConfig,
         agent: &AgentConfig,
         http: &reqwest::Client,
     ) -> anyhow::Result<AgentConfig> {
+        let current = live.get();
+        let config = &*current;
         let moved = self.move_agent_keeping_hub(config, agent, http).await?;
         // Its space serves it now: the move stands. Until 2026-11-07 a failed delete here failed the whole move with
         // the space left running and the bridge still pointing at the hub (whose copy Hermes had already marked
         // deleted), and each try again then met « a space with this name already exists » (token lab).
         if let Err(exc) = self.forget_in_hub(config, &agent.name).await {
             tracing::warn!(agent = %agent.name, error = %exc, "the hub's copy of the moved agent not deleted yet: tried again later");
-            self.forget_later(config, &agent.name);
+            self.forget_later(live, &agent.name);
         }
         Ok(moved)
     }
 
     /// The hub's copy of a moved agent deleted later, a few times (`[spaces] forget_again`, then 4 times longer each
-    /// time): what kept it (« a running gateway still owns this profile ») settles. Done once it is gone.
-    pub fn forget_later(&self, config: &Config, agent: &str) {
-        let (spaces, config, agent) = (Spaces::new(self.run.clone()), config.clone(), agent.to_string());
+    /// time): what kept it (« a running gateway still owns this profile ») settles. Done once it is gone, or once the
+    /// bridge serves the agent from the hub again (`forget_unless_served`: never the profile a way back put there).
+    pub fn forget_later(&self, live: &SharedConfig, agent: &str) {
+        let (spaces, live, agent) = (Spaces::new(self.run.clone()), live.clone(), agent.to_string());
         tokio::spawn(async move {
-            let mut wait = config.spaces.forget_again;
+            let mut wait = live.get().spaces.forget_again;
             for _ in 0..FORGET_TRIES {
                 tokio::time::sleep(Duration::from_secs_f64(wait)).await;
-                if !hub_profile(&config, &agent).is_dir() {
-                    return;
-                }
-                match spaces.forget_in_hub(&config, &agent).await {
-                    Ok(()) => {
+                match spaces.forget_unless_served(&live, &agent).await {
+                    Ok(Forgot::Deleted) => {
                         tracing::info!(agent = %agent, "the hub forgot the moved agent");
                         return;
                     }
+                    Ok(_) => return,
                     Err(exc) => {
                         tracing::warn!(agent = %agent, error = %exc, "the hub's copy of the moved agent still not deleted")
                     }
@@ -440,6 +525,26 @@ impl Spaces {
             }
             tracing::warn!(agent = %agent, "the hub keeps a copy of the moved agent: `hermes profile delete <agent> --yes` removes it");
         });
+    }
+
+    /// The hub's copy of `agent` deleted now, unless the bridge serves the agent from the hub (review 3 of 21/11, B1: a
+    /// delete that waited — after a move, `forget_later`; the way out's `finish`, own_space.rs — deleted the profile a
+    /// way back had put there meanwhile: its conversations, memory, files and Hermes vault, its name tombstoned). Taken
+    /// under the agent's lock (own_space.rs `lock_of`, which the way back holds from its copy to its switch), the
+    /// bridge's live configuration read again then. Never call it while holding that lock.
+    pub async fn forget_unless_served(&self, live: &SharedConfig, agent: &str) -> anyhow::Result<Forgot> {
+        let lock = crate::own_space::lock_of(agent);
+        let _one_at_a_time = lock.lock().await;
+        let config = live.get();
+        if config.agent(Some(agent)).is_some_and(|a| crate::vault::in_hub(&config, a)) {
+            tracing::info!(agent = %agent, "served from the shared hub again: its profile there kept");
+            return Ok(Forgot::Served);
+        }
+        if !hub_profile(&config, agent).is_dir() {
+            return Ok(Forgot::Gone);
+        }
+        self.forget_in_hub(&config, agent).await?;
+        Ok(Forgot::Deleted)
     }
 
     /// The move without its last step: the hub still serves the profile, so a turn going on there ends there (the
@@ -518,7 +623,7 @@ impl Spaces {
             // tools, config v52: there, turn the `browser` toolset off for this profile instead.)
             crate::profile_files::set(
                 &root.join("profiles").join(&agent.name).join("config.yaml"),
-                &[("gateway.strict", Yaml::Bool(true)), ("browser.backend", Yaml::str("off"))],
+                &[("gateway.strict", Yaml::Bool(true)), ("browser.backend", Yaml::str("off"))], // SPACE_ONLY
             )?;
             if !has_start && sandbox_available(config) {
                 // Terminal, files, code and the browser's desktop in a container; nothing of the host mounted.
@@ -590,6 +695,93 @@ impl Spaces {
         Ok(())
     }
 
+    /// The way back (own_space_back.rs): an agent of its own space served by the shared hub again, the space still
+    /// running. Its profile copied into the hub as the move copied it out (its database through SQLite's backup,
+    /// consistent while the space keeps serving; runtime files and, on a place whose Hermes copies are in memory, its
+    /// vault left out), its API conversations made the hub's (`rebind_api_sessions`), Hermes' tombstone of it taken
+    /// away and the copy published with one rename (Hermes builds a profile the same way: a running hub never adopts
+    /// half a copy). A copy the hub still has (its delete after the move never done, a way back cut off) is deleted
+    /// first (`clear_hub_copy`). Returns its configuration in the hub once the hub serves it (not saved: the caller
+    /// switches the bridge, then removes the space with `remove`); the hub's copy deleted again when the hub won't
+    /// serve it.
+    pub async fn copy_back(
+        &self,
+        config: &Config,
+        agent: &AgentConfig,
+        http: &reqwest::Client,
+    ) -> anyhow::Result<AgentConfig> {
+        let Some(root) = agent.space.as_deref().filter(|s| !s.is_empty()).map(PathBuf::from) else {
+            return Err(SpaceError(format!("{} has no space of its own", agent.name)).into());
+        };
+        let source = root.join("profiles").join(&agent.name);
+        if !source.is_dir() {
+            return Err(SpaceError("its space has no profile".into()).into());
+        }
+        let target = hub_profile(config, &agent.name);
+        self.clear_hub_copy(config, &agent.name).await?;
+        let profiles = target.parent().map(Path::to_path_buf).unwrap_or_default();
+        std::fs::create_dir_all(&profiles)?;
+        let staging = profiles.join(format!(".{}.bip-back", agent.name)); // a dot first: no profile id, never served
+        if staging.exists() {
+            std::fs::remove_dir_all(&staging)?;
+        }
+        let not_copied = &crate::hermes_copies::NOT_COPIED;
+        let except: Vec<&'static str> =
+            if crate::hermes_copies::in_memory(config) { not_copied.to_vec() } else { not_copied[1..].to_vec() };
+        let profile_id = hub_profile_id(config, &agent.name);
+        let hub_config = profiles.parent().map(|hub| hub.join("config.yaml")).unwrap_or_default();
+        let (from, to) = (source.clone(), staging.clone());
+        let copied = tokio::task::spawn_blocking(move || -> anyhow::Result<usize> {
+            copy_profile_except(&from, &to, &except)?;
+            hub_settings_again(&to, &hub_config)?; // its space's own settings out (SPACE_ONLY)
+            Ok(rebind_api_sessions(&to, &profile_id)?)
+        })
+        .await?;
+        let rebound = match copied {
+            Ok(rebound) => rebound,
+            Err(exc) => {
+                let _ = std::fs::remove_dir_all(&staging);
+                return Err(exc);
+            }
+        };
+        if rebound > 0 {
+            tracing::info!(agent = %agent.name, conversations = rebound, "its API conversations made the hub's again");
+        }
+        let _ = std::fs::remove_file(tombstone(config, &agent.name));
+        std::fs::rename(&staging, &target)?;
+        let back = in_hub_again(config, agent);
+        if let Err(exc) = crate::agents_admin::wait_served_within(http, &back, false, config.spaces.served_within).await {
+            tracing::warn!(agent = %agent.name, error = %exc, "the hub did not serve the agent back: its copy deleted, it stays in its space");
+            // Never a delete that waits (`forget_later`): the next try deletes it under the agent's lock
+            // (`clear_hub_copy`), or the bridge's next start (own_space_back.rs `settle_journal`), the journal keeping
+            // the agent while the copy is there (review 3 of 21/11, B1).
+            if let Err(forget) = self.forget_in_hub(config, &agent.name).await {
+                tracing::warn!(agent = %agent.name, error = %forget, "the hub's copy not deleted: at the next try");
+            }
+            return Err(SpaceError("the hub did not serve it".into()).into());
+        }
+        tracing::info!(agent = %agent.name, "agent copied back into the shared hub");
+        Ok(back)
+    }
+
+    /// A copy of `agent` the hub has: deleted through Hermes (it stops serving it first), or removed when Hermes had
+    /// already marked it deleted. Err when it is still there.
+    pub async fn clear_hub_copy(&self, config: &Config, agent: &str) -> anyhow::Result<()> {
+        let target = hub_profile(config, agent);
+        if !target.exists() {
+            return Ok(());
+        }
+        if tombstone(config, agent).exists() {
+            std::fs::remove_dir_all(&target)?;
+        } else if let Err(exc) = self.forget_in_hub(config, agent).await {
+            tracing::warn!(agent = %agent, error = %exc, "the hub's copy of the agent not deleted");
+        }
+        if target.exists() {
+            return Err(SpaceError("the hub still has a copy of this agent".into()).into());
+        }
+        Ok(())
+    }
+
     /// A deleted agent's space: its gateway stopped, its folder gone.
     pub async fn remove(&self, config: &Config, agent: &AgentConfig) -> anyhow::Result<()> {
         let Some(space) = agent.space.as_deref().filter(|s| !s.is_empty()) else { return Ok(()) };
@@ -604,6 +796,38 @@ impl Spaces {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Coordinator 21/11: an agent back in the hub has the hub's settings of an agent that never left, not its space's
+    /// (`browser.backend: off` would cost Vie its browser where the hub's agents have Hermes' default).
+    #[test]
+    fn an_agent_back_in_the_hub_gets_the_hubs_settings_not_its_spaces() {
+        let dir = tempfile::tempdir().unwrap();
+        let (hub, profile) = (dir.path().join("config.yaml"), dir.path().join("profiles/vie"));
+        std::fs::create_dir_all(&profile).unwrap();
+        let read = || crate::profile_files::load(&profile.join("config.yaml")).unwrap();
+        let space = "terminal:\n  backend: docker\ngateway:\n  strict: true\nbrowser:\n  backend: 'off'\n  vault_only: true\n";
+        // the hub's profile without them: taken out, the rest of their sections kept, an empty section gone
+        std::fs::write(&hub, "model:\n  default: glm\n").unwrap();
+        std::fs::write(profile.join("config.yaml"), space).unwrap();
+        assert!(hub_settings_again(&profile, &hub).unwrap());
+        let back = read();
+        assert!(back.get("gateway").is_none(), "{back:?}");
+        assert_eq!(back.get("browser").and_then(|b| b.get("backend")), None);
+        assert_eq!(back.get("browser").and_then(|b| b.get("vault_only")), Some(&Yaml::Bool(true)));
+        assert_eq!(back.get("terminal").and_then(|t| t.get("backend")).and_then(Yaml::as_str), Some("docker"));
+        assert!(!hub_settings_again(&profile, &hub).unwrap()); // once
+        // the hub's profile with them (the installer's « off » for a visible desktop): as the hub has them
+        std::fs::write(&hub, "browser:\n  backend: camofox\ngateway:\n  strict: false\n").unwrap();
+        std::fs::write(profile.join("config.yaml"), space).unwrap();
+        hub_settings_again(&profile, &hub).unwrap();
+        let back = read();
+        assert_eq!(back.get("browser").and_then(|b| b.get("backend")).and_then(Yaml::as_str), Some("camofox"));
+        assert_eq!(back.get("gateway").and_then(|g| g.get("strict")), Some(&Yaml::Bool(false)));
+        // no hub profile file: as without them
+        std::fs::write(profile.join("config.yaml"), space).unwrap();
+        hub_settings_again(&profile, &dir.path().join("none.yaml")).unwrap();
+        assert!(read().get("gateway").is_none());
+    }
 
     #[test]
     fn the_hubs_api_conversations_become_the_spaces() {

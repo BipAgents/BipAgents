@@ -318,6 +318,7 @@ impl AppState {
         self.spawn(crate::mail_rules::run_forever(self.clone())); // standing mail rules: resumes, weekly line
         crate::held_approvals::start(self); // what turns nobody follows ask: kept as cards, never waited for
         self.spawn(crate::door_tls::announce_forever(self.clone())); // our door's certificate to linked households
+        self.spawn(crate::rules_live::run_forever(self.clone())); // our side of « Entre tes agents » to them
         // a household that can't be reached (a home) and one that can (a place): the calls kept for it, fetched by it
         self.spawn(crate::family_relay::serve_loopback(self.clone()));
         self.spawn(crate::family_relay::pull_forever(self.clone()));
@@ -347,6 +348,7 @@ impl AppState {
         // an agent's Hermes restarted when there is a reason, once idle (agent_restart.rs)
         self.spawn(crate::agent_restart::run_forever(self.clone()));
         self.spawn(crate::own_space::tidy_at_start(self.clone())); // others-facing agents left in the hub: out, once
+        self.spawn(crate::own_space_back::at_start(self.clone())); // agents out only because others talk to them: back
         self.spawn(crate::agent_shares::drop_relative_conversations(self.clone())); // personal shares read-only (12/11)
         self.spawn(crate::phone_exit::serve(self.clone())); // the phone exit's socket for the agents' proxy (off by default)
         if self.sleep.enabled() {
@@ -1295,6 +1297,10 @@ async fn bridge_card(
             allow,
         )?));
     }
+    // a household's proposal of « Entre tes agents » (rules_live.rs): « D'accord » or « Non merci »
+    if let Some(id) = run_id.strip_prefix(crate::rules_live::RUN_PREFIX) {
+        return Ok(Some(crate::rules_live::approve(state, id, &body.choice).await?));
+    }
     // a tip card (a feature to discover, feature_tips.rs), answered here
     if let Some(id) = run_id.strip_prefix(crate::feature_tips::RUN_PREFIX) {
         return Ok(Some(crate::feature_tips::approve(state, &agent.name, id, &body.choice).await?));
@@ -1845,8 +1851,15 @@ pub fn create_app(config: Config, options: AppOptions) -> anyhow::Result<App> {
     let config = state.config();
     crate::guide::refresh(&config); // the guide's list of agents and the setup blocks, as this bridge writes them
                                     // The skills about other agents as this bridge writes them (an update may have changed their words).
-    crate::peers::write_contacts(&config, &crate::peers::links_of(&state.links.load()), Some(&state.households));
-    crate::peers::heal_tokens(&config, &state.links); // Bot Mode only towards other households
+    // « Entre tes agents » as rules: made once from the pairs of before (rules.rs), then what they give (Bot Mode only
+    // towards other households, the contacts)
+    if let Err(exc) = crate::rules::at_start(&config) {
+        tracing::warn!(error = %exc, "agent rules not made from the pairs (every link closed until they are)");
+    }
+    crate::peers::drop_bot_mode(&config, &state.links); // Hermes' Bot Mode off everywhere (Alex 21/11)
+    if let Err(exc) = crate::peers::refresh(&config, &state.links, Some(&state.households)) {
+        tracing::warn!(error = %exc, "agent contacts not written");
+    }
     crate::shares::heal_skills(&config);
     crate::jobs::repair_titles(&config); // tasks titled with Hermes' wrapper of a steer (21/11), before any task runs
     if options.start_background {
@@ -1940,6 +1953,7 @@ fn assemble(state: &AppState, config: &Config) -> Router {
     }
     authed = authed
         .merge(crate::peers::household_admin_router())
+        .merge(crate::rules_live::router())
         .merge(crate::family_news::router())
         .merge(crate::agent_shares::router())
         .merge(crate::family_agent::router())
@@ -1965,7 +1979,6 @@ fn assemble(state: &AppState, config: &Config) -> Router {
         .merge(Router::new().nest("/v1", open))
         // The agents' Hermes through the bridge: on the LAN door, and for agents in their own space (their gateway
         // listens on a local port only). Hermes checks each agent's own key.
-        .merge(crate::peers::peer_router()) // agents' own tokens, checked against the links the person allowed
         .merge(crate::sandbox::router()) // the agents' file tools (shared folders), same tokens
         .merge(crate::card_pay::router()) // the agents' card payment tools, same tokens
         .merge(crate::vault_logins::router()) // the agents' vault tools (accounts with a vault password), same tokens
@@ -1984,6 +1997,8 @@ fn assemble(state: &AppState, config: &Config) -> Router {
         .merge(crate::family_thread::household_router()) // the family conversation changed: this person told
         .merge(crate::rooms_remote::household_router()) // their agents in this person's discussions, the same key
         .merge(crate::meet::household_router()) // a date to find together, the same key
+        .merge(crate::rules_live::household_router()) // their side of « Entre tes agents », the same key
+        .merge(crate::household_asks::household_router()) // their agents asking ours, the same key
         .nest("/desktop/static/novnc", crate::desktop::static_files())
         .merge(crate::desktop::desktop_router()); // the page and its stream: a short-lived ticket from the route above
     // The same routes, answering « matched » without running anything: what `redirect_slashes` asks.
