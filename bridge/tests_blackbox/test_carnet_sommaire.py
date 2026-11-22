@@ -369,3 +369,17 @@ def test_an_agent_may_say_the_category(bridges):
     # housekeeping, not news: « Nouveau » shows the page's last real change
     recent = bridge.get("/v1/notebook", headers=AUTH).json()["recent"]
     assert recent[0]["path"] == "Sujets/Cours de piano.md" and not recent[0]["summary"].startswith("categories"), recent[0]
+
+
+def test_no_http_cache_keeps_the_carnet(bridges):
+    """Every Carnet answer says `Cache-Control: no-store` (review of carnet-a1, B3): the phones' URLCache keeps no
+    readable copy of the Carnet, the installed 1.0 apps' included (today's /offline and /search too)."""
+    bridge = bridges.new().start()
+    write_carnet(bridge)
+    for name, path in READS:
+        got = bridge.get(path, headers=AUTH)
+        assert got.headers.get("cache-control") == "no-store", (name, dict(got.headers))
+    for got in [bridge.get("/v1/notebook/page?path=Sujets/Rien.md", headers=AUTH),
+                bridge.post("/v1/notebook/categorize", json={"path": "Sujets/Jardin.md", "categories": ["home"]}, headers=AUTH),
+                bridge.post("/v1/notebook/categorize/undo", json={"undo": "u000000000000"}, headers=AUTH)]:
+        assert got.headers.get("cache-control") == "no-store", (got.status_code, dict(got.headers))
