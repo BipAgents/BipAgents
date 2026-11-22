@@ -34,6 +34,23 @@ def tool_names(bridge, token=TOKEN):
     return [t["name"] for t in tools]
 
 
+def token_back(bridge, agent="budget"):
+    """Its tools' list changed (off takes plan_propose out: plans.rs), so the bridge registered them again, in the
+    background after « arrête de me proposer des choses », with a token of its own since this test's isn't its Hermes
+    profile's (agent_tools.rs `register_at`): once it did, this test's back."""
+    import hashlib
+    path = bridge.state_dir / "agent-tools.json"
+    ours = hashlib.sha256(TOKEN.encode()).hexdigest()
+
+    def theirs():
+        try:
+            return json.loads(path.read_text())["tokens"].get(agent) != ours
+        except (OSError, ValueError, KeyError):
+            return False
+    assert wait_until(theirs, timeout=20)
+    give_token(bridge, agent, TOKEN)
+
+
 def kept(bridge):
     path = bridge.state_dir / "agent_proactive.json"
     return json.loads(path.read_text()) if path.exists() else None
@@ -110,6 +127,7 @@ def test_stop_suggesting_turns_it_off_only_in_the_persons_own_turn(bridges, fake
         done = call(bridge, "proactive_off", {"level": "smart"}, token=TOKEN, session="api_p")
         assert done["isError"] is False and "bottom of your page" in text_of(done), done
         assert settings(bridge, "budget")["proactive"] == {"level": "off", "smart_ok": False}
+        token_back(bridge)
         again = call(bridge, "proactive_off", {}, token=TOKEN, session="api_p")
         assert "already off" in text_of(again)
         assert settings(bridge, "budget")["proactive"]["level"] == "off"

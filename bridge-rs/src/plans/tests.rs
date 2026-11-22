@@ -56,6 +56,10 @@ fn the_contract_s_texts_are_the_bridge_s() {
             ("first_card", t.first_card),
             ("moved", t.moved),
             ("cancelled", t.cancelled),
+            ("route_pending", t.route_pending),
+            ("before", t.before),
+            ("route_failed", t.route_failed),
+            ("watch_failed", t.watch_failed),
             ("notification", t.notification),
             ("summary", t.summary),
         ];
@@ -263,7 +267,7 @@ fn yes_makes_once_routines_and_none_calls_the_model() {
     change(&config, |s| s.plans.push(plan.clone()));
     let skip = vec!["m3".to_string()];
     let done = answer(&config, "vie", &plan.id, true, &skip, "api_s", now);
-    assert!(matches!(done, Some(Answer::Set { kept: 1, of: 3, passed: 1 })));
+    assert!(matches!(done, Some(Answer::Set { kept: 1, of: 3, passed: 1, watch: Some(false) })));
     let routines = crate::routines::all(&config, Some("vie"));
     assert_eq!(routines.len(), 1);
     let r = &routines[0];
@@ -301,7 +305,7 @@ fn no_thanks_forgets_it_and_keeps_its_print_only() {
 #[test]
 fn a_moved_event_shifts_the_moments_and_a_cancelled_event_removes_the_plan() {
     let start = at("2026-11-26T15:00:00+01:00");
-    let event = EventRef { source: "phone".into(), id: "e1".into(), start };
+    let event = EventRef { source: "phone".into(), id: "e1".into(), start, calendar: String::new() };
     let copy = |events: Value| args(&json!({"from": "2026-11-15", "to": "2027-01-20", "events": events}));
     let same = copy(json!([{"id": "e1", "start": "2026-11-26T15:00:00+01:00"}]));
     assert_eq!(event_news(&event, &same, PARIS), EventNews::Same);
@@ -365,4 +369,104 @@ fn plan_and_its_card_are_critical_never_auto_approved() {
     assert!(crate::approval_level::rule_of("plan").critical);
     let card = json!({"run_id": "bip-plan-x"});
     assert_eq!(crate::approval_level::classify_card(card.as_object().unwrap()), "plan");
+}
+
+/// An event of the phone's copy as `plan_propose` keeps it (read like plans.json, so a field added later is welcome).
+fn event_ref(value: Value) -> EventRef {
+    serde_json::from_value(value).unwrap()
+}
+
+/// Review 1 (B2): every occurrence of a repeating event has the same id (the iPhone's `eventIdentifier`, Android's
+/// `EVENT_ID`), the one a week before first in the copy. The plan's occurrence is never taken for another one: no
+/// « a bougé » of a week, whether the week before is still in the copy or gone from it, nor when its own occurrence
+/// went and the others stay (a moved occurrence on Android gets an id of its own).
+#[test]
+fn a_repeating_event_never_moves_the_plan_by_a_week() {
+    let start = at("2026-11-26T15:00:00+01:00");
+    let event = event_ref(json!({"source": "phone", "id": "e1", "start": start}));
+    let copy = |events: Value| args(&json!({"from": "2026-11-15", "to": "2027-01-20", "events": events}));
+    let weekly = |days: &[&str]| {
+        json!(days.iter().map(|d| json!({"id": "e1", "start": format!("2026-{d}T15:00:00+01:00"), "recurring": true}))
+            .collect::<Vec<_>>())
+    };
+    assert_eq!(event_news(&event, &copy(weekly(&["11-19", "11-26", "12-03"])), PARIS), EventNews::Same);
+    assert_eq!(event_news(&event, &copy(weekly(&["11-26", "12-03"])), PARIS), EventNews::Same);
+    assert_eq!(event_news(&event, &copy(weekly(&["11-19", "12-03"])), PARIS), EventNews::Same, "its own occurrence gone");
+    // its own occurrence moved within its day: moved
+    let later = copy(json!([{"id": "e1", "start": "2026-11-19T15:00:00+01:00", "recurring": true},
+                            {"id": "e1", "start": "2026-11-26T17:00:00+01:00", "recurring": true}]));
+    assert_eq!(event_news(&event, &later, PARIS), EventNews::Moved { start: start + 7200.0, delta: 7200.0 });
+}
+
+/// Review 1 (R5): the person took the event's calendar out of the phone's copy (the app's choice of calendars): the
+/// event is not in the copy any more, but it is not cancelled: the plan stays, no line.
+#[test]
+fn a_calendar_taken_out_of_the_copy_cancels_nothing() {
+    let start = at("2026-11-26T15:00:00+01:00");
+    let event = event_ref(json!({"source": "phone", "id": "e1", "start": start, "calendar": "C1"}));
+    let with = |calendars: Value| {
+        args(&json!({"from": "2026-11-15", "to": "2027-01-20", "calendars": calendars, "events": []}))
+    };
+    assert_eq!(event_news(&event, &with(json!([{"id": "C2", "title": "Pro"}])), PARIS), EventNews::Same);
+    assert_eq!(event_news(&event, &with(json!([{"id": "C1", "title": "Perso"}, {"id": "C2"}])), PARIS),
+               EventNews::Cancelled);
+}
+
+/// Review 1 (R3): `urgent` (the system's urgent level, through « Ne pas déranger ») is described to the agent and kept
+/// for what must be on time: never a habit's (every day), two moments of a plan at most (leaving, a check-in).
+#[test]
+fn urgent_is_described_and_kept_for_what_must_be_on_time() {
+    let schema = tool();
+    let urgent = &schema["inputSchema"]["properties"]["moments"]["items"]["properties"]["urgent"];
+    let words = urgent["description"].as_str().unwrap_or("");
+    assert!(words.contains("leave") && words.contains("check-in") && words.contains("Do Not Disturb"), "{words}");
+    let now = at("2026-11-22T18:02:00+01:00");
+    let mut habit = example("water")["arguments"].clone();
+    habit["moments"][0]["urgent"] = json!(true);
+    assert!(draft(&args(&habit), "vie", PARIS, PARIS, now).unwrap_err().contains("urgent"));
+    let mut trip = example("lisbon")["arguments"].clone();
+    for m in trip["moments"].as_array_mut().unwrap() {
+        m["urgent"] = json!(true);
+    }
+    assert!(draft(&args(&trip), "vie", PARIS, PARIS, now).unwrap_err().contains("urgent"));
+    trip["moments"][2]["urgent"] = json!(false);
+    assert!(draft(&args(&trip), "vie", PARIS, PARIS, now).is_ok());
+}
+
+/// Review 1 (B2): the event a plan would follow, as the phone's copy has it: one event, its start and calendar; a
+/// repeating one (marked, or several occurrences with that id) never.
+#[test]
+fn a_plan_follows_one_event_never_a_repeating_one() {
+    let copy = args(&json!({"from": "2026-11-15", "to": "2027-01-20", "events": [
+        {"id": "e1", "calendar": "C1", "start": "2026-11-26T15:00:00+01:00"},
+        {"id": "w1", "calendar": "C1", "start": "2026-11-19T09:00:00+01:00", "recurring": true},
+        {"id": "w1", "calendar": "C1", "start": "2026-11-26T09:00:00+01:00", "recurring": true},
+        {"id": "r1", "calendar": "C2", "start": "2026-11-26T09:00:00+01:00", "recurring": true}]}));
+    assert_eq!(phone_event(&copy, "e1", PARIS),
+               PhoneEvent::Found { start: at("2026-11-26T15:00:00+01:00"), calendar: "C1".into() });
+    assert_eq!(phone_event(&copy, "w1", PARIS), PhoneEvent::Repeating);
+    assert_eq!(phone_event(&copy, "r1", PARIS), PhoneEvent::Repeating, "one occurrence in the copy, marked");
+    assert_eq!(phone_event(&copy, "nope", PARIS), PhoneEvent::Missing);
+}
+
+/// Review 1 (R1): the person's home is the « Coordonnées » entry labelled as home (or whose « Indications » say so),
+/// never just the first one; one whose label says work never is.
+#[test]
+fn the_home_is_the_entry_labelled_home_never_the_first_one() {
+    let entry = |label: &str, hint: Option<&str>, line: &str| crate::vault_contacts::Entry {
+        id: label.into(),
+        label: label.into(),
+        hint: hint.map(str::to_string),
+        secret: args(&json!({"address_line1": line, "postal_code": "69001", "city": "Lyon", "country": "FR"})),
+    };
+    let pro = entry("Kerfy Studio (pro)", Some("pour la société"), "1 rue de l'Essai");
+    assert_eq!(home_of(&[pro.clone()]), None);
+    let home = entry("Domicile", None, "3 rue du Test");
+    assert_eq!(home_of(&[pro.clone(), home]).as_deref(), Some("3 rue du Test, 69001 Lyon, FR"));
+    for label in ["Maison", "Chez moi", "Home", "Zuhause", "Casa", "Mon domicile"] {
+        assert!(home_of(&[pro.clone(), entry(label, None, "x")]).is_some(), "{label}");
+    }
+    assert!(home_of(&[entry("Moi", Some("à la maison"), "x")]).is_some(), "its indications");
+    assert_eq!(home_of(&[entry("Home office (pro)", None, "x"), entry("Camille", None, "y")]), None);
+    assert_eq!(home_of(&[entry("Domicile", None, "")]), None, "no address in it");
 }

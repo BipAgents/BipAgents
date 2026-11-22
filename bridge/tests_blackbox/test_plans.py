@@ -419,7 +419,197 @@ def test_a_watched_mailbox_starts_with_the_plan(bridges, fakes):
     assert not_done(bad) and "watch" in text_of(bad)
     # nothing watched before « Prévoir »
     assert bridge.get("/v1/triggers", headers=AUTH).json()["items"] == []
-    assert answer(bridge, card, "once").status_code == 200
+    assert answer(bridge, card, "once").json() == {"ok": True, "choice": "once", "moments": 3, "of": 3, "passed": 0,
+                                                    "watch": True}
     [trigger] = bridge.get("/v1/triggers", headers=AUTH).json()["items"]
     assert trigger["state"] == "active" and "flytap.com" in json.dumps(trigger), trigger
+    # a few k tokens for a wake-up (§3.8): its budget the smallest
+    assert trigger["budget_tokens"] == 20_000, trigger
+    # « Ce que tes agents font tout seuls », filtered on the plan: its moments and its watch (review 1, R6)
+    listed = bridge.get("/v1/autonomous", headers=AUTH, params={"plan": card["bip_plan"]["id"]}).json()["items"]
+    assert sorted(i["kind"] for i in listed) == ["routine", "routine", "routine", "trigger"], listed
+    assert trigger["id"] in {i["ref"] for i in listed}
     assert wait_until(lambda: fakes.imap.idling >= 1, timeout=20)
+    # headers only (review 1, R2; design §3.4, §3.7): the sender's address, never its display name; the turn reads
+    # From, Subject, Date, never the text, which the bridge does not even fetch
+    from test_triggers import mail, turns
+    fetched = len(fakes.imap.commands)
+    fakes.imap.add("INBOX", 201, mail(201, "flytap.com <promo@ailleurs.io>", "Votre vol TP 433", "Promo", "<a1@x>"))
+    fakes.imap.add("INBOX", 202, mail(202, "TAP Air Portugal <info@flytap.com>", "Changement d’horaire : TP 433",
+                                      "SECRET-BODY porte 12", "<a2@flytap.com>"))
+    assert wait_until(lambda: turns(fakes), timeout=30)
+    time.sleep(1)
+    [turn] = turns(fakes)
+    note = turn["input"]
+    assert "From: info@flytap.com" in note and "Subject: Changement d’horaire : TP 433" in note and "Date: " in note
+    assert "SECRET-BODY" not in note and "mail_read" not in note and "ailleurs" not in note and "Air Portugal" not in note
+    whole = [c for c in fakes.imap.commands[fetched:] if "FETCH" in c and "BODY.PEEK[]" in c]
+    assert whole == [], whole
+    # the watch can't be made at « Prévoir » (20 routines of that kind already): said in one line, and in the answer
+    porto = trip(title="Porto", days=5, watch={"mail_from": [{"name": "TAP", "domain": "flytap.com"}]})
+    assert done(call(bridge, "plan_propose", porto, token=COACH))
+    [card] = plan_cards(bridge)
+    account = bridge.get("/v1/mail/accounts", headers=AUTH).json()["accounts"][0]["id"]
+    for i in range(19):
+        made = bridge.post("/v1/agents/coach/triggers", headers=AUTH, json={
+            "name": f"R{i}", "prompt": "Dis-moi.", "kind": "mail", "mail": {"account": account, "from": f"s{i}.example"}})
+        assert made.status_code == 200, made.text
+    assert answer(bridge, card, "once").json()["watch"] is False
+    failed = texts["watch_failed"].format(name="TAP")
+    assert wait_until(lambda: [m for m in boite_items(bridge) if m.get("text") == failed], timeout=20)
+
+
+def test_a_plan_in_a_turn_another_agent_asked_for_is_unasked_and_lands_in_the_main_conversation(bridges, fakes):
+    """Review 1 (B1, and the caps after « Initiative »'s B1): Quotidien asks Coach (« message_agent », their pair's
+    hidden conversation) and Coach proposes a plan in that turn. Its person asked nothing: unasked (one card waiting at a
+    time, two a day); its card shows in Coach's main conversation, and its moments are said there, never in the pair's
+    hidden thread (nor would « a bougé / annulé » be)."""
+    from concurrent.futures import ThreadPoolExecutor
+    from test_agent_messages import TOKENS as PAIR_TOKENS, ask
+    from test_agent_pairs import linked
+
+    bridge = bridges.new()
+    bridge.config["agents"].pop("Wellness", None)
+    linked(bridge, fakes, [{"from": "quotidien", "to": "coach"}])
+    assert bridge.patch("/v1/time", headers=AUTH, json={"auto": False, "time_zone": "Europe/Paris"}).status_code == 200
+    fakes.hermes.add_session("botchat-coach", [], title="Bot Chat", agent="coach", last_active=1.0)
+    fakes.hermes.rounds = 10_000   # Coach's run goes on until the test lets it end
+    run_id = f"r{len(fakes.hermes.started) + 1}"
+    gate = threading.Event()
+    fakes.hermes.runs[run_id] = [sse("tool.started", run_id=run_id, tool="mcp_bipagents_plan_propose", preview="x"), gate,
+                                 sse("run.completed", run_id=run_id, output="C'est prévu.")]
+    coach = PAIR_TOKENS["coach"]
+    with ThreadPoolExecutor(1) as pool:
+        asked = pool.submit(ask, bridge, "quotidien", target="bip/coach", message="Prévois son voyage à Lisbonne.")
+        assert wait_until(lambda: run_id in fakes.hermes.started and fakes.hermes.seen(f"/p/coach/v1/runs/{run_id}/events"))
+        time.sleep(0.5)
+        pair = fakes.hermes.started[run_id]["session_id"]
+        try:
+            propose(bridge, trip(), token=coach, session=pair)
+            # unasked: one card waiting at a time (asked, it would say « one plan per reply »)
+            second = call(bridge, "plan_propose", trip(title="Porto"), token=coach, session=pair)
+            assert not_done(second) and "already waits" in text_of(second), text_of(second)
+        finally:
+            gate.set()
+            fakes.hermes.rounds = 1
+        asked.result(timeout=60)
+    kept = json.loads((bridge.state_dir / "plans.json").read_text())
+    assert [m["asked"] for m in kept["made"]] == [False]
+    [card] = plan_cards(bridge)
+    places = json.loads((bridge.state_dir / "card-places.json").read_text())
+    assert places[card["run_id"]]["report"] is None, places[card["run_id"]]   # the main conversation shows it
+    assert answer(bridge, card, "once").status_code == 200
+    jobs = plan_jobs(bridge, card["bip_plan"]["id"])
+    assert jobs and all(j["origin_session_id"] is None for j in jobs), jobs
+    # its time come: said in Coach's main conversation, never the pair's
+    job = jobs[0]
+    assert bridge.post(f"/v1/routines/{job['id']}/run", headers=AUTH).status_code == 200
+    assert wait_until(lambda: [m for m in boite_items(bridge, "coach") if m.get("text") == job["say"]], timeout=20)
+    [said] = [m for m in boite_items(bridge, "coach") if m.get("text") == job["say"]]
+    assert said["session_id"] != pair, said
+
+
+def home_place(bridges, fakes):
+    """Coach in its own container (« Coordonnées » need the vault's isolation), the streets routed by the fake OSRM."""
+    from test_vault_contacts import ANSWER
+    bridge = bridges.new()
+    bridge.config["agents"]["Coach"] = {
+        "hermes_url": fakes.down.url, "hermes_key": "k" * 32, "isolated": True,
+        "python": f"{bridge.fakebin}/podman exec -i hermes-coach python", "hermes_home": "/home/hermes/.hermes"}
+    bridge.commands.rule("podman", ["exec", "-i", "hermes-coach"], stdout=ANSWER)
+    bridge.config["hermes"] = {"isolated": True, "bin": str(bridge.fakebin / "hermes"), "hub_url": fakes.hermes.url}
+    bridge.config["maps"].update(streets="osrm", streets_url=fakes.maps.url)
+    bridge.start()
+    give_token(bridge, "coach", TOKEN)
+    assert bridge.patch("/v1/time", headers=AUTH, json={"auto": False, "time_zone": "Europe/Paris"}).status_code == 200
+    return bridge
+
+
+def test_a_route_from_home_is_timed_only_after_yes_from_the_entry_labelled_home(bridges, fakes):
+    """Review 1 (R1, privacy): the person's address (« Coordonnées ») goes to the geocoder only after « Prévoir », never
+    while the card waits nor after « Non merci »; it is the entry labelled as home, never just the first one (here a
+    pro address); without such an entry the route needs its `from`. The place to go is found at once (the agent hears
+    of a place not found); the way is timed with the home's coordinates then."""
+    from test_vault_contacts import PRO
+    bridge = home_place(bridges, fakes)
+    arrive = local(4, 15, 0)
+
+    def dentist(title):
+        return {"kind": "appointment", "title": title,
+                "moments": [{"route": {"to": "Cabinet du Dr Martin", "arrive_by": arrive, "mode": "walking"}}]}
+
+    def searched():
+        return [s.params.get("q", "") for s in fakes.maps.seen("/search")]
+
+    assert bridge.post("/v1/vault", headers=AUTH, json={**PRO, "agents": ["coach"]}).status_code == 201
+    pro_only = call(bridge, "plan_propose", dentist("Ostéo"), token=TOKEN)
+    assert not_done(pro_only) and "route" in text_of(pro_only) and "home" in text_of(pro_only), text_of(pro_only)
+    home = {"kind": "address", "label": "Domicile", "full_name": "Camille Exemple", "address_line1": "3 rue du Test",
+            "city": "Lyon", "postal_code": "69001", "country": "fr", "agents": ["coach"]}
+    assert bridge.post("/v1/vault", headers=AUTH, json=home).status_code == 201
+    propose(bridge, dentist("Dentiste"))
+    [card] = plan_cards(bridge)
+    texts = TEXTS[lang_of(card)]
+    [route] = card["bip_plan"]["moments"]
+    # while the card waits: the place to go found, nothing of the person's addresses sent, no way asked
+    assert not [q for q in searched() if "Test" in q or "Essai" in q], searched()
+    assert "Cabinet du Dr Martin" in searched() and not fakes.maps.seen("/routed-foot/")
+    walking = texts["modes"]["walking"]
+    assert (route["route"], route["urgent"], route["pending"]) == (True, True, True), route
+    assert route["what"] == texts["route_pending"].format(place="Cabinet du Dr Martin", mode=walking), route
+    assert route["when_text"].endswith(texts["before"].format(time="15:00")), route
+    # « Non merci »: still nothing
+    assert answer(bridge, card, "deny").status_code == 200
+    assert not [q for q in searched() if "Test" in q or "Essai" in q], searched()
+    # « Prévoir »: the entry labelled as home, timed by the streets then (25 min on foot, 5 to spare)
+    propose(bridge, dentist("Kiné"))
+    [card] = plan_cards(bridge)
+    done = answer(bridge, card, "once")
+    assert done.status_code == 200 and done.json()["moments"] == 1, done.text
+    asked = [q for q in searched() if "Test" in q or "Essai" in q]
+    assert len(asked) == 1 and "3 rue du Test" in asked[0] and "Lyon" in asked[0], asked
+    [job] = plan_jobs(bridge, card["bip_plan"]["id"])
+    assert job["say"] == texts["route"].format(place="Cabinet du Dr Martin", n=25, mode=walking) and job["urgent"], job
+    assert datetime.datetime.fromisoformat(job["next_run_at"]).timestamp() == epoch(arrive) - 30 * 60, job
+    # the router got coordinates only
+    assert fakes.maps.seen("/routed-foot/") and not any("Test" in s.path for s in fakes.maps.seen("/routed-foot/"))
+
+
+def test_a_repeating_event_is_not_followed_and_a_calendar_taken_out_cancels_nothing(bridges, fakes):
+    """Review 1 (B2, R5): every occurrence of a repeating event has the same id on both phones, so a plan never follows
+    one (made without it, the agent told why: no « a bougé » of a week later); and the person taking a calendar out of
+    the phone's copy is no cancellation: the plan of an event of that calendar stays, no line."""
+    bridge = place(bridges, fakes)
+    assert bridge.put("/v1/calendar/agents", json={"agents": ["Coach"]}, headers=AUTH).status_code == 200
+    give_token(bridge, "coach", TOKEN)
+    today = datetime.datetime.now(PARIS).date()
+
+    def at(days, hour):
+        return datetime.datetime.fromisoformat(local(days, hour)).replace(tzinfo=PARIS).isoformat()
+
+    weekly = [{"id": "w1", "calendar": "C1", "title": "Kiné", "all_day": False, "start": at(d, 9), "end": at(d, 10),
+               "recurring": True} for d in (-3, 4)]
+    dentist = {"id": "e2", "calendar": "C2", "title": "Dentiste", "all_day": False, "start": at(4, 15), "end": at(4, 16)}
+    copy = {"from": (today - datetime.timedelta(days=7)).isoformat(),
+            "to": (today + datetime.timedelta(days=60)).isoformat(),
+            "calendars": [{"id": "C1", "title": "Perso"}, {"id": "C2", "title": "Santé"}], "events": [*weekly, dentist]}
+    assert bridge.put("/v1/calendar", json=copy, headers=AUTH).status_code == 200
+    made = propose(bridge, {"kind": "appointment", "title": "Kiné", "event": {"source": "phone", "id": "w1"},
+                            "moments": [{"at": local(3, 19), "what": "Kiné demain 9:00", "say": "Kiné demain à 9:00."}]})
+    assert "repeats" in text_of(made), text_of(made)
+    [card] = plan_cards(bridge)
+    kept = json.loads((bridge.state_dir / "plans.json").read_text())
+    assert [p.get("event") for p in kept["plans"]] == [None], kept["plans"]
+    assert answer(bridge, card, "once").status_code == 200
+    propose(bridge, {"kind": "appointment", "title": "Dentiste", "event": {"source": "phone", "id": "e2"},
+                     "moments": [{"at": local(3, 19), "what": "Dentiste demain", "say": "Dentiste demain à 15:00."}]})
+    [card] = plan_cards(bridge)
+    plan = card["bip_plan"]["id"]
+    assert answer(bridge, card, "once").status_code == 200
+    # « Santé » taken out of the copy: its events with it, but nothing was cancelled
+    taken_out = dict(copy, calendars=[{"id": "C1", "title": "Perso"}], events=weekly)
+    assert bridge.put("/v1/calendar", json=taken_out, headers=AUTH).status_code == 200
+    time.sleep(8)   # the plans' look every 5 s
+    assert len(plan_jobs(bridge, plan)) == 1
+    cancelled = [TEXTS[lang]["cancelled"].format(title="Dentiste") for lang in LANGS]
+    assert not [m for m in boite_items(bridge) if m.get("text") in cancelled]

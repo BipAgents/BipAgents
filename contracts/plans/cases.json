@@ -13,11 +13,11 @@
    "moment.what": "the moment's line on the card, plain text",
    "moment.say": "what the bridge delivers at that time, as written (one Boîte line, no model), plain text: no markup, no line breaks, links in https only",
    "moment.link": "optional, an https URL, added to `say` when not in it",
-   "moment.urgent": "optional: at the system's urgent level (Time Sensitive on the iPhone, Android 1.1's « Urgent » channel). A route moment is always urgent.",
-   "moment.route": "optional, {to (1–200), arrive_by (« YYYY-MM-DDTHH:MM » in the moment's zone), mode: walking | driving | transit, from? (1–200)}: the bridge geocodes `from` (default: the first « Coordonnées » entry this agent may read, with an address) and `to` (Nominatim, as `map_image`), asks the time by the streets (OSRM, as map_route.rs: coordinates only; transit: by car × 1.5), and writes the moment itself: at = arrive_by − the way − 5 min, rounded down to 5 min; `what` and `say` = `texts.<lang>.route`",
+   "moment.urgent": "optional: at the system's urgent level (Time Sensitive on the iPhone, Android 1.1's « Urgent » channel), described to the agent as « only for a moment that must be on time: when to leave, a check-in opening ». A route moment is always urgent. At most 2 urgent moments per plan (a route counts), never for a habit (review 1, R3).",
+   "moment.route": "optional, {to (1–200), arrive_by (« YYYY-MM-DDTHH:MM » in the moment's zone), mode: walking | driving | transit, from? (1–200)}: the bridge geocodes `to` at once (Nominatim, as `map_image`, cached) and asks the time by the streets (OSRM, as map_route.rs: coordinates only, cached; transit: by car × 1.5); it writes the moment itself: at = arrive_by − the way − 5 min, rounded down to 5 min; `what` and `say` = `texts.<lang>.route`. With `from`: timed at once. Without: from the person's home, the « Coordonnées » entry this agent may read whose label (or « Indications ») says home (« Domicile », « Maison », « Home », « Zuhause », « Casa »…; never one whose label says work, never just the first entry); none: refused. That address goes to the geocoder only after « Prévoir » (review 1, R1): until then the moment is `pending`, at = arrive_by, `what` = `say` = texts.<lang>.route_pending, its when_text « <day> <date> · texts.<lang>.before » (« jeu. 26 · avant 15:00 »); not timed at « Prévoir » (the home gone, not found, no way): left out, one Boîte line texts.<lang>.route_failed",
    "repeat": "habit only, required: {days: daily | weekdays | weekends | [mon, tue, wed, thu, fri, sat, sun], times: [« HH:MM »] (1 to 4), weeks: 1 to 12}. Each time of day is one routine on a clock « vers » that time (a stable shift of −10 to +10 min from the plan's id, Alex Q7 A), ending after `weeks` weeks (its number of runs)",
-   "watch": "optional, {mail_from: [{name (1–40), domain}] (1 to 3)}: plain host names (« flytap.com »). Needs a mailbox this agent reads; without one the plan is made without it and the agent is told",
-   "event": "optional, {source: « phone », id}: an event of the phone's calendar copy (calendar.rs) this agent reads; moved, the moments move with it; cancelled, the plan goes (§3.4). Google and CalDAV sources come with plans-sources (§6 row 7)"
+   "watch": "optional, {mail_from: [{name (1–40), domain}] (1 to 3)}: plain host names (« flytap.com »). Needs a mailbox this agent reads, and room for one more of its e-mail or link routines (20 at most); else the plan is made without it and the agent is told (« Not watched: »). Its headers only (design §3.4, §3.7; review 1, R2): a message whose From ADDRESS is at one of the domains or under one (« mail.flytap.com »), never its display name nor a domain that only contains it; the bridge fetches its headers only when only plans watch that mailbox; the agent's turn (one per e-mail of theirs, §3.8, budget 20 000 tokens) reads the sender's address, the subject and the date, never the text nor a way to read it whole",
+   "event": "optional, {source: « phone », id}: an event of the phone's calendar copy (calendar.rs) this agent reads; moved, the moments move with it; cancelled, the plan goes (§3.4). A repeating event (marked `recurring`, or several occurrences with that id: both phones give every occurrence the same id) is never followed: the plan is made without it and the agent is told (« Not followed: »). An event whose calendar left the copy is not cancelled (review 1, B2, R5). Google and CalDAV sources come with plans-sources (§6 row 7)"
   },
   "offers": "Not in this branch: `offers` and a moment's `offer` come with `offer_act` (§6 row 6). Until then `bip_plan.offers` is always [].",
   "answers_to_the_agent": {
@@ -42,7 +42,7 @@
   ]
  },
  "caps": {
-  "about": "Help without bothering (D2 A, §3.2). « Asked »: made in a turn of the person's own conversation (runs.rs `persons_own_turn`); anything else (a routine's, a watcher's, a trigger's, a task's turn, no turn at all) is « unasked ». The day is the person's (their zone).",
+  "about": "Help without bothering (D2 A, §3.2). « Asked »: made in a turn of the person's own conversation with no relative's or other household's turn going on (agent_tools.rs `persons_own_call`, the same as « Initiative »'s off switch: runs.rs `persons_own_turn`, shared_pages.rs `who`); anything else (a routine's, a watcher's, a trigger's, a task's turn, another agent's ask by « message_agent », no turn at all) is « unasked ». The day is the person's (their zone).",
   "per_reply": 1,
   "unasked_per_agent_per_day": 2,
   "unasked_per_place_per_day": 4,
@@ -56,21 +56,21 @@
   "fields": "agent, run_id, request_id (<id>), command (« plan_propose · <title> »), description (= bip_summary), choices, created_at, session_id, bip_summary, bip_detail, bip_plan",
   "bip_summary": "texts.<lang>.summary (the app 1.0's whole card); a habit counts its runs",
   "bip_detail": "One line per moment « <when_text> — <what> : <say> » (a habit: « <rhythm_text> — <what> : <say> »), then the watch line, then texts.<lang>.under_i; on the first plan card of each agent, texts.<lang>.first_card after it",
-  "bip_plan": "{id, kind, title, agent (its shown name), moments: [{id, at (Unix seconds), zone, when_text, what, say, urgent, route: bool}], rhythm_text (habit, else null), watch_text (null when it watches nothing), offers: []}",
+  "bip_plan": "{id, kind, title, agent (its shown name), moments: [{id, at (Unix seconds), zone, when_text, what, say, urgent, route: bool, pending: bool (a route from home, timed at « Prévoir »)}], rhythm_text (habit, else null), watch_text (null when it watches nothing), offers: []}",
   "when_text": "« <day> <date> · HH:MM » in the moment's zone, then texts.<lang>.other_zone when that zone is not the person's (« mer. 25 · 10:50 · heure de Lisbonne »). Days: fr lun. mar. mer. jeu. ven. sam. dim. · en Mon Tue Wed Thu Fri Sat Sun · de Mo. Di. Mi. Do. Fr. Sa. So. · es lun. mar. mié. jue. vie. sáb. dom.",
-  "push": "The existing card notification (contracts/notifications/types/card.json, key `plan_request` → `t: connector`), its words texts.<lang>.notification; pushed even under « Seulement le critique »: `plan` is critical (approval_level.rs)",
+  "push": "The existing card notification (contracts/notifications/types/card.json, variant `plan`: key `plan_request` → `t: mail_card`, the neutral « Une demande attend ton accord »; `r` the card's run id), its sealed words texts.<lang>.notification; pushed even under « Seulement le critique »: `plan` is critical (approval_level.rs)",
   "approval_kind": "plan (critical, never auto-approved, no « Toujours »)"
  },
  "answers": [
-  {"name": "once", "body": {"choice": "once"}, "status": 200, "answer": {"ok": true, "choice": "once", "moments": "k", "of": "n", "passed": "n − k − skipped"}, "about": "« Prévoir »: every moment not skipped and still to come becomes a one-time routine (its `say`, `urgent`, `plan`); a habit its routines on a clock; the watch its e-mail trigger (made by the plan: on at once); the phone event watched. A moment already passed is left out (`passed`: the folded line says « un était passé »). An app 1.0's « Oui » sends no `skip`: the whole plan."},
+  {"name": "once", "body": {"choice": "once"}, "status": 200, "answer": {"ok": true, "choice": "once", "moments": "k", "of": "n", "passed": "n − k − skipped", "watch": "true | false, only when the plan watches e-mails"}, "about": "« Prévoir »: every moment not skipped and still to come becomes a one-time routine (its `say`, `urgent`, `plan`); a route from home is timed first (R1); a habit its routines on a clock; the watch its e-mail trigger (made by the plan: on at once); the phone event watched. A moment already passed is left out (`passed`: the folded line says « un était passé »). What can't be set up says so in one Boîte line, no model: a route not timed (texts.<lang>.route_failed, the moment left out), the watch not made (texts.<lang>.watch_failed, `watch: false`; review 1, R6). An app 1.0's « Oui » sends no `skip`: the whole plan."},
   {"name": "once_skip", "body": {"choice": "once", "skip": ["<moment id>"]}, "status": 200, "about": "An app 1.1's « Prévoir » with moments unticked: those are left out."},
   {"name": "deny", "body": {"choice": "deny"}, "status": 200, "answer": {"ok": true, "choice": "deny"}, "about": "« Non merci »: forgotten; its title's print kept 14 days, so the same plan is not proposed again."},
   {"name": "unknown_word", "body": {"choice": "maybe"}, "status": 422, "about": "Anything else changes nothing: the card keeps asking."},
   {"name": "answered_twice", "body": {"choice": "once"}, "status": 404}
  ],
  "after": {
-  "routines": "Each moment is a routine `once` in « Ce que tes agents font tout seuls » (an app 1.0 lists it as any « Une seule fois »), its job view with `plan` (the plan's id), `say` (the words it delivers) and `urgent`. `GET /v1/autonomous?plan=<id>` lists only that plan's.",
-  "moment": "At its time the bridge delivers `say` (+ `link`) as written: one Boîte message where the card showed (else the main conversation), pushed as a `boite` (urgent: the `urgent` variant of contracts/notifications/types/boite.json, background_turn.rs `deliver_urgent`), no turn of the model.",
+  "routines": "Each moment is a routine `once` in « Ce que tes agents font tout seuls » (an app 1.0 lists it as any « Une seule fois »), its job view with `plan` (the plan's id), `say` (the words it delivers) and `urgent`. `GET /v1/autonomous?plan=<id>` lists only that plan's: its moments and its e-mail watch (a `trigger` item).",
+  "moment": "At its time the bridge delivers `say` (+ `link`) as written: one Boîte message where the card showed for the person (card_place.rs `report`: their conversation; never a hidden one, a routine's run or another agent's ask, review 1, B1: the main conversation then), pushed as a `boite` (urgent: the `urgent` variant of contracts/notifications/types/boite.json, background_turn.rs `deliver_urgent`), no turn of the model, even with the month's credit used. The « a bougé / annulé » lines and those of « Prévoir » land there too.",
   "moved": "The phone's calendar copy shows the event at another time: every moment moves by the same delta, one Boîte line texts.<lang>.moved, no model.",
   "cancelled": "The event is gone from a copy that covers its day: the plan, its routines and its trigger go, one Boîte line texts.<lang>.cancelled, no model.",
   "end": "One day after its last moment (a habit: after its last run), the plan, its routines and its trigger go without a word.",
@@ -78,7 +78,7 @@
   "turned_off": "« Initiative » turned off: the cards still waiting go without a word; what was set goes on (the person asked for it)."
  },
  "app_1_0": {
-  "about": "What an app 1.0 (iPhone and Android) already does with a card whose run id it doesn't know: its generic card. Checked on both 1.0 apps by this contract's cases (no app change).",
+  "about": "What an app 1.0 (iPhone and Android) already does with a card whose run id it doesn't know: its generic card (no app change). Not checked by the apps yet: no app reads contracts/plans/; to check on both 1.0 apps with int-1.1 (« apps 1.0 contre le pont 1.1 »).",
   "draws": "bip_summary as the card's sentence, bip_detail under « i », « Oui » / « Non » sending `once` / `deny` (no `skip`: the whole plan), the notification's sealed words",
   "ignores": ["bip_plan"],
   "routines": "the moments as « Une seule fois » routines; `plan`, `say`, `urgent` ignored"
@@ -130,7 +130,8 @@
   "rules": {
    "apostrophes": "The bridge writes the apps' typographic apostrophe (’); the design note's straight ones are the same words.",
    "plurals": "n = 1: « 1 moment », « 1 moment » (en), « 1 Moment », « 1 momento »; « 1 semaine », « 1 week », « 1 Woche », « 1 semana ».",
-   "lang": "The agent's language (names.rs `agent_language`); another than these four: English."
+   "lang": "The agent's language (names.rs `agent_language`); another than these four: English.",
+   "new": "route_pending, before, route_failed and watch_failed are new (review 1, 22/11), not yet validated by Alex: the route from home timed after « Prévoir », a watch or a route that could not be set up."
   },
   "fr": {
    "top": "{agent} propose un plan · {title}",
@@ -150,7 +151,11 @@
    "moved": "Ton rendez-vous « {title} » a bougé : {day} à {time}. J’ai décalé les rappels.",
    "cancelled": "Ton rendez-vous « {title} » est annulé : j’ai retiré ses rappels.",
    "notification": "Propose un plan · {title}",
-   "summary": "{agent} propose un plan pour {title} : {n} moments. Le prévoir ?"
+   "summary": "{agent} propose un plan pour {title} : {n} moments. Le prévoir ?",
+   "route_pending": "Pars pour {place} · {mode}",
+   "before": "avant {time}",
+   "route_failed": "Je n’ai pas pu calculer le trajet pour {place} : pas de rappel pour partir.",
+   "watch_failed": "Je ne surveille pas les e-mails de {name} : la veille n’a pas pu être créée. Les rappels sont prévus."
   },
   "en": {
    "top": "{agent} suggests a plan · {title}",
@@ -170,7 +175,11 @@
    "moved": "Your appointment “{title}” moved: {day} at {time}. I’ve moved the reminders.",
    "cancelled": "Your appointment “{title}” was cancelled: I’ve removed its reminders.",
    "notification": "Suggests a plan · {title}",
-   "summary": "{agent} suggests a plan for {title}: {n} moments. Set it up?"
+   "summary": "{agent} suggests a plan for {title}: {n} moments. Set it up?",
+   "route_pending": "Leave for {place} · {mode}",
+   "before": "before {time}",
+   "route_failed": "I couldn’t time the way to {place}: no reminder to leave.",
+   "watch_failed": "I’m not watching e-mails from {name}: the watch couldn’t be set up. The reminders are set."
   },
   "de": {
    "top": "{agent} schlägt einen Plan vor · {title}",
@@ -190,7 +199,11 @@
    "moved": "Dein Termin „{title}“ hat sich verschoben: {day} um {time}. Ich habe die Erinnerungen verschoben.",
    "cancelled": "Dein Termin „{title}“ wurde abgesagt: Ich habe seine Erinnerungen entfernt.",
    "notification": "Schlägt einen Plan vor · {title}",
-   "summary": "{agent} schlägt einen Plan für {title} vor: {n} Momente. Einplanen?"
+   "summary": "{agent} schlägt einen Plan für {title} vor: {n} Momente. Einplanen?",
+   "route_pending": "Brich nach {place} auf · {mode}",
+   "before": "vor {time}",
+   "route_failed": "Ich konnte den Weg nach {place} nicht berechnen: keine Erinnerung zum Aufbrechen.",
+   "watch_failed": "Ich behalte E-Mails von {name} nicht im Blick: Die Überwachung ließ sich nicht einrichten. Die Erinnerungen stehen."
   },
   "es": {
    "top": "{agent} propone un plan · {title}",
@@ -210,7 +223,11 @@
    "moved": "Tu cita «{title}» ha cambiado: {day} a las {time}. He movido los recordatorios.",
    "cancelled": "Tu cita «{title}» se ha cancelado: he quitado sus recordatorios.",
    "notification": "Propone un plan · {title}",
-   "summary": "{agent} propone un plan para {title}: {n} momentos. ¿Programarlo?"
+   "summary": "{agent} propone un plan para {title}: {n} momentos. ¿Programarlo?",
+   "route_pending": "Sal hacia {place} · {mode}",
+   "before": "antes de las {time}",
+   "route_failed": "No pude calcular el trayecto hasta {place}: no habrá aviso para salir.",
+   "watch_failed": "No vigilo los correos de {name}: no se pudo activar la vigilancia. Los recordatorios están programados."
   }
  }
 }

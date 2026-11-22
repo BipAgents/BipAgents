@@ -2,12 +2,13 @@
   "$schema": "../schema.json",
   "type": "card",
   "audit_row": 15,
-  "summary": "A connector's, a secret's or a mail connector's card waits for the person's accord.",
+  "summary": "A connector's, a secret's, a mail connector's card, a tool asked for or a plan an agent proposes waits for the person's accord.",
   "producers": [
     "connectors.rs:595 (connector_request)",
     "connectors.rs:1236 (secret_request)",
     "agent_tools.rs:1428 (mail_request) -> notify_bridge_card",
-    "tool_asks.rs (tool_request) -> notify_bridge_card"
+    "tool_asks.rs (tool_request) -> notify_bridge_card",
+    "agent_tools.rs (plan_request: plans.rs PUSH_KEY) -> notify_bridge_card"
   ],
   "policy": {
     "per_agent_switch": false
@@ -216,6 +217,55 @@
         "push_type": "alert",
         "priority": 10,
         "collapse_id": "mail_card:bip-tool-card_4"
+      }
+    },
+    {
+      "name": "plan",
+      "about": "A plan its agent proposed (plans.rs, contracts/plans): the neutral line of a request, « Une demande attend ton accord », as a tool asked for; its sealed words texts.<lang>.notification; `r` the card's run id, so an older app's « Refuser » answers it through /v1/approve (`deny`: « Non merci »).",
+      "bridge": {
+        "agent": "vie",
+        "context": {
+          "title": "Vie",
+          "lang": "fr"
+        },
+        "input": {
+          "fn": "notify_bridge_card",
+          "args": {
+            "line": "Propose un plan · Lisbonne",
+            "key": "plan_request",
+            "id": "bip-plan-0123456789ab"
+          }
+        },
+        "pointer": {
+          "n": "n_contract",
+          "thread": "t_contract",
+          "message": "m_contract",
+          "badge": 1
+        }
+      },
+      "payload": {
+        "aps": {
+          "alert": {
+            "loc-key": "notif.mail_card",
+            "body": "notif.mail_card"
+          },
+          "thread-id": "vie/t_contract",
+          "mutable-content": 1,
+          "category": "BRIDGE_CARD",
+          "sound": "default",
+          "badge": 1
+        },
+        "v": 2,
+        "n": "n_contract",
+        "t": "mail_card",
+        "agent": "vie",
+        "c": "t_contract",
+        "r": "bip-plan-0123456789ab"
+      },
+      "push": {
+        "push_type": "alert",
+        "priority": 10,
+        "collapse_id": "mail_card:bip-plan-0123456789ab"
       }
     }
   ]
