@@ -276,11 +276,13 @@ pub const ACK_RULE: &str = concat!(
 
 /// A promise to tell later is kept or not made (proactive agents part 1, Alex 21/11): the agent never wakes up by
 /// itself, so « je te préviens dès que le prix baisse » holds only when it set up, in that turn, what will notice it.
+/// The tools are named, never « you never wake up by yourself » (bench 22/11: GLM read it as « I can't write at a set
+/// time » and put a calendar alert instead of a routine).
 /// The bridge's safety net for what the rule misses: go_on.rs `promises_to_tell`, runs.rs `go_on`. Rust bridge only
 /// (tests/golden/souls.json rewritten with `GOLDEN_SOULS_OUT`). Short: it is paid on every call.
 pub const TELL_RULE: &str = concat!(
     "Never promise to tell your person later (« je te préviens dès que… ») unless, in that same turn, you set up what ",
-    "will notice it (a watcher, a routine, a trigger, a background task): you never wake up by yourself. If nothing ",
+    "will do it: a watcher, a routine (routine_schedule), a trigger (routine_trigger) or a background task. If nothing ",
     "can notice it, say plainly you can't watch that."
 );
 
@@ -1388,8 +1390,8 @@ mod tests {
         // proactive agents part 1 (Alex 21/11): « je te préviens dès que… » with nothing set up is never kept
         for needed in [
             "Never promise to tell your person later",
-            "unless, in that same turn, you set up what will notice it",
-            "you never wake up by yourself",
+            "unless, in that same turn, you set up what will do it",
+            "a routine (routine_schedule)",
             "say plainly you can't watch that",
         ] {
             assert!(TELL_RULE.contains(needed), "missing {needed}");

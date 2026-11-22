@@ -27,7 +27,7 @@ def test_a_promise_to_tell_with_nothing_set_up_goes_on_once_to_set_it_up(bridges
     assert started["session_id"] == "api_c"
     note = started["input"]
     assert "[bipagents:go_on]" in note and f"« {WATCH} »" in note
-    assert "you never wake up by yourself" in note and "make a watcher" in note and "routine_schedule" in note
+    assert "nothing you set up will notice it" in note and "make a watcher" in note and "routine_schedule" in note
     assert "say plainly in one short sentence that you can't watch that" in note
     # not the work's note (« Do it now »), only its way out when the promise was in fact work
     assert "Do it now, in this answer" not in note and "If what you promised is in fact your own work" in note

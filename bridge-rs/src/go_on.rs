@@ -583,8 +583,8 @@ pub fn tell_input(reply: &str, set_up: &[String]) -> String {
     };
     format!(
         "{MARK}\n\n(A note from the app, not from your person.) Your last answer promised to tell your person later \
-(« {said} »), but nothing you set up will notice it: you never wake up by yourself, so as it stands they would wait \
-for nothing. Keep it now, in this answer: for a change on a site or an account (a price, a slot, a parcel, a grade, a \
+(« {said} »), but nothing you set up will notice it, so as it stands they would wait for nothing. Keep it now, in \
+this answer: for a change on a site or an account (a price, a slot, a parcel, a grade, a \
 balance), make a watcher (a connector with watch); at set times, a routine (routine_schedule); each time an e-mail \
 arrives, routine_trigger. Then say in one short sentence what will tell them, and how often. {have}If nothing you \
 have can notice it, say plainly in one short sentence that you can't watch that, so they don't count on it. If what \
@@ -1051,7 +1051,7 @@ mod tell_later {
         let watch = "Le vélo est à 899 €. Je te préviens dès que le prix baisse.";
         let input = tell_input(watch, &[]);
         assert!(input.starts_with(MARK) && input.contains(&format!("« {watch} »")));
-        for needed in ["you never wake up by yourself", "make a watcher", "routine_schedule", "routine_trigger",
+        for needed in ["nothing you set up will notice it", "make a watcher", "routine_schedule", "routine_trigger",
             "say plainly in one short sentence that you can't watch that", "If what you promised is in fact your own work",
             "Never send, order, book or pay"] {
             assert!(input.contains(needed), "missing {needed}");
