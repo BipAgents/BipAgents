@@ -2077,6 +2077,9 @@ fn note_locked_with(
             "create"
         } else if converted {
             "trip"
+        } else if chosen && added.is_empty() && !summary_changed && !aliases_changed {
+            // only the agent's category: housekeeping, never in « Nouveau »
+            categories::ACTION
         } else {
             "note"
         },

@@ -360,3 +360,6 @@ def test_an_agent_may_say_the_category(bridges):
     said = wrote(call(bridge, "notebook_write", {"page": "Atelier poterie", "category": ["work", "money"]}))
     assert text_of(said) == "Saved: Atelier poterie.", text_of(said)
     assert page_of(bridge, path)["categories"] == ["work", "money"]
+    # housekeeping, not news: « Nouveau » shows the page's last real change
+    recent = bridge.get("/v1/notebook", headers=AUTH).json()["recent"]
+    assert recent[0]["path"] == "Sujets/Cours de piano.md" and not recent[0]["summary"].startswith("categories"), recent[0]

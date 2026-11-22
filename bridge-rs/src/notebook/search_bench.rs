@@ -615,7 +615,19 @@ fn report() -> Value {
         let cat = write_demo(&config, lang, today);
         warnings.extend(cat.warnings.iter().map(|w| format!("{lang}: {w}")));
         let (f, bridge) = filing(&config, &cat, lang, today);
-        filed_by.insert(lang.into(), f.view());
+        let mut view = f.view();
+        // what reading every item's categories costs (no page has them written yet: all computed, as before S2)
+        let mut runs: Vec<f64> = (0..5)
+            .map(|_| {
+                let t = Instant::now();
+                std::hint::black_box(bridge_categories(&config, &cat, lang, today));
+                t.elapsed().as_secs_f64() * 1000.0
+            })
+            .collect();
+        runs.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        view["all_items_ms"] = json!((runs[2] * 100.0).round() / 100.0);
+        view["items"] = json!(bridge.len());
+        filed_by.insert(lang.into(), view);
         let fam = if lang == "nl" {
             b["fixtures"]["nl"]["family"].clone()
         } else {

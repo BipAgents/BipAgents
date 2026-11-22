@@ -94,7 +94,12 @@ pub fn valid(given: &[String], allowed: &[&str]) -> Option<Vec<String>> {
 
 /// The categories written on a page (its frontmatter) and by whom, when they are valid ones.
 pub fn stored(page: &Page) -> Option<(Vec<String>, String)> {
-    let cats = valid(&super::strings(page.front.get("categories")), &PERSON_MAY_GIVE)?;
+    // a list, or one written by hand in Obsidian as a plain value (`categories: money`)
+    let written = match page.front.get("categories") {
+        Some(Value::String(one)) => vec![one.clone()],
+        other => super::strings(other),
+    };
+    let cats = valid(&written, &PERSON_MAY_GIVE)?;
     let by = tk::str_or_empty(page.front.get("categories_by"));
     Some((cats, if BY.contains(&by.as_str()) { by } else { "auto".into() }))
 }
@@ -1070,6 +1075,8 @@ mod tests {
         assert_eq!(stored(&q).unwrap().0, ["home"]);
         // a hand-written value that is not a category: read as the bridge's
         let mut r = page("subject", "Voyage Japon", "", "");
+        r.front.insert("categories".into(), json!("Money"));
+        assert_eq!(stored(&r), Some((vec!["money".to_string()], "auto".to_string())));
         r.front.insert("categories".into(), json!(["maison"]));
         assert_eq!(stored(&r), None);
         assert_eq!(of_page(&config, Part::Main, "Sujets/Voyage Japon.md", &r).categories, ["trips"]);
