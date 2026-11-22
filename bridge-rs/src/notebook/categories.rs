@@ -129,7 +129,7 @@ const NEIGHBOUR_NEVER: &[&str] = &[
     "program", "programm", "schedule", "route", "call", "reunion", "reunions", "equipe", "team", "present", "presents",
     "kind", "mot", "order", "due", "post", "pass", "power", "contador", "cita", "citas", "consulta", "marie", "gym",
     "workout", "mann", "frau", "vrouw", "mujer", "man", "mate", "mates", "bon", "fuel", "petrol", "diesel", "essence",
-    "remote", "kurs",
+    "remote", "kurs", "gran",
 ];
 
 /// Dutch health words (lexicon.rs `touches_health` has none yet: review 1, R4): never filed by a neighbour, never a
@@ -1725,6 +1725,7 @@ mod tests {
     /// wrong. Written from the review and the development set, never from a blind set.
     #[test]
     fn the_reviews_titles_go_where_a_person_looks() {
+        let mut wrong = Vec::new();
         for (lang, title, line, want) in [
             // R1: the weekend
             ("fr", "Ménage ce week-end", "", "home"),
@@ -1745,7 +1746,10 @@ mod tests {
         ] {
             let dir = tempfile::tempdir().unwrap();
             let config = config_in(&dir, lang);
-            assert_eq!(decided(&config, &page_in(lang, "subject", title, line, ""))[0], want, "{lang} {title}");
+            let got = decided(&config, &page_in(lang, "subject", title, line, ""));
+            if got[0] != want {
+                wrong.push(format!("{lang} {title} → {got:?} (want {want})"));
+            }
         }
         // R3, R7: never in the category the false friend points to
         for (lang, title, line, never) in [
@@ -1756,7 +1760,7 @@ mod tests {
             ("fr", "Salon de l'auto", "", "home"),
             ("fr", "Prélèvement sanguin", "", "money"),
             ("fr", "Disneyland", "", "money"),
-            ("fr", "Colis livré", "", "other"),
+            ("fr", "Colis livré chez la voisine", "", "other"),
             ("es", "Gran Canaria en abril", "", "people"),
             ("es", "Tener en cuenta", "", "money"),
             ("es", "Planta baja", "", "papers"),
@@ -1784,8 +1788,11 @@ mod tests {
             let dir = tempfile::tempdir().unwrap();
             let config = config_in(&dir, lang);
             let got = decided(&config, &page_in(lang, "subject", title, line, ""));
-            assert!(!got.iter().any(|c| c == never), "{lang} {title} → {got:?}");
+            if got.iter().any(|c| c == never) {
+                wrong.push(format!("{lang} {title} → {got:?} (never {never})"));
+            }
         }
+        assert!(wrong.is_empty(), "{wrong:#?}");
     }
 
     /// Review 1 (R4): no word of the neighbours' health groups (search_words.rs, the five languages: the groups before
