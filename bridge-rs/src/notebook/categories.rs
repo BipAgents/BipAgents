@@ -129,7 +129,7 @@ const NEIGHBOUR_NEVER: &[&str] = &[
     "program", "programm", "schedule", "route", "call", "reunion", "reunions", "equipe", "team", "present", "presents",
     "kind", "mot", "order", "due", "post", "pass", "power", "contador", "cita", "citas", "consulta", "marie", "gym",
     "workout", "mann", "frau", "vrouw", "mujer", "man", "mate", "mates", "bon", "fuel", "petrol", "diesel", "essence",
-    "remote", "kurs", "gran",
+    "remote", "kurs", "gran", "stage", "stages",
 ];
 
 /// Dutch health words (lexicon.rs `touches_health` has none yet: review 1, R4): never filed by a neighbour, never a
@@ -1777,7 +1777,7 @@ mod tests {
             ("de", "Wohnung in Berlin", "", "trips"),
             ("en", "Pea and mint soup", "", "money"),
             ("en", "Chore rota", "", "work"),
-            ("en", "Meter reading", "", "other"),
+            ("en", "Meter reading for the energy supplier", "", "other"),
             ("en", "Concrete for the patio", "", "trips"),
             ("en", "Permission slip", "", "work"),
             ("en", "Interpreter", "", "money"),
@@ -1787,9 +1787,9 @@ mod tests {
         ] {
             let dir = tempfile::tempdir().unwrap();
             let config = config_in(&dir, lang);
-            let got = decided(&config, &page_in(lang, "subject", title, line, ""));
+            let (got, word) = decide(&config, Part::Main, "Sujets/x.md", &page_in(lang, "subject", title, line, ""), None);
             if got.iter().any(|c| c == never) {
-                wrong.push(format!("{lang} {title} → {got:?} (never {never})"));
+                wrong.push(format!("{lang} {title} → {got:?} by {word:?} (never {never})"));
             }
         }
         assert!(wrong.is_empty(), "{wrong:#?}");

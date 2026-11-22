@@ -673,7 +673,7 @@ pub const CATEGORY_WORDS: &[(&[&str], &[&str])] = &[
         // carnet-categories (22/11)
         "embauche", "convention de stage", "stage de 3e", "stage de fin d etudes", "rapport de stage", "stagiaire",
         "alternance", "lettre de motivation", "pot de depart",
-        "notes de frais", "note de frais", "frais de deplacement", "seminaire", "compte rendu", "rapport=", "visio=",
+        "notes de frais", "note de frais", "frais de deplacement", "seminaire", "rapport=", "visio=",
         "rtt=", "conges payes", "fiche de poste", "demission", "licenciement", "rupture conventionnelle",
         "france travail", "pole emploi", "auto entrepreneur", "micro entreprise", "linkedin", "internship", "intern=",
         "apprenticeship", "cover letter", "cover letters", "pay rise", "payrise", "appraisal", "performance review",
