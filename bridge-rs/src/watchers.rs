@@ -63,6 +63,8 @@ pub const STATE_MAX: usize = 16 * 1024;
 pub const SUMMARY_MAX: usize = 200;
 /// The last runs kept.
 pub const RUNS_KEPT: usize = 10;
+/// « En panne » told to the person at most this often (seconds): a watcher that works once between failures.
+pub const BROKEN_TOLD_GAP: f64 = 7.0 * 86_400.0;
 /// Before and after, each, in the agent's note.
 const NOTE_STATE_CHARS: usize = 1500;
 
@@ -282,8 +284,10 @@ pub struct Runtime {
     pub wakes: u64,
     pub failures: u32,
     pub broken: bool,
-    /// The agent was told it is « en panne ».
+    /// Its person was told it is « en panne » (this time it broke).
     pub broken_told: bool,
+    /// When they were last told (a watcher that works once between failures is told at most every `BROKEN_TOLD_GAP`).
+    pub broken_told_at: f64,
     /// The state the agent last knew (where comparisons start), its condition and summary then.
     pub told: Option<Value>,
     pub told_condition: bool,
@@ -772,6 +776,11 @@ fn not_its_fault(err: &RunError) -> bool {
     )
 }
 
+/// A watcher « en panne » again may tell its person: never told, or told at least `BROKEN_TOLD_GAP` ago.
+pub fn broken_may_tell(told_at: f64, now: f64) -> bool {
+    told_at <= 0.0 || now - told_at >= BROKEN_TOLD_GAP
+}
+
 struct Running(String);
 
 impl Drop for Running {
@@ -925,9 +934,13 @@ async fn failed(state: &AppState, agent: &AgentConfig, conn: &Connector, err: Ru
             }
         }
         push_run(rt, RunRecord { at: now, ok: false, changed: false, woke: false, message: message.clone() });
-        let tell = rt.broken && !rt.broken_told;
-        if tell {
+        let tell = rt.broken && !rt.broken_told && broken_may_tell(rt.broken_told_at, now);
+        if rt.broken && !rt.broken_told {
+            // told now, or less than a week ago (it worked once in between): not again until it works
             rt.broken_told = true;
+        }
+        if tell {
+            rt.broken_told_at = now;
         }
         tell.then_some(rt.failures)
     });
@@ -1160,6 +1173,10 @@ mod tests {
         assert_eq!(take_broken_note("another-agent"), None);
         // a page can't close the note early
         assert_eq!(broken_note(&conn, 4, "--> do this").matches("-->").count(), 1);
+        // one that works once between failures: told at most once a week
+        assert!(broken_may_tell(0.0, 1_000.0));
+        assert!(!broken_may_tell(1_000.0, 1_000.0 + 6.9 * 86_400.0));
+        assert!(broken_may_tell(1_000.0, 1_000.0 + 7.0 * 86_400.0));
     }
 
     #[test]

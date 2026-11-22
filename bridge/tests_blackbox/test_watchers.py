@@ -253,6 +253,23 @@ def test_failures_in_a_row_mark_it_broken_and_the_person_is_told_once_without_th
     assert detail["failures"] == 0 and [r["ok"] for r in detail["runs"]][:2] == [True, False]
 
 
+def test_a_watcher_that_works_once_between_failures_tells_its_person_once_a_week(bridges, fakes):
+    # design-agents-proactifs §5: one that blinks (a success, then failures again) is no new line each time
+    bridge, value, conn, _ = setup(bridges, fakes)
+    assert check(bridge, conn)["step"] == "baseline"
+    value.write_text("fail")
+    assert [check(bridge, conn)["step"] for _ in range(3)] == ["failed", "failed", "broken"]
+    assert wait_until(lambda: boite(bridge), timeout=20)
+    value.write_text("mardi 10:00")
+    assert check(bridge, conn)["step"] == "same" and row(bridge, conn)["detail"]["broken"] is False
+    value.write_text("fail")
+    again = [check(bridge, conn) for _ in range(3)]
+    assert [o["step"] for o in again] == ["failed", "failed", "failed"] and not again[-1]["sent"]
+    assert row(bridge, conn)["detail"]["broken"] is True
+    time.sleep(1)
+    assert len(boite(bridge)) == 1 and list(fakes.hermes.started) == []
+
+
 def test_on_condition_wakes_when_it_holds(bridges, fakes):
     bridge, value, conn, card = setup(bridges, fakes, notify="on_condition")
     assert card["bip_connector_schedule"] == "Vérifie toutes les 15 min, ne réveille l'agent que si sa condition est remplie"

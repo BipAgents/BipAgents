@@ -12,6 +12,10 @@
 //! an app, a group discussion, a relative's or a guest's turn, a turn the brake stopped or that handed work over; a
 //! Live call's turns are not runs (live_turns.rs). An answer whose end asks the person anything (« Je te prépare le
 //! panier ? », « Dis-moi lequel et je m'y mets ») waits for them: no nudge. Bench: internal/notes/promise-stop.md.
+//!
+//! The same continuation for a turn, working or not, whose end promises to tell the person later (« je te préviens dès
+//! que le prix baisse ») with nothing set up in it to notice it (`promises_to_tell`, `nudge`; proactive agents part 1,
+//! Alex 21/11): told to set up a watcher, a routine or a trigger now, or to say plainly it can't watch that.
 
 use std::sync::LazyLock;
 
@@ -911,8 +915,12 @@ mod seventh_review {
         let missed: Vec<&str> = said.iter().copied().filter(|s| !promises(s)).collect();
         assert!(missed.is_empty(), "real promises not caught: {missed:#?}");
     }
+}
 
-    // --- a promise to tell later (proactive agents, part 1) ---------------------------------------------------------
+/// A promise to tell later (proactive agents, part 1).
+#[cfg(test)]
+mod tell_later {
+    use super::*;
 
     #[test]
     fn a_promise_to_tell_later_is_caught_in_the_five_languages() {
