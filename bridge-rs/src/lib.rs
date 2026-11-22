@@ -215,6 +215,8 @@ pub mod phone_rights;
 pub mod reminders;
 pub mod rooms;
 pub mod routines;
+// plans an agent proposes on its own (proactive agents, part 3)
+pub mod plans;
 pub mod rooms_handoff;
 pub mod rooms_memory;
 pub mod rooms_remote;

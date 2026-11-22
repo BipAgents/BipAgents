@@ -121,6 +121,7 @@ pub const TABLE: &[Rule] = &[
     rule("trigger", true, false, "bip-trig-", "lets an e-mail or a link from outside start the agent"),
     rule("site_send", true, false, "bip-site- (the proxy's cut, or the agent's sandbox_sites_request)", "Alex 11/11 (was not critical since 6/11; security audit PI-7, BV-9): data sent to a site never validated for that agent; one tool call would have opened an attacker-named host for unlimited sending, no push, no undo; reading sites never asks"),
     rule("routine_way", true, false, "bip-rout- (with bip_routine)", "Alex 11/11 (audit PI-6, was not critical since 6/11): a routine its agent made starts only with this answer, then runs unattended with all its tools"),
+    rule("plan", true, false, "bip-plan-", "Alex 22/11 (§3.4): a plan the agent proposed on its own; « Prévoir » sets its moments (routines that run unattended) and what it watches (an e-mail trigger)"),
     rule("routine_change", true, false, "bip-rout- (no bip_routine)", "the agent proposes new words or a new time for a routine, or wants it back on: it then runs unattended with all its tools (PI-6, 11/11)"),
     rule("phone_exit", true, false, "bip-exit-", "uses the person's phone and home connection"),
     rule("agent_hops", true, false, "bip-hops-", "agents went on writing to each other past the cap (« Continuer l'échange ? »): more model calls, no person in the loop"),
@@ -171,8 +172,9 @@ pub fn classify_card(item: &Dict) -> &'static str {
     if run.starts_with(crate::routines::RUN_PREFIX) && item.get("bip_routine").is_none() {
         return "routine_change"; // an agent's proposal for a routine (routines.rs): asked at every level
     }
-    const PREFIXES: [(&str, &str); 11] = [
+    const PREFIXES: [(&str, &str); 12] = [
         (crate::routines::RUN_PREFIX, "routine_way"),
+        (crate::plans::RUN_PREFIX, "plan"),
         (crate::sandbox_sites::RUN_PREFIX, "site_send"),
         (crate::vault_logins::RUN_PREFIX, "vault_login"),
         (crate::secrets::RUN_PREFIX, "secret"),
@@ -1240,7 +1242,7 @@ mod tests {
         // what Alex named critical
         for kind in ["payment", "secret", "vault_login", "held_mail", "family_send", "mail_trash", "files_delete",
                      "connector", "meet", "command", "phone_exit", "agent_hops", "task_more", "guide_proposal",
-                     "routine_change", "routine_way", "site_send"] {
+                     "routine_change", "routine_way", "site_send", "plan"] {
             assert!(rule_of(kind).critical, "{kind}");
         }
         for kind in ["mail_archive", "mail_move", "mail_mark_read", "mail_rule", "task_start", "files_write"] {
@@ -1269,6 +1271,7 @@ mod tests {
         assert_eq!(kind("bip-login-x"), "vault_login");
         assert_eq!(kind("bip-conn-x"), "connector");
         assert_eq!(kind("bip-trig-x"), "trigger");
+        assert_eq!(kind("bip-plan-x"), "plan");
         assert_eq!(kind("bip-exit-x"), "phone_exit");
         assert_eq!(kind("bip-hops-x"), "agent_hops");
         assert_eq!(kind("bip-space-x"), "space");

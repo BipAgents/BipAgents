@@ -15,6 +15,7 @@ from bbkit.common import AUTH, boite_items, sse
 from bbkit.mcp import call, give_token, not_done, rpc, text_of
 from bbkit.servers import wait_until
 from conftest import managed_install, profile, wait_registered
+from test_agents_admin import managed
 from test_mailbox import add_mailbox
 from test_triggers import mail_setup
 
@@ -22,6 +23,8 @@ CASES = json.loads((Path(__file__).resolve().parents[2] / "contracts" / "plans" 
 TEXTS = CASES["texts"]
 LANGS = ("fr", "en", "de", "es")
 TOKEN = "coach-token-" + "p" * 30
+DEVICE = "d" * 64
+NOW = "2026-11-22T08:00:00.000Z"
 PARIS = ZoneInfo("Europe/Paris")
 
 
@@ -40,6 +43,9 @@ def lang_of(card):
 
 def place(bridges, fakes, agents=("coach",), change=None):
     bridge = bridges.new()
+    # a phone to push to
+    bridge.seed_db([("INSERT INTO devices (token, environment, agent_ids, created_at, updated_at) VALUES (?,?,?,?,?)",
+                     (DEVICE, "sandbox", "[]", NOW, NOW))])
     home = managed_install(bridge, fakes, agents=agents)
     for name in agents:
         profile(home, name)
@@ -133,7 +139,9 @@ def test_a_trip_is_one_card_with_its_moments_and_nothing_runs_before_yes(bridges
     assert wait_until(lambda: [p for p in fakes.apns.payloads() if card["request_id"] in json.dumps(p)], timeout=20)
     kinds = {k["kind"]: k for k in bridge.get("/v1/approval-level", headers=AUTH).json()["kinds"]}
     assert kinds["plan"]["critical"] is True
-    # a second plan card's « i » no longer repeats where to set it
+    # a second plan card's « i » no longer repeats where to set it (unasked: one waiting at a time, so « Non merci »
+    # to the first)
+    assert answer(bridge, card, "deny").status_code == 200
     propose(bridge, trip(title="Porto", days=5))
     porto = next(c for c in plan_cards(bridge) if c["bip_plan"]["title"] == "Porto")
     assert texts["first_card"] not in porto["bip_detail"] and texts["under_i"] in porto["bip_detail"]
@@ -280,8 +288,9 @@ def test_caps_one_plan_per_reply_two_unasked_per_agent_four_per_place_one_waitin
         give_token(bridge, agent, token)
     n = iter(range(100))
 
-    def plan(agent, **kw):
-        return call(bridge, "plan_propose", trip(title=f"Voyage {next(n)}"), token=tokens[agent], **kw)
+    def plan(agent, session="api_unasked"):
+        # unasked: a call from a conversation no turn of the person's runs in (a routine's, a watcher's…)
+        return call(bridge, "plan_propose", trip(title=f"Voyage {next(n)}"), token=tokens[agent], session=session)
 
     def deny_all(agent):
         for card in plan_cards(bridge, agent):
@@ -321,20 +330,28 @@ def test_caps_one_plan_per_reply_two_unasked_per_agent_four_per_place_one_waitin
 
 
 def test_off_proposes_nothing_and_an_agent_others_talk_to_never_does(bridges, fakes):
-    bridge = place(bridges, fakes)
+    """As contracts/proactive: « off » is kept in <data>/agent_proactive.json (proactive-level's file), an agent other
+    people talk to (a project agent) has no « Initiative » at all."""
+    bridge, _ = managed(bridges, fakes, isolated=True)
+    assert bridge.post("/v1/agents", headers=AUTH, json={"name": "Budget", "kind": "finance"}).status_code == 201
+    own = "budget-token-" + "o" * 30
+    give_token(bridge, "budget", own)
 
-    def listed():
-        return "plan_propose" in [t["name"] for t in rpc(bridge, "tools/list", token=TOKEN).json()["result"]["tools"]]
+    def listed(token=own):
+        return "plan_propose" in [t["name"] for t in rpc(bridge, "tools/list", token=token).json()["result"]["tools"]]
 
     assert listed()
-    # « Initiative » off (contracts/proactive: the same file proactive-level keeps)
-    (bridge.state_dir / "agent_proactive.json").write_text(json.dumps({"levels": {"coach": "off"}}))
+    (bridge.state_dir / "agent_proactive.json").write_text(json.dumps({"levels": {"budget": "off"}}))
     assert not listed()
-    refused = call(bridge, "plan_propose", trip(), token=TOKEN)
+    refused = call(bridge, "plan_propose", trip(), token=own)
     assert not_done(refused) and "turned your suggestions off" in text_of(refused)
-    assert plan_cards(bridge) == []
-    (bridge.state_dir / "agent_proactive.json").write_text(json.dumps({"levels": {"coach": "smart"}}))
-    assert listed() and call(bridge, "plan_propose", trip(), token=TOKEN)["isError"] is False
+    assert plan_cards(bridge, "budget") == []
+    (bridge.state_dir / "agent_proactive.json").write_text(json.dumps({"levels": {"budget": "smart"}}))
+    assert listed() and call(bridge, "plan_propose", trip(), token=own)["isError"] is False
+    # turned off again: the card still waiting goes without a word (§2.1)
+    assert len(plan_cards(bridge, "budget")) == 1
+    (bridge.state_dir / "agent_proactive.json").write_text(json.dumps({"levels": {"budget": "off"}}))
+    assert wait_until(lambda: plan_cards(bridge, "budget") == [], timeout=20)
     # an agent other people talk to (a project agent): never listed, never made
     made = bridge.post("/v1/project-agents", headers=AUTH, json={"name": "Voyage à Lisbonne", "lang": "fr",
                                                                   "ends": time.time() + 86400 * 10, "category": "creative"})
@@ -342,7 +359,7 @@ def test_off_proposes_nothing_and_an_agent_others_talk_to_never_does(bridges, fa
     project = made.json()["agent"]
     other = "project-token-" + "x" * 30
     give_token(bridge, project, other)
-    assert "plan_propose" not in [t["name"] for t in rpc(bridge, "tools/list", token=other).json()["result"]["tools"]]
+    assert not listed(other)
     assert not_done(call(bridge, "plan_propose", trip(), token=other)) and plan_cards(bridge, project) == []
 
 

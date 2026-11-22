@@ -577,7 +577,14 @@ pub fn meant<'a>(tools: &'a [Value], name: &'a str, arguments: &crate::Dict) -> 
     let mut others = tools.iter().filter(|t| t.get("name").and_then(Value::as_str) != Some(name) && fits(t, arguments));
     match (others.next(), others.next()) {
         (Some(only), None) => match only.get("name").and_then(Value::as_str) {
-            Some(other) if !NEVER_REROUTED.contains(&other) && !NEVER_REROUTED.contains(&name) => other,
+            // a plan's card (plans.rs) as the others: never run as another tool, nor another tool as it
+            Some(other)
+                if !NEVER_REROUTED.contains(&other)
+                    && !NEVER_REROUTED.contains(&name)
+                    && ![other, name].contains(&crate::plans::TOOL_NAME) =>
+            {
+                other
+            }
             _ => name,
         },
         _ => name,

@@ -473,6 +473,11 @@ fn own_tools(config: &Config, agent: &AgentConfig, offer: bool) -> Vec<Value> {
     if crate::phone_exit::agent::offered(config, &agent.name) {
         tools.push(crate::phone_exit::agent::tool());
     }
+    // a plan it proposes on its own (plans.rs): « Initiative » not off, its own person's agent, its routines on
+    if crate::plans::offered(config, &agent.name) {
+        tools.push(crate::plans::tool());
+    }
+
     if !crate::routines::enabled(config, &agent.name) {
         tools.retain(|t| t["name"] != crate::routines::TOOL_NAME);
     }
@@ -2373,6 +2378,21 @@ async fn mcp_call(
             wrote(&agent.name, &name, &arguments, &mut result);
             return Ok(answer(result));
         }
+    }
+    if name == crate::plans::TOOL_NAME {
+        // ONE card for the whole plan (plans.rs), in this turn's conversation and pushed; nothing to tell the agent
+        // when it is answered (`taken`): « Prévoir » runs no model
+        let asked = turn_run.as_deref().is_some_and(|run| state.hub.persons_own_turn(&agent.name, run));
+        let cards_before = crate::card_place::waiting(&state, &agent.name);
+        let called = crate::plans::call(&state, &agent, &arguments, asked, turn_run.as_deref()).await;
+        let mut result = called.result;
+        if let Some((line, id)) = called.card {
+            crate::card_place::place_new(&state, &agent, &cards_before, turn_run.as_deref()).await;
+            crate::card_place::taken(&state.config(), &format!("{}{id}", crate::plans::RUN_PREFIX));
+            state.push.notify_bridge_card(&agent.name, &line, crate::plans::PUSH_KEY, &id).await;
+        }
+        wrote(&agent.name, &name, &arguments, &mut result);
+        return Ok(answer(result));
     }
     if name == "calendar_delete" {
         // critical (audit 1.3, Alex 17/11: as mail_trash): a card before each event deleted (person_ok.rs)

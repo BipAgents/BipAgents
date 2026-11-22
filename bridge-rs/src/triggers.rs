@@ -588,7 +588,7 @@ fn apply(config: &Config, t: &mut Trigger, f: &Fields) -> Result<(), String> {
     Ok(())
 }
 
-/// A new trigger of `agent`. `by`: `person` (active at once) or `agent` (waits for the person's OK on a card).
+/// A new trigger of `agent`. `by`: `person` or `plan` (active at once) or `agent` (waits for the person's OK on a card).
 pub fn create(config: &Config, agent: &str, f: &Fields, by: &str) -> Result<Trigger, String> {
     let kind = f.kind.as_deref().unwrap_or("").trim().to_lowercase();
     if kind != MAIL && kind != LINK {
@@ -612,7 +612,8 @@ pub fn create(config: &Config, agent: &str, f: &Fields, by: &str) -> Result<Trig
     if kind == LINK {
         t.token = new_token();
     }
-    if by == "person" {
+    if by == "person" || by == crate::plans::MAKER {
+        // the person's own, or a plan's e-mail watch: the person said « Prévoir » to the plan's card (plans.rs)
         t.enabled = true;
     } else {
         t.card = Some(Card { id: py::token_hex(6), at: now });

@@ -32,7 +32,8 @@
 //!                 `notify`, `last_check`, `last_change` (Unix seconds or null), `broken` (« en panne »), `summary`
 //!                 (what it saw last, plain words), `wakes`, `pending`, `description`, `icon`
 //!
-//!     GET  /v1/autonomous[?agent=]    {items, approved, budgets_eur, budgets_tokens}
+//!     GET  /v1/autonomous[?agent=][&plan=]    {items, approved, budgets_eur, budgets_tokens}   (`plan`: that plan's
+//!                                             moments only, plans.rs)
 //!
 //! `approved`: « Validé pour toi », what went through without asking (a « Toujours », « Seulement le critique »), one
 //! row per run and kind (« 12 e-mails rangés »), each line with « Annuler » while it can be undone
@@ -556,8 +557,17 @@ async fn list_route(State(state): State<AppState>, q: web::QueryMap) -> ApiResul
         ),
         _ => None,
     };
-    let items = listing(&state, only.as_deref()).await;
+    let mut items = listing(&state, only.as_deref()).await;
     let config = state.config();
+    if let Some(plan) = web::query_str(&q, "plan", false, Some(40))?.filter(|p| !p.is_empty()) {
+        // one plan's moments (plans.rs, contracts/plans): its routines only
+        let ids: Vec<String> = crate::routines::all(&config, None)
+            .into_iter()
+            .filter(|r| r.plan.as_deref() == Some(plan.as_str()))
+            .map(|r| r.id)
+            .collect();
+        items.retain(|i| i["kind"] == "routine" && i["ref"].as_str().is_some_and(|r| ids.iter().any(|id| id == r)));
+    }
     let (euros, tokens) = crate::jobs::budgets(&config);
     // what went through without asking (a « Toujours », « Seulement le critique »), folded per run: here, never in the
     // Boîte (approval_level.rs `groups`)

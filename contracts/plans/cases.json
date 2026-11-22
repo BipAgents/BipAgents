@@ -74,7 +74,8 @@
   "moved": "The phone's calendar copy shows the event at another time: every moment moves by the same delta, one Boîte line texts.<lang>.moved, no model.",
   "cancelled": "The event is gone from a copy that covers its day: the plan, its routines and its trigger go, one Boîte line texts.<lang>.cancelled, no model.",
   "end": "One day after its last moment (a habit: after its last run), the plan, its routines and its trigger go without a word.",
-  "waiting_lapsed": "A card still waiting when its last moment has passed goes without a word."
+  "waiting_lapsed": "A card still waiting when its last moment has passed goes without a word.",
+  "turned_off": "« Initiative » turned off: the cards still waiting go without a word; what was set goes on (the person asked for it)."
  },
  "app_1_0": {
   "about": "What an app 1.0 (iPhone and Android) already does with a card whose run id it doesn't know: its generic card. Checked on both 1.0 apps by this contract's cases (no app change).",
