@@ -526,10 +526,14 @@ async fn the_phone_exit_s_refusal_and_a_challenge_page_are_said_to_the_agent() {
                 let mut line = String::new();
                 tokio::io::BufReader::new(read).read_line(&mut line).await.unwrap();
                 asked.lock().unwrap().push(line.trim().to_string());
+                // the challenge's card, then (Alex 22/11, review 1) the person chose their phone for the site
+                let asks = asked.lock().unwrap().iter().filter(|l| l.starts_with("ASK")).count();
                 let answer = if line.starts_with("WHY vie www.ameli.fr") {
                     "paused 3\n"
                 } else if line.starts_with("WHY") {
                     "NONE\n"
+                } else if asks > 1 {
+                    "LIVE\n"
                 } else {
                     "CARD\n"
                 };
@@ -539,6 +543,7 @@ async fn the_phone_exit_s_refusal_and_a_challenge_page_are_said_to_the_agent() {
     }
     config.insert("agent".into(), json!("vie"));
     config.insert("exit_sock".into(), json!(sock.to_string_lossy()));
+    config.insert("hand_wait_seconds".into(), json!(20.0));
     let out = Out::default();
     let proxy = Proxy::new(config, Box::new(out.clone()));
     proxy.handle(init()).await;
@@ -559,11 +564,13 @@ async fn the_phone_exit_s_refusal_and_a_challenge_page_are_said_to_the_agent() {
         .handle(json!({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "get_page_content"}}))
         .await;
     assert_eq!(texts(&out).len(), 2);
-    // a challenge page: the hub asked, the card said
+    // a challenge page: the hub asked (its card), the person's phone offered beside the hand; they chose their phone
+    // while the call waited: the agent reloads the page
+    let started = std::time::Instant::now();
     proxy.handle(navigate(3, "https://www.leboncoin.fr/challenge")).await;
     let said = texts(&out);
-    assert!(said[1].contains("Cloudflare challenge") && said[1].contains("just got a card"), "{said:?}");
-    assert!(said[1].contains("Never solve"));
+    assert_eq!(said[1], browser_mcp::check_phone_text("leboncoin.fr"), "{said:?}");
+    assert!(started.elapsed() < Duration::from_secs(15));
     // an ordinary page: nothing added
     proxy.handle(navigate(4, "https://www.doctolib.fr/")).await;
     assert_eq!(texts(&out), vec!["did navigate".to_string()]);
@@ -711,18 +718,20 @@ characters of this page. To read on, run execute_script with: "
     // a click too; a call without an instance waits for nothing
     std::fs::remove_file(tmp.join("calls.jsonl")).unwrap();
     proxy.handle(tool(4, "click_element", json!({"instance_id": "319ceedb", "selector": "a"}))).await;
-    // what the target is (never the site's terms box), the page's fingerprints before (browser_mcp `guard_before`),
-    // the click, the page's state, the check after it (`guard_after`), then the look for a bot check
-    assert_eq!(calls(tmp).len(), 6);
-    assert!(calls(tmp)[0]["arguments"]["script"].as_str().unwrap().contains("found: true"));
-    assert!(calls(tmp)[1]["arguments"]["script"].as_str().unwrap().contains("bipagents guard: before"));
-    assert_eq!(calls(tmp)[2]["arguments"]["timeout"], json!(3000), "3 s to find it, not the real server's 10");
-    assert!(calls(tmp)[4]["arguments"]["script"].as_str().unwrap().contains("bipagents guard: after"));
-    assert!(calls(tmp)[5]["arguments"]["script"].as_str().unwrap().contains("bipagents-bot-check"));
+    // the look for a form whose captcha is not answered (antibot-guard review 1: never sent), what the target is
+    // (never the site's terms box), the page's fingerprints before (browser_mcp `guard_before`), the click, the
+    // page's state, the check after it (`guard_after`), then the look for a bot check
+    assert_eq!(calls(tmp).len(), 7);
+    assert!(calls(tmp)[0]["arguments"]["script"].as_str().unwrap().contains("bipagents-bot-check"));
+    assert!(calls(tmp)[1]["arguments"]["script"].as_str().unwrap().contains("found: true"));
+    assert!(calls(tmp)[2]["arguments"]["script"].as_str().unwrap().contains("bipagents guard: before"));
+    assert_eq!(calls(tmp)[3]["arguments"]["timeout"], json!(3000), "3 s to find it, not the real server's 10");
+    assert!(calls(tmp)[5]["arguments"]["script"].as_str().unwrap().contains("bipagents guard: after"));
+    assert!(calls(tmp)[6]["arguments"]["script"].as_str().unwrap().contains("bipagents-bot-check"));
     proxy.handle(tool(5, "list_tabs", json!({"instance_id": "319ceedb"}))).await;
     proxy.handle(tool(6, "click_element", json!({"selector": "a", "timeout": 8000}))).await;
-    assert_eq!(calls(tmp).len(), 8);
-    assert_eq!(calls(tmp)[7]["arguments"]["timeout"], json!(8000), "the agent's own time kept");
+    assert_eq!(calls(tmp).len(), 9);
+    assert_eq!(calls(tmp)[8]["arguments"]["timeout"], json!(8000), "the agent's own time kept");
 
     // a screenshot: an image block, the agent's path never passed on (it would land in the container)
     std::fs::remove_file(tmp.join("calls.jsonl")).unwrap();
@@ -2001,6 +2010,8 @@ async fn review8_a_call_cancelled_while_its_browser_starts_never_reaches_the_rea
 const CHECK_SERVER: &str = r#"
 import json, os, sys
 here = os.path.dirname(os.path.abspath(__file__))
+ORDINARY = json.dumps({"title": "Accueil", "marks": [], "widgets": [], "inputs": 2, "length": 5000, "body": "",
+                       "form": False})
 for line in sys.stdin:
     m = json.loads(line)
     if "id" not in m:
@@ -2020,9 +2031,15 @@ for line in sys.stdin:
             r = {"content": [{"type": "text", "text": json.dumps(answer)}], "structuredContent": answer}
         elif name == "execute_script" and "bipagents-bot-check" in script:
             path = os.path.join(here, "page.txt")
-            page = open(path).read() if os.path.exists(path) else "<title>Accueil</title> Nos vélos"
+            page = open(path).read() if os.path.exists(path) else ORDINARY
             answer = {"success": True, "result": page, "error": None}
             r = {"content": [{"type": "text", "text": json.dumps(answer)}], "structuredContent": answer}
+        elif name == "execute_script":
+            # a script's answer that only says the words of an interstitial (review 1 B2): never a check
+            answer = {"success": True, "result": "Just a moment... Security verification", "error": None}
+            r = {"content": [{"type": "text", "text": json.dumps(answer)}], "structuredContent": answer}
+        elif name == "list_tabs":
+            r = {"content": [{"type": "text", "text": "Vérification de sécurité | Just a moment..."}]}
         elif name == "navigate":
             r = {"content": [{"type": "text", "text": json.dumps({"url": args.get("url"), "title": "page"})}]}
         else:
@@ -2030,7 +2047,17 @@ for line in sys.stdin:
     print(json.dumps({"jsonrpc": "2.0", "id": m["id"], "result": r}), flush=True)
 "#;
 
-const INTERSTITIAL: &str = "<title>Just a moment...</title> Vérification que vous êtes un humain";
+/// What the guard's look (`browser_mcp::check_probe_script`) answers on Cloudflare's interstitial.
+const INTERSTITIAL: &str = r#"{"title": "Just a moment...", "marks": ["cf_chl_opt"], "widgets": [], "inputs": 0,
+"length": 80, "body": "Vérification que vous êtes un humain", "form": false}"#;
+
+/// The look on a page with a widget: `inputs` fields to type into, `length` characters of text, `form` when the
+/// element the agent acts on sends the widget's form.
+fn widget_page(kind: &str, inputs: u64, length: u64, form: bool) -> String {
+    json!({"title": "Contact", "marks": [], "widgets": [kind], "inputs": inputs, "length": length, "body": "",
+           "form": form})
+    .to_string()
+}
 
 fn checking(tmp: &Path, clear: f64, wait: f64) -> Dict {
     std::fs::write(tmp.join("checks.py"), CHECK_SERVER).unwrap();
@@ -2085,6 +2112,8 @@ async fn a_bot_check_that_stays_is_handed_to_the_person_and_its_site_is_not_open
         serde_json::from_str(&std::fs::read_to_string(tmp.join(browser_mcp::CHECK_FILE)).unwrap()).unwrap();
     assert_eq!((note["site"].as_str(), note["kind"].as_str()), (Some("decathlon.fr"), Some("Cloudflare challenge")));
     assert!(note["at"].as_f64().unwrap() > now() - 60.0);
+    // nobody came within the wait: the last note says the agent stopped waiting (the Boîte says so, review 1)
+    assert_eq!((note["stopped"].as_bool(), note["phone"].as_bool()), (Some(true), Some(false)));
     // a second try at the site in this turn: refused, the real server never asked
     proxy.handle(go(2, "https://www.decathlon.fr/recherche?q=velo")).await;
     let lines = said(&out);
@@ -2213,10 +2242,14 @@ async fn ordinary_pages_and_a_solved_widget_trigger_nothing() {
     let out = Out::default();
     let proxy = Proxy::new(checking(tmp, 1.0, 30.0), Box::new(out.clone()));
     proxy.handle(init()).await;
+    // what the look says of an ordinary page (DataDome's tag, Cloudflare's analytics and reCAPTCHA v3's badge give no
+    // mark: `check_probe_script` looks for widgets shown and not answered), and of an article that says the words of an
+    // interstitial in its text (review 1 B2: its title is an article's)
     let pages = [
-        "<title>Annonces</title><script src=\"https://js.datadome.co/tags.js\"></script>",
-        "<title>Accueil</title> static.cloudflareinsights.com/beacon.min.js",
-        "<title>Connexion</title><div class=\"grecaptcha-badge\"></div> This site is protected by reCAPTCHA",
+        r#"{"title": "Annonces", "marks": [], "widgets": [], "inputs": 1, "length": 9000, "body": "", "form": false}"#,
+        r#"{"title": "Accueil", "marks": [], "widgets": [], "inputs": 0, "length": 200, "body": "Bienvenue", "form": false}"#,
+        r#"{"title": "Mon article", "marks": [], "widgets": [], "inputs": 0, "length": 900,
+            "body": "Just a moment... Security verification, Vérification de sécurité", "form": false}"#,
     ];
     for (n, page) in pages.iter().enumerate() {
         std::fs::write(tmp.join("page.txt"), page).unwrap();
@@ -2225,9 +2258,10 @@ async fn ordinary_pages_and_a_solved_widget_trigger_nothing() {
         assert_eq!(said(&out).len(), 1, "{page}");
         assert!(started.elapsed() < Duration::from_secs(3), "{page}");
     }
-    // a widget the page answers with its token already (`CHECK_PROBE` says none is waiting): nothing either, even
-    // when the answer's own text names it
-    std::fs::write(tmp.join("page.txt"), "<title>Connexion</title>").unwrap();
+    // a widget the page answers with its token already (the look says none is waiting): nothing either, even when
+    // the answer's own text names it
+    std::fs::write(tmp.join("page.txt"), widget_page("turnstile", 1, 900, false).replace("[\"turnstile\"]", "[]"))
+        .unwrap();
     let mut settings = checking(tmp, 1.0, 30.0);
     let server = CHECK_SERVER.replace(
         r#"r = {"content": [{"type": "text", "text": json.dumps({"url": args.get("url"), "title": "page"})}]}"#,
@@ -2243,6 +2277,153 @@ async fn ordinary_pages_and_a_solved_widget_trigger_nothing() {
     assert!(!tmp.join(browser_mcp::CHECK_FILE).exists());
     proxy.stop_child().await;
     solved.stop_child().await;
+}
+
+/// Review 1 of antibot-guard, B1: a captcha box on a page the agent only reads (a comment, contact or sign-in form's)
+/// is said, never handed over: no wait, no line in the Boîte, the site not refused.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_captcha_on_a_page_the_agent_reads_is_said_never_handed_over() {
+    let dir = tempfile::tempdir().unwrap();
+    let tmp = dir.path();
+    let out = Out::default();
+    let proxy = Proxy::new(checking(tmp, 5.0, 30.0), Box::new(out.clone()));
+    proxy.handle(init()).await;
+    for (n, kind) in ["recaptcha", "hcaptcha", "turnstile"].iter().enumerate() {
+        std::fs::write(tmp.join("page.txt"), widget_page(kind, 3, 4200, false)).unwrap();
+        let started = std::time::Instant::now();
+        proxy.handle(go(n as i64 + 1, "https://www.example-blog.fr/article")).await;
+        assert!(started.elapsed() < Duration::from_secs(3), "{kind}: never waited");
+        let lines = said(&out);
+        assert_eq!(lines.len(), 2, "{lines:?}");
+        assert!(lines[1].starts_with("A captcha (") && lines[1].contains("never answer it yourself"), "{lines:?}");
+        assert!(!lines[1].starts_with(browser_mcp::CHECK_STOP_START));
+    }
+    assert!(!tmp.join(browser_mcp::CHECK_FILE).exists(), "nothing for the person");
+    // reading it again, typing into its fields: as ever
+    proxy.handle(tool(9, "type_text", json!({"instance_id": "i1", "selector": "#message", "text": "Bonjour"}))).await;
+    assert!(!said(&out)[0].starts_with(browser_mcp::CHECK_REFUSED_START));
+    assert_eq!(navigations(tmp).len(), 3);
+    proxy.stop_child().await;
+}
+
+/// B1: sending the form a captcha guards, the captcha not answered: not sent (the click never reaches the page), the
+/// person asked; a widget alone on its page is a wall, handed over from its load.
+#[tokio::test(flavor = "multi_thread")]
+async fn sending_a_form_whose_captcha_is_not_answered_is_handed_over_and_a_lone_widget_is_a_wall() {
+    let dir = tempfile::tempdir().unwrap();
+    let tmp = dir.path();
+    let out = Out::default();
+    let proxy = Proxy::new(checking(tmp, 0.0, 1.0), Box::new(out.clone()));
+    proxy.handle(init()).await;
+    std::fs::write(tmp.join("page.txt"), widget_page("hcaptcha", 3, 4200, false)).unwrap();
+    proxy.handle(go(1, "https://www.example-shop.fr/contact")).await;
+    assert_eq!(said(&out).len(), 2);
+    // the agent sends it: the look before its click says the button sends the widget's form
+    std::fs::write(tmp.join("page.txt"), widget_page("hcaptcha", 3, 4200, true)).unwrap();
+    proxy.handle(tool(2, "click_element", json!({"instance_id": "i1", "selector": "form button"}))).await;
+    let lines = said(&out);
+    assert!(lines[0].starts_with(browser_mcp::CHECK_FORM_START) && lines[0].contains("hCaptcha"), "{lines:?}");
+    assert!(lines[0].contains(browser_mcp::CHECK_STOP_START), "{lines:?}");
+    assert!(!calls(tmp).iter().any(|c| c["name"] == "click_element"), "the click never reached the page");
+    let note: Value =
+        serde_json::from_str(&std::fs::read_to_string(tmp.join(browser_mcp::CHECK_FILE)).unwrap()).unwrap();
+    assert_eq!(note["kind"].as_str(), Some("hCaptcha"));
+    // Enter in one of its fields: the same, not pressed
+    proxy.handle(tool(3, "press_key", json!({"instance_id": "i1", "key": "Enter"}))).await;
+    assert!(said(&out)[0].starts_with(browser_mcp::CHECK_REFUSED_START));
+    // another site whose page is only a widget (a « verify you are human » page): handed over from its load
+    std::fs::remove_file(tmp.join(browser_mcp::CHECK_FILE)).unwrap();
+    std::fs::write(tmp.join("page.txt"), widget_page("turnstile", 0, 120, false)).unwrap();
+    proxy.handle(go(4, "https://www.example-wall.fr/")).await;
+    let lines = said(&out);
+    assert!(lines[1].starts_with(browser_mcp::CHECK_STOP_START) && lines[1].contains("Cloudflare Turnstile"), "{lines:?}");
+    // a click on a page whose form has no captcha left: as ever
+    std::fs::write(tmp.join("page.txt"), widget_page("hcaptcha", 3, 4200, false).replace("[\"hcaptcha\"]", "[]"))
+        .unwrap();
+    std::fs::write(tmp.join("ended"), "").unwrap();
+    proxy.handle(tool(5, "click_element", json!({"instance_id": "i1", "selector": "form button"}))).await;
+    assert_eq!(said(&out), vec!["did click_element".to_string()]);
+    proxy.stop_child().await;
+}
+
+/// B2: only a tool that loads or reads a page is looked at; a script's answer or the tabs' list that say the words of
+/// an interstitial are never a check.
+#[tokio::test(flavor = "multi_thread")]
+async fn other_tools_answers_are_never_read_as_a_check() {
+    let dir = tempfile::tempdir().unwrap();
+    let tmp = dir.path();
+    let out = Out::default();
+    let proxy = Proxy::new(checking(tmp, 5.0, 30.0), Box::new(out.clone()));
+    proxy.handle(init()).await;
+    proxy.handle(go(1, "https://www.example.org/")).await;
+    let started = std::time::Instant::now();
+    proxy.handle(tool(2, "execute_script", json!({"instance_id": "i1", "script": "document.title"}))).await;
+    proxy.handle(tool(3, "list_tabs", json!({}))).await;
+    assert!(started.elapsed() < Duration::from_secs(3));
+    assert_eq!(said(&out).len(), 1);
+    assert!(!tmp.join(browser_mcp::CHECK_FILE).exists());
+    proxy.stop_child().await;
+}
+
+/// R1: the wait ends before Hermes gives up on the call (its timeout, less a margin, from when Hermes sent it), and the
+/// other conversations' calls meanwhile hear that a check waits for the person.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_wait_ends_before_hermes_gives_up_and_the_others_hear_why() {
+    let dir = tempfile::tempdir().unwrap();
+    let tmp = dir.path();
+    std::fs::write(tmp.join("page.txt"), INTERSTITIAL).unwrap();
+    let mut settings = checking(tmp, 0.0, 600.0);
+    settings.insert("hermes_timeout_seconds".into(), json!(browser_mcp::HERMES_MARGIN + 3.0));
+    settings.insert("call_seconds".into(), json!(1.0));
+    let out = Out::default();
+    let proxy = Proxy::new(settings, Box::new(out.clone()));
+    proxy.handle(init()).await;
+    let started = std::time::Instant::now();
+    let first = {
+        let proxy = proxy.clone();
+        tokio::spawn(async move { proxy.handle(go(1, "https://www.decathlon.fr/a")).await })
+    };
+    tokio::time::sleep(Duration::from_millis(800)).await;
+    proxy.handle(go(2, "https://www.example.org/")).await;
+    let busy = out.messages().iter().find(|m| m["id"] == json!(2)).cloned().unwrap();
+    assert!(busy.to_string().contains("waiting for your person to pass a bot check"), "{busy}");
+    first.await.unwrap();
+    assert!(started.elapsed() < Duration::from_secs(10), "{:?}", started.elapsed());
+    let last = out.messages().iter().rev().find(|m| m["id"] == json!(1)).cloned().unwrap();
+    assert!(last.to_string().contains(browser_mcp::CHECK_STOP_START), "{last}");
+    proxy.stop_child().await;
+}
+
+/// R4: the site a check is kept for is the registrable name on the Public Suffix List, its private section included.
+#[test]
+fn a_checks_site_is_its_registrable_name() {
+    assert_eq!(browser_mcp::check_site("www.decathlon.fr"), "decathlon.fr");
+    assert_eq!(browser_mcp::check_site("shop.example.co.uk"), "example.co.uk");
+    assert_eq!(browser_mcp::check_site("myshop.pages.dev"), "myshop.pages.dev");
+    assert_eq!(browser_mcp::check_site("alex.github.io"), "alex.github.io");
+    assert_eq!(browser_mcp::check_site("boutique.myshopify.com"), "boutique.myshopify.com");
+    assert_eq!(browser_mcp::check_site("127.0.0.1"), "127.0.0.1");
+}
+
+/// The look's JSON read (review 1): a whole page by its marks or its title only, a widget present or blocking.
+#[test]
+fn the_looks_verdict() {
+    use browser_mcp::{probe_verdict, Verdict};
+    assert_eq!(probe_verdict(INTERSTITIAL), Some(Verdict::Blocking("Cloudflare challenge")));
+    let titled = r#"{"title": "Vérification de sécurité", "marks": [], "widgets": [], "inputs": 0, "length": 50}"#;
+    assert_eq!(probe_verdict(titled), Some(Verdict::Blocking("Cloudflare challenge")));
+    let worded = r#"{"title": "Blog", "marks": [], "widgets": [], "inputs": 0, "length": 50, "body": "Just a moment..."}"#;
+    assert_eq!(probe_verdict(worded), Some(Verdict::Clear));
+    let datadome = r#"{"title": "leboncoin", "marks": ["captcha-delivery.com"], "widgets": []}"#;
+    assert_eq!(probe_verdict(datadome), Some(Verdict::Blocking("DataDome")));
+    assert_eq!(probe_verdict(&widget_page("recaptcha", 2, 3000, false)), Some(Verdict::Present("reCAPTCHA")));
+    assert_eq!(probe_verdict(&widget_page("recaptcha", 2, 3000, true)), Some(Verdict::Blocking("reCAPTCHA")));
+    assert_eq!(probe_verdict(&widget_page("turnstile", 0, 300, false)), Some(Verdict::Blocking("Cloudflare Turnstile")));
+    assert_eq!(probe_verdict(&widget_page("turnstile", 0, 5000, false)), Some(Verdict::Present("Cloudflare Turnstile")));
+    assert_eq!(probe_verdict("<title>Just a moment...</title>"), None);
+    let script = browser_mcp::check_probe_script(browser_mcp::Acted::Selector("form \"x\" button"));
+    assert!(script.contains("bipagents-bot-check") && script.contains(r#"d.querySelector("form \"x\" button")"#));
+    assert!(browser_mcp::check_probe_script(browser_mcp::Acted::Focused { enter: true }).contains("const submit = true ||"));
 }
 
 #[tokio::test(flavor = "multi_thread")]
