@@ -131,7 +131,7 @@
    "apostrophes": "The bridge writes the apps' typographic apostrophe (’); the design note's straight ones are the same words.",
    "plurals": "n = 1: « 1 moment », « 1 moment » (en), « 1 Moment », « 1 momento »; « 1 semaine », « 1 week », « 1 Woche », « 1 semana ».",
    "lang": "The agent's language (names.rs `agent_language`); another than these four: English.",
-   "new": "route_pending, before, route_failed and watch_failed are new (review 1, 22/11), not yet validated by Alex: the route from home timed after « Prévoir », a watch or a route that could not be set up."
+   "new": "route_pending, before, route_failed and watch_failed (review 1, 22/11: a route timed after « Prévoir », a watch or a route that could not be set up): validated by Alex on 22/11 as written, en/de/es the same wording."
   },
   "fr": {
    "top": "{agent} propose un plan · {title}",
