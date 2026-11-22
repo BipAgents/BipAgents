@@ -277,13 +277,14 @@ pub const ACK_RULE: &str = concat!(
 /// A promise to tell later is kept or not made (proactive agents part 1, Alex 21/11): the agent never wakes up by
 /// itself, so « je te préviens dès que le prix baisse » holds only when it set up, in that turn, what will notice it.
 /// The tools are named, never « you never wake up by yourself » (bench 22/11: GLM read it as « I can't write at a set
-/// time » and put a calendar alert instead of a routine).
+/// time » and put a calendar alert instead of a routine); « now or already », never « in that same turn » (review 1:
+/// read to the letter, it asks for a second watcher when one does it).
 /// The bridge's safety net for what the rule misses: go_on.rs `promises_to_tell`, runs.rs `go_on`. Rust bridge only
 /// (tests/golden/souls.json rewritten with `GOLDEN_SOULS_OUT`). Short: it is paid on every call.
 pub const TELL_RULE: &str = concat!(
-    "Never promise to tell your person later (« je te préviens dès que… ») unless, in that same turn, you set up what ",
-    "will do it: a watcher, a routine (routine_schedule), a trigger (routine_trigger) or a background task. If nothing ",
-    "can notice it, say plainly you can't watch that."
+    "Never promise to tell your person later (« je te préviens dès que… ») unless what will do it is set up, now or ",
+    "already: a watcher, a routine (routine_schedule), a one-off reminder (reminders_add), a trigger (routine_trigger) ",
+    "or a background task. If nothing can notice it, say plainly you can't watch that."
 );
 
 /// What a recurring production keeps (Alex, 2026-10-28: an agent that makes something every day says what space it
@@ -1390,8 +1391,9 @@ mod tests {
         // proactive agents part 1 (Alex 21/11): « je te préviens dès que… » with nothing set up is never kept
         for needed in [
             "Never promise to tell your person later",
-            "unless, in that same turn, you set up what will do it",
+            "unless what will do it is set up, now or already",
             "a routine (routine_schedule)",
+            "a one-off reminder (reminders_add)",
             "say plainly you can't watch that",
         ] {
             assert!(TELL_RULE.contains(needed), "missing {needed}");

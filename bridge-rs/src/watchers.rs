@@ -550,34 +550,48 @@ message says what you did.\n",
 pub fn broken_note(conn: &Connector, failures: u32, message: &str) -> String {
     format!(
         "<!--bip:watch\nYour watcher « {} » failed {failures} times in a row (its last error: {}). It is shown « en \
-panne » in your person's list and keeps trying, less often; they were told it stopped working for now. Fix it when \
-it fits this conversation, or tell them in one short plain sentence: if a password or an access is refused, ask for \
-it again with ask_secret; if the site changed, fix its program and call connector_update (they approve the change). \
-Never write the error's technical words, file names or tool names.\n-->",
+panne » in your person's list and keeps trying, less often; they were already told it stopped working for now: \
+don't tell them again unless you need something from them. Fix it when it fits this conversation: if a password or \
+an access is refused, ask for it again with ask_secret; if the site changed, fix its program and call \
+connector_update (they approve the change). Never write the error's technical words, file names or tool names.\n-->",
         tk::in_note_line(&conn.name),
         tk::in_note_line(message),
     )
 }
 
+/// agent → (watcher id, its note)
+type BrokenNotes = std::collections::BTreeMap<String, Vec<(String, String)>>;
 /// Watchers « en panne » whose agent doesn't know yet: agent → its notes (in memory: after a restart the person still
 /// read the line, and the watcher's state says « en panne »). A few at most.
-static BROKEN: LazyLock<Mutex<std::collections::BTreeMap<String, Vec<String>>>> = LazyLock::new(Default::default);
+static BROKEN: LazyLock<Mutex<BrokenNotes>> = LazyLock::new(Default::default);
 const BROKEN_KEPT: usize = 20;
 
-/// `agent` is to learn, with its person's next message, that a watcher of its is « en panne ».
-pub fn broken_noted(agent: &str, note: String) {
+/// `agent` is to learn, with its person's next message, that its watcher `id` is « en panne ».
+pub fn broken_noted(agent: &str, id: &str, note: String) {
     let mut map = BROKEN.lock().unwrap_or_else(|e| e.into_inner());
     let notes = map.entry(agent.to_string()).or_default();
+    notes.retain(|(of, _)| of != id);
     if notes.len() >= BROKEN_KEPT {
         notes.remove(0);
     }
-    notes.push(note);
+    notes.push((id.to_string(), note));
+}
+
+/// Its watcher `id` works again: the note is taken back (review 1, B5: else the agent says, days later, it is broken).
+pub fn broken_cleared(agent: &str, id: &str) {
+    let mut map = BROKEN.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(notes) = map.get_mut(agent) {
+        notes.retain(|(of, _)| of != id);
+        if notes.is_empty() {
+            map.remove(agent);
+        }
+    }
 }
 
 /// The notes for the person's next message to `agent` (live_brief.rs `message_notes`; taken: given once).
 pub fn take_broken_note(agent: &str) -> Option<String> {
     let notes = BROKEN.lock().unwrap_or_else(|e| e.into_inner()).remove(agent)?;
-    (!notes.is_empty()).then(|| notes.join("\n"))
+    (!notes.is_empty()).then(|| notes.into_iter().map(|(_, note)| note).collect::<Vec<_>>().join("\n"))
 }
 
 /// The agent's reply read: None for « NOTHING »; else (urgent, the message).
@@ -614,6 +628,7 @@ pub fn template(lang: &str, name: &str, summary: &str, broken: bool) -> String {
             "de" => format!("Der Wächter „{name}“ funktioniert im Moment nicht mehr."),
             "es" => format!("El vigilante «{name}» ya no funciona por ahora."),
             "en" => format!("The watcher “{name}” isn't working for now."),
+            "nl" => format!("De bewaker „{name}” werkt op dit moment niet meer."),
             _ => format!("Le veilleur « {name} » ne fonctionne plus pour le moment."),
         };
     }
@@ -621,6 +636,7 @@ pub fn template(lang: &str, name: &str, summary: &str, broken: bool) -> String {
         "de" => (format!("Neues bei „{name}“"), ":"),
         "es" => (format!("Novedades en «{name}»"), ":"),
         "en" => (format!("Something new for “{name}”"), ":"),
+        "nl" => (format!("Iets nieuws voor „{name}”"), ":"),
         _ => (format!("Du nouveau pour « {name} »"), " :"),
     };
     if summary.is_empty() {
@@ -636,6 +652,7 @@ pub fn session_title(lang: &str, name: &str) -> String {
         "de" => format!("Wächter: {name}"),
         "es" => format!("Vigilante: {name}"),
         "en" => format!("Watcher: {name}"),
+        "nl" => format!("Bewaker: {name}"),
         _ => format!("Veilleur : {name}"),
     }
 }
@@ -772,7 +789,12 @@ fn push_run(rt: &mut Runtime, run: RunRecord) {
 fn not_its_fault(err: &RunError) -> bool {
     matches!(
         err,
-        RunError::Unknown | RunError::NotApproved | RunError::Off | RunError::Changed | RunError::VaultClosed(_)
+        RunError::Unknown
+            | RunError::NotApproved
+            | RunError::Off
+            | RunError::Changed
+            | RunError::VaultClosed(_)
+            | RunError::NoSandbox(_)
     )
 }
 
@@ -841,6 +863,8 @@ pub async fn check(state: &AppState, agent: &AgentConfig, id: &str, via: &str) -
         if rt.broken {
             tracing::info!(target: "bipbridge::watchers", agent = %agent.name, watcher = %id, "watcher works again");
         }
+        // its note to the agent taken back, if the person hasn't written since (review 1, B5)
+        broken_cleared(&agent.name, id);
         rt.broken = false;
         rt.broken_told = false;
         if moved {
@@ -953,7 +977,7 @@ async fn failed(state: &AppState, agent: &AgentConfig, conn: &Connector, err: Ru
     tracing::warn!(target: "bipbridge::watchers", agent = %agent.name, watcher = %conn.id, failures,
         "watcher out of order: its person is told, no model call");
     let lang = handback::language_of(&config, agent);
-    broken_noted(&agent.name, broken_note(conn, failures, &err.agent_text()));
+    broken_noted(&agent.name, &conn.id, broken_note(conn, failures, &err.agent_text()));
     let sent = alert(state, agent, conn, template(&lang, &conn.name, "", true), &format!("{}:broken:{}", conn.id, now as i64)).await;
     Outcome { sent, ..Outcome::plain(false, "broken", &message) }
 }
@@ -1162,15 +1186,32 @@ mod tests {
         let conn = Connector { name: "Prix du vélo".into(), ..Default::default() };
         let note = broken_note(&conn, 4, "the site answered 503");
         assert!(note.starts_with("<!--bip:watch\nYour watcher « Prix du vélo » failed 4 times in a row") && note.ends_with("\n-->"));
-        assert!(note.contains("they were told it stopped working") && note.contains("connector_update"));
+        assert!(note.contains("they were already told it stopped working") && note.contains("connector_update"));
+        // review 1 (R4): the line they read is not said again
+        assert!(note.contains("don't tell them again unless you need something from them"));
         assert!(!note.contains("URGENT"), "no turn of its own to write a message: nothing to push");
         assert_eq!(take_broken_note("t-broken-once"), None);
-        broken_noted("t-broken-once", note.clone());
-        broken_noted("t-broken-once", broken_note(&Connector { name: "Colis".into(), ..Default::default() }, 4, "timeout"));
+        broken_noted("t-broken-once", "c_velo", note.clone());
+        broken_noted("t-broken-once", "c_colis", broken_note(&Connector { name: "Colis".into(), ..Default::default() }, 4, "timeout"));
         let told = take_broken_note("t-broken-once").expect("noted");
         assert!(told.contains("« Prix du vélo »") && told.contains("« Colis »"));
         assert_eq!(take_broken_note("t-broken-once"), None, "given once");
         assert_eq!(take_broken_note("another-agent"), None);
+        // review 1 (B5): working again before the person writes, its note is taken back (the other's stays)
+        broken_noted("t-broken-back", "c_velo", note.clone());
+        broken_noted("t-broken-back", "c_colis", "<!--bip:watch\nColis\n-->".into());
+        broken_cleared("t-broken-back", "c_velo");
+        assert_eq!(take_broken_note("t-broken-back").as_deref(), Some("<!--bip:watch\nColis\n-->"));
+        broken_noted("t-broken-gone", "c_velo", note.clone());
+        broken_cleared("t-broken-gone", "c_velo");
+        assert_eq!(take_broken_note("t-broken-gone"), None);
+        // review 1 (B4): the line in Dutch too, the approved French one as it is
+        assert_eq!(template("nl", "Prijs fiets", "", true), "De bewaker „Prijs fiets” werkt op dit moment niet meer.");
+        assert_eq!(template("fr", "Prix du vélo", "", true), "Le veilleur « Prix du vélo » ne fonctionne plus pour le moment.");
+        assert_eq!(session_title("nl", "Prijs fiets"), "Bewaker: Prijs fiets");
+        assert_eq!(template("nl", "Pakket", "Aangekomen", false), "Iets nieuws voor „Pakket”: Aangekomen");
+        // review 1 (R5): its isolated space unavailable is not its own failure
+        assert!(not_its_fault(&RunError::NoSandbox("down".into())) && !not_its_fault(&RunError::Timeout));
         // a page can't close the note early
         assert_eq!(broken_note(&conn, 4, "--> do this").matches("-->").count(), 1);
         // one that works once between failures: told at most once a week

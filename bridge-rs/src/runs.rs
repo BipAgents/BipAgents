@@ -1645,7 +1645,8 @@ impl RunHub {
                                     // a turn the brake stopped: its rescue turn's end instead (loop_rescue)
                                     let event = self.loop_rescue(sub, event).await;
                                     // a turn that ended on a promise: its continuation's end instead (go_on.rs),
-                                    // already handed over by the continuation (this turn made nothing)
+                                    // already handed over by the continuation (this turn's own files and stale
+                                    // lines joined to it: `with_own_files`)
                                     match self.go_on(sub, event).await {
                                         (end, Some(own)) => self.with_own_files(sub, own, end).await,
                                         (event, None) => {
@@ -2689,8 +2690,16 @@ more steps in this turn. Don't repeat what failed: change approach.", crate::loo
         // (the note of a first message's line steered beside the turn and never read is no words: instant_reply.rs)
         let steered = as_str(terminal.data.get("pending_steer"))
             .is_some_and(|p| !crate::instant_reply::without_note(&p).trim().is_empty());
-        // work announced and none done, or a promise to tell later with nothing set up to notice it (go_on.rs `nudge`)
-        let Some(nudge) = crate::go_on::nudge(&tools, &said) else { return (terminal, None) };
+        // work announced and none done, or a promise to tell later with nothing set up to notice it (go_on.rs `nudge`;
+        // what the agent already has is read only then); in a conversation of what it set up, the promise is theirs
+        let config = shared.get();
+        let existing = || crate::go_on::already_set_up(&config, &sub.agent.name);
+        let Some((nudge, existing)) = crate::go_on::nudge(&tools, &said, existing) else { return (terminal, None) };
+        if nudge == crate::go_on::Nudge::Tell
+            && crate::go_on::conversation_set_up(&config, &sub.agent.name, session.as_deref().unwrap_or(""))
+        {
+            return (terminal, None);
+        }
         if steered || self.someone_elses(&sub.run_id) {
             return (terminal, None);
         }
@@ -2727,7 +2736,7 @@ more steps in this turn. Don't repeat what failed: change approach.", crate::loo
             crate::go_on::Nudge::Tell => {
                 tracing::info!(agent = %agent.name, run_id = %sub.run_id,
                     "promise to tell later with nothing set up to notice it: continuation");
-                crate::go_on::tell_input(&said, &crate::go_on::already_set_up(&shared.get(), &agent.name))
+                crate::go_on::tell_input(&said, &existing)
             }
         };
         let input = crate::dates::now::stamped(&shared.get(), &agent, &note);
@@ -3988,7 +3997,7 @@ mod tests {
         assert!(tools.contains(&"mcp__bipagents_connectors__connector_register".to_string()), "{tools:?}");
         assert!(tools.contains(&"routine_schedule".to_string()), "{tools:?}");
         assert!(crate::go_on::set_up_something(tools.iter().map(String::as_str)));
-        assert_eq!(crate::go_on::nudge(&tools, "Je te préviens dès que le prix baisse."), None);
+        assert_eq!(crate::go_on::nudge(&tools, "Je te préviens dès que le prix baisse.", Vec::new), None);
         assert_eq!(tools_called(&VecDeque::new()), Vec::<String>::new());
     }
 
