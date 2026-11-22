@@ -1,5 +1,6 @@
 {
   "v": 1,
+  "epoch": "e7k2m9",
   "version": 42,
   "since": null,
   "full": true,
@@ -19,48 +20,30 @@
     {
       "id": "page:p000000000d",
       "kind": "page",
-      "part": "main",
       "path": "Areas/Family.md",
       "title": "Family",
       "line": "Your sister [[Claire Durand]], her husband [[Marc Durand]] and their children.",
       "categories": [
         "people"
       ],
-      "space": "perso",
-      "date": null,
-      "yearly": null,
       "source": "Family",
-      "who": "",
-      "noted": null,
-      "archived": false,
-      "label": null,
-      "answer": null,
-      "page": null,
       "open": {
         "path": "Areas/Family.md"
       },
-      "fold": "family your sister claire durand her husband marc durand and their children",
-      "aliases": []
+      "fold": "family your sister claire durand her husband marc durand and their children"
     },
     {
       "id": "line:p000000000d:000000000f",
       "kind": "line",
-      "part": "main",
       "path": "Areas/Family.md",
       "title": "Family",
       "line": "Your sister [[Claire Durand]], her husband [[Marc Durand]] and their children",
       "categories": [
         "people"
       ],
-      "space": "perso",
-      "date": null,
-      "yearly": null,
       "source": "What matters",
       "who": "Daily",
       "noted": "2026-11-10",
-      "archived": false,
-      "label": null,
-      "answer": null,
       "page": "page:p000000000d",
       "open": {
         "path": "Areas/Family.md",
@@ -71,22 +54,15 @@
     {
       "id": "line:p000000000d:000000002f",
       "kind": "line",
-      "part": "main",
       "path": "Areas/Family.md",
       "title": "Family",
       "line": "Dinner together one Saturday a month",
       "categories": [
         "people"
       ],
-      "space": "perso",
-      "date": null,
-      "yearly": null,
       "source": "Habits and rules",
       "who": "Daily",
       "noted": "2026-10-23",
-      "archived": false,
-      "label": null,
-      "answer": null,
       "page": "page:p000000000d",
       "open": {
         "path": "Areas/Family.md",
@@ -97,22 +73,15 @@
     {
       "id": "line:p000000000d:0000000030",
       "kind": "line",
-      "part": "main",
       "path": "Areas/Family.md",
       "title": "Family",
       "line": "Dinner at yours on Saturday the 2nd",
       "categories": [
         "people"
       ],
-      "space": "perso",
-      "date": null,
-      "yearly": null,
       "source": "In progress",
       "who": "Daily",
       "noted": "2026-11-18",
-      "archived": false,
-      "label": null,
-      "answer": null,
       "page": "page:p000000000d",
       "open": {
         "path": "Areas/Family.md",
@@ -123,46 +92,30 @@
     {
       "id": "page:p0000000010",
       "kind": "page",
-      "part": "main",
       "path": "Areas/Home.md",
       "title": "Home",
       "line": "The flat, the kitchen work and the neighbours.",
       "categories": [
         "home"
       ],
-      "space": "perso",
-      "date": null,
-      "yearly": null,
       "source": "Home",
-      "who": "",
-      "noted": null,
-      "archived": false,
-      "label": null,
-      "answer": null,
-      "page": null,
       "open": {
         "path": "Areas/Home.md"
       },
-      "fold": "home the flat the kitchen work and the neighbours",
-      "aliases": []
+      "fold": "home the flat the kitchen work and the neighbours"
     },
     {
       "id": "line:p0000000010:0000000031",
       "kind": "line",
-      "part": "main",
       "path": "Areas/Home.md",
       "title": "Home",
       "line": "Boiler service: every October",
       "categories": [
         "home"
       ],
-      "space": "perso",
-      "date": null,
-      "yearly": null,
       "source": "Habits and rules",
       "who": "Home",
       "noted": "2026-11-02",
-      "archived": false,
       "label": "Boiler service",
       "answer": "every October",
       "page": "page:p0000000010",
@@ -175,22 +128,15 @@
     {
       "id": "line:p0000000010:0000000032",
       "kind": "line",
-      "part": "main",
       "path": "Areas/Home.md",
       "title": "Home",
       "line": "Bins out on Monday evening",
       "categories": [
         "home"
       ],
-      "space": "perso",
-      "date": null,
-      "yearly": null,
       "source": "Habits and rules",
       "who": "Home",
       "noted": "2026-11-07",
-      "archived": false,
-      "label": null,
-      "answer": null,
       "page": "page:p0000000010",
       "open": {
         "path": "Areas/Home.md",
@@ -201,22 +147,15 @@
     {
       "id": "line:p0000000010:0000000033",
       "kind": "line",
-      "part": "main",
       "path": "Areas/Home.md",
       "title": "Home",
       "line": "A spare key with [[Sophie Laurent]]",
       "categories": [
         "home"
       ],
-      "space": "perso",
-      "date": null,
-      "yearly": null,
       "source": "Useful contacts",
       "who": "toi",
       "noted": "2026-11-19",
-      "archived": false,
-      "label": null,
-      "answer": null,
       "page": "page:p0000000010",
       "open": {
         "path": "Areas/Home.md",
@@ -227,20 +166,15 @@
     {
       "id": "line:p0000000010:0000000034",
       "kind": "line",
-      "part": "main",
       "path": "Areas/Home.md",
       "title": "Home",
       "line": "Building manager: Cabinet Moreau, 02 40 00 00 00",
       "categories": [
         "home"
       ],
-      "space": "perso",
-      "date": null,
-      "yearly": null,
       "source": "Useful contacts",
       "who": "Home",
       "noted": "2026-10-28",
-      "archived": false,
       "label": "Building manager",
       "answer": "Cabinet Moreau, 02 40 00 00 00",
       "page": "page:p0000000010",
@@ -253,22 +187,15 @@
     {
       "id": "line:p0000000010:0000000035",
       "kind": "line",
-      "part": "main",
       "path": "Areas/Home.md",
       "title": "Home",
       "line": "The [[Kitchen renovation]] works",
       "categories": [
         "home"
       ],
-      "space": "perso",
-      "date": null,
-      "yearly": null,
       "source": "In progress",
       "who": "Home",
       "noted": "2026-11-14",
-      "archived": false,
-      "label": null,
-      "answer": null,
       "page": "page:p0000000010",
       "open": {
         "path": "Areas/Home.md",
@@ -279,46 +206,30 @@
     {
       "id": "page:p0000000011",
       "kind": "page",
-      "part": "main",
       "path": "Areas/Money.md",
       "title": "Money",
       "line": "The month’s budget and the contracts to renew.",
       "categories": [
         "money"
       ],
-      "space": "perso",
-      "date": null,
-      "yearly": null,
       "source": "Money",
-      "who": "",
-      "noted": null,
-      "archived": false,
-      "label": null,
-      "answer": null,
-      "page": null,
       "open": {
         "path": "Areas/Money.md"
       },
-      "fold": "money the month s budget and the contracts to renew",
-      "aliases": []
+      "fold": "money the month s budget and the contracts to renew"
     },
     {
       "id": "line:p0000000011:0000000036",
       "kind": "line",
-      "part": "main",
       "path": "Areas/Money.md",
       "title": "Money",
       "line": "Savings: €200 a month",
       "categories": [
         "money"
       ],
-      "space": "perso",
-      "date": null,
-      "yearly": null,
       "source": "What matters",
       "who": "Budget",
       "noted": "2026-11-02",
-      "archived": false,
       "label": "Savings",
       "answer": "€200 a month",
       "page": "page:p0000000011",
@@ -331,22 +242,15 @@
     {
       "id": "line:p0000000011:0000000037",
       "kind": "line",
-      "part": "main",
       "path": "Areas/Money.md",
       "title": "Money",
       "line": "Car insurance to renew before the 5th",
       "categories": [
         "money"
       ],
-      "space": "perso",
-      "date": null,
-      "yearly": null,
       "source": "In progress",
       "who": "Budget",
       "noted": "2026-11-19",
-      "archived": false,
-      "label": null,
-      "answer": null,
       "page": "page:p0000000011",
       "open": {
         "path": "Areas/Money.md",
@@ -357,48 +261,31 @@
     {
       "id": "page:p0000000012",
       "kind": "page",
-      "part": "main",
       "path": "Areas/Work.md",
       "title": "Work",
       "line": "Your job at Atelier Lumière and your annual review.",
       "categories": [
         "work"
       ],
-      "space": "perso",
-      "date": null,
-      "yearly": null,
       "source": "Work",
-      "who": "",
-      "noted": null,
-      "archived": false,
-      "label": null,
-      "answer": null,
-      "page": null,
       "open": {
         "path": "Areas/Work.md"
       },
-      "fold": "work your job at atelier lumiere and your annual review",
-      "aliases": []
+      "fold": "work your job at atelier lumiere and your annual review"
     },
     {
       "id": "line:p0000000012:0000000038",
       "kind": "line",
-      "part": "main",
       "path": "Areas/Work.md",
       "title": "Work",
       "line": "Annual review on November 27",
       "categories": [
         "work"
       ],
-      "space": "perso",
       "date": "2026-11-27",
-      "yearly": null,
       "source": "What matters",
       "who": "Daily",
       "noted": "2026-11-19",
-      "archived": false,
-      "label": null,
-      "answer": null,
       "page": "page:p0000000012",
       "open": {
         "path": "Areas/Work.md",
@@ -409,22 +296,15 @@
     {
       "id": "line:p0000000012:0000000039",
       "kind": "line",
-      "part": "main",
       "path": "Areas/Work.md",
       "title": "Work",
       "line": "Excel course in November",
       "categories": [
         "work"
       ],
-      "space": "perso",
-      "date": null,
-      "yearly": null,
       "source": "In progress",
       "who": "Daily",
       "noted": "2026-11-14",
-      "archived": false,
-      "label": null,
-      "answer": null,
       "page": "page:p0000000012",
       "open": {
         "path": "Areas/Work.md",
@@ -435,23 +315,13 @@
     {
       "id": "page:p0000000013",
       "kind": "page",
-      "part": "main",
       "path": "People/Claire Durand.md",
       "title": "Claire Durand",
       "line": "Your sister. A nurse in Nantes, married to Marc.",
       "categories": [
         "people"
       ],
-      "space": "perso",
-      "date": null,
-      "yearly": null,
       "source": "Claire Durand",
-      "who": "",
-      "noted": null,
-      "archived": false,
-      "label": null,
-      "answer": null,
-      "page": null,
       "open": {
         "path": "People/Claire Durand.md"
       },
@@ -463,22 +333,15 @@
     {
       "id": "line:p0000000013:000000003a",
       "kind": "line",
-      "part": "main",
       "path": "People/Claire Durand.md",
       "title": "Claire Durand",
       "line": "Your sister",
       "categories": [
         "people"
       ],
-      "space": "perso",
-      "date": null,
-      "yearly": null,
       "source": "Who they are",
       "who": "Daily",
       "noted": "2026-09-23",
-      "archived": false,
-      "label": null,
-      "answer": null,
       "page": "page:p0000000013",
       "open": {
         "path": "People/Claire Durand.md",
@@ -489,20 +352,16 @@
     {
       "id": "line:p0000000013:000000003b",
       "kind": "line",
-      "part": "main",
       "path": "People/Claire Durand.md",
       "title": "Claire Durand",
       "line": "Birthday: January 2",
       "categories": [
         "people"
       ],
-      "space": "perso",
-      "date": null,
       "yearly": "01-02",
       "source": "Dates",
       "who": "Daily",
       "noted": "2026-11-10",
-      "archived": false,
       "label": "Birthday",
       "answer": "January 2",
       "page": "page:p0000000013",
@@ -515,22 +374,15 @@
     {
       "id": "line:p0000000013:000000003c",
       "kind": "line",
-      "part": "main",
       "path": "People/Claire Durand.md",
       "title": "Claire Durand",
       "line": "Married to [[Marc Durand]], two children: Inès and Tom",
       "categories": [
         "people"
       ],
-      "space": "perso",
-      "date": null,
-      "yearly": null,
       "source": "Family and close ones",
       "who": "Daily",
       "noted": "2026-09-23",
-      "archived": false,
-      "label": null,
-      "answer": null,
       "page": "page:p0000000013",
       "open": {
         "path": "People/Claire Durand.md",
@@ -541,22 +393,15 @@
     {
       "id": "line:p0000000013:000000003d",
       "kind": "line",
-      "part": "main",
       "path": "People/Claire Durand.md",
       "title": "Claire Durand",
       "line": "Night nurse in Nantes",
       "categories": [
         "people"
       ],
-      "space": "perso",
-      "date": null,
-      "yearly": null,
       "source": "Work",
       "who": "Daily",
       "noted": "2026-11-10",
-      "archived": false,
-      "label": null,
-      "answer": null,
       "page": "page:p0000000013",
       "open": {
         "path": "People/Claire Durand.md",
@@ -567,20 +412,15 @@
     {
       "id": "line:p0000000013:000000003e",
       "kind": "line",
-      "part": "main",
       "path": "People/Claire Durand.md",
       "title": "Claire Durand",
       "line": "Text: she'll bring a cake on Saturday",
       "categories": [
         "people"
       ],
-      "space": "perso",
-      "date": null,
-      "yearly": null,
       "source": "Latest exchanges",
       "who": "Daily",
       "noted": "2026-11-19",
-      "archived": false,
       "label": "Text",
       "answer": "she'll bring a cake on Saturday",
       "page": "page:p0000000013",
@@ -593,23 +433,13 @@
     {
       "id": "page:p0000000014",
       "kind": "page",
-      "part": "main",
       "path": "People/Lucas Bernard.md",
       "title": "Lucas Bernard",
       "line": "Your Sunday-morning running friend.",
       "categories": [
         "people"
       ],
-      "space": "perso",
-      "date": null,
-      "yearly": null,
       "source": "Lucas Bernard",
-      "who": "",
-      "noted": null,
-      "archived": false,
-      "label": null,
-      "answer": null,
-      "page": null,
       "open": {
         "path": "People/Lucas Bernard.md"
       },
@@ -621,22 +451,15 @@
     {
       "id": "line:p0000000014:000000003f",
       "kind": "line",
-      "part": "main",
       "path": "People/Lucas Bernard.md",
       "title": "Lucas Bernard",
       "line": "Your running friend, Sunday mornings",
       "categories": [
         "people"
       ],
-      "space": "perso",
-      "date": null,
-      "yearly": null,
       "source": "Who they are",
       "who": "Coach",
       "noted": "2026-10-13",
-      "archived": false,
-      "label": null,
-      "answer": null,
       "page": "page:p0000000014",
       "open": {
         "path": "People/Lucas Bernard.md",
@@ -647,20 +470,16 @@
     {
       "id": "line:p0000000014:0000000040",
       "kind": "line",
-      "part": "main",
       "path": "People/Lucas Bernard.md",
       "title": "Lucas Bernard",
       "line": "Birthday: December 1",
       "categories": [
         "people"
       ],
-      "space": "perso",
-      "date": null,
       "yearly": "12-01",
       "source": "Dates",
       "who": "Coach",
       "noted": "2026-10-13",
-      "archived": false,
       "label": "Birthday",
       "answer": "December 1",
       "page": "page:p0000000014",
@@ -673,22 +492,15 @@
     {
       "id": "line:p0000000014:0000000041",
       "kind": "line",
-      "part": "main",
       "path": "People/Lucas Bernard.md",
       "title": "Lucas Bernard",
       "line": "Runs the Nantes half marathon in spring",
       "categories": [
         "people"
       ],
-      "space": "perso",
-      "date": null,
-      "yearly": null,
       "source": "Likes and preferences",
       "who": "Nightly:coach",
       "noted": "2026-11-20",
-      "archived": false,
-      "label": null,
-      "answer": null,
       "page": "page:p0000000014",
       "open": {
         "path": "People/Lucas Bernard.md",
@@ -699,22 +511,15 @@
     {
       "id": "line:p0000000014:0000000042",
       "kind": "line",
-      "part": "main",
       "path": "People/Lucas Bernard.md",
       "title": "Lucas Bernard",
       "line": "A running watch, he often mentions it",
       "categories": [
         "people"
       ],
-      "space": "perso",
-      "date": null,
-      "yearly": null,
       "source": "Gift ideas",
       "who": "Coach",
       "noted": "2026-11-20",
-      "archived": false,
-      "label": null,
-      "answer": null,
       "page": "page:p0000000014",
       "open": {
         "path": "People/Lucas Bernard.md",
@@ -725,23 +530,13 @@
     {
       "id": "page:p0000000015",
       "kind": "page",
-      "part": "main",
       "path": "People/Marc Durand.md",
       "title": "Marc Durand",
       "line": "Claire’s husband (your sister) and Inès and Tom’s dad. A carpenter: he’s quoting for your kitchen. Allergic to nuts.",
       "categories": [
         "people"
       ],
-      "space": "perso",
-      "date": null,
-      "yearly": null,
       "source": "Marc Durand",
-      "who": "",
-      "noted": null,
-      "archived": false,
-      "label": null,
-      "answer": null,
-      "page": null,
       "open": {
         "path": "People/Marc Durand.md"
       },
@@ -753,22 +548,15 @@
     {
       "id": "line:p0000000015:0000000043",
       "kind": "line",
-      "part": "main",
       "path": "People/Marc Durand.md",
       "title": "Marc Durand",
       "line": "Your brother-in-law, married to [[Claire Durand]]",
       "categories": [
         "people"
       ],
-      "space": "perso",
-      "date": null,
-      "yearly": null,
       "source": "Who they are",
       "who": "Daily",
       "noted": "2026-09-23",
-      "archived": false,
-      "label": null,
-      "answer": null,
       "page": "page:p0000000015",
       "open": {
         "path": "People/Marc Durand.md",
@@ -779,20 +567,16 @@
     {
       "id": "line:p0000000015:0000000044",
       "kind": "line",
-      "part": "main",
       "path": "People/Marc Durand.md",
       "title": "Marc Durand",
       "line": "Birthday: December 15",
       "categories": [
         "people"
       ],
-      "space": "perso",
-      "date": null,
       "yearly": "12-15",
       "source": "Dates",
       "who": "Daily",
       "noted": "2026-11-22",
-      "archived": false,
       "label": "Birthday",
       "answer": "December 15",
       "page": "page:p0000000015",
@@ -805,20 +589,15 @@
     {
       "id": "line:p0000000015:0000000045",
       "kind": "line",
-      "part": "main",
       "path": "People/Marc Durand.md",
       "title": "Marc Durand",
       "line": "Children: Inès, 7, and Tom, 4",
       "categories": [
         "people"
       ],
-      "space": "perso",
-      "date": null,
-      "yearly": null,
       "source": "Family and close ones",
       "who": "Daily",
       "noted": "2026-09-23",
-      "archived": false,
       "label": "Children",
       "answer": "Inès, 7, and Tom, 4",
       "page": "page:p0000000015",
@@ -831,22 +610,15 @@
     {
       "id": "line:p0000000015:0000000046",
       "kind": "line",
-      "part": "main",
       "path": "People/Marc Durand.md",
       "title": "Marc Durand",
       "line": "Self-employed carpenter, quoting your [[Kitchen renovation]]",
       "categories": [
         "people"
       ],
-      "space": "perso",
-      "date": null,
-      "yearly": null,
       "source": "Work",
       "who": "Home",
       "noted": "2026-11-09",
-      "archived": false,
-      "label": null,
-      "answer": null,
       "page": "page:p0000000015",
       "open": {
         "path": "People/Marc Durand.md",
@@ -857,22 +629,15 @@
     {
       "id": "line:p0000000015:0000000047",
       "kind": "line",
-      "part": "main",
       "path": "People/Marc Durand.md",
       "title": "Marc Durand",
       "line": "Loves jazz and natural wines",
       "categories": [
         "people"
       ],
-      "space": "perso",
-      "date": null,
-      "yearly": null,
       "source": "Likes and preferences",
       "who": "Daily",
       "noted": "2026-10-23",
-      "archived": false,
-      "label": null,
-      "answer": null,
       "page": "page:p0000000015",
       "open": {
         "path": "People/Marc Durand.md",
@@ -883,22 +648,15 @@
     {
       "id": "line:p0000000015:0000000048",
       "kind": "line",
-      "part": "main",
       "path": "People/Marc Durand.md",
       "title": "Marc Durand",
       "line": "Allergic to nuts",
       "categories": [
         "people"
       ],
-      "space": "perso",
-      "date": null,
-      "yearly": null,
       "source": "Likes and preferences",
       "who": "Coach",
       "noted": "2026-10-04",
-      "archived": false,
-      "label": null,
-      "answer": null,
       "page": "page:p0000000015",
       "open": {
         "path": "People/Marc Durand.md",
@@ -909,22 +667,15 @@
     {
       "id": "line:p0000000015:0000000049",
       "kind": "line",
-      "part": "main",
       "path": "People/Marc Durand.md",
       "title": "Marc Durand",
       "line": "Prefers calls in the evening",
       "categories": [
         "people"
       ],
-      "space": "perso",
-      "date": null,
-      "yearly": null,
       "source": "Likes and preferences",
       "who": "toi",
       "noted": "2026-11-02",
-      "archived": false,
-      "label": null,
-      "answer": null,
       "page": "page:p0000000015",
       "open": {
         "path": "People/Marc Durand.md",
@@ -935,22 +686,15 @@
     {
       "id": "line:p0000000015:000000004a",
       "kind": "line",
-      "part": "main",
       "path": "People/Marc Durand.md",
       "title": "Marc Durand",
       "line": "A Chet Baker record",
       "categories": [
         "people"
       ],
-      "space": "perso",
-      "date": null,
-      "yearly": null,
       "source": "Gift ideas",
       "who": "Daily",
       "noted": "2026-11-17",
-      "archived": false,
-      "label": null,
-      "answer": null,
       "page": "page:p0000000015",
       "open": {
         "path": "People/Marc Durand.md",
@@ -961,22 +705,15 @@
     {
       "id": "line:p0000000015:000000004b",
       "kind": "line",
-      "part": "main",
       "path": "People/Marc Durand.md",
       "title": "Marc Durand",
       "line": "Lends you his sander until the end of November",
       "categories": [
         "people"
       ],
-      "space": "perso",
-      "date": null,
-      "yearly": null,
       "source": "What you agreed",
       "who": "Home",
       "noted": "2026-11-16",
-      "archived": false,
-      "label": null,
-      "answer": null,
       "page": "page:p0000000015",
       "open": {
         "path": "People/Marc Durand.md",
@@ -987,22 +724,15 @@
     {
       "id": "line:p0000000015:000000004c",
       "kind": "line",
-      "part": "main",
       "path": "People/Marc Durand.md",
       "title": "Marc Durand",
       "line": "Comes to measure the kitchen on Saturday",
       "categories": [
         "people"
       ],
-      "space": "perso",
-      "date": null,
-      "yearly": null,
       "source": "What you agreed",
       "who": "Home",
       "noted": "2026-11-20",
-      "archived": false,
-      "label": null,
-      "answer": null,
       "page": "page:p0000000015",
       "open": {
         "path": "People/Marc Durand.md",
@@ -1013,20 +743,15 @@
     {
       "id": "line:p0000000015:000000004d",
       "kind": "line",
-      "part": "main",
       "path": "People/Marc Durand.md",
       "title": "Marc Durand",
       "line": "Call: the quote comes tonight",
       "categories": [
         "people"
       ],
-      "space": "perso",
-      "date": null,
-      "yearly": null,
       "source": "Latest exchanges",
       "who": "Home",
       "noted": "2026-11-21",
-      "archived": false,
       "label": "Call",
       "answer": "the quote comes tonight",
       "page": "page:p0000000015",
@@ -1039,22 +764,15 @@
     {
       "id": "line:p0000000015:000000004e",
       "kind": "line",
-      "part": "main",
       "path": "People/Marc Durand.md",
       "title": "Marc Durand",
       "line": "Dinner at Claire's, he talked about a holiday in Portugal",
       "categories": [
         "people"
       ],
-      "space": "perso",
-      "date": null,
-      "yearly": null,
       "source": "Latest exchanges",
       "who": "Daily",
       "noted": "2026-11-13",
-      "archived": false,
-      "label": null,
-      "answer": null,
       "page": "page:p0000000015",
       "open": {
         "path": "People/Marc Durand.md",
@@ -1065,22 +783,15 @@
     {
       "id": "line:p0000000015:000000004f",
       "kind": "line",
-      "part": "main",
       "path": "People/Marc Durand.md",
       "title": "Marc Durand",
       "line": "No nuts at dinner on the 2nd",
       "categories": [
         "people"
       ],
-      "space": "perso",
-      "date": null,
-      "yearly": null,
       "source": "Don't forget",
       "who": "Coach",
       "noted": "2026-11-18",
-      "archived": false,
-      "label": null,
-      "answer": null,
       "page": "page:p0000000015",
       "open": {
         "path": "People/Marc Durand.md",
@@ -1091,23 +802,13 @@
     {
       "id": "page:p0000000016",
       "kind": "page",
-      "part": "main",
       "path": "People/Sophie Laurent.md",
       "title": "Sophie Laurent",
       "line": "Your neighbour on the 3rd floor. She has a spare set of your keys.",
       "categories": [
         "people"
       ],
-      "space": "perso",
-      "date": null,
-      "yearly": null,
       "source": "Sophie Laurent",
-      "who": "",
-      "noted": null,
-      "archived": false,
-      "label": null,
-      "answer": null,
-      "page": null,
       "open": {
         "path": "People/Sophie Laurent.md"
       },
@@ -1119,22 +820,15 @@
     {
       "id": "line:p0000000016:0000000050",
       "kind": "line",
-      "part": "main",
       "path": "People/Sophie Laurent.md",
       "title": "Sophie Laurent",
       "line": "Your neighbour on the 3rd floor",
       "categories": [
         "people"
       ],
-      "space": "perso",
-      "date": null,
-      "yearly": null,
       "source": "Who they are",
       "who": "toi",
       "noted": "2026-10-23",
-      "archived": false,
-      "label": null,
-      "answer": null,
       "page": "page:p0000000016",
       "open": {
         "path": "People/Sophie Laurent.md",
@@ -1145,22 +839,15 @@
     {
       "id": "line:p0000000016:0000000051",
       "kind": "line",
-      "part": "main",
       "path": "People/Sophie Laurent.md",
       "title": "Sophie Laurent",
       "line": "Looks after the cat during the holidays",
       "categories": [
         "people"
       ],
-      "space": "perso",
-      "date": null,
-      "yearly": null,
       "source": "What you agreed",
       "who": "toi",
       "noted": "2026-11-19",
-      "archived": false,
-      "label": null,
-      "answer": null,
       "page": "page:p0000000016",
       "open": {
         "path": "People/Sophie Laurent.md",
@@ -1171,22 +858,15 @@
     {
       "id": "line:p0000000016:0000000052",
       "kind": "line",
-      "part": "main",
       "path": "People/Sophie Laurent.md",
       "title": "Sophie Laurent",
       "line": "Has a spare set of your keys",
       "categories": [
         "people"
       ],
-      "space": "perso",
-      "date": null,
-      "yearly": null,
       "source": "What you agreed",
       "who": "toi",
       "noted": "2026-10-23",
-      "archived": false,
-      "label": null,
-      "answer": null,
       "page": "page:p0000000016",
       "open": {
         "path": "People/Sophie Laurent.md",
@@ -1197,48 +877,30 @@
     {
       "id": "page:p0000000017",
       "kind": "page",
-      "part": "main",
       "path": "Subjects/Inès’s birthday.md",
       "title": "Inès’s birthday",
       "line": "Inès turns 8 on Saturday December 4, at Claire’s. Theme: unicorns.",
       "categories": [
         "people"
       ],
-      "space": "perso",
-      "date": null,
-      "yearly": null,
       "source": "Inès’s birthday",
-      "who": "",
-      "noted": null,
-      "archived": false,
-      "label": null,
-      "answer": null,
-      "page": null,
       "open": {
         "path": "Subjects/Inès’s birthday.md"
       },
-      "fold": "ines s birthday ines turns 8 on saturday december 4 at claire s theme unicorns",
-      "aliases": []
+      "fold": "ines s birthday ines turns 8 on saturday december 4 at claire s theme unicorns"
     },
     {
       "id": "line:p0000000017:0000000053",
       "kind": "line",
-      "part": "main",
       "path": "Subjects/Inès’s birthday.md",
       "title": "Inès’s birthday",
       "line": "Invitations to send this week",
       "categories": [
         "people"
       ],
-      "space": "perso",
-      "date": null,
-      "yearly": null,
       "source": "Where it stands",
       "who": "Daily",
       "noted": "2026-11-22",
-      "archived": false,
-      "label": null,
-      "answer": null,
       "page": "page:p0000000017",
       "open": {
         "path": "Subjects/Inès’s birthday.md",
@@ -1249,22 +911,15 @@
     {
       "id": "line:p0000000017:0000000054",
       "kind": "line",
-      "part": "main",
       "path": "Subjects/Inès’s birthday.md",
       "title": "Inès’s birthday",
       "line": "Order the cake from the bakery",
       "categories": [
         "people"
       ],
-      "space": "perso",
-      "date": null,
-      "yearly": null,
       "source": "Next steps",
       "who": "Daily",
       "noted": "2026-11-22",
-      "archived": false,
-      "label": null,
-      "answer": null,
       "page": "page:p0000000017",
       "open": {
         "path": "Subjects/Inès’s birthday.md",
@@ -1275,22 +930,15 @@
     {
       "id": "line:p0000000017:0000000055",
       "kind": "line",
-      "part": "main",
       "path": "Subjects/Inès’s birthday.md",
       "title": "Inès’s birthday",
       "line": "[[Claire Durand]] organises, [[Marc Durand]] runs the games",
       "categories": [
         "people"
       ],
-      "space": "perso",
-      "date": null,
-      "yearly": null,
       "source": "People",
       "who": "Daily",
       "noted": "2026-11-21",
-      "archived": false,
-      "label": null,
-      "answer": null,
       "page": "page:p0000000017",
       "open": {
         "path": "Subjects/Inès’s birthday.md",
@@ -1301,48 +949,30 @@
     {
       "id": "page:p0000000018",
       "kind": "page",
-      "part": "main",
       "path": "Subjects/Japan trip.md",
       "title": "Japan trip",
       "line": "April, 12 days: Tokyo, Kyoto, Osaka. The flights are to book soon.",
       "categories": [
         "trips"
       ],
-      "space": "perso",
-      "date": null,
-      "yearly": null,
       "source": "Japan trip",
-      "who": "",
-      "noted": null,
-      "archived": false,
-      "label": null,
-      "answer": null,
-      "page": null,
       "open": {
         "path": "Subjects/Japan trip.md"
       },
-      "fold": "japan trip april 12 days tokyo kyoto osaka the flights are to book soon",
-      "aliases": []
+      "fold": "japan trip april 12 days tokyo kyoto osaka the flights are to book soon"
     },
     {
       "id": "line:p0000000018:0000000056",
       "kind": "line",
-      "part": "main",
       "path": "Subjects/Japan trip.md",
       "title": "Japan trip",
       "line": "Route set, flights not booked yet",
       "categories": [
         "trips"
       ],
-      "space": "perso",
-      "date": null,
-      "yearly": null,
       "source": "Where it stands",
       "who": "Daily",
       "noted": "2026-11-21",
-      "archived": false,
-      "label": null,
-      "answer": null,
       "page": "page:p0000000018",
       "open": {
         "path": "Subjects/Japan trip.md",
@@ -1353,22 +983,15 @@
     {
       "id": "line:p0000000018:0000000057",
       "kind": "line",
-      "part": "main",
       "path": "Subjects/Japan trip.md",
       "title": "Japan trip",
       "line": "April, 12 days: Tokyo, Kyoto, Osaka",
       "categories": [
         "trips"
       ],
-      "space": "perso",
-      "date": null,
-      "yearly": null,
       "source": "Decisions",
       "who": "Daily",
       "noted": "2026-11-12",
-      "archived": false,
-      "label": null,
-      "answer": null,
       "page": "page:p0000000018",
       "open": {
         "path": "Subjects/Japan trip.md",
@@ -1379,22 +1002,15 @@
     {
       "id": "line:p0000000018:0000000058",
       "kind": "line",
-      "part": "main",
       "path": "Subjects/Japan trip.md",
       "title": "Japan trip",
       "line": "Book the flights before the end of the month",
       "categories": [
         "trips"
       ],
-      "space": "perso",
-      "date": null,
-      "yearly": null,
       "source": "Next steps",
       "who": "Daily",
       "noted": "2026-11-21",
-      "archived": false,
-      "label": null,
-      "answer": null,
       "page": "page:p0000000018",
       "open": {
         "path": "Subjects/Japan trip.md",
@@ -1405,20 +1021,15 @@
     {
       "id": "line:p0000000018:0000000059",
       "kind": "line",
-      "part": "main",
       "path": "Subjects/Japan trip.md",
       "title": "Japan trip",
       "line": "Budget: €4,000 for two",
       "categories": [
         "trips"
       ],
-      "space": "perso",
-      "date": null,
-      "yearly": null,
       "source": "Figures and budget",
       "who": "Budget",
       "noted": "2026-11-12",
-      "archived": false,
       "label": "Budget",
       "answer": "€4,000 for two",
       "page": "page:p0000000018",
@@ -1431,48 +1042,30 @@
     {
       "id": "page:p0000000001",
       "kind": "page",
-      "part": "main",
       "path": "Subjects/Kitchen renovation.md",
       "title": "Kitchen renovation",
       "line": "Marc’s quote is in: €8,900. The worktop is still to choose and the work date to set.",
       "categories": [
         "home"
       ],
-      "space": "perso",
-      "date": null,
-      "yearly": null,
       "source": "Kitchen renovation",
-      "who": "",
-      "noted": null,
-      "archived": false,
-      "label": null,
-      "answer": null,
-      "page": null,
       "open": {
         "path": "Subjects/Kitchen renovation.md"
       },
-      "fold": "kitchen renovation marc s quote is in 8 900 the worktop is still to choose and the work date to set",
-      "aliases": []
+      "fold": "kitchen renovation marc s quote is in 8 900 the worktop is still to choose and the work date to set"
     },
     {
       "id": "line:p0000000001:000000005a",
       "kind": "line",
-      "part": "main",
       "path": "Subjects/Kitchen renovation.md",
       "title": "Kitchen renovation",
       "line": "Quote received, dates to set with Marc",
       "categories": [
         "home"
       ],
-      "space": "perso",
-      "date": null,
-      "yearly": null,
       "source": "Where it stands",
       "who": "Home",
       "noted": "2026-11-21",
-      "archived": false,
-      "label": null,
-      "answer": null,
       "page": "page:p0000000001",
       "open": {
         "path": "Subjects/Kitchen renovation.md",
@@ -1483,22 +1076,15 @@
     {
       "id": "line:p0000000001:000000005b",
       "kind": "line",
-      "part": "main",
       "path": "Subjects/Kitchen renovation.md",
       "title": "Kitchen renovation",
       "line": "[[Marc Durand]]'s quote accepted",
       "categories": [
         "home"
       ],
-      "space": "perso",
-      "date": null,
-      "yearly": null,
       "source": "Decisions",
       "who": "Budget",
       "noted": "2026-11-21",
-      "archived": false,
-      "label": null,
-      "answer": null,
       "page": "page:p0000000001",
       "open": {
         "path": "Subjects/Kitchen renovation.md",
@@ -1509,22 +1095,15 @@
     {
       "id": "line:p0000000001:000000005c",
       "kind": "line",
-      "part": "main",
       "path": "Subjects/Kitchen renovation.md",
       "title": "Kitchen renovation",
       "line": "Quartz worktop, colour to choose",
       "categories": [
         "home"
       ],
-      "space": "perso",
-      "date": null,
-      "yearly": null,
       "source": "Decisions",
       "who": "Home",
       "noted": "2026-11-17",
-      "archived": false,
-      "label": null,
-      "answer": null,
       "page": "page:p0000000001",
       "open": {
         "path": "Subjects/Kitchen renovation.md",
@@ -1535,22 +1114,15 @@
     {
       "id": "line:p0000000001:000000005d",
       "kind": "line",
-      "part": "main",
       "path": "Subjects/Kitchen renovation.md",
       "title": "Kitchen renovation",
       "line": "Choose the worktop colour",
       "categories": [
         "home"
       ],
-      "space": "perso",
-      "date": null,
-      "yearly": null,
       "source": "Next steps",
       "who": "Home",
       "noted": "2026-11-17",
-      "archived": false,
-      "label": null,
-      "answer": null,
       "page": "page:p0000000001",
       "open": {
         "path": "Subjects/Kitchen renovation.md",
@@ -1561,22 +1133,15 @@
     {
       "id": "line:p0000000001:000000005e",
       "kind": "line",
-      "part": "main",
       "path": "Subjects/Kitchen renovation.md",
       "title": "Kitchen renovation",
       "line": "Set the work dates",
       "categories": [
         "home"
       ],
-      "space": "perso",
-      "date": null,
-      "yearly": null,
       "source": "Next steps",
       "who": "Home",
       "noted": "2026-11-21",
-      "archived": false,
-      "label": null,
-      "answer": null,
       "page": "page:p0000000001",
       "open": {
         "path": "Subjects/Kitchen renovation.md",
@@ -1587,22 +1152,15 @@
     {
       "id": "line:p0000000001:000000005f",
       "kind": "line",
-      "part": "main",
       "path": "Subjects/Kitchen renovation.md",
       "title": "Kitchen renovation",
       "line": "[[Marc Durand]], carpenter",
       "categories": [
         "home"
       ],
-      "space": "perso",
-      "date": null,
-      "yearly": null,
       "source": "People",
       "who": "Home",
       "noted": "2026-11-09",
-      "archived": false,
-      "label": null,
-      "answer": null,
       "page": "page:p0000000001",
       "open": {
         "path": "Subjects/Kitchen renovation.md",
@@ -1613,22 +1171,15 @@
     {
       "id": "line:p0000000001:0000000060",
       "kind": "line",
-      "part": "main",
       "path": "Subjects/Kitchen renovation.md",
       "title": "Kitchen renovation",
       "line": "Cuisines Éclat, rue des Halles",
       "categories": [
         "home"
       ],
-      "space": "perso",
-      "date": null,
-      "yearly": null,
       "source": "People",
       "who": "Home",
       "noted": "2026-10-13",
-      "archived": false,
-      "label": null,
-      "answer": null,
       "page": "page:p0000000001",
       "open": {
         "path": "Subjects/Kitchen renovation.md",
@@ -1639,20 +1190,15 @@
     {
       "id": "line:p0000000001:0000000061",
       "kind": "line",
-      "part": "main",
       "path": "Subjects/Kitchen renovation.md",
       "title": "Kitchen renovation",
       "line": "Quote: €8,900",
       "categories": [
         "home"
       ],
-      "space": "perso",
-      "date": null,
-      "yearly": null,
       "source": "Figures and budget",
       "who": "Budget",
       "noted": "2026-11-21",
-      "archived": false,
       "label": "Quote",
       "answer": "€8,900",
       "page": "page:p0000000001",
@@ -1665,20 +1211,15 @@
     {
       "id": "line:p0000000001:0000000062",
       "kind": "line",
-      "part": "main",
       "path": "Subjects/Kitchen renovation.md",
       "title": "Kitchen renovation",
       "line": "Budget set aside: €10,000",
       "categories": [
         "home"
       ],
-      "space": "perso",
-      "date": null,
-      "yearly": null,
       "source": "Figures and budget",
       "who": "Budget",
       "noted": "2026-11-02",
-      "archived": false,
       "label": "Budget set aside",
       "answer": "€10,000",
       "page": "page:p0000000001",
@@ -1691,22 +1232,15 @@
     {
       "id": "line:p0000000001:0000000063",
       "kind": "line",
-      "part": "main",
       "path": "Subjects/Kitchen renovation.md",
       "title": "Kitchen renovation",
       "line": "Quote accepted",
       "categories": [
         "home"
       ],
-      "space": "perso",
-      "date": null,
-      "yearly": null,
       "source": "History",
       "who": "Budget",
       "noted": "2026-11-21",
-      "archived": false,
-      "label": null,
-      "answer": null,
       "page": "page:p0000000001",
       "open": {
         "path": "Subjects/Kitchen renovation.md",
@@ -1717,22 +1251,15 @@
     {
       "id": "line:p0000000001:0000000064",
       "kind": "line",
-      "part": "main",
       "path": "Subjects/Kitchen renovation.md",
       "title": "Kitchen renovation",
       "line": "Visit to the showroom",
       "categories": [
         "home"
       ],
-      "space": "perso",
-      "date": null,
-      "yearly": null,
       "source": "History",
       "who": "Home",
       "noted": "2026-10-13",
-      "archived": false,
-      "label": null,
-      "answer": null,
       "page": "page:p0000000001",
       "open": {
         "path": "Subjects/Kitchen renovation.md",
@@ -1743,48 +1270,31 @@
     {
       "id": "page:p0000000019",
       "kind": "page",
-      "part": "main",
       "path": "Subjects/Lisbon weekend.md",
       "title": "Lisbon weekend",
       "line": "Four days in Lisbon with Claire, from December 4 to December 7. Flights and hotel booked.",
       "categories": [
         "trips"
       ],
-      "space": "perso",
-      "date": null,
-      "yearly": null,
       "source": "Lisbon weekend",
-      "who": "",
-      "noted": null,
-      "archived": false,
-      "label": null,
-      "answer": null,
-      "page": null,
       "open": {
         "path": "Subjects/Lisbon weekend.md"
       },
-      "fold": "lisbon weekend four days in lisbon with claire from december 4 to december 7 flights and hotel booked",
-      "aliases": []
+      "fold": "lisbon weekend four days in lisbon with claire from december 4 to december 7 flights and hotel booked"
     },
     {
       "id": "line:p0000000019:0000000065",
       "kind": "line",
-      "part": "main",
       "path": "Subjects/Lisbon weekend.md",
       "title": "Lisbon weekend",
       "line": "From December 4 to December 7",
       "categories": [
         "trips"
       ],
-      "space": "perso",
       "date": "2026-12-04",
-      "yearly": null,
       "source": "Dates",
       "who": "Daily",
       "noted": "2026-11-21",
-      "archived": false,
-      "label": null,
-      "answer": null,
       "page": "page:p0000000019",
       "open": {
         "path": "Subjects/Lisbon weekend.md",
@@ -1795,22 +1305,15 @@
     {
       "id": "line:p0000000019:0000000066",
       "kind": "line",
-      "part": "main",
       "path": "Subjects/Lisbon weekend.md",
       "title": "Lisbon weekend",
       "line": "Day 1: arrival, hotel and a walk through Alfama",
       "categories": [
         "trips"
       ],
-      "space": "perso",
-      "date": null,
-      "yearly": null,
       "source": "Itinerary",
       "who": "Daily",
       "noted": "2026-11-21",
-      "archived": false,
-      "label": null,
-      "answer": null,
       "page": "page:p0000000019",
       "open": {
         "path": "Subjects/Lisbon weekend.md",
@@ -1821,22 +1324,15 @@
     {
       "id": "line:p0000000019:0000000067",
       "kind": "line",
-      "part": "main",
       "path": "Subjects/Lisbon weekend.md",
       "title": "Lisbon weekend",
       "line": "Day 2: São Jorge Castle, Baixa and Chiado",
       "categories": [
         "trips"
       ],
-      "space": "perso",
-      "date": null,
-      "yearly": null,
       "source": "Itinerary",
       "who": "Daily",
       "noted": "2026-11-21",
-      "archived": false,
-      "label": null,
-      "answer": null,
       "page": "page:p0000000019",
       "open": {
         "path": "Subjects/Lisbon weekend.md",
@@ -1847,22 +1343,15 @@
     {
       "id": "line:p0000000019:0000000068",
       "kind": "line",
-      "part": "main",
       "path": "Subjects/Lisbon weekend.md",
       "title": "Lisbon weekend",
       "line": "Day 3: Belém",
       "categories": [
         "trips"
       ],
-      "space": "perso",
-      "date": null,
-      "yearly": null,
       "source": "Itinerary",
       "who": "Daily",
       "noted": "2026-11-21",
-      "archived": false,
-      "label": null,
-      "answer": null,
       "page": "page:p0000000019",
       "open": {
         "path": "Subjects/Lisbon weekend.md",
@@ -1873,22 +1362,15 @@
     {
       "id": "line:p0000000019:0000000069",
       "kind": "line",
-      "part": "main",
       "path": "Subjects/Lisbon weekend.md",
       "title": "Lisbon weekend",
       "line": "Day 4: Campo de Ourique market, then home",
       "categories": [
         "trips"
       ],
-      "space": "perso",
-      "date": null,
-      "yearly": null,
       "source": "Itinerary",
       "who": "Daily",
       "noted": "2026-11-21",
-      "archived": false,
-      "label": null,
-      "answer": null,
       "page": "page:p0000000019",
       "open": {
         "path": "Subjects/Lisbon weekend.md",
@@ -1899,22 +1381,15 @@
     {
       "id": "line:p0000000019:000000006a",
       "kind": "line",
-      "part": "main",
       "path": "Subjects/Lisbon weekend.md",
       "title": "Lisbon weekend",
       "line": "[x] Passport",
       "categories": [
         "trips"
       ],
-      "space": "perso",
-      "date": null,
-      "yearly": null,
       "source": "To pack",
       "who": "Daily",
       "noted": "2026-11-21",
-      "archived": false,
-      "label": null,
-      "answer": null,
       "page": "page:p0000000019",
       "open": {
         "path": "Subjects/Lisbon weekend.md",
@@ -1925,22 +1400,15 @@
     {
       "id": "line:p0000000019:000000006b",
       "kind": "line",
-      "part": "main",
       "path": "Subjects/Lisbon weekend.md",
       "title": "Lisbon weekend",
       "line": "[x] Walking shoes",
       "categories": [
         "trips"
       ],
-      "space": "perso",
-      "date": null,
-      "yearly": null,
       "source": "To pack",
       "who": "Daily",
       "noted": "2026-11-21",
-      "archived": false,
-      "label": null,
-      "answer": null,
       "page": "page:p0000000019",
       "open": {
         "path": "Subjects/Lisbon weekend.md",
@@ -1951,22 +1419,15 @@
     {
       "id": "line:p0000000019:000000006c",
       "kind": "line",
-      "part": "main",
       "path": "Subjects/Lisbon weekend.md",
       "title": "Lisbon weekend",
       "line": "[x] Copy of the tickets",
       "categories": [
         "trips"
       ],
-      "space": "perso",
-      "date": null,
-      "yearly": null,
       "source": "To pack",
       "who": "Daily",
       "noted": "2026-11-21",
-      "archived": false,
-      "label": null,
-      "answer": null,
       "page": "page:p0000000019",
       "open": {
         "path": "Subjects/Lisbon weekend.md",
@@ -1977,22 +1438,15 @@
     {
       "id": "line:p0000000019:000000006d",
       "kind": "line",
-      "part": "main",
       "path": "Subjects/Lisbon weekend.md",
       "title": "Lisbon weekend",
       "line": "[ ] Sunscreen",
       "categories": [
         "trips"
       ],
-      "space": "perso",
-      "date": null,
-      "yearly": null,
       "source": "To pack",
       "who": "Daily",
       "noted": "2026-11-21",
-      "archived": false,
-      "label": null,
-      "answer": null,
       "page": "page:p0000000019",
       "open": {
         "path": "Subjects/Lisbon weekend.md",
@@ -2003,22 +1457,15 @@
     {
       "id": "line:p0000000019:000000006e",
       "kind": "line",
-      "part": "main",
       "path": "Subjects/Lisbon weekend.md",
       "title": "Lisbon weekend",
       "line": "[ ] Light raincoat",
       "categories": [
         "trips"
       ],
-      "space": "perso",
-      "date": null,
-      "yearly": null,
       "source": "To pack",
       "who": "Daily",
       "noted": "2026-11-21",
-      "archived": false,
-      "label": null,
-      "answer": null,
       "page": "page:p0000000019",
       "open": {
         "path": "Subjects/Lisbon weekend.md",
@@ -2029,22 +1476,15 @@
     {
       "id": "line:p0000000019:000000006f",
       "kind": "line",
-      "part": "main",
       "path": "Subjects/Lisbon weekend.md",
       "title": "Lisbon weekend",
       "line": "[ ] Phone charger",
       "categories": [
         "trips"
       ],
-      "space": "perso",
-      "date": null,
-      "yearly": null,
       "source": "To pack",
       "who": "Daily",
       "noted": "2026-11-21",
-      "archived": false,
-      "label": null,
-      "answer": null,
       "page": "page:p0000000019",
       "open": {
         "path": "Subjects/Lisbon weekend.md",
@@ -2055,20 +1495,15 @@
     {
       "id": "line:p0000000019:0000000070",
       "kind": "line",
-      "part": "main",
       "path": "Subjects/Lisbon weekend.md",
       "title": "Lisbon weekend",
       "line": "Budget: €900 for two, flights and hotel included",
       "categories": [
         "trips"
       ],
-      "space": "perso",
-      "date": null,
-      "yearly": null,
       "source": "Budget",
       "who": "Budget",
       "noted": "2026-11-19",
-      "archived": false,
       "label": "Budget",
       "answer": "€900 for two, flights and hotel included",
       "page": "page:p0000000019",
@@ -2081,22 +1516,15 @@
     {
       "id": "line:p0000000019:0000000071",
       "kind": "line",
-      "part": "main",
       "path": "Subjects/Lisbon weekend.md",
       "title": "Lisbon weekend",
       "line": "Tram 28 stops in front of the hotel",
       "categories": [
         "trips"
       ],
-      "space": "perso",
-      "date": null,
-      "yearly": null,
       "source": "On site",
       "who": "Daily",
       "noted": "2026-11-21",
-      "archived": false,
-      "label": null,
-      "answer": null,
       "page": "page:p0000000019",
       "open": {
         "path": "Subjects/Lisbon weekend.md",
@@ -2107,22 +1535,15 @@
     {
       "id": "line:p0000000019:0000000072",
       "kind": "line",
-      "part": "main",
       "path": "Subjects/Lisbon weekend.md",
       "title": "Lisbon weekend",
       "line": "Miradouro da Senhora do Monte at sunset",
       "categories": [
         "trips"
       ],
-      "space": "perso",
-      "date": null,
-      "yearly": null,
       "source": "On site",
       "who": "Daily",
       "noted": "2026-11-21",
-      "archived": false,
-      "label": null,
-      "answer": null,
       "page": "page:p0000000019",
       "open": {
         "path": "Subjects/Lisbon weekend.md",
@@ -2133,48 +1554,30 @@
     {
       "id": "page:p000000001a",
       "kind": "page",
-      "part": "main",
       "path": "Subjects/New car.md",
       "title": "New car",
       "line": "A used hybrid, €15,000 at most.",
       "categories": [
         "money"
       ],
-      "space": "perso",
-      "date": null,
-      "yearly": null,
       "source": "New car",
-      "who": "",
-      "noted": null,
-      "archived": false,
-      "label": null,
-      "answer": null,
-      "page": null,
       "open": {
         "path": "Subjects/New car.md"
       },
-      "fold": "new car a used hybrid 15 000 at most",
-      "aliases": []
+      "fold": "new car a used hybrid 15 000 at most"
     },
     {
       "id": "line:p000000001a:0000000073",
       "kind": "line",
-      "part": "main",
       "path": "Subjects/New car.md",
       "title": "New car",
       "line": "Three models shortlisted",
       "categories": [
         "money"
       ],
-      "space": "perso",
-      "date": null,
-      "yearly": null,
       "source": "Where it stands",
       "who": "Budget",
       "noted": "2026-11-18",
-      "archived": false,
-      "label": null,
-      "answer": null,
       "page": "page:p000000001a",
       "open": {
         "path": "Subjects/New car.md",
@@ -2185,20 +1588,15 @@
     {
       "id": "line:p000000001a:0000000074",
       "kind": "line",
-      "part": "main",
       "path": "Subjects/New car.md",
       "title": "New car",
       "line": "Budget: €15,000 at most",
       "categories": [
         "money"
       ],
-      "space": "perso",
-      "date": null,
-      "yearly": null,
       "source": "Figures and budget",
       "who": "Budget",
       "noted": "2026-11-16",
-      "archived": false,
       "label": "Budget",
       "answer": "€15,000 at most",
       "page": "page:p000000001a",
@@ -2211,7 +1609,6 @@
     {
       "id": "page:p0000000003",
       "kind": "page",
-      "part": "main",
       "path": "Subjects/Taxes 2026.md",
       "title": "Taxes 2026",
       "line": "Online tax return to check before the end of the month.",
@@ -2219,26 +1616,15 @@
         "money",
         "papers"
       ],
-      "space": "perso",
-      "date": null,
-      "yearly": null,
       "source": "Taxes 2026",
-      "who": "",
-      "noted": null,
-      "archived": false,
-      "label": null,
-      "answer": null,
-      "page": null,
       "open": {
         "path": "Subjects/Taxes 2026.md"
       },
-      "fold": "taxes 2026 online tax return to check before the end of the month",
-      "aliases": []
+      "fold": "taxes 2026 online tax return to check before the end of the month"
     },
     {
       "id": "line:p0000000003:000000000b",
       "kind": "line",
-      "part": "main",
       "path": "Subjects/Taxes 2026.md",
       "title": "Taxes 2026",
       "line": "Pre-filled return received",
@@ -2246,15 +1632,9 @@
         "money",
         "papers"
       ],
-      "space": "perso",
-      "date": null,
-      "yearly": null,
       "source": "Where it stands",
       "who": "Budget",
       "noted": "2026-11-20",
-      "archived": false,
-      "label": null,
-      "answer": null,
       "page": "page:p0000000003",
       "open": {
         "path": "Subjects/Taxes 2026.md",
@@ -2265,7 +1645,6 @@
     {
       "id": "line:p0000000003:000000000c",
       "kind": "line",
-      "part": "main",
       "path": "Subjects/Taxes 2026.md",
       "title": "Taxes 2026",
       "line": "Add the donations and the childcare costs",
@@ -2273,15 +1652,9 @@
         "money",
         "papers"
       ],
-      "space": "perso",
-      "date": null,
-      "yearly": null,
       "source": "Next steps",
       "who": "Budget",
       "noted": "2026-11-20",
-      "archived": false,
-      "label": null,
-      "answer": null,
       "page": "page:p0000000003",
       "open": {
         "path": "Subjects/Taxes 2026.md",
@@ -2292,48 +1665,30 @@
     {
       "id": "page:p000000001b",
       "kind": "page",
-      "part": "main",
       "path": "You.md",
       "title": "You",
       "line": "You live in Nantes, run on Sundays and are planning a trip to Japan.",
       "categories": [
         "people"
       ],
-      "space": "perso",
-      "date": null,
-      "yearly": null,
       "source": "You",
-      "who": "",
-      "noted": null,
-      "archived": false,
-      "label": null,
-      "answer": null,
-      "page": null,
       "open": {
         "path": "You.md"
       },
-      "fold": "you you live in nantes run on sundays and are planning a trip to japan",
-      "aliases": []
+      "fold": "you you live in nantes run on sundays and are planning a trip to japan"
     },
     {
       "id": "line:p000000001b:0000000075",
       "kind": "line",
-      "part": "main",
       "path": "You.md",
       "title": "You",
       "line": "Lives in Nantes",
       "categories": [
         "people"
       ],
-      "space": "perso",
-      "date": null,
-      "yearly": null,
       "source": "Who you are",
       "who": "Daily",
       "noted": "2026-09-23",
-      "archived": false,
-      "label": null,
-      "answer": null,
       "page": "page:p000000001b",
       "open": {
         "path": "You.md",
@@ -2344,20 +1699,15 @@
     {
       "id": "line:p000000001b:0000000076",
       "kind": "line",
-      "part": "main",
       "path": "You.md",
       "title": "You",
       "line": "Sister: [[Claire Durand]]",
       "categories": [
         "people"
       ],
-      "space": "perso",
-      "date": null,
-      "yearly": null,
       "source": "Family",
       "who": "Daily",
       "noted": "2026-09-23",
-      "archived": false,
       "label": "Sister",
       "answer": "[[Claire Durand]]",
       "page": "page:p000000001b",
@@ -2370,20 +1720,15 @@
     {
       "id": "line:p000000001b:0000000077",
       "kind": "line",
-      "part": "main",
       "path": "You.md",
       "title": "You",
       "line": "Brother-in-law: [[Marc Durand]]",
       "categories": [
         "people"
       ],
-      "space": "perso",
-      "date": null,
-      "yearly": null,
       "source": "Family",
       "who": "Daily",
       "noted": "2026-09-23",
-      "archived": false,
       "label": "Brother-in-law",
       "answer": "[[Marc Durand]]",
       "page": "page:p000000001b",
@@ -2396,22 +1741,15 @@
     {
       "id": "line:p000000001b:0000000078",
       "kind": "line",
-      "part": "main",
       "path": "You.md",
       "title": "You",
       "line": "Graphic designer at an agency, works from home on Fridays",
       "categories": [
         "people"
       ],
-      "space": "perso",
-      "date": null,
-      "yearly": null,
       "source": "Work",
       "who": "Daily",
       "noted": "2026-10-23",
-      "archived": false,
-      "label": null,
-      "answer": null,
       "page": "page:p000000001b",
       "open": {
         "path": "You.md",
@@ -2422,22 +1760,15 @@
     {
       "id": "line:p000000001b:0000000079",
       "kind": "line",
-      "part": "main",
       "path": "You.md",
       "title": "You",
       "line": "Runs on Sunday mornings with [[Lucas Bernard]]",
       "categories": [
         "people"
       ],
-      "space": "perso",
-      "date": null,
-      "yearly": null,
       "source": "Likes and habits",
       "who": "Coach",
       "noted": "2026-10-13",
-      "archived": false,
-      "label": null,
-      "answer": null,
       "page": "page:p000000001b",
       "open": {
         "path": "You.md",
@@ -2448,22 +1779,15 @@
     {
       "id": "line:p000000001b:000000007a",
       "kind": "line",
-      "part": "main",
       "path": "You.md",
       "title": "You",
       "line": "Coffee without sugar",
       "categories": [
         "people"
       ],
-      "space": "perso",
-      "date": null,
-      "yearly": null,
       "source": "Likes and habits",
       "who": "toi",
       "noted": "2026-11-02",
-      "archived": false,
-      "label": null,
-      "answer": null,
       "page": "page:p000000001b",
       "open": {
         "path": "You.md",
@@ -2474,22 +1798,15 @@
     {
       "id": "line:p000000001b:000000007b",
       "kind": "line",
-      "part": "main",
       "path": "You.md",
       "title": "You",
       "line": "Run a half marathon in spring",
       "categories": [
         "people"
       ],
-      "space": "perso",
-      "date": null,
-      "yearly": null,
       "source": "Goals",
       "who": "Coach",
       "noted": "2026-11-12",
-      "archived": false,
-      "label": null,
-      "answer": null,
       "page": "page:p000000001b",
       "open": {
         "path": "You.md",
@@ -2500,22 +1817,15 @@
     {
       "id": "line:p000000001b:000000007c",
       "kind": "line",
-      "part": "main",
       "path": "You.md",
       "title": "You",
       "line": "No task proposals for birthdays",
       "categories": [
         "people"
       ],
-      "space": "perso",
-      "date": null,
-      "yearly": null,
       "source": "What your agents should know",
       "who": "Daily",
       "noted": "2026-11-07",
-      "archived": false,
-      "label": null,
-      "answer": null,
       "page": "page:p000000001b",
       "open": {
         "path": "You.md",
@@ -2526,22 +1836,15 @@
     {
       "id": "line:p000000001b:000000007d",
       "kind": "line",
-      "part": "main",
       "path": "You.md",
       "title": "You",
       "line": "Short answers in the morning",
       "categories": [
         "people"
       ],
-      "space": "perso",
-      "date": null,
-      "yearly": null,
       "source": "What your agents should know",
       "who": "toi",
       "noted": "2026-11-17",
-      "archived": false,
-      "label": null,
-      "answer": null,
       "page": "page:p000000001b",
       "open": {
         "path": "You.md",
@@ -2552,111 +1855,78 @@
     {
       "id": "task:t00000e",
       "kind": "task",
-      "part": "main",
       "path": "Tasks/Tasks.md",
       "title": "Call Marc back about the quote",
       "line": "Call Marc back about the quote",
       "categories": [
         "home"
       ],
-      "space": "perso",
       "date": "2026-11-24",
-      "yearly": null,
       "source": "Tasks",
       "who": "Daily",
       "noted": "2026-11-22",
-      "archived": false,
-      "label": null,
-      "answer": null,
-      "page": null,
       "open": {
         "task": "t00000e"
       },
-      "fold": "call marc back about the quote",
-      "done": false
+      "fold": "call marc back about the quote"
     },
     {
       "id": "task:t00001c",
       "kind": "task",
-      "part": "main",
       "path": "Tasks/Tasks.md",
       "title": "Send the invitations",
       "line": "Send the invitations",
       "categories": [
         "people"
       ],
-      "space": "perso",
       "date": "2026-11-25",
-      "yearly": null,
       "source": "Tasks",
       "who": "Daily",
       "noted": "2026-11-22",
-      "archived": false,
-      "label": null,
-      "answer": null,
-      "page": null,
       "open": {
         "task": "t00001c"
       },
-      "fold": "send the invitations",
-      "done": false
+      "fold": "send the invitations"
     },
     {
       "id": "task:t00001d",
       "kind": "task",
-      "part": "main",
       "path": "Tasks/Tasks.md",
       "title": "Book the flights to Osaka",
       "line": "Book the flights to Osaka",
       "categories": [
         "trips"
       ],
-      "space": "perso",
       "date": "2026-11-26",
-      "yearly": null,
       "source": "Tasks",
       "who": "Daily",
       "noted": "2026-11-22",
-      "archived": false,
-      "label": null,
-      "answer": null,
-      "page": null,
       "open": {
         "task": "t00001d"
       },
-      "fold": "book the flights to osaka",
-      "done": false
+      "fold": "book the flights to osaka"
     },
     {
       "id": "task:t00001e",
       "kind": "task",
-      "part": "main",
       "path": "Tasks/Tasks.md",
       "title": "Prepare the annual review",
       "line": "Prepare the annual review",
       "categories": [
         "work"
       ],
-      "space": "perso",
       "date": "2026-11-27",
-      "yearly": null,
       "source": "Tasks",
       "who": "Daily",
       "noted": "2026-11-22",
-      "archived": false,
-      "label": null,
-      "answer": null,
-      "page": null,
       "open": {
         "task": "t00001e"
       },
-      "fold": "prepare the annual review",
-      "done": false
+      "fold": "prepare the annual review"
     },
     {
       "id": "task:t000004",
       "kind": "task",
-      "part": "main",
       "path": "Tasks/Tasks.md",
       "title": "Check the pre-filled tax return",
       "line": "Check the pre-filled tax return",
@@ -2664,260 +1934,176 @@
         "money",
         "papers"
       ],
-      "space": "perso",
       "date": "2026-11-28",
-      "yearly": null,
       "source": "Tasks",
       "who": "Daily",
       "noted": "2026-11-22",
-      "archived": false,
-      "label": null,
-      "answer": null,
-      "page": null,
       "open": {
         "task": "t000004"
       },
-      "fold": "check the pre filled tax return",
-      "done": false
+      "fold": "check the pre filled tax return"
     },
     {
       "id": "task:t00001f",
       "kind": "task",
-      "part": "main",
       "path": "Tasks/Tasks.md",
       "title": "Book a dentist appointment",
       "line": "Book a dentist appointment",
       "categories": [
         "people"
       ],
-      "space": "perso",
       "date": "2026-11-29",
-      "yearly": null,
       "source": "Tasks",
       "who": "Daily",
       "noted": "2026-11-22",
-      "archived": false,
-      "label": null,
-      "answer": null,
-      "page": null,
       "open": {
         "task": "t00001f"
       },
-      "fold": "book a dentist appointment",
-      "done": false
+      "fold": "book a dentist appointment"
     },
     {
       "id": "task:t000020",
       "kind": "task",
-      "part": "main",
       "path": "Tasks/Tasks.md",
       "title": "Book a Yaris test drive",
       "line": "Book a Yaris test drive",
       "categories": [
         "money"
       ],
-      "space": "perso",
       "date": "2026-12-01",
-      "yearly": null,
       "source": "Tasks",
       "who": "Daily",
       "noted": "2026-11-22",
-      "archived": false,
-      "label": null,
-      "answer": null,
-      "page": null,
       "open": {
         "task": "t000020"
       },
-      "fold": "book a yaris test drive",
-      "done": false
+      "fold": "book a yaris test drive"
     },
     {
       "id": "task:t000021",
       "kind": "task",
-      "part": "main",
       "path": "Tasks/Tasks.md",
       "title": "Order the cake",
       "line": "Order the cake",
       "categories": [
         "people"
       ],
-      "space": "perso",
       "date": "2026-12-02",
-      "yearly": null,
       "source": "Tasks",
       "who": "Daily",
       "noted": "2026-11-22",
-      "archived": false,
-      "label": null,
-      "answer": null,
-      "page": null,
       "open": {
         "task": "t000021"
       },
-      "fold": "order the cake",
-      "done": false
+      "fold": "order the cake"
     },
     {
       "id": "task:t000022",
       "kind": "task",
-      "part": "main",
       "path": "Tasks/Tasks.md",
       "title": "Renew the car insurance",
       "line": "Renew the car insurance",
       "categories": [
         "money"
       ],
-      "space": "perso",
       "date": "2026-12-06",
-      "yearly": null,
       "source": "Tasks",
       "who": "Daily",
       "noted": "2026-11-22",
-      "archived": false,
-      "label": null,
-      "answer": null,
-      "page": null,
       "open": {
         "task": "t000022"
       },
-      "fold": "renew the car insurance",
-      "done": false
+      "fold": "renew the car insurance"
     },
     {
       "id": "task:t000023",
       "kind": "task",
-      "part": "main",
       "path": "Tasks/Tasks.md",
       "title": "Buy Marc’s present",
       "line": "Buy Marc’s present",
       "categories": [
         "people"
       ],
-      "space": "perso",
       "date": "2026-12-13",
-      "yearly": null,
       "source": "Tasks",
       "who": "Daily",
       "noted": "2026-11-22",
-      "archived": false,
-      "label": null,
-      "answer": null,
-      "page": null,
       "open": {
         "task": "t000023"
       },
-      "fold": "buy marc s present",
-      "done": false
+      "fold": "buy marc s present"
     },
     {
       "id": "task:t000024",
       "kind": "task",
-      "part": "main",
       "path": "Tasks/Tasks.md",
       "title": "Choose the worktop",
       "line": "Choose the worktop",
       "categories": [
         "home"
       ],
-      "space": "perso",
-      "date": null,
-      "yearly": null,
       "source": "Tasks",
       "who": "Daily",
       "noted": "2026-11-22",
-      "archived": false,
-      "label": null,
-      "answer": null,
-      "page": null,
       "open": {
         "task": "t000024"
       },
-      "fold": "choose the worktop",
-      "done": false
+      "fold": "choose the worktop"
     },
     {
       "id": "task:t000025",
       "kind": "task",
-      "part": "main",
       "path": "Tasks/Tasks.md",
       "title": "Sort the summer photos",
       "line": "Sort the summer photos",
       "categories": [
         "other"
       ],
-      "space": "perso",
-      "date": null,
-      "yearly": null,
       "source": "Tasks",
       "who": "Daily",
       "noted": "2026-11-22",
-      "archived": false,
-      "label": null,
-      "answer": null,
-      "page": null,
       "open": {
         "task": "t000025"
       },
-      "fold": "sort the summer photos",
-      "done": false
+      "fold": "sort the summer photos"
     },
     {
       "id": "task:t000026",
       "kind": "task",
-      "part": "main",
       "path": "Tasks/Tasks.md",
       "title": "Compare internet providers",
       "line": "Compare internet providers",
       "categories": [
         "home"
       ],
-      "space": "perso",
-      "date": null,
-      "yearly": null,
       "source": "Tasks",
       "who": "Daily",
       "noted": "2026-11-22",
-      "archived": false,
-      "label": null,
-      "answer": null,
-      "page": null,
       "open": {
         "task": "t000026"
       },
-      "fold": "compare internet providers",
-      "done": false
+      "fold": "compare internet providers"
     },
     {
       "id": "task:t000027",
       "kind": "task",
-      "part": "main",
       "path": "Tasks/Tasks.md",
       "title": "Buy the balloons",
       "line": "Buy the balloons",
       "categories": [
         "people"
       ],
-      "space": "perso",
-      "date": null,
-      "yearly": null,
       "source": "Tasks",
       "who": "Daily",
       "noted": "2026-11-22",
-      "archived": false,
-      "label": null,
-      "answer": null,
-      "page": null,
       "open": {
         "task": "t000027"
       },
-      "fold": "buy the balloons",
-      "done": false
+      "fold": "buy the balloons"
     },
     {
       "id": "task:t000005",
       "kind": "task",
-      "part": "main",
       "path": "Tasks/Tasks.md",
       "title": "Find the donation receipts",
       "line": "Find the donation receipts",
@@ -2925,104 +2111,68 @@
         "money",
         "papers"
       ],
-      "space": "perso",
-      "date": null,
-      "yearly": null,
       "source": "Tasks",
       "who": "Daily",
       "noted": "2026-11-22",
-      "archived": false,
-      "label": null,
-      "answer": null,
-      "page": null,
       "open": {
         "task": "t000005"
       },
-      "fold": "find the donation receipts",
-      "done": false
+      "fold": "find the donation receipts"
     },
     {
       "id": "task:t000028",
       "kind": "task",
-      "part": "main",
       "path": "Tasks/Tasks.md",
       "title": "Compare three used models",
       "line": "Compare three used models",
       "categories": [
         "money"
       ],
-      "space": "perso",
-      "date": null,
-      "yearly": null,
       "source": "Tasks",
       "who": "Daily",
       "noted": "2026-11-22",
-      "archived": false,
-      "label": null,
-      "answer": null,
-      "page": null,
       "open": {
         "task": "t000028"
       },
-      "fold": "compare three used models",
-      "done": false
+      "fold": "compare three used models"
     },
     {
       "id": "task:t000029",
       "kind": "task",
-      "part": "main",
       "path": "Tasks/Tasks.md",
       "title": "Choose the splashback",
       "line": "Choose the splashback",
       "categories": [
         "home"
       ],
-      "space": "perso",
-      "date": null,
-      "yearly": null,
       "source": "Tasks",
       "who": "Daily",
       "noted": "2026-11-22",
-      "archived": false,
-      "label": null,
-      "answer": null,
-      "page": null,
       "open": {
         "task": "t000029"
       },
-      "fold": "choose the splashback",
-      "done": false
+      "fold": "choose the splashback"
     },
     {
       "id": "task:t00002a",
       "kind": "task",
-      "part": "main",
       "path": "Tasks/Tasks.md",
       "title": "Buy a Kyoto guidebook",
       "line": "Buy a Kyoto guidebook",
       "categories": [
         "trips"
       ],
-      "space": "perso",
-      "date": null,
-      "yearly": null,
       "source": "Tasks",
       "who": "Daily",
       "noted": "2026-11-22",
-      "archived": false,
-      "label": null,
-      "answer": null,
-      "page": null,
       "open": {
         "task": "t00002a"
       },
-      "fold": "buy a kyoto guidebook",
-      "done": false
+      "fold": "buy a kyoto guidebook"
     },
     {
       "id": "record:r000006",
       "kind": "record",
-      "part": "main",
       "path": "Records/Purchases.md",
       "title": "Washing machine",
       "line": "2024-12-22 · Washing machine · Electro Plus · €499 · durable goods · 2026-12-22",
@@ -3030,16 +2180,8 @@
         "money",
         "papers"
       ],
-      "space": "perso",
       "date": "2026-12-22",
-      "yearly": null,
       "source": "Purchases",
-      "who": "",
-      "noted": null,
-      "archived": false,
-      "label": null,
-      "answer": null,
-      "page": null,
       "open": {
         "record": {
           "type": "purchase",
@@ -3051,7 +2193,6 @@
     {
       "id": "record:r000007",
       "kind": "record",
-      "part": "main",
       "path": "Records/Purchases.md",
       "title": "Tablet",
       "line": "2026-07-25 · Tablet · Online shop · €329 · durable goods · 2028-07-24",
@@ -3059,16 +2200,8 @@
         "money",
         "papers"
       ],
-      "space": "perso",
       "date": "2028-07-24",
-      "yearly": null,
       "source": "Purchases",
-      "who": "",
-      "noted": null,
-      "archived": false,
-      "label": null,
-      "answer": null,
-      "page": null,
       "open": {
         "record": {
           "type": "purchase",
@@ -3080,7 +2213,6 @@
     {
       "id": "record:r000008",
       "kind": "record",
-      "part": "main",
       "path": "Records/Purchases.md",
       "title": "Headphones",
       "line": "2024-09-13 · Headphones · Department store · €89 · durable goods · 2026-09-13",
@@ -3088,16 +2220,8 @@
         "money",
         "papers"
       ],
-      "space": "perso",
       "date": "2026-09-13",
-      "yearly": null,
       "source": "Purchases",
-      "who": "",
-      "noted": null,
-      "archived": false,
-      "label": null,
-      "answer": null,
-      "page": null,
       "open": {
         "record": {
           "type": "purchase",
@@ -3109,23 +2233,14 @@
     {
       "id": "record:r00002b",
       "kind": "record",
-      "part": "main",
       "path": "Records/Subscriptions.md",
       "title": "Film streaming",
       "line": "Film streaming · €13.49 · monthly · 2026-12-01 · Online, any time",
       "categories": [
         "money"
       ],
-      "space": "perso",
       "date": "2026-12-01",
-      "yearly": null,
       "source": "Subscriptions",
-      "who": "",
-      "noted": null,
-      "archived": false,
-      "label": null,
-      "answer": null,
-      "page": null,
       "open": {
         "record": {
           "type": "subscription",
@@ -3137,23 +2252,14 @@
     {
       "id": "record:r00002c",
       "kind": "record",
-      "part": "main",
       "path": "Records/Subscriptions.md",
       "title": "Gym",
       "line": "Gym · €29.90 · monthly · 2026-12-09 · By letter, one month ahead",
       "categories": [
         "money"
       ],
-      "space": "perso",
       "date": "2026-12-09",
-      "yearly": null,
       "source": "Subscriptions",
-      "who": "",
-      "noted": null,
-      "archived": false,
-      "label": null,
-      "answer": null,
-      "page": null,
       "open": {
         "record": {
           "type": "subscription",
@@ -3165,23 +2271,14 @@
     {
       "id": "record:r000009",
       "kind": "record",
-      "part": "main",
       "path": "Records/Contracts and insurance.md",
       "title": "Home insurance",
       "line": "Home insurance · Horizon Insurance · 2027-02-25",
       "categories": [
         "papers"
       ],
-      "space": "perso",
       "date": "2027-02-25",
-      "yearly": null,
       "source": "Contracts and insurance",
-      "who": "",
-      "noted": null,
-      "archived": false,
-      "label": null,
-      "answer": null,
-      "page": null,
       "open": {
         "record": {
           "type": "contract",
@@ -3193,23 +2290,14 @@
     {
       "id": "record:r00000a",
       "kind": "record",
-      "part": "main",
       "path": "Records/Papers.md",
       "title": "Passport",
       "line": "Passport · 2028-01-16",
       "categories": [
         "papers"
       ],
-      "space": "perso",
       "date": "2028-01-16",
-      "yearly": null,
       "source": "Papers",
-      "who": "",
-      "noted": null,
-      "archived": false,
-      "label": null,
-      "answer": null,
-      "page": null,
       "open": {
         "record": {
           "type": "paper",
@@ -3221,23 +2309,14 @@
     {
       "id": "record:r00002d",
       "kind": "record",
-      "part": "main",
       "path": "Records/Bookings.md",
       "title": "Hotel, 3 nights",
       "line": "2026-12-04 · Hotel, 3 nights · Hotel Rossio · Lisbon weekend",
       "categories": [
         "trips"
       ],
-      "space": "perso",
       "date": "2026-12-04",
-      "yearly": null,
       "source": "Bookings",
-      "who": "",
-      "noted": null,
-      "archived": false,
-      "label": null,
-      "answer": null,
-      "page": null,
       "open": {
         "record": {
           "type": "booking",
@@ -3249,23 +2328,14 @@
     {
       "id": "record:r00002e",
       "kind": "record",
-      "part": "main",
       "path": "Records/Bookings.md",
       "title": "Castle visit, 2 tickets",
       "line": "2026-12-05 · Castle visit, 2 tickets · São Jorge Castle · Lisbon weekend",
       "categories": [
         "trips"
       ],
-      "space": "perso",
       "date": "2026-12-05",
-      "yearly": null,
       "source": "Bookings",
-      "who": "",
-      "noted": null,
-      "archived": false,
-      "label": null,
-      "answer": null,
-      "page": null,
       "open": {
         "record": {
           "type": "booking",
@@ -3277,23 +2347,14 @@
     {
       "id": "doc:budget:00000000007e",
       "kind": "document",
-      "part": "main",
-      "path": null,
       "title": "Trip budget",
       "line": "Trip budget",
       "categories": [
         "trips"
       ],
-      "space": "perso",
-      "date": null,
-      "yearly": null,
       "source": "budget",
       "who": "budget",
       "noted": "2026-11-20",
-      "archived": false,
-      "label": null,
-      "answer": null,
-      "page": null,
       "open": {
         "document": {
           "agent": "budget",
@@ -3305,23 +2366,14 @@
     {
       "id": "doc:daily:00000000007f",
       "kind": "document",
-      "part": "main",
-      "path": null,
       "title": "Japan trip, the plan.pptx",
       "line": "Japan trip, the plan.pptx",
       "categories": [
         "trips"
       ],
-      "space": "perso",
-      "date": null,
-      "yearly": null,
       "source": "daily",
       "who": "daily",
       "noted": "2026-11-22",
-      "archived": false,
-      "label": null,
-      "answer": null,
-      "page": null,
       "open": {
         "document": {
           "agent": "daily",
@@ -3333,23 +2385,14 @@
     {
       "id": "doc:budget:000000000080",
       "kind": "document",
-      "part": "main",
-      "path": null,
       "title": "Building work budget.xlsx",
       "line": "Building work budget.xlsx",
       "categories": [
         "home"
       ],
-      "space": "perso",
-      "date": null,
-      "yearly": null,
       "source": "budget",
       "who": "budget",
       "noted": "2026-11-19",
-      "archived": false,
-      "label": null,
-      "answer": null,
-      "page": null,
       "open": {
         "document": {
           "agent": "budget",
@@ -3361,23 +2404,14 @@
     {
       "id": "doc:home:000000000081",
       "kind": "document",
-      "part": "main",
-      "path": null,
       "title": "Letter to the building manager.docx",
       "line": "Letter to the building manager.docx",
       "categories": [
         "home"
       ],
-      "space": "perso",
-      "date": null,
-      "yearly": null,
       "source": "home",
       "who": "home",
       "noted": "2026-11-14",
-      "archived": false,
-      "label": null,
-      "answer": null,
-      "page": null,
       "open": {
         "document": {
           "agent": "home",
@@ -3389,23 +2423,14 @@
     {
       "id": "doc:home:000000000082",
       "kind": "document",
-      "part": "main",
-      "path": null,
       "title": "Kitchen quote.pdf",
       "line": "Kitchen quote.pdf",
       "categories": [
         "home"
       ],
-      "space": "perso",
-      "date": null,
-      "yearly": null,
       "source": "home",
       "who": "home",
       "noted": "2026-11-09",
-      "archived": false,
-      "label": null,
-      "answer": null,
-      "page": null,
       "open": {
         "document": {
           "agent": "home",
@@ -3417,23 +2442,14 @@
     {
       "id": "doc:home:000000000083",
       "kind": "document",
-      "part": "main",
-      "path": null,
       "title": "Kitchen plan.jpg",
       "line": "Kitchen plan.jpg",
       "categories": [
         "home"
       ],
-      "space": "perso",
-      "date": null,
-      "yearly": null,
       "source": "home",
       "who": "home",
       "noted": "2026-10-03",
-      "archived": false,
-      "label": null,
-      "answer": null,
-      "page": null,
       "open": {
         "document": {
           "agent": "home",
@@ -3602,9 +2618,39 @@
       }
     ],
     "feasts": {
-      "christmas_eve": "2026-12-24",
-      "christmas": "2026-12-25",
-      "easter": "2027-03-28"
+      "christmas_eve": {
+        "month": 12,
+        "day": 24
+      },
+      "christmas": {
+        "month": 12,
+        "day": 25
+      },
+      "new_year": {
+        "month": 1,
+        "day": 1
+      },
+      "easter": {
+        "easter": 0
+      },
+      "ascension": {
+        "easter": 39
+      },
+      "pentecost": {
+        "easter": 49
+      }
+    },
+    "easter": {
+      "2026": "2026-04-05",
+      "2027": "2027-03-28",
+      "2028": "2028-04-16",
+      "2029": "2029-04-01",
+      "2030": "2030-04-21",
+      "2031": "2031-04-13",
+      "2032": "2032-03-28",
+      "2033": "2033-04-17",
+      "2034": "2034-04-09",
+      "2035": "2035-03-25"
     }
   },
   "kept": [
