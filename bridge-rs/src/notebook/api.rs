@@ -1445,6 +1445,18 @@ pub fn router() -> Router<AppState> {
         .route("/notebook/export", get(export))
         .route("/notebook/tidy", post(tidy_now))
         .route("/notebook/fill", get(fill_view).post(fill_all).delete(fill_stop))
+        .layer(axum::middleware::map_response(stored_nowhere))
+}
+
+/// Every Carnet answer is kept by no HTTP cache (`Cache-Control: no-store`: the phones' URLCache, a proxy): what the
+/// Carnet holds stays in the apps' own sealed copies only, the 1.0 apps' too (contracts/carnet/sommaire.md §0).
+pub fn no_store(mut response: Response) -> Response {
+    response.headers_mut().insert("cache-control", HeaderValue::from_static("no-store"));
+    response
+}
+
+async fn stored_nowhere(response: Response) -> Response {
+    no_store(response)
 }
 
 // -- « Déplacer vers… » (moves.rs) and the misplaced points' card (misplaced.rs) ---------------------------------------

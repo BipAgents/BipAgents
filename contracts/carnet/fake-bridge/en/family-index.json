@@ -1,5 +1,6 @@
 {
   "v": 1,
+  "epoch": "e3p8q1",
   "version": 7,
   "since": null,
   "full": true,
@@ -18,16 +19,12 @@
       "categories": [
         "shopping"
       ],
-      "date": null,
-      "yearly": null,
       "who": "Marie",
-      "noted": null,
       "open": {
         "list": "courses",
         "item": "c1"
       },
-      "fold": "milk",
-      "done": false
+      "fold": "milk"
     },
     {
       "id": "fam:list:courses/c2",
@@ -37,16 +34,12 @@
       "categories": [
         "shopping"
       ],
-      "date": null,
-      "yearly": null,
       "who": "Léa",
-      "noted": null,
       "open": {
         "list": "courses",
         "item": "c2"
       },
-      "fold": "wholewheat pasta",
-      "done": false
+      "fold": "wholewheat pasta"
     },
     {
       "id": "fam:list:courses/c3",
@@ -56,16 +49,12 @@
       "categories": [
         "shopping"
       ],
-      "date": null,
-      "yearly": null,
       "who": "Maison",
-      "noted": null,
       "open": {
         "list": "courses",
         "item": "c3"
       },
-      "fold": "lemons",
-      "done": false
+      "fold": "lemons"
     },
     {
       "id": "fam:list:courses/c4",
@@ -75,16 +64,12 @@
       "categories": [
         "shopping"
       ],
-      "date": null,
-      "yearly": null,
       "who": "Marie",
-      "noted": null,
       "open": {
         "list": "courses",
         "item": "c4"
       },
-      "fold": "toilet paper",
-      "done": false
+      "fold": "toilet paper"
     },
     {
       "id": "fam:list:courses/c5",
@@ -94,10 +79,7 @@
       "categories": [
         "shopping"
       ],
-      "date": null,
-      "yearly": null,
       "who": "Léa",
-      "noted": null,
       "open": {
         "list": "courses",
         "item": "c5"
@@ -114,15 +96,12 @@
         "home"
       ],
       "date": "2026-11-25",
-      "yearly": null,
       "who": "Léa",
-      "noted": null,
       "open": {
         "list": "taches",
         "item": "t1"
       },
-      "fold": "boiler appointment",
-      "done": false
+      "fold": "boiler appointment"
     },
     {
       "id": "fam:list:taches/t2",
@@ -133,15 +112,12 @@
         "menus"
       ],
       "date": "2026-11-28",
-      "yearly": null,
       "who": "Marie",
-      "noted": null,
       "open": {
         "list": "taches",
         "item": "t2"
       },
-      "fold": "book the christmas caterer",
-      "done": false
+      "fold": "book the christmas caterer"
     },
     {
       "id": "fam:list:taches/t3",
@@ -151,16 +127,12 @@
       "categories": [
         "school"
       ],
-      "date": null,
-      "yearly": null,
       "who": "Marie",
-      "noted": null,
       "open": {
         "list": "taches",
         "item": "t3"
       },
-      "fold": "sign tom up for judo",
-      "done": false
+      "fold": "sign tom up for judo"
     },
     {
       "id": "fam:list:taches/t4",
@@ -172,9 +144,7 @@
         "other"
       ],
       "date": "2026-11-21",
-      "yearly": null,
       "who": "Léa",
-      "noted": null,
       "open": {
         "list": "taches",
         "item": "t4"
@@ -190,16 +160,13 @@
       "categories": [
         "people"
       ],
-      "date": null,
       "yearly": "11-28",
       "who": "Marie",
-      "noted": null,
       "open": {
         "list": "dates",
         "item": "d1"
       },
-      "fold": "grandma s birthday",
-      "done": false
+      "fold": "grandma s birthday"
     },
     {
       "id": "fam:list:dates/d2",
@@ -210,15 +177,12 @@
         "other"
       ],
       "date": "2026-12-31",
-      "yearly": null,
       "who": "Maison",
-      "noted": null,
       "open": {
         "list": "dates",
         "item": "d2"
       },
-      "fold": "christmas dinner at marie s",
-      "done": false
+      "fold": "christmas dinner at marie s"
     },
     {
       "id": "fam:list:dates/d3",
@@ -228,16 +192,13 @@
       "categories": [
         "people"
       ],
-      "date": null,
       "yearly": "03-09",
       "who": "Léa",
-      "noted": null,
       "open": {
         "list": "dates",
         "item": "d3"
       },
-      "fold": "tom s birthday",
-      "done": false
+      "fold": "tom s birthday"
     },
     {
       "id": "fam:page:p1",
@@ -247,10 +208,7 @@
       "categories": [
         "holidays"
       ],
-      "date": null,
-      "yearly": null,
       "who": "Maison",
-      "noted": null,
       "open": {
         "path": "p1"
       },
@@ -266,10 +224,7 @@
         "papers",
         "school"
       ],
-      "date": null,
-      "yearly": null,
       "who": "Marie",
-      "noted": null,
       "open": {
         "path": "p2"
       },
@@ -283,10 +238,7 @@
       "categories": [
         "menus"
       ],
-      "date": null,
-      "yearly": null,
       "who": "Léa",
-      "noted": null,
       "open": {
         "path": "p3"
       },
@@ -452,9 +404,39 @@
       }
     ],
     "feasts": {
-      "christmas_eve": "2026-12-24",
-      "christmas": "2026-12-25",
-      "easter": "2027-03-28"
+      "christmas_eve": {
+        "month": 12,
+        "day": 24
+      },
+      "christmas": {
+        "month": 12,
+        "day": 25
+      },
+      "new_year": {
+        "month": 1,
+        "day": 1
+      },
+      "easter": {
+        "easter": 0
+      },
+      "ascension": {
+        "easter": 39
+      },
+      "pentecost": {
+        "easter": 49
+      }
+    },
+    "easter": {
+      "2026": "2026-04-05",
+      "2027": "2027-03-28",
+      "2028": "2028-04-16",
+      "2029": "2029-04-01",
+      "2030": "2030-04-21",
+      "2031": "2031-04-13",
+      "2032": "2032-03-28",
+      "2033": "2033-04-17",
+      "2034": "2034-04-09",
+      "2035": "2035-03-25"
     }
   },
   "kept": [

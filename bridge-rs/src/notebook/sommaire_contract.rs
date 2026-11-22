@@ -250,6 +250,40 @@ fn demo_index(config: &crate::config::Config, lang: &str) -> Vec<Value> {
     items
 }
 
+/// Easter's day in year `y` (the Gregorian computus, Meeus/Jones/Butcher).
+fn easter_of(y: i32) -> NaiveDate {
+    let (a, b, c) = (y % 19, y / 100, y % 100);
+    let (d, e) = (b / 4, b % 4);
+    let f = (b + 8) / 25;
+    let g = (b - f + 1) / 3;
+    let h = (19 * a + b - d - g + 15) % 30;
+    let (i, k) = (c / 4, c % 4);
+    let l = (32 + 2 * e + 2 * i - h - k) % 7;
+    let m = (a + 11 * h + 22 * l) / 451;
+    let month = (h + l - 7 * m + 114) / 31;
+    let day = (h + l - 7 * m + 114) % 31 + 1;
+    NaiveDate::from_ymd_opt(y, month as u32, day as u32).unwrap()
+}
+
+/// An index item as the bridge sends it: every key at its default left out (null, false, an empty text or list,
+/// `part: main`, `space: perso`).
+fn compact(item: &Value) -> Value {
+    let mut out = serde_json::Map::new();
+    for (k, v) in item.as_object().unwrap() {
+        let default = match v {
+            Value::Null => true,
+            Value::Bool(b) => !b,
+            Value::String(t) => t.is_empty() || (k == "part" && t == "main") || (k == "space" && t == "perso"),
+            Value::Array(a) => a.is_empty() && k != "categories",
+            _ => false,
+        };
+        if !default {
+            out.insert(k.clone(), v.clone());
+        }
+    }
+    Value::Object(out)
+}
+
 /// An index item as the bridge's live answers show it (the search, a category's page): `dates` among its categories
 /// on the day it is asked, no `fold`.
 fn live(index: &Value) -> Value {
@@ -291,8 +325,14 @@ fn tables(lang: &str) -> (Value, Value) {
             {"words": "before christmas", "from": {"unit": "day", "n": 0}, "to": {"unit": "feast", "feast": "christmas_eve"}},
             {"words": "a month ago", "from": {"unit": "month", "n": -1, "edge": "start"}, "to": {"unit": "month", "n": -1, "edge": "end"}}]),
     };
+    // rules, never days (the copy does not change with the day): a fixed day, or days from Easter
+    let easter: serde_json::Map<String, Value> =
+        (2026..2036).map(|y| (y.to_string(), json!(easter_of(y).format("%Y-%m-%d").to_string()))).collect();
     let dates = json!({"lang": lang, "phrases": phrases,
-                       "feasts": {"christmas_eve": "2026-12-24", "christmas": "2026-12-25", "easter": "2027-03-28"}});
+                       "feasts": {"christmas_eve": {"month": 12, "day": 24}, "christmas": {"month": 12, "day": 25},
+                                  "new_year": {"month": 1, "day": 1}, "easter": {"easter": 0},
+                                  "ascension": {"easter": 39}, "pentecost": {"easter": 49}},
+                       "easter": easter});
     (neighbours, dates)
 }
 
@@ -323,13 +363,14 @@ fn fake_bridge(lang: &str) -> BTreeMap<String, Value> {
     let stop: Vec<&str> = super::lexicon::STOP.to_vec();
     let kept_full = kept(lang, &shown);
     let kept_short: Vec<Value> = kept_full.iter().map(|k| json!({"id": k["id"], "q": k["q"], "title": k["title"]})).collect();
-    out.insert("index.json".into(), json!({"v": 1, "version": 42, "since": null, "full": true, "lang": lang,
+    let sent: Vec<Value> = items.iter().map(compact).collect();
+    out.insert("index.json".into(), json!({"v": 1, "epoch": "e7k2m9", "version": 42, "since": null, "full": true, "lang": lang,
         "made": "2026-11-22T07:00:00Z", "limits": {"lines": 20000, "bytes": 8000000}, "truncated": false,
-        "online_only": null, "dated": {"before": 90, "after": 730}, "items": items, "removed": [], "stop": stop,
+        "online_only": null, "dated": {"before": 90, "after": 730}, "items": sent, "removed": [], "stop": stop,
         "neighbours": neighbours, "dates": dates, "kept": kept_short}));
-    let changed: Vec<Value> = items.iter().filter(|i| i["kind"] == "task").take(1).cloned().collect();
+    let changed: Vec<Value> = items.iter().filter(|i| i["kind"] == "task").take(1).map(compact).collect();
     let gone: Vec<Value> = items.iter().filter(|i| i["kind"] == "line").take(1).map(|i| i["id"].clone()).collect();
-    out.insert("index-since.json".into(), json!({"v": 1, "version": 43, "since": 42, "full": false, "lang": lang,
+    out.insert("index-since.json".into(), json!({"v": 1, "epoch": "e7k2m9", "version": 43, "since": 42, "full": false, "lang": lang,
         "made": "2026-11-22T07:05:00Z", "limits": {"lines": 20000, "bytes": 8000000}, "truncated": false,
         "online_only": null, "dated": {"before": 90, "after": 730}, "items": changed, "removed": gone, "stop": stop,
         "neighbours": neighbours, "dates": dates, "kept": kept_short}));
@@ -488,8 +529,9 @@ fn fake_bridge(lang: &str) -> BTreeMap<String, Value> {
                         "open": {"path": s(&p["id"])}, "fold": fold(&format!("{} {}", s(&p["title"]), s(&p["text"])))}));
     }
     let fam_kept = if lang == "fr" { "courses" } else { "shopping" };
-    out.insert("family-index.json".into(), json!({"v": 1, "version": 7, "since": null, "full": true, "lang": lang,
-        "made": "2026-11-22T07:00:00Z", "dated": {"before": 90, "after": 730}, "items": fam, "removed": [], "stop": stop, "neighbours": tables(lang).0,
+    let fam_sent: Vec<Value> = fam.iter().map(compact).collect();
+    out.insert("family-index.json".into(), json!({"v": 1, "epoch": "e3p8q1", "version": 7, "since": null, "full": true, "lang": lang,
+        "made": "2026-11-22T07:00:00Z", "dated": {"before": 90, "after": 730}, "items": fam_sent, "removed": [], "stop": stop, "neighbours": tables(lang).0,
         "dates": tables(lang).1, "kept": [{"id": "k9f8e7d", "q": fam_kept, "title": fam_kept}]}));
     let fam_lines: Vec<Value> = c::FAMILY
         .iter()
