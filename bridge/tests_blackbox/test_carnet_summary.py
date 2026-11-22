@@ -69,7 +69,7 @@ def test_s4_the_summary_is_ready_to_show(bridges):
     # listed now that the routes answer
     assert bridge.get("/v1/notebook", headers=AUTH).json()["sommaire"] == CAPABILITIES
     s = summary(bridge)
-    assert set(s) == {"v", "lang", "title", "space", "spaces", "kept", "card", "total", "categories", "bar", "version"}
+    assert set(s) == {"v", "lang", "title", "space", "spaces", "kept", "card", "total", "categories", "bar", "version", "epoch"}
     assert (s["v"], s["lang"], s["title"], s["space"], s["spaces"], s["kept"]) == (1, "fr", "Carnet", "all", [], [])
     assert s["card"] is None or s["card"]["kind"] in ("ask", "follow", "misplaced", "sorted", "review"), s["card"]
     copy = index_of(bridge, lang="fr").json()
