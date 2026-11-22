@@ -268,6 +268,8 @@ pub fn policy_of(config: &Config, store: &Store) -> Value {
                 hosts.push(host);
             }
         }
+        // never a bot check's host nor a captcha-solving service, even validated before 22/11 (bot_hosts.rs)
+        hosts.retain(|h| crate::bot_hosts::never(h).is_none());
         // the hosts its person refused for good: the proxy holds them (11/11 audit PI-2: a refusal used to stop
         // nothing). A « Refuser » is not there: it refused one request, the proxy treats the host as any other.
         let always: Vec<&String> = entry.refused_always.keys().filter(|h| !hosts.contains(h)).collect();
@@ -405,7 +407,7 @@ fn covered(sites: &[String], host: &str) -> bool {
 /// Whether the agent may send to `host` without a card: a registry, one of its validated sites, a site of one of its
 /// approved connectors.
 pub fn validated(config: &Config, agent: &str, host: &str) -> bool {
-    covered(&send_hosts(config, agent), host)
+    crate::bot_hosts::never(host).is_none() && covered(&send_hosts(config, agent), host)
 }
 
 /// What the agent may send to without a card: the registries, its validated sites, its approved connectors' sites
@@ -423,6 +425,7 @@ pub fn send_hosts_in(config: &Config, store: &Store, agent: &str) -> Vec<String>
             sites.push(site);
         }
     }
+    sites.retain(|h| crate::bot_hosts::never(h).is_none());
     sites
 }
 
@@ -592,6 +595,9 @@ pub async fn refresh_sandboxes(config: &Config, run: &crate::agents_admin::Run) 
 /// Added (true), or already there (false). Err: why not.
 pub fn add(config: &Config, agent: &str, raw: &str, by: &str) -> Result<bool, String> {
     let host = clean_host(raw, by == "person")?;
+    if let Some(kind) = crate::bot_hosts::never(&host) {
+        return Err(crate::bot_hosts::refusal(&host, kind));
+    }
     if registries(config).contains(&host) {
         return Ok(false);
     }
@@ -778,6 +784,8 @@ pub enum Asked {
     /// Too many cards wait for this agent.
     TooMany,
     Invalid(String),
+    /// A bot check's host or a captcha-solving service (bot_hosts.rs): never a card, never validated.
+    Never(String, crate::bot_hosts::Never),
 }
 
 /// The person asked whether `agent` may send to `host` (`via`: « proxy », a send cut, with about how many `bytes`; or
@@ -788,6 +796,10 @@ pub fn ask(config: &Config, agent: &str, raw: &str, reason: &str, via: &str, byt
         Ok(h) => h,
         Err(why) => return Asked::Invalid(why),
     };
+    if let Some(kind) = crate::bot_hosts::never(&host) {
+        tracing::info!(target: "bipbridge::sandbox", agent, host = %host, via, "a bot check's host or a captcha-solving service: never asked of the person");
+        return Asked::Never(host, kind);
+    }
     if validated(config, agent, &host) {
         return Asked::Already;
     }
@@ -994,6 +1006,9 @@ pub fn answer_seen(
         let left: Vec<String> = hosts.iter().filter(|h| !chosen.contains(h)).cloned().collect();
         let entry = store.agents.entry(agent.to_string()).or_default();
         for host in &chosen {
+            if allow && crate::bot_hosts::never(host).is_some() {
+                continue; // a card from before 22/11: a bot check's host is never validated
+            }
             if allow {
                 if !entry.sites.iter().any(|s| &s.host == host) && entry.sites.len() < MAX_SITES {
                     entry.sites.push(Site {
@@ -1448,6 +1463,7 @@ pub fn call(
             None,
         ),
         Asked::Invalid(why) => (why, true, None),
+        Asked::Never(host, kind) => (crate::bot_hosts::refusal(&host, kind), true, None),
     }
 }
 
@@ -1873,5 +1889,58 @@ mod tests {
         assert_eq!(taken.sends.len(), 1);
         assert_eq!(taken.who, vec!["10.233.80.7".to_string()]);
         assert!(take_all_reports(&config).who.is_empty());
+    }
+
+    /// 22/11 (enquete-antibot): a bot check's host or a captcha-solving service is never a card, never validated:
+    /// asked by the proxy (a send cut) or by the agent, answered at once; the person can't add it, an old card's
+    /// « Autoriser » leaves it out, and the proxy's file never lists it, even for a site validated before.
+    #[test]
+    fn a_bot_checks_host_is_never_a_card_nor_validated() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = with_agents(&dir, json!({"vie": {"hermes_url": "http://127.0.0.1:9300", "display_name": "Vie"}}));
+        ensure_agent(&config, "vie").unwrap();
+        let agent = config.agent(Some("vie")).unwrap().clone();
+        for host in ["challenges.cloudflare.com", "hcaptcha.com", "2captcha.com", "api.capsolver.com"] {
+            for via in ["proxy", "agent"] {
+                assert!(matches!(ask(&config, "vie", host, "", via, 70_000), Asked::Never(..)), "{host} {via}");
+            }
+            assert!(add(&config, "vie", host, "person").is_err(), "{host}");
+            assert!(add(&config, "vie", host, "request").is_err(), "{host}");
+            assert!(!validated(&config, "vie", host));
+        }
+        assert!(add(&config, "vie", "*.cloudflare.com", "person").is_err());
+        assert!(load(&config).pending.is_empty(), "no card");
+        let mut args = Dict::new();
+        args.insert("host".into(), json!("challenges.cloudflare.com"));
+        args.insert("reason".into(), json!("passer le mur"));
+        let (text, error, card) = call(&config, &agent, REQUEST, &args, None);
+        assert!(error && card.is_none());
+        assert!(text.contains("bot checks") && text.contains("« Prendre la main »"), "{text}");
+        // a card from before this change (made by hand here), answered « Autoriser »: the check's host left out
+        change(&config, |s| {
+            s.pending.push(Pending {
+                id: "old1".into(),
+                agent: "vie".into(),
+                host: "challenges.cloudflare.com".into(),
+                hosts: vec!["challenges.cloudflare.com".into(), "api.meteo.fr".into()],
+                reason: String::new(),
+                via: "proxy".into(),
+                at: py::time_time(),
+                bytes: 70_000,
+            });
+            // and a site validated before it (a bench said yes on 22/11)
+            s.agents.get_mut("vie").unwrap().sites.push(Site {
+                host: "challenges.cloudflare.com".into(),
+                at: "2026-11-22T09:45:51".into(),
+                by: "request".into(),
+            });
+        })
+        .unwrap();
+        assert!(answer(&config, "vie", "old1", Decision::AllSites, "app").unwrap().is_some());
+        assert!(validated(&config, "vie", "api.meteo.fr"));
+        assert!(!validated(&config, "vie", "challenges.cloudflare.com"));
+        let written = std::fs::read_to_string(policy_dir(&config).join(POLICY_FILE)).unwrap();
+        assert!(!written.contains("challenges.cloudflare.com"), "{written}");
+        assert!(!send_hosts(&config, "vie").iter().any(|h| h == "challenges.cloudflare.com"));
     }
 }

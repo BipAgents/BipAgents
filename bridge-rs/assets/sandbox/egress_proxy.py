@@ -56,6 +56,12 @@ abuse complaint can be traced to an agent.
   approved hosts only, on HTTPS — never the registries, never another site — and is not counted (its sites were
   approved with it). A connection that arrives on one of `BIP_STRICT`'s addresses (this proxy's address on the
   connectors' network) is held to that: a connector's own credentials or nothing.
+- **Bot checks and captcha-solving services** (22/11, enquete-antibot; bridge-rs/src/bot_hosts.rs has the same
+  lists, a test reads them here): their hosts (`NEVER_CHECKS`, `NEVER_SOLVERS`, each with its subdomains) are never
+  reached by a sandbox's program, a connector or a client nobody knows, and never validated for sending, even if a
+  list holds one. The agent's visible browser still reaches a check's host (counted as any site not validated: it
+  gets past a check by itself when it can, and one that still blocks is handed to the person), never a solving
+  service.
 - **Refusals read plainly**: the reason phrase says what happens: clients show it in their error, so the agent tells
   its person what it waits for, not that « the proxy » cuts it.
 - **What it counted** (`BIP_USAGE`, written each minute): per agent, today's bytes sent and received, and new
@@ -291,8 +297,11 @@ def connector(agent):
 
 
 def validated(agent, host):
-    """A host the agent may send to without counting: a registry, or one its person validated for it."""
+    """A host the agent may send to without counting: a registry, or one its person validated for it (never a bot
+    check's host nor a captcha-solving service, whatever a list says)."""
     host = normal(host)
+    if never(host):
+        return False
     if host in REGISTRIES:
         return True
     entry = policy().get(agent) or {}
@@ -347,6 +356,31 @@ def blocked_name(host):
     host = normal(host)
     labels = host.split(".")
     return any(".".join(labels[i:]) in names for i in range(len(labels) - 1))
+
+
+# bot checks' own hosts and captcha-solving services (bridge-rs/src/bot_hosts.rs: the same lists), with subdomains
+NEVER_CHECKS = (
+    "challenges.cloudflare.com", "hcaptcha.com", "recaptcha.net", "captcha-delivery.com", "api-js.datadome.co",
+    "perimeterx.net", "px-cloud.net", "px-cdn.net", "arkoselabs.com", "funcaptcha.com", "geetest.com", "geevisit.com",
+    "awswaf.com", "friendlycaptcha.com", "frcapi.com", "mtcaptcha.com",
+)
+NEVER_SOLVERS = (
+    "2captcha.com", "rucaptcha.com", "anti-captcha.com", "capsolver.com", "capmonster.cloud", "deathbycaptcha.com",
+    "nopecha.com", "azcaptcha.com", "captchaai.com", "nextcaptcha.com", "solvecaptcha.com", "ez-captcha.com",
+    "cap.guru", "bestcaptchasolver.com", "imagetyperz.com", "endcaptcha.com", "9kw.eu", "truecaptcha.org",
+    "anycaptcha.com", "captchas.io",
+)
+
+
+def never(host):
+    """What `host` is: a captcha-solving service ("solver"), a bot check's host ("check"), or neither (None)."""
+    host = normal(host)
+    hit = lambda names: any(host == n or host.endswith("." + n) for n in names)  # noqa: E731
+    if hit(NEVER_SOLVERS):
+        return "solver"
+    if hit(NEVER_CHECKS):
+        return "check"
+    return None
 
 
 LOCAL_SUFFIXES = ("localhost", "local", "internal", "lan", "home", "arpa", "test", "invalid", "localdomain")
@@ -879,6 +913,8 @@ PHONE_FAILED = "Bad Gateway (the phone could not reach the site)"
 CONNECTIONS = "Too many new connections - wait a minute"
 UNKNOWN_BROWSER = "Unknown browser"
 UNKNOWN_SANDBOX = "Sandbox not recognised yet - retry in a moment"
+BOT_CHECK = "Bot check refused - it is your person's to pass: stop, no retry, tell them"
+SOLVER = "Captcha-solving service refused on BipAgents"
 REFUSED = "Sending to this site refused for good by your person - it stays readable, a little each hour"
 REGISTRY_HOUR = "Package registries paused - too much was sent to them, retry within the hour"
 REGISTRY_DAY = "Package registries paused - too much was sent to them today, retry tomorrow"
@@ -903,6 +939,11 @@ BODIES = {
     PAUSED: "You sent this site more than a small amount: your person has a card to answer. Reading goes on with a "
             "small allowance an hour, which is used up: retry within the hour, or wait for their answer.",
     TOO_MANY_OPEN: "Your programs hold too many connections to the proxy open at once: close some, then retry.",
+    BOT_CHECK: "This host serves bot checks (a captcha, « verify you are human »). Your programs never reach it: a check "
+               "is your person's to pass, in your browser (« Prendre la main »). Don't try again and don't go round it "
+               "(no other proxy, identity, headless browser or captcha service): tell them in one short sentence.",
+    SOLVER: "Captcha-solving services are never used on BipAgents. If a captcha blocks you, tell your person: they can "
+            "take over your browser (« Prendre la main »).",
     UNKNOWN_SANDBOX: "Your sandbox has just started and is not recognised yet: only the package registries are "
                      "reachable until it is. Retry in a moment; no proxy settings or credentials are needed.",
     NOT_CONNECTOR: "This connector may only reach the sites your person approved with it.",
@@ -1095,6 +1136,12 @@ async def handle(reader, writer):
     else:
         return await answer(writer, 400, "Bad Request")
     host = normal(host)
+    kind = never(host)
+    if kind == "solver" or (kind == "check" and not browser):
+        # a check is the person's to pass in the browser; a solving service, never (bot_hosts.rs)
+        log(f"blocked ({'captcha-solving service' if kind == 'solver' else 'bot check'})", method, target,
+            agent or peer)
+        return await answer(writer, 403, SOLVER if kind == "solver" else BOT_CHECK)
     if sandbox and agent is None:
         if host in REGISTRIES:
             ask_who(peer)   # learnt for its next request; installs never wait

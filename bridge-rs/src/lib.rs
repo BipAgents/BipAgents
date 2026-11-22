@@ -128,6 +128,7 @@ pub mod skill_library;
 pub mod own_space;
 pub mod peers;
 pub mod beneath;
+pub mod bot_hosts;
 pub mod sandbox;
 pub mod sandbox_adopt;
 pub mod sandbox_sites;

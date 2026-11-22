@@ -942,3 +942,26 @@ def test_a_sandbox_the_proxy_does_not_know_yet_is_asked_about_and_an_old_token_o
     finally:
         proc.kill()
         site.sock.close()
+
+
+def test_a_bot_checks_host_is_never_asked_of_the_person(bridges, fakes):
+    """22/11 (enquete-antibot): a card « Quotidien veut envoyer des données à challenges.cloudflare.com » came up and a
+    bench's script accepted it. A bot check's host or a captcha-solving service is never a card: the proxy's report of
+    a send cut there, and the agent's own request, are answered at once (what to do instead); the person can't add one
+    in « Sites autorisés »; the proxy's file never lists one."""
+    bridge, hub, _ = isolated(bridges, fakes, agents=("vie",))
+    started(bridge, hub, ["vie"])
+    give_tokens(bridge, ["vie"])
+    reports = send_report(bridge, ("vie", "challenges.cloudflare.com", 90 * 1024), ("vie", "api.2captcha.com", 70 * 1024))
+    assert wait_until(lambda: not reports.exists(), timeout=10)
+    time.sleep(0.5)
+    assert site_cards(bridge, "vie") == []
+    for host in ("challenges.cloudflare.com", "hcaptcha.com", "2captcha.com"):
+        text, error = call(bridge, "vie", "sandbox_sites_request", host=host, reason="passer la vérification")
+        assert error and "« Prendre la main »" in text, (host, text)
+    assert "never asked of the person" in bridge.log_tail(20000)
+    assert site_cards(bridge, "vie") == []
+    for host in ("challenges.cloudflare.com", "*.hcaptcha.com", "capsolver.com"):
+        assert bridge.post("/v1/agents/vie/sandbox/sites", json={"host": host}, headers=AUTH).status_code == 422, host
+    policy = (bridge.state_dir / "sandbox-proxy" / "policy" / "sites.json").read_text()
+    assert "cloudflare" not in policy and "captcha" not in policy

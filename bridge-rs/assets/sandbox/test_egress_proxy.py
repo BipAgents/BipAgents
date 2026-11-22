@@ -1138,6 +1138,63 @@ def test_an_agents_token_is_honoured_nowhere_once_sandboxes_are_known_by_address
     assert out["conn"].startswith("HTTP/1.1 200")
 
 
+# --- bot checks and captcha-solving services (enquete-antibot 22/11, fix 4) ----------------------------------------
+
+def test_bot_checks_and_captcha_services_are_never_reached_by_programs(tmp_path, monkeypatch):
+    """A sandbox's program or a connector never reaches a bot check's host nor a captcha-solving service: refused with
+    a reason that says what to do, never validated (even listed before 22/11, when a bench said yes to one). The
+    agent's visible browser still reaches a check's host (it gets past a check by itself, Alex 22/11), never a
+    solving service."""
+    agents = dict(AGENTS)
+    agents["vie"] = {"key": key("t-vie"), "hosts": ["data.gouv.fr", "challenges.cloudflare.com"]}
+    agents["conn-c1"] = {"key": key("t-conn"), "hosts": ["api.garmin.example", "challenges.cloudflare.com"],
+                         "connector": True}
+    proxy, _, reports = load(tmp_path, monkeypatch, agents, sandboxes={"127.0.0.1": "vie"},
+                             env={"BIP_SANDBOXES": "127.0.0.1"})
+    assert not proxy.validated("vie", "challenges.cloudflare.com") and proxy.validated("vie", "data.gouv.fr")
+    assert proxy.never("api.hcaptcha.com") == "check" and proxy.never("api.2captcha.com") == "solver"
+    assert proxy.never("www.lemonde.fr") is None and proxy.never("static.cloudflareinsights.com") is None
+
+    async def steps(port):
+        return {host: (await tunnel(port, host))[0] for host in
+                ("challenges.cloudflare.com", "api.hcaptcha.com", "geo.captcha-delivery.com", "api.2captcha.com",
+                 "api.capsolver.com", "www.lemonde.fr")}
+
+    out = asyncio.run(through(proxy, monkeypatch, Site(), steps))
+    for host in ("challenges.cloudflare.com", "api.hcaptcha.com", "geo.captcha-delivery.com"):
+        assert out[host].startswith("HTTP/1.1 403 Bot check refused"), (host, out[host])
+    for host in ("api.2captcha.com", "api.capsolver.com"):
+        assert out[host].startswith("HTTP/1.1 403 Captcha-solving service refused"), (host, out[host])
+    assert out["www.lemonde.fr"].startswith("HTTP/1.1 200")
+    assert "« Prendre la main »" in proxy.BODIES[proxy.BOT_CHECK] and reports_of(reports) == []
+
+    # a connector, on the connectors' network, even with the host on its list
+    strict = tmp_path / "strict"
+    strict.mkdir()
+    proxy2, _, _ = load(strict, monkeypatch, agents, env={"BIP_SANDBOXES": "10.233.80.2", "BIP_STRICT": "127.0.0.1"})
+
+    async def steps2(port):
+        auth = basic("conn-c1", "t-conn")
+        return {"check": (await tunnel(port, "challenges.cloudflare.com", auth))[0],
+                "own": (await tunnel(port, "api.garmin.example", auth))[0]}
+
+    out = asyncio.run(through(proxy2, monkeypatch, Site(), steps2))
+    assert out["check"].startswith("HTTP/1.1 403 Bot check refused") and out["own"].startswith("HTTP/1.1 200")
+
+    # the visible browser: a check's host passes (counted as any site not validated), a solving service never
+    browser = tmp_path / "browser"
+    browser.mkdir()
+    proxy3, _, _ = load(browser, monkeypatch, agents, browsers={"127.0.0.1": "vie"}, env={"BIP_BROWSERS": "127.0.0.1"})
+
+    async def steps3(port):
+        return {"check": (await tunnel(port, "challenges.cloudflare.com"))[0],
+                "solver": (await tunnel(port, "2captcha.com"))[0]}
+
+    out = asyncio.run(through(proxy3, monkeypatch, Site(), steps3))
+    assert out["check"].startswith("HTTP/1.1 200") and out["solver"].startswith("HTTP/1.1 403 Captcha-solving")
+    assert not proxy3.validated("vie", "challenges.cloudflare.com")
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-q"]))
 

@@ -1047,6 +1047,10 @@ fn apply_fields(base: &mut Connector, arguments: &Dict, creating: bool) -> Resul
         let mut sites = Vec::new();
         for raw in strings(arguments.get("sites")) {
             let host = crate::sandbox_sites::clean_host(&raw, true).map_err(|why| format!("sites: {why}"))?;
+            // a bot check's host or a captcha-solving service: never a connector's (22/11, bot_hosts.rs)
+            if let Some(kind) = crate::bot_hosts::never(&host) {
+                return Err(format!("sites: {}", crate::bot_hosts::refusal(&host, kind)));
+            }
             if !sites.contains(&host) {
                 sites.push(host);
             }
@@ -1904,6 +1908,12 @@ mod tests {
         assert_eq!(when_line(&watcher), "Vérifie toutes les 15 min, ne réveille l'agent que si ça change");
         assert_eq!(sentence("Vie", &watcher, "new"), "Vie a créé le veilleur Prix du vélo");
         assert!(bad(json!({"watch": {"every": "1m", "notify": "on_change"}})).contains("watch.every"));
+        // 22/11 (enquete-antibot): a bot check's host, a captcha-solving service, or a `*.` covering one: never
+        for sites in [json!(["www.decathlon.example", "challenges.cloudflare.com"]), json!(["api.2captcha.com"]),
+                      json!(["*.hcaptcha.com"]), json!(["*.cloudflare.com"])] {
+            let refused = bad(json!({"sites": sites}));
+            assert!(refused.starts_with("sites:") && refused.contains("« Prendre la main »"), "{refused}");
+        }
     }
 
     #[test]
