@@ -3,6 +3,9 @@
 into the min by the server's own clock, and the 426 `app_too_old` of a path retired for old apps.
 
 Contract: additive only. An app of before 1.1 sends no `X-Bip-App`: it reads exactly today's answers."""
+import json
+import os
+import shlex
 import time
 
 import pytest
@@ -131,3 +134,22 @@ def test_a_retired_path_answers_426_app_too_old(bridges):
 def test_without_the_setting_a_missing_path_stays_a_404(bridge, path):
     answer = bridge.get(path, headers=AUTH)
     assert (answer.status_code, answer.json()) == (404, {"detail": "Not Found"})
+
+
+@pytest.mark.skipif(not os.environ.get("BRIDGE_PREVIOUS_CMD"), reason="BRIDGE_PREVIOUS_CMD: the bridge before app_floor")
+def test_old_apps_read_what_the_previous_bridge_said(bridges):
+    """An installed 1.0 app (no `X-Bip-App`) against this bridge reads exactly what the previous release answered: the
+    same JSON on the routes it asks at each refresh (`BRIDGE_PREVIOUS_CMD`: that release's `bipbridge serve`)."""
+    new = bridges.new("new").start()
+    old = bridges.new("old")
+    old.command = shlex.split(os.environ["BRIDGE_PREVIOUS_CMD"])
+    old.start()
+
+    def answer(bridge, path):
+        headers = AUTH if path != "/health" else {}
+        got = bridge.get(path, headers=headers)
+        assert got.status_code == 200, (path, got.text)
+        return json.loads(got.text.replace(str(bridge.root), "<root>").replace(f":{bridge.port}", ":<port>"))
+
+    for path in READ_ROUTES:
+        assert answer(new, path) == answer(old, path), path
