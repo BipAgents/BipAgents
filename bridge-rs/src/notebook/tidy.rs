@@ -12,6 +12,9 @@
 //! 3. A hard monthly cap per install (`[notebook] monthly_cap`, 0.10 € by default): a run that could pass it is cut down
 //!    or skipped; once reached, the pass waits for the next month (the agents keep filing as they talk). Every run logs
 //!    its tokens and its estimated cost (`notebook pass` in the log, and `GET /v1/notebook/runs`).
+//! 4. The Carnet's categories (plan « Le sommaire », S2, categories_pass.rs): the pages' headers given their categories
+//!    without a model (the whole Carnet once per version of the table), then the pages no word placed, 20 a night at
+//!    most, to the same small model under the same cap.
 
 use std::sync::LazyLock;
 use std::time::Duration;
@@ -225,12 +228,12 @@ pub fn model(config: &Config) -> Option<(String, String, String)> {
     None
 }
 
-fn cost(config: &Config, tokens_in: i64, tokens_out: i64) -> f64 {
+pub(crate) fn cost(config: &Config, tokens_in: i64, tokens_out: i64) -> f64 {
     (tokens_in as f64 * config.notebook.price_in + tokens_out as f64 * config.notebook.price_out) / 1_000_000.0
 }
 
 /// About 3.5 characters a token (French and English prose, JSON).
-fn tokens_of(chars: usize) -> i64 {
+pub(crate) fn tokens_of(chars: usize) -> i64 {
     (chars as f64 / 3.5).ceil() as i64
 }
 
@@ -296,6 +299,11 @@ pub async fn run(config: &Config, hermes: &HermesClient, http: &reqwest::Client)
     if let Err(err) = result {
         record.insert("error".into(), json!(clip(&format!("{err:#}"), 300)));
     }
+    // the pages no word placed (« Autres »): a few a night to the same small model, inside the same cap, before the
+    // month's spending is counted (categories_pass.rs)
+    if let Err(err) = super::categories_pass::night(config, http, &mut record).await {
+        record.insert("categories_error".into(), json!(clip(&format!("{err:#}"), 300)));
+    }
     let spend = spending(config);
     let _guard = super::lock();
     let saved = super::update_state(config, |s| {
@@ -318,7 +326,8 @@ pub async fn run(config: &Config, hermes: &HermesClient, http: &reqwest::Client)
         add_i(&mut spend, "tokens_in", tokens_in);
         add_i(&mut spend, "tokens_out", tokens_out);
         if record.get("model_called").map(py::truthy).unwrap_or(false) {
-            add_i(&mut spend, "model_calls", 1);
+            // (two when the pages left in « Autres » went to the model too: categories_pass.rs `night`)
+            add_i(&mut spend, "model_calls", record.get("model_calls").and_then(Value::as_i64).unwrap_or(1));
         }
         let eur = spend.get("eur").and_then(Value::as_f64).unwrap_or(0.0)
             + record.get("eur").and_then(Value::as_f64).unwrap_or(0.0);
@@ -429,6 +438,29 @@ async fn run_inner(
     .await??;
     if refiled > 0 {
         record.insert("refiled".into(), json!(refiled));
+    }
+    // « Rangement de l'existant » (plan « Le sommaire », S2): each page's categories written in its header, the whole
+    // Carnet once per version of the table, then each night the pages without any and those in « Autres » (no model;
+    // categories_pass.rs)
+    // (it failing — the state not writable — never costs the rest of the night: S2 review 1, R1)
+    let sorted = tokio::task::spawn_blocking({
+        let c = config.clone();
+        move || super::categories_pass::sort(&c)
+    })
+    .await?
+    .unwrap_or_else(|err| {
+        tracing::warn!(error = %format!("{err:#}"), "notebook categories pass stopped");
+        record.insert("categories_error".into(), json!(clip(&format!("{err:#}"), 300)));
+        super::categories_pass::Sorted::default()
+    });
+    if sorted.filed > 0 {
+        record.insert("categorized".into(), json!(sorted.filed));
+    }
+    if sorted.skipped > 0 {
+        record.insert("categories_skipped".into(), json!(sorted.skipped));
+    }
+    if sorted.done {
+        record.insert("categories_v".into(), json!(super::categories_pass::VERSION));
     }
     // the points clearly in the wrong place: proposed in a card, never moved here (misplaced.rs, no model)
     let misplaced = tokio::task::spawn_blocking({

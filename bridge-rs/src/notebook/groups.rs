@@ -320,10 +320,7 @@ pub fn fold_light_locked(config: &Config, who: &Who) -> anyhow::Result<usize> {
             continue;
         }
         // written by the person last, or by hand outside the Carnet's history (Obsidian): theirs, left as it is
-        let by_person = super::history(config, Some(Part::Main), Some(&path), 1)
-            .first()
-            .is_none_or(|e| crate::tools_knowledge::str_or_empty(e.get("by")) == "you");
-        if by_person {
+        if super::written_by_person(config, &path) {
             continue;
         }
         // its lines, as written (their attribution kept), « En bref » too when it says more
