@@ -35,12 +35,15 @@ pub const BY: [&str; 3] = ["auto", "agent", "person"];
 pub const AT_MOST: usize = 2;
 /// Rules learned from the person's corrections kept (the most recent first).
 pub const RULES_KEPT: usize = 200;
-/// Corrections that can still be undone.
+/// Corrections that can still be undone: the 20 latest, and all of today's (« l'historique d'aujourd'hui », S2) up
+/// to `UNDO_TODAY_MAX`.
 pub const UNDO_KEPT: usize = 20;
+pub const UNDO_TODAY_MAX: usize = 100;
 /// What this bridge's Carnet can do of the sommaire (contracts/carnet/sommaire.json `capabilities`), in the home's
 /// `sommaire`: a new app uses a route only when it is listed (S1: the categories on today's answers, « Ranger
-/// ailleurs »; S3 adds `index`, S4 `summary`, `category`, `kept`, `searched`, S5 `spaces`, S6 `family`).
-pub const CAPABILITIES: [&str; 2] = ["categories", "categorize"];
+/// ailleurs »; S2 `sorted`: the card « Ton Carnet est rangé par catégories », today's re-filings, the toast; S3 adds
+/// `index`, S4 `summary`, `category`, `kept`, `searched`, S5 `spaces`, S6 `family`).
+pub const CAPABILITIES: [&str; 3] = ["categories", "categorize", "sorted"];
 /// The person's corrections of records, tasks, documents and lines kept.
 const MARKS_KEPT: usize = 2000;
 /// An item is in « Dates » when its date is from this many days ago …
@@ -72,6 +75,37 @@ const COLLEAGUE: &[&str] = &[
     "collegue", "collegues", "colleague", "colleagues", "kollege", "kollegin", "kollegen", "colega", "colegas",
     "collega", "collegas", "manager", "client", "cliente", "clients", "customer", "kunde", "kundin", "klant",
 ];
+
+/// The categories' names as the screens show them (contracts/carnet/sommaire.json `titles_proposed`, the same table:
+/// checked by `the_sommaire_contract_holds_together`), for fr, en, de, es, nl (Alex, 22/11: « Personnes », the other
+/// French names stand for now; the other languages to be read by a speaker).
+pub const TITLES: [(&str, [&str; 5]); 13] = [
+    ("people", ["Personnes", "People", "Personen", "Personas", "Personen"]),
+    ("dates", ["Dates", "Dates", "Termine", "Fechas", "Datums"]),
+    ("money", ["Argent", "Money", "Geld", "Dinero", "Geld"]),
+    ("home", ["Maison", "Home", "Zuhause", "Casa", "Huis"]),
+    ("papers", ["Papiers", "Papers", "Papiere", "Papeles", "Papieren"]),
+    ("trips", ["Voyages", "Trips", "Reisen", "Viajes", "Reizen"]),
+    ("work", ["Travail", "Work", "Arbeit", "Trabajo", "Werk"]),
+    ("other", ["Autres", "Other", "Sonstiges", "Otros", "Overig"]),
+    ("health", ["Santé", "Health", "Gesundheit", "Salud", "Gezondheid"]),
+    ("shopping", ["Courses", "Shopping", "Einkäufe", "Compras", "Boodschappen"]),
+    ("holidays", ["Vacances", "Holidays", "Ferien", "Vacaciones", "Vakanties"]),
+    ("school", ["École", "School", "Schule", "Colegio", "School"]),
+    ("menus", ["Menus", "Menus", "Essen", "Menús", "Menu's"]),
+];
+
+/// A category's name in `lang` (English for another language; the id itself for an unknown one).
+pub fn title(lang: &str, id: &str) -> String {
+    let column = match lang {
+        "fr" => 0,
+        "de" => 2,
+        "es" => 3,
+        "nl" => 4,
+        _ => 1,
+    };
+    TITLES.iter().find(|(c, _)| *c == id).map(|(_, t)| t[column].to_string()).unwrap_or_else(|| id.to_string())
+}
 
 fn order(category: &str) -> usize {
     PERSONAL.iter().chain(FAMILY.iter()).position(|c| *c == category).unwrap_or(99)
@@ -900,7 +934,7 @@ pub fn hand_written(page: &Page) -> bool {
     page.front.contains_key("categories") && stored(page).is_none()
 }
 
-fn line_on(page: &Page, text: &str) -> Option<String> {
+pub(crate) fn line_on(page: &Page, text: &str) -> Option<String> {
     let wanted = fold(&super::split_attribution(text.trim().trim_start_matches("- ")).0);
     page.sections().into_iter().flat_map(|(_, f)| f).find(|f| fold(&f.text) == wanted).map(|f| f.text)
 }
@@ -910,7 +944,7 @@ fn page_by_key(config: &Config, key: &str) -> Option<(String, Page)> {
 }
 
 /// An Item's id resolved to what it names (None: nothing of that id any more).
-fn resolve(config: &Config, id: &str) -> Option<Target> {
+pub(crate) fn resolve(config: &Config, id: &str) -> Option<Target> {
     if let Some(key) = id.strip_prefix("page:") {
         return page_by_key(config, key).map(|(path, _)| Target::Page { path });
     }
@@ -974,8 +1008,11 @@ pub fn categorize(config: &Config, target: &Target, given: &[String], who: &Who)
             let before = of_page(config, Part::Main, path, &page);
             let (auto, word) = decide(config, Part::Main, path, &page, None);
             let key = format!("page:{}", page_key(&page, path));
-            set_front(&mut page, &cats, "person");
-            let after = page.render();
+            // its header lines only: a page written by hand keeps its frontmatter as it is (S2 review 1, R10)
+            let after = super::categories_pass::with_header(&text, &cats, "person").unwrap_or_else(|| {
+                set_front(&mut page, &cats, "person");
+                page.render()
+            });
             if after != text {
                 super::commit(config, Part::Main, path, Some(&text), Some(&after), who, ACTION, "")?;
             }
@@ -1051,8 +1088,9 @@ pub fn categorize(config: &Config, target: &Target, given: &[String], who: &Who)
         list.retain(|e| tk::str_or_empty(e.get("key")) != key);
         list.insert(0, json!({"id": undo, "key": key, "set": cats, "before": {"categories": before.categories,
                               "categories_by": before.by, "stored": before.stored},
-                              "rule": word, "rule_before": rule_before, "at": super::today()}));
-        list.truncate(UNDO_KEPT);
+                              "rule": word, "rule_before": rule_before, "at": super::today(),
+                              "categories": cats, "time": tk::now_iso_seconds()}));
+        keep_undo(&mut list, &super::today());
         state.insert("category_undo".into(), Value::Array(list));
     })?;
     let mut shown = target.view();
@@ -1060,6 +1098,16 @@ pub fn categorize(config: &Config, target: &Target, given: &[String], who: &Who)
     Ok(Ok(json!({"target": shown, "categories": cats, "categories_by": "person",
                  "before": {"categories": before.categories, "categories_by": before.by},
                  "learnt": learnt, "undo": undo, "toast": Value::Null})))
+}
+
+/// The corrections kept for « Annuler » (the newest first): the `UNDO_KEPT` latest, and today's up to
+/// `UNDO_TODAY_MAX` (each re-filing of the day stays undoable from its list, S2).
+pub(crate) fn keep_undo(list: &mut Vec<Value>, today: &str) {
+    let mut n = 0;
+    list.retain(|e| {
+        n += 1;
+        n <= UNDO_KEPT || (n <= UNDO_TODAY_MAX && tk::str_or_empty(e.get("at")) == today)
+    });
 }
 
 /// The history's action of a correction.
@@ -1112,17 +1160,26 @@ pub fn undo(config: &Config, id: &str, who: &Who) -> anyhow::Result<Option<Value
         if let Some((path, mut page)) = page_by_key(config, page_id) {
             target = json!({"path": path, "private": false, "item": key});
             if stored(&page) == Some((set.clone(), "person".into())) {
-                let text = page.render();
-                if stored_before {
-                    set_front(&mut page, &was, &was_by);
+                // its header lines only, as the correction wrote them (S2 review 1, R10)
+                let old = super::read_page_text(config, Part::Main, &path).unwrap_or_default();
+                let lines = if stored_before {
+                    super::categories_pass::with_header(&old, &was, &was_by)
                 } else {
-                    clear_front(&mut page);
+                    super::categories_pass::without_header(&old)
+                };
+                let after = lines.unwrap_or_else(|| {
+                    if stored_before {
+                        set_front(&mut page, &was, &was_by);
+                    } else {
+                        clear_front(&mut page);
+                    }
+                    page.render()
+                });
+                if after != old {
+                    super::commit(config, Part::Main, &path, Some(&old), Some(&after), who, ACTION, "")?;
                 }
-                let after = page.render();
-                if after != text {
-                    let old = super::read_page_text(config, Part::Main, &path);
-                    super::commit(config, Part::Main, &path, old.as_deref(), Some(&after), who, ACTION, "")?;
-                }
+                let stem = std::path::Path::new(&path).file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+                page = Page::parse(&after, &stem);
             }
             now = of_page(config, Part::Main, &path, &page);
         }

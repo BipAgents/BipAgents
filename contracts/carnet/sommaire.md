@@ -25,7 +25,7 @@ bridge, the iPhone and Android: what is written here is what each side tests aga
    6, 21/11).
 5. **The person wins.** `categories_by: person` is never changed by the bridge, an agent or the nightly pass.
 6. **No model, no tokens at write time.** The bridge files by words (§2). The agents may say a category
-   (`notebook_write.category`, short, optional); the nightly model only for what stays in « Autres » (S2).
+   (`notebook_write.category`, short, optional); the nightly model only for what stays in « Autres » (S2, §2b).
 
 ## 1. Categories
 
@@ -35,7 +35,8 @@ answers (S4 serves them in the app's language); `sommaire.json` `titles_proposed
 en, de, es, nl for Alex to confirm (visible text).
 
 - **Where they live.** A page: `categories` (1 or 2) and `categories_by` (`auto` the bridge's words, `agent` an
-  agent's `category`, `person` the person's correction) in its frontmatter. A page without them (written before the
+  agent's `category` or the nightly model's for a page no word placed, `person` the person's correction) in its
+  frontmatter. A page without them (written before the
   sommaire, or by hand in Obsidian) is read with the bridge's categories computed on the fly (`auto`), stored at its
   next write (and by S2's one pass over the whole Carnet). A record, a task, a document and a single line have no
   frontmatter: theirs are computed, the person's correction kept in `notebook/state.json` (`category_marks`).
@@ -82,6 +83,49 @@ keys only, never a line's text, a page's path or a file's name. `categories` wri
 read (« [[Livres]] », three values) are never touched (409 `categories_by_hand`). A work agent's page is Travail only
 when that agent makes it.
 
+**What the app shows** (S2): the answer's `toast` (« Rangé dans Argent. », « … et Maison » for two) and `undo_title`
+(« Annuler ») in the app's `?lang=`; then today's re-filings (`GET /v1/notebook/categorize/today`, the newest first),
+each with its `undo`: every re-filing of the day stays undoable (the 20 latest, and today's up to 100). A re-filing
+whose page, line, task or record is gone (deleted, forgotten) is not listed.
+
+## 2b. The Carnet from before the sommaire (S2)
+
+Once, at night (the nightly pass, before its model; `bridge-rs/src/notebook/categories_pass.rs`), without a model:
+
+- **Every page of the shared part gets `categories` + `categories_by: auto`** in its frontmatter: the categories the
+  bridge read on the fly for it until then (§2; one exception: a page a work agent made before S1, read by its words
+  until then, is `work`, as S1 files a page a work agent makes). Nothing moves; a page's text
+  changes only by those lines, where the bridge writes them (before `updated`, else at the end of the frontmatter; a
+  page without one gets one), checked by reading the page back. Left as they are: the tasks page, « À ranger », the
+  documents' index (not notes); `categories_by: person` or `agent`; a `categories` the bridge did not write (by hand in
+  Obsidian: without `categories_by`, or values it does not read); a text it cannot change safely (another line ending,
+  a byte-order mark, YAML it does not parse). Each page written is one change of its history (`categorize`, by the
+  « rangement », no summary), never in « Nouveau »: the only thing a 1.0 app shows of it, a line in the page's
+  history. A page a work agent made (its last « create » in the history; not one it only wrote on, nor one deleted or
+  made again by the person since): `work`. A page with another line ending (CRLF) is left as it is, and so is an
+  empty frontmatter followed further down by a rule (its lines would show in the text). A page the bridge cannot
+  write is left and tried again the next night. The categories' lines of the pass, of the nightly model and of an
+  agent never make the bridge the page's last writer (the nightly pass folds and takes out only pages the person did
+  not write last); the person's « Ranger ailleurs » does: the page is theirs. « Ranger ailleurs » and its undo change
+  the header lines only.
+- **Records, tasks, documents and lines** have no frontmatter: theirs stay computed from their page or type (§1).
+- **Once per version**: `state.json` `categories_v`. A better table (version + 1) re-decides the `auto` pages once,
+  never `agent` nor `person`. Between versions, each night: the pages without categories and those `auto` in `other`
+  (the person's rules may place them now). By batches of 50 pages under the Carnet's lock; idempotent; a pass cut short
+  starts again after its last batch (`categories_pass`).
+- **What stays in `other`**: the nightly pass's small model, 20 pages a night at most, inside its monthly cap (the
+  run's `categorized_by_model`, its tokens and cost in the run). It reads a page's title, aliases, « En bref » and lines
+  (400 characters, no attribution, nothing that touches health; never a page that looks like health, never the private
+  part) and answers 1–2 of `agent_may_give`: written `categories_by: agent` (later tables leave it; the person's
+  correction still wins). A page it was shown is not sent again while its text stays the same (`categories_tried`:
+  fingerprints only).
+- **The card**, once after the first pass over a Carnet with notes: the home's `sorted` (`SortedCard`; S4 serves it as
+  the summary's `card` `{kind: sorted}`): `title` « Ton Carnet est rangé par catégories », `text` « 9 notes dans
+  Autres » (null when none: then no `see`), `see` « Voir » opens `open.category` (`other`), `ok` « OK »;
+  `POST /v1/notebook/sorted {action: ok|see}` → `{card: null}`, never shown again. Its count is kept until the Carnet
+  changes (its history, the person's marks). Visible texts: the plan's in French;
+  the other languages proposed, for Alex to confirm (as `titles_proposed`).
+
 ## 3. Routes
 
 Types and examples: `sommaire.json` `types`, `routes`, `fake-bridge/`. All under the bridge key, JSON, the app's
@@ -90,8 +134,11 @@ in `routes[].errors`; S1's codes have no text yet: the apps show their own until
 
 | Brick | Route | What |
 |---|---|---|
-| S1 | `POST /v1/notebook/categorize` | « Ranger ailleurs »: `{item}` (an Item's id) · `{path, private?}` · `{record: {type, id}}` · `{document: {agent, file}}` · `{task}` · `{line: {path, text}}`, with `categories` (1–2 of `person_may_give`) → `Categorized` (`before`, `learnt`, `undo`) |
-| S1 | `POST /v1/notebook/categorize/undo` | `{undo}` → `Undone`; 404 `undo_gone` after 20 newer corrections |
+| S1 | `POST /v1/notebook/categorize` | « Ranger ailleurs »: `{item}` (an Item's id) · `{path, private?}` · `{record: {type, id}}` · `{document: {agent, file}}` · `{task}` · `{line: {path, text}}`, with `categories` (1–2 of `person_may_give`) → `Categorized` (`before`, `learnt`, `undo`; S2: `toast`, `undo_title`) |
+| S1 | `POST /v1/notebook/categorize/undo` | `{undo}` → `Undone`; 404 `undo_gone` once undone, after a newer correction of the same target, or after 20 newer corrections (today's stay, 100 at most) |
+| S2 | `GET /v1/notebook/categorize/today` | today's re-filings, each still undoable (`RefiledToday`) |
+| S2 | `GET /v1/notebook` `sorted` | the card « Ton Carnet est rangé par catégories » (`SortedCard`), or null |
+| S2 | `POST /v1/notebook/sorted` | `{action: ok\|see}` → `{card: null}`; the card is not shown again |
 | S1 | MCP `notebook_write.category` | 1–2 of `agent_may_give`, only when the agent is sure |
 | S3 | `GET /v1/notebook/index?since=&epoch=` | the phone's search copy (`Index`): ETag `"<epoch>-v<version>"`, 304 when unchanged; `since`/`epoch` = what the phone has → only `items` changed and `removed` ids (`full: false`), the tables whole; another epoch, a `since` above the version or unknown → everything (`full: true`). Never Santé, never ID numbers or references, mails' archives or online files' content; 20 000 lines / 8 MB of JSON as sent at most, default keys left out (`truncated`; out first: archived lines oldest first, archived pages, then the other lines oldest first). Dates and feasts as rules: the copy never changes with the day (`sommaire.json` `dates`, `feasts`, `index`) |
 | S3 | `GET /v1/notebook/search` | today's answer plus `groups` (by category, in the order of their best result; `count`, the two best `top`), `counts` (`all` and per category: the chips), `online` (connected drives the person allowed, online only) |
@@ -124,14 +171,16 @@ absolute dates from the bridge), stop words dropped unless alone; ranking as in 
 Exactly today's answers, the keys of `additive` added. Concretely, for an app of today: pages, results, tasks,
 records and documents gain `categories` (a list of ids) and sometimes `categories_by`/`space`; the page's
 `frontmatter` gains the same keys; the home gains `sommaire`, the list of what this bridge's Carnet can do (`sommaire.json` `Capability`: S1
-`categories`, `categorize`; then `index`, `summary`, `category`, `kept`, `searched`, `spaces`, `family` as they
+`categories`, `categorize`; S2 `sorted` (the home's `sorted` card and its answer, today's re-filings, the toast);
+then `index`, `summary`, `category`, `kept`, `searched`, `spaces`, `family` as they
 come): a new app uses a route only when it is listed, else the home of today. An old bridge has no `sommaire`.
 
 ## 5. Fake bridge (for the iPhone and Android agents)
 
 `fake-bridge/<lang>/` holds one answer per route for the demo Carnet (`App/Resources/Demo/notebook-demo.json`,
 `notebook-demo-trip.json`, `family-notebook-demo.json`), dated from 2026-11-22: `categorize.json`,
-`categorize-undo.json` (S1, the bridge's own answers), `index.json`, `index-since.json`, `search-aniv.json`,
+`categorize-undo.json` (S1, the bridge's own answers), `categorize-today.json` and `home-sorted.json` (S2, the
+bridge's own: the pass run over the demo, then its card), `index.json`, `index-since.json`, `search-aniv.json`,
 `summary.json`, `summary-pro.json`, `category-papers.json`, `kept.json`, `family-summary.json`, `family-index.json`.
 The categories in them are the bridge's (S1's code on the demo); the rest (counts, hints, groups, the index) is
 assembled from them by the generator in the shape of this contract, until S3/S4 answer for real: an app built on

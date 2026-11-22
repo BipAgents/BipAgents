@@ -71,4 +71,6 @@ def test_the_tables_written_before_are_put_right_at_night(bridge):
         ("r000001", "Claude Max 20x (Anthropic, PBC)", "196,57 €", "mensuel"),
         ("r000004", "Spotify", "10,99 €", "annuel")], items
     history = bridge.get("/v1/notebook/history", params={"path": "Fiches/Abonnements.md"}, headers=AUTH).json()
-    assert history["changes"][0]["action"] == "tidy", "a change of the history, undone from there"
+    # (the night's « categorize » of the table's header, S2, is housekeeping: the newest change besides it)
+    changes = [c for c in history["changes"] if c["action"] != "categorize"]
+    assert changes[0]["action"] == "tidy", "a change of the history, undone from there"
