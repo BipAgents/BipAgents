@@ -372,7 +372,9 @@ fn matches(text: &str, rules: &[Rule]) -> Vec<Match> {
     for r in rules {
         take(&r.word, r.categories.clone(), RULE, &mut taken, &mut out);
     }
-    for (_, phrase, i) in PHRASES.iter() {
+    // a phrase looked for only when the text holds it (most texts hold none: a page's 40 facts each read)
+    let padded = format!(" {folded} ");
+    for (_, phrase, i) in PHRASES.iter().filter(|(p, _, _)| padded.contains(p.as_str())) {
         take(phrase, strings(lexicon::CATEGORY_WORDS[*i].0), 1.0, &mut taken, &mut out);
     }
     for (at, word) in words.iter().enumerate().filter(|(at, _)| !taken[*at]) {
