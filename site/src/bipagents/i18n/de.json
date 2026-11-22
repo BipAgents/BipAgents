@@ -5,7 +5,7 @@
   },
   "meta": {
     "title": "BipAgents — Persönliche Agenten, die deine Daten nie verkaufen.",
-    "description": "Persönliche KI-Agenten für die ganze Familie: privat, in deinem eigenen Bereich in Europa oder bei dir zu Hause, und günstiger als ein einziger Platz anderswo. Gebaut auf Hermes Agent."
+    "description": "Persönliche KI-Agenten für die ganze Familie: privat, auf deinem eigenen Server in Europa oder bei dir zu Hause, und günstiger als ein einziger Platz anderswo. Gebaut auf Hermes Agent."
   },
   "a11y": {
     "skip": "Zum Inhalt",
@@ -116,8 +116,8 @@
   },
   "private": {
     "whereTitle": "Wo sind deine Daten?",
-    "where1": "In deinem eigenen Bereich, getrennt von dem der anderen, auf einem Server in der Europäischen Union (OVHcloud oder Hetzner). Oder auf deinem eigenen Computer, wenn du es bei dir installierst.",
-    "where2": "Mit Alles inklusive wird dein Bereich wenige Minuten nach jeder Aktivität und mindestens einmal am Tag verschlüsselt gesichert. Die Kopie auf unserem Sicherungsserver ist ohne den Schlüssel unlesbar, und der bleibt in deinem Bereich und auf deinen Geräten.",
+    "where1": "Auf deinem eigenen Server, getrennt von denen der anderen, in der Europäischen Union (OVHcloud oder Hetzner). Oder auf deinem eigenen Computer, wenn du es bei dir installierst.",
+    "where2": "Mit Alles inklusive wird dein Server wenige Minuten nach jeder Aktivität und mindestens einmal am Tag verschlüsselt gesichert. Die Kopie auf unserem Sicherungsserver ist ohne den Schlüssel unlesbar, und der bleibt auf deinem Server und auf deinen Geräten.",
     "whoTitle": "Wer kann sie lesen?",
     "who2": "Die KI liest, was dein Agent ihr schickt, um dir zu antworten: über EUrouter, einen europäischen KI-Router, dann beim Anbieter, der das gewählte Modell betreibt. Vor deiner ersten Nachricht nennt dir die App den Router und das Modell.",
     "who3": "Unsere Grenze, offen gesagt: Wie bei jedem gemieteten Server könnten der Hoster und wir technisch hinein. Unsere Software tut es nicht, und wir täten es nur, wenn das Gesetz es verlangt.",
@@ -129,16 +129,16 @@
     "theirsSub": "sehen deine Daten und dürfen ihre KI damit trainieren",
     "you": "Du",
     "ai": "Die KI",
-    "space": "Dein Bereich",
+    "space": "Dein Server",
     "spaceSub": "privat, nur für dich",
-    "picA11y": "Ein üblicher Assistent: Deine Nachrichten gehen auf ihre Server, die deine Daten sehen und ihre KI damit trainieren dürfen. BipAgents: Deine Nachrichten gehen in deinen Bereich, privat, nur für dich.",
+    "picA11y": "Ein üblicher Assistent: Deine Nachrichten gehen auf ihre Server, die deine Daten sehen und ihre KI damit trainieren dürfen. BipAgents: Deine Nachrichten gehen auf deinen Server, privat, nur für dich.",
     "f1": "<b>Nicht von uns gelesen</b>, keine KI damit trainiert",
     "f2": "<b>Keine Werbung</b>, kein Tracking",
     "f4": "<b>Alles gehört dir</b>: Nimm es mit, wann du willst",
     "detail": "Details ansehen",
     "limitTitle": "Was wir nicht versprechen",
     "detailTitle": "Die Details, ohne Umschweife",
-    "line": "Deine Agenten leben in deinem eigenen Bereich, in Europa oder bei dir zu Hause.",
+    "line": "Deine Agenten leben auf deinem eigenen Server, in Europa oder bei dir zu Hause.",
     "k1t": "Von uns nicht gelesen",
     "k1": "Keine KI wird damit trainiert.",
     "k2t": "Keine Werbung",
@@ -161,12 +161,12 @@
     "duo": {
       "name": "Duo",
       "who": "2 Personen",
-      "blurb": "Jeder mit eigenen Agenten und eigenem Bereich."
+      "blurb": "Jeder mit eigenen Agenten und eigenem Server."
     },
     "famille": {
       "name": "Familie",
       "who": "bis zu 6 Personen",
-      "blurb": "Ein gemeinsames KI-Guthaben, ein Bereich für jeden.",
+      "blurb": "Ein gemeinsames KI-Guthaben, ein Server für jeden.",
       "flag": "Bester Preis pro Person"
     },
     "perYear": "/Jahr",
@@ -176,7 +176,7 @@
     "cta": "Abonnieren",
     "soon": "<b>Das Web-Abo kommt sehr bald.</b> Bis dahin kommt BipAgents in die Stores, wo du in der App abonnierst:",
     "trial": "Eine Gratiswoche zum Start, wenn du noch keine hattest: Nichts wird abgebucht, wenn du vorher aufhörst.",
-    "cancel": "Jederzeit kündbar: Dein Bereich bleibt 30 Tage erhalten, damit du alles mitnehmen kannst (3 Tage nach einer Gratiswoche ohne Abo).",
+    "cancel": "Jederzeit kündbar: Dein Server bleibt 30 Tage erhalten, damit du alles mitnehmen kannst (3 Tage nach einer Gratiswoche ohne Abo).",
     "includedTitle": "In jedem Tarif enthalten",
     "inc1": "Deine Bips, deine KI-Agenten, in einer Minute bereit",
     "inc2": "KI-Guthaben jeden Monat, bei Duo und Familie gemeinsam, Reste gehen in den nächsten Monat",
@@ -228,7 +228,7 @@
       "offerTag": "Am einfachsten",
       "offerLead": "In einer Minute bereit: nichts zu installieren, wir kümmern uns um Server, Updates und Sicherungen.",
       "offerFrom": "ab {{p.from}}/Monat",
-      "offer1": "Dein privater Bereich, auf einem Server in Europa",
+      "offer1": "Dein privater Server in Europa",
       "offer2": "Für dich allein, zu zweit oder als Familie mit bis zu 6",
       "offer3": "Ohne Vertragsbindung: Du hörst auf, wann du willst",
       "offerCta": "Tarife ansehen",
@@ -289,7 +289,7 @@
     "title": "Gute Fragen.",
     "1": {
       "q": "Was bekomme ich genau?",
-      "a": "Deine eigenen KI-Agenten, die Bips, in der App auf iPhone, iPad und Android. Sie arbeiten in deinem eigenen Bereich, auf einem Server in Europa, um den wir uns kümmern: nichts zu installieren, nichts einzustellen, Updates und Sicherungen inklusive."
+      "a": "Deine eigenen KI-Agenten, die Bips, in der App auf iPhone, iPad und Android. Sie arbeiten auf deinem eigenen Server in Europa, um den wir uns kümmern: nichts zu installieren, nichts einzustellen, Updates und Sicherungen inklusive."
     },
     "2": {
       "q": "Gibt es eine Gratiswoche?",
@@ -301,15 +301,15 @@
     },
     "4": {
       "q": "Wer kann meine Unterhaltungen lesen?",
-      "a": "Wir nicht: Kerfy Studio liest sie nicht und trainiert keine KI damit. Um zu antworten, liest die KI, was dein Agent ihr schickt: über EUrouter, einen europäischen KI-Router, dann beim Anbieter, der das gewählte Modell betreibt; die App nennt den Router und das Modell vor deiner ersten Nachricht. Da wir den Server mieten, könnten wir technisch in deinen Bereich: Unsere Software tut es nicht, und wir täten es nur, wenn das Gesetz es verlangt. Deine Angehörigen lesen nur, was du mit ihnen teilst: einen deiner Agenten, nur zum Lesen, und das gemeinsame Gespräch des Familienagenten."
+      "a": "Wir nicht: Kerfy Studio liest sie nicht und trainiert keine KI damit. Um zu antworten, liest die KI, was dein Agent ihr schickt: über EUrouter, einen europäischen KI-Router, dann beim Anbieter, der das gewählte Modell betreibt; die App nennt den Router und das Modell vor deiner ersten Nachricht. Da wir die Maschine mieten, könnten wir technisch auf deinen Server zugreifen: Unsere Software tut es nicht, und wir täten es nur, wenn das Gesetz es verlangt. Deine Angehörigen lesen nur, was du mit ihnen teilst: einen deiner Agenten, nur zum Lesen, und das gemeinsame Gespräch des Familienagenten."
     },
     "5": {
       "q": "Wie funktionieren Duo und Familie?",
-      "a": "Jede eingeladene Person hat ihr eigenes Konto, ihren Bereich und ihre Agenten; das KI-Guthaben des Tarifs ist gemeinsam. Wer zahlt, sieht keine Unterhaltungen, nur, wie viel Guthaben jede Person verbraucht. Mit Familie teilen sich bis zu sechs Personen denselben Tarif und sein Guthaben."
+      "a": "Jede eingeladene Person hat ihr eigenes Konto, ihren Server und ihre Agenten; das KI-Guthaben des Tarifs ist gemeinsam. Wer zahlt, sieht keine Unterhaltungen, nur, wie viel Guthaben jede Person verbraucht. Mit Familie teilen sich bis zu sechs Personen denselben Tarif und sein Guthaben."
     },
     "6": {
       "q": "Kann ich jederzeit aufhören?",
-      "a": "Ja, ohne Kosten: Das Abo endet mit dem bezahlten Zeitraum. Dein Bereich bleibt danach 30 Tage erhalten, damit du alles mitnehmen kannst, und wird dann mit seinen Sicherungen gelöscht. Und nach dem Kauf hast du 14 Tage, um es dir anders zu überlegen."
+      "a": "Ja, ohne Kosten: Das Abo endet mit dem bezahlten Zeitraum. Dein Server bleibt danach 30 Tage erhalten, damit du alles mitnehmen kannst, und wird dann mit seinen Sicherungen gelöscht. Und nach dem Kauf hast du 14 Tage, um es dir anders zu überlegen."
     },
     "7": {
       "q": "Warum ist es im Web günstiger?",
@@ -400,7 +400,7 @@
   "page": {
     "privacy": {
       "title": "Datenschutzerklärung — BipAgents",
-      "description": "Wie BipAgents mit deinen Daten umgeht: was auf deinem Telefon und deinem Platz bleibt, was Kerfy Studio erhält, Google-Daten, deine Rechte."
+      "description": "Wie BipAgents mit deinen Daten umgeht: was auf deinem Telefon und deinem Server bleibt, was Kerfy Studio erhält, Google-Daten, deine Rechte."
     },
     "demo": {
       "title": "Die Demo — BipAgents",
@@ -416,7 +416,7 @@
     },
     "beta": {
       "title": "Die Beta — BipAgents",
-      "description": "Die öffentliche Beta von BipAgents: kostenlos, für iPhone und Android, begrenzte Plätze, ohne Kreditkarte. Dein privater Bereich in Europa, mit KI-Guthaben."
+      "description": "Die öffentliche Beta von BipAgents: kostenlos, für iPhone und Android, begrenzte Plätze, ohne Kreditkarte. Dein privater Server in Europa, mit KI-Guthaben."
     }
   },
   "beta": {
@@ -429,7 +429,7 @@
     "what3": "Begrenzte Plätze",
     "what4": "Ohne Kreditkarte",
     "getTitle": "Was du bekommst",
-    "get1": "Deinen privaten Bereich auf einem Server in Europa",
+    "get1": "Deinen privaten Server in Europa",
     "get2": "Ein KI-Guthaben für deine Agenten",
     "get3": "Deine Bips, in einer Minute bereit",
     "askTitle": "Worum wir dich bitten",
@@ -480,9 +480,9 @@
   },
   "family": {
     "title": "Alle haben ihre eigenen Agenten.",
-    "sub": "Jeder hat seinen privaten Bereich; geteilt wird nur, was du willst.",
-    "s1t": "Jeder hat seinen Platz",
-    "s1": "Eigener Bereich, eigene Agenten, ein gemeinsames KI-Guthaben",
+    "sub": "Jeder hat seinen privaten Server; geteilt wird nur, was du willst.",
+    "s1t": "Jeder hat seinen eigenen Server",
+    "s1": "Eigener Server, eigene Agenten, ein gemeinsames KI-Guthaben",
     "s2t": "Eure Agenten reden",
     "s2": "Nur wenn du es erlaubst, und eine Nachricht an die Familie wartet auf dein „Senden“",
     "s3t": "Der Agent der Familie",
@@ -629,13 +629,13 @@
   },
   "rules": {
     "title": "Die Hausregeln.",
-    "line": "Deine Bips wohnen bei dir: in deinem eigenen Bereich, getrennt von dem der anderen.",
+    "line": "Deine Bips wohnen bei dir: auf deinem eigenen Server, getrennt von denen der anderen.",
     "where": "Ein privater Server in Europa, in einer Minute bereit. Oder dein eigener Computer.",
-    "alt": "Dein Bereich: ein Haus, in dem deine Bips wohnen, unter der Europaflagge.",
+    "alt": "Dein Server: ein Haus, in dem deine Bips wohnen, unter der Europaflagge.",
     "r1t": "Sie fragen, bevor sie zahlen oder jemand Neuem schreiben.",
     "r1": "Eine Zahlung, eine Mail an eine neue Adresse, eine Nachricht an deine Familie: Sie warten auf dein Ja.",
     "r2t": "Wir lesen ihnen nicht über die Schulter.",
-    "r2": "Kerfy Studio liest deinen Bereich nicht und trainiert keine KI damit.",
+    "r2": "Kerfy Studio liest deinen Server nicht und trainiert keine KI damit.",
     "r3t": "Keine Werbung, kein Tracking.",
     "r3": "Keine Cookies und keine Tracker auf dieser Website, keine Werbung in der App.",
     "r4t": "Die KI läuft in Europa.",

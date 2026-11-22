@@ -5,7 +5,7 @@
   },
   "meta": {
     "title": "BipAgents — Agentes personales que nunca venden tus datos.",
-    "description": "Agentes de IA personales para toda la familia: privados, en tu propio espacio en Europa o en casa, y más baratos que una sola plaza en otro sitio. Construido sobre Hermes Agent."
+    "description": "Agentes de IA personales para toda la familia: privados, en tu propio servidor en Europa o en casa, y más baratos que una sola plaza en otro sitio. Construido sobre Hermes Agent."
   },
   "a11y": {
     "skip": "Ir al contenido",
@@ -116,8 +116,8 @@
   },
   "private": {
     "whereTitle": "¿Dónde están tus datos?",
-    "where1": "En tu propio espacio, separado del de los demás, en un servidor de la Unión Europea (OVHcloud o Hetzner). O en tu propio ordenador, si lo instalas en casa.",
-    "where2": "Con Todo incluido, tu espacio se guarda cifrado unos minutos después de cada actividad, y al menos una vez al día. La copia que se guarda en nuestro servidor de copias de seguridad es ilegible sin la clave, que se queda en tu espacio y en tus dispositivos.",
+    "where1": "En tu propio servidor, separado del de los demás, en la Unión Europea (OVHcloud o Hetzner). O en tu propio ordenador, si lo instalas en casa.",
+    "where2": "Con Todo incluido, tu servidor se guarda cifrado unos minutos después de cada actividad, y al menos una vez al día. La copia que se guarda en nuestro servidor de copias de seguridad es ilegible sin la clave, que se queda en tu servidor y en tus dispositivos.",
     "whoTitle": "¿Quién puede leerlos?",
     "who2": "La IA lee lo que tu agente le envía, para responderte: a través de EUrouter, un enrutador de IA europeo, y luego el proveedor que ejecuta el modelo elegido. Antes de tu primer mensaje, la app te nombra el enrutador y el modelo.",
     "who3": "Nuestro límite, dicho claro: como con cualquier servidor alquilado, el proveedor y nosotros podríamos técnicamente entrar. Nuestro software no lo hace, y solo lo haríamos si la ley nos obliga.",
@@ -129,16 +129,16 @@
     "theirsSub": "ven tu información y pueden entrenar su IA con ella",
     "you": "Tú",
     "ai": "La IA",
-    "space": "Tu espacio",
+    "space": "Tu servidor",
     "spaceSub": "privado, solo tuyo",
-    "picA11y": "Un asistente clásico: tus mensajes van a sus servidores, que ven tu información y pueden entrenar su IA con ella. BipAgents: tus mensajes van a tu espacio, privado, solo tuyo.",
+    "picA11y": "Un asistente clásico: tus mensajes van a sus servidores, que ven tu información y pueden entrenar su IA con ella. BipAgents: tus mensajes van a tu servidor, privado, solo tuyo.",
     "f1": "<b>No lo leemos</b>, ni entrenamos IA con ello",
     "f2": "<b>Sin anuncios</b> ni rastreo",
     "f4": "<b>Todo es tuyo</b>: llévatelo cuando quieras",
     "detail": "Ver el detalle",
     "limitTitle": "Lo que no prometemos",
     "detailTitle": "El detalle, sin rodeos",
-    "line": "Tus agentes viven en tu propio espacio, en Europa o en casa.",
+    "line": "Tus agentes viven en tu propio servidor, en Europa o en casa.",
     "k1t": "No lo leemos",
     "k1": "Ninguna IA se entrena con ello.",
     "k2t": "Sin anuncios",
@@ -161,12 +161,12 @@
     "duo": {
       "name": "Dúo",
       "who": "2 personas",
-      "blurb": "Cada uno con sus agentes y su espacio."
+      "blurb": "Cada uno con sus agentes y su servidor."
     },
     "famille": {
       "name": "Familia",
       "who": "hasta 6 personas",
-      "blurb": "Un crédito de IA compartido, un espacio para cada uno.",
+      "blurb": "Un crédito de IA compartido, un servidor para cada uno.",
       "flag": "El mejor precio por persona"
     },
     "perYear": "/año",
@@ -176,7 +176,7 @@
     "cta": "Suscribirme",
     "soon": "<b>La suscripción web llega muy pronto.</b> Mientras tanto, BipAgents llega a las tiendas, donde te suscribirás en la app:",
     "trial": "Una semana gratis para empezar, si nunca la has tenido: no se cobra nada si lo dejas antes de que acabe.",
-    "cancel": "Cancela cuando quieras: tu espacio se guarda 30 días para que te lleves todo (3 días tras una semana gratis que no continuaste).",
+    "cancel": "Cancela cuando quieras: tu servidor se guarda 30 días para que te lleves todo (3 días tras una semana gratis que no continuaste).",
     "includedTitle": "Incluido en cada plan",
     "inc1": "Tus Bips, tus agentes de IA, listos en un minuto",
     "inc2": "Crédito de IA cada mes, común en Dúo y Familia, y lo que sobra pasa al mes siguiente",
@@ -228,7 +228,7 @@
       "offerTag": "Lo más sencillo",
       "offerLead": "Listo en un minuto: nada que instalar, nos ocupamos del servidor, las actualizaciones y las copias de seguridad.",
       "offerFrom": "desde {{p.from}}/mes",
-      "offer1": "Tu espacio privado, en un servidor en Europa",
+      "offer1": "Tu servidor privado, en Europa",
       "offer2": "Para ti, para dos o para una familia de hasta 6",
       "offer3": "Sin permanencia: lo dejas cuando quieras",
       "offerCta": "Ver los planes",
@@ -289,7 +289,7 @@
     "title": "Buenas preguntas.",
     "1": {
       "q": "¿Qué recibo exactamente?",
-      "a": "Tus propios agentes de IA, los Bips, en la app para iPhone, iPad y Android. Trabajan en tu propio espacio, en un servidor en Europa del que nos ocupamos: nada que instalar ni configurar, actualizaciones y copias incluidas."
+      "a": "Tus propios agentes de IA, los Bips, en la app para iPhone, iPad y Android. Trabajan en tu propio servidor, en Europa, y nosotros nos ocupamos de él: nada que instalar ni configurar, actualizaciones y copias incluidas."
     },
     "2": {
       "q": "¿Hay una semana gratis?",
@@ -301,15 +301,15 @@
     },
     "4": {
       "q": "¿Quién puede leer mis conversaciones?",
-      "a": "Nosotros no: Kerfy Studio no las lee ni entrena ninguna IA con ellas. Para responderte, la IA lee lo que tu agente le envía: a través de EUrouter, un enrutador de IA europeo, y luego el proveedor que ejecuta el modelo elegido; la app nombra el enrutador y el modelo antes de tu primer mensaje. Como alquilamos el servidor, técnicamente podríamos entrar en tu espacio: nuestro software no lo hace, y solo lo haríamos si la ley nos obliga. Tus familiares solo leen lo que compartes con ellos: uno de tus agentes, solo para leer, y la conversación común del agente de la familia."
+      "a": "Nosotros no: Kerfy Studio no las lee ni entrena ninguna IA con ellas. Para responderte, la IA lee lo que tu agente le envía: a través de EUrouter, un enrutador de IA europeo, y luego el proveedor que ejecuta el modelo elegido; la app nombra el enrutador y el modelo antes de tu primer mensaje. Como alquilamos la máquina, técnicamente podríamos entrar en tu servidor: nuestro software no lo hace, y solo lo haríamos si la ley nos obliga. Tus familiares solo leen lo que compartes con ellos: uno de tus agentes, solo para leer, y la conversación común del agente de la familia."
     },
     "5": {
       "q": "¿Cómo funcionan Dúo y Familia?",
-      "a": "Cada persona invitada tiene su propia cuenta, su espacio y sus agentes; el crédito de IA del plan es común. Pagar no da acceso a ninguna conversación: la persona que paga solo ve cuánto crédito usa cada persona. Con Familia, hasta seis personas comparten el mismo plan y su crédito."
+      "a": "Cada persona invitada tiene su propia cuenta, su servidor y sus agentes; el crédito de IA del plan es común. Pagar no da acceso a ninguna conversación: la persona que paga solo ve cuánto crédito usa cada persona. Con Familia, hasta seis personas comparten el mismo plan y su crédito."
     },
     "6": {
       "q": "¿Puedo dejarlo cuando quiera?",
-      "a": "Sí, sin coste: la suscripción termina al final del periodo pagado. Tu espacio se guarda 30 días para que te lleves todo, y luego se borra con sus copias. Y tienes 14 días para cambiar de opinión tras la compra."
+      "a": "Sí, sin coste: la suscripción termina al final del periodo pagado. Tu servidor se guarda 30 días para que te lleves todo, y luego se borra con sus copias. Y tienes 14 días para cambiar de opinión tras la compra."
     },
     "7": {
       "q": "¿Por qué es más barato en la web?",
@@ -400,7 +400,7 @@
   "page": {
     "privacy": {
       "title": "Política de privacidad — BipAgents",
-      "description": "Cómo trata BipAgents tus datos: qué se queda en tu teléfono y tu espacio, qué recibe Kerfy Studio, los datos de Google, tus derechos."
+      "description": "Cómo trata BipAgents tus datos: qué se queda en tu teléfono y tu servidor, qué recibe Kerfy Studio, los datos de Google, tus derechos."
     },
     "demo": {
       "title": "La demo — BipAgents",
@@ -416,7 +416,7 @@
     },
     "beta": {
       "title": "La beta — BipAgents",
-      "description": "La beta pública de BipAgents: gratuita, en iPhone y Android, plazas limitadas, sin tarjeta. Tu espacio privado en Europa, con un crédito de IA."
+      "description": "La beta pública de BipAgents: gratuita, en iPhone y Android, plazas limitadas, sin tarjeta. Tu servidor privado en Europa, con un crédito de IA."
     }
   },
   "beta": {
@@ -429,7 +429,7 @@
     "what3": "Plazas limitadas",
     "what4": "Sin tarjeta",
     "getTitle": "Qué recibes",
-    "get1": "Tu espacio privado, en un servidor en Europa",
+    "get1": "Tu servidor privado, en Europa",
     "get2": "Un crédito de IA para tus agentes",
     "get3": "Tus Bips, listos en un minuto",
     "askTitle": "Qué te pedimos",
@@ -480,9 +480,9 @@
   },
   "family": {
     "title": "Cada uno con sus propios agentes.",
-    "sub": "Cada uno tiene su espacio privado; solo se comparte lo que tú quieras.",
+    "sub": "Cada uno tiene su servidor privado; solo se comparte lo que tú quieras.",
     "s1t": "Cada uno su sitio",
-    "s1": "Su espacio, sus agentes, un crédito de IA común",
+    "s1": "Su servidor, sus agentes, un crédito de IA común",
     "s2t": "Vuestros agentes hablan",
     "s2": "Solo si lo permites, y un mensaje a la familia espera tu «Enviar»",
     "s3t": "El agente de la familia",
@@ -629,13 +629,13 @@
   },
   "rules": {
     "title": "Las reglas de la casa.",
-    "line": "Tus Bips viven en tu casa: en tu propio espacio, separado del de los demás.",
+    "line": "Tus Bips viven en tu casa: en tu propio servidor, separado del de los demás.",
     "where": "Un servidor privado en Europa, listo en un minuto. O tu propio ordenador.",
-    "alt": "Tu espacio: una casa donde viven tus Bips, bajo la bandera europea.",
+    "alt": "Tu servidor: una casa donde viven tus Bips, bajo la bandera europea.",
     "r1t": "Preguntan antes de pagar o de escribir a alguien nuevo.",
     "r1": "Un pago, un correo a una dirección nueva, un mensaje a tu familia: esperan a que digas que sí.",
     "r2t": "No leemos por encima de su hombro.",
-    "r2": "Kerfy Studio no lee tu espacio ni entrena ninguna IA con él.",
+    "r2": "Kerfy Studio no lee tu servidor ni entrena ninguna IA con él.",
     "r3t": "Sin publicidad, sin rastreo.",
     "r3": "Ninguna cookie ni rastreador en este sitio, y ninguna publicidad en la app.",
     "r4t": "La IA funciona en Europa.",

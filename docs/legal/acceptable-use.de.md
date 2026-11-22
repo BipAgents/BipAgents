@@ -6,16 +6,16 @@
 
 ## 1. Wozu sie dient
 
-Mit dem Alles-inklusive-Angebot laufen deine Agenten auf deinem Platz, einem Konto auf einem Server, den Kerfy Studio
+Mit dem Alles-inklusive-Angebot laufen deine Agenten auf deinem Server, einem Konto auf einer Maschine, die Kerfy Studio
 bei einem Hosting-Partner (OVHcloud, Hetzner) mietet und oft mit anderen Personen teilt. Kerfy Studio muss die Regeln
-dieser Hoster einhalten: Ein Missbrauch, der von einem Platz ausgeht, kann dazu führen, dass der ganze Server
-abgeschaltet wird, und damit die Plätze der anderen. Diese Richtlinie sagt, was verboten ist, wie du Missbrauch meldest
+dieser Hoster einhalten: Ein Missbrauch, der von einem Server ausgeht, kann dazu führen, dass die ganze Maschine
+abgeschaltet wird, und damit die Server der anderen. Diese Richtlinie sagt, was verboten ist, wie du Missbrauch meldest
 und was Kerfy Studio tut. Sie ist Teil der [Bedingungen des Angebots](offer.de.md) und ergänzt die Nutzungsregeln der
 [Nutzungsbedingungen](terms.de.md) (Abschnitt 10), die für die ganze App gelten.
 
 ## 2. Was verboten ist
 
-Du verpflichtest dich, deinen Platz, deine Agenten oder dein KI-Guthaben nicht zu nutzen und niemanden nutzen zu
+Du verpflichtest dich, deinen Server, deine Agenten oder dein KI-Guthaben nicht zu nutzen und niemanden nutzen zu
 lassen für:
 
 - **eine rechtswidrige Nutzung**: alles, was das französische Recht oder das Recht deines Landes verbietet, oder
@@ -35,10 +35,10 @@ lassen für:
   werden (Art. 227-23 und 227-24 des französischen Strafgesetzbuchs);
 - **Schutzmaßnahmen umgehen**: CAPTCHAs, Ratenbegrenzungen, Zugangskontrollen oder andere Schutzmaßnahmen einer Website
   oder eines Dienstes, auch durch deine Agenten;
-- **deinen Platz weiterverkaufen**: ihn vermieten, weiterverkaufen oder anderen als Dienst anbieten, den Platz oder
+- **deinen Server weiterverkaufen**: ihn vermieten, weiterverkaufen oder anderen als Dienst anbieten, den Server oder
   dein KI-Guthaben (die Personen eines Duo- oder Familie-Tarifs haben jeweils ihren eigenen);
-- **aus deinem Platz ausbrechen**: versuchen, auf die Plätze anderer zuzugreifen, Administratorrechte zu erlangen oder
-  die Trennung zwischen den Konten des Servers zu umgehen.
+- **aus deinem Server ausbrechen**: versuchen, auf die Server anderer zuzugreifen, Administratorrechte zu erlangen oder
+  die Trennung zwischen den Konten der Maschine zu umgehen.
 
 Wenn deine Agenten surfen oder einen Online-Dienst nutzen, müssen sie **die Nutzungsbedingungen dieser Website oder
 dieses Dienstes** und die Rechte anderer **beachten**: Dafür stehst du ein.
@@ -51,7 +51,7 @@ einer anderen Person ohne ihre Einwilligung, kein Auftreten unter fremdem Namen 
 
 ## 3. Deine Verantwortung
 
-Du stehst für das ein, was du und deine Agenten von deinem Platz aus tun, mit deinem Einverständnis oder weil deine
+Du stehst für das ein, was du und deine Agenten von deinem Server aus tun, mit deinem Einverständnis oder weil deine
 Konfiguration es erlaubt, auch über den SSH-Zugang. Was deine Agenten lesen (Webseiten, E-Mails, Dateien), kann
 versteckte Anweisungen enthalten, die sie missbrauchen sollen: Lass die Freigabeanfragen eingeschaltet und gib jedem
 Agenten nur die Zugänge, die er braucht (Nutzungsbedingungen, Abschnitt 9).
@@ -83,24 +83,24 @@ Notruf (112).**
 
 ## 5. Was Kerfy Studio tut
 
-- **Kerfy Studio liest die Plätze nicht.** Um eine Meldung zu bearbeiten, nutzt es, was die Meldung enthält, und die
-  technischen Daten, die es schon hat (welcher Server und welcher Platz, zu welcher Zeit), nie den Inhalt des Platzes.
+- **Kerfy Studio liest die Server nicht.** Um eine Meldung zu bearbeiten, nutzt es, was die Meldung enthält, und die
+  technischen Daten, die es schon hat (welche Maschine und welcher Server, zu welcher Zeit), nie den Inhalt des Servers.
 - **Schnelle Sperre**: Auf die Meldung eines Hosters, auf eine behördliche Anfrage oder bei einem laufenden schweren
-  Missbrauch (ein Angriff, ein Spam-Versand) kann Kerfy Studio **den KI-Schlüssel des Platzes sofort abschalten und den
-  Platz sperren**, vor jedem Austausch, um den Missbrauch zu stoppen und die anderen Personen auf dem Server zu
+  Missbrauch (ein Angriff, ein Spam-Versand) kann Kerfy Studio **den KI-Schlüssel des Servers sofort abschalten und den
+  Server sperren**, vor jedem Austausch, um den Missbrauch zu stoppen und die anderen Personen auf der Maschine zu
   schützen. Diese Entscheidung trifft ein Mensch.
 - **Begründung**: Kerfy Studio teilt dir unverzüglich mit, was getan wurde, warum (die Tatsachen, die betroffene
   Regel) und wie du widersprechen kannst, außer wenn das Gesetz oder eine Behörde es verbietet (Art. 17 der Verordnung
   (EU) 2022/2065).
 - **Widersprechen**: Antworte auf diese Nachricht oder schreib an abuse@bipagents.com. Ein Mensch prüft die
   Entscheidung erneut. Kam der Missbrauch von einem missbrauchten Agenten oder einem gestohlenen Zugang, helfen wir dir,
-  deinen Platz wieder in Ordnung zu bringen; war die Sperre nicht gerechtfertigt, wird dein Platz so schnell wie möglich
+  deinen Server wieder in Ordnung zu bringen; war die Sperre nicht gerechtfertigt, wird dein Server so schnell wie möglich
   wiederhergestellt.
 - **Ende des Abos**: Bei einem schweren oder wiederholten Verstoß kann Kerfy Studio das Abo beenden, nachdem es dich
   aufgefordert hat, den Verstoß abzustellen, außer in dringenden Fällen oder bei einem besonders schweren Verstoß
   (Bedingungen des Angebots, Abschnitt 11).
-- **In der App gemachte Meldungen**: Kerfy Studio kann Inhalte auf dem Server oder dem Platz einer Person weder
-  lesen noch löschen. Es kann dir antworten, die Person benachrichtigen, die den Familienagenten erstellt hat, die
+- **In der App gemachte Meldungen**: Kerfy Studio kann Inhalte auf dem Server einer Person, ihrem eigenen oder dem
+  des Angebots, weder lesen noch löschen. Es kann dir antworten, die Person benachrichtigen, die den Familienagenten erstellt hat, die
   betroffene Person verwarnen und bei einem schweren Verstoß die oben genannten Maßnahmen ergreifen, bis hin zur
   Beendigung des Abonnements für das Angebot, mit Begründung. Die Person, die einen Familienagenten erstellt hat, kann
   auch ein Mitglied entfernen.

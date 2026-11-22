@@ -7,12 +7,12 @@
 ## En resumen
 
 - BipAgents conecta tu teléfono con **tus propios agentes de IA**, construidos sobre Hermes Agent. Funcionan **en tu
-  ordenador o tu servidor** o, con la **oferta todo incluido**, en **tu plaza**, una cuenta en un servidor que Kerfy
+  propio ordenador o servidor** o, con la **oferta todo incluido**, en **tu servidor**, una cuenta en una máquina que Kerfy
   Studio alquila a un proveedor de alojamiento socio. Tus conversaciones, tus archivos, tu voz y la memoria de tus
   agentes se quedan en ese servidor y en el proveedor de modelos de IA que les responde. **Kerfy Studio, el editor de
   la app, no los lee.**
 - Sin publicidad, sin rastreo entre apps o sitios. Solo contamos de dónde vienen nuestros suscriptores, por campaña y
-  por semana (sección 5.11), y, con la oferta todo incluido, algunas mediciones de los primeros días de una plaza, sin
+  por semana (sección 5.11), y, con la oferta todo incluido, algunas mediciones de los primeros días de un servidor, sin
   ningún contenido (sección 5.12). En Android, los servicios de Google integrados en la app (mapas, escáner de documentos)
   envían a Google sus propios datos técnicos (sección 7). Sin cuenta con tu propio servidor; una cuenta para la oferta
   todo incluido.
@@ -25,8 +25,8 @@
      su **relé**, cifrados de extremo a extremo: el relé ve las direcciones IP, quién llama a quién, cuándo, el
      tamaño de los intercambios y cuándo está encendido tu ordenador (sección 4.1 bis).
 - Con la oferta todo incluido, Kerfy Studio trata además tu cuenta, el estado de tu suscripción, datos técnicos sobre
-  tu plaza (nunca su contenido) y tus copias de seguridad, ilegibles sin su clave, que se queda en tu plaza y en tus dispositivos (sección 5.5); aloja tu plaza sin
-  acceder a ella (sección 5). Si das a un agente su propia dirección de correo, Kerfy Studio guarda además los correos
+  tu servidor (nunca su contenido) y tus copias de seguridad, ilegibles sin su clave, que se queda en tu servidor y en tus dispositivos (sección 5.5); aloja tu servidor sin
+  acceder a él (sección 5). Si das a un agente su propia dirección de correo, Kerfy Studio guarda además los correos
   de esa dirección en su servidor de correo (sección 5.8).
 - En un plan Duo o Familia, el crédito de IA es de toda la familia: **la persona que paga ve cuánto usa cada persona**
   (un importe), **nunca lo que escribe** (sección 5.3).
@@ -84,7 +84,7 @@ Con tu propio ordenador o tu propio servidor:
   agentes, separados de los de las demás, salvo los agentes de la familia y los agentes compartidos (sección 2 bis), que
   son comunes por elección. Quien administra el servidor es responsable frente a las demás.
 
-**Con la oferta todo incluido**, tu plaza ocupa el lugar de tu servidor, y Kerfy Studio elige el proveedor de
+**Con la oferta todo incluido**, tu servidor es el de la oferta en lugar del tuyo propio, y Kerfy Studio elige el proveedor de
 alojamiento y el enrutador de IA: la sección 5 dice quién ve qué.
 
 ## 2 bis. Los agentes de la familia y los agentes compartidos
@@ -95,12 +95,12 @@ agente. Su memoria es común: lo que tú le dices puede salir en sus respuestas 
 rutinas que hace llegan a esa conversación.
 
 - **Dónde.** El agente, su conversación, su memoria, sus archivos y sus fotos están en el servidor de la persona que lo
-  creó, o en su plaza con la oferta todo incluido, que Kerfy Studio aloja sin acceder a ella (sección 5.1). Los archivos
+  creó, el suyo propio o el de la oferta todo incluido, que Kerfy Studio aloja sin acceder a él (sección 5.1). Los archivos
   y fotos que se le envían (fotos, PDF, Word, Excel, PowerPoint) son visibles para los miembros y se guardan según el
   plazo elegido en ese servidor, 30 días por defecto, y después se borran (sección 12).
 - **Lo que nunca lee**: tu correo, tu salud y tu Cuaderno.
 - **Tu calendario**, solo si se lo permites (Ajustes › Calendario, o la página del agente; desactivado al principio):
-  entonces pide a tu servidor (o a tu plaza) las citas que necesita, en el momento de responder, sin guardar copia en
+  entonces pide a tu servidor (propio o de la oferta) las citas que necesita, en el momento de responder, sin guardar copia en
   casa de la persona que lo creó, y sus respuestas son visibles para los miembros. Añadir o cambiar una cita necesita
   un segundo ajuste, también desactivado al principio. Estos ajustes solo los activas tú, en tu dispositivo: ni la
   persona que creó el agente ni un padre o una madre pueden hacerlo en tu lugar, tampoco entre los 16 y los 18 años.
@@ -110,12 +110,12 @@ rutinas que hace llegan a esa conversación.
   conversación común con tu nombre de pila, y tus archivos se retiran. Para dejar de formar parte del agente, pídele que
   te retire. Si eliminas tu cuenta, tu nombre de pila se sustituye por «Antiguo miembro». Puedes pedir que se borren tus
   mensajes: escribe a privacy@bipagents.com. Si la persona que creó el agente lo elimina, o elimina su cuenta o su
-  plaza, el agente, su conversación y sus archivos se borran para todos.
+  servidor, el agente, su conversación y sus archivos se borran para todos.
 - **Quién decide.** La persona que crea el agente elige sus miembros y sus herramientas, y puede retirar a un miembro.
   En su propio servidor, es responsable frente a los demás miembros.
-- **Durante la beta**, lo que los miembros escriben al agente cuenta como uso de la plaza que lo aloja. Si esa plaza se
+- **Durante la beta**, lo que los miembros escriben al agente cuenta como uso del servidor que lo aloja. Si ese servidor se
   libera de todos modos (sección 5.14), la conversación común, guardada en casa de la persona que creó el agente, se
-  detiene para todos los miembros hasta que recupere su plaza; lo mismo vale para los usos compartidos en lectura de
+  detiene para todos los miembros hasta que recupere su servidor; lo mismo vale para los usos compartidos en lectura de
   sus agentes.
 
 **Un agente personal compartido con tus familiares.** Puedes dejarles leer tus conversaciones con uno de tus agentes
@@ -174,31 +174,31 @@ ciclo (flujo y comienzo de la regla), más sensibles. Un agente que recibe Salud
 «Compartir todo» deja fuera la glucosa y el ciclo. Algunos datos solo existen en el iPhone (horas de pie, temperatura
 de la muñeca, IMC, estados de ánimo). Envía los últimos 30 días la primera vez y luego los días que cambiaron (en Android, solo cuando la app
 está abierta; en iPhone, también en segundo plano, como máximo una vez al día, cuando Apple Salud tiene datos nuevos),
-**solo a tu servidor** (o a tu plaza con la oferta todo incluido), donde se guardan en un archivo por día, 400 días como
+**solo a tu servidor** (propio o de la oferta todo incluido), donde se guardan en un archivo por día, 400 días como
 máximo, solo con las categorías que al menos un agente lee allí (una categoría que ya ningún agente lee se borra de
 los días guardados). Cada agente solo lee sus categorías, para ayudarte con tu sueño, tu actividad, tu entrenamiento y
 tus hábitos; no hacen diagnósticos. El modelo de IA del agente recibe lo que el agente lee para responderte. Con la
-oferta todo incluido, solo puedes activar Salud con un modelo que funciona en la Unión Europea, y tu plaza lo comprueba
+oferta todo incluido, solo puedes activar Salud con un modelo que funciona en la Unión Europea, y tu servidor lo comprueba
 en cada lectura: si el modelo del agente ya no es uno que funciona en la Unión, el agente ya no lee nada de tu salud y
 te lo dice. El teléfono solo guarda las fechas y una huella de lo que ya envió, nunca los valores, y nada en iCloud.
-Kerfy Studio no los lee (con la oferta, aloja tu plaza sin acceder a ella, sección 5.1); nada se vende ni se usa para
+Kerfy Studio no los lee (con la oferta, aloja tu servidor sin acceder a él, sección 5.1); nada se vende ni se usa para
 publicidad. **Base jurídica**: tu consentimiento explícito (artículos 6.1.a y 9.2.a del RGPD). Lo das para cada agente
 en la ventana «¿Compartir tu salud con …?», que dice adónde van tus datos, cuánto tiempo se guardan y qué IA los lee,
 y luego al permitir las categorías en Apple Salud o Health Connect; tu teléfono guarda la fecha de ese consentimiento.
 **Dejarlo**: desactiva Salud para el agente, lo que retira tu consentimiento para él (la ventana vuelve si la activas
 de nuevo); cuando ya ningún agente la tiene, los días guardados en tu servidor se borran. También se borran con el
-agente, con tu plaza, o al retirar el permiso en Apple Salud o Health Connect (ya no se envía nada).
+agente, con tu servidor, o al retirar el permiso en Apple Salud o Health Connect (ya no se envía nada).
 
 **Tu agenda, si la compartes (« Calendrier », Calendario).** Para cada agente, puedes activar Calendario en sus
 herramientas. Con tu permiso (Calendarios en el iPhone, Calendario en Android), la app lee las agendas de tu teléfono,
 incluidas las cuentas añadidas en él (Google, Outlook…), y envía una copia de sus citas, desde una semana antes hasta
-dos meses después de hoy (título, horas, lugar, notas), **solo a tu servidor** (o a tu plaza con la oferta todo
+dos meses después de hoy (título, horas, lugar, notas), **solo a tu servidor** (propio o de la oferta todo
 incluido), cuando se abre la app. La copia se queda allí, se sustituye en cada envío y se borra cuando ningún agente
 puede leerla ya. Solo la leen los agentes que elegiste. Para cada agente, eliges si puede leer tu agenda, y si puede
 añadir, mover y borrar citas (bajo la pequeña flecha de «Calendario»); al principio puede hacer ambas cosas, sin
 volver a preguntarte. Cuando un agente que tiene permiso añade, cambia o borra una cita, lo hace tu teléfono; un
 permiso que le retiras anula sus peticiones pendientes. El modelo de IA del agente recibe las citas que el agente lee
-para responderte. Kerfy Studio no las lee (con la oferta, aloja tu plaza sin acceder a ella, sección 5.1). **Base
+para responderte. Kerfy Studio no las lee (con la oferta, aloja tu servidor sin acceder a él, sección 5.1). **Base
 jurídica**: tu consentimiento (artículo 6.1.a del RGPD), que das al activar Calendario para un agente (en Android,
 tras una ventana que dice qué se copia y quién lo lee) y permitirlo en tu teléfono. **Dejarlo**: desactiva Calendario
 para el agente, o retira el permiso en los ajustes del teléfono (ya no se envía nada). Para un buzón que conectaste,
@@ -209,12 +209,12 @@ borra las citas que pide; no se guarda nada salvo la lista de esos calendarios. 
 **Tus recordatorios, si los compartes (« Rappels », Recordatorios, iPhone).** Para cada agente, puedes activar
 Recordatorios en sus herramientas. Con tu permiso (Recordatorios en el iPhone), la app envía una copia de tus listas y
 recordatorios, los pendientes y los marcados en los últimos 30 días (título, notas, fecha límite, lista), **solo a tu
-servidor** (o a tu plaza con la oferta todo incluido), cuando se abre la app. La copia se queda allí, se sustituye en
+servidor** (propio o de la oferta todo incluido), cuando se abre la app. La copia se queda allí, se sustituye en
 cada envío y se borra cuando ningún agente puede leerla ya. Para cada agente, eliges si puede leerlos, y si puede
 añadir y marcar recordatorios (bajo la pequeña flecha de «Recordatorios»); al principio puede hacer ambas cosas, sin
 volver a preguntarte. Es entonces tu teléfono quien añade o marca el recordatorio. El modelo de IA del agente recibe
-los recordatorios que el agente lee para responderte. Kerfy Studio no los lee (con la oferta, aloja tu plaza sin
-acceder a ella, sección 5.1). **Base jurídica**: tu consentimiento (artículo 6.1.a del RGPD), que das al activar
+los recordatorios que el agente lee para responderte. Kerfy Studio no los lee (con la oferta, aloja tu servidor sin
+acceder a él, sección 5.1). **Base jurídica**: tu consentimiento (artículo 6.1.a del RGPD), que das al activar
 Recordatorios y permitirlo en tu iPhone. **Dejarlo**: desactiva Recordatorios para el agente, o retira el permiso en
 los ajustes del iPhone (ya no se envía nada). En Android, que no tiene app Recordatorios, un recordatorio a una hora
 o en un día que pides a un agente va al calendario de tu teléfono (el de tu cuenta, Google Calendar por ejemplo), con
@@ -227,19 +227,19 @@ se describen más abajo.
 
 **Tu Cuaderno (« Carnet »).** Tus agentes llevan un cuaderno con lo que les cuentas que seguirá importando (las
 personas de tu vida, tus proyectos, las fechas importantes, las tareas que pides), en páginas de texto **solo en tu
-servidor** (o tu plaza), compartido por todos tus agentes; lo lees, lo corriges, deshaces cambios y lo exportas desde
+servidor** (propio o de la oferta), compartido por todos tus agentes; lo lees, lo corriges, deshaces cambios y lo exportas desde
 la app. Una vez por noche (o por semana, o nunca: lo eliges en la app), tu servidor revisa las conversaciones del día
 en busca de lo que los agentes no anotaron: solo los pasajes que parecen contener esos datos se envían, una vez, a un
 modelo de IA de tu proveedor de modelos, uno pequeño, por el mismo enrutador que tus agentes, para ordenarlos, con un
 pequeño presupuesto mensual; las páginas se escriben en tu servidor. Los datos de salud van solo a una parte privada
 que solo el agente elegido para tu salud y tú podéis leer; las conversaciones de ese agente nunca van al orden
 nocturno. Kerfy Studio no recibe nada de ello. **Parar**: desactiva
-« Carnet » para un agente, elige « nunca » para el orden nocturno, borra páginas en la app; todo se va con tu plaza.
+« Carnet » para un agente, elige « nunca » para el orden nocturno, borra páginas en la app; todo se va con tu servidor.
 
 **Tus contactos, si los compartes (« Contacts », Contactos).** Para cada agente, puedes activar Contactos en sus
 herramientas. Con tu permiso (Contactos en el iPhone y en Android), la app lee la libreta de direcciones de tu
-teléfono, incluidas las cuentas añadidas en él (iCloud, Google…), y envía una copia **solo a tu servidor** (o a tu
-plaza con la oferta todo incluido), cuando se abre la app: toda la libreta o solo los grupos (etiquetas) que elijas
+teléfono, incluidas las cuentas añadidas en él (iCloud, Google…), y envía una copia **solo a tu servidor** (propio o de la
+oferta todo incluido), cuando se abre la app: toda la libreta o solo los grupos (etiquetas) que elijas
 para ese servidor, con el nombre, apodo, empresa y cargo, las personas relacionadas y los grupos de cada contacto, y,
 solo si al menos un agente de ese servidor puede verlos, sus teléfonos, direcciones de correo, direcciones postales y
 cumpleaños; sus notas solo si marcas « notas » (desactivado por defecto). Las fotos nunca se envían. La copia se queda
@@ -249,7 +249,7 @@ uno, y si puede añadir y completar fichas (bajo la pequeña flecha de «Contact
 añadir y completar fichas. Un detalle que le retiras ya no se le muestra ni sirve para buscar; cuando ningún agente lo
 ve, se retira de la copia enseguida y tu teléfono ya no lo envía. Cuando un agente que tiene permiso añade o cambia un
 contacto, lo hace tu teléfono (así no se borra nada). El modelo de IA del agente recibe los contactos que el agente lee
-para responderte. Kerfy Studio no los lee (con la oferta, aloja tu plaza sin acceder a ella, sección 5.1). **Tus
+para responderte. Kerfy Studio no los lee (con la oferta, aloja tu servidor sin acceder a él, sección 5.1). **Tus
 contactos son otras personas**: los agentes tienen la consigna de no escribirles nunca, llamarles ni pasar sus datos
 sin tu permiso, y sigues siendo responsable del uso que hagas de ellos. **Base jurídica**: tu consentimiento (artículo
 6.1.a del RGPD), que das al activar Contactos para un agente (en Android, tras una ventana que dice qué se copia y
@@ -282,7 +282,7 @@ compartido o familiar. Kerfy Studio no recibe nada. **Base jurídica**: prestart
 del RGPD).
 
 **Tus elecciones de aprobación.** Las acciones que has permitido con «Permitir siempre» para cada agente, los sitios
-bloqueados con «Rechazar siempre» y las solicitudes pendientes se guardan en tu servidor (o tu plaza); una solicitud pendiente se
+bloqueados con «Rechazar siempre» y las solicitudes pendientes se guardan en tu servidor (propio o de la oferta); una solicitud pendiente se
 borra tras 24 horas sin respuesta. Kerfy Studio no recibe nada.
 
 ## 4. Lo que Kerfy Studio puede recibir
@@ -352,14 +352,14 @@ rechazos (cuota superada, buzón bloqueado, respuesta cortada), con una huella c
 una clave que solo tiene el relé, y un total por hora (número de intercambios, bytes, buzones conectados). Estos
 registros se conservan 14 días.
 
-Una casa vinculada a una plaza de la oferta solo pasa por el relé una vez, para presentarse; después, sus bridges se
+Una casa vinculada a un servidor de la oferta solo pasa por el relé una vez, para presentarse; después, sus bridges se
 hablan directamente.
 
 ### 4.2 El soporte y las denuncias
 
 - **Con la oferta todo incluido**, **Ajustes › Contactar con soporte** y **Danos tu opinión** envían tu mensaje desde
   la app, a través del guichet de Kerfy Studio (sección 5), al buzón del soporte. El guichet añade tu **código de
-  ayuda** (que la app te muestra), tu plan y su estado, el estado de tus plazas (número, servidor, nombre bajo
+  ayuda** (que la app te muestra), tu plan y su estado, el estado de tus servidores (número, servidor, nombre bajo
   bipagents.com, vinculada o no a tu teléfono), cómo inicias sesión (Apple, Google o correo), la versión y el idioma de
   la app y, para responderte, la dirección de correo que indiques o, si no, la de tu cuenta. **Ninguna conversación,
   ninguna clave.** El guichet guarda tu código de ayuda mientras dure la suscripción; su registro anota que se envió un
@@ -429,29 +429,29 @@ las elaboran bajo su propia responsabilidad y nos las dan agregadas: no nos perm
 
 ## 5. La oferta todo incluido
 
-Esta sección se refiere a las personas que usan la oferta todo incluido ([condiciones de la oferta](offer.es.md)): una
-plaza en un servidor que Kerfy Studio alquila a un proveedor de alojamiento socio, un crédito de IA, copias de
+Esta sección se refiere a las personas que usan la oferta todo incluido ([condiciones de la oferta](offer.es.md)): un
+servidor en una máquina que Kerfy Studio alquila a un proveedor de alojamiento socio, un crédito de IA, copias de
 seguridad y una cuenta. El resto de esta política también se aplica (la app en tu teléfono, las notificaciones, el
-soporte). El servicio de Kerfy Studio que gestiona las cuentas, las suscripciones y las plazas se llama guichet.
+soporte). El servicio de Kerfy Studio que gestiona las cuentas, las suscripciones y los servidores se llama guichet.
 
 ### 5.1 Quién es responsable de qué
 
 - **Kerfy Studio es el responsable** de los tratamientos que requiere la oferta: tu cuenta, el estado de tu
-  suscripción, el alojamiento de tu plaza, el envío de tus mensajes al modelo de IA, las copias de seguridad, las
+  suscripción, el alojamiento de tu servidor, el envío de tus mensajes al modelo de IA, las copias de seguridad, las
   direcciones de correo de tus agentes si las activas, la supervisión técnica y la tramitación de los abusos.
-- **El contenido de tu plaza** (tus agentes, tus conversaciones, tus archivos, su memoria, sus rutinas, la caja fuerte
-  de contraseñas): tú decides lo que pones en ella. Kerfy Studio lo aloja y hace que lo trate el modelo de IA solo para
+- **El contenido de tu servidor** (tus agentes, tus conversaciones, tus archivos, su memoria, sus rutinas, la caja fuerte
+  de contraseñas): tú decides lo que pones en él. Kerfy Studio lo aloja y hace que lo trate el modelo de IA solo para
   prestarte el servicio (artículo 6.1.b del RGPD), **sin acceder a él**: su software no lo lee
-  (las únicas órdenes que ejecuta un servidor son reinstalar una plaza, actualizarla a una versión publicada del código abierto de BipAgents o volver a abrirla, y ninguna lee su contenido). El acceso a las cuentas de Kerfy Studio en los proveedores de alojamiento está reservado a la sociedad. Solo
-  se accedería al contenido de una plaza para cumplir una obligación legal (una orden judicial, por ejemplo), y se te
+  (las únicas órdenes que ejecuta una máquina son reinstalar un servidor, actualizarlo a una versión publicada del código abierto de BipAgents o volver a abrirlo, y ninguna lee su contenido). El acceso a las cuentas de Kerfy Studio en los proveedores de alojamiento está reservado a la sociedad. Solo
+  se accedería al contenido de un servidor para cumplir una obligación legal (una orden judicial, por ejemplo), y se te
   informaría cuando la ley lo permita. Como todo proveedor de alojamiento, OVHcloud y Hetzner tienen acceso físico a
-  sus servidores. Si tu plaza contiene datos de salud, los de Salud o lo que cuentas de tu salud a tus agentes, Kerfy
+  sus servidores. Si tu servidor contiene datos de salud, los de Salud o lo que cuentas de tu salud a tus agentes, Kerfy
   Studio solo los aloja y los hace tratar por el modelo de IA con tu consentimiento explícito (artículo 9.2.a del
   RGPD): para Salud, el que das al activarla para un agente (sección 3), y solo con un modelo que funciona en la Unión
   Europea; para tus conversaciones, el consentimiento explícito que das al elegir hablar de tu salud con tus agentes,
-  después de haber sido informado en esta política: esas palabras se alojan en tu plaza y las trata el modelo de IA
+  después de haber sido informado en esta política: esas palabras se alojan en tu servidor y las trata el modelo de IA
   solo para responderte, solo con un modelo que funciona en la Unión Europea, y nunca para publicidad. No estás
-  obligado a hablar de ello. Puedes borrarlas al suprimir las conversaciones o tu plaza, y dejar de hablar de ello en
+  obligado a hablar de ello. Puedes borrarlas al suprimir las conversaciones o tu servidor, y dejar de hablar de ello en
   cualquier momento.
 - **Apple y Google** son responsables de sus propios tratamientos cuando inicias sesión con ellos y cuando pagas en su
   tienda.
@@ -471,20 +471,20 @@ invitada, su estado y, solo si lo das, tu nombre, que la persona invitada ve en 
 (una invitación por enlace guarda solo ese nombre, si se da, y su estado). Los vínculos familiares: la dirección de
 correo de la otra persona, el nombre del hogar que das y una invitación sellada para cada uno de sus dispositivos, que
 Kerfy Studio no puede abrir. Una conversación que compartes en lectura («Compartir en lectura», 20 personas como
-máximo, hasta la fecha de fin que eliges): su copia cifrada por tu servidor (o tu plaza) antes de salir, que Kerfy
+máximo, hasta la fecha de fin que eliges): su copia cifrada por tu servidor (propio o de la oferta) antes de salir, que Kerfy
 Studio guarda sin poder leerla, los nombres que escribiste para las personas invitadas y el nombre que se les muestra,
 quién se unió y cuándo, tamaños y horas. Una solicitud de recuperación en curso. La
 copia de tu clave de copia de seguridad, cifrada con tu código de recuperación, que Kerfy Studio no puede leer. El
 crédito de IA comprado y conservado para una próxima suscripción (un importe). La fecha de eliminación de la cuenta, si
-la has solicitado. Ni tu foto, nunca las claves de tu plaza.
+la has solicitado. Ni tu foto, nunca las claves de tu servidor.
 
-**Finalidades.** Iniciar tu sesión, vincular tu suscripción y tus plazas, aprobar tus dispositivos, recuperar tu
+**Finalidades.** Iniciar tu sesión, vincular tu suscripción y tus servidores, aprobar tus dispositivos, recuperar tu
 cuenta, enviarte los códigos de inicio de sesión, los avisos de seguridad (dispositivo nuevo, recuperación en curso),
 la confirmación de tu compra, el acuse de recibo de un desistimiento, los avisos de eliminación, el aviso del 5.º día
-de una plaza beta a la que nadie escribe (sección 5.14) y el aviso de fin de la beta, gestionar las invitaciones. Ningún correo publicitario: un mensaje comercial solo se enviaría si das tu acuerdo marcando una casilla.
+de un servidor beta al que nadie escribe (sección 5.14) y el aviso de fin de la beta, gestionar las invitaciones. Ningún correo publicitario: un mensaje comercial solo se enviaría si das tu acuerdo marcando una casilla.
 **Base jurídica.** Ejecución del contrato (artículo 6.1.b del RGPD).
-**Plazo.** Mientras exista tu cuenta. Cuando la eliminas, se borra **30 días** después de tu solicitud (tus plazas se
-detienen desde la solicitud, y puedes cambiar de opinión hasta entonces), con sus plazas y sus copias de seguridad,
+**Plazo.** Mientras exista tu cuenta. Cuando la eliminas, se borra **30 días** después de tu solicitud (tus servidores se
+detienen desde la solicitud, y puedes cambiar de opinión hasta entonces), con sus servidores y sus copias de seguridad,
 salvo lo que la ley obliga a conservar: como proveedor de alojamiento, Kerfy Studio conserva aparte, y solo para
 responder a las autoridades judiciales, tu dirección de correo 5 años y tu identificador de Apple o de Google 1 año
 después del fin del contrato (ley francesa para la confianza en la economía digital, artículo 6, II; decreto
@@ -494,7 +494,7 @@ Invitación no aceptada: 30 días; invitación de un vínculo familiar: 7 días,
 se borra en su fecha de fin, cuando lo detienes o con tu cuenta.
 **Eliminar tu cuenta.** En la app, Ajustes › Cuenta › Eliminar mi cuenta, o, si ya no tienes la app, en la página
 https://guichet.bipagents.com/account/delete con un código enviado a tu dirección de correo. Las personas con las que
-compartes tu plan reciben un aviso por correo: sus plazas se detienen el día en que se borra tu cuenta.
+compartes tu plan reciben un aviso por correo: sus servidores se detienen el día en que se borra tu cuenta.
 
 ### 5.3 Tu suscripción, tus compras y la semana gratis
 
@@ -522,11 +522,11 @@ guarda también la dirección de correo escrita, en claro, y una huella de la di
 **Tu contrato.** La fecha de inicio, la del correo de confirmación y, si desistes del contrato, la fecha y la hora de
 tu desistimiento.
 
-**Crédito de IA usado.** El importe que la clave de IA de cada plaza ha gastado en el mes, consultado en el enrutador
+**Crédito de IA usado.** El importe que la clave de IA de cada servidor ha gastado en el mes, consultado en el enrutador
 de IA una vez por minuto como máximo, y el crédito traspasado: un importe, nunca tus mensajes.
 
 **En un plan Duo o Familia**, el crédito de IA es compartido: la persona que paga ve en su app el importe que cada
-plaza ha usado en el mes (y su estimación en mensajes) y el límite mensual que le haya dado. Una persona invitada ve
+servidor ha usado en el mes (y su estimación en mensajes) y el límite mensual que le haya dado. Una persona invitada ve
 lo que queda para todos, lo que ha usado y su límite, nunca lo que han usado los demás. Estos importes no dicen nada
 del contenido: **nadie ve lo que escribe cada uno ni lo que hacen sus agentes**. Finalidad: permitir a la persona que
 paga seguir el crédito de la familia y fijar límites, y a cada persona saber lo que le queda; base jurídica: la
@@ -549,7 +549,7 @@ y nunca pasa por nuestros servidores (para una tarjeta confiada a tus agentes, v
   segunda huella, solo para este límite y para el de los códigos beta (abajo).
 - **La dirección IP** de tu teléfono nunca se guarda en claro. Para limitar el número de reservas por dirección, el
   guichet solo conserva una huella calculada con una clave secreta, únicamente en memoria, mientras dura la reserva de
-  una plaza de prueba (15 minutos como máximo); se pierde al reiniciarse. Para limitar los intentos de códigos beta, en
+  un servidor de prueba (15 minutos como máximo); se pierde al reiniciarse. Para limitar los intentos de códigos beta, en
   la página de baja del sitio y en las denuncias de agentes compartidos como plantilla, guarda del mismo modo una
   huella, nunca la dirección, 2 días como máximo.
 
@@ -558,9 +558,9 @@ tu cuenta como cualquier suscripción (abajo), y el registro del guichet anota �
 Un solo código por teléfono: en iPhone, Apple guarda para ello el segundo bit de DeviceCheck; en Android, el guichet
 guarda una huella del dispositivo, aparte de tu código y de tu cuenta, mientras aún se puedan usar
 códigos. Un código nunca usado se borra en cuanto ya no puede usarse; un código usado, con su vínculo a tu cuenta,
-cuando tu plaza beta termina o pasa a una suscripción de pago.
+cuando tu servidor beta termina o pasa a una suscripción de pago.
 
-**Finalidades y bases jurídicas.** Prestar y gestionar tu suscripción, tus plazas y tu crédito: ejecución del contrato
+**Finalidades y bases jurídicas.** Prestar y gestionar tu suscripción, tus servidores y tu crédito: ejecución del contrato
 (artículo 6.1.b del RGPD). Evitar que una misma persona encadene semanas gratis: interés legítimo de Kerfy Studio en
 prevenir el fraude y en poder seguir ofreciendo una semana gratis (artículo 6.1.f y considerando 47). Leer el
 identificador del dispositivo no requiere tu consentimiento, porque solo sirve para limitar el acceso gratuito al
@@ -573,16 +573,16 @@ fraude, interés legítimo (artículo 6.1.f); facturas y documentos contables, o
 10 años (artículo L123-22 del Código de Comercio francés); Stripe guarda las facturas. Huella del dispositivo Android:
 24 meses desde la primera marca del teléfono (su semana gratis, o la primera suscripción hecha desde él), guardada
 aparte de tu cuenta. Dirección IP: nunca se guarda en claro; su huella, en memoria, 15 minutos como
-máximo para la semana gratis, 2 días como máximo para los demás límites. La huella guardada 2 días, la de un teléfono Android que usó un código beta y las mediciones de cada plaza (sección 5.12) quedan después hasta 30 días en las copias cifradas de la base. Los bits de DeviceCheck los guarda Apple.
+máximo para la semana gratis, 2 días como máximo para los demás límites. La huella guardada 2 días, la de un teléfono Android que usó un código beta y las mediciones de cada servidor (sección 5.12) quedan después hasta 30 días en las copias cifradas de la base. Los bits de DeviceCheck los guarda Apple.
 
-### 5.4 Tu plaza y el modelo de IA
+### 5.4 Tu servidor y el modelo de IA
 
-**Dónde.** En un servidor alquilado a OVHcloud (centros de datos en la Unión Europea) o a Hetzner (Alemania o
+**Dónde.** En una máquina alquilada a OVHcloud (centros de datos en la Unión Europea) o a Hetzner (Alemania o
 Finlandia), para todas las personas de la oferta, también las que viven fuera de la Unión.
 
 **Lo que hay.** Lo que describe la sección 5.1, y las claves SSH públicas que añades desde la app. El guichet de Kerfy
-Studio (el servicio que gestiona las plazas) conoce la dirección de tu plaza y la huella de su certificado, para que tu
-teléfono se conecte a ella y para trasladarla en caso de avería.
+Studio (el servicio que gestiona los servidores) conoce la dirección de tu servidor y la huella de su certificado, para que tu
+teléfono se conecte a él y para trasladarlo en caso de avería.
 
 **El modelo de IA.** Los mensajes que tus agentes envían al modelo (con los archivos y las fotos que le muestran)
 pasan por un enrutador de IA, **EUrouter** (EUrouter B.V., Ámsterdam, Países Bajos), para todas las personas de la
@@ -592,64 +592,64 @@ GLM-5.3 Flash (fabricante: Z.ai); si se retirara, el modelo de sustitución prev
 establecidos en la Unión Europea, en servidores de la Unión; los fabricantes de esos modelos no reciben tus mensajes.
 No ofreceremos otro modelo en la oferta sin actualizar antes esta sección. EUrouter indica que por defecto no guarda ni las solicitudes ni las respuestas, y
 que guarda sus metadatos (hora, modelo, número de tokens, coste, dirección IP) hasta 12 meses. En cada solicitud de la
-oferta, tu plaza pide además a EUrouter que **no se entrene** ningún modelo con tus mensajes y que **no se guarden**:
+oferta, tu servidor pide además a EUrouter que **no se entrene** ningún modelo con tus mensajes y que **no se guarden**:
 EUrouter solo la confía entonces a un proveedor que, según EUrouter, cumple ambas reglas. Actúan por cuenta de
 Kerfy Studio. **Antes del primer mensaje, la app nombra el enrutador y el fabricante del modelo y te pide tu
 acuerdo**. **Para Salud**, solo un modelo que funciona en la Unión
-Europea: tu plaza se niega a dar tus datos de salud a un agente cuyo modelo no está marcado así, aunque el modelo haya
+Europea: tu servidor se niega a dar tus datos de salud a un agente cuyo modelo no está marcado así, aunque el modelo haya
 cambiado después de que activaras Salud (sección 3).
 
-**El reposo.** Tu plaza anota ella misma la última solicitud de la app; el guichet sabe que duerme (sección 5.6).
+**El reposo.** Tu servidor anota él mismo la última solicitud de la app; el guichet sabe que duerme (sección 5.6).
 
 **Base jurídica.** Ejecución del contrato (artículo 6.1.b del RGPD).
-**Plazo.** Durante la suscripción. Cuando termina, tu plaza se conserva 30 días (3 días después de una semana gratis
-que no continuó) y después su cuenta se borra y se reinstala para otra persona. Las plazas de más de un plan reducido
+**Plazo.** Durante la suscripción. Cuando termina, tu servidor se conserva 30 días (3 días después de una semana gratis
+que no continuó) y después su cuenta se borra y se reinstala para otra persona. Los servidores de más de un plan reducido
 se borran 30 días después de detenerse.
 
 ### 5.5 Las copias de seguridad
 
-Tu plaza hace una copia de seguridad unos minutos después de cada actividad, y al menos una vez al día. La copia se **cifra en la plaza**, antes de salir, con una clave que
-se queda en la plaza y en tus dispositivos, más una copia de esa clave cifrada con tu código de recuperación (sección
-5.2), que Kerfy Studio no puede abrir. En la oferta todo incluido, la plaza está en un servidor que alquila Kerfy
+Tu servidor hace una copia de seguridad unos minutos después de cada actividad, y al menos una vez al día. La copia se **cifra en el servidor**, antes de salir, con una clave que
+se queda en el servidor y en tus dispositivos, más una copia de esa clave cifrada con tu código de recuperación (sección
+5.2), que Kerfy Studio no puede abrir. En la oferta todo incluido, el servidor está en una máquina que alquila Kerfy
 Studio: la clave también está allí y,
-técnicamente, el proveedor y Kerfy Studio podrían acceder a ella; nuestro software no lee ni tu plaza ni sus copias, y
+técnicamente, el proveedor y Kerfy Studio podrían acceder a ella; nuestro software no lee ni tu servidor ni sus copias, y
 solo lo haríamos si la ley nos obligara. Kerfy Studio guarda estas copias en **Scaleway** (Scaleway SAS, Francia;
 almacenamiento de objetos en París, región fr-par) sin poder leerlas: las de las 2 últimas horas, luego una por hora durante 48 horas, una por día durante
-21 días, nada más antiguo. Se borran con tu plaza. Lo que una plaza borra de sus copias, el guichet lo aparta primero 5 días (contra un borrado malintencionado) y
+21 días, nada más antiguo. Se borran con tu servidor. Lo que un servidor borra de sus copias, el guichet lo aparta primero 5 días (contra un borrado malintencionado) y
 luego se borra; en Scaleway, una versión sustituida o borrada de un archivo se guarda 1 día y luego se borra. Así, lo que borras o pides a un agente que olvide ha salido de las copias de seguridad, todas sus copias incluidas, **en 30 días**. Los datos se quedan en la Unión Europea.
 
-**Las copias de seguridad del guichet.** El guichet (tu cuenta, tu suscripción, los datos técnicos de las plazas)
+**Las copias de seguridad del guichet.** El guichet (tu cuenta, tu suscripción, los datos técnicos de los servidores)
 también se guarda en Scaleway, en copias que Kerfy Studio cifra antes de enviarlas; las versiones antiguas se borran
 a los 30 días.
 
-**La imagen diaria de OVHcloud.** En sus servidores, OVHcloud hace además una imagen diaria del servidor entero, que
-guarda en sus instalaciones: un punto de restauración por día, no cifrado por Kerfy Studio. Cuando una plaza se
-reinstala para otra persona, la imagen que la contenía se sustituye en un día aproximadamente.
+**La imagen diaria de OVHcloud.** En sus máquinas, OVHcloud hace además una imagen diaria de la máquina entera, que
+guarda en sus instalaciones: un punto de restauración por día, no cifrado por Kerfy Studio. Cuando un servidor se
+reinstala para otra persona, la imagen que lo contenía se sustituye en un día aproximadamente.
 
 **Base jurídica.** Ejecución del contrato (artículo 6.1.b del RGPD).
 
 ### 5.6 La supervisión técnica y las averías
 
-Cada dos minutos, cada servidor envía al guichet: su memoria, su disco y su carga y, para cada plaza, si su bridge
+Cada dos minutos, cada máquina envía al guichet: su memoria, su disco y su carga y, para cada servidor, si su bridge
 responde, si su Hermes Agent funciona o duerme, su versión de BipAgents, la hora de su última copia de seguridad
 correcta, la memoria que usa, si hay una tarea en curso, el número de sus agentes que tienen su propio espacio y tu
 zona horaria (la hora de su última solicitud de la app y de su próxima rutina también se envían, pero el guichet no
-las guarda). **Nunca contenido.** Estos datos sirven para detectar una avería, trasladar las plazas (durante tu noche,
+las guarda). **Nunca contenido.** Estos datos sirven para detectar una avería, trasladar los servidores (durante tu noche,
 nunca en plena tarea), hacer las actualizaciones por oleadas y avisar a Kerfy Studio.
 
-Cuando el servidor de tu plaza se avería, se traslada o vuelve, tus teléfonos reciben un aviso a través del relé de
+Cuando la máquina de tu servidor se avería, se traslada o vuelve, tus teléfonos reciben un aviso a través del relé de
 notificaciones, con un texto genérico: para ello, el guichet guarda los tokens sellados de tus teléfonos vinculados a
-tu plaza.
+tu servidor.
 
 **Base jurídica.** Ejecución del contrato (artículo 6.1.b del RGPD).
-**Plazo.** Los últimos valores, sustituidos en cada envío, salvo la memoria de cada plaza: su valor más alto de cada
-hora, durante 7 días (168 valores), para repartir las plazas entre los servidores. Registro de eventos (averías,
+**Plazo.** Los últimos valores, sustituidos en cada envío, salvo la memoria de cada servidor: su valor más alto de cada
+hora, durante 7 días (168 valores), para repartir los servidores entre las máquinas. Registro de eventos (averías,
 traslados, actualizaciones, eventos de tu cuenta y de tu suscripción con sus identificadores, nunca contenido):
-12 meses. Tokens sellados: mientras el dispositivo esté vinculado a tu plaza.
+12 meses. Tokens sellados: mientras el dispositivo esté vinculado a tu servidor.
 
 ### 5.7 Las denuncias de abusos y las solicitudes de las autoridades
 
-**Datos.** La denuncia (quién la envía y cómo contactarle, los hechos, la dirección IP y la hora), la plaza afectada,
+**Datos.** La denuncia (quién la envía y cómo contactarle, los hechos, la dirección IP y la hora), el servidor afectado,
 nuestra decisión y sus motivos, nuestros intercambios contigo.
 **Finalidades.** Tramitar las denuncias ([política de uso aceptable](acceptable-use.es.md)), proteger los servidores y
 a las demás personas, responder a las autoridades.
@@ -663,13 +663,13 @@ legítimo de Kerfy Studio en proteger su servicio y a sus clientes (artículo 6.
 Está desactivada por defecto: la activas para ese agente en la app y puedes quitarla en cualquier momento.
 
 **Dónde.** El buzón se guarda en el servidor de correo propio de Kerfy Studio, un servidor dedicado alquilado a
-Hetzner (Alemania o Finlandia), aparte de los servidores de las plazas.
+Hetzner (Alemania o Finlandia), aparte de las máquinas de los servidores.
 
-**Datos.** La propia dirección, que el guichet vincula a tu plaza. Los correos recibidos y enviados por esa dirección:
+**Datos.** La propia dirección, que el guichet vincula a tu servidor. Los correos recibidos y enviados por esa dirección:
 sus cabeceras (remitentes, destinatarios, fechas, asuntos), su contenido y sus adjuntos. La contraseña de la dirección
-se crea en el servidor de Kerfy Studio y se entrega una sola vez a tu plaza, donde se guarda con los ajustes del
+se crea en el servidor de Kerfy Studio y se entrega una sola vez a tu servidor, donde se guarda con los ajustes del
 agente; el servidor de correo solo guarda un hash de ella, y el guichet no la guarda. Las direcciones a las que tu
-agente puede escribir, su límite diario y los correos que esperan tu aprobación se guardan en tu plaza.
+agente puede escribir, su límite diario y los correos que esperan tu aprobación se guardan en tu servidor.
 
 **Quién puede escribir a tu agente.** El agente solo lee los correos de las direcciones que has autorizado, cuando su
 remitente está verificado (las comprobaciones habituales contra remitentes falsificados). No lee ni responde los
@@ -684,7 +684,7 @@ descartes. Envía como máximo el número de correos al día que fijas en la app
 servidores que envían, la entrega de cada correo, las conexiones al buzón) durante **30 días**, para entregar los
 correos, bloquear el spam y los abusos e investigar un incidente.
 
-**Acceso.** Como con el contenido de tu plaza (sección 5.1), Kerfy Studio no lee estos correos: su software solo los
+**Acceso.** Como con el contenido de tu servidor (sección 5.1), Kerfy Studio no lee estos correos: su software solo los
 entrega, filtra el spam y los borra cuando se cumple su plazo. Entre servidores de correo, los correos van cifrados
 durante el trayecto cuando el otro servidor lo permite; un correo no está cifrado de extremo a extremo.
 
@@ -694,7 +694,7 @@ seguridad: interés legítimo de Kerfy Studio en proteger su servicio y a las pe
 
 **Plazo.** Los correos recibidos y enviados se borran a los **90 días**. Este plazo es un ajuste de la oferta: puede
 acortarse, y nunca se alarga sin avisarte antes. El buzón entero se borra de una vez cuando quitas la dirección o el
-agente, cuando se borra tu plaza (sección 5.4) y cuando se borra tu cuenta (sección 5.2). Registros de seguridad: 30
+agente, cuando se borra tu servidor (sección 5.4) y cuando se borra tu cuenta (sección 5.2). Registros de seguridad: 30
 días.
 
 **Tu propio buzón en su lugar.** En tu propio servidor, puedes conectar en su lugar un buzón de tu propio proveedor de
@@ -705,14 +705,14 @@ no borra nada en él y Kerfy Studio no guarda nada de él.
 
 | Prestador | Papel | Datos | Dónde |
 |---|---|---|---|
-| OVHcloud (OVH SAS, Roubaix, Francia) | Aloja los servidores de las plazas; imagen diaria de cada servidor | Contenido de las plazas | Unión Europea |
-| Hetzner Online GmbH (Gunzenhausen, Alemania) | Aloja parte de los servidores de las plazas y el servidor de correo de los agentes | Contenido de las plazas; buzones de los agentes y registros de seguridad del servidor de correo | Alemania, Finlandia |
+| OVHcloud (OVH SAS, Roubaix, Francia) | Aloja las máquinas de los servidores; imagen diaria de cada máquina | Contenido de los servidores | Unión Europea |
+| Hetzner Online GmbH (Gunzenhausen, Alemania) | Aloja parte de las máquinas de los servidores y el servidor de correo de los agentes | Contenido de los servidores; buzones de los agentes y registros de seguridad del servidor de correo | Alemania, Finlandia |
 | EUrouter B.V. (Ámsterdam, Países Bajos) | Enrutador de IA | Mensajes enviados al modelo, metadatos | Unión Europea |
 | Proveedores de alojamiento de los modelos, socios de EUrouter | Hacen funcionar el modelo (hoy GLM-5.3 Flash) | Mensajes enviados al modelo, con los archivos y las fotos que ve | Unión Europea, según EUrouter |
-| Scaleway SAS (París, Francia) | Almacenamiento de objetos de las copias de seguridad (región fr-par, París) | Copias de seguridad cifradas de las plazas, ilegibles para él y para Kerfy Studio; copias cifradas de la base de datos del guichet; una versión sustituida o borrada se guarda 1 día | Unión Europea (Francia) |
-| Scaleway SAS (París, Francia) | Servicio de claves de la caja fuerte (keys.bipagents.com): guarda una mitad de la clave de la caja fuerte de cada plaza cuya caja fuerte está sellada; la otra mitad se queda en la plaza, y ninguna de las dos abre la caja fuerte por sí sola | Para cada plaza sellada: su mitad de la clave, una huella de su token, la dirección IP de su servidor y el registro de sus solicitudes (hora, dirección, resultado), guardado 90 días; el nombre de una plaza borrada y la huella de su token se quedan, para rechazar cualquier nueva solicitud | Unión Europea (Países Bajos) |
+| Scaleway SAS (París, Francia) | Almacenamiento de objetos de las copias de seguridad (región fr-par, París) | Copias de seguridad cifradas de los servidores, ilegibles para él y para Kerfy Studio; copias cifradas de la base de datos del guichet; una versión sustituida o borrada se guarda 1 día | Unión Europea (Francia) |
+| Scaleway SAS (París, Francia) | Servicio de claves de la caja fuerte (keys.bipagents.com): guarda una mitad de la clave de la caja fuerte de cada servidor cuya caja fuerte está sellada; la otra mitad se queda en el servidor, y ninguna de las dos abre la caja fuerte por sí sola | Para cada servidor sellado: su mitad de la clave, una huella de su token, la dirección IP de su máquina y el registro de sus solicitudes (hora, dirección, resultado), guardado 90 días; el nombre de un servidor borrado y la huella de su token se quedan, para rechazar cualquier nueva solicitud | Unión Europea (Países Bajos) |
 | OVHcloud (OVH SAS, Roubaix, Francia) | Aloja el guichet y el relé, en un VPS en Francia | Cuenta, suscripción, datos técnicos; tokens sellados y los registros del relé (secciones 4.1 y 5.6) | Francia |
-| Proton AG (Ginebra, Suiza) | Envía, desde una dirección bipagents.com, los códigos, los avisos de seguridad, las invitaciones, la confirmación de compra, el acuse de desistimiento, los avisos de eliminación, el aviso del 5.º día de una plaza beta sin usar y el aviso de fin de la beta; también aloja el buzón de soporte (sección 4.2) | Dirección de correo, contenido de esos correos; Proton guarda el mensaje enviado hasta que lo borramos de la bandeja de salida | Suiza (decisión de adecuación, sección 11) |
+| Proton AG (Ginebra, Suiza) | Envía, desde una dirección bipagents.com, los códigos, los avisos de seguridad, las invitaciones, la confirmación de compra, el acuse de desistimiento, los avisos de eliminación, el aviso del 5.º día de un servidor beta sin usar y el aviso de fin de la beta; también aloja el buzón de soporte (sección 4.2) | Dirección de correo, contenido de esos correos; Proton guarda el mensaje enviado hasta que lo borramos de la bandeja de salida | Suiza (decisión de adecuación, sección 11) |
 | Stripe Payments Europe, Ltd. (Dublín, Irlanda) | Pago de las compras en el sitio bipagents.com, cálculo de impuestos, controles contra el fraude, facturas | Dirección de correo, dirección o país de facturación, datos de tarjeta, dirección IP | Unión Europea; posiblemente fuera de la Unión (sección 11) |
 
 Están vinculados a Kerfy Studio por un contrato conforme al artículo 28 del RGPD; Stripe actúa además como responsable
@@ -728,17 +728,17 @@ en los sitios que permitas:
 
 - El número, la fecha de caducidad, el nombre del titular y el código postal de la tarjeta se quedan **en el teléfono
   donde la añadiste**, en su almacenamiento protegido (Llavero de iOS, Keystore de Android), tras Face ID, tu huella o
-  tu código. Tu plaza solo guarda el nombre que le diste a la tarjeta, su red, sus 4 últimos dígitos, el límite que
+  tu código. Tu servidor solo guarda el nombre que le diste a la tarjeta, su red, sus 4 últimos dígitos, el límite que
   fijaste, los sitios y agentes permitidos y los pagos hechos con ella (importe, sitio, agente, fecha).
 - Antes de añadir una tarjeta, fijas un límite por pago, en euros, y confirmas marcando una casilla que es una tarjeta
   virtual con límite, no tu tarjeta principal: el límite de tu banco sigue siendo el verdadero, el de la app es uno más.
 - **En cada pago que apruebas** en la app, tu teléfono envía estos datos y el código de seguridad (escrito, o
-  recordado en ese teléfono si lo elegiste) a tu plaza, por la conexión cifrada de la app. El software de tu plaza los guarda en memoria el tiempo de
+  recordado en ese teléfono si lo elegiste) a tu servidor, por la conexión cifrada de la app. El software de tu servidor los guarda en memoria el tiempo de
   rellenar el formulario de pago en el navegador del agente y luego los borra. Nunca se escriben en el disco, en los
   registros ni en las copias de seguridad, y el agente (el modelo de IA) no los ve.
-- El registro de pagos (sin ningún número de tarjeta) se guarda 3 años en tu plaza.
+- El registro de pagos (sin ningún número de tarjeta) se guarda 3 años en tu servidor.
 - Finalidad: hacer la compra que pediste y aprobaste (ejecución del contrato, artículo 6.1.b del RGPD). Puedes
-  suspenderlo todo en cualquier momento y borrar la tarjeta en la app (se borra entonces del teléfono y de tu plaza).
+  suspenderlo todo en cualquier momento y borrar la tarjeta en la app (se borra entonces del teléfono y de tu servidor).
 
 Es una función experimental durante la beta, desactivada por defecto: la app te muestra sus riesgos antes de que la
 actives. Como eres tú quien aprueba cada pago, tu banco puede considerar que no es un fraude y negarse a reembolsarlo;
@@ -769,19 +769,19 @@ teléfono solo sirve para esta medición de audiencia. **Plazo.** 13 meses despu
 tu suscripción se borra antes. **Oponerte.** Escribe a privacy@bipagents.com: borramos el tuyo y no registramos más
 para tu cuenta y tus suscripciones.
 
-### 5.12 Las mediciones de los primeros días de una plaza
+### 5.12 Las mediciones de los primeros días de un servidor
 
-Para saber si los primeros pasos en la app van bien, tu plaza cuenta algunos gestos, **sin ningún contenido** (ni
+Para saber si los primeros pasos en la app van bien, tu servidor cuenta algunos gestos, **sin ningún contenido** (ni
 mensaje, ni nombre, ni agente): la hora de tu primer mensaje al asistente que te ayuda a prepararlo todo, de la
 primera de sus propuestas que aceptas y de la primera rutina recibida, el número de equipos propuestos, aceptados o
 rechazados y de agentes creados así, y las horas en que escribiste (redondeadas a la hora). Las envía al guichet con
-la supervisión técnica (sección 5.6). El guichet las guarda **por plaza** (y por tanto vinculadas a tu suscripción),
-sin las horas: solo si escribiste al día siguiente y una semana después. Esto vale para todas las plazas de la oferta
+la supervisión técnica (sección 5.6). El guichet las guarda **por servidor** (y por tanto vinculadas a tu suscripción),
+sin las horas: solo si escribiste al día siguiente y una semana después. Esto vale para todos los servidores de la oferta
 (código beta, semana gratis, suscripción de pago). Con tu propio servidor, nada de esto sale.
 
 **Base jurídica.** Interés legítimo de Kerfy Studio en mejorar los primeros pasos en la app (artículo 6.1.f del RGPD).
-**Plazo.** Por plaza, durante sus primeros días (11 días como máximo después de que se te diera la plaza), y luego
-solo sumadas a los totales del día, en los que no aparece nadie, guardados 2 años. Borradas en el acto cuando la plaza
+**Plazo.** Por servidor, durante sus primeros días (11 días como máximo después de que se te diera el servidor), y luego
+solo sumadas a los totales del día, en los que no aparece nadie, guardados 2 años. Borradas en el acto cuando el servidor
 se reinstala, se retira o se da a otra persona.
 
 ### 5.13 Pedir un código beta en el sitio
@@ -800,37 +800,37 @@ red y el cálculo contra los robots: interés legítimo de Kerfy Studio en preve
 plazas de la beta (artículo 6.1.f). **Plazo.** La huella de la dirección, hasta el final de la beta, como muy tarde el 31 de diciembre de
 2026. Si después creas una cuenta, la sección 5.2 se aplica a tu cuenta.
 
-### 5.14 Las plazas beta sin usar
+### 5.14 Los servidores beta sin usar
 
 Para la regla de los 7 días (condiciones de la beta), tu servidor solo envía al guichet la hora de la última vez que
 alguien escribió a tus agentes, nunca su contenido: un mensaje, una nota de voz, una foto o un archivo enviado a un
-agente, una llamada Live, una tarjeta a la que se responde, o «Conservar mi plaza». Lo que escriben los miembros de un
-agente de la familia cuenta para la plaza que lo aloja; las rutinas que funcionan solas no cuentan. Esta hora sale con
-la supervisión técnica (sección 5.6) y solo sirve para liberar una plaza beta a la que nadie ha escrito desde hace
+agente, una llamada Live, una tarjeta a la que se responde, o «Conservar mi servidor». Lo que escriben los miembros de un
+agente de la familia cuenta para el servidor que lo aloja; las rutinas que funcionan solas no cuentan. Esta hora sale con
+la supervisión técnica (sección 5.6) y solo sirve para liberar un servidor beta al que nadie ha escrito desde hace
 7 días. El 5.º día, el guichet te avisa con una notificación, en la app y por correo si tienes cuenta (sección 5.2).
 
-**En la liberación** (7 días sin mensajes, o final del mes de regalo sin suscripción), el servidor de la plaza se pone
+**En la liberación** (7 días sin mensajes, o final del mes de regalo sin suscripción), el servidor se pone
 a cero y no queda nada en él (la imagen diaria de OVHcloud que lo contenía se sustituye en un día aproximadamente,
-sección 5.5). Solo se guarda la copia cifrada de las copias de seguridad de la plaza, 21 días de historial como máximo,
+sección 5.5). Solo se guarda la copia cifrada de las copias de seguridad del servidor, 21 días de historial como máximo,
 durante 30 días en Scaleway, en París, para que puedas volver, y después se borra para siempre. Puede contener datos de
-tu Cuaderno, de tu salud y, si tu plaza aloja un agente de la familia, los mensajes de sus miembros: es un dato
+tu Cuaderno, de tu salud y, si tu servidor aloja un agente de la familia, los mensajes de sus miembros: es un dato
 personal. La clave de esta copia ya solo está en tu teléfono y en una caja sellada que solo abre tu código de
 recuperación (sección 5.2): Kerfy Studio no puede leer la copia.
-Si nadie escribe, la conversación común de un agente de la familia alojado en esa plaza y los usos compartidos en
+Si nadie escribe, la conversación común de un agente de la familia alojado en ese servidor y los usos compartidos en
 lectura de sus agentes se detienen con la liberación (sección 2 bis). Después de la liberación, ya no se pueden
 exportar los datos.
 
 **Base jurídica.** Ejecución de las condiciones de la beta (artículo 6.1.b del RGPD). **Plazo.** La hora: se sustituye
-cada vez que alguien escribe y se borra con la plaza; la copia cifrada: 30 días después de la liberación de la plaza.
+cada vez que alguien escribe y se borra con el servidor; la copia cifrada: 30 días después de la liberación del servidor.
 
 ## 6. Lo que Kerfy Studio no hace
 
 - Sin publicidad, sin identificador publicitario, sin rastreo entre apps o sitios. Ninguna herramienta de estadísticas
   en la app: solo el recuento de nuestras campañas (sección 5.11) y, con la oferta, las mediciones de los primeros
-  días de una plaza (sección 5.12). Sin cuenta, salvo para la oferta todo incluido.
+  días de un servidor (sección 5.12). Sin cuenta, salvo para la oferta todo incluido.
 - Sin venta ni alquiler de datos.
 - Sin entrenamiento de modelos de IA con tus datos por parte de Kerfy Studio.
-- Sin acceso a tu servidor, al contenido de tu plaza, a tus conversaciones ni a tus archivos.
+- Sin acceso a tu servidor, al contenido de tu servidor, a tus conversaciones ni a tus archivos.
 
 ## 7. Los demás servicios que intervienen en la app
 
@@ -841,15 +841,15 @@ cada servicio es responsable de lo que hace con ello.
 - **Iconos de los sitios.** Para mostrar el pequeño icono de los sitios citados en las respuestas, la app pide estos
   iconos a tu servidor, que los obtiene de DuckDuckGo (icons.duckduckgo.com): DuckDuckGo recibe el **nombre del
   sitio** (por ejemplo «ejemplo.es») y ve la dirección de tu servidor, no la de tu teléfono. No recibe el mensaje.
-- **Tiempo e itinerarios.** Cuando un agente tiene « Tiempo » y le preguntas qué tiempo hará, tu servidor (o tu
-  plaza) pide el lugar a OpenStreetMap (Nominatim, para encontrar la ciudad) y luego el pronóstico al Instituto
+- **Tiempo e itinerarios.** Cuando un agente tiene « Tiempo » y le preguntas qué tiempo hará, tu servidor (propio o de la
+  oferta) pide el lugar a OpenStreetMap (Nominatim, para encontrar la ciudad) y luego el pronóstico al Instituto
   Meteorológico Noruego (MET Norway): reciben **solo el nombre del lugar y sus coordenadas redondeadas** (unos 1 km), y
   ven la dirección de tu servidor, no la de tu teléfono ni tu mensaje. Un itinerario es un enlace que abre Mapas
   (iPhone) o Google Maps (Android) en tu teléfono, con sus propias reglas. Si tu servidor tiene una clave de Google
   Maps (de momento no en la oferta todo incluido), los lugares y la hora del itinerario también van a Google (Google
   LLC, posiblemente en Estados Unidos, certificada en el EU-U.S. Data Privacy Framework) para calcular su duración; no
   se guarda nada.
-- **Los mapas.** Los mapas de las páginas de tus agentes vienen de tu servidor (o de tu plaza), que obtiene sus piezas
+- **Los mapas.** Los mapas de las páginas de tus agentes vienen de tu servidor (propio o de la oferta), que obtiene sus piezas
   de OpenFreeMap: tu teléfono no contacta con OpenFreeMap. Para una conversación que te comparten en lectura, tu
   teléfono los pide él mismo a OpenFreeMap, que ve entonces su dirección IP y la zona del mapa. Los mapas de las
   respuestas (lugares, itinerarios) son los de Mapas de Apple (MapKit) en iPhone y del SDK de Google Maps en Android.
@@ -859,7 +859,7 @@ cada servicio es responsable de lo que hace con ello.
   lugares de la respuesta, nunca tu ubicación. Google LLC puede tratar estos datos en Estados Unidos. Para situar los
   lugares de una respuesta en estos mapas, tu teléfono envía sus nombres a Mapas de Apple (iPhone) o al servicio de
   geocodificación del teléfono, en general el de Google (Android). Para dibujar un mapa o un itinerario en una
-  respuesta o una página, tu servidor (o tu plaza) pide además los lugares a OpenStreetMap (Nominatim, que recibe los
+  respuesta o una página, tu servidor (propio o de la oferta) pide además los lugares a OpenStreetMap (Nominatim, que recibe los
   nombres o direcciones de los lugares), las imágenes del mapa a OpenStreetMap (que recibe la zona del mapa) y el
   camino por las calles a FOSSGIS (Alemania, que recibe las coordenadas de las etapas): ven la dirección de tu
   servidor, no la de tu teléfono ni tu mensaje.
@@ -889,7 +889,7 @@ cada servicio es responsable de lo que hace con ello.
 
 ## 7 bis. Los datos de Google (Gmail, Google Calendar, Google Drive)
 
-Si conectas tu cuenta de Google, tu espacio recibe de Google solo lo que autorizas: tus calendarios y sus eventos; los archivos que tus agentes crean para ti y los que eliges para ellos; tus correos, para buscarlos, leerlos, preparar borradores y ordenar tu bandeja cuando tú lo pides. Estos datos se quedan cifrados en tu espacio y solo van al modelo de IA que responde a tus agentes, a través de EUrouter y sus proveedores de alojamiento en la Unión Europea, con la instrucción de no conservar nada y no entrenar nada. Kerfy Studio no los lee, no los vende y no los usa ni para publicidad ni para entrenar un modelo de IA. Puedes desconectar Google en cualquier momento en la app: tu espacio borra entonces sus tokens y revoca el acceso en Google. El uso y la transferencia a cualquier otra aplicación de la información recibida de las API de Google por BipAgents cumplen la [Política de datos de usuario de los servicios de las API de Google](https://developers.google.com/terms/api-services-user-data-policy), incluidos los requisitos de uso limitado (Limited Use).
+Si conectas tu cuenta de Google, tu servidor recibe de Google solo lo que autorizas: tus calendarios y sus eventos; los archivos que tus agentes crean para ti y los que eliges para ellos; tus correos, para buscarlos, leerlos, preparar borradores y ordenar tu bandeja cuando tú lo pides. Estos datos se quedan cifrados en tu servidor y solo van al modelo de IA que responde a tus agentes, a través de EUrouter y sus proveedores de alojamiento en la Unión Europea, con la instrucción de no conservar nada y no entrenar nada. Kerfy Studio no los lee, no los vende y no los usa ni para publicidad ni para entrenar un modelo de IA. Puedes desconectar Google en cualquier momento en la app: tu servidor borra entonces sus tokens y revoca el acceso en Google. El uso y la transferencia a cualquier otra aplicación de la información recibida de las API de Google por BipAgents cumplen la [Política de datos de usuario de los servicios de las API de Google](https://developers.google.com/terms/api-services-user-data-policy), incluidos los requisitos de uso limitado (Limited Use).
 
 ## 8. La demo
 
@@ -901,8 +901,8 @@ demo, se aplica el reconocimiento de voz del teléfono (sección 7).
 ## 9. Las voces
 
 Las voces de los Bips se sintetizan **en tu teléfono** cuando este lo permite: la app descarga las voces de tu idioma
-desde el App Store o Google Play, y tu servidor (o tu plaza) le envía el texto que hay que leer, ya preparado. Si no,
-se sintetizan en tu servidor o en tu plaza. Si conectas tu propio modelo de voz, es un servidor que tú mismo haces
+desde el App Store o Google Play, y tu servidor (propio o de la oferta) le envía el texto que hay que leer, ya preparado. Si no,
+se sintetizan en tu servidor (propio o de la oferta). Si conectas tu propio modelo de voz, es un servidor que tú mismo haces
 funcionar. Kerfy Studio no recibe nada de lo que leen las voces.
 
 El pequeño modelo que ayuda al Live a saber cuándo has terminado de hablar (unos 35 MB) lo descarga tu teléfono, por
@@ -937,7 +937,7 @@ Estados Unidos:
 - Apple indica que enmarca las transferencias desde el Espacio Económico Europeo con las cláusulas contractuales tipo
   adoptadas por la Comisión Europea.
 
-**La oferta todo incluido.** Los servidores de las plazas, el servidor de correo de los agentes y las copias de
+**La oferta todo incluido.** Las máquinas de los servidores, el servidor de correo de los agentes y las copias de
 seguridad (Scaleway, Francia) están en la Unión Europea, para todas las personas de la oferta. EUrouter trata tus mensajes en la Unión
 Europea, e indica que hace funcionar los modelos de la oferta solo en proveedores de alojamiento de la Unión
 (sección 5.4). Si un modelo de la oferta llegara a funcionar fuera de la Unión, esta sección diría dónde y con qué
@@ -966,29 +966,29 @@ Scaleway, en Francia, sin transferencia fuera de la Unión. Puedes pedirnos una 
 | Datos | Plazo |
 |---|---|
 | Datos de la app en tu teléfono | Hasta que elimines el agente o la app |
-| Datos de salud (« Santé ») en tu servidor o tu plaza | 400 días como máximo; se borran cuando ningún agente tiene Salud, con el agente o con la plaza |
+| Datos de salud (« Santé ») en tu servidor (propio o de la oferta) | 400 días como máximo; se borran cuando ningún agente tiene Salud, con el agente o con el servidor |
 | Tu consentimiento para Salud (y, en Android, para los contactos y la agenda), con su fecha, en tu teléfono | Hasta que borres la app; marcado como retirado, con su fecha, cuando desactivas la herramienta para el agente |
-| Copia de la agenda, los recordatorios y los contactos en tu servidor o tu plaza | Sustituida cada vez que se abre la app; borrada cuando ningún agente puede leerla (también cuando se borra el último) o con la plaza |
-| Peticiones de los agentes a tu teléfono (citas, recordatorios, contactos) | Hasta que tu teléfono las haga o se anulen, y luego borradas en la copia siguiente una vez cumplidos 14 días; como tarde con la plaza |
-| Token de dispositivo en el relé | Ninguna conservación: solo existe sellado, en tu teléfono y tu servidor (y en el guichet con la oferta todo incluido, mientras el dispositivo esté vinculado a tu plaza) |
+| Copia de la agenda, los recordatorios y los contactos en tu servidor (propio o de la oferta) | Sustituida cada vez que se abre la app; borrada cuando ningún agente puede leerla (también cuando se borra el último) o con el servidor |
+| Peticiones de los agentes a tu teléfono (citas, recordatorios, contactos) | Hasta que tu teléfono las haga o se anulen, y luego borradas en la copia siguiente una vez cumplidos 14 días; como tarde con el servidor |
+| Token de dispositivo en el relé | Ninguna conservación: solo existe sellado, en tu teléfono y tu servidor (y en el guichet con la oferta todo incluido, mientras el dispositivo esté vinculado a tu servidor) |
 | Dirección IP en el relé | En memoria, una hora como máximo, en forma de huella |
 | Registros técnicos del relé | 6 meses como máximo |
 | Correos de soporte | 2 años después del último intercambio |
 | Código de ayuda (oferta todo incluido) | Mientras dure la suscripción |
 | Denuncia de una respuesta | 1 año después de su tramitación |
 | Denuncia de un mensaje de otra persona | Contenido: hasta su tramitación, 6 meses como máximo después de recibirlo; ficha sin el mensaje: 1 año después de la tramitación (más si un litigio o una autoridad lo exige) |
-| Solicitud de aprobación pendiente, en tu servidor o tu plaza | 24 horas sin respuesta, y después se borra |
+| Solicitud de aprobación pendiente, en tu servidor (propio o de la oferta) | 24 horas sin respuesta, y después se borra |
 | Informes de fallos | 1 año después de su recepción (en Kerfy Studio) |
 | Cuenta de la oferta (identificadores, correo, dispositivos, invitaciones, crédito conservado) | Mientras exista la cuenta; se borra 30 días después de una solicitud de eliminación |
 | Invitación no aceptada | 30 días |
 | Dirección de correo e identificador de cuenta después del fin del contrato (obligación de los proveedores de alojamiento) | 5 años para el correo, 1 año para el identificador, conservados aparte |
 | Suscripción y compras | Durante la suscripción y después 5 años archivados |
 | Compra en el sitio (dirección de correo dada al pagar, identificadores de Stripe, plan y periodo, país de facturación, idioma) | Durante la suscripción y después 5 años archivados |
-| Pagos de tus agentes: número, fecha de caducidad, titular, código postal y código de seguridad de la tarjeta (oferta todo incluido) | En tu teléfono; en tu plaza, solo en memoria mientras se rellena un pago que aprobaste |
-| Registro de pagos de tus agentes (importe, sitio, agente, fecha, sin número de tarjeta) | 3 años en tu plaza |
+| Pagos de tus agentes: número, fecha de caducidad, titular, código postal y código de seguridad de la tarjeta (oferta todo incluido) | En tu teléfono; en tu servidor, solo en memoria mientras se rellena un pago que aprobaste |
+| Registro de pagos de tus agentes (importe, sitio, agente, fecha, sin número de tarjeta) | 3 años en tu servidor |
 | Facturas y justificantes de pago de una compra en el sitio | 10 años (artículo L123-22 del Código de Comercio francés); facturas guardadas por Stripe |
 | Código beta nunca usado | Hasta que ya no pueda usarse |
-| Código beta usado y su vínculo a tu cuenta | Hasta el final de tu plaza beta o su paso a una suscripción de pago |
+| Código beta usado y su vínculo a tu cuenta | Hasta el final de tu servidor beta o su paso a una suscripción de pago |
 | Huella de un teléfono Android que usó un código beta (guardada aparte del código y de la cuenta) | Mientras aún se puedan usar códigos beta; luego hasta 30 días en las copias cifradas de la base |
 | Huella del dispositivo Android, calculada con una clave secreta (semana gratis) | 24 meses desde la primera marca del teléfono; guardada aparte de la cuenta, no se borra con ella |
 | Invitación de un vínculo familiar | 7 días, o hasta la respuesta |
@@ -1001,18 +1001,18 @@ Scaleway, en Francia, sin transferencia fuera de la Unión. Puedes pedirnos una 
 | Huella de la dirección IP (códigos beta, «Obtener un código», página de baja del sitio, denuncias de agentes compartidos) | 2 días como máximo; hasta 30 días en las copias cifradas de la base |
 | Baja en el sitio: la declaración (correo, número, motivo, fecha de fin, fecha y hora) | 3 años |
 | Baja en el sitio: la dirección de correo escrita, para limitar los intentos | 2 días como máximo |
-| Contenido de tu plaza | Durante la suscripción y después 30 días (3 días después de una semana gratis que no continuó) |
-| Plaza beta liberada (7 días sin mensajes a tus agentes, o final del mes de regalo el 31 de diciembre de 2026 sin suscripción) | Servidor puesto a cero; solo se guarda la copia cifrada de sus copias de seguridad (21 días de historial como máximo), 30 días después de la liberación, y después se borra para siempre |
-| Hora de la última vez que alguien escribió a tus agentes (plaza beta) | Se sustituye cada vez que alguien escribe; se borra con la plaza |
-| Copias de seguridad | 2 horas (todas), luego 48 horas (por hora), 21 días (diarias), nada más antiguo; se borran con la plaza; lo que borras ha salido de ellas en 30 días, todas las copias incluidas |
-| Archivos de copia que una plaza borra, apartados por el guichet | 5 días |
-| Versiones sustituidas o borradas en Scaleway (copias de seguridad de las plazas, copias cifradas de la base de datos del guichet) | 1 día |
-| Imagen diaria de OVHcloud | Un punto por día, sustituido en un día aproximadamente después de reinstalar la plaza |
-| Datos técnicos de los servidores | Los últimos valores; memoria de cada plaza, hora a hora: 7 días |
-| Mediciones de los primeros días de una plaza (sección 5.12) | Por plaza, 11 días como máximo, luego hasta 30 días en las copias cifradas de la base; totales por día, sin nadie: 2 años |
+| Contenido de tu servidor | Durante la suscripción y después 30 días (3 días después de una semana gratis que no continuó) |
+| Servidor beta liberado (7 días sin mensajes a tus agentes, o final del mes de regalo el 31 de diciembre de 2026 sin suscripción) | Servidor puesto a cero; solo se guarda la copia cifrada de sus copias de seguridad (21 días de historial como máximo), 30 días después de la liberación, y después se borra para siempre |
+| Hora de la última vez que alguien escribió a tus agentes (servidor beta) | Se sustituye cada vez que alguien escribe; se borra con el servidor |
+| Copias de seguridad | 2 horas (todas), luego 48 horas (por hora), 21 días (diarias), nada más antiguo; se borran con el servidor; lo que borras ha salido de ellas en 30 días, todas las copias incluidas |
+| Archivos de copia que un servidor borra, apartados por el guichet | 5 días |
+| Versiones sustituidas o borradas en Scaleway (copias de seguridad de los servidores, copias cifradas de la base de datos del guichet) | 1 día |
+| Imagen diaria de OVHcloud | Un punto por día, sustituido en un día aproximadamente después de reinstalar el servidor |
+| Datos técnicos de los servidores | Los últimos valores; memoria de cada servidor, hora a hora: 7 días |
+| Mediciones de los primeros días de un servidor (sección 5.12) | Por servidor, 11 días como máximo, luego hasta 30 días en las copias cifradas de la base; totales por día, sin nadie: 2 años |
 | Registro de eventos del guichet (incluido «código beta usado», con tu cuenta) | 12 meses |
 | Metadatos en EUrouter | Hasta 12 meses, según EUrouter |
-| Correos de tus agentes (oferta todo incluido) | 90 días por correo (puede acortarse); el buzón entero de una vez cuando quitas la dirección o el agente, cuando se borra la plaza o cuando se borra la cuenta |
+| Correos de tus agentes (oferta todo incluido) | 90 días por correo (puede acortarse); el buzón entero de una vez cuando quitas la dirección o el agente, cuando se borra el servidor o cuando se borra la cuenta |
 | Registros de seguridad del servidor de correo de los agentes | 30 días |
 | Denuncias de abusos | 1 año después de su tramitación |
 
@@ -1024,11 +1024,11 @@ y la conexión con tu servidor pasa por Tailscale o por una puerta HTTPS en tu r
 certificado de tu servidor. El código de la app, del servidor y del relé es público: https://github.com/BipAgents/BipAgents. Para
 informar de un fallo de seguridad: **security@bipagents.com** (consulta el archivo SECURITY.md del repositorio).
 
-Con la oferta todo incluido, cada plaza es una cuenta separada del servidor, sin derechos de administrador; Kerfy
-Studio no tiene ninguna clave SSH en los servidores, y un servidor solo ejecuta órdenes firmadas por el guichet. La
-app se conecta a tu plaza en HTTPS y comprueba su certificado. Las copias de seguridad se cifran en la plaza antes de
-salir. El servidor de correo de los agentes es un servidor aparte, gestionado por Kerfy Studio: las plazas se conectan
-a él con conexiones cifradas, y un agente solo envía correos a través de un control en su plaza que aplica las
+Con la oferta todo incluido, cada servidor es una cuenta separada en su máquina, sin derechos de administrador; Kerfy
+Studio no tiene ninguna clave SSH en las máquinas, y una máquina solo ejecuta órdenes firmadas por el guichet. La
+app se conecta a tu servidor en HTTPS y comprueba su certificado. Las copias de seguridad se cifran en el servidor antes de
+salir. El servidor de correo de los agentes es un servidor aparte, gestionado por Kerfy Studio: los servidores se conectan
+a él con conexiones cifradas, y un agente solo envía correos a través de un control en su servidor que aplica las
 direcciones autorizadas, tus aprobaciones y el límite diario.
 
 **En caso de violación de datos**, Kerfy Studio avisa a la CNIL en un plazo de 72 horas (artículo 33 del RGPD) y a las
@@ -1042,7 +1042,7 @@ portabilidad, y dar instrucciones sobre el destino de tus datos después de tu f
 
 **Derecho de oposición.** Puedes oponerte en cualquier momento, por motivos relacionados con tu situación particular,
 a los tratamientos basados en nuestro interés legítimo (limitación de abusos, correos, denuncias, informes de
-fallos, límite de las semanas gratis, medición de nuestras campañas, mediciones de los primeros días de una plaza).
+fallos, límite de las semanas gratis, medición de nuestras campañas, mediciones de los primeros días de un servidor).
 
 **Retirar tu consentimiento.** Para Salud, Calendario, Contactos, Recordatorios, la ubicación de los recordatorios por
 lugar y el escáner de documentos de Android, retiras tu consentimiento cuando quieras, tan fácilmente como lo diste:
@@ -1059,7 +1059,7 @@ desinstala la app. Los datos de tu servidor los gestionas tú; para los de tu pr
 alojamiento, dirígete a ellos.
 
 **Con la oferta todo incluido**, tu cuenta vincula esos datos contigo: podemos darte acceso a ellos, rectificarlos o
-borrarlos. Al contenido de tu plaza accedes tú mismo, por la app o por SSH, y puedes copiarlo en cualquier momento.
+borrarlos. Al contenido de tu servidor accedes tú mismo, por la app o por SSH, y puedes copiarlo en cualquier momento.
 Para eliminar tu cuenta: sección 5.2.
 
 **Si vives en California o en otro lugar de Estados Unidos.** Kerfy Studio no vende ni comparte tus datos personales
@@ -1083,8 +1083,8 @@ BipAgents está dirigida a personas **de 16 años o más**. Entre los 16 y los 1
 tus padres y respeta la edad mínima de tu proveedor de modelos (a menudo 18 años). **Antes de los 16 años, la app solo
 debe usarse en tu propio ordenador o en tu propio servidor, en una instalación preparada y supervisada por uno de los
 padres o un adulto a cargo del menor** (función familia): ese adulto elige los agentes, sus accesos y el modelo,
-acepta las condiciones de uso por el menor y sigue siendo responsable de su uso. La oferta todo incluido (una plaza
-alojada por Kerfy Studio) no se ofrece a personas menores de 16 años, ni siquiera con supervisión. Una persona
+acepta las condiciones de uso por el menor y sigue siendo responsable de su uso. La oferta todo incluido (un servidor
+alojado por Kerfy Studio) no se ofrece a personas menores de 16 años, ni siquiera con supervisión. Una persona
 invitada en la oferta debe tener al menos 16 años.
 
 Kerfy Studio no pregunta la edad. Algunas funciones se basan en tu consentimiento: Salud, Calendario, Contactos,
@@ -1094,8 +1094,8 @@ servidor, el adulto que la preparó lo da junto con el menor (artículo 45 de la
 pedirnos que borremos su mensaje.
 
 **Oferta todo incluido**: la contrata un adulto, o se contrata con el acuerdo de uno de los padres; toda persona que
-usa una plaza, personas invitadas incluidas, tiene al menos 16 años ([condiciones de la oferta](offer.es.md), sección
-7). **En Estados Unidos, ninguna persona menor de 13 años puede usar una plaza**, y Kerfy Studio no recoge a sabiendas
+usa un servidor, personas invitadas incluidas, tiene al menos 16 años ([condiciones de la oferta](offer.es.md), sección
+7). **En Estados Unidos, ninguna persona menor de 13 años puede usar un servidor**, y Kerfy Studio no recoge a sabiendas
 ningún dato de un menor de 13 años (Children's Online Privacy Protection Act); si ha ocurrido, escríbenos y lo
 borramos. **En Quebec**, los datos de un menor de 14 años solo se recogen con el consentimiento de uno de sus padres o
 del tutor: el adulto que prepara y supervisa su instalación, en su propio ordenador o su propio servidor, lo da por él

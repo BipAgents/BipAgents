@@ -2,7 +2,7 @@
   "page": {
     "code": {
       "title": "Einen Code bekommen — BipAgents",
-      "description": "Mach bei der BipAgents-Beta mit: mit deinem eigenen Hermes, ohne Code und ohne Limit, oder mit einem Alles-inklusive-Platz, dein Code kommt per E-Mail."
+      "description": "Mach bei der BipAgents-Beta mit: mit deinem eigenen Hermes, ohne Code und ohne Limit, oder mit einem Alles-inklusive-Server, dein Code kommt per E-Mail."
     }
   },
   "code": {
@@ -11,8 +11,8 @@
     "ownTitle": "Ich will mein Hermes nutzen",
     "ownText": "Auf deinem Computer oder deinem Server: ein Befehl, dann scannst du den QR-Code in der App. Ohne Code, ohne Limit.",
     "ownCta": "So geht’s",
-    "placeTitle": "Ich will einen Platz",
-    "placeText": "Dein privater Bereich auf einem Server in Europa, mit dem KI-Guthaben. Kostenlos während der Beta.",
+    "placeTitle": "Ich will einen Server",
+    "placeText": "Dein privater Server in Europa, mit dem KI-Guthaben. Kostenlos während der Beta.",
     "placeCta": "Meinen Code bekommen",
     "formTitle": "Dein Code kommt per E-Mail",
     "email": "Deine E-Mail",
