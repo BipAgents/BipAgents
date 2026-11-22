@@ -18,6 +18,7 @@ import time
 from pathlib import Path
 
 import httpx
+import pytest
 
 from bbkit.common import AUTH
 from bbkit.servers import free_port, wait_until
@@ -26,6 +27,9 @@ from test_card_payments_chrome import CHROME, Browser, pytestmark  # noqa: F401 
 from test_watcher_urgent_pay import ARGS, HermesSide, answered, approvals, setup, unattended_ask, urgent_pushes
 
 LAB_SHOP = Path(__file__).resolve().parents[2] / "scripts" / "release-battery" / "cards_shop"
+# The public repository has no release battery (its cards lab shop stays private): skipped there.
+pytestmark = [*(pytestmark if isinstance(pytestmark, list) else [pytestmark]),
+              pytest.mark.skipif(not LAB_SHOP.is_dir(), reason="no release-battery/cards_shop (public export)")]
 PRICE = "45,00"   # cards_lab.py PRICE: the watcher's purchase, the amount the person approves
 
 
