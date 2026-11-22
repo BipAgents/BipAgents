@@ -326,7 +326,8 @@ pub async fn run(config: &Config, hermes: &HermesClient, http: &reqwest::Client)
         add_i(&mut spend, "tokens_in", tokens_in);
         add_i(&mut spend, "tokens_out", tokens_out);
         if record.get("model_called").map(py::truthy).unwrap_or(false) {
-            add_i(&mut spend, "model_calls", 1);
+            // (two when the pages left in « Autres » went to the model too: categories_pass.rs `night`)
+            add_i(&mut spend, "model_calls", record.get("model_calls").and_then(Value::as_i64).unwrap_or(1));
         }
         let eur = spend.get("eur").and_then(Value::as_f64).unwrap_or(0.0)
             + record.get("eur").and_then(Value::as_f64).unwrap_or(0.0);
@@ -441,11 +442,17 @@ async fn run_inner(
     // « Rangement de l'existant » (plan « Le sommaire », S2): each page's categories written in its header, the whole
     // Carnet once per version of the table, then each night the pages without any and those in « Autres » (no model;
     // categories_pass.rs)
+    // (it failing — the state not writable — never costs the rest of the night: S2 review 1, R1)
     let sorted = tokio::task::spawn_blocking({
         let c = config.clone();
         move || super::categories_pass::sort(&c)
     })
-    .await??;
+    .await?
+    .unwrap_or_else(|err| {
+        tracing::warn!(error = %format!("{err:#}"), "notebook categories pass stopped");
+        record.insert("categories_error".into(), json!(clip(&format!("{err:#}"), 300)));
+        super::categories_pass::Sorted::default()
+    });
     if sorted.filed > 0 {
         record.insert("categorized".into(), json!(sorted.filed));
     }

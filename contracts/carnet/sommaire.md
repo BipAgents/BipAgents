@@ -93,13 +93,21 @@ whose page, line, task or record is gone (deleted, forgotten) is not listed.
 Once, at night (the nightly pass, before its model; `bridge-rs/src/notebook/categories_pass.rs`), without a model:
 
 - **Every page of the shared part gets `categories` + `categories_by: auto`** in its frontmatter: the categories the
-  bridge read on the fly for it until then (§2), so nothing the apps show changes. Nothing moves; a page's text
+  bridge read on the fly for it until then (§2; one exception: a page a work agent made before S1, read by its words
+  until then, is `work`, as S1 files a page a work agent makes). Nothing moves; a page's text
   changes only by those lines, where the bridge writes them (before `updated`, else at the end of the frontmatter; a
   page without one gets one), checked by reading the page back. Left as they are: the tasks page, « À ranger », the
   documents' index (not notes); `categories_by: person` or `agent`; a `categories` the bridge did not write (by hand in
   Obsidian: without `categories_by`, or values it does not read); a text it cannot change safely (another line ending,
   a byte-order mark, YAML it does not parse). Each page written is one change of its history (`categorize`, by the
-  « rangement »), never in « Nouveau ». A page every attributed line of which a work agent wrote: `work`.
+  « rangement », no summary), never in « Nouveau »: the only thing a 1.0 app shows of it, a line in the page's
+  history. A page a work agent made (its last « create » in the history; not one it only wrote on, nor one deleted or
+  made again by the person since): `work`. A page with another line ending (CRLF) is left as it is, and so is an
+  empty frontmatter followed further down by a rule (its lines would show in the text). A page the bridge cannot
+  write is left and tried again the next night. The categories' lines of the pass, of the nightly model and of an
+  agent never make the bridge the page's last writer (the nightly pass folds and takes out only pages the person did
+  not write last); the person's « Ranger ailleurs » does: the page is theirs. « Ranger ailleurs » and its undo change
+  the header lines only.
 - **Records, tasks, documents and lines** have no frontmatter: theirs stay computed from their page or type (§1).
 - **Once per version**: `state.json` `categories_v`. A better table (version + 1) re-decides the `auto` pages once,
   never `agent` nor `person`. Between versions, each night: the pages without categories and those `auto` in `other`
@@ -114,7 +122,8 @@ Once, at night (the nightly pass, before its model; `bridge-rs/src/notebook/cate
 - **The card**, once after the first pass over a Carnet with notes: the home's `sorted` (`SortedCard`; S4 serves it as
   the summary's `card` `{kind: sorted}`): `title` « Ton Carnet est rangé par catégories », `text` « 9 notes dans
   Autres » (null when none: then no `see`), `see` « Voir » opens `open.category` (`other`), `ok` « OK »;
-  `POST /v1/notebook/sorted {action: ok|see}` → `{card: null}`, never shown again. Visible texts: the plan's in French;
+  `POST /v1/notebook/sorted {action: ok|see}` → `{card: null}`, never shown again. Its count is kept until the Carnet
+  changes (its history, the person's marks). Visible texts: the plan's in French;
   the other languages proposed, for Alex to confirm (as `titles_proposed`).
 
 ## 3. Routes

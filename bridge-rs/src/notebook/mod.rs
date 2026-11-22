@@ -1495,15 +1495,28 @@ pub fn history(config: &Config, part: Option<Part>, path: Option<&str>, limit: u
 }
 
 /// Whether the person wrote the page last, or wrote it by hand outside the Carnet's history (Obsidian): its newest
-/// change that is not housekeeping — a page's categories (categories.rs `ACTION`: the person's « Ranger ailleurs »,
-/// an agent's category alone, the nightly pass's headers, S2) — is the person's, or there is none. The nightly pass
-/// leaves such a page as it is (groups.rs folding a light person page, archive.rs an empty page): S2 writing a
-/// header line on a page written by hand must not make it the bridge's.
+/// change is the person's, or there is none. A change of its categories by an agent or by the nightly pass
+/// (categories.rs `ACTION`: an agent's category alone, S2's header lines, the night model's) is housekeeping, not
+/// writing: passed over. The person's own « Ranger ailleurs » is theirs (S2 review 1, B1). The nightly pass leaves
+/// such a page as it is (groups.rs folding a light person page, archive.rs an empty page). The log is read backwards
+/// once, to the first change that says (S2 review 1, R8).
 pub fn written_by_person(config: &Config, path: &str) -> bool {
-    history(config, Some(Part::Main), Some(path), 20)
-        .into_iter()
-        .find(|e| e.get("action").and_then(Value::as_str) != Some(categories::ACTION))
-        .is_none_or(|e| tk::str_or_empty(e.get("by")) == "you")
+    let text = tk::read_text(&history_dir(config).join("log.jsonl")).unwrap_or_default();
+    for line in text.lines().rev() {
+        if !line.contains(path) {
+            continue;
+        }
+        let Ok(Value::Object(entry)) = serde_json::from_str::<Value>(line) else { continue };
+        if entry.get("path").and_then(Value::as_str) != Some(path) || entry.get("part").and_then(Value::as_str) != Some("main") {
+            continue;
+        }
+        let by_you = tk::str_or_empty(entry.get("by")) == "you";
+        if entry.get("action").and_then(Value::as_str) == Some(categories::ACTION) && !by_you {
+            continue;
+        }
+        return by_you;
+    }
+    true
 }
 
 /// « Nouveau » (the home's recent changes, and its full list): the newest changes of pages that still exist, where

@@ -33,7 +33,8 @@
 //! their path nor their text).
 
 use std::collections::{HashMap, HashSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
@@ -103,8 +104,30 @@ fn without_ours(page: &Page) -> Dict {
 /// read (another line ending, a byte-order mark, YAML that does not parse, not closed).
 pub fn with_header(text: &str, categories: &[String], by: &str) -> Option<String> {
     let ours = format!("categories:\n{}categories_by: {by}\n", categories.iter().map(|c| format!("  - {c}\n")).collect::<String>());
+    rewrite(text, Some(ours.as_str()), Some((categories, by)))
+}
+
+/// The page's text without `categories` and `categories_by` (« Annuler » after the person's « Ranger ailleurs » on a
+/// page that had none), nothing else changed; a frontmatter that held only them is taken out. None as for
+/// [`with_header`].
+pub fn without_header(text: &str) -> Option<String> {
+    rewrite(text, None, None)
+}
+
+/// [`with_header`] (`ours`: the lines to put) and [`without_header`] (None), checked by reading the page back
+/// (`want`: the categories it must then hold; None: none).
+fn rewrite(text: &str, ours: Option<&str>, want: Option<(&[String], &str)>) -> Option<String> {
+    // another line ending: left as it is (S2 review 1, R3)
+    if text.contains('\r') {
+        return None;
+    }
     let out = if text.starts_with("---") || text.starts_with('\u{feff}') {
         let after = text.strip_prefix("---\n")?;
+        // an empty frontmatter with a rule further down: the parser would read the lines before the rule as its
+        // frontmatter, ours would show in the text (S2 review 1, R4)
+        if after.starts_with("---\n") && after[4..].contains("\n---\n") {
+            return None;
+        }
         let (end, close) = frontmatter_end(after)?;
         let yaml = &after[..end];
         if !yaml.trim().is_empty() && !matches!(serde_yaml::from_str::<Value>(yaml), Ok(Value::Object(_))) {
@@ -133,21 +156,33 @@ pub fn with_header(text: &str, categories: &[String], by: &str) -> Option<String
         let mut head = String::new();
         for (i, line) in kept.iter().enumerate() {
             if i == place {
-                head.push_str(&ours);
+                head.push_str(ours.unwrap_or(""));
             }
             head.push_str(line);
             head.push('\n');
         }
         if place >= kept.len() {
-            head.push_str(&ours);
+            head.push_str(ours.unwrap_or(""));
         }
-        format!("---\n{head}{}", &after[close..])
+        if head.is_empty() && ours.is_none() && !yaml.is_empty() {
+            // a frontmatter that held only our lines (written by the bridge on a page that had none): taken out
+            after[close..].strip_prefix("---").map(|rest| rest.strip_prefix('\n').unwrap_or(rest).to_string())?
+        } else {
+            format!("---\n{head}{}", &after[close..])
+        }
     } else {
-        format!("---\n{ours}---\n{text}")
+        match ours {
+            Some(ours) => format!("---\n{ours}---\n{text}"),
+            None => text.to_string(),
+        }
     };
     let (old, new) = (Page::parse(text, ""), Page::parse(&out, ""));
     let same = without_ours(&old) == without_ours(&new) && old.title == new.title && old.body == new.body;
-    (same && c::stored(&new) == Some((categories.to_vec(), by.to_string()))).then_some(out)
+    let holds = match want {
+        Some((categories, by)) => c::stored(&new) == Some((categories.to_vec(), by.to_string())),
+        None => !new.front.contains_key("categories") && !new.front.contains_key("categories_by"),
+    };
+    (same && holds).then_some(out)
 }
 
 // -- the pass ------------------------------------------------------------------------------------------------------
@@ -187,21 +222,33 @@ fn auto_other(page: &Page) -> bool {
     header(page) == Header::Auto && c::stored(page).is_some_and(|(cats, _)| cats == ["other"])
 }
 
-/// Who made each page of the shared part (its last « create » in the history: the change that wrote it from
-/// nothing), read line by line from the log (a big Carnet's log is never held whole).
+/// The agent that made each page of the shared part (its last « create » in the history: the change that wrote it
+/// from nothing), read line by line from the log (a big Carnet's log is never held whole). A page gone since (deleted,
+/// merged, moved away: a change with no text after it) or made again by the person is no longer that agent's (S2
+/// review 1, R6).
 fn makers(config: &Config) -> HashMap<String, String> {
     use std::io::BufRead;
     let mut out = HashMap::new();
     let Ok(file) = std::fs::File::open(super::history_dir(config).join("log.jsonl")) else { return out };
     for line in std::io::BufReader::new(file).lines().map_while(Result::ok) {
-        // most lines are not a creation: skipped before they are read as JSON
-        if !line.contains("\"create\"") {
+        // most lines neither make nor take out a page: skipped before they are read as JSON
+        if !line.contains("\"create\"") && !line.contains("\"after\": null") && !line.contains("\"after\":null") {
             continue;
         }
         let Ok(Value::Object(e)) = serde_json::from_str::<Value>(&line) else { continue };
+        if tk::str_or_empty(e.get("part")) != "main" {
+            continue;
+        }
+        let path = tk::str_or_empty(e.get("path"));
         let agent = tk::str_or_empty(e.get("agent"));
-        if tk::str_or_empty(e.get("action")) == "create" && tk::str_or_empty(e.get("part")) == "main" && !agent.is_empty() {
-            out.insert(tk::str_or_empty(e.get("path")), agent);
+        if e.get("after").is_none_or(Value::is_null) {
+            out.remove(&path);
+        } else if tk::str_or_empty(e.get("action")) == "create" {
+            if agent.is_empty() {
+                out.remove(&path);
+            } else {
+                out.insert(path, agent);
+            }
         }
     }
     out
@@ -247,8 +294,13 @@ fn sort_page(
         return Ok(Some(false));
     }
     let Some(after) = with_header(&text, &cats, "auto") else { return Ok(None) };
-    // (no summary: a page's history in the apps 1.0 would show the ids; S1 review R4)
-    super::commit(config, Part::Main, path, Some(&text), Some(&after), who, c::ACTION, "")?;
+    // (no summary: a page's history in the apps 1.0 would show the ids; S1 review R4). A page the bridge cannot write
+    // (a read-only file or folder on a self-install) is left and counted: the pass and the night go on (S2 review 1,
+    // R1); the next night tries it again.
+    if let Err(err) = super::commit(config, Part::Main, path, Some(&text), Some(&after), who, c::ACTION, "") {
+        tracing::warn!(path = %path, error = %format!("{err:#}"), "notebook page's categories not written");
+        return Ok(None);
+    }
     Ok(Some(true))
 }
 
@@ -364,6 +416,31 @@ pub fn other_count(config: &Config, pages: &[(String, Page)]) -> usize {
     n + marks.iter().filter(|(k, m)| k.starts_with("doc:") && other(&super::strings(m.get("categories")))).count()
 }
 
+/// The card's count of « Autres » by Carnet, kept while the Carnet does not change: the 1.0 apps never answer the
+/// card, and the home would count every line again at each opening (S2 review 1, R2).
+static OTHER: LazyLock<Mutex<HashMap<PathBuf, (String, usize)>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// What says the Carnet changed for the count: its history's length (every write of the bridge) and the person's
+/// marks (a record, task, line or document filed elsewhere: state.json, no history).
+fn carnet_print(config: &Config) -> String {
+    let log = std::fs::metadata(super::history_dir(config).join("log.jsonl")).map(|m| m.len()).unwrap_or(0);
+    let marks = serde_json::to_string(&c::marks(config)).unwrap_or_default();
+    format!("{log}:{}", super::rev(&marks))
+}
+
+/// [`other_count`], counted again only when the Carnet changed.
+fn other_count_kept(config: &Config, pages: &[(String, Page)]) -> usize {
+    let (key, print) = (super::root(config), carnet_print(config));
+    let kept = OTHER.lock().ok().and_then(|m| m.get(&key).filter(|(p, _)| *p == print).map(|(_, n)| *n));
+    kept.unwrap_or_else(|| {
+        let n = other_count(config, pages);
+        if let Ok(mut m) = OTHER.lock() {
+            m.insert(key, (print, n));
+        }
+        n
+    })
+}
+
 /// The card, ready to show (`shown`: the app's language), until the person answers it; `pages`: the shared part's.
 pub fn card(config: &Config, shown: &str, pages: &[(String, Page)]) -> Option<Value> {
     let state = super::read_state(config);
@@ -371,7 +448,7 @@ pub fn card(config: &Config, shown: &str, pages: &[(String, Page)]) -> Option<Va
     if card.get("done").and_then(Value::as_bool).unwrap_or(false) {
         return None;
     }
-    let n = other_count(config, pages);
+    let n = other_count_kept(config, pages);
     let (title, one, many, see, ok) = card_texts(shown);
     let other = c::title(shown, "other");
     let text = match n {
@@ -426,7 +503,7 @@ fn print_of(path: &str, text: &str) -> String {
 fn excerpt(page: &Page, w: &Words) -> String {
     let kind = page.kind();
     let mut parts: Vec<String> = Vec::new();
-    let aliases = page.aliases();
+    let aliases: Vec<String> = page.aliases().into_iter().filter(|a| !lexicon::touches_health(a)).collect();
     if !aliases.is_empty() {
         parts.push(format!("also {}", aliases.join(", ")));
     }
@@ -483,9 +560,14 @@ pub fn apply_answer(config: &Config, candidates: &[Candidate], answer: &str) -> 
     let _guard = super::lock();
     let who = Who::tidy(config);
     let mut filed = 0;
-    for line in answer.lines() {
-        let line = line.trim().trim_matches(',');
-        let Ok(Value::Object(op)) = serde_json::from_str::<Value>(line) else { continue };
+    // one object a line, as asked; or one JSON array, maybe in a code fence (S2 review 1, R9)
+    let bare = answer.trim().trim_start_matches("```json").trim_start_matches("```").trim_end_matches("```").trim();
+    let ops: Vec<Value> = match serde_json::from_str::<Value>(bare) {
+        Ok(Value::Array(items)) => items,
+        _ => answer.lines().filter_map(|l| serde_json::from_str::<Value>(l.trim().trim_matches(',')).ok()).collect(),
+    };
+    for op in ops {
+        let Value::Object(op) = op else { continue };
         let n = match op.get("n") {
             Some(Value::Number(x)) => x.as_u64(),
             Some(Value::String(s)) => s.trim().parse().ok(),
@@ -499,8 +581,10 @@ pub fn apply_answer(config: &Config, candidates: &[Candidate], answer: &str) -> 
             continue;
         }
         let Some(after) = with_header(&text, &cats, "agent") else { continue };
-        super::commit(config, Part::Main, &cand.path, Some(&text), Some(&after), &who, c::ACTION, "")?;
-        filed += 1;
+        match super::commit(config, Part::Main, &cand.path, Some(&text), Some(&after), &who, c::ACTION, "") {
+            Ok(_) => filed += 1,
+            Err(err) => tracing::warn!(path = %cand.path, error = %format!("{err:#}"), "notebook page's categories not written"),
+        }
     }
     super::update_state(config, |s| {
         let mut list = super::strings(s.get(KEY_TRIED));
@@ -563,6 +647,9 @@ pub async fn night(config: &Config, http: &reqwest::Client, record: &mut Dict) -
         .timeout(Duration::from_secs(120))
         .send()
         .await?;
+    // (the run's model calls: the pass's own, if it called, and this one; S2 review 1, R9)
+    let calls = record.get("model_calls").and_then(Value::as_i64).unwrap_or(i64::from(record.get("model_called") == Some(&json!(true))));
+    record.insert("model_calls".into(), json!(calls + 1));
     record.insert("model_called".into(), json!(true));
     record.entry("model").or_insert(json!(model));
     let status = resp.status().as_u16();
@@ -809,7 +896,10 @@ mod tests {
         assert_eq!(with_header(hand, &home, "agent").unwrap(),
                    "---\ntype:   subject   # mine\ntags: [a, b]\ncategories:\n  - home\ncategories_by: agent\nupdated: 2026-11-01\n---\n\n# X\nbody\n\n---\nnot a frontmatter\n");
         // what the bridge cannot change safely: left alone
-        for odd in ["---\r\ntype: subject\r\n---\r\n# X\r\n", "\u{feff}---\ntype: subject\n---\n# X\n",
+        // (review 1, R3: a page with CRLF line endings, with or without a frontmatter; R4: an empty frontmatter with
+        // a rule further down, whose « key: value » lines the parser would read as one)
+        for odd in ["# X\r\nbody\r\n", "---\n---\n# Réunion\nDate: 12 mars\n\n---\nNotes\n",
+                    "---\r\ntype: subject\r\n---\r\n# X\r\n", "\u{feff}---\ntype: subject\n---\n# X\n",
                     "---\ntype: [\n---\n# X\n", "---\ntype: subject\n# X\n", "--- \ntype: subject\n---\n# X\n"] {
             assert_eq!(with_header(odd, &home, "auto"), None, "{odd:?}");
         }
@@ -940,8 +1030,18 @@ mod tests {
         // written by hand in Obsidian: no maker, its words
         write_file(&part_root(&config, Part::Main).join("Sujets/Lancement presse.md"),
                    "---\ntype: subject\n---\n# Lancement presse\n\n## Où on en est\n- Presse le 3 — *Kerfy Studio, 2026-11-02*\n").unwrap();
+        // made by the work agent, deleted, then made again by the person at the same path (review 1, R6): theirs
+        note(&config, Part::Main, "subject", "Bilan", "status", &strings(&["Rapport livré"]), &[], "", "", &pro).unwrap();
+        crate::notebook::delete_page(&config, Part::Main, "Sujets/Bilan.md", &Who::you(&config)).unwrap();
+        crate::notebook::new_page(&config, Part::Main, "subject", "Bilan", &Who::you(&config)).unwrap().unwrap();
+        // made by the work agent, then deleted and written again by hand
+        note(&config, Part::Main, "subject", "Atelier", "status", &strings(&["Lancé"]), &[], "", "", &pro).unwrap();
+        crate::notebook::delete_page(&config, Part::Main, "Sujets/Atelier.md", &Who::you(&config)).unwrap();
+        write_file(&part_root(&config, Part::Main).join("Sujets/Atelier.md"), "---\ntype: subject\n---\n# Atelier\n").unwrap();
         as_before_the_sommaire(&config);
         sort(&config).unwrap();
+        assert_eq!(stored_of(&config, "Sujets/Bilan.md").unwrap().0, ["other"]);
+        assert_eq!(stored_of(&config, "Sujets/Atelier.md").unwrap().0, ["other"]);
         assert_eq!(stored_of(&config, "Sujets/Lancement.md"), Some((strings(&["work"]), "auto".into())));
         assert_eq!(stored_of(&config, "Domaines/Maison.md"), Some((strings(&["home"]), "auto".into())));
         assert_eq!(stored_of(&config, "Sujets/Lancement presse.md"), Some((strings(&["other"]), "auto".into())));
@@ -1107,6 +1207,107 @@ mod tests {
         assert!(!root.join("Personnes/Paul.md").exists() && root.join("Personnes/Léa.md").exists() && root.join("Sujets/Idées.md").exists());
     }
 
+    /// Review 1, B1: the person's « Ranger ailleurs » on a page an agent wrote makes it theirs, as before S2: the next
+    /// nights neither fold it into its group (a light person page) nor take it out (an empty page). The pass's and an
+    /// agent's category lines do not.
+    #[test]
+    fn a_page_the_person_filed_stays_theirs_at_night() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = config_in(&dir, "fr");
+        let root = part_root(&config, Part::Main);
+        let (agent, you) = (Who::agent(&config, "home"), Who::you(&config));
+        for name in ["Paul", "Hugo"] {
+            note(&config, Part::Main, "person", name, "dates", &strings(&["Anniversaire : 3 mai"]), &[], "", "", &agent).unwrap();
+        }
+        for title in ["Idées", "Brouillon"] {
+            crate::notebook::new_page(&config, Part::Main, "subject", title, &agent).unwrap().unwrap();
+        }
+        assert!(sort(&config).unwrap().done);
+        for path in ["Personnes/Paul.md", "Sujets/Idées.md"] {
+            c::categorize(&config, &c::Target::Page { path: path.into() }, &strings(&["work"]), &you).unwrap().unwrap();
+        }
+        crate::notebook::archive::run(&config, chrono::Local::now().date_naive()).unwrap();
+        assert!(root.join("Personnes/Paul.md").exists() && root.join("Sujets/Idées.md").exists());
+        assert_eq!(stored_of(&config, "Personnes/Paul.md"), Some((strings(&["work"]), "person".into())));
+        // the agent's own, only filed by the pass: as before S2 (folded, taken out)
+        assert!(!root.join("Personnes/Hugo.md").exists() && !root.join("Sujets/Brouillon.md").exists());
+    }
+
+    /// Review 1, R1: a page the bridge cannot write (a read-only folder on a self-install) is left and counted, the
+    /// pass goes on and ends: the rest of the night is not lost, night after night.
+    #[cfg(unix)]
+    #[test]
+    fn a_page_the_bridge_cannot_write_is_left_not_the_night() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let config = config_in(&dir, "fr");
+        let root = part_root(&config, Part::Main);
+        for path in ["Sujets/Jazz.md", "Domaines/Maison.md"] {
+            write_file(&root.join(path), &format!("---\ntype: subject\n---\n# {}\n", &path[path.find('/').unwrap() + 1..path.len() - 3])).unwrap();
+        }
+        let locked = root.join("Sujets");
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o555)).unwrap();
+        let writable = std::fs::write(locked.join("probe"), "").is_ok(); // (root writes anywhere)
+        let sorted = sort(&config);
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+        if writable {
+            return;
+        }
+        let sorted = sorted.unwrap();
+        assert_eq!((sorted.filed, sorted.skipped, sorted.done), (1, 1, true), "{sorted:?}");
+        assert_eq!(stored_of(&config, "Domaines/Maison.md").unwrap().0, ["home"]);
+        // the next night writes it
+        assert_eq!(sort(&config).unwrap().filed, 1);
+    }
+
+    /// Review 1, R2: the card's count is not made again at each opening of the Carnet (the 1.0 apps never answer the
+    /// card): kept until the Carnet changes (its history, the person's marks).
+    #[test]
+    fn the_cards_count_is_kept_until_the_carnet_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = config_in(&dir, "fr");
+        let agent = Who::agent(&config, "home");
+        note(&config, Part::Main, "subject", "Jazz", "status", &strings(&["Coltrane d'abord"]), &[], "", "", &agent).unwrap();
+        note(&config, Part::Main, "subject", "Rénovation cuisine", "status", &strings(&["Devis reçu"]), &[], "", "", &agent).unwrap();
+        sort(&config).unwrap();
+        let count = |c: &Config| card(c, "fr", &all_pages(c, Part::Main)).unwrap()["other"].as_u64().unwrap();
+        assert_eq!(count(&config), 2);
+        // written outside the bridge (no history): the count kept
+        let jazz = part_root(&config, Part::Main).join("Sujets/Jazz.md");
+        std::fs::write(&jazz, std::fs::read_to_string(&jazz).unwrap() + "- Puis Mingus\n").unwrap();
+        assert_eq!(count(&config), 2);
+        // a change of the Carnet: counted again
+        note(&config, Part::Main, "subject", "Jazz", "status", &strings(&["Et Monk"]), &[], "", "", &agent).unwrap();
+        assert_eq!(count(&config), 4);
+        // the person puts a line in « Autres » (a mark, no history): counted again
+        let line = c::Target::Line { path: "Sujets/Rénovation cuisine.md".into(), text: "Devis reçu".into() };
+        c::categorize(&config, &line, &strings(&["other"]), &Who::you(&config)).unwrap().unwrap();
+        assert_eq!(count(&config), 5);
+    }
+
+    /// Review 1, R10: « Ranger ailleurs » on a page written by hand changes its header lines only (its comments, its
+    /// spacing kept), and « Annuler » takes them out again: the page as it was, byte for byte.
+    #[test]
+    fn a_refiling_and_its_undo_change_the_header_lines_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = config_in(&dir, "fr");
+        let root = part_root(&config, Part::Main);
+        let hand = "---\ntype:   subject   # mine\ntags: [a, b]\n---\n\n# Jazz\nColtrane.\n";
+        write_file(&root.join("Sujets/Jazz.md"), hand).unwrap();
+        let bare = "# Lectures\nRomans.\n";
+        write_file(&root.join("Sujets/Lectures.md"), bare).unwrap();
+        let you = Who::you(&config);
+        let home = strings(&["home"]);
+        let done = c::categorize(&config, &c::Target::Page { path: "Sujets/Jazz.md".into() }, &home, &you).unwrap().unwrap();
+        assert_eq!(read_page_text(&config, Part::Main, "Sujets/Jazz.md").unwrap(), with_header(hand, &home, "person").unwrap());
+        c::undo(&config, done["undo"].as_str().unwrap(), &you).unwrap().unwrap();
+        assert_eq!(read_page_text(&config, Part::Main, "Sujets/Jazz.md").unwrap(), hand);
+        let done = c::categorize(&config, &c::Target::Page { path: "Sujets/Lectures.md".into() }, &home, &you).unwrap().unwrap();
+        assert_eq!(read_page_text(&config, Part::Main, "Sujets/Lectures.md").unwrap(), with_header(bare, &home, "person").unwrap());
+        c::undo(&config, done["undo"].as_str().unwrap(), &you).unwrap().unwrap();
+        assert_eq!(read_page_text(&config, Part::Main, "Sujets/Lectures.md").unwrap(), bare);
+    }
+
     #[test]
     fn the_card_once_with_what_is_in_other() {
         let dir = tempfile::tempdir().unwrap();
@@ -1148,8 +1349,8 @@ mod tests {
         assert_eq!(card(&config, "fr", &all_pages(&config, Part::Main)), Some(json!({"title": "Ton Carnet est rangé par catégories",
             "text": null, "other": 0, "see": null, "ok": "OK", "open": {"category": "other"}})));
         assert_eq!(card(&config, "fr", &[]).unwrap()["other"], 0);
-        // one note
-        write_file(&part_root(&config, Part::Main).join("Sujets/Divers.md"), "---\ntype: subject\n---\n# Divers\n").unwrap();
+        // one note (made by the bridge: the count is kept until the Carnet changes)
+        crate::notebook::new_page(&config, Part::Main, "subject", "Divers", &agent).unwrap().unwrap();
         assert_eq!(card(&config, "fr", &all_pages(&config, Part::Main)).unwrap()["text"], "1 note dans Autres");
     }
 
@@ -1159,8 +1360,9 @@ mod tests {
         let config = config_in(&dir, "fr");
         let root = part_root(&config, Part::Main);
         for i in 0..25 {
+            // (review 1, R7: an alias that looks like health is never sent either)
             write_file(&root.join(format!("Sujets/Note {i:02}.md")),
-                       &format!("---\ntype: subject\n---\n# Note {i:02}\n\n## En bref\nQuelque chose {i}.\n\n## Autres\n- Allergique aux noix\n- Ligne {i} — *Quotidien, 2026-11-01*\n")).unwrap();
+                       &format!("---\ntype: subject\naliases:\n  - Allergie aux noix {i}\n---\n# Note {i:02}\n\n## En bref\nQuelque chose {i}.\n\n## Autres\n- Allergique aux noix\n- Ligne {i} — *Quotidien, 2026-11-01*\n")).unwrap();
         }
         // never sent: a page that looks like health, one the person filed in « Autres », the tasks and the inbox
         write_file(&root.join("Sujets/Dentiste.md"), "---\ntype: subject\n---\n# Dentiste\n").unwrap();
@@ -1191,7 +1393,10 @@ mod tests {
         let second = candidates(&config, NIGHT_MAX);
         assert_eq!(second.iter().map(|c| c.path.as_str()).collect::<Vec<_>>(),
                    ["Sujets/Note 20.md", "Sujets/Note 21.md", "Sujets/Note 22.md", "Sujets/Note 23.md", "Sujets/Note 24.md"]);
-        apply_answer(&config, &second, "").unwrap();
+        // (review 1, R9) an answer as one JSON array, in a code fence: read too
+        let fenced = "```json\n[{\"n\": 1, \"categories\": [\"home\"]}, {\"n\": 2, \"categories\": [\"trips\"]}]\n```";
+        assert_eq!(apply_answer(&config, &second, fenced).unwrap(), 2);
+        assert_eq!(stored_of(&config, "Sujets/Note 21.md"), Some((strings(&["trips"]), "agent".into())));
         assert!(candidates(&config, NIGHT_MAX).is_empty());
         // a page whose text changed is shown again; the state keeps fingerprints, never a text
         let changed = read_page_text(&config, Part::Main, "Sujets/Note 01.md").unwrap() + "- Une ligne de plus\n";

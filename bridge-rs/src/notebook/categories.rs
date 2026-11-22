@@ -1008,8 +1008,11 @@ pub fn categorize(config: &Config, target: &Target, given: &[String], who: &Who)
             let before = of_page(config, Part::Main, path, &page);
             let (auto, word) = decide(config, Part::Main, path, &page, None);
             let key = format!("page:{}", page_key(&page, path));
-            set_front(&mut page, &cats, "person");
-            let after = page.render();
+            // its header lines only: a page written by hand keeps its frontmatter as it is (S2 review 1, R10)
+            let after = super::categories_pass::with_header(&text, &cats, "person").unwrap_or_else(|| {
+                set_front(&mut page, &cats, "person");
+                page.render()
+            });
             if after != text {
                 super::commit(config, Part::Main, path, Some(&text), Some(&after), who, ACTION, "")?;
             }
@@ -1157,17 +1160,26 @@ pub fn undo(config: &Config, id: &str, who: &Who) -> anyhow::Result<Option<Value
         if let Some((path, mut page)) = page_by_key(config, page_id) {
             target = json!({"path": path, "private": false, "item": key});
             if stored(&page) == Some((set.clone(), "person".into())) {
-                let text = page.render();
-                if stored_before {
-                    set_front(&mut page, &was, &was_by);
+                // its header lines only, as the correction wrote them (S2 review 1, R10)
+                let old = super::read_page_text(config, Part::Main, &path).unwrap_or_default();
+                let lines = if stored_before {
+                    super::categories_pass::with_header(&old, &was, &was_by)
                 } else {
-                    clear_front(&mut page);
+                    super::categories_pass::without_header(&old)
+                };
+                let after = lines.unwrap_or_else(|| {
+                    if stored_before {
+                        set_front(&mut page, &was, &was_by);
+                    } else {
+                        clear_front(&mut page);
+                    }
+                    page.render()
+                });
+                if after != old {
+                    super::commit(config, Part::Main, &path, Some(&old), Some(&after), who, ACTION, "")?;
                 }
-                let after = page.render();
-                if after != text {
-                    let old = super::read_page_text(config, Part::Main, &path);
-                    super::commit(config, Part::Main, &path, old.as_deref(), Some(&after), who, ACTION, "")?;
-                }
+                let stem = std::path::Path::new(&path).file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+                page = Page::parse(&after, &stem);
             }
             now = of_page(config, Part::Main, &path, &page);
         }
