@@ -565,8 +565,6 @@ async fn follow_turn(
     if let Some(hub) = &hub {
         // approvals and questions nobody follows are pushed (the Boîte); the answer goes back to the asker
         hub.watch(target, &run_id, Some(&session), false);
-        // the words are the asking agent's, never the target's person's (runs.rs `persons_own_turn`)
-        hub.mark_asked_by_agent(&target.name, &run_id);
     }
     let since = py::time_time();
     loop {
