@@ -651,3 +651,39 @@ def test_a_card_still_waiting_stays_under_the_last_words_of_its_turn(bridges, fa
     assert len(sentence) == 1, said
     [card] = waiting()
     assert card["after"] == sentence[0]["id"], (card["after"], said)
+
+
+def test_two_cards_of_one_turn_come_in_the_order_they_were_asked(bridges, fakes):
+    """22/11 relecture 2, R4: two cards waiting in one turn go after the same item (its last words), and both apps draw
+    them in the page's order. That order is the one they were asked in, not Hermes' approvals first then the bridge's
+    by kind: the phone exit's card asked first comes first, the command Hermes asks a second later after it."""
+    bridge = exit_bridge(bridges)
+    hermes = fakes.hermes
+    hermes.add_session("api_y", [{"role": "user", "content": "Ameli, puis range le build", "timestamp": time.time() - 30}],
+                       title="Deux cartes")
+    gate, done = threading.Event(), threading.Event()
+    hermes.runs["run_y"] = [sse("tool.started", run_id="run_y", tool="mcp_bipagents_ask_phone_exit", preview="x"), gate,
+                            sse("approval.request", run_id="run_y", request_id="req-y", command="rm -rf build/",
+                                choices=["once", "deny"]),
+                            done, sse("run.completed", run_id="run_y", output="Fait.")]
+    assert bridge.post("/v1/watch", headers=AUTH,
+                       json={"agent": "wellness", "run_id": "run_y", "session_id": "api_y"}).status_code == 200
+    assert wait_until(lambda: hermes.seen("/v1/runs/run_y/events"))
+    time.sleep(0.3)
+    answered = call(bridge, "ask_phone_exit", {"site": SITE, "reason": "Cloudflare"})
+    assert not answered.get("isError"), answered
+    found = bridge.get("/v1/threads/resolve", headers=AUTH, params={"agent": "wellness", "session_id": "api_y"})
+    thread = found.json()["thread"]["id"]
+
+    def approvals():
+        page = bridge.get(f"/v1/threads/{thread}/timeline", headers=AUTH, params={"agent": "wellness"}).json()
+        return page["pending"]["approvals"] or []
+
+    assert wait_until(lambda: any(a["run_id"].startswith("bip-exit-") for a in approvals()), timeout=10), approvals()
+    time.sleep(1.1)   # Hermes asks its command a second later
+    gate.set()
+    assert wait_until(lambda: len(approvals()) == 2, timeout=10), approvals()
+    both = approvals()
+    assert [a["run_id"][:9] for a in both] == ["bip-exit-", "run_y"], [(a["run_id"], a.get("created_at")) for a in both]
+    assert both[0]["after"] == both[1]["after"], both
+    done.set()

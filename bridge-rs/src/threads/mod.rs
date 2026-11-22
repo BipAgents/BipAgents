@@ -1462,6 +1462,9 @@ async fn waiting_here(state: &AppState, agent: &AgentConfig, thread: &Thread, se
         Value::Object(a)
     }));
     let mut questions = waiting(state.hub.pending_questions(&agent.name));
+    // in the order they were asked: two of one turn go after the same item, drawn in the list's order
+    timeline::by_time(&mut approvals);
+    timeline::by_time(&mut questions);
     // where each waiting card goes among the items (`after`), decided once for every app (thin apps, brick 5)
     timeline::place_waiting(items, &mut approvals);
     timeline::place_waiting(items, &mut questions);
