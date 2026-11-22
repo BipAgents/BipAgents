@@ -768,6 +768,10 @@ pub struct Config {
     /// `[google_calendar]` (google_calendar.rs, off by default): not in the serialized form either.
     #[serde(skip)]
     pub google_calendar: crate::google_calendar::Settings,
+    /// `[app_floor]` (app_floor.rs): raises the oldest app builds this bridge works with (test journeys, an urgent
+    /// floor on one place), and paths answered 426 for old apps. Not in the serialized form either.
+    #[serde(skip)]
+    pub app_floor: crate::app_floor::Settings,
     /// `[watchers]` (watchers.rs): not in the serialized form either.
     #[serde(skip)]
     pub watchers: crate::watchers::Settings,
@@ -914,6 +918,7 @@ impl Config {
             drives: crate::drives::Settings::default(),
             obsidian: crate::obsidian::Settings::default(),
             google_calendar: crate::google_calendar::Settings::default(),
+            app_floor: crate::app_floor::Settings::default(),
             watchers: crate::watchers::Settings::default(),
             triggers: crate::triggers::Settings::default(),
             agent_restart: crate::agent_restart::Settings::default(),
@@ -1967,6 +1972,7 @@ pub fn parse_config(data: &Value, source_path: Option<&str>) -> Result<Config> {
         drives: crate::drives::Settings::from_table(table(data, "drives")),
         obsidian: crate::obsidian::Settings::from_table(table(data, "obsidian")),
         google_calendar: crate::google_calendar::Settings::from_table(table(data, "google_calendar")),
+        app_floor: crate::app_floor::Settings::from_table(table(data, "app_floor")),
         watchers: crate::watchers::Settings::from_table(table(data, "watchers")),
         triggers: crate::triggers::Settings::from_table(table(data, "triggers")),
         agent_restart: crate::agent_restart::Settings::from_table(table(data, "agent_restart")),
