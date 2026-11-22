@@ -270,6 +270,17 @@ def test_a_watcher_that_works_once_between_failures_tells_its_person_once_a_week
     assert len(boite(bridge)) == 1 and list(fakes.hermes.started) == []
 
 
+def test_a_watcher_working_again_takes_back_its_note_to_the_agent(bridges, fakes):
+    # review 1 (B5): broken, then working again before the person writes: the agent is not told it is broken
+    bridge, value, conn, _ = setup(bridges, fakes)
+    assert check(bridge, conn)["step"] == "baseline"
+    value.write_text("fail")
+    assert [check(bridge, conn)["step"] for _ in range(3)] == ["failed", "failed", "broken"]
+    value.write_text("mardi 10:00")
+    assert check(bridge, conn)["step"] == "same"
+    assert waiting_notes(taken_notes(bridge, agent="vie", session="s1")) is None
+
+
 def test_on_condition_wakes_when_it_holds(bridges, fakes):
     bridge, value, conn, card = setup(bridges, fakes, notify="on_condition")
     assert card["bip_connector_schedule"] == "Vérifie toutes les 15 min, ne réveille l'agent que si sa condition est remplie"

@@ -29,6 +29,8 @@ def test_a_promise_to_tell_with_nothing_set_up_goes_on_once_to_set_it_up(bridges
     assert "[bipagents:go_on]" in note and f"« {WATCH} »" in note
     assert "nothing you set up will notice it" in note and "make a watcher" in note and "routine_schedule" in note
     assert "say plainly in one short sentence that you can't watch that" in note
+    # review 1 (B3, R3): a one-off time is a reminder, not a routine; a watcher only where checks are allowed
+    assert "reminders_add" in note and "notebook_task" in note and "allows automated checks" in note
     # not the work's note (« Do it now »), only its way out when the promise was in fact work
     assert "Do it now, in this answer" not in note and "If what you promised is in fact your own work" in note
     assert "Already set up" not in note
@@ -66,6 +68,9 @@ def test_a_promise_kept_by_what_the_turn_set_up_ends_the_turn_as_before(bridges,
         "run_t": ["mcp_bipagents_routine_trigger"],                               # each time an e-mail arrives
         "run_s": ["mcp_bipagents_start_task"],                                    # a task that reports when done
         "run_a": ["mcp_bipagents_message_agent"],                                 # another agent's answer comes back
+        # review 1 (B3): a dated task of the Carnet sets the phone's reminder, a calendar event its alert
+        "run_n": ["mcp_bipagents_notebook_task"],
+        "run_k": ["mcp_bipagents_calendar_add"],
     }
     for run, tools in kept.items():
         fakes.hermes.runs[run] = turn(run, WATCH, tools=tools)
@@ -110,11 +115,47 @@ def test_a_question_an_offer_or_work_to_finish_is_no_promise_to_tell(bridges, fa
         "run_o": "Le vélo est à 899 €. Si tu veux, je te préviens dès que le prix baisse.",
         "run_d": "J'ai lancé la comparaison. Je te préviens quand c'est prêt.",
         "run_b": "Voilà le récap. Je te tiens au courant si besoin.",
+        # review 1 (B2): a warning or a reminder given now
+        "run_w1": "Je te préviens que le magasin ferme à 19 h.",
+        "run_w2": "Je te préviens aussi : si tu commandes après 14 h, c'est livré lundi.",
+        "run_w3": "Je te rappelle juste que la réunion est demain à 9 h.",
+        "run_w4": "Je te préviens que si tu prends l'option, c'est 10 € de plus.",
     }
     for run, reply in said.items():
         fakes.hermes.runs[run] = turn(run, reply, tools=["web_search"])
     continued = [run for run in said if notices(follow(bridge, run))]
     assert continued == [], {r: s["input"][:90] for r, s in fakes.hermes.started.items()}
+
+
+def test_a_promise_kept_by_what_the_agent_already_has_is_not_continued(bridges, fakes):
+    # review 1 (B1): the end names what already does it (a routine of its, « le veilleur » when it has one): no paid
+    # continuation; « le veilleur est en place » with nothing set up is still not kept
+    bridge = bridges.new().start()
+    body = {"name": "Point du matin", "schedule": "every day at 7:30", "prompt": "Résume mes e-mails."}
+    made = bridge.post("/v1/agents/wellness/routines", headers=AUTH, json=body)
+    assert made.status_code in (200, 201), made.text
+    said = {
+        "run_n": "C'est la routine « Point du matin » qui s'en charge : je te préviens dès qu'il y a du nouveau.",
+        "run_g": "Avec plaisir ! La routine est en place, je te redis ça demain matin.",
+    }
+    for run, reply in said.items():
+        fakes.hermes.runs[run] = turn(run, reply, tools=["web_search"])
+    for run in said:
+        assert notices(follow(bridge, run)) == [], run
+    assert list(fakes.hermes.started) == []
+
+
+def test_a_claim_with_nothing_set_up_and_a_later_question_still_go_on(bridges, fakes):
+    bridge = bridges.new().start()
+    # nothing of the agent's: « le veilleur est en place » is not true
+    fakes.hermes.runs["run_c"] = turn("run_c", "Le veilleur est en place, je te préviens dès que le prix baisse.")
+    fakes.hermes.runs["r1"] = turn("r1", KEPT, tools=["mcp_bipagents_connectors_connector_register"])
+    assert [n["code"] for n in notices(follow(bridge, "run_c"))] == ["loop_rescue_started"]
+    # review 1 (R2): a question in a later sentence does not undo the promise to tell
+    fakes.hermes.runs["run_q"] = turn("run_q", "Je te préviens dès que le prix baisse. Tu veux aussi que je regarde le "
+                                               "modèle L ?", tools=["web_search"])
+    fakes.hermes.runs["r2"] = turn("r2", KEPT, tools=["mcp_bipagents_connectors_connector_register"])
+    assert [n["code"] for n in notices(follow(bridge, "run_q"))] == ["loop_rescue_started"]
 
 
 def test_switched_off_with_go_on(bridges, fakes):
