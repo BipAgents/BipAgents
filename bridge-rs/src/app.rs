@@ -377,6 +377,8 @@ impl AppState {
         if config.hermes.enabled() {
             self.spawn(crate::sandbox::isolate_all(self.config.clone(), agents_admin::default_run()));
             self.spawn(crate::sandbox_sites::watch(self.clone()));
+            // a sandbox container started, died or removed: its address known to the proxy at once (review 1 R5)
+            self.spawn(crate::sandbox_sites::follow_sandbox_events(self.clone()));
             // a card made while a tool call runs, in its turn's conversation; one answered elsewhere, gone (card_place.rs)
             self.spawn(crate::card_place::watch(self.clone()));
             // a tool card whose tool got turned on some other way closes by itself; one past its time expires

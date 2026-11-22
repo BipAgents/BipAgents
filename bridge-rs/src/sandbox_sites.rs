@@ -590,6 +590,51 @@ pub async fn refresh_sandboxes(config: &Config, run: &crate::agents_admin::Run) 
     }
 }
 
+/// podman's `events` for the sandboxes' containers: each start, death or removal.
+pub fn events_command(podman: &str) -> Vec<String> {
+    [podman, "events", "--format", "{{.Status}}", "--filter", "type=container", "--filter", "label=hermes-agent=1",
+     "--filter", "event=start", "--filter", "event=died", "--filter", "event=remove"]
+        .iter()
+        .map(|a| a.to_string())
+        .collect()
+}
+
+/// The sandboxes' addresses read again at once when one of their containers starts, dies or goes (review 1 R5: a
+/// freed address stayed its old agent's until the next look, 15 s), from podman's events; podman ending them (no
+/// events log, a restart): followed again a minute later. The 15-s look and the proxy's « who » stay behind it.
+pub async fn follow_sandbox_events(state: AppState) {
+    use tokio::io::AsyncBufReadExt;
+    let run = crate::agents_admin::default_run();
+    loop {
+        let config = state.config();
+        let Some(podman) = crate::sandbox::engine(&config) else {
+            tokio::time::sleep(Duration::from_secs(600)).await;
+            continue;
+        };
+        let command = events_command(&podman);
+        let child = tokio::process::Command::new(&command[0])
+            .args(&command[1..])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .kill_on_drop(true)
+            .spawn();
+        match child {
+            Ok(mut child) => {
+                if let Some(stdout) = child.stdout.take() {
+                    let mut lines = tokio::io::BufReader::new(stdout).lines();
+                    while let Ok(Some(_)) = lines.next_line().await {
+                        refresh_sandboxes(&state.config(), &run).await;
+                    }
+                }
+                let _ = child.kill().await;
+            }
+            Err(exc) => tracing::info!(target: "bipbridge::sandbox", error = %exc, "podman's events not followed"),
+        }
+        tokio::time::sleep(Duration::from_secs(60)).await;
+    }
+}
+
 // --- the list ------------------------------------------------------------------------------------------------------
 
 /// Added (true), or already there (false). Err: why not.
@@ -748,6 +793,37 @@ pub fn refused_in_turn(config: &Config, agent: &str, host: &str, turn: Option<&s
             false
         }
     }
+}
+
+/// A site validated before it became a bot check's host or a captcha-solving service (bot_hosts.rs; a bench said yes
+/// to challenges.cloudflare.com on 22/11): taken out of the agents' lists at start, each with a log line, so « Sites
+/// autorisés » never shows it as allowed (review 1 R8; the proxy's file never had it since fix 4). Returns how many.
+pub fn drop_never_sites(config: &Config) -> usize {
+    let stale = load(config)
+        .agents
+        .values()
+        .any(|a| a.sites.iter().any(|s| crate::bot_hosts::never(&s.host).is_some()));
+    if !stale {
+        return 0;
+    }
+    let dropped = change(config, |store| {
+        let mut dropped: Vec<(String, String)> = Vec::new();
+        for (agent, entry) in store.agents.iter_mut() {
+            entry.sites.retain(|site| {
+                let never = crate::bot_hosts::never(&site.host).is_some();
+                if never {
+                    dropped.push((agent.clone(), site.host.clone()));
+                }
+                !never
+            });
+        }
+        dropped
+    })
+    .unwrap_or_default();
+    for (agent, host) in &dropped {
+        tracing::warn!(target: "bipbridge::sandbox", agent = %agent, host = %host, "a bot check's host or a captcha-solving service taken out of the sites validated for sending");
+    }
+    dropped.len()
 }
 
 /// The 24-hour refusals kept before 12/11 (`refused` of each agent): gone, at start. The « Refuser toujours » stay.
@@ -1143,7 +1219,11 @@ pub fn take_all_reports(config: &Config) -> Reports {
 /// The proxy's reports turned into cards (each few seconds), and the adopted « link » folders tended.
 pub async fn watch(state: AppState) {
     let c = state.config();
-    let _ = tokio::task::spawn_blocking(move || drop_timed_refusals(&c)).await;
+    let _ = tokio::task::spawn_blocking(move || {
+        drop_timed_refusals(&c);
+        drop_never_sites(&c);
+    })
+    .await;
     let run = crate::agents_admin::default_run();
     let mut ticks: u64 = 0;
     loop {
@@ -1942,5 +2022,11 @@ mod tests {
         let written = std::fs::read_to_string(policy_dir(&config).join(POLICY_FILE)).unwrap();
         assert!(!written.contains("challenges.cloudflare.com"), "{written}");
         assert!(!send_hosts(&config, "vie").iter().any(|h| h == "challenges.cloudflare.com"));
+        // at start, taken out of the list « Sites autorisés » shows (review 1 R8); the others stay
+        assert!(view(&config, &agent)["sites"].to_string().contains("challenges.cloudflare.com"));
+        assert_eq!(drop_never_sites(&config), 1);
+        assert_eq!(drop_never_sites(&config), 0);
+        let sites = view(&config, &agent)["sites"].to_string();
+        assert!(!sites.contains("challenges.cloudflare.com") && sites.contains("api.meteo.fr"), "{sites}");
     }
 }

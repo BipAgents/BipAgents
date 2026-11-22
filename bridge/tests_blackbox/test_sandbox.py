@@ -965,3 +965,31 @@ def test_a_bot_checks_host_is_never_asked_of_the_person(bridges, fakes):
         assert bridge.post("/v1/agents/vie/sandbox/sites", json={"host": host}, headers=AUTH).status_code == 422, host
     policy = (bridge.state_dir / "sandbox-proxy" / "policy" / "sites.json").read_text()
     assert "cloudflare" not in policy and "captcha" not in policy
+
+
+def test_a_sandbox_container_started_is_known_at_once_from_podmans_events(bridges, fakes):
+    """Review 1 of antibot-guard (R5): a freed address stayed its old agent's until the next look (15 s). The bridge
+    follows podman's events for the sandboxes' containers (a start, a death, a removal) and reads their addresses again
+    at once."""
+    bridge, hub, _ = isolated(bridges, fakes, agents=("vie",))
+    listed, inspected, go = bridge.root / "podman-ps.txt", bridge.root / "podman-inspect.txt", bridge.root / "events-go"
+    listed.write_text("")
+    inspected.write_text("")
+    ps = ["ps", "-q", "--filter", "label=hermes-agent=1", "--filter", "network=bipagents-sandbox"]
+    bridge.commands.rule("podman", ps, stdout_file=str(listed))
+    bridge.commands.rule("podman", ["inspect", "--type", "container"], stdout_file=str(inspected))
+    bridge.commands.rule("podman", ["events"], stdout="start\n", hold=str(go), times=1)
+    started(bridge, hub, ["vie"])
+    policy_file = bridge.state_dir / "sandbox-proxy" / "policy" / "sites.json"
+    looks = lambda: sum(1 for args in bridge.commands.of("podman") if args[:len(ps)] == ps)  # noqa: E731
+    assert wait_until(lambda: looks() >= 1, timeout=20)
+    events = [args for args in bridge.commands.of("podman") if args[:1] == ["events"]]
+    assert events and "label=hermes-agent=1" in events[0] and "event=died" in events[0], events
+    # right after a look (the next one is 15 s away): a container starts, podman says so
+    before = looks()
+    assert wait_until(lambda: looks() > before, timeout=20)
+    listed.write_text("c0ffee01\n")
+    inspected.write_text("vie 10.233.80.7\n")
+    go.write_text("")
+    assert wait_until(lambda: json.loads(policy_file.read_text()).get("sandboxes") == {"10.233.80.7": "vie"},
+                      timeout=4), policy_file.read_text()

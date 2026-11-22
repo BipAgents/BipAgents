@@ -27,8 +27,10 @@ pub enum Never {
 }
 
 /// The bot checks' own hosts (Cloudflare's Turnstile and challenge platform, hCaptcha, reCAPTCHA's other home,
-/// DataDome, PerimeterX / HUMAN, Arkose Labs / FunCaptcha, GeeTest, AWS WAF's captcha, Friendly Captcha, MTCaptcha).
-pub const CHECK_HOSTS: [&str; 16] = [
+/// DataDome, PerimeterX / HUMAN, Arkose Labs / FunCaptcha, GeeTest, AWS WAF's captcha, Friendly Captcha, MTCaptcha;
+/// review 1 R8: PerimeterX's collectors, Friendly Captcha's EU home, Yandex SmartCaptcha, Tencent's captcha — each
+/// checked in the DNS on 22/11).
+pub const CHECK_HOSTS: [&str; 23] = [
     "challenges.cloudflare.com",
     "hcaptcha.com",
     "recaptcha.net",
@@ -45,10 +47,18 @@ pub const CHECK_HOSTS: [&str; 16] = [
     "friendlycaptcha.com",
     "frcapi.com",
     "mtcaptcha.com",
+    "pxchk.net",
+    "px-client.net",
+    "friendlycaptcha.eu",
+    "smartcaptcha.yandexcloud.net",
+    "captcha.qq.com",
+    "captcha.qcloud.com",
+    "captcha.gtimg.com",
 ];
 
-/// Captcha-solving services (people or programs paid to solve captchas for a client).
-pub const SOLVER_HOSTS: [&str; 20] = [
+/// Captcha-solving services (people or programs paid to solve captchas for a client; review 1 R8: three more, checked
+/// in the DNS on 22/11).
+pub const SOLVER_HOSTS: [&str; 23] = [
     "2captcha.com",
     "rucaptcha.com",
     "anti-captcha.com",
@@ -69,6 +79,9 @@ pub const SOLVER_HOSTS: [&str; 20] = [
     "truecaptcha.org",
     "anycaptcha.com",
     "captchas.io",
+    "nocaptchaai.com",
+    "capbypass.com",
+    "multibot.in",
 ];
 
 fn under(host: &str, name: &str) -> bool {
@@ -122,17 +135,21 @@ mod tests {
         for host in ["challenges.cloudflare.com", "HCAPTCHA.com.", "api.hcaptcha.com", "newassets.hcaptcha.com",
                      "www.recaptcha.net", "geo.captcha-delivery.com", "api-js.datadome.co", "client.px-cloud.net",
                      "client-api.arkoselabs.com", "gcaptcha4.geetest.com", "abc.token.awswaf.com",
-                     "https://challenges.cloudflare.com/turnstile/v0/api.js"] {
+                     "https://challenges.cloudflare.com/turnstile/v0/api.js", "collector-pxabc.pxchk.net",
+                     "eu-api.friendlycaptcha.eu", "smartcaptcha.yandexcloud.net", "ssl.captcha.qq.com",
+                     "turing.captcha.qcloud.com"] {
             assert_eq!(never(host), Some(Never::Check), "{host}");
         }
         for host in ["2captcha.com", "api.2captcha.com", "api.anti-captcha.com", "api.capsolver.com", "api.capmonster.cloud",
-                     "rucaptcha.com", "deathbycaptcha.com", "nopecha.com"] {
+                     "rucaptcha.com", "deathbycaptcha.com", "nopecha.com", "api.nocaptchaai.com", "capbypass.com",
+                     "multibot.in"] {
             assert_eq!(never(host), Some(Never::Solver), "{host}");
         }
         // a `*.` that covers one of them; ordinary sites and look-alikes are not
         assert_eq!(never("*.cloudflare.com"), Some(Never::Check));
         assert_eq!(never("*.hcaptcha.com"), Some(Never::Check));
-        for host in ["cloudflare.com", "www.cloudflare.com", "static.cloudflareinsights.com", "js.datadome.co",
+        for host in ["cloudflare.com", "www.cloudflare.com", "static.cloudflareinsights.com", "js.datadome.co", "qq.com",
+                     "mail.qq.com", "yandexcloud.net", "storage.yandexcloud.net",
                      "datadome.co", "decathlon.fr", "www.google.com", "notrecaptcha.net", "my2captcha.com",
                      "*.decathlon.fr", "", "*."] {
             assert_eq!(never(host), None, "{host}");

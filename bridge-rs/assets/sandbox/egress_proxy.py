@@ -362,13 +362,14 @@ def blocked_name(host):
 NEVER_CHECKS = (
     "challenges.cloudflare.com", "hcaptcha.com", "recaptcha.net", "captcha-delivery.com", "api-js.datadome.co",
     "perimeterx.net", "px-cloud.net", "px-cdn.net", "arkoselabs.com", "funcaptcha.com", "geetest.com", "geevisit.com",
-    "awswaf.com", "friendlycaptcha.com", "frcapi.com", "mtcaptcha.com",
+    "awswaf.com", "friendlycaptcha.com", "frcapi.com", "mtcaptcha.com", "pxchk.net", "px-client.net",
+    "friendlycaptcha.eu", "smartcaptcha.yandexcloud.net", "captcha.qq.com", "captcha.qcloud.com", "captcha.gtimg.com",
 )
 NEVER_SOLVERS = (
     "2captcha.com", "rucaptcha.com", "anti-captcha.com", "capsolver.com", "capmonster.cloud", "deathbycaptcha.com",
     "nopecha.com", "azcaptcha.com", "captchaai.com", "nextcaptcha.com", "solvecaptcha.com", "ez-captcha.com",
     "cap.guru", "bestcaptchasolver.com", "imagetyperz.com", "endcaptcha.com", "9kw.eu", "truecaptcha.org",
-    "anycaptcha.com", "captchas.io",
+    "anycaptcha.com", "captchas.io", "nocaptchaai.com", "capbypass.com", "multibot.in",
 )
 
 

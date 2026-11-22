@@ -721,9 +721,11 @@ const NETWORK_CAPS: [&str; 4] = ["NET_ADMIN", "NET_RAW", "ALL", "SYS_ADMIN"];
 
 /// The person's own container arguments that would let an isolated sandbox change its address on the sandboxes'
 /// network (`--privileged`, `--cap-add` of a network capability, its own `--ip`, `--mac-address`, `--network`,
-/// `--net`), taken out of `args` (each with its value when given apart); returns them.
+/// `--net`) or the label the bridge knows its agent by (`--label`, `-l`, `--label-file`: Hermes' `hermes-profile`,
+/// review 1 R6), taken out of `args` (each with its value when given apart); returns them.
 pub fn identity_unsafe(args: &mut Vec<String>) -> Vec<String> {
-    const VALUED: [&str; 6] = ["--cap-add", "--ip", "--ip6", "--mac-address", "--network", "--net"];
+    const VALUED: [&str; 9] =
+        ["--cap-add", "--ip", "--ip6", "--mac-address", "--network", "--net", "--label", "-l", "--label-file"];
     let unsafe_cap = |value: &str| {
         value.split(',').any(|c| {
             let c = c.trim().to_ascii_uppercase();
@@ -744,7 +746,7 @@ pub fn identity_unsafe(args: &mut Vec<String>) -> Vec<String> {
                 Some(v) => unsafe_cap(v),
                 None => items.peek().is_some_and(|v| unsafe_cap(v)),
             },
-            "--ip" | "--ip6" | "--mac-address" | "--network" | "--net" => true,
+            "--ip" | "--ip6" | "--mac-address" | "--network" | "--net" | "--label" | "-l" | "--label-file" => true,
             _ => false,
         };
         if !bad {
@@ -2328,7 +2330,8 @@ mod tests {
             "docker_extra_args".into(),
             json!(["--shm-size=2g", "--cap-add=NET_ADMIN", "--privileged", "--cap-add", "net_raw", "--ip", "10.233.80.5",
                    "--cap-add", "CHOWN", "--network=host", "--mac-address=02:00:00:00:00:01", "--cap-add=SYS_ADMIN,CHOWN",
-                   "--privileged=false"]),
+                   "--privileged=false", "--label", "hermes-profile=budget", "-l", "hermes-agent=1",
+                   "--label=hermes-profile=x", "--label-file=/tmp/l"]),
         );
         let wanted = wanted_terminal(&config, "vie", &risky, Net::Registries("http://10.233.80.2:3128"), &reads);
         assert_eq!(
