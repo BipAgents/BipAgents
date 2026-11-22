@@ -7,8 +7,9 @@
 //!   where the bridge writes them, checked by reading the page back; a page the bridge cannot change safely — another
 //!   line ending, a frontmatter it cannot read, a `categories` of the person's own — is left as it is). Each page
 //!   written is one change of its history (`categorize`, by the « rangement », never in « Nouveau »). The tasks page,
-//!   « À ranger » and the documents' index are not notes: left as they are. A page every attributed line of which a
-//!   work agent wrote is Travail (plan §2.2; one line of another agent or of the person: by its words).
+//!   « À ranger » and the documents' index are not notes: left as they are. A page a work agent made (its « create »
+//!   in the history) is Travail, as at its creation since S1 (plan §2.2); a page it only wrote on is filed by its
+//!   words (S1 review B1).
 //! - **Once per version.** `state.json` `categories_v` is the table's version the pass has gone through: a better table
 //!   (`VERSION` + 1) re-decides the `auto` pages once, never `agent` nor `person`. Between versions, each night only
 //!   the pages without categories (written by hand, or by an older bridge) and those `auto` in « Autres » (the person's
@@ -16,7 +17,7 @@
 //! - **Safe on a big Carnet.** By batches of `BATCH` pages under the Carnet's lock (the agents' writes wait one batch at
 //!   most), the language and the rules read once a batch; a page already as it should be is not written again
 //!   (idempotent). A pass cut short (the bridge stopped, a crash) starts again after the last batch done
-//!   (`categories_pass`: `{v, after}`).
+//!   (`categories_pass`: `{v, after}`, `after` the fingerprint of the batch's last path: the state keeps no path).
 //! - **What stays in « Autres »** goes to the nightly pass's small model, `NIGHT_MAX` pages a night at most, inside its
 //!   monthly cap ([`night`]): the pages no word placed, never the private part, never a page or a line that looks like
 //!   health, never an attribution. Its answer is written `categories_by: agent` (a model's choice: the next versions
@@ -27,8 +28,9 @@
 //! - **The person's re-filings** (« Ranger ailleurs », categories.rs `categorize`): the toast and its « Annuler »
 //!   ([`with_toast`]), then today's list ([`today`], `GET /v1/notebook/categorize/today`), each still undoable.
 //!
-//! state.json: `categories_v` (int), `categories_pass` `{v, after}` (a pass under way), `categories_card` `{v, at,
-//! done, answer?}`, `categories_tried` (fingerprints of the pages the model was shown: never their text).
+//! state.json: `categories_v` (int), `categories_pass` `{v, after}` (a pass under way; `after` a fingerprint),
+//! `categories_card` `{v, at, done, answer?}`, `categories_tried` (fingerprints of the pages the model was shown: never
+//! their path nor their text).
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -150,6 +152,11 @@ pub fn with_header(text: &str, categories: &[String], by: &str) -> Option<String
 
 // -- the pass ------------------------------------------------------------------------------------------------------
 
+/// A path as the state keeps it: a fingerprint, never the path (« Oublie ça » leaves no name in state.json).
+fn print_of_path(path: &str) -> String {
+    super::rev(path)
+}
+
 /// The pages that are not notes: the tasks page, « À ranger », the documents' index.
 fn structural(page: &Page, path: &str, w: &Words) -> bool {
     matches!(page.kind().as_str(), "tasks" | "documents") || path == w.inbox_path()
@@ -180,24 +187,37 @@ fn auto_other(page: &Page) -> bool {
     header(page) == Header::Auto && c::stored(page).is_some_and(|(cats, _)| cats == ["other"])
 }
 
-/// The work agent who wrote every attributed line of the page (plan §2.2: a page a Pro agent wrote is Travail), else
-/// None: a line of another agent or of the person, or no attribution at all.
-fn writer_of(config: &Config, page: &Page, known: &mut HashMap<String, Option<String>>) -> Option<String> {
-    let mut writer: Option<String> = None;
-    for (_, facts) in page.sections() {
-        for f in facts.iter().filter(|f| !f.who.is_empty()) {
-            let agent = known
-                .entry(fold(&f.who))
-                .or_insert_with(|| super::assign::agent_named(config, &f.who).filter(|a| super::assign::is_work_agent(config, a)))
-                .clone();
-            writer.get_or_insert(agent?);
+/// Who made each page of the shared part (its last « create » in the history: the change that wrote it from
+/// nothing), read line by line from the log (a big Carnet's log is never held whole).
+fn makers(config: &Config) -> HashMap<String, String> {
+    use std::io::BufRead;
+    let mut out = HashMap::new();
+    let Ok(file) = std::fs::File::open(super::history_dir(config).join("log.jsonl")) else { return out };
+    for line in std::io::BufReader::new(file).lines().map_while(Result::ok) {
+        // most lines are not a creation: skipped before they are read as JSON
+        if !line.contains("\"create\"") {
+            continue;
+        }
+        let Ok(Value::Object(e)) = serde_json::from_str::<Value>(&line) else { continue };
+        let agent = tk::str_or_empty(e.get("agent"));
+        if tk::str_or_empty(e.get("action")) == "create" && tk::str_or_empty(e.get("part")) == "main" && !agent.is_empty() {
+            out.insert(tk::str_or_empty(e.get("path")), agent);
         }
     }
-    writer
+    out
+}
+
+/// The work agent that made the page (plan §2.2, as categories.rs `on_write` at a page's creation: a page a Pro agent
+/// makes is Travail; one it only wrote on is not), else None.
+fn maker_of(config: &Config, path: &str, makers: &HashMap<String, String>, work: &mut HashMap<String, bool>) -> Option<String> {
+    let agent = makers.get(path)?;
+    let is_work = *work.entry(agent.clone()).or_insert_with(|| super::assign::is_work_agent(config, agent));
+    is_work.then(|| agent.clone())
 }
 
 /// One page: Some(true) written, Some(false) as it should be already (or not the bridge's to file), None left alone
 /// (the bridge cannot change it safely, or the person wrote a `categories` of their own).
+#[allow(clippy::too_many_arguments)]
 fn sort_page(
     config: &Config,
     ctx: &Ctx,
@@ -205,7 +225,8 @@ fn sort_page(
     path: &str,
     full: bool,
     who: &Who,
-    writers: &mut HashMap<String, Option<String>>,
+    makers: &HashMap<String, String>,
+    work: &mut HashMap<String, bool>,
 ) -> anyhow::Result<Option<bool>> {
     let Some(text) = super::read_page_text(config, Part::Main, path) else { return Ok(Some(false)) };
     let stem = Path::new(path).file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
@@ -220,13 +241,14 @@ fn sort_page(
         Header::Auto if !full && !auto_other(&page) => return Ok(Some(false)),
         _ => {}
     }
-    let writer = writer_of(config, &page, writers);
+    let writer = maker_of(config, path, makers, work);
     let (cats, _) = c::decide_in(config, ctx, Part::Main, path, &page, writer.as_deref());
     if header(&page) == Header::Auto && now == Some((cats.clone(), "auto".into())) {
         return Ok(Some(false));
     }
     let Some(after) = with_header(&text, &cats, "auto") else { return Ok(None) };
-    super::commit(config, Part::Main, path, Some(&text), Some(&after), who, c::ACTION, &cats.join(", "))?;
+    // (no summary: a page's history in the apps 1.0 would show the ids; S1 review R4)
+    super::commit(config, Part::Main, path, Some(&text), Some(&after), who, c::ACTION, "")?;
     Ok(Some(true))
 }
 
@@ -248,11 +270,15 @@ pub(crate) fn sort_with(config: &Config, version: i64, stop_after: Option<usize>
     let w = super::words(&lang);
     let all = super::all_pages(config, Part::Main);
     let notes = all.iter().filter(|(path, p)| !structural(p, path, w)).count();
-    let paths: Vec<String> =
-        all.into_iter().map(|(p, _)| p).filter(|p| resume.as_ref().is_none_or(|after| p > after)).collect();
+    let mut paths: Vec<String> = all.into_iter().map(|(p, _)| p).collect();
+    // after the last page done (gone since: from the start again, nothing is written twice)
+    if let Some(at) = resume.and_then(|after| paths.iter().position(|p| print_of_path(p) == after)) {
+        paths.drain(..=at);
+    }
     let who = Who::tidy(config);
     let mut out = Sorted::default();
-    let mut writers: HashMap<String, Option<String>> = HashMap::new();
+    let makers = makers(config);
+    let mut work: HashMap<String, bool> = HashMap::new();
     for (n, batch) in paths.chunks(BATCH).enumerate() {
         if stop_after == Some(n) {
             return Ok(out);
@@ -261,14 +287,14 @@ pub(crate) fn sort_with(config: &Config, version: i64, stop_after: Option<usize>
         let held = Instant::now();
         let ctx = Ctx::of(config);
         for path in batch {
-            match sort_page(config, &ctx, w, path, full, &who, &mut writers)? {
+            match sort_page(config, &ctx, w, path, full, &who, &makers, &mut work)? {
                 Some(true) => out.filed += 1,
                 Some(false) => {}
                 None => out.skipped += 1,
             }
         }
         if full {
-            let after = batch.last().cloned().unwrap_or_default();
+            let after = batch.last().map(|p| print_of_path(p)).unwrap_or_default();
             super::update_state(config, |s| {
                 s.insert(KEY_PASS.into(), json!({"v": version, "after": after}));
             })?;
@@ -322,12 +348,12 @@ pub fn other_count(config: &Config, pages: &[(String, Page)]) -> usize {
         if other(&filed) {
             n += 1;
         }
-        let id = if page.id().is_empty() { path.clone() } else { page.id() };
+        let key = c::page_key(page, path);
         for (section, facts) in page.sections() {
             if fold(&section) == fold(w.brief) {
                 continue;
             }
-            n += facts.iter().filter(|f| other(&c::of_line(&filed, &id, &f.text, &marks, today))).count();
+            n += facts.iter().filter(|f| other(&c::of_line(&filed, &key, &f.text, &f.date, &marks, today))).count();
         }
     }
     n += super::open_tasks(config, Part::Main).iter().filter(|t| other(&c::of_task(config, t, pages, &marks, today))).count();
@@ -473,7 +499,7 @@ pub fn apply_answer(config: &Config, candidates: &[Candidate], answer: &str) -> 
             continue;
         }
         let Some(after) = with_header(&text, &cats, "agent") else { continue };
-        super::commit(config, Part::Main, &cand.path, Some(&text), Some(&after), &who, c::ACTION, &cats.join(", "))?;
+        super::commit(config, Part::Main, &cand.path, Some(&text), Some(&after), &who, c::ACTION, "")?;
         filed += 1;
     }
     super::update_state(config, |s| {
@@ -600,7 +626,8 @@ pub fn with_toast(mut view: Value, lang: &str) -> Value {
 }
 
 /// What a re-filing is, as the list shows it: the page's title, the line, the task's, the record's or the document's
-/// name. None when it is no longer there (deleted, forgotten, edited): not listed.
+/// name, read now (the state keeps only its key). None when it is no longer there (deleted, forgotten, edited): not
+/// listed.
 fn title_of(config: &Config, target: &c::Target) -> Option<String> {
     match target {
         c::Target::Page { path } => {
@@ -619,7 +646,26 @@ fn title_of(config: &Config, target: &c::Target) -> Option<String> {
             Some(records::summary_head(t, &found))
         }
         c::Target::Document { file, .. } => Some(file.clone()),
+        c::Target::Item(_) => None,
     }
+}
+
+/// What a re-filing's key names now, and what the list shows of it (the pages read once for all of them).
+fn named(config: &Config, key: &str, pages: &HashMap<String, (String, Page)>) -> Option<(c::Target, String)> {
+    if let Some(k) = key.strip_prefix("page:") {
+        let (path, page) = pages.get(k)?;
+        return Some((c::Target::Page { path: path.clone() }, page.title.clone()));
+    }
+    if let Some(rest) = key.strip_prefix("line:") {
+        let (k, _) = rest.split_once(':')?;
+        let (path, page) = pages.get(k)?;
+        let texts: Vec<String> = page.sections().into_iter().flat_map(|(_, f)| f).map(|f| f.text).collect();
+        let i = c::line_ids(k, &texts).iter().position(|x| x == key)?;
+        return Some((c::Target::Line { path: path.clone(), text: texts[i].clone() }, texts[i].clone()));
+    }
+    let target = c::resolve(config, key)?;
+    let title = title_of(config, &target)?;
+    Some((target, title))
 }
 
 /// Today's re-filings still undoable, the newest first: what it is (`title`), where it went (`categories`, `text`:
@@ -627,20 +673,27 @@ fn title_of(config: &Config, target: &c::Target) -> Option<String> {
 pub fn today(config: &Config, lang: &str) -> Value {
     let state = super::read_state(config);
     let day = super::today();
+    let entries: Vec<&Value> = state
+        .get("category_undo")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|e| tk::str_or_empty(e.get("at")) == day)
+        .collect();
+    let pages: HashMap<String, (String, Page)> = if entries.is_empty() {
+        HashMap::new()
+    } else {
+        super::all_pages(config, Part::Main).into_iter().map(|(path, page)| (c::page_key(&page, &path), (path, page))).collect()
+    };
     let mut items: Vec<Value> = Vec::new();
-    for e in state.get("category_undo").and_then(Value::as_array).into_iter().flatten() {
-        if tk::str_or_empty(e.get("at")) != day {
-            continue;
-        }
-        let (Some(target), Some(cats)) = (
-            e.get("target").and_then(c::Target::from_view),
-            c::valid(&super::strings(e.get("categories")), &c::PERSON_MAY_GIVE),
-        ) else {
-            continue;
-        };
-        let Some(title) = title_of(config, &target) else { continue };
+    for e in entries {
+        let key = tk::str_or_empty(e.get("key"));
+        let Some(cats) = c::valid(&super::strings(e.get("categories")), &c::PERSON_MAY_GIVE) else { continue };
+        let Some((target, title)) = named(config, &key, &pages) else { continue };
+        let mut shown = target.view();
+        shown["item"] = json!(key);
         let before = &e["before"];
-        items.push(json!({"undo": e["id"], "target": e["target"], "title": title, "categories": cats,
+        items.push(json!({"undo": e["id"], "target": shown, "title": title, "categories": cats,
                           "before": {"categories": before["categories"], "categories_by": before["categories_by"]},
                           "at": e.get("time").cloned().unwrap_or_else(|| e["at"].clone()), "text": toast(lang, &cats)}));
     }
@@ -867,7 +920,7 @@ mod tests {
     }
 
     #[test]
-    fn a_page_a_work_agent_alone_wrote_is_work() {
+    fn a_page_a_work_agent_made_is_work_not_one_it_wrote_on() {
         let dir = tempfile::tempdir().unwrap();
         let mut config = config_in(&dir, "fr");
         for (id, name, category) in [("kerfy", "Kerfy Studio", Some("work")), ("quotidien", "Quotidien", None)] {
@@ -879,15 +932,19 @@ mod tests {
             };
             config.agents.insert(id.into(), agent);
         }
-        let root = part_root(&config, Part::Main);
-        write_file(&root.join("Sujets/Lancement.md"),
-                   "---\ntype: subject\n---\n# Lancement\n\n## Où on en est\n- Site en ligne — *Kerfy Studio, 2026-11-01*\n- Presse le 3 — *Kerfy Studio, 2026-11-02*\n").unwrap();
-        // the family's home, where the work agent also wrote once (assign.rs: never Travail for that)
-        write_file(&root.join("Domaines/Maison.md"),
-                   "---\ntype: area\n---\n# Maison\n\n## En bref\nL'appartement.\n\n## Ce qui compte\n- Bureau dans la chambre — *Kerfy Studio, 2026-11-01*\n- Poubelles le lundi — *Quotidien, 2026-11-02*\n").unwrap();
+        let (pro, daily) = (Who::agent(&config, "kerfy"), Who::agent(&config, "quotidien"));
+        note(&config, Part::Main, "subject", "Lancement", "status", &strings(&["Site en ligne"]), &[], "", "", &pro).unwrap();
+        // made by the daily agent, then written on by the work agent (S1 review B1: not Travail for that)
+        note(&config, Part::Main, "area", "Maison", "matters", &strings(&["Poubelles le lundi"]), &[], "", "", &daily).unwrap();
+        note(&config, Part::Main, "area", "Maison", "matters", &strings(&["Bureau dans la chambre"]), &[], "", "", &pro).unwrap();
+        // written by hand in Obsidian: no maker, its words
+        write_file(&part_root(&config, Part::Main).join("Sujets/Lancement presse.md"),
+                   "---\ntype: subject\n---\n# Lancement presse\n\n## Où on en est\n- Presse le 3 — *Kerfy Studio, 2026-11-02*\n").unwrap();
+        as_before_the_sommaire(&config);
         sort(&config).unwrap();
         assert_eq!(stored_of(&config, "Sujets/Lancement.md"), Some((strings(&["work"]), "auto".into())));
         assert_eq!(stored_of(&config, "Domaines/Maison.md"), Some((strings(&["home"]), "auto".into())));
+        assert_eq!(stored_of(&config, "Sujets/Lancement presse.md"), Some((strings(&["other"]), "auto".into())));
     }
 
     /// `n` pages of the shared part, `lines` facts each, written as an older bridge did (no categories).
@@ -918,7 +975,7 @@ mod tests {
         assert_eq!((cut.filed, cut.done), (2 * BATCH, false));
         let state = read_state(&config);
         let paths: Vec<String> = all_pages(&config, Part::Main).into_iter().map(|(p, _)| p).collect();
-        assert_eq!(state[KEY_PASS], json!({"v": VERSION, "after": paths[2 * BATCH - 1]}));
+        assert_eq!(state[KEY_PASS], json!({"v": VERSION, "after": print_of_path(&paths[2 * BATCH - 1])}));
         assert!(state.get(KEY_V).is_none() && state.get(KEY_CARD).is_none());
         let rest = sort(&config).unwrap();
         assert_eq!((rest.filed, rest.done), (4 * BATCH, true));
@@ -962,6 +1019,71 @@ mod tests {
         assert!(first.longest_hold < Duration::from_secs(10), "{:?}", first.longest_hold);
         assert!(next < Duration::from_secs(60), "{next:?}");
     }
+
+    /// Out of the demo (S1 review R6; contracts/carnet/categories-out-of-demo.json): a Carnet of 50 pages a language
+    /// the demo never had, as an older bridge left them, sorted by the pass (only their headers change), and the
+    /// measure: where the bridge files each against where a person would look (printed with `--nocapture`). The
+    /// floors are the table's of today: a change that files fewer of them right fails.
+    #[test]
+    fn the_pass_over_pages_from_outside_the_demo() {
+        let file = Path::new(env!("CARGO_MANIFEST_DIR")).join("../contracts/carnet/categories-out-of-demo.json");
+        let set: Value = serde_json::from_str(&std::fs::read_to_string(file).unwrap()).unwrap();
+        let mut lines = Vec::new();
+        let (mut all_first, mut all_exact, mut all_wrong) = (0, 0, 0);
+        for lang in ["fr", "en", "de", "es", "nl"] {
+            let dir = tempfile::tempdir().unwrap();
+            // a Dutch person's Carnet is in English words (the bridge has no Dutch folders)
+            let config = config_in(&dir, if lang == "nl" { "en" } else { lang });
+            let root = part_root(&config, Part::Main);
+            let w = crate::notebook::words(&crate::notebook::language(&config));
+            let cases = set["cases"][lang].as_array().unwrap();
+            let path_of = |title: &str| format!("{}/{}.md", w.subjects, crate::notebook::file_name(title));
+            for case in cases {
+                let title = case["title"].as_str().unwrap();
+                write_file(&root.join(path_of(title)), &format!("---\ntype: subject\naliases: []\n---\n# {title}\n")).unwrap();
+            }
+            let before = files_in(&root);
+            assert_eq!(before.len(), 50, "{lang}: two titles share a file");
+            let sorted = sort(&config).unwrap();
+            assert_eq!((sorted.filed, sorted.skipped), (50, 0), "{lang}");
+            for (path, text) in files_in(&root) {
+                assert_eq!(without_header(&text), before[&path], "{lang} {path}");
+            }
+            let (mut first, mut exact, mut wrong, mut misses) = (0, 0, 0, Vec::new());
+            for case in cases {
+                let title = case["title"].as_str().unwrap();
+                let want = crate::notebook::strings(case.get("want"));
+                let (got, by) = stored_of(&config, &path_of(title)).unwrap();
+                assert_eq!(by, "auto");
+                if got.contains(&want[0]) {
+                    first += 1;
+                } else {
+                    // in « Autres » it waits for the night's model; elsewhere it is filed wrong
+                    if got != ["other"] {
+                        wrong += 1;
+                    }
+                    misses.push(format!("{title} → {} (want {})", got.join("+"), want.join("+")));
+                }
+                if got.iter().all(|g| want.contains(g)) && got.contains(&want[0]) {
+                    exact += 1;
+                }
+            }
+            all_first += first;
+            all_exact += exact;
+            all_wrong += wrong;
+            lines.push(format!("{lang}: {first}/50 where a person looks, {exact}/50 nothing else, {wrong} elsewhere than « Autres »; missed: {}",
+                               misses.join(" · ")));
+        }
+        eprintln!("S2 out of the demo:\n{}\nall: {all_first}/250, {all_exact}/250, {all_wrong} filed wrong", lines.join("\n"));
+        assert!(all_first >= OUT_OF_DEMO_FLOOR, "{all_first}/250 < {OUT_OF_DEMO_FLOOR}");
+        assert!(all_wrong <= OUT_OF_DEMO_WRONG, "{all_wrong} filed wrong > {OUT_OF_DEMO_WRONG}");
+    }
+
+    /// Out of the demo, the pages filed where a person would look (of 250), and those filed in a wrong category
+    /// (neither where a person looks nor « Autres »): today's table's measure (22/11: fr 45, en 39, es 38, nl 31, de
+    /// 29; the misses mostly German and Dutch compounds and words the table lacks, in « Autres »).
+    const OUT_OF_DEMO_FLOOR: usize = 182;
+    const OUT_OF_DEMO_WRONG: usize = 16;
 
     #[test]
     fn the_card_once_with_what_is_in_other() {
@@ -1087,7 +1209,8 @@ mod tests {
         assert_eq!((first["undo"].clone(), first["title"].clone(), first["text"].clone(), first["categories"].clone()),
                    (done["undo"].clone(), json!("Rénovation cuisine"), json!("Rangé dans Argent."), json!(["money"])));
         assert_eq!(first["before"], json!({"categories": ["home"], "categories_by": "auto"}));
-        assert_eq!(first["target"], json!({"path": "Sujets/Rénovation cuisine.md", "private": false}));
+        assert_eq!(first["target"], done["target"]);
+        assert_eq!(first["target"]["path"], "Sujets/Rénovation cuisine.md");
         // a whole day of re-filings: the first stays undoable after 30 more
         for i in 0..30 {
             let title = format!("Page {i:02}");

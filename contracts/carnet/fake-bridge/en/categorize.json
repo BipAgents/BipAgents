@@ -1,7 +1,8 @@
 {
   "target": {
     "path": "Subjects/Kitchen renovation.md",
-    "private": false
+    "private": false,
+    "item": "page:p0000000001"
   },
   "categories": [
     "money"
@@ -19,6 +20,7 @@
       "money"
     ]
   },
-  "undo": "u000000000001",
-  "toast": null
+  "undo": "u000000000002",
+  "toast": "Filed in Money.",
+  "undo_title": "Undo"
 }

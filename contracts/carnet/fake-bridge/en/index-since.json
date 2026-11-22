@@ -11,32 +11,40 @@
   },
   "truncated": false,
   "online_only": null,
+  "dated": {
+    "before": 90,
+    "after": 730
+  },
   "items": [
     {
-      "id": "task:t00000d",
+      "id": "task:t00000e",
       "kind": "task",
       "part": "main",
       "path": "Tasks/Tasks.md",
       "title": "Call Marc back about the quote",
       "line": "Call Marc back about the quote",
       "categories": [
-        "home",
-        "dates"
+        "home"
       ],
-      "space": "",
+      "space": "perso",
       "date": "2026-11-24",
+      "yearly": null,
       "source": "Tasks",
       "who": "Daily",
       "noted": "2026-11-22",
+      "archived": false,
+      "label": null,
+      "answer": null,
+      "page": null,
       "open": {
-        "task": "t00000d"
+        "task": "t00000e"
       },
       "fold": "call marc back about the quote",
       "done": false
     }
   ],
   "removed": [
-    "line:p000000000e:000000000e"
+    "line:p000000000d:000000000f"
   ],
   "stop": [
     "de",

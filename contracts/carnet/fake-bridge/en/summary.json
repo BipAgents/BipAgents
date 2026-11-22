@@ -21,13 +21,13 @@
       "q": "to pay this month",
       "title": "to pay this month",
       "count": 8,
-      "space": "",
+      "space": "perso",
       "category": "money"
     }
   ],
   "card": null,
   "total": {
-    "count": 133,
+    "count": 130,
     "title": "All the Notebook"
   },
   "categories": [
@@ -38,7 +38,7 @@
       "hint": "Family, Claire Durand, Lucas Bernard",
       "locked": false,
       "first": {
-        "id": "page:p000000000c",
+        "id": "page:p000000000d",
         "kind": "page",
         "part": "main",
         "path": "Areas/Family.md",
@@ -47,11 +47,16 @@
         "categories": [
           "people"
         ],
-        "space": "",
+        "space": "perso",
         "date": null,
+        "yearly": null,
         "source": "Family",
         "who": "",
         "noted": null,
+        "archived": false,
+        "label": null,
+        "answer": null,
+        "page": null,
         "open": {
           "path": "Areas/Family.md"
         }
@@ -64,7 +69,7 @@
       "hint": "Work, Claire Durand, Lucas Bernard",
       "locked": false,
       "first": {
-        "id": "line:p0000000038:0000000038",
+        "id": "line:p0000000012:0000000038",
         "kind": "line",
         "part": "main",
         "path": "Areas/Work.md",
@@ -74,11 +79,16 @@
           "work",
           "dates"
         ],
-        "space": "",
+        "space": "perso",
         "date": "2026-11-27",
+        "yearly": null,
         "source": "What matters",
         "who": "Daily",
         "noted": "2026-11-19",
+        "archived": false,
+        "label": null,
+        "answer": null,
+        "page": "page:p0000000012",
         "open": {
           "path": "Areas/Work.md",
           "section": "matters"
@@ -92,7 +102,7 @@
       "hint": "Money, New car, Taxes 2026",
       "locked": false,
       "first": {
-        "id": "page:p0000000010",
+        "id": "page:p0000000011",
         "kind": "page",
         "part": "main",
         "path": "Areas/Money.md",
@@ -101,11 +111,16 @@
         "categories": [
           "money"
         ],
-        "space": "",
+        "space": "perso",
         "date": null,
+        "yearly": null,
         "source": "Money",
         "who": "",
         "noted": null,
+        "archived": false,
+        "label": null,
+        "answer": null,
+        "page": null,
         "open": {
           "path": "Areas/Money.md"
         }
@@ -118,7 +133,7 @@
       "hint": "Home, Kitchen renovation, Call Marc back about the quote",
       "locked": false,
       "first": {
-        "id": "page:p000000000f",
+        "id": "page:p0000000010",
         "kind": "page",
         "part": "main",
         "path": "Areas/Home.md",
@@ -127,11 +142,16 @@
         "categories": [
           "home"
         ],
-        "space": "",
+        "space": "perso",
         "date": null,
+        "yearly": null,
         "source": "Home",
         "who": "",
         "noted": null,
+        "archived": false,
+        "label": null,
+        "answer": null,
+        "page": null,
         "open": {
           "path": "Areas/Home.md"
         }
@@ -144,7 +164,7 @@
       "hint": "Taxes 2026, Check the pre-filled tax return, Find the donation receipts",
       "locked": false,
       "first": {
-        "id": "page:p0000000002",
+        "id": "page:p0000000003",
         "kind": "page",
         "part": "main",
         "path": "Subjects/Taxes 2026.md",
@@ -154,11 +174,16 @@
           "money",
           "papers"
         ],
-        "space": "",
+        "space": "perso",
         "date": null,
+        "yearly": null,
         "source": "Taxes 2026",
         "who": "",
         "noted": null,
+        "archived": false,
+        "label": null,
+        "answer": null,
+        "page": null,
         "open": {
           "path": "Subjects/Taxes 2026.md"
         }
@@ -167,11 +192,11 @@
     {
       "id": "trips",
       "title": "Trips",
-      "count": 29,
+      "count": 26,
       "hint": "Japan trip, Lisbon weekend, Book the flights to Osaka",
       "locked": false,
       "first": {
-        "id": "page:p0000000017",
+        "id": "page:p0000000018",
         "kind": "page",
         "part": "main",
         "path": "Subjects/Japan trip.md",
@@ -180,11 +205,16 @@
         "categories": [
           "trips"
         ],
-        "space": "",
+        "space": "perso",
         "date": null,
+        "yearly": null,
         "source": "Japan trip",
         "who": "",
         "noted": null,
+        "archived": false,
+        "label": null,
+        "answer": null,
+        "page": null,
         "open": {
           "path": "Subjects/Japan trip.md"
         }
@@ -197,7 +227,7 @@
       "hint": "Work, Prepare the annual review",
       "locked": false,
       "first": {
-        "id": "page:p0000000011",
+        "id": "page:p0000000012",
         "kind": "page",
         "part": "main",
         "path": "Areas/Work.md",
@@ -206,11 +236,16 @@
         "categories": [
           "work"
         ],
-        "space": "",
+        "space": "perso",
         "date": null,
+        "yearly": null,
         "source": "Work",
         "who": "",
         "noted": null,
+        "archived": false,
+        "label": null,
+        "answer": null,
+        "page": null,
         "open": {
           "path": "Areas/Work.md"
         }
@@ -232,11 +267,16 @@
         "categories": [
           "other"
         ],
-        "space": "",
+        "space": "perso",
         "date": null,
+        "yearly": null,
         "source": "Tasks",
         "who": "Daily",
         "noted": "2026-11-22",
+        "archived": false,
+        "label": null,
+        "answer": null,
+        "page": null,
         "open": {
           "task": "t000025"
         }

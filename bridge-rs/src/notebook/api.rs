@@ -192,7 +192,7 @@ async fn home(State(state): State<AppState>, q: QueryMap) -> ApiResult<Response>
         let proposals = super::open_proposals(&config);
         let archives = super::archive::counts(&config);
         Ok(json!({"language": lang, "shown_language": shown, "sections": sections, "recent": recent, "upcoming": upcoming, "archives": archives,
-                  "sommaire": SOMMAIRE,
+                  "sommaire": super::categories::CAPABILITIES,
                   "dates": dates.into_iter().take(10).collect::<Vec<_>>(),
                   "inbox": inbox.len(), "settings": settings_view(&config), "trips": trips, "records": records,
                   "proposals": proposals, "known_tile": super::known::tile(&config, &shown, crate::py::time_time()),
@@ -204,10 +204,6 @@ async fn home(State(state): State<AppState>, q: QueryMap) -> ApiResult<Response>
     .await?;
     Ok(web::ok(view))
 }
-
-/// The version of the Carnet « Le sommaire » contract this bridge speaks (contracts/carnet/sommaire.json): a new app
-/// reads the sommaire's routes only from a bridge that says it.
-pub const SOMMAIRE: i64 = 1;
 
 fn page_summary(config: &Config, path: &str, part: Part, page: &super::Page, brief: &str) -> Value {
     let archived = super::WORDS.iter().any(|w| w.archived(path));
@@ -311,9 +307,9 @@ async fn search(State(state): State<AppState>, q: QueryMap) -> ApiResult<Respons
                 let cats = match all.iter().find(|(p, _)| *p == a.path) {
                     Some((path, page)) => {
                         let filed = super::categories::of_page(&config, a.part, path, page);
-                        let id = if page.id().is_empty() { path.clone() } else { page.id() };
+                        let key = super::categories::page_key(page, path);
                         let line = format!("{} : {}", a.label, a.answer);
-                        super::categories::of_line(&filed.categories, &id, &line, &marks, today)
+                        super::categories::of_line(&filed.categories, &key, &line, &a.date, &marks, today)
                     }
                     None => Vec::new(),
                 };
@@ -662,7 +658,7 @@ pub fn page_view_in(config: &Config, part: Part, path: &str, shown: &str) -> any
     let filed = super::categories::of_page(config, part, path, &page);
     let marks = super::categories::marks(config);
     let today = chrono::Local::now().date_naive();
-    let line_of = if page.id().is_empty() { path.to_string() } else { page.id() };
+    let line_of = super::categories::page_key(&page, path);
     let sections: Vec<Value> = page
         .sections()
         .into_iter()
@@ -673,7 +669,7 @@ pub fn page_view_in(config: &Config, part: Part, path: &str, shown: &str) -> any
                 .map(|f| {
                     let links: Vec<Value> = super::links_in(&f.text).iter().map(|l| resolve(l)).collect();
                     let (label, answer) = super::lexicon::split_label(&f.text).unwrap_or_default();
-                    let cats = super::categories::of_line(&filed.categories, &line_of, &f.text, &marks, today);
+                    let cats = super::categories::of_line(&filed.categories, &line_of, &f.text, &f.date, &marks, today);
                     json!({"text": f.text, "label": label, "answer": answer, "when": super::offline::when(&f.date, shown),
                            "fresh": fresh(&f.date), "noted": noted(&f.who, &f.date, shown),
                            "by": if f.who.is_empty() { Value::Null } else { json!(f.who) },
@@ -1815,6 +1811,9 @@ pub struct Categorize {
     pub task: Option<String>,
     #[serde(default)]
     pub line: Option<LineTarget>,
+    /// An Item's id (the index's, a search result's): what it names.
+    #[serde(default)]
+    pub item: Option<String>,
     #[serde(default)]
     pub categories: Vec<String>,
 }
@@ -1823,6 +1822,7 @@ impl Validate for Categorize {
     fn validate(&self, errors: &mut Vec<FieldError>) {
         check_max_len(errors, "path", self.path.as_deref(), 300);
         check_max_len(errors, "task", self.task.as_deref(), 40);
+        check_max_len(errors, "item", self.item.as_deref(), 200);
         if let Some(r) = &self.record {
             check_max_len(errors, "record.type", Some(&r.kind), 40);
             check_max_len(errors, "record.id", Some(&r.id), 40);
@@ -1848,13 +1848,16 @@ async fn categorize(State(state): State<AppState>, q: QueryMap, Json(body): Json
     use super::categories::{Refused, Target};
     let config = state.config();
     let shown = shown_language(&config, &q);
-    let target = match (&body.path, &body.record, &body.document, &body.task, &body.line) {
-        (Some(path), None, None, None, None) if !body.private => Target::Page { path: path.clone() },
-        (Some(_), None, None, None, None) => return Err(carnet_error(400, Refused::NotGiven.code(), &shown, json!({}))),
-        (None, Some(r), None, None, None) => Target::Record { kind: r.kind.clone(), id: r.id.clone() },
-        (None, None, Some(d), None, None) => Target::Document { agent: d.agent.clone(), file: d.file.clone() },
-        (None, None, None, Some(t), None) => Target::Task(t.clone()),
-        (None, None, None, None, Some(l)) => Target::Line { path: l.path.clone(), text: l.text.clone() },
+    if body.private {
+        return Err(carnet_error(400, Refused::NotGiven.code(), &shown, json!({})));
+    }
+    let target = match (&body.path, &body.record, &body.document, &body.task, &body.line, &body.item) {
+        (Some(path), None, None, None, None, None) => Target::Page { path: path.clone() },
+        (None, Some(r), None, None, None, None) => Target::Record { kind: r.kind.clone(), id: r.id.clone() },
+        (None, None, Some(d), None, None, None) => Target::Document { agent: d.agent.clone(), file: d.file.clone() },
+        (None, None, None, Some(t), None, None) => Target::Task(t.clone()),
+        (None, None, None, None, Some(l), None) => Target::Line { path: l.path.clone(), text: l.text.clone() },
+        (None, None, None, None, None, Some(i)) => Target::Item(i.clone()),
         _ => return Err(carnet_error(400, "target_missing", &shown, json!({}))),
     };
     let categories = body.categories.clone();
@@ -1863,6 +1866,7 @@ async fn categorize(State(state): State<AppState>, q: QueryMap, Json(body): Json
         // the toast « Rangé dans Argent. » and its « Annuler » (S2)
         Ok(view) => Ok(web::ok(super::categories_pass::with_toast(view, &shown))),
         Err(Refused::NotFound) => Err(carnet_error(404, Refused::NotFound.code(), &shown, json!({}))),
+        Err(Refused::HandWritten) => Err(carnet_error(409, Refused::HandWritten.code(), &shown, json!({}))),
         Err(r) => Err(carnet_error(400, r.code(), &shown, json!({}))),
     }
 }

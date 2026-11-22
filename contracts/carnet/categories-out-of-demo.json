@@ -1,0 +1,1530 @@
+{
+ "about": "Out of the demo (S1 review R6, 22/11): 50 page titles a language that are not in the demo (App/Resources/Demo, the search bench, the S1 tests), each with where a person would look for it (`want`: the first category; a second one when a person could look in either). The traps the review named are among them (« honderd », « Working from home », German and Dutch compounds, « London marathon »). Played by bridge-rs src/notebook/categories_pass.rs `the_pass_over_pages_from_outside_the_demo` (brick S2: the pass over a Carnet made of them, and the measure: the bridge's categories against `want`). No model, no real Carnet.",
+ "cases": {
+  "fr": [
+   {
+    "title": "Chaudière à remplacer",
+    "want": [
+     "home"
+    ]
+   },
+   {
+    "title": "Fuite sous l'évier",
+    "want": [
+     "home"
+    ]
+   },
+   {
+    "title": "Peinture du salon",
+    "want": [
+     "home"
+    ]
+   },
+   {
+    "title": "Déménagement à Lyon",
+    "want": [
+     "home"
+    ]
+   },
+   {
+    "title": "Assurance habitation",
+    "want": [
+     "papers",
+     "home"
+    ]
+   },
+   {
+    "title": "Mutuelle",
+    "want": [
+     "papers"
+    ]
+   },
+   {
+    "title": "Prêt immobilier",
+    "want": [
+     "money"
+    ]
+   },
+   {
+    "title": "Livret A",
+    "want": [
+     "money"
+    ]
+   },
+   {
+    "title": "Impôt sur le revenu",
+    "want": [
+     "money",
+     "papers"
+    ]
+   },
+   {
+    "title": "Facture d'électricité",
+    "want": [
+     "papers",
+     "money"
+    ]
+   },
+   {
+    "title": "Forfait téléphone",
+    "want": [
+     "money"
+    ]
+   },
+   {
+    "title": "Remboursement de Paul",
+    "want": [
+     "money"
+    ]
+   },
+   {
+    "title": "Épargne pour Léo",
+    "want": [
+     "money"
+    ]
+   },
+   {
+    "title": "Carte grise",
+    "want": [
+     "papers"
+    ]
+   },
+   {
+    "title": "Passeport de Zoé",
+    "want": [
+     "papers"
+    ]
+   },
+   {
+    "title": "Renouvellement carte d'identité",
+    "want": [
+     "papers"
+    ]
+   },
+   {
+    "title": "Dossier CAF",
+    "want": [
+     "papers"
+    ]
+   },
+   {
+    "title": "Lettre de résiliation",
+    "want": [
+     "papers"
+    ]
+   },
+   {
+    "title": "Garantie du frigo",
+    "want": [
+     "papers"
+    ]
+   },
+   {
+    "title": "Vacances en Bretagne",
+    "want": [
+     "trips"
+    ]
+   },
+   {
+    "title": "Week-end à Rome",
+    "want": [
+     "trips"
+    ]
+   },
+   {
+    "title": "Séjour au ski",
+    "want": [
+     "trips"
+    ]
+   },
+   {
+    "title": "Road trip en Écosse",
+    "want": [
+     "trips"
+    ]
+   },
+   {
+    "title": "Vol pour Montréal",
+    "want": [
+     "trips"
+    ]
+   },
+   {
+    "title": "Camping cet été",
+    "want": [
+     "trips"
+    ]
+   },
+   {
+    "title": "Mariage de Julie",
+    "want": [
+     "people"
+    ]
+   },
+   {
+    "title": "Anniversaire de Papa",
+    "want": [
+     "people"
+    ]
+   },
+   {
+    "title": "Cadeaux de Noël",
+    "want": [
+     "people"
+    ]
+   },
+   {
+    "title": "Le bébé de Claire",
+    "want": [
+     "people"
+    ]
+   },
+   {
+    "title": "Soirée chez les voisins",
+    "want": [
+     "people"
+    ]
+   },
+   {
+    "title": "Mamie Jeanne",
+    "want": [
+     "people"
+    ]
+   },
+   {
+    "title": "Nounou de Léo",
+    "want": [
+     "people"
+    ]
+   },
+   {
+    "title": "Réunion d'équipe",
+    "want": [
+     "work"
+    ]
+   },
+   {
+    "title": "Entretien d'embauche",
+    "want": [
+     "work"
+    ]
+   },
+   {
+    "title": "Projet client Dupont",
+    "want": [
+     "work"
+    ]
+   },
+   {
+    "title": "Formation Excel",
+    "want": [
+     "work"
+    ]
+   },
+   {
+    "title": "Télétravail",
+    "want": [
+     "work"
+    ]
+   },
+   {
+    "title": "Note de frais",
+    "want": [
+     "work"
+    ]
+   },
+   {
+    "title": "Démission",
+    "want": [
+     "work"
+    ]
+   },
+   {
+    "title": "Club de lecture",
+    "want": [
+     "other"
+    ]
+   },
+   {
+    "title": "Cours de guitare",
+    "want": [
+     "other"
+    ]
+   },
+   {
+    "title": "Séries à regarder",
+    "want": [
+     "other"
+    ]
+   },
+   {
+    "title": "Recettes de grand-mère",
+    "want": [
+     "home"
+    ]
+   },
+   {
+    "title": "Potager",
+    "want": [
+     "home"
+    ]
+   },
+   {
+    "title": "Vétérinaire du chat",
+    "want": [
+     "home"
+    ]
+   },
+   {
+    "title": "Grand ménage de printemps",
+    "want": [
+     "home"
+    ]
+   },
+   {
+    "title": "Marathon de Paris",
+    "want": [
+     "other"
+    ]
+   },
+   {
+    "title": "Bénévolat",
+    "want": [
+     "other"
+    ]
+   },
+   {
+    "title": "Photos de famille",
+    "want": [
+     "people"
+    ]
+   },
+   {
+    "title": "Cent choses à faire",
+    "want": [
+     "other"
+    ]
+   }
+  ],
+  "en": [
+   {
+    "title": "Boiler to replace",
+    "want": [
+     "home"
+    ]
+   },
+   {
+    "title": "Leak under the sink",
+    "want": [
+     "home"
+    ]
+   },
+   {
+    "title": "Painting the living room",
+    "want": [
+     "home"
+    ]
+   },
+   {
+    "title": "Moving to Leeds",
+    "want": [
+     "home"
+    ]
+   },
+   {
+    "title": "Home insurance",
+    "want": [
+     "papers",
+     "home"
+    ]
+   },
+   {
+    "title": "Health insurance plan",
+    "want": [
+     "papers"
+    ]
+   },
+   {
+    "title": "Mortgage",
+    "want": [
+     "money"
+    ]
+   },
+   {
+    "title": "Savings account",
+    "want": [
+     "money"
+    ]
+   },
+   {
+    "title": "Income tax",
+    "want": [
+     "money",
+     "papers"
+    ]
+   },
+   {
+    "title": "Electricity bill",
+    "want": [
+     "papers",
+     "money"
+    ]
+   },
+   {
+    "title": "Phone subscription",
+    "want": [
+     "money"
+    ]
+   },
+   {
+    "title": "Paul's refund",
+    "want": [
+     "money"
+    ]
+   },
+   {
+    "title": "Saving for Leo",
+    "want": [
+     "money"
+    ]
+   },
+   {
+    "title": "Car registration",
+    "want": [
+     "papers"
+    ]
+   },
+   {
+    "title": "Zoe's passport",
+    "want": [
+     "papers"
+    ]
+   },
+   {
+    "title": "ID card renewal",
+    "want": [
+     "papers"
+    ]
+   },
+   {
+    "title": "Child benefit claim",
+    "want": [
+     "papers"
+    ]
+   },
+   {
+    "title": "Cancellation letter",
+    "want": [
+     "papers"
+    ]
+   },
+   {
+    "title": "Fridge warranty",
+    "want": [
+     "papers"
+    ]
+   },
+   {
+    "title": "Holidays in Cornwall",
+    "want": [
+     "trips"
+    ]
+   },
+   {
+    "title": "Weekend in Rome",
+    "want": [
+     "trips"
+    ]
+   },
+   {
+    "title": "Ski trip",
+    "want": [
+     "trips"
+    ]
+   },
+   {
+    "title": "Road trip in Scotland",
+    "want": [
+     "trips"
+    ]
+   },
+   {
+    "title": "Flight to Montreal",
+    "want": [
+     "trips"
+    ]
+   },
+   {
+    "title": "Camping this summer",
+    "want": [
+     "trips"
+    ]
+   },
+   {
+    "title": "Julie's wedding",
+    "want": [
+     "people"
+    ]
+   },
+   {
+    "title": "Dad's birthday",
+    "want": [
+     "people"
+    ]
+   },
+   {
+    "title": "Christmas presents",
+    "want": [
+     "people"
+    ]
+   },
+   {
+    "title": "Claire's baby",
+    "want": [
+     "people"
+    ]
+   },
+   {
+    "title": "Evening at the neighbours'",
+    "want": [
+     "people"
+    ]
+   },
+   {
+    "title": "Grandma Jean",
+    "want": [
+     "people"
+    ]
+   },
+   {
+    "title": "Leo's nanny",
+    "want": [
+     "people"
+    ]
+   },
+   {
+    "title": "Team meeting",
+    "want": [
+     "work"
+    ]
+   },
+   {
+    "title": "Job interview",
+    "want": [
+     "work"
+    ]
+   },
+   {
+    "title": "Dupont client project",
+    "want": [
+     "work"
+    ]
+   },
+   {
+    "title": "Excel training",
+    "want": [
+     "work"
+    ]
+   },
+   {
+    "title": "Working from home",
+    "want": [
+     "work"
+    ]
+   },
+   {
+    "title": "Expense report",
+    "want": [
+     "work"
+    ]
+   },
+   {
+    "title": "Resignation letter",
+    "want": [
+     "work"
+    ]
+   },
+   {
+    "title": "Book club",
+    "want": [
+     "other"
+    ]
+   },
+   {
+    "title": "Guitar lessons",
+    "want": [
+     "other"
+    ]
+   },
+   {
+    "title": "Series to watch",
+    "want": [
+     "other"
+    ]
+   },
+   {
+    "title": "Grandma's recipes",
+    "want": [
+     "home"
+    ]
+   },
+   {
+    "title": "Vegetable garden",
+    "want": [
+     "home"
+    ]
+   },
+   {
+    "title": "The cat's vet",
+    "want": [
+     "home"
+    ]
+   },
+   {
+    "title": "Spring cleaning",
+    "want": [
+     "home"
+    ]
+   },
+   {
+    "title": "London marathon",
+    "want": [
+     "other"
+    ]
+   },
+   {
+    "title": "Volunteering",
+    "want": [
+     "other"
+    ]
+   },
+   {
+    "title": "Family photos",
+    "want": [
+     "people"
+    ]
+   },
+   {
+    "title": "A hundred things to do",
+    "want": [
+     "other"
+    ]
+   }
+  ],
+  "de": [
+   {
+    "title": "Heizkessel ersetzen",
+    "want": [
+     "home"
+    ]
+   },
+   {
+    "title": "Leck unter der Spüle",
+    "want": [
+     "home"
+    ]
+   },
+   {
+    "title": "Wohnzimmer streichen",
+    "want": [
+     "home"
+    ]
+   },
+   {
+    "title": "Umzug nach Köln",
+    "want": [
+     "home"
+    ]
+   },
+   {
+    "title": "Hausratversicherung",
+    "want": [
+     "papers",
+     "home"
+    ]
+   },
+   {
+    "title": "Krankenversicherung",
+    "want": [
+     "papers"
+    ]
+   },
+   {
+    "title": "Baufinanzierung",
+    "want": [
+     "money"
+    ]
+   },
+   {
+    "title": "Sparkonto",
+    "want": [
+     "money"
+    ]
+   },
+   {
+    "title": "Einkommensteuer",
+    "want": [
+     "money",
+     "papers"
+    ]
+   },
+   {
+    "title": "Stromrechnung",
+    "want": [
+     "papers",
+     "money"
+    ]
+   },
+   {
+    "title": "Handytarif",
+    "want": [
+     "money"
+    ]
+   },
+   {
+    "title": "Erstattung von Paul",
+    "want": [
+     "money"
+    ]
+   },
+   {
+    "title": "Sparen für Leo",
+    "want": [
+     "money"
+    ]
+   },
+   {
+    "title": "Kfz-Zulassung",
+    "want": [
+     "papers"
+    ]
+   },
+   {
+    "title": "Reisepass von Zoe",
+    "want": [
+     "papers"
+    ]
+   },
+   {
+    "title": "Personalausweis verlängern",
+    "want": [
+     "papers"
+    ]
+   },
+   {
+    "title": "Kindergeld-Antrag",
+    "want": [
+     "papers"
+    ]
+   },
+   {
+    "title": "Kündigungsschreiben",
+    "want": [
+     "papers"
+    ]
+   },
+   {
+    "title": "Garantie Kühlschrank",
+    "want": [
+     "papers"
+    ]
+   },
+   {
+    "title": "Urlaub an der Ostsee",
+    "want": [
+     "trips"
+    ]
+   },
+   {
+    "title": "Wochenende in Rom",
+    "want": [
+     "trips"
+    ]
+   },
+   {
+    "title": "Skiurlaub",
+    "want": [
+     "trips"
+    ]
+   },
+   {
+    "title": "Rundreise Schottland",
+    "want": [
+     "trips"
+    ]
+   },
+   {
+    "title": "Flug nach Montreal",
+    "want": [
+     "trips"
+    ]
+   },
+   {
+    "title": "Camping im Sommer",
+    "want": [
+     "trips"
+    ]
+   },
+   {
+    "title": "Hochzeit von Julia",
+    "want": [
+     "people"
+    ]
+   },
+   {
+    "title": "Papas Geburtstag",
+    "want": [
+     "people"
+    ]
+   },
+   {
+    "title": "Weihnachtsgeschenke",
+    "want": [
+     "people"
+    ]
+   },
+   {
+    "title": "Claires Baby",
+    "want": [
+     "people"
+    ]
+   },
+   {
+    "title": "Abend bei den Nachbarn",
+    "want": [
+     "people"
+    ]
+   },
+   {
+    "title": "Oma Helga",
+    "want": [
+     "people"
+    ]
+   },
+   {
+    "title": "Babysitter für Leo",
+    "want": [
+     "people"
+    ]
+   },
+   {
+    "title": "Teambesprechung",
+    "want": [
+     "work"
+    ]
+   },
+   {
+    "title": "Vorstellungsgespräch",
+    "want": [
+     "work"
+    ]
+   },
+   {
+    "title": "Kundenprojekt Müller",
+    "want": [
+     "work"
+    ]
+   },
+   {
+    "title": "Excel-Schulung",
+    "want": [
+     "work"
+    ]
+   },
+   {
+    "title": "Homeoffice-Regeln",
+    "want": [
+     "work"
+    ]
+   },
+   {
+    "title": "Reisekostenabrechnung",
+    "want": [
+     "work"
+    ]
+   },
+   {
+    "title": "Kündigung beim Arbeitgeber",
+    "want": [
+     "work"
+    ]
+   },
+   {
+    "title": "Lesekreis",
+    "want": [
+     "other"
+    ]
+   },
+   {
+    "title": "Gitarrenunterricht",
+    "want": [
+     "other"
+    ]
+   },
+   {
+    "title": "Serien zum Anschauen",
+    "want": [
+     "other"
+    ]
+   },
+   {
+    "title": "Omas Rezepte",
+    "want": [
+     "home"
+    ]
+   },
+   {
+    "title": "Gemüsebeet",
+    "want": [
+     "home"
+    ]
+   },
+   {
+    "title": "Tierarzt für die Katze",
+    "want": [
+     "home"
+    ]
+   },
+   {
+    "title": "Frühjahrsputz",
+    "want": [
+     "home"
+    ]
+   },
+   {
+    "title": "Berlin-Marathon",
+    "want": [
+     "other"
+    ]
+   },
+   {
+    "title": "Ehrenamt",
+    "want": [
+     "other"
+    ]
+   },
+   {
+    "title": "Familienfotos",
+    "want": [
+     "people"
+    ]
+   },
+   {
+    "title": "Hundert Dinge",
+    "want": [
+     "other"
+    ]
+   }
+  ],
+  "es": [
+   {
+    "title": "Cambiar la caldera",
+    "want": [
+     "home"
+    ]
+   },
+   {
+    "title": "Fuga bajo el fregadero",
+    "want": [
+     "home"
+    ]
+   },
+   {
+    "title": "Pintar el salón",
+    "want": [
+     "home"
+    ]
+   },
+   {
+    "title": "Mudanza a Valencia",
+    "want": [
+     "home"
+    ]
+   },
+   {
+    "title": "Seguro del hogar",
+    "want": [
+     "papers",
+     "home"
+    ]
+   },
+   {
+    "title": "Seguro médico",
+    "want": [
+     "papers"
+    ]
+   },
+   {
+    "title": "Hipoteca",
+    "want": [
+     "money"
+    ]
+   },
+   {
+    "title": "Cuenta de ahorro",
+    "want": [
+     "money"
+    ]
+   },
+   {
+    "title": "Declaración de la renta",
+    "want": [
+     "money",
+     "papers"
+    ]
+   },
+   {
+    "title": "Factura de la luz",
+    "want": [
+     "papers",
+     "money"
+    ]
+   },
+   {
+    "title": "Tarifa del móvil",
+    "want": [
+     "money"
+    ]
+   },
+   {
+    "title": "Reembolso de Pablo",
+    "want": [
+     "money"
+    ]
+   },
+   {
+    "title": "Ahorro para Leo",
+    "want": [
+     "money"
+    ]
+   },
+   {
+    "title": "Permiso de circulación",
+    "want": [
+     "papers"
+    ]
+   },
+   {
+    "title": "Pasaporte de Zoe",
+    "want": [
+     "papers"
+    ]
+   },
+   {
+    "title": "Renovar el DNI",
+    "want": [
+     "papers"
+    ]
+   },
+   {
+    "title": "Ayuda por hijo a cargo",
+    "want": [
+     "papers"
+    ]
+   },
+   {
+    "title": "Carta de baja",
+    "want": [
+     "papers"
+    ]
+   },
+   {
+    "title": "Garantía de la nevera",
+    "want": [
+     "papers"
+    ]
+   },
+   {
+    "title": "Vacaciones en Galicia",
+    "want": [
+     "trips"
+    ]
+   },
+   {
+    "title": "Fin de semana en Roma",
+    "want": [
+     "trips"
+    ]
+   },
+   {
+    "title": "Viaje de esquí",
+    "want": [
+     "trips"
+    ]
+   },
+   {
+    "title": "Ruta por Escocia",
+    "want": [
+     "trips"
+    ]
+   },
+   {
+    "title": "Vuelo a Montreal",
+    "want": [
+     "trips"
+    ]
+   },
+   {
+    "title": "Camping este verano",
+    "want": [
+     "trips"
+    ]
+   },
+   {
+    "title": "Boda de Julia",
+    "want": [
+     "people"
+    ]
+   },
+   {
+    "title": "Cumpleaños de papá",
+    "want": [
+     "people"
+    ]
+   },
+   {
+    "title": "Regalos de Navidad",
+    "want": [
+     "people"
+    ]
+   },
+   {
+    "title": "El bebé de Clara",
+    "want": [
+     "people"
+    ]
+   },
+   {
+    "title": "Cena con los vecinos",
+    "want": [
+     "people"
+    ]
+   },
+   {
+    "title": "Abuela Carmen",
+    "want": [
+     "people"
+    ]
+   },
+   {
+    "title": "Canguro de Leo",
+    "want": [
+     "people"
+    ]
+   },
+   {
+    "title": "Reunión de equipo",
+    "want": [
+     "work"
+    ]
+   },
+   {
+    "title": "Entrevista de trabajo",
+    "want": [
+     "work"
+    ]
+   },
+   {
+    "title": "Proyecto del cliente García",
+    "want": [
+     "work"
+    ]
+   },
+   {
+    "title": "Curso de Excel",
+    "want": [
+     "work"
+    ]
+   },
+   {
+    "title": "Teletrabajo",
+    "want": [
+     "work"
+    ]
+   },
+   {
+    "title": "Nota de gastos",
+    "want": [
+     "work"
+    ]
+   },
+   {
+    "title": "Dimisión",
+    "want": [
+     "work"
+    ]
+   },
+   {
+    "title": "Club de lectura",
+    "want": [
+     "other"
+    ]
+   },
+   {
+    "title": "Clases de guitarra",
+    "want": [
+     "other"
+    ]
+   },
+   {
+    "title": "Series pendientes",
+    "want": [
+     "other"
+    ]
+   },
+   {
+    "title": "Recetas de la abuela",
+    "want": [
+     "home"
+    ]
+   },
+   {
+    "title": "Huerto",
+    "want": [
+     "home"
+    ]
+   },
+   {
+    "title": "Veterinario del gato",
+    "want": [
+     "home"
+    ]
+   },
+   {
+    "title": "Limpieza de primavera",
+    "want": [
+     "home"
+    ]
+   },
+   {
+    "title": "Maratón de Madrid",
+    "want": [
+     "other"
+    ]
+   },
+   {
+    "title": "Voluntariado",
+    "want": [
+     "other"
+    ]
+   },
+   {
+    "title": "Fotos de familia",
+    "want": [
+     "people"
+    ]
+   },
+   {
+    "title": "Cien cosas que hacer",
+    "want": [
+     "other"
+    ]
+   }
+  ],
+  "nl": [
+   {
+    "title": "Cv-ketel vervangen",
+    "want": [
+     "home"
+    ]
+   },
+   {
+    "title": "Lek onder de gootsteen",
+    "want": [
+     "home"
+    ]
+   },
+   {
+    "title": "Woonkamer schilderen",
+    "want": [
+     "home"
+    ]
+   },
+   {
+    "title": "Verhuizing naar Utrecht",
+    "want": [
+     "home"
+    ]
+   },
+   {
+    "title": "Inboedelverzekering",
+    "want": [
+     "papers",
+     "home"
+    ]
+   },
+   {
+    "title": "Zorgverzekering",
+    "want": [
+     "papers"
+    ]
+   },
+   {
+    "title": "Hypotheek",
+    "want": [
+     "money"
+    ]
+   },
+   {
+    "title": "Spaarrekening",
+    "want": [
+     "money"
+    ]
+   },
+   {
+    "title": "Inkomstenbelasting",
+    "want": [
+     "money",
+     "papers"
+    ]
+   },
+   {
+    "title": "Energierekening",
+    "want": [
+     "papers",
+     "money"
+    ]
+   },
+   {
+    "title": "Telefoonabonnement",
+    "want": [
+     "money"
+    ]
+   },
+   {
+    "title": "Terugbetaling van Paul",
+    "want": [
+     "money"
+    ]
+   },
+   {
+    "title": "Sparen voor Leo",
+    "want": [
+     "money"
+    ]
+   },
+   {
+    "title": "Kentekenbewijs",
+    "want": [
+     "papers"
+    ]
+   },
+   {
+    "title": "Paspoort van Zoë",
+    "want": [
+     "papers"
+    ]
+   },
+   {
+    "title": "Identiteitskaart verlengen",
+    "want": [
+     "papers"
+    ]
+   },
+   {
+    "title": "Kinderbijslag aanvragen",
+    "want": [
+     "papers"
+    ]
+   },
+   {
+    "title": "Opzegbrief",
+    "want": [
+     "papers"
+    ]
+   },
+   {
+    "title": "Garantie koelkast",
+    "want": [
+     "papers"
+    ]
+   },
+   {
+    "title": "Vakantie in Zeeland",
+    "want": [
+     "trips"
+    ]
+   },
+   {
+    "title": "Weekendje Rome",
+    "want": [
+     "trips"
+    ]
+   },
+   {
+    "title": "Wintersport",
+    "want": [
+     "trips"
+    ]
+   },
+   {
+    "title": "Rondreis Schotland",
+    "want": [
+     "trips"
+    ]
+   },
+   {
+    "title": "Vlucht naar Montreal",
+    "want": [
+     "trips"
+    ]
+   },
+   {
+    "title": "Kamperen deze zomer",
+    "want": [
+     "trips"
+    ]
+   },
+   {
+    "title": "Bruiloft van Julia",
+    "want": [
+     "people"
+    ]
+   },
+   {
+    "title": "Verjaardag van papa",
+    "want": [
+     "people"
+    ]
+   },
+   {
+    "title": "Kerstcadeaus",
+    "want": [
+     "people"
+    ]
+   },
+   {
+    "title": "De baby van Claire",
+    "want": [
+     "people"
+    ]
+   },
+   {
+    "title": "Etentje bij de buren",
+    "want": [
+     "people"
+    ]
+   },
+   {
+    "title": "Oma Truus",
+    "want": [
+     "people"
+    ]
+   },
+   {
+    "title": "Oppas van Leo",
+    "want": [
+     "people"
+    ]
+   },
+   {
+    "title": "Teamvergadering",
+    "want": [
+     "work"
+    ]
+   },
+   {
+    "title": "Sollicitatiegesprek",
+    "want": [
+     "work"
+    ]
+   },
+   {
+    "title": "Klantproject Jansen",
+    "want": [
+     "work"
+    ]
+   },
+   {
+    "title": "Excel-cursus",
+    "want": [
+     "work"
+    ]
+   },
+   {
+    "title": "Thuiswerken",
+    "want": [
+     "work"
+    ]
+   },
+   {
+    "title": "Declaratie onkosten",
+    "want": [
+     "work"
+    ]
+   },
+   {
+    "title": "Ontslag nemen",
+    "want": [
+     "work"
+    ]
+   },
+   {
+    "title": "Leesclub",
+    "want": [
+     "other"
+    ]
+   },
+   {
+    "title": "Gitaarles",
+    "want": [
+     "other"
+    ]
+   },
+   {
+    "title": "Series om te kijken",
+    "want": [
+     "other"
+    ]
+   },
+   {
+    "title": "Recepten van oma",
+    "want": [
+     "home"
+    ]
+   },
+   {
+    "title": "Moestuin",
+    "want": [
+     "home"
+    ]
+   },
+   {
+    "title": "Dierenarts van de kat",
+    "want": [
+     "home"
+    ]
+   },
+   {
+    "title": "Voorjaarsschoonmaak",
+    "want": [
+     "home"
+    ]
+   },
+   {
+    "title": "Marathon van Rotterdam",
+    "want": [
+     "other"
+    ]
+   },
+   {
+    "title": "Vrijwilligerswerk",
+    "want": [
+     "other"
+    ]
+   },
+   {
+    "title": "Familiefoto's",
+    "want": [
+     "people"
+    ]
+   },
+   {
+    "title": "Honderd dingen om te doen",
+    "want": [
+     "other"
+    ]
+   }
+  ]
+ }
+}

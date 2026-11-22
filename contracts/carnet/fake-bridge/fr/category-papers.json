@@ -8,7 +8,7 @@
     {
       "id": "invoices",
       "title": "Factures",
-      "count": 1
+      "count": 0
     },
     {
       "id": "contracts",
@@ -30,7 +30,7 @@
   ],
   "recent": [
     {
-      "id": "task:t000003",
+      "id": "task:t000004",
       "kind": "task",
       "part": "main",
       "path": "Tâches/Tâches.md",
@@ -41,17 +41,22 @@
         "papers",
         "dates"
       ],
-      "space": "",
+      "space": "perso",
       "date": "2026-11-28",
+      "yearly": null,
       "source": "Tâches",
       "who": "Daily",
       "noted": "2026-11-22",
+      "archived": false,
+      "label": null,
+      "answer": null,
+      "page": null,
       "open": {
-        "task": "t000003"
+        "task": "t000004"
       }
     },
     {
-      "id": "task:t000004",
+      "id": "task:t000005",
       "kind": "task",
       "part": "main",
       "path": "Tâches/Tâches.md",
@@ -61,17 +66,22 @@
         "money",
         "papers"
       ],
-      "space": "",
+      "space": "perso",
       "date": null,
+      "yearly": null,
       "source": "Tâches",
       "who": "Daily",
       "noted": "2026-11-22",
+      "archived": false,
+      "label": null,
+      "answer": null,
+      "page": null,
       "open": {
-        "task": "t000004"
+        "task": "t000005"
       }
     },
     {
-      "id": "line:p000000000a:000000000a",
+      "id": "line:p0000000003:000000000b",
       "kind": "line",
       "part": "main",
       "path": "Sujets/Impôts 2026.md",
@@ -81,18 +91,23 @@
         "money",
         "papers"
       ],
-      "space": "",
+      "space": "perso",
       "date": null,
+      "yearly": null,
       "source": "Où on en est",
       "who": "Budget",
       "noted": "2026-11-20",
+      "archived": false,
+      "label": null,
+      "answer": null,
+      "page": "page:p0000000003",
       "open": {
         "path": "Sujets/Impôts 2026.md",
         "section": "status"
       }
     },
     {
-      "id": "line:p000000000b:000000000b",
+      "id": "line:p0000000003:000000000c",
       "kind": "line",
       "part": "main",
       "path": "Sujets/Impôts 2026.md",
@@ -102,18 +117,23 @@
         "money",
         "papers"
       ],
-      "space": "",
+      "space": "perso",
       "date": null,
+      "yearly": null,
       "source": "Prochaines étapes",
       "who": "Budget",
       "noted": "2026-11-20",
+      "archived": false,
+      "label": null,
+      "answer": null,
+      "page": "page:p0000000003",
       "open": {
         "path": "Sujets/Impôts 2026.md",
         "section": "next"
       }
     },
     {
-      "id": "page:p0000000002",
+      "id": "page:p0000000003",
       "kind": "page",
       "part": "main",
       "path": "Sujets/Impôts 2026.md",
@@ -123,37 +143,18 @@
         "money",
         "papers"
       ],
-      "space": "",
+      "space": "perso",
       "date": null,
+      "yearly": null,
       "source": "Impôts 2026",
       "who": "",
       "noted": null,
+      "archived": false,
+      "label": null,
+      "answer": null,
+      "page": null,
       "open": {
         "path": "Sujets/Impôts 2026.md"
-      }
-    },
-    {
-      "id": "record:r000005",
-      "kind": "record",
-      "part": "main",
-      "path": "Fiches/Achats.md",
-      "title": "Lave-linge",
-      "line": "2024-12-22 · Lave-linge · Électro Plus · 499 € · bien durable · 2026-12-22 · Facture reçue par e-mail",
-      "categories": [
-        "money",
-        "papers",
-        "dates"
-      ],
-      "space": "",
-      "date": "2026-12-22",
-      "source": "Achats",
-      "who": "",
-      "noted": null,
-      "open": {
-        "record": {
-          "type": "purchase",
-          "id": "r000005"
-        }
       }
     },
     {
@@ -161,18 +162,23 @@
       "kind": "record",
       "part": "main",
       "path": "Fiches/Achats.md",
-      "title": "Tablette",
-      "line": "2026-07-25 · Tablette · Boutique en ligne · 329 € · bien durable · 2028-07-24 · Confirmation de commande",
+      "title": "Lave-linge",
+      "line": "2024-12-22 · Lave-linge · Électro Plus · 499 € · bien durable · 2026-12-22",
       "categories": [
         "money",
         "papers",
         "dates"
       ],
-      "space": "",
-      "date": "2028-07-24",
+      "space": "perso",
+      "date": "2026-12-22",
+      "yearly": null,
       "source": "Achats",
       "who": "",
       "noted": null,
+      "archived": false,
+      "label": null,
+      "answer": null,
+      "page": null,
       "open": {
         "record": {
           "type": "purchase",
@@ -185,18 +191,23 @@
       "kind": "record",
       "part": "main",
       "path": "Fiches/Achats.md",
-      "title": "Casque audio",
-      "line": "2024-09-13 · Casque audio · Grand magasin · 89 € · bien durable · 2026-09-13",
+      "title": "Tablette",
+      "line": "2026-07-25 · Tablette · Boutique en ligne · 329 € · bien durable · 2028-07-24",
       "categories": [
         "money",
         "papers",
         "dates"
       ],
-      "space": "",
-      "date": "2026-09-13",
+      "space": "perso",
+      "date": "2028-07-24",
+      "yearly": null,
       "source": "Achats",
       "who": "",
       "noted": null,
+      "archived": false,
+      "label": null,
+      "answer": null,
+      "page": null,
       "open": {
         "record": {
           "type": "purchase",
@@ -208,21 +219,27 @@
       "id": "record:r000008",
       "kind": "record",
       "part": "main",
-      "path": "Fiches/Contrats et assurances.md",
-      "title": "Assurance habitation",
-      "line": "Assurance habitation · Assureur Horizon · HAB-448120 · 2027-02-25 · Avis d’échéance",
+      "path": "Fiches/Achats.md",
+      "title": "Casque audio",
+      "line": "2024-09-13 · Casque audio · Grand magasin · 89 € · bien durable · 2026-09-13",
       "categories": [
+        "money",
         "papers",
         "dates"
       ],
-      "space": "",
-      "date": "2027-02-25",
-      "source": "Contrats et assurances",
+      "space": "perso",
+      "date": "2026-09-13",
+      "yearly": null,
+      "source": "Achats",
       "who": "",
       "noted": null,
+      "archived": false,
+      "label": null,
+      "answer": null,
+      "page": null,
       "open": {
         "record": {
-          "type": "contract",
+          "type": "purchase",
           "id": "r000008"
         }
       }
@@ -231,22 +248,55 @@
       "id": "record:r000009",
       "kind": "record",
       "part": "main",
-      "path": "Fiches/Papiers.md",
-      "title": "Passeport",
-      "line": "Passeport · 2028-01-16 · Photo du passeport",
+      "path": "Fiches/Contrats et assurances.md",
+      "title": "Assurance habitation",
+      "line": "Assurance habitation · Assureur Horizon · 2027-02-25",
       "categories": [
         "papers",
         "dates"
       ],
-      "space": "",
+      "space": "perso",
+      "date": "2027-02-25",
+      "yearly": null,
+      "source": "Contrats et assurances",
+      "who": "",
+      "noted": null,
+      "archived": false,
+      "label": null,
+      "answer": null,
+      "page": null,
+      "open": {
+        "record": {
+          "type": "contract",
+          "id": "r000009"
+        }
+      }
+    },
+    {
+      "id": "record:r00000a",
+      "kind": "record",
+      "part": "main",
+      "path": "Fiches/Papiers.md",
+      "title": "Passeport",
+      "line": "Passeport · 2028-01-16",
+      "categories": [
+        "papers",
+        "dates"
+      ],
+      "space": "perso",
       "date": "2028-01-16",
+      "yearly": null,
       "source": "Papiers",
       "who": "",
       "noted": null,
+      "archived": false,
+      "label": null,
+      "answer": null,
+      "page": null,
       "open": {
         "record": {
           "type": "paper",
-          "id": "r000009"
+          "id": "r00000a"
         }
       }
     }

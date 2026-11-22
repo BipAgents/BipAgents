@@ -152,65 +152,86 @@ fn title(lang: &str, id: &str) -> String {
     s(&titles(lang)[id])
 }
 
-/// The demo Carnet of `lang` as the bridge files it: its index (`IndexItem`s, the main part only).
+/// The demo Carnet of `lang` as the bridge files it: its index (`IndexItem`s, the main part only). The index never
+/// depends on the day it is made: no `dates` among the categories (the phone adds it: `dated`, `date`, `yearly`).
 fn demo_index(config: &crate::config::Config, lang: &str) -> Vec<Value> {
     let lang_store = super::language(config);
     let w = super::words(&lang_store);
     let marks = Dict::new();
     let mut items: Vec<Value> = Vec::new();
     let main = super::all_pages(config, Part::Main);
+    let without_dates = |cats: Vec<String>| -> Vec<String> { cats.into_iter().filter(|c| c != "dates").collect() };
     for (path, page) in &main {
         let kind = page.kind();
         if kind == "tasks" || kind == "records" || path == &w.inbox_path() {
             continue;
         }
         let filed = c::of_page(config, Part::Main, path, page).categories;
-        let pid = page.id();
-        let date = page.front.get("updated").map(s).filter(|d| !d.is_empty());
+        let key = c::page_key(page, path);
+        let page_id = format!("page:{key}");
+        let archived = w.archived(path);
         let title = if kind == "self" { super::words(lang).me.to_string() } else { page.title.clone() };
         let aliases = page.aliases();
         let summary = super::summary_of(&page.body, w.brief);
-        items.push(json!({"id": format!("page:{pid}"), "kind": "page", "part": "main", "path": path, "title": title,
-                          "line": crate::tools_knowledge::head(&summary, 240), "categories": filed, "space": "",
-                          "date": date, "source": title, "who": "", "noted": date, "open": {"path": path},
+        items.push(json!({"id": page_id, "kind": "page", "part": "main", "path": path, "title": title,
+                          "line": crate::tools_knowledge::head(&summary, 240), "categories": filed, "space": "perso",
+                          "date": null, "yearly": null, "source": title, "who": "", "noted": null, "archived": archived,
+                          "label": null, "answer": null, "page": null, "open": {"path": path},
                           "fold": fold(&format!("{title} {} {summary}", aliases.join(" "))), "aliases": aliases}));
-        for (section, facts) in page.sections() {
-            if fold(&section) == fold(w.brief) {
-                continue;
-            }
-            let id = super::template::resolve(&kind, &section);
+        let sections: Vec<(String, Vec<super::Fact>)> =
+            page.sections().into_iter().filter(|(name, _)| fold(name) != fold(w.brief)).collect();
+        let texts: Vec<String> = sections.iter().flat_map(|(_, f)| f.iter().map(|x| x.text.clone())).collect();
+        let ids = c::line_ids(&key, &texts);
+        let mut n = 0;
+        for (section, facts) in &sections {
+            let sid = super::template::resolve(&kind, section);
             for f in facts {
-                let cats = c::of_line(&filed, &pid, &f.text, &marks, today());
-                let date = c::date_of(&f.text, today()).filter(|d| c::in_window(*d, today())).map(|d| d.to_string());
-                items.push(json!({"id": c::line_key(&pid, &f.text), "kind": "line",
-                                  "part": "main", "path": path, "title": title, "line": crate::tools_knowledge::head(&f.text, 240),
-                                  "categories": cats, "space": "", "date": date, "source": section, "who": f.who,
-                                  "noted": if f.date.is_empty() { Value::Null } else { json!(f.date) },
-                                  "open": {"path": path, "section": id}, "fold": fold(&f.text)}));
+                // never a reference or a number, never an archived mail's link (as the offline copy: offline.rs)
+                if c::holds_reference(&f.text) || f.text.contains("[[archive:") {
+                    n += 1;
+                    continue;
+                }
+                let when = c::line_when(&f.text, &f.date, today());
+                let (date, yearly) = c::When::fields(when);
+                let (label, answer) = match super::lexicon::split_label(&f.text) {
+                    Some((l, a)) => (json!(l), json!(a)),
+                    None => (Value::Null, Value::Null),
+                };
+                items.push(json!({"id": ids[n], "kind": "line", "part": "main", "path": path, "title": title,
+                                  "line": crate::tools_knowledge::head(&f.text, 240),
+                                  "categories": without_dates(c::of_line(&filed, &key, &f.text, &f.date, &marks, today())),
+                                  "space": "perso", "date": date, "yearly": yearly, "source": section, "who": f.who,
+                                  "noted": if f.date.is_empty() { Value::Null } else { json!(f.date) }, "archived": archived,
+                                  "label": label, "answer": answer, "page": page_id,
+                                  "open": {"path": path, "section": sid}, "fold": fold(&f.text)}));
+                n += 1;
             }
         }
     }
     let tasks_title = w.tasks;
     for t in super::open_tasks(config, Part::Main) {
-        let cats = c::of_task(config, &t, &main, &marks, today());
+        let cats = without_dates(c::of_task(config, &t, &main, &marks, today()));
         let plain: String = t.title.split(" [[").next().unwrap_or(&t.title).to_string();
         items.push(json!({"id": format!("task:{}", t.id), "kind": "task", "part": "main", "path": w.tasks_path(),
-                          "title": plain, "line": plain, "categories": cats, "space": "",
-                          "date": if t.due.is_empty() { Value::Null } else { json!(t.due) }, "source": tasks_title,
-                          "who": t.who, "noted": today().to_string(), "open": {"task": t.id}, "fold": fold(&plain),
+                          "title": plain, "line": plain, "categories": cats, "space": "perso",
+                          "date": if t.due.is_empty() { Value::Null } else { json!(t.due) }, "yearly": null,
+                          "source": tasks_title, "who": t.who, "noted": today().to_string(), "archived": t.archived,
+                          "label": null, "answer": null, "page": null, "open": {"task": t.id}, "fold": fold(&plain),
                           "done": false}));
     }
     for t in &records::TYPES {
         for r in records::records(config, t) {
-            let (cats, _, dated) = c::of_record(t, &r, &marks, today());
+            let (cats, _, _) = c::of_record(t, &r, &marks, today());
             let name = records::summary_head(t, &r);
-            let next = records::next_date_on(t, &r, today()).map(|d| d.to_string());
+            let (date, yearly) = c::When::fields(c::record_when(t, &r));
             let id = crate::tools_knowledge::str_or_empty(r.get("id"));
+            let line = c::record_line(t, &r);
             items.push(json!({"id": format!("record:{id}"), "kind": "record", "part": "main",
-                              "path": records::path_of(&lang_store, t), "title": name,
-                              "line": records::summary_of(t, &r), "categories": c::with_dates(&cats, dated), "space": "",
-                              "date": next, "source": t.titles[super::lang_index(&lang_store)], "who": "", "noted": Value::Null,
-                              "open": {"record": {"type": t.id, "id": id}}, "fold": fold(&records::summary_of(t, &r))}));
+                              "path": records::path_of(&lang_store, t), "title": name, "line": line, "categories": cats,
+                              "space": "perso", "date": date, "yearly": yearly,
+                              "source": t.titles[super::lang_index(&lang_store)], "who": "", "noted": null,
+                              "archived": false, "label": null, "answer": null, "page": null,
+                              "open": {"record": {"type": t.id, "id": id}}, "fold": fold(&line)}));
         }
     }
     let demo = read("App/Resources/Demo/notebook-demo.json")[lang].clone();
@@ -220,13 +241,35 @@ fn demo_index(config: &crate::config::Config, lang: &str) -> Vec<Value> {
                           "linked": d["linked"].as_str().map(|p| json!({"path": p}))});
         let (cats, _, _) = c::of_document(config, &view, &main, &marks);
         let when = (today() - Duration::days(d["days_ago"].as_i64().unwrap_or(0))).to_string();
-        let file = s(&d["name"]);
-        items.push(json!({"id": format!("doc:{}/{file}", s(&d["agent"])), "kind": "document", "part": "main", "path": Value::Null,
-                          "title": file, "line": file, "categories": cats, "space": "", "date": when,
-                          "source": s(&d["agent"]), "who": s(&d["agent"]), "noted": when,
-                          "open": {"document": {"agent": d["agent"], "file": d["name"]}}, "fold": fold(&file)}));
+        let (agent, file) = (s(&d["agent"]), s(&d["name"]));
+        items.push(json!({"id": c::document_key(&agent, &file), "kind": "document", "part": "main", "path": null,
+                          "title": file, "line": file, "categories": cats, "space": "perso", "date": null, "yearly": null,
+                          "source": agent, "who": agent, "noted": when, "archived": false, "label": null, "answer": null,
+                          "page": null, "open": {"document": {"agent": agent, "file": file}}, "fold": fold(&file)}));
     }
     items
+}
+
+/// An index item as the bridge's live answers show it (the search, a category's page): `dates` among its categories
+/// on the day it is asked, no `fold`.
+fn live(index: &Value) -> Value {
+    let mut i = index.clone();
+    let when = match (i["date"].as_str(), i["yearly"].as_str()) {
+        (Some(d), _) => NaiveDate::parse_from_str(d, "%Y-%m-%d").ok().map(c::When::On),
+        (None, Some(md)) => md.split_once('-').and_then(|(m, d)| Some(c::When::Yearly(m.parse().ok()?, d.parse().ok()?))),
+        _ => None,
+    };
+    if when.is_some_and(|w| w.dated(today())) && !has(&i, "dates") {
+        let mut cats: Vec<String> = i["categories"].as_array().unwrap().iter().map(s).collect();
+        cats.push("dates".into());
+        i["categories"] = json!(cats);
+    }
+    if let Some(o) = i.as_object_mut() {
+        for k in ["fold", "aliases", "done"] {
+            o.remove(k);
+        }
+    }
+    i
 }
 
 /// The index's tables for the phone (drafts until S3: a few neighbours and date phrases a language).
@@ -253,16 +296,6 @@ fn tables(lang: &str) -> (Value, Value) {
     (neighbours, dates)
 }
 
-fn item_of(index: &Value) -> Value {
-    let mut i = index.clone();
-    if let Some(o) = i.as_object_mut() {
-        for k in ["fold", "aliases", "done"] {
-            o.remove(k);
-        }
-    }
-    i
-}
-
 fn first(v: &Value) -> String {
     v["categories"].as_array().and_then(|c| c.first()).map(s).unwrap_or_default()
 }
@@ -274,7 +307,7 @@ fn has(v: &Value, cat: &str) -> bool {
 fn kept(lang: &str, items: &[Value]) -> Vec<Value> {
     let (q, cat) = if lang == "fr" { ("à payer ce mois-ci", "money") } else { ("to pay this month", "money") };
     let count = items.iter().filter(|i| has(i, cat) && has(i, "dates")).count();
-    vec![json!({"id": "k1a2b3c", "q": q, "title": q, "count": count, "space": "", "category": cat})]
+    vec![json!({"id": "k1a2b3c", "q": q, "title": q, "count": count, "space": "perso", "category": cat})]
 }
 
 /// Every fake answer of `lang` (file name → answer), the categorize ones by the bridge itself.
@@ -283,26 +316,32 @@ fn fake_bridge(lang: &str) -> BTreeMap<String, Value> {
     let config = super::tests_config(dir.path());
     super::search_bench::write_demo_for(&config, lang, today());
     let items = demo_index(&config, lang);
+    // the live answers (search, sommaire, a category's page): Dates on the bridge's day
+    let shown: Vec<Value> = items.iter().map(live).collect();
     let (neighbours, dates) = tables(lang);
     let mut out = BTreeMap::new();
     let stop: Vec<&str> = super::lexicon::STOP.to_vec();
-    let kept_full = kept(lang, &items);
+    let kept_full = kept(lang, &shown);
     let kept_short: Vec<Value> = kept_full.iter().map(|k| json!({"id": k["id"], "q": k["q"], "title": k["title"]})).collect();
     out.insert("index.json".into(), json!({"v": 1, "version": 42, "since": null, "full": true, "lang": lang,
         "made": "2026-11-22T07:00:00Z", "limits": {"lines": 20000, "bytes": 8000000}, "truncated": false,
-        "online_only": null, "items": items, "removed": [], "stop": stop, "neighbours": neighbours, "dates": dates,
-        "kept": kept_short}));
+        "online_only": null, "dated": {"before": 90, "after": 730}, "items": items, "removed": [], "stop": stop,
+        "neighbours": neighbours, "dates": dates, "kept": kept_short}));
     let changed: Vec<Value> = items.iter().filter(|i| i["kind"] == "task").take(1).cloned().collect();
     let gone: Vec<Value> = items.iter().filter(|i| i["kind"] == "line").take(1).map(|i| i["id"].clone()).collect();
     out.insert("index-since.json".into(), json!({"v": 1, "version": 43, "since": 42, "full": false, "lang": lang,
         "made": "2026-11-22T07:05:00Z", "limits": {"lines": 20000, "bytes": 8000000}, "truncated": false,
-        "online_only": null, "items": changed, "removed": gone, "stop": stop, "neighbours": neighbours, "dates": dates,
-        "kept": kept_short}));
+        "online_only": null, "dated": {"before": 90, "after": 730}, "items": changed, "removed": gone, "stop": stop,
+        "neighbours": neighbours, "dates": dates, "kept": kept_short}));
     // « aniv » typed (« bday »): what it finds once the phone's corrector reads « anniv… » (« birthday »), grouped by
     // their first category
     let wanted: &[&str] = if lang == "fr" { &["aniv", "anniv"] } else { &["bday", "birthday"] };
-    let hits: Vec<&Value> =
-        items.iter().filter(|i| s(&i["fold"]).split(' ').any(|w| wanted.iter().any(|q| w.starts_with(q)))).collect();
+    let hits: Vec<Value> = items
+        .iter()
+        .filter(|i| s(&i["fold"]).split(' ').any(|w| wanted.iter().any(|q| w.starts_with(q))))
+        .map(live)
+        .collect();
+    // a result listed once, under its first category; counted in each of its categories (the chips filter on any)
     let mut groups: Vec<(String, Vec<&Value>)> = Vec::new();
     for h in &hits {
         let cat = first(h);
@@ -313,16 +352,19 @@ fn fake_bridge(lang: &str) -> BTreeMap<String, Value> {
     }
     let mut counts = serde_json::Map::new();
     counts.insert("all".into(), json!(hits.len()));
-    for (g, list) in &groups {
-        counts.insert(g.clone(), json!(list.len()));
+    for id in c::PERSONAL {
+        let n = hits.iter().filter(|h| has(h, id)).count();
+        if n > 0 {
+            counts.insert(id.to_string(), json!(n));
+        }
     }
     out.insert("search-aniv.json".into(), json!({
         "groups": groups.iter().map(|(g, list)| json!({"category": g, "title": title(lang, g), "count": list.len(),
-            "top": list.iter().take(2).map(|i| item_of(i)).collect::<Vec<_>>()})).collect::<Vec<_>>(),
+            "top": list.iter().take(2).map(|i| live(i)).collect::<Vec<_>>()})).collect::<Vec<_>>(),
         "counts": counts, "online": null}));
     // the sommaire: each category's count and grey words (its latest titles), Santé locked, « Autres » when not empty
     let line = |id: &str, space: Option<&str>| -> Option<Value> {
-        let mine: Vec<&Value> = items
+        let mine: Vec<&Value> = shown
             .iter()
             .filter(|i| has(i, id) && space.is_none_or(|sp| i["space"] == sp))
             .collect();
@@ -340,7 +382,7 @@ fn fake_bridge(lang: &str) -> BTreeMap<String, Value> {
             }
         }
         Some(json!({"id": id, "title": title(lang, id), "count": mine.len(), "hint": names.join(", "), "locked": false,
-                    "first": item_of(mine[0])}))
+                    "first": live(mine[0])}))
     };
     let spaces = |on: bool, selected: &str| -> Value {
         let ids: &[&str] = if on { &["perso", "pro", "family"] } else { &["all", "family"] };
@@ -360,7 +402,7 @@ fn fake_bridge(lang: &str) -> BTreeMap<String, Value> {
         "kept": kept_full, "card": null, "total": {"count": items.len(), "title": all_notes}, "categories": lines,
         "bar": {"placeholder": bar}, "version": 42}));
     // « Séparer Perso, Pro et Famille » on, the Pro tab: the pages of `space: pro` (S5; here the work area's)
-    let pro_items: Vec<Value> = items
+    let pro_items: Vec<Value> = shown
         .iter()
         .map(|i| {
             let mut i = i.clone();
@@ -384,7 +426,7 @@ fn fake_bridge(lang: &str) -> BTreeMap<String, Value> {
                 a
             });
             Some(json!({"id": id, "title": title(lang, id), "count": mine.len(), "hint": hint.join(", "), "locked": false,
-                        "first": item_of(mine[0])}))
+                        "first": live(mine[0])}))
         })
         .collect();
     let pro_total = pro_items.iter().filter(|i| i["space"] == "pro").count();
@@ -392,14 +434,14 @@ fn fake_bridge(lang: &str) -> BTreeMap<String, Value> {
         "kept": [], "card": null, "total": {"count": pro_total, "title": all_notes}, "categories": pro_lines,
         "bar": {"placeholder": bar}, "version": 42}));
     // a category's page: Papiers, its sub-filters by the records' types and the documents' names
-    let papers: Vec<&Value> = items.iter().filter(|i| has(i, "papers")).collect();
+    let papers: Vec<&Value> = shown.iter().filter(|i| has(i, "papers")).collect();
     let count = |f: &dyn Fn(&Value) -> bool| papers.iter().filter(|i| f(i)).count();
     let filters = vec![
         json!({"id": "invoices", "title": title(lang, "invoices"), "count": count(&|i: &Value| fold(&s(&i["line"])).contains("factur") || fold(&s(&i["line"])).contains("invoice") || fold(&s(&i["line"])).contains("devis") || fold(&s(&i["line"])).contains("quote"))}),
         json!({"id": "contracts", "title": title(lang, "contracts"), "count": count(&|i: &Value| i["open"]["record"]["type"] == "contract")}),
         json!({"id": "warranties", "title": title(lang, "warranties"), "count": count(&|i: &Value| i["open"]["record"]["type"] == "purchase")}),
     ];
-    let mut recent: Vec<Value> = papers.iter().map(|i| item_of(i)).collect();
+    let mut recent: Vec<Value> = papers.iter().map(|i| live(i)).collect();
     recent.sort_by_key(|i| std::cmp::Reverse(s(&i["noted"])));
     recent.truncate(10);
     let searched = if lang == "fr" { "garantie lave-linge" } else { "washing machine warranty" };
@@ -434,29 +476,39 @@ fn fake_bridge(lang: &str) -> BTreeMap<String, Value> {
     for list in family["lists"].as_array().into_iter().flatten() {
         for it in list["items"].as_array().into_iter().flatten() {
             let id = format!("fam:list:{}/{}", s(&list["id"]), s(&it["id"]));
-            let cats = reference.get(&id).map(|r| r["categories"].clone()).unwrap_or(json!(["other"]));
-            let date = it["due_in"].as_i64().map(|d| (today() + Duration::days(d)).to_string());
+            let cats = family_cats(reference.get(&id));
+            let day = it["due_in"].as_i64().map(|d| today() + Duration::days(d));
+            // a birthday (`born`): yearly; a list's other dates, days
+            let (date, yearly) = match (day, it["born"].is_number()) {
+                (Some(d), true) => (Value::Null, json!(d.format("%m-%d").to_string())),
+                (Some(d), false) => (json!(d.to_string()), Value::Null),
+                _ => (Value::Null, Value::Null),
+            };
             fam.push(json!({"id": id, "kind": "list_item", "title": s(&list["title"]), "line": s(&it["text"]), "categories": cats,
-                            "date": date, "who": s(&it["by"]), "noted": Value::Null,
+                            "date": date, "yearly": yearly, "who": s(&it["by"]), "noted": Value::Null,
                             "open": {"list": s(&list["id"]), "item": s(&it["id"])}, "fold": fold(&s(&it["text"])),
                             "done": it["done"].as_bool().unwrap_or(false)}));
         }
     }
     for p in family["pages"].as_array().into_iter().flatten() {
         let id = format!("fam:page:{}", s(&p["id"]));
-        let cats = reference.get(&id).map(|r| r["categories"].clone()).unwrap_or(json!(["other"]));
+        let cats = family_cats(reference.get(&id));
         fam.push(json!({"id": id, "kind": "page", "title": s(&p["title"]), "line": crate::tools_knowledge::head(&s(&p["text"]), 240),
-                        "categories": cats, "date": Value::Null, "who": s(&p["by"]), "noted": Value::Null,
+                        "categories": cats, "date": Value::Null, "yearly": Value::Null, "who": s(&p["by"]), "noted": Value::Null,
                         "open": {"path": s(&p["id"])}, "fold": fold(&format!("{} {}", s(&p["title"]), s(&p["text"])))}));
     }
     let fam_kept = if lang == "fr" { "courses" } else { "shopping" };
     out.insert("family-index.json".into(), json!({"v": 1, "version": 7, "since": null, "full": true, "lang": lang,
-        "made": "2026-11-22T07:00:00Z", "items": fam, "removed": [], "stop": stop, "neighbours": tables(lang).0,
+        "made": "2026-11-22T07:00:00Z", "dated": {"before": 90, "after": 730}, "items": fam, "removed": [], "stop": stop, "neighbours": tables(lang).0,
         "dates": tables(lang).1, "kept": [{"id": "k9f8e7d", "q": fam_kept, "title": fam_kept}]}));
     let fam_lines: Vec<Value> = c::FAMILY
         .iter()
         .filter_map(|id| {
-            let mine: Vec<&Value> = fam.iter().filter(|i| i["categories"].as_array().is_some_and(|c| c.iter().any(|x| x == id))).collect();
+            let dated = |i: &Value| i["yearly"].is_string() || i["date"].as_str().and_then(|d| NaiveDate::parse_from_str(d, "%Y-%m-%d").ok()).is_some_and(|d| c::in_window(d, today()));
+            let mine: Vec<&Value> = fam
+                .iter()
+                .filter(|i| i["categories"].as_array().is_some_and(|c| c.iter().any(|x| x == id)) || (*id == "dates" && dated(i)))
+                .collect();
             if mine.is_empty() {
                 return None;
             }
@@ -467,10 +519,19 @@ fn fake_bridge(lang: &str) -> BTreeMap<String, Value> {
     let shopping = fam.iter().filter(|i| i["categories"].as_array().is_some_and(|c| c.iter().any(|x| x == "shopping"))).count();
     out.insert("family-summary.json".into(), json!({"v": 1, "lang": lang, "title": carnet,
         "with": if lang == "fr" { "Avec Marie, Léa et Tom" } else { "With Marie, Léa and Tom" },
-        "kept": [{"id": "k9f8e7d", "q": fam_kept, "title": fam_kept, "count": shopping, "space": ""}],
+        "kept": [{"id": "k9f8e7d", "q": fam_kept, "title": fam_kept, "count": shopping, "space": null}],
         "total": {"count": fam.len(), "title": all_notes}, "categories": fam_lines,
         "bar": {"placeholder": if lang == "fr" { "Cherche pour la famille" } else { "Search for the family" }}, "version": 7}));
     out
+}
+
+/// A family note's categories from the bench's reference (until S6 files them), `dates` left to the phone.
+fn family_cats(reference: Option<&Value>) -> Value {
+    let cats: Vec<String> = reference
+        .and_then(|r| r["categories"].as_array())
+        .map(|c| c.iter().map(s).filter(|c| c != "dates").collect())
+        .unwrap_or_default();
+    if cats.is_empty() { json!(["other"]) } else { json!(cats) }
 }
 
 /// Ids made at random (pages, tasks, records, undo) replaced by stable ones, in order of appearance.
@@ -480,7 +541,8 @@ fn steady(files: &BTreeMap<String, Value>) -> BTreeMap<String, String> {
         (regex::Regex::new(r"\bt[0-9a-f]{6,16}\b").unwrap(), "t"),
         (regex::Regex::new(r"\br[0-9a-f]{6}\b").unwrap(), "r"),
         (regex::Regex::new(r"\bu[0-9a-f]{12}\b").unwrap(), "u"),
-        (regex::Regex::new(r"line:[^:]+:[0-9a-f]{10}").unwrap(), "line"),
+        (regex::Regex::new(r#"(line:[^:"]+:)[0-9a-f]{10}"#).unwrap(), "line"),
+        (regex::Regex::new(r"doc:([a-z]+):[0-9a-f]{12}").unwrap(), "doc"),
     ];
     let mut seen: BTreeMap<String, String> = BTreeMap::new();
     let mut out = BTreeMap::new();
@@ -496,7 +558,8 @@ fn steady(files: &BTreeMap<String, Value>) -> BTreeMap<String, String> {
                             "t" => format!("t{n:06x}"),
                             "r" => format!("r{n:06x}"),
                             "u" => format!("u{n:012x}"),
-                            _ => format!("line:p{n:010x}:{n:010x}"),
+                            "doc" => format!("doc:{}:{n:012x}", &m[1]),
+                            _ => format!("{}{n:010x}", &m[1]),
                         })
                         .clone()
                 })

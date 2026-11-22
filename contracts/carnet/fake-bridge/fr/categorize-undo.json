@@ -1,7 +1,8 @@
 {
   "target": {
     "path": "Sujets/Rénovation cuisine.md",
-    "private": false
+    "private": false,
+    "item": "page:p0000000001"
   },
   "categories": [
     "home"

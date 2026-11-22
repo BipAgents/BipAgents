@@ -2053,7 +2053,7 @@ fn note_locked_with(
     }
     page.body = body;
     // its categories, by its words, when it has none yet (categories.rs: no model, no token)
-    categories::on_write(config, part, &path, &mut page, who);
+    categories::on_write(config, part, &path, &mut page, who, created);
     page.touch();
     let text = page.render();
     let summary = if converted && added.is_empty() {
@@ -2063,7 +2063,8 @@ fn note_locked_with(
     } else if summary_changed {
         format!("{} : {}", w.brief, tk::head(&summary_of(&page.body, w.brief), 200))
     } else if chosen && !aliases_changed {
-        format!("categories: {}", categories::stored(&page).map(|(c, _)| c.join(", ")).unwrap_or_default())
+        // a change of categories says nothing in a page's history (the apps show no empty summary: never ids)
+        String::new()
     } else {
         "aliases".to_string()
     };
@@ -2285,7 +2286,7 @@ pub fn new_page(config: &Config, part: Part, kind: &str, title: &str, who: &Who)
             return Ok(Err(path));
         }
         let mut page = Page::new("self", w.me);
-        categories::on_write(config, part, &path, &mut page, who);
+        categories::on_write(config, part, &path, &mut page, who, true);
         page.touch();
         commit(config, part, &path, None, Some(&page.render()), who, "create", "")?;
         return Ok(Ok(path));
@@ -2304,7 +2305,7 @@ pub fn new_page(config: &Config, part: Part, kind: &str, title: &str, who: &Who)
     if kind == "trip" {
         trip::make_trip(&mut page, &lang);
     }
-    categories::on_write(config, part, &path, &mut page, who);
+    categories::on_write(config, part, &path, &mut page, who, true);
     page.touch();
     commit(config, part, &path, None, Some(&page.render()), who, "create", "")?;
     Ok(Ok(path))

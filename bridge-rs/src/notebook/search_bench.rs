@@ -500,7 +500,7 @@ fn bridge_categories(config: &Config, cat: &Catalogue, lang: &str, today: NaiveD
     for (id, path, _) in &cat.facts {
         let page = filed.get(path).cloned().unwrap_or_default();
         let text = cat.texts.get(id).cloned().unwrap_or_default();
-        out.insert(id.clone(), c::with_dates(&page, c::dated(&text, today)));
+        out.insert(id.clone(), c::with_dates(&page, c::dated(&text, None, today)));
     }
     let tasks = super::tasks(config, Part::Main);
     for (id, title) in &cat.tasks {

@@ -1,0 +1,12 @@
+{
+  "sorted": {
+    "title": "Your Notebook is sorted into categories",
+    "text": "1 note in Other",
+    "other": 1,
+    "see": "See",
+    "ok": "OK",
+    "open": {
+      "category": "other"
+    }
+  }
+}

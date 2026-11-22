@@ -1,0 +1,25 @@
+{
+  "items": [
+    {
+      "undo": "u000000000002",
+      "target": {
+        "path": "Subjects/Kitchen renovation.md",
+        "private": false,
+        "item": "page:p0000000001"
+      },
+      "title": "Kitchen renovation",
+      "categories": [
+        "money"
+      ],
+      "before": {
+        "categories": [
+          "home"
+        ],
+        "categories_by": "auto"
+      },
+      "at": "2026-11-22T10:00:00+01:00",
+      "text": "Filed in Money."
+    }
+  ],
+  "undo_title": "Undo"
+}
