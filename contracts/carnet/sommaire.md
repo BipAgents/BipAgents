@@ -16,13 +16,15 @@ bridge, the iPhone and Android: what is written here is what each side tests aga
 2. **Nothing moves.** Categories are a label on the pages (their frontmatter), never a folder: no file changes
    place. A page's text gains `categories:` and `categories_by:` (and `space: pro` with S5) in its frontmatter,
    readable in Obsidian; the 1.0 apps do not read it.
-3. **Santé stays locked.** `health` is the private part (`Part::Health`, Domaines › Santé there): its lines are never
+3. **No HTTP cache.** Every Carnet answer carries `Cache-Control: no-store` (today's routes too: the 1.0 apps'
+   URLCache keeps no readable copy).
+4. **Santé stays locked.** `health` is the private part (`Part::Health`, Domaines › Santé there): its lines are never
    in the phone's copy (`index`), never in a summary count (the line shows `count: null`, `locked: true`), reached
    only through `?private=1` behind the app's lock. Lines of the shared Carnet that look like health (« allergique
    aux noix », « dentiste mardi », `lexicon::is_health`) stay in their own category and in the copy (Alex's decision
    6, 21/11).
-4. **The person wins.** `categories_by: person` is never changed by the bridge, an agent or the nightly pass.
-5. **No model, no tokens at write time.** The bridge files by words (§2). The agents may say a category
+5. **The person wins.** `categories_by: person` is never changed by the bridge, an agent or the nightly pass.
+6. **No model, no tokens at write time.** The bridge files by words (§2). The agents may say a category
    (`notebook_write.category`, short, optional); the nightly model only for what stays in « Autres » (S2, §2b).
 
 ## 1. Categories
@@ -129,7 +131,7 @@ in `routes[].errors`; S1's codes have no text yet: the apps show their own until
 | S2 | `GET /v1/notebook` `sorted` | the card « Ton Carnet est rangé par catégories » (`SortedCard`), or null |
 | S2 | `POST /v1/notebook/sorted` | `{action: ok\|see}` → `{card: null}`; the card is not shown again |
 | S1 | MCP `notebook_write.category` | 1–2 of `agent_may_give`, only when the agent is sure |
-| S3 | `GET /v1/notebook/index?since=` | the phone's search copy (`Index`): ETag `"v<version>"`, 304 when unchanged; `since` = the version the phone has → only `items` changed and `removed` ids (`full: false`), else everything (`full: true`). Never Santé, never ID numbers, mails' archives or online files' content; 20 000 lines / 8 MB at most (`truncated`, the oldest archived lines out first) |
+| S3 | `GET /v1/notebook/index?since=&epoch=` | the phone's search copy (`Index`): ETag `"<epoch>-v<version>"`, 304 when unchanged; `since`/`epoch` = what the phone has → only `items` changed and `removed` ids (`full: false`), the tables whole; another epoch, a `since` above the version or unknown → everything (`full: true`). Never Santé, never ID numbers or references, mails' archives or online files' content; 20 000 lines / 8 MB of JSON as sent at most, default keys left out (`truncated`; out first: archived lines oldest first, archived pages, then the other lines oldest first). Dates and feasts as rules: the copy never changes with the day (`sommaire.json` `dates`, `feasts`, `index`) |
 | S3 | `GET /v1/notebook/search` | today's answer plus `groups` (by category, in the order of their best result; `count`, the two best `top`), `counts` (`all` and per category: the chips), `online` (connected drives the person allowed, online only) |
 | S4 | `GET /v1/notebook/summary?space=` | the sommaire ready to show (`Summary`): selector, kept searches with their count, total, categories with count and grey hint, the moment's card, Santé locked |
 | S4 | `GET /v1/notebook/category/{id}?space=&filter=` | a category's page (`CategoryPage`): sub-filters with counts, « Cherché ici » (3), the most recent; `category/health?private=1`: Santé's, behind the lock, never in the index |

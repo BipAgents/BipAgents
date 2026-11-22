@@ -227,30 +227,64 @@ fn matches(text: &str, rules: &[Rule]) -> Vec<(Vec<String>, f64, String)> {
             padded = padded.replace(&p, " ");
         }
     }
-    for (cats, stems) in lexicon::CATEGORY_WORDS {
-        for stem in stems.iter().filter(|s| s.contains(' ')) {
-            let body = stem.trim_end_matches('=');
-            let p = format!(" {body} ");
-            if padded.contains(&p) {
-                out.push((strings(cats), 1.0, body.to_string()));
-                padded = padded.replace(&p, " ");
-            }
+    for (padded_phrase, phrase, i) in PHRASES.iter() {
+        if padded.contains(padded_phrase.as_str()) {
+            out.push((strings(lexicon::CATEGORY_WORDS[*i].0), 1.0, phrase.to_string()));
+            padded = padded.replace(padded_phrase.as_str(), " ");
         }
     }
+    // folded text is ASCII (`fold`): two bytes are two letters
     for word in padded.split_whitespace() {
-        let key: String = word.chars().take(2).collect();
-        let best = STEMS
-            .get(&key)
+        let key = word.get(..2).unwrap_or(word);
+        // (where the stem ends in the word, its length, its entry): a stem at the word's start, or the head of a
+        // compound (« Mietvertrag », « Stromrechnung », « huurcontract »: a stem of 5 letters or more after 3 or more):
+        // the one ending last wins (a compound's last part says what it is), then the longest
+        let prefix = STEMS
+            .get(key)
             .into_iter()
             .flatten()
             .filter(|(body, exact, _)| if *exact { word == *body } else { word.starts_with(body) })
-            .max_by_key(|(body, _, i)| (body.len(), std::cmp::Reverse(*i)));
+            .map(|(body, _, i)| (body.len(), body.len(), *i));
+        let heads = (3..word.len().saturating_sub(4)).filter(|at| word.is_char_boundary(*at)).flat_map(|at| {
+            let rest = &word[at..];
+            COMPOUND_HEADS
+                .get(rest.get(..2).unwrap_or(rest))
+                .into_iter()
+                .flatten()
+                .filter(move |(body, _)| rest.starts_with(body))
+                .map(move |(body, i)| (at + body.len(), body.len(), *i))
+        });
+        let best = prefix.chain(heads).max_by_key(|(end, len, i)| (*end, *len, std::cmp::Reverse(*i)));
         if let Some((_, _, i)) = best {
-            out.push((strings(lexicon::CATEGORY_WORDS[*i].0), 1.0, word.to_string()));
+            out.push((strings(lexicon::CATEGORY_WORDS[i].0), 1.0, word.to_string()));
         }
     }
     out
 }
+
+/// The table's phrases (« entretien annuel »), padded (« ␣entretien annuel␣ »), with their entry.
+static PHRASES: LazyLock<Vec<(String, &'static str, usize)>> = LazyLock::new(|| {
+    let mut out = Vec::new();
+    for (i, (_, stems)) in lexicon::CATEGORY_WORDS.iter().enumerate() {
+        for stem in stems.iter().filter(|s| s.contains(' ')) {
+            let body = stem.trim_end_matches('=');
+            out.push((format!(" {body} "), body, i));
+        }
+    }
+    out
+});
+
+/// The table's stems of 5 letters or more (not whole words only), by their first two letters: what a compound may end
+/// with.
+static COMPOUND_HEADS: LazyLock<HashMap<String, Vec<(&'static str, usize)>>> = LazyLock::new(|| {
+    let mut out: HashMap<String, Vec<(&'static str, usize)>> = HashMap::new();
+    for (i, (_, stems)) in lexicon::CATEGORY_WORDS.iter().enumerate() {
+        for stem in stems.iter().filter(|s| !s.contains(' ') && !s.ends_with('=') && s.len() >= 5) {
+            out.entry(stem.chars().take(2).collect()).or_default().push((*stem, i));
+        }
+    }
+    out
+});
 
 /// The points of each category, and the word that gave each its most.
 #[derive(Default)]
@@ -366,17 +400,29 @@ fn colleague(page: &Page, lang: &str) -> bool {
     COLLEAGUE.iter().any(|w| padded.contains(&format!(" {w} ")))
 }
 
-/// What deciding reads from the state, read once for many pages (S2's pass over a whole Carnet): the Carnet's
-/// language and the person's rules.
-#[derive(Debug, Clone)]
-pub struct Ctx {
-    pub lang: String,
-    pub rules: Vec<Rule>,
+/// What filing reads once a request, the first time a page needs it: the Carnet's language and the person's rules
+/// (state.json). A page whose categories are written needs neither (Review 1, R1: /pages, /tasks and /search read
+/// them once, not twice a page).
+pub struct Ctx<'a> {
+    pub config: &'a Config,
+    read: std::cell::OnceCell<(String, Vec<Rule>)>,
 }
 
-impl Ctx {
-    pub fn of(config: &Config) -> Ctx {
-        Ctx { lang: super::language(config), rules: rules(config) }
+impl<'a> Ctx<'a> {
+    pub fn new(config: &'a Config) -> Self {
+        Ctx { config, read: std::cell::OnceCell::new() }
+    }
+
+    fn read(&self) -> &(String, Vec<Rule>) {
+        self.read.get_or_init(|| (super::language(self.config), rules(self.config)))
+    }
+
+    pub fn lang(&self) -> &str {
+        &self.read().0
+    }
+
+    fn rules(&self) -> &[Rule] {
+        &self.read().1
     }
 }
 
@@ -385,18 +431,15 @@ impl Ctx {
 /// relation; trips; records pages by type; the tasks page and the inbox « Autres »; a page a work agent (`writer`)
 /// makes, Travail; the others by their words (the person's rules first).
 pub fn decide(config: &Config, part: Part, path: &str, page: &Page, writer: Option<&str>) -> (Vec<String>, Option<String>) {
-    if part == Part::Health {
-        return (vec!["health".into()], None);
-    }
-    decide_in(config, &Ctx::of(config), part, path, page, writer)
+    decide_in(&Ctx::new(config), part, path, page, writer)
 }
 
-/// [`decide`] with the language and the rules already read.
-pub fn decide_in(config: &Config, ctx: &Ctx, part: Part, path: &str, page: &Page, writer: Option<&str>) -> (Vec<String>, Option<String>) {
+pub fn decide_in(ctx: &Ctx, part: Part, path: &str, page: &Page, writer: Option<&str>) -> (Vec<String>, Option<String>) {
     if part == Part::Health {
         return (vec!["health".into()], None);
     }
-    let lang = ctx.lang.clone();
+    let config = ctx.config;
+    let lang = ctx.lang().to_string();
     let w = super::words(&lang);
     let kind = page.kind();
     let fixed = |list: &[&str]| (strings(list), None);
@@ -422,7 +465,7 @@ pub fn decide_in(config: &Config, ctx: &Ctx, part: Part, path: &str, page: &Page
     if work_agent {
         return fixed(&["work"]);
     }
-    by_words(page, &lang, &ctx.rules)
+    by_words(page, &lang, ctx.rules())
 }
 
 /// A page's categories as the apps show them.
@@ -442,12 +485,16 @@ impl Filed {
 
 /// A page's categories: those written on it, else the bridge's now.
 pub fn of_page(config: &Config, part: Part, path: &str, page: &Page) -> Filed {
+    of_page_in(&Ctx::new(config), part, path, page)
+}
+
+pub fn of_page_in(ctx: &Ctx, part: Part, path: &str, page: &Page) -> Filed {
     if part == Part::Health {
         return Filed { categories: vec!["health".into()], by: "auto".into(), stored: false };
     }
     match stored(page) {
         Some((categories, by)) => Filed { categories, by, stored: true },
-        None => Filed { categories: decide(config, part, path, page, None).0, by: "auto".into(), stored: false },
+        None => Filed { categories: decide_in(ctx, part, path, page, None).0, by: "auto".into(), stored: false },
     }
 }
 
@@ -733,9 +780,9 @@ fn task_page<'a>(task: &Task, pages: &'a [(String, Page)]) -> Option<&'a (String
 
 /// A task's categories: its page's (none: « Autres »), the person's own choice first, `dates` when it is due within
 /// the window.
-pub fn of_task(config: &Config, task: &Task, pages: &[(String, Page)], marks: &Dict, today: NaiveDate) -> Vec<String> {
+pub fn of_task(ctx: &Ctx, task: &Task, pages: &[(String, Page)], marks: &Dict, today: NaiveDate) -> Vec<String> {
     let cats = marked(marks, &task_key(&task.id)).unwrap_or_else(|| match task_page(task, pages) {
-        Some((path, page)) => of_page(config, task.part, path, page).categories,
+        Some((path, page)) => of_page_in(ctx, task.part, path, page).categories,
         None if task.part == Part::Health => vec!["health".into()],
         None => vec!["other".into()],
     });
@@ -745,7 +792,7 @@ pub fn of_task(config: &Config, task: &Task, pages: &[(String, Page)], marks: &D
 
 /// A document's categories (GET /v1/notebook/documents' item), by whom, and the word of its name that decided: the
 /// person's choice; the page it is linked to or named on; its name's words; else Papiers (Alex's decision 4).
-pub fn of_document(config: &Config, doc: &Value, pages: &[(String, Page)], marks: &Dict) -> (Vec<String>, String, Option<String>) {
+pub fn of_document(ctx: &Ctx, doc: &Value, pages: &[(String, Page)], marks: &Dict) -> (Vec<String>, String, Option<String>) {
     let key = document_key(&tk::str_or_empty(doc.get("agent")), &tk::str_or_empty(doc.get("file")));
     if let Some(cats) = marked(marks, &key) {
         return (cats, "person".into(), None);
@@ -757,13 +804,13 @@ pub fn of_document(config: &Config, doc: &Value, pages: &[(String, Page)], marks
     for path in linked.into_iter().chain(named) {
         if let Some((path, page)) = pages.iter().find(|(p, _)| *p == path) {
             let part = if health { Part::Health } else { Part::Main };
-            return (of_page(config, part, path, page).categories, "auto".into(), None);
+            return (of_page_in(ctx, part, path, page).categories, "auto".into(), None);
         }
     }
     let name = tk::str_or_empty(doc.get("name"));
     let stem = std::path::Path::new(&name).file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or(name);
     let named = Page::new("subject", &stem);
-    match by_words(&named, &super::language(config), &rules(config)) {
+    match by_words(&named, ctx.lang(), ctx.rules()) {
         (cats, word) if cats != ["other"] => (cats, "auto".into(), word),
         _ => (vec!["papers".into()], "auto".into(), None),
     }
@@ -786,6 +833,10 @@ pub fn line_when(text: &str, noted: &str, today: NaiveDate) -> Option<When> {
 
 /// The documents' list with each one's categories (`categories`, `categories_by`), for the apps.
 pub fn with_documents(config: &Config, documents: Vec<Value>, part: Part) -> Vec<Value> {
+    if documents.is_empty() {
+        return documents;
+    }
+    let ctx = Ctx::new(config);
     let pages = super::all_pages(config, part);
     let marks = marks(config);
     documents
@@ -794,7 +845,7 @@ pub fn with_documents(config: &Config, documents: Vec<Value>, part: Part) -> Vec
             let (cats, by, _) = if part == Part::Health {
                 (vec!["health".to_string()], "auto".to_string(), None)
             } else {
-                of_document(config, &d, &pages, &marks)
+                of_document(&ctx, &d, &pages, &marks)
             };
             if let Some(o) = d.as_object_mut() {
                 o.insert("categories".into(), json!(cats));
@@ -806,9 +857,9 @@ pub fn with_documents(config: &Config, documents: Vec<Value>, part: Part) -> Vec
 }
 
 /// A task's view with its categories.
-pub fn task_view(config: &Config, task: &Task, pages: &[(String, Page)], marks: &Dict, today: NaiveDate) -> Value {
+pub fn task_view(ctx: &Ctx, task: &Task, pages: &[(String, Page)], marks: &Dict, today: NaiveDate) -> Value {
     let mut v = task.view();
-    v["categories"] = json!(of_task(config, task, pages, marks, today));
+    v["categories"] = json!(of_task(ctx, task, pages, marks, today));
     v
 }
 
@@ -980,7 +1031,7 @@ pub fn categorize(config: &Config, target: &Target, given: &[String], who: &Who)
                 return Ok(Err(Refused::NotFound));
             };
             let pages = super::all_pages(config, Part::Main);
-            let (c, by, word) = of_document(config, doc, &pages, &marks);
+            let (c, by, word) = of_document(&Ctx::new(config), doc, &pages, &marks);
             let word = word.filter(|_| c != cats && by == "auto");
             let key = document_key(agent, file);
             (Filed { categories: c, stored: by == "person", by }, key.clone(), word, key)
@@ -990,7 +1041,7 @@ pub fn categorize(config: &Config, target: &Target, given: &[String], who: &Who)
                 return Ok(Err(Refused::NotFound));
             };
             let pages = super::all_pages(config, Part::Main);
-            let c: Vec<String> = of_task(config, &task, &pages, &marks, today).into_iter().filter(|c| c != "dates").collect();
+            let c: Vec<String> = of_task(&Ctx::new(config), &task, &pages, &marks, today).into_iter().filter(|c| c != "dates").collect();
             let by = if marked(&marks, &task_key(id)).is_some() { marked_by(&marks, &task_key(id)) } else { "auto" };
             (Filed { categories: c, stored: by == "person", by: by.into() }, task_key(id), None, task_key(id))
         }
@@ -1219,6 +1270,41 @@ mod tests {
             assert_eq!(got, want, "{lang} {title}");
         }
     }
+
+    /// Review 1 (R6): 50 page titles a language that are not the demo's (contracts/carnet/category-titles.json, written
+    /// before measuring, never tuned on): the bridge's first category is the one meant.
+    #[test]
+    fn titles_outside_the_demo() {
+        let file = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../contracts/carnet/category-titles.json");
+        let cases: Value = serde_json::from_str(&std::fs::read_to_string(file).unwrap()).unwrap();
+        let mut report = Vec::new();
+        for (lang, list) in cases["cases"].as_object().unwrap() {
+            let dir = tempfile::tempdir().unwrap();
+            let config = config_in(&dir, lang);
+            let (mut first, mut among, mut misses) = (0, 0, Vec::new());
+            let list = list.as_array().unwrap();
+            for case in list {
+                let (title, want) = (case["title"].as_str().unwrap(), case["category"].as_str().unwrap());
+                let got = decided(&config, &page_in(lang, "subject", title, "", ""));
+                first += usize::from(got[0] == want);
+                among += usize::from(got.iter().any(|c| c == want));
+                if got[0] != want {
+                    misses.push(format!("{title} → {}", got.join("+")));
+                }
+            }
+            let n = list.len() as f64;
+            report.push((lang.clone(), first as f64 / n, among as f64 / n, misses));
+        }
+        for (lang, first, among, misses) in &report {
+            eprintln!("TITLES {lang}: first {:.0} %, among {:.0} %, misses {misses:?}", 100.0 * first, 100.0 * among);
+        }
+        for (lang, first, _, _) in &report {
+            assert!(*first >= FLOOR, "{lang}: {:.0} % (floor {:.0} %)", 100.0 * first, 100.0 * FLOOR);
+        }
+    }
+
+    /// The floor the held-out titles may not go below (measured on 22/11: see the status).
+    const FLOOR: f64 = 0.75;
 
     #[test]
     fn other_words_and_nothing() {
@@ -1530,15 +1616,15 @@ mod tests {
         let linked = add_task(&config, Part::Main, "Réserver les vols", &day(4), "Voyage Japon", "asked", "", &agent).unwrap().task;
         let alone = add_task(&config, Part::Main, "Trier les photos", "", "", "asked", "", &agent).unwrap().task;
         let pages = all_pages(&config, Part::Main);
-        assert_eq!(of_task(&config, &linked, &pages, &none, today), ["trips", "dates"]);
-        assert_eq!(of_task(&config, &alone, &pages, &none, today), ["other"]);
+        assert_eq!(of_task(&Ctx::new(&config), &linked, &pages, &none, today), ["trips", "dates"]);
+        assert_eq!(of_task(&Ctx::new(&config), &alone, &pages, &none, today), ["other"]);
         // documents: their page's, else their name's words, else Papiers
         let doc = |name: &str, subject: Option<&str>| json!({"agent": "home", "file": name, "name": name,
             "subjects": subject.map(|p| vec![json!({"path": p})]).unwrap_or_default()});
-        assert_eq!(of_document(&config, &doc("Programme.pptx", Some("Sujets/Voyage Japon.md")), &pages, &none).0, ["trips"]);
-        assert_eq!(of_document(&config, &doc("Facture EDF.pdf", None), &pages, &none),
+        assert_eq!(of_document(&Ctx::new(&config), &doc("Programme.pptx", Some("Sujets/Voyage Japon.md")), &pages, &none).0, ["trips"]);
+        assert_eq!(of_document(&Ctx::new(&config), &doc("Facture EDF.pdf", None), &pages, &none),
                    (vec!["papers".into(), "money".into()], "auto".into(), Some("facture".into())));
-        assert_eq!(of_document(&config, &doc("IMG_2041.jpg", None), &pages, &none).0, ["papers"]);
+        assert_eq!(of_document(&Ctx::new(&config), &doc("IMG_2041.jpg", None), &pages, &none).0, ["papers"]);
         // lines: their page's, Dates when they carry a date
         assert_eq!(of_line(&["people".to_string()], "p1", "Anniversaire : 14 mars — *Léa, 2026-10-01*", "", &none, today), ["people", "dates"]);
         // the person files them elsewhere: kept in the state, undone as well
@@ -1548,7 +1634,7 @@ mod tests {
         assert_eq!(done["learnt"], Value::Null);
         assert_eq!(of_record(purchase, &with, &marks(&config), today).0, ["home"]);
         let t = categorize(&config, &Target::Task(alone.id.clone()), &give("home"), &you).unwrap().unwrap();
-        assert_eq!(of_task(&config, &alone, &pages, &marks(&config), today), ["home"]);
+        assert_eq!(of_task(&Ctx::new(&config), &alone, &pages, &marks(&config), today), ["home"]);
         let japan = all_pages(&config, Part::Main).into_iter().find(|(_, p)| p.title == "Voyage Japon").unwrap();
         let line = Target::Line { path: japan.0.clone(), text: "Réserver les vols".into() };
         categorize(&config, &line, &give("money"), &you).unwrap().unwrap();
@@ -1558,7 +1644,7 @@ mod tests {
         assert_eq!(categorize(&config, &Target::Record { kind: "purchase".into(), id: "r000000".into() }, &give("home"), &you).unwrap(),
                    Err(Refused::NotFound));
         undo(&config, t["undo"].as_str().unwrap(), &you).unwrap().unwrap();
-        assert_eq!(of_task(&config, &alone, &pages, &marks(&config), today), ["other"]);
+        assert_eq!(of_task(&Ctx::new(&config), &alone, &pages, &marks(&config), today), ["other"]);
         undo(&config, done["undo"].as_str().unwrap(), &you).unwrap().unwrap();
         assert_eq!(of_record(purchase, &with, &marks(&config), today).0, ["money", "papers"]);
         // the pages of the records keep their type's categories

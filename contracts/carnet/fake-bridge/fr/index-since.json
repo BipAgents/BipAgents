@@ -1,5 +1,6 @@
 {
   "v": 1,
+  "epoch": "e7k2m9",
   "version": 43,
   "since": 42,
   "full": false,
@@ -19,28 +20,20 @@
     {
       "id": "task:t00000e",
       "kind": "task",
-      "part": "main",
       "path": "Tâches/Tâches.md",
       "title": "Rappeler Marc pour le devis",
       "line": "Rappeler Marc pour le devis",
       "categories": [
         "home"
       ],
-      "space": "perso",
       "date": "2026-11-24",
-      "yearly": null,
       "source": "Tâches",
       "who": "Daily",
       "noted": "2026-11-22",
-      "archived": false,
-      "label": null,
-      "answer": null,
-      "page": null,
       "open": {
         "task": "t00000e"
       },
-      "fold": "rappeler marc pour le devis",
-      "done": false
+      "fold": "rappeler marc pour le devis"
     }
   ],
   "removed": [
@@ -205,9 +198,39 @@
       }
     ],
     "feasts": {
-      "christmas_eve": "2026-12-24",
-      "christmas": "2026-12-25",
-      "easter": "2027-03-28"
+      "christmas_eve": {
+        "month": 12,
+        "day": 24
+      },
+      "christmas": {
+        "month": 12,
+        "day": 25
+      },
+      "new_year": {
+        "month": 1,
+        "day": 1
+      },
+      "easter": {
+        "easter": 0
+      },
+      "ascension": {
+        "easter": 39
+      },
+      "pentecost": {
+        "easter": 49
+      }
+    },
+    "easter": {
+      "2026": "2026-04-05",
+      "2027": "2027-03-28",
+      "2028": "2028-04-16",
+      "2029": "2029-04-01",
+      "2030": "2030-04-21",
+      "2031": "2031-04-13",
+      "2032": "2032-03-28",
+      "2033": "2033-04-17",
+      "2034": "2034-04-09",
+      "2035": "2035-03-25"
     }
   },
   "kept": [

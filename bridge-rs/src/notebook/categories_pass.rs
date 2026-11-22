@@ -242,7 +242,7 @@ fn sort_page(
         _ => {}
     }
     let writer = maker_of(config, path, makers, work);
-    let (cats, _) = c::decide_in(config, ctx, Part::Main, path, &page, writer.as_deref());
+    let (cats, _) = c::decide_in(ctx, Part::Main, path, &page, writer.as_deref());
     if header(&page) == Header::Auto && now == Some((cats.clone(), "auto".into())) {
         return Ok(Some(false));
     }
@@ -285,7 +285,7 @@ pub(crate) fn sort_with(config: &Config, version: i64, stop_after: Option<usize>
         }
         let _guard = super::lock();
         let held = Instant::now();
-        let ctx = Ctx::of(config);
+        let ctx = Ctx::new(config);
         for path in batch {
             match sort_page(config, &ctx, w, path, full, &who, &makers, &mut work)? {
                 Some(true) => out.filed += 1,
@@ -334,8 +334,8 @@ fn card_texts(lang: &str) -> (&'static str, &'static str, &'static str, &'static
 /// The notes in « Autres » (pages, their lines, tasks, records, documents: how the sommaire counts; `pages`: the
 /// shared part's).
 pub fn other_count(config: &Config, pages: &[(String, Page)]) -> usize {
-    let ctx = Ctx::of(config);
-    let w = super::words(&ctx.lang);
+    let ctx = Ctx::new(config);
+    let w = super::words(ctx.lang());
     let marks = c::marks(config);
     let today = chrono::Local::now().date_naive();
     let other = |cats: &[String]| cats.iter().any(|c| c == "other");
@@ -344,7 +344,7 @@ pub fn other_count(config: &Config, pages: &[(String, Page)]) -> usize {
         if structural(page, path, w) || page.kind() == "records" {
             continue;
         }
-        let filed = c::stored(page).map(|(cats, _)| cats).unwrap_or_else(|| c::decide_in(config, &ctx, Part::Main, path, page, None).0);
+        let filed = c::stored(page).map(|(cats, _)| cats).unwrap_or_else(|| c::decide_in(&ctx, Part::Main, path, page, None).0);
         if other(&filed) {
             n += 1;
         }
@@ -356,7 +356,7 @@ pub fn other_count(config: &Config, pages: &[(String, Page)]) -> usize {
             n += facts.iter().filter(|f| other(&c::of_line(&filed, &key, &f.text, &f.date, &marks, today))).count();
         }
     }
-    n += super::open_tasks(config, Part::Main).iter().filter(|t| other(&c::of_task(config, t, pages, &marks, today))).count();
+    n += super::open_tasks(config, Part::Main).iter().filter(|t| other(&c::of_task(&ctx, t, pages, &marks, today))).count();
     for t in &records::TYPES {
         n += records::records(config, t).iter().filter(|r| other(&c::of_record(t, r, &marks, today).0)).count();
     }
@@ -1020,70 +1020,92 @@ mod tests {
         assert!(next < Duration::from_secs(60), "{next:?}");
     }
 
-    /// Out of the demo (S1 review R6; contracts/carnet/categories-out-of-demo.json): a Carnet of 50 pages a language
-    /// the demo never had, as an older bridge left them, sorted by the pass (only their headers change), and the
-    /// measure: where the bridge files each against where a person would look (printed with `--nocapture`). The
-    /// floors are the table's of today: a change that files fewer of them right fails.
+    /// Out of the demo (S1 review R6): Carnets of page titles the demo never had, as an older bridge left them, sorted
+    /// by the pass (only their headers change), and the measure — where the bridge files each against where a person
+    /// would look (printed with `--nocapture`). Two held-out sets, both written before measuring: S1's
+    /// (contracts/carnet/category-titles.json) and S2's (categories-out-of-demo.json, with the review's traps). The
+    /// floors are today's table's: a change that files fewer of them where a person looks, or more of them in a wrong
+    /// category (neither that one nor « Autres »), fails.
     #[test]
     fn the_pass_over_pages_from_outside_the_demo() {
-        let file = Path::new(env!("CARGO_MANIFEST_DIR")).join("../contracts/carnet/categories-out-of-demo.json");
-        let set: Value = serde_json::from_str(&std::fs::read_to_string(file).unwrap()).unwrap();
         let mut lines = Vec::new();
-        let (mut all_first, mut all_exact, mut all_wrong) = (0, 0, 0);
-        for lang in ["fr", "en", "de", "es", "nl"] {
-            let dir = tempfile::tempdir().unwrap();
-            // a Dutch person's Carnet is in English words (the bridge has no Dutch folders)
-            let config = config_in(&dir, if lang == "nl" { "en" } else { lang });
-            let root = part_root(&config, Part::Main);
-            let w = crate::notebook::words(&crate::notebook::language(&config));
-            let cases = set["cases"][lang].as_array().unwrap();
-            let path_of = |title: &str| format!("{}/{}.md", w.subjects, crate::notebook::file_name(title));
-            for case in cases {
-                let title = case["title"].as_str().unwrap();
-                write_file(&root.join(path_of(title)), &format!("---\ntype: subject\naliases: []\n---\n# {title}\n")).unwrap();
-            }
-            let before = files_in(&root);
-            assert_eq!(before.len(), 50, "{lang}: two titles share a file");
-            let sorted = sort(&config).unwrap();
-            assert_eq!((sorted.filed, sorted.skipped), (50, 0), "{lang}");
-            for (path, text) in files_in(&root) {
-                assert_eq!(without_header(&text), before[&path], "{lang} {path}");
-            }
-            let (mut first, mut exact, mut wrong, mut misses) = (0, 0, 0, Vec::new());
-            for case in cases {
-                let title = case["title"].as_str().unwrap();
-                let want = crate::notebook::strings(case.get("want"));
-                let (got, by) = stored_of(&config, &path_of(title)).unwrap();
-                assert_eq!(by, "auto");
-                if got.contains(&want[0]) {
-                    first += 1;
-                } else {
+        for (file, floor, ceiling) in OUT_OF_DEMO {
+            let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../contracts/carnet").join(file);
+            let set: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+            let (mut all_where, mut all_wrong, mut all_n) = (0, 0, 0);
+            for lang in ["fr", "en", "de", "es", "nl"] {
+                let dir = tempfile::tempdir().unwrap();
+                // a Dutch person's Carnet is in English words (the bridge has no Dutch folders)
+                let config = config_in(&dir, if lang == "nl" { "en" } else { lang });
+                let root = part_root(&config, Part::Main);
+                let w = crate::notebook::words(&crate::notebook::language(&config));
+                let cases = set["cases"][lang].as_array().unwrap();
+                let path_of = |title: &str| format!("{}/{}.md", w.subjects, crate::notebook::file_name(title));
+                for case in cases {
+                    let title = case["title"].as_str().unwrap();
+                    write_file(&root.join(path_of(title)), &format!("---\ntype: subject\naliases: []\n---\n# {title}\n")).unwrap();
+                }
+                let before = files_in(&root);
+                assert_eq!(before.len(), cases.len(), "{file} {lang}: two titles share a file");
+                let sorted = sort(&config).unwrap();
+                assert_eq!((sorted.filed, sorted.skipped), (cases.len(), 0), "{file} {lang}");
+                for (path, text) in files_in(&root) {
+                    assert_eq!(without_header(&text), before[&path], "{file} {lang} {path}");
+                }
+                let (mut at, mut wrong, mut misses) = (0, 0, Vec::new());
+                for case in cases {
+                    let title = case["title"].as_str().unwrap();
+                    // S2's set: `want` (where a person looks first, maybe a second); S1's: `category`
+                    let want = match case.get("want") {
+                        Some(w) => crate::notebook::strings(Some(w)),
+                        None => vec![case["category"].as_str().unwrap().to_string()],
+                    };
+                    let (got, by) = stored_of(&config, &path_of(title)).unwrap();
+                    assert_eq!(by, "auto");
+                    if got.contains(&want[0]) {
+                        at += 1;
+                        continue;
+                    }
                     // in « Autres » it waits for the night's model; elsewhere it is filed wrong
                     if got != ["other"] {
                         wrong += 1;
                     }
                     misses.push(format!("{title} → {} (want {})", got.join("+"), want.join("+")));
                 }
-                if got.iter().all(|g| want.contains(g)) && got.contains(&want[0]) {
-                    exact += 1;
-                }
+                (all_where, all_wrong, all_n) = (all_where + at, all_wrong + wrong, all_n + cases.len());
+                lines.push(format!("{file} {lang}: {at}/{}, {wrong} filed wrong; missed: {}", cases.len(), misses.join(" · ")));
             }
-            all_first += first;
-            all_exact += exact;
-            all_wrong += wrong;
-            lines.push(format!("{lang}: {first}/50 where a person looks, {exact}/50 nothing else, {wrong} elsewhere than « Autres »; missed: {}",
-                               misses.join(" · ")));
+            lines.push(format!("{file}: {all_where}/{all_n} where a person looks, {all_wrong} filed wrong"));
+            assert!(all_where >= floor && all_wrong <= ceiling, "{}", lines.join("\n"));
         }
-        eprintln!("S2 out of the demo:\n{}\nall: {all_first}/250, {all_exact}/250, {all_wrong} filed wrong", lines.join("\n"));
-        assert!(all_first >= OUT_OF_DEMO_FLOOR, "{all_first}/250 < {OUT_OF_DEMO_FLOOR}");
-        assert!(all_wrong <= OUT_OF_DEMO_WRONG, "{all_wrong} filed wrong > {OUT_OF_DEMO_WRONG}");
+        eprintln!("S2 out of the demo:\n{}", lines.join("\n"));
     }
 
-    /// Out of the demo, the pages filed where a person would look (of 250), and those filed in a wrong category
-    /// (neither where a person looks nor « Autres »): today's table's measure (22/11: fr 45, en 39, es 38, nl 31, de
-    /// 29; the misses mostly German and Dutch compounds and words the table lacks, in « Autres »).
-    const OUT_OF_DEMO_FLOOR: usize = 182;
-    const OUT_OF_DEMO_WRONG: usize = 16;
+    /// The held-out sets, the pages filed where a person looks at least, and in a wrong category at most (of 250 each):
+    /// today's table's measure (22/11, with S1's compound words: S1's set 214 and 4, S2's 197 and 14).
+    const OUT_OF_DEMO: [(&str, usize, usize); 2] = [("category-titles.json", 214, 4), ("categories-out-of-demo.json", 197, 14)];
+
+    /// A page written by hand (no history) stays the person's once the pass wrote its header: the next nights neither
+    /// fold it into its group (groups.rs, a light person page) nor take it out when it is empty (archive.rs).
+    #[test]
+    fn a_page_written_by_hand_stays_the_persons_after_its_header() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = config_in(&dir, "fr");
+        let root = part_root(&config, Part::Main);
+        write_file(&root.join("Personnes/Léa.md"),
+                   "---\ntype: person\naliases: []\n---\n# Léa\n\n## Dates\n- Anniversaire : 12 mars — *Wellness, 2026-10-01*\n").unwrap();
+        write_file(&root.join("Sujets/Idées.md"), "---\ntype: subject\naliases: []\n---\n# Idées\n").unwrap();
+        assert_eq!(sort(&config).unwrap().filed, 2);
+        let sorted = files_in(&root);
+        let today = chrono::Local::now().date_naive();
+        crate::notebook::archive::run(&config, today).unwrap();
+        assert_eq!(files_in(&root), sorted);
+        // the rule itself unchanged: the same light page an agent wrote goes to its group
+        note(&config, Part::Main, "person", "Paul", "dates", &strings(&["Anniversaire : 3 mai"]), &[], "", "", &Who::agent(&config, "home")).unwrap();
+        assert!(root.join("Personnes/Paul.md").exists());
+        crate::notebook::archive::run(&config, today).unwrap();
+        assert!(!root.join("Personnes/Paul.md").exists() && root.join("Personnes/Léa.md").exists() && root.join("Sujets/Idées.md").exists());
+    }
 
     #[test]
     fn the_card_once_with_what_is_in_other() {

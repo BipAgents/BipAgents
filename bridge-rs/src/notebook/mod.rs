@@ -1494,6 +1494,18 @@ pub fn history(config: &Config, part: Option<Part>, path: Option<&str>, limit: u
     out
 }
 
+/// Whether the person wrote the page last, or wrote it by hand outside the Carnet's history (Obsidian): its newest
+/// change that is not housekeeping — a page's categories (categories.rs `ACTION`: the person's « Ranger ailleurs »,
+/// an agent's category alone, the nightly pass's headers, S2) — is the person's, or there is none. The nightly pass
+/// leaves such a page as it is (groups.rs folding a light person page, archive.rs an empty page): S2 writing a
+/// header line on a page written by hand must not make it the bridge's.
+pub fn written_by_person(config: &Config, path: &str) -> bool {
+    history(config, Some(Part::Main), Some(path), 20)
+        .into_iter()
+        .find(|e| e.get("action").and_then(Value::as_str) != Some(categories::ACTION))
+        .is_none_or(|e| tk::str_or_empty(e.get("by")) == "you")
+}
+
 /// « Nouveau » (the home's recent changes, and its full list): the newest changes of pages that still exist, where
 /// they are now. A deleted page (its « create » line stays in the log) or a page moved away is left out, and so are the
 /// deletions themselves (2026-11-02: a deleted page was still listed as « Written by you · 5 min ago »).
