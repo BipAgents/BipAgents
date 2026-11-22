@@ -6,16 +6,16 @@ English · [Français](acceptable-use.fr.md) · [Deutsch](acceptable-use.de.md) 
 
 ## 1. What it is for
 
-With the all-included offer, your agents run on your place, an account on a server that Kerfy Studio rents from a
+With the all-included offer, your agents run on your server, an account on a machine that Kerfy Studio rents from a
 hosting partner (OVHcloud, Hetzner) and often shares with other people. Kerfy Studio must follow these hosting
-providers' rules: abuse coming from one place can get the whole server cut off, and with it the other people's places.
+providers' rules: abuse coming from one server can get the whole machine cut off, and with it the other people's servers.
 This policy says what is forbidden, how to report abuse and what Kerfy Studio does. It is part of the
 [terms of the offer](offer.en.md) and adds to the rules on use in the [terms of use](terms.en.md) (section 10), which
 apply to the whole app.
 
 ## 2. What is forbidden
 
-You agree not to use your place, your agents or your AI credit, nor let anyone do so, for:
+You agree not to use your server, your agents or your AI credit, nor let anyone do so, for:
 
 - **illegal use**: anything French law or the law of your country forbids, or helping anyone do it;
 - **spam and mass mailing**: unsolicited emails or messages, bulk sending, bought mailing lists, open mail relays;
@@ -25,15 +25,15 @@ You agree not to use your place, your agents or your AI credit, nor let anyone d
 - **piracy**: downloading or sharing films, series, music, books or software you have no right to, or installing a
   BitTorrent client to do so. The offer's servers refuse known piracy sites and BitTorrent trackers and limit what each
   agent downloads per day;
-- **cryptocurrency mining**, or any use designed to hog the server's processor, memory, disk or network;
+- **cryptocurrency mining**, or any use designed to hog the machine's processor, memory, disk or network;
 - **content illegal towards minors**: any child sexual abuse material or sexual content involving a minor, and any
   pornographic or violent content made accessible to a minor (articles 227-23 and 227-24 of the French Criminal Code);
 - **getting around protections**: CAPTCHAs, rate limits, access controls or other protections of a website or a
   service, including through your agents;
-- **reselling your place**: renting it out, reselling it or offering it as a service to others, the place or your AI
+- **reselling your server**: renting it out, reselling it or offering it as a service to others, the server or your AI
   credit (each person in a Duo or Family plan has their own);
-- **breaking out of your place**: trying to access other people's places, to obtain administrator rights or to get
-  around the separation between the server's accounts.
+- **breaking out of your server**: trying to access other people's servers, to obtain administrator rights or to get
+  around the separation between the machine's accounts.
 
 When your agents browse or use an online service, they must **respect that website's or service's terms of use** and
 the rights of others: you are answerable for it.
@@ -45,7 +45,7 @@ one else's private data without their consent, no impersonation (terms of use, s
 
 ## 3. Your responsibility
 
-You are answerable for what you do and what your agents do from your place, with your approval or because your
+You are answerable for what you do and what your agents do from your server, with your approval or because your
 configuration allows it, including through SSH access. What your agents read (web pages, emails, files) may contain
 hidden instructions meant to hijack them: keep approvals on and give each agent only the access it needs (terms of
 use, section 9).
@@ -74,20 +74,20 @@ sent and how long it is kept: [privacy policy](privacy.en.md), section 4.2; see 
 
 ## 5. What Kerfy Studio does
 
-- **Kerfy Studio does not read the places.** To handle a report, it uses what the report contains and the technical
-  data it already has (which server and which place, at what time), never the content of the place.
+- **Kerfy Studio does not read the servers.** To handle a report, it uses what the report contains and the technical
+  data it already has (which machine and which server, at what time), never the content of the server.
 - **Quick suspension**: on a hosting provider's report, on a legal request or in front of serious abuse in progress (an
-  attack, spam being sent), Kerfy Studio may **at once cut the place's AI key and suspend the place**, before any
-  exchange, to stop the abuse and protect the other people on the server. This decision is made by a person.
+  attack, spam being sent), Kerfy Studio may **at once cut the server's AI key and suspend the server**, before any
+  exchange, to stop the abuse and protect the other people on the machine. This decision is made by a person.
 - **Reasons**: Kerfy Studio tells you without delay what was done, why (the facts, the rule at stake) and how to
   contest it, unless the law or an authority forbids it (article 17 of Regulation (EU) 2022/2065).
 - **Contesting**: reply to that message or write to abuse@bipagents.com. A person reviews the decision. If the abuse
-  came from a hijacked agent or stolen access, we help you put your place back in order; if the suspension was not
-  justified, your place is restored as soon as possible.
+  came from a hijacked agent or stolen access, we help you put your server back in order; if the suspension was not
+  justified, your server is restored as soon as possible.
 - **End of the subscription**: for a serious or repeated breach, Kerfy Studio may end the subscription, after giving
   you formal notice to stop, except in an emergency or for a particularly serious breach (terms of the offer,
   section 11).
-- **Reports made in the app**: Kerfy Studio can neither read nor delete content on a person's server or place. It can
+- **Reports made in the app**: Kerfy Studio can neither read nor delete content on a person's own server or on their server with the offer. It can
   answer you, tell the person who created the family agent, warn the person concerned and, for a serious breach, take
   the measures above, up to ending the subscription to the offer, with its reasons. The person who created a family
   agent can also remove a member.

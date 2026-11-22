@@ -37,7 +37,7 @@ Using BipAgents with your own computer or your own server stays free and is not 
 
 ## 2. Kerfy Studio, the stores and the website
 
-- **Kerfy Studio provides the service**: your place, your AI credit, the backups and support. Kerfy Studio, a French
+- **Kerfy Studio provides the service**: your server, your AI credit, the backups and support. Kerfy Studio, a French
   SAS with a share capital of [capital] €, registered office: [registered office address], registered with the RCS of
   [registry city] under number [SIREN], phone: [phone number]. Contact: **support@bipagents.com**. Abuse reports:
   **abuse@bipagents.com**.
@@ -55,9 +55,9 @@ Using BipAgents with your own computer or your own server stays free and is not 
 
 | Plan | People | Server | Price in the app (App Store, Google Play), VAT included | Price on the bipagents.com website, in euros, VAT included |
 |---|---|---|---|---|
-| Solo | 1 | a place on a server shared with other subscribers | €7.99 per month or €79.90 per year | €7.49 per month or €74.90 per year |
-| Duo | 2 | two places on one server, shared with other subscribers | €12.99 per month or €129.00 per year | €11.99 per month or €119.90 per year |
-| Family | up to 6 | a place for each person, on servers shared with other subscribers | €19.99 per month or €199.00 per year | €17.99 per month or €179.90 per year |
+| Solo | 1 | a server on a machine shared with other subscribers | €7.99 per month or €79.90 per year | €7.49 per month or €74.90 per year |
+| Duo | 2 | two servers on one machine, shared with other subscribers | €12.99 per month or €129.00 per year | €11.99 per month or €119.90 per year |
+| Family | up to 6 | a server for each person, on machines shared with other subscribers | €19.99 per month or €199.00 per year | €17.99 per month or €179.90 per year |
 
 **The yearly subscription** costs at most 10 months for 12 and is paid at once, in advance, for the 12 months. It
 renews every year at the same price, unless a price change is announced in advance (section 5), until you cancel it;
@@ -80,20 +80,20 @@ shows the price, the currency and the total you pay.
 
 For each person in the plan:
 
-- **Their place**: their own Linux account on a server that Kerfy Studio rents from a hosting partner, where their AI
+- **Their server**: their own Linux account on a machine that Kerfy Studio rents from a hosting partner, where their AI
   agents run. The agents are built on Hermes Agent, open-source software by Nous Research
   (https://github.com/NousResearch/hermes-agent); BipAgents is not published, endorsed or sponsored by Nous Research.
-- **The Bips' voices**, on their phone when it can, otherwise from their place.
+- **The Bips' voices**, on their phone when it can, otherwise from their server.
 - **An encrypted backup a few minutes after each activity, and at least once a day** (section 9).
-- **SSH access** to their place's account, from a computer whose key was added in the app (Settings › All-included plan
+- **SSH access** to their server's account, from a computer whose key was added in the app (Settings › All-included plan
   › SSH access), without administrator (root) rights.
 
 **The plan's AI credit**: €5.00 (Solo), €9.00 (Duo) or €16.00 (Family) of AI model use each month, shared by everyone
 in the plan, shown in the app as an estimated number of messages: about 7,000, 13,000 or 24,000 messages a month with
 the offer's model (section 6).
 
-**Where.** The servers are rented from OVHcloud first (data centres in the European Union), then from Hetzner (Germany
-or Finland), then from OVHcloud for smaller servers, depending on what is available. They are all in the European
+**Where.** The machines are rented from OVHcloud first (data centres in the European Union), then from Hetzner (Germany
+or Finland), then from OVHcloud for smaller machines, depending on what is available. They are all in the European
 Union, including for people who live outside the Union.
 
 **In which countries.** The offer is available when your store account is in the European Union, the United States, the
@@ -106,7 +106,7 @@ section 6); the services you connect to your agents and their own subscriptions.
 
 **Payments by your agents** (experimental during the beta, off by default): when Kerfy Studio has opened the feature,
 you can turn it on and give an agent a virtual card with a cap, never your main card. Its number stays on your phone; it
-is sent to your place only with each payment you approve, kept in memory while it is filled in, then erased ([privacy
+is sent to your server only with each payment you approve, kept in memory while it is filled in, then erased ([privacy
 policy](privacy.en.md), section 5.10).
 
 **Compatibility**: the app works on iPhone and iPad with iOS 18 or later, and on Android 10 or later.
@@ -118,7 +118,7 @@ policy](privacy.en.md), section 5.10).
   bipagents.com website. To check it, we use the email address given with the order, your BipAgents account, your
   customer identifier at our payment provider Stripe and a mark tied to your device (Apple's DeviceCheck on iPhone, a
   fingerprint of the device on Android), as explained in our [privacy policy](privacy.en.md) (section 5.3). Apple and
-  Google also apply their own rules: they grant only one trial offer per Apple or Google account. Beta places (beta
+  Google also apply their own rules: they grant only one trial offer per Apple or Google account. Beta servers (beta
   codes) don't count as a subscription.
 - A plan starts with **a free week** if your device and your store account never had one. Otherwise, the app offers you the same plan without a free week. Before the purchase, the app tells
   you whether the free week applies, when it ends and the price that follows it.
@@ -129,7 +129,7 @@ policy](privacy.en.md), section 5.10).
 - **At the end of the week, the paid subscription starts on its own**, unless you cancelled it before the end: in the
   store (on the App Store, at least 24 hours before the end, under Apple's terms) or, on the website, on Stripe's
   customer page (section 11). Nothing is charged if you stop before.
-- If you do not continue, your place is kept for 3 days, then erased with its backups.
+- If you do not continue, your server is kept for 3 days, then erased with its backups.
 - So that there is only one free week per device, the app uses Apple's DeviceCheck on iPhone and a fingerprint of the
   device on Android ([privacy policy](privacy.en.md), section 5.3).
 
@@ -153,7 +153,7 @@ policy](privacy.en.md), section 5.10).
   date, the deadline to stop it and how to do so. If we don't have your address, you only get Apple's or Google's
   reminders.
 - **Changing plan** (Settings › All-included plan › Change plan): to a bigger plan, at once, and the store takes into
-  account what is left of your month; to a smaller plan, at your renewal (the extra places: section 8). For a
+  account what is left of your month; to a smaller plan, at your renewal (the extra servers: section 8). For a
   subscription bought on the website, you change plan on Stripe's customer page (section 11).
 - **Price change**: a new price never applies to a period already paid. In the app, the store tells you at least 30 days
   in advance and, under its rules, asks for your agreement. On the website, Kerfy Studio only changes its prices for a
@@ -188,7 +188,7 @@ policy](privacy.en.md), section 5.10).
   month or as soon as the person who pays adds credit. What is used on the margin counts like the rest of the credit
   (it is taken from credit added); it is not carried over to the next month.
 - **Margin used too**: the agents of everyone in the plan no longer call the AI model until the next month or until
-  the person who pays adds credit. The places, the files and the backups go on; the app tells each person and offers
+  the person who pays adds credit. The servers, the files and the backups go on; the app tells each person and offers
   the packs.
 - **Limit per person** (Duo and Family): the person who pays can give each person a monthly limit (Settings ›
   All-included plan). Once their limit is reached, that person's agents no longer call the AI model until the next
@@ -206,14 +206,14 @@ policy](privacy.en.md), section 5.10).
 ## 7. Who can subscribe, and your account
 
 - **Subscribing**: you must be an adult, or have a parent's agreement (the store may ask for this agreement before the
-  purchase). Anyone who uses a place must be at least 16, as for the app; between 16 and 18, with a parent's agreement.
+  purchase). Anyone who uses a server must be at least 16, as for the app; between 16 and 18, with a parent's agreement.
   The all-included offer is not available to anyone under 16, even under supervision. A child under 16 may only use
   BipAgents on the computer or server of a parent or an adult in charge of the child, under the terms of use (section
   4).
-  **In the United States, nobody under 13 may use a place**, even supervised.
+  **In the United States, nobody under 13 may use a server**, even supervised.
 - **Your account**: you create it with "Sign in with Apple", with Google or with an email address (a one-time code sent to
   that address). It holds your identity (Apple or Google identifier, email address), the link with your subscription, the
-  list of your devices and your invitations. **It never holds the keys to your place**: they stay on your devices.
+  list of your devices and your invitations. **It never holds the keys to your server**: they stay on your devices.
 - **New device**: you sign in (Apple, Google or email) and enter the **one-time code sent to your email address**;
   if you added an **authenticator app**, its code is asked too. You can also approve it from a device you already
   have. Every new device is **reported** to your other devices and by email, with a link to remove it; every access is
@@ -221,26 +221,26 @@ policy](privacy.en.md), section 5.10).
 - **No access to your email any more**: you get your account back **at once** with your **recovery code** (optional,
   in Settings › Account), or after **24 hours**, your devices and your email address being told about it. This code
   also opens the copy of your backup key that Kerfy Studio keeps encrypted and cannot read without
-  it. **Keep it somewhere safe**: Kerfy Studio does not know it and cannot recover it. If your place is lost, with no device and
+  it. **Keep it somewhere safe**: Kerfy Studio does not know it and cannot recover it. If your server is lost, with no device and
   no recovery code, you can no longer open your backups.
 - You are responsible for the security of your devices, of your Apple, Google or email account, and of your recovery
   code.
 - **Deleting your account**: in the app, Settings › Account › Delete my account, or on the page
   https://guichet.bipagents.com/account/delete, with a code sent to your email address. Your account is erased
   **30 days** after your request. Until then, your agents are stopped, you can still get your data back and you can
-  change your mind (Settings › Account › Keep my account). After the 30 days, your place and its backups are erased,
+  change your mind (Settings › Account › Keep my account). After the 30 days, your server and its backups are erased,
   then your account (the [privacy policy](privacy.en.md) says what the law requires us to keep).
 - **Deleting your account does not cancel your subscription**: cancel it in the store, or on Stripe's customer page if
   you bought it on the website (section 11). On Google Play, Kerfy Studio also stops its renewal on the day of the
   erasure; the App Store does not allow this.
-- **If you share your plan**, the invited people are told by email: their places stop on the day your account is
-  erased. **If you are an invited person**, your place is erased at the end of the 30 days, and the person who pays
+- **If you share your plan**, the invited people are told by email: their servers stop on the day your account is
+  erased. **If you are an invited person**, your server is erased at the end of the 30 days, and the person who pays
   gets a new one, which they can offer to someone else.
 
 ## 8. Duo and Family: invited people
 
 - The person who subscribes invites the others by email, with a link that only works once. Each invited person creates
-  their own account and has **their own place** and their agents; the AI credit is the plan's, shared (section 6).
+  their own account and has **their own server** and their agents; the AI credit is the plan's, shared (section 6).
   **Neither the person who pays nor Kerfy Studio reads their agents or their conversations**, except what they choose
   to share: an agent they share read-only, what they write in a family agent (read by its members) and their calendar
   if they open it to a family agent.
@@ -249,51 +249,50 @@ policy](privacy.en.md), section 5.10).
   agents do.** Each invited person sees what is left of the credit for everyone, what they used and their limit if
   there is one, never what the others used.
 - The person who subscribes remains the only customer of the store (or of Kerfy Studio, on the website): they pay,
-  change plan or cancel. The invited people's places depend on their subscription: if it ends, they follow the same
+  change plan or cancel. The invited people's servers depend on their subscription: if it ends, they follow the same
   rules as theirs (section 11), and the app tells them. If the person who subscribes deletes their account, the invited
-  people's places stop 30 days later and they are told by email (section 7). Tell the people you invite.
-- **Moving to a smaller plan**: at your renewal, the extra places stop, then they are erased with their backups 30 days
+  people's servers stop 30 days later and they are told by email (section 7). Tell the people you invite.
+- **Moving to a smaller plan**: at your renewal, the extra servers stop, then they are erased with their backups 30 days
   later, unless you go back to the bigger plan before. The app shows which ones and on which date.
 - Each invited person accepts the app's terms of use and the acceptable use policy, and these terms for what concerns
   them (sections 6, 7, 9, 10 and 14).
 
-## 9. Your place, your data, your backups
+## 9. Your server, your data, your backups
 
-- **What is on your place belongs to you**: your agents, your conversations, your files, their memory. Kerfy Studio
+- **What is on your server belongs to you**: your agents, your conversations, your files, their memory. Kerfy Studio
   claims no right over them.
-- **Kerfy Studio does not access the content of the places.** Its software does not read it: the only orders a
-  server carries out are to reinstall a place, update it to a published version of BipAgents' open source code, or reopen it, and none of them reads its content. Access to Kerfy
-  Studio's accounts at the hosting providers is restricted to the company. The content of a place would only be
+- **Kerfy Studio does not access the content of the servers.** Its software does not read it: the only orders a machine carries out are to reinstall a server, update it to a published version of BipAgents' open source code, or reopen it, and none of them reads its content. Access to Kerfy
+  Studio's accounts at the hosting providers is restricted to the company. The content of a server would only be
   accessed to meet a legal obligation, and you would be told when the law allows it. Like any hosting provider,
-  OVHcloud and Hetzner have physical access to their servers.
-- **Backups**: your place backs itself up a few minutes after each activity, and at least once a day, encrypted on the place before it leaves, with a key
-  that stays on your place and on your devices (plus the encrypted copy that your recovery code opens, section 7).
-  Kerfy Studio keeps these backups on its backup server, unreadable without that key: those of the last 2 hours, then one per hour for 48 hours, one per day for 21 days, nothing older. When a beta place is freed ([beta terms](beta.en.md)), its server is reset and only the encrypted copy of its backups (21 days of history at most) is kept, then erased after 30 days. Settings ›
+  OVHcloud and Hetzner have physical access to their machines.
+- **Backups**: your server backs itself up a few minutes after each activity, and at least once a day, encrypted on the server before it leaves, with a key
+  that stays on your server and on your devices (plus the encrypted copy that your recovery code opens, section 7).
+  Kerfy Studio keeps these backups on its backup server, unreadable without that key: those of the last 2 hours, then one per hour for 48 hours, one per day for 21 days, nothing older. When a beta server is freed ([beta terms](beta.en.md)), it is reset and only the encrypted copy of its backups (21 days of history at most) is kept, then erased after 30 days. Settings ›
   All-included plan › Backups shows the latest one and starts one at once.
-- **OVHcloud's daily image**: on its servers, OVHcloud also makes, on its side, a daily image of the whole server,
-  which it keeps on its premises (one restore point per day, not encrypted by Kerfy Studio). When a place is
+- **OVHcloud's daily image**: on its machines, OVHcloud also makes, on its side, a daily image of the whole machine,
+  which it keeps on its premises (one restore point per day, not encrypted by Kerfy Studio). When a server is
   reinstalled for someone else, the image that held it is replaced within about a day.
-- **Outages**: if your place's server stays unreachable for about 40 minutes, your place is moved to another server,
+- **Outages**: if the machine of your server stays unreachable for about 40 minutes, your server is moved to another machine,
   sometimes at another hosting provider, and restored from its latest backup: **you lose at most about 20 minutes of
   activity**. The app tells you and completes the restore with the backup key on your phone: open it. When a whole hosting
   provider is down at once, Kerfy Studio may wait for it to come back rather than move everyone.
-- **Sleep**: a place with no request from the app for 14 days and no scheduled routine goes to sleep; it wakes up when
+- **Sleep**: a server with no request from the app for 14 days and no scheduled routine goes to sleep; it wakes up when
   you open the app, in a few moments. Nothing is lost.
-- **Updates**: Kerfy Studio updates the places' software (BipAgents, Hermes Agent) in waves, and can go back to the
+- **Updates**: Kerfy Studio updates the servers' software (BipAgents, Hermes Agent) in waves, and can go back to the
   previous version if a wave goes wrong. An update may replace changes you made, over SSH, to the files BipAgents
   installs.
-- **Technical monitoring**: the servers send Kerfy Studio technical data (memory, disk, load, whether each place's
+- **Technical monitoring**: the machines send Kerfy Studio technical data (memory, disk, load, whether each server's
   software runs and whether it is in the middle of a task, its version, the time of its latest backup, your time zone)
-  and, in a place's first days, a few usage measures ([privacy policy](privacy.en.md), sections 5.6 and 5.12), never
+  and, in a server's first days, a few usage measures ([privacy policy](privacy.en.md), sections 5.6 and 5.12), never
   any content.
 - Keep a copy of what matters to you: SSH access lets you get your files back at any time.
 
 ## 10. Acceptable use
 
-Your place is on a server rented by Kerfy Studio, often shared with other people, at hosting providers whose rules
+Your server is on a machine rented by Kerfy Studio, often shared with other people, at hosting providers whose rules
 Kerfy Studio must follow. The [acceptable use policy](acceptable-use.en.md) says what is forbidden (in particular
-illegal use, spam, attacks, cryptocurrency mining, reselling your place) and how to report abuse. On a hosting
-provider's report, a legal request or serious abuse, Kerfy Studio may cut a place's AI key and suspend it at once,
+illegal use, spam, attacks, cryptocurrency mining, reselling your server) and how to report abuse. On a hosting
+provider's report, a legal request or serious abuse, Kerfy Studio may cut a server's AI key and suspend it at once,
 under the conditions of that policy.
 
 ## 11. Cancellation, end and suspension
@@ -316,22 +315,22 @@ under the conditions of that policy.
   send you the reminder before the renewal (section 5), you can cancel at any time from the renewal on, and what you
   paid for the period after the cancellation is refunded within 30 days (article L215-1 of the French Consumer Code).
   For these refunds, write to support@bipagents.com.
-- **When the subscription ends** (cancelled or not renewed): your place is **suspended for 30 days**. Your agents no
+- **When the subscription ends** (cancelled or not renewed): your server is **suspended for 30 days**. Your agents no
   longer call the AI model, nothing is erased, you can still open your conversations and get your files back, and you
-  can come back by subscribing again. After 30 days, your place and its backups are erased. The AI credit you bought
+  can come back by subscribing again. After 30 days, your server and its backups are erased. The AI credit you bought
   and did not use is kept on your account (section 6).
 - **After a free week you did not continue**: 3 days instead of 30.
 - **Unpaid renewal on the website**: Stripe tries to charge your card again. Your agents go on for about 7 days, then
-  the AI stops and your place is suspended for 30 days, as for a store subscription that is not renewed; it is then
+  the AI stops and your server is suspended for 30 days, as for a store subscription that is not renewed; it is then
   erased if nothing has been paid.
-- **Refund by the store**: your place is suspended at once, then erased with its backups after 30 days.
+- **Refund by the store**: your server is suspended at once, then erased with its backups after 30 days.
 - **Reminders**: when you turn off the renewal, the app reminds you to use your remaining credit. If you have not
   opened the app for a month, your phone reminds you that the subscription goes on and where to manage it.
 - **Suspension by Kerfy Studio**: in case of a breach of the acceptable use policy, under the conditions it sets out
   (quick suspension, reasons, contesting). Kerfy Studio only ends your subscription after giving you formal notice to
   stop the breach, except in an emergency or for a serious breach (articles 1224 to 1226 of the French Civil Code).
 - **End of the offer**: if Kerfy Studio stops the all-included offer, you are told in the app at least 30 days in
-  advance; the subscription is no longer renewed, you keep your place until the end of the paid month and you can get
+  advance; the subscription is no longer renewed, you keep your server until the end of the paid month and you can get
   its content back over SSH; for a yearly subscription, the months paid and not used are refunded.
 
 ## 12. Right of withdrawal
@@ -350,10 +349,10 @@ credit you bought is refunded under the store's rules.
 L221-21 and D221-5 of the French Consumer Code). You immediately receive an acknowledgement of receipt by email, with
 the date and time of your decision.
 
-- **Google Play**: Kerfy Studio has Google refund the subscription in full, and your place stops at once.
+- **Google Play**: Kerfy Studio has Google refund the subscription in full, and your server stops at once.
 - **App Store**: Apple collected the price and only Apple can refund it. Apple's refund window opens in the app:
-  complete the request, or make it on reportaproblem.apple.com. Your place stops as soon as Apple has refunded you.
-- **During the free week**, nothing has been paid: your place stops at once. On iPhone, the app also opens your
+  complete the request, or make it on reportaproblem.apple.com. Your server stops as soon as Apple has refunded you.
+- **During the free week**, nothing has been paid: your server stops at once. On iPhone, the app also opens your
   subscriptions so that you turn off the renewal; otherwise Apple would charge the first month.
 - **bipagents.com website**: Kerfy Studio stops your subscription at Stripe and refunds all your payments in full at
   once; the money comes back to your payment method within 5 to 10 days. A full refund, for instance made by support,
@@ -361,7 +360,7 @@ the date and time of your decision.
 
 You can also withdraw from the contract with any clear statement: an email to support@bipagents.com or the form in
 the annex; or ask the store for the refund directly (App Store: your Apple account's purchase history; Google Play:
-the "Request a refund" page). In every case, your place is kept for 30 days so that you can get your data back, then
+the "Request a refund" page). In every case, your server is kept for 30 days so that you can get your data back, then
 it is erased with its backups (section 11).
 
 ## 13. Legal guarantee of conformity and updates
@@ -373,7 +372,7 @@ it is erased with its backups (section 11).
   sums due within 14 days (articles L224-25-17 to L224-25-23). Write to support@bipagents.com.
 - The agents' replies are produced by an AI model and can be wrong (terms of use, section 8): this is a characteristic
   of the service, described before the purchase.
-- **Updates**: Kerfy Studio keeps your place up to date (security, compatibility, fixes). It may also change the
+- **Updates**: Kerfy Studio keeps your server up to date (security, compatibility, fixes). It may also change the
   service beyond that, for valid reasons: security, changes in Hermes Agent, iOS or Android, the AI models available
   and their prices, server capacity. These changes cost you nothing more. When one of them changes the way you use the
   service, you are told in the app in advance, with its date; if it affects you more than minimally, you can cancel at
@@ -395,7 +394,7 @@ In particular, Kerfy Studio is not liable for:
   service;
 - a payment made by an agent with your card that you approved, nor a refusal by your bank to refund it, unless the
   payment results from a defect of the service (an amount, site or card different from what you approved);
-- what you do yourself on your place, in particular over SSH;
+- what you do yourself on your server, in particular over SSH;
 - a loss of access due to the loss of all your devices and of your recovery code;
 - the third-party services you connect to your agents (email, websites, online accounts).
 
@@ -435,7 +434,7 @@ your country's taxes, calculated by Stripe Tax, and you cancel on Stripe's custo
   the website, you get a reminder between 15 and 45 days before each renewal (about 35 days before), with the price, the
   date and how to cancel online; a price change is announced to you a second time between 7 and 30 days before it
   applies (section 5; California Business and Professions Code, sections 17600 and following).
-- **Age**: nobody under 13 may use a place (section 7).
+- **Age**: nobody under 13 may use a server (section 7).
 - **Liability**: to the extent the law of your state allows, Kerfy Studio's total liability to you is limited to the
   amount you paid for the offer during the 12 months before the event in question, and Kerfy Studio is not liable for
   indirect damage; for you, this rule replaces the sentence of section 14 saying that its liability is not capped.
@@ -487,7 +486,7 @@ your country's taxes, calculated by Stripe Tax, and you cancel on Stripe's custo
 - **Language**: these terms exist in French and English. In Quebec, the French version is given to you first; you can
   then choose to be bound by the English version (Charter of the French language, section 55).
 - **Age**: in Quebec, the data of a child under 14 is only collected with the consent of a parent or tutor: the adult
-  who sets up and supervises the child's place (section 7) gives it.
+  who sets up and supervises the child's server (section 7) gives it.
 - For your data, see the privacy policy (sections 1, 11, 13 and 15).
 
 **Everywhere**: if a person seems to be in danger, their agents give them their country's helpline number (988 in the
