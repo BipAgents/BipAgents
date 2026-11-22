@@ -4693,8 +4693,18 @@ mod tests {
     }
 
     /// The person's phones as reminders.json shows them, shared with Léa: an iPhone sharing its Reminders (`iphone`),
-    /// the Android app's last word (`android`: whether it may write to its calendar; None: no Android app).
+    /// the Android 1.1 app's last word (`android`: whether it may write to its calendar; it takes the Carnet's tasks;
+    /// None: no Android app).
     fn phones(config: &Config, iphone: bool, android: Option<bool>) {
+        phones_with(config, iphone, android.map(|calendar| json!({"calendar": calendar, "carnet": true})));
+    }
+
+    /// The same with an Android app of 1.0: its calendar writable, the Carnet's tasks never asked for.
+    fn phones_with_android_1_0(config: &Config, iphone: bool) {
+        phones_with(config, iphone, Some(json!({"calendar": true})));
+    }
+
+    fn phones_with(config: &Config, iphone: bool, android: Option<Value>) {
         let mut data = crate::reminders::read(config);
         data.insert("agents".into(), json!(["lea"]));
         data.remove("at");
@@ -4702,8 +4712,10 @@ mod tests {
         if iphone {
             data.insert("at".into(), json!(py::time_time()));
         }
-        if let Some(calendar) = android {
-            data.insert("android".into(), json!({"at": py::time_time(), "calendar": calendar, "items": []}));
+        if let Some(Value::Object(mut said)) = android {
+            said.insert("at".into(), json!(py::time_time()));
+            said.insert("items".into(), json!([]));
+            data.insert("android".into(), Value::Object(said));
         }
         crate::reminders::write(config, &data).unwrap();
     }
@@ -4776,10 +4788,23 @@ mod tests {
         assert!(again.existing && !again.reminder);
         assert_eq!(ops_of(&config).iter().filter(|o| o["args"]["title"] == "Payer la cantine").count(), 1);
         assert_eq!(op_titled(&config, "Payer la cantine")["phone"], "android");
-        // ticked while its add still waits: the add cancelled, nothing reaches the phone
+        // ticked while its add still waits: the add cancelled, and the « cochée » sent too — the app may have
+        // written the event already and its `done` not reached the bridge yet (relecture 1, B2: without an event,
+        // the app answers « done »)
+        let cantine = link_op(&config, &dated.task.id);
         set_task_done(&config, &[Part::Main], &dated.task.id, true, &who, false).unwrap();
         assert_eq!(op_titled(&config, "Payer la cantine")["state"], "cancelled");
+        let last = ops_of(&config).last().cloned().unwrap();
+        assert_eq!((&last["op"], &last["phone"], &last["args"]), (&json!("complete"), &json!("android"), &json!({"id": cantine})));
         assert!(!reminder_linked(&read_state(&config), &dated.task.id));
+        // removed while its add still waits: the same
+        let erreur = add_task(&config, Part::Main, "Tâche par erreur", "2026-11-30", "", "asked", "", &who).unwrap();
+        let made = link_op(&config, &erreur.task.id);
+        edit(&config, &[Part::Main], "Tâches", "Tâche par erreur", "", "", None, "", None, &who).unwrap();
+        assert_eq!(op_titled(&config, "Tâche par erreur")["state"], "cancelled");
+        let last = ops_of(&config).last().cloned().unwrap();
+        assert_eq!((&last["op"], &last["phone"], &last["args"]), (&json!("complete"), &json!("android"), &json!({"id": made})));
+        assert!(!reminder_linked(&read_state(&config), &erreur.task.id));
         // ticked once in the calendar: the « cochée » request for the Android phone, naming the request that made it
         let made = link_op(&config, &first.task.id);
         done_by_phone(&config, &made);
@@ -4860,6 +4885,110 @@ mod tests {
         let max = Who::agent(&config, "max").from_phone(Some("android"));
         assert!(!add_task(&config, Part::Main, "Appeler Max", "2026-11-28", "", "asked", "", &max).unwrap().reminder);
         assert_eq!(op_titled(&config, "Appeler Max"), Value::Null);
+    }
+
+    /// Alex, 21/11 (relecture 1, B1: « A, porte en 1.1 »): only the Android 1.1 app gets the Carnet's dated tasks, as it
+    /// says it takes them (`carnet` in `PUT /v1/reminders/android`); an installed 1.0 app, iPhone or Android, keeps
+    /// exactly what it did: the iPhone's Reminders, else none — never an Android 1.0 calendar.
+    #[test]
+    fn an_android_app_of_1_0_never_gets_the_carnets_tasks() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = config_in(dir.path());
+        update_state(&config, |s| {
+            s.insert("language".into(), json!("fr"));
+        })
+        .unwrap();
+        let from_android = lea().from_phone(Some("android"));
+        phones_with_android_1_0(&config, false);
+        let alone =
+            add_task(&config, Part::Main, "Réserver le restaurant", "2026-11-28", "", "asked", "", &from_android).unwrap();
+        assert!(!alone.reminder && ops_of(&config).is_empty());
+        let own = Who::you(&config).from_phone(Some("android"));
+        assert!(!add_task(&config, Part::Main, "Arroser les plantes", "2026-11-28", "", "asked", "", &own).unwrap().reminder);
+        assert!(ops_of(&config).is_empty());
+        // with an iPhone 1.0 too: a turn from Android leaves the task in the iPhone's Reminders, as before
+        phones_with_android_1_0(&config, true);
+        let marc =
+            add_task(&config, Part::Main, "Appeler Marc", "2026-11-28T09:00", "", "asked", "", &from_android).unwrap();
+        assert!(marc.reminder);
+        assert_eq!(op_titled(&config, "Appeler Marc").get("phone"), None);
+        assert!(!reminder_in_calendar(&config, &marc.task.id));
+        // the same phone updated to 1.1 (it says it takes them): the phone asked from
+        phones(&config, true, Some(true));
+        let paul =
+            add_task(&config, Part::Main, "Appeler Paul", "2026-11-28T09:00", "", "asked", "", &from_android).unwrap();
+        assert!(paul.reminder && reminder_in_calendar(&config, &paul.task.id));
+        assert_eq!(op_titled(&config, "Appeler Paul")["phone"], "android");
+    }
+
+    /// Relecture 1, R2 and R3: a health task never goes to the Android calendar (a Google calendar is often shared,
+    /// and its copy is read by any agent with « Rappels »): an iPhone's Reminders as before, else none. An agent the
+    /// person took « write » away from (phone_rights.rs) puts none of its dated tasks on a phone.
+    #[test]
+    fn health_tasks_stay_off_the_android_calendar_and_a_refused_right_is_kept() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = config_in(dir.path());
+        update_state(&config, |s| {
+            s.insert("language".into(), json!("fr"));
+        })
+        .unwrap();
+        let from_android = lea().from_phone(Some("android"));
+        phones(&config, false, Some(true));
+        let pills =
+            add_task(&config, Part::Health, "Prendre le traitement", "2026-11-28T08:00", "", "asked", "", &from_android);
+        assert!(!pills.unwrap().reminder && ops_of(&config).is_empty());
+        phones(&config, true, Some(true));
+        let blood = add_task(&config, Part::Health, "Prise de sang", "2026-11-29T08:00", "", "asked", "", &from_android);
+        assert!(blood.unwrap().reminder);
+        assert_eq!(op_titled(&config, "Prise de sang").get("phone"), None);
+        // « write » taken from Léa: none of hers, on either phone; the person's own still go
+        let mut data = crate::reminders::read(&config);
+        data.insert("rights".into(), json!({"lea": {"write": false}}));
+        crate::reminders::write(&config, &data).unwrap();
+        let refused = add_task(&config, Part::Main, "Appeler le notaire", "2026-11-28", "", "asked", "", &from_android);
+        assert!(!refused.unwrap().reminder);
+        assert_eq!(op_titled(&config, "Appeler le notaire"), Value::Null);
+        let own = Who::you(&config).from_phone(Some("android"));
+        assert!(add_task(&config, Part::Main, "Appeler le plombier", "2026-11-28", "", "asked", "", &own).unwrap().reminder);
+    }
+
+    /// Relecture 1, R5: in an agent's reminders_list, a Carnet task's event in the Android calendar says it is one (its
+    /// task's id); reminders_complete on it is refused with the way to tick the task (else the event would go and the
+    /// task stay open).
+    #[test]
+    fn an_agent_sees_a_carnet_tasks_event_as_one_and_ticks_the_task_instead() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = config_in(dir.path());
+        update_state(&config, |s| {
+            s.insert("language".into(), json!("fr"));
+        })
+        .unwrap();
+        phones(&config, false, Some(true));
+        let task = add_task(&config, Part::Main, "Appeler le dentiste", "2026-11-28T10:30", "", "asked", "", &lea());
+        let task = task.unwrap().task;
+        let made = link_op(&config, &task.id);
+        done_by_phone(&config, &made);
+        let mut data = crate::reminders::read(&config);
+        data["android"]["items"] = json!([{"id": made, "title": "Appeler le dentiste", "due": "2026-11-28T10:30:00+01:00"},
+                                          {"id": "a0a0a0", "title": "Banque", "due": "2026-11-29T09:00:00+01:00"}]);
+        crate::reminders::write(&config, &data).unwrap();
+        let call = |name: &str, arguments: Value| {
+            let arguments: Dict = serde_json::from_value(arguments).unwrap();
+            Value::Object(crate::reminders::call(&config, "lea", name, &arguments, None, None).unwrap())
+        };
+        let listed = call("reminders_list", json!({}));
+        let text = listed["content"][0]["text"].as_str().unwrap().to_string();
+        assert!(text.contains(&format!("- id {made} · Appeler le dentiste")), "{text}");
+        assert!(text.contains(&format!("Carnet task [{}]", task.id)), "{text}");
+        assert!(!text.lines().any(|l| l.contains("Banque") && l.contains("Carnet")), "{text}");
+        let before = ops_of(&config).len();
+        let refused = call("reminders_complete", json!({"id": made}));
+        assert_eq!(refused["isError"], true);
+        let said = refused["content"][0]["text"].as_str().unwrap();
+        assert!(said.contains("notebook_task") && said.contains(&task.id), "{said}");
+        assert_eq!(ops_of(&config).len(), before);
+        // another reminder in the calendar: ticked off there as before
+        assert_eq!(call("reminders_complete", json!({"id": "a0a0a0"}))["isError"], false);
     }
 
     #[test]

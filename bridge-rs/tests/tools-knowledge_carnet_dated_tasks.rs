@@ -31,8 +31,9 @@ async fn a_dated_task_from_the_android_app_goes_to_its_calendar_and_leaves_it_wh
     let (k, v) = auth();
     let h = [(k, v.as_str())];
     app.send_json("PUT", "/v1/reminders/agents", &h, &json!({"agents": ["coach"]})).await;
-    // the Android app says it may write to its calendar (no iPhone shares its Reminders here)
-    let said = app.send_json("PUT", "/v1/reminders/android", &h, &json!({"calendar": true, "items": []})).await;
+    // the Android 1.1 app says it may write to its calendar and takes the Carnet's tasks (no iPhone shares here)
+    let said =
+        app.send_json("PUT", "/v1/reminders/android", &h, &json!({"calendar": true, "carnet": true, "items": []})).await;
     assert_eq!(said.json(), json!({"items": 0}));
     let added = app
         .send_json("POST", "/v1/notebook/tasks", &h, &json!({"title": "Appeler le dentiste", "due": "2026-11-28T10:30", "phone": "android"}))
@@ -56,7 +57,8 @@ async fn a_dated_task_from_the_android_app_goes_to_its_calendar_and_leaves_it_wh
         "PUT",
         "/v1/reminders/android",
         &h,
-        &json!({"calendar": true, "items": [{"id": made, "title": "Appeler le dentiste", "due": "2026-11-28T10:30:00+01:00"}]}),
+        &json!({"calendar": true, "carnet": true,
+                "items": [{"id": made, "title": "Appeler le dentiste", "due": "2026-11-28T10:30:00+01:00"}]}),
     )
     .await;
     // ticked in the Carnet: the « cochée » request, for the Android phone, naming the request that made the event
@@ -77,7 +79,7 @@ async fn with_both_phones_the_app_asking_decides_and_an_older_app_keeps_the_ipho
     let h = [(k, v.as_str())];
     app.send_json("PUT", "/v1/reminders/agents", &h, &json!({"agents": ["coach"]})).await;
     app.send_json("PUT", "/v1/reminders", &h, &json!({"lists": [], "items": []})).await; // the iPhone shares
-    app.send_json("PUT", "/v1/reminders/android", &h, &json!({"calendar": true, "items": []})).await;
+    app.send_json("PUT", "/v1/reminders/android", &h, &json!({"calendar": true, "carnet": true, "items": []})).await;
     let add = |title: &str, phone: Option<&str>| {
         let mut body = json!({"title": title, "due": "2026-11-28"});
         if let Some(phone) = phone {
@@ -97,9 +99,13 @@ async fn with_both_phones_the_app_asking_decides_and_an_older_app_keeps_the_ipho
     assert_eq!((&again["existing"], &again["reminder"]), (&json!(true), &json!(false)));
     assert_eq!(queue(app.get("/v1/reminders/queue?phone=android", &h).await.json()).len(), 1);
     assert_eq!(queue(app.get("/v1/reminders/queue", &h).await.json()).len(), 2);
-    // a phone the bridge doesn't know: refused as any wrong field (the app sends « ios » or « android »)
-    let wrong = app.send_json("POST", "/v1/notebook/tasks", &h, &add("Vaccin", Some("x".repeat(30).as_str()))).await;
-    assert_eq!(wrong.status, 422);
+    // a phone the bridge doesn't know: refused as any wrong field, as a message's (threads/send.rs), long or short
+    for phone in ["x".repeat(30), "windows".to_string()] {
+        let wrong = app.send_json("POST", "/v1/notebook/tasks", &h, &add("Vaccin", Some(phone.as_str()))).await;
+        assert_eq!(wrong.status, 422, "{phone}");
+        let answer = json!({"accept": true, "phone": phone});
+        assert_eq!(app.send_json("POST", "/v1/notebook/proposals/p0", &h, &answer).await.status, 422, "{phone}");
+    }
     // a proposal said yes to on the Android phone: its task's reminder in that phone's calendar
     let proposal = notebook::propose(&config, "coach", "deadline", "Renouveler le passeport", "2026-12-15").unwrap();
     let yes = app
@@ -118,7 +124,7 @@ fn an_agents_dated_task_in_a_turn_from_android_is_in_the_calendar_and_the_agent_
     let mut data = Dict::new();
     data.insert("agents".into(), json!(["coach"]));
     data.insert("at".into(), json!(bipbridge::py::time_time())); // an iPhone shares its Reminders too
-    data.insert("android".into(), json!({"at": bipbridge::py::time_time(), "calendar": true, "items": []}));
+    data.insert("android".into(), json!({"at": bipbridge::py::time_time(), "calendar": true, "carnet": true, "items": []}));
     bipbridge::reminders::write(&config, &data).unwrap();
     let arguments: Dict =
         serde_json::from_value(json!({"action": "add", "title": "Appeler Paul", "due": "2026-11-28T14:00"})).unwrap();
@@ -137,4 +143,31 @@ fn an_agents_dated_task_in_a_turn_from_android_is_in_the_calendar_and_the_agent_
     let text = said["content"][0]["text"].as_str().unwrap().to_string();
     assert!(text.contains("Phone reminder too") && !text.contains("calendar"), "{text}");
     assert_eq!(bipbridge::reminders::read(&config)["queue"][1].get("phone"), None);
+}
+
+/// Relecture 1, B1 (Alex, 21/11: « A, porte en 1.1 »): an Android app of 1.0 says nothing of the Carnet in its copy, so
+/// it never gets the Carnet's dated tasks — not even those added from it — and an iPhone keeps them as before.
+#[tokio::test]
+async fn an_android_app_of_1_0_keeps_exactly_what_it_did() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = with_coach(dir.path());
+    let app = TestApp::new(config.clone());
+    let (k, v) = auth();
+    let h = [(k, v.as_str())];
+    app.send_json("PUT", "/v1/reminders/agents", &h, &json!({"agents": ["coach"]})).await;
+    app.send_json("PUT", "/v1/reminders/android", &h, &json!({"calendar": true, "items": []})).await;
+    let task = json!({"title": "Appeler le dentiste", "due": "2026-11-28T10:30", "phone": "android"});
+    let added = app.send_json("POST", "/v1/notebook/tasks", &h, &task).await.json();
+    assert_eq!(added["reminder"], false, "{added}");
+    assert!(queue(app.get("/v1/reminders/queue?phone=android", &h).await.json()).is_empty());
+    // an iPhone sharing too: the task goes to its Reminders, as before 1.1
+    app.send_json("PUT", "/v1/reminders", &h, &json!({"lists": [], "items": []})).await;
+    let task = json!({"title": "Payer la cantine", "due": "2026-11-28", "phone": "android"});
+    assert_eq!(app.send_json("POST", "/v1/notebook/tasks", &h, &task).await.json()["reminder"], true);
+    assert!(queue(app.get("/v1/reminders/queue?phone=android", &h).await.json()).is_empty());
+    let iphone = queue(app.get("/v1/reminders/queue", &h).await.json());
+    assert_eq!(iphone.iter().map(|o| o["args"]["title"].clone()).collect::<Vec<_>>(), [json!("Payer la cantine")]);
+    // the stored word: only what the app said (a 1.1 app updated says it at its next sync)
+    let stored = bipbridge::reminders::read(&config);
+    assert_eq!(stored["android"].get("carnet"), Some(&json!(false)));
 }
