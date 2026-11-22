@@ -1080,6 +1080,48 @@ fn sommaire_shows(som: &Sommaire, case: &Value, today: NaiveDate) -> Vec<Shown> 
         .collect()
 }
 
+/// The plan's bar for S3 (« banc ≥ 85 % (deux meilleurs justes) »), in `cargo test`: the right result among the two
+/// first for 85 % of the bench's cases or more (80 % in each language), Santé never out of its lock, the drives the
+/// person did not allow never searched.
+#[test]
+fn the_sommaire_search_passes_the_bench() {
+    let b = bench();
+    let items = b["items"].as_object().unwrap().clone();
+    let today = chrono::Local::now().date_naive();
+    let (mut n, mut two, mut leaks, mut refused) = (0usize, 0usize, 0usize, 0usize);
+    let mut by_lang: Vec<String> = Vec::new();
+    for lang in LANGS {
+        let dir = tempfile::tempdir().unwrap();
+        let config = super::tests_config(dir.path());
+        let cat = write_demo(&config, lang, today);
+        let fam = if lang == "nl" { b["fixtures"]["nl"]["family"].clone() } else { read("App/Resources/Demo/family-notebook-demo.json")[lang].clone() };
+        let som = sommaire(&config, &cat, lang, today, &fam);
+        let (mut ln, mut ltwo) = (0usize, 0usize);
+        for case in b["cases"].as_array().unwrap().iter().filter(|c| c["lang"] == lang) {
+            let shown = sommaire_shows(&som, case, today);
+            if case["health"].as_bool() != Some(true) && shown.iter().any(|r| r.covers.iter().any(|c| c.contains("health"))) {
+                leaks += 1;
+            }
+            if let Some(never) = case["never"].as_array() {
+                refused += usize::from(shown.iter().any(|r| never.iter().any(|x| r.covers.contains(&s(x)))));
+                continue;
+            }
+            let want = expected(case, &items, today);
+            if want.is_empty() {
+                continue;
+            }
+            ln += 1;
+            ltwo += usize::from(shown.iter().take(2).any(|r| r.covers.iter().any(|c| want.contains(c))));
+        }
+        n += ln;
+        two += ltwo;
+        assert!(ltwo as f64 >= 0.8 * ln as f64, "{lang}: {ltwo}/{ln} among the two first");
+        by_lang.push(format!("{lang} {ltwo}/{ln}"));
+    }
+    assert!(two as f64 >= 0.85 * n as f64, "{two}/{n} among the two first ({by_lang:?})");
+    assert_eq!((leaks, refused), (0, 0), "Santé out of its lock, a drive not allowed searched");
+}
+
 #[test]
 fn the_bench_file_holds_together() {
     let b = bench();
