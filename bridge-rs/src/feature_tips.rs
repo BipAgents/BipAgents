@@ -760,19 +760,22 @@ fn count_talk(store: &mut Store, agent: &str, now: f64) {
     });
 }
 
-/// Who proposes: the guide, else the agent written to most these 14 days (`fallback` on a tie or none).
+/// Who proposes: the guide, else the agent written to most these 14 days (`fallback` on a tie or none). Never an agent
+/// whose « Initiative » is off, nor one other people talk to (agent_proactive.rs: it suggests nothing on its own): the
+/// next one; nobody (empty) when none may.
 fn proposer(store: &Store, config: &Config, moment: &Moment, fallback: &str) -> String {
-    if let Some(guide) = moment.guide.as_deref().filter(|g| config.agent(Some(g)).is_some()) {
+    let may = |a: &str| config.agent(Some(a)).is_some() && crate::agent_proactive::proposes(config, a);
+    if let Some(guide) = moment.guide.as_deref().filter(|g| may(g)) {
         return guide.to_string();
     }
     let total = |a: &str| store.talks.get(a).map(|d| d.values().sum::<u32>()).unwrap_or(0);
-    let mut best = (fallback.to_string(), total(fallback));
+    let mut best = if may(fallback) { Some((fallback.to_string(), total(fallback))) } else { None };
     for agent in store.talks.keys() {
-        if config.agent(Some(agent)).is_some() && total(agent) > best.1 {
-            best = (agent.clone(), total(agent));
+        if may(agent) && best.as_ref().is_none_or(|(_, most)| total(agent) > *most) {
+            best = Some((agent.clone(), total(agent)));
         }
     }
-    best.0
+    best.map(|(agent, _)| agent).unwrap_or_default()
 }
 
 /// The next feature not seen, in the table's order.
@@ -1314,6 +1317,22 @@ mod tests {
 
     fn no_podcast_day(config: &Config) {
         let _ = change(config, |s| s.podcast_day = Some(9));
+    }
+
+    /// Review 1 (B2): an agent whose « Initiative » is off suggests nothing on its own: the app's suggestion goes
+    /// through another agent, never through it.
+    #[test]
+    fn an_agent_turned_off_never_brings_a_suggestion_another_one_does() {
+        let (_dir, config) = setup();
+        no_podcast_day(&config);
+        crate::agent_proactive::set_level(&config, "vie", crate::agent_proactive::Level::Off).unwrap();
+        let said = say(&config, "vie", "On prépare un voyage à Lisbonne avec des amis", &[], at(0, 10));
+        assert!(said.as_deref().is_none_or(|n| !n.contains("project agent")), "{said:?}");
+        assert!(pending_items(&config, Some("vie")).is_empty());
+        // Max, its « Initiative » basic: the moment noticed with Vie is proposed through it
+        let note = say(&config, "max", "Et pour le voyage ?", &[], at(0, 11)).unwrap();
+        assert!(note.contains("project agent"), "{note}");
+        assert_eq!(pending_items(&config, Some("max")).len(), 1);
     }
 
     #[test]

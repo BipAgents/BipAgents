@@ -2474,6 +2474,7 @@ pub fn soul_text(config: &Config, agent: &AgentConfig, personality: &str, lang: 
     let text = if closed { crate::approval_level::split_block(&text).0 } else { crate::approval_level::with_block(config, &agent.name, &text) };
     let text = crate::family_agent::with_family(&text, family);
     let text = crate::project_agent::with_project(&text, project);
+    let text = crate::agent_proactive::with_block(config, &agent.name, &text);
     let text = crate::guide::with_blocks(config, agent, &text);
     let line = crate::dates::agent_line(config, &crate::dates::load(config), &text);
     crate::dates::with_dates(&text, line.as_deref())
@@ -2492,6 +2493,7 @@ pub fn personality_of(soul: &str) -> (String, Option<String>) {
     let (soul, _) = crate::dates::split_dates(&soul);
     let (soul, _) = crate::family_agent::split_family(&soul);
     let (soul, _) = crate::project_agent::split_project(&soul);
+    let (soul, _) = crate::agent_proactive::split_block(&soul);
     (crate::guide::split_blocks(&soul).trim().to_string(), lang)
 }
 

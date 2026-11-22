@@ -593,6 +593,9 @@ pub struct SubscriptionState {
     pub stop_asked: bool,
     /// A message of another household's agent (peers.rs): a guest's turn, never continued (`go_on`).
     pub guest: bool,
+    /// Another agent asked for this turn (agent_pairs.rs `follow_turn`: « message_agent », a pair's conversation):
+    /// never its person's own words (`persons_own_turn`).
+    pub asked_by_agent: bool,
     /// Followed again after a bridge restart (`resume`): what started it (a person, a routine, a continuation…) is
     /// not known any more, so it is never continued (`go_on`).
     pub resumed: bool,
@@ -698,6 +701,7 @@ impl Default for SubscriptionState {
             stop_asked: false,
             answers: HashMap::new(),
             guest: false,
+            asked_by_agent: false,
             resumed: false,
             dropped: false,
             instructions: None,
@@ -3060,8 +3064,10 @@ more steps in this turn. Don't repeat what failed: change approach.", crate::loo
     }
 
     /// `agent`'s run `run_id` is a turn of its person's own conversation: not one nobody started (a routine's, a
-    /// watcher's, a trigger's: `mark_unattended`), a background task's, a group discussion's, a relative's or another
-    /// household's, nor the brake's rescue. Only such a turn turns the agent's « Initiative » off (agent_proactive.rs).
+    /// watcher's, a trigger's: `mark_unattended`), a background task's, one another agent asked for
+    /// (`mark_asked_by_agent`), a group discussion's, a relative's or another household's, the brake's rescue, nor one
+    /// followed again after a restart (what started it isn't known any more). Only such a turn turns the agent's
+    /// « Initiative » off (agent_proactive.rs).
     pub fn persons_own_turn(&self, agent: &str, run_id: &str) -> bool {
         let Some(sub) = lock(&self.inner).subs.get(&(agent.to_string(), run_id.to_string())).cloned() else {
             return false;
@@ -3070,11 +3076,21 @@ more steps in this turn. Don't repeat what failed: change approach.", crate::loo
         st.session_id.is_some()
             && !st.unattended
             && !st.background
+            && !st.asked_by_agent
+            && !st.resumed
             && st.room_id.is_none()
             && !st.guest
             && st.rescue_of.is_none()
             && st.loop_rescue.is_none()
             && !self.someone_elses(&sub.run_id)
+    }
+
+    /// Another agent asked for this turn (agent_pairs.rs): its words are that agent's, never its person's.
+    pub fn mark_asked_by_agent(&self, agent: &str, run_id: &str) {
+        let inner = lock(&self.inner);
+        if let Some(sub) = inner.subs.get(&(agent.to_string(), run_id.to_string())) {
+            lock(&sub.state).asked_by_agent = true;
+        }
     }
 
     /// A background task's run (jobs.rs): the brake's higher limits.
@@ -5002,12 +5018,19 @@ mod tests {
         run("chat");
         run("routine");
         run("task");
+        run("pair");
         let room = run("room");
+        let guest = run("guest");
+        let resumed = run("resumed");
         hub.mark_unattended("vie", "routine");
         hub.mark_background("vie", "task");
+        // another agent asked for this turn (« message_agent », its pair's conversation: agent_pairs.rs)
+        hub.mark_asked_by_agent("vie", "pair");
         lock(&room.state).room_id = Some("r1".into());
+        lock(&guest.state).guest = true;
+        lock(&resumed.state).resumed = true;
         assert!(hub.persons_own_turn("vie", "chat"));
-        for other in ["routine", "task", "room", "gone"] {
+        for other in ["routine", "task", "pair", "room", "guest", "resumed", "gone"] {
             assert!(!hub.persons_own_turn("vie", other), "{other}");
         }
         assert!(!hub.persons_own_turn("budget", "chat"), "another agent's run");
