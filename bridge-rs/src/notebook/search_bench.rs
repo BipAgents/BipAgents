@@ -455,8 +455,38 @@ fn at_scale(lang: &str, today: NaiveDate, queries: &[String], target: usize) -> 
         ms.push(runs[1]);
     }
     ms.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    // what /pages costs with every page's categories (none written yet, as before S2): the pages read, then the
+    // categories with the language and rules read for each page (S1 as first pushed) or once (review 1, R1)
+    let median = |work: &dyn Fn()| -> f64 {
+        let mut runs: Vec<f64> = (0..3)
+            .map(|_| {
+                let t = Instant::now();
+                work();
+                t.elapsed().as_secs_f64() * 1000.0
+            })
+            .collect();
+        runs.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        (runs[1] * 10.0).round() / 10.0
+    };
+    let pages = super::all_pages(&config, Part::Main).len();
+    let read = median(&|| {
+        std::hint::black_box(super::all_pages(&config, Part::Main));
+    });
+    let each = median(&|| {
+        for (path, page) in super::all_pages(&config, Part::Main) {
+            std::hint::black_box(super::categories::of_page(&config, Part::Main, &path, &page));
+        }
+    });
+    let once = median(&|| {
+        let ctx = super::categories::Ctx::new(&config);
+        for (path, page) in super::all_pages(&config, Part::Main) {
+            std::hint::black_box(super::categories::of_page_in(&ctx, Part::Main, &path, &page));
+        }
+    });
     json!({"lines": total, "bytes": bytes, "queries": queries.len(),
-           "p50_ms": (percentile(&ms, 50.0) * 10.0).round() / 10.0, "p95_ms": (percentile(&ms, 95.0) * 10.0).round() / 10.0})
+           "p50_ms": (percentile(&ms, 50.0) * 10.0).round() / 10.0, "p95_ms": (percentile(&ms, 95.0) * 10.0).round() / 10.0,
+           "pages": pages, "pages_read_ms": read, "pages_with_categories_ms_state_each_page": each,
+           "pages_with_categories_ms_state_once": once})
 }
 
 // -- the categories (brick S1) -----------------------------------------------------------------------------------------
@@ -486,13 +516,14 @@ fn bridge_categories(config: &Config, cat: &Catalogue, lang: &str, today: NaiveD
     let main = super::all_pages(config, Part::Main);
     let health = super::all_pages(config, Part::Health);
     let marks = Dict::new();
+    let ctx = c::Ctx::new(config);
     let page_of = |path: &str| -> Option<(Part, &(String, super::Page))> {
         main.iter().find(|(p, _)| p == path).map(|x| (Part::Main, x)).or_else(|| health.iter().find(|(p, _)| p == path).map(|x| (Part::Health, x)))
     };
     let mut filed: HashMap<String, Vec<String>> = HashMap::new();
     for (path, id) in &cat.pages {
         if let Some((part, (path, page))) = page_of(path) {
-            let cats = c::of_page(config, part, path, page).categories;
+            let cats = c::of_page_in(&ctx, part, path, page).categories;
             filed.insert(path.clone(), cats.clone());
             out.insert(id.clone(), cats);
         }
@@ -506,7 +537,7 @@ fn bridge_categories(config: &Config, cat: &Catalogue, lang: &str, today: NaiveD
     for (id, title) in &cat.tasks {
         // its title as written, its page's link after it (« … [[Rénovation cuisine]] »)
         if let Some(t) = tasks.iter().find(|t| fold(&t.title).starts_with(title.as_str())) {
-            out.insert(id.clone(), c::of_task(config, t, &main, &marks, today));
+            out.insert(id.clone(), c::of_task(&ctx, t, &main, &marks, today));
         }
     }
     for t in &records::TYPES {
@@ -520,7 +551,7 @@ fn bridge_categories(config: &Config, cat: &Catalogue, lang: &str, today: NaiveD
     }
     for (id, doc, part) in demo_documents(lang) {
         let pages = if part == Part::Health { &health } else { &main };
-        let cats = if part == Part::Health { vec!["health".to_string()] } else { c::of_document(config, &doc, pages, &marks).0 };
+        let cats = if part == Part::Health { vec!["health".to_string()] } else { c::of_document(&ctx, &doc, pages, &marks).0 };
         out.insert(id, cats);
     }
     out

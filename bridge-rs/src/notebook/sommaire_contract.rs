@@ -210,7 +210,7 @@ fn demo_index(config: &crate::config::Config, lang: &str) -> Vec<Value> {
     }
     let tasks_title = w.tasks;
     for t in super::open_tasks(config, Part::Main) {
-        let cats = without_dates(c::of_task(config, &t, &main, &marks, today()));
+        let cats = without_dates(c::of_task(&c::Ctx::new(config), &t, &main, &marks, today()));
         let plain: String = t.title.split(" [[").next().unwrap_or(&t.title).to_string();
         items.push(json!({"id": format!("task:{}", t.id), "kind": "task", "part": "main", "path": w.tasks_path(),
                           "title": plain, "line": plain, "categories": cats, "space": "perso",
@@ -239,7 +239,7 @@ fn demo_index(config: &crate::config::Config, lang: &str) -> Vec<Value> {
         let subjects: Vec<Value> = d["subjects"].as_array().into_iter().flatten().map(|p| json!({"path": p})).collect();
         let view = json!({"agent": d["agent"], "file": d["name"], "name": d["name"], "subjects": subjects,
                           "linked": d["linked"].as_str().map(|p| json!({"path": p}))});
-        let (cats, _, _) = c::of_document(config, &view, &main, &marks);
+        let (cats, _, _) = c::of_document(&c::Ctx::new(config), &view, &main, &marks);
         let when = (today() - Duration::days(d["days_ago"].as_i64().unwrap_or(0))).to_string();
         let (agent, file) = (s(&d["agent"]), s(&d["name"]));
         items.push(json!({"id": c::document_key(&agent, &file), "kind": "document", "part": "main", "path": null,

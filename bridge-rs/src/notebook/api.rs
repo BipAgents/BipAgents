@@ -197,9 +197,9 @@ async fn home(State(state): State<AppState>, q: QueryMap) -> ApiResult<Response>
     Ok(web::ok(view))
 }
 
-fn page_summary(config: &Config, path: &str, part: Part, page: &super::Page, brief: &str) -> Value {
+fn page_summary(ctx: &super::categories::Ctx, path: &str, part: Part, page: &super::Page, brief: &str) -> Value {
     let archived = super::WORDS.iter().any(|w| w.archived(path));
-    let filed = super::categories::of_page(config, part, path, page);
+    let filed = super::categories::of_page_in(ctx, part, path, page);
     json!({"path": path, "part": part.as_str(), "title": page.title, "kind": page.kind(), "aliases": page.aliases(),
            "archived": archived,
            "contact": if page.contact().is_empty() { Value::Null } else { json!(page.contact()) },
@@ -214,6 +214,7 @@ async fn list_pages(State(state): State<AppState>, q: QueryMap) -> ApiResult<Res
     let kind = q.get("kind").unwrap_or("").to_string();
     let view = blocking(move || {
         let w = super::words(&super::language(&config));
+        let ctx = super::categories::Ctx::new(&config);
         // what a section's card shows: a person's next date and whether they are close, a subject's « Où on en
         // est », an area's number of facts
         let dates = match part {
@@ -243,7 +244,7 @@ async fn list_pages(State(state): State<AppState>, q: QueryMap) -> ApiResult<Res
         let pages: Vec<Value> = listed
             .iter()
             .map(|(path, p)| {
-                let mut view = page_summary(&config, path, part, p, w.brief);
+                let mut view = page_summary(&ctx, path, part, p, w.brief);
                 let shaped = super::Page { body: super::in_outline(&config, p), ..p.clone() };
                 let sections = shaped.sections();
                 let status = super::template::title(&p.kind(), "status", &super::language(&config));
@@ -290,15 +291,23 @@ async fn search(State(state): State<AppState>, q: QueryMap) -> ApiResult<Respons
         // the answers by the one rule the agents' search and the offline copy follow (offline.rs): split by the
         // bridge, the apps show them as they come
         let today = chrono::Local::now().date_naive();
-        let all = super::all_pages(&config, part);
+        let ctx = super::categories::Ctx::new(&config);
         let marks = super::categories::marks(&config);
-        let answers: Vec<Value> = super::tools::answers(&config, &[part], &words)
+        let found_answers = super::tools::answers(&config, &[part], &words);
+        let (wanted, _) = super::lexicon::query(&words);
+        let found_tasks: Vec<super::Task> = super::tasks(&config, part)
+            .into_iter()
+            .filter(|t| !wanted.is_empty() && wanted.iter().all(|x| super::fold(&t.title).contains(x.as_str())))
+            .collect();
+        // the pages read again only when an answer or a task needs its page's categories
+        let all = if found_answers.is_empty() && found_tasks.is_empty() { Vec::new() } else { super::all_pages(&config, part) };
+        let answers: Vec<Value> = found_answers
             .into_iter()
             .map(|a| {
                 // the line's categories: its page's (the person's choice for this line first), Dates when dated
                 let cats = match all.iter().find(|(p, _)| *p == a.path) {
                     Some((path, page)) => {
-                        let filed = super::categories::of_page(&config, a.part, path, page);
+                        let filed = super::categories::of_page_in(&ctx, a.part, path, page);
                         let key = super::categories::page_key(page, path);
                         let line = format!("{} : {}", a.label, a.answer);
                         super::categories::of_line(&filed.categories, &key, &line, &a.date, &marks, today)
@@ -314,17 +323,13 @@ async fn search(State(state): State<AppState>, q: QueryMap) -> ApiResult<Respons
             .iter()
             .take(50)
             .map(|(part, path, page, lines)| {
-                let mut v = page_summary(&config, path, *part, page, w.brief);
+                let mut v = page_summary(&ctx, path, *part, page, w.brief);
                 v["lines"] = json!(lines);
                 v
             })
             .collect();
-        let (wanted, _) = super::lexicon::query(&words);
-        let tasks: Vec<Value> = super::tasks(&config, part)
-            .iter()
-            .filter(|t| !wanted.is_empty() && wanted.iter().all(|x| super::fold(&t.title).contains(x.as_str())))
-            .map(|t| super::categories::task_view(&config, t, &all, &marks, today))
-            .collect();
+        let tasks: Vec<Value> =
+            found_tasks.iter().map(|t| super::categories::task_view(&ctx, t, &all, &marks, today)).collect();
         Ok(json!({"answers": answers, "pages": pages, "tasks": tasks}))
     })
     .await?;
@@ -647,7 +652,8 @@ pub fn page_view_in(config: &Config, part: Part, path: &str, shown: &str) -> any
         }
     };
     // its categories (plan « Le sommaire »), each line's: the page's, the person's choice for the line first, Dates
-    let filed = super::categories::of_page(config, part, path, &page);
+    let ctx = super::categories::Ctx::new(config);
+    let filed = super::categories::of_page_in(&ctx, part, path, &page);
     let marks = super::categories::marks(config);
     let today = chrono::Local::now().date_naive();
     let line_of = super::categories::page_key(&page, path);
@@ -703,7 +709,7 @@ pub fn page_view_in(config: &Config, part: Part, path: &str, shown: &str) -> any
     let tasks: Vec<Value> = super::tasks(config, part)
         .iter()
         .filter(|t| t.links.iter().any(|l| names.iter().any(|n| super::fold(n) == super::fold(l))))
-        .map(|t| super::categories::task_view(config, t, &all, &marks, today))
+        .map(|t| super::categories::task_view(&ctx, t, &all, &marks, today))
         .collect();
     // the web pages the agents made about it (linked to it by `create_page`), shown in its « Documents »
     let documents: Vec<Value> = super::documents(config, part)
@@ -962,7 +968,8 @@ async fn list_tasks(State(state): State<AppState>, q: QueryMap) -> ApiResult<Res
         // each with its categories (its page's: plan « Le sommaire »)
         let (pages, marks, today) =
             (super::all_pages(&config, part), super::categories::marks(&config), chrono::Local::now().date_naive());
-        let view = |t: &super::Task| super::categories::task_view(&config, t, &pages, &marks, today);
+        let ctx = super::categories::Ctx::new(&config);
+        let view = |t: &super::Task| super::categories::task_view(&ctx, t, &pages, &marks, today);
         let open: Vec<Value> = super::open_tasks(&config, part).iter().map(view).collect();
         let done: Vec<Value> = all.iter().rev().filter(|t| t.done).take(50).map(view).collect();
         let archived: Vec<Value> = all.iter().filter(|t| t.archived && !t.done).map(view).collect();

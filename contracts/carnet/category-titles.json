@@ -1,0 +1,1015 @@
+{
+ "about": "Page titles that are not the demo's (review 1, R6), 50 a language, with the category a person means first: the held-out check of the bridge's words (bridge-rs categories.rs `titles_outside_the_demo`). Written by hand on 22/11 before measuring; never tuned on. `first`: the bridge's first category is it; `among`: one of the bridge's two is.",
+ "cases": {
+  "fr": [
+   {
+    "title": "Travaux salle de bain",
+    "category": "home"
+   },
+   {
+    "title": "Fuite sous l'évier",
+    "category": "home"
+   },
+   {
+    "title": "Nouveau canapé",
+    "category": "home"
+   },
+   {
+    "title": "Potager du printemps",
+    "category": "home"
+   },
+   {
+    "title": "Ménage de printemps",
+    "category": "home"
+   },
+   {
+    "title": "Chauffe-eau à changer",
+    "category": "home"
+   },
+   {
+    "title": "Box internet et wifi",
+    "category": "home"
+   },
+   {
+    "title": "Épargne pour la voiture",
+    "category": "money"
+   },
+   {
+    "title": "Remboursement du prêt",
+    "category": "money"
+   },
+   {
+    "title": "Budget vacances d'été",
+    "category": "money"
+   },
+   {
+    "title": "Dépenses de Noël",
+    "category": "money"
+   },
+   {
+    "title": "Placement assurance-vie",
+    "category": "money"
+   },
+   {
+    "title": "Achats en ligne à rendre",
+    "category": "money"
+   },
+   {
+    "title": "Abonnements à résilier",
+    "category": "money"
+   },
+   {
+    "title": "Salaire et primes",
+    "category": "money"
+   },
+   {
+    "title": "Carte d'identité de Léo",
+    "category": "papers"
+   },
+   {
+    "title": "Dossier de retraite",
+    "category": "papers"
+   },
+   {
+    "title": "Contrat de location",
+    "category": "papers"
+   },
+   {
+    "title": "Garantie du frigo",
+    "category": "papers"
+   },
+   {
+    "title": "Mutuelle",
+    "category": "papers"
+   },
+   {
+    "title": "Permis de conduire",
+    "category": "papers"
+   },
+   {
+    "title": "Factures d'électricité",
+    "category": "papers"
+   },
+   {
+    "title": "Succession de mamie",
+    "category": "papers"
+   },
+   {
+    "title": "Week-end à Rome",
+    "category": "trips"
+   },
+   {
+    "title": "Road trip en Écosse",
+    "category": "trips"
+   },
+   {
+    "title": "Croisière en Norvège",
+    "category": "trips"
+   },
+   {
+    "title": "Vacances en Bretagne",
+    "category": "trips"
+   },
+   {
+    "title": "Séjour à Barcelone",
+    "category": "trips"
+   },
+   {
+    "title": "Vols pour Montréal",
+    "category": "trips"
+   },
+   {
+    "title": "Hôtels à Lisbonne",
+    "category": "trips"
+   },
+   {
+    "title": "Projet client Dupont",
+    "category": "work"
+   },
+   {
+    "title": "Entretien d'embauche",
+    "category": "work"
+   },
+   {
+    "title": "Formation management",
+    "category": "work"
+   },
+   {
+    "title": "Réunion d'équipe du lundi",
+    "category": "work"
+   },
+   {
+    "title": "Lancement de la startup",
+    "category": "work"
+   },
+   {
+    "title": "Comptabilité de l'entreprise",
+    "category": "work"
+   },
+   {
+    "title": "Télétravail",
+    "category": "work"
+   },
+   {
+    "title": "Anniversaire de Paul",
+    "category": "people"
+   },
+   {
+    "title": "Mariage de Julie",
+    "category": "people"
+   },
+   {
+    "title": "Cadeaux pour les enfants",
+    "category": "people"
+   },
+   {
+    "title": "Baby-sitting du mercredi",
+    "category": "people"
+   },
+   {
+    "title": "Fête des voisins",
+    "category": "people"
+   },
+   {
+    "title": "Naissance de Zoé",
+    "category": "people"
+   },
+   {
+    "title": "Mamie en Ehpad",
+    "category": "people"
+   },
+   {
+    "title": "Lectures de l'été",
+    "category": "other"
+   },
+   {
+    "title": "Séries à regarder",
+    "category": "other"
+   },
+   {
+    "title": "Apprendre la guitare",
+    "category": "other"
+   },
+   {
+    "title": "Course à pied",
+    "category": "other"
+   },
+   {
+    "title": "Méditation",
+    "category": "other"
+   },
+   {
+    "title": "Idées de podcasts",
+    "category": "other"
+   }
+  ],
+  "en": [
+   {
+    "title": "Bathroom works",
+    "category": "home"
+   },
+   {
+    "title": "Leak under the sink",
+    "category": "home"
+   },
+   {
+    "title": "New sofa",
+    "category": "home"
+   },
+   {
+    "title": "Spring vegetable garden",
+    "category": "home"
+   },
+   {
+    "title": "Spring cleaning",
+    "category": "home"
+   },
+   {
+    "title": "Replace the water heater",
+    "category": "home"
+   },
+   {
+    "title": "Internet and wifi",
+    "category": "home"
+   },
+   {
+    "title": "Savings for the car",
+    "category": "money"
+   },
+   {
+    "title": "Loan repayments",
+    "category": "money"
+   },
+   {
+    "title": "Summer holiday budget",
+    "category": "money"
+   },
+   {
+    "title": "Christmas spending",
+    "category": "money"
+   },
+   {
+    "title": "Pension savings plan",
+    "category": "money"
+   },
+   {
+    "title": "Online purchases to return",
+    "category": "money"
+   },
+   {
+    "title": "Subscriptions to cancel",
+    "category": "money"
+   },
+   {
+    "title": "Salary and bonus",
+    "category": "money"
+   },
+   {
+    "title": "Leo's identity card",
+    "category": "papers"
+   },
+   {
+    "title": "Retirement paperwork",
+    "category": "papers"
+   },
+   {
+    "title": "Rental contract",
+    "category": "papers"
+   },
+   {
+    "title": "Fridge warranty",
+    "category": "papers"
+   },
+   {
+    "title": "Health insurance",
+    "category": "papers"
+   },
+   {
+    "title": "Driving licence",
+    "category": "papers"
+   },
+   {
+    "title": "Electricity invoices",
+    "category": "papers"
+   },
+   {
+    "title": "Grandma's inheritance",
+    "category": "papers"
+   },
+   {
+    "title": "Weekend in Rome",
+    "category": "trips"
+   },
+   {
+    "title": "Road trip in Scotland",
+    "category": "trips"
+   },
+   {
+    "title": "Cruise in Norway",
+    "category": "trips"
+   },
+   {
+    "title": "Holidays in Cornwall",
+    "category": "trips"
+   },
+   {
+    "title": "Stay in Barcelona",
+    "category": "trips"
+   },
+   {
+    "title": "Flights to Montreal",
+    "category": "trips"
+   },
+   {
+    "title": "Hotels in Lisbon",
+    "category": "trips"
+   },
+   {
+    "title": "Dupont client project",
+    "category": "work"
+   },
+   {
+    "title": "Job interview",
+    "category": "work"
+   },
+   {
+    "title": "Management training",
+    "category": "work"
+   },
+   {
+    "title": "Monday team meeting",
+    "category": "work"
+   },
+   {
+    "title": "Startup launch",
+    "category": "work"
+   },
+   {
+    "title": "Company accounting",
+    "category": "work"
+   },
+   {
+    "title": "Working from home",
+    "category": "work"
+   },
+   {
+    "title": "Paul's birthday",
+    "category": "people"
+   },
+   {
+    "title": "Julie's wedding",
+    "category": "people"
+   },
+   {
+    "title": "Gifts for the kids",
+    "category": "people"
+   },
+   {
+    "title": "Wednesday babysitting",
+    "category": "people"
+   },
+   {
+    "title": "Neighbours' party",
+    "category": "people"
+   },
+   {
+    "title": "Zoe's birth",
+    "category": "people"
+   },
+   {
+    "title": "Grandma in a care home",
+    "category": "people"
+   },
+   {
+    "title": "Summer reading",
+    "category": "other"
+   },
+   {
+    "title": "Series to watch",
+    "category": "other"
+   },
+   {
+    "title": "Learn the guitar",
+    "category": "other"
+   },
+   {
+    "title": "Running",
+    "category": "other"
+   },
+   {
+    "title": "Meditation",
+    "category": "other"
+   },
+   {
+    "title": "Podcast ideas",
+    "category": "other"
+   }
+  ],
+  "de": [
+   {
+    "title": "Badumbau",
+    "category": "home"
+   },
+   {
+    "title": "Leck unter der Spüle",
+    "category": "home"
+   },
+   {
+    "title": "Neues Sofa",
+    "category": "home"
+   },
+   {
+    "title": "Gemüsegarten im Frühling",
+    "category": "home"
+   },
+   {
+    "title": "Frühjahrsputz",
+    "category": "home"
+   },
+   {
+    "title": "Boiler austauschen",
+    "category": "home"
+   },
+   {
+    "title": "Internet und WLAN",
+    "category": "home"
+   },
+   {
+    "title": "Sparen fürs Auto",
+    "category": "money"
+   },
+   {
+    "title": "Kredit zurückzahlen",
+    "category": "money"
+   },
+   {
+    "title": "Budget Sommerurlaub",
+    "category": "money"
+   },
+   {
+    "title": "Weihnachtsausgaben",
+    "category": "money"
+   },
+   {
+    "title": "Altersvorsorge",
+    "category": "money"
+   },
+   {
+    "title": "Online-Bestellungen zurückschicken",
+    "category": "money"
+   },
+   {
+    "title": "Abos kündigen",
+    "category": "money"
+   },
+   {
+    "title": "Gehalt und Prämie",
+    "category": "money"
+   },
+   {
+    "title": "Leos Personalausweis",
+    "category": "papers"
+   },
+   {
+    "title": "Rentenunterlagen",
+    "category": "papers"
+   },
+   {
+    "title": "Mietvertrag",
+    "category": "papers"
+   },
+   {
+    "title": "Garantie Kühlschrank",
+    "category": "papers"
+   },
+   {
+    "title": "Krankenversicherung",
+    "category": "papers"
+   },
+   {
+    "title": "Führerschein",
+    "category": "papers"
+   },
+   {
+    "title": "Stromrechnungen",
+    "category": "papers"
+   },
+   {
+    "title": "Erbschaft von Oma",
+    "category": "papers"
+   },
+   {
+    "title": "Wochenende in Rom",
+    "category": "trips"
+   },
+   {
+    "title": "Rundreise durch Schottland",
+    "category": "trips"
+   },
+   {
+    "title": "Kreuzfahrt in Norwegen",
+    "category": "trips"
+   },
+   {
+    "title": "Urlaub an der Ostsee",
+    "category": "trips"
+   },
+   {
+    "title": "Aufenthalt in Barcelona",
+    "category": "trips"
+   },
+   {
+    "title": "Flüge nach Montreal",
+    "category": "trips"
+   },
+   {
+    "title": "Hotels in Lissabon",
+    "category": "trips"
+   },
+   {
+    "title": "Kundenprojekt Dupont",
+    "category": "work"
+   },
+   {
+    "title": "Vorstellungsgespräch",
+    "category": "work"
+   },
+   {
+    "title": "Führungskräfteschulung",
+    "category": "work"
+   },
+   {
+    "title": "Teambesprechung am Montag",
+    "category": "work"
+   },
+   {
+    "title": "Gründung des Startups",
+    "category": "work"
+   },
+   {
+    "title": "Buchhaltung der Firma",
+    "category": "work"
+   },
+   {
+    "title": "Homeoffice",
+    "category": "work"
+   },
+   {
+    "title": "Pauls Geburtstag",
+    "category": "people"
+   },
+   {
+    "title": "Julias Hochzeit",
+    "category": "people"
+   },
+   {
+    "title": "Geschenke für die Kinder",
+    "category": "people"
+   },
+   {
+    "title": "Babysitter am Mittwoch",
+    "category": "people"
+   },
+   {
+    "title": "Nachbarschaftsfest",
+    "category": "people"
+   },
+   {
+    "title": "Geburt von Zoe",
+    "category": "people"
+   },
+   {
+    "title": "Oma im Pflegeheim",
+    "category": "people"
+   },
+   {
+    "title": "Sommerlektüre",
+    "category": "other"
+   },
+   {
+    "title": "Serien zum Anschauen",
+    "category": "other"
+   },
+   {
+    "title": "Gitarre lernen",
+    "category": "other"
+   },
+   {
+    "title": "Laufen",
+    "category": "other"
+   },
+   {
+    "title": "Meditation",
+    "category": "other"
+   },
+   {
+    "title": "Podcast-Ideen",
+    "category": "other"
+   }
+  ],
+  "es": [
+   {
+    "title": "Reforma del baño",
+    "category": "home"
+   },
+   {
+    "title": "Fuga bajo el fregadero",
+    "category": "home"
+   },
+   {
+    "title": "Sofá nuevo",
+    "category": "home"
+   },
+   {
+    "title": "Huerto de primavera",
+    "category": "home"
+   },
+   {
+    "title": "Limpieza de primavera",
+    "category": "home"
+   },
+   {
+    "title": "Cambiar el calentador",
+    "category": "home"
+   },
+   {
+    "title": "Internet y wifi",
+    "category": "home"
+   },
+   {
+    "title": "Ahorro para el coche",
+    "category": "money"
+   },
+   {
+    "title": "Devolver el préstamo",
+    "category": "money"
+   },
+   {
+    "title": "Presupuesto de vacaciones",
+    "category": "money"
+   },
+   {
+    "title": "Gastos de Navidad",
+    "category": "money"
+   },
+   {
+    "title": "Plan de pensiones",
+    "category": "money"
+   },
+   {
+    "title": "Compras online para devolver",
+    "category": "money"
+   },
+   {
+    "title": "Suscripciones a cancelar",
+    "category": "money"
+   },
+   {
+    "title": "Sueldo y paga extra",
+    "category": "money"
+   },
+   {
+    "title": "DNI de Leo",
+    "category": "papers"
+   },
+   {
+    "title": "Papeles de la jubilación",
+    "category": "papers"
+   },
+   {
+    "title": "Contrato de alquiler",
+    "category": "papers"
+   },
+   {
+    "title": "Garantía de la nevera",
+    "category": "papers"
+   },
+   {
+    "title": "Seguro médico",
+    "category": "papers"
+   },
+   {
+    "title": "Carnet de conducir",
+    "category": "papers"
+   },
+   {
+    "title": "Facturas de la luz",
+    "category": "papers"
+   },
+   {
+    "title": "Herencia de la abuela",
+    "category": "papers"
+   },
+   {
+    "title": "Fin de semana en Roma",
+    "category": "trips"
+   },
+   {
+    "title": "Ruta por Escocia",
+    "category": "trips"
+   },
+   {
+    "title": "Crucero por Noruega",
+    "category": "trips"
+   },
+   {
+    "title": "Vacaciones en Galicia",
+    "category": "trips"
+   },
+   {
+    "title": "Estancia en Barcelona",
+    "category": "trips"
+   },
+   {
+    "title": "Vuelos a Montreal",
+    "category": "trips"
+   },
+   {
+    "title": "Hoteles en Lisboa",
+    "category": "trips"
+   },
+   {
+    "title": "Proyecto cliente Dupont",
+    "category": "work"
+   },
+   {
+    "title": "Entrevista de trabajo",
+    "category": "work"
+   },
+   {
+    "title": "Formación de gestión",
+    "category": "work"
+   },
+   {
+    "title": "Reunión de equipo del lunes",
+    "category": "work"
+   },
+   {
+    "title": "Lanzamiento de la startup",
+    "category": "work"
+   },
+   {
+    "title": "Contabilidad de la empresa",
+    "category": "work"
+   },
+   {
+    "title": "Teletrabajo",
+    "category": "work"
+   },
+   {
+    "title": "Cumpleaños de Pablo",
+    "category": "people"
+   },
+   {
+    "title": "Boda de Julia",
+    "category": "people"
+   },
+   {
+    "title": "Regalos para los niños",
+    "category": "people"
+   },
+   {
+    "title": "Canguro del miércoles",
+    "category": "people"
+   },
+   {
+    "title": "Fiesta de los vecinos",
+    "category": "people"
+   },
+   {
+    "title": "Nacimiento de Zoe",
+    "category": "people"
+   },
+   {
+    "title": "La abuela en la residencia",
+    "category": "people"
+   },
+   {
+    "title": "Lecturas de verano",
+    "category": "other"
+   },
+   {
+    "title": "Series por ver",
+    "category": "other"
+   },
+   {
+    "title": "Aprender guitarra",
+    "category": "other"
+   },
+   {
+    "title": "Correr",
+    "category": "other"
+   },
+   {
+    "title": "Meditación",
+    "category": "other"
+   },
+   {
+    "title": "Ideas de podcasts",
+    "category": "other"
+   }
+  ],
+  "nl": [
+   {
+    "title": "Verbouwing badkamer",
+    "category": "home"
+   },
+   {
+    "title": "Lek onder de gootsteen",
+    "category": "home"
+   },
+   {
+    "title": "Nieuwe bank",
+    "category": "home"
+   },
+   {
+    "title": "Moestuin in de lente",
+    "category": "home"
+   },
+   {
+    "title": "Voorjaarsschoonmaak",
+    "category": "home"
+   },
+   {
+    "title": "Boiler vervangen",
+    "category": "home"
+   },
+   {
+    "title": "Internet en wifi",
+    "category": "home"
+   },
+   {
+    "title": "Sparen voor de auto",
+    "category": "money"
+   },
+   {
+    "title": "Lening aflossen",
+    "category": "money"
+   },
+   {
+    "title": "Budget zomervakantie",
+    "category": "money"
+   },
+   {
+    "title": "Uitgaven met kerst",
+    "category": "money"
+   },
+   {
+    "title": "Pensioensparen",
+    "category": "money"
+   },
+   {
+    "title": "Online aankopen terugsturen",
+    "category": "money"
+   },
+   {
+    "title": "Abonnementen opzeggen",
+    "category": "money"
+   },
+   {
+    "title": "Salaris en bonus",
+    "category": "money"
+   },
+   {
+    "title": "Identiteitskaart van Leo",
+    "category": "papers"
+   },
+   {
+    "title": "Papieren voor het pensioen",
+    "category": "papers"
+   },
+   {
+    "title": "Huurcontract",
+    "category": "papers"
+   },
+   {
+    "title": "Garantie van de koelkast",
+    "category": "papers"
+   },
+   {
+    "title": "Zorgverzekering",
+    "category": "papers"
+   },
+   {
+    "title": "Rijbewijs",
+    "category": "papers"
+   },
+   {
+    "title": "Energiefacturen",
+    "category": "papers"
+   },
+   {
+    "title": "Erfenis van oma",
+    "category": "papers"
+   },
+   {
+    "title": "Weekend in Rome",
+    "category": "trips"
+   },
+   {
+    "title": "Rondreis door Schotland",
+    "category": "trips"
+   },
+   {
+    "title": "Cruise in Noorwegen",
+    "category": "trips"
+   },
+   {
+    "title": "Vakantie aan zee",
+    "category": "trips"
+   },
+   {
+    "title": "Verblijf in Barcelona",
+    "category": "trips"
+   },
+   {
+    "title": "Vluchten naar Montreal",
+    "category": "trips"
+   },
+   {
+    "title": "Hotels in Lissabon",
+    "category": "trips"
+   },
+   {
+    "title": "Klantproject Dupont",
+    "category": "work"
+   },
+   {
+    "title": "Sollicitatiegesprek",
+    "category": "work"
+   },
+   {
+    "title": "Training leidinggeven",
+    "category": "work"
+   },
+   {
+    "title": "Teamoverleg op maandag",
+    "category": "work"
+   },
+   {
+    "title": "Lancering van de startup",
+    "category": "work"
+   },
+   {
+    "title": "Boekhouding van het bedrijf",
+    "category": "work"
+   },
+   {
+    "title": "Thuiswerken",
+    "category": "work"
+   },
+   {
+    "title": "Verjaardag van Paul",
+    "category": "people"
+   },
+   {
+    "title": "Bruiloft van Julia",
+    "category": "people"
+   },
+   {
+    "title": "Cadeaus voor de kinderen",
+    "category": "people"
+   },
+   {
+    "title": "Oppas op woensdag",
+    "category": "people"
+   },
+   {
+    "title": "Burenfeest",
+    "category": "people"
+   },
+   {
+    "title": "Geboorte van Zoë",
+    "category": "people"
+   },
+   {
+    "title": "Oma in het verpleeghuis",
+    "category": "people"
+   },
+   {
+    "title": "Zomerlectuur",
+    "category": "other"
+   },
+   {
+    "title": "Series om te kijken",
+    "category": "other"
+   },
+   {
+    "title": "Gitaar leren",
+    "category": "other"
+   },
+   {
+    "title": "Hardlopen",
+    "category": "other"
+   },
+   {
+    "title": "Meditatie",
+    "category": "other"
+   },
+   {
+    "title": "Ideeën voor podcasts",
+    "category": "other"
+   }
+  ]
+ }
+}
