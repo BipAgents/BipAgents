@@ -267,7 +267,7 @@ fn card(config: &Config, shown: &str, now: f64) -> Value {
             tk::str_or_empty(c.get("card")) == kind
                 && tk::str_or_empty(c.get("state")) == "open"
                 && tk::str_or_empty(c.get("day")) == day
-                && healthy(*c)
+                && healthy(c)
         });
         let view = open.and_then(|c| if kind == "ask" { super::ask::view(c, shown, now) } else { super::followups::view(c, shown) });
         if let Some(v) = view {
