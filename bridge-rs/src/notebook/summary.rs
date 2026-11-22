@@ -35,7 +35,7 @@ use serde_json::{json, Value};
 
 use super::categories as c;
 use super::finder::Finder;
-use super::{fold, Part};
+use super::{fold, lexicon, Part};
 use crate::config::Config;
 use crate::tools_knowledge as tk;
 use crate::Dict;
@@ -255,9 +255,19 @@ fn card(config: &Config, shown: &str, now: f64) -> Value {
     let state = super::read_state(config);
     let day = super::ask::day_of(now);
     let cards = state.get("cards").and_then(Value::as_array).cloned().unwrap_or_default();
+    // never one that speaks of health (its question, its choices, its task): the sommaire is outside the lock (review 1
+    // of S4, R2)
+    let healthy = |c: &Dict| {
+        let mut texts = super::strings(c.get("chips"));
+        texts.extend(["question", "title", "label"].iter().map(|k| tk::str_or_empty(c.get(*k))));
+        !texts.iter().any(|t| lexicon::touches_health(t))
+    };
     for kind in ["ask", "follow"] {
         let open = cards.iter().rev().filter_map(Value::as_object).find(|c| {
-            tk::str_or_empty(c.get("card")) == kind && tk::str_or_empty(c.get("state")) == "open" && tk::str_or_empty(c.get("day")) == day
+            tk::str_or_empty(c.get("card")) == kind
+                && tk::str_or_empty(c.get("state")) == "open"
+                && tk::str_or_empty(c.get("day")) == day
+                && healthy(*c)
         });
         let view = open.and_then(|c| if kind == "ask" { super::ask::view(c, shown, now) } else { super::followups::view(c, shown) });
         if let Some(v) = view {
@@ -279,7 +289,7 @@ fn card(config: &Config, shown: &str, now: f64) -> Value {
 pub fn summary_at(config: &Config, space: &str, langs: &[String], today: NaiveDate, now: f64) -> Value {
     let shown = titles_lang(langs);
     let t = texts(&shown);
-    let (f, version) = super::index::current(config, langs);
+    let (f, version, epoch) = super::index::current(config, langs);
     let (members, total) = by_category(&f, space, today);
     let me = super::words(&super::language(config)).self_path();
     let made = read_searched(config);
@@ -311,7 +321,7 @@ pub fn summary_at(config: &Config, space: &str, langs: &[String], today: NaiveDa
            "kept": kept_with_counts(config, &f, space, today),
            "card": if space == "pro" { Value::Null } else { card(config, &shown, now) },
            "total": {"count": total, "title": t.all_notes}, "categories": lines,
-           "bar": {"placeholder": t.bar_all}, "version": version})
+           "bar": {"placeholder": t.bar_all}, "version": version, "epoch": epoch})
 }
 
 // -- GET /v1/notebook/category/{id} -----------------------------------------------------------------------------------
@@ -648,9 +658,34 @@ pub fn forget_searched(config: &Config, gone: &dyn Fn(&str) -> bool) -> std::io:
     Ok(n)
 }
 
-/// (tests first: review 1 of S4, B2)
-pub fn drop_searched(_config: &Config, _q: Option<&str>, _space: Option<&str>, _category: Option<&str>) -> std::io::Result<usize> {
-    Ok(0)
+/// Searches made dropped by the person (`DELETE /v1/notebook/searched`; review 1 of S4, B2: one whose words are
+/// nowhere in the Carnet, that « Oublie ça » cannot find): the one of these words (`q`, folded) or all, in `space`
+/// (none: every space) and `category` (none: every one). How many.
+pub fn drop_searched(config: &Config, q: Option<&str>, space: Option<&str>, category: Option<&str>) -> std::io::Result<usize> {
+    let folded = q.map(fold).map(|f| f.split_whitespace().collect::<Vec<_>>().join(" "));
+    let _guard = SEARCHED.lock().unwrap_or_else(|e| e.into_inner());
+    let mut all = read_searched(config);
+    let mut n = 0;
+    for (key, list) in all.iter_mut() {
+        let (s, c) = key.split_once('/').unwrap_or((key.as_str(), ""));
+        if space.is_some_and(|x| x != s) || category.is_some_and(|x| x != c) {
+            continue;
+        }
+        if let Value::Array(items) = list {
+            let before = items.len();
+            items.retain(|i| {
+                folded.as_ref().is_some_and(|f| {
+                    fold(i["q"].as_str().unwrap_or_default()).split_whitespace().collect::<Vec<_>>().join(" ") != *f
+                })
+            });
+            n += before - items.len();
+        }
+    }
+    if n > 0 {
+        all.retain(|_, list| list.as_array().is_some_and(|l| !l.is_empty()));
+        write_searched(config, all)?;
+    }
+    Ok(n)
 }
 
 /// A search made (`POST /v1/notebook/searched`), kept for « Cherché ici » and the grey words. Whether it was kept.

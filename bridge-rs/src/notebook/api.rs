@@ -56,8 +56,9 @@
 //!                                              their counts, « Cherché ici », the latest (Santé: private=1 only)
 //!     GET    /v1/notebook/kept?space=          the kept searches (6 a space); POST {q, title?, space?, category?}
 //!                                              | {id, title}; DELETE ?id=
-//!     POST   /v1/notebook/searched             {q, category?, space?}   a search made (« Cherché ici »), never
-//!                                              shown to an agent → 204
+//!     POST   /v1/notebook/searched             {q, category?, space?, private?}   a search made (« Cherché ici »),
+//!                                              never shown to an agent, never kept with Santé open → 204; DELETE
+//!                                              ?q=&space=&category= the one of these words, or all → 204
 //!     GET    /v1/notebook/history?path=        changes (a page's, or all), the newest first
 //!     POST   /v1/notebook/restore              {change}   the page as it was after that change
 //!     GET    /v1/notebook/tasks                open and recent tasks
@@ -1566,7 +1567,7 @@ pub fn router() -> Router<AppState> {
         .route("/notebook/summary", get(summary))
         .route("/notebook/category/{id}", get(category_page))
         .route("/notebook/kept", get(kept_list).post(kept_change).delete(kept_drop))
-        .route("/notebook/searched", post(searched))
+        .route("/notebook/searched", post(searched).delete(searched_drop))
         .route("/notebook/history", get(history))
         .route("/notebook/restore", post(restore))
         .route("/notebook/tasks", get(list_tasks).post(add_task))
@@ -2184,6 +2185,9 @@ pub struct Searched {
     pub category: Option<String>,
     #[serde(default)]
     pub space: Option<String>,
+    /// Made with Santé open (the app's lock): never kept (review 1 of S4, R3).
+    #[serde(default, deserialize_with = "web::lax::bool")]
+    pub private: bool,
 }
 
 impl Validate for Searched {
@@ -2202,9 +2206,33 @@ async fn searched(State(state): State<AppState>, q: QueryMap, Json(body): Json<S
     let space = super::summary::space_asked(body.space.as_deref()).map_err(|r| sommaire_refused(r, &shown))?;
     let langs = super::index::langs(&super::language(&config), q.get("lang"));
     let today = chrono::Local::now().date_naive();
-    let done = blocking(move || Ok(super::summary::searched_at(&config, &body.q, body.category.as_deref(), space, &langs, today))).await?;
-    done.map_err(|r| sommaire_refused(r, &shown))?;
+    if !body.private {
+        let done = blocking(move || Ok(super::summary::searched_at(&config, &body.q, body.category.as_deref(), space, &langs, today))).await?;
+        done.map_err(|r| sommaire_refused(r, &shown))?;
+    }
+    Ok(no_content())
+}
+
+fn no_content() -> Response {
     let mut r = Response::new(Body::empty());
     *r.status_mut() = axum::http::StatusCode::NO_CONTENT;
-    Ok(r)
+    r
+}
+
+/// Searches made dropped (`?q=`: the one of these words, else all; `?space=`, `?category=` narrow it): 204. The
+/// gesture comes with A2/D2 (review 1 of S4, B2).
+async fn searched_drop(State(state): State<AppState>, q: QueryMap) -> ApiResult<Response> {
+    let config = state.config();
+    let shown = shown_language(&config, &q);
+    let words = web::query_str(&q, "q", false, Some(super::summary::Q_MAX))?.filter(|w| !w.trim().is_empty());
+    let space = match q.get("space").filter(|s| !s.trim().is_empty()) {
+        Some(s) => Some(super::summary::space_asked(Some(s)).map_err(|r| sommaire_refused(r, &shown))?),
+        None => None,
+    };
+    let category = web::query_str(&q, "category", false, Some(20))?.filter(|c| !c.trim().is_empty());
+    if category.as_deref().is_some_and(|c| !super::categories::PERSONAL.contains(&c)) {
+        return Err(sommaire_refused(super::summary::Refused::CategoryUnknown, &shown));
+    }
+    blocking(move || Ok(super::summary::drop_searched(&config, words.as_deref(), space, category.as_deref())?)).await?;
+    Ok(no_content())
 }

@@ -146,7 +146,7 @@ in `routes[].errors`; S1's codes have no text yet: the apps show their own until
 | S4 | `GET /v1/notebook/summary?space=&lang=` | the sommaire ready to show (`Summary`, §3b): kept searches with their count, total, categories with count and grey words, « Toi » first in Personnes, the moment's card, Santé locked; `spaces: []` until S5/S6; 400 `space_unknown` |
 | S4 | `GET /v1/notebook/category/{id}?space=&filter=&lang=` | a category's page (`CategoryPage`, §3b): sub-filters with counts, « Cherché ici » (3), the latest (20, of `filter` when given); `category/health?private=1`: Santé's, behind the lock, read now and kept nowhere (no sub-filter, no search kept); 404 `category_unknown`, 400 `filter_unknown`, 403 `health_locked` |
 | S4 | `GET/POST/DELETE /v1/notebook/kept` | kept searches (6 a space, `state.json`), their count from the bridge; POST `{q, title?, space?, category?}` or `{id, title}`, DELETE `?id=` → the space's `KeptList`; 409 `kept_full`, 404 `kept_unknown`, 400 `kept_empty`, `number_refused`, `category_not_given` |
-| S4 | `POST /v1/notebook/searched` | `{q, category?, space?}`: a search made (3 a category for « Cherché ici » and the grey words, `searched.json`, never shown to the agents, never in the copy) → 204 |
+| S4 | `POST /v1/notebook/searched` | `{q, category?, space?, private?}`: a search made (3 a category for « Cherché ici » and the grey words, `searched.json`, never shown to the agents, never in the copy; with Santé open — `category: health` or `private: true` — never kept) → 204; `DELETE ?q=&space=&category=`: the one of these words, or all → 204 |
 | S5 | `PATCH /v1/notebook/settings {separate_spaces}` | « Séparer Perso, Pro et Famille » (off by default); `?space=all|perso|pro` on summary/category/search/index; `POST /v1/notebook/space {item | path, space}` « Ranger dans… Perso / Pro » (+ `/space/undo`) |
 | S6 | `/v1/family-agent/notebook/{summary,index,kept,categorize,category/{id}}` | the family Carnet's, relayed by the members' bridges as today (`FamilySummary`, `FamilyIndex`, `FamilyCategorized`, `FamilyCategoryPage`) |
 
@@ -206,10 +206,18 @@ cases are written on them.
 - **« Oublie ça »** takes the searches with it: the kept ones (every space; the copy moves to a new version, the phones
   drop them) and those made (« Cherché ici », the grey words) whose words, or a kept one's title, say what is forgotten
   (folded as the search folds, whole words; a person's first name too when their page is forgotten whole).
-- **Spaces until S5**: no note is Pro: `perso` is the whole Carnet, `pro` nothing; `spaces` stays `[]` (the app keeps
+- **Spaces until S5**: the bridge writes no `space: pro` before S5: `perso` is the whole Carnet, `pro` nothing (unless a
+  page got `space: pro` by hand in Obsidian: it is Pro then, as S5 will read it); `spaces` stays `[]` (the app keeps
   its « Moi | Famille » until S6). Unknown: 400 `space_unknown`.
+- **`version` with `epoch`** (the copy's): a version is compared only with its epoch. On a copy cut (`truncated`), the
+  counts are the copy's, archives included.
+- **Santé open**: a search made in Santé or with `private=1` is sent with `category: health` or `private: true` (or not
+  at all): never kept. **`DELETE /v1/notebook/searched`** drops one (by its words) or all: for a search whose words are
+  nowhere in the Carnet, that « Oublie ça » cannot find (the gesture comes with A2/D2).
+- **Never health in the moment's card**: no point of Santé in `misplaced` (whatever its words; the 1.0 home's card too),
+  no `ask`/`follow` whose question, choices or task touch health.
 - **Errors** (`{"detail": {"code", "text"}}`): no text yet but `number_refused`'s (the apps show their own until
-  Alex approves them).
+  Alex approves them); `not_written` (500) when `state.json` cannot be written.
 
 ## 4. What the 1.0 apps see
 

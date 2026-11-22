@@ -214,6 +214,9 @@ pub struct Target {
     /// The page's names (title, aliases), folded; and their words that name it alone (a first name, a nickname).
     names: Vec<String>,
     first: Vec<String>,
+    /// A person's name word for the sommaire's searches (summary.rs): the first word of their name of 3 letters or more
+    /// that is no stop word (« La nounou » → « nounou », « Van Damme » → « damme »; review 1 of carnet-s4, R1).
+    named_by: Vec<String>,
     /// The page forgotten whole (its part, path and id), or the pages the facts are on.
     pub whole: Option<(Part, String, String)>,
     pub pages: Vec<(Part, String)>,
@@ -264,9 +267,24 @@ impl Target {
         }
     }
 
+    /// Whether a search (a kept one, one made: summary.rs) says what the target forgets: as an agent's memory line
+    /// (folded, whole words, sure or not), a person's name counting by its name word only (`named_by`: never « la »,
+    /// « le », « van »; review 1 of carnet-s4, R1).
+    pub fn says(&self, search: &str) -> bool {
+        let t = Target { first: self.named_by.clone(), ..self.clone() };
+        t.hit(search, false, true).is_some()
+    }
+
     fn links(&self, line: &str) -> bool {
         super::links_in(line).iter().any(|l| self.names.contains(&fold(l)))
     }
+}
+
+/// A word that names someone alone in a search: 3 letters or more, no stop word of the five languages.
+fn name_word(word: &str) -> bool {
+    word.chars().count() >= 3
+        && !lexicon::STOP.contains(&word)
+        && !super::search_words::LANGS.iter().any(|l| super::search_words::WORDS.stop(l).iter().any(|s| s == word))
 }
 
 /// The request resolved: the page found by name (several: refused), the texts' forms.
@@ -326,6 +344,11 @@ pub fn target(config: &Config, request: &Request) -> Result<Target, Refused> {
             if let Some(first) = names.first().and_then(|n| n.split(' ').next()) {
                 if first.chars().count() >= 2 && !t.first.contains(&first.to_string()) {
                     t.first.push(first.to_string());
+                }
+            }
+            if let Some(word) = names.first().and_then(|n| n.split(' ').find(|w| name_word(w))) {
+                if !t.named_by.contains(&word.to_string()) {
+                    t.named_by.push(word.to_string());
                 }
             }
         }
@@ -862,8 +885,8 @@ pub fn apply(config: &Config, target: &Target, lang: &str, person: &str) -> anyh
         .map(|(id, _)| id)
         .collect();
     // the searches (summary.rs): kept ones and those made that say it, in every space, as an agent's memory line
-    // (folded, whole words; a person's first name when their page goes whole)
-    let said = |q: &str| target.hit(q, false, true).is_some();
+    // (folded, whole words; a person's name word when their page goes whole: `Target::says`)
+    let said = |q: &str| target.says(q);
     match super::summary::forget_searched(config, &said) {
         Ok(n) => erased += n,
         Err(err) => tracing::warn!(error = %err, "forgotten searches not taken out of searched.json"),
@@ -1079,6 +1102,8 @@ pub fn ask_from_agent(config: &Config, agent: &str, page: &str, texts_asked: &[S
 
 /// A card's state changed (`done`, `cancelled`). Returns whether it was there.
 pub fn set_card(config: &Config, id: &str, to: &str) -> std::io::Result<bool> {
+    // under the Carnet's lock, as every other writer of state.json (review 1 of carnet-s4, R6)
+    let _guard = super::lock();
     let mut found = false;
     super::update_state(config, |state| {
         if let Some(Value::Array(items)) = state.get_mut("cards") {

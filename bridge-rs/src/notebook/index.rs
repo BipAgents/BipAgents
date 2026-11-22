@@ -659,6 +659,8 @@ struct Kept {
 }
 
 static KEPT: LazyLock<Mutex<HashMap<PathBuf, Kept>>> = LazyLock::new(Default::default);
+/// One making of a copy at a time: the sommaire and the index opened together make it once (review 1 of S4, R7).
+static MAKING: Mutex<()> = Mutex::new(());
 
 fn hash_of(v: &impl Hash) -> u64 {
     let mut h = std::collections::hash_map::DefaultHasher::new();
@@ -707,13 +709,17 @@ fn files_now(config: &Config) -> u64 {
 fn refreshed(config: &Config) -> (PathBuf, u64) {
     let key = super::root(config);
     let files = files_now(config);
-    {
+    let unchanged = |files: u64| {
         let kept = KEPT.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(k) = kept.get(&key) {
-            if k.files == files {
-                return (key, files);
-            }
-        }
+        kept.get(&key).is_some_and(|k| k.files == files)
+    };
+    if unchanged(files) {
+        return (key.clone(), files);
+    }
+    // another request may be making it: wait for it, then look again
+    let _making = MAKING.lock().unwrap_or_else(|e| e.into_inner());
+    if unchanged(files) {
+        return (key.clone(), files);
     }
     let documents = super::documents(config, Part::Main);
     let made = entries(config, &documents);
@@ -764,16 +770,17 @@ pub fn finder(config: &Config, langs: &[String]) -> Arc<Finder> {
     current(config, langs).0
 }
 
-/// [`finder`] and the copy's version it searches (the sommaire's `version`, summary.rs).
-pub fn current(config: &Config, langs: &[String]) -> (Arc<Finder>, u64) {
+/// [`finder`], and the copy's version and epoch (the sommaire's `version` and `epoch`, summary.rs: a version alone
+/// means nothing after the bridge started again; review 1 of S4, R4).
+pub fn current(config: &Config, langs: &[String]) -> (Arc<Finder>, u64, String) {
     let (key, _) = refreshed(config);
-    let (items, version) = {
+    let (items, version, epoch) = {
         let kept = KEPT.lock().unwrap_or_else(|e| e.into_inner());
         let k = &kept[&key];
         if let Some(f) = k.finders.get(langs) {
-            return (f.clone(), k.version);
+            return (f.clone(), k.version, k.epoch.clone());
         }
-        (k.items.clone(), k.version)
+        (k.items.clone(), k.version, k.epoch.clone())
     };
     let year = chrono::Local::now().date_naive().year();
     let finder = Arc::new(Finder::shared(items.clone(), &tables(langs, year)));
@@ -783,7 +790,7 @@ pub fn current(config: &Config, langs: &[String]) -> (Arc<Finder>, u64) {
             k.finders.insert(langs.to_vec(), finder.clone());
         }
     }
-    (finder, version)
+    (finder, version, epoch)
 }
 
 
