@@ -5,6 +5,7 @@ every agent of the person until they change it (Alex 22/11, D1 A, D4 B), in the 
 turns it off, only in a turn of the person's own conversation, never back on (D3 A). An app 1.0 sees its settings as
 before, with one more key it ignores."""
 import json
+import re
 import threading
 import time
 from pathlib import Path
@@ -128,8 +129,18 @@ def test_an_app_1_0_sees_its_settings_as_before(bridges, fakes):
     tools_before = tool_names(bridge)
     assert put(bridge, "budget", {"level": "off"}).status_code == 200
     after = settings(bridge, "budget")
-    assert {k: v for k, v in after.items() if k != "proactive"} == {k: v for k, v in before.items() if k != "proactive"}
+
+    def as_before(values):
+        """All but `proactive`, and the tools' version (`?v=`) out of its tools' addresses: off takes plan_propose
+        out of its list (plans.rs), a new list is a new version, as when « Météo » is switched on."""
+        return json.loads(re.sub(r"\?v=[0-9a-f]+", "", json.dumps({k: v for k, v in values.items() if k != "proactive"})))
+
+    assert as_before(after) == as_before(before)
     assert bridge.put("/v1/agents/budget/notify", headers=AUTH, json={"on": False}).json() == {"id": "budget", "on": False}
     assert settings(bridge, "budget")["notify"] == {"on": False}
-    # nothing it had goes (plans and offers come with later branches; off takes only those out)
-    assert set(tools_before) <= set(tool_names(bridge))
+    # its tools registered again (a new list), with a token of its own since this test's isn't its Hermes profile's
+    # (agent_tools.rs `register_at`): this test's back
+    give_token(bridge, "budget", TOKEN)
+    # nothing it had goes but what proposes on its own (plan_propose; offers come with a later branch)
+    assert "plan_propose" in tools_before and "plan_propose" not in tool_names(bridge)
+    assert set(tools_before) - {"plan_propose"} <= set(tool_names(bridge))

@@ -95,9 +95,14 @@ def plan_jobs(bridge, plan, agent="coach"):
     return [j for j in jobs if j.get("plan") == plan]
 
 
+def done(result):
+    """Made: neither an error nor a refusal (a refusal is a plain answer too, `isError` false: bbkit.mcp `not_done`)."""
+    return result["isError"] is False and not not_done(result)
+
+
 def propose(bridge, arguments, token=TOKEN, **kw):
     made = call(bridge, "plan_propose", arguments, token=token, **kw)
-    assert made["isError"] is False, text_of(made)
+    assert done(made), text_of(made)
     return made
 
 
@@ -314,24 +319,24 @@ def test_caps_one_plan_per_reply_two_unasked_per_agent_four_per_place_one_waitin
     assert wait_until(lambda: fakes.hermes.seen("/p/coach/v1/runs/run_p/events"))
     time.sleep(0.3)
     try:
-        assert plan("coach", session="api_p")["isError"] is False
+        assert done(plan("coach", session="api_p"))
         second = plan("coach", session="api_p")
         assert not_done(second) and "one plan per reply" in text_of(second)
     finally:
         gate.set()
     deny_all("coach")
     # unasked (no turn of the person's): one waiting at a time, 2 a day per agent
-    assert plan("coach")["isError"] is False
+    assert done(plan("coach"))
     waiting = plan("coach")
     assert not_done(waiting) and "already waits" in text_of(waiting)
     deny_all("coach")
-    assert plan("coach")["isError"] is False
+    assert done(plan("coach"))
     deny_all("coach")
     third = plan("coach")
     assert not_done(third) and "already made 2" in text_of(third)
     # 4 a day for the whole place
     for _ in range(2):
-        assert plan("vie")["isError"] is False
+        assert done(plan("vie"))
         deny_all("vie")
     fifth = plan("budget")
     assert not_done(fifth) and "4 cards" in text_of(fifth)
@@ -349,17 +354,23 @@ def test_off_proposes_nothing_and_an_agent_others_talk_to_never_does(bridges, fa
     def listed(token=own):
         return "plan_propose" in [t["name"] for t in rpc(bridge, "tools/list", token=token).json()["result"]["tools"]]
 
+    def set_level(level):
+        assert bridge.put("/v1/agents/budget/proactive", headers=AUTH, json={"level": level}).status_code == 200
+        # its tools' list changed: the bridge registered them again, with a token of its own since this test's isn't
+        # the one in its Hermes profile (agent_tools.rs `register_at`): this test's back
+        give_token(bridge, "budget", own)
+
     assert listed()
-    assert bridge.put("/v1/agents/budget/proactive", headers=AUTH, json={"level": "off"}).status_code == 200
+    set_level("off")
     assert not listed()
     refused = call(bridge, "plan_propose", trip(), token=own)
     assert not_done(refused) and "turned your suggestions off" in text_of(refused)
     assert plan_cards(bridge, "budget") == []
-    assert bridge.put("/v1/agents/budget/proactive", headers=AUTH, json={"level": "smart"}).status_code == 200
-    assert listed() and call(bridge, "plan_propose", trip(), token=own)["isError"] is False
+    set_level("smart")
+    assert listed() and done(call(bridge, "plan_propose", trip(), token=own))
     # turned off again: the card still waiting goes without a word (§2.1)
     assert len(plan_cards(bridge, "budget")) == 1
-    assert bridge.put("/v1/agents/budget/proactive", headers=AUTH, json={"level": "off"}).status_code == 200
+    set_level("off")
     assert wait_until(lambda: plan_cards(bridge, "budget") == [], timeout=20)
     # an agent other people talk to (a project agent): never listed, never made
     made = bridge.post("/v1/project-agents", headers=AUTH, json={"name": "Voyage à Lisbonne", "lang": "fr",
@@ -398,7 +409,7 @@ def test_a_watched_mailbox_starts_with_the_plan(bridges, fakes):
     from test_mailbox import TOKEN as COACH
     made = call(bridge, "plan_propose", trip(watch={"mail_from": [{"name": "TAP", "domain": "flytap.com"}]}),
                 token=COACH)
-    assert made["isError"] is False, text_of(made)
+    assert done(made), text_of(made)
     [card] = plan_cards(bridge)
     texts = TEXTS[lang_of(card)]
     assert card["bip_plan"]["watch_text"] == texts["watch"].format(name="TAP")
