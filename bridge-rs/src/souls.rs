@@ -23,7 +23,8 @@
 //! the end of a task it deletes the working files it no longer needs, never the person's own (2026-11-07,
 //! `TIDY_RULE`, the golden rewritten the same way; space_tidy.rs removes what is temporary by itself); and when the
 //! person must pick between a few options, it asks with Hermes' clarify card, never a numbered list (2026-11-19,
-//! `CHOICE_RULE`, the golden rewritten the same way).
+//! `CHOICE_RULE`, the golden rewritten the same way); and a bot check or captcha that still blocks its browser is
+//! handed to the person, nothing else tried (2026-11-22, `BOT_CHECK_RULE`, the golden rewritten the same way).
 //! `heal_souls` brings existing agents' blocks up to date. An agent given the person's
 //! health data has a second block (`with_health`): use it to help, never to diagnose. An agent in the person's
 //! circle (shared_memory.rs) knows that what it remembers of them is common to their own agents
@@ -86,6 +87,19 @@ pub const SENDING_RULE: &str = concat!(
     "validated asks them first in the app: if an upload is cut, say in one sentence that it waits for their go. Never ",
     "help download pirated films, series, music, books or software, nor install a torrent client for it: say so ",
     "plainly, once, without lecturing."
+);
+
+/// A bot check that still blocks (Alex, 22/11, passation-pro briefs/enquete-antibot-1122.md: GLM met Cloudflare's
+/// wall on a shop, then set out to pass it with headless Playwright through the proxy and the agent's own proxy
+/// credentials, for a watcher). The visible browser keeps getting past checks by itself (Alex: « on veut contourner…
+/// c'est seulement s'il est bloqué quand même »): only a check that still blocks it is the person's, nothing else is
+/// tried. Its browser hands it over by itself (browser_mcp.rs `check_stop_text`); its programs can't reach check
+/// hosts nor captcha services (sandbox_sites.rs, the proxy). Rust bridge only (tests/golden/souls.json rewritten with
+/// `GOLDEN_SOULS_OUT`). Short: it is paid on every call.
+pub const BOT_CHECK_RULE: &str = concat!(
+    "A bot check or captcha that still blocks your browser: try nothing else (no headless script, other browser, ",
+    "proxy or identity, no captcha service, no watcher on that site). Tell your person in one sentence; they can take ",
+    "over your browser (« Prendre la main »)."
 );
 
 pub const AI_RULE: &str = concat!(
@@ -423,7 +437,7 @@ pub fn language_block(lang: Option<&str>) -> String {
     for_language(
         &format!(
             "{BLOCK_START}\nLanguage: answer in the language your person writes in. Always write it with its accents and usual punctuation (routines and notes too), never an ASCII-only version: its own quotation marks too (“…” in English), the « » of these rules and of the tools' texts are only quotes. When you write first (a routine, \
-             a report, a reminder), write in {name}.{names} The current time is at the top of each message (a bip:now line): trust it, never check it in the terminal.\n{CONTENT_RULE}\n{SENDING_RULE}\n{AI_RULE}\n{CARE_RULE}\n{FAMILY_RULE}\n{PROJECT_RULE}\n{DRAFT_RULE}\n{PLAIN_RULE}\n{FILES_RULE}\n{TIDY_RULE}\n{LONG_WORK_RULE}\n{VISUAL_RULE}\n{FACTS_RULE}\n{CALC_RULE}\n{SPACE_RULE}\n{ACK_RULE}\n{STEPS_RULE}\n{CHOICE_RULE}\n{SAY_RULE}\n{STYLE_RULE}\n{BLOCK_END}"
+             a report, a reminder), write in {name}.{names} The current time is at the top of each message (a bip:now line): trust it, never check it in the terminal.\n{CONTENT_RULE}\n{SENDING_RULE}\n{BOT_CHECK_RULE}\n{AI_RULE}\n{CARE_RULE}\n{FAMILY_RULE}\n{PROJECT_RULE}\n{DRAFT_RULE}\n{PLAIN_RULE}\n{FILES_RULE}\n{TIDY_RULE}\n{LONG_WORK_RULE}\n{VISUAL_RULE}\n{FACTS_RULE}\n{CALC_RULE}\n{SPACE_RULE}\n{ACK_RULE}\n{STEPS_RULE}\n{CHOICE_RULE}\n{SAY_RULE}\n{STYLE_RULE}\n{BLOCK_END}"
         ),
         Some(&code),
     )
@@ -1153,6 +1167,25 @@ mod tests {
         let dutch = with_language("Je bent Vie.\n", Some("nl"));
         assert!(dutch.contains("write in Dutch."));
         assert_eq!(split_language(&dutch).1.as_deref(), Some("nl"));
+    }
+
+    /// 22/11 (enquete-antibot): the bot-check line is in every agent's rules, once, whatever its kind and language,
+    /// short; it never forbids the browser's own way past a check, only trying something else once it still blocks.
+    #[test]
+    fn a_bot_check_that_still_blocks_is_handed_over() {
+        assert!(BOT_CHECK_RULE.chars().count() < 320, "{}", BOT_CHECK_RULE.chars().count());
+        for needed in ["still blocks your browser", "no headless script", "proxy or identity", "no captcha service", "take over"] {
+            assert!(BOT_CHECK_RULE.contains(needed), "missing {needed}");
+        }
+        assert!(!BOT_CHECK_RULE.to_lowercase().contains("never get past"));
+        for kind in ["daily", "wellness", "finance", "home", "work", "learning", "creative", "tech"] {
+            for lang in ["fr", "en"] {
+                let soul = soul_for("Vie", kind, Some(lang)).unwrap();
+                assert_eq!(soul.matches("A bot check or captcha that still blocks").count(), 1, "{kind} {lang}");
+                // the button as the other tools' texts name it (card_pay.rs, phone_exit/agent.rs)
+                assert!(soul.contains("« Prendre la main »"), "{kind} {lang}");
+            }
+        }
     }
 
     #[test]
