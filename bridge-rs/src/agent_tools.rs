@@ -2052,6 +2052,16 @@ pub fn call_session_of(body: &[u8]) -> Option<String> {
     })
 }
 
+/// The call of `tool` carries its person's own words: a turn of their own conversation (runs.rs `persons_own_turn`: not
+/// a routine's, a watcher's, a task's, another agent's ask, a group's, a relative's or another household's, the
+/// brake's rescue, one followed again after a restart), while no relative's or other household's turn goes on
+/// (shared_pages.rs `who`). Only then does « arrête de me proposer des choses » turn « Initiative » off
+/// (agent_proactive.rs), and only then is a plan « asked » (plans.rs: else the caps of what nobody asked for).
+fn persons_own_call(state: &AppState, agent: &str, tool: &str, turn_run: Option<&str>) -> bool {
+    matches!(crate::shared_pages::who(state, agent, tool), crate::shared_pages::Who::Owner)
+        && turn_run.is_some_and(|run| state.hub.persons_own_turn(agent, run))
+}
+
 async fn mcp_call(
     State(state): State<AppState>,
     uri: axum::http::Uri,
@@ -2287,11 +2297,8 @@ async fn mcp_call(
         return Ok(answer(result));
     }
     if name == crate::agent_proactive::OFF_TOOL {
-        // « arrête de me proposer des choses »: its person's own words only, in a turn of their own conversation
-        // (and not while a relative's or another household's turn goes on: shared_pages.rs `who`)
-        let owner = matches!(crate::shared_pages::who(&state, &agent.name, &name), crate::shared_pages::Who::Owner);
-        let persons_turn =
-            owner && turn_run.as_deref().is_some_and(|run| state.hub.persons_own_turn(&agent.name, run));
+        // « arrête de me proposer des choses »: its person's own words only (`persons_own_call`)
+        let persons_turn = persons_own_call(&state, &agent.name, &name, turn_run.as_deref());
         let config = state.config();
         let (was, tools_before) =
             (crate::agent_proactive::level(&config, &agent.name), crate::agent_tools::tools_for(&config, &agent));
@@ -2400,15 +2407,20 @@ async fn mcp_call(
     }
     if name == crate::plans::TOOL_NAME {
         // ONE card for the whole plan (plans.rs), in this turn's conversation and pushed; nothing to tell the agent
-        // when it is answered (`taken`): « Prévoir » runs no model
-        let asked = turn_run.as_deref().is_some_and(|run| state.hub.persons_own_turn(&agent.name, run));
+        // when it is answered (`taken`): « Prévoir » runs no model. Asked only in its person's own words
+        // (`persons_own_call`, as « Initiative »'s off switch): another agent's ask, a relative's turn… are unasked
+        let asked = persons_own_call(&state, &agent.name, &name, turn_run.as_deref());
         let cards_before = crate::card_place::waiting(&state, &agent.name);
         let called = crate::plans::call(&state, &agent, &arguments, asked, turn_run.as_deref()).await;
         let mut result = called.result;
         if let Some((line, id)) = called.card {
-            crate::card_place::place_new(&state, &agent, &cards_before, turn_run.as_deref()).await;
-            crate::card_place::taken(&state.config(), &format!("{}{id}", crate::plans::RUN_PREFIX));
-            state.push.notify_bridge_card(&agent.name, &line, crate::plans::PUSH_KEY, &id).await;
+            let run_id = format!("{}{id}", crate::plans::RUN_PREFIX);
+            // asked: in the person's conversation; unasked, the main one (review 1, B1: a routine's run, another
+            // agent's ask in their pair's hidden conversation, which card_place.rs doesn't know as hidden)
+            let shown_in = if asked { turn_run.as_deref() } else { None };
+            crate::card_place::place_new(&state, &agent, &cards_before, shown_in).await;
+            crate::card_place::taken(&state.config(), &run_id);
+            state.push.notify_bridge_card(&agent.name, &line, crate::plans::PUSH_KEY, &run_id).await;
         }
         wrote(&agent.name, &name, &arguments, &mut result);
         return Ok(answer(result));

@@ -7,18 +7,27 @@
 //!   « Prévoir » (routines.rs `create_said`): at its time the bridge delivers the words as written, one Boîte line,
 //!   WITHOUT the model; an urgent one at the system's urgent level (background_turn.rs `deliver_urgent`). A habit is one moment on a rhythm: one routine on a clock per time of day, « vers » that time
 //!   (a stable shift of −10 to +10 min from the plan's id, Alex Q7 A), ending after its weeks (its number of runs).
-//! - **A route moment** is written by the bridge: `to` and `from` (else the first « Coordonnées » entry this agent
-//!   reads) found as `map_image` finds places (Nominatim), the way's time asked as map_route.rs asks it (FOSSGIS's
-//!   OSRM, coordinates only), the moment at the arrival less the way and 5 minutes, urgent.
+//! - **A route moment** is written by the bridge: `to` found as `map_image` finds places (Nominatim, cached), the way's
+//!   time asked as map_route.rs asks it (FOSSGIS's OSRM, coordinates only, cached), the moment at the arrival less the
+//!   way and 5 minutes, urgent. From `from` when the agent gives one: timed at once. Else from the person's home (the
+//!   « Coordonnées » entry this agent reads that is labelled as home, `home_of`), which goes to the geocoder only after
+//!   « Prévoir » (review 1, R1): never while the card waits, never after « Non merci »; the card says « avant 15:00 »
+//!   until then (`Leg`). Not timed then (the home gone, a way not found): left out, one line (`route_failed`).
 //! - **What it watches** costs nothing while nothing moves: the senders' e-mails are an e-mail trigger on their domains
-//!   (triggers.rs, made by the plan: on with « Prévoir », gone with the plan); an event of the phone's calendar copy
-//!   (calendar.rs) is compared with each copy the phone sends (`tick`): moved, the moments move by as much, one line;
-//!   cancelled, the plan goes, one line; no model either way. Google and CalDAV events come with plans-sources (§6 row 7).
+//!   (triggers.rs, made by the plan: on with « Prévoir », gone with the plan), its headers only (`headers_only`: the
+//!   sender's address, the subject, the date; one small turn per e-mail of theirs, §3.8); not made, one line
+//!   (`watch_failed`). An event of the phone's calendar copy (calendar.rs) is compared with each copy the phone sends
+//!   (`tick`): moved, the moments move by as much, one line; cancelled, the plan goes, one line; no model either way.
+//!   A repeating event is never followed (`phone_event`: all its occurrences share one id on both phones); an event
+//!   whose calendar left the copy is not cancelled. Google and CalDAV events come with plans-sources (§6 row 7).
 //! - **Only from an agent that may propose** (agent_proactive.rs `proposes`): « Initiative » not off
 //!   (contracts/proactive), the person's own agent (never one other people talk to); its « Routines » on.
-//! - **The caps** (D2 A): one plan per reply in the person's own turn (runs.rs `persons_own_turn`); unasked (a
-//!   routine's, a watcher's, a trigger's, a task's turn, or none) one card waiting per agent, 2 a day per agent, 4 a day
-//!   for the place. « Non merci » forgets the plan and keeps its title's print 14 days: the same plan is refused.
+//! - **The caps** (D2 A): one plan per reply in the person's own turn (agent_tools.rs `persons_own_call`, as
+//!   « Initiative »'s off switch); unasked (a routine's, a watcher's, a trigger's, a task's turn, another agent's ask,
+//!   a relative's turn, or none) one card waiting per agent, 2 a day per agent, 4 a day for the place. Its card shows
+//!   where the person sees it (card_place.rs `report`: a hidden conversation's card in the main one), and so do its
+//!   moments and lines (B1). « Non merci » forgets the plan and keeps its title's print 14 days: the same plan is
+//!   refused.
 //! - **The end**: a day after its last moment, the plan, its routines and its trigger go without a word. A card still
 //!   waiting when its last moment has passed, or when « Initiative » is turned off, goes without a word; a plan set
 //!   goes on whatever the level (the person asked for it).
@@ -51,7 +60,8 @@ use crate::{py, Dict};
 pub const TOOL_NAME: &str = "plan_propose";
 /// The plan's card (`/v1/approvals`, `/v1/approve`).
 pub const RUN_PREFIX: &str = "bip-plan-";
-/// Its notification's key (notifications.rs `Kind::of_card`: the card family, as a routine's).
+/// Its notification's key (notifications.rs `Kind::of_card`: a request's neutral line, as a tool asked for; its id the
+/// card's run id, so an older app's « Refuser » answers it: contracts/notifications/types/card.json `plan`).
 pub const PUSH_KEY: &str = "plan_request";
 /// Who made an e-mail trigger of a plan (triggers.rs: on at once, the person said « Prévoir »).
 pub const MAKER: &str = "plan";
@@ -66,6 +76,8 @@ pub const NAME_MAX: usize = 40;
 pub const SENDERS_MAX: usize = 3;
 pub const TIMES_MAX: usize = 4;
 pub const WEEKS_MAX: u32 = 12;
+/// Urgent moments of a plan, at most (leaving, a check-in): never a habit's.
+pub const URGENT_MAX: usize = 2;
 /// The caps (D2 A, §3.2).
 pub const PER_REPLY: usize = 1;
 pub const UNASKED_PER_AGENT: usize = 2;
@@ -103,6 +115,20 @@ pub struct Moment {
     /// Written by the bridge from a route (« Pars pour … »).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub route: bool,
+    /// A route from the person's home, timed at « Prévoir » (its `at` the arrival until then).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub leg: Option<Leg>,
+}
+
+/// A route moment from the person's home, waiting for « Prévoir » to be timed: where to (its words and the place's
+/// coordinates), how, the arrival. The home itself is never kept here: read from « Coordonnées » then.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Leg {
+    pub place: String,
+    pub lat: f64,
+    pub lon: f64,
+    pub mode: String,
+    pub arrive: f64,
 }
 
 /// A habit's rhythm.
@@ -132,6 +158,9 @@ pub struct EventRef {
     pub id: String,
     /// Its start as last seen (Unix seconds).
     pub start: f64,
+    /// Its calendar's id: a calendar taken out of the copy cancels nothing (`event_news`).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub calendar: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -253,6 +282,10 @@ pub struct Texts {
     pub first_card: &'static str,
     pub moved: &'static str,
     pub cancelled: &'static str,
+    pub route_pending: &'static str,
+    pub before: &'static str,
+    pub route_failed: &'static str,
+    pub watch_failed: &'static str,
     pub notification: &'static str,
     pub summary: &'static str,
     pub one_moment: (&'static str, &'static str),
@@ -277,6 +310,10 @@ pub static TEXTS: [Texts; 4] = [
         first_card: "Tu règles ses propositions en bas de sa page.",
         moved: "Ton rendez-vous « {title} » a bougé : {day} à {time}. J’ai décalé les rappels.",
         cancelled: "Ton rendez-vous « {title} » est annulé : j’ai retiré ses rappels.",
+        route_pending: "Pars pour {place} · {mode}",
+        before: "avant {time}",
+        route_failed: "Je n’ai pas pu calculer le trajet pour {place} : pas de rappel pour partir.",
+        watch_failed: "Je ne surveille pas les e-mails de {name} : la veille n’a pas pu être créée. Les rappels sont prévus.",
         notification: "Propose un plan · {title}",
         summary: "{agent} propose un plan pour {title} : {n} moments. Le prévoir ?",
         one_moment: ("1 moments", "1 moment"),
@@ -299,6 +336,10 @@ pub static TEXTS: [Texts; 4] = [
         first_card: "You can set its suggestions at the bottom of its page.",
         moved: "Your appointment “{title}” moved: {day} at {time}. I’ve moved the reminders.",
         cancelled: "Your appointment “{title}” was cancelled: I’ve removed its reminders.",
+        route_pending: "Leave for {place} · {mode}",
+        before: "before {time}",
+        route_failed: "I couldn’t time the way to {place}: no reminder to leave.",
+        watch_failed: "I’m not watching e-mails from {name}: the watch couldn’t be set up. The reminders are set.",
         notification: "Suggests a plan · {title}",
         summary: "{agent} suggests a plan for {title}: {n} moments. Set it up?",
         one_moment: ("1 moments", "1 moment"),
@@ -321,6 +362,10 @@ pub static TEXTS: [Texts; 4] = [
         first_card: "Seine Vorschläge stellst du unten auf seiner Seite ein.",
         moved: "Dein Termin „{title}“ hat sich verschoben: {day} um {time}. Ich habe die Erinnerungen verschoben.",
         cancelled: "Dein Termin „{title}“ wurde abgesagt: Ich habe seine Erinnerungen entfernt.",
+        route_pending: "Brich nach {place} auf · {mode}",
+        before: "vor {time}",
+        route_failed: "Ich konnte den Weg nach {place} nicht berechnen: keine Erinnerung zum Aufbrechen.",
+        watch_failed: "Ich behalte E-Mails von {name} nicht im Blick: Die Überwachung ließ sich nicht einrichten. Die Erinnerungen stehen.",
         notification: "Schlägt einen Plan vor · {title}",
         summary: "{agent} schlägt einen Plan für {title} vor: {n} Momente. Einplanen?",
         one_moment: ("1 Momente", "1 Moment"),
@@ -343,6 +388,10 @@ pub static TEXTS: [Texts; 4] = [
         first_card: "Puedes ajustar sus propuestas al final de su página.",
         moved: "Tu cita «{title}» ha cambiado: {day} a las {time}. He movido los recordatorios.",
         cancelled: "Tu cita «{title}» se ha cancelado: he quitado sus recordatorios.",
+        route_pending: "Sal hacia {place} · {mode}",
+        before: "antes de las {time}",
+        route_failed: "No pude calcular el trayecto hasta {place}: no habrá aviso para salir.",
+        watch_failed: "No vigilo los correos de {name}: no se pudo activar la vigilancia. Los recordatorios están programados.",
         notification: "Propone un plan · {title}",
         summary: "{agent} propone un plan para {title}: {n} momentos. ¿Programarlo?",
         one_moment: ("1 momentos", "1 momento"),
@@ -408,12 +457,41 @@ pub fn route_words(lang: &str, place: &str, minutes: u32, mode: &str) -> String 
     fill(t.route, &[("place", place), ("n", &minutes.to_string()), ("mode", way)])
 }
 
+/// « Pars pour Cabinet du Dr Martin · à pied », a route from home before « Prévoir » (its minutes come then).
+pub fn route_pending_words(lang: &str, place: &str, mode: &str) -> String {
+    let t = texts(lang);
+    let way = t.modes[MODES.iter().position(|m| *m == mode).unwrap_or(0)];
+    fill(t.route_pending, &[("place", place), ("mode", way)])
+}
+
+pub fn route_failed_line(lang: &str, place: &str) -> String {
+    fill(texts(lang).route_failed, &[("place", place)])
+}
+
+/// « Je ne surveille pas les e-mails de TAP : … »
+pub fn watch_failed_line(lang: &str, senders: &[Sender]) -> String {
+    let t = texts(lang);
+    let names: Vec<String> = senders.iter().map(|s| s.name.clone()).collect();
+    fill(t.watch_failed, &[("name", &joined(&names, t.and))])
+}
+
 /// « mer. 25 · 10:50 », then « · heure de Lisbonne » when its zone's clock is not the person's.
 pub fn when_text(lang: &str, at: f64, zone: Tz, person: Tz, city: &str) -> String {
+    when_with(lang, at, zone, person, city, false)
+}
+
+/// « jeu. 26 · avant 15:00 »: a route from home before « Prévoir », at its arrival.
+pub fn before_text(lang: &str, at: f64, zone: Tz, person: Tz, city: &str) -> String {
+    when_with(lang, at, zone, person, city, true)
+}
+
+fn when_with(lang: &str, at: f64, zone: Tz, person: Tz, city: &str, before: bool) -> String {
     let t = texts(lang);
     let Some(local) = zone.timestamp_opt(at as i64, 0).single() else { return String::new() };
     let day = t.days_short[local.weekday().num_days_from_monday() as usize];
-    let mut text = format!("{day} {} · {}", local.day(), local.format("%H:%M"));
+    let clock = local.format("%H:%M").to_string();
+    let clock = if before { fill(t.before, &[("time", &clock)]) } else { clock };
+    let mut text = format!("{day} {} · {clock}", local.day());
     let theirs = person.timestamp_opt(at as i64, 0).single().map(|d| d.naive_local());
     if theirs != Some(local.naive_local()) {
         text.push(' ');
@@ -631,6 +709,7 @@ pub fn draft(arguments: &Dict, agent: &str, person: Tz, routines: Tz, now: f64) 
                 say: String::new(),
                 urgent: true,
                 route: true,
+                leg: None,
             });
             continue;
         }
@@ -657,7 +736,16 @@ pub fn draft(arguments: &Dict, agent: &str, person: Tz, routines: Tz, now: f64) 
             at
         };
         let urgent = item.get("urgent").is_some_and(py::truthy);
-        moments.push(Moment { id, at, zone: moment_zone.name().to_string(), what, say, urgent, route: false });
+        if urgent && habit {
+            return Err("moment 1: urgent: never for a habit (every day at the phone's urgent level)".into());
+        }
+        moments.push(Moment { id, at, zone: moment_zone.name().to_string(), what, say, urgent, route: false, leg: None });
+    }
+    if moments.iter().filter(|m| m.urgent).count() > URGENT_MAX {
+        return Err(format!(
+            "urgent: {URGENT_MAX} moments at most (when to leave, a check-in opening: what is missed if late); a route \
+             is urgent already"
+        ));
     }
     let repeat = match (habit, arguments.get("repeat").filter(|v| !v.is_null())) {
         (true, Some(r)) => {
@@ -704,7 +792,7 @@ pub fn draft(arguments: &Dict, agent: &str, person: Tz, routines: Tz, now: f64) 
             if source != "phone" || id.is_empty() || id.len() > 300 {
                 return Err("event: {source: phone, id} (an event of the phone's calendar)".into());
             }
-            Some(EventRef { source, id, start: 0.0 })
+            Some(EventRef { source, id, start: 0.0, calendar: String::new() })
         }
     };
     let id = py::uuid4_hex()[..12].to_string();
@@ -913,9 +1001,12 @@ fn moment_views(config: &Config, plan: &Plan, lang: &str) -> Vec<Value> {
     plan.moments
         .iter()
         .map(|m| {
-            let when = rhythm.clone().unwrap_or_else(|| when_text(lang, m.at, zone_of(&m.zone), person, &plan.city));
+            let when = rhythm.clone().unwrap_or_else(|| match m.leg {
+                Some(_) => before_text(lang, m.at, zone_of(&m.zone), person, &plan.city),
+                None => when_text(lang, m.at, zone_of(&m.zone), person, &plan.city),
+            });
             json!({"id": m.id, "at": m.at, "zone": m.zone, "when_text": when, "what": m.what, "say": m.say,
-                   "urgent": m.urgent, "route": m.route})
+                   "urgent": m.urgent, "route": m.route, "pending": m.leg.is_some()})
         })
         .collect()
 }
@@ -987,20 +1078,25 @@ per reply. Say it in one sentence in your reply; the card shows the rest.",
                         "what": {"type": "string", "description": "its line on the card (≤ 80)"},
                         "say": {"type": "string", "description": "what you'll say then, plain text (≤ 240), in your person's language"},
                         "link": {"type": "string", "description": "an https link added to it"},
-                        "urgent": {"type": "boolean"},
+                        "urgent": {"type": "boolean", "description": "only for a moment that must be on time, else \
+the thing is missed: when to leave, a check-in opening. It reaches the phone at the system's urgent level, through Do Not \
+Disturb. 2 at most per plan (a route counts), never for a habit"},
                         "route": {"type": "object", "description": "instead of at/what/say: the bridge times the way and says when to leave",
                             "properties": {"to": {"type": "string"}, "arrive_by": {"type": "string"},
                                            "mode": {"type": "string", "enum": MODES},
-                                           "from": {"type": "string", "description": "default: your person's address in their contact details"}},
+                                           "from": {"type": "string", "description": "default: your person's home \
+(their contact details' entry labelled as home), timed once they say « Prévoir »"}},
                             "required": ["to", "arrive_by"]}}}},
                 "repeat": {"type": "object", "description": "a habit's rhythm",
                     "properties": {"days": {"description": "daily, weekdays, weekends, or [mon, wed, fri]"},
                                    "times": {"type": "array", "items": {"type": "string"}, "description": "HH:MM, 1 to 4"},
                                    "weeks": {"type": "integer", "minimum": 1, "maximum": WEEKS_MAX}}},
-                "watch": {"type": "object", "description": "e-mails to watch for a change (an airline's, a hotel's)",
+                "watch": {"type": "object", "description": "e-mails to watch for a change (an airline's, a hotel's), by \
+their sender's domain: you'll see only their sender, subject and date",
                     "properties": {"mail_from": {"type": "array", "maxItems": SENDERS_MAX, "items": {"type": "object",
                         "properties": {"name": {"type": "string"}, "domain": {"type": "string"}}}}}},
-                "event": {"type": "object", "description": "the event of your person's phone calendar it is about",
+                "event": {"type": "object", "description": "the event of your person's phone calendar it is about \
+(one that doesn't repeat: a repeating one is not followed)",
                     "properties": {"source": {"type": "string", "enum": ["phone"]}, "id": {"type": "string"}}},
             },
             "required": ["kind", "title", "moments"],
@@ -1036,10 +1132,25 @@ async fn way_minutes(config: &Config, from: (f64, f64), to: (f64, f64), mode: &s
     Ok(((seconds / 60.0).ceil() as u32).max(1))
 }
 
-/// The person's address the agent may read (« Coordonnées »), when one has one.
-fn home_address(state: &AppState, config: &Config, agent: &str) -> Option<String> {
-    let entries = state.vault.contacts_for(config, agent).ok()?;
-    entries.iter().find_map(|e| {
+/// Words a « Coordonnées » entry's label (or its « Indications ») says home with, in the four languages (accents and
+/// case aside); one whose label says work is never home.
+const HOME_WORDS: [&str; 11] =
+    ["domicile", "maison", "chez moi", "home", "house", "zuhause", "zu hause", "daheim", "wohnung", "casa", "hogar"];
+const WORK_WORDS: [&str; 10] =
+    ["pro", "travail", "bureau", "boulot", "work", "office", "arbeit", "buro", "trabajo", "oficina"];
+
+/// `text` says one of `words` (whole words, accents and case aside).
+fn says_any(text: &str, words: &[&str]) -> bool {
+    let folded = crate::tools_knowledge::ascii_fold(&text.to_lowercase()).replace(|c: char| !c.is_alphanumeric(), " ");
+    let folded = format!(" {} ", folded.split_whitespace().collect::<Vec<_>>().join(" "));
+    words.iter().any(|w| folded.contains(&format!(" {w} ")))
+}
+
+/// The person's home among the « Coordonnées » entries an agent reads: the first one with an address whose label (or
+/// else its « Indications ») says home, never just the first entry (review 1, R1: maybe the office). Its address on one
+/// line (« 3 rue du Test, 69001 Lyon, FR »).
+pub fn home_of(entries: &[crate::vault_contacts::Entry]) -> Option<String> {
+    let address = |e: &crate::vault_contacts::Entry| {
         let field = |k: &str| e.secret.get(k).and_then(Value::as_str).unwrap_or("").trim().to_string();
         let line = field("address_line1");
         (!line.is_empty()).then(|| {
@@ -1049,34 +1160,98 @@ fn home_address(state: &AppState, config: &Config, agent: &str) -> Option<String
                 .collect::<Vec<_>>()
                 .join(", ")
         })
-    })
+    };
+    let home = |e: &&crate::vault_contacts::Entry| {
+        !says_any(&e.label, &WORK_WORDS)
+            && (says_any(&e.label, &HOME_WORDS) || e.hint.as_deref().is_some_and(|h| says_any(h, &HOME_WORDS)))
+    };
+    entries.iter().filter(home).find_map(address)
 }
 
-/// Each route moment timed and written by the bridge.
+/// The person's home address `agent` may read (`home_of`): read here, sent nowhere.
+fn home_address(state: &AppState, config: &Config, agent: &str) -> Option<String> {
+    home_of(&state.vault.contacts_for(config, agent).ok()?)
+}
+
+/// When to leave: the arrival less the way and the margin, rounded down to 5 minutes.
+fn leave_at(arrive: f64, minutes: u32) -> f64 {
+    ((arrive - (f64::from(minutes) + MARGIN_MINUTES) * 60.0) / 300.0).floor() * 300.0
+}
+
+/// Each route moment written by the bridge: the place to go found now (the agent hears of one not found); timed now
+/// from the agent's `from`; from the person's home, timed at « Prévoir » only (`time_legs`: its address goes to the
+/// geocoder then, never while the card waits).
 async fn resolve_routes(state: &AppState, config: &Config, draft: &mut Draft, lang: &str, now: f64) -> Result<(), String> {
     let routes = std::mem::take(&mut draft.routes);
     for r in routes {
-        let from = match r.from.clone().or_else(|| home_address(state, config, &draft.plan.agent)) {
-            Some(from) => from,
-            None => {
-                return Err("route: no start address: give route.from (your person's address, from their contact \
-                            details) or leave the route out"
-                    .into())
-            }
-        };
-        let from = locate(config, &from).await.map_err(|e| format!("route: {e}"))?;
+        if r.from.is_none() && home_address(state, config, &draft.plan.agent).is_none() {
+            return Err("route: no start address: none of your person's contact details you may read is labelled as \
+                        their home (« Domicile », « Home »…): give route.from, or leave the route out"
+                .into());
+        }
+        if config.maps.streets == "off" {
+            return Err("route: the street routing is off on this place".into());
+        }
         let to = locate(config, &r.to).await.map_err(|e| format!("route: {e}"))?;
+        let m = &mut draft.plan.moments[r.moment];
+        let Some(from) = &r.from else {
+            let words = route_pending_words(lang, &r.to, &r.mode);
+            let leg = Leg { place: r.to.clone(), lat: to.0, lon: to.1, mode: r.mode.clone(), arrive: r.arrive };
+            (m.at, m.what, m.say, m.urgent, m.leg) = (r.arrive, words.clone(), words, true, Some(leg));
+            continue;
+        };
+        let from = locate(config, from).await.map_err(|e| format!("route: {e}"))?;
         let minutes = way_minutes(config, from, to, &r.mode).await.map_err(|e| format!("route: {e}"))?;
-        let leave = r.arrive - (f64::from(minutes) + MARGIN_MINUTES) * 60.0;
-        let leave = (leave / 300.0).floor() * 300.0;
+        let leave = leave_at(r.arrive, minutes);
         if leave <= now {
             return Err("route: the time to leave has passed already".into());
         }
         let words = route_words(lang, &r.to, minutes, &r.mode);
-        let m = &mut draft.plan.moments[r.moment];
         (m.at, m.what, m.say, m.urgent) = (leave, words.clone(), words, true);
     }
     Ok(())
+}
+
+/// The way's minutes from the person's home (`home`, None: gone from « Coordonnées ») to a leg's place.
+async fn leg_minutes(config: &Config, home: Option<&str>, leg: &Leg) -> Result<u32, String> {
+    let from = locate(config, home.ok_or("no home address any more")?).await?;
+    way_minutes(config, from, (leg.lat, leg.lon), &leg.mode).await
+}
+
+/// « Prévoir » to a plan with routes from home: each one timed now (the home's address to the geocoder, then its
+/// coordinates to the router) and written into the waiting plan; those not timed (the home gone from « Coordonnées »,
+/// not found, no way) returned (their moment id and place): left out, said in one line.
+async fn time_legs(state: &AppState, config: &Config, plan: &Plan, skip: &[String], lang: &str) -> Vec<(String, String)> {
+    let legs: Vec<(String, Leg)> = plan
+        .moments
+        .iter()
+        .filter(|m| !skip.contains(&m.id))
+        .filter_map(|m| m.leg.clone().map(|l| (m.id.clone(), l)))
+        .collect();
+    if legs.is_empty() {
+        return Vec::new();
+    }
+    let home = home_address(state, config, &plan.agent);
+    let mut timed = Vec::new();
+    let mut failed = Vec::new();
+    for (id, leg) in legs {
+        match leg_minutes(config, home.as_deref(), &leg).await {
+            Ok(minutes) => timed.push((id, leave_at(leg.arrive, minutes), route_words(lang, &leg.place, minutes, &leg.mode))),
+            Err(why) => {
+                tracing::info!(target: "bipbridge::plans", plan = %plan.id, moment = %id, why = %why, "route not timed");
+                failed.push((id, leg.place));
+            }
+        }
+    }
+    change(config, |store| {
+        let Some(p) = store.plans.iter_mut().find(|p| p.id == plan.id && p.state == WAITING) else { return };
+        for (id, at, words) in &timed {
+            if let Some(m) = p.moments.iter_mut().find(|m| &m.id == id) {
+                (m.at, m.what, m.say, m.leg) = (*at, words.clone(), words.clone(), None);
+            }
+        }
+    });
+    failed
 }
 
 /// The first mailbox `agent` reads (an e-mail trigger's).
@@ -1125,28 +1300,41 @@ pub async fn call(state: &AppState, agent: &AgentConfig, arguments: &Dict, asked
     }
     let mut notes = Vec::new();
     let mut plan = draft.plan;
-    if let Some(event) = plan.event.as_mut() {
-        let copy = crate::calendar::read(&config);
-        let found = copy
-            .get("events")
-            .and_then(Value::as_array)
-            .and_then(|events| events.iter().find(|e| e.get("id").and_then(Value::as_str) == Some(event.id.as_str())))
-            .and_then(|e| event_start(e, person));
-        match found.filter(|_| crate::calendar::reads(&config, &agent.name)) {
-            Some(start) => event.start = start,
-            None => {
+    if let Some(event) = plan.event.clone() {
+        let found = match crate::calendar::reads(&config, &agent.name) {
+            true => phone_event(&crate::calendar::read(&config), &event.id, person),
+            false => PhoneEvent::Missing,
+        };
+        match found {
+            PhoneEvent::Found { start, calendar } => plan.event = Some(EventRef { start, calendar, ..event }),
+            PhoneEvent::Repeating => {
+                // every occurrence has the same id on both phones: which one is the plan's can't be told
+                notes.push(
+                    "Not followed: this event repeats in your person's calendar (its occurrences share one id), so \
+                     the plan doesn't follow it: if it moves or is cancelled, its reminders stay as they are."
+                        .into(),
+                );
+                plan.event = None;
+            }
+            PhoneEvent::Missing => {
                 return refusal("Not done: event: no such event in your person's phone calendar that you may read. \
                                 Propose the plan without `event`, or not at all.")
             }
         }
     }
-    if !plan.watch.is_empty() && mailbox_of(&config, &agent.name).is_none() {
+    if !plan.watch.is_empty() {
         let names: Vec<String> = plan.watch.iter().map(|s| s.name.clone()).collect();
-        notes.push(format!(
-            "Not watched: you read no mailbox here (no mailbox given to you), so the e-mails of {} are not watched.",
-            names.join(", ")
-        ));
-        plan.watch.clear();
+        let why = if mailbox_of(&config, &agent.name).is_none() {
+            Some("you read no mailbox here (no mailbox given to you)")
+        } else if crate::triggers::of_agent(&config, &agent.name).len() >= crate::triggers::MAX_PER_AGENT {
+            Some("you have as many routines that start on an e-mail or a link as you may")
+        } else {
+            None
+        };
+        if let Some(why) = why {
+            notes.push(format!("Not watched: {why}, so the e-mails of {} are not watched.", names.join(", ")));
+            plan.watch.clear();
+        }
     }
     plan.asked = asked;
     let made = change(&config, |store| {
@@ -1184,9 +1372,10 @@ pub async fn call(state: &AppState, agent: &AgentConfig, arguments: &Dict, asked
 
 // -- the answer ---------------------------------------------------------------------------------------------------------
 
-/// The person answered the plan's card: `Some((kept, of, passed))` for « Prévoir », `None` for « Non merci ».
+/// The person answered the plan's card: « Prévoir » (`watch`: its e-mail watch made, None when it watches nothing), or
+/// « Non merci ».
 pub enum Answer {
-    Set { kept: usize, of: usize, passed: usize },
+    Set { kept: usize, of: usize, passed: usize, watch: Option<bool> },
     Declined,
 }
 
@@ -1200,15 +1389,43 @@ pub async fn approve(state: &AppState, agent: &AgentConfig, id: &str, choice: &s
     }
     let config = state.config();
     let place = crate::card_place::of(&config, &format!("{RUN_PREFIX}{id}")).unwrap_or_default();
-    let origin = place.report.or(place.session).unwrap_or_default();
-    let (c, name, id, skip) = (config.clone(), agent.name.clone(), id.to_string(), skip.to_vec());
-    let answered = tokio::task::spawn_blocking(move || answer(&c, &name, &id, yes, &skip, &origin, py::time_time()))
-        .await
-        .map_err(anyhow::Error::from)?;
+    let waiting = get(&config, id).filter(|p| p.agent == agent.name && p.state == WAITING);
+    // where the card showed for the person (card_place.rs `report`): the conversation they asked in; none, the main
+    // one, for a card nobody asked for (a routine's run, another agent's ask in their pair's hidden conversation):
+    // its moments and lines never go to a hidden conversation (review 1, B1)
+    let asked = waiting.as_ref().is_some_and(|p| p.asked);
+    let origin = if asked { place.report.unwrap_or_default() } else { String::new() };
+    let lang = lang_of(&config, &agent.name);
+    let mut skip = skip.to_vec();
+    // a route from home: timed now, never before « Prévoir » (R1)
+    let untimed = match (&waiting, yes) {
+        (Some(plan), true) => time_legs(state, &config, plan, &skip, lang).await,
+        _ => Vec::new(),
+    };
+    skip.extend(untimed.iter().map(|(id, _)| id.clone()));
+    let (c, name, plan_id, kept_skip) = (config.clone(), agent.name.clone(), id.to_string(), skip.clone());
+    let answered =
+        tokio::task::spawn_blocking(move || answer(&c, &name, &plan_id, yes, &kept_skip, &origin, py::time_time()))
+            .await
+            .map_err(anyhow::Error::from)?;
     match answered {
-        Some(Answer::Set { kept, of, passed }) => Ok(web::ok(
-            json!({"ok": true, "choice": "once", "moments": kept, "of": of, "passed": passed}),
-        )),
+        Some(Answer::Set { kept, of, passed, watch }) => {
+            // what the card announced and couldn't be set up: one line each, no model
+            if let Some(plan) = get(&config, id) {
+                for (_, place) in &untimed {
+                    tell(state, &plan, route_failed_line(lang, place)).await;
+                }
+                if watch == Some(false) {
+                    let senders = waiting.as_ref().map(|p| p.watch.clone()).unwrap_or_default();
+                    tell(state, &plan, watch_failed_line(lang, &senders)).await;
+                }
+            }
+            let mut body = json!({"ok": true, "choice": "once", "moments": kept, "of": of, "passed": passed});
+            if let Some(watch) = watch {
+                body["watch"] = json!(watch);
+            }
+            Ok(web::ok(body))
+        }
         Some(Answer::Declined) => Ok(web::ok(json!({"ok": true, "choice": "deny"}))),
         None => Err(HttpError::new(404, "no such request (answered already?)")),
     }
@@ -1246,8 +1463,9 @@ pub fn answer(config: &Config, agent: &str, id: &str, yes: bool, skip: &[String]
             p.ends = ends;
         }
     });
-    tracing::info!(target: "bipbridge::plans", agent, plan = id, kept, passed, "plan set");
-    Some(Answer::Set { kept, of, passed })
+    let watch = (!plan.watch.is_empty()).then_some(made.1.is_some());
+    tracing::info!(target: "bipbridge::plans", agent, plan = id, kept, passed, ?watch, "plan set");
+    Some(Answer::Set { kept, of, passed, watch })
 }
 
 /// « Prévoir »: each moment kept a routine (a habit, its routines on a clock), the watch its trigger. ((routines,
@@ -1312,15 +1530,17 @@ fn watch_trigger(config: &Config, plan: &Plan) -> Option<String> {
     let fields = crate::triggers::Fields {
         name: Some(format!("{} · {}", plan.title, names.join(", ")).chars().take(crate::triggers::NAME_MAX).collect()),
         prompt: Some(format!(
-            "An e-mail from {} about the plan « {} » you set up with your person. If it changes the plan (a new time, a \
-             gate, a delay, a cancellation), tell them in one short line what changed; else answer [SILENT].",
+            "An e-mail from {} about the plan « {} » you set up with your person: you see its sender, subject and date \
+             only, never its text. If they say the plan changed (a new time, a gate, a delay, a cancellation), tell \
+             them in one short line what the subject says; else answer [SILENT].",
             names.join(", "),
             plan.title
         )),
         kind: Some(crate::triggers::MAIL.into()),
         mail: Some(crate::triggers::MailFilter { account, from: domains.join(", "), words: String::new() }),
         enabled: None,
-        budget_tokens: None,
+        // headers only: a few k tokens (§3.8), the smallest budget
+        budget_tokens: Some(crate::triggers::BUDGET_MIN),
     };
     match crate::triggers::create(config, &plan.agent, &fields, MAKER) {
         Ok(t) => Some(t.id),
@@ -1352,21 +1572,69 @@ pub enum EventNews {
     Cancelled,
 }
 
-/// The plan's event in the copy (calendar.rs `read`): moved, gone from a copy that covers its day, or the same.
+/// What the phone's copy says of an event a plan would follow (`plan_propose`'s `event`).
+#[derive(Debug, Clone, PartialEq)]
+pub enum PhoneEvent {
+    /// One event with that id: its start and its calendar.
+    Found { start: f64, calendar: String },
+    /// It repeats (marked `recurring`, or several occurrences with that id: both phones give every occurrence the
+    /// same id, iPhone `CalendarSync.swift` `eventIdentifier`, Android `CalendarSync.kt` `EVENT_ID`): which one is the
+    /// plan's can't be told, nor a moved occurrence from a cancelled one (Android gives a moved one an id of its own).
+    Repeating,
+    Missing,
+}
+
+fn same_id<'a>(copy: &'a Dict, id: &str) -> Vec<&'a Value> {
+    copy.get("events")
+        .and_then(Value::as_array)
+        .map(|events| events.iter().filter(|e| e.get("id").and_then(Value::as_str) == Some(id)).collect())
+        .unwrap_or_default()
+}
+
+fn repeats(events: &[&Value]) -> bool {
+    events.len() > 1 || events.iter().any(|e| e.get("recurring").is_some_and(py::truthy))
+}
+
+/// The event `id` of the phone's copy, for a plan to follow: a repeating one never (review 1, B2).
+pub fn phone_event(copy: &Dict, id: &str, zone: Tz) -> PhoneEvent {
+    let events = same_id(copy, id);
+    if repeats(&events) {
+        return PhoneEvent::Repeating;
+    }
+    let calendar = |e: &Value| e.get("calendar").and_then(Value::as_str).unwrap_or("").to_string();
+    match events.first().and_then(|e| Some((event_start(e, zone)?, calendar(e)))) {
+        Some((start, calendar)) => PhoneEvent::Found { start, calendar },
+        None => PhoneEvent::Missing,
+    }
+}
+
+/// The plan's event in the copy (calendar.rs `read`): moved, gone from a copy that covers its day (its calendar still
+/// in it: a calendar the person took out of the copy cancels nothing, R5), or the same. One that became a repeating
+/// event since: only an occurrence on its own day is its own (never a move of a week, B2); none there, nothing said.
 pub fn event_news(event: &EventRef, copy: &Dict, zone: Tz) -> EventNews {
-    let events = copy.get("events").and_then(Value::as_array).cloned().unwrap_or_default();
-    match events.iter().find(|e| e.get("id").and_then(Value::as_str) == Some(event.id.as_str())) {
-        Some(e) => match event_start(e, zone) {
-            Some(start) if (start - event.start).abs() >= MOVED_MIN_SECONDS => {
-                EventNews::Moved { start, delta: start - event.start }
-            }
-            _ => EventNews::Same,
-        },
+    let events = same_id(copy, &event.id);
+    let day_of = |at: f64| zone.timestamp_opt(at as i64, 0).single().map(|d| d.date_naive());
+    let mut starts = events.iter().filter_map(|e| event_start(e, zone));
+    let found = if repeats(&events) {
+        starts
+            .filter(|s| day_of(*s) == day_of(event.start))
+            .min_by(|a, b| (a - event.start).abs().total_cmp(&(b - event.start).abs()))
+    } else {
+        starts.next()
+    };
+    match found {
+        Some(start) if (start - event.start).abs() >= MOVED_MIN_SECONDS => {
+            EventNews::Moved { start, delta: start - event.start }
+        }
+        Some(_) => EventNews::Same,
+        None if !events.is_empty() => EventNews::Same,
         None => {
+            let listed = copy.get("calendars").and_then(Value::as_array);
+            let taken_out = !event.calendar.is_empty()
+                && listed.is_some_and(|l| !l.iter().any(|c| c.get("id").and_then(Value::as_str) == Some(&event.calendar)));
             let day = |k: &str| copy.get(k).and_then(Value::as_str).and_then(|d| NaiveDate::parse_from_str(d.get(..10)?, "%Y-%m-%d").ok());
-            let at = zone.timestamp_opt(event.start as i64, 0).single().map(|d| d.date_naive());
-            match (day("from"), day("to"), at) {
-                (Some(from), Some(to), Some(at)) if from <= at && at <= to => EventNews::Cancelled,
+            match (day("from"), day("to"), day_of(event.start)) {
+                (Some(from), Some(to), Some(at)) if from <= at && at <= to && !taken_out => EventNews::Cancelled,
                 _ => EventNews::Same,
             }
         }
@@ -1383,12 +1651,20 @@ pub fn lapsed(plan: &Plan, now: f64) -> bool {
     plan.state == WAITING && plan.repeat.is_none() && plan.moments.iter().all(|m| m.at <= now)
 }
 
-/// One line in the plan's conversation (else the main one), pushed: no model.
+/// One line in the plan's conversation (else the main one: never a hidden one, card_place.rs `report_of`), pushed: no
+/// model.
 async fn tell(state: &AppState, plan: &Plan, text: String) {
     let config = state.config();
     let Some(agent) = config.agent(Some(&plan.agent)).cloned() else { return };
     let pipeline = Pipeline::of(state);
-    let session = if plan.origin.is_empty() { pipeline.tip(&agent, "main").await } else { plan.origin.clone() };
+    let origin = match plan.origin.as_str() {
+        "" => None,
+        o => crate::card_place::report_of(state, &agent, o).await,
+    };
+    let session = match origin {
+        Some(o) => o,
+        None => pipeline.tip(&agent, "main").await,
+    };
     let delivery = Delivery {
         agent,
         session,
@@ -1409,6 +1685,9 @@ fn shift(config: &Config, plan: &Plan, start: f64, delta: f64) {
         if let Some(p) = store.plans.iter_mut().find(|p| p.id == plan.id) {
             for m in p.moments.iter_mut() {
                 m.at += delta;
+                if let Some(leg) = m.leg.as_mut() {
+                    leg.arrive += delta;
+                }
             }
             if let Some(e) = p.event.as_mut() {
                 e.start = start;

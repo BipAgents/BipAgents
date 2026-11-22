@@ -459,12 +459,12 @@ fn the_home_is_the_entry_labelled_home_never_the_first_one() {
         hint: hint.map(str::to_string),
         secret: args(&json!({"address_line1": line, "postal_code": "69001", "city": "Lyon", "country": "FR"})),
     };
-    let pro = entry("Kerfy Studio (pro)", Some("pour la société"), "1 rue de l'Essai");
-    assert_eq!(home_of(&[pro.clone()]), None);
+    let pro = || entry("Kerfy Studio (pro)", Some("pour la société"), "1 rue de l'Essai");
+    assert_eq!(home_of(&[pro()]), None);
     let home = entry("Domicile", None, "3 rue du Test");
-    assert_eq!(home_of(&[pro.clone(), home]).as_deref(), Some("3 rue du Test, 69001 Lyon, FR"));
+    assert_eq!(home_of(&[pro(), home]).as_deref(), Some("3 rue du Test, 69001 Lyon, FR"));
     for label in ["Maison", "Chez moi", "Home", "Zuhause", "Casa", "Mon domicile"] {
-        assert!(home_of(&[pro.clone(), entry(label, None, "x")]).is_some(), "{label}");
+        assert!(home_of(&[pro(), entry(label, None, "x")]).is_some(), "{label}");
     }
     assert!(home_of(&[entry("Moi", Some("à la maison"), "x")]).is_some(), "its indications");
     assert_eq!(home_of(&[entry("Home office (pro)", None, "x"), entry("Camille", None, "y")]), None);

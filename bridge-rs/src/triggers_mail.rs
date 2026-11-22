@@ -2,7 +2,8 @@
 //! waiting with IDLE (RFC 2177) on its inbox — the server tells of new mail as it arrives, nothing is polled — renewed
 //! every `idle_minutes`; a server without IDLE is looked at every `poll_minutes`. Each new message (by UID, above the
 //! last one seen: a first connection starts from the newest, old mail is never replayed) is read once (its first
-//! 256 KB, `BODY.PEEK`: it stays unread for the person), then offered to the mailbox's triggers, whose filters choose.
+//! 256 KB, `BODY.PEEK`: it stays unread for the person; its headers only when only plans watch that mailbox:
+//! triggers.rs `headers_only`), then offered to the mailbox's triggers, whose filters choose.
 //!
 //! A connection that fails (a server down, a password changed, the network) is tried again after 5 s, then twice as
 //! long each time up to 15 min; a mailbox whose settings changed (a new password) gets a new connection; one no
@@ -148,6 +149,20 @@ fn has_routines(config: &Config, account: &str) -> bool {
         .any(|t| t.enabled && t.kind == MAIL && t.mail.as_ref().is_some_and(|m| m.account == account))
 }
 
+/// Whether some active e-mail routine of this mailbox reads its messages' text: a plan's watch reads their headers
+/// only (triggers.rs `headers_only`), so a mailbox watched only for plans has no message read whole.
+fn reads_text(config: &Config, account: &str) -> bool {
+    triggers::load(config).triggers.iter().any(|t| {
+        t.enabled
+            && t.kind == MAIL
+            && t.mail.as_ref().is_some_and(|m| m.account == account)
+            && !triggers::headers_only(t)
+    })
+}
+
+/// What a plan's watch fetches of a new message: these headers, never its text.
+const HEADERS_ONLY: &str = "(BODY.PEEK[HEADER.FIELDS (FROM SUBJECT DATE MESSAGE-ID)])";
+
 /// New messages' headers (mail_rules.rs: sender, list, flags, Message-ID), never their text.
 fn headers_of(conn: &mut Connection, uids: &[u64]) -> Result<Vec<crate::mail_tidy::Row>, String> {
     let small: Vec<u32> = uids.iter().filter_map(|u| u32::try_from(*u).ok()).collect();
@@ -170,11 +185,10 @@ fn new_uids(conn: &mut Connection, last: u64) -> Result<Vec<u64>, String> {
     Ok(found)
 }
 
-/// One message read (its first bytes), as an event. None: gone meanwhile.
-fn read_one(conn: &mut Connection, account: &str, uid: u64) -> Result<Option<Event>, String> {
-    let (status, data) = conn
-        .uid("FETCH", &[&uid.to_string(), &format!("(BODY.PEEK[]<0.{FETCH_BYTES}>)")])
-        .map_err(|e| e.to_string())?;
+/// One message read (its first bytes; `text` false: its headers only), as an event. None: gone meanwhile.
+fn read_one(conn: &mut Connection, account: &str, uid: u64, text: bool) -> Result<Option<Event>, String> {
+    let items = if text { format!("(BODY.PEEK[]<0.{FETCH_BYTES}>)") } else { HEADERS_ONLY.to_string() };
+    let (status, data) = conn.uid("FETCH", &[&uid.to_string(), &items]).map_err(|e| e.to_string())?;
     let raw = if status == "OK" { data.iter().find_map(Data::literal).map(<[u8]>::to_vec) } else { None };
     let Some(raw) = raw.filter(|r| !r.is_empty()) else { return Ok(None) };
     let (message, text, files) = mailbox::message_text(&raw);
@@ -239,9 +253,10 @@ fn session(config: &Config, id: &str, account: &Dict, stop: &AtomicBool, tx: &Un
             let uids: Vec<u64> = new_uids(&mut conn, at.last_uid)?.into_iter().take(PER_LOOK).collect();
             // a mailbox watched only for its rules: no message read whole
             let routines = !uids.is_empty() && has_routines(config, id);
+            let text = routines && reads_text(config, id);
             for &uid in &uids {
                 if routines {
-                    if let Some(event) = read_one(&mut conn, id, uid)? {
+                    if let Some(event) = read_one(&mut conn, id, uid, text)? {
                         let _ = tx.send((id.to_string(), event));
                     }
                 }
@@ -303,10 +318,12 @@ pub fn offer(config: &Config, account: &str, event: &Event) -> usize {
         if !t.enabled || t.kind != MAIL {
             continue;
         }
-        if !triggers::matches(filter, &event.from, &event.subject, &event.text) {
+        if !triggers::takes(&t, filter, event) {
             continue;
         }
-        match triggers::enqueue(config, &t.id, event.clone()) {
+        // a plan's watch keeps the headers only (triggers.rs `headers_only`)
+        let kept = if triggers::headers_only(&t) { triggers::headers_of(event) } else { event.clone() };
+        match triggers::enqueue(config, &t.id, kept) {
             Ok(true) => {
                 queued += 1;
                 tracing::info!(target: "bipbridge::triggers", agent = %t.agent, trigger = %t.id, "e-mail queued for a routine");
@@ -448,7 +465,7 @@ mod tests {
         news.send(()).unwrap();
         assert!(conn.idle(Duration::from_secs(10), &|| false).unwrap());
         assert_eq!(new_uids(&mut conn, 7).unwrap(), vec![8]);
-        let event = read_one(&mut conn, "acct", 8).unwrap().unwrap();
+        let event = read_one(&mut conn, "acct", 8, true).unwrap().unwrap();
         assert_eq!(event.message_id, "<b@x>");
         assert_eq!(event.mail_ref, "acct|INBOX|8");
         assert!(event.from.contains("banque.fr"));

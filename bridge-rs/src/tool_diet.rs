@@ -551,7 +551,7 @@ pub fn fits(tool: &Value, arguments: &crate::Dict) -> bool {
 /// Tools that act or propose a card for the person: a call with another tool's arguments is never run as that other
 /// tool when either is one of these (2026-10-30 bench, DeepSeek: `propose_task` written with `propose_agent`'s
 /// arguments made an agent card). The call then fails on its own tool's arguments and the model calls the right one.
-pub const NEVER_REROUTED: [&str; 11] = [
+pub const NEVER_REROUTED: [&str; 12] = [
     "propose_agent",
     "propose_team",
     "propose_room",
@@ -564,6 +564,8 @@ pub const NEVER_REROUTED: [&str; 11] = [
     "tell_family",
     // « arrête de me proposer des choses » (agent_proactive.rs): it turns the agent's « Initiative » off
     crate::agent_proactive::OFF_TOOL,
+    // a plan's card (plans.rs)
+    crate::plans::TOOL_NAME,
 ];
 
 /// The tool a call was meant for, among `tools`: `name` when its arguments fit it (or fit nothing better), else the
@@ -585,14 +587,7 @@ pub fn meant<'a>(tools: &'a [Value], name: &'a str, arguments: &crate::Dict) -> 
     let mut others = tools.iter().filter(|t| t.get("name").and_then(Value::as_str) != Some(name) && fits(t, arguments));
     match (others.next(), others.next()) {
         (Some(only), None) => match only.get("name").and_then(Value::as_str) {
-            // a plan's card (plans.rs) as the others: never run as another tool, nor another tool as it
-            Some(other)
-                if !NEVER_REROUTED.contains(&other)
-                    && !NEVER_REROUTED.contains(&name)
-                    && ![other, name].contains(&crate::plans::TOOL_NAME) =>
-            {
-                other
-            }
+            Some(other) if !NEVER_REROUTED.contains(&other) && !NEVER_REROUTED.contains(&name) => other,
             _ => name,
         },
         _ => name,
@@ -1097,6 +1092,14 @@ mod tests {
             tool("notebook_read", &["page"], &["page"]),
         ];
         assert_eq!(meant(&cards, "propose_task", &args(&["kind", "name", "role"])), "propose_task");
+        // review 1 of plans (R7): a plan's card is never run as another tool, nor another tool as it
+        assert!(NEVER_REROUTED.contains(&crate::plans::TOOL_NAME));
+        let plans = vec![
+            tool("plan_propose", &["kind", "title", "moments", "zone"], &["kind", "title", "moments"]),
+            tool("calendar_add", &["title", "start", "zone"], &["title", "start"]),
+        ];
+        assert_eq!(meant(&plans, "plan_propose", &args(&["title", "start"])), "plan_propose");
+        assert_eq!(meant(&plans, "calendar_add", &args(&["kind", "title", "moments"])), "calendar_add");
         // 5/11: a mail's id under map_image's name, though the id alone also fits mail_attachment: reading that mail
         let mail = vec![
             tool("map_image", &["markers", "center"], &[]),

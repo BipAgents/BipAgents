@@ -33,7 +33,7 @@
 //!                 (what it saw last, plain words), `wakes`, `pending`, `description`, `icon`
 //!
 //!     GET  /v1/autonomous[?agent=][&plan=]    {items, approved, budgets_eur, budgets_tokens}   (`plan`: that plan's
-//!                                             moments only, plans.rs)
+//!                                             moments and its e-mail watch only, plans.rs)
 //!
 //! `approved`: « Validé pour toi », what went through without asking (a « Toujours », « Seulement le critique »), one
 //! row per run and kind (« 12 e-mails rangés »), each line with « Annuler » while it can be undone
@@ -560,13 +560,18 @@ async fn list_route(State(state): State<AppState>, q: web::QueryMap) -> ApiResul
     let mut items = listing(&state, only.as_deref()).await;
     let config = state.config();
     if let Some(plan) = web::query_str(&q, "plan", false, Some(40))?.filter(|p| !p.is_empty()) {
-        // one plan's moments (plans.rs, contracts/plans): its routines only
+        // one plan's moments and what it watches (plans.rs, contracts/plans): its routines and its e-mail trigger
         let ids: Vec<String> = crate::routines::all(&config, None)
             .into_iter()
             .filter(|r| r.plan.as_deref() == Some(plan.as_str()))
             .map(|r| r.id)
             .collect();
-        items.retain(|i| i["kind"] == "routine" && i["ref"].as_str().is_some_and(|r| ids.iter().any(|id| id == r)));
+        let trigger = crate::plans::get(&config, &plan).and_then(|p| p.trigger);
+        items.retain(|i| {
+            let of = |id: &str| i["ref"].as_str() == Some(id);
+            (i["kind"] == "routine" && ids.iter().any(|id| of(id)))
+                || (i["kind"] == "trigger" && trigger.as_deref().is_some_and(of))
+        });
     }
     let (euros, tokens) = crate::jobs::budgets(&config);
     // what went through without asking (a « Toujours », « Seulement le critique »), folded per run: here, never in the
