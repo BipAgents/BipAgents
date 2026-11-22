@@ -12,6 +12,10 @@
 //! an app, a group discussion, a relative's or a guest's turn, a turn the brake stopped or that handed work over; a
 //! Live call's turns are not runs (live_turns.rs). An answer whose end asks the person anything (« Je te prépare le
 //! panier ? », « Dis-moi lequel et je m'y mets ») waits for them: no nudge. Bench: internal/notes/promise-stop.md.
+//!
+//! The same continuation for a turn, working or not, whose end promises to tell the person later (« je te préviens dès
+//! que le prix baisse ») with nothing set up in it to notice it (`promises_to_tell`, `nudge`; proactive agents part 1,
+//! Alex 21/11): told to set up a watcher, a routine or a trigger now, or to say plainly it can't watch that.
 
 use std::sync::LazyLock;
 
@@ -269,15 +273,20 @@ pub fn did_nothing<'a>(tools: impl IntoIterator<Item = &'a str>) -> bool {
     tools.into_iter().all(|t| TALK_TOOLS.contains(&bare(t)))
 }
 
-/// The reply's end announces work to come, and does not wait for the person (a question, an offer).
-pub fn promises(reply: &str) -> bool {
+/// The end of the agent's own words (`TAIL_CHARS`), None when it says nothing.
+fn tail_of(reply: &str) -> Option<String> {
     let text = own_words(reply);
     let text = text.trim();
     if text.is_empty() {
-        return false;
+        return None;
     }
     let chars: Vec<char> = text.chars().collect();
-    let tail: String = chars[chars.len().saturating_sub(TAIL_CHARS)..].iter().collect();
+    Some(chars[chars.len().saturating_sub(TAIL_CHARS)..].iter().collect())
+}
+
+/// The reply's end announces work to come, and does not wait for the person (a question, an offer).
+pub fn promises(reply: &str) -> bool {
+    let Some(tail) = tail_of(reply) else { return false };
     // the last words announcing work (not an answer given after « : », not « je cherche à comprendre »)
     let Some(last) = PROMISE
         .find_iter(&tail)
@@ -286,9 +295,14 @@ pub fn promises(reply: &str) -> bool {
     else {
         return false;
     };
-    let at = last.start();
+    stands(&tail, last.start())
+}
+
+/// The promise at `at` in `tail` does not wait for the person: no question to them, no request they answer first, no
+/// work offered on their condition.
+fn stands(tail: &str, at: usize) -> bool {
     // a question to the person (« Tu veux que je… ? »): they answer first
-    if asks_a_question(&tail, at) {
+    if asks_a_question(tail, at) {
         return false;
     }
     // a request they answer first (« Dis-moi lequel et je m'y mets », « Envoie-moi le lien et je regarde », « Dis-moi si
@@ -316,12 +330,12 @@ pub fn promises(reply: &str) -> bool {
             && !YES.is_match(sentence);
         !choice && !optional
     };
-    if ASKS.find_iter(&tail).any(|m| request(&m)) {
+    if ASKS.find_iter(tail).any(|m| request(&m)) {
         return false;
     }
     // the work offered on their condition in the promise's sentence (« Si tu veux, je te prépare le panier », « Je te
     // prépare une version imprimable si tu veux ! », « If that works for you, I'll check out »): it waits for their yes
-    !OFFER.find_iter(&tail).any(|m| {
+    !OFFER.find_iter(tail).any(|m| {
         let (from, to) = if m.start() < at { (m.end(), at) } else { (at, m.start()) };
         !tail[from..to].contains(['.', '!', '?', '\n'])
     })
@@ -367,6 +381,315 @@ answer, with your tools (search, browse, pages…), or start it as a background 
 sentence. Don't apologise and don't mention this note. If something is really missing to do it, ask your person one \
 precise question. If your last answer was in fact waiting for your person (their choice, a detail, their go-ahead), \
 don't act: say in one short sentence that you wait for them. Never send, order, book or pay because of this note."
+    )
+}
+
+// --- a promise to tell later (proactive agents, part 1, Alex 21/11) ----------------------------------------------------
+
+/// A promise to tell the person later, on something that happens out of the agent's sight (« je te préviens dès que le
+/// prix baisse », « si un créneau se libère, je te fais signe », « I'll let you know when it ships », « je surveille
+/// ta boîte »): the agent never wakes up by itself, so it is kept only by what it set up to notice it — a watcher
+/// (connectors.rs `watch`), a routine (routines.rs), a trigger (triggers.rs), a background task that reports when done,
+/// a question to another agent whose answer comes back, a reminder. A person's turn that ends on such a promise with
+/// none of these called in it gets the same ONE continuation as a promise of work (runs.rs `go_on`), told to set one
+/// up now or to say plainly it can't watch that (`tell_input`). Before this one: `promises` (work).
+///
+/// The agent's verb to tell, in the first person, with what it waits for (quand / si / dès que / when / if / as soon
+/// as…), or its verb to watch (« je surveille », « je garde un œil », « I'll keep an eye on »).
+static TELLS: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(concat!(
+        r"(?i)",
+        // French: to tell (now, future, « je vais »)
+        r"\bje (?:te |t'|vous )(?:le |la |les )?(?:pr[ée]viens|pr[ée]viendrai|tiens au courant|tiendrai au courant",
+        r"|tiens inform[ée]e?s?|tiendrai inform[ée]e?s?|fais signe|ferai signe|dis|dirai|redis|redirai",
+        r"|recontacte|recontacterai|alerte|alerterai|avertis|avertirai|envoie un (?:message|mot|petit mot)|enverrai un (?:message|mot))\b",
+        r"|\bje vais (?:te |t'|vous )(?:(?:le |la |les )?rappeler|pr[ée]venir|tenir au courant|faire signe|alerter|avertir|recontacter)\b",
+        r"|\bje (?:te |vous )(?:le |la |les )?(?:rappelle|rappellerai)\b",
+        r"|\bi(?:'ll| will) remind you\b",
+        // English
+        r"|\bi(?:'ll| will) (?:let you know|tell you|ping you|notify you|alert you|message you|text you|get back to you",
+        r"|keep you (?:posted|updated|in the loop)|update you|(?:be sure|make sure) to let you know)\b",
+        // Spanish, German, Dutch
+        r"|\b(?:te|le) (?:aviso|avisar[ée]|escribo|escribir[ée]|lo dir[ée])\b|\bte mantendr[ée] al tanto\b",
+        r"|\bich (?:sage|sag|gebe|geb) (?:dir|ihnen) bescheid\b|\b(?:sage|sag|gebe|geb) ich (?:dir|ihnen) bescheid\b",
+        r"|\bich melde mich\b|\bich halte (?:dich|sie) auf dem laufenden\b",
+        r"|\bik laat (?:het )?(?:je|u) weten\b|\blaat ik (?:het )?(?:je|u) weten\b|\bik houd? (?:je|u) op de hoogte\b",
+    ))
+    .expect("valid regex")
+});
+
+/// What a promise to tell waits for (in its sentence, before or after the verb).
+static WHEN: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(concat!(
+        r"(?i)\b(?:quand|lorsque|d[èe]s que|aussit[ôo]t que|sit[ôo]t que|si|s'il|s'ils|s'elle|s'elles|au cas où",
+        r"|en cas de|le jour où|au moindre|à la moindre|d[èe]s la|d[èe]s le|d[èe]s les)\b|\b(?:lorsqu'|d[èe]s qu'|d[èe]s l'|une fois qu')",
+        r"|\b(?:when|whenever|if|as soon as|once|the moment|the minute)\b",
+        r"|\b(?:cuando|si|en cuanto)\b|\b(?:wenn|sobald|falls)\b|\b(?:als|wanneer|zodra)\b",
+        // a time to come
+        r"|\b(?:demain|ce soir|cet après-midi|tout à l'heure|plus tard|la semaine prochaine|le moment venu|la veille",
+        r"|le jour même|la prochaine fois|une fois que|the day before",
+        r"|lundi|mardi|mercredi|jeudi|vendredi|samedi|dimanche|(?:à|vers) \d{1,2} ?h(?:\d\d)?)\b",
+        r"|\b(?:tomorrow|tonight|later|next week|on (?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)",
+        r"|at \d{1,2}(?::\d\d)? ?(?:am|pm|h)?)\b|\b(?:mañana|morgen|heute abend)\b",
+    ))
+    .expect("valid regex")
+});
+
+/// The agent's verb to watch: a promise to tell by itself.
+static WATCHES: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(concat!(
+        r"(?i)\bje (?:surveille|surveillerai|guette|garde (?:un (?:petit )?(?:œ|oe)il|l'(?:œ|oe)il)|garderai un (?:œ|oe)il",
+        r"|reste (?:à l'affût|en veille))\b|\bje vais (?:surveiller|guetter|garder un (?:œ|oe)il)\b",
+        r"|\bi(?:'ll| will) (?:keep an eye (?:on|out)|keep watching|keep checking|keep monitoring|keep track of|watch (?:for|out for)",
+        r"|monitor)\b|\bi'm (?:keeping an eye|monitoring|keeping track)\b",
+        r"|\b(?:vigilo|vigilar[ée])\b|\bich behalte\b[^.!?\n]{0,40}\bim auge\b",
+        r"|\bik (?:hou|houd) \b[^.!?\n]{0,40}\bin de gaten\b",
+    ))
+    .expect("valid regex")
+});
+
+/// What the agent's own work being finished looks like (« je te préviens quand c'est prêt », « dès que j'ai trouvé »,
+/// « when it's done »): a promise of work (`promises`), not of watching.
+static DONE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(concat!(
+        r"(?i)\b(?:fini|finie|termin[ée]e?s?|pr[êe]te?s?|trouv[ée]e?s?|boucl[ée]e?)\b|\bc'est fait\b|\bje trouve\b",
+        r"|\b(?:done|ready|finished|found|complete)\b|\bi find\b|\bfertig\b|\bklaar\b|\blisto\b|\bterminado\b",
+        r"|\bj'ai (?:v[ée]rifi[ée]|regard[ée]|compar[ée]|cherch[ée])\b|\bi(?:'ve| have) (?:checked|looked|compared)\b",
+        r"|\b(?:si j'ai besoin|si j'en ai besoin|if i need|j'en sais plus|j'en saurai plus|i know more|ich mehr wei(?:ß|ss))\b",
+        // nothing in particular to notice (« je te tiens au courant si besoin »)
+        r"|\b(?:si besoin|au besoin|si n[ée]cessaire|if needed|if necessary|if need be|falls n[öo]tig|si hace falta)\b",
+    ))
+    .expect("valid regex")
+});
+
+/// « Je te préviens, … / : … » (I warn you), « je te rappelle que / de … » (I remind you now): said in this answer.
+/// (review 1, B2: « je te préviens que le magasin ferme à 19 h », « je te préviens aussi : si… », « je te rappelle
+/// juste que… »)
+static NOW_SAID: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(concat!(
+        r"(?i)^(?:[ \t]+(?:tout de suite|d'avance|juste|quand même|honnêtement|aussi|simplement|seulement|d'ailleurs",
+        r"|au passage|néanmoins|cependant|toutefois|donc|bien))*[ \t]*(?:[,:;!—–-]|que\b|qu')",
+    ))
+    .expect("valid regex")
+});
+static REMINDS_NOW: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(concat!(
+        r"(?i)^(?:[ \t]+(?:juste|aussi|simplement|seulement|d'ailleurs|au passage|quand même|donc|bien))*",
+        r"[ \t]*(?:[,:;!—–-]|[ \t]+(?:que\b|qu'|de\b|d'))",
+    ))
+    .expect("valid regex")
+});
+
+/// What « je te dis » waits for, right after it (« je te dis dès que Paul répond »).
+static DIS_WHEN: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)^[ \t]+(?:ça[ \t]+)?(?:dès que|dès qu'|quand|lorsque|lorsqu'|aussitôt que|si|s'il|s'ils)").expect("valid regex")
+});
+
+/// « Te aviso que si pides después de las 14 h… », « le aviso: … »: the Spanish warning said now (review 2, C2).
+static AVISO_NOW: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)^[ \t]*(?:[,:;!—–-]|que\b)").expect("valid regex"));
+
+fn said_now(verb: &str, after: &str) -> bool {
+    let verb = verb.to_lowercase();
+    if verb.ends_with("aviso") && AVISO_NOW.is_match(after) {
+        return true;
+    }
+    if verb.ends_with(" dis") && !DIS_WHEN.is_match(after) {
+        return true; // « je te dis » that tells now (« je te dis tout », « je te dis : … »)
+    }
+    let warns = verb.ends_with("préviens") || verb.ends_with("previens") || verb.ends_with("avertis");
+    (warns && NOW_SAID.is_match(after)) || (verb.ends_with("rappelle") && REMINDS_NOW.is_match(after))
+}
+
+/// The reply's end promises to tell the person later about something it will have to notice, and does not wait for
+/// them (a question, a request, an offer: `stands`).
+pub fn promises_to_tell(reply: &str) -> bool {
+    let Some(tail) = tail_of(reply) else { return false };
+    let sentence_of = |at: usize, end: usize| {
+        let start = tail[..at].rfind(['.', '!', '?', '\n']).map_or(0, |s| s + 1);
+        let stop = tail[end..].find(['.', '!', '?', '\n']).map_or(tail.len(), |e| end + e);
+        (start, stop)
+    };
+    let found = TELLS
+        .find_iter(&tail)
+        .filter(|m| {
+            let (start, stop) = sentence_of(m.start(), m.end());
+            let (before, after) = (&tail[start..m.start()], &tail[m.end()..stop]);
+            // what it waits for, in its sentence; the agent's own work finished is a promise of work; a warning or a
+            // reminder given now (« Je te préviens, si tu commandes après 14 h… », « je te rappelle que… ») is no
+            // promise
+            !said_now(m.as_str(), &tail[m.end()..])
+                && WHEN.find(after).or_else(|| WHEN.find(before)).is_some()
+                && !DONE.is_match(after)
+                && !DONE.is_match(before)
+        })
+        .chain(WATCHES.find_iter(&tail))
+        .map(|m| m.start())
+        .max();
+    // review 1 (R2): a question in another sentence (« … Tu veux aussi le modèle L ? ») does not undo it, one in the
+    // promise's own sentence does (« Je te préviens quand le prix baisse ? »); requests and offers still count
+    found.is_some_and(|at| {
+        let start = tail[..at].rfind(['.', '!', '?', '\n']).map_or(0, |s| s + 1);
+        let end = tail[at..].find(['.', '!', '?', '\n']).map_or(tail.len(), |e| at + e);
+        if tail[end..].starts_with('?') {
+            return false;
+        }
+        let plain: String =
+            tail.char_indices().map(|(i, c)| if c == '?' && (i < start || i > end) { '.' } else { c }).collect();
+        stands(&plain, at)
+    })
+}
+
+/// Tools whose call sets up what will notice something later and tell the person (a watcher is a connector with
+/// `watch`; a background task and another agent's answer come back by themselves; a reminder rings on their phone, a
+/// dated task of the Carnet sets one, notebook/tools.rs; a calendar event has its alert).
+pub const NOTICERS: [&str; 15] = [
+    crate::routines::TOOL_NAME,
+    "routine_trigger",
+    crate::connectors::REGISTER,
+    crate::connectors::UPDATE,
+    "start_task",
+    "propose_task",
+    "notebook_fill",
+    "delegate_task",
+    "message_agent",
+    "ask_agent",
+    "reminders_add",
+    "notebook_task",
+    "calendar_add",
+    "cronjob",
+    "cronjob_manage",
+];
+
+/// The turn set up something that will notice it (a tool of another MCP entry than `bipagents` keeps its server's name
+/// before its own: `mcp_bipagents_connectors_connector_register`).
+pub fn set_up_something<'a>(tools: impl IntoIterator<Item = &'a str>) -> bool {
+    tools.into_iter().map(bare).any(|t| {
+        NOTICERS.iter().any(|n| t == *n || t.strip_suffix(n).is_some_and(|server| server.ends_with('_')))
+    })
+}
+
+/// Why a turn gets its continuation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Nudge {
+    /// Work announced, none done (`promises`).
+    Work,
+    /// A promise to tell later with nothing set up to notice it (`promises_to_tell`).
+    Tell,
+}
+
+/// What a person's turn that called `tools` and ended on `reply` needs: a promise to tell first (a turn that did
+/// nothing and promises to tell needs a watcher more than a search), then a promise of work. `existing`: what the
+/// agent already has (`already_set_up`, read only for a promise to tell), returned for the continuation's note; a
+/// promise its end ties to one of them is kept (review 1, B1: « C'est la routine « Point du matin » qui s'en charge »,
+/// « La routine est en place, je te redis ça demain matin »).
+pub fn nudge(tools: &[String], reply: &str, existing: impl FnOnce() -> Vec<String>) -> Option<(Nudge, Vec<String>)> {
+    let tools = || tools.iter().map(String::as_str);
+    if !set_up_something(tools()) && promises_to_tell(reply) {
+        let existing = existing();
+        if !kept_by(reply, &existing) {
+            return Some((Nudge::Tell, existing));
+        }
+        return None;
+    }
+    (did_nothing(tools()) && promises(reply)).then_some((Nudge::Work, Vec::new()))
+}
+
+/// What the agent's words call something it set up (five languages).
+static SET_UP_WORDS: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(concat!(
+        r"(?i)\b(?:veilleurs?|routines?|déclencheurs?|watchers?|triggers?|wächter|routinen|auslöser|vigilantes?",
+        r"|rutinas?|disparadores?|bewakers?)\b",
+    ))
+    .expect("valid regex")
+});
+
+/// The reply's end ties its promise to what the agent already has (`existing`, as `already_set_up` gives them): one
+/// of them by its name, or « le veilleur / la routine… » when it has one. With nothing set up, « le veilleur est en
+/// place » keeps nothing.
+pub fn kept_by(reply: &str, existing: &[String]) -> bool {
+    if existing.is_empty() {
+        return false;
+    }
+    // the reply as written (its names are often quoted: « Point du matin »), its end
+    let text = reply.to_lowercase();
+    let chars: Vec<char> = text.chars().collect();
+    let tail: String = chars[chars.len().saturating_sub(TAIL_CHARS)..].iter().collect();
+    SET_UP_WORDS.is_match(&tail)
+        || existing.iter().any(|e| {
+            let name = e.split_once('«').and_then(|(_, n)| n.rsplit_once('»')).map_or("", |(n, _)| n.trim());
+            name.chars().count() >= 3 && tail.contains(&name.to_lowercase())
+        })
+}
+
+/// The conversation is one of what the agent set up (a watcher's, a routine's run, the conversation a routine was made
+/// in, that hour: `routine_here`): a promise to tell there is theirs (review 1, B1).
+pub fn conversation_set_up(config: &crate::config::Config, agent: &str, session: &str) -> bool {
+    !session.is_empty()
+        && (crate::connectors::of_agent(config, agent)
+            .iter()
+            .filter(|c| c.watch.is_some())
+            .any(|c| crate::watchers::load(config, agent, &c.id).session == session)
+            || crate::routines::all(config, Some(agent))
+                .iter()
+                .any(|r| routine_here(&r.origin, &r.last_session, r.created, session, crate::py::time_time())))
+}
+
+/// How long the conversation a routine was made in counts as its own (review 2, C1: that conversation is usually the
+/// main one; for good it would turn the net off there for every promise, whatever it is about).
+pub const ORIGIN_SECONDS: f64 = 3600.0;
+
+/// `session` is the conversation of a routine's last run, or the one it was made in less than `ORIGIN_SECONDS` ago
+/// (« Avec plaisir, je te redis ça demain matin ! » right after).
+pub fn routine_here(origin: &str, last_session: &str, created: f64, session: &str, now: f64) -> bool {
+    !session.is_empty() && (last_session == session || (origin == session && now - created < ORIGIN_SECONDS))
+}
+
+/// The agent's watchers, routines and triggers by name (for the continuation's input: one of them may already notice
+/// it), at most `SET_UP_SHOWN`.
+pub fn already_set_up(config: &crate::config::Config, agent: &str) -> Vec<String> {
+    let mut names: Vec<String> = crate::connectors::of_agent(config, agent)
+        .into_iter()
+        .filter(|c| c.watch.is_some())
+        .map(|c| format!("watcher « {} »", crate::tools_knowledge::in_note_line(&c.name)))
+        .collect();
+    names.extend(
+        crate::routines::all(config, Some(agent))
+            .into_iter()
+            .map(|r| format!("routine « {} »", crate::tools_knowledge::in_note_line(&r.name))),
+    );
+    names.extend(
+        crate::triggers::of_agent(config, agent)
+            .into_iter()
+            .map(|t| format!("trigger « {} »", crate::tools_knowledge::in_note_line(&t.name))),
+    );
+    names.truncate(SET_UP_SHOWN);
+    names
+}
+
+pub const SET_UP_SHOWN: usize = 8;
+
+/// The continuation's input for a promise to tell later (in English, like `input`).
+pub fn tell_input(reply: &str, set_up: &[String]) -> String {
+    let said: String = reply.trim().chars().rev().take(160).collect::<Vec<_>>().into_iter().rev().collect();
+    let have = if set_up.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "Already set up: {}. If one of these already notices exactly this, just say which in one short sentence. ",
+            set_up.join(", ")
+        )
+    };
+    format!(
+        "{MARK}\n\n(A note from the app, not from your person.) Your last answer promised to tell your person later \
+(« {said} »), but nothing you set up will notice it, so as it stands they would wait for nothing. Keep it now, in \
+this answer: for a change on a site or an account (a price, a slot, a parcel, a grade, a \
+balance), make a watcher (a connector with watch), only on a site that allows automated checks; once at a set time, \
+a reminder (reminders_add, or a dated task: notebook_task); again and again at set times, a routine \
+(routine_schedule); each time an e-mail arrives, routine_trigger. Then say in one short sentence what will tell them, and how often. {have}If nothing you \
+have can notice it, say plainly in one short sentence that you can't watch that, so they don't count on it. If what \
+you promised is in fact your own work (a search, a comparison), do it now with your tools or start it with \
+start_task. Don't apologise and don't mention this note. Never send, order, book or pay because of this note."
     )
 }
 
@@ -719,5 +1042,186 @@ mod seventh_review {
         ];
         let missed: Vec<&str> = said.iter().copied().filter(|s| !promises(s)).collect();
         assert!(missed.is_empty(), "real promises not caught: {missed:#?}");
+    }
+}
+
+/// A promise to tell later (proactive agents, part 1).
+#[cfg(test)]
+mod tell_later {
+    use super::*;
+
+    fn nudged(tools: &[String], reply: &str) -> Option<Nudge> {
+        nudge(tools, reply, Vec::new).map(|(n, _)| n)
+    }
+
+    #[test]
+    fn a_promise_to_tell_later_is_caught_in_the_five_languages() {
+        let said = [
+            "Le vélo est à 899 € chez Decathlon. Je te préviens dès que le prix baisse.",
+            "Rien de libre cette semaine chez le Dr Martin. Si un créneau se libère, je te fais signe.",
+            "Ton colis est à Lyon. Je te tiendrai au courant quand il arrive.",
+            "Je vais te prévenir dès qu'une nouvelle note arrive sur Pronote.",
+            "Je surveille ta boîte et je te dis quand Paul a répondu.",
+            "Je garde un œil sur le prix.",
+            "It's €899 today. I'll let you know as soon as it drops.",
+            "If a slot opens up, I'll ping you.",
+            "I'll keep an eye on the price for you.",
+            "Te aviso cuando baje el precio.",
+            "Ich sage dir Bescheid, sobald der Preis fällt.",
+            "Ik laat je weten zodra de prijs zakt.",
+            // a time to come, a reminder
+            "C'est noté pour le dentiste. Je te le rappelle demain matin.",
+            "Je te préviens demain à 8 h s'il pleut.",
+            "Got it, I'll remind you tomorrow at 9.",
+            "Je te recontacte vendredi pour les billets.",
+            "Je te redis ça demain vers 8h30.",
+            "C'est dans ton agenda. Je te le rappelle la veille.",
+            "Je te ferai signe la prochaine fois qu'une promo passe.",
+            "Si jamais il y a un souci avec la commande, je te préviens.",
+            "I'll let you know if anything changes.",
+            // review 1 (R1)
+            "Sobald der Preis fällt, sage ich dir Bescheid.",
+            "Zodra de prijs zakt, laat ik het je weten.",
+            "Ich halte dich auf dem Laufenden, sobald sich etwas tut.",
+            "Ik hou je op de hoogte zodra de prijs zakt.",
+            "Te lo diré cuando baje el precio.",
+            "Te mantendré al tanto si cambia algo.",
+            "I'll update you when the parcel ships.",
+            "I'll be sure to let you know if a slot opens up.",
+            "Je te dis dès que Paul a répondu.",
+            "Je te le dirai quand le colis arrive.",
+            "Je te tiens informée dès que le prix baisse.",
+            // review 1 (R2): a question in a later sentence leaves it standing
+            "Je te préviens dès que le prix baisse. Tu veux aussi que je regarde le modèle L ?",
+        ];
+        let missed: Vec<&str> = said.iter().copied().filter(|s| !promises_to_tell(s)).collect();
+        assert!(missed.is_empty(), "promises to tell not caught: {missed:#?}");
+    }
+
+    #[test]
+    fn work_to_finish_a_question_an_offer_or_a_bare_closing_is_no_promise_to_tell() {
+        let said = [
+            // the agent's own work: a promise of work (`promises`), not of watching
+            "Je te prépare la liste et je te préviens quand c'est prêt.",
+            "Je te fais signe dès que j'ai trouvé.",
+            "I'll let you know when it's done.",
+            "Je m'en occupe en arrière-plan, je te préviens quand c'est fini.",
+            "I'll let you know if I find anything.",
+            // they answer first
+            "Je te préviens quand le prix baisse ?",
+            "Tu veux que je te prévienne quand le prix baisse ?",
+            "Si tu veux, je te préviens dès que le prix baisse.",
+            "Dis-moi ton budget et je te préviens quand un vélo passe en dessous.",
+            // nothing to notice
+            "Je te tiens au courant si besoin.",
+            "Voilà, c'est réservé pour samedi 20 h. Bonne soirée !",
+            "Préviens-moi quand tu es rentrée.",
+            // a warning or a reminder given now
+            "Je te préviens, si tu commandes après 14 h, la livraison sera lundi.",
+            "Je te préviens tout de suite : si tu prends l'option, c'est 10 € de plus.",
+            "Je te rappelle que la réunion est demain à 9 h.",
+            "Je te rappelle de prendre ton parapluie demain.",
+            // review 1 (B2): with « que » or an adverb
+            "Je te préviens que le magasin ferme à 19 h.",
+            "Je te préviens que si tu commandes après 14 h, la livraison sera lundi.",
+            "Je te préviens aussi : si tu prends l'option, c'est 10 € de plus.",
+            "Je te rappelle juste que la réunion est demain à 9 h.",
+            "Je te rappelle aussi que le dentiste est jeudi.",
+            "Je te dis tout demain si tu veux bien ? Non : je te dis tout maintenant.",
+            // review 2 (C2): the Spanish warning said now
+            "Te aviso que si pides después de las 14 h, llega el lunes.",
+            "Le aviso que la tienda cierra a las 19 h.",
+            "Te aviso: si pides hoy, llega el lunes.",
+            // the agent's own need or knowledge: work, not watching
+            "Je te recontacte si j'ai besoin de précisions.",
+            "Je te tiens au courant quand j'en sais plus.",
+            // not a watch
+            "I'll watch the video and sum it up for you.",
+            "I'll tell you what you should do next time.",
+            "Je reste attentive à ce que tu me dis.",
+            // someone else's words
+            "Elle m'a écrit : « je te préviens dès que j'arrive ».",
+            "",
+        ];
+        let wrong: Vec<&str> = said.iter().copied().filter(|s| promises_to_tell(s)).collect();
+        assert!(wrong.is_empty(), "taken for promises to tell: {wrong:#?}");
+    }
+
+    #[test]
+    fn a_promise_to_tell_is_kept_by_what_the_turn_set_up() {
+        let tools = |names: &[&str]| names.iter().map(|n| n.to_string()).collect::<Vec<_>>();
+        let watch = "Le vélo est à 899 €. Je te préviens dès que le prix baisse.";
+        // searched, then promised: nothing set up
+        assert_eq!(nudged(&tools(&["web_search"]), watch), Some(Nudge::Tell));
+        // nothing at all: the watcher first, not a search
+        assert_eq!(nudged(&[], watch), Some(Nudge::Tell));
+        assert_eq!(nudged(&tools(&["clarify"]), "Je te tiens au courant dès que le prix baisse."), Some(Nudge::Tell));
+        // a watcher, a routine, a trigger, a task, another agent asked, a reminder: kept
+        for noticer in [
+            "mcp_bipagents_connectors_connector_register",
+            "mcp__bipagents_connectors__connector_update",
+            "mcp_bipagents_routine_schedule",
+            "routine_trigger",
+            "mcp_bipagents_start_task",
+            "message_agent",
+            "delegate_task",
+            "reminders_add",
+            "mcp_bipagents_notebook_task",
+            "mcp_bipagents_calendar_add",
+        ] {
+            assert_eq!(nudged(&tools(&["web_search", noticer]), watch), None, "{noticer}");
+        }
+        // a promise of work stays one (go_on as before)
+        assert_eq!(nudged(&[], "Je te prépare 2-3 trouvailles pour 5 €."), Some(Nudge::Work));
+        assert_eq!(nudged(&tools(&["web_search"]), "Je te prépare 2-3 trouvailles pour 5 €."), None);
+        assert_eq!(nudged(&tools(&["web_search"]), "Voilà le prix : 899 €."), None);
+    }
+
+    #[test]
+    fn the_tell_input_is_hidden_quotes_the_promise_and_names_what_exists() {
+        let watch = "Le vélo est à 899 €. Je te préviens dès que le prix baisse.";
+        let input = tell_input(watch, &[]);
+        assert!(input.starts_with(MARK) && input.contains(&format!("« {watch} »")));
+        for needed in ["nothing you set up will notice it", "make a watcher", "routine_schedule", "routine_trigger",
+            "say plainly in one short sentence that you can't watch that", "If what you promised is in fact your own work",
+            "a reminder (reminders_add, or a dated task: notebook_task)", "only on a site that allows automated checks",
+            "Never send, order, book or pay"] {
+            assert!(input.contains(needed), "missing {needed}");
+        }
+        assert!(!input.contains("Already set up"));
+        let named = tell_input(watch, &["watcher « Prix du vélo »".to_string()]);
+        assert!(named.contains("Already set up: watcher « Prix du vélo ». If one of these already notices exactly this"));
+    }
+
+    #[test]
+    fn the_conversation_a_routine_was_made_in_is_its_own_for_an_hour_only() {
+        // review 2 (C1): usually the main conversation; for good, the net would be off there for every promise
+        let now = 1_000_000.0;
+        assert!(routine_here("api_main", "", now - 60.0, "api_main", now));
+        assert!(!routine_here("api_main", "", now - ORIGIN_SECONDS, "api_main", now));
+        assert!(!routine_here("api_main", "", now - 86_400.0, "api_main", now));
+        // its run's conversation, whenever
+        assert!(routine_here("api_main", "api_run", now - 86_400.0, "api_run", now));
+        assert!(!routine_here("api_main", "api_run", now - 60.0, "api_other", now));
+        assert!(!routine_here("", "", now, "", now));
+    }
+
+    #[test]
+    fn a_promise_kept_by_what_the_agent_already_has_is_not_continued() {
+        // review 1 (B1)
+        let watch = "Je te préviens dès que le prix baisse.";
+        let has = || vec!["watcher « Prix du vélo »".to_string(), "routine « Point du matin »".to_string()];
+        let none: fn() -> Vec<String> = Vec::new;
+        assert!(nudge(&[], "C'est la routine « Point du matin » qui s'en charge : je te préviens dès qu'il y a du nouveau.", has).is_none());
+        assert!(nudge(&[], "Le veilleur est en place. Je te préviens dès que le prix baisse.", has).is_none());
+        assert!(nudge(&[], "Le prix du vélo est noté : je te préviens dès qu'il baisse.", has).is_none());
+        // with nothing set up, « le veilleur est en place » keeps nothing
+        assert_eq!(nudge(&[], "Le veilleur est en place. Je te préviens dès que le prix baisse.", none).map(|(n, _)| n), Some(Nudge::Tell));
+        // what exists, unnamed and unrelated: the note lists it
+        let (kind, listed) = nudge(&[], watch, has).expect("not kept");
+        assert_eq!((kind, listed.len()), (Nudge::Tell, 2));
+        // read only for a promise to tell
+        assert!(nudge(&[], "Voilà le prix : 899 €.", || panic!("read for nothing")).is_none());
+        assert!(!kept_by(watch, &[]) && kept_by("Le veilleur s'en occupe, je te préviens.", &has()));
     }
 }

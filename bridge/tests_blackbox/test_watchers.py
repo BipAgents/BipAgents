@@ -3,8 +3,9 @@ bridge runs by itself (the fake podman plays the container here), with NO model 
 with the state the agent last knew: the first check notes where comparisons start, no change gives no turn, a change
 gives exactly ONE turn of the agent in the watcher's own conversation (a hidden note with the before and after), whose
 message goes to the Boîte (pushed only when it starts with URGENT, kept to itself with NOTHING); wake-ups are
-rate-limited; failures in a row make it « en panne » and the agent is told once; the list « Ce que tes agents font
-tout seuls » shows it in « Quand quelque chose change »."""
+rate-limited; failures in a row make it « en panne »: the person is told once by the bridge's own line and the agent
+with their next message, and a failing watcher never runs the model (proactive agents part 5); the list « Ce que tes
+agents font tout seuls » shows it in « Quand quelque chose change »."""
 import hashlib
 import json
 import time
@@ -12,6 +13,7 @@ import time
 import pytest
 
 from bbkit.common import AUTH, boite_items
+from bbkit.fakes import taken_notes, waiting_notes
 from bbkit.servers import wait_until
 from conftest import profile, wait_registered
 from test_connectors import IMAGE, TOKEN, approve_next, rpc, text
@@ -26,6 +28,11 @@ mode = open(__VALUE__).read().strip()
 if mode.startswith("fail"):
     sys.stderr.write("the site answered 503\n")
     sys.exit(1)
+if mode == "garbage":
+    print("Service indisponible")
+    sys.exit(0)
+if mode == "empty":
+    sys.exit(0)
 print("looking at the doctor's agenda…")
 print(json.dumps({"state": {"slots": [mode], "checked_at": None}, "summary": "Prochain créneau : " + mode,
                   "condition": mode.startswith("low")}))
@@ -202,28 +209,76 @@ def test_a_used_credit_holds_the_wake_up_until_it_is_back(bridges, fakes):
     assert len(turns(fakes)) == 1
 
 
-def test_failures_in_a_row_mark_it_broken_and_the_agent_is_told_once(bridges, fakes):
+def test_failures_in_a_row_mark_it_broken_and_the_person_is_told_once_without_the_model(bridges, fakes):
+    # proactive agents part 5 (the rule of Hermes PR #158289): a failing watcher never runs the model — an error, a
+    # program that fails, prints nothing or nothing readable: the bridge's own line and the log, never a paid turn
     bridge, value, conn, _ = setup(bridges, fakes)
     assert check(bridge, conn)["step"] == "baseline"
     fakes.hermes.run_output = "Le veilleur du Dr Martin ne marche plus : je regarde ce qui a changé sur le site."
     value.write_text("fail")
-    one, two = check(bridge, conn), check(bridge, conn)
+    one = check(bridge, conn)
+    value.write_text("garbage")
+    two = check(bridge, conn)
     assert (one["step"], two["step"]) == ("failed", "failed") and turns(fakes) == []
     assert "503" in one["message"]
+    value.write_text("empty")
     broken = check(bridge, conn)
-    assert broken["step"] == "broken" and broken["woke"] is True
-    [turn] = turns(fakes)
-    assert "failed 3 times in a row" in turn["input"] and "connector_update" in turn["input"]
+    assert broken["step"] == "broken" and broken["woke"] is False and broken["sent"] is True, broken
+    # no turn of the agent, no model call: not one run started in Hermes
+    assert turns(fakes) == [] and list(fakes.hermes.started) == [] and not fakes.model.requests
+    assert bridge.logged("watcher out of order: its person is told, no model call")
+    # the person: the bridge's line in the watcher's conversation (the agent's language here), not pushed
+    assert wait_until(lambda: boite(bridge), timeout=20)
+    [item] = boite(bridge)
+    assert item["text"] == "The watcher “Créneau médecin” isn't working for now."
+    created = [body for agent, body in fakes.hermes.created if agent == "vie"]
+    assert created and created[-1]["title"] == "Watcher: Créneau médecin" and item["session_id"]
+    time.sleep(1)
+    assert not [p for p in fakes.apns.payloads() if p.get("outbox_id") == item["id"]]
     shown = row(bridge, conn)
-    assert shown["detail"]["broken"] is True and shown["last_run"]["ok"] is False and "503" in shown["last_run"]["error"]
-    # told once: the next failure wakes nobody
-    assert check(bridge, conn)["step"] == "failed" and len(turns(fakes)) == 1
+    assert shown["detail"]["broken"] is True and shown["last_run"]["ok"] is False
+    # told once: the next failure tells nobody
+    value.write_text("fail")
+    assert check(bridge, conn)["step"] == "failed" and len(boite(bridge)) == 1
+    assert list(fakes.hermes.started) == []
+    # the agent learns it with the person's next message (once), where it can fix it or ask them
+    note = waiting_notes(taken_notes(bridge, agent="vie", session="s1"))
+    assert note and "Your watcher « Créneau médecin » failed 3 times in a row" in note and "connector_update" in note
+    assert waiting_notes(taken_notes(bridge, agent="vie", session="s1")) is None
     # working again: no longer broken, and the same state as before is no change
     value.write_text("mardi 10:00")
     back = check(bridge, conn)
     assert back["step"] == "same" and row(bridge, conn)["detail"]["broken"] is False
     detail = bridge.get(f"/v1/agents/vie/connectors/{conn['id']}", headers=AUTH).json()["watch"]
     assert detail["failures"] == 0 and [r["ok"] for r in detail["runs"]][:2] == [True, False]
+
+
+def test_a_watcher_that_works_once_between_failures_tells_its_person_once_a_week(bridges, fakes):
+    # design-agents-proactifs §5: one that blinks (a success, then failures again) is no new line each time
+    bridge, value, conn, _ = setup(bridges, fakes)
+    assert check(bridge, conn)["step"] == "baseline"
+    value.write_text("fail")
+    assert [check(bridge, conn)["step"] for _ in range(3)] == ["failed", "failed", "broken"]
+    assert wait_until(lambda: boite(bridge), timeout=20)
+    value.write_text("mardi 10:00")
+    assert check(bridge, conn)["step"] == "same" and row(bridge, conn)["detail"]["broken"] is False
+    value.write_text("fail")
+    again = [check(bridge, conn) for _ in range(3)]
+    assert [o["step"] for o in again] == ["failed", "failed", "failed"] and not again[-1]["sent"]
+    assert row(bridge, conn)["detail"]["broken"] is True
+    time.sleep(1)
+    assert len(boite(bridge)) == 1 and list(fakes.hermes.started) == []
+
+
+def test_a_watcher_working_again_takes_back_its_note_to_the_agent(bridges, fakes):
+    # review 1 (B5): broken, then working again before the person writes: the agent is not told it is broken
+    bridge, value, conn, _ = setup(bridges, fakes)
+    assert check(bridge, conn)["step"] == "baseline"
+    value.write_text("fail")
+    assert [check(bridge, conn)["step"] for _ in range(3)] == ["failed", "failed", "broken"]
+    value.write_text("mardi 10:00")
+    assert check(bridge, conn)["step"] == "same"
+    assert waiting_notes(taken_notes(bridge, agent="vie", session="s1")) is None
 
 
 def test_on_condition_wakes_when_it_holds(bridges, fakes):

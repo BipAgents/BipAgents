@@ -23,7 +23,8 @@
 //! the end of a task it deletes the working files it no longer needs, never the person's own (2026-11-07,
 //! `TIDY_RULE`, the golden rewritten the same way; space_tidy.rs removes what is temporary by itself); and when the
 //! person must pick between a few options, it asks with Hermes' clarify card, never a numbered list (2026-11-19,
-//! `CHOICE_RULE`, the golden rewritten the same way).
+//! `CHOICE_RULE`, the golden rewritten the same way); and it promises to tell the person later only when it set up
+//! what will notice it (2026-11-22, `TELL_RULE`, the golden rewritten the same way).
 //! `heal_souls` brings existing agents' blocks up to date. An agent given the person's
 //! health data has a second block (`with_health`): use it to help, never to diagnose. An agent in the person's
 //! circle (shared_memory.rs) knows that what it remembers of them is common to their own agents
@@ -273,6 +274,19 @@ pub const ACK_RULE: &str = concat!(
     "quelques minutes »). Do it now with your tools, or start a background task with start_task and say so."
 );
 
+/// A promise to tell later is kept or not made (proactive agents part 1, Alex 21/11): the agent never wakes up by
+/// itself, so « je te préviens dès que le prix baisse » holds only when it set up, in that turn, what will notice it.
+/// The tools are named, never « you never wake up by yourself » (bench 22/11: GLM read it as « I can't write at a set
+/// time » and put a calendar alert instead of a routine); « now or already », never « in that same turn » (review 1:
+/// read to the letter, it asks for a second watcher when one does it).
+/// The bridge's safety net for what the rule misses: go_on.rs `promises_to_tell`, runs.rs `go_on`. Rust bridge only
+/// (tests/golden/souls.json rewritten with `GOLDEN_SOULS_OUT`). Short: it is paid on every call.
+pub const TELL_RULE: &str = concat!(
+    "Never promise to tell your person later (« je te préviens dès que… ») unless what will do it is set up, now or ",
+    "already: a watcher, a routine (routine_schedule), a one-off reminder (reminders_add), a trigger (routine_trigger) ",
+    "or a background task. If nothing can notice it, say plainly you can't watch that."
+);
+
 /// What a recurring production keeps (Alex, 2026-10-28: an agent that makes something every day says what space it
 /// takes and asks what to keep; storage_watch.rs). Rust bridge only, like FAMILY_RULE (in tests/golden/souls.json by
 /// hand). Short: it is paid on every call.
@@ -423,7 +437,7 @@ pub fn language_block(lang: Option<&str>) -> String {
     for_language(
         &format!(
             "{BLOCK_START}\nLanguage: answer in the language your person writes in. Always write it with its accents and usual punctuation (routines and notes too), never an ASCII-only version: its own quotation marks too (“…” in English), the « » of these rules and of the tools' texts are only quotes. When you write first (a routine, \
-             a report, a reminder), write in {name}.{names} The current time is at the top of each message (a bip:now line): trust it, never check it in the terminal.\n{CONTENT_RULE}\n{SENDING_RULE}\n{AI_RULE}\n{CARE_RULE}\n{FAMILY_RULE}\n{PROJECT_RULE}\n{DRAFT_RULE}\n{PLAIN_RULE}\n{FILES_RULE}\n{TIDY_RULE}\n{LONG_WORK_RULE}\n{VISUAL_RULE}\n{FACTS_RULE}\n{CALC_RULE}\n{SPACE_RULE}\n{ACK_RULE}\n{STEPS_RULE}\n{CHOICE_RULE}\n{SAY_RULE}\n{STYLE_RULE}\n{BLOCK_END}"
+             a report, a reminder), write in {name}.{names} The current time is at the top of each message (a bip:now line): trust it, never check it in the terminal.\n{CONTENT_RULE}\n{SENDING_RULE}\n{AI_RULE}\n{CARE_RULE}\n{FAMILY_RULE}\n{PROJECT_RULE}\n{DRAFT_RULE}\n{PLAIN_RULE}\n{FILES_RULE}\n{TIDY_RULE}\n{LONG_WORK_RULE}\n{VISUAL_RULE}\n{FACTS_RULE}\n{CALC_RULE}\n{SPACE_RULE}\n{ACK_RULE}\n{TELL_RULE}\n{STEPS_RULE}\n{CHOICE_RULE}\n{SAY_RULE}\n{STYLE_RULE}\n{BLOCK_END}"
         ),
         Some(&code),
     )
@@ -433,7 +447,7 @@ pub fn language_block(lang: Option<&str>) -> String {
 /// were French for every agent (Alex, 2026-10-30: his wife's place, iPhone and app in English, had a reply in
 /// French): « Je m'en occupe en arrière-plan… » or « un veilleur » were the very
 /// words its rules gave it to say. The Carnet's « Toi » and « En bref » take the agent's language's names.
-const ENGLISH_EXAMPLES: [(&str, &str); 28] = [
+const ENGLISH_EXAMPLES: [(&str, &str); 29] = [
     (
         "« Je peux payer avec ta carte {card} : tu valideras le montant avant. »",
         "« I can pay with your card {card}: you'll approve the amount first. »",
@@ -453,6 +467,7 @@ const ENGLISH_EXAMPLES: [(&str, &str); 28] = [
     ("« Je compare les prix… »", "« Comparing prices… »"),
     ("« je te prépare ça »", "« I'll get that ready »"),
     ("« je reviens dans quelques minutes »", "« I'll be back in a few minutes »"),
+    ("« je te préviens dès que… »", "« I'll let you know as soon as… »"),
     ("« Je garderai les 30 derniers, environ 150 Mo. »", "« I'll keep the last 30, about 150 MB. »"),
     ("« Coach sportif »", "« Sports coach »"),
     ("« rappelle-moi… »", "« remind me… »"),
@@ -945,7 +960,7 @@ pub fn language_block_compact(lang: Option<&str>) -> String {
     for_language(
         &format!(
             "{BLOCK_START}\nLanguage: answer in the language your person writes in. When you write first (a routine, \
-             a report, a reminder), write in {name}.\n{COMPACT_RULES}\n{TIDY_RULE}\n{ACK_RULE}\n{STEPS_RULE}\n{SAY_RULE}\n{STYLE_RULE}\n{BLOCK_END}"
+             a report, a reminder), write in {name}.\n{COMPACT_RULES}\n{TIDY_RULE}\n{ACK_RULE}\n{TELL_RULE}\n{STEPS_RULE}\n{SAY_RULE}\n{STYLE_RULE}\n{BLOCK_END}"
         ),
         Some(&code),
     )
@@ -1369,6 +1384,28 @@ mod tests {
             assert!(en.contains("« I'll be back in a few minutes »") && !en.contains("je reviens"), "{category}");
         }
         assert_eq!(language_block_compact(Some("fr")).matches(ACK_RULE).count(), 1);
+    }
+
+    #[test]
+    fn every_agent_promises_to_tell_later_only_with_what_will_notice_it() {
+        // proactive agents part 1 (Alex 21/11): « je te préviens dès que… » with nothing set up is never kept
+        for needed in [
+            "Never promise to tell your person later",
+            "unless what will do it is set up, now or already",
+            "a routine (routine_schedule)",
+            "a one-off reminder (reminders_add)",
+            "say plainly you can't watch that",
+        ] {
+            assert!(TELL_RULE.contains(needed), "missing {needed}");
+        }
+        assert!(TELL_RULE.len() < 320, "short: paid on every call");
+        for category in CATEGORIES {
+            let fr = soul_for("Bip", category, Some("fr")).unwrap();
+            assert_eq!(fr.matches(TELL_RULE).count(), 1, "{category}");
+            let en = soul_for("Bip", category, Some("en")).unwrap();
+            assert!(en.contains("« I'll let you know as soon as… »") && !en.contains("je te préviens dès que"), "{category}");
+        }
+        assert_eq!(language_block_compact(Some("fr")).matches(TELL_RULE).count(), 1);
     }
 
     #[test]

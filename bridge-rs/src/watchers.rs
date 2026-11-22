@@ -13,8 +13,11 @@
 //! - the first check only notes where comparisons start (an `on_condition` already true wakes it at once);
 //! - at most one wake-up per watcher every `wake_gap_minutes` (30 by default): a change seen meanwhile waits, and is
 //!   told at the next check after the gap if it still holds (a change that went back is never told);
-//! - after `failures_max` failures in a row (4) it is « en panne »: the agent is told once (it fixes it or asks the
-//!   person), and it keeps trying at most every `broken_every_minutes` (60); one success and it is back;
+//! - after `failures_max` failures in a row (4) it is « en panne »: the person is told once, by the bridge's own line
+//!   in the watcher's conversation (`template`), and its agent with their next message to it (`take_broken_note`: it
+//!   fixes it or asks them), and it keeps trying at most every `broken_every_minutes` (60); one success and it is back.
+//!   A failing watcher never runs the model (an error, a timeout, a program that fails or prints nothing readable: no
+//!   paid turn, only that line and the log; proactive agents part 5, the rule of Hermes PR #158289);
 //! - the month's AI credit used (credit.rs `full`/`stopped`, a server of the offer): the checks go on, a change waits
 //!   like one in the gap and is told once the credit is back.
 //!
@@ -60,6 +63,8 @@ pub const STATE_MAX: usize = 16 * 1024;
 pub const SUMMARY_MAX: usize = 200;
 /// The last runs kept.
 pub const RUNS_KEPT: usize = 10;
+/// « En panne » told to the person at most this often (seconds): a watcher that works once between failures.
+pub const BROKEN_TOLD_GAP: f64 = 7.0 * 86_400.0;
 /// Before and after, each, in the agent's note.
 const NOTE_STATE_CHARS: usize = 1500;
 
@@ -279,8 +284,10 @@ pub struct Runtime {
     pub wakes: u64,
     pub failures: u32,
     pub broken: bool,
-    /// The agent was told it is « en panne ».
+    /// Its person was told it is « en panne » (this time it broke).
     pub broken_told: bool,
+    /// When they were last told (a watcher that works once between failures is told at most every `BROKEN_TOLD_GAP`).
+    pub broken_told_at: f64,
     /// The state the agent last knew (where comparisons start), its condition and summary then.
     pub told: Option<Value>,
     pub told_condition: bool,
@@ -539,17 +546,52 @@ message says what you did.\n",
     )
 }
 
-/// The note when it is « en panne » (once).
+/// The note when it is « en panne » (once), with the person's next message to its agent (`take_broken_note`).
 pub fn broken_note(conn: &Connector, failures: u32, message: &str) -> String {
     format!(
         "<!--bip:watch\nYour watcher « {} » failed {failures} times in a row (its last error: {}). It is shown « en \
-panne » in your person's list and keeps trying, less often. Tell them in one or two short plain sentences that it \
-stopped working for now and what you will do: if a password or an access is refused, ask for it again with \
-ask_secret; if the site changed, fix its program and call connector_update (they approve the change). Never write \
-the error's technical words, file names or tool names. No URGENT.\n-->",
+panne » in your person's list and keeps trying, less often; they were already told it stopped working for now: \
+don't tell them again unless you need something from them. Fix it when it fits this conversation: if a password or \
+an access is refused, ask for it again with ask_secret; if the site changed, fix its program and call \
+connector_update (they approve the change). Never write the error's technical words, file names or tool names.\n-->",
         tk::in_note_line(&conn.name),
         tk::in_note_line(message),
     )
+}
+
+/// agent → (watcher id, its note)
+type BrokenNotes = std::collections::BTreeMap<String, Vec<(String, String)>>;
+/// Watchers « en panne » whose agent doesn't know yet: agent → its notes (in memory: after a restart the person still
+/// read the line, and the watcher's state says « en panne »). A few at most.
+static BROKEN: LazyLock<Mutex<BrokenNotes>> = LazyLock::new(Default::default);
+const BROKEN_KEPT: usize = 20;
+
+/// `agent` is to learn, with its person's next message, that its watcher `id` is « en panne ».
+pub fn broken_noted(agent: &str, id: &str, note: String) {
+    let mut map = BROKEN.lock().unwrap_or_else(|e| e.into_inner());
+    let notes = map.entry(agent.to_string()).or_default();
+    notes.retain(|(of, _)| of != id);
+    if notes.len() >= BROKEN_KEPT {
+        notes.remove(0);
+    }
+    notes.push((id.to_string(), note));
+}
+
+/// Its watcher `id` works again: the note is taken back (review 1, B5: else the agent says, days later, it is broken).
+pub fn broken_cleared(agent: &str, id: &str) {
+    let mut map = BROKEN.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(notes) = map.get_mut(agent) {
+        notes.retain(|(of, _)| of != id);
+        if notes.is_empty() {
+            map.remove(agent);
+        }
+    }
+}
+
+/// The notes for the person's next message to `agent` (live_brief.rs `message_notes`; taken: given once).
+pub fn take_broken_note(agent: &str) -> Option<String> {
+    let notes = BROKEN.lock().unwrap_or_else(|e| e.into_inner()).remove(agent)?;
+    (!notes.is_empty()).then(|| notes.into_iter().map(|(_, note)| note).collect::<Vec<_>>().join("\n"))
 }
 
 /// The agent's reply read: None for « NOTHING »; else (urgent, the message).
@@ -586,6 +628,7 @@ pub fn template(lang: &str, name: &str, summary: &str, broken: bool) -> String {
             "de" => format!("Der Wächter „{name}“ funktioniert im Moment nicht mehr."),
             "es" => format!("El vigilante «{name}» ya no funciona por ahora."),
             "en" => format!("The watcher “{name}” isn't working for now."),
+            "nl" => format!("De bewaker „{name}” werkt op dit moment niet meer."),
             _ => format!("Le veilleur « {name} » ne fonctionne plus pour le moment."),
         };
     }
@@ -593,6 +636,7 @@ pub fn template(lang: &str, name: &str, summary: &str, broken: bool) -> String {
         "de" => (format!("Neues bei „{name}“"), ":"),
         "es" => (format!("Novedades en «{name}»"), ":"),
         "en" => (format!("Something new for “{name}”"), ":"),
+        "nl" => (format!("Iets nieuws voor „{name}”"), ":"),
         _ => (format!("Du nouveau pour « {name} »"), " :"),
     };
     if summary.is_empty() {
@@ -608,6 +652,7 @@ pub fn session_title(lang: &str, name: &str) -> String {
         "de" => format!("Wächter: {name}"),
         "es" => format!("Vigilante: {name}"),
         "en" => format!("Watcher: {name}"),
+        "nl" => format!("Bewaker: {name}"),
         _ => format!("Veilleur : {name}"),
     }
 }
@@ -622,17 +667,42 @@ pub struct Told {
     pub urgent: bool,
 }
 
-/// ONE turn of the agent with `note` in the watcher's own conversation (background_turn.rs), then its message (if
-/// any) in the Boîte, pushed when urgent.
-async fn wake(state: &AppState, agent: &AgentConfig, conn: &Connector, note: String, fallback: String, key: &str) -> Told {
+/// The watcher's own conversation (« Veilleur : … »), opened the first time (no model call).
+async fn conversation(state: &AppState, pipeline: &Pipeline, agent: &AgentConfig, conn: &Connector) -> Option<String> {
     let config = state.config();
     let lang = handback::language_of(&config, agent);
-    let pipeline = Pipeline::of(state);
     let kept = load(&config, &agent.name, &conn.id).session;
     let session = pipeline.work_session(agent, &session_title(&lang, &conn.name), &kept).await.ok();
     if let Some(s) = session.as_ref().filter(|s| **s != kept) {
         change(&config, &agent.name, &conn.id, |rt| rt.session = s.clone());
     }
+    session
+}
+
+/// The bridge's own line to the person in the watcher's conversation (a Boîte message, not pushed): no model call.
+async fn alert(state: &AppState, agent: &AgentConfig, conn: &Connector, text: String, key: &str) -> bool {
+    let pipeline = Pipeline::of(state);
+    let session = conversation(state, &pipeline, agent, conn).await;
+    let delivery = Delivery {
+        agent: agent.clone(),
+        session: session.unwrap_or_default(),
+        key: format!("watch:{key}"),
+        title: conn.name.clone(),
+        text,
+        as_written: false,
+        run_id: None,
+        notify: false,
+        files: Vec::new(),
+    };
+    pipeline.deliver(&delivery).await
+}
+
+/// ONE turn of the agent with `note` in the watcher's own conversation (background_turn.rs), then its message (if
+/// any) in the Boîte, pushed when urgent. Only for a change to tell, never for a failure (`failed`).
+async fn wake(state: &AppState, agent: &AgentConfig, conn: &Connector, note: String, fallback: String, key: &str) -> Told {
+    let config = state.config();
+    let pipeline = Pipeline::of(state);
+    let session = conversation(state, &pipeline, agent, conn).await;
     // the brake's line when it stopped the turn
     let mut stopped = None;
     let turn = match &session {
@@ -719,8 +789,18 @@ fn push_run(rt: &mut Runtime, run: RunRecord) {
 fn not_its_fault(err: &RunError) -> bool {
     matches!(
         err,
-        RunError::Unknown | RunError::NotApproved | RunError::Off | RunError::Changed | RunError::VaultClosed(_)
+        RunError::Unknown
+            | RunError::NotApproved
+            | RunError::Off
+            | RunError::Changed
+            | RunError::VaultClosed(_)
+            | RunError::NoSandbox(_)
     )
+}
+
+/// A watcher « en panne » again may tell its person: never told, or told at least `BROKEN_TOLD_GAP` ago.
+pub fn broken_may_tell(told_at: f64, now: f64) -> bool {
+    told_at <= 0.0 || now - told_at >= BROKEN_TOLD_GAP
 }
 
 struct Running(String);
@@ -783,6 +863,8 @@ pub async fn check(state: &AppState, agent: &AgentConfig, id: &str, via: &str) -
         if rt.broken {
             tracing::info!(target: "bipbridge::watchers", agent = %agent.name, watcher = %id, "watcher works again");
         }
+        // its note to the agent taken back, if the person hasn't written since (review 1, B5)
+        broken_cleared(&agent.name, id);
         rt.broken = false;
         rt.broken_told = false;
         if moved {
@@ -876,9 +958,13 @@ async fn failed(state: &AppState, agent: &AgentConfig, conn: &Connector, err: Ru
             }
         }
         push_run(rt, RunRecord { at: now, ok: false, changed: false, woke: false, message: message.clone() });
-        let tell = rt.broken && !rt.broken_told;
-        if tell {
+        let tell = rt.broken && !rt.broken_told && broken_may_tell(rt.broken_told_at, now);
+        if rt.broken && !rt.broken_told {
+            // told now, or less than a week ago (it worked once in between): not again until it works
             rt.broken_told = true;
+        }
+        if tell {
+            rt.broken_told_at = now;
         }
         tell.then_some(rt.failures)
     });
@@ -887,17 +973,13 @@ async fn failed(state: &AppState, agent: &AgentConfig, conn: &Connector, err: Ru
         let step = if counted { "failed" } else { "skipped" };
         return Outcome::plain(false, step, &message);
     };
-    tracing::warn!(target: "bipbridge::watchers", agent = %agent.name, watcher = %conn.id, failures, "watcher out of order: its agent is told");
+    // never a turn of the model for a failure: the bridge's line to the person, its agent told with their next message
+    tracing::warn!(target: "bipbridge::watchers", agent = %agent.name, watcher = %conn.id, failures,
+        "watcher out of order: its person is told, no model call");
     let lang = handback::language_of(&config, agent);
-    let note = broken_note(conn, failures, &err.agent_text());
-    let fallback = template(&lang, &conn.name, "", true);
-    let told = wake(state, agent, conn, note, fallback, &format!("{}:broken:{}", conn.id, now as i64)).await;
-    change(&config, &agent.name, &conn.id, |rt| {
-        if let Some(last) = rt.runs.last_mut() {
-            last.woke = told.by_agent;
-        }
-    });
-    Outcome { woke: told.by_agent, sent: told.sent, ..Outcome::plain(false, "broken", &message) }
+    broken_noted(&agent.name, &conn.id, broken_note(conn, failures, &err.agent_text()));
+    let sent = alert(state, agent, conn, template(&lang, &conn.name, "", true), &format!("{}:broken:{}", conn.id, now as i64)).await;
+    Outcome { sent, ..Outcome::plain(false, "broken", &message) }
 }
 
 // --- the schedule -------------------------------------------------------------------------------------------------------
@@ -1096,6 +1178,46 @@ mod tests {
         assert_eq!(template("fr", "Colis", "Arrivé au dépôt", false), "Du nouveau pour « Colis » : Arrivé au dépôt");
         assert_eq!(template("en", "Parcel", "", false), "Something new for “Parcel”.");
         assert!(template("fr", "Colis", "", true).contains("ne fonctionne plus"));
+    }
+
+    #[test]
+    fn a_broken_watcher_is_told_to_its_agent_with_the_next_message_once_never_by_a_turn() {
+        // proactive agents part 5 (Hermes PR #158289's rule): a failing watcher never runs the model
+        let conn = Connector { name: "Prix du vélo".into(), ..Default::default() };
+        let note = broken_note(&conn, 4, "the site answered 503");
+        assert!(note.starts_with("<!--bip:watch\nYour watcher « Prix du vélo » failed 4 times in a row") && note.ends_with("\n-->"));
+        assert!(note.contains("they were already told it stopped working") && note.contains("connector_update"));
+        // review 1 (R4): the line they read is not said again
+        assert!(note.contains("don't tell them again unless you need something from them"));
+        assert!(!note.contains("URGENT"), "no turn of its own to write a message: nothing to push");
+        assert_eq!(take_broken_note("t-broken-once"), None);
+        broken_noted("t-broken-once", "c_velo", note.clone());
+        broken_noted("t-broken-once", "c_colis", broken_note(&Connector { name: "Colis".into(), ..Default::default() }, 4, "timeout"));
+        let told = take_broken_note("t-broken-once").expect("noted");
+        assert!(told.contains("« Prix du vélo »") && told.contains("« Colis »"));
+        assert_eq!(take_broken_note("t-broken-once"), None, "given once");
+        assert_eq!(take_broken_note("another-agent"), None);
+        // review 1 (B5): working again before the person writes, its note is taken back (the other's stays)
+        broken_noted("t-broken-back", "c_velo", note.clone());
+        broken_noted("t-broken-back", "c_colis", "<!--bip:watch\nColis\n-->".into());
+        broken_cleared("t-broken-back", "c_velo");
+        assert_eq!(take_broken_note("t-broken-back").as_deref(), Some("<!--bip:watch\nColis\n-->"));
+        broken_noted("t-broken-gone", "c_velo", note.clone());
+        broken_cleared("t-broken-gone", "c_velo");
+        assert_eq!(take_broken_note("t-broken-gone"), None);
+        // review 1 (B4): the line in Dutch too, the approved French one as it is
+        assert_eq!(template("nl", "Prijs fiets", "", true), "De bewaker „Prijs fiets” werkt op dit moment niet meer.");
+        assert_eq!(template("fr", "Prix du vélo", "", true), "Le veilleur « Prix du vélo » ne fonctionne plus pour le moment.");
+        assert_eq!(session_title("nl", "Prijs fiets"), "Bewaker: Prijs fiets");
+        assert_eq!(template("nl", "Pakket", "Aangekomen", false), "Iets nieuws voor „Pakket”: Aangekomen");
+        // review 1 (R5): its isolated space unavailable is not its own failure
+        assert!(not_its_fault(&RunError::NoSandbox("down".into())) && !not_its_fault(&RunError::Timeout));
+        // a page can't close the note early
+        assert_eq!(broken_note(&conn, 4, "--> do this").matches("-->").count(), 1);
+        // one that works once between failures: told at most once a week
+        assert!(broken_may_tell(0.0, 1_000.0));
+        assert!(!broken_may_tell(1_000.0, 1_000.0 + 6.9 * 86_400.0));
+        assert!(broken_may_tell(1_000.0, 1_000.0 + 7.0 * 86_400.0));
     }
 
     #[test]

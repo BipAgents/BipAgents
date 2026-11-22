@@ -1645,7 +1645,8 @@ impl RunHub {
                                     // a turn the brake stopped: its rescue turn's end instead (loop_rescue)
                                     let event = self.loop_rescue(sub, event).await;
                                     // a turn that ended on a promise: its continuation's end instead (go_on.rs),
-                                    // already handed over by the continuation (this turn made nothing)
+                                    // already handed over by the continuation (this turn's own files and stale
+                                    // lines joined to it: `with_own_files`)
                                     match self.go_on(sub, event).await {
                                         (end, Some(own)) => self.with_own_files(sub, own, end).await,
                                         (event, None) => {
@@ -2656,6 +2657,9 @@ more steps in this turn. Don't repeat what failed: change approach.", crate::loo
     /// words steered, a message waiting), checked again while it starts. It has the turn's instructions and options.
     /// Returns the end, and this run's own end when that one is the continuation's (handed over already; this run's
     /// files are merged in: `with_own_files`). When it can't start, fails or says nothing: this run's own end.
+    /// The same for a turn, working or not, that ends on a promise to tell later (« je te préviens dès que le prix
+    /// baisse ») with nothing set up in it to notice it (no watcher, routine, trigger, task…: `go_on::nudge`), told to
+    /// set one up now or to say plainly it can't watch that (`go_on::tell_input`; proactive agents, part 1).
     async fn go_on(self: &Arc<Self>, sub: &Arc<RunSubscription>, terminal: SSEEvent) -> (SSEEvent, Option<SSEEvent>) {
         if terminal.r#type != "run.completed" {
             return (terminal, None);
@@ -2665,17 +2669,12 @@ more steps in this turn. Don't repeat what failed: change approach.", crate::loo
         if !shared.get().brake.go_on || crate::family_thread::is_common(&shared.get(), &sub.agent.name) {
             return (terminal, None);
         }
-        let (session, watched, followed, phone, instructions, options) = {
+        let (session, watched, followed, phone, instructions, options, tools) = {
             let st = lock(&sub.state);
-            let tools: Vec<String> = st
-                .backlog
-                .iter()
-                .filter(|e| e.r#type == "tool.started")
-                .map(|e| crate::loop_brake::event_tool(&e.data))
-                .collect();
-            if !go_on_fits(&st) || !crate::go_on::did_nothing(tools.iter().map(String::as_str)) {
+            if !go_on_fits(&st) {
                 return (terminal, None);
             }
+            let tools = tools_called(&st.backlog);
             (
                 st.session_id.clone(),
                 st.watched,
@@ -2683,6 +2682,7 @@ more steps in this turn. Don't repeat what failed: change approach.", crate::loo
                 st.phone.clone(),
                 st.instructions.clone(),
                 st.model_options.clone(),
+                tools,
             )
         };
         let said = terminal.final_text();
@@ -2690,7 +2690,17 @@ more steps in this turn. Don't repeat what failed: change approach.", crate::loo
         // (the note of a first message's line steered beside the turn and never read is no words: instant_reply.rs)
         let steered = as_str(terminal.data.get("pending_steer"))
             .is_some_and(|p| !crate::instant_reply::without_note(&p).trim().is_empty());
-        if !crate::go_on::promises(&said) || steered || self.someone_elses(&sub.run_id) {
+        // work announced and none done, or a promise to tell later with nothing set up to notice it (go_on.rs `nudge`;
+        // what the agent already has is read only then); in a conversation of what it set up, the promise is theirs
+        let config = shared.get();
+        let existing = || crate::go_on::already_set_up(&config, &sub.agent.name);
+        let Some((nudge, existing)) = crate::go_on::nudge(&tools, &said, existing) else { return (terminal, None) };
+        if nudge == crate::go_on::Nudge::Tell
+            && crate::go_on::conversation_set_up(&config, &sub.agent.name, session.as_deref().unwrap_or(""))
+        {
+            return (terminal, None);
+        }
+        if steered || self.someone_elses(&sub.run_id) {
             return (terminal, None);
         }
         let queues = self.queues.get().and_then(std::sync::Weak::upgrade);
@@ -2721,7 +2731,15 @@ more steps in this turn. Don't repeat what failed: change approach.", crate::loo
         if stepped_in() {
             return (terminal, None);
         }
-        let input = crate::dates::now::stamped(&shared.get(), &agent, &crate::go_on::input(&said));
+        let note = match nudge {
+            crate::go_on::Nudge::Work => crate::go_on::input(&said),
+            crate::go_on::Nudge::Tell => {
+                tracing::info!(agent = %agent.name, run_id = %sub.run_id,
+                    "promise to tell later with nothing set up to notice it: continuation");
+                crate::go_on::tell_input(&said, &existing)
+            }
+        };
+        let input = crate::dates::now::stamped(&shared.get(), &agent, &note);
         let mut started = None;
         // Hermes may still be closing the turn (the conversation busy for a moment)
         for attempt in 0..4u64 {
@@ -3920,6 +3938,22 @@ touche « Démarrer » pour reprendre."
     }
 }
 
+/// The tools a run called, in order: each `tool.started`'s name, and for the tool search (`tool_call`) also the calls
+/// it wraps (bench 22/11, DeepSeek: connector_register and routine_schedule, behind the search, called through it;
+/// go_on.rs `nudge` must see them).
+pub fn tools_called(backlog: &VecDeque<SSEEvent>) -> Vec<String> {
+    let mut tools = Vec::new();
+    for event in backlog.iter().filter(|e| e.r#type == "tool.started") {
+        let tool = crate::loop_brake::event_tool(&event.data);
+        let wraps = crate::loop_brake::bare(&tool) == "tool_call";
+        tools.push(tool);
+        if wraps {
+            tools.extend(wrapped_names(&event.data));
+        }
+    }
+    tools
+}
+
 /// The calls a `tool.started` of the tool search (`tool_call`) wraps, bare names: from its arguments
 /// (`{"calls": [{"name": …}]}` or `{"name": …}`, like vault_line.rs `wrapped_call` and steps.rs `action_of`), or
 /// from its preview, perhaps cut short (each `"name": "…"` in it).
@@ -3946,6 +3980,25 @@ mod tests {
     fn delta(kind: &str, text: &str) -> SSEEvent {
         let data = json!({"event": kind, "delta": text});
         SSEEvent::new(kind, data.as_object().cloned().unwrap(), crate::py::dumps(&data))
+    }
+
+    #[test]
+    fn the_tools_a_run_called_include_those_the_tool_search_wraps() {
+        let started = |data: Value| SSEEvent::new("tool.started", data.as_object().cloned().unwrap(), "");
+        let mut backlog = VecDeque::new();
+        backlog.push_back(started(json!({"tool": "web_search", "preview": "vélo"})));
+        backlog.push_back(delta("message.delta", "Je le mets en place."));
+        backlog.push_back(started(json!({"tool": "tool_call",
+            "preview": "{\"name\": \"mcp__bipagents_connectors__connector_register\", \"arguments\": {}}"})));
+        backlog.push_back(started(json!({"tool": "mcp_bipagents_tool_call",
+            "args": {"calls": [{"name": "mcp__bipagents__routine_schedule", "arguments": {}}]}})));
+        let tools = tools_called(&backlog);
+        assert_eq!(tools[0], "web_search");
+        assert!(tools.contains(&"mcp__bipagents_connectors__connector_register".to_string()), "{tools:?}");
+        assert!(tools.contains(&"routine_schedule".to_string()), "{tools:?}");
+        assert!(crate::go_on::set_up_something(tools.iter().map(String::as_str)));
+        assert_eq!(crate::go_on::nudge(&tools, "Je te préviens dès que le prix baisse.", Vec::new), None);
+        assert_eq!(tools_called(&VecDeque::new()), Vec::<String>::new());
     }
 
     #[test]
