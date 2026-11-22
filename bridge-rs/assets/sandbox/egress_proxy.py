@@ -5,12 +5,19 @@ HTTPS goes through CONNECT, to port 443; plain HTTP (Debian's apt, a browser's h
 port 80. Each decision is one line of its log (`podman logs bipagents-egress`), each tunnel's byte counts too, so an
 abuse complaint can be traced to an agent.
 
-- **Who asks**: each isolated sandbox has its own proxy URL, `http://<agent>:<token>@…` (pip, npm, uv, curl, apt…
-  send it as `Proxy-Authorization: Basic`). The bridge writes `BIP_POLICY` (read-only here): per agent, the SHA-256
-  of its token and the hosts its person validated for sending (`data.gouv.fr`, or `*.example.org`), read again when it
-  changes. An agent's visible browser is known by its address on the browsers' network (`BIP_BROWSERS`: this proxy's
-  address there; the policy's `browsers` maps each browser's address to its agent). No credentials, or wrong ones:
-  the registries only (a 407 asks a client that waits for it to send them).
+- **Who asks**: known by the address it comes from, never by what it says. The bridge writes `BIP_POLICY` (read-only
+  here): per agent the hosts its person validated for sending (`data.gouv.fr`, or `*.example.org`), read again when
+  it changes. An agent's sandbox is known by its address on the sandboxes' network (`BIP_SANDBOXES`: this proxy's
+  address there; the policy's `sandboxes` maps each sandbox container's address to its agent, from podman), its
+  visible browser by its address on the browsers' network (`BIP_BROWSERS`, the policy's `browsers`). Until 22/11 a
+  sandbox's proxy variables carried its own credentials (`http://<agent>:<token>@…`): the model read them in its
+  environment and wrote them into a task (enquete-antibot); now they carry none, and credentials shown on those
+  addresses are ignored. A sandbox address the policy doesn't know yet (a container just started): one `{"kind":
+  "who", "address"}` line asks the bridge, and its request waits `BIP_WHO_WAIT` seconds for the answer; still unknown,
+  the registries only. Credentials are honoured on the connectors' network only, and only a connector's (`BIP_STRICT`,
+  below); an agent's token opens nothing anywhere once `BIP_SANDBOXES` is set (without it, as before: this file's
+  tests and an older bridge). No identity: the registries only (a 407 asks a client that waits for it to send its
+  credentials, never on the sandboxes' or browsers' networks).
 - **Reading is open**: an agent reaches any public name on HTTPS (its browser on plain HTTP too) — never an address,
   nor a name of this machine's networks, nor one that resolves to a private, loopback, link-local, shared (Tailscale
   100.64/10) or reserved address; the connection goes to the address checked, never resolved again. The
@@ -84,6 +91,11 @@ USAGE = os.environ.get("BIP_USAGE", "")
 BLOCKLIST = os.environ.get("BIP_BLOCKLIST", "")
 STRICT = {a.strip() for a in os.environ.get("BIP_STRICT", "").split(",") if a.strip()}
 BROWSERS = {a.strip() for a in os.environ.get("BIP_BROWSERS", "").split(",") if a.strip()}
+SANDBOXES = {a.strip() for a in os.environ.get("BIP_SANDBOXES", "").split(",") if a.strip()}
+# an unknown sandbox address: how long its request waits for the bridge to say whose it is (seconds)
+WHO_WAIT = float(os.environ.get("BIP_WHO_WAIT", "8") or 8)
+# the same address asked about at most once in so long
+WHO_EVERY = 10.0
 WAIT = 30
 HOUR = 3600
 REPORTS_MAX = 256 * 1024
@@ -122,7 +134,9 @@ EXIT_SOCK = os.environ.get("BIP_EXIT_SOCK", "")
 STATIC_LABELS = frozenset(("assets", "static", "statics", "cdn", "img", "images", "image", "media", "medias", "fonts",
                            "font", "css", "js", "pics", "photos", "thumbs", "video", "videos"))
 
-_policy = {"stamp": None, "agents": {}, "browsers": {}, "limits": dict(LIMITS)}
+_policy = {"stamp": None, "agents": {}, "browsers": {}, "sandboxes": {}, "limits": dict(LIMITS)}
+# address -> when the bridge was last asked whose sandbox it is
+_asked_who = {}
 _blocklist = {"stamp": None, "names": frozenset()}
 # (agent, host) -> [window start, bytes sent this hour] to hosts not validated
 _sent = {}
@@ -162,7 +176,7 @@ def load_policy():
         info = os.stat(POLICY)
         stamp = (info.st_mtime_ns, info.st_size, info.st_ino)
     except OSError:
-        _policy.update(stamp=None, agents={}, browsers={}, limits=dict(LIMITS))
+        _policy.update(stamp=None, agents={}, browsers={}, sandboxes={}, limits=dict(LIMITS))
         return _policy
     if stamp != _policy["stamp"]:
         try:
@@ -172,11 +186,13 @@ def load_policy():
             data = {}
         data = data if isinstance(data, dict) else {}
         agents, browsers, limits = data.get("agents"), data.get("browsers"), dict(LIMITS)
+        sandboxes = data.get("sandboxes")
         for name, value in (data.get("limits") or {}).items() if isinstance(data.get("limits"), dict) else ():
             if name in LIMITS and isinstance(value, int) and not isinstance(value, bool) and value >= 0:
                 limits[name] = value
         _policy.update(stamp=stamp, agents=agents if isinstance(agents, dict) else {},
-                       browsers=browsers if isinstance(browsers, dict) else {}, limits=limits)
+                       browsers=browsers if isinstance(browsers, dict) else {},
+                       sandboxes=sandboxes if isinstance(sandboxes, dict) else {}, limits=limits)
     return _policy
 
 
@@ -211,6 +227,53 @@ def browser_of(address):
     """The agent whose visible browser has this address on the browsers' network, else None."""
     agent = load_policy()["browsers"].get(address)
     return agent if isinstance(agent, str) and isinstance(policy().get(agent), dict) else None
+
+
+def sandbox_of(address):
+    """The agent whose sandbox has this address on the sandboxes' network, else None (never a connector's entry)."""
+    agent = load_policy()["sandboxes"].get(address)
+    return agent if isinstance(agent, str) and isinstance(policy().get(agent), dict) and not connector(agent) else None
+
+
+def ask_who(address):
+    """The bridge asked whose sandbox this address is (one line, at most once per `WHO_EVERY` per address)."""
+    now = time.time()
+    if now - _asked_who.get(address, 0) < WHO_EVERY:
+        return
+    if len(_asked_who) > 4096:
+        _asked_who.clear()
+    _asked_who[address] = now
+    append_report({"kind": "who", "address": address[:64], "at": int(now)})
+
+
+async def sandbox_known(address):
+    """`sandbox_of`, after asking the bridge and waiting up to `WHO_WAIT` for its answer when the address is unknown."""
+    agent = sandbox_of(address)
+    if agent is not None or not address:
+        return agent
+    ask_who(address)
+    deadline = time.time() + WHO_WAIT
+    while time.time() < deadline:
+        await asyncio.sleep(0.2)
+        agent = sandbox_of(address)
+        if agent is not None:
+            return agent
+    return None
+
+
+def identity(local, peer, auth):
+    """Who asks, from the proxy's address the connection reached (`local`) and its own (`peer`): a browser or a sandbox
+    by its address (credentials ignored there), a connector by its credentials on the connectors' network only, an
+    agent's credentials nowhere once the sandboxes are known by address (`BIP_SANDBOXES`). None: nobody known (a
+    sandbox still unknown is waited for by the caller, `sandbox_known`)."""
+    if local in BROWSERS:
+        return browser_of(peer)
+    if local in SANDBOXES:
+        return sandbox_of(peer)
+    named = who(auth)
+    if local in STRICT:
+        return named if connector(named) or not SANDBOXES else None
+    return None if SANDBOXES else named
 
 
 def host_matches(host, pattern):
@@ -815,6 +878,7 @@ PHONE_REFUSED = "Site refused by the phone exit"
 PHONE_FAILED = "Bad Gateway (the phone could not reach the site)"
 CONNECTIONS = "Too many new connections - wait a minute"
 UNKNOWN_BROWSER = "Unknown browser"
+UNKNOWN_SANDBOX = "Sandbox not recognised yet - retry in a moment"
 REFUSED = "Sending to this site refused for good by your person - it stays readable, a little each hour"
 REGISTRY_HOUR = "Package registries paused - too much was sent to them, retry within the hour"
 REGISTRY_DAY = "Package registries paused - too much was sent to them today, retry tomorrow"
@@ -839,6 +903,8 @@ BODIES = {
     PAUSED: "You sent this site more than a small amount: your person has a card to answer. Reading goes on with a "
             "small allowance an hour, which is used up: retry within the hour, or wait for their answer.",
     TOO_MANY_OPEN: "Your programs hold too many connections to the proxy open at once: close some, then retry.",
+    UNKNOWN_SANDBOX: "Your sandbox has just started and is not recognised yet: only the package registries are "
+                     "reachable until it is. Retry in a moment; no proxy settings or credentials are needed.",
     NOT_CONNECTOR: "This connector may only reach the sites your person approved with it.",
     NOT_OPEN: "Only the package registries can be reached without your own access.",
     NOT_HTTPS: "Your programs reach sites over HTTPS only.",
@@ -1005,16 +1071,13 @@ async def handle(reader, writer):
     local, peer = ends(writer)
     strict = local in STRICT
     browser = local in BROWSERS
-    if browser:
-        agent = browser_of(peer)
-        auth = ""
-        if agent is None:
-            log("unknown-browser", method, peer)
-            return await answer(writer, 403, UNKNOWN_BROWSER)
-    else:
-        auth = next((line.split(b":", 1)[1].decode("latin-1") for name, line in headers
-                     if name == "proxy-authorization"), "")
-        agent = who(auth)
+    sandbox = local in SANDBOXES and not browser
+    auth = "" if browser or sandbox else next((line.split(b":", 1)[1].decode("latin-1") for name, line in headers
+                                               if name == "proxy-authorization"), "")
+    agent = identity(local, peer, auth)
+    if browser and agent is None:
+        log("unknown-browser", method, peer)
+        return await answer(writer, 403, UNKNOWN_BROWSER)
     if method.upper() == "CONNECT":
         host, port = split_authority(target, 443)
         wanted = 443
@@ -1032,8 +1095,17 @@ async def handle(reader, writer):
     else:
         return await answer(writer, 400, "Bad Request")
     host = normal(host)
+    if sandbox and agent is None:
+        if host in REGISTRIES:
+            ask_who(peer)   # learnt for its next request; installs never wait
+        else:
+            # a sandbox just started: the bridge says whose it is (podman), its request waits a moment for it
+            agent = await sandbox_known(peer)
+            if agent is None:
+                log("unknown-sandbox", method, f"{peer} {target}")
+                return await answer(writer, 403, UNKNOWN_SANDBOX)
     if not allowed(host, port, wanted, agent, strict, browser):
-        if agent is None and not auth and wanted == 443 and port == 443 and not browser:
+        if agent is None and not auth and wanted == 443 and port == 443 and not browser and not sandbox:
             # a client that sends its credentials only when asked (the registries need none)
             log("ask-credentials", method, target)
             return await answer(writer, 407, "Proxy Authentication Required",

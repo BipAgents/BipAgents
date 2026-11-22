@@ -18,19 +18,21 @@ import pytest
 HERE = Path(__file__).parent
 
 
-def load(tmp_path, monkeypatch, agents=None, limits=None, browsers=None, env=None):
+def load(tmp_path, monkeypatch, agents=None, limits=None, browsers=None, env=None, sandboxes=None):
     policy, reports = tmp_path / "sites.json", tmp_path / "reports.jsonl"
     body = {"agents": agents or {}}
     if limits is not None:
         body["limits"] = limits
     if browsers is not None:
         body["browsers"] = browsers
+    if sandboxes is not None:
+        body["sandboxes"] = sandboxes
     policy.write_text(json.dumps(body))
     monkeypatch.setenv("BIP_ALLOW", "pypi.org,deb.debian.org")
     monkeypatch.setenv("BIP_POLICY", str(policy))
     monkeypatch.setenv("BIP_REPORTS", str(reports))
     monkeypatch.setenv("BIP_USAGE", str(tmp_path / "usage.json"))
-    for name in ("BIP_BROWSERS", "BIP_BLOCKLIST", "BIP_STRICT"):
+    for name in ("BIP_BROWSERS", "BIP_BLOCKLIST", "BIP_STRICT", "BIP_SANDBOXES", "BIP_WHO_WAIT"):
         monkeypatch.delenv(name, raising=False)
     for name, value in (env or {}).items():
         monkeypatch.setenv(name, value)
@@ -1038,6 +1040,102 @@ def test_registries_and_anonymous_clients(tmp_path, monkeypatch):
     assert out["conn"].startswith("HTTP/1.1 403 Site not approved for this connector")
     assert out["http"] == b"HTTP/1.1 403 Only HTTPS sites are reachable (https://, port 443)"
     assert site.received > 0 and reports_of(reports) == []
+
+
+# --- the sandboxes known by their address (enquete-antibot 22/11, fix 1) -------------------------------------------
+
+def test_a_sandbox_is_known_by_its_address_never_by_credentials(tmp_path, monkeypatch):
+    """The sandbox's proxy variables carry no credentials any more (22/11: the model read them in its environment and
+    wrote them into a task): the proxy knows each sandbox by its address on the sandboxes' network (the policy's
+    `sandboxes`, from podman, as `browsers`). Credentials shown there change nothing: the address says who asks."""
+    proxy, _, reports = load(tmp_path, monkeypatch, AGENTS, LIMITS, sandboxes={"127.0.0.1": "vie"},
+                             env={"BIP_SANDBOXES": "127.0.0.1"})
+    site = Site()
+
+    async def steps(port):
+        out = {}
+        out["read"] = (await tunnel(port, "www.lemonde.fr"))[0]
+        out["registry"] = (await tunnel(port, "pypi.org"))[0]
+        out["local"] = (await tunnel(port, "nas.local"))[0]
+        # another agent's token: still vie (data.gouv.fr is validated for vie, not for budget): passes whole
+        out["validated"] = await send_tls(port, "data.gouv.fr", basic("budget", "t-budget"), 200 * 1024)
+        # a connector's token: still vie, counted (never the connector's uncounted way to its hosts)
+        out["connector"] = await send_tls(port, "api.garmin.example", basic("conn-c1", "t-conn"), 200 * 1024)
+        return out
+
+    out = asyncio.run(through(proxy, monkeypatch, site, steps))
+    assert out["read"].startswith("HTTP/1.1 200") and out["registry"].startswith("HTTP/1.1 200")
+    assert out["local"].startswith("HTTP/1.1 403")
+    assert out["validated"][0].startswith("HTTP/1.1 200") and out["connector"][0].startswith("HTTP/1.1 200")
+    # the validated send whole, the connector-token one cut at vie's hour budget and reported as vie's
+    assert 200 * 1024 <= site.received < 200 * 1024 + 64 * 1024 + 4 * 1024, site.received
+    [row] = [r for r in reports_of(reports) if r["kind"] == "send"]
+    assert (row["agent"], row["host"]) == ("vie", "api.garmin.example")
+
+
+def test_an_unknown_sandbox_gets_the_registries_only_and_the_bridge_is_asked(tmp_path, monkeypatch):
+    """An address the policy doesn't know yet (a sandbox just started): the bridge is asked who it is (a « who » line)
+    and the request waits a moment for the answer; still unknown, the registries only — an agent's old token, read in
+    another sandbox, opens nothing more. Never a 407 there: nothing to send."""
+    proxy, policy, reports = load(tmp_path, monkeypatch, AGENTS, sandboxes={},
+                                  env={"BIP_SANDBOXES": "127.0.0.1", "BIP_WHO_WAIT": "0.6"})
+    site = Site()
+
+    async def steps(port):
+        out = {}
+        out["token"] = (await tunnel(port, "www.lemonde.fr", VIE))[0]
+        out["bare"] = (await tunnel(port, "www.lemonde.fr"))[0]
+        out["registry"] = (await tunnel(port, "pypi.org"))[0]
+        return out
+
+    out = asyncio.run(through(proxy, monkeypatch, site, steps))
+    assert out["token"].startswith("HTTP/1.1 403 Sandbox not recognised yet")
+    assert out["bare"].startswith("HTTP/1.1 403 Sandbox not recognised yet")
+    assert out["registry"].startswith("HTTP/1.1 200")
+    asks = [r for r in reports_of(reports) if r["kind"] == "who"]
+    assert asks and all(r["address"] == "127.0.0.1" for r in asks) and len(asks) == 1   # once, not per request
+
+    # the bridge answers while the request waits: it goes on
+    other = tmp_path / "late"
+    other.mkdir()
+    proxy2, policy2, _ = load(other, monkeypatch, AGENTS, sandboxes={},
+                              env={"BIP_SANDBOXES": "127.0.0.1", "BIP_WHO_WAIT": "5"})
+
+    async def steps2(port):
+        async def answer():
+            await asyncio.sleep(0.5)
+            policy2.write_text(json.dumps({"agents": AGENTS, "sandboxes": {"127.0.0.1": "vie"}}))
+            os.utime(policy2, ns=(5, 6))
+        task = asyncio.ensure_future(answer())
+        status = (await tunnel(port, "www.lemonde.fr"))[0]
+        await task
+        return status
+
+    assert asyncio.run(through(proxy2, monkeypatch, Site(), steps2)).startswith("HTTP/1.1 200")
+
+
+def test_an_agents_token_is_honoured_nowhere_once_sandboxes_are_known_by_address(tmp_path, monkeypatch):
+    """Tokens bound to their source: with the sandboxes known by their address, an agent's token opens nothing on any
+    of the proxy's addresses; a connector's opens its own hosts on the connectors' network only."""
+    proxy, _, _ = load(tmp_path, monkeypatch, AGENTS, env={"BIP_SANDBOXES": "10.233.80.2"})
+
+    async def steps(port):
+        return {"vie": (await tunnel(port, "www.lemonde.fr", VIE))[0],
+                "conn": (await tunnel(port, "api.garmin.example", basic("conn-c1", "t-conn")))[0]}
+
+    out = asyncio.run(through(proxy, monkeypatch, Site(), steps))
+    assert out["vie"].startswith("HTTP/1.1 403") and out["conn"].startswith("HTTP/1.1 403")
+    other = tmp_path / "strict"
+    other.mkdir()
+    proxy2, _, _ = load(other, monkeypatch, AGENTS, env={"BIP_SANDBOXES": "10.233.80.2", "BIP_STRICT": "127.0.0.1"})
+
+    async def steps2(port):
+        return {"vie": (await tunnel(port, "www.lemonde.fr", VIE))[0],
+                "conn": (await tunnel(port, "api.garmin.example", basic("conn-c1", "t-conn")))[0]}
+
+    out = asyncio.run(through(proxy2, monkeypatch, Site(), steps2))
+    assert out["vie"].startswith("HTTP/1.1 403 Site not approved for this connector")
+    assert out["conn"].startswith("HTTP/1.1 200")
 
 
 if __name__ == "__main__":

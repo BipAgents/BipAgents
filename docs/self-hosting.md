@@ -145,7 +145,8 @@ you each time:
   systemd user service, that proxy runs in its own scope (`systemd-run --user --scope`): restarting or updating the
   bridge leaves it running. Web search and the
   agent's own visible browser are separate tools and keep working. Each agent can also have **sites of its own**
-  (HTTPS only): each sandbox gets its own proxy credentials, so the proxy knows which agent asks. When the proxy
+  (HTTPS only): the proxy knows which agent asks by its sandbox's address on that network (the bridge reads it from
+  podman), never by credentials an agent's programs could read or copy. When the proxy
   refuses a site to an agent's programs, or when the agent asks first (`sandbox_sites_request`), you get one card in
   the app, « Autoriser toujours / Refuser »; the list is in the agent's options, « Sites autorisés », where you can
   remove a site or add one by hand (`*.example.org` for its subdomains). A name of your own network (`localhost`,

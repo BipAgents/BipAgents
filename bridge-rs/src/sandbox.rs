@@ -29,10 +29,13 @@
 //! - **the network**: the sandbox joins `bipagents-sandbox`, a podman network without a route out (`--internal`), with
 //!   no DNS server. Its only way out is a small proxy (`bipagents-egress`, `assets/sandbox/egress_proxy.py`, in the
 //!   sandbox image), on that network and the ordinary one, which lets through the registries of `[sandbox]
-//!   registries` and, since 2026-10-23, the sites the person allowed that agent (sandbox_sites.rs: each sandbox's
-//!   proxy variables carry its own credentials, `http://<agent>:<token>@…`, so the proxy knows who asks; a site it
-//!   refuses becomes a card for the person); pip, npm, uv, cargo, go and apt find it through the usual proxy
-//!   variables. When that
+//!   registries` and, since 2026-10-23, the sites the person allowed that agent (sandbox_sites.rs; a send it cuts
+//!   becomes a card for the person); pip, npm, uv, cargo, go and apt find it through the usual proxy variables,
+//!   `http://10.233.80.2:3128`, with no credentials in them (22/11, enquete-antibot: until then they carried the
+//!   agent's own, which its commands and scripts could read and copy): the proxy knows each sandbox by its address on
+//!   that network (podman's, `sandbox_sites::refresh_sandboxes`), which a sandbox can't change (Hermes drops every
+//!   capability but a few file ones; the person's own `--privileged`, `--cap-add` of a network capability, `--ip`,
+//!   `--mac-address` or `--network` are taken out of an isolated sandbox's arguments, `identity_unsafe`). When that
 //!   can't be set up, the sandbox gets no network at all (`docker_network: false`), never the open internet, and the
 //!   log says why; it is tried again every 10 minutes.
 //!
@@ -425,6 +428,9 @@ pub fn proxy_command(config: &Config, podman: &str) -> Vec<String> {
         &format!("{CONNECTOR_NETWORK}:ip={strict}"),
         "-e",
         &format!("BIP_STRICT={strict}"),
+        // the sandboxes, known by their address there (sandbox_sites.rs `sandboxes`), never by credentials
+        "-e",
+        &format!("BIP_SANDBOXES={ip}"),
         "--cap-drop",
         "ALL",
         "--security-opt",
@@ -709,6 +715,53 @@ pub fn wanted_volumes(config: &Config, agent: &str, current: &[String], reads: &
     volumes
 }
 
+/// The capabilities that would let a sandbox change its address or send packets as another (the proxy knows it by
+/// its address, 22/11).
+const NETWORK_CAPS: [&str; 4] = ["NET_ADMIN", "NET_RAW", "ALL", "SYS_ADMIN"];
+
+/// The person's own container arguments that would let an isolated sandbox change its address on the sandboxes'
+/// network (`--privileged`, `--cap-add` of a network capability, its own `--ip`, `--mac-address`, `--network`,
+/// `--net`), taken out of `args` (each with its value when given apart); returns them.
+pub fn identity_unsafe(args: &mut Vec<String>) -> Vec<String> {
+    const VALUED: [&str; 6] = ["--cap-add", "--ip", "--ip6", "--mac-address", "--network", "--net"];
+    let unsafe_cap = |value: &str| {
+        value.split(',').any(|c| {
+            let c = c.trim().to_ascii_uppercase();
+            NETWORK_CAPS.contains(&c.strip_prefix("CAP_").unwrap_or(&c))
+        })
+    };
+    let mut kept = Vec::new();
+    let mut dropped = Vec::new();
+    let mut items = std::mem::take(args).into_iter().peekable();
+    while let Some(arg) = items.next() {
+        let (flag, value) = match arg.split_once('=') {
+            Some((f, v)) if f.starts_with("--") => (f.to_string(), Some(v.to_string())),
+            _ => (arg.clone(), None),
+        };
+        let bad = match flag.as_str() {
+            "--privileged" => value.as_deref().is_none_or(|v| v != "false"),
+            "--cap-add" => match &value {
+                Some(v) => unsafe_cap(v),
+                None => items.peek().is_some_and(|v| unsafe_cap(v)),
+            },
+            "--ip" | "--ip6" | "--mac-address" | "--network" | "--net" => true,
+            _ => false,
+        };
+        if !bad {
+            kept.push(arg);
+            continue;
+        }
+        dropped.push(arg);
+        if value.is_none() && VALUED.contains(&flag.as_str()) {
+            if let Some(next) = items.next() {
+                dropped.push(next);
+            }
+        }
+    }
+    *args = kept;
+    dropped
+}
+
 /// The terminal settings an isolated sandbox gets, from the profile's current ones: the person's own entries kept.
 pub fn wanted_terminal(config: &Config, agent: &str, current: &Dict, net: Net, reads: &[(String, String)]) -> Dict {
     let list = |key: &str| -> Vec<String> {
@@ -726,6 +779,11 @@ pub fn wanted_terminal(config: &Config, agent: &str, current: &Dict, net: Net, r
     };
     env.retain(|k, _| !PROXY_ENV.contains(&k.as_str()));
     if let Net::Registries(url) = net {
+        // the proxy knows the sandbox by its address: nothing of the person's may let it change it
+        let dropped = identity_unsafe(&mut extra);
+        if !dropped.is_empty() {
+            tracing::warn!(target: "bipbridge::sandbox", agent, arguments = %dropped.join(" "), "sandbox arguments that would let it change its network address taken out (the proxy knows it by its address)");
+        }
         extra.extend(ours);
         for key in PROXY_ENV {
             let value =
@@ -856,9 +914,13 @@ pub async fn isolate(shared: &SharedConfig, agent: &AgentConfig, run: &Run, save
     // The code an adopted agent runs (its skills, its bin…), refreshed from the folders the person keeps it in.
     let (c, name) = (config.clone(), agent.name.clone());
     tokio::task::spawn_blocking(move || crate::sandbox_adopt::refresh(&c, &name)).await?;
-    // its own credentials on the proxy (sandbox_sites.rs): the proxy knows it, and lets it reach its sites
+    // its entry on the proxy (sandbox_sites.rs): the proxy knows it by its address and lets it reach its sites; no
+    // credentials in its environment (22/11)
     let proxy = match network(&config, run).await {
-        Ok(base) => Some(crate::sandbox_sites::proxy_url(&config, &agent.name, &base)?),
+        Ok(base) => {
+            crate::sandbox_sites::ensure_agent(&config, &agent.name)?;
+            Some(base)
+        }
         Err(_) => None,
     };
     let net = match &proxy {
@@ -1801,6 +1863,8 @@ mod tests {
         let command = proxy_command(&config, "podman");
         let mount = format!("{}:/etc/resolv.conf:ro,z", proxy_resolv(&config).display());
         assert!(command.contains(&mount) && !command.iter().any(|a| a.starts_with("--dns=")));
+        // the sandboxes known by their address on their network (22/11), never by credentials
+        assert!(command.contains(&"BIP_SANDBOXES=10.233.80.2".to_string()), "{command:?}");
         // none found: no file, podman's default
         write_proxy_resolv(&config, &[dir.path().join("none").to_str().unwrap()]).unwrap();
         assert!(!proxy_resolv(&config).exists() && !proxy_command(&config, "podman").contains(&mount));
@@ -2257,6 +2321,20 @@ mod tests {
         assert_eq!(
             host_mounts(&["/home/x/photos:/photos:ro".into(), "bipagents-files-vie:/fichiers:ro".into()]).len(),
             1
+        );
+        // 22/11: the proxy knows the sandbox by its address: nothing of the person's that would let it change it
+        let mut risky = current.clone();
+        risky.insert(
+            "docker_extra_args".into(),
+            json!(["--shm-size=2g", "--cap-add=NET_ADMIN", "--privileged", "--cap-add", "net_raw", "--ip", "10.233.80.5",
+                   "--cap-add", "CHOWN", "--network=host", "--mac-address=02:00:00:00:00:01", "--cap-add=SYS_ADMIN,CHOWN",
+                   "--privileged=false"]),
+        );
+        let wanted = wanted_terminal(&config, "vie", &risky, Net::Registries("http://10.233.80.2:3128"), &reads);
+        assert_eq!(
+            wanted["docker_extra_args"],
+            json!(["--shm-size=2g", "--cap-add", "CHOWN", "--privileged=false", "--network=bipagents-sandbox",
+                   "--dns=127.0.0.1"])
         );
         // No proxy: no network at all, never the open internet.
         let closed = wanted_terminal(&config, "vie", &current, Net::Closed, &[]);
