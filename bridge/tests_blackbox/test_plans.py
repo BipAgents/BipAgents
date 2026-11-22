@@ -209,16 +209,27 @@ def test_a_route_moment_is_timed_by_the_streets_and_urgent(bridges, fakes):
     [card] = plan_cards(bridge)
     texts = TEXTS[lang_of(card)]
     route = card["bip_plan"]["moments"][1]
-    words = texts["route"].format(place="Cabinet du Dr Martin", n=25, mode=texts["modes"]["walking"])
-    assert (route["what"], route["say"], route["urgent"], route["route"]) == (words, words, True, True), route
-    # 25 min on foot and 5 min to spare: 14:30
-    assert route["at"] == epoch(arrive) - 30 * 60, (route["at"], epoch(arrive))
-    # the router got coordinates only, never the place's name nor the person's address
-    asked = [s.path for s in fakes.maps.seen("/routed-foot/")]
-    assert asked and not any("Martin" in p or "Haute" in p for p in asked)
-    # « Prévoir », then its time come (« Lancer maintenant » here): said at the system's urgent level, no model
+    walking = texts["modes"]["walking"]
+    # review 2 (R9): while the card waits, nothing goes to a geocoder or a router, not even the agent's `from` nor
+    # the place to go: the moment says « avant 15:00 »
+    assert fakes.maps.seen("/search") == [] and fakes.maps.seen("/routed-") == []
+    assert route["what"] == texts["route_pending"].format(place="Cabinet du Dr Martin", mode=walking), route
+    assert (route["urgent"], route["route"], route["pending"]) == (True, True, True), route
+    assert route["when_text"].endswith(texts["before"].format(time="15:00")), route
+    # « Prévoir »: found and timed then, 25 min on foot and 5 min to spare: 14:30
     assert answer(bridge, card, "once").status_code == 200
+    words = texts["route"].format(place="Cabinet du Dr Martin", n=25, mode=walking)
     [leave] = [j for j in plan_jobs(bridge, card["bip_plan"]["id"]) if j["urgent"]]
+    assert leave["say"] == words, leave
+    assert datetime.datetime.fromisoformat(leave["next_run_at"]).timestamp() == epoch(arrive) - 30 * 60, leave
+    # the router got coordinates only (the start's rounded to 3 decimals, about 100 m), never a place's name
+    asked = [s.path for s in fakes.maps.seen("/routed-foot/")]
+    assert asked and not any("Martin" in p or "Haute" in p for p in asked), asked
+    assert "4.83200,45.75800" in asked[0] and "45.7578," not in asked[0], asked
+    # nothing of the way kept on disk (map_route.rs keeps a drawn map's way 30 days: not a plan's)
+    routes = bridge.state_dir / "map-routes"
+    assert not routes.exists() or not list(routes.iterdir()), list(routes.iterdir())
+    # its time come (« Lancer maintenant » here): said at the system's urgent level, no model
     pushed = len(fakes.apns.payloads())
     assert bridge.post(f"/v1/routines/{leave['id']}/run", headers=AUTH).status_code == 200
     assert wait_until(lambda: [m for m in boite_items(bridge) if m.get("text") == words], timeout=20)
@@ -229,7 +240,9 @@ def test_a_route_moment_is_timed_by_the_streets_and_urgent(bridges, fakes):
     nowhere = dict(appointment, title="Kiné")
     nowhere["moments"] = [{"route": {"to": "Cabinet du Dr Martin", "arrive_by": arrive, "mode": "walking"}}]
     refused = call(bridge, "plan_propose", nowhere, token=TOKEN)
-    assert not_done(refused) and "route" in text_of(refused)
+    assert not_done(refused) and "route" in text_of(refused), text_of(refused)
+    # review 2 (R13): what it invites waits for « Prévoir » too
+    assert "Prévoir" in text_of(refused), text_of(refused)
     assert plan_cards(bridge) == []
 
 
@@ -434,9 +447,25 @@ def test_a_watched_mailbox_starts_with_the_plan(bridges, fakes):
     # From, Subject, Date, never the text, which the bridge does not even fetch
     from test_triggers import mail, turns
     fetched = len(fakes.imap.commands)
+    # its turn held open, to try the mailbox's tools from it (review 2, R10)
+    fakes.hermes.rounds = 10_000
+    run_id = f"r{len(fakes.hermes.started) + 1}"
+    gate = threading.Event()
+    fakes.hermes.runs[run_id] = [sse("tool.started", run_id=run_id, tool="mcp_bipagents_mail_search", preview="x"),
+                                 gate, sse("run.completed", run_id=run_id, output="[SILENT]")]
     fakes.imap.add("INBOX", 201, mail(201, "flytap.com <promo@ailleurs.io>", "Votre vol TP 433", "Promo", "<a1@x>"))
     fakes.imap.add("INBOX", 202, mail(202, "TAP Air Portugal <info@flytap.com>", "Changement d’horaire : TP 433",
                                       "SECRET-BODY porte 12", "<a2@flytap.com>"))
+    try:
+        assert wait_until(lambda: run_id in fakes.hermes.started, timeout=30)
+        time.sleep(0.5)
+        session = fakes.hermes.started[run_id]["session_id"]
+        for tool, arguments in (("mail_search", {"query": "TP 433"}), ("mail_read", {"id": "x|INBOX|202"})):
+            refused = call(bridge, tool, arguments, token=COACH, session=session)
+            assert not_done(refused) and "headers" in text_of(refused), (tool, text_of(refused))
+    finally:
+        gate.set()
+        fakes.hermes.rounds = 1
     assert wait_until(lambda: turns(fakes), timeout=30)
     time.sleep(1)
     [turn] = turns(fakes)
@@ -489,6 +518,12 @@ def test_a_plan_in_a_turn_another_agent_asked_for_is_unasked_and_lands_in_the_ma
             # unasked: one card waiting at a time (asked, it would say « one plan per reply »)
             second = call(bridge, "plan_propose", trip(title="Porto"), token=coach, session=pair)
             assert not_done(second) and "already waits" in text_of(second), text_of(second)
+            # review 2 (R12): any card made in the pair's turn (here a routine Coach proposes) is shown to the person
+            # in its main conversation, never in the pair's hidden one (card_place.rs `report_of`)
+            routine = call(bridge, "routine_schedule", {"action": "create", "name": "Point du soir",
+                                                        "schedule": "every day at 21:00", "prompt": "Le point."},
+                           token=coach, session=pair)
+            assert routine["isError"] is False and not not_done(routine), text_of(routine)
         finally:
             gate.set()
             fakes.hermes.rounds = 1
@@ -498,6 +533,8 @@ def test_a_plan_in_a_turn_another_agent_asked_for_is_unasked_and_lands_in_the_ma
     [card] = plan_cards(bridge)
     places = json.loads((bridge.state_dir / "card-places.json").read_text())
     assert places[card["run_id"]]["report"] is None, places[card["run_id"]]   # the main conversation shows it
+    [routine_card] = [r for r in places if r.startswith("bip-rout-")]
+    assert places[routine_card]["report"] is None, places[routine_card]
     assert answer(bridge, card, "once").status_code == 200
     jobs = plan_jobs(bridge, card["bip_plan"]["id"])
     assert jobs and all(j["origin_session_id"] is None for j in jobs), jobs
@@ -544,23 +581,23 @@ def test_a_route_from_home_is_timed_only_after_yes_from_the_entry_labelled_home(
     assert bridge.post("/v1/vault", headers=AUTH, json={**PRO, "agents": ["coach"]}).status_code == 201
     pro_only = call(bridge, "plan_propose", dentist("Ostéo"), token=TOKEN)
     assert not_done(pro_only) and "route" in text_of(pro_only) and "home" in text_of(pro_only), text_of(pro_only)
-    home = {"kind": "address", "label": "Domicile", "full_name": "Camille Exemple", "address_line1": "3 rue du Test",
+    # review 2 (R13): « Perso » says home too
+    home = {"kind": "address", "label": "Perso", "full_name": "Camille Exemple", "address_line1": "3 rue du Test",
             "city": "Lyon", "postal_code": "69001", "country": "fr", "agents": ["coach"]}
     assert bridge.post("/v1/vault", headers=AUTH, json=home).status_code == 201
     propose(bridge, dentist("Dentiste"))
     [card] = plan_cards(bridge)
     texts = TEXTS[lang_of(card)]
     [route] = card["bip_plan"]["moments"]
-    # while the card waits: the place to go found, nothing of the person's addresses sent, no way asked
-    assert not [q for q in searched() if "Test" in q or "Essai" in q], searched()
-    assert "Cabinet du Dr Martin" in searched() and not fakes.maps.seen("/routed-foot/")
+    # while the card waits: nothing to a geocoder nor a router, not even the place to go (review 2, R9)
+    assert searched() == [] and not fakes.maps.seen("/routed-")
     walking = texts["modes"]["walking"]
     assert (route["route"], route["urgent"], route["pending"]) == (True, True, True), route
     assert route["what"] == texts["route_pending"].format(place="Cabinet du Dr Martin", mode=walking), route
     assert route["when_text"].endswith(texts["before"].format(time="15:00")), route
     # « Non merci »: still nothing
     assert answer(bridge, card, "deny").status_code == 200
-    assert not [q for q in searched() if "Test" in q or "Essai" in q], searched()
+    assert searched() == [] and not fakes.maps.seen("/routed-")
     # « Prévoir »: the entry labelled as home, timed by the streets then (25 min on foot, 5 to spare)
     propose(bridge, dentist("Kiné"))
     [card] = plan_cards(bridge)
@@ -568,11 +605,13 @@ def test_a_route_from_home_is_timed_only_after_yes_from_the_entry_labelled_home(
     assert done.status_code == 200 and done.json()["moments"] == 1, done.text
     asked = [q for q in searched() if "Test" in q or "Essai" in q]
     assert len(asked) == 1 and "3 rue du Test" in asked[0] and "Lyon" in asked[0], asked
+    assert "Cabinet du Dr Martin" in searched(), searched()
     [job] = plan_jobs(bridge, card["bip_plan"]["id"])
     assert job["say"] == texts["route"].format(place="Cabinet du Dr Martin", n=25, mode=walking) and job["urgent"], job
     assert datetime.datetime.fromisoformat(job["next_run_at"]).timestamp() == epoch(arrive) - 30 * 60, job
-    # the router got coordinates only
-    assert fakes.maps.seen("/routed-foot/") and not any("Test" in s.path for s in fakes.maps.seen("/routed-foot/"))
+    # the router got coordinates only, the home's rounded to 3 decimals (about 100 m)
+    routed = [s.path for s in fakes.maps.seen("/routed-foot/")]
+    assert routed and not any("Test" in p for p in routed) and "4.83200,45.75800" in routed[0], routed
 
 
 def test_a_repeating_event_is_not_followed_and_a_calendar_taken_out_cancels_nothing(bridges, fakes):

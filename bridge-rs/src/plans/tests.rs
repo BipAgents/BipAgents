@@ -470,3 +470,25 @@ fn the_home_is_the_entry_labelled_home_never_the_first_one() {
     assert_eq!(home_of(&[entry("Home office (pro)", None, "x"), entry("Camille", None, "y")]), None);
     assert_eq!(home_of(&[entry("Domicile", None, "")]), None, "no address in it");
 }
+
+/// Review 2 (R13): « Perso », « Appartement », « Mon adresse », « Résidence » say home too, and theirs in the other
+/// languages a label may be written in; someone else's home or a holiday one never is the person's.
+#[test]
+fn the_home_is_said_in_every_language_and_never_someone_elses_nor_a_holiday_one() {
+    let entry = |label: &str| crate::vault_contacts::Entry {
+        id: label.into(),
+        label: label.into(),
+        hint: None,
+        secret: args(&json!({"address_line1": "3 rue du Test", "postal_code": "69001", "city": "Lyon", "country": "FR"})),
+    };
+    for label in ["Perso", "Appartement", "Mon adresse", "Résidence", "Mon appart", "Personal", "Apartment", "Flat",
+                  "My address", "Privat", "Meine Wohnung", "Meine Adresse", "Piso", "Mi dirección", "Residencia",
+                  "Apartamento", "Abitazione", "Appartamento", "Il mio indirizzo"] {
+        assert!(home_of(&[entry(label)]).is_some(), "{label}");
+    }
+    for label in ["Maison de ma mère", "Maison de vacances", "Chez mes parents", "Holiday home", "Mum's house",
+                  "Ferienwohnung", "Wohnung meiner Eltern", "Casa de mis padres", "Casa de vacaciones",
+                  "Casa al mare per le vacanze", "Appartement pro"] {
+        assert!(home_of(&[entry(label)]).is_none(), "{label}");
+    }
+}
