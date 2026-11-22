@@ -44,15 +44,15 @@
      "date": "D-120",
      "id": "R1",
      "important": true,
-     "in_days": 611,
+     "in_days": 600,
      "item": "Lave-linge",
-     "legal": true,
-     "next_date": "D+611",
+     "legal": false,
+     "next_date": "D+600",
      "price": "499 €",
      "source": "",
      "source_ref": null,
      "store": "Électro Plus",
-     "warranty_end": "D+611 (légale)"
+     "warranty_end": "D+600"
     }
    ],
    "next": "warranty_end",
@@ -195,12 +195,12 @@
     {
      "archived": false,
      "document": "Passeport",
-     "expires": "D+420",
+     "expires": "D+20",
      "holder": "",
      "id": "R4",
-     "in_days": 420,
+     "in_days": 20,
      "legal": false,
-     "next_date": "D+420",
+     "next_date": "D+20",
      "source": "",
      "source_ref": null
     }

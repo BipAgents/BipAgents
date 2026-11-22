@@ -68,10 +68,13 @@ def write_carnet(bridge):
     t({"action": "add", "title": "Rappeler Marc pour le devis", "due": iso(2), "page": "Rénovation cuisine"})
     t({"action": "add", "title": "Trier les photos de l'été"})
     r = lambda kind, fields: wrote(call(bridge, "notebook_record", {"action": "add", "type": kind, "fields": fields}))  # noqa: E731
-    r("purchase", {"date": iso(-120), "item": "Lave-linge", "store": "Électro Plus", "price": "499 €"})
+    # (dates as days from the run's day only: a computed legal warranty or a paper's reminders « 3 months before »
+    # would move with the calendar, and the comparison runs any day)
+    r("purchase", {"date": iso(-120), "item": "Lave-linge", "store": "Électro Plus", "price": "499 €",
+                   "warranty_end": iso(600)})
     r("subscription", {"service": "Films en streaming", "price": "13,49 €", "period": "Mensuel", "renewal": iso(9)})
     r("contract", {"what": "Assurance habitation", "provider": "Assureur Horizon", "end": iso(95)})
-    r("paper", {"document": "Passeport", "expires": iso(420)})
+    r("paper", {"document": "Passeport", "expires": iso(20)})
     r("booking", {"date": iso(12) + " 10:30", "what": "Vol pour Lisbonne", "reference": "ABC123"})
     # a file the agent was sent, and a page the person made in the app
     received = Path(bridge.config["agents"]["Wellness"]["upload_dir_host"]) / "2026-11"
@@ -138,7 +141,7 @@ def normalised(value):
     text = STAMP.sub("STAMP", text)
     text = EPOCH.sub(r'\1"STAMP"', text)
     text = ISO_DAY.sub(lambda m: "D%+d" % (date.fromisoformat(m.group(1)) - today()).days, text)
-    for offset in (2, 5, 9, 12, 23, 41, 95, 420):
+    for offset in (2, 5, 9, 12, 20, 23, 41, 95, 600):
         text = text.replace(spoken(offset), "{date%+d}" % offset)
     # « noté le 22 nov. », « Noté par Wellness le 22 nov. 2026 »: the run's day, in words
     text = SHORT_DAY.sub("DAY", text)
@@ -266,9 +269,9 @@ def test_the_bridge_files_pages_records_tasks_and_documents_by_their_words(bridg
     assert records["paper"]["items"][0]["categories"] == ["papers", "dates"]
     assert records["booking"]["items"][0]["categories"] == ["trips", "dates"]
     tasks = {t["title"].split(" [[")[0]: t["categories"] for t in bridge.get("/v1/notebook/tasks", headers=AUTH).json()["open"]}
-    # (a paper's two reminders, made by the bridge: Papiers)
+    # (a paper's reminder, made by the bridge: Papiers)
     assert tasks == {"Rappeler Marc pour le devis": ["home", "dates"], "Trier les photos de l'été": ["other"],
-                     "Penser à renouveler Passeport": ["papers", "dates"], "Renouveler Passeport": ["papers", "dates"]}, tasks
+                     "Renouveler Passeport": ["papers", "dates"]}, tasks
     documents = bridge.get("/v1/notebook/documents", headers=AUTH).json()["documents"]
     assert [(d["file"], d["categories"], d["categories_by"]) for d in documents] == [("Devis cuisine.pdf", ["home"], "auto")]
     # the search: the same categories on what it finds

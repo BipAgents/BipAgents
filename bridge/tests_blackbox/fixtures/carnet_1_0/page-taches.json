@@ -69,19 +69,7 @@
      "label": "",
      "links": [],
      "noted": null,
-     "text": "[ ] Penser à renouveler Passeport 📅 D+328 — *Wellness, D+0* ^T3",
-     "when": ""
-    },
-    {
-     "answer": "",
-     "by": null,
-     "date": null,
-     "fresh": false,
-     "item": true,
-     "label": "",
-     "links": [],
-     "noted": null,
-     "text": "[ ] Renouveler Passeport 📅 D+389 — *Wellness, D+0* ^T4",
+     "text": "[ ] Renouveler Passeport 📅 D+0 — *Wellness, D+0* ^T3",
      "when": ""
     }
    ],
@@ -93,7 +81,7 @@
  "split": null,
  "summary": "",
  "tasks": [],
- "text": "---\nid: P1\ntype: tasks\nupdated: D+0\n---\n# Tâches\n\n- [ ] Rappeler Marc pour le devis [[Rénovation cuisine]] 📅 D+2 — *Wellness, D+0* ^T1\n- [ ] Trier les photos de l'été — *Wellness, D+0* ^T2\n- [ ] Penser à renouveler Passeport 📅 D+328 — *Wellness, D+0* ^T3\n- [ ] Renouveler Passeport 📅 D+389 — *Wellness, D+0* ^T4\n",
+ "text": "---\nid: P1\ntype: tasks\nupdated: D+0\n---\n# Tâches\n\n- [ ] Rappeler Marc pour le devis [[Rénovation cuisine]] 📅 D+2 — *Wellness, D+0* ^T1\n- [ ] Trier les photos de l'été — *Wellness, D+0* ^T2\n- [ ] Renouveler Passeport 📅 D+0 — *Wellness, D+0* ^T3\n",
  "title": "Tâches",
  "trip": null,
  "updated": "D+0"

@@ -64,15 +64,15 @@
     "date": "D-120",
     "id": "R1",
     "important": true,
-    "in_days": 611,
+    "in_days": 600,
     "item": "Lave-linge",
-    "legal": true,
-    "next_date": "D+611",
+    "legal": false,
+    "next_date": "D+600",
     "price": "499 €",
     "source": "",
     "source_ref": null,
     "store": "Électro Plus",
-    "warranty_end": "D+611 (légale)"
+    "warranty_end": "D+600"
    }
   ],
   "next": "warranty_end",
@@ -119,7 +119,7 @@
      "label": "",
      "links": [],
      "noted": null,
-     "text": "| D-120 | Lave-linge | Électro Plus | 499 € | bien durable | D+611 (légale) |  | R1 |",
+     "text": "| D-120 | Lave-linge | Électro Plus | 499 € | bien durable | D+600 |  | R1 |",
      "when": ""
     }
    ],
@@ -131,7 +131,7 @@
  "split": null,
  "summary": "",
  "tasks": [],
- "text": "---\nid: P1\ntype: records\nrecords: purchase\nupdated: D+0\n---\n# Achats\n\n| Date | Objet | Magasin | Prix | Catégorie | Fin de garantie | Source | id |\n| --- | --- | --- | --- | --- | --- | --- | --- |\n| D-120 | Lave-linge | Électro Plus | 499 € | bien durable | D+611 (légale) |  | R1 |\n",
+ "text": "---\nid: P1\ntype: records\nrecords: purchase\nupdated: D+0\n---\n# Achats\n\n| Date | Objet | Magasin | Prix | Catégorie | Fin de garantie | Source | id |\n| --- | --- | --- | --- | --- | --- | --- | --- |\n| D-120 | Lave-linge | Électro Plus | 499 € | bien durable | D+600 |  | R1 |\n",
  "title": "Achats",
  "trip": null,
  "updated": "D+0"

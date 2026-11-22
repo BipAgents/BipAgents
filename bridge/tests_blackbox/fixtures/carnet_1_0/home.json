@@ -94,23 +94,23 @@
    "title": "Tâches"
   },
   {
-   "action": "task_add",
-   "after": "V4",
+   "action": "record_add",
+   "after": "V5",
    "agent": "wellness",
    "agent_color": null,
    "at": "STAMP",
-   "before": "V5",
+   "before": null,
    "by": "wellness",
    "by_you": false,
    "id": "C4",
    "name": "Wellness",
    "nightly": false,
    "part": "main",
-   "path": "Tâches/Tâches.md",
+   "path": "Fiches/Papiers.md",
    "run": null,
    "session": null,
-   "summary": "Penser à renouveler Passeport",
-   "title": "Tâches"
+   "summary": "Passeport · D+20",
+   "title": "Papiers"
   },
   {
    "action": "record_add",
@@ -125,11 +125,11 @@
    "name": "Wellness",
    "nightly": false,
    "part": "main",
-   "path": "Fiches/Papiers.md",
+   "path": "Fiches/Contrats et assurances.md",
    "run": null,
    "session": null,
-   "summary": "Passeport · D+420",
-   "title": "Papiers"
+   "summary": "Assurance habitation · Assureur Horizon · D+95",
+   "title": "Contrats et assurances"
   },
   {
    "action": "record_add",
@@ -144,11 +144,11 @@
    "name": "Wellness",
    "nightly": false,
    "part": "main",
-   "path": "Fiches/Contrats et assurances.md",
+   "path": "Fiches/Abonnements.md",
    "run": null,
    "session": null,
-   "summary": "Assurance habitation · Assureur Horizon · D+95",
-   "title": "Contrats et assurances"
+   "summary": "Films en streaming · 13,49 € · mensuel · D+9",
+   "title": "Abonnements"
   },
   {
    "action": "record_add",
@@ -163,41 +163,22 @@
    "name": "Wellness",
    "nightly": false,
    "part": "main",
-   "path": "Fiches/Abonnements.md",
-   "run": null,
-   "session": null,
-   "summary": "Films en streaming · 13,49 € · mensuel · D+9",
-   "title": "Abonnements"
-  },
-  {
-   "action": "record_add",
-   "after": "V9",
-   "agent": "wellness",
-   "agent_color": null,
-   "at": "STAMP",
-   "before": null,
-   "by": "wellness",
-   "by_you": false,
-   "id": "C8",
-   "name": "Wellness",
-   "nightly": false,
-   "part": "main",
    "path": "Fiches/Achats.md",
    "run": null,
    "session": null,
-   "summary": "D-120 · Lave-linge · Électro Plus · 499 € · bien durable · D+611 (légale)",
+   "summary": "D-120 · Lave-linge · Électro Plus · 499 € · bien durable · D+600",
    "title": "Achats"
   },
   {
    "action": "task_add",
-   "after": "V5",
+   "after": "V4",
    "agent": "wellness",
    "agent_color": null,
    "at": "STAMP",
-   "before": "V10",
+   "before": "V9",
    "by": "wellness",
    "by_you": false,
-   "id": "C9",
+   "id": "C8",
    "name": "Wellness",
    "nightly": false,
    "part": "main",
@@ -209,6 +190,25 @@
   },
   {
    "action": "task_add",
+   "after": "V9",
+   "agent": "wellness",
+   "agent_color": null,
+   "at": "STAMP",
+   "before": null,
+   "by": "wellness",
+   "by_you": false,
+   "id": "C9",
+   "name": "Wellness",
+   "nightly": false,
+   "part": "main",
+   "path": "Tâches/Tâches.md",
+   "run": null,
+   "session": null,
+   "summary": "Rappeler Marc pour le devis",
+   "title": "Tâches"
+  },
+  {
+   "action": "create",
    "after": "V10",
    "agent": "wellness",
    "agent_color": null,
@@ -220,11 +220,11 @@
    "name": "Wellness",
    "nightly": false,
    "part": "main",
-   "path": "Tâches/Tâches.md",
+   "path": "Toi.md",
    "run": null,
    "session": null,
-   "summary": "Rappeler Marc pour le devis",
-   "title": "Tâches"
+   "summary": "Vit à Nantes",
+   "title": "Toi"
   },
   {
    "action": "create",
@@ -239,11 +239,11 @@
    "name": "Wellness",
    "nightly": false,
    "part": "main",
-   "path": "Toi.md",
+   "path": "Domaines/Travail.md",
    "run": null,
    "session": null,
-   "summary": "Vit à Nantes",
-   "title": "Toi"
+   "summary": "Entretien annuel le {date+5}",
+   "title": "Travail"
   },
   {
    "action": "create",
@@ -258,11 +258,11 @@
    "name": "Wellness",
    "nightly": false,
    "part": "main",
-   "path": "Domaines/Travail.md",
+   "path": "Domaines/Finances.md",
    "run": null,
    "session": null,
-   "summary": "Entretien annuel le {date+5}",
-   "title": "Travail"
+   "summary": "Épargne : 200 € par mois",
+   "title": "Finances"
   },
   {
    "action": "create",
@@ -277,11 +277,11 @@
    "name": "Wellness",
    "nightly": false,
    "part": "main",
-   "path": "Domaines/Finances.md",
+   "path": "Domaines/Maison.md",
    "run": null,
    "session": null,
-   "summary": "Épargne : 200 € par mois",
-   "title": "Finances"
+   "summary": "Poubelles le lundi soir",
+   "title": "Maison"
   },
   {
    "action": "create",
@@ -296,11 +296,11 @@
    "name": "Wellness",
    "nightly": false,
    "part": "main",
-   "path": "Domaines/Maison.md",
+   "path": "Sujets/Impôts 2026.md",
    "run": null,
    "session": null,
-   "summary": "Poubelles le lundi soir",
-   "title": "Maison"
+   "summary": "Ajouter les dons",
+   "title": "Impôts 2026"
   },
   {
    "action": "create",
@@ -315,25 +315,6 @@
    "name": "Wellness",
    "nightly": false,
    "part": "main",
-   "path": "Sujets/Impôts 2026.md",
-   "run": null,
-   "session": null,
-   "summary": "Ajouter les dons",
-   "title": "Impôts 2026"
-  },
-  {
-   "action": "create",
-   "after": "V16",
-   "agent": "wellness",
-   "agent_color": null,
-   "at": "STAMP",
-   "before": null,
-   "by": "wellness",
-   "by_you": false,
-   "id": "C16",
-   "name": "Wellness",
-   "nightly": false,
-   "part": "main",
    "path": "Sujets/Voyage Japon.md",
    "run": null,
    "session": null,
@@ -342,14 +323,14 @@
   },
   {
    "action": "note",
-   "after": "V17",
+   "after": "V16",
    "agent": "wellness",
    "agent_color": null,
    "at": "STAMP",
-   "before": "V18",
+   "before": "V17",
    "by": "wellness",
    "by_you": false,
-   "id": "C17",
+   "id": "C16",
    "name": "Wellness",
    "nightly": false,
    "part": "main",
@@ -361,14 +342,14 @@
   },
   {
    "action": "create",
-   "after": "V18",
+   "after": "V17",
    "agent": "wellness",
    "agent_color": null,
    "at": "STAMP",
    "before": null,
    "by": "wellness",
    "by_you": false,
-   "id": "C18",
+   "id": "C17",
    "name": "Wellness",
    "nightly": false,
    "part": "main",
@@ -380,6 +361,25 @@
   },
   {
    "action": "note",
+   "after": "V18",
+   "agent": "wellness",
+   "agent_color": null,
+   "at": "STAMP",
+   "before": "V19",
+   "by": "wellness",
+   "by_you": false,
+   "id": "C18",
+   "name": "Wellness",
+   "nightly": false,
+   "part": "main",
+   "path": "Personnes/Claire Durand.md",
+   "run": null,
+   "session": null,
+   "summary": "Anniversaire : {date+41}",
+   "title": "Claire Durand"
+  },
+  {
+   "action": "close",
    "after": "V19",
    "agent": "wellness",
    "agent_color": null,
@@ -394,16 +394,16 @@
    "path": "Personnes/Claire Durand.md",
    "run": null,
    "session": null,
-   "summary": "Anniversaire : {date+41}",
+   "summary": "close",
    "title": "Claire Durand"
   },
   {
-   "action": "close",
+   "action": "create",
    "after": "V20",
    "agent": "wellness",
    "agent_color": null,
    "at": "STAMP",
-   "before": "V21",
+   "before": null,
    "by": "wellness",
    "by_you": false,
    "id": "C20",
@@ -413,7 +413,7 @@
    "path": "Personnes/Claire Durand.md",
    "run": null,
    "session": null,
-   "summary": "close",
+   "summary": "Ta sœur",
    "title": "Claire Durand"
   }
  ],
@@ -421,8 +421,8 @@
   {
    "count": 1,
    "next": {
-    "date": "D+611",
-    "in_days": 611,
+    "date": "D+600",
+    "in_days": 600,
     "text": "Lave-linge"
    },
    "path": "Fiches/Achats.md",
@@ -454,8 +454,8 @@
   {
    "count": 1,
    "next": {
-    "date": "D+420",
-    "in_days": 420,
+    "date": "D+20",
+    "in_days": 20,
     "text": "Passeport"
    },
    "path": "Fiches/Papiers.md",
@@ -503,7 +503,7 @@
    "title": "Domaines"
   },
   {
-   "count": 4,
+   "count": 3,
    "kind": "tasks",
    "title": "Tâches"
   },
@@ -540,40 +540,27 @@
    "date": "D+0",
    "done": false,
    "done_on": null,
-   "due": "D+2",
+   "due": "D+0",
    "id": "T1",
+   "links": [],
+   "origin": "asked",
+   "part": "main",
+   "title": "Renouveler Passeport"
+  },
+  {
+   "archived": false,
+   "by": "Wellness",
+   "date": "D+0",
+   "done": false,
+   "done_on": null,
+   "due": "D+2",
+   "id": "T2",
    "links": [
     "Rénovation cuisine"
    ],
    "origin": "asked",
    "part": "main",
    "title": "Rappeler Marc pour le devis [[Rénovation cuisine]]"
-  },
-  {
-   "archived": false,
-   "by": "Wellness",
-   "date": "D+0",
-   "done": false,
-   "done_on": null,
-   "due": "D+328",
-   "id": "T2",
-   "links": [],
-   "origin": "asked",
-   "part": "main",
-   "title": "Penser à renouveler Passeport"
-  },
-  {
-   "archived": false,
-   "by": "Wellness",
-   "date": "D+0",
-   "done": false,
-   "done_on": null,
-   "due": "D+389",
-   "id": "T3",
-   "links": [],
-   "origin": "asked",
-   "part": "main",
-   "title": "Renouveler Passeport"
   }
  ]
 }
