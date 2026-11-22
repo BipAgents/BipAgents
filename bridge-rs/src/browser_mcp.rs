@@ -3746,7 +3746,8 @@ impl Proxy {
         if host.is_empty() || crate::phone_exit::name_refused(&host).is_some() {
             return;
         }
-        let site = crate::mail_tidy::registrable(&host);
+        // the site as the card names it (the Public Suffix List: `alice.github.io`, never `github.io`)
+        let site = crate::phone_exit::checks::site_key(&host);
         let Some(result) = response.get_mut("result").and_then(Value::as_object_mut) else { return };
         let text = result.get("content").map(Value::to_string).unwrap_or_default();
         let mut lines = Vec::new();

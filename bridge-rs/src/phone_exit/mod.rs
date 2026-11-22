@@ -358,7 +358,7 @@ impl Hub {
     /// the session of its site.
     pub fn why(&self, agent: &str, host: &str) -> Option<(String, u64)> {
         let host = checks::host_of(host);
-        let site = crate::mail_tidy::registrable(&host);
+        let site = checks::site_key(&host);
         let notes = self.notes.lock().unwrap_or_else(|e| e.into_inner());
         notes
             .get(agent)?
@@ -366,8 +366,7 @@ impl Hub {
             .rev()
             .find(|(h, code, at)| {
                 at.elapsed() < NOTE_KEEP
-                    && (*h == host
-                        || (SITE_WIDE.contains(&code.as_str()) && crate::mail_tidy::registrable(h) == site))
+                    && (*h == host || (SITE_WIDE.contains(&code.as_str()) && checks::site_key(h) == site))
             })
             .map(|(_, code, at)| (code.clone(), at.elapsed().as_secs()))
     }
