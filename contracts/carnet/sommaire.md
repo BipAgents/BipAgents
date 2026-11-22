@@ -42,10 +42,18 @@ en, de, es, nl for Alex to confirm (visible text).
   paper `papers`, booking `trips`); a document its page's (the page it is linked to or named on), else its name's
   words, else `papers` (Alex's decision 4: what the agents make is found, « Papiers » by default).
 - **Dates is computed, never stored or given.** An item is also in `dates` when it carries a date from 90 days ago to
-  two years ahead: a line with a date in its text (yearly ones, birthdays, at their next occurrence), a task's due
-  date, a record's dates (warranty end, renewal, end, expiry, booking). Pages themselves are not in `dates`.
+  two years ahead, or a yearly one: a line with a date in its text, a task's due date, a record's next date (warranty
+  end, renewal, end, expiry, booking day — never a purchase's day). Yearly only when the text says so (a birthday, an
+  anniversary, a wedding); a day without a year that says nothing yearly (« devis reçu le 3 octobre ») is the day
+  nearest to when it was noted; « 1/2 » is not a date, « 14/11 » is. Pages themselves are not in `dates`. **The
+  index never depends on the day** (so its version and ETag change only with the Carnet): no `dates` among its
+  categories; each item carries `date` (a day) or `yearly` (« MM-DD »), and the phone adds `dates` (`yearly` always,
+  a `date` within `dated`: 90 days back, 730 ahead). The bridge's live answers (search, summary, a category's page,
+  today's routes) give `dates` as of the bridge's day.
 - **Autres** (`other`): what no word places. Shown only when not empty.
-- **At most two**, the first the main one (the one a summary counts first and a result is grouped under).
+- **At most two**, the first the main one (the one a result is grouped under). A note with two categories counts in
+  each (a category's `count`, a search's `counts.<id>`); `total` and `counts.all` count each note once; a search
+  lists a note once, under its first category.
 
 ## 2. How the bridge files (S1)
 
@@ -62,11 +70,15 @@ page a Pro agent wrote: `work` + `people`); the group pages Amis, Famille élarg
 then the aliases, the « En bref », the sections' titles (« Chiffres et budget » → money) and labels, amounts. What
 decided is kept for learning (the word: « cuisine » → `home`).
 
-**A correction teaches.** `POST /v1/notebook/categorize` on a page sets `categories_by: person`; when the bridge had
-decided by a word, it keeps the rule « word → the person's categories » for this Carnet (`state.json`
+**A correction teaches.** `POST /v1/notebook/categorize` (by an Item's `id`, or by path, record, document, task or
+line) on a page sets `categories_by: person`; when the bridge itself had filed it (`auto`) by a word, it keeps the rule « word → the person's categories » for this Carnet (`state.json`
 `category_rules`, 200 at most, the most recent wins), used by the next writes and the nightly pass. A correction on a
 record, a task, a line or a document decided by its page or its type teaches nothing (too broad); one on a document
-decided by a word of its name does. Undo (`/categorize/undo`) puts back the categories and forgets the rule.
+decided by a word of its name does; correcting an agent's or an earlier correction teaches nothing. Undo
+(`/categorize/undo`) puts back the categories and forgets the rule; one undo a target (the newest). The state keeps
+keys only, never a line's text, a page's path or a file's name. `categories` written by hand that the bridge cannot
+read (« [[Livres]] », three values) are never touched (409 `categories_by_hand`). A work agent's page is Travail only
+when that agent makes it.
 
 ## 3. Routes
 
@@ -76,27 +88,29 @@ in `routes[].errors`; S1's codes have no text yet: the apps show their own until
 
 | Brick | Route | What |
 |---|---|---|
-| S1 | `POST /v1/notebook/categorize` | « Ranger ailleurs »: `{path, private?}` · `{record: {type, id}}` · `{document: {agent, file}}` · `{task}` · `{line: {path, text}}`, with `categories` (1–2 of `person_may_give`) → `Categorized` (`before`, `learnt`, `undo`) |
+| S1 | `POST /v1/notebook/categorize` | « Ranger ailleurs »: `{item}` (an Item's id) · `{path, private?}` · `{record: {type, id}}` · `{document: {agent, file}}` · `{task}` · `{line: {path, text}}`, with `categories` (1–2 of `person_may_give`) → `Categorized` (`before`, `learnt`, `undo`) |
 | S1 | `POST /v1/notebook/categorize/undo` | `{undo}` → `Undone`; 404 `undo_gone` after 20 newer corrections |
 | S1 | MCP `notebook_write.category` | 1–2 of `agent_may_give`, only when the agent is sure |
 | S3 | `GET /v1/notebook/index?since=` | the phone's search copy (`Index`): ETag `"v<version>"`, 304 when unchanged; `since` = the version the phone has → only `items` changed and `removed` ids (`full: false`), else everything (`full: true`). Never Santé, never ID numbers, mails' archives or online files' content; 20 000 lines / 8 MB at most (`truncated`, the oldest archived lines out first) |
 | S3 | `GET /v1/notebook/search` | today's answer plus `groups` (by category, in the order of their best result; `count`, the two best `top`), `counts` (`all` and per category: the chips), `online` (connected drives the person allowed, online only) |
 | S4 | `GET /v1/notebook/summary?space=` | the sommaire ready to show (`Summary`): selector, kept searches with their count, total, categories with count and grey hint, the moment's card, Santé locked |
-| S4 | `GET /v1/notebook/category/{id}?space=&filter=` | a category's page (`CategoryPage`): sub-filters with counts, « Cherché ici » (3), the most recent |
+| S4 | `GET /v1/notebook/category/{id}?space=&filter=` | a category's page (`CategoryPage`): sub-filters with counts, « Cherché ici » (3), the most recent; `category/health?private=1`: Santé's, behind the lock, never in the index |
 | S4 | `GET/POST/DELETE /v1/notebook/kept` | kept searches (6 a space), their count from the bridge |
 | S4 | `POST /v1/notebook/searched` | a search made (3 a category for « Cherché ici », never shown to the agents) → 204 |
-| S5 | `PATCH /v1/notebook/settings {separate_spaces}` | « Séparer Perso, Pro et Famille » (off by default); `?space=perso|pro` on summary/category/search/index |
-| S6 | `/v1/family-agent/notebook/{summary,index,kept,categorize}` | the family Carnet's, relayed by the members' bridges as today (`FamilySummary`, `FamilyIndex`) |
+| S5 | `PATCH /v1/notebook/settings {separate_spaces}` | « Séparer Perso, Pro et Famille » (off by default); `?space=all|perso|pro` on summary/category/search/index; `POST /v1/notebook/space {item | path, space}` « Ranger dans… Perso / Pro » (+ `/space/undo`) |
+| S6 | `/v1/family-agent/notebook/{summary,index,kept,categorize,category/{id}}` | the family Carnet's, relayed by the members' bridges as today (`FamilySummary`, `FamilyIndex`, `FamilyCategorized`, `FamilyCategoryPage`) |
 
 **Counts.** A category's `count` counts its items (pages, lines, tasks, records, documents); `total` all of them.
 The fake bridge counts so; S4 may count otherwise (pages apart), the contract's shape stays.
 
 **Items.** Everything the phone lists (index entries, search groups, a category's recent ones) is an `Item`: `id`
-(stable: `page:<page id>`, `line:<page id>:<hash of the line>`, `task:<id>`, `record:<id>`, `doc:<agent>/<file>`),
-`kind`, `title` (the page's, the task's, the record's name), `line` (the point, 240 characters), `categories` (with
-`dates` when dated), `space`, `date` (the item's date, YYYY-MM-DD), `source` (where it is: the page or the table),
-`who` and `noted` (its attribution), `open` (what a tap opens). Index entries add `fold` (the words folded by the
-bridge: the phone never folds differently) and the page's `aliases`.
+(stable, never a text, a path or a file's name: `page:<page key>` — its `id`, else `f` + a hash of its path —,
+`line:<page key>:<hash of the line>` with `:2`, `:3` for the same line said again, `task:<id>`, `record:<id>`,
+`doc:<agent>:<hash of the file's name>`), `kind`, `title`, `line` (240 characters; never a number or a reference:
+`sommaire.json` `records`), `categories`, `space` (`perso` or `pro`), `date` / `yearly`, `source`, `who` and
+`noted`, `archived`, `label` / `answer` (a « Label : value » line), `page` (a line's page's id: its title and
+aliases apply to the line), `open` (what a tap opens). Index entries add `fold` (the words folded by the bridge) and,
+on a page, its `aliases`. `categorize` takes an Item's `id` (`{item}`).
 
 **The phone's search** (A1, D1) follows the rule written once at the bridge (S3: `search-parity.json`, played by the
 three): fold, prefix from 3 letters, one typo from 5 letters and two from 8 (never on names under 4), the
@@ -107,9 +121,9 @@ absolute dates from the bridge), stop words dropped unless alone; ranking as in 
 
 Exactly today's answers, the keys of `additive` added. Concretely, for an app of today: pages, results, tasks,
 records and documents gain `categories` (a list of ids) and sometimes `categories_by`/`space`; the page's
-`frontmatter` gains the same keys; the home gains `sommaire: 1` (the version of this contract the bridge speaks: a
-new app reads the summary only from a bridge that says it, else the home of today). A new app on an old bridge:
-`/summary` answers 404 → today's home.
+`frontmatter` gains the same keys; the home gains `sommaire`, the list of what this bridge's Carnet can do (`sommaire.json` `Capability`: S1
+`categories`, `categorize`; then `index`, `summary`, `category`, `kept`, `searched`, `spaces`, `family` as they
+come): a new app uses a route only when it is listed, else the home of today. An old bridge has no `sommaire`.
 
 ## 5. Fake bridge (for the iPhone and Android agents)
 

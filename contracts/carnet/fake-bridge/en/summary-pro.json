@@ -34,7 +34,7 @@
       "hint": "Work, Prepare the annual review",
       "locked": false,
       "first": {
-        "id": "line:p0000000038:0000000038",
+        "id": "line:p0000000012:0000000038",
         "kind": "line",
         "part": "main",
         "path": "Areas/Work.md",
@@ -46,9 +46,14 @@
         ],
         "space": "pro",
         "date": "2026-11-27",
+        "yearly": null,
         "source": "What matters",
         "who": "Daily",
         "noted": "2026-11-19",
+        "archived": false,
+        "label": null,
+        "answer": null,
+        "page": "page:p0000000012",
         "open": {
           "path": "Areas/Work.md",
           "section": "matters"
@@ -62,7 +67,7 @@
       "hint": "Work, Prepare the annual review",
       "locked": false,
       "first": {
-        "id": "page:p0000000011",
+        "id": "page:p0000000012",
         "kind": "page",
         "part": "main",
         "path": "Areas/Work.md",
@@ -73,9 +78,14 @@
         ],
         "space": "pro",
         "date": null,
+        "yearly": null,
         "source": "Work",
         "who": "",
         "noted": null,
+        "archived": false,
+        "label": null,
+        "answer": null,
+        "page": null,
         "open": {
           "path": "Areas/Work.md"
         }

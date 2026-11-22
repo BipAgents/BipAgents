@@ -9,7 +9,7 @@
       "q": "courses",
       "title": "courses",
       "count": 5,
-      "space": ""
+      "space": null
     }
   ],
   "total": {
@@ -34,8 +34,8 @@
     {
       "id": "dates",
       "title": "Dates",
-      "count": 5,
-      "hint": "Rendez-vous chaudière, Réserver le traiteur pour Noël, Anniversaire de Mamie",
+      "count": 6,
+      "hint": "Rendez-vous chaudière, Réserver le traiteur pour Noël, Rendre les livres à la médiathèque",
       "locked": false
     },
     {
@@ -76,8 +76,8 @@
     {
       "id": "other",
       "title": "Autres",
-      "count": 1,
-      "hint": "Rendre les livres à la médiathèque",
+      "count": 2,
+      "hint": "Rendre les livres à la médiathèque, Repas de Noël chez Marie",
       "locked": false
     }
   ],

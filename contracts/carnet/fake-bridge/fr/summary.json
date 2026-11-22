@@ -21,13 +21,13 @@
       "q": "à payer ce mois-ci",
       "title": "à payer ce mois-ci",
       "count": 8,
-      "space": "",
+      "space": "perso",
       "category": "money"
     }
   ],
   "card": null,
   "total": {
-    "count": 133,
+    "count": 130,
     "title": "Tout le Carnet"
   },
   "categories": [
@@ -38,7 +38,7 @@
       "hint": "Famille, Claire Durand, Lucas Bernard",
       "locked": false,
       "first": {
-        "id": "page:p000000000c",
+        "id": "page:p000000000d",
         "kind": "page",
         "part": "main",
         "path": "Domaines/Famille.md",
@@ -47,11 +47,16 @@
         "categories": [
           "people"
         ],
-        "space": "",
+        "space": "perso",
         "date": null,
+        "yearly": null,
         "source": "Famille",
         "who": "",
         "noted": null,
+        "archived": false,
+        "label": null,
+        "answer": null,
+        "page": null,
         "open": {
           "path": "Domaines/Famille.md"
         }
@@ -64,7 +69,7 @@
       "hint": "Travail, Claire Durand, Lucas Bernard",
       "locked": false,
       "first": {
-        "id": "line:p0000000038:0000000038",
+        "id": "line:p0000000012:0000000038",
         "kind": "line",
         "part": "main",
         "path": "Domaines/Travail.md",
@@ -74,11 +79,16 @@
           "work",
           "dates"
         ],
-        "space": "",
+        "space": "perso",
         "date": "2026-11-27",
+        "yearly": null,
         "source": "Ce qui compte",
         "who": "Daily",
         "noted": "2026-11-19",
+        "archived": false,
+        "label": null,
+        "answer": null,
+        "page": "page:p0000000012",
         "open": {
           "path": "Domaines/Travail.md",
           "section": "matters"
@@ -92,7 +102,7 @@
       "hint": "Finances, Changer de voiture, Impôts 2026",
       "locked": false,
       "first": {
-        "id": "page:p000000000f",
+        "id": "page:p0000000010",
         "kind": "page",
         "part": "main",
         "path": "Domaines/Finances.md",
@@ -101,11 +111,16 @@
         "categories": [
           "money"
         ],
-        "space": "",
+        "space": "perso",
         "date": null,
+        "yearly": null,
         "source": "Finances",
         "who": "",
         "noted": null,
+        "archived": false,
+        "label": null,
+        "answer": null,
+        "page": null,
         "open": {
           "path": "Domaines/Finances.md"
         }
@@ -118,7 +133,7 @@
       "hint": "Maison, Rénovation cuisine, Rappeler Marc pour le devis",
       "locked": false,
       "first": {
-        "id": "page:p0000000010",
+        "id": "page:p0000000011",
         "kind": "page",
         "part": "main",
         "path": "Domaines/Maison.md",
@@ -127,11 +142,16 @@
         "categories": [
           "home"
         ],
-        "space": "",
+        "space": "perso",
         "date": null,
+        "yearly": null,
         "source": "Maison",
         "who": "",
         "noted": null,
+        "archived": false,
+        "label": null,
+        "answer": null,
+        "page": null,
         "open": {
           "path": "Domaines/Maison.md"
         }
@@ -144,7 +164,7 @@
       "hint": "Impôts 2026, Vérifier la déclaration pré-remplie, Retrouver les reçus de dons",
       "locked": false,
       "first": {
-        "id": "page:p0000000002",
+        "id": "page:p0000000003",
         "kind": "page",
         "part": "main",
         "path": "Sujets/Impôts 2026.md",
@@ -154,11 +174,16 @@
           "money",
           "papers"
         ],
-        "space": "",
+        "space": "perso",
         "date": null,
+        "yearly": null,
         "source": "Impôts 2026",
         "who": "",
         "noted": null,
+        "archived": false,
+        "label": null,
+        "answer": null,
+        "page": null,
         "open": {
           "path": "Sujets/Impôts 2026.md"
         }
@@ -167,7 +192,7 @@
     {
       "id": "trips",
       "title": "Voyages",
-      "count": 29,
+      "count": 26,
       "hint": "Voyage Japon, Week-end à Lisbonne, Réserver les vols pour Osaka",
       "locked": false,
       "first": {
@@ -180,11 +205,16 @@
         "categories": [
           "trips"
         ],
-        "space": "",
+        "space": "perso",
         "date": null,
+        "yearly": null,
         "source": "Voyage Japon",
         "who": "",
         "noted": null,
+        "archived": false,
+        "label": null,
+        "answer": null,
+        "page": null,
         "open": {
           "path": "Sujets/Voyage Japon.md"
         }
@@ -197,7 +227,7 @@
       "hint": "Travail, Préparer l’entretien annuel",
       "locked": false,
       "first": {
-        "id": "page:p0000000011",
+        "id": "page:p0000000012",
         "kind": "page",
         "part": "main",
         "path": "Domaines/Travail.md",
@@ -206,11 +236,16 @@
         "categories": [
           "work"
         ],
-        "space": "",
+        "space": "perso",
         "date": null,
+        "yearly": null,
         "source": "Travail",
         "who": "",
         "noted": null,
+        "archived": false,
+        "label": null,
+        "answer": null,
+        "page": null,
         "open": {
           "path": "Domaines/Travail.md"
         }
@@ -232,11 +267,16 @@
         "categories": [
           "other"
         ],
-        "space": "",
+        "space": "perso",
         "date": null,
+        "yearly": null,
         "source": "Tâches",
         "who": "Daily",
         "noted": "2026-11-22",
+        "archived": false,
+        "label": null,
+        "answer": null,
+        "page": null,
         "open": {
           "task": "t000025"
         }

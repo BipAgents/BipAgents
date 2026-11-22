@@ -37,6 +37,10 @@ pub const AT_MOST: usize = 2;
 pub const RULES_KEPT: usize = 200;
 /// Corrections that can still be undone.
 pub const UNDO_KEPT: usize = 20;
+/// What this bridge's Carnet can do of the sommaire (contracts/carnet/sommaire.json `capabilities`), in the home's
+/// `sommaire`: a new app uses a route only when it is listed (S1: the categories on today's answers, « Ranger
+/// ailleurs »; S3 adds `index`, S4 `summary`, `category`, `kept`, `searched`, S5 `spaces`, S6 `family`).
+pub const CAPABILITIES: [&str; 2] = ["categories", "categorize"];
 /// The person's corrections of records, tasks, documents and lines kept.
 const MARKS_KEPT: usize = 2000;
 /// An item is in « Dates » when its date is from this many days ago …
@@ -395,6 +399,9 @@ pub fn of_page(config: &Config, part: Part, path: &str, page: &Page) -> Filed {
 /// changed.
 pub fn choose(page: &mut Page, chosen: &[String], who: &Who) -> bool {
     let Some(cats) = valid(chosen, &AGENT_MAY_GIVE).filter(|_| who.agent.is_some()) else { return false };
+    if hand_written(page) {
+        return false;
+    }
     let now = stored(page);
     if now.as_ref().is_some_and(|(_, by)| by == "person") || now == Some((cats.clone(), "agent".into())) {
         return false;
@@ -404,17 +411,20 @@ pub fn choose(page: &mut Page, chosen: &[String], who: &Who) -> bool {
 }
 
 /// At a write of a page of the shared part (an agent's notebook_write, the app's new page): its categories written
-/// when it has none yet (or only « Autres » from the bridge, filed again). A page already filed keeps its categories.
+/// when it has none yet (or only « Autres » from the bridge, filed again). A page already filed keeps its categories;
+/// `categories` written by hand that the bridge cannot read are never touched. Who writes counts only for a page this
+/// write makes (`created`: a work agent's new page is Travail; its first write on « Maison » does not make it so).
 /// Whether they changed.
-pub fn on_write(config: &Config, part: Part, path: &str, page: &mut Page, who: &Who) -> bool {
-    if part != Part::Main {
+pub fn on_write(config: &Config, part: Part, path: &str, page: &mut Page, who: &Who, created: bool) -> bool {
+    if part != Part::Main || hand_written(page) {
         return false;
     }
     let now = stored(page);
     if now.as_ref().is_some_and(|(c, by)| !(by == "auto" && c == &["other"])) {
         return false;
     }
-    let (cats, _) = decide(config, part, path, page, who.agent.as_deref());
+    let writer = if created { who.agent.as_deref() } else { None };
+    let (cats, _) = decide(config, part, path, page, writer);
     if now == Some((cats.clone(), "auto".into())) {
         return false;
     }
@@ -441,28 +451,88 @@ static DUTCH_MONTHS: LazyLock<Vec<(regex::Regex, &'static str)>> = LazyLock::new
         .collect()
 });
 
-/// The date a text carries, a yearly one (a birthday, a date without a year) at its next occurrence.
-pub fn date_of(text: &str, today: NaiveDate) -> Option<NaiveDate> {
+/// A date a note carries: a yearly one (a birthday, a wedding anniversary: month and day), or a day.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum When {
+    Yearly(u32, u32),
+    On(NaiveDate),
+}
+
+impl When {
+    /// Its next day from `today` (a yearly one's next occurrence).
+    pub fn next(self, today: NaiveDate) -> Option<NaiveDate> {
+        match self {
+            When::On(d) => Some(d),
+            When::Yearly(m, d) => match NaiveDate::from_ymd_opt(today.year(), m, d) {
+                Some(this) if this >= today => Some(this),
+                _ => (1..=8).find_map(|n| NaiveDate::from_ymd_opt(today.year() + n, m, d)),
+            },
+        }
+    }
+
+    /// In « Dates » on `today`: a yearly date always (its next occurrence is within the year), a day within the window.
+    pub fn dated(self, today: NaiveDate) -> bool {
+        match self {
+            When::Yearly(..) => true,
+            When::On(d) => in_window(d, today),
+        }
+    }
+
+    /// The index's fields (contracts/carnet/sommaire.json `IndexItem`): `date` (a day) and `yearly` (« MM-DD »).
+    pub fn fields(when: Option<When>) -> (Value, Value) {
+        match when {
+            Some(When::On(d)) => (json!(d.format("%Y-%m-%d").to_string()), Value::Null),
+            Some(When::Yearly(m, d)) => (Value::Null, json!(format!("{m:02}-{d:02}"))),
+            None => (Value::Null, Value::Null),
+        }
+    }
+}
+
+/// The Dutch words of a yearly date (mod.rs `YEARLY` has the four other languages').
+static DUTCH_YEARLY: LazyLock<regex::Regex> =
+    LazyLock::new(|| regex::Regex::new(r"verjaardag|jarig|trouwdag|huwelijksdag").expect("valid regex"));
+
+/// « 1/2 tasse », « 3/4 » : a number over another without a year is not a date here (« 14/11 » is: two digits each).
+static FRACTION: LazyLock<regex::Regex> =
+    LazyLock::new(|| regex::Regex::new(r"\b(\d{1,2})/(\d{1,2})\b(/\d{4})?").expect("valid regex"));
+
+/// The date a note's text carries. Yearly when the text says so (a birthday, an anniversary, a wedding: mod.rs
+/// `YEARLY`, or its label); a day with its year as written; a day without a year (« devis reçu le 3 octobre ») is
+/// the one nearest to when it was noted (`noted`, else `today`), never every year.
+pub fn when_of(text: &str, noted: Option<NaiveDate>, today: NaiveDate) -> Option<When> {
     let mut plain = tk::ascii_fold(&text.to_lowercase());
     plain = SPOKEN.replace_all(&plain, "$1 $2").into_owned();
     for (nl, en) in DUTCH_MONTHS.iter() {
         plain = nl.replace_all(&plain, *en).into_owned();
     }
+    plain = FRACTION
+        .replace_all(&plain, |c: &regex::Captures| {
+            if c.get(3).is_some() || (c[1].len() == 2 && c[2].len() == 2) { c[0].to_string() } else { " ".to_string() }
+        })
+        .into_owned();
     let (month, day, year) = super::date_in(&plain)?;
-    let yearly = year.is_none() || super::YEARLY.is_match(text);
-    if yearly {
-        let this = NaiveDate::from_ymd_opt(today.year(), month, day);
-        match this {
-            Some(d) if d >= today => Some(d),
-            _ => NaiveDate::from_ymd_opt(today.year() + 1, month, day),
-        }
-    } else {
-        NaiveDate::from_ymd_opt(year?, month, day)
+    let birthday = lexicon::split_label(text).and_then(|(l, _)| lexicon::label_of(&l)).is_some_and(|l| l.id == "birthday");
+    if super::YEARLY.is_match(&plain) || DUTCH_YEARLY.is_match(&plain) || birthday {
+        return NaiveDate::from_ymd_opt(2000, month, day).map(|_| When::Yearly(month, day));
     }
+    if let Some(y) = year {
+        return NaiveDate::from_ymd_opt(y, month, day).map(When::On);
+    }
+    let around = noted.unwrap_or(today);
+    [around.year() - 1, around.year(), around.year() + 1]
+        .into_iter()
+        .filter_map(|y| NaiveDate::from_ymd_opt(y, month, day))
+        .min_by_key(|d| (*d - around).num_days().abs())
+        .map(When::On)
 }
 
-pub fn dated(text: &str, today: NaiveDate) -> bool {
-    date_of(text, today).is_some_and(|d| in_window(d, today))
+/// The next day of the date a text carries (tests, the fake bridge).
+pub fn date_of(text: &str, today: NaiveDate) -> Option<NaiveDate> {
+    when_of(text, None, today)?.next(today)
+}
+
+pub fn dated(text: &str, noted: Option<NaiveDate>, today: NaiveDate) -> bool {
+    when_of(text, noted, today).is_some_and(|w| w.dated(today))
 }
 
 /// `categories` with `dates` when the item is dated.
@@ -517,23 +587,77 @@ pub fn task_key(id: &str) -> String {
     format!("task:{id}")
 }
 
+/// A document's mark: its agent and its file's name hashed (the state never keeps a file's name: « Oublie ça »).
 pub fn document_key(agent: &str, file: &str) -> String {
-    format!("doc:{agent}/{file}")
+    format!("doc:{agent}:{}", &super::rev(file)[..12])
 }
 
-/// A line's key: its page (its id, else its path) and its text folded.
+/// A page's key: its id, else (a page made by hand, no id yet) a hash of its path.
+pub fn page_key(page: &Page, path: &str) -> String {
+    let id = page.id();
+    if id.is_empty() { format!("f{}", &super::rev(path)[..10]) } else { id }
+}
+
+/// A line's key: its page's key and its text folded, hashed (never the text).
 pub fn line_key(page: &str, text: &str) -> String {
     let (text, _) = super::split_attribution(text.trim().trim_start_matches("- "));
     format!("line:{page}:{}", &super::rev(&fold(&text))[..10])
 }
 
+/// The Item ids of a page's lines, in order: their key, and « :2 », « :3 »… for the same line said again.
+pub fn line_ids(page: &str, texts: &[String]) -> Vec<String> {
+    let mut seen: HashMap<String, usize> = HashMap::new();
+    texts
+        .iter()
+        .map(|t| {
+            let key = line_key(page, t);
+            let n = seen.entry(key.clone()).or_insert(0);
+            *n += 1;
+            if *n == 1 { key } else { format!("{key}:{n}") }
+        })
+        .collect()
+}
+
+/// « 12h30 »: a time, not a reference.
+static TIME: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(r"^\d{1,2}h\d{0,2}$").expect("valid regex"));
+
+/// Whether a text holds a reference or a number that never goes to the phone's copy: what the offline copy leaves out
+/// (offline.rs `numbered`: an ID number, a word of 6 characters or more with 3 digits or more), and a code of letters
+/// and digits (« HR-55821 », « CSG-2291 », « ABC123 ») — not a price, a date, a year or a time.
+pub fn holds_reference(text: &str) -> bool {
+    if super::offline::numbered(text) {
+        return true;
+    }
+    text.split_whitespace().any(|w| {
+        let w = w.trim_matches(|c: char| !c.is_alphanumeric());
+        let digits = w.chars().filter(|c| c.is_ascii_digit()).count();
+        digits >= 3 && w.chars().any(char::is_alphabetic) && !TIME.is_match(&w.to_lowercase())
+    })
+}
+
+/// A record's line for the phone (the index, contracts/carnet/sommaire.json `records`): its values without its
+/// number, its booking reference or its source, and no value that holds a reference.
+pub fn record_line(t: &records::Kind, record: &Dict) -> String {
+    t.fields
+        .iter()
+        .filter(|f| !["number", "reference", "source"].contains(&f.id))
+        .map(|f| tk::str_or_empty(record.get(f.id)))
+        .filter(|v| !v.is_empty() && !holds_reference(v))
+        .collect::<Vec<_>>()
+        .join(" · ")
+}
+
+/// The date a record is in « Dates » by: its next one (a warranty's end, a renewal, an end, an expiry, a booking's
+/// day), never a purchase's day.
+pub fn record_when(t: &records::Kind, record: &Dict) -> Option<When> {
+    let text = tk::str_or_empty(record.get(t.next));
+    let (m, d, y) = super::date_in(&text)?;
+    NaiveDate::from_ymd_opt(y?, m, d).map(When::On)
+}
+
 /// A record's categories (by its type; a purchase with a warranty also Papiers), by whom, and whether it is dated.
 pub fn of_record(t: &records::Kind, record: &Dict, marks: &Dict, today: NaiveDate) -> (Vec<String>, String, bool) {
-    let dated = t
-        .fields
-        .iter()
-        .filter(|f| records::is_date_field(f.id))
-        .any(|f| dated(&tk::str_or_empty(record.get(f.id)), today));
+    let dated = record_when(t, record).is_some_and(|w| w.dated(today));
     if let Some(cats) = marked(marks, &record_key(&tk::str_or_empty(record.get("id")))) {
         return (cats, "person".into(), dated);
     }
@@ -590,11 +714,18 @@ pub fn of_document(config: &Config, doc: &Value, pages: &[(String, Page)], marks
 }
 
 /// A line's categories: its page's (`page_categories`), the person's own choice first, `dates` when it carries a date.
-pub fn of_line(page_categories: &[String], page: &str, text: &str, marks: &Dict, today: NaiveDate) -> Vec<String> {
+/// `noted`: when the line was noted (its attribution's day, YYYY-MM-DD), when `text` comes without it.
+pub fn of_line(page_categories: &[String], page: &str, text: &str, noted: &str, marks: &Dict, today: NaiveDate) -> Vec<String> {
     let cats = marked(marks, &line_key(page, text)).unwrap_or_else(|| page_categories.to_vec());
-    // the line's own date, never its attribution's (« — *Léa, 2026-10-22* »)
-    let (plain, _) = super::split_attribution(text.trim().trim_start_matches("- "));
-    with_dates(&cats, dated(&plain, today))
+    with_dates(&cats, line_when(text, noted, today).is_some_and(|w| w.dated(today)))
+}
+
+/// A line's date (its text's, never its attribution's « — *Léa, 2026-10-22* », which says when it was noted: the
+/// day a date without a year is read near).
+pub fn line_when(text: &str, noted: &str, today: NaiveDate) -> Option<When> {
+    let (plain, by) = super::split_attribution(text.trim().trim_start_matches("- "));
+    let noted = by.map(|(_, d)| d).unwrap_or_else(|| noted.to_string());
+    when_of(&plain, NaiveDate::parse_from_str(&noted, "%Y-%m-%d").ok(), today)
 }
 
 /// The documents' list with each one's categories (`categories`, `categories_by`), for the apps.
@@ -627,7 +758,8 @@ pub fn task_view(config: &Config, task: &Task, pages: &[(String, Page)], marks: 
 
 // -- the person's correction (« Ranger ailleurs ») -------------------------------------------------------------------
 
-/// What the person files elsewhere.
+/// What the person files elsewhere: a page (its path), a record, a document, a task, a line of a page, or an Item's
+/// id (the index's, a search result's: contracts/carnet/sommaire.json `Item`).
 #[derive(Debug, Clone, PartialEq)]
 pub enum Target {
     Page { path: String },
@@ -635,6 +767,7 @@ pub enum Target {
     Document { agent: String, file: String },
     Task(String),
     Line { path: String, text: String },
+    Item(String),
 }
 
 impl Target {
@@ -645,24 +778,8 @@ impl Target {
             Target::Document { agent, file } => json!({"document": {"agent": agent, "file": file}}),
             Target::Task(id) => json!({"task": id}),
             Target::Line { path, text } => json!({"line": {"path": path, "text": text}}),
+            Target::Item(id) => json!({"item": id}),
         }
-    }
-
-    fn from_view(v: &Value) -> Option<Target> {
-        if let Some(path) = v.get("path").and_then(Value::as_str) {
-            return Some(Target::Page { path: path.into() });
-        }
-        if let Some(r) = v.get("record") {
-            return Some(Target::Record { kind: tk::str_or_empty(r.get("type")), id: tk::str_or_empty(r.get("id")) });
-        }
-        if let Some(d) = v.get("document") {
-            return Some(Target::Document { agent: tk::str_or_empty(d.get("agent")), file: tk::str_or_empty(d.get("file")) });
-        }
-        if let Some(t) = v.get("task").and_then(Value::as_str) {
-            return Some(Target::Task(t.into()));
-        }
-        let l = v.get("line")?;
-        Some(Target::Line { path: tk::str_or_empty(l.get("path")), text: tk::str_or_empty(l.get("text")) })
     }
 }
 
@@ -677,6 +794,8 @@ pub enum Refused {
     NotGiven,
     /// No such page, record, task, document or line.
     NotFound,
+    /// The page's `categories` were written by hand (in Obsidian) in a way the bridge does not read: left as they are.
+    HandWritten,
 }
 
 impl Refused {
@@ -686,6 +805,7 @@ impl Refused {
             Refused::Count => "category_count",
             Refused::NotGiven => "category_not_given",
             Refused::NotFound => "not_found",
+            Refused::HandWritten => "categories_by_hand",
         }
     }
 }
@@ -701,38 +821,93 @@ fn checked(given: &[String]) -> Result<Vec<String>, Refused> {
     valid(&given, &PERSON_MAY_GIVE).ok_or(Refused::Count)
 }
 
+/// Whether a page has `categories` the bridge cannot read (written by hand: « [[Livres]] », three values…): the
+/// bridge never touches them.
+pub fn hand_written(page: &Page) -> bool {
+    page.front.contains_key("categories") && stored(page).is_none()
+}
+
 fn line_on(page: &Page, text: &str) -> Option<String> {
     let wanted = fold(&super::split_attribution(text.trim().trim_start_matches("- ")).0);
     page.sections().into_iter().flat_map(|(_, f)| f).find(|f| fold(&f.text) == wanted).map(|f| f.text)
 }
 
+fn page_by_key(config: &Config, key: &str) -> Option<(String, Page)> {
+    super::all_pages(config, Part::Main).into_iter().find(|(path, page)| page_key(page, path) == key)
+}
+
+/// An Item's id resolved to what it names (None: nothing of that id any more).
+fn resolve(config: &Config, id: &str) -> Option<Target> {
+    if let Some(key) = id.strip_prefix("page:") {
+        return page_by_key(config, key).map(|(path, _)| Target::Page { path });
+    }
+    if let Some(rest) = id.strip_prefix("line:") {
+        let (key, _) = rest.split_once(':')?;
+        let (path, page) = page_by_key(config, key)?;
+        let texts: Vec<String> = page.sections().into_iter().flat_map(|(_, f)| f).map(|f| f.text).collect();
+        let ids = line_ids(key, &texts);
+        let i = ids.iter().position(|x| x == id)?;
+        return Some(Target::Line { path, text: texts[i].clone() });
+    }
+    if let Some(task) = id.strip_prefix("task:") {
+        return Some(Target::Task(task.into()));
+    }
+    if let Some(record) = id.strip_prefix("record:") {
+        let t = records::TYPES.iter().find(|t| {
+            records::records(config, t).into_iter().chain(records::archived_records(config, t)).any(|r| tk::str_or_empty(r.get("id")) == record)
+        })?;
+        return Some(Target::Record { kind: t.id.into(), id: record.into() });
+    }
+    if id.starts_with("doc:") {
+        return super::documents(config, Part::Main).iter().find_map(|d| {
+            let (agent, file) = (tk::str_or_empty(d.get("agent")), tk::str_or_empty(d.get("file")));
+            (document_key(&agent, &file) == id).then_some(Target::Document { agent, file })
+        });
+    }
+    None
+}
+
 /// « Ranger ailleurs »: `target` filed in `given` (1 or 2 of `PERSON_MAY_GIVE`) by the person. A page gets
-/// `categories_by: person` (and, when the bridge had decided by a word, the rule « word → these categories » for the
-/// next writes); a record, task, document or line a mark in the state. The answer says what it was and how to undo.
+/// `categories_by: person` (and, when the bridge itself had filed it by a word, the rule « word → these categories »
+/// for the next writes); a record, task, document or line a mark in the state. The state keeps keys only (a page's,
+/// a line's hash, a file's hash), never a text, a path or a file's name (« Oublie ça »). The answer says what it was
+/// and how to undo.
 pub fn categorize(config: &Config, target: &Target, given: &[String], who: &Who) -> anyhow::Result<Result<Value, Refused>> {
     let cats = match checked(given) {
         Ok(c) => c,
         Err(r) => return Ok(Err(r)),
     };
     let _guard = super::lock();
+    let target = match target {
+        Target::Item(id) => match resolve(config, id) {
+            Some(t) => t,
+            None => return Ok(Err(Refused::NotFound)),
+        },
+        t => t.clone(),
+    };
     let today = chrono::Local::now().date_naive();
     let marks = marks(config);
-    // what it was, its mark's key (none for a page), the word that decided it
-    let (before, key, word): (Filed, Option<String>, Option<String>) = match target {
+    // what it was, its key in the state, the word that decided it (pages and documents filed by the bridge only)
+    let (before, key, word, item): (Filed, String, Option<String>, String) = match &target {
         Target::Page { path } => {
             if super::checked(path).is_err() {
                 return Ok(Err(Refused::NotFound));
             }
             let Some(text) = super::read_page_text(config, Part::Main, path) else { return Ok(Err(Refused::NotFound)) };
             let mut page = Page::parse(&text, "");
+            if hand_written(&page) {
+                return Ok(Err(Refused::HandWritten));
+            }
             let before = of_page(config, Part::Main, path, &page);
             let (auto, word) = decide(config, Part::Main, path, &page, None);
+            let key = format!("page:{}", page_key(&page, path));
             set_front(&mut page, &cats, "person");
             let after = page.render();
             if after != text {
-                super::commit(config, Part::Main, path, Some(&text), Some(&after), who, ACTION, &cats.join(", "))?;
+                super::commit(config, Part::Main, path, Some(&text), Some(&after), who, ACTION, "")?;
             }
-            (before, None, word.filter(|_| auto != cats))
+            let word = word.filter(|_| auto != cats && before.by == "auto");
+            (before, key.clone(), word, key)
         }
         Target::Record { kind, id } => {
             let Some(t) = records::kind(kind) else { return Ok(Err(Refused::NotFound)) };
@@ -741,7 +916,7 @@ pub fn categorize(config: &Config, target: &Target, given: &[String], who: &Who)
                 return Ok(Err(Refused::NotFound));
             };
             let (c, by, _) = of_record(t, &record, &marks, today);
-            (Filed { categories: c, stored: by == "person", by }, Some(record_key(id)), None)
+            (Filed { categories: c, stored: by == "person", by }, record_key(id), None, record_key(id))
         }
         Target::Document { agent, file } => {
             let docs = super::documents(config, Part::Main);
@@ -750,8 +925,9 @@ pub fn categorize(config: &Config, target: &Target, given: &[String], who: &Who)
             };
             let pages = super::all_pages(config, Part::Main);
             let (c, by, word) = of_document(config, doc, &pages, &marks);
-            let word = word.filter(|_| c != cats);
-            (Filed { categories: c, stored: by == "person", by }, Some(document_key(agent, file)), word)
+            let word = word.filter(|_| c != cats && by == "auto");
+            let key = document_key(agent, file);
+            (Filed { categories: c, stored: by == "person", by }, key.clone(), word, key)
         }
         Target::Task(id) => {
             let Some(task) = super::tasks(config, Part::Main).into_iter().find(|t| t.id == *id) else {
@@ -760,7 +936,7 @@ pub fn categorize(config: &Config, target: &Target, given: &[String], who: &Who)
             let pages = super::all_pages(config, Part::Main);
             let c: Vec<String> = of_task(config, &task, &pages, &marks, today).into_iter().filter(|c| c != "dates").collect();
             let by = if marked(&marks, &task_key(id)).is_some() { marked_by(&marks, &task_key(id)) } else { "auto" };
-            (Filed { categories: c, stored: by == "person", by: by.into() }, Some(task_key(id)), None)
+            (Filed { categories: c, stored: by == "person", by: by.into() }, task_key(id), None, task_key(id))
         }
         Target::Line { path, text } => {
             let Some(page_text) = super::checked(path).ok().and_then(|_| super::read_page_text(config, Part::Main, path)) else {
@@ -768,13 +944,14 @@ pub fn categorize(config: &Config, target: &Target, given: &[String], who: &Who)
             };
             let page = Page::parse(&page_text, "");
             let Some(line) = line_on(&page, text) else { return Ok(Err(Refused::NotFound)) };
-            let id = if page.id().is_empty() { path.clone() } else { page.id() };
-            let key = line_key(&id, &line);
+            let key = line_key(&page_key(&page, path), &line);
             let c = marked(&marks, &key).unwrap_or_else(|| of_page(config, Part::Main, path, &page).categories);
             let by = if marked(&marks, &key).is_some() { "person" } else { "auto" };
-            (Filed { categories: c, stored: by == "person", by: by.into() }, Some(key), None)
+            (Filed { categories: c, stored: by == "person", by: by.into() }, key.clone(), None, key)
         }
+        Target::Item(_) => return Ok(Err(Refused::NotFound)),
     };
+    let is_page = key.starts_with("page:");
     let undo = format!("u{}", crate::py::token_hex(6));
     let learnt = word.as_ref().map(|w| json!({"word": w, "categories": cats}));
     super::update_state(config, |state| {
@@ -786,9 +963,9 @@ pub fn categorize(config: &Config, target: &Target, given: &[String], who: &Who)
             list.truncate(RULES_KEPT);
             state.insert("category_rules".into(), Value::Array(list));
         }
-        if let Some(key) = &key {
+        if !is_page {
             let mut m = marks_in(state);
-            m.shift_remove(key);
+            m.shift_remove(&key);
             m.insert(key.clone(), json!({"categories": cats, "at": super::today()}));
             if m.len() > MARKS_KEPT {
                 let extra = m.len() - MARKS_KEPT;
@@ -796,14 +973,18 @@ pub fn categorize(config: &Config, target: &Target, given: &[String], who: &Who)
             }
             state.insert("category_marks".into(), Value::Object(m));
         }
+        // one undo a target: the newest (an older one would put back what this one replaced)
         let mut list: Vec<Value> = state.get("category_undo").and_then(Value::as_array).cloned().unwrap_or_default();
-        list.insert(0, json!({"id": undo, "target": target.view(), "before": {"categories": before.categories,
+        list.retain(|e| tk::str_or_empty(e.get("key")) != key);
+        list.insert(0, json!({"id": undo, "key": key, "set": cats, "before": {"categories": before.categories,
                               "categories_by": before.by, "stored": before.stored},
                               "rule": word, "rule_before": rule_before, "at": super::today()}));
         list.truncate(UNDO_KEPT);
         state.insert("category_undo".into(), Value::Array(list));
     })?;
-    Ok(Ok(json!({"target": target.view(), "categories": cats, "categories_by": "person",
+    let mut shown = target.view();
+    shown["item"] = json!(item);
+    Ok(Ok(json!({"target": shown, "categories": cats, "categories_by": "person",
                  "before": {"categories": before.categories, "categories_by": before.by},
                  "learnt": learnt, "undo": undo, "toast": Value::Null})))
 }
@@ -812,36 +993,27 @@ pub fn categorize(config: &Config, target: &Target, given: &[String], who: &Who)
 pub const ACTION: &str = "categorize";
 
 /// « Annuler »: the correction `id` undone (the categories as they were, the rule it taught forgotten). None: no
-/// such correction any more (20 newer ones, or undone already).
+/// such correction any more (20 newer ones, a newer one on the same target, or undone already). A page whose
+/// categories changed since (by hand, by another correction) is left as it is now.
 pub fn undo(config: &Config, id: &str, who: &Who) -> anyhow::Result<Option<Value>> {
     let _guard = super::lock();
     let state = super::read_state(config);
     let list: Vec<Value> = state.get("category_undo").and_then(Value::as_array).cloned().unwrap_or_default();
     let Some(entry) = list.iter().find(|e| tk::str_or_empty(e.get("id")) == id).cloned() else { return Ok(None) };
-    let Some(target) = entry.get("target").and_then(Target::from_view) else { return Ok(None) };
+    let key = tk::str_or_empty(entry.get("key"));
     let before = &entry["before"];
     let was = valid(&super::strings(before.get("categories")), &PERSON_MAY_GIVE).unwrap_or_else(|| vec!["other".into()]);
     let was_by = tk::str_or_empty(before.get("categories_by"));
-    let stored = before.get("stored").and_then(Value::as_bool).unwrap_or(false);
-    let mut now = Filed { categories: was.clone(), by: if was_by.is_empty() { "auto".into() } else { was_by.clone() }, stored };
+    let was_by = if was_by.is_empty() { "auto".to_string() } else { was_by };
+    let stored_before = before.get("stored").and_then(Value::as_bool).unwrap_or(false);
+    let set = valid(&super::strings(entry.get("set")), &PERSON_MAY_GIVE).unwrap_or_default();
     let rule = entry.get("rule").and_then(Value::as_str).map(str::to_string);
     let rule_before = valid(&super::strings(entry.get("rule_before")), &PERSON_MAY_GIVE);
     super::update_state(config, |state| {
-        let key = match &target {
-            Target::Page { .. } => None,
-            Target::Record { id, .. } => Some(record_key(id)),
-            Target::Document { agent, file } => Some(document_key(agent, file)),
-            Target::Task(id) => Some(task_key(id)),
-            Target::Line { path, text } => {
-                let page = super::read_page_text(config, Part::Main, path).map(|t| Page::parse(&t, "")).unwrap_or_default();
-                let id = if page.id().is_empty() { path.clone() } else { page.id() };
-                Some(line_key(&id, text))
-            }
-        };
-        if let Some(key) = key {
+        if !key.starts_with("page:") {
             let mut m = marks_in(state);
-            if stored {
-                m.insert(key, json!({"categories": was, "at": super::today()}));
+            if stored_before {
+                m.insert(key.clone(), json!({"categories": was, "at": super::today()}));
             } else {
                 m.shift_remove(&key);
             }
@@ -859,24 +1031,30 @@ pub fn undo(config: &Config, id: &str, who: &Who) -> anyhow::Result<Option<Value
         list.retain(|e| tk::str_or_empty(e.get("id")) != id);
         state.insert("category_undo".into(), Value::Array(list));
     })?;
+    let mut target = json!({"item": key});
+    let mut now = Filed { categories: was.clone(), by: was_by.clone(), stored: stored_before };
     // the page as it was, read once the rule is forgotten (a page the bridge had not written categories on is read
-    // with its words again)
-    if let Target::Page { path } = &target {
-        if let Some(text) = super::read_page_text(config, Part::Main, path) {
-            let mut page = Page::parse(&text, "");
-            if stored {
-                set_front(&mut page, &was, &now.by);
-            } else {
-                clear_front(&mut page);
+    // with its words again); untouched when its categories are no longer the ones this correction set
+    if let Some(page_id) = key.strip_prefix("page:") {
+        if let Some((path, mut page)) = page_by_key(config, page_id) {
+            target = json!({"path": path, "private": false, "item": key});
+            if stored(&page) == Some((set.clone(), "person".into())) {
+                let text = page.render();
+                if stored_before {
+                    set_front(&mut page, &was, &was_by);
+                } else {
+                    clear_front(&mut page);
+                }
+                let after = page.render();
+                if after != text {
+                    let old = super::read_page_text(config, Part::Main, &path);
+                    super::commit(config, Part::Main, &path, old.as_deref(), Some(&after), who, ACTION, "")?;
+                }
             }
-            let after = page.render();
-            if after != text {
-                super::commit(config, Part::Main, path, Some(&text), Some(&after), who, ACTION, &was.join(", "))?;
-            }
-            now = of_page(config, Part::Main, path, &page);
+            now = of_page(config, Part::Main, &path, &page);
         }
     }
-    Ok(Some(json!({"target": target.view(), "categories": now.categories, "categories_by": now.by, "unlearnt": rule})))
+    Ok(Some(json!({"target": target, "categories": now.categories, "categories_by": now.by, "unlearnt": rule})))
 }
 
 #[cfg(test)]
@@ -1015,27 +1193,85 @@ mod tests {
         assert_eq!(at(Part::Main, &records), ["trips"]);
         let tasks = Page::new("tasks", "Tâches");
         assert_eq!(at(Part::Main, &tasks), ["other"]);
-        // a page a work agent makes (its group « Pro »): Travail
-        let pro = Page::new("subject", "Lancement");
-        assert_eq!(decide(&config, Part::Main, "Sujets/Lancement.md", &pro, None).0, ["other"]);
+    }
+
+    /// Review 1 (B1): a work agent's page is Travail when it makes it; its first write on a page that has no
+    /// categories yet (written before the sommaire) files it by its words, not under Travail for good.
+    #[test]
+    fn a_work_agents_page_is_travail_only_when_it_makes_it() {
+        use crate::notebook::{note, part_root, read_page_text, write_file};
+        let dir = tempfile::tempdir().unwrap();
+        let config = config_in(&dir, "fr");
+        crate::agent_groups::set_group(&config, "kerfy", "Pro").unwrap();
+        let pro = Who::agent(&config, "kerfy");
+        let lancement = Page::new("subject", "Lancement");
+        assert_eq!(decide(&config, Part::Main, "Sujets/Lancement.md", &lancement, Some("kerfy")).0, ["work"]);
+        assert_eq!(decide(&config, Part::Main, "Sujets/Lancement.md", &lancement, None).0, ["other"]);
+        let person = Page::new("person", "Claire Durand");
+        assert_eq!(decide(&config, Part::Main, "Personnes/Claire Durand.md", &person, Some("kerfy")).0, ["people", "work"]);
+        // a page written before the sommaire (no categories), then by the work agent
+        write_file(&part_root(&config, Part::Main).join("Domaines/Maison.md"), "---\ntype: area\n---\n# Maison\n\n## Habitudes et règles\n- Poubelles le lundi soir\n").unwrap();
+        write_file(&part_root(&config, Part::Main).join("Personnes/Claire Durand.md"), "---\ntype: person\n---\n# Claire Durand\n\n## Qui c'est\n- Ta sœur\n").unwrap();
+        let fact = |f: &str| vec![f.to_string()];
+        note(&config, Part::Main, "area", "Maison", "habits", &fact("Chaudière : entretien en octobre"), &[], "", "", &pro).unwrap();
+        note(&config, Part::Main, "person", "Claire Durand", "work", &fact("Infirmière"), &[], "", "", &pro).unwrap();
+        note(&config, Part::Main, "subject", "Lancement", "status", &fact("Maquette prête"), &[], "", "", &pro).unwrap();
+        let read = |p: &str| Page::parse(&read_page_text(&config, Part::Main, p).unwrap(), "");
+        assert_eq!(stored(&read("Domaines/Maison.md")).unwrap().0, ["home"]);
+        assert_eq!(stored(&read("Personnes/Claire Durand.md")).unwrap().0, ["people"]);
+        assert_eq!(stored(&read("Sujets/Lancement.md")).unwrap().0, ["work"]);
+    }
+
+    /// Review 1 (B4): `categories` written by hand that the bridge cannot read are never touched.
+    #[test]
+    fn hand_written_categories_are_left_as_they_are() {
+        use crate::notebook::{note, part_root, read_page_text, write_file};
+        let dir = tempfile::tempdir().unwrap();
+        let config = config_in(&dir, "fr");
+        let (agent, you) = (Who::agent(&config, "home"), Who::you(&config));
+        for (name, value) in [("Lectures", "categories:\n  - \"[[Livres]]\"\n"), ("Jardin", "categories:\n  - home\n  - money\n  - work\n")] {
+            let path = format!("Sujets/{name}.md");
+            write_file(&part_root(&config, Part::Main).join(&path), &format!("---\ntype: subject\n{value}---\n# {name}\n")).unwrap();
+            note(&config, Part::Main, "subject", name, "status", &["En cours".to_string()], &[], "", "", &agent).unwrap();
+            crate::notebook::note_with(&config, Part::Main, "subject", name, "status", &["Encore".to_string()], &[], "", "",
+                                       &["money".to_string()], &agent).unwrap();
+            let text = read_page_text(&config, Part::Main, &path).unwrap();
+            assert!(text.contains(value) && !text.contains("categories_by"), "{text}");
+            let page = Page::parse(&text, "");
+            assert!(hand_written(&page));
+            assert_eq!(of_page(&config, Part::Main, &path, &page).by, "auto");
+            let refused = categorize(&config, &Target::Page { path: path.clone() }, &["money".to_string()], &you).unwrap();
+            assert_eq!(refused, Err(Refused::HandWritten));
+        }
     }
 
     #[test]
     fn dates_are_computed_from_the_texts() {
         let today = NaiveDate::from_ymd_opt(2026, 11, 22).unwrap();
-        assert!(dated("Anniversaire : 14 mars", today));
-        assert_eq!(date_of("Anniversaire : 14 mars 1990", today), NaiveDate::from_ymd_opt(2027, 3, 14));
-        assert!(dated("Entretien annuel le 27 novembre", today));
-        assert!(dated("Vol le 2027-03-01", today));
-        assert!(dated("Garantie jusqu’au 2028-10-01", today));
-        assert!(dated("Rendu le 2026-09-01", today));
-        assert!(!dated("Acheté le 2024-01-10", today));
-        assert!(!dated("Expire le 2030-01-01", today));
-        assert!(!dated("Poubelles le lundi soir", today));
-        assert!(!dated("Avril, 12 jours : Tokyo, Kyoto", today));
-        assert!(dated("Cumpleaños: 23 de diciembre", today));
-        assert!(dated("Verjaardag : 14 maart", today));
-        assert!(dated("Jaargesprek op 27 november", today));
+        let day = |y, m, d| NaiveDate::from_ymd_opt(y, m, d).unwrap();
+        let on = |text: &str| dated(text, None, today);
+        // yearly when the text says so: at its next occurrence, always in Dates
+        assert_eq!(when_of("Anniversaire : 14 mars 1990", None, today), Some(When::Yearly(3, 14)));
+        assert_eq!(date_of("Anniversaire : 14 mars 1990", today), Some(day(2027, 3, 14)));
+        assert_eq!(when_of("Cumpleaños: 23 de diciembre", None, today), Some(When::Yearly(12, 23)));
+        assert_eq!(when_of("Verjaardag : 14 maart", None, today), Some(When::Yearly(3, 14)));
+        assert_eq!(When::fields(Some(When::Yearly(3, 14))), (Value::Null, json!("03-14")));
+        // a day without a year that says nothing yearly: the one nearest to when it was noted, not every year
+        assert_eq!(when_of("Devis reçu le 3 octobre", Some(day(2026, 10, 5)), today), Some(When::On(day(2026, 10, 3))));
+        assert!(on("Devis reçu le 3 octobre"));
+        assert!(!dated("Devis reçu le 3 octobre", Some(day(2025, 10, 5)), today));
+        assert_eq!(when_of("Entretien annuel le 27 novembre", None, today), Some(When::On(day(2026, 11, 27))));
+        assert_eq!(when_of("Jaargesprek op 3 januari", None, today), Some(When::On(day(2027, 1, 3))));
+        // days with their year
+        assert!(on("Vol le 2027-03-01") && on("Garantie jusqu’au 2028-10-01") && on("Rendu le 2026-09-01"));
+        assert!(!on("Acheté le 2024-01-10") && !on("Expire le 2030-01-01"));
+        // not dates
+        assert!(!on("Poubelles le lundi soir") && !on("Avril, 12 jours : Tokyo, Kyoto"));
+        assert_eq!(when_of("1/2 tasse de sucre", None, today), None);
+        assert_eq!(when_of("Rendez-vous le 14/11", Some(day(2026, 11, 2)), today), Some(When::On(day(2026, 11, 14))));
+        // a line: its own date, read near its attribution's day (never the attribution's)
+        assert_eq!(line_when("- Devis le 3 octobre — *Léa, 2026-10-05*", "", today), Some(When::On(day(2026, 10, 3))));
+        assert_eq!(line_when("Rien de daté — *Léa, 2026-10-05*", "", today), None);
         assert_eq!(with_dates(&["people".to_string()], true), ["people", "dates"]);
         assert_eq!(with_dates(&["people".to_string()], false), ["people"]);
     }
@@ -1047,11 +1283,11 @@ mod tests {
         let (agent, you) = (Who::agent(&config, "home"), Who::you(&config));
         let path = "Sujets/Rénovation cuisine.md";
         let mut p = page("subject", "Rénovation cuisine", "Devis reçu.", "");
-        assert!(on_write(&config, Part::Main, path, &mut p, &agent));
+        assert!(on_write(&config, Part::Main, path, &mut p, &agent, true));
         assert_eq!(stored(&p), Some((vec!["home".to_string()], "auto".to_string())));
         // filed already: kept, whatever its words become
         p.body = "## En bref\nLe budget : 9 000 €, le prêt de la banque.\n".into();
-        assert!(!on_write(&config, Part::Main, path, &mut p, &agent));
+        assert!(!on_write(&config, Part::Main, path, &mut p, &agent, true));
         // an agent says it (never dates, health or other, two at most, only an agent)
         for wrong in [vec!["dates"], vec!["health"], vec!["other"], vec!["money", "home", "work"], vec![]] {
             let wrong: Vec<String> = wrong.into_iter().map(String::from).collect();
@@ -1063,7 +1299,7 @@ mod tests {
         // the person's choice: no agent and no write changes it
         set_front(&mut p, &["home".to_string()], "person");
         assert!(!choose(&mut p, &["money".to_string()], &agent));
-        assert!(!on_write(&config, Part::Main, path, &mut p, &agent));
+        assert!(!on_write(&config, Part::Main, path, &mut p, &agent, true));
         // in the frontmatter, before `updated`: readable in Obsidian, read back the same
         p.touch();
         let text = p.render();
@@ -1071,10 +1307,10 @@ mod tests {
         assert_eq!(stored(&Page::parse(&text, "")), Some((vec!["home".to_string()], "person".to_string())));
         // filed in « Autres » by the bridge: filed again at the next write
         let mut q = page("subject", "Divers", "", "");
-        assert!(on_write(&config, Part::Main, "Sujets/Divers.md", &mut q, &agent));
+        assert!(on_write(&config, Part::Main, "Sujets/Divers.md", &mut q, &agent, true));
         assert_eq!(stored(&q).unwrap().0, ["other"]);
         q.body = "## En bref\nLe devis du plombier pour la salle de bain.\n".into();
-        assert!(on_write(&config, Part::Main, "Sujets/Divers.md", &mut q, &agent));
+        assert!(on_write(&config, Part::Main, "Sujets/Divers.md", &mut q, &agent, true));
         assert_eq!(stored(&q).unwrap().0, ["home"]);
         // a hand-written value that is not a category: read as the bridge's
         let mut r = page("subject", "Voyage Japon", "", "");
@@ -1085,7 +1321,7 @@ mod tests {
         assert_eq!(of_page(&config, Part::Main, "Sujets/Voyage Japon.md", &r).categories, ["trips"]);
         // the private part is Santé: nothing written there
         let mut h = page("area", "Santé", "", "");
-        assert!(!on_write(&config, Part::Health, "Domaines/Santé.md", &mut h, &agent));
+        assert!(!on_write(&config, Part::Health, "Domaines/Santé.md", &mut h, &agent, true));
         assert_eq!(of_page(&config, Part::Health, "Domaines/Santé.md", &h).categories, ["health"]);
     }
 
@@ -1142,6 +1378,46 @@ mod tests {
         assert_eq!(stored(&read(old)), None);
     }
 
+    /// Review 1 (R2, R3, B2): a rule is learnt only from the bridge's own filing; one undo a target, the newest; the
+    /// state keeps keys, never a line's text, a page's path or a file's name.
+    #[test]
+    fn corrections_learn_from_the_bridge_only_keep_one_undo_and_no_text() {
+        use crate::notebook::{note, note_with, read_state};
+        let dir = tempfile::tempdir().unwrap();
+        let config = config_in(&dir, "fr");
+        let (agent, you) = (Who::agent(&config, "home"), Who::you(&config));
+        let give = |c: &str| vec![c.to_string()];
+        // filed by an agent, then corrected by the person: nothing learnt
+        note_with(&config, Part::Main, "subject", "Rénovation cuisine", "status", &give("Devis reçu"), &[], "", "",
+                  &give("home"), &agent).unwrap();
+        let page = Target::Page { path: "Sujets/Rénovation cuisine.md".into() };
+        let first = categorize(&config, &page, &give("money"), &you).unwrap().unwrap();
+        assert_eq!((first["before"]["categories_by"].clone(), first["learnt"].clone()), (json!("agent"), Value::Null));
+        assert!(rules(&config).is_empty());
+        // corrected again: the first correction can no longer be undone, the second puts back the first's
+        let second = categorize(&config, &page, &give("work"), &you).unwrap().unwrap();
+        assert!(undo(&config, first["undo"].as_str().unwrap(), &you).unwrap().is_none());
+        let back = undo(&config, second["undo"].as_str().unwrap(), &you).unwrap().unwrap();
+        assert_eq!((back["categories"].clone(), back["categories_by"].clone()), (json!(["money"]), json!("person")));
+        // a line, by the Item id the phone has; the state holds no text
+        note(&config, Part::Main, "subject", "Voyage Japon", "next", &give("Réserver les vols pour Osaka"), &[], "", "", &agent).unwrap();
+        let (path, japan) = crate::notebook::all_pages(&config, Part::Main).into_iter().find(|(_, p)| p.title == "Voyage Japon").unwrap();
+        let key = page_key(&japan, &path);
+        let ids = line_ids(&key, &["Réserver les vols pour Osaka".to_string()]);
+        let done = categorize(&config, &Target::Item(ids[0].clone()), &give("money"), &you).unwrap().unwrap();
+        assert_eq!(done["target"]["item"], json!(ids[0]));
+        assert_eq!(categorize(&config, &Target::Item(format!("{}0", ids[0])), &give("money"), &you).unwrap(), Err(Refused::NotFound));
+        let page_item = categorize(&config, &Target::Item(format!("page:{key}")), &give("work"), &you).unwrap().unwrap();
+        assert_eq!(page_item["target"]["path"], json!(path));
+        let state = serde_json::to_string(&read_state(&config)).unwrap();
+        assert!(!state.contains("Osaka") && !state.contains("Voyage") && !state.contains("cuisine"), "{state}");
+        // the same line said twice on a page: two ids
+        let twice = line_ids("p1", &["Lait".to_string(), "Pain".to_string(), "lait".to_string()]);
+        assert_eq!((twice[2].strip_suffix(":2"), twice[1] != twice[0]), (Some(twice[0].as_str()), true));
+        // a page without an id (made in Obsidian): a key from its path
+        assert!(page_key(&Page::parse("# Notes\n", "Notes"), "Notes.md").starts_with('f'));
+    }
+
     #[test]
     fn records_tasks_documents_and_lines_follow_their_page_or_type() {
         use crate::notebook::{add_task, all_pages, note, records as rec};
@@ -1159,6 +1435,25 @@ mod tests {
         let none = Dict::new();
         assert_eq!(of_record(purchase, &with, &none, today), (vec!["money".into(), "papers".into()], "auto".into(), true));
         assert_eq!(of_record(purchase, &without, &none, today).0, ["money"]);
+        // a purchase is dated by its warranty's end only, never by its day (Review 1, R5)
+        assert!(!of_record(purchase, &without, &none, today).2);
+        // the phone's line of a record: no number, no reference, no source (Review 1, B5)
+        let contract = rec::kind("contract").unwrap();
+        let (insured, _) = rec::upsert(&config, contract, "", &fields(&[("what", "Assurance habitation".into()),
+            ("provider", "Assureur Horizon".into()), ("number", "HAB-448120".into()), ("end", day(95)),
+            ("source", "Avis d’échéance CSG-2291".into())]), false, &agent).unwrap();
+        let line = record_line(contract, &insured);
+        assert!(line.starts_with("Assurance habitation · Assureur Horizon") && !line.contains("448120") && !line.contains("2291"), "{line}");
+        let booking_ref = rec::kind("booking").unwrap();
+        let (with_ref, _) = rec::upsert(&config, booking_ref, "", &fields(&[("date", day(30)), ("what", "Hôtel Rossio".into()),
+            ("reference", "HR-55821".into())]), false, &agent).unwrap();
+        assert!(!record_line(booking_ref, &with_ref).contains("55821"));
+        for reference in ["réf. HR-55821", "Avis CSG-2291", "Contrat HAB-448120", "Code ABC123"] {
+            assert!(holds_reference(reference), "{reference}");
+        }
+        for plain in ["8 900 €", "15.000 €", "Vol le 2026-12-04", "Rendez-vous à 12h30", "Entre 2026 et 2027", "Format A4"] {
+            assert!(!holds_reference(plain), "{plain}");
+        }
         let booking = rec::kind("booking").unwrap();
         let (vol, _) = rec::upsert(&config, booking, "", &fields(&[("date", format!("{} 10:30", day(12))), ("what", "Vol Lisbonne".into())]),
                                    false, &agent).unwrap();
@@ -1178,7 +1473,7 @@ mod tests {
                    (vec!["papers".into(), "money".into()], "auto".into(), Some("facture".into())));
         assert_eq!(of_document(&config, &doc("IMG_2041.jpg", None), &pages, &none).0, ["papers"]);
         // lines: their page's, Dates when they carry a date
-        assert_eq!(of_line(&["people".to_string()], "p1", "Anniversaire : 14 mars — *Léa, 2026-10-01*", &none, today), ["people", "dates"]);
+        assert_eq!(of_line(&["people".to_string()], "p1", "Anniversaire : 14 mars — *Léa, 2026-10-01*", "", &none, today), ["people", "dates"]);
         // the person files them elsewhere: kept in the state, undone as well
         let give = |c: &str| vec![c.to_string()];
         let id = tk::str_or_empty(with.get("id"));
@@ -1190,7 +1485,7 @@ mod tests {
         let japan = all_pages(&config, Part::Main).into_iter().find(|(_, p)| p.title == "Voyage Japon").unwrap();
         let line = Target::Line { path: japan.0.clone(), text: "Réserver les vols".into() };
         categorize(&config, &line, &give("money"), &you).unwrap().unwrap();
-        assert_eq!(of_line(&["trips".to_string()], &japan.1.id(), "- Réserver les vols — *Home, 2026-11-22*", &marks(&config), today), ["money"]);
+        assert_eq!(of_line(&["trips".to_string()], &japan.1.id(), "- Réserver les vols — *Home, 2026-11-22*", "", &marks(&config), today), ["money"]);
         let gone = Target::Line { path: japan.0.clone(), text: "Rien de tel".into() };
         assert_eq!(categorize(&config, &gone, &give("money"), &you).unwrap(), Err(Refused::NotFound));
         assert_eq!(categorize(&config, &Target::Record { kind: "purchase".into(), id: "r000000".into() }, &give("home"), &you).unwrap(),

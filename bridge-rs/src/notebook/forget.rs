@@ -461,9 +461,17 @@ fn lines_without(text: &str, hit: impl Fn(&str) -> Option<Hit>, with: Option<&st
     let mut out: Vec<String> = Vec::new();
     let mut unsure = Vec::new();
     let mut changed = false;
-    for line in text.lines() {
+    // the frontmatter's own keys of the sommaire (`categories`, `categories_by`, `space`: ids, never what was said)
+    let (mut front, mut key) = (false, String::new());
+    for (i, line) in text.lines().enumerate() {
+        if line == "---" {
+            front = i == 0;
+        } else if front && !line.starts_with(' ') {
+            key = line.split(':').next().unwrap_or("").to_string();
+        }
+        let sommaire = front && ["categories", "categories_by", "space"].contains(&key.as_str()) && line != "---";
         // headings and the frontmatter's lines stay (a page's outline, its name)
-        let structural = line.starts_with('#') || line.starts_with("---") || line.trim().is_empty();
+        let structural = line.starts_with('#') || line.starts_with("---") || line.trim().is_empty() || sommaire;
         match (!structural).then(|| hit(line)).flatten() {
             Some(h) => {
                 changed = true;
@@ -1138,6 +1146,22 @@ pub fn cards(config: &Config, agent: &str, lang: &str, spans: &[Span]) -> HashMa
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Review 1 (B3): forgetting « Money » (or « Auto », « Home », « Work ») never touches the sommaire's keys of a
+    /// page's frontmatter (`categories`, `categories_by`, `space`), only what was said.
+    #[test]
+    fn the_sommaire_keys_of_a_frontmatter_stay() {
+        let text = "---\nid: p0000000001\ntype: subject\ncategories:\n  - money\n  - home\ncategories_by: auto\nspace: pro\n\
+                    updated: 2026-11-22\n---\n# Budget\n\n## Notes\n- Money for the car\n";
+        let hit = |l: &str| {
+            let f = super::super::fold(l);
+            (f.contains("money") || f.contains("auto") || f.contains("pro")).then_some(Hit::Sure)
+        };
+        let (new, _) = lines_without(text, hit, None);
+        let new = new.expect("the fact goes");
+        assert!(new.contains("categories:\n  - money\n  - home\ncategories_by: auto\nspace: pro\n"), "{new}");
+        assert!(!new.contains("Money for the car"), "{new}");
+    }
 
     /// Léa's size, as each place said it (Marc's own « Pointure : 36 » stays: another fact).
     const SECRETS: [&str; 4] = ["fait du 36", "chausse du 36", "lea pointure 36", "36 pour lea"];

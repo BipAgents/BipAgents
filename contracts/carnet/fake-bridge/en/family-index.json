@@ -5,6 +5,10 @@
   "full": true,
   "lang": "en",
   "made": "2026-11-22T07:00:00Z",
+  "dated": {
+    "before": 90,
+    "after": 730
+  },
   "items": [
     {
       "id": "fam:list:courses/c1",
@@ -15,6 +19,7 @@
         "shopping"
       ],
       "date": null,
+      "yearly": null,
       "who": "Marie",
       "noted": null,
       "open": {
@@ -33,6 +38,7 @@
         "shopping"
       ],
       "date": null,
+      "yearly": null,
       "who": "Léa",
       "noted": null,
       "open": {
@@ -51,6 +57,7 @@
         "shopping"
       ],
       "date": null,
+      "yearly": null,
       "who": "Maison",
       "noted": null,
       "open": {
@@ -69,6 +76,7 @@
         "shopping"
       ],
       "date": null,
+      "yearly": null,
       "who": "Marie",
       "noted": null,
       "open": {
@@ -87,6 +95,7 @@
         "shopping"
       ],
       "date": null,
+      "yearly": null,
       "who": "Léa",
       "noted": null,
       "open": {
@@ -102,10 +111,10 @@
       "title": "Tasks",
       "line": "Boiler appointment",
       "categories": [
-        "home",
-        "dates"
+        "home"
       ],
       "date": "2026-11-25",
+      "yearly": null,
       "who": "Léa",
       "noted": null,
       "open": {
@@ -121,10 +130,10 @@
       "title": "Tasks",
       "line": "Book the Christmas caterer",
       "categories": [
-        "dates",
         "menus"
       ],
       "date": "2026-11-28",
+      "yearly": null,
       "who": "Marie",
       "noted": null,
       "open": {
@@ -143,6 +152,7 @@
         "school"
       ],
       "date": null,
+      "yearly": null,
       "who": "Marie",
       "noted": null,
       "open": {
@@ -162,6 +172,7 @@
         "other"
       ],
       "date": "2026-11-21",
+      "yearly": null,
       "who": "Léa",
       "noted": null,
       "open": {
@@ -177,10 +188,10 @@
       "title": "Dates",
       "line": "Grandma's birthday",
       "categories": [
-        "people",
-        "dates"
+        "people"
       ],
-      "date": "2026-11-28",
+      "date": null,
+      "yearly": "11-28",
       "who": "Marie",
       "noted": null,
       "open": {
@@ -196,9 +207,10 @@
       "title": "Dates",
       "line": "Christmas dinner at Marie's",
       "categories": [
-        "dates"
+        "other"
       ],
       "date": "2026-12-31",
+      "yearly": null,
       "who": "Maison",
       "noted": null,
       "open": {
@@ -214,10 +226,10 @@
       "title": "Dates",
       "line": "Tom's birthday",
       "categories": [
-        "people",
-        "dates"
+        "people"
       ],
-      "date": "2027-03-09",
+      "date": null,
+      "yearly": "03-09",
       "who": "Léa",
       "noted": null,
       "open": {
@@ -236,6 +248,7 @@
         "holidays"
       ],
       "date": null,
+      "yearly": null,
       "who": "Maison",
       "noted": null,
       "open": {
@@ -254,6 +267,7 @@
         "school"
       ],
       "date": null,
+      "yearly": null,
       "who": "Marie",
       "noted": null,
       "open": {
@@ -270,6 +284,7 @@
         "menus"
       ],
       "date": null,
+      "yearly": null,
       "who": "Léa",
       "noted": null,
       "open": {

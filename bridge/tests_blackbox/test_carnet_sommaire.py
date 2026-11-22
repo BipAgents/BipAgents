@@ -243,7 +243,8 @@ def facts_of(page):
 def test_the_bridge_files_pages_records_tasks_and_documents_by_their_words(bridges):
     bridge = bridges.new().start()
     write_carnet(bridge)
-    assert bridge.get("/v1/notebook", headers=AUTH).json()["sommaire"] == 1
+    # what this bridge's Carnet can do of the sommaire (contracts/carnet/sommaire.json `Capability`)
+    assert bridge.get("/v1/notebook", headers=AUTH).json()["sommaire"] == ["categories", "categorize"]
     # the pages, by their kind and their words, written in their frontmatter (the app's new page too)
     pages = pages_by_title(bridge)
     want = {"Marc Durand": ["people"], "Claire Durand": ["people"], "Rénovation cuisine": ["home"],
@@ -304,7 +305,8 @@ def test_the_person_files_elsewhere_and_the_next_write_follows(bridges):
     assert done["before"] == {"categories": ["home"], "categories_by": "auto"}
     assert (done["categories"], done["categories_by"]) == (["money"], "person")
     assert done["learnt"] == {"word": "renovation", "categories": ["money"]} and done["undo"].startswith("u")
-    assert done["target"] == {"path": kitchen, "private": False}
+    assert {k: done["target"][k] for k in ("path", "private")} == {"path": kitchen, "private": False}
+    assert done["target"]["item"].startswith("page:")
     assert (page_of(bridge, kitchen)["categories"], page_of(bridge, kitchen)["categories_by"]) == (["money"], "person")
     # an agent writes there again, saying another category: the person's stays; the next page the word decides follows
     wrote(call(bridge, "notebook_write", {"page": "Rénovation cuisine", "section": "status", "facts": ["Travaux en mars"],
@@ -329,7 +331,8 @@ def test_the_person_files_elsewhere_and_the_next_write_follows(bridges):
     purchase = next(t for t in bridge.get("/v1/notebook/records", headers=AUTH).json()["types"] if t["type"] == "purchase")
     assert (purchase["items"][0]["categories"], purchase["items"][0]["categories_by"]) == (["home", "dates"], "person")
     task = next(t for t in bridge.get("/v1/notebook/tasks", headers=AUTH).json()["open"] if t["title"].startswith("Trier"))
-    assert post({"task": task["id"], "categories": ["home"]}).status_code == 200
+    by_item = post({"item": "task:" + task["id"], "categories": ["home"]})    # an Item's id, as the phone has it
+    assert by_item.status_code == 200 and by_item.json()["target"]["task"] == task["id"], by_item.text
     task = next(t for t in bridge.get("/v1/notebook/tasks", headers=AUTH).json()["open"] if t["title"].startswith("Trier"))
     assert task["categories"] == ["home"]
     doc = bridge.get("/v1/notebook/documents", headers=AUTH).json()["documents"][0]
