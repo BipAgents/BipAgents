@@ -16,7 +16,8 @@
 //! it starts keeping it (a bridge started again, a Carnet restored or moved: another epoch, the phone takes the whole
 //! copy); each change of the copy is a new version, the last `HISTORY` of them kept as their changed and removed ids.
 //! `since` + `epoch` of a version kept: only what changed (`full: false`); else everything (`full: true`). The ETag is
-//! `"<epoch>-v<version>"`; `If-None-Match` with it: 304.
+//! `"<epoch>-v<version>-<languages>"`; `If-None-Match` with it: 304. The kept searches (S4, summary.rs) go whole with
+//! every answer, as the tables; a change of theirs is a version of its own (no item changed).
 //!
 //! Limits: 20 000 items and 8 MB of compact JSON. The bridge alone trims (the phone never does): archived lines out
 //! first (the oldest noted first), then archived pages, then the other lines (the oldest noted first);
@@ -653,6 +654,8 @@ struct Kept {
     items: Arc<Vec<Entry>>,
     truncated: bool,
     finders: HashMap<Vec<String>, Arc<Finder>>,
+    /// The kept searches as sent (`KeptShort`, summary.rs): a change is a new version (no item changed).
+    kept: Value,
 }
 
 static KEPT: LazyLock<Mutex<HashMap<PathBuf, Kept>>> = LazyLock::new(Default::default);
@@ -732,11 +735,14 @@ fn refreshed(config: &Config) -> (PathBuf, u64) {
         items: Arc::new(Vec::new()),
         truncated: false,
         finders: HashMap::new(),
+        kept: json!([]),
     });
     let changed: Vec<String> =
         items.iter().filter(|e| k.hashes.get(&e.id) != hashes.get(&e.id)).map(|e| e.id.clone()).collect();
     let removed: Vec<String> = k.hashes.keys().filter(|id| !hashes.contains_key(*id)).cloned().collect();
-    if k.version == 0 || !changed.is_empty() || !removed.is_empty() || k.truncated != truncated {
+    // (the kept searches are in state.json: a change of theirs makes the copy again, and is a version of its own)
+    let kept_now = super::summary::kept_short(config);
+    if k.version == 0 || !changed.is_empty() || !removed.is_empty() || k.truncated != truncated || k.kept != kept_now {
         k.version += 1;
         k.history.push_back((k.version, changed, removed));
         while k.history.len() > HISTORY {
@@ -746,6 +752,7 @@ fn refreshed(config: &Config) -> (PathBuf, u64) {
         k.items = Arc::new(items);
         k.truncated = truncated;
         k.finders.clear();
+        k.kept = kept_now;
     }
     k.files = files;
     (key, files)
@@ -754,14 +761,19 @@ fn refreshed(config: &Config) -> (PathBuf, u64) {
 /// The bridge's own search over the copy (the same rule as the phones): the copy made again only when the Carnet
 /// changed, its finder kept for these tables' languages.
 pub fn finder(config: &Config, langs: &[String]) -> Arc<Finder> {
+    current(config, langs).0
+}
+
+/// [`finder`] and the copy's version it searches (the sommaire's `version`, summary.rs).
+pub fn current(config: &Config, langs: &[String]) -> (Arc<Finder>, u64) {
     let (key, _) = refreshed(config);
-    let items = {
+    let (items, version) = {
         let kept = KEPT.lock().unwrap_or_else(|e| e.into_inner());
         let k = &kept[&key];
         if let Some(f) = k.finders.get(langs) {
-            return f.clone();
+            return (f.clone(), k.version);
         }
-        k.items.clone()
+        (k.items.clone(), k.version)
     };
     let year = chrono::Local::now().date_naive().year();
     let finder = Arc::new(Finder::shared(items.clone(), &tables(langs, year)));
@@ -771,7 +783,7 @@ pub fn finder(config: &Config, langs: &[String]) -> Arc<Finder> {
             k.finders.insert(langs.to_vec(), finder.clone());
         }
     }
-    finder
+    (finder, version)
 }
 
 
@@ -835,7 +847,7 @@ pub fn answer(config: &Config, langs: &[String], since: Option<u64>, epoch: Opti
         "limits": {"lines": LINES_MAX, "bytes": BYTES_MAX}, "truncated": k.truncated,
         "online_only": if k.truncated { json!(online_only) } else { Value::Null },
         "dated": dated, "items": items, "removed": removed, "stop": stop, "neighbours": neighbours, "dates": dates,
-        "kept": [],
+        "kept": k.kept,
     });
     (body, etag)
 }

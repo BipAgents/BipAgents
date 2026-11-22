@@ -42,8 +42,9 @@ pub const UNDO_TODAY_MAX: usize = 100;
 /// What this bridge's Carnet can do of the sommaire (contracts/carnet/sommaire.json `capabilities`), in the home's
 /// `sommaire`: a new app uses a route only when it is listed (S1: the categories on today's answers, « Ranger
 /// ailleurs »; S2 `sorted`: the card « Ton Carnet est rangé par catégories », today's re-filings, the toast; S3
-/// `index`: the phone's search copy; then S4 `summary`, `category`, `kept`, `searched`, S5 `spaces`, S6 `family`).
-pub const CAPABILITIES: [&str; 4] = ["categories", "categorize", "sorted", "index"];
+/// `index`: the phone's search copy; S4 `summary`, `category`, `kept`, `searched`: the sommaire ready to show,
+/// summary.rs; then S5 `spaces`, S6 `family`).
+pub const CAPABILITIES: [&str; 8] = ["categories", "categorize", "sorted", "index", "summary", "category", "kept", "searched"];
 /// The person's corrections of records, tasks, documents and lines kept.
 const MARKS_KEPT: usize = 2000;
 /// An item is in « Dates » when its date is from this many days ago …
