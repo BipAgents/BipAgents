@@ -99,7 +99,7 @@ pub const SENDING_RULE: &str = concat!(
 /// (tests/golden/souls.json rewritten with `GOLDEN_SOULS_OUT`). Short: it is paid on every call.
 pub const BOT_CHECK_RULE: &str = concat!(
     "A bot check or captcha blocking your programs: use your browser, never script around it. Still blocking your ",
-    "browser: try nothing else (no headless script, other proxy or identity, captcha service, or watcher on that ",
+    "browser: try nothing else (no headless or other browser, proxy, identity, captcha service or watcher on that ",
     "site). Tell your person in one sentence; they can take over your browser (« Prendre la main »)."
 );
 
@@ -1176,7 +1176,7 @@ mod tests {
     fn a_bot_check_that_still_blocks_is_handed_over() {
         assert!(BOT_CHECK_RULE.chars().count() < 320, "{}", BOT_CHECK_RULE.chars().count());
         for needed in ["blocking your programs", "use your browser", "never script around it", "Still blocking your browser",
-                       "no headless script", "proxy or identity", "captcha service", "watcher", "take over"] {
+                       "no headless or other browser", "proxy, identity", "captcha service", "watcher", "take over"] {
             assert!(BOT_CHECK_RULE.contains(needed), "missing {needed}");
         }
         assert!(!BOT_CHECK_RULE.to_lowercase().contains("never get past"));

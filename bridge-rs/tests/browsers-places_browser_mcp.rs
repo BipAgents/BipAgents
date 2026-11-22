@@ -532,7 +532,7 @@ async fn the_phone_exit_s_refusal_and_a_challenge_page_are_said_to_the_agent() {
                     "paused 3\n"
                 } else if line.starts_with("WHY") {
                     "NONE\n"
-                } else if asks > 1 {
+                } else if line.starts_with("STATE") || asks > 1 {
                     "LIVE\n"
                 } else {
                     "CARD\n"
@@ -2112,8 +2112,13 @@ async fn a_bot_check_that_stays_is_handed_to_the_person_and_its_site_is_not_open
         serde_json::from_str(&std::fs::read_to_string(tmp.join(browser_mcp::CHECK_FILE)).unwrap()).unwrap();
     assert_eq!((note["site"].as_str(), note["kind"].as_str()), (Some("decathlon.fr"), Some("Cloudflare challenge")));
     assert!(note["at"].as_f64().unwrap() > now() - 60.0);
-    // nobody came within the wait: the last note says the agent stopped waiting (the Boîte says so, review 1)
-    assert_eq!((note["stopped"].as_bool(), note["phone"].as_bool()), (Some(true), Some(false)));
+    // nobody came within the wait: a note of its own says the agent stopped waiting (the Boîte says so, review 1);
+    // the first one stays for the bridge (review 2)
+    assert_eq!((note["stopped"].as_bool(), note["phone"].as_bool()), (Some(false), Some(false)));
+    let stopped: Value =
+        serde_json::from_str(&std::fs::read_to_string(tmp.join(browser_mcp::CHECK_STOPPED_FILE)).unwrap()).unwrap();
+    assert_eq!(stopped["stopped"].as_bool(), Some(true));
+    std::fs::remove_file(tmp.join(browser_mcp::CHECK_STOPPED_FILE)).unwrap();
     // a second try at the site in this turn: refused, the real server never asked
     proxy.handle(go(2, "https://www.decathlon.fr/recherche?q=velo")).await;
     let lines = said(&out);
@@ -2424,6 +2429,97 @@ fn the_looks_verdict() {
     let script = browser_mcp::check_probe_script(browser_mcp::Acted::Selector("form \"x\" button"));
     assert!(script.contains("bipagents-bot-check") && script.contains(r#"d.querySelector("form \"x\" button")"#));
     assert!(browser_mcp::check_probe_script(browser_mcp::Acted::Focused { enter: true }).contains("const submit = true ||"));
+}
+
+/// A fake phone exit hub: answers each line with `answer(line)`, every line kept.
+fn fake_hub(answer: fn(&str) -> &'static str) -> (tempfile::TempDir, PathBuf, Arc<Mutex<Vec<String>>>) {
+    let short = tempfile::Builder::new().prefix("pe").tempdir_in("/tmp").unwrap();
+    let sock = short.path().join("hub.sock");
+    let asked: Arc<Mutex<Vec<String>>> = Arc::default();
+    let listener = tokio::net::UnixListener::bind(&sock).unwrap();
+    let kept = asked.clone();
+    tokio::spawn(async move {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+        loop {
+            let Ok((conn, _)) = listener.accept().await else { return };
+            let (read, mut write) = conn.into_split();
+            let mut line = String::new();
+            let _ = tokio::io::BufReader::new(read).read_line(&mut line).await;
+            kept.lock().unwrap().push(line.trim().to_string());
+            let _ = write.write_all(format!("{}\n", answer(line.trim())).as_bytes()).await;
+        }
+    });
+    (short, sock, asked)
+}
+
+/// Review 2 (B3): the phone's card is asked ONCE per check that stays (never before its moment to clear: one that
+/// clears by itself never asks), then only where the phone stands (`STATE`, never a card); a « Refuser » ends the offer.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_phones_card_once_never_before_the_check_stays_a_refusal_ends_the_offer() {
+    let dir = tempfile::tempdir().unwrap();
+    let tmp = dir.path().to_path_buf();
+    let (_short, sock, asked) = fake_hub(|line| match line.split_whitespace().next() {
+        Some("ASK") => "CARD",
+        Some("STATE") => "NONE", // the person said « Refuser »
+        _ => "NONE",
+    });
+    let mut settings = checking(&tmp, 2.0, 5.0);
+    settings.insert("exit_sock".into(), json!(sock.to_string_lossy()));
+    let out = Out::default();
+    let proxy = Proxy::new(settings, Box::new(out.clone()));
+    proxy.handle(init()).await;
+    // a check that clears by itself: never asked of the phone
+    std::fs::write(tmp.join("page.txt"), INTERSTITIAL).unwrap();
+    let cleared = {
+        let tmp = tmp.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(1000)).await;
+            std::fs::remove_file(tmp.join("page.txt")).unwrap();
+        })
+    };
+    proxy.handle(go(1, "https://www.ameli.fr/assure")).await;
+    cleared.await.unwrap();
+    assert_eq!(said(&out).last().unwrap(), browser_mcp::CHECK_CLEARED);
+    assert!(!asked.lock().unwrap().iter().any(|l| l.starts_with("ASK")), "{:?}", asked.lock().unwrap());
+    // one that stays: one card; refused: the offer ends, never a second card
+    std::fs::write(tmp.join("page.txt"), INTERSTITIAL).unwrap();
+    proxy.handle(go(2, "https://www.decathlon.fr/a")).await;
+    let lines = asked.lock().unwrap().clone();
+    assert_eq!(lines.iter().filter(|l| l.starts_with("ASK")).count(), 1, "{lines:?}");
+    assert_eq!(lines.iter().filter(|l| l.starts_with("STATE")).count(), 1, "asked once, refused: {lines:?}");
+    let last = said(&out).last().unwrap().clone();
+    assert_eq!(last, browser_mcp::check_stop_text("decathlon.fr", "Cloudflare challenge"), "no phone offered any more");
+    proxy.stop_child().await;
+}
+
+/// Review 2 (R11): the hand given back on a form whose box is still not answered: the agent reads so, never « passed ».
+#[tokio::test(flavor = "multi_thread")]
+async fn the_hand_given_back_with_the_forms_box_unanswered_is_said_so() {
+    let dir = tempfile::tempdir().unwrap();
+    let tmp = dir.path().to_path_buf();
+    let out = Out::default();
+    let proxy = Proxy::new(checking(&tmp, 0.0, 20.0), Box::new(out.clone()));
+    proxy.handle(init()).await;
+    std::fs::write(tmp.join("page.txt"), widget_page("recaptcha", 3, 4200, false)).unwrap();
+    proxy.handle(go(1, "https://www.example-shop.fr/contact")).await;
+    std::fs::write(tmp.join("page.txt"), widget_page("recaptcha", 3, 4200, true)).unwrap();
+    let person = {
+        let tmp = tmp.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(800)).await;
+            std::fs::write(tmp.join("hold.token"), "t").unwrap();
+            tokio::time::sleep(Duration::from_millis(1000)).await;
+            std::fs::remove_file(tmp.join("hold.token")).unwrap(); // handed back, the box not answered
+        })
+    };
+    proxy.handle(tool(2, "click_element", json!({"instance_id": "i1", "selector": "form button"}))).await;
+    person.await.unwrap();
+    let text = said(&out)[0].clone();
+    assert!(text.contains("still there after your person handed your browser back"), "{text}");
+    assert!(!text.contains(browser_mcp::CHECK_PASSED), "{text}");
+    // R12: what a captcha on a page read tells the agent is true whatever the click
+    assert!(browser_mcp::check_present_text("reCAPTCHA").contains("ask your person to take over your browser"));
+    proxy.stop_child().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]

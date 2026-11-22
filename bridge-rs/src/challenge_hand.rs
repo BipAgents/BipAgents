@@ -130,8 +130,12 @@ pub fn take(config: &Config, seen: &mut HashMap<(String, String), f64>, now: f64
 pub fn take_lines(config: &Config, seen: &mut HashMap<(String, String), f64>, now: f64) -> Vec<Told> {
     seen.retain(|_, at| now - *at < KEEP_SECONDS);
     let mut out = Vec::new();
-    for agent in config.agents.values() {
-        let path = crate::browsers::folder(config, &agent.name).join(crate::browser_mcp::CHECK_FILE);
+    // the first note of each agent's browser, then the one saying it stopped waiting (a file of its own: review 2)
+    let notes = config.agents.values().flat_map(|agent| {
+        [crate::browser_mcp::CHECK_FILE, crate::browser_mcp::CHECK_STOPPED_FILE]
+            .map(|name| (agent, crate::browsers::folder(config, &agent.name).join(name)))
+    });
+    for (agent, path) in notes {
         let Ok(meta) = path.symlink_metadata() else { continue };
         let note = if meta.is_file() && meta.len() <= NOTE_MAX { std::fs::read_to_string(&path).ok() } else { None };
         let _ = std::fs::remove_file(&path);
@@ -282,7 +286,14 @@ mod tests {
             "Une vérification anti-robots bloque decathlon.fr. Prends la main dans le Bureau de Quotidien pour la \
              passer, ou fais passer decathlon.fr par la connexion de ton téléphone : Quotidien reprendra."
         );
-        // the wait over, nobody came: one more line, no push; once
+        // the wait over, nobody came: one more line, no push; once. Its own file (review 2): both lines when both
+        // notes wait for the bridge
+        let stopped_path = folder.join(crate::browser_mcp::CHECK_STOPPED_FILE);
+        let write = |phone: bool, stopped: bool| {
+            let body = json!({"agent": "daily", "site": "decathlon.fr", "kind": "reCAPTCHA", "at": 1.0,
+                              "phone": phone, "stopped": stopped});
+            std::fs::write(if stopped { &stopped_path } else { &path }, body.to_string()).unwrap();
+        };
         write(true, true);
         let lines = take_lines(&config, &mut seen, 1600.0);
         assert_eq!(lines.len(), 1);
@@ -293,6 +304,11 @@ mod tests {
         );
         write(true, true);
         assert!(take_lines(&config, &mut seen, 1601.0).is_empty());
+        let mut fresh = HashMap::new();
+        write(false, false);
+        write(false, true);
+        let both = take_lines(&config, &mut fresh, 5000.0);
+        assert_eq!(both.iter().map(|t| t.push).collect::<Vec<_>>(), vec![true, false]);
         assert!(stopped_line("en", "Daily", "x.com").1.starts_with("Daily stopped waiting for x.com"));
         assert!(phone_line("en", "Daily", "x.com").1.contains("phone's connection"));
     }

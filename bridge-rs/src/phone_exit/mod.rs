@@ -1051,6 +1051,12 @@ async fn local_stream(state: AppState, conn: tokio::net::UnixStream) {
             };
             let _ = write.write_all(answer.as_bytes()).await;
         }
+        // the browser tool, while it waits for the person: where the phone stands, never a card (antibot-guard review 2)
+        ["STATE", agent, host] => {
+            let (config, a, h) = (state.config(), agent.to_string(), host.to_string());
+            let answer = tokio::task::spawn_blocking(move || agent::state(&config, &a, &h)).await.unwrap_or("NONE");
+            let _ = write.write_all(format!("{answer}\n").as_bytes()).await;
+        }
         // the browser tool: the agent's page is a challenge for servers; its person asked (a card) if possible
         ["ASK", agent, host, reason @ ..] => {
             let (config, a, h, r) = (state.config(), agent.to_string(), host.to_string(), reason.join(" "));

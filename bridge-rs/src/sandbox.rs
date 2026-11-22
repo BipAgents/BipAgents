@@ -747,6 +747,8 @@ pub fn identity_unsafe(args: &mut Vec<String>) -> Vec<String> {
                 None => items.peek().is_some_and(|v| unsafe_cap(v)),
             },
             "--ip" | "--ip6" | "--mac-address" | "--network" | "--net" | "--label" | "-l" | "--label-file" => true,
+            // `-lkey=value`, `-l=key=value`: the short label's other forms (review 2)
+            short if short.starts_with("-l") && !short.starts_with("--") => true,
             _ => false,
         };
         if !bad {
@@ -2331,7 +2333,7 @@ mod tests {
             json!(["--shm-size=2g", "--cap-add=NET_ADMIN", "--privileged", "--cap-add", "net_raw", "--ip", "10.233.80.5",
                    "--cap-add", "CHOWN", "--network=host", "--mac-address=02:00:00:00:00:01", "--cap-add=SYS_ADMIN,CHOWN",
                    "--privileged=false", "--label", "hermes-profile=budget", "-l", "hermes-agent=1",
-                   "--label=hermes-profile=x", "--label-file=/tmp/l"]),
+                   "--label=hermes-profile=x", "--label-file=/tmp/l", "-lhermes-profile=y", "-l=hermes-agent=1"]),
         );
         let wanted = wanted_terminal(&config, "vie", &risky, Net::Registries("http://10.233.80.2:3128"), &reads);
         assert_eq!(

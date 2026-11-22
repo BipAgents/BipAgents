@@ -73,6 +73,26 @@ pub fn ask(config: &Config, agent: &str, raw: &str, reason: &str) -> std::io::Re
     })
 }
 
+/// Where the phone stands for `agent` and the site of `raw`, asked without ever making a card (antibot-guard review 2,
+/// B3: the browser's wait for the person's hand asked again with `ask`, which made a new card and notification after
+/// each « Refuser »): « LIVE » (a session covers it), « WAITING » (its card waits), else « NONE » (refused, gone, or
+/// never asked).
+pub fn state(config: &Config, agent: &str, raw: &str) -> &'static str {
+    if !config.phone_exit.enabled {
+        return "NONE";
+    }
+    let Ok(site) = super::checks::site_of(raw) else { return "NONE" };
+    let store = store::load(config);
+    if store.session_for(agent, &site).is_some() {
+        return "LIVE";
+    }
+    let now = py::time_time();
+    if store.cards.iter().any(|c| c.agent == agent && c.site == site && now - c.at < store::CARD_TTL) {
+        return "WAITING";
+    }
+    "NONE"
+}
+
 /// The person answered card `id`: `once`, `always` (the site set to « Toujours ») or `deny`. Some(Some(session)):
 /// the session the phone now carries (a live one covering the site is reused); Some(None): refused; None: no such
 /// card (answered already, or gone).

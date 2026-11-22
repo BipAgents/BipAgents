@@ -303,6 +303,31 @@ def test_a_challenge_page_asks_the_person(bridges):
     assert asyncio.run(more()) == ("NO never", "LIVE")
 
 
+def test_the_browser_asks_where_the_phone_stands_without_ever_making_a_card(bridges):
+    """antibot-guard review 2 (B3): while the browser waits for the person's hand on a bot check, it asks the hub where
+    the phone stands (`STATE`), never `ASK` again: no new card nor notification after a « Refuser »; « LIVE » once a
+    session covers the site."""
+    bridge = exit_bridge(bridges)
+
+    async def asked():
+        return [await hub_line(sock(bridge), "STATE wellness www.blocked.example"),
+                await hub_line(sock(bridge), "ASK wellness www.blocked.example reCAPTCHA"),
+                await hub_line(sock(bridge), "STATE wellness www.blocked.example")]
+
+    assert asyncio.run(asked()) == ["NONE", "CARD", "WAITING"]
+    [card] = cards(bridge)
+    no = bridge.post("/v1/approve", headers=AUTH, json={"agent": "wellness", "run_id": card["run_id"], "choice": "deny"})
+    assert no.status_code == 200, no.text
+
+    async def after():
+        return [await hub_line(sock(bridge), "STATE wellness www.blocked.example") for _ in range(3)]
+
+    assert asyncio.run(after()) == ["NONE"] * 3
+    assert cards(bridge) == [], "never a card again"
+    start_session(bridge, ["live.example"])
+    assert asyncio.run(hub_line(sock(bridge), "STATE wellness www.live.example")) == "LIVE"
+
+
 def test_the_phone_has_the_last_word_and_the_server_name_must_match(bridges):
     bridge = exit_bridge(bridges)
     session = start_session(bridge)

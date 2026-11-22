@@ -254,6 +254,9 @@ pub fn probe_verdict(text: &str) -> Option<Verdict> {
 
 /// Beside `busy`: a check handed to the person, for the bridge (challenge_hand.rs): `{agent, site, kind, at}`.
 pub const CHECK_FILE: &str = "challenge.json";
+/// Beside it: the agent stopped waiting for the person's hand (its own file: never in place of a first note the bridge
+/// hasn't read yet, review 2).
+pub const CHECK_STOPPED_FILE: &str = "challenge-stopped.json";
 /// How long the call waits for the person's hand: `hand_wait_seconds` of the settings (`proxy_config` writes it with
 /// Hermes' `PROXIED_TIMEOUT`), else `HAND_WAIT_UNSET`, under the 120 s Hermes gave the browser before.
 pub const HAND_WAIT_SECONDS: u64 = 600;
@@ -311,8 +314,8 @@ pub fn check_site(host: &str) -> String {
 /// A widget on a page the agent only reads (review 1 B1): said, nothing handed over.
 pub fn check_present_text(kind: &str) -> String {
     format!(
-        "A captcha ({kind}) is on this page: never answer it yourself. If you send the form it guards, your person is \
-         asked to take over your browser to pass it."
+        "A captcha ({kind}) is on this page: never answer it yourself. To send the form it guards, ask your person to \
+         take over your browser (« Prendre la main ») and pass it."
     )
 }
 
@@ -4216,15 +4219,6 @@ impl Proxy {
         probing: bool,
         acted: Acted<'_>,
     ) -> Option<Vec<String>> {
-        // the phone exit, when on here: its card for the site (the person decides), offered beside the hand
-        let mut phone = None;
-        if let Some((sock, agent)) = exit {
-            if let Some(answer) = ask_hub(sock, &format!("ASK {agent} {host} {kind}")).await {
-                if matches!(answer.split_whitespace().next(), Some("CARD" | "WAITING")) {
-                    phone = Some((sock.clone(), agent.clone()));
-                }
-            }
-        }
         if probing {
             // only a check that stays is handed over; looked at every few seconds, not more (review 1 R2: each look
             // reaches the page through DevTools while nodriver gets past the check)
@@ -4245,7 +4239,17 @@ impl Proxy {
                 }
             }
         }
-        Some(self.hand_over(instance, host, site, kind, probing, phone).await)
+        // still there: the phone exit, when on here, gets ONE card for it (the person decides), offered beside the
+        // hand; never before the check had its moment to clear (review 2, B3)
+        let mut phone = None;
+        if let Some((sock, agent)) = exit {
+            if let Some(answer) = ask_hub(sock, &format!("ASK {agent} {host} {kind}")).await {
+                if matches!(answer.split_whitespace().next(), Some("CARD" | "WAITING")) {
+                    phone = Some((sock.clone(), agent.clone()));
+                }
+            }
+        }
+        Some(self.hand_over(instance, host, site, kind, probing, phone, acted).await)
     }
 
     /// The guard's look at the page for a check (`check_probe_script`): its verdict, None when the page can't be asked.
@@ -4275,6 +4279,7 @@ impl Proxy {
     /// for what is left of Hermes' time (`hand_wait_left`); then what the agent does, and, when nobody came, the bridge
     /// told again (`stopped`: the Boîte says the agent stopped waiting). A task's own browser: nobody to hand it to,
     /// the stop at once.
+    #[allow(clippy::too_many_arguments)]
     async fn hand_over(
         &self,
         instance: &str,
@@ -4283,23 +4288,28 @@ impl Proxy {
         kind: &str,
         probing: bool,
         phone: Option<(String, String)>,
+        acted: Acted<'_>,
     ) -> Vec<String> {
+        let mut phone = phone;
         let now = crate::py::time_time();
         self.checked.lock().unwrap_or_else(|e| e.into_inner()).insert(site.to_string(), (now, kind.to_string()));
         if self.config.contains_key("task") {
             log(&format!("a bot check on {site} ({kind}) still blocks a task's browser: the agent stops there"));
             return vec![check_task_text(site, kind)];
         }
-        let stop = || if phone.is_some() { check_stop_phone_text(site, kind) } else { check_stop_text(site, kind) };
+        let offered = phone.is_some();
+        // the phone still offered (not refused meanwhile) or not
+        let stop = |phone: bool| if phone { check_stop_phone_text(site, kind) } else { check_stop_text(site, kind) };
         let busy = self.config.get("busy").and_then(Value::as_str).filter(|p| !p.is_empty()).map(PathBuf::from);
         let Some(folder) = busy.as_ref().and_then(|b| b.parent()).map(Path::to_path_buf) else {
-            return vec![stop()];
+            return vec![stop(offered)];
         };
         let agent = self.config.get("agent").and_then(Value::as_str).unwrap_or("");
         let note = |stopped: bool| {
             let note = json!({"agent": agent, "site": site, "kind": kind, "at": crate::py::time_time(),
-                              "phone": phone.is_some(), "stopped": stopped});
-            let (file, part) = (folder.join(CHECK_FILE), folder.join(format!("{CHECK_FILE}.part")));
+                              "phone": offered, "stopped": stopped});
+            let name = if stopped { CHECK_STOPPED_FILE } else { CHECK_FILE };
+            let (file, part) = (folder.join(name), folder.join(format!("{name}.part")));
             if std::fs::write(&part, format!("{note}\n")).and_then(|_| std::fs::rename(&part, &file)).is_err() {
                 log("a bot check's note for the bridge could not be written");
             }
@@ -4315,9 +4325,10 @@ impl Proxy {
             if hold.exists() {
                 held = true;
             } else if held {
-                // handed back: the page looked at again
+                // handed back: the page looked at again, for what the agent did (its form's box answered or not:
+                // review 2, R11)
                 let still = if probing {
-                    matches!(self.check_probe(instance, Acted::Nothing).await, Some(Verdict::Blocking(_)))
+                    matches!(self.check_probe(instance, acted).await, Some(Verdict::Blocking(_)))
                 } else {
                     false
                 };
@@ -4329,15 +4340,21 @@ impl Proxy {
                 self.checked.lock().unwrap_or_else(|e| e.into_inner()).remove(site);
                 break vec![CHECK_PASSED.to_string()];
             }
-            // their phone's connection chosen (the hub's card accepted): the agent reloads the page
+            // their phone's connection chosen (the hub's card accepted): the agent reloads the page. Asked where the
+            // phone stands (`STATE`), never with a new card (review 2, B3); their « Refuser » ends the offer
             looks += 1;
             if let Some((sock, agent)) = phone.as_ref().filter(|_| !held && looks.is_multiple_of(PHONE_LOOK_EVERY)) {
-                if let Some(answer) = ask_hub(sock, &format!("ASK {agent} {host} {kind}")).await {
-                    if answer.split_whitespace().next() == Some("LIVE") {
+                match ask_hub(sock, &format!("STATE {agent} {host}")).await.as_deref().map(str::trim) {
+                    Some("LIVE") => {
                         log(&format!("{site} goes through the person's phone now: the agent reloads its page"));
                         self.checked.lock().unwrap_or_else(|e| e.into_inner()).remove(site);
                         break vec![check_phone_text(site)];
                     }
+                    Some("NONE") => {
+                        log(&format!("the phone's card for {site} refused or gone: only the hand now"));
+                        phone = None;
+                    }
+                    _ => {}
                 }
             }
             if crate::py::monotonic() >= deadline {
@@ -4346,7 +4363,7 @@ impl Proxy {
                 }
                 // nobody came in time: the Boîte says the agent stopped waiting (« reprendra » no longer true)
                 note(true);
-                break vec![stop()];
+                break vec![stop(phone.is_some())];
             }
             if self.in_flight_cancelled() {
                 break Vec::new();
