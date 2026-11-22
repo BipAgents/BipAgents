@@ -500,6 +500,12 @@ pub fn diet(kind: &str, bridge_tools: &[String], browser: bool, holds_vault_item
         if bridge_tools.iter().any(|t| t == crate::give_file::TOOL_NAME) {
             add(&format!("!{BRIDGE_PREFIX}{}", crate::give_file::TOOL_NAME));
         }
+        // a plan or an offer to act it may suggest on its own (agent_proactive.rs `PROPOSING_TOOLS`), whatever the
+        // kind, listed only while its « Initiative » is not off: behind the search, what it was never asked for would
+        // never be suggested
+        for name in crate::agent_proactive::PROPOSING_TOOLS.iter().filter(|n| bridge_tools.iter().any(|t| t == *n)) {
+            add(&format!("!{BRIDGE_PREFIX}{name}"));
+        }
         // maps (maps.rs), whatever the kind: behind the search, asked for « une carte », the agent made a picture or a
         // page with coordinates of its own, which fell in the sea (2026-10-31)
         if bridge_tools.iter().any(|t| t == crate::maps::TOOL_NAME) {
@@ -545,7 +551,7 @@ pub fn fits(tool: &Value, arguments: &crate::Dict) -> bool {
 /// Tools that act or propose a card for the person: a call with another tool's arguments is never run as that other
 /// tool when either is one of these (2026-10-30 bench, DeepSeek: `propose_task` written with `propose_agent`'s
 /// arguments made an agent card). The call then fails on its own tool's arguments and the model calls the right one.
-pub const NEVER_REROUTED: [&str; 10] = [
+pub const NEVER_REROUTED: [&str; 11] = [
     "propose_agent",
     "propose_team",
     "propose_room",
@@ -556,6 +562,8 @@ pub const NEVER_REROUTED: [&str; 10] = [
     "propose_task",
     "start_task",
     "tell_family",
+    // « arrête de me proposer des choses » (agent_proactive.rs): it turns the agent's « Initiative » off
+    crate::agent_proactive::OFF_TOOL,
 ];
 
 /// The tool a call was meant for, among `tools`: `name` when its arguments fit it (or fit nothing better), else the
@@ -810,6 +818,20 @@ mod tests {
 
     fn names(list: &[&str]) -> Vec<String> {
         list.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn the_proposing_tools_are_in_view_while_listed_and_the_off_switch_stays_behind_the_search() {
+        let with =
+            diet("custom", &names(&["plan_propose", "offer_act", "proactive_off", "create_page"]), false, false, false);
+        for name in crate::agent_proactive::PROPOSING_TOOLS {
+            assert!(with.defer.contains(&format!("!{BRIDGE_PREFIX}{name}")), "{name} behind the search");
+        }
+        // rare: « arrête de me proposer des choses » costs nothing on a usual call
+        assert!(!with.defer.contains(&format!("!{BRIDGE_PREFIX}{}", crate::agent_proactive::OFF_TOOL)));
+        // off: not listed (agent_proactive.rs `keep_tools`), so nothing of them in view
+        let off = diet("custom", &names(&["proactive_off", "create_page"]), false, false, false);
+        assert!(!off.defer.iter().any(|d| d.contains("plan_propose") || d.contains("offer_act")));
     }
 
     #[test]

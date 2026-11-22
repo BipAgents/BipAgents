@@ -17,7 +17,12 @@
 //! - **what lands**: [`Pipeline::deliver`]: the agent's own message stays where it wrote it, one journal row pointing
 //!   at it (pushed by the « Me prévenir » rules unless on screen), the files of the work attached to it as items
 //!   (`Threads::attach`); a message the bridge writes instead (a template, a watcher's words) is a Boîte message in
-//!   that thread.
+//!   that thread; urgent ([`Pipeline::deliver_urgent`]: a watcher's URGENT message) at the system's urgent level;
+//! - **« une ligne pour dire, une carte pour décider »** (Alex 22/11, Q9; proactive agents §2.3, whatever the agent's
+//!   « Initiative »): a routine's, a watcher's or a trigger's turn reads [`LINE_RULE`]: news or a reminder in one
+//!   short line, never a question left for the person to answer there (the cards to decide come with the offers);
+//! - **never twice the same report** ([`same_report`]): the same words told again in the same conversation within
+//!   [`SAME_REPORT_SECONDS`] (two starters, a resumed turn) are not delivered again.
 //!
 //! No Python counterpart.
 
@@ -67,6 +72,64 @@ pub fn is_silent(text: &str) -> bool {
         && inner.chars().all(|c| c.is_alphanumeric() || matches!(c, ' ' | '_' | '-' | '.' | '!' | '\'' | '’'))
 }
 
+/// What a turn whose person is not there to answer reads (`Kind::reports_alone`), at the end of the starter's hidden
+/// note: the same words every run. « Une ligne pour dire, une carte pour décider »: the offers bring the cards to decide.
+pub const LINE_RULE: &str = "Your person is not in this conversation now: nobody answers here. Tell them plainly what \
+they asked for; a reminder or a piece of news is one short line. Never end with a question for them to answer here \
+(« Do you want me to…? »).";
+
+/// `prompt` as the turn reads it: for a turn whose person is not there (a routine's, a watcher's, a trigger's),
+/// [`LINE_RULE`] closes the starter's hidden note (one note: what it quotes can't close it), or a note of its own.
+pub fn with_line_rule(kind: Kind, prompt: &str) -> String {
+    if !kind.reports_alone() || prompt.contains(LINE_RULE) {
+        return prompt.to_string();
+    }
+    let body = prompt.trim_end();
+    match body.strip_suffix("-->") {
+        Some(open) if open.contains("<!--bip:") => format!("{}\n{LINE_RULE}\n-->", open.trim_end()),
+        _ => format!("{prompt}\n<!--bip:tell\n{LINE_RULE}\n-->"),
+    }
+}
+
+/// How long the same words told in one conversation are not told again (`same_report`): two starters telling the same
+/// thing, a turn resumed after a card. An hourly reminder is further apart.
+pub const SAME_REPORT_SECONDS: f64 = 30.0 * 60.0;
+
+/// The words last told in each conversation of each agent: (the place's data folder, agent, session) → (their
+/// fingerprint, when).
+type Told = std::collections::HashMap<(String, String, String), (u64, f64)>;
+static TOLD: std::sync::LazyLock<std::sync::Mutex<Told>> = std::sync::LazyLock::new(Default::default);
+
+/// The words as compared: lower case, white space collapsed, notes left out.
+fn fingerprint(text: &str) -> u64 {
+    let words: Vec<String> = tk::strip(text).split_whitespace().map(str::to_lowercase).collect();
+    let mut hash: u64 = 0xcbf29ce484222325;
+    for byte in words.join(" ").bytes() {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    hash
+}
+
+/// Whether `text` is what `agent` of the place whose data is in `place` last told in `session` less than
+/// `SAME_REPORT_SECONDS` before `now` (« pas deux fois le même rapport »); else it is noted as the last told there.
+pub fn same_report(place: &str, agent: &str, session: &str, text: &str, now: f64) -> bool {
+    if text.trim().is_empty() {
+        return false;
+    }
+    let print = fingerprint(text);
+    let mut told = TOLD.lock().unwrap_or_else(|e| e.into_inner());
+    if told.len() > 512 {
+        told.retain(|_, (_, at)| now - *at < SAME_REPORT_SECONDS);
+    }
+    let key = (place.to_string(), agent.to_string(), session.to_string());
+    if told.get(&key).is_some_and(|(last, at)| *last == print && now - *at < SAME_REPORT_SECONDS) {
+        return true;
+    }
+    told.insert(key, (print, now));
+    false
+}
+
 /// What a starter is (its credit rule, the brake's limits, the logs).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
@@ -107,6 +170,12 @@ impl Kind {
     /// A routine started by an event waits while the agent runs anything else (triggers.rs: one at a time).
     fn waits_for_agent(self) -> bool {
         self == Kind::Trigger
+    }
+
+    /// A turn whose person is not there to answer, telling them what it found (`LINE_RULE`): a routine's, a
+    /// watcher's, a trigger's. A task's report, a hand-back, a card's answer or the turn after a call are not.
+    pub fn reports_alone(self) -> bool {
+        matches!(self, Kind::Routine | Kind::Watcher | Kind::Trigger)
     }
 
     /// The brake's higher limits for long work (loop_brake.rs).
@@ -358,7 +427,8 @@ impl Pipeline {
         }
         let agent = &turn.agent;
         let session = self.wait_idle(turn).await?;
-        let text = crate::dates::now::stamped(&self.config.get(), agent, &turn.prompt);
+        let prompt = with_line_rule(turn.kind, &turn.prompt);
+        let text = crate::dates::now::stamped(&self.config.get(), agent, &prompt);
         let run_id = self.hermes.start_run_with(agent, &text, &session, None, turn.options.clone()).await.map_err(
             |e| match e {
                 HermesError::Http { status: 404 | 410, .. } => NotRun::Gone,
@@ -522,7 +592,25 @@ impl Pipeline {
 
     /// The result in its thread (see the module's doc). False when nothing could be put there.
     pub async fn deliver(&self, d: &Delivery) -> bool {
+        self.deliver_as(d, false).await
+    }
+
+    /// `deliver`, pushed at the system's urgent level (a watcher's URGENT message, later a plan's urgent moment):
+    /// time-sensitive on the iPhone, Android's « Urgent » channel. Only a Boîte message (the bridge's words) is: the
+    /// agent's own reply goes as `deliver`. No quiet hours of ours: the phone's Do Not Disturb and Focus decide.
+    pub async fn deliver_urgent(&self, d: &Delivery) -> bool {
+        self.deliver_as(d, true).await
+    }
+
+    async fn deliver_as(&self, d: &Delivery, urgent: bool) -> bool {
         let agent = &d.agent;
+        // the same words just told in this conversation: there again, never pushed twice
+        let repeat = same_report(&self.config.get().data_dir(), &agent.name, &d.session, &d.text, py::time_time());
+        if repeat && d.notify {
+            tracing::info!(target: "bipbridge::background_turn", agent = %agent.name, key = %d.key,
+                "the same report as just told in this conversation: not pushed again");
+        }
+        let notify = d.notify && !repeat;
         if d.as_written {
             if let (Some(threads), false) = (self.threads(), d.files.is_empty()) {
                 let wait = self.config.get().push_message_wait_seconds;
@@ -532,7 +620,7 @@ impl Pipeline {
                         session = %d.session, "the work's files not attached: its message not found"),
                 }
             }
-            if let (true, Some(push)) = (d.notify, &self.push) {
+            if let (true, Some(push)) = (notify, &self.push) {
                 let run = d.run_id.clone().unwrap_or_else(|| format!("session:{}", d.session));
                 push.notify_reply(&agent.name, &run, &d.text, Some(&d.session)).await;
             } else if let Some(threads) = self.threads() {
@@ -547,8 +635,9 @@ impl Pipeline {
             files: d.files.clone(),
             title: Some(d.title.clone()),
             session_id: Some(d.session.clone()),
+            urgent: urgent && notify,
         };
-        match outbox.ingest(agent, message, d.notify).await {
+        match outbox.ingest(agent, message, notify).await {
             Ok(_) => true,
             Err(err) => {
                 tracing::warn!(target: "bipbridge::background_turn", agent = %agent.name, key = %d.key,
@@ -587,6 +676,78 @@ mod tests {
         }
         // the note's words: the code word itself, the same text every run (the prompt cache)
         assert!(SILENT_RULE.contains(SILENT) && SILENT_RULE.contains("never translated"));
+    }
+
+    #[test]
+    fn a_turn_without_the_person_tells_in_one_line_and_asks_nothing_there() {
+        let note = "Vérifie mes e-mails.\n\n<!--bip:routine\nThis is your routine « Mails ».\n-->";
+        for kind in [Kind::Routine, Kind::Watcher, Kind::Trigger] {
+            let read = with_line_rule(kind, note);
+            // inside the starter's one note, which it closes: what the note quotes can't close it
+            assert_eq!(
+                read,
+                format!("Vérifie mes e-mails.\n\n<!--bip:routine\nThis is your routine « Mails ».\n{LINE_RULE}\n-->"),
+            );
+            assert_eq!(read.matches("-->").count(), 1, "{kind:?}");
+            assert_eq!(with_line_rule(kind, &read), read, "{kind:?}: once");
+        }
+        // no note of its own: one, hidden
+        assert_eq!(with_line_rule(Kind::Routine, "Météo"), format!("Météo\n<!--bip:tell\n{LINE_RULE}\n-->"));
+        // the person asked for that work, or is there: their turn's words as they are
+        for kind in [Kind::Task, Kind::Handback, Kind::Card, Kind::AfterCall] {
+            assert_eq!(with_line_rule(kind, note), note, "{kind:?}");
+        }
+        // the same words every run, in English
+        assert!(LINE_RULE.contains("one short line") && LINE_RULE.contains("Never end with a question"));
+        assert!(!LINE_RULE.contains("-->") && !LINE_RULE.contains("<!--"));
+    }
+
+    #[test]
+    fn the_same_report_is_never_pushed_twice_in_one_conversation() {
+        let (place, other_place) = ("/data/a", "/data/b");
+        let t = 1_800_000_000.0;
+        assert!(!same_report(place, "vie", "s1", "Le prix est passé à 1 199 €.", t));
+        // the same words (case and spaces aside) in the same conversation, minutes later: a repeat
+        assert!(same_report(place, "vie", "s1", "le prix est passé  à 1 199 €.", t + 120.0));
+        // another conversation, another agent, another place, other words: not one
+        assert!(!same_report(place, "vie", "s2", "Le prix est passé à 1 199 €.", t + 130.0));
+        assert!(!same_report(place, "budget", "s1", "Le prix est passé à 1 199 €.", t + 140.0));
+        assert!(!same_report(other_place, "vie", "s1", "Le prix est passé à 1 199 €.", t + 150.0));
+        assert!(!same_report(place, "vie", "s1", "Le prix est passé à 1 149 €.", t + 160.0));
+        // an hourly reminder is told every hour
+        assert!(!same_report(place, "vie", "s3", "Bois un verre d'eau.", t));
+        assert!(!same_report(place, "vie", "s3", "Bois un verre d'eau.", t + 3600.0));
+        assert!(!same_report(place, "vie", "s4", "  ", t) && !same_report(place, "vie", "s4", "  ", t + 1.0));
+    }
+
+    /// No quiet hours of ours (Alex 22/11, Q2): the phone's Do Not Disturb and Focus decide. The Carnet's quiet hours
+    /// hold only its own cards and the feature tips (neither is a notification of an agent's work).
+    #[test]
+    fn nothing_of_ours_holds_a_notification_at_night() {
+        let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut callers = Vec::new();
+        let mut folders = vec![src.clone()];
+        while let Some(folder) = folders.pop() {
+            for entry in std::fs::read_dir(&folder).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    folders.push(path);
+                } else if path.extension().is_some_and(|e| e == "rs") {
+                    let text = std::fs::read_to_string(&path).unwrap();
+                    // (the words split, so this test is not one of them)
+                    if text.contains(concat!("ask::is", "_quiet(")) || text.contains(concat!("quiet", "_hours(")) {
+                        callers.push(path.strip_prefix(&src).unwrap().to_string_lossy().into_owned());
+                    }
+                }
+            }
+        }
+        callers.sort();
+        assert_eq!(callers, ["feature_tips.rs", "notebook/api.rs", "notebook/ask.rs"]);
+        // and nothing on the way of a push reads the hour
+        for file in ["push.rs", "outbox.rs", "notifications.rs", "push_runs/notices.rs", "apns.rs", "fcm.rs"] {
+            let text = std::fs::read_to_string(src.join(file)).unwrap();
+            assert!(!text.contains("Timelike") && !text.contains(".hour()"), "{file} reads the hour");
+        }
     }
 
     #[test]

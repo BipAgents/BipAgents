@@ -43,8 +43,16 @@ pub struct Pointer {
 #[serde(tag = "fn", content = "args", deny_unknown_fields)]
 pub enum Notice {
     /// A Boîte message (outbox): routine report, watcher, hand-back outside the main thread, credit, storage, imports.
+    /// `urgent`: a watcher's URGENT message (later a plan's urgent moment): time-sensitive on the iPhone, Android's
+    /// « Urgent » channel (contracts/proactive/cases.json `urgent`).
     #[serde(rename = "notify_message")]
-    Message { outbox_id: String, text: String, session_id: Option<String> },
+    Message {
+        outbox_id: String,
+        text: String,
+        session_id: Option<String>,
+        #[serde(default)]
+        urgent: bool,
+    },
     /// An approval Hermes waits for (`room_id`: a group discussion's turn).
     #[serde(rename = "notify_approval_values")]
     Approval {
@@ -177,11 +185,16 @@ impl Notice {
     /// pointed).
     pub fn event(&self, agent: &str, context: &Context) -> Option<Event> {
         let event = match self {
-            Notice::Message { outbox_id, text, session_id } => {
+            Notice::Message { outbox_id, text, session_id, urgent } => {
                 let mut event =
                     Event::new(agent, Kind::Boite, outbox_id).session(opt(session_id)).reference(outbox_id);
                 event.shown = Some(text.clone());
                 event.message = Some(format!("o_{outbox_id}"));
+                if *urgent {
+                    // the system's urgent level (Alex 22/11, Q3 A): the phone's Do Not Disturb and Focus still decide
+                    event = event.with("urgent", json!(1));
+                    event.aps.insert("interruption-level".into(), json!("time-sensitive"));
+                }
                 event
             }
             Notice::Approval { run_id, request_id, choices, command, session_id, room_id } => {
