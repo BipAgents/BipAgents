@@ -1032,6 +1032,29 @@ mod tests {
         assert!(all.contains("Impôts 2026.md") && all.contains("Budget 2026.xlsx"), "{all}");
     }
 
+    /// Review 2 of S3, B4: a line's `source` is its section's title, as written: a reference in it is masked too.
+    #[test]
+    fn a_reference_in_a_sections_title_never_reaches_the_copy() {
+        let (_d, config) = config();
+        page(&config, Part::Main, "Sujets/Papiers.md", "---\nid: p0000000009\ntype: subject\n---\n# Papiers\n\n## Passeport 18AB12345\n- Expire en 2031\n");
+        let items = entries(&config, &[]);
+        let all = serde_json::to_string(&items.iter().map(sent).collect::<Vec<_>>()).unwrap();
+        assert!(!all.contains("18AB12345"), "{all}");
+        let line = items.iter().find(|e| e.line == "Expire en 2031").unwrap();
+        assert_eq!(line.source.as_deref(), Some("Passeport …"));
+    }
+
+    /// Review 2 of S3: a file's extension is set aside in a path or a file's name only, never in a line's words (« le
+    /// code 12345.AB1 » holds a reference); only a real file's extension.
+    #[test]
+    fn an_extension_hides_no_reference() {
+        assert!(reference("Code client 12345.AB1"));
+        assert!(named_reference("Dossier 12345.AB1"));
+        assert!(!named_reference("Budget 2026.xlsx") && !named_reference("Sujets/Impôts 2026.md"));
+        assert!(named_reference("Facture FR-2026-00123.pdf"));
+        assert!(!reference("Voir le devis.pdf"));
+    }
+
     /// Review 1 of S3, B3: a page's items are kept by what the page says, never by its file's size and time alone
     /// (an agent's write or « Oublie ça » between the read and the look at the file left the old line in the copy).
     #[test]
