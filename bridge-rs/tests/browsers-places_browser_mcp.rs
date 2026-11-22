@@ -704,22 +704,25 @@ characters of this page. To read on, run execute_script with: "
     assert_eq!(out.messages().last().unwrap()["result"]["content"][0]["text"], "did navigate");
     let seen = calls(tmp);
     assert_eq!(seen[0]["arguments"]["wait_until"], json!("domcontentloaded"));
-    let states: Vec<_> = seen[1..].iter().map(|c| c["arguments"]["script"].as_str().unwrap()).collect();
+    let states: Vec<_> = seen[1..seen.len() - 1].iter().map(|c| c["arguments"]["script"].as_str().unwrap()).collect();
     assert_eq!(states, ["document.readyState"; 3], "loading, interactive, complete");
+    // then one look at the loaded page for a bot check that still blocks (antibot-guard): none here
+    assert!(seen.last().unwrap()["arguments"]["script"].as_str().unwrap().contains("bipagents-bot-check"));
     // a click too; a call without an instance waits for nothing
     std::fs::remove_file(tmp.join("calls.jsonl")).unwrap();
     proxy.handle(tool(4, "click_element", json!({"instance_id": "319ceedb", "selector": "a"}))).await;
     // what the target is (never the site's terms box), the page's fingerprints before (browser_mcp `guard_before`),
-    // the click, the page's state, then the check after it (`guard_after`)
-    assert_eq!(calls(tmp).len(), 5);
+    // the click, the page's state, the check after it (`guard_after`), then the look for a bot check
+    assert_eq!(calls(tmp).len(), 6);
     assert!(calls(tmp)[0]["arguments"]["script"].as_str().unwrap().contains("found: true"));
     assert!(calls(tmp)[1]["arguments"]["script"].as_str().unwrap().contains("bipagents guard: before"));
     assert_eq!(calls(tmp)[2]["arguments"]["timeout"], json!(3000), "3 s to find it, not the real server's 10");
     assert!(calls(tmp)[4]["arguments"]["script"].as_str().unwrap().contains("bipagents guard: after"));
+    assert!(calls(tmp)[5]["arguments"]["script"].as_str().unwrap().contains("bipagents-bot-check"));
     proxy.handle(tool(5, "list_tabs", json!({"instance_id": "319ceedb"}))).await;
     proxy.handle(tool(6, "click_element", json!({"selector": "a", "timeout": 8000}))).await;
-    assert_eq!(calls(tmp).len(), 7);
-    assert_eq!(calls(tmp)[6]["arguments"]["timeout"], json!(8000), "the agent's own time kept");
+    assert_eq!(calls(tmp).len(), 8);
+    assert_eq!(calls(tmp)[7]["arguments"]["timeout"], json!(8000), "the agent's own time kept");
 
     // a screenshot: an image block, the agent's path never passed on (it would land in the container)
     std::fs::remove_file(tmp.join("calls.jsonl")).unwrap();
@@ -1988,4 +1991,278 @@ async fn review8_a_call_cancelled_while_its_browser_starts_never_reaches_the_rea
         !received.contains("navigate"),
         "the cancelled call still reached the real server once its browser had started: {received:?} {messages:?}"
     );
+}
+
+// --- a bot check that still blocks: handed to the person (antibot-guard, 22/11) -----------------------------------
+
+/// The real server for bot checks: `navigate` answers its address and a title, `document.readyState` « complete »,
+/// the guard's look at the page (`browser_mcp::CHECK_PROBE`) the text of `page.txt` beside it (an ordinary page
+/// when there is none); every call written to `calls.jsonl`.
+const CHECK_SERVER: &str = r#"
+import json, os, sys
+here = os.path.dirname(os.path.abspath(__file__))
+for line in sys.stdin:
+    m = json.loads(line)
+    if "id" not in m:
+        continue
+    if m["method"] == "initialize":
+        r = {"protocolVersion": m["params"]["protocolVersion"], "capabilities": {"tools": {}},
+             "serverInfo": {"name": "stealth", "version": "1"}}
+    elif m["method"] == "tools/list":
+        r = {"tools": []}
+    else:
+        name, args = m["params"]["name"], m["params"].get("arguments", {})
+        with open(os.path.join(here, "calls.jsonl"), "a") as f:
+            f.write(json.dumps({"name": name, "arguments": args}) + "\n")
+        script = args.get("script", "")
+        if name == "execute_script" and script == "document.readyState":
+            answer = {"success": True, "result": "complete", "error": None}
+            r = {"content": [{"type": "text", "text": json.dumps(answer)}], "structuredContent": answer}
+        elif name == "execute_script" and "bipagents-bot-check" in script:
+            path = os.path.join(here, "page.txt")
+            page = open(path).read() if os.path.exists(path) else "<title>Accueil</title> Nos vélos"
+            answer = {"success": True, "result": page, "error": None}
+            r = {"content": [{"type": "text", "text": json.dumps(answer)}], "structuredContent": answer}
+        elif name == "navigate":
+            r = {"content": [{"type": "text", "text": json.dumps({"url": args.get("url"), "title": "page"})}]}
+        else:
+            r = {"content": [{"type": "text", "text": "did " + name}]}
+    print(json.dumps({"jsonrpc": "2.0", "id": m["id"], "result": r}), flush=True)
+"#;
+
+const INTERSTITIAL: &str = "<title>Just a moment...</title> Vérification que vous êtes un humain";
+
+fn checking(tmp: &Path, clear: f64, wait: f64) -> Dict {
+    std::fs::write(tmp.join("checks.py"), CHECK_SERVER).unwrap();
+    let mut settings = config(tmp);
+    settings.insert("server".into(), json!([python(), tmp.join("checks.py").to_string_lossy()]));
+    settings.insert("agent".into(), json!("vie"));
+    settings.insert("challenge_clear_seconds".into(), json!(clear));
+    settings.insert("hand_wait_seconds".into(), json!(wait));
+    settings
+}
+
+fn go(id: i64, url: &str) -> Value {
+    tool(id, "navigate", json!({"instance_id": "i1", "url": url}))
+}
+
+fn said(out: &Out) -> Vec<String> {
+    let last = out.messages().last().unwrap().clone();
+    assert_eq!(last["result"].get("isError"), None, "never an error (Hermes' breaker): {last}");
+    last["result"]["content"].as_array().unwrap().iter().map(|c| c["text"].as_str().unwrap_or("").to_string()).collect()
+}
+
+fn navigations(tmp: &Path) -> Vec<String> {
+    calls(tmp)
+        .iter()
+        .filter(|c| c["name"] == "navigate")
+        .map(|c| c["arguments"]["url"].as_str().unwrap_or("").to_string())
+        .collect()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_bot_check_that_stays_is_handed_to_the_person_and_its_site_is_not_opened_again() {
+    // Decathlon, 22/11 (passation-pro/briefs/enquete-antibot-1122.md §3): without the phone exit nothing was said,
+    // and nothing stopped a second try
+    let dir = tempfile::tempdir().unwrap();
+    let tmp = dir.path();
+    std::fs::write(tmp.join("page.txt"), INTERSTITIAL).unwrap();
+    let out = Out::default();
+    let proxy = Proxy::new(checking(tmp, 1.0, 2.0), Box::new(out.clone()));
+    proxy.handle(init()).await;
+    proxy.handle(go(1, "https://www.decathlon.fr/p/velo-st-100")).await;
+    let lines = said(&out);
+    assert_eq!(lines.len(), 2, "{lines:?}");
+    let stop = &lines[1];
+    assert!(stop.starts_with(browser_mcp::CHECK_STOP_START), "{stop}");
+    assert!(stop.contains("decathlon.fr") && stop.contains("Cloudflare challenge"), "{stop}");
+    assert!(stop.contains("« Prendre la main »") && stop.contains("Don't try again"), "{stop}");
+    for word in ["headless", "proxy", "captcha service"] {
+        assert!(stop.contains(word), "{word}: {stop}");
+    }
+    // the bridge is told (its Boîte line, challenge_hand.rs), beside `busy`
+    let note: Value =
+        serde_json::from_str(&std::fs::read_to_string(tmp.join(browser_mcp::CHECK_FILE)).unwrap()).unwrap();
+    assert_eq!((note["site"].as_str(), note["kind"].as_str()), (Some("decathlon.fr"), Some("Cloudflare challenge")));
+    assert!(note["at"].as_f64().unwrap() > now() - 60.0);
+    // a second try at the site in this turn: refused, the real server never asked
+    proxy.handle(go(2, "https://www.decathlon.fr/recherche?q=velo")).await;
+    let lines = said(&out);
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    assert!(lines[0].starts_with(browser_mcp::CHECK_REFUSED_START) && lines[0].contains("decathlon.fr"), "{lines:?}");
+    proxy.handle(tool(3, "reload_page", json!({"instance_id": "i1"}))).await;
+    assert!(said(&out)[0].starts_with(browser_mcp::CHECK_REFUSED_START));
+    proxy.handle(tool(4, "new_tab", json!({"instance_id": "i1", "url": "https://decathlon.fr/"}))).await;
+    assert!(said(&out)[0].starts_with(browser_mcp::CHECK_REFUSED_START));
+    assert_eq!(navigations(tmp), vec!["https://www.decathlon.fr/p/velo-st-100".to_string()]);
+    // reading the page it is on goes on: no second card, no second wait
+    std::fs::remove_file(tmp.join(browser_mcp::CHECK_FILE)).unwrap();
+    let started = std::time::Instant::now();
+    proxy.handle(tool(5, "get_page_content", json!({"instance_id": "i1"}))).await;
+    assert!(started.elapsed() < Duration::from_millis(1500));
+    assert!(!tmp.join(browser_mcp::CHECK_FILE).exists());
+    // another site: as ever
+    std::fs::remove_file(tmp.join("page.txt")).unwrap();
+    proxy.handle(go(6, "https://www.example.org/")).await;
+    assert_eq!(said(&out).len(), 1);
+    // the run over (the bridge touches `ended`): a later turn may open the site again
+    std::thread::sleep(Duration::from_millis(20));
+    std::fs::write(tmp.join("ended"), "").unwrap();
+    proxy.handle(go(7, "https://www.decathlon.fr/p/velo-st-100")).await;
+    assert_eq!(said(&out).len(), 1);
+    assert_eq!(navigations(tmp).len(), 3);
+    proxy.stop_child().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_person_takes_over_passes_the_check_hands_back_and_the_agent_goes_on() {
+    let dir = tempfile::tempdir().unwrap();
+    let tmp = dir.path().to_path_buf();
+    std::fs::write(tmp.join("page.txt"), INTERSTITIAL).unwrap();
+    let out = Out::default();
+    let proxy = Proxy::new(checking(&tmp, 0.0, 20.0), Box::new(out.clone()));
+    proxy.handle(init()).await;
+    // the person: takes the hand (browsers.rs `hold` writes hold.token), passes the check, hands back
+    let person = {
+        let tmp = tmp.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(1200)).await;
+            std::fs::write(tmp.join("hold.token"), "t").unwrap();
+            tokio::time::sleep(Duration::from_millis(1500)).await;
+            std::fs::remove_file(tmp.join("page.txt")).unwrap();
+            std::fs::remove_file(tmp.join("hold.token")).unwrap();
+        })
+    };
+    let started = std::time::Instant::now();
+    proxy.handle(go(1, "https://www.decathlon.fr/p/velo-st-100")).await;
+    person.await.unwrap();
+    assert!(started.elapsed() < Duration::from_secs(15), "waited for the hand, not for the whole wait");
+    let lines = said(&out);
+    assert_eq!(lines.last().unwrap(), browser_mcp::CHECK_PASSED, "{lines:?}");
+    // the site open again
+    proxy.handle(go(2, "https://www.decathlon.fr/p/velo-st-100")).await;
+    assert_eq!(said(&out).len(), 1);
+    assert_eq!(navigations(&tmp).len(), 2);
+    proxy.stop_child().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_person_still_holding_or_the_check_still_there_after_the_hand_stops_the_agent() {
+    let dir = tempfile::tempdir().unwrap();
+    let tmp = dir.path().to_path_buf();
+    std::fs::write(tmp.join("page.txt"), INTERSTITIAL).unwrap();
+    let out = Out::default();
+    let proxy = Proxy::new(checking(&tmp, 0.0, 2.0), Box::new(out.clone()));
+    proxy.handle(init()).await;
+    std::fs::write(tmp.join("hold.token"), "t").unwrap();
+    proxy.handle(go(1, "https://www.decathlon.fr/a")).await;
+    assert_eq!(said(&out).last().unwrap(), &browser_mcp::check_held_text("decathlon.fr"));
+    // handed back, the check still there
+    std::fs::remove_file(tmp.join("hold.token")).unwrap();
+    let out = Out::default();
+    let proxy = Proxy::new(checking(&tmp, 0.0, 10.0), Box::new(out.clone()));
+    proxy.handle(init()).await;
+    let person = {
+        let tmp = tmp.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(800)).await;
+            std::fs::write(tmp.join("hold.token"), "t").unwrap();
+            tokio::time::sleep(Duration::from_millis(1200)).await;
+            std::fs::remove_file(tmp.join("hold.token")).unwrap();
+        })
+    };
+    proxy.handle(go(2, "https://www.decathlon.fr/b")).await;
+    person.await.unwrap();
+    let last = said(&out).last().unwrap().clone();
+    assert!(last.starts_with(browser_mcp::CHECK_STOP_START) && last.contains("still"), "{last}");
+    proxy.stop_child().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_check_that_clears_by_itself_is_never_handed_over() {
+    // the stealth browser gets past many checks by itself (Alex 22/11: « seulement s'il est bloqué quand même »)
+    let dir = tempfile::tempdir().unwrap();
+    let tmp = dir.path().to_path_buf();
+    std::fs::write(tmp.join("page.txt"), INTERSTITIAL).unwrap();
+    let out = Out::default();
+    let proxy = Proxy::new(checking(&tmp, 6.0, 30.0), Box::new(out.clone()));
+    proxy.handle(init()).await;
+    let cleared = {
+        let tmp = tmp.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(1500)).await;
+            std::fs::remove_file(tmp.join("page.txt")).unwrap();
+        })
+    };
+    let started = std::time::Instant::now();
+    proxy.handle(go(1, "https://www.ameli.fr/assure")).await;
+    cleared.await.unwrap();
+    assert!(started.elapsed() < Duration::from_secs(6));
+    let lines = said(&out);
+    assert_eq!(lines.last().unwrap(), browser_mcp::CHECK_CLEARED, "{lines:?}");
+    assert!(!tmp.join(browser_mcp::CHECK_FILE).exists());
+    proxy.handle(go(2, "https://www.ameli.fr/assure")).await;
+    assert_eq!(said(&out).len(), 1);
+    proxy.stop_child().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn ordinary_pages_and_a_solved_widget_trigger_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let tmp = dir.path();
+    let out = Out::default();
+    let proxy = Proxy::new(checking(tmp, 1.0, 30.0), Box::new(out.clone()));
+    proxy.handle(init()).await;
+    let pages = [
+        "<title>Annonces</title><script src=\"https://js.datadome.co/tags.js\"></script>",
+        "<title>Accueil</title> static.cloudflareinsights.com/beacon.min.js",
+        "<title>Connexion</title><div class=\"grecaptcha-badge\"></div> This site is protected by reCAPTCHA",
+    ];
+    for (n, page) in pages.iter().enumerate() {
+        std::fs::write(tmp.join("page.txt"), page).unwrap();
+        let started = std::time::Instant::now();
+        proxy.handle(go(n as i64 + 1, "https://www.leboncoin.fr/")).await;
+        assert_eq!(said(&out).len(), 1, "{page}");
+        assert!(started.elapsed() < Duration::from_secs(3), "{page}");
+    }
+    // a widget the page answers with its token already (`CHECK_PROBE` says none is waiting): nothing either, even
+    // when the answer's own text names it
+    std::fs::write(tmp.join("page.txt"), "<title>Connexion</title>").unwrap();
+    let mut settings = checking(tmp, 1.0, 30.0);
+    let server = CHECK_SERVER.replace(
+        r#"r = {"content": [{"type": "text", "text": json.dumps({"url": args.get("url"), "title": "page"})}]}"#,
+        r#"r = {"content": [{"type": "text", "text": "<div class=\"cf-turnstile\"></div>"}]}"#,
+    );
+    std::fs::write(tmp.join("checks2.py"), server).unwrap();
+    settings.insert("server".into(), json!([python(), tmp.join("checks2.py").to_string_lossy()]));
+    let out = Out::default();
+    let solved = Proxy::new(settings, Box::new(out.clone()));
+    solved.handle(init()).await;
+    solved.handle(go(9, "https://www.example.org/login")).await;
+    assert_eq!(said(&out).len(), 1);
+    assert!(!tmp.join(browser_mcp::CHECK_FILE).exists());
+    proxy.stop_child().await;
+    solved.stop_child().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_tasks_own_browser_stops_at_once_nobody_to_hand_it_to() {
+    let dir = tempfile::tempdir().unwrap();
+    let tmp = dir.path();
+    std::fs::write(tmp.join("page.txt"), INTERSTITIAL).unwrap();
+    let mut settings = checking(tmp, 0.0, 30.0);
+    settings.insert("agent".into(), json!("vie--t1"));
+    settings.insert("task".into(), json!({"agent": "vie", "job": "t1"}));
+    let out = Out::default();
+    let proxy = Proxy::new(settings, Box::new(out.clone()));
+    proxy.handle(init()).await;
+    let started = std::time::Instant::now();
+    proxy.handle(go(1, "https://www.decathlon.fr/p/velo")).await;
+    assert!(started.elapsed() < Duration::from_secs(5), "no wait");
+    let last = said(&out).last().unwrap().clone();
+    assert!(last.starts_with(browser_mcp::CHECK_STOP_START) && last.contains("report"), "{last}");
+    assert!(!tmp.join(browser_mcp::CHECK_FILE).exists());
+    proxy.handle(go(2, "https://www.decathlon.fr/p/velo")).await;
+    assert!(said(&out)[0].starts_with(browser_mcp::CHECK_REFUSED_START));
+    proxy.stop_child().await;
 }

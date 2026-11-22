@@ -1,8 +1,11 @@
 """An agent's own browser turned off and on from the app (`PATCH /v1/agents/{id}/settings {"browser": …}`), and
 removed with `bipbridge browser remove` (tests/test_browsers.py's routes; its container is the fake `podman`)."""
+import json
+import time
+
 import yaml
 
-from bbkit.common import AUTH
+from bbkit.common import AUTH, boite_items
 from bbkit.servers import wait_until
 from conftest import managed_install, profile, wait_registered
 
@@ -87,3 +90,32 @@ def test_an_agent_with_its_browser_keeps_only_the_vault_of_hermes_browser_tools(
     data = yaml.safe_load((folder / "config.yaml").read_text())
     assert data["mcp_servers"]["stealth"]["enabled"] is True          # the rest as it was
     assert "`browser_vault`" in skill.read_text() and "An earlier skill" not in skill.read_text()
+
+
+def test_a_bot_check_handed_to_the_person_reaches_them_once_per_site(bridges, fakes):
+    """antibot-guard (22/11): when a bot check still blocks the agent's browser, bip-browser-mcp writes
+    `challenge.json` beside its `busy` and waits for the person's hand; the bridge turns it into ONE Boîte line (with
+    a push) per site, in the agent's language, and takes the file away."""
+    bridge, _ = with_browser(bridges, fakes)
+    note = bridge.data / "browsers" / "coach" / "challenge.json"
+    note.write_text(json.dumps({"agent": "coach", "site": "decathlon.fr", "kind": "Cloudflare challenge",
+                                "at": time.time()}))
+
+    def lines():
+        return [i for i in boite_items(bridge, "coach") if "decathlon.fr" in (i.get("text") or "")]
+
+    assert wait_until(lambda: len(lines()) == 1, timeout=15)
+    assert wait_until(lambda: not note.exists(), timeout=5)
+    [line] = lines()
+    assert line["text"] in (
+        "Une vérification anti-robots bloque decathlon.fr. Prends la main dans le Bureau de Coach pour la passer, "
+        "puis rends-la : Coach reprendra.",
+        "A bot check is blocking decathlon.fr. Take over Coach's Desktop to pass it, then hand it back: Coach will "
+        "carry on.",
+    ), line
+    # the same site again a moment later: no second line
+    note.write_text(json.dumps({"agent": "coach", "site": "decathlon.fr", "kind": "Cloudflare challenge",
+                                "at": time.time()}))
+    assert wait_until(lambda: not note.exists(), timeout=10)
+    time.sleep(1)
+    assert len(lines()) == 1

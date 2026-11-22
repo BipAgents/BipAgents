@@ -227,7 +227,11 @@ never as a refusal.
   relaying now (paused). Do not say the site blocks you … ».
 - A page that is a challenge or block page for servers (Cloudflare « Just a moment », DataDome, PerimeterX,
   « Access denied » 403) gets a line too: the card was made for the person (or why not: « Jamais », not the person's
-  own agent, feature off), and « never solve a CAPTCHA ».
+  own agent, feature off), and « never solve a CAPTCHA ». When the phone exit doesn't take it (no card: live
+  already, « Jamais », not the person's own agent, feature off) or the check is a widget (Turnstile, hCaptcha, a
+  reCAPTCHA box…: the phone's address doesn't help), the browser hands it to the person, phone exit or not
+  (antibot-guard, 22/11, browser_mcp.rs `hand_over`): a Boîte line « Prends la main », the call waiting for their hand,
+  the site not opened again in that turn.
 - `ask_phone_exit` (bridge MCP tool, owned agents only): `{"site", "reason"}` makes the card (or says it is waiting,
   already live, or why not); `{"site", "done": true}` ends the agent's session for that site (`task_done`).
 

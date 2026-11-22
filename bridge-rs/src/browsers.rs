@@ -1496,6 +1496,9 @@ pub fn mcp_server(engine: &str, agent: &str, proxy: Option<&Path>) -> Value {
     let mut server = json!({"command": command[0], "args": command[1..], "connect_timeout": 90, "timeout": 120,
            "tools": {"exclude": ["get_instance_state"]}});
     if proxy.is_some() {
+        // bip-browser-mcp bounds each call itself (its `call_limit`, `ready_seconds`); a bot check that still blocks
+        // waits for the person's hand (browser_mcp.rs `hand_over`, `hand_wait_seconds` in its settings)
+        server["timeout"] = json!(crate::browser_mcp::PROXIED_TIMEOUT);
         // each call says its Hermes session (patch 0028): a task's « Oui » to « Envoyer sur ce site ? » is its own
         server["call_context"] = json!(true);
     }
@@ -1524,6 +1527,9 @@ pub fn proxy_config(config: &Config, agent: &str, engine: &str, ports: &IndexMap
         "idle": config.browser.idle_minutes as u64 * 60,
         "ended": place.join("ended").to_string_lossy(), "after_run": crate::browser_mcp::AFTER_RUN_SECONDS,
         "rescue": place.join("rescue").to_string_lossy(),
+        // a bot check that still blocks: how long the call waits for the person's hand, under Hermes' timeout for
+        // this proxy (`mcp_server`, `PROXIED_TIMEOUT`)
+        "hand_wait_seconds": crate::browser_mcp::HAND_WAIT_SECONDS,
         "shared_cache": PathBuf::from(&config.browser.root).join("mcp-cache.json").to_string_lossy(),
         "ready_seconds": crate::browser_mcp::READY_SECONDS,
         // the phone exit's hub (phone_exit): why a page failed (`WHY`), a challenge page asked about (`ASK`)

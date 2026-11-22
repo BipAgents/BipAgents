@@ -227,6 +227,7 @@ pub mod weather;
 
 // -- browsers-places -------------------------------------------------------------------------------
 pub mod browser_mcp;
+pub mod challenge_hand; // a bot check that still blocks the visible browser, told to the person
 pub mod browsers;
 pub mod caldav;
 pub mod connections;

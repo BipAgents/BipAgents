@@ -32,6 +32,10 @@
 //! hub asked the person (`ASK`: a card). So the agent never says « the site blocks servers » wrongly, never solves a
 //! CAPTCHA, and waits for the card.
 //!
+//! A bot check that still blocks (antibot-guard, 22/11), phone exit or not: every page loaded or read is looked at
+//! (`CHECK_PROBE`); a check still there after a moment is handed to the person (`hand_over`: the bridge told through
+//! `CHECK_FILE`, the call waiting for their hand), and the site is not opened again in that turn.
+//!
 //! A page too large to come back whole (token lab of 2026-11-07, GLM-5.3 Flash on the French Wikipedia page of the
 //! Eiffel tower, 1.4 MB): the real server saves it to a file inside the container and answers with its path
 //! (`SAVED_TO_FILE`), which none of the agent's tools reach; the agent read the page 16 times until the brake stopped
@@ -90,6 +94,124 @@ pub const AROUND_A_WORD: &str =
 pub const RESCUE_REFUSED: &str = "Refused: you were stopped for going round in circles, so your browser reads no page \
 in this turn. Answer your person now with what you already have: what you found, what blocked you, and one or two ways \
 forward.";
+
+// --- a bot check that still blocks: the person's hand (antibot-guard, 22/11) --------------------------------------
+//
+// passation-pro/briefs/enquete-antibot-1122.md: a Cloudflare wall on decathlon.fr was only said to the agent when the
+// phone exit was on (off by default), reCAPTCHA, hCaptcha and Turnstile never, and nothing stopped a second try (the
+// agent then went round it with a headless browser in its sandbox). Alex (22/11): the visible browser keeps its setup
+// and may get past a check by itself; only a check that still blocks stops the agent, which hands it to its person.
+// Every page the agent's browser loads or reads is looked at (`CHECK_PROBE`, `challenge_kind`); a check that is still
+// there after `CHECK_CLEAR_SECONDS` (Cloudflare's interstitial often clears by itself) is handed over: the bridge is
+// told (`CHECK_FILE` beside `busy`: a Boîte line with a push, challenge_hand.rs), the call waits for the person's hand
+// (`hold.token` beside `busy`, browsers.rs `hold`) up to `hand_wait_seconds`, then says what happened; the site is not
+// opened again in that turn (`CHECK_REFUSED_START`). The phone exit, when on, asks first (its card): it decides.
+
+/// The guard's look at a page for a check that still blocks (read only, in its own world: `look`): the title, the
+/// marks `challenge_kind` knows for what is shown and not answered yet (a widget whose answer field is still empty, a
+/// challenge frame in sight), and the first words of a short page (an interstitial's).
+pub const CHECK_PROBE: &str = "(() => { /* bipagents-bot-check (browser_mcp.rs CHECK_PROBE): read only */ \
+const d = document, out = [d.title || '']; \
+const shown = (e) => { if (!e) return false; const r = e.getBoundingClientRect(); const s = getComputedStyle(e); \
+return r.width > 10 && r.height > 10 && s.visibility !== 'hidden' && s.display !== 'none' && s.opacity !== '0'; }; \
+const empty = (n) => { const f = d.querySelector('[name=\"' + n + '\"]'); return !f || !f.value; }; \
+const frames = [...d.querySelectorAll('iframe')].filter(shown).map((f) => f.src || ''); \
+const framed = (re) => frames.some((src) => re.test(src)); \
+const open = (sel) => { const e = d.querySelector(sel); return !!e && e.getAttribute('data-size') !== 'invisible' && shown(e); }; \
+if ([...d.scripts].some((s) => (s.textContent || '').includes('_cf_chl_opt'))) out.push('cf_chl_opt'); \
+if (d.querySelector('#challenge-form, #challenge-running, #challenge-stage')) out.push('cf-chl-widget'); \
+if ((open('.cf-turnstile') || framed(/challenges\\.cloudflare\\.com\\/.*turnstile/)) && empty('cf-turnstile-response')) out.push('/turnstile/if/'); \
+if ((open('.h-captcha') || framed(/hcaptcha\\.com\\/captcha\\//)) && empty('h-captcha-response')) out.push('hcaptcha.com/captcha/'); \
+if ((open('.g-recaptcha') || frames.some((src) => /\\/recaptcha\\/(api2|enterprise)\\/(anchor|bframe)/.test(src) \
+&& !/size=invisible/.test(src)) || framed(/\\/recaptcha\\/(api2|enterprise)\\/bframe/)) && empty('g-recaptcha-response')) \
+out.push('/recaptcha/api2/anchor'); \
+if (framed(/captcha-delivery\\.com/)) out.push('captcha-delivery.com'); \
+if (shown(d.querySelector('#px-captcha'))) out.push('px-captcha'); \
+if (framed(/(arkoselabs|funcaptcha)\\.com/)) out.push('arkoselabs.com/fc/gc'); \
+if (shown(d.querySelector('.geetest_captcha, .geetest_holder, .geetest_panel, .geetest_box'))) out.push('geetest_captcha'); \
+if (shown(d.querySelector('#captcha-container, awswaf-captcha')) && [...d.scripts].some((s) => /captcha\\.awswaf\\.com/.test(s.src || ''))) out.push('AwsWafCaptcha'); \
+const body = (d.body && d.body.innerText) || ''; if (body.length < 3000) out.push(body.slice(0, 400)); \
+return out.join('\\n'); })()";
+/// Beside `busy`: a check handed to the person, for the bridge (challenge_hand.rs): `{agent, site, kind, at}`.
+pub const CHECK_FILE: &str = "challenge.json";
+/// How long the call waits for the person's hand: `hand_wait_seconds` of the settings (`proxy_config` writes it with
+/// Hermes' `PROXIED_TIMEOUT`), else `HAND_WAIT_UNSET`, under the 120 s Hermes gave the browser before.
+pub const HAND_WAIT_SECONDS: u64 = 600;
+pub const HAND_WAIT_UNSET: f64 = 90.0;
+/// Hermes' timeout for the browser's calls through this proxy (browsers.rs `mcp_server`): the person's hand and a
+/// call's own time; every call is bounded here anyway (`call_limit`, `ready_seconds`).
+pub const PROXIED_TIMEOUT: u64 = 720;
+/// A check is given so long to clear by itself before it is handed over (`challenge_clear_seconds`).
+pub const CHECK_CLEAR_SECONDS: f64 = 12.0;
+/// A site handed over is not opened again for so long at most (sooner: the run ended, or the person's hand).
+pub const CHECK_KEEP_SECONDS: f64 = 1800.0;
+/// How every « stop » about a check starts (the agent's answer, the tests).
+pub const CHECK_STOP_START: &str = "Stopped: a bot check";
+/// How the refusal to open a site handed over starts (not a step the page failed: `own_refusal`).
+pub const CHECK_REFUSED_START: &str = "Refused: a bot check";
+/// The person passed the check and handed the browser back.
+pub const CHECK_PASSED: &str = "Your person passed the site's bot check in your browser and handed it back: go on \
+from this page (read it first).";
+/// The check went by itself (the browser got past it): nothing for the person.
+pub const CHECK_CLEARED: &str =
+    "The site's bot check cleared by itself: the page is loaded now; read it before going on.";
+const GO_ROUND: &str =
+    "Don't try again and don't go round it: no other browser, no headless script, no proxy or other identity, no \
+     captcha service.";
+
+/// The site a check is remembered by: its registrable name (`www.decathlon.fr` → `decathlon.fr`), an address as it is.
+pub fn check_site(host: &str) -> String {
+    if host.trim_matches(['[', ']']).parse::<std::net::IpAddr>().is_ok() {
+        return host.to_string();
+    }
+    crate::mail_tidy::registrable(host)
+}
+
+/// The check still blocks after `CHECK_CLEAR_SECONDS` and the person didn't take over within the wait.
+pub fn check_stop_text(site: &str, kind: &str) -> String {
+    format!(
+        "{CHECK_STOP_START} ({kind}) on {site} still blocks your browser. Your person was told and can take over your \
+         browser (« Prendre la main ») to pass it. {GO_ROUND} Tell them in one short sentence, then stop."
+    )
+}
+
+/// Handed back with the check still there.
+pub fn check_still_text(site: &str, kind: &str) -> String {
+    format!(
+        "{CHECK_STOP_START} ({kind}) on {site} is still there after your person handed your browser back. {GO_ROUND} \
+         Tell them in one short sentence, then stop."
+    )
+}
+
+/// A task's own browser: nobody takes it over.
+pub fn check_task_text(site: &str, kind: &str) -> String {
+    format!(
+        "{CHECK_STOP_START} ({kind}) on {site} blocks this browser, and nobody can take it over now. {GO_ROUND} Say so \
+         in your report and go on without this site."
+    )
+}
+
+/// The person still holds the browser when the wait ends.
+pub fn check_held_text(site: &str) -> String {
+    format!(
+        "Your person has taken over your browser to pass the bot check on {site} and hasn't handed it back yet. Don't \
+         use your browser: say you'll go on once they hand it back, then stop."
+    )
+}
+
+/// A page load of a site handed over in this turn, refused without asking the real server.
+pub fn check_refused_text(site: &str) -> String {
+    format!(
+        "{CHECK_REFUSED_START} on {site} stopped your browser in this turn, so it doesn't open that site again (no \
+         retry). Your person can take over your browser (« Prendre la main ») to pass it; until then do without this \
+         site and tell them in one short sentence."
+    )
+}
+
+/// A page of a site handed over still showing its check (read again): no second card, no second wait.
+pub fn check_again_text(site: &str) -> String {
+    format!("This page is still the bot check of {site}: don't try to get past it; your person was told.")
+}
 
 // --- no pause, said plainly (fix-signup-hold, 13/11) --------------------------------------------------------------
 //
@@ -841,6 +963,8 @@ pub fn own_refusal(response: &Dict) -> bool {
         .contains(&text)
         // the first form to a site (audit 1.2): the person's OK to ask, no failure of the page
         || text.starts_with(SEND_ASK_START)
+        // a site whose bot check was handed over (antibot-guard)
+        || text.starts_with(CHECK_REFUSED_START)
 }
 
 /// How `send_ask_text` starts.
@@ -2404,6 +2528,9 @@ pub struct Proxy {
     /// The tasks' own browsers this proxy relays to, by their settings' path (one per running task, browsers.rs
     /// `setup_task`): a task's calls never reach the agent's browser nor another task's.
     tasks: Mutex<HashMap<PathBuf, Arc<Proxy>>>,
+    /// The sites whose bot check was handed over (their registrable name): when, and the check's kind
+    /// (`check_refusal`).
+    checked: Mutex<HashMap<String, (f64, String)>>,
 }
 
 impl Proxy {
@@ -2467,6 +2594,7 @@ impl Proxy {
             in_flight: Mutex::new(None),
             sessions_path,
             tasks: Mutex::new(HashMap::new()),
+            checked: Mutex::new(HashMap::new()),
         })
     }
 
@@ -2853,6 +2981,17 @@ impl Proxy {
             self.to_client(&Value::Object(answer));
             return;
         }
+        if let Some(text) = calling.then(|| self.check_refusal(&tool, params.as_ref())).flatten() {
+            // a site whose bot check was handed over in this turn: never opened again, the real server never asked
+            log(&format!("{tool} refused: its site's bot check was handed to the person"));
+            let mut answer = refused(&text);
+            if self.answered_call(&named, named != tool, &mut answer) {
+                self.add_hint("", &mut answer).await;
+            }
+            answer.insert("id".into(), ident);
+            self.to_client(&Value::Object(answer));
+            return;
+        }
         if calling {
             self.calls.fetch_add(1, Ordering::SeqCst);
             self.touch();
@@ -2897,7 +3036,7 @@ impl Proxy {
                 if rewrite_too_large(&tool, &mut response) {
                     log(&format!("{tool}: a result too large, plain guidance instead of its file"));
                 }
-                self.phone_exit_lines(params.as_ref(), &mut response).await;
+                self.page_lines(&tool, params.as_ref(), &mut response).await;
                 if self.answered_call(&named, named != tool, &mut response) {
                     let instance = params
                         .as_ref()
@@ -3727,14 +3866,11 @@ impl Proxy {
         }
     }
 
-    /// The phone exit's lines added to a tool's result: why the person's phone refused this page's site lately, or
-    /// what was done about a challenge page (a card for the person). Nothing when the phone exit is off here.
-    async fn phone_exit_lines(&self, params: Option<&Value>, response: &mut Dict) {
-        let (sock, agent) = self.exit_keys();
-        if sock.is_empty() || agent.is_empty() {
-            return;
-        }
-        let url = params.and_then(|p| p.get("arguments")).and_then(|a| a.get("url")).and_then(Value::as_str);
+    /// The lines added to a tool's result about its page's site: why the person's phone refused it lately (the phone
+    /// exit, when on here), or what was done about a bot check that still blocks (`check_lines`).
+    async fn page_lines(&self, tool: &str, params: Option<&Value>, response: &mut Dict) {
+        let arguments = params.and_then(|p| p.get("arguments"));
+        let url = arguments.and_then(|a| a.get("url")).and_then(Value::as_str);
         let url = match url {
             Some(u) if u.starts_with("http") => {
                 *self.last_url.lock().unwrap_or_else(|e| e.into_inner()) = u.to_string();
@@ -3743,36 +3879,203 @@ impl Proxy {
             _ => self.last_url.lock().unwrap_or_else(|e| e.into_inner()).clone(),
         };
         let host = crate::phone_exit::checks::host_of(&url);
-        if host.is_empty() || crate::phone_exit::name_refused(&host).is_some() {
+        if host.is_empty() {
             return;
         }
-        let site = crate::mail_tidy::registrable(&host);
-        let Some(result) = response.get_mut("result").and_then(Value::as_object_mut) else { return };
-        let text = result.get("content").map(Value::to_string).unwrap_or_default();
+        let site = check_site(&host);
+        let instance = arguments.and_then(|a| a.get("instance_id")).and_then(Value::as_str).unwrap_or("").to_string();
+        let text = match response.get("result").and_then(Value::as_object) {
+            Some(result) => result.get("content").map(Value::to_string).unwrap_or_default(),
+            None => return,
+        };
+        // the phone exit only for a name of the internet (the hub refuses the others anyway)
+        let (sock, agent) = self.exit_keys();
+        let named = crate::phone_exit::name_refused(&host).is_none();
+        let exit = (named && !sock.is_empty() && !agent.is_empty()).then_some((sock, agent));
         let mut lines = Vec::new();
-        if let Some(answer) = ask_hub(&sock, &format!("WHY {agent} {host}")).await {
-            let mut words = answer.split_whitespace();
-            if let (Some(code), Some(ago)) = (words.next(), words.next().and_then(|a| a.parse::<u64>().ok())) {
-                if code != "NONE" && ago <= 60 {
-                    lines.push(crate::phone_exit::agent::refusal_text(code, &site));
+        if let Some((sock, agent)) = &exit {
+            if let Some(answer) = ask_hub(sock, &format!("WHY {agent} {host}")).await {
+                let mut words = answer.split_whitespace();
+                if let (Some(code), Some(ago)) = (words.next(), words.next().and_then(|a| a.parse::<u64>().ok())) {
+                    if code != "NONE" && ago <= 60 {
+                        lines.push(crate::phone_exit::agent::refusal_text(code, &site));
+                    }
                 }
             }
         }
         if lines.is_empty() {
-            if let Some(kind) = crate::phone_exit::agent::challenge_kind(&text) {
-                if let Some(answer) = ask_hub(&sock, &format!("ASK {agent} {host} {kind}")).await {
-                    lines.push(crate::phone_exit::agent::challenge_text(kind, &site, &answer));
-                }
-            }
+            lines = self.check_lines(tool, &instance, &text, &host, &site, exit.as_ref()).await;
         }
         if lines.is_empty() {
             return;
         }
-        if let Some(Value::Array(content)) = result.get_mut("content") {
+        if let Some(Value::Array(content)) = response.get_mut("result").and_then(|r| r.get_mut("content")) {
             for line in lines {
                 content.push(json!({"type": "text", "text": line}));
             }
         }
+    }
+
+    /// A bot check on the page that still blocks (`challenge_kind`): the phone exit's card when it asks the person
+    /// first; else a moment for it to clear by itself, then the person's hand (`hand_over`). The page looked at itself
+    /// (`CHECK_PROBE`) after a tool that loads or reads one: its verdict wins over the answer's text (a widget answered
+    /// already). Nothing for an ordinary page.
+    async fn check_lines(
+        &self,
+        tool: &str,
+        instance: &str,
+        text: &str,
+        host: &str,
+        site: &str,
+        exit: Option<&(String, String)>,
+    ) -> Vec<String> {
+        let probing = !instance.is_empty() && (loads_a_page(tool) || matches!(tool, "get_page_content" | "new_tab"));
+        let looked = if probing { self.check_probe(instance).await } else { None };
+        let probing = looked.is_some();
+        // a widget only from the page itself (an answer's HTML can't say whether it was answered); a whole page's
+        // block from its text too, as before
+        let from_text =
+            || crate::phone_exit::agent::challenge_kind(text).filter(|k| crate::phone_exit::agent::whole_page(k));
+        let Some(kind) = looked.unwrap_or_else(from_text) else {
+            return Vec::new();
+        };
+        if self.checked_now(site).is_some() {
+            return vec![check_again_text(site)];
+        }
+        // a whole page standing in for the site: the phone exit, when on, asks the person first (their address may
+        // help); a widget asks a person whatever the address
+        if let Some((sock, agent)) = exit.filter(|_| crate::phone_exit::agent::whole_page(kind)) {
+            if let Some(answer) = ask_hub(sock, &format!("ASK {agent} {host} {kind}")).await {
+                if matches!(answer.split_whitespace().next(), Some("CARD" | "WAITING")) {
+                    // the person decides about their phone first: its card, nothing else yet
+                    return vec![crate::phone_exit::agent::challenge_text(kind, site, &answer)];
+                }
+            }
+        }
+        if probing {
+            // the stealth browser gets past many checks by itself (Alex 22/11): only one that stays is handed over
+            let deadline =
+                crate::py::monotonic() + self.setting_seconds("challenge_clear_seconds", CHECK_CLEAR_SECONDS);
+            while crate::py::monotonic() < deadline {
+                tokio::time::sleep(Duration::from_millis(500)).await;
+                if self.in_flight_cancelled() {
+                    return Vec::new();
+                }
+                if let Some(None) = self.check_probe(instance).await {
+                    log(&format!("a bot check on {site} ({kind}) cleared by itself"));
+                    return vec![CHECK_CLEARED.to_string()];
+                }
+            }
+        }
+        self.hand_over(instance, site, kind, probing).await
+    }
+
+    /// The guard's look at the page for a check (`CHECK_PROBE`): Some(its kind, or None for none), None when the page
+    /// can't be asked.
+    async fn check_probe(&self, instance: &str) -> Option<Option<&'static str>> {
+        let text = match self.look(instance, CHECK_PROBE).await? {
+            Value::String(text) => text,
+            Value::Null => return None,
+            other => other.to_string(),
+        };
+        Some(crate::phone_exit::agent::challenge_kind(&text))
+    }
+
+    /// A check that still blocks, handed to the person: the site not opened again in this turn (`check_refusal`), the
+    /// bridge told (`CHECK_FILE`), the call waiting for the person's hand (`hold.token` beside `busy`) up to
+    /// `hand_wait_seconds`; then what the agent does. A task's own browser: nobody to hand it to, the stop at once.
+    async fn hand_over(&self, instance: &str, site: &str, kind: &str, probing: bool) -> Vec<String> {
+        let now = crate::py::time_time();
+        self.checked.lock().unwrap_or_else(|e| e.into_inner()).insert(site.to_string(), (now, kind.to_string()));
+        if self.config.contains_key("task") {
+            log(&format!("a bot check on {site} ({kind}) still blocks a task's browser: the agent stops there"));
+            return vec![check_task_text(site, kind)];
+        }
+        let busy = self.config.get("busy").and_then(Value::as_str).filter(|p| !p.is_empty()).map(PathBuf::from);
+        let Some(folder) = busy.as_ref().and_then(|b| b.parent()).map(Path::to_path_buf) else {
+            return vec![check_stop_text(site, kind)];
+        };
+        let agent = self.config.get("agent").and_then(Value::as_str).unwrap_or("");
+        let note = json!({"agent": agent, "site": site, "kind": kind, "at": crate::py::time_time()});
+        let file = folder.join(CHECK_FILE);
+        let part = folder.join(format!("{CHECK_FILE}.part"));
+        let written = std::fs::write(&part, format!("{note}\n")).and_then(|_| std::fs::rename(&part, &file));
+        if written.is_err() {
+            log("a bot check's note for the bridge could not be written");
+        }
+        log(&format!("a bot check on {site} ({kind}) still blocks: handed to the person, waiting for their hand"));
+        let hold = folder.join(crate::browsers::HOLD_TOKEN);
+        let deadline = crate::py::monotonic() + self.setting_seconds("hand_wait_seconds", HAND_WAIT_UNSET);
+        let mut held = false;
+        loop {
+            if hold.exists() {
+                held = true;
+            } else if held {
+                // handed back: the page looked at again
+                let still = if probing { self.check_probe(instance).await.flatten() } else { None };
+                if still.is_some() {
+                    log(&format!("the bot check on {site} still there after the person's hand"));
+                    return vec![check_still_text(site, kind)];
+                }
+                log(&format!("the bot check on {site} passed by the person: the agent goes on"));
+                self.checked.lock().unwrap_or_else(|e| e.into_inner()).remove(site);
+                return vec![CHECK_PASSED.to_string()];
+            }
+            if crate::py::monotonic() >= deadline {
+                break;
+            }
+            if self.in_flight_cancelled() {
+                return Vec::new();
+            }
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }
+        if held {
+            return vec![check_held_text(site)];
+        }
+        vec![check_stop_text(site, kind)]
+    }
+
+    /// When the check of `site` was handed over and its kind, while it holds: not past `CHECK_KEEP_SECONDS`, the run
+    /// that met it not ended since (`ended`, touched by the bridge).
+    fn checked_now(&self, site: &str) -> Option<(f64, String)> {
+        let mut checked = self.checked.lock().unwrap_or_else(|e| e.into_inner());
+        let (at, kind) = checked.get(site).cloned()?;
+        let ended = std::fs::metadata(&self.ended_path)
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_secs_f64())
+            .unwrap_or(0.0);
+        if crate::py::time_time() - at > CHECK_KEEP_SECONDS || ended > at {
+            checked.remove(site);
+            return None;
+        }
+        Some((at, kind))
+    }
+
+    /// A call that would open, or act on, a site whose check was handed over in this turn: its refusal. Reading the
+    /// page (its text, a screenshot) goes on.
+    fn check_refusal(&self, tool: &str, params: Option<&Value>) -> Option<String> {
+        let arguments = params.and_then(|p| p.get("arguments"));
+        let url = arguments.and_then(|a| a.get("url")).and_then(Value::as_str).filter(|u| u.starts_with("http"));
+        // a click, a key, a reload on its page: trying again (its widget's box clicked is solving it)
+        let acting = loads_a_page(tool) || matches!(tool, "type_text" | "paste_text" | "press_key" | "select_option");
+        let url = match url {
+            Some(u) => u.to_string(),
+            None if acting => self.last_url.lock().unwrap_or_else(|e| e.into_inner()).clone(),
+            None => return None,
+        };
+        let host = crate::phone_exit::checks::host_of(&url);
+        if host.is_empty() {
+            return None;
+        }
+        let site = check_site(&host);
+        self.checked_now(&site).map(|_| check_refused_text(&site))
+    }
+
+    /// A number of seconds of the settings (tests set short ones), else `default`.
+    fn setting_seconds(&self, key: &str, default: f64) -> f64 {
+        self.config.get(key).and_then(|v| crate::py::py_float(v).ok()).unwrap_or(default).clamp(0.0, 3600.0)
     }
 
     /// The brake's rescue turn goes on for this agent: the `rescue` file holds a deadline still ahead (a file left by a

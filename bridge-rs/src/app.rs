@@ -349,6 +349,7 @@ impl AppState {
         self.spawn(crate::own_space::tidy_at_start(self.clone())); // others-facing agents left in the hub: out, once
         self.spawn(crate::agent_shares::drop_relative_conversations(self.clone())); // personal shares read-only (12/11)
         self.spawn(crate::phone_exit::serve(self.clone())); // the phone exit's socket for the agents' proxy (off by default)
+        self.spawn(crate::challenge_hand::run_forever(self.clone())); // a bot check that still blocks: the person told
         if self.sleep.enabled() {
             // a server of the offer: the guichet's seat agent reads whether a run goes on (runs.rs BUSY_MARKER)
             self.spawn(self.hub.clone().mark_busy_forever(self.sleep.home.clone(), 60.0));
