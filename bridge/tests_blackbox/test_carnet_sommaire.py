@@ -464,8 +464,9 @@ def test_s2_the_carnet_from_before_is_sorted_once_at_night_and_nothing_moves(bri
         "Your Notebook is sorted into categories"
     # the next night: nothing written again
     again = tidy(bridge)
-    assert "categorized" not in again and "categories_v" not in again, again
-    assert carnet_files(bridge) == after
+    now = carnet_files(bridge)
+    changed = {p: now.get(p) for p in set(now) | set(after) if now.get(p) != after.get(p)}
+    assert not changed and "categorized" not in again and "categories_v" not in again, (changed, again)
     wrong = bridge.post("/v1/notebook/sorted", json={"action": "later"}, headers=AUTH)
     assert wrong.status_code == 422, wrong.text
     seen = bridge.post("/v1/notebook/sorted", json={"action": "see"}, headers=AUTH)
