@@ -361,33 +361,57 @@ mod tests {
         .unwrap();
         let health = super::super::part_root(&config, Part::Health);
         std::fs::create_dir_all(health.join("Domaines")).unwrap();
-        std::fs::write(
-            health.join("Domaines/Santé.md"),
-            "---\ntype: area\n---\n# Santé\n\n## Ce qui compte\n- Allergie de Zoé : pénicilline — *Coach, 2026-10-14*\n\
-             - Enceinte Bluetooth : à acheter pour le salon — *Quotidien, 2026-11-08*\n",
-        )
-        .unwrap();
-        assert_eq!(detect(&config).unwrap(), 4);
+        let sante = "---\ntype: area\n---\n# Santé\n\n## Ce qui compte\n- Allergie de Zoé : pénicilline — *Coach, 2026-10-14*\n\
+             - Enceinte Bluetooth : à acheter pour le salon — *Quotidien, 2026-11-08*\n- Prednisolone le matin — *Coach, 2026-11-01*\n";
+        std::fs::write(health.join("Domaines/Santé.md"), sante).unwrap();
+        // the private health part is never proposed, whatever its words (review 1 of carnet-s4, B1): only Famille's
+        assert_eq!(detect(&config).unwrap(), 3);
         let card = card(&config, "fr").unwrap();
-        assert_eq!(card["title"], "4 points semblent mal rangés");
+        assert_eq!(card["title"], "3 points semblent mal rangés");
+        let text = card.to_string();
+        assert!(!text.contains("Santé") && !text.contains("Enceinte") && !text.contains("Prednisolone"), "{text}");
         let groups = card["groups"].as_array().unwrap();
         assert!(groups.iter().any(|g| g["from"] == "Famille" && g["to"] == "BipAgents" && g["by"] == "Kerfy Studio"));
         assert!(groups.iter().any(|g| g["from"] == "Famille" && g["to"] == "Travail"));
-        assert!(groups.iter().any(|g| g["from"] == "Santé" && g["to"] == "À ranger"));
-        // « Laisser » on the speaker: not proposed again
-        let speaker = card["items"].as_array().unwrap().iter().find(|i| i["to"] == "À ranger").unwrap()["id"].as_str().unwrap().to_string();
-        let (moved, _, card) = answer(&config, "leave", &[speaker], "fr").unwrap();
+        // « Laisser » on the promotion: not proposed again
+        let promotion = card["items"].as_array().unwrap().iter().find(|i| i["to"] == "Travail").unwrap()["id"].as_str().unwrap().to_string();
+        let (moved, _, card) = answer(&config, "leave", &[promotion], "fr").unwrap();
         assert_eq!(moved, 0);
-        assert_eq!(card.unwrap()["title"], "3 points semblent mal rangés");
-        assert_eq!(detect(&config).unwrap(), 3);
+        assert_eq!(card.unwrap()["title"], "2 points semblent mal rangés");
+        assert_eq!(detect(&config).unwrap(), 2);
         // « Tout déplacer »
         let (moved, toast, card) = answer(&config, "move", &[], "fr").unwrap();
-        assert_eq!((moved, toast.as_str(), card.is_none()), (3, "Déplacé.", true));
+        assert_eq!((moved, toast.as_str(), card.is_none()), (2, "Déplacé.", true));
         let famille = std::fs::read_to_string(root.join("Domaines/Famille.md")).unwrap();
-        assert!(famille.contains("Judo") && !famille.contains("Kerfy"), "{famille}");
+        assert!(famille.contains("Judo") && famille.contains("Promotion") && !famille.contains("panorama"), "{famille}");
         let bip = std::fs::read_to_string(root.join("Sujets/BipAgents.md")).unwrap();
         assert!(bip.contains("- panorama concurrentiel livré le 25/10 — *Kerfy Studio, 2026-10-25*"), "{bip}");
-        assert!(std::fs::read_to_string(root.join("Domaines/Travail.md")).unwrap().contains("Promotion : Buffer"));
+        assert_eq!(std::fs::read_to_string(health.join("Domaines/Santé.md")).unwrap(), sante);
+        assert_eq!(detect(&config).unwrap(), 0);
+    }
+
+    #[test]
+    fn a_point_of_the_health_part_is_never_shown_nor_moved() {
+        let (_dir, config) = setup();
+        let health = super::super::part_root(&config, Part::Health);
+        std::fs::create_dir_all(health.join("Domaines")).unwrap();
+        let sante = "---\ntype: area\n---\n# Santé\n\n## Ce qui compte\n- Prednisolone le matin — *Coach, 2026-11-01*\n";
+        std::fs::write(health.join("Domaines/Santé.md"), sante).unwrap();
+        // a card an older bridge kept in state.json, with a point of Santé in it
+        let held = item(Part::Health, "Domaines/Santé.md", &Page::parse(sante, "Santé"), "Prednisolone le matin", "Coach",
+                        to_page(Part::Main, "", "À ranger", "inbox", ""), "health");
+        let id = held["id"].as_str().unwrap().to_string();
+        super::super::update_state(&config, |s| {
+            s.insert("misplaced".into(), json!({"items": [held]}));
+        })
+        .unwrap();
+        assert_eq!(card(&config, "fr"), None);
+        for ids in [vec![id.clone()], vec![]] {
+            let (moved, _, card) = answer(&config, "move", &ids, "fr").unwrap();
+            assert_eq!((moved, card), (0, None));
+        }
+        assert_eq!(std::fs::read_to_string(health.join("Domaines/Santé.md")).unwrap(), sante);
+        assert!(!Value::Object(super::super::read_state(&config)).to_string().contains("Prednisolone"));
         assert_eq!(detect(&config).unwrap(), 0);
     }
 }
