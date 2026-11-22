@@ -1278,10 +1278,12 @@ async fn relayed(
 
 async fn get_notebook(State(state): State<AppState>) -> ApiResult<Response> {
     let config = state.config();
-    match holder(&config)? {
-        None => Ok(web::ok(notebook_view(&config))),
-        Some(household) => relayed(&state, &household, reqwest::Method::GET, "/notebook", None).await,
-    }
+    // the family's Carnet, as the person's own: kept by no HTTP cache (notebook/api.rs `no_store`)
+    let answer = match holder(&config)? {
+        None => web::ok(notebook_view(&config)),
+        Some(household) => relayed(&state, &household, reqwest::Method::GET, "/notebook", None).await?,
+    };
+    Ok(crate::notebook::api::no_store(answer))
 }
 
 fn changed(config: &Config, body: &Dict, by: &str) -> ApiResult<Response> {

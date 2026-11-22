@@ -1,0 +1,69 @@
+{
+  "groups": [
+    {
+      "category": "people",
+      "title": "Personnes",
+      "count": 5,
+      "top": [
+        {
+          "id": "line:p0000000013:000000003c",
+          "kind": "line",
+          "part": "main",
+          "path": "Personnes/Claire Durand.md",
+          "title": "Claire Durand",
+          "line": "Anniversaire : 2 janvier",
+          "categories": [
+            "people",
+            "dates"
+          ],
+          "space": "perso",
+          "date": null,
+          "yearly": "01-02",
+          "source": "Dates",
+          "who": "Daily",
+          "noted": "2026-11-10",
+          "archived": false,
+          "label": "Anniversaire",
+          "answer": "2 janvier",
+          "page": "page:p0000000013",
+          "open": {
+            "path": "Personnes/Claire Durand.md",
+            "section": "dates"
+          }
+        },
+        {
+          "id": "line:p0000000014:0000000041",
+          "kind": "line",
+          "part": "main",
+          "path": "Personnes/Lucas Bernard.md",
+          "title": "Lucas Bernard",
+          "line": "Anniversaire : 1 décembre",
+          "categories": [
+            "people",
+            "dates"
+          ],
+          "space": "perso",
+          "date": null,
+          "yearly": "12-01",
+          "source": "Dates",
+          "who": "Coach",
+          "noted": "2026-10-13",
+          "archived": false,
+          "label": "Anniversaire",
+          "answer": "1 décembre",
+          "page": "page:p0000000014",
+          "open": {
+            "path": "Personnes/Lucas Bernard.md",
+            "section": "dates"
+          }
+        }
+      ]
+    }
+  ],
+  "counts": {
+    "all": 5,
+    "people": 5,
+    "dates": 3
+  },
+  "online": null
+}

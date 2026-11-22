@@ -1,0 +1,138 @@
+{
+ "aliases": [],
+ "archived": false,
+ "backlinks": [],
+ "close": false,
+ "contact": null,
+ "documents": [],
+ "emails": [],
+ "frontmatter": {
+  "id": "P1",
+  "records": "purchase",
+  "type": "records",
+  "updated": "D+0"
+ },
+ "icon": null,
+ "id": "P1",
+ "kind": "records",
+ "links": [],
+ "outline": [],
+ "part": "main",
+ "path": "Fiches/Achats.md",
+ "phones": [],
+ "records": {
+  "archive_path": "Archives/Fiches/Achats.md",
+  "archived": [],
+  "archived_count": 0,
+  "count": 1,
+  "fields": [
+   {
+    "id": "date",
+    "title": "Date"
+   },
+   {
+    "id": "item",
+    "title": "Objet"
+   },
+   {
+    "id": "store",
+    "title": "Magasin"
+   },
+   {
+    "id": "price",
+    "title": "Prix"
+   },
+   {
+    "id": "class",
+    "title": "Catégorie"
+   },
+   {
+    "id": "warranty_end",
+    "title": "Fin de garantie"
+   },
+   {
+    "id": "source",
+    "title": "Source"
+   }
+  ],
+  "important_count": 1,
+  "items": [
+   {
+    "archived": false,
+    "class": "bien durable",
+    "class_id": "goods",
+    "date": "D-120",
+    "id": "R1",
+    "important": true,
+    "in_days": 600,
+    "item": "Lave-linge",
+    "legal": false,
+    "next_date": "D+600",
+    "price": "499 €",
+    "source": "",
+    "source_ref": null,
+    "store": "Électro Plus",
+    "warranty_end": "D+600"
+   }
+  ],
+  "next": "warranty_end",
+  "next_title": "Fin de garantie",
+  "path": "Fiches/Achats.md",
+  "title": "Achats",
+  "type": "purchase",
+  "warranty_min_eur": 50.0
+ },
+ "rev": "REV1",
+ "sections": [
+  {
+   "facts": [
+    {
+     "answer": "",
+     "by": null,
+     "date": null,
+     "fresh": false,
+     "item": false,
+     "label": "",
+     "links": [],
+     "noted": null,
+     "text": "| Date | Objet | Magasin | Prix | Catégorie | Fin de garantie | Source | id |",
+     "when": ""
+    },
+    {
+     "answer": "",
+     "by": null,
+     "date": null,
+     "fresh": false,
+     "item": false,
+     "label": "",
+     "links": [],
+     "noted": null,
+     "text": "| --- | --- | --- | --- | --- | --- | --- | --- |",
+     "when": ""
+    },
+    {
+     "answer": "",
+     "by": null,
+     "date": null,
+     "fresh": false,
+     "item": false,
+     "label": "",
+     "links": [],
+     "noted": null,
+     "text": "| D-120 | Lave-linge | Électro Plus | 499 € | bien durable | D+600 |  | R1 |",
+     "when": ""
+    }
+   ],
+   "id": null,
+   "title": ""
+  }
+ ],
+ "shared_with": [],
+ "split": null,
+ "summary": "",
+ "tasks": [],
+ "text": "---\nid: P1\ntype: records\nrecords: purchase\nupdated: D+0\n---\n# Achats\n\n| Date | Objet | Magasin | Prix | Catégorie | Fin de garantie | Source | id |\n| --- | --- | --- | --- | --- | --- | --- | --- |\n| D-120 | Lave-linge | Électro Plus | 499 € | bien durable | D+600 |  | R1 |\n",
+ "title": "Achats",
+ "trip": null,
+ "updated": "D+0"
+}

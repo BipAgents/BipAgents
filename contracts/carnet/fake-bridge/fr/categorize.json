@@ -1,0 +1,25 @@
+{
+  "target": {
+    "path": "Sujets/Rénovation cuisine.md",
+    "private": false,
+    "item": "page:p0000000001"
+  },
+  "categories": [
+    "money"
+  ],
+  "categories_by": "person",
+  "before": {
+    "categories": [
+      "home"
+    ],
+    "categories_by": "auto"
+  },
+  "learnt": {
+    "word": "renovation",
+    "categories": [
+      "money"
+    ]
+  },
+  "undo": "u000000000002",
+  "toast": null
+}

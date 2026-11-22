@@ -1,0 +1,57 @@
+{
+ "pages": [
+  {
+   "aliases": [],
+   "archived": false,
+   "close": false,
+   "contact": null,
+   "facts": 1,
+   "icon": null,
+   "kind": "area",
+   "next_date": null,
+   "part": "main",
+   "path": "Domaines/Finances.md",
+   "status": null,
+   "summary": "",
+   "title": "Finances",
+   "updated": "D+0"
+  },
+  {
+   "aliases": [],
+   "archived": false,
+   "close": false,
+   "contact": null,
+   "facts": 1,
+   "icon": null,
+   "kind": "area",
+   "next_date": null,
+   "part": "main",
+   "path": "Domaines/Maison.md",
+   "status": null,
+   "summary": "",
+   "title": "Maison",
+   "updated": "D+0"
+  },
+  {
+   "aliases": [],
+   "archived": false,
+   "close": false,
+   "contact": null,
+   "facts": 1,
+   "icon": null,
+   "kind": "area",
+   "next_date": {
+    "date": "D+5",
+    "fact": "Entretien annuel le {date+5}",
+    "in_days": 5,
+    "yearly": true
+   },
+   "part": "main",
+   "path": "Domaines/Travail.md",
+   "status": null,
+   "summary": "",
+   "title": "Travail",
+   "updated": "D+0"
+  }
+ ]
+}

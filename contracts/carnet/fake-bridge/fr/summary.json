@@ -1,0 +1,297 @@
+{
+  "v": 1,
+  "lang": "fr",
+  "title": "Carnet",
+  "space": "all",
+  "spaces": [
+    {
+      "id": "all",
+      "title": "Moi",
+      "selected": true
+    },
+    {
+      "id": "family",
+      "title": "Famille",
+      "selected": false
+    }
+  ],
+  "kept": [
+    {
+      "id": "k1a2b3c",
+      "q": "à payer ce mois-ci",
+      "title": "à payer ce mois-ci",
+      "count": 8,
+      "space": "perso",
+      "category": "money"
+    }
+  ],
+  "card": null,
+  "total": {
+    "count": 131,
+    "title": "Tout le Carnet"
+  },
+  "categories": [
+    {
+      "id": "people",
+      "title": "Personnes",
+      "count": 52,
+      "hint": "Famille, Claire Durand, Lucas Bernard",
+      "locked": false,
+      "first": {
+        "id": "page:p000000000d",
+        "kind": "page",
+        "part": "main",
+        "path": "Domaines/Famille.md",
+        "title": "Famille",
+        "line": "Ta sœur [[Claire Durand]], son mari [[Marc Durand]] et leurs enfants.",
+        "categories": [
+          "people"
+        ],
+        "space": "perso",
+        "date": null,
+        "yearly": null,
+        "source": "Famille",
+        "who": "",
+        "noted": null,
+        "archived": false,
+        "label": null,
+        "answer": null,
+        "page": null,
+        "open": {
+          "path": "Domaines/Famille.md"
+        }
+      }
+    },
+    {
+      "id": "dates",
+      "title": "Dates",
+      "count": 24,
+      "hint": "Travail, Claire Durand, Lucas Bernard",
+      "locked": false,
+      "first": {
+        "id": "line:p0000000012:0000000039",
+        "kind": "line",
+        "part": "main",
+        "path": "Domaines/Travail.md",
+        "title": "Travail",
+        "line": "Entretien annuel le 27 novembre",
+        "categories": [
+          "work",
+          "dates"
+        ],
+        "space": "perso",
+        "date": "2026-11-27",
+        "yearly": null,
+        "source": "Ce qui compte",
+        "who": "Daily",
+        "noted": "2026-11-19",
+        "archived": false,
+        "label": null,
+        "answer": null,
+        "page": "page:p0000000012",
+        "open": {
+          "path": "Domaines/Travail.md",
+          "section": "matters"
+        }
+      }
+    },
+    {
+      "id": "money",
+      "title": "Argent",
+      "count": 19,
+      "hint": "Finances, Changer de voiture, Impôts 2026",
+      "locked": false,
+      "first": {
+        "id": "page:p0000000010",
+        "kind": "page",
+        "part": "main",
+        "path": "Domaines/Finances.md",
+        "title": "Finances",
+        "line": "Le budget du mois et les contrats à renouveler.",
+        "categories": [
+          "money"
+        ],
+        "space": "perso",
+        "date": null,
+        "yearly": null,
+        "source": "Finances",
+        "who": "",
+        "noted": null,
+        "archived": false,
+        "label": null,
+        "answer": null,
+        "page": null,
+        "open": {
+          "path": "Domaines/Finances.md"
+        }
+      }
+    },
+    {
+      "id": "home",
+      "title": "Maison",
+      "count": 27,
+      "hint": "Maison, Jardin, Rénovation cuisine",
+      "locked": false,
+      "first": {
+        "id": "page:p0000000011",
+        "kind": "page",
+        "part": "main",
+        "path": "Domaines/Maison.md",
+        "title": "Maison",
+        "line": "L’appartement, les travaux de la cuisine et les voisins.",
+        "categories": [
+          "home"
+        ],
+        "space": "perso",
+        "date": null,
+        "yearly": null,
+        "source": "Maison",
+        "who": "",
+        "noted": null,
+        "archived": false,
+        "label": null,
+        "answer": null,
+        "page": null,
+        "open": {
+          "path": "Domaines/Maison.md"
+        }
+      }
+    },
+    {
+      "id": "papers",
+      "title": "Papiers",
+      "count": 10,
+      "hint": "Impôts 2026, Vérifier la déclaration pré-remplie, Retrouver les reçus de dons",
+      "locked": false,
+      "first": {
+        "id": "page:p0000000003",
+        "kind": "page",
+        "part": "main",
+        "path": "Sujets/Impôts 2026.md",
+        "title": "Impôts 2026",
+        "line": "Déclaration en ligne à vérifier avant la fin du mois.",
+        "categories": [
+          "money",
+          "papers"
+        ],
+        "space": "perso",
+        "date": null,
+        "yearly": null,
+        "source": "Impôts 2026",
+        "who": "",
+        "noted": null,
+        "archived": false,
+        "label": null,
+        "answer": null,
+        "page": null,
+        "open": {
+          "path": "Sujets/Impôts 2026.md"
+        }
+      }
+    },
+    {
+      "id": "trips",
+      "title": "Voyages",
+      "count": 26,
+      "hint": "Voyage Japon, Week-end à Lisbonne, Réserver les vols pour Osaka",
+      "locked": false,
+      "first": {
+        "id": "page:p000000001a",
+        "kind": "page",
+        "part": "main",
+        "path": "Sujets/Voyage Japon.md",
+        "title": "Voyage Japon",
+        "line": "Avril, 12 jours : Tokyo, Kyoto, Osaka. Les vols sont à réserver bientôt.",
+        "categories": [
+          "trips"
+        ],
+        "space": "perso",
+        "date": null,
+        "yearly": null,
+        "source": "Voyage Japon",
+        "who": "",
+        "noted": null,
+        "archived": false,
+        "label": null,
+        "answer": null,
+        "page": null,
+        "open": {
+          "path": "Sujets/Voyage Japon.md"
+        }
+      }
+    },
+    {
+      "id": "work",
+      "title": "Travail",
+      "count": 4,
+      "hint": "Travail, Préparer l’entretien annuel",
+      "locked": false,
+      "first": {
+        "id": "page:p0000000012",
+        "kind": "page",
+        "part": "main",
+        "path": "Domaines/Travail.md",
+        "title": "Travail",
+        "line": "Ton poste chez Atelier Lumière et ton entretien annuel.",
+        "categories": [
+          "work"
+        ],
+        "space": "perso",
+        "date": null,
+        "yearly": null,
+        "source": "Travail",
+        "who": "",
+        "noted": null,
+        "archived": false,
+        "label": null,
+        "answer": null,
+        "page": null,
+        "open": {
+          "path": "Domaines/Travail.md"
+        }
+      }
+    },
+    {
+      "id": "other",
+      "title": "Autres",
+      "count": 1,
+      "hint": "Trier les photos de l’été",
+      "locked": false,
+      "first": {
+        "id": "task:t000026",
+        "kind": "task",
+        "part": "main",
+        "path": "Tâches/Tâches.md",
+        "title": "Trier les photos de l’été",
+        "line": "Trier les photos de l’été",
+        "categories": [
+          "other"
+        ],
+        "space": "perso",
+        "date": null,
+        "yearly": null,
+        "source": "Tâches",
+        "who": "Daily",
+        "noted": "2026-11-22",
+        "archived": false,
+        "label": null,
+        "answer": null,
+        "page": null,
+        "open": {
+          "task": "t000026"
+        }
+      }
+    },
+    {
+      "id": "health",
+      "title": "Santé",
+      "count": null,
+      "hint": "",
+      "locked": true
+    }
+  ],
+  "bar": {
+    "placeholder": "Cherche dans tout le Carnet"
+  },
+  "version": 42
+}

@@ -1,0 +1,46 @@
+{
+ "answers": [
+  {
+   "answer": "{date+41}",
+   "date": "D+0",
+   "label": "Anniversaire",
+   "page": "Claire Durand",
+   "part": "main",
+   "path": "Personnes/Claire Durand.md",
+   "when": "noté le DAY"
+  }
+ ],
+ "pages": [
+  {
+   "aliases": [],
+   "archived": false,
+   "contact": null,
+   "icon": null,
+   "kind": "person",
+   "lines": [
+    "- Anniversaire : {date+41} — *Wellness, D+0*"
+   ],
+   "part": "main",
+   "path": "Personnes/Claire Durand.md",
+   "summary": "",
+   "title": "Claire Durand",
+   "updated": "D+0"
+  },
+  {
+   "aliases": [],
+   "archived": false,
+   "contact": null,
+   "icon": null,
+   "kind": "person",
+   "lines": [
+    "- Anniversaire : {date+23} — *Wellness, D+0*"
+   ],
+   "part": "main",
+   "path": "Personnes/Marc Durand.md",
+   "summary": "Ton beau-frère, menuisier.",
+   "title": "Marc Durand",
+   "updated": "D+0"
+  }
+ ],
+ "tasks": []
+}

@@ -6,6 +6,12 @@
 //! aside, the items then the pages). Documents, agent pages and connected drives are not searched today: their cases
 //! miss by construction, they are there for S3.
 //!
+//! Brick S1 (categories.rs) adds the categories the bridge gives each item of the demo, against the bench's own
+//! (`items`: the first one, the one the item is grouped under, must be among the bridge's): ≥ 90 % in each language
+//! (`the_demo_is_filed_in_its_categories`, in `cargo test`); and the report's « mauvaise catégorie en tête » measured
+//! twice: with the bench's categories of the first result (S0's measure: the ranking's, unchanged by S1) and with the
+//! bridge's own (before S1: none, every result in « Autres »).
+//!
 //!     cargo test --lib search_bench -- --ignored --nocapture       the report (BIPAGENTS_BENCH_OUT=<file>: as JSON too)
 
 use std::collections::{BTreeMap, HashMap};
@@ -86,6 +92,8 @@ struct Catalogue {
     records: Vec<(String, String, String)>,
     tasks_path: String,
     warnings: Vec<String>,
+    /// fact id → its text as written
+    texts: HashMap<String, String>,
 }
 
 fn who(agent: &str) -> Who {
@@ -122,7 +130,9 @@ fn write_page(
             let date = today - Duration::days(f["days_ago"].as_i64().unwrap_or(0));
             let by = who(&s(&f["agent"]));
             body.push_str(&format!("- {text}{}\n", super::attribution(&by, &date.format("%Y-%m-%d").to_string())));
-            cat.facts.push((format!("fact:{key}/{}/{n}", s(&section["id"])), path.clone(), fold(&text)));
+            let id = format!("fact:{key}/{}/{n}", s(&section["id"]));
+            cat.texts.insert(id.clone(), text.clone());
+            cat.facts.push((id, path.clone(), fold(&text)));
         }
     }
     page.body = body;
@@ -201,6 +211,11 @@ fn write_demo(config: &Config, lang: &str, today: NaiveDate) -> Catalogue {
         cat.pages.insert(cat.tasks_path.clone(), "page:tasks".into());
     }
     cat
+}
+
+/// The language's demo written into `config`'s Carnet (sommaire_contract.rs's fake bridge).
+pub(super) fn write_demo_for(config: &Config, lang: &str, today: NaiveDate) {
+    write_demo(config, lang, today);
 }
 
 // -- one search, as the route makes it ---------------------------------------------------------------------------------
@@ -440,8 +455,174 @@ fn at_scale(lang: &str, today: NaiveDate, queries: &[String], target: usize) -> 
         ms.push(runs[1]);
     }
     ms.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    // what /pages costs with every page's categories (none written yet, as before S2): the pages read, then the
+    // categories with the language and rules read for each page (S1 as first pushed) or once (review 1, R1)
+    let median = |work: &dyn Fn()| -> f64 {
+        let mut runs: Vec<f64> = (0..3)
+            .map(|_| {
+                let t = Instant::now();
+                work();
+                t.elapsed().as_secs_f64() * 1000.0
+            })
+            .collect();
+        runs.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        (runs[1] * 10.0).round() / 10.0
+    };
+    let pages = super::all_pages(&config, Part::Main).len();
+    let read = median(&|| {
+        std::hint::black_box(super::all_pages(&config, Part::Main));
+    });
+    let each = median(&|| {
+        for (path, page) in super::all_pages(&config, Part::Main) {
+            std::hint::black_box(super::categories::of_page(&config, Part::Main, &path, &page));
+        }
+    });
+    let once = median(&|| {
+        let ctx = super::categories::Ctx::new(&config);
+        for (path, page) in super::all_pages(&config, Part::Main) {
+            std::hint::black_box(super::categories::of_page_in(&ctx, Part::Main, &path, &page));
+        }
+    });
     json!({"lines": total, "bytes": bytes, "queries": queries.len(),
-           "p50_ms": (percentile(&ms, 50.0) * 10.0).round() / 10.0, "p95_ms": (percentile(&ms, 95.0) * 10.0).round() / 10.0})
+           "p50_ms": (percentile(&ms, 50.0) * 10.0).round() / 10.0, "p95_ms": (percentile(&ms, 95.0) * 10.0).round() / 10.0,
+           "pages": pages, "pages_read_ms": read, "pages_with_categories_ms_state_each_page": each,
+           "pages_with_categories_ms_state_once": once})
+}
+
+// -- the categories (brick S1) -----------------------------------------------------------------------------------------
+
+/// The language's demo documents (and the health part's) as GET /v1/notebook/documents lists them, by bench id.
+fn demo_documents(lang: &str) -> Vec<(String, Value, Part)> {
+    let b = bench();
+    let demo = if lang == "nl" { b["fixtures"]["nl"]["personal"].clone() } else { read("App/Resources/Demo/notebook-demo.json")[lang].clone() };
+    let keys: Vec<String> = b["documents"].as_array().unwrap().iter().map(s).collect();
+    let mut out = Vec::new();
+    let all = demo["documents"].as_array().into_iter().flatten().map(|d| (d, Part::Main));
+    let health = demo["health_documents"].as_array().into_iter().flatten().map(|d| (d, Part::Health));
+    for (i, (d, part)) in all.chain(health).enumerate() {
+        let subjects: Vec<Value> = d["subjects"].as_array().into_iter().flatten().map(|p| json!({"path": p})).collect();
+        let linked = d["linked"].as_str().map(|p| json!({"path": p})).unwrap_or(Value::Null);
+        let view = json!({"agent": d["agent"], "file": d["name"], "name": d["name"], "subjects": subjects, "linked": linked,
+                          "part": part.as_str()});
+        out.push((format!("doc:{}", keys.get(i).cloned().unwrap_or_default()), view, part));
+    }
+    out
+}
+
+/// The bridge's categories of every item of the language's demo (pages, lines, tasks, records, documents), by bench id.
+fn bridge_categories(config: &Config, cat: &Catalogue, lang: &str, today: NaiveDate) -> BTreeMap<String, Vec<String>> {
+    use super::categories as c;
+    let mut out = BTreeMap::new();
+    let main = super::all_pages(config, Part::Main);
+    let health = super::all_pages(config, Part::Health);
+    let marks = Dict::new();
+    let ctx = c::Ctx::new(config);
+    let page_of = |path: &str| -> Option<(Part, &(String, super::Page))> {
+        main.iter().find(|(p, _)| p == path).map(|x| (Part::Main, x)).or_else(|| health.iter().find(|(p, _)| p == path).map(|x| (Part::Health, x)))
+    };
+    let mut filed: HashMap<String, Vec<String>> = HashMap::new();
+    for (path, id) in &cat.pages {
+        if let Some((part, (path, page))) = page_of(path) {
+            let cats = c::of_page_in(&ctx, part, path, page).categories;
+            filed.insert(path.clone(), cats.clone());
+            out.insert(id.clone(), cats);
+        }
+    }
+    for (id, path, _) in &cat.facts {
+        let page = filed.get(path).cloned().unwrap_or_default();
+        let text = cat.texts.get(id).cloned().unwrap_or_default();
+        out.insert(id.clone(), c::with_dates(&page, c::dated(&text, None, today)));
+    }
+    let tasks = super::tasks(config, Part::Main);
+    for (id, title) in &cat.tasks {
+        // its title as written, its page's link after it (« … [[Rénovation cuisine]] »)
+        if let Some(t) = tasks.iter().find(|t| fold(&t.title).starts_with(title.as_str())) {
+            out.insert(id.clone(), c::of_task(&ctx, t, &main, &marks, today));
+        }
+    }
+    for t in &records::TYPES {
+        for r in records::records(config, t).into_iter().chain(records::archived_records(config, t)) {
+            let key = ["item", "service", "what", "document"].iter().find_map(|k| r.get(*k).map(|v| fold(&s(v)))).unwrap_or_default();
+            if let Some((id, _, _)) = cat.records.iter().find(|(_, _, k)| *k == key) {
+                let (cats, _, dated) = c::of_record(t, &r, &marks, today);
+                out.insert(id.clone(), c::with_dates(&cats, dated));
+            }
+        }
+    }
+    for (id, doc, part) in demo_documents(lang) {
+        let pages = if part == Part::Health { &health } else { &main };
+        let cats = if part == Part::Health { vec!["health".to_string()] } else { c::of_document(&ctx, &doc, pages, &marks).0 };
+        out.insert(id, cats);
+    }
+    out
+}
+
+#[derive(Default)]
+struct Filing {
+    n: usize,
+    /// the bench's first category among the bridge's
+    right: usize,
+    /// the same categories (Dates aside)
+    exact: usize,
+    /// Dates where the bench has it (of those with an offset in the bench)
+    dated: usize,
+    dated_right: usize,
+    misses: Vec<Value>,
+}
+
+impl Filing {
+    fn view(&self) -> Value {
+        let pct = |x: usize, n: usize| if n == 0 { Value::Null } else { json!((1000.0 * x as f64 / n as f64).round() / 10.0) };
+        json!({"n": self.n, "right": pct(self.right, self.n), "exact": pct(self.exact, self.n),
+               "dates_found": pct(self.dated_right, self.dated), "misses": self.misses})
+    }
+}
+
+/// The bridge's categories against the bench's (`items`), for the personal Carnet's items (the family's are S6's, the
+/// connected drives' S3's).
+fn filing(config: &Config, cat: &Catalogue, lang: &str, today: NaiveDate) -> (Filing, BTreeMap<String, Vec<String>>) {
+    let b = bench();
+    let items = b["items"].as_object().unwrap();
+    let got = bridge_categories(config, cat, lang, today);
+    let mut f = Filing::default();
+    for (id, item) in items {
+        if id.starts_with("fam:") || id.starts_with("drive:") {
+            continue;
+        }
+        let want: Vec<String> = item["categories"].as_array().unwrap().iter().map(s).collect();
+        let Some(have) = got.get(id) else {
+            f.n += 1;
+            f.misses.push(json!({"id": id, "want": want, "got": null}));
+            continue;
+        };
+        f.n += 1;
+        let main = want.iter().find(|c| *c != "dates").cloned().unwrap_or_else(|| want[0].clone());
+        let right = have.contains(&main);
+        let plain = |l: &[String]| { let mut v: Vec<String> = l.iter().filter(|c| *c != "dates").cloned().collect(); v.sort(); v };
+        f.right += usize::from(right);
+        f.exact += usize::from(plain(&want) == plain(have));
+        if item.get("offset").is_some() && want.contains(&"dates".to_string()) {
+            f.dated += 1;
+            f.dated_right += usize::from(have.contains(&"dates".to_string()));
+        }
+        if !right {
+            f.misses.push(json!({"id": id, "want": want, "got": have}));
+        }
+    }
+    (f, got)
+}
+
+#[test]
+fn the_demo_is_filed_in_its_categories() {
+    let today = NaiveDate::from_ymd_opt(2026, 11, 21).unwrap();
+    for lang in LANGS {
+        let dir = tempfile::tempdir().unwrap();
+        let config = super::tests_config(dir.path());
+        let cat = write_demo(&config, lang, today);
+        let (f, _) = filing(&config, &cat, lang, today);
+        let right = f.right as f64 / f.n as f64;
+        assert!(right >= 0.9, "{lang}: {:.1} % in the right category, {:?}", 100.0 * right, f.misses);
+    }
 }
 
 fn report() -> Value {
@@ -450,6 +631,11 @@ fn report() -> Value {
     let today = chrono::Local::now().date_naive();
     let mut all = Tally::default();
     let mut by: BTreeMap<String, Tally> = BTreeMap::new();
+    let mut filed_by: BTreeMap<String, Value> = BTreeMap::new();
+    // « mauvaise catégorie en tête » with the bridge's own categories: before S1 (none: every result « Autres »), after
+    let (mut with_cat, mut wrong_none, mut wrong_bridge) = (0usize, 0usize, 0usize);
+    // the result that answers, under the category the person means (what S3's groups will show)
+    let (mut answered, mut answer_right) = (0usize, 0usize);
     let mut misses: Vec<Value> = Vec::new();
     let mut sizes_by: BTreeMap<String, Value> = BTreeMap::new();
     let (mut skipped, mut refused_ok, mut refused_n, mut health_leaks, mut health_lines) = (0, 0, 0, 0, 0);
@@ -459,6 +645,20 @@ fn report() -> Value {
         let config = super::tests_config(dir.path());
         let cat = write_demo(&config, lang, today);
         warnings.extend(cat.warnings.iter().map(|w| format!("{lang}: {w}")));
+        let (f, bridge) = filing(&config, &cat, lang, today);
+        let mut view = f.view();
+        // what reading every item's categories costs (no page has them written yet: all computed, as before S2)
+        let mut runs: Vec<f64> = (0..5)
+            .map(|_| {
+                let t = Instant::now();
+                std::hint::black_box(bridge_categories(&config, &cat, lang, today));
+                t.elapsed().as_secs_f64() * 1000.0
+            })
+            .collect();
+        runs.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        view["all_items_ms"] = json!((runs[2] * 100.0).round() / 100.0);
+        view["items"] = json!(bridge.len());
+        filed_by.insert(lang.into(), view);
         let fam = if lang == "nl" {
             b["fixtures"]["nl"]["family"].clone()
         } else {
@@ -507,6 +707,21 @@ fn report() -> Value {
                 .map(|i| i["categories"].as_array().unwrap().iter().map(s).collect())
                 .unwrap_or_else(|| if shown.is_empty() { vec![] } else { vec!["other".into()] });
             let wrong = category.is_some() && !shown.is_empty() && !top_cats.iter().any(|c| Some(c.as_str()) == category);
+            if !is_family {
+                if let (Some(category), Some(top)) = (category, shown.first()) {
+                    with_cat += 1;
+                    wrong_none += usize::from(category != "other");
+                    let cats = bridge.get(&top.primary).cloned().unwrap_or_else(|| vec!["other".into()]);
+                    wrong_bridge += usize::from(!cats.iter().any(|c| c == category));
+                }
+                if let Some(category) = category {
+                    let firsts: Vec<&String> = want.iter().filter(|w| bridge.contains_key(*w)).collect();
+                    if !firsts.is_empty() {
+                        answered += 1;
+                        answer_right += usize::from(firsts.iter().any(|w| bridge[*w].iter().any(|c| c == category)));
+                    }
+                }
+            }
             let carnet = if is_family { "family" } else { "personal" };
             let keys = [
                 format!("lang:{lang}"),
@@ -546,6 +761,17 @@ fn report() -> Value {
                 "runs_per_query": RUNS, "note": "in-process time of the route's work (no HTTP, no network); build profile of `cargo test`"},
         "all": all.view(),
         "by": by.iter().map(|(k, t)| (k.clone(), t.view())).collect::<serde_json::Map<String, Value>>(),
+        "categories": {
+            "filed": filed_by,
+            "wrong_category_top_personal": {
+                "n": with_cat,
+                "bench_categories_s0": by.get("carnet:personal").map(|t| t.view()["wrong_category"].clone()).unwrap_or(Value::Null),
+                "bridge_before_s1": (1000.0 * wrong_none as f64 / with_cat.max(1) as f64).round() / 10.0,
+                "bridge_after_s1": (1000.0 * wrong_bridge as f64 / with_cat.max(1) as f64).round() / 10.0,
+            },
+            "answer_in_meant_category": {"n": answered, "after_s1": (1000.0 * answer_right as f64 / answered.max(1) as f64).round() / 10.0,
+                                          "before_s1": "0 (no categories: everything « Autres »)"},
+        },
         "drives_refused_kept_out": format!("{refused_ok}/{refused_n}"),
         "health_leaks": health_leaks,
         "health_looking_lines_in_main_results": health_lines,

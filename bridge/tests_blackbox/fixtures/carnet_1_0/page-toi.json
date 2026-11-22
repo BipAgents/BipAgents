@@ -1,0 +1,82 @@
+{
+ "aliases": [],
+ "archived": false,
+ "backlinks": [],
+ "close": false,
+ "contact": null,
+ "documents": [],
+ "emails": [],
+ "frontmatter": {
+  "aliases": [],
+  "id": "P1",
+  "type": "self",
+  "updated": "D+0"
+ },
+ "icon": null,
+ "id": "P1",
+ "kind": "self",
+ "links": [],
+ "outline": [
+  {
+   "id": "about",
+   "title": "Qui tu es"
+  },
+  {
+   "id": "family",
+   "title": "Famille"
+  },
+  {
+   "id": "work",
+   "title": "Travail"
+  },
+  {
+   "id": "habits",
+   "title": "Goûts et habitudes"
+  },
+  {
+   "id": "goals",
+   "title": "Objectifs"
+  },
+  {
+   "id": "agents",
+   "title": "Ce que tes agents doivent savoir"
+  },
+  {
+   "id": "other",
+   "title": "Autres"
+  }
+ ],
+ "part": "main",
+ "path": "Toi.md",
+ "phones": [],
+ "records": null,
+ "rev": "REV1",
+ "sections": [
+  {
+   "facts": [
+    {
+     "answer": "",
+     "by": "Wellness",
+     "date": "D+0",
+     "fresh": true,
+     "item": true,
+     "label": "",
+     "links": [],
+     "noted": "Noté par Wellness le DAY",
+     "text": "Vit à Nantes",
+     "when": "noté le DAY"
+    }
+   ],
+   "id": "about",
+   "title": "Qui tu es"
+  }
+ ],
+ "shared_with": [],
+ "split": null,
+ "summary": "",
+ "tasks": [],
+ "text": "---\nid: P1\ntype: self\naliases: []\nupdated: D+0\n---\n# Toi\n\n## Qui tu es\n- Vit à Nantes — *Wellness, D+0*\n",
+ "title": "Toi",
+ "trip": null,
+ "updated": "D+0"
+}

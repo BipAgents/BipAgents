@@ -1,0 +1,243 @@
+{
+  "v": 1,
+  "epoch": "e7k2m9",
+  "version": 43,
+  "since": 42,
+  "full": false,
+  "lang": "fr",
+  "made": "2026-11-22T07:05:00Z",
+  "limits": {
+    "lines": 20000,
+    "bytes": 8000000
+  },
+  "truncated": false,
+  "online_only": null,
+  "dated": {
+    "before": 90,
+    "after": 730
+  },
+  "items": [
+    {
+      "id": "task:t00000e",
+      "kind": "task",
+      "path": "Tâches/Tâches.md",
+      "title": "Rappeler Marc pour le devis",
+      "line": "Rappeler Marc pour le devis",
+      "categories": [
+        "home"
+      ],
+      "date": "2026-11-24",
+      "source": "Tâches",
+      "who": "Daily",
+      "noted": "2026-11-22",
+      "open": {
+        "task": "t00000e"
+      },
+      "fold": "rappeler marc pour le devis"
+    }
+  ],
+  "removed": [
+    "line:p000000000d:000000000f"
+  ],
+  "stop": [
+    "de",
+    "du",
+    "la",
+    "le",
+    "les",
+    "des",
+    "d",
+    "l",
+    "un",
+    "une",
+    "au",
+    "aux",
+    "et",
+    "a",
+    "en",
+    "pour",
+    "sur",
+    "ma",
+    "mon",
+    "mes",
+    "ta",
+    "ton",
+    "tes",
+    "sa",
+    "son",
+    "ses",
+    "quel",
+    "quelle",
+    "quels",
+    "quelles",
+    "est",
+    "c",
+    "qu",
+    "que",
+    "qui",
+    "quoi",
+    "combien",
+    "elle",
+    "il",
+    "quand",
+    "the",
+    "of",
+    "an",
+    "and",
+    "to",
+    "is",
+    "what",
+    "which",
+    "who",
+    "how",
+    "many",
+    "much",
+    "my",
+    "your",
+    "his",
+    "her",
+    "does",
+    "s",
+    "when",
+    "has",
+    "der",
+    "die",
+    "das",
+    "den",
+    "dem",
+    "von",
+    "ein",
+    "eine",
+    "und",
+    "ist",
+    "was",
+    "wie",
+    "welche",
+    "hat",
+    "wann",
+    "el",
+    "los",
+    "las",
+    "del",
+    "y",
+    "es",
+    "cual",
+    "cuanto",
+    "cuando",
+    "tiene"
+  ],
+  "neighbours": {
+    "toubib": [
+      "medecin"
+    ],
+    "note": [
+      "facture"
+    ],
+    "bagnole": [
+      "voiture"
+    ],
+    "aniv": [
+      "anniversaire"
+    ],
+    "bail": [
+      "location",
+      "loyer"
+    ]
+  },
+  "dates": {
+    "lang": "fr",
+    "phrases": [
+      {
+        "words": "la semaine prochaine",
+        "from": {
+          "unit": "week",
+          "n": 1,
+          "edge": "start"
+        },
+        "to": {
+          "unit": "week",
+          "n": 1,
+          "edge": "end"
+        }
+      },
+      {
+        "words": "ce mois ci",
+        "from": {
+          "unit": "day",
+          "n": 0
+        },
+        "to": {
+          "unit": "month",
+          "n": 0,
+          "edge": "end"
+        }
+      },
+      {
+        "words": "avant noel",
+        "from": {
+          "unit": "day",
+          "n": 0
+        },
+        "to": {
+          "unit": "feast",
+          "feast": "christmas_eve"
+        }
+      },
+      {
+        "words": "il y a un mois",
+        "from": {
+          "unit": "month",
+          "n": -1,
+          "edge": "start"
+        },
+        "to": {
+          "unit": "month",
+          "n": -1,
+          "edge": "end"
+        }
+      }
+    ],
+    "feasts": {
+      "christmas_eve": {
+        "month": 12,
+        "day": 24
+      },
+      "christmas": {
+        "month": 12,
+        "day": 25
+      },
+      "new_year": {
+        "month": 1,
+        "day": 1
+      },
+      "easter": {
+        "easter": 0
+      },
+      "ascension": {
+        "easter": 39
+      },
+      "pentecost": {
+        "easter": 49
+      }
+    },
+    "easter": {
+      "2026": "2026-04-05",
+      "2027": "2027-03-28",
+      "2028": "2028-04-16",
+      "2029": "2029-04-01",
+      "2030": "2030-04-21",
+      "2031": "2031-04-13",
+      "2032": "2032-03-28",
+      "2033": "2033-04-17",
+      "2034": "2034-04-09",
+      "2035": "2035-03-25"
+    }
+  },
+  "kept": [
+    {
+      "id": "k1a2b3c",
+      "q": "à payer ce mois-ci",
+      "title": "à payer ce mois-ci"
+    }
+  ]
+}

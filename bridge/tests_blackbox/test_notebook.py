@@ -44,7 +44,8 @@ def test_an_agent_files_facts_that_read_well_in_obsidian(bridge):
     assert text_of(filed) == "Saved: Marc Dupont › dates (1 fact, new page)."
     page = (notebook(bridge) / "carnet" / "Personnes" / "Marc Dupont.md").read_text()
     assert re.fullmatch(
-        r"---\nid: p[0-9a-f]{10}\ntype: person\naliases:\n  - Marco\ncontact: C-1\nupdated: " + TODAY + r"\n---\n"
+        r"---\nid: p[0-9a-f]{10}\ntype: person\naliases:\n  - Marco\ncontact: C-1\ncategories:\n  - people\n"
+        r"categories_by: auto\nupdated: " + TODAY + r"\n---\n"
         r"# Marc Dupont\n\n## En bref\nAmi d'enfance\.\n\n## Dates\n- Anniversaire : 14 novembre — \*Wellness, "
         + TODAY + r"\*\n", page), page
     # Found again by a nickname or the contact: the same page, nothing repeated.
@@ -168,7 +169,9 @@ def test_the_app_reads_searches_edits_and_restores(bridge):
     assert view["sections"] == [{"id": "dates", "title": "Dates", "facts": [{"text": "Anniversaire : 14 novembre",
                                  "label": "Anniversaire", "answer": "14 novembre", "when": when, "fresh": True,
                                  "noted": f"Noté par Wellness le {when.removeprefix('noté le ')} {day.year}",
-                                 "by": "Wellness", "date": TODAY, "item": True, "links": []}]}]
+                                 "by": "Wellness", "date": TODAY, "item": True, "links": [],
+                                 # its categories (the sommaire, contracts/carnet/sommaire.json: added for the new apps)
+                                 "categories": ["people", "dates"]}]}]
     assert [s["id"] for s in view["outline"]] == ["who", "dates", "family", "work", "tastes", "gifts", "agreed",
                                                    "exchanges", "remember", "other"]
     assert view["rev"] == hashlib.sha256(view["text"].encode()).hexdigest()[:16]

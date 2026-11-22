@@ -1,0 +1,88 @@
+{
+  "v": 1,
+  "lang": "en",
+  "title": "Notebook",
+  "with": "With Marie, Léa and Tom",
+  "kept": [
+    {
+      "id": "k9f8e7d",
+      "q": "shopping",
+      "title": "shopping",
+      "count": 5,
+      "space": null
+    }
+  ],
+  "total": {
+    "count": 15,
+    "title": "All the Notebook"
+  },
+  "categories": [
+    {
+      "id": "shopping",
+      "title": "Shopping",
+      "count": 5,
+      "hint": "Milk, Wholewheat pasta, Lemons",
+      "locked": false
+    },
+    {
+      "id": "people",
+      "title": "People",
+      "count": 2,
+      "hint": "Grandma's birthday, Tom's birthday",
+      "locked": false
+    },
+    {
+      "id": "dates",
+      "title": "Dates",
+      "count": 6,
+      "hint": "Boiler appointment, Book the Christmas caterer, Return the library books",
+      "locked": false
+    },
+    {
+      "id": "home",
+      "title": "Home",
+      "count": 2,
+      "hint": "Boiler appointment, Wifi: see the router.\nPlumber: Mr Garnier, 06 00 00 00 00.\nTom's school: 01 00 00 00 00.",
+      "locked": false
+    },
+    {
+      "id": "papers",
+      "title": "Papers",
+      "count": 1,
+      "hint": "Wifi: see the router.\nPlumber: Mr Garnier, 06 00 00 00 00.\nTom's school: 01 00 00 00 00.",
+      "locked": false
+    },
+    {
+      "id": "holidays",
+      "title": "Holidays",
+      "count": 1,
+      "hint": "Cottage in Annecy, 14 to 21 February.\nStill to book: the train there.",
+      "locked": false
+    },
+    {
+      "id": "school",
+      "title": "School",
+      "count": 3,
+      "hint": "Sign Tom up for judo, Return the library books, Wifi: see the router.\nPlumber: Mr Garnier, 06 00 00 00 00.\nTom's school: 01 00 00 00 00.",
+      "locked": false
+    },
+    {
+      "id": "menus",
+      "title": "Menus",
+      "count": 2,
+      "hint": "Book the Christmas caterer, Monday: lemon pasta.\nTuesday: soup and toast.",
+      "locked": false
+    },
+    {
+      "id": "other",
+      "title": "Other",
+      "count": 2,
+      "hint": "Return the library books, Christmas dinner at Marie's",
+      "locked": false
+    }
+  ],
+  "bar": {
+    "placeholder": "Search for the family"
+  },
+  "version": 7
+}

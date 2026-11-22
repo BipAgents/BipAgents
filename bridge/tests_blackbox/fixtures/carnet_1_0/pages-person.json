@@ -1,0 +1,46 @@
+{
+ "pages": [
+  {
+   "aliases": [],
+   "archived": false,
+   "close": true,
+   "contact": null,
+   "facts": 2,
+   "icon": null,
+   "kind": "person",
+   "next_date": {
+    "date": "D+41",
+    "fact": "Anniversaire : {date+41}",
+    "in_days": 41,
+    "yearly": true
+   },
+   "part": "main",
+   "path": "Personnes/Claire Durand.md",
+   "status": null,
+   "summary": "",
+   "title": "Claire Durand",
+   "updated": "D+0"
+  },
+  {
+   "aliases": [],
+   "archived": false,
+   "close": true,
+   "contact": null,
+   "facts": 3,
+   "icon": null,
+   "kind": "person",
+   "next_date": {
+    "date": "D+23",
+    "fact": "Anniversaire : {date+23}",
+    "in_days": 23,
+    "yearly": true
+   },
+   "part": "main",
+   "path": "Personnes/Marc Durand.md",
+   "status": null,
+   "summary": "Ton beau-frère, menuisier.",
+   "title": "Marc Durand",
+   "updated": "D+0"
+  }
+ ]
+}

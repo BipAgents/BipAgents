@@ -1,0 +1,88 @@
+{
+  "v": 1,
+  "lang": "fr",
+  "title": "Carnet",
+  "with": "Avec Marie, Léa et Tom",
+  "kept": [
+    {
+      "id": "k9f8e7d",
+      "q": "courses",
+      "title": "courses",
+      "count": 5,
+      "space": null
+    }
+  ],
+  "total": {
+    "count": 15,
+    "title": "Tout le Carnet"
+  },
+  "categories": [
+    {
+      "id": "shopping",
+      "title": "Courses",
+      "count": 5,
+      "hint": "Lait, Pâtes complètes, Citrons",
+      "locked": false
+    },
+    {
+      "id": "people",
+      "title": "Personnes",
+      "count": 2,
+      "hint": "Anniversaire de Mamie, Anniversaire de Tom",
+      "locked": false
+    },
+    {
+      "id": "dates",
+      "title": "Dates",
+      "count": 6,
+      "hint": "Rendez-vous chaudière, Réserver le traiteur pour Noël, Rendre les livres à la médiathèque",
+      "locked": false
+    },
+    {
+      "id": "home",
+      "title": "Maison",
+      "count": 2,
+      "hint": "Rendez-vous chaudière, Wifi : voir la box.\nPlombier : M. Garnier, 06 00 00 00 00.\nÉcole de Tom : 01 00 00 00 00.",
+      "locked": false
+    },
+    {
+      "id": "papers",
+      "title": "Papiers",
+      "count": 1,
+      "hint": "Wifi : voir la box.\nPlombier : M. Garnier, 06 00 00 00 00.\nÉcole de Tom : 01 00 00 00 00.",
+      "locked": false
+    },
+    {
+      "id": "holidays",
+      "title": "Vacances",
+      "count": 1,
+      "hint": "Gîte à Annecy, du 14 au 21 février.\nReste à réserver : le train aller.",
+      "locked": false
+    },
+    {
+      "id": "school",
+      "title": "École",
+      "count": 3,
+      "hint": "Inscrire Tom au judo, Rendre les livres à la médiathèque, Wifi : voir la box.\nPlombier : M. Garnier, 06 00 00 00 00.\nÉcole de Tom : 01 00 00 00 00.",
+      "locked": false
+    },
+    {
+      "id": "menus",
+      "title": "Menus",
+      "count": 2,
+      "hint": "Réserver le traiteur pour Noël, Lundi : pâtes au citron.\nMardi : soupe et tartines.",
+      "locked": false
+    },
+    {
+      "id": "other",
+      "title": "Autres",
+      "count": 2,
+      "hint": "Rendre les livres à la médiathèque, Repas de Noël chez Marie",
+      "locked": false
+    }
+  ],
+  "bar": {
+    "placeholder": "Cherche pour la famille"
+  },
+  "version": 7
+}
