@@ -1040,7 +1040,7 @@ async fn delete_page(State(state): State<AppState>, Path(page): Path<String>, q:
 /// Is each agent's Hermes up, and does the model answer? Lets the app tell « server down » from « model
 /// down » (its machine off, an expired API key).
 /// `?agent=<name>`: that agent's Hermes only (the app refreshes one agent at a time).
-async fn status(State(state): State<AppState>, q: QueryMap) -> ApiResult<Response> {
+async fn status(State(state): State<AppState>, headers: HeaderMap, q: QueryMap) -> ApiResult<Response> {
     let config = state.config();
     let only = match q.get("agent").filter(|a| !a.is_empty()) {
         Some(a) => Some(agent_or_404(&config, Some(a))?.name),
@@ -1090,7 +1090,12 @@ async fn status(State(state): State<AppState>, q: QueryMap) -> ApiResult<Respons
     if let Some(one) = &only {
         jobs.retain(|j| j.get("agent").and_then(Value::as_str) == Some(one.as_str())); // `?agent=`: its own only
     }
-    Ok(web::ok(json!({"agents": agents, "model": model, "protected": config.hermes.isolated, "jobs": jobs})))
+    let mut body = json!({"agents": agents, "model": model, "protected": config.hermes.isolated, "jobs": jobs});
+    // the oldest app builds this bridge works with (app_floor.rs): only to an app that says its build (1.1 and later)
+    if let Some(floor) = crate::app_floor::for_request(&config.app_floor, &headers) {
+        body["app_floor"] = floor;
+    }
+    Ok(crate::app_floor::vary(web::ok(body)))
 }
 
 /// The LAN door as it is now (address, certificate): the app refreshes it while the tailnet works.
@@ -1689,7 +1694,7 @@ pub fn build_router() -> Router<AppState> {
         .route("/approvals", get(approvals))
 }
 
-async fn health(State(state): State<AppState>) -> ApiResult<Response> {
+async fn health(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<Response> {
     let tts = &state.tts;
     let (pocket_ok, server_ok) = tokio::join!(
         async {
@@ -1727,7 +1732,14 @@ async fn health(State(state): State<AppState>) -> ApiResult<Response> {
     if let Value::Object(map) = &mut body {
         map.extend(crate::sealed_keys::health_fields(&state.config()));
     }
-    Ok(web::ok(body))
+    // « Mets à jour l'app » (app_floor.rs): for an app that says its build only, so an older one reads today's answer
+    if let Some(floor) = crate::app_floor::for_request(&state.config().app_floor, &headers) {
+        if let Some(features) = body["features"].as_array_mut() {
+            features.push(json!("app_floor"));
+        }
+        body["app_floor"] = floor;
+    }
+    Ok(crate::app_floor::vary(web::ok(body)))
 }
 
 /// A request that only asks whether a route matches its path (see `redirect_slashes`): answered before any handler.
@@ -1745,8 +1757,12 @@ async fn probe(request: Request, next: Next) -> Response {
 
 /// FastAPI's answer to an unknown path: Starlette's `redirect_slashes` first (the same path with or without its
 /// trailing slash matches a route: 307 there), else 404 `{"detail": "Not Found"}`.
-async fn not_found(routes: Router, request: Request) -> Response {
+async fn not_found(routes: Router, state: AppState, request: Request) -> Response {
     let path = request.uri().path().to_string();
+    // a path retired for old apps (`[app_floor] gone`): 426 « update the app » instead of 404
+    if let Some(gone) = crate::app_floor::gone_answer(&state.config().app_floor, &path) {
+        return gone;
+    }
     let websocket = request
         .headers()
         .get("upgrade")
@@ -2003,8 +2019,10 @@ fn assemble(state: &AppState, config: &Config) -> Router {
         .merge(crate::desktop::desktop_router()); // the page and its stream: a short-lived ticket from the route above
     // The same routes, answering « matched » without running anything: what `redirect_slashes` asks.
     let routes: Router = app.clone().route_layer(middleware::from_fn(probe)).with_state(state.clone());
-    let inner: Router =
-        app.fallback(move |request: Request| not_found(routes.clone(), request)).with_state(state.clone());
+    let floor_state = state.clone();
+    let inner: Router = app
+        .fallback(move |request: Request| not_found(routes.clone(), floor_state.clone(), request))
+        .with_state(state.clone());
     // Python's middlewares wrap the whole app (before routing): here around the routed app, as one service.
     // Bodies: one limit for the whole app, before routing (body_limit.rs: 4 MB, raised on the few routes that take
     // large bodies), so axum's own per-extractor limit is off. An exception in a route is a plain-text 500, logged as

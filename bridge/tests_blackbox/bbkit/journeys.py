@@ -142,6 +142,12 @@ def journeys_chrome(url: str):
     return JourneysChrome(url)
 
 
+# « Mets à jour l'app » (J66): the oldest app build this bridge works with, for both apps. Only a build of 2 to 4 is
+# under it: the journeys' debug apps are build 1 (never checked) unless J66 makes them stand for 3 (`-appFloorBuild`,
+# AppFloorCenter.pretend), then 10; a real build (2026…, 263…) is far above (release-compat's apps of the stores).
+JOURNEY_FLOOR = 5
+
+
 def journey_bridge(bridges, fakes, word_gap: float = 0.06, name: str = "journeys",
                    family_relay: Optional[str] = None, tool_asks: bool = False, browser: bool = False) -> Journey:
     from test_connectors import IMAGE, SERVER
@@ -164,6 +170,7 @@ def journey_bridge(bridges, fakes, word_gap: float = 0.06, name: str = "journeys
     files.mkdir(parents=True, exist_ok=True)
     bridge.config["media"] = {"roots": {FILES_ROOT: str(files)}}
     bridge.config["limits"] = {"upload_max_mb": 20, "purge_interval_hours": 1000}
+    bridge.config["app_floor"] = {"ios": {"min": JOURNEY_FLOOR}, "android": {"min": JOURNEY_FLOOR}}   # J66
     # its door (HTTPS, a certificate the apps pin), as an install's QR code gives it: the iPhone pairs there only
     door = free_port()
     bridge.config["lan"] = {"enabled": True, "address": "127.0.0.1", "host": "127.0.0.1", "port": door}

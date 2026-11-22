@@ -25,6 +25,8 @@ pub mod web;
 
 // -- core ------------------------------------------------------------------------------------------
 pub mod app;
+/// « Mets à jour l'app »: the oldest app builds this bridge works with, and routes retired for old apps (1.1).
+pub mod app_floor;
 pub mod auth;
 pub mod config;
 pub mod guard;
