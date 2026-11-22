@@ -274,7 +274,7 @@ fn compact(item: &Value) -> Value {
             Value::Null => true,
             Value::Bool(b) => !b,
             Value::String(t) => t.is_empty() || (k == "part" && t == "main") || (k == "space" && t == "perso"),
-            Value::Array(a) => a.is_empty() && k != "categories",
+            Value::Array(a) => a.is_empty(),
             _ => false,
         };
         if !default {
@@ -355,6 +355,9 @@ fn fake_bridge(lang: &str) -> BTreeMap<String, Value> {
     let dir = tempfile::tempdir().unwrap();
     let config = super::tests_config(dir.path());
     super::search_bench::write_demo_for(&config, lang, today());
+    // and a page the person just made in the app: no « En bref » yet, so its item has no `line`
+    let garden = if lang == "fr" { "Jardin" } else { "Garden" };
+    super::new_page(&config, Part::Main, "subject", garden, &super::Who::you(&config)).unwrap().unwrap();
     let items = demo_index(&config, lang);
     // the live answers (search, sommaire, a category's page): Dates on the bridge's day
     let shown: Vec<Value> = items.iter().map(live).collect();

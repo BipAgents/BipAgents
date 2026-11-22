@@ -52,7 +52,7 @@
       "fold": "ta soeur claire durand son mari marc durand et leurs enfants"
     },
     {
-      "id": "line:p000000000d:000000002f",
+      "id": "line:p000000000d:0000000030",
       "kind": "line",
       "path": "Domaines/Famille.md",
       "title": "Famille",
@@ -71,7 +71,7 @@
       "fold": "diner ensemble un samedi par mois"
     },
     {
-      "id": "line:p000000000d:0000000030",
+      "id": "line:p000000000d:0000000031",
       "kind": "line",
       "path": "Domaines/Famille.md",
       "title": "Famille",
@@ -105,7 +105,7 @@
       "fold": "finances le budget du mois et les contrats a renouveler"
     },
     {
-      "id": "line:p0000000010:0000000031",
+      "id": "line:p0000000010:0000000032",
       "kind": "line",
       "path": "Domaines/Finances.md",
       "title": "Finances",
@@ -126,7 +126,7 @@
       "fold": "epargne 200 par mois sur le livret"
     },
     {
-      "id": "line:p0000000010:0000000032",
+      "id": "line:p0000000010:0000000033",
       "kind": "line",
       "path": "Domaines/Finances.md",
       "title": "Finances",
@@ -160,7 +160,7 @@
       "fold": "maison l appartement les travaux de la cuisine et les voisins"
     },
     {
-      "id": "line:p0000000011:0000000033",
+      "id": "line:p0000000011:0000000034",
       "kind": "line",
       "path": "Domaines/Maison.md",
       "title": "Maison",
@@ -181,7 +181,7 @@
       "fold": "entretien de la chaudiere chaque annee en octobre"
     },
     {
-      "id": "line:p0000000011:0000000034",
+      "id": "line:p0000000011:0000000035",
       "kind": "line",
       "path": "Domaines/Maison.md",
       "title": "Maison",
@@ -200,7 +200,7 @@
       "fold": "poubelles le lundi soir"
     },
     {
-      "id": "line:p0000000011:0000000035",
+      "id": "line:p0000000011:0000000036",
       "kind": "line",
       "path": "Domaines/Maison.md",
       "title": "Maison",
@@ -219,7 +219,7 @@
       "fold": "un double des cles chez sophie laurent"
     },
     {
-      "id": "line:p0000000011:0000000036",
+      "id": "line:p0000000011:0000000037",
       "kind": "line",
       "path": "Domaines/Maison.md",
       "title": "Maison",
@@ -240,7 +240,7 @@
       "fold": "syndic cabinet moreau 02 40 00 00 00"
     },
     {
-      "id": "line:p0000000011:0000000037",
+      "id": "line:p0000000011:0000000038",
       "kind": "line",
       "path": "Domaines/Maison.md",
       "title": "Maison",
@@ -274,7 +274,7 @@
       "fold": "travail ton poste chez atelier lumiere et ton entretien annuel"
     },
     {
-      "id": "line:p0000000012:0000000038",
+      "id": "line:p0000000012:0000000039",
       "kind": "line",
       "path": "Domaines/Travail.md",
       "title": "Travail",
@@ -294,7 +294,7 @@
       "fold": "entretien annuel le 27 novembre"
     },
     {
-      "id": "line:p0000000012:0000000039",
+      "id": "line:p0000000012:000000003a",
       "kind": "line",
       "path": "Domaines/Travail.md",
       "title": "Travail",
@@ -331,7 +331,7 @@
       ]
     },
     {
-      "id": "line:p0000000013:000000003a",
+      "id": "line:p0000000013:000000003b",
       "kind": "line",
       "path": "Personnes/Claire Durand.md",
       "title": "Claire Durand",
@@ -350,7 +350,7 @@
       "fold": "ta soeur"
     },
     {
-      "id": "line:p0000000013:000000003b",
+      "id": "line:p0000000013:000000003c",
       "kind": "line",
       "path": "Personnes/Claire Durand.md",
       "title": "Claire Durand",
@@ -372,7 +372,7 @@
       "fold": "anniversaire 2 janvier"
     },
     {
-      "id": "line:p0000000013:000000003c",
+      "id": "line:p0000000013:000000003d",
       "kind": "line",
       "path": "Personnes/Claire Durand.md",
       "title": "Claire Durand",
@@ -391,7 +391,7 @@
       "fold": "mariee a marc durand deux enfants ines et tom"
     },
     {
-      "id": "line:p0000000013:000000003d",
+      "id": "line:p0000000013:000000003e",
       "kind": "line",
       "path": "Personnes/Claire Durand.md",
       "title": "Claire Durand",
@@ -410,7 +410,7 @@
       "fold": "infirmiere de nuit a nantes"
     },
     {
-      "id": "line:p0000000013:000000003e",
+      "id": "line:p0000000013:000000003f",
       "kind": "line",
       "path": "Personnes/Claire Durand.md",
       "title": "Claire Durand",
@@ -449,7 +449,7 @@
       ]
     },
     {
-      "id": "line:p0000000014:000000003f",
+      "id": "line:p0000000014:0000000040",
       "kind": "line",
       "path": "Personnes/Lucas Bernard.md",
       "title": "Lucas Bernard",
@@ -468,7 +468,7 @@
       "fold": "ton ami de la course a pied le dimanche matin"
     },
     {
-      "id": "line:p0000000014:0000000040",
+      "id": "line:p0000000014:0000000041",
       "kind": "line",
       "path": "Personnes/Lucas Bernard.md",
       "title": "Lucas Bernard",
@@ -490,7 +490,7 @@
       "fold": "anniversaire 1 decembre"
     },
     {
-      "id": "line:p0000000014:0000000041",
+      "id": "line:p0000000014:0000000042",
       "kind": "line",
       "path": "Personnes/Lucas Bernard.md",
       "title": "Lucas Bernard",
@@ -509,7 +509,7 @@
       "fold": "court le semi marathon de nantes au printemps"
     },
     {
-      "id": "line:p0000000014:0000000042",
+      "id": "line:p0000000014:0000000043",
       "kind": "line",
       "path": "Personnes/Lucas Bernard.md",
       "title": "Lucas Bernard",
@@ -546,7 +546,7 @@
       ]
     },
     {
-      "id": "line:p0000000015:0000000043",
+      "id": "line:p0000000015:0000000044",
       "kind": "line",
       "path": "Personnes/Marc Durand.md",
       "title": "Marc Durand",
@@ -565,7 +565,7 @@
       "fold": "ton beau frere marie a claire durand"
     },
     {
-      "id": "line:p0000000015:0000000044",
+      "id": "line:p0000000015:0000000045",
       "kind": "line",
       "path": "Personnes/Marc Durand.md",
       "title": "Marc Durand",
@@ -587,7 +587,7 @@
       "fold": "anniversaire 15 decembre"
     },
     {
-      "id": "line:p0000000015:0000000045",
+      "id": "line:p0000000015:0000000046",
       "kind": "line",
       "path": "Personnes/Marc Durand.md",
       "title": "Marc Durand",
@@ -608,7 +608,7 @@
       "fold": "enfants ines 7 ans et tom 4 ans"
     },
     {
-      "id": "line:p0000000015:0000000046",
+      "id": "line:p0000000015:0000000047",
       "kind": "line",
       "path": "Personnes/Marc Durand.md",
       "title": "Marc Durand",
@@ -627,7 +627,7 @@
       "fold": "menuisier a son compte il fait le devis de ta renovation cuisine"
     },
     {
-      "id": "line:p0000000015:0000000047",
+      "id": "line:p0000000015:0000000048",
       "kind": "line",
       "path": "Personnes/Marc Durand.md",
       "title": "Marc Durand",
@@ -646,7 +646,7 @@
       "fold": "aime le jazz et les vins nature"
     },
     {
-      "id": "line:p0000000015:0000000048",
+      "id": "line:p0000000015:0000000049",
       "kind": "line",
       "path": "Personnes/Marc Durand.md",
       "title": "Marc Durand",
@@ -665,7 +665,7 @@
       "fold": "allergique aux noix"
     },
     {
-      "id": "line:p0000000015:0000000049",
+      "id": "line:p0000000015:000000004a",
       "kind": "line",
       "path": "Personnes/Marc Durand.md",
       "title": "Marc Durand",
@@ -684,7 +684,7 @@
       "fold": "prefere qu on l appelle le soir"
     },
     {
-      "id": "line:p0000000015:000000004a",
+      "id": "line:p0000000015:000000004b",
       "kind": "line",
       "path": "Personnes/Marc Durand.md",
       "title": "Marc Durand",
@@ -703,7 +703,7 @@
       "fold": "un vinyle de chet baker"
     },
     {
-      "id": "line:p0000000015:000000004b",
+      "id": "line:p0000000015:000000004c",
       "kind": "line",
       "path": "Personnes/Marc Durand.md",
       "title": "Marc Durand",
@@ -722,7 +722,7 @@
       "fold": "te prete sa ponceuse jusqu a fin novembre"
     },
     {
-      "id": "line:p0000000015:000000004c",
+      "id": "line:p0000000015:000000004d",
       "kind": "line",
       "path": "Personnes/Marc Durand.md",
       "title": "Marc Durand",
@@ -741,7 +741,7 @@
       "fold": "passe prendre les mesures de la cuisine samedi"
     },
     {
-      "id": "line:p0000000015:000000004d",
+      "id": "line:p0000000015:000000004e",
       "kind": "line",
       "path": "Personnes/Marc Durand.md",
       "title": "Marc Durand",
@@ -762,7 +762,7 @@
       "fold": "appel le devis arrive ce soir"
     },
     {
-      "id": "line:p0000000015:000000004e",
+      "id": "line:p0000000015:000000004f",
       "kind": "line",
       "path": "Personnes/Marc Durand.md",
       "title": "Marc Durand",
@@ -781,7 +781,7 @@
       "fold": "diner chez claire il a parle de vacances au portugal"
     },
     {
-      "id": "line:p0000000015:000000004f",
+      "id": "line:p0000000015:0000000050",
       "kind": "line",
       "path": "Personnes/Marc Durand.md",
       "title": "Marc Durand",
@@ -818,7 +818,7 @@
       ]
     },
     {
-      "id": "line:p0000000016:0000000050",
+      "id": "line:p0000000016:0000000051",
       "kind": "line",
       "path": "Personnes/Sophie Laurent.md",
       "title": "Sophie Laurent",
@@ -837,7 +837,7 @@
       "fold": "ta voisine du 3e"
     },
     {
-      "id": "line:p0000000016:0000000051",
+      "id": "line:p0000000016:0000000052",
       "kind": "line",
       "path": "Personnes/Sophie Laurent.md",
       "title": "Sophie Laurent",
@@ -856,7 +856,7 @@
       "fold": "garde le chat pendant les vacances"
     },
     {
-      "id": "line:p0000000016:0000000052",
+      "id": "line:p0000000016:0000000053",
       "kind": "line",
       "path": "Personnes/Sophie Laurent.md",
       "title": "Sophie Laurent",
@@ -890,7 +890,7 @@
       "fold": "anniversaire d ines ines fete ses 8 ans samedi 4 decembre chez claire theme les licornes"
     },
     {
-      "id": "line:p0000000017:0000000053",
+      "id": "line:p0000000017:0000000054",
       "kind": "line",
       "path": "Sujets/Anniversaire d’Inès.md",
       "title": "Anniversaire d’Inès",
@@ -909,7 +909,7 @@
       "fold": "invitations a envoyer cette semaine"
     },
     {
-      "id": "line:p0000000017:0000000054",
+      "id": "line:p0000000017:0000000055",
       "kind": "line",
       "path": "Sujets/Anniversaire d’Inès.md",
       "title": "Anniversaire d’Inès",
@@ -928,7 +928,7 @@
       "fold": "commander le gateau chez le patissier"
     },
     {
-      "id": "line:p0000000017:0000000055",
+      "id": "line:p0000000017:0000000056",
       "kind": "line",
       "path": "Sujets/Anniversaire d’Inès.md",
       "title": "Anniversaire d’Inès",
@@ -962,7 +962,7 @@
       "fold": "changer de voiture une hybride d occasion 15 000 au maximum"
     },
     {
-      "id": "line:p0000000018:0000000056",
+      "id": "line:p0000000018:0000000057",
       "kind": "line",
       "path": "Sujets/Changer de voiture.md",
       "title": "Changer de voiture",
@@ -981,7 +981,7 @@
       "fold": "trois modeles retenus"
     },
     {
-      "id": "line:p0000000018:0000000057",
+      "id": "line:p0000000018:0000000058",
       "kind": "line",
       "path": "Sujets/Changer de voiture.md",
       "title": "Changer de voiture",
@@ -1058,6 +1058,20 @@
       "fold": "ajouter les dons et les frais de garde"
     },
     {
+      "id": "page:p0000000019",
+      "kind": "page",
+      "path": "Sujets/Jardin.md",
+      "title": "Jardin",
+      "categories": [
+        "home"
+      ],
+      "source": "Jardin",
+      "open": {
+        "path": "Sujets/Jardin.md"
+      },
+      "fold": "jardin"
+    },
+    {
       "id": "page:p0000000001",
       "kind": "page",
       "path": "Sujets/Rénovation cuisine.md",
@@ -1073,7 +1087,7 @@
       "fold": "renovation cuisine devis de marc recu 8 900 il reste a choisir le plan de travail et a fixer la date des travaux"
     },
     {
-      "id": "line:p0000000001:0000000058",
+      "id": "line:p0000000001:0000000059",
       "kind": "line",
       "path": "Sujets/Rénovation cuisine.md",
       "title": "Rénovation cuisine",
@@ -1092,7 +1106,7 @@
       "fold": "devis recu travaux a fixer avec marc"
     },
     {
-      "id": "line:p0000000001:0000000059",
+      "id": "line:p0000000001:000000005a",
       "kind": "line",
       "path": "Sujets/Rénovation cuisine.md",
       "title": "Rénovation cuisine",
@@ -1111,7 +1125,7 @@
       "fold": "devis de marc durand accepte"
     },
     {
-      "id": "line:p0000000001:000000005a",
+      "id": "line:p0000000001:000000005b",
       "kind": "line",
       "path": "Sujets/Rénovation cuisine.md",
       "title": "Rénovation cuisine",
@@ -1130,7 +1144,7 @@
       "fold": "plan de travail en quartz couleur a choisir"
     },
     {
-      "id": "line:p0000000001:000000005b",
+      "id": "line:p0000000001:000000005c",
       "kind": "line",
       "path": "Sujets/Rénovation cuisine.md",
       "title": "Rénovation cuisine",
@@ -1149,7 +1163,7 @@
       "fold": "choisir la couleur du plan de travail"
     },
     {
-      "id": "line:p0000000001:000000005c",
+      "id": "line:p0000000001:000000005d",
       "kind": "line",
       "path": "Sujets/Rénovation cuisine.md",
       "title": "Rénovation cuisine",
@@ -1168,7 +1182,7 @@
       "fold": "fixer la date des travaux"
     },
     {
-      "id": "line:p0000000001:000000005d",
+      "id": "line:p0000000001:000000005e",
       "kind": "line",
       "path": "Sujets/Rénovation cuisine.md",
       "title": "Rénovation cuisine",
@@ -1187,7 +1201,7 @@
       "fold": "marc durand menuisier"
     },
     {
-      "id": "line:p0000000001:000000005e",
+      "id": "line:p0000000001:000000005f",
       "kind": "line",
       "path": "Sujets/Rénovation cuisine.md",
       "title": "Rénovation cuisine",
@@ -1206,7 +1220,7 @@
       "fold": "cuisines eclat rue des halles"
     },
     {
-      "id": "line:p0000000001:000000005f",
+      "id": "line:p0000000001:0000000060",
       "kind": "line",
       "path": "Sujets/Rénovation cuisine.md",
       "title": "Rénovation cuisine",
@@ -1227,7 +1241,7 @@
       "fold": "devis 8 900"
     },
     {
-      "id": "line:p0000000001:0000000060",
+      "id": "line:p0000000001:0000000061",
       "kind": "line",
       "path": "Sujets/Rénovation cuisine.md",
       "title": "Rénovation cuisine",
@@ -1248,7 +1262,7 @@
       "fold": "enveloppe prevue 10 000"
     },
     {
-      "id": "line:p0000000001:0000000061",
+      "id": "line:p0000000001:0000000062",
       "kind": "line",
       "path": "Sujets/Rénovation cuisine.md",
       "title": "Rénovation cuisine",
@@ -1267,7 +1281,7 @@
       "fold": "devis accepte"
     },
     {
-      "id": "line:p0000000001:0000000062",
+      "id": "line:p0000000001:0000000063",
       "kind": "line",
       "path": "Sujets/Rénovation cuisine.md",
       "title": "Rénovation cuisine",
@@ -1286,7 +1300,7 @@
       "fold": "visite du magasin"
     },
     {
-      "id": "page:p0000000019",
+      "id": "page:p000000001a",
       "kind": "page",
       "path": "Sujets/Voyage Japon.md",
       "title": "Voyage Japon",
@@ -1301,7 +1315,7 @@
       "fold": "voyage japon avril 12 jours tokyo kyoto osaka les vols sont a reserver bientot"
     },
     {
-      "id": "line:p0000000019:0000000063",
+      "id": "line:p000000001a:0000000064",
       "kind": "line",
       "path": "Sujets/Voyage Japon.md",
       "title": "Voyage Japon",
@@ -1312,7 +1326,7 @@
       "source": "Où on en est",
       "who": "Daily",
       "noted": "2026-11-21",
-      "page": "page:p0000000019",
+      "page": "page:p000000001a",
       "open": {
         "path": "Sujets/Voyage Japon.md",
         "section": "status"
@@ -1320,7 +1334,7 @@
       "fold": "itineraire fixe vols pas encore pris"
     },
     {
-      "id": "line:p0000000019:0000000064",
+      "id": "line:p000000001a:0000000065",
       "kind": "line",
       "path": "Sujets/Voyage Japon.md",
       "title": "Voyage Japon",
@@ -1331,7 +1345,7 @@
       "source": "Décisions",
       "who": "Daily",
       "noted": "2026-11-12",
-      "page": "page:p0000000019",
+      "page": "page:p000000001a",
       "open": {
         "path": "Sujets/Voyage Japon.md",
         "section": "decisions"
@@ -1339,7 +1353,7 @@
       "fold": "avril 12 jours tokyo kyoto osaka"
     },
     {
-      "id": "line:p0000000019:0000000065",
+      "id": "line:p000000001a:0000000066",
       "kind": "line",
       "path": "Sujets/Voyage Japon.md",
       "title": "Voyage Japon",
@@ -1350,7 +1364,7 @@
       "source": "Prochaines étapes",
       "who": "Daily",
       "noted": "2026-11-21",
-      "page": "page:p0000000019",
+      "page": "page:p000000001a",
       "open": {
         "path": "Sujets/Voyage Japon.md",
         "section": "next"
@@ -1358,7 +1372,7 @@
       "fold": "reserver les vols avant la fin du mois"
     },
     {
-      "id": "line:p0000000019:0000000066",
+      "id": "line:p000000001a:0000000067",
       "kind": "line",
       "path": "Sujets/Voyage Japon.md",
       "title": "Voyage Japon",
@@ -1371,7 +1385,7 @@
       "noted": "2026-11-12",
       "label": "Budget",
       "answer": "4 000 € pour deux",
-      "page": "page:p0000000019",
+      "page": "page:p000000001a",
       "open": {
         "path": "Sujets/Voyage Japon.md",
         "section": "budget"
@@ -1379,7 +1393,7 @@
       "fold": "budget 4 000 pour deux"
     },
     {
-      "id": "page:p000000001a",
+      "id": "page:p000000001b",
       "kind": "page",
       "path": "Sujets/Week-end à Lisbonne.md",
       "title": "Week-end à Lisbonne",
@@ -1394,7 +1408,7 @@
       "fold": "week end a lisbonne quatre jours a lisbonne avec claire du 4 decembre au 7 decembre vols et hotel reserves"
     },
     {
-      "id": "line:p000000001a:0000000067",
+      "id": "line:p000000001b:0000000068",
       "kind": "line",
       "path": "Sujets/Week-end à Lisbonne.md",
       "title": "Week-end à Lisbonne",
@@ -1406,7 +1420,7 @@
       "source": "Dates",
       "who": "Daily",
       "noted": "2026-11-21",
-      "page": "page:p000000001a",
+      "page": "page:p000000001b",
       "open": {
         "path": "Sujets/Week-end à Lisbonne.md",
         "section": "dates"
@@ -1414,7 +1428,7 @@
       "fold": "du 4 decembre au 7 decembre"
     },
     {
-      "id": "line:p000000001a:0000000068",
+      "id": "line:p000000001b:0000000069",
       "kind": "line",
       "path": "Sujets/Week-end à Lisbonne.md",
       "title": "Week-end à Lisbonne",
@@ -1425,7 +1439,7 @@
       "source": "Itinéraire",
       "who": "Daily",
       "noted": "2026-11-21",
-      "page": "page:p000000001a",
+      "page": "page:p000000001b",
       "open": {
         "path": "Sujets/Week-end à Lisbonne.md",
         "section": "itinerary"
@@ -1433,7 +1447,7 @@
       "fold": "jour 1 arrivee hotel et balade dans l alfama"
     },
     {
-      "id": "line:p000000001a:0000000069",
+      "id": "line:p000000001b:000000006a",
       "kind": "line",
       "path": "Sujets/Week-end à Lisbonne.md",
       "title": "Week-end à Lisbonne",
@@ -1444,7 +1458,7 @@
       "source": "Itinéraire",
       "who": "Daily",
       "noted": "2026-11-21",
-      "page": "page:p000000001a",
+      "page": "page:p000000001b",
       "open": {
         "path": "Sujets/Week-end à Lisbonne.md",
         "section": "itinerary"
@@ -1452,7 +1466,7 @@
       "fold": "jour 2 chateau saint georges baixa et chiado"
     },
     {
-      "id": "line:p000000001a:000000006a",
+      "id": "line:p000000001b:000000006b",
       "kind": "line",
       "path": "Sujets/Week-end à Lisbonne.md",
       "title": "Week-end à Lisbonne",
@@ -1463,7 +1477,7 @@
       "source": "Itinéraire",
       "who": "Daily",
       "noted": "2026-11-21",
-      "page": "page:p000000001a",
+      "page": "page:p000000001b",
       "open": {
         "path": "Sujets/Week-end à Lisbonne.md",
         "section": "itinerary"
@@ -1471,7 +1485,7 @@
       "fold": "jour 3 belem"
     },
     {
-      "id": "line:p000000001a:000000006b",
+      "id": "line:p000000001b:000000006c",
       "kind": "line",
       "path": "Sujets/Week-end à Lisbonne.md",
       "title": "Week-end à Lisbonne",
@@ -1482,7 +1496,7 @@
       "source": "Itinéraire",
       "who": "Daily",
       "noted": "2026-11-21",
-      "page": "page:p000000001a",
+      "page": "page:p000000001b",
       "open": {
         "path": "Sujets/Week-end à Lisbonne.md",
         "section": "itinerary"
@@ -1490,7 +1504,7 @@
       "fold": "jour 4 marche de campo de ourique puis retour"
     },
     {
-      "id": "line:p000000001a:000000006c",
+      "id": "line:p000000001b:000000006d",
       "kind": "line",
       "path": "Sujets/Week-end à Lisbonne.md",
       "title": "Week-end à Lisbonne",
@@ -1501,7 +1515,7 @@
       "source": "À emporter",
       "who": "Daily",
       "noted": "2026-11-21",
-      "page": "page:p000000001a",
+      "page": "page:p000000001b",
       "open": {
         "path": "Sujets/Week-end à Lisbonne.md",
         "section": "packing"
@@ -1509,7 +1523,7 @@
       "fold": "x passeport"
     },
     {
-      "id": "line:p000000001a:000000006d",
+      "id": "line:p000000001b:000000006e",
       "kind": "line",
       "path": "Sujets/Week-end à Lisbonne.md",
       "title": "Week-end à Lisbonne",
@@ -1520,7 +1534,7 @@
       "source": "À emporter",
       "who": "Daily",
       "noted": "2026-11-21",
-      "page": "page:p000000001a",
+      "page": "page:p000000001b",
       "open": {
         "path": "Sujets/Week-end à Lisbonne.md",
         "section": "packing"
@@ -1528,7 +1542,7 @@
       "fold": "x chaussures de marche"
     },
     {
-      "id": "line:p000000001a:000000006e",
+      "id": "line:p000000001b:000000006f",
       "kind": "line",
       "path": "Sujets/Week-end à Lisbonne.md",
       "title": "Week-end à Lisbonne",
@@ -1539,7 +1553,7 @@
       "source": "À emporter",
       "who": "Daily",
       "noted": "2026-11-21",
-      "page": "page:p000000001a",
+      "page": "page:p000000001b",
       "open": {
         "path": "Sujets/Week-end à Lisbonne.md",
         "section": "packing"
@@ -1547,7 +1561,7 @@
       "fold": "x copie des billets"
     },
     {
-      "id": "line:p000000001a:000000006f",
+      "id": "line:p000000001b:0000000070",
       "kind": "line",
       "path": "Sujets/Week-end à Lisbonne.md",
       "title": "Week-end à Lisbonne",
@@ -1558,7 +1572,7 @@
       "source": "À emporter",
       "who": "Daily",
       "noted": "2026-11-21",
-      "page": "page:p000000001a",
+      "page": "page:p000000001b",
       "open": {
         "path": "Sujets/Week-end à Lisbonne.md",
         "section": "packing"
@@ -1566,7 +1580,7 @@
       "fold": "creme solaire"
     },
     {
-      "id": "line:p000000001a:0000000070",
+      "id": "line:p000000001b:0000000071",
       "kind": "line",
       "path": "Sujets/Week-end à Lisbonne.md",
       "title": "Week-end à Lisbonne",
@@ -1577,7 +1591,7 @@
       "source": "À emporter",
       "who": "Daily",
       "noted": "2026-11-21",
-      "page": "page:p000000001a",
+      "page": "page:p000000001b",
       "open": {
         "path": "Sujets/Week-end à Lisbonne.md",
         "section": "packing"
@@ -1585,7 +1599,7 @@
       "fold": "impermeable leger"
     },
     {
-      "id": "line:p000000001a:0000000071",
+      "id": "line:p000000001b:0000000072",
       "kind": "line",
       "path": "Sujets/Week-end à Lisbonne.md",
       "title": "Week-end à Lisbonne",
@@ -1596,7 +1610,7 @@
       "source": "À emporter",
       "who": "Daily",
       "noted": "2026-11-21",
-      "page": "page:p000000001a",
+      "page": "page:p000000001b",
       "open": {
         "path": "Sujets/Week-end à Lisbonne.md",
         "section": "packing"
@@ -1604,7 +1618,7 @@
       "fold": "chargeur de telephone"
     },
     {
-      "id": "line:p000000001a:0000000072",
+      "id": "line:p000000001b:0000000073",
       "kind": "line",
       "path": "Sujets/Week-end à Lisbonne.md",
       "title": "Week-end à Lisbonne",
@@ -1617,7 +1631,7 @@
       "noted": "2026-11-19",
       "label": "Budget",
       "answer": "900 € pour deux, vols et hôtel compris",
-      "page": "page:p000000001a",
+      "page": "page:p000000001b",
       "open": {
         "path": "Sujets/Week-end à Lisbonne.md",
         "section": "budget"
@@ -1625,7 +1639,7 @@
       "fold": "budget 900 pour deux vols et hotel compris"
     },
     {
-      "id": "line:p000000001a:0000000073",
+      "id": "line:p000000001b:0000000074",
       "kind": "line",
       "path": "Sujets/Week-end à Lisbonne.md",
       "title": "Week-end à Lisbonne",
@@ -1636,7 +1650,7 @@
       "source": "Sur place",
       "who": "Daily",
       "noted": "2026-11-21",
-      "page": "page:p000000001a",
+      "page": "page:p000000001b",
       "open": {
         "path": "Sujets/Week-end à Lisbonne.md",
         "section": "onsite"
@@ -1644,7 +1658,7 @@
       "fold": "le tram 28 passe devant l hotel"
     },
     {
-      "id": "line:p000000001a:0000000074",
+      "id": "line:p000000001b:0000000075",
       "kind": "line",
       "path": "Sujets/Week-end à Lisbonne.md",
       "title": "Week-end à Lisbonne",
@@ -1655,7 +1669,7 @@
       "source": "Sur place",
       "who": "Daily",
       "noted": "2026-11-21",
-      "page": "page:p000000001a",
+      "page": "page:p000000001b",
       "open": {
         "path": "Sujets/Week-end à Lisbonne.md",
         "section": "onsite"
@@ -1663,7 +1677,7 @@
       "fold": "miradouro da senhora do monte au coucher du soleil"
     },
     {
-      "id": "page:p000000001b",
+      "id": "page:p000000001c",
       "kind": "page",
       "path": "Toi.md",
       "title": "Toi",
@@ -1678,7 +1692,7 @@
       "fold": "toi tu vis a nantes tu cours le dimanche et tu prepares un voyage au japon"
     },
     {
-      "id": "line:p000000001b:0000000075",
+      "id": "line:p000000001c:0000000076",
       "kind": "line",
       "path": "Toi.md",
       "title": "Toi",
@@ -1689,7 +1703,7 @@
       "source": "Qui tu es",
       "who": "Daily",
       "noted": "2026-09-23",
-      "page": "page:p000000001b",
+      "page": "page:p000000001c",
       "open": {
         "path": "Toi.md",
         "section": "about"
@@ -1697,7 +1711,7 @@
       "fold": "vit a nantes"
     },
     {
-      "id": "line:p000000001b:0000000076",
+      "id": "line:p000000001c:0000000077",
       "kind": "line",
       "path": "Toi.md",
       "title": "Toi",
@@ -1710,7 +1724,7 @@
       "noted": "2026-09-23",
       "label": "Sœur",
       "answer": "[[Claire Durand]]",
-      "page": "page:p000000001b",
+      "page": "page:p000000001c",
       "open": {
         "path": "Toi.md",
         "section": "family"
@@ -1718,7 +1732,7 @@
       "fold": "soeur claire durand"
     },
     {
-      "id": "line:p000000001b:0000000077",
+      "id": "line:p000000001c:0000000078",
       "kind": "line",
       "path": "Toi.md",
       "title": "Toi",
@@ -1731,7 +1745,7 @@
       "noted": "2026-09-23",
       "label": "Beau-frère",
       "answer": "[[Marc Durand]]",
-      "page": "page:p000000001b",
+      "page": "page:p000000001c",
       "open": {
         "path": "Toi.md",
         "section": "family"
@@ -1739,7 +1753,7 @@
       "fold": "beau frere marc durand"
     },
     {
-      "id": "line:p000000001b:0000000078",
+      "id": "line:p000000001c:0000000079",
       "kind": "line",
       "path": "Toi.md",
       "title": "Toi",
@@ -1750,7 +1764,7 @@
       "source": "Travail",
       "who": "Daily",
       "noted": "2026-10-23",
-      "page": "page:p000000001b",
+      "page": "page:p000000001c",
       "open": {
         "path": "Toi.md",
         "section": "work"
@@ -1758,7 +1772,7 @@
       "fold": "graphiste en agence teletravail le vendredi"
     },
     {
-      "id": "line:p000000001b:0000000079",
+      "id": "line:p000000001c:000000007a",
       "kind": "line",
       "path": "Toi.md",
       "title": "Toi",
@@ -1769,7 +1783,7 @@
       "source": "Goûts et habitudes",
       "who": "Coach",
       "noted": "2026-10-13",
-      "page": "page:p000000001b",
+      "page": "page:p000000001c",
       "open": {
         "path": "Toi.md",
         "section": "habits"
@@ -1777,7 +1791,7 @@
       "fold": "course a pied le dimanche matin avec lucas bernard"
     },
     {
-      "id": "line:p000000001b:000000007a",
+      "id": "line:p000000001c:000000007b",
       "kind": "line",
       "path": "Toi.md",
       "title": "Toi",
@@ -1788,7 +1802,7 @@
       "source": "Goûts et habitudes",
       "who": "toi",
       "noted": "2026-11-02",
-      "page": "page:p000000001b",
+      "page": "page:p000000001c",
       "open": {
         "path": "Toi.md",
         "section": "habits"
@@ -1796,7 +1810,7 @@
       "fold": "cafe sans sucre"
     },
     {
-      "id": "line:p000000001b:000000007b",
+      "id": "line:p000000001c:000000007c",
       "kind": "line",
       "path": "Toi.md",
       "title": "Toi",
@@ -1807,7 +1821,7 @@
       "source": "Objectifs",
       "who": "Coach",
       "noted": "2026-11-12",
-      "page": "page:p000000001b",
+      "page": "page:p000000001c",
       "open": {
         "path": "Toi.md",
         "section": "goals"
@@ -1815,7 +1829,7 @@
       "fold": "courir un semi marathon au printemps"
     },
     {
-      "id": "line:p000000001b:000000007c",
+      "id": "line:p000000001c:000000007d",
       "kind": "line",
       "path": "Toi.md",
       "title": "Toi",
@@ -1826,7 +1840,7 @@
       "source": "Ce que tes agents doivent savoir",
       "who": "Daily",
       "noted": "2026-11-07",
-      "page": "page:p000000001b",
+      "page": "page:p000000001c",
       "open": {
         "path": "Toi.md",
         "section": "agents"
@@ -1834,7 +1848,7 @@
       "fold": "pas de propositions de taches pour les anniversaires"
     },
     {
-      "id": "line:p000000001b:000000007d",
+      "id": "line:p000000001c:000000007e",
       "kind": "line",
       "path": "Toi.md",
       "title": "Toi",
@@ -1845,7 +1859,7 @@
       "source": "Ce que tes agents doivent savoir",
       "who": "toi",
       "noted": "2026-11-17",
-      "page": "page:p000000001b",
+      "page": "page:p000000001c",
       "open": {
         "path": "Toi.md",
         "section": "agents"
@@ -1871,7 +1885,7 @@
       "fold": "rappeler marc pour le devis"
     },
     {
-      "id": "task:t00001c",
+      "id": "task:t00001d",
       "kind": "task",
       "path": "Tâches/Tâches.md",
       "title": "Envoyer les invitations",
@@ -1884,12 +1898,12 @@
       "who": "Daily",
       "noted": "2026-11-22",
       "open": {
-        "task": "t00001c"
+        "task": "t00001d"
       },
       "fold": "envoyer les invitations"
     },
     {
-      "id": "task:t00001d",
+      "id": "task:t00001e",
       "kind": "task",
       "path": "Tâches/Tâches.md",
       "title": "Réserver les vols pour Osaka",
@@ -1902,12 +1916,12 @@
       "who": "Daily",
       "noted": "2026-11-22",
       "open": {
-        "task": "t00001d"
+        "task": "t00001e"
       },
       "fold": "reserver les vols pour osaka"
     },
     {
-      "id": "task:t00001e",
+      "id": "task:t00001f",
       "kind": "task",
       "path": "Tâches/Tâches.md",
       "title": "Préparer l’entretien annuel",
@@ -1920,7 +1934,7 @@
       "who": "Daily",
       "noted": "2026-11-22",
       "open": {
-        "task": "t00001e"
+        "task": "t00001f"
       },
       "fold": "preparer l entretien annuel"
     },
@@ -1944,7 +1958,7 @@
       "fold": "verifier la declaration pre remplie"
     },
     {
-      "id": "task:t00001f",
+      "id": "task:t000020",
       "kind": "task",
       "path": "Tâches/Tâches.md",
       "title": "Prendre rendez-vous chez le dentiste",
@@ -1957,12 +1971,12 @@
       "who": "Daily",
       "noted": "2026-11-22",
       "open": {
-        "task": "t00001f"
+        "task": "t000020"
       },
       "fold": "prendre rendez vous chez le dentiste"
     },
     {
-      "id": "task:t000020",
+      "id": "task:t000021",
       "kind": "task",
       "path": "Tâches/Tâches.md",
       "title": "Réserver un essai de la Yaris",
@@ -1975,12 +1989,12 @@
       "who": "Daily",
       "noted": "2026-11-22",
       "open": {
-        "task": "t000020"
+        "task": "t000021"
       },
       "fold": "reserver un essai de la yaris"
     },
     {
-      "id": "task:t000021",
+      "id": "task:t000022",
       "kind": "task",
       "path": "Tâches/Tâches.md",
       "title": "Commander le gâteau",
@@ -1993,12 +2007,12 @@
       "who": "Daily",
       "noted": "2026-11-22",
       "open": {
-        "task": "t000021"
+        "task": "t000022"
       },
       "fold": "commander le gateau"
     },
     {
-      "id": "task:t000022",
+      "id": "task:t000023",
       "kind": "task",
       "path": "Tâches/Tâches.md",
       "title": "Renouveler l’assurance auto",
@@ -2011,12 +2025,12 @@
       "who": "Daily",
       "noted": "2026-11-22",
       "open": {
-        "task": "t000022"
+        "task": "t000023"
       },
       "fold": "renouveler l assurance auto"
     },
     {
-      "id": "task:t000023",
+      "id": "task:t000024",
       "kind": "task",
       "path": "Tâches/Tâches.md",
       "title": "Acheter le cadeau de Marc",
@@ -2029,12 +2043,12 @@
       "who": "Daily",
       "noted": "2026-11-22",
       "open": {
-        "task": "t000023"
+        "task": "t000024"
       },
       "fold": "acheter le cadeau de marc"
     },
     {
-      "id": "task:t000024",
+      "id": "task:t000025",
       "kind": "task",
       "path": "Tâches/Tâches.md",
       "title": "Choisir le plan de travail",
@@ -2046,12 +2060,12 @@
       "who": "Daily",
       "noted": "2026-11-22",
       "open": {
-        "task": "t000024"
+        "task": "t000025"
       },
       "fold": "choisir le plan de travail"
     },
     {
-      "id": "task:t000025",
+      "id": "task:t000026",
       "kind": "task",
       "path": "Tâches/Tâches.md",
       "title": "Trier les photos de l’été",
@@ -2063,12 +2077,12 @@
       "who": "Daily",
       "noted": "2026-11-22",
       "open": {
-        "task": "t000025"
+        "task": "t000026"
       },
       "fold": "trier les photos de l ete"
     },
     {
-      "id": "task:t000026",
+      "id": "task:t000027",
       "kind": "task",
       "path": "Tâches/Tâches.md",
       "title": "Comparer les box internet",
@@ -2080,12 +2094,12 @@
       "who": "Daily",
       "noted": "2026-11-22",
       "open": {
-        "task": "t000026"
+        "task": "t000027"
       },
       "fold": "comparer les box internet"
     },
     {
-      "id": "task:t000027",
+      "id": "task:t000028",
       "kind": "task",
       "path": "Tâches/Tâches.md",
       "title": "Acheter les ballons",
@@ -2097,7 +2111,7 @@
       "who": "Daily",
       "noted": "2026-11-22",
       "open": {
-        "task": "t000027"
+        "task": "t000028"
       },
       "fold": "acheter les ballons"
     },
@@ -2120,7 +2134,7 @@
       "fold": "retrouver les recus de dons"
     },
     {
-      "id": "task:t000028",
+      "id": "task:t000029",
       "kind": "task",
       "path": "Tâches/Tâches.md",
       "title": "Comparer trois modèles d’occasion",
@@ -2132,12 +2146,12 @@
       "who": "Daily",
       "noted": "2026-11-22",
       "open": {
-        "task": "t000028"
+        "task": "t000029"
       },
       "fold": "comparer trois modeles d occasion"
     },
     {
-      "id": "task:t000029",
+      "id": "task:t00002a",
       "kind": "task",
       "path": "Tâches/Tâches.md",
       "title": "Choisir la crédence",
@@ -2149,12 +2163,12 @@
       "who": "Daily",
       "noted": "2026-11-22",
       "open": {
-        "task": "t000029"
+        "task": "t00002a"
       },
       "fold": "choisir la credence"
     },
     {
-      "id": "task:t00002a",
+      "id": "task:t00002b",
       "kind": "task",
       "path": "Tâches/Tâches.md",
       "title": "Acheter un guide de Kyoto",
@@ -2166,7 +2180,7 @@
       "who": "Daily",
       "noted": "2026-11-22",
       "open": {
-        "task": "t00002a"
+        "task": "t00002b"
       },
       "fold": "acheter un guide de kyoto"
     },
@@ -2231,7 +2245,7 @@
       "fold": "2024 09 13 casque audio grand magasin 89 bien durable 2026 09 13"
     },
     {
-      "id": "record:r00002b",
+      "id": "record:r00002c",
       "kind": "record",
       "path": "Fiches/Abonnements.md",
       "title": "Films en streaming",
@@ -2244,13 +2258,13 @@
       "open": {
         "record": {
           "type": "subscription",
-          "id": "r00002b"
+          "id": "r00002c"
         }
       },
       "fold": "films en streaming 13 49 mensuel 2026 12 01 en ligne a tout moment"
     },
     {
-      "id": "record:r00002c",
+      "id": "record:r00002d",
       "kind": "record",
       "path": "Fiches/Abonnements.md",
       "title": "Salle de sport",
@@ -2263,7 +2277,7 @@
       "open": {
         "record": {
           "type": "subscription",
-          "id": "r00002c"
+          "id": "r00002d"
         }
       },
       "fold": "salle de sport 29 90 mensuel 2026 12 09 lettre un mois avant"
@@ -2307,7 +2321,7 @@
       "fold": "passeport 2028 01 16"
     },
     {
-      "id": "record:r00002d",
+      "id": "record:r00002e",
       "kind": "record",
       "path": "Fiches/Réservations.md",
       "title": "Hôtel, 3 nuits",
@@ -2320,13 +2334,13 @@
       "open": {
         "record": {
           "type": "booking",
-          "id": "r00002d"
+          "id": "r00002e"
         }
       },
       "fold": "2026 12 04 hotel 3 nuits hotel rossio week end a lisbonne"
     },
     {
-      "id": "record:r00002e",
+      "id": "record:r00002f",
       "kind": "record",
       "path": "Fiches/Réservations.md",
       "title": "Visite du château, 2 billets",
@@ -2339,13 +2353,13 @@
       "open": {
         "record": {
           "type": "booking",
-          "id": "r00002e"
+          "id": "r00002f"
         }
       },
       "fold": "2026 12 05 visite du chateau 2 billets chateau saint georges week end a lisbonne"
     },
     {
-      "id": "doc:budget:00000000007e",
+      "id": "doc:budget:00000000007f",
       "kind": "document",
       "title": "Budget du voyage",
       "line": "Budget du voyage",
@@ -2364,7 +2378,7 @@
       "fold": "budget du voyage"
     },
     {
-      "id": "doc:daily:00000000007f",
+      "id": "doc:daily:000000000080",
       "kind": "document",
       "title": "Voyage Japon, le programme.pptx",
       "line": "Voyage Japon, le programme.pptx",
@@ -2383,7 +2397,7 @@
       "fold": "voyage japon le programme pptx"
     },
     {
-      "id": "doc:budget:000000000080",
+      "id": "doc:budget:000000000081",
       "kind": "document",
       "title": "Budget des travaux.xlsx",
       "line": "Budget des travaux.xlsx",
@@ -2402,7 +2416,7 @@
       "fold": "budget des travaux xlsx"
     },
     {
-      "id": "doc:home:000000000081",
+      "id": "doc:home:000000000082",
       "kind": "document",
       "title": "Lettre au syndic.docx",
       "line": "Lettre au syndic.docx",
@@ -2421,7 +2435,7 @@
       "fold": "lettre au syndic docx"
     },
     {
-      "id": "doc:home:000000000082",
+      "id": "doc:home:000000000083",
       "kind": "document",
       "title": "Devis cuisine.pdf",
       "line": "Devis cuisine.pdf",
@@ -2440,7 +2454,7 @@
       "fold": "devis cuisine pdf"
     },
     {
-      "id": "doc:home:000000000083",
+      "id": "doc:home:000000000084",
       "kind": "document",
       "title": "Plan de la cuisine.jpg",
       "line": "Plan de la cuisine.jpg",

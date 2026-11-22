@@ -27,7 +27,7 @@
   ],
   "card": null,
   "total": {
-    "count": 130,
+    "count": 131,
     "title": "All the Notebook"
   },
   "categories": [
@@ -69,7 +69,7 @@
       "hint": "Work, Claire Durand, Lucas Bernard",
       "locked": false,
       "first": {
-        "id": "line:p0000000012:0000000038",
+        "id": "line:p0000000012:0000000039",
         "kind": "line",
         "part": "main",
         "path": "Areas/Work.md",
@@ -129,8 +129,8 @@
     {
       "id": "home",
       "title": "Home",
-      "count": 26,
-      "hint": "Home, Kitchen renovation, Call Marc back about the quote",
+      "count": 27,
+      "hint": "Home, Garden, Kitchen renovation",
       "locked": false,
       "first": {
         "id": "page:p0000000010",
@@ -196,7 +196,7 @@
       "hint": "Japan trip, Lisbon weekend, Book the flights to Osaka",
       "locked": false,
       "first": {
-        "id": "page:p0000000018",
+        "id": "page:p0000000019",
         "kind": "page",
         "part": "main",
         "path": "Subjects/Japan trip.md",
@@ -258,7 +258,7 @@
       "hint": "Sort the summer photos",
       "locked": false,
       "first": {
-        "id": "task:t000025",
+        "id": "task:t000026",
         "kind": "task",
         "part": "main",
         "path": "Tasks/Tasks.md",
@@ -278,7 +278,7 @@
         "answer": null,
         "page": null,
         "open": {
-          "task": "t000025"
+          "task": "t000026"
         }
       }
     },
