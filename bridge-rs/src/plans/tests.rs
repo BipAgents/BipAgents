@@ -343,9 +343,11 @@ fn a_set_plan_goes_a_day_after_its_last_moment_and_a_lapsed_card_goes() {
 fn no_plan_for_an_agent_others_use_or_turned_off() {
     let dir = tempfile::tempdir().unwrap();
     let config = config_in(dir.path());
+    let proposes = crate::agent_proactive::proposes;
     assert!(proposes(&config, "vie") && offered(&config, "vie"));
-    let file = PathBuf::from(config.data_dir()).join("agent_proactive.json");
-    std::fs::write(&file, json!({"levels": {"vie": "off", "budget": "smart"}}).to_string()).unwrap();
+    use crate::agent_proactive::{set_level, Level};
+    set_level(&config, "vie", Level::Off).unwrap();
+    set_level(&config, "budget", Level::Smart).unwrap();
     assert!(!proposes(&config, "vie") && proposes(&config, "budget") && proposes(&config, "coach"));
     // its routines off: no plan either (its moments are routines)
     crate::routines::set_enabled(&config, "coach", false);

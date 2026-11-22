@@ -70,7 +70,7 @@
  ],
  "after": {
   "routines": "Each moment is a routine `once` in « Ce que tes agents font tout seuls » (an app 1.0 lists it as any « Une seule fois »), its job view with `plan` (the plan's id), `say` (the words it delivers) and `urgent`. `GET /v1/autonomous?plan=<id>` lists only that plan's.",
-  "moment": "At its time the bridge delivers `say` (+ `link`) as written: one Boîte message where the card showed (else the main conversation), pushed as a `boite` (urgent: the `urgent` variant of contracts/notifications/types/boite.json once proactive-level's `deliver_urgent` is merged), no turn of the model.",
+  "moment": "At its time the bridge delivers `say` (+ `link`) as written: one Boîte message where the card showed (else the main conversation), pushed as a `boite` (urgent: the `urgent` variant of contracts/notifications/types/boite.json, background_turn.rs `deliver_urgent`), no turn of the model.",
   "moved": "The phone's calendar copy shows the event at another time: every moment moves by the same delta, one Boîte line texts.<lang>.moved, no model.",
   "cancelled": "The event is gone from a copy that covers its day: the plan, its routines and its trigger go, one Boîte line texts.<lang>.cancelled, no model.",
   "end": "One day after its last moment (a habit: after its last run), the plan, its routines and its trigger go without a word.",

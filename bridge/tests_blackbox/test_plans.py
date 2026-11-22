@@ -211,12 +211,21 @@ def test_a_route_moment_is_timed_by_the_streets_and_urgent(bridges, fakes):
     # the router got coordinates only, never the place's name nor the person's address
     asked = [s.path for s in fakes.maps.seen("/routed-foot/")]
     assert asked and not any("Martin" in p or "Haute" in p for p in asked)
+    # « Prévoir », then its time come (« Lancer maintenant » here): said at the system's urgent level, no model
+    assert answer(bridge, card, "once").status_code == 200
+    [leave] = [j for j in plan_jobs(bridge, card["bip_plan"]["id"]) if j["urgent"]]
+    pushed = len(fakes.apns.payloads())
+    assert bridge.post(f"/v1/routines/{leave['id']}/run", headers=AUTH).status_code == 200
+    assert wait_until(lambda: [m for m in boite_items(bridge) if m.get("text") == words], timeout=20)
+    assert wait_until(lambda: [p for p in fakes.apns.payloads()[pushed:]
+                               if p.get("aps", {}).get("interruption-level") == "time-sensitive"], timeout=20)
+    assert fakes.hermes.started == {}
     # no start address (none given, no « Coordonnées » for Coach): refused, nothing made
     nowhere = dict(appointment, title="Kiné")
     nowhere["moments"] = [{"route": {"to": "Cabinet du Dr Martin", "arrive_by": arrive, "mode": "walking"}}]
     refused = call(bridge, "plan_propose", nowhere, token=TOKEN)
     assert not_done(refused) and "route" in text_of(refused)
-    assert len(plan_cards(bridge)) == 1
+    assert plan_cards(bridge) == []
 
 
 def test_no_thanks_forgets_it_and_the_same_plan_is_not_proposed_again(bridges, fakes):
@@ -330,8 +339,8 @@ def test_caps_one_plan_per_reply_two_unasked_per_agent_four_per_place_one_waitin
 
 
 def test_off_proposes_nothing_and_an_agent_others_talk_to_never_does(bridges, fakes):
-    """As contracts/proactive: « off » is kept in <data>/agent_proactive.json (proactive-level's file), an agent other
-    people talk to (a project agent) has no « Initiative » at all."""
+    """« Initiative » (contracts/proactive, set on the agent's page: PUT /v1/agents/{id}/proactive): off proposes
+    nothing; an agent other people talk to (a project agent) has no « Initiative » at all."""
     bridge, _ = managed(bridges, fakes, isolated=True)
     assert bridge.post("/v1/agents", headers=AUTH, json={"name": "Budget", "kind": "finance"}).status_code == 201
     own = "budget-token-" + "o" * 30
@@ -341,16 +350,16 @@ def test_off_proposes_nothing_and_an_agent_others_talk_to_never_does(bridges, fa
         return "plan_propose" in [t["name"] for t in rpc(bridge, "tools/list", token=token).json()["result"]["tools"]]
 
     assert listed()
-    (bridge.state_dir / "agent_proactive.json").write_text(json.dumps({"levels": {"budget": "off"}}))
+    assert bridge.put("/v1/agents/budget/proactive", headers=AUTH, json={"level": "off"}).status_code == 200
     assert not listed()
     refused = call(bridge, "plan_propose", trip(), token=own)
     assert not_done(refused) and "turned your suggestions off" in text_of(refused)
     assert plan_cards(bridge, "budget") == []
-    (bridge.state_dir / "agent_proactive.json").write_text(json.dumps({"levels": {"budget": "smart"}}))
+    assert bridge.put("/v1/agents/budget/proactive", headers=AUTH, json={"level": "smart"}).status_code == 200
     assert listed() and call(bridge, "plan_propose", trip(), token=own)["isError"] is False
     # turned off again: the card still waiting goes without a word (§2.1)
     assert len(plan_cards(bridge, "budget")) == 1
-    (bridge.state_dir / "agent_proactive.json").write_text(json.dumps({"levels": {"budget": "off"}}))
+    assert bridge.put("/v1/agents/budget/proactive", headers=AUTH, json={"level": "off"}).status_code == 200
     assert wait_until(lambda: plan_cards(bridge, "budget") == [], timeout=20)
     # an agent other people talk to (a project agent): never listed, never made
     made = bridge.post("/v1/project-agents", headers=AUTH, json={"name": "Voyage à Lisbonne", "lang": "fr",

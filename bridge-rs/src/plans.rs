@@ -5,7 +5,7 @@
 //!
 //! - **The moments** are written beforehand (`say`, plain text, links in https only) and become one-time routines on
 //!   « Prévoir » (routines.rs `create_said`): at its time the bridge delivers the words as written, one Boîte line,
-//!   WITHOUT the model. A habit is one moment on a rhythm: one routine on a clock per time of day, « vers » that time
+//!   WITHOUT the model; an urgent one at the system's urgent level (background_turn.rs `deliver_urgent`). A habit is one moment on a rhythm: one routine on a clock per time of day, « vers » that time
 //!   (a stable shift of −10 to +10 min from the plan's id, Alex Q7 A), ending after its weeks (its number of runs).
 //! - **A route moment** is written by the bridge: `to` and `from` (else the first « Coordonnées » entry this agent
 //!   reads) found as `map_image` finds places (Nominatim), the way's time asked as map_route.rs asks it (FOSSGIS's
@@ -14,8 +14,8 @@
 //!   (triggers.rs, made by the plan: on with « Prévoir », gone with the plan); an event of the phone's calendar copy
 //!   (calendar.rs) is compared with each copy the phone sends (`tick`): moved, the moments move by as much, one line;
 //!   cancelled, the plan goes, one line; no model either way. Google and CalDAV events come with plans-sources (§6 row 7).
-//! - **Only from an agent that may propose** (`proposes`): « Initiative » not off (contracts/proactive), the person's
-//!   own agent (never one other people talk to); its « Routines » on.
+//! - **Only from an agent that may propose** (agent_proactive.rs `proposes`): « Initiative » not off
+//!   (contracts/proactive), the person's own agent (never one other people talk to); its « Routines » on.
 //! - **The caps** (D2 A): one plan per reply in the person's own turn (runs.rs `persons_own_turn`); unasked (a
 //!   routine's, a watcher's, a trigger's, a task's turn, or none) one card waiting per agent, 2 a day per agent, 4 a day
 //!   for the place. « Non merci » forgets the plan and keeps its title's print 14 days: the same plan is refused.
@@ -28,9 +28,6 @@
 //!
 //!     <data>/plans.json (0600)   {plans: [...], declined: [{agent, print, at}], made: [{agent, at, asked, run}],
 //!                                 hinted: [agent]}
-//!
-//! « Initiative » is kept by proactive-level (agent_proactive.rs, not merged when this was written): `proposes` reads
-//! the same file, as its contract says, until then.
 //!
 //! No Python counterpart.
 
@@ -238,27 +235,10 @@ pub fn get(config: &Config, id: &str) -> Option<Plan> {
 
 // -- who may propose ---------------------------------------------------------------------------------------------------
 
-/// Whether `agent` may propose on its own: the person's own agent (never the family's, a project's, a shared one:
-/// vault.rs `others_facing`) whose « Initiative » is not off. The level is proactive-level's
-/// (`<data>/agent_proactive.json`, contracts/proactive: an agent absent from it is « basic »); read here until
-/// agent_proactive.rs is merged, then `agent_proactive::proposes`.
-pub fn proposes(config: &Config, agent: &str) -> bool {
-    if crate::family_agent::is_family(config, agent)
-        || crate::project_agent::is_project(config, agent)
-        || crate::vault::others_facing(config, agent)
-    {
-        return false;
-    }
-    let text = std::fs::read_to_string(PathBuf::from(config.data_dir()).join("agent_proactive.json")).unwrap_or_default();
-    let level = serde_json::from_str::<Value>(&text)
-        .ok()
-        .and_then(|v| v.get("levels")?.get(agent)?.as_str().map(str::to_string));
-    level.as_deref() != Some("off")
-}
-
-/// `plan_propose` is in `agent`'s tools: it may propose, and its « Routines » are on (the moments are routines).
+/// `plan_propose` is in `agent`'s tools: it may propose (« Initiative » not off, never an agent other people talk to:
+/// agent_proactive.rs `proposes`), and its « Routines » are on (the moments are routines).
 pub fn offered(config: &Config, agent: &str) -> bool {
-    proposes(config, agent) && crate::routines::enabled(config, agent)
+    crate::agent_proactive::proposes(config, agent) && crate::routines::enabled(config, agent)
 }
 
 // -- the texts (contracts/plans/cases.json `texts`) ---------------------------------------------------------------------
@@ -1124,7 +1104,7 @@ fn event_start(event: &Value, zone: Tz) -> Option<f64> {
 /// `plan_propose` by `agent`; `asked`: in a turn of its person's own conversation, `run` that turn.
 pub async fn call(state: &AppState, agent: &AgentConfig, arguments: &Dict, asked: bool, run: Option<&str>) -> Called {
     let config = state.config();
-    if !proposes(&config, &agent.name) {
+    if !crate::agent_proactive::proposes(&config, &agent.name) {
         return refusal(
             "Not done: your person turned your suggestions off (« Initiative », at the bottom of your page), or other \
              people talk to you: propose nothing on your own. Do what they ask.",
@@ -1458,7 +1438,7 @@ pub async fn tick(state: &AppState) {
     for plan in &plans {
         let (over, lapsed) = (over(plan, now), lapsed(plan, now));
         // « Initiative » turned off: its cards still waiting withdrawn without a word (§2.1); what was set goes on
-        let withdrawn = plan.state == WAITING && !proposes(&config, &plan.agent);
+        let withdrawn = plan.state == WAITING && !crate::agent_proactive::proposes(&config, &plan.agent);
         if over || lapsed || withdrawn {
             tracing::info!(target: "bipbridge::plans", agent = %plan.agent, plan = %plan.id, over, lapsed, withdrawn,
                            "plan gone");

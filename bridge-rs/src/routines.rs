@@ -1286,8 +1286,8 @@ pub async fn fire(state: &AppState, id: &str) {
 }
 
 /// A plan's moment said: one Boîte message in the bridge's words where the routine's reports land, pushed (muted: not
-/// pushed). Urgent: pushed as the other urgent messages once proactive-level's `deliver_urgent` is merged (until
-/// then, an ordinary Boîte message).
+/// pushed); an urgent one at the system's urgent level (`deliver_urgent`: time-sensitive on the iPhone, Android's
+/// « Urgent » channel).
 async fn say(state: &AppState, pipeline: &Pipeline, agent: &AgentConfig, r: &Routine, words: &str, now: f64) -> &'static str {
     let (home, _) = report_home(state, pipeline, agent, r, "main").await;
     let delivery = Delivery {
@@ -1301,7 +1301,9 @@ async fn say(state: &AppState, pipeline: &Pipeline, agent: &AgentConfig, r: &Rou
         notify: !r.muted,
         files: Vec::new(),
     };
-    if pipeline.deliver(&delivery).await {
+    let delivered =
+        if r.urgent { pipeline.deliver_urgent(&delivery).await } else { pipeline.deliver(&delivery).await };
+    if delivered {
         "said"
     } else {
         "not delivered"
