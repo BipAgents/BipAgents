@@ -1034,10 +1034,10 @@ pub async fn finish_query(config: &Config, query: HashMap<String, String>) -> Ap
         .map(|l| l.tokens.clone());
     // the same account signed in again (« Reconnecter », Google's « Ajouter… »): its folders stay; another account:
     // they were the other account's, forgotten
-    let mut folders = previous
-        .filter(|l| l.account.is_none() || account.is_none() || l.account == account)
-        .map(|l| l.folders)
-        .unwrap_or_default();
+    let same = previous.filter(|l| l.account.is_none() || account.is_none() || l.account == account);
+    // and the person's switch for the Carnet (review 1 of S3, R1: read after `remove`, it was always off)
+    let carnet = same.as_ref().is_some_and(|l| l.carnet);
+    let mut folders = same.map(|l| l.folders).unwrap_or_default();
     for f in picked {
         if let Some(old) = folders.iter_mut().find(|old| old.id == f.id) {
             for a in f.agents {
@@ -1059,8 +1059,7 @@ pub async fn finish_query(config: &Config, query: HashMap<String, String>) -> Ap
         client: flow.client.clone(),
         folders,
         agents: Vec::new(),
-        // signed in again: the person's switch for the Carnet stays
-        carnet: stored.drives.get(flow.provider.id()).is_some_and(|l| l.carnet),
+        carnet,
     };
     stored.drives.insert(flow.provider.id().to_string(), link.clone());
     store.write(&stored)?;

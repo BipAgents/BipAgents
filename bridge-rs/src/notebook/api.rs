@@ -8,9 +8,11 @@
 //!                                              shows (close, next_date, status, facts)
 //!     GET    /v1/notebook/search?q=&lang=      the facts that answer, ready to show ({label, answer, page, path, date,
 //!                                              when}: tools::answers, the agents' search too), then the pages
-//!                                              + `groups`, `counts` (index.rs, finder.rs: the phones' rule; &space=,
-//!                                              &category=), `online` (&online=1: the drives the person allowed);
-//!                                              &sommaire=1: those keys only (today's not made)
+//!                                              &groups=1: + `groups`, `counts` (index.rs, finder.rs: the phones' rule;
+//!                                              &space=, &category=), `online` (&online=1: the drives the person
+//!                                              allowed); &sommaire=1: those keys only (today's not made). Without
+//!                                              either, today's keys only: an installed 1.0 app's search never makes
+//!                                              the copy
 //!     GET    /v1/notebook/index?since=&epoch=&lang=   the phone's search copy (index.rs; ETag, 304, a diff, gzip)
 //!     GET    /v1/notebook/offline              the copy the phone answers from offline (offline.rs; ETag, 304)
 //!     GET    /v1/notebook/known?agent=&lang=   « Ce que tes agents savent de toi » (known.rs)
@@ -305,6 +307,8 @@ async fn search(State(state): State<AppState>, q: QueryMap) -> ApiResult<Respons
     let online = matches!(q.get("online"), Some("1" | "true" | "yes"));
     // a new app asking for the sommaire's keys only: today's (answers, pages, tasks) not made
     let sommaire_only = matches!(q.get("sommaire"), Some("1" | "true" | "yes"));
+    // the sommaire's keys only when asked: an installed 1.0 app's search never makes the copy (review 1 of S3, R3)
+    let with_groups = sommaire_only || matches!(q.get("groups"), Some("1" | "true" | "yes"));
     let (online_words, online_lang) = (words.clone(), titles_lang.clone());
     let view = blocking(move || {
         let today = chrono::Local::now().date_naive();
@@ -355,6 +359,9 @@ async fn search(State(state): State<AppState>, q: QueryMap) -> ApiResult<Respons
             .collect();
         let tasks: Vec<Value> =
             found_tasks.iter().map(|t| super::categories::task_view(&ctx, t, &all, &marks, today)).collect();
+        if !with_groups {
+            return Ok(json!({"answers": answers, "pages": pages, "tasks": tasks}));
+        }
         // the sommaire's search (S3): the phones' rule on the bridge's copy, by category
         let (groups, counts) = sommaire_search(&config, part, &words, &langs, &titles_lang, category.as_deref(), space.as_deref(), today);
         Ok(json!({"answers": answers, "pages": pages, "tasks": tasks, "groups": groups, "counts": counts}))
@@ -362,11 +369,13 @@ async fn search(State(state): State<AppState>, q: QueryMap) -> ApiResult<Respons
     .await?;
     let mut view = view;
     // the online files the person allowed for the Carnet, only when asked (they take the network's time)
-    view["online"] = if online && part == Part::Main && !online_words.trim().is_empty() {
-        crate::drives::carnet_search(&state.config(), &online_words, &online_lang).await.unwrap_or(Value::Null)
-    } else {
-        Value::Null
-    };
+    if with_groups {
+        view["online"] = if online && part == Part::Main && !online_words.trim().is_empty() {
+            crate::drives::carnet_search(&state.config(), &online_words, &online_lang).await.unwrap_or(Value::Null)
+        } else {
+            Value::Null
+        };
+    }
     Ok(web::ok(view))
 }
 
@@ -393,7 +402,7 @@ fn sommaire_search(
         .groups
         .iter()
         .map(|g| {
-            json!({"category": g.category, "title": super::index::category_title(titles, &g.category), "count": g.count,
+            json!({"category": g.category, "title": super::categories::title(titles, &g.category), "count": g.count,
                    "top": g.top.iter().map(|at| super::index::item_view(&finder, *at, today)).collect::<Vec<_>>()})
         })
         .collect();
@@ -410,13 +419,19 @@ async fn index(State(state): State<AppState>, q: QueryMap, headers: axum::http::
     };
     let epoch = web::query_str(&q, "epoch", false, Some(40))?;
     let asked = q.get("lang").map(str::to_string);
+    let has = headers.get("if-none-match").and_then(|v| v.to_str().ok()).map(|v| v.trim().to_string());
     let (body, etag) = blocking(move || {
         let langs = super::index::langs(&super::language(&config), asked.as_deref());
+        // the phone has it: no answer made (review 1 of S3, R4: an 8 MB copy for a 304)
+        let now = super::index::etag(&config, &langs);
+        if has.as_deref() == Some(now.as_str()) {
+            return Ok((Value::Null, now));
+        }
         let shown = langs.last().cloned().unwrap_or_default();
         Ok(super::index::answer(&config, &langs, since, epoch.as_deref(), super::index::online_only(&shown)))
     })
     .await?;
-    let unchanged = headers.get("if-none-match").and_then(|v| v.to_str().ok()).is_some_and(|v| v.trim() == etag);
+    let unchanged = body.is_null();
     let gzip = headers
         .get("accept-encoding")
         .and_then(|v| v.to_str().ok())

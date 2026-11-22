@@ -1026,8 +1026,8 @@ pub fn categorize(config: &Config, target: &Target, given: &[String], who: &Who)
             }
             let before = of_page(config, Part::Main, path, &page);
             let (auto, word) = decide(config, Part::Main, path, &page, None);
-            // a page made by hand gets its id now, so its key never changes after (review 2 of S1, R12)
-            page.ensure_id();
+            // (a page made by hand keeps its key from its path: its header gets the categories' lines only, never an
+            // id: S2 review 1, R10; review 1 of S3)
             let key = format!("page:{}", page_key(&page, path));
             // its header lines only: a page written by hand keeps its frontmatter as it is (S2 review 1, R10)
             let after = super::categories_pass::with_header(&text, &cats, "person").unwrap_or_else(|| {
@@ -1073,13 +1073,8 @@ pub fn categorize(config: &Config, target: &Target, given: &[String], who: &Who)
             let Some(page_text) = super::checked(path).ok().and_then(|_| super::read_page_text(config, Part::Main, path)) else {
                 return Ok(Err(Refused::NotFound));
             };
-            let mut page = Page::parse(&page_text, "");
+            let page = Page::parse(&page_text, "");
             let Some(line) = line_on(&page, text) else { return Ok(Err(Refused::NotFound)) };
-            // a page made by hand gets its id first: its lines' keys never change after (review 2 of S1, R12)
-            if page.id().is_empty() {
-                page.ensure_id();
-                super::commit(config, Part::Main, path, Some(&page_text), Some(&page.render()), who, ACTION, "")?;
-            }
             let key = line_key(&page_key(&page, path), &line);
             let c = marked(&marks, &key).unwrap_or_else(|| of_page(config, Part::Main, path, &page).categories);
             let by = if marked(&marks, &key).is_some() { "person" } else { "auto" };
@@ -1156,14 +1151,10 @@ pub fn undo(config: &Config, id: &str, who: &Who) -> anyhow::Result<Option<Value
     let set = valid(&super::strings(entry.get("set")), &PERSON_MAY_GIVE).unwrap_or_default();
     let rule = entry.get("rule").and_then(Value::as_str).map(str::to_string);
     let rule_before = valid(&super::strings(entry.get("rule_before")), &PERSON_MAY_GIVE);
-    // a page gone since: nothing to undo on it any more (review 2 of S1, R12: `undo_gone`, never the old state)
-    let page = match key.strip_prefix("page:") {
-        Some(page_id) => match page_by_key(config, page_id) {
-            Some(found) => Some(found),
-            None => return Ok(None),
-        },
-        None => None,
-    };
+    // a page gone since: nothing to undo on it any more (review 2 of S1, R12: `undo_gone`, never the old state);
+    // what the correction taught and its undo are forgotten all the same (review 1 of S3, R6)
+    let page = key.strip_prefix("page:").and_then(|page_id| page_by_key(config, page_id));
+    let gone = key.starts_with("page:") && page.is_none();
     super::update_state(config, |state| {
         if !key.starts_with("page:") {
             let mut m = marks_in(state);
@@ -1186,6 +1177,9 @@ pub fn undo(config: &Config, id: &str, who: &Who) -> anyhow::Result<Option<Value
         list.retain(|e| tk::str_or_empty(e.get("id")) != id);
         state.insert("category_undo".into(), Value::Array(list));
     })?;
+    if gone {
+        return Ok(None);
+    }
     let mut target = json!({"item": key});
     let mut now = Filed { categories: was.clone(), by: was_by.clone(), stored: stored_before };
     // the page as it was, read once the rule is forgotten (a page the bridge had not written categories on is read

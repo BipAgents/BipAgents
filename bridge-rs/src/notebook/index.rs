@@ -51,9 +51,22 @@ const DOCUMENT_MAX: u64 = 20 * 1024 * 1024;
 
 // -- the items ----------------------------------------------------------------------------------------------------------
 
-/// Whether a word (or a text) of the copy holds a reference (categories.rs `holds_reference`, quantities aside).
+/// « Budget 2026.xlsx », « Impôts 2026.md »: a file's extension is no part of a reference.
+static EXTENSION: LazyLock<regex::Regex> =
+    LazyLock::new(|| regex::Regex::new(r"\.[A-Za-z][A-Za-z0-9]{0,4}$").expect("valid regex"));
+
+/// Whether a word (or a text) of the copy holds a reference (categories.rs `holds_reference`, quantities aside), a
+/// file's extension set aside.
 pub fn reference(text: &str) -> bool {
-    c::holds_reference(text)
+    let words: Vec<String> = text.split_whitespace().map(|w| EXTENSION.replace(w, "").into_owned()).collect();
+    c::holds_reference(&words.join(" "))
+}
+
+/// Whether a path or a file's name holds a reference (« Sujets/Passeport 18AB12345.md », « Facture FR-2026-00123.pdf
+/// »): the item is not in the copy at all, as a line that holds one (review 1 of S3, B2: its `path` and `open` would
+/// carry it to the phone).
+pub fn named_reference(path: &str) -> bool {
+    reference(&path.replace(['/', '\\'], " "))
 }
 
 /// A text with each word that holds a reference taken out (« Facture FR-2026-00123.pdf » → « Facture … »); None when
@@ -118,9 +131,25 @@ static READING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::n
 /// How many documents' texts were read: the copy is made again when a text arrives.
 static TEXTS_READ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
+/// The tags that end a line of a web page (its paragraphs, titles, cells): read as line ends, so that a number in one
+/// paragraph takes only that paragraph out.
+static BLOCKS: LazyLock<regex::Regex> = LazyLock::new(|| {
+    regex::Regex::new(r"(?i)<(?:br|/?p|/?div|/?h[1-6]|/?li|/?tr|/?td|/?th|/?section|/?article)\b[^>]*>").expect("valid regex")
+});
+
+/// A word of a document kept in the copy: no digits, a year (19xx, 20xx) or a number of one or two digits. A number
+/// written in groups (« FR76 3000 6000 0112 », « 4970 1012 3456 7890 ») leaves nothing of itself (review 1 of S3, B1).
+fn plain_word(w: &str) -> bool {
+    let digits = w.chars().filter(char::is_ascii_digit).count();
+    digits == 0
+        || (digits == w.len() && (w.len() <= 2 || (w.len() == 4 && (w.starts_with("19") || w.starts_with("20")))))
+}
+
 fn read_document(path: &Path, name: &str) -> String {
     let raw = if name.ends_with(".html") || name.ends_with(".htm") {
-        std::fs::read_to_string(path).map(|h| TAGS.replace_all(&h, " ").into_owned()).unwrap_or_default()
+        std::fs::read_to_string(path)
+            .map(|h| TAGS.replace_all(&BLOCKS.replace_all(&h, "\n"), " ").into_owned())
+            .unwrap_or_default()
     } else if std::fs::metadata(path).map(|m| m.len()).unwrap_or(u64::MAX) <= DOCUMENT_MAX {
         match crate::doc_text::document_text(path, name, "") {
             crate::doc_text::Read::Text(t) => t,
@@ -129,8 +158,11 @@ fn read_document(path: &Path, name: &str) -> String {
     } else {
         String::new()
     };
-    let folded = fold(tk::head(&raw, DOCUMENT_TEXT * 2));
-    let words: Vec<&str> = folded.split(' ').filter(|w| !reference(w)).collect();
+    // each raw line as written: none that holds an ID number or a reference (an IBAN, a card or a social security
+    // number is read on its line, before folding splits it into words)
+    let kept: Vec<&str> = raw.lines().filter(|l| !l.trim().is_empty() && !reference(l)).collect();
+    let folded = fold(tk::head(&kept.join("\n"), DOCUMENT_TEXT * 2));
+    let words: Vec<&str> = folded.split(' ').filter(|w| plain_word(w)).collect();
     tk::head(&words.join(" "), DOCUMENT_TEXT).to_string()
 }
 
@@ -157,12 +189,12 @@ fn document_text(path: &Path, name: &str) -> String {
                 break;
             };
             let text = read_document(&key.0, &name);
-            let mut cache = DOCUMENT_TEXTS.lock().unwrap_or_else(|e| e.into_inner());
-            if cache.len() > 5000 {
-                cache.clear();
+            let found = !text.is_empty();
+            DOCUMENT_TEXTS.lock().unwrap_or_else(|e| e.into_inner()).insert(key, text);
+            // the copy is made again for a text that says something only
+            if found {
+                TEXTS_READ.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             }
-            cache.insert(key, text);
-            TEXTS_READ.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         });
     }
     String::new()
@@ -203,8 +235,8 @@ fn anchor(page: &Page, file: &Path) -> Option<NaiveDate> {
     })
 }
 
-/// Each page's items as last made: (its root, its path) → (its file's size and time, what filed it, its items).
-type PageItems = HashMap<(PathBuf, String), ((u64, u64), u64, Vec<Entry>)>;
+/// Each page's items as last made: (its root, its path) → (what the page said and what filed it, its items).
+type PageItems = HashMap<(PathBuf, String), (u64, Vec<Entry>)>;
 static PAGE_ITEMS: LazyLock<Mutex<PageItems>> = LazyLock::new(Default::default);
 
 /// What files the pages besides their own text: the person's rules and marks, the papers' tasks (state.json).
@@ -223,14 +255,14 @@ fn page_entries(
     part: Part,
     w: &super::Words,
     marks: &serde_json::Map<String, Value>,
-    file: &Path,
+    anchor: Option<NaiveDate>,
     path: &String,
     page: &Page,
 ) -> Vec<Entry> {
     let health = part == Part::Health;
     let mut items: Vec<Entry> = Vec::new();
     let kind = page.kind();
-    if ["tasks", "records", "documents"].contains(&kind.as_str()) || *path == w.inbox_path() {
+    if ["tasks", "records", "documents"].contains(&kind.as_str()) || *path == w.inbox_path() || named_reference(path) {
         return items;
     }
     let filed = c::of_page_in(ctx, part, path, page);
@@ -262,7 +294,6 @@ fn page_entries(
         aliases,
         ..Default::default()
     });
-    let anchor = anchor(page, file);
     let sections: Vec<(String, Vec<super::Fact>)> =
         page.sections().into_iter().filter(|(name, _)| fold(name) != fold(w.brief)).collect();
     let texts: Vec<String> = sections.iter().flat_map(|(_, f)| f.iter().map(|x| x.text.clone())).collect();
@@ -337,30 +368,33 @@ fn entries_of(config: &Config, part: Part, documents: &[Value]) -> Vec<Entry> {
     let main = super::all_pages(config, part);
     let root = super::part_root(config, part);
     let mut items: Vec<Entry> = Vec::new();
-    // each page's items kept while its file and what files it (language, rules, the person's marks) stay the same:
-    // a write makes the copy again for the pages it touched only
-    // (Santé's are read at each search and kept nowhere)
+    // each page's items kept while what it says and what files it (language, rules, the person's marks) stay the
+    // same: a write makes the copy again for the pages it touched only (Santé's are read at each search, kept nowhere)
     let filing = hash_of(&(lang.clone(), state_key(config)));
     let mut cache = PAGE_ITEMS.lock().unwrap_or_else(|e| e.into_inner());
     let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
     for (path, page) in &main {
         let file = root.join(path);
+        let anchor = anchor(page, &file);
         if health {
-            items.extend(page_entries(&ctx, part, w, &marks, &file, path, page));
+            items.extend(page_entries(&ctx, part, w, &marks, anchor, path, page));
             continue;
         }
-        let stamp = stamp(&file).unwrap_or_default();
+        // what the page says as it was read (never its file's size and time, read apart: an agent's write or « Oublie
+        // ça » between the two kept the old lines; review 1 of S3, B3), the day its undated lines are read near, and
+        // what files it
+        let said = hash_of(&(filing, anchor, page.title.as_str(), page.body.as_str(), serde_json::to_string(&page.front).unwrap_or_default()));
         let key = (root.clone(), path.clone());
         seen.insert(path.as_str());
-        if let Some((s, f, kept)) = cache.get(&key) {
-            if *s == stamp && *f == filing {
+        if let Some((s, kept)) = cache.get(&key) {
+            if *s == said {
                 items.extend(kept.iter().cloned());
                 continue;
             }
         }
-        let made = page_entries(&ctx, part, w, &marks, &file, path, page);
+        let made = page_entries(&ctx, part, w, &marks, anchor, path, page);
         items.extend(made.iter().cloned());
-        cache.insert(key, (stamp, filing, made));
+        cache.insert(key, (said, made));
     }
     if !health {
         cache.retain(|(r, p), _| *r != root || seen.contains(p.as_str()));
@@ -420,6 +454,12 @@ fn entries_of(config: &Config, part: Part, documents: &[Value]) -> Vec<Entry> {
         }
     }
     let files = if documents.is_empty() { HashMap::new() } else { document_files(config) };
+    // the texts kept: those of the documents listed now (never all dropped at once: they would be read again forever)
+    if part == Part::Main {
+        let now: std::collections::HashSet<&Path> = files.values().map(PathBuf::as_path).collect();
+        DOCUMENT_TEXTS.lock().unwrap_or_else(|e| e.into_inner()).retain(|k, _| now.contains(k.0.as_path()));
+    }
+    let mut listed: std::collections::HashSet<String> = std::collections::HashSet::new();
     for d in documents {
         if tk::str_or_empty(d.get("part")) == "health" {
             continue;
@@ -429,13 +469,25 @@ fn entries_of(config: &Config, part: Part, documents: &[Value]) -> Vec<Entry> {
             continue;
         }
         let (agent, file) = (tk::str_or_empty(d.get("agent")), tk::str_or_empty(d.get("file")));
-        let Some(name) = masked(&tk::str_or_empty(d.get("name"))) else { continue };
         let web_page = d.get("page").is_some_and(|p| !p.is_null()) || tk::str_or_empty(d.get("type")) == "page";
+        // a file whose name holds a reference: out (its `open` names it); an agent's web page is named after its
+        // title (`pages::slug`): out when its title holds one
+        let named = tk::str_or_empty(d.get("name"));
+        if (!web_page && named_reference(&file)) || (web_page && reference(&named)) {
+            continue;
+        }
+        // two files of the same name an agent received: one note, the newest (`documents` lists the newest first;
+        // review 1 of S3, R8)
+        let id = c::document_key(&agent, &file);
+        if !listed.insert(id.clone()) {
+            continue;
+        }
+        let Some(name) = masked(&named) else { continue };
         let text = files.get(&(agent.clone(), file.clone())).map(|p| document_text(p, &file)).unwrap_or_default();
         let shown_by = tk::str_or_empty(d.get("agent_name"));
         let by = if shown_by.is_empty() { agent.clone() } else { shown_by };
         items.push(Entry {
-            id: c::document_key(&agent, &file),
+            id,
             kind: "document".into(),
             title: name.clone(),
             line: name.clone(),
@@ -456,29 +508,6 @@ fn entries_of(config: &Config, part: Part, documents: &[Value]) -> Vec<Entry> {
 pub fn health_finder(config: &Config, langs: &[String]) -> Finder {
     let year = chrono::Local::now().date_naive().year();
     Finder::new(entries_of(config, Part::Health, &[]), &tables(langs, year))
-}
-
-/// A category's name in `lang` (contracts/carnet/sommaire.json `titles_proposed`; Alex, 22/11: « Personnes »).
-pub fn category_title(lang: &str, id: &str) -> String {
-    const TITLES: [(&str, [&str; 5]); 9] = [
-        ("people", ["Personnes", "People", "Personen", "Personas", "Personen"]),
-        ("dates", ["Dates", "Dates", "Termine", "Fechas", "Datums"]),
-        ("money", ["Argent", "Money", "Geld", "Dinero", "Geld"]),
-        ("home", ["Maison", "Home", "Zuhause", "Casa", "Huis"]),
-        ("papers", ["Papiers", "Papers", "Papiere", "Papeles", "Papieren"]),
-        ("trips", ["Voyages", "Trips", "Reisen", "Viajes", "Reizen"]),
-        ("work", ["Travail", "Work", "Arbeit", "Trabajo", "Werk"]),
-        ("other", ["Autres", "Other", "Sonstiges", "Otros", "Overig"]),
-        ("health", ["Santé", "Health", "Gesundheit", "Salud", "Gezondheid"]),
-    ];
-    let column = match lang {
-        "fr" => 0,
-        "de" => 2,
-        "es" => 3,
-        "nl" => 4,
-        _ => 1,
-    };
-    TITLES.iter().find(|(c, _)| *c == id).map(|(_, t)| t[column].to_string()).unwrap_or_else(|| id.to_string())
 }
 
 /// An item as sent: compact JSON (its default keys left out).
@@ -537,8 +566,8 @@ fn trim_sized(items: Vec<Entry>, sizes: Vec<usize>, lines: usize, bytes: usize) 
 /// The languages whose tables go with the copy: the Carnet's and the app's.
 pub fn langs(carnet: &str, asked: Option<&str>) -> Vec<String> {
     let mut out = vec![carnet.to_string()];
-    if let Some(a) = asked.map(|a| a.trim().to_lowercase()).filter(|a| a.len() >= 2) {
-        let a = a[..2].to_string();
+    if let Some(a) = asked.map(|a| a.trim().to_lowercase()).filter(|a| a.chars().count() >= 2) {
+        let a: String = a.chars().take(2).collect();
         if super::search_words::LANGS.contains(&a.as_str()) && !out.contains(&a) {
             out.push(a);
         }
@@ -549,8 +578,13 @@ pub fn langs(carnet: &str, asked: Option<&str>) -> Vec<String> {
 /// The copy's tables for `langs` (sommaire.json `Index`: `stop`, `neighbours`, `dates`, `dated`).
 pub fn tables(langs: &[String], year: i32) -> Tables {
     let words = &super::search_words::WORDS;
-    let mut t = Tables { stop: words.stop.clone(), dated: (c::DATED_BEFORE, c::DATED_AFTER), ..Default::default() };
+    let mut t = Tables { dated: (c::DATED_BEFORE, c::DATED_AFTER), ..Default::default() };
     for lang in langs {
+        for w in words.stop(lang) {
+            if !t.stop.contains(w) {
+                t.stop.push(w.clone());
+            }
+        }
         for (k, v) in words.neighbours(lang) {
             let list = t.neighbours.entry(k.clone()).or_default();
             for x in v {
@@ -724,12 +758,26 @@ pub fn rebuilt_for_bench(config: &Config, langs: &[String]) -> Finder {
     Finder::new(items, &tables(langs, chrono::Local::now().date_naive().year()))
 }
 
+/// The copy's ETag: its epoch, its version and the languages of its tables (`"<epoch>-v<version>-fr.en"`: the app's
+/// language changed, its tables come; review 1 of S3, R2).
+fn etag_of(k: &Kept, langs: &[String]) -> String {
+    format!("\"{}-v{}-{}\"", k.epoch, k.version, langs.join("."))
+}
+
+/// The copy's ETag now (the copy made again first when the Carnet changed): a 304 is answered without making the
+/// answer (review 1 of S3, R4).
+pub fn etag(config: &Config, langs: &[String]) -> String {
+    let (key, _) = refreshed(config);
+    let kept = KEPT.lock().unwrap_or_else(|e| e.into_inner());
+    etag_of(&kept[&key], langs)
+}
+
 /// `GET /v1/notebook/index`: (the answer, its ETag). `since`/`epoch`: what the phone has.
 pub fn answer(config: &Config, langs: &[String], since: Option<u64>, epoch: Option<&str>, online_only: &str) -> (Value, String) {
     let (key, _) = refreshed(config);
     let kept = KEPT.lock().unwrap_or_else(|e| e.into_inner());
     let k = &kept[&key];
-    let etag = format!("\"{}-v{}\"", k.epoch, k.version);
+    let etag = etag_of(k, langs);
     // a diff: the phone's version is one of this epoch's kept ones
     let first_kept = k.history.front().map(|h| h.0).unwrap_or(k.version);
     let diff = match (since, epoch) {
@@ -738,24 +786,18 @@ pub fn answer(config: &Config, langs: &[String], since: Option<u64>, epoch: Opti
     };
     let (items, removed, full) = match diff {
         Some(s) => {
-            let mut changed: Vec<&String> = Vec::new();
-            let mut removed: Vec<String> = Vec::new();
+            // (sets: a diff of many items stays linear; review 1 of S3, R10)
+            let mut changed: std::collections::HashSet<&str> = std::collections::HashSet::new();
+            let mut removed: Vec<&str> = Vec::new();
             for (_, ch, rm) in k.history.iter().filter(|h| h.0 > s) {
-                for id in ch {
-                    if !changed.contains(&id) {
-                        changed.push(id);
-                    }
-                    removed.retain(|r| r != id);
-                }
-                for id in rm {
-                    if !removed.contains(id) {
-                        removed.push(id.clone());
-                    }
-                }
+                changed.extend(ch.iter().map(String::as_str));
+                removed.extend(rm.iter().map(String::as_str));
             }
-            let now: HashMap<&str, &Entry> = k.items.iter().map(|e| (e.id.as_str(), e)).collect();
-            let items: Vec<Value> = k.items.iter().filter(|e| changed.contains(&&e.id)).map(sent).collect();
-            let removed: Vec<String> = removed.into_iter().filter(|id| !now.contains_key(id.as_str())).collect();
+            let now: std::collections::HashSet<&str> = k.items.iter().map(|e| e.id.as_str()).collect();
+            let items: Vec<Value> = k.items.iter().filter(|e| changed.contains(e.id.as_str())).map(sent).collect();
+            let mut gone: std::collections::HashSet<&str> = std::collections::HashSet::new();
+            let removed: Vec<String> =
+                removed.into_iter().filter(|id| !now.contains(id) && gone.insert(id)).map(str::to_string).collect();
             (items, removed, false)
         }
         None => (k.items.iter().map(sent).collect(), Vec::new(), true),
@@ -892,7 +934,7 @@ mod tests {
         let (first, etag) = answer(&config, &langs, None, None, "");
         assert_eq!((first["full"].as_bool(), first["version"].as_u64()), (Some(true), Some(1)));
         let epoch = first["epoch"].as_str().unwrap().to_string();
-        assert_eq!(etag, format!("\"{epoch}-v1\""));
+        assert_eq!(etag, format!("\"{epoch}-v1-fr\""));
         // nothing changed: the same version, nothing to send
         let (same, etag2) = answer(&config, &langs, Some(1), Some(&epoch), "");
         assert_eq!((etag2, same["full"].as_bool(), same["items"].as_array().unwrap().len()), (etag, Some(false), 0));
@@ -918,26 +960,29 @@ mod tests {
         }
     }
 
+    /// A page made by hand (no id) keeps its key from its path when the person files it or a line of it: its header
+    /// gets the categories' lines only (S2 review 1, R10), never an id; an undo on it once it is gone is gone (review 2
+    /// of S1, R12).
     #[test]
-    fn a_page_made_by_hand_gets_its_id_before_it_is_filed() {
-        // review 2 of S1, R12: its `f…` key would change at the first agent's write, and its lines' marks be lost
+    fn a_page_made_by_hand_keeps_its_key_when_it_is_filed() {
         let (_d, config) = config();
-        page(&config, Part::Main, "Sujets/Atelier.md", "---\ntype: subject\n---\n# Atelier\n\n## Où on en est\n- Vernis à commander\n");
+        let hand = "---\ntype: subject\n---\n# Atelier\n\n## Où on en est\n- Vernis à commander\n";
+        page(&config, Part::Main, "Sujets/Atelier.md", hand);
+        let file = super::super::part_root(&config, Part::Main).join("Sujets/Atelier.md");
         let you = Who::you(&config);
         let line = c::Target::Line { path: "Sujets/Atelier.md".into(), text: "Vernis à commander".into() };
         let done = c::categorize(&config, &line, &["money".to_string()], &you).unwrap().unwrap();
-        let text = std::fs::read_to_string(super::super::part_root(&config, Part::Main).join("Sujets/Atelier.md")).unwrap();
-        let id = Page::parse(&text, "Atelier").id();
-        assert!(!id.is_empty(), "{text}");
-        assert!(done["target"]["item"].as_str().unwrap().starts_with(&format!("line:{id}:")), "{done}");
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), hand, "a line's correction is kept in the state only");
+        let item = done["target"]["item"].as_str().unwrap().to_string();
+        assert!(item.starts_with("line:f"), "{done}");
         let copy = entries(&config, &[]);
         let filed = copy.iter().find(|e| e.line == "Vernis à commander").unwrap();
-        assert_eq!((filed.id.starts_with(&format!("line:{id}:")), filed.categories.clone()), (true, vec!["money".to_string()]));
-        // the page itself, then gone: its undo is gone too
+        assert_eq!((filed.id.clone(), filed.categories.clone()), (item, vec!["money".to_string()]));
         let pg = c::Target::Page { path: "Sujets/Atelier.md".into() };
         let done = c::categorize(&config, &pg, &["home".to_string()], &you).unwrap().unwrap();
-        assert_eq!(done["target"]["item"], format!("page:{id}"));
-        std::fs::remove_file(super::super::part_root(&config, Part::Main).join("Sujets/Atelier.md")).unwrap();
+        assert!(done["target"]["item"].as_str().unwrap().starts_with("page:f"), "{done}");
+        assert!(Page::parse(&std::fs::read_to_string(&file).unwrap(), "Atelier").id().is_empty());
+        std::fs::remove_file(&file).unwrap();
         assert!(c::undo(&config, done["undo"].as_str().unwrap(), &you).unwrap().is_none());
     }
 
@@ -1042,7 +1087,7 @@ mod tests {
     fn the_stop_words_are_each_languages() {
         let stop = |lang: &str| tables(&[lang.to_string()], 2026).stop;
         let en = stop("en");
-        for kept in ["van", "bin", "hay", "met", "comment", "mais", "die", "was"] {
+        for kept in ["van", "bin", "hay", "met", "comment", "mais", "die", "het"] {
             assert!(!en.contains(&kept.to_string()), "en drops {kept}");
         }
         assert!(en.contains(&"the".to_string()) && en.contains(&"um".to_string()));

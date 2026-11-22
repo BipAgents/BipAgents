@@ -8,8 +8,9 @@
 //!   viene », « volgende week »… → an interval computed on the phone (`DateEnd`: `day`, `week`, `month`, `year`,
 //!   `feast`, `weekday`); feasts as rules (a fixed day, or days from Easter), never days: the copy never changes with
 //!   the day. A month's name is no phrase: its word finds the dates written with it (« anniversaires en décembre »).
-//! - **Stop words**: the lexicon's (`lexicon::STOP`, the answers' and the 1.0 search's, unchanged) and, for this
-//!   search only, Dutch's and the words a spoken question carries (« euh », « je dois », « remind me »).
+//! - **Stop words**: each language's (review 1 of S3, R9): the lexicon's words of that language (`lexicon::STOP`, the
+//!   answers' and the 1.0 search's, unchanged), Dutch's, and the words a spoken question carries (« euh », « je
+//!   dois », « remind me »).
 //!
 //! Left out on purpose until the blind set (briefs/carnet-blind-set-1122.json, 22/11) has been measured once: the
 //! words its README names (« rdv », « proprio », « CAF », « PTO », « ISA », « Bank », « banco », « poen »,
@@ -870,38 +871,52 @@ const FEASTS: &[(&str, u32, u32, Option<i64>)] = &[
     ("whit_monday", 0, 0, Some(50)),
 ];
 
-/// Words dropped by this search besides `lexicon::STOP` (Dutch's, and what a spoken question carries), unless alone.
-const STOP_MORE: &[&str] = &[
-    // fr
-    "je", "j", "tu", "me", "m", "moi", "toi", "te", "t", "nous", "vous", "ce", "cet", "cette", "ces", "ai", "as",
-    "avez", "ont", "suis", "es", "sont", "avec", "dans", "par", "pas", "ne", "n", "y", "se", "s", "si", "mais", "donc",
-    "alors", "deja", "encore", "euh", "ben", "bah", "hein", "dois", "doit", "faut", "dis", "rappelle", "comment",
-    "pourquoi", "ou", "notre", "nos", "votre", "vos", "leur", "leurs", "on", "ils", "elles", "lui", "eux", "jour",
-    // en
-    "i", "me", "you", "it", "its", "we", "our", "they", "them", "their", "do", "did", "done", "need", "should",
-    "could", "would", "can", "was", "were", "be", "been", "are", "am", "at", "in", "on", "for", "with", "by", "from",
-    "about", "again", "already", "remind", "um", "uh", "er", "please", "tell", "just", "that", "this", "these",
-    "those", "there", "where", "why", "have", "had", "get", "got", "so", "day",
-    // de
-    "ich", "mir", "mich", "du", "dir", "dich", "wir", "uns", "ihr", "sie", "er", "mein", "meine", "meinen", "meiner",
-    "dein", "deine", "seine", "ihre", "im", "an", "auf", "fur", "mit", "bei", "zu", "zum", "zur", "aus", "nach",
-    "vom", "noch", "schon", "nochmal", "bitte", "ahm", "muss", "soll", "habe", "hab", "haben", "sind", "wo", "wer",
-    "warum", "welcher", "welches", "welchem", "welchen", "nicht", "kein", "keine", "auch", "doch", "ja", "nein",
-    "also", "tag", "bin", "erinner", "erinnere",
-    // es
-    "yo", "mi", "mis", "tus", "su", "sus", "lo", "unos", "unas", "al", "con", "por", "para", "quien", "donde",
-    "como", "eh", "este", "esta", "tengo", "debo", "hay", "otra", "vez", "ya", "pues", "bueno", "recuerdame", "dime",
-    "favor", "dia",
-    // nl
-    "het", "een", "van", "op", "te", "voor", "met", "aan", "bij", "uit", "om", "naar", "ik", "mij", "mijn", "je",
-    "jij", "jouw", "u", "uw", "wij", "ons", "onze", "hij", "zij", "ze", "hem", "zijn", "waren", "heb", "heeft",
-    "hebben", "moet", "moeten", "wat", "waar", "wie", "hoe", "wanneer", "welke", "al", "eens", "even", "dat", "die",
-    "dit", "deze", "niet", "geen", "ook", "wel", "dag", "herinner",
+/// Each language's stop words, for this search only (review 1 of S3, R9: one list for all dropped « van », « bin »,
+/// « hay », « met », « comment » from an English Carnet, « Mais » from a German one): the lexicon's (`lexicon::STOP`,
+/// the 1.0 answers', unchanged), Dutch's, and the words a spoken question carries. Dropped unless alone.
+const STOP_FR: &[&str] = &[
+    "de", "du", "la", "le", "les", "des", "d", "l", "un", "une", "au", "aux", "et", "a", "en", "pour", "sur", "ma", "mon",
+    "mes", "ta", "ton", "tes", "sa", "son", "ses", "quel", "quelle", "quels", "quelles", "est", "c", "qu", "que", "qui",
+    "quoi", "combien", "elle", "il", "quand", "je", "j", "tu", "me", "m", "moi", "toi", "te", "t", "nous", "vous", "ce",
+    "cet", "cette", "ces", "ai", "as", "avez", "ont", "suis", "es", "sont", "avec", "dans", "par", "pas", "ne", "n", "y",
+    "se", "s", "si", "mais", "donc", "alors", "deja", "encore", "euh", "ben", "bah", "hein", "dois", "doit", "faut",
+    "dis", "rappelle", "comment", "pourquoi", "ou", "notre", "nos", "votre", "vos", "leur", "leurs", "on", "ils",
+    "elles", "lui", "eux", "jour",
 ];
+const STOP_EN: &[&str] = &[
+    "the", "of", "an", "and", "to", "is", "what", "which", "who", "how", "many", "much", "my", "your", "his", "her",
+    "does", "s", "when", "has", "a", "i", "me", "you", "it", "its", "we", "our", "they", "them", "their", "do", "did",
+    "done", "need", "should", "could", "would", "can", "was", "were", "be", "been", "are", "am", "at", "in", "on",
+    "for", "with", "by", "from", "about", "again", "already", "remind", "um", "uh", "er", "please", "tell", "just",
+    "that", "this", "these", "those", "there", "where", "why", "have", "had", "get", "got", "so", "day",
+];
+const STOP_DE: &[&str] = &[
+    "der", "die", "das", "den", "dem", "des", "von", "ein", "eine", "einen", "einem", "und", "ist", "was", "wie",
+    "welche", "hat", "wann", "ich", "mir", "mich", "du", "dir", "dich", "wir", "uns", "ihr", "sie", "er", "es", "mein",
+    "meine", "meinen", "meiner", "dein", "deine", "seine", "ihre", "im", "in", "an", "am", "auf", "fur", "mit", "bei",
+    "zu", "zum", "zur", "aus", "nach", "vom", "noch", "schon", "nochmal", "bitte", "ahm", "muss", "soll", "habe",
+    "hab", "haben", "sind", "wo", "wer", "warum", "welcher", "welches", "welchem", "welchen", "nicht", "kein",
+    "keine", "auch", "doch", "ja", "nein", "also", "tag", "bin", "erinner", "erinnere",
+];
+const STOP_ES: &[&str] = &[
+    "el", "la", "los", "las", "del", "de", "y", "es", "un", "una", "cual", "cuanto", "cuando", "tiene", "a", "en",
+    "que", "yo", "me", "mi", "mis", "tu", "tus", "su", "sus", "te", "se", "lo", "le", "les", "unos", "unas", "al",
+    "con", "por", "para", "quien", "donde", "como", "eh", "este", "esta", "tengo", "debo", "hay", "otra", "vez", "ya",
+    "pues", "bueno", "recuerdame", "dime", "favor", "dia",
+];
+const STOP_NL: &[&str] = &[
+    "de", "het", "een", "van", "en", "in", "op", "te", "voor", "met", "aan", "bij", "uit", "om", "naar", "ik", "mij",
+    "me", "mijn", "je", "jij", "jouw", "u", "uw", "we", "wij", "ons", "onze", "hij", "zij", "ze", "hem", "is", "zijn",
+    "was", "waren", "heb", "heeft", "hebben", "moet", "moeten", "wat", "waar", "wie", "hoe", "wanneer", "welke", "al",
+    "eens", "even", "eh", "uh", "er", "dat", "die", "dit", "deze", "niet", "geen", "ook", "wel", "dag", "herinner",
+];
+
+/// A language's words as written here: its neighbours' groups, its date phrases, its stop words.
+type LangWords = (&'static str, &'static [&'static str], &'static [Phrase], &'static [&'static str]);
 
 /// The search's words, made once.
 pub struct Words {
-    pub stop: Vec<String>,
+    stop: HashMap<&'static str, Vec<String>>,
     neighbours: HashMap<&'static str, IndexMap<String, Vec<String>>>,
     phrases: HashMap<&'static str, Vec<DatePhrase>>,
     pub feasts: IndexMap<String, Feast>,
@@ -911,6 +926,11 @@ impl Words {
     /// A language's neighbours (word → its neighbours), English's for another language.
     pub fn neighbours(&self, lang: &str) -> &IndexMap<String, Vec<String>> {
         self.neighbours.get(lang).or_else(|| self.neighbours.get("en")).expect("en is there")
+    }
+
+    /// A language's stop words, English's for another language.
+    pub fn stop(&self, lang: &str) -> &[String] {
+        self.stop.get(lang).or_else(|| self.stop.get("en")).map(Vec::as_slice).unwrap_or_default()
     }
 
     pub fn phrases(&self, lang: &str) -> &[DatePhrase] {
@@ -946,22 +966,24 @@ fn groups(list: &[&str]) -> IndexMap<String, Vec<String>> {
 }
 
 pub static WORDS: LazyLock<Words> = LazyLock::new(|| {
-    let mut stop: Vec<String> = Vec::new();
-    for w in super::lexicon::STOP.iter().chain(STOP_MORE) {
-        if !stop.iter().any(|s| s == w) {
-            stop.push(w.to_string());
-        }
-    }
-    let tables: [(&str, &[&str], &[Phrase]); 5] = [
-        ("fr", NEIGHBOURS_FR, PHRASES_FR),
-        ("en", NEIGHBOURS_EN, PHRASES_EN),
-        ("de", NEIGHBOURS_DE, PHRASES_DE),
-        ("es", NEIGHBOURS_ES, PHRASES_ES),
-        ("nl", NEIGHBOURS_NL, PHRASES_NL),
+    let tables: [LangWords; 5] = [
+        ("fr", NEIGHBOURS_FR, PHRASES_FR, STOP_FR),
+        ("en", NEIGHBOURS_EN, PHRASES_EN, STOP_EN),
+        ("de", NEIGHBOURS_DE, PHRASES_DE, STOP_DE),
+        ("es", NEIGHBOURS_ES, PHRASES_ES, STOP_ES),
+        ("nl", NEIGHBOURS_NL, PHRASES_NL, STOP_NL),
     ];
     let mut neighbours = HashMap::new();
     let mut phrases = HashMap::new();
-    for (lang, n, p) in tables {
+    let mut stop = HashMap::new();
+    for (lang, n, p, st) in tables {
+        let mut words: Vec<String> = Vec::new();
+        for w in st {
+            if !words.iter().any(|x| x == w) {
+                words.push(w.to_string());
+            }
+        }
+        stop.insert(lang, words);
         neighbours.insert(lang, groups(n));
         phrases.insert(
             lang,
@@ -1014,6 +1036,10 @@ mod tests {
             for p in WORDS.phrases(lang) {
                 assert_eq!(p.words, fold(&p.words));
             }
+        }
+        // each language's stop words come from the lexicon's when it has that language
+        for w in super::super::lexicon::STOP {
+            assert!(LANGS.iter().any(|l| WORDS.stop(l).iter().any(|x| x == w)), "{w}");
         }
         // none of the words the blind set's README names (it stays blind until measured once)
         let named = ["rdv", "proprio", "caf", "pto", "isa", "bank", "banco", "poen", "curro", "pasta", "cv", "vve",

@@ -545,13 +545,19 @@ fn at_scale_s3(lang: &str, today: NaiveDate, queries: &[String], items: usize) -
             let mut copy = page.clone();
             copy.title = format!("{} {i}", page.title);
             copy.front.insert("id".into(), json!(super::new_page_id()));
-            write_file(&root.join(format!("Archives/copie{i}/{name}")), &copy.render()).unwrap();
+            // (a folder of digits only: « copie123 » would read as a reference, and its pages leave the copy)
+            write_file(&root.join(format!("Archives/{i}/{name}")), &copy.render()).unwrap();
         }
     }
     let langs = vec![lang.to_string()];
+    let rss_before = rss_kb();
     let t = Instant::now();
     let finder = super::index::finder(&config, &langs);
     let made = t.elapsed().as_secs_f64() * 1000.0;
+    // a phone in French and one in English: two engines on the same copy
+    let en = super::index::finder(&config, &[lang.to_string(), "en".to_string()]);
+    let rss_after = rss_kb();
+    drop(en);
     let (path, page) = super::all_pages(&config, Part::Main).into_iter().find(|(p, _)| p.starts_with("Archives/")).unwrap();
     let mut changed = page.clone();
     changed.body.push_str("\n- Une ligne de plus\n");
@@ -575,10 +581,83 @@ fn at_scale_s3(lang: &str, today: NaiveDate, queries: &[String], items: usize) -
     let lines: usize = super::all_pages(&config, Part::Main).iter().map(|(_, p)| p.render().lines().count()).sum();
     let (body, _) = super::index::answer(&config, &langs, None, None, "");
     json!({"text_lines": lines, "items": finder.items.len(), "index_json_bytes": serde_json::to_vec(&body).unwrap().len(),
+           "rss_kb_before": rss_before, "rss_kb_after_copy_and_two_engines": rss_after,
+           "rss_mb_added": rss_after.zip(rss_before).map(|(a, b)| ((a as f64 - b as f64) / 102.4).round() / 10.0),
            "index_gzip_bytes": gz(&serde_json::to_vec(&body).unwrap()), "finder_bytes_estimate": finder.footprint(),
            "copy_made_ms": r(made), "copy_after_one_write_ms": r(after_write), "route_p50_ms": r(percentile(&route_ms, 50.0)),
            "route_p95_ms": r(percentile(&route_ms, 95.0)), "search_p50_ms": r(percentile(&search_ms, 50.0)),
            "search_p95_ms": r(percentile(&search_ms, 95.0))})
+}
+
+/// The process's resident memory (Linux, the build server: `/proc/self/status`), in KB.
+fn rss_kb() -> Option<u64> {
+    let status = std::fs::read_to_string("/proc/self/status").ok()?;
+    status.lines().find_map(|l| l.strip_prefix("VmRSS:")).and_then(|v| v.trim().trim_end_matches("kB").trim().parse().ok())
+}
+
+/// What an installed 1.0 app's search costs after a write, with 500 documents (review 1 of S3, R3): `documents()`
+/// alone, the copy made again (the documents listed, their pages read), and the search route's 1.0 work.
+fn with_documents(lang: &str, today: NaiveDate, documents: usize) -> Value {
+    let dir = tempfile::tempdir().unwrap();
+    let mut config = super::tests_config(dir.path());
+    let uploads = dir.path().join("uploads");
+    config.agents.insert(
+        "daily".into(),
+        crate::config::AgentConfig { name: "daily".into(), upload_dir_host: Some(uploads.to_string_lossy().into_owned()), ..Default::default() },
+    );
+    let cat = write_demo(&config, lang, today);
+    let originals = super::all_pages(&config, Part::Main);
+    let root = part_root(&config, Part::Main);
+    // the demo copied to about 1 000 pages
+    for i in 0..48 {
+        for (path, page) in &originals {
+            let name = path.rsplit('/').next().unwrap();
+            let mut copy = page.clone();
+            copy.title = format!("{} {i}", page.title);
+            copy.front.insert("id".into(), json!(super::new_page_id()));
+            write_file(&root.join(format!("Archives/copie{i}/{name}")), &copy.render()).unwrap();
+        }
+    }
+    let month = uploads.join("2026-11");
+    std::fs::create_dir_all(&month).unwrap();
+    for i in 0..documents {
+        std::fs::write(month.join(format!("{:012x}-Facture du mois {i}.txt", i)), format!("Facture {i}\nMerci")).unwrap();
+    }
+    let median = |work: &dyn Fn()| -> f64 {
+        let mut runs: Vec<f64> = (0..3)
+            .map(|_| {
+                let t = Instant::now();
+                work();
+                t.elapsed().as_secs_f64() * 1000.0
+            })
+            .collect();
+        runs.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        (runs[1] * 10.0).round() / 10.0
+    };
+    let langs = vec![lang.to_string()];
+    let listed = median(&|| {
+        std::hint::black_box(super::documents(&config, Part::Main));
+    });
+    let made = median(&|| {
+        std::hint::black_box(super::index::rebuilt_for_bench(&config, &langs));
+    });
+    // what `documents()` did before (review 1 of S3, R3): each page's text folded again for each document
+    let pages_read = super::all_pages(&config, Part::Main);
+    let before = median(&|| {
+        for _ in 0..documents {
+            for (_, p) in &pages_read {
+                std::hint::black_box(fold(&p.body));
+            }
+        }
+    });
+    let today_search = median(&|| {
+        std::hint::black_box(personal(&config, &cat, Part::Main, "devis cuisine"));
+    });
+    let pages = super::all_pages(&config, Part::Main).len();
+    json!({"pages": pages, "documents": documents, "documents_listed_ms": listed, "copy_made_again_ms": made,
+           "before_each_page_folded_for_each_document_ms": before,
+           "a_1_0_search_ms": today_search,
+           "note": "a 1.0 app's search makes no copy (review 1 of S3, R3): its cost is today's search only"})
 }
 
 // -- the categories (brick S1) -----------------------------------------------------------------------------------------
@@ -925,6 +1004,7 @@ fn report() -> Value {
         "sizes": sizes_by,
         "scale": [at_scale("fr", today, &fr_queries, 5_000), at_scale("fr", today, &fr_queries, 20_000)],
         "scale_s3_20000_items": at_scale_s3("fr", today, &fr_queries, 20_000),
+        "documents_500": with_documents("fr", today, 500),
         "s3": {
             "note": "brick S3: the same cases on the sommaire's search (index.rs + finder.rs: the copy built by the bridge, the phones' rule); a line is its own result (it no longer counts for its page); `drive` cases: the block of the online files the person allowed (their service's search simulated by the start of a word); time: the search on the copy in memory",
             "all": s3_all.view(),
