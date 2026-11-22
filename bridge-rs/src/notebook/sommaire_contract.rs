@@ -408,13 +408,23 @@ fn fake_bridge(lang: &str) -> BTreeMap<String, Value> {
         "searched": [{"q": searched, "at": "2026-11-20T18:02:00Z"}], "recent": recent,
         "bar": {"placeholder": if lang == "fr" { format!("Cherche dans {}", title(lang, "papers")) } else { format!("Search in {}", title(lang, "papers")) }}}));
     out.insert("kept.json".into(), json!({"kept": kept_full, "max": 6}));
-    // the bridge's own answers: « Ranger ailleurs » on the kitchen's page, and its undo
+    // S2, the bridge's own: the pass over the demo (its categories written in the pages' headers, the same as above),
+    // then the home's card
+    assert!(super::categories_pass::sort(&config).unwrap().done);
+    let pages = super::all_pages(&config, Part::Main);
+    out.insert("home-sorted.json".into(), json!({"sorted": super::categories_pass::card(&config, lang, &pages)}));
+    // the bridge's own answers: « Ranger ailleurs » on the kitchen's page (its toast), today's list, and its undo
     let kitchen = |i: &&Value| ["cuisine", "kitchen"].iter().any(|w| fold(&s(&i["title"])).contains(w));
     let path = items.iter().find(|i| i["kind"] == "page" && kitchen(i)).map(|i| s(&i["path"])).unwrap();
     let you = super::Who::you(&config);
     let done = c::categorize(&config, &c::Target::Page { path }, &["money".to_string()], &you).unwrap().unwrap();
+    let mut refiled = super::categories_pass::today(&config, lang);
+    for i in refiled["items"].as_array_mut().unwrap() {
+        i["at"] = json!("2026-11-22T10:00:00+01:00"); // (the run's time)
+    }
+    out.insert("categorize-today.json".into(), refiled);
     let undone = c::undo(&config, done["undo"].as_str().unwrap(), &you).unwrap().unwrap();
-    out.insert("categorize.json".into(), done);
+    out.insert("categorize.json".into(), super::categories_pass::with_toast(done, lang));
     out.insert("categorize-undo.json".into(), undone);
     // the family's Carnet: its lists and pages, their categories from the bench's reference until S6
     let family = read("App/Resources/Demo/family-notebook-demo.json")[lang].clone();
@@ -539,6 +549,8 @@ fn the_sommaire_contract_holds_together() {
         let t = &contract["categories"]["titles_proposed"][lang];
         for id in c::PERSONAL.iter().chain(c::FAMILY.iter()) {
             assert!(t[*id].is_string(), "{lang}: no title for {id}");
+            // the bridge's own table (the toasts, the card) says the same
+            assert_eq!(json!(c::title(lang, id)), t[*id], "{lang} {id}");
         }
     }
     // every example has its route's type; the made ones too (the generator follows the contract)

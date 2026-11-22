@@ -37,6 +37,12 @@
 //!     POST   /v1/notebook/move/undo            {move}   « Annuler » → {page}
 //!     POST   /v1/notebook/misplaced            {action: move|leave, ids?}   the misplaced points' card answered
 //!                                              (misplaced.rs) → {moved, toast, card}
+//!     POST   /v1/notebook/categorize           {path | record | document | task | line, categories}   « Ranger
+//!                                              ailleurs » (categories.rs) → {…, undo, toast, undo_title}
+//!     POST   /v1/notebook/categorize/undo      {undo}   « Annuler »
+//!     GET    /v1/notebook/categorize/today     today's re-filings, each still undoable (categories_pass.rs)
+//!     POST   /v1/notebook/sorted               {action: ok|see}   the card « Ton Carnet est rangé par catégories »
+//!                                              (home `sorted`) answered → {card: null}
 //!     GET    /v1/notebook/history?path=        changes (a page's, or all), the newest first
 //!     POST   /v1/notebook/restore              {change}   the page as it was after that change
 //!     GET    /v1/notebook/tasks                open and recent tasks
@@ -191,7 +197,9 @@ async fn home(State(state): State<AppState>, q: QueryMap) -> ApiResult<Response>
                   "inbox": inbox.len(), "settings": settings_view(&config), "trips": trips, "records": records,
                   "proposals": proposals, "known_tile": super::known::tile(&config, &shown, crate::py::time_time()),
                   "review": super::review::view(&config, &shown, crate::py::time_time())?.map(|r| r["card"].clone()),
-                  "misplaced": super::misplaced::card(&config, &shown)}))
+                  "misplaced": super::misplaced::card(&config, &shown),
+                  // « Ton Carnet est rangé par catégories » (S2), once after the first pass, until answered
+                  "sorted": super::categories_pass::card(&config, &shown, &pages)}))
     })
     .await?;
     Ok(web::ok(view))
@@ -1426,6 +1434,8 @@ pub fn router() -> Router<AppState> {
         .route("/notebook/misplaced", post(misplaced))
         .route("/notebook/categorize", post(categorize))
         .route("/notebook/categorize/undo", post(categorize_undo))
+        .route("/notebook/categorize/today", get(categorize_today))
+        .route("/notebook/sorted", post(sorted_done))
         .route("/notebook/history", get(history))
         .route("/notebook/restore", post(restore))
         .route("/notebook/tasks", get(list_tasks).post(add_task))
@@ -1850,7 +1860,8 @@ async fn categorize(State(state): State<AppState>, q: QueryMap, Json(body): Json
     let categories = body.categories.clone();
     let done = blocking(move || super::categories::categorize(&config, &target, &categories, &Who::you(&config))).await?;
     match done {
-        Ok(view) => Ok(web::ok(view)),
+        // the toast « Rangé dans Argent. » and its « Annuler » (S2)
+        Ok(view) => Ok(web::ok(super::categories_pass::with_toast(view, &shown))),
         Err(Refused::NotFound) => Err(carnet_error(404, Refused::NotFound.code(), &shown, json!({}))),
         Err(r) => Err(carnet_error(400, r.code(), &shown, json!({}))),
     }
@@ -1865,6 +1876,35 @@ impl Validate for CategorizeUndo {
     fn validate(&self, errors: &mut Vec<FieldError>) {
         check_max_len(errors, "undo", Some(&self.undo), 40);
     }
+}
+
+/// Today's re-filings, the newest first, each still undoable (after the toast: « l'historique d'aujourd'hui », S2).
+async fn categorize_today(State(state): State<AppState>, q: QueryMap) -> ApiResult<Response> {
+    let config = state.config();
+    let shown = shown_language(&config, &q);
+    let view = blocking(move || Ok(super::categories_pass::today(&config, &shown))).await?;
+    Ok(web::ok(view))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SortedDone {
+    pub action: String,
+}
+
+impl Validate for SortedDone {
+    fn validate(&self, errors: &mut Vec<FieldError>) {
+        if self.action != "ok" && self.action != "see" {
+            errors.push(FieldError::new("value_error", web::body_loc("action"), "Value error, ok or see", json!(self.action)));
+        }
+    }
+}
+
+/// The card « Ton Carnet est rangé par catégories » answered (« OK », or « Voir »: the app opened « Autres »): not
+/// shown again (S2).
+async fn sorted_done(State(state): State<AppState>, Json(body): Json<SortedDone>) -> ApiResult<Response> {
+    let config = state.config();
+    blocking(move || super::categories_pass::card_done(&config, &body.action)).await?;
+    Ok(web::ok(json!({"card": null})))
 }
 
 /// « Annuler » after « Ranger ailleurs »: the categories as they were, the rule forgotten (404 `undo_gone`).

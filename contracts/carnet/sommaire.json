@@ -55,6 +55,7 @@
   "CategoryLine": {"id": "CategoryId", "title": "string", "count": "int?", "hint": "string", "locked": "bool", "first?": "Item"},
   "FamilyCategoryLine": {"id": "FamilyCategoryId", "title": "string", "count": "int", "hint": "string", "locked": "bool"},
   "Card": {"kind": "enum:ask|follow|misplaced|sorted|review", "card": "any"},
+  "SortedCard": {"title": "string", "text": "string?", "other": "int", "see": "string?", "ok": "string", "open": {"category": "CategoryId"}},
   "Summary": {"v": "int", "lang": "string", "title": "string", "space": "enum:all|perso|pro", "spaces": "[SpaceChoice]", "kept": "[Kept]", "card": "Card?", "total": {"count": "int", "title": "string"}, "categories": "[CategoryLine]", "bar": {"placeholder": "string"}, "version": "int"},
   "FamilySummary": {"v": "int", "lang": "string", "title": "string", "with": "string", "kept": "[Kept]", "total": {"count": "int", "title": "string"}, "categories": "[FamilyCategoryLine]", "bar": {"placeholder": "string"}, "version": "int"},
   "Filter": {"id": "string", "title": "string", "count": "int"},
@@ -64,7 +65,9 @@
   "SearchAdded": {"groups": "[Group]", "counts": "map:int", "online": "OnlineDocs?"},
   "OnlineDocs": {"title": "string", "items": "[Item]"},
   "CategorizeTarget": {"path?": "string", "private?": "bool", "record?": "RecordRef", "document?": "DocumentRef", "task?": "string", "line?": "LineRef"},
-  "Categorized": {"target": "CategorizeTarget", "categories": "[CategoryId]", "categories_by": "By", "before": {"categories": "[CategoryId]", "categories_by": "By"}, "learnt": "Learnt?", "undo": "string", "toast": "string?"},
+  "Categorized": {"target": "CategorizeTarget", "categories": "[CategoryId]", "categories_by": "By", "before": {"categories": "[CategoryId]", "categories_by": "By"}, "learnt": "Learnt?", "undo": "string", "toast": "string", "undo_title": "string"},
+  "Refiled": {"undo": "string", "target": "CategorizeTarget", "title": "string", "categories": "[CategoryId]", "before": {"categories": "[CategoryId]", "categories_by": "By"}, "at": "string", "text": "string"},
+  "RefiledToday": {"items": "[Refiled]", "undo_title": "string"},
   "Learnt": {"word": "string", "categories": "[CategoryId]"},
   "Undone": {"target": "CategorizeTarget", "categories": "[CategoryId]", "categories_by": "By", "unlearnt": "string?"},
   "Error": {"detail": {"code": "string", "text": "string"}}
@@ -72,6 +75,9 @@
  "routes": [
   {"brick": "S1", "method": "POST", "path": "/v1/notebook/categorize", "body": "{path, private?} | {record: RecordRef} | {document: DocumentRef} | {task} | {line: LineRef}, categories: [1–2 of person_may_give]", "answer": "Categorized", "errors": {"400": "category_unknown | category_count | category_not_given (dates, health) | target_missing", "404": "not_found"}, "example": "fake-bridge/fr/categorize.json"},
   {"brick": "S1", "method": "POST", "path": "/v1/notebook/categorize/undo", "body": "{undo}", "answer": "Undone", "errors": {"404": "undo_gone"}, "example": "fake-bridge/fr/categorize-undo.json"},
+  {"brick": "S2", "method": "GET", "path": "/v1/notebook/categorize/today", "query": "lang?", "answer": "RefiledToday", "example": "fake-bridge/fr/categorize-today.json"},
+  {"brick": "S2", "method": "GET", "path": "/v1/notebook (added key)", "query": "lang?", "answer": {"sorted": "SortedCard?"}, "example": "fake-bridge/fr/home-sorted.json"},
+  {"brick": "S2", "method": "POST", "path": "/v1/notebook/sorted", "body": "{action: ok | see}", "answer": {"card": "SortedCard?"}, "errors": {"422": "action not ok nor see"}},
   {"brick": "S1", "method": "MCP", "path": "notebook_write.category", "body": "[1–2 of agent_may_give]: the agent's choice, kept unless the person chose (categories_by person)", "answer": "the tool's text, unchanged"},
   {"brick": "S3", "method": "GET", "path": "/v1/notebook/index", "query": "since? (a version), lang?; If-None-Match: the ETag (\"v<version>\") → 304", "answer": "Index", "example": "fake-bridge/fr/index.json"},
   {"brick": "S3", "method": "GET", "path": "/v1/notebook/index?since=", "answer": "Index", "example": "fake-bridge/fr/index-since.json"},
@@ -90,7 +96,7 @@
   {"brick": "S6", "method": "POST", "path": "/v1/family-agent/notebook/categorize", "body": "{page} | {list, item}, categories: [1–2 of family_may_give]", "answer": "Categorized"}
  ],
  "additive": {
-  "GET /v1/notebook": ["sommaire", "settings.separate_spaces"],
+  "GET /v1/notebook": ["sommaire", "settings.separate_spaces", "sorted"],
   "GET /v1/notebook/pages": ["pages[].categories", "pages[].categories_by", "pages[].space"],
   "GET /v1/notebook/search": ["answers[].categories", "pages[].categories", "pages[].categories_by", "pages[].space", "tasks[].categories", "groups", "counts", "online"],
   "GET /v1/notebook/page": ["categories", "categories_by", "space", "frontmatter.categories", "frontmatter.categories_by", "frontmatter.space", "sections[].facts[].categories", "tasks[].categories", "documents[].categories", "documents[].categories_by", "records.categories", "records.items[].categories", "records.items[].categories_by", "records.archived[].categories", "records.archived[].categories_by"],

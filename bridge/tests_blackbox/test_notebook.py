@@ -605,7 +605,9 @@ def test_old_pages_are_refiled_and_the_rest_sorted_by_the_nightly_pass(bridges, 
     assert page.endswith("# Léa\n\n## Dates\n- Anniversaire : 12 mars — *Wellness, 2026-10-01*\n\n"
                          "## Goûts et préférences\n- Grande voyageuse — *Wellness, 2026-10-01*\n")
     changes = bridge.get("/v1/notebook/history", params={"path": "Personnes/Léa.md"}, headers=AUTH).json()["changes"]
-    assert [(c["action"], c["name"]) for c in changes] == [("refile", "rangement"), ("refile", "rangement")]
+    # (and its categories written in its header, S2: « categorize », never in « Nouveau »)
+    assert [(c["action"], c["name"]) for c in changes] == [("refile", "rangement"), ("categorize", "rangement"),
+                                                           ("refile", "rangement")]
     # The tidy has no agent: the apps still get strings (the iPhone failed to read a null agent, 2026-10-22).
     recent = bridge.get("/v1/notebook", headers=AUTH).json()["recent"]
     assert recent and all(isinstance(c[k], str) for c in recent for k in ("id", "by", "name", "agent", "title", "summary"))

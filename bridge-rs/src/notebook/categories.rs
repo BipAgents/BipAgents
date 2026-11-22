@@ -35,8 +35,10 @@ pub const BY: [&str; 3] = ["auto", "agent", "person"];
 pub const AT_MOST: usize = 2;
 /// Rules learned from the person's corrections kept (the most recent first).
 pub const RULES_KEPT: usize = 200;
-/// Corrections that can still be undone.
+/// Corrections that can still be undone: the 20 latest, and all of today's (« l'historique d'aujourd'hui », S2) up
+/// to `UNDO_TODAY_MAX`.
 pub const UNDO_KEPT: usize = 20;
+pub const UNDO_TODAY_MAX: usize = 100;
 /// The person's corrections of records, tasks, documents and lines kept.
 const MARKS_KEPT: usize = 2000;
 /// An item is in « Dates » when its date is from this many days ago …
@@ -68,6 +70,37 @@ const COLLEAGUE: &[&str] = &[
     "collegue", "collegues", "colleague", "colleagues", "kollege", "kollegin", "kollegen", "colega", "colegas",
     "collega", "collegas", "manager", "client", "cliente", "clients", "customer", "kunde", "kundin", "klant",
 ];
+
+/// The categories' names as the screens show them (contracts/carnet/sommaire.json `titles_proposed`, the same table:
+/// checked by `the_sommaire_contract_holds_together`), for fr, en, de, es, nl. Visible text, still to be confirmed by
+/// Alex.
+pub const TITLES: [(&str, [&str; 5]); 13] = [
+    ("people", ["Gens", "People", "Menschen", "Personas", "Mensen"]),
+    ("dates", ["Dates", "Dates", "Termine", "Fechas", "Datums"]),
+    ("money", ["Argent", "Money", "Geld", "Dinero", "Geld"]),
+    ("home", ["Maison", "Home", "Zuhause", "Casa", "Huis"]),
+    ("papers", ["Papiers", "Papers", "Papiere", "Papeles", "Papieren"]),
+    ("trips", ["Voyages", "Trips", "Reisen", "Viajes", "Reizen"]),
+    ("work", ["Travail", "Work", "Arbeit", "Trabajo", "Werk"]),
+    ("other", ["Autres", "Other", "Sonstiges", "Otros", "Overig"]),
+    ("health", ["Santé", "Health", "Gesundheit", "Salud", "Gezondheid"]),
+    ("shopping", ["Courses", "Shopping", "Einkäufe", "Compras", "Boodschappen"]),
+    ("holidays", ["Vacances", "Holidays", "Ferien", "Vacaciones", "Vakanties"]),
+    ("school", ["École", "School", "Schule", "Colegio", "School"]),
+    ("menus", ["Menus", "Menus", "Essen", "Menús", "Menu's"]),
+];
+
+/// A category's name in `lang` (English for another language; the id itself for an unknown one).
+pub fn title(lang: &str, id: &str) -> String {
+    let column = match lang {
+        "fr" => 0,
+        "de" => 2,
+        "es" => 3,
+        "nl" => 4,
+        _ => 1,
+    };
+    TITLES.iter().find(|(c, _)| *c == id).map(|(_, t)| t[column].to_string()).unwrap_or_else(|| id.to_string())
+}
 
 fn order(category: &str) -> usize {
     PERSONAL.iter().chain(FAMILY.iter()).position(|c| *c == category).unwrap_or(99)
@@ -328,6 +361,20 @@ fn colleague(page: &Page, lang: &str) -> bool {
     COLLEAGUE.iter().any(|w| padded.contains(&format!(" {w} ")))
 }
 
+/// What deciding reads from the state, read once for many pages (S2's pass over a whole Carnet): the Carnet's
+/// language and the person's rules.
+#[derive(Debug, Clone)]
+pub struct Ctx {
+    pub lang: String,
+    pub rules: Vec<Rule>,
+}
+
+impl Ctx {
+    pub fn of(config: &Config) -> Ctx {
+        Ctx { lang: super::language(config), rules: rules(config) }
+    }
+}
+
 /// The bridge's categories for a page, and the word that decided (None: its kind, its group or its type did):
 /// the private part is Santé; « Toi » and people are Gens (a colleague also Travail); the group pages by their
 /// relation; trips; records pages by type; the tasks page and the inbox « Autres »; a page a work agent (`writer`)
@@ -336,7 +383,15 @@ pub fn decide(config: &Config, part: Part, path: &str, page: &Page, writer: Opti
     if part == Part::Health {
         return (vec!["health".into()], None);
     }
-    let lang = super::language(config);
+    decide_in(config, &Ctx::of(config), part, path, page, writer)
+}
+
+/// [`decide`] with the language and the rules already read.
+pub fn decide_in(config: &Config, ctx: &Ctx, part: Part, path: &str, page: &Page, writer: Option<&str>) -> (Vec<String>, Option<String>) {
+    if part == Part::Health {
+        return (vec!["health".into()], None);
+    }
+    let lang = ctx.lang.clone();
     let w = super::words(&lang);
     let kind = page.kind();
     let fixed = |list: &[&str]| (strings(list), None);
@@ -362,7 +417,7 @@ pub fn decide(config: &Config, part: Part, path: &str, page: &Page, writer: Opti
     if work_agent {
         return fixed(&["work"]);
     }
-    by_words(page, &lang, &rules(config))
+    by_words(page, &lang, &ctx.rules)
 }
 
 /// A page's categories as the apps show them.
@@ -648,7 +703,7 @@ impl Target {
         }
     }
 
-    fn from_view(v: &Value) -> Option<Target> {
+    pub(crate) fn from_view(v: &Value) -> Option<Target> {
         if let Some(path) = v.get("path").and_then(Value::as_str) {
             return Some(Target::Page { path: path.into() });
         }
@@ -701,7 +756,7 @@ fn checked(given: &[String]) -> Result<Vec<String>, Refused> {
     valid(&given, &PERSON_MAY_GIVE).ok_or(Refused::Count)
 }
 
-fn line_on(page: &Page, text: &str) -> Option<String> {
+pub(crate) fn line_on(page: &Page, text: &str) -> Option<String> {
     let wanted = fold(&super::split_attribution(text.trim().trim_start_matches("- ")).0);
     page.sections().into_iter().flat_map(|(_, f)| f).find(|f| fold(&f.text) == wanted).map(|f| f.text)
 }
@@ -799,13 +854,24 @@ pub fn categorize(config: &Config, target: &Target, given: &[String], who: &Who)
         let mut list: Vec<Value> = state.get("category_undo").and_then(Value::as_array).cloned().unwrap_or_default();
         list.insert(0, json!({"id": undo, "target": target.view(), "before": {"categories": before.categories,
                               "categories_by": before.by, "stored": before.stored},
-                              "rule": word, "rule_before": rule_before, "at": super::today()}));
-        list.truncate(UNDO_KEPT);
+                              "rule": word, "rule_before": rule_before, "at": super::today(),
+                              "categories": cats, "time": tk::now_iso_seconds()}));
+        keep_undo(&mut list, &super::today());
         state.insert("category_undo".into(), Value::Array(list));
     })?;
     Ok(Ok(json!({"target": target.view(), "categories": cats, "categories_by": "person",
                  "before": {"categories": before.categories, "categories_by": before.by},
                  "learnt": learnt, "undo": undo, "toast": Value::Null})))
+}
+
+/// The corrections kept for « Annuler » (the newest first): the `UNDO_KEPT` latest, and today's up to
+/// `UNDO_TODAY_MAX` (each re-filing of the day stays undoable from its list, S2).
+pub(crate) fn keep_undo(list: &mut Vec<Value>, today: &str) {
+    let mut n = 0;
+    list.retain(|e| {
+        n += 1;
+        n <= UNDO_KEPT || (n <= UNDO_TODAY_MAX && tk::str_or_empty(e.get("at")) == today)
+    });
 }
 
 /// The history's action of a correction.

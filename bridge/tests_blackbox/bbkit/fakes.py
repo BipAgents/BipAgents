@@ -589,6 +589,8 @@ class FakeModel(Fake):
                                          sse("run.completed", run_id="run_l1", output="Salut")]
         # the Carnet's nightly pass (its instructions start « You tidy »): the lines it answers
         self.notebook_lines: List[Dict[str, Any]] = []
+        # the nightly pass's pages left in « Autres » (its instructions start « You file notes »): the lines it answers
+        self.category_lines: List[Dict[str, Any]] = []
         # records from an archive (its instructions start « You extract precise records »): per document of the
         # prompt, the records of the first word of `records_by_word` found in it; a document with « BROKEN » spoils the
         # whole answer (no JSON)
@@ -658,6 +660,11 @@ class FakeModel(Fake):
             if body["messages"][0]["content"].startswith("You route"):
                 return JSONResponse({"choices": [{"message": {"content": self.route_answer}}],
                                      "usage": {"prompt_tokens": 120, "completion_tokens": 4}},
+                                    status_code=self.status)
+            if body["messages"][0]["content"].startswith("You file notes"):
+                content = "\n".join(json.dumps(line, ensure_ascii=False) for line in self.category_lines)
+                return JSONResponse({"choices": [{"message": {"content": content}}],
+                                     "usage": {"prompt_tokens": 800, "completion_tokens": 40}},
                                     status_code=self.status)
             if body["messages"][0]["content"].startswith("You tidy"):
                 content = "\n".join(json.dumps(line, ensure_ascii=False) for line in self.notebook_lines)

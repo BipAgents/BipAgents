@@ -12,6 +12,9 @@
 //! 3. A hard monthly cap per install (`[notebook] monthly_cap`, 0.10 € by default): a run that could pass it is cut down
 //!    or skipped; once reached, the pass waits for the next month (the agents keep filing as they talk). Every run logs
 //!    its tokens and its estimated cost (`notebook pass` in the log, and `GET /v1/notebook/runs`).
+//! 4. The Carnet's categories (plan « Le sommaire », S2, categories_pass.rs): the pages' headers given their categories
+//!    without a model (the whole Carnet once per version of the table), then the pages no word placed, 20 a night at
+//!    most, to the same small model under the same cap.
 
 use std::sync::LazyLock;
 use std::time::Duration;
@@ -225,12 +228,12 @@ pub fn model(config: &Config) -> Option<(String, String, String)> {
     None
 }
 
-fn cost(config: &Config, tokens_in: i64, tokens_out: i64) -> f64 {
+pub(crate) fn cost(config: &Config, tokens_in: i64, tokens_out: i64) -> f64 {
     (tokens_in as f64 * config.notebook.price_in + tokens_out as f64 * config.notebook.price_out) / 1_000_000.0
 }
 
 /// About 3.5 characters a token (French and English prose, JSON).
-fn tokens_of(chars: usize) -> i64 {
+pub(crate) fn tokens_of(chars: usize) -> i64 {
     (chars as f64 / 3.5).ceil() as i64
 }
 
@@ -295,6 +298,11 @@ pub async fn run(config: &Config, hermes: &HermesClient, http: &reqwest::Client)
     let result = run_inner(config, hermes, http, &mut record).await;
     if let Err(err) = result {
         record.insert("error".into(), json!(clip(&format!("{err:#}"), 300)));
+    }
+    // the pages no word placed (« Autres »): a few a night to the same small model, inside the same cap, before the
+    // month's spending is counted (categories_pass.rs)
+    if let Err(err) = super::categories_pass::night(config, http, &mut record).await {
+        record.insert("categories_error".into(), json!(clip(&format!("{err:#}"), 300)));
     }
     let spend = spending(config);
     let _guard = super::lock();
@@ -429,6 +437,23 @@ async fn run_inner(
     .await??;
     if refiled > 0 {
         record.insert("refiled".into(), json!(refiled));
+    }
+    // « Rangement de l'existant » (plan « Le sommaire », S2): each page's categories written in its header, the whole
+    // Carnet once per version of the table, then each night the pages without any and those in « Autres » (no model;
+    // categories_pass.rs)
+    let sorted = tokio::task::spawn_blocking({
+        let c = config.clone();
+        move || super::categories_pass::sort(&c)
+    })
+    .await??;
+    if sorted.filed > 0 {
+        record.insert("categorized".into(), json!(sorted.filed));
+    }
+    if sorted.skipped > 0 {
+        record.insert("categories_skipped".into(), json!(sorted.skipped));
+    }
+    if sorted.done {
+        record.insert("categories_v".into(), json!(super::categories_pass::VERSION));
     }
     // the points clearly in the wrong place: proposed in a card, never moved here (misplaced.rs, no model)
     let misplaced = tokio::task::spawn_blocking({

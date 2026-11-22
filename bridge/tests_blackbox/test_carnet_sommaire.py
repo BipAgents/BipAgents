@@ -9,7 +9,10 @@
    the sommaire: that is the reference).
 2. **The categories at the bridge (brick S1)**: what the pages, records, tasks and documents carry, the person's
    correction (`POST /v1/notebook/categorize`, its undo) that always wins and teaches the next writes, the agent's
-   `category`."""
+   `category`.
+3. **The Carnet from before, sorted once (brick S2)**: the nightly pass writes the categories in the pages' headers and
+   nothing else (nothing moves, the person's own left alone, once), the small model for what stays in « Autres »
+   within its cap, the card « Voir · OK », a re-filing's toast and today's list."""
 import json
 import os
 import re
@@ -366,3 +369,163 @@ def test_an_agent_may_say_the_category(bridges):
     # housekeeping, not news: « Nouveau » shows the page's last real change
     recent = bridge.get("/v1/notebook", headers=AUTH).json()["recent"]
     assert recent[0]["path"] == "Sujets/Cours de piano.md" and not recent[0]["summary"].startswith("categories"), recent[0]
+
+
+# -- brick S2: the Carnet a person had before the sommaire, sorted once at night ------------------------------------
+
+# Pages as an older bridge wrote them (or the person in Obsidian), in their outline already (the nightly pass's
+# re-filing into the outlines leaves them as they are): no `categories` yet.
+BEFORE = {
+    "Personnes/Léa.md": "---\nid: p0000000001\ntype: person\naliases: []\nupdated: 2026-10-01\n---\n# Léa\n\n## Dates\n"
+                        "- Anniversaire : 12 mars — *Wellness, 2026-10-01*\n",
+    "Sujets/Rénovation cuisine.md": "---\nid: p0000000002\ntype: subject\naliases: []\nupdated: 2026-10-01\n---\n"
+                                    "# Rénovation cuisine\n\n## Où on en est\n- Devis reçu — *Wellness, 2026-10-01*\n",
+    "Sujets/Divers.md": "---\nid: p0000000003\ntype: subject\naliases: []\n---\n# Divers\n\n## Où on en est\n"
+                        "- Idée en vrac — *Wellness, 2026-10-01*\n",
+    "Sujets/Jazz.md": "# Jazz\n\nColtrane d'abord, puis Mingus.\n",
+}
+# The person's own, never touched: filed by them, and an Obsidian property the bridge does not read.
+THEIRS = {
+    "Domaines/Maison.md": "---\ntype: area\ncategories:\n  - money\ncategories_by: person\n---\n# Maison\n",
+    "Sujets/Lectures.md": "---\ntype: subject\ncategories:\n  - \"[[Livres]]\"\n---\n# Lectures\n",
+}
+HEADER = re.compile(r"^categories:.*\n(?:  - .*\n)*|^categories_by:.*\n", re.M)
+
+
+def without_header(text):
+    """A page's text without the sommaire's header lines (and the frontmatter they alone make)."""
+    if not text.startswith("---\n"):
+        return text
+    head, sep, body = text[4:].partition("\n---\n")
+    if not sep:
+        return text
+    kept = HEADER.sub("", head + "\n").rstrip("\n")
+    return body if not kept else "---\n" + kept + sep + body
+
+
+def carnet_files(bridge):
+    root = bridge.state_dir / "notebook" / "carnet"
+    return {str(p.relative_to(root)): p.read_bytes().decode() for p in sorted(root.rglob("*")) if p.is_file()}
+
+
+def older_carnet(bridges, fakes, pages, **notebook):
+    """A bridge whose Carnet has `pages` written before it starts (state: French, the outlines done), its nightly pass
+    on the fake model."""
+    bridge = bridges.new(change=lambda c: c.update(notebook={"base_url": fakes.model.url + "/v1", "key": "sk-nb",
+                                                             "model": "small-eu", **notebook}))
+    root = bridge.state_dir / "notebook"
+    for path, text in pages.items():
+        (root / "carnet" / path).parent.mkdir(parents=True, exist_ok=True)
+        (root / "carnet" / path).write_bytes(text.encode())
+    (root / "state.json").write_text(json.dumps({"language": "fr", "outline": 1}))
+    bridge.start()
+    give_token(bridge)
+    return bridge
+
+
+def tidy(bridge):
+    got = bridge.post("/v1/notebook/tidy", headers=AUTH)
+    assert got.status_code == 200, got.text
+    return got.json()["run"]
+
+
+def test_s2_the_carnet_from_before_is_sorted_once_at_night_and_nothing_moves(bridges, fakes):
+    bridge = older_carnet(bridges, fakes, {**BEFORE, **THEIRS})
+    assert bridge.get("/v1/notebook", headers=AUTH).json()["sorted"] is None
+    before = carnet_files(bridge)
+    run = tidy(bridge)
+    assert (run["categorized"], run["categories_v"]) == (4, 1), run
+    after = carnet_files(bridge)
+    # nothing moved or gone; each page changed by its header lines only; the person's own as they were
+    for path, text in before.items():
+        assert path in after, path
+        assert without_header(after[path]) == text, path
+    for path, text in THEIRS.items():
+        assert after[path] == text, path
+    assert "categories:\n  - home\ncategories_by: auto\nupdated: 2026-10-01\n" in after["Sujets/Rénovation cuisine.md"]
+    assert after["Sujets/Jazz.md"] == "---\ncategories:\n  - other\ncategories_by: auto\n---\n" + BEFORE["Sujets/Jazz.md"]
+    pages = pages_by_title(bridge)
+    assert {t: (pages[t]["categories"], pages[t]["categories_by"]) for t in ("Léa", "Rénovation cuisine", "Divers", "Maison")} == {
+        "Léa": (["people"], "auto"), "Rénovation cuisine": (["home"], "auto"), "Divers": (["other"], "auto"),
+        "Maison": (["money"], "person")}
+    # in each page's history, by the « rangement »; never in « Nouveau »
+    changes = bridge.get("/v1/notebook/history", params={"path": "Sujets/Divers.md"}, headers=AUTH).json()["changes"]
+    assert [(c["action"], c["by"], c["name"]) for c in changes] == [("categorize", "nightly", "rangement")]
+    assert all(c["action"] != "categorize" for c in bridge.get("/v1/notebook", headers=AUTH).json()["recent"])
+    # the card, once: what is in « Autres », « Voir » and « OK »
+    card = bridge.get("/v1/notebook", params={"lang": "fr"}, headers=AUTH).json()["sorted"]
+    assert card["other"] >= 4, card
+    assert card == {"title": "Ton Carnet est rangé par catégories", "text": f"{card['other']} notes dans Autres",
+                    "other": card["other"], "see": "Voir", "ok": "OK", "open": {"category": "other"}}
+    assert bridge.get("/v1/notebook", params={"lang": "en"}, headers=AUTH).json()["sorted"]["title"] == \
+        "Your Notebook is sorted into categories"
+    # the next night: nothing written again
+    again = tidy(bridge)
+    assert "categorized" not in again and "categories_v" not in again, again
+    assert carnet_files(bridge) == after
+    wrong = bridge.post("/v1/notebook/sorted", json={"action": "later"}, headers=AUTH)
+    assert wrong.status_code == 422, wrong.text
+    seen = bridge.post("/v1/notebook/sorted", json={"action": "see"}, headers=AUTH)
+    assert seen.status_code == 200 and seen.json() == {"card": None}, seen.text
+    assert bridge.get("/v1/notebook", headers=AUTH).json()["sorted"] is None
+
+
+def model_chats(fakes):
+    return [c for c in fakes.model.chats if c["body"]["messages"][0]["content"].startswith("You file notes")]
+
+
+def test_s2_what_stays_in_other_goes_to_the_small_model_within_its_cap(bridges, fakes):
+    bridge = older_carnet(bridges, fakes, {"Sujets/Divers.md": BEFORE["Sujets/Divers.md"],
+                                           "Sujets/Jazz.md": BEFORE["Sujets/Jazz.md"]})
+    fakes.model.category_lines = [{"n": 1, "categories": ["home"]}, {"n": 2, "categories": ["health"]}]
+    run = tidy(bridge)
+    assert (run["categorized"], run["categorized_by_model"], run["model_called"]) == (2, 1, True), run
+    # the fake model's usage (800 in, 40 out) at the pass's prices: in the run and in the month's spending
+    assert (run["tokens_in"], run["tokens_out"], run["eur"]) == (800, 40, 0.00046), run
+    assert bridge.get("/v1/notebook/settings", headers=AUTH).json()["spent_this_month"] == 0.00046
+    [chat] = model_chats(fakes)
+    assert chat["authorization"] == "Bearer sk-nb" and chat["body"]["model"] == "small-eu"
+    sent = chat["body"]["messages"][1]["content"]
+    assert sent.startswith("1. Divers (subject)") and "\n2. Jazz (page)" in sent and "Idée en vrac" in sent, sent
+    assert "Wellness" not in sent, sent
+    pages = pages_by_title(bridge)
+    assert (pages["Divers"]["categories"], pages["Divers"]["categories_by"]) == (["home"], "agent")
+    # health is never given: Jazz stays in « Autres », and is not sent again while it stays as it is
+    jazz = page_of(bridge, "Sujets/Jazz.md")
+    assert (jazz["categories"], jazz["categories_by"]) == (["other"], "auto")
+    again = tidy(bridge)
+    assert "categorized_by_model" not in again and len(model_chats(fakes)) == 1, again
+    # the monthly cap: no call at all
+    capped = older_carnet(bridges, fakes, {"Sujets/Jazz.md": BEFORE["Sujets/Jazz.md"]}, monthly_cap=0.00001)
+    run = tidy(capped)
+    assert run["categories_reason"] == "monthly cap reached" and len(model_chats(fakes)) == 1, run
+
+
+def test_s2_a_refiling_shows_its_toast_then_stays_in_todays_list(bridges):
+    bridge = bridges.new().start()
+    write_carnet(bridge)
+    kitchen = "Sujets/Rénovation cuisine.md"
+    done = bridge.post("/v1/notebook/categorize", params={"lang": "fr"}, json={"path": kitchen, "categories": ["money"]},
+                       headers=AUTH)
+    assert done.status_code == 200, done.text
+    done = done.json()
+    assert (done["toast"], done["undo_title"]) == ("Rangé dans Argent.", "Annuler"), done
+    line = bridge.post("/v1/notebook/categorize", params={"lang": "en"},
+                       json={"line": {"path": "Personnes/Marc Durand.md", "text": "Un vinyle de Chet Baker"},
+                             "categories": ["money", "home"]}, headers=AUTH).json()
+    assert line["toast"] == "Filed in Money and Home." and line["undo_title"] == "Undo", line
+    # after the toast: today's list, the newest first, each with its undo
+    today = bridge.get("/v1/notebook/categorize/today", params={"lang": "fr"}, headers=AUTH)
+    assert today.status_code == 200, today.text
+    today = today.json()
+    assert today["undo_title"] == "Annuler"
+    assert [(i["title"], i["categories"], i["text"]) for i in today["items"]] == [
+        ("Un vinyle de Chet Baker", ["money", "home"], "Rangé dans Argent et Maison."),
+        ("Rénovation cuisine", ["money"], "Rangé dans Argent.")]
+    assert today["items"][1]["undo"] == done["undo"] and today["items"][1]["target"] == {"path": kitchen, "private": False}
+    assert today["items"][1]["before"] == {"categories": ["home"], "categories_by": "auto"}
+    undone = bridge.post("/v1/notebook/categorize/undo", json={"undo": done["undo"]}, headers=AUTH)
+    assert undone.status_code == 200, undone.text
+    assert page_of(bridge, kitchen)["categories"] == ["home"]
+    left = bridge.get("/v1/notebook/categorize/today", headers=AUTH).json()["items"]
+    assert [i["title"] for i in left] == ["Un vinyle de Chet Baker"]

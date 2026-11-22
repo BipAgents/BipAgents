@@ -40,6 +40,7 @@ pub mod archive;
 pub mod assign;
 pub mod ask;
 pub mod categories;
+pub mod categories_pass;
 pub mod fill;
 pub mod followups;
 pub mod forget;
