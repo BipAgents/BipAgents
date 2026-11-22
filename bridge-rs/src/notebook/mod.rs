@@ -40,6 +40,8 @@ pub mod archive;
 pub mod assign;
 pub mod ask;
 pub mod categories;
+pub mod finder;
+pub mod index;
 pub mod fill;
 pub mod followups;
 pub mod forget;
@@ -60,6 +62,7 @@ pub mod reads;
 pub mod review;
 #[cfg(test)]
 mod search_bench;
+pub mod search_words;
 #[cfg(test)]
 mod sommaire_contract;
 pub mod tidy;

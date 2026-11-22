@@ -40,13 +40,13 @@ pub const UNDO_KEPT: usize = 20;
 /// What this bridge's Carnet can do of the sommaire (contracts/carnet/sommaire.json `capabilities`), in the home's
 /// `sommaire`: a new app uses a route only when it is listed (S1: the categories on today's answers, « Ranger
 /// ailleurs »; S3 adds `index`, S4 `summary`, `category`, `kept`, `searched`, S5 `spaces`, S6 `family`).
-pub const CAPABILITIES: [&str; 2] = ["categories", "categorize"];
+pub const CAPABILITIES: [&str; 3] = ["categories", "categorize", "index"];
 /// The person's corrections of records, tasks, documents and lines kept.
 const MARKS_KEPT: usize = 2000;
 /// An item is in « Dates » when its date is from this many days ago …
-const DATED_BEFORE: i64 = 90;
+pub const DATED_BEFORE: i64 = 90;
 /// … to this many days ahead (a passport's expiry, a warranty's end).
-const DATED_AFTER: i64 = 730;
+pub const DATED_AFTER: i64 = 730;
 
 // How much each part of a page counts for its words' categories: the title most.
 const TITLE: f64 = 5.0;
@@ -561,9 +561,12 @@ impl When {
 static DUTCH_YEARLY: LazyLock<regex::Regex> =
     LazyLock::new(|| regex::Regex::new(r"verjaardag|jarig|trouwdag|huwelijksdag").expect("valid regex"));
 
-/// « 1/2 tasse », « 3/4 » : a number over another without a year is not a date here (« 14/11 » is: two digits each).
-static FRACTION: LazyLock<regex::Regex> =
-    LazyLock::new(|| regex::Regex::new(r"\b(\d{1,2})/(\d{1,2})\b(/\d{4})?").expect("valid regex"));
+/// « 1/2 tasse », « 3/4 » : a number over another of one digit each, without a year and without a word that says a
+/// day before it, is not a date here; « 14/11 », « 14/2 », « le 3/11 », « le 3/4 » are (review 2 of S1, R11).
+static FRACTION: LazyLock<regex::Regex> = LazyLock::new(|| {
+    regex::Regex::new(r"(\b(?:le|du|au|on|the|am|vom|bis|el|del|op|tot|until|jusqu au|avant le|apres le)\s+)?\b(\d{1,2})/(\d{1,2})\b(/\d{4})?")
+        .expect("valid regex")
+});
 
 /// The date a note's text carries. Yearly when the text says so (a birthday, an anniversary, a wedding: mod.rs
 /// `YEARLY`, or its label); a day with its year as written; a day without a year (« devis reçu le 3 octobre ») is
@@ -576,7 +579,11 @@ pub fn when_of(text: &str, noted: Option<NaiveDate>, today: NaiveDate) -> Option
     }
     plain = FRACTION
         .replace_all(&plain, |c: &regex::Captures| {
-            if c.get(3).is_some() || (c[1].len() == 2 && c[2].len() == 2) { c[0].to_string() } else { " ".to_string() }
+            if c.get(1).is_some() || c.get(4).is_some() || c[2].len() == 2 || c[3].len() == 2 {
+                c[0].to_string()
+            } else {
+                " ".to_string()
+            }
         })
         .into_owned();
     let (month, day, year) = super::date_in(&plain)?;
@@ -687,6 +694,12 @@ pub fn line_ids(page: &str, texts: &[String]) -> Vec<String> {
         .collect()
 }
 
+/// « 250g », « 100km », « 1,5l », « 2x »: a quantity, not a reference.
+static QUANTITY: LazyLock<regex::Regex> = LazyLock::new(|| {
+    regex::Regex::new(r"(?i)^\d+(?:[.,]\d+)?(?:g|kg|mg|km|m|cm|mm|ml|cl|dl|l|h|min|mn|ko|mo|go|kb|mb|gb|tb|w|kw|kwh|v|j|e|x)$")
+        .expect("valid regex")
+});
+
 /// « 12h30 »: a time, not a reference.
 static TIME: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(r"^\d{1,2}h\d{0,2}$").expect("valid regex"));
 
@@ -694,7 +707,13 @@ static TIME: LazyLock<regex::Regex> = LazyLock::new(|| regex::Regex::new(r"^\d{1
 /// (offline.rs `numbered`: an ID number, a word of 6 characters or more with 3 digits or more), and a code of letters
 /// and digits (« HR-55821 », « CSG-2291 », « ABC123 ») — not a price, a date, a year or a time.
 pub fn holds_reference(text: &str) -> bool {
-    if super::offline::numbered(text) {
+    // « 250g », « 100km », « 1,5l »: quantities, never references (review 2 of S1, R11)
+    let kept: Vec<&str> = text
+        .split_whitespace()
+        .filter(|w| !QUANTITY.is_match(w.trim_matches(|c: char| !c.is_alphanumeric() && c != ',' && c != '.')))
+        .collect();
+    let text = kept.join(" ");
+    if super::offline::numbered(&text) {
         return true;
     }
     text.split_whitespace().any(|w| {
@@ -973,6 +992,8 @@ pub fn categorize(config: &Config, target: &Target, given: &[String], who: &Who)
             }
             let before = of_page(config, Part::Main, path, &page);
             let (auto, word) = decide(config, Part::Main, path, &page, None);
+            // a page made by hand gets its id now, so its key never changes after (review 2 of S1, R12)
+            page.ensure_id();
             let key = format!("page:{}", page_key(&page, path));
             set_front(&mut page, &cats, "person");
             let after = page.render();
@@ -1015,8 +1036,13 @@ pub fn categorize(config: &Config, target: &Target, given: &[String], who: &Who)
             let Some(page_text) = super::checked(path).ok().and_then(|_| super::read_page_text(config, Part::Main, path)) else {
                 return Ok(Err(Refused::NotFound));
             };
-            let page = Page::parse(&page_text, "");
+            let mut page = Page::parse(&page_text, "");
             let Some(line) = line_on(&page, text) else { return Ok(Err(Refused::NotFound)) };
+            // a page made by hand gets its id first: its lines' keys never change after (review 2 of S1, R12)
+            if page.id().is_empty() {
+                page.ensure_id();
+                super::commit(config, Part::Main, path, Some(&page_text), Some(&page.render()), who, ACTION, "")?;
+            }
             let key = line_key(&page_key(&page, path), &line);
             let c = marked(&marks, &key).unwrap_or_else(|| of_page(config, Part::Main, path, &page).categories);
             let by = if marked(&marks, &key).is_some() { "person" } else { "auto" };
@@ -1082,6 +1108,14 @@ pub fn undo(config: &Config, id: &str, who: &Who) -> anyhow::Result<Option<Value
     let set = valid(&super::strings(entry.get("set")), &PERSON_MAY_GIVE).unwrap_or_default();
     let rule = entry.get("rule").and_then(Value::as_str).map(str::to_string);
     let rule_before = valid(&super::strings(entry.get("rule_before")), &PERSON_MAY_GIVE);
+    // a page gone since: nothing to undo on it any more (review 2 of S1, R12: `undo_gone`, never the old state)
+    let page = match key.strip_prefix("page:") {
+        Some(page_id) => match page_by_key(config, page_id) {
+            Some(found) => Some(found),
+            None => return Ok(None),
+        },
+        None => None,
+    };
     super::update_state(config, |state| {
         if !key.starts_with("page:") {
             let mut m = marks_in(state);
@@ -1108,8 +1142,8 @@ pub fn undo(config: &Config, id: &str, who: &Who) -> anyhow::Result<Option<Value
     let mut now = Filed { categories: was.clone(), by: was_by.clone(), stored: stored_before };
     // the page as it was, read once the rule is forgotten (a page the bridge had not written categories on is read
     // with its words again); untouched when its categories are no longer the ones this correction set
-    if let Some(page_id) = key.strip_prefix("page:") {
-        if let Some((path, mut page)) = page_by_key(config, page_id) {
+    if key.starts_with("page:") {
+        if let Some((path, mut page)) = page {
             target = json!({"path": path, "private": false, "item": key});
             if stored(&page) == Some((set.clone(), "person".into())) {
                 let text = page.render();

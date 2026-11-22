@@ -8,6 +8,10 @@
 //!                                              shows (close, next_date, status, facts)
 //!     GET    /v1/notebook/search?q=&lang=      the facts that answer, ready to show ({label, answer, page, path, date,
 //!                                              when}: tools::answers, the agents' search too), then the pages
+//!                                              + `groups`, `counts` (index.rs, finder.rs: the phones' rule; &space=,
+//!                                              &category=), `online` (&online=1: the drives the person allowed);
+//!                                              &sommaire=1: those keys only (today's not made)
+//!     GET    /v1/notebook/index?since=&epoch=&lang=   the phone's search copy (index.rs; ETag, 304, a diff, gzip)
 //!     GET    /v1/notebook/offline              the copy the phone answers from offline (offline.rs; ETag, 304)
 //!     GET    /v1/notebook/known?agent=&lang=   « Ce que tes agents savent de toi » (known.rs)
 //!     POST   /v1/notebook/forget/preview       {texts? (≤ 5), page?, private?, card?}   « Oublie ça »: where it is, and a
@@ -286,11 +290,24 @@ async fn search(State(state): State<AppState>, q: QueryMap) -> ApiResult<Respons
     let part = part_of(&q);
     let shown = shown_language(&config, &q);
     let words = web::query_str(&q, "q", true, Some(200))?.unwrap_or_default();
+    let langs = super::index::langs(&super::language(&config), q.get("lang"));
+    let titles_lang = langs.last().cloned().unwrap_or_default();
+    let category = web::query_str(&q, "category", false, Some(20))?.filter(|c| !c.is_empty());
+    let space = web::query_str(&q, "space", false, Some(10))?.filter(|s| !s.is_empty());
+    let online = matches!(q.get("online"), Some("1" | "true" | "yes"));
+    // a new app asking for the sommaire's keys only: today's (answers, pages, tasks) not made
+    let sommaire_only = matches!(q.get("sommaire"), Some("1" | "true" | "yes"));
+    let (online_words, online_lang) = (words.clone(), titles_lang.clone());
     let view = blocking(move || {
+        let today = chrono::Local::now().date_naive();
+        if sommaire_only {
+            let (groups, counts) =
+                sommaire_search(&config, part, &words, &langs, &titles_lang, category.as_deref(), space.as_deref(), today);
+            return Ok(json!({"groups": groups, "counts": counts}));
+        }
         let w = super::words(&super::language(&config));
         // the answers by the one rule the agents' search and the offline copy follow (offline.rs): split by the
         // bridge, the apps show them as they come
-        let today = chrono::Local::now().date_naive();
         let ctx = super::categories::Ctx::new(&config);
         let marks = super::categories::marks(&config);
         let found_answers = super::tools::answers(&config, &[part], &words);
@@ -330,10 +347,92 @@ async fn search(State(state): State<AppState>, q: QueryMap) -> ApiResult<Respons
             .collect();
         let tasks: Vec<Value> =
             found_tasks.iter().map(|t| super::categories::task_view(&ctx, t, &all, &marks, today)).collect();
-        Ok(json!({"answers": answers, "pages": pages, "tasks": tasks}))
+        // the sommaire's search (S3): the phones' rule on the bridge's copy, by category
+        let (groups, counts) = sommaire_search(&config, part, &words, &langs, &titles_lang, category.as_deref(), space.as_deref(), today);
+        Ok(json!({"answers": answers, "pages": pages, "tasks": tasks, "groups": groups, "counts": counts}))
     })
     .await?;
+    let mut view = view;
+    // the online files the person allowed for the Carnet, only when asked (they take the network's time)
+    view["online"] = if online && part == Part::Main && !online_words.trim().is_empty() {
+        crate::drives::carnet_search(&state.config(), &online_words, &online_lang).await.unwrap_or(Value::Null)
+    } else {
+        Value::Null
+    };
     Ok(web::ok(view))
+}
+
+/// The search of the sommaire (index.rs, finder.rs): `groups` (by first category, in the order of their best
+/// result, the two best each) and `counts` (`all`, and each category).
+#[allow(clippy::too_many_arguments)]
+fn sommaire_search(
+    config: &Config,
+    part: Part,
+    words: &str,
+    langs: &[String],
+    titles: &str,
+    category: Option<&str>,
+    space: Option<&str>,
+    today: chrono::NaiveDate,
+) -> (Value, Value) {
+    let finder = match part {
+        Part::Main => super::index::finder(config, langs),
+        // Santé, behind the app's lock: read now, kept nowhere
+        Part::Health => std::sync::Arc::new(super::index::health_finder(config, langs)),
+    };
+    let found = finder.search(words, today, category, space);
+    let groups: Vec<Value> = found
+        .groups
+        .iter()
+        .map(|g| {
+            json!({"category": g.category, "title": super::index::category_title(titles, &g.category), "count": g.count,
+                   "top": g.top.iter().map(|at| super::index::item_view(&finder, *at, today)).collect::<Vec<_>>()})
+        })
+        .collect();
+    (json!(groups), json!(found.counts))
+}
+
+/// The phone's search copy (`Index`, contracts/carnet/sommaire.json): 304 when the phone has this version; a diff
+/// when it says its version and epoch; gzip when it accepts it.
+async fn index(State(state): State<AppState>, q: QueryMap, headers: axum::http::HeaderMap) -> ApiResult<Response> {
+    let config = state.config();
+    let since = match web::query_str(&q, "since", false, Some(20))? {
+        Some(s) => Some(s.trim().parse::<u64>().map_err(|_| carnet_error(400, "since_invalid", "en", json!({})))?),
+        None => None,
+    };
+    let epoch = web::query_str(&q, "epoch", false, Some(40))?;
+    let asked = q.get("lang").map(str::to_string);
+    let (body, etag) = blocking(move || {
+        let langs = super::index::langs(&super::language(&config), asked.as_deref());
+        let shown = langs.last().cloned().unwrap_or_default();
+        Ok(super::index::answer(&config, &langs, since, epoch.as_deref(), super::index::online_only(&shown)))
+    })
+    .await?;
+    let unchanged = headers.get("if-none-match").and_then(|v| v.to_str().ok()).is_some_and(|v| v.trim() == etag);
+    let gzip = headers
+        .get("accept-encoding")
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| v.split(',').any(|e| e.trim().split(';').next() == Some("gzip")));
+    let mut response = if unchanged {
+        let mut r = Response::new(Body::empty());
+        *r.status_mut() = axum::http::StatusCode::NOT_MODIFIED;
+        r
+    } else if gzip {
+        use std::io::Write as _;
+        let mut e = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        e.write_all(&serde_json::to_vec(&body).map_err(anyhow::Error::from)?).map_err(anyhow::Error::from)?;
+        let mut r = Response::new(Body::from(e.finish().map_err(anyhow::Error::from)?));
+        r.headers_mut().insert("content-type", HeaderValue::from_static("application/json"));
+        r.headers_mut().insert("content-encoding", HeaderValue::from_static("gzip"));
+        r
+    } else {
+        web::ok(body)
+    };
+    if let Ok(v) = HeaderValue::from_str(&etag) {
+        response.headers_mut().insert("etag", v);
+    }
+    response.headers_mut().insert("vary", HeaderValue::from_static("accept-encoding"));
+    Ok(no_store(response))
 }
 
 /// The copy the phone answers from offline (contract.md §6): 304 when the app has it already.
@@ -1411,6 +1510,7 @@ pub fn router() -> Router<AppState> {
         .route("/notebook/pages", get(list_pages))
         .route("/notebook/search", get(search))
         .route("/notebook/offline", get(offline))
+        .route("/notebook/index", get(index))
         .route("/notebook/known", get(known))
         .route("/notebook/forget/preview", post(forget_preview))
         .route("/notebook/forget/confirm", post(forget_confirm))

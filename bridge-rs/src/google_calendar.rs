@@ -343,6 +343,7 @@ pub async fn finish(config: &Config, query: HashMap<String, String>) -> ApiResul
         client: flow.client.clone(),
         folders: Vec::new(),
         agents,
+        carnet: false,
     };
     stored.google_calendar = Some(link.clone());
     store.write(&stored)?;

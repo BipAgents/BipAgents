@@ -1,0 +1,62 @@
+{
+ "answers": [
+  {
+   "answer": "{date+41}",
+   "date": "D+0",
+   "label": "Anniversaire",
+   "page": "Claire Durand",
+   "part": "main",
+   "path": "Personnes/Claire Durand.md",
+   "when": "noté le DAY"
+  }
+ ],
+ "pages": [
+  {
+   "aliases": [],
+   "archived": false,
+   "contact": null,
+   "icon": null,
+   "kind": "person",
+   "lines": [
+    "## Qui c'est",
+    "- Anniversaire : {date+41} — *Wellness, D+0*"
+   ],
+   "part": "main",
+   "path": "Personnes/Claire Durand.md",
+   "summary": "",
+   "title": "Claire Durand",
+   "updated": "D+0"
+  },
+  {
+   "aliases": [],
+   "archived": false,
+   "contact": null,
+   "icon": null,
+   "kind": "person",
+   "lines": [
+    "- Anniversaire : {date+23} — *Wellness, D+0*"
+   ],
+   "part": "main",
+   "path": "Personnes/Marc Durand.md",
+   "summary": "Ton beau-frère, menuisier.",
+   "title": "Marc Durand",
+   "updated": "D+0"
+  },
+  {
+   "aliases": [],
+   "archived": false,
+   "contact": null,
+   "icon": null,
+   "kind": "subject",
+   "lines": [
+    "## Où on en est"
+   ],
+   "part": "main",
+   "path": "Sujets/Rénovation cuisine.md",
+   "summary": "Devis de Marc reçu : 8 900 €.",
+   "title": "Rénovation cuisine",
+   "updated": "D+0"
+  }
+ ],
+ "tasks": []
+}

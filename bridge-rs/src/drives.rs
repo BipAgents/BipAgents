@@ -65,6 +65,11 @@
 //!     GET    /v1/drives/{service}/browse?folder= {folders: [{id, name, path}]} (OneDrive, Dropbox; root without folder)
 //!     PUT    /v1/drives/{service}/folders        {folders: [{id, agents}]}, the whole list → the drive
 //!     DELETE /v1/drives/{service}                {ok, revoked}
+//!     PUT    /v1/drives/{service}/carnet         {carnet: bool}   « Chercher aussi ici depuis le Carnet » (off by
+//!                                                default, Alex's decision 4 of the sommaire, 21/11): the Carnet's
+//!                                                search (`GET /v1/notebook/search?online=1`) looks in this drive's
+//!                                                chosen folders too, online only; nothing of them is copied
+//!                                                → the drive, as listed (`carnet` added)
 //!
 //! No Python counterpart.
 
@@ -683,6 +688,9 @@ pub struct Link {
     /// Google's calendar only (google_calendar.rs, kept as a `Link` too): the agents that may use it.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub agents: Vec<String>,
+    /// The person lets the Carnet's search look in this drive's chosen folders (off by default).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub carnet: bool,
 }
 
 /// Which connection kept in the store: a drive, or the Google calendar (google_calendar.rs: the same Google clients,
@@ -757,6 +765,7 @@ pub fn view(provider: Provider, configured: bool, link: Option<&Link>) -> Value 
         "state": link.map(|l| l.state.as_str()).unwrap_or("not_connected"),
         "account": link.and_then(|l| l.account.clone()),
         "connected_at": link.map(|l| l.connected_at),
+        "carnet": link.is_some_and(|l| l.carnet),
         "folders": link.map(|l| l.folders.iter().map(|f| json!({
             "id": f.id, "name": f.name, "file": f.file, "agents": f.agents,
         })).collect::<Vec<_>>()).unwrap_or_default(),
@@ -1050,6 +1059,8 @@ pub async fn finish_query(config: &Config, query: HashMap<String, String>) -> Ap
         client: flow.client.clone(),
         folders,
         agents: Vec::new(),
+        // signed in again: the person's switch for the Carnet stays
+        carnet: stored.drives.get(flow.provider.id()).is_some_and(|l| l.carnet),
     };
     stored.drives.insert(flow.provider.id().to_string(), link.clone());
     store.write(&stored)?;
@@ -2280,6 +2291,97 @@ pub async fn set_folders(config: &Config, id: &str, chosen: &[Chosen]) -> ApiRes
     Ok(shown)
 }
 
+/// « Chercher aussi ici depuis le Carnet »: the person's switch for this drive.
+pub async fn set_carnet(config: &Config, id: &str, on: bool) -> ApiResult<Value> {
+    let (provider, _) = ready(config, id)?;
+    let _guard = connections::LOCK.lock().await;
+    let store = connections::store_of(config);
+    let mut stored = store.read()?;
+    let link = stored.drives.get_mut(provider.id()).ok_or_else(not_connected)?;
+    link.carnet = on;
+    let shown = view(provider, true, Some(&*link));
+    store.write(&stored)?;
+    Ok(shown)
+}
+
+/// The Carnet's search in the drives the person allowed for it (`carnet`), online only: the files of their chosen
+/// folders whose name or words hold `words` (each service's own search), checked inside those folders as for the
+/// agents, as Carnet items (sommaire.json `OnlineDocs`, kind `drive`, « Papiers » by default). None: no drive
+/// allowed. Nothing of them is kept or copied.
+pub async fn carnet_search(config: &Config, words: &str, lang: &str) -> Option<Value> {
+    if !config.drives.enabled {
+        return None;
+    }
+    let stored = read_stored(config).ok()?;
+    let allowed: Vec<(Provider, Link)> = stored
+        .drives
+        .iter()
+        .filter(|(_, l)| l.carnet && l.state == "connected")
+        .filter_map(|(id, l)| Some((Provider::of(id)?, l.clone())))
+        .collect();
+    if allowed.is_empty() {
+        return None;
+    }
+    let mut items: Vec<Value> = Vec::new();
+    for (provider, link) in allowed {
+        let Ok(api) = access(config, provider).await else { continue };
+        let folders = current(&api, &link.folders).await;
+        let mut seen: Vec<String> = Vec::new();
+        let mut add = |hit: &Item, items: &mut Vec<Value>| {
+            if seen.contains(&hit.id) || items.len() >= HITS_MAX {
+                return;
+            }
+            seen.push(hit.id.clone());
+            let name = crate::notebook::index::masked(&hit.name).unwrap_or_default();
+            if name.is_empty() {
+                return;
+            }
+            let noted = hit.modified.get(..10).map(str::to_string);
+            items.push(json!({"id": format!("drive:{}:{}", provider.id(), hit.id), "kind": "drive", "part": "main",
+                              "path": null, "title": name, "line": name, "categories": ["papers"], "space": "perso",
+                              "date": null, "yearly": null, "source": provider.label(), "who": link.account.clone().unwrap_or_default(),
+                              "noted": noted, "archived": false, "label": null, "answer": null, "page": null,
+                              "open": {"drive": {"account": provider.id(), "id": hit.id}}}));
+        };
+        // the files picked on their own (Google's window): by their names
+        let lower = crate::notebook::fold(words);
+        for f in folders.iter().filter(|f| f.file && crate::notebook::fold(&f.name).contains(&lower)) {
+            let item = Item { id: f.id.clone(), name: f.name.clone(), ..Default::default() };
+            add(&item, &mut items);
+        }
+        let targets: Vec<&Folder> = if provider == Provider::Google {
+            folders.iter().take(1).collect()
+        } else {
+            folders.iter().filter(|f| !f.file).collect()
+        };
+        for target in targets {
+            let Ok(hits) = api.search(target, words).await else { continue };
+            for hit in hits {
+                if !hit.folder && inside(&api, &hit, &folders).await {
+                    add(&hit, &mut items);
+                }
+            }
+        }
+    }
+    let title = match lang {
+        "fr" => "Dans tes fichiers en ligne",
+        "de" => "In deinen Online-Dateien",
+        "es" => "En tus archivos en línea",
+        "nl" => "In je online bestanden",
+        _ => "In your online files",
+    };
+    Some(json!({"title": title, "items": items}))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CarnetBody {
+    pub carnet: bool,
+}
+
+impl Validate for CarnetBody {
+    fn validate(&self, _errors: &mut Vec<FieldError>) {}
+}
+
 /// The sub-folders of `folder` (the root without one), for the app's folder choice. Items of others' drives shown in
 /// this one (OneDrive's « Ajouter à mon OneDrive ») are left out: their content lives elsewhere.
 pub async fn browse(config: &Config, id: &str, folder: Option<&str>) -> ApiResult<Value> {
@@ -2475,6 +2577,14 @@ async fn folders_route(
     Ok(web::ok(set_folders(&state.config(), &id, &body.folders).await?))
 }
 
+async fn carnet_route(
+    State(state): State<AppState>,
+    UrlPath(id): UrlPath<String>,
+    Json(body): Json<CarnetBody>,
+) -> ApiResult<Response> {
+    Ok(web::ok(set_carnet(&state.config(), &id, body.carnet).await?))
+}
+
 async fn android_route(State(state): State<AppState>, Json(body): Json<AndroidBody>) -> ApiResult<Response> {
     Ok(web::ok(set_android(&state.config(), &body).await?))
 }
@@ -2495,6 +2605,7 @@ pub fn router() -> Router<AppState> {
         .route("/drives/{service}/start", post(start_route))
         .route("/drives/{service}/browse", get(browse_route))
         .route("/drives/{service}/folders", put(folders_route))
+        .route("/drives/{service}/carnet", put(carnet_route))
         .route("/drives/{service}", axum::routing::delete(disconnect_route))
         .route("/drives/google_drive/android", put(android_route).delete(forget_android_route))
 }
