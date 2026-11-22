@@ -118,6 +118,59 @@
         "priority": 10,
         "collapse_id": null
       }
+    },
+    {
+      "name": "urgent",
+      "about": "A watcher's URGENT message (watchers.rs wake → background_turn.rs deliver_urgent; contracts/proactive/cases.json `urgent`): time-sensitive on the iPhone (from the 1.0 on), Android 1.1's « Urgent » channel (`urgent`), the « Messages » channel on Android 1.0.",
+      "bridge": {
+        "agent": "vie",
+        "context": {
+          "title": "Vie",
+          "lang": "fr"
+        },
+        "input": {
+          "fn": "notify_message",
+          "args": {
+            "outbox_id": "o3",
+            "text": "Un créneau mardi à 10 h chez le Dr Martin : réserve vite.",
+            "session_id": "sess_w",
+            "urgent": true
+          }
+        },
+        "pointer": {
+          "n": "n_contract",
+          "thread": "t_contract",
+          "message": "m_contract",
+          "badge": 1
+        }
+      },
+      "payload": {
+        "aps": {
+          "alert": {
+            "loc-key": "notif.boite",
+            "body": "notif.boite"
+          },
+          "thread-id": "vie/t_contract",
+          "mutable-content": 1,
+          "category": "MESSAGE",
+          "sound": "default",
+          "badge": 1,
+          "interruption-level": "time-sensitive"
+        },
+        "v": 2,
+        "n": "n_contract",
+        "t": "boite",
+        "agent": "vie",
+        "c": "t_contract",
+        "m": "o_o3",
+        "r": "o3",
+        "urgent": 1
+      },
+      "push": {
+        "push_type": "alert",
+        "priority": 10,
+        "collapse_id": null
+      }
     }
   ]
 }

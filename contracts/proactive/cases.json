@@ -1,0 +1,95 @@
+{
+ "about": "« Initiative », per agent, at the very bottom of its page (passation-pro briefs/design-agents-proactifs.md §2 and §7.1; Alex 22/11: D1 A, D3 A, D4 B; texts validated 22/11 08:53). The bridge keeps it (bridge-rs/src/agent_proactive.rs) and tells it in the agent's settings; the apps draw it (AgentPageView.swift, AgentPageScreen.kt). Read by bridge/tests_blackbox/test_agent_proactive.py (the bridge's answers), HermesKit AgentInitiativeTests and Android AgentInitiativeTest (what the apps read and draw). Additions only: an app 1.0 ignores `proactive` and draws nothing.",
+ "levels": ["off", "basic", "smart"],
+ "default": "basic",
+ "routes": {
+  "settings": "GET /v1/agents/{agent_id}/settings: + `proactive: {level, smart_ok}`; absent for an agent other people talk to (the family's agent, a project agent, an agent shared with a relative or linked with another household's agents: vault.rs `others_facing`).",
+  "put": "PUT /v1/agents/{agent_id}/proactive {level} → {id, level}. 404: not an agent of this place. 409 {\"detail\": \"others_facing\"}: an agent other people talk to. 422: a level not in `levels`.",
+  "off_by_words": "« arrête de me proposer des choses »: the agent's tool `proactive_off` sets « off », only in a turn of its person's own conversation (never a routine's, a watcher's, a trigger's, a task's, a relative's or another household's turn), and never turns it back on. Every app version sees it in the settings.",
+  "file": "<data>/agent_proactive.json (0600): {\"levels\": {\"<agent id>\": \"off\" | \"basic\" | \"smart\"}}. An agent absent from it is « basic »; « basic » is never written (the file holds only what the person changed)."
+ },
+ "settings": [
+  {"name": "own_agent_default", "about": "One of the person's own agents nobody changed: basic, everywhere (D4 B), old agents too (D1 A).", "agent": "own", "stored": null, "proactive": {"level": "basic", "smart_ok": false}},
+  {"name": "own_agent_smart", "about": "The person chose « Intelligente ». `smart_ok`: its model passed the smart offers' bench (§3b.8); none has yet, so false.", "agent": "own", "stored": "smart", "proactive": {"level": "smart", "smart_ok": false}},
+  {"name": "own_agent_off", "about": "Turned off (on its page, or by its person's words).", "agent": "own", "stored": "off", "proactive": {"level": "off", "smart_ok": false}},
+  {"name": "project_agent", "about": "An agent other people talk to: no `proactive` at all, whatever is stored.", "agent": "others_facing", "stored": "smart", "proactive": null}
+ ],
+ "put": [
+  {"name": "to_smart", "agent": "own", "body": {"level": "smart"}, "status": 200, "answer": {"level": "smart"}},
+  {"name": "to_off", "agent": "own", "body": {"level": "off"}, "status": 200, "answer": {"level": "off"}},
+  {"name": "back_to_basic", "agent": "own", "body": {"level": "basic"}, "status": 200, "answer": {"level": "basic"}},
+  {"name": "others_facing", "agent": "others_facing", "body": {"level": "smart"}, "status": 409, "answer": {"detail": "others_facing"}},
+  {"name": "unknown_agent", "agent": "nobody", "body": {"level": "off"}, "status": 404, "answer": null},
+  {"name": "unknown_level", "agent": "own", "body": {"level": "turbo"}, "status": 422, "answer": null},
+  {"name": "no_level", "agent": "own", "body": {}, "status": 422, "answer": null}
+ ],
+ "app": {
+  "rules": {
+   "apostrophes": "The texts are written with the apps' typographic apostrophe (’); the design note's straight ones are the same words.",
+   "where": "At the very bottom of the agent's page, after « Notifications » and the tools' line (« N outils », « Validations », « Peut écrire à »): a small heading, three segments, one grey line under them. Nothing else on the page moves.",
+   "hidden": "No `proactive` in the settings (an app 1.1 on a bridge 1.0, an agent other people talk to), or a level the app doesn't know (a newer bridge): nothing drawn, not even the heading.",
+   "line": "The grey line says what the chosen level does (`texts.<lang>.line_<level>`).",
+   "untested": "With « Intelligente » chosen and `smart_ok` false, a second grey line under it: `texts.<lang>.untested`. Never under « Éteinte » or « Basique ».",
+   "tap": "A tap on a segment shows it at once and sends PUT {level}; the answer's `level` is kept. A failure puts the previous level back: a 409 says `texts.<lang>.others_facing`, anything else the app's usual error line.",
+   "demo": "The demo keeps the level on the phone (basic for every agent)."
+  },
+  "cases": [
+   {"name": "absent", "proactive": null, "shown": null},
+   {"name": "basic_default", "proactive": {"level": "basic", "smart_ok": true}, "shown": {"selected": "basic", "line": "line_basic", "untested": false}},
+   {"name": "basic_untested_model", "proactive": {"level": "basic", "smart_ok": false}, "shown": {"selected": "basic", "line": "line_basic", "untested": false}},
+   {"name": "smart_tested", "proactive": {"level": "smart", "smart_ok": true}, "shown": {"selected": "smart", "line": "line_smart", "untested": false}},
+   {"name": "smart_untested", "proactive": {"level": "smart", "smart_ok": false}, "shown": {"selected": "smart", "line": "line_smart", "untested": true}},
+   {"name": "off", "proactive": {"level": "off", "smart_ok": false}, "shown": {"selected": "off", "line": "line_off", "untested": false}},
+   {"name": "smart_ok_missing", "about": "`smart_ok` missing: taken as true (nothing to warn about).", "proactive": {"level": "smart"}, "shown": {"selected": "smart", "line": "line_smart", "untested": false}},
+   {"name": "unknown_level", "about": "A newer bridge's level: nothing drawn.", "proactive": {"level": "turbo", "smart_ok": true}, "shown": null}
+  ]
+ },
+ "texts": {
+  "fr": {
+   "title": "Initiative",
+   "segment_off": "Éteinte", "segment_basic": "Basique", "segment_smart": "Intelligente",
+   "line_off": "Il ne propose rien de lui-même. Il fait ce que tu lui demandes.",
+   "line_basic": "Des rappels et quelques offres simples au bon moment : trajet, rappel, agenda, recherche. Rien ne se fait sans ton oui.",
+   "line_smart": "Il te propose tout ce qu’il sait vraiment faire, et repense à ta journée plusieurs fois par jour pour te proposer une idée. Rien ne se fait sans ton oui.",
+   "untested": "Son modèle n’est pas encore testé pour ça : ses offres peuvent être moins justes.",
+   "others_facing": "Cet agent parle à d’autres personnes : il ne propose rien de lui-même.",
+   "channel_urgent": "Urgent"
+  },
+  "en": {
+   "title": "Initiative",
+   "segment_off": "Off", "segment_basic": "Basic", "segment_smart": "Smart",
+   "line_off": "It doesn’t suggest anything on its own. It does what you ask.",
+   "line_basic": "Reminders and a few simple offers at the right time: route, reminder, calendar, search. Nothing happens without your yes.",
+   "line_smart": "It suggests anything it can really do, and looks back over your day a few times a day to suggest ideas. Nothing happens without your yes.",
+   "untested": "Its model isn’t tested for this yet: its offers may be less accurate.",
+   "others_facing": "This agent talks to other people: it never suggests anything on its own.",
+   "channel_urgent": "Urgent"
+  },
+  "de": {
+   "title": "Initiative",
+   "segment_off": "Aus", "segment_basic": "Einfach", "segment_smart": "Intelligent",
+   "line_off": "Es schlägt nichts von sich aus vor. Es tut, worum du es bittest.",
+   "line_basic": "Erinnerungen und ein paar einfache Angebote zur richtigen Zeit: Weg, Erinnerung, Kalender, Suche. Nichts passiert ohne dein Ja.",
+   "line_smart": "Es schlägt dir alles vor, was es wirklich kann, und geht mehrmals täglich deinen Tag durch, um dir Ideen vorzuschlagen. Nichts passiert ohne dein Ja.",
+   "untested": "Sein Modell ist dafür noch nicht getestet: Seine Angebote können ungenauer sein.",
+   "others_facing": "Dieser Agent spricht mit anderen Menschen: Er schlägt nie von sich aus etwas vor.",
+   "channel_urgent": "Dringend"
+  },
+  "es": {
+   "title": "Iniciativa",
+   "segment_off": "Apagada", "segment_basic": "Básica", "segment_smart": "Inteligente",
+   "line_off": "No propone nada por su cuenta. Hace lo que le pides.",
+   "line_basic": "Recordatorios y algunas ofertas sencillas en el momento justo: trayecto, recordatorio, agenda, búsqueda. Nada se hace sin tu sí.",
+   "line_smart": "Te propone todo lo que de verdad sabe hacer, y repasa tu jornada varias veces al día para proponerte ideas. Nada se hace sin tu sí.",
+   "untested": "Su modelo aún no está probado para esto: sus ofertas pueden ser menos acertadas.",
+   "others_facing": "Este agente habla con otras personas: nunca propone nada por su cuenta.",
+   "channel_urgent": "Urgente"
+  }
+ },
+ "urgent": {
+  "about": "What is urgent (§2.4, Alex Q3 A): an urgent payment (already, notify_payment_urgent), a watcher's URGENT message, later a plan's urgent moment. Never an offer. No quiet hours of ours: the phone's Do Not Disturb and Focus decide.",
+  "push": "A Boîte message pushed urgent (contracts/notifications/types/boite.json, variant `urgent`): `aps.interruption-level` « time-sensitive » and `urgent: 1` in the payload (FCM data: \"1\"). Everything else as a usual Boîte message.",
+  "ios": "Time Sensitive from the 1.0 on: the level is in the notification and the right is in the app's entitlements already.",
+  "android": "1.1: its own channel `urgent` (`texts.<lang>.channel_urgent`, importance high), for any push with `urgent: \"1\"` that is not an urgent payment (those keep `payments_urgent`). 1.0: the « Messages » channel, as any Boîte message."
+ }
+}
