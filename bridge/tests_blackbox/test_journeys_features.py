@@ -412,3 +412,40 @@ def test_j52_a_work_agent_stays_off_famille_and_the_card_proposes_the_old_points
     root = bridge.state_dir / "notebook" / "carnet"
     assert "Promotion" in (root / "Domaines" / "Travail.md").read_text()
     assert "Promotion" not in (root / "Domaines" / "Famille.md").read_text()
+
+
+# -- « Mets à jour l'app » (J66) -------------------------------------------------------------------------------------
+
+def test_j66_a_too_old_app_reads_takes_away_and_stops_an_updated_one_writes_again(journey):
+    """An app of 1.1 under the bridge's floor (`[app_floor]` above its build: it stands for build 3, the journeys'
+    bridge says 5) reads the floor in the status it asks at each refresh and refuses on its side what gives; what it
+    still sends goes through as before: its conversation reads, its « Non » to a card reaches the agent, its Stop stops
+    a turn. Updated (build 10), nothing to check. An app of before 1.1 (no header) reads today's status."""
+    from bbkit.journeys import JOURNEY_FLOOR
+    old = {**AUTH, "X-Bip-App": "ios/3/1.1"}
+    status = journey.bridge.get("/v1/status", headers=old).json()
+    assert status["app_floor"]["ios"]["min"] == JOURNEY_FLOOR > 3
+    assert journey.bridge.get("/v1/status", headers={**AUTH, "X-Bip-App": "android/3/1.1"}).json()["app_floor"]["android"]["min"] == JOURNEY_FLOOR
+    assert "app_floor" not in journey.bridge.get("/v1/status", headers=AUTH).json()
+    # its conversation reads (another device writes, the too-old app reads)
+    journey.send(cid(661), "Bonjour depuis l'iPad")
+    reply_done(journey, "Bien reçu")
+    page = journey.bridge.get(f"/v1/threads/{journey.thread}/timeline", headers=old,
+                              params={"agent": AGENT, "tz": "Europe/Paris"})
+    assert page.status_code == 200 and any("Bonjour depuis l'iPad" in (i.get("text") or "") for i in page.json()["items"])
+    # « Non » to a card goes through and the agent goes on without
+    run = journey.send(cid(662), "Fais le ménage #approbation").json()["run_id"]
+    [card] = waiting_card(journey, "")
+    no = journey.bridge.post("/v1/approve", headers=old, json={"agent": AGENT, "run_id": run,
+                                                              "request_id": card["request_id"], "choice": "deny"})
+    assert no.status_code == 200, no.text
+    reply_done(journey, "je n’y touche pas")
+    # Stop stops a turn under way
+    journey.send(cid(663), "Vérifie tout #lent")
+    assert wait_until(lambda: journey.page()["pending"].get("run") is not None, timeout=30)
+    stop = journey.bridge.post(f"/v1/threads/{journey.thread}/stop", headers=old, json={"agent": AGENT})
+    assert stop.status_code in (200, 202, 204), stop.text
+    assert wait_until(lambda: journey.page()["pending"].get("run") is None, timeout=30), journey.page()["pending"]
+    # updated: above the floor, nothing to check
+    updated = journey.bridge.get("/v1/status", headers={**AUTH, "X-Bip-App": "ios/10/1.1"}).json()["app_floor"]
+    assert updated["ios"]["min"] < 10

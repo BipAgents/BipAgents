@@ -166,8 +166,11 @@ async fn next_turns_into_min_by_the_servers_clock() {
 
 #[tokio::test]
 async fn gone_route_answers_426_app_too_old() {
-    // the helper a retired route's handler is replaced with (any method)
-    let router: Router = Router::new().route("/v1/old-thing", app_floor::gone_for_old_apps());
+    // the helper a retired route's handler is replaced with (any method), from the day it was retired
+    let retired = now() - 10 * 86_400;
+    let router: Router = Router::new()
+        .route("/v1/old-thing", app_floor::gone_for_old_apps(retired))
+        .route("/v1/long-gone", app_floor::gone_for_old_apps(now() - app_floor::GONE_FOR - 86_400));
     for method in ["GET", "POST", "PUT", "DELETE"] {
         let resp = tower::ServiceExt::oneshot(
             router.clone(),
@@ -179,6 +182,14 @@ async fn gone_route_answers_426_app_too_old() {
         let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
         assert_eq!(serde_json::from_slice::<Value>(&body).unwrap(), json!({"detail": "update the app", "code": "app_too_old"}));
     }
+    // 3 months after: a plain 404, as any path no route serves (review 1, R3)
+    let resp = tower::ServiceExt::oneshot(
+        router.clone(),
+        axum::http::Request::builder().uri("/v1/long-gone").body(axum::body::Body::empty()).unwrap(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     // a path retired in bridge.toml (test journeys): 426 on the real app, whoever asks; other unknown paths stay 404
     let (_dir, app) = app_with(Some(json!({"gone": ["/v1/retired-for-test", "/v1/agents/{agent}/retired"]})));
     let (k, v) = auth();
@@ -208,4 +219,17 @@ fn floor_values_build_as_the_apps_read_them() {
     let f = Floor { min: 7, next: Some(Step { build: 9, from: 1_800_000_000 }) };
     assert_eq!(f.to_json(), json!({"min": 7, "next": 9, "next_from": 1_800_000_000i64}));
     assert_eq!(Floor::default().to_json(), json!({"min": 0}));
+}
+
+/// The answers that depend on `X-Bip-App` say so (review 1, R1): a cache between would never mix them up.
+#[tokio::test]
+async fn the_answers_vary_with_x_bip_app() {
+    let (_dir, app) = app_with(None);
+    let (k, v) = auth();
+    for headers in [vec![(k, v.as_str())], vec![(k, v.as_str()), ("x-bip-app", IOS_APP)]] {
+        let status = app.get("/v1/status", &headers).await;
+        assert_eq!(status.header("vary").as_deref(), Some("x-bip-app"));
+        let health = app.get("/health", &headers[1..]).await;
+        assert_eq!(health.header("vary").as_deref(), Some("x-bip-app"));
+    }
 }

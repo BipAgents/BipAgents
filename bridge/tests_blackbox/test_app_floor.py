@@ -18,9 +18,6 @@ FLOOR_FEATURE = "app_floor"
 # what an app of before 1.1 reads, and what every app read before this change: the routes the home and the
 # conversation list ask at each refresh
 READ_ROUTES = ["/health", "/v1/status", "/v1/agents", "/v1/notifications", "/v1/approvals"]
-TODAYS_FEATURES = ["agent_groups", "files_kept", "calendar", "health_categories", "contacts", "time_zone",
-                   "message_search", "agent_templates", "agent_create_bip", "agent_catalogue", "agent_notify",
-                   "agent_queue", "threads", "notifications", "push_seal"]
 
 
 def floored(bridges, floor):
@@ -59,7 +56,7 @@ def test_old_apps_read_exactly_todays_answers(bridges):
                                "android": {"min": 999999999}})
     # today's answers, field by field
     health = plain.get("/health").json()
-    assert health["features"] == TODAYS_FEATURES
+    assert FLOOR_FEATURE not in health["features"]   # (the list itself grows with the bridge: never written here)
     assert "app_floor" not in health
     assert set(status(plain)) == {"agents", "model", "protected", "jobs"}
     for path in ("/health", "/v1/status"):
