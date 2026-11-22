@@ -145,7 +145,8 @@ def test_off_holds_back_its_own_ideas_and_what_is_asked_still_goes(bridges, fake
 
 def test_a_turn_another_agent_asked_for_never_turns_it_off(bridges, fakes):
     """Review 1 (B1): Quotidien asks Coach (« message_agent », their pair's own conversation): Coach's turn carries
-    Quotidien's words, never its person's; a proactive_off called in it is refused (agent_pairs.rs marks the turn)."""
+    Quotidien's words, never its person's; a proactive_off called in it is refused (it runs in their pair's conversation:
+    runs.rs `persons_own_turn`, agent_pairs.rs `is_pair_session`)."""
     from concurrent.futures import ThreadPoolExecutor
     from test_agent_messages import TOKENS as PAIR_TOKENS, ask
     from test_agent_pairs import linked

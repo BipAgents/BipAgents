@@ -22,9 +22,10 @@
 //! What follows the level: the tools that propose without being asked (`PROPOSING_TOOLS`: `plan_propose`, `offer_act`,
 //! made by later branches) are listed only while it is not off (agent_tools.rs `own_tools`), and kept in view then
 //! (tool_diet.rs); off, its personality gets `OFF_RULE` (`with_block`, agents_admin.rs `soul_text`): what its bridge
-//! rules let it propose of its own idea today (a background task, a word for the family, a project agent) only when
-//! its person asks; and the app's feature suggestions go through another agent (feature_tips.rs `proposer`). Its prompt
-//! cache is lost once, when the level changes. « Arrête de me proposer des choses » turns it off (`OFF_TOOL`, D3 A):
+//! rules let it propose of its own idea today (a background task, a word for the family, a project agent, the guide's
+//! switch and role) only when its person asks (Alex 22/11, « Oui, les 4 »: a follow-up tied to the request stays, a
+//! routine written to get ideas is a request, the app's feature suggestions stay in every state). Its prompt cache is
+//! lost once, when the level changes. « Arrête de me proposer des choses » turns it off (`OFF_TOOL`, D3 A):
 //! only from a turn of its person's own conversation, never the other way.
 //!
 //! The log says « proactive smart → off · agent X », nothing else. No Python counterpart.
@@ -95,14 +96,21 @@ static LOCK: Mutex<()> = Mutex::new(());
 
 /// The personality's block while « Éteinte » (« Il ne propose rien de lui-même. Il fait ce que tu lui demandes. »):
 /// the bridge's rules that let it propose of its own idea (souls.rs LONG_WORK_RULE « or the idea comes from you »,
-/// FAMILY_RULE, PROJECT_RULE, the compact rules' « your own idea: propose_task ») held back; what the person asks, as
-/// usual. In English, the same words each time (the prompt cache).
+/// FAMILY_RULE, PROJECT_RULE, the compact rules' « your own idea: propose_task », the guide's suggest_switch and
+/// propose_profile) held back; what the person asks, as usual. Alex 22/11 (« Oui, les 4 »): a follow-up tied to what
+/// they just asked stays (« Je l'envoie ? »), only unrelated offers go; a routine they wrote to get ideas is their
+/// request; the app's feature suggestions (feature_tips.rs) are the app's, passed on. Review 2: it never holds back
+/// PLAIN_RULE's « what you propose instead » nor CARE_RULE. In English, the same words each time (the prompt cache).
 pub const BLOCK_START: &str = "<!-- bipagents:initiative -->";
 pub const BLOCK_END: &str = "<!-- /bipagents:initiative -->";
-pub const OFF_RULE: &str = "Your person turned your « Initiative » off: you suggest nothing on your own. A background \
-task (propose_task), a message for their family (tell_family), a project agent or anything else: only when they ask \
-for it, never as your own idea, whatever your other rules say; and don't offer what else you could do for them. \
-Everything they ask, you still do as usual.";
+pub const OFF_RULE: &str = "Your person turned your « Initiative » off: you suggest nothing on your own. Only when they \
+ask for it, never as your own idea: a background task (propose_task), a message for their family (tell_family), a \
+project agent, another agent to continue with (suggest_switch), a role for yourself (propose_profile), or anything \
+unrelated to what they asked. Everything they ask, you still do as usual, and you may still ask a follow-up question \
+tied to it (« Je l'envoie ? », « Je le mets aussi dans ton agenda ? »). Their own requests count, a routine they \
+wrote to get ideas from you included. This holds back none of your other rules: when something can't be done you \
+still say what you propose instead, and someone in danger still gets your care and their crisis line. The app's own \
+suggestions the bridge hands you in a note are not yours: pass them on as the note says.";
 
 /// The personality without the block.
 pub fn split_block(soul: &str) -> (String, bool) {
@@ -446,7 +454,7 @@ mod tests {
         let off = with_block(&config, "vie", soul);
         assert!(off.starts_with(soul.trim_end()) && off.ends_with(&format!("{BLOCK_START}\n{OFF_RULE}\n{BLOCK_END}\n")));
         assert_eq!(with_block(&config, "vie", &off), off, "once");
-        for own_idea in ["propose_task", "tell_family", "project agent", "only when they ask", "never as your own idea"] {
+        for own_idea in ["propose_task", "tell_family", "project agent", "Only when they", "never as your own idea"] {
             assert!(OFF_RULE.contains(own_idea), "{own_idea}");
         }
         assert!(OFF_RULE.contains("Everything they ask, you still do"));
@@ -458,6 +466,30 @@ mod tests {
         set_level(&config, "budget", Level::Off).unwrap();
         make_project(&config, "budget");
         assert_eq!(with_block(&config, "budget", soul), soul);
+    }
+
+    /// Alex 22/11 (« Oui, les 4 »), what « Éteinte » holds back and what it doesn't, each case in the block's words.
+    #[test]
+    fn off_alex_s_four_answers_in_the_block() {
+        // 1. the app's own feature suggestions stay in every state: not the agent's idea, it passes them on
+        assert!(OFF_RULE.contains("The app's own suggestions the bridge hands you in a note are not yours: pass them on"));
+        // 2. the guide's switch to another agent and a role it would give itself: withheld
+        assert!(OFF_RULE.contains("another agent to continue with (suggest_switch)"));
+        assert!(OFF_RULE.contains("a role for yourself (propose_profile)"));
+        // 3. a follow-up tied to what they asked stays (« Je l'envoie ? »); an offer unrelated to it goes
+        assert!(OFF_RULE.contains("a follow-up question tied to it"));
+        assert!(OFF_RULE.contains("« Je l'envoie ? »") && OFF_RULE.contains("« Je le mets aussi dans ton agenda ? »"));
+        assert!(OFF_RULE.contains("anything unrelated to what they asked"));
+        // 4. a routine they wrote to get ideas from them is their request
+        assert!(OFF_RULE.contains("a routine they wrote to get ideas from you included"));
+        // review 2: never over the other rules: what it proposes instead when a request can't be done (PLAIN_RULE),
+        // its care for someone in danger (CARE_RULE)
+        assert!(OFF_RULE.contains("This holds back none of your other rules"));
+        assert!(OFF_RULE.contains("you still say what you propose instead"));
+        assert!(crate::souls::PLAIN_RULE.contains("what you propose instead"));
+        assert!(OFF_RULE.contains("someone in danger still gets your care and their crisis line"));
+        assert!(crate::souls::CARE_RULE.contains("crisis line"));
+        assert!(!OFF_RULE.contains("whatever your other rules say") && !OFF_RULE.contains("don't offer what else"));
     }
 
     #[test]
