@@ -335,6 +335,39 @@ def test_a_hub_agent_gets_the_connector_tools_too(bridges, fakes):
 
 # --- the egress proxy, run here as the bridge writes its policy ---------------------------------------------------------
 
+def test_an_ask_secret_carrying_a_connectors_fields_registers_it(bridges, fakes):
+    """22/11 (enquete-antibot, the GLM-5.3 Flash bench): « Pas besoin de secret, l'API est publique. J'enregistre le
+    veilleur. », then ask_secret five times, never connector_register: its call, meant for connector_register (behind
+    the tool search), fell on the in-view ask_secret sharing its prefix, and the person refused card after card. An
+    ask_secret carrying connector_register's fields (folder, entry, sites, watch) is connector_register: a connector's
+    card, never a secret's (the precedent: browser_mcp.rs `script_meant`)."""
+    bridge, hub, work = setup(bridges, fakes)
+    meant = {k: v for k, v in REGISTER.items() if k != "secrets"}
+    result, card = approve_next(bridge, "ask_secret", dict(meant, kind="token", reason="La météo"))
+    assert card["run_id"].startswith("bip-conn-") and card["bip_connector_sites"] == REGISTER["sites"]
+    assert "approved" in text(result), text(result)
+    assert cards(bridge, "bip-secret-") == []
+    assert "ask_secret called with a connector's fields" in bridge.log_tail(20000)
+
+
+def test_after_a_refusal_no_second_secret_card_for_that_site_in_the_turn(bridges, fakes):
+    """The same bench: three cards « Quotidien a besoin de ton accès Open-meteo (api.open-meteo.com) » refused, each
+    asked again under another name. Once the person refused an access to a site, a new ask_secret for that site in the
+    turn gets no card: refused for this turn, and what to do instead; another site is still asked."""
+    bridge, hub, work = setup(bridges, fakes)
+    first, card = ask(bridge, {"name": "openmeteo", "site": "api.open-meteo.com", "kind": "token",
+                               "reason": "La météo de demain"}, None)
+    assert not_done(first) and card["bip_secret_kind"] == "token"
+    again = tool(bridge, "ask_secret", {"name": "meteo_key", "site": "https://api.open-meteo.com/v1/forecast",
+                                        "kind": "token", "reason": "La météo"})
+    assert not_done(again) and "refused" in text(again) and "connector_register" in text(again), text(again)
+    time.sleep(1)
+    assert cards(bridge, "bip-secret-") == []
+    other, card = ask(bridge, {"name": "strava", "site": "strava.example", "kind": "token", "reason": "Tes sorties"},
+                      None)
+    assert card["run_id"].startswith("bip-secret-") and not_done(other)
+
+
 def start_proxy(tmp, policy, strict):
     (tmp / "policy.json").write_text(json.dumps(policy))
     port = free_port()

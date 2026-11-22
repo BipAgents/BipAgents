@@ -21,6 +21,9 @@
 //!   hand is back (card_place.rs `settle`, `self_hand`, `resume_words`). Nobody took the browser while it waited, or
 //!   `SELF_KEEP` passed: the answer is closed, a take afterwards resumes nothing (review of 17/11). On an agent other
 //!   people talk to, only with the person's confirmation (`confirmed_others`), as « Enregistrer ».
+//! - **No second card after a « Refuser »** (22/11, enquete-antibot: GLM asked again under other names, card after
+//!   card): within the turn, a new ask for the same site gets no card (`refused_in_turn`), and an `ask_secret` that
+//!   carries connector_register's fields is run as connector_register (connectors.rs `register_meant`).
 //! - **Blanking** (`Blanker`): every value of the agent's secrets, raw, URL-encoded, JSON-escaped, hex and base64
 //!   (padded, unpadded, URL-safe, and the aligned cores of a value inside a longer base64 stream, as in a Basic
 //!   header), is replaced by « [secret] » in whatever a connector sends back before it reaches Hermes, the model, the
@@ -320,6 +323,58 @@ one sentence to sign in from your desktop in the app and to tell you once it's d
 /// (card_place.rs `settle`, `resume_words`).
 pub const NOT_BACK: &str = "The person chose to sign in themselves in your browser and hasn't handed it back yet. Don't \
 use your browser: say you'll go on once they hand it back, then stop.";
+
+/// The sites whose access the person refused, by (agent, site): the turn that asked (None: none followed) and when
+/// (22/11, enquete-antibot: GLM asked again and again under other names after each « Refuser »). In memory only, an
+/// hour at most; a later turn may ask again.
+static REFUSED_IN_TURN: LazyLock<Mutex<HashMap<(String, String), Refused>>> = LazyLock::new(Default::default);
+/// A refusal: the turn that asked, and when.
+type Refused = (Option<String>, Instant);
+const REFUSED_KEEP: Duration = Duration::from_secs(3600);
+
+/// The site a refusal is kept for: an origin's registrable name (`https://api.open-meteo.com` → `open-meteo.com`);
+/// empty for none.
+pub fn refusal_site(origin: &str) -> String {
+    let host = url::Url::parse(origin).ok().and_then(|u| u.host_str().map(str::to_lowercase)).unwrap_or_default();
+    if host.is_empty() {
+        return String::new();
+    }
+    crate::mail_tidy::registrable(&host)
+}
+
+/// « Refuser » on an access to `site`, asked in the turn `turn`.
+pub fn refuse_in_turn(agent: &str, site: &str, turn: Option<&str>) {
+    let mut all = REFUSED_IN_TURN.lock().unwrap_or_else(|e| e.into_inner());
+    all.retain(|_, (_, at)| at.elapsed() < REFUSED_KEEP);
+    all.insert((agent.to_string(), site.to_string()), (turn.map(str::to_string), Instant::now()));
+}
+
+/// Whether an access to `site` was refused in the turn going on (`turn`; None: no turn followed, still the refused
+/// one), within the hour. Another turn: forgotten, it may be asked again (as sandbox_sites.rs `refused_in_turn`).
+pub fn refused_in_turn(agent: &str, site: &str, turn: Option<&str>) -> bool {
+    let mut all = REFUSED_IN_TURN.lock().unwrap_or_else(|e| e.into_inner());
+    let key = (agent.to_string(), site.to_string());
+    let Some((asked, at)) = all.get(&key).cloned() else { return false };
+    let same = at.elapsed() < REFUSED_KEEP
+        && match (asked.as_deref(), turn) {
+            (_, None) => true,
+            (Some(a), Some(now)) => a == now,
+            (None, Some(_)) => false,
+        };
+    if !same {
+        all.remove(&key);
+    }
+    same
+}
+
+/// What the agent reads when it asks again for a site whose access the person refused in this turn.
+pub fn refused_again_text(site: &str) -> String {
+    format!(
+        "Your person refused an access to {site} in this turn: no new card, under this name or another. If no secret \
+         is needed (a public API), register the connector without `secrets` (connector_register); else tell them in \
+         one sentence what you wanted it for, and stop."
+    )
+}
 
 /// `HAND_WAIT`, only ever shorter in the black-box tests (`BIP_TEST_HAND_WAIT_SECONDS`, 1 to 600, said in the log).
 pub fn hand_wait() -> Duration {
@@ -926,6 +981,22 @@ mod tests {
     use super::*;
 
     const SECRET: &str = "Tr0ub4dor&3 x/y+z";
+
+    /// 22/11 (enquete-antibot): a refused access is not asked again for that site in that turn, whatever the name;
+    /// another turn may.
+    #[test]
+    fn a_refused_site_is_not_asked_again_in_its_turn() {
+        assert_eq!(refusal_site("https://api.open-meteo.com"), "open-meteo.com");
+        assert_eq!(refusal_site(""), "");
+        refuse_in_turn("vie-refusal-test", "open-meteo.com", Some("run-1"));
+        assert!(refused_in_turn("vie-refusal-test", "open-meteo.com", Some("run-1")));
+        assert!(refused_in_turn("vie-refusal-test", "open-meteo.com", None));
+        assert!(!refused_in_turn("vie-refusal-test", "strava.com", Some("run-1")));
+        assert!(!refused_in_turn("other-refusal-test", "open-meteo.com", Some("run-1")));
+        assert!(!refused_in_turn("vie-refusal-test", "open-meteo.com", Some("run-2")));
+        assert!(!refused_in_turn("vie-refusal-test", "open-meteo.com", Some("run-1")), "forgotten once another turn asked");
+        assert!(refused_again_text("open-meteo.com").contains("connector_register"));
+    }
 
     #[test]
     fn names_and_variables() {

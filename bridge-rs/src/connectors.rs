@@ -1336,6 +1336,13 @@ async fn ask_secret_tool(state: &AppState, agent: &AgentConfig, arguments: &Dict
     if reason.is_empty() {
         return Ok(refusal("reason: why you need it, in a few words the person understands."));
     }
+    // the person refused an access to this site in this turn: no second card, under this name or another (22/11)
+    let refused_site = secrets::refusal_site(&origin);
+    let turn = state.hub.turn_of(&agent.name, ASK_SECRET).map(|t| t.run_id);
+    if !refused_site.is_empty() && secrets::refused_in_turn(&agent.name, &refused_site, turn.as_deref()) {
+        tracing::info!(agent = %agent.name, site = %refused_site, "secret card not made: refused for this site in this turn");
+        return Ok(refusal(&secrets::refused_again_text(&refused_site)));
+    }
     // a name already kept is not asked again (the person changes it from the connector's page)
     let known = state.vault.secret_items(&agent.name);
     if kind != "code" && known.iter().any(|i| i.label == name && i.secret_info.as_ref().and_then(|s| s.get("kind")).and_then(Value::as_str) != Some("code")) {
@@ -1390,9 +1397,14 @@ async fn ask_secret_tool(state: &AppState, agent: &AgentConfig, arguments: &Dict
             let what = if kind == "code" { "held for the connector's next run, then gone" } else { "kept in the vault" };
             text(&format!("Saved as « {name} »{with}: {what}. You never see it; your connector reads it from its environment."))
         }
-        Some(secrets::Outcome::Refused) => refusal(&format!(
-            "The person refused to give « {name} »: don't ask again unless they tell you to."
-        )),
+        Some(secrets::Outcome::Refused) => {
+            if !refused_site.is_empty() {
+                secrets::refuse_in_turn(&agent.name, &refused_site, turn.as_deref());
+            }
+            refusal(&format!(
+                "The person refused to give « {name} »: don't ask again, under this name or another, unless they tell                  you to. If no secret is needed (a public API), register the connector without `secrets`                  (connector_register)."
+            ))
+        }
         // « Je le taperai moi-même »: told here once the person hands the browser back, else in a later turn when they
         // do (card_place.rs `settle`)
         Some(secrets::Outcome::TypedByPerson) => {
@@ -1438,10 +1450,39 @@ fn service_named(name: &str, arguments: &Dict) -> String {
     crate::cards::quoted(&arg(arguments, "name"), 60)
 }
 
+/// An `ask_secret` call that carries `connector_register`'s own fields (22/11, passation-pro
+/// briefs/enquete-antibot-1122.md, annex: GLM-5.3 Flash wrote « Pas besoin de secret, l'API est publique.
+/// J'enregistre le veilleur. », then called ask_secret five times and never connector_register; its call, meant for
+/// connector_register behind the tool search, fell on the in-view ask_secret sharing its `mcp__bipagents_connectors__`
+/// prefix, tool_diet.rs `CREDENTIALS_DIRECT`): run as connector_register, whose card stays critical (the precedent:
+/// browser_mcp.rs `script_meant`).
+pub fn register_meant(arguments: &Dict) -> bool {
+    let filled = |k: &str| match arguments.get(k) {
+        Some(Value::String(s)) => !s.trim().is_empty(),
+        Some(Value::Array(a)) => !a.is_empty(),
+        Some(Value::Object(o)) => !o.is_empty(),
+        _ => false,
+    };
+    ["folder", "entry", "sites", "watch"].iter().any(|k| filled(k))
+}
+
 pub async fn call(state: &AppState, agent: &AgentConfig, name: &str, arguments: &Dict, _asker: &Asker) -> anyhow::Result<Dict> {
     if !offered(&state.config(), agent) {
         return Ok(refusal(NOT_HERE));
     }
+    let rerouted;
+    let (name, arguments) = if name == ASK_SECRET && register_meant(arguments) {
+        tracing::info!(agent = %agent.name, "ask_secret called with a connector's fields: run as connector_register");
+        // a secret's kind (password, token, code) is not a connector's (mcp, script): left out
+        let mut meant = arguments.clone();
+        if meant.get("kind").and_then(Value::as_str).is_some_and(|k| secrets::KINDS.contains(&k.to_lowercase().as_str())) {
+            meant.remove("kind");
+        }
+        rerouted = meant;
+        (REGISTER, &rerouted)
+    } else {
+        (name, arguments)
+    };
     // An agent of the shared hub keeps its first secret, or makes its first connector: it moves into its own space
     // now, and the call goes on there (own_space.rs).
     let moved;
@@ -1908,6 +1949,16 @@ mod tests {
         assert_eq!(when_line(&watcher), "Vérifie toutes les 15 min, ne réveille l'agent que si ça change");
         assert_eq!(sentence("Vie", &watcher, "new"), "Vie a créé le veilleur Prix du vélo");
         assert!(bad(json!({"watch": {"every": "1m", "notify": "on_change"}})).contains("watch.every"));
+        // 22/11 (enquete-antibot): an ask_secret with a connector's fields is connector_register
+        let mut meant = args(json!({"name": "openmeteo", "kind": "token", "site": "api.open-meteo.com", "reason": "r"}));
+        assert!(!register_meant(&meant));
+        meant.insert("folder".into(), json!("/workspace/connecteurs/meteo"));
+        assert!(register_meant(&meant));
+        for (key, value) in [("entry", json!("python3 check.py")), ("sites", json!(["api.open-meteo.com"])),
+                             ("watch", json!({"every": "6h", "notify": "on_change"}))] {
+            assert!(register_meant(&args(json!({"name": "x", key: value}))), "{key}");
+        }
+        assert!(!register_meant(&args(json!({"name": "x", "sites": [], "folder": " ", "watch": {}}))));
         // 22/11 (enquete-antibot): a bot check's host, a captcha-solving service, or a `*.` covering one: never
         for sites in [json!(["www.decathlon.example", "challenges.cloudflare.com"]), json!(["api.2captcha.com"]),
                       json!(["*.hcaptcha.com"]), json!(["*.cloudflare.com"])] {
