@@ -410,7 +410,7 @@ def write_by_hand(bridge):
     carnet = bridge.state_dir / "notebook" / "carnet" / "Sujets"
     carnet.mkdir(parents=True, exist_ok=True)
     (carnet / "Atelier.md").write_text(
-        "---\ntype: subject\nupdated: 2026-09-20\n---\n# Atelier\n\n## Où on en est\n"
+        "---\ntype: subject\nupdated: 2025-03-01\n---\n# Atelier\n\n## Où on en est\n"
         "- Code client HR-55821\n- Le mail [[archive:m01]] du menuisier\n- 250g de colle à bois\n"
         "- Livraison le 3/11\n- 1/2 litre de vernis\n")
     private = bridge.state_dir / "notebook" / "private" / "Domaines"
@@ -440,7 +440,7 @@ def test_the_index_is_the_phones_copy_without_sante_numbers_or_mails(bridges):
     lines = {i.get("line", ""): i for i in items}
     # a quantity stays; « le 3/11 » is a day near the page's `updated`, « 1/2 litre » none (review 2 of S1, R10-R11)
     assert "250g de colle à bois" in lines
-    assert lines["Livraison le 3/11"]["date"] == "2026-11-03"
+    assert lines["Livraison le 3/11"]["date"] == "2024-11-03"
     assert "date" not in lines["1/2 litre de vernis"] and "yearly" not in lines["1/2 litre de vernis"]
     # compact items: only `id`, `kind`, `open` always there; never a default value, never Dates or Santé
     for i in items:
@@ -466,6 +466,9 @@ def test_the_index_is_the_phones_copy_without_sante_numbers_or_mails(bridges):
     # the phone has it: 304, its ETag again
     same = bridge.get("/v1/notebook/index", params={"lang": "fr"}, headers={**AUTH, "If-None-Match": etag})
     assert same.status_code == 304 and same.headers["etag"] == etag and same.headers.get("cache-control") == "no-store"
+    # the app's language changed: its tables come, never a 304 (review 1 of S3, R2)
+    other = bridge.get("/v1/notebook/index", params={"lang": "en"}, headers={**AUTH, "If-None-Match": etag})
+    assert other.status_code == 200 and other.headers["etag"] != etag and "doc" in other.json()["neighbours"]
     # gzip when the phone accepts it
     packed = index_of(bridge, headers={"Accept-Encoding": "gzip"}, lang="fr")
     assert packed.headers.get("content-encoding") == "gzip" and packed.json()["items"] == items
@@ -509,11 +512,14 @@ def test_the_sommaire_search_groups_by_category_on_todays_route(bridges):
     ids = {i["id"]: i for i in index_of(bridge, lang="fr").json()["items"]}
 
     def search(q, **more):
-        got = bridge.get("/v1/notebook/search", params={"q": q, "lang": "fr", **more}, headers=AUTH)
+        got = bridge.get("/v1/notebook/search", params={"q": q, "lang": "fr", "groups": "1", **more}, headers=AUTH)
         assert got.status_code == 200, got.text
         assert got.headers.get("cache-control") == "no-store"
         return got.json()
 
+    # an installed 1.0 app's search: today's keys only, the copy not made for it (review 1 of S3, R3)
+    plain = bridge.get("/v1/notebook/search", params={"q": "anniversiare claire", "lang": "fr"}, headers=AUTH).json()
+    assert set(plain) == {"answers", "pages", "tasks"}, set(plain)
     found = search("anniversiare claire")
     # today's keys stay, the sommaire's are added
     assert {"answers", "pages", "tasks", "groups", "counts", "online"} <= set(found)
@@ -565,7 +571,7 @@ def test_the_online_files_only_from_the_drives_the_person_allowed(bridges, fakes
                           json={"folders": [{"id": "D", "agents": ["wellness"]}]}).status_code == 200
 
         def online(q):
-            got = bridge.get("/v1/notebook/search", params={"q": q, "lang": "fr", "online": "1"}, headers=AUTH)
+            got = bridge.get("/v1/notebook/search", params={"q": q, "lang": "fr", "online": "1", "sommaire": "1"}, headers=AUTH)
             assert got.status_code == 200, got.text
             return got.json()["online"]
 
@@ -583,6 +589,10 @@ def test_the_online_files_only_from_the_drives_the_person_allowed(bridges, fakes
         assert item["open"] == {"drive": {"account": "onedrive", "id": "F2"}}
         # nothing of it is in the phone's copy
         assert "deep.txt" not in json.dumps(index_of(bridge).json())
+        # signed in again to the same account: the switch stays (review 1 of S3, R1)
+        connect(bridge, service, "onedrive", client="ios")
+        onedrive = next(d for d in bridge.get("/v1/drives", headers=AUTH).json()["drives"] if d["service"] == "onedrive")
+        assert onedrive["carnet"] is True and [f["id"] for f in onedrive["folders"]] == ["D"], onedrive
         # Dropbox too: its chosen folder only, never the look-alike (the fake service keeps one token at a time:
         # OneDrive's ends here, and its search is left out quietly)
         connect(bridge, service, "dropbox", client="ios")
@@ -593,7 +603,7 @@ def test_the_online_files_only_from_the_drives_the_person_allowed(bridges, fakes
         ids = {i["id"] for i in online("plan")["items"]}
         assert "drive:dropbox:id:f" in ids and "drive:dropbox:id:z" not in ids and "drive:onedrive:X" not in ids
         # without `online=1`: never the network
-        plain = bridge.get("/v1/notebook/search", params={"q": "plan"}, headers=AUTH).json()
+        plain = bridge.get("/v1/notebook/search", params={"q": "plan", "groups": "1"}, headers=AUTH).json()
         assert plain["online"] is None
         bridge.put("/v1/drives/onedrive/carnet", headers=AUTH, json={"carnet": False})
         bridge.put("/v1/drives/dropbox/carnet", headers=AUTH, json={"carnet": False})

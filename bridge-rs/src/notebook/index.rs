@@ -840,9 +840,8 @@ mod tests {
         let marc = items.iter().find(|e| e.id == "page:p0000000001").unwrap();
         assert_eq!(marc.line, "Ton beau-frère, dossier …");
         assert!(items.iter().any(|e| e.kind == "task" && e.title == "Payer la facture …"), "{all}");
-        let doc = items.iter().find(|e| e.kind == "document").unwrap();
-        assert_eq!(doc.title, "Facture …");
-        assert!(doc.fold.contains("pdf"));
+        // a document whose file's name holds a reference: out, as a line (review 1 of S3, B2: its `open` names it)
+        assert!(!items.iter().any(|e| e.kind == "document"), "{all}");
         assert!(items.iter().all(|e| !e.categories.iter().any(|c| c == "health" || c == "dates")));
     }
 
@@ -850,11 +849,12 @@ mod tests {
     fn the_copy_never_depends_on_the_day() {
         let (_d, config) = config();
         // a line typed in Obsidian (no attribution), a day without a year: read near the page's `updated` (R10)
-        page(&config, Part::Main, "Sujets/Devis.md", "---\nid: p0000000002\ntype: subject\nupdated: 2026-09-20\n---\n# Devis\n\n## Où on en est\n- Devis reçu le 3 octobre\n- Rendez-vous le 3/11\n- 1/2 tasse de sucre\n- Anniversaire de mariage : 14 juin\n");
+        // (review 1 of S3, R5: an `updated` far from today, so that today's day would give another year)
+        page(&config, Part::Main, "Sujets/Devis.md", "---\nid: p0000000002\ntype: subject\nupdated: 2025-03-01\n---\n# Devis\n\n## Où on en est\n- Devis reçu le 3 octobre\n- Rendez-vous le 3/11\n- 1/2 tasse de sucre\n- Anniversaire de mariage : 14 juin\n");
         let items = entries(&config, &[]);
         let by_line = |t: &str| items.iter().find(|e| e.line == t).unwrap().clone();
-        assert_eq!(by_line("Devis reçu le 3 octobre").date.as_deref(), Some("2026-10-03"));
-        assert_eq!(by_line("Rendez-vous le 3/11").date.as_deref(), Some("2026-11-03"));
+        assert_eq!(by_line("Devis reçu le 3 octobre").date.as_deref(), Some("2024-10-03"));
+        assert_eq!(by_line("Rendez-vous le 3/11").date.as_deref(), Some("2024-11-03"));
         assert_eq!(by_line("1/2 tasse de sucre").date, None);
         assert_eq!(by_line("Anniversaire de mariage : 14 juin").yearly.as_deref(), Some("06-14"));
         assert_eq!(entries(&config, &[]), items, "the same Carnet, the same copy");
@@ -939,6 +939,138 @@ mod tests {
         assert_eq!(done["target"]["item"], format!("page:{id}"));
         std::fs::remove_file(super::super::part_root(&config, Part::Main).join("Sujets/Atelier.md")).unwrap();
         assert!(c::undo(&config, done["undo"].as_str().unwrap(), &you).unwrap().is_none());
+    }
+
+    /// Review 1 of S3, B1: a number written in groups (an IBAN, a card, a social security number) is an ID number on
+    /// its raw line: never in a document's words, whatever the words around it.
+    #[test]
+    fn numbers_in_groups_never_reach_the_copy_from_a_document() {
+        let dir = tempfile::tempdir().unwrap();
+        let files = [
+            ("rib.txt", "Relevé d'identité bancaire\nTitulaire : Marie Martin\nIBAN : FR76 3000 6000 0112 3456 7890 189\nBIC : AGRIFRPP\n"),
+            ("paie.txt", "Bulletin de paie d'octobre\nNuméro de sécurité sociale : 1 85 05 78 006 084 36\nSalaire net : 2 100 €\n"),
+            ("pg0123456789.html", "<html><body><h1>Budget du voyage</h1><p>Payé avec la carte 4970 1012 3456 7890</p><p>Hôtel à Kyoto</p></body></html>"),
+        ];
+        let mut read = String::new();
+        for (name, text) in files {
+            let path = dir.path().join(name);
+            std::fs::write(&path, text).unwrap();
+            read.push_str(&read_document(&path, name));
+            read.push(' ');
+        }
+        for never in ["fr76", "3000", "6000", "0112", "3456", "7890", "4970", "1012", "006 084", " 084 "] {
+            assert!(!format!(" {read} ").contains(never), "{never} in the copy: {read}");
+        }
+        for kept in ["titulaire", "salaire", "budget du voyage", "kyoto"] {
+            assert!(read.contains(kept), "{kept} not in: {read}");
+        }
+    }
+
+    /// Review 1 of S3, B2: a reference never reaches the phone by a path or a file's name either (`path`, `open`).
+    #[test]
+    fn a_reference_never_reaches_the_copy_by_a_path_or_a_file() {
+        let (_d, config) = config();
+        page(&config, Part::Main, "Sujets/Passeport 18AB12345.md", "---\ntype: subject\n---\n# Passeport\n\n## Où on en est\n- Renouveler avant l'été\n");
+        page(&config, Part::Main, "Sujets/Impôts 2026.md", "---\ntype: subject\n---\n# Impôts 2026\n\n## Où on en est\n- Déclaration reçue\n");
+        let docs = vec![
+            json!({"agent": "daily", "agent_name": "Daily", "file": "Facture FR-2026-00123.pdf", "name": "Facture FR-2026-00123.pdf",
+                   "type": "pdf", "date": "2026-11-02T10:00:00+00:00", "subjects": []}),
+            json!({"agent": "daily", "agent_name": "Daily", "file": "Budget 2026.xlsx", "name": "Budget 2026.xlsx",
+                   "type": "spreadsheet", "date": "2026-11-02T10:00:00+00:00", "subjects": []}),
+        ];
+        let items = entries(&config, &docs);
+        let all = serde_json::to_string(&items.iter().map(sent).collect::<Vec<_>>()).unwrap();
+        for never in ["18AB12345", "FR-2026", "00123"] {
+            assert!(!all.contains(never), "{never} in the copy: {all}");
+        }
+        // a year is no reference: those stay
+        assert!(all.contains("Impôts 2026.md") && all.contains("Budget 2026.xlsx"), "{all}");
+    }
+
+    /// Review 1 of S3, B3: a page's items are kept by what the page says, never by its file's size and time alone
+    /// (an agent's write or « Oublie ça » between the read and the look at the file left the old line in the copy).
+    #[test]
+    fn a_page_rewritten_is_read_again_whatever_its_size_and_time() {
+        let (_d, config) = config();
+        let file = super::super::part_root(&config, Part::Main).join("Sujets/Jardin.md");
+        let text = |line: &str| format!("---\nid: p0000000005\ntype: subject\n---\n# Jardin\n\n## Où on en est\n- {line}\n");
+        page(&config, Part::Main, "Sujets/Jardin.md", &text("Tailler la haie"));
+        let when = std::fs::metadata(&file).unwrap().modified().unwrap();
+        assert!(entries(&config, &[]).iter().any(|e| e.line == "Tailler la haie"));
+        // the same length, the same time: another line
+        std::fs::write(&file, text("Planter un lila")).unwrap();
+        std::fs::File::options().write(true).open(&file).unwrap().set_modified(when).unwrap();
+        let lines: Vec<String> = entries(&config, &[]).into_iter().filter(|e| e.kind == "line").map(|e| e.line).collect();
+        assert_eq!(lines, ["Planter un lila"]);
+    }
+
+    /// Review 1 of S3, R2: the tables follow the app's language, so its ETag says the languages too.
+    #[test]
+    fn the_etag_says_the_languages_of_the_tables() {
+        let (_d, config) = config();
+        page(&config, Part::Main, "Sujets/Jardin.md", "---\nid: p0000000006\ntype: subject\n---\n# Jardin\n");
+        let (_, fr) = answer(&config, &["fr".to_string()], None, None, "");
+        let (_, fr_en) = answer(&config, &["fr".to_string(), "en".to_string()], None, None, "");
+        assert_ne!(fr, fr_en);
+        assert!(fr.ends_with("-fr\"") && fr_en.ends_with("-fr.en\""), "{fr} {fr_en}");
+    }
+
+    /// Review 1 of S3, R7: a language asked of two letters that are not ASCII never breaks the route.
+    #[test]
+    fn a_language_of_any_letters_is_read() {
+        assert_eq!(langs("fr", Some("aé")), ["fr"]);
+        assert_eq!(langs("fr", Some("NL-be")), ["fr", "nl"]);
+        assert_eq!(langs("en", Some("é")), ["en"]);
+    }
+
+    /// Review 1 of S3, R8: two files of the same name an agent received are one note of the copy (the newest), never
+    /// two items of the same id.
+    #[test]
+    fn two_files_of_the_same_name_are_one_item() {
+        let (_d, config) = config();
+        let doc = |date: &str| json!({"agent": "daily", "agent_name": "Daily", "file": "image.jpg", "name": "image.jpg",
+                                      "type": "image", "date": date, "subjects": []});
+        let items = entries(&config, &[doc("2026-11-02T10:00:00+00:00"), doc("2026-10-02T10:00:00+00:00")]);
+        let docs: Vec<&Entry> = items.iter().filter(|e| e.kind == "document").collect();
+        assert_eq!(docs.len(), 1);
+        assert_eq!(docs[0].noted.as_deref(), Some("2026-11-02"));
+    }
+
+    /// Review 1 of S3, R9: each language's stop words only (an English Carnet keeps « van », « bin », « hay », « met »,
+    /// « comment »; a German one « Mais »).
+    #[test]
+    fn the_stop_words_are_each_languages() {
+        let stop = |lang: &str| tables(&[lang.to_string()], 2026).stop;
+        let en = stop("en");
+        for kept in ["van", "bin", "hay", "met", "comment", "mais", "die", "was"] {
+            assert!(!en.contains(&kept.to_string()), "en drops {kept}");
+        }
+        assert!(en.contains(&"the".to_string()) && en.contains(&"um".to_string()));
+        assert!(!stop("de").contains(&"mais".to_string()) && stop("de").contains(&"der".to_string()));
+        assert!(stop("fr").contains(&"le".to_string()) && stop("fr").contains(&"euh".to_string()));
+        assert!(stop("nl").contains(&"het".to_string()) && !stop("nl").contains(&"the".to_string()));
+        // the app's language adds its own
+        let both = tables(&["fr".to_string(), "en".to_string()], 2026).stop;
+        assert!(both.contains(&"le".to_string()) && both.contains(&"the".to_string()));
+    }
+
+    /// Review 1 of S3, R6: « Annuler » on a page gone since forgets what the correction taught, then says it is gone.
+    #[test]
+    fn an_undo_on_a_page_gone_forgets_its_rule() {
+        let (_d, config) = config();
+        page(&config, Part::Main, "Sujets/Cuisine.md", "---\nid: p0000000007\ntype: subject\n---\n# Cuisine\n\n## Où on en est\n- Devis reçu\n");
+        let you = Who::you(&config);
+        let target = c::Target::Page { path: "Sujets/Cuisine.md".into() };
+        let done = c::categorize(&config, &target, &["money".to_string()], &you).unwrap().unwrap();
+        let word = done["learnt"]["word"].as_str().unwrap().to_string();
+        let undo = done["undo"].as_str().unwrap().to_string();
+        std::fs::remove_file(super::super::part_root(&config, Part::Main).join("Sujets/Cuisine.md")).unwrap();
+        assert!(c::undo(&config, &undo, &you).unwrap().is_none());
+        let state = super::super::read_state(&config);
+        let rules = state.get("category_rules").cloned().unwrap_or_default().to_string();
+        let undos = state.get("category_undo").cloned().unwrap_or_default().to_string();
+        assert!(!rules.contains(&format!("\"{word}\"")), "{rules}");
+        assert!(!undos.contains(&undo), "{undos}");
     }
 
     #[test]
