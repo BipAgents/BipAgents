@@ -76,7 +76,8 @@ def item_of(bridge, path, kind="page", space=None):
 def test_s5_the_setting_off_at_first_then_a_pro_agent_writes_in_pro(bridges):
     bridge = studio_bridge(bridges)
     # the capability, the setting off at first (in the settings and in the home's)
-    assert bridge.get("/v1/notebook", headers=AUTH).json()["sommaire"][-1] == "spaces"
+    # (S6's `family` after it: contracts/carnet/sommaire.json `Capability`)
+    assert bridge.get("/v1/notebook", headers=AUTH).json()["sommaire"][-2:] == ["spaces", "family"]
     assert get(bridge, "/v1/notebook/settings")["separate_spaces"] is False
     assert bridge.get("/v1/notebook", headers=AUTH).json()["settings"]["separate_spaces"] is False
     bad = bridge.patch("/v1/notebook/settings", json={"separate_spaces": "maybe"}, headers=AUTH)
