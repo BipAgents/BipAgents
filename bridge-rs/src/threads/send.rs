@@ -42,6 +42,12 @@ use crate::web::{check_max_len, ApiResult, FieldError, HttpError, Validate};
 pub static CLIENT_ID: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^[A-Za-z0-9_-]{8,64}\z").expect("valid regex"));
 /// Files one message carries at most.
 const ATTACHMENTS_MAX: usize = 10;
+/// A text one message takes at most (characters): over msg_queue.rs `TEXT_MAX`, its words go whole as a text file
+/// joined to the message (`long_text_as_file`).
+pub const LONG_TEXT_MAX: usize = 1_000_000;
+/// The agent's note on a message whose words went as a text file (never shown: a `<!--bip:` note).
+const LONG_TEXT_NOTE: &str = "<!--bip:long_text The person's message was too long to go as words: it is whole in the \
+                              attached text file. Read the whole file before answering.-->";
 /// A message Hermes never stored (its turn failed before) stops showing after this long.
 const SENDS_KEPT_SECONDS: i64 = 2 * 86_400;
 /// Hermes' clock and the bridge's may differ a little (an existing Hermes on another machine).
@@ -108,7 +114,7 @@ pub struct NewMessage {
 
 impl Validate for NewMessage {
     fn validate(&self, errors: &mut Vec<FieldError>) {
-        check_max_len(errors, "text", Some(&self.text), crate::msg_queue::TEXT_MAX);
+        check_max_len(errors, "text", Some(&self.text), LONG_TEXT_MAX);
         check_max_len(errors, "notes", self.notes.as_deref(), crate::msg_queue::TEXT_MAX);
         check_max_len(errors, "instructions", self.instructions.as_deref(), crate::msg_queue::TEXT_MAX);
         if self.phone.as_deref().is_some_and(|p| crate::reminders::phone_named(p).is_none()) {
@@ -216,6 +222,8 @@ impl Threads {
         for row in rows.iter().filter(|r| s(r, "message_id").is_empty()) {
             let (client_id, words, at) = (s(row, "client_id"), s(row, "text"), since(row));
             let words = words.trim();
+            let sought = sought(words);
+            let holds = |i: &Item| squeezed(i.text()).contains(&sought);
             let found = items.iter().enumerate().skip(from).find(|(_, i)| {
                 i.kind() == "message"
                     && i.body.get("role") == Some(&json!("person"))
@@ -223,7 +231,7 @@ impl Threads {
                     && (i.at == 0.0 || i.at >= at - CLOCK_SLACK) // a row without its time (an older store): order only
                     // files alone: a row with files (every person's row has the key, most an empty list: a photo
                     // sent alone took the row of the words sent just before it, 6/11)
-                    && (if words.is_empty() { has_files(i) } else { i.text().contains(words) })
+                    && (if words.is_empty() { has_files(i) } else { holds(i) })
             });
             if let Some((n, item)) = found {
                 from = n + 1;
@@ -243,7 +251,7 @@ impl Threads {
                     && i.body.get("added_during_run") == Some(&json!(true))
                     && claimed.contains_key(&i.id)
                     && (i.at == 0.0 || i.at >= at - CLOCK_SLACK)
-                    && i.text().contains(words)
+                    && holds(i)
             }) {
                 joined.entry(row.id.clone()).or_default().push(client_id.clone());
                 self.store
@@ -305,6 +313,21 @@ impl Threads {
         }
         Ok(())
     }
+}
+
+/// What a stored row is looked for by: the words sent as the timeline shows a person's row (`person_text`, then
+/// `visible`: the machinery's lines out, blank lines in threes or more tidied to two), each run of spaces and line breaks
+/// one space (`squeezed`, the row's text too). 23/11 (Alex): a blog article pasted from a web page, blank lines in threes
+/// between its blocks, never matched its row (shown tidied): the message stayed « Pas envoyé » at the end of the
+/// conversation although his agent had answered it. Words that are only machinery are looked for as they are.
+fn sought(words: &str) -> String {
+    let shown = super::timeline::person_text(words).map(|w| super::timeline::visible(&w, "s", 0).0).unwrap_or_default();
+    squeezed(if shown.trim().is_empty() { words } else { &shown })
+}
+
+/// A text with each run of spaces and line breaks as one space (trimmed).
+fn squeezed(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 fn has_files(item: &Item) -> bool {
@@ -535,6 +558,48 @@ pub fn photo_bytes(data: &str) -> Option<Vec<u8>> {
     base64::engine::general_purpose::STANDARD.decode(clean.as_bytes()).ok().filter(|b| !b.is_empty())
 }
 
+/// A text over msg_queue.rs `TEXT_MAX` characters as a file (23/11, Alex: a blog article pasted): stored whole with the
+/// agent's uploads (where `POST /v1/files` puts documents), named after its first line, to join the message in its
+/// words' stead (its reference line goes to Hermes, every app draws the file, installed ones too). Measured on Hermes
+/// v0.23.1: a 150 000-character message would go whole into the model's context, every turn until a compaction; read
+/// from a file, the agent takes what it needs. None when the agent has no uploads (the text is then refused).
+async fn long_text_as_file(state: &AppState, agent: &AgentConfig, text: &str) -> Option<Attachment> {
+    let (config, agent, bytes, name) = (state.config(), agent.clone(), text.as_bytes().to_vec(), long_text_name(text));
+    let stored = tokio::task::spawn_blocking(move || {
+        let mut open = || Ok(std::io::Cursor::new(bytes.clone()));
+        let file = crate::files::store_upload_from(&agent, &mut open, &name, Some("text/plain"), &config.limits, None);
+        let file = match file {
+            Ok(file) => file,
+            Err(exc) => {
+                tracing::warn!(agent = %agent.name, status = %exc.status, "a long text not kept as a file");
+                return None;
+            }
+        };
+        // an isolated sandbox sees a copy of the uploads (sandbox.rs)
+        if let Err(exc) = crate::sandbox::sync_agent(&config, &agent.name) {
+            tracing::warn!(agent = %agent.name, error = %exc, "uploads not copied to the sandbox");
+        }
+        Some(Attachment {
+            kind: "document".into(),
+            name: file["filename"].as_str().map(str::to_string),
+            mime: Some("text/plain".into()),
+            size: file["size"].as_u64(),
+            path: file["path"].as_str().map(str::to_string),
+            data: None,
+            text: None,
+        })
+    });
+    stored.await.ok().flatten()
+}
+
+/// A long text's file name: its first line with words (a title's `#` out), 60 characters at most, `.txt`.
+fn long_text_name(text: &str) -> String {
+    let first = text.lines().map(|l| l.trim().trim_start_matches('#').trim()).find(|l| l.chars().any(char::is_alphanumeric));
+    let mut name: String = first.unwrap_or("message").chars().take(60).collect();
+    name = name.trim_end_matches(|c: char| !c.is_alphanumeric()).to_string();
+    format!("{name}.txt")
+}
+
 /// What the line said at once restates (instant_reply.rs): the words, else what the message carries.
 fn said_for_ack(words: &str, attachments: &[Attachment]) -> String {
     match words.trim().is_empty() {
@@ -573,6 +638,22 @@ pub async fn send(state: &AppState, agent: &AgentConfig, thread: Option<Thread>,
             }
         }
     }
+    let mut body = body;
+    if body.text.trim().chars().count() > crate::msg_queue::TEXT_MAX {
+        // too long for one message's words (an article pasted, 23/11): whole as a text file, the agent told to read it
+        let Some(file) = long_text_as_file(state, agent, body.text.trim()).await else {
+            return Err(HttpError::new(
+                422,
+                &format!("a message's words are {} characters at most: send a longer text as a file", crate::msg_queue::TEXT_MAX),
+            ));
+        };
+        body.attachments.push(file);
+        body.text = String::new();
+        body.notes = Some(match body.notes.take().filter(|n| !n.trim().is_empty()) {
+            Some(notes) => format!("{LONG_TEXT_NOTE}\n{notes}"),
+            None => LONG_TEXT_NOTE.to_string(),
+        });
+    }
     let thread = match thread {
         Some(t) => t,
         None => threads.create(&agent.name, "side", None, Value::Null, false).await?,
@@ -595,7 +676,6 @@ pub async fn send(state: &AppState, agent: &AgentConfig, thread: Option<Thread>,
             crate::family_thread::said(state, agent, a, &words, &client_id, tip);
         }
     };
-    let mut body = body;
     body.attachments = keep_photos(state, agent, std::mem::take(&mut body.attachments)).await;
     if !body.attachments.is_empty() {
         // an agent others use too (shared with relatives, the family's): its files also go into its pool, everyone's
@@ -962,6 +1042,47 @@ mod tests {
             serde_json::from_value(json!({"client_id": "0F0E-1A2B-3C4D", "attachments": [{"kind": "image", "data": "AA"}]})).unwrap();
         body.validate(&mut errors);
         assert!(errors.is_empty());
+    }
+
+    /// 23/11 (Alex): an article pasted from a web page (blank lines in threes) stayed « Pas envoyé » after its answer:
+    /// its stored row, as the timeline shows it (blank lines tidied), never held the words as sent.
+    #[test]
+    fn a_stored_row_holds_the_words_sent_as_the_timeline_shows_them() {
+        let article = "Pourquoi le vélo a gagné la ville\n\n\n\nLes pistes ont doublé.   \n\n\n- point 1 : voir \
+                       https://exemple.org/a?b=c\n- point 2 : ça roule 🚲\r\n\n\nFin.";
+        let stored = format!("<!--bip:now lundi 23 novembre, 19:00-->\n{article}");
+        let words = super::super::timeline::person_text(&stored).unwrap();
+        let (shown, _) = super::super::timeline::visible(&words, "m_1", 0);
+        assert!(!shown.contains(article), "the row is shown tidied: {shown:?}");
+        assert!(squeezed(&shown).contains(&sought(article)));
+        // in a row holding other words too (Hermes joins steers held until its next step)
+        assert!(squeezed(&format!("Et aussi ceci\n\n{shown}")).contains(&sought(article)));
+        // never another message
+        assert!(!squeezed("Pourquoi le vélo a gagné la ville").contains(&sought(article)));
+        // a line the timeline takes out of a row ([image], a tool's markup) is looked for without it
+        let marked = "Regarde ça\n[image]\nC'est beau";
+        let (shown, _) = super::super::timeline::visible(&super::super::timeline::person_text(marked).unwrap(), "m_2", 0);
+        assert!(squeezed(&shown).contains(&sought(marked)), "{shown:?}");
+        // words that are only machinery: looked for as they are
+        assert_eq!(sought("[image]"), "[image]");
+    }
+
+    #[test]
+    fn a_long_text_is_named_after_its_first_line() {
+        assert_eq!(long_text_name("\n\n# Pourquoi le vélo électrique a gagné la ville !\n\nTexte"), "Pourquoi le vélo électrique a gagné la ville.txt");
+        assert_eq!(long_text_name(&"mot ".repeat(40)).chars().count(), 59 + 4);
+        assert_eq!(long_text_name("---\n\n  "), "message.txt");
+    }
+
+    #[test]
+    fn a_message_takes_a_long_text_up_to_its_limit() {
+        let check = |chars: usize| {
+            let mut errors = Vec::new();
+            let body: NewMessage = serde_json::from_value(json!({"client_id": "0F0E-1A2B-3C4D", "text": "é".repeat(chars)})).unwrap();
+            body.validate(&mut errors);
+            errors.len()
+        };
+        assert_eq!((check(150_000), check(LONG_TEXT_MAX), check(LONG_TEXT_MAX + 1)), (0, 0, 1));
     }
 
     /// The phone a message is sent from (7/11: where a reminder asked in its turn goes): « ios » or « android ».
