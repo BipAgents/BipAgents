@@ -8,8 +8,8 @@
 use super::{fold, groups, template, Page, WORDS};
 use crate::config::Config;
 
-/// The group names (folded) that mean work, in the apps' languages.
-const WORK_GROUPS: &[&str] = &["pro", "travail", "boulot", "work", "job", "business", "arbeit", "beruf", "trabajo"];
+/// The group names (folded) that mean work, in the apps' languages (« Werk »: the Dutch name proposed for Pro, S5).
+const WORK_GROUPS: &[&str] = &["pro", "travail", "boulot", "work", "job", "business", "arbeit", "beruf", "trabajo", "werk"];
 
 /// The family area's title in each language (folded).
 const FAMILY_AREAS: &[&str] = &["famille", "family", "familie", "familia", "ma famille", "my family", "meine familie", "mi familia"];

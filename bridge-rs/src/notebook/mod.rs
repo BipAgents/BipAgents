@@ -2377,6 +2377,11 @@ pub fn merge_locked(config: &Config, part: Part, from: &str, into: &str, who: &W
     if a.path == b.path || a.page.kind() == "tasks" || b.page.kind() == "tasks" {
         return Ok(None);
     }
+    // never across two spaces (Perso, Pro): the nightly pass, a contact, the trips made again would move notes from
+    // one to the other without the person's gesture (8 B; review 1 of S5, B2)
+    if spaces::of_page(part, &a.page) != spaces::of_page(part, &b.page) {
+        return Ok(None);
+    }
     let before_into = read_page_text(config, part, &b.path);
     let before_from = read_page_text(config, part, &a.path);
     let mut page = b.page.clone();

@@ -591,9 +591,11 @@ fn split_locked(config: &Config, path: &str, page: &Page, trips: &[Trip], who: &
         // its lines under their headings, in the trip's outline
         let mut chunk = String::new();
         let mut last: Option<Option<String>> = None;
-        let existing = super::all_pages(config, Part::Main)
-            .into_iter()
-            .find(|(p, pg)| p != path && pg.kind() == "trip" && pg.named(&trip.title));
+        // (a trip of that name in the other space is not this one: never across Perso and Pro; review 1 of S5, B2)
+        let space = super::spaces::of_page(Part::Main, page);
+        let existing = super::all_pages(config, Part::Main).into_iter().find(|(p, pg)| {
+            p != path && pg.kind() == "trip" && pg.named(&trip.title) && super::spaces::of_page(Part::Main, pg) == space
+        });
         let already: Vec<String> = existing
             .as_ref()
             .map(|(_, pg)| pg.sections().into_iter().flat_map(|(_, f)| f).map(|f| fold(&f.text)).collect())
@@ -618,6 +620,8 @@ fn split_locked(config: &Config, path: &str, page: &Page, trips: &[Trip], who: &
                 let mut pg = Page::new("trip", &trip.title);
                 pg.front.insert("origin".into(), json!("split"));
                 pg.front.insert("split_from".into(), json!(page.title));
+                // in the space of the page split (a Pro page's trips are Pro; review 1 of S5, B2)
+                super::spaces::set_front(&mut pg, space);
                 let folder = trip_auto::folder_for(w, Some(trip.end), today);
                 (super::free_path(config, Part::Main, &folder, &trip.title, ""), None, pg)
             }
