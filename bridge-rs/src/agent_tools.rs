@@ -2402,6 +2402,18 @@ async fn mcp_call(
             let run_id = format!("{}{card}", crate::routines::RUN_PREFIX);
             crate::card_place::taken(&state.config(), &run_id);
             crate::threads::threads_of(&state).touch(&agent.name, origin.as_deref(), "card").await;
+        } else if let Some((line, household)) = called
+            .card
+            .as_ref()
+            .and_then(|(line, card)| crate::routines::card_by(&state.config(), &agent.name, card).map(|h| (line, h)))
+        {
+            // a proposal on a routine a family member asked for (her « Réparer »'s turn, where nobody's member turn
+            // goes on): hers already (`by`), told to her bridge, never pushed to the creator (review 2, C7 bis)
+            if let Some((_, card)) = &called.card {
+                crate::card_place::taken(&state.config(), &format!("{}{card}", crate::routines::RUN_PREFIX));
+            }
+            crate::threads::threads_of(&state).touch(&agent.name, None, "card").await;
+            crate::family_thread::tell_member(&state, &agent, &household, line).await;
         } else if let Some((line, card)) = called.card {
             // its card (a routine to start, a proposal): in this turn's conversation (card_place.rs) and pushed, as
             // routine_trigger's; the agent was told it waits, so no turn resumes to tell it the answer (`taken`);

@@ -830,6 +830,16 @@ fn routine_asks_keep(r: &Routine, now: f64) -> bool {
         && r.frame.until.is_some_and(|u| u - now <= KEEP_ASK_DAYS * DAY && (u > now || paused(r)))
 }
 
+/// Paused past its default end: the end waits, `KEEP_ASK_DAYS` from now each time (it never runs while paused:
+/// reviews B1, B1 bis), so a way back on never finds it gone.
+fn routine_slides(r: &Routine, now: f64) -> bool {
+    r.frame.default_end && paused(r) && r.frame.until.is_some_and(|u| u < now)
+}
+
+fn watch_slides(conn: &connectors::Connector, now: f64) -> bool {
+    !conn.enabled && conn.watch.as_ref().is_some_and(|w| w.default_end && w.until.is_some_and(|u| u < now))
+}
+
 fn unanswered(fix: &Option<Fix>, now: f64) -> bool {
     fix.as_ref().is_some_and(|f| f.variant != KEEP && now - f.at >= NO_ANSWER_DAYS * DAY)
 }
@@ -861,7 +871,10 @@ pub fn due(config: &Config, now: f64) -> Vec<Due> {
     let mine = routines::all(config, None);
     let routine_work = mine.iter().any(|r| {
         !routines::is_running(&r.id)
-            && (routine_ends_now(r, now) || routine_asks_keep(r, now) || unanswered(&r.frame.fix, now))
+            && (routine_ends_now(r, now)
+                || routine_asks_keep(r, now)
+                || unanswered(&r.frame.fix, now)
+                || routine_slides(r, now))
     });
     if routine_work {
         let mut gone: Vec<Routine> = Vec::new();
@@ -881,11 +894,10 @@ pub fn due(config: &Config, now: f64) -> Vec<Due> {
                     let text = stopped_line(lang, Task::Routine, &name);
                     out.push(Due::Line { agent: r.agent.clone(), task: Task::Routine, id: r.id.clone(), text });
                 }
+                if routine_slides(r, now) {
+                    r.frame.until = Some(now + KEEP_ASK_DAYS * DAY);
+                }
                 if routine_asks_keep(r, now) {
-                    if r.frame.until.is_some_and(|u| u < now + DAY) && paused(r) {
-                        // paused past (or at) its end: the card's day 3 days on, never one gone
-                        r.frame.until = Some(now + KEEP_ASK_DAYS * DAY);
-                    }
                     let fix = Fix { id: py::token_hex(6), at: now, variant: KEEP.into(), ..Fix::default() };
                     let run_id = format!("{RUN_PREFIX}{}", fix.id);
                     (r.frame.fix, r.frame.keep_asked) = (Some(fix), true);
@@ -918,7 +930,8 @@ pub fn due(config: &Config, now: f64) -> Vec<Due> {
     }
     let watchers = connectors::all(config);
     let watcher_work = watchers.iter().any(|(_, c)| {
-        c.watch.is_some() && (watch_ends_now(c, now) || watch_asks_keep(c, now) || unanswered(&c.frame.fix, now))
+        c.watch.is_some()
+            && (watch_ends_now(c, now) || watch_asks_keep(c, now) || unanswered(&c.frame.fix, now) || watch_slides(c, now))
     });
     if watcher_work {
         let mut gone: Vec<(String, connectors::Connector)> = Vec::new();
@@ -937,10 +950,12 @@ pub fn due(config: &Config, now: f64) -> Vec<Due> {
                         let text = stopped_line(lang, Task::Watcher, &routines::flat(&conn.name, routines::NAME_MAX));
                         out.push(Due::Line { agent: agent.clone(), task: Task::Watcher, id: conn.id.clone(), text });
                     }
-                    if watch_asks_keep(conn, now) {
-                        if let Some(w) = conn.watch.as_mut().filter(|w| w.until.is_some_and(|u| u < now + DAY)) {
+                    if watch_slides(conn, now) {
+                        if let Some(w) = conn.watch.as_mut() {
                             w.until = Some(now + KEEP_ASK_DAYS * DAY);
                         }
+                    }
+                    if watch_asks_keep(conn, now) {
                         let fix = Fix { id: py::token_hex(6), at: now, variant: KEEP.into(), ..Fix::default() };
                         let run_id = format!("{RUN_PREFIX}{}", fix.id);
                         (conn.frame.fix, conn.frame.keep_asked) = (Some(fix), true);

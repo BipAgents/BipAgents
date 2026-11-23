@@ -306,9 +306,12 @@ pub fn set_enabled(config: &Config, agent: &str, id: &str, on: bool) -> anyhow::
         if on && c.status != APPROVED {
             return Some(false);
         }
-        c.enabled = on;
         c.updated_at = crate::vault::now();
-        if !on {
+        if on {
+            // a « Oui » to its agent's card « Connecteur « X » » (tool_asks.rs): as any way back on (review 2, B1 bis)
+            switched_on(c, py::time_time());
+        } else {
+            c.enabled = false;
             // switched off: its card « Réparer / Arrêter » has its answer (task_frame.rs)
             drop_fix(config, c);
         }
@@ -824,7 +827,8 @@ pub async fn answer(state: &AppState, card_id: &str, allow: bool, via: &str) -> 
         if let Some(c) = find(store, &agent, &conn.id) {
             c.fingerprint = pinned.clone();
             c.status = APPROVED.into();
-            c.enabled = true;
+            // on: a default end passed meanwhile (off, or « à réapprouver ») gives it 3 days (review 2, B1 bis)
+            switched_on(c, py::time_time());
             c.card = None;
             c.approved_at = Some(crate::vault::now());
             c.updated_at = crate::vault::now();
@@ -1058,6 +1062,15 @@ fn strings(value: Option<&Value>) -> Vec<String> {
 /// `DEFAULT_END_DAYS` (« une seule fois » too), « Garder 3 mois de plus ? » before.
 pub fn watch_frame(watch: &mut Watch, asked: bool, now: f64) {
     (watch.until, watch.default_end) = crate::task_frame::own_end(watch.until, asked, now);
+}
+
+/// On, by any way (its switch in the app, a « Oui » to its agent's card, the approval of a change): a watcher's
+/// default end passed (or near) meanwhile gives it `KEEP_ASK_DAYS` more, never gone at once (reviews B1, B1 bis).
+pub fn switched_on(c: &mut Connector, now: f64) {
+    c.enabled = true;
+    if let Some(w) = c.watch.as_mut() {
+        w.until = crate::task_frame::back_on_end(w.until, w.default_end, now);
+    }
 }
 
 /// Its card « Réparer / Arrêter » has its answer (switched off, removed: review C11).
@@ -1789,14 +1802,13 @@ async fn switch_route(
     }
     change(&config, |store| {
         if let Some(c) = find(store, &agent.name, &id) {
-            c.enabled = on;
             c.updated_at = crate::vault::now();
-            if !on {
+            if on {
+                switched_on(c, py::time_time());
+            } else {
+                c.enabled = false;
                 // switched off by the person: its card « Réparer / Arrêter » has its answer (review C11)
                 drop_fix(&config, c);
-            } else if let Some(w) = c.watch.as_mut() {
-                // back on: a default end passed while it was off gives it 3 more days (review B1)
-                w.until = crate::task_frame::back_on_end(w.until, w.default_end, py::time_time());
             }
         }
     })

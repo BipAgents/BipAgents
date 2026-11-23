@@ -2480,6 +2480,14 @@ in the app. Do not try to run it.",
                         if to_repeat && until.is_none() && repeat.is_none() && !ask.asked {
                             (until, default_end) = (Some(now + crate::task_frame::DEFAULT_END_DAYS * crate::task_frame::DAY), true);
                         }
+                        // a number of runs its agent gives on its own: within 90 days too, as at its making (frame_of;
+                        // review 2, C9 bis)
+                        if let (Some(n), false, false) = (ask.repeat, ask.asked, matches!(clock, Schedule::Once { .. })) {
+                            let horizon = now + crate::task_frame::DEFAULT_END_DAYS * crate::task_frame::DAY;
+                            if !runs_by(&clock, now, horizon, n, zone) {
+                                (until, default_end) = crate::task_frame::own_end(until, false, now);
+                            }
+                        }
                         // an end before its first run (review C10)
                         if let (Some(at), Some(first)) = (until, next_after(&clock, now, zone)) {
                             if first > at && !matches!(clock, Schedule::Once { .. }) {

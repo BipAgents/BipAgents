@@ -19,7 +19,7 @@
    "description": "Vie voudrait une routine « Raccourci » qui se lance quand un autre service l'appelle par un lien.",
    "request_id": "<v>",
    "run_id": "<v>",
-   "session_id": "<v>"
+   "session_id": null
   },
   {
    "agent": "vie",
@@ -50,7 +50,7 @@
    "detail": {
     "muted": false,
     "prompt": "Fais le point.",
-    "session_id": "<v>"
+    "session_id": null
    },
    "group": "schedule",
    "id": "<v>",
@@ -81,7 +81,7 @@
    "detail": {
     "muted": false,
     "prompt": "Relevés : fais-le.",
-    "session_id": "<v>"
+    "session_id": null
    },
    "group": "schedule",
    "id": "<v>",
@@ -260,7 +260,7 @@
      "woke": false
     }
    ],
-   "session_id": "<v>",
+   "session_id": null,
    "summary": "Prochain créneau : mardi 10:00",
    "text": "Vérifie toutes les 15 min, ne réveille l'agent que si ça change",
    "wakes": 0
@@ -328,7 +328,7 @@
        "woke": false
       }
      ],
-     "session_id": "<v>",
+     "session_id": null,
      "summary": "Prochain créneau : mardi 10:00",
      "text": "Vérifie toutes les 15 min, ne réveille l'agent que si ça change",
      "wakes": 0
@@ -349,7 +349,7 @@
     "muted": false,
     "name": "Point du soir",
     "next_run_at": "<v>",
-    "origin_session_id": "<v>",
+    "origin_session_id": null,
     "plan": null,
     "prompt": "Fais le point.",
     "repeat": null,
@@ -417,7 +417,7 @@
     "pending": 0,
     "prompt": "Note ce que je dicte.",
     "runs": [],
-    "session_id": "<v>",
+    "session_id": null,
     "state": "waiting",
     "when_text": "Depuis un autre service"
    },
@@ -442,7 +442,7 @@
     "pending": 0,
     "prompt": "Range la réponse.",
     "runs": [],
-    "session_id": "<v>",
+    "session_id": null,
     "state": "active",
     "when_text": "Depuis un autre service"
    }

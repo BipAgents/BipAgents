@@ -1019,12 +1019,7 @@ pub async fn check(state: &AppState, agent: &AgentConfig, id: &str, via: &str) -
         // « une seule fois, puis il s'arrête »: its agent told its person (never the bridge's own line when its turn
         // failed): it stops, paused on its page, never deleted (review C2)
         tracing::info!(target: "bipbridge::watchers", agent = %agent.name, watcher = %id, "a once watcher told its person: paused");
-        let _ = connectors::change(&config, |store| {
-            if let Some(c) = store.agents.get_mut(&agent.name).and_then(|l| l.iter_mut().find(|c| c.id == id)) {
-                c.enabled = false;
-                c.updated_at = crate::vault::now();
-            }
-        });
+        once_told(&config, &agent.name, id);
     }
     Outcome {
         ok: true,
@@ -1163,6 +1158,25 @@ pub async fn repair(state: &AppState, agent: &AgentConfig, id: &str) {
         files: Vec::new(),
     };
     pipeline.deliver(&delivery).await;
+}
+
+/// A « once » watcher whose agent told its person: done (review C2): paused on its page, never deleted, and no end
+/// left to come nor « Garder 3 mois de plus ? » (review 2, N1): it has done its work; a « Garder ? » waiting goes. The
+/// person may turn it back on: it then watches once more, until they stop it.
+pub fn once_told(config: &Config, agent: &str, id: &str) {
+    let gone = connectors::change(config, |store| {
+        let c = store.agents.get_mut(agent)?.iter_mut().find(|c| c.id == id)?;
+        c.enabled = false;
+        c.updated_at = crate::vault::now();
+        if let Some(w) = c.watch.as_mut() {
+            (w.until, w.default_end) = (None, false);
+        }
+        c.frame.keep_asked = false;
+        c.frame.fix.take_if(|f| f.variant == crate::task_frame::KEEP).map(|f| f.id)
+    });
+    if let Ok(Some(fix)) = gone {
+        crate::task_frame::withdraw(config, &fix);
+    }
 }
 
 /// « Réparer » of watcher `id` of `agent` could not run or said nothing (review C5): the card again (its failures as
