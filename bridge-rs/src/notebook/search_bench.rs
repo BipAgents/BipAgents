@@ -370,6 +370,7 @@ fn percentile(sorted: &[f64], p: f64) -> f64 {
 struct Tally {
     n: usize,
     hit1: usize,
+    hit2: usize,
     hit5: usize,
     with_category: usize,
     wrong_category: usize,
@@ -382,7 +383,7 @@ impl Tally {
         let mut ms = self.ms.clone();
         ms.sort_by(|a, b| a.partial_cmp(b).unwrap());
         let pct = |x: usize, n: usize| if n == 0 { Value::Null } else { json!((1000.0 * x as f64 / n as f64).round() / 10.0) };
-        json!({"n": self.n, "hit1": pct(self.hit1, self.n), "hit5": pct(self.hit5, self.n),
+        json!({"n": self.n, "hit1": pct(self.hit1, self.n), "hit2": pct(self.hit2, self.n), "hit5": pct(self.hit5, self.n),
                "wrong_category": pct(self.wrong_category, self.with_category), "no_result": pct(self.empty, self.n),
                "p50_ms": (percentile(&ms, 50.0) * 100.0).round() / 100.0, "p95_ms": (percentile(&ms, 95.0) * 100.0).round() / 100.0})
     }
@@ -483,10 +484,180 @@ fn at_scale(lang: &str, today: NaiveDate, queries: &[String], target: usize) -> 
             std::hint::black_box(super::categories::of_page_in(&ctx, Part::Main, &path, &page));
         }
     });
-    json!({"lines": total, "bytes": bytes, "queries": queries.len(),
+    // brick S3: the copy made once (as the first search after a change does), then each query as the route runs it:
+    // the Carnet's files looked at (no read), the copy kept, the search on it
+    let langs = vec![lang.to_string()];
+    let cold = median(&|| {
+        std::hint::black_box(super::index::rebuilt_for_bench(&config, &langs));
+    });
+    let mut route_ms: Vec<f64> = Vec::new();
+    let mut search_ms: Vec<f64> = Vec::new();
+    for q in queries {
+        let mut runs: Vec<(f64, f64)> = (0..3)
+            .map(|_| {
+                let t = Instant::now();
+                let f = super::index::finder(&config, &langs);
+                let t2 = Instant::now();
+                std::hint::black_box(f.search(q, today, None, None));
+                (t.elapsed().as_secs_f64() * 1000.0, t2.elapsed().as_secs_f64() * 1000.0)
+            })
+            .collect();
+        runs.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+        route_ms.push(runs[1].0);
+        search_ms.push(runs[1].1);
+    }
+    route_ms.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    search_ms.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    // one page written: the copy made again for that page only (each page's items kept, index.rs)
+    let (path, page) = super::all_pages(&config, Part::Main).into_iter().find(|(p, _)| p.starts_with("Archives/")).unwrap();
+    let mut changed = page.clone();
+    changed.body.push_str("\n- Une ligne de plus\n");
+    write_file(&root.join(&path), &changed.render()).unwrap();
+    let t = Instant::now();
+    std::hint::black_box(super::index::finder(&config, &langs));
+    let after_write = (t.elapsed().as_secs_f64() * 10000.0).round() / 10.0;
+    let finder = super::index::finder(&config, &langs);
+    let copy_bytes: usize = finder.items.iter().map(|e| serde_json::to_vec(&super::index::sent(e)).unwrap().len() + 1).sum();
+    let s3 = json!({"items": finder.items.len(), "copy_bytes": copy_bytes, "finder_bytes_estimate": finder.footprint(),
+                    "copy_made_ms": cold, "copy_after_one_write_ms": after_write, "route_p50_ms": (percentile(&route_ms, 50.0) * 10.0).round() / 10.0,
+                    "route_p95_ms": (percentile(&route_ms, 95.0) * 10.0).round() / 10.0,
+                    "search_p50_ms": (percentile(&search_ms, 50.0) * 100.0).round() / 100.0,
+                    "search_p95_ms": (percentile(&search_ms, 95.0) * 100.0).round() / 100.0});
+    json!({"lines": total, "bytes": bytes, "queries": queries.len(), "s3": s3,
            "p50_ms": (percentile(&ms, 50.0) * 10.0).round() / 10.0, "p95_ms": (percentile(&ms, 95.0) * 10.0).round() / 10.0,
            "pages": pages, "pages_read_ms": read, "pages_with_categories_ms_state_each_page": each,
            "pages_with_categories_ms_state_once": once})
+}
+
+/// The sommaire's search on a Carnet grown to `items` items of the copy (its limit: 20 000): the copy made, made again
+/// after one write, each query as the route runs it (S3 only: today's search takes seconds there).
+fn at_scale_s3(lang: &str, today: NaiveDate, queries: &[String], items: usize) -> Value {
+    let dir = tempfile::tempdir().unwrap();
+    let config = super::tests_config(dir.path());
+    write_demo(&config, lang, today);
+    let originals = super::all_pages(&config, Part::Main);
+    let per_copy = super::index::entries(&config, &[]).iter().filter(|e| e.kind == "page" || e.kind == "line").count();
+    let copies = items.div_ceil(per_copy.max(1));
+    let root = part_root(&config, Part::Main);
+    for i in 0..copies {
+        for (path, page) in &originals {
+            let name = path.rsplit('/').next().unwrap();
+            let mut copy = page.clone();
+            copy.title = format!("{} {i}", page.title);
+            copy.front.insert("id".into(), json!(super::new_page_id()));
+            // (a folder of digits only: « copie123 » would read as a reference, and its pages leave the copy)
+            write_file(&root.join(format!("Archives/{i}/{name}")), &copy.render()).unwrap();
+        }
+    }
+    let langs = vec![lang.to_string()];
+    let rss_before = rss_kb();
+    let t = Instant::now();
+    let finder = super::index::finder(&config, &langs);
+    let made = t.elapsed().as_secs_f64() * 1000.0;
+    // a phone in French and one in English: two engines on the same copy
+    let en = super::index::finder(&config, &[lang.to_string(), "en".to_string()]);
+    let rss_after = rss_kb();
+    drop(en);
+    let (path, page) = super::all_pages(&config, Part::Main).into_iter().find(|(p, _)| p.starts_with("Archives/")).unwrap();
+    let mut changed = page.clone();
+    changed.body.push_str("\n- Une ligne de plus\n");
+    write_file(&root.join(&path), &changed.render()).unwrap();
+    let t = Instant::now();
+    std::hint::black_box(super::index::finder(&config, &langs));
+    let after_write = t.elapsed().as_secs_f64() * 1000.0;
+    let mut route_ms: Vec<f64> = Vec::new();
+    let mut search_ms: Vec<f64> = Vec::new();
+    for q in queries {
+        let t = Instant::now();
+        let f = super::index::finder(&config, &langs);
+        let t2 = Instant::now();
+        std::hint::black_box(f.search(q, today, None, None));
+        route_ms.push(t.elapsed().as_secs_f64() * 1000.0);
+        search_ms.push(t2.elapsed().as_secs_f64() * 1000.0);
+    }
+    route_ms.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    search_ms.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let r = |x: f64| (x * 10.0).round() / 10.0;
+    let lines: usize = super::all_pages(&config, Part::Main).iter().map(|(_, p)| p.render().lines().count()).sum();
+    let (body, _) = super::index::answer(&config, &langs, None, None, "");
+    json!({"text_lines": lines, "items": finder.items.len(), "index_json_bytes": serde_json::to_vec(&body).unwrap().len(),
+           "rss_kb_before": rss_before, "rss_kb_after_copy_and_two_engines": rss_after,
+           "rss_mb_added": rss_after.zip(rss_before).map(|(a, b)| ((a as f64 - b as f64) / 102.4).round() / 10.0),
+           "index_gzip_bytes": gz(&serde_json::to_vec(&body).unwrap()), "finder_bytes_estimate": finder.footprint(),
+           "copy_made_ms": r(made), "copy_after_one_write_ms": r(after_write), "route_p50_ms": r(percentile(&route_ms, 50.0)),
+           "route_p95_ms": r(percentile(&route_ms, 95.0)), "search_p50_ms": r(percentile(&search_ms, 50.0)),
+           "search_p95_ms": r(percentile(&search_ms, 95.0))})
+}
+
+/// The process's resident memory (Linux, the build server: `/proc/self/status`), in KB.
+fn rss_kb() -> Option<u64> {
+    let status = std::fs::read_to_string("/proc/self/status").ok()?;
+    status.lines().find_map(|l| l.strip_prefix("VmRSS:")).and_then(|v| v.trim().trim_end_matches("kB").trim().parse().ok())
+}
+
+/// What an installed 1.0 app's search costs after a write, with 500 documents (review 1 of S3, R3): `documents()`
+/// alone, the copy made again (the documents listed, their pages read), and the search route's 1.0 work.
+fn with_documents(lang: &str, today: NaiveDate, documents: usize) -> Value {
+    let dir = tempfile::tempdir().unwrap();
+    let mut config = super::tests_config(dir.path());
+    let uploads = dir.path().join("uploads");
+    config.agents.insert(
+        "daily".into(),
+        crate::config::AgentConfig { name: "daily".into(), upload_dir_host: Some(uploads.to_string_lossy().into_owned()), ..Default::default() },
+    );
+    let cat = write_demo(&config, lang, today);
+    let originals = super::all_pages(&config, Part::Main);
+    let root = part_root(&config, Part::Main);
+    // the demo copied to about 1 000 pages
+    for i in 0..48 {
+        for (path, page) in &originals {
+            let name = path.rsplit('/').next().unwrap();
+            let mut copy = page.clone();
+            copy.title = format!("{} {i}", page.title);
+            copy.front.insert("id".into(), json!(super::new_page_id()));
+            write_file(&root.join(format!("Archives/copie{i}/{name}")), &copy.render()).unwrap();
+        }
+    }
+    let month = uploads.join("2026-11");
+    std::fs::create_dir_all(&month).unwrap();
+    for i in 0..documents {
+        std::fs::write(month.join(format!("{:012x}-Facture du mois {i}.txt", i)), format!("Facture {i}\nMerci")).unwrap();
+    }
+    let median = |work: &dyn Fn()| -> f64 {
+        let mut runs: Vec<f64> = (0..3)
+            .map(|_| {
+                let t = Instant::now();
+                work();
+                t.elapsed().as_secs_f64() * 1000.0
+            })
+            .collect();
+        runs.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        (runs[1] * 10.0).round() / 10.0
+    };
+    let langs = vec![lang.to_string()];
+    let listed = median(&|| {
+        std::hint::black_box(super::documents(&config, Part::Main));
+    });
+    let made = median(&|| {
+        std::hint::black_box(super::index::rebuilt_for_bench(&config, &langs));
+    });
+    // what `documents()` did before (review 1 of S3, R3): each page's text folded again for each document
+    let pages_read = super::all_pages(&config, Part::Main);
+    let before = median(&|| {
+        for _ in 0..documents {
+            for (_, p) in &pages_read {
+                std::hint::black_box(fold(&p.body));
+            }
+        }
+    });
+    let today_search = median(&|| {
+        std::hint::black_box(personal(&config, &cat, Part::Main, "devis cuisine"));
+    });
+    let pages = super::all_pages(&config, Part::Main).len();
+    json!({"pages": pages, "documents": documents, "documents_listed_ms": listed, "copy_made_again_ms": made,
+           "before_each_page_folded_for_each_document_ms": before,
+           "a_1_0_search_ms": today_search,
+           "note": "a 1.0 app's search makes no copy (review 1 of S3, R3): its cost is today's search only"})
 }
 
 // -- the categories (brick S1) -----------------------------------------------------------------------------------------
@@ -640,6 +811,9 @@ fn report() -> Value {
     let mut sizes_by: BTreeMap<String, Value> = BTreeMap::new();
     let (mut skipped, mut refused_ok, mut refused_n, mut health_leaks, mut health_lines) = (0, 0, 0, 0, 0);
     let mut warnings: Vec<String> = Vec::new();
+    let (mut s3_all, mut s3_by) = (Tally::default(), BTreeMap::<String, Tally>::new());
+    let mut s3_misses: Vec<Value> = Vec::new();
+    let (mut s3_refused_ok, mut s3_refused_n, mut s3_health_leaks) = (0, 0, 0);
     for lang in LANGS {
         let dir = tempfile::tempdir().unwrap();
         let config = super::tests_config(dir.path());
@@ -669,7 +843,58 @@ fn report() -> Value {
             v["family_bytes"] = json!(serde_json::to_vec(&fam).unwrap().len());
             v
         });
+        let som = sommaire(&config, &cat, lang, today, &fam);
         for case in b["cases"].as_array().unwrap().iter().filter(|c| c["lang"] == lang) {
+            // brick S3: the same case on the sommaire's search
+            let mut s3_times: Vec<f64> = Vec::new();
+            let mut s3_shown = Vec::new();
+            for _ in 0..RUNS {
+                let t = Instant::now();
+                s3_shown = sommaire_shows(&som, case, today);
+                s3_times.push(t.elapsed().as_secs_f64() * 1000.0);
+            }
+            s3_times.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            if case["health"].as_bool() != Some(true) && s3_shown.iter().any(|r| r.covers.iter().any(|c| c.contains("health"))) {
+                s3_health_leaks += 1;
+            }
+            if let Some(never) = case["never"].as_array() {
+                s3_refused_n += 1;
+                if !s3_shown.iter().any(|r| never.iter().any(|n| r.covers.contains(&s(n)))) {
+                    s3_refused_ok += 1;
+                }
+            } else {
+                let want = expected(case, &items, today);
+                if !want.is_empty() {
+                    let rank = s3_shown.iter().position(|r| r.covers.iter().any(|c| want.contains(c)));
+                    let category = case["category"].as_str();
+                    let top_cats: Vec<String> = s3_shown
+                        .first()
+                        .and_then(|r| items.get(&r.primary))
+                        .map(|i| i["categories"].as_array().unwrap().iter().map(s).collect())
+                        .unwrap_or_else(|| if s3_shown.is_empty() { vec![] } else { vec!["other".into()] });
+                    let wrong = category.is_some() && !s3_shown.is_empty() && !top_cats.iter().any(|c| Some(c.as_str()) == category);
+                    let carnet = if case["carnet"] == "family" { "family" } else { "personal" };
+                    let keys = [format!("lang:{lang}"), format!("type:{}", s(&case["type"])), format!("carnet:{carnet}"), format!("{carnet}:{lang}")];
+                    let count = |t: &mut Tally| {
+                        t.n += 1;
+                        t.hit1 += usize::from(rank == Some(0));
+                        t.hit2 += usize::from(rank.is_some_and(|r| r < 2));
+                        t.hit5 += usize::from(rank.is_some_and(|r| r < 5));
+                        t.with_category += usize::from(category.is_some() && !s3_shown.is_empty());
+                        t.wrong_category += usize::from(wrong);
+                        t.empty += usize::from(s3_shown.is_empty());
+                        t.ms.push(s3_times[RUNS / 2]);
+                    };
+                    count(&mut s3_all);
+                    for k in keys {
+                        count(s3_by.entry(k).or_default());
+                    }
+                    if rank != Some(0) {
+                        s3_misses.push(json!({"id": case["id"], "type": case["type"], "q": s(&case["q"]), "want": want, "rank": rank,
+                                              "results": s3_shown.len(), "top": s3_shown.iter().take(3).map(|r| r.primary.clone()).collect::<Vec<_>>()}));
+                    }
+                }
+            }
             let q = s(&case["q"]);
             let is_family = case["carnet"] == "family";
             let health = case["health"].as_bool() == Some(true);
@@ -732,6 +957,7 @@ fn report() -> Value {
             let count = |t: &mut Tally| {
                 t.n += 1;
                 t.hit1 += usize::from(rank == Some(0));
+                t.hit2 += usize::from(rank.is_some_and(|r| r < 2));
                 t.hit5 += usize::from(rank.is_some_and(|r| r < 5));
                 t.with_category += usize::from(category.is_some() && !shown.is_empty());
                 t.wrong_category += usize::from(wrong);
@@ -777,9 +1003,203 @@ fn report() -> Value {
         "health_looking_lines_in_main_results": health_lines,
         "sizes": sizes_by,
         "scale": [at_scale("fr", today, &fr_queries, 5_000), at_scale("fr", today, &fr_queries, 20_000)],
+        "scale_s3_20000_items": at_scale_s3("fr", today, &fr_queries, 20_000),
+        "documents_500": with_documents("fr", today, 500),
+        "s3": {
+            "note": "brick S3: the same cases on the sommaire's search (index.rs + finder.rs: the copy built by the bridge, the phones' rule); a line is its own result (it no longer counts for its page); `drive` cases: the block of the online files the person allowed (their service's search simulated by the start of a word); time: the search on the copy in memory",
+            "all": s3_all.view(),
+            "by": s3_by.iter().map(|(k, t)| (k.clone(), t.view())).collect::<serde_json::Map<String, Value>>(),
+            "drives_refused_kept_out": format!("{s3_refused_ok}/{s3_refused_n}"),
+            "health_leaks": s3_health_leaks,
+            "misses": s3_misses,
+        },
         "warnings": warnings,
         "misses": misses,
     })
+}
+
+// -- brick S3: the sommaire's search (index.rs, finder.rs) -------------------------------------------------------------
+
+/// The demo's documents as `documents()` lists them (the shared part's, with their kind and day), by bench id.
+fn listed_documents(lang: &str, today: NaiveDate) -> Vec<(String, Value)> {
+    let b = bench();
+    let demo = if lang == "nl" { b["fixtures"]["nl"]["personal"].clone() } else { read("App/Resources/Demo/notebook-demo.json")[lang].clone() };
+    let keys: Vec<String> = b["documents"].as_array().unwrap().iter().map(s).collect();
+    let mut out = Vec::new();
+    for (i, d) in demo["documents"].as_array().into_iter().flatten().enumerate() {
+        let subjects: Vec<Value> = d["subjects"].as_array().into_iter().flatten().map(|p| json!({"path": p})).collect();
+        let linked = d["linked"].as_str().map(|p| json!({"path": p})).unwrap_or(Value::Null);
+        let page = d["page"].as_str().map(|p| json!(p)).unwrap_or(Value::Null);
+        let file = if d["type"] == "page" { format!("{}.html", s(&d["page"])) } else { s(&d["name"]) };
+        let day = today - Duration::days(d["days_ago"].as_i64().unwrap_or(0));
+        let view = json!({"agent": d["agent"], "agent_name": d["agent"], "file": file, "name": d["name"], "type": d["type"],
+                          "page": page, "subjects": subjects, "linked": linked, "date": format!("{day}T09:00:00+00:00")});
+        out.push((format!("doc:{}", keys.get(i).cloned().unwrap_or_default()), view));
+    }
+    out
+}
+
+/// The family Carnet's copy as the phone keeps it (the fake bridge's way, until S6), its categories the bench's.
+fn family_entries(data: &Value, today: NaiveDate) -> Vec<super::finder::Entry> {
+    use super::finder::Entry;
+    let b = bench();
+    let reference = b["items"].as_object().unwrap();
+    let cats = |id: &str| -> Vec<String> {
+        let c: Vec<String> = reference
+            .get(id)
+            .and_then(|r| r["categories"].as_array())
+            .map(|c| c.iter().map(s).filter(|c| c != "dates").collect())
+            .unwrap_or_default();
+        if c.is_empty() { vec!["other".into()] } else { c }
+    };
+    let mut out = Vec::new();
+    for list in data["lists"].as_array().into_iter().flatten() {
+        for it in list["items"].as_array().into_iter().flatten() {
+            let id = format!("fam:list:{}/{}", s(&list["id"]), s(&it["id"]));
+            let day = it["due_in"].as_i64().map(|d| today + Duration::days(d));
+            let (date, yearly) = match (day, it["born"].is_number()) {
+                (Some(d), true) => (None, Some(d.format("%m-%d").to_string())),
+                (Some(d), false) => (Some(d.to_string()), None),
+                _ => (None, None),
+            };
+            out.push(Entry { categories: cats(&id), id, kind: "list_item".into(), title: s(&list["title"]), line: s(&it["text"]),
+                             date, yearly, fold: fold(&s(&it["text"])), done: it["done"].as_bool().unwrap_or(false),
+                             ..Default::default() });
+        }
+    }
+    for p in data["pages"].as_array().into_iter().flatten() {
+        let id = format!("fam:page:{}", s(&p["id"]));
+        out.push(Entry { categories: cats(&id), id, kind: "page".into(), title: s(&p["title"]),
+                         line: crate::tools_knowledge::head(&s(&p["text"]), 240).to_string(),
+                         fold: fold(&format!("{} {}", s(&p["title"]), s(&p["text"]))), ..Default::default() });
+    }
+    out
+}
+
+/// The sommaire's search on a language's demo: the copy (and Santé's, the family's) ready, each index id → its bench id.
+struct Sommaire {
+    main: super::finder::Finder,
+    health: super::finder::Finder,
+    family: super::finder::Finder,
+    ids: HashMap<String, String>,
+    drives: Vec<(String, String, bool)>,
+}
+
+fn sommaire(config: &Config, cat: &Catalogue, lang: &str, today: NaiveDate, fam: &Value) -> Sommaire {
+    use super::finder::Finder;
+    let docs = listed_documents(lang, today);
+    let views: Vec<Value> = docs.iter().map(|(_, v)| v.clone()).collect();
+    let langs = vec![lang.to_string()];
+    let tables = super::index::tables(&langs, today.year());
+    let main = Finder::new(super::index::entries(config, &views), &tables);
+    let health = super::index::health_finder(config, &langs);
+    let family = Finder::new(family_entries(fam, today), &tables);
+    let mut ids: HashMap<String, String> = HashMap::new();
+    for f in [&main, &health] {
+        for e in f.items.iter() {
+            let bench_id = match e.kind.as_str() {
+                "page" => e.path.as_ref().and_then(|p| cat.pages.get(p)).cloned(),
+                "line" => {
+                    let t = fold(&e.line);
+                    cat.facts.iter().find(|(_, p, x)| Some(p) == e.path.as_ref() && *x == t).map(|(id, _, _)| id.clone())
+                }
+                "task" => {
+                    let t = fold(&e.title);
+                    cat.tasks.iter().find(|(_, x)| *x == t).map(|(id, _)| id.clone())
+                }
+                "record" => cat.records.iter().find(|(_, _, k)| !k.is_empty() && e.fold.contains(k.as_str())).map(|(id, _, _)| id.clone()),
+                "document" => docs.iter().find(|(_, v)| super::categories::document_key(&s(&v["agent"]), &s(&v["file"])) == e.id).map(|(id, _)| id.clone()),
+                _ => None,
+            };
+            if let Some(b) = bench_id {
+                ids.insert(e.id.clone(), b);
+            }
+        }
+    }
+    let drives = bench()["fixtures"]["drives"][lang]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|d| (s(&d["id"]), fold(&format!("{} {}", s(&d["name"]), s(&d["text"]))), d["allowed"].as_bool() == Some(true)))
+        .collect();
+    Sommaire { main, health, family, ids, drives }
+}
+
+/// A case as the new search shows it: the copy's results in order (Santé's when open, the family's for its Carnet);
+/// a `drive` case: the block « Dans tes fichiers en ligne » (the drives the person allowed, found by their words: the
+/// services' own search, simulated here by the start of a word), which arrives on its own.
+fn sommaire_shows(som: &Sommaire, case: &Value, today: NaiveDate) -> Vec<Shown> {
+    let q = s(&case["q"]);
+    if matches!(case["type"].as_str(), Some("drive" | "drive_refused")) {
+        let query = som.main.query(&q, today);
+        let words: Vec<&String> = query.terms.iter().flatten().flatten().filter(|w| w.len() >= 3).collect();
+        return som
+            .drives
+            .iter()
+            .filter(|(_, text, allowed)| *allowed && text.split(' ').any(|t| words.iter().any(|w| t.starts_with(w.as_str()))))
+            .map(|(id, _, _)| Shown { primary: id.clone(), covers: vec![id.clone()], health_line: false })
+            .collect();
+    }
+    let finder = if case["carnet"] == "family" {
+        &som.family
+    } else if case["health"].as_bool() == Some(true) {
+        &som.health
+    } else {
+        &som.main
+    };
+    finder
+        .search(&q, today, None, None)
+        .order
+        .iter()
+        .take(50)
+        .map(|at| {
+            let e = &finder.items[*at];
+            let id = som.ids.get(&e.id).cloned().unwrap_or_else(|| e.id.clone());
+            Shown { primary: id.clone(), covers: vec![id], health_line: super::lexicon::is_health(&e.line) }
+        })
+        .collect()
+}
+
+/// The plan's bar for S3 (« banc ≥ 85 % (deux meilleurs justes) »), in `cargo test`: the right result among the two
+/// first for 85 % of the bench's cases or more (80 % in each language), Santé never out of its lock, the drives the
+/// person did not allow never searched.
+#[test]
+fn the_sommaire_search_passes_the_bench() {
+    let b = bench();
+    let items = b["items"].as_object().unwrap().clone();
+    let today = chrono::Local::now().date_naive();
+    let (mut n, mut two, mut leaks, mut refused) = (0usize, 0usize, 0usize, 0usize);
+    let mut by_lang: Vec<String> = Vec::new();
+    for lang in LANGS {
+        let dir = tempfile::tempdir().unwrap();
+        let config = super::tests_config(dir.path());
+        let cat = write_demo(&config, lang, today);
+        let fam = if lang == "nl" { b["fixtures"]["nl"]["family"].clone() } else { read("App/Resources/Demo/family-notebook-demo.json")[lang].clone() };
+        let som = sommaire(&config, &cat, lang, today, &fam);
+        let (mut ln, mut ltwo) = (0usize, 0usize);
+        for case in b["cases"].as_array().unwrap().iter().filter(|c| c["lang"] == lang) {
+            let shown = sommaire_shows(&som, case, today);
+            if case["health"].as_bool() != Some(true) && shown.iter().any(|r| r.covers.iter().any(|c| c.contains("health"))) {
+                leaks += 1;
+            }
+            if let Some(never) = case["never"].as_array() {
+                refused += usize::from(shown.iter().any(|r| never.iter().any(|x| r.covers.contains(&s(x)))));
+                continue;
+            }
+            let want = expected(case, &items, today);
+            if want.is_empty() {
+                continue;
+            }
+            ln += 1;
+            ltwo += usize::from(shown.iter().take(2).any(|r| r.covers.iter().any(|c| want.contains(c))));
+        }
+        n += ln;
+        two += ltwo;
+        assert!(ltwo as f64 >= 0.8 * ln as f64, "{lang}: {ltwo}/{ln} among the two first");
+        by_lang.push(format!("{lang} {ltwo}/{ln}"));
+    }
+    assert!(two as f64 >= 0.85 * n as f64, "{two}/{n} among the two first ({by_lang:?})");
+    assert_eq!((leaks, refused), (0, 0), "Santé out of its lock, a drive not allowed searched");
 }
 
 #[test]
@@ -829,4 +1249,113 @@ fn search_bench_report() {
     let mut short = report.clone();
     short.as_object_mut().unwrap().remove("misses");
     println!("SEARCH-BENCH {}", serde_json::to_string_pretty(&short).unwrap());
+}
+
+/// The blind set (briefs/carnet-blind-set-1122.json, written without seeing the word table: 60 pages a language),
+/// measured once: the bridge's categories for each personal page (a new subject page: its title and first line),
+/// and the search, by queries made mechanically from each title (the title; its longest word with two letters side by
+/// side swapped; its longest word's first five letters), against a Carnet of the 60 pages. Never tuned on.
+///
+///     BIPAGENTS_BLIND_SET=<file> cargo test --lib blind_set_report -- --ignored --nocapture
+#[test]
+#[ignore = "the blind set's report (BIPAGENTS_BLIND_SET=<file>)"]
+fn blind_set_report() {
+    let Ok(file) = std::env::var("BIPAGENTS_BLIND_SET") else { return };
+    let set: Value = serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+    let today = NaiveDate::from_ymd_opt(2026, 11, 22).unwrap();
+    let mut out = serde_json::Map::new();
+    let pct = |x: usize, n: usize| if n == 0 { Value::Null } else { json!((1000.0 * x as f64 / n as f64).round() / 10.0) };
+    let (mut tn, mut tfirst, mut tright, mut texact) = (0, 0, 0, 0);
+    let mut search_all: BTreeMap<&str, (usize, usize, usize)> = BTreeMap::new();
+    for lang in LANGS {
+        let dir = tempfile::tempdir().unwrap();
+        let config = super::tests_config(dir.path());
+        update_state(&config, |st| {
+            st.insert("language".into(), json!(if lang == "nl" { "en" } else { lang }));
+        })
+        .unwrap();
+        let brief = super::words(&super::language(&config)).brief;
+        let (mut n, mut first, mut right, mut exact, mut other_wrong, mut real) = (0, 0, 0, 0, 0, 0);
+        let (mut trap_n, mut trap_right) = (0, 0);
+        let mut misses: Vec<Value> = Vec::new();
+        let pages = set[lang].as_array().unwrap();
+        let mut written: Vec<(String, String)> = Vec::new();
+        for (i, p) in pages.iter().enumerate() {
+            let title = s(&p["title"]);
+            let mut page = Page::new("subject", &title);
+            page.front.insert("id".into(), json!(format!("p{i:010x}")));
+            if let Some(line) = p["first_line"].as_str() {
+                page.body = format!("## {brief}\n{line}\n");
+            }
+            let path = format!("Sujets/{}.md", super::file_name(&title));
+            write_file(&part_root(&config, Part::Main).join(&path), &page.render()).unwrap();
+            written.push((format!("page:p{i:010x}"), title.clone()));
+            if p["carnet"] != "personal" {
+                continue;
+            }
+            let expected: Vec<String> = p["expected"].as_array().unwrap().iter().map(s).collect();
+            let (got, _) = super::categories::decide(&config, Part::Main, &path, &page, None);
+            n += 1;
+            first += usize::from(got.first() == expected.first());
+            right += usize::from(got.contains(&expected[0]));
+            let mut a = got.clone();
+            a.sort();
+            let mut b = expected.clone();
+            b.sort();
+            exact += usize::from(a == b);
+            if expected[0] != "other" {
+                real += 1;
+                other_wrong += usize::from(got == ["other"]);
+            }
+            if p["tricky"].as_bool() == Some(true) {
+                trap_n += 1;
+                trap_right += usize::from(got.contains(&expected[0]));
+            }
+            if !got.contains(&expected[0]) {
+                misses.push(json!({"title": title, "expected": expected, "got": got, "tricky": p["tricky"]}));
+            }
+        }
+        tn += n;
+        tfirst += first;
+        tright += right;
+        texact += exact;
+        // the search: each title, as typed in three ways
+        let langs = vec![lang.to_string()];
+        let finder = super::finder::Finder::new(super::index::entries(&config, &[]), &super::index::tables(&langs, today.year()));
+        let mut search = serde_json::Map::new();
+        for mode in ["title", "swap", "start"] {
+            let (mut sn, mut s1, mut s2) = (0, 0, 0);
+            for (id, title) in &written {
+                let longest = fold(title).split(' ').max_by_key(|w| w.len()).unwrap_or_default().to_string();
+                let q = match mode {
+                    "title" => title.clone(),
+                    "swap" if longest.len() >= 5 => {
+                        let mut b: Vec<char> = longest.chars().collect();
+                        let m = b.len() / 2;
+                        b.swap(m - 1, m);
+                        fold(title).replacen(&longest, &b.iter().collect::<String>(), 1)
+                    }
+                    "start" if longest.len() >= 6 => fold(title).replacen(&longest, &longest[..5], 1),
+                    _ => continue,
+                };
+                let found: Vec<&str> = finder.search(&q, today, None, None).order.iter().map(|at| finder.items[*at].id.as_str()).collect();
+                sn += 1;
+                s1 += usize::from(found.first() == Some(&id.as_str()));
+                s2 += usize::from(found.iter().take(2).any(|f| f == id));
+            }
+            let e = search_all.entry(mode).or_default();
+            e.0 += sn;
+            e.1 += s1;
+            e.2 += s2;
+            search.insert(mode.into(), json!({"n": sn, "hit1": pct(s1, sn), "hit2": pct(s2, sn)}));
+        }
+        out.insert(lang.into(), json!({"categories": {"n": n, "first_right": pct(first, n), "expected_among_the_two": pct(right, n),
+                                        "exact": pct(exact, n), "autres_on_a_real_category": pct(other_wrong, real),
+                                        "traps": format!("{trap_right}/{trap_n}"), "misses": misses},
+                                       "search": search}));
+    }
+    out.insert("all".into(), json!({"categories": {"n": tn, "first_right": pct(tfirst, tn), "expected_among_the_two": pct(tright, tn),
+                                                   "exact": pct(texact, tn)},
+                                    "search": search_all.iter().map(|(k, (n, a, b))| (k.to_string(), json!({"n": n, "hit1": pct(*a, *n), "hit2": pct(*b, *n)}))).collect::<serde_json::Map<String, Value>>()}));
+    println!("BLIND-SET {}", serde_json::to_string_pretty(&Value::Object(out)).unwrap());
 }

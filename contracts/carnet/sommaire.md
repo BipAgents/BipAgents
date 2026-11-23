@@ -135,13 +135,14 @@ in `routes[].errors`; S1's codes have no text yet: the apps show their own until
 | Brick | Route | What |
 |---|---|---|
 | S1 | `POST /v1/notebook/categorize` | « Ranger ailleurs »: `{item}` (an Item's id) · `{path, private?}` · `{record: {type, id}}` · `{document: {agent, file}}` · `{task}` · `{line: {path, text}}`, with `categories` (1–2 of `person_may_give`) → `Categorized` (`before`, `learnt`, `undo`; S2: `toast`, `undo_title`) |
-| S1 | `POST /v1/notebook/categorize/undo` | `{undo}` → `Undone`; 404 `undo_gone` once undone, after a newer correction of the same target, or after 20 newer corrections (today's stay, 100 at most) |
+| S1 | `POST /v1/notebook/categorize/undo` | `{undo}` → `Undone`; 404 `undo_gone` once undone, after a newer correction of the same target, after 20 newer corrections (today's stay, 100 at most), or when the page is gone (the rule it taught and the undo are forgotten all the same) |
 | S2 | `GET /v1/notebook/categorize/today` | today's re-filings, each still undoable (`RefiledToday`) |
 | S2 | `GET /v1/notebook` `sorted` | the card « Ton Carnet est rangé par catégories » (`SortedCard`), or null |
 | S2 | `POST /v1/notebook/sorted` | `{action: ok\|see}` → `{card: null}`; the card is not shown again |
 | S1 | MCP `notebook_write.category` | 1–2 of `agent_may_give`, only when the agent is sure |
-| S3 | `GET /v1/notebook/index?since=&epoch=` | the phone's search copy (`Index`): ETag `"<epoch>-v<version>"`, 304 when unchanged; `since`/`epoch` = what the phone has → only `items` changed and `removed` ids (`full: false`), the tables whole; another epoch, a `since` above the version or unknown → everything (`full: true`). Never Santé, never ID numbers or references, mails' archives or online files' content; 20 000 lines / 8 MB of JSON as sent at most, default keys left out (`truncated`; out first: archived lines oldest first, archived pages, then the other lines oldest first). Dates and feasts as rules: the copy never changes with the day (`sommaire.json` `dates`, `feasts`, `index`) |
-| S3 | `GET /v1/notebook/search` | today's answer plus `groups` (by category, in the order of their best result; `count`, the two best `top`), `counts` (`all` and per category: the chips), `online` (connected drives the person allowed, online only) |
+| S3 | `GET /v1/notebook/index?since=&epoch=&lang=` | the phone's search copy (`Index`): ETag `"<epoch>-v<version>-<languages of its tables>"` (`"e1a2b3c4-v42-fr.en"`: opaque to the phones), 304 when unchanged (`If-None-Match`, the answer not even made), gzip when accepted, 400 `since_invalid`; `since`/`epoch` = what the phone has → only `items` changed and `removed` ids (`full: false`), the tables whole; another epoch, a `since` above the version or unknown → everything (`full: true`). Never Santé, never ID numbers or references, mails' archives or online files' content; 20 000 lines / 8 MB of JSON as sent at most, default keys left out (`truncated`; out first: archived lines oldest first, archived pages, then the other lines oldest first). Dates and feasts as rules: the copy never changes with the day (`sommaire.json` `dates`, `feasts`, `index`) |
+| S3 | `GET /v1/notebook/search?q=&lang=&category=&space=&online=&groups=&sommaire=` | `groups=1`: today's answer plus `groups` (by category, in the order of their best result; `count`, the two best `top`), `counts` (`all` and per category: the chips), `online` (`online=1` only: the connected drives the person allowed, online only; else null); `sommaire=1`: only `groups`, `counts`, `online` (today's keys not made); neither: today's answer only (an installed 1.0 app's search never makes the copy); `category`, `space` narrow it; `private=1`: Santé's, behind the lock, read and kept nowhere |
+| S3 | `PUT /v1/drives/{service}/carnet {carnet}` | « Chercher aussi ici depuis le Carnet » (Alex's decision 4: off by default, a switch per connected drive): the drive as listed, `carnet` added (`GET /v1/drives` lists it on each drive) |
 | S4 | `GET /v1/notebook/summary?space=` | the sommaire ready to show (`Summary`): selector, kept searches with their count, total, categories with count and grey hint, the moment's card, Santé locked |
 | S4 | `GET /v1/notebook/category/{id}?space=&filter=` | a category's page (`CategoryPage`): sub-filters with counts, « Cherché ici » (3), the most recent; `category/health?private=1`: Santé's, behind the lock, never in the index |
 | S4 | `GET/POST/DELETE /v1/notebook/kept` | kept searches (6 a space), their count from the bridge |
@@ -149,8 +150,8 @@ in `routes[].errors`; S1's codes have no text yet: the apps show their own until
 | S5 | `PATCH /v1/notebook/settings {separate_spaces}` | « Séparer Perso, Pro et Famille » (off by default); `?space=all|perso|pro` on summary/category/search/index; `POST /v1/notebook/space {item | path, space}` « Ranger dans… Perso / Pro » (+ `/space/undo`) |
 | S6 | `/v1/family-agent/notebook/{summary,index,kept,categorize,category/{id}}` | the family Carnet's, relayed by the members' bridges as today (`FamilySummary`, `FamilyIndex`, `FamilyCategorized`, `FamilyCategoryPage`) |
 
-**Counts.** A category's `count` counts its items (pages, lines, tasks, records, documents); `total` all of them.
-The fake bridge counts so; S4 may count otherwise (pages apart), the contract's shape stays.
+**Counts.** A category's `count` counts its items (pages, lines, tasks, records, documents); `total` all of them. A
+note with two categories counts in each of them, `total` and `counts.all` once (change 5 of 22/11; §1).
 
 **Items.** Everything the phone lists (index entries, search groups, a category's recent ones) is an `Item`: `id`
 (stable, never a text, a path or a file's name: `page:<page key>` — its `id`, else `f` + a hash of its path —,
@@ -162,10 +163,28 @@ aliases apply to the line), `open` (what a tap opens). Index entries add `fold` 
 on a page, its `aliases`. `categorize` takes an Item's `id` (`{item}`).
 
 **The phone's search** (A1, D1) follows the rule written once at the bridge (S3: `search-parity.json`, played by the
-three): fold, prefix from 3 letters, one typo from 5 letters and two from 8 (never on names under 4), the
-neighbours' table (`neighbours`), the date phrases (`dates`: an interval computed on the phone, moving feasts as
-absolute dates from the bridge), stop words dropped unless alone; ranking as in the plan §3.3. The phone never keeps
+three: the bridge's `notebook::finder`, HermesKit's and Android's `CarnetSearch`): fold, prefix from 3 letters, one
+typo from 5 letters and two from 8 (never towards a word under 4), the neighbours' table (`neighbours`), the date
+phrases (`dates`: an interval computed on the phone; feasts as rules, `dates.feasts` a fixed day or days from Easter
+with `dates.easter`, never days), stop words dropped unless alone; ranking as in the plan §3.3 and the file's `rule`.
+The bridge's own search (`/search`'s `groups` and `counts`) is the same rule on the same copy. The phone never keeps
 Santé (an item whose `part` is not `main`, or filed in `health`, is left out when read), whatever a bridge sends.
+
+**The copy's tables** (S3, `notebook/search_words.rs`): about 120 groups of neighbours a language (fr, en, de, es,
+nl; each word of a group has the others), date phrases (about 35 a language), the feasts' rules and Easter for this
+year and the nine after, and each language's stop words (its words of the lexicon's, and those of a spoken question).
+`?lang=` on
+`/index` adds the app's language's tables to the Carnet's (stop words included).
+
+**Never in the copy** (S3, review 1 and 2): the private part (Santé), a line holding an ID number or a reference
+(`holds_reference`), an archived mail's link; a page whose **path** holds a reference (its name or a folder's: the page
+and its lines are left out, the phone opening a page by its path), a document whose **file's name** holds one, an
+agent's web page whose title does (a real file's extension is no part of a reference: « Budget 2026.xlsx » stays,
+« 12345.AB1 » does not); a reference in a title, an « En bref », a section's title (`source`), a task's title or a
+document's name is masked (« … »). A document's text: its lines holding a number or a reference left out on the raw
+line, then no word of digits but a year (19xx, 20xx) or a number of one or two digits. Two files of the same name an
+agent received: one item, the newest. The fake bridge keeps its draft tables: the parity file's
+cases are written on them.
 
 ## 4. What the 1.0 apps see
 
@@ -173,7 +192,7 @@ Exactly today's answers, the keys of `additive` added. Concretely, for an app of
 records and documents gain `categories` (a list of ids) and sometimes `categories_by`/`space`; the page's
 `frontmatter` gains the same keys; the home gains `sommaire`, the list of what this bridge's Carnet can do (`sommaire.json` `Capability`: S1
 `categories`, `categorize`; S2 `sorted` (the home's `sorted` card and its answer, today's re-filings, the toast);
-then `index`, `summary`, `category`, `kept`, `searched`, `spaces`, `family` as they
+S3 `index` (the phone's search copy); then `summary`, `category`, `kept`, `searched`, `spaces`, `family` as they
 come): a new app uses a route only when it is listed, else the home of today. An old bridge has no `sommaire`.
 
 ## 5. Fake bridge (for the iPhone and Android agents)
