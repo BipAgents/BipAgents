@@ -66,6 +66,9 @@ mod search_bench;
 pub mod search_words;
 #[cfg(test)]
 mod sommaire_contract;
+pub mod summary;
+#[cfg(test)]
+mod summary_tests;
 pub mod tidy;
 pub mod tools;
 pub mod trip;

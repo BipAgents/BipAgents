@@ -485,6 +485,11 @@ pub fn card(config: &Config, shown: &str, pages: &[(String, Page)]) -> Option<Va
     Some(json!({"title": title, "text": text, "other": n, "see": see, "ok": ok, "open": {"category": "other"}}))
 }
 
+/// Whether the card waits (made, not answered): the sommaire reads the pages for its count only then (summary.rs).
+pub fn card_waits(config: &Config) -> bool {
+    super::read_state(config).get(KEY_CARD).is_some_and(|c| !c.get("done").and_then(Value::as_bool).unwrap_or(false))
+}
+
 /// The card answered (`ok`, or `see`: « Voir » opened « Autres »): not shown again.
 pub fn card_done(config: &Config, action: &str) -> anyhow::Result<()> {
     let _guard = super::lock();

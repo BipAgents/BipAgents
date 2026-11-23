@@ -280,7 +280,7 @@ def test_the_bridge_files_pages_records_tasks_and_documents_by_their_words(bridg
     bridge = bridges.new().start()
     write_carnet(bridge)
     # what this bridge's Carnet can do of the sommaire (contracts/carnet/sommaire.json `Capability`; S2 `sorted`, S3 `index`)
-    assert bridge.get("/v1/notebook", headers=AUTH).json()["sommaire"] == ["categories", "categorize", "sorted", "index"]
+    assert bridge.get("/v1/notebook", headers=AUTH).json()["sommaire"] == ["categories", "categorize", "sorted", "index", "summary", "category", "kept", "searched"]
     # the pages, by their kind and their words, written in their frontmatter (the app's new page too)
     pages = pages_by_title(bridge)
     want = {"Marc Durand": ["people"], "Claire Durand": ["people"], "Rénovation cuisine": ["home"],
@@ -612,7 +612,7 @@ def test_the_index_is_the_phones_copy_without_sante_numbers_or_mails(bridges):
     write_carnet(bridge)
     write_by_hand(bridge)
     # the capability is listed only now that the route answers
-    assert bridge.get("/v1/notebook", headers=AUTH).json()["sommaire"] == ["categories", "categorize", "sorted", "index"]
+    assert bridge.get("/v1/notebook", headers=AUTH).json()["sommaire"] == ["categories", "categorize", "sorted", "index", "summary", "category", "kept", "searched"]
     got = index_of(bridge, lang="fr")
     etag = got.headers["etag"]
     copy = got.json()
