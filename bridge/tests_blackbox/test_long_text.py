@@ -12,6 +12,7 @@ nothing sent): they now go whole as a text file joined to the message, the agent
 Synthetic articles only, never anyone's real text."""
 import random
 import threading
+import time
 
 import pytest
 
@@ -22,6 +23,7 @@ from test_threads_send import agent, page, send, setup, stored
 WORDS = ("le vélo électrique change la façon dont on traverse une ville été comme hiver même sous la pluie les pistes "
          "cyclables à Lyon Nantes ou Strasbourg ont doublé depuis cinq ans d'après l'enquête publiée cet automne où l'on "
          "apprend que près d'un trajet sur dix se fait désormais à deux roues").split()
+NOW = "<!--bip:now lundi 23 novembre, 19:00-->"
 LINKS = ["https://exemple.org/velo/enquete-2026?source=blog&page=2", "[le rapport complet](https://exemple.org/rapport.pdf)",
          "<https://exemple.org/a-propos>"]
 
@@ -60,13 +62,15 @@ def test_a_long_article_pasted_is_the_message_its_agent_answered(bridges, fakes)
     sent = send(bridge, thread, client_id, text)
     assert sent.status_code == 200, sent.text
     assert sent.json()["state"] == "started"
-    # what Hermes got: the bridge's note line, then the words whole
+    # what Hermes got: the words whole
     given = fakes.hermes.started["r1"]["input"]
-    assert given.endswith(text.strip()) and given.startswith("<!--bip:")
-    # Hermes (v0.23.1, measured) stores the person's row as it was sent
-    stored(fakes, {"role": "user", "content": given}, agent("Bien lu."))
+    assert given.endswith(text.strip())
+    # Hermes (v0.23.1, measured) stores the person's row as it was sent, the time's note before it (patch 0015)
+    stored(fakes, {"role": "user", "content": f"{NOW}\n\n{given}"}, agent("Bien lu."))
     gate.set()
-    assert wait_until(lambda: page(bridge, thread)["items"][-1].get("text") == "Bien lu.", timeout=15)
+    assert wait_until(lambda: any(i.get("text") == "Bien lu." for i in page(bridge, thread)["items"])
+                      and not page(bridge, thread).get("pending", {}).get("run"), timeout=15)
+    time.sleep(11)   # past send.rs `LOST_AFTER`: a message still unmatched is « Pas envoyé » then
     items = page(bridge, thread)["items"]
     shown = [(i["id"][:40], (i.get("text") or "")[:30], i.get("client_id"), i.get("sending"), i.get("not_sent"))
              for i in items]
@@ -84,7 +88,7 @@ def test_an_article_with_its_lines_as_written_is_its_message_too(bridges, fakes)
     text = article(19_000, web=False)
     fakes.hermes.runs["r1"] = [sse("run.started", run_id="r1"), sse("run.completed", run_id="r1", output="Lu.")]
     assert send(bridge, thread, "C1D00000-0000-4000-8000-00000000A272", text).status_code == 200
-    stored(fakes, {"role": "user", "content": fakes.hermes.started["r1"]["input"]}, agent("Lu."))
+    stored(fakes, {"role": "user", "content": f"{NOW}\n\n{fakes.hermes.started['r1']['input']}"}, agent("Lu."))
     assert wait_until(lambda: page(bridge, thread)["items"][-1].get("text") == "Lu.", timeout=15)
     items = page(bridge, thread)["items"]
     assert [i["id"] for i in items if i["id"].startswith("s_")] == []
@@ -123,7 +127,7 @@ def test_a_text_over_twenty_thousand_characters_goes_whole_as_a_text_file(bridge
     assert last["id"] == f"s_{client_id}" and last["text"] == ""
     assert [(a["kind"], a["mime"]) for a in last["attachments"]] == [("document", "text/plain")]
     # stored by Hermes as sent: its row, matched by its id, the file, no note shown
-    stored(fakes, {"role": "user", "content": given}, agent("Lu en entier."))
+    stored(fakes, {"role": "user", "content": f"{NOW}\n\n{given}"}, agent("Lu en entier."))
     gate.set()
     assert wait_until(lambda: page(bridge, thread)["items"][-1].get("text") == "Lu en entier.", timeout=15)
     items = page(bridge, thread)["items"]
