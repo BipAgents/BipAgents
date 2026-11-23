@@ -227,7 +227,7 @@ def test_settings_and_delete(bridges, fakes):
     assert data["toolsets"] == [{"name": "web", "label": "Web", "description": "Search", "enabled": True, "configured": True}]
     assert data["id"] == "budget" and data["name"] == "Budget" and data["thinking"] is None and data["model"] is None
     assert data["isolated"] is False and data["protected"] is False and data["skills"] == []
-    assert set(data) - {"health", "weather", "notebook", "group", "guide", "notify", "proactive"} == {"id", "name", "soul", "language", "thinking", "model", "toolsets",
+    assert set(data) - {"health", "weather", "notebook", "group", "guide", "notify", "proactive", "shared_memory"} == {"id", "name", "soul", "language", "thinking", "model", "toolsets",
                                                "isolated", "protected", "services", "skills", "browser",
                                                "answer_style", "model_choice"}   # Rust: +3
     # its model chosen at home (model_choice.rs): its install's default (test_model_choice.py)
@@ -240,6 +240,8 @@ def test_settings_and_delete(bridges, fakes):
     assert bridge.get("/v1/agents/budget/settings", headers=AUTH).json()["notify"] == {"on": False}
     # « Initiative » (agent_proactive.rs, test_agent_proactive.py): basic until the person changes it
     assert data["proactive"] == {"level": "basic", "smart_ok": False}
+    # « Mémoire partagée » (agent_shared_memory.rs, test_shared_memory_setting.py): on, no model set (not outside)
+    assert data["shared_memory"] == {"on": True, "outside": None}
     assert fakes.hermes.seen("/p/budget/v1/toolsets")
     bridge.commands.clear()
     patched = bridge.patch("/v1/agents/budget/settings", headers=AUTH,
@@ -521,7 +523,9 @@ def test_the_agents_model_is_switched_in_its_config(bridges, fakes):
     switched = bridge.put("/v1/agents/coach/model", headers=AUTH, json={"name": "deepseek-v4-flash-0731", "vision": False})
     assert switched.json() == {"id": "coach", "model": {"name": "deepseek-v4-flash-0731", "vision": False}}
     data = yaml.safe_load((folder / "config.yaml").read_text())
-    assert data["model"]["base_url"] == "https://api.eurouter.ai/api/v1" and data["agent"] == {"max_turns": 60}
+    # (it left Anthropic, an outside model: what the bridge had turned off comes back and its profile is reconciled,
+    # the bridge's own `agent.*` keys with it: agent_shared_memory.rs)
+    assert data["model"]["base_url"] == "https://api.eurouter.ai/api/v1" and data["agent"]["max_turns"] == 60
     kept = bridge.put("/v1/agents/coach/model", headers=AUTH, json={"name": "minimax-m3"})
     assert kept.json()["model"] == {"name": "minimax-m3", "vision": False}   # vision unsaid: kept
     assert bridge.put("/v1/agents/coach/model", headers=AUTH, json={"name": "bad name!"}).status_code == 422
