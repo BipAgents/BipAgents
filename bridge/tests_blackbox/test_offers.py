@@ -418,3 +418,30 @@ def test_an_app_1_0_draws_an_offer_as_the_generic_card_it_already_draws(bridges,
     assert card["choices"] == base["plan_card"]["choices"] == ["once", "deny"]
     # « Oui » / « Non » as an app 1.0 sends them, with nothing else
     assert answer(bridge, card, "once", agent="vie").status_code == 200
+
+
+def test_review_a_moment_offer_answered_starts_no_turn_of_the_model(bridges, fakes):
+    """Review of offers (23/11, R1): a moment's offer card, placed by the bridge at its time with no turn
+    (plans/offers.rs `at_moment`), then answered « Non merci »: nothing to tell the agent, no turn of the model, as for
+    offer_act's own cards (card_place.rs `taken`). Today `taken` is called before the card has a place (a no-op), so
+    card_place.rs `watch` places it untaken and `settle` resumes the agent in a paid turn for that answer (the same
+    for « Oui » to a route, a reminder or an event, and for its expiry)."""
+    bridge = place(bridges, fakes)
+    label = "Il pleuvra à Lisbonne. Je te fais la liste de bagages ?"
+    arguments = trip()
+    arguments["moments"].append({"at": local(2, 18, 0), "what": "Liste de bagages",
+                                 "offer": {"kind": "page", "label": label,
+                                           "prompt": "Fais une page avec la liste de bagages pour 3 jours de pluie."}})
+    propose(bridge, arguments)
+    [plan] = plan_cards(bridge)
+    assert answer(bridge, plan, "once").status_code == 200
+    [job] = [j for j in plan_jobs(bridge, plan["bip_plan"]["id"]) if "Liste de bagages" in j["name"]]
+    assert bridge.post(f"/v1/routines/{job['id']}/run", headers=AUTH).status_code == 200
+    assert wait_until(lambda: offer_cards(bridge), timeout=20)
+    [card] = offer_cards(bridge)
+    time.sleep(2)   # card_place.rs `watch` (every second) has seen it
+    assert fakes.hermes.started == {}
+    assert answer(bridge, card, "deny").status_code == 200
+    # « Non merci »: 0 model (design §3.8); card_place.rs `settle` would resume a turn within a few seconds
+    assert not wait_until(lambda: fakes.hermes.started, timeout=10), \
+        [r.get("input", "")[:200] for r in fakes.hermes.started.values()]

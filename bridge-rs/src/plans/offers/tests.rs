@@ -507,6 +507,91 @@ fn the_answer_counts_for_its_kind_and_a_second_answer_finds_nothing() {
     assert!(store.offers.is_empty() && store.answers.len() == 1);
 }
 
+/// Review of offers (23/11, R3): a calendar offer's card « vaut celle de calendar_write : elle montre exactement
+/// l'événement » (design §3.3). A field the card does not show (calendar.rs `new_event`'s `notes`, 2000 characters,
+/// never checked: links in http, line breaks) is never written: refused, or shown.
+#[test]
+fn review_a_calendar_offer_writes_nothing_its_card_does_not_show() {
+    let mut a = offer("calendar", "Dentiste");
+    let notes = "Paie l’acompte sur http://example.com/pay avant jeudi.";
+    a.insert(
+        "params".into(),
+        json!({"title": "Dentiste", "start": day_at(4, 15, 0), "duration_minutes": 45, "notes": notes}),
+    );
+    match draft(&a, "vie", &all(), PARIS, now()) {
+        Err(why) => assert!(why.starts_with("Not done: params"), "{why}"),
+        Ok(o) => {
+            let written = o.params.as_ref().unwrap()["event"]["notes"].as_str().unwrap_or("").to_string();
+            let shown = detail("fr", &o, PARIS);
+            assert!(written.is_empty() || shown.contains(&written), "written « {written} », shown « {shown} »");
+        }
+    }
+}
+
+/// Review of offers (23/11, R7): an event given with its offset (« …T15:00:00+00:00 ») is shown on the person's clock,
+/// its end too (not its start on the person's clock and its end as written).
+#[test]
+fn review_a_calendar_offer_shows_its_start_and_end_on_the_same_clock() {
+    let day = &day_at(4, 0, 0)[..10];
+    let mut a = offer("calendar", "Dentiste");
+    a.insert(
+        "params".into(),
+        json!({"title": "Dentiste", "start": format!("{day}T15:00:00+00:00"), "end": format!("{day}T15:45:00+00:00")}),
+    );
+    let o = draft(&a, "vie", &all(), PARIS, now()).unwrap();
+    let start = chrono::DateTime::parse_from_rfc3339(&format!("{day}T15:00:00+00:00")).unwrap().timestamp() as f64;
+    let shown = detail("fr", &o, PARIS);
+    let start_text = crate::plans::when_text("fr", start, PARIS, PARIS, "");
+    let end_clock = PARIS.timestamp_opt(start as i64 + 45 * 60, 0).single().unwrap().format("%H:%M").to_string();
+    assert!(shown.contains(&format!("{start_text}–{end_clock}")), "« {shown} »: {start_text}–{end_clock}");
+}
+
+/// Review of offers (23/11, R2): an offer's card never offers « Toujours » (critical, design §3.4), a calendar one
+/// neither, whose kind is `calendar_write`: branch calendar-always (7f9093677) gives that kind a « Toujours » of its
+/// own on every bridge card (approval_level.rs `with_always`), and app.rs `approve` would then keep, on a « Oui » to
+/// one offer, a standing right to write in the person's Google Calendar. Green on `offers` alone; red once merged with
+/// calendar-always.
+#[test]
+fn review_an_offer_card_never_offers_toujours() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = config_in(dir.path());
+    for kind in KINDS {
+        let mut o = read(kind, "Dentiste");
+        if kind == "calendar" {
+            o.params.as_mut().unwrap()["calendar"] = json!("google");
+        }
+        let item = crate::approval_level::with_always(&config, card_item(&config, &o));
+        assert!(item.get("bip_always").is_none() && item.get("bip_always_kind").is_none(), "{kind}: {item:?}");
+    }
+}
+
+/// Review of offers (23/11, R4): the plan « Lisbonne » shows a search on its card (a pill); its moment two days later
+/// offers another search (accepted with « Prévoir »: its line was on the plan's « i »). That moment's offer is not
+/// « the same offer » as the pill, nor « a subject declined » when the pill got a « Non merci »: placed at its time.
+#[test]
+fn review_a_plan_s_moment_offer_is_not_held_by_another_offer_of_its_plan() {
+    let n = now();
+    let plans = crate::plans::Store::default();
+    let pill_spec = json!({"kind": "search", "label": "Je regarde les hôtels ?", "prompt": "Cherche 3 hôtels près de Baixa."});
+    let mut pill = spec_of(&pill_spec, "vie", "Lisbonne", &all(), PARIS, n, PILL_MAX).unwrap();
+    (pill.plan, pill.pill, pill.asked) = (Some("p1".into()), true, true);
+    let moment_spec = json!({"kind": "search", "label": "Je cherche un resto près du Chiado pour ce soir ?",
+                             "prompt": "Cherche 3 restaurants près du Chiado, ouverts ce soir."});
+    let later = n + 2.0 * DAY;
+    let mut moment = spec_of(&moment_spec, "vie", "Lisbonne", &all(), PARIS, later, LABEL_MAX).unwrap();
+    moment.plan = Some("p1".into());
+    // the pill made with the plan
+    let mut store = Store::default();
+    remember(&mut store, &pill, n);
+    let held = refused(&store, &plans, &moment, None, PARIS, later);
+    assert!(held.is_none(), "held by its own plan's pill: {held:?}");
+    // the pill declined
+    let mut store = Store::default();
+    record(&mut store, "vie", "search", &pill.about, NO, n + 60.0);
+    let held = refused(&store, &plans, &moment, None, PARIS, later);
+    assert!(held.is_none(), "held by its own plan's declined pill: {held:?}");
+}
+
 #[test]
 fn a_plan_s_offers_and_a_moment_s_offer_are_read_with_the_same_checks() {
     let n = now();
