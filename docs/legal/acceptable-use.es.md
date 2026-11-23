@@ -6,16 +6,16 @@
 
 ## 1. Para qué sirve
 
-Con la oferta todo incluido, tus agentes funcionan en tu plaza, una cuenta en un servidor que Kerfy Studio alquila a un
+Con la oferta todo incluido, tus agentes funcionan en tu servidor, una cuenta en una máquina que Kerfy Studio alquila a un
 proveedor de alojamiento socio (OVHcloud, Hetzner) y que a menudo comparte con otras personas. Kerfy Studio debe
-respetar las reglas de esos proveedores: un abuso que sale de una plaza puede hacer que corten el servidor entero, y con
-él las plazas de los demás. Esta política dice lo que está prohibido, cómo denunciar un abuso y lo que hace Kerfy
+respetar las reglas de esos proveedores: un abuso que sale de un servidor puede hacer que corten la máquina entera, y con
+ella los servidores de los demás. Esta política dice lo que está prohibido, cómo denunciar un abuso y lo que hace Kerfy
 Studio. Forma parte de las [condiciones de la oferta](offer.es.md) y se suma a las reglas de uso de las
 [condiciones de uso](terms.es.md) (sección 10), que valen para toda la app.
 
 ## 2. Lo que está prohibido
 
-Te comprometes a no usar tu plaza, tus agentes ni tu crédito de IA, ni a dejar que nadie lo haga, para:
+Te comprometes a no usar tu servidor, tus agentes ni tu crédito de IA, ni a dejar que nadie lo haga, para:
 
 - **un uso ilegal**: todo lo que prohíbe la ley francesa o la de tu país, o ayudar a alguien a hacerlo;
 - **el spam y los envíos masivos**: correos o mensajes no solicitados, envíos en masa, listas de difusión compradas,
@@ -27,16 +27,16 @@ Te comprometes a no usar tu plaza, tus agentes ni tu crédito de IA, ni a dejar 
   instalar un cliente BitTorrent para hacerlo. Los servidores de la oferta bloquean los sitios de piratería y los
   trackers BitTorrent conocidos y limitan lo que cada agente descarga al día;
 - **la minería de criptomonedas**, o cualquier uso pensado para acaparar el procesador, la memoria, el disco o la red
-  del servidor;
+  de la máquina;
 - **contenidos ilícitos respecto a menores**: cualquier material de abuso sexual infantil o contenido sexual en el que
   aparezca un menor, y cualquier contenido pornográfico o violento al que pueda acceder un menor (artículos 227-23 y
   227-24 del Código Penal francés);
 - **eludir protecciones**: CAPTCHA, límites de frecuencia, controles de acceso u otras protecciones de un sitio o de un
   servicio, también a través de tus agentes;
-- **revender tu plaza**: alquilarla, revenderla u ofrecerla como servicio a otros, la plaza o tu crédito de IA (cada
-  persona de un plan Duo o Familia tiene la suya);
-- **salir de tu plaza**: intentar acceder a las plazas de otros, obtener derechos de administrador o eludir la
-  separación entre las cuentas del servidor.
+- **revender tu servidor**: alquilarlo, revenderlo u ofrecerlo como servicio a otros, el servidor o tu crédito de IA (cada
+  persona de un plan Duo o Familia tiene su propio servidor);
+- **salir de tu servidor**: intentar acceder a los servidores de otros, obtener derechos de administrador o eludir la
+  separación entre las cuentas de la máquina.
 
 Cuando tus agentes navegan o usan un servicio en línea, deben **respetar las condiciones de uso de ese sitio o de ese
 servicio** y los derechos de los demás: tú respondes de ello.
@@ -49,7 +49,7 @@ su consentimiento, nada de suplantar a nadie (condiciones de uso, sección 10).
 
 ## 3. Tu responsabilidad
 
-Respondes de lo que haces tú y de lo que hacen tus agentes desde tu plaza, con tu acuerdo o porque tu configuración lo
+Respondes de lo que haces tú y de lo que hacen tus agentes desde tu servidor, con tu acuerdo o porque tu configuración lo
 permite, también por el acceso SSH. Lo que leen tus agentes (páginas web, correos, archivos) puede contener
 instrucciones ocultas destinadas a desviarlos: mantén activadas las solicitudes de aprobación y da a cada agente solo
 los accesos que necesita (condiciones de uso, sección 9).
@@ -80,21 +80,21 @@ emergencia (112).**
 
 ## 5. Lo que hace Kerfy Studio
 
-- **Kerfy Studio no lee las plazas.** Para tramitar una denuncia, usa lo que contiene la denuncia y los datos técnicos
-  que ya tiene (qué servidor y qué plaza, a qué hora), nunca el contenido de la plaza.
+- **Kerfy Studio no lee los servidores.** Para tramitar una denuncia, usa lo que contiene la denuncia y los datos técnicos
+  que ya tiene (qué máquina y qué servidor, a qué hora), nunca el contenido del servidor.
 - **Suspensión rápida**: ante la denuncia de un proveedor de alojamiento, una solicitud legal o un abuso grave en curso
-  (un ataque, un envío de spam), Kerfy Studio puede **cortar enseguida la clave de IA de la plaza y suspenderla**,
-  antes de cualquier intercambio, para detener el abuso y proteger a las demás personas del servidor. Esta decisión la
+  (un ataque, un envío de spam), Kerfy Studio puede **cortar enseguida la clave de IA del servidor y suspenderlo**,
+  antes de cualquier intercambio, para detener el abuso y proteger a las demás personas de la máquina. Esta decisión la
   toma una persona.
 - **Motivos**: Kerfy Studio te dice sin demora lo que se ha hecho, por qué (los hechos, la regla en cuestión) y cómo
   impugnarlo, salvo si la ley o una autoridad lo prohíbe (artículo 17 del Reglamento (UE) 2022/2065).
 - **Impugnar**: responde a ese mensaje o escribe a abuse@bipagents.com. Una persona vuelve a examinar la decisión. Si
-  el abuso venía de un agente desviado o de un acceso robado, te ayudamos a poner tu plaza en orden; si la suspensión
-  no estaba justificada, tu plaza se restablece lo antes posible.
+  el abuso venía de un agente desviado o de un acceso robado, te ayudamos a poner tu servidor en orden; si la suspensión
+  no estaba justificada, tu servidor se restablece lo antes posible.
 - **Fin de la suscripción**: por un incumplimiento grave o repetido, Kerfy Studio puede poner fin a la suscripción,
   después de haberte requerido que cese, salvo urgencia o incumplimiento de especial gravedad (condiciones de la
   oferta, sección 11).
-- **Denuncias hechas en la app**: Kerfy Studio no puede ni leer ni borrar un contenido en el servidor o la plaza de
+- **Denuncias hechas en la app**: Kerfy Studio no puede ni leer ni borrar un contenido en el servidor de
   una persona. Puede responderte, avisar a la persona que creó el agente de la familia, advertir a la persona afectada
   y, ante un incumplimiento grave, tomar las medidas anteriores, hasta poner fin a la suscripción a la oferta, con sus
   motivos. La persona que creó un agente de la familia también puede retirar a un miembro.

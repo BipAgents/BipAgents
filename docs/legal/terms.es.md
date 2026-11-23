@@ -32,15 +32,15 @@ política de privacidad y el aviso legal siguen disponibles en Ajustes › Acerc
   BipAgents es una aplicación independiente: no está editada, aprobada ni patrocinada por Nous Research, y no tiene
   ningún vínculo con los titulares de marcas homónimas.
 - Tus agentes funcionan de una de estas dos formas:
-  - **en tu ordenador o tu servidor**, que instalas y gestionas tú mismo, con el **modelo de IA que has elegido** (una
+  - **en tu propio ordenador o servidor**, que instalas y gestionas tú mismo, con el **modelo de IA que has elegido** (una
     API en la nube o un modelo local); la app se conecta a ellos a través de Tailscale o de tu red local;
-  - con la **oferta todo incluido**, de pago, en **tu plaza**, una cuenta en un servidor que Kerfy Studio alquila a un
+  - con la **oferta todo incluido**, de pago, en **tu servidor**, una cuenta en una máquina que Kerfy Studio alquila a un
     proveedor de alojamiento socio, con crédito de IA incluido; se rige por sus
     [condiciones generales de venta](offer.es.md).
 - **Con tu propio servidor, Kerfy Studio no aloja tus agentes, no proporciona el modelo de IA y no tiene acceso a tus
   conversaciones.** Su papel se limita entonces a publicar la app y a hacer funcionar un relé hacia Apple y Google para
   las notificaciones (consulta la sección 13 y la [política de privacidad](privacy.es.md)). **Con la oferta todo
-  incluido**, Kerfy Studio aloja tu plaza y te da acceso al modelo de IA, sin acceder al contenido de tu plaza
+  incluido**, Kerfy Studio aloja tu servidor y te da acceso al modelo de IA, sin acceder al contenido de tu servidor
   (condiciones de la oferta, sección 9).
 
 ## 4. Edad mínima
@@ -102,8 +102,8 @@ Si usas tu propio ordenador o servidor, eres responsable:
   lo que puedes ver o hacer en el servidor, no leas sus conversaciones sin su acuerdo y, para un menor, adapta los
   agentes, sus accesos (correo, navegación, compras) y el modelo a su edad.
 
-Con la oferta todo incluido, Kerfy Studio se ocupa del servidor, de sus actualizaciones y de las copias de seguridad
-de tu plaza; sigues siendo responsable de tus dispositivos, de tu código de recuperación, del respeto de las
+Con la oferta todo incluido, Kerfy Studio se ocupa de la máquina, de sus actualizaciones y de las copias de seguridad
+de tu servidor; sigues siendo responsable de tus dispositivos, de tu código de recuperación, del respeto de las
 condiciones de los servicios que conectas a tus agentes y de lo que haces por SSH
 ([condiciones de la oferta](offer.es.md)).
 
@@ -177,7 +177,7 @@ Eres responsable de lo que pides a tus agentes y de lo que hacen con tu acuerdo.
 profesional, se te aplican las obligaciones del «responsable del despliegue» previstas por el reglamento europeo de
 IA, en particular para las ultrasuplantaciones.
 
-Con la oferta todo incluido, la [política de uso aceptable](acceptable-use.es.md) precisa estas reglas para tu plaza
+Con la oferta todo incluido, la [política de uso aceptable](acceptable-use.es.md) precisa estas reglas para tu servidor
 (spam, ataques, minería de criptomonedas, reventa…) y dice cómo denunciar un abuso: **abuse@bipagents.com**.
 
 ## 11. Denunciar una respuesta o un mensaje
@@ -188,7 +188,7 @@ Con la oferta todo incluido, la [política de uso aceptable](acceptable-use.es.m
 - Un mensaje de otra persona (agente de la familia, agente compartido): **mantén pulsado › Denunciar este mensaje**. La
   denuncia sale solo a Kerfy Studio, con el texto del mensaje, el nombre de pila que se muestra de su autor y el nombre
   del agente, sin tu nombre; puedes añadir tu correo si quieres una respuesta. El autor no recibe ningún aviso. Kerfy
-  Studio no lee las conversaciones y no puede borrar un mensaje; si toma una medida contra una cuenta, una plaza o un
+  Studio no lee las conversaciones y no puede borrar un mensaje; si toma una medida contra una cuenta, un servidor o un
   dispositivo (sección 10, política de uso aceptable), da los motivos a la persona afectada y le dice cómo impugnarla
   (Reglamento (UE) 2022/2065, artículo 17). La persona que creó un agente de la familia también puede retirar a un
   miembro.
@@ -196,7 +196,7 @@ Con la oferta todo incluido, la [política de uso aceptable](acceptable-use.es.m
   amenazas, odio, contenidos ilícitos, ataques a la vida privada).
 - O escribe a **support@bipagents.com**.
 
-Las respuestas de tus agentes se producen en tu servidor, o en tu plaza con la oferta todo incluido, con el modelo
+Las respuestas de tus agentes se producen en tu propio servidor o, con la oferta todo incluido, en tu servidor, con el modelo
 elegido: Kerfy Studio no las lee y no interviene en ellas. Las denuncias nos sirven para mejorar la app, sus ajustes por
 defecto y su documentación, y para avisar a los proyectos afectados cuando es útil.
 
@@ -211,8 +211,8 @@ with Fish Audio»).
 
 El relé transmite las notificaciones de tu servidor a tu teléfono: es un servicio de «mera transmisión» en el sentido
 del Reglamento (UE) 2022/2065 de servicios digitales. También transmite a Kerfy Studio las denuncias enviadas desde la
-app (sección 11). Con la oferta todo incluido, Kerfy Studio aloja las plazas, incluida la conversación de un agente de
-la familia en la plaza de la persona que lo creó: la política de uso aceptable (secciones 4 y 5) describe entonces cómo
+app (sección 11). Con la oferta todo incluido, Kerfy Studio aloja los servidores, incluida la conversación de un agente de
+la familia en el servidor de la persona que lo creó: la política de uso aceptable (secciones 4 y 5) describe entonces cómo
 trata una denuncia.
 
 - **Lo que acepta**: un texto genérico, identificadores técnicos y, cifrados por tu servidor solo para tu teléfono, el
@@ -241,8 +241,8 @@ Para la oferta todo incluido, consulta también sus condiciones (secciones 11 y 
 ## 15. Tus contenidos
 
 Tus mensajes, archivos y grabaciones te pertenecen. Kerfy Studio no reivindica ningún derecho sobre ellos y no los
-recibe, salvo lo que decidas enviarnos (correo al soporte, denuncia). Con la oferta todo incluido, están en tu plaza,
-que Kerfy Studio aloja sin acceder a ella.
+recibe, salvo lo que decidas enviarnos (correo al soporte, denuncia). Con la oferta todo incluido, están en tu servidor,
+que Kerfy Studio aloja sin acceder a él.
 
 ## 16. Garantía
 
@@ -264,7 +264,7 @@ común. No responde de lo que no depende de él, en particular:
 - si usas tu propio servidor, de ese servidor, de su proveedor de alojamiento, de tu proveedor de modelos y de
   Tailscale;
 - de Apple, de Google o de los servicios conectados a tus agentes;
-- de la pérdida de datos en tu servidor o tu teléfono que no se deba a un defecto de la app.
+- de la pérdida de datos en tu propio servidor o tu teléfono que no se deba a un defecto de la app.
 
 Para la oferta todo incluido, la responsabilidad de Kerfy Studio se describe en sus condiciones (sección 14).
 

@@ -2,7 +2,7 @@
   "page": {
     "code": {
       "title": "Conseguir un código — BipAgents",
-      "description": "Únete a la beta de BipAgents: con tu propio Hermes, sin código ni límite, o con una plaza todo incluido, tu código llega por correo."
+      "description": "Únete a la beta de BipAgents: con tu propio Hermes, sin código ni límite, o con un servidor todo incluido, tu código llega por correo."
     }
   },
   "code": {
@@ -11,8 +11,8 @@
     "ownTitle": "Quiero usar mi Hermes",
     "ownText": "En tu ordenador o tu servidor: un comando y luego escaneas el código QR en la app. Sin código, sin límite.",
     "ownCta": "Ver cómo",
-    "placeTitle": "Quiero una plaza",
-    "placeText": "Tu espacio privado en un servidor en Europa, con el crédito de IA. Gratis durante la beta.",
+    "placeTitle": "Quiero un servidor",
+    "placeText": "Tu servidor privado en Europa, con el crédito de IA. Gratis durante la beta.",
     "placeCta": "Recibir mi código",
     "formTitle": "Tu código llega por correo",
     "email": "Tu correo",

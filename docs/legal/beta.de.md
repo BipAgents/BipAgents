@@ -15,25 +15,25 @@ starten. Sie wird von Kerfy Studio angeboten, dem Herausgeber von BipAgents.
 - **Das geschenkte KI-Guthaben.** 2 € Nutzung des Modells pro Person und pro Monat, mit einer festen Obergrenze. Ist
   dieses Guthaben verbraucht, rufen deine Agenten das Modell bis zum nächsten Monat nicht mehr auf: Dir wird nichts
   berechnet. Es kann weder verkauft noch erstattet werden.
-- **Ungenutzter Platz.** Die Plätze der Beta sind begrenzt. Wenn 7 Tage lang niemand deinen Agenten schreibt, wird
-  dein Platz für jemand anderen freigegeben. Deinen Agenten schreiben heißt: einem Agenten eine Nachricht, eine
+- **Ungenutzter Server.** Die Plätze der Beta sind begrenzt. Wenn 7 Tage lang niemand deinen Agenten schreibt, wird
+  dein Server für jemand anderen freigegeben. Deinen Agenten schreiben heißt: einem Agenten eine Nachricht, eine
   Sprachnachricht, ein Foto oder eine Datei schicken, einen Live-Anruf führen oder auf eine Karte antworten; Routinen,
   die von selbst laufen, zählen nicht. Was die Mitglieder eines Familienagenten schreiben, den du erstellt hast, zählt
-  auch für deinen Platz. Am 5. Tag sagen wir dir mit einer Benachrichtigung, in der App und per E-Mail, wenn du ein
-  Konto hast, Bescheid: Dann reicht es, einem Agenten zu schreiben oder auf „Platz behalten“ zu tippen. Wenn niemand
+  auch für deinen Server. Am 5. Tag sagen wir dir mit einer Benachrichtigung, in der App und per E-Mail, wenn du ein
+  Konto hast, Bescheid: Dann reicht es, einem Agenten zu schreiben oder auf „Server behalten“ zu tippen. Wenn niemand
   schreibt, enden mit der Freigabe die gemeinsame Unterhaltung deiner Familienagenten und dein Teilen zum Lesen. Dein
   Konto bleibt bestehen.
 - **Nach der Freigabe.** Dein Server wird zurückgesetzt und jemand anderem gegeben: Nichts bleibt dort. Wir bewahren
-  nur die verschlüsselte Kopie der Sicherungen deines Platzes auf (höchstens 21 Tage Verlauf: Unterhaltungen,
+  nur die verschlüsselte Kopie der Sicherungen deines Servers auf (höchstens 21 Tage Verlauf: Unterhaltungen,
   Gedächtnis der Agenten, Dateien, Notizbuch, Einstellungen), 30 Tage bei Scaleway in Paris, dann wird sie endgültig
   gelöscht. Der Schlüssel zu dieser Kopie liegt dann nur noch auf deinem Telefon und in einem versiegelten Tresor, den
   nur dein Wiederherstellungscode öffnet: Kerfy Studio kann die Kopie nicht lesen.
-  In diesen 30 Tagen bringt „Meinen Platz zurückholen“ sie auf einen neuen Platz, wenn noch einer frei ist. Wenn du
+  In diesen 30 Tagen bringt „Meinen Server zurückholen“ sie auf einen neuen Server, wenn noch ein Platz frei ist. Wenn du
   weder dein Telefon noch deinen Wiederherstellungscode mehr hast, lässt sie sich nicht öffnen, und du fängst von vorn
   an. Exportiere deine Daten vor der Freigabe: Danach ist kein Export mehr möglich.
-- **Ende der Beta.** Die Beta endet am 30. November 2026. Dein Platz bleibt danach bis zum 31. Dezember 2026
+- **Ende der Beta.** Die Beta endet am 30. November 2026. Dein Server bleibt danach bis zum 31. Dezember 2026
   geschenkt. Er wird nie kostenpflichtig, ohne dass du ein Abo wählst. Hast du bis zu diesem Datum kein Abo, wird dein
-  Platz wie oben freigegeben: Nur seine verschlüsselte Kopie wird 30 Tage aufbewahrt, und wenn du in diesen 30 Tagen
+  Server wie oben freigegeben: Nur seine verschlüsselte Kopie wird 30 Tage aufbewahrt, und wenn du in diesen 30 Tagen
   ein Abo abschließt, bekommst du deine Agenten zurück. Wir sagen dir mindestens 7 Tage vorher per E-Mail und in der App
   Bescheid.
 - **Ohne Gewähr.** Es ist eine Testversion: Funktionen können fehlen, sich ändern, fehlerhaft sein oder ausfallen, und

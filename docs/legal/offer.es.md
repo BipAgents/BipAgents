@@ -41,7 +41,7 @@ condiciones.
 
 ## 2. Kerfy Studio, las tiendas y el sitio
 
-- **Kerfy Studio presta el servicio**: tu plaza, tu crédito de IA, las copias de seguridad y el soporte. Kerfy Studio,
+- **Kerfy Studio presta el servicio**: tu servidor, tu crédito de IA, las copias de seguridad y el soporte. Kerfy Studio,
   SAS (sociedad por acciones simplificada francesa) con un capital de [capital] €, domicilio social: [dirección del
   domicilio social], inscrita en el RCS de [ciudad del registro] con el número [SIREN], teléfono: [número de
   teléfono]. Contacto: **support@bipagents.com**. Denuncia de abusos: **abuse@bipagents.com**.
@@ -60,9 +60,9 @@ condiciones.
 
 | Plan | Personas | Servidor | Precio en la app (App Store, Google Play), IVA incluido | Precio en el sitio bipagents.com, en euros, IVA incluido |
 |---|---|---|---|---|
-| Solo | 1 | una plaza en un servidor compartido con otros suscriptores | 7,99 € al mes o 79,90 € al año | 7,49 € al mes o 74,90 € al año |
-| Duo | 2 | dos plazas en un mismo servidor, compartido con otros suscriptores | 12,99 € al mes o 129,00 € al año | 11,99 € al mes o 119,90 € al año |
-| Familia | hasta 6 | una plaza por persona, en servidores compartidos con otros abonados | 19,99 € al mes o 199,00 € al año | 17,99 € al mes o 179,90 € al año |
+| Solo | 1 | un servidor en una máquina compartida con otros suscriptores | 7,99 € al mes o 79,90 € al año | 7,49 € al mes o 74,90 € al año |
+| Duo | 2 | dos servidores en una misma máquina, compartida con otros suscriptores | 12,99 € al mes o 129,00 € al año | 11,99 € al mes o 119,90 € al año |
+| Familia | hasta 6 | un servidor por persona, en máquinas compartidas con otros abonados | 19,99 € al mes o 199,00 € al año | 17,99 € al mes o 179,90 € al año |
 
 **La suscripción anual** cuesta como mucho 10 meses por 12 y se paga de una vez, por adelantado, por los 12 meses.
 Se renueva cada año al mismo precio, salvo un cambio de precio anunciado con antelación (sección 5), hasta que la
@@ -85,12 +85,12 @@ Stripe muestra el precio, la moneda y el total que pagas.
 
 Para cada persona del plan:
 
-- **Su plaza**: su propia cuenta Linux en un servidor que Kerfy Studio alquila a un proveedor de alojamiento socio, en
+- **Su servidor**: su propia cuenta Linux en una máquina que Kerfy Studio alquila a un proveedor de alojamiento socio, en
   la que funcionan sus agentes de IA. Están construidos sobre Hermes Agent, software libre de Nous Research
   (https://github.com/NousResearch/hermes-agent); BipAgents no está editada, aprobada ni patrocinada por Nous Research.
-- **Las voces de los Bips**, en su teléfono cuando este lo permite; si no, desde su plaza.
+- **Las voces de los Bips**, en su teléfono cuando este lo permite; si no, desde su servidor.
 - **Una copia de seguridad cifrada unos minutos después de cada actividad, y al menos una vez al día** (sección 9).
-- **Un acceso SSH** a la cuenta de su plaza, desde un ordenador cuya clave se haya añadido en la app (Ajustes › Plan
+- **Un acceso SSH** a la cuenta de su servidor, desde un ordenador cuya clave se haya añadido en la app (Ajustes › Plan
   todo incluido › Acceso SSH), sin derechos de administrador (root).
 
 **El crédito de IA del plan**: 5,00 € (Solo), 9,00 € (Duo) o 16,00 € (Familia) de uso del modelo de IA cada mes,
@@ -111,7 +111,7 @@ enseguida. Las reglas propias de las personas que viven fuera de la Unión está
 
 **Los pagos de tus agentes** (experimental durante la beta, desactivado por defecto): cuando Kerfy Studio ha abierto la
 función, puedes activarla y confiar a un agente una tarjeta virtual con límite, nunca tu tarjeta principal. Su número se
-queda en tu teléfono; solo se envía a tu plaza con cada pago que apruebas, se guarda en memoria el tiempo de rellenarlo
+queda en tu teléfono; solo se envía a tu servidor con cada pago que apruebas, se guarda en memoria el tiempo de rellenarlo
 y luego se borra ([política de privacidad](privacy.es.md), sección 5.10).
 
 **Compatibilidad**: la app funciona en iPhone y iPad con iOS 18 o posterior, y en Android 10 o posterior.
@@ -124,7 +124,7 @@ y luego se borra ([política de privacidad](privacy.es.md), sección 5.10).
   tu identificador de cliente en nuestro proveedor de pago Stripe y una marca ligada a tu dispositivo (DeviceCheck de
   Apple en iPhone, una huella del dispositivo en Android), como se explica en nuestra
   [política de privacidad](privacy.es.md) (sección 5.3). Apple y Google aplican además sus propias reglas: solo
-  conceden una oferta de prueba por cuenta de Apple o Google. Las plazas beta (códigos beta) no cuentan como
+  conceden una oferta de prueba por cuenta de Apple o Google. Los servidores beta (códigos beta) no cuentan como
   suscripción.
 - Un plan empieza con **una semana gratis** si tu dispositivo y tu cuenta de la tienda nunca han tenido una. Si no, la app te propone el mismo plan sin semana gratis. Antes de la
   compra, la app te dice si se aplica la semana gratis, cuándo termina y el precio que la sigue.
@@ -136,7 +136,7 @@ y luego se borra ([política de privacidad](privacy.es.md), sección 5.10).
 - **Al final de la semana, la suscripción de pago empieza sola**, salvo que la hayas cancelado antes del final: en la
   tienda (en el App Store, al menos 24 horas antes del final, según las condiciones de Apple) o, en el sitio, en la
   página de cliente de Stripe (sección 11). No se cobra nada si lo dejas antes.
-- Si no continúas, tu plaza se conserva 3 días y después se borra con sus copias de seguridad.
+- Si no continúas, tu servidor se conserva 3 días y después se borra con sus copias de seguridad.
 - Para que solo haya una semana gratis por dispositivo, la app usa DeviceCheck de Apple en iPhone y una huella del
   dispositivo en Android ([política de privacidad](privacy.es.md), sección 5.3).
 
@@ -160,7 +160,7 @@ y luego se borra ([política de privacidad](privacy.es.md), sección 5.10).
   fecha. Indica la fecha de renovación, la fecha límite para detenerla y cómo hacerlo. Si no tenemos tu dirección, solo
   recibes los recordatorios de Apple o de Google.
 - **Cambiar de plan** (Ajustes › Plan todo incluido › Cambiar de plan): a un plan más grande, enseguida, y la tienda
-  tiene en cuenta lo que queda de tu mes; a un plan más pequeño, en tu renovación (las plazas de más: sección 8). Para
+  tiene en cuenta lo que queda de tu mes; a un plan más pequeño, en tu renovación (los servidores de más: sección 8). Para
   una suscripción contratada en el sitio, cambias de plan en la página de cliente de Stripe (sección 11).
 - **Cambio de precio**: un nuevo precio nunca se aplica a un periodo ya pagado. En la app, la tienda te avisa al menos
   30 días antes y, según sus reglas, te pide tu acuerdo. En el sitio, Kerfy Studio solo cambia sus precios por un motivo
@@ -195,7 +195,7 @@ y luego se borra ([política de privacidad](privacy.es.md), sección 5.10).
   Vuelven solas el día 1 del mes siguiente o en cuanto la persona que paga añada crédito. Lo usado en el margen
   cuenta como el resto del crédito (se toma del crédito añadido); no se traslada al mes siguiente.
 - **Margen usado también**: los agentes de todas las personas del plan dejan de llamar al modelo de IA hasta el mes
-  siguiente o hasta que la persona que paga añada crédito. Las plazas, los archivos y las copias de seguridad siguen;
+  siguiente o hasta que la persona que paga añada crédito. Los servidores, los archivos y las copias de seguridad siguen;
   la app avisa a cada persona y propone las recargas.
 - **Límite por persona** (Duo y Familia): la persona que paga puede dar a cada persona un límite mensual (Ajustes ›
   Plan todo incluido). Una vez alcanzado su límite, los agentes de esa persona dejan de llamar al modelo de IA hasta
@@ -213,40 +213,40 @@ y luego se borra ([política de privacidad](privacy.es.md), sección 5.10).
 ## 7. Quién puede contratar, y tu cuenta
 
 - **Contratar**: tienes que ser mayor de edad o tener el acuerdo de uno de tus padres (la tienda puede pedir ese
-  acuerdo antes de la compra). Toda persona que usa una plaza debe tener al menos 16 años, como para la app; entre los
+  acuerdo antes de la compra). Toda persona que usa un servidor de la oferta debe tener al menos 16 años, como para la app; entre los
   16 y los 18 años, con el acuerdo de uno de sus padres. La oferta todo incluido no se ofrece a personas menores de 16
   años, ni siquiera con supervisión. Un menor de 16 años solo puede usar BipAgents en el ordenador o el servidor de uno
   de sus padres o de un adulto a su cargo, según las condiciones de uso (sección 4). **En Estados Unidos, ninguna persona menor de 13 años
-  puede usar una plaza**, ni siquiera supervisada.
+  puede usar un servidor de la oferta**, ni siquiera supervisada.
 - **Tu cuenta**: la creas con «Iniciar sesión con Apple», con Google o con una dirección de correo (un código de un
   solo uso enviado a esa dirección). Contiene tu identidad (identificador de Apple o de Google, dirección de
   correo), el vínculo con tu suscripción, la lista de tus dispositivos y tus invitaciones. **Nunca contiene las claves
-  de tu plaza**: se quedan en tus dispositivos.
+  de tu servidor**: se quedan en tus dispositivos.
 - **Dispositivo nuevo**: lo apruebas desde un dispositivo que ya tienes.
 - **Ningún dispositivo**: recuperas tu cuenta al cabo de **24 horas**, y se avisa a tus antiguos dispositivos y a tu
   dirección de correo; o **enseguida** con tu **código de recuperación**, que la app te propone crear justo después
   de la compra. Ese código abre también la copia de tu clave de copia de seguridad que Kerfy Studio guarda cifrada y
   no puede leer sin él. **Guárdalo en un lugar seguro**: Kerfy Studio no lo conoce y no puede recuperarlo. Si
-  tu plaza se pierde, sin dispositivo ni código de recuperación ya no puedes abrir tus copias de seguridad.
+  tu servidor se pierde, sin dispositivo ni código de recuperación ya no puedes abrir tus copias de seguridad.
 - Eres responsable de la seguridad de tus dispositivos, de tu cuenta de Apple, de Google o de correo, y de tu código
   de recuperación.
 - **Eliminar tu cuenta**: en la app, Ajustes › Cuenta › Eliminar mi cuenta, o en la página
   https://guichet.bipagents.com/account/delete, con un código enviado a tu dirección de correo. Tu cuenta se borra
   **30 días** después de tu solicitud. Hasta entonces, tus agentes están detenidos, todavía puedes recuperar tus datos
-  y puedes cambiar de opinión (Ajustes › Cuenta › Mantener mi cuenta). Al cabo de los 30 días, se borran tu plaza y
+  y puedes cambiar de opinión (Ajustes › Cuenta › Mantener mi cuenta). Al cabo de los 30 días, se borran tu servidor y
   sus copias de seguridad, y después tu cuenta (la [política de privacidad](privacy.es.md) dice lo que la ley obliga a
   conservar).
 - **Eliminar tu cuenta no cancela tu suscripción**: cancélala en la tienda, o en la página de cliente de Stripe si la
   contrataste en el sitio (sección 11). En Google Play, Kerfy Studio también detiene su renovación el día del borrado;
   el App Store no lo permite.
-- **Si compartes tu plan**, las personas invitadas reciben un aviso por correo: sus plazas se detienen el día en que
-  se borra tu cuenta. **Si eres una persona invitada**, tu plaza se borra al final de los 30 días, y la persona que
-  paga recibe una nueva, que puede ofrecer a otra persona.
+- **Si compartes tu plan**, las personas invitadas reciben un aviso por correo: sus servidores se detienen el día en que
+  se borra tu cuenta. **Si eres una persona invitada**, tu servidor se borra al final de los 30 días, y la persona que
+  paga recibe uno nuevo, que puede ofrecer a otra persona.
 
 ## 8. Duo y Familia: las personas invitadas
 
 - La persona que contrata invita a las demás por correo, con un enlace que solo sirve una vez. Cada persona invitada
-  crea su propia cuenta y tiene **su propia plaza** y sus agentes; el crédito de IA es el del plan, compartido
+  crea su propia cuenta y tiene **un servidor propio dentro del plan** y sus agentes; el crédito de IA es el del plan, compartido
   (sección 6). **Ni la persona que paga ni Kerfy Studio leen sus agentes ni sus conversaciones**, salvo lo que ella
   decida compartir: un agente que comparte en lectura, lo que escribe en un agente de la familia (que leen sus
   miembros) y su agenda si la abre a un agente de la familia.
@@ -255,52 +255,52 @@ y luego se borra ([política de privacidad](privacy.es.md), sección 5.10).
   lo que hacen sus agentes.** Cada persona invitada ve lo que queda del crédito para todos, lo que ha usado y su
   límite si lo hay, nunca lo que han usado los demás.
 - La persona que contrata sigue siendo la única clienta de la tienda (o de Kerfy Studio, en el sitio): paga, cambia de
-  plan o cancela. Las plazas de las personas invitadas dependen de su suscripción: si termina, siguen las mismas reglas
-  que la suya (sección 11), y la app las avisa. Si elimina su cuenta, sus plazas se detienen 30 días después y reciben
+  plan o cancela. Los servidores de las personas invitadas dependen de su suscripción: si termina, siguen las mismas reglas
+  que la suya (sección 11), y la app las avisa. Si elimina su cuenta, sus servidores se detienen 30 días después y reciben
   un aviso por correo (sección 7). Díselo a las personas que invitas.
-- **Pasar a un plan más pequeño**: en tu renovación, las plazas de más se detienen y se borran con sus copias de
+- **Pasar a un plan más pequeño**: en tu renovación, los servidores de más se detienen y se borran con sus copias de
   seguridad 30 días después, salvo que vuelvas antes al plan más grande. La app indica cuáles y en qué fecha.
 - Cada persona invitada acepta las condiciones de uso de la app y la política de uso aceptable, y estas condiciones en
   lo que le concierne (secciones 6, 7, 9, 10 y 14).
 
-## 9. Tu plaza, tus datos, tus copias de seguridad
+## 9. Tu servidor, tus datos, tus copias de seguridad
 
-- **Lo que está en tu plaza te pertenece**: tus agentes, tus conversaciones, tus archivos, su memoria. Kerfy Studio no
+- **Lo que está en tu servidor te pertenece**: tus agentes, tus conversaciones, tus archivos, su memoria. Kerfy Studio no
   reivindica ningún derecho sobre ello.
-- **Kerfy Studio no accede al contenido de las plazas.** Su software no lo lee: las únicas
-  órdenes que ejecuta un servidor son reinstalar una plaza, actualizarla a una versión publicada del código abierto de BipAgents o volver a abrirla, y ninguna lee su contenido. El
+- **Kerfy Studio no accede al contenido de los servidores.** Su software no lo lee: las únicas
+  órdenes que ejecuta una máquina son reinstalar un servidor, actualizarlo a una versión publicada del código abierto de BipAgents o volver a abrirlo, y ninguna lee su contenido. El
   acceso a las cuentas de Kerfy Studio en los proveedores de alojamiento está reservado a la sociedad. Solo se
-  accedería al contenido de una plaza para cumplir una obligación legal, y se te informaría cuando la ley lo permita.
+  accedería al contenido de un servidor para cumplir una obligación legal, y se te informaría cuando la ley lo permita.
   Como todo proveedor de alojamiento, OVHcloud y Hetzner tienen acceso físico a sus servidores.
-- **Copias de seguridad**: tu plaza hace una copia de seguridad unos minutos después de cada actividad, y al menos una vez al día, cifrada en la plaza antes de salir, con una
-  clave que se queda en tu plaza y en tus dispositivos (más la copia cifrada que abre tu código de recuperación,
-  sección 7). Kerfy Studio guarda estas copias en su servidor de copias de seguridad, ilegibles sin esa clave: las de las 2 últimas horas, luego una por hora durante 48 horas, una por día durante 21 días, nada más antiguo. Cuando se libera una plaza beta ([condiciones de la beta](beta.es.md)), su servidor se pone a cero y solo se guarda la copia cifrada de sus copias de seguridad (21 días de historial como máximo), que se borra al cabo de 30 días. Ajustes › Plan todo incluido › Copias de seguridad muestra la última y lanza una enseguida.
-- **La imagen diaria de OVHcloud**: en sus servidores, OVHcloud hace además, por su parte, una imagen diaria del
-  servidor entero, que guarda en sus instalaciones (un punto de restauración por día, no cifrado por Kerfy Studio).
-  Cuando una plaza se reinstala para otra persona, la imagen que la contenía se sustituye en un día aproximadamente.
-- **Averías**: si el servidor de tu plaza sigue inaccesible unos 40 minutos, tu plaza se traslada a otro servidor, a veces
+- **Copias de seguridad**: tu servidor hace una copia de seguridad unos minutos después de cada actividad, y al menos una vez al día, cifrada en el servidor antes de salir, con una
+  clave que se queda en tu servidor y en tus dispositivos (más la copia cifrada que abre tu código de recuperación,
+  sección 7). Kerfy Studio guarda estas copias en su servidor de copias de seguridad, ilegibles sin esa clave: las de las 2 últimas horas, luego una por hora durante 48 horas, una por día durante 21 días, nada más antiguo. Cuando se libera un servidor beta ([condiciones de la beta](beta.es.md)), se pone a cero y solo se guarda la copia cifrada de sus copias de seguridad (21 días de historial como máximo), que se borra al cabo de 30 días. Ajustes › Plan todo incluido › Copias de seguridad muestra la última y lanza una enseguida.
+- **La imagen diaria de OVHcloud**: en sus máquinas, OVHcloud hace además, por su parte, una imagen diaria de la
+  máquina entera, que guarda en sus instalaciones (un punto de restauración por día, no cifrado por Kerfy Studio).
+  Cuando un servidor se reinstala para otra persona, la imagen que lo contenía se sustituye en un día aproximadamente.
+- **Averías**: si la máquina de tu servidor sigue inaccesible unos 40 minutos, tu servidor se traslada a otra máquina, a veces
   en otro proveedor de alojamiento, y se restaura desde su última copia de seguridad: **pierdes como mucho unos 20 minutos de
   actividad**. La app te avisa y termina la restauración con la clave de copia de seguridad de tu
   teléfono: ábrela. Cuando todo un proveedor de alojamiento falla a la vez, Kerfy Studio puede esperar a que vuelva en
   lugar de trasladar a todo el mundo.
-- **Reposo**: una plaza sin ninguna solicitud de la app desde hace 14 días y sin rutina programada se duerme; se
+- **Reposo**: un servidor sin ninguna solicitud de la app desde hace 14 días y sin rutina programada se duerme; se
   despierta cuando abres la app, en unos instantes. No se pierde nada.
-- **Actualizaciones**: Kerfy Studio actualiza el software de las plazas (BipAgents, Hermes Agent) por oleadas, y puede
+- **Actualizaciones**: Kerfy Studio actualiza el software de los servidores (BipAgents, Hermes Agent) por oleadas, y puede
   volver a la versión anterior si una oleada sale mal. Una actualización puede sustituir los cambios que hayas hecho,
   por SSH, en los archivos que instala BipAgents.
-- **Supervisión técnica**: los servidores envían a Kerfy Studio datos técnicos (memoria, disco, carga, si el software
-  de cada plaza funciona y si está en plena tarea, su versión, la hora de su última copia de seguridad, tu zona
-  horaria) y, en los primeros días de una plaza, algunas mediciones de uso ([política de privacidad](privacy.es.md),
+- **Supervisión técnica**: las máquinas envían a Kerfy Studio datos técnicos (memoria, disco, carga, si el software
+  de cada servidor funciona y si está en plena tarea, su versión, la hora de su última copia de seguridad, tu zona
+  horaria) y, en los primeros días de un servidor, algunas mediciones de uso ([política de privacidad](privacy.es.md),
   secciones 5.6 y 5.12), nunca contenido.
 - Guarda una copia de lo que te importa: el acceso SSH te permite recuperar tus archivos en cualquier momento.
 
 ## 10. Uso aceptable
 
-Tu plaza está en un servidor alquilado por Kerfy Studio, a menudo compartido con otras personas, en proveedores de
+Tu servidor está en una máquina alquilada por Kerfy Studio, a menudo compartida con otras personas, en proveedores de
 alojamiento cuyas reglas Kerfy Studio debe respetar. La [política de uso aceptable](acceptable-use.es.md) dice lo que
 está prohibido (en particular el uso ilegal, el spam, los ataques, la minería de criptomonedas, la reventa de tu
-plaza) y cómo denunciar un abuso. Ante la denuncia de un proveedor de alojamiento, una solicitud legal o un abuso
-grave, Kerfy Studio puede cortar la clave de IA de una plaza y suspenderla enseguida, en las condiciones de esa
+servidor) y cómo denunciar un abuso. Ante la denuncia de un proveedor de alojamiento, una solicitud legal o un abuso
+grave, Kerfy Studio puede cortar la clave de IA de un servidor y suspenderlo enseguida, en las condiciones de esa
 política.
 
 ## 11. Cancelación, fin y suspensión
@@ -323,15 +323,15 @@ política.
   si Kerfy Studio no te envió el recordatorio antes de la renovación (sección 5), puedes cancelar en cualquier momento a
   partir de la renovación, y lo que pagaste por el periodo posterior a la cancelación se te reembolsa en 30 días
   (artículo L215-1 del Código de Consumo francés). Para estos reembolsos, escribe a support@bipagents.com.
-- **Cuando la suscripción termina** (cancelada o no renovada): tu plaza queda **suspendida durante 30 días**. Tus
+- **Cuando la suscripción termina** (cancelada o no renovada): tu servidor queda **suspendido durante 30 días**. Tus
   agentes dejan de llamar al modelo de IA, no se borra nada, todavía puedes abrir tus conversaciones y recuperar tus
-  archivos, y puedes volver contratando de nuevo una suscripción. Al cabo de 30 días, se borran tu plaza y sus copias de
+  archivos, y puedes volver contratando de nuevo una suscripción. Al cabo de 30 días, se borran tu servidor y sus copias de
   seguridad. El crédito de IA comprado y no usado se conserva en tu cuenta (sección 6).
 - **Después de una semana gratis que no continuaste**: 3 días en lugar de 30.
 - **Renovación impagada en el sitio**: Stripe vuelve a intentar cobrar tu tarjeta. Tus agentes siguen unos 7 días;
-  después la IA se detiene y tu plaza queda suspendida 30 días, como con una suscripción de la tienda que no se renueva;
+  después la IA se detiene y tu servidor queda suspendido 30 días, como con una suscripción de la tienda que no se renueva;
   luego se borra si no se ha pagado nada.
-- **Reembolso por la tienda**: tu plaza queda suspendida enseguida y se borra con sus copias de seguridad al cabo de
+- **Reembolso por la tienda**: tu servidor queda suspendido enseguida y se borra con sus copias de seguridad al cabo de
   30 días.
 - **Recordatorios**: cuando desactivas la renovación, la app te recuerda que uses tu crédito restante. Si no has
   abierto la app desde hace un mes, tu teléfono te recuerda que la suscripción continúa y dónde gestionarla.
@@ -340,7 +340,7 @@ política.
   requerido que cese el incumplimiento, salvo urgencia o incumplimiento grave (artículos 1224 a 1226 del Código Civil
   francés).
 - **Fin de la oferta**: si Kerfy Studio deja de ofrecer la oferta todo incluido, se te informa en la app al menos 30
-  días antes; la suscripción deja de renovarse, conservas tu plaza hasta el final del mes pagado y puedes recuperar su
+  días antes; la suscripción deja de renovarse, conservas tu servidor hasta el final del mes pagado y puedes recuperar su
   contenido por SSH; en una suscripción anual, se te reembolsan los meses pagados y no usados.
 
 ## 12. Derecho de desistimiento
@@ -359,10 +359,10 @@ adicional se reembolsa según las reglas de la tienda.
 L221-21 y D221-5 del Código de Consumo francés). Recibes enseguida un acuse de recibo por correo, con la fecha y la
 hora de tu decisión.
 
-- **Google Play**: Kerfy Studio hace que Google reembolse la suscripción entera, y tu plaza se detiene enseguida.
+- **Google Play**: Kerfy Studio hace que Google reembolse la suscripción entera, y tu servidor se detiene enseguida.
 - **App Store**: Apple cobró el precio y solo Apple puede reembolsarlo. La ventana de reembolso de Apple se abre en la
-  app: termina la solicitud, o hazla en reportaproblem.apple.com. Tu plaza se detiene en cuanto Apple te reembolsa.
-- **Durante la semana gratis**, no se ha pagado nada: tu plaza se detiene enseguida. En iPhone, la app también abre tus
+  app: termina la solicitud, o hazla en reportaproblem.apple.com. Tu servidor se detiene en cuanto Apple te reembolsa.
+- **Durante la semana gratis**, no se ha pagado nada: tu servidor se detiene enseguida. En iPhone, la app también abre tus
   suscripciones para que desactives la renovación; si no, Apple cobraría el primer mes.
 - **Sitio bipagents.com**: Kerfy Studio detiene tu suscripción en Stripe y te reembolsa enseguida, por completo, todos
   tus pagos; el dinero vuelve a tu medio de pago en un plazo de 5 a 10 días. Un reembolso completo, por ejemplo hecho
@@ -370,7 +370,7 @@ hora de tu decisión.
 
 También puedes desistir del contrato con cualquier declaración clara: un correo a support@bipagents.com o el
 formulario del anexo; o pedir directamente el reembolso a la tienda (App Store: historial de compras de tu cuenta de
-Apple; Google Play: página «Solicitar un reembolso»). En todos los casos, tu plaza se conserva 30 días para que
+Apple; Google Play: página «Solicitar un reembolso»). En todos los casos, tu servidor se conserva 30 días para que
 recuperes tus datos, y después se borra con sus copias de seguridad (sección 11).
 
 ## 13. Garantía legal de conformidad y actualizaciones
@@ -382,7 +382,7 @@ recuperes tus datos, y después se borra con sus copias de seguridad (sección 1
   debidas en 14 días (artículos L224-25-17 a L224-25-23). Escribe a support@bipagents.com.
 - Las respuestas de los agentes las produce un modelo de IA y pueden ser falsas (condiciones de uso, sección 8): es una
   característica del servicio, descrita antes de la compra.
-- **Actualizaciones**: Kerfy Studio mantiene tu plaza al día (seguridad, compatibilidad, correcciones). También puede
+- **Actualizaciones**: Kerfy Studio mantiene tu servidor al día (seguridad, compatibilidad, correcciones). También puede
   hacer evolucionar el servicio más allá, por motivos válidos: seguridad, evolución de Hermes Agent, de iOS o de
   Android, modelos de IA disponibles y su precio, capacidad de los servidores. Estas evoluciones no te cuestan nada
   más. Cuando una de ellas cambia tu uso, se te informa en la app con antelación, con su fecha; si te perjudica de
@@ -404,7 +404,7 @@ En particular, Kerfy Studio no responde:
   servicio;
 - de un pago hecho por un agente con tu tarjeta y que hayas aprobado, ni de una negativa de tu banco a reembolsarlo,
   salvo si el pago se debe a un defecto del servicio (importe, sitio o tarjeta distintos de lo que aprobaste);
-- de lo que hagas tú mismo en tu plaza, en particular por SSH;
+- de lo que hagas tú mismo en tu servidor, en particular por SSH;
 - de una pérdida de acceso por haber perdido todos tus dispositivos y tu código de recuperación;
 - de los servicios de terceros que conectes a tus agentes (correo, sitios web, cuentas en línea).
 
@@ -447,7 +447,7 @@ los impuestos de tu país, calculados por Stripe Tax, y cancelas en la página d
   el sitio, recibes un recordatorio entre 15 y 45 días antes de cada renovación (unos 35 días antes), con el precio, la
   fecha y cómo cancelar en línea; un cambio de precio se te anuncia una segunda vez entre 7 y 30 días antes de aplicarse
   (sección 5; Business and Professions Code de California, artículos 17600 y siguientes).
-- **Edad**: ninguna persona menor de 13 años puede usar una plaza (sección 7).
+- **Edad**: ninguna persona menor de 13 años puede usar un servidor de la oferta (sección 7).
 - **Responsabilidad**: en la medida en que lo permita la ley de tu estado, la responsabilidad total de Kerfy Studio
   frente a ti se limita al importe que hayas pagado por la oferta durante los 12 meses anteriores al hecho en cuestión,
   y Kerfy Studio no responde de los daños indirectos; para ti, esta regla sustituye a la frase de la sección 14 sobre

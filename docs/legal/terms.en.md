@@ -31,14 +31,14 @@ See also the [mentions légales](mentions-legales.fr.md) (in French).
   BipAgents is an independent app: it is not published, endorsed or sponsored by Nous Research, and it has no link
   with the owners of trademarks with the same name.
 - Your agents run in one of two ways:
-  - **on your computer or server**, which you install and manage yourself, with the **AI model you chose** (a cloud
+  - **on your own computer or server**, which you install and manage yourself, with the **AI model you chose** (a cloud
     API or a local model); the app connects to them through Tailscale or your local network;
-  - with the **all-included offer**, which is paid, on **your place**, an account on a server that Kerfy Studio rents
+  - with the **all-included offer**, which is paid, on **your server**, an account on a machine that Kerfy Studio rents
     from a hosting partner, with AI credit included; it is governed by its [terms of sale](offer.en.md).
 - **With your own server, Kerfy Studio does not host your agents, does not provide the AI model and has no access to
   your conversations.** Its role is then limited to publishing the app and running a relay to Apple and Google for
   notifications (see section 13 and the [privacy policy](privacy.en.md)). **With the all-included offer**, Kerfy
-  Studio hosts your place and gives you access to the AI model, without accessing the content of your place (terms of
+  Studio hosts your server and gives you access to the AI model, without accessing the content of your server (terms of
   the offer, section 9).
 
 ## 4. Minimum age
@@ -94,7 +94,7 @@ If you use your own computer or server, you are responsible for:
   you can see or do on the server, do not read their conversations without their agreement and, for a minor, adapt
   the agents, their access (email, browsing, purchases) and the model to their age.
 
-With the all-included offer, Kerfy Studio takes care of the server, its updates and your place's backups; you remain
+With the all-included offer, Kerfy Studio takes care of the machine, its updates and your server's backups; you remain
 responsible for your devices, your recovery code, complying with the terms of the services you connect to your agents
 and what you do over SSH ([terms of the offer](offer.en.md)).
 
@@ -163,7 +163,7 @@ You are responsible for what you ask your agents and for what they do with your 
 a professional context, the obligations of the "deployer" under the European regulation on AI, in particular for
 deep fakes, apply to you.
 
-With the all-included offer, the [acceptable use policy](acceptable-use.en.md) sets out these rules for your place
+With the all-included offer, the [acceptable use policy](acceptable-use.en.md) sets out these rules for your server
 (spam, attacks, cryptocurrency mining, reselling…) and says how to report abuse: **abuse@bipagents.com**.
 
 ## 11. Reporting an answer or a message
@@ -174,14 +174,14 @@ With the all-included offer, the [acceptable use policy](acceptable-use.en.md) s
 - Another person's message (family agent, shared agent): **long press › Report this message**. The report goes to
   Kerfy Studio only, with the message text, its author's displayed first name and the agent's name, without your name;
   you can add your email if you want an answer. The author isn't told. Kerfy Studio doesn't read conversations and
-  cannot delete a message; if it takes a measure against an account, a place or a device (section 10, acceptable use
+  cannot delete a message; if it takes a measure against an account, a server or a device (section 10, acceptable use
   policy), it gives the person concerned its reasons and how to contest (Regulation (EU) 2022/2065, article 17). The
   creator of a family agent can also remove a member.
 - What section 10 forbids is also forbidden in a family agent or a shared agent (harassment, threats, hate, illegal
   content, invasion of privacy).
 - Or write to **support@bipagents.com**.
 
-Your agents' replies are produced on your server, or on your place with the all-included offer, by the chosen model:
+Your agents' replies are produced on your own server, or on your server with the all-included offer, by the chosen model:
 Kerfy Studio does not read them and does not intervene in them. Reports help us improve the app, its defaults and its
 documentation, and warn the projects concerned when useful.
 
@@ -196,8 +196,8 @@ Audio").
 
 The relay forwards your server's notifications to your phone: it is a "mere conduit" service within the meaning of
 Regulation (EU) 2022/2065 on digital services. It also forwards to Kerfy Studio the reports sent from the app
-(section 11). With the all-included offer, Kerfy Studio hosts the places, including a family agent's conversation on
-its creator's place: the acceptable use policy (sections 4 and 5) then describes how it handles a notice.
+(section 11). With the all-included offer, Kerfy Studio hosts the servers, including a family agent's conversation on
+its creator's server: the acceptable use policy (sections 4 and 5) then describes how it handles a notice.
 
 - **What it accepts**: a generic text, technical identifiers and, encrypted by your server for your phone alone, the
   agent's name and the start of the message, which it cannot read. Any other text is automatically replaced with a
@@ -225,7 +225,7 @@ all-included offer, see also its terms (sections 11 and 13).
 ## 15. Your content
 
 Your messages, files and recordings belong to you. Kerfy Studio claims no right over them and does not receive them,
-except what you choose to send us (email to support, report). With the all-included offer, they are on your place,
+except what you choose to send us (email to support, report). With the all-included offer, they are on your server,
 which Kerfy Studio hosts without accessing it.
 
 ## 16. Warranty
@@ -247,7 +247,7 @@ not liable for what does not depend on it, in particular:
   defect of the app;
 - if you use your own server, that server, its hosting provider, your model provider and Tailscale;
 - Apple, Google or the services connected to your agents;
-- loss of data on your server or your phone that does not result from a defect of the app.
+- loss of data on your own server or your phone that does not result from a defect of the app.
 
 For the all-included offer, Kerfy Studio's liability is set out in its terms (section 14).
 

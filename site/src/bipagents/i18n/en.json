@@ -5,7 +5,7 @@
   },
   "meta": {
     "title": "BipAgents — Personal agents that never sell your data.",
-    "description": "Personal AI agents for everyone in the family: private, in your own space in Europe or at home, and cheaper than one seat elsewhere. Built on Hermes Agent."
+    "description": "Personal AI agents for everyone in the family: private, on your own server in Europe or at home, and cheaper than one seat elsewhere. Built on Hermes Agent."
   },
   "a11y": {
     "skip": "Skip to content",
@@ -30,7 +30,7 @@
     "proof2": "<b>Your OK</b> before paying or sending",
     "cta": "Choose my plan",
     "watch": "See the demo",
-    "price": "Free beta on iPhone and Android · limited places · no card needed",
+    "price": "Free beta on iPhone and Android · limited spots · no card needed",
     "beta": "Free beta",
     "get": "Get the app"
   },
@@ -116,8 +116,8 @@
   },
   "private": {
     "whereTitle": "Where is your data?",
-    "where1": "In your own space, separate from everyone else’s, on a server in the European Union (OVHcloud or Hetzner). Or on your own computer, if you install it at home.",
-    "where2": "With All included, your space is backed up, encrypted, a few minutes after each activity, and at least once a day. The copy kept on our backup server can’t be read without the key, which stays in your space and on your devices.",
+    "where1": "On your server, separate from everyone else’s, on a machine in the European Union (OVHcloud or Hetzner). Or on your own computer, if you install it at home.",
+    "where2": "With All included, your server is backed up, encrypted, a few minutes after each activity, and at least once a day. The copy kept on our backup server can’t be read without the key, which stays on your server and on your devices.",
     "whoTitle": "Who can read it?",
     "who2": "The AI reads what your agent sends it, to answer you: through EUrouter, a European AI router, then the provider running the model you chose. Before your first message, the app names the router and the model.",
     "who3": "Our limit, said plainly: as with any rented server, the host and we could technically get in. Our software doesn’t, and we only would if the law required it.",
@@ -129,16 +129,16 @@
     "theirsSub": "see your information and may train their AI with it",
     "you": "You",
     "ai": "The AI",
-    "space": "Your space",
+    "space": "Your server",
     "spaceSub": "private, yours alone",
-    "picA11y": "A usual assistant: your messages go to their servers, which see your information and may train their AI with it. BipAgents: your messages go to your space, private, yours alone.",
+    "picA11y": "A usual assistant: your messages go to their servers, which see your information and may train their AI with it. BipAgents: your messages go to your server, private, yours alone.",
     "f1": "<b>Not read by us</b>, no AI trained on it",
     "f2": "<b>No ads</b>, no tracking",
     "f4": "<b>It’s all yours</b>: take it with you whenever you like",
     "detail": "See the details",
     "limitTitle": "What we don’t promise",
     "detailTitle": "The details, plainly",
-    "line": "Your agents live in your own space, in Europe or at home.",
+    "line": "Your agents live on your own server, in Europe or at home.",
     "k1t": "Not read by us",
     "k1": "No AI is trained on it.",
     "k2t": "No ads",
@@ -161,12 +161,12 @@
     "duo": {
       "name": "Duo",
       "who": "2 people",
-      "blurb": "Each with their own agents and space."
+      "blurb": "Each with their own agents and server."
     },
     "famille": {
       "name": "Family",
       "who": "up to 6 people",
-      "blurb": "One shared AI credit, a space for each.",
+      "blurb": "One shared AI credit, a server for each.",
       "flag": "Best price per person"
     },
     "perYear": "/year",
@@ -176,7 +176,7 @@
     "cta": "Subscribe",
     "soon": "<b>The web subscription is coming very soon.</b> Meanwhile, BipAgents is coming to the stores, where you’ll subscribe in the app:",
     "trial": "A free week to start, if you never had one: nothing is charged if you stop before it ends.",
-    "cancel": "Cancel anytime: your space is kept 30 days so you can take everything with you (3 days after a free week you didn’t continue).",
+    "cancel": "Cancel anytime: your server is kept 30 days so you can take everything with you (3 days after a free week you didn’t continue).",
     "includedTitle": "Included in every plan",
     "inc1": "Your Bips, your AI agents, ready in a minute",
     "inc2": "AI credit every month, shared in Duo and Family, carried over if some is left",
@@ -228,7 +228,7 @@
       "offerTag": "The simplest",
       "offerLead": "Ready in a minute: nothing to install, we take care of the server, the updates and the backups.",
       "offerFrom": "from {{p.from}}/month",
-      "offer1": "Your private space, on a server in Europe",
+      "offer1": "Your private server, in Europe",
       "offer2": "Just you, the two of you, or a family of up to 6",
       "offer3": "No commitment: stop whenever you like",
       "offerCta": "See the plans",
@@ -244,7 +244,7 @@
     "headline": "Solo, as a pair, or the whole family.",
     "line": "Subscriptions open after the beta: a free week to start, and cancel anytime.",
     "betaTitle": "The beta is open: it’s free.",
-    "betaLine": "iPhone and Android · limited places · no card needed",
+    "betaLine": "iPhone and Android · limited spots · no card needed",
     "free": {
       "name": "At home",
       "who": "on your computer",
@@ -289,7 +289,7 @@
     "title": "Good questions.",
     "1": {
       "q": "What do I get, exactly?",
-      "a": "Your own AI agents, the Bips, in the app on iPhone, iPad and Android. They work in your own space, on a server in Europe that we look after: nothing to install, nothing to set up, updates and backups included."
+      "a": "Your own AI agents, the Bips, in the app on iPhone, iPad and Android. They work on your server, on a machine in Europe that we look after: nothing to install, nothing to set up, updates and backups included."
     },
     "2": {
       "q": "Is there a free week?",
@@ -301,15 +301,15 @@
     },
     "4": {
       "q": "Who can read my conversations?",
-      "a": "Not us: Kerfy Studio doesn’t read them or train any AI on them. To answer you, the AI reads what your agent sends it: through EUrouter, a European AI router, then the provider running the chosen model; the app names the router and the model before your first message. As we rent the server, we could technically enter your space: our software doesn’t, and we only would if the law required it. Your relatives only read what you share with them: one of your agents, read-only, and the family agent’s shared conversation."
+      "a": "Not us: Kerfy Studio doesn’t read them or train any AI on them. To answer you, the AI reads what your agent sends it: through EUrouter, a European AI router, then the provider running the chosen model; the app names the router and the model before your first message. As we rent the machine, we could technically enter your server: our software doesn’t, and we only would if the law required it. Your relatives only read what you share with them: one of your agents, read-only, and the family agent’s shared conversation."
     },
     "5": {
       "q": "How do Duo and Family work?",
-      "a": "Each invited person has their own account, space and agents; the plan’s AI credit is shared. Paying gives access to no one’s conversations: the person who pays only sees how much credit each person uses. With Family, up to six people share the same plan and its credit."
+      "a": "Each invited person has their own account, server and agents; the plan’s AI credit is shared. Paying gives access to no one’s conversations: the person who pays only sees how much credit each person uses. With Family, up to six people share the same plan and its credit."
     },
     "6": {
       "q": "Can I stop whenever I want?",
-      "a": "Yes, at no cost: the subscription ends at the end of the paid period. Your space is then kept for 30 days so you can take everything with you, then erased with its backups. And you have 14 days to change your mind after buying."
+      "a": "Yes, at no cost: the subscription ends at the end of the paid period. Your server is then kept for 30 days so you can take everything with you, then erased with its backups. And you have 14 days to change your mind after buying."
     },
     "7": {
       "q": "Why is it cheaper on the web?",
@@ -400,7 +400,7 @@
   "page": {
     "privacy": {
       "title": "Privacy policy — BipAgents",
-      "description": "How BipAgents handles your data: what stays on your phone and your place, what Kerfy Studio receives, Google data, your rights."
+      "description": "How BipAgents handles your data: what stays on your phone and your server, what Kerfy Studio receives, Google data, your rights."
     },
     "demo": {
       "title": "The demo — BipAgents",
@@ -416,20 +416,20 @@
     },
     "beta": {
       "title": "The beta — BipAgents",
-      "description": "The BipAgents public beta: free, on iPhone and Android, limited places, no card needed. Your private space in Europe, with an AI credit."
+      "description": "The BipAgents public beta: free, on iPhone and Android, limited spots, no card needed. Your private server in Europe, with an AI credit."
     }
   },
   "beta": {
     "kicker": "Beta",
     "title": "Try BipAgents before everyone else.",
-    "sub": "The public beta is free, on iPhone and Android. Places are limited, and no card is needed.",
+    "sub": "The public beta is free, on iPhone and Android. Spots are limited, and no card is needed.",
     "whatTitle": "What it is",
     "what1": "Free for the whole beta",
     "what2": "On iPhone and Android",
-    "what3": "Limited places",
+    "what3": "Limited spots",
     "what4": "No card needed",
     "getTitle": "What you get",
-    "get1": "Your private space, on a server in Europe",
+    "get1": "Your private server, in Europe",
     "get2": "An AI credit for your agents",
     "get3": "Your Bips, ready in a minute",
     "askTitle": "What we ask",
@@ -440,12 +440,12 @@
     "soon": "Opening soon.",
     "storeSoon": "Coming soon on",
     "storeGet": "The beta on",
-    "cap": "Places: {cap}",
+    "cap": "Spots: {cap}",
     "terms": "Beta terms",
     "after": "After the beta, the all-included offer becomes paid.",
     "afterCta": "See the prices",
     "sticky": "Free beta",
-    "stickySub": "limited places"
+    "stickySub": "limited spots"
   },
   "notebook": {
     "kicker": "Notebook",
@@ -480,9 +480,9 @@
   },
   "family": {
     "title": "Everyone gets their own agents.",
-    "sub": "Everyone has their own private space; you share only what you want.",
-    "s1t": "A place for everyone",
-    "s1": "Own space, own agents, one shared AI credit",
+    "sub": "Everyone has their own private server; you share only what you want.",
+    "s1t": "A server for everyone",
+    "s1": "Own server, own agents, one shared AI credit",
     "s2t": "Your agents talk",
     "s2": "Only if you allow it, and a message to the family waits for your “Send”",
     "s3t": "The family’s agent",
@@ -629,13 +629,13 @@
   },
   "rules": {
     "title": "The house rules.",
-    "line": "Your Bips live at your place: in your own space, separate from everyone else’s.",
+    "line": "Your Bips live on your own server, separate from everyone else’s.",
     "where": "A private server in Europe, ready in a minute. Or your own computer.",
-    "alt": "Your space: a house where your Bips live, under the European flag.",
+    "alt": "Your server: a house where your Bips live, under the European flag.",
     "r1t": "They ask before paying or writing to someone new.",
     "r1": "A payment, an email to a new address, a message to your family: they wait for your yes.",
     "r2t": "We don’t read over their shoulder.",
-    "r2": "Kerfy Studio doesn’t read your space, and trains no AI on it.",
+    "r2": "Kerfy Studio doesn’t read your server, and trains no AI on it.",
     "r3t": "No ads, no tracking.",
     "r3": "No cookies or trackers on this site, and no ads in the app.",
     "r4t": "The AI runs in Europe.",

@@ -17,7 +17,7 @@ support@bipagents.com.
 | **Claude** (Anthropic) | On Anthropic's servers | Only if "Help improve Claude" is on; the switch was pre-set to on when the choice was asked in 2025 [4][5] | Up to 5 years with the switch on, otherwise 30 days after deletion [6] | Not covered here |
 | **Meta AI** | On Meta's servers | Meta uses interactions with its AIs to improve its products [7] | Not found | Yes, by people and automated tools [7] |
 | **Copilot** (Microsoft, new app since 18 August 2026) | On Microsoft's servers | Not for its "foundation models", per Microsoft [8] | Not stated for the new app | Not covered here |
-| **BipAgents** | On **your place** (an account of your own on a server, separate from the others) or on your own computer | **No**: Kerfy Studio trains no AI with your data [9] | As long as you keep your place; erased 30 days after the account is deleted [10] | Kerfy Studio does not read your place (see the limits below) [11] |
+| **BipAgents** | On **your server** (an account of your own on a machine, separate from the others) or on your own computer | **No**: Kerfy Studio trains no AI with your data [9] | As long as you keep your server; erased 30 days after the account is deleted [10] | Kerfy Studio does not read your server (see the limits below) [11] |
 
 ## What changed recently
 
@@ -38,12 +38,12 @@ support@bipagents.com.
 
 All these assistants now have a memory that keeps things about you from one conversation to the next: ChatGPT [20],
 Gemini [3], Claude (on by default) [18], Meta AI [21], Copilot [22]. The company keeps it. In BipAgents, your agents'
-memory is a file on your place, which you can read and correct in the app.
+memory is a file on your server, which you can read and correct in the app.
 
 ## What BipAgents does not promise
 
-- **On the all-included offer, Kerfy Studio rents the server** (OVHcloud or Hetzner, in Europe). Technically, the host
-  and Kerfy Studio could access your place. Kerfy Studio's software does not read it, access to the company's host
+- **On the all-included offer, Kerfy Studio rents the machine** (OVHcloud or Hetzner, in Europe). Technically, the host
+  and Kerfy Studio could access your server. Kerfy Studio's software does not read it, access to the company's host
   accounts is restricted to the company, and access would only happen under a legal obligation [11]. OVHcloud also
   takes a daily image of its servers, which Kerfy Studio does not encrypt [23].
 - **The AI reads what your agents send it**, in order to answer. On the offer this goes through EUrouter (Amsterdam),

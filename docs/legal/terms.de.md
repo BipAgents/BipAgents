@@ -34,17 +34,17 @@ Diese Texte, die Datenschutzerklärung und das Impressum bleiben unter Einstellu
   Installationsprogramm von BipAgents daran vornimmt. BipAgents ist eine unabhängige App: Sie wird von Nous Research
   weder herausgegeben noch gebilligt noch gesponsert und hat keine Verbindung zu den Inhabern gleichnamiger Marken.
 - Deine Agenten laufen auf eine von zwei Arten:
-  - **auf deinem Computer oder deinem Server**, den du selbst installierst und verwaltest, mit dem **KI-Modell, das du
+  - **auf deinem eigenen Computer oder Server**, den du selbst installierst und verwaltest, mit dem **KI-Modell, das du
     gewählt hast** (eine API in der Cloud oder ein lokales Modell); die App verbindet sich mit ihnen über Tailscale
     oder über dein lokales Netz;
-  - mit dem kostenpflichtigen **Alles-inklusive-Angebot** auf **deinem Platz**, einem Konto auf einem Server, den Kerfy
+  - mit dem kostenpflichtigen **Alles-inklusive-Angebot** auf **deinem Server**, einem Konto auf einer Maschine, die Kerfy
     Studio bei einem Hosting-Partner mietet, mit inklusivem KI-Guthaben; es unterliegt seinen
     [Allgemeinen Verkaufsbedingungen](offer.de.md).
 - **Mit deinem eigenen Server hostet Kerfy Studio deine Agenten nicht, stellt das KI-Modell nicht bereit und hat
   keinen Zugriff auf deine Unterhaltungen.** Seine Rolle beschränkt sich dann darauf, die App herauszugeben und für
   Benachrichtigungen ein Relay zu Apple und Google zu betreiben (siehe Abschnitt 13 und die
-  [Datenschutzerklärung](privacy.de.md)). **Mit dem Alles-inklusive-Angebot** hostet Kerfy Studio deinen Platz und
-  gibt dir Zugang zum KI-Modell, ohne auf den Inhalt deines Platzes zuzugreifen (Bedingungen des Angebots,
+  [Datenschutzerklärung](privacy.de.md)). **Mit dem Alles-inklusive-Angebot** hostet Kerfy Studio deinen Server und
+  gibt dir Zugang zum KI-Modell, ohne auf den Inhalt deines Servers zuzugreifen (Bedingungen des Angebots,
   Abschnitt 9).
 
 ## 4. Mindestalter
@@ -107,8 +107,8 @@ Wenn du deinen eigenen Computer oder Server nutzt, bist du verantwortlich:
   Einverständnis und passe bei Minderjährigen die Agenten, ihre Zugänge (E-Mail, Surfen, Käufe) und das Modell an
   ihr Alter an.
 
-Mit dem Alles-inklusive-Angebot kümmert sich Kerfy Studio um den Server, seine Updates und die Sicherungen deines
-Platzes; du bleibst verantwortlich für deine Geräte, deinen Wiederherstellungscode, die Einhaltung der Bedingungen der
+Mit dem Alles-inklusive-Angebot kümmert sich Kerfy Studio um die Maschine, ihre Updates und die Sicherungen deines
+Servers; du bleibst verantwortlich für deine Geräte, deinen Wiederherstellungscode, die Einhaltung der Bedingungen der
 Dienste, die du mit deinen Agenten verbindest, und für das, was du per SSH tust
 ([Bedingungen des Angebots](offer.de.md)).
 
@@ -185,7 +185,7 @@ deine Agenten beruflich nutzt, gelten für dich die Pflichten des „Betreibers�
 insbesondere für Deepfakes.
 
 Mit dem Alles-inklusive-Angebot präzisiert die [Richtlinie zur zulässigen Nutzung](acceptable-use.de.md) diese Regeln
-für deinen Platz (Spam, Angriffe, Kryptomining, Weiterverkauf …) und sagt, wie du Missbrauch meldest:
+für deinen Server (Spam, Angriffe, Kryptomining, Weiterverkauf …) und sagt, wie du Missbrauch meldest:
 **abuse@bipagents.com**.
 
 ## 11. Eine Antwort oder eine Nachricht melden
@@ -197,15 +197,15 @@ für deinen Platz (Spam, Angriffe, Kryptomining, Weiterverkauf …) und sagt, wi
   Meldung geht nur an Kerfy Studio, mit dem Text der Nachricht, dem angezeigten Vornamen ihres Verfassers und dem Namen
   des Agenten, ohne deinen Namen; du kannst deine E-Mail-Adresse hinzufügen, wenn du eine Antwort möchtest. Der
   Verfasser wird nicht benachrichtigt. Kerfy Studio liest die Unterhaltungen nicht und kann keine Nachricht löschen;
-  wenn es eine Maßnahme gegen ein Konto, einen Platz oder ein Gerät trifft (Abschnitt 10, Richtlinie zur zulässigen
+  wenn es eine Maßnahme gegen ein Konto, einen Server oder ein Gerät trifft (Abschnitt 10, Richtlinie zur zulässigen
   Nutzung), nennt es der betroffenen Person die Gründe und sagt ihr, wie sie widersprechen kann (Verordnung (EU)
   2022/2065, Art. 17). Die Person, die einen Familienagenten erstellt hat, kann auch ein Mitglied entfernen.
 - Was Abschnitt 10 verbietet, ist auch in einem Familienagenten oder einem geteilten Agenten verboten (Belästigung,
   Drohungen, Hass, rechtswidrige Inhalte, Verletzung der Privatsphäre).
 - Oder schreib an **support@bipagents.com**.
 
-Die Antworten deiner Agenten werden auf deinem Server, oder mit dem Alles-inklusive-Angebot auf deinem Platz, von dem
-gewählten Modell erzeugt: Kerfy Studio liest sie nicht und greift nicht in sie ein. Meldungen helfen uns, die App, ihre
+Die Antworten deiner Agenten werden auf deinem eigenen Server, oder mit dem Alles-inklusive-Angebot auf deinem Server bei
+Kerfy Studio, von dem gewählten Modell erzeugt: Kerfy Studio liest sie nicht und greift nicht in sie ein. Meldungen helfen uns, die App, ihre
 Standardeinstellungen und ihre Dokumentation zu verbessern und, wenn es nützlich ist, die betroffenen Projekte zu
 informieren.
 
@@ -220,8 +220,8 @@ aufgenommen („Built with Fish Audio“).
 
 Das Relay leitet die Benachrichtigungen deines Servers an dein Telefon weiter: Es ist ein Dienst der „reinen
 Durchleitung“ im Sinne der Verordnung (EU) 2022/2065 über digitale Dienste. Es leitet auch die aus der App gesendeten
-Meldungen an Kerfy Studio weiter (Abschnitt 11). Mit dem Alles-inklusive-Angebot hostet Kerfy Studio die Plätze,
-auch die Unterhaltung eines Familienagenten auf dem Platz der Person, die ihn erstellt hat: Die Richtlinie zur
+Meldungen an Kerfy Studio weiter (Abschnitt 11). Mit dem Alles-inklusive-Angebot hostet Kerfy Studio die Server,
+auch die Unterhaltung eines Familienagenten auf dem Server der Person, die ihn erstellt hat: Die Richtlinie zur
 zulässigen Nutzung (Abschnitte 4 und 5) beschreibt dann, wie es eine Meldung bearbeitet.
 
 - **Was es annimmt**: einen allgemeinen Text, technische Kennungen und, von deinem Server nur für dein Telefon
@@ -254,7 +254,7 @@ das Alles-inklusive-Angebot siehe auch seine Bedingungen (Abschnitte 11 und 13).
 
 Deine Nachrichten, Dateien und Aufnahmen gehören dir. Kerfy Studio beansprucht keine Rechte daran und erhält sie
 nicht, außer dem, was du uns schicken möchtest (E-Mail an den Support, Meldung). Mit dem Alles-inklusive-Angebot
-liegen sie auf deinem Platz, den Kerfy Studio hostet, ohne darauf zuzugreifen.
+liegen sie auf deinem Server, den Kerfy Studio hostet, ohne darauf zuzugreifen.
 
 ## 16. Gewährleistung
 
@@ -276,7 +276,7 @@ gesetzlichen Regeln. Es haftet nicht für das, was nicht von ihm abhängt, insbe
   denn, sie beruhen auf einem Fehler der App;
 - wenn du deinen eigenen Server nutzt, für diesen Server, seinen Hoster, deinen Modellanbieter und Tailscale;
 - für Apple, Google oder die mit deinen Agenten verbundenen Dienste;
-- für den Verlust von Daten auf deinem Server oder deinem Telefon, der nicht auf einem Fehler der App beruht.
+- für den Verlust von Daten auf deinem eigenen Server oder deinem Telefon, der nicht auf einem Fehler der App beruht.
 
 Für das Alles-inklusive-Angebot ist die Haftung von Kerfy Studio in seinen Bedingungen beschrieben (Abschnitt 14).
 
