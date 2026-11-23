@@ -266,9 +266,10 @@ const HEALTH_WEAK: &[&str] = &[
     "tratamiento*", "cirug*", "dolor*", "salud",
 ];
 
-/// Health words that are only held back (`touches_health`: the phone's offline copy, the week's review, the questions,
-/// the night model's pages), never used to file (`is_health` is unchanged): Dutch, which `HEALTH` lacks, and what the
-/// other languages miss (carnet-categories, review 2 B1). A word, `x*` a word's start, or a phrase.
+/// Health words that only keep a text from the night model (`held_from_model`, categories_pass.rs: the one-time sort
+/// sends ten times more pages than a night), never used to file (`is_health`) nor to hold back elsewhere
+/// (`touches_health`: the phone's offline copy, as the apps 1.0 read it, stays as it is): Dutch, which `HEALTH` lacks,
+/// and what the other languages miss (carnet-categories, review 2 B1). A word, `x*` a word's start, or a phrase.
 const HEALTH_HELD: &[&str] = &[
     // nl
     "arts", "artsen", "dokter*", "huisarts*", "tandarts*", "oogarts*", "kinderarts*", "bedrijfsarts*", "gezondheid*",
@@ -294,7 +295,7 @@ const HEALTH_HELD: &[&str] = &[
 ];
 
 /// The parts of a compound that say health wherever they stand in a word (German « Kinderarzt », « Augenklinik »,
-/// Dutch « kindertandarts »), held back only (`touches_health`).
+/// Dutch « kindertandarts »), kept from the night model only (`held_from_model`).
 const HEALTH_INSIDE: &[&str] = &[
     "arzt", "klinik", "krankenhaus", "apothek", "medikament", "therap", "tandarts", "huisarts", "ziekenhuis", "kinderarts",
     "oogarts",
@@ -361,7 +362,13 @@ pub fn is_health(text: &str) -> bool {
 /// questions, « Toujours en tête »): any health word, even one that alone is often something else. Filing uses the
 /// strict `is_health`.
 pub fn touches_health(text: &str) -> bool {
-    is_health(text) || holds(text, HEALTH_WEAK) || holds(text, HEALTH_HELD) || {
+    is_health(text) || holds(text, HEALTH_WEAK)
+}
+
+/// Whether a text is kept from the night model (categories_pass.rs): it touches health, or holds a word of
+/// `HEALTH_HELD` (the five languages) or a compound with a part of `HEALTH_INSIDE` (« Kinderarzt »).
+pub fn held_from_model(text: &str) -> bool {
+    touches_health(text) || holds(text, HEALTH_HELD) || {
         let folded = fold(text);
         folded.split(' ').any(|w| HEALTH_INSIDE.iter().any(|part| w.len() > part.len() && w.contains(part)))
     }
@@ -850,8 +857,9 @@ mod tests {
         }
     }
 
-    /// Review 2 of carnet-categories (B1): what touches health is held back in the five languages, compounds included;
-    /// filing (`is_health`) does not change.
+    /// Review 2 of carnet-categories (B1): what touches health is kept from the night model in the five languages,
+    /// compounds included; filing (`is_health`) and what the phone's offline copy holds back (`touches_health`) do not
+    /// change.
     #[test]
     fn health_is_held_back_in_five_languages() {
         for text in [
@@ -861,13 +869,14 @@ mod tests {
             "Fisioterapeuta", "Médica de cabecera", "Prise de sang", "Pharmacie", "Radiographie du genou",
             "Infirmière à domicile", "GP appointment", "Pharmacy", "Blood test on Monday", "Antibiotics",
         ] {
-            assert!(touches_health(text), "{text}");
+            assert!(held_from_model(text), "{text}");
         }
         for text in ["Recept stamppot boerenkool", "Gastronomie", "Operations team", "Nursery place for Ollie", "Rezept Kartoffelsalat"] {
-            assert!(!touches_health(text), "{text}");
+            assert!(!held_from_model(text), "{text}");
         }
-        // filing reads the strict words only: unchanged
+        // filing and the offline copy read their own words: unchanged
         assert!(!is_health("Afspraak huisarts") && !is_health("Kinderarzt für Leo") && !is_health("Pharmacie"));
+        assert!(!touches_health("Afspraak huisarts") && !touches_health("Pharmacie"));
     }
 
     /// Alex's Carnet, 10/11: things that are not health, filed in Santé by one word each.

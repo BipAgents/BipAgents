@@ -121,8 +121,8 @@ Once, at night (the nightly pass, before its model; `bridge-rs/src/notebook/cate
   no word placed then those the words placed narrowly (never by the person's rules, never a work agent's), by calls of
   20, each call's most cost reserved before it goes (a call that left without an answer is counted at it, its pages
   never sent again), the rest the following nights. It reads a page's title, aliases, « En bref » and lines
-  (400 characters, no attribution, nothing that touches health; never a page whose title touches health or that holds
-  a health line, never the private part) and answers 1–2 of `agent_may_give`, or « other »: a real category that
+  (400 characters, no attribution, nothing that touches health in any of the five languages; never a page whose title
+  touches health or that holds a health line, never the private part) and answers 1–2 of `agent_may_give`, or « other »: a real category that
   changes the page is written `categories_by: agent` (later tables leave it; the person's correction still wins);
   anything else leaves the page as the words placed it. A page it was shown is not sent again while its text stays the
   same (`categories_tried`: fingerprints only). One pass at a time (the night's and « ranger maintenant »).
