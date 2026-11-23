@@ -8,6 +8,7 @@ page, cart: drafts only); the caps and the learning per kind keep it from bother
 import json
 import os
 import re
+from zoneinfo import ZoneInfo
 import threading
 import time
 from pathlib import Path
@@ -15,7 +16,7 @@ from pathlib import Path
 from bbkit.common import AUTH, boite_items, sse
 from bbkit.mcp import call, give_token, not_done, rpc, text_of
 from bbkit.servers import wait_until
-from test_plans import answer, done, local, place, plan_cards, plan_jobs, propose, trip, TOKEN
+from test_plans import answer, done, epoch, home_place, local, place, plan_cards, plan_jobs, propose, trip, TOKEN
 
 CASES = json.loads((Path(__file__).resolve().parents[2] / "contracts" / "offers" / "cases.json").read_text())
 TEXTS = CASES["texts"]
@@ -445,3 +446,112 @@ def test_review_a_moment_offer_answered_starts_no_turn_of_the_model(bridges, fak
     # « Non merci »: 0 model (design §3.8); card_place.rs `settle` would resume a turn within a few seconds
     assert not wait_until(lambda: fakes.hermes.started, timeout=10), \
         [r.get("input", "")[:200] for r in fakes.hermes.started.values()]
+
+
+# -- review of offers (23/11): the author's red tests -----------------------------------------------------------------
+
+
+def moment_offer(kind="page", label="Il pleuvra à Lisbonne. Je te fais la liste de bagages ?"):
+    """The Lisbon trip with a moment that offers, 2 days ahead at 18:00 (Lisbon's clock)."""
+    arguments = trip()
+    at = local(2, 18, 0, ZoneInfo("Europe/Lisbon"))
+    arguments["moments"].append({"at": at, "what": "Liste de bagages",
+                                 "offer": {"kind": kind, "label": label,
+                                           "prompt": "Fais une page avec la liste de bagages pour 3 jours de pluie."}})
+    return arguments, at
+
+
+def test_r1_a_moment_offer_that_expires_starts_no_turn_of_the_model(bridges, fakes):
+    bridge = place(bridges, fakes)
+    arguments, _ = moment_offer()
+    propose(bridge, arguments)
+    [plan] = plan_cards(bridge)
+    assert answer(bridge, plan, "once").status_code == 200
+    [job] = [j for j in plan_jobs(bridge, plan["bip_plan"]["id"]) if "Liste de bagages" in j["name"]]
+    assert bridge.post(f"/v1/routines/{job['id']}/run", headers=AUTH).status_code == 200
+    assert wait_until(lambda: offer_cards(bridge), timeout=20)
+    [card] = offer_cards(bridge)
+    time.sleep(2)
+    path = bridge.state_dir / "offers.json"
+    kept = json.loads(path.read_text())
+    for offer in kept["offers"]:
+        offer["expires"] = time.time() - 1
+    path.write_text(json.dumps(kept))
+    log = bridge.state_dir / "approvals" / "coach.jsonl"
+    assert wait_until(lambda: log.exists() and card["run_id"] in log.read_text(), timeout=20)
+    assert not wait_until(lambda: fakes.hermes.started, timeout=10), \
+        [r.get("input", "")[:200] for r in fakes.hermes.started.values()]
+
+
+def test_r2_an_offer_card_takes_yes_or_no_never_toujours(bridges, fakes):
+    """With calendar-always merged, an event's own card offers « Toujours autoriser »; an offer's card never does, an
+    event's offer neither, and its answer is only « Oui » or « Non merci »."""
+    bridge = place(bridges, fakes)
+    assert bridge.put("/v1/calendar/agents", headers=AUTH, json={"agents": ["coach"]}).status_code == 200
+    give_token(bridge, "coach", TOKEN)
+    make(bridge, {"kind": "calendar", "label": "Je l’ajoute à ton agenda ?", "about": "Dentiste",
+                  "params": {"title": "Dentiste", "start": local(4, 15, 0), "duration_minutes": 45}})
+    [card] = offer_cards(bridge)
+    assert "bip_always" not in card and "bip_always_kind" not in card, card
+    for word in ("always", "session"):
+        assert answer(bridge, card, word).status_code == 422, word
+    assert offer_cards(bridge) == [card]
+    assert answer(bridge, card, "once").json()["by"] == "bridge"
+    settings = bridge.get("/v1/agents/coach/settings", headers=AUTH).json()
+    assert "calendar_write" not in json.dumps(settings.get("always", {})), settings.get("always")
+
+
+def test_choice2_a_moment_offer_held_by_the_caps_waits_for_the_next_day(bridges, fakes):
+    bridge = place(bridges, fakes)
+    arguments, at = moment_offer()
+    propose(bridge, arguments, session="api_unasked")
+    [plan] = plan_cards(bridge)
+    assert answer(bridge, plan, "once").status_code == 200
+    # another card nobody asked for waits: the moment's offer may not come now
+    make(bridge, search(), session="api_unasked")
+    [job] = [j for j in plan_jobs(bridge, plan["bip_plan"]["id"]) if "Liste de bagages" in j["name"]]
+    assert bridge.post(f"/v1/routines/{job['id']}/run", headers=AUTH).status_code == 200
+
+    import datetime
+    tomorrow = epoch(at, ZoneInfo("Europe/Lisbon")) + 86400
+
+    def moved():
+        [j] = [j for j in plan_jobs(bridge, plan["bip_plan"]["id"]) if j["id"] == job["id"]]
+        nxt = j.get("next_run_at")
+        return nxt and abs(datetime.datetime.fromisoformat(nxt).timestamp() - tomorrow) < 60
+    assert wait_until(moved, timeout=20), plan_jobs(bridge, plan["bip_plan"]["id"])
+    assert [c["bip_offer"]["kind"] for c in offer_cards(bridge)] == ["search"]
+    assert fakes.hermes.started == {}
+
+
+def test_choice4_an_unasked_plans_pills_count_in_the_day(bridges, fakes):
+    bridge = place(bridges, fakes)
+    pills = [{"kind": "search", "label": "Je regarde les hôtels ?", "prompt": PROMPT},
+             {"kind": "page", "label": "Je te fais la liste de bagages ?", "prompt": "Fais la liste de bagages."}]
+    over = call(bridge, "plan_propose", trip(offers=pills), token=TOKEN, session="api_unasked")
+    assert not_done(over) and "offers" in text_of(over), text_of(over)
+    propose(bridge, trip(offers=pills[:1]), session="api_unasked")
+    [plan] = plan_cards(bridge)
+    assert answer(bridge, plan, "deny").status_code == 200
+    third = call(bridge, "offer_act", search(about="Porto"), token=TOKEN, session="api_unasked")
+    assert not_done(third) and "already made 2" in text_of(third), text_of(third)
+
+
+def test_r8_a_route_from_home_is_found_only_at_yes(bridges, fakes):
+    bridge = home_place(bridges, fakes)
+    home = {"kind": "address", "label": "Domicile", "full_name": "Camille Exemple", "address_line1": "3 rue du Test",
+            "city": "Lyon", "postal_code": "69001", "country": "fr", "agents": ["coach"]}
+    assert bridge.post("/v1/vault", headers=AUTH, json=home).status_code == 201
+
+    def searched():
+        return [s.params.get("q", "") for s in fakes.maps.seen("/search")]
+    make(bridge, {"kind": "route", "label": "Je cherche le trajet ?", "about": "Dentiste",
+                  "params": {"to": "Cabinet du Dr Martin", "mode": "walking"}})
+    [card] = offer_cards(bridge)
+    texts = TEXTS[lang_of(card)]
+    assert texts["home"] in card["bip_detail"] and "3 rue du Test" not in card["bip_detail"], card["bip_detail"]
+    assert searched() == [] and not fakes.maps.seen("/routed-")
+    assert answer(bridge, card, "once").json()["by"] == "bridge"
+    start = texts["route_done"].split("{place}")[0] + "Cabinet du Dr Martin"
+    assert wait_until(lambda: [m for m in boite_items(bridge) if (m.get("text") or "").startswith(start)], timeout=30)
+    assert [q for q in searched() if "3 rue du Test" in q], searched()

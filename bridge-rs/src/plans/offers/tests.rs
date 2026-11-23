@@ -620,3 +620,191 @@ fn a_plan_s_offers_and_a_moment_s_offer_are_read_with_the_same_checks() {
     let both = crate::plans::draft(&args(&moment(json!({"say": "Il pleuvra."}))), "vie", PARIS, PARIS, now()).unwrap_err();
     assert!(both.contains("offer"), "{both}");
 }
+
+// -- review of offers (23/11): the author's red tests -------------------------------------------------------------------
+
+/// R3: what the bridge does at « Oui » takes a closed list of fields, kind by kind; anything else is refused, never kept
+/// out of the card's sight.
+#[test]
+fn r3_params_are_a_closed_list_for_every_kind() {
+    for (kind, extra) in
+        [("route", "via"), ("reminder", "urgent"), ("calendar", "notes"), ("calendar", "attendees"), ("calendar", "calendar")]
+    {
+        let mut a = offer(kind, "Dentiste");
+        let mut p = a.get("params").cloned().unwrap();
+        p[extra] = json!("x");
+        a.insert("params".into(), p);
+        let why = draft(&a, "vie", &all(), PARIS, now()).unwrap_err();
+        assert!(why.starts_with(&format!("Not done: params.{extra}")), "{kind}: {why}");
+    }
+    // what the card shows, and only that, is written
+    let o = read("calendar", "Dentiste");
+    let event = o.params.as_ref().unwrap()["event"].as_object().unwrap().clone();
+    let written: Vec<&str> = event.iter().filter(|(_, v)| v.as_str().is_some_and(|s| !s.is_empty())).map(|(k, _)| k.as_str()).collect();
+    assert!(written.iter().all(|k| ["title", "start", "end"].contains(k)), "{written:?}");
+}
+
+fn plan_of(id: &str, state: &str, n: f64) -> crate::plans::Plan {
+    crate::plans::Plan {
+        id: id.into(), agent: "vie".into(), kind: "trip".into(), title: "Lisbonne".into(), city: "Lisbonne".into(),
+        zone: "Europe/Lisbon".into(), moments: Vec::new(), repeat: None, watch: Vec::new(), event: None,
+        state: state.into(), made: n, asked: true, first: false, origin: String::new(), routines: Vec::new(),
+        trigger: None, ends: n + 3.0 * DAY,
+    }
+}
+
+fn pill_of(plan: &str, kind: &str, label: &str, n: f64) -> Offer {
+    let mut spec = json!({"kind": kind, "label": label, "prompt": format!("{label} : fais-le.")});
+    if kind == "reminder" {
+        spec = json!({"kind": kind, "label": label, "params": {"at": day_at(2, 9, 0), "say": "Rappel."}});
+    }
+    let mut p = spec_of(&spec, "vie", "Lisbonne", &all(), PARIS, n, PILL_MAX).unwrap();
+    (p.plan, p.pill, p.asked) = (Some(plan.into()), true, true);
+    p
+}
+
+/// R5: a plan that goes without « Non merci » (its event cancelled, its end, « Initiative » off) takes its pills with it,
+/// counted for nothing.
+#[test]
+fn r5_a_plan_gone_takes_its_pills_with_it() {
+    let n = now();
+    let dir = tempfile::tempdir().unwrap();
+    let config = config_in(dir.path());
+    let plan = plan_of("p1", crate::plans::SET, n);
+    crate::plans::change(&config, |s| s.plans.push(plan.clone()));
+    change(&config, |s| {
+        s.offers.push(pill_of("p1", "search", "Je regarde les hôtels ?", n));
+        s.offers.push(pill_of("p2", "page", "Je te fais la liste ?", n));
+    });
+    crate::plans::remove(&config, &plan);
+    let left = load(&config);
+    assert_eq!(left.offers.iter().map(|o| o.plan.clone().unwrap()).collect::<Vec<_>>(), vec!["p2".to_string()]);
+    assert!(left.answers.is_empty());
+}
+
+/// R7: at « Oui », the calendar of the card is checked again, as on the card: Google Calendar still given to the
+/// agent, the phone's still shared with it in writing.
+#[test]
+fn r7_a_calendar_yes_checks_its_right_again() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = config_in(dir.path());
+    let mut o = read("calendar", "Dentiste");
+    o.params.as_mut().unwrap()["calendar"] = json!("google");
+    assert!(!still_writes(&config, "vie", &o), "Google Calendar not given to Vie");
+    o.params.as_mut().unwrap()["calendar"] = json!("phone");
+    assert!(!still_writes(&config, "vie", &o), "the phone's calendar not shared with Vie");
+    crate::calendar::allow(&config, &["vie".to_string()]).unwrap();
+    assert!(still_writes(&config, "vie", &o));
+}
+
+/// Choice 2 (the coordinator, design §3.2 validated by Alex): a moment's offer held by the caps waits for the next day,
+/// at the same time, while its plan lasts; never lost in silence.
+#[test]
+fn choice2_a_held_moment_offer_waits_for_the_next_day_while_its_plan_lasts() {
+    let n = now();
+    assert_eq!(next_try(n, n + 3.0 * DAY), Some(n + DAY));
+    assert_eq!(next_try(n, n + 0.5 * DAY), None, "its plan over by then");
+    // held by the caps only: a rule (the same offer, a subject declined, a kind quiet) drops it
+    let mut store = Store::default();
+    let mut moment = read("page", "Lisbonne · Bagages");
+    moment.plan = Some("p1".into());
+    assert!(rule_refusal(&store, &moment, n).is_none());
+    remember(&mut store, &moment, n);
+    assert!(rule_refusal(&store, &moment, n).is_some());
+}
+
+/// Choice 4 (the coordinator): on an app 1.0 each pill is a card of its own, so a plan's pills count in the day's cap
+/// of cards nobody asked for: an unasked plan and its pills must fit in it.
+#[test]
+fn choice4_a_plan_s_pills_count_in_the_unasked_day() {
+    let n = now();
+    let mut store = Store::default();
+    store.made.push(Made { agent: "vie".into(), at: n, asked: false, run: None, pill: true });
+    assert_eq!(unasked_today(&store, Some("vie"), PARIS, n), 1);
+    let plans = crate::plans::Store::default();
+    let empty = Store::default();
+    assert!(pills_room(&empty, &plans, "vie", 1, PARIS, n).is_none(), "the plan and one pill: 2");
+    let over = pills_room(&empty, &plans, "vie", 2, PARIS, n).unwrap();
+    assert!(over.starts_with("Not done: offers:"), "{over}");
+    assert!(pills_room(&store, &plans, "vie", 1, PARIS, n).is_some(), "one card made already");
+}
+
+/// R8: the day of the caps is the person's, wherever the server is.
+#[test]
+fn r8_the_day_of_the_caps_is_the_person_s() {
+    let n = now();
+    let far = chrono_tz::Pacific::Auckland;
+    let midnight = far
+        .from_local_datetime(&far.timestamp_opt(n as i64, 0).single().unwrap().date_naive().and_hms_opt(0, 0, 0).unwrap())
+        .earliest()
+        .unwrap()
+        .timestamp() as f64;
+    let mut store = Store::default();
+    store.made.push(Made { agent: "vie".into(), at: midnight - 1800.0, asked: false, run: None, pill: false });
+    store.made.push(Made { agent: "vie".into(), at: midnight + 60.0, asked: false, run: None, pill: false });
+    assert_eq!(unasked_today(&store, Some("vie"), far, midnight + 120.0), 1);
+}
+
+/// Remark: a subject said again in other words of case, accents or punctuation is the same subject.
+#[test]
+fn remark_a_subject_reworded_by_case_accents_or_punctuation_is_the_same() {
+    assert_eq!(same_print("vie", "search", "Séville"), same_print("vie", "search", "  seville ! "));
+    assert_eq!(topic_print("vie", "Mariage samedi"), topic_print("vie", "mariage, Samedi…"));
+    assert_ne!(topic_print("vie", "Lisbonne"), topic_print("vie", "Porto"));
+}
+
+/// Remark: the turn of « Oui » reads what its kind allows, so another kind can't do a quiet kind's work.
+#[test]
+fn remark_the_yes_note_says_what_its_kind_allows() {
+    let note = yes_note(&read("page", "Bagages"));
+    assert!(note.contains("It was offered as a page: "), "{note}");
+    assert!(note.contains("nothing else"), "{note}");
+}
+
+/// Remark: an offer made in a turn that read a message from outside (an e-mail's, a link's trigger) is said so on its
+/// card and in the note of its « Oui ».
+#[test]
+fn remark_an_offer_made_after_outside_content_is_said_on_its_card_and_in_its_note() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = config_in(dir.path());
+    let mut o = read("search", "Lisbonne");
+    o.outside = true;
+    let lang = crate::plans::texts(lang_of(&config, "vie")).lang;
+    let item = card_item(&config, &o);
+    assert!(item["bip_detail"].as_str().unwrap().starts_with(texts(lang).outside), "{:?}", item["bip_detail"]);
+    assert_eq!(item["bip_offer"]["outside"], json!(true));
+    assert!(yes_note(&o).contains("a message from outside"), "{}", yes_note(&o));
+    assert!(!yes_note(&read("search", "Lisbonne")).contains("a message from outside"));
+}
+
+/// Remark: a « Oui » whose work had not ended when the bridge stopped is done after its restart, once.
+#[test]
+fn remark_a_yes_not_done_yet_is_done_after_a_restart() {
+    let n = now();
+    let mut store = Store::default();
+    let o = read("page", "Bagages");
+    store.doing.push(Doing { offer: o.clone(), session: None, report: None, at: n - 120.0, tries: 1 });
+    let running = std::collections::HashSet::new();
+    assert_eq!(stale(&store, &running, n).iter().map(|d| d.offer.id.clone()).collect::<Vec<_>>(), vec![o.id.clone()]);
+    let mut busy = std::collections::HashSet::new();
+    busy.insert(o.id.clone());
+    assert!(stale(&store, &busy, n).is_empty(), "running in this bridge");
+    assert!(stale(&store, &running, n - 100.0).is_empty(), "just started");
+    store.doing[0].tries = MAX_TRIES;
+    assert!(stale(&store, &running, n).is_empty(), "tried enough");
+}
+
+/// Remark (design §3.1): a plan's « i » says the whole text of each of its offers, not only their question.
+#[test]
+fn remark_the_plan_s_i_says_its_offers_whole() {
+    let n = now();
+    let dir = tempfile::tempdir().unwrap();
+    let config = config_in(dir.path());
+    let plan = plan_of("p1", crate::plans::WAITING, n);
+    crate::plans::change(&config, |s| s.plans.push(plan.clone()));
+    let pill = pill_of("p1", "search", "Je regarde les hôtels ?", n);
+    change(&config, |s| s.offers.push(pill.clone()));
+    let item = crate::plans::card_item(&config, &plan);
+    let detail = item["bip_detail"].as_str().unwrap();
+    assert!(detail.contains(&pill.prompt) && detail.contains(&pill.label), "{detail}");
+}
