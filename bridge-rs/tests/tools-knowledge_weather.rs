@@ -246,10 +246,11 @@ async fn weather_is_listed_only_once_switched_on() {
 
     assert!(weather::set_enabled(&config, "wellness", true).unwrap());
     assert!(!weather::set_enabled(&config, "wellness", true).unwrap());
-    // listed after the others (then a plan it proposes on its own, plans.rs, « arrête de me proposer des choses »,
-    // agent_proactive.rs, and ask_for_tool, a tool it has off asked on a card, last: tool_asks.rs)
+    // listed after the others (then a plan it proposes on its own, plans.rs, an offer to act, plans/offers.rs,
+    // « arrête de me proposer des choses », agent_proactive.rs, and ask_for_tool, a tool it has off asked on a card,
+    // last: tool_asks.rs)
     let names = tool_names(&app).await;
-    let after = ["plan_propose", "proactive_off", "ask_for_tool"];
+    let after = ["plan_propose", "offer_act", "proactive_off", "ask_for_tool"];
     assert_eq!(names.iter().rfind(|n| !after.contains(&n.as_str())).unwrap(), "weather", "{names:?}");
     use std::os::unix::fs::PermissionsExt;
     let file = dir.path().join("data/weather/agents.json");

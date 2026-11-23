@@ -206,7 +206,7 @@ fn route_reminder_and_calendar_take_params_the_others_a_prompt() {
 #[test]
 fn an_offer_expires_after_24h_or_when_its_moment_has_passed() {
     let n = now();
-    let search = read("search", "Lisbonne");
+    let search = draft(&offer("search", "Lisbonne"), "vie", &all(), PARIS, n).unwrap();
     assert_eq!(search.expires, n + EXPIRES_SECONDS);
     // a reminder within the day: its moment first
     let mut soon = offer("reminder", "Four");
@@ -269,21 +269,21 @@ fn two_offers_per_reply_and_the_unasked_caps_shared_with_plans() {
     });
     assert!(refused(&Store::default(), &plans_waiting, &unasked, None, PARIS, now()).is_some());
     let mut day = crate::plans::Store::default();
-    day.made.push(crate::plans::Made { agent: "vie".into(), at: n - 60.0, asked: false, run: None });
+    day.made.push(crate::plans::Made { agent: "vie".into(), at: n, asked: false, run: None });
     let mut store = Store::default();
-    store.made.push(Made { agent: "vie".into(), at: n - 30.0, asked: false, run: None, pill: false });
+    store.made.push(Made { agent: "vie".into(), at: n, asked: false, run: None, pill: false });
     let two = refused(&store, &day, &unasked, None, PARIS, now()).unwrap();
     assert!(two.starts_with("Not done: you already made 2"), "{two}");
     // asked cards count in no daily cap
     let mut asked_day = Store::default();
     for _ in 0..3 {
-        asked_day.made.push(Made { agent: "vie".into(), at: n - 30.0, asked: true, run: Some("r".into()), pill: false });
+        asked_day.made.push(Made { agent: "vie".into(), at: n, asked: true, run: Some("r".into()), pill: false });
     }
     assert!(refused(&asked_day, &crate::plans::Store::default(), &unasked, None, PARIS, now()).is_none());
     let mut place = crate::plans::Store::default();
     for agent in ["budget", "coach"] {
         for _ in 0..2 {
-            place.made.push(crate::plans::Made { agent: agent.into(), at: n - 60.0, asked: false, run: None });
+            place.made.push(crate::plans::Made { agent: agent.into(), at: n, asked: false, run: None });
         }
     }
     let four = refused(&Store::default(), &place, &unasked, None, PARIS, now()).unwrap();
@@ -291,7 +291,7 @@ fn two_offers_per_reply_and_the_unasked_caps_shared_with_plans() {
     // and the other way: an offer made unasked today counts for the plans
     let mut offers_day = Store::default();
     for _ in 0..2 {
-        offers_day.made.push(Made { agent: "vie".into(), at: n - 60.0, asked: false, run: None, pill: false });
+        offers_day.made.push(Made { agent: "vie".into(), at: n, asked: false, run: None, pill: false });
     }
     assert_eq!(unasked_today(&offers_day, Some("vie"), PARIS, now()), 2);
     assert_eq!(unasked_today(&offers_day, None, PARIS, now()), 2);
@@ -447,15 +447,15 @@ fn the_card_is_a_generic_yes_no_card_with_its_prompt_under_i() {
     // under « i »: exactly what the agent will be asked, then where its suggestions are set (its first card)
     let prompt = hotels["arguments"]["prompt"].as_str().unwrap();
     assert_eq!(item["bip_detail"], json!(format!("{prompt}\n{}", t.first_card)));
-    let offer = &item["bip_offer"];
-    assert_eq!(offer["kind"], json!("search"));
-    assert_eq!(offer["about"], json!("Lisbonne"));
-    assert_eq!(offer["label"], json!(label));
-    assert_eq!(offer["agent"], json!("Vie"));
-    assert_eq!(offer["mode"], json!("basic"));
-    assert_eq!(offer["plan"], Value::Null);
-    assert_eq!(offer["pill"], json!(false));
-    assert_eq!(offer["expires_at"], json!(o.expires));
+    let shown = &item["bip_offer"];
+    assert_eq!(shown["kind"], json!("search"));
+    assert_eq!(shown["about"], json!("Lisbonne"));
+    assert_eq!(shown["label"], json!(label));
+    assert_eq!(shown["agent"], json!("Vie"));
+    assert_eq!(shown["mode"], json!("basic"));
+    assert_eq!(shown["plan"], Value::Null);
+    assert_eq!(shown["pill"], json!(false));
+    assert_eq!(shown["expires_at"], json!(o.expires));
     // what the bridge does, said exactly
     let reminder = example("reminder");
     let mut r = read("reminder", "Dentiste");

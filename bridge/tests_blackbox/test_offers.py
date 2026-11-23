@@ -237,7 +237,7 @@ def test_caps_two_offers_per_reply_one_unasked_waiting_shared_with_the_plans(bri
                       "prompt": "Fais une page avec la liste de bagages pour Lisbonne."}, session="api_o")
         third = call(bridge, "offer_act", {"kind": "draft", "label": "Je prépare le message ?", "about": "Hôtel",
                                            "prompt": "Écris un brouillon pour demander une chambre calme."},
-                     session="api_o")
+                     token=TOKEN, session="api_o")
         assert not_done(third) and "two offers per reply" in text_of(third), text_of(third)
     finally:
         gate.set()
@@ -281,8 +281,13 @@ def test_an_offer_expires_quietly_and_folds_into_passee(bridges, fakes):
     assert len(fakes.apns.payloads()) == pushed
     assert answer(bridge, card, "once").status_code == 404
     # kept for the conversation as « expired » (an app 1.1 folds it into « Passée »), counted, nothing run
-    log = (bridge.state_dir / "approvals" / "coach.jsonl").read_text().splitlines()
-    [row] = [json.loads(line) for line in log if card["run_id"] in line]
+    kept = bridge.state_dir / "approvals" / "coach.jsonl"
+
+    def rows():
+        lines = kept.read_text().splitlines() if kept.exists() else []
+        return [json.loads(line) for line in lines if card["run_id"] in line]
+    assert wait_until(rows, timeout=20)
+    [row] = rows()
     assert row["choice"] == "expired", row
     assert fakes.hermes.started == {}
 
