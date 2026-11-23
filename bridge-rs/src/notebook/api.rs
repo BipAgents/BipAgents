@@ -43,8 +43,9 @@
 //!     POST   /v1/notebook/move/undo            {move}   « Annuler » → {page}
 //!     POST   /v1/notebook/misplaced            {action: move|leave, ids?}   the misplaced points' card answered
 //!                                              (misplaced.rs) → {moved, toast, card}
-//!     POST   /v1/notebook/categorize           {path | record | document | task | line, categories}   « Ranger
-//!                                              ailleurs » (categories.rs) → {…, undo, toast, undo_title}
+//!     POST   /v1/notebook/categorize           {path | record | document | task | line | item, categories?,
+//!                                              space?}   « Ranger ailleurs » (categories.rs), « Ranger dans… Perso /
+//!                                              Pro » (spaces.rs, S5) → {…, space?, undo, toast, undo_title}
 //!     POST   /v1/notebook/categorize/undo      {undo}   « Annuler »
 //!     GET    /v1/notebook/categorize/today     today's re-filings, each still undoable (categories_pass.rs)
 //!     POST   /v1/notebook/sorted               {action: ok|see}   the card « Ton Carnet est rangé par catégories »
@@ -78,9 +79,10 @@
 //!     POST   /v1/notebook/check                {path, item, done}   a trip's thing to pack ticked (trip.rs)
 //!     GET    /v1/notebook/documents?private=   the files the agents made or received and their web pages, by agent,
 //!                                              with their subjects (the private part's pages only with private=1)
-//!     GET    /v1/notebook/settings             {mentions, nightly, language, cap…}
+//!     GET    /v1/notebook/settings             {mentions, nightly, language, cap, separate_spaces…}
 //!     PATCH  /v1/notebook/settings             {mentions?, nightly?, questions?, quiet? {from, to}, language? (a Carnet
-//!                                              with pages: its folders and pages moved to the new names, relanguage.rs)}
+//!                                              with pages: its folders and pages moved to the new names, relanguage.rs),
+//!                                              separate_spaces? (« Séparer Perso, Pro et Famille », spaces.rs)}
 //!     GET    /v1/notebook/export?health=       a zip of the vault, for Obsidian
 //!     POST   /v1/notebook/tidy                 the nightly pass now; GET /v1/notebook/runs its runs and this month's cost
 //!     GET    /v1/notebook/fill                 « Remplir mon Carnet »: where it is; POST starts it {agents?}, DELETE stops
@@ -230,7 +232,16 @@ fn page_summary(ctx: &super::categories::Ctx, path: &str, part: Part, page: &sup
            "contact": if page.contact().is_empty() { Value::Null } else { json!(page.contact()) },
            "updated": page.front.get("updated").cloned().unwrap_or(Value::Null), "icon": page.icon(),
            "summary": super::summary_of(&page.body, brief),
-           "categories": filed.categories, "categories_by": filed.by})
+           "categories": filed.categories, "categories_by": filed.by, "space": space_view(part, page)})
+}
+
+/// A page's space as the apps show it (S5): `perso` or `pro`; the private part (Santé) none.
+fn space_view(part: Part, page: &super::Page) -> Value {
+    if part == Part::Health {
+        Value::Null
+    } else {
+        json!(super::spaces::of_page(part, page))
+    }
 }
 
 async fn list_pages(State(state): State<AppState>, q: QueryMap) -> ApiResult<Response> {
@@ -314,7 +325,12 @@ async fn search(State(state): State<AppState>, q: QueryMap) -> ApiResult<Respons
     let langs = super::index::langs(&super::language(&config), q.get("lang"));
     let titles_lang = langs.last().cloned().unwrap_or_default();
     let category = web::query_str(&q, "category", false, Some(20))?.filter(|c| !c.is_empty());
-    let space = web::query_str(&q, "space", false, Some(10))?.filter(|s| !s.is_empty());
+    // `all`, `perso`, `pro` (else 400 space_unknown); Santé, behind its lock, is in no space (S5)
+    let space = match super::summary::space_asked(q.get("space")).map_err(|r| sommaire_refused(r, &shown))? {
+        "all" => None,
+        _ if part == Part::Health => None,
+        s => Some(s.to_string()),
+    };
     let online = matches!(q.get("online"), Some("1" | "true" | "yes"));
     // a new app asking for the sommaire's keys only: today's (answers, pages, tasks) not made
     let sommaire_only = matches!(q.get("sommaire"), Some("1" | "true" | "yes"));
@@ -429,17 +445,19 @@ async fn index(State(state): State<AppState>, q: QueryMap, headers: axum::http::
         None => None,
     };
     let epoch = web::query_str(&q, "epoch", false, Some(40))?;
+    // one space's copy (S5): `all` (none) the whole; else 400 space_unknown
+    let space = super::summary::space_asked(q.get("space")).map_err(|r| sommaire_refused(r, "en"))?;
     let asked = q.get("lang").map(str::to_string);
     let has = headers.get("if-none-match").and_then(|v| v.to_str().ok()).map(|v| v.trim().to_string());
     let (body, etag) = blocking(move || {
         let langs = super::index::langs(&super::language(&config), asked.as_deref());
         // the phone has it: no answer made (review 1 of S3, R4: an 8 MB copy for a 304)
-        let now = super::index::etag(&config, &langs);
+        let now = super::index::etag_in(&config, &langs, space);
         if has.as_deref() == Some(now.as_str()) {
             return Ok((Value::Null, now));
         }
         let shown = langs.last().cloned().unwrap_or_default();
-        Ok(super::index::answer(&config, &langs, since, epoch.as_deref(), super::index::online_only(&shown)))
+        Ok(super::index::answer_in(&config, &langs, since, epoch.as_deref(), super::index::online_only(&shown), space))
     })
     .await?;
     let unchanged = body.is_null();
@@ -865,7 +883,7 @@ pub fn page_view_in(config: &Config, part: Part, path: &str, shown: &str) -> any
               "backlinks": backlinks, "tasks": tasks, "documents": documents, "id": page.id(), "close": page.close(),
               "icon": page.icon(), "shared_with": super::shares_of(config, part, path, &page),
               "emails": page.emails(), "phones": page.phones(), "rev": super::rev(&text), "text": text,
-              "categories": filed.categories, "categories_by": filed.by}))
+              "categories": filed.categories, "categories_by": filed.by, "space": space_view(part, &page)}))
 }
 
 async fn read_page(State(state): State<AppState>, q: QueryMap) -> ApiResult<Response> {
@@ -891,12 +909,16 @@ pub struct NewPage {
     pub title: String,
     #[serde(default, deserialize_with = "web::lax::bool")]
     pub private: bool,
+    /// The app's open tab (« Écrire une page » in Pro; S5): `perso` or `pro`.
+    #[serde(default)]
+    pub space: Option<String>,
 }
 
 impl Validate for NewPage {
     fn validate(&self, errors: &mut Vec<FieldError>) {
         check_max_len(errors, "kind", Some(&self.kind), 20);
         check_max_len(errors, "title", Some(&self.title), 200);
+        check_max_len(errors, "space", self.space.as_deref(), 10);
     }
 }
 
@@ -960,8 +982,12 @@ async fn new_page(State(state): State<AppState>, q: QueryMap, Json(body): Json<N
     let config = state.config();
     let shown = shown_language(&config, &q);
     let part = if body.private { Part::Health } else { Part::Main };
+    let space = match body.space.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        Some(s) => Some(super::spaces::asked(s).map_err(|r| carnet_error(400, r.code(), &shown, json!({})))?),
+        None => None,
+    };
     let made = blocking(move || {
-        let made = super::new_page(&config, part, body.kind.trim(), &body.title, &Who::you(&config))?;
+        let made = super::new_page_in(&config, part, body.kind.trim(), &body.title, space, &Who::you(&config))?;
         Ok(made.map(|path| {
             let rev = super::read_page_text(&config, part, &path).map(|t| super::rev(&t)).unwrap_or_default();
             (path, rev)
@@ -1392,7 +1418,7 @@ pub fn settings_view(config: &Config) -> Value {
            "questions": super::ask::questions_on(&state), "quiet": {"from": from, "to": to},
            "language": super::language(config),
            "monthly_cap": config.notebook.monthly_cap, "spent_this_month": spend.get("eur").cloned().unwrap_or(json!(0.0)),
-           "model": config.notebook.model})
+           "model": config.notebook.model, "separate_spaces": super::spaces::on_in(&state)})
 }
 
 async fn get_settings(State(state): State<AppState>) -> ApiResult<Response> {
@@ -1415,6 +1441,9 @@ pub struct Settings {
     /// The place's quiet hours, « HH:MM » (the Carnet's cards, the review, the tips).
     #[serde(default)]
     pub quiet: Option<Quiet>,
+    /// « Séparer Perso, Pro et Famille » (spaces.rs, S5; off at first).
+    #[serde(default, deserialize_with = "web::lax::opt_bool")]
+    pub separate_spaces: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1481,6 +1510,9 @@ async fn set_settings(State(state): State<AppState>, Json(body): Json<Settings>)
             }
             if let Some(q) = &body.quiet {
                 s.insert("quiet".into(), json!({"from": q.from, "to": q.to}));
+            }
+            if let Some(on) = body.separate_spaces {
+                s.insert(super::spaces::SETTING.into(), json!(on));
             }
         })?;
         Ok(settings_view(&config))
@@ -1985,6 +2017,9 @@ pub struct Categorize {
     pub item: Option<String>,
     #[serde(default)]
     pub categories: Vec<String>,
+    /// « Ranger dans… Perso / Pro » (S5): `perso` or `pro`, alone or with `categories`.
+    #[serde(default)]
+    pub space: Option<String>,
 }
 
 impl Validate for Categorize {
@@ -2007,12 +2042,14 @@ impl Validate for Categorize {
         if self.categories.len() > 5 || self.categories.iter().any(|c| c.len() > 40) {
             errors.push(FieldError::new("too_long", web::body_loc("categories"), "1 or 2 categories", json!(self.categories)));
         }
+        check_max_len(errors, "space", self.space.as_deref(), 10);
     }
 }
 
 /// « Ranger ailleurs »: a page, a record, a document, a task or a line filed in other categories by the person
-/// (categories.rs `categorize`): what it was, the rule it taught, the undo's id. The private part is Santé: its
-/// pages are not filed elsewhere.
+/// (categories.rs `categorize`): what it was, the rule it taught, the undo's id. « Ranger dans… Perso / Pro »
+/// (`space`, spaces.rs, S5), alone or with them: one gesture, one undo. The private part is Santé: its pages are not
+/// filed elsewhere, never in a space.
 async fn categorize(State(state): State<AppState>, q: QueryMap, Json(body): Json<Categorize>) -> ApiResult<Response> {
     use super::categories::{Refused, Target};
     let config = state.config();
@@ -2030,13 +2067,16 @@ async fn categorize(State(state): State<AppState>, q: QueryMap, Json(body): Json
         _ => return Err(carnet_error(400, "target_missing", &shown, json!({}))),
     };
     let categories = body.categories.clone();
-    let done = blocking(move || super::categories::categorize(&config, &target, &categories, &Who::you(&config))).await?;
+    let space = body.space.clone();
+    let lang = shown.clone();
+    let done = blocking(move || {
+        super::spaces::categorize(&config, &target, &categories, space.as_deref(), &lang, &Who::you(&config))
+    })
+    .await?;
     match done {
-        // the toast « Rangé dans Argent. » and its « Annuler » (S2)
-        Ok(view) => Ok(web::ok(super::categories_pass::with_toast(view, &shown))),
-        Err(Refused::NotFound) => Err(carnet_error(404, Refused::NotFound.code(), &shown, json!({}))),
-        Err(Refused::HandWritten) => Err(carnet_error(409, Refused::HandWritten.code(), &shown, json!({}))),
-        Err(r) => Err(carnet_error(400, r.code(), &shown, json!({}))),
+        // the toast « Rangé dans Argent. » (« … et Pro. ») and its « Annuler » (S2, S5)
+        Ok(view) => Ok(web::ok(view)),
+        Err(r) => Err(carnet_error(r.status(), r.code(), &shown, json!({}))),
     }
 }
 
@@ -2055,7 +2095,7 @@ impl Validate for CategorizeUndo {
 async fn categorize_today(State(state): State<AppState>, q: QueryMap) -> ApiResult<Response> {
     let config = state.config();
     let shown = shown_language(&config, &q);
-    let view = blocking(move || Ok(super::categories_pass::today(&config, &shown))).await?;
+    let view = blocking(move || Ok(super::spaces::today(&config, &shown))).await?;
     Ok(web::ok(view))
 }
 
@@ -2080,11 +2120,13 @@ async fn sorted_done(State(state): State<AppState>, Json(body): Json<SortedDone>
     Ok(web::ok(json!({"card": null})))
 }
 
-/// « Annuler » after « Ranger ailleurs »: the categories as they were, the rule forgotten (404 `undo_gone`).
+/// « Annuler » after « Ranger ailleurs » or « Ranger dans… »: the categories and the space as they were, the rule
+/// forgotten (404 `undo_gone`).
 async fn categorize_undo(State(state): State<AppState>, q: QueryMap, Json(body): Json<CategorizeUndo>) -> ApiResult<Response> {
     let config = state.config();
     let shown = shown_language(&config, &q);
-    let undone = blocking(move || super::categories::undo(&config, &body.undo, &Who::you(&config))).await?;
+    let lang = shown.clone();
+    let undone = blocking(move || super::spaces::undo(&config, &body.undo, &lang, &Who::you(&config))).await?;
     match undone {
         Some(view) => Ok(web::ok(view)),
         None => Err(carnet_error(404, "undo_gone", &shown, json!({}))),
@@ -2168,7 +2210,8 @@ impl Validate for KeptChange {
     }
 }
 
-/// « Garder » a search (`{q, title?, space?, category?}`), or rename one (`{id, title}`): the space's list after it.
+/// « Garder » a search (`{q, title?, space?, category?}`), or rename one (`{id, title, space?}`): the list of the view
+/// on screen after it (`space`: the view; none, `all`, the S4 apps'; review 1 of S5, B1).
 async fn kept_change(State(state): State<AppState>, q: QueryMap, Json(body): Json<KeptChange>) -> ApiResult<Response> {
     let config = state.config();
     let shown = shown_language(&config, &q);
@@ -2180,20 +2223,22 @@ async fn kept_change(State(state): State<AppState>, q: QueryMap, Json(body): Jso
             (None, Some(words)) => super::summary::keep(&config, words, body.title.as_deref(), space, body.category.as_deref()),
             (None, None) => Err(super::summary::Refused::KeptEmpty),
         };
-        Ok(changed.map(|space| super::summary::kept_at(&config, &space, &langs, chrono::Local::now().date_naive())))
+        Ok(changed.map(|_| super::summary::kept_at(&config, space, &langs, chrono::Local::now().date_naive())))
     })
     .await?;
     done.map(web::ok).map_err(|r| sommaire_refused(r, &shown))
 }
 
-/// A kept search deleted (`?id=`): its space's list after it (404 `kept_unknown`).
+/// A kept search deleted (`?id=&space=`): the list of the view on screen after it (`space`; none: `all`), 404
+/// `kept_unknown`.
 async fn kept_drop(State(state): State<AppState>, q: QueryMap) -> ApiResult<Response> {
     let config = state.config();
     let shown = shown_language(&config, &q);
     let id = web::query_str(&q, "id", true, Some(20))?.unwrap_or_default();
+    let space = space_of(&q, &shown)?;
     let langs = super::index::langs(&super::language(&config), q.get("lang"));
     let done = blocking(move || {
-        Ok(super::summary::drop_kept(&config, &id).map(|space| super::summary::kept_at(&config, &space, &langs, chrono::Local::now().date_naive())))
+        Ok(super::summary::drop_kept(&config, &id).map(|_| super::summary::kept_at(&config, space, &langs, chrono::Local::now().date_naive())))
     })
     .await?;
     done.map(web::ok).map_err(|r| sommaire_refused(r, &shown))

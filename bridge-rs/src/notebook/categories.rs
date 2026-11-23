@@ -45,8 +45,10 @@ pub const UNDO_TODAY_MAX: usize = 100;
 /// `sommaire`: a new app uses a route only when it is listed (S1: the categories on today's answers, « Ranger
 /// ailleurs »; S2 `sorted`: the card « Ton Carnet est rangé par catégories », today's re-filings, the toast; S3
 /// `index`: the phone's search copy; S4 `summary`, `category`, `kept`, `searched`: the sommaire ready to show,
-/// summary.rs; then S5 `spaces`, S6 `family`).
-pub const CAPABILITIES: [&str; 8] = ["categories", "categorize", "sorted", "index", "summary", "category", "kept", "searched"];
+/// summary.rs; S5 `spaces`: « Séparer Perso, Pro et Famille », `space` on « Ranger ailleurs », spaces.rs; then S6
+/// `family`).
+pub const CAPABILITIES: [&str; 9] =
+    ["categories", "categorize", "sorted", "index", "summary", "category", "kept", "searched", "spaces"];
 /// The person's corrections of records, tasks, documents and lines kept.
 const MARKS_KEPT: usize = 2000;
 /// An item is in « Dates » when its date is from this many days ago …
@@ -1238,11 +1240,23 @@ pub(crate) fn resolve(config: &Config, id: &str) -> Option<Target> {
 /// a line's hash, a file's hash), never a text, a path or a file's name (« Oublie ça »). The answer says what it was
 /// and how to undo.
 pub fn categorize(config: &Config, target: &Target, given: &[String], who: &Who) -> anyhow::Result<Result<Value, Refused>> {
+    let _guard = super::lock();
+    categorize_locked(config, target, given, who, None)
+}
+
+/// [`categorize`], the Carnet's lock held by the caller; `header`: another change of a page's text written in the
+/// same write (« Ranger dans… Pro » with « Ranger ailleurs », spaces.rs: one change of the page, one lock).
+pub fn categorize_locked(
+    config: &Config,
+    target: &Target,
+    given: &[String],
+    who: &Who,
+    header: Option<&dyn Fn(&str) -> String>,
+) -> anyhow::Result<Result<Value, Refused>> {
     let cats = match checked(given) {
         Ok(c) => c,
         Err(r) => return Ok(Err(r)),
     };
-    let _guard = super::lock();
     let target = match target {
         Target::Item(id) => match resolve(config, id) {
             Some(t) => t,
@@ -1273,6 +1287,10 @@ pub fn categorize(config: &Config, target: &Target, given: &[String], who: &Who)
                 set_front(&mut page, &cats, "person");
                 page.render()
             });
+            let after = match header {
+                Some(change) => change(&after),
+                None => after,
+            };
             if after != text {
                 super::commit(config, Part::Main, path, Some(&text), Some(&after), who, ACTION, "")?;
             }
@@ -1378,6 +1396,12 @@ pub const ACTION: &str = "categorize";
 /// categories changed since (by hand, by another correction) is left as it is now.
 pub fn undo(config: &Config, id: &str, who: &Who) -> anyhow::Result<Option<Value>> {
     let _guard = super::lock();
+    undo_locked(config, id, who, None)
+}
+
+/// [`undo`], the Carnet's lock held by the caller; `header`: another change of the page's text written with it
+/// (its space put back, spaces.rs).
+pub fn undo_locked(config: &Config, id: &str, who: &Who, header: Option<&dyn Fn(&str) -> String>) -> anyhow::Result<Option<Value>> {
     let state = super::read_state(config);
     let list: Vec<Value> = state.get("category_undo").and_then(Value::as_array).cloned().unwrap_or_default();
     let Some(entry) = list.iter().find(|e| tk::str_or_empty(e.get("id")) == id).cloned() else { return Ok(None) };
@@ -1442,6 +1466,10 @@ pub fn undo(config: &Config, id: &str, who: &Who) -> anyhow::Result<Option<Value
                     }
                     page.render()
                 });
+                let after = match header {
+                    Some(change) => change(&after),
+                    None => after,
+                };
                 if after != old {
                     super::commit(config, Part::Main, &path, Some(&old), Some(&after), who, ACTION, "")?;
                 }

@@ -66,6 +66,9 @@ mod search_bench;
 pub mod search_words;
 #[cfg(test)]
 mod sommaire_contract;
+pub mod spaces;
+#[cfg(test)]
+mod spaces_tests;
 pub mod summary;
 #[cfg(test)]
 mod summary_tests;
@@ -2095,6 +2098,8 @@ fn note_locked_with(
     page.body = body;
     // its categories, by its words, when it has none yet (categories.rs: no model, no token)
     categories::on_write(config, part, &path, &mut page, who, created);
+    // a page a Pro agent makes, « Séparer Perso, Pro et Famille » on: Pro (spaces.rs, S5)
+    spaces::on_write(config, part, &path, &mut page, who, created);
     page.touch();
     let text = page.render();
     let summary = if converted && added.is_empty() {
@@ -2313,6 +2318,18 @@ pub fn edit(
 /// A new page made by the person in the app (`POST /v1/notebook/page`): its Markdown written by the bridge. Err(path)
 /// inside: a page of that name, alias, e-mail or phone is there already (the app opens it).
 pub fn new_page(config: &Config, part: Part, kind: &str, title: &str, who: &Who) -> anyhow::Result<Result<String, String>> {
+    new_page_in(config, part, kind, title, None, who)
+}
+
+/// [`new_page`] in the space of the app's open tab (`space`: « Écrire une page » in Pro; S5).
+pub fn new_page_in(
+    config: &Config,
+    part: Part,
+    kind: &str,
+    title: &str,
+    space: Option<&str>,
+    who: &Who,
+) -> anyhow::Result<Result<String, String>> {
     let _guard = lock();
     let lang = fix_language(config)?;
     let w = words(&lang);
@@ -2347,6 +2364,10 @@ pub fn new_page(config: &Config, part: Part, kind: &str, title: &str, who: &Who)
         trip::make_trip(&mut page, &lang);
     }
     categories::on_write(config, part, &path, &mut page, who, true);
+    // written in the app's open tab (« Écrire une page » in Pro); never in the private part (Santé has no space)
+    if part == Part::Main && space == Some("pro") {
+        spaces::set_front(&mut page, "pro");
+    }
     page.touch();
     commit(config, part, &path, None, Some(&page.render()), who, "create", "")?;
     Ok(Ok(path))
@@ -2364,6 +2385,11 @@ pub fn delete_page(config: &Config, part: Part, path: &str, who: &Who) -> anyhow
 pub fn merge_locked(config: &Config, part: Part, from: &str, into: &str, who: &Who) -> anyhow::Result<Option<String>> {
     let (Some(a), Some(b)) = (find(config, &[part], from), find(config, &[part], into)) else { return Ok(None) };
     if a.path == b.path || a.page.kind() == "tasks" || b.page.kind() == "tasks" {
+        return Ok(None);
+    }
+    // never across two spaces (Perso, Pro): the nightly pass, a contact, the trips made again would move notes from
+    // one to the other without the person's gesture (8 B; review 1 of S5, B2)
+    if spaces::of_page(part, &a.page) != spaces::of_page(part, &b.page) {
         return Ok(None);
     }
     let before_into = read_page_text(config, part, &b.path);

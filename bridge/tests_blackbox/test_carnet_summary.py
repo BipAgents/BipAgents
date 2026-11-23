@@ -17,7 +17,7 @@ from bbkit.common import AUTH
 from bbkit.mcp import call, text_of
 from test_carnet_sommaire import index_of, today, write_by_hand, write_carnet
 
-CAPABILITIES = ["categories", "categorize", "sorted", "index", "summary", "category", "kept", "searched"]
+CAPABILITIES = ["categories", "categorize", "sorted", "index", "summary", "category", "kept", "searched", "spaces"]
 
 
 def get(bridge, path, status=200, **params):
@@ -217,14 +217,16 @@ def test_s4_kept_searches_six_a_space_with_their_count(bridges):
         keep(bridge, q=q)
     full = bridge.post("/v1/notebook/kept", json={"q": "claire"}, headers=AUTH)
     assert full.status_code == 409 and full.json()["detail"]["code"] == "kept_full", full.text
-    # another space, its own six (before S5: nothing is Pro, its count is 0)
+    # another space, its own six (nothing is Pro here, its count is 0)
     pro = keep(bridge, q="claire", space="pro")
     assert [(k["q"], k["space"], k["count"]) for k in pro["kept"]] == [("claire", "pro", 0)]
+    # (S5: `all` shows every space's kept searches: the setting off shows everything together; six a view, the newest)
+    assert [k["q"] for k in get(bridge, "/v1/notebook/kept")["kept"]][-1] == "claire"
     assert len(get(bridge, "/v1/notebook/kept")["kept"]) == 6
     assert get(bridge, "/v1/notebook/kept", space="pro")["kept"] == pro["kept"]
     # deleted
     left = bridge.delete("/v1/notebook/kept", params={"id": first["id"]}, headers=AUTH)
-    assert left.status_code == 200 and len(left.json()["kept"]) == 5 and left.headers.get("cache-control") == "no-store"
+    assert left.status_code == 200 and len(left.json()["kept"]) == 6 and left.headers.get("cache-control") == "no-store"
     gone = bridge.delete("/v1/notebook/kept", params={"id": first["id"]}, headers=AUTH)
     assert gone.status_code == 404 and gone.json()["detail"]["code"] == "kept_unknown"
     # refused: nothing typed, a number or a reference (never kept, never on the phone), Santé, an unknown category,
@@ -238,7 +240,8 @@ def test_s4_kept_searches_six_a_space_with_their_count(bridges):
         assert got.status_code == status and got.json()["detail"]["code"] == code, (body, got.status_code, got.text)
     # kept on the bridge: there after a restart
     bridge.restart()
-    assert [k["q"] for k in get(bridge, "/v1/notebook/kept")["kept"]] == ["à payer ce mois-ci", "voyage", "maison", "impôts", "marc"]
+    # (S5: `all` lists every space's, Pro's « claire » too)
+    assert [k["q"] for k in get(bridge, "/v1/notebook/kept")["kept"]] == ["à payer ce mois-ci", "voyage", "maison", "impôts", "marc", "claire"]
 
 
 def test_s4_a_search_made_feeds_searched_here_and_never_reaches_an_agent(bridges):
