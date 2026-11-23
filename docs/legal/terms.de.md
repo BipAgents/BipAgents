@@ -276,7 +276,7 @@ gesetzlichen Regeln. Es haftet nicht für das, was nicht von ihm abhängt, insbe
   denn, sie beruhen auf einem Fehler der App;
 - wenn du deinen eigenen Server nutzt, für diesen Server, seinen Hoster, deinen Modellanbieter und Tailscale;
 - für Apple, Google oder die mit deinen Agenten verbundenen Dienste;
-- für den Verlust von Daten auf deinem Server oder deinem Telefon, der nicht auf einem Fehler der App beruht.
+- für den Verlust von Daten auf deinem eigenen Server oder deinem Telefon, der nicht auf einem Fehler der App beruht.
 
 Für das Alles-inklusive-Angebot ist die Haftung von Kerfy Studio in seinen Bedingungen beschrieben (Abschnitt 14).
 

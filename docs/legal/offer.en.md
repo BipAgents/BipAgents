@@ -206,11 +206,11 @@ policy](privacy.en.md), section 5.10).
 ## 7. Who can subscribe, and your account
 
 - **Subscribing**: you must be an adult, or have a parent's agreement (the store may ask for this agreement before the
-  purchase). Anyone who uses a server must be at least 16, as for the app; between 16 and 18, with a parent's agreement.
+  purchase). Anyone who uses a server of the offer must be at least 16, as for the app; between 16 and 18, with a parent's agreement.
   The all-included offer is not available to anyone under 16, even under supervision. A child under 16 may only use
   BipAgents on the computer or server of a parent or an adult in charge of the child, under the terms of use (section
   4).
-  **In the United States, nobody under 13 may use a server**, even supervised.
+  **In the United States, nobody under 13 may use a server of the offer**, even supervised.
 - **Your account**: you create it with "Sign in with Apple", with Google or with an email address (a one-time code sent to
   that address). It holds your identity (Apple or Google identifier, email address), the link with your subscription, the
   list of your devices and your invitations. **It never holds the keys to your server**: they stay on your devices.
@@ -240,7 +240,7 @@ policy](privacy.en.md), section 5.10).
 ## 8. Duo and Family: invited people
 
 - The person who subscribes invites the others by email, with a link that only works once. Each invited person creates
-  their own account and has **their own server** and their agents; the AI credit is the plan's, shared (section 6).
+  their own account and has **a server of their own in the plan** and their agents; the AI credit is the plan's, shared (section 6).
   **Neither the person who pays nor Kerfy Studio reads their agents or their conversations**, except what they choose
   to share: an agent they share read-only, what they write in a family agent (read by its members) and their calendar
   if they open it to a family agent.
@@ -434,7 +434,7 @@ your country's taxes, calculated by Stripe Tax, and you cancel on Stripe's custo
   the website, you get a reminder between 15 and 45 days before each renewal (about 35 days before), with the price, the
   date and how to cancel online; a price change is announced to you a second time between 7 and 30 days before it
   applies (section 5; California Business and Professions Code, sections 17600 and following).
-- **Age**: nobody under 13 may use a server (section 7).
+- **Age**: nobody under 13 may use a server of the offer (section 7).
 - **Liability**: to the extent the law of your state allows, Kerfy Studio's total liability to you is limited to the
   amount you paid for the offer during the 12 months before the event in question, and Kerfy Studio is not liable for
   indirect damage; for you, this rule replaces the sentence of section 14 saying that its liability is not capped.

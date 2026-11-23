@@ -10,7 +10,7 @@
     "title": "How the vault protects your passwords",
     "sub": "When one of your agents has to sign in to a site for you, it needs your username and your password. The vault keeps them and types them in for it. Here is how, and what it can’t prevent.",
     "whereTitle": "Where it is kept",
-    "where1": "<b>On your server.</b> On your own computer or server, if you installed BipAgents yourself. With the all-included offer, on your server, which Kerfy Studio rents from OVHcloud (data centres in the European Union) or from Hetzner (Germany or Finland).",
+    "where1": "<b>On your server.</b> On your own computer or server, if you installed BipAgents yourself. With the all-included offer, on your server, on a machine Kerfy Studio rents from OVHcloud (data centres in the European Union) or from Hetzner (Germany or Finland).",
     "where2": "<b>Encrypted, out of the agents’ reach.</b> The server keeps the main copy encrypted, in a folder no agent can reach: your agents work in their own container or sandbox.",
     "where3": "<b>Only for the agents you choose.</b> Each login is given only to the agents you tick.",
     "useTitle": "How it is used",

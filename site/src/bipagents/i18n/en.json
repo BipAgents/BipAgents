@@ -116,7 +116,7 @@
   },
   "private": {
     "whereTitle": "Where is your data?",
-    "where1": "On your own server, separate from everyone else’s, in the European Union (OVHcloud or Hetzner). Or on your own computer, if you install it at home.",
+    "where1": "On your server, separate from everyone else’s, on a machine in the European Union (OVHcloud or Hetzner). Or on your own computer, if you install it at home.",
     "where2": "With All included, your server is backed up, encrypted, a few minutes after each activity, and at least once a day. The copy kept on our backup server can’t be read without the key, which stays on your server and on your devices.",
     "whoTitle": "Who can read it?",
     "who2": "The AI reads what your agent sends it, to answer you: through EUrouter, a European AI router, then the provider running the model you chose. Before your first message, the app names the router and the model.",
@@ -289,7 +289,7 @@
     "title": "Good questions.",
     "1": {
       "q": "What do I get, exactly?",
-      "a": "Your own AI agents, the Bips, in the app on iPhone, iPad and Android. They work on your own server in Europe, which we look after: nothing to install, nothing to set up, updates and backups included."
+      "a": "Your own AI agents, the Bips, in the app on iPhone, iPad and Android. They work on your server, on a machine in Europe that we look after: nothing to install, nothing to set up, updates and backups included."
     },
     "2": {
       "q": "Is there a free week?",
@@ -301,7 +301,7 @@
     },
     "4": {
       "q": "Who can read my conversations?",
-      "a": "Not us: Kerfy Studio doesn’t read them or train any AI on them. To answer you, the AI reads what your agent sends it: through EUrouter, a European AI router, then the provider running the chosen model; the app names the router and the model before your first message. As we rent the server, we could technically enter it: our software doesn’t, and we only would if the law required it. Your relatives only read what you share with them: one of your agents, read-only, and the family agent’s shared conversation."
+      "a": "Not us: Kerfy Studio doesn’t read them or train any AI on them. To answer you, the AI reads what your agent sends it: through EUrouter, a European AI router, then the provider running the chosen model; the app names the router and the model before your first message. As we rent the machine, we could technically enter your server: our software doesn’t, and we only would if the law required it. Your relatives only read what you share with them: one of your agents, read-only, and the family agent’s shared conversation."
     },
     "5": {
       "q": "How do Duo and Family work?",

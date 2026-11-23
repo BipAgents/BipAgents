@@ -54,7 +54,7 @@ Mit deinem eigenen Computer oder deinem eigenen Server:
 
 | Wo | Was dort liegt | Wer entscheidet |
 |---|---|---|
-| **Dein Server** (dein Computer oder ein Server, den du mietest) | Hermes Agent, deine Agenten, deine Unterhaltungen, deine Dateien, ihr Gedächtnis, ihre geplanten Aufgaben, der Passworttresor | Du |
+| **Dein eigener Server** (dein Computer oder ein Server, den du selbst mietest) | Hermes Agent, deine Agenten, deine Unterhaltungen, deine Dateien, ihr Gedächtnis, ihre geplanten Aufgaben, der Passworttresor | Du |
 | **Dein Modellanbieter** (eine API in der Cloud, zum Beispiel OpenRouter, oder ein Modell, das bei dir läuft) | Jede Nachricht, die deine Agenten ihm schicken, damit er antwortet | Du, nach den Bedingungen dieses Anbieters |
 | **Dein Telefon** | Was die App speichert, um zu funktionieren (Abschnitt 3) | Du |
 | **Kerfy Studio** | Nur das, was in Abschnitt 4 beschrieben ist | Kerfy Studio |
@@ -333,7 +333,7 @@ es, leitet an Apple oder Google weiter und vergisst dann alles.
 Server gespeichert; mit dem Alles-inklusive-Angebot bewahrt es auch der Guichet von Kerfy Studio auf, weiterhin
 versiegelt (Abschnitt 5.6). Die technischen Protokolle des Relays enthalten die Plattform, einen 4-Byte-
 Fingerabdruck des Tokens und die Antwort von Apple oder Google; sie werden **höchstens 6 Monate** aufbewahrt. Das
-Relay läuft, zusammen mit dem Guichet von Kerfy Studio (Abschnitt 5), auf einem Server, den Kerfy Studio bei OVHcloud
+Relay läuft, zusammen mit dem Guichet von Kerfy Studio (Abschnitt 5), auf einer Maschine, die Kerfy Studio bei OVHcloud
 (OVH SAS) als VPS in Frankreich mietet und selbst verwaltet; der Hoster kann die IP-Adressen der Anfragen in seinen
 Betriebsprotokollen speichern.
 
@@ -1074,7 +1074,7 @@ des Guichets und des Relays: OVHcloud, in Frankreich. Hoster der Sicherungen: Sc
 | Sicherungsdateien, die ein Server löscht, vom Guichet beiseitegelegt | 5 Tage |
 | Ersetzte oder gelöschte Versionen bei Scaleway (Sicherungen der Server, verschlüsselte Kopien der Datenbank des Guichets) | 1 Tag |
 | Tägliches Abbild von OVHcloud | Ein Punkt pro Tag, innerhalb von etwa einem Tag nach der Neuinstallation des Servers ersetzt |
-| Technische Daten der Server | Die letzten Werte; Arbeitsspeicher jedes Servers, Stunde für Stunde: 7 Tage |
+| Technische Daten der Maschinen | Die letzten Werte; Arbeitsspeicher jedes Servers, Stunde für Stunde: 7 Tage |
 | Messwerte der ersten Tage eines Servers (Abschnitt 5.12) | Pro Server höchstens 11 Tage, danach bis zu 30 Tage in den verschlüsselten Kopien der Datenbank; Summen pro Tag, ohne Personen: 2 Jahre |
 | Ereignisprotokoll des Guichet (darunter „Beta-Code eingelöst“, mit deinem Konto) | 12 Monate |
 | Metadaten bei EUrouter | Bis zu 12 Monate, laut EUrouter |
@@ -1086,7 +1086,7 @@ des Guichets und des Relays: OVHcloud, in Frankreich. Hoster der Sicherungen: Sc
 
 Das Relay akzeptiert nur verschlüsselte Verbindungen (HTTPS), versiegelt die Tokens (XChaCha20-Poly1305), hat keine
 Datenbank und schreibt nie ein Token im Klartext. In der App sind die Schlüssel deiner Agenten durch den
-Schlüsselbund oder den Keystore geschützt, und die Verbindung zu deinem Server läuft über Tailscale oder über eine
+Schlüsselbund oder den Keystore geschützt, und die Verbindung zu deinem eigenen Server läuft über Tailscale oder über eine
 HTTPS-Tür in deinem lokalen Netz, die nur das Zertifikat deines Servers akzeptiert. Der Code der App, der
 Serverseite und des Relays ist öffentlich: https://github.com/BipAgents/BipAgents. Um eine Sicherheitslücke zu melden:
 **security@bipagents.com** (siehe die Datei SECURITY.md im Repository).
@@ -1165,8 +1165,8 @@ französischen Datenschutzgesetzes). Wenn ein Kind uns
 geschrieben hat, kann ein Elternteil verlangen, dass wir die Nachricht löschen.
 
 **Alles-inklusive-Angebot**: Es wird von einem Erwachsenen abgeschlossen oder mit dem Einverständnis eines
-Elternteils; jede Person, die einen Server nutzt, eingeladene Personen eingeschlossen, ist mindestens 16 Jahre alt
-([Bedingungen des Angebots](offer.de.md), Abschnitt 7). **In den USA darf keine Person unter 13 Jahren einen Server
+Elternteils; jede Person, die einen Server des Angebots nutzt, eingeladene Personen eingeschlossen, ist mindestens 16 Jahre alt
+([Bedingungen des Angebots](offer.de.md), Abschnitt 7). **In den USA darf keine Person unter 13 Jahren einen Server des Angebots
 nutzen**, und Kerfy Studio erhebt wissentlich keine Daten eines Kindes unter 13 Jahren (Children's Online Privacy
 Protection Act); falls es doch geschehen ist, schreib uns, und wir löschen sie. **In Québec** werden die Daten eines
 Kindes unter 14 Jahren nur mit der Einwilligung eines Elternteils oder des Vormunds erhoben: Der Erwachsene, der seine

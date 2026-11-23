@@ -86,8 +86,8 @@ die Zahlungsseite von Stripe zeigt den Preis, die Währung und den Betrag, den d
 
 Für jede Person des Tarifs:
 
-- **Ihr Server**: ihr eigenes Linux-Konto auf einer Maschine, die Kerfy Studio bei einem Hosting-Partner mietet, und auf
-  dem ihre KI-Agenten laufen. Sie bauen auf Hermes Agent auf, freier Software von Nous Research
+- **Ihr Server**: ihr eigenes Linux-Konto auf einer Maschine, die Kerfy Studio bei einem Hosting-Partner mietet; darauf
+  laufen ihre KI-Agenten. Sie bauen auf Hermes Agent auf, freier Software von Nous Research
   (https://github.com/NousResearch/hermes-agent); BipAgents wird von Nous Research weder herausgegeben noch gebilligt
   noch gesponsert.
 - **Die Stimmen der Bips**, auf ihrem Telefon, wenn es das kann, sonst von ihrem Server.
@@ -220,11 +220,11 @@ Abschnitt 5.10).
 ## 7. Wer abschließen kann, und dein Konto
 
 - **Abschließen**: Du musst volljährig sein oder das Einverständnis eines Elternteils haben (der Store kann dieses
-  Einverständnis vor dem Kauf verlangen). Jede Person, die einen Server nutzt, muss mindestens 16 Jahre alt sein, wie
+  Einverständnis vor dem Kauf verlangen). Jede Person, die einen Server des Angebots nutzt, muss mindestens 16 Jahre alt sein, wie
   für die App; zwischen 16 und 18 Jahren mit dem Einverständnis eines Elternteils. Das Alles-inklusive-Angebot steht
   Personen unter 16 Jahren nicht zur Verfügung, auch nicht unter Aufsicht. Ein Kind unter 16 Jahren darf BipAgents nur
   auf dem Computer oder Server eines Elternteils oder einer verantwortlichen erwachsenen Person nutzen, gemäß den
-  Nutzungsbedingungen (Abschnitt 4). **In den USA darf keine Person unter 13 Jahren einen Server
+  Nutzungsbedingungen (Abschnitt 4). **In den USA darf keine Person unter 13 Jahren einen Server des Angebots
   nutzen**, auch nicht unter Aufsicht.
 - **Dein Konto**: Du erstellst es mit „Mit Apple anmelden“, mit Google oder mit einer E-Mail-Adresse (ein Einmalcode,
   der an diese Adresse geht). Es enthält deine Identität (Apple- oder Google-Kennung, E-Mail-Adresse), die Verbindung zu deinem
@@ -255,7 +255,7 @@ Abschnitt 5.10).
 ## 8. Duo und Familie: eingeladene Personen
 
 - Die Person, die abschließt, lädt die anderen per E-Mail ein, mit einem Link, der nur einmal funktioniert. Jede
-  eingeladene Person erstellt ihr eigenes Konto und hat **ihren eigenen Server** und ihre Agenten; das KI-Guthaben ist
+  eingeladene Person erstellt ihr eigenes Konto und hat **einen eigenen Server im Abo** und ihre Agenten; das KI-Guthaben ist
   das des Tarifs, geteilt (Abschnitt 6). **Weder die Person, die zahlt, noch Kerfy Studio lesen ihre Agenten oder ihre Unterhaltungen**, außer dem,
   was sie teilen möchte: ein Agent, den sie zum Lesen teilt, was sie in einem Familienagenten schreibt (von seinen
   Mitgliedern gelesen), und ihr Kalender, wenn sie ihn für einen Familienagenten öffnet.
@@ -469,7 +469,7 @@ Stripe (Abschnitte 2 und 11).
   bekommst du 15 bis 45 Tage vor jeder Verlängerung eine Erinnerung (etwa 35 Tage vorher), mit dem Preis, dem Datum und
   wie du online kündigst; eine Preisänderung wird dir 7 bis 30 Tage vor ihrem Inkrafttreten ein zweites Mal angekündigt
   (Abschnitt 5; California Business and Professions Code, §§ 17600 ff.).
-- **Alter**: Keine Person unter 13 Jahren darf einen Server nutzen (Abschnitt 7).
+- **Alter**: Keine Person unter 13 Jahren darf einen Server des Angebots nutzen (Abschnitt 7).
 - **Haftung**: Soweit das Recht deines Bundesstaats es erlaubt, ist die gesamte Haftung von Kerfy Studio dir gegenüber
   auf den Betrag begrenzt, den du in den 12 Monaten vor dem betreffenden Ereignis für das Angebot bezahlt hast, und
   Kerfy Studio haftet nicht für indirekte Schäden; diese Regel ersetzt für dich den Satz in Abschnitt 14, nach dem die

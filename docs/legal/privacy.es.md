@@ -52,7 +52,7 @@ Con tu propio ordenador o tu propio servidor:
 
 | Dónde | Qué hay | Quién decide |
 |---|---|---|
-| **Tu servidor** (tu ordenador o un servidor que alquilas) | Hermes Agent, tus agentes, tus conversaciones, tus archivos, su memoria, sus tareas programadas, la caja fuerte de contraseñas | Tú |
+| **Tu propio servidor** (tu ordenador o un servidor que alquilas tú) | Hermes Agent, tus agentes, tus conversaciones, tus archivos, su memoria, sus tareas programadas, la caja fuerte de contraseñas | Tú |
 | **Tu proveedor de modelos** (una API en la nube, por ejemplo OpenRouter, o un modelo que funciona en tu casa) | Cada mensaje que tus agentes le envían para que responda | Tú, según las condiciones de ese proveedor |
 | **Tu teléfono** | Lo que la app guarda para funcionar (sección 3) | Tú |
 | **Kerfy Studio** | Solo lo que se describe en la sección 4 | Kerfy Studio |
@@ -312,8 +312,8 @@ olvida todo.
 **Lo que se conserva.** El relé no tiene base de datos. El token sellado se guarda en tu teléfono y en tu servidor; con
 la oferta todo incluido, el guichet de Kerfy Studio también lo guarda, siempre sellado (sección 5.6). Los registros
 técnicos del relé contienen la plataforma, una huella de 4 bytes del token y la respuesta de Apple o de Google; se
-conservan **6 meses como máximo**. El relé funciona, junto con el guichet de Kerfy Studio (sección 5), en un
-servidor que Kerfy Studio alquila a OVHcloud (OVH SAS), un VPS en Francia, y administra él mismo; el proveedor de
+conservan **6 meses como máximo**. El relé funciona, junto con el guichet de Kerfy Studio (sección 5), en una
+máquina que Kerfy Studio alquila a OVHcloud (OVH SAS), un VPS en Francia, y administra él mismo; el proveedor de
 alojamiento puede registrar las direcciones IP de las solicitudes, en sus registros de explotación.
 
 **Finalidades y bases jurídicas.** Entregar las notificaciones que has activado: ejecución de las condiciones de uso
@@ -359,8 +359,8 @@ hablan directamente.
 
 - **Con la oferta todo incluido**, **Ajustes › Contactar con soporte** y **Danos tu opinión** envían tu mensaje desde
   la app, a través del guichet de Kerfy Studio (sección 5), al buzón del soporte. El guichet añade tu **código de
-  ayuda** (que la app te muestra), tu plan y su estado, el estado de tus servidores (número, servidor, nombre bajo
-  bipagents.com, vinculada o no a tu teléfono), cómo inicias sesión (Apple, Google o correo), la versión y el idioma de
+  ayuda** (que la app te muestra), tu plan y su estado, el estado de tus servidores (número, máquina, nombre bajo
+  bipagents.com, vinculado o no a tu teléfono), cómo inicias sesión (Apple, Google o correo), la versión y el idioma de
   la app y, para responderte, la dirección de correo que indiques o, si no, la de tu cuenta. **Ninguna conversación,
   ninguna clave.** El guichet guarda tu código de ayuda mientras dure la suscripción; su registro anota que se envió un
   mensaje, sin su texto.
@@ -667,7 +667,7 @@ Hetzner (Alemania o Finlandia), aparte de las máquinas de los servidores.
 
 **Datos.** La propia dirección, que el guichet vincula a tu servidor. Los correos recibidos y enviados por esa dirección:
 sus cabeceras (remitentes, destinatarios, fechas, asuntos), su contenido y sus adjuntos. La contraseña de la dirección
-se crea en el servidor de Kerfy Studio y se entrega una sola vez a tu servidor, donde se guarda con los ajustes del
+se crea en el servidor de correo de Kerfy Studio y se entrega una sola vez a tu servidor, donde se guarda con los ajustes del
 agente; el servidor de correo solo guarda un hash de ella, y el guichet no la guarda. Las direcciones a las que tu
 agente puede escribir, su límite diario y los correos que esperan tu aprobación se guardan en tu servidor.
 
@@ -830,7 +830,7 @@ cada vez que alguien escribe y se borra con el servidor; la copia cifrada: 30 d�
   días de un servidor (sección 5.12). Sin cuenta, salvo para la oferta todo incluido.
 - Sin venta ni alquiler de datos.
 - Sin entrenamiento de modelos de IA con tus datos por parte de Kerfy Studio.
-- Sin acceso a tu servidor, al contenido de tu servidor, a tus conversaciones ni a tus archivos.
+- Sin acceso a tu propio servidor, al contenido de tu servidor de la oferta, a tus conversaciones ni a tus archivos.
 
 ## 7. Los demás servicios que intervienen en la app
 
@@ -1008,7 +1008,7 @@ Scaleway, en Francia, sin transferencia fuera de la Unión. Puedes pedirnos una 
 | Archivos de copia que un servidor borra, apartados por el guichet | 5 días |
 | Versiones sustituidas o borradas en Scaleway (copias de seguridad de los servidores, copias cifradas de la base de datos del guichet) | 1 día |
 | Imagen diaria de OVHcloud | Un punto por día, sustituido en un día aproximadamente después de reinstalar el servidor |
-| Datos técnicos de los servidores | Los últimos valores; memoria de cada servidor, hora a hora: 7 días |
+| Datos técnicos de las máquinas | Los últimos valores; memoria de cada servidor, hora a hora: 7 días |
 | Mediciones de los primeros días de un servidor (sección 5.12) | Por servidor, 11 días como máximo, luego hasta 30 días en las copias cifradas de la base; totales por día, sin nadie: 2 años |
 | Registro de eventos del guichet (incluido «código beta usado», con tu cuenta) | 12 meses |
 | Metadatos en EUrouter | Hasta 12 meses, según EUrouter |
@@ -1020,14 +1020,14 @@ Scaleway, en Francia, sin transferencia fuera de la Unión. Puedes pedirnos una 
 
 El relé solo acepta conexiones cifradas (HTTPS), sella los tokens (XChaCha20-Poly1305), no tiene base de datos y
 nunca escribe un token en claro. En la app, las claves de tus agentes están protegidas por el Llavero o el Keystore,
-y la conexión con tu servidor pasa por Tailscale o por una puerta HTTPS en tu red local, que solo acepta el
+y la conexión con tu propio servidor pasa por Tailscale o por una puerta HTTPS en tu red local, que solo acepta el
 certificado de tu servidor. El código de la app, del servidor y del relé es público: https://github.com/BipAgents/BipAgents. Para
 informar de un fallo de seguridad: **security@bipagents.com** (consulta el archivo SECURITY.md del repositorio).
 
 Con la oferta todo incluido, cada servidor es una cuenta separada en su máquina, sin derechos de administrador; Kerfy
 Studio no tiene ninguna clave SSH en las máquinas, y una máquina solo ejecuta órdenes firmadas por el guichet. La
 app se conecta a tu servidor en HTTPS y comprueba su certificado. Las copias de seguridad se cifran en el servidor antes de
-salir. El servidor de correo de los agentes es un servidor aparte, gestionado por Kerfy Studio: los servidores se conectan
+salir. El servidor de correo de los agentes es una máquina aparte, gestionada por Kerfy Studio: los servidores se conectan
 a él con conexiones cifradas, y un agente solo envía correos a través de un control en su servidor que aplica las
 direcciones autorizadas, tus aprobaciones y el límite diario.
 
@@ -1094,8 +1094,8 @@ servidor, el adulto que la preparó lo da junto con el menor (artículo 45 de la
 pedirnos que borremos su mensaje.
 
 **Oferta todo incluido**: la contrata un adulto, o se contrata con el acuerdo de uno de los padres; toda persona que
-usa un servidor, personas invitadas incluidas, tiene al menos 16 años ([condiciones de la oferta](offer.es.md), sección
-7). **En Estados Unidos, ninguna persona menor de 13 años puede usar un servidor**, y Kerfy Studio no recoge a sabiendas
+usa un servidor de la oferta, personas invitadas incluidas, tiene al menos 16 años ([condiciones de la oferta](offer.es.md), sección
+7). **En Estados Unidos, ninguna persona menor de 13 años puede usar un servidor de la oferta**, y Kerfy Studio no recoge a sabiendas
 ningún dato de un menor de 13 años (Children's Online Privacy Protection Act); si ha ocurrido, escríbenos y lo
 borramos. **En Quebec**, los datos de un menor de 14 años solo se recogen con el consentimiento de uno de sus padres o
 del tutor: el adulto que prepara y supervisa su instalación, en su propio ordenador o su propio servidor, lo da por él

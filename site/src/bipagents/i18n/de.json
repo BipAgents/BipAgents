@@ -116,7 +116,7 @@
   },
   "private": {
     "whereTitle": "Wo sind deine Daten?",
-    "where1": "Auf deinem eigenen Server, getrennt von denen der anderen, in der Europäischen Union (OVHcloud oder Hetzner). Oder auf deinem eigenen Computer, wenn du es bei dir installierst.",
+    "where1": "Auf deinem Server, getrennt von denen der anderen, auf einer Maschine in der Europäischen Union (OVHcloud oder Hetzner). Oder auf deinem eigenen Computer, wenn du es bei dir installierst.",
     "where2": "Mit Alles inklusive wird dein Server wenige Minuten nach jeder Aktivität und mindestens einmal am Tag verschlüsselt gesichert. Die Kopie auf unserem Sicherungsserver ist ohne den Schlüssel unlesbar, und der bleibt auf deinem Server und auf deinen Geräten.",
     "whoTitle": "Wer kann sie lesen?",
     "who2": "Die KI liest, was dein Agent ihr schickt, um dir zu antworten: über EUrouter, einen europäischen KI-Router, dann beim Anbieter, der das gewählte Modell betreibt. Vor deiner ersten Nachricht nennt dir die App den Router und das Modell.",
@@ -289,7 +289,7 @@
     "title": "Gute Fragen.",
     "1": {
       "q": "Was bekomme ich genau?",
-      "a": "Deine eigenen KI-Agenten, die Bips, in der App auf iPhone, iPad und Android. Sie arbeiten auf deinem eigenen Server in Europa, um den wir uns kümmern: nichts zu installieren, nichts einzustellen, Updates und Sicherungen inklusive."
+      "a": "Deine eigenen KI-Agenten, die Bips, in der App auf iPhone, iPad und Android. Sie arbeiten auf deinem Server, auf einer Maschine in Europa, um die wir uns kümmern: nichts zu installieren, nichts einzustellen, Updates und Sicherungen inklusive."
     },
     "2": {
       "q": "Gibt es eine Gratiswoche?",

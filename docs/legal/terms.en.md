@@ -247,7 +247,7 @@ not liable for what does not depend on it, in particular:
   defect of the app;
 - if you use your own server, that server, its hosting provider, your model provider and Tailscale;
 - Apple, Google or the services connected to your agents;
-- loss of data on your server or your phone that does not result from a defect of the app.
+- loss of data on your own server or your phone that does not result from a defect of the app.
 
 For the all-included offer, Kerfy Studio's liability is set out in its terms (section 14).
 

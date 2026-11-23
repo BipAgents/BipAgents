@@ -32,7 +32,7 @@ política de privacidad y el aviso legal siguen disponibles en Ajustes › Acerc
   BipAgents es una aplicación independiente: no está editada, aprobada ni patrocinada por Nous Research, y no tiene
   ningún vínculo con los titulares de marcas homónimas.
 - Tus agentes funcionan de una de estas dos formas:
-  - **en tu ordenador o tu servidor**, que instalas y gestionas tú mismo, con el **modelo de IA que has elegido** (una
+  - **en tu propio ordenador o servidor**, que instalas y gestionas tú mismo, con el **modelo de IA que has elegido** (una
     API en la nube o un modelo local); la app se conecta a ellos a través de Tailscale o de tu red local;
   - con la **oferta todo incluido**, de pago, en **tu servidor**, una cuenta en una máquina que Kerfy Studio alquila a un
     proveedor de alojamiento socio, con crédito de IA incluido; se rige por sus
@@ -264,7 +264,7 @@ común. No responde de lo que no depende de él, en particular:
 - si usas tu propio servidor, de ese servidor, de su proveedor de alojamiento, de tu proveedor de modelos y de
   Tailscale;
 - de Apple, de Google o de los servicios conectados a tus agentes;
-- de la pérdida de datos en tu servidor o tu teléfono que no se deba a un defecto de la app.
+- de la pérdida de datos en tu propio servidor o tu teléfono que no se deba a un defecto de la app.
 
 Para la oferta todo incluido, la responsabilidad de Kerfy Studio se describe en sus condiciones (sección 14).
 

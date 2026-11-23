@@ -213,11 +213,11 @@ y luego se borra ([política de privacidad](privacy.es.md), sección 5.10).
 ## 7. Quién puede contratar, y tu cuenta
 
 - **Contratar**: tienes que ser mayor de edad o tener el acuerdo de uno de tus padres (la tienda puede pedir ese
-  acuerdo antes de la compra). Toda persona que usa un servidor debe tener al menos 16 años, como para la app; entre los
+  acuerdo antes de la compra). Toda persona que usa un servidor de la oferta debe tener al menos 16 años, como para la app; entre los
   16 y los 18 años, con el acuerdo de uno de sus padres. La oferta todo incluido no se ofrece a personas menores de 16
   años, ni siquiera con supervisión. Un menor de 16 años solo puede usar BipAgents en el ordenador o el servidor de uno
   de sus padres o de un adulto a su cargo, según las condiciones de uso (sección 4). **En Estados Unidos, ninguna persona menor de 13 años
-  puede usar un servidor**, ni siquiera supervisada.
+  puede usar un servidor de la oferta**, ni siquiera supervisada.
 - **Tu cuenta**: la creas con «Iniciar sesión con Apple», con Google o con una dirección de correo (un código de un
   solo uso enviado a esa dirección). Contiene tu identidad (identificador de Apple o de Google, dirección de
   correo), el vínculo con tu suscripción, la lista de tus dispositivos y tus invitaciones. **Nunca contiene las claves
@@ -246,7 +246,7 @@ y luego se borra ([política de privacidad](privacy.es.md), sección 5.10).
 ## 8. Duo y Familia: las personas invitadas
 
 - La persona que contrata invita a las demás por correo, con un enlace que solo sirve una vez. Cada persona invitada
-  crea su propia cuenta y tiene **su propio servidor** y sus agentes; el crédito de IA es el del plan, compartido
+  crea su propia cuenta y tiene **un servidor propio dentro del plan** y sus agentes; el crédito de IA es el del plan, compartido
   (sección 6). **Ni la persona que paga ni Kerfy Studio leen sus agentes ni sus conversaciones**, salvo lo que ella
   decida compartir: un agente que comparte en lectura, lo que escribe en un agente de la familia (que leen sus
   miembros) y su agenda si la abre a un agente de la familia.
@@ -447,7 +447,7 @@ los impuestos de tu país, calculados por Stripe Tax, y cancelas en la página d
   el sitio, recibes un recordatorio entre 15 y 45 días antes de cada renovación (unos 35 días antes), con el precio, la
   fecha y cómo cancelar en línea; un cambio de precio se te anuncia una segunda vez entre 7 y 30 días antes de aplicarse
   (sección 5; Business and Professions Code de California, artículos 17600 y siguientes).
-- **Edad**: ninguna persona menor de 13 años puede usar un servidor (sección 7).
+- **Edad**: ninguna persona menor de 13 años puede usar un servidor de la oferta (sección 7).
 - **Responsabilidad**: en la medida en que lo permita la ley de tu estado, la responsabilidad total de Kerfy Studio
   frente a ti se limita al importe que hayas pagado por la oferta durante los 12 meses anteriores al hecho en cuestión,
   y Kerfy Studio no responde de los daños indirectos; para ti, esta regla sustituye a la frase de la sección 14 sobre

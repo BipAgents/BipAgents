@@ -7,7 +7,7 @@ person's own server (their bridge and Hermes), and, for a family agent, on to th
 plus sealed boxes they cannot open. There are no analytics or crash SDKs of ours; on Android, the Google Maps SDK (map cards) and the ML Kit
 document scanner send Google their own technical data (§4). Apple and Google get what their stores,
 sign-in and push need, and the voice for dictation only where the person agreed to online dictation. With the
-all-included offer, an agent's own e-mail address keeps its mail on Kerfy Studio's mail server; the place's bridge
+all-included offer, an agent's own e-mail address keeps its mail on Kerfy Studio's mail server; the server's bridge
 talks to that server, not the app.
 
 This page was written from the source of the iPhone/iPad app (`App/`, `Widgets/`, `NotificationService/`,
@@ -45,7 +45,7 @@ the bridge's interface contract, before the apps' code for it.
 ## 1. The person's own server: bridge and Hermes
 
 This is either the person's own machine or VPS (reached through their tailnet, their local network or its "door"), or
-their place on the all-included offer. Everything personal goes here, with that server's bearer key
+their server on the all-included offer. Everything personal goes here, with that server's bearer key
 (`App/Model/BridgeClient.swift`, `Packages/HermesKit/Sources/HermesKit/Client/HermesClient.swift`,
 `Input/DocumentUploader.swift`, `android/.../net/Bridge.kt`, `net/Hermes.kt`, `net/Http.kt`). Public code: `bridge/`,
 `bridge-rs/`.
@@ -60,7 +60,7 @@ their place on the all-included offer. Everything personal goes here, with that 
   import, pages, background jobs, scheduled tasks, shares between agents, family links (`/v1/family/*`).
 - **Secrets the person enters:** e-mail account passwords (`/v1/mail/accounts`, and an agent's own mailbox at the
   person's provider in `/v1/agents/{id}/email`), vault items (`/v1/vault`; on the person's own server, a payment card's number, expiry, holder and postcode go
-  there too, `bridge-rs/src/cards.rs`; on a place of the offer they stay on the phone and are sent, with the security
+  there too, `bridge-rs/src/cards.rs`; on a server of the offer they stay on the phone and are sent, with the security
   code (typed, or remembered on that phone behind Face ID / fingerprint when the person chose so: Keychain / Android
   Keystore, `App/Model/CardCodes.swift`, `CardCodeStore.kt`), only for a payment the person approves), SSH public keys (`/v1/ssh/keys`), voice
   server settings.
@@ -123,10 +123,10 @@ their place on the all-included offer. Everything personal goes here, with that 
   The bridge keeps only what the choice covers and drops the copy when no agent may read it (`bridge-rs/src/contacts.rs`).
   On the iPhone the notes are never read (they need an Apple entitlement the app doesn't have).
 - **An agent's e-mail address** (`GET/POST/PATCH/DELETE /v1/agents/{id}/email`,
-  `POST /v1/agents/{id}/email/held/{mail}`): turning it on (a Kerfy Studio address on a place of the offer, or the person's
+  `POST /v1/agents/{id}/email/held/{mail}`): turning it on (a Kerfy Studio address on a server of the offer, or the person's
   own mailbox with its address, password and IMAP/SMTP servers), the allowed addresses, the daily limit, and approving
   or dropping a mail the agent wants to send to a new address (the app shows its recipients and subject). For a Kerfy
-  Studio address, the place's bridge itself asks the guichet for the mailbox, with the place's backup token; the
+  Studio address, the server's bridge itself asks the guichet for the mailbox, with the server's backup token; the
   guichet gives the password once to the bridge, which keeps it in the agent's settings: **the phone never sees it**.
   A held mail triggers a notification (`email_held`).
 - **Push registration:** the APNs or Firebase token (or a relay token instead, see §3), with the agents' ids and the
@@ -158,7 +158,7 @@ their place on the all-included offer. Everything personal goes here, with that 
 - **Pages that remember** (`bridge-rs/src/page_store.rs`): what is typed in an agent's page, and what the agent itself
   keeps there (16/11: a page it keeps up to date — a dashboard, prices, scores — from a conversation, a routine or a
   background task, with what it found on the web, in the mail or the calendar; `page_data` with `ops`, its own pages
-  only), is kept by the bridge beside the page (`<page>.store.json`, 256 KB at most) and in the place's backups. The
+  only), is kept by the bridge beside the page (`<page>.store.json`, 256 KB at most) and in the server's backups. The
   page reads it through the app (`bipstore:` on the iPhone, `https://bipstore.invalid` on Android, answered by the app
   with the bridge's key) about every 5 seconds while it is open; the phone fetches it from nowhere else. Everyone who
   sees the page sees it: the family through their own bridges, a project's friends inside the page's sealed item
@@ -169,12 +169,12 @@ their place on the all-included offer. Everything personal goes here, with that 
   its own connection. The site sees the phone's IP address; TLS stays end to end between the agent's Chrome and the
   site, and the phone reads only the server name. Shown by a foreground notification (Android) or the « Relais »
   screen (iOS), with « Arrêter »; never for a shared or household agent.
-- **Pairing a place of the offer** (`App/Features/Cloud/CloudPairing.swift`, `android/.../cloud/CloudPairing.kt`):
+- **Pairing a server of the offer** (`App/Features/Cloud/CloudPairing.swift`, `android/.../cloud/CloudPairing.kt`):
   `GET /v1/setup?nonce=`, then `POST /v1/setup/claim` over the certificate that was proved and pinned. The claim
-  carries the model, **the AI key the guichet issued for this place** (from the phone), the agents to create and the
+  carries the model, **the AI key the guichet issued for this server** (from the phone), the agents to create and the
   language. For a restore, it carries the backup key the phone kept instead.
-- **Backups:** the phone reads the place's backup key and status (`/v1/backup`) and keeps the key (see §7).
-- **New device on the account:** the phone asks each of its places for a new key for that device (`/v1/device-keys`),
+- **Backups:** the phone reads the server's backup key and status (`/v1/backup`) and keeps the key (see §7).
+- **New device on the account:** the phone asks each of its servers for a new key for that device (`/v1/device-keys`),
   then seals them (§2).
 
 The widgets make no network calls. They read what the app has already saved in the shared App Group (iOS,
@@ -190,19 +190,19 @@ This is the all-included offer's service, with accounts and family links (`App/F
 | When | Call | What is sent |
 |---|---|---|
 | When the person opens the offer (not on the welcome screen, not in demo mode) | `GET /v1/where?country=` | the store country code (App Store storefront, Play billing config) |
-| Offer screens, and choosing a model for an agent on a place of the offer | `GET /v1/models?region=` | the region only |
+| Offer screens, and choosing a model for an agent on a server of the offer | `GET /v1/models?region=` | the region only |
 | Before buying | `POST /v1/offer` | plan, region; for the free week: iOS a **DeviceCheck token**, Android a **Play Integrity token + SHA-256 of `"bipagents-trial:"` + ANDROID_ID** (the raw ID is not sent) |
 | Purchase, restore, plan change | `POST /v1/activate` | iOS: the App Store's **signed transaction (JWS)** + a DeviceCheck token; Android: the Play **purchase token**; region, ticket |
 | AI credit bought | `POST /v1/subscription/credit` | the store proof, product id |
-| Following the subscription and the places | `GET /v1/subscription`, `/v1/places/mine`, `POST …/claimed`, `…/withdraw` | the subscription token or the place's claim token |
-| A Duo's or a family's shared AI credit: the buyer sets one person's monthly limit | `POST /v1/subscription/places/{number}/cap` | the subscription token, `cap_eur` (an amount, or null for none). `GET /v1/subscription` returns each place's AI use this month (`ai.people`: number, amount spent, limit) to the buyer only; `GET /v1/places/mine` returns an invited person only what is left for everyone and their own use and limit. Amounts in euros, never content |
+| Following the subscription and the servers | `GET /v1/subscription`, `/v1/places/mine`, `POST …/claimed`, `…/withdraw` | the subscription token or the server's claim token |
+| A Duo's or a family's shared AI credit: the buyer sets one person's monthly limit | `POST /v1/subscription/places/{number}/cap` | the subscription token, `cap_eur` (an amount, or null for none). `GET /v1/subscription` returns each server's AI use this month (`ai.people`: number, amount spent, limit) to the buyer only; `GET /v1/places/mine` returns an invited person only what is left for everyone and their own use and limit. Amounts in euros, never content |
 | Outage notices | `POST /v1/subscription/phone`, `/v1/places/phone` | the **relay token** (never the APNs or Firebase token) |
 | Account sign-in | `POST /v1/account/email`, `/v1/account/signin` | e-mail address (and the code received), or the **Apple or Google ID token**; device name (iOS: "iPhone"/"iPad"; Android: `Build.MODEL`, e.g. "Pixel 8"), platform, **this device's P-256 public key**, app language |
 | Account | `GET/PUT /v1/account*` | relay token, device name; approve or remove devices; delete or keep the account |
 | Approving a new device | `POST /v1/account/devices/{id}/approve` | a **sealed box** (below) |
 | Recovery code | `PUT/POST /v1/account/recovery` | a **verifier** of the code (never the code itself) and the **escrow** (below) |
-| Inviting someone to a shared place (Duo, Famille) | `POST /v1/account/invitations` | the place's number, the invitee's e-mail, the inviter's first name (`who`, optional since 2026-11-06: left out when not given), the app language. Nothing about the place itself: the guichet's e-mail only says to open the app and sign in with that address |
-| Invitations received (signed-in, approved account) | `GET /v1/account/invitations/received` | the account token. The answer holds the places offered to this address and still ready to pair, with what pairing needs (address, port, certificate fingerprint, pairing secret, the AI key the guichet issued, claim token), over HTTPS. Once paired, `POST /v1/account/places` with the claim binds the place to the account |
+| Inviting someone to a server of a shared plan (Duo, Famille) | `POST /v1/account/invitations` | the server's number, the invitee's e-mail, the inviter's first name (`who`, optional since 2026-11-06: left out when not given), the app language. Nothing about the server itself: the guichet's e-mail only says to open the app and sign in with that address |
+| Invitations received (signed-in, approved account) | `GET /v1/account/invitations/received` | the account token. The answer holds the servers offered to this address and still ready to pair, with what pairing needs (address, port, certificate fingerprint, pairing secret, the AI key the guichet issued, claim token), over HTTPS. Once paired, `POST /v1/account/places` with the claim binds the server to the account |
 | Family links | `POST /v1/account/family/devices` (body `{email, siblings}`), `POST /v1/account/family/invitations` | the other person's e-mail (in the request body, not in the URL), the household name (`from`), one **sealed box** per device of theirs |
 | Where the person came from (once; `App/Features/Cloud/Attribution.swift`, `android/.../cloud/Attribution.kt`) | `POST /v1/attribution` | the subscription or account token and **one** of: Android, the ad campaign's name from Google Play's install referrer (`utm_campaign` only); iPhone, AdServices' attribution token (the guichet asks Apple and keeps only « asa- » + the Apple Search Ads campaign's number, never the token); the answer to « Comment nous as-tu connus ? » (Instagram, X, a friend or family, an article or a podcast, a search, other) if the person answered. Sent once, only when the phone has the offer or an account; nothing for a self-install without one |
 | « Partager en lecture »: the owner starts sharing one conversation | `POST /v1/rshares` | the account token, the end date. The answer is the share's id and a token the app hands to the person's own bridge, which does the rest (below) |
@@ -229,9 +229,9 @@ guichet with the purchase.
 
 **What is encrypted end to end (public code):** `AccountCrypto`. A box is sealed on one device for
 another device's P-256 key: an ephemeral ECDH key, HKDF-SHA256 (info `bipagents-box-v1`), then AES-256-GCM. Only the
-device holding the private key can open it. Boxes carry the device handover (for each place: address, certificate
+device holding the private key can open it. Boxes carry the device handover (for each server: address, certificate
 fingerprint, the new device's bridge key, backup key, claim token, and the escrow key) and family invitations. The
-**escrow** (each place's backup key) is sealed with AES-256-GCM under a key derived from the 24-character recovery
+**escrow** (each server's backup key) is sealed with AES-256-GCM under a key derived from the 24-character recovery
 code (HKDF, 120 bits). The guichet keeps only another value derived from the code.
 
 **A conversation shown read-only (« Partager en lecture »; public code: `ReadShare.swift`, `ReadShareCrypto.kt`,
@@ -255,7 +255,7 @@ checked in both apps (`AccountCryptoTest.kt`, and a debug-build assertion in `Ac
 **Never sent to the guichet** (no such call exists in the code): conversations (except, encrypted, one the person
 shares read-only, above), files, memory, health data, reminders,
 contacts,
-bridge keys in clear, the recovery code itself. The agents' mailboxes are asked for by the place's bridge, not by the
+bridge keys in clear, the recovery code itself. The agents' mailboxes are asked for by the server's bridge, not by the
 apps (§1).
 
 ## 3. Kerfy Studio's push relay (public: `relay/`)
@@ -333,10 +333,10 @@ Used only when the build sets a relay host (`BIPPushRelayHost` / `push.relayHost
 code). Messages reach the model through the person's Hermes. What the provider sees is whatever the agent puts in its
 request: the conversation, the files, and the results of its tools, including **health summaries when an agent with
 "Santé" uses its `health` tool**. On the offer, the app allows turning "Santé" on only with a model the guichet marks
-as `eu_hosted` (`ToolStates.swift`, `AppsTools.kt`), and the place's bridge refuses the `health` tool to an agent whose
+as `eu_hosted` (`ToolStates.swift`, `AppsTools.kt`), and the server's bridge refuses the `health` tool to an agent whose
 model is not in its config's `[model] eu_hosted`, at every call: a model changed afterwards (the guichet, the catalog,
 SSH) reads nothing more of the person's health, and the agent says why (`bridge-rs/src/health.rs`, `eu_refusal`;
-2026-11-01). Since `c7535789`, the offer has no model choice in the app. The AI key of an offer place is created by the
+2026-11-01). Since `c7535789`, the offer has no model choice in the app. The AI key of an offer server is created by the
 guichet and goes through the phone to the bridge (§1).
 
 **The Carnet's nightly sorting** (bridge, `notebook/tidy.rs`): once a night at most, the person's own bridge sends
@@ -358,7 +358,7 @@ The apps play no part in it.
   state; no conversation, name, address or key (`Support.swift`, `ui/Support.kt`).
 - **Support and feedback with the offer** (`SupportDesk.swift`, `cloud/SupportDesk.kt`): `GET /v1/support/code` (the
   help code) and `POST /v1/support/message` to the guichet, with the message, the reply address if the person types
-  one, the app's version and language; the guichet adds the help code, the plan and the places' state, and e-mails it
+  one, the app's version and language; the guichet adds the help code, the plan and the servers' state, and e-mails it
   to support.
 - **The model that helps Live know when the person has finished speaking** (`VoiceDeciderPackage.swift`, Android
   `voice/decider/VoiceDeciderPackage.kt`): about 35 MB downloaded from a GitHub release of the public repository, on
@@ -372,7 +372,7 @@ The apps play no part in it.
 
 - iOS Keychain, `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly` (`App/Model/Keychain.swift`, `OfferVault` in
   `Guichet.swift`): the agents' keys, the guichet tokens, the account's P-256 private key, the escrow key, and the
-  places with their backup keys. These are not in iCloud Keychain or in backups that move to another device.
+  servers with their backup keys. These are not in iCloud Keychain or in backups that move to another device.
 - Android: the same secrets in the app's private preferences, encrypted with an AES key that stays in the Android
   Keystore (`model/Secrets.kt`). `allowBackup="false"`.
 - Until the guichet has them: the install referrer's campaign name and the answer to « Comment nous as-tu connus ? »
@@ -384,7 +384,7 @@ The apps play no part in it.
 
 The demo (`App/Features/Demo/`, `AgentStore.tour`, `ui/DemoViews.kt`) uses the bundled `demo.json` and recordings. Its
 agents point at `https://demo.invalid`. In demo mode the app does not ask for push, health, reminder or backup syncing,
-the account or the guichet's place checks (`BipAgentsApp.swift`, `HealthSync`), and conversations and Live calls play
+the account or the guichet's server checks (`BipAgentsApp.swift`, `HealthSync`), and conversations and Live calls play
 recorded lines. The offer screens ask the guichet nothing (`OfferFlow.swift`, `OfferScreen.kt`): prices come from the
 store alone (StoreKit products and storefront, Play Billing products and country, or the phone's region).
 
@@ -398,17 +398,17 @@ store alone (StoreKit products and storefront, Play Billing products and country
   gives them (`POST /v1/account/family/devices`); a dishonest guichet could hand its own key and open the invitation.
 - **A new device gets in with the sign-in plus a code sent by email** (and an authenticator app's code when the person
   added one). When another approved device exists, it sends the new one the sealed keys; otherwise the guichet has the
-  places paired again with the new device (new keys). So the guichet can give access to whoever controls the email
+  servers paired again with the new device (new keys). So the guichet can give access to whoever controls the email
   address (and the authenticator app): that is by design; every new device is reported to the others and by email
   with a link that removes it (which changes the keys again), and logged. The authenticator's secret is kept encrypted
   by the guichet. Recovery with no code at all (after 24 hours) stays for when email can't be received. The guichet
   never reads conversations.
-- On a place of the offer, the server is installed for Kerfy Studio and runs at a hosting provider. The app's
-  encryption does not protect against whoever runs that server.
-- **Invitations to a shared place:** the guichet holds the place's pairing secret, AI key and claim token (it issued
+- On a server of the offer, the software is installed for Kerfy Studio and runs at a hosting provider. The app's
+  encryption does not protect against whoever runs that machine.
+- **Invitations to a server of a shared plan:** the guichet holds the server's pairing secret, AI key and claim token (it issued
   them) and gives them, over HTTPS, to the app signed in with the invited address. Whoever can sign in with that address
-  (for example by reading its e-mail codes) can take the place while it is unpaired.
-- **« Partager le lien » of a place** (Duo, Famille) still puts the place's address, port, pairing secret, AI key and
+  (for example by reading its e-mail codes) can take the server while it is unpaired.
+- **« Partager le lien » of a server** (Duo, Famille) still puts the server's address, port, pairing secret, AI key and
   claim token, base64 and not encrypted, after the link's `#`. The person chooses where to send it; the link works once.
 - **« Signaler cette réponse »** sends the reply's text to Kerfy Studio (through the relay to the guichet, or by e-mail
   if the relay does not answer), only when the person sends the report (§3).
@@ -418,9 +418,9 @@ store alone (StoreKit products and storefront, Play Billing products and country
 - **ML Kit's document scanner** on Android may send usage and diagnostic data to Google, according to Google. The app
   does not change this.
 - **"Santé" and the model:** the EU-hosted check is done by the apps when the switch is turned on (the guichet's
-  `eu_hosted` mark) and by the place's bridge at every call of the `health` tool (its config's `[model] eu_hosted`,
+  `eu_hosted` mark) and by the server's bridge at every call of the `health` tool (its config's `[model] eu_hosted`,
   empty by default: no model). The two lists must agree: a model marked `eu_hosted` at the guichet but not added to the
-  places leaves "Santé" switchable but silent.
+  servers leaves "Santé" switchable but silent.
 - **An agent's Kerfy Studio e-mail address** keeps its mail on Kerfy Studio's mail server (a Hetzner server, apart
   from the places), stored as any mail server stores mail, not encrypted for the person: whoever runs that server can
   read it. Mails are deleted after 90 days, and the whole mailbox when the address goes. Between mail servers, mail is

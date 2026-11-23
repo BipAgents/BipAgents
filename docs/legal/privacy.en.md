@@ -52,7 +52,7 @@ With your own computer or your own server:
 
 | Where | What is there | Who decides |
 |---|---|---|
-| **Your server** (your computer, or a server you rent) | Hermes Agent, your agents, your conversations, your files, their memory, their scheduled tasks, the password vault | You |
+| **Your own server** (your computer, or a server you rent yourself) | Hermes Agent, your agents, your conversations, your files, their memory, their scheduled tasks, the password vault | You |
 | **Your model provider** (a cloud API such as OpenRouter, or a model running at home) | Each message your agents send it to be answered | You, under that provider's terms |
 | **Your phone** | What the app keeps in order to work (section 3) | You |
 | **Kerfy Studio** | Only what section 4 describes | Kerfy Studio |
@@ -296,7 +296,7 @@ everything.
 **What is kept.** The relay has no database. The sealed token is kept on your phone and on your server; with the
 all-included offer, Kerfy Studio's guichet keeps it too, still sealed (section 5.6).
 The relay's technical logs contain the platform, a 4-byte fingerprint of the token and Apple's or Google's answer;
-they are kept for **6 months at most**. The relay runs, with Kerfy Studio's guichet (section 5), on a server Kerfy Studio rents from OVHcloud
+they are kept for **6 months at most**. The relay runs, with Kerfy Studio's guichet (section 5), on a machine Kerfy Studio rents from OVHcloud
 (OVH SAS), on a VPS in France, and administers itself; the hosting provider may log the IP addresses of requests, in
 its operating logs.
 
@@ -637,7 +637,7 @@ Finland), apart from the machines of the servers.
 
 **Data.** The address itself, which the guichet links to your server. The mails received and sent by that address:
 their headers (senders, recipients, dates, subjects), their contents and their attachments. The address's password is
-made on Kerfy Studio's server and given once to your server, where it is kept with the agent's settings; the mail
+made on Kerfy Studio's mail server and given once to your server, where it is kept with the agent's settings; the mail
 server only keeps a hashed form of it, and the guichet does not keep it. The addresses your agent may write to, its
 daily limit and the mails waiting for your approval are kept on your server.
 
@@ -987,7 +987,7 @@ of the applicable safeguards.
 
 The relay only accepts encrypted connections (HTTPS), seals tokens (XChaCha20-Poly1305), has no database and never
 writes a token in clear. In the app, your agents' keys are protected by the Keychain or the Keystore, and the
-connection to your server goes through Tailscale or through an HTTPS door on your local network that only accepts your
+connection to your own server goes through Tailscale or through an HTTPS door on your local network that only accepts your
 server's certificate. The code of the app, the server side and the relay is public: https://github.com/BipAgents/BipAgents. To report a
 security flaw: **security@bipagents.com** (see the SECURITY.md file in the repository).
 
@@ -1064,8 +1064,8 @@ the location of reminders by place (section 3) and Android's document scanner, f
 (section 7). Under 15, on an install on your own computer or your own server, the adult who set it up gives it
 together with the child (article 45 of the French Data Protection Act). If a child wrote to us, a parent can ask us to delete the message.
 
-**All-included offer**: it is subscribed by an adult, or with a parent's agreement; anyone who uses a server, invited
-people included, is at least 16 ([terms of the offer](offer.en.md), section 7). **In the United States, nobody under 13 may use a server**, and Kerfy
+**All-included offer**: it is subscribed by an adult, or with a parent's agreement; anyone who uses a server of the offer, invited
+people included, is at least 16 ([terms of the offer](offer.en.md), section 7). **In the United States, nobody under 13 may use a server of the offer**, and Kerfy
 Studio does not knowingly collect any data from a child under 13 (Children's Online Privacy Protection Act); if that
 happened, write to us and we will erase it. **In Quebec**, the data of a child under 14 is only collected with the
 consent of a parent or tutor: the adult who sets up and supervises the child's install, on their own computer or
