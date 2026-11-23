@@ -2,7 +2,7 @@ English · [Français](privacy.fr.md) · [Deutsch](privacy.de.md) · [Español](
 
 # BipAgents privacy policy
 
-> Last updated: 20 November 2026.
+> Last updated: 23 November 2026.
 
 ## In short
 
@@ -849,7 +849,7 @@ then responsible for what it does with it.
 
 ## 7 bis. Google data (Gmail, Google Calendar, Google Drive)
 
-If you connect your Google account, your server receives from Google only what you allow: your calendars and their events; the files your agents create for you and those you choose for them; your e-mails, to search them, read them, prepare drafts and tidy your mailbox when you ask. This data stays on your server, encrypted, and goes only to the AI model that answers your agents, through EUrouter and its hosts in the European Union, with the instruction to keep nothing and train nothing. Kerfy Studio does not read it, does not sell it and does not use it for advertising or to train an AI model. You can disconnect Google at any time in the app: your server then erases its tokens and revokes the access at Google. BipAgents' use and transfer to any other app of information received from Google APIs will adhere to the [Google API Services User Data Policy](https://developers.google.com/terms/api-services-user-data-policy), including the Limited Use requirements.
+If you connect your Google account, your server receives from Google only what you allow: your calendars and their events; the files your agents create for you and those you choose for them; your e-mails, to search them, read them, prepare drafts and tidy your mailbox when you ask. This data stays on your server, encrypted, and goes only to the AI model that answers the agent: with the offer, through EUrouter and its hosts in the European Union, with the instruction to keep nothing and train nothing; on your own server, or if you connect an agent to another model, to the model you chose. Kerfy Studio does not read it, does not sell it and does not use it for advertising or to train an AI model. You can disconnect Google at any time in the app: your server then erases its tokens and revokes the access at Google. BipAgents' use and transfer to any other app of information received from Google APIs will adhere to the [Google API Services User Data Policy](https://developers.google.com/terms/api-services-user-data-policy), including the Limited Use requirements.
 
 ## 8. The demo
 
