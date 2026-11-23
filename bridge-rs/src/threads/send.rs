@@ -644,7 +644,7 @@ pub async fn send(state: &AppState, agent: &AgentConfig, thread: Option<Thread>,
         let Some(file) = long_text_as_file(state, agent, body.text.trim()).await else {
             return Err(HttpError::new(
                 422,
-                &format!("a message's words are {} characters at most: send a longer text as a file", crate::msg_queue::TEXT_MAX),
+                format!("a message's words are {} characters at most: send a longer text as a file", crate::msg_queue::TEXT_MAX),
             ));
         };
         body.attachments.push(file);
