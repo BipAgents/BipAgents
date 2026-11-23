@@ -147,7 +147,9 @@ in `routes[].errors`; S1's codes have no text yet: the apps show their own until
 | S4 | `GET /v1/notebook/category/{id}?space=&filter=&lang=` | a category's page (`CategoryPage`, §3b): sub-filters with counts, « Cherché ici » (3), the latest (20, of `filter` when given); `category/health?private=1`: Santé's, behind the lock, read now and kept nowhere (no sub-filter, no search kept); 404 `category_unknown`, 400 `filter_unknown`, 403 `health_locked` |
 | S4 | `GET/POST/DELETE /v1/notebook/kept` | kept searches (6 a space, `state.json`), their count from the bridge; POST `{q, title?, space?, category?}` or `{id, title}`, DELETE `?id=` → the space's `KeptList`; 409 `kept_full`, 404 `kept_unknown`, 400 `kept_empty`, `number_refused`, `category_not_given` |
 | S4 | `POST /v1/notebook/searched` | `{q, category?, space?, private?}`: a search made (3 a category for « Cherché ici » and the grey words, `searched.json`, never shown to the agents, never in the copy; with Santé open — `category: health` or `private: true` — never kept) → 204; `DELETE ?q=&space=&category=`: the one of these words, or all → 204 |
-| S5 | `PATCH /v1/notebook/settings {separate_spaces}` | « Séparer Perso, Pro et Famille » (off by default); `?space=all|perso|pro` on summary/category/search/index; `POST /v1/notebook/space {item | path, space}` « Ranger dans… Perso / Pro » (+ `/space/undo`) |
+| S5 | `GET/PATCH /v1/notebook/settings {separate_spaces}` | « Séparer Perso, Pro et Famille » (off at first; also the home's `settings.separate_spaces`; 422 not a bool) |
+| S5 | `POST /v1/notebook/categorize` `space?` | « Ranger dans… Perso / Pro » (§3c): `space` (`perso`, `pro`) alone or with `categories` → `Categorized` + `space`, `before.space`, the toast saying it; one undo (`/categorize/undo` → `Undone` + `space`); today's re-filings say it (`Refiled.space`); 400 `space_unknown` |
+| S5 | `?space=all\|perso\|pro` | on summary (`spaces`: the selector), category, kept, searched (S4), search (400 `space_unknown` now; ignored with `private=1`) and index (one space's copy, its own ETag); `POST /v1/notebook/page` `space?` (the app's open tab) |
 | S6 | `/v1/family-agent/notebook/{summary,index,kept,categorize,category/{id}}` | the family Carnet's, relayed by the members' bridges as today (`FamilySummary`, `FamilyIndex`, `FamilyCategorized`, `FamilyCategoryPage`) |
 
 **Counts.** A category's `count` counts its items (pages, lines, tasks, records, documents); `total` all of them. A
@@ -206,9 +208,8 @@ cases are written on them.
 - **« Oublie ça »** takes the searches with it: the kept ones (every space; the copy moves to a new version, the phones
   drop them) and those made (« Cherché ici », the grey words) whose words, or a kept one's title, say what is forgotten
   (folded as the search folds, whole words; a person's first name too when their page is forgotten whole).
-- **Spaces until S5**: the bridge writes no `space: pro` before S5: `perso` is the whole Carnet, `pro` nothing (unless a
-  page got `space: pro` by hand in Obsidian: it is Pro then, as S5 will read it); `spaces` stays `[]` (the app keeps
-  its « Moi | Famille » until S6). Unknown: 400 `space_unknown`.
+- **Spaces** (S5, §3c): a note's space is its page's or the person's mark; `perso` is what is not Pro. `spaces` is
+  the selector: `[]` with the setting off (the app keeps its « Moi | Famille »). Unknown: 400 `space_unknown`.
 - **`version` with `epoch`** (the copy's): a version is compared only with its epoch. On a copy cut (`truncated`), the
   counts are the copy's, archives included.
 - **Santé open**: a search made in Santé or with `private=1` is sent with `category: health` or `private: true` (or not
@@ -219,6 +220,49 @@ cases are written on them.
 - **Errors** (`{"detail": {"code", "text"}}`): no text yet but `number_refused`'s (the apps show their own until
   Alex approves them); `not_written` (500) when `state.json` cannot be written.
 
+## 3c. Perso and Pro (S5)
+
+`bridge-rs/src/notebook/spaces.rs`; the choices of 17/11 (the plan §2.3): a setting, off at first; 6 B (Famille is the
+household's shared Carnet, it has no space); 7 B (the Pro agents read everything); 8 B (nothing is filed by itself).
+
+- **The setting** « Séparer Perso, Pro et Famille » (Réglages › Carnet): `separate_spaces` in `GET/PATCH
+  /v1/notebook/settings` (the bridge's `state.json`), off at first. Off, everything is together, as before. It decides
+  two things only: where a Pro agent makes its new pages, and the sommaire's selector. Switched off again, nothing is
+  lost: the pages keep their space, the sommaire of `all` shows everything (the kept searches of every space too).
+- **A page's space**: `space: pro` in its frontmatter (readable and editable in Obsidian; `Pro` in any case is Pro,
+  another value Perso), nothing for Perso. Its lines, its tasks (their first `[[link]]`, as their categories) and the
+  documents linked to it or named on it follow it. A record is Perso unless the person files it in Pro. A record, a
+  task, a document or a single line filed in another space than its page's keeps a mark in `state.json`
+  `space_marks` (keys only, never a text: « Oublie ça »).
+- **A Pro agent** (the person's « Pro » group of agents, or the work Bip), the setting on: a page it **makes** — a
+  person, a subject, an area, a trip — gets `space: pro` (after `categories_by`). Never « Toi », the tasks page,
+  « À ranger », the records' and documents' pages, nor the private part. A page that exists keeps its space; the
+  setting off, nothing is written. It reads every space, as every agent of the person (7 B).
+- **« Ranger dans… Perso / Pro »**: `POST /v1/notebook/categorize` with `space` (`perso` | `pro`), on the page (`space`
+  alone: `categories` may be left out) or in « Ranger ailleurs » (with `categories`): one gesture, one `undo` (the
+  categories and the space as they were). A page changes by its header's `space` line only (the history's
+  `categorize`, the person's write); the others by a mark. The answer: `Categorized`, plus `space` and `before.space`
+  (without `space` in the request: S1's answer exactly); `toast` « Rangé dans Pro. », « Rangé dans Argent et Pro. »;
+  `undo_title` « Annuler ». `Undone` gains `space` (the space now). Today's re-filings (`categorize/today`): an item
+  whose gesture set a space has `space` and the toast's text; a gesture that set only a space is listed too.
+- **Each space answers for itself**: `?space=` on summary, category, kept, searched, search and index; `all` (or none)
+  everything, `perso` what is not Pro, `pro` Pro's. **The selector** (`Summary.spaces`): off, `[]`; on, Perso, then
+  Pro when the person has a Pro agent or a Pro note (`selected`: the space asked; `all` selects none); the app adds its
+  Famille (until S6) and asks `perso` or `pro`. **The phone's copy**: every item carries its `space` (`perso` left
+  out); `?space=perso|pro` gives that space's notes only, with its own ETag (`"…-pro"`), a note that left the space in
+  `removed`, the kept searches of that view.
+- **Kept searches**: no rewrite when the setting changes; by view: `all` lists every space's, `perso` Perso's and those
+  kept in `all` (kept with the setting off: they show in Perso, the tab the app opens on), `pro` Pro's; 6 a view when
+  one is kept (after a change of the setting a view may show more: nothing is dropped). **Searches made**: each space
+  its own (« Cherché ici » and the grey words of Pro are Pro's; those of `all` are back when the setting is off).
+- **Santé is in no space**: never `space` on its pages (one written by hand is not read), never in Pro (no Santé line
+  in the Pro sommaire), its page (`category/health?private=1`) and its search (`private=1`) ignore `space`;
+  « Ranger dans… » never reaches the private part (`private: true` → 400 `category_not_given`).
+- **New page** (`POST /v1/notebook/page`): `space?` (`perso` | `pro`), the app's open tab (« Écrire une page » in Pro).
+- **Visible texts** (proposed, for Alex): the setting's name and line, the spaces' names (the home's groups of agents:
+  Perso / Pro; en Personal / Work, de Privat / Arbeit, es Personal / Trabajo, nl Privé / Werk), the toast.
+- **Errors**: `space_unknown` (400), no text yet (as S1's).
+
 ## 4. What the 1.0 apps see
 
 Exactly today's answers, the keys of `additive` added. Concretely, for an app of today: pages, results, tasks,
@@ -226,7 +270,10 @@ records and documents gain `categories` (a list of ids) and sometimes `categorie
 `frontmatter` gains the same keys; the home gains `sommaire`, the list of what this bridge's Carnet can do (`sommaire.json` `Capability`: S1
 `categories`, `categorize`; S2 `sorted` (the home's `sorted` card and its answer, today's re-filings, the toast);
 S3 `index` (the phone's search copy); S4 `summary`, `category`, `kept`, `searched` (the sommaire ready to show);
-then `spaces`, `family` as they come): a new app uses a route only when it is listed, else the home of today. An old bridge has no `sommaire`.
+S5 `spaces` (« Séparer Perso, Pro et Famille », `space` on « Ranger ailleurs »); then `family`): a new app uses a route only when it is listed, else the home of today. An old bridge has no `sommaire`.
+Pages also gain `space` (`perso` or `pro`; null in the private part) on `GET /v1/notebook/page` and `/pages`, and the
+settings `separate_spaces`; with the setting on and a Pro agent writing, a 1.0 app still sees every page, as before
+(checked: `test_carnet_spaces.py::test_s5_the_1_0_apps_see_the_same_with_the_setting_on_and_a_pro_agent`).
 
 ## 5. Fake bridge (for the iPhone and Android agents)
 

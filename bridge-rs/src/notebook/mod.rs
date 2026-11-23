@@ -2088,6 +2088,8 @@ fn note_locked_with(
     page.body = body;
     // its categories, by its words, when it has none yet (categories.rs: no model, no token)
     categories::on_write(config, part, &path, &mut page, who, created);
+    // a page a Pro agent makes, « Séparer Perso, Pro et Famille » on: Pro (spaces.rs, S5)
+    spaces::on_write(config, part, &path, &mut page, who, created);
     page.touch();
     let text = page.render();
     let summary = if converted && added.is_empty() {
@@ -2315,7 +2317,7 @@ pub fn new_page_in(
     part: Part,
     kind: &str,
     title: &str,
-    _space: Option<&str>,
+    space: Option<&str>,
     who: &Who,
 ) -> anyhow::Result<Result<String, String>> {
     let _guard = lock();
@@ -2352,6 +2354,10 @@ pub fn new_page_in(
         trip::make_trip(&mut page, &lang);
     }
     categories::on_write(config, part, &path, &mut page, who, true);
+    // written in the app's open tab (« Écrire une page » in Pro); never in the private part (Santé has no space)
+    if part == Part::Main && space == Some("pro") {
+        spaces::set_front(&mut page, "pro");
+    }
     page.touch();
     commit(config, part, &path, None, Some(&page.render()), who, "create", "")?;
     Ok(Ok(path))

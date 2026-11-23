@@ -256,19 +256,22 @@ static PAGE_ITEMS: LazyLock<Mutex<PageItems>> = LazyLock::new(Default::default);
 /// What files the pages besides their own text: the person's rules and marks, the papers' tasks (state.json).
 fn state_key(config: &Config) -> String {
     let state = super::read_state(config);
-    ["category_rules", "category_marks", "papers", "language"]
+    ["category_rules", "category_marks", "papers", "language", "space_marks"]
         .iter()
         .map(|k| state.get(*k).map(|v| v.to_string()).unwrap_or_default())
         .collect::<Vec<_>>()
         .join("\u{1}")
 }
 
-/// A page's items: itself, then its lines (never a reference, a number or an archived mail's link).
+/// A page's items: itself, then its lines (never a reference, a number or an archived mail's link). `spaces`: the
+/// person's space marks (spaces.rs: a line filed in another space than its page's).
+#[allow(clippy::too_many_arguments)]
 fn page_entries(
     ctx: &c::Ctx,
     part: Part,
     w: &super::Words,
     marks: &serde_json::Map<String, Value>,
+    spaces: &serde_json::Map<String, Value>,
     anchor: Option<NaiveDate>,
     path: &String,
     page: &Page,
@@ -290,8 +293,9 @@ fn page_entries(
     let Some(title) = masked(&title) else { return items };
     let aliases: Vec<String> = page.aliases().iter().filter_map(|a| masked(a)).collect();
     let summary = masked(&super::summary_of(&page.body, w.brief)).unwrap_or_default();
-    let space = tk::str_or_empty(page.front.get("space"));
-    let space = (space == "pro").then(|| "pro".to_string());
+    // its space (S5): `space: pro` on its header; Santé's pages have none (spaces.rs)
+    let page_space = super::spaces::of_page(part, page);
+    let space = (page_space == "pro").then(|| "pro".to_string());
     items.push(Entry {
         id: page_id.clone(),
         kind: "page".into(),
@@ -337,6 +341,7 @@ fn page_entries(
                 None => (None, None),
             };
             let cats = without_dates(c::of_line(&filed.categories, &key, &f.text, &f.date, marks, NaiveDate::MIN));
+            let line_space = if health { "perso" } else { super::spaces::of_line(page_space, &c::line_key(&key, &f.text), spaces) };
             items.push(Entry {
                 id,
                 kind: "line".into(),
@@ -345,7 +350,7 @@ fn page_entries(
                 title: title.clone(),
                 line: tk::head(&f.text, 240).to_string(),
                 categories: cats,
-                space: space.clone(),
+                space: (line_space == "pro").then(|| "pro".to_string()),
                 date,
                 yearly,
                 // its section's title as written can hold one too (review 2 of S3, B4)
@@ -379,6 +384,7 @@ fn entries_of(config: &Config, part: Part, documents: &[Value]) -> Vec<Entry> {
     let w = super::words(&lang);
     let ctx = c::Ctx::new(config);
     let marks = c::marks(config);
+    let spaces = super::spaces::marks(config);
     let health = part == Part::Health;
     let main = super::all_pages(config, part);
     let root = super::part_root(config, part);
@@ -400,7 +406,7 @@ fn entries_of(config: &Config, part: Part, documents: &[Value]) -> Vec<Entry> {
         let file = root.join(path);
         let anchor = anchor(page, &file);
         if health {
-            items.extend(page_entries(&ctx, part, w, &marks, anchor, path, page));
+            items.extend(page_entries(&ctx, part, w, &marks, &spaces, anchor, path, page));
             continue;
         }
         // what the page says as it was read (never its file's size and time, read apart: an agent's write or « Oublie
@@ -415,7 +421,7 @@ fn entries_of(config: &Config, part: Part, documents: &[Value]) -> Vec<Entry> {
                 continue;
             }
         }
-        let made = page_entries(&ctx, part, w, &marks, anchor, path, page);
+        let made = page_entries(&ctx, part, w, &marks, &spaces, anchor, path, page);
         items.extend(made.iter().cloned());
         cache.insert(key, (said, made));
     }
@@ -441,6 +447,7 @@ fn entries_of(config: &Config, part: Part, documents: &[Value]) -> Vec<Entry> {
             title: plain.clone(),
             line: plain.clone(),
             categories: cats,
+            space: (!health && super::spaces::of_task(&t, &main, &spaces) == "pro").then(|| "pro".to_string()),
             date: some(t.due.clone()),
             source: some(w.tasks.to_string()),
             who: some(t.who.clone()),
@@ -470,6 +477,7 @@ fn entries_of(config: &Config, part: Part, documents: &[Value]) -> Vec<Entry> {
                 title: name,
                 line: tk::head(&line, 240).to_string(),
                 categories: without_dates(cats),
+                space: (super::spaces::of_record(&id, &spaces) == "pro").then(|| "pro".to_string()),
                 date: date.as_str().map(str::to_string),
                 source: some(t.titles[super::lang_index(&lang)].to_string()),
                 archived,
@@ -518,6 +526,7 @@ fn entries_of(config: &Config, part: Part, documents: &[Value]) -> Vec<Entry> {
             title: name.clone(),
             line: name.clone(),
             categories: without_dates(cats),
+            space: (super::spaces::of_document(d, &main, &spaces) == "pro").then(|| "pro".to_string()),
             source: some(by.clone()),
             who: some(by),
             noted: day_of(&tk::str_or_empty(d.get("date"))).map(|d| d.to_string()),
@@ -816,21 +825,50 @@ pub fn etag(config: &Config, langs: &[String]) -> String {
     etag_of(&kept[&key], langs)
 }
 
-/// [`answer`] of one space (`?space=`, S5).
+/// [`answer`] of one space (`?space=`, S5): `all` the whole copy; `perso` or `pro` that space's notes only (a diff
+/// sends a note that left the space among `removed`), the kept searches of that view (spaces.rs `kept_in_view`),
+/// its own ETag.
 pub fn answer_in(
     config: &Config,
     langs: &[String],
     since: Option<u64>,
     epoch: Option<&str>,
     online_only: &str,
-    _space: &str,
+    space: &str,
 ) -> (Value, String) {
-    answer(config, langs, since, epoch, online_only)
+    let (mut body, etag) = answer(config, langs, since, epoch, online_only);
+    if space == "all" {
+        return (body, etag);
+    }
+    let inside = |i: &Value| i.get("space").and_then(Value::as_str).unwrap_or("perso") == space;
+    let full = body["full"].as_bool().unwrap_or(true);
+    let items: Vec<Value> = body["items"].as_array().cloned().unwrap_or_default();
+    let (kept, out): (Vec<Value>, Vec<Value>) = items.into_iter().partition(inside);
+    if !full {
+        let mut removed: Vec<Value> = body["removed"].as_array().cloned().unwrap_or_default();
+        removed.extend(out.iter().map(|i| i["id"].clone()));
+        body["removed"] = json!(removed);
+    }
+    body["items"] = json!(kept);
+    let searches: Vec<Value> = body["kept"].as_array().cloned().unwrap_or_default();
+    body["kept"] = json!(searches
+        .into_iter()
+        .filter(|k| super::spaces::kept_in_view(k.get("space").and_then(Value::as_str).unwrap_or("all"), space))
+        .collect::<Vec<_>>());
+    (body, of_space(&etag, space))
+}
+
+/// An ETag of one space's copy: the whole copy's, the space added (`"e1a2b3c4-v42-fr-pro"`).
+fn of_space(etag: &str, space: &str) -> String {
+    if space == "all" {
+        return etag.to_string();
+    }
+    format!("{}-{space}\"", etag.trim_end_matches('"'))
 }
 
 /// [`etag`] of one space's copy (S5).
-pub fn etag_in(config: &Config, langs: &[String], _space: &str) -> String {
-    etag(config, langs)
+pub fn etag_in(config: &Config, langs: &[String], space: &str) -> String {
+    of_space(&etag(config, langs), space)
 }
 
 /// `GET /v1/notebook/index`: (the answer, its ETag). `since`/`epoch`: what the phone has.

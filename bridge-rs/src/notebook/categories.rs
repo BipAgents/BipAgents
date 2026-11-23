@@ -43,8 +43,10 @@ pub const UNDO_TODAY_MAX: usize = 100;
 /// `sommaire`: a new app uses a route only when it is listed (S1: the categories on today's answers, « Ranger
 /// ailleurs »; S2 `sorted`: the card « Ton Carnet est rangé par catégories », today's re-filings, the toast; S3
 /// `index`: the phone's search copy; S4 `summary`, `category`, `kept`, `searched`: the sommaire ready to show,
-/// summary.rs; then S5 `spaces`, S6 `family`).
-pub const CAPABILITIES: [&str; 8] = ["categories", "categorize", "sorted", "index", "summary", "category", "kept", "searched"];
+/// summary.rs; S5 `spaces`: « Séparer Perso, Pro et Famille », `space` on « Ranger ailleurs », spaces.rs; then S6
+/// `family`).
+pub const CAPABILITIES: [&str; 9] =
+    ["categories", "categorize", "sorted", "index", "summary", "category", "kept", "searched", "spaces"];
 /// The person's corrections of records, tasks, documents and lines kept.
 const MARKS_KEPT: usize = 2000;
 /// An item is in « Dates » when its date is from this many days ago …
