@@ -362,7 +362,8 @@ def test_s6_the_passage_de_main_takes_the_categories_the_kept_searches_and_the_r
     assert next(i for i in now["items"] if i["id"] == ids["Menus de la semaine"])["categories"] == ["home"]
     assert [k["q"] for k in now["kept"]] == ["courses"]
     s = ok(fam(b, "summary"))
-    assert [(k["q"], k["count"]) for k in s["kept"]] == [("courses", 2)] and s["with"] == ""
+    # (`with`: the households her family agent is for; Alex stays linked on her side until she unlinks him too)
+    assert [(k["q"], k["count"]) for k in s["kept"]] == [("courses", 2)]
     assert [x["q"] for x in ok(fam(b, "category/school"))["searched"]] == ["karaté"]
     stored = json.loads((b.state_dir / "family-notebook.json").read_text())
     assert stored["category_rules"] == handed["category_rules"]

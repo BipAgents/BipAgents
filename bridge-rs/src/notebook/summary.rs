@@ -317,7 +317,8 @@ pub fn summary_at(config: &Config, space: &str, langs: &[String], today: NaiveDa
         }
         lines.push(line);
     }
-    json!({"v": V, "lang": shown, "title": t.carnet, "space": space, "spaces": [],
+    // the selector: « Moi · Famille » for a member of a family (S6, family_carnet.rs; S5 adds Perso · Pro)
+    json!({"v": V, "lang": shown, "title": t.carnet, "space": space, "spaces": crate::family_carnet::spaces(config, &shown, space),
            "kept": kept_with_counts(config, &f, space, today),
            "card": if space == "pro" { Value::Null } else { card(config, &shown, now) },
            "total": {"count": total, "title": t.all_notes}, "categories": lines,

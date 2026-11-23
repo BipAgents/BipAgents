@@ -774,6 +774,8 @@ fn family(config: &Config, target: &Target, person: &str) -> Option<Dict> {
             }
         }
     }
+    // the household's searches the person kept that say it (S6; the others' are theirs, as their lines)
+    changed |= crate::family_carnet::forget_kept(&mut data, person, &|q| target.says(q)) > 0;
     changed.then_some(data)
 }
 
@@ -890,6 +892,11 @@ pub fn apply(config: &Config, target: &Target, lang: &str, person: &str) -> anyh
     match super::summary::forget_searched(config, &said) {
         Ok(n) => erased += n,
         Err(err) => tracing::warn!(error = %err, "forgotten searches not taken out of searched.json"),
+    }
+    // the person's own searches made in the family Carnet (S6: kept by her own place)
+    match crate::family_carnet::forget_searched(config, &said) {
+        Ok(n) => erased += n,
+        Err(err) => tracing::warn!(error = %err, "forgotten searches not taken out of family-searched.json"),
     }
     super::update_state(config, |state| {
         erased += scrub_state(state, target, &moot);

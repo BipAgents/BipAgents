@@ -52,8 +52,10 @@ fn demo(lang: &str) -> Dict {
         .as_array()
         .unwrap()
         .iter()
-        .map(|p| json!({"id": p["id"], "title": p["title"], "text": p["text"], "by": p["by"],
-                        "updated": now - 3600.0 * p["hours_ago"].as_f64().unwrap_or(0.0)}))
+        .map(|p| {
+            json!({"id": p["id"], "title": p["title"], "text": p["text"], "by": p["by"],
+                        "updated": now - 3600.0 * p["hours_ago"].as_f64().unwrap_or(0.0)})
+        })
         .collect();
     json!({"lists": lists, "pages": pages, "updated": now}).as_object().cloned().unwrap()
 }
@@ -70,13 +72,8 @@ fn the_family_table_files_the_demo_in_five_languages() {
         let copy = entries(&data);
         assert_eq!(copy.len(), 15, "{lang}: every list item and page");
         for e in &copy {
-            let want: Vec<String> = reference[&e.id]["categories"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .map(s)
-                .filter(|c| c != "dates")
-                .collect();
+            let want: Vec<String> =
+                reference[&e.id]["categories"].as_array().unwrap().iter().map(s).filter(|c| c != "dates").collect();
             assert!(!e.categories.iter().any(|c| c == "dates" || c == "health"), "{lang} {}: {:?}", e.id, e.categories);
             assert!(e.categories.iter().all(|c| crate::notebook::categories::FAMILY.contains(&c.as_str())));
             all += 1;
@@ -123,26 +120,33 @@ fn the_copy_of_the_family_carnet() {
     data.insert(
         "pages".into(),
         json!([{"id": "p2", "title": "Codes et numéros utiles", "by": "Marie", "updated": 1.7e9,
-                "text": "Wifi : voir la box.\nPlombier : M. Garnier, 06 12 34 56 78.\nÉcole de Tom : 01 00 00 00 00."}]),
+                "text": "Wifi : voir la box.\nPasseport de Tom : 18AB12345.\nPlombier : M. Garnier, 06 12 34 56 78."}]),
     );
     file_all(&mut data);
     let copy = entries(&data);
     let by_id = |id: &str| copy.iter().find(|e| e.id == id).unwrap_or_else(|| panic!("no {id}: {copy:#?}"));
     let lait = by_id("fam:list:courses/c1");
     assert_eq!((lait.kind.as_str(), lait.title.as_str(), lait.line.as_str()), ("list_item", "Courses", "Lait"));
-    assert_eq!((lait.categories.clone(), lait.who.clone(), lait.fold.as_str()), (vec!["shopping".to_string()], Some("Marie".into()), "lait"));
+    assert_eq!(
+        (lait.categories.clone(), lait.who.clone(), lait.fold.as_str()),
+        (vec!["shopping".to_string()], Some("Marie".into()), "lait")
+    );
     assert_eq!(lait.open, json!({"list": "courses", "item": "c1"}));
     assert!(!lait.done && by_id("fam:list:courses/c5").done);
     let today = Local::now().date_naive();
     // a task's day; a birthday every year (its day without the year), never a day of its own
     assert_eq!(by_id("fam:list:taches/t1").date, Some((today + Duration::days(3)).to_string()));
     let mamie = by_id("fam:list:dates/d1");
-    assert_eq!((mamie.date.clone(), mamie.yearly.clone()), (None, Some((today + Duration::days(6)).format("%m-%d").to_string())));
+    assert_eq!(
+        (mamie.date.clone(), mamie.yearly.clone()),
+        (None, Some((today + Duration::days(6)).format("%m-%d").to_string()))
+    );
     let page = by_id("fam:page:p2");
     assert_eq!((page.kind.as_str(), page.title.as_str()), ("page", "Codes et numéros utiles"));
     assert_eq!(page.open, json!({"path": "p2"}));
-    // never a number: the lines holding one are left out of the copy
-    assert!(page.line.starts_with("Wifi : voir la box.") && !page.line.contains("06") && !page.fold.contains("06"), "{page:?}");
+    // never a number nor a reference (the person's copy's rule: a line holding one is left out; a phone number stays)
+    assert!(page.line.starts_with("Wifi : voir la box.\nPlombier : M. Garnier, 06 12 34 56 78."), "{page:?}");
+    assert!(!page.line.contains("18AB") && !page.fold.contains("18ab") && !page.fold.contains("passeport"), "{page:?}");
     assert!(page.fold.contains("wifi") && page.fold.contains("codes"));
     assert!(copy.iter().all(|e| e.noted.as_deref().is_some_and(|n| n.len() == 10)));
 }
@@ -153,7 +157,13 @@ fn filing_at_a_write_keeps_the_persons_choice() {
     let body = |v: Value| v.as_object().cloned().unwrap();
     apply(&mut data, &body(json!({"op": "list_save", "title": "Courses", "kind": "list"})), "Marie", 1.0).unwrap();
     apply(&mut data, &body(json!({"op": "list_save", "title": "Tâches", "kind": "tasks"})), "Marie", 1.0).unwrap();
-    apply(&mut data, &body(json!({"op": "page_save", "title": "Menus de la semaine", "text": "Lundi : pâtes."})), "Léa", 2.0).unwrap();
+    apply(
+        &mut data,
+        &body(json!({"op": "page_save", "title": "Menus de la semaine", "text": "Lundi : pâtes."})),
+        "Léa",
+        2.0,
+    )
+    .unwrap();
     let list = data["lists"][0].clone();
     assert_eq!((list["categories"].clone(), list["categories_by"].clone()), (json!(["shopping"]), json!("auto")));
     // a list of tasks or of dates has none of its own: each item has its words'
@@ -164,8 +174,12 @@ fn filing_at_a_write_keeps_the_persons_choice() {
     data.get_mut("pages").unwrap()[0]["categories"] = json!(["home"]);
     data.get_mut("pages").unwrap()[0]["categories_by"] = json!("person");
     let pid = s(&page["id"]);
-    apply(&mut data, &body(json!({"op": "page_save", "id": pid, "title": "Recettes", "text": "Gratin."})), "Léa", 3.0).unwrap();
-    assert_eq!((data["pages"][0]["categories"].clone(), data["pages"][0]["categories_by"].clone()), (json!(["home"]), json!("person")));
+    apply(&mut data, &body(json!({"op": "page_save", "id": pid, "title": "Recettes", "text": "Gratin."})), "Léa", 3.0)
+        .unwrap();
+    assert_eq!(
+        (data["pages"][0]["categories"].clone(), data["pages"][0]["categories_by"].clone()),
+        (json!(["home"]), json!("person"))
+    );
     // the bridge's own: filed again when the title changes
     let lid = s(&list["id"]);
     apply(&mut data, &body(json!({"op": "list_save", "id": lid, "title": "Menus"})), "Marie", 4.0).unwrap();

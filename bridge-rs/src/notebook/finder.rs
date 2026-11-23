@@ -907,10 +907,17 @@ impl Finder {
                     *counts.entry(c.clone()).or_insert(0) += 1;
                 }
             }
-            if !cats.iter().any(|c| c == "dates") && self.in_dates(*at, window_from, window_to) {
+            let dated = self.in_dates(*at, window_from, window_to);
+            if !cats.iter().any(|c| c == "dates") && dated {
                 *counts.entry("dates".into()).or_insert(0) += 1;
             }
-            let cat = cats.first().cloned().unwrap_or_else(|| "other".into());
+            // a note without a category of its own (the family Carnet's date with no word of one, S6): under Dates
+            // when dated, else « Autres »
+            if cats.is_empty() && !dated {
+                *counts.entry("other".into()).or_insert(0) += 1;
+            }
+            let fallback = if dated { "dates" } else { "other" };
+            let cat = cats.first().cloned().unwrap_or_else(|| fallback.into());
             match place.get(&cat) {
                 Some(g) => {
                     groups[*g].count += 1;
