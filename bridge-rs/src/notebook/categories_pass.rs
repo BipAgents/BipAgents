@@ -525,18 +525,18 @@ fn print_of(path: &str, text: &str) -> String {
 }
 
 /// What the model reads of a page: its title and kind, its aliases, its « En bref » and its lines, without their
-/// attributions and without anything that might touch health (lexicon.rs `touches_health`: what is held back),
+/// attributions and without anything that might touch health (lexicon.rs `held_from_model`),
 /// `EXCERPT` characters at most.
 fn excerpt(page: &Page, w: &Words) -> String {
     let kind = page.kind();
     let mut parts: Vec<String> = Vec::new();
     let aliases: Vec<String> =
-        page.aliases().into_iter().map(|a| tk::squeeze(&a)).filter(|a| !lexicon::touches_health(a)).collect();
+        page.aliases().into_iter().map(|a| tk::squeeze(&a)).filter(|a| !lexicon::held_from_model(a)).collect();
     if !aliases.is_empty() {
         parts.push(format!("also {}", aliases.join(", ")));
     }
     let brief = tk::squeeze(&super::summary_of(&page.body, w.brief));
-    if !brief.is_empty() && !lexicon::touches_health(&brief) {
+    if !brief.is_empty() && !lexicon::held_from_model(&brief) {
         parts.push(brief);
     }
     for (section, facts) in page.sections() {
@@ -544,7 +544,7 @@ fn excerpt(page: &Page, w: &Words) -> String {
             continue;
         }
         for f in facts {
-            if !f.text.trim().is_empty() && !lexicon::touches_health(&f.text) {
+            if !f.text.trim().is_empty() && !lexicon::held_from_model(&f.text) {
                 parts.push(tk::squeeze(&f.text));
             }
         }
@@ -568,11 +568,11 @@ pub fn candidates_once(config: &Config, limit: usize) -> Vec<Candidate> {
 }
 
 /// Whether a page holds something of health anywhere the model would read it: its title (anything that touches
-/// health, `touches_health`), or one of its aliases, its « En bref » or its lines (`is_health`, the strict reading
-/// that files a fact in Santé): such a page is never sent (review 2, B1; its lines that only touch health are left out
-/// of the excerpt of the others).
+/// health, in the five languages: `held_from_model`), or one of its aliases, its « En bref » or its lines
+/// (`is_health`, the strict reading that files a fact in Santé): such a page is never sent (review 2, B1; its lines
+/// that only touch health are left out of the excerpt of the others).
 fn holds_health(page: &Page, w: &Words) -> bool {
-    lexicon::touches_health(&page.title)
+    lexicon::held_from_model(&page.title)
         || page.aliases().iter().any(|a| lexicon::is_health(a))
         || lexicon::is_health(&super::summary_of(&page.body, w.brief))
         || page.sections().iter().any(|(_, facts)| facts.iter().any(|f| lexicon::is_health(&f.text)))
