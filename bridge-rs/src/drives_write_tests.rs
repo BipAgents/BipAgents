@@ -1141,3 +1141,51 @@ async fn annuler_after_another_account_says_so() {
     assert!(undoable(&config).contains(&line.id), "still undoable from the right account");
     assert!(undo_line(&config, "not-a-file-line").await.is_none());
 }
+
+// -- review2-drive-write (23/11): red tests of the second review (briefs/review-drive-write.md, « Relecture 2 ») -------
+
+/// Review 2, R4: what is made at once, without a card, never fetches or goes elsewhere when the person opens it on a
+/// computer (Dropbox and OneDrive put it there without the « downloaded from the internet » mark).
+/// - An RTF is plain text (the agent writes it with `text`), and Word follows its `{\*\template …}` (or a linked
+///   picture) when it opens it: a web address, or `\\host\share` (the Windows account's hash sent to that host).
+/// - An agent's page keeps its Content-Security-Policy in its `<meta>`, but no CSP stops a navigation: outside the
+///   app's view, `location = …`, `<meta http-equiv="refresh">` or a link open any site (pages.rs lets them through).
+/// Both may still go with a card. (If the fix looks at the page's content instead, adapt this test, don't loosen it.)
+#[test]
+fn review2_nothing_made_at_once_reaches_elsewhere_when_opened() {
+    assert!(!at_once_kind("Note.rtf", false), "an RTF made at once: Word fetches its template when opened");
+    assert!(!at_once_kind("budget.html", true), "an agent's page made at once: it navigates anywhere outside the app");
+}
+
+/// Review 2, R5: never written, card or not, like `.docm` and `.lnk` already: the Office files that carry macros
+/// in their old formats (Office shows « Activer le contenu » for a file without the internet mark), Excel's
+/// SYLK (Excel 4 macros) and web query (`.iqy`, fetched when opened), OneNote (files inside it run from a
+/// double-click), Access, and what connects to another machine or installs when opened (`.rdp`, `.website`,
+/// `.search-ms`, `.appinstaller`, `.msu`, `.sct`).
+#[test]
+fn review2_never_an_old_office_file_with_macros_nor_a_link_to_another_machine() {
+    for bad in [
+        "Lettre.doc",
+        "Modèle.dot",
+        "Budget.xls",
+        "Modèle.xlt",
+        "Macro.xla",
+        "Budget.xlsb",
+        "Diapo.ppt",
+        "Diapo.pps",
+        "Modèle.pot",
+        "Liste.slk",
+        "Cours.iqy",
+        "Notes.one",
+        "Base.mdb",
+        "Base.accdb",
+        "Bureau.rdp",
+        "Site.website",
+        "Recherche.search-ms",
+        "Appli.appinstaller",
+        "Mise-a-jour.msu",
+        "x.sct",
+    ] {
+        assert!(clean_name(bad).is_err(), "{bad:?} accepted");
+    }
+}
