@@ -2,10 +2,11 @@
 //! Carnet looks for points that are clearly in the wrong place and proposes moving them, in one card on the Carnet's
 //! home (never a notification, never a move without the person's « Déplacer »):
 //!
-//! - never a point of the private health part (Santé), whatever its words: the card is shown outside the app's lock
-//!   (review 1 of carnet-s4, B1, 22/11: « Prednisolone le matin » has no word of the strict health filter and showed
-//!   on the home with its page « Santé »). A card an older bridge kept with such points is read without them, and
-//!   answering it by their ids moves nothing of Santé;
+//! - never a point of the private health part (Santé), whatever its words, **nor a page of Santé as destination**:
+//!   the card is shown outside the app's lock (review 1 of carnet-s4, B1, 22/11: « Prednisolone le matin » has no word
+//!   of the strict health filter and showed on the home with its page « Santé »; review of fix-misplaced-health, B1: a
+//!   correction towards a page of Santé showed « Famille → <its title> »). A card an older bridge kept with such points
+//!   is read without them, and answering it by their ids moves nothing;
 //! - on the family's pages (« Famille », « Famille élargie », « Toi »'s family), what a work agent noted (assign.rs)
 //!   → the project's page its label names (« BipAgents : … » → « BipAgents »), else the « Travail » area;
 //! - what goes against a correction of the person (moves.rs): a point like those they moved, by the same agent, back
@@ -150,6 +151,8 @@ pub fn find(config: &Config) -> Vec<Value> {
             let undone = corrections.iter().rev().find(|c| {
                 tk::str_or_empty(c.get("agent")) == agent
                     && Part::parse(&tk::str_or_empty(c.get("from_part"))) == Part::Main
+                    // never towards Santé: its page's title would show outside the lock
+                    && Part::parse(&tk::str_or_empty(c.get("to_part"))) == Part::Main
                     && (tk::str_or_empty(c.get("from_path")) == path
                         || (!id.is_empty() && tk::str_or_empty(c.get("from_id")) == id))
                     && moves::matches(c, &page.kind(), &section, &text)
@@ -185,14 +188,15 @@ pub fn detect(config: &Config) -> anyhow::Result<usize> {
     Ok(n)
 }
 
-/// The card's points as kept, never one of the private health part (an older bridge's card may hold some: they are
-/// neither shown nor moved, and leave the state at the next answer or night).
+/// The card's points as kept, never one of the private health part nor one going to it (an older bridge's card may
+/// hold some: they are neither shown nor moved, and leave the state at the next answer or night).
 fn kept_items(config: &Config) -> Vec<Value> {
+    let shared = |v: Option<&Value>| Part::parse(&tk::str_or_empty(v)) != Part::Health;
     super::read_state(config)
         .get("misplaced")
         .and_then(|m| m.get("items"))
         .and_then(Value::as_array)
-        .map(|items| items.iter().filter(|i| Part::parse(&tk::str_or_empty(i.get("part"))) != Part::Health).cloned().collect())
+        .map(|items| items.iter().filter(|i| shared(i.get("part")) && shared(i["to"].get("part"))).cloned().collect())
         .unwrap_or_default()
 }
 
