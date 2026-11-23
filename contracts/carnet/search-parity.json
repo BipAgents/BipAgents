@@ -915,6 +915,34 @@
      ]
     ]
    ]
+  },
+  {
+   "id": "family-no-category-dated",
+   "index": "parity-copies/family-edges.json",
+   "today": "2026-11-22",
+   "q": "paul",
+   "first": "fam:list:dates/n1",
+   "groups": [
+    "dates"
+   ],
+   "counts": {
+    "all": 1,
+    "dates": 1
+   }
+  },
+  {
+   "id": "family-no-category-undated",
+   "index": "parity-copies/family-edges.json",
+   "today": "2026-11-22",
+   "q": "lucie",
+   "first": "fam:list:dates/n2",
+   "groups": [
+    "other"
+   ],
+   "counts": {
+    "all": 1,
+    "other": 1
+   }
   }
  ]
 }
