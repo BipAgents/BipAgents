@@ -106,6 +106,7 @@ fn the_contract_s_kinds_and_texts_are_the_bridge_s() {
             ("detail_calendar", t.detail_calendar),
             ("home", t.home),
             ("phone_calendar", t.phone_calendar),
+            ("outside", t.outside),
         ];
         for (key, ours) in pairs {
             assert_eq!(c[key].as_str().unwrap(), ours, "{} {key}", t.lang);
