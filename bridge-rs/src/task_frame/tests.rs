@@ -424,3 +424,110 @@ fn a_once_watcher_and_a_watchers_end_are_read_from_its_watch() {
     map.insert("until".into(), json!("2020-01-01"));
     assert!(crate::watchers::parse_watch_in(&map, PARIS).is_err());
 }
+
+// -- review-task-frame (23/11): red tests of the review (briefs/review-task-frame.md), not the branch's ------------------
+
+/// « Arrêter » pauses, never deletes; « Garder 3 mois de plus ? » 3 days before a default end. A routine its agent made
+/// on its own, stopped after 3 failures: no « Garder ? » is asked (it is paused), and its default end deletes it.
+#[test]
+fn review_stop_never_deletes_even_at_its_default_end() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = config_in(dir.path());
+    let r = agents(&config, "Veille", "every day at 7:30", &Ask { asked: false, ..Ask::default() });
+    let until = r.frame.until.unwrap();
+    assert!(r.frame.default_end);
+    let then = until - 10.0 * DAY;
+    for n in 0..3 {
+        routines::failed(&config, &r.id, routines::Ended::Failed, then + f64::from(n), false);
+    }
+    let fix = routines::get(&config, &r.id).unwrap().frame.fix.unwrap();
+    assert!(settle(&config, "vie", &fix.id, false).is_some(), "« Arrêter »");
+    let before = due(&config, until - 2.0 * DAY);
+    due(&config, until + 60.0);
+    assert!(
+        routines::get(&config, &r.id).is_some(),
+        "« Arrêter : elle ne tourne plus et reste sur sa page », then deleted at its default end, no « Garder ? » asked \
+         ({before:?})"
+    );
+}
+
+/// A count end reached, for what ran more than 7 days: « …s'est arrêtée comme prévu (10 fois) », never « (0 fois) ».
+#[test]
+fn review_a_count_end_reached_says_its_count_not_zero() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = config_in(dir.path());
+    let now = py::time_time();
+    let r = routines::create_framed(&config, "vie", "Dix", "every 2h", "x", None, Maker::Person { muted: false },
+                                    &Ask { repeat: Some(10), ..asked() }).unwrap();
+    // its 10 runs made (fire_via: the last one leaves repeat 0, no next run)
+    routines::update(&config, &r.id, |x| {
+        (x.created, x.last_run, x.repeat, x.next_run) = (now - 20.0 * DAY, Some(now - 600.0), Some(0), None);
+        Ok(())
+    })
+    .unwrap();
+    let found = due(&config, now);
+    let [Due::Line { text, .. }] = found.as_slice() else { panic!("{found:?}") };
+    assert!(!text.contains("(0 fois)"), "{text}");
+}
+
+/// contracts/task-frame tools.routine_schedule: « An `until` in the past, or before its first run, is refused ».
+#[test]
+fn review_an_until_before_its_first_run_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = config_in(dir.path());
+    let now = py::time_time();
+    let schedule = "0 8 1 1 *";
+    let first = routines::next_after(&routines::parse(schedule, PARIS).unwrap(), now, PARIS).unwrap();
+    if first - now < 7200.0 {
+        return;
+    }
+    let until = now + (first - now) / 2.0;
+    let made = routines::create_framed(&config, "vie", "Bonne année", schedule, "x", None, Maker::Agent,
+                                       &Ask { until: Some(until), ..asked() });
+    assert!(made.is_err(), "an end before its first run, accepted: it never runs, then goes with its card");
+}
+
+/// The last run of a routine with a number of runs fails: its silent retry (15 min later) must not be dropped by its
+/// end at the clock's next look (20 s later), nor the failure go untold.
+#[test]
+fn review_the_retry_of_a_last_counted_run_is_not_dropped_by_its_end() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = config_in(dir.path());
+    let r = routines::create_framed(&config, "vie", "Deux", "every 2h", "x", None, Maker::Person { muted: false },
+                                    &Ask { repeat: Some(2), ..asked() }).unwrap();
+    let now = py::time_time();
+    routines::update(&config, &r.id, |x| {
+        (x.repeat, x.next_run, x.last_run) = (Some(0), None, Some(now));
+        Ok(())
+    })
+    .unwrap();
+    assert!(matches!(routines::failed(&config, &r.id, routines::Ended::Failed, now, true), Some(After::Retry(_))));
+    due(&config, now + 20.0);
+    let kept = routines::get(&config, &r.id);
+    assert!(kept.as_ref().is_some_and(|k| k.frame.retry_at.is_some()), "its retry dropped with the routine: {kept:?}");
+}
+
+/// « Garder 3 mois de plus ? » replaced by « Réparer / Arrêter » (a failure 2 days before its end): once repaired, it
+/// is asked again before the end, not lost.
+#[test]
+fn review_a_keep_card_replaced_by_a_repair_is_asked_again() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = config_in(dir.path());
+    let r = agents(&config, "Météo", "every day at 7:30", &Ask { asked: false, ..Ask::default() });
+    let until = r.frame.until.unwrap();
+    assert!(matches!(due(&config, until - 2.5 * DAY).as_slice(), [Due::Raise { .. }]));
+    let then = until - 2.4 * DAY;
+    for n in 0..3 {
+        routines::failed(&config, &r.id, routines::Ended::Failed, then + f64::from(n), false);
+    }
+    assert_eq!(routines::get(&config, &r.id).unwrap().frame.fix.unwrap().variant, REPAIR);
+    // the person turns it back on (its page): the count starts again
+    routines::update(&config, &r.id, |x| {
+        x.enabled = true;
+        resumed(&mut x.frame);
+        Ok(())
+    })
+    .unwrap();
+    let found = due(&config, until - 2.0 * DAY);
+    assert!(matches!(found.as_slice(), [Due::Raise { .. }]), "no « Garder ? » any more before its end: {found:?}");
+}
