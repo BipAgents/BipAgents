@@ -14,7 +14,8 @@
 //!    ([`EU_HOSTS`]), or `provider: mistral` without one;
 //! 3. **everything else is outside**: OpenAI (Codex included), Anthropic, Google, xAI, OpenRouter, DeepSeek, Nous,
 //!    GitHub Copilot…, Hermes' `auto`, and any other public address (a `custom` server on the Internet: nobody here
-//!    knows who runs it). No `model` section at all: not outside (nothing is sent anywhere yet).
+//!    knows who runs it). No `model` section at all, or a `custom` server without its address: not outside (nothing
+//!    is sent anywhere).
 //!
 //! No Python counterpart.
 
@@ -111,7 +112,8 @@ pub fn place_of(provider: &str, base_url: &str) -> Place {
     let provider = provider.trim().to_ascii_lowercase();
     let base_url = base_url.trim();
     if base_url.is_empty() {
-        if provider.is_empty() {
+        // a « custom » server without its address sends nothing anywhere (Hermes has no server to call)
+        if provider.is_empty() || provider == "custom" {
             return Place::Unknown;
         }
         if LOCAL_PROVIDERS.contains(&provider.as_str()) {
@@ -244,6 +246,7 @@ mod tests {
             assert_eq!(outside(provider, url), Some((id.to_string(), label.to_string())), "{provider} {url}");
         }
         assert_eq!(place_of("", ""), Place::Unknown);
+        assert_eq!(place_of("custom", ""), Place::Unknown, "a custom server without its address");
     }
 
     fn config_in(dir: &std::path::Path) -> Config {
