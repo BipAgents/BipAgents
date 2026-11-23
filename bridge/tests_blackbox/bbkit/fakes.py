@@ -861,6 +861,12 @@ class FakeMaps(Fake):
                 return JSONResponse({"lat": str(lat), "lon": str(lon), "display_name": "Lyon, France",
                                      "address": {"city": "Lyon", "country": "France"}})
             return JSONResponse({"error": "Unable to geocode"})
+        if seen.path.startswith("/routed-") and "/route/v1/" in seen.path:
+            # FOSSGIS's OSRM (map_route.rs, `[maps] streets_url` pointed here): 25 min on foot, 9 min by car
+            minutes = 25 if seen.path.startswith("/routed-foot/") else 9
+            return JSONResponse({"code": "Ok", "routes": [{
+                "distance": 1800.0, "duration": minutes * 60.0,
+                "geometry": {"type": "LineString", "coordinates": [[4.8320, 45.7578], [4.8400, 45.7600]]}}]})
         if seen.path == "/directions/v2:computeRoutes":
             if seen.header("x-goog-api-key") != "test-maps-key":
                 return JSONResponse({"error": {"status": "PERMISSION_DENIED"}}, status_code=403)

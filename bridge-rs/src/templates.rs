@@ -794,6 +794,9 @@ fn template_routine(agent: &str, routine: &Value, skills: &BTreeSet<String>) -> 
         awaits_start: false,
         change: None,
         by: None,
+        say: None,
+        urgent: false,
+        plan: None,
     })
 }
 

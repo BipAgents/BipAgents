@@ -125,6 +125,8 @@ impl Kind {
             // a tool asked in the conversation (tool_asks.rs): « Une demande attend ton accord », and an older app's
             // « Refuser » answers it through /v1/approve as a mail card's (its run id in `r`)
             "tool_request" => Kind::MailCard,
+            // a plan its agent proposed (plans.rs `PUSH_KEY`): a request too, never « Un connecteur attend ton accord »
+            crate::plans::PUSH_KEY => Kind::MailCard,
             _ => Kind::Connector,
         }
     }
@@ -586,6 +588,9 @@ mod tests {
         let names: std::collections::HashSet<&str> = Kind::ALL.iter().map(|k| k.as_str()).collect();
         assert_eq!(names.len(), Kind::ALL.len());
         assert_eq!(Kind::of_card("secret_request"), Kind::Secret);
+        // a plan its agent proposed (plans.rs): the neutral line of a request, « Une demande attend ton accord »,
+        // never a connector's (review 1 of plans, R4)
+        assert_eq!(Kind::of_card(crate::plans::PUSH_KEY), Kind::MailCard);
     }
 
     #[tokio::test]

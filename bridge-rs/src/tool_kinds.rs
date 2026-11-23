@@ -115,7 +115,7 @@ pub const KINDS: &[Kind] = &[
     Kind { id: "xSearch", names: &["x_search"], prefixes: &[], step: Some("xSearch") },
     Kind { id: "video", names: &["video_analyze"], prefixes: &[], step: Some("video") },
     Kind { id: "videoCreate", names: &["video_generate", "xai_video_edit", "xai_video_extend"], prefixes: &[], step: Some("videoCreate") },
-    Kind { id: "tool", names: &["tool_call"], prefixes: &[], step: None },
+    Kind { id: "tool", names: &["tool_call", "proactive_off"], prefixes: &[], step: None },
 ];
 
 /// The agent's bookkeeping (its memory, its to-do list, finding a tool…): never the call a turn « starts with ».

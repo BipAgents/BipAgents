@@ -92,6 +92,7 @@ pub mod voices;
 // -- agents ----------------------------------------------------------------------------------------
 pub mod agent_groups;
 pub mod agent_notify;
+pub mod agent_proactive;
 pub mod msg_queue;
 pub mod agent_feed;
 pub mod agent_shares;
@@ -221,6 +222,8 @@ pub mod rules;
 pub mod rules_live;
 pub mod rooms;
 pub mod routines;
+// plans an agent proposes on its own (proactive agents, part 3)
+pub mod plans;
 pub mod rooms_handoff;
 pub mod rooms_memory;
 pub mod rooms_remote;

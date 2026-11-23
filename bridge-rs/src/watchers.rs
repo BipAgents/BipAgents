@@ -746,7 +746,7 @@ async fn wake(state: &AppState, agent: &AgentConfig, conn: &Connector, note: Str
         notify: urgent,
         files: Vec::new(),
     };
-    let sent = pipeline.deliver(&delivery).await;
+    let sent = if urgent { pipeline.deliver_urgent(&delivery).await } else { pipeline.deliver(&delivery).await };
     Told { by_agent, sent, urgent }
 }
 

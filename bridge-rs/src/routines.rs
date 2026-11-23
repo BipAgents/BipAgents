@@ -128,6 +128,15 @@ pub struct Routine {
     /// everyone, its runs are counted to her.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub by: Option<String>,
+    /// A plan's moment (plans.rs): the words it delivers as written at its time, one Boîte line, no turn of the model.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub say: Option<String>,
+    /// A plan's urgent moment: at the system's urgent level (contracts/proactive `urgent`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub urgent: bool,
+    /// The plan it is a moment of (plans.rs): it goes with it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -419,7 +428,9 @@ pub fn view(r: &Routine, zone: Tz) -> Value {
            "repeat": r.repeat, "skills": r.skills, "deliver": "local",
            // a card waits for the person: its start (made by its agent) or its agent's proposal (S6, for the apps'
            // routines list and page; current app builds ignore it)
-           "waits_for_answer": r.awaits_start || r.change.is_some()})
+           "waits_for_answer": r.awaits_start || r.change.is_some(),
+           // a plan's moment (plans.rs, contracts/plans): its plan, the words it says, urgent; current apps ignore them
+           "plan": r.plan, "say": r.say, "urgent": r.urgent})
 }
 
 // -- making and changing ------------------------------------------------------------------------------------------------
@@ -475,9 +486,71 @@ pub fn create(
         change: None,
         awaits_start: proposed,
         by: None,
+        say: None,
+        urgent: false,
+        plan: None,
     };
     change(config, |b| b.routines.push(routine.clone()));
     Ok(routine)
+}
+
+/// A plan's moment (plans.rs), on at once: the person said « Prévoir » to the plan's card, which showed its words.
+/// It says `say` as written at its time (`fire`: no turn), its reports where the card showed (`origin`); `repeat` its
+/// runs; its first run after `after`.
+#[allow(clippy::too_many_arguments)]
+pub fn create_said(
+    config: &Config,
+    agent: &str,
+    name: &str,
+    schedule: Schedule,
+    say: &str,
+    urgent: bool,
+    plan: &str,
+    origin: Option<&str>,
+    repeat: Option<u32>,
+    after: f64,
+) -> Routine {
+    let now = py::time_time();
+    let routine = Routine {
+        id: py::uuid4_hex()[..12].to_string(),
+        agent: agent.to_string(),
+        name: name.to_string(),
+        prompt: say.to_string(),
+        next_run: next_after(&schedule, after, zone(config)),
+        schedule,
+        skills: Vec::new(),
+        enabled: true,
+        muted: false,
+        notify: true,
+        origin: origin.unwrap_or("").to_string(),
+        repeat,
+        last_run: None,
+        last_status: String::new(),
+        last_session: String::new(),
+        created: now,
+        card: None,
+        suggested_silent: None,
+        awaits_start: false,
+        change: None,
+        by: None,
+        say: Some(say.to_string()),
+        urgent,
+        plan: Some(plan.to_string()),
+    };
+    change(config, |b| b.routines.push(routine.clone()));
+    routine
+}
+
+/// A one-time routine moved by `delta` seconds (a plan's appointment moved, plans.rs).
+pub fn shift_once(config: &Config, id: &str, delta: f64) {
+    change(config, |b| {
+        if let Some(r) = b.routines.iter_mut().find(|r| r.id == id) {
+            if let Schedule::Once { at } = r.schedule {
+                r.schedule = Schedule::Once { at: at + delta };
+                r.next_run = r.next_run.map(|t| t + delta);
+            }
+        }
+    });
 }
 
 /// Changes one routine (None: unknown); its next run computed again when its schedule or state changes.
@@ -912,10 +985,23 @@ fn settle_change(r: &mut Routine, ch: Change, yes: bool, zone: Tz) {
     }
     let moved = ch.schedule != r.schedule || (ch.resumed && !r.enabled);
     (r.prompt, r.schedule) = (ch.prompt, ch.schedule);
+    if r.say.is_some() {
+        // a plan's moment: the words approved are what it says
+        r.say = Some(r.prompt.clone());
+    }
     r.enabled |= ch.resumed;
     if moved {
         r.next_run = if r.enabled { next_after(&r.schedule, py::time_time(), zone) } else { None };
     }
+}
+
+/// Why a routine due now is skipped (None: it runs): the month's AI credit used up (`credit_used`), but for a plan's
+/// moment, which calls no model (plans.rs: it says its words as written); or missed while the bridge was down.
+pub fn held(r: &Routine, credit_used: bool, now: f64) -> Option<&'static str> {
+    if credit_used && r.say.is_none() {
+        return Some(crate::credit::REASON);
+    }
+    (now - r.next_run.unwrap_or(now) > LATE_MAX_SECONDS).then_some("missed")
 }
 
 /// Due now: on, its time come (the clock's test).
@@ -1077,11 +1163,9 @@ pub async fn scheduler(state: AppState) {
             if !due(&r, now) || config.agent(Some(&r.agent)).is_none() {
                 continue;
             }
-            let late = now - r.next_run.unwrap_or(now) > LATE_MAX_SECONDS;
-            if credit || late {
+            if let Some(why) = held(&r, credit, now) {
                 // the month's credit used, or missed while the bridge was down: skipped, the next one kept
                 let next = next_after(&r.schedule, now, zone);
-                let why = if credit { crate::credit::REASON } else { "missed" };
                 let _ = update(&config, &r.id, |x| {
                     x.next_run = next;
                     x.last_status = why.into();
@@ -1126,6 +1210,16 @@ pub async fn fire(state: &AppState, id: &str) {
         Ok(())
     });
     let pipeline = Pipeline::of(state);
+    if let Some(words) = r.say.as_deref().filter(|w| !w.trim().is_empty()) {
+        // a plan's moment (plans.rs): its words as written, where its plan's card showed, no turn of the model
+        let status = say(state, &pipeline, &agent, &r, words, now).await;
+        tracing::info!(target: "bipbridge::routines", agent = %agent.name, routine = %r.id, status, "plan moment said");
+        let _ = update(&config, id, |x| {
+            x.last_status = status.into();
+            Ok(())
+        });
+        return;
+    }
     let when = zone.timestamp_opt(now as i64, 0).single().map(|d| d.format("%-d/%-m %H:%M").to_string());
     let title = format!("{} · {}", r.name, when.unwrap_or_default());
     let mut ran_in = String::new();
@@ -1194,6 +1288,38 @@ pub async fn fire(state: &AppState, id: &str) {
         }
         Ok(())
     });
+}
+
+/// A plan's moment said: one Boîte message in the bridge's words where the routine's reports land, pushed (muted: not
+/// pushed); an urgent one at the system's urgent level (`deliver_urgent`: time-sensitive on the iPhone, Android's
+/// « Urgent » channel).
+async fn say(state: &AppState, pipeline: &Pipeline, agent: &AgentConfig, r: &Routine, words: &str, now: f64) -> &'static str {
+    // where its card showed, as card_place.rs says it: never a hidden conversation (a routine's run, another agent's
+    // ask: review 1 of plans, B1), the main one then
+    let origin = match r.origin.as_str() {
+        "" => None,
+        o => crate::card_place::report_of(state, agent, o).await,
+    };
+    let at = Routine { origin: origin.unwrap_or_default(), ..r.clone() };
+    let (home, _) = report_home(state, pipeline, agent, &at, "main").await;
+    let delivery = Delivery {
+        agent: agent.clone(),
+        session: home,
+        key: format!("routine:{}:said:{}", r.id, now as i64),
+        title: r.name.clone(),
+        text: words.to_string(),
+        as_written: false,
+        run_id: None,
+        notify: !r.muted,
+        files: Vec::new(),
+    };
+    let delivered =
+        if r.urgent { pipeline.deliver_urgent(&delivery).await } else { pipeline.deliver(&delivery).await };
+    if delivered {
+        "said"
+    } else {
+        "not delivered"
+    }
 }
 
 /// Why a run ended without its report.
@@ -1455,6 +1581,9 @@ pub async fn migrate(state: &AppState, agent: &AgentConfig) {
             awaits_start: false,
             change: None,
             by: None,
+            say: None,
+            urgent: false,
+            plan: None,
         });
     }
     let ids: Vec<String> = kept.iter().map(|r| r.id.clone()).collect();
@@ -1795,6 +1924,10 @@ fn person_edit(r: &mut Routine, b: Body, zone: Tz) -> Result<Option<String>, Str
     }
     if let Some(p) = b.prompt.filter(|p| !p.trim().is_empty()) {
         r.prompt = p.trim().into();
+        if r.say.is_some() {
+            // a plan's moment: the person's new words are what it says
+            r.say = Some(r.prompt.clone());
+        }
     }
     if let Some(m) = b.muted {
         r.muted = m;
@@ -2006,6 +2139,9 @@ Pour la relancer tout de suite : « Lancer maintenant » sur sa page."
             awaits_start: false,
             change: None,
             by: None,
+            say: None,
+            urgent: false,
+            plan: None,
         };
         let n = note(&r);
         assert!(n.starts_with("Dis-moi la météo.\n\n<!--bip:routine\n") && n.contains(SILENT) && n.ends_with("-->"));
@@ -2039,6 +2175,49 @@ Pour la relancer tout de suite : « Lancer maintenant » sur sa page."
         let mut config = Config::with_key("k");
         config.outbox.db_path = dir.path().join("bridge.db").to_string_lossy().into_owned();
         config
+    }
+
+    /// A plan's moment (plans.rs) of `config`, an hour from now.
+    fn said(config: &Config) -> Routine {
+        let now = py::time_time();
+        create_said(config, "vie", "Lisbonne · Enregistrement", Schedule::Once { at: now + 3600.0 },
+                    "L’enregistrement est ouvert.", false, "p1", None, Some(1), now)
+    }
+
+    /// Review 1 of plans (R7): a plan's moment says the person's own words once they edit it.
+    #[test]
+    fn a_plans_moment_says_the_persons_edit() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = config_in(&dir);
+        let r = said(&config);
+        let words = Body { prompt: Some("L’enregistrement du TP 433 est ouvert.".into()), ..Body::default() };
+        update(&config, &r.id, |x| person_edit(x, words, Tz::UTC).map(drop)).unwrap();
+        assert_eq!(get(&config, &r.id).unwrap().say.as_deref(), Some("L’enregistrement du TP 433 est ouvert."));
+    }
+
+    /// Review 1 of plans (R7): a plan's moment says its agent's proposed words once the person said « Oui ».
+    #[test]
+    fn a_plans_moment_says_the_words_approved() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = config_in(&dir);
+        let mut r = said(&config);
+        let proposal = Change { card: Card { id: "c1".into(), at: 0.0 }, resumed: false, prompt: "Ouvert : tap.pt".into(),
+                                schedule: r.schedule.clone() };
+        settle_change(&mut r, proposal, true, Tz::UTC);
+        assert_eq!(r.say.as_deref(), Some("Ouvert : tap.pt"));
+    }
+
+    /// Review 1 of plans (R7): the month's credit used holds every routine but a plan's moment (no model).
+    #[test]
+    fn the_credit_never_holds_a_plans_moment() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = config_in(&dir);
+        let r = said(&config);
+        let at = r.next_run.unwrap() + 1.0;
+        assert_eq!(held(&r, true, at), None);
+        let ordinary = Routine { say: None, ..r.clone() };
+        assert_eq!(held(&ordinary, true, at), Some(crate::credit::REASON));
+        assert_eq!((held(&ordinary, false, at), held(&ordinary, false, at + LATE_MAX_SECONDS)), (None, Some("missed")));
     }
 
     fn args(v: Value) -> Dict {

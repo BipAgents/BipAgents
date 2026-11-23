@@ -999,10 +999,13 @@ async fn routes_for_settings_thinking_and_model() {
             "notify",
             "answer_style",
             "model_choice",
-            "group"
+            "group",
+            "proactive"
         ]
     );
     assert_eq!(got.json()["notify"], json!({"on": true}));
+    // « Initiative » (agent_proactive.rs): basic until the person changes it; its model not benched yet
+    assert_eq!(got.json()["proactive"], json!({"level": "basic", "smart_ok": false}));
     assert_eq!(got.json()["answer_style"], json!({"style": "short", "custom": "", "custom_max": 300}));
     assert_eq!(got.json()["soul"], "Tu es Wellness.");
     assert_eq!(got.json()["language"], "fr");

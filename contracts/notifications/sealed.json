@@ -386,6 +386,39 @@
       }
     },
     {
+      "variant": "boite/urgent",
+      "agent": "vie",
+      "payload": {
+        "aps": {
+          "alert": {
+            "loc-key": "notif.boite",
+            "body": "notif.boite"
+          },
+          "thread-id": "vie/t_contract",
+          "mutable-content": 1,
+          "category": "MESSAGE",
+          "sound": "default",
+          "badge": 1,
+          "interruption-level": "time-sensitive"
+        },
+        "v": 2,
+        "n": "n_contract",
+        "t": "boite",
+        "agent": "vie",
+        "c": "t_contract",
+        "m": "o_o3",
+        "r": "o3",
+        "urgent": 1,
+        "enc": "BPzDzmuX6cz3t8EgnAYDW5MCgbwiPjv/8klQ08Fu6EuFB9PD9Pn7sM73iSvPkxrEf1eRJWSMaiMKG/zoh+vk0Y2DZb+JtTvVL2zQDtsx3qzPhero0wbH4BMi7wQQrNq+q6pg5lyfUoUNdZAfmryF572qlVnKI9ywlkCBNue875tLozKtRqHk1Kouh3+CQ40ZRc5kc2Vt+bvLxgEDeHmcbX8qjOFRPxD7/vfO3qkCaYRrzM+9doWfWIJZeTuKbg1dECNoqQ=="
+      },
+      "shown": {
+        "v": 1,
+        "t": "boite",
+        "title": "Vie",
+        "body": "Un créneau mardi à 10 h chez le Dr Martin : réserve vite."
+      }
+    },
+    {
       "variant": "bot_chat_turn/default",
       "agent": "vie",
       "payload": {
@@ -534,6 +567,36 @@
         "t": "mail_card",
         "title": "Vie",
         "body": "Vie demande Rappels"
+      }
+    },
+    {
+      "variant": "card/plan",
+      "agent": "vie",
+      "payload": {
+        "aps": {
+          "alert": {
+            "loc-key": "notif.mail_card",
+            "body": "notif.mail_card"
+          },
+          "thread-id": "vie/t_contract",
+          "mutable-content": 1,
+          "category": "BRIDGE_CARD",
+          "sound": "default",
+          "badge": 1
+        },
+        "v": 2,
+        "n": "n_contract",
+        "t": "mail_card",
+        "agent": "vie",
+        "c": "t_contract",
+        "r": "bip-plan-0123456789ab",
+        "enc": "BJIh7HccAUFQkecKpgEm6bFRtUXXL+UE+vx94Y3i1gqNgoQ/kjTqod7ZGDVVWTBqGXWC9GQdDhd0B+A9DxBI7lZnq6JPcAgmoAj9Q8Hi+WrQrFJzOp2Le2gtoKm2OByO8VgbdB/wxFGMM+/DFqw+9DNYb8mMsc6sX0MGYtl+xeyNjjYQK5dt1ylq6RXkCFn1tiQN/aeAuC8BRWFW0oW2KjJv1ctcz/8="
+      },
+      "shown": {
+        "v": 1,
+        "t": "mail_card",
+        "title": "Vie",
+        "body": "Propose un plan · Lisbonne"
       }
     },
     {

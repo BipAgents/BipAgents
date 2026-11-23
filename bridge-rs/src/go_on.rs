@@ -542,9 +542,11 @@ pub fn promises_to_tell(reply: &str) -> bool {
 
 /// Tools whose call sets up what will notice something later and tell the person (a watcher is a connector with
 /// `watch`; a background task and another agent's answer come back by themselves; a reminder rings on their phone, a
-/// dated task of the Carnet sets one, notebook/tools.rs; a calendar event has its alert).
-pub const NOTICERS: [&str; 15] = [
+/// dated task of the Carnet sets one, notebook/tools.rs; a calendar event has its alert; a plan's card sets up its
+/// moments and its e-mail watch at « Prévoir », plans.rs).
+pub const NOTICERS: [&str; 16] = [
     crate::routines::TOOL_NAME,
+    crate::plans::TOOL_NAME,
     "routine_trigger",
     crate::connectors::REGISTER,
     crate::connectors::UPDATE,
@@ -1175,6 +1177,20 @@ mod tell_later {
         assert_eq!(nudged(&[], "Je te prépare 2-3 trouvailles pour 5 €."), Some(Nudge::Work));
         assert_eq!(nudged(&tools(&["web_search"]), "Je te prépare 2-3 trouvailles pour 5 €."), None);
         assert_eq!(nudged(&tools(&["web_search"]), "Voilà le prix : 899 €."), None);
+    }
+
+    #[test]
+    fn a_proposed_plan_keeps_its_promise_to_tell() {
+        // plans, review 1 B3 (int-1.1c): « je te préviens si le TAP change » after plan_propose is what the plan's
+        // card sets up at « Prévoir » (its moments, its e-mail watch); no hidden continuation, no second card before it
+        let tools = |names: &[&str]| names.iter().map(|n| n.to_string()).collect::<Vec<_>>();
+        let tell = "Je t'ai préparé le plan pour jeudi. Je te préviens si le TAP change.";
+        assert_eq!(nudged(&tools(&["web_search"]), tell), Some(Nudge::Tell));
+        assert!(set_up_something([crate::plans::TOOL_NAME]));
+        for called in ["plan_propose", "mcp_bipagents_plan_propose", "mcp__bipagents__plan_propose"] {
+            assert!(set_up_something([called]), "{called}");
+            assert_eq!(nudged(&tools(&["web_search", called]), tell), None, "{called}");
+        }
     }
 
     #[test]

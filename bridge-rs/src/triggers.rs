@@ -237,7 +237,7 @@ pub struct Trigger {
     pub budget_tokens: i64,
     pub created: f64,
     pub updated: f64,
-    /// `person` or `agent`.
+    /// `person`, `agent`, or `plan` (plans.rs: a plan's e-mail watch, its headers only: `headers_only`).
     pub by: String,
     /// Waiting for the person's OK (proposed by an agent).
     pub card: Option<Card>,
@@ -350,6 +350,56 @@ pub fn matches(filter: &MailFilter, from: &str, subject: &str, text: &str) -> bo
     words.iter().any(|w| body.contains(w.as_str()))
 }
 
+/// A plan's e-mail watch (plans.rs, made by `plans::MAKER`) reads the headers only (design §3.4, §3.7): its senders
+/// matched on the From address's domain (`from_domain`), its events kept without their text (`headers_of`), its turn
+/// reading the sender's address, the subject and the date (`turn_text`); the IMAP watch then fetches no text
+/// (triggers_mail.rs `reads_text`).
+pub fn headers_only(t: &Trigger) -> bool {
+    t.by == crate::plans::MAKER
+}
+
+/// `session` is the conversation of `agent`'s plan watch (`headers_only`): its turn reads the headers it was given,
+/// never the e-mail (agent_tools.rs refuses the mailbox's tools there).
+pub fn headers_only_session(config: &Config, agent: &str, session: &str) -> bool {
+    !session.is_empty()
+        && load(config).triggers.iter().any(|t| t.agent == agent && t.session == session && headers_only(t))
+}
+
+/// The address of a From line, lowercased (« TAP <Info@FlyTap.com> » → « info@flytap.com »); None without one.
+pub fn address_of(from: &str) -> Option<String> {
+    let inner = match (from.rfind('<'), from.rfind('>')) {
+        (Some(open), Some(close)) if open < close => &from[open + 1..close],
+        _ => from,
+    };
+    let address = inner.trim().to_lowercase();
+    let (local, domain) = address.rsplit_once('@')?;
+    let plain = !local.is_empty() && !domain.is_empty() && !address.contains(|c: char| c.is_whitespace() || c == '<');
+    plain.then_some(address)
+}
+
+/// The From line's address is at one of `domains` (comma-separated) or under one (« mail.flytap.com » for
+/// « flytap.com »): never its display name, never a domain that only contains it (« flytap.com.ailleurs.io »).
+pub fn from_domain(domains: &str, from: &str) -> bool {
+    let Some(address) = address_of(from) else { return false };
+    let domain = address.rsplit_once('@').map(|(_, d)| d).unwrap_or("");
+    terms(domains).iter().any(|d| domain == d || domain.ends_with(&format!(".{d}")))
+}
+
+/// A message as a plan's watch keeps it: the sender's address, the subject, the date and its ids, never its text.
+pub fn headers_of(event: &Event) -> Event {
+    Event { from: address_of(&event.from).unwrap_or_default(), text: String::new(), ..event.clone() }
+}
+
+/// Whether trigger `t` takes the message: a plan's on its senders' addresses and its subject, any other on its filter.
+pub fn takes(t: &Trigger, filter: &MailFilter, event: &Event) -> bool {
+    if headers_only(t) {
+        let words = MailFilter { from: String::new(), ..filter.clone() };
+        from_domain(&filter.from, &event.from) && matches(&words, "", &event.subject, "")
+    } else {
+        matches(filter, &event.from, &event.subject, &event.text)
+    }
+}
+
 /// The key a message is seen once by.
 pub fn seen_key(event: &Event) -> String {
     if !event.message_id.trim().is_empty() {
@@ -433,6 +483,20 @@ fn event_block(n: usize, e: &Event) -> String {
     lines.join("\n")
 }
 
+/// A message a plan's watch took: its sender's address, its subject, its date; nothing else (`headers_only`).
+fn headers_block(n: usize, e: &Event) -> String {
+    let mut lines = vec![
+        format!("=== e-mail {n}: its headers only ==="),
+        format!("From: {}", tk::in_note_line(&address_of(&e.from).unwrap_or_default())),
+        format!("Subject: {}", tk::in_note_line(&e.subject)),
+    ];
+    if !e.date.is_empty() {
+        lines.push(format!("Date: {}", tk::in_note_line(&e.date)));
+    }
+    lines.push(format!("=== end {n} ==="));
+    lines.join("\n")
+}
+
 /// The turn's text: a visible line, then the hidden note with the person's words and the events as data.
 pub fn turn_text(t: &Trigger, events: &[Event], dropped: u64) -> String {
     let what = match t.kind.as_str() {
@@ -443,7 +507,11 @@ pub fn turn_text(t: &Trigger, events: &[Event], dropped: u64) -> String {
         _ => "the person tries it from the app".to_string(),
     };
     let lost = if dropped > 0 { format!(" ({dropped} older ones were left out: too many at once.)") } else { String::new() };
-    let blocks: Vec<String> = events.iter().enumerate().map(|(i, e)| event_block(i + 1, e)).collect();
+    let blocks: Vec<String> = events
+        .iter()
+        .enumerate()
+        .map(|(i, e)| if headers_only(t) { headers_block(i + 1, e) } else { event_block(i + 1, e) })
+        .collect();
     format!(
         "⚡ {name}\n<!--bip:trigger\nYour routine « {name} » starts because {what}.{lost} Your person set it up and \
 asked you, in their words:\n---\n{prompt}\n---\nDo it now, on your own, with your tools (your person's approvals still \
@@ -588,7 +656,7 @@ fn apply(config: &Config, t: &mut Trigger, f: &Fields) -> Result<(), String> {
     Ok(())
 }
 
-/// A new trigger of `agent`. `by`: `person` (active at once) or `agent` (waits for the person's OK on a card).
+/// A new trigger of `agent`. `by`: `person` or `plan` (active at once) or `agent` (waits for the person's OK on a card).
 pub fn create(config: &Config, agent: &str, f: &Fields, by: &str) -> Result<Trigger, String> {
     let kind = f.kind.as_deref().unwrap_or("").trim().to_lowercase();
     if kind != MAIL && kind != LINK {
@@ -612,7 +680,8 @@ pub fn create(config: &Config, agent: &str, f: &Fields, by: &str) -> Result<Trig
     if kind == LINK {
         t.token = new_token();
     }
-    if by == "person" {
+    if by == "person" || by == crate::plans::MAKER {
+        // the person's own, or a plan's e-mail watch: the person said « Prévoir » to the plan's card (plans.rs)
         t.enabled = true;
     } else {
         t.card = Some(Card { id: py::token_hex(6), at: now });
@@ -1430,5 +1499,58 @@ mod tests {
     fn a_title_per_day() {
         let day = chrono::NaiveDate::from_ymd_opt(2026, 11, 2).unwrap();
         assert_eq!(session_title("Factures", day), "⚡ Factures · 2/11");
+    }
+
+    /// Review 1 of plans (R2): a plan's e-mail watch (plans.rs, made by `plans::MAKER`) reads the headers only (design
+    /// §3.4, §3.7): its senders match the From ADDRESS's domain (theirs or one under it), never the display name nor a
+    /// part of another domain; its event keeps the address, the subject and the date, never the text; its turn reads
+    /// those three, no text and no way to read it whole. A routine the person made reads as before.
+    #[test]
+    fn a_plans_watch_reads_headers_only_and_matches_the_senders_address() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = config_in(dir.path());
+        let watch = |id: &str, by: &str| Trigger {
+            id: id.into(),
+            agent: "vie".into(),
+            name: "Lisbonne · TAP".into(),
+            prompt: "Un e-mail de TAP sur le plan.".into(),
+            kind: MAIL.into(),
+            enabled: true,
+            by: by.into(),
+            mail: Some(MailFilter { account: "a".into(), from: "flytap.com".into(), words: String::new() }),
+            ..Trigger::default()
+        };
+        change(&config, |s| s.triggers.extend([watch("gplan", crate::plans::MAKER), watch("gperson", "person")]));
+        let mail = |id: &str, from: &str| Event {
+            kind: MAIL.into(),
+            message_id: format!("<{id}@x>"),
+            from: from.into(),
+            subject: "Votre vol TP 433".into(),
+            date: "Sun, 22 Nov 2026 10:00:00 +0100".into(),
+            mail_ref: format!("a|INBOX|{id}"),
+            text: "Le corps du message, jamais lu".into(),
+            ..Event::default()
+        };
+        let pending = |id: &str| get(&config, id).unwrap().pending;
+        for not_theirs in ["flytap.com <x@ailleurs.io>", "x@flytap.com.ailleurs.io", "Promo <x@noflytap.com>"] {
+            crate::triggers_mail::offer(&config, "a", &mail(not_theirs, not_theirs));
+            assert!(pending("gplan").is_empty(), "{not_theirs}");
+        }
+        // the person's own routine: any part of the From line, as before
+        assert_eq!(pending("gperson").len(), 3);
+        for theirs in ["TAP Air Portugal <info@flytap.com>", "<news@mail.FlyTap.com>"] {
+            crate::triggers_mail::offer(&config, "a", &mail(theirs, theirs));
+        }
+        let kept = get(&config, "gplan").unwrap();
+        let froms: Vec<&str> = kept.pending.iter().map(|e| e.from.as_str()).collect();
+        assert_eq!(froms, ["info@flytap.com", "news@mail.flytap.com"]);
+        assert!(kept.pending.iter().all(|e| e.text.is_empty() && e.subject == "Votre vol TP 433" && !e.date.is_empty()));
+        let note = turn_text(&kept, &kept.pending, 0);
+        assert!(note.contains("From: info@flytap.com") && note.contains("Subject: Votre vol TP 433"), "{note}");
+        assert!(note.contains("Date: Sun, 22 Nov 2026"), "{note}");
+        assert!(!note.contains("corps") && !note.contains("mail_read") && !note.contains("Air Portugal"), "{note}");
+        // the person's: the text read, as before
+        let theirs = get(&config, "gperson").unwrap();
+        assert!(turn_text(&theirs, &theirs.pending, 0).contains("Le corps du message"));
     }
 }

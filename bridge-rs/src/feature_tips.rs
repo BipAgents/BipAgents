@@ -760,7 +760,9 @@ fn count_talk(store: &mut Store, agent: &str, now: f64) {
     });
 }
 
-/// Who proposes: the guide, else the agent written to most these 14 days (`fallback` on a tie or none).
+/// Who proposes: the guide, else the agent written to most these 14 days (`fallback` on a tie or none). Whatever its
+/// « Initiative » (Alex 22/11: the app's suggestions are the app's, not an agent's idea; agent_proactive.rs `OFF_RULE`
+/// lets an agent turned off pass them on).
 fn proposer(store: &Store, config: &Config, moment: &Moment, fallback: &str) -> String {
     if let Some(guide) = moment.guide.as_deref().filter(|g| config.agent(Some(g)).is_some()) {
         return guide.to_string();
@@ -1314,6 +1316,20 @@ mod tests {
 
     fn no_podcast_day(config: &Config) {
         let _ = change(config, |s| s.podcast_day = Some(9));
+    }
+
+    /// Alex 22/11 (answer 1): the app's feature suggestions stay in every state, every agent « Éteinte » too: they are
+    /// the app's, not the agent's idea (agent_proactive.rs `OFF_RULE` lets it pass them on).
+    #[test]
+    fn the_apps_suggestions_stay_when_the_agent_is_turned_off() {
+        let (_dir, config) = setup();
+        no_podcast_day(&config);
+        for agent in ["vie", "max"] {
+            crate::agent_proactive::set_level(&config, agent, crate::agent_proactive::Level::Off).unwrap();
+        }
+        let note = say(&config, "vie", "On prépare un voyage à Lisbonne avec des amis", &[], at(0, 10)).unwrap();
+        assert!(note.contains("project agent"), "{note}");
+        assert_eq!(pending_items(&config, Some("vie")).len(), 1);
     }
 
     #[test]

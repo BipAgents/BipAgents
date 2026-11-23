@@ -2196,11 +2196,11 @@ pub async fn read_settings(config: &Config, agent: &AgentConfig, http: &reqwest:
     let notify = json!({"on": crate::agent_notify::notifies(config, &agent.name)});
     if agent.host_home.as_deref().is_some_and(|h| !h.is_empty()) {
         // set up by hand: its tools are its administrator's
-        return Ok(json!({"id": agent.name, "name": agent.display_name, "soul": soul.trim(), "language": lang,
+        return Ok(with_proactive(config, agent, json!({"id": agent.name, "name": agent.display_name, "soul": soul.trim(), "language": lang,
                          "thinking": shown_thinking(config, agent), "model": null, "by_hand": true, "toolsets": [],
                          "isolated": agent.isolated, "guide": guide, "notify": notify,
                          "answer_style": crate::answer_style::view(agent),
-                         "protected": true, "services": []}));
+                         "protected": true, "services": []})));
     }
     let resp = http
         .get(format!("{}/v1/toolsets", agent.hermes_url))
@@ -2236,7 +2236,7 @@ pub async fn read_settings(config: &Config, agent: &AgentConfig, http: &reqwest:
     };
     // what it may ask for in a conversation follows Hermes' own word (tool_asks.rs)
     crate::tool_asks::note_toolsets(&agent.name, &toolsets);
-    Ok(json!({"id": agent.name, "name": agent.display_name, "soul": soul.trim(), "language": lang,
+    Ok(with_proactive(config, agent, json!({"id": agent.name, "name": agent.display_name, "soul": soul.trim(), "language": lang,
               "thinking": shown_thinking(config, agent), "model": read_model(config, agent), "toolsets": toolsets,
               "isolated": agent.isolated,
               "protected": config.hermes.isolated,
@@ -2251,7 +2251,15 @@ pub async fn read_settings(config: &Config, agent: &AgentConfig, http: &reqwest:
               "answer_style": crate::answer_style::view(agent),
               // the per-agent model at home (model_choice.rs): its presence tells the apps this bridge offers it
               "model_choice": crate::model_choice::view(config, agent),
-              "group": crate::agent_groups::group_of(config, &agent.name)}))
+              "group": crate::agent_groups::group_of(config, &agent.name)})))
+}
+
+/// « Initiative » (agent_proactive.rs) in `settings`, except for an agent other people talk to (no such setting).
+fn with_proactive(config: &Config, agent: &AgentConfig, mut settings: Value) -> Value {
+    if let (Some(proactive), Value::Object(map)) = (crate::agent_proactive::view(config, agent), &mut settings) {
+        map.insert("proactive".into(), proactive);
+    }
+    settings
 }
 
 /// « Naviguer à ta place »: its own browser, on or not (`ready`: set up before, turning it on is instant); None
@@ -2482,6 +2490,7 @@ pub fn soul_text(config: &Config, agent: &AgentConfig, personality: &str, lang: 
     let text = if closed { crate::approval_level::split_block(&text).0 } else { crate::approval_level::with_block(config, &agent.name, &text) };
     let text = crate::family_agent::with_family(&text, family);
     let text = crate::project_agent::with_project(&text, project);
+    let text = crate::agent_proactive::with_block(config, &agent.name, &text);
     let text = crate::guide::with_blocks(config, agent, &text);
     let line = crate::dates::agent_line(config, &crate::dates::load(config), &text);
     crate::dates::with_dates(&text, line.as_deref())
@@ -2500,6 +2509,7 @@ pub fn personality_of(soul: &str) -> (String, Option<String>) {
     let (soul, _) = crate::dates::split_dates(&soul);
     let (soul, _) = crate::family_agent::split_family(&soul);
     let (soul, _) = crate::project_agent::split_project(&soul);
+    let (soul, _) = crate::agent_proactive::split_block(&soul);
     (crate::guide::split_blocks(&soul).trim().to_string(), lang)
 }
 

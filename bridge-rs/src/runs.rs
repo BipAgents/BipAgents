@@ -3077,6 +3077,30 @@ more steps in this turn. Don't repeat what failed: change approach.", crate::loo
         tx.send(request).is_ok()
     }
 
+    /// `agent`'s run `run_id` is a turn of its person's own conversation: not one nobody started (a routine's, a
+    /// watcher's, a trigger's: `mark_unattended`), a background task's, one another agent asked for (its answer in their
+    /// pair's conversation, agent_pairs.rs `is_pair_session`: « message_agent », review 1 B1), a group discussion's, a
+    /// relative's or another household's, the brake's rescue, nor one followed again after a restart (what started it
+    /// isn't known any more). Only such a turn turns the agent's « Initiative » off (agent_proactive.rs).
+    pub fn persons_own_turn(&self, agent: &str, run_id: &str) -> bool {
+        let Some(sub) = lock(&self.inner).subs.get(&(agent.to_string(), run_id.to_string())).cloned() else {
+            return false;
+        };
+        let st = lock(&sub.state);
+        let in_a_pair = |session: &str| {
+            self.config.as_ref().is_some_and(|c| crate::agent_pairs::is_pair_session(&c.get(), agent, session))
+        };
+        st.session_id.as_deref().is_some_and(|s| !in_a_pair(s))
+            && !st.unattended
+            && !st.background
+            && !st.resumed
+            && st.room_id.is_none()
+            && !st.guest
+            && st.rescue_of.is_none()
+            && st.loop_rescue.is_none()
+            && !self.someone_elses(&sub.run_id)
+    }
+
     /// A background task's run (jobs.rs): the brake's higher limits.
     pub fn mark_background(&self, agent: &str, run_id: &str) {
         let inner = lock(&self.inner);
@@ -5020,6 +5044,49 @@ mod tests {
         // the person's start_task now, its event not seen yet
         let turn = hub.turn_of("daily", "mcp__bipagents__start_task").map(|t| t.run_id);
         assert_ne!(turn.as_deref(), Some("run_task"), "a run out of the tool taken for the caller");
+    }
+
+    /// « Arrête de me proposer des choses » (agent_proactive.rs): only a turn of the person's own conversation turns the
+    /// agent's « Initiative » off; a routine's, a watcher's, a trigger's, a task's or a group discussion's never.
+    #[tokio::test]
+    async fn only_a_turn_of_the_persons_own_conversation_is_theirs() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = crate::config::Config::with_key("k");
+        config.outbox.db_path = dir.path().join("bridge.db").to_string_lossy().into_owned();
+        // Coach asked Vie (« message_agent »): Vie answers in their pair's own conversation (agent_pairs.rs)
+        std::fs::write(
+            dir.path().join("agent-pairs.json"),
+            json!({"pairs": {"p1": {"id": "p1", "agents": ["coach", "vie"], "sessions": {"vie": "api_pair"}}}}).to_string(),
+        )
+        .unwrap();
+        let hub = RunHub::new(HermesClient::new(reqwest::Client::new()), None, 7200, None)
+            .with_config(crate::config::SharedConfig::new(config));
+        let agent = AgentConfig { name: "vie".into(), ..Default::default() };
+        let run = |id: &str| {
+            let sub = Arc::new(RunSubscription::new(agent.clone(), id));
+            lock(&sub.state).session_id = Some(format!("api_{id}"));
+            lock(&hub.inner).subs.insert(sub.key(), sub.clone());
+            sub
+        };
+        run("chat");
+        run("routine");
+        run("task");
+        run("pair");
+        let room = run("room");
+        let guest = run("guest");
+        let resumed = run("resumed");
+        hub.mark_unattended("vie", "routine");
+        hub.mark_background("vie", "task");
+        // another agent asked for this turn (« message_agent »): it runs in their pair's conversation
+        assert!(crate::agent_pairs::is_pair_session(&hub.config.as_ref().unwrap().get(), "vie", "api_pair"));
+        lock(&room.state).room_id = Some("r1".into());
+        lock(&guest.state).guest = true;
+        lock(&resumed.state).resumed = true;
+        assert!(hub.persons_own_turn("vie", "chat"));
+        for other in ["routine", "task", "pair", "room", "guest", "resumed", "gone"] {
+            assert!(!hub.persons_own_turn("vie", other), "{other}");
+        }
+        assert!(!hub.persons_own_turn("budget", "chat"), "another agent's run");
     }
 
     /// Hermes patch 0028: a call of the bridge's tools says its Hermes session (`_meta`, agent_tools.rs `CALL_SESSION`):

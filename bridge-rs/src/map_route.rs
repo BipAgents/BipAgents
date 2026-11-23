@@ -260,6 +260,13 @@ async fn ask(config: &Config, service: &str, travel: &str, stops: &[(f64, f64)],
     }
 }
 
+/// A way's time only (seconds), for a plan's « Pars pour … » (plans.rs): no path asked (`overview=false`) and nothing
+/// kept on disk; the stops as the caller rounded them.
+pub async fn seconds(config: &Config, travel: &str, stops: &[(f64, f64)]) -> Result<f64, String> {
+    let answer = ask(config, "route", travel, stops, "overview=false&steps=false&alternatives=false").await?;
+    answer["routes"][0]["duration"].as_f64().ok_or_else(|| "the street routing gave no way".to_string())
+}
+
 /// The way along the streets through the stops in their order (from the cache when asked within `CACHE_DAYS`).
 pub async fn way(config: &Config, travel: &str, stops: &[(f64, f64)]) -> Result<Way, String> {
     let file = cache_file(config, "route", travel, stops);

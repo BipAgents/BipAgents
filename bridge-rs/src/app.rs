@@ -337,6 +337,7 @@ impl AppState {
         self.spawn(crate::watchers::scheduler(self.clone())); // the watchers: checks with no model call
         self.spawn(crate::routines::scheduler(self.clone())); // routines on a clock (Hermes' cron runs none)
         self.spawn(crate::triggers::scheduler(self.clone())); // routines started by an e-mail or a link
+        self.spawn(crate::plans::watch(self.clone())); // plans: their end, their phone event moved or cancelled
         self.spawn(crate::triggers_mail::supervisor(self.clone())); // their mailboxes, by IMAP IDLE
         self.spawn(crate::archives::scheduler(self.config.clone()));
         crate::agent_email::start(self);
@@ -567,11 +568,15 @@ pub struct ApproveRequest {
     /// A question's answer (Hermes' clarify: its words; empty skips it) instead of a choice.
     #[serde(default)]
     pub answer: Option<String>,
+    /// A plan's « Prévoir » (plans.rs): the moments the person unticked (an app 1.0 sends none: the whole plan).
+    #[serde(default)]
+    pub skip: Option<Vec<String>>,
 }
 
 impl Validate for ApproveRequest {
     fn validate(&self, errors: &mut Vec<FieldError>) {
         check_max_len(errors, "choice", Some(&self.choice), 32);
+        crate::web::check_max_items(errors, "skip", self.skip.as_deref(), crate::plans::MAX_MOMENTS);
         check_max_len(errors, "answer", self.answer.as_deref(), 20_000);
         check_max_len(errors, "request_id", self.request_id.as_deref(), 256);
     }
@@ -1385,6 +1390,11 @@ async fn bridge_card(
             None => Err(HttpError::new(404, "no such request (answered already?)")),
         }?));
     }
+    // a plan its agent proposed (plans.rs): « Prévoir » sets its moments (but those unticked), « Non merci » forgets it
+    if let Some(id) = run_id.strip_prefix(crate::plans::RUN_PREFIX) {
+        let skip = body.skip.clone().unwrap_or_default();
+        return Ok(Some(crate::plans::approve(state, agent, id, &body.choice, &skip).await?));
+    }
     // the cards of a routine its agent made or wants changed (routines.rs `answer`): only a « Oui » starts it or applies
     // the change; only a « Non » deletes one that never started or drops the change; any other answer changes nothing
     if let Some(id) = run_id.strip_prefix(crate::routines::RUN_PREFIX) {
@@ -1476,6 +1486,7 @@ pub(crate) async fn answer_bridge_card(state: &AppState, agent: &AgentConfig, ru
         choice: choice.to_string(),
         request_id: None,
         answer: None,
+        skip: None,
     };
     match bridge_card(state, agent, run_id, &body).await {
         Ok(Some(r)) if r.status().is_success() => {
@@ -1899,6 +1910,7 @@ fn assemble(state: &AppState, config: &Config) -> Router {
         .merge(agents_admin::router())
         .merge(crate::agent_groups::router())
         .merge(crate::agent_notify::router())
+        .merge(crate::agent_proactive::router())
         .merge(crate::msg_queue::router())
         .merge(crate::threads::router())
         .merge(crate::used::router())

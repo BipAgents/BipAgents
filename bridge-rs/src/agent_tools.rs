@@ -473,9 +473,16 @@ fn own_tools(config: &Config, agent: &AgentConfig, offer: bool) -> Vec<Value> {
     if crate::phone_exit::agent::offered(config, &agent.name) {
         tools.push(crate::phone_exit::agent::tool());
     }
+    // a plan it proposes on its own (plans.rs): « Initiative » not off, its own person's agent, its routines on
+    if crate::plans::offered(config, &agent.name) {
+        tools.push(crate::plans::tool());
+    }
+
     if !crate::routines::enabled(config, &agent.name) {
         tools.retain(|t| t["name"] != crate::routines::TOOL_NAME);
     }
+    // « Initiative » (agent_proactive.rs): nothing proposed on its own while off; « arrête de me proposer des choses »
+    crate::agent_proactive::keep_tools(config, &agent.name, &mut tools);
     // a tool it has off, asked for on a card in the conversation (tool_asks.rs): its list closed to what it lacks, and
     // not listed at all when it lacks nothing or the place doesn't offer it
     if let Some(ask) = crate::tool_asks::tool(config, agent) {
@@ -2048,6 +2055,16 @@ pub fn call_session_of(body: &[u8]) -> Option<String> {
     })
 }
 
+/// The call of `tool` carries its person's own words: a turn of their own conversation (runs.rs `persons_own_turn`: not
+/// a routine's, a watcher's, a task's, another agent's ask, a group's, a relative's or another household's, the
+/// brake's rescue, one followed again after a restart), while no relative's or other household's turn goes on
+/// (shared_pages.rs `who`). Only then does « arrête de me proposer des choses » turn « Initiative » off
+/// (agent_proactive.rs), and only then is a plan « asked » (plans.rs: else the caps of what nobody asked for).
+fn persons_own_call(state: &AppState, agent: &str, tool: &str, turn_run: Option<&str>) -> bool {
+    matches!(crate::shared_pages::who(state, agent, tool), crate::shared_pages::Who::Owner)
+        && turn_run.is_some_and(|run| state.hub.persons_own_turn(agent, run))
+}
+
 async fn mcp_call(
     State(state): State<AppState>,
     uri: axum::http::Uri,
@@ -2233,6 +2250,18 @@ async fn mcp_call(
     let turn = state.hub.turn_of(&agent.name, &name);
     // the files made in this turn (audio, pages, maps), for the reply that ends it (made_files.rs)
     let turn_run = turn.as_ref().map(|t| t.run_id.clone());
+    // a plan's e-mail watch reads the headers it was given, never the e-mail (triggers.rs `headers_only`; review 2 of
+    // plans, R10): the mailbox's tools are closed in its turn
+    if name.starts_with("mail_") {
+        let session = turn_run.as_deref().and_then(|r| state.hub.subscription(&agent.name, r)).and_then(|s| s.session_id());
+        if session.is_some_and(|s| crate::triggers::headers_only_session(&state.config(), &agent.name, &s)) {
+            return Ok(answer(tool_text(
+                "Not done: this e-mail watch of a plan gives you the e-mail's headers only (its sender, subject and \
+                 date): don't open it. Tell your person what the subject says, or answer [SILENT].",
+                false,
+            )));
+        }
+    }
     // the Carnet's tools: the turn's pages, capped, and its session for the line under the answer (notebook/reads.rs)
     let carnet = carnet_turn(&state, &agent.name, turn.as_ref());
     if let Some(refused) = crate::loop_brake::TURNS.check(
@@ -2281,6 +2310,20 @@ async fn mcp_call(
         let mut result = crate::live_calls::after_call(&state, &agent, &arguments);
         wrote(&agent.name, &name, &arguments, &mut result);
         return Ok(answer(result));
+    }
+    if name == crate::agent_proactive::OFF_TOOL {
+        // « arrête de me proposer des choses »: its person's own words only (`persons_own_call`)
+        let persons_turn = persons_own_call(&state, &agent.name, &name, turn_run.as_deref());
+        let config = state.config();
+        let (was, tools_before) =
+            (crate::agent_proactive::level(&config, &agent.name), crate::agent_tools::tools_for(&config, &agent));
+        let result = crate::agent_proactive::off_call(&config, &agent.name, persons_turn);
+        if was != crate::agent_proactive::level(&config, &agent.name) {
+            // its personality's block and its tools follow, once this answer is on its way
+            let (config, name) = (config.clone(), agent.name.clone());
+            tokio::spawn(async move { crate::agent_proactive::after_change(config, &name, Some(tools_before)).await });
+        }
+        return Ok(answer(or_failure(&name, result)));
     }
     if name == crate::agent_messages::TOOL_NAME {
         // the family's agent asks for the member whose turn it is (None: its creator's): the target is told so
@@ -2376,6 +2419,26 @@ async fn mcp_call(
             wrote(&agent.name, &name, &arguments, &mut result);
             return Ok(answer(result));
         }
+    }
+    if name == crate::plans::TOOL_NAME {
+        // ONE card for the whole plan (plans.rs), in this turn's conversation and pushed; nothing to tell the agent
+        // when it is answered (`taken`): « Prévoir » runs no model. Asked only in its person's own words
+        // (`persons_own_call`, as « Initiative »'s off switch): another agent's ask, a relative's turn… are unasked
+        let asked = persons_own_call(&state, &agent.name, &name, turn_run.as_deref());
+        let cards_before = crate::card_place::waiting(&state, &agent.name);
+        let called = crate::plans::call(&state, &agent, &arguments, asked, turn_run.as_deref()).await;
+        let mut result = called.result;
+        if let Some((line, id)) = called.card {
+            let run_id = format!("{}{id}", crate::plans::RUN_PREFIX);
+            // asked: in the person's conversation; unasked, the main one (review 1, B1: a routine's run, another
+            // agent's ask in their pair's hidden conversation, which card_place.rs doesn't know as hidden)
+            let shown_in = if asked { turn_run.as_deref() } else { None };
+            crate::card_place::place_new(&state, &agent, &cards_before, shown_in).await;
+            crate::card_place::taken(&state.config(), &run_id);
+            state.push.notify_bridge_card(&agent.name, &line, crate::plans::PUSH_KEY, &run_id).await;
+        }
+        wrote(&agent.name, &name, &arguments, &mut result);
+        return Ok(answer(result));
     }
     if name == "calendar_delete" {
         // critical (audit 1.3, Alex 17/11: as mail_trash): a card before each event deleted (person_ok.rs)
