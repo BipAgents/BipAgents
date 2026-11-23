@@ -188,3 +188,51 @@ fn filing_at_a_write_keeps_the_persons_choice() {
     let view = crate::family_agent::view_for_tests(&data);
     assert!(!view.to_string().contains("categor"), "{view}");
 }
+
+/// Review 1 of S6, R4: « Oublie ça » writes the family Carnet under its own lock, by a temporary file of its own:
+/// the members' and the agent's writes at the same moment are never lost, the file never read half written.
+#[test]
+fn oublie_ca_and_the_familys_writes_never_lose_one_another() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = crate::notebook::tests_config(dir.path());
+    crate::notebook::update_state(&config, |s| {
+        s.insert("language".into(), json!("fr"));
+    })
+    .unwrap();
+    let body = |v: Value| v.as_object().cloned().unwrap();
+    let made = crate::family_agent::change(
+        &config,
+        &body(json!({"op": "list_save", "title": "Courses", "kind": "list"})),
+        "Marie",
+    )
+    .unwrap()
+    .unwrap();
+    let lid = s(&made["lists"][0]["id"]);
+    std::thread::scope(|scope| {
+        for t in 0..4 {
+            let (config, lid) = (&config, lid.clone());
+            scope.spawn(move || {
+                for i in 0..25 {
+                    let add = body(json!({"op": "item_add", "list": lid, "text": format!("lait {t}-{i}")}));
+                    crate::family_agent::change(config, &add, "Marie").unwrap().unwrap();
+                }
+            });
+        }
+        let (config, lid) = (&config, lid.clone());
+        scope.spawn(move || {
+            for i in 0..15 {
+                let add = body(json!({"op": "item_add", "list": lid, "text": format!("cadeau {i} pour Marc")}));
+                crate::family_agent::change(config, &add, "Alex").unwrap().unwrap();
+                let request =
+                    crate::notebook::forget::Request { texts: vec!["Marc".into()], page: None, private: false };
+                let target = crate::notebook::forget::target(config, &request).unwrap();
+                crate::notebook::forget::apply(config, &target, "fr", "Alex").unwrap();
+            }
+        });
+    });
+    let text = std::fs::read_to_string(std::path::Path::new(&config.data_dir()).join("family-notebook.json")).unwrap();
+    let data: Value = serde_json::from_str(&text).expect("never half written");
+    let texts: Vec<String> = data["lists"][0]["items"].as_array().unwrap().iter().map(|i| s(&i["text"])).collect();
+    assert_eq!(texts.iter().filter(|t| t.starts_with("lait ")).count(), 100, "a member's write lost: {texts:?}");
+    assert!(!texts.iter().any(|t| t.contains("Marc")), "{texts:?}");
+}

@@ -237,6 +237,10 @@ def test_s6_the_bridge_files_the_family_carnet_and_the_person_wins(bridges, fake
                        ({"page": "nope", "categories": ["home"]}, "not_found")):
         got = fam(b, "categorize", method="post", json=body)
         assert got.status_code in (400, 404) and got.json()["detail"]["code"] == code, (body, got.text)
+    # (review 1 R6b) a list of tasks or of dates has no category of its own: its items are filed, not it
+    tasks = ids["Inscrire Tom au judo"].split(":")[2].split("/")[0]
+    got = fam(b, "categorize", method="post", json={"list": tasks, "categories": ["school"]})
+    assert got.status_code == 400 and got.json()["detail"]["code"] == "list_not_filed", got.text
     # renamed, an auto list is filed again; the person's stays hers
     view = change(b, op="list_save", title="Bricolage", kind="list")
     tools = next(x["id"] for x in view["lists"] if x["title"] == "Bricolage")
@@ -290,10 +294,12 @@ def test_s6_kept_searches_are_the_households(bridges, fakes):
 def test_s6_searches_made_are_each_persons_own(bridges, fakes):
     a, b, ids = two(bridges, fakes)
     assert fam(b, "searched", method="post", json={"q": "karaté", "category": "school"}).status_code == 204
-    # without a category: under the best result's (asked of the holder's copy)
-    assert fam(b, "searched", method="post", json={"q": "judo"}).status_code == 204
-    # never kept: a single letter, nothing found, Santé open
-    for body in ({"q": "x"}, {"q": "zzzzqq"}, {"q": "piscine", "category": "school", "private": True}):
+    # without a category, on a member's place: kept nowhere and sent nowhere (review 1 R2: her words never go to the
+    # holder; the app sends the category of its best group)
+    assert fam(b, "searched", method="post", json={"q": "natation"}).status_code == 204
+    assert fam(b, "searched", method="post", json={"q": "judo", "category": "school"}).status_code == 204
+    # never kept: a single letter, Santé open
+    for body in ({"q": "x", "category": "school"}, {"q": "piscine", "category": "school", "private": True}):
         assert fam(b, "searched", method="post", json=body).status_code == 204
     got = fam(b, "searched", method="post", json={"q": "lait", "category": "money"})
     assert got.status_code == 400 and got.json()["detail"]["code"] == "category_unknown"
@@ -310,6 +316,11 @@ def test_s6_searches_made_are_each_persons_own(bridges, fakes):
     # kept by her own bridge, nowhere else: not on the holder's place, not in the copy, not for the agent
     assert files_holding(b, "karat") == ["family-searched.json"] and files_holding(a, "karat") == []
     assert files_holding(a, "piscine") == [] and files_holding(b, "piscine") == []
+    assert files_holding(b, "natation") == [] and files_holding(a, "natation") == []
+    # on the holder's own place, without a category: under its best result (nothing leaves the place)
+    assert fam(a, "searched", method="post", json={"q": "judo"}).status_code == 204
+    assert [x["q"] for x in ok(fam(a, "category/school"))["searched"]] == ["judo"]
+    assert fam(a, "searched", method="delete", params={"q": "judo"}).status_code == 204
     assert "karat" not in json.dumps(ok(fam(b, "index"))).lower()
     give_token(a, "famille", TOKEN)
     assert "karat" not in call(a, "family_notebook_read", {}, token=TOKEN)["content"][0]["text"].lower()
@@ -336,6 +347,7 @@ def test_s6_the_passage_de_main_takes_the_categories_the_kept_searches_and_the_r
     page = ids["page Menus de la semaine"]
     ok(fam(b, "categorize", method="post", json={"page": page, "categories": ["home"]}))
     ok(fam(b, "kept", method="post", json={"q": "courses"}))
+    ok(fam(a, "kept", method="post", json={"q": "lait"}))
     assert fam(b, "searched", method="post", json={"q": "karaté", "category": "school"}).status_code == 204
     first = ok(fam(b, "index"))
 
@@ -343,7 +355,10 @@ def test_s6_the_passage_de_main_takes_the_categories_the_kept_searches_and_the_r
     assert a.delete("/v1/family/marie", headers=AUTH).status_code == 204
     assert wait(lambda: b.get("/v1/family-agent", headers=AUTH).json()["handover"] is not None)
     handed = json.loads((b.state_dir / "family-agent.json").read_text())["handover"]["notebook"]
-    assert [k["q"] for k in handed["kept"]] == ["courses"] and handed["category_rules"]
+    # (review 1 R3) each side keeps only its own household's kept searches: Marie's go with her, as hers; Alex's stay
+    assert [(k["q"], k["by_household"]) for k in handed["kept"]] == [("courses", "self")] and handed["category_rules"]
+    assert [k["q"] for k in ok(fam(a, "kept"))["kept"]] == ["lait"]
+    assert b"courses" not in json.dumps(json.loads((a.state_dir / "family-notebook.json").read_text())["kept"]).encode()
     assert next(p for p in handed["pages"] if p["id"] == page)["categories_by"] == "person"
     # meanwhile she has no family Carnet: her phone drops its copy, her own searches wait for the taking over
     left = fam(b, "index")
@@ -363,7 +378,7 @@ def test_s6_the_passage_de_main_takes_the_categories_the_kept_searches_and_the_r
     assert [k["q"] for k in now["kept"]] == ["courses"]
     s = ok(fam(b, "summary"))
     # (`with`: the households her family agent is for; Alex stays linked on her side until she unlinks him too)
-    assert [(k["q"], k["count"]) for k in s["kept"]] == [("courses", 2)]
+    assert [(k["q"], k["count"]) for k in s["kept"]] == [("courses", 2)] and s["with"] == "Avec Alex"
     assert [x["q"] for x in ok(fam(b, "category/school"))["searched"]] == ["karaté"]
     stored = json.loads((b.state_dir / "family-notebook.json").read_text())
     assert stored["category_rules"] == handed["category_rules"]
@@ -372,6 +387,8 @@ def test_s6_the_passage_de_main_takes_the_categories_the_kept_searches_and_the_r
 def test_s6_a_member_who_leaves_drops_the_copy_and_her_searches(bridges, fakes):
     a, b, ids = two(bridges, fakes)
     assert fam(b, "searched", method="post", json={"q": "karaté", "category": "school"}).status_code == 204
+    ok(fam(b, "kept", method="post", json={"q": "pâtes"}))
+    ok(fam(a, "kept", method="post", json={"q": "lait"}))
     first = ok(fam(b, "index"))
     assert first["items"]
     # taken out of the family's agent by its creator: out of its Carnet
@@ -384,15 +401,24 @@ def test_s6_a_member_who_leaves_drops_the_copy_and_her_searches(bridges, fakes):
     for route in ("summary", "category/school", "kept"):
         got = fam(b, route)
         assert got.status_code == 404 and got.json()["detail"]["code"] == "no_family", (route, got.text)
+    # (review 1 R6a) out of the family, a search made is not kept, even with its category
+    got = fam(b, "searched", method="post", json={"q": "karaté", "category": "school"})
+    assert got.status_code == 404 and got.json()["detail"]["code"] == "no_family"
+    assert not (b.state_dir / "family-searched.json").exists()
+    # (review 1 R3) her kept searches left with her; Alex's stay
+    assert [k["q"] for k in ok(fam(a, "kept"))["kept"]] == ["lait"]
     # back in: a whole new copy
     assert a.put("/v1/family-agent/famille/members", headers=AUTH, json={"members": None}).status_code == 200
     b.get("/v1/family-agent", headers=AUTH)
     assert wait(lambda: fam(b, "index").json().get("left") is None)
     assert fam(b, "searched", method="post", json={"q": "karaté", "category": "school"}).status_code == 204
-    # she unlinks Alex herself: the same
+    ok(fam(b, "kept", method="post", json={"q": "citrons"}))
+    assert [k["q"] for k in ok(fam(a, "kept"))["kept"]] == ["lait", "citrons"]
+    # she unlinks Alex herself: the same; her bridge takes her kept searches off his place as she goes
     assert b.delete("/v1/family/alex", headers=AUTH).status_code == 204
     assert ok(fam(b, "index"))["left"] is True
     assert not (b.state_dir / "family-searched.json").exists()
+    assert wait(lambda: [k["q"] for k in ok(fam(a, "kept"))["kept"]] == ["lait"])
     # nothing of hers was ever on Alex's place
     assert files_holding(a, "karat") == []
 
@@ -425,6 +451,50 @@ def test_s6_oublie_ca_takes_the_persons_kept_and_made_searches_of_the_family_car
     # the phones drop them at their next read: a new version without them
     after = ok(fam(b, "index", params={"since": str(before["version"]), "epoch": before["epoch"]}))
     assert after["version"] > before["version"] and [k["q"] for k in after["kept"]] == ["marc tennis", "lait"]
+
+
+def test_s6_review_1_b1_a_members_oublie_ca_takes_her_kept_searches_off_the_holder(bridges, fakes):
+    """Review 1 of S6, B1: Marie forgets « Marc » on her place: her kept search that says it leaves Alex's place and the
+    phones' copy; Alex's stays. Her bridge asks the holder for her own kept searches and matches them itself: the
+    forgotten words never leave her place."""
+    a, b, ids = two(bridges, fakes)
+    ok(fam(b, "kept", method="post", json={"q": "marc tennis"}))
+    ok(fam(b, "kept", method="post", json={"q": "lait"}))
+    ok(fam(a, "kept", method="post", json={"q": "cadeau marc"}))
+    before = ok(fam(b, "index"))
+    page = b.state_dir / "notebook" / "carnet" / "Sujets" / "Tennis.md"
+    page.parent.mkdir(parents=True, exist_ok=True)
+    page.write_text("# Tennis\n\n- Tennis avec Marc le samedi\n")
+    preview = b.post("/v1/notebook/forget/preview", params={"lang": "fr"}, json={"texts": ["Marc"]}, headers=AUTH)
+    assert preview.status_code == 200, preview.text
+    done = b.post("/v1/notebook/forget/confirm", json={"token": preview.json()["token"]}, headers=AUTH)
+    assert done.status_code == 200 and done.json()["done"] is True and "family" not in done.json(), done.text
+    assert [k["q"] for k in ok(fam(a, "kept"))["kept"]] == ["lait", "cadeau marc"]
+    after = ok(fam(b, "index", params={"since": str(before["version"]), "epoch": before["epoch"]}))
+    assert [k["q"] for k in after["kept"]] == ["lait", "cadeau marc"]
+    # the holder keeps who kept each one by household (never a name sent by a bridge), told to the asking bridge only
+    stored = json.loads((a.state_dir / "family-notebook.json").read_text())["kept"]
+    assert [(k["q"], k["by_household"]) for k in stored] == [("lait", "marie"), ("cadeau marc", "self")]
+    assert all("by" not in k for k in ok(fam(b, "kept"))["kept"])
+
+
+def test_s6_review_1_r1_a_holder_that_removed_the_link_leaves_the_member_left(bridges, fakes):
+    """Review 1 of S6, R1: Alex removes the link while Marie's bridge is off (the handover never arrives): her routes
+    get `left` / `no_family`, never the holder's 401; her copy and her searches made go."""
+    a, b, ids = two(bridges, fakes)
+    assert fam(b, "searched", method="post", json={"q": "karaté", "category": "school"}).status_code == 204
+    assert ok(fam(b, "index"))["items"]
+    b.stop()
+    assert a.delete("/v1/family/marie", headers=AUTH).status_code == 204
+    b.start()
+    got = fam(b, "index")
+    assert got.status_code == 200 and got.json()["left"] is True and got.json()["items"] == [], got.text
+    assert not (b.state_dir / "family-searched.json").exists()
+    for route, params in (("summary", {}), ("category/school", {}), ("kept", {}), ("search", {"q": "lait"})):
+        got = fam(b, route, params=params)
+        assert got.status_code == 404 and got.json()["detail"]["code"] == "no_family", (route, got.status_code, got.text)
+    got = fam(b, "categorize", method="post", json={"page": ids["page Menus de la semaine"], "categories": ["home"]})
+    assert got.status_code == 404 and got.json()["detail"]["code"] == "no_family", got.text
 
 
 # -- the 1.0 apps ------------------------------------------------------------------------------------------------------
