@@ -1263,3 +1263,32 @@ async fn onedrive_a_parent_that_cant_be_read_now_is_said_as_such() {
     w.lock().unwrap().graph_down = None;
     assert!(planned(&config, "onedrive:FAC", false, "Relevé.md").await.is_ok());
 }
+
+/// Review 2, C3 the other way: a bridge on cc88657ce (before the fix) may have written a line whose `undo` is
+/// `{"what": "drive_file", …}`. This bridge still reads the person's level and her lines from that file (the line
+/// without « Annuler »), never the defaults; written again, the file is one every bridge reads.
+#[test]
+fn a_line_written_by_the_first_drive_write_bridge_never_hides_the_levels() {
+    let (_dir, config) = setup("http://127.0.0.1:9");
+    let file = std::path::Path::new(&config.data_dir()).join("approval-level.json");
+    std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+    let now = py::time_time();
+    let old = json!({"level": "critical", "agents": {"vie": "all"}, "lines": [
+        {"id": "l1", "agent": "vie", "kind": "drive_write", "summary": "« a.md » enregistré", "at": now,
+         "undo": {"what": "drive_file", "service": "dropbox", "id": "id:new1", "rev": "r1"}},
+        {"id": "l2", "agent": "vie", "kind": "mail_move", "summary": "rangé", "at": now,
+         "undo": {"what": "mail_job", "job": "j1"}},
+    ]});
+    std::fs::write(&file, old.to_string()).unwrap();
+    assert_eq!(crate::approval_level::person_level(&config), "critical", "the person's level, not the default");
+    assert_eq!(crate::approval_level::level_for(&config, "vie"), "all", "her agent's own level");
+    let lines = crate::approval_level::lines(&config, Some("vie"), 10);
+    assert_eq!(lines.len(), 2);
+    let by = |id: &str| lines.iter().find(|l| l.id == id).unwrap().clone();
+    assert!(by("l1").undo.is_none(), "the unknown undo dropped, the line kept");
+    assert!(by("l2").undo.is_some(), "the others' undo kept");
+    // a change writes it back: readable by every bridge (no `drive_file` left)
+    crate::approval_level::set_level(&config, "critical").unwrap();
+    assert!(!std::fs::read_to_string(&file).unwrap().contains("drive_file"));
+    assert_eq!(crate::approval_level::lines(&config, Some("vie"), 10).len(), 2);
+}
