@@ -3101,6 +3101,22 @@ more steps in this turn. Don't repeat what failed: change approach.", crate::loo
             && !self.someone_elses(&sub.run_id)
     }
 
+    /// `agent`'s run `run_id` is a turn of a conversation someone writes in (the person's, a family member's): not one
+    /// nobody started (a routine's, a watcher's, a trigger's), a background task's, the brake's rescue, nor one followed
+    /// again after a restart (task_frame.rs: what a family member asks in her own turn is asked).
+    pub fn conversation_turn(&self, agent: &str, run_id: &str) -> bool {
+        let Some(sub) = lock(&self.inner).subs.get(&(agent.to_string(), run_id.to_string())).cloned() else {
+            return false;
+        };
+        let st = lock(&sub.state);
+        st.session_id.is_some()
+            && !st.unattended
+            && !st.background
+            && !st.resumed
+            && st.rescue_of.is_none()
+            && st.loop_rescue.is_none()
+    }
+
     /// A background task's run (jobs.rs): the brake's higher limits.
     pub fn mark_background(&self, agent: &str, run_id: &str) {
         let inner = lock(&self.inner);

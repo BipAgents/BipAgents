@@ -69,6 +69,7 @@ fn the_contract_s_texts_are_the_bridge_s() {
             assert_eq!(fix_under_i(lang, task, "{agent}"), s(&c["fix_under_i"][k]), "{lang} {k}");
             assert_eq!(fix_summary(lang, task, "{agent}", "{name}"), s(&c["fix_summary"][k]), "{lang} {k}");
             assert_eq!(stopped_line(lang, task, "{name}"), s(&c["stopped"][k]), "{lang} {k}");
+            assert_eq!(repair_failed_line(lang, task, "{name}"), s(&c["repair_failed"][k]), "{lang} {k}");
             assert_eq!(ended_line(lang, task, "{name}", "{end}"), s(&c["ended"][k]), "{lang} {k}");
             assert_eq!(keep_sentence(lang, task, "{name}", "{date}"), s(&c["keep"][k]), "{lang} {k}");
             let buttons: Vec<String> = c["keep_buttons"][k].as_array().unwrap().iter().map(s).collect();

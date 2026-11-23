@@ -328,11 +328,21 @@ pub fn cron_matches(expr: &str, at: &NaiveDateTime) -> Option<bool> {
 /// Routine `r`'s next run strictly after `after`: its schedule's, shifted « vers » (`approx`: task_frame.rs) for a
 /// schedule at a time of day.
 pub fn next_run_of(r: &Routine, after: f64, zone: Tz) -> Option<f64> {
-    let shift = if r.approx && !matches!(r.schedule, Schedule::Interval { .. }) {
+    let mut shift = if r.approx && !matches!(r.schedule, Schedule::Interval { .. }) {
         crate::task_frame::approx_seconds(&r.id)
     } else {
         0.0
     };
+    // never to the day before nor the day after (« 0:00 » shifted back: review R8): the other way then
+    if let Schedule::Cron { expr } = &r.schedule {
+        let f: Vec<&str> = expr.split_whitespace().collect();
+        if let (Some(Ok(m)), Some(Ok(h))) = (f.first().map(|m| m.parse::<f64>()), f.get(1).map(|h| h.parse::<f64>())) {
+            let minute = h * 60.0 + m + shift / 60.0;
+            if !(0.0..1440.0).contains(&minute) {
+                shift = -shift;
+            }
+        }
+    }
     next_after(&r.schedule, after - shift, zone).map(|t| t + shift)
 }
 
@@ -590,7 +600,7 @@ pub fn create_framed(
     let schedule = parse(schedule, zone)?;
     let now = py::time_time();
     let proposed = by == Maker::Agent;
-    let frame = frame_of(&schedule, ask, proposed, now)?;
+    let frame = frame_of(&schedule, ask, proposed, now, zone)?;
     let once = matches!(schedule, Schedule::Once { .. });
     let mut routine = Routine {
         id: py::uuid4_hex()[..12].to_string(),
@@ -620,7 +630,14 @@ pub fn create_framed(
         urgent: false,
         plan: None,
     };
-    routine.next_run = if proposed { None } else { next_run_of(&routine, now, zone) };
+    // an end before its first run: it would never run (review C10)
+    let first = next_run_of(&routine, now, zone);
+    if let (Some(until), Some(first)) = (routine.frame.until, first) {
+        if first > until {
+            return Err("until: that end comes before its first run; give a later one (or no end)".into());
+        }
+    }
+    routine.next_run = if proposed { None } else { first };
     change(config, |b| b.routines.push(routine.clone()));
     Ok(routine)
 }
@@ -638,7 +655,7 @@ fn approx_of(schedule: &Schedule, asked: Option<bool>, proposed: bool) -> bool {
 
 /// The frame of a new routine (task_frame.rs): its end as given (a one-time routine: none, its run is its end); none
 /// given by an agent on its own: `DEFAULT_END_DAYS` later. An end already passed is refused.
-fn frame_of(schedule: &Schedule, ask: &Ask, proposed: bool, now: f64) -> Result<crate::task_frame::Frame, String> {
+fn frame_of(schedule: &Schedule, ask: &Ask, proposed: bool, now: f64, zone: Tz) -> Result<crate::task_frame::Frame, String> {
     let mut frame = crate::task_frame::Frame::default();
     if matches!(schedule, Schedule::Once { .. }) {
         return Ok(frame);
@@ -646,16 +663,32 @@ fn frame_of(schedule: &Schedule, ask: &Ask, proposed: bool, now: f64) -> Result<
     if let Some(n) = ask.repeat.filter(|n| *n < 1) {
         return Err(format!("repeat: a number of runs, at least 1 (not {n})"));
     }
-    match ask.until {
-        Some(at) if at <= now => return Err("until: that end has passed already; give a later one".into()),
-        Some(at) => frame.until = Some(at),
-        None if proposed && !ask.asked && ask.repeat.is_none() => {
-            frame.until = Some(now + crate::task_frame::DEFAULT_END_DAYS * crate::task_frame::DAY);
-            frame.default_end = true;
+    if ask.until.is_some_and(|at| at <= now) {
+        return Err("until: that end has passed already; give a later one".into());
+    }
+    frame.until = ask.until;
+    frame.count = ask.repeat.unwrap_or(0);
+    if proposed && !ask.asked {
+        // its agent's own idea: it ends within 90 days, a count that would go past them too (review C9)
+        let horizon = now + crate::task_frame::DEFAULT_END_DAYS * crate::task_frame::DAY;
+        let within = ask.repeat.is_some_and(|n| runs_by(schedule, now, horizon, n, zone));
+        if ask.until.is_some() || !within {
+            (frame.until, frame.default_end) = crate::task_frame::own_end(ask.until, false, now);
         }
-        None => {}
     }
     Ok(frame)
+}
+
+/// Whether `n` runs of `schedule` from `now` all come by `horizon`.
+fn runs_by(schedule: &Schedule, now: f64, horizon: f64, n: u32, zone: Tz) -> bool {
+    let mut at = now;
+    for _ in 0..n {
+        match next_after(schedule, at, zone) {
+            Some(next) if next <= horizon => at = next,
+            _ => return false,
+        }
+    }
+    true
 }
 
 /// A plan's moment (plans.rs), on at once: the person said « Prévoir » to the plan's card, which showed its words.
@@ -728,6 +761,10 @@ pub fn update(config: &Config, id: &str, edit: impl FnOnce(&mut Routine) -> Resu
         edit(r)?;
         if (r.schedule.clone(), r.enabled) != before {
             r.next_run = if r.enabled { next_run_of(r, py::time_time(), zone) } else { None };
+        }
+        if before.1 && !r.enabled {
+            // paused: a retry waiting goes (else it would run at the resume, besides its schedule: review C3 d)
+            r.frame.retry_at = None;
         }
         Ok(Some(r.clone()))
     })
@@ -910,7 +947,14 @@ pub fn pending_items(config: &Config, agent: Option<&str>) -> Vec<Dict> {
 
 /// The cards of the routines `household` asked a family agent for (family_thread.rs): hers to answer.
 pub fn member_items(config: &Config, agent: &str, household: &str) -> Vec<Dict> {
-    items_of(config, Some(agent), |r| r.by.as_deref() == Some(household))
+    let mut items = items_of(config, Some(agent), |r| r.by.as_deref() == Some(household));
+    // and the card « Réparer / Arrêter » or « Garder ? » of her routines (task_frame.rs, review C7)
+    for r in all(config, Some(agent)).into_iter().filter(|r| r.by.as_deref() == Some(household)) {
+        if let Some(fix) = &r.frame.fix {
+            items.push(crate::task_frame::routine_card(config, &r, fix));
+        }
+    }
+    items
 }
 
 /// The household whose card `card_id` (a routine's start or change) is, if a family member's.
@@ -1231,13 +1275,17 @@ fn settle_change(r: &mut Routine, ch: Change, yes: bool, zone: Tz) {
         if ch.until.is_some() {
             (r.frame.until, r.frame.default_end, r.frame.keep_asked) = (ch.until, ch.default_end, false);
         }
-        if ch.repeat.is_some() {
-            r.repeat = ch.repeat;
+        if let Some(n) = ch.repeat {
+            (r.repeat, r.frame.count) = (Some(n), n);
         }
     }
     if r.say.is_some() {
         // a plan's moment: the words approved are what it says
         r.say = Some(r.prompt.clone());
+    }
+    if ch.resumed && !r.enabled {
+        r.frame.retry_at = None;
+        r.frame.until = crate::task_frame::back_on_end(r.frame.until, r.frame.default_end, py::time_time());
     }
     r.enabled |= ch.resumed;
     if repaired {
@@ -1266,6 +1314,11 @@ pub fn due(r: &Routine, now: f64) -> bool {
 /// Its first failure's retry is due (task_frame.rs: the same run again, in silence).
 pub fn retry_due(r: &Routine, now: f64) -> bool {
     r.enabled && r.frame.retry_at.is_some_and(|t| t <= now)
+}
+
+/// Its retry missed by more than a run may be (the bridge was down): not run late, as a run missed (review C3 b).
+pub fn retry_missed(r: &Routine, now: f64) -> bool {
+    r.frame.retry_at.is_some_and(|t| now - t > LATE_MAX_SECONDS)
 }
 
 /// How a run was started: by its clock, its silent retry, or asked (« Lancer maintenant », its agent's `run`, a place
@@ -1440,12 +1493,17 @@ pub async fn scheduler(state: AppState) {
             if config.agent(Some(&r.agent)).is_none() {
                 continue;
             }
-            if via == Via::Retry && credit && r.say.is_none() {
-                // the month's credit used: no retry (its notice waits for the next run)
+            if via == Via::Retry && ((credit && r.say.is_none()) || retry_missed(&r, now)) {
+                // the month's credit used: no retry (its notice waits for the next run); missed while the bridge was
+                // down: not run late, its failure told now (review C3 b)
                 let _ = update(&config, &r.id, |x| {
                     x.frame.retry_at = None;
                     Ok(())
                 });
+                if retry_missed(&r, now) && !r.muted {
+                    let (state, r) = (state.clone(), r.clone());
+                    tokio::spawn(async move { tell_missed_retry(&state, &r).await });
+                }
                 continue;
             }
             if let Some(why) = held(&r, credit, now).filter(|_| via == Via::Schedule) {
@@ -1580,7 +1638,8 @@ pub async fn fire_via(state: &AppState, id: &str, via: Via) {
         }
     };
     match failure {
-        Some((why, run, session)) => match failed(&config, id, why, now, via == Via::Schedule) {
+        // (counted from its end, not its start: a run cut after 30 min is tried again 15 min later, review C3 a)
+        Some((why, run, session)) => match failed(&config, id, why, py::time_time(), via == Via::Schedule) {
             // tried again in silence in 15 minutes (task_frame.rs)
             Some(crate::task_frame::After::Retry(_)) => status.push_str(", retry"),
             // 3 in a row: paused, the card « Réparer / Arrêter » (no model call before « Réparer »)
@@ -1605,14 +1664,8 @@ pub async fn fire_via(state: &AppState, id: &str, via: Via) {
             }
         },
         None if counted => {
-            // it worked: the count starts again, a card « Réparer / Arrêter » left goes
-            let mut gone = None;
-            let _ = update(&config, id, |x| {
-                gone = x.frame.fix.as_ref().filter(|f| f.variant == crate::task_frame::REPAIR).map(|f| f.id.clone());
-                crate::task_frame::after_success(&mut x.frame);
-                Ok(())
-            });
-            if let Some(gone) = gone {
+            // it worked: the count starts again (its card stays while it is paused: review C4)
+            if let Some(gone) = succeeded(&config, id) {
                 crate::task_frame::withdraw(&config, &gone);
             }
         }
@@ -1641,6 +1694,10 @@ pub fn failed(config: &Config, id: &str, why: Ended, now: f64, scheduled: bool) 
         r.frame.reason = reason_of(why).into();
         if step == After::Repair {
             replaced = r.frame.fix.take().map(|f| f.id);
+            if replaced.is_some() {
+                // its « Garder ? » given way: asked again once it is answered (review C6)
+                r.frame.keep_asked = false;
+            }
             r.enabled = false;
             r.frame.retry_at = None;
             r.frame.fix = Some(Fix {
@@ -1660,6 +1717,49 @@ pub fn failed(config: &Config, id: &str, why: Ended, now: f64, scheduled: bool) 
         crate::task_frame::withdraw(config, &old);
     }
     after
+}
+
+/// Routine `id`'s run worked: the count starts again. On, a card « Réparer / Arrêter » left goes (its id returned, to
+/// withdraw); paused with its card, the card stays, and « Réparer » answered too: only the person's answer takes them
+/// (review C4).
+pub fn succeeded(config: &Config, id: &str) -> Option<String> {
+    let mut gone = None;
+    let _ = update(config, id, |x| {
+        if x.enabled {
+            gone = x.frame.fix.as_ref().filter(|f| f.variant == crate::task_frame::REPAIR).map(|f| f.id.clone());
+            crate::task_frame::after_success(&mut x.frame);
+        } else {
+            crate::task_frame::after_success_paused(&mut x.frame);
+        }
+        Ok(())
+    });
+    gone
+}
+
+/// « Réparer » of routine `id` could not run or said nothing (review C5): « Réparer » undone, the card again (its
+/// failures as they were). The line to tell, in its agent's language; None: no such routine.
+pub fn repair_failed(config: &Config, id: &str, now: f64) -> Option<String> {
+    use crate::task_frame::{Fix, REPAIR};
+    let r = update(config, id, |r| {
+        r.frame.repairing = false;
+        if r.frame.fix.is_none() {
+            let reason = if r.frame.reason.is_empty() { "failed".to_string() } else { r.frame.reason.clone() };
+            let since = if r.frame.failing_since > 0.0 { r.frame.failing_since } else { now };
+            r.frame.fix = Some(Fix {
+                id: py::token_hex(6),
+                at: now,
+                variant: REPAIR.into(),
+                since,
+                failures: r.frame.failures.max(crate::task_frame::FAILURES_MAX),
+                reason,
+            });
+        }
+        Ok(())
+    })
+    .ok()
+    .flatten()?;
+    let lang = crate::task_frame::lang_of_agent(config, &r.agent);
+    Some(crate::task_frame::repair_failed_line(lang, crate::task_frame::Task::Routine, &flat(&r.name, NAME_MAX)))
 }
 
 /// The card's reason (task_frame.rs `reason_words`).
@@ -1682,7 +1782,7 @@ pub fn repair_note(r: &Routine) -> String {
 last time: {why}) and it is paused. Its words: « {} ». Find out why with your tools, then propose the fix with \
 routine_schedule: `update` with its name (new words or a new time); it comes back on only when your person says yes on \
 its card. If nothing needs to change, ask to turn it back on with `resume` (the same card). Change nothing any other \
-way. Then tell your person, in their language, in one or two short plain sentences, what you found and what you \
+way, and never pause nor delete it: your person decides that. Then tell your person, in their language, in one or two short plain sentences, what you found and what you \
 propose. Never write technical words, file names or tool names.\n-->",
         crate::tools_knowledge::in_note_line(&r.name),
         crate::tools_knowledge::in_note_line(&flat(&r.prompt, PROMPT_MAX)),
@@ -1702,6 +1802,7 @@ pub async fn repair(state: &AppState, agent: &AgentConfig, id: &str) {
         Ok(session) => session,
         Err(e) => {
             tracing::warn!(target: "bipbridge::routines", agent = %agent.name, routine = %r.id, error = %e, "repair: no conversation");
+            repair_said_nothing(state, agent, id).await;
             return;
         }
     };
@@ -1709,7 +1810,12 @@ pub async fn repair(state: &AppState, agent: &AgentConfig, id: &str) {
     let thread = crate::threads::threads_of(state).adopt(agent, &session, &title, "routine", origin).await;
     let mut turn = Turn::new(agent, Kind::Routine, thread.as_deref().unwrap_or(&session), repair_note(&r));
     turn.max_seconds = TURN_MAX_SECONDS;
-    let status = match pipeline.run(&turn).await {
+    let result = pipeline.run(&turn).await;
+    if let (Ok(ran), Some(household)) = (&result, &r.by) {
+        // a family member's routine: its repair counted to her, as its runs (review C7)
+        crate::family_thread::routine_counted(state, agent, household, &ran.run_id, ran.tokens).await;
+    }
+    let status = match result {
         Ok(ran) if ran.answered() && !is_silent(&ran.text) => deliver(state, &pipeline, agent, &r, &ran).await,
         Ok(ran) => format!("ended {}", ran.status),
         Err(why) => why.to_string(),
@@ -1719,6 +1825,42 @@ pub async fn repair(state: &AppState, agent: &AgentConfig, id: &str) {
         x.last_session = session;
         Ok(())
     });
+    if status != "sent" {
+        repair_said_nothing(state, agent, id).await;
+    }
+}
+
+/// « Réparer » without a word (no conversation, a failed turn, the month's credit, nothing said or not delivered): one
+/// line, no model, and the card again (review C5).
+async fn repair_said_nothing(state: &AppState, agent: &AgentConfig, id: &str) {
+    let config = state.config();
+    let Some(text) = repair_failed(&config, id, py::time_time()) else { return };
+    tell_line(state, agent, id, &text).await;
+    if let Some(r) = get(&config, id) {
+        if let Some(fix) = &r.frame.fix {
+            let lang = crate::task_frame::lang_of_agent(&config, &agent.name);
+            let (who, name) = (flat(&shown_agent(&config, &agent.name), NAME_MAX), flat(&r.name, NAME_MAX));
+            let line = crate::task_frame::fix_title(lang, crate::task_frame::Task::Routine, &who, &name);
+            crate::task_frame::raise(state, agent, &format!("{}{}", crate::task_frame::RUN_PREFIX, fix.id), &line, true).await;
+        }
+    }
+}
+
+/// A first failure whose retry was missed (the bridge down): today's notice, in the bridge's words, now.
+async fn tell_missed_retry(state: &AppState, r: &Routine) {
+    let config = state.config();
+    let Some(agent) = config.agent(Some(&r.agent)).cloned() else { return };
+    let why = match r.frame.reason.as_str() {
+        "looping" => Ended::Looping,
+        "too_long" => Ended::TooLong,
+        "not_started" => Ended::NotStarted,
+        _ => Ended::Failed,
+    };
+    let (zone, now) = (zone(&config), py::time_time());
+    let lang = crate::handback::language_of(&config, &agent);
+    let text = ended_notice(&r.name, why, r.next_run.map(|t| (t, now)), zone, &lang);
+    let pipeline = Pipeline::of(state);
+    tell_ended(state, &pipeline, &agent, r, &format!("{}", now as i64), "main", &text).await;
 }
 
 /// One line of the frame (task_frame.rs: an end told, a card unanswered for a week), a Boîte message where the
@@ -2173,7 +2315,7 @@ fn ask_of(arguments: &Dict, zone: Tz, asked: bool) -> Result<Ask, String> {
         },
         None => None,
     };
-    let approx = arguments.get("approx").filter(|v| !v.is_null()).map(py::truthy);
+    let approx = arguments.get("approx").filter(|v| !v.is_null()).map(crate::task_frame::flag);
     Ok(Ask { until, approx, repeat, asked })
 }
 
@@ -2324,7 +2466,8 @@ in the app. Do not try to run it.",
                             if at <= now {
                                 return Err("until: that end has passed already; give a later one".into());
                             }
-                            (until, default_end) = (Some(at), false);
+                            // its agent's own end: within 90 days (review C9)
+                            (until, default_end) = crate::task_frame::own_end(Some(at), ask.asked, now);
                         }
                         if ask.repeat.is_some() {
                             repeat = ask.repeat;
@@ -2336,6 +2479,12 @@ in the app. Do not try to run it.",
                         }
                         if to_repeat && until.is_none() && repeat.is_none() && !ask.asked {
                             (until, default_end) = (Some(now + crate::task_frame::DEFAULT_END_DAYS * crate::task_frame::DAY), true);
+                        }
+                        // an end before its first run (review C10)
+                        if let (Some(at), Some(first)) = (until, next_after(&clock, now, zone)) {
+                            if first > at && !matches!(clock, Schedule::Once { .. }) {
+                                return Err("until: that end comes before its first run; give a later one (or no end)".into());
+                            }
                         }
                         // « Réparer » answered: its proposal turns it back on with the person's « Oui »
                         back = (back || act == "resume" || x.frame.repairing) && !x.enabled;
@@ -2531,8 +2680,10 @@ async fn action_route(State(state): State<AppState>, UrlPath((id, action)): UrlP
     let r = update(&config, &id, |r| {
         dropped = person_switch(r, enabled);
         if enabled {
-            // back on by the person: a card « Réparer / Arrêter » goes, the count starts again (task_frame.rs)
+            // back on by the person: a card « Réparer / Arrêter » goes, the count starts again (task_frame.rs), a
+            // default end passed while paused gives it 3 more days (review B1)
             fix = crate::task_frame::resumed(&mut r.frame);
+            r.frame.until = crate::task_frame::back_on_end(r.frame.until, r.frame.default_end, py::time_time());
         }
         Ok(())
     })

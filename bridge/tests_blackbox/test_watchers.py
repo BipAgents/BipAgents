@@ -48,10 +48,12 @@ REGISTER = {"name": "Créneau médecin", "sites": ["www.doctolib.example"],
 
 
 @contextmanager
-def persons_turn(bridge, fakes, agent="wellness", tool="mcp_bipagents_routine_schedule", run="run_p"):
+def persons_turn(bridge, fakes, agent="wellness", tool="mcp_bipagents_routine_schedule", run=None):
     """A turn of the person's own conversation going on (the app follows it), inside `tool`: what the agent sets up then
     is asked by its person (no default end; review C8: outside any turn it is its own idea)."""
     hermes = fakes.hermes
+    # a run of its own each time (a run followed once and over stays over)
+    run = run or f"run_p{len(hermes.runs) + 1}"
     gate = threading.Event()
     hermes.runs[run] = [sse("tool.started", run_id=run, tool=tool, preview="x"), gate,
                         sse("run.completed", run_id=run, output="C'est noté.")]

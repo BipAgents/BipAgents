@@ -595,6 +595,15 @@ async fn tell_one(state: &AppState, household: &str, body: &Value) -> bool {
         .is_ok_and(|r| r.status().is_success())
 }
 
+/// One member's bridge told of a card for her in the family conversation (task_frame.rs: « Réparer / Arrêter » of a
+/// routine she asked for): her devices pushed with `line`, unless it is on her screen.
+pub async fn tell_member(state: &AppState, agent: &AgentConfig, household: &str, line: &str) {
+    let told = json!({"agent": agent.name, "kind": "reply", "text": line});
+    if !tell_one(state, household, &told).await {
+        tracing::info!(household = %household, "family conversation: a member's bridge not told of her card (out of reach)");
+    }
+}
+
 /// Every member's bridge but `except`'s told (one at a time, each in its own task: a member out of reach delays none).
 async fn tell_members(state: &AppState, agent: &AgentConfig, except: Option<&str>, body: &Value) {
     let config = state.config();

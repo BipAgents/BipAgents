@@ -1395,6 +1395,10 @@ async fn bridge_card(
     }
     // « Réparer / Arrêter » or « Garder 3 mois de plus ? » (task_frame.rs): « Réparer » starts ONE turn of its agent
     if let Some(id) = run_id.strip_prefix(crate::task_frame::RUN_PREFIX) {
+        if crate::task_frame::fix_by(&state.config(), &agent.name, id).is_some() {
+            // a routine a family member asked for: hers to answer, from her bridge (review C7)
+            return Err(HttpError::new(403, "this card is a family member's: they answer it"));
+        }
         return Ok(Some(crate::task_frame::approve(state, agent, id, &body.choice).await?));
     }
     // a plan its agent proposed (plans.rs): « Prévoir » sets its moments (but those unticked), « Non merci » forgets it

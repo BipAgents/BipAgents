@@ -75,9 +75,10 @@ def edit_routine(bridge, rid, **changes):
 
 
 def day_en(at):
-    """« Nov 30 » (texts.en, the routines' clock: UTC here)."""
+    """« Nov 30 » (texts.en, the routines' clock: UTC here), « Jan 2, 2027 » when not this year (review C9)."""
     d = datetime.fromtimestamp(at, timezone.utc)
-    return f"{d.strftime('%b')} {d.day}"
+    year = "" if d.year == datetime.now(timezone.utc).year else f", {d.year}"
+    return f"{d.strftime('%b')} {d.day}{year}"
 
 
 def made_by_agent(bridge, name, schedule, token=None, agent="wellness", **extra):
@@ -205,16 +206,13 @@ def test_a_failing_routine_is_retried_in_silence_then_told_then_paused_with_repa
                           and jobs(bridge)["Courriels"]["state"] != "running", timeout=60)
 
     # 1. its scheduled run fails, after a while: tried again 15 minutes after its end (review C3 a), nothing told
-    gate = threading.Event()
-    hermes.runs["r1"] = [gate]
-    threading.Timer(4.0, gate.set).start()
     edit_routine(bridge, rid, next_run=time.time() - 5)
-    began = time.time()
     assert ran(1)
     time.sleep(1.0)
     assert told() == [] and jobs(bridge)["Courriels"]["failures"] == 1
     kept = routine(bridge, rid)
-    assert kept["frame"]["retry_at"] >= began + 900 + 3, (kept, began)
+    # (its start is `last_run`: the retry counts from its end, after it)
+    assert kept["frame"]["retry_at"] > kept["last_run"] + 900, kept
     assert abs(kept["frame"]["retry_at"] - (time.time() + 900)) < 120, kept
     next_run = kept["next_run"]
     # 2. its retry fails too: today's notice, the run of the day not moved
@@ -475,8 +473,9 @@ ISO = re.compile(r"\d{4}-\d\d-\d\dT[\d:.]+(Z|[+-]\d\d:\d\d)?")
 
 def normal(value, key=None):
     """An answer with what changes from one run to the next (ids, times, tokens) blanked."""
-    # (a card's conversation, `session_id`: the turn it was made in, null outside any: the scenario's, not the bridge's)
-    if key in VOLATILE and (value is not None or key == "session_id"):
+    # (a card's conversation, `session_id`, and the one a routine was made in, `origin_session_id`: the turn it was made
+    # in, null outside any: the scenario's, not the bridge's)
+    if key in VOLATILE and (value is not None or key in ("session_id", "origin_session_id")):
         return "<v>"
     if isinstance(value, dict):
         return {k: normal(v, k) for k, v in value.items()}

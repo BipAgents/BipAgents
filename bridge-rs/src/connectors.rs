@@ -310,9 +310,7 @@ pub fn set_enabled(config: &Config, agent: &str, id: &str, on: bool) -> anyhow::
         c.updated_at = crate::vault::now();
         if !on {
             // switched off: its card « Réparer / Arrêter » has its answer (task_frame.rs)
-            if let Some(fix) = c.frame.fix.take_if(|f| f.variant == crate::task_frame::REPAIR) {
-                crate::task_frame::withdraw(config, &fix.id);
-            }
+            drop_fix(config, c);
         }
         Some(true)
     })?;
@@ -1056,6 +1054,19 @@ fn strings(value: Option<&Value>) -> Vec<String> {
     }
 }
 
+/// A watcher's end as its frame wants it (task_frame.rs): asked by its person, as given; its agent's own idea, within
+/// `DEFAULT_END_DAYS` (« une seule fois » too), « Garder 3 mois de plus ? » before.
+pub fn watch_frame(watch: &mut Watch, asked: bool, now: f64) {
+    (watch.until, watch.default_end) = crate::task_frame::own_end(watch.until, asked, now);
+}
+
+/// Its card « Réparer / Arrêter » has its answer (switched off, removed: review C11).
+fn drop_fix(config: &Config, c: &mut Connector) {
+    if let Some(fix) = c.frame.fix.take_if(|f| f.variant == crate::task_frame::REPAIR) {
+        crate::task_frame::withdraw(config, &fix.id);
+    }
+}
+
 /// The fields of a connector the agent gave, applied over `base` (an update): Err is the refusal's text. A watcher's
 /// end in UTC: the tools use `apply_fields_in`.
 #[cfg(test)]
@@ -1222,13 +1233,10 @@ async fn register_tool(state: &AppState, agent: &AgentConfig, arguments: &Dict) 
     if let Err(why) = apply_fields_in(&mut conn, arguments, true, crate::routines::zone(&config)) {
         return Ok(refusal(&why));
     }
-    if let Some(watch) = conn.watch.as_mut().filter(|w| w.until.is_none() && !w.once) {
-        // a watcher its agent sets up on its own (not in its person's own conversation) with no end: it stops by
-        // itself after 90 days, « Garder 3 mois de plus ? » before (task_frame.rs, Alex Q6 A)
-        if !crate::agent_tools::asked_by_person(state, &agent.name, REGISTER) {
-            watch.until = Some(py::time_time() + crate::task_frame::DEFAULT_END_DAYS * crate::task_frame::DAY);
-            watch.default_end = true;
-        }
+    if let Some(watch) = conn.watch.as_mut() {
+        // a watcher its agent sets up on its own (not in its person's own conversation): it stops by itself within
+        // 90 days, « Garder 3 mois de plus ? » before (task_frame.rs, Alex Q6 A; review C9, R2)
+        watch_frame(watch, crate::agent_tools::asked_by_person(state, &agent.name, REGISTER), py::time_time());
     }
     if arguments.get("tools").is_none_or(Value::is_null) {
         conn.declared_tools = Vec::new();
@@ -1274,8 +1282,11 @@ async fn update_tool(state: &AppState, agent: &AgentConfig, arguments: &Dict) ->
     }
     if let (Some(new), Some(old)) = (conn.watch.as_mut(), before.watch.as_ref()) {
         // its end stays as it was unless the agent gives another (task_frame.rs)
-        if new.until.is_none() && !new.once && arguments.get("watch").and_then(|w| w.get("until")).is_none_or(Value::is_null) {
+        if arguments.get("watch").and_then(|w| w.get("until")).is_none_or(Value::is_null) {
             (new.until, new.default_end) = (old.until, old.default_end);
+        } else if !crate::agent_tools::asked_by_person(state, &agent.name, UPDATE) {
+            // its agent's own end: within 90 days (review C9)
+            (new.until, new.default_end) = crate::task_frame::own_end(new.until, false, py::time_time());
         }
     }
     if conn.slug != before.slug && of_agent(&config, &agent.name).iter().any(|c| c.slug == conn.slug) {
@@ -1306,7 +1317,10 @@ async fn update_tool(state: &AppState, agent: &AgentConfig, arguments: &Dict) ->
     let stored = conn.clone();
     change(&config, |store| {
         if let Some(c) = find(store, &agent.name, &before.id) {
+            // its frame as it is now (a card raised meanwhile stays: review R5)
+            let frame = std::mem::take(&mut c.frame);
             *c = stored;
+            c.frame = frame;
         }
     })?;
     if let Some(old) = &before.card {
@@ -1322,6 +1336,12 @@ pub async fn remove(state: &AppState, agent: &AgentConfig, id: &str) -> bool {
     let removed = change(&config, |store| {
         let list = store.agents.entry(agent.name.clone()).or_default();
         let before = list.len();
+        // its cards of the frame with it (review C11)
+        for c in list.iter().filter(|c| c.id == id) {
+            if let Some(fix) = &c.frame.fix {
+                crate::task_frame::withdraw(&config, &fix.id);
+            }
+        }
         list.retain(|c| c.id != id);
         before != list.len()
     })
@@ -1771,6 +1791,13 @@ async fn switch_route(
         if let Some(c) = find(store, &agent.name, &id) {
             c.enabled = on;
             c.updated_at = crate::vault::now();
+            if !on {
+                // switched off by the person: its card « Réparer / Arrêter » has its answer (review C11)
+                drop_fix(&config, c);
+            } else if let Some(w) = c.watch.as_mut() {
+                // back on: a default end passed while it was off gives it 3 more days (review B1)
+                w.until = crate::task_frame::back_on_end(w.until, w.default_end, py::time_time());
+            }
         }
     })
     .map_err(anyhow::Error::from)?;

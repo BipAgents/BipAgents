@@ -137,6 +137,10 @@ pub struct Frame {
     /// Its first failure's retry, in silence.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub retry_at: Option<f64>,
+    /// The number of runs it was given (a count end: « 10 fois » said when it ends; 0: none given here, as a job
+    /// moved from Hermes, which stays « terminée » at its end as before).
+    #[serde(skip_serializing_if = "is_zero")]
+    pub count: u32,
     /// « Réparer » answered: its agent's proposal turns it back on with the person's « Oui ».
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub repairing: bool,
@@ -214,6 +218,44 @@ pub fn after_success(frame: &mut Frame) -> bool {
     }
 }
 
+/// A run that worked while paused with its card (« Lancer maintenant », its agent's `run`): the count starts again, but
+/// the card stays, and « Réparer » answered too: only the person's answer takes it (review C4).
+pub fn after_success_paused(frame: &mut Frame) {
+    frame.failures = 0;
+    frame.failing_since = 0.0;
+    frame.retry_at = None;
+}
+
+/// A flag as a model may write it (review C12): true, « true », « yes », « oui », 1; false, « false », « no », « 0 »,
+/// empty.
+pub fn flag(value: &Value) -> bool {
+    match value {
+        Value::Bool(b) => *b,
+        Value::Number(n) => n.as_f64().is_some_and(|n| n != 0.0),
+        Value::String(s) => matches!(s.trim().to_lowercase().as_str(), "true" | "yes" | "oui" | "1" | "on"),
+        _ => false,
+    }
+}
+
+/// What its agent sets up on its own: its end at most `DEFAULT_END_DAYS` from `now` (review C9), set by default when
+/// none is given; `(until, default_end)`. Asked by the person: as given.
+pub fn own_end(given: Option<f64>, asked: bool, now: f64) -> (Option<f64>, bool) {
+    if asked {
+        return (given, false);
+    }
+    let cap = now + DEFAULT_END_DAYS * DAY;
+    (Some(given.map_or(cap, |g| g.min(cap))), true)
+}
+
+/// Back on after a pause: a default end passed (or near) meanwhile gives it `KEEP_ASK_DAYS` more, never gone at once
+/// (review B1).
+pub fn back_on_end(until: Option<f64>, default_end: bool, now: f64) -> Option<f64> {
+    match until {
+        Some(u) if default_end && u < now + KEEP_ASK_DAYS * DAY => Some(now + KEEP_ASK_DAYS * DAY),
+        other => other,
+    }
+}
+
 /// The person turned it back on: a card « Réparer / Arrêter » goes (its id), the count starts again.
 pub fn resumed(frame: &mut Frame) -> Option<String> {
     let id = frame.fix.as_ref().filter(|f| f.variant == REPAIR).map(|f| f.id.clone());
@@ -264,13 +306,21 @@ pub fn clock(lang: &str, h: u32, m: u32) -> String {
     }
 }
 
-/// A day: « 30/11 », « Nov 30 », « 30.11. », « 30/11 ».
+/// A day: « 30/11 », « Nov 30 », « 30.11. », « 30/11 »; with its year when it is not this year (review C9:
+/// « 30/11/2027 », « Nov 30, 2027 », « 30.11.2027 »).
 pub fn day_words(lang: &str, at: f64, zone: Tz) -> String {
     let Some(d) = zone.timestamp_opt(at as i64, 0).single() else { return String::new() };
-    match lang_of(lang) {
-        "en" => d.format("%b %-d").to_string(),
-        "de" => d.format("%-d.%-m.").to_string(),
-        _ => d.format("%-d/%-m").to_string(),
+    let this_year = zone.timestamp_opt(py::time_time() as i64, 0).single().is_some_and(|now| {
+        use chrono::Datelike;
+        now.year() == d.year()
+    });
+    match (lang_of(lang), this_year) {
+        ("en", true) => d.format("%b %-d").to_string(),
+        ("en", false) => d.format("%b %-d, %Y").to_string(),
+        ("de", true) => d.format("%-d.%-m.").to_string(),
+        ("de", false) => d.format("%-d.%-m.%Y").to_string(),
+        (_, true) => d.format("%-d/%-m").to_string(),
+        (_, false) => d.format("%-d/%-m/%Y").to_string(),
     }
 }
 
@@ -487,6 +537,20 @@ pub fn stopped_line(lang: &str, task: Task, name: &str) -> String {
     }
 }
 
+/// « Réparer » that could not run or said nothing (review C5): the line, then the card again.
+pub fn repair_failed_line(lang: &str, task: Task, name: &str) -> String {
+    match (lang_of(lang), task) {
+        ("fr", Task::Watcher) => format!("Le veilleur « {name} » n'a pas pu être réparé pour l'instant."),
+        ("fr", Task::Routine) => format!("La routine « {name} » n'a pas pu être réparée pour l'instant : elle reste en pause."),
+        ("de", Task::Watcher) => format!("Der Wächter „{name}“ konnte vorerst nicht repariert werden."),
+        ("de", Task::Routine) => format!("Die Routine „{name}“ konnte vorerst nicht repariert werden: Sie bleibt pausiert."),
+        ("es", Task::Watcher) => format!("El vigilante «{name}» no se ha podido reparar por ahora."),
+        ("es", Task::Routine) => format!("La rutina «{name}» no se ha podido reparar por ahora: sigue en pausa."),
+        (_, Task::Watcher) => format!("The watcher “{name}” couldn't be repaired for now."),
+        (_, Task::Routine) => format!("The routine “{name}” couldn't be repaired for now: it stays paused."),
+    }
+}
+
 /// An end reached, for what ran more than a week: the line.
 pub fn ended_line(lang: &str, task: Task, name: &str, end: &str) -> String {
     match (lang_of(lang), task) {
@@ -581,10 +645,10 @@ pub fn card_item(config: &Config, about: &About) -> Dict {
 /// The cards waiting for `agent` (None: every agent), oldest first.
 pub fn pending_items(config: &Config, agent: Option<&str>) -> Vec<Dict> {
     let mut items: Vec<(f64, Dict)> = Vec::new();
-    for r in routines::all(config, agent) {
+    // a family member's routine: hers (routines.rs `member_items`, review C7)
+    for r in routines::all(config, agent).into_iter().filter(|r| r.by.is_none()) {
         if let Some(fix) = &r.frame.fix {
-            let about = About { task: Task::Routine, agent: &r.agent, id: &r.id, name: &r.name, fix, ends_at: r.frame.until };
-            items.push((fix.at, card_item(config, &about)));
+            items.push((fix.at, routine_card(config, &r, fix)));
         }
     }
     for (name, conn) in connectors::all(config) {
@@ -601,14 +665,39 @@ pub fn pending_items(config: &Config, agent: Option<&str>) -> Vec<Dict> {
     items.into_iter().map(|(_, item)| item).collect()
 }
 
+/// The card of routine `r`.
+pub fn routine_card(config: &Config, r: &Routine, fix: &Fix) -> Dict {
+    let about = About { task: Task::Routine, agent: &r.agent, id: &r.id, name: &r.name, fix, ends_at: r.frame.until };
+    card_item(config, &about)
+}
+
+/// The household whose card `fix_id` is (a routine a family member asked for: hers to answer), if any.
+pub fn fix_by(config: &Config, agent: &str, fix_id: &str) -> Option<String> {
+    routines::all(config, Some(agent))
+        .into_iter()
+        .find(|r| r.frame.fix.as_ref().is_some_and(|f| f.id == fix_id))
+        .and_then(|r| r.by)
+}
+
 /// A card gone (answered elsewhere, its task gone or working again): no turn resumed for it, its places told.
 pub fn withdraw(config: &Config, fix_id: &str) {
     crate::card_place::taken(config, &format!("{RUN_PREFIX}{fix_id}"));
 }
 
 /// A card just made: in the main conversation and the Boîte (no turn asked it), pushed when `push` as a request
-/// (« Une demande attend ton accord », its sealed words `line`).
+/// (« Une demande attend ton accord », its sealed words `line`). A family member's routine's (`by`): hers, from her
+/// bridge (the family conversation's pending cards), she is told; never the creator's (review C7).
 pub async fn raise(state: &AppState, agent: &AgentConfig, run_id: &str, line: &str, push: bool) {
+    let fix = run_id.strip_prefix(RUN_PREFIX).unwrap_or("");
+    if let Some(household) = fix_by(&state.config(), &agent.name, fix) {
+        crate::card_place::taken(&state.config(), run_id);
+        crate::threads::threads_of(state).touch(&agent.name, None, "card").await;
+        if push {
+            crate::family_thread::tell_member(state, agent, &household, line).await;
+        }
+        tracing::info!(target: "bipbridge::task_frame", agent = %agent.name, card = run_id, "task frame card raised for a member");
+        return;
+    }
     crate::card_place::place_for(state, agent, run_id, None).await;
     crate::card_place::taken(&state.config(), run_id);
     tracing::info!(target: "bipbridge::task_frame", agent = %agent.name, card = run_id, push, "task frame card raised");
@@ -718,17 +807,27 @@ fn ran_long(since: f64, ran: bool, now: f64) -> bool {
     ran && since > 0.0 && now - since > ENDED_LINE_DAYS * DAY
 }
 
+/// Paused by the person or by « Arrêter » (on, or waiting for its start, is not): a default end never takes it
+/// (review B1: « elle reste sur sa page »).
+fn paused(r: &Routine) -> bool {
+    !r.enabled && !r.awaits_start
+}
+
 fn routine_ends_now(r: &Routine, now: f64) -> bool {
-    r.frame.until.is_some_and(|u| now > u) || (routines::end_of(r) == End::Count(0) && r.next_run.is_none())
+    if r.frame.retry_at.is_some() || (r.frame.default_end && paused(r)) {
+        // its last run's retry waits (review C3 c); a default end waits for « Garder ? » while it is paused (B1)
+        return false;
+    }
+    r.frame.until.is_some_and(|u| now > u)
+        || (r.frame.count > 0 && routines::end_of(r) == End::Count(0) && r.next_run.is_none())
 }
 
 fn routine_asks_keep(r: &Routine, now: f64) -> bool {
     r.frame.default_end
         && !r.frame.keep_asked
         && r.frame.fix.is_none()
-        && r.enabled
         && !r.awaits_start
-        && r.frame.until.is_some_and(|u| u > now && u - now <= KEEP_ASK_DAYS * DAY)
+        && r.frame.until.is_some_and(|u| u - now <= KEEP_ASK_DAYS * DAY && (u > now || paused(r)))
 }
 
 fn unanswered(fix: &Option<Fix>, now: f64) -> bool {
@@ -736,7 +835,13 @@ fn unanswered(fix: &Option<Fix>, now: f64) -> bool {
 }
 
 fn watch_ends_now(conn: &connectors::Connector, now: f64) -> bool {
-    conn.watch.as_ref().and_then(|w| w.until).is_some_and(|u| now > u)
+    let Some(watch) = &conn.watch else { return false };
+    // switched off: its default end waits for « Garder ? » (review B1); not approved (a change refused, waiting): it
+    // doesn't run, its end neither (R6)
+    if (watch.default_end && !conn.enabled) || conn.status != connectors::APPROVED {
+        return false;
+    }
+    watch.until.is_some_and(|u| now > u)
 }
 
 fn watch_asks_keep(conn: &connectors::Connector, now: f64) -> bool {
@@ -744,9 +849,8 @@ fn watch_asks_keep(conn: &connectors::Connector, now: f64) -> bool {
     watch.default_end
         && !conn.frame.keep_asked
         && conn.frame.fix.is_none()
-        && conn.enabled
         && conn.status == connectors::APPROVED
-        && watch.until.is_some_and(|u| u > now && u - now <= KEEP_ASK_DAYS * DAY)
+        && watch.until.is_some_and(|u| u - now <= KEEP_ASK_DAYS * DAY && (u > now || !conn.enabled))
 }
 
 /// One look at `now`: ends reached, « Garder ? » to ask, cards nobody answered for a week. The state changes are
@@ -778,6 +882,10 @@ pub fn due(config: &Config, now: f64) -> Vec<Due> {
                     out.push(Due::Line { agent: r.agent.clone(), task: Task::Routine, id: r.id.clone(), text });
                 }
                 if routine_asks_keep(r, now) {
+                    if r.frame.until.is_some_and(|u| u < now + DAY) && paused(r) {
+                        // paused past (or at) its end: the card's day 3 days on, never one gone
+                        r.frame.until = Some(now + KEEP_ASK_DAYS * DAY);
+                    }
                     let fix = Fix { id: py::token_hex(6), at: now, variant: KEEP.into(), ..Fix::default() };
                     let run_id = format!("{RUN_PREFIX}{}", fix.id);
                     (r.frame.fix, r.frame.keep_asked) = (Some(fix), true);
@@ -794,7 +902,12 @@ pub fn due(config: &Config, now: f64) -> Vec<Due> {
             tracing::info!(target: "bipbridge::task_frame", agent = %r.agent, routine = %r.id, "routine at its end: gone");
             if ran_long(r.created, r.last_run.is_some(), now) {
                 let lang = lang_of_agent(config, &r.agent);
-                let end = end_words(lang, Task::Routine, &routines::end_of(r), zone);
+                // a count end says the runs it was given, never « 0 fois » (review C1)
+                let end = match routines::end_of(r) {
+                    End::Count(_) => End::Count(r.frame.count),
+                    end => end,
+                };
+                let end = end_words(lang, Task::Routine, &end, zone);
                 let text = ended_line(lang, Task::Routine, &routines::flat(&r.name, routines::NAME_MAX), &end);
                 out.push(Due::Line { agent: r.agent.clone(), task: Task::Routine, id: r.id.clone(), text });
             }
@@ -825,6 +938,9 @@ pub fn due(config: &Config, now: f64) -> Vec<Due> {
                         out.push(Due::Line { agent: agent.clone(), task: Task::Watcher, id: conn.id.clone(), text });
                     }
                     if watch_asks_keep(conn, now) {
+                        if let Some(w) = conn.watch.as_mut().filter(|w| w.until.is_some_and(|u| u < now + DAY)) {
+                            w.until = Some(now + KEEP_ASK_DAYS * DAY);
+                        }
                         let fix = Fix { id: py::token_hex(6), at: now, variant: KEEP.into(), ..Fix::default() };
                         let run_id = format!("{RUN_PREFIX}{}", fix.id);
                         (conn.frame.fix, conn.frame.keep_asked) = (Some(fix), true);
@@ -839,7 +955,12 @@ pub fn due(config: &Config, now: f64) -> Vec<Due> {
             let checked = crate::watchers::load(config, &agent, &conn.id).checks > 0;
             if ran_long(approved, checked, now) {
                 let lang = lang_of_agent(config, &agent);
-                let end = end_words(lang, Task::Watcher, &crate::watchers::end_of(conn.watch.as_ref()), zone);
+                // reached at its date (a « once » one too: R12)
+                let end = match conn.watch.as_ref().and_then(|w| w.until) {
+                    Some(at) => End::Date(at),
+                    None => crate::watchers::end_of(conn.watch.as_ref()),
+                };
+                let end = end_words(lang, Task::Watcher, &end, zone);
                 let text = ended_line(lang, Task::Watcher, &routines::flat(&conn.name, routines::NAME_MAX), &end);
                 out.push(Due::Line { agent: agent.clone(), task: Task::Watcher, id: conn.id.clone(), text });
             }
@@ -849,9 +970,14 @@ pub fn due(config: &Config, now: f64) -> Vec<Due> {
             withdraw(config, id);
         }
     }
-    // a trigger at its end goes, quietly
-    if crate::triggers::load(config).triggers.iter().any(|t| t.ends.is_some_and(|e| now > e)) {
+    // a trigger at its end goes, quietly, its card with it
+    let ended: Vec<crate::triggers::Trigger> =
+        crate::triggers::load(config).triggers.into_iter().filter(|t| t.ends.is_some_and(|e| now > e)).collect();
+    if !ended.is_empty() {
         crate::triggers::change(config, |s| s.triggers.retain(|t| t.ends.is_none_or(|e| now <= e)));
+        for card in ended.iter().filter_map(|t| t.card.as_ref()) {
+            crate::card_place::taken(config, &format!("{}{}", crate::triggers::RUN_PREFIX, card.id));
+        }
     }
     out
 }
@@ -873,7 +999,12 @@ pub async fn tick(state: &AppState) {
             Due::Line { task: Task::Watcher, id, text, .. } => crate::watchers::tell_line(state, &agent, &id, &text).await,
             Due::Raise { run_id, line, push, .. } => raise(state, &agent, &run_id, &line, push).await,
             Due::Remove { id, .. } => {
-                connectors::remove(state, &agent, &id).await;
+                // still at its end (a « Garder » answered since its line: R7)
+                let still =
+                    connectors::get(&state.config(), &agent.name, &id).is_some_and(|c| watch_ends_now(&c, py::time_time()));
+                if still {
+                    connectors::remove(state, &agent, &id).await;
+                }
             }
         }
     }

@@ -2061,12 +2061,10 @@ pub fn call_session_of(body: &[u8]) -> Option<String> {
 /// (shared_pages.rs `who`). Only then does « arrête de me proposer des choses » turn « Initiative » off
 /// (agent_proactive.rs), and only then is a plan « asked » (plans.rs: else the caps of what nobody asked for).
 /// A call of `tool` by `agent` asked in its person's own words (task_frame.rs: what it sets up then has no default
-/// end): a turn of its person's own conversation (`persons_own_call`), or no turn the hub follows (taken as asked).
+/// end): a turn of its person's own conversation (`persons_own_call`); no turn the hub follows is its own idea
+/// (review C8, as plans.rs).
 pub fn asked_by_person(state: &AppState, agent: &str, tool: &str) -> bool {
-    match state.hub.turn_of(agent, tool) {
-        Some(turn) => persons_own_call(state, agent, tool, Some(&turn.run_id)),
-        None => true,
-    }
+    state.hub.turn_of(agent, tool).is_some_and(|turn| persons_own_call(state, agent, tool, Some(&turn.run_id)))
 }
 
 fn persons_own_call(state: &AppState, agent: &str, tool: &str, turn_run: Option<&str>) -> bool {
@@ -2380,12 +2378,13 @@ async fn mcp_call(
         // made in this conversation: its report goes back there
         let origin = state.hub.asking_session(&agent.name);
         let cards_before = crate::card_place::waiting(&state, &agent.name);
-        // asked in its person's own words (a family member's too), or outside any turn the hub follows: no default
-        // end; made on its own (a routine's, a watcher's, a task's turn, another agent's ask): it ends after 90 days
-        // (task_frame.rs)
-        let asked = member.is_some()
-            || turn_run.is_none()
-            || persons_own_call(&state, &agent.name, &name, turn_run.as_deref());
+        // asked in its person's own words (a family member's in her own turn too): no default end; made on its own (a
+        // routine's, a watcher's, a task's turn, another agent's ask, outside any turn the hub follows: review C8, as
+        // plans.rs): it ends within 90 days (task_frame.rs)
+        let asked = match &member {
+            Some(_) => turn_run.as_deref().is_some_and(|run| state.hub.conversation_turn(&agent.name, run)),
+            None => persons_own_call(&state, &agent.name, &name, turn_run.as_deref()),
+        };
         let called = crate::routines::call_asked(&state.config(), &agent.name, &arguments, origin.as_deref(), asked);
         let mut result = called.result;
         if let Some(id) = called.run {
