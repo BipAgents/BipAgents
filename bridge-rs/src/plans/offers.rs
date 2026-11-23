@@ -614,7 +614,7 @@ pub fn detail(lang: &str, offer: &Offer, person: Tz) -> String {
             } else {
                 // its end on the same clock as its start, the person's (review R6)
                 let day = |t: f64| person.timestamp_opt(t as i64, 0).single();
-                match (super::parse_at(&field("end"), person).and_then(day), day(at)) {
+                match super::parse_at(&field("end"), person).and_then(day) {
                     Some(end) if Some(end.date_naive()) == day(at).map(|d| d.date_naive()) => {
                         format!("{start}–{}", end.format("%H:%M"))
                     }
