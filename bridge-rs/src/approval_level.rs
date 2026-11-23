@@ -297,8 +297,9 @@ pub struct Line {
     pub run_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
-    /// What undoes it (None: nothing to undo).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// What undoes it (None: nothing to undo). One this bridge doesn't know (the `drive_file` a bridge on cc88657ce
+    /// wrote, review 2 of drive-write) reads as none: never the whole file failing, never the levels lost.
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "known_undo")]
     pub undo: Option<Undo>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub undone_at: Option<f64>,
@@ -312,6 +313,12 @@ pub struct Line {
     /// C3: a bridge put back to the version before still reads this one), never written here.
     #[serde(skip)]
     pub drive_undo: bool,
+}
+
+/// A line's `undo` as kept, or none when it is of a kind this bridge doesn't know.
+fn known_undo<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<Undo>, D::Error> {
+    let kept = Option::<Value>::deserialize(d)?;
+    Ok(kept.and_then(|v| serde_json::from_value(v).ok()))
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
