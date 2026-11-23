@@ -249,6 +249,20 @@ mod tests {
         assert_eq!(place_of("custom", ""), Place::Unknown, "a custom server without its address");
     }
 
+    /// Review 23/11 (red): a host with a label « eurouter » is not EUrouter (model_route::pins is right for its own use,
+    /// the routing field, not for « is this European »): a proxy or tunnel anywhere may be named so.
+    #[test]
+    fn review_a_host_named_eurouter_elsewhere_is_outside() {
+        for url in [
+            "https://eurouter.proxy.example.com/v1",
+            "https://api.eurouter.ai.example.net/v1",
+            "https://eurouter.ngrok.app/v1",
+        ] {
+            assert!(outside("custom", url).is_some(), "{url}: taken for EUrouter");
+        }
+        assert_eq!(place_of("custom", "https://api.eurouter.ai/api/v1"), Place::Europe);
+    }
+
     fn config_in(dir: &std::path::Path) -> Config {
         let mut config = Config::with_key("k".repeat(40));
         config.hermes.home = dir.join("hub").to_string_lossy().into_owned();

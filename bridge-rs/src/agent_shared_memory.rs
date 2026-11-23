@@ -535,6 +535,45 @@ mod tests {
         assert_eq!(page["always"]["lines"][0]["text"], "Alex aime le jazz.");
     }
 
+    /// Review 23/11 (red): what Bip handed over before (« ↪ Passé par Bip … » in MEMORY.md, in every prompt: Hermes'
+    /// memory block stays on with `user_profile_enabled: false`) is something it received from another agent. Gone to
+    /// an outside model, it gives it back like the rest; today it stays and goes to OpenAI with every turn.
+    #[test]
+    fn review_an_outside_model_gives_back_the_handovers_it_had() {
+        let (_dir, config) = place();
+        set_model(&config, "budget", EUROUTER);
+        set_model(&config, "gpt", EUROUTER);
+        let gpt = config.agent(Some("gpt")).unwrap().clone();
+        let memory = || {
+            std::fs::read_to_string(crate::agents_admin::profile_folder(&config, &gpt).join("memories/MEMORY.md"))
+                .unwrap_or_default()
+        };
+        crate::shared_memory::sync(&config, 1.0, None);
+        crate::guide::hand_over(&config, &gpt, "Bip", "Alex a deux enfants, Tiago et Maëlle.", "fr").unwrap();
+        assert!(memory().contains("Tiago"), "the handover of before: {}", memory());
+        set_model(&config, "gpt", CODEX);
+        assert_eq!(guard_at(&config, &gpt, 2.0), Changed { shared: true, notebook: true });
+        crate::shared_memory::sync(&config, 2.0, None);
+        assert!(!memory().contains("Tiago"), "still in its MEMORY.md, sent with every prompt: {}", memory());
+    }
+
+    /// Review 23/11 (red): « in doubt » is not « back on our providers ». A model the bridge cannot tell any more (its
+    /// config.yaml empty for a moment while it is rewritten, or `provider: custom` without its address — Hermes v0.23.1
+    /// then goes to CUSTOM_BASE_URL, else OpenRouter's address with an OpenRouter key: runtime_provider_backends.py
+    /// `_resolve_openrouter_runtime`) must not turn the shared memory and the Carnet back on.
+    #[test]
+    fn review_a_model_it_cannot_tell_gives_nothing_back() {
+        let (_dir, config) = place();
+        set_model(&config, "gpt", CODEX);
+        let gpt = config.agent(Some("gpt")).unwrap().clone();
+        guard_at(&config, &gpt, 1.0);
+        for unknown in ["", "model:\n  provider: custom\n  default: gpt-6.1\n"] {
+            set_model(&config, "gpt", unknown);
+            assert_eq!(guard_at(&config, &gpt, 2.0), Changed::default(), "turned back on for {unknown:?}");
+            assert!(!enabled(&config, "gpt") && !crate::notebook::enabled(&config, "gpt"), "{unknown:?}");
+        }
+    }
+
     #[test]
     fn hermes_shows_no_user_md_while_it_is_off() {
         let data = crate::agents_admin::pyyaml::load("model:\n  default: x\nmemory:\n  user_char_limit: 1375\n").unwrap();

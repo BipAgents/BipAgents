@@ -1584,6 +1584,26 @@ mod tests {
         assert!(now.contains(&"weather".to_string()), "the others stay askable: {now:?}");
     }
 
+    /// Review 23/11 (red): « Aussi pour… » on another agent's Carnet card never lists an agent on an outside model; a
+    /// ticked « Oui » there turns its Carnet on without the app's explanation, the very thing `askable` keeps out.
+    #[test]
+    fn review_also_never_offers_the_carnet_to_an_agent_on_an_outside_model() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = config_in(&dir, true);
+        config.hermes.home = dir.path().join("hub").to_string_lossy().into_owned(); // (never the machine's ~/.hermes)
+        for name in ["vie", "paul", "maison"] {
+            crate::notebook::set_enabled(&config, name, false).unwrap();
+        }
+        let paul = agent(&config, "paul");
+        let folder = crate::agents_admin::profile_folder(&config, &paul);
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::write(folder.join("config.yaml"), "model:\n  provider: openai-codex\n  default: gpt-6.1\n").unwrap();
+        let notebook = REGISTRY.iter().find(|e| e.id == "notebook").unwrap().item();
+        let names: Vec<String> = also_for(&config, &agent(&config, "vie"), &notebook).into_iter().map(|a| a.name).collect();
+        assert!(names.contains(&"maison".to_string()), "{names:?}");
+        assert!(!names.contains(&"paul".to_string()), "an outside model offered the Carnet: {names:?}");
+    }
+
     #[test]
     fn nothing_is_askable_when_the_place_does_not_offer_it_nor_for_agents_that_never_ask() {
         let dir = tempfile::tempdir().unwrap();

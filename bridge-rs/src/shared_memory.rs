@@ -1818,6 +1818,31 @@ mod tests {
         assert!(now["coach"].iter().all(|e| !e.contains("rachide") && !e.contains("nceinte")), "{:?}", now["coach"]);
     }
 
+    /// Review 23/11 (red): health as people say it is held back too (`touches_health`, the common list's only gate):
+    /// a psy, a cardiologist, a kind of pill, an illness named plainly, and the languages the bridge already speaks
+    /// (nl). Each of these joins every agent's USER.md today.
+    #[test]
+    fn review_health_as_people_say_it_never_joins_the_common_memory() {
+        let missed: Vec<&str> = [
+            "Alex voit un psy le jeudi.",
+            "Alex prend des antidépresseurs.",
+            "Alex a rendez-vous chez le cardiologue mardi.",
+            "Alex est sous insuline.",
+            "Alex fait de l'hypertension.",
+            "Alex est séropositif.",
+            "Alex a fait une fausse couche en mars.",
+            "Alex takes antidepressants.",
+            "Alex sees a cardiologist.",
+            "Alex va al psicólogo los lunes.",
+            "Alex is zwanger.",
+            "Alex gaat naar de huisarts.",
+        ]
+        .into_iter()
+        .filter(|t| !notebook::lexicon::touches_health(t))
+        .collect();
+        assert!(missed.is_empty(), "shared as if not health: {missed:?}");
+    }
+
     fn shared_off(config: &Config, agent: &str) {
         crate::agent_shared_memory::set(config, agent, false).unwrap();
     }
