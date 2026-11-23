@@ -1654,9 +1654,10 @@ mod tests {
         let config = config_in(&dir, "fr");
         let root = part_root(&config, Part::Main);
         for i in 0..25 {
-            // (review 1, R7: an alias that looks like health is never sent either)
+            // (review 1, R7: an alias that touches health is never sent either; review 2: a page that holds a health line
+            // is not sent at all — no_health_page_goes_to_the_model_in_any_language — so these only touch health)
             write_file(&root.join(format!("Sujets/Note {i:02}.md")),
-                       &format!("---\ntype: subject\naliases:\n  - Allergie aux noix {i}\n---\n# Note {i:02}\n\n## En bref\nQuelque chose {i}.\n\n## Autres\n- Allergique aux noix\n- Ligne {i} — *Quotidien, 2026-11-01*\n")).unwrap();
+                       &format!("---\ntype: subject\naliases:\n  - Pharmacie {i}\n---\n# Note {i:02}\n\n## En bref\nQuelque chose {i}.\n\n## Autres\n- Pharmacie de garde\n- Ligne {i} — *Quotidien, 2026-11-01*\n")).unwrap();
         }
         // never sent: a page that looks like health, one the person filed in « Autres », the tasks and the inbox
         write_file(&root.join("Sujets/Dentiste.md"), "---\ntype: subject\n---\n# Dentiste\n").unwrap();
@@ -1671,7 +1672,7 @@ mod tests {
         let input = night_input(&first);
         assert!(input.starts_with("1. Note 00 (subject)"), "{input}");
         assert!(input.contains("\n20. Note 19 (subject)") && input.contains("Ligne 3"), "{input}");
-        assert!(!input.to_lowercase().contains("noix"), "a health line is never sent: {input}");
+        assert!(!input.to_lowercase().contains("pharmacie"), "a health line is never sent: {input}");
         assert!(first.iter().all(|c| tk::chars(&c.excerpt) <= EXCERPT));
         // the person files one meanwhile: never overridden
         c::categorize(&config, &c::Target::Page { path: "Sujets/Note 04.md".into() }, &strings(&["money"]), &Who::you(&config)).unwrap().unwrap();
@@ -1826,7 +1827,7 @@ mod tests {
             write_file(&root.join(format!("Sujets/Note {i:03}.md")), &page(&format!("Note {i:03}"), &format!("Quelque chose {i}."))).unwrap();
         }
         for i in 0..70 {
-            write_file(&root.join(format!("Sujets/Truc {i:03}.md")), &format!("{}\n## Autres\n- Allergique aux noix\n",
+            write_file(&root.join(format!("Sujets/Truc {i:03}.md")), &format!("{}\n## Autres\n- Pharmacie de garde\n",
                 page(&format!("Truc {i:03}"), "Le jardin."))).unwrap();
         }
         for i in 0..10 {
@@ -1906,7 +1907,7 @@ mod tests {
         // never: a page placed surely, one that looks like health, the person's, one their rule placed; no health line
         assert!(sent.iter().all(|t| !t.starts_with("Rénovation") && !["Dentiste", "Bazar", "Bidule", "Cours de piano"].contains(&t.as_str())),
                 "{sent:?}");
-        assert!(inputs.iter().all(|u| !u.to_lowercase().contains("noix")));
+        assert!(inputs.iter().all(|u| !u.to_lowercase().contains("pharmacie")));
         // what one page sends: its excerpt, `EXCERPT` characters at most
         assert!(inputs.iter().flat_map(|u| u.lines()).all(|l| tk::chars(l) <= EXCERPT + 5));
         // kept only when the model gives a real category that changes the page: its « other » leaves the words' (Truc
