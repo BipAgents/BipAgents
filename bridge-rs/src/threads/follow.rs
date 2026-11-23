@@ -20,8 +20,10 @@
 //! - `next`: when to ask again (milliseconds; null: nothing more will change for this message). The thread's hint
 //!   (`GET /v1/threads/events?thread=`) is a reason to ask sooner.
 //!
-//! Only this turn's cards count: one asked before the person's words (placed before them, `after`) is not the
-//! quick talk's to hand over (5/11 and before: any waiting card made every quick talk open the app).
+//! Only the cards asked since the person's words count: one asked before them is not the quick talk's to hand over
+//! (5/11 and before: any waiting card made every quick talk open the app), even when it waits at the end of the turn
+//! the words were added to (a card goes after its turn's last words, timeline::place_waiting): a quick dictation sent
+//! into a turn is never held by a card it isn't about.
 
 use std::sync::LazyLock;
 
@@ -117,12 +119,22 @@ fn files(item: &Item) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// Whether a waiting row (its `after`, timeline::place_waiting) is placed at or after the item at `at`.
+/// Whether a waiting row is about the person's message at `at`: placed at or after it (its `after`,
+/// timeline::place_waiting) and, with a time, asked at or after it. A card waits at the end of the turn it was asked in
+/// (22/11), so one asked before a message added to that turn is placed after it too: it is not that message's, and a
+/// quick talk sent into the turn is never held by it (22/11 relecture 2, R1).
 fn of_this_turn(row: &Value, items: &[Item], at: usize) -> bool {
-    match row.get("after").and_then(Value::as_str) {
+    let placed = match row.get("after").and_then(Value::as_str) {
         Some(after) => items.iter().position(|i| i.id == after).is_some_and(|k| k >= at),
         None => false,
-    }
+    };
+    let said = items[at].at;
+    let asked = match row.get("created_at") {
+        Some(Value::Number(n)) => n.as_f64(),
+        Some(Value::String(s)) => crate::store::parse_since(s).ok().map(|d| d.timestamp_micros() as f64 / 1e6),
+        _ => None,
+    };
+    placed && (said <= 0.0 || asked.is_none_or(|asked| asked >= said))
 }
 
 /// Where the message `client_id` is, decided from the thread's items (with its kept sends), its waiting cards (placed:
@@ -272,6 +284,24 @@ mod tests {
         assert_eq!(state_of(&items, &[], &[], None, false, "QT-1", "t")["needs"], "task");
         let live = Live { run_id: "r1".into(), tool: Some("propose_agent".into()), answer: String::new() };
         assert_eq!(state_of(&thread(), &[], &[], Some(&live), false, "QT-1", "t")["needs"], "pick");
+    }
+
+    /// 22/11 relecture 2, R1: a card waits at the end of the turn it was asked in, so one asked before a message the
+    /// person added to that turn (a quick dictation into it) is placed after that message too. It is not that
+    /// message's: the quick talk is never held by it. A card asked since, or with no time, is.
+    #[test]
+    fn a_card_asked_before_words_added_to_its_turn_never_holds_their_quick_talk() {
+        let mut items = thread();
+        items[2].body.insert("added_during_run".into(), json!(true));
+        items.push(item("m_4", 4, 210.0, json!({"kind": "message", "role": "agent", "text": "J'attends ta réponse."})));
+        let earlier = json!({"command": "rm -rf build/", "after": "m_4", "created_at": 150.0});
+        assert_eq!(state_of(&items, std::slice::from_ref(&earlier), &[], None, false, "QT-1", "t")["state"], "reply");
+        let since = json!({"command": "rm -rf build/", "after": "m_4", "created_at": 205.0});
+        assert_eq!(state_of(&items, &[earlier.clone(), since], &[], None, false, "QT-1", "t")["needs"], "approval");
+        let untimed = json!({"command": "rm -rf build/", "after": "m_4"});
+        assert_eq!(state_of(&items, &[untimed], &[], None, false, "QT-1", "t")["needs"], "approval");
+        let question = json!({"after": "m_4", "created_at": "1970-01-01T00:02:30Z"});
+        assert_eq!(state_of(&items, &[], &[question], None, false, "QT-1", "t")["state"], "reply");
     }
 
     #[test]

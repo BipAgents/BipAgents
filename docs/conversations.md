@@ -256,9 +256,17 @@ Answer:
   rewind) still pages correctly: the cursor's position is used when its item is gone.
 - `anchor` is the `around` item when it was found (else null and the latest page is given).
 - **Where a waiting card goes** (thin apps, brick 5): each row of `pending.approvals` / `pending.questions` (any
-  waiting row with a time) carries `after`: the id of the last item that draws something said at or before its
-  `created_at`; null when it was asked before them all; the last item when it has no time. Both apps draw it right
-  after that item's row (above the rows shown when that item is not shown), every card, not only the first.
+  waiting row with a time) carries `after`: the id of the last item that draws something **in the turn it was asked
+  in** — its turn is the one of the last such item said at or before its `created_at`, up to the next message that
+  starts a turn (the person's or a peer's; one added to the answer in progress does not) or the first item of a turn
+  opened without the person's words (a task's hand-back, a routine, Hermes' process notice; a steer or the bridge's
+  `go_on` note does not). So a card still waiting stays under its turn's last words once the turn is over, where the
+  apps drew it while it ran (22/11, Alex: « sous la phrase »). Never a message drawn only by its reasoning (no app has
+  a line for its id). Null when it was asked before them all; the last item when it has no time. The rows come in the
+  order they were asked (`created_at`; without a time, last). Both apps draw it right after that item's row (above
+  the rows shown when that item is not shown), every card, not only the first, in the list's order. An answered card
+  is an item at its own time, not placed here. `GET /v1/threads/{t}/sends/{client_id}` (the quick talk) counts a card
+  as the message's only when it is placed after it and asked since it (follow.rs).
 - **How a page goes into the phone's window** (thin apps, 5/11; one rule on both apps): `reset: true` — the page is
   the window (latest, around, and below); else `joins: <cursor>` — an `after=` page goes after the held item at that
   cursor, a `before=` page in front of it, and what the phone held beyond that item is gone (rows the bridge no

@@ -110,7 +110,8 @@ impl Item {
     pub fn to_json(&self, thread: &str, debug: bool) -> Value {
         let mut out = Map::new();
         out.insert("id".into(), json!(self.id));
-        for (k, v) in &self.body {
+        // the bridge's own marks on an item (`_…`, e.g. `OPENS`) are never served
+        for (k, v) in self.body.iter().filter(|(k, _)| !k.starts_with('_')) {
             out.insert(k.clone(), v.clone());
         }
         if let Some(Value::Array(atts)) = out.get_mut("attachments") {
@@ -580,6 +581,8 @@ pub fn segment_items(
     let mut rehearsal = false;
     // where the bridge's note continuing a turn came (runs.rs `go_on`): a restart cuts only what follows it
     let mut continued_at = 0;
+    // where a turn opened without the person's words starts (the item it says first gets `OPENS`)
+    let mut opened = Vec::new();
     for (place, shown) in in_place_compaction(rows) {
         let (row, place) = (&rows[shown], &rows[place]);
         let id = message_id(agent, session, row);
@@ -630,7 +633,12 @@ pub fn segment_items(
                         continue;
                     }
                     // a photo sent alone still is the person's
-                    Ok(None) if images == 0 => continue,
+                    Ok(None) if images == 0 => {
+                        if opens_turn(row, &raw) {
+                            opened.push(items.len());
+                        }
+                        continue;
+                    }
                     Ok(None) => (String::new(), false),
                     Ok(Some(found)) => {
                         rehearsal = false;
@@ -730,6 +738,11 @@ pub fn segment_items(
                 }
             }
             _ => {}
+        }
+    }
+    for at in opened {
+        if let Some(item) = items.get_mut(at) {
+            item.body.insert(OPENS.into(), json!(true));
         }
     }
     if turn.is_empty() {
@@ -923,12 +936,42 @@ pub fn draws(item: &Item) -> bool {
     }
 }
 
+/// The bridge's mark (never served) on the first item of a turn Hermes or the bridge opened without the person's words:
+/// a task's hand-back, a routine's run, Hermes' notice of a background process, a purchase rehearsal. Such a turn ends
+/// the one before it for the waiting cards (`place_waiting`; 22/11 relecture 2, R5: a card went under the words of a
+/// task's hand-back hours later, under another day).
+pub const OPENS: &str = "_opens";
+
+/// A row of the person's role with nothing of theirs that opens a turn: the input of a run Hermes or the bridge
+/// started (notes only, Hermes' process notice). Never a steer within a turn (the bridge's, wrapped by Hermes), nor
+/// the bridge's note going on with the turn after a stop (`go_on`).
+fn opens_turn(row: &Row, raw: &str) -> bool {
+    row.display_kind.as_deref() != Some("steer")
+        && steer_words(NOTES.replace_all(raw, "").trim()).is_none()
+        && !raw.contains(crate::go_on::MARK)
+}
+
+/// An item a waiting card can go after: one the apps draw a line for under its own id. Not a message drawn only by
+/// its reasoning: its line is `<id>.r`, no app has one for `<id>` (22/11 relecture 2, R6: a card after one went to the
+/// top of the thread).
+fn anchors(item: &Item) -> bool {
+    draws(item)
+        && !(item.kind() == "message"
+            && item.text().trim().is_empty()
+            && item.body.get("attachments").and_then(Value::as_array).is_none_or(|a| a.is_empty()))
+}
+
 /// Where each waiting row (a card, a question, any `pending` item that has a time) goes among the thread's items, as
-/// the apps draw it: `after` — the id of the last item that draws something said at or before its `created_at` (Unix
-/// seconds, or ISO), null when it was asked before all of them; a row without a time goes after the last item. The
-/// apps draw it there (5/11: the iPhone placed cards by time itself, Android showed one card at the bottom).
+/// the apps draw it: `after` — the id of the last item that draws something in the turn it was asked in (its turn: the
+/// one of the last drawing item said at or before its `created_at`, Unix seconds or ISO), null when it was asked before
+/// all of them; a row without a time goes after the last item. The apps draw it there (5/11: the iPhone placed cards
+/// by time itself, Android showed one card at the bottom). Under the turn's last words, not at its own time: while the
+/// turn runs the apps draw a waiting card at its end, under the words written after it (`ask_phone_exit` answers at
+/// once and the agent writes on), and it stays there once the turn is over (22/11, Alex: « Oui, sous la phrase »; at
+/// its time, it jumped up between the call and the sentence when the turn ended). An answered card is an item at its
+/// own time (`kept`), not placed here.
 pub fn place_waiting(items: &[Item], rows: &mut [Value]) {
-    let last = items.iter().rev().find(|i| draws(i)).map(|i| i.id.clone());
+    let last = items.iter().rev().find(|i| anchors(i)).map(|i| i.id.clone());
     for row in rows.iter_mut() {
         let Some(fields) = row.as_object_mut() else { continue };
         let asked = match fields.get("created_at") {
@@ -937,12 +980,51 @@ pub fn place_waiting(items: &[Item], rows: &mut [Value]) {
             _ => None,
         };
         let after = match asked.filter(|a| *a > 0.0) {
-            // in display order: the last drawing item said by then (an item without its time counts as earlier)
-            Some(at) => items.iter().rev().find(|i| draws(i) && i.at <= at).map(|i| i.id.clone()),
+            // in display order: the last drawing item said by then (an item without its time counts as earlier), then
+            // the last drawing one of its turn
+            Some(at) => {
+                items.iter().rposition(|i| anchors(i) && i.at <= at).map(|k| items[turn_end(items, k)].id.clone())
+            }
             None => last.clone(),
         };
         fields.insert("after".into(), after.map_or(Value::Null, Value::String));
     }
+}
+
+/// The last item a card can go after in the turn of item `k`: from `k` up to the next message that starts a turn (the
+/// person's or a peer's; one added to the answer in progress, a steer, does not) or the first item of a turn opened
+/// without the person's words (`OPENS`).
+fn turn_end(items: &[Item], k: usize) -> usize {
+    let mut end = k;
+    for (n, item) in items.iter().enumerate().skip(k + 1) {
+        let person = item.kind() == "message"
+            && matches!(item.body.get("role").and_then(Value::as_str), Some("person" | "peer"))
+            && item.body.get("added_during_run") != Some(&json!(true));
+        if person || item.body.contains_key(OPENS) {
+            break;
+        }
+        if anchors(item) {
+            end = n;
+        }
+    }
+    end
+}
+
+/// The waiting rows in the order they were asked (`created_at`; one without a time after them all, the list's order
+/// kept among equals): two cards of one turn share their `after`, and both apps draw them in the list's order (22/11
+/// relecture 2, R4: Hermes' first by time, then the bridge's by kind).
+pub fn by_time(rows: &mut [Value]) {
+    let at = |row: &Value| match row.get("created_at") {
+        Some(Value::Number(n)) => n.as_f64(),
+        Some(Value::String(s)) => crate::store::parse_since(s).ok().map(|d| d.timestamp_micros() as f64 / 1e6),
+        _ => None,
+    };
+    rows.sort_by(|a, b| match (at(a), at(b)) {
+        (Some(x), Some(y)) => x.total_cmp(&y),
+        (Some(_), None) => std::cmp::Ordering::Less,
+        (None, Some(_)) => std::cmp::Ordering::Greater,
+        (None, None) => std::cmp::Ordering::Equal,
+    });
 }
 
 /// The day of each item of a thread where the person is (`zone`), and whether it is the first of that day: None for an
@@ -1822,6 +1904,128 @@ not from your person: you have read the page 5 times\n[/OUT-OF-BAND USER MESSAGE
         let after: Vec<Value> = rows.iter().map(|r| r["after"].clone()).collect();
         // m_3 draws nothing: the card asked at 1030 goes after m_2
         assert_eq!(after, vec![json!("m_2"), Value::Null, json!("m_4"), json!("m_4"), json!("m_4")]);
+    }
+
+    /// 22/11 (Alex, « Oui, sous la phrase »): `ask_phone_exit` answers at once and the agent writes its sentence after
+    /// the card. While the turn runs the apps draw the card at its end, under the words; once it is over, a card still
+    /// waiting stays under the turn's last words (no jump up between the call and the sentence, where its time put it).
+    /// The turn goes on across a message added to it (a steer) and ends at the person's next one; rows that draw
+    /// nothing don't count.
+    #[test]
+    fn a_waiting_card_stays_under_the_last_words_of_its_turn() {
+        let all = vec![
+            said("m_1", 1, 1000.0, json!({"kind": "message", "role": "person", "text": "Passe par mon téléphone"})),
+            said("m_2", 2, 1010.0, json!({"kind": "message", "role": "agent", "text": "ameli.fr me bloque."})),
+            said("m_2.t0", 2, 1011.0, json!({"kind": "tool", "tool": {"name": "ask_phone_exit", "status": "done"}})),
+            said("m_3", 3, 1030.0, json!({"kind": "message", "role": "agent", "text": "Je t'ai envoyé une carte."})),
+            said(
+                "m_4",
+                4,
+                1040.0,
+                json!({"kind": "message", "role": "person", "text": "Vas-y", "added_during_run": true}),
+            ),
+            said(
+                "m_5",
+                5,
+                1050.0,
+                json!({"kind": "message", "role": "agent", "text": "D'accord, j'attends ta réponse."}),
+            ),
+            said("m_6", 6, 1060.0, json!({"kind": "message", "role": "agent", "text": " "})),
+            said("m_7", 7, 1100.0, json!({"kind": "message", "role": "person", "text": "Et la facture ?"})),
+            said("m_8", 8, 1110.0, json!({"kind": "message", "role": "agent", "text": "La voici."})),
+        ];
+        let mut rows = vec![
+            // asked during the call: under the turn's last words (m_5), not between the call and the sentence
+            json!({"id": "a_exit", "created_at": 1012.0}),
+            // asked before the turn's first word: the same
+            json!({"id": "a_early", "created_at": 1005.0}),
+            // asked in the next turn: under its own last words
+            json!({"id": "a_next", "created_at": 1105.0}),
+            json!({"id": "a_before", "created_at": 500.0}),
+            json!({"id": "q_1", "kind": "question", "created_at": 1012.0}),
+        ];
+        place_waiting(&all, &mut rows);
+        let after: Vec<Value> = rows.iter().map(|r| r["after"].clone()).collect();
+        assert_eq!(after, vec![json!("m_5"), json!("m_5"), json!("m_8"), Value::Null, json!("m_5")]);
+        // the turn going on (its last words not stored yet): its last stored row, at its end as the apps draw it
+        let mut rows = vec![json!({"id": "a_exit", "created_at": 1012.0})];
+        place_waiting(&all[..3], &mut rows);
+        assert_eq!(rows[0]["after"], "m_2.t0");
+    }
+
+    /// 22/11 relecture 2, R6: a turn whose last message holds only its reasoning (a cut turn, an empty answer). Its line
+    /// is `<id>.r`, no app has one for its id: a card placed after it went to the top of the thread. It goes after the
+    /// last line of its turn the apps do draw, at its time too.
+    #[test]
+    fn a_waiting_card_never_goes_after_a_message_drawn_only_by_its_reasoning() {
+        let all = vec![
+            said("m_1", 1, 1000.0, json!({"kind": "message", "role": "person", "text": "Passe par mon téléphone"})),
+            said("m_2", 2, 1010.0, json!({"kind": "message", "role": "agent", "text": "Je t'ai envoyé une carte."})),
+            said("m_3", 3, 1020.0, json!({"kind": "message", "role": "agent", "text": "", "reasoning": "J'attends."})),
+        ];
+        let mut rows = vec![
+            json!({"id": "a_1", "created_at": 1005.0}),
+            json!({"id": "a_2", "created_at": 1025.0}),
+            json!({"id": "a_3"}),
+        ];
+        place_waiting(&all, &mut rows);
+        let after: Vec<Value> = rows.iter().map(|r| r["after"].clone()).collect();
+        assert_eq!(after, vec![json!("m_2"), json!("m_2"), json!("m_2")]);
+    }
+
+    /// 22/11 relecture 2, R5: a turn Hermes or the bridge opens without the person's words (a task's hand-back, a
+    /// routine) ends the one before it for the waiting cards: a card asked in the person's turn stays under that turn's
+    /// last words, never under the hand-back's, hours later. Its first item carries the bridge's mark, never served. A
+    /// steer of the bridge's within a turn, or its note going on after a stop, opens none.
+    #[test]
+    fn a_turn_opened_without_the_persons_words_ends_the_one_before_for_the_waiting_cards() {
+        let rows = vec![
+            row(1, "user", json!("<!--bip:now x-->Range mes mails")),
+            row(2, "assistant", json!("Je regarde.")),
+            row(3, "user", json!("<!--bip:task\nYour background work « Tri » is done.-->")),
+            row(4, "assistant", json!("La tâche est finie : 3 mails archivés.")),
+            row(5, "user", json!("[OUT-OF-BAND USER MESSAGE from the user]\n[bipagents:handoff] hand over\n[/OUT-OF-BAND USER MESSAGE]")),
+            row(6, "assistant", json!("Je continue.")),
+            row(7, "user", json!("[bipagents:go_on] Go on where you stopped.")),
+            row(8, "assistant", json!("Voilà la suite.")),
+        ];
+        let got = items(&rows);
+        let words: Vec<&str> = got.iter().map(|i| i.text()).collect();
+        assert_eq!(
+            words,
+            vec![
+                "Range mes mails",
+                "Je regarde.",
+                "La tâche est finie : 3 mails archivés.",
+                "Je continue.",
+                "Voilà la suite."
+            ]
+        );
+        // the bridge's mark: never in what the apps read
+        assert!(got.iter().all(|i| !i.to_json("t", false).as_object().unwrap().keys().any(|k| k.starts_with('_'))));
+        let mut cards = vec![
+            json!({"id": "a_person", "created_at": 1002.5}), // in the person's turn
+            json!({"id": "a_task", "created_at": 1004.5}),   // in the hand-back's turn (steer and go-on within it)
+        ];
+        place_waiting(&got, &mut cards);
+        assert_eq!(cards[0]["after"], json!(got[1].id), "{:?}", words);
+        assert_eq!(cards[1]["after"], json!(got[4].id));
+    }
+
+    /// The turn's end, as the apps draw it, also when the turn failed or was stopped (Hermes' line, a notice) and when a
+    /// peer (another agent in Bot Mode) opens the next turn (22/11 relecture 2, R8).
+    #[test]
+    fn a_waiting_card_stays_under_a_failed_turns_notice_and_above_a_peers_message() {
+        let all = vec![
+            said("m_1", 1, 1000.0, json!({"kind": "message", "role": "person", "text": "Réserve"})),
+            said("m_2", 2, 1010.0, json!({"kind": "message", "role": "agent", "text": "Je regarde."})),
+            said("m_3", 3, 1020.0, json!({"kind": "notice", "notice": {"code": "failed_turn", "text": "Interrompu."}})),
+            said("m_4", 4, 1030.0, json!({"kind": "message", "role": "peer", "text": "Bonjour Vie", "from": "budget"})),
+            said("m_5", 5, 1040.0, json!({"kind": "message", "role": "agent", "text": "Bonjour Budget"})),
+        ];
+        let mut rows = vec![json!({"id": "a_1", "created_at": 1012.0}), json!({"id": "a_2", "created_at": 1035.0})];
+        place_waiting(&all, &mut rows);
+        assert_eq!((rows[0]["after"].clone(), rows[1]["after"].clone()), (json!("m_3"), json!("m_5")));
     }
 
     /// Review instant-ack (19/11): Hermes joins the steers it holds before its next step with newlines into ONE user
