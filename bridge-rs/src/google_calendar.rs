@@ -8,10 +8,14 @@
 //! agent has no other calendar), `calendar_update` and `calendar_delete` act on its events: ids
 //! `google:<calendar>:<event>`, both percent-encoded (a calendar's id holds `@` and `#`), the primary one `primary`.
 //!
-//! **Every write asks the person first**, on the bridge's card (person_ok.rs): « Oui » (this once), « Oui, pour cette
-//! conversation » (adds and changes, for the rest of that Hermes session) or « Non »; a deletion is asked each time
-//! (audit 1.3, as the phone's). Never silently: the kind is critical (approval_level.rs), asked at every level; a
-//! turn nobody follows holds the card (held_approvals.rs) and its « Oui » lets that very call through once.
+//! **Every write asks the person first**, on the bridge's card (person_ok.rs): « Oui » (this once), « Toujours
+//! autoriser » (adds and changes in the primary calendar, Alex 23/11: in place of « Oui, pour cette conversation »)
+//! or « Non »; a deletion is asked each time (audit 1.3, as the phone's), and so is a write in another calendar
+//! (shared by someone else, review 2 of 21/11). Never silently: the kind is critical (approval_level.rs), asked at
+//! every level; only the person's own « Toujours » for that agent lets its adds and changes in the primary calendar
+//! through, with no card from then on (routines and restarts too), each an « auto » line marked « toujours autorisé »;
+//! it goes when the agent is taken out of the list or Google Calendar is disconnected. Without it, a turn nobody
+//! follows holds the card (held_approvals.rs) and its « Oui » lets that very call through once.
 //!
 //! The sign-in reuses Google Drive's (drives.rs): the same Google clients (`[drives.google_drive]`: the iOS client and
 //! its redirect, Android's Web client from bridge.toml, the guichet or the person's choice), PKCE, the same renewal
@@ -359,17 +363,21 @@ pub async fn set_agents(config: &Config, agents: &[String]) -> ApiResult<(Value,
     // an agent deleted since the app listed them: left out, never a refusal (as drives.rs)
     let present: Vec<String> = agents.iter().filter(|a| config.agent(Some(a.as_str())).is_some()).cloned().collect();
     let agents = agents_checked(config, &present)?;
-    let _guard = connections::LOCK.lock().await;
-    let store = connections::store_of(config);
-    let mut stored = store.read()?;
-    let link = stored.google_calendar.as_mut().ok_or_else(not_connected)?;
-    let before = std::mem::replace(&mut link.agents, agents.clone());
-    let removed: Vec<String> = before.iter().filter(|a| !agents.contains(a)).cloned().collect();
-    let changed = agents.iter().filter(|a| !before.contains(a)).chain(removed.iter()).cloned().collect();
-    let shown = view(config, Some(&*link));
-    store.write(&stored)?;
-    // their « Oui, pour cette conversation » goes with the calendar: chosen again, they are asked again
-    crate::person_ok::forget_sessions(config, crate::person_ok::CALENDAR_WRITE, Some(&removed));
+    let (shown, changed, removed) = {
+        let _guard = connections::LOCK.lock().await;
+        let store = connections::store_of(config);
+        let mut stored = store.read()?;
+        let link = stored.google_calendar.as_mut().ok_or_else(not_connected)?;
+        let before = std::mem::replace(&mut link.agents, agents.clone());
+        let removed: Vec<String> = before.iter().filter(|a| !agents.contains(a)).cloned().collect();
+        let changed: Vec<String> =
+            agents.iter().filter(|a| !before.contains(a)).chain(removed.iter()).cloned().collect();
+        let shown = view(config, Some(&*link));
+        store.write(&stored)?;
+        (shown, changed, removed)
+    };
+    // their « Toujours » goes with the calendar: chosen again, they are asked again
+    revoke_always(config, Some(&removed)).await;
     Ok((shown, changed))
 }
 
@@ -391,13 +399,21 @@ pub async fn disconnect(config: &Config) -> ApiResult<(Value, Vec<String>)> {
         let shared = Slot::Calendar.other_google(&stored, &link.client);
         (link, shared)
     };
-    // every « Oui, pour cette conversation » given for it: a new connection asks again
-    crate::person_ok::forget_sessions(config, crate::person_ok::CALENDAR_WRITE, None);
+    // every « Toujours » given for it: a new connection asks again
+    revoke_always(config, None).await;
     let ep = drives::endpoints(config, Provider::Google);
     let revoked =
         !shared && drives::revoke(Provider::Google, ep.as_ref().and_then(|e| e.revoke.as_deref()), &link.tokens).await;
     tracing::info!(revoked, shared, "google calendar: disconnected");
     Ok((json!({"ok": true, "revoked": revoked}), link.agents))
+}
+
+/// The « Toujours » of `agents` (None: every agent) for the calendar's adds and changes taken back, their
+/// personalities rendered again (approval_level.rs `always_rule`).
+async fn revoke_always(config: &Config, agents: Option<&[String]>) {
+    for agent in crate::approval_level::revoke_always_of(config, crate::person_ok::CALENDAR_WRITE, agents) {
+        crate::approval_level::granted_now(config, &agent).await;
+    }
 }
 
 /// The switch turned off with the calendar still connected: forgotten and revoked at the bridge's start.
@@ -421,7 +437,7 @@ pub async fn forget_agent(config: &Config, agent: &str) {
     let Some(link) = stored.google_calendar.as_mut() else { return };
     let before = link.agents.len();
     link.agents.retain(|a| a != agent);
-    crate::person_ok::forget_sessions(config, crate::person_ok::CALENDAR_WRITE, Some(&[agent.to_string()]));
+    crate::approval_level::revoke_always_of(config, crate::person_ok::CALENDAR_WRITE, Some(&[agent.to_string()]));
     if link.agents.len() != before {
         if let Err(e) = store.write(&stored) {
             tracing::warn!(error = %e, "google calendar: a deleted agent can't be taken out");
@@ -1140,16 +1156,30 @@ pub async fn write_call(state: &AppState, agent: &AgentConfig, name: &str, argum
     };
     detail += &format!(" ({place})\n{}", crate::cards::quoted(&planned.title, 300));
     let delete = planned.tool == "calendar_delete";
+    let summary = sentence(&lang, planned.tool, &shown, &planned.title);
+    // a deletion is asked each time (audit 1.3); adds and changes may be allowed for good (Alex 23/11), in the primary
+    // calendar only: another one (shared by someone else) is asked each time (review 2, 21/11). The family's agent and
+    // a project agent never get here (`offered`), and grant_always refuses them.
+    let may_always = !delete && planned.calendar_name.is_none();
+    if may_always && crate::approval_level::granted(&config, &agent.name, crate::person_ok::CALENDAR_WRITE) {
+        // the person's « Toujours » for this agent (never their level): no card, in routines too
+        let session = crate::runs::CALL_SESSION.try_with(|s| s.clone()).ok().flatten().filter(|s| !s.is_empty());
+        crate::approval_level::record_always(&config, &agent.name, crate::person_ok::CALENDAR_WRITE, &summary, session);
+        tracing::info!(agent = %agent.name, tool = planned.tool, "google calendar: always allowed by the person");
+        return Some(apply(&config, &api, &planned).await);
+    }
     let card = crate::person_ok::Card {
         kind: if delete { crate::person_ok::CALENDAR_DELETE } else { crate::person_ok::CALENDAR_WRITE },
         tool: planned.tool,
         command: planned.command(),
-        summary: sentence(&lang, planned.tool, &shown, &planned.title),
+        summary,
         detail,
-        always: None,
-        // a deletion is asked each time (audit 1.3); adds and changes may be allowed for the conversation, in the
-        // primary calendar only: another one (shared by someone else) is asked each time (review 2, 21/11)
-        session: !delete && planned.calendar_name.is_none(),
+        // « Toujours autoriser »: kept for this agent by the person's answer (app.rs `approve`, its `bip_always_kind`)
+        always: if may_always {
+            crate::approval_level::always_button(&lang, crate::person_ok::CALENDAR_WRITE)
+        } else {
+            None
+        },
     };
     use crate::person_ok::Answer;
     let refused = |a: &'static str, b: &'static str| if delete { a } else { b };

@@ -1,9 +1,9 @@
 """The bridge's side of the first form sent to a site (security audit 1.2, 17/11; Alex « Oui, 1re fois par site »):
 `ask_to_send` on the vault's entry, after the agent's browser refused a form (test_form_send_chrome.py). One card
-« Envoyer sur ce site ? » listed with the approvals (`bip-ok-…`, « Oui » / « Non » and « Toujours pour ce site »):
+« Envoyer sur ce site ? » listed with the approvals (`bip-ok-…`, « Oui » / « Non » and « Toujours autoriser »):
 
 - « Oui »: one sending granted to the agent's browser (`send-sites.json` beside its `busy`), nothing kept for good;
-- « Toujours pour ce site »: the site in « Sites autorisés » (validated for sending), and in the browser's file;
+- « Toujours autoriser »: the site in « Sites autorisés » (validated for sending), and in the browser's file;
 - « Non »: nothing granted, the agent told to stop.
 
 No Chromium needed: the call only needs the agent's browser set up (its ports)."""
@@ -58,7 +58,7 @@ def test_oui_grants_one_sending_toujours_keeps_the_site_and_non_nothing(bridges,
         "Send to this site? Vie wants to send a form to contact.example: if you say yes, its sendings to "
         "contact.example go through without asking you again for 10 minutes"), card
     assert card["choices"] == ["once", "deny"], card
-    assert card["bip_always"] in ("Toujours pour ce site", "Always for this site"), card
+    assert card["bip_always"] in ("Toujours autoriser", "Always allow"), card   # every card's words (Alex 23/11)
     assert card["bip_detail"].endswith("« un message au service client »"), card
     assert result["isError"] is False and "do the same step again" in result["content"][0]["text"], result
     file = allowed(bridge)
@@ -73,7 +73,7 @@ def test_oui_grants_one_sending_toujours_keeps_the_site_and_non_nothing(bridges,
     result, _ = answered(bridge, "forum.example", "deny")
     assert not_done(result) and "said no" in result["content"][0]["text"], result
     assert "forum.example" not in json.dumps(allowed(bridge))
-    # « Toujours pour ce site »: in « Sites autorisés » and in the browser's file; asked again, no card
+    # « Toujours autoriser »: in « Sites autorisés » and in the browser's file; asked again, no card
     result, _ = answered(bridge, "forum.example", "always")
     assert result["isError"] is False and "for good" in result["content"][0]["text"], result
     assert "forum.example" in allowed(bridge)["always"]

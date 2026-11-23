@@ -2,7 +2,7 @@
 1re fois par site »), in a real Chromium behind the stand-in for stealth-browser-mcp (fixtures/signup_guard): a contact
 form posting to a site that records what it gets (fixtures/form_send/contact.html). Reading (its search form) stays
 free; its send button or Enter in its field is refused with what to do (`ask_to_send`) until
-the person's « Oui » (a one-use grant beside `busy`, as form_send.rs writes it), then once; « Toujours pour ce site »
+the person's « Oui » (a one-use grant beside `busy`, as form_send.rs writes it), then once; « Toujours autoriser »
 every time. Each test says what should happen.
 
 Needs a Chromium (`BIP_CHROME`) and the proxy (`BIP_BROWSER_MCP`): skipped without."""
@@ -120,7 +120,7 @@ def test_the_persons_yes_sends_it_once_and_always_every_time(browser):
     browser.tool("navigate", url=browser.contact)
     browser.tool("type_text", selector="#message", text="encore")
     assert browser.tool("click_element", selector="#go").startswith(ASKED)
-    # « Toujours pour ce site »
+    # « Toujours autoriser »
     allow(browser, always=["127.0.0.1"])
     said = browser.tool("click_element", selector="#go")
     time.sleep(1)

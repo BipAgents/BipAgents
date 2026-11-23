@@ -120,7 +120,7 @@ async fn a_local_vault_is_read_at_once_and_written_only_after_the_persons_yes() 
     assert_eq!(card["bip_summary"], "Coach wants to create the note « Cadeaux » in Obsidian");
     assert_eq!(card["bip_detail"], "Folder: Idées\nNew note:\n- un livre pour Chi");
     assert_eq!(card["bip_ok"]["kind"], "service_write");
-    assert_eq!(card["bip_always"], "Always let Coach write in Obsidian");
+    assert_eq!(card["bip_always"], "Always allow", "the « Toujours » button of every card (Alex 23/11)");
     assert_eq!(std::fs::read_to_string(vault.join("Idées/Cadeaux.md")).unwrap(), "- un livre pour Chi");
     let (failed, said) = tool(&app, "obsidian_create", json!({"note": "Idées/Cadeaux", "text": "x"})).await;
     assert!(failed && said.contains("exists already"), "{said}");
