@@ -686,7 +686,7 @@ pub fn today(config: &Config, lang: &str) -> Value {
                           "at": e.get("time").cloned().unwrap_or_else(|| e["at"].clone()), "text": toast(lang, &[], set),
                           "space": set}));
     }
-    items.sort_by(|a, b| tk::str_or_empty(b.get("at")).cmp(&tk::str_or_empty(a.get("at"))));
+    items.sort_by_key(|i| std::cmp::Reverse(tk::str_or_empty(i.get("at"))));
     view["items"] = json!(items);
     view
 }
