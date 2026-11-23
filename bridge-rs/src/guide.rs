@@ -100,7 +100,7 @@ pub const HANDOVERS_KEPT: usize = 3;
 /// past it, and the app showed « Ça n'a pas pu être fait » (its guide notice, under every conversation) although the
 /// six were made.
 pub const TEAM_ANSWER_WAIT: std::time::Duration = std::time::Duration::from_secs(240);
-const HANDOVER_MARK: &str = "↪ ";
+pub const HANDOVER_MARK: &str = "↪ ";
 
 /// Names that say nothing about the agent (lowercase, accents kept).
 const GENERIC_NAMES: [&str; 22] = [
@@ -1048,9 +1048,9 @@ pub(crate) fn hand_over(
     if text.is_empty() {
         return Ok(());
     }
-    if crate::agent_shared_memory::turned_off(config, &agent.name) {
-        // its « Mémoire partagée » off (an outside model by default): what another agent knew of the person is not
-        // passed on into its memory (agent_shared_memory.rs); the person tells it what it needs
+    if crate::agent_shared_memory::protected(config, agent) {
+        // its « Mémoire partagée » off, or a model outside (or that the bridge cannot tell): what another agent knew of
+        // the person is not passed on into its memory (agent_shared_memory.rs); the person tells it what it needs
         tracing::info!(target: "bipbridge::guide", agent = %agent.name, "shared memory off: handover not kept");
         return Ok(());
     }

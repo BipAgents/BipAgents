@@ -23,7 +23,7 @@ def with_spaces(bridges, fakes):
     bridge.state_dir.mkdir(parents=True, exist_ok=True)
     (bridge.state_dir / "project-agents.json").write_text(json.dumps({"projects": {"coach": {
         "created": time.time(), "ends": time.time() + 86400, "archived": None, "from": None, "lang": "fr"}}}))
-    (hub / "config.yaml").write_text("model:\n  provider: custom\n  default: glm\n")
+    (hub / "config.yaml").write_text("model:\n  provider: custom\n  default: glm\n  base_url: http://gpu:8888/v1\n")   # the person's own server
     (hub / ".env").write_text("CUSTOM_MODEL_API_KEY=sk-hub\n")
     folder = profile(hub, "coach")
     (folder / "SOUL.md").write_text("Tu es Coach.\n")
@@ -83,7 +83,7 @@ def test_adopt_serves_what_an_export_brought(bridges, fakes):
     bridge's tools; the profiles no agent serves yet are claimed."""
     bridge = bridges.new()
     hub = managed_install(bridge, fakes, agents=("coach",))
-    profile(hub, "coach").joinpath("config.yaml").write_text("model:\n  provider: custom\n")
+    profile(hub, "coach").joinpath("config.yaml").write_text("model:\n  provider: lmstudio\n")   # the person's own (custom without its address: outside)
     profile(hub, "jardin").joinpath("SOUL.md").write_text("Tu es Jardin.")
     bridge.write_config()
     out = bridge.cli("adopt")

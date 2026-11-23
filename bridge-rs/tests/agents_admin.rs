@@ -75,6 +75,10 @@ fn managed_config(dir: &Path, hub: &str) -> (SharedConfig, PathBuf) {
     let mut d = config_dict(dir, &Urls::default());
     d["hermes"] = json!({"bin": "/opt/hermes", "home": dir.join(".hermes").to_string_lossy(),
                          "hub_url": hub, "public_hub_url": "https://mini.ts.net:8642"});
+    // the install's model: the person's own (a model the bridge cannot tell is protected as outside:
+    // agent_shared_memory.rs)
+    std::fs::create_dir_all(dir.join(".hermes")).unwrap();
+    std::fs::write(dir.join(".hermes/config.yaml"), "model:\n  provider: lmstudio\n").unwrap();
     let config = parse_config(&d, Some(&path.to_string_lossy())).unwrap();
     (SharedConfig::new(config), path)
 }
@@ -1008,7 +1012,8 @@ async fn routes_for_settings_thinking_and_model() {
     // « Initiative » (agent_proactive.rs): basic until the person changes it; its model not benched yet
     assert_eq!(got.json()["proactive"], json!({"level": "basic", "smart_ok": false}));
     // « Mémoire partagée » (agent_shared_memory.rs): on, its model the person's own (a host of the local network)
-    assert_eq!(got.json()["shared_memory"], json!({"on": true, "outside": null}));
+    assert_eq!(got.json()["shared_memory"]["on"], json!(true));
+    assert_eq!(got.json()["shared_memory"]["outside"], Value::Null);
     assert_eq!(got.json()["answer_style"], json!({"style": "short", "custom": "", "custom_max": 300}));
     assert_eq!(got.json()["soul"], "Tu es Wellness.");
     assert_eq!(got.json()["language"], "fr");

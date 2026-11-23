@@ -28,6 +28,16 @@ def settings(bridge, agent):
     return resp.json()
 
 
+def shared(values):
+    """`shared_memory` of the settings, `outside.since` (when the protection applied: a time) checked and left out."""
+    shown = values.get("shared_memory")
+    if shown and shown.get("outside"):
+        outside = dict(shown["outside"])
+        assert isinstance(outside.pop("since"), (int, float)), shown
+        shown = {**shown, "outside": outside}
+    return shown
+
+
 def put(bridge, agent, body):
     return bridge.put(f"/v1/agents/{agent}/shared-memory", headers=AUTH, json=body)
 
@@ -95,7 +105,7 @@ def test_the_contract_s_settings_and_answers(bridges, fakes):
         if case["stored"] is not None:
             assert put(bridge, agent, {"on": case["stored"]}).status_code == 200, case["name"]
         shown = settings(bridge, agent)
-        assert shown.get("shared_memory") == case["shared_memory"], (case["name"], shown.get("shared_memory"))
+        assert shared(shown) == case["shared_memory"], (case["name"], shown.get("shared_memory"))
         if case["notebook"] is not None:
             assert shown["notebook"] == case["notebook"], (case["name"], shown["notebook"])
 
@@ -115,7 +125,7 @@ def test_off_gives_back_what_it_received_and_hermes_shows_it_no_user_md(bridges,
     assert not (memories(home, "coach") / DAY_COPY).exists()
     assert user_profile(home, "coach") is False
     assert wait_until(lambda: refreshed(bridge, "coach"))
-    assert settings(bridge, "coach")["shared_memory"] == {"on": False, "outside": None}
+    assert shared(settings(bridge, "coach")) == {"on": False, "circle": False, "outside": None}
     soul = (home / "profiles" / "coach" / "SOUL.md").read_text()
     assert "bipagents:shared-memory" not in soul, "the shared memory block out of its personality"
     # nothing given any more
@@ -168,9 +178,11 @@ def test_health_never_joins_the_common_memory(bridges, fakes):
 def test_an_agent_created_on_an_outside_model_starts_with_both_off(bridges, fakes):
     bridge, home = place(bridges, fakes, hub_model=CODEX, agents=("Coach",))
     shown = settings(bridge, "coach")
-    assert shown["shared_memory"] == {"on": False, "outside": {"provider": "openai-codex", "label": "OpenAI"}}
-    assert shown["notebook"] == {"on": False}
+    assert shared(shown) == {"on": False, "circle": False, "outside": {"provider": "openai-codex", "label": "OpenAI"}}
+    assert shown["notebook"] == {"on": False} and shown["health"]["on"] is False
     assert user_profile(home, "coach") is False
+    rules = bridge.get("/v1/agent-rules", headers=AUTH).json()
+    assert "coach" in rules["aside"], "its links with the other agents off (« à l'écart »)"
     # turned back on, knowingly: on, and kept at the next start
     assert put(bridge, "coach", {"on": True}).json() == {"id": "coach", "on": True}
     bridge.restart(write=False)   # (the agents it made are in its own config file)
@@ -195,13 +207,13 @@ def test_the_next_update_cleans_an_agent_already_on_an_outside_model(bridges, fa
     assert wait_until(lambda: user_md(home, "coach") == [], timeout=40)
     assert not (memories(home, "coach") / DAY_COPY).exists()
     shown = settings(bridge, "coach")
-    assert shown["shared_memory"] == {"on": False, "outside": {"provider": "openai-codex", "label": "OpenAI"}}
+    assert shared(shown) == {"on": False, "circle": False, "outside": {"provider": "openai-codex", "label": "OpenAI"}}
     assert shown["notebook"] == {"on": False}
     assert wait_until(lambda: user_profile(home, "coach") is False)
     assert wait_until(lambda: refreshed(bridge, "coach"), timeout=40)
     # Budget, on the install's provider, untouched
     assert user_md(home, "budget") == ["Alex habite Lyon.", "Alex a deux enfants."]
-    assert settings(bridge, "budget")["shared_memory"] == {"on": True, "outside": None}
+    assert shared(settings(bridge, "budget")) == {"on": True, "circle": True, "outside": None}
 
 
 def test_an_app_1_0_sees_its_settings_as_before(bridges, fakes):
@@ -215,4 +227,64 @@ def test_an_app_1_0_sees_its_settings_as_before(bridges, fakes):
         return {k: v for k, v in values.items() if k != "shared_memory"}
 
     assert as_before(after) == as_before(before)
-    assert before["shared_memory"] == {"on": True, "outside": None} and after["shared_memory"]["on"] is False
+    assert before["shared_memory"] == {"on": True, "circle": True, "outside": None} and after["shared_memory"]["on"] is False
+
+
+def test_its_conversations_go_on_in_a_new_session(bridges, fakes):
+    """Review B2: Hermes replays a conversation's history at every turn (the memory's turn notes, the Carnet's news
+    joined to the person's words). Its shared memory turned off, or its model gone outside: each conversation goes on in
+    a new Hermes session; the app keeps showing what was said (the same thread)."""
+    from test_agent_create import idle, send
+    bridge, home = place(bridges, fakes)
+    send(bridge, fakes, "coach", "Bonjour Coach, je cours le dimanche.")
+    idle(bridge, "coach")
+    before = bridge.get("/v1/threads/main", headers=AUTH, params={"agent": "coach"}).json()
+    assert put(bridge, "coach", {"on": False}).json() == {"id": "coach", "on": False}
+    after = bridge.get("/v1/threads/main", headers=AUTH, params={"agent": "coach"}).json()
+    assert after["id"] == before["id"] and after["tip"] != before["tip"], (before, after)
+    segments = bridge.get(f"/v1/threads/{after['id']}", headers=AUTH, params={"agent": "coach"}).json()["segments"]
+    assert [s["session_id"] for s in segments][-2:] == [before["tip"], after["tip"]] and segments[-1]["linked"] == "moved"
+    timeline = bridge.get("/v1/threads/main/timeline", headers=AUTH, params={"agent": "coach"}).json()
+    assert any("je cours le dimanche" in (i.get("text") or "") for i in timeline["items"]), "what was said still shown"
+    # the next turn runs in the new session
+    from test_agent_create import next_run
+    idle(bridge, "coach")
+    run = next_run(fakes)
+    sent = bridge.post("/v1/threads/main/messages", headers=AUTH,
+                       json={"agent": "coach", "client_id": "c-after-off", "text": "Et maintenant ?"})
+    assert sent.status_code == 200 and sent.json()["tip"] == after["tip"], sent.text
+    assert fakes.hermes.started[run]["session_id"] == after["tip"]
+    # on again: nothing moves (a new session only when it goes off)
+    assert put(bridge, "coach", {"on": True}).status_code == 200
+    idle(bridge, "coach")
+    assert bridge.get("/v1/threads/main", headers=AUTH, params={"agent": "coach"}).json()["tip"] == after["tip"]
+
+
+def test_a_model_of_the_catalogue_on_an_outside_hub_keeps_the_carnet_off(bridges, fakes):
+    """Review C4: Kerfy's catalogue says « Carnet on » for each of its agents; on a hub on an outside model the new
+    agent is protected all the same, and it is never noted as the person's own gesture."""
+    bridge, home = place(bridges, fakes, hub_model=CODEX, agents=())
+    adopted = bridge.post("/v1/templates/import", headers=AUTH, json={"catalogue": "cuisine", "lang": "fr"})
+    assert adopted.status_code == 201, adopted.text
+    agent = adopted.json()["agent"]["id"]
+    shown = settings(bridge, agent)
+    assert shown["notebook"] == {"on": False} and shared(shown)["on"] is False
+    kept = json.loads((bridge.state_dir / "agent_shared_memory.json").read_text())
+    assert "notebook" in kept["outside"][agent]["off"], "the bridge's own: a return to our providers gives it back"
+
+
+def test_custom_without_its_address_and_a_model_it_cannot_tell_are_protected(bridges, fakes):
+    """Review C1: `custom` without its address goes to OpenRouter in Hermes; a profile with no model the bridge can
+    read is protected too (« in doubt »), named so for the apps."""
+    bridge, home = place(bridges, fakes, hub_model="model:\n  provider: custom\n  default: x\n", agents=("Coach",))
+    shown = settings(bridge, "coach")
+    assert shared(shown) == {"on": False, "circle": False, "outside": {"provider": "custom", "label": "OpenRouter"}}
+    assert shown["notebook"] == {"on": False}
+    # a profile whose model can't be read, for an agent never protected: protected as outside
+    (home / "config.yaml").write_text("model:\n  provider: lmstudio\n")
+    assert bridge.post("/v1/agents", headers=AUTH, json={"name": "Budget", "kind": "finance"}).status_code == 201
+    folder = home / "profiles" / "budget"
+    (folder / "config.yaml").write_text("agent:\n  max_turns: 60\n")
+    (home / "config.yaml").write_text("")
+    assert wait_until(lambda: shared(settings(bridge, "budget"))["on"] is False, timeout=40)
+    assert shared(settings(bridge, "budget"))["outside"]["provider"] == "unknown"

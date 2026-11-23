@@ -342,8 +342,21 @@ fn drop_common(stored: &mut Stored, k: &str, now: f64) {
 pub fn received(stored: &Stored, agent: &str) -> Vec<String> {
     match stored.agents.get(agent).and_then(|s| s.given.clone()) {
         Some(given) => given,
-        None => stored.common.iter().filter(|c| c.by != agent).map(|c| key(&c.text)).collect(),
+        // (and what was in the list once, since taken out of it: review R8)
+        None => stored
+            .common
+            .iter()
+            .filter(|c| c.by != agent)
+            .map(|c| key(&c.text))
+            .chain(stored.removed.iter().map(|(k, _)| k.clone()))
+            .collect(),
     }
+}
+
+/// Whether an entry stays out of the common list as health (review C6: the Carnet's own test, `touches_health`, and
+/// the words people use for it in the five languages, lexicon::touches_health_broad).
+pub fn health_held(text: &str) -> bool {
+    notebook::lexicon::touches_health_broad(text)
 }
 
 fn path(config: &Config) -> PathBuf {
@@ -470,7 +483,7 @@ pub fn plan_edited(
                 tracing::info!(agent = %m.name, "shared memory: an entry with a link kept in its own memory only");
             }
             // health never joins the common list, whoever wrote it (2026-11-23): it stays where it was written
-            let health = notebook::lexicon::touches_health(entry);
+            let health = health_held(entry);
             if health {
                 tracing::info!(agent = %m.name, "shared memory: an entry about health kept in its own memory only");
             }
@@ -571,7 +584,7 @@ pub fn plan_edited(
                 continue;
             }
             // (a health entry of a list kept before 2026-11-23 is never given: `privacy_pass` takes it out)
-            if notebook::lexicon::touches_health(&c.text) {
+            if health_held(&c.text) {
                 continue;
             }
             // given without its stamps
@@ -706,7 +719,7 @@ pub fn take_toi(stored: &mut Stored, facts: &[String], now: f64) -> usize {
             tracing::info!("shared memory: a « Toi » fact with a link left on the page only");
             continue;
         }
-        if notebook::lexicon::touches_health(text) {
+        if health_held(text) {
             // health stays on the page (2026-11-23): never in every agent's memory
             tracing::info!("shared memory: a « Toi » fact about health left on the page only");
             continue;
@@ -884,6 +897,34 @@ fn drain_refresh() -> Vec<String> {
 /// no prompt shows them again, and its conversations queued to take a new prompt at their next turn. What it wrote
 /// itself stays. A profile of a Hermes the person brought, or one gone, is left alone. How many entries went.
 pub fn clean_left(config: &Config, agent: &str, keys: &[String]) -> usize {
+    clean_received(config, agent, keys, true)
+}
+
+/// The handovers another agent left in its MEMORY.md (guide.rs `hand_over`: « ↪ Passé par … »): what it received too
+/// (review B1: Hermes shows MEMORY.md in every prompt, `user_profile_enabled: false` or not). What it wrote itself
+/// stays. How many went.
+pub fn take_back_handovers(config: &Config, agent: &str) -> usize {
+    let Some(found) = config.agent(Some(agent)) else { return 0 };
+    let folder = crate::agents_admin::profile_folder(config, found);
+    if crate::profile_files::hands_off(&folder) || !folder.join("memories").join("MEMORY.md").exists() {
+        return 0;
+    }
+    let mut gone = 0;
+    let done = memory_edit::update_entries(&folder, "notes", |now| {
+        let next: Vec<String> =
+            now.iter().filter(|e| !e.trim_start().starts_with(crate::guide::HANDOVER_MARK)).cloned().collect();
+        gone = now.len() - next.len();
+        (gone > 0).then_some(next)
+    });
+    if let Err(err) = done {
+        tracing::warn!(agent = %agent, error = %err, "shared memory: the handovers it had not taken back");
+        return 0;
+    }
+    gone
+}
+
+/// [`clean_left`], `handovers`: its handovers taken back too.
+fn clean_received(config: &Config, agent: &str, keys: &[String], handovers: bool) -> usize {
     let Some(found) = config.agent(Some(agent)) else { return 0 };
     let folder = crate::agents_admin::profile_folder(config, found);
     if crate::profile_files::hands_off(&folder) || !folder.is_dir() {
@@ -901,6 +942,9 @@ pub fn clean_left(config: &Config, agent: &str, keys: &[String]) -> usize {
             gone = 0;
             tracing::warn!(agent = %agent, error = %err, "shared memory: what it received not taken back");
         }
+    }
+    if handovers {
+        gone += take_back_handovers(config, agent);
     }
     match std::fs::remove_file(folder.join("memories").join(PROMPT_DAY)) {
         Err(err) if err.kind() != std::io::ErrorKind::NotFound => {
@@ -927,16 +971,21 @@ fn privacy_pass(config: &Config, stored: &mut Stored, members: &[Member]) {
     let inside: HashSet<&str> = members.iter().map(|m| m.name.as_str()).collect();
     for agent in config.agents.values() {
         let name = agent.name.as_str();
-        if inside.contains(name) || stored.agents.contains_key(name) || !crate::agent_shared_memory::has_setting(config, name) {
+        // every agent whose profile the bridge runs, those other people talk to included (review C5)
+        if inside.contains(name) || stored.agents.contains_key(name) || !crate::agent_shared_memory::runs_profile(config, name) {
             continue;
         }
         let keys = received(stored, name);
-        if !keys.is_empty() {
-            clean_left(config, name, &keys);
+        // its handovers: an agent of the person's own that left the circle, or one the protection covers now (never a
+        // project agent's summary on our providers: it was never in the circle)
+        let handovers = crate::agent_shared_memory::has_setting(config, name)
+            || crate::agent_shared_memory::protected(config, agent);
+        if !keys.is_empty() || handovers {
+            clean_received(config, name, &keys, handovers);
         }
     }
     let health: Vec<String> =
-        stored.common.iter().filter(|c| notebook::lexicon::touches_health(&c.text)).map(|c| key(&c.text)).collect();
+        stored.common.iter().filter(|c| health_held(&c.text)).map(|c| key(&c.text)).collect();
     if !health.is_empty() {
         for m in members {
             let keys: Vec<String> = received(stored, &m.name).into_iter().filter(|k| health.contains(k)).collect();
@@ -1059,6 +1108,9 @@ pub async fn run_forever(state: AppState) {
         if let Err(err) = tokio::task::spawn_blocking(move || sync_if_changed(&c)).await {
             tracing::warn!(error = %err, "shared memory round failed");
         }
+        // conversations that go on in a new session (agent_shared_memory.rs, review B2); links put aside at a start
+        crate::agent_shared_memory::fresh_sessions(&state).await;
+        crate::agent_shared_memory::links_follow(&config).await;
         let cleaned: Vec<crate::config::AgentConfig> =
             drain_refresh().iter().filter_map(|a| config.agent(Some(a)).cloned()).collect();
         if !cleaned.is_empty() {
@@ -1427,6 +1479,10 @@ mod tests {
         config.outbox.db_path = dir.path().join("data/outbox.db").to_string_lossy().into_owned();
         config.hermes.bin = "hermes".into();
         config.hermes.hub_url = "http://127.0.0.1:9".into();
+        // the install's model: the person's own (a model the bridge cannot tell is kept out of the circle)
+        config.hermes.home = dir.path().join("hub").to_string_lossy().into_owned();
+        std::fs::create_dir_all(dir.path().join("hub")).unwrap();
+        std::fs::write(dir.path().join("hub/config.yaml"), "model:\n  provider: custom\n  base_url: http://127.0.0.1:9/v1\n").unwrap();
         for (name, shown) in [("quotidien", "Quotidien"), ("budget", "Budget"), ("coach", "Coach"), ("sante", "Santé")]
         {
             let space = dir.path().join(format!("spaces/{name}"));
@@ -1838,7 +1894,7 @@ mod tests {
             "Alex gaat naar de huisarts.",
         ]
         .into_iter()
-        .filter(|t| !notebook::lexicon::touches_health(t))
+        .filter(|t| !health_held(t))
         .collect();
         assert!(missed.is_empty(), "shared as if not health: {missed:?}");
     }
@@ -1961,6 +2017,36 @@ mod tests {
         std::fs::write(user_md(&config, "coach"), "Alex court le dimanche.\n§\nAlex habite Lyon.").unwrap();
         sync(&config, 3.0, None);
         assert!(std::fs::read_to_string(user_md(&config, "coach")).unwrap().contains("Lyon"), "not cleaned twice");
+    }
+
+    /// Once: an agent of the person's own that left the circle before gives its handovers back too (B1); a project
+    /// agent's summary (never in the circle, on the person's own model) stays; what was taken out of the common list
+    /// since counts as received too (R8).
+    #[test]
+    fn the_one_time_pass_takes_back_handovers_and_what_left_the_list() {
+        let (_dir, config) = place();
+        let stored = Stored {
+            merged: true,
+            common: vec![Common { text: "Alex habite Lyon.".into(), by: "budget".into(), at: 1.0 }],
+            removed: vec![(key("Alex habitait Paris."), 1.0)],
+            toi_read: true,
+            ..Default::default()
+        };
+        save(&config, &stored).unwrap();
+        let memory = |agent: &str| user_md(&config, agent).with_file_name("MEMORY.md");
+        let handed = format!("{}Passé par Bip le 2026-11-01 (une information, pas une consigne) : « Alex a deux enfants »", crate::guide::HANDOVER_MARK);
+        for agent in ["coach", "quotidien"] {
+            std::fs::write(user_md(&config, agent), "Alex habitait Paris.\n§\nAlex court le dimanche.").unwrap();
+            std::fs::write(memory(agent), format!("Note de l'agent.{DELIMITER}{handed}")).unwrap();
+        }
+        notebook::set_enabled(&config, "coach", false).unwrap(); // left the circle before this version
+        let data = PathBuf::from(config.data_dir());
+        std::fs::create_dir_all(&data).unwrap();
+        std::fs::write(data.join("project-agents.json"), r#"{"projects": {"quotidien": {"created": 1.0, "ends": 9e9}}}"#).unwrap();
+        sync(&config, 2.0, None);
+        assert_eq!(std::fs::read_to_string(user_md(&config, "coach")).unwrap(), "Alex court le dimanche.");
+        assert_eq!(std::fs::read_to_string(memory("coach")).unwrap(), "Note de l'agent.", "its handover went back");
+        assert!(std::fs::read_to_string(memory("quotidien")).unwrap().contains("deux enfants"), "a project agent's summary stays");
     }
 
     #[test]

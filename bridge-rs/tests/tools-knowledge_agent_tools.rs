@@ -48,6 +48,9 @@ async fn each_agent_of_the_install_gets_the_tools_with_a_token_of_its_own() {
     let hub = dir.path().join(".hermes");
     std::fs::create_dir_all(hub.join("profiles").join("vie")).unwrap();
     std::fs::write(hub.join("profiles/vie/config.yaml"), "model:\n  default: x\n").unwrap();
+    // the install's model: the person's own (a model the bridge cannot tell is protected as outside:
+    // agent_shared_memory.rs)
+    std::fs::write(hub.join("config.yaml"), "model:\n  provider: lmstudio\n").unwrap();
     let mut dict = config_dict(dir.path(), &Urls::default());
     dict["hermes"] = json!({"bin": "/opt/hermes", "home": hub.to_string_lossy(), "hub_url": "http://127.0.0.1:8642"});
     dict["agents"]["Vie"] = json!({"hermes_url": "http://127.0.0.1:8642/p/vie", "hermes_key": "k".repeat(32)});
@@ -441,6 +444,10 @@ async fn the_common_tools_are_the_same_bytes_for_every_agent_and_every_start() {
     use bipbridge::tool_diet::{BRIDGE_PREFIX, COMMON_FIRST};
     let dir = tempfile::tempdir().unwrap();
     let hub = dir.path().join(".hermes");
+    // the install's model: the person's own (a model the bridge cannot tell is protected as outside:
+    // agent_shared_memory.rs)
+    std::fs::create_dir_all(&hub).unwrap();
+    std::fs::write(hub.join("config.yaml"), "model:\n  provider: lmstudio\n").unwrap();
     for (name, soul) in [("vie", "Tu es Vie.\n"), ("budget", "Tu es Budget.\n")] {
         std::fs::create_dir_all(hub.join("profiles").join(name)).unwrap();
         std::fs::write(hub.join("profiles").join(name).join("config.yaml"), "model:\n  default: x\n").unwrap();

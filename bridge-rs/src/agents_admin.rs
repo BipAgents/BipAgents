@@ -2352,6 +2352,8 @@ pub async fn write_settings(
         crate::answer_style::set(shared, agent, &style, body.answer_style_custom.as_deref())?;
     }
     if let Some(on) = body.health {
+        // the person's own choice from now on (an outside model's default no longer brings it back)
+        crate::agent_shared_memory::person_set(&config, &agent.name, crate::agent_shared_memory::HEALTH);
         set_health(&config, agent, on, run).await?;
     }
     if let Some(categories) = &body.health_categories {
@@ -2780,6 +2782,16 @@ async fn put_model(
 ) -> ApiResult<Response> {
     let config = state.config();
     let agent = editable(&config, &agent_id).map_err(|_| not_managed())?;
+    // a model that runs outside (an Ollama cloud model on the person's Ollama: review R3): the protection before the
+    // model is written (review R2)
+    if read_model(&config, &agent).is_some() {
+        let name = body.name.clone();
+        if let Some((p, l)) = crate::outside_model::outside_after(&config, &agent, |m| {
+            m.insert("default".into(), json!(name));
+        }) {
+            crate::agent_shared_memory::guard_before_and_follow(config.clone(), &agent, &p, &l).await;
+        }
+    }
     let model = {
         let _guard = LOCK.lock().await;
         match set_model(&config, &agent, &body.name, body.vision) {
@@ -2792,6 +2804,7 @@ async fn put_model(
     };
     tracing::info!(target: "bipbridge::agents", agent = %agent.name, model = %body.name, "agent model changed");
     crate::agent_shared_memory::guard_and_follow(config.clone(), &agent).await;
+    crate::agent_shared_memory::fresh_sessions(&state).await;
     Ok(web::ok(json!({"id": agent.name, "model": model})))
 }
 

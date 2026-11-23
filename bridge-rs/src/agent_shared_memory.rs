@@ -56,9 +56,12 @@ use crate::web::{self, ApiResult, FieldError, HttpError, Json, Validate};
 pub const OTHERS_FACING: &str = "others_facing";
 /// What a 400 says: an agent set up by hand keeps its own memory.
 pub const BY_HAND: &str = "by_hand";
-/// What the bridge turned off for an outside model.
+/// What the bridge turns off for an outside model (`Guarded::off`).
 pub const SHARED: &str = "shared_memory";
 pub const NOTEBOOK: &str = "notebook";
+pub const HEALTH: &str = "health";
+/// Its links with the other agents: « à l'écart » (rules.rs `aside`: it writes to no one, no one writes to it).
+pub const LINKS: &str = "links";
 
 static LOCK: Mutex<()> = Mutex::new(());
 
@@ -69,7 +72,8 @@ pub struct Guarded {
     pub label: String,
     #[serde(default)]
     pub at: f64,
-    /// what the bridge turned off then, and the person has not changed since ([`SHARED`], [`NOTEBOOK`])
+    /// what the bridge turned off then, and the person has not changed since ([`SHARED`], [`NOTEBOOK`], [`HEALTH`],
+    /// [`LINKS`])
     #[serde(default)]
     pub off: Vec<String>,
 }
@@ -81,6 +85,14 @@ pub struct Stored {
     pub off: Vec<String>,
     #[serde(default)]
     pub outside: BTreeMap<String, Guarded>,
+    /// the agents whose conversations go on in a new Hermes session (review B2): since when (an ISO time, as
+    /// thread_segments' `added_at`); taken by [`fresh_sessions`]
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub fresh: BTreeMap<String, String>,
+    /// the profiles whose `memory.user_profile_enabled: false` the bridge wrote (review R7: one the person wrote
+    /// stays)
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub profile_off: Vec<String>,
 }
 
 fn path(config: &Config) -> PathBuf {
@@ -114,12 +126,30 @@ fn update<T>(config: &Config, change: impl FnOnce(&mut Stored) -> T) -> std::io:
     Ok(out)
 }
 
-/// Whether `agent` has the setting (module doc).
-pub fn has_setting(config: &Config, agent: &str) -> bool {
+/// Whether the bridge runs `agent`'s profile itself: managed, no `host_home`, not a profile of a Hermes the person
+/// brought. The outside model's protection applies to every such agent, those other people talk to included (review
+/// C5: an agent shared with a relative still has its person's Carnet in their turns).
+pub fn runs_profile(config: &Config, agent: &str) -> bool {
     let Ok(found) = crate::agents_admin::managed(config, agent) else { return false };
     found.host_home.as_deref().is_none_or(str::is_empty)
-        && !crate::vault::others_facing(config, agent)
         && !crate::profile_files::hands_off(&crate::agents_admin::profile_folder(config, &found))
+}
+
+/// Whether `agent` has the setting (module doc): its profile is the bridge's and no one else talks to it.
+pub fn has_setting(config: &Config, agent: &str) -> bool {
+    runs_profile(config, agent) && !crate::vault::others_facing(config, agent)
+}
+
+/// Where `agent`'s model runs as the protection sees it: `Some((provider, label))` outside, a model it cannot tell
+/// included (« in doubt, it protects »: review C1); None on our providers or the person's own.
+pub fn outside_now(config: &Config, agent: &AgentConfig) -> Option<(String, String)> {
+    match crate::outside_model::place(config, agent) {
+        crate::outside_model::Place::Outside { provider, label } => Some((provider, label)),
+        crate::outside_model::Place::Unknown => {
+            Some((crate::outside_model::UNKNOWN.into(), crate::outside_model::unknown_label(config)))
+        }
+        _ => None,
+    }
 }
 
 /// Whether `agent` may be in the circle as far as this setting goes: it has the setting, the person did not turn it
@@ -133,14 +163,18 @@ pub fn enabled(config: &Config, agent: &str) -> bool {
 }
 
 /// [`enabled`] without the question of who has the setting (shared_memory::circle asks it its own way), the switches
-/// read once (`stored`).
+/// read once (`stored`). A model it cannot tell keeps out an agent the guard has never seen, and leaves an agent it
+/// has as it is (review C1).
 pub fn switched_on(config: &Config, agent: &AgentConfig, stored: &Stored) -> bool {
     if stored.off.contains(&agent.name) {
         return false;
     }
-    match crate::outside_model::outside(config, agent) {
-        Some((provider, _)) => stored.outside.get(&agent.name).is_some_and(|g| g.provider == provider),
-        None => true,
+    match crate::outside_model::place(config, agent) {
+        crate::outside_model::Place::Outside { provider, .. } => {
+            stored.outside.get(&agent.name).is_some_and(|g| g.provider == provider)
+        }
+        crate::outside_model::Place::Unknown => stored.outside.contains_key(&agent.name),
+        _ => true,
     }
 }
 
@@ -150,22 +184,46 @@ pub fn turned_off(config: &Config, agent: &str) -> bool {
     has_setting(config, agent) && !enabled(config, agent)
 }
 
+/// Whether what the person's other agents hold stays away from `agent` (an agent whose profile the bridge runs): its
+/// shared memory off, or a model outside or that it cannot tell. No handover into its memory, no imported facts, no
+/// Carnet or Health offered on a card (tool_asks.rs).
+pub fn protected(config: &Config, agent: &AgentConfig) -> bool {
+    runs_profile(config, &agent.name) && (turned_off(config, &agent.name) || outside_now(config, agent).is_some())
+}
+
+/// Whether the Carnet and Health are kept off `agent`'s cards (tool_asks.rs: its own asks, « Aussi pour… », an answer
+/// to a card waiting from before; review C3): a model outside, or one the bridge cannot tell once the protection
+/// applied. They come back on only from the app, with its explanation.
+pub fn kept_from_cards(config: &Config, agent: &AgentConfig) -> bool {
+    match crate::outside_model::place(config, agent) {
+        crate::outside_model::Place::Outside { .. } => true,
+        crate::outside_model::Place::Unknown => read(config).outside.contains_key(&agent.name),
+        _ => false,
+    }
+}
+
 /// [`turned_off`] for a caller that has already left out the agents other people talk to (notebook/news.rs
 /// `concerned`), the switches read once (`stored`).
 pub fn off_for(config: &Config, agent: &AgentConfig, stored: &Stored) -> bool {
-    crate::agents_admin::managed(config, &agent.name).is_ok()
-        && agent.host_home.as_deref().is_none_or(str::is_empty)
-        && !crate::profile_files::hands_off(&crate::agents_admin::profile_folder(config, agent))
-        && !switched_on(config, agent, stored)
+    runs_profile(config, &agent.name) && !switched_on(config, agent, stored)
 }
 
-/// The person's switch; whether it changed. Clears the bridge's note that it had turned it off.
+/// The time thread_segments use (`added_at`).
+fn iso_now() -> String {
+    crate::store::iso(crate::store::utcnow())
+}
+
+/// The person's switch; whether it changed. Clears the bridge's note that it had turned it off. Off: its conversations
+/// go on in a new session (review B2, [`fresh_sessions`]).
 pub fn set(config: &Config, agent: &str, on: bool) -> std::io::Result<bool> {
     let changed = update(config, |s| {
         let was_on = !s.off.iter().any(|a| a == agent);
         s.off.retain(|a| a != agent);
         if !on {
             s.off.push(agent.to_string());
+            if was_on {
+                s.fresh.insert(agent.to_string(), iso_now());
+            }
         }
         if let Some(g) = s.outside.get_mut(agent) {
             g.off.retain(|w| w != SHARED); // the person decided
@@ -179,12 +237,13 @@ pub fn set(config: &Config, agent: &str, on: bool) -> std::io::Result<bool> {
     Ok(changed)
 }
 
-/// The person changed `agent`'s Carnet switch themselves (agents_admin.rs `write_settings`): the bridge's note that it
-/// had turned it off goes, so a return to a model that is not outside leaves it as they set it.
-pub fn person_set_notebook(config: &Config, agent: &str) {
+/// The person changed one of `agent`'s switches the protection had turned off ([`NOTEBOOK`], [`HEALTH`], [`LINKS`]):
+/// the bridge's note goes, so a return to a model that is not outside leaves it as they set it. Never called for the
+/// bridge's own writes (templates.rs `import`, review C4).
+pub fn person_set(config: &Config, agent: &str, what: &str) {
     let done = update(config, |s| {
         if let Some(g) = s.outside.get_mut(agent) {
-            g.off.retain(|w| w != NOTEBOOK);
+            g.off.retain(|w| w != what);
         }
     });
     if let Err(err) = done {
@@ -192,7 +251,12 @@ pub fn person_set_notebook(config: &Config, agent: &str) {
     }
 }
 
-/// What [`guard`] changed.
+/// The person changed `agent`'s Carnet switch themselves (agents_admin.rs `write_settings`).
+pub fn person_set_notebook(config: &Config, agent: &str) {
+    person_set(config, agent, NOTEBOOK);
+}
+
+/// What [`guard`] changed of the shared memory and the Carnet.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct Changed {
     pub shared: bool,
@@ -205,65 +269,135 @@ impl Changed {
     }
 }
 
+/// Everything [`guard_full_at`] changed: also Health and the links (`links`: whether each agent wrote to another
+/// before, rules_live::agents_changed gives the tools again from it).
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct Guard {
+    pub changed: Changed,
+    pub health: bool,
+    pub links: Option<Vec<(String, bool)>>,
+}
+
+impl Guard {
+    pub fn any(&self) -> bool {
+        self.changed.any() || self.health || self.links.is_some()
+    }
+}
+
 /// The defaults of an outside model for `agent`, once per provider (module doc); a model that is no longer outside
 /// gets back what the bridge had turned off and the person never touched. What changed.
 pub fn guard(config: &Config, agent: &AgentConfig) -> Changed {
-    guard_at(config, agent, py::time_time())
+    guard_full(config, agent).changed
+}
+
+pub fn guard_full(config: &Config, agent: &AgentConfig) -> Guard {
+    guard_full_at(config, agent, py::time_time())
 }
 
 pub fn guard_at(config: &Config, agent: &AgentConfig, now: f64) -> Changed {
+    guard_full_at(config, agent, now).changed
+}
+
+/// The defaults for where `agent`'s model runs now (outside_model::place), and what changed.
+pub fn guard_full_at(config: &Config, agent: &AgentConfig, now: f64) -> Guard {
+    guard_place(config, agent, crate::outside_model::place(config, agent), now)
+}
+
+/// [`guard_full_at`] for a provider the agent is about to use (review R2: the protection is in place before the model
+/// is written). Nothing for a provider that is not outside: the return is seen once the model is written.
+pub fn guard_before(config: &Config, agent: &AgentConfig, provider: &str, label: &str) -> Guard {
+    let place = crate::outside_model::Place::Outside { provider: provider.into(), label: label.into() };
+    guard_place(config, agent, place, py::time_time())
+}
+
+fn guard_place(config: &Config, agent: &AgentConfig, place: crate::outside_model::Place, now: f64) -> Guard {
+    use crate::outside_model::Place;
     let name = agent.name.as_str();
-    let outside = crate::outside_model::outside(config, agent);
     let stored = read(config);
     let record = stored.outside.get(name).cloned();
-    // nothing moved since the last look (the usual case, every 15 s): no question of who has the setting
-    match (&outside, &record) {
-        (Some((provider, _)), Some(g)) if g.provider == *provider => return Changed::default(),
-        (None, None) => return Changed::default(),
-        _ => {}
+    // nothing moved since the last look (the usual case, every 15 s): nothing more to ask
+    let target = match (&place, &record) {
+        (Place::Outside { provider, .. }, Some(g)) if g.provider == *provider => return Guard::default(),
+        (Place::Unknown, Some(_)) => return Guard::default(), // in doubt: as it is (review C1)
+        (Place::Own | Place::Europe, None) => return Guard::default(),
+        (Place::Outside { provider, label }, _) => Some((provider.clone(), label.clone())),
+        (Place::Unknown, None) => Some((crate::outside_model::UNKNOWN.to_string(), crate::outside_model::unknown_label(config))),
+        (Place::Own | Place::Europe, Some(_)) => None,
+    };
+    if !runs_profile(config, name) {
+        return Guard::default();
     }
-    if !has_setting(config, name) {
-        return Changed::default();
-    }
-    let mut changed = Changed::default();
-    let result: std::io::Result<()> = (|| {
-        match (outside, record) {
-            (Some((provider, _)), Some(g)) if g.provider == provider => {}
+    let mut out = Guard::default();
+    let result: anyhow::Result<()> = (|| {
+        match (target, record) {
             (Some((provider, label)), before) => {
-                // what was turned off for an earlier outside provider stays noted (a return gives it back)
+                // what was turned off for an earlier provider stays noted (a return gives it back)
                 let mut off: Vec<String> = before.map(|g| g.off).unwrap_or_default();
-                let shared_on = !stored.off.iter().any(|a| a == name);
-                let notebook_on = crate::notebook::enabled(config, name);
-                if notebook_on && crate::notebook::set_enabled(config, name, false)? {
-                    changed.notebook = true;
-                    if !off.iter().any(|w| w == NOTEBOOK) {
-                        off.push(NOTEBOOK.into());
+                let mut note = |what: &str| {
+                    if !off.iter().any(|w| w == what) {
+                        off.push(what.into());
                     }
+                };
+                let shared_on = has_setting(config, name) && !stored.off.iter().any(|a| a == name);
+                if shared_on {
+                    note(SHARED);
+                }
+                if crate::notebook::enabled(config, name) && crate::notebook::set_enabled(config, name, false)? {
+                    out.changed.notebook = true;
+                    note(NOTEBOOK);
+                }
+                if crate::health::enabled(config, name) && crate::health::set_enabled(config, name, false)? {
+                    out.health = true;
+                    note(HEALTH);
+                }
+                if !crate::rules::load(config).is_aside(name) {
+                    let before_links = crate::rules_live::offered_now(config);
+                    crate::rules::change(config, |r| {
+                        r.aside.retain(|a| a != name);
+                        r.aside.push(name.to_string());
+                        for h in r.households.values_mut() {
+                            h.changed = now; // what the linked households are told changes (rules.rs `Wire`)
+                        }
+                    })?;
+                    out.links = Some(before_links);
+                    note(LINKS);
                 }
                 update(config, |s| {
                     if shared_on {
                         s.off.retain(|a| a != name);
                         s.off.push(name.to_string());
-                        if !off.iter().any(|w| w == SHARED) {
-                            off.push(SHARED.into());
-                        }
                     }
+                    // its conversations go on in a new session, without what was said there (review B2)
+                    s.fresh.insert(name.to_string(), iso_now());
                     s.outside.insert(name.to_string(), Guarded { provider: provider.clone(), label, at: now, off });
                 })?;
-                changed.shared = shared_on;
+                out.changed.shared = shared_on;
                 tracing::info!(target: "bipbridge::agents", agent = %name, provider = %provider,
-                    "outside model: shared memory and Carnet off by default");
+                    "outside model: shared memory, Carnet, Health and links off by default");
             }
             (None, Some(g)) => {
-                // back on our providers or the person's own model
-                if g.off.iter().any(|w| w == NOTEBOOK) && crate::notebook::set_enabled(config, name, true)? {
-                    changed.notebook = true;
+                // back on our providers or the person's own model (read as such: never « in doubt »)
+                let had = |what: &str| g.off.iter().any(|w| w == what);
+                if had(NOTEBOOK) && crate::notebook::set_enabled(config, name, true)? {
+                    out.changed.notebook = true;
                 }
-                let shared_back = g.off.iter().any(|w| w == SHARED);
+                if had(HEALTH) && crate::health::set_enabled(config, name, true)? {
+                    out.health = true;
+                }
+                if had(LINKS) && crate::rules::load(config).is_aside(name) {
+                    let before_links = crate::rules_live::offered_now(config);
+                    crate::rules::change(config, |r| {
+                        r.aside.retain(|a| a != name);
+                        for h in r.households.values_mut() {
+                            h.changed = now;
+                        }
+                    })?;
+                    out.links = Some(before_links);
+                }
                 update(config, |s| {
-                    if shared_back && s.off.iter().any(|a| a == name) {
+                    if had(SHARED) && s.off.iter().any(|a| a == name) {
                         s.off.retain(|a| a != name);
-                        changed.shared = true;
+                        out.changed.shared = true;
                     }
                     s.outside.remove(name);
                 })?;
@@ -274,19 +408,26 @@ pub fn guard_at(config: &Config, agent: &AgentConfig, now: f64) -> Changed {
         Ok(())
     })();
     if let Err(err) = result {
-        tracing::warn!(agent = %name, error = %err, "outside model defaults not applied");
+        tracing::warn!(agent = %name, error = %format!("{err:#}"), "outside model defaults not applied");
     }
-    changed
+    out
 }
 
-/// `shared_memory` in the agent's settings (agents_admin.rs `read_settings`); None without the setting.
+/// `shared_memory` in the agent's settings (agents_admin.rs `read_settings`); None without the setting. `circle`:
+/// whether it receives the common memory now (its Carnet on too: review C10); `outside.since`: when the protection
+/// applied (the apps say it again after a new one: review R6).
 pub fn view(config: &Config, agent: &AgentConfig) -> Option<Value> {
     if !has_setting(config, &agent.name) {
         return None;
     }
-    let outside = crate::outside_model::outside(config, agent)
-        .map(|(provider, label)| json!({"provider": provider, "label": label}));
-    Some(json!({"on": enabled(config, &agent.name), "outside": outside}))
+    let stored = read(config);
+    let outside = outside_now(config, agent).map(|(provider, label)| {
+        let since = stored.outside.get(&agent.name).filter(|g| g.provider == provider).map(|g| g.at);
+        json!({"provider": provider, "label": label, "since": since})
+    });
+    let on = switched_on(config, agent, &stored);
+    let circle = on && crate::shared_memory::membership(config, &agent.name).is_some();
+    Some(json!({"on": on, "circle": circle, "outside": outside}))
 }
 
 /// Hermes' `memory.user_profile_enabled` in a profile's config: false while the setting is off (Hermes then shows the
@@ -311,11 +452,35 @@ pub fn with_user_profile(data: &Yaml, off: bool) -> Option<Yaml> {
     }
 }
 
+/// What profile_files::reconcile writes of `memory.user_profile_enabled` for `agent`: Some(true) to turn it off, Some
+/// (false) to take the bridge's own `false` out, None to leave the file as it is (no setting, or a `false` the person
+/// wrote themselves: review R7). The bridge's own writes are noted.
+pub fn user_profile_change(config: &Config, agent: &str) -> Option<bool> {
+    if !has_setting(config, agent) {
+        return None;
+    }
+    let off = turned_off(config, agent);
+    let ours = read(config).profile_off.iter().any(|a| a == agent);
+    let _ = update(config, |s| {
+        s.profile_off.retain(|a| a != agent);
+        if off {
+            s.profile_off.push(agent.to_string());
+        }
+    });
+    match (off, ours) {
+        (true, _) => Some(true),
+        (false, true) => Some(false),
+        (false, false) => None,
+    }
+}
+
 /// A deleted agent: its switch and its note go.
 pub fn forget(config: &Config, agent: &str) {
     let done = update(config, |s| {
         s.off.retain(|a| a != agent);
         s.outside.remove(agent);
+        s.fresh.remove(agent);
+        s.profile_off.retain(|a| a != agent);
     });
     if let Err(err) = done {
         tracing::warn!(agent = %agent, error = %err, "shared memory switch not removed");
@@ -325,12 +490,20 @@ pub fn forget(config: &Config, agent: &str) {
 /// The setting changed (the person, or the guard): it leaves or joins the circle at once (what it had received taken
 /// out: shared_memory::sync), its personality and profile follow (profile_files::reconcile: the shared memory block,
 /// `memory.user_profile_enabled`), and its conversations take a new prompt from their next turn. `tools`: its Carnet
-/// changed too, its tools are given again.
+/// or Health changed too, its tools are given again; `links`: whether each agent wrote to another before its links
+/// changed (rules_live::agents_changed).
 pub async fn after_change(config: std::sync::Arc<Config>, agent: &str, tools: bool) {
+    follow(config, agent, tools, None).await;
+}
+
+async fn follow(config: std::sync::Arc<Config>, agent: &str, tools: bool, links: Option<Vec<(String, bool)>>) {
     let Some(agent) = config.agent(Some(agent)).cloned() else { return };
     let c = config.clone();
     let _ = tokio::task::spawn_blocking(move || crate::shared_memory::sync(&c, py::time_time(), None)).await;
     let run = crate::agents_admin::default_run();
+    if let Some(before) = links {
+        crate::rules_live::agents_changed(&config, &run, &before).await;
+    }
     if tools {
         if let Err(exc) = crate::agent_tools::register(&config, &agent, &run).await {
             tracing::warn!(target: "bipbridge::agents", agent = %agent.name, error = %exc, "agent tools not registered");
@@ -342,14 +515,114 @@ pub async fn after_change(config: std::sync::Arc<Config>, agent: &str, tools: bo
     crate::agents_admin::refresh_prompts(&config, &agent, &run).await;
 }
 
+/// Links changed by a guard that ran where their follow-up can't (agent_tools::register): (whether each agent wrote to
+/// another before), taken by the shared memory's look ([`links_follow`]).
+static LINKS_LATER: Mutex<Option<Vec<(String, bool)>>> = Mutex::new(None);
+
+pub fn links_changed_later(before: Vec<(String, bool)>) {
+    let mut later = LINKS_LATER.lock().unwrap_or_else(|e| e.into_inner());
+    if later.is_none() {
+        *later = Some(before); // the earliest « before » is the one to compare with
+    }
+}
+
+/// The others' tools and contacts after links changed by a guard ([`links_changed_later`]).
+pub async fn links_follow(config: &Config) {
+    let before = LINKS_LATER.lock().unwrap_or_else(|e| e.into_inner()).take();
+    if let Some(before) = before {
+        crate::rules_live::agents_changed(config, &crate::agents_admin::default_run(), &before).await;
+    }
+}
+
 /// [`guard`], then what follows when it changed something ([`after_change`]); whether it did. After a model change
 /// (the routes) and at each look of the shared memory (run_forever).
 pub async fn guard_and_follow(config: std::sync::Arc<Config>, agent: &AgentConfig) -> bool {
-    let changed = guard(&config, agent);
-    if changed.any() {
-        after_change(config, &agent.name, changed.notebook).await;
+    let guard = guard_full(&config, agent);
+    let any = guard.any();
+    if any {
+        follow(config, &agent.name, guard.changed.notebook || guard.health, guard.links).await;
     }
-    changed.any()
+    any
+}
+
+/// [`guard_before`] for a provider an agent's model is about to go to, then what follows (review R2).
+pub async fn guard_before_and_follow(config: std::sync::Arc<Config>, agent: &AgentConfig, provider: &str, label: &str) {
+    let guard = guard_before(&config, agent, provider, label);
+    if guard.any() {
+        follow(config, &agent.name, guard.changed.notebook || guard.health, guard.links).await;
+    }
+}
+
+/// Review B2: the conversations of an agent whose shared memory went off (the person, or an outside model) go on in a
+/// new Hermes session each: Hermes replays a conversation's history at every turn (its turn notes of the memory, patch
+/// 0023, the « Nouvelles du Carnet » joined to the person's words), so what it was given before would otherwise go
+/// with every new turn. The thread stays the same (a `moved` segment, threads::Threads::link): the apps keep showing
+/// what was said. A conversation whose turn is going on is taken at the next look. Each agent's mark goes once all its
+/// conversations begun before it have a new session.
+pub async fn fresh_sessions(state: &AppState) {
+    let config = state.config();
+    let pending = read(&config).fresh;
+    if pending.is_empty() {
+        return;
+    }
+    let threads = crate::threads::threads_of(state);
+    for (name, since) in pending {
+        let Some(agent) = config.agent(Some(&name)).cloned() else {
+            let _ = update(&config, |s| s.fresh.remove(&name));
+            continue;
+        };
+        let begun = match threads.begun_before(&name, &since).await {
+            Ok(begun) => begun,
+            Err(exc) => {
+                tracing::warn!(agent = %name, error = %format!("{exc:#}"), "conversations not read for a new session");
+                continue;
+            }
+        };
+        let mut done = true;
+        for thread in begun.iter().filter(|t| !t.hidden) {
+            let Ok(segments) = threads.segments(&thread.id).await else { done = false; continue };
+            let Some(tip) = segments.last() else { continue };
+            if state.hub.session_run(&name, &tip.session_id).is_some() {
+                done = false; // a turn going on: at the next look
+                continue;
+            }
+            let base = thread.title.clone().filter(|t| !t.trim().is_empty()).unwrap_or_else(|| "Conversation".into());
+            let base: String = base.chars().take(50).collect();
+            let mut made = None;
+            for attempt in 1..=9 {
+                let title = format!("{base} · {}", if attempt == 1 { since.chars().take(16).collect::<String>() } else { format!("{since} ({attempt})") });
+                match state.hermes.create_session(&agent, &title).await {
+                    Ok(session) => {
+                        made = Some(session);
+                        break;
+                    }
+                    Err(crate::hermes::HermesError::Http { status: 400 | 409, .. }) => continue,
+                    Err(exc) => {
+                        tracing::warn!(agent = %name, error = %exc, "a new session not made for a conversation");
+                        break;
+                    }
+                }
+            }
+            match made {
+                Some(session) => {
+                    if let Err(exc) = threads.link(&agent, thread, &session).await {
+                        tracing::warn!(agent = %name, error = %format!("{exc:#}"), "a new session not linked");
+                        done = false;
+                    }
+                }
+                None => done = false,
+            }
+        }
+        if done {
+            let _ = update(&config, |s| {
+                if s.fresh.get(&name) == Some(&since) {
+                    s.fresh.remove(&name);
+                }
+            });
+            tracing::info!(target: "bipbridge::agents", agent = %name, conversations = begun.len(),
+                "its conversations go on in a new session, without what was said before");
+        }
+    }
 }
 
 // --- the app's route ---------------------------------------------------------------------------------------------------
@@ -377,14 +650,16 @@ async fn put_shared_memory(
         return Err(HttpError::new(400, BY_HAND));
     }
     // the outside model's defaults first: a model changed a moment ago never makes the person's « on » undone later
-    let guarded = guard(&config, &agent);
+    let guarded = guard_full(&config, &agent);
     let (c, id, on) = (config.clone(), agent_id.clone(), body.on);
     let changed = tokio::task::spawn_blocking(move || set(&c, &id, on))
         .await
         .map_err(anyhow::Error::from)?
         .map_err(anyhow::Error::from)?;
     if changed || guarded.any() {
-        after_change(config.clone(), &agent_id, guarded.notebook).await;
+        let tools = guarded.changed.notebook || guarded.health;
+        follow(config.clone(), &agent_id, tools, guarded.links).await;
+        fresh_sessions(&state).await; // off: its conversations go on in a new session at once (review B2)
     }
     Ok(web::ok(json!({"id": agent_id, "on": enabled(&config, &agent_id)})))
 }
@@ -408,6 +683,8 @@ mod tests {
         for name in ["budget", "gpt"] {
             let space = dir.path().join(format!("spaces/{name}"));
             std::fs::create_dir_all(space.join(format!("profiles/{name}/memories"))).unwrap();
+            // the person's own model (no install's model: a profile without one is a model the bridge cannot tell)
+            std::fs::write(space.join(format!("profiles/{name}/config.yaml")), SPARK).unwrap();
             config.agents.insert(
                 name.into(),
                 AgentConfig { name: name.into(), space: Some(space.to_string_lossy().into_owned()), ..Default::default() },
@@ -443,9 +720,9 @@ mod tests {
         assert!(enabled(&config, "budget") && crate::notebook::enabled(&config, "budget"));
         assert_eq!(
             view(&config, &gpt),
-            Some(json!({"on": false, "outside": {"provider": "openai-codex", "label": "OpenAI"}}))
+            Some(json!({"on": false, "circle": false, "outside": {"provider": "openai-codex", "label": "OpenAI", "since": 1.0}}))
         );
-        assert_eq!(view(&config, &budget), Some(json!({"on": true, "outside": null})));
+        assert_eq!(view(&config, &budget), Some(json!({"on": true, "circle": true, "outside": null})));
         // once: the person turns them back on, knowingly; the next start leaves them on
         assert!(set(&config, "gpt", true).unwrap());
         crate::notebook::set_enabled(&config, "gpt", true).unwrap();
@@ -495,8 +772,10 @@ mod tests {
         set_model(&config, "budget", CODEX);
         let budget = config.agent(Some("budget")).unwrap().clone();
         assert_eq!(view(&config, &budget), None);
-        assert!(!turned_off(&config, "budget"), "no setting: never « off » (its handovers, its news stay as they are)");
-        assert_eq!(guard_at(&config, &budget, 1.0), Changed::default());
+        assert!(!turned_off(&config, "budget"), "no setting: never « off »");
+        // but the outside model's protection all the same (review C5): its Carnet off
+        assert_eq!(guard_at(&config, &budget, 1.0), Changed { shared: false, notebook: true });
+        assert!(!crate::notebook::enabled(&config, "budget") && protected(&config, &budget));
         config.agents.get_mut("gpt").unwrap().host_home = Some(dir.path().to_string_lossy().into_owned());
         assert_eq!(view(&config, config.agent(Some("gpt")).unwrap()), None, "set up by hand");
     }
@@ -572,6 +851,107 @@ mod tests {
             assert_eq!(guard_at(&config, &gpt, 2.0), Changed::default(), "turned back on for {unknown:?}");
             assert!(!enabled(&config, "gpt") && !crate::notebook::enabled(&config, "gpt"), "{unknown:?}");
         }
+    }
+
+    /// The protection puts Health and the links with the other agents away too (coordinator 23/11, C8, C9), notes it,
+    /// and gives them back on a return to the person's own model; the conversations are marked to go on in a new
+    /// session (B2).
+    #[test]
+    fn health_and_links_go_away_with_the_rest_and_come_back() {
+        let (_dir, config) = place();
+        let gpt = config.agent(Some("gpt")).unwrap().clone();
+        crate::health::set_enabled(&config, "gpt", true).unwrap();
+        assert!(!crate::rules::load(&config).is_aside("gpt"));
+        set_model(&config, "gpt", CODEX);
+        let guard = guard_full_at(&config, &gpt, 1.0);
+        assert!(guard.health && guard.links.is_some() && guard.changed == Changed { shared: true, notebook: true }, "{guard:?}");
+        assert!(!crate::health::enabled(&config, "gpt") && crate::rules::load(&config).is_aside("gpt"));
+        let stored = read(&config);
+        let mut off = stored.outside["gpt"].off.clone();
+        off.sort();
+        assert_eq!(off, [HEALTH, LINKS, NOTEBOOK, SHARED]);
+        assert!(stored.fresh.contains_key("gpt"), "its conversations go on in a new session");
+        set_model(&config, "gpt", SPARK);
+        let back = guard_full_at(&config, &gpt, 2.0);
+        assert!(back.health && back.links.is_some(), "{back:?}");
+        assert!(crate::health::enabled(&config, "gpt") && !crate::rules::load(&config).is_aside("gpt"));
+        assert!(enabled(&config, "gpt") && crate::notebook::enabled(&config, "gpt"));
+    }
+
+    /// The person's own changes of Health and of « à l'écart » are theirs: a return doesn't undo them.
+    #[test]
+    fn the_person_s_health_and_links_stay_as_they_set_them() {
+        let (_dir, config) = place();
+        let gpt = config.agent(Some("gpt")).unwrap().clone();
+        crate::health::set_enabled(&config, "gpt", true).unwrap();
+        set_model(&config, "gpt", CODEX);
+        guard_full_at(&config, &gpt, 1.0);
+        person_set(&config, "gpt", HEALTH);
+        person_set(&config, "gpt", LINKS);
+        set_model(&config, "gpt", SPARK);
+        let back = guard_full_at(&config, &gpt, 2.0);
+        assert!(!back.health && back.links.is_none(), "{back:?}");
+        assert!(!crate::health::enabled(&config, "gpt") && crate::rules::load(&config).is_aside("gpt"));
+    }
+
+    /// In doubt, it protects (review C1): a model the bridge cannot tell, for an agent it has never protected, is
+    /// treated as outside (named so for the apps); once protected, a moment of doubt changes nothing.
+    #[test]
+    fn in_doubt_it_protects() {
+        let (_dir, config) = place();
+        let gpt = config.agent(Some("gpt")).unwrap().clone();
+        set_model(&config, "gpt", "");
+        assert!(!enabled(&config, "gpt"), "out of the circle before the guard");
+        assert_eq!(guard_at(&config, &gpt, 1.0), Changed { shared: true, notebook: true });
+        let record = read(&config).outside["gpt"].clone();
+        assert_eq!(record.provider, crate::outside_model::UNKNOWN);
+        assert!(kept_from_cards(&config, &gpt) && protected(&config, &gpt));
+        let shown = view(&config, &gpt).unwrap();
+        assert_eq!(shown["outside"]["provider"], "unknown");
+        assert!(shown["outside"]["label"].as_str().is_some_and(|l| !l.is_empty()));
+        // the person turns it on knowingly: still doubt, it stays on
+        set(&config, "gpt", true).unwrap();
+        assert_eq!(guard_at(&config, &gpt, 2.0), Changed::default());
+        assert!(enabled(&config, "gpt"));
+        // its model readable again, the person's own: what the bridge turned off comes back
+        set_model(&config, "gpt", SPARK);
+        assert_eq!(guard_at(&config, &gpt, 3.0), Changed { shared: false, notebook: true });
+        assert!(read(&config).outside.is_empty());
+    }
+
+    /// Off by the person: its conversations go on in a new session too (B2); `memory.user_profile_enabled: false` is
+    /// the bridge's to take out again, never one the person wrote (R7).
+    #[test]
+    fn off_marks_new_sessions_and_the_profile_key_is_the_bridge_s_own() {
+        let (_dir, config) = place();
+        assert_eq!(user_profile_change(&config, "budget"), None, "on, nothing written by the bridge: left as it is");
+        set(&config, "budget", false).unwrap();
+        assert!(read(&config).fresh.contains_key("budget"));
+        assert_eq!(user_profile_change(&config, "budget"), Some(true));
+        set(&config, "budget", true).unwrap();
+        assert_eq!(user_profile_change(&config, "budget"), Some(false), "the bridge's own false taken out");
+        assert_eq!(user_profile_change(&config, "budget"), None, "once");
+    }
+
+    /// A model route puts the protection in place for where the model goes before it writes it (R2).
+    #[test]
+    fn where_a_model_goes_is_known_before_it_is_written() {
+        let (_dir, config) = place();
+        let budget = config.agent(Some("budget")).unwrap().clone();
+        let to_anthropic = crate::outside_model::outside_after(&config, &budget, |m| {
+            m.insert("provider".into(), json!("anthropic"));
+            m.insert("base_url".into(), json!(""));
+        });
+        assert_eq!(to_anthropic.map(|o| o.1), Some("Anthropic".into()));
+        let cloud = crate::outside_model::outside_after(&config, &budget, |m| {
+            m.insert("provider".into(), json!("ollama"));
+            m.insert("base_url".into(), json!(""));
+            m.insert("default".into(), json!("gpt-oss:120b-cloud"));
+        });
+        assert!(cloud.is_some(), "an Ollama cloud model");
+        assert_eq!(crate::outside_model::outside_after(&config, &budget, |m| { m.insert("default".into(), json!("qwen3")); }), None);
+        let guard = guard_before(&config, &budget, "anthropic", "Anthropic");
+        assert!(guard.changed.shared && !enabled(&config, "budget"), "{guard:?}");
     }
 
     #[test]

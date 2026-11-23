@@ -882,7 +882,12 @@ pub async fn import(state: &AppState, body: &Value) -> ApiResult<Value> {
             soul: Some(instructions.clone()).filter(|t| !t.trim().is_empty()),
             toolsets: Some(toolsets).filter(|t| !t.is_empty()),
             weather: tools.get("weather").and_then(Value::as_bool),
-            notebook: tools.get("notebook").and_then(Value::as_bool),
+            // on an outside model the protection turned its Carnet off (agent_shared_memory.rs): a model's « Carnet
+            // on » never turns it back on, nor counts as the person's gesture (review C4)
+            notebook: tools
+                .get("notebook")
+                .and_then(Value::as_bool)
+                .filter(|_| crate::agent_shared_memory::outside_now(&state.config(), &agent).is_none()),
             ..AgentSettings::default()
         };
         if let Err(exc) = agents_admin::write_settings(&state.config, &agent, &settings, &run).await {

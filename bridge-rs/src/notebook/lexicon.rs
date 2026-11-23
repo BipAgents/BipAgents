@@ -330,6 +330,72 @@ pub fn touches_health(text: &str) -> bool {
     is_health(text) || holds(text, HEALTH_WEAK)
 }
 
+/// Health as people say it, in the five languages (fr, en, de, es, nl), by families of roots: the practitioners and
+/// specialties, the medicines and their kinds, the illnesses and states, mental health, sexuality (review C6 of the
+/// shared memory, 23/11). Wider than `HEALTH` on purpose: only for what must never be shared between the person's
+/// agents (`touches_health_broad`), never for filing (a false « health » here only keeps a fact to the agent that
+/// learnt it).
+const HEALTH_BROAD: &[&str] = &[
+    // practitioners, specialties — fr
+    "psy", "psys", "psychiatr*", "psychotherap*", "psychanaly*", "psycholog*", "therapie*", "cardiolog*", "cardiaque*",
+    "neurolog*", "oncolog*", "dermatolog*", "gastroenter*", "gastro", "pneumolog*", "rhumatolog*", "endocrinolog*",
+    "urolog*", "nephrolog*", "hematolog*", "allergolog*", "addictolog*", "sexolog*", "orthophon*", "orthopt*",
+    "podolog*", "generaliste*", "sage femme", "sages femmes", "infirmier*", "infirmiere*", "radiotherap*",
+    // en
+    "psychiatrist*", "psychologist*", "therapist*", "gp", "midwife", "midwives", "nurse", "nurses", "rehab",
+    // de
+    "psychiater*", "therapeut*", "kardiolog*", "onkolog*", "hausarzt*", "frauenarzt*", "arzt*", "arztin*", "hebamme*",
+    "orthopad*", "krankenpfleg*",
+    // es
+    "psicolog*", "psiquiatr*", "psicoterap*", "terapeut*", "terapia*", "ginecolog*", "pediatra*", "matrona*",
+    "enfermer*", "medicos", "medica", "medicas",
+    // nl
+    "huisarts*", "arts", "artsen", "tandarts*", "dokter*", "psycholoog*", "cardioloog*", "verpleeg*", "verloskund*",
+    "fysio*", "ziekenhuis*",
+    // medicines and their kinds — fr, en, de, es, nl
+    "antidepress*", "antidepresiv*", "anxiolyti*", "ansiolitic*", "somnifere*", "somnifero*", "neurolepti*",
+    "antipsychoti*", "insuline", "insulin", "insulina", "chimio*", "chemo*", "quimio*", "antibiotique*", "antibiotic*",
+    "antibiotik*", "antibiotica", "anticoagul*", "corticoide*", "cortisone", "ventoline", "pilule", "pille",
+    "contracepti*", "anticoncepti*", "anticonceptie*", "verhutung*", "sterilet*", "lithium", "methadone", "subutex",
+    "ritaline", "xanax", "lexomil", "prozac", "levothyrox", "doliprane", "paracetamol", "ibuprofen*", "ssri*",
+    "statin*", "inhaler*", "painkiller*", "sleeping pill", "sleeping pills", "birth control", "schlafmittel*",
+    "medicijn*", "medicatie*", "slaappil*", "de pil", "the pill",
+    // illnesses and states — fr
+    "hypertension", "hypotension", "vih", "sida", "seropositi*", "hepatite*", "covid*", "grippe", "fausse couche",
+    "fausses couches", "ivg", "avortement*", "fertilit*", "fiv", "pma", "menopause*", "endometriose*", "anxiete*",
+    "angoisse*", "attaque de panique", "attaques de panique", "burn out", "burnout", "tdah", "autis*", "bipolaire*",
+    "schizophren*", "anorexi*", "boulimi*", "addict*", "alcoolism*", "alcoolique*", "sevrage*", "suicid*", "phobi*",
+    "parkinson*", "alzheimer*", "sclerose*", "arthrose*", "arthrite*", "rhumatism*", "lombalgie*", "hernie*",
+    "fracture*", "tumeur*", "leucemie*", "avc", "infarctus", "crise cardiaque", "apnee*", "eczema*", "psoriasis", "acne",
+    "dyslexi*", "surdite", "malvoyant*", "fibromyalgie*", "cystite*", "mycose*", "depression*", "deprime*",
+    // en
+    "hiv", "aids", "hepatitis", "flu", "miscarriage*", "abortion*", "ivf", "fertility", "menopaus*", "endometriosis",
+    "anxiety", "panic attack", "panic attacks", "adhd", "bipolar", "anorexia", "bulimia", "alcoholi*", "ocd", "ptsd",
+    "sclerosis", "arthritis", "tumor*", "tumour*", "leukemia", "heart attack", "dyslexia", "deaf", "pregnant",
+    // de
+    "bluthochdruck", "fehlgeburt*", "abtreibung*", "schwangerschaftsabbruch*", "kinderwunsch*", "wechseljahre*",
+    "angststorung*", "panikattacke*", "adhs", "magersucht*", "bulimie*", "alkoholiker*", "suizid*", "selbstmord*",
+    "zwangsstorung*", "demenz*", "rheuma*", "leukamie*", "schlaganfall*", "herzinfarkt*", "neurodermitis", "legasthen*",
+    // es
+    "hipertension", "seropositiv*", "gripe", "aborto*", "fecundacion", "fertilidad", "menopausia*", "ansiedad*",
+    "ataque de panico", "ataques de panico", "esquizofren*", "adiccion*", "demencia*", "artritis", "artrosis",
+    "leucemia*", "infarto*", "ictus", "depresion*",
+    // nl
+    "ziek*", "zwanger*", "depressie*", "angststoornis*", "paniekaanval*", "verslav*", "zelfmoord*", "miskraam*",
+    "abortus*", "bloeddruk", "suikerziekte", "kanker*", "beroerte*", "hartaanval*", "astma", "griep", "operatie*",
+    "dementie*",
+    // sexuality — fr, en, de, es, nl
+    "sexualit*", "sexuel*", "sexuell*", "sexual*", "sexualidad*", "seksualiteit*", "seksue*", "libido", "erecti*",
+    "impuissan*", "homosexu*", "bisexu*", "transgenre*", "transgender*", "transexual*", "lgbt*", "gay", "lesbienne*",
+    "lesbian*", "lesbisch*", "lesbiana*", "queer", "schwul*",
+];
+
+/// Whether a text might touch health, as people say it (`HEALTH_BROAD`, with `touches_health`): what is never shared
+/// between the person's agents (shared_memory.rs).
+pub fn touches_health_broad(text: &str) -> bool {
+    touches_health(text) || holds(text, HEALTH_BROAD)
+}
+
 /// A money fact (budget, salary, rent, loans…, or an amount).
 pub fn is_money(text: &str) -> bool {
     holds(text, MONEY) || super::news::mentions_money(text)
@@ -666,6 +732,24 @@ mod tests {
             assert!(!is_health(fact), "{fact}");
         }
         assert!(touches_health("Comparer les programmes santé des candidats"));
+        // what is never shared between the person's agents: health as people say it, five languages (review C6)
+        for said in [
+            "Alex voit un psy le jeudi.", "Alex prend un somnifère le soir.", "Rendez-vous chez la sage-femme lundi.",
+            "Alex est bipolaire.", "Alex a un TDAH.", "Alex fait des crises d'angoisse.", "Alex a eu un AVC.",
+            "Alex sees a therapist on Thursdays.", "Alex has ADHD.", "Alex is on the pill.", "Alex had a miscarriage.",
+            "Alex geht zum Hausarzt.", "Alex nimmt Antidepressiva.", "Alex hat Bluthochdruck.",
+            "Alex va al psiquiatra.", "Alex tiene ansiedad.", "Alex toma anticonceptivos.",
+            "Alex gaat naar de tandarts.", "Alex is ziek.", "Alex slikt medicijnen.", "Alex heeft een depressie.",
+            "Alex est homosexuel.", "Alex is gay.",
+        ] {
+            assert!(touches_health_broad(said), "{said}");
+        }
+        for plain in [
+            "Alex habite Lyon.", "Alex aime la gastronomie.", "Alex sucht eine Wohnung.", "Alex ist Lehrer.",
+            "Alex gaat naar Amsterdam.", "Alex works in a bank.", "Alex vive en Madrid.", "Alex aime le jazz.",
+        ] {
+            assert!(!touches_health_broad(plain), "{plain}");
+        }
         assert!(is_money("Loyer : 950 €") && is_money("Budget vacances 2 000 €") && is_money("Rent is due"));
         assert!(!is_money("Rentrée le 2 septembre"));
     }

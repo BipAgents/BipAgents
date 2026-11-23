@@ -75,7 +75,7 @@ def test_what_the_person_kept_fills_an_existing_agent(bridges, fakes):
     home = managed_install(bridge, fakes, agents=("coach",))
     folder = profile(home, "coach")
     (folder / "SOUL.md").write_text("Tu es Coach.\n")
-    (folder / "config.yaml").write_text("model:\n  provider: custom\n")
+    (folder / "config.yaml").write_text("model:\n  provider: lmstudio\n")   # the person's own (custom without its address: outside)
     bridge.start()
     plan = bridge.post("/v1/assistant-import/parse", headers=AUTH,
                        json={"files": [{"name": "bipagents-export.zip", "data": zipped(EXPORT)}]}).json()

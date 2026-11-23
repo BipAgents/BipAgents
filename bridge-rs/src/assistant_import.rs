@@ -985,7 +985,7 @@ pub fn apply_files(
     // its « Mémoire partagée » off: no facts about the person in its USER.md (Hermes doesn't show it, and they would
     // join every agent's memory once it is turned on: agent_shared_memory.rs); they reach the Carnet's « À ranger »
     // below all the same
-    if !crate::agent_shared_memory::turned_off(config, &agent.name) {
+    if !crate::agent_shared_memory::protected(config, agent) {
         counts.memory += fill_memory(&folder, "user", &plan.user.iter().map(quoted).collect::<Vec<_>>())?;
     }
     let inbox: Vec<String> = plan

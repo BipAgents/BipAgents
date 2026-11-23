@@ -51,7 +51,7 @@ def started(bridges, fakes):
     home = managed_install(bridge, fakes, agents=("coach",))
     folder = profile(home, "coach")
     (folder / "SOUL.md").write_text("Tu es Coach.\n")
-    (folder / "config.yaml").write_text("model:\n  provider: custom\n")
+    (folder / "config.yaml").write_text("model:\n  provider: lmstudio\n")   # the person's own (custom without its address: outside)
     (bridge.state_dir / "notebook").mkdir(parents=True, exist_ok=True)
     (bridge.state_dir / "notebook" / "state.json").write_text('{"language": "fr"}')   # a French Carnet
     bridge.start()

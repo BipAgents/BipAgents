@@ -241,7 +241,7 @@ def test_settings_and_delete(bridges, fakes):
     # « Initiative » (agent_proactive.rs, test_agent_proactive.py): basic until the person changes it
     assert data["proactive"] == {"level": "basic", "smart_ok": False}
     # « Mémoire partagée » (agent_shared_memory.rs, test_shared_memory_setting.py): on, no model set (not outside)
-    assert data["shared_memory"] == {"on": True, "outside": None}
+    assert data["shared_memory"] == {"on": True, "circle": True, "outside": None}
     assert fakes.hermes.seen("/p/budget/v1/toolsets")
     bridge.commands.clear()
     patched = bridge.patch("/v1/agents/budget/settings", headers=AUTH,

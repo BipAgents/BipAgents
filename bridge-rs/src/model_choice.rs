@@ -482,12 +482,19 @@ async fn put_choice(
     let agent = agent_of(&state, &agent_id)?;
     let config = state.config();
     if body.provider == "default" {
+        // the protection first when the install's model is outside (review R2)
+        if let Some(hub) = crate::outside_model::install_model(&config) {
+            if let Some((p, l)) = crate::outside_model::outside_after(&config, &agent, |m| *m = hub) {
+                crate::agent_shared_memory::guard_before_and_follow(config.clone(), &agent, &p, &l).await;
+            }
+        }
         let _guard = crate::agents_admin::LOCK.lock().await;
         back_to_default(&config, &agent)?;
         drop(_guard);
         tracing::info!(target: "bipbridge::agents", agent = %agent.name, "agent back on the install's model");
         // an outside model's defaults, or what they had turned off back on (agent_shared_memory.rs)
         crate::agent_shared_memory::guard_and_follow(config.clone(), &agent).await;
+        crate::agent_shared_memory::fresh_sessions(&state).await;
         return Ok(web::ok(view(&config, &agent).unwrap_or(Value::Null)));
     }
     let preset = preset(&body.provider).ok_or_else(|| HttpError::new(422, "not a provider offered here"))?;
@@ -505,13 +512,24 @@ async fn put_choice(
         None if key.is_some() => Some(key.clone().unwrap_or_default()),
         None => Some(String::new()),
     };
+    // on an outside provider: its shared memory, Carnet, Health and links off before the model is written (review R2)
+    let target = |m: &mut serde_json::Map<String, Value>| {
+        let anthropic = preset.id == "anthropic";
+        m.insert("provider".into(), json!(if anthropic { "anthropic" } else { "custom" }));
+        m.insert("base_url".into(), json!(if anthropic { "" } else { base_url.as_str() }));
+        m.insert("default".into(), json!(model));
+    };
+    if let Some((p, l)) = crate::outside_model::outside_after(&config, &agent, target) {
+        crate::agent_shared_memory::guard_before_and_follow(config.clone(), &agent, &p, &l).await;
+    }
     {
         let _guard = crate::agents_admin::LOCK.lock().await;
         use_model(&config, &agent, preset, &base_url, &model, given.as_deref(), vision)?;
     }
     tracing::info!(target: "bipbridge::agents", agent = %agent.name, provider = preset.id, model = %model, "agent model chosen");
-    // on an outside provider: its shared memory and Carnet off by default, before its next message (agent_shared_memory.rs)
+    // what the model now is (a return from outside gives back what the protection turned off)
     crate::agent_shared_memory::guard_and_follow(config.clone(), &agent).await;
+    crate::agent_shared_memory::fresh_sessions(&state).await;
     Ok(web::ok(view(&config, &agent).unwrap_or(Value::Null)))
 }
 
