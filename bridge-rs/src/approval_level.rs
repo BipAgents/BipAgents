@@ -308,6 +308,10 @@ pub struct Line {
     /// Approved by a « Toujours » of the person (not by the level).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub always: bool,
+    /// A new file of drives_write.rs to put back in its service's bin: kept in its own file (drive-undo.json, review
+    /// C3: a bridge put back to the version before still reads this one), never written here.
+    #[serde(skip)]
+    pub drive_undo: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -319,8 +323,6 @@ pub enum Undo {
     MailRule { rule: String },
     /// jobs.rs' task: paused.
     Task { job: String },
-    /// drives_write.rs' new file: put in the service's bin, while unchanged (`rev`: its revision when made).
-    DriveFile { service: String, id: String, rev: String },
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -773,7 +775,7 @@ pub fn line_view(line: &Line) -> Value {
     json!({
         "id": line.id, "agent": line.agent, "kind": line.kind, "summary": line.summary, "at": iso(line.at),
         "run_id": line.run_id, "session_id": line.session_id,
-        "undo": line.undo.is_some() && line.undone_at.is_none(), "undone": line.undone_at.is_some(),
+        "undo": (line.undo.is_some() || line.drive_undo) && line.undone_at.is_none(), "undone": line.undone_at.is_some(),
         "always": line.always,
     })
 }
@@ -783,6 +785,11 @@ pub fn lines(config: &Config, agent: Option<&str>, limit: usize) -> Vec<Line> {
     let mut all: Vec<Line> = load(config).lines.into_iter().filter(|l| agent.is_none_or(|a| l.agent == a)).collect();
     all.sort_by(|a, b| b.at.total_cmp(&a.at));
     all.truncate(limit);
+    // a new file's « Annuler » (drives_write.rs, its own file)
+    let files = crate::drives_write::undoable(config);
+    for line in &mut all {
+        line.drive_undo = files.contains(&line.id);
+    }
     all
 }
 
@@ -802,7 +809,23 @@ pub async fn undo(state: &AppState, id: &str) -> Result<Line, UndoRefused> {
     if line.undone_at.is_some() {
         return Err(UndoRefused::Undone);
     }
-    let undo = line.undo.clone().ok_or(UndoRefused::NotUndoable)?;
+    let Some(undo) = line.undo.clone() else {
+        // a new file in the person's online documents (drives_write.rs keeps what undoes it)
+        return match crate::drives_write::undo_line(&config, id).await {
+            Some(Ok(())) => {
+                let now = py::time_time();
+                let done = change(&config, |b| {
+                    let l = b.lines.iter_mut().find(|l| l.id == id)?;
+                    l.undone_at = Some(now);
+                    Some(l.clone())
+                });
+                tracing::info!(target: "bipbridge::approval_level", agent = %line.agent, kind = %line.kind, "auto approval undone");
+                done.ok_or(UndoRefused::NotFound)
+            }
+            Some(Err(why)) => Err(UndoRefused::Failed(why)),
+            None => Err(UndoRefused::NotUndoable),
+        };
+    };
     let (c, agent) = (config.clone(), line.agent.clone());
     match undo {
         Undo::MailJob { job } => {
@@ -828,9 +851,6 @@ pub async fn undo(state: &AppState, id: &str) -> Result<Line, UndoRefused> {
         }
         Undo::Task { job } => {
             crate::jobs::jobs_of(state).pause(&job).await.map_err(|e| UndoRefused::Failed(e.to_string()))?;
-        }
-        Undo::DriveFile { service, id, rev } => {
-            crate::drives_write::undo_file(&config, &service, &id, &rev).await.map_err(UndoRefused::Failed)?;
         }
     }
     let now = py::time_time();
@@ -1136,7 +1156,7 @@ pub fn groups(config: &Config, agent: Option<&str>, limit: usize) -> Vec<Value> 
                 "id": format!("approved:{}", newest.id),
                 "agent": newest.agent, "kind": newest.kind, "title": title, "at": iso(newest.at),
                 "count": members.len(),
-                "undo": members.iter().any(|l| l.undo.is_some() && l.undone_at.is_none()),
+                "undo": members.iter().any(|l| (l.undo.is_some() || l.drive_undo) && l.undone_at.is_none()),
                 "undone": members.iter().all(|l| l.undone_at.is_some()),
                 "items": members.iter().map(|l| line_view(l)).collect::<Vec<_>>(),
             })

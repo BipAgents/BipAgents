@@ -4,12 +4,15 @@ item against the folders the person chose for each agent; the agents get read-on
 drive_search, drive_read, drive_save). The three services are one fake here (Drive v3 under /g, Graph under /ms,
 Dropbox under /dbx, one sign-in and token server), started by each test on a port of its own."""
 import json
+import os
+import shlex
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlencode, urlsplit
 
 import httpx
+import pytest
 
 from bbkit.common import AUTH
 from bbkit.mcp import TOKEN, call, give_token, rpc, text_of, not_done
@@ -69,6 +72,7 @@ class FakeDrives:
         # drive.file: only what was picked (and, here, what a picked folder holds)
         self.google_seen = {"gf", "gd", "gp"}
         self.sessions, self.written, self.deleted, self.made = {}, [], [], 0
+        self.ms_sessions, self.links = {}, []
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
 
     def close(self):
@@ -244,6 +248,25 @@ class FakeDrives:
                     return self.send(200, {"metadata": found})
                 if url.path == "/g/files" and parse_qs(url.query).get("uploadType") == ["resumable"]:
                     return self.google_session(None, body)
+                if url.path == "/dbx/sharing/list_shared_links":
+                    if "sharing.read" not in fake.scope.split():
+                        return self.send(401, {"error_summary": "missing_scope/",
+                                               "error": {".tag": "missing_scope", "required_scope": "sharing.read"}})
+                    at = (body.get("path") or "").lower()
+                    hits = [{".tag": "folder", "url": "https://www.dropbox.com/s/x", "path_lower": p}
+                            for p in fake.links if at == p or at.startswith(p + "/")]
+                    return self.send(200, {"links": hits, "has_more": False})
+                if url.path.startswith("/ms/me/drive/items/") and url.path.endswith(":/createUploadSession"):
+                    from urllib.parse import unquote
+                    parent, name = url.path.removeprefix("/ms/me/drive/items/").removesuffix(":/createUploadSession").split(":/", 1)
+                    name = unquote(name)
+                    assert body["item"]["@microsoft.graph.conflictBehavior"] == "fail"
+                    if any(v.get("parentReference", {}).get("id") == parent and v["name"] == name for v in fake.graph.values()):
+                        return self.send(409, {"error": {"code": "nameAlreadyExists"}})
+                    fake.made += 1
+                    fake.ms_sessions[f"u{fake.made}"] = (parent, name)
+                    host = self.headers.get("host")
+                    return self.send(200, {"uploadUrl": f"http://{host}/ms-upload/u{fake.made}"})
                 self.send(404, {"error": "not_found", "path": url.path})
 
             def raw_body(self):
@@ -289,6 +312,16 @@ class FakeDrives:
                 url = urlsplit(self.path)
                 fake.seen.append(url.path)
                 data = self.raw_body()
+                if url.path.startswith("/ms-upload/"):   # OneDrive's upload address: never with the bearer
+                    assert not self.headers.get("authorization"), "the bearer sent to the upload address"
+                    parent, name = fake.ms_sessions.pop(url.path.rsplit("/", 1)[1])
+                    fake.made += 1
+                    item = {"id": f"M{fake.made}", "name": name, "file": {}, "parentReference": {"id": parent},
+                            "eTag": "e1", "cTag": "c1"}
+                    fake.graph[item["id"]] = item
+                    fake.graph_content[item["id"]] = data
+                    fake.written.append(("onedrive", item["id"], data))
+                    return self.send(201, item)
                 if not self.signed():
                     return self.send(401, {"error": {"code": 401}})
                 if url.path.startswith("/g/upload/"):
@@ -401,7 +434,7 @@ def test_onedrive_folder_by_folder_for_the_chosen_agent(bridges, fakes):
         started, shown = connect(bridge, service, "onedrive", client="ios")
         assert started["redirect_uri"] == "bipagents://oauth/callback" and started["expires_in"] == 900
         asked = service.authorized[0]
-        assert asked["scope"] == "Files.ReadWrite offline_access User.Read" and asked["code_challenge_method"] == "S256"
+        assert asked["scope"] == "Files.Read offline_access User.Read" and asked["code_challenge_method"] == "S256"
         assert shown["state"] == "connected" and shown["account"] == "a@example.org" and shown["folders"] == []
         assert not names(bridge) & tool_names(), "connected, no folder given yet"
         # The app's folder choice: sub-folders only, sorted, someone else's folder left out.
@@ -657,7 +690,7 @@ def test_dropbox_writes_after_the_persons_yes_only_where_its_switch_is_on(bridge
         said, failed = write_tool(bridge, folder="dropbox:id:w", name="Compte rendu", text="# Réunion")
         assert failed and "right to write" in said and not cards(bridge), said
         _, shown = connect(bridge, service, "dropbox")
-        assert service.authorized[-1]["scope"].endswith(" files.content.write")
+        assert service.authorized[-1]["scope"].endswith(" files.content.write sharing.read"), "its links read too"
         assert shown["writable"] is True and shown["folders"][0]["writers"] == ["wellness"]
         # « Oui »: written; the card says what and where
         result, card = write_answered(bridge, "once", folder="dropbox:id:w", name="Compte rendu", text="# Réunion")
@@ -665,7 +698,10 @@ def test_dropbox_writes_after_the_persons_yes_only_where_its_switch_is_on(bridge
         assert card["bip_summary"] in ("Save « Compte rendu.md » in Dropbox › Work?",
                                        "Enregistrer « Compte rendu.md » dans Dropbox › Work ?"), card
         assert card["bip_detail"] == "# Réunion"
-        assert not result["isError"] and "Saved: « Compte rendu.md » in Dropbox › Work" in text_of(result), result
+        said = text_of(result)
+        assert not result["isError"] and said.startswith("Saved, a new file: dropbox:id:new"), result
+        # the names from the service between the markers that say they are data (review A-marqueurs)
+        assert "[The text between these markers" in said and "« Compte rendu.md » in Dropbox › Work" in said, said
         assert service.written[-1][2] == "# Réunion".encode()
         new_id = service.written[-1][1]
         assert service.dropbox[new_id]["path_lower"] == "/work/compte rendu.md"
@@ -677,8 +713,13 @@ def test_dropbox_writes_after_the_persons_yes_only_where_its_switch_is_on(bridge
         result, _ = write_answered(bridge, "deny", folder="dropbox:id:w", name="Autre.md", text="x")
         assert not_done(result) or result["isError"]
         assert len(service.written) == before
+        # a new version: never over a change since the agent read it (`seen`, the revision drive_read shows)
+        read, _ = tool(bridge, "drive_read", file="dropbox:id:f")
+        assert "(revision r1:" in read, read
+        said, failed = write_tool(bridge, replace="dropbox:id:f", text="x", seen="r0")
+        assert failed and "changed in Dropbox since you read it" in said and not cards(bridge), said
         # a new version: on the revision read
-        result, card = write_answered(bridge, "once", replace="dropbox:id:f", text="plan v2")
+        result, card = write_answered(bridge, "once", replace="dropbox:id:f", text="plan v2", seen="r1")
         assert card["bip_ok"]["kind"] == "drive_replace", card
         assert service.dropbox_content["id:f"] == b"plan v2" and service.dropbox["id:f"]["rev"] != "r1"
         # never outside: the look-alike, a path for a name
@@ -713,6 +754,12 @@ def test_seulement_le_critique_saves_a_new_file_at_once_and_annuler_puts_it_in_t
         undone = bridge.post(f"/v1/approvals/auto/{line['id']}/undo", headers=AUTH)
         assert undone.status_code == 200, undone.text
         assert new_id in service.deleted and new_id not in service.dropbox
+        # never a type that runs (review B1), card or not
+        said, failed = write_tool(bridge, folder="dropbox:id:w", name="Facture.pdf.bat", text="@echo off")
+        assert failed and "never written" in said and not cards(bridge), said
+        # not a document or a picture: a card, whatever the level
+        result, card = write_answered(bridge, "deny", folder="dropbox:id:w", name="page.html", text="<p>x</p>")
+        assert card["bip_ok"]["kind"] == "drive_write", card
         # a new version stays asked, whatever the level
         result, card = write_answered(bridge, "once", replace="dropbox:id:f", text="v2")
         assert card["bip_ok"]["kind"] == "drive_replace" and not result["isError"], result
@@ -741,8 +788,13 @@ def test_google_and_onedrive_write_and_the_whole_drive(bridges, fakes):
         assert failed and "peut y écrire" in said, "its own switch, off"
         # OneDrive: Files.ReadWrite, a new file with its card, then the whole OneDrive read from its root
         _, shown = connect(bridge, service, "onedrive")
-        assert service.authorized[-1]["scope"] == "Files.ReadWrite offline_access User.Read"
-        folders_put(bridge, "onedrive", [{"id": "D", "agents": ["wellness"], "writers": ["wellness"]}])
+        assert service.authorized[-1]["scope"] == "Files.Read offline_access User.Read", "reading until a writer (C6)"
+        shown = folders_put(bridge, "onedrive", [{"id": "D", "agents": ["wellness"], "writers": ["wellness"]}])
+        assert shown["writable"] is False
+        said, failed = write_tool(bridge, folder="onedrive:D", name="Été.md", text="x")
+        assert failed and "right to write" in said and not cards(bridge), said
+        _, shown = connect(bridge, service, "onedrive")
+        assert service.authorized[-1]["scope"] == "Files.ReadWrite offline_access User.Read" and shown["writable"] is True
         result, card = write_answered(bridge, "once", folder="onedrive:D", name="Été.md", text="x")
         assert not result["isError"] and service.written[-1][0] == "onedrive", result
         assert service.graph[service.written[-1][1]]["name"] == "Été.md"
@@ -752,5 +804,34 @@ def test_google_and_onedrive_write_and_the_whole_drive(bridges, fakes):
         assert not failed and "Docs" in listed and "Partagé" not in listed, listed
         read, failed = tool(bridge, "drive_read", file="onedrive:X")
         assert not failed and "secret" in read, "the whole OneDrive: Privé's file too"
+    finally:
+        service.close()
+
+
+def test_a_bridge_put_back_still_reads_the_levels_after_a_file_made_at_once(bridges, fakes):
+    """Review C3: the bridge before drive-write (`BASE_BRIDGE_CMD`, int-1.1c's release, `… serve`), started on the
+    same data after a new file was made at once, still reads the person's level: what undoes the file is kept in
+    drive-undo.json, never in approval-level.json."""
+    base = os.environ.get("BASE_BRIDGE_CMD", "").strip()
+    if not base:
+        pytest.skip("BASE_BRIDGE_CMD: the bridge before drive-write, for the rollback")
+    service = FakeDrives()
+    try:
+        bridge = install(bridges, fakes, service)
+        connect(bridge, service, "dropbox")
+        folders_put(bridge, "dropbox", [{"id": "id:w", "agents": ["wellness"], "writers": ["wellness"]}])
+        connect(bridge, service, "dropbox")
+        assert bridge.put("/v1/approval-level", headers=AUTH, json={"level": "critical"}).status_code == 200
+        result = call(bridge, "drive_write", {"folder": "dropbox:id:w", "name": "Notes", "text": "à garder"})
+        assert not result["isError"] and "Done at once" in text_of(result), result
+        kept = (bridge.data / "approval-level.json").read_text()
+        assert "drive_file" not in kept and (bridge.data / "drive-undo.json").exists()
+        bridge.stop()
+        bridge.command = shlex.split(base)
+        bridge.start()
+        level = bridge.get("/v1/approval-level", headers=AUTH)
+        assert level.status_code == 200 and level.json()["level"] == "critical", level.text
+        lines = bridge.get("/v1/approvals/auto", headers=AUTH, params={"agent": "wellness"}).json()["items"]
+        assert [l["kind"] for l in lines] == ["drive_write"] and lines[0]["undo"] is False, lines
     finally:
         service.close()

@@ -22,6 +22,12 @@ struct World {
     seen: Vec<(String, String, Option<String>)>,
     kept_forever: Vec<String>,
     made: u32,
+    /// OneDrive's upload sessions: (the folder, the name).
+    ms_sessions: HashMap<String, (String, String)>,
+    /// OneDrive answers 200 (an update) where a new file was asked.
+    upload_200: bool,
+    /// Dropbox's shared links, by `path_lower`.
+    links: Vec<String>,
 }
 
 type W = Arc<Mutex<World>>;
@@ -95,6 +101,20 @@ async fn fake(w: W, method: Method, uri: Uri, headers: HeaderMap, body: Bytes) -
     let auth = header("authorization").unwrap_or_default();
     let mut w = w.lock().unwrap();
     w.seen.push((method.to_string(), path.clone(), header("dropbox-api-arg")));
+    // OneDrive's upload session address: never with the bearer (Microsoft's rule)
+    if let Some(session) = path.strip_prefix("/ms-upload/") {
+        assert!(auth.is_empty(), "the bearer sent to the upload address");
+        let n = body.len();
+        assert_eq!(header("content-range"), Some(format!("bytes 0-{}/{n}", n.saturating_sub(1))));
+        let Some((parent, name)) = w.ms_sessions.remove(session) else { return reply(404, json!({})) };
+        w.made += 1;
+        let id = format!("M{}", w.made);
+        let v =
+            json!({"id": id, "name": name, "file": {}, "parentReference": {"id": parent}, "eTag": "e1", "cTag": "c1"});
+        w.graph.insert(id.clone(), v.clone());
+        w.bytes.insert(id, body.to_vec());
+        return reply(if w.upload_200 { 200 } else { 201 }, v);
+    }
     if path == "/token-aad" {
         // Microsoft refusing a public client's code without a secret (the Entra setting, 23/11)
         return reply(
@@ -109,6 +129,24 @@ async fn fake(w: W, method: Method, uri: Uri, headers: HeaderMap, body: Bytes) -
     let json_body = || serde_json::from_slice::<Value>(&body).unwrap_or(Value::Null);
     let host = header("host").unwrap_or_default();
     // -- Dropbox
+    if path == "/dbx/sharing/list_shared_links" {
+        if auth == "Bearer at-nolinks" {
+            return reply(
+                401,
+                json!({"error_summary": "missing_scope/", "error": {".tag": "missing_scope", "required_scope": "sharing.read"}}),
+            );
+        }
+        let v = json_body();
+        assert_eq!(v["direct_only"], false, "the links above it too");
+        let asked = v["path"].as_str().unwrap_or_default().to_lowercase();
+        let hits: Vec<Value> = w
+            .links
+            .iter()
+            .filter(|l| asked == **l || asked.starts_with(&format!("{l}/")))
+            .map(|l| json!({".tag": "folder", "url": format!("https://www.dropbox.com/s/x{l}"), "path_lower": l}))
+            .collect();
+        return reply(200, json!({"links": hits, "has_more": false}));
+    }
     if path == "/dbx/files/get_metadata" {
         let asked = json_body()["path"].as_str().unwrap_or_default().to_lowercase();
         let found =
@@ -243,9 +281,9 @@ async fn fake(w: W, method: Method, uri: Uri, headers: HeaderMap, body: Bytes) -
     // -- Graph
     if let Some(rest) = path.strip_prefix("/ms/me/drive/items/") {
         let rest = rest.to_string();
-        // `{parent}:/{name}:` and `{parent}:/{name}:/content`
+        // `{parent}:/{name}:` and `{parent}:/{name}:/createUploadSession`
         if let Some((parent, tail)) = rest.split_once(":/") {
-            let (name, content) = match tail.strip_suffix(":/content") {
+            let (name, content) = match tail.strip_suffix(":/createUploadSession") {
                 Some(n) => (n, true),
                 None => (tail.trim_end_matches(':'), false),
             };
@@ -260,17 +298,15 @@ async fn fake(w: W, method: Method, uri: Uri, headers: HeaderMap, body: Bytes) -
                     .map(|v| reply(200, v))
                     .unwrap_or_else(|| reply(404, json!({"error": {"code": "itemNotFound"}})));
             }
-            assert_eq!(query.get("@microsoft.graph.conflictBehavior").map(String::as_str), Some("fail"));
+            assert_eq!(method, Method::POST);
+            assert_eq!(json_body()["item"]["@microsoft.graph.conflictBehavior"], "fail", "documented: never replaces");
             if found.is_some() {
                 return reply(409, json!({"error": {"code": "nameAlreadyExists"}}));
             }
             w.made += 1;
-            let id = format!("M{}", w.made);
-            let v = json!({"id": id, "name": name, "file": {"mimeType": header("content-type")}, "parentReference": {"id": parent},
-                           "eTag": "e1", "cTag": "c1"});
-            w.graph.insert(id.clone(), v.clone());
-            w.bytes.insert(id, body.to_vec());
-            return reply(201, v);
+            let session = format!("u{}", w.made);
+            w.ms_sessions.insert(session.clone(), (parent.to_string(), name));
+            return reply(200, json!({"uploadUrl": format!("http://{host}/ms-upload/{session}")}));
         }
         let (id, content) = match rest.strip_suffix("/content") {
             Some(id) => (id.to_string(), true),
@@ -378,14 +414,20 @@ fn keep(config: &Config, provider: Provider, token: &str, scope: &str, folders: 
     store.write(&stored).unwrap();
 }
 
-const DBX_WRITE: &str = "account_info.read files.metadata.read files.content.read files.content.write";
+const DBX_WRITE: &str = "account_info.read files.metadata.read files.content.read files.content.write sharing.read";
 
 fn vie(config: &Config) -> AgentConfig {
     config.agents["vie"].clone()
 }
 
 fn text_content(text: &str) -> Content {
-    Content { bytes: text.as_bytes().to_vec(), mime: String::new(), text: Some(text.into()), own_name: None }
+    Content {
+        bytes: text.as_bytes().to_vec(),
+        mime: String::new(),
+        text: Some(text.into()),
+        own_name: None,
+        from_page: false,
+    }
 }
 
 fn said(d: &Dict) -> String {
@@ -439,11 +481,24 @@ fn the_words_of_the_card_and_of_the_line() {
     assert_eq!(card_sentence("nl", false, "a.md", "Dropbox"), "« a.md » opslaan in Dropbox?");
     assert_eq!(card_sentence("de", false, "a.md", "Dropbox"), "« a.md » in Dropbox speichern?");
     assert_eq!(card_sentence("es", false, "a.md", "Dropbox"), "¿Guardar « a.md » en Dropbox?");
-    let file = Content { bytes: vec![0; 12 * 1024], mime: String::new(), text: None, own_name: Some("x.pdf".into()) };
+    let file = Content {
+        bytes: vec![0; 12 * 1024],
+        mime: String::new(),
+        text: None,
+        own_name: Some("x.pdf".into()),
+        from_page: false,
+    };
     assert_eq!(card_detail("fr", false, "Dropbox", &file), "Nouveau fichier · 12 ko");
-    assert_eq!(card_detail("en", true, "Dropbox", &file), "The old version stays in Dropbox's history.\n12 KB");
+    assert_eq!(
+        card_detail("en", true, "Dropbox", &file),
+        "The old version stays in Dropbox's history (at least 30 days).\n12 KB"
+    );
     let long = text_content(&"mot ".repeat(400));
-    assert!(card_detail("fr", false, "Dropbox", &long).ends_with('…'));
+    assert!(
+        card_detail("fr", false, "Dropbox", &long).ends_with("… (2 ko en tout)"),
+        "{}",
+        card_detail("fr", false, "Dropbox", &long)
+    );
     assert_eq!(line_sentence("fr", "a.md", "Dropbox › Work"), "« a.md » enregistré dans Dropbox › Work");
     assert_eq!(size_text("fr", 3 * 1024 * 1024 / 2), "1,5 Mo");
     assert_eq!(size_text("en", 3 * 1024 * 1024 / 2), "1.5 MB");
@@ -494,10 +549,15 @@ async fn the_write_right_is_asked_only_when_a_folder_has_a_writer() {
         "files.content.read",
         vec![folder("id:w", "Work", "/work", &["vie"], &["vie"])],
     );
-    assert!(scope_of(&config, "dropbox").ends_with(" files.content.write"), "a writer: asked");
-    keep(&config, Provider::Dropbox, "at", DBX_WRITE, vec![]);
-    assert!(scope_of(&config, "dropbox").contains("files.content.write"), "« Reconnecter » keeps it");
+    assert!(scope_of(&config, "dropbox").ends_with(" files.content.write sharing.read"), "a writer: asked, links too");
+    keep(&config, Provider::Dropbox, "at", DBX_WRITE, vec![folder("id:w", "Work", "/work", &["vie"], &[])]);
+    assert!(!scope_of(&config, "dropbox").contains("write"), "no writer any more: « Reconnecter » drops it");
+    // OneDrive (review C6): reading until a folder has a writer, as Dropbox
+    assert_eq!(scope_of(&config, "onedrive"), "Files.Read offline_access User.Read");
+    keep(&config, Provider::Microsoft, "at", "Files.Read", vec![folder("D", "Docs", "", &["vie"], &["vie"])]);
     assert_eq!(scope_of(&config, "onedrive"), "Files.ReadWrite offline_access User.Read");
+    let shown = drives::view(Provider::Microsoft, true, drives::read_stored(&config).unwrap().drives.get("onedrive"));
+    assert_eq!(shown["writable"], false, "a reading connection: « Reconnecter OneDrive »");
     assert_eq!(scope_of(&config, "google_drive"), "https://www.googleapis.com/auth/drive.file", "never wider");
     // Kerfy's Microsoft client by default (public: code + PKCE, the app's redirect)
     let kerfy = drives::Settings::from_table(&json!({"enabled": true}));
@@ -628,7 +688,8 @@ async fn dropbox_writes_a_new_file_and_a_new_version_inside_the_folders_given() 
     assert_eq!((version.name.as_str(), version.place.as_str()), ("plan.txt", "Dropbox › Work"));
     let updated = write(&version, &text_content("plan v2")).await.unwrap();
     assert_eq!(updated.rev, "r1+");
-    assert_eq!(write(&version, &text_content("plan v3")).await.unwrap_err(), Fault::Refused, "its revision is no more");
+    // its revision is no more: Dropbox's `path/conflict`, said as a change (review A-conflit)
+    assert_eq!(write(&version, &text_content("plan v3")).await.unwrap_err(), Fault::Changed);
     // outside: the look-alike, a shared folder (even inside), a shared folder never added
     for (asked, replace, why) in [
         ("dropbox:id:ws", false, "not in a folder your person let you read"),
@@ -641,6 +702,36 @@ async fn dropbox_writes_a_new_file_and_a_new_version_inside_the_folders_given() 
         let said = planned(&config, asked, replace, "x.md").await.unwrap_err();
         assert!(said.contains(why), "{asked}: {said}");
     }
+    // the path from the folder given, on the card (review A-carte)
+    w.lock().unwrap().dropbox.insert(
+        "id:w19".into(),
+        json!({".tag": "folder", "id": "id:w19", "name": "2019", "path_lower": "/work/2019", "path_display": "/Work/2019"}),
+    );
+    assert_eq!(planned(&config, "dropbox:id:w19", false, "a.md").await.unwrap().place, "Dropbox › Work › 2019");
+    // a shared link on the folder or on one above it (review C2): anyone with the link would read it
+    w.lock().unwrap().links.push("/work".into());
+    for (asked, replace) in [("dropbox:id:w", false), ("dropbox:id:w19", false), ("dropbox:id:f", true)] {
+        let said = planned(&config, asked, replace, "x.md").await.unwrap_err();
+        assert!(said.contains("shared with other people"), "{asked}: {said}");
+    }
+    w.lock().unwrap().links.clear();
+    // the write right without the links' reading (a connection made before): asked again, never written blind
+    keep(
+        &config,
+        Provider::Dropbox,
+        "at-nolinks",
+        "files.content.read files.content.write",
+        vec![folder("id:w", "Work", "/work", &["vie"], &["vie"])],
+    );
+    assert!(planned(&config, "dropbox:id:w", false, "x.md").await.unwrap_err().contains("right to write yet"));
+    keep(
+        &config,
+        Provider::Dropbox,
+        "at-nolinks",
+        DBX_WRITE,
+        vec![folder("id:w", "Work", "/work", &["vie"], &["vie"])],
+    );
+    assert!(planned(&config, "dropbox:id:w", false, "x.md").await.unwrap_err().contains("right to write yet"));
     // the switch off: said with the way to turn it on
     keep(&config, Provider::Dropbox, "at", DBX_WRITE, vec![folder("id:w", "Work", "/work", &["vie"], &[])]);
     let off = planned(&config, "dropbox:id:w", false, "x.md").await.unwrap_err();
@@ -699,7 +790,13 @@ async fn google_writes_inside_what_was_picked() {
     let version = planned(&config, "google_drive:gp", true, "").await.unwrap();
     let updated = write(
         &version,
-        &Content { bytes: b"%PDF".to_vec(), mime: String::new(), text: None, own_name: Some("f.pdf".into()) },
+        &Content {
+            bytes: b"%PDF".to_vec(),
+            mime: String::new(),
+            text: None,
+            own_name: Some("f.pdf".into()),
+            from_page: false,
+        },
     )
     .await
     .unwrap();
@@ -902,7 +999,13 @@ async fn review_onedrive_never_writes_inside_a_folder_shared_above_the_one_given
             json!({"id": "FAC", "name": "Factures", "folder": {}, "parentReference": {"id": "FAM"}}),
         );
     }
-    keep(&config, Provider::Microsoft, "at", "Files.ReadWrite", vec![folder("FAC", "Factures", "", &["vie"], &["vie"])]);
+    keep(
+        &config,
+        Provider::Microsoft,
+        "at",
+        "Files.ReadWrite",
+        vec![folder("FAC", "Factures", "", &["vie"], &["vie"])],
+    );
     let said = planned(&config, "onedrive:FAC", false, "Relevé.md").await.err().unwrap_or_default();
     assert!(said.contains("shared with other people"), "written inside « Famille », shared: {said:?}");
 }
@@ -936,22 +1039,105 @@ fn review_an_older_bridge_still_reads_the_levels_after_a_new_file_made_at_once()
     }
     let (_dir, config) = setup("http://127.0.0.1:9");
     crate::approval_level::set_level(&config, "critical").unwrap();
-    crate::approval_level::record(
+    // (adapted to the fix: what undoes the new file is kept apart, drive-undo.json; the line, its « Annuler » shown)
+    let line = record_made(
         &config,
         crate::approval_level::Line {
             agent: "vie".into(),
             kind: KIND_CREATE.into(),
             summary: "« a.md » enregistré dans Dropbox › Work".into(),
-            undo: Some(crate::approval_level::Undo::DriveFile {
-                service: "dropbox".into(),
-                id: "id:new1".into(),
-                rev: "r1".into(),
-            }),
             ..Default::default()
         },
+        Made { service: "dropbox".into(), id: "id:new1".into(), rev: "r1".into(), account: None, at: py::time_time() },
     );
+    let shown = crate::approval_level::lines(&config, Some("vie"), 10);
+    assert_eq!(crate::approval_level::line_view(&shown[0])["undo"], true, "« Annuler » still shown");
+    assert_eq!(shown[0].id, line.id);
     let text = std::fs::read_to_string(std::path::Path::new(&config.data_dir()).join("approval-level.json")).unwrap();
     let old = serde_json::from_str::<OldBook>(&text);
     assert!(old.is_ok(), "the bridge before drive-write can't read it: {:?}", old.err());
     assert_eq!(old.unwrap().level.as_deref(), Some("critical"));
+}
+
+/// Review B1 with the fix: the types made at once without a card are documents and pictures only (an HTML file only
+/// from the agent's own pages); the ones that run never, card or not; a new version of one neither.
+#[test]
+fn only_documents_go_through_at_once_and_nothing_that_runs_ever() {
+    for ok in ["a.md", "a.TXT", "Relevé.pdf", "b.docx", "c.xlsx", "photo.JPG", "d.csv", "e.json", "f.odt"] {
+        assert!(at_once_kind(ok, false), "{ok}");
+        assert!(never_written(ok).is_none(), "{ok}");
+    }
+    for asked in ["page.html", "dessin.svg", "archive.zip", "sans-extension"] {
+        assert!(!at_once_kind(asked, false) && never_written(asked).is_none(), "{asked}: with a card only");
+    }
+    assert!(at_once_kind("budget.html", true), "one of its own pages");
+    for bad in [
+        "NUL.txt",
+        "con",
+        "Lpt1.md",
+        "autorun.inf",
+        "Thumbs.db",
+        "x.docm",
+        "x.xlsm",
+        "x.sh",
+        "x.dmg",
+        "x.webloc",
+        "x.desktop",
+        "x.app",
+        "x.pkg",
+        "x.apk",
+        "x.iso",
+        "x.jar",
+        "x.reg",
+        "x.js",
+        "x.py",
+    ] {
+        assert!(clean_name(bad).is_err(), "{bad:?} accepted");
+    }
+    assert!(crate::loop_brake::write_tool("drive_write"), "counted by the brake (review C8)");
+    assert!(crate::loop_brake::write_tool("mcp_bipagents_drive_write"));
+}
+
+/// Review C5: OneDrive's new file through an upload session (`conflictBehavior: fail`), the bytes to its address
+/// without the bearer; a 200 (an update) is a failure said, never a new file.
+#[tokio::test]
+async fn onedrive_s_new_file_is_a_201_or_nothing() {
+    let (base, w) = serve().await;
+    let (_dir, config) = setup(&base);
+    keep(&config, Provider::Microsoft, "at", "Files.ReadWrite", vec![folder("D", "Docs", "", &["vie"], &["vie"])]);
+    let made =
+        write(&planned(&config, "onedrive:D", false, "Neuf.md").await.unwrap(), &text_content("x")).await.unwrap();
+    assert!(made.id.starts_with('M'));
+    w.lock().unwrap().upload_200 = true;
+    let plan = planned(&config, "onedrive:D", false, "Autre.md").await.unwrap();
+    match write(&plan, &text_content("x")).await {
+        Err(Fault::Other(why)) => assert!(why.contains("not counted as a new file"), "{why}"),
+        other => panic!("a 200 taken for a new file: {other:?}"),
+    }
+}
+
+/// Review remark A-annuler: signed in with another account since, « Annuler » says so and leaves the file (never
+/// « Annulé » for a file still there).
+#[tokio::test]
+async fn annuler_after_another_account_says_so() {
+    let (base, _w) = serve().await;
+    let (_dir, config) = setup(&base);
+    keep(&config, Provider::Dropbox, "at", DBX_WRITE, vec![folder("id:w", "Work", "/work", &["vie"], &["vie"])]);
+    let made =
+        write(&planned(&config, "dropbox:id:w", false, "a.md").await.unwrap(), &text_content("a")).await.unwrap();
+    let line = record_made(
+        &config,
+        crate::approval_level::Line { agent: "vie".into(), kind: KIND_CREATE.into(), ..Default::default() },
+        Made {
+            service: "dropbox".into(),
+            id: made.id.clone(),
+            rev: made.rev.clone(),
+            account: Some("b@example.org".into()),
+            at: py::time_time(),
+        },
+    );
+    let refused = undo_line(&config, &line.id).await.unwrap().unwrap_err();
+    assert!(refused.contains("another account"), "{refused}");
+    assert!(undoable(&config).contains(&line.id), "still undoable from the right account");
+    assert!(undo_line(&config, "not-a-file-line").await.is_none());
 }

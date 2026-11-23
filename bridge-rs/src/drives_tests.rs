@@ -385,7 +385,8 @@ fn the_sign_in_addresses() {
     let ms = endpoints(&config, Provider::Microsoft).unwrap();
     let url = authorize_url(&ms, "st", "v", Pick::Folders);
     assert!(url.starts_with("https://login.example/authorize?"));
-    assert_eq!(connections::callback_query(&url)["scope"], "Files.ReadWrite offline_access User.Read");
+    // reading until a folder has a writer (review C6, as Dropbox): drives_write_tests.rs asks the write right
+    assert_eq!(connections::callback_query(&url)["scope"], "Files.Read offline_access User.Read");
     assert_eq!(ms.client.auth_method, "none");
     let dbx = endpoints(&config, Provider::Dropbox).unwrap();
     assert_eq!(
