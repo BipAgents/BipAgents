@@ -397,7 +397,8 @@ def test_s6_the_passage_de_main_takes_the_categories_the_kept_searches_and_the_r
     assert wait(lambda: b.get("/v1/family-agent", headers=AUTH).json()["handover"] is not None)
     handed = json.loads((b.state_dir / "family-agent.json").read_text())["handover"]["notebook"]
     # (review 1 R3) each side keeps only its own household's kept searches: Marie's go with her, as hers; Alex's stay
-    assert [(k["q"], k["by_household"]) for k in handed["kept"]] == [("courses", "self")] and handed["category_rules"]
+    # (`~self`: the place's own person; no household's id, a slug, is ever that: review 2 of S6, R1)
+    assert [(k["q"], k["by_household"]) for k in handed["kept"]] == [("courses", "~self")] and handed["category_rules"]
     assert [k["q"] for k in ok(fam(a, "kept"))["kept"]] == ["lait"]
     assert b"courses" not in json.dumps(json.loads((a.state_dir / "family-notebook.json").read_text())["kept"]).encode()
     assert next(p for p in handed["pages"] if p["id"] == page)["categories_by"] == "person"
@@ -515,7 +516,7 @@ def test_s6_review_1_b1_a_members_oublie_ca_takes_her_kept_searches_off_the_hold
     assert [k["q"] for k in after["kept"]] == ["lait", "cadeau marc"]
     # the holder keeps who kept each one by household (never a name sent by a bridge), told to the asking bridge only
     stored = json.loads((a.state_dir / "family-notebook.json").read_text())["kept"]
-    assert [(k["q"], k["by_household"]) for k in stored] == [("lait", "marie"), ("cadeau marc", "self")]
+    assert [(k["q"], k["by_household"]) for k in stored] == [("lait", "marie"), ("cadeau marc", "~self")]
     assert all("by" not in k for k in ok(fam(b, "kept"))["kept"])
 
 

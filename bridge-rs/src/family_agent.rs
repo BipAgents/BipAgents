@@ -179,15 +179,48 @@ fn save(path: &PathBuf, data: &Dict) -> anyhow::Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    // a temporary file of its own, renamed over the file: never one another writer is writing (review 1 of S6, R4)
+    // a temporary file of its own, renamed over the file: never one another writer is writing (review 1 of S6, R4);
+    // taken out when the write fails (it holds the family Carnet of that moment: review 2 of S6, R3)
     let tmp = path.with_extension(format!("{}.tmp", py::token_hex(4)));
-    py::write_with_mode(
+    let written = py::write_with_mode(
         &tmp.to_string_lossy(),
         py::Dumps::new().unicode().dumps(&Value::Object(data.clone())).as_bytes(),
         0o600,
-    )?;
-    std::fs::rename(&tmp, path)?;
-    Ok(())
+    )
+    .map_err(anyhow::Error::from)
+    .and_then(|()| std::fs::rename(&tmp, path).map_err(anyhow::Error::from));
+    if written.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    written
+}
+
+/// At the bridge's start (app.rs `create_app`): the temporary files of [`save`] a hard stop left between a write and
+/// its rename (`family-notebook.<hex>.tmp`, `family-agent.<hex>.tmp`: the family Carnet of that moment, a line
+/// forgotten since included; review 2 of S6, R3). Only those older than a minute: a write going on keeps its own.
+pub fn drop_stale_temporaries(config: &Config) {
+    let folder = PathBuf::from(config.data_dir());
+    let Ok(entries) = std::fs::read_dir(&folder) else { return };
+    for entry in entries.flatten() {
+        let file = entry.file_name();
+        let Some(file) = file.to_str() else { continue };
+        let ours = ["family-notebook.", "family-agent."].iter().any(|p| file.starts_with(p));
+        if !ours || !file.ends_with(".tmp") {
+            continue;
+        }
+        let old = entry
+            .metadata()
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.elapsed().ok())
+            .is_some_and(|age| age > Duration::from_secs(60));
+        if old {
+            match std::fs::remove_file(entry.path()) {
+                Ok(()) => tracing::info!(file, "family Carnet: a temporary file a stop left taken out"),
+                Err(e) => tracing::warn!(file, error = %e, "family Carnet: a temporary file a stop left not taken out"),
+            }
+        }
+    }
 }
 
 fn update<R>(path: &PathBuf, change: impl FnOnce(&mut Dict) -> R) -> anyhow::Result<R> {
@@ -1588,12 +1621,9 @@ pub fn after_unlink(state: &AppState, household: &str, entry: Option<Dict>) {
     if own_agent(&config).is_none() && known_all(&config).is_empty() && !handover_waits(&config) {
         crate::family_carnet::erase_searched(&config);
     }
-    // a member leaving the household that may hold her family Carnet: her kept searches there go with her (review 1
-    // of S6, R3; answered only by a holder she uses)
+    // a member leaving the household that holds her family Carnet: her kept searches there went before the link did
+    // (peers.rs `unlink`, family_carnet::before_unlink: review 1 of S6 R3, review 2 R2)
     if own_agent(&config).is_none() {
-        if let Some(entry) = entry {
-            crate::family_carnet::leave_holder(state, entry);
-        }
         return;
     }
     let (Some(agent), Some(entry)) = (own_agent(&config), entry) else { return };
@@ -1631,6 +1661,20 @@ mod tests {
 
     fn body(v: Value) -> Dict {
         v.as_object().cloned().unwrap()
+    }
+
+    #[test]
+    fn a_write_that_fails_leaves_no_temporary_file() {
+        // review 2 of S6, R3: the temporary file holds the family Carnet of that moment; a write that fails takes it out
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("family-notebook.json");
+        std::fs::create_dir(&path).unwrap(); // the rename over it fails
+        let mut data = Dict::new();
+        data.insert("pages".into(), json!([{"title": "Ligne oubliée depuis"}]));
+        assert!(save(&path, &data).is_err());
+        let left: Vec<String> =
+            std::fs::read_dir(dir.path()).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+        assert_eq!(left, vec!["family-notebook.json".to_string()]);
     }
 
     #[test]

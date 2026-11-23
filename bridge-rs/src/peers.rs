@@ -1046,6 +1046,9 @@ async fn unlink(state: &AppState, household: &str) -> ApiResult<Response> {
     let Some(before) = state.households.get(household) else {
         return Err(HttpError::new(404, "no such household"));
     };
+    // the household holding her family Carnet: her kept searches there go while the link still carries the calls
+    // (through Kerfy Studio's relay too: review 2 of S6, R2)
+    crate::family_carnet::before_unlink(state, household).await;
     // its pass goes with those every pass made from now on is newer than (R7), before anything else
     if let Some(given) = before.get("given_pass").and_then(Value::as_str) {
         if let Err(e) = crate::family_rendezvous::withdraw_pass(&state.config(), given) {

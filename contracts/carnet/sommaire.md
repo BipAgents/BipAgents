@@ -347,8 +347,11 @@ app shows the family sommaire only when it is listed, and falls back to today's 
   handover waits for her to take the Carnet over). The holder's 401 `unknown household` (it removed the link, its
   handover never came) is leaving too; another 401 or 403 of the holder's is a 502, never passed to the app. Her kept
   searches leave the holder's place: the holder drops those of a household in none of its family agents (taken out,
-  link removed there), her bridge drops hers as she removes the link, and a handover gives the receiver hers (`self`)
-  and leaves the leaving holder's behind. Who kept a search is kept by household (`by_household`), never a name.
+  link removed there), her bridge drops hers as she removes the link (before the link goes, so through Kerfy Studio's
+  relay too), and a handover gives the receiver hers (`~self`) and leaves the leaving holder's behind. Who kept a
+  search is kept by household (`by_household`: a household's id, or `~self` for the place's own person — never a
+  household's id, a slug of its name), never a name. Temporary files a hard stop left (`family-notebook.<hex>.tmp`,
+  `family-agent.<hex>.tmp`, older than a minute) go as the bridge starts.
 - **« Oublie ça »**: on the holder's place, the person's own lines (as before), her own kept searches and her searches
   made that say it (the others' are theirs), written under the family Carnet's own lock; on a member's place, her own
   searches made, and her own kept searches held by the holder: her bridge asks which ones her household kept

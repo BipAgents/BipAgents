@@ -926,9 +926,11 @@ fn sync_locked(config: &Config, who: &Who, today: NaiveDate) -> anyhow::Result<S
         match group_of(&sources) {
             None if !own => {}
             None => {
-                // not a trip by the rule: back to plain records, its lines kept under the bookings' table
-                demote_locked(config, &path, &page, who, &lang)?;
-                done.demoted += 1;
+                // not a trip by the rule: back to plain records, its lines kept under the bookings' table (never into
+                // another space's: the page then stays as it is)
+                if demote_locked(config, &path, &page, who, &lang)? {
+                    done.demoted += 1;
+                }
             }
             Some(g) => {
                 if let Some(into) = claimed.get(&g).cloned().filter(|_| own) {
@@ -1179,10 +1181,14 @@ fn rename_bookings_locked(config: &Config, g: &Group, title: &str, who: &Who) ->
 
 /// A page the extraction made that is no trip by the rule: its lines under the bookings' table (« Réservations »), a
 /// heading with its title over them, then the page taken out (in its history: restoring it brings it back, and it is
-/// then left as it is). Nothing dropped.
-fn demote_locked(config: &Config, path: &str, page: &Page, who: &Who, lang: &str) -> anyhow::Result<()> {
-    let Some(t) = records::kind("booking") else { return Ok(()) };
+/// then left as it is). Nothing dropped. Never from one space to the other (S5: a page filed in Pro is not poured into
+/// the bookings of Perso, nor the reverse; int-1.1d, S5 review 2 remark 3): false, the page left as it is.
+fn demote_locked(config: &Config, path: &str, page: &Page, who: &Who, lang: &str) -> anyhow::Result<bool> {
+    let Some(t) = records::kind("booking") else { return Ok(false) };
     let (rpath, before, mut rpage, table) = records::read_at(config, t, false);
+    if super::spaces::of_page(Part::Main, page) != super::spaces::of_page(Part::Main, &rpage) {
+        return Ok(false);
+    }
     let mut lines: Vec<String> = Vec::new();
     for (section, facts) in page.sections() {
         for fact in facts {
@@ -1211,7 +1217,7 @@ fn demote_locked(config: &Config, path: &str, page: &Page, who: &Who, lang: &str
     super::commit(config, Part::Main, &rpath, before.as_deref(), Some(&rpage.render()), who, "demote", &summary)?;
     let text = super::read_page_text(config, Part::Main, path);
     super::commit(config, Part::Main, path, text.as_deref(), None, who, "demote", &summary)?;
-    Ok(())
+    Ok(true)
 }
 
 #[cfg(test)]

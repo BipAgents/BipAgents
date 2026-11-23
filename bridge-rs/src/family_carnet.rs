@@ -887,8 +887,10 @@ fn kept_all(data: &Dict) -> Vec<Dict> {
         .unwrap_or_default()
 }
 
-/// Who kept a search: the household (its id on this place; `self` for this place's own person). Never a name.
-pub const SELF: &str = "self";
+/// Who kept a search: the household (its id on this place; `~self` for this place's own person). Never a name. A
+/// household's id is its name's slug (households.rs: `a-z`, `0-9`, `-` only), so none is ever `~self` — a household
+/// named « Self » is `self` (review 2 of S6, R1).
+pub const SELF: &str = "~self";
 
 fn kept_by(k: &Dict) -> String {
     tk::str_or_empty(k.get("by_household"))
@@ -949,7 +951,7 @@ pub fn prune_kept(config: &Config) -> usize {
 }
 
 /// The kept searches as the handover carries them to `receiver` (review 1 of S6, R3): the receiver's become her own
-/// (`self`), the leaving holder's own stay behind, the others' go as they are.
+/// ([`SELF`]), the leaving holder's own stay behind, the others' go as they are.
 pub fn handed_kept(kept: Option<&Value>, receiver: &str) -> Value {
     let mut out = Vec::new();
     for k in kept.and_then(Value::as_array).into_iter().flatten() {
@@ -980,7 +982,7 @@ fn write_kept(config: &Config, change: impl FnOnce(&mut Vec<Dict>) -> Result<(),
     done.map_err(|_| Refused::NotWritten)?
 }
 
-/// A search kept (« Garder ») for the household, by the household `by` (`self`: this place's person): the same words
+/// A search kept (« Garder ») for the household, by the household `by` ([`SELF`]: this place's person): the same words
 /// once; 6 at most.
 pub fn keep(config: &Config, q: &str, title: Option<&str>, category: Option<&str>, by: &str) -> Result<(), Refused> {
     let category = category.map(str::trim).filter(|c| !c.is_empty());
@@ -1468,7 +1470,7 @@ async fn hop(
     hop_to(state, &entry, method, path, query, body).await
 }
 
-/// [`hop`] with the household's entry as it is (or was: a link just removed, `leave_holder`).
+/// [`hop`] with the household's entry as it is.
 async fn hop_to(
     state: &AppState,
     entry: &Dict,
@@ -1550,15 +1552,22 @@ pub async fn forget_at_holder(state: &AppState, says: &(dyn Fn(&str) -> bool + S
     drop_own_kept(state, &entry, &|q, title| says(q) || says(title)).await
 }
 
-/// A member removed the link to the household holding her family Carnet (family_agent.rs `after_unlink`; review 1 of
-/// S6, R3): her bridge takes her kept searches off that place as she goes (best effort: the holder also drops them
-/// when it sees her gone).
-pub fn leave_holder(state: &AppState, entry: Dict) {
-    let state2 = state.clone();
-    state.spawn(async move {
-        let done = drop_own_kept(&state2, &entry, &|_, _| true).await;
-        tracing::info!(done = done, "family Carnet: her kept searches taken off the place she left");
-    });
+/// How long removing a link waits for the holder to take her kept searches off ([`before_unlink`]).
+const LEAVING_WAIT: Duration = Duration::from_secs(8);
+
+/// A member removes the link to the household holding her family Carnet (peers.rs `unlink`; review 1 of S6, R3): her
+/// bridge takes her kept searches off that place as she goes, **before** the link is gone (review 2 of S6, R2:
+/// through Kerfy Studio's relay the call goes by this bridge's own door, which no longer knows a household withdrawn).
+/// Best effort, [`LEAVING_WAIT`] at most (the holder also drops them when it sees her gone). Whether they went.
+pub async fn before_unlink(state: &AppState, household: &str) -> bool {
+    let Holder::At(at) = holder(&state.config()) else { return false };
+    if at != household {
+        return false;
+    }
+    let Some(entry) = state.households.get(household) else { return false };
+    let done = tokio::time::timeout(LEAVING_WAIT, drop_own_kept(state, &entry, &|_, _| true)).await.unwrap_or(false);
+    tracing::info!(done = done, "family Carnet: her kept searches taken off the place she leaves");
+    done
 }
 
 /// A category of the path that is not the family's: 404 (S4's rule for `/category/{id}`).
