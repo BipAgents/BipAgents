@@ -352,6 +352,7 @@ impl AppState {
         self.spawn(crate::own_space_back::at_start(self.clone())); // agents out only because others talk to them: back
         self.spawn(crate::agent_shares::drop_relative_conversations(self.clone())); // personal shares read-only (12/11)
         self.spawn(crate::phone_exit::serve(self.clone())); // the phone exit's socket for the agents' proxy (off by default)
+        self.spawn(crate::challenge_hand::run_forever(self.clone())); // a bot check that still blocks: the person told
         if self.sleep.enabled() {
             // a server of the offer: the guichet's seat agent reads whether a run goes on (runs.rs BUSY_MARKER)
             self.spawn(self.hub.clone().mark_busy_forever(self.sleep.home.clone(), 60.0));
@@ -379,6 +380,8 @@ impl AppState {
         if config.hermes.enabled() {
             self.spawn(crate::sandbox::isolate_all(self.config.clone(), agents_admin::default_run()));
             self.spawn(crate::sandbox_sites::watch(self.clone()));
+            // a sandbox container started, died or removed: its address known to the proxy at once (review 1 R5)
+            self.spawn(crate::sandbox_sites::follow_sandbox_events(self.clone()));
             // a card made while a tool call runs, in its turn's conversation; one answered elsewhere, gone (card_place.rs)
             self.spawn(crate::card_place::watch(self.clone()));
             // a tool card whose tool got turned on some other way closes by itself; one past its time expires

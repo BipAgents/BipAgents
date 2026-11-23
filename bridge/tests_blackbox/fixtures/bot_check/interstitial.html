@@ -1,0 +1,11 @@
+<!doctype html><meta charset="utf-8"><title>Just a moment...</title>
+<script id="cf">window._cf_chl_opt = {cvId: '3', cType: 'managed'};</script>
+<p>Vérification que vous êtes un humain. Cela peut prendre quelques secondes.</p>
+<script>
+  // a check the browser gets past by itself: gone a moment later (Cloudflare's interstitial usually is)
+  if (location.hash === '#clears') setTimeout(() => {
+    document.getElementById('cf').remove();
+    document.title = 'Boutique';
+    document.body.innerHTML = '<h1>Boutique</h1>' + '<p>Nos produits.</p>'.repeat(200);
+  }, 1500);
+</script>

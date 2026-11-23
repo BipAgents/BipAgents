@@ -1,0 +1,8 @@
+<!doctype html><meta charset="utf-8"><title>Accès</title>
+<p>Vérification en cours.</p>
+<div id="ts" style="width:300px;height:65px"><input type="hidden" name="cf-turnstile-response" value=""></div>
+<script>
+  // Turnstile rendered without its class: its frame in a closed shadow root, its answer field beside it (review 1 R3)
+  document.getElementById('ts').attachShadow({mode: 'closed'}).innerHTML =
+    '<div style="width:300px;height:65px;border:1px solid #ccc">Vérifiez que vous êtes humain</div>';
+</script>

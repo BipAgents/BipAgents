@@ -133,6 +133,7 @@ pub mod own_space;
 pub mod own_space_back;
 pub mod peers;
 pub mod beneath;
+pub mod bot_hosts;
 pub mod sandbox;
 pub mod sandbox_adopt;
 pub mod sandbox_sites;
@@ -236,6 +237,7 @@ pub mod weather;
 
 // -- browsers-places -------------------------------------------------------------------------------
 pub mod browser_mcp;
+pub mod challenge_hand; // a bot check that still blocks the visible browser, told to the person
 pub mod browsers;
 pub mod caldav;
 pub mod connections;

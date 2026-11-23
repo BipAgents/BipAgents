@@ -175,7 +175,8 @@ async fn an_agent_gets_its_own_browser_container_and_desktop() {
     let mcp = written(&s)["mcp_servers"]["stealth"].clone();
     assert_eq!(
         mcp,
-        json!({"command": browsers::proxy_binary(), "connect_timeout": 90, "timeout": 120,
+        // its calls bounded by bip-browser-mcp itself; Hermes waits for a bot check's hand-over (antibot-guard)
+        json!({"command": browsers::proxy_binary(), "connect_timeout": 90, "timeout": 720,
                             "args": [place.join("mcp.json").to_string_lossy()],
                             "tools": {"exclude": ["get_instance_state"]}, "call_context": true})
     );
@@ -197,6 +198,7 @@ async fn an_agent_gets_its_own_browser_container_and_desktop() {
     assert_eq!(proxy["after_run"], 480);
     assert_eq!(proxy["ended"], json!(place.join("ended").to_string_lossy()));
     assert_eq!(proxy["rescue"], json!(place.join("rescue").to_string_lossy())); // the brake's rescue turn (runs.rs)
+    assert_eq!(proxy["hand_wait_seconds"], 600); // a bot check's hand-over, under Hermes' 720 s (antibot-guard)
     assert_eq!(proxy["cdp_port"], 19602);
     assert_eq!(proxy["busy"], json!(place.join("busy").to_string_lossy()));
     assert_eq!(proxy["unit"]["path"], json!(unit_file.to_string_lossy()));

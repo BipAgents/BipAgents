@@ -1,8 +1,12 @@
 //! The sites an agent may SEND data to (owner decisions 2026-10-23, then 2026-10-28: « il faudrait pas bloquer le site
 //! mais bloquer l'envoi d'informations sans validation », internal/next/send-guard.md). An isolated sandbox
-//! (sandbox.rs) reaches the internet only through the proxy `bipagents-egress` (assets/sandbox/egress_proxy.py); each
-//! one gets its own proxy credentials (`http://<agent>:<token>@…` in its proxy variables), and the agent's visible
-//! browser is known by its address (send_guard.rs), so the proxy knows which agent asks.
+//! (sandbox.rs) reaches the internet only through the proxy `bipagents-egress` (assets/sandbox/egress_proxy.py), which
+//! knows each sandbox by its address on the sandboxes' network (the policy's `sandboxes`, from podman: `refresh_sandboxes`)
+//! and the agent's visible browser by its address on the browsers' network (send_guard.rs), so it knows which agent
+//! asks. Until 22/11 each sandbox's proxy variables carried its own credentials (`http://<agent>:<token>@…`): any
+//! command or script of the agent could read them (`env`), and GLM wrote them into a background task's prompt
+//! (passation-pro briefs/enquete-antibot-1122.md). They carry none now; the token stays here, its digest in the
+//! proxy's file, honoured nowhere once the proxy knows the sandboxes by address.
 //!
 //! - **Reading is open**: every agent's programs and browser reach any public HTTPS site, with no card. This machine
 //!   and private or Tailscale addresses stay refused (here for the names, in the proxy for what they resolve to).
@@ -33,8 +37,9 @@
 //!
 //! `<data>/sandbox-sites.json` (0600) keeps each agent's token, sites, refusals and the cards waiting;
 //! `<data>/sandbox-proxy/policy/sites.json` is what the proxy reads (the tokens' SHA-256, the hosts, the limits, the
-//! browsers' addresses; mounted read-only), `<data>/sandbox-proxy/reports/` what it writes (`sends.jsonl`, and
-//! `usage.json`: today's counts).
+//! browsers' and the sandboxes' addresses; mounted read-only), `<data>/sandbox-proxy/reports/` what it writes
+//! (`sends.jsonl`: the sends it cut, and the sandbox addresses it doesn't know yet, `{"kind": "who"}`; `usage.json`:
+//! today's counts).
 //!
 //! The routes (bridge key):
 //!
@@ -263,6 +268,8 @@ pub fn policy_of(config: &Config, store: &Store) -> Value {
                 hosts.push(host);
             }
         }
+        // never a bot check's host nor a captcha-solving service, even validated before 22/11 (bot_hosts.rs)
+        hosts.retain(|h| crate::bot_hosts::never(h).is_none());
         // the hosts its person refused for good: the proxy holds them (11/11 audit PI-2: a refusal used to stop
         // nothing). A « Refuser » is not there: it refused one request, the proxy treats the host as any other.
         let always: Vec<&String> = entry.refused_always.keys().filter(|h| !hosts.contains(h)).collect();
@@ -288,7 +295,13 @@ pub fn policy_of(config: &Config, store: &Store) -> Value {
         .into_iter()
         .filter(|(_, agent)| agent.as_str().is_some_and(|a| agents.contains_key(a)))
         .collect();
-    json!({"agents": agents, "browsers": browsers, "limits": crate::send_guard::limits(config)})
+    // each sandbox by its address (podman's, never what it says): its agent's entry, never a connector's
+    let sandboxes: serde_json::Map<String, Value> = sandbox_addresses(config)
+        .into_iter()
+        .filter(|(_, agent)| store.agents.get(agent).is_some_and(|a| !a.token.is_empty()))
+        .map(|(address, agent)| (address, json!(agent)))
+        .collect();
+    json!({"agents": agents, "browsers": browsers, "sandboxes": sandboxes, "limits": crate::send_guard::limits(config)})
 }
 
 /// The proxy's file written again when it changed (the proxy reads it again then).
@@ -394,7 +407,7 @@ fn covered(sites: &[String], host: &str) -> bool {
 /// Whether the agent may send to `host` without a card: a registry, one of its validated sites, a site of one of its
 /// approved connectors.
 pub fn validated(config: &Config, agent: &str, host: &str) -> bool {
-    covered(&send_hosts(config, agent), host)
+    crate::bot_hosts::never(host).is_none() && covered(&send_hosts(config, agent), host)
 }
 
 /// What the agent may send to without a card: the registries, its validated sites, its approved connectors' sites
@@ -412,6 +425,7 @@ pub fn send_hosts_in(config: &Config, store: &Store, agent: &str) -> Vec<String>
             sites.push(site);
         }
     }
+    sites.retain(|h| crate::bot_hosts::never(h).is_none());
     sites
 }
 
@@ -447,27 +461,6 @@ pub fn about_in(lang: &str, bytes: u64) -> String {
 
 // --- an agent's token ----------------------------------------------------------------------------------------------
 
-/// The agent's proxy URL: the sandboxes' proxy (`http://10.233.80.2:3128`) with its own credentials, its token made
-/// the first time (and the proxy's file written).
-pub fn proxy_url(config: &Config, agent: &str, base: &str) -> std::io::Result<String> {
-    let token = {
-        let known = load(config).agents.get(agent).map(|a| a.token.clone()).unwrap_or_default();
-        if known.is_empty() {
-            change(config, |store| {
-                let entry = store.agents.entry(agent.to_string()).or_default();
-                if entry.token.is_empty() {
-                    entry.token = py::token_urlsafe(24);
-                }
-                entry.token.clone()
-            })?
-        } else {
-            known
-        }
-    };
-    let rest = base.strip_prefix("http://").unwrap_or(base);
-    Ok(format!("http://{agent}:{token}@{rest}"))
-}
-
 /// The proxy's file in step with the store (at each start, before the proxy).
 pub fn ensure_policy(config: &Config) -> std::io::Result<()> {
     let _held = LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -476,8 +469,9 @@ pub fn ensure_policy(config: &Config) -> std::io::Result<()> {
     write_policy(config, &store)
 }
 
-/// A browser that goes through the proxy needs an entry for its agent (the proxy knows the browser by its address,
-/// and finds the agent's validated sites there): made like a sandbox's, without handing the token out.
+/// An agent whose sandbox or browser goes through the proxy needs an entry (the proxy knows them by their address,
+/// and finds the agent's validated sites there): its token made the first time, never handed out (22/11: not in the
+/// sandbox's proxy variables any more), the proxy's file written.
 pub fn ensure_agent(config: &Config, agent: &str) -> std::io::Result<()> {
     if load(config).agents.get(agent).is_some_and(|a| !a.token.is_empty()) {
         return ensure_policy(config);
@@ -490,11 +484,165 @@ pub fn ensure_agent(config: &Config, agent: &str) -> std::io::Result<()> {
     })
 }
 
+// --- the sandboxes' addresses (22/11, enquete-antibot) -------------------------------------------------------------
+
+/// Each running sandbox container's address on the sandboxes' network → its agent, as podman last said, by data
+/// folder (in memory; read back from the proxy's file at start, so a bridge restart doesn't forget them).
+static SANDBOXES: LazyLock<Mutex<HashMap<String, BTreeMap<String, String>>>> = LazyLock::new(Default::default);
+
+/// `podman inspect`'s template: a container's agent (Hermes labels its sandboxes with their profile, `hermes-profile`,
+/// tools/environments/docker.py) and its address on the sandboxes' network.
+pub const INSPECT_FORMAT: &str = "{{index .Config.Labels \"hermes-profile\"}} \
+{{with index .NetworkSettings.Networks \"bipagents-sandbox\"}}{{.IPAddress}}{{end}}";
+
+/// The sandboxes' addresses known now (address → agent).
+pub fn sandbox_addresses(config: &Config) -> BTreeMap<String, String> {
+    let mut all = SANDBOXES.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(known) = all.get(&config.data_dir()) {
+        return known.clone();
+    }
+    let kept: BTreeMap<String, String> = std::fs::read_to_string(policy_dir(config).join(POLICY_FILE))
+        .ok()
+        .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+        .and_then(|p| p.get("sandboxes").and_then(Value::as_object).cloned())
+        .map(|m| m.into_iter().filter_map(|(k, v)| v.as_str().map(|a| (k, a.to_string()))).collect())
+        .unwrap_or_default();
+    all.insert(config.data_dir().to_string(), kept.clone());
+    kept
+}
+
+/// The sandboxes' addresses as podman says them now; true when they changed.
+pub fn set_sandboxes(config: &Config, found: BTreeMap<String, String>) -> bool {
+    let before = sandbox_addresses(config);
+    if before == found {
+        return false;
+    }
+    SANDBOXES.lock().unwrap_or_else(|e| e.into_inner()).insert(config.data_dir().to_string(), found);
+    true
+}
+
+/// `podman inspect`'s lines (« <agent> <address> ») → address → agent: an agent `known` here, an address literal;
+/// an address claimed by two agents (never seen: podman gives each container its own) is left out.
+pub fn parse_sandboxes(out: &str, known: impl Fn(&str) -> bool) -> BTreeMap<String, String> {
+    let mut found: BTreeMap<String, String> = BTreeMap::new();
+    let mut twice: Vec<String> = Vec::new();
+    for line in out.lines() {
+        let mut words = line.split_whitespace();
+        let (Some(agent), Some(address), None) = (words.next(), words.next(), words.next()) else { continue };
+        if !known(agent) || address.parse::<std::net::IpAddr>().is_err() {
+            continue;
+        }
+        match found.get(address) {
+            Some(other) if other != agent => twice.push(address.to_string()),
+            _ => {
+                found.insert(address.to_string(), agent.to_string());
+            }
+        }
+    }
+    for address in twice {
+        found.remove(&address);
+    }
+    found
+}
+
+/// The sandboxes' addresses asked of podman (Hermes' running containers on the sandboxes' network) and the proxy's
+/// file written when they changed. A podman that fails keeps the last ones. Returns whether they changed.
+pub async fn refresh_sandboxes(config: &Config, run: &crate::agents_admin::Run) -> bool {
+    let Some(podman) = crate::sandbox::engine(config) else { return false };
+    let none = BTreeMap::new();
+    let network = format!("network={}", crate::sandbox::NETWORK);
+    let mut list = vec![podman.clone()];
+    list.extend(["ps", "-q", "--filter", "label=hermes-agent=1", "--filter", network.as_str()].map(String::from));
+    let listed = run(list, none.clone()).await;
+    let ids: Vec<String> = match listed {
+        Ok(out) => out.split_whitespace().map(str::to_string).collect(),
+        Err(exc) => {
+            tracing::warn!(target: "bipbridge::sandbox", error = %crate::agents_admin::tail(&exc.to_string(), 200), "sandboxes' addresses not read (the last ones kept)");
+            return false;
+        }
+    };
+    let found = if ids.is_empty() {
+        BTreeMap::new()
+    } else {
+        let mut command = vec![podman, "inspect".into(), "--type".into(), "container".into(), "--format".into(), INSPECT_FORMAT.into()];
+        command.extend(ids);
+        match run(command, none).await {
+            Ok(out) => parse_sandboxes(&out, |name| config.agents.contains_key(name)),
+            Err(exc) => {
+                // a container gone between the two: read again at the next look
+                tracing::info!(target: "bipbridge::sandbox", error = %crate::agents_admin::tail(&exc.to_string(), 200), "sandboxes' addresses not read this time");
+                return false;
+            }
+        }
+    };
+    if !set_sandboxes(config, found.clone()) {
+        return false;
+    }
+    let shown: Vec<String> = found.iter().map(|(a, n)| format!("{n}={a}")).collect();
+    tracing::info!(target: "bipbridge::sandbox", sandboxes = %shown.join(" "), "sandboxes known to the proxy by their address");
+    let c = config.clone();
+    match tokio::task::spawn_blocking(move || ensure_policy(&c)).await {
+        Ok(Ok(())) => true,
+        _ => {
+            tracing::warn!(target: "bipbridge::sandbox", "the proxy's file not written with the sandboxes' addresses");
+            true
+        }
+    }
+}
+
+/// podman's `events` for the sandboxes' containers: each start, death or removal.
+pub fn events_command(podman: &str) -> Vec<String> {
+    [podman, "events", "--format", "{{.Status}}", "--filter", "type=container", "--filter", "label=hermes-agent=1",
+     "--filter", "event=start", "--filter", "event=died", "--filter", "event=remove"]
+        .iter()
+        .map(|a| a.to_string())
+        .collect()
+}
+
+/// The sandboxes' addresses read again at once when one of their containers starts, dies or goes (review 1 R5: a
+/// freed address stayed its old agent's until the next look, 15 s), from podman's events; podman ending them (no
+/// events log, a restart): followed again a minute later. The 15-s look and the proxy's « who » stay behind it.
+pub async fn follow_sandbox_events(state: AppState) {
+    use tokio::io::AsyncBufReadExt;
+    let run = crate::agents_admin::default_run();
+    loop {
+        let config = state.config();
+        let Some(podman) = crate::sandbox::engine(&config) else {
+            tokio::time::sleep(Duration::from_secs(600)).await;
+            continue;
+        };
+        let command = events_command(&podman);
+        let child = tokio::process::Command::new(&command[0])
+            .args(&command[1..])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .kill_on_drop(true)
+            .spawn();
+        match child {
+            Ok(mut child) => {
+                if let Some(stdout) = child.stdout.take() {
+                    let mut lines = tokio::io::BufReader::new(stdout).lines();
+                    while let Ok(Some(_)) = lines.next_line().await {
+                        refresh_sandboxes(&state.config(), &run).await;
+                    }
+                }
+                let _ = child.kill().await;
+            }
+            Err(exc) => tracing::info!(target: "bipbridge::sandbox", error = %exc, "podman's events not followed"),
+        }
+        tokio::time::sleep(Duration::from_secs(60)).await;
+    }
+}
+
 // --- the list ------------------------------------------------------------------------------------------------------
 
 /// Added (true), or already there (false). Err: why not.
 pub fn add(config: &Config, agent: &str, raw: &str, by: &str) -> Result<bool, String> {
     let host = clean_host(raw, by == "person")?;
+    if let Some(kind) = crate::bot_hosts::never(&host) {
+        return Err(crate::bot_hosts::refusal(&host, kind));
+    }
     if registries(config).contains(&host) {
         return Ok(false);
     }
@@ -647,6 +795,37 @@ pub fn refused_in_turn(config: &Config, agent: &str, host: &str, turn: Option<&s
     }
 }
 
+/// A site validated before it became a bot check's host or a captcha-solving service (bot_hosts.rs; a bench said yes
+/// to challenges.cloudflare.com on 22/11): taken out of the agents' lists at start, each with a log line, so « Sites
+/// autorisés » never shows it as allowed (review 1 R8; the proxy's file never had it since fix 4). Returns how many.
+pub fn drop_never_sites(config: &Config) -> usize {
+    let stale = load(config)
+        .agents
+        .values()
+        .any(|a| a.sites.iter().any(|s| crate::bot_hosts::never(&s.host).is_some()));
+    if !stale {
+        return 0;
+    }
+    let dropped = change(config, |store| {
+        let mut dropped: Vec<(String, String)> = Vec::new();
+        for (agent, entry) in store.agents.iter_mut() {
+            entry.sites.retain(|site| {
+                let never = crate::bot_hosts::never(&site.host).is_some();
+                if never {
+                    dropped.push((agent.clone(), site.host.clone()));
+                }
+                !never
+            });
+        }
+        dropped
+    })
+    .unwrap_or_default();
+    for (agent, host) in &dropped {
+        tracing::warn!(target: "bipbridge::sandbox", agent = %agent, host = %host, "a bot check's host or a captcha-solving service taken out of the sites validated for sending");
+    }
+    dropped.len()
+}
+
 /// The 24-hour refusals kept before 12/11 (`refused` of each agent): gone, at start. The « Refuser toujours » stay.
 pub fn drop_timed_refusals(config: &Config) {
     let Ok(text) = std::fs::read_to_string(store_path(config)) else { return };
@@ -681,6 +860,8 @@ pub enum Asked {
     /// Too many cards wait for this agent.
     TooMany,
     Invalid(String),
+    /// A bot check's host or a captcha-solving service (bot_hosts.rs): never a card, never validated.
+    Never(String, crate::bot_hosts::Never),
 }
 
 /// The person asked whether `agent` may send to `host` (`via`: « proxy », a send cut, with about how many `bytes`; or
@@ -691,6 +872,10 @@ pub fn ask(config: &Config, agent: &str, raw: &str, reason: &str, via: &str, byt
         Ok(h) => h,
         Err(why) => return Asked::Invalid(why),
     };
+    if let Some(kind) = crate::bot_hosts::never(&host) {
+        tracing::info!(target: "bipbridge::sandbox", agent, host = %host, via, "a bot check's host or a captcha-solving service: never asked of the person");
+        return Asked::Never(host, kind);
+    }
     if validated(config, agent, &host) {
         return Asked::Already;
     }
@@ -897,6 +1082,9 @@ pub fn answer_seen(
         let left: Vec<String> = hosts.iter().filter(|h| !chosen.contains(h)).cloned().collect();
         let entry = store.agents.entry(agent.to_string()).or_default();
         for host in &chosen {
+            if allow && crate::bot_hosts::never(host).is_some() {
+                continue; // a card from before 22/11: a bot check's host is never validated
+            }
             if allow {
                 if !entry.sites.iter().any(|s| &s.host == host) && entry.sites.len() < MAX_SITES {
                     entry.sites.push(Site {
@@ -965,16 +1153,29 @@ pub struct Report {
     pub bytes: u64,
 }
 
-/// The sends the proxy cut since the last call, the file emptied (lines of an older proxy, refusals to read, are
-/// left: reading is open).
+/// What the proxy wrote since the last look: the sends it cut, and the sandbox addresses it asks about.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Reports {
+    pub sends: Vec<Report>,
+    /// Addresses on the sandboxes' network it doesn't know yet (each once).
+    pub who: Vec<String>,
+}
+
+/// The sends the proxy cut since the last call, the file emptied (`take_all_reports` without the addresses).
 pub fn take_reports(config: &Config) -> Vec<Report> {
+    take_all_reports(config).sends
+}
+
+/// What the proxy wrote since the last call, the file emptied (lines of an older proxy, refusals to read, are left:
+/// reading is open).
+pub fn take_all_reports(config: &Config) -> Reports {
     let file = reports_dir(config).join(REPORTS_FILE);
     let _ = std::fs::remove_file(reports_dir(config).join("blocked.jsonl")); // the reading cards' file, before 2026-10-28
-    let Ok(meta) = file.symlink_metadata() else { return Vec::new() };
+    let Ok(meta) = file.symlink_metadata() else { return Reports::default() };
     let taking = reports_dir(config).join(format!("{REPORTS_FILE}.taking"));
     if !meta.is_file() || std::fs::rename(&file, &taking).is_err() {
         let _ = std::fs::remove_file(&file);
-        return Vec::new();
+        return Reports::default();
     }
     let body = match crate::sandbox::open_plain(&taking) {
         Ok(f) => {
@@ -987,8 +1188,16 @@ pub fn take_reports(config: &Config) -> Vec<Report> {
     };
     let _ = std::fs::remove_file(&taking);
     let mut seen: Vec<Report> = Vec::new();
+    let mut who: Vec<String> = Vec::new();
     for line in body.lines() {
         let Ok(Value::Object(row)) = serde_json::from_str::<Value>(line) else { continue };
+        if row.get("kind").and_then(Value::as_str) == Some("who") {
+            let address = row.get("address").and_then(Value::as_str).unwrap_or("");
+            if address.parse::<std::net::IpAddr>().is_ok() && !who.iter().any(|w| w == address) && who.len() < 100 {
+                who.push(address.to_string());
+            }
+            continue;
+        }
         if row.get("kind").and_then(Value::as_str) != Some("send") {
             continue;
         }
@@ -1004,20 +1213,30 @@ pub fn take_reports(config: &Config) -> Vec<Report> {
             seen.push(Report { agent: agent.to_string(), host: host.to_string(), bytes });
         }
     }
-    seen
+    Reports { sends: seen, who }
 }
 
 /// The proxy's reports turned into cards (each few seconds), and the adopted « link » folders tended.
 pub async fn watch(state: AppState) {
     let c = state.config();
-    let _ = tokio::task::spawn_blocking(move || drop_timed_refusals(&c)).await;
+    let _ = tokio::task::spawn_blocking(move || {
+        drop_timed_refusals(&c);
+        drop_never_sites(&c);
+    })
+    .await;
+    let run = crate::agents_admin::default_run();
     let mut ticks: u64 = 0;
     loop {
         tokio::time::sleep(WATCH_EVERY).await;
         ticks += 1;
         let config = state.config();
         let c = config.clone();
-        let reports = tokio::task::spawn_blocking(move || take_reports(&c)).await.unwrap_or_default();
+        let Reports { sends: reports, who } =
+            tokio::task::spawn_blocking(move || take_all_reports(&c)).await.unwrap_or_default();
+        // a sandbox the proxy doesn't know yet (its request waits a moment), and every 15 s one gone or come
+        if !who.is_empty() || ticks % 5 == 1 {
+            refresh_sandboxes(&config, &run).await;
+        }
         for report in reports {
             let Some(found) = config.agent(Some(&report.agent)).cloned() else { continue };
             tracing::warn!(target: "bipbridge::sandbox", agent = %report.agent, host = %report.host, bytes = report.bytes, "a send to a site not validated was cut");
@@ -1324,6 +1543,7 @@ pub fn call(
             None,
         ),
         Asked::Invalid(why) => (why, true, None),
+        Asked::Never(host, kind) => (crate::bot_hosts::refusal(&host, kind), true, None),
     }
 }
 
@@ -1393,10 +1613,10 @@ mod tests {
     #[test]
     fn a_send_cut_one_card_then_the_persons_word() {
         let (_dir, config) = config();
-        let url = proxy_url(&config, "vie", "http://10.233.80.2:3128").unwrap();
+        ensure_agent(&config, "vie").unwrap();
         let token = load(&config).agents["vie"].token.clone();
-        assert_eq!(url, format!("http://vie:{token}@10.233.80.2:3128"));
-        assert_eq!(proxy_url(&config, "vie", "http://10.233.80.2:3128").unwrap(), url); // kept
+        ensure_agent(&config, "vie").unwrap();
+        assert_eq!(load(&config).agents["vie"].token, token); // kept
         let policy: Value =
             serde_json::from_str(&std::fs::read_to_string(policy_dir(&config).join(POLICY_FILE)).unwrap()).unwrap();
         assert_eq!(policy["agents"]["vie"]["key"], json!(crate::agent_tools::digest(&token)));
@@ -1505,7 +1725,7 @@ mod tests {
     fn refuse_for_now_and_for_good() {
         let dir = tempfile::tempdir().unwrap();
         let config = with_agents(&dir, json!({"vie": {"hermes_url": "http://127.0.0.1:9300", "display_name": "Vie"}}));
-        proxy_url(&config, "vie", "http://10.233.80.2:3128").unwrap();
+        ensure_agent(&config, "vie").unwrap();
         let agent = config.agent(Some("vie")).unwrap().clone();
         let policy = |c: &Config| policy_of(c, &load(c))["agents"]["vie"].clone();
         let back = |c: &Config, host: &str, seconds: f64| {
@@ -1569,7 +1789,7 @@ mod tests {
     fn a_card_that_grew_since_it_was_shown_is_asked_again_in_place() {
         let dir = tempfile::tempdir().unwrap();
         let config = with_agents(&dir, json!({"vie": {"hermes_url": "http://127.0.0.1:9300", "display_name": "Vie"}}));
-        proxy_url(&config, "vie", "http://10.233.80.2:3128").unwrap();
+        ensure_agent(&config, "vie").unwrap();
         ask(&config, "vie", "connect.garmin.com", "", "proxy", 1);
         let shown = pending_items(&config, Some("vie"))[0].clone();
         assert_eq!(shown["bip_sites_version"], json!(1));
@@ -1596,7 +1816,7 @@ mod tests {
             s.insert("language".into(), json!("fr"));
         })
         .unwrap();
-        proxy_url(&config, "vie", "http://10.233.80.2:3128").unwrap();
+        ensure_agent(&config, "vie").unwrap();
         for host in ["a.fr", "b.fr", "c.fr"] {
             ask(&config, "vie", host, "", "proxy", 100 * 1024);
         }
@@ -1697,5 +1917,116 @@ mod tests {
             ]
         );
         assert!(take_reports(&config).is_empty() && !file.exists());
+    }
+
+    /// 22/11 (enquete-antibot): a sandbox is known by its address on the sandboxes' network, as podman says it, never
+    /// by credentials in its environment. Hermes labels its containers with their profile (`hermes-profile`); an
+    /// address of an agent this place doesn't serve, a malformed line, or one address claimed twice: left out.
+    #[test]
+    fn the_sandboxes_known_by_their_address() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = with_agents(
+            &dir,
+            json!({"vie": {"hermes_url": "http://127.0.0.1:9300"}, "budget": {"hermes_url": "http://127.0.0.1:9301"}}),
+        );
+        let out = "vie 10.233.80.7\nbudget 10.233.80.9\nstranger 10.233.80.11\nvie\n 10.233.80.12\nvie not-an-ip\n\
+                   budget 10.233.80.13\nvie 10.233.80.13\n";
+        let found = parse_sandboxes(out, |name| config.agents.contains_key(name));
+        assert_eq!(
+            found,
+            BTreeMap::from([
+                ("10.233.80.7".to_string(), "vie".to_string()),
+                ("10.233.80.9".to_string(), "budget".to_string())
+            ])
+        );
+        // in the proxy's file, for the agents it has an entry for (never a connector's)
+        ensure_agent(&config, "vie").unwrap();
+        set_sandboxes(&config, found);
+        let policy = policy_of(&config, &load(&config));
+        assert_eq!(policy["sandboxes"], json!({"10.233.80.7": "vie"}));
+        // a bridge started again reads them back from the proxy's file until podman answers
+        write_policy(&config, &load(&config)).unwrap();
+        SANDBOXES.lock().unwrap().remove(&config.data_dir());
+        assert_eq!(sandbox_addresses(&config).get("10.233.80.7").map(String::as_str), Some("vie"));
+        let token = load(&config).agents["vie"].token.clone();
+        assert!(!policy.to_string().contains(&token));
+    }
+
+    /// The proxy asks who an address is (`{"kind": "who"}` lines, beside the sends): taken with them, the sends'
+    /// cards unchanged.
+    #[test]
+    fn the_proxys_who_lines_are_taken_with_the_sends() {
+        let (_dir, config) = config();
+        std::fs::create_dir_all(reports_dir(&config)).unwrap();
+        std::fs::write(
+            reports_dir(&config).join(REPORTS_FILE),
+            "{\"kind\": \"who\", \"address\": \"10.233.80.7\", \"at\": 1}\n\
+             {\"kind\": \"send\", \"agent\": \"vie\", \"host\": \"x.example.org\", \"bytes\": 70000}\n\
+             {\"kind\": \"who\", \"address\": \"10.233.80.7\", \"at\": 2}\n",
+        )
+        .unwrap();
+        let taken = take_all_reports(&config);
+        assert_eq!(taken.sends.len(), 1);
+        assert_eq!(taken.who, vec!["10.233.80.7".to_string()]);
+        assert!(take_all_reports(&config).who.is_empty());
+    }
+
+    /// 22/11 (enquete-antibot): a bot check's host or a captcha-solving service is never a card, never validated:
+    /// asked by the proxy (a send cut) or by the agent, answered at once; the person can't add it, an old card's
+    /// « Autoriser » leaves it out, and the proxy's file never lists it, even for a site validated before.
+    #[test]
+    fn a_bot_checks_host_is_never_a_card_nor_validated() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = with_agents(&dir, json!({"vie": {"hermes_url": "http://127.0.0.1:9300", "display_name": "Vie"}}));
+        ensure_agent(&config, "vie").unwrap();
+        let agent = config.agent(Some("vie")).unwrap().clone();
+        for host in ["challenges.cloudflare.com", "hcaptcha.com", "2captcha.com", "api.capsolver.com"] {
+            for via in ["proxy", "agent"] {
+                assert!(matches!(ask(&config, "vie", host, "", via, 70_000), Asked::Never(..)), "{host} {via}");
+            }
+            assert!(add(&config, "vie", host, "person").is_err(), "{host}");
+            assert!(add(&config, "vie", host, "request").is_err(), "{host}");
+            assert!(!validated(&config, "vie", host));
+        }
+        assert!(add(&config, "vie", "*.cloudflare.com", "person").is_err());
+        assert!(load(&config).pending.is_empty(), "no card");
+        let mut args = Dict::new();
+        args.insert("host".into(), json!("challenges.cloudflare.com"));
+        args.insert("reason".into(), json!("passer le mur"));
+        let (text, error, card) = call(&config, &agent, REQUEST, &args, None);
+        assert!(error && card.is_none());
+        assert!(text.contains("bot checks") && text.contains("« Prendre la main »"), "{text}");
+        // a card from before this change (made by hand here), answered « Autoriser »: the check's host left out
+        change(&config, |s| {
+            s.pending.push(Pending {
+                id: "old1".into(),
+                agent: "vie".into(),
+                host: "challenges.cloudflare.com".into(),
+                hosts: vec!["challenges.cloudflare.com".into(), "api.meteo.fr".into()],
+                reason: String::new(),
+                via: "proxy".into(),
+                at: py::time_time(),
+                bytes: 70_000,
+            });
+            // and a site validated before it (a bench said yes on 22/11)
+            s.agents.get_mut("vie").unwrap().sites.push(Site {
+                host: "challenges.cloudflare.com".into(),
+                at: "2026-11-22T09:45:51".into(),
+                by: "request".into(),
+            });
+        })
+        .unwrap();
+        assert!(answer(&config, "vie", "old1", Decision::AllSites, "app").unwrap().is_some());
+        assert!(validated(&config, "vie", "api.meteo.fr"));
+        assert!(!validated(&config, "vie", "challenges.cloudflare.com"));
+        let written = std::fs::read_to_string(policy_dir(&config).join(POLICY_FILE)).unwrap();
+        assert!(!written.contains("challenges.cloudflare.com"), "{written}");
+        assert!(!send_hosts(&config, "vie").iter().any(|h| h == "challenges.cloudflare.com"));
+        // at start, taken out of the list « Sites autorisés » shows (review 1 R8); the others stay
+        assert!(view(&config, &agent)["sites"].to_string().contains("challenges.cloudflare.com"));
+        assert_eq!(drop_never_sites(&config), 1);
+        assert_eq!(drop_never_sites(&config), 0);
+        let sites = view(&config, &agent)["sites"].to_string();
+        assert!(!sites.contains("challenges.cloudflare.com") && sites.contains("api.meteo.fr"), "{sites}");
     }
 }

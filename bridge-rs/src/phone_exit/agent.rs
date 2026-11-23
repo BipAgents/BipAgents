@@ -73,6 +73,26 @@ pub fn ask(config: &Config, agent: &str, raw: &str, reason: &str) -> std::io::Re
     })
 }
 
+/// Where the phone stands for `agent` and the site of `raw`, asked without ever making a card (antibot-guard review 2,
+/// B3: the browser's wait for the person's hand asked again with `ask`, which made a new card and notification after
+/// each « Refuser »): « LIVE » (a session covers it), « WAITING » (its card waits), else « NONE » (refused, gone, or
+/// never asked).
+pub fn state(config: &Config, agent: &str, raw: &str) -> &'static str {
+    if !config.phone_exit.enabled {
+        return "NONE";
+    }
+    let Ok(site) = super::checks::site_of(raw) else { return "NONE" };
+    let store = store::load(config);
+    if store.session_for(agent, &site).is_some() {
+        return "LIVE";
+    }
+    let now = py::time_time();
+    if store.cards.iter().any(|c| c.agent == agent && c.site == site && now - c.at < store::CARD_TTL) {
+        return "WAITING";
+    }
+    "NONE"
+}
+
 /// The person answered card `id`: `once`, `always` (the site set to « Toujours ») or `deny`. Some(Some(session)):
 /// the session the phone now carries (a live one covering the site is reused); Some(None): refused; None: no such
 /// card (answered already, or gone).
@@ -255,8 +275,43 @@ they can do this step themselves (« Prendre la main »).",
     format!("{start} {rest}")
 }
 
+/// The kinds `challenge_kind` finds that are a whole page standing in for the site's (not a widget inside one).
+pub fn whole_page(kind: &str) -> bool {
+    matches!(kind, "Cloudflare challenge" | "DataDome" | "PerimeterX" | "Akamai « Access Denied »" | "Imperva")
+}
+
+/// A widget's class (`cf-turnstile`, `h-captcha`, `g-recaptcha`) in a tag that is not invisible, its answer field
+/// (`…-response`) aside.
+fn widget(text: &str, class: &str) -> bool {
+    text.match_indices(class).any(|(at, _)| {
+        if text[at + class.len()..].starts_with("-response") || text[..at].ends_with('-') {
+            return false;
+        }
+        let start = text[..at].rfind('<').unwrap_or(0);
+        let end = text[at..].find('>').map(|e| at + e).unwrap_or(text.len());
+        !text[start..end].contains("invisible")
+    })
+}
+
+/// A reCAPTCHA box's frame (`/recaptcha/api2/anchor`, enterprise's, recaptcha.net's), not the invisible one of the v3
+/// badge or of an invisible v2.
+fn recaptcha_box(text: &str) -> bool {
+    ["/recaptcha/api2/anchor", "/recaptcha/enterprise/anchor"].iter().any(|path| {
+        text.match_indices(path).any(|(at, _)| {
+            let rest = &text[at..];
+            let end = rest.find(['"', '\'', ' ', '>', '\n']).unwrap_or(rest.len());
+            !rest[..end].contains("size=invisible")
+        })
+    })
+}
+
 /// A page that is a challenge or block page for servers: its kind (None: an ordinary page). Markers of the pages
-/// themselves, not of the scripts ordinary pages load (DataDome's tag is on leboncoin's every page).
+/// themselves, not of the scripts ordinary pages load (DataDome's tag is on leboncoin's every page). Since
+/// antibot-guard (22/11) the widgets a person must answer too, wherever the page is (Turnstile, hCaptcha, a reCAPTCHA
+/// v2 box, AWS WAF's CAPTCHA, Arkose, GeeTest), never what ordinary pages carry without asking anything: the reCAPTCHA
+/// v3 badge and its invisible frame, an invisible widget, the libraries loaded before any widget, a widget's answer
+/// field. The visible browser looks at the page itself too (browser_mcp.rs `CHECK_PROBE`: a widget shown and not
+/// answered yet), and its verdict wins over an answer's text.
 pub fn challenge_kind(text: &str) -> Option<&'static str> {
     let has = |s: &str| text.contains(s);
     // Cloudflare's challenge page, its title in the visitor's language (« Vérification de sécurité » for ameli, 6/11)
@@ -280,6 +335,25 @@ pub fn challenge_kind(text: &str) -> Option<&'static str> {
     if has("_Incapsula_Resource") || (has("Request unsuccessful") && has("Incapsula")) {
         return Some("Imperva");
     }
+    // the widgets (antibot-guard, 22/11)
+    if has("/turnstile/if/") || widget(text, "cf-turnstile") {
+        return Some("Cloudflare Turnstile");
+    }
+    if has("hcaptcha.com/captcha/") || widget(text, "h-captcha") {
+        return Some("hCaptcha");
+    }
+    if recaptcha_box(text) || widget(text, "g-recaptcha") {
+        return Some("reCAPTCHA");
+    }
+    if has("AwsWafCaptcha") {
+        return Some("AWS WAF CAPTCHA");
+    }
+    if has("arkoselabs.com/fc/gc") || has("funcaptcha.com/fc/gc") {
+        return Some("Arkose");
+    }
+    if ["geetest_captcha", "geetest_holder", "geetest_panel", "geetest_box"].iter().any(|m| has(m)) {
+        return Some("GeeTest");
+    }
     None
 }
 
@@ -298,6 +372,51 @@ mod tests {
         // an ordinary page loading DataDome's tag, or Cloudflare's analytics
         assert_eq!(challenge_kind("<script src=\"https://js.datadome.co/tags.js\"></script> Annonces"), None);
         assert_eq!(challenge_kind("static.cloudflareinsights.com/beacon.min.js"), None);
+    }
+
+    #[test]
+    fn the_captcha_widgets_that_still_block_not_the_ones_that_never_ask() {
+        // antibot-guard (22/11): a widget a person must answer is a check, wherever the page is
+        let blocking = [
+            ("<iframe src=\"https://challenges.cloudflare.com/cdn-cgi/challenge-platform/h/b/turnstile/if/ov2/av0/x\">",
+             "Cloudflare Turnstile"),
+            ("<div class=\"cf-turnstile\" data-sitekey=\"0x4AAA\"></div>", "Cloudflare Turnstile"),
+            ("<iframe src=\"https://newassets.hcaptcha.com/captcha/v1/abc/static/hcaptcha.html#frame=checkbox\">",
+             "hCaptcha"),
+            ("<div class=\"h-captcha\" data-sitekey=\"10000000\"></div>", "hCaptcha"),
+            ("<iframe title=\"reCAPTCHA\" src=\"https://www.google.com/recaptcha/api2/anchor?ar=1&k=6Le&size=normal\">",
+             "reCAPTCHA"),
+            ("<iframe src=\"https://www.recaptcha.net/recaptcha/enterprise/anchor?k=6Le&size=compact\">", "reCAPTCHA"),
+            ("<div class=\"g-recaptcha\" data-sitekey=\"6Le\"></div>", "reCAPTCHA"),
+            ("<script src=\"https://x.eu-west-3.captcha.awswaf.com/x/jsapi.js\"></script> AwsWafCaptcha.renderCaptcha(",
+             "AWS WAF CAPTCHA"),
+            ("<iframe src=\"https://client-api.arkoselabs.com/fc/gc/?token=1\">", "Arkose"),
+            ("<div class=\"geetest_captcha geetest_boxShow\">", "GeeTest"),
+            ("<iframe src=\"https://geo.captcha-delivery.com/captcha/?initialCid=x\">", "DataDome"),
+        ];
+        for (page, kind) in blocking {
+            assert_eq!(challenge_kind(page), Some(kind), "{page}");
+        }
+        // what ordinary pages carry: the reCAPTCHA v3 badge and its invisible anchor, an invisible widget, the
+        // libraries loaded before any widget, DataDome's tag, Cloudflare's analytics, AWS WAF's silent token
+        let ordinary = [
+            "<div class=\"grecaptcha-badge\"><iframe src=\"https://www.google.com/recaptcha/api2/anchor?ar=1&k=6Le&\
+             size=invisible\"></iframe></div> This site is protected by reCAPTCHA and the Google Privacy Policy",
+            "<script src=\"https://www.google.com/recaptcha/api.js?render=6Le\"></script>",
+            "<div class=\"g-recaptcha\" data-sitekey=\"6Le\" data-size=\"invisible\"></div>",
+            "<textarea id=\"g-recaptcha-response\" name=\"g-recaptcha-response\"></textarea>",
+            "<div class=\"h-captcha\" data-sitekey=\"1\" data-size=\"invisible\"></div>",
+            "<script src=\"https://js.hcaptcha.com/1/api.js\" async></script>",
+            "<script src=\"https://challenges.cloudflare.com/turnstile/v0/api.js\" async defer></script>",
+            "<script src=\"https://client-api.arkoselabs.com/v2/11111111-1111/api.js\"></script>",
+            "<script src=\"https://static.geetest.com/v4/gt4.js\"></script>",
+            "<script>AwsWafIntegration.getToken()</script>",
+            "<script src=\"https://js.datadome.co/tags.js\"></script>",
+            "static.cloudflareinsights.com/beacon.min.js",
+        ];
+        for page in ordinary {
+            assert_eq!(challenge_kind(page), None, "{page}");
+        }
     }
 
     #[test]

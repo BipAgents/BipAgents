@@ -133,13 +133,15 @@ def test_an_isolated_sandbox_mounts_no_folder_and_reaches_only_the_registries(br
     assert vie.get("docker_network", True) is True     # Hermes' default: not written
     # The code it writes runs without asking (Hermes' own permanent approvals), its risky commands still ask.
     assert wait_until(lambda: allowlist(hub, "vie") == CODE_KEYS and allowlist(hub, "wellness") == CODE_KEYS, timeout=10)
-    # Each sandbox its own credentials on the proxy (sandbox_sites.rs): the proxy knows which agent asks.
+    # The proxy knows each sandbox by its address (22/11, enquete-antibot): no credentials in its environment, which
+    # its commands and scripts read (`env`); the agent's entry on the proxy all the same (sandbox_sites.rs).
     sites = json.loads((bridge.state_dir / "sandbox-sites.json").read_text())["agents"]
     token = sites["vie"]["token"]
     assert len(token) >= 24 and token != sites["wellness"]["token"]
-    proxy = f"http://vie:{token}@10.233.80.2:3128"
+    proxy = "http://10.233.80.2:3128"
     assert vie["docker_env"]["HTTPS_PROXY"] == proxy == vie["docker_env"]["https_proxy"]
-    assert vie["docker_env"]["npm_config_https_proxy"] == proxy
+    assert vie["docker_env"]["npm_config_https_proxy"] == proxy == vie["docker_env"]["HTTP_PROXY"]
+    assert not any("@" in str(v) or token in str(v) for v in vie["docker_env"].values()), vie["docker_env"]
     assert oct(os.stat(bridge.state_dir / "sandbox-sites.json").st_mode & 0o777) == "0o600"
     policy = json.loads((bridge.state_dir / "sandbox-proxy" / "policy" / "sites.json").read_text())
     # reading open to every agent, sending guarded: no site validated yet, the guard's limits; a self-install has
@@ -173,6 +175,7 @@ def test_an_isolated_sandbox_mounts_no_folder_and_reaches_only_the_registries(br
     assert f"{bridge.state_dir}/sandbox-proxy/reports:/bip/reports:z" in run
     assert "BIP_POLICY=/bip/policy/sites.json" in run and "BIP_REPORTS=/bip/reports/sends.jsonl" in run
     assert "BIP_USAGE=/bip/reports/usage.json" in run and "BIP_BLOCKLIST=/bip/policy/blocklist.txt" in run
+    assert "BIP_SANDBOXES=10.233.80.2" in run
     assert not any("bipagents-browsers" in a for a in run)              # no visible browser on this install
     assert sum(1 for args in podman if args[:1] == ["run"]) == 1       # the network set up once for both agents
     # The uploads are copied into the volume, at the same paths as before.
@@ -789,10 +792,11 @@ def record(kind, size):
 
 
 def through(port, host, token, payload, wait_answer=0):
-    """A CONNECT as `vie`, then `payload` (a TLS-looking stream); returns the status line and what came back."""
+    """A CONNECT (as `vie` when `token`: credentials, as before 22/11; else none, the proxy knowing the sandbox by its
+    address), then `payload` (a TLS-looking stream); returns the status line and what came back."""
     sock = socket.create_connection(("127.0.0.1", port), timeout=10)
-    auth = base64.b64encode(f"vie:{token}".encode()).decode()
-    sock.sendall(f"CONNECT {host}:443 HTTP/1.1\r\nProxy-Authorization: Basic {auth}\r\n\r\n".encode())
+    auth = f"Proxy-Authorization: Basic {base64.b64encode(f'vie:{token}'.encode()).decode()}\r\n" if token else ""
+    sock.sendall(f"CONNECT {host}:443 HTTP/1.1\r\n{auth}\r\n".encode())
     head = b""
     while b"\r\n\r\n" not in head:
         head += sock.recv(1)
@@ -815,16 +819,25 @@ def test_the_real_proxy_cuts_a_big_upload_and_the_person_gets_one_card(bridges, 
     validated is cut past the hour's budget and becomes ONE card; a page read and a 5 MB download pass; once the person
     validated the site, the same upload goes whole."""
     bridge, hub, _ = isolated(bridges, fakes, agents=("vie", "wellness"))
+    # vie's sandbox as podman sees it (22/11): its address on the sandboxes' network is this test's own
+    bridge.commands.rule("podman", ["ps", "-q", "--filter", "label=hermes-agent=1", "--filter", "network=bipagents-sandbox"],
+                         stdout="c0ffee01\nc0ffee02\n")
+    bridge.commands.rule("podman", ["inspect", "--type", "container"],
+                         stdout="vie 127.0.0.1\nstranger 127.0.0.9\n")
     started(bridge, hub, ["vie", "wellness"])
-    token = json.loads((bridge.state_dir / "sandbox-sites.json").read_text())["agents"]["vie"]["token"]
+    token = None    # no credentials: vie is known by its address
     proxy_dir = bridge.state_dir / "sandbox-proxy"
+    policy_file = proxy_dir / "policy" / "sites.json"
+    assert wait_until(lambda: json.loads(policy_file.read_text()).get("sandboxes") == {"127.0.0.1": "vie"},
+                      timeout=20), policy_file.read_text()
     site = Site()
     site.start()
     reader = Site(serve=5 * 1024 * 1024)
     reader.start()
     port = free_port()
     env = {"BIP_POLICY": str(proxy_dir / "policy" / "sites.json"), "BIP_REPORTS": str(proxy_dir / "reports" / "sends.jsonl"),
-           "BIP_PORT": str(port), "BIP_ALLOW": "pypi.org", "TEST_SITE_PORT": str(site.port), "PATH": "/usr/bin:/bin"}
+           "BIP_PORT": str(port), "BIP_ALLOW": "pypi.org", "TEST_SITE_PORT": str(site.port), "PATH": "/usr/bin:/bin",
+           "BIP_SANDBOXES": "127.0.0.1"}
     proc = subprocess.Popen([sys.executable, "-I", "-u", "-c", LOCAL_SITES, str(PROXY_SCRIPT)], env=env,
                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     try:
@@ -876,3 +889,107 @@ def test_the_real_proxy_cuts_a_big_upload_and_the_person_gets_one_card(bridges, 
         proc.kill()
         site.sock.close()
         reader.sock.close()
+
+
+def test_a_sandbox_the_proxy_does_not_know_yet_is_asked_about_and_an_old_token_opens_nothing(bridges, fakes):
+    """22/11 (enquete-antibot): the agent's old token, read in a sandbox before the update and used from another
+    sandbox, opens nothing but the registries; a sandbox just started (an address the proxy doesn't know) waits a
+    moment while the bridge asks podman whose it is, then reads its sites."""
+    bridge, hub, _ = isolated(bridges, fakes, agents=("vie",))
+    listed, inspected = bridge.root / "podman-ps.txt", bridge.root / "podman-inspect.txt"
+    listed.write_text("")
+    inspected.write_text("")
+    bridge.commands.rule("podman", ["ps", "-q", "--filter", "label=hermes-agent=1", "--filter", "network=bipagents-sandbox"],
+                         stdout_file=str(listed))
+    bridge.commands.rule("podman", ["inspect", "--type", "container"], stdout_file=str(inspected))
+    started(bridge, hub, ["vie"])
+    token = json.loads((bridge.state_dir / "sandbox-sites.json").read_text())["agents"]["vie"]["token"]
+    proxy_dir = bridge.state_dir / "sandbox-proxy"
+    site = Site()
+    site.start()
+    port = free_port()
+    env = {"BIP_POLICY": str(proxy_dir / "policy" / "sites.json"), "BIP_REPORTS": str(proxy_dir / "reports" / "sends.jsonl"),
+           "BIP_PORT": str(port), "BIP_ALLOW": "pypi.org", "TEST_SITE_PORT": str(site.port), "PATH": "/usr/bin:/bin",
+           "BIP_SANDBOXES": "127.0.0.1", "BIP_WHO_WAIT": "1"}
+    proc = subprocess.Popen([sys.executable, "-I", "-u", "-c", LOCAL_SITES, str(PROXY_SCRIPT)], env=env,
+                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    try:
+        def up():
+            try:
+                socket.create_connection(("127.0.0.1", port), timeout=0.2).close()
+                return True
+            except OSError:
+                return False
+        assert wait_until(up, timeout=10)
+        hello = record(22, 517)
+        status, _ = through(port, "www.example-news.fr", token, hello)
+        assert status.startswith("HTTP/1.1 403 Sandbox not recognised yet"), status
+        status, _ = through(port, "pypi.org", None, hello)
+        assert status == "HTTP/1.1 200 Connection established"
+        # podman now lists it (a container just started): the next request waits for the bridge, then goes through
+        listed.write_text("c0ffee01\n")
+        inspected.write_text("vie 127.0.0.1\n")
+        env["BIP_WHO_WAIT"] = "15"
+        proc.kill()
+        proc.wait()
+        proc = subprocess.Popen([sys.executable, "-I", "-u", "-c", LOCAL_SITES, str(PROXY_SCRIPT)], env=env,
+                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        assert wait_until(up, timeout=10)
+        status, _ = through(port, "www.example-news.fr", None, hello)
+        assert status == "HTTP/1.1 200 Connection established", (status, bridge.log_tail(3000))
+        assert "sandboxes known to the proxy by their address" in bridge.log_tail(6000)
+        assert token not in bridge.log_tail(20000)
+    finally:
+        proc.kill()
+        site.sock.close()
+
+
+def test_a_bot_checks_host_is_never_asked_of_the_person(bridges, fakes):
+    """22/11 (enquete-antibot): a card « Quotidien veut envoyer des données à challenges.cloudflare.com » came up and a
+    bench's script accepted it. A bot check's host or a captcha-solving service is never a card: the proxy's report of
+    a send cut there, and the agent's own request, are answered at once (what to do instead); the person can't add one
+    in « Sites autorisés »; the proxy's file never lists one."""
+    bridge, hub, _ = isolated(bridges, fakes, agents=("vie",))
+    started(bridge, hub, ["vie"])
+    give_tokens(bridge, ["vie"])
+    reports = send_report(bridge, ("vie", "challenges.cloudflare.com", 90 * 1024), ("vie", "api.2captcha.com", 70 * 1024))
+    assert wait_until(lambda: not reports.exists(), timeout=10)
+    time.sleep(0.5)
+    assert site_cards(bridge, "vie") == []
+    for host in ("challenges.cloudflare.com", "hcaptcha.com", "2captcha.com"):
+        text, error = call(bridge, "vie", "sandbox_sites_request", host=host, reason="passer la vérification")
+        assert error and "« Prendre la main »" in text, (host, text)
+    assert "never asked of the person" in bridge.log_tail(20000)
+    assert site_cards(bridge, "vie") == []
+    for host in ("challenges.cloudflare.com", "*.hcaptcha.com", "capsolver.com"):
+        assert bridge.post("/v1/agents/vie/sandbox/sites", json={"host": host}, headers=AUTH).status_code == 422, host
+    policy = (bridge.state_dir / "sandbox-proxy" / "policy" / "sites.json").read_text()
+    assert "cloudflare" not in policy and "captcha" not in policy
+
+
+def test_a_sandbox_container_started_is_known_at_once_from_podmans_events(bridges, fakes):
+    """Review 1 of antibot-guard (R5): a freed address stayed its old agent's until the next look (15 s). The bridge
+    follows podman's events for the sandboxes' containers (a start, a death, a removal) and reads their addresses again
+    at once."""
+    bridge, hub, _ = isolated(bridges, fakes, agents=("vie",))
+    listed, inspected, go = bridge.root / "podman-ps.txt", bridge.root / "podman-inspect.txt", bridge.root / "events-go"
+    listed.write_text("")
+    inspected.write_text("")
+    ps = ["ps", "-q", "--filter", "label=hermes-agent=1", "--filter", "network=bipagents-sandbox"]
+    bridge.commands.rule("podman", ps, stdout_file=str(listed))
+    bridge.commands.rule("podman", ["inspect", "--type", "container"], stdout_file=str(inspected))
+    bridge.commands.rule("podman", ["events"], stdout="start\n", hold=str(go), times=1)
+    started(bridge, hub, ["vie"])
+    policy_file = bridge.state_dir / "sandbox-proxy" / "policy" / "sites.json"
+    looks = lambda: sum(1 for args in bridge.commands.of("podman") if args[:len(ps)] == ps)  # noqa: E731
+    assert wait_until(lambda: looks() >= 1, timeout=20)
+    events = [args for args in bridge.commands.of("podman") if args[:1] == ["events"]]
+    assert events and "label=hermes-agent=1" in events[0] and "event=died" in events[0], events
+    # right after a look (the next one is 15 s away): a container starts, podman says so
+    before = looks()
+    assert wait_until(lambda: looks() > before, timeout=20)
+    listed.write_text("c0ffee01\n")
+    inspected.write_text("vie 10.233.80.7\n")
+    go.write_text("")
+    assert wait_until(lambda: json.loads(policy_file.read_text()).get("sandboxes") == {"10.233.80.7": "vie"},
+                      timeout=4), policy_file.read_text()
