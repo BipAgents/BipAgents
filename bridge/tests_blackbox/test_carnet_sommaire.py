@@ -12,7 +12,11 @@
    `category`.
 3. **The Carnet from before, sorted once (brick S2)**: the nightly pass writes the categories in the pages' headers and
    nothing else (nothing moves, the person's own left alone, once), the small model for what stays in « Autres »
-   within its cap, the card « Voir · OK », a re-filing's toast and today's list."""
+   within its cap, the card « Voir · OK », a re-filing's toast and today's list.
+4. **The search's ground at the bridge (brick S3)**: the phone's copy (`GET /v1/notebook/index`: never Santé, a
+   number or a reference, an archived mail; ETag and 304, what changed since the phone's version, another epoch:
+   everything; gzip; no HTTP cache), the sommaire's search on today's route (`groups`, `counts`, `category`, Santé
+   behind its lock) and the online files the person allowed for the Carnet (`online=1`, a switch per drive)."""
 import json
 import os
 import re
@@ -98,6 +102,12 @@ READS = [
     ("search-marc", "/v1/notebook/search?q=marc&lang=fr"),
     ("search-devis", "/v1/notebook/search?q=devis%20cuisine&lang=fr"),
     ("search-anniversaire", "/v1/notebook/search?q=anniversaire%20claire&lang=fr"),
+    # (S3: what the new search reads differently — a typo and a neighbour, a date phrase, a spoken question — leaves
+    # the 1.0 keys as they were; recorded from carnet-s1 8b2c516b4, whose 1.0 answers are rc-1122's, the additive
+    # keys taken out)
+    ("search-aniv", "/v1/notebook/search?q=aniv%20marc&lang=fr"),
+    ("search-week", "/v1/notebook/search?q=la%20semaine%20prochaine&lang=fr"),
+    ("search-question", "/v1/notebook/search?q=C%27est%20quand%20l%27anniversaire%20de%20Claire%20%3F&lang=fr"),
     ("page-marc", "/v1/notebook/page?path=Personnes/Marc%20Durand.md&lang=fr"),
     ("page-cuisine", "/v1/notebook/page?path=Sujets/R%C3%A9novation%20cuisine.md&lang=fr"),
     ("page-jardin", "/v1/notebook/page?path=Sujets/Jardin.md&lang=fr"),
@@ -152,6 +162,29 @@ def normalised(value):
         seen = {}
         text = pattern.sub(lambda m, seen=seen, mark=mark: seen.setdefault(m.group(0), f"{mark}{len(seen) + 1}"), text)
     return text
+
+
+def undated(text):
+    """The offline copy's search `words` without the numbers of days: « 28 novembre » (the run's day + 5) splits into
+    words the day normalisation does not see, so the comparison held only on the day it was recorded (23/11: « 27 »
+    recorded on 22/11)."""
+    try:
+        value = json.loads(text)
+    except ValueError:
+        return text
+
+    def walk(v):
+        if isinstance(v, dict):
+            for k, x in v.items():
+                if k == "words" and isinstance(x, list):
+                    v[k] = [w for w in x if not (isinstance(w, str) and w.isdigit() and len(w) <= 2)]
+                else:
+                    walk(x)
+        elif isinstance(v, list):
+            for x in v:
+                walk(x)
+    walk(value)
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, indent=1)
 
 
 def contract_additive():
@@ -216,8 +249,8 @@ def test_the_1_0_apps_see_exactly_todays_answers(bridges):
             Path(record).mkdir(parents=True, exist_ok=True)
             (Path(record) / f"{name}.json").write_text(normalised(answer) + "\n")
             continue
-        want = (FIXTURES / f"{name}.json").read_text().rstrip("\n")
-        if normalised(as_1_0(route_of(path), answer)) != want:
+        want = undated((FIXTURES / f"{name}.json").read_text().rstrip("\n"))
+        if undated(normalised(as_1_0(route_of(path), answer))) != want:
             differ.append(name)
             (bridge.root / f"{name}.got.json").write_text(normalised(as_1_0(route_of(path), answer)) + "\n")
     assert not differ, f"not as before: {differ} (the answers, as a 1.0 app reads them, in {bridge.root})"
@@ -246,8 +279,8 @@ def facts_of(page):
 def test_the_bridge_files_pages_records_tasks_and_documents_by_their_words(bridges):
     bridge = bridges.new().start()
     write_carnet(bridge)
-    # what this bridge's Carnet can do of the sommaire (contracts/carnet/sommaire.json `Capability`)
-    assert bridge.get("/v1/notebook", headers=AUTH).json()["sommaire"] == ["categories", "categorize", "sorted"]
+    # what this bridge's Carnet can do of the sommaire (contracts/carnet/sommaire.json `Capability`; S2 `sorted`, S3 `index`)
+    assert bridge.get("/v1/notebook", headers=AUTH).json()["sommaire"] == ["categories", "categorize", "sorted", "index", "summary", "category", "kept", "searched"]
     # the pages, by their kind and their words, written in their frontmatter (the app's new page too)
     pages = pages_by_title(bridge)
     want = {"Marc Durand": ["people"], "Claire Durand": ["people"], "Rénovation cuisine": ["home"],
@@ -548,3 +581,238 @@ def test_no_http_cache_keeps_the_carnet(bridges):
                 bridge.post("/v1/notebook/categorize", json={"path": "Sujets/Jardin.md", "categories": ["home"]}, headers=AUTH),
                 bridge.post("/v1/notebook/categorize/undo", json={"undo": "u000000000000"}, headers=AUTH)]:
         assert got.headers.get("cache-control") == "no-store", (got.status_code, dict(got.headers))
+
+
+# -- brick S3: the phone's copy and the sommaire's search ---------------------------------------------------------
+
+def index_of(bridge, headers=None, **params):
+    got = bridge.get("/v1/notebook/index", params=params, headers={**AUTH, **(headers or {})})
+    assert got.status_code == 200, got.text
+    assert got.headers.get("cache-control") == "no-store", dict(got.headers)
+    return got
+
+
+def write_by_hand(bridge):
+    """What Obsidian or a sync leaves: a page without id, a line with a reference, an archived mail's link, a
+    quantity, a short date; and the private part's page (Santé)."""
+    carnet = bridge.state_dir / "notebook" / "carnet" / "Sujets"
+    carnet.mkdir(parents=True, exist_ok=True)
+    (carnet / "Atelier.md").write_text(
+        "---\ntype: subject\nupdated: 2025-03-01\n---\n# Atelier\n\n## Où on en est\n"
+        "- Code client HR-55821\n- Le mail [[archive:m01]] du menuisier\n- 250g de colle à bois\n"
+        "- Livraison le 3/11\n- 1/2 litre de vernis\n")
+    private = bridge.state_dir / "notebook" / "private" / "Domaines"
+    private.mkdir(parents=True, exist_ok=True)
+    (private / "Santé.md").write_text("---\ntype: area\n---\n# Santé\n\n## Ce qui compte\n"
+                                      "- Prednisolone le matin — *Wellness, 2026-11-01*\n")
+
+
+def test_the_index_is_the_phones_copy_without_sante_numbers_or_mails(bridges):
+    bridge = bridges.new().start()
+    write_carnet(bridge)
+    write_by_hand(bridge)
+    # the capability is listed only now that the route answers
+    assert bridge.get("/v1/notebook", headers=AUTH).json()["sommaire"] == ["categories", "categorize", "sorted", "index", "summary", "category", "kept", "searched"]
+    got = index_of(bridge, lang="fr")
+    etag = got.headers["etag"]
+    copy = got.json()
+    # (the tables' languages in it too: review 1 of S3, R2)
+    assert re.fullmatch(r'"e[0-9a-f]{8}-v\d+-fr"', etag) and etag == f'"{copy["epoch"]}-v{copy["version"]}-fr"'
+    assert (copy["v"], copy["full"], copy["since"], copy["lang"], copy["truncated"], copy["online_only"]) == (1, True, None, "fr", False, None)
+    assert copy["limits"] == {"lines": 20000, "bytes": 8000000} and copy["dated"] == {"before": 90, "after": 730}
+    assert copy["removed"] == [] and copy["kept"] == []
+    text = json.dumps(copy, ensure_ascii=False)
+    # never Santé, a reference, a booking's or contract's number, an archived mail
+    for never in ("Prednisolone", "HR-55821", "ABC123", "archive:", "Santé.md"):
+        assert never not in text, never
+    items = copy["items"]
+    lines = {i.get("line", ""): i for i in items}
+    # a quantity stays; « le 3/11 » is a day near the page's `updated`, « 1/2 litre » none (review 2 of S1, R10-R11)
+    assert "250g de colle à bois" in lines
+    assert lines["Livraison le 3/11"]["date"] == "2024-11-03"
+    assert "date" not in lines["1/2 litre de vernis"] and "yearly" not in lines["1/2 litre de vernis"]
+    # compact items: only `id`, `kind`, `open` always there; never a default value, never Dates or Santé
+    for i in items:
+        assert {"id", "kind", "open"} <= set(i) and i["kind"] in ("page", "line", "task", "record", "document"), i
+        for k, v in i.items():
+            assert v not in (None, False, "", []) and (k, v) not in (("part", "main"), ("space", "perso")), (k, i)
+        assert not set(i.get("categories", [])) & {"dates", "health"}, i
+    ids = {i["id"] for i in items}
+    assert any(x.startswith("page:f") for x in ids), "a page made by hand: its key from its path"
+    kinds = {i["kind"] for i in items}
+    assert kinds == {"page", "line", "task", "record", "document"}, kinds
+    claire = next(i for i in items if i.get("line", "").startswith("Anniversaire") and i.get("title") == "Claire Durand")
+    assert claire["yearly"] == iso(41)[5:] and claire["label"] == "Anniversaire" and claire["page"].startswith("page:p")
+    received = next(i for i in items if i["kind"] == "document")
+    assert received["title"] == "Devis cuisine.pdf" and "pdf" in received["fold"]
+    # the tables, whole
+    assert len(copy["neighbours"]) >= 250 and "medecin" in copy["neighbours"]["toubib"]
+    phrases = {p["words"]: p for p in copy["dates"]["phrases"]}
+    assert phrases["la semaine prochaine"]["from"] == {"unit": "week", "n": 1, "edge": "start"}
+    assert copy["dates"]["feasts"]["christmas_eve"] == {"month": 12, "day": 24}
+    assert copy["dates"]["feasts"]["ascension"] == {"easter": 39} and len(copy["dates"]["easter"]) == 10
+    assert {"le", "de", "euh"} <= set(copy["stop"])
+    # the phone has it: 304, its ETag again
+    same = bridge.get("/v1/notebook/index", params={"lang": "fr"}, headers={**AUTH, "If-None-Match": etag})
+    assert same.status_code == 304 and same.headers["etag"] == etag and same.headers.get("cache-control") == "no-store"
+    # the app's language changed: its tables come, never a 304 (review 1 of S3, R2)
+    other = bridge.get("/v1/notebook/index", params={"lang": "en"}, headers={**AUTH, "If-None-Match": etag})
+    assert other.status_code == 200 and other.headers["etag"] != etag and "doc" in other.json()["neighbours"]
+    # gzip when the phone accepts it
+    packed = index_of(bridge, headers={"Accept-Encoding": "gzip"}, lang="fr")
+    assert packed.headers.get("content-encoding") == "gzip" and packed.json()["items"] == items
+    # a word the bridge does not know: refused
+    assert bridge.get("/v1/notebook/index", params={"since": "x"}, headers=AUTH).status_code == 400
+
+
+def test_the_index_sends_only_what_changed_since_the_phones_version(bridges):
+    bridge = bridges.new().start()
+    write_carnet(bridge)
+    first = index_of(bridge, lang="fr").json()
+    epoch, version = first["epoch"], first["version"]
+    # nothing changed: the same version, nothing to send
+    again = index_of(bridge, since=version, epoch=epoch).json()
+    assert (again["version"], again["full"], again["items"], again["removed"]) == (version, False, [], [])
+    # a line written: only it, the tables whole
+    wrote(call(bridge, "notebook_write", {"page": "Marc Durand", "section": "gifts", "facts": ["Une montre de plongée"]}))
+    diff = index_of(bridge, since=version, epoch=epoch).json()
+    assert (diff["full"], diff["since"], diff["version"]) == (False, version, version + 1)
+    assert [i.get("line") for i in diff["items"] if i["kind"] == "line"] == ["Une montre de plongée"], diff["items"]
+    assert diff["removed"] == [] and len(diff["neighbours"]) >= 250 and diff["dates"]["phrases"]
+    watch = next(i for i in diff["items"] if i.get("line") == "Une montre de plongée")
+    # « Oublie ça »: the line leaves the phone at its next read
+    preview = bridge.post("/v1/notebook/forget/preview", params={"lang": "fr"},
+                          json={"texts": ["Une montre de plongée"], "page": "Marc Durand"}, headers=AUTH)
+    assert preview.status_code == 200, preview.text
+    assert bridge.post("/v1/notebook/forget/confirm", json={"token": preview.json()["token"]}, headers=AUTH).status_code == 200
+    gone = index_of(bridge, since=version + 1, epoch=epoch).json()
+    assert watch["id"] in gone["removed"] and gone["version"] == version + 2, gone
+    assert "montre de plongée" not in json.dumps(gone, ensure_ascii=False)
+    # another epoch, a version the bridge never sent: everything
+    for since, e in ((version, "e00000000"), (version + 50, epoch)):
+        whole = index_of(bridge, since=since, epoch=e).json()
+        assert whole["full"] is True and whole["since"] is None and len(whole["items"]) == len(first["items"])
+
+
+def test_the_sommaire_search_groups_by_category_on_todays_route(bridges):
+    bridge = bridges.new().start()
+    write_carnet(bridge)
+    write_by_hand(bridge)
+    ids = {i["id"]: i for i in index_of(bridge, lang="fr").json()["items"]}
+
+    def search(q, **more):
+        got = bridge.get("/v1/notebook/search", params={"q": q, "lang": "fr", "groups": "1", **more}, headers=AUTH)
+        assert got.status_code == 200, got.text
+        assert got.headers.get("cache-control") == "no-store"
+        return got.json()
+
+    # an installed 1.0 app's search: today's keys only, the copy not made for it (review 1 of S3, R3)
+    plain = bridge.get("/v1/notebook/search", params={"q": "anniversiare claire", "lang": "fr"}, headers=AUTH).json()
+    assert set(plain) == {"answers", "pages", "tasks"}, set(plain)
+    found = search("anniversiare claire")
+    # today's keys stay, the sommaire's are added
+    assert {"answers", "pages", "tasks", "groups", "counts", "online"} <= set(found)
+    assert found["online"] is None
+    first = found["groups"][0]
+    assert (first["category"], first["title"]) == ("people", "Personnes")
+    top = first["top"][0]
+    assert top["line"].startswith("Anniversaire") and top["title"] == "Claire Durand" and top["id"] in ids
+    # an Item: every key, Dates as of today
+    assert {"id", "kind", "part", "path", "title", "line", "categories", "space", "source", "who", "archived", "open"} <= set(top)
+    assert "dates" in top["categories"] and top["space"] == "perso" and top["part"] == "main"
+    assert found["counts"]["all"] >= 1 and found["counts"]["people"] >= 1
+    # a neighbour and the start of a word
+    assert search("aniv marc")["groups"][0]["top"][0]["title"] == "Marc Durand"
+    # a date phrase alone: what is dated in it (the task due in two days, the interview in five)
+    soon = search("bientôt")
+    listed = [i["line"] for g in soon["groups"] for i in g["top"]]
+    assert soon["counts"]["all"] == soon["counts"]["dates"] >= 2, soon["counts"]
+    assert "Rappeler Marc pour le devis" in listed, listed
+    # one category: only its notes
+    home = search("devis", category="home")
+    assert home["groups"] and all("home" in i["categories"] for g in home["groups"] for i in g["top"])
+    assert search("marc", space="pro")["counts"] == {"all": 0}
+    # a new app asking for the sommaire's keys only: today's are not made
+    only = search("anniversiare claire", sommaire="1")
+    assert set(only) == {"groups", "counts", "online"} and only["groups"] == found["groups"]
+    # Santé: only behind its lock, never in the shared search
+    assert search("prednisolone")["counts"] == {"all": 0}
+    locked = search("prednisolone", private="1")
+    assert [(g["category"], g["top"][0]["part"]) for g in locked["groups"]] == [("health", "health")], locked["groups"]
+    # an agent's page (create_page) is found too, with the agent that made it
+    pages = bridge.state_dir / "agent-pages" / "wellness"
+    pages.mkdir(parents=True, exist_ok=True)
+    (pages / "pg0123456789.html").write_text("<html><body><h1>Budget du voyage</h1><p>Tokyo, Kyoto</p></body></html>")
+    (pages / "pg0123456789.json").write_text(json.dumps({"title": "Budget du voyage", "updated": "2026-11-20T10:00:00+00:00"}))
+    made = search("Budget du voyage")
+    first = made["groups"][0]["top"][0]
+    assert (first["kind"], first["title"]) == ("document", "Budget du voyage"), made["groups"]
+    assert first["source"] and first["open"]["document"] == {"agent": "wellness", "file": "pg0123456789.html"}
+
+
+def test_the_online_files_only_from_the_drives_the_person_allowed(bridges, fakes):
+    from test_drives import FakeDrives, connect, install
+    service = FakeDrives()
+    try:
+        bridge = install(bridges, fakes, service)
+        connect(bridge, service, "onedrive", client="ios")
+        assert bridge.put("/v1/drives/onedrive/folders", headers=AUTH,
+                          json={"folders": [{"id": "D", "agents": ["wellness"]}]}).status_code == 200
+
+        def online(q):
+            got = bridge.get("/v1/notebook/search", params={"q": q, "lang": "fr", "online": "1", "sommaire": "1"}, headers=AUTH)
+            assert got.status_code == 200, got.text
+            return got.json()["online"]
+
+        # off by default: nothing searched online
+        assert all(d["carnet"] is False for d in bridge.get("/v1/drives", headers=AUTH).json()["drives"])
+        assert online("texte") is None and not service.downloaded("search")
+        # the person's switch on OneDrive only
+        shown = bridge.put("/v1/drives/onedrive/carnet", headers=AUTH, json={"carnet": True})
+        assert shown.status_code == 200 and shown.json()["carnet"] is True
+        found = online("texte")
+        assert found["title"] == "Dans tes fichiers en ligne"
+        assert [i["id"] for i in found["items"]] == ["drive:onedrive:F2"], found
+        item = found["items"][0]
+        assert (item["kind"], item["title"], item["categories"], item["source"]) == ("drive", "deep.txt", ["papers"], "OneDrive")
+        assert item["open"] == {"drive": {"account": "onedrive", "id": "F2"}}
+        # nothing of it is in the phone's copy
+        assert "deep.txt" not in json.dumps(index_of(bridge).json())
+        # signed in again to the same account: the switch stays (review 1 of S3, R1)
+        connect(bridge, service, "onedrive", client="ios")
+        onedrive = next(d for d in bridge.get("/v1/drives", headers=AUTH).json()["drives"] if d["service"] == "onedrive")
+        assert onedrive["carnet"] is True and [f["id"] for f in onedrive["folders"]] == ["D"], onedrive
+        # Dropbox too: its chosen folder only, never the look-alike (the fake service keeps one token at a time:
+        # OneDrive's ends here, and its search is left out quietly)
+        connect(bridge, service, "dropbox", client="ios")
+        assert bridge.put("/v1/drives/dropbox/folders", headers=AUTH,
+                          json={"folders": [{"id": "id:w", "agents": ["wellness"]}]}).status_code == 200
+        assert bridge.get("/v1/drives", headers=AUTH).json()["drives"][2]["carnet"] is False
+        bridge.put("/v1/drives/dropbox/carnet", headers=AUTH, json={"carnet": True})
+        ids = {i["id"] for i in online("plan")["items"]}
+        assert "drive:dropbox:id:f" in ids and "drive:dropbox:id:z" not in ids and "drive:onedrive:X" not in ids
+        # without `online=1`: never the network
+        plain = bridge.get("/v1/notebook/search", params={"q": "plan", "groups": "1"}, headers=AUTH).json()
+        assert plain["online"] is None
+        bridge.put("/v1/drives/onedrive/carnet", headers=AUTH, json={"carnet": False})
+        bridge.put("/v1/drives/dropbox/carnet", headers=AUTH, json={"carnet": False})
+        assert online("plan") is None
+    finally:
+        service.close()
+
+
+def test_no_http_cache_keeps_the_family_carnet(bridges, fakes):
+    """The family's Carnet, kept by no HTTP cache either (review 2 of S1): at the holder's bridge and relayed to a
+    member's."""
+    from test_family_agent import make_family_agent
+    from test_households_and_peers import household
+    from test_shared_agents import link
+    a = household(bridges, fakes, "alex", ["famille"])
+    b = household(bridges, fakes, "marie", ["vie"])
+    link(a, b)
+    make_family_agent(a)
+    for bridge in (a, b):
+        assert bridge.get("/v1/family-agent", headers=AUTH).json()["agent"]["id"].startswith("famille")
+        got = bridge.get("/v1/family-agent/notebook", headers=AUTH)
+        assert got.status_code == 200, got.text
+        assert got.headers.get("cache-control") == "no-store", dict(got.headers)
