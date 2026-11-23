@@ -16,6 +16,8 @@
 //!   `categories` (« Ranger ailleurs »): one gesture, one undo (`/categorize/undo`), one line of today's re-filings.
 //! - **Santé** is in no space: its pages never get one (one written by hand is not read), it is never in Pro, its
 //!   page and its search ignore the space asked.
+//! - **Nothing changes space without the person** (review 1, 23/11): no merge of two pages of different spaces
+//!   (mod.rs `merge_locked`), the trips split from a page in its space (trip_split.rs); « Toi » never in Pro.
 
 use serde_json::{json, Value};
 
@@ -41,6 +43,8 @@ pub enum Refused {
     Category(c::Refused),
     /// Not `perso` nor `pro`.
     SpaceUnknown,
+    /// « Toi » in Pro: the person's own page is always Perso (17/11; review 1 of S5, R4).
+    SpaceNotGiven,
 }
 
 impl Refused {
@@ -48,6 +52,7 @@ impl Refused {
         match self {
             Refused::Category(r) => r.code(),
             Refused::SpaceUnknown => "space_unknown",
+            Refused::SpaceNotGiven => "space_not_given",
         }
     }
 
@@ -435,10 +440,11 @@ fn page_with(text: &str, space: &str) -> String {
     })
 }
 
-/// Sets `space` on `target` (found: its `key`) by the person, its undo kept under `undo`. Returns the space before.
-fn set(config: &Config, target: &Target, key: &str, space: &str, undo: &str, who: &Who) -> anyhow::Result<&'static str> {
-    let _guard = super::lock();
-    let Some((_, before)) = found(config, target) else { return Ok("perso") };
+/// Sets `space` on `target` (found: its `key`, its space `before`) by the person, its undo kept under `undo`; the
+/// Carnet's lock held by the caller. A page already written with it (with its categories, in one change) is not
+/// written again.
+#[allow(clippy::too_many_arguments)]
+fn set_locked(config: &Config, target: &Target, key: &str, space: &str, before: &str, undo: &str, who: &Who) -> anyhow::Result<()> {
     let state = super::read_state(config);
     let mark_before = marks_in(&state).get(key).cloned();
     if let Target::Page { path } = target {
@@ -472,7 +478,15 @@ fn set(config: &Config, target: &Target, key: &str, space: &str, undo: &str, who
         c::keep_undo(&mut list, &super::today());
         state.insert(UNDO.into(), Value::Array(list));
     })?;
-    Ok(before)
+    Ok(())
+}
+
+/// Whether a target is « Toi » (the person's own page: always Perso, 17/11).
+fn is_self(config: &Config, target: &Target) -> bool {
+    let Target::Page { path } = target else { return false };
+    let w = super::words(&super::language(config));
+    *path == w.self_path()
+        || super::read_page_text(config, Part::Main, path).is_some_and(|t| Page::parse(&t, "").kind() == "self")
 }
 
 /// « Rangé dans Pro. », « Rangé dans Argent et Pro. » (the categories first, Dates never named; visible text, the
@@ -503,7 +517,8 @@ pub fn toast(lang: &str, categories: &[String], space: &str) -> String {
 }
 
 /// « Ranger ailleurs » (S1, `categories`) and « Ranger dans… Perso / Pro » (`space`), alone or together: one gesture,
-/// one undo. Without a space, S1's answer exactly; with one, `space` and `before.space` added, and the toast saying it.
+/// under one lock, one change of a page, one undo. Without a space, S1's answer exactly; with one, `space` and
+/// `before.space` added, and the toast saying it. « Toi » is never put in Pro (`space_not_given`).
 pub fn categorize(
     config: &Config,
     target: &Target,
@@ -521,6 +536,7 @@ pub fn categorize(
         Some(Err(r)) => return Ok(Err(r)),
         Some(Ok(s)) => s,
     };
+    let _guard = super::lock();
     let target = match target {
         Target::Item(id) => match c::resolve(config, id) {
             Some(t) => t,
@@ -528,7 +544,10 @@ pub fn categorize(
         },
         t => t.clone(),
     };
-    let Some((key, _)) = found(config, &target) else { return Ok(Err(Refused::Category(c::Refused::NotFound))) };
+    let Some((key, before)) = found(config, &target) else { return Ok(Err(Refused::Category(c::Refused::NotFound))) };
+    if space == "pro" && is_self(config, &target) {
+        return Ok(Err(Refused::SpaceNotGiven));
+    }
     let mut view = if categories.is_empty() {
         let (cats, by) = filed_now(config, &target);
         let mut shown = target.view();
@@ -537,13 +556,16 @@ pub fn categorize(
                "before": {"categories": cats, "categories_by": by}, "learnt": null,
                "undo": format!("u{}", crate::py::token_hex(6)), "toast": null})
     } else {
-        match c::categorize(config, &target, categories, who)? {
+        // a page: its categories and its space in one change of its text (review 1 of S5, R3)
+        let header = |t: &str| page_with(t, space);
+        let header: Option<&dyn Fn(&str) -> String> = matches!(target, Target::Page { .. }).then_some(&header);
+        match c::categorize_locked(config, &target, categories, who, header)? {
             Ok(v) => v,
             Err(r) => return Ok(Err(Refused::Category(r))),
         }
     };
     let undo = tk::str_or_empty(view.get("undo"));
-    let before = set(config, &target, &key, space, &undo, who)?;
+    set_locked(config, &target, &key, space, before, &undo, who)?;
     let cats = if categories.is_empty() { Vec::new() } else { super::strings(view.get("categories")) };
     view["space"] = json!(space);
     view["before"]["space"] = json!(before);
@@ -557,13 +579,10 @@ fn page_by_key(config: &Config, key: &str) -> Option<(String, Page)> {
     super::all_pages(config, Part::Main).into_iter().find(|(path, page)| c::page_key(page, path) == key)
 }
 
-/// The space part of the undo `id`: the space as it was (when it is still the one set), the mark as it was. None:
-/// no such space change. (the target as the answer shows it, its space now)
-fn undo_space(config: &Config, id: &str, who: &Who) -> anyhow::Result<Option<(Value, String)>> {
-    let _guard = super::lock();
-    let state = super::read_state(config);
-    let list: Vec<Value> = state.get(UNDO).and_then(Value::as_array).cloned().unwrap_or_default();
-    let Some(entry) = list.iter().find(|e| tk::str_or_empty(e.get("id")) == id).cloned() else { return Ok(None) };
+/// The space part of an undo (`entry`, of `space_undo`): the space as it was (when it is still the one set), the mark
+/// as it was; the Carnet's lock held by the caller. None: its page is gone. (the target as the answer shows it, its
+/// space now)
+fn undo_space_locked(config: &Config, id: &str, entry: &Value, who: &Who) -> anyhow::Result<Option<(Value, String)>> {
     let key = tk::str_or_empty(entry.get("key"));
     let set = if tk::str_or_empty(entry.get("set")) == "pro" { "pro" } else { "perso" };
     let before = if tk::str_or_empty(entry.get("before")) == "pro" { "pro" } else { "perso" };
@@ -572,7 +591,8 @@ fn undo_space(config: &Config, id: &str, who: &Who) -> anyhow::Result<Option<(Va
     let mut now = before.to_string();
     if let Some((path, p)) = &page {
         target = json!({"path": path, "private": false, "item": key});
-        // untouched when its space is no longer the one this gesture set (changed by hand, or again)
+        // untouched when its space is no longer the one this gesture set (changed by hand, or again; or put back
+        // already, with its categories, in one change)
         if of_page(Part::Main, p) == set {
             let text = super::read_page_text(config, Part::Main, path).unwrap_or_default();
             let after = page_with(&text, before);
@@ -611,11 +631,27 @@ fn undo_space(config: &Config, id: &str, who: &Who) -> anyhow::Result<Option<(Va
     Ok(Some((target, now)))
 }
 
-/// « Annuler » after « Ranger ailleurs » or « Ranger dans… »: the categories and the space as they were (S1's
-/// answer, `space` added when the gesture changed it). None: nothing of that id any more.
+/// « Annuler » after « Ranger ailleurs » or « Ranger dans… »: the categories and the space as they were, under one lock
+/// and, for a page, in one change of its text (S1's answer, `space` added when the gesture changed it). None: nothing
+/// of that id any more.
 pub fn undo(config: &Config, id: &str, _lang: &str, who: &Who) -> anyhow::Result<Option<Value>> {
-    let space = undo_space(config, id, who)?;
-    let categories = c::undo(config, id, who)?;
+    let _guard = super::lock();
+    let state = super::read_state(config);
+    let entry = state.get(UNDO).and_then(Value::as_array).into_iter().flatten().find(|e| tk::str_or_empty(e.get("id")) == id).cloned();
+    // the page's space put back with its categories (one change), when it is still the one this gesture set
+    let back = entry.as_ref().and_then(|e| {
+        let key = tk::str_or_empty(e.get("key"));
+        let (_, page) = page_by_key(config, key.strip_prefix("page:")?)?;
+        let set = if tk::str_or_empty(e.get("set")) == "pro" { "pro" } else { "perso" };
+        (of_page(Part::Main, &page) == set).then(|| if tk::str_or_empty(e.get("before")) == "pro" { "pro" } else { "perso" })
+    });
+    let header = |t: &str| page_with(t, back.unwrap_or("perso"));
+    let header: Option<&dyn Fn(&str) -> String> = back.is_some().then_some(&header);
+    let categories = c::undo_locked(config, id, who, header)?;
+    let space = match &entry {
+        Some(e) => undo_space_locked(config, id, e, who)?,
+        None => None,
+    };
     Ok(match (categories, space) {
         (Some(mut v), Some((_, now))) => {
             v["space"] = json!(now);

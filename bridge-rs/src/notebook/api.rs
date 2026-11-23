@@ -2210,7 +2210,8 @@ impl Validate for KeptChange {
     }
 }
 
-/// « Garder » a search (`{q, title?, space?, category?}`), or rename one (`{id, title}`): the space's list after it.
+/// « Garder » a search (`{q, title?, space?, category?}`), or rename one (`{id, title, space?}`): the list of the view
+/// on screen after it (`space`: the view; none, `all`, the S4 apps'; review 1 of S5, B1).
 async fn kept_change(State(state): State<AppState>, q: QueryMap, Json(body): Json<KeptChange>) -> ApiResult<Response> {
     let config = state.config();
     let shown = shown_language(&config, &q);
@@ -2222,20 +2223,22 @@ async fn kept_change(State(state): State<AppState>, q: QueryMap, Json(body): Jso
             (None, Some(words)) => super::summary::keep(&config, words, body.title.as_deref(), space, body.category.as_deref()),
             (None, None) => Err(super::summary::Refused::KeptEmpty),
         };
-        Ok(changed.map(|space| super::summary::kept_at(&config, &space, &langs, chrono::Local::now().date_naive())))
+        Ok(changed.map(|_| super::summary::kept_at(&config, space, &langs, chrono::Local::now().date_naive())))
     })
     .await?;
     done.map(web::ok).map_err(|r| sommaire_refused(r, &shown))
 }
 
-/// A kept search deleted (`?id=`): its space's list after it (404 `kept_unknown`).
+/// A kept search deleted (`?id=&space=`): the list of the view on screen after it (`space`; none: `all`), 404
+/// `kept_unknown`.
 async fn kept_drop(State(state): State<AppState>, q: QueryMap) -> ApiResult<Response> {
     let config = state.config();
     let shown = shown_language(&config, &q);
     let id = web::query_str(&q, "id", true, Some(20))?.unwrap_or_default();
+    let space = space_of(&q, &shown)?;
     let langs = super::index::langs(&super::language(&config), q.get("lang"));
     let done = blocking(move || {
-        Ok(super::summary::drop_kept(&config, &id).map(|space| super::summary::kept_at(&config, &space, &langs, chrono::Local::now().date_naive())))
+        Ok(super::summary::drop_kept(&config, &id).map(|_| super::summary::kept_at(&config, space, &langs, chrono::Local::now().date_naive())))
     })
     .await?;
     done.map(web::ok).map_err(|r| sommaire_refused(r, &shown))

@@ -470,12 +470,16 @@ fn kept_category(k: &Dict) -> Option<String> {
 }
 
 /// The kept searches of the view of `space` (`Kept`; spaces.rs `kept_in_view`: `all` every space's, `perso` also
-/// those kept with the setting off), each with what it finds now in that view (`count`: `all` of the sommaire's
+/// those kept with the setting off), six at most (the newest: after the setting changed a view may hold more, none
+/// is dropped; review 1 of S5, R2), each with what it finds now in that view (`count`: `all` of the sommaire's
 /// search).
 fn kept_with_counts(config: &Config, f: &Finder, space: &str, today: NaiveDate) -> Vec<Value> {
-    kept_all(&super::read_state(config))
-        .iter()
-        .filter(|k| super::spaces::kept_in_view(&kept_space(k), space))
+    let all = kept_all(&super::read_state(config));
+    let shown: Vec<&Dict> = all.iter().filter(|k| super::spaces::kept_in_view(&kept_space(k), space)).collect();
+    let skip = shown.len().saturating_sub(KEPT_MAX);
+    shown
+        .into_iter()
+        .skip(skip)
         .map(|k| {
             let q = tk::str_or_empty(k.get("q"));
             let category = kept_category(k);

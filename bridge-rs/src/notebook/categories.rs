@@ -1002,11 +1002,23 @@ pub(crate) fn resolve(config: &Config, id: &str) -> Option<Target> {
 /// a line's hash, a file's hash), never a text, a path or a file's name (« Oublie ça »). The answer says what it was
 /// and how to undo.
 pub fn categorize(config: &Config, target: &Target, given: &[String], who: &Who) -> anyhow::Result<Result<Value, Refused>> {
+    let _guard = super::lock();
+    categorize_locked(config, target, given, who, None)
+}
+
+/// [`categorize`], the Carnet's lock held by the caller; `header`: another change of a page's text written in the
+/// same write (« Ranger dans… Pro » with « Ranger ailleurs », spaces.rs: one change of the page, one lock).
+pub fn categorize_locked(
+    config: &Config,
+    target: &Target,
+    given: &[String],
+    who: &Who,
+    header: Option<&dyn Fn(&str) -> String>,
+) -> anyhow::Result<Result<Value, Refused>> {
     let cats = match checked(given) {
         Ok(c) => c,
         Err(r) => return Ok(Err(r)),
     };
-    let _guard = super::lock();
     let target = match target {
         Target::Item(id) => match resolve(config, id) {
             Some(t) => t,
@@ -1037,6 +1049,10 @@ pub fn categorize(config: &Config, target: &Target, given: &[String], who: &Who)
                 set_front(&mut page, &cats, "person");
                 page.render()
             });
+            let after = match header {
+                Some(change) => change(&after),
+                None => after,
+            };
             if after != text {
                 super::commit(config, Part::Main, path, Some(&text), Some(&after), who, ACTION, "")?;
             }
@@ -1142,6 +1158,12 @@ pub const ACTION: &str = "categorize";
 /// categories changed since (by hand, by another correction) is left as it is now.
 pub fn undo(config: &Config, id: &str, who: &Who) -> anyhow::Result<Option<Value>> {
     let _guard = super::lock();
+    undo_locked(config, id, who, None)
+}
+
+/// [`undo`], the Carnet's lock held by the caller; `header`: another change of the page's text written with it
+/// (its space put back, spaces.rs).
+pub fn undo_locked(config: &Config, id: &str, who: &Who, header: Option<&dyn Fn(&str) -> String>) -> anyhow::Result<Option<Value>> {
     let state = super::read_state(config);
     let list: Vec<Value> = state.get("category_undo").and_then(Value::as_array).cloned().unwrap_or_default();
     let Some(entry) = list.iter().find(|e| tk::str_or_empty(e.get("id")) == id).cloned() else { return Ok(None) };
@@ -1206,6 +1228,10 @@ pub fn undo(config: &Config, id: &str, who: &Who) -> anyhow::Result<Option<Value
                     }
                     page.render()
                 });
+                let after = match header {
+                    Some(change) => change(&after),
+                    None => after,
+                };
                 if after != old {
                     super::commit(config, Part::Main, &path, Some(&old), Some(&after), who, ACTION, "")?;
                 }

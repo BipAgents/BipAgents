@@ -274,3 +274,33 @@ def test_s5_the_1_0_apps_see_the_same_with_the_setting_on_and_a_pro_agent(bridge
             differ.append(name)
             (bridge.root / f"{name}.got.json").write_text(mine + "\n")
     assert not differ, f"not as before: {differ} (in {bridge.root})"
+
+
+def test_s5_renaming_or_deleting_a_kept_search_answers_the_view_on_screen(bridges):
+    """Review 1, B1: the answer of a rename (`space` in the body) or a deletion (`?space=`) is the list of the view the
+    app shows; without it, `all` (the view of the S4 apps)."""
+    bridge = studio_bridge(bridges)
+    keep(bridge, q="anniversaire")
+    setting(bridge, True)
+    keep(bridge, q="facture", space="pro")
+    before = get(bridge, "/v1/notebook/kept", space="perso")["kept"][0]
+    assert before["q"] == "anniversaire"
+    # on, the Perso tab: one kept before the setting renamed → Perso's list (never Pro's), counted in Perso
+    renamed = keep(bridge, id=before["id"], title="Les anniversaires", space="perso")["kept"]
+    assert [(k["q"], k["title"]) for k in renamed] == [("anniversaire", "Les anniversaires")]
+    assert renamed[0]["count"] == get(bridge, "/v1/notebook/kept", space="perso")["kept"][0]["count"]
+    # off: the view `all` (no space sent): renaming or deleting Pro's answers everything
+    setting(bridge, False)
+    pro_id = get(bridge, "/v1/notebook/kept", space="pro")["kept"][0]["id"]
+    assert [k["q"] for k in keep(bridge, id=pro_id, title="Factures")["kept"]] == ["anniversaire", "facture"]
+    left = bridge.delete("/v1/notebook/kept", params={"id": pro_id}, headers=AUTH)
+    assert left.status_code == 200 and [k["q"] for k in left.json()["kept"]] == ["anniversaire"], left.text
+    # a deletion in the Pro tab: Pro's list
+    keep(bridge, q="devis", space="pro")
+    devis = get(bridge, "/v1/notebook/kept", space="pro")["kept"][0]["id"]
+    gone = bridge.delete("/v1/notebook/kept", params={"id": devis, "space": "pro"}, headers=AUTH)
+    assert gone.status_code == 200 and gone.json()["kept"] == [] and gone.headers.get("cache-control") == "no-store"
+    bad = bridge.delete("/v1/notebook/kept", params={"id": devis, "space": "family"}, headers=AUTH)
+    assert bad.status_code == 400 and bad.json()["detail"]["code"] == "space_unknown", bad.text
+    # « Toi » stays in Perso (R4)
+    assert categorize(bridge, 400, path="Toi.md", space="pro")["detail"]["code"] == "space_not_given"

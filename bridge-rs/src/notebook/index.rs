@@ -826,8 +826,9 @@ pub fn etag(config: &Config, langs: &[String]) -> String {
 }
 
 /// [`answer`] of one space (`?space=`, S5): `all` the whole copy; `perso` or `pro` that space's notes only (a diff
-/// sends a note that left the space among `removed`), the kept searches of that view (spaces.rs `kept_in_view`),
-/// its own ETag.
+/// sends a note that left the space among `removed`), the kept searches of that view (spaces.rs `kept_in_view`, six
+/// at most, the newest), its own ETag and its own epoch (`<epoch>-pro`: a `since` of another copy, the whole one or
+/// another space's, gets everything; review 1 of S5, R1).
 pub fn answer_in(
     config: &Config,
     langs: &[String],
@@ -836,10 +837,12 @@ pub fn answer_in(
     online_only: &str,
     space: &str,
 ) -> (Value, String) {
-    let (mut body, etag) = answer(config, langs, since, epoch, online_only);
     if space == "all" {
-        return (body, etag);
+        return answer(config, langs, since, epoch, online_only);
     }
+    let suffix = format!("-{space}");
+    let (mut body, etag) = answer(config, langs, since, epoch.and_then(|e| e.strip_suffix(suffix.as_str())), online_only);
+    body["epoch"] = json!(format!("{}{suffix}", body["epoch"].as_str().unwrap_or_default()));
     let inside = |i: &Value| i.get("space").and_then(Value::as_str).unwrap_or("perso") == space;
     let full = body["full"].as_bool().unwrap_or(true);
     let items: Vec<Value> = body["items"].as_array().cloned().unwrap_or_default();
@@ -851,10 +854,12 @@ pub fn answer_in(
     }
     body["items"] = json!(kept);
     let searches: Vec<Value> = body["kept"].as_array().cloned().unwrap_or_default();
-    body["kept"] = json!(searches
+    let searches: Vec<Value> = searches
         .into_iter()
         .filter(|k| super::spaces::kept_in_view(k.get("space").and_then(Value::as_str).unwrap_or("all"), space))
-        .collect::<Vec<_>>());
+        .collect();
+    let skip = searches.len().saturating_sub(super::summary::KEPT_MAX);
+    body["kept"] = json!(searches.into_iter().skip(skip).collect::<Vec<_>>());
     (body, of_space(&etag, space))
 }
 

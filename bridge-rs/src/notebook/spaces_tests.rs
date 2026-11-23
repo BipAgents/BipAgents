@@ -421,3 +421,157 @@ fn the_phones_copy_moves_with_a_space() {
     let pro: Vec<&Value> = whole["items"].as_array().unwrap().iter().filter(|i| i.get("space").is_some()).collect();
     assert_eq!(pro.len(), items.len());
 }
+
+// -- review 1 (23/11 08:47) ------------------------------------------------------------------------------------------
+
+/// A page of the shared part as the bridge writes it (the person's new page, then a fact).
+fn page_in(config: &Config, title: &str, space: Option<&str>, fact: &str) -> String {
+    let you = Who::you(config);
+    let path = nb::new_page_in(config, Part::Main, "subject", title, space, &you).unwrap().unwrap();
+    nb::note(config, Part::Main, "subject", title, "status", &[fact.to_string()], &[], "", "", &you).unwrap();
+    path
+}
+
+#[test]
+fn a_merge_never_moves_notes_across_spaces() {
+    // B2: the nightly model's `merge` (tidy.rs), an agent's contact on another page, the trips made again: never from
+    // one space to the other without the person's gesture
+    let (_dir, config) = demo();
+    let you = Who::you(&config);
+    let pro = page_in(&config, "Client Martin", Some("pro"), "Contrat signé");
+    let pro2 = page_in(&config, "Martin SARL", Some("pro"), "Siège à Nantes");
+    let perso = page_in(&config, "Martin voisin", None, "Prête sa tondeuse");
+    let (a, b) = (text(&config, &pro), text(&config, &perso));
+    {
+        let _guard = nb::lock();
+        assert!(nb::merge_locked(&config, Part::Main, "Client Martin", "Martin voisin", &you).unwrap().is_none());
+        assert!(nb::merge_locked(&config, Part::Main, "Martin voisin", "Client Martin", &you).unwrap().is_none());
+    }
+    assert_eq!((text(&config, &pro), text(&config, &perso)), (a, b), "both pages as they were");
+    // the same space: merged, Pro still
+    {
+        let _guard = nb::lock();
+        assert!(nb::merge_locked(&config, Part::Main, "Martin SARL", "Client Martin", &you).unwrap().is_some());
+    }
+    assert!(text(&config, &pro2).is_empty());
+    let merged = text(&config, &pro);
+    assert!(merged.contains("Siège à Nantes") && merged.contains("\nspace: pro\n"), "{merged}");
+}
+
+/// A page of journeys in Pro (as trip_split.rs's tests: three trips).
+const PRO_TRIPS: &str = "---\ntype: trip\nid: pvoyagespro1\nspace: pro\n---\n# Voyages\n\n## En bref\nMes déplacements.\n\n\
+## Transports\n- Vol AF1240 Paris → Amsterdam le 18/12/2021 à 07:15 — *Studio, 2026-10-28*\n\
+- Vol retour Amsterdam → Paris le 22/12/2021\n- Remboursement Air France le 31/12/2021\n\
+- Parking aéroport le 22/07/2022\n- Location voiture le 01/10/2022\n- Location voiture retour le 08/10/2022\n\n\
+## Notes\n- Garder les factures\n";
+
+#[test]
+fn the_trips_split_from_a_pro_page_stay_in_pro() {
+    // B2: « Séparer en voyages » on a Pro page: its trips are Pro
+    let dir = tempfile::tempdir().unwrap();
+    let config = nb::tests_config(dir.path());
+    nb::update_state(&config, |s| {
+        s.insert("language".into(), json!("fr"));
+    })
+    .unwrap();
+    nb::write_file(&nb::part_root(&config, Part::Main).join("Voyages/Voyages.md"), PRO_TRIPS).unwrap();
+    assert_eq!(nb::trip_split::detect(&config).unwrap(), 1);
+    let id = crate::tools_knowledge::str_or_empty(nb::open_proposals(&config)[0].get("id"));
+    let made = nb::trip_split::accept(&config, &id, &Who::you(&config)).unwrap();
+    assert_eq!(made["trips"].as_array().unwrap().len(), 3);
+    let trips: Vec<(String, nb::Page)> = nb::all_pages(&config, Part::Main).into_iter().filter(|(_, p)| p.kind() == "trip").collect();
+    assert_eq!(trips.len(), 3);
+    for (path, page) in &trips {
+        assert_eq!(spaces::of_page(Part::Main, page), "pro", "{path}: {}", page.render());
+    }
+}
+
+#[test]
+fn a_spaces_copy_has_its_own_epoch() {
+    // R1: a `since` of another copy (the whole one, another space's) gets everything again
+    let (_dir, config) = demo();
+    let you = Who::you(&config);
+    spaces::categorize(&config, &Target::Page { path: "Sujets/Rénovation cuisine.md".into() }, &[], Some("pro"), "fr", &you).unwrap().unwrap();
+    let (whole, _) = nb::index::answer(&config, &fr(), None, None, "");
+    let (pro, _) = nb::index::answer_in(&config, &fr(), None, None, "", "pro");
+    let (perso, _) = nb::index::answer_in(&config, &fr(), None, None, "", "perso");
+    let epoch = whole["epoch"].as_str().unwrap();
+    assert_eq!((pro["epoch"].clone(), perso["epoch"].clone()), (json!(format!("{epoch}-pro")), json!(format!("{epoch}-perso"))));
+    let since = |copy: &Value, space: &str| {
+        nb::index::answer_in(&config, &fr(), copy["version"].as_u64(), copy["epoch"].as_str(), "", space).0["full"].clone()
+    };
+    assert_eq!(since(&pro, "pro"), json!(false));
+    assert_eq!(since(&whole, "pro"), json!(true));
+    assert_eq!(since(&perso, "pro"), json!(true));
+    assert_eq!(since(&pro, "all"), json!(true));
+    assert_eq!(since(&whole, "all"), json!(false));
+}
+
+#[test]
+fn six_kept_searches_a_view_even_after_the_setting_changed() {
+    // R2: on, six in Perso and six in Pro; off again, the sommaire's top shows six (the newest), none dropped
+    let (_dir, config) = demo();
+    spaces::set_on(&config, true).unwrap();
+    for n in 1..=6 {
+        sm::keep(&config, &format!("perso {n}"), None, "perso", None).unwrap();
+    }
+    for n in 1..=6 {
+        sm::keep(&config, &format!("pro {n}"), None, "pro", None).unwrap();
+    }
+    let words = |space: &str| -> Vec<String> {
+        sm::kept_at(&config, space, &fr(), today())["kept"].as_array().unwrap().iter().map(|k| k["q"].as_str().unwrap().to_string()).collect()
+    };
+    assert_eq!(words("perso").len(), 6);
+    spaces::set_on(&config, false).unwrap();
+    let newest: Vec<String> = (1..=6).map(|n| format!("pro {n}")).collect();
+    assert_eq!(words("all"), newest);
+    let s = sm::summary_at(&config, "all", &fr(), today(), now());
+    assert_eq!(s["kept"].as_array().unwrap().len(), 6);
+    assert_eq!(nb::read_state(&config)["kept_searches"].as_array().unwrap().len(), 12, "nothing dropped");
+    assert_eq!(sm::keep(&config, "encore", None, "all", None), Err(sm::Refused::KeptFull));
+    // the phone's copy of a view: the same six
+    let (copy, _) = nb::index::answer_in(&config, &fr(), None, None, "", "pro");
+    assert_eq!(copy["kept"].as_array().unwrap().len(), 6);
+    spaces::set_on(&config, true).unwrap();
+    assert_eq!((words("perso").len(), words("pro").len()), (6, 6));
+}
+
+#[test]
+fn categories_and_a_space_are_one_write() {
+    // R3: « Rangé dans Argent et Pro » is one change of the page (one line of its history), and so is its undo
+    let (_dir, config) = demo();
+    let you = Who::you(&config);
+    let path = "Sujets/Rénovation cuisine.md";
+    let before = text(&config, path);
+    let changes = || nb::history(&config, Some(Part::Main), Some(path), 100).len();
+    let n = changes();
+    let done = spaces::categorize(&config, &Target::Page { path: path.into() }, &["money".to_string()], Some("pro"), "fr", &you).unwrap().unwrap();
+    assert_eq!(changes(), n + 1);
+    let page = nb::Page::parse(&text(&config, path), "");
+    assert_eq!((page.front["categories"].clone(), page.front["space"].clone()), (json!(["money"]), json!("pro")));
+    spaces::undo(&config, done["undo"].as_str().unwrap(), "fr", &you).unwrap().unwrap();
+    assert_eq!(changes(), n + 2);
+    assert_eq!(text(&config, path), before);
+}
+
+#[test]
+fn toi_stays_in_perso_and_werk_is_pro() {
+    // R4: « Toi » is always Perso (17/11); a group « Werk » (the Dutch name proposed for Pro) is Pro
+    let (_dir, config) = demo();
+    let you = Who::you(&config);
+    let before = text(&config, "Toi.md");
+    for cats in [vec![], vec!["work".to_string()]] {
+        let r = spaces::categorize(&config, &Target::Page { path: "Toi.md".into() }, &cats, Some("pro"), "fr", &you).unwrap();
+        assert_eq!(r.unwrap_err().code(), "space_not_given", "{cats:?}");
+    }
+    let f = nb::index::finder(&config, &fr());
+    let me = f.items.iter().find(|e| e.kind == "page" && e.path.as_deref() == Some("Toi.md")).unwrap().id.clone();
+    let r = spaces::categorize(&config, &Target::Item(me), &[], Some("pro"), "fr", &you).unwrap();
+    assert_eq!(r.unwrap_err().code(), "space_not_given");
+    assert_eq!(text(&config, "Toi.md"), before);
+    // Perso: as it is
+    spaces::categorize(&config, &Target::Page { path: "Toi.md".into() }, &[], Some("perso"), "fr", &you).unwrap().unwrap();
+    assert_eq!(text(&config, "Toi.md"), before);
+    crate::agent_groups::set_group(&config, "studio", "Werk").unwrap();
+    assert!(nb::assign::is_work_agent(&config, "studio"));
+}

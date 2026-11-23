@@ -250,19 +250,28 @@ household's shared Carnet, it has no space); 7 B (the Pro agents read everything
   everything, `perso` what is not Pro, `pro` Pro's. **The selector** (`Summary.spaces`): off, `[]`; on, Perso, then
   Pro when the person has a Pro agent or a Pro note (`selected`: the space asked; `all` selects none); the app adds its
   Famille (until S6) and asks `perso` or `pro`. **The phone's copy**: every item carries its `space` (`perso` left
-  out); `?space=perso|pro` gives that space's notes only, with its own ETag (`"…-pro"`), a note that left the space in
-  `removed`, the kept searches of that view.
+  out); `?space=perso|pro` gives that space's notes only, with its own ETag (`"…-pro"`) and its own epoch
+  (`<epoch>-pro`: a `since` of another copy, the whole one or the other space's, gets everything), a note that left
+  the space in `removed`, the kept searches of that view.
 - **Kept searches**: no rewrite when the setting changes; by view: `all` lists every space's, `perso` Perso's and those
-  kept in `all` (kept with the setting off: they show in Perso, the tab the app opens on), `pro` Pro's; 6 a view when
-  one is kept (after a change of the setting a view may show more: nothing is dropped). **Searches made**: each space
+  kept in `all` (kept with the setting off: they show in Perso, the tab the app opens on), `pro` Pro's; **six a view**:
+  a view shows the six newest (after a change of the setting it may hold more: none is dropped, none more is kept
+  until there are fewer). A rename (`POST /kept {id, title, space?}`) or a deletion (`DELETE /kept?id=&space=`) answers
+  the list of the view on screen (`space`; none: `all`, the view of the S4 apps). **Searches made**: each space
   its own (« Cherché ici » and the grey words of Pro are Pro's; those of `all` are back when the setting is off).
+- **Nothing changes space without the person**: two pages of different spaces are never merged (the nightly pass, a
+  contact found on another page, the trips made again: the write goes on the page named); the trips split from a page
+  (« Séparer en voyages ») are in its space; a trip of the same name in the other space is another page.
+- **« Toi »** is always Perso: « Ranger dans… Pro » on it → 400 `space_not_given` (17/11).
 - **Santé is in no space**: never `space` on its pages (one written by hand is not read), never in Pro (no Santé line
   in the Pro sommaire), its page (`category/health?private=1`) and its search (`private=1`) ignore `space`;
   « Ranger dans… » never reaches the private part (`private: true` → 400 `category_not_given`).
 - **New page** (`POST /v1/notebook/page`): `space?` (`perso` | `pro`), the app's open tab (« Écrire une page » in Pro).
 - **Visible texts** (proposed, for Alex): the setting's name and line, the spaces' names (the home's groups of agents:
   Perso / Pro; en Personal / Work, de Privat / Arbeit, es Personal / Trabajo, nl Privé / Werk), the toast.
-- **Errors**: `space_unknown` (400), no text yet (as S1's).
+- **Errors**: `space_unknown`, `space_not_given` (400), no text yet (as S1's).
+- **One gesture, one write**: « Ranger ailleurs » with a space changes a page's text once (its categories and its
+  `space` line together, under the Carnet's lock), and so does its undo.
 
 ## 4. What the 1.0 apps see
 
