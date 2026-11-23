@@ -575,3 +575,63 @@ fn toi_stays_in_perso_and_werk_is_pro() {
     crate::agent_groups::set_group(&config, "studio", "Werk").unwrap();
     assert!(nb::assign::is_work_agent(&config, "studio"));
 }
+
+// -- int-1.1d: the follow-up of review 2 (23/11 09:33, remark 3) -----------------------------------------------------
+
+/// A page of the extraction that is no trip by the rule (a lone commute train): trip_auto.rs pours its lines under
+/// the bookings' table and takes it out.
+fn extraction_trip(title: &str, space: &str, n: u32, on: NaiveDate) -> String {
+    format!(
+        "---\nid: p{n:010}\ntype: trip\naliases: []\n{space}---\n# {title}\n\n## Transports\n\
+         - {on} 08:04 — Train Paris → {title} — SNCF — QW{n:04} [[archive:wellness/mails/{n:016x}|voir le document]] \
+         — *Wellness, 2026-10-23*\n"
+    )
+}
+
+#[test]
+fn the_extractions_pages_never_go_from_one_space_to_the_other() {
+    // S5 review 2, remark 3: trip_auto.rs `demote_locked` poured a page into the bookings' table (Perso) and took it
+    // out, even filed in Pro by the person: nothing changes space without the person's gesture
+    let dir = tempfile::tempdir().unwrap();
+    let config = nb::tests_config(dir.path());
+    nb::update_state(&config, |s| {
+        s.insert("language".into(), json!("fr"));
+    })
+    .unwrap();
+    let root = nb::part_root(&config, Part::Main);
+    let (lyon, lille, nantes) = (today() - chrono::Duration::days(120), today() - chrono::Duration::days(90), today() - chrono::Duration::days(60));
+    let row = |on: NaiveDate, city: &str, n: u32| {
+        format!("| {on} 08:04 | Train Paris → {city} | SNCF | QW{n:04} | {city} | archive:wellness/mails/{n:016x} | r{n:06} |\n")
+    };
+    let bookings = |space: &str| {
+        format!(
+            "---\nid: p0000000001\ntype: records\nrecords: booking\n{space}---\n# Réservations\n\n\
+             | Date | Quoi | Chez | Référence | Voyage | Source | id |\n| --- | --- | --- | --- | --- | --- | --- |\n{}{}{}",
+            row(lyon, "Lyon", 3),
+            row(lille, "Lille", 4),
+            row(nantes, "Nantes", 5)
+        )
+    };
+    nb::write_file(&root.join("Fiches/Réservations.md"), &bookings("")).unwrap();
+    nb::write_file(&root.join("Sujets/Lyon.md"), &extraction_trip("Lyon", "space: pro\n", 3, lyon)).unwrap();
+    nb::write_file(&root.join("Sujets/Lille.md"), &extraction_trip("Lille", "", 4, lille)).unwrap();
+    let pro = text(&config, "Sujets/Lyon.md");
+    let done = nb::trip_auto::sync(&config, &Who::tidy(&config), today()).unwrap();
+    // Perso, as the bookings: poured into their table and taken out, as before
+    assert_eq!(done.demoted, 1, "{done:?}");
+    assert!(text(&config, "Sujets/Lille.md").is_empty());
+    let table = text(&config, "Fiches/Réservations.md");
+    assert!(table.contains("## Lille\n") && table.contains("QW0004"), "{table}");
+    // Pro: as it was, nothing of it in Perso's table
+    assert_eq!(text(&config, "Sujets/Lyon.md"), pro);
+    assert!(!table.contains("## Lyon"), "{table}");
+    // the bookings filed in Pro by the person: a Perso page of the extraction stays out of them
+    let pro_table = table.replacen("records: booking\n", "records: booking\nspace: pro\n", 1);
+    nb::write_file(&root.join("Fiches/Réservations.md"), &pro_table).unwrap();
+    nb::write_file(&root.join("Sujets/Nantes.md"), &extraction_trip("Nantes", "", 5, nantes)).unwrap();
+    let perso = text(&config, "Sujets/Nantes.md");
+    let done = nb::trip_auto::sync(&config, &Who::tidy(&config), today()).unwrap();
+    assert_eq!(done.demoted, 0, "{done:?}");
+    assert_eq!(text(&config, "Sujets/Nantes.md"), perso);
+    assert_eq!(text(&config, "Fiches/Réservations.md"), pro_table);
+}

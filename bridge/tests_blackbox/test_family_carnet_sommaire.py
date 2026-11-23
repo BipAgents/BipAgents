@@ -18,11 +18,16 @@ agent and its Carnet (`family-notebook.json`); Marie's bridge relays her app's c
 import datetime
 import json
 import os
+import time
 from pathlib import Path
 
+import pytest
+
 from bbkit.common import AUTH
+from bbkit.kerfy_relay import KerfyRelay
 from bbkit.mcp import call, give_token
 from conftest import managed_install
+from test_family_relay_anywhere import install as relay_install, link as relay_link, named
 from test_households_and_peers import household
 from test_shared_agents import link, wait
 
@@ -531,6 +536,82 @@ def test_s6_review_1_r1_a_holder_that_removed_the_link_leaves_the_member_left(br
         assert got.status_code == 404 and got.json()["detail"]["code"] == "no_family", (route, got.status_code, got.text)
     got = fam(b, "categorize", method="post", json={"page": ids["page Menus de la semaine"], "categories": ["home"]})
     assert got.status_code == 404 and got.json()["detail"]["code"] == "no_family", got.text
+
+
+# -- review 2 (23/11 10:31), done at int-1.1d ------------------------------------------------------------------------
+
+@pytest.fixture
+def relay(tmp_path):
+    started = KerfyRelay(tmp_path).start()
+    yield started
+    started.stop()
+
+
+def test_s6_review_2_r1_a_household_named_self_never_passes_for_the_holders_person(bridges, fakes):
+    """Review 2 of S6, R1: a household's id is its name's slug, so a household named « Self » is `self` on the holder's
+    place. Its kept searches are still its own, never the holder's person's: taken out of the family agent, they go
+    with it; the holder's stay."""
+    a = household(bridges, fakes, "alex", ["famille"])
+    b = household(bridges, fakes, "self", ["vie"])
+    named(a, "Alex")
+    named(b, "Self")
+    invitation = a.post("/v1/family/invite", headers=AUTH).json()
+    joined = b.post("/v1/family/join", headers=AUTH, json={"url": invitation["url"], "code": invitation["code"]})
+    assert joined.status_code == 200, joined.text
+    assert [h["id"] for h in a.get("/v1/family", headers=AUTH).json()["households"]] == ["self"]
+    make_family_agent(a)
+    assert b.get("/v1/family-agent", headers=AUTH).json()["agent"]["id"] == "famille__alex"
+    seed(b)
+    ok(fam(a, "kept", method="post", json={"q": "lait"}))
+    ok(fam(b, "kept", method="post", json={"q": "pâtes"}))
+    stored = json.loads((a.state_dir / "family-notebook.json").read_text())["kept"]
+    assert [k["q"] for k in stored] == ["lait", "pâtes"]
+    assert stored[0]["by_household"] != stored[1]["by_household"], stored
+    # taken out of the family agent by its creator: the household « Self »'s kept searches go, Alex's stay
+    assert a.put("/v1/family-agent/famille/members", headers=AUTH, json={"members": []}).status_code == 200
+    assert wait(lambda: fam(b, "index").json().get("left") is True)
+    assert [k["q"] for k in ok(fam(a, "kept"))["kept"]] == ["lait"]
+
+
+def test_s6_review_2_r2_a_member_who_unlinks_through_the_relay_takes_her_kept_searches(bridges, fakes, relay):
+    """Review 2 of S6, R2: Marie and Alex linked through Kerfy Studio's relay only (no address of one the other
+    reaches). She removes the link: her kept searches leave Alex's family Carnet (her bridge takes them off while the
+    link still carries the calls), his stay."""
+    a = relay_install(bridges, fakes, "alex", ["famille"], relay.url)
+    b = relay_install(bridges, fakes, "marie", ["vie"], relay.url)
+    named(a, "Alex")
+    named(b, "Marie")
+    assert relay_link(b, a) == {"id": "alex", "name": "Alex"}
+    make_family_agent(a)
+    assert wait(lambda: (b.get("/v1/family-agent", headers=AUTH).json().get("agent") or {}).get("id") == "famille__alex",
+                timeout=40), b.log_tail()
+    ok(fam(b, "kept", method="post", json={"q": "pâtes"}))
+    ok(fam(a, "kept", method="post", json={"q": "lait"}))
+    assert [k["q"] for k in ok(fam(a, "kept"))["kept"]] == ["pâtes", "lait"]
+    assert b.delete("/v1/family/alex", headers=AUTH).status_code == 204
+    assert ok(fam(b, "index"))["left"] is True
+    assert wait(lambda: [k["q"] for k in ok(fam(a, "kept"))["kept"]] == ["lait"], timeout=20), ok(fam(a, "kept"))
+
+
+def test_s6_review_2_r3_the_temporary_files_a_hard_stop_left_go_at_start(bridges, fakes):
+    """Review 2 of S6, R3: a hard stop between the write of `family-notebook.json` (or `family-agent.json`) and its
+    rename leaves `family-notebook.<hex>.tmp`, the family Carnet of that moment (a line forgotten since included). The
+    bridge takes those older than a minute out as it starts; a fresh one (a write going on) and other files stay."""
+    a, b, _ = two(bridges, fakes)
+    a.stop()
+    stale = [a.state_dir / "family-notebook.0a1b2c3d.tmp", a.state_dir / "family-agent.9f8e7d6c.tmp"]
+    fresh = a.state_dir / "family-notebook.11223344.tmp"
+    other = a.state_dir / "notes.0a1b2c3d.tmp"
+    for p in stale + [fresh, other]:
+        p.write_text(json.dumps({"lists": [{"title": "Courses", "items": [{"text": "Ligne oubliée depuis"}]}]}))
+    hour_ago = time.time() - 3600
+    for p in stale + [other]:
+        os.utime(p, (hour_ago, hour_ago))
+    a.start()
+    assert [p.exists() for p in stale] == [False, False]
+    assert fresh.exists() and other.exists()
+    # the family Carnet itself as it was
+    assert [x["title"] for x in a.get("/v1/family-agent/notebook", headers=AUTH).json()["lists"]] == ["Courses", "Tâches", "Dates"]
 
 
 # -- the 1.0 apps ------------------------------------------------------------------------------------------------------
