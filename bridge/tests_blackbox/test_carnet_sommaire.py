@@ -164,6 +164,29 @@ def normalised(value):
     return text
 
 
+def undated(text):
+    """The offline copy's search `words` without the numbers of days: « 28 novembre » (the run's day + 5) splits into
+    words the day normalisation does not see, so the comparison held only on the day it was recorded (23/11: « 27 »
+    recorded on 22/11)."""
+    try:
+        value = json.loads(text)
+    except ValueError:
+        return text
+
+    def walk(v):
+        if isinstance(v, dict):
+            for k, x in v.items():
+                if k == "words" and isinstance(x, list):
+                    v[k] = [w for w in x if not (isinstance(w, str) and w.isdigit() and len(w) <= 2)]
+                else:
+                    walk(x)
+        elif isinstance(v, list):
+            for x in v:
+                walk(x)
+    walk(value)
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, indent=1)
+
+
 def contract_additive():
     return json.loads(CONTRACT.read_text())["additive"]
 
@@ -226,8 +249,8 @@ def test_the_1_0_apps_see_exactly_todays_answers(bridges):
             Path(record).mkdir(parents=True, exist_ok=True)
             (Path(record) / f"{name}.json").write_text(normalised(answer) + "\n")
             continue
-        want = (FIXTURES / f"{name}.json").read_text().rstrip("\n")
-        if normalised(as_1_0(route_of(path), answer)) != want:
+        want = undated((FIXTURES / f"{name}.json").read_text().rstrip("\n"))
+        if undated(normalised(as_1_0(route_of(path), answer))) != want:
             differ.append(name)
             (bridge.root / f"{name}.got.json").write_text(normalised(as_1_0(route_of(path), answer)) + "\n")
     assert not differ, f"not as before: {differ} (the answers, as a 1.0 app reads them, in {bridge.root})"
