@@ -320,11 +320,27 @@ pub fn summary_at(config: &Config, space: &str, langs: &[String], today: NaiveDa
         }
         lines.push(line);
     }
-    json!({"v": V, "lang": shown, "title": t.carnet, "space": space, "spaces": super::spaces::choices(config, &f, space, &shown),
+    json!({"v": V, "lang": shown, "title": t.carnet, "space": space, "spaces": selector(config, &f, space, &shown),
            "kept": kept_with_counts(config, &f, space, today),
            "card": if space == "pro" { Value::Null } else { card(config, &shown, now) },
            "total": {"count": total, "title": t.all_notes}, "categories": lines,
            "bar": {"placeholder": t.bar_all}, "version": version, "epoch": epoch})
+}
+
+/// The selector (`Summary.spaces`). The setting « Séparer Perso, Pro et Famille » off: « Moi · Famille » for a member
+/// of a family, else none (S6, family_carnet.rs). On: « Perso », then « Pro » when there is a Pro agent or a Pro note
+/// (S5, spaces.rs), then « Famille » for a member of a family.
+fn selector(config: &Config, f: &Finder, space: &str, lang: &str) -> Value {
+    if !super::spaces::on(config) {
+        return crate::family_carnet::spaces(config, lang, space);
+    }
+    let mut choices = super::spaces::choices(config, f, space, lang);
+    if crate::family_carnet::in_family(config) {
+        if let Some(list) = choices.as_array_mut() {
+            list.push(crate::family_carnet::family_choice(lang));
+        }
+    }
+    choices
 }
 
 // -- GET /v1/notebook/category/{id} -----------------------------------------------------------------------------------

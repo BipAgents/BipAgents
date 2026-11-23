@@ -45,10 +45,10 @@ pub const UNDO_TODAY_MAX: usize = 100;
 /// `sommaire`: a new app uses a route only when it is listed (S1: the categories on today's answers, « Ranger
 /// ailleurs »; S2 `sorted`: the card « Ton Carnet est rangé par catégories », today's re-filings, the toast; S3
 /// `index`: the phone's search copy; S4 `summary`, `category`, `kept`, `searched`: the sommaire ready to show,
-/// summary.rs; S5 `spaces`: « Séparer Perso, Pro et Famille », `space` on « Ranger ailleurs », spaces.rs; then S6
-/// `family`).
-pub const CAPABILITIES: [&str; 9] =
-    ["categories", "categorize", "sorted", "index", "summary", "category", "kept", "searched", "spaces"];
+/// summary.rs; S5 `spaces`: « Séparer Perso, Pro et Famille », `space` on « Ranger ailleurs », spaces.rs; S6
+/// `family`: the family Carnet's sommaire, family_carnet.rs).
+pub const CAPABILITIES: [&str; 10] =
+    ["categories", "categorize", "sorted", "index", "summary", "category", "kept", "searched", "spaces", "family"];
 /// The person's corrections of records, tasks, documents and lines kept.
 const MARKS_KEPT: usize = 2000;
 /// An item is in « Dates » when its date is from this many days ago …
@@ -533,6 +533,12 @@ impl Points {
         let word = self.best.get(&top).map(|(_, w)| w.clone()).filter(|w| !w.is_empty());
         (cats, word)
     }
+}
+
+/// A note's categories by its words alone, and the word that decided (the family Carnet's, family_carnet.rs: no kind,
+/// no group, no work agent): `title` read as a page's title, `body` as its lines.
+pub fn of_words(title: &str, body: &str, lang: &str, rules: &[Rule]) -> (Vec<String>, Option<String>) {
+    by_words(&Page { front: Dict::new(), title: title.to_string(), body: body.to_string() }, lang, rules)
 }
 
 /// A subject's or an area's categories from its words: the title, its aliases, its « En bref », its labels and facts,

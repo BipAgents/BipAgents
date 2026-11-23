@@ -9,80 +9,203 @@
       "q": "shopping",
       "title": "shopping",
       "count": 5,
-      "space": null
+      "space": null,
+      "category": null
     }
   ],
   "total": {
     "count": 15,
-    "title": "All the Notebook"
+    "title": "The whole Notebook"
   },
   "categories": [
     {
       "id": "shopping",
       "title": "Shopping",
       "count": 5,
-      "hint": "Milk, Wholewheat pasta, Lemons",
-      "locked": false
+      "hint": "Coffee, Milk, Wholewheat pasta",
+      "locked": false,
+      "first": {
+        "id": "fam:list:courses/c5",
+        "kind": "list_item",
+        "title": "Shopping",
+        "line": "Coffee",
+        "categories": [
+          "shopping"
+        ],
+        "who": "Léa",
+        "noted": "2026-11-22",
+        "open": {
+          "list": "courses",
+          "item": "c5"
+        },
+        "done": true
+      }
     },
     {
       "id": "people",
       "title": "People",
       "count": 2,
       "hint": "Grandma's birthday, Tom's birthday",
-      "locked": false
+      "locked": false,
+      "first": {
+        "id": "fam:list:dates/d1",
+        "kind": "list_item",
+        "title": "Dates",
+        "line": "Grandma's birthday",
+        "categories": [
+          "people",
+          "dates"
+        ],
+        "yearly": "11-28",
+        "who": "Marie",
+        "noted": "2026-11-14",
+        "open": {
+          "list": "dates",
+          "item": "d1"
+        }
+      }
     },
     {
       "id": "dates",
       "title": "Dates",
       "count": 6,
-      "hint": "Boiler appointment, Book the Christmas caterer, Return the library books",
-      "locked": false
+      "hint": "Boiler appointment, Book the Christmas caterer, Grandma's birthday",
+      "locked": false,
+      "first": {
+        "id": "fam:list:taches/t1",
+        "kind": "list_item",
+        "title": "Tasks",
+        "line": "Boiler appointment",
+        "categories": [
+          "home",
+          "dates"
+        ],
+        "date": "2026-11-25",
+        "who": "Léa",
+        "noted": "2026-11-21",
+        "open": {
+          "list": "taches",
+          "item": "t1"
+        }
+      }
     },
     {
       "id": "home",
       "title": "Home",
       "count": 2,
-      "hint": "Boiler appointment, Wifi: see the router.\nPlumber: Mr Garnier, 06 00 00 00 00.\nTom's school: 01 00 00 00 00.",
-      "locked": false
-    },
-    {
-      "id": "papers",
-      "title": "Papers",
-      "count": 1,
-      "hint": "Wifi: see the router.\nPlumber: Mr Garnier, 06 00 00 00 00.\nTom's school: 01 00 00 00 00.",
-      "locked": false
+      "hint": "Useful codes and numbers, Boiler appointment",
+      "locked": false,
+      "first": {
+        "id": "fam:page:p2",
+        "kind": "page",
+        "title": "Useful codes and numbers",
+        "line": "Wifi: see the router.\nPlumber: Mr Garnier, 06 00 00 00 00.\nTom's school: 01 00 00 00 00.",
+        "categories": [
+          "home"
+        ],
+        "who": "Marie",
+        "noted": "2026-11-21",
+        "open": {
+          "path": "p2"
+        }
+      }
     },
     {
       "id": "holidays",
       "title": "Holidays",
       "count": 1,
-      "hint": "Cottage in Annecy, 14 to 21 February.\nStill to book: the train there.",
-      "locked": false
+      "hint": "February holidays",
+      "locked": false,
+      "first": {
+        "id": "fam:page:p1",
+        "kind": "page",
+        "title": "February holidays",
+        "line": "Cottage in Annecy, 14 to 21 February.\nStill to book: the train there.",
+        "categories": [
+          "holidays"
+        ],
+        "who": "Maison",
+        "noted": "2026-11-22",
+        "open": {
+          "path": "p1"
+        }
+      }
     },
     {
       "id": "school",
       "title": "School",
-      "count": 3,
-      "hint": "Sign Tom up for judo, Return the library books, Wifi: see the router.\nPlumber: Mr Garnier, 06 00 00 00 00.\nTom's school: 01 00 00 00 00.",
-      "locked": false
+      "count": 1,
+      "hint": "Sign Tom up for judo",
+      "locked": false,
+      "first": {
+        "id": "fam:list:taches/t3",
+        "kind": "list_item",
+        "title": "Tasks",
+        "line": "Sign Tom up for judo",
+        "categories": [
+          "school"
+        ],
+        "who": "Marie",
+        "noted": "2026-11-21",
+        "open": {
+          "list": "taches",
+          "item": "t3"
+        }
+      }
     },
     {
       "id": "menus",
       "title": "Menus",
-      "count": 2,
-      "hint": "Book the Christmas caterer, Monday: lemon pasta.\nTuesday: soup and toast.",
-      "locked": false
+      "count": 3,
+      "hint": "Book the Christmas caterer, This week's meals, Christmas dinner at Marie's",
+      "locked": false,
+      "first": {
+        "id": "fam:list:taches/t2",
+        "kind": "list_item",
+        "title": "Tasks",
+        "line": "Book the Christmas caterer",
+        "categories": [
+          "menus",
+          "dates"
+        ],
+        "date": "2026-11-28",
+        "who": "Marie",
+        "noted": "2026-11-20",
+        "open": {
+          "list": "taches",
+          "item": "t2"
+        }
+      }
     },
     {
       "id": "other",
       "title": "Other",
-      "count": 2,
-      "hint": "Return the library books, Christmas dinner at Marie's",
-      "locked": false
+      "count": 1,
+      "hint": "Return the library books",
+      "locked": false,
+      "first": {
+        "id": "fam:list:taches/t4",
+        "kind": "list_item",
+        "title": "Tasks",
+        "line": "Return the library books",
+        "categories": [
+          "other",
+          "dates"
+        ],
+        "date": "2026-11-21",
+        "who": "Léa",
+        "noted": "2026-11-22",
+        "open": {
+          "list": "taches",
+          "item": "t4"
+        },
+        "done": true
+      }
     }
   ],
   "bar": {
     "placeholder": "Search for the family"
   },
-  "version": 7
+  "version": 7,
+  "epoch": "e3p8q1"
 }

@@ -597,9 +597,19 @@ async fn forget_confirm(State(state): State<AppState>, q: QueryMap, Json(body): 
     let config = state.config();
     let shown = shown_language(&config, &q);
     let person = state.households.name();
-    let done = blocking(move || super::forget::confirm(&config, body.token.trim(), &person)).await?;
+    let done = blocking(move || super::forget::confirm_target(&config, body.token.trim(), &person)).await?;
     match done {
-        Some(text) => Ok(web::ok(json!({"done": true, "text": text}))),
+        Some((text, target)) => {
+            let mut out = json!({"done": true, "text": text});
+            // on a member's place: her own kept searches of the family Carnet, matched here, taken off the holder's
+            // place (S6, review 1 B1); `family: not_reached` when it did not answer
+            if let Some(target) = target {
+                if !crate::family_carnet::forget_at_holder(&state, &|q| target.says(q)).await {
+                    out["family"] = json!("not_reached");
+                }
+            }
+            Ok(web::ok(out))
+        }
         None => Err(carnet_error(410, "token_expired", &shown, json!({}))),
     }
 }

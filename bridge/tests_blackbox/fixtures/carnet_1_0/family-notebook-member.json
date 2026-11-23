@@ -1,0 +1,88 @@
+{
+ "lists": [
+  {
+   "by": "Marie",
+   "id": "<id3>",
+   "items": [
+    {
+     "at": 0,
+     "by": "Marie",
+     "done": false,
+     "due": null,
+     "id": "<id4>",
+     "text": "Lait"
+    },
+    {
+     "at": 0,
+     "by": "Marie",
+     "done": false,
+     "due": null,
+     "id": "<id5>",
+     "text": "Pâtes complètes"
+    }
+   ],
+   "kind": "list",
+   "title": "Courses",
+   "updated": 0
+  },
+  {
+   "by": "Marie",
+   "id": "<id6>",
+   "items": [
+    {
+     "at": 0,
+     "by": "Marie",
+     "done": false,
+     "due": null,
+     "id": "<id7>",
+     "text": "Inscrire Tom au judo"
+    },
+    {
+     "at": 0,
+     "by": "Marie",
+     "done": false,
+     "due": "<due>",
+     "id": "<id8>",
+     "text": "Rendez-vous chaudière"
+    }
+   ],
+   "kind": "tasks",
+   "title": "Tâches",
+   "updated": 0
+  },
+  {
+   "by": "Marie",
+   "id": "<id9>",
+   "items": [
+    {
+     "at": 0,
+     "by": "Marie",
+     "done": false,
+     "due": "<due>",
+     "id": "<id10>",
+     "text": "Anniversaire de Mamie"
+    }
+   ],
+   "kind": "dates",
+   "title": "Dates",
+   "updated": 0
+  }
+ ],
+ "pages": [
+  {
+   "by": "Marie",
+   "id": "<id1>",
+   "text": "Gîte à Annecy, du 14 au 21 février.\nReste à réserver : le train aller.",
+   "title": "Vacances de février",
+   "updated": 0
+  },
+  {
+   "by": "Marie",
+   "id": "<id2>",
+   "text": "Lundi : pâtes au citron.\nMardi : soupe et tartines.",
+   "title": "Menus de la semaine",
+   "updated": 0
+  }
+ ],
+ "updated": 0
+}

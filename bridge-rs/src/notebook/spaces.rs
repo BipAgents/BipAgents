@@ -729,9 +729,8 @@ pub fn today(config: &Config, lang: &str) -> Value {
 
 // -- what the sommaire shows ------------------------------------------------------------------------------------------
 
-/// The selector (`Summary.spaces`): the setting off, none (the app keeps its « Moi | Famille »); on, Perso, then Pro
-/// when the person has a Pro agent or a Pro note (the app adds its Famille, the rule of today, until S6). `asked`
-/// selected (`all`: none).
+/// S5's part of the selector (`Summary.spaces`): the setting off, none; on, Perso, then Pro when the person has a Pro
+/// agent or a Pro note, `asked` selected (`all`: none). summary.rs `selector` adds S6's « Famille » (family_carnet.rs).
 pub fn choices(config: &Config, f: &Finder, asked: &str, lang: &str) -> Value {
     if !on(config) {
         return json!([]);

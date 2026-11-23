@@ -150,14 +150,14 @@ in `routes[].errors`; S1's codes have no text yet: the apps show their own until
 | S3 | `GET /v1/notebook/index?since=&epoch=&lang=` | the phone's search copy (`Index`): ETag `"<epoch>-v<version>-<languages of its tables>"` (`"e1a2b3c4-v42-fr.en"`: opaque to the phones), 304 when unchanged (`If-None-Match`, the answer not even made), gzip when accepted, 400 `since_invalid`; `since`/`epoch` = what the phone has → only `items` changed and `removed` ids (`full: false`), the tables whole; another epoch, a `since` above the version or unknown → everything (`full: true`). Never Santé, never ID numbers or references, mails' archives or online files' content; 20 000 lines / 8 MB of JSON as sent at most, default keys left out (`truncated`; out first: archived lines oldest first, archived pages, then the other lines oldest first). Dates and feasts as rules: the copy never changes with the day (`sommaire.json` `dates`, `feasts`, `index`) |
 | S3 | `GET /v1/notebook/search?q=&lang=&category=&space=&online=&groups=&sommaire=` | `groups=1`: today's answer plus `groups` (by category, in the order of their best result; `count`, the two best `top`), `counts` (`all` and per category: the chips), `online` (`online=1` only: the connected drives the person allowed, online only; else null); `sommaire=1`: only `groups`, `counts`, `online` (today's keys not made); neither: today's answer only (an installed 1.0 app's search never makes the copy); `category`, `space` narrow it; `private=1`: Santé's, behind the lock, read and kept nowhere |
 | S3 | `PUT /v1/drives/{service}/carnet {carnet}` | « Chercher aussi ici depuis le Carnet » (Alex's decision 4: off by default, a switch per connected drive): the drive as listed, `carnet` added (`GET /v1/drives` lists it on each drive) |
-| S4 | `GET /v1/notebook/summary?space=&lang=` | the sommaire ready to show (`Summary`, §3b): kept searches with their count, total, categories with count and grey words, « Toi » first in Personnes, the moment's card, Santé locked; `spaces: []` until S5/S6; 400 `space_unknown` |
+| S4 | `GET /v1/notebook/summary?space=&lang=` | the sommaire ready to show (`Summary`, §3b): kept searches with their count, total, categories with count and grey words, « Toi » first in Personnes, the moment's card, Santé locked; `spaces`, the selector (§3c); 400 `space_unknown` |
 | S4 | `GET /v1/notebook/category/{id}?space=&filter=&lang=` | a category's page (`CategoryPage`, §3b): sub-filters with counts, « Cherché ici » (3), the latest (20, of `filter` when given); `category/health?private=1`: Santé's, behind the lock, read now and kept nowhere (no sub-filter, no search kept); 404 `category_unknown`, 400 `filter_unknown`, 403 `health_locked` |
 | S4 | `GET/POST/DELETE /v1/notebook/kept` | kept searches (6 a space, `state.json`), their count from the bridge; POST `{q, title?, space?, category?}` or `{id, title}`, DELETE `?id=` → the space's `KeptList`; 409 `kept_full`, 404 `kept_unknown`, 400 `kept_empty`, `number_refused`, `category_not_given` |
 | S4 | `POST /v1/notebook/searched` | `{q, category?, space?, private?}`: a search made (3 a category for « Cherché ici » and the grey words, `searched.json`, never shown to the agents, never in the copy; with Santé open — `category: health` or `private: true` — never kept) → 204; `DELETE ?q=&space=&category=`: the one of these words, or all → 204 |
 | S5 | `GET/PATCH /v1/notebook/settings {separate_spaces}` | « Séparer Perso, Pro et Famille » (off at first; also the home's `settings.separate_spaces`; 422 not a bool) |
 | S5 | `POST /v1/notebook/categorize` `space?` | « Ranger dans… Perso / Pro » (§3c): `space` (`perso`, `pro`) alone or with `categories` → `Categorized` + `space`, `before.space`, the toast saying it; one undo (`/categorize/undo` → `Undone` + `space`); today's re-filings say it (`Refiled.space`); 400 `space_unknown` |
 | S5 | `?space=all\|perso\|pro` | on summary (`spaces`: the selector), category, kept, searched (S4), search (400 `space_unknown` now; ignored with `private=1`) and index (one space's copy, its own ETag); `POST /v1/notebook/page` `space?` (the app's open tab) |
-| S6 | `/v1/family-agent/notebook/{summary,index,kept,categorize,category/{id}}` | the family Carnet's, relayed by the members' bridges as today (`FamilySummary`, `FamilyIndex`, `FamilyCategorized`, `FamilyCategoryPage`) |
+| S6 | `/v1/family-agent/notebook/{summary,category/{id},search,index,kept,searched,categorize,categorize/undo}` | the family Carnet's (§6), relayed by the members' bridges as today (`FamilySummary`, `FamilyCategoryPage`, `FamilySearch`, `FamilyIndex`, `KeptList`, `FamilyCategorized`, `FamilyUndone`) |
 
 **Counts.** A category's `count` counts its items (pages, lines, tasks, records, documents); `total` all of them. A
 note with two categories counts in each of them, `total` and `counts.all` once (change 5 of 22/11; §1).
@@ -217,7 +217,8 @@ cases are written on them.
   drop them) and those made (« Cherché ici », the grey words) whose words, or a kept one's title, say what is forgotten
   (folded as the search folds, whole words; a person's first name too when their page is forgotten whole).
 - **Spaces** (S5, §3c): a note's space is its page's or the person's mark; `perso` is what is not Pro. `spaces` is
-  the selector: `[]` with the setting off (the app keeps its « Moi | Famille »). Unknown: 400 `space_unknown`.
+  the selector (§3c): the setting off, « Moi · Famille » for a member of a family, else `[]`; on, Perso, Pro and
+  Famille. Unknown: 400 `space_unknown`.
 - **`version` with `epoch`** (the copy's): a version is compared only with its epoch. On a copy cut (`truncated`), the
   counts are the copy's, archives included.
 - **Santé open**: a search made in Santé or with `private=1` is sent with `category: health` or `private: true` (or not
@@ -254,9 +255,13 @@ household's shared Carnet, it has no space); 7 B (the Pro agents read everything
   `undo_title` « Annuler ». `Undone` gains `space` (the space now). Today's re-filings (`categorize/today`): an item
   whose gesture set a space has `space` and the toast's text; a gesture that set only a space is listed too.
 - **Each space answers for itself**: `?space=` on summary, category, kept, searched, search and index; `all` (or none)
-  everything, `perso` what is not Pro, `pro` Pro's. **The selector** (`Summary.spaces`): off, `[]`; on, Perso, then
-  Pro when the person has a Pro agent or a Pro note (`selected`: the space asked; `all` selects none); the app adds its
-  Famille (until S6) and asks `perso` or `pro`. **The phone's copy**: every item carries its `space` (`perso` left
+  everything, `perso` what is not Pro, `pro` Pro's. **The selector** (`Summary.spaces`, S5 and S6, summary.rs
+  `selector`): the setting off, « Moi · Famille » (`all` « Moi », then `family` « Famille ») for a member of a family
+  (§6), else `[]`; the setting on, `perso` (« Perso »), then `pro` (« Pro ») when the person has a Pro agent or a Pro
+  note, then `family` (« Famille ») for a member of a family. `selected`: the space asked (`all` with the setting on
+  selects none); `family` is never selected nor asked of these routes: it opens the family Carnet's sommaire (§6). The
+  app shows the selector with two choices or more, asks `perso` or `pro` with the setting on (`all` off), and shows one
+  Famille: this entry, or its own by the household's rule, never both. **The phone's copy**: every item carries its `space` (`perso` left
   out); `?space=perso|pro` gives that space's notes only, with its own ETag (`"…-pro"`) and its own epoch
   (`<epoch>-pro`: a `since` of another copy, the whole one or the other space's, gets everything), a note that left
   the space in `removed`, the kept searches of that view.
@@ -287,7 +292,8 @@ records and documents gain `categories` (a list of ids) and sometimes `categorie
 `frontmatter` gains the same keys; the home gains `sommaire`, the list of what this bridge's Carnet can do (`sommaire.json` `Capability`: S1
 `categories`, `categorize`; S2 `sorted` (the home's `sorted` card and its answer, today's re-filings, the toast);
 S3 `index` (the phone's search copy); S4 `summary`, `category`, `kept`, `searched` (the sommaire ready to show);
-S5 `spaces` (« Séparer Perso, Pro et Famille », `space` on « Ranger ailleurs »); then `family`): a new app uses a route only when it is listed, else the home of today. An old bridge has no `sommaire`.
+S5 `spaces` (« Séparer Perso, Pro et Famille », `space` on « Ranger ailleurs »); S6 `family` (the family Carnet's
+sommaire, §6)): a new app uses a route only when it is listed, else the home of today. An old bridge has no `sommaire`.
 Pages also gain `space` (`perso` or `pro`; null in the private part) on `GET /v1/notebook/page` and `/pages`, and the
 settings `separate_spaces`; with the setting on and a Pro agent writing, a 1.0 app still sees every page, as before
 (checked: `test_carnet_spaces.py::test_s5_the_1_0_apps_see_the_same_with_the_setting_on_and_a_pro_agent`).
@@ -302,3 +308,58 @@ bridge's own: the pass run over the demo, then its card), `index.json`, `index-s
 The categories in them are the bridge's (S1's code on the demo); the rest (counts, hints, groups, the index) is
 assembled from them by the generator in the shape of this contract, until S3/S4 answer for real: an app built on
 them only changes its base URL. Regenerated by `BIPAGENTS_WRITE_FAKE_BRIDGE=1 cargo test --lib write_fake_bridge`.
+
+## 6. The family Carnet (S6)
+
+`bridge-rs/src/family_carnet.rs`; the rules in full: `sommaire.json` `family`; the routes: `sommaire.json` `routes`
+(brick S6; §3's S6 row in full). The family Carnet is `family-notebook.json` on the place that holds the family's
+agents (family_agent.rs); a member's bridge relays her app's calls there as it does today's family routes
+(`/family/fa/notebook/…` between the bridges, the household key). Capability `family` in the home's `sommaire`: a new
+app shows the family sommaire only when it is listed, and falls back to today's family Carnet on a 404
+`family_sommaire_unavailable` (the holder's bridge is from before S6).
+
+| Route (`/v1/family-agent/notebook/…`) | What |
+|---|---|
+| `GET summary?lang=` | `FamilySummary`: the family's categories in `categories.order.family` (one without a note left out, never Santé), each with its count, grey words (the person's 3 latest searches there, else the 3 latest notes: an item's line, a page's title) and `first`; the household's kept searches with their count; « Avec Marie, Léa et Tom » (`with`: the household's others); `version` and `epoch` of the copy |
+| `GET category/{id}?lang=` | `FamilyCategoryPage`: the count, the person's « Cherché ici » (`searched`), the 20 latest (Dates: the soonest to come first); 404 `category_unknown` for an id that is not the family's (`money`, `trips`, `work`, `health`) |
+| `GET search?q=&category=&lang=` | `FamilySearch`: by category in the order of their best result, the two best each, the chips' `counts` (the rule of `search-parity.json`) |
+| `GET index?since=&epoch=&lang=` | `FamilyIndex`: the phone's copy, as `/v1/notebook/index` (ETag `"<epoch>-v<version>-<languages>"`, 304, gzip, `since`/`epoch` diffs); `left: true` (epoch `left`, version 0, nothing in it, ETag `"left"`): this person has no family Carnet (any more) — the phone **erases its copy, its file too**. 502 (the holder does not answer): the phone keeps its copy |
+| `GET/POST/DELETE kept` | the household's kept searches, **common** (6, `family-notebook.json` `kept`): POST `{q, title?, category?}` or `{id, title}`, DELETE `?id=` → `KeptList` (`space` null); S4's codes |
+| `POST/DELETE searched` | a search made → 204: kept by **the person's own bridge** (`family-searched.json`), never on the holder's place, never told to another member nor to an agent; 3 a category; **the app sends its best group's category**: without one, a member's bridge keeps nothing and sends nothing anywhere (the holder's own: under the best result's); out of the family: 404 `no_family`, nothing kept; DELETE `?q=&category=` |
+| `POST categorize`, `POST categorize/undo` | « Ranger ailleurs »: `{page}`, `{list}`, `{list, item}` or `{item}` (a `FamilyIndexItem` id), `categories` 1–2 of `family_may_give` → `FamilyCategorized` (the toast in the app's language), `{undo}` → `FamilyUndone`; S1's codes |
+
+- **Filing** (no model, no token, at each write: the apps', a member's, the family agent's — its tools unchanged): the
+  person's rules (her corrections' words) first, then the family's own words (Courses, École, Menus, Vacances, in five
+  languages), then the person's Carnet's table with the family's ids (Argent → Papiers, Voyages → Vacances, Travail →
+  Autres). A list of things (« Courses ») is filed by its title and its items follow it; an item of a list of tasks
+  has its own words' (none: Autres); an item of a list of dates its own words', or none: it is then in Dates only (a
+  birthday is `yearly`; the search groups such a note under Dates when dated, else Autres: the phones' family search
+  does the same, finder.rs; parity cases `family-no-category-*`, `parity-copies/family-edges.json`). Pages by their title, then their text. A renamed page or list the bridge had filed is filed
+  again; **the person's choice is never changed**. The family Carnet gets **no nightly model pass** (small, every
+  member's writing, the holder's model is one person's: status-carnet-s6.md).
+- **Ids**: `fam:list:<list>/<item>`, `fam:page:<page>` (`open.path` is the page's id). Never in the copy: a line holding
+  a number or a reference (the person's copy's rule).
+- **« Passage de main »** (the holder unlinks a member: today's handover, « Le reprendre »): the handover carries the
+  pages and lists with their categories, the kept searches and the rules; taken over, the Carnet has another epoch and
+  the phones take it whole. The searches made never move: each person's are on her own place.
+- **Leaving** (taken out of the family agent by its creator, a link removed on either side, the holder gone): `left:
+  true` from the index, 404 `no_family` from the other routes; the person's searches made are erased (unless a
+  handover waits for her to take the Carnet over). The holder's 401 `unknown household` (it removed the link, its
+  handover never came) is leaving too; another 401 or 403 of the holder's is a 502, never passed to the app. Her kept
+  searches leave the holder's place: the holder drops those of a household in none of its family agents (taken out,
+  link removed there), her bridge drops hers as she removes the link, and a handover gives the receiver hers (`self`)
+  and leaves the leaving holder's behind. Who kept a search is kept by household (`by_household`), never a name.
+- **« Oublie ça »**: on the holder's place, the person's own lines (as before), her own kept searches and her searches
+  made that say it (the others' are theirs), written under the family Carnet's own lock; on a member's place, her own
+  searches made, and her own kept searches held by the holder: her bridge asks which ones her household kept
+  (`GET /family/fa/notebook/kept?mine=1`, between the bridges), matches them itself and deletes those by id — the
+  forgotten words never leave her place; `POST /v1/notebook/forget/confirm` adds `family: "not_reached"` when the
+  holder did not answer (nothing kept to try again). Her lines on the holder's place are not reached (as before S6;
+  Alex, 23/11: the forgotten words are not relayed to the holder).
+- **« Ranger ailleurs »** on a list of tasks or of dates: 400 `list_not_filed` (it has no category of its own).
+- **The person's own sommaire**: its selector (`Summary.spaces`, §3c) has `family` (« Famille ») for a member of a
+  family (a holder whose family agent has at least one other household, or a member of a linked household's family
+  agent): after « Moi » (`all`) with the setting « Séparer Perso, Pro et Famille » off, after Perso and Pro with it on.
+- **The 1.0 apps**: `GET /v1/family-agent/notebook`, `POST /v1/family-agent/notebook` and the family agent's tools
+  answer exactly as before (the categories kept in the file are left out of them; checked against the 1.0 bridge's
+  answers: `test_family_carnet_sommaire.py::test_s6_the_1_0_apps_see_todays_family_carnet`).

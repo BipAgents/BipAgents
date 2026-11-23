@@ -110,6 +110,8 @@ pub mod dates;
 pub mod device_keys;
 pub mod door_tls;
 pub mod family_agent;
+/// The family Carnet's sommaire: its categories, its copy, kept searches, relayed (brick S6, no Python counterpart).
+pub mod family_carnet;
 /// The family agent and its members' calendars, each on her own place (no Python counterpart).
 pub mod family_calendar;
 /// « L'agent de projet »: an agent for one occasion whose thread friends follow (no Python counterpart).

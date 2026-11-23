@@ -179,7 +179,8 @@ fn save(path: &PathBuf, data: &Dict) -> anyhow::Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let tmp = path.with_extension("tmp");
+    // a temporary file of its own, renamed over the file: never one another writer is writing (review 1 of S6, R4)
+    let tmp = path.with_extension(format!("{}.tmp", py::token_hex(4)));
     py::write_with_mode(
         &tmp.to_string_lossy(),
         py::Dumps::new().unicode().dumps(&Value::Object(data.clone())).as_bytes(),
@@ -475,15 +476,95 @@ fn seed_in(data: &mut Dict, lang: &str, by: &str, at: f64) {
     data.insert("updated".into(), json!(at));
 }
 
+/// What a member's bridge hears when its household is in none of this place's family agents (404).
+pub(crate) const NOT_SERVED: &str = "no family agent for this household";
+/// What a member's bridge hears when this place no longer knows its key (the link removed here, 401).
+pub(crate) const UNKNOWN_HOUSEHOLD: &str = "unknown household";
+/// What the family Carnet's handover carries (family_carnet.rs, S6: its categories in the pages and lists, the
+/// household's kept searches, the rules its corrections taught): the Carnet as it is, never one person's searches.
+const HANDED: [&str; 4] = ["pages", "lists", "kept", "category_rules"];
+
+fn handed_notebook(config: &Config, receiver: &str) -> Value {
+    let data = read(&notebook_path(config));
+    let mut out = Map::from_iter(HANDED.iter().filter_map(|k| data.get(*k).map(|v| (k.to_string(), v.clone()))));
+    // the kept searches: the receiver's become hers, the leaving holder's stay behind (review 1 of S6, R3)
+    out.insert("kept".into(), crate::family_carnet::handed_kept(data.get("kept"), receiver));
+    out.insert("updated".into(), data.get("updated").cloned().unwrap_or(json!(0)));
+    Value::Object(out)
+}
+
+/// `family-notebook.json` (family_carnet.rs).
+pub(crate) fn notebook_file(config: &Config) -> PathBuf {
+    notebook_path(config)
+}
+
+/// The family Carnet as kept, every key (family_carnet.rs).
+pub(crate) fn notebook_data(config: &Config) -> Dict {
+    read(&notebook_path(config))
+}
+
+/// One change of the family Carnet's file under its lock (family_carnet.rs: kept searches, corrections).
+pub(crate) fn change_data<R>(config: &Config, change: impl FnOnce(&mut Dict) -> R) -> anyhow::Result<R> {
+    update(&notebook_path(config), change)
+}
+
+/// Where this person's family Carnet is: `Some(None)` here, `Some(Some(household))` at a linked household's, None
+/// nowhere.
+pub(crate) fn holder_of(config: &Config) -> Option<Option<String>> {
+    holder(config).ok()
+}
+
+/// Whether this person uses a linked household's family agent.
+pub(crate) fn uses_a_family_agent(config: &Config) -> bool {
+    !known_all(config).is_empty()
+}
+
+/// Whether a handover waits for this person to take the family's agent and its Carnet over.
+pub(crate) fn handover_waits(config: &Config) -> bool {
+    read(&state_path(config)).get("handover").is_some_and(Value::is_object)
+}
+
+/// The family Carnet's language: its agent's, else the place's.
+pub(crate) fn carnet_language(config: &Config) -> String {
+    Some(tk::str_or_empty(read(&state_path(config)).get("lang")))
+        .filter(|l| !l.is_empty())
+        .unwrap_or_else(|| crate::notebook::language(config))
+}
+
 /// The Carnet as the apps get it.
 pub fn notebook_view(config: &Config) -> Value {
     view_of(&read(&notebook_path(config)))
 }
 
+/// [`view_of`] for the tests of family_carnet.rs.
+#[cfg(test)]
+pub fn view_for_tests(data: &Dict) -> Value {
+    view_of(data)
+}
+
 fn view_of(data: &Dict) -> Value {
-    json!({"pages": data.get("pages").cloned().unwrap_or(json!([])),
-           "lists": data.get("lists").cloned().unwrap_or(json!([])),
+    json!({"pages": without_categories(data.get("pages")),
+           "lists": without_categories(data.get("lists")),
            "updated": data.get("updated").cloned().unwrap_or(json!(0))})
+}
+
+/// Pages or lists (and their items) as the apps and the agent have always read them: the sommaire's `categories` and
+/// `categories_by` (family_carnet.rs, S6) left out, so that today's answers stay exactly today's.
+fn without_categories(list: Option<&Value>) -> Value {
+    let mut list = list.cloned().unwrap_or(json!([]));
+    for entry in list.as_array_mut().into_iter().flatten() {
+        if let Some(o) = entry.as_object_mut() {
+            o.shift_remove("categories");
+            o.shift_remove("categories_by");
+            for item in o.get_mut("items").and_then(Value::as_array_mut).into_iter().flatten() {
+                if let Some(i) = item.as_object_mut() {
+                    i.shift_remove("categories");
+                    i.shift_remove("categories_by");
+                }
+            }
+        }
+    }
+    list
 }
 
 fn due_of(value: Option<&Value>) -> Result<Value, String> {
@@ -527,6 +608,7 @@ pub fn apply(data: &mut Dict, body: &Dict, by: &str, at: f64) -> Result<(), Stri
             } else {
                 let at_index = find(pages, &id).ok_or("no such page")?;
                 let page = &mut pages[at_index];
+                crate::family_carnet::renamed(page, &title);
                 if !title.is_empty() {
                     page["title"] = json!(title);
                 }
@@ -561,6 +643,7 @@ pub fn apply(data: &mut Dict, body: &Dict, by: &str, at: f64) -> Result<(), Stri
             } else {
                 let at_index = find(lists, &id).ok_or("no such list")?;
                 let list = &mut lists[at_index];
+                crate::family_carnet::renamed(list, &title);
                 if !title.is_empty() {
                     list["title"] = json!(title);
                 }
@@ -627,6 +710,8 @@ pub fn apply(data: &mut Dict, body: &Dict, by: &str, at: f64) -> Result<(), Stri
                 .into())
         }
     }
+    // the sommaire's categories (S6): what has none filed by the bridge's words, at each write, whoever writes
+    crate::family_carnet::file_all(data);
     data.insert("updated".into(), json!(at));
     Ok(())
 }
@@ -1163,7 +1248,7 @@ async fn create(State(state): State<AppState>, body: Bytes) -> ApiResult<Respons
     if take_over {
         if let Some(Value::Object(notebook)) = handover.as_ref().and_then(|h| h.get("notebook")) {
             let kept = Map::from_iter(
-                ["pages", "lists"].iter().filter_map(|k| notebook.get(*k).map(|v| (k.to_string(), v.clone()))),
+                HANDED.iter().filter_map(|k| notebook.get(*k).map(|v| (k.to_string(), v.clone()))),
             );
             update(&notebook_path(&config), |data| {
                 for (k, v) in kept {
@@ -1246,6 +1331,8 @@ async fn put_members(
     let gone: Vec<String> = before.iter().filter(|h| !after.contains(h)).cloned().collect();
     if !gone.is_empty() {
         crate::shared_files::forget_households(&config, &agent.name, &gone);
+        // their kept searches in the family Carnet, when they are in none of its agents now (review 1 of S6, R3)
+        crate::family_carnet::prune_kept(&config);
     }
     tell_all(&state, &agent, true).await;
     tracing::info!(agent = %agent.name, everyone = chosen.is_none(), members = after.len(), "family agent: its members changed");
@@ -1380,6 +1467,7 @@ pub fn router() -> Router<AppState> {
         .route("/family-agent/{agent}/members", put(put_members))
         .route("/family-agent/notebook", get(get_notebook).post(post_notebook))
         .route("/family-agent/usage", get(usage))
+        .merge(crate::family_carnet::router())
 }
 
 // -- between the bridges ------------------------------------------------------------------------------------------------
@@ -1388,7 +1476,7 @@ fn household_of(state: &AppState, headers: &HeaderMap) -> ApiResult<String> {
     let header = headers.get("authorization").and_then(|v| v.to_str().ok()).unwrap_or("");
     let token = header.strip_prefix("Bearer ").unwrap_or(header).trim();
     let household = if token.is_empty() { None } else { state.households.caller(token) };
-    household.ok_or_else(|| HttpError::new(401, "unknown household"))
+    household.ok_or_else(|| HttpError::new(401, UNKNOWN_HOUSEHOLD))
 }
 
 /// The calling household and the family agents of this place it is in (their creator may have chosen the members):
@@ -1401,9 +1489,14 @@ fn served(state: &AppState, headers: &HeaderMap) -> ApiResult<(String, Vec<Agent
         .filter(|a| crate::agent_shares::shared_with(&config, &a.name).contains(&household))
         .collect();
     if agents.is_empty() {
-        return Err(HttpError::new(404, "no family agent for this household"));
+        return Err(HttpError::new(404, NOT_SERVED));
     }
     Ok((household, agents))
+}
+
+/// The calling member's household (family_carnet.rs: the sommaire's routes between the bridges), 404 as `served`.
+pub(crate) fn served_household(state: &AppState, headers: &HeaderMap) -> ApiResult<String> {
+    served(state, headers).map(|(household, _)| household)
 }
 
 /// `GET /family/fa`: the family agents of this place the calling household is in (`agents`; the first's fields too,
@@ -1416,7 +1509,7 @@ async fn served_view(State(state): State<AppState>, headers: HeaderMap) -> ApiRe
         .map(|a| json!({"agent": a.name, "name": a.display_name, "category": a.category, "color": a.color,
                         "everyone": members(&config, &a.name).is_none()}))
         .collect();
-    let first = agents.first().cloned().ok_or_else(|| HttpError::new(404, "no family agent for this household"))?;
+    let first = agents.first().cloned().ok_or_else(|| HttpError::new(404, NOT_SERVED))?;
     Ok(web::ok(json!({"agent": first["agent"], "name": first["name"], "category": first["category"],
                       "color": first["color"], "owner": state.households.name(), "agents": agents})))
 }
@@ -1483,17 +1576,33 @@ pub fn household_router() -> Router<AppState> {
         .route("/family/fa/notebook", get(served_notebook).post(served_change))
         .route("/family/fa/usage", get(served_usage))
         .route("/family/fa/handover", post(handed_over))
+        .merge(crate::family_carnet::household_router())
 }
 
 /// A household unlinked by this person (peers.rs): if this place holds the family's agent, that member gets a copy of
 /// what is the family's (its name, personality, Carnet) so it is never lost silently. `entry`: the household as it was.
 pub fn after_unlink(state: &AppState, household: &str, entry: Option<Dict>) {
     let config = state.config();
+    // a member who left the household holding her family Carnet: her searches made in it go (family_carnet.rs, S6),
+    // unless that Carnet waits for her to take it over
+    if own_agent(&config).is_none() && known_all(&config).is_empty() && !handover_waits(&config) {
+        crate::family_carnet::erase_searched(&config);
+    }
+    // a member leaving the household that may hold her family Carnet: her kept searches there go with her (review 1
+    // of S6, R3; answered only by a holder she uses)
+    if own_agent(&config).is_none() {
+        if let Some(entry) = entry {
+            crate::family_carnet::leave_holder(state, entry);
+        }
+        return;
+    }
     let (Some(agent), Some(entry)) = (own_agent(&config), entry) else { return };
     let soul = crate::agents_admin::editable_soul(&config, &agent).unwrap_or_default();
     let lang = tk::str_or_empty(read(&state_path(&config)).get("lang"));
     let body = json!({"from": state.households.name(), "name": agent.display_name, "soul": soul, "lang": lang,
-                      "notebook": notebook_view(&config)});
+                      "notebook": handed_notebook(&config, household)});
+    // that member's kept searches leave this place's family Carnet with her (review 1 of S6, R3)
+    crate::family_carnet::prune_kept(&config);
     let http = state.http.clone();
     let household = household.to_string();
     state.spawn(async move {

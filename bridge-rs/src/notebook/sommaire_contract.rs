@@ -512,71 +512,53 @@ fn fake_bridge(lang: &str) -> BTreeMap<String, Value> {
     let undone = c::undo(&config, done["undo"].as_str().unwrap(), &you).unwrap().unwrap();
     out.insert("categorize.json".into(), super::categories_pass::with_toast(done, lang));
     out.insert("categorize-undo.json".into(), undone);
-    // the family's Carnet: its lists and pages, their categories from the bench's reference until S6
+    // the family's Carnet (S6): the demo written as `family-notebook.json`, filed, copied and counted by the bridge's
+    // own code (family_carnet.rs); the copy's tables stay the drafts (the parity cases are written on them)
     let family = read("App/Resources/Demo/family-notebook-demo.json")[lang].clone();
-    let bench = read("contracts/carnet/search-bench.json");
-    let reference = bench["items"].as_object().unwrap();
-    let mut fam: Vec<Value> = Vec::new();
-    for list in family["lists"].as_array().into_iter().flatten() {
-        for it in list["items"].as_array().into_iter().flatten() {
-            let id = format!("fam:list:{}/{}", s(&list["id"]), s(&it["id"]));
-            let cats = family_cats(reference.get(&id));
-            let day = it["due_in"].as_i64().map(|d| today() + Duration::days(d));
-            // a birthday (`born`): yearly; a list's other dates, days
-            let (date, yearly) = match (day, it["born"].is_number()) {
-                (Some(d), true) => (Value::Null, json!(d.format("%m-%d").to_string())),
-                (Some(d), false) => (json!(d.to_string()), Value::Null),
-                _ => (Value::Null, Value::Null),
-            };
-            fam.push(json!({"id": id, "kind": "list_item", "title": s(&list["title"]), "line": s(&it["text"]), "categories": cats,
-                            "date": date, "yearly": yearly, "who": s(&it["by"]), "noted": Value::Null,
-                            "open": {"list": s(&list["id"]), "item": s(&it["id"])}, "fold": fold(&s(&it["text"])),
-                            "done": it["done"].as_bool().unwrap_or(false)}));
-        }
-    }
-    for p in family["pages"].as_array().into_iter().flatten() {
-        let id = format!("fam:page:{}", s(&p["id"]));
-        let cats = family_cats(reference.get(&id));
-        fam.push(json!({"id": id, "kind": "page", "title": s(&p["title"]), "line": crate::tools_knowledge::head(&s(&p["text"]), 240),
-                        "categories": cats, "date": Value::Null, "yearly": Value::Null, "who": s(&p["by"]), "noted": Value::Null,
-                        "open": {"path": s(&p["id"])}, "fold": fold(&format!("{} {}", s(&p["title"]), s(&p["text"])))}));
-    }
+    let made = today().and_hms_opt(7, 0, 0).unwrap().and_utc().timestamp() as f64;
+    let ago = |v: &Value| made - 3600.0 * v["hours_ago"].as_f64().unwrap_or(0.0);
+    let lists: Vec<Value> = family["lists"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|l| {
+            let items: Vec<Value> = l["items"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|i| {
+                    let due = i["due_in"].as_i64().map(|d| (today() + Duration::days(d)).to_string());
+                    json!({"id": i["id"], "text": i["text"], "done": i["done"].as_bool().unwrap_or(false), "due": due,
+                           "by": i["by"], "at": ago(i)})
+                })
+                .collect();
+            json!({"id": l["id"], "title": l["title"], "kind": l["kind"], "items": items, "updated": made, "by": "Marie"})
+        })
+        .collect();
+    let pages: Vec<Value> = family["pages"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|p| json!({"id": p["id"], "title": p["title"], "text": p["text"], "by": p["by"], "updated": ago(p)}))
+        .collect();
     let fam_kept = if lang == "fr" { "courses" } else { "shopping" };
-    let fam_sent: Vec<Value> = fam.iter().map(compact).collect();
+    let mut data = json!({"lists": lists, "pages": pages, "updated": made,
+                          "kept": [{"id": "k9f8e7d", "q": fam_kept, "title": fam_kept, "by_household": "self"}]})
+    .as_object()
+    .cloned()
+    .unwrap();
+    crate::family_carnet::file_all(&mut data);
+    std::fs::write(crate::family_agent::notebook_file(&config), Value::Object(data.clone()).to_string()).unwrap();
+    let fam_sent: Vec<Value> = crate::family_carnet::entries(&data).iter().map(super::index::sent).collect();
     out.insert("family-index.json".into(), json!({"v": 1, "epoch": "e3p8q1", "version": 7, "since": null, "full": true, "lang": lang,
         "made": "2026-11-22T07:00:00Z", "dated": {"before": 90, "after": 730}, "items": fam_sent, "removed": [], "stop": stop, "neighbours": tables(lang).0,
         "dates": tables(lang).1, "kept": [{"id": "k9f8e7d", "q": fam_kept, "title": fam_kept}]}));
-    let fam_lines: Vec<Value> = c::FAMILY
-        .iter()
-        .filter_map(|id| {
-            let dated = |i: &Value| i["yearly"].is_string() || i["date"].as_str().and_then(|d| NaiveDate::parse_from_str(d, "%Y-%m-%d").ok()).is_some_and(|d| c::in_window(d, today()));
-            let mine: Vec<&Value> = fam
-                .iter()
-                .filter(|i| i["categories"].as_array().is_some_and(|c| c.iter().any(|x| x == id)) || (*id == "dates" && dated(i)))
-                .collect();
-            if mine.is_empty() {
-                return None;
-            }
-            let hint: Vec<String> = mine.iter().take(3).map(|i| s(&i["line"])).collect();
-            Some(json!({"id": id, "title": title(lang, id), "count": mine.len(), "hint": hint.join(", "), "locked": false}))
-        })
-        .collect();
-    let shopping = fam.iter().filter(|i| i["categories"].as_array().is_some_and(|c| c.iter().any(|x| x == "shopping"))).count();
-    out.insert("family-summary.json".into(), json!({"v": 1, "lang": lang, "title": carnet,
-        "with": if lang == "fr" { "Avec Marie, Léa et Tom" } else { "With Marie, Léa and Tom" },
-        "kept": [{"id": "k9f8e7d", "q": fam_kept, "title": fam_kept, "count": shopping, "space": null}],
-        "total": {"count": fam.len(), "title": all_notes}, "categories": fam_lines,
-        "bar": {"placeholder": if lang == "fr" { "Cherche pour la famille" } else { "Search for the family" }}, "version": 7}));
+    let names: Vec<String> = ["Marie", "Léa", "Tom"].iter().map(|n| n.to_string()).collect();
+    let mut summary = crate::family_carnet::summary_at(&config, &[lang.to_string()], today(), &names);
+    summary["version"] = json!(7);
+    summary["epoch"] = json!("e3p8q1");
+    out.insert("family-summary.json".into(), summary);
     out
-}
-
-/// A family note's categories from the bench's reference (until S6 files them), `dates` left to the phone.
-fn family_cats(reference: Option<&Value>) -> Value {
-    let cats: Vec<String> = reference
-        .and_then(|r| r["categories"].as_array())
-        .map(|c| c.iter().map(s).filter(|c| c != "dates").collect())
-        .unwrap_or_default();
-    if cats.is_empty() { json!(["other"]) } else { json!(cats) }
 }
 
 /// Ids made at random (pages, tasks, records, undo) replaced by stable ones, in order of appearance.
