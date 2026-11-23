@@ -59,9 +59,10 @@ pub fn tool() -> Value {
         "description": "Save a file in your person's online documents (Google Drive, OneDrive, Dropbox), only in a \
     folder they let you write in (drive_folders says « you may write in it »): a NEW file (`folder` and `name`, with `text` \
     or `file`), or a NEW VERSION of a file there (`replace`, with `text` or `file`; the old version stays in the service's \
-    history). Never deletes, moves or renames anything, never writes over a file, never a program, a script, a shortcut or \
-    a link. Your person sees it on a card and says yes first (a new document or picture may go through at once when they \
-    chose so).",
+    history). Never deletes, moves or renames anything, never writes over a file, never a file that runs, installs, \
+    connects or fetches something by itself when opened (programs, scripts, shortcuts, links, macros, old Office files). \
+    Your person sees it on a card and says yes first; only a new document or picture (text, PDF, Office, OpenDocument, \
+    photo) may go through at once when they chose so.",
         "inputSchema": {"type": "object", "properties": {
             "folder": {"type": "string", "description": format!("the folder to save in: {reference}")},
             "name": {"type": "string", "description": "the new file's name, e.g. « Compte rendu.md »", "maxLength": NAME_MAX},
@@ -146,7 +147,53 @@ pub const RUNS: &[&str] = &[
     "diagcab",
     "theme",
     "themepack",
-    // Office with macros, add-ins
+    // Office with macros, add-ins, and its old formats that carry them (Office offers « Activer le contenu » for a file
+    // without the internet mark: review 2); Excel's SYLK (Excel 4 macros) and web queries (fetched when opened); OneNote
+    // (the files inside it run from a double-click); Access; Visio with macros
+    "doc",
+    "dot",
+    "wbk",
+    "xls",
+    "xlt",
+    "xla",
+    "xlsb",
+    "xlm",
+    "xlw",
+    "ppt",
+    "pot",
+    "pps",
+    "ppa",
+    "slk",
+    "iqy",
+    "oqy",
+    "rqy",
+    "dqy",
+    "one",
+    "onepkg",
+    "onetoc2",
+    "mdb",
+    "mda",
+    "mdw",
+    "mdz",
+    "accdb",
+    "accda",
+    "accde",
+    "accdr",
+    "accdt",
+    "accdu",
+    "ade",
+    "adp",
+    "maf",
+    "mam",
+    "maq",
+    "mar",
+    "mas",
+    "mat",
+    "mav",
+    "maw",
+    "vsdm",
+    "vssm",
+    "vstm",
     "docm",
     "dotm",
     "xlsm",
@@ -158,6 +205,27 @@ pub const RUNS: &[&str] = &[
     "ppam",
     "ppsm",
     "sldm",
+    // what connects to another machine, searches it, or installs when opened (review 2)
+    "rdp",
+    "website",
+    "search-ms",
+    "searchconnector",
+    "appinstaller",
+    "msu",
+    "sct",
+    "ins",
+    "isp",
+    "shs",
+    "shb",
+    "xnk",
+    "glk",
+    "mshxml",
+    "printerexport",
+    "partial",
+    "cab",
+    "msh",
+    "msh1",
+    "msh2",
     // macOS and Linux: apps, installers, scripts, links
     "app",
     "command",
@@ -211,12 +279,12 @@ const RESERVED: &[&str] = &[
     "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8", "lpt9",
 ];
 
-/// What may be made at once, without a card, under « Seulement le critique » (review B1): documents and pictures.
-/// Anything else (not one of [`RUNS`]) asks the person on a card first, whatever their level. An HTML file only when
-/// it is one of the agent's own pages (locked: no network, nothing to run outside it).
+/// What may be made at once, without a card, under « Seulement le critique » (review B1): documents and pictures that
+/// fetch nothing when opened. Anything else (not one of [`RUNS`]: an RTF, an HTML page, an SVG, an archive…) asks the
+/// person on a card first, whatever their level.
 pub const AT_ONCE: &[&str] = &[
-    "txt", "md", "markdown", "csv", "tsv", "json", "pdf", "docx", "xlsx", "pptx", "odt", "ods", "odp", "rtf", "jpg",
-    "jpeg", "png", "gif", "webp", "heic", "heif", "bmp", "tif", "tiff",
+    "txt", "md", "markdown", "csv", "tsv", "json", "pdf", "docx", "xlsx", "pptx", "odt", "ods", "odp", "jpg", "jpeg",
+    "png", "gif", "webp", "heic", "heif", "bmp", "tif", "tiff",
 ];
 
 /// Characters that show nothing, or turn the text around: a name with one looks like another (review A-noms).
@@ -229,12 +297,11 @@ fn invisible(c: char) -> bool {
 }
 
 /// Whether `name` (as it will be written) may be made at once, without a card: a document or a picture.
+/// (Review 2: never an RTF, whose template or linked picture Word fetches when it opens it, nor an agent's page, which
+/// may navigate anywhere outside the app's view: both go by a card; `from_page` no longer opens anything.)
 pub fn at_once_kind(name: &str, from_page: bool) -> bool {
-    match extension(name).map(str::to_ascii_lowercase) {
-        Some(ext) if AT_ONCE.contains(&ext.as_str()) => true,
-        Some(ext) => from_page && (ext == "html" || ext == "htm"),
-        None => false,
-    }
+    let _ = from_page;
+    extension(name).map(str::to_ascii_lowercase).is_some_and(|ext| AT_ONCE.contains(&ext.as_str()))
 }
 
 /// Why a file named `name` is never written (a type that runs or reaches elsewhere, a reserved or special name).
@@ -248,9 +315,12 @@ pub fn never_written(name: &str) -> Option<&'static str> {
         return Some("a name Windows keeps for itself (CON, NUL, COM1…): choose another");
     }
     match extension(&lower) {
+        // a letter that only looks like a plain one (« .vbſ », « .pıf »): never taken for a harmless type (review 2)
+        Some(ext) if !ext.is_ascii() => Some("an extension in plain letters only (a-z, 0-9): never written"),
         Some(ext) if RUNS.contains(&ext) => Some(
-            "a kind of file that runs, installs or opens something else on a computer (a program, a script, a shortcut, \
-a link, a disk image, a document with macros): never written in your person's online documents, card or not",
+            "a kind of file that runs, installs, connects or opens something else on a computer by itself (a program, \
+a script, a shortcut, a link, a disk image, a document with macros, an old Office file): never written in your \
+person's online documents, card or not",
         ),
         _ => None,
     }
@@ -306,6 +376,28 @@ pub fn name_with_extension(asked: &str, own: Option<&str>) -> String {
     }
 }
 
+/// The name a new file is written under: the one asked (else the agent's file's own), its extension added from the
+/// content, then checked as it will be written (« Facture » with a `.bat` file is a `Facture.bat`: refused).
+pub fn written_name(asked: &str, own: Option<&str>) -> Result<String, &'static str> {
+    let asked = if asked.trim().is_empty() { own.unwrap_or_default() } else { asked };
+    clean_name(asked).and_then(|clean| clean_name(&name_with_extension(&clean, own)))
+}
+
+/// What a held « Oui » covers exactly (held_approvals.rs `take_grant`), and the start every revision of the same write
+/// shares: the reference, the name and the content's digest; for a new version, the revision the card shows too
+/// (`rev:{rev}/{eTag}`, review C4): a « Oui » given overnight never writes over a change made since.
+pub fn card_command(provider: Provider, target: &Item, name: &str, bytes: &[u8], replacing: bool) -> (String, String) {
+    let base = format!("{TOOL} {} {name} {}", drives::reference(provider, &target.id), digest(name, bytes));
+    let command = if replacing { format!("{base} rev:{}/{}", target.rev, target.etag) } else { base.clone() };
+    (base, command)
+}
+
+/// A revision as the agent may copy it back: OneDrive's tags come in quotes (`"c:{…},2"`), a model drops them.
+pub fn same_revision(seen: &str, now: &str) -> bool {
+    let bare = |r: &str| r.trim().trim_matches('"').trim().to_string();
+    bare(seen) == bare(now)
+}
+
 /// What is written.
 #[derive(Debug, Clone, Default)]
 pub struct Content {
@@ -315,7 +407,7 @@ pub struct Content {
     pub text: Option<String>,
     /// The agent's file's own name (`file`).
     pub own_name: Option<String>,
-    /// One of the agent's own pages (locked: an HTML file may then be made at once, [`at_once_kind`]).
+    /// One of the agent's own pages (review 2: it still goes by a card, [`at_once_kind`]).
     pub from_page: bool,
 }
 
@@ -548,7 +640,7 @@ fn refused(text: &str) -> Dict {
 /// - Dropbox: `sharing_info` (a shared folder and its content) or a shared link on it or on a folder above it
 ///   (`sharing/list_shared_links`, needs `sharing.read`: asked with the write right; review C2).
 /// - OneDrive: the `shared` facet on it or on ANY folder above it, up to the drive's root (review C1: the facet is on
-///   the folder shared, not on what it holds); a parent that can't be read counts as shared.
+///   the folder shared, not on what it holds); a parent that can't be read: « can't be checked », nothing written.
 /// - Google: `shared` / `driveId` on it and its folders up to the folder given (`drive.file` lets nothing above it be
 ///   read: what Google says of the folder picked and its content).
 async fn open_to_others(api: &Api, item: &Item, writable: &[Folder]) -> Result<bool, Fault> {
@@ -561,13 +653,16 @@ async fn open_to_others(api: &Api, item: &Item, writable: &[Folder]) -> Result<b
             let mut parent = item.parents.first().cloned();
             for _ in 0..drives::HOPS_MAX {
                 let Some(id) = parent else { return Ok(false) };
-                let Ok(up) = api.item_with(&id, drives::WRITE_FIELDS).await else { return Ok(true) };
+                // a parent that can't be read now (a slow-down, a service in trouble): said as such, never as
+                // « shared », and nothing written (review 2)
+                let up = api.item_with(&id, drives::WRITE_FIELDS).await?;
                 if up.shared || up.remote {
                     return Ok(true);
                 }
                 parent = up.parents.first().cloned();
             }
-            Ok(true) // deeper than the parents looked up: not known, so not written
+            // deeper than the parents looked up: not known, so not written
+            Err(Fault::Other("too many folders above it to check".into()))
         }
         Provider::Google => {
             let chosen: Vec<&str> = writable.iter().map(|f| f.id.as_str()).collect();
@@ -1176,12 +1271,7 @@ pub async fn call(state: &AppState, agent: &AgentConfig, arguments: &Dict) -> Di
     let name = if replacing {
         String::new()
     } else {
-        let asked_name = arg(arguments, "name");
-        let asked_name = if asked_name.is_empty() { content.own_name.clone().unwrap_or_default() } else { asked_name };
-        // the name as it will be written (its extension added) is the one checked: « Facture » with a `.bat` file too
-        match clean_name(&asked_name)
-            .and_then(|clean| clean_name(&name_with_extension(&clean, content.own_name.as_deref())))
-        {
+        match written_name(&arg(arguments, "name"), content.own_name.as_deref()) {
             Ok(written) => written,
             Err(why) => return refused(&format!("Nothing saved: {why}.")),
         }
@@ -1195,7 +1285,7 @@ pub async fn call(state: &AppState, agent: &AgentConfig, arguments: &Dict) -> Di
     let shown_name = drives::defused(&first.name);
     // the revision the agent read (drive_read says it): changed since, never written over unseen (review A-révision)
     let seen = arg(arguments, "seen");
-    if replacing && !seen.is_empty() && seen != first.target.rev {
+    if replacing && !seen.is_empty() && !same_revision(&seen, &first.target.rev) {
         return refused(&format!(
             "{asked} changed in {label} since you read it: nothing was saved. Read it again (drive_read), then write."
         ));
@@ -1209,14 +1299,7 @@ pub async fn call(state: &AppState, agent: &AgentConfig, arguments: &Dict) -> Di
     if !at_once {
         // a new version's card holds the revision it shows (review C4): a « Oui » given to a card held overnight
         // never lets a later call write over a change made since
-        let base = format!(
-            "{TOOL} {} {} {}",
-            drives::reference(first.provider, &first.target.id),
-            first.name,
-            digest(&first.name, &content.bytes)
-        );
-        let command =
-            if replacing { format!("{base} rev:{}/{}", first.target.rev, first.target.etag) } else { base.clone() };
+        let (base, command) = card_command(first.provider, &first.target, &first.name, &content.bytes, replacing);
         if replacing {
             let (c, a, prefix, now) = (config.clone(), agent.name.clone(), format!("{base} rev:"), command.clone());
             let stale =

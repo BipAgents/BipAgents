@@ -1069,7 +1069,8 @@ pub fn start(config: &Config, id: &str, agents: &[String], pick: Pick, client: &
 }
 
 /// Whether a sign-in to `provider` asks the write right (Dropbox, OneDrive): a folder kept for it has a writer. None
-/// any more: the next sign-in (« Reconnecter ») asks reading only, and the write right is gone (review remark).
+/// any more: the next sign-in (« Reconnecter ») asks reading only. Dropbox then gives a reading token; Microsoft adds up
+/// what was consented, so OneDrive's token may keep `Files.ReadWrite` (harmless: no agent writes without its switch).
 pub fn wants_write(config: &Config, provider: Provider) -> bool {
     let Some(link) = read_stored(config).ok().and_then(|s| s.drives.get(provider.id()).cloned()) else { return false };
     link.folders.iter().any(|f| !f.writers.is_empty())

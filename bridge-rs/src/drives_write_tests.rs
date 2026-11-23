@@ -28,6 +28,8 @@ struct World {
     upload_200: bool,
     /// Dropbox's shared links, by `path_lower`.
     links: Vec<String>,
+    /// A Graph item that answers 503 (a service in trouble).
+    graph_down: Option<String>,
 }
 
 type W = Arc<Mutex<World>>;
@@ -313,6 +315,9 @@ async fn fake(w: W, method: Method, uri: Uri, headers: HeaderMap, body: Bytes) -
             None => (rest.clone(), false),
         };
         let id = if id == "root" { "ROOT".to_string() } else { id };
+        if w.graph_down.as_deref() == Some(id.as_str()) {
+            return reply(503, json!({"error": {"code": "serviceNotAvailable"}}));
+        }
         let Some(item) = w.graph.get(&id).cloned() else {
             return reply(404, json!({"error": {"code": "itemNotFound"}}));
         };
@@ -1070,7 +1075,7 @@ fn only_documents_go_through_at_once_and_nothing_that_runs_ever() {
     for asked in ["page.html", "dessin.svg", "archive.zip", "sans-extension"] {
         assert!(!at_once_kind(asked, false) && never_written(asked).is_none(), "{asked}: with a card only");
     }
-    assert!(at_once_kind("budget.html", true), "one of its own pages");
+    assert!(!at_once_kind("budget.html", true), "one of its own pages: a card too (review 2)");
     for bad in [
         "NUL.txt",
         "con",
@@ -1150,6 +1155,7 @@ async fn annuler_after_another_account_says_so() {
 ///   picture) when it opens it: a web address, or `\\host\share` (the Windows account's hash sent to that host).
 /// - An agent's page keeps its Content-Security-Policy in its `<meta>`, but no CSP stops a navigation: outside the
 ///   app's view, `location = …`, `<meta http-equiv="refresh">` or a link open any site (pages.rs lets them through).
+///
 /// Both may still go with a card. (If the fix looks at the page's content instead, adapt this test, don't loosen it.)
 #[test]
 fn review2_nothing_made_at_once_reaches_elsewhere_when_opened() {
@@ -1188,4 +1194,72 @@ fn review2_never_an_old_office_file_with_macros_nor_a_link_to_another_machine() 
     ] {
         assert!(clean_name(bad).is_err(), "{bad:?} accepted");
     }
+}
+
+/// Review 2: the name checked is the one written, its extension added from the agent's file (« Facture » with
+/// `x.bat` is `Facture.bat`); an extension in letters that only look plain is never taken for a harmless one.
+#[test]
+fn the_name_checked_is_the_one_written_with_its_extension_added() {
+    assert_eq!(written_name("Facture", Some("rapport.pdf")), Ok("Facture.pdf".to_string()));
+    assert_eq!(written_name("Compte rendu", None), Ok("Compte rendu.md".to_string()), "a text: markdown");
+    assert_eq!(written_name("", Some("devis.pdf")), Ok("devis.pdf".to_string()), "no name: the file's own");
+    for (asked, own) in
+        [("Facture", Some("x.bat")), ("Facture", Some("Modèle.dot")), ("", Some("x.lnk")), ("Note", Some("y.rtf.exe"))]
+    {
+        assert!(written_name(asked, own).is_err(), "{asked:?} with {own:?} accepted");
+    }
+    assert_eq!(written_name("Note", Some("y.rtf")), Ok("Note.rtf".to_string()), "an RTF: with a card");
+    for bad in ["x.vbſ", "x.pıf", "Lettre.dоc", "x.exé"] {
+        assert!(clean_name(bad).is_err(), "{bad:?} accepted");
+    }
+}
+
+/// Review 2, C4 at drives_write's level: a new version's card command holds the revision (and the eTag), so a « Oui »
+/// given for one revision never covers another; a new file's has none.
+#[test]
+fn a_new_version_s_card_holds_the_revision() {
+    let file = Item { id: "id:f".into(), rev: "r1".into(), etag: "e1".into(), ..Default::default() };
+    let (base, command) = card_command(Provider::Dropbox, &file, "plan.txt", b"v2", true);
+    assert!(command.starts_with(&format!("{base} rev:")) && command.ends_with(" rev:r1/e1"), "{command}");
+    let changed = Item { rev: "r2".into(), ..file.clone() };
+    let (base2, command2) = card_command(Provider::Dropbox, &changed, "plan.txt", b"v2", true);
+    assert_eq!(base, base2, "the same write");
+    assert_ne!(command, command2, "another revision: another card, the old « Oui » never used");
+    let (base3, created) = card_command(Provider::Dropbox, &file, "plan.txt", b"v2", false);
+    assert_eq!(base3, created, "a new file: no revision");
+    // OneDrive's tags in quotes, copied back without them by the agent (review 2)
+    assert!(same_revision("c:{ABC},2", "\"c:{ABC},2\""));
+    assert!(same_revision(" r1 ", "r1"));
+    assert!(!same_revision("r1", "r2"));
+}
+
+/// Review 2, C1: a folder above that can't be read now (OneDrive in trouble) is said as such, never as « shared »,
+/// and nothing is written.
+#[tokio::test]
+async fn onedrive_a_parent_that_cant_be_read_now_is_said_as_such() {
+    let (base, w) = serve().await;
+    let (_dir, config) = setup(&base);
+    {
+        let mut w = w.lock().unwrap();
+        w.graph.insert(
+            "FAM".into(),
+            json!({"id": "FAM", "name": "Famille", "folder": {}, "parentReference": {"id": "ROOT"}}),
+        );
+        w.graph.insert(
+            "FAC".into(),
+            json!({"id": "FAC", "name": "Factures", "folder": {}, "parentReference": {"id": "FAM"}}),
+        );
+        w.graph_down = Some("FAM".into());
+    }
+    keep(
+        &config,
+        Provider::Microsoft,
+        "at",
+        "Files.ReadWrite",
+        vec![folder("FAC", "Factures", "", &["vie"], &["vie"])],
+    );
+    let said = planned(&config, "onedrive:FAC", false, "Relevé.md").await.err().unwrap_or_default();
+    assert!(said.contains("can't be checked") && said.contains("trouble") && !said.contains("shared"), "{said}");
+    w.lock().unwrap().graph_down = None;
+    assert!(planned(&config, "onedrive:FAC", false, "Relevé.md").await.is_ok());
 }

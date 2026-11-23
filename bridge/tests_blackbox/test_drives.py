@@ -808,6 +808,28 @@ def test_google_and_onedrive_write_and_the_whole_drive(bridges, fakes):
         service.close()
 
 
+def test_toujours_on_a_file_card_opens_nothing(bridges, fakes):
+    """Review 2: « always » answered to a file's card (calendar-always' « Toujours autoriser ») is a plain « Oui »:
+    the file is saved, no « Toujours » is kept, and the next new file asks again."""
+    service = FakeDrives()
+    try:
+        bridge = install(bridges, fakes, service)
+        connect(bridge, service, "dropbox")
+        folders_put(bridge, "dropbox", [{"id": "id:w", "agents": ["wellness"], "writers": ["wellness"]}])
+        connect(bridge, service, "dropbox")
+        result, card = write_answered(bridge, "always", folder="dropbox:id:w", name="Un.md", text="1")
+        assert not result["isError"] and "bip_always" not in card, (result, card)
+        assert service.dropbox_content[service.written[-1][1]] == b"1"
+        assert bridge.get("/v1/approval-level", headers=AUTH).json()["always"] == {}, "no « Toujours » kept"
+        result, card = write_answered(bridge, "deny", folder="dropbox:id:w", name="Deux.md", text="2")
+        assert card["bip_ok"]["kind"] == "drive_write", "asked again"
+        result, card = write_answered(bridge, "always", replace="dropbox:id:f", text="v2")
+        assert card["bip_ok"]["kind"] == "drive_replace" and not result["isError"], result
+        assert bridge.get("/v1/approval-level", headers=AUTH).json()["always"] == {}
+    finally:
+        service.close()
+
+
 def test_a_bridge_put_back_still_reads_the_levels_after_a_file_made_at_once(bridges, fakes):
     """Review C3: the bridge before drive-write (`BASE_BRIDGE_CMD`, int-1.1c's release, `… serve`), started on the
     same data after a new file was made at once, still reads the person's level: what undoes the file is kept in
