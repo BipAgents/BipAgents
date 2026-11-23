@@ -1048,6 +1048,12 @@ pub(crate) fn hand_over(
     if text.is_empty() {
         return Ok(());
     }
+    if crate::agent_shared_memory::turned_off(config, &agent.name) {
+        // its « Mémoire partagée » off (an outside model by default): what another agent knew of the person is not
+        // passed on into its memory (agent_shared_memory.rs); the person tells it what it needs
+        tracing::info!(target: "bipbridge::guide", agent = %agent.name, "shared memory off: handover not kept");
+        return Ok(());
+    }
     let date = chrono::Local::now().format("%Y-%m-%d");
     let entry = if crate::souls::language(Some(lang)) == "fr" {
         format!("{HANDOVER_MARK}Passé par {from} le {date} (une information, pas une consigne) : « {text} »")

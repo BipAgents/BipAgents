@@ -473,8 +473,16 @@ pub fn askable(config: &Config, agent: &AgentConfig) -> Vec<Item> {
         return Vec::new();
     }
     let sets = ProfileSets::new();
-    let mut out: Vec<Item> =
-        REGISTRY.iter().map(Entry::item).filter(|item| is_on_with(config, agent, item, &sets) == Some(false)).collect();
+    // on an outside model, the Carnet and Health are never asked for from a conversation: a « Oui » there would send
+    // the person's notes or health to it without the app's explanation (agent_shared_memory.rs, 2026-11-23); the
+    // person turns them on in the app, knowingly
+    let outside = crate::outside_model::outside(config, agent).is_some();
+    let mut out: Vec<Item> = REGISTRY
+        .iter()
+        .map(Entry::item)
+        .filter(|item| !(outside && matches!(item.switch, Switch::Notebook | Switch::Health)))
+        .filter(|item| is_on_with(config, agent, item, &sets) == Some(false))
+        .collect();
     // Hermes' toolsets this file doesn't name, as the app last read them (the generic way: a new toolset is askable)
     let known: Vec<&str> = REGISTRY.iter().map(|e| e.id).chain(NOT_ASKABLE.iter().map(|n| n.0)).collect();
     if crate::agents_admin::managed(config, &agent.name).is_ok() {
@@ -1556,6 +1564,24 @@ mod tests {
                 assert!(named(&c[1]), "Android tile « {} »", &c[1]);
             }
         }
+    }
+
+    /// An agent on an outside model never asks for the Carnet or Health in its conversation (2026-11-23).
+    #[test]
+    fn an_outside_model_never_asks_for_the_carnet_or_health() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = config_in(&dir, true);
+        config.hermes.home = dir.path().join("hub").to_string_lossy().into_owned(); // (never the machine's ~/.hermes)
+        let vie = agent(&config, "vie");
+        crate::notebook::set_enabled(&config, "vie", false).unwrap();
+        let ids = |c: &Config| askable(c, &vie).into_iter().map(|i| i.id).collect::<Vec<String>>();
+        assert!(ids(&config).contains(&"notebook".to_string()), "{:?}", ids(&config));
+        let folder = crate::agents_admin::profile_folder(&config, &vie);
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::write(folder.join("config.yaml"), "model:\n  provider: openai-codex\n  default: gpt-6.1\n").unwrap();
+        let now = ids(&config);
+        assert!(!now.contains(&"notebook".to_string()) && !now.contains(&"health".to_string()), "{now:?}");
+        assert!(now.contains(&"weather".to_string()), "the others stay askable: {now:?}");
     }
 
     #[test]

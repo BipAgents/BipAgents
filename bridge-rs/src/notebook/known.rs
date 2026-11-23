@@ -42,6 +42,8 @@ pub struct Texts {
     pub tile: &'static str,
     pub tile_one: &'static str,
     pub tile_many: &'static str,
+    /// « Toujours en tête » of an agent whose « Mémoire partagée » is off (agent_shared_memory.rs)
+    pub shared_off: &'static str,
 }
 
 /// The footer is the app's one sentence of honesty: only what is true by contract. « No training » only on a place of
@@ -58,6 +60,7 @@ pub fn texts(lang: &str) -> Texts {
             no_training: "Ni Kerfy Studio ni l'hébergeur européen qui fait tourner l'IA n'entraînent de modèle avec tes informations.",
             gone: "Page oubliée", old_agent: "Ancien agent", health: "Santé", tile: "Ce que tes agents savent",
             tile_one: "1 page lue ces 7 jours", tile_many: "{n} pages lues ces 7 jours",
+            shared_off: "Mémoire partagée éteinte : il ne reçoit pas ce que tes autres agents savent de toi.",
         },
         "de" => Texts {
             title: "Was deine Agenten über dich wissen", all: "Alle", always: "Immer im Kopf", reads: "Kürzlich gelesen",
@@ -68,6 +71,7 @@ pub fn texts(lang: &str) -> Texts {
             no_training: "Weder Kerfy Studio noch der europäische Anbieter, der die KI betreibt, trainiert ein Modell mit deinen Informationen.",
             gone: "Vergessene Seite", old_agent: "Früherer Agent", health: "Gesundheit", tile: "Was deine Agenten wissen",
             tile_one: "1 Seite in 7 Tagen gelesen", tile_many: "{n} Seiten in 7 Tagen gelesen",
+            shared_off: "Gemeinsames Gedächtnis aus: Er bekommt nicht, was deine anderen Agenten über dich wissen.",
         },
         "es" => Texts {
             title: "Lo que tus agentes saben de ti", all: "Todos", always: "Siempre presente", reads: "Leído hace poco",
@@ -78,6 +82,7 @@ pub fn texts(lang: &str) -> Texts {
             no_training: "Ni Kerfy Studio ni el proveedor europeo que hace funcionar la IA entrenan ningún modelo con tu información.",
             gone: "Página olvidada", old_agent: "Agente anterior", health: "Salud", tile: "Lo que saben tus agentes",
             tile_one: "1 página leída en 7 días", tile_many: "{n} páginas leídas en 7 días",
+            shared_off: "Memoria compartida apagada: no recibe lo que tus otros agentes saben de ti.",
         },
         _ => Texts {
             title: "What your agents know about you", all: "All", always: "Always in mind", reads: "Read recently",
@@ -88,6 +93,7 @@ pub fn texts(lang: &str) -> Texts {
             no_training: "Neither Kerfy Studio nor the European host that runs the AI trains a model on your information.",
             gone: "Forgotten page", old_agent: "Former agent", health: "Health", tile: "What your agents know",
             tile_one: "1 page read in 7 days", tile_many: "{n} pages read in 7 days",
+            shared_off: "Shared memory off: it doesn't get what your other agents know about you.",
         },
     }
 }
@@ -100,14 +106,19 @@ fn at_of(entry: &Dict) -> f64 {
     entry.get("at").and_then(Value::as_f64).unwrap_or(0.0)
 }
 
-/// « Toujours en tête »: the common memory (an agent's own `USER.md` with `agent`), health left out.
+/// « Toujours en tête »: the common memory; with `agent`, what its prompt really carries, its own `USER.md` (whatever
+/// its Carnet: an agent out of the circle keeps what it learnt itself), none while its « Mémoire partagée » is off
+/// (Hermes then shows it no `USER.md`: agent_shared_memory.rs). Health left out.
 fn always(config: &Config, agent: &str) -> Vec<String> {
     let mut lines: Vec<String> = Vec::new();
+    if !agent.is_empty() && crate::agent_shared_memory::turned_off(config, agent) {
+        return lines;
+    }
     let own: Vec<(String, std::path::PathBuf)> = config
         .agents
         .values()
         .filter(|a| agent.is_empty() || a.name == agent)
-        .filter(|a| super::enabled(config, &a.name))
+        .filter(|a| !agent.is_empty() || super::enabled(config, &a.name))
         .map(|a| (a.name.clone(), crate::agents_admin::profile_folder(config, a)))
         .collect();
     let common = if agent.is_empty() { crate::shared_memory::common_texts(config) } else { Vec::new() };
@@ -148,11 +159,16 @@ pub fn view(config: &Config, agent: &str, lang: &str, now: f64) -> Value {
 pub fn view_on(config: &Config, agent: &str, lang: &str, now: f64, offer: bool) -> Value {
     let t = texts(lang);
     let mut agents = vec![json!({"id": "", "name": t.all})];
-    for a in config.agents.values().filter(|a| super::enabled(config, &a.name)) {
+    // every agent, its Carnet on or not: each with what it really knows of the person (`always`)
+    for a in config.agents.values() {
         let name = if a.display_name.is_empty() { a.name.clone() } else { a.display_name.clone() };
         agents.push(json!({"id": a.name, "name": name, "color": a.color}));
     }
     let always_lines: Vec<Value> = always(config, agent).iter().map(|l| json!({"key": key(l), "text": l})).collect();
+    let mut always_block = json!({"title": t.always, "lines": always_lines});
+    if !agent.is_empty() && crate::agent_shared_memory::turned_off(config, agent) {
+        always_block["note"] = json!(t.shared_off); // (absent otherwise: the page as before)
+    }
     // « Lu récemment »: one row per turn (its run, else its session), the newest first
     let by_id = pages_by_id(config);
     let mut rows: Vec<(f64, String, Vec<Value>)> = Vec::new();
@@ -235,7 +251,7 @@ pub fn view_on(config: &Config, agent: &str, lang: &str, now: f64, offer: bool) 
         unseen.push(t.archives_line);
     }
     json!({"title": t.title, "agents": agents,
-           "always": {"title": t.always, "lines": always_lines},
+           "always": always_block,
            "reads": {"title": t.reads, "days": days, "older": if empty { Value::Null } else { json!(t.older) },
                      "empty": if empty { json!(t.empty) } else { Value::Null }},
            "unseen": {"title": t.unseen, "lines": unseen},

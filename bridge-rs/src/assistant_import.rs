@@ -982,7 +982,12 @@ pub fn apply_files(
     }
     notes.extend(plan.memory.iter().map(quoted));
     counts.memory = fill_memory(&folder, "notes", &notes)?;
-    counts.memory += fill_memory(&folder, "user", &plan.user.iter().map(quoted).collect::<Vec<_>>())?;
+    // its « Mémoire partagée » off: no facts about the person in its USER.md (Hermes doesn't show it, and they would
+    // join every agent's memory once it is turned on: agent_shared_memory.rs); they reach the Carnet's « À ranger »
+    // below all the same
+    if !crate::agent_shared_memory::turned_off(config, &agent.name) {
+        counts.memory += fill_memory(&folder, "user", &plan.user.iter().map(quoted).collect::<Vec<_>>())?;
+    }
     let inbox: Vec<String> = plan
         .user
         .iter()

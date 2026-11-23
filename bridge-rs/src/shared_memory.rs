@@ -124,6 +124,10 @@ pub struct Seen {
     /// The keys it has had or been given (never given again).
     #[serde(default)]
     pub seen: Vec<String>,
+    /// The keys the bridge wrote into its file from the common list, that it has not written again itself: what it
+    /// gives back when it leaves the circle (`left`). None for a record of before this list was kept (`received`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub given: Option<Vec<String>>,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -146,6 +150,10 @@ pub struct Stored {
     /// `edited`).
     #[serde(default)]
     pub toi_page: Vec<String>,
+    /// Whether the one-time pass of 2026-11-23 ran (`privacy_pass`): the agents that left the circle before `given`
+    /// was kept cleaned, the health entries taken out of the common list.
+    #[serde(default)]
+    pub privacy: bool,
 }
 
 /// An agent of the circle.
@@ -166,6 +174,8 @@ pub struct Round {
     pub writes: Vec<Write>,
     /// Entries learnt by an agent after the first run: (agent, entry), for the Carnet.
     pub learnt: Vec<(String, String)>,
+    /// The agents that left the circle, each with the keys to take out of its USER.md (`received`).
+    pub left: Vec<(String, Vec<String>)>,
 }
 
 /// What a date stamp says before its date (« noté le », « annoncé le », « added on »…), folded or not.
@@ -323,6 +333,19 @@ fn drop_common(stored: &mut Stored, k: &str, now: f64) {
     stored.removed.push((k.to_string(), now));
 }
 
+/// What `agent` received from the common list (module doc of agent_shared_memory.rs, « what it gives back »): the
+/// keys the bridge wrote into its file (`given`); for a record of before that list was kept, or none at all, the keys
+/// of the common list learnt by someone else (another agent, the « Toi » page, the person in another agent's page).
+/// Its own stays: what it wrote itself, what the person wrote in its own page, what it knew when it joined. In doubt
+/// (learnt by it and by another before the list was kept, `by` the other): received, out (privacy first; the common
+/// list and « Toi » keep it).
+pub fn received(stored: &Stored, agent: &str) -> Vec<String> {
+    match stored.agents.get(agent).and_then(|s| s.given.clone()) {
+        Some(given) => given,
+        None => stored.common.iter().filter(|c| c.by != agent).map(|c| key(&c.text)).collect(),
+    }
+}
+
 fn path(config: &Config) -> PathBuf {
     notebook::root(config).join("shared-user.json")
 }
@@ -345,6 +368,7 @@ fn save(config: &Config, stored: &Stored) -> std::io::Result<()> {
 /// The circle, in the config's order (module doc).
 pub fn circle(config: &Config) -> Vec<Member> {
     let facing = crate::vault::others_facing_agents(config);
+    let switches = crate::agent_shared_memory::read(config);
     config
         .agents
         .values()
@@ -352,6 +376,8 @@ pub fn circle(config: &Config) -> Vec<Member> {
         .filter(|a| crate::agents_admin::managed(config, &a.name).is_ok())
         .filter(|a| !facing.contains(&a.name.to_lowercase()))
         .filter(|a| notebook::enabled(config, &a.name))
+        // its « Mémoire partagée » on, and not on an outside model the guard has not seen yet (agent_shared_memory.rs)
+        .filter(|a| crate::agent_shared_memory::switched_on(config, a, &switches))
         .map(|a| {
             let folder = crate::agents_admin::profile_folder(config, a);
             let limit = memory_edit::limit(&folder, "user");
@@ -408,13 +434,28 @@ pub fn plan_edited(
 ) -> Round {
     let first = !stored.merged;
     let mut round = Round::default();
-    let members: Vec<&Member> = members.iter().filter(|m| current.contains_key(&m.name)).collect();
-    // agents gone from the circle: forgotten (back later, they are merged again as new)
+    // agents gone from the circle (its Carnet or its « Mémoire partagée » off, an outside model, shared with a
+    // relative, deleted): what they had received goes back (`left`), their record is forgotten (back later, they are
+    // merged again as new). One whose file could not be read this round is still a member: kept.
     let names: HashSet<&str> = members.iter().map(|m| m.name.as_str()).collect();
-    let all: HashSet<String> = stored.agents.keys().cloned().collect();
+    let all: Vec<String> = stored.agents.keys().cloned().collect();
     for name in all {
-        if !names.contains(name.as_str()) && !current.contains_key(&name) {
+        if !names.contains(name.as_str()) {
+            let keys = received(stored, &name);
             stored.agents.remove(&name);
+            round.left.push((name, keys));
+        }
+    }
+    let members: Vec<&Member> = members.iter().filter(|m| current.contains_key(&m.name)).collect();
+    // the records of before `given` was kept: what it holds of the common list learnt by another counts as received
+    for m in &members {
+        if stored.agents.get(&m.name).is_some_and(|s| s.given.is_none()) {
+            let mut keys = received(stored, &m.name);
+            let held: HashSet<String> = current[&m.name].iter().map(|e| key(e)).collect();
+            keys.retain(|k| held.contains(k));
+            if let Some(seen) = stored.agents.get_mut(&m.name) {
+                seen.given = Some(keys);
+            }
         }
     }
     // 1. what each giver changed since the last round
@@ -424,11 +465,16 @@ pub fn plan_edited(
         let known = stored.agents.get(&m.name).cloned();
         let by_agent = edited != Some(m.name.as_str());
         let kept_apart = |entry: &str| {
-            let apart = by_agent && carries_link(entry);
-            if apart {
+            let linked = by_agent && carries_link(entry);
+            if linked {
                 tracing::info!(agent = %m.name, "shared memory: an entry with a link kept in its own memory only");
             }
-            apart
+            // health never joins the common list, whoever wrote it (2026-11-23): it stays where it was written
+            let health = notebook::lexicon::touches_health(entry);
+            if health {
+                tracing::info!(agent = %m.name, "shared memory: an entry about health kept in its own memory only");
+            }
+            linked || health
         };
         if m.gives {
             match &known {
@@ -478,6 +524,12 @@ pub fn plan_edited(
             }
         }
         let seen = stored.agents.entry(m.name.clone()).or_default();
+        let given = seen.given.get_or_insert_with(Vec::new);
+        if let Some(known) = &known {
+            // what it wrote again itself (an entry it had dropped, then said again) is its own now
+            let last_keys: HashSet<String> = known.last.iter().map(|e| key(e)).collect();
+            given.retain(|k| !now_keys.contains(k) || last_keys.contains(k));
+        }
         for k in now_keys {
             if !seen.seen.contains(&k) {
                 seen.seen.push(k);
@@ -518,6 +570,10 @@ pub fn plan_edited(
             if seen.seen.contains(&k) || after.iter().any(|e| key(e) == k) {
                 continue;
             }
+            // (a health entry of a list kept before 2026-11-23 is never given: `privacy_pass` takes it out)
+            if notebook::lexicon::touches_health(&c.text) {
+                continue;
+            }
             // given without its stamps
             after.push(strip_stamps(&c.text));
             given.push(k);
@@ -540,6 +596,11 @@ pub fn plan_edited(
         for k in &given {
             seen.seen.push(k.clone());
         }
+        let received = seen.given.get_or_insert_with(Vec::new);
+        received.extend(given.iter().cloned());
+        let held: HashSet<String> = after.iter().map(|e| key(e)).collect();
+        let mut once: HashSet<String> = HashSet::new();
+        received.retain(|k| held.contains(k) && once.insert(k.clone()));
         seen.last = after.clone();
         let keep: HashSet<String> =
             rank.keys().cloned().chain(after.iter().map(|e| key(e))).chain(before.iter().map(|e| key(e))).collect();
@@ -645,6 +706,11 @@ pub fn take_toi(stored: &mut Stored, facts: &[String], now: f64) -> usize {
             tracing::info!("shared memory: a « Toi » fact with a link left on the page only");
             continue;
         }
+        if notebook::lexicon::touches_health(text) {
+            // health stays on the page (2026-11-23): never in every agent's memory
+            tracing::info!("shared memory: a « Toi » fact about health left on the page only");
+            continue;
+        }
         if !in_common(stored, k) {
             if !first {
                 replace_older(stored, text, now);
@@ -673,6 +739,9 @@ pub fn undo(stored: &mut Stored, agent: &str, before: &[String], given: &[String
     if let Some(seen) = stored.agents.get_mut(agent) {
         seen.last = before.to_vec();
         seen.seen.retain(|k| !given.contains(k));
+        if let Some(received) = seen.given.as_mut() {
+            received.retain(|k| !given.contains(k));
+        }
     }
 }
 
@@ -691,7 +760,9 @@ pub fn forget(config: &Config, matches: &dyn Fn(&str) -> bool, dry: bool) -> usi
     let gone = stored.common.iter().filter(|c| matches(&c.text)).count();
     let traces = stored.toi_page.iter().chain(stored.toi.iter()).any(|f| matches(f))
         || stored.removed.iter().any(|(k, _)| matches(k))
-        || stored.agents.values().any(|s| s.last.iter().chain(s.seen.iter()).any(|e| matches(e)));
+        || stored.agents.values().any(|s| {
+            s.last.iter().chain(s.seen.iter()).chain(s.given.iter().flatten()).any(|e| matches(e))
+        });
     if dry || (gone == 0 && !traces) {
         return gone;
     }
@@ -702,6 +773,9 @@ pub fn forget(config: &Config, matches: &dyn Fn(&str) -> bool, dry: bool) -> usi
     for seen in stored.agents.values_mut() {
         seen.last.retain(|e| !matches(e));
         seen.seen.retain(|e| !matches(e));
+        if let Some(given) = seen.given.as_mut() {
+            given.retain(|e| !matches(e));
+        }
     }
     if let Err(err) = save(config, &stored) {
         tracing::warn!(error = %err, "shared memory state not saved after a forget");
@@ -716,9 +790,11 @@ pub fn sync(config: &Config, now: f64, edited: Option<&str>) -> usize {
     let (written, learnt) = {
         let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let members = circle(config);
-        if members.is_empty() {
+        let mut stored = load(config);
+        if members.is_empty() && stored.agents.is_empty() && (stored.privacy || !path(config).exists()) {
             return 0;
         }
+        privacy_pass(config, &mut stored, &members);
         let mut current = BTreeMap::new();
         for m in &members {
             if let Some(entries) = memory_edit::read_locked(&m.folder, "user") {
@@ -740,9 +816,11 @@ pub fn sync(config: &Config, now: f64, edited: Option<&str>) -> usize {
                 current.insert(m.name.clone(), entries);
             }
         }
-        let mut stored = load(config);
         take_toi(&mut stored, &read_toi(config), now);
         let round = plan_edited(&mut stored, &members, &current, now, edited);
+        for (agent, keys) in &round.left {
+            clean_left(config, agent, keys);
+        }
         let mut written = 0;
         for (agent, before, after, given) in &round.writes {
             let Some(m) = members.iter().find(|m| &m.name == agent) else { continue };
@@ -776,6 +854,118 @@ pub fn sync(config: &Config, now: f64, edited: Option<&str>) -> usize {
         tracing::info!(agents = written, "shared memory synced");
     }
     written
+}
+
+/// The agents whose conversations must take a new prompt (their USER.md cleaned, the day's copy gone): taken by the
+/// look (`run_forever`), or by agent_shared_memory::after_change for the agent it handles.
+static REFRESH: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+fn queue_refresh(agent: &str) {
+    let mut queued = REFRESH.lock().unwrap_or_else(|e| e.into_inner());
+    if !queued.iter().any(|a| a == agent) {
+        queued.push(agent.to_string());
+    }
+}
+
+/// Whether `agent` was waiting for a new prompt (taken off the list: the caller refreshes it).
+pub fn take_refresh(agent: &str) -> bool {
+    let mut queued = REFRESH.lock().unwrap_or_else(|e| e.into_inner());
+    let had = queued.iter().any(|a| a == agent);
+    queued.retain(|a| a != agent);
+    had
+}
+
+fn drain_refresh() -> Vec<String> {
+    std::mem::take(&mut *REFRESH.lock().unwrap_or_else(|e| e.into_inner()))
+}
+
+/// An agent out of the circle gives back what it received (`keys`, `received`): those entries out of its USER.md
+/// under Hermes' lock, the day's copy of its prompt (`memories/.prompt-day.json`, Hermes patch 0023) removed so that
+/// no prompt shows them again, and its conversations queued to take a new prompt at their next turn. What it wrote
+/// itself stays. A profile of a Hermes the person brought, or one gone, is left alone. How many entries went.
+pub fn clean_left(config: &Config, agent: &str, keys: &[String]) -> usize {
+    let Some(found) = config.agent(Some(agent)) else { return 0 };
+    let folder = crate::agents_admin::profile_folder(config, found);
+    if crate::profile_files::hands_off(&folder) || !folder.is_dir() {
+        return 0;
+    }
+    let keys: HashSet<&str> = keys.iter().map(String::as_str).collect();
+    let mut gone = 0;
+    if !keys.is_empty() && folder.join("memories").join("USER.md").exists() {
+        let done = memory_edit::update_entries(&folder, "user", |now| {
+            let next: Vec<String> = now.iter().filter(|e| !keys.contains(key(e).as_str())).cloned().collect();
+            gone = now.len() - next.len();
+            (gone > 0).then_some(next)
+        });
+        if let Err(err) = done {
+            gone = 0;
+            tracing::warn!(agent = %agent, error = %err, "shared memory: what it received not taken back");
+        }
+    }
+    match std::fs::remove_file(folder.join("memories").join(PROMPT_DAY)) {
+        Err(err) if err.kind() != std::io::ErrorKind::NotFound => {
+            tracing::warn!(agent = %agent, error = %err, "shared memory: the day's prompt copy not removed");
+        }
+        _ => {}
+    }
+    queue_refresh(agent);
+    tracing::info!(agent = %agent, entries = gone, "shared memory: left the circle, what it received taken back");
+    gone
+}
+
+/// The day's copy of the memory a prompt shows (Hermes patch 0023, `memory.prompt_refresh: daily`).
+pub const PROMPT_DAY: &str = ".prompt-day.json";
+
+/// Once (2026-11-23, `privacy`): the agents of the person's own that left the circle before `given` was kept (their
+/// record was dropped then, what they received stayed) give it back, as `received` says for them; then every common
+/// entry that touches health leaves the list and the USER.md of each agent that received it, never the one of the
+/// agent that learnt it (it stays its own, as a health entry learnt now does).
+fn privacy_pass(config: &Config, stored: &mut Stored, members: &[Member]) {
+    if stored.privacy {
+        return;
+    }
+    let inside: HashSet<&str> = members.iter().map(|m| m.name.as_str()).collect();
+    for agent in config.agents.values() {
+        let name = agent.name.as_str();
+        if inside.contains(name) || stored.agents.contains_key(name) || !crate::agent_shared_memory::has_setting(config, name) {
+            continue;
+        }
+        let keys = received(stored, name);
+        if !keys.is_empty() {
+            clean_left(config, name, &keys);
+        }
+    }
+    let health: Vec<String> =
+        stored.common.iter().filter(|c| notebook::lexicon::touches_health(&c.text)).map(|c| key(&c.text)).collect();
+    if !health.is_empty() {
+        for m in members {
+            let keys: Vec<String> = received(stored, &m.name).into_iter().filter(|k| health.contains(k)).collect();
+            if keys.is_empty() || !m.folder.join("memories").join("USER.md").exists() {
+                continue;
+            }
+            let wanted: HashSet<&str> = keys.iter().map(String::as_str).collect();
+            let done = memory_edit::update_entries(&m.folder, "user", |now| {
+                let next: Vec<String> = now.iter().filter(|e| !wanted.contains(key(e).as_str())).cloned().collect();
+                (next.len() != now.len()).then_some(next)
+            });
+            match done {
+                Ok(true) => {
+                    if let Some(seen) = stored.agents.get_mut(&m.name) {
+                        seen.last.retain(|e| !wanted.contains(key(e).as_str()));
+                        if let Some(given) = seen.given.as_mut() {
+                            given.retain(|k| !wanted.contains(k.as_str()));
+                        }
+                    }
+                    queue_refresh(&m.name);
+                }
+                Ok(false) => {}
+                Err(err) => tracing::warn!(agent = %m.name, error = %err, "shared memory: a health entry not taken back"),
+            }
+        }
+        stored.common.retain(|c| !health.contains(&key(&c.text)));
+        tracing::info!(entries = health.len(), "shared memory: entries about health taken out of the common list");
+    }
+    stored.privacy = true;
 }
 
 /// An entry learnt by `agent`, on the person's « Toi » page and in the other agents' news.
@@ -861,8 +1051,18 @@ pub async fn run_forever(state: AppState) {
     tokio::time::sleep(Duration::from_secs(20)).await;
     loop {
         let config = state.config();
-        if let Err(err) = tokio::task::spawn_blocking(move || sync_if_changed(&config)).await {
+        // an agent whose model went outside (or came back) since the last look, by any way (agent_shared_memory.rs)
+        for agent in config.agents.values() {
+            crate::agent_shared_memory::guard_and_follow(config.clone(), agent).await;
+        }
+        let c = config.clone();
+        if let Err(err) = tokio::task::spawn_blocking(move || sync_if_changed(&c)).await {
             tracing::warn!(error = %err, "shared memory round failed");
+        }
+        let cleaned: Vec<crate::config::AgentConfig> =
+            drain_refresh().iter().filter_map(|a| config.agent(Some(a)).cloned()).collect();
+        if !cleaned.is_empty() {
+            crate::agents_admin::refresh_prompts_soon_each(config.clone(), cleaned, crate::agents_admin::default_run());
         }
         tokio::time::sleep(Duration::from_secs(INTERVAL_SECONDS)).await;
     }
@@ -1513,6 +1713,229 @@ mod tests {
         let r = plan(&mut stored, &members, &now, 4.0);
         apply(&mut now, &r);
         assert!(!now["coach"].iter().any(|e| e.contains("cours-exemple")));
+    }
+
+    /// An agent leaving the circle (its Carnet off, its « Mémoire partagée » off, an outside model…) gives back what
+    /// it received and keeps what it wrote itself (2026-11-23).
+    #[test]
+    fn leaving_the_circle_gives_back_what_it_received_only() {
+        let members = [member("budget", true, 1375), member("coach", true, 1375)];
+        let mut stored = Stored::default();
+        let mut now = files(&[("budget", &["Alex habite Lyon."]), ("coach", &["Alex court le dimanche."])]);
+        let r = plan(&mut stored, &members, &now, 1.0);
+        apply(&mut now, &r);
+        now.get_mut("budget").unwrap().push("Alex déménage à Nantes en janvier.".into());
+        now.get_mut("coach").unwrap().push("Alex vise un semi-marathon.".into());
+        let r = plan(&mut stored, &members, &now, 2.0);
+        apply(&mut now, &r);
+        assert_eq!(now["coach"].len(), 4, "{:?}", now["coach"]);
+        // coach leaves
+        let budget: Vec<&str> = now["budget"].iter().map(String::as_str).collect();
+        let r = plan(&mut stored, &members[..1], &files(&[("budget", &budget)]), 3.0);
+        let (who, keys) = &r.left[0];
+        assert_eq!(who, "coach");
+        let mut keys = keys.clone();
+        keys.sort();
+        let mut want = vec![key("Alex habite Lyon."), key("Alex déménage à Nantes en janvier.")];
+        want.sort();
+        assert_eq!(keys, want, "only what the bridge wrote into its file");
+        assert!(!stored.agents.contains_key("coach"));
+        // back later: given again silently, as a new member
+        let r = plan(&mut stored, &members, &files(&[("budget", &budget), ("coach", &["Alex court le dimanche."])]), 4.0);
+        assert!(r.left.is_empty());
+        apply(&mut now, &r);
+        assert!(now["coach"].contains(&"Alex habite Lyon.".to_string()), "{:?}", now["coach"]);
+    }
+
+    /// A fact it knew itself when it joined, also known by another agent, stays its own; one it wrote again itself
+    /// after dropping it too.
+    #[test]
+    fn what_it_knew_or_wrote_again_itself_stays_its_own() {
+        let members = [member("budget", true, 1375), member("coach", true, 1375)];
+        let mut stored = Stored::default();
+        let mut now = files(&[("budget", &["Alex habite Lyon.", "Alex a un chat."]), ("coach", &["alex a un chat"])]);
+        let r = plan(&mut stored, &members, &now, 1.0);
+        apply(&mut now, &r);
+        // coach drops what it was given, then says it again itself
+        now.get_mut("coach").unwrap().retain(|e| e != "Alex habite Lyon.");
+        let r = plan(&mut stored, &members, &now, 2.0);
+        apply(&mut now, &r);
+        now.get_mut("coach").unwrap().push("Alex habite Lyon.".into());
+        let r = plan(&mut stored, &members, &now, 3.0);
+        apply(&mut now, &r);
+        let r = plan(&mut stored, &members[..1], &files(&[("budget", &now["budget"].iter().map(String::as_str).collect::<Vec<_>>())]), 4.0);
+        assert_eq!(r.left, [("coach".to_string(), Vec::<String>::new())], "nothing it holds was given to it");
+    }
+
+    /// A record of before `given` was kept: what it holds of the common list learnt by another counts as received.
+    #[test]
+    fn an_old_record_gives_back_the_common_entries_of_the_others() {
+        let mut stored = Stored {
+            common: vec![
+                Common { text: "Alex habite Lyon.".into(), by: "budget".into(), at: 1.0 },
+                Common { text: "Alex court le dimanche.".into(), by: "coach".into(), at: 1.0 },
+                Common { text: "Alex préfère le tutoiement.".into(), by: TOI_BY.into(), at: 1.0 },
+            ],
+            ..Default::default()
+        };
+        let last: Vec<String> = stored.common.iter().map(|c| c.text.clone()).collect();
+        stored.agents.insert("coach".into(), Seen { last, seen: vec![], given: None });
+        let mut keys = received(&stored, "coach");
+        keys.sort();
+        let mut want = vec![key("Alex habite Lyon."), key("Alex préfère le tutoiement.")];
+        want.sort();
+        assert_eq!(keys, want);
+        // still a member: the list is started from it, then kept
+        let members = [member("budget", true, 1375), member("coach", true, 1375)];
+        let now = files(&[("budget", &["Alex habite Lyon.", "Alex court le dimanche.", "Alex préfère le tutoiement."]),
+                          ("coach", &["Alex habite Lyon.", "Alex court le dimanche.", "Alex préfère le tutoiement."])]);
+        plan(&mut stored, &members, &now, 2.0);
+        let mut given = stored.agents["coach"].given.clone().unwrap();
+        given.sort();
+        assert_eq!(given, want);
+    }
+
+    /// Health never joins the common list (2026-11-23), from an agent's memory or from « Toi ».
+    #[test]
+    fn health_never_joins_the_common_memory() {
+        let members = [member("budget", true, 1375), member("coach", true, 1375)];
+        let mut stored = Stored::default();
+        let mut now = files(&[("budget", &["Alex habite Lyon.", "Alex prend un traitement pour l'asthme."]), ("coach", &[])]);
+        let r = plan(&mut stored, &members, &now, 1.0);
+        apply(&mut now, &r);
+        assert_eq!(now["coach"], ["Alex habite Lyon."]);
+        now.get_mut("budget").unwrap().push("Alex a rendez-vous chez le dentiste mardi.".into());
+        let r = plan(&mut stored, &members, &now, 2.0);
+        apply(&mut now, &r);
+        assert!(r.learnt.is_empty(), "{r:?}");
+        assert_eq!(now["coach"], ["Alex habite Lyon."]);
+        assert_eq!(now["budget"].len(), 3, "it stays where it was written");
+        assert!(stored.common.iter().all(|c| !notebook::lexicon::touches_health(&c.text)));
+        assert_eq!(toi(&mut stored, &["Habite à Lyon", "Allergique aux arachides"], 3.0), 1, "only what is not health");
+        assert_eq!(toi(&mut stored, &["Habite à Lyon", "Allergique aux arachides", "Enceinte de 3 mois"], 4.0), 0);
+        let r = plan(&mut stored, &members, &now, 4.0);
+        apply(&mut now, &r);
+        assert!(now["coach"].iter().all(|e| !e.contains("rachide") && !e.contains("nceinte")), "{:?}", now["coach"]);
+    }
+
+    fn shared_off(config: &Config, agent: &str) {
+        crate::agent_shared_memory::set(config, agent, false).unwrap();
+    }
+
+    fn day_copy(config: &Config, agent: &str) -> PathBuf {
+        user_md(config, agent).with_file_name(PROMPT_DAY)
+    }
+
+    /// Off, or its Carnet off: out of the circle at the next round, what it received out of its USER.md, the day's
+    /// copy of its prompt gone, its conversations queued for a new prompt; nothing given any more (2026-11-23).
+    #[test]
+    fn an_agent_switched_off_gives_back_what_it_received() {
+        let (_dir, config) = place();
+        std::fs::write(user_md(&config, "budget"), "Alex habite Lyon.").unwrap();
+        std::fs::write(user_md(&config, "coach"), "Alex court le dimanche.").unwrap();
+        sync(&config, 1.0, None);
+        assert_eq!(std::fs::read_to_string(user_md(&config, "coach")).unwrap(), "Alex court le dimanche.\n§\nAlex habite Lyon.");
+        std::fs::write(day_copy(&config, "coach"), r#"{"day": "2026-11-23", "memory": [], "user": ["Alex habite Lyon."]}"#).unwrap();
+        drain_refresh();
+        shared_off(&config, "coach");
+        assert_eq!(membership(&config, "coach"), None);
+        sync(&config, 2.0, None);
+        assert_eq!(std::fs::read_to_string(user_md(&config, "coach")).unwrap(), "Alex court le dimanche.", "its own kept");
+        assert!(!day_copy(&config, "coach").exists());
+        assert!(take_refresh("coach"));
+        // nothing given any more, no news
+        std::fs::write(user_md(&config, "budget"), "Alex habite Lyon.\n§\nAlex déménage à Nantes.").unwrap();
+        sync(&config, 3.0, None);
+        assert_eq!(std::fs::read_to_string(user_md(&config, "coach")).unwrap(), "Alex court le dimanche.");
+        assert_eq!(notebook::news::take(&config, "coach", 4.0), None);
+        assert!(notebook::news::take(&config, "quotidien", 4.0).is_some_and(|n| n.contains("Nantes")));
+        // the Carnet off: the same
+        std::fs::write(day_copy(&config, "quotidien"), "{}").unwrap();
+        notebook::set_enabled(&config, "quotidien", false).unwrap();
+        sync(&config, 5.0, None);
+        assert_eq!(std::fs::read_to_string(user_md(&config, "quotidien")).unwrap(), "");
+        assert!(!day_copy(&config, "quotidien").exists());
+        // back on: the common list again, silently
+        crate::agent_shared_memory::set(&config, "coach", true).unwrap();
+        sync(&config, 6.0, None);
+        let coach = std::fs::read_to_string(user_md(&config, "coach")).unwrap();
+        assert!(coach.contains("Nantes") && coach.contains("Lyon") && coach.starts_with("Alex court"), "{coach}");
+    }
+
+    /// The last agent leaving the circle is cleaned too (no member left to sync with).
+    #[test]
+    fn the_last_agent_out_is_cleaned_too() {
+        let (_dir, config) = place();
+        std::fs::write(user_md(&config, "budget"), "Alex habite Lyon.").unwrap();
+        sync(&config, 1.0, None);
+        for agent in ["quotidien", "coach", "sante"] {
+            notebook::set_enabled(&config, agent, false).unwrap();
+        }
+        sync(&config, 2.0, None);
+        shared_off(&config, "budget");
+        sync(&config, 3.0, None);
+        assert!(circle(&config).is_empty());
+        assert_eq!(std::fs::read_to_string(user_md(&config, "budget")).unwrap(), "Alex habite Lyon.", "its own");
+        assert_eq!(std::fs::read_to_string(user_md(&config, "coach")).unwrap(), "");
+    }
+
+    /// An agent on an outside model is out of the circle even before its defaults were applied; at the bridge's next
+    /// look it gives back what it had received.
+    #[test]
+    fn an_outside_model_leaves_the_circle_at_once() {
+        let (_dir, config) = place();
+        std::fs::write(user_md(&config, "budget"), "Alex habite Lyon.").unwrap();
+        sync(&config, 1.0, None);
+        assert!(std::fs::read_to_string(user_md(&config, "coach")).unwrap().contains("Lyon"));
+        let folder = crate::agents_admin::profile_folder(&config, config.agent(Some("coach")).unwrap());
+        std::fs::write(folder.join("config.yaml"), "model:\n  provider: openai-codex\n  default: gpt-6.1\n").unwrap();
+        assert_eq!(membership(&config, "coach"), None);
+        sync(&config, 2.0, None);
+        assert_eq!(std::fs::read_to_string(user_md(&config, "coach")).unwrap(), "");
+    }
+
+    /// Once: an agent that left before `given` was kept gives back the others' common entries; the health entries
+    /// leave the list and the agents that received them, never the one that learnt it.
+    #[test]
+    fn the_one_time_pass_cleans_the_agents_of_before() {
+        let (_dir, config) = place();
+        // the state a bridge of before left: coach out of the circle (its record dropped), a health entry common
+        let common = [("Alex habite Lyon.", "budget"), ("Alex prend un traitement pour l'asthme.", "budget"), ("Alex court le dimanche.", "coach")];
+        let stored = Stored {
+            merged: true,
+            common: common.iter().map(|(t, by)| Common { text: t.to_string(), by: by.to_string(), at: 1.0 }).collect(),
+            agents: ["quotidien", "budget", "sante"]
+                .iter()
+                .map(|a| (a.to_string(), Seen { last: common.iter().map(|(t, _)| t.to_string()).collect(), seen: vec![], given: None }))
+                .collect(),
+            toi_read: true,
+            ..Default::default()
+        };
+        save(&config, &stored).unwrap();
+        let all = common.iter().map(|(t, _)| *t).collect::<Vec<_>>().join(DELIMITER);
+        for agent in ["quotidien", "budget", "coach", "sante"] {
+            std::fs::write(user_md(&config, agent), &all).unwrap();
+        }
+        notebook::set_enabled(&config, "coach", false).unwrap();
+        sync(&config, 2.0, None);
+        assert_eq!(std::fs::read_to_string(user_md(&config, "coach")).unwrap(), "Alex court le dimanche.");
+        assert_eq!(
+            std::fs::read_to_string(user_md(&config, "budget")).unwrap(),
+            all,
+            "the health entry stays with the agent that learnt it"
+        );
+        for agent in ["quotidien", "sante"] {
+            assert_eq!(
+                std::fs::read_to_string(user_md(&config, agent)).unwrap(),
+                format!("Alex habite Lyon.{DELIMITER}Alex court le dimanche."),
+                "{agent}"
+            );
+        }
+        assert!(load(&config).privacy && load(&config).common.len() == 2);
+        // once: what coach holds later (written by hand here) stays where it is
+        std::fs::write(user_md(&config, "coach"), "Alex court le dimanche.\n§\nAlex habite Lyon.").unwrap();
+        sync(&config, 3.0, None);
+        assert!(std::fs::read_to_string(user_md(&config, "coach")).unwrap().contains("Lyon"), "not cleaned twice");
     }
 
     #[test]

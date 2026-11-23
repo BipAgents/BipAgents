@@ -484,7 +484,10 @@ async fn put_choice(
     if body.provider == "default" {
         let _guard = crate::agents_admin::LOCK.lock().await;
         back_to_default(&config, &agent)?;
+        drop(_guard);
         tracing::info!(target: "bipbridge::agents", agent = %agent.name, "agent back on the install's model");
+        // an outside model's defaults, or what they had turned off back on (agent_shared_memory.rs)
+        crate::agent_shared_memory::guard_and_follow(config.clone(), &agent).await;
         return Ok(web::ok(view(&config, &agent).unwrap_or(Value::Null)));
     }
     let preset = preset(&body.provider).ok_or_else(|| HttpError::new(422, "not a provider offered here"))?;
@@ -507,6 +510,8 @@ async fn put_choice(
         use_model(&config, &agent, preset, &base_url, &model, given.as_deref(), vision)?;
     }
     tracing::info!(target: "bipbridge::agents", agent = %agent.name, provider = preset.id, model = %model, "agent model chosen");
+    // on an outside provider: its shared memory and Carnet off by default, before its next message (agent_shared_memory.rs)
+    crate::agent_shared_memory::guard_and_follow(config.clone(), &agent).await;
     Ok(web::ok(view(&config, &agent).unwrap_or(Value::Null)))
 }
 

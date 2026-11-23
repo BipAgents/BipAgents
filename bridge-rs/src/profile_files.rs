@@ -482,6 +482,10 @@ pub fn reconcile(config: &Config, agent: &AgentConfig) -> anyhow::Result<bool> {
     let proxy = crate::browsers::proxy_binary();
     let proxy = Path::new(&proxy).exists().then_some(proxy);
     let order = &config.model_provider_order;
+    // « Mémoire partagée » off: Hermes shows it no USER.md (agent_shared_memory.rs); an agent without the setting is
+    // left as it is
+    let shared_off = crate::agent_shared_memory::has_setting(config, &agent.name)
+        .then(|| crate::agent_shared_memory::turned_off(config, &agent.name));
     let mut floored = false;
     let changed = edit(&path, |data| {
         if thinking {
@@ -500,6 +504,11 @@ pub fn reconcile(config: &Config, agent: &AgentConfig) -> anyhow::Result<bool> {
         }
         if let Some(proxy) = &proxy {
             crate::browsers::with_proxy(data, proxy);
+        }
+        if let Some(off) = shared_off {
+            if let Some(changed) = crate::agent_shared_memory::with_user_profile(data, off) {
+                *data = changed;
+            }
         }
     })?;
     if floored {

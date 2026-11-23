@@ -319,11 +319,14 @@ pub fn concerned(config: &Config, writer: &str, part: Part, path: &str, title: &
     if facing.contains(&writer.to_lowercase()) {
         return Vec::new();
     }
+    let switches = crate::agent_shared_memory::read(config);
     let candidates: Vec<&AgentConfig> = config
         .agents
         .values()
         .filter(|a| a.name != writer && !facing.contains(&a.name.to_lowercase()))
         .filter(|a| super::enabled(config, &a.name))
+        // its « Mémoire partagée » off: no news of the Carnet either (agent_shared_memory.rs)
+        .filter(|a| !crate::agent_shared_memory::off_for(config, a, &switches))
         .collect();
     if part == Part::Health {
         return candidates
@@ -495,7 +498,10 @@ pub fn take(config: &Config, agent: &str, now: f64) -> Option<String> {
     })
     .ok()
     .flatten()?;
-    if crate::vault::others_facing(config, agent) || !super::enabled(config, agent) {
+    if crate::vault::others_facing(config, agent)
+        || !super::enabled(config, agent)
+        || crate::agent_shared_memory::turned_off(config, agent)
+    {
         return None;
     }
     let health = super::health_agent(config, agent);

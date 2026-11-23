@@ -1000,12 +1000,15 @@ async fn routes_for_settings_thinking_and_model() {
             "answer_style",
             "model_choice",
             "group",
-            "proactive"
+            "proactive",
+            "shared_memory"
         ]
     );
     assert_eq!(got.json()["notify"], json!({"on": true}));
     // « Initiative » (agent_proactive.rs): basic until the person changes it; its model not benched yet
     assert_eq!(got.json()["proactive"], json!({"level": "basic", "smart_ok": false}));
+    // « Mémoire partagée » (agent_shared_memory.rs): on, its model the person's own (a host of the local network)
+    assert_eq!(got.json()["shared_memory"], json!({"on": true, "outside": null}));
     assert_eq!(got.json()["answer_style"], json!({"style": "short", "custom": "", "custom_max": 300}));
     assert_eq!(got.json()["soul"], "Tu es Wellness.");
     assert_eq!(got.json()["language"], "fr");
