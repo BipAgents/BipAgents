@@ -288,7 +288,7 @@ const HEALTH_HELD: &[&str] = &[
     "analyses de sang", "feuille de soins", "feuilles de soins", "dermato*", "cardiolog*", "rhumato*", "orl",
     "sage femme", "aux urgences",
     // en
-    "gp", "pharmacy", "pharmacies", "nurse", "nurses", "clinic", "clinics", "blood test*", "x ray", "xray*", "mri",
+    "gp", "pharmacy", "pharmacies", "nurse", "nurses", "clinic", "clinics", "blood test", "blood tests", "x ray", "xray*", "mri",
     "fit note",
     "paracetamol", "ibuprofen", "antibiotic*", "dentist*",
 ];
