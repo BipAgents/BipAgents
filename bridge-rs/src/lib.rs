@@ -227,6 +227,8 @@ pub mod rooms;
 pub mod routines;
 // plans an agent proposes on its own (proactive agents, part 3)
 pub mod plans;
+// what the agents do on their own: its owner, its end, where it answers, a repair or a stop (proactive agents, part 4)
+pub mod task_frame;
 pub mod rooms_handoff;
 pub mod rooms_memory;
 pub mod rooms_remote;

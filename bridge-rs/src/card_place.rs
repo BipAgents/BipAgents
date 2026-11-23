@@ -172,6 +172,7 @@ pub fn bridge_cards(state: &AppState, config: &Config, agent: Option<&str>) -> V
     items.extend(crate::phone_exit::store::pending_items(config, agent));
     items.extend(crate::routines::pending_items(config, agent));
     items.extend(crate::plans::pending_items(config, agent));
+    items.extend(crate::task_frame::pending_items(config, agent));
     items.extend(crate::agent_hops::pending_items(config, agent));
     items.extend(crate::held_approvals::pending_items(config, agent));
     items.extend(crate::card_pay::pending_items(agent));

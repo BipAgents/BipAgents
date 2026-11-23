@@ -1202,6 +1202,16 @@ async fn served_approval(
     };
     let request_id = Some(tk::str_or_empty(body.get("request_id"))).filter(|r| !r.is_empty());
     let config = state.config();
+    if let Some(fix) = run_id.strip_prefix(crate::task_frame::RUN_PREFIX) {
+        // « Réparer / Arrêter » of a routine she asked a family agent for (task_frame.rs, review C7): hers only
+        if crate::task_frame::fix_by(&config, &agent.name, fix).as_deref() != Some(household.as_str()) {
+            return Err(HttpError::new(404, "no such turn"));
+        }
+        let answered = crate::task_frame::approve(&state, &agent, fix, &value).await?;
+        crate::threads::threads_of(&state).touch(&agent.name, None, "answered").await;
+        tracing::info!(agent = %agent.name, household = %household, "family agent: a member's repair card answered");
+        return Ok(answered);
+    }
     if let Some(card) = run_id.strip_prefix(crate::routines::RUN_PREFIX) {
         // the card of a routine she asked a family agent for (family_thread.rs): hers only
         if crate::routines::card_by(&config, &agent.name, card).as_deref() != Some(household.as_str()) {

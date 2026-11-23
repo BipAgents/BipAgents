@@ -1,0 +1,451 @@
+{
+ "approvals": [
+  {
+   "agent": "vie",
+   "bip_detail": "Note ce que je dicte.",
+   "bip_summary": "Vie voudrait une routine « Raccourci » qui se lance quand un autre service l'appelle par un lien.",
+   "bip_trigger": {
+    "id": "<v>",
+    "kind": "link",
+    "name": "Raccourci",
+    "when_text": "Depuis un autre service"
+   },
+   "choices": [
+    "once",
+    "deny"
+   ],
+   "command": "routine_trigger link · Raccourci",
+   "created_at": "<v>",
+   "description": "Vie voudrait une routine « Raccourci » qui se lance quand un autre service l'appelle par un lien.",
+   "request_id": "<v>",
+   "run_id": "<v>",
+   "session_id": null
+  },
+  {
+   "agent": "vie",
+   "bip_detail": "What it will do: Relevés : fais-le.",
+   "bip_summary": "Vie created the routine “Relevés”: every 2 h. Start it?",
+   "choices": [
+    "once",
+    "deny"
+   ],
+   "command": "routine_schedule · Relevés",
+   "created_at": "<v>",
+   "description": "Vie created the routine “Relevés”: every 2 h. Start it?",
+   "request_id": "<v>",
+   "run_id": "<v>",
+   "session_id": "<v>"
+  }
+ ],
+ "autonomous": [
+  {
+   "actions": [
+    "pause",
+    "run",
+    "delete",
+    "open"
+   ],
+   "agent": "vie",
+   "cost": null,
+   "detail": {
+    "muted": false,
+    "prompt": "Fais le point.",
+    "session_id": null
+   },
+   "group": "schedule",
+   "id": "<v>",
+   "kind": "routine",
+   "last_run": null,
+   "main_action": "pause",
+   "next_run": "<v>",
+   "raw_state": "scheduled",
+   "ref": "<v>",
+   "state": "active",
+   "title": "Point du soir",
+   "when": {
+    "hour": 19,
+    "kind": "daily",
+    "minute": 0,
+    "text": "Chaque jour à 19:00"
+   }
+  },
+  {
+   "actions": [
+    "resume",
+    "run",
+    "delete",
+    "open"
+   ],
+   "agent": "vie",
+   "cost": null,
+   "detail": {
+    "muted": false,
+    "prompt": "Relevés : fais-le.",
+    "session_id": null
+   },
+   "group": "schedule",
+   "id": "<v>",
+   "kind": "routine",
+   "last_run": null,
+   "main_action": "resume",
+   "next_run": null,
+   "raw_state": "paused",
+   "ref": "<v>",
+   "state": "paused",
+   "title": "Relevés",
+   "when": {
+    "hours": 2,
+    "kind": "every_hours",
+    "text": "Toutes les 2 h"
+   }
+  },
+  {
+   "actions": [
+    "start",
+    "delete"
+   ],
+   "agent": "vie",
+   "cost": null,
+   "detail": {
+    "events": 0,
+    "kind": "link",
+    "pending": 0,
+    "prompt": "Note ce que je dicte."
+   },
+   "group": "on_change",
+   "id": "<v>",
+   "kind": "trigger",
+   "last_run": null,
+   "main_action": "start",
+   "next_run": null,
+   "raw_state": "waiting",
+   "ref": "<v>",
+   "state": "waiting",
+   "title": "Raccourci",
+   "when": {
+    "from": null,
+    "kind": "link",
+    "text": "Depuis un autre service",
+    "words": null
+   }
+  },
+  {
+   "actions": [
+    "pause",
+    "run",
+    "delete",
+    "open"
+   ],
+   "agent": "vie",
+   "cost": {
+    "ai": false
+   },
+   "detail": {
+    "broken": false,
+    "description": "Les créneaux libres du Dr Martin",
+    "icon": {
+     "material": "medical_services",
+     "sf": "cross.case"
+    },
+    "last_change": null,
+    "last_check": "<v>",
+    "notify": "on_change",
+    "pending": false,
+    "summary": "Prochain créneau : mardi 10:00",
+    "wakes": 0
+   },
+   "group": "on_change",
+   "id": "<v>",
+   "kind": "watcher",
+   "last_run": "<v>",
+   "main_action": "pause",
+   "next_run": "<v>",
+   "raw_state": "approved",
+   "ref": "<v>",
+   "state": "active",
+   "title": "Créneau médecin",
+   "when": {
+    "kind": "every_minutes",
+    "minutes": 15,
+    "text": "Toutes les 15 minutes"
+   }
+  },
+  {
+   "actions": [
+    "pause",
+    "delete"
+   ],
+   "agent": "vie",
+   "cost": null,
+   "detail": {
+    "events": 0,
+    "kind": "link",
+    "pending": 0,
+    "prompt": "Range la réponse."
+   },
+   "group": "on_change",
+   "id": "<v>",
+   "kind": "trigger",
+   "last_run": null,
+   "main_action": "pause",
+   "next_run": null,
+   "raw_state": "active",
+   "ref": "<v>",
+   "state": "active",
+   "title": "Formulaire",
+   "when": {
+    "from": null,
+    "kind": "link",
+    "text": "Depuis un autre service",
+    "words": null
+   }
+  }
+ ],
+ "connector": {
+  "agent": "vie",
+  "approved_at": "<v>",
+  "card_run_id": null,
+  "created_at": "<v>",
+  "description": "Les créneaux libres du Dr Martin",
+  "enabled": true,
+  "fingerprint": "<hex>",
+  "from_template": false,
+  "icon": {
+   "image": null,
+   "material": "medical_services",
+   "sf": "cross.case",
+   "symbol": "health"
+  },
+  "id": "<v>",
+  "last_run": null,
+  "made_by": "Vie",
+  "name": "Créneau médecin",
+  "runs": true,
+  "schedule": null,
+  "secrets": [],
+  "sites": [
+   "www.doctolib.example"
+  ],
+  "status": "approved",
+  "status_text": "Autorisé",
+  "tools": [
+   {
+    "description": "Les créneaux libres du Dr Martin",
+    "name": "run"
+   }
+  ],
+  "unofficial": false,
+  "updated_at": "<v>",
+  "watch": {
+   "broken": false,
+   "checks": 1,
+   "every": "15m",
+   "every_text": "toutes les 15 min",
+   "failures": 0,
+   "last_change": null,
+   "last_check": "<v>",
+   "last_wake": null,
+   "message": "",
+   "minutes": 15,
+   "next_check": "<v>",
+   "notify": "on_change",
+   "ok": true,
+   "pending": false,
+   "runs": [
+    {
+     "at": "<v>",
+     "changed": false,
+     "message": "",
+     "ok": true,
+     "woke": false
+    }
+   ],
+   "session_id": null,
+   "summary": "Prochain créneau : mardi 10:00",
+   "text": "Vérifie toutes les 15 min, ne réveille l'agent que si ça change",
+   "wakes": 0
+  }
+ },
+ "connectors": {
+  "icons": "/v1/connectors/icons",
+  "items": [
+   {
+    "agent": "vie",
+    "approved_at": "<v>",
+    "card_run_id": null,
+    "created_at": "<v>",
+    "description": "Les créneaux libres du Dr Martin",
+    "enabled": true,
+    "fingerprint": "<hex>",
+    "from_template": false,
+    "icon": {
+     "image": null,
+     "material": "medical_services",
+     "sf": "cross.case",
+     "symbol": "health"
+    },
+    "id": "<v>",
+    "last_run": null,
+    "made_by": "Vie",
+    "name": "Créneau médecin",
+    "runs": true,
+    "schedule": null,
+    "secrets": [],
+    "sites": [
+     "www.doctolib.example"
+    ],
+    "status": "approved",
+    "status_text": "Autorisé",
+    "tools": [
+     {
+      "description": "Les créneaux libres du Dr Martin",
+      "name": "run"
+     }
+    ],
+    "unofficial": false,
+    "updated_at": "<v>",
+    "watch": {
+     "broken": false,
+     "checks": 1,
+     "every": "15m",
+     "every_text": "toutes les 15 min",
+     "failures": 0,
+     "last_change": null,
+     "last_check": "<v>",
+     "last_wake": null,
+     "message": "",
+     "minutes": 15,
+     "next_check": "<v>",
+     "notify": "on_change",
+     "ok": true,
+     "pending": false,
+     "runs": [
+      {
+       "at": "<v>",
+       "changed": false,
+       "message": "",
+       "ok": true,
+       "woke": false
+      }
+     ],
+     "session_id": null,
+     "summary": "Prochain créneau : mardi 10:00",
+     "text": "Vérifie toutes les 15 min, ne réveille l'agent que si ça change",
+     "wakes": 0
+    }
+   }
+  ]
+ },
+ "routines": {
+  "jobs": [
+   {
+    "agent": "vie",
+    "deliver": "local",
+    "enabled": true,
+    "id": "<v>",
+    "last_run_at": null,
+    "last_session_id": null,
+    "last_status": null,
+    "muted": false,
+    "name": "Point du soir",
+    "next_run_at": "<v>",
+    "origin_session_id": null,
+    "plan": null,
+    "prompt": "Fais le point.",
+    "repeat": null,
+    "say": null,
+    "schedule": {
+     "display": "0 19 * * *",
+     "expr": "0 19 * * *",
+     "kind": "cron"
+    },
+    "schedule_display": "0 19 * * *",
+    "skills": [],
+    "state": "scheduled",
+    "urgent": false,
+    "waits_for_answer": false
+   },
+   {
+    "agent": "vie",
+    "deliver": "local",
+    "enabled": false,
+    "id": "<v>",
+    "last_run_at": null,
+    "last_session_id": null,
+    "last_status": null,
+    "muted": false,
+    "name": "Relevés",
+    "next_run_at": null,
+    "origin_session_id": "<v>",
+    "plan": null,
+    "prompt": "Relevés : fais-le.",
+    "repeat": null,
+    "say": null,
+    "schedule": {
+     "display": "every 120m",
+     "kind": "interval",
+     "minutes": 120
+    },
+    "schedule_display": "every 120m",
+    "skills": [],
+    "state": "paused",
+    "urgent": false,
+    "waits_for_answer": true
+   }
+  ]
+ },
+ "triggers": {
+  "items": [
+   {
+    "agent": "vie",
+    "budget_eur": 0.11,
+    "budget_tokens": 200000,
+    "by": "agent",
+    "card_run_id": "<v>",
+    "created": "<v>",
+    "enabled": false,
+    "events_total": 0,
+    "id": "<v>",
+    "kind": "link",
+    "last_run": null,
+    "link": {
+     "path": "<v>",
+     "url": null
+    },
+    "mail": null,
+    "name": "Raccourci",
+    "pending": 0,
+    "prompt": "Note ce que je dicte.",
+    "runs": [],
+    "session_id": null,
+    "state": "waiting",
+    "when_text": "Depuis un autre service"
+   },
+   {
+    "agent": "vie",
+    "budget_eur": 0.11,
+    "budget_tokens": 200000,
+    "by": "person",
+    "card_run_id": null,
+    "created": "<v>",
+    "enabled": true,
+    "events_total": 0,
+    "id": "<v>",
+    "kind": "link",
+    "last_run": null,
+    "link": {
+     "path": "<v>",
+     "url": null
+    },
+    "mail": null,
+    "name": "Formulaire",
+    "pending": 0,
+    "prompt": "Range la réponse.",
+    "runs": [],
+    "session_id": null,
+    "state": "active",
+    "when_text": "Depuis un autre service"
+   }
+  ]
+ }
+}

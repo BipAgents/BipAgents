@@ -1,0 +1,447 @@
+{
+ "about": "The frame of what the agents do on their own (passation-pro briefs/design-agents-proactifs.md §4, §6 row 3, §7.4, §7.5; Alex 22/11: Q6 A, Q7 A, Q8 A; texts validated 22/11 but those listed in `texts.rules.new`). Every routine (routines.rs), watcher (watchers.rs, connectors.rs) and trigger (triggers.rs) has an owner (the agent that does it, the person it is for), an end, and a place where it answers. A « Oui » to a one-time thing is one time; a repeat asks its own « Oui », its card saying its rhythm and its end. The agent's routines run « vers 8 h » (a stable shift of −10 to +10 min drawn from their id); the person's stay exact. What fails is repaired in its frame or stopped with a word: a card `bip-fix-<id>` « Réparer / Arrêter », no model call before « Réparer ». Additions only: an app 1.0 ignores the new fields and draws the generic Yes / No card it already draws for an unknown `bip-` card. Read by bridge/tests_blackbox/test_task_frame.py and task_frame.rs' tests (the bridge), and by the apps' FixCard and lists (branch task-frame-apps).",
+ "fields": {
+  "where": "Each item of GET /v1/autonomous of kind routine, watcher or trigger; the job view of GET /v1/agents/{agent}/routines (and the routine routes' {job}); the `watch` of a connector's detail and of its card (`bip_connector_watch`); GET /v1/triggers' items.",
+  "owner": "{agent: the agent's id, person: \"you\" or the shown name of the family member who asked for it (a family agent's routine, routines.rs `by`)}",
+  "ends": "{kind, at?, count?, text}: kind `date` (at: Unix seconds, its last moment), `count` (count: the runs left), `plan` (it goes with its plan, plans.rs), `once` (a one-time routine; a watcher `once`: it stops once it has told its person), `never` (until the person stops it). `text` in the agent's language (texts.<lang>.ends).",
+  "deliver": "{kind, title, session_id}: kind `conversation` (a routine made in a conversation: its reports go there; title: that conversation's, in /v1/autonomous only, else null), `boite` (the Boîte of the main conversation, or a watcher's or a trigger's own conversation that the Boîte points at), `silent` (a muted routine: its reports stay on its page). The apps say it with texts.<lang>.deliver. In a routine's job view (GET /v1/agents/{agent}/routines, {job}) it is `deliver_to`: the job's own `deliver` stays Hermes' « local », as an app 1.0 reads it.",
+  "approx": "true: runs « vers » its time (routines only). The job's schedule keeps the exact time (an app 1.0 shows « 8:00 »); `next_run_at` is the shifted one; `when` (in /v1/autonomous) gains `approx: true` and its French `text` says « vers 8 h ».",
+  "failures": "the failed runs (routines) or checks (watchers) in a row",
+  "plan": "the plan it is a moment of (routines; null otherwise); a job had it already, a row of /v1/autonomous gains it",
+  "fix": "the run id of its card waiting (`bip-fix-<id>`), else null"
+ },
+ "tools": {
+  "routine_schedule": "`create` and `update` take `until` (a date « 2026-11-30 »: through that day on the routines' clock; or a date-time « 2026-11-30T18:00 »), `repeat` (a number of runs, 2 or more: « 10 fois ») and `approx` (default true for a schedule at a time of day: the routine runs « vers » it; false when the person asked for an exact time). A one-time schedule ignores `until` and `repeat`. An `until` in the past, or before its first run, is refused.",
+  "connector_register": "`watch` takes `until` (a date or a date-time, as above) and `once` (true: it stops once it has told its person what it waited for: « préviens-moi quand les billets sont en vente »).",
+  "default_end": "A routine or a watcher its agent makes on its own (not in a turn of the person's own conversation: a routine's, a watcher's, a trigger's, a task's turn, another agent's ask, or outside any turn the bridge follows, as plans.rs; review C8) ends within 90 days: with no end given, 90 days after it is made; an end it gives (a date, or a number of runs that would go past them) is brought back to 90 days at most (review C9); « once » watchers too (R2). 3 days before, a card « Garder 3 mois de plus ? » (Alex Q6 A), asked while it is paused too; a default end never takes a paused one (« Arrêter », its switch, a card unanswered for 7 days: review B1): it waits, 3 days from now each look, and any way back on (the person's resume or switch, a « Oui » to its agent's card, the approval of a change, an accepted resume) gives a passed or near one 3 days (review 2, B1 bis). One the person asked for, in their own conversation (a family member in her own turn too), keeps the end they said, none: `never`."
+ },
+ "cards": {
+  "start": "The creation card of a routine its agent made (routines.rs) says its end in its sentence, so an app 1.0 shows it too: texts.<lang>.start, `{end}` only for a `date` or `count` end (none: today's sentence). A routine « vers »: `{when}` says « vers 7 h ».",
+  "repeat": "An agent's change of a one-time routine into a repeat is its own card (`routine_change`, critical): texts.<lang>.repeat, with its rhythm and its end. Its detail shows « Quand : une seule fois (…) → chaque jour vers 8 h, jusqu'au 30/11 ».",
+  "watcher": "A watcher's connector card (`bip_connector_schedule`, `bip_connector_watch.text`) says its end after its check: « Vérifie toutes les heures, ne réveille l'agent que si ça change, jusqu'au 30/11 » (none: today's line).",
+  "fix": {
+   "run_id": "bip-fix-<id>",
+   "choices": [
+    "once",
+    "deny"
+   ],
+   "bip_choices": [
+    "repair",
+    "stop"
+   ],
+   "fields": "agent, run_id, request_id (<id>), command (« task_fix · <name> »), description (= bip_summary), choices, bip_choices, created_at, session_id (null), bip_summary, bip_detail, bip_fix",
+   "bip_summary": "texts.<lang>.fix_summary.<task> (the app 1.0's whole card: « Oui » = Réparer, « Non » = Arrêter)",
+   "bip_detail": "texts.<lang>.fix_under_i.<task>",
+   "bip_fix": "{kind: routine | watcher, ref (its id), name, variant: repair, since (Unix seconds: its first failure in a row), failures, reason (looping | too_long | failed | not_started | timeout | secret | check), title (texts.<lang>.fix_top.<task>), text (texts.<lang>.fix_since + the reason's words), buttons (texts.<lang>.fix_buttons)}",
+   "when": "Routine: 3 failed runs in a row (the scheduled one's silent retry counts): it is paused and the card asks. Watcher: « en panne » (`[watchers] failures_max`, 4): the card asks instead of the bridge's line, at most once a week (watchers.rs `BROKEN_TOLD_GAP`); its agent still learns it with the person's next message. No model call before « Réparer ».",
+   "placed": "In the main conversation and the Boîte (card_place.rs, no turn), pushed as a request (`tool_request`: « Une demande attend ton accord », its sealed words texts.<lang>.fix_top.<task>). A routine a family member asked for (routines.rs `by`): her card, in the family conversation's pending cards on her bridge, answered from there (`/family/...` served approvals; the creator's /v1/approve: 403), she is pushed; its repair counted to her, and its agent's proposal after « Réparer » is hers too, told to her bridge, never pushed to the creator (review C7, C7 bis). Critical at every level (approval_level.rs `task_fix`: « Réparer » starts a paid turn).",
+   "gone": "Answered; the routine resumed or deleted by the person; the watcher working again, approved again, switched off or removed by the person (review C11); 7 days without an answer (below). A run that works while the routine is paused with its card (« Lancer maintenant », its agent's `run`) leaves the card: only the person's answer takes it (review C4)."
+  },
+  "keep": {
+   "run_id": "bip-fix-<id>",
+   "choices": [
+    "once",
+    "deny"
+   ],
+   "bip_choices": [
+    "keep",
+    "stop"
+   ],
+   "bip_summary": "texts.<lang>.keep.<task>",
+   "bip_detail": "the same sentence",
+   "bip_fix": "{kind, ref, name, variant: keep, ends_at (Unix seconds), title (the agent's shown name), text (= bip_summary), buttons (texts.<lang>.keep_buttons.<task>)}",
+   "when": "3 days before a default end (tools.default_end), once; never for an end the agent or the person gave.",
+   "placed": "As the fix card; not pushed (nothing urgent: it ends as planned without an answer)."
+  }
+ },
+ "answers": [
+  {
+   "card": "fix",
+   "choice": "once (or repair)",
+   "status": 200,
+   "answer": {
+    "ok": true,
+    "choice": "once"
+   },
+   "does": "« Réparer »: ONE turn of its agent (no turn before), in its conversation (a watcher's own; a routine's: a hidden run conversation, its reply where its reports land), fed with today's failure (a hidden note). It may change something only through the existing cards: routine_schedule `update` / `resume` (`routine_change`: a routine being repaired is proposed back on), connector_update (the connector card). The routine stays paused until the person's « Oui » to that change; the watcher keeps trying, less often. « Réparer » that could not run or said nothing (no conversation, a failed turn, the month's credit, [SILENT]): one line, no model (texts.<lang>.repair_failed.<task>), and the card again (review C5)."
+  },
+  {
+   "card": "fix",
+   "choice": "deny (or stop, and the other refusals)",
+   "status": 200,
+   "answer": {
+    "ok": true,
+    "choice": "deny"
+   },
+   "does": "« Arrêter »: paused, never deleted (a watcher: switched off), on its page."
+  },
+  {
+   "card": "keep",
+   "choice": "once (or keep)",
+   "status": 200,
+   "answer": {
+    "ok": true,
+    "choice": "once"
+   },
+   "does": "« Garder »: its end moves 90 days later."
+  },
+  {
+   "card": "keep",
+   "choice": "deny (or stop)",
+   "status": 200,
+   "answer": {
+    "ok": true,
+    "choice": "deny"
+   },
+   "does": "« Le laisser s'arrêter »: it ends as planned."
+  },
+  {
+   "card": "any",
+   "choice": "anything else (empty, unknown)",
+   "status": 422,
+   "does": "nothing: the card keeps asking"
+  },
+  {
+   "card": "gone",
+   "choice": "once",
+   "status": 404
+  }
+ ],
+ "after": {
+  "retry": "A scheduled run that fails a first time (none failed just before) is tried again, in silence, 15 minutes after its end (review C3 a) with the same words, unless its next run comes first: no Boîte line, no push. Failed again: today's notice (routines.rs `ended_notice`). A retry missed by more than 2 hours (the bridge down) is not run late: today's notice then (C3 b). A pause drops a retry waiting (C3 d); the last run's retry is never dropped by its end (C3 c). The person's « Lancer maintenant » and the agent's `run` are never retried in silence: told at once, as today.",
+  "end": "An end reached: the routine (a `date` end; a `count` end given here, `frame.count`: a job moved from Hermes stays « terminée » as before; a one-time routine too), the watcher (removed) or the trigger goes, its cards with it; never while its last run's retry waits, never a paused one at its default end. One that ran more than 7 days leaves one Boîte line, not pushed: texts.<lang>.ended.<task>, a count end saying the runs it was given (review C1), a watcher at its date its date (R12). A watcher `once` stops once its agent told its person what they wait for (never the bridge's own line when its turn failed; its wake-up's note says it is « once »): paused on its page, never deleted (review C2), with no end left nor « Garder ? »: its work is done (review 2, N1).",
+  "no_answer": "A fix card waiting 7 days: the card goes, the routine stays paused (a watcher is switched off), one Boîte line, not pushed: texts.<lang>.stopped.<task>.",
+  "approx": "« vers »: the run at its time shifted by −10 to +10 minutes (whole minutes, stable for the routine: sha256 of its id, plans.rs `approx_shift`). A one-time or an interval schedule is never shifted unless `approx` is given true for a one-time one. Never to the day before nor after: a run at 0:00 shifted back is shifted forward instead (R8)."
+ },
+ "app_1_0": {
+  "about": "What an app 1.0 (iPhone and Android) already does: no app change. To check on both 1.0 apps with int-1.1 (« apps 1.0 contre le pont 1.1 »).",
+  "ignores": [
+   "owner",
+   "ends",
+   "deliver",
+   "approx",
+   "failures",
+   "fix",
+   "bip_fix",
+   "bip_choices",
+   "until",
+   "once",
+   "default_end"
+  ],
+  "same": "Every key and value it reads today is unchanged (bridge/tests_blackbox/test_task_frame.py compares the JSON of the routines, autonomous, approvals, connectors and triggers routes with the base int-1.1c 938d65f23, the added keys left out), but on purpose: the sentence of an agent's routine card with an end or « vers » (cards.start, cards.repeat), a watcher's card line with an end (cards.watcher), and `next_run_at` of a routine « vers » (shifted).",
+  "fix": "the generic card: bip_summary, bip_detail under « i », « Oui » (once: Réparer) / « Non » (deny: Arrêter)",
+  "approx": "a routine « vers 8 h » shows « 8:00 » (its schedule is the exact one)"
+ },
+ "texts": {
+  "rules": {
+   "lang": "The agent's language (names.rs `agent_language`); another than these four: English. Dutch: not yet (texts to validate, briefs/status-task-frame.md).",
+   "dates": "A day: fr « 30/11 », en « Nov 30 », de « 30.11. », es « 30/11 »; not this year, with its year (review C9): « 30/11/2027 », « Nov 30, 2027 », « 30.11.2027 », « 30/11/2027 ». « Depuis {since} »: fr « le 21/11 », en « Nov 21 », de « dem 21.11. », es « el 21/11 ».",
+   "clock": "« vers 8 h » / « around 8 AM » / « gegen 8 Uhr » / « hacia las 8 »; with minutes « vers 7 h 30 », « around 7:30 AM », « gegen 7:30 Uhr », « hacia las 7:30 ».",
+   "new": "Not in the design's §7 as written, to validate by Alex: clock_minutes, ends.never, ends.once.routine, ended.watcher, keep.routine, keep_buttons.routine, fix_since's date form, the reasons, fix_under_i.routine (fr; de/es from the §7.5 notes), fix_summary.routine, stopped.routine, repair_failed (review C5), the year of a day not this year (review C9)."
+  },
+  "fr": {
+   "clock": "vers {h} h",
+   "clock_minutes": "vers {h} h {mm}",
+   "ends": {
+    "date": "jusqu'au {date}",
+    "count": "{n} fois",
+    "plan": "jusqu'à la fin du plan",
+    "once": {
+     "watcher": "une seule fois, puis il s'arrête",
+     "routine": "une seule fois, puis elle s'arrête"
+    },
+    "never": {
+     "watcher": "jusqu'à ce que tu l'arrêtes",
+     "routine": "jusqu'à ce que tu l'arrêtes"
+    }
+   },
+   "deliver": {
+    "conversation": "cette conversation",
+    "boite": "la Boîte",
+    "silent": "en silence, sur sa page"
+   },
+   "start": "{agent} a créé la routine « {name} » : {when}, {end}. La démarrer ?",
+   "repeat": "{agent} propose que la routine « {name} » se répète : {when}, {end}. D'accord ?",
+   "ended": {
+    "routine": "La routine « {name} » s'est arrêtée comme prévu ({end}).",
+    "watcher": "Le veilleur « {name} » s'est arrêté comme prévu ({end})."
+   },
+   "keep": {
+    "watcher": "Le veilleur « {name} » s'arrête le {date}. Le garder 3 mois de plus ?",
+    "routine": "La routine « {name} » s'arrête le {date}. La garder 3 mois de plus ?"
+   },
+   "keep_buttons": {
+    "watcher": [
+     "Garder",
+     "Le laisser s'arrêter"
+    ],
+    "routine": [
+     "Garder",
+     "La laisser s'arrêter"
+    ]
+   },
+   "fix_top": {
+    "watcher": "{agent} · le veilleur « {name} » ne marche plus",
+    "routine": "{agent} · la routine « {name} » a échoué 3 fois de suite"
+   },
+   "fix_since": "Depuis {since} : {reason}.",
+   "reasons": {
+    "looping": "elle tournait en rond",
+    "too_long": "elle prenait trop de temps",
+    "failed": "un problème l'a arrêtée",
+    "not_started": "elle n'a pas pu démarrer",
+    "timeout": "le site ne répond pas à temps",
+    "secret": "il lui manque un mot de passe",
+    "check": "sa vérification ne marche plus"
+   },
+   "fix_buttons": [
+    "Réparer",
+    "Arrêter"
+   ],
+   "fix_under_i": {
+    "watcher": "Réparer : {agent} le corrige une fois ; tu valideras le changement. Arrêter : il ne tourne plus et reste sur sa page.",
+    "routine": "Réparer : {agent} la corrige une fois ; tu valideras le changement. Arrêter : elle ne tourne plus et reste sur sa page."
+   },
+   "fix_summary": {
+    "watcher": "Le veilleur « {name} » de {agent} ne marche plus. Le faire réparer ? (Non : il s'arrête.)",
+    "routine": "La routine « {name} » de {agent} a échoué 3 fois de suite. La faire réparer ? (Non : elle s'arrête.)"
+   },
+   "stopped": {
+    "watcher": "« {name} » est arrêté : il ne marchait plus depuis 7 jours. Il reste sur sa page.",
+    "routine": "« {name} » est arrêtée : elle ne marchait plus depuis 7 jours. Elle reste sur sa page."
+   },
+   "repair_failed": {
+    "routine": "La routine « {name} » n'a pas pu être réparée pour l'instant : elle reste en pause.",
+    "watcher": "Le veilleur « {name} » n'a pas pu être réparé pour l'instant."
+   }
+  },
+  "en": {
+   "clock": "around {h12} {ampm}",
+   "clock_minutes": "around {h12}:{mm} {ampm}",
+   "ends": {
+    "date": "until {date}",
+    "count": "{n} times",
+    "plan": "until the plan ends",
+    "once": {
+     "watcher": "once, then it stops",
+     "routine": "once, then it stops"
+    },
+    "never": {
+     "watcher": "until you stop it",
+     "routine": "until you stop it"
+    }
+   },
+   "deliver": {
+    "conversation": "this conversation",
+    "boite": "the Inbox",
+    "silent": "silently, on its page"
+   },
+   "start": "{agent} created the routine “{name}”: {when}, {end}. Start it?",
+   "repeat": "{agent} suggests repeating the routine “{name}”: {when}, {end}. OK?",
+   "ended": {
+    "routine": "The routine “{name}” stopped as planned ({end}).",
+    "watcher": "The watcher “{name}” stopped as planned ({end})."
+   },
+   "keep": {
+    "watcher": "The watcher “{name}” stops on {date}. Keep it 3 more months?",
+    "routine": "The routine “{name}” stops on {date}. Keep it 3 more months?"
+   },
+   "keep_buttons": {
+    "watcher": [
+     "Keep",
+     "Let it stop"
+    ],
+    "routine": [
+     "Keep",
+     "Let it stop"
+    ]
+   },
+   "fix_top": {
+    "watcher": "{agent} · the watcher “{name}” stopped working",
+    "routine": "{agent} · the routine “{name}” failed 3 times in a row"
+   },
+   "fix_since": "Since {since}: {reason}.",
+   "reasons": {
+    "looping": "it was going round in circles",
+    "too_long": "it was taking too long",
+    "failed": "something stopped it",
+    "not_started": "it couldn't start",
+    "timeout": "the site doesn't answer in time",
+    "secret": "it is missing a password",
+    "check": "its check doesn't work any more"
+   },
+   "fix_buttons": [
+    "Repair",
+    "Stop"
+   ],
+   "fix_under_i": {
+    "watcher": "Repair: {agent} fixes it once; you'll approve the change. Stop: it no longer runs and stays on its page.",
+    "routine": "Repair: {agent} fixes it once; you'll approve the change. Stop: it no longer runs and stays on its page."
+   },
+   "fix_summary": {
+    "watcher": "{agent}'s watcher “{name}” stopped working. Have it repaired? (No: it stops.)",
+    "routine": "{agent}'s routine “{name}” failed 3 times in a row. Have it repaired? (No: it stops.)"
+   },
+   "stopped": {
+    "watcher": "“{name}” is stopped: it hadn't worked for 7 days. It stays on its page.",
+    "routine": "“{name}” is stopped: it hadn't worked for 7 days. It stays on its page."
+   },
+   "repair_failed": {
+    "routine": "The routine “{name}” couldn't be repaired for now: it stays paused.",
+    "watcher": "The watcher “{name}” couldn't be repaired for now."
+   }
+  },
+  "de": {
+   "clock": "gegen {h} Uhr",
+   "clock_minutes": "gegen {h}:{mm} Uhr",
+   "ends": {
+    "date": "bis {date}",
+    "count": "{n}-mal",
+    "plan": "bis zum Ende des Plans",
+    "once": {
+     "watcher": "einmal, dann stoppt er",
+     "routine": "einmal, dann stoppt sie"
+    },
+    "never": {
+     "watcher": "bis du ihn stoppst",
+     "routine": "bis du sie stoppst"
+    }
+   },
+   "deliver": {
+    "conversation": "diesem Chat",
+    "boite": "dem Eingang",
+    "silent": "still, auf seiner Seite"
+   },
+   "start": "{agent} hat die Routine „{name}“ erstellt: {when}, {end}. Starten?",
+   "repeat": "{agent} schlägt vor, die Routine „{name}“ zu wiederholen: {when}, {end}. Einverstanden?",
+   "ended": {
+    "routine": "Die Routine „{name}“ hat wie geplant aufgehört ({end}).",
+    "watcher": "Der Wächter „{name}“ hat wie geplant aufgehört ({end})."
+   },
+   "keep": {
+    "watcher": "Der Wächter „{name}“ endet am {date}. Noch 3 Monate behalten?",
+    "routine": "Die Routine „{name}“ endet am {date}. Noch 3 Monate behalten?"
+   },
+   "keep_buttons": {
+    "watcher": [
+     "Behalten",
+     "Enden lassen"
+    ],
+    "routine": [
+     "Behalten",
+     "Enden lassen"
+    ]
+   },
+   "fix_top": {
+    "watcher": "{agent} · der Wächter „{name}“ funktioniert nicht mehr",
+    "routine": "{agent} · die Routine „{name}“ ist dreimal hintereinander fehlgeschlagen"
+   },
+   "fix_since": "Seit {since}: {reason}.",
+   "reasons": {
+    "looping": "Sie hat sich im Kreis gedreht",
+    "too_long": "Sie hat zu lange gedauert",
+    "failed": "Ein Problem hat sie gestoppt",
+    "not_started": "Sie konnte nicht starten",
+    "timeout": "Die Seite antwortet nicht rechtzeitig",
+    "secret": "Ihm fehlt ein Passwort",
+    "check": "Seine Prüfung funktioniert nicht mehr"
+   },
+   "fix_buttons": [
+    "Reparieren",
+    "Stoppen"
+   ],
+   "fix_under_i": {
+    "watcher": "Reparieren: {agent} korrigiert ihn einmal; du bestätigst die Änderung. Stoppen: Er läuft nicht mehr und bleibt auf seiner Seite.",
+    "routine": "Reparieren: {agent} korrigiert sie einmal; du bestätigst die Änderung. Stoppen: Sie läuft nicht mehr und bleibt auf ihrer Seite."
+   },
+   "fix_summary": {
+    "watcher": "{agent}s Wächter „{name}“ funktioniert nicht mehr. Reparieren lassen? (Nein: Er stoppt.)",
+    "routine": "{agent}s Routine „{name}“ ist dreimal hintereinander fehlgeschlagen. Reparieren lassen? (Nein: Sie stoppt.)"
+   },
+   "stopped": {
+    "watcher": "„{name}“ ist gestoppt: Er hat 7 Tage lang nicht funktioniert. Er bleibt auf seiner Seite.",
+    "routine": "„{name}“ ist gestoppt: Sie hat 7 Tage lang nicht funktioniert. Sie bleibt auf ihrer Seite."
+   },
+   "repair_failed": {
+    "routine": "Die Routine „{name}“ konnte vorerst nicht repariert werden: Sie bleibt pausiert.",
+    "watcher": "Der Wächter „{name}“ konnte vorerst nicht repariert werden."
+   }
+  },
+  "es": {
+   "clock": "hacia las {h}",
+   "clock_minutes": "hacia las {h}:{mm}",
+   "ends": {
+    "date": "hasta el {date}",
+    "count": "{n} veces",
+    "plan": "hasta que acabe el plan",
+    "once": {
+     "watcher": "una vez y se detiene",
+     "routine": "una vez y se detiene"
+    },
+    "never": {
+     "watcher": "hasta que lo detengas",
+     "routine": "hasta que la detengas"
+    }
+   },
+   "deliver": {
+    "conversation": "esta conversación",
+    "boite": "el Buzón",
+    "silent": "en silencio, en su página"
+   },
+   "start": "{agent} ha creado la rutina «{name}»: {when}, {end}. ¿Ponerla en marcha?",
+   "repeat": "{agent} propone repetir la rutina «{name}»: {when}, {end}. ¿De acuerdo?",
+   "ended": {
+    "routine": "La rutina «{name}» se ha detenido como estaba previsto ({end}).",
+    "watcher": "El vigilante «{name}» se ha detenido como estaba previsto ({end})."
+   },
+   "keep": {
+    "watcher": "El vigilante «{name}» termina el {date}. ¿Mantenerlo 3 meses más?",
+    "routine": "La rutina «{name}» termina el {date}. ¿Mantenerla 3 meses más?"
+   },
+   "keep_buttons": {
+    "watcher": [
+     "Mantener",
+     "Dejar que termine"
+    ],
+    "routine": [
+     "Mantener",
+     "Dejar que termine"
+    ]
+   },
+   "fix_top": {
+    "watcher": "{agent} · el vigilante «{name}» ya no funciona",
+    "routine": "{agent} · la rutina «{name}» ha fallado 3 veces seguidas"
+   },
+   "fix_since": "Desde {since}: {reason}.",
+   "reasons": {
+    "looping": "estaba dando vueltas en círculo",
+    "too_long": "estaba tardando demasiado",
+    "failed": "un problema la detuvo",
+    "not_started": "no ha podido empezar",
+    "timeout": "el sitio no responde a tiempo",
+    "secret": "le falta una contraseña",
+    "check": "su comprobación ya no funciona"
+   },
+   "fix_buttons": [
+    "Reparar",
+    "Detener"
+   ],
+   "fix_under_i": {
+    "watcher": "Reparar: {agent} lo corrige una vez; tú aprobarás el cambio. Detener: deja de funcionar y se queda en su página.",
+    "routine": "Reparar: {agent} la corrige una vez; tú aprobarás el cambio. Detener: deja de funcionar y se queda en su página."
+   },
+   "fix_summary": {
+    "watcher": "El vigilante «{name}» de {agent} ya no funciona. ¿Hacer que lo repare? (No: se detiene.)",
+    "routine": "La rutina «{name}» de {agent} ha fallado 3 veces seguidas. ¿Hacer que la repare? (No: se detiene.)"
+   },
+   "stopped": {
+    "watcher": "«{name}» está detenido: llevaba 7 días sin funcionar. Se queda en su página.",
+    "routine": "«{name}» está detenida: llevaba 7 días sin funcionar. Se queda en su página."
+   },
+   "repair_failed": {
+    "routine": "La rutina «{name}» no se ha podido reparar por ahora: sigue en pausa.",
+    "watcher": "El vigilante «{name}» no se ha podido reparar por ahora."
+   }
+  }
+ }
+}

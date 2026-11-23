@@ -131,6 +131,15 @@ pub struct Watch {
     /// expected; its detail shows « Prêt à acheter » (urgent_pay.rs `purchase_view`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub purchase: Option<Purchase>,
+    /// Its end (task_frame.rs): its last moment (Unix seconds); none: until its person stops it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub until: Option<f64>,
+    /// « Préviens-moi quand… »: it stops once it told its person.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub once: bool,
+    /// `until` set by default (its agent's own idea, no end given): « Garder 3 mois de plus ? » before it.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub default_end: bool,
 }
 
 /// What a purchase watcher is for.
@@ -205,6 +214,9 @@ pub struct Connector {
     pub from_template: bool,
     /// The secrets' kind and identifier label a model gave (none of the creator's values): the secret card uses them.
     pub secret_hints: Vec<SecretHint>,
+    /// A watcher's frame (task_frame.rs): its card « Réparer / Arrêter » or « Garder ? » waiting.
+    #[serde(skip_serializing_if = "crate::task_frame::Frame::is_empty")]
+    pub frame: crate::task_frame::Frame,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
@@ -294,8 +306,15 @@ pub fn set_enabled(config: &Config, agent: &str, id: &str, on: bool) -> anyhow::
         if on && c.status != APPROVED {
             return Some(false);
         }
-        c.enabled = on;
         c.updated_at = crate::vault::now();
+        if on {
+            // a « Oui » to its agent's card « Connecteur « X » » (tool_asks.rs): as any way back on (review 2, B1 bis)
+            switched_on(c, py::time_time());
+        } else {
+            c.enabled = false;
+            // switched off: its card « Réparer / Arrêter » has its answer (task_frame.rs)
+            drop_fix(config, c);
+        }
         Some(true)
     })?;
     match found {
@@ -565,10 +584,15 @@ pub fn sentence(shown: &str, conn: &Connector, change: &str) -> String {
     }
 }
 
-/// When it runs, as the card and the apps say it: a watcher's check, else its schedule.
+/// When it runs, as the card and the apps say it: a watcher's check (and its end), else its schedule.
 pub fn when_line(conn: &Connector) -> String {
+    when_line_in(conn, chrono_tz::Tz::UTC)
+}
+
+/// `when_line`, a watcher's end on the routines' clock `zone`.
+pub fn when_line_in(conn: &Connector, zone: chrono_tz::Tz) -> String {
     match &conn.watch {
-        Some(watch) => crate::watchers::card_text(watch),
+        Some(watch) => crate::watchers::card_text_in(watch, zone),
         None => schedule_text(&conn.schedule),
     }
 }
@@ -625,8 +649,9 @@ fn card_item(state: Option<&AppState>, config: &Config, agent: &str, conn: &Conn
         "bip_connector_description": conn.description,
         "bip_connector_sites": conn.sites,
         "bip_connector_secrets": secrets_view(state, agent, conn),
-        "bip_connector_schedule": when_line(conn),
-        "bip_connector_watch": conn.watch.as_ref().map(crate::watchers::watch_view),
+        "bip_connector_schedule": when_line_in(conn, crate::routines::zone(config)),
+        "bip_connector_watch": conn.watch.as_ref().map(|w| crate::watchers::watch_view_in(w,
+            crate::task_frame::lang_of_agent(config, agent), crate::routines::zone(config))),
         // a purchase watcher: that it buys, shown on the card itself
         "bip_connector_purchase": conn.watch.as_ref().and_then(|w| w.purchase.as_ref()).map(crate::watchers::purchase_text),
         "bip_connector_tools": tool_names(conn),
@@ -802,7 +827,8 @@ pub async fn answer(state: &AppState, card_id: &str, allow: bool, via: &str) -> 
         if let Some(c) = find(store, &agent, &conn.id) {
             c.fingerprint = pinned.clone();
             c.status = APPROVED.into();
-            c.enabled = true;
+            // on: a default end passed meanwhile (off, or « à réapprouver ») gives it 3 days (review 2, B1 bis)
+            switched_on(c, py::time_time());
             c.card = None;
             c.approved_at = Some(crate::vault::now());
             c.updated_at = crate::vault::now();
@@ -925,6 +951,8 @@ pub fn tools() -> Vec<Value> {
             "price": {"type": "string", "description": "the price expected, e.g. 45.00 (leave out if unknown)"},
             "currency": {"type": "string", "description": "e.g. EUR"},
         }, "required": ["site", "what"]},
+        "until": {"type": "string", "description": "its end, when your person said one: a date (2026-11-30, through that day) or a date and time. One you set up on your own with no end stops by itself after 90 days"},
+        "once": {"type": "boolean", "description": "true: it stops once it has told your person (« préviens-moi quand les billets sont en vente »)"},
     }, "required": ["every", "notify"]});
     let fields = json!({
         "name": {"type": "string", "description": "its name for the person, e.g. « Garmin »"},
@@ -1030,8 +1058,37 @@ fn strings(value: Option<&Value>) -> Vec<String> {
     }
 }
 
-/// The fields of a connector the agent gave, applied over `base` (an update): Err is the refusal's text.
+/// A watcher's end as its frame wants it (task_frame.rs): asked by its person, as given; its agent's own idea, within
+/// `DEFAULT_END_DAYS` (« une seule fois » too), « Garder 3 mois de plus ? » before.
+pub fn watch_frame(watch: &mut Watch, asked: bool, now: f64) {
+    (watch.until, watch.default_end) = crate::task_frame::own_end(watch.until, asked, now);
+}
+
+/// On, by any way (its switch in the app, a « Oui » to its agent's card, the approval of a change): a watcher's
+/// default end passed (or near) meanwhile gives it `KEEP_ASK_DAYS` more, never gone at once (reviews B1, B1 bis).
+pub fn switched_on(c: &mut Connector, now: f64) {
+    c.enabled = true;
+    if let Some(w) = c.watch.as_mut() {
+        w.until = crate::task_frame::back_on_end(w.until, w.default_end, now);
+    }
+}
+
+/// Its card « Réparer / Arrêter » has its answer (switched off, removed: review C11).
+fn drop_fix(config: &Config, c: &mut Connector) {
+    if let Some(fix) = c.frame.fix.take_if(|f| f.variant == crate::task_frame::REPAIR) {
+        crate::task_frame::withdraw(config, &fix.id);
+    }
+}
+
+/// The fields of a connector the agent gave, applied over `base` (an update): Err is the refusal's text. A watcher's
+/// end in UTC: the tools use `apply_fields_in`.
+#[cfg(test)]
 fn apply_fields(base: &mut Connector, arguments: &Dict, creating: bool) -> Result<(), String> {
+    apply_fields_in(base, arguments, creating, chrono_tz::Tz::UTC)
+}
+
+/// `apply_fields`, a watcher's `until` on the routines' clock `zone` (task_frame.rs).
+fn apply_fields_in(base: &mut Connector, arguments: &Dict, creating: bool, zone: chrono_tz::Tz) -> Result<(), String> {
     let given = |k: &str| arguments.get(k).is_some_and(|v| !v.is_null());
     let name_key = if creating { "name" } else { "new_name" };
     if given(name_key) || creating {
@@ -1141,7 +1198,7 @@ fn apply_fields(base: &mut Connector, arguments: &Dict, creating: bool) -> Resul
     }
     if given("watch") {
         base.watch = match arguments.get("watch") {
-            Some(Value::Object(map)) => Some(crate::watchers::parse_watch(map)?),
+            Some(Value::Object(map)) => Some(crate::watchers::parse_watch_in(map, zone)?),
             _ => None,
         };
     }
@@ -1186,8 +1243,13 @@ async fn waited(state: &AppState, card: &str, name: &str, schedule: &Option<Sche
 async fn register_tool(state: &AppState, agent: &AgentConfig, arguments: &Dict) -> anyhow::Result<Dict> {
     let config = state.config();
     let mut conn = Connector::default();
-    if let Err(why) = apply_fields(&mut conn, arguments, true) {
+    if let Err(why) = apply_fields_in(&mut conn, arguments, true, crate::routines::zone(&config)) {
         return Ok(refusal(&why));
+    }
+    if let Some(watch) = conn.watch.as_mut() {
+        // a watcher its agent sets up on its own (not in its person's own conversation): it stops by itself within
+        // 90 days, « Garder 3 mois de plus ? » before (task_frame.rs, Alex Q6 A; review C9, R2)
+        watch_frame(watch, crate::agent_tools::asked_by_person(state, &agent.name, REGISTER), py::time_time());
     }
     if arguments.get("tools").is_none_or(Value::is_null) {
         conn.declared_tools = Vec::new();
@@ -1228,8 +1290,17 @@ async fn update_tool(state: &AppState, agent: &AgentConfig, arguments: &Dict) ->
         return Ok(refusal("You have no connector of that name (connector_list shows them)."));
     };
     let mut conn = before.clone();
-    if let Err(why) = apply_fields(&mut conn, arguments, false) {
+    if let Err(why) = apply_fields_in(&mut conn, arguments, false, crate::routines::zone(&config)) {
         return Ok(refusal(&why));
+    }
+    if let (Some(new), Some(old)) = (conn.watch.as_mut(), before.watch.as_ref()) {
+        // its end stays as it was unless the agent gives another (task_frame.rs)
+        if arguments.get("watch").and_then(|w| w.get("until")).is_none_or(Value::is_null) {
+            (new.until, new.default_end) = (old.until, old.default_end);
+        } else if !crate::agent_tools::asked_by_person(state, &agent.name, UPDATE) {
+            // its agent's own end: within 90 days (review C9)
+            (new.until, new.default_end) = crate::task_frame::own_end(new.until, false, py::time_time());
+        }
     }
     if conn.slug != before.slug && of_agent(&config, &agent.name).iter().any(|c| c.slug == conn.slug) {
         return Ok(refusal("Another connector has that name."));
@@ -1259,7 +1330,10 @@ async fn update_tool(state: &AppState, agent: &AgentConfig, arguments: &Dict) ->
     let stored = conn.clone();
     change(&config, |store| {
         if let Some(c) = find(store, &agent.name, &before.id) {
+            // its frame as it is now (a card raised meanwhile stays: review R5)
+            let frame = std::mem::take(&mut c.frame);
             *c = stored;
+            c.frame = frame;
         }
     })?;
     if let Some(old) = &before.card {
@@ -1275,6 +1349,12 @@ pub async fn remove(state: &AppState, agent: &AgentConfig, id: &str) -> bool {
     let removed = change(&config, |store| {
         let list = store.agents.entry(agent.name.clone()).or_default();
         let before = list.len();
+        // its cards of the frame with it (review C11)
+        for c in list.iter().filter(|c| c.id == id) {
+            if let Some(fix) = &c.frame.fix {
+                crate::task_frame::withdraw(&config, &fix.id);
+            }
+        }
         list.retain(|c| c.id != id);
         before != list.len()
     })
@@ -1496,7 +1576,7 @@ pub async fn call(state: &AppState, agent: &AgentConfig, name: &str, arguments: 
                 && !arg(arguments, "reason").is_empty()
                 && (arg(arguments, "site").is_empty() || crate::vault::normalize_origin(&arg(arguments, "site")).is_ok())
         } else {
-            apply_fields(&mut Connector::default(), arguments, true).is_ok()
+            apply_fields_in(&mut Connector::default(), arguments, true, crate::routines::zone(&state.config())).is_ok()
         };
         if !valid {
             return if name == ASK_SECRET {
@@ -1722,8 +1802,14 @@ async fn switch_route(
     }
     change(&config, |store| {
         if let Some(c) = find(store, &agent.name, &id) {
-            c.enabled = on;
             c.updated_at = crate::vault::now();
+            if on {
+                switched_on(c, py::time_time());
+            } else {
+                c.enabled = false;
+                // switched off by the person: its card « Réparer / Arrêter » has its answer (review C11)
+                drop_fix(&config, c);
+            }
         }
     })
     .map_err(anyhow::Error::from)?;
@@ -1991,7 +2077,7 @@ mod tests {
             name: "Billets Stromae".into(),
             sites: vec!["www.shop.example".into()],
             description: "La mise en vente des billets".into(),
-            watch: Some(Watch { every: "15m".into(), notify: "on_change".into(), purchase: Some(purchase) }),
+            watch: Some(Watch { every: "15m".into(), notify: "on_change".into(), purchase: Some(purchase), ..Default::default() }),
             ..Default::default()
         };
         for change in ["new", "update"] {

@@ -797,6 +797,8 @@ fn template_routine(agent: &str, routine: &Value, skills: &BTreeSet<String>) -> 
         say: None,
         urgent: false,
         plan: None,
+        approx: false,
+        frame: Default::default(),
     })
 }
 

@@ -2059,6 +2059,13 @@ pub fn call_session_of(body: &[u8]) -> Option<String> {
 /// brake's rescue, one followed again after a restart), while no relative's or other household's turn goes on
 /// (shared_pages.rs `who`). Only then does « arrête de me proposer des choses » turn « Initiative » off
 /// (agent_proactive.rs), and only then is a plan « asked » (plans.rs: else the caps of what nobody asked for).
+/// A call of `tool` by `agent` asked in its person's own words (task_frame.rs: what it sets up then has no default
+/// end): a turn of its person's own conversation (`persons_own_call`); no turn the hub follows is its own idea
+/// (review C8, as plans.rs).
+pub fn asked_by_person(state: &AppState, agent: &str, tool: &str) -> bool {
+    state.hub.turn_of(agent, tool).is_some_and(|turn| persons_own_call(state, agent, tool, Some(&turn.run_id)))
+}
+
 fn persons_own_call(state: &AppState, agent: &str, tool: &str, turn_run: Option<&str>) -> bool {
     matches!(crate::shared_pages::who(state, agent, tool), crate::shared_pages::Who::Owner)
         && turn_run.is_some_and(|run| state.hub.persons_own_turn(agent, run))
@@ -2370,7 +2377,14 @@ async fn mcp_call(
         // made in this conversation: its report goes back there
         let origin = state.hub.asking_session(&agent.name);
         let cards_before = crate::card_place::waiting(&state, &agent.name);
-        let called = crate::routines::call(&state.config(), &agent.name, &arguments, origin.as_deref());
+        // asked in its person's own words (a family member's in her own turn too): no default end; made on its own (a
+        // routine's, a watcher's, a task's turn, another agent's ask, outside any turn the hub follows: review C8, as
+        // plans.rs): it ends within 90 days (task_frame.rs)
+        let asked = match &member {
+            Some(_) => turn_run.as_deref().is_some_and(|run| state.hub.conversation_turn(&agent.name, run)),
+            None => persons_own_call(&state, &agent.name, &name, turn_run.as_deref()),
+        };
+        let called = crate::routines::call_asked(&state.config(), &agent.name, &arguments, origin.as_deref(), asked);
         let mut result = called.result;
         if let Some(id) = called.run {
             let state = state.clone();
@@ -2387,6 +2401,18 @@ async fn mcp_call(
             let run_id = format!("{}{card}", crate::routines::RUN_PREFIX);
             crate::card_place::taken(&state.config(), &run_id);
             crate::threads::threads_of(&state).touch(&agent.name, origin.as_deref(), "card").await;
+        } else if let Some((line, household)) = called
+            .card
+            .as_ref()
+            .and_then(|(line, card)| crate::routines::card_by(&state.config(), &agent.name, card).map(|h| (line, h)))
+        {
+            // a proposal on a routine a family member asked for (her « Réparer »'s turn, where nobody's member turn
+            // goes on): hers already (`by`), told to her bridge, never pushed to the creator (review 2, C7 bis)
+            if let Some((_, card)) = &called.card {
+                crate::card_place::taken(&state.config(), &format!("{}{card}", crate::routines::RUN_PREFIX));
+            }
+            crate::threads::threads_of(&state).touch(&agent.name, None, "card").await;
+            crate::family_thread::tell_member(&state, &agent, &household, line).await;
         } else if let Some((line, card)) = called.card {
             // its card (a routine to start, a proposal): in this turn's conversation (card_place.rs) and pushed, as
             // routine_trigger's; the agent was told it waits, so no turn resumes to tell it the answer (`taken`);
