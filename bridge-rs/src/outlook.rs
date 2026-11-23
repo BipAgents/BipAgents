@@ -14,8 +14,11 @@
 //!
 //! The sign-in is OneDrive's (drives.rs): the same Microsoft client (Kerfy's Entra app by default, `/common`, any
 //! directory and personal accounts, `bipagents://oauth/callback`, code + PKCE, no secret), its own grant and tokens kept
-//! in the connections' encrypted store (`Stored.outlook`), renewed as OneDrive's (`drives::Slot::Outlook`). Scopes
-//! [`SCOPES`]; a sign-in that leaves one out is refused. No token ever reaches Hermes nor the model: the bridge calls
+//! in the connections' encrypted store (`Stored.outlook`), renewed as OneDrive's (`drives::Slot::Outlook`). The sign-in
+//! asks only the rights of what the person switched on (« Mails », « Agenda », « Contacts », [`scopes_for`]: as
+//! OneDrive asks its write right only once an agent writes); a sign-in that leaves one out is refused; a part switched
+//! on later that Microsoft hasn't given yet is `missing` until « Reconnecter » (its agents don't get it before).
+//! No token ever reaches Hermes nor the model: the bridge calls
 //! Microsoft Graph itself and gives the agents text. What a mail, an event, a calendar's name or a contact says is
 //! written by others: data between the markers that say so, defused (archives.rs), never instructions.
 //!
@@ -35,8 +38,8 @@
 //!
 //! App routes (the bridge key; 404 while off). Errors `{"detail": {"code", "message"}}` as drives.rs':
 //!
-//!     GET    /v1/outlook             {enabled, configured, state, account, connected_at, agents, parts}
-//!     POST   /v1/outlook/start       {agents} → {authorize_url, state, redirect_uri, expires_in}
+//!     GET    /v1/outlook             {enabled, configured, state, account, connected_at, agents, parts, missing}
+//!     POST   /v1/outlook/start       {agents, parts?} → {authorize_url, state, redirect_uri, expires_in}
 //!     POST   /v1/outlook/callback    {url} → as listed  (400 denied | admin_consent | unknown_state | bad_callback)
 //!     PUT    /v1/outlook/agents      {agents, parts?: {mail, calendar, contacts}} → as listed
 //!     DELETE /v1/outlook             {ok, revoked}
@@ -62,10 +65,14 @@ use crate::py;
 use crate::tools_knowledge::{tool_failure, tool_text};
 use crate::web::{self, check_max_items, ApiResult, FieldError, HttpError, Json, Validate};
 
-/// What the sign-in asks (Graph's delegated rights; Kerfy's Entra app lists them): mail read, drafted and tidied
-/// (never `Mail.Send`), the calendars read and written, the contacts read.
+/// What a sign-in with every part asks (Graph's delegated rights; Kerfy's Entra app lists them): mail read, drafted
+/// and tidied (never `Mail.Send`), the calendars read and written, the contacts read. Always the base ones
+/// ([`BASE_SCOPES`]), then each part's ([`scopes_for`]).
 pub const SCOPES: &str = "offline_access User.Read Mail.ReadWrite Calendars.ReadWrite Contacts.Read";
-/// The rights a sign-in must give (lower case, without Graph's address).
+pub const BASE_SCOPES: &str = "offline_access User.Read";
+/// Each part's right: (part, scope).
+const PART_SCOPES: [(&str, &str); 3] = [("mail", "Mail.ReadWrite"), ("calendar", "Calendars.ReadWrite"), ("contacts", "Contacts.Read")];
+/// The rights a full sign-in must give (lower case, without Graph's address).
 const NEEDED: [&str; 3] = ["mail.readwrite", "calendars.readwrite", "contacts.read"];
 /// Its name in the agents' tools and on the cards (the same in every language).
 pub const LABEL: &str = "Outlook";
@@ -111,6 +118,72 @@ impl Default for Parts {
     }
 }
 
+impl Parts {
+    pub fn get(self, key: &str) -> bool {
+        match key {
+            "mail" => self.mail,
+            "calendar" => self.calendar,
+            _ => self.contacts,
+        }
+    }
+
+    /// Only what both have.
+    pub fn and(self, other: Parts) -> Parts {
+        Parts { mail: self.mail && other.mail, calendar: self.calendar && other.calendar, contacts: self.contacts && other.contacts }
+    }
+
+    pub fn any(self) -> bool {
+        self.mail || self.calendar || self.contacts
+    }
+
+    /// The parts on here and not in `given` (`mail`, `calendar`, `contacts`).
+    pub fn missing(self, given: Parts) -> Vec<&'static str> {
+        PART_SCOPES.iter().map(|(key, _)| *key).filter(|key| self.get(key) && !given.get(key)).collect()
+    }
+}
+
+/// The rights a sign-in asks for `parts`: the base ones, then each part's on.
+pub fn scopes_for(parts: Parts) -> String {
+    let mut scopes = BASE_SCOPES.to_string();
+    for (key, scope) in PART_SCOPES {
+        if parts.get(key) {
+            scopes.push(' ');
+            scopes.push_str(scope);
+        }
+    }
+    scopes
+}
+
+fn scope_words(scopes: &str) -> Vec<String> {
+    scopes
+        .split([' ', ','])
+        .map(|w| w.rsplit('/').next().unwrap_or(w).to_ascii_lowercase())
+        .filter(|w| !w.is_empty())
+        .collect()
+}
+
+/// The parts Microsoft gave, by the rights a token's answer lists (none listed: all of them, as drives.rs reads
+/// OneDrive's write right; tried, and a refusal said plainly).
+pub fn granted(tokens: &connections::Tokens) -> Parts {
+    let Some(scopes) = tokens.scope.as_deref() else { return Parts::default() };
+    let words = scope_words(scopes);
+    let has = |key: &str| {
+        let wanted = PART_SCOPES.iter().find(|(k, _)| *k == key).map(|(_, s)| s.to_ascii_lowercase()).unwrap_or_default();
+        words.contains(&wanted)
+    };
+    Parts { mail: has("mail"), calendar: has("calendar"), contacts: has("contacts") }
+}
+
+/// What the agents get of the account: what the person switched on, among what Microsoft gave.
+pub fn effective(account: &Account) -> Parts {
+    account.parts.and(granted(&account.link.tokens))
+}
+
+/// The rights a renewal asks (Microsoft: those of the sign-in or fewer, never more): the parts the agents get.
+pub fn renewal_scope(stored: &connections::Stored) -> String {
+    scopes_for(stored.outlook.as_ref().map(effective).unwrap_or(Parts { mail: false, calendar: false, contacts: false }))
+}
+
 /// The Microsoft account connected (connections' encrypted store, `outlook`): its tokens, account, agents (`Link`),
 /// and what of it they use.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
@@ -135,7 +208,7 @@ pub fn parts_for(config: &Config, agent: &str) -> Option<Parts> {
     if !config.outlook.enabled || shared_with_others(config, agent) {
         return None;
     }
-    stored(config).filter(|a| a.link.agents.iter().any(|x| x == agent)).map(|a| a.parts)
+    stored(config).filter(|a| a.link.agents.iter().any(|x| x == agent)).map(|a| effective(&a))
 }
 
 pub fn mail_for(config: &Config, agent: &str) -> bool {
@@ -165,6 +238,8 @@ pub fn view(config: &Config, account: Option<&Account>) -> Value {
         "connected_at": account.map(|a| a.link.connected_at),
         "agents": account.map(|a| a.link.agents.clone()).unwrap_or_default(),
         "parts": account.map(|a| a.parts).unwrap_or_default(),
+        // switched on and not given by Microsoft yet: « Reconnecter » asks it
+        "missing": account.map(|a| a.parts.missing(granted(&a.link.tokens))).unwrap_or_default(),
     })
 }
 
@@ -206,32 +281,48 @@ fn agents_checked(config: &Config, agents: &[String]) -> ApiResult<Vec<String>> 
 
 // -- sign-in -----------------------------------------------------------------------------------------------------------
 
-/// Microsoft's sign-in address for Outlook (its account chosen in Microsoft's window: `prompt=select_account`).
-pub fn authorize_url(ep: &drives::Endpoints, state: &str, verifier: &str) -> String {
-    drives::authorize_url_with(ep, state, verifier, drives::Pick::Folders, SCOPES)
+/// Microsoft's sign-in address for Outlook, asking `parts`' rights (its account chosen in Microsoft's window:
+/// `prompt=select_account`).
+pub fn authorize_url(ep: &drives::Endpoints, state: &str, verifier: &str, parts: Parts) -> String {
+    drives::authorize_url_with(ep, state, verifier, drives::Pick::Folders, &scopes_for(parts))
 }
 
 /// Whether Microsoft gave the three rights (its list, by spaces; `https://graph.microsoft.com/Mail.ReadWrite` or
 /// `Mail.ReadWrite`, any case).
 pub fn all_given(scopes: &str) -> bool {
-    let given: Vec<String> = scopes
-        .split([' ', ','])
-        .map(|w| w.rsplit('/').next().unwrap_or(w).to_ascii_lowercase())
-        .filter(|w| !w.is_empty())
-        .collect();
+    let given = scope_words(scopes);
     NEEDED.iter().all(|want| given.iter().any(|g| g == want))
 }
 
-/// A sign-in for `agents` (the same on iPhone and Android: Microsoft's web sign-in, back to the app's address).
-pub fn start(config: &Config, agents: &[String]) -> ApiResult<Value> {
+/// Whether Microsoft gave every right `parts` asked.
+pub fn given_for(scopes: &str, parts: Parts) -> bool {
+    parts.missing(granted(&connections::Tokens { scope: Some(scopes.to_string()), ..Default::default() })).is_empty()
+}
+
+/// The parts a sign-in under way asks, by its state (drives' `Flow` has no room for them).
+static ASKED: std::sync::LazyLock<Mutex<HashMap<String, (std::time::Instant, Parts)>>> =
+    std::sync::LazyLock::new(Default::default);
+
+/// A sign-in for `agents` (the same on iPhone and Android: Microsoft's web sign-in, back to the app's address),
+/// asking the rights of `parts` (none given: those kept for the account, else all of them).
+pub fn start(config: &Config, agents: &[String], parts: Option<Parts>) -> ApiResult<Value> {
     if !config.outlook.enabled {
         return Err(off());
     }
     let ep = drives::endpoints(config, Provider::Microsoft).ok_or_else(not_configured)?;
     let agents = agents_checked(config, agents)?;
+    let parts = parts.or_else(|| stored(config).map(|a| a.parts)).unwrap_or_default();
+    if !parts.any() {
+        return Err(coded(422, "parts", "switch on mail, calendar or contacts"));
+    }
     let state = py::token_hex(16);
     let verifier = py::token_hex(32);
-    let url = authorize_url(&ep, &state, &verifier);
+    let url = authorize_url(&ep, &state, &verifier, parts);
+    {
+        let mut asked = ASKED.lock().unwrap_or_else(|e| e.into_inner());
+        asked.retain(|_, (at, _)| at.elapsed().as_secs() < FLOW_SECONDS);
+        asked.insert(state.clone(), (std::time::Instant::now(), parts));
+    }
     drives::keep_flow(
         &state,
         drives::Flow {
@@ -278,20 +369,25 @@ pub async fn finish(config: &Config, query: HashMap<String, String>) -> ApiResul
         .filter(|c| !c.is_empty())
         .ok_or_else(|| coded(400, "bad_callback", "the sign-in came back without its code"))?;
     let ep = drives::endpoints(config, Provider::Microsoft).ok_or_else(not_configured)?;
+    let asked = query
+        .get("state")
+        .and_then(|s| ASKED.lock().unwrap_or_else(|e| e.into_inner()).remove(s))
+        .map(|(_, parts)| parts)
+        .unwrap_or_default();
     let form = vec![
         ("grant_type", "authorization_code".to_string()),
         ("code", code.clone()),
         ("redirect_uri", ep.client.redirect_uri.clone()),
         ("code_verifier", flow.verifier.clone()),
-        ("scope", SCOPES.to_string()),
+        ("scope", scopes_for(asked)),
     ];
     let answer = ep.token_call(&drives::http(), form).await.map_err(|(status, why)| {
         tracing::warn!(status, why = %why, "outlook: code exchange refused");
         coded(502, "exchange_failed", &format!("Microsoft refused the sign-in ({status} {why})"))
     })?;
     let tokens = connections::tokens_of(&answer, None);
-    if tokens.scope.as_deref().is_some_and(|s| !all_given(s)) {
-        return Err(coded(400, "denied", "mail, calendar and contacts were not all allowed"));
+    if tokens.scope.as_deref().is_some_and(|s| !given_for(s, asked)) {
+        return Err(coded(400, "denied", "Microsoft did not give every right asked"));
     }
     let api = Api::new(ep, tokens.access_token.clone(), None);
     let account = api.account().await.or_else(|| connections::account_of(&answer));
@@ -304,7 +400,8 @@ pub async fn finish(config: &Config, query: HashMap<String, String>) -> ApiResul
             p.link.account.is_some() && account.is_some() && p.link.account != account
         });
         let same = previous.filter(|_| !other_account);
-        let parts = same.as_ref().map(|a| a.parts).unwrap_or_default();
+        // what was asked is what they use (the app sends what the person switched on)
+        let parts = asked;
         let mut agents = same.map(|a| a.link.agents).unwrap_or_default();
         for a in &flow.agents {
             if !agents.contains(a) {
@@ -664,6 +761,9 @@ fn forget_local(config: &Config) {
 pub struct StartBody {
     #[serde(default)]
     pub agents: Vec<String>,
+    /// What they will use (an older app sends none: those kept, else all of them).
+    #[serde(default)]
+    pub parts: Option<Parts>,
 }
 
 impl Validate for StartBody {
@@ -719,7 +819,7 @@ async fn listing_route(State(state): State<AppState>) -> ApiResult<Response> {
 }
 
 async fn start_route(State(state): State<AppState>, Json(body): Json<StartBody>) -> ApiResult<Response> {
-    Ok(web::ok(start(&state.config(), &body.agents)?))
+    Ok(web::ok(start(&state.config(), &body.agents, body.parts)?))
 }
 
 async fn callback_route(State(state): State<AppState>, Json(body): Json<CallbackBody>) -> ApiResult<Response> {

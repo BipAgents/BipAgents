@@ -125,8 +125,10 @@ async fn serve(State(graph): State<Shared>, method: Method, uri: Uri, headers: H
     graph.lock().unwrap().requests.push((method.to_string(), path.clone(), query.clone(), body.clone(), if_match.clone(), prefer));
     if path == "/token" {
         let f = form(&body);
+        // Microsoft gives what was asked (the sign-in's `scope`), else everything
+        let asked = f.get("scope").map(|s| format!("{s} profile openid email")).unwrap_or_else(|| GIVEN.to_string());
         let given = |at: &str, rt: &str| {
-            reply(200, json!({"access_token": at, "refresh_token": rt, "expires_in": 3600, "scope": GIVEN, "token_type": "Bearer"}))
+            reply(200, json!({"access_token": at, "refresh_token": rt, "expires_in": 3600, "scope": asked, "token_type": "Bearer"}))
         };
         return match (f.get("grant_type").map(String::as_str), f.get("code").map(String::as_str)) {
             (Some("authorization_code"), Some("good")) if f.contains_key("code_verifier") => given("at-1", "rt-1"),
@@ -423,7 +425,11 @@ fn writes(graph: &Shared) -> Vec<(String, String, String, String, String, String
 
 /// The callback of a sign-in started for Coach with Microsoft's code `code`: its status and answer.
 async fn connect(app: &TestApp, h: &[(&str, &str)], code: &str) -> (u16, Value) {
-    let started = app.send_json("POST", "/v1/outlook/start", h, &json!({"agents": ["coach"]})).await.json();
+    connect_with(app, h, code, json!({"agents": ["coach"]})).await
+}
+
+async fn connect_with(app: &TestApp, h: &[(&str, &str)], code: &str, body: Value) -> (u16, Value) {
+    let started = app.send_json("POST", "/v1/outlook/start", h, &body).await.json();
     let state = started["state"].as_str().unwrap().to_string();
     let done = app
         .send_json("POST", "/v1/outlook/callback", h, &json!({"url": format!("bipagents://oauth/callback?code={code}&state={state}")}))
@@ -751,6 +757,47 @@ async fn the_contacts_read_never_written() {
     one_block(&work);
     let (failed, said) = tool(&app, "contacts_add", json!({"name": "Nouveau"}), "h1").await;
     assert!(failed && said.contains("read only"), "{said}");
+}
+
+/// Only the rights of what the person switched on (as OneDrive asks its write right only once an agent writes): the
+/// mail alone asks Mail.ReadWrite alone; the agenda switched on later is « missing » (no calendar tool) until
+/// « Reconnecter » asks it too.
+#[tokio::test]
+async fn only_the_rights_of_what_is_switched_on_are_asked() {
+    let (url, graph) = fake_graph().await;
+    let dir = tempfile::tempdir().unwrap();
+    let app = TestApp::new(config_for(dir.path(), &url, true));
+    let (k, v) = auth();
+    let h = [(k, v.as_str())];
+    let mail_only = json!({"mail": true, "calendar": false, "contacts": false});
+    let (status, shown) = connect_with(&app, &h, "good", json!({"agents": ["coach"], "parts": mail_only})).await;
+    assert_eq!(status, 200, "{shown}");
+    let asked = graph.lock().unwrap().requests.iter().find(|r| r.1 == "/token").map(|r| form(&r.3)["scope"].clone()).unwrap();
+    assert_eq!(asked, "offline_access User.Read Mail.ReadWrite");
+    assert_eq!((shown["parts"].clone(), shown["missing"].clone()), (mail_only.clone(), json!([])));
+    assert!(tools_named(&app, "calendar_").await.is_empty() && tools_named(&app, "contacts_").await.is_empty());
+    let (failed, text) = tool(&app, "mail_search", json!({}), "h1").await;
+    assert!(!failed && text.contains("Votre facture"), "{text}");
+    // the agenda switched on: Microsoft hasn't given it yet, its agents don't get it
+    let on = app
+        .send_json("PUT", "/v1/outlook/agents", &h, &json!({"agents": ["coach"], "parts": {"mail": true, "calendar": true, "contacts": false}}))
+        .await
+        .json();
+    assert_eq!(on["missing"], json!(["calendar"]), "{on}");
+    assert!(tools_named(&app, "calendar_").await.is_empty());
+    // « Reconnecter » (no parts sent: those kept) asks the agenda too
+    let (status, shown) = connect(&app, &h, "good").await;
+    assert_eq!(status, 200, "{shown}");
+    let asked = graph.lock().unwrap().requests.iter().rev().find(|r| r.1 == "/token").map(|r| form(&r.3)["scope"].clone()).unwrap();
+    assert_eq!(asked, "offline_access User.Read Mail.ReadWrite Calendars.ReadWrite");
+    assert_eq!(shown["missing"], json!([]));
+    assert_eq!(tools_named(&app, "calendar_").await.len(), 4);
+    assert!(tools_named(&app, "contacts_").await.is_empty());
+    // nothing switched on: nothing to ask
+    let none = app
+        .send_json("POST", "/v1/outlook/start", &h, &json!({"agents": ["coach"], "parts": {"mail": false, "calendar": false, "contacts": false}}))
+        .await;
+    assert_eq!(none.status, 422);
 }
 
 #[tokio::test]

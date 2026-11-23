@@ -23,7 +23,7 @@ fn off_by_default_and_on_by_its_own_switch() {
     assert_eq!(Settings::from_table(&json!({})), Settings::default());
     assert!(!Settings::default().enabled);
     assert!(!Config::with_key("k").outlook.enabled);
-    assert_eq!(start(&config_with(false, dir.path()), &[]).unwrap_err().status.as_u16(), 404);
+    assert_eq!(start(&config_with(false, dir.path()), &[], None).unwrap_err().status.as_u16(), 404);
     assert!(parts_for(&config_with(false, dir.path()), "vie").is_none());
     // drives stay off: Outlook needs only Microsoft's client (Kerfy's by default)
     let on = config_with(true, dir.path());
@@ -35,7 +35,7 @@ fn off_by_default_and_on_by_its_own_switch() {
 fn the_sign_in_asks_mail_calendar_and_contacts_with_kerfys_client() {
     let dir = tempfile::tempdir().unwrap();
     let config = config_with(true, dir.path());
-    let started = start(&config, &[]).unwrap();
+    let started = start(&config, &[], None).unwrap();
     let address = url::Url::parse(started["authorize_url"].as_str().unwrap()).unwrap();
     let q: HashMap<String, String> = address.query_pairs().into_owned().collect();
     assert_eq!(q["scope"], SCOPES);
@@ -62,6 +62,40 @@ fn the_three_rights_must_be_given() {
     assert!(!all_given("Mail.ReadWrite Calendars.ReadWrite User.Read"));
     assert!(!all_given("Files.ReadWrite User.Read"));
     assert!(!all_given(""));
+}
+
+#[test]
+fn only_the_rights_of_what_is_switched_on_are_asked() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = config_with(true, dir.path());
+    assert_eq!(scopes_for(Parts::default()), SCOPES);
+    let mail_only = Parts { mail: true, calendar: false, contacts: false };
+    assert_eq!(scopes_for(mail_only), "offline_access User.Read Mail.ReadWrite");
+    assert_eq!(scopes_for(Parts { mail: false, calendar: true, contacts: true }), "offline_access User.Read Calendars.ReadWrite Contacts.Read");
+    let started = start(&config, &[], Some(mail_only)).unwrap();
+    let address = url::Url::parse(started["authorize_url"].as_str().unwrap()).unwrap();
+    let q: HashMap<String, String> = address.query_pairs().into_owned().collect();
+    assert_eq!(q["scope"], "offline_access User.Read Mail.ReadWrite");
+    // nothing switched on: nothing to ask
+    let none = Parts { mail: false, calendar: false, contacts: false };
+    assert_eq!(start(&config, &[], Some(none)).unwrap_err().status.as_u16(), 422);
+    // what Microsoft gave, and what is still to ask
+    assert!(given_for("Mail.ReadWrite User.Read", mail_only));
+    assert!(!given_for("User.Read", mail_only));
+    let tokens = |scope: Option<&str>| connections::Tokens { scope: scope.map(str::to_string), ..Default::default() };
+    assert_eq!(granted(&tokens(Some("https://graph.microsoft.com/Mail.ReadWrite Contacts.Read"))),
+               Parts { mail: true, calendar: false, contacts: true });
+    assert_eq!(granted(&tokens(None)), Parts::default(), "nothing listed: tried");
+    assert_eq!(Parts::default().missing(mail_only), vec!["calendar", "contacts"]);
+    // the agents get what is on AND given; the renewal asks just that
+    let account = Account {
+        link: Link { tokens: tokens(Some("Mail.ReadWrite User.Read")), state: "connected".into(), ..Default::default() },
+        parts: Parts::default(),
+    };
+    assert_eq!(effective(&account), mail_only);
+    let stored = connections::Stored { outlook: Some(account.clone()), ..Default::default() };
+    assert_eq!(renewal_scope(&stored), "offline_access User.Read Mail.ReadWrite");
+    assert_eq!(view(&config, Some(&account))["missing"], json!(["calendar", "contacts"]));
 }
 
 #[test]

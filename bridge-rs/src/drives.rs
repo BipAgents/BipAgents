@@ -1235,6 +1235,7 @@ async fn renew(config: &Config, slot: Slot, refused: Option<&str>) -> Result<Str
     let _guard = connections::LOCK.lock().await;
     let store = connections::store_of(config);
     let mut stored = store.read().map_err(|e| Fault::Other(e.to_string()))?;
+    let outlook_scope = (slot == Slot::Outlook).then(|| crate::outlook::renewal_scope(&stored));
     let link = slot.link_mut(&mut stored).ok_or(Fault::Other("not connected".into()))?;
     if link.state != "connected" {
         return Err(Fault::Expired);
@@ -1254,9 +1255,9 @@ async fn renew(config: &Config, slot: Slot, refused: Option<&str>) -> Result<Str
         return Err(Fault::Expired);
     };
     let mut form = vec![("grant_type", "refresh_token".to_string()), ("refresh_token", refresh)];
-    if slot == Slot::Outlook {
-        // the renewal asks the same rights as the sign-in (Microsoft: a subset of them, never more)
-        form.push(("scope", crate::outlook::SCOPES.to_string()));
+    if let Some(scope) = outlook_scope {
+        // the renewal asks the rights its agents use (Microsoft: those of the sign-in or fewer, never more)
+        form.push(("scope", scope));
     }
     match ep.token_call(&http(), form).await {
         Ok(answer) => {
