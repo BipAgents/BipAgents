@@ -849,3 +849,109 @@ async fn a_refused_microsoft_sign_in_says_its_aadsts_code() {
     .unwrap_err();
     assert_eq!(refused, (401, "invalid_client AADSTS7000218".to_string()));
 }
+
+// -- review-drive-write (23/11): red tests of the independent review (briefs/review-drive-write.md) ---------------------
+
+/// Review R1: a new file never lands on the person's computers (Dropbox and OneDrive sync it there, without the
+/// « downloaded from the internet » mark) as something that runs or reaches elsewhere when clicked or merely shown
+/// (a `.bat`, a `.url` whose icon is fetched from another machine…), nor with a name that only looks like another
+/// one (an invisible character). Under « Seulement le critique » it goes through with no card at all.
+#[test]
+fn review_a_name_never_runs_nor_links_nor_hides_a_character() {
+    for bad in [
+        "Facture.pdf.bat",
+        "Lis-moi.cmd",
+        "setup.exe",
+        "photo.scr",
+        "x.vbs",
+        "x.ps1",
+        "x.hta",
+        "x.msi",
+        "Raccourci.lnk",
+        "Site.url",
+        "x.scf",
+        "x.library-ms",
+        "Ouvre-moi.command",
+        "desktop.ini",
+        "Budget\u{200b}.xlsx",
+        "Budget\u{2060}.xlsx",
+        "Budget\u{feff}.xlsx",
+        "Bud\u{ad}get.xlsx",
+        "\u{61c}rapport.md",
+    ] {
+        assert!(clean_name(bad).is_err(), "{bad:?} accepted");
+    }
+}
+
+/// Review R2: OneDrive, a folder given for writing that sits inside a folder shared with other people (the facet on
+/// the shared folder, not on what is inside it): never written into, as the module promises (« a folder or file
+/// shared with other people »). Today the parents are looked at only up to the folder given.
+#[tokio::test]
+async fn review_onedrive_never_writes_inside_a_folder_shared_above_the_one_given() {
+    let (base, w) = serve().await;
+    let (_dir, config) = setup(&base);
+    {
+        let mut w = w.lock().unwrap();
+        w.graph.insert(
+            "FAM".into(),
+            json!({"id": "FAM", "name": "Famille", "folder": {}, "parentReference": {"id": "ROOT"},
+                   "shared": {"scope": "users"}}),
+        );
+        w.graph.insert(
+            "FAC".into(),
+            json!({"id": "FAC", "name": "Factures", "folder": {}, "parentReference": {"id": "FAM"}}),
+        );
+    }
+    keep(&config, Provider::Microsoft, "at", "Files.ReadWrite", vec![folder("FAC", "Factures", "", &["vie"], &["vie"])]);
+    let said = planned(&config, "onedrive:FAC", false, "Relevé.md").await.err().unwrap_or_default();
+    assert!(said.contains("shared with other people"), "written inside « Famille », shared: {said:?}");
+}
+
+/// Review R3: a bridge put back to the version before (a rollback) still reads approval-level.json after a new file
+/// was made at once: today its `Undo` has no `drive_file`, the whole file fails to parse, and the person's level,
+/// her agents' levels and her « Toujours » are read as the defaults, then written over at the next change.
+#[test]
+fn review_an_older_bridge_still_reads_the_levels_after_a_new_file_made_at_once() {
+    #[derive(serde::Deserialize)]
+    #[serde(tag = "what", rename_all = "snake_case")]
+    #[allow(dead_code)]
+    enum OldUndo {
+        MailJob { job: String },
+        MailRule { rule: String },
+        Task { job: String },
+    }
+    #[derive(serde::Deserialize)]
+    #[allow(dead_code)]
+    struct OldLine {
+        #[serde(default)]
+        undo: Option<OldUndo>,
+    }
+    #[derive(serde::Deserialize)]
+    #[allow(dead_code)]
+    struct OldBook {
+        #[serde(default)]
+        level: Option<String>,
+        #[serde(default)]
+        lines: Vec<OldLine>,
+    }
+    let (_dir, config) = setup("http://127.0.0.1:9");
+    crate::approval_level::set_level(&config, "critical").unwrap();
+    crate::approval_level::record(
+        &config,
+        crate::approval_level::Line {
+            agent: "vie".into(),
+            kind: KIND_CREATE.into(),
+            summary: "« a.md » enregistré dans Dropbox › Work".into(),
+            undo: Some(crate::approval_level::Undo::DriveFile {
+                service: "dropbox".into(),
+                id: "id:new1".into(),
+                rev: "r1".into(),
+            }),
+            ..Default::default()
+        },
+    );
+    let text = std::fs::read_to_string(std::path::Path::new(&config.data_dir()).join("approval-level.json")).unwrap();
+    let old = serde_json::from_str::<OldBook>(&text);
+    assert!(old.is_ok(), "the bridge before drive-write can't read it: {:?}", old.err());
+    assert_eq!(old.unwrap().level.as_deref(), Some("critical"));
+}
