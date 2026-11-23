@@ -864,3 +864,97 @@ async fn tokens_renewed_refused_and_the_account_disconnected() {
     assert!(bipbridge::outlook::ended_when_off(&off).await);
     assert!(store.read().unwrap().outlook.is_none());
 }
+
+/// Review 23/11 (review-outlook, B1): an Outlook tidying card waits for the person alone, « même en Seulement le
+/// critique ». Another call of the same agent that ends while it waits (a routine's, another conversation's, a parallel
+/// one's: agent_tools.rs runs `approval_level::settle_new` after every call of the generic path, its `cards_before`
+/// taken before this card existed) must not answer it in the person's place.
+#[tokio::test]
+async fn review_an_outlook_tidying_card_is_never_answered_by_another_calls_level() {
+    let (url, graph) = fake_graph().await;
+    let dir = tempfile::tempdir().unwrap();
+    let config = config_for(dir.path(), &url, true);
+    let app = TestApp::new(config.clone());
+    let (k, v) = auth();
+    let h = [(k, v.as_str())];
+    assert_eq!(connect(&app, &h, "good").await.0, 200);
+    assert_eq!(app.send_json("PUT", "/v1/approval-level", &h, &json!({"level": "critical"})).await.status, 200);
+    let state = app.app.state.clone();
+    let coach = config.agent(Some("coach")).cloned().unwrap();
+    // another call of Coach starts now: the cards waiting before it
+    let before = bipbridge::card_place::waiting(&state, "coach");
+    let writes_before = writes(&graph).len();
+    let bulk = tool(&app, "mail_bulk", json!({"action": "archive", "domain": "shop.example"}), "h1");
+    let other = async {
+        // the Outlook card shows…
+        for _ in 0..200 {
+            let items = app.get("/v1/approvals", &h).await.json()["items"].clone();
+            let shown = items
+                .as_array()
+                .is_some_and(|a| a.iter().any(|i| i["run_id"].as_str().is_some_and(|r| r.starts_with("bip-ok-"))));
+            if shown {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        // …then that other call ends: the bridge settles the new cards its level lets through (agent_tools.rs)
+        bipbridge::approval_level::settle_new(&state, &coach, &before, None).await
+    };
+    let ((failed, said), auto) = tokio::join!(bulk, other);
+    assert!(auto.is_empty(), "the Outlook card answered by the level, not by the person: {auto:?} / {said}");
+    assert!(failed && said.contains("didn't answer"), "{said}");
+    assert_eq!(writes(&graph).len(), writes_before, "mails moved with no « Oui » of the person");
+}
+
+/// Review 23/11 (review-outlook, C1): « undo » puts back only the mails still where the tidying put them, as the IMAP
+/// boxes' undo does (mail_tidy.rs `undo`: found in the destination by Message-ID); a mail the person filed elsewhere
+/// herself since stays where she put it.
+#[tokio::test]
+async fn review_an_outlook_undo_leaves_a_mail_the_person_moved_since() {
+    let (url, graph) = fake_graph().await;
+    let dir = tempfile::tempdir().unwrap();
+    let app = TestApp::new(config_for(dir.path(), &url, true));
+    let (k, v) = auth();
+    let h = [(k, v.as_str())];
+    assert_eq!(connect(&app, &h, "good").await.0, 200);
+    let archive = json!({"action": "archive", "domain": "shop.example"});
+    let ((failed, said), _) =
+        tokio::join!(tool(&app, "mail_bulk", archive, "h1"), common::answer_card(&app, "bip-ok-", "once"));
+    assert!(!failed && said.contains("2 e-mails archived"), "{said}");
+    let job = said.split("Job ").nth(1).unwrap().split(':').next().unwrap().to_string();
+    // the person files one of the two in « Factures » herself, in Outlook
+    graph.lock().unwrap().messages.get_mut("m2").unwrap()["parentFolderId"] = json!("factures-id");
+    let (failed, said) = tool(&app, "mail_bulk", json!({"action": "undo", "job": job}), "h1").await;
+    assert!(!failed, "{said}");
+    let g = graph.lock().unwrap();
+    assert_eq!(g.messages["m3"]["parentFolderId"], "inbox-id", "the one still archived goes back");
+    assert_eq!(g.messages["m2"]["parentFolderId"], "factures-id", "the person's own filing undone by « undo »");
+}
+
+/// Review 23/11 (review-outlook, C3): what reading the items costs once the short ids' table is full (20 000 Graph ids,
+/// outlook.rs `IDS_MAX`): each item's id (a contact, a scanned mail, an event) reads the whole table again, and a new
+/// one writes it again. A measure, not a check: `cargo test --test tools-knowledge_outlook -- --ignored --nocapture
+/// review_measure`.
+#[test]
+#[ignore]
+fn review_measure_short_ids_per_item() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = config_for(dir.path(), "http://127.0.0.1:9", true);
+    // a Graph immutable id is about 150 characters
+    let long = |i: usize| format!("AAkALgAAAAAAHYQDEapmEc2byACqAC-EWg0A8wJ6kpILh0iwP9uiPwNhsQAAA{i:0>90}");
+    let all: Vec<String> = (0..20_000).map(long).collect();
+    bipbridge::outlook::short_ids(&config, &all);
+    let size = std::fs::metadata(dir.path().join("data").join("outlook").join("ids.json")).map(|m| m.len()).unwrap_or(0);
+    let started = std::time::Instant::now();
+    for i in 0..3000 {
+        let v = json!({"id": long(i), "displayName": format!("Contact {i}")});
+        assert!(bipbridge::outlook_contacts::contact_of(&config, &v).is_some());
+    }
+    let known = started.elapsed();
+    let started = std::time::Instant::now();
+    for i in 0..300 {
+        bipbridge::outlook::short_id(&config, &format!("new{i:0>147}"));
+    }
+    let new = started.elapsed();
+    eprintln!("REVIEW-MEASURE ids.json {size} bytes; 3000 known contacts read: {known:?}; 300 new ids: {new:?}");
+}
