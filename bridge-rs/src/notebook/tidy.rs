@@ -302,17 +302,25 @@ fn clip(text: &str, n: usize) -> String {
     }
 }
 
-/// (review 2, tests first: not built yet)
-pub(crate) fn try_running() -> Option<()> {
-    Some(())
+/// One pass at a time in this bridge (review 2 of carnet-categories, R2): the night's and the app's « ranger
+/// maintenant » would send the same pages twice and each count only its own spending against the cap.
+static RUNNING: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// The right to run a pass now, or None while another one runs.
+pub(crate) fn try_running() -> Option<tokio::sync::MutexGuard<'static, ()>> {
+    RUNNING.try_lock().ok()
 }
 
 /// The pass, now. `forced`: run even if not due (the app's « ranger maintenant », the owner's tests). Returns the run's
-/// record (also kept in the state and logged).
+/// record (also kept in the state and logged); while another pass runs, a record that says so, nothing done.
 pub async fn run(config: &Config, hermes: &HermesClient, http: &reqwest::Client) -> Dict {
     let started = tk::now_iso_seconds();
     let mut record = Dict::new();
     record.insert("at".into(), json!(started));
+    let Some(_running) = try_running() else {
+        record.insert("skipped".into(), json!("another pass is running"));
+        return record;
+    };
     let result = run_inner(config, hermes, http, &mut record).await;
     if let Err(err) = result {
         record.insert("error".into(), json!(clip(&format!("{err:#}"), 300)));
@@ -773,6 +781,8 @@ pub fn apply(
 
 /// The scheduler: every ten minutes, the pass if it is due.
 pub async fn scheduler(state: AppState) {
+    // the categories' word tables made now, not under the Carnet's lock at the first write (review 2, R10)
+    let _ = tokio::task::spawn_blocking(super::categories::warm).await;
     // at once: the reminders removed tasks left on the phone (and duplicates), asked off once (free, no model)
     let config = state.config();
     match tokio::task::spawn_blocking(move || super::clean_reminders(&config)).await {

@@ -266,6 +266,40 @@ const HEALTH_WEAK: &[&str] = &[
     "tratamiento*", "cirug*", "dolor*", "salud",
 ];
 
+/// Health words that are only held back (`touches_health`: the phone's offline copy, the week's review, the questions,
+/// the night model's pages), never used to file (`is_health` is unchanged): Dutch, which `HEALTH` lacks, and what the
+/// other languages miss (carnet-categories, review 2 B1). A word, `x*` a word's start, or a phrase.
+const HEALTH_HELD: &[&str] = &[
+    // nl
+    "arts", "artsen", "dokter*", "huisarts*", "tandarts*", "oogarts*", "kinderarts*", "bedrijfsarts*", "gezondheid*",
+    "ziek", "zieke", "ziekte*", "ziekenhuis*", "kliniek*", "apothe*", "medicijn*", "medicatie*", "zwanger*",
+    "inenting*", "griepprik*", "fysio*", "psycholoog*", "psychiater*", "astma", "bloeddruk*", "operatie*",
+    "ziekmeld*", "eerste hulp", "spoedeisende hulp", "huisartsenpost*", "verloskundige*", "opticien*", "pijn",
+    "pijnlijk*",
+    // de
+    "arzt*", "arzte*", "apotheke*", "krankmeld*", "krankenkasse*", "krankschreib*", "zahnspange*", "blutabnahme*",
+    "blutwerte*", "rontgen*", "vorsorgeuntersuchung*", "pflegedienst*", "pflegegrad*", "hebamme*",
+    // es
+    "medica", "medicas", "medicos", "medicina*", "farmacia*", "receta medica", "clinica*", "centro de salud",
+    "ginecolog*", "oftalmolog*", "fisio*", "psicolog*", "psiquiatr*", "analisis de sangre", "radiografia*",
+    "ecografia*", "baja medica", "consulta medica", "cita medica", "pastilla*", "urgencias",
+    // fr
+    "pharmacie*", "infirmi*", "radiographie*", "irm", "echographie*", "prise de sang", "analyse de sang",
+    "analyses de sang", "feuille de soins", "feuilles de soins", "dermato*", "cardiolog*", "rhumato*", "orl",
+    "sage femme", "aux urgences",
+    // en
+    "gp", "pharmacy", "pharmacies", "nurse", "nurses", "clinic", "clinics", "blood test*", "x ray", "xray*", "mri",
+    "fit note",
+    "paracetamol", "ibuprofen", "antibiotic*", "dentist*",
+];
+
+/// The parts of a compound that say health wherever they stand in a word (German « Kinderarzt », « Augenklinik »,
+/// Dutch « kindertandarts »), held back only (`touches_health`).
+const HEALTH_INSIDE: &[&str] = &[
+    "arzt", "klinik", "krankenhaus", "apothek", "medikament", "therap", "tandarts", "huisarts", "ziekenhuis", "kinderarts",
+    "oogarts",
+];
+
 /// Phrases that are never health, taken out before the words are looked for.
 const NOT_HEALTH: &[&str] = &[
     "traitement de texte", "traitement des donnees", "traitement de donnees", "traitement de l information",
@@ -327,7 +361,10 @@ pub fn is_health(text: &str) -> bool {
 /// questions, « Toujours en tête »): any health word, even one that alone is often something else. Filing uses the
 /// strict `is_health`.
 pub fn touches_health(text: &str) -> bool {
-    is_health(text) || holds(text, HEALTH_WEAK)
+    is_health(text) || holds(text, HEALTH_WEAK) || holds(text, HEALTH_HELD) || {
+        let folded = fold(text);
+        folded.split(' ').any(|w| HEALTH_INSIDE.iter().any(|part| w.len() > part.len() && w.contains(part)))
+    }
 }
 
 /// A money fact (budget, salary, rent, loans…, or an amount).

@@ -25,7 +25,8 @@ bridge, the iPhone and Android: what is written here is what each side tests aga
    6, 21/11).
 5. **The person wins.** `categories_by: person` is never changed by the bridge, an agent or the nightly pass.
 6. **No model, no tokens at write time.** The bridge files by words (§2). The agents may say a category
-   (`notebook_write.category`, short, optional); the nightly model only for what stays in « Autres » (S2, §2b).
+   (`notebook_write.category`, short, optional); the nightly model only for what no word placed and, once after a new
+   version of the table, for what the words placed narrowly (S2, §2b).
 
 ## 1. Categories
 
@@ -35,7 +36,8 @@ answers (S4 serves them in the app's language); `sommaire.json` `titles_proposed
 en, de, es, nl for Alex to confirm (visible text).
 
 - **Where they live.** A page: `categories` (1 or 2) and `categories_by` (`auto` the bridge's words, `agent` an
-  agent's `category` or the nightly model's for a page no word placed, `person` the person's correction) in its
+  agent's `category` or the nightly model's for a page no word placed or placed narrowly, `person` the person's
+  correction) in its
   frontmatter. A page without them (written before the
   sommaire, or by hand in Obsidian) is read with the bridge's categories computed on the fly (`auto`), stored at its
   next write (and by S2's one pass over the whole Carnet). A record, a task, a document and a single line have no
@@ -114,11 +116,16 @@ Once, at night (the nightly pass, before its model; `bridge-rs/src/notebook/cate
   (the person's rules may place them now). By batches of 50 pages under the Carnet's lock; idempotent; a pass cut short
   starts again after its last batch (`categories_pass`).
 - **What stays in `other`**: the nightly pass's small model, 20 pages a night at most, inside its monthly cap (the
-  run's `categorized_by_model`, its tokens and cost in the run). It reads a page's title, aliases, « En bref » and lines
-  (400 characters, no attribution, nothing that touches health; never a page that looks like health, never the private
-  part) and answers 1–2 of `agent_may_give`: written `categories_by: agent` (later tables leave it; the person's
-  correction still wins). A page it was shown is not sent again while its text stays the same (`categories_tried`:
-  fingerprints only).
+  run's `categorized_by_model`, its tokens and cost in the run): the pages no word placed (never one a hobby's word put
+  in `other` on purpose). **Once after each new version** (`categories_once`, carnet-categories): up to 200 pages, those
+  no word placed then those the words placed narrowly (never by the person's rules, never a work agent's), by calls of
+  20, each call's most cost reserved before it goes (a call that left without an answer is counted at it, its pages
+  never sent again), the rest the following nights. It reads a page's title, aliases, « En bref » and lines
+  (400 characters, no attribution, nothing that touches health; never a page whose title touches health or that holds
+  a health line, never the private part) and answers 1–2 of `agent_may_give`, or « other »: a real category that
+  changes the page is written `categories_by: agent` (later tables leave it; the person's correction still wins);
+  anything else leaves the page as the words placed it. A page it was shown is not sent again while its text stays the
+  same (`categories_tried`: fingerprints only). One pass at a time (the night's and « ranger maintenant »).
 - **The card**, once after the first pass over a Carnet with notes: the home's `sorted` (`SortedCard`; S4 serves it as
   the summary's `card` `{kind: sorted}`): `title` « Ton Carnet est rangé par catégories », `text` « 9 notes dans
   Autres » (null when none: then no `see`), `see` « Voir » opens `open.category` (`other`), `ok` « OK »;
