@@ -1578,7 +1578,7 @@ pub const VAULT_TYPED_SECONDS: f64 = 1800.0;
 // allowed for this agent (the form's `action`, its button's `formaction`), the call is refused with `send_ask_text`; a
 // script sends nothing (it only runs once V8 proves it only reads, `read_only`). The agent calls `ask_to_send`
 // (form_send.rs), a card asks the person « Envoyer sur
-// ce site ? » (« Oui »: this one sending; « Toujours pour ce site »: kept in « Sites autorisés »), then it does the
+// ce site ? » (« Oui »: this one sending; « Toujours autoriser »: kept in « Sites autorisés »), then it does the
 // same step again. A search form (role=search, a search field, or a `get` form with one text field) is reading. The
 // bridge writes what is allowed beside `busy` (`SEND_SITES_FILE`: the sites validated for sending, and each « Oui »'s
 // grant for its ten minutes, `window`; a vault fill's one-use grant, used once by this proxy, `first_refused`). The vault's fills (vault_login,

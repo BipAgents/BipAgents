@@ -1520,7 +1520,6 @@ async fn delete_card(state: &AppState, agent: &AgentConfig, arguments: &Dict, fa
         summary: crate::calendar::delete_sentence(&lang, &shown, &title),
         detail: format!("{when}\n{}", crate::cards::quoted(&title, 300)),
         always: None,
-        session: false,
     };
     match crate::person_ok::ask(state, agent, card).await {
         crate::person_ok::Answer::Once | crate::person_ok::Answer::Always => None,

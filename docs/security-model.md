@@ -138,9 +138,12 @@ time; starting an agent-made routine; going past a budget.
 - **No « always » for what matters.** Hermes runs with `approvals.mode: manual` (outside an isolated sandbox, its risky
   commands ask; inside one, see [isolation](#-isolation)). « Toujours autoriser » exists only for six non-critical
   kinds (`ALWAYS_KINDS`: archiving, marking read, moving mail, a mail rule, writing in one service the person
-  connected, files in the agent's own space), is granted only by the person's own answer (never by the bridge, a
-  relative or an agent tool), is listed in the agent's settings and can be taken back. It is never offered for a
-  payment, a secret, a login, a command or a family agent's card. When the app sends « always » on a Hermes approval,
+  connected, files in the agent's own space) and one critical kind its rule names (`own_always`: adding or changing
+  an event in the person's Google Calendar, its primary calendar only; their approval level never lets it through,
+  and deleting an event is asked each time), is granted only by the person's own answer (never by the bridge, a
+  relative or an agent tool), is listed in the agent's settings and can be taken back (a Google Calendar one also goes
+  when the agent is taken out of its list or Google Calendar is disconnected). It is never offered for a payment, a
+  secret, a login, a command or a family agent's card. When the app sends « always » on a Hermes approval,
   the bridge answers Hermes « once » and keeps the rule itself, so it can be revoked.
 - **Bulk requests fold, decisions don't.** Similar requests of one agent fold into one card (the same action on the
   same mail folder, the same kind of held request) with « Voir la liste ». A payment, a secret, an account, a site, a

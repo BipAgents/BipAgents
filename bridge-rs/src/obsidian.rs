@@ -30,8 +30,8 @@
 //!
 //! The vault is never mounted in an agent's sandbox (a writable folder there would skip the cards). Two-way sync means
 //! a write reaches all the person's devices, so: nothing deletes, renames, moves or rewrites a whole note; a write
-//! never goes without its card (the person's level « Seulement le critique » or a « Toujours autoriser … à écrire dans
-//! Obsidian » lets creating and adding through at once, as for their other services; a change of existing text is
+//! never goes without its card (the person's level « Seulement le critique » or their « Toujours autoriser » for
+//! writing in Obsidian lets creating and adding through at once, as for their other services; a change of existing text is
 //! always asked); before a note is changed its copy is kept (`<data>/obsidian/backups/<day>/…`, `BACKUP_DAYS`);
 //! the copy is synced just before a write when it is older than `FRESH_BEFORE_WRITE`, and soon after it.
 //! What a note says is data (web clips, shared vaults): between markers, as the drives' texts.
@@ -924,8 +924,7 @@ async fn approved(state: &AppState, agent: &AgentConfig, tool: &'static str, wha
             return None;
         }
     }
-    let shown = crate::mail_tidy::shown_agent(&config, &agent.name);
-    let always = (kind == KIND_WRITE).then(|| crate::approval_level::always_button(&lang, &shown, ALWAYS_KEY)).flatten();
+    let always = (kind == KIND_WRITE).then(|| crate::approval_level::always_button(&lang, ALWAYS_KEY)).flatten();
     let digest = {
         use sha2::{Digest, Sha256};
         // the whole note as it would be written: a kept « Oui » lets exactly this write through, nothing else
@@ -942,7 +941,6 @@ async fn approved(state: &AppState, agent: &AgentConfig, tool: &'static str, wha
         summary,
         detail,
         always,
-        session: false,
     };
     match crate::person_ok::ask(state, agent, card).await {
         crate::person_ok::Answer::Once => None,
