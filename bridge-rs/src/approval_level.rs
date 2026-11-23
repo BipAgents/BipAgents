@@ -412,7 +412,7 @@ pub fn offers_always(key: &str) -> bool {
     ALWAYS_KINDS.contains(&kind)
         && (!rule.critical || rule.own_always)
         && match service {
-            Some(s) => kind == "service_write" && SERVICE.is_match(s),
+            Some(s) => (kind == "service_write" && SERVICE.is_match(s)) || key == crate::person_ok::CALENDAR_WRITE_OUTLOOK,
             None => kind != "service_write",
         }
 }
@@ -502,6 +502,15 @@ fn always_words(key: &str) -> Option<[String; 4]> {
         return None;
     }
     let s = |a: &str, b: &str, c: &str, d: &str| Some([a, b, c, d].map(str::to_string));
+    if key == crate::person_ok::CALENDAR_WRITE_OUTLOOK {
+        // Alex 23/11 (outlook_calendar.rs: its adds and changes)
+        return s(
+            "modifier ton agenda Outlook",
+            "change your Outlook calendar",
+            "deinen Outlook-Kalender ändern",
+            "modificar tu calendario de Outlook",
+        );
+    }
     match key.split_once(':') {
         Some((_, service)) => {
             let n = capitalized(&service.replace(['_', '-'], " "));

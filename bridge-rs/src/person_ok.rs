@@ -28,6 +28,10 @@
 //!   the primary calendar through from then on (approval_level.rs); its deletions are `calendar_delete` cards, asked
 //!   each time.
 //!
+//! - **Outlook** (outlook.rs, Alex 23/11): an event added or changed in its calendar (`calendar_write:outlook`, as
+//!   Google Calendar's, its « Toujours » kept apart), an event deleted (`calendar_delete`), mails tidied in its mailbox
+//!   (`mail_archive`, `mail_move`, `mail_mark_read`, `mail_trash`: asked on this card each time in this first version).
+//!
 //! The other kinds are critical (approval_level.rs: always asked, whatever the level). Not a Python module.
 
 use std::collections::HashMap;
@@ -58,6 +62,9 @@ pub const NOTES_WRITE: &str = "service_write";
 pub const NOTES_CHANGE: &str = "notes_change";
 /// An event added to or changed in the person's Google Calendar (google_calendar.rs).
 pub const CALENDAR_WRITE: &str = "calendar_write";
+/// The same in their Outlook calendar (outlook_calendar.rs): a `calendar_write` (critical) whose « Toujours » is kept
+/// under its own key (approval_level.rs): one given for Google Calendar never lets Outlook's through, nor the reverse.
+pub const CALENDAR_WRITE_OUTLOOK: &str = "calendar_write:outlook";
 
 /// What the card shows and what it is for.
 #[derive(Debug, Clone)]
@@ -120,6 +127,12 @@ pub fn kind_of(item: &Dict) -> &'static str {
         Some(NOTES_WRITE) => NOTES_WRITE,
         Some(NOTES_CHANGE) => NOTES_CHANGE,
         Some(CALENDAR_WRITE) => CALENDAR_WRITE,
+        Some(CALENDAR_WRITE_OUTLOOK) => CALENDAR_WRITE,
+        // Outlook's mails tidied (outlook_mail.rs `mail_bulk`): the same kinds as the IMAP boxes' cards
+        Some("mail_archive") => "mail_archive",
+        Some("mail_mark_read") => "mail_mark_read",
+        Some("mail_move") => "mail_move",
+        Some("mail_trash") => "mail_trash",
         // a file saved in the person's online documents (drives_write.rs): a new one, or a new version (critical)
         Some(crate::drives_write::KIND_CREATE) => crate::drives_write::KIND_CREATE,
         Some(crate::drives_write::KIND_REPLACE) => crate::drives_write::KIND_REPLACE,

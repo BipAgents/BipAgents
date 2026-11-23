@@ -711,7 +711,7 @@ pub enum Aim {
 const GOOGLE_NAMES: [&str; 5] = ["google calendar", "google", "agenda google", "google agenda", CALENDAR_ID];
 
 /// A calendar's name as compared: one line, defused as the listing shows it, lowercase.
-fn folded(name: &str) -> String {
+pub(crate) fn folded(name: &str) -> String {
     crate::archives::defused(&name.split_whitespace().collect::<Vec<_>>().join(" ")).to_lowercase()
 }
 
@@ -805,7 +805,7 @@ impl Planned {
     }
 }
 
-fn when_of(event: &Value) -> String {
+pub(crate) fn when_of(event: &Value) -> String {
     let (start, end) = (text(event, "start"), text(event, "end"));
     let all_day = event.get("all_day").and_then(Value::as_bool).unwrap_or(false);
     let clock = |v: &str| v.get(11..16).unwrap_or("").to_string();
@@ -820,7 +820,7 @@ fn when_of(event: &Value) -> String {
     }
 }
 
-fn mixed(start: Moment, end: Moment) -> bool {
+pub(crate) fn mixed(start: Moment, end: Moment) -> bool {
     matches!(start, Moment::Day(_)) != matches!(end, Moment::Day(_))
 }
 

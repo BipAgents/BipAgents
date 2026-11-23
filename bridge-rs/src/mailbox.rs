@@ -704,28 +704,30 @@ static SIZE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"RFC822\.SIZE (\d+)"
 /// The attachment `wanted` names: its number in the list (from 1), its name (any case), a part of a single name, or
 /// the only one when `wanted` is empty.
 pub fn choose(found: Vec<email::Attachment>, wanted: &str) -> Result<email::Attachment, MailError> {
+    let names: Vec<String> = found.iter().map(|a| a.name.clone()).collect();
+    let i = choose_index(&names, wanted)?;
+    Ok(found.into_iter().nth(i).expect("an index in the list"))
+}
+
+/// [`choose`] by the attachments' names alone (Outlook's: outlook_mail.rs): the index of the one `wanted` names.
+pub fn choose_index(names: &[String], wanted: &str) -> Result<usize, MailError> {
     let wanted = wanted.trim();
-    let names =
-        || found.iter().enumerate().map(|(i, a)| format!("{} {}", i + 1, a.name)).collect::<Vec<_>>().join(", ");
-    if found.is_empty() {
+    let listed = || names.iter().enumerate().map(|(i, n)| format!("{} {n}", i + 1)).collect::<Vec<_>>().join(", ");
+    if names.is_empty() {
         return Err(MailError("this e-mail has no attachment".into()));
     }
     let index = if wanted.is_empty() {
-        (found.len() == 1).then_some(0)
+        (names.len() == 1).then_some(0)
     } else if let Ok(n) = wanted.parse::<usize>() {
-        (1..=found.len()).contains(&n).then(|| n - 1)
+        (1..=names.len()).contains(&n).then(|| n - 1)
     } else {
         let low = wanted.to_lowercase();
-        found.iter().position(|a| a.name.to_lowercase() == low).or_else(|| {
-            let partly: Vec<usize> =
-                (0..found.len()).filter(|i| found[*i].name.to_lowercase().contains(&low)).collect();
+        names.iter().position(|n| n.to_lowercase() == low).or_else(|| {
+            let partly: Vec<usize> = (0..names.len()).filter(|i| names[*i].to_lowercase().contains(&low)).collect();
             (partly.len() == 1).then(|| partly[0])
         })
     };
-    match index {
-        Some(i) => Ok(found.into_iter().nth(i).expect("an index in the list")),
-        None => Err(MailError(format!("say which attachment (its number or name): {}", names()))),
-    }
+    index.ok_or_else(|| MailError(format!("say which attachment (its number or name): {}", listed())))
 }
 
 /// One attachment of a message, read-only (`EXAMINE`, `BODY.PEEK[]`): the message's size asked first, so that a huge
@@ -804,13 +806,27 @@ fn save_attachment(
     }
     let expected = listed_id(config, &field(account, "id"), folder, uid);
     let (file, from) = attachment(account, folder, uid, wanted, expected.as_deref(), opener)?;
+    tracing::info!(agent = %agent, account = %field(account, "id"), size = file.data.len(), "mail attachment saved");
+    Ok(store_attachment(config, &agent_config, file, &from))
+}
+
+/// Whether `agent` may receive files (an attachment saved for it): None, or the words why not.
+pub fn files_refused(agent: &crate::config::AgentConfig) -> Option<Dict> {
+    (agent.upload_dir_host.as_deref().is_none_or(str::is_empty)
+        || agent.upload_dir_container.as_deref().is_none_or(str::is_empty))
+    .then(|| tool_text("You can't receive files here, so attachments can't be saved for you.", true))
+}
+
+/// An attachment (an IMAP box's, Outlook's: outlook_mail.rs) stored in `agent`'s own files, never executable.
+pub fn store_attachment(config: &Config, agent_config: &crate::config::AgentConfig, file: email::Attachment, from: &str) -> Dict {
+    let agent = agent_config.name.as_str();
     let mut limits = config.limits.clone();
     limits.upload_max_bytes = limits.upload_max_bytes.min(ATTACHMENT_MAX);
     limits.upload_file_mode &= !0o111;
     let bytes = file.data;
     let mut open = || Ok(std::io::Cursor::new(bytes.clone()));
     let stored = match crate::files::store_upload_from(
-        &agent_config,
+        agent_config,
         &mut open,
         &file.name,
         Some(&file.content_type),
@@ -819,15 +835,14 @@ fn save_attachment(
     ) {
         Ok(stored) => stored,
         Err(exc) => {
-            return Ok(tool_text(&format!("{} could not be saved ({}).", file.name, py::py_str(&exc.detail)), true))
+            return tool_text(&format!("{} could not be saved ({}).", file.name, py::py_str(&exc.detail)), true)
         }
     };
     if let Err(exc) = crate::sandbox::sync_agent(config, agent) {
         tracing::warn!(agent = %agent, error = %exc, "attachment not copied into the sandbox");
     }
-    tracing::info!(agent = %agent, account = %field(account, "id"), size = bytes.len(), "mail attachment saved");
     let path = py::py_str(stored.get("path").unwrap_or(&Value::Null));
-    Ok(tool_text(
+    tool_text(
         &format!(
             "Saved {name} ({kb} KB, {kind}) from the e-mail of {from}: {path}\n{ATTACHMENT_UNTRUSTED}",
             name = py::py_str(stored.get("filename").unwrap_or(&json!(file.name))),
@@ -835,7 +850,7 @@ fn save_attachment(
             kind = file.content_type,
         ),
         false,
-    ))
+    )
 }
 
 static LIST_ROW: LazyLock<Regex> =

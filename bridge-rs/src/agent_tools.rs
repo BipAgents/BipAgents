@@ -438,6 +438,13 @@ fn own_tools(config: &Config, agent: &AgentConfig, offer: bool) -> Vec<Value> {
     }
     if crate::contacts::enabled(config, &agent.name) {
         tools.extend(crate::contacts::tools_of(config, &agent.name));
+    } else if crate::outlook::contacts_for(config, &agent.name) {
+        // Outlook's contacts only (outlook_contacts.rs): the read tools
+        tools.extend(
+            crate::contacts::tools()
+                .into_iter()
+                .filter(|t| crate::outlook_contacts::READ_TOOLS.contains(&t["name"].as_str().unwrap_or(""))),
+        );
     }
     if crate::agent_files::offered(config, &agent.name) {
         tools.push(crate::agent_files::tool());
@@ -500,12 +507,13 @@ pub fn stale_agents(config: &Config) -> Vec<(String, f64)> {
     )
 }
 
-/// Whether `agent` reads a calendar: the phone's, one of its mailboxes' (caldav.rs), or the person's Google Calendar
-/// (google_calendar.rs).
+/// Whether `agent` reads a calendar: the phone's, one of its mailboxes' (caldav.rs), the person's Google Calendar
+/// (google_calendar.rs) or their Outlook calendar (outlook_calendar.rs).
 pub fn calendar_on(config: &Config, agent: &str) -> bool {
     crate::calendar::enabled(config, agent)
         || crate::caldav::shared_with(config, agent)
         || crate::google_calendar::offered(config, agent)
+        || crate::outlook::calendar_for(config, agent)
 }
 
 /// Changes whenever the tools do: Hermes keeps the list it got when it connected, so a new tool needs a new entry.
@@ -1741,10 +1749,19 @@ the BipAgents app.",
         .await;
     }
     if mailbox::MAIL_TOOL_NAMES.contains(&name) {
-        return blocking(move || {
+        let also = name == "mail_search" && crate::outlook::mail_for(&config, &agent.name);
+        let mut result = blocking(move || {
             mailbox::call(&config, &agent_c.name, &name_c, &arguments_c, &mailbox::default_connect())
         })
-        .await;
+        .await?;
+        if also {
+            // the person's Outlook mailbox too (outlook_mail.rs): named, or the agent would not know it is there
+            if let Some(Value::String(said)) = result.get_mut("content").and_then(|c| c.get_mut(0)).and_then(|c| c.get_mut("text")) {
+                said.push('\n');
+                said.push_str(&crate::outlook_mail::also_line());
+            }
+        }
+        return Ok(result);
     }
     if crate::notebook::tools::TOOL_NAMES.contains(&name) {
         let result =
@@ -1803,6 +1820,12 @@ the BipAgents app.",
                 crate::google_calendar::listed(&config, &mut remote, from, to).await;
             }
         }
+        if name == "calendar_list" && crate::outlook::calendar_for(&config, &agent.name) {
+            // the person's Outlook calendars, read now (outlook_calendar.rs; its writes: a card first, `mcp_call`)
+            if let Ok((from, to)) = crate::calendar::range(arguments, None) {
+                crate::outlook_calendar::listed(&config, &mut remote, from, to).await;
+            }
+        }
         let result =
             blocking(move || crate::calendar::call(&config, &agent_c.name, &name_c, &arguments_c, None, &remote))
                 .await?;
@@ -1824,6 +1847,19 @@ the BipAgents app.",
         return Ok(result);
     }
     if crate::contacts::TOOL_NAMES.contains(&name) {
+        let phone = crate::contacts::enabled(&config, &agent.name);
+        if crate::outlook::contacts_for(&config, &agent.name) {
+            // the person's Outlook contacts (outlook_contacts.rs, read only), beside the phone's address book
+            match crate::outlook_contacts::call(&config, name, arguments).await {
+                Some(outlook) if phone => {
+                    let mine = blocking(move || crate::contacts::call(&config, &agent_c.name, &name_c, &arguments_c, None)).await?;
+                    return Ok(crate::outlook_contacts::beside(mine, outlook));
+                }
+                Some(outlook) => return Ok(outlook),
+                None if !phone => return Ok(tool_text(crate::outlook_contacts::READ_ONLY, true)),
+                None => {}
+            }
+        }
         let result =
             blocking(move || crate::contacts::call(&config, &agent_c.name, &name_c, &arguments_c, None)).await?;
         let asked = result.get("content").and_then(|c| c.get(0)).and_then(|c| c.get("text")).and_then(Value::as_str)
@@ -2423,6 +2459,23 @@ async fn mcp_call(
         if let Some(mut result) = crate::google_calendar::write_call(&state, &agent, &name, &arguments).await {
             wrote(&agent.name, &name, &arguments, &mut result);
             return Ok(answer(result));
+        }
+        // the same for their Outlook calendar (outlook_calendar.rs)
+        if let Some(mut result) = crate::outlook_calendar::write_call(&state, &agent, &name, &arguments).await {
+            wrote(&agent.name, &name, &arguments, &mut result);
+            return Ok(answer(result));
+        }
+        // their Outlook mailbox (outlook_mail.rs): read, searched, drafted; tidied only after the person's card
+        if mailbox::MAIL_TOOL_NAMES.contains(&name.as_str()) || crate::mail_tidy::TOOL_NAMES.contains(&name.as_str()) {
+            let (c, a) = (state.config(), agent.name.clone());
+            let boxes = tokio::task::spawn_blocking(move || mailbox::of(&c).of_agent(&a).map(|b| b.len()).unwrap_or(0))
+                .await
+                .unwrap_or(0);
+            if crate::outlook_mail::takes(&state.config(), &agent.name, &name, &arguments, boxes) {
+                let mut result = crate::outlook_mail::call(&state, &agent, &name, &arguments).await;
+                wrote(&agent.name, &name, &arguments, &mut result);
+                return Ok(answer(result));
+            }
         }
     }
     if name == crate::plans::TOOL_NAME {

@@ -430,7 +430,7 @@ fn is_on_with(config: &Config, agent: &AgentConfig, item: &Item, sets: &ProfileS
         Switch::Routines => Some(crate::routines::enabled(config, name)),
         Switch::Reminders => Some(crate::reminders::allowed(config, name)),
         Switch::Calendar => Some(crate::agent_tools::calendar_on(config, name)),
-        Switch::Contacts => Some(crate::contacts::enabled(config, name)),
+        Switch::Contacts => Some(crate::contacts::enabled(config, name) || crate::outlook::contacts_for(config, name)),
         Switch::Health => Some(crate::health::enabled(config, name)),
         Switch::Connector(id) => crate::connectors::of_agent(config, name)
             .into_iter()
@@ -444,7 +444,11 @@ fn is_on_with(config: &Config, agent: &AgentConfig, item: &Item, sets: &ProfileS
 fn by_app_on(config: &Config, agent: &AgentConfig, id: &str) -> Option<bool> {
     let name = agent.name.as_str();
     match id {
-        "mail" => crate::mailbox::of(config).of_agent(name).ok().map(|boxes| !boxes.is_empty()),
+        // an IMAP box, or Outlook's mailbox (outlook.rs)
+        "mail" => crate::mailbox::of(config)
+            .of_agent(name)
+            .ok()
+            .map(|boxes| !boxes.is_empty() || crate::outlook::mail_for(config, name)),
         "notion" | "finary" => {
             crate::connections::service(id)?;
             let stored = crate::connections::store_of(config).read().ok()?;
