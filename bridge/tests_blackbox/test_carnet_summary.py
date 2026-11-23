@@ -220,8 +220,9 @@ def test_s4_kept_searches_six_a_space_with_their_count(bridges):
     # another space, its own six (nothing is Pro here, its count is 0)
     pro = keep(bridge, q="claire", space="pro")
     assert [(k["q"], k["space"], k["count"]) for k in pro["kept"]] == [("claire", "pro", 0)]
-    # (S5: `all` shows every space's kept searches: the setting off shows everything together)
-    assert len(get(bridge, "/v1/notebook/kept")["kept"]) == 7
+    # (S5: `all` shows every space's kept searches: the setting off shows everything together; six a view, the newest)
+    assert [k["q"] for k in get(bridge, "/v1/notebook/kept")["kept"]][-1] == "claire"
+    assert len(get(bridge, "/v1/notebook/kept")["kept"]) == 6
     assert get(bridge, "/v1/notebook/kept", space="pro")["kept"] == pro["kept"]
     # deleted
     left = bridge.delete("/v1/notebook/kept", params={"id": first["id"]}, headers=AUTH)

@@ -265,8 +265,10 @@ fn kept_searches_six_a_space_with_their_count() {
     sm::keep(&config, "claire", Some("Claire"), "pro", None).unwrap();
     let pro = listed("pro");
     assert_eq!((pro["kept"][0]["space"].clone(), pro["kept"][0]["count"].clone(), pro["kept"][0]["title"].clone()), (json!("pro"), json!(0), json!("Claire")));
-    // (S5: `all` shows every space's kept searches, the setting off shows everything together; spaces.rs)
-    assert_eq!(listed("all")["kept"].as_array().unwrap().len(), 7);
+    // (S5: `all` shows every space's kept searches, the setting off shows everything together; spaces.rs; six a view,
+    // the newest: review 1 of S5, R2)
+    assert_eq!(listed("all")["kept"].as_array().unwrap().len(), 6);
+    assert!(listed("all")["kept"].as_array().unwrap().iter().any(|k| k["q"] == "claire"));
     // deleted
     assert_eq!(sm::drop_kept(&config, &id).unwrap(), "all");
     assert_eq!(listed("all")["kept"].as_array().unwrap().len(), 6);
