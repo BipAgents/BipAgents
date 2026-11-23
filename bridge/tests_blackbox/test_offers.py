@@ -325,12 +325,31 @@ def test_only_the_person_answers_an_offer(bridges, fakes):
     assert not_done(call(bridge, "offer_act", search(), token=other)) and offer_cards(bridge, project) == []
 
 
+def persons_turn(bridge, fakes, run="run_p", session="api_p"):
+    """A turn of the person's own conversation, going on until the returned gate is set: calls in `session` are
+    asked."""
+    gate = threading.Event()
+    fakes.hermes.runs[run] = [sse("tool.started", run_id=run, tool="mcp_bipagents_plan_propose", preview="x"),
+                              gate, sse("run.completed", run_id=run, output="Bon voyage !")]
+    assert bridge.post("/v1/watch", headers=AUTH,
+                       json={"agent": "coach", "run_id": run, "session_id": session}).status_code == 200
+    assert wait_until(lambda: fakes.hermes.seen(f"/p/coach/v1/runs/{run}/events"))
+    time.sleep(0.3)
+    return gate
+
+
 def test_a_plans_offers_are_pills_on_its_card_and_their_own_cards_for_an_app_1_0(bridges, fakes):
+    """Asked in the person's own turn (unasked, a plan and its two pills would be 3 cards nobody asked for: choice 4)."""
     bridge = place(bridges, fakes)
     pushed = len(fakes.apns.payloads())
-    propose(bridge, trip(offers=[{"kind": "search", "label": "Je regarde les hôtels ?", "prompt": PROMPT},
-                                 {"kind": "page", "label": "Je te fais la liste de bagages ?",
-                                  "prompt": "Fais une page avec la liste de bagages pour 3 jours à Lisbonne."}]))
+    gate = persons_turn(bridge, fakes)
+    try:
+        propose(bridge, trip(offers=[{"kind": "search", "label": "Je regarde les hôtels ?", "prompt": PROMPT},
+                                     {"kind": "page", "label": "Je te fais la liste de bagages ?",
+                                      "prompt": "Fais une page avec la liste de bagages pour 3 jours à Lisbonne."}]),
+                session="api_p")
+    finally:
+        gate.set()
     [plan] = plan_cards(bridge)
     pills = offer_cards(bridge)
     assert sorted(plan["bip_plan"]["offers"]) == sorted(c["bip_offer"]["id"] for c in pills) and len(pills) == 2
@@ -343,7 +362,8 @@ def test_a_plans_offers_are_pills_on_its_card_and_their_own_cards_for_an_app_1_0
     assert rs == [plan["run_id"]], rs
     # a wrong kind refuses the plan
     wrong = call(bridge, "plan_propose", trip(title="Porto", offers=[{"kind": "cart", "label": "Panier ?",
-                                                                      "prompt": "x", "site": "a.fr"}]), token=TOKEN)
+                                                                      "prompt": "x", "site": "a.fr"}]), token=TOKEN,
+                 session="api_unasked")
     assert not_done(wrong) and "offers" in text_of(wrong), text_of(wrong)
     # « Non merci » to the plan: its offers go with it
     assert answer(bridge, plan, "deny").status_code == 200
