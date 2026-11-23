@@ -2,7 +2,9 @@
 //! record, task, document and line — never a folder, nothing moves. Personal ids `people, dates, money, home, papers,
 //! trips, work, other, health`, family ones apart (S6). Filed by the bridge at each write, by words, without a model
 //! and without a token (`decide`: the kind first, then the person's rules, then the 5-language table of
-//! lexicon::CATEGORY_WORDS); an agent may say one (`notebook_write.category`); the person's correction always wins
+//! lexicon::CATEGORY_WORDS — a title's head before what follows its first preposition, a word the table does not know
+//! by its neighbours of search_words.rs; carnet-categories, 22/11); an agent may say one (`notebook_write.category`);
+//! the person's correction always wins
 //! (`categories_by: person`) and teaches the next writes (`category_rules`). `dates` is computed, never stored;
 //! `health` is the private part.
 //!
@@ -53,8 +55,14 @@ pub const DATED_AFTER: i64 = 730;
 
 // How much each part of a page counts for its words' categories: the title most.
 const TITLE: f64 = 5.0;
+/// A title's words after its first preposition (« Dépenses | de Noël », « Kredit | für die Küche », « Seguro | de
+/// hogar »): what its head is about, counting a little less than the head (carnet-categories, 22/11).
+const MODIFIER: f64 = 4.0;
 const ALIASES: f64 = 4.0;
 const SUMMARY: f64 = 2.0;
+/// The « En bref » once the title or an alias said something: it refines, it does not turn the page over
+/// (carnet-categories: « Dépenses de Noël · Cadeaux et repas » is Argent).
+const SUMMARY_AFTER_TITLE: f64 = 1.0;
 const LABEL: f64 = 1.0;
 const FACT: f64 = 0.5;
 /// The facts together count this much at most for one category (a long page is not filed by its volume).
@@ -69,6 +77,69 @@ const RULE: f64 = 2.0;
 const ENOUGH: f64 = 1.0;
 /// A second category when it scores this share of the first.
 const BESIDE: f64 = 0.75;
+/// Words that say little of what a page is (review 1, R1: « Ménage ce week-end », « Kids this weekend » are not
+/// trips): they count `WEAK` of a word.
+const WEAK_STEMS: &[&str] = &["weekend", "week end"];
+const WEAK: f64 = 0.5;
+/// Below this (as an entry's first category), the words placed a page narrowly (`narrow_in`).
+const NARROW_BELOW: f64 = 4.0;
+/// A runner-up this close to the first category: placed narrowly too.
+const NARROW_CLOSE: f64 = 0.9;
+/// An amount in the « En bref » (« 25 € la séance »): a hint for Argent, never enough alone (carnet-categories: an
+/// amount filed a babysitter's or a piano lesson's page in Argent; the blind set had 12 « Argent » too many).
+const AMOUNT: f64 = 0.6;
+/// A word the table does not know, read through its neighbours (search_words.rs, plan §3.2: « toubib » is
+/// « médecin »): this share of a word of the table.
+const NEIGHBOUR: f64 = 0.5;
+
+/// The words that end a title's head (« Dépenses | de Noël », « Gift ideas | for Mum », « Kredit | für die Küche »,
+/// « Hipoteca | del piso », « Afscheid | van Ingrid »), folded: the five languages' prepositions (French and Spanish
+/// « en » is Dutch « and »: the head ends there too). Never a title's first word.
+const PREPOSITIONS: &[&str] = &[
+    "de", "du", "des", "d", "pour", "a", "au", "aux", "avec", "chez", "en", "sur", "dans", "apres", "avant", "par",
+    "sans", "vers", "entre", "of", "for", "to", "with", "at", "in", "on", "from", "by", "about", "before", "after",
+    "fur", "von", "vom", "mit", "nach", "zu", "zum", "zur", "bei", "beim", "im", "am", "an", "auf", "aus", "vor",
+    "uber", "ab", "bis", "ins", "del", "para", "con", "al", "por", "sin", "sobre", "desde", "hasta", "van", "voor",
+    "met", "naar", "bij", "op", "aan", "uit", "om", "over", "tot", "door",
+];
+
+/// Between categories with the same points, what kind of note it is before what it is about (carnet-categories,
+/// 22/11: « Dishwasher warranty » is Papiers, « Train to see Gran » Voyages, « Christmas spending » Argent; the
+/// sommaire's order put Maison and Personnes first), « Autres » last.
+const TIES: [&str; 7] = ["papers", "money", "trips", "work", "home", "people", "other"];
+
+fn tie(category: &str) -> usize {
+    TIES.iter().position(|c| *c == category).unwrap_or(TIES.len())
+}
+
+/// Neighbours that never file a word (carnet-categories): « rezept », « receta », « recept » are a prescription too;
+/// a car's garage and its inspection, an itinerary's « planning », a warranty's « broken », a shift's « cita »
+/// (an appointment) would pull what is not theirs.
+const NEIGHBOUR_NEVER_THROUGH: &[&str] = &[
+    "rezept", "receta", "recept", "garage", "tuv", "itv", "itineraire", "itinerary", "reiseplan", "garantie", "warranty",
+    "garantia", "altpapier", "turno",
+];
+
+/// Words whose neighbours never file them: a note (« Note 03 », a bill's neighbour), a ticket, a quote, a room or
+/// nights (a hotel's, a child's), a « planning », a call or a meeting that may be the family's, « Marie » the name,
+/// German « Mann » and « Frau », English « kind » and « order », French « mot », a school that may be a gym.
+const NEIGHBOUR_NEVER: &[&str] = &[
+    "note", "notes", "addition", "ticket", "tickets", "quote", "quotes", "college", "gymnasium", "room", "rooms",
+    "chambre", "chambres", "kamer", "kamers", "nights", "nuits", "nachte", "noches", "nachten", "planning", "programme",
+    "program", "programm", "schedule", "route", "call", "reunion", "reunions", "equipe", "team", "present", "presents",
+    "kind", "mot", "order", "due", "post", "pass", "power", "contador", "cita", "citas", "consulta", "marie", "gym",
+    "workout", "mann", "frau", "vrouw", "mujer", "man", "mate", "mates", "bon", "fuel", "petrol", "diesel", "essence",
+    "remote", "kurs", "gran", "stage", "stages",
+];
+
+/// Dutch health words (lexicon.rs `touches_health` has none yet: review 1, R4): never filed by a neighbour, never a
+/// neighbour that files (the neighbours' health groups, search_words.rs).
+const DUTCH_HEALTH: &[&str] = &[
+    "dokter", "huisarts", "arts", "doc", "tandarts", "tanden", "gebit", "afspraak", "afspraken", "consult", "fysio",
+    "fysiotherapeut", "fysiotherapie", "opticien", "bril", "lenzen", "oogarts", "allergie", "allergisch", "allergieen",
+    "intolerantie", "recept", "medicijn", "medicijnen", "apotheek", "pillen", "vaccinatie", "prik", "vaccin", "inenting",
+    "ziekenhuis", "kliniek", "spoedeisende hulp", "eerste hulp",
+];
 
 /// Words that make someone a work contact (a person page: people and work), folded.
 const COLLEAGUE: &[&str] = &[
@@ -105,10 +176,6 @@ pub fn title(lang: &str, id: &str) -> String {
         _ => 1,
     };
     TITLES.iter().find(|(c, _)| *c == id).map(|(_, t)| t[column].to_string()).unwrap_or_else(|| id.to_string())
-}
-
-fn order(category: &str) -> usize {
-    PERSONAL.iter().chain(FAMILY.iter()).position(|c| *c == category).unwrap_or(99)
 }
 
 fn strings(list: &[&str]) -> Vec<String> {
@@ -215,51 +282,147 @@ fn rules_in(state: &Dict) -> Vec<Rule> {
         .collect()
 }
 
-/// What `text`'s words say: (categories, how much a match counts, the word) for each match — the person's rules
-/// first (their word counts double), then the table's phrases, then each word's longest stem.
-fn matches(text: &str, rules: &[Rule]) -> Vec<(Vec<String>, f64, String)> {
-    let mut padded = format!(" {} ", fold(text));
-    let mut out = Vec::new();
-    for r in rules {
-        let p = format!(" {} ", r.word);
-        if padded.contains(&p) {
-            out.push((r.categories.clone(), RULE, r.word.clone()));
-            padded = padded.replace(&p, " ");
-        }
+/// A match of a text's words: its categories, how much it counts, the word (a rule's, a phrase or the text's word)
+/// and where it starts (its first word's place among the text's folded words).
+struct Match {
+    categories: Vec<String>,
+    factor: f64,
+    word: String,
+    at: usize,
+}
+
+/// Where `phrase` (folded words) stands among `words`, none of its words taken yet: each place.
+fn places(words: &[&str], taken: &[bool], phrase: &[&str]) -> Vec<usize> {
+    if phrase.is_empty() || phrase.len() > words.len() {
+        return Vec::new();
     }
-    for (padded_phrase, phrase, i) in PHRASES.iter() {
-        if padded.contains(padded_phrase.as_str()) {
-            out.push((strings(lexicon::CATEGORY_WORDS[*i].0), 1.0, phrase.to_string()));
-            padded = padded.replace(padded_phrase.as_str(), " ");
-        }
-    }
+    (0..=words.len() - phrase.len())
+        .filter(|at| phrase.iter().enumerate().all(|(k, p)| !taken[at + k] && words[at + k] == *p))
+        .collect()
+}
+
+/// A word's entry of the table: its longest stem — a stem at the word's start, or the head of a compound
+/// (« Mietvertrag », « Stromrechnung », « huurcontract »: a stem of 5 letters or more after 3 or more): the one ending
+/// last wins (a compound's last part says what it is), then the longest.
+fn stem_entry(word: &str) -> Option<(usize, &'static str)> {
     // folded text is ASCII (`fold`): two bytes are two letters
-    for word in padded.split_whitespace() {
-        let key = word.get(..2).unwrap_or(word);
-        // (where the stem ends in the word, its length, its entry): a stem at the word's start, or the head of a
-        // compound (« Mietvertrag », « Stromrechnung », « huurcontract »: a stem of 5 letters or more after 3 or more):
-        // the one ending last wins (a compound's last part says what it is), then the longest
-        let prefix = STEMS
-            .get(key)
+    let key = word.get(..2).unwrap_or(word);
+    let prefix = STEMS
+        .get(key)
+        .into_iter()
+        .flatten()
+        .filter(|(body, exact, _)| if *exact { word == *body } else { word.starts_with(body) })
+        .map(|(body, _, i)| (body.len(), body.len(), *i, *body));
+    let heads = (3..word.len().saturating_sub(4)).filter(|at| word.is_char_boundary(*at)).flat_map(|at| {
+        let rest = &word[at..];
+        COMPOUND_HEADS
+            .get(rest.get(..2).unwrap_or(rest))
             .into_iter()
             .flatten()
-            .filter(|(body, exact, _)| if *exact { word == *body } else { word.starts_with(body) })
-            .map(|(body, _, i)| (body.len(), body.len(), *i));
-        let heads = (3..word.len().saturating_sub(4)).filter(|at| word.is_char_boundary(*at)).flat_map(|at| {
-            let rest = &word[at..];
-            COMPOUND_HEADS
-                .get(rest.get(..2).unwrap_or(rest))
-                .into_iter()
-                .flatten()
-                .filter(move |(body, _)| rest.starts_with(body))
-                .map(move |(body, i)| (at + body.len(), body.len(), *i))
-        });
-        let best = prefix.chain(heads).max_by_key(|(end, len, i)| (*end, *len, std::cmp::Reverse(*i)));
-        if let Some((_, _, i)) = best {
-            out.push((strings(lexicon::CATEGORY_WORDS[i].0), 1.0, word.to_string()));
+            .filter(move |(body, _)| rest.starts_with(body))
+            .map(move |(body, i)| (at + body.len(), body.len(), *i, *body))
+    });
+    prefix.chain(heads).max_by_key(|(end, len, i, _)| (*end, *len, std::cmp::Reverse(*i))).map(|(_, _, i, body)| (i, body))
+}
+
+/// The table's entry for a text of one or more folded words: a phrase it is, else its first word's stem.
+fn table_entry(text: &str) -> Option<usize> {
+    let padded = format!(" {text} ");
+    PHRASES
+        .iter()
+        .find(|(p, _, _)| padded.contains(p.as_str()))
+        .map(|(_, _, i)| *i)
+        .or_else(|| text.split(' ').find_map(|w| stem_entry(w).map(|(i, _)| i)))
+}
+
+/// The words the table does not know that their neighbours file (search_words.rs, the five languages together: a
+/// Dutch person's Carnet is in English words): the first neighbour the table places decides; never a word that might
+/// touch health (Santé stays the private part, decision 6), never through `NEIGHBOUR_NEVER_THROUGH`.
+static NEIGHBOURS: LazyLock<HashMap<String, usize>> = LazyLock::new(|| {
+    let mut merged: indexmap::IndexMap<String, Vec<String>> = indexmap::IndexMap::new();
+    for lang in super::search_words::LANGS {
+        for (word, near) in super::search_words::WORDS.neighbours(lang) {
+            let all = merged.entry(word.clone()).or_default();
+            for n in near {
+                if !all.contains(n) {
+                    all.push(n.clone());
+                }
+            }
+        }
+    }
+    let mut out = HashMap::new();
+    for (word, near) in merged {
+        let health = |w: &str| lexicon::touches_health(w) || DUTCH_HEALTH.contains(&w);
+        let never = NEIGHBOUR_NEVER.contains(&word.as_str()) || health(&word) || near.iter().any(|n| health(n));
+        if word.contains(' ') || never || table_entry(&word).is_some() {
+            continue;
+        }
+        for n in near {
+            if NEIGHBOUR_NEVER_THROUGH.contains(&n.as_str()) {
+                break;
+            }
+            if let Some(i) = table_entry(&n) {
+                out.insert(word, i);
+                break;
+            }
         }
     }
     out
+});
+
+/// The words' tables made now, before a caller holds the Carnet's lock (the neighbours read the five languages'
+/// groups once, a few tenths of a second: measured as the S2 pass's longest hold of the lock, review 1 R5).
+pub fn warm() {
+    LazyLock::force(&STEMS);
+    LazyLock::force(&PHRASES);
+    LazyLock::force(&COMPOUND_HEADS);
+    LazyLock::force(&NEIGHBOURS);
+}
+
+/// What `text`'s words say, each match where it starts — the person's rules first (their word counts double), then
+/// the table's phrases, then each word's longest stem, then a word the table does not know by its neighbours.
+fn matches(text: &str, rules: &[Rule]) -> Vec<Match> {
+    let folded = fold(text);
+    let words: Vec<&str> = folded.split(' ').filter(|w| !w.is_empty()).collect();
+    let mut taken = vec![false; words.len()];
+    let mut out = Vec::new();
+    let take = |phrase: &str, categories: Vec<String>, factor: f64, taken: &mut [bool], out: &mut Vec<Match>| {
+        let parts: Vec<&str> = phrase.split(' ').collect();
+        let found = places(&words, taken, &parts);
+        let Some(first) = found.first() else { return };
+        out.push(Match { categories, factor, word: phrase.to_string(), at: *first });
+        for at in found {
+            for k in 0..parts.len() {
+                taken[at + k] = true;
+            }
+        }
+    };
+    // a rule or a phrase looked for only when the text holds it (most texts hold none: a page's 40 facts each read)
+    let padded = format!(" {folded} ");
+    for r in rules.iter().filter(|r| padded.contains(&format!(" {} ", r.word))) {
+        take(&r.word, r.categories.clone(), RULE, &mut taken, &mut out);
+    }
+    for (_, phrase, i) in PHRASES.iter().filter(|(p, _, _)| padded.contains(p.as_str())) {
+        let factor = if WEAK_STEMS.contains(phrase) { WEAK } else { 1.0 };
+        take(phrase, strings(lexicon::CATEGORY_WORDS[*i].0), factor, &mut taken, &mut out);
+    }
+    for (at, word) in words.iter().enumerate().filter(|(at, _)| !taken[*at]) {
+        let (entry, factor) = match stem_entry(word) {
+            Some((i, stem)) => (Some(i), if WEAK_STEMS.contains(&stem) { WEAK } else { 1.0 }),
+            None => (NEIGHBOURS.get(*word).copied(), NEIGHBOUR),
+        };
+        if let Some(i) = entry {
+            out.push(Match { categories: strings(lexicon::CATEGORY_WORDS[i].0), factor, word: word.to_string(), at });
+        }
+    }
+    out
+}
+
+/// How many of a title's first folded words are its head: up to its first preposition (never its first word).
+fn head_len(title: &str) -> usize {
+    let folded = fold(title);
+    let words: Vec<&str> = folded.split(' ').filter(|w| !w.is_empty()).collect();
+    words.iter().skip(1).position(|w| PREPOSITIONS.contains(w)).map_or(words.len(), |at| at + 1)
 }
 
 /// The table's phrases (« entretien annuel »), padded (« ␣entretien annuel␣ »), with their entry.
@@ -291,10 +454,24 @@ static COMPOUND_HEADS: LazyLock<HashMap<String, Vec<(&'static str, usize)>>> = L
 struct Points {
     total: HashMap<String, f64>,
     best: HashMap<String, (f64, String)>,
+    /// The points of each category as an entry's first one (a bill's « money » aside): how sure the words are.
+    lead: HashMap<String, f64>,
+    /// A rule of the person's matched.
+    ruled: bool,
+    /// The points each category got from the title's words.
+    titled: HashMap<String, f64>,
 }
 
 impl Points {
     fn add(&mut self, category: &str, points: f64, word: &str) {
+        self.add_as(category, points, word, true);
+    }
+
+    /// `lead`: the match's first category (else an entry's second one, which counts in the total only).
+    fn add_as(&mut self, category: &str, points: f64, word: &str, lead: bool) {
+        if lead {
+            *self.lead.entry(category.to_string()).or_default() += points;
+        }
         *self.total.entry(category.to_string()).or_default() += points;
         let best = self.best.entry(category.to_string()).or_insert((0.0, String::new()));
         if points > best.0 {
@@ -303,17 +480,41 @@ impl Points {
     }
 
     fn text(&mut self, text: &str, weight: f64, rules: &[Rule]) {
-        for (cats, factor, word) in matches(text, rules) {
-            for (n, c) in cats.iter().enumerate() {
-                self.add(c, weight * factor * if n == 0 { 1.0 } else { SECOND }, &word);
+        self.weighed(text, rules, |_| weight);
+    }
+
+    /// `text`'s matches, each weighed by where it starts.
+    fn weighed(&mut self, text: &str, rules: &[Rule], weight: impl Fn(usize) -> f64) {
+        for m in matches(text, rules) {
+            self.ruled |= m.factor == RULE;
+            for (n, c) in m.categories.iter().enumerate() {
+                self.add_as(c, weight(m.at) * m.factor * if n == 0 { 1.0 } else { SECOND }, &m.word, n == 0);
             }
         }
     }
 
-    /// The categories, the best first (the sommaire's order among equals), and the word that decided.
+    /// A title: its head (up to its first preposition) counts `TITLE`, what follows `MODIFIER`.
+    fn title(&mut self, title: &str, rules: &[Rule]) {
+        let head = head_len(title);
+        let before = self.lead.clone();
+        self.weighed(title, rules, |at| if at < head { TITLE } else { MODIFIER });
+        for (c, p) in &self.lead {
+            self.titled.insert(c.clone(), p - before.get(c).copied().unwrap_or(0.0));
+        }
+    }
+
+    /// The categories, the best first (among equals, what kind of note it is: `TIES`), and the word that decided.
+    /// « Autres » first (a hobby, a book, a series: the table's own entry) is « Autres » alone; never second.
     fn result(&self) -> (Vec<String>, Option<String>) {
         let mut ranked: Vec<(&String, &f64)> = self.total.iter().collect();
-        ranked.sort_by(|a, b| b.1.partial_cmp(a.1).unwrap_or(std::cmp::Ordering::Equal).then(order(a.0).cmp(&order(b.0))));
+        ranked.sort_by(|a, b| b.1.partial_cmp(a.1).unwrap_or(std::cmp::Ordering::Equal).then(tie(a.0).cmp(&tie(b.0))));
+        // a hobby's word never beats what another word of the title says (review 1, R2: « Photos du mariage » is
+        // Personnes, « Cours de piano » stays in « Autres »)
+        if ranked.first().is_some_and(|(c, _)| c.as_str() == "other")
+            && self.titled.iter().any(|(c, p)| c != "other" && *p >= MODIFIER)
+        {
+            ranked.retain(|(c, _)| c.as_str() != "other");
+        }
         let Some((top, points)) = ranked.first().map(|(c, p)| ((*c).clone(), **p)) else {
             return (vec!["other".into()], None);
         };
@@ -321,7 +522,7 @@ impl Points {
             return (vec!["other".into()], None);
         }
         let mut cats = vec![top.clone()];
-        if let Some((second, p)) = ranked.get(1) {
+        if let Some((second, p)) = ranked.iter().skip(1).find(|(c, _)| top != "other" && c.as_str() != "other") {
             if **p >= BESIDE * points {
                 cats.push((*second).clone());
             }
@@ -334,14 +535,19 @@ impl Points {
 /// A subject's or an area's categories from its words: the title, its aliases, its « En bref », its labels and facts,
 /// its « Chiffres et budget » and its amounts (lang: the Carnet's).
 fn by_words(page: &Page, lang: &str, rules: &[Rule]) -> (Vec<String>, Option<String>) {
+    scored(page, lang, rules).result()
+}
+
+/// The points of a page's words (`by_words`).
+fn scored(page: &Page, lang: &str, rules: &[Rule]) -> Points {
     let brief = super::words(lang).brief;
     let mut points = Points::default();
-    points.text(&page.title, TITLE, rules);
+    points.title(&page.title, rules);
     points.text(&page.aliases().join(" "), ALIASES, rules);
     let summary = super::summary_of(&page.body, brief);
-    points.text(&summary, SUMMARY, rules);
+    points.text(&summary, if points.total.is_empty() { SUMMARY } else { SUMMARY_AFTER_TITLE }, rules);
     if super::news::mentions_money(&summary) {
-        points.add("money", ENOUGH, "");
+        points.add("money", AMOUNT, "");
     }
     let mut facts = Points::default();
     let kind = page.kind();
@@ -369,9 +575,41 @@ fn by_words(page: &Page, lang: &str, rules: &[Rule]) -> (Vec<String>, Option<Str
     }
     for (category, total) in facts.total {
         let (_, word) = facts.best.get(&category).cloned().unwrap_or_default();
-        points.add(&category, total.min(FACTS_CAP), &word);
+        points.add_as(&category, total.min(FACTS_CAP), &word, false);
+        let lead = facts.lead.get(&category).copied().unwrap_or(0.0);
+        *points.lead.entry(category).or_default() += lead.min(FACTS_CAP);
     }
-    points.result()
+    points.ruled |= facts.ruled;
+    points
+}
+
+/// Whether the words placed a page narrowly (carnet-categories, 22/11: what the night model reads on the one-time
+/// sort, categories_pass.rs `candidates_once`): filed by its words (not by its kind, its group or a work agent), no rule
+/// of the person's matched (they apply first), not « Autres » (sent as such), and either nothing strong placed it —
+/// its first category has less than `NARROW_BELOW` points as an entry's first one (a table word of the title's head
+/// counts 5, after its preposition 4: so only its first line, its lines, a neighbour or an amount did) — or another
+/// category is as strong as it (`NARROW_CLOSE` of its points or more, a bill's « money » beside « papers » aside).
+pub fn narrow_in(ctx: &Ctx, part: Part, path: &str, page: &Page) -> bool {
+    if part != Part::Main {
+        return false;
+    }
+    let w = super::words(ctx.lang());
+    let kind = page.kind();
+    if matches!(kind.as_str(), "self" | "trip" | "tasks" | "documents" | "records" | "person")
+        || path == w.inbox_path()
+        || path == w.tasks_path()
+        || groups::group_relation(&page.title).is_some()
+    {
+        return false;
+    }
+    let points = scored(page, ctx.lang(), ctx.rules());
+    let (cats, _) = points.result();
+    if points.ruled || cats == ["other"] {
+        return false;
+    }
+    let top = points.lead.get(&cats[0]).copied().unwrap_or(0.0);
+    let runner = points.lead.iter().filter(|(c, _)| **c != cats[0] && c.as_str() != "other").map(|(_, p)| *p).fold(0.0, f64::max);
+    top < NARROW_BELOW || runner >= NARROW_CLOSE * top
 }
 
 /// A records page's categories, by its type.
@@ -1343,8 +1581,274 @@ mod tests {
         }
     }
 
-    /// The floor the held-out titles may not go below (measured on 22/11: see the status).
-    const FLOOR: f64 = 0.75;
+    /// The floor the held-out titles may not go below (measured on 22/11: see the status; 76–82 % with S1's table,
+    /// 92–98 % with carnet-categories').
+    const FLOOR: f64 = 0.88;
+
+    /// The categories' development set (contracts/carnet/category-dev-set.json, carnet-categories 22/11: written for
+    /// this work without the blind set): each page read as the blind set's measure reads it, a new subject page with its
+    /// title and its first line as its « En bref ». Per language: the first category right, the one meant among the
+    /// two, « Autres » on a real category, the traps (printed with --nocapture). The floors: the table's measure.
+    #[test]
+    fn the_dev_set_is_filed_where_a_person_looks() {
+        let file = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../contracts/carnet/category-dev-set.json");
+        let set: Value = serde_json::from_str(&std::fs::read_to_string(file).unwrap()).unwrap();
+        let (mut all_n, mut all_first, mut all_among) = (0, 0, 0);
+        let mut lines = Vec::new();
+        let mut low = Vec::new();
+        for (lang, cases) in set["cases"].as_object().unwrap() {
+            let dir = tempfile::tempdir().unwrap();
+            let config = config_in(&dir, lang);
+            let (mut n, mut first, mut among, mut real, mut autres, mut traps, mut traps_right) = (0, 0, 0, 0, 0, 0, 0);
+            let mut misses = Vec::new();
+            for case in cases.as_array().unwrap() {
+                let (title, line) = (case["title"].as_str().unwrap(), case["first_line"].as_str().unwrap_or(""));
+                let want = crate::notebook::strings(case.get("expected"));
+                let got = decided(&config, &page_in(lang, "subject", title, line, ""));
+                n += 1;
+                first += usize::from(got[0] == want[0]);
+                among += usize::from(got.contains(&want[0]));
+                if want[0] != "other" {
+                    real += 1;
+                    autres += usize::from(got == ["other"]);
+                }
+                if case["trap"].as_bool() == Some(true) {
+                    traps += 1;
+                    traps_right += usize::from(got.contains(&want[0]));
+                }
+                if got[0] != want[0] {
+                    misses.push(format!("{title} → {} (want {})", got.join("+"), want.join("+")));
+                }
+            }
+            let pct = |x: usize, of: usize| 100.0 * x as f64 / of.max(1) as f64;
+            lines.push(format!(
+                "DEV {lang}: n {n}, first {:.1} %, among the two {:.1} %, « Autres » on a real category {:.1} %, traps {traps_right}/{traps}; misses: {}",
+                pct(first, n), pct(among, n), pct(autres, real), misses.join(" · ")
+            ));
+            if pct(first, n) < 100.0 * DEV_FLOOR_EACH {
+                low.push(lang.clone());
+            }
+            (all_n, all_first, all_among) = (all_n + n, all_first + first, all_among + among);
+        }
+        let all = all_first as f64 / all_n as f64;
+        lines.push(format!("DEV all: n {all_n}, first {:.1} %, among the two {:.1} %", 100.0 * all, 100.0 * all_among as f64 / all_n as f64));
+        // what filing one page by its words costs (title and first line; the table and neighbours made once before)
+        let dir = tempfile::tempdir().unwrap();
+        let config = config_in(&dir, "fr");
+        let pages: Vec<Page> = set["cases"]["fr"].as_array().unwrap().iter()
+            .map(|c| page_in("fr", "subject", c["title"].as_str().unwrap(), c["first_line"].as_str().unwrap_or(""), "")).collect();
+        let _ = decided(&config, &pages[0]);
+        let ctx = Ctx::new(&config);
+        let started = std::time::Instant::now();
+        for _ in 0..20 {
+            for p in &pages {
+                std::hint::black_box(decide_in(&ctx, Part::Main, "Sujets/x.md", p, None));
+            }
+        }
+        lines.push(format!("DEV cost: {:.1} µs a page (title and first line)", started.elapsed().as_secs_f64() * 1e6 / (20 * pages.len()) as f64));
+        eprintln!("{}", lines.join("\n"));
+        assert!(all >= DEV_FLOOR && low.is_empty(), "{}", lines.join("\n"));
+    }
+
+    /// The development set's floors (first category right): all languages together, and each language (22/11: S1's
+    /// table 66.9 %, 61–77 %; carnet-categories' 95.3 %, 92.5–97.1 %; after its review 1: 94.7 %, 92.5–97.1 %; floors at
+    /// that measure, review 2 R11).
+    const DEV_FLOOR: f64 = 0.94;
+    const DEV_FLOOR_EACH: f64 = 0.92;
+
+    /// Words a person writes that the table did not know (« Autres » before, carnet-categories): everyday words of
+    /// each category in the five languages, their forms (plurals, verbs), German and Dutch compounds, phrases.
+    #[test]
+    fn everyday_words_and_their_forms() {
+        for (lang, title, want) in [
+            ("fr", "Tondeuse en panne", "home"),
+            ("fr", "Rembourser Sophie", "money"),
+            ("fr", "Procuration de papa", "papers"),
+            ("fr", "Note de frais du salon", "work"),
+            ("fr", "Billets de train", "trips"),
+            ("fr", "Obsèques de tante Rose", "people"),
+            ("en", "Hedge and lawn", "home"),
+            ("en", "Pocket money", "money"),
+            ("en", "Parking permit form", "papers"),
+            ("en", "Night shifts in March", "work"),
+            ("en", "Lift passes", "trips"),
+            ("en", "Nephew's christening", "people"),
+            ("de", "Dachboden entrümpeln", "home"),
+            ("de", "Taschengeld", "money"),
+            ("de", "Geburtsurkunde beantragen", "papers"),
+            ("de", "Praktikum im Sommer", "work"),
+            ("de", "Mietwagen in Portugal", "trips"),
+            ("de", "Beerdigung", "people"),
+            ("es", "Pintar la habitación", "home"),
+            ("es", "Pagar la deuda", "money"),
+            ("es", "Empadronamiento", "papers"),
+            ("es", "Turnos de noche", "work"),
+            ("es", "Billetes de tren", "trips"),
+            ("es", "Bautizo del sobrino", "people"),
+            ("nl", "Zolder en kelder", "home"),
+            ("nl", "Zakgeld", "money"),
+            ("nl", "Uittreksel aanvragen", "papers"),
+            ("nl", "Vacature teamleider", "work"),
+            ("nl", "Huurauto", "trips"),
+            ("nl", "Begrafenis", "people"),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let config = config_in(&dir, lang);
+            assert_eq!(decided(&config, &page_in(lang, "subject", title, "", ""))[0], want, "{lang} {title}");
+        }
+    }
+
+    /// « Maison » and « Argent » pull no more than their share (the blind set's misses, 22/11: 18 « Maison » and 12
+    /// « Argent » too many): a holiday rental is a trip, a ski pass too; an amount alone files nothing; a hobby stays
+    /// in « Autres » whatever its first line says; the title's head (« Dépenses de Noël », « Kredit für die Küche »)
+    /// decides between its words.
+    #[test]
+    fn maison_and_argent_pull_no_more_than_their_share() {
+        for (lang, title, line, want) in [
+            ("fr", "Gîte à Biarritz", "Maison près de la plage, du 3 au 17 août.", &["trips"][..]),
+            ("fr", "Dépenses de Noël", "Cadeaux et repas : 300 € au plus.", &["money", "people"]),
+            ("fr", "Cours de piano", "Le mardi, 25 € la séance.", &["other"]),
+            ("fr", "Assurance de la maison", "", &["papers", "home"]),
+            ("en", "Holiday cottage in Wales", "Three nights in May.", &["trips"]),
+            ("en", "Choir", "Rehearsal at the house of Ann, bring £5.", &["other"]),
+            ("de", "Ferienwohnung am See", "Zwei Wochen im Juli.", &["trips"]),
+            ("de", "Kredit für die Küche", "Raten bis August.", &["money", "home"]),
+            ("de", "Jubiläum von Opa", "Feier im Gasthaus.", &["people"]),
+            ("es", "Casa rural en Cantabria", "Cuatro noches en abril.", &["trips"]),
+            ("es", "Forfait de esquí", "Comprarlo antes de enero.", &["trips"]),
+            ("es", "Seguro de hogar", "", &["papers", "home"]),
+            ("nl", "Vakantiehuis in Frankrijk", "Twee weken in juli.", &["trips"]),
+            ("nl", "Gitaarles", "Elke week 20 euro.", &["other"]),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let config = config_in(&dir, lang);
+            assert_eq!(decided(&config, &page_in(lang, "subject", title, line, "")), want, "{lang} {title}");
+        }
+        // German « nicht » is no niece: a first line saying « not » files nothing
+        let dir = tempfile::tempdir().unwrap();
+        let config = config_in(&dir, "de");
+        assert_eq!(decided(&config, &page_in("de", "subject", "Ideen", "Noch nicht entschieden.", "")), ["other"]);
+    }
+
+    /// Review 1 of carnet-categories (R1, R2, R3, R7, R8): the weekend says little; a hobby's word never beats a real
+    /// category another word of the title gives; the false friends and too wide words the review found file nothing
+    /// wrong. Written from the review and the development set, never from a blind set.
+    #[test]
+    fn the_reviews_titles_go_where_a_person_looks() {
+        let mut wrong = Vec::new();
+        for (lang, title, line, want) in [
+            // R1: the weekend
+            ("fr", "Ménage ce week-end", "", "home"),
+            ("fr", "Chez mamie ce week-end", "", "people"),
+            ("en", "Garden this weekend", "", "home"),
+            ("en", "Kids this weekend", "", "people"),
+            ("nl", "Tuin dit weekend", "", "home"),
+            ("fr", "Week-end à Lisbonne", "", "trips"),
+            // R2: a hobby's word at the head
+            ("fr", "Photos du mariage de Julie", "", "people"),
+            ("fr", "Sortie au zoo avec les enfants", "", "people"),
+            ("es", "Libro de familia", "", "papers"),
+            ("de", "Schachteln für den Umzug", "", "home"),
+            ("fr", "Cours de piano", "Le mardi, 25 € la séance.", "other"),
+            // R8: Spanish feminines
+            ("es", "La inquilina del segundo", "", "home"),
+            ("es", "Jubilada desde enero", "", "money"),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let config = config_in(&dir, lang);
+            let got = decided(&config, &page_in(lang, "subject", title, line, ""));
+            if got[0] != want {
+                wrong.push(format!("{lang} {title} → {got:?} (want {want})"));
+            }
+        }
+        // R3, R7: never in the category the false friend points to
+        for (lang, title, line, never) in [
+            ("fr", "Stage de poney", "", "work"),
+            ("fr", "Emmener la voiture au garage", "", "home"),
+            ("fr", "Compte rendu IRM", "", "money"),
+            ("fr", "Compte rendu du conseil de classe", "", "work"),
+            ("fr", "Salon de l'auto", "", "home"),
+            ("fr", "Prélèvement sanguin", "", "money"),
+            ("fr", "Disneyland", "", "money"),
+            ("fr", "Colis livré chez la voisine", "", "other"),
+            ("es", "Gran Canaria en abril", "", "people"),
+            ("es", "Tener en cuenta", "", "money"),
+            ("es", "Planta baja", "", "papers"),
+            ("es", "Turno del pediatra", "", "work"),
+            ("es", "Chequeo médico", "", "money"),
+            ("nl", "Overleg met de buren", "", "work"),
+            ("nl", "Zorgdeclaratie", "", "work"),
+            ("nl", "Enkel verstuikt", "", "people"),
+            ("de", "Betriebskosten", "", "work"),
+            ("de", "Heiratsantrag", "", "papers"),
+            ("de", "Akten vernichten", "", "people"),
+            ("de", "Hochzeitsfotograf", "", "other"),
+            ("de", "Familie Zimmermann", "", "home"),
+            ("de", "Wohnung in Berlin", "", "trips"),
+            ("en", "Pea and mint soup", "", "money"),
+            ("en", "Chore rota", "", "work"),
+            ("en", "Meter reading for the energy supplier", "", "other"),
+            ("en", "Concrete for the patio", "", "trips"),
+            ("en", "Permission slip", "", "work"),
+            ("en", "Interpreter", "", "money"),
+            ("en", "Cookies for the bake sale", "", "home"),
+            ("fr", "Idées", "Un bon resto à Lyon.", "money"),
+            ("es", "Plantilla del informe", "", "home"),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let config = config_in(&dir, lang);
+            let (got, word) = decide(&config, Part::Main, "Sujets/x.md", &page_in(lang, "subject", title, line, ""), None);
+            if got.iter().any(|c| c == never) {
+                wrong.push(format!("{lang} {title} → {got:?} by {word:?} (never {never})"));
+            }
+        }
+        assert!(wrong.is_empty(), "{wrong:#?}");
+    }
+
+    /// Review 1 (R4): no word of the neighbours' health groups (search_words.rs, the five languages: the groups before
+    /// each language's birthday group) is filed by a neighbour.
+    #[test]
+    fn no_health_word_is_filed_by_a_neighbour() {
+        let file = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/notebook/search_words.rs");
+        let source = std::fs::read_to_string(file).unwrap();
+        for lang in ["FR", "EN", "DE", "ES", "NL"] {
+            let block = &source[source.find(&format!("const NEIGHBOURS_{lang}: &[&str] = &[")).unwrap()..];
+            let block = &block[..block.find("\n];").unwrap()];
+            let mut groups = 0;
+            for line in block.lines().skip(1) {
+                let Some(group) = line.trim().strip_prefix('"').and_then(|l| l.strip_suffix("\",")) else { continue };
+                if ["anniv", "birthday", "geburtstag", "cumple", "verjaardag"].iter().any(|b| group.contains(b)) {
+                    break;
+                }
+                groups += 1;
+                for word in group.split('|') {
+                    assert!(!NEIGHBOURS.contains_key(&fold(word)), "{lang}: {word} filed by a neighbour");
+                }
+            }
+            assert!(groups >= 5, "{lang}: {groups} health groups read");
+        }
+    }
+
+    /// The person's rule still wins over the table's new words (a word they filed elsewhere), and a hobby's word is
+    /// learnt like any other.
+    #[test]
+    fn a_rule_wins_over_the_new_words() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = config_in(&dir, "fr");
+        let p = page("subject", "Cours de piano", "Le mardi.", "");
+        assert_eq!(decide(&config, Part::Main, "Sujets/Cours de piano.md", &p, None), (vec!["other".to_string()], Some("piano".to_string())));
+        update_state(&config, |s| {
+            s.insert("category_rules".into(), json!([{"word": "piano", "categories": ["people"], "at": "2026-11-22"}]));
+        })
+        .unwrap();
+        assert_eq!(decided(&config, &p), ["people"]);
+        let q = page("subject", "Billets de train", "", "");
+        update_state(&config, |s| {
+            s.insert("category_rules".into(), json!([{"word": "train", "categories": ["work"], "at": "2026-11-22"}]));
+        })
+        .unwrap();
+        assert_eq!(decided(&config, &q), ["work"]);
+    }
 
     #[test]
     fn other_words_and_nothing() {
@@ -1353,7 +1857,8 @@ mod tests {
         let one = |title: &str, summary: &str| decided(&config, &page("subject", title, summary, ""));
         assert_eq!(one("Assurance auto", ""), ["papers"]);
         assert_eq!(one("Factures EDF", ""), ["papers", "money"]);
-        assert_eq!(one("Lettre au syndic", ""), ["home", "papers"]);
+        // a letter is a paper, the syndic what it is about (carnet-categories: the title's head first)
+        assert_eq!(one("Lettre au syndic", ""), ["papers", "home"]);
         assert_eq!(one("Abonnement salle de sport", ""), ["money"]);
         assert_eq!(one("Lectures de l’hiver", "Romans à lire"), ["other"]);
         assert_eq!(one("Jazz", ""), ["other"]);

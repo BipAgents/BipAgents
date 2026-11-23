@@ -14,7 +14,8 @@
 //!    its tokens and its estimated cost (`notebook pass` in the log, and `GET /v1/notebook/runs`).
 //! 4. The Carnet's categories (plan « Le sommaire », S2, categories_pass.rs): the pages' headers given their categories
 //!    without a model (the whole Carnet once per version of the table), then the pages no word placed, 20 a night at
-//!    most, to the same small model under the same cap.
+//!    most (up to 200, the words' narrow ones too, once after a new version), to the same small model under the same
+//!    cap.
 
 use std::sync::LazyLock;
 use std::time::Duration;
@@ -163,13 +164,25 @@ fn tidy_state(state: &Dict) -> Dict {
     }
 }
 
+/// `state` with this month's spending `spend`.
+pub(crate) fn set_spending(state: &mut Dict, spend: Dict) {
+    let mut tidy = tidy_state(state);
+    tidy.insert("spend".into(), Value::Object(spend));
+    state.insert("tidy".into(), Value::Object(tidy));
+}
+
 fn month() -> String {
     Local::now().format("%Y-%m").to_string()
 }
 
 /// This month's spending (`eur`, tokens), reset each month.
 pub fn spending(config: &Config) -> Dict {
-    let tidy = tidy_state(&super::read_state(config));
+    spending_in(&super::read_state(config))
+}
+
+/// This month's spending as `state` holds it.
+pub(crate) fn spending_in(state: &Dict) -> Dict {
+    let tidy = tidy_state(state);
     match tidy.get("spend") {
         Some(Value::Object(m)) if m.get("month").and_then(Value::as_str) == Some(month().as_str()) => m.clone(),
         _ => {
@@ -289,12 +302,25 @@ fn clip(text: &str, n: usize) -> String {
     }
 }
 
+/// One pass at a time in this bridge (review 2 of carnet-categories, R2): the night's and the app's « ranger
+/// maintenant » would send the same pages twice and each count only its own spending against the cap.
+static RUNNING: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// The right to run a pass now, or None while another one runs.
+pub(crate) fn try_running() -> Option<tokio::sync::MutexGuard<'static, ()>> {
+    RUNNING.try_lock().ok()
+}
+
 /// The pass, now. `forced`: run even if not due (the app's « ranger maintenant », the owner's tests). Returns the run's
-/// record (also kept in the state and logged).
+/// record (also kept in the state and logged); while another pass runs, a record that says so, nothing done.
 pub async fn run(config: &Config, hermes: &HermesClient, http: &reqwest::Client) -> Dict {
     let started = tk::now_iso_seconds();
     let mut record = Dict::new();
     record.insert("at".into(), json!(started));
+    let Some(_running) = try_running() else {
+        record.insert("skipped".into(), json!("another pass is running"));
+        return record;
+    };
     let result = run_inner(config, hermes, http, &mut record).await;
     if let Err(err) = result {
         record.insert("error".into(), json!(clip(&format!("{err:#}"), 300)));
@@ -304,6 +330,20 @@ pub async fn run(config: &Config, hermes: &HermesClient, http: &reqwest::Client)
     if let Err(err) = super::categories_pass::night(config, http, &mut record).await {
         record.insert("categories_error".into(), json!(clip(&format!("{err:#}"), 300)));
     }
+    save_run(config, &record);
+    let int = |k: &str| record.get(k).and_then(serde_json::Value::as_i64).unwrap_or(0);
+    let (seen, kept, tokens_in, tokens_out, applied) =
+        (int("turns_seen"), int("turns_kept"), int("tokens_in"), int("tokens_out"), int("applied"));
+    let eur = record.get("eur").and_then(serde_json::Value::as_f64).unwrap_or(0.0);
+    let called = record.get("model_called").map(py::truthy).unwrap_or(false);
+    let reason = tk::str_or_empty(record.get("reason"));
+    tracing::info!(reason = %reason, turns_seen = seen, turns_kept = kept, model_called = called, tokens_in = tokens_in,
+        tokens_out = tokens_out, eur = eur, applied = applied, "notebook pass");
+    record
+}
+
+/// A run recorded: kept in the state (the last runs), its tokens and cost added to the month's spending.
+pub(crate) fn save_run(config: &Config, record: &Dict) {
     let spend = spending(config);
     let _guard = super::lock();
     let saved = super::update_state(config, |s| {
@@ -334,19 +374,12 @@ pub async fn run(config: &Config, hermes: &HermesClient, http: &reqwest::Client)
         spend.insert("eur".into(), json!((eur * 1_000_000.0).round() / 1_000_000.0));
         tidy.insert("spend".into(), Value::Object(spend));
         s.insert("tidy".into(), Value::Object(tidy));
+        // the night's « Autres » calls are in this record: their own reckoning is done (categories_pass.rs `recover`)
+        s.shift_remove(super::categories_pass::KEY_SPENT);
     });
     if let Err(err) = saved {
         tracing::warn!(error = %err, "notebook pass not recorded");
     }
-    let int = |k: &str| record.get(k).and_then(serde_json::Value::as_i64).unwrap_or(0);
-    let (seen, kept, tokens_in, tokens_out, applied) =
-        (int("turns_seen"), int("turns_kept"), int("tokens_in"), int("tokens_out"), int("applied"));
-    let eur = record.get("eur").and_then(serde_json::Value::as_f64).unwrap_or(0.0);
-    let called = record.get("model_called").map(py::truthy).unwrap_or(false);
-    let reason = tk::str_or_empty(record.get("reason"));
-    tracing::info!(reason = %reason, turns_seen = seen, turns_kept = kept, model_called = called, tokens_in = tokens_in,
-        tokens_out = tokens_out, eur = eur, applied = applied, "notebook pass");
-    record
 }
 
 async fn run_inner(
@@ -748,6 +781,8 @@ pub fn apply(
 
 /// The scheduler: every ten minutes, the pass if it is due.
 pub async fn scheduler(state: AppState) {
+    // the categories' word tables made now, not under the Carnet's lock at the first write (review 2, R10)
+    let _ = tokio::task::spawn_blocking(super::categories::warm).await;
     // at once: the reminders removed tasks left on the phone (and duplicates), asked off once (free, no model)
     let config = state.config();
     match tokio::task::spawn_blocking(move || super::clean_reminders(&config)).await {

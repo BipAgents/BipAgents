@@ -733,6 +733,11 @@ struct Filing {
     n: usize,
     /// the bench's first category among the bridge's
     right: usize,
+    /// the bridge's first category is the bench's (Dates aside; carnet-categories, 22/11)
+    first: usize,
+    /// « Autres » alone where the bench has a real category
+    other_on_real: usize,
+    real: usize,
     /// the same categories (Dates aside)
     exact: usize,
     /// Dates where the bench has it (of those with an offset in the bench)
@@ -744,7 +749,8 @@ struct Filing {
 impl Filing {
     fn view(&self) -> Value {
         let pct = |x: usize, n: usize| if n == 0 { Value::Null } else { json!((1000.0 * x as f64 / n as f64).round() / 10.0) };
-        json!({"n": self.n, "right": pct(self.right, self.n), "exact": pct(self.exact, self.n),
+        json!({"n": self.n, "right": pct(self.right, self.n), "first": pct(self.first, self.n),
+               "other_on_real": pct(self.other_on_real, self.real), "exact": pct(self.exact, self.n),
                "dates_found": pct(self.dated_right, self.dated), "misses": self.misses})
     }
 }
@@ -771,6 +777,12 @@ fn filing(config: &Config, cat: &Catalogue, lang: &str, today: NaiveDate) -> (Fi
         let right = have.contains(&main);
         let plain = |l: &[String]| { let mut v: Vec<String> = l.iter().filter(|c| *c != "dates").cloned().collect(); v.sort(); v };
         f.right += usize::from(right);
+        let first = have.iter().find(|c| *c != "dates");
+        f.first += usize::from(first == Some(&main));
+        if main != "other" && main != "health" {
+            f.real += 1;
+            f.other_on_real += usize::from(first.map(String::as_str) == Some("other"));
+        }
         f.exact += usize::from(plain(&want) == plain(have));
         if item.get("offset").is_some() && want.contains(&"dates".to_string()) {
             f.dated += 1;

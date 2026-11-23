@@ -266,6 +266,41 @@ const HEALTH_WEAK: &[&str] = &[
     "tratamiento*", "cirug*", "dolor*", "salud",
 ];
 
+/// Health words that only keep a text from the night model (`held_from_model`, categories_pass.rs: the one-time sort
+/// sends ten times more pages than a night), never used to file (`is_health`) nor to hold back elsewhere
+/// (`touches_health`: the phone's offline copy, as the apps 1.0 read it, stays as it is): Dutch, which `HEALTH` lacks,
+/// and what the other languages miss (carnet-categories, review 2 B1). A word, `x*` a word's start, or a phrase.
+const HEALTH_HELD: &[&str] = &[
+    // nl
+    "arts", "artsen", "dokter*", "huisarts*", "tandarts*", "oogarts*", "kinderarts*", "bedrijfsarts*", "gezondheid*",
+    "ziek", "zieke", "ziekte*", "ziekenhuis*", "kliniek*", "apothe*", "medicijn*", "medicatie*", "zwanger*",
+    "inenting*", "griepprik*", "fysio*", "psycholoog*", "psychiater*", "astma", "bloeddruk*", "operatie*",
+    "ziekmeld*", "eerste hulp", "spoedeisende hulp", "huisartsenpost*", "verloskundige*", "opticien*", "pijn",
+    "pijnlijk*",
+    // de
+    "arzt*", "arzte*", "apotheke*", "krankmeld*", "krankenkasse*", "krankschreib*", "zahnspange*", "blutabnahme*",
+    "blutwerte*", "rontgen*", "vorsorgeuntersuchung*", "pflegedienst*", "pflegegrad*", "hebamme*",
+    // es
+    "medica", "medicas", "medicos", "medicina*", "farmacia*", "receta medica", "clinica*", "centro de salud",
+    "ginecolog*", "oftalmolog*", "fisio*", "psicolog*", "psiquiatr*", "analisis de sangre", "radiografia*",
+    "ecografia*", "baja medica", "consulta medica", "cita medica", "pastilla*", "urgencias",
+    // fr
+    "pharmacie*", "infirmi*", "radiographie*", "irm", "echographie*", "prise de sang", "analyse de sang",
+    "analyses de sang", "feuille de soins", "feuilles de soins", "dermato*", "cardiolog*", "rhumato*", "orl",
+    "sage femme", "aux urgences",
+    // en
+    "gp", "pharmacy", "pharmacies", "nurse", "nurses", "clinic", "clinics", "blood test", "blood tests", "x ray", "xray*", "mri",
+    "fit note",
+    "paracetamol", "ibuprofen", "antibiotic*", "dentist*",
+];
+
+/// The parts of a compound that say health wherever they stand in a word (German « Kinderarzt », « Augenklinik »,
+/// Dutch « kindertandarts »), kept from the night model only (`held_from_model`).
+const HEALTH_INSIDE: &[&str] = &[
+    "arzt", "klinik", "krankenhaus", "apothek", "medikament", "therap", "tandarts", "huisarts", "ziekenhuis", "kinderarts",
+    "oogarts",
+];
+
 /// Phrases that are never health, taken out before the words are looked for.
 const NOT_HEALTH: &[&str] = &[
     "traitement de texte", "traitement des donnees", "traitement de donnees", "traitement de l information",
@@ -328,6 +363,15 @@ pub fn is_health(text: &str) -> bool {
 /// strict `is_health`.
 pub fn touches_health(text: &str) -> bool {
     is_health(text) || holds(text, HEALTH_WEAK)
+}
+
+/// Whether a text is kept from the night model (categories_pass.rs): it touches health, or holds a word of
+/// `HEALTH_HELD` (the five languages) or a compound with a part of `HEALTH_INSIDE` (« Kinderarzt »).
+pub fn held_from_model(text: &str) -> bool {
+    touches_health(text) || holds(text, HEALTH_HELD) || {
+        let folded = fold(text);
+        folded.split(' ').any(|w| HEALTH_INSIDE.iter().any(|part| w.len() > part.len() && w.contains(part)))
+    }
 }
 
 /// A money fact (budget, salary, rent, loans…, or an amount).
@@ -480,8 +524,11 @@ pub fn phone(text: &str, lang: &str) -> Option<String> {
 /// nl: the words of the apps' icon table (HermesKit `NotebookIcon`, scripts/notebook-icons.py) copied and extended, the
 /// bridge now the reference. Each entry: its categories (the first the main one, a second one counting a little
 /// less) and its stems: `x` the start of a word, `x=` the whole word. The longest stem a word matches decides it.
+/// The last entry is « Autres » on purpose (hobbies, books, series, sport, learning: carnet-categories, 22/11): a page
+/// it decides stays in « Autres » whatever its first line says.
 /// Health words file nothing here: a line of the shared Carnet that looks like health stays in its page's category
-/// (Alex's decision 6, 21/11); Santé is the private part.
+/// (Alex's decision 6, 21/11); Santé is the private part. The papers that go with an illness do file their page in
+/// Papiers (« arrêt maladie », « feuille de soins », « sick note »: carnet-categories).
 pub const CATEGORY_WORDS: &[(&[&str], &[&str])] = &[
     // trips
     (&["trips"], &[
@@ -496,6 +543,29 @@ pub const CATEGORY_WORDS: &[(&[&str], &[&str])] = &[
         "kyoto", "kioto", "osaka", "lisbonne", "lisbon", "lissabon", "lisboa", "weekend", "hotel", "airbnb",
         "croisiere", "cruise", "kreuzfahrt", "crucero", "valise", "suitcase", "koffer", "maleta", "passagier",
         "billet d avion", "camping", "randonn", "hiking", "wander", "senderismo",
+        // carnet-categories (22/11)
+        "train=", "trains=", "tgv=", "sncf", "gare=", "billet", "billete", "ski=", "skis=", "skier", "skiing",
+        "skipass", "skipas", "skiurlaub", "skifahren", "esqui", "wintersport", "lift pass", "lift passes",
+        "forfait de ski", "forfaits de ski", "forfait ski", "forfait de esqui", "gite", "chambre d hote",
+        "chambres d hotes", "auberge", "location de vacances", "location de voiture", "voiture de location",
+        "road trip", "roadtrip", "escapade", "excursion", "plage", "creme solaire", "bagage", "itineraire", "escale",
+        "croisi", "week end", "rail=", "railcard", "eurostar", "ferry", "packing", "pack list", "luggage", "baggage",
+        "holiday cottage", "holiday let", "car hire", "hire car", "hire a car", "rental car", "city break", "getaway",
+        "staycation", "campsite", "caravan", "sightseeing", "itinerary", "jet lag", "beach", "abroad", "honeymoon",
+        "hostel", "zug=", "zugfahrt", "bahnfahrt", "bahnreise", "packliste", "gepack",
+        "ferienwohnung", "hotelzimmer", "ferienhaus", "mietwagen", "rundreise", "ausflug", "strand", "kurztrip",
+        "tren=", "trenes=",
+        "equipaje", "casa rural", "alquiler de coche", "coche de alquiler", "playa", "escapada", "ruta por", "hostal",
+        "albergue", "trein", "paklijst", "huurauto", "vakantiehuis", "vakantiewoning", "rondreis", "stedentrip",
+        "citytrip", "dagje uit", "bretagne", "normandie", "corse", "provence", "venise", "venice", "venedig",
+        "venecia", "venetie", "crete=", "kreta", "creta", "sicile", "sicily", "sizilien", "sicilia", "croatie",
+        "croatia", "kroatien", "croacia", "kroatie", "egypte", "egypt", "agypten", "egipto", "norvege", "norway",
+        "norwegen", "noruega", "noorwegen", "edimbourg", "edinburgh", "edimburgo", "porto=", "oporto", 
+        "cornwall",
+        "cornouailles", "algarve", "andalous", "andalusia", "andalucia", "tenerif", "majorque", "mallorca", "ibiza",
+        "canaries", "kanaren", "canarias", "toscane", "tuscany", "toskana", "toscana", "new york", 
+        "montagne", "mer=", "etranger", "mountain", "seaside", "berge=", "ausland", "montana",
+        "extranjero", "buitenland", "uitstapje",
     ]),
     // home: the house, works, furniture, garden, pets, energy, cleaning, cooking, the building
     (&["home"], &[
@@ -509,7 +579,7 @@ pub const CATEGORY_WORDS: &[(&[&str], &[&str])] = &[
         "obra=", "obras=", "verbouw", "renovatie", "klus", "aannemer", "loodgieter", "kitchen", "kuche", "keuken",
         "bathroom", "badezimmer", "bano=", "badkamer", "sdb=", "devis", "offerte", "bricol", "diy=", "outil", "tool=",
         "tools=", "heimwerk", "werkzeug", "bricolaje", "herramienta", "gereedschap", "meuble", "furniture", "mobel",
-        "mueble", "meubel", "ikea", "jardin", "garden", "garten", "plante", "plant", "pflanz", "planta", "potager",
+        "mueble", "meubel", "ikea", "jardin", "garden", "garten", "plante", "pflanz", "planta", "potager",
         "pelouse", "lawn", "rasen", "cesped", "tuin", "gazon", "arbre", "tree=", "baum", "arbol", "compost", "balcon",
         "terrasse", "chien", "dog=", "dogs=", "cat=", "cats=", "hund", "katze", "perro", "gato", "hond=", "honden=",
         "kat=", "katten", "veterin", "vet=", "dierenarts", "haustier", "mascota", "huisdier", "chiot", "puppy",
@@ -517,32 +587,87 @@ pub const CATEGORY_WORDS: &[(&[&str], &[&str])] = &[
         "laundry", "wasche", "colada", "energ", "electricite", "electric", "strom", "stroom", "chauffage", "heating",
         "heizung", "calefaccion", "verwarming", "chaudiere", "boiler", "caldera", "ketel", "solaire", "solar",
         "compteur", "thermostat", "climatis", "klima", "cuisine", "cuisiner", "recette", "recipe", "rezept", "receta",
-        "recept=", "recepten=", "cocina", "cocinar", "kochen", "koken", "cook", "repas", "meal", "maaltijd",
+        "recept=", "recepten=", "cocina", "cocinar", "kochen", "koken", "repas", "meal", "maaltijd",
         "patisser", "baking", "backen", "hornear", "syndic", "copro", "hausverwaltung", "administrador de fincas",
         "comunidad de vecinos", "vve=", "poubelle", "bin=", "basura", "vuilnis", "cle=", "cles=", "key=", "keys=",
         "schlussel", "llave", "sleutel",
+        // carnet-categories (22/11)
+        "tondre", "tondeuse", "haie=", "haies=", "taille haie", "jardinage", "arrosage", "arroser", "robinet", "evier",
+        "fuite=", "fuites=", "radiateur", "chauffe eau", "repeindre", "peindre", "papier peint", "tapisserie",
+        "parquet", "moquette", "cave=", "caves=", "grenier", "cartons=", "desencombr", "vide grenier",
+        "encombrants", "dechetterie", "electromenager", "lave linge", "lave vaisselle", "machine a laver", "frigo",
+        "refrigerateur", "congelateur", "aspirateur", "canape", "matelas", "literie", "rideau", "volets=", "fenetre",
+        "vitres=", "serrure", "serrurier", "menuisier", "charpentier", "couvreur", "gouttiere", "facade", "ravalement",
+        "bailleur", "locataire", "bail=", "etat des lieux", "pompe a chaleur", "litiere", "veto=", "repassage",
+        "perceuse", "etagere", "plumber", "plumbing", "leak=", "leaks=", "leaking", "sink=", "tap=", "taps=",
+        "radiator", "mow=", "mowing", "mower", "hedge", "weeding", "paint=", "wallpaper", "carpet", "flooring",
+        "loft=", "attic", "cellar", "basement", "shed=", "declutter", "clear out", "dishwasher", "washing machine",
+        "fridge", "freezer", "hoover", "vacuum", "sofa", "mattress", "curtain", "locksmith", "roofer", "gutter",
+        "carpenter", "joiner", "electrician", "builder", "tenant", "tenancy", "letting agent", "estate agent",
+        "recycling", "spring clean", "pet=", "pets=", "hamster", "heat pump", "insulation", "spare room", "klempner",
+        "wasserhahn", "abfluss", "heizkorper", "mahen", "hecke", "unkraut", "streichen", "tapete", "tapezier",
+        "keller", "dachboden", "ausmisten", "entrumpel", "sperrmull", "wertstoff", "waschmaschine", "spulmaschine",
+        "geschirrspul", "kuhlschrank", "staubsaug", "matratze", "vorhang", "fenster", "schlusseldienst", "dachdecker",
+        "tischler", "schreiner", "elektriker", "mieter", "nebenkosten", "mietkaution", "hausmeister", "eigentumer",
+        "fruhjahrsputz", "tierarzt", "photovoltaik", "warmepumpe", "dammung", "zimmer=", "kinderzimmer",
+        "schlafzimmer", "wohnzimmer", "gastezimmer", "fontaner", "fuga=", "grifo",
+        "fregadero", "radiador", "segar", "seto=", "pintar", "pintor", "habitacion", "trastero", "desvan", "garaje",
+        "sotano", "lavadora", "lavavajillas", "nevera", "frigorifico", "aspiradora", "colchon", "cortina", "ventana",
+        "cerrajer", "carpinter", "electricista", "albanil", "casero=", "inquilin", "junta de vecinos", 
+        "lekkage", "lekkend", "lek=", "kraan", "gootsteen", "cv ketel", "maaien", "heg=", "heggen", "schilder",
+        "verf=", "zolder", "kelder",
+        "schuur", "milieustraat", "afval", "wasmachine", "vaatwasser", "koelkast", "stofzuig", "matras", "gordijn",
+        "slotenmaker", "timmerman", "elektricien", "borg=", "bewoner", "zonnepan", "warmtepomp", "isolatie",
+        "woonkamer", "slaapkamer", "plant=", "plants=", "planta=", "plantas=", "cook=", "cooking", "cookery",
+        "logement", "salle de bain", "linge=", "ascenseur", "animaux=", "animal=", "bedroom", "living room",
+        "decorating", "chores", "bins=", "gas=", "haushalt", "mull=", "hausordnung", "dormitorio", "electrodomestic",
+        "fianza",
     ]),
     // money
     (&["money"], &[
         "budget", "depense", "epargne", "saving", "expense", "ausgab", "sparen", "gasto", "ahorro", "presupuesto",
         "uitgave", "spaar", "financ", "finanz", "argent", "money", "geld", "dinero", "banque", "bank", "compte=",
         "comptes=", "credit", "pret=", "emprunt", "loan", "mortgage", "hypothe", "kredit", "banco", "prestamo",
-        "hipoteca", "hypotheek", "lening", "livret", "retraite", "pension", "pensioen", "rente=", "jubil", "invest",
+        "hipoteca", "hypotheek", "lening", "livret", "retraite", "pension", "pensioen", "rente=", "invest",
         "belegg", "bourse", "stock=", "aktie", "inversion", "crypto", "abonnement", "abonn", "subscription", "abo=",
         "suscrip", "forfait", "achat", "acheter", "buy=", "kauf", "einkauf", "compra", "comprar", "aankoop", "kopen",
         "courses=", "shopping", "boodschappen", "commande", "bestell", "pedido", "bestelling", "soldes", "salaire",
         "salary", "gehalt", "sueldo", "salario", "salaris", "paie", "payslip", "lohn", "nomina", "loonstrook", "payer",
-        "paiement", "payment", "zahlung", "pago", "betaling", "remboursement", "refund", "erstattung", "reembolso",
+        "paiement", "payment", "zahlung", "pago", "betaling", "refund", "erstattung", "reembolso",
         "terugbetaling",
+        // carnet-categories (22/11)
+        "rembours", "dette", "dettes=", "preter=", "economies", "economiser", "mettre de cote", "virement", "cheque=",
+        "cheques=",
+        "carte bancaire", "carte bleue", "decouvert=", "agios", "frais bancaires", "releve de compte", "taux=",
+        "assurance vie", "tirelire", "argent de poche", "prime=", "allocation", "mensualit", "echeancier",
+        "prelevement", "netflix", "spotify", "disney=", "deezer", "black friday", "promo=", "promos=", "vinted",
+        "leboncoin", "revendre", "spending", "spend=", "owe=", "owed", "debt", "lend=", "lent=", "pocket money",
+        "allowance", "overdraft", "direct debit", "standing order", "interest rate", "remortgag", "membership",
+        "purchase", "price=", "prices=", "cost=", "costs=", "afford", "payday", "wage=", "wages=", "cashback",
+        "voucher", "haushaltsbuch", "haushaltskasse", "sparplan", "sparkont", "sparbuch", "sparkass", "erspar",
+        "konto", "tagesgeld", "festgeld", "zinsen", "dispo=", "uberweis", "lastschrift", "dauerauftrag", "schulden",
+        "zuruckzahl", "taschengeld", "kindergeld", "elterngeld", "weihnachtsgeld", "urlaubsgeld", "handyvertrag",
+        "handytarif", "mobilfunk", "cuenta de ahorro", "cuenta corriente", "cuenta bancaria", "ahorrar", "deuda",
+        "paga=", "pagar=", "tarifa",
+        "transferencia", "bizum", "rebajas", "zakgeld", "rekening", "schuld=", "schulden=", "terugbetal",
+        "terugstort", "overmaken", "betalen", "betaal", "oversluit", "toeslag", "uitverkoop", "korting",
+        "kinderbijslag", "huishoudgeld", "jubilacion", "jubilad", "banquier", "pel=", "lep=", "bitcoin",
+        "impaye", "rib=", "stocks=", "shares=", "paypal", "einnahmen", "kosten=", "etf=", "ingresos", "inkomsten",
+        "aandelen", "loon=",
     ]),
     // taxes: money, and the papers that go with them
     (&["money", "papers"], &[
         "impot", "taxe", "tax=", "taxes=", "fiscal", "steuer", "finanzamt", "impuesto", "hacienda", "belasting",
         "aangifte", "declaration d impot",
+        // carnet-categories (22/11)
+        "taxe fonciere", "taxe d habitation", "foyer fiscal", "council tax", "grundsteuer", "ibi=", "renta=",
+        "declaracion de la renta",
     ]),
     // bills: papers (« Factures »), and money
     (&["papers", "money"], &[
         "factur", "invoice", "bill=", "bills=", "rechnung", "recibo", "quittance", "factuur", "facturen", "nota=",
+        // carnet-categories (22/11)
+        "utility bill", "energierekening", "stromrechnung", "mahnung",
     ]),
     // papers: admin, contracts, insurance, guarantees, letters
     (&["papers"], &[
@@ -557,6 +682,25 @@ pub const CATEGORY_WORDS: &[(&[&str], &[&str])] = &[
         "mutuelle", "insurance", "insur", "versicher", "seguro", "verzeker", "garantie", "warranty", "garantia",
         "lettre", "letter", "carta=", "courrier", "permis", "licence", "license", "fuhrerschein", "rijbewijs",
         "carnet de conducir",
+        // carnet-categories (22/11)
+        "carte grise", "carte d identite", "cni=", "titre de sejour", "procuration", "arret maladie",
+        "arret de travail", "feuille de soins", "feuilles de soins", "carte vitale", "ameli=", "cpam=", "resili",
+        "preavis", "acte de naissance", "acte de deces", "livret de famille", "libro de familia", "livret scolaire",
+        "etat civil", "justificatif", "justificatif de domicile", "inscription", "commissariat", "amende",
+        "controle technique", "sav=", "ticket de caisse", "form=", "forms=", "admission", "enrol",
+        "registration", "register=", "solicitor", "power of attorney", "probate", "dvla", "parking permit",
+        "parking fine", "policy=", "policies=", "cancel=", "cancellation", "guarantee", "receipt", "sick note",
+        "fit note", "anmeldung",
+        "ummeldung", "abmeldung", "einwohnermeldeamt", "burgeramt", "standesamt", "urkunde", "unterlagen", "antrag=",
+        "antrage=",
+        "antrage=", "krankmeld", "krankschreib", "gelber schein", "kundig", "police=", "zulassung", "tuv=",
+        "hauptuntersuchung", "vollmacht", "kassenbon", "quittung", "cita previa", "comisaria", "ayuntamiento",
+        "empadron", "padron", "registro civil", "partida de nacimiento", "matricula", "solicitud", "instancia",
+        "baja medica", "baja laboral", "darse de baja", "parte de baja", "poliza", "multa", "itv=", "dni=", "pasfoto",
+        "apk=", "kenteken", "polis=",
+        "ziekmeld", "uittreksel", "geboorteakte", "akte=", "aanvraag", "aanvragen", "inschrijv", "opzeg", "bonnetje",
+        "kassabon", "boete", "huissier", "naturalisation", "deed=", "deeds=", "id=", "seguridad social",
+        "permiso", "licencia", "digid",
     ]),
     // work
     (&["work"], &[
@@ -570,6 +714,28 @@ pub const CATEGORY_WORDS: &[(&[&str], &[&str])] = &[
         "accounting", "buchhalt", "contabil", "boekhoud", "entretien annuel", "annual review", "jahresgesprach",
         "entrevista anual", "jaargesprek", "formation", "schulung", "formacion", "opleiding", "poste=", "stelle=",
         "puesto=",
+        // carnet-categories (22/11)
+        "embauche", "convention de stage", "stage de 3e", "stage de fin d etudes", "rapport de stage", "stagiaire",
+        "alternance", "lettre de motivation", "pot de depart",
+        "notes de frais", "note de frais", "frais de deplacement", "seminaire", "rapport=", "visio=",
+        "rtt=", "conges payes", "fiche de poste", "demission", "licenciement", "rupture conventionnelle",
+        "france travail", "pole emploi", "auto entrepreneur", "micro entreprise", "linkedin", "internship", "intern=",
+        "apprenticeship", "cover letter", "cover letters", "pay rise", "payrise", "appraisal", "performance review",
+        "quarterly", "shift=", "shifts=", "night shift", "on call", "overtime", "timesheet", "expenses claim",
+        "expense claim", "leaving drinks", "leaving do", "leaving party", "conference", "trade fair", "offsite",
+        "away day", "onboarding", "deadline", "hr=", "payroll", "redundancy", "resign", "headhunter", "management",
+        "working from home", "work from home", "wfh=", "vorstellungsgesprach", "praktikum", "ausbildung", "quartal",
+        "reisekosten", "spesen", "dienstreise", "geschaftsreise", "schicht", "dienstplan", "nachtdienst",
+        "bereitschaft", "uberstunden", "gehaltserhoh", "beforderung", "arbeitgeber", "arbeitnehmer", "chef=", "chefin",
+        "weiterbildung", "fortbildung", "betriebsrat", "auftrag", "entrevista", "curriculum", "practicas", "becari",
+        "informe", "trimestral", "turno de noche", "turnos de noche", "cambio de turno", "guardia", "horas extra",
+        "subida de sueldo",
+        "aumento de sueldo", "jefa=", "jefe=", "congreso", "autonom", "vacature", "stagiair", "kwartaal", "rooster",
+        "overuren", "salarisverhoging", "loonsverhoging", "declaratie reiskosten", "reiskosten", "werkgever",
+        "werknemer",
+        "werkplek", "werkoverleg", "leidinggevende", "functioneringsgesprek", "beoordelingsgesprek", "mutation",
+        "mission=", "astreinte", "heures sup", "heures supplementaires", "commute", "staff=", "personalgesprach",
+        "mitarbeitergesprach", "teletrabajo", "paro=", "despido", "ontslag", "werkloos", 
     ]),
     // people: the person's own people, their dates, gifts and parties
     (&["people"], &[
@@ -577,7 +743,7 @@ pub const CATEGORY_WORDS: &[(&[&str], &[&str])] = &[
         "pere=", "mutter", "vater", "madre", "padre", "moeder", "vader", "mamie", "papi=", "grandma", "grandpa",
         "oma=", "opa=", "abuel", "grootouder", "cousin", "tante", "oncle", "uncle", "aunt", "frere", "soeur",
         "brother", "sister", "bruder", "schwester", "hermano", "hermana", "broer", "zus=", "zussen", "oom=", "neef",
-        "nicht=", "ami=", "amis=", "amie=", "amies=", "copain", "copine", "pote=", "potes=", "friend", "freund",
+        "ami=", "amis=", "amie=", "amies=", "copain", "copine", "pote=", "potes=", "friend", "freund",
         "amigo", "amiga", "vriend", "voisin", "neighbo", "nachbar", "vecino", "buren", "buurman", "buurvrouw",
         "enfant", "child", "kid=", "kids=", "kinder", "kinderen", "nounou", "creche", "kita", "babysit", "garderie",
         "nanny", "oppas", "hijo", "hija", "fils=", "fille=", "bebe", "baby", "naissance", "birth", "geburt",
@@ -587,6 +753,61 @@ pub const CATEGORY_WORDS: &[(&[&str], &[&str])] = &[
         "soiree", "feier", "fiesta", "feest", "celebr", "apero", "barbecue", "bbq=", "invite", "guest", "gast=",
         "gaste=", "invitad", "noel", "christmas", "weihnacht", "navidad", "kerst", "reveillon", "ehpad", "elderly",
         "aidant", "caregiver", "residencia", "mantelzorg",
+        // carnet-categories (22/11)
+        "mum=", "mums=", "mummy", "papy", "grand mere", "grand pere", "grands parents", "petit fils", "petite fille",
+        "petits enfants", "tonton", "tata=", "neveu", "niece", "parrain", "marraine", "filleul", "beau frere",
+        "belle soeur", "belle mere", "beau pere", "conjoint", "mari=", "obseques", "enterrement", "condoleances",
+        "bapteme", "communion", "maison de retraite", "arbre genealogique", "repas de famille", "ecole=", "maternelle",
+        "cantine", "kermesse", "sortie scolaire", "fournitures scolaires", "maitresse", "nan=", "nana=",
+        "grandad", "granddad", "grandmother", "grandfather", "grandparent", "grandchild", "grandson", "granddaughter",
+        "nephew", "godson", "goddaughter", "godparent", "godmother", "godfather", "in laws", "husband", "wife=",
+        "childminder", "school run", "teacher", "funeral", "christening", "baptism", "anniversary", "sleepover",
+        "playdate", "care home", "carer", "omas=", "opas=", "grosseltern", "enkelin", "enkelkind", "neffe",
+        "nichte=", "patenkind", "schwager", "schwagerin", "schwieger", "ehemann", "ehefrau", "kindergarten",
+        "tagesmutter", "beerdigung", "trauerfeier", "taufe", "konfirmation", "kommunion", "trauzeug", "jubilaum",
+        "pflegeheim", "altenheim", "seniorenheim", "einschulung", "klassenfahrt", "grillabend", "grillparty",
+        "grillen", "nieto", "nieta", "sobrino", "sobrina", "primo=", "primos=", "tio=", "tia=", "tios=", "padrino",
+        "madrina", "ahijad", "suegro", "suegra", "cunado", "cunada", "marido", "esposa", "esposo", "novio", "novia",
+        "canguro", "ninera", "guarderia", "colegio", "bautizo", "entierro", "velatorio", "kleinkind", "kleinzoon",
+        "kleindochter", "nichtje", "peetoom", "peettante", "schoonmoeder", "schoonvader", "schoonouder", "zwager",
+        "schoonzus", "echtgeno", "kinderopvang", "ouderavond", "oudergesprek", "begrafenis", "crematie", "uitvaart",
+        "doop=", "getuige", "verzorgingshuis", "verpleeghuis", "bejaardentehuis", "logeer", "deces", "deuil",
+        "garde d enfants", "garde alternee", "rentree scolaire", "playgroup", "daughter", "grandkid", "toddler",
+        "teenager", "fiance", "relatives=", "bereavement", "sohn", "tochter", "onkel", "lehrer", "trauer", "profesor",
+        "maestr", "zoon=", "dochter", "juf=",
+    ]),
+    // carnet-categories (22/11): what a person keeps in « Autres » — hobbies, books, films and series, music, sport,
+    // learning — so that a word of its first line does not pull it elsewhere (the page stays in « Autres »)
+    (&["other"], &[
+        "livres=", "lecture=", "lectures=", "roman=", "romans=", "polar", "bd=", "film=", "films=",
+        "series=", "cinema", "theatre", "concert", "musique", "guitare", "piano", "violon", "chorale", "chant=",
+        "danse", "dessin", "photo=", "photos=", "tricot", "crochet", "couture", "broderie", "jeux=", "puzzle",
+        "echecs", "sport=", "sports=", "foot=", "football", "tennis", "rugby", "natation", "piscine", "yoga",
+        "pilates", "course a pied", "running", "marathon", "velo=", "peche=", "apprendre", "espagnol", "anglais",
+        "allemand", "duolingo", "podcast", "sortie=", "sorties=", "expo=", "exposition", "musee", "escape game",
+        "loisir", "books=", "reading list", "novel=", "novels=", "thriller", "movie", "shows=", "tv=", "music",
+        "guitar",
+        "violin", "choir", "singing", "dancing", "drawing", "photography", "knitting", "sewing", "embroidery", "chess",
+        "board game", "gaming", "golf=", "cricket", "swimming", "parkrun", "cycling", "fishing", "learning", "spanish",
+        "french=", "german=", "exhibition", "museum", "gig=", "gigs=", "hobby", "hobbies", "buch=", "bucher=",
+        "lesen=", "krimi", "filme=", "serie=", "serien=", "kino", "musik", "gitarre", "klavier", "geige", "chor=",
+        "chorprobe", "singen", "tanzen", "zeichnen", "fotograf=", "fotografin", "stricken", "hakeln", "nahen=",
+        "schach=", "schachclub", "schachverein", "spiele=",
+        "fussball", "schwimmen", "laufen=", "radfahren", "angeln", "lernen", "spanisch", "englisch", "sprachkurs",
+        "ausstellung", "konzert", "theater", "libro=", "libros=", "leer=", "novela", "pelicula", "cine=", "musica",
+        "guitarra", "coro=", "ensayo", "cantar", "baile", "dibujo", "fotografia", "ganchillo", "costura", "ajedrez",
+        "juegos", "futbol", "tenis=", "padel", "natacion", "correr", "maraton", "bici=", "pesca=", "aprender",
+        "ingles=", "frances=", "aleman=", "exposicion", "museo", "concierto", "teatro", "aficion", "boek=", "lezen=",
+        "bioscoop", "muziek", "gitaar", "viool", "koor=", "koorrepetitie", "zingen", "dansen", "fotografie",
+        "breien", "haken=", "naaien", "puzzel", "schaken", "spelletjes", "voetbal", "hockey", "zwemmen", "hardlopen",
+        "fietsen", "vissen", "leren=", "spaans", "engels", "taalcursus", "tentoonstelling", "uitje=", "uitjes=",
+        "benevol", "volunteer", "ehrenamt", "voluntari", "vrijwillig", "club=", "jeu video", "jeux video",
+    ]),
+    // carnet-categories, review 1 (22/11): phrases that file nothing, taken out before their words are read (« compte
+    // rendu » is no account, « tener en cuenta » no bank, « planta baja » no paper)
+    (&[], &[
+        "compte rendu", "comptes rendus", "prelevement sanguin", "tener en cuenta", "darse cuenta", "planta baja",
+        "temporada baja", "rekening houden", "in overleg", "im zuge", "last resort", "meter reading", "chore rota",
     ]),
 ];
 
@@ -634,6 +855,28 @@ mod tests {
                      "Under treatment for asthma", "Ist schwanger", "Rendez-vous chez le dentiste de Zoé"] {
             assert!(is_health(fact), "{fact}");
         }
+    }
+
+    /// Review 2 of carnet-categories (B1): what touches health is kept from the night model in the five languages,
+    /// compounds included; filing (`is_health`) and what the phone's offline copy holds back (`touches_health`) do not
+    /// change.
+    #[test]
+    fn health_is_held_back_in_five_languages() {
+        for text in [
+            "Afspraak huisarts", "Gezondheid", "Naar de tandarts", "Ziekenhuis Utrecht", "Medicijnen ophalen bij de apotheek",
+            "Griepprik in oktober", "Kindertandarts van Daan", "Kinderarzt für Leo", "Hausarzt anrufen", "Termin beim Augenarzt",
+            "Apotheke", "Blutabnahme am Montag", "Augenklinik", "Cita médica", "Farmacia de guardia", "Análisis de sangre",
+            "Fisioterapeuta", "Médica de cabecera", "Prise de sang", "Pharmacie", "Radiographie du genou",
+            "Infirmière à domicile", "GP appointment", "Pharmacy", "Blood test on Monday", "Antibiotics",
+        ] {
+            assert!(held_from_model(text), "{text}");
+        }
+        for text in ["Recept stamppot boerenkool", "Gastronomie", "Operations team", "Nursery place for Ollie", "Rezept Kartoffelsalat"] {
+            assert!(!held_from_model(text), "{text}");
+        }
+        // filing and the offline copy read their own words: unchanged
+        assert!(!is_health("Afspraak huisarts") && !is_health("Kinderarzt für Leo") && !is_health("Pharmacie"));
+        assert!(!touches_health("Afspraak huisarts") && !touches_health("Pharmacie"));
     }
 
     /// Alex's Carnet, 10/11: things that are not health, filed in Santé by one word each.
