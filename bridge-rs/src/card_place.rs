@@ -729,7 +729,8 @@ pub async fn answered_unplaced(state: &AppState, agent: &AgentConfig, run_id: &s
 /// The card `place` answered with `choice`: kept until the agent knows it (`settle`). A card never placed was asked
 /// in no conversation: nobody to tell.
 fn decide(state: &AppState, run_id: &str, place: &Place, choice: &str) {
-    if place.agent.is_empty() {
+    if place.agent.is_empty() || run_id.starts_with(crate::plans::offers::RUN_PREFIX) {
+        // an offer's card never resumes its agent: its « Oui » does what it must itself (plans/offers.rs; review R1)
         return;
     }
     let followed = place.run.as_deref().and_then(|r| state.hub.subscription(&place.agent, r)).map(|sub| {

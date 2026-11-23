@@ -2486,7 +2486,11 @@ async fn mcp_call(
         // the agent when it is answered (`taken`): its « Oui » is done by the bridge, or starts its one turn
         let asked = persons_own_call(&state, &agent.name, &name, turn_run.as_deref());
         let cards_before = crate::card_place::waiting(&state, &agent.name);
-        let called = crate::plans::offers::call(&state, &agent, &arguments, asked, turn_run.as_deref()).await;
+        // made in a turn that reads a message from outside (an e-mail's or a link's routine): said on its card
+        let session = turn_run.as_deref().and_then(|r| state.hub.subscription(&agent.name, r)).and_then(|s| s.session_id());
+        let outside = session.is_some_and(|s| crate::triggers::outside_session(&state.config(), &agent.name, &s));
+        let called =
+            crate::plans::offers::call(&state, &agent, &arguments, asked, turn_run.as_deref(), outside).await;
         let mut result = called.result;
         if let Some((line, id)) = called.card {
             let run_id = format!("{}{id}", crate::plans::offers::RUN_PREFIX);

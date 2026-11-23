@@ -590,7 +590,8 @@ fn marked(config: &Config, agent: &str, summary: &str) -> String {
 /// (its `Card.always`: a Google Calendar card offers it for its primary calendar only).
 pub fn with_always(config: &Config, mut item: Dict) -> Dict {
     let run = item.get("run_id").and_then(Value::as_str).unwrap_or("");
-    if run.starts_with(crate::person_ok::RUN_PREFIX) {
+    // an offer's card: answered each time, never « Toujours » (plans/offers.rs; review of offers, R2)
+    if run.starts_with(crate::person_ok::RUN_PREFIX) || run.starts_with(crate::plans::offers::RUN_PREFIX) {
         return item;
     }
     // a held Hermes approval (held_approvals.rs) as Hermes' own would be; the bridge's cards by their kind

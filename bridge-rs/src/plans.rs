@@ -307,6 +307,8 @@ pub struct Texts {
     pub weekends: &'static str,
     pub around: &'static str,
     pub weeks: (&'static str, &'static str),
+    /// Before a plan's offers (§7.2, validated): its « i » says each one whole.
+    pub offers: &'static str,
 }
 
 pub static TEXTS: [Texts; 4] = [
@@ -335,6 +337,7 @@ pub static TEXTS: [Texts; 4] = [
         weekends: "Le week-end",
         around: "vers",
         weeks: ("semaine", "semaines"),
+        offers: "Je peux aussi :",
     },
     Texts {
         lang: "en",
@@ -361,6 +364,7 @@ pub static TEXTS: [Texts; 4] = [
         weekends: "Weekends",
         around: "around",
         weeks: ("week", "weeks"),
+        offers: "I can also:",
     },
     Texts {
         lang: "de",
@@ -387,6 +391,7 @@ pub static TEXTS: [Texts; 4] = [
         weekends: "Am Wochenende",
         around: "gegen",
         weeks: ("Woche", "Wochen"),
+        offers: "Ich kann auch:",
     },
     Texts {
         lang: "es",
@@ -413,6 +418,7 @@ pub static TEXTS: [Texts; 4] = [
         weekends: "Los fines de semana",
         around: "hacia",
         weeks: ("semana", "semanas"),
+        offers: "También puedo:",
     },
 ];
 
@@ -1046,7 +1052,7 @@ fn moment_views(config: &Config, plan: &Plan, lang: &str) -> Vec<Value> {
                 Some(_) => before_text(lang, m.at, zone_of(&m.zone), person, &plan.city),
                 None => when_text(lang, m.at, zone_of(&m.zone), person, &plan.city),
             });
-            let offer = m.offer.as_ref().map(|o| json!({"kind": o.get("kind"), "label": o.get("label")}));
+            let offer = m.offer.as_ref().map(|o| json!({"kind": o.get("kind"), "label": o.get("label"), "prompt": o.get("prompt")}));
             json!({"id": m.id, "at": m.at, "zone": m.zone, "when_text": when, "what": m.what, "say": m.say,
                    "urgent": m.urgent, "route": m.route, "pending": m.leg.is_some(), "offer": offer})
         })
@@ -1065,12 +1071,18 @@ pub fn card_item(config: &Config, plan: &Plan) -> Dict {
         .iter()
         .map(|m| {
             let s = |k: &str| m[k].as_str().unwrap_or("").to_string();
-            // a moment that offers: its question (its card comes at its time)
-            let said = m["offer"]["label"].as_str().map(str::to_string).unwrap_or_else(|| s("say"));
+            // a moment that offers: its question and what will be asked (its card comes at its time: review, remark)
+            let said = match (m["offer"]["label"].as_str(), m["offer"]["prompt"].as_str()) {
+                (Some(label), Some(prompt)) => format!("{label} — {prompt}"),
+                (Some(label), None) => label.to_string(),
+                _ => s("say"),
+            };
             format!("{} — {} : {said}", s("when_text"), s("what"))
         })
         .collect();
     detail.extend(watch.clone());
+    // its offers shown on its card, each whole (design §3.1; review, remark)
+    detail.extend(offers::pill_lines(config, &plan.id, lang));
     detail.push(t.under_i.to_string());
     if plan.first {
         detail.push(t.first_card.to_string());
@@ -1698,8 +1710,10 @@ fn watch_trigger(config: &Config, plan: &Plan) -> Option<String> {
     }
 }
 
-/// A plan gone: its routines and its trigger with it.
+/// A plan gone, however (its event cancelled, its end, « Initiative » off): its routines, its trigger and its offers
+/// still waiting with it (review R5), counted for nothing.
 fn remove(config: &Config, plan: &Plan) {
+    offers::withdraw_plan(config, &plan.id);
     for id in &plan.routines {
         crate::routines::delete(config, id);
     }
