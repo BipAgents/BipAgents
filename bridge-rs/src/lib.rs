@@ -242,6 +242,7 @@ pub mod browsers;
 pub mod caldav;
 pub mod connections;
 pub mod drives;
+pub mod drives_write;
 pub mod obsidian;
 pub mod obsidian_ob;
 pub mod google_calendar;

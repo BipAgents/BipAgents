@@ -97,6 +97,7 @@ pub const TABLE: &[Rule] = &[
     rule("task_start", false, true, "propose_task (≤ 0,50 €)", "a background task within a small budget of the month's credit; paused from its line"),
     rule("service_write", false, false, "Hermes: MCP tool that creates or changes, on a service the person connected", "writes in the person's own service (a Notion page, a note): nothing sent to anyone, nothing deleted"),
     rule("files_write", false, false, "Hermes: bipagents_files (not delete)", "files in the agent's own space"),
+    rule("drive_write", false, true, "bip-ok- drive_write (drives_write.rs)", "Alex 23/11: a NEW file in a folder of the person's online documents they let this agent write in; nothing replaced, nothing deleted; undone by putting that new file in the service's bin"),
     // -- critical: always asked
     rule("payment", true, false, "Hermes: card_pay, Link, hand-over elicitations", "spends money or uses a payment card"),
     rule("secret", true, false, "bip-secret-", "a password, key or code typed for the agent"),
@@ -105,6 +106,7 @@ pub const TABLE: &[Rule] = &[
     rule("mail_trash", true, false, "bip-mail- trash", "deletes (to the trash, then gone)"),
     rule("notes_change", true, false, "bip-ok- notes_change", "Alex 20/11: changes text already in one of the person's Obsidian notes, synced to all their devices (a copy is kept first)"),
     rule("calendar_delete", true, false, "bip-ok- calendar_delete", "audit 1.3, Alex 17/11: deletes an event of the person's calendar (a mailbox's at once, no trash), like mail_trash"),
+    rule("drive_replace", true, false, "bip-ok- drive_replace (drives_write.rs)", "Alex 23/11: a new version of a file of the person's online documents (the old one stays in the service's history): always asked"),
     rule("calendar_write", true, false, "bip-ok- calendar_write (google_calendar.rs)", "Alex 20/11: adds or changes an event of the person's Google Calendar, never silently; « Oui, pour cette conversation » lets the same kind through in that session"),
     rule("site_form", true, false, "bip-ok- site_form (ask_to_send)", "audit 1.2, Alex 17/11 « Oui, 1re fois par site »: the agent's browser sends a form to a site not allowed yet for it; « Toujours pour ce site » keeps it in « Sites autorisés »"),
     rule("mail_rule_trash", true, false, "bip-mailrule- trash", "deletes every new matching mail"),
@@ -301,6 +303,8 @@ pub enum Undo {
     MailRule { rule: String },
     /// jobs.rs' task: paused.
     Task { job: String },
+    /// drives_write.rs' new file: put in the service's bin, while unchanged (`rev`: its revision when made).
+    DriveFile { service: String, id: String, rev: String },
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -774,6 +778,9 @@ pub async fn undo(state: &AppState, id: &str) -> Result<Line, UndoRefused> {
         Undo::Task { job } => {
             crate::jobs::jobs_of(state).pause(&job).await.map_err(|e| UndoRefused::Failed(e.to_string()))?;
         }
+        Undo::DriveFile { service, id, rev } => {
+            crate::drives_write::undo_file(&config, &service, &id, &rev).await.map_err(UndoRefused::Failed)?;
+        }
     }
     let now = py::time_time();
     let done = change(&config, |b| {
@@ -1095,6 +1102,7 @@ fn folded_title(lang: &str, kind: &str, n: u64) -> String {
         ("fr", "task_start") => format!("{n} tâches de fond lancées"),
         ("fr", "service_write") => format!("{n} changements dans tes services"),
         ("fr", "files_write") => format!("{n} fichiers enregistrés"),
+        ("fr", "drive_write") => format!("{n} fichiers enregistrés dans tes documents en ligne"),
         ("fr", _) => format!("{n} actions validées pour toi"),
         ("de", "mail_archive") => format!("{n} E-Mails archiviert"),
         ("de", "mail_mark_read") => format!("{n} E-Mails als gelesen markiert"),
@@ -1103,6 +1111,7 @@ fn folded_title(lang: &str, kind: &str, n: u64) -> String {
         ("de", "task_start") => format!("{n} Hintergrundaufgaben gestartet"),
         ("de", "service_write") => format!("{n} Änderungen in deinen Diensten"),
         ("de", "files_write") => format!("{n} Dateien gespeichert"),
+        ("de", "drive_write") => format!("{n} Dateien in deinen Online-Dokumenten gespeichert"),
         ("de", _) => format!("{n} Aktionen für dich bestätigt"),
         ("es", "mail_archive") => format!("{n} correos archivados"),
         ("es", "mail_mark_read") => format!("{n} correos marcados como leídos"),
@@ -1111,6 +1120,7 @@ fn folded_title(lang: &str, kind: &str, n: u64) -> String {
         ("es", "task_start") => format!("{n} tareas en segundo plano iniciadas"),
         ("es", "service_write") => format!("{n} cambios en tus servicios"),
         ("es", "files_write") => format!("{n} archivos guardados"),
+        ("es", "drive_write") => format!("{n} archivos guardados en tus documentos en línea"),
         ("es", _) => format!("{n} acciones validadas para ti"),
         (_, "mail_archive") => format!("{n} e-mails archived"),
         (_, "mail_mark_read") => format!("{n} e-mails marked as read"),
@@ -1119,6 +1129,8 @@ fn folded_title(lang: &str, kind: &str, n: u64) -> String {
         (_, "task_start") => format!("{n} background tasks started"),
         (_, "service_write") => format!("{n} changes in your services"),
         (_, "files_write") => format!("{n} files saved"),
+        ("nl", "drive_write") => format!("{n} bestanden opgeslagen in je online documenten"),
+        (_, "drive_write") => format!("{n} files saved in your online documents"),
         _ => format!("{n} actions approved for you"),
     }
 }

@@ -46,7 +46,7 @@ pub const RUN_PREFIX: &str = "bip-ok-";
 /// `calendar_update`: the phone's are queued at once, and the turn's status would take their repeats for the person's
 /// wait instead of a loop (runs.rs' brake); a Google Calendar card shows in the conversation all the same.
 pub const HOLDS_THE_CALL: &[&str] =
-    &[crate::form_send::TOOL, "calendar_delete", "obsidian_create", "obsidian_append", "obsidian_edit"];
+    &[crate::form_send::TOOL, "calendar_delete", "obsidian_create", "obsidian_append", "obsidian_edit", crate::drives_write::TOOL];
 /// A form sent to a site not allowed yet for this agent.
 pub const SITE_FORM: &str = "site_form";
 /// An event deleted from the person's calendar.
@@ -125,6 +125,9 @@ pub fn kind_of(item: &Dict) -> &'static str {
         Some(NOTES_WRITE) => NOTES_WRITE,
         Some(NOTES_CHANGE) => NOTES_CHANGE,
         Some(CALENDAR_WRITE) => CALENDAR_WRITE,
+        // a file saved in the person's online documents (drives_write.rs): a new one, or a new version (critical)
+        Some(crate::drives_write::KIND_CREATE) => crate::drives_write::KIND_CREATE,
+        Some(crate::drives_write::KIND_REPLACE) => crate::drives_write::KIND_REPLACE,
         _ => SITE_FORM,
     }
 }

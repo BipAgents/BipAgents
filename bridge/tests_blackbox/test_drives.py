@@ -5,6 +5,7 @@ drive_search, drive_read, drive_save). The three services are one fake here (Dri
 Dropbox under /dbx, one sign-in and token server), started by each test on a port of its own."""
 import json
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlencode, urlsplit
 
@@ -12,6 +13,7 @@ import httpx
 
 from bbkit.common import AUTH
 from bbkit.mcp import TOKEN, call, give_token, rpc, text_of, not_done
+from bbkit.servers import wait_until
 
 GOOGLE_FOLDER = "application/vnd.google-apps.folder"
 
@@ -53,7 +55,8 @@ class FakeDrives:
         self.dropbox = {
             "id:w": {".tag": "folder", "id": "id:w", "name": "Work", "path_lower": "/work"},
             "id:ws": {".tag": "folder", "id": "id:ws", "name": "Workshop", "path_lower": "/workshop"},
-            "id:f": {".tag": "file", "id": "id:f", "name": "plan.txt", "size": 4, "path_lower": "/work/plan.txt"},
+            "id:f": {".tag": "file", "id": "id:f", "name": "plan.txt", "size": 4, "path_lower": "/work/plan.txt",
+                     "rev": "r1"},
             "id:z": {".tag": "file", "id": "id:z", "name": "x.txt", "size": 4, "path_lower": "/workshop/x.txt"},
         }
         self.dropbox_content = {"id:f": b"plan", "id:z": b"nope"}
@@ -65,19 +68,23 @@ class FakeDrives:
         }
         # drive.file: only what was picked (and, here, what a picked folder holds)
         self.google_seen = {"gf", "gd", "gp"}
+        self.sessions, self.written, self.deleted, self.made = {}, [], [], 0
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
 
     def close(self):
         self.server.shutdown()
         self.server.server_close()
 
-    def issue(self):
+    def issue(self, scope=None):
         self.generation += 1
         token = f"at-{self.generation}"
         self.valid = {token}
         self.refresh_token = f"rt-{self.generation}"
-        return {"access_token": token, "token_type": "bearer", "expires_in": 3600,
-                "refresh_token": self.refresh_token}
+        self.scope = scope if scope is not None else getattr(self, "scope", "")
+        answer = {"access_token": token, "token_type": "bearer", "expires_in": 3600, "refresh_token": self.refresh_token}
+        if self.scope:
+            answer["scope"] = self.scope   # what the person granted (Dropbox: its write right only when asked)
+        return answer
 
     def config(self):
         def client(name, api, **more):
@@ -152,6 +159,7 @@ class FakeDrives:
                 if url.path.startswith("/ms/me/drive/items/"):
                     rest = url.path.removeprefix("/ms/me/drive/items/").split("/", 1)
                     item, what = rest[0], (rest[1] if len(rest) > 1 else "")
+                    item = "ROOT" if item == "root" else item
                     if item not in fake.graph:
                         return self.send(404, {"error": {"code": "itemNotFound"}})
                     if what == "":
@@ -184,6 +192,8 @@ class FakeDrives:
             def do_POST(self):
                 url = urlsplit(self.path)
                 fake.seen.append(url.path)
+                if url.path == "/dbx/files/upload":
+                    return self.dropbox_upload()
                 body = self.body() if url.path != "/dbx/files/download" else {}
                 if url.path == "/token":
                     fake.tokens.append(body)
@@ -191,7 +201,7 @@ class FakeDrives:
                         asked = fake.codes.pop(body.get("code"), None)
                         if not asked or asked["redirect_uri"] != body.get("redirect_uri") or "code_verifier" not in body:
                             return self.send(400, {"error": "invalid_grant"})
-                        return self.send(200, fake.issue())
+                        return self.send(200, fake.issue(asked.get("scope", "")))
                     if body.get("grant_type") == "refresh_token":
                         if fake.refuse_refresh or body.get("refresh_token") != fake.refresh_token:
                             return self.send(400, {"error": "invalid_grant"})
@@ -207,7 +217,9 @@ class FakeDrives:
                 if url.path == "/dbx/users/get_current_account":
                     return self.send(200, {"email": "d@example.org"})
                 if url.path == "/dbx/files/get_metadata":
-                    found = fake.dropbox.get(body.get("path"))
+                    asked = body.get("path") or ""
+                    found = fake.dropbox.get(asked) or next(
+                        (v for v in fake.dropbox.values() if v.get("path_lower") == asked.lower()), None)
                     return self.send(200, found) if found else self.send(409, {"error_summary": "path/not_found/"})
                 if url.path == "/dbx/files/list_folder":
                     folder = fake.dropbox.get(body.get("path"), {}).get("path_lower", body.get("path"))
@@ -221,7 +233,106 @@ class FakeDrives:
                 if url.path == "/dbx/files/download":
                     arg = json.loads(self.headers.get("dropbox-api-arg") or "{}")
                     return self.send(200, raw=fake.dropbox_content[arg["path"]])
+                if url.path == "/dbx/files/delete_v2":
+                    found = fake.dropbox.get(body.get("path"))
+                    if not found:
+                        return self.send(409, {"error_summary": "path_lookup/not_found/"})
+                    if found.get("rev") != body.get("parent_rev"):
+                        return self.send(409, {"error_summary": "path_write/conflict/"})
+                    fake.dropbox.pop(body["path"])
+                    fake.deleted.append(body["path"])
+                    return self.send(200, {"metadata": found})
+                if url.path == "/g/files" and parse_qs(url.query).get("uploadType") == ["resumable"]:
+                    return self.google_session(None, body)
                 self.send(404, {"error": "not_found", "path": url.path})
+
+            def raw_body(self):
+                return self.rfile.read(int(self.headers.get("content-length") or 0))
+
+            def dropbox_upload(self):
+                """files/upload: a new file (`add`, never over one) or a new version (`update` on its revision)."""
+                fake.seen.append("/dbx/files/upload")
+                data = self.raw_body()
+                if not self.signed():
+                    return self.send(401, {"error_summary": "expired_access_token/"})
+                if "files.content.write" not in fake.scope.split():
+                    return self.send(401, {"error_summary": "missing_scope/",
+                                           "error": {".tag": "missing_scope", "required_scope": "files.content.write"}})
+                raw = self.headers.get("dropbox-api-arg") or "{}"
+                assert raw.isascii(), raw
+                arg = json.loads(raw)
+                at = arg["path"]
+                old = next((v for v in fake.dropbox.values() if v["path_lower"] == at.lower()), None)
+                mode = arg["mode"]
+                if mode == "add" and old is None:
+                    fake.made += 1
+                    new = {".tag": "file", "id": f"id:new{fake.made}", "name": at.rsplit("/", 1)[1],
+                           "path_lower": at.lower(), "path_display": at, "rev": "r1", "size": len(data)}
+                    fake.dropbox[new["id"]] = new
+                elif isinstance(mode, dict) and mode.get(".tag") == "update" and old and old.get("rev") == mode["update"]:
+                    new = old
+                    new["rev"] = old["rev"] + "+"
+                else:
+                    return self.send(409, {"error_summary": "path/conflict/file/"})
+                fake.dropbox_content[new["id"]] = data
+                fake.written.append(("dropbox", new["id"], data))
+                return self.send(200, new)
+
+            def google_session(self, file, metadata):
+                fake.made += 1
+                session = f"s{fake.made}"
+                fake.sessions[session] = (file, metadata)
+                host = self.headers.get("host")
+                return self.send(200, {}, [("location", f"http://{host}/g/upload/{session}")])
+
+            def do_PUT(self):
+                url = urlsplit(self.path)
+                fake.seen.append(url.path)
+                data = self.raw_body()
+                if not self.signed():
+                    return self.send(401, {"error": {"code": 401}})
+                if url.path.startswith("/g/upload/"):
+                    file, metadata = fake.sessions.pop(url.path.rsplit("/", 1)[1])
+                    if file is None:
+                        fake.made += 1
+                        file = f"gnew{fake.made}"
+                        fake.google[file] = {"id": file, "name": metadata["name"], "mimeType": metadata["mimeType"],
+                                             "parents": metadata["parents"], "headRevisionId": "h1"}
+                        fake.google_seen.add(file)
+                    else:
+                        fake.google[file]["headRevisionId"] = fake.google[file].get("headRevisionId", "h") + "+"
+                    fake.written.append(("google_drive", file, data))
+                    return self.send(200, fake.google[file])
+                if url.path.startswith("/ms/me/drive/items/") and url.path.endswith(":/content"):
+                    parent, name = url.path.removeprefix("/ms/me/drive/items/").removesuffix(":/content").split(":/", 1)
+                    from urllib.parse import unquote
+                    name = unquote(name)
+                    if any(v.get("parentReference", {}).get("id") == parent and v["name"] == name for v in fake.graph.values()):
+                        return self.send(409, {"error": {"code": "nameAlreadyExists"}})
+                    fake.made += 1
+                    item = {"id": f"M{fake.made}", "name": name, "file": {}, "parentReference": {"id": parent},
+                            "eTag": "e1", "cTag": "c1"}
+                    fake.graph[item["id"]] = item
+                    fake.graph_content[item["id"]] = data
+                    fake.written.append(("onedrive", item["id"], data))
+                    return self.send(201, item)
+                self.send(404, {"error": "not_found", "path": url.path})
+
+            def do_PATCH(self):
+                url = urlsplit(self.path)
+                fake.seen.append(url.path)
+                body = self.body()
+                if not self.signed():
+                    return self.send(401, {"error": {"code": 401}})
+                item = url.path.removeprefix("/g/files/")
+                if "/revisions/" in item:
+                    return self.send(200, {"keepForever": True})
+                if item not in fake.google:
+                    return self.send(404, {"error": {"code": 404}})
+                if parse_qs(url.query).get("uploadType") == ["resumable"]:
+                    return self.google_session(item, body)
+                fake.google[item].update(body)   # « Annuler »: to the bin
+                return self.send(200, fake.google[item])
 
         return Handler
 
@@ -251,7 +362,7 @@ def connect(bridge, service, drive, agents=(), **more):
 
 
 def tool_names():
-    return {"drive_folders", "drive_list", "drive_search", "drive_read", "drive_save"}
+    return {"drive_folders", "drive_list", "drive_search", "drive_read", "drive_save", "drive_write"}
 
 
 def names(bridge):
@@ -290,7 +401,7 @@ def test_onedrive_folder_by_folder_for_the_chosen_agent(bridges, fakes):
         started, shown = connect(bridge, service, "onedrive", client="ios")
         assert started["redirect_uri"] == "bipagents://oauth/callback" and started["expires_in"] == 900
         asked = service.authorized[0]
-        assert asked["scope"] == "Files.Read offline_access User.Read" and asked["code_challenge_method"] == "S256"
+        assert asked["scope"] == "Files.ReadWrite offline_access User.Read" and asked["code_challenge_method"] == "S256"
         assert shown["state"] == "connected" and shown["account"] == "a@example.org" and shown["folders"] == []
         assert not names(bridge) & tool_names(), "connected, no folder given yet"
         # The app's folder choice: sub-folders only, sorted, someone else's folder left out.
@@ -491,5 +602,149 @@ def test_what_is_refused(bridges, fakes):
         assert started["server_client_id"] == "mine.apps.googleusercontent.com"
         gone = bridge.delete("/v1/drives/google_drive/android", headers=AUTH)
         assert gone.status_code == 200 and gone.json()["android"] == "choose"
+    finally:
+        service.close()
+
+
+# -- writing (drives_write.rs, Alex 23/11): a folder's switch, the person's card or level, « Annuler » -------------
+
+def cards(bridge):
+    items = bridge.get("/v1/approvals", headers=AUTH, params={"agent": "wellness"}).json()["items"]
+    return [i for i in items if i["run_id"].startswith("bip-ok-")]
+
+
+def write_answered(bridge, choice, meanwhile=None, **arguments):
+    """drive_write while the person answers its card (`meanwhile`: what they do before answering)."""
+    with ThreadPoolExecutor(1) as pool:
+        result = pool.submit(call, bridge, "drive_write", arguments)
+        assert wait_until(lambda: cards(bridge), timeout=30), "no card"
+        [card] = cards(bridge)
+        if meanwhile:
+            meanwhile()
+        said = bridge.post("/v1/approve", headers=AUTH,
+                           json={"agent": "wellness", "run_id": card["run_id"], "choice": choice})
+        assert said.status_code == 200, said.text
+        return result.result(timeout=60), card
+
+
+def folders_put(bridge, drive, rows):
+    put = bridge.put(f"/v1/drives/{drive}/folders", headers=AUTH, json={"folders": rows})
+    assert put.status_code == 200, put.text
+    return put.json()
+
+
+def test_dropbox_writes_after_the_persons_yes_only_where_its_switch_is_on(bridges, fakes):
+    service = FakeDrives()
+    try:
+        bridge = install(bridges, fakes, service)
+        _, shown = connect(bridge, service, "dropbox")
+        assert "files.content.write" not in service.authorized[-1]["scope"], "reading only: no write right asked"
+        assert shown["writable"] is False and shown["whole_drive"] is True
+        shown = folders_put(bridge, "dropbox", [{"id": "id:w", "agents": ["wellness"]}])
+        assert shown["folders"] == [{"id": "id:w", "name": "Work", "file": False, "agents": ["wellness"]}], "1.0's shape"
+        # the switch off: the agent says how to turn it on, nothing asked
+        said, failed = tool(bridge, "drive_write", folder="dropbox:id:w", name="Compte rendu", text="# Réunion")
+        assert failed and "peut y écrire" in said and not cards(bridge), said
+        # on, but Dropbox hasn't given the right yet: the person reconnects once (its folders and switches kept)
+        shown = folders_put(bridge, "dropbox", [{"id": "id:w", "agents": ["wellness"], "writers": ["wellness"]}])
+        assert shown["folders"][0]["writers"] == ["wellness"] and shown["writable"] is False
+        said, failed = tool(bridge, "drive_write", folder="dropbox:id:w", name="Compte rendu", text="# Réunion")
+        assert failed and "right to write" in said and not cards(bridge), said
+        _, shown = connect(bridge, service, "dropbox")
+        assert service.authorized[-1]["scope"].endswith(" files.content.write")
+        assert shown["writable"] is True and shown["folders"][0]["writers"] == ["wellness"]
+        # « Oui »: written; the card says what and where
+        result, card = write_answered(bridge, "once", folder="dropbox:id:w", name="Compte rendu", text="# Réunion")
+        assert card["bip_ok"]["kind"] == "drive_write" and card["choices"] == ["once", "deny"], card
+        assert card["bip_summary"] in ("Save « Compte rendu.md » in Dropbox › Work?",
+                                       "Enregistrer « Compte rendu.md » dans Dropbox › Work ?"), card
+        assert card["bip_detail"] == "# Réunion"
+        assert not result["isError"] and "Saved: « Compte rendu.md » in Dropbox › Work" in text_of(result), result
+        assert service.written[-1][2] == "# Réunion".encode()
+        new_id = service.written[-1][1]
+        assert service.dropbox[new_id]["path_lower"] == "/work/compte rendu.md"
+        # never over a file: the same name again is refused before any card
+        said, failed = tool(bridge, "drive_write", folder="dropbox:id:w", name="Compte rendu.md", text="x")
+        assert failed and "exists already" in said and not cards(bridge), said
+        # « Non »: nothing
+        before = len(service.written)
+        result, _ = write_answered(bridge, "deny", folder="dropbox:id:w", name="Autre.md", text="x")
+        assert not_done(result) or result["isError"]
+        assert len(service.written) == before
+        # a new version: on the revision read
+        result, card = write_answered(bridge, "once", replace="dropbox:id:f", text="plan v2")
+        assert card["bip_ok"]["kind"] == "drive_replace", card
+        assert service.dropbox_content["id:f"] == b"plan v2" and service.dropbox["id:f"]["rev"] != "r1"
+        # never outside: the look-alike, a path for a name
+        said, failed = tool(bridge, "drive_write", folder="dropbox:id:ws", name="x.md", text="x")
+        assert failed and not cards(bridge), said
+        said, failed = tool(bridge, "drive_write", folder="dropbox:id:w", name="../x.md", text="x")
+        assert failed and "path" in said and not cards(bridge), said
+        # the folder taken back while the card waits: nothing written
+        before = len(service.written)
+        result, _ = write_answered(bridge, "once", folder="dropbox:id:w", name="Tard.md", text="x",
+                                   meanwhile=lambda: folders_put(bridge, "dropbox", []))
+        assert len(service.written) == before and (result["isError"] or not_done(result)), result
+    finally:
+        service.close()
+
+
+def test_seulement_le_critique_saves_a_new_file_at_once_and_annuler_puts_it_in_the_bin(bridges, fakes):
+    service = FakeDrives()
+    try:
+        bridge = install(bridges, fakes, service)
+        connect(bridge, service, "dropbox")
+        folders_put(bridge, "dropbox", [{"id": "id:w", "agents": ["wellness"], "writers": ["wellness"]}])
+        connect(bridge, service, "dropbox")   # the write right
+        assert bridge.put("/v1/approval-level", headers=AUTH, json={"level": "critical"}).status_code == 200
+        result = call(bridge, "drive_write", {"folder": "dropbox:id:w", "name": "Notes", "text": "à garder"})
+        assert not result["isError"] and "Done at once" in text_of(result) and not cards(bridge), result
+        new_id = service.written[-1][1]
+        lines = bridge.get("/v1/approvals/auto", headers=AUTH, params={"agent": "wellness"}).json()["items"]
+        [line] = [l for l in lines if l["kind"] == "drive_write"]
+        assert line["undo"] is True and line["summary"] in ("« Notes.md » saved in Dropbox › Work",
+                                                            "« Notes.md » enregistré dans Dropbox › Work"), line
+        undone = bridge.post(f"/v1/approvals/auto/{line['id']}/undo", headers=AUTH)
+        assert undone.status_code == 200, undone.text
+        assert new_id in service.deleted and new_id not in service.dropbox
+        # a new version stays asked, whatever the level
+        result, card = write_answered(bridge, "once", replace="dropbox:id:f", text="v2")
+        assert card["bip_ok"]["kind"] == "drive_replace" and not result["isError"], result
+    finally:
+        service.close()
+
+
+def test_google_and_onedrive_write_and_the_whole_drive(bridges, fakes):
+    service = FakeDrives()
+    try:
+        bridge = install(bridges, fakes, service)
+        service.picked = "gf,gp"
+        _, shown = connect(bridge, service, "google_drive", agents=["wellness"])
+        assert shown["writable"] is True and shown["whole_drive"] is False
+        assert service.authorized[-1]["scope"] == "https://www.googleapis.com/auth/drive.file", "never wider"
+        whole = bridge.put("/v1/drives/google_drive/folders", headers=AUTH,
+                           json={"folders": [{"id": "root", "agents": ["wellness"]}]})
+        assert whole.status_code == 422 and whole.json()["detail"]["code"] == "whole_drive"
+        folders_put(bridge, "google_drive", [{"id": "gf", "agents": ["wellness"], "writers": ["wellness"]},
+                                             {"id": "gp", "agents": ["wellness"]}])
+        result, card = write_answered(bridge, "once", folder="google_drive:gf", name="Liste.md", text="- pain")
+        assert not result["isError"], result
+        made = service.written[-1]
+        assert made[0] == "google_drive" and service.google[made[1]]["parents"] == ["gf"] and made[2] == b"- pain"
+        said, failed = tool(bridge, "drive_write", replace="google_drive:gp", text="x")
+        assert failed and "peut y écrire" in said, "its own switch, off"
+        # OneDrive: Files.ReadWrite, a new file with its card, then the whole OneDrive read from its root
+        _, shown = connect(bridge, service, "onedrive")
+        assert service.authorized[-1]["scope"] == "Files.ReadWrite offline_access User.Read"
+        folders_put(bridge, "onedrive", [{"id": "D", "agents": ["wellness"], "writers": ["wellness"]}])
+        result, card = write_answered(bridge, "once", folder="onedrive:D", name="Été.md", text="x")
+        assert not result["isError"] and service.written[-1][0] == "onedrive", result
+        assert service.graph[service.written[-1][1]]["name"] == "Été.md"
+        shown = folders_put(bridge, "onedrive", [{"id": "root", "agents": ["wellness"]}])
+        assert shown["folders"] == [{"id": "root", "name": "OneDrive", "file": False, "agents": ["wellness"], "root": True}]
+        listed, failed = tool(bridge, "drive_list", folder="onedrive:root")
+        assert not failed and "Docs" in listed and "Partagé" not in listed, listed
+        read, failed = tool(bridge, "drive_read", file="onedrive:X")
+        assert not failed and "secret" in read, "the whole OneDrive: Privé's file too"
     finally:
         service.close()
