@@ -1,6 +1,7 @@
 //! task_frame.rs' tests (contracts/task-frame/cases.json; design-agents-proactifs.md §4.6), no model anywhere.
 
 use super::*;
+use chrono::{Datelike, Timelike};
 use crate::routines::{self, Ask, Maker, Routine, Schedule};
 
 fn config_in(dir: &std::path::Path) -> Config {
@@ -30,8 +31,19 @@ fn contract() -> Value {
 
 const PARIS: Tz = chrono_tz::Europe::Paris;
 
-fn at(text: &str) -> f64 {
-    chrono::DateTime::parse_from_rfc3339(text).unwrap().timestamp() as f64
+/// A day of this year (no year written then), about `days` from today (C13 of the review: never a fixed date): its
+/// last second on the Paris clock.
+fn day_this_year(days: i64) -> chrono::DateTime<Tz> {
+    let today = chrono::Utc::now().with_timezone(&PARIS).date_naive();
+    let mut day = today + chrono::Duration::days(days);
+    if day.year() != today.year() {
+        day = today - chrono::Duration::days(days);
+    }
+    PARIS.from_local_datetime(&day.and_hms_opt(23, 59, 59).unwrap()).unwrap()
+}
+
+fn epoch(d: chrono::DateTime<Tz>) -> f64 {
+    d.timestamp() as f64
 }
 
 /// A routine its agent made in the person's own conversation, on.
@@ -84,22 +96,25 @@ fn the_contract_s_texts_are_the_bridge_s() {
 
 #[test]
 fn dates_and_clocks_in_the_four_languages() {
-    let last = at("2026-11-30T23:59:59+01:00");
-    assert_eq!(end_words("fr", Task::Routine, &End::Date(last), PARIS), "jusqu'au 30/11");
-    assert_eq!(end_words("en", Task::Routine, &End::Date(last), PARIS), "until Nov 30");
-    assert_eq!(end_words("de", Task::Routine, &End::Date(last), PARIS), "bis 30.11.");
-    assert_eq!(end_words("es", Task::Routine, &End::Date(last), PARIS), "hasta el 30/11");
-    assert_eq!(end_words("it", Task::Routine, &End::Date(last), PARIS), "until Nov 30");
+    let d = day_this_year(7);
+    let last = epoch(d);
+    let (dm, en) = (format!("{}/{}", d.day(), d.month()), d.format("%b %-d").to_string());
+    assert_eq!(end_words("fr", Task::Routine, &End::Date(last), PARIS), format!("jusqu'au {dm}"));
+    assert_eq!(end_words("en", Task::Routine, &End::Date(last), PARIS), format!("until {en}"));
+    assert_eq!(end_words("de", Task::Routine, &End::Date(last), PARIS), format!("bis {}.{}.", d.day(), d.month()));
+    assert_eq!(end_words("es", Task::Routine, &End::Date(last), PARIS), format!("hasta el {dm}"));
+    assert_eq!(end_words("it", Task::Routine, &End::Date(last), PARIS), format!("until {en}"));
     assert_eq!((clock("fr", 8, 0), clock("en", 8, 0), clock("de", 8, 0), clock("es", 8, 0)),
                ("vers 8 h".into(), "around 8 AM".into(), "gegen 8 Uhr".into(), "hacia las 8".into()));
     assert_eq!((clock("fr", 7, 30), clock("en", 15, 5), clock("de", 7, 30), clock("es", 19, 45)),
                ("vers 7 h 30".into(), "around 3:05 PM".into(), "gegen 7:30 Uhr".into(), "hacia las 19:45".into()));
     assert_eq!((clock("en", 0, 0), clock("en", 12, 0)), ("around 12 AM".into(), "around 12 PM".into()));
-    let since = at("2026-11-21T07:00:00+01:00");
-    assert_eq!(since_words("fr", since, PARIS), "le 21/11");
-    assert_eq!(since_words("de", since, PARIS), "dem 21.11.");
+    let s = day_this_year(-2);
+    let since = epoch(s) - 3600.0 * 16.0;
+    assert_eq!(since_words("fr", since, PARIS), format!("le {}/{}", s.day(), s.month()));
+    assert_eq!(since_words("de", since, PARIS), format!("dem {}.{}.", s.day(), s.month()));
     assert_eq!(fix_since_line("en", &since_words("en", since, PARIS), reason_words("en", "looping")),
-               "Since Nov 21: it was going round in circles.");
+               format!("Since {}: it was going round in circles.", s.format("%b %-d")));
 }
 
 #[test]
@@ -121,11 +136,14 @@ fn every_agent_made_routine_watcher_and_trigger_has_an_owner_an_end_and_a_place(
     let quiet = routines::create(&config, "vie", "Archive", "every 2h", "x", None, Maker::Person { muted: true }).unwrap();
     assert_eq!(routines::view_of(&config, &quiet)["deliver_to"]["kind"], "silent");
     // a watcher, its end on its card and its views
-    let watch = connectors::Watch { every: "1h".into(), notify: "on_change".into(), until: Some(at("2026-11-30T23:59:59+01:00")),
+    let d = day_this_year(7);
+    let dm = format!("{}/{}", d.day(), d.month());
+    let watch = connectors::Watch { every: "1h".into(), notify: "on_change".into(), until: Some(epoch(d)),
                                     ..Default::default() };
-    let shown = crate::watchers::watch_view(&watch, "fr");
-    assert_eq!(shown["ends"], json!({"kind": "date", "at": at("2026-11-30T23:59:59+01:00"), "text": "jusqu'au 30/11"}));
-    assert_eq!(crate::watchers::card_text(&watch), "Vérifie toutes les heures, ne réveille l'agent que si ça change, jusqu'au 30/11");
+    let shown = crate::watchers::watch_view_in(&watch, "fr", PARIS);
+    assert_eq!(shown["ends"], json!({"kind": "date", "at": epoch(d), "text": format!("jusqu'au {dm}")}));
+    assert_eq!(crate::watchers::card_text_in(&watch, PARIS),
+               format!("Vérifie toutes les heures, ne réveille l'agent que si ça change, jusqu'au {dm}"));
     let once = connectors::Watch { every: "1h".into(), notify: "on_change".into(), once: true, ..Default::default() };
     assert_eq!(crate::watchers::card_text(&once),
                "Vérifie toutes les heures, ne réveille l'agent que si ça change, une seule fois, puis il s'arrête");
@@ -175,7 +193,8 @@ fn a_change_from_once_to_a_repeat_says_its_rhythm_and_end_in_the_summary() {
         .cloned()
         .unwrap();
     let (line, _) = routines::call_asked(&config, "vie", &args, None, true).card.unwrap();
-    let day = until.format("%-d/%-m").to_string();
+    let last = PARIS.from_local_datetime(&until.and_hms_opt(23, 59, 59).unwrap()).unwrap();
+    let day = day_words("fr", epoch(last), PARIS);
     assert_eq!(line, format!("Vie propose que la routine « Météo » se répète : chaque jour vers 8 h, jusqu'au {day}. D'accord ?"));
     let r = routines::get(&config, &r.id).unwrap();
     let item = routines::change_item(&config, &r, r.change.as_ref().unwrap());
@@ -199,12 +218,13 @@ fn approx_routines_fire_within_ten_minutes_stable_per_routine() {
     assert_eq!(approx_seconds("r7"), approx_seconds("r7"));
     let r = agents(&config, "Météo", "every day at 8:00", &asked());
     assert!(r.approx);
-    let after = at("2026-11-23T12:00:00+01:00");
-    let exact = routines::next_after(&r.schedule, after, PARIS).unwrap();
-    let next = routines::next_run_of(&r, after, PARIS).unwrap();
+    // on a clock without summer time (UTC): its run « vers 8 h » then its next one, the next day
+    let (utc, after) = (Tz::UTC, py::time_time());
+    let exact = routines::next_after(&r.schedule, after - 900.0, utc).unwrap();
+    let next = routines::next_run_of(&r, after - 900.0, utc).unwrap();
     assert_eq!(next - exact, approx_seconds(&r.id));
-    // its run « vers 8 h » then its next one: the next day, never twice the same day
-    let then = routines::next_run_of(&r, next + 1.0, PARIS).unwrap();
+    // never twice the same day
+    let then = routines::next_run_of(&r, next + 1.0, utc).unwrap();
     assert_eq!(then - next, 86_400.0);
     // its card says « vers »
     let card = routines::card_sentence(&config, &Routine { awaits_start: true, ..r.clone() });
@@ -221,8 +241,12 @@ fn a_persons_routine_stays_exact() {
     let config = config_in(dir.path());
     let r = routines::create(&config, "vie", "Point", "every day at 8:00", "x", None, Maker::Person { muted: false }).unwrap();
     assert!(!r.approx);
-    let after = at("2026-11-23T12:00:00+01:00");
-    assert_eq!(routines::next_run_of(&r, after, PARIS), Some(at("2026-11-24T08:00:00+01:00")));
+    let now = py::time_time();
+    let next = routines::next_run_of(&r, now, Tz::UTC).unwrap();
+    assert_eq!(Some(next), routines::next_after(&r.schedule, now, Tz::UTC));
+    let at = Tz::UTC.timestamp_opt(next as i64, 0).unwrap();
+    assert_eq!((at.hour(), at.minute(), at.second()), (8, 0, 0));
+    assert!(next > now && next - now <= DAY);
     assert_eq!(routines::view_of(&config, &r)["ends"], json!({"kind": "never", "text": "jusqu'à ce que tu l'arrêtes"}));
 }
 
@@ -345,7 +369,8 @@ fn an_end_reached_goes_quietly_and_says_it_once_after_7_days() {
     let dir = tempfile::tempdir().unwrap();
     let config = config_in(dir.path());
     let now = py::time_time();
-    let until = now + 3600.0;
+    // (its first run at +2 h, before its end: C10 of the review refuses an end before the first run)
+    let until = now + 3.0 * 3600.0;
     let long = routines::create_framed(&config, "vie", "Ancienne", "every 2h", "x", None, Maker::Person { muted: false },
                                        &Ask { until: Some(until), ..asked() }).unwrap();
     let short = routines::create_framed(&config, "vie", "Récente", "every 2h", "x", None, Maker::Person { muted: false },
@@ -417,11 +442,13 @@ fn a_once_watcher_and_a_watchers_end_are_read_from_its_watch() {
     let mut map = json!({"every": "1h", "notify": "on_change", "once": true}).as_object().cloned().unwrap();
     let w = crate::watchers::parse_watch_in(&map, PARIS).unwrap();
     assert!(w.once && w.until.is_none());
-    map.insert("until".into(), json!("2026-11-30"));
+    let d = day_this_year(7);
+    map.insert("until".into(), json!(d.format("%Y-%m-%d").to_string()));
     map.insert("once".into(), json!(false));
     let w = crate::watchers::parse_watch_in(&map, PARIS).unwrap();
-    assert_eq!(w.until, Some(at("2026-11-30T23:59:59+01:00")));
-    map.insert("until".into(), json!("2020-01-01"));
+    assert_eq!(w.until, Some(epoch(d)));
+    let past = chrono::Utc::now().with_timezone(&PARIS).date_naive() - chrono::Duration::days(2);
+    map.insert("until".into(), json!(past.format("%Y-%m-%d").to_string()));
     assert!(crate::watchers::parse_watch_in(&map, PARIS).is_err());
 }
 
@@ -530,4 +557,230 @@ fn review_a_keep_card_replaced_by_a_repair_is_asked_again() {
     .unwrap();
     let found = due(&config, until - 2.0 * DAY);
     assert!(matches!(found.as_slice(), [Due::Raise { .. }]), "no « Garder ? » any more before its end: {found:?}");
+}
+
+// -- the review's corrections (23/11, briefs/review-task-frame.md), red first ----------------------------------------
+
+/// A watcher of its agent's own, with its default end.
+fn watcher_of_its_own(config: &Config, id: &str, until: f64, enabled: bool) {
+    connectors::change(config, |store| {
+        store.agents.entry("vie".into()).or_default().push(connectors::Connector {
+            id: id.into(),
+            name: "Prix du vélo".into(),
+            slug: "prix_du_velo".into(),
+            status: connectors::APPROVED.into(),
+            enabled,
+            approved_at: Some(crate::vault::now()),
+            watch: Some(connectors::Watch { every: "1h".into(), notify: "on_change".into(), until: Some(until),
+                                            default_end: true, ..Default::default() }),
+            ..Default::default()
+        });
+    })
+    .unwrap();
+}
+
+/// B1 (watchers): a watcher switched off (« Arrêter », or its switch) is never removed by its default end.
+#[test]
+fn b1_a_paused_watcher_never_goes_at_its_default_end_and_garder_is_asked() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = config_in(dir.path());
+    let now = py::time_time();
+    watcher_of_its_own(&config, "c_veille", now + 2.0 * DAY, false);
+    let found = due(&config, now);
+    assert!(matches!(found.as_slice(), [Due::Raise { .. }]), "« Garder ? » asked though it is paused: {found:?}");
+    let gone = due(&config, now + 3.0 * DAY);
+    assert!(!gone.iter().any(|d| matches!(d, Due::Remove { .. })), "a paused watcher removed at its default end: {gone:?}");
+}
+
+/// C3 (b): a retry missed while the bridge was down is not run late (as a missed run).
+#[test]
+fn c3b_a_retry_missed_while_the_bridge_was_down_is_not_run_late() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = config_in(dir.path());
+    let r = routines::create(&config, "vie", "Matin", "every 2h", "x", None, Maker::Person { muted: false }).unwrap();
+    let now = py::time_time();
+    routines::failed(&config, &r.id, routines::Ended::Failed, now, true);
+    let r = routines::get(&config, &r.id).unwrap();
+    let at = r.frame.retry_at.unwrap();
+    assert!(!routines::retry_missed(&r, at + 300.0));
+    assert!(routines::retry_missed(&r, at + 3.0 * 3600.0));
+}
+
+/// C3 (d): a pause drops a retry waiting (else it would run at the resume, besides its schedule).
+#[test]
+fn c3d_a_pause_drops_a_waiting_retry() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = config_in(dir.path());
+    let r = routines::create(&config, "vie", "Matin", "every 2h", "x", None, Maker::Person { muted: false }).unwrap();
+    routines::failed(&config, &r.id, routines::Ended::Failed, py::time_time(), true);
+    assert!(routines::get(&config, &r.id).unwrap().frame.retry_at.is_some());
+    let args = json!({"action": "pause", "name": "Matin"}).as_object().cloned().unwrap();
+    routines::call_asked(&config, "vie", &args, None, true);
+    assert_eq!(routines::get(&config, &r.id).unwrap().frame.retry_at, None);
+}
+
+/// C4: a run that works while the routine is paused with its card (« Lancer maintenant », its agent's `run`) keeps the
+/// card: only the person's answer takes it; « Réparer » answered stays so.
+#[test]
+fn c4_a_success_while_paused_keeps_its_card() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = config_in(dir.path());
+    let r = routines::create(&config, "vie", "Courriels", "every 2h", "x", None, Maker::Person { muted: false }).unwrap();
+    let now = py::time_time();
+    for n in 0..3 {
+        routines::failed(&config, &r.id, routines::Ended::Failed, now + f64::from(n), false);
+    }
+    assert!(routines::succeeded(&config, &r.id).is_none(), "its card withdrawn by a run that worked");
+    let kept = routines::get(&config, &r.id).unwrap();
+    assert!(!kept.enabled && kept.frame.fix.is_some() && kept.frame.failures == 0, "{kept:?}");
+    let fix = kept.frame.fix.unwrap();
+    settle(&config, "vie", &fix.id, true).unwrap();
+    routines::succeeded(&config, &r.id);
+    assert!(routines::get(&config, &r.id).unwrap().frame.repairing, "« Réparer » undone by a run that worked");
+}
+
+/// C5: « Réparer » that could not run (no conversation, a failed turn, the credit, nothing said) says so in one line
+/// and asks again.
+#[test]
+fn c5_a_repair_that_fails_says_so_and_asks_again() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = config_in(dir.path());
+    let r = routines::create(&config, "vie", "Courriels", "every 2h", "x", None, Maker::Person { muted: false }).unwrap();
+    let now = py::time_time();
+    for n in 0..3 {
+        routines::failed(&config, &r.id, routines::Ended::Failed, now + f64::from(n), false);
+    }
+    let fix = routines::get(&config, &r.id).unwrap().frame.fix.unwrap();
+    settle(&config, "vie", &fix.id, true).unwrap();
+    let text = routines::repair_failed(&config, &r.id, now + 60.0).unwrap();
+    assert_eq!(text, "La routine « Courriels » n'a pas pu être réparée pour l'instant : elle reste en pause.");
+    let again = routines::get(&config, &r.id).unwrap();
+    assert!(!again.frame.repairing && !again.enabled);
+    assert_eq!(again.frame.fix.map(|f| f.variant), Some(REPAIR.to_string()));
+    // a watcher's
+    watcher_of_its_own(&config, "c_veille", now + 30.0 * DAY, true);
+    connectors::change(&config, |s| {
+        let c = s.agents.get_mut("vie").unwrap().iter_mut().find(|c| c.id == "c_veille").unwrap();
+        c.frame.fix = Some(Fix { id: "w1".into(), at: now, variant: REPAIR.into(), failures: 4, reason: "check".into(),
+                                 since: now });
+    })
+    .unwrap();
+    settle(&config, "vie", "w1", true).unwrap();
+    let said = crate::watchers::repair_failed(&config, "vie", "c_veille", now + 60.0).unwrap();
+    assert_eq!(said, "Le veilleur « Prix du vélo » n'a pas pu être réparé pour l'instant.");
+    assert!(connectors::get(&config, "vie", "c_veille").unwrap().frame.fix.is_some());
+}
+
+/// C7: the card of a routine a family member asked for is hers (her bridge shows it and answers it), never the creator's.
+#[test]
+fn c7_a_members_routine_card_is_hers() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = config_in(dir.path());
+    let r = routines::create(&config, "vie", "Menus", "every 2h", "x", None, Maker::Person { muted: false }).unwrap();
+    routines::update(&config, &r.id, |x| {
+        x.by = Some("lea".into());
+        Ok(())
+    })
+    .unwrap();
+    let now = py::time_time();
+    for n in 0..3 {
+        routines::failed(&config, &r.id, routines::Ended::Failed, now + f64::from(n), false);
+    }
+    let fix = routines::get(&config, &r.id).unwrap().frame.fix.unwrap();
+    assert!(pending_items(&config, Some("vie")).is_empty(), "a member's routine card in the creator's list");
+    let hers = routines::member_items(&config, "vie", "lea");
+    assert!(hers.iter().any(|c| c["run_id"] == json!(format!("{RUN_PREFIX}{}", fix.id))), "{hers:?}");
+    assert_eq!(fix_by(&config, "vie", &fix.id).as_deref(), Some("lea"));
+}
+
+/// C9: an end its agent gives on its own never passes its default 90 days (a date, or a number of runs); one the person
+/// asked for stays; a day not of this year says its year.
+#[test]
+fn c9_an_end_its_agent_sets_on_its_own_never_passes_90_days() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = config_in(dir.path());
+    let now = py::time_time();
+    let far = now + 400.0 * DAY;
+    let own = agents(&config, "Loin", "every day at 8:00", &Ask { until: Some(far), asked: false, ..Ask::default() });
+    let until = own.frame.until.unwrap();
+    assert!(until <= now + DEFAULT_END_DAYS * DAY + 5.0 && own.frame.default_end, "{:?}", own.frame);
+    let many = agents(&config, "Souvent", "every 2h", &Ask { repeat: Some(100_000), asked: false, ..Ask::default() });
+    assert!(many.frame.until.is_some_and(|u| u <= now + DEFAULT_END_DAYS * DAY + 5.0), "{:?}", many.frame);
+    let few = agents(&config, "Dix lundis", "every monday 18h", &Ask { repeat: Some(10), asked: false, ..Ask::default() });
+    assert_eq!(routines::end_of(&few), End::Count(10));
+    let asked_far = agents(&config, "Demandé", "every day at 9:00", &Ask { until: Some(far), ..asked() });
+    assert_eq!(asked_far.frame.until, Some(far));
+    let year = PARIS.timestamp_opt(far as i64, 0).unwrap().year();
+    assert!(day_words("fr", far, PARIS).ends_with(&format!("/{year}")), "{}", day_words("fr", far, PARIS));
+    assert!(day_words("en", far, PARIS).ends_with(&format!(", {year}")), "{}", day_words("en", far, PARIS));
+    assert!(day_words("de", far, PARIS).ends_with(&format!(".{year}")), "{}", day_words("de", far, PARIS));
+    // a watcher of its own: the same, « once » too (R2)
+    let mut w = connectors::Watch { every: "1h".into(), notify: "on_change".into(), once: true, ..Default::default() };
+    connectors::watch_frame(&mut w, false, now);
+    assert!(w.default_end && w.until.is_some_and(|u| u <= now + DEFAULT_END_DAYS * DAY + 1.0), "{w:?}");
+    let mut asked_w = connectors::Watch { every: "1h".into(), notify: "on_change".into(), until: Some(far), ..Default::default() };
+    connectors::watch_frame(&mut asked_w, true, now);
+    assert_eq!((asked_w.until, asked_w.default_end), (Some(far), false));
+}
+
+/// C12: a flag written as text says what it says (« false » is false).
+#[test]
+fn c12_a_flag_written_as_text_is_read_as_said() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = config_in(dir.path());
+    let map = json!({"every": "1h", "notify": "on_change", "once": "false"}).as_object().cloned().unwrap();
+    assert!(!crate::watchers::parse_watch_in(&map, PARIS).unwrap().once);
+    let map = json!({"every": "1h", "notify": "on_change", "once": "true"}).as_object().cloned().unwrap();
+    assert!(crate::watchers::parse_watch_in(&map, PARIS).unwrap().once);
+    let args = json!({"action": "create", "name": "Pile", "schedule": "every day at 8:00", "prompt": "x", "approx": "false"})
+        .as_object()
+        .cloned()
+        .unwrap();
+    routines::call_asked(&config, "vie", &args, None, true);
+    let made = routines::all(&config, Some("vie")).into_iter().find(|r| r.name == "Pile").unwrap();
+    assert!(!made.approx);
+}
+
+/// R8: « vers » never moves a run to the day before (0:00 shifted back) nor past midnight.
+#[test]
+fn r8_vers_never_crosses_midnight() {
+    let utc = Tz::UTC;
+    let back = (0..200).map(|i| format!("r{i}")).find(|id| approx_seconds(id) < 0.0).unwrap();
+    let r = Routine {
+        id: back,
+        approx: true,
+        ..routines::create(&config_in(tempfile::tempdir().unwrap().path()), "vie", "Minuit", "every day at 0:00", "x",
+                           None, Maker::Person { muted: false }).unwrap()
+    };
+    let next = routines::next_run_of(&r, py::time_time(), utc).unwrap();
+    let at = utc.timestamp_opt(next as i64, 0).unwrap();
+    assert_eq!(at.hour(), 0, "« vers 0 h » run at {at}");
+}
+
+/// R12: a watcher « once » that reaches its date says the date.
+#[test]
+fn r12_a_once_watcher_at_its_date_says_the_date() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = config_in(dir.path());
+    let now = py::time_time();
+    connectors::change(&config, |store| {
+        store.agents.entry("vie".into()).or_default().push(connectors::Connector {
+            id: "c_billets".into(),
+            name: "Billets".into(),
+            status: connectors::APPROVED.into(),
+            enabled: true,
+            approved_at: Some(crate::vault::now()),
+            watch: Some(connectors::Watch { every: "1h".into(), notify: "on_change".into(), once: true,
+                                            until: Some(now + 60.0), ..Default::default() }),
+            ..Default::default()
+        });
+    })
+    .unwrap();
+    crate::watchers::change(&config, "vie", "c_billets", |rt| rt.checks = 3);
+    let found = due(&config, now + 9.0 * DAY);
+    let line = found.iter().find_map(|d| match d {
+        Due::Line { text, .. } => Some(text.clone()),
+        _ => None,
+    });
+    assert!(line.as_deref().is_some_and(|t| t.contains("jusqu'au")), "{found:?}");
 }

@@ -14,6 +14,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import test_watchers as tw
+from test_watchers import persons_turn
 from bbkit.common import AUTH, boite_items, sse
 from bbkit.mcp import call, give_token, text_of
 from bbkit.servers import wait_until
@@ -203,12 +204,17 @@ def test_a_failing_routine_is_retried_in_silence_then_told_then_paused_with_repa
         return wait_until(lambda: len(routine_runs(fakes)) == n and routine(bridge, rid).get("last_status")
                           and jobs(bridge)["Courriels"]["state"] != "running", timeout=60)
 
-    # 1. its scheduled run fails: tried again in 15 minutes, nothing told
+    # 1. its scheduled run fails, after a while: tried again 15 minutes after its end (review C3 a), nothing told
+    gate = threading.Event()
+    hermes.runs["r1"] = [gate]
+    threading.Timer(4.0, gate.set).start()
     edit_routine(bridge, rid, next_run=time.time() - 5)
+    began = time.time()
     assert ran(1)
     time.sleep(1.0)
     assert told() == [] and jobs(bridge)["Courriels"]["failures"] == 1
     kept = routine(bridge, rid)
+    assert kept["frame"]["retry_at"] >= began + 900 + 3, (kept, began)
     assert abs(kept["frame"]["retry_at"] - (time.time() + 900)) < 120, kept
     next_run = kept["next_run"]
     # 2. its retry fails too: today's notice, the run of the day not moved
@@ -313,9 +319,14 @@ def test_what_the_agent_sets_up_on_its_own_ends_after_90_days_and_asks_3_days_be
     bridge = started(with_device(bridges))
     hermes = fakes.hermes
     hermes.add_session("api_main", [{"role": "user", "content": "Bonjour"}], title="Bot Chat")
-    # asked (no turn going on: taken as asked), no end given: until the person stops it
-    _, asked = made_by_agent(bridge, "Agenda", "every day at 8:00")
+    # asked in the person's own conversation, no end given: until the person stops it
+    with persons_turn(bridge, fakes):
+        _, asked = made_by_agent(bridge, "Agenda", "every day at 8:00")
     assert asked["bip_summary"] == "Wellness created the routine “Agenda”: every day around 8 AM. Start it?"
+    # outside any turn the bridge follows: its own idea too (review C8, as plans.rs)
+    _, outside = made_by_agent(bridge, "Hors tour", "every day at 9:00")
+    end = jobs(bridge)["Hors tour"]["ends"]
+    assert end["kind"] == "date" and abs(end["at"] - (time.time() + 90 * DAY)) < 2 * DAY, end
     host = bridge.post("/v1/agents/wellness/routines", headers=AUTH,
                        json={"name": "Veille", "schedule": "every 2h", "prompt": "Regarde."}).json()["job"]
     gate = threading.Event()
@@ -427,14 +438,29 @@ def test_a_once_watcher_stops_once_it_told_its_person(bridges, fakes):
     assert card["bip_connector_schedule"] == \
         "Vérifie toutes les 15 min, ne réveille l'agent que si ça change, une seule fois, puis il s'arrête"
     assert tw.check(bridge, conn)["step"] == "baseline"
+    listed = lambda: bridge.get("/v1/agents/vie/connectors", headers=AUTH).json()["items"]  # noqa: E731
+    # not yet what the person waits for: its agent keeps it to itself, the watcher goes on (review C2); its note says
+    # it is « once »
+    fakes.hermes.run_output = "NOTHING"
+    value.write_text("mardi 18:00")
+    assert tw.check(bridge, conn)["step"] == "woke"
+    assert "only once" in tw.turns(fakes)[-1]["input"], tw.turns(fakes)[-1]["input"]
+    time.sleep(1.0)
+    assert [c["enabled"] for c in listed()] == [True]
+    # its agent's turn fails: the bridge's own line is no « once » told, it goes on
+    fakes.hermes.run_info[f"r{len(fakes.hermes.started) + 1}"] = {"status": "failed", "error": "model unreachable"}
+    value.write_text("mardi 19:00")
+    assert tw.check(bridge, conn)["step"] == "woke"
+    time.sleep(1.0)
+    assert [c["enabled"] for c in listed()] == [True]
+    # what it waited for: told, then it stops (paused on its page, never deleted)
     fakes.hermes.run_output = "Un créneau s'est libéré mercredi à 9 h."
     value.write_text("mercredi 09:00")
     woke = tw.check(bridge, conn)
     assert woke["step"] == "woke" and woke["sent"] is True, woke
-    assert wait_until(lambda: bridge.get("/v1/agents/vie/connectors", headers=AUTH).json()["items"] == [], timeout=20)
-    assert not [i for i in autonomous(bridge, "vie") if i["kind"] == "watcher"]
-    assert wait_until(lambda: tw.boite(bridge), timeout=20)
-    assert [i["text"] for i in tw.boite(bridge)] == ["Un créneau s'est libéré mercredi à 9 h."]
+    assert wait_until(lambda: [c["enabled"] for c in listed()] == [False], timeout=20)
+    assert [i["state"] for i in autonomous(bridge, "vie") if i["kind"] == "watcher"] == ["paused"]
+    assert wait_until(lambda: [i for i in tw.boite(bridge) if i["text"].startswith("Un créneau")], timeout=20)
 
 
 # -- an app 1.0 ------------------------------------------------------------------------------------------------------
@@ -449,7 +475,8 @@ ISO = re.compile(r"\d{4}-\d\d-\d\dT[\d:.]+(Z|[+-]\d\d:\d\d)?")
 
 def normal(value, key=None):
     """An answer with what changes from one run to the next (ids, times, tokens) blanked."""
-    if key in VOLATILE and value is not None:
+    # (a card's conversation, `session_id`: the turn it was made in, null outside any: the scenario's, not the bridge's)
+    if key in VOLATILE and (value is not None or key == "session_id"):
         return "<v>"
     if isinstance(value, dict):
         return {k: normal(v, k) for k, v in value.items()}
@@ -487,7 +514,8 @@ def test_an_app_1_0_sees_today_s_answers(bridges, fakes):
     assert bridge.post("/v1/agents/vie/routines", headers=AUTH,
                        json={"name": "Point du soir", "schedule": "every day at 19:00", "prompt": "Fais le point."}
                        ).status_code == 200
-    made_by_agent(bridge, "Relevés", "every 2h", token=VIE, agent="vie")
+    with persons_turn(bridge, fakes, agent="vie"):
+        made_by_agent(bridge, "Relevés", "every 2h", token=VIE, agent="vie")
     asked = call(bridge, "routine_trigger", {"action": "create", "kind": "link", "name": "Raccourci",
                                              "prompt": "Note ce que je dicte."}, token=VIE)
     assert not asked["isError"], text_of(asked)
@@ -508,3 +536,18 @@ def test_an_app_1_0_sees_today_s_answers(bridges, fakes):
         return
     base = json.loads(RECORDED.read_text())
     assert without_added(seen) == base
+
+
+def test_switching_a_broken_watcher_off_or_removing_it_takes_its_card(bridges, fakes):
+    """Review C11: its switch in the app, or its removal, answers its card « Réparer / Arrêter »: no « arrêté depuis 7
+    jours » later for a watcher the person switched off."""
+    bridge, value, conn, _ = tw.setup(bridges, fakes)
+    assert tw.check(bridge, conn)["step"] == "baseline"
+    value.write_text("fail")
+    assert [tw.check(bridge, conn)["step"] for _ in range(3)] == ["failed", "failed", "broken"]
+    assert wait_until(lambda: cards(bridge, "bip-fix-", "vie"), timeout=20)
+    off = bridge.patch(f"/v1/agents/vie/connectors/{conn['id']}", headers=AUTH, json={"enabled": False})
+    assert off.status_code == 200, off.text
+    assert cards(bridge, "bip-fix-", "vie") == []
+    kept = json.loads((bridge.state_dir / "connectors" / "connectors.json").read_text())
+    assert not kept["agents"]["vie"][0].get("frame", {}).get("fix"), kept["agents"]["vie"][0]

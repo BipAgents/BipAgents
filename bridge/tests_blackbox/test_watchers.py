@@ -9,11 +9,13 @@ runs the model (proactive agents part 5); the list « Ce que tes agents font tou
 chose change »."""
 import hashlib
 import json
+import threading
 import time
+from contextlib import contextmanager
 
 import pytest
 
-from bbkit.common import AUTH, boite_items
+from bbkit.common import AUTH, boite_items, sse
 from bbkit.fakes import taken_notes, waiting_notes
 from bbkit.servers import wait_until
 from conftest import profile, wait_registered
@@ -45,7 +47,26 @@ REGISTER = {"name": "Créneau médecin", "sites": ["www.doctolib.example"],
             "watch": {"every": "15m", "notify": "on_change"}}
 
 
-def setup(bridges, fakes, watchers=None, notify="on_change", watch=None):
+@contextmanager
+def persons_turn(bridge, fakes, agent="wellness", tool="mcp_bipagents_routine_schedule", run="run_p"):
+    """A turn of the person's own conversation going on (the app follows it), inside `tool`: what the agent sets up then
+    is asked by its person (no default end; review C8: outside any turn it is its own idea)."""
+    hermes = fakes.hermes
+    gate = threading.Event()
+    hermes.runs[run] = [sse("tool.started", run_id=run, tool=tool, preview="x"), gate,
+                        sse("run.completed", run_id=run, output="C'est noté.")]
+    watched = bridge.post("/v1/watch", headers=AUTH, json={"agent": agent, "run_id": run, "session_id": f"api_{run}"})
+    assert watched.status_code == 200, watched.text
+    assert wait_until(lambda: any(f"/v1/runs/{run}/events" in s.path for s in hermes.seen("")), timeout=20)
+    time.sleep(0.3)
+    try:
+        yield
+    finally:
+        gate.set()
+        time.sleep(0.5)
+
+
+def setup(bridges, fakes, watchers=None, notify="on_change", watch=None, asked=True):
     bridge, hub, _ = isolated(bridges, fakes, agents=("vie",))
     bridge.config["agents"]["vie"].update({"isolated": True, "python": f"{bridge.fakebin}/podman exec -i hermes-vie python",
                                            "hermes_home": "/home/hermes/.hermes"})
@@ -68,8 +89,16 @@ def setup(bridges, fakes, watchers=None, notify="on_change", watch=None):
     tokens = json.loads(path.read_text())["tokens"]
     tokens["vie"] = hashlib.sha256(TOKEN.encode()).hexdigest()
     path.write_text(json.dumps({"tokens": tokens}))
-    result, card = approve_next(bridge, "connector_register",
-                                {**REGISTER, "watch": watch or {"every": "15m", "notify": notify}})
+    # made in the person's own conversation (asked: no default end, task-frame); `asked=False`: outside any turn
+    turn = persons_turn(bridge, fakes, agent="vie", tool="mcp_bipagents_connectors_connector_register") if asked else None
+    if turn:
+        turn.__enter__()
+    try:
+        result, card = approve_next(bridge, "connector_register",
+                                    {**REGISTER, "watch": watch or {"every": "15m", "notify": notify}})
+    finally:
+        if turn:
+            turn.__exit__(None, None, None)
     assert "approved" in text(result), text(result)
     conn = bridge.get("/v1/agents/vie/connectors", headers=AUTH).json()["items"][0]
     return bridge, value, conn, card
