@@ -2,13 +2,14 @@
   "$schema": "../schema.json",
   "type": "card",
   "audit_row": 15,
-  "summary": "A connector's, a secret's, a mail connector's card, a tool asked for or a plan an agent proposes waits for the person's accord.",
+  "summary": "A connector's, a secret's, a mail connector's card, a tool asked for, or a plan or an offer an agent proposes waits for the person's accord.",
   "producers": [
     "connectors.rs:595 (connector_request)",
     "connectors.rs:1236 (secret_request)",
     "agent_tools.rs:1428 (mail_request) -> notify_bridge_card",
     "tool_asks.rs (tool_request) -> notify_bridge_card",
-    "agent_tools.rs (plan_request: plans.rs PUSH_KEY) -> notify_bridge_card"
+    "agent_tools.rs (plan_request: plans.rs PUSH_KEY) -> notify_bridge_card",
+    "agent_tools.rs (offer_request: plans/offers.rs PUSH_KEY) -> notify_bridge_card"
   ],
   "policy": {
     "per_agent_switch": false
@@ -266,6 +267,55 @@
         "push_type": "alert",
         "priority": 10,
         "collapse_id": "mail_card:bip-plan-0123456789ab"
+      }
+    },
+    {
+      "name": "offer",
+      "about": "An offer to act its agent made (plans/offers.rs, contracts/offers): the neutral line of a request, « Une demande attend ton accord », as a plan's; its sealed words texts.<lang>.notification (« Propose : {question} »); `r` the card's run id, so an older app's « Refuser » answers it through /v1/approve (`deny`: « Non merci »). A plan's offers shown on its card are not pushed.",
+      "bridge": {
+        "agent": "vie",
+        "context": {
+          "title": "Vie",
+          "lang": "fr"
+        },
+        "input": {
+          "fn": "notify_bridge_card",
+          "args": {
+            "line": "Propose : Je regarde les hôtels ?",
+            "key": "offer_request",
+            "id": "bip-offer-0123456789ab"
+          }
+        },
+        "pointer": {
+          "n": "n_contract",
+          "thread": "t_contract",
+          "message": "m_contract",
+          "badge": 1
+        }
+      },
+      "payload": {
+        "aps": {
+          "alert": {
+            "loc-key": "notif.mail_card",
+            "body": "notif.mail_card"
+          },
+          "thread-id": "vie/t_contract",
+          "mutable-content": 1,
+          "category": "BRIDGE_CARD",
+          "sound": "default",
+          "badge": 1
+        },
+        "v": 2,
+        "n": "n_contract",
+        "t": "mail_card",
+        "agent": "vie",
+        "c": "t_contract",
+        "r": "bip-offer-0123456789ab"
+      },
+      "push": {
+        "push_type": "alert",
+        "priority": 10,
+        "collapse_id": "mail_card:bip-offer-0123456789ab"
       }
     }
   ]

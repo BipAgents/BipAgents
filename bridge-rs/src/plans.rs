@@ -1801,5 +1801,8 @@ pub async fn watch(state: AppState) {
     }
 }
 
+/// Offers to act (`offer_act`, the `bip-offer-` card; plans/offers.rs).
+pub mod offers;
+
 #[cfg(test)]
 mod tests;
