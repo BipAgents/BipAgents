@@ -332,8 +332,8 @@ fn graphs_contacts_in_the_phone_copys_shape() {
     assert_eq!(c["birthday"], "1990-05-12");
     assert_eq!(c["groups"], json!(["Famille"]));
     assert!(c.get("notes").is_none(), "never its notes");
-    assert_eq!(groups_of(&[c.clone()]), vec![json!({"id": "Famille", "title": "Famille"})]);
-    let answer = crate::contacts::read_answer("contacts_search", &args(json!({"query": "kerfy"})), &groups_of(&[c.clone()]), &[c], "read now from Outlook", py::time_time());
+    assert_eq!(groups_of(std::slice::from_ref(&c)), vec![json!({"id": "Famille", "title": "Famille"})]);
+    let answer = crate::contacts::read_answer("contacts_search", &args(json!({"query": "kerfy"})), &groups_of(std::slice::from_ref(&c)), &[c], "read now from Outlook", py::time_time());
     let said = answer["content"][0]["text"].as_str().unwrap();
     assert!(said.contains("Léa Martin") && said.contains("read now from Outlook"), "{said}");
 }
