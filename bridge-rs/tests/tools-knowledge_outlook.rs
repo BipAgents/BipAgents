@@ -174,7 +174,7 @@ async fn serve(State(graph): State<Shared>, method: Method, uri: Uri, headers: H
             if let Some(since) = q.get("$filter").and_then(|f| f.strip_prefix("receivedDateTime ge ")) {
                 found.retain(|m| text(m, "receivedDateTime").as_str() >= since);
             }
-            found.sort_by(|a, b| text(b, "receivedDateTime").cmp(&text(a, "receivedDateTime")));
+            found.sort_by_key(|m| std::cmp::Reverse(text(m, "receivedDateTime")));
             let top: usize = q.get("$top").and_then(|t| t.parse().ok()).unwrap_or(10);
             found.truncate(top);
             reply(200, json!({"value": found}))
