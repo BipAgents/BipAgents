@@ -480,6 +480,12 @@ pub fn notebook_view(config: &Config) -> Value {
     view_of(&read(&notebook_path(config)))
 }
 
+/// [`view_of`] for the tests of family_carnet.rs.
+#[cfg(test)]
+pub fn view_for_tests(data: &Dict) -> Value {
+    view_of(data)
+}
+
 fn view_of(data: &Dict) -> Value {
     json!({"pages": data.get("pages").cloned().unwrap_or(json!([])),
            "lists": data.get("lists").cloned().unwrap_or(json!([])),

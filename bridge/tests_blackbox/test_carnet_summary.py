@@ -17,7 +17,7 @@ from bbkit.common import AUTH
 from bbkit.mcp import call, text_of
 from test_carnet_sommaire import index_of, today, write_by_hand, write_carnet
 
-CAPABILITIES = ["categories", "categorize", "sorted", "index", "summary", "category", "kept", "searched"]
+CAPABILITIES = ["categories", "categorize", "sorted", "index", "summary", "category", "kept", "searched", "family"]
 
 
 def get(bridge, path, status=200, **params):
