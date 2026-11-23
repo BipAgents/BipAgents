@@ -1425,10 +1425,12 @@ mod tests {
         for key in ["mail_move", "mail_archive", "mail_mark_read", "mail_rule", "files_write", "service_write:notion"] {
             assert!(offers_always(key), "{key}");
         }
-        // every critical kind, and anything not named: never
-        for rule in TABLE.iter().filter(|r| r.critical) {
+        // every critical kind, and anything not named: never (but the one critical kind its rule names: a Google
+        // Calendar add or change, Alex 23/11)
+        for rule in TABLE.iter().filter(|r| r.critical && r.kind != "calendar_write") {
             assert!(!offers_always(rule.kind), "{}", rule.kind);
         }
+        assert!(offers_always("calendar_write") && !offers_always("calendar_delete"));
         for key in ["service_write", "service_write:", "service_write:../x", "mail_move:x", "task_start", "unknown",
                     "service_send:notion", "mail_trash", "site_send", "held_mail", "payment", ""] {
             assert!(!offers_always(key), "{key}");
@@ -1441,12 +1443,57 @@ mod tests {
         assert_eq!(gate("delete_page", "notion"), None);
         assert_eq!(gate("send_message", "slack"), None);
         assert_eq!(hermes_always_key(&data(json!({"command": "rm -rf /", "pattern_key": "recursive delete"}))), None);
-        assert_eq!(always_button("fr", "Vie", "mail_move").as_deref(), Some("Toujours autoriser Vie à déplacer tes e-mails"));
-        assert_eq!(always_button("en", "Vie", "service_write:google_drive").as_deref(), Some("Always let Vie write in Google drive"));
-        assert_eq!(always_button("de", "Vie", "mail_archive").as_deref(), Some("Vie immer erlauben, deine E-Mails zu archivieren"));
-        assert_eq!(always_button("es", "Vie", "files_write").as_deref(), Some("Permitir siempre a Vie guardar archivos en su espacio"));
-        assert_eq!(always_short("de", "mail_move").as_deref(), Some("Deine E-Mails verschieben"));
+        // the button says just that, on every card (Alex 23/11 « Juste Toujours autoriser », then « Oui, tous »)
+        assert_eq!(always_button("fr", "Vie", "mail_move").as_deref(), Some("Toujours autoriser"));
+        assert_eq!(always_button("en", "Vie", "service_write:google_drive").as_deref(), Some("Always allow"));
+        assert_eq!(always_button("de", "Vie", "mail_archive").as_deref(), Some("Immer erlauben"));
+        assert_eq!(always_button("es", "Vie", "files_write").as_deref(), Some("Permitir siempre"));
+        assert_eq!(always_button("fr", "Vie", "calendar_write").as_deref(), Some("Toujours autoriser"));
         assert_eq!(always_button("fr", "Vie", "mail_trash"), None);
+        assert_eq!(always_button("fr", "Vie", "calendar_delete"), None);
+        // the agent's settings say what it allows
+        assert_eq!(always_short("de", "mail_move").as_deref(), Some("Deine E-Mails verschieben"));
+        assert_eq!(always_short("fr", "service_write:google_drive").as_deref(), Some("Écrire dans Google drive"));
+    }
+
+    /// Alex 23/11: « Oui, pour cette conversation » gone from a Google Calendar card, its « Toujours autoriser » in
+    /// its place. Only that « Toujours » lets this agent's adds and changes through (google_calendar.rs applies it
+    /// itself): never the person's level (Alex 20/11: never silently), never another agent, never a deletion.
+    #[test]
+    fn the_calendars_toujours_is_the_persons_own_never_their_level() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = config_in(&dir);
+        for (name, shown) in [("vie", "Vie"), ("coach", "Coach")] {
+            config.agents.insert(name.into(), AgentConfig { name: name.into(), display_name: shown.into(), ..Default::default() });
+        }
+        assert!(rule_of("calendar_write").critical, "still asked at every level");
+        assert!(offers_always("calendar_write"));
+        assert!(!offers_always("calendar_delete") && !offers_always("calendar_write:primary"));
+        // « Seulement le critique »: still asked
+        set_level(&config, "critical").unwrap();
+        assert!(!auto_for(&config, "vie", "calendar_write") && !granted(&config, "vie", "calendar_write"));
+        // the person's « Toujours autoriser » for Vie: Vie's alone, kept (a file: a restart keeps it)
+        grant_always(&config, "vie", "calendar_write").unwrap();
+        assert!(granted(&config, "vie", "calendar_write") && !granted(&config, "coach", "calendar_write"));
+        assert!(has_grants(&config, "vie"));
+        // the cards' generic answers (settle_new, settle_card) never take a critical kind: google_calendar.rs does
+        assert!(!auto_for(&config, "vie", "calendar_write"));
+        assert!(grant_always(&config, "vie", "calendar_delete").is_err(), "a deletion: asked each time");
+        assert!(!auto_for(&config, "vie", "calendar_delete"));
+        // listed in the agent's settings in the same format as the others; its personality says so
+        let listed = view(&config)["always"]["vie"].as_array().cloned().unwrap();
+        assert_eq!(listed.iter().map(|k| k["kind"].as_str().unwrap()).collect::<Vec<_>>(), ["calendar_write"]);
+        let label = listed[0]["label"].as_str().unwrap();
+        let four = ["Modifier ton agenda", "Change your calendar", "Deinen Kalender ändern", "Modificar tu calendario"];
+        assert!(four.contains(&label), "{label}");
+        assert_eq!(always_short("fr", "calendar_write").as_deref(), Some("Modifier ton agenda"));
+        assert_eq!(always_short("en", "calendar_write").as_deref(), Some("Change your calendar"));
+        assert_eq!(always_short("de", "calendar_write").as_deref(), Some("Deinen Kalender ändern"));
+        assert_eq!(always_short("es", "calendar_write").as_deref(), Some("Modificar tu calendario"));
+        assert!(always_rule(&config, "vie").is_some_and(|r| r.contains("change your calendar")));
+        // taken back: asked again
+        assert!(revoke_always(&config, "vie", "calendar_write"));
+        assert!(!granted(&config, "vie", "calendar_write") && !has_grants(&config, "vie"));
     }
 
     #[test]

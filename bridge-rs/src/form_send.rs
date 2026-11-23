@@ -352,8 +352,9 @@ mod tests {
         assert!(sentence("es", "Vie", "x.example").contains("10 minutos"));
         assert!(sentence("de", "Vie", "x.example").starts_with("An diese Website senden?"));
         assert!(sentence("es", "Vie", "x.example").starts_with("¿Enviar a este sitio?"));
-        assert_eq!(always_words("fr"), "Toujours pour ce site");
-        assert_eq!(always_words("es"), "Siempre para este sitio");
+        // the « Toujours » button of every card (Alex 23/11)
+        assert_eq!(always_words("fr"), "Toujours autoriser");
+        assert_eq!(always_words("es"), "Permitir siempre");
         assert_eq!(detail("fr", "un message"), "Ce que l’agent dit envoyer : « un message »");
         assert_eq!(detail("en", "a message"), "What the agent says it sends: « a message »");
         let tool = tool();

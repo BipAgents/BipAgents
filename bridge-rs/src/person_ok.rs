@@ -463,49 +463,40 @@ mod tests {
         asks().remove("t1abc");
     }
 
-    /// Google Calendar's adds and changes (Alex 20/11): « Oui, pour cette conversation » offered, kept for that kind,
-    /// that agent and that Hermes session only; a card without it takes « session » as a plain « Oui ».
+    /// Google Calendar's adds and changes (Alex 23/11): no « Oui, pour cette conversation » any more, its
+    /// « Toujours autoriser » in its place (`bip_always`, kind `calendar_write`: app.rs `approve` keeps it for that
+    /// agent); a card without it (another calendar) offers none, and an older app's « session » is a plain « Oui ».
     #[test]
-    fn a_session_yes_is_for_that_kind_agent_and_conversation_only() {
+    fn a_calendar_card_offers_toujours_autoriser_never_for_this_conversation() {
         let dir = tempfile::tempdir().unwrap();
         let mut config = Config::with_key("k");
         config.outbox.db_path = dir.path().join("bridge.db").to_string_lossy().into_owned();
-        let card = |session: bool| Card { kind: CALENDAR_WRITE, tool: "calendar_add", command: "calendar_add x".into(),
-                                          summary: "Vie veut ajouter un événement".into(), detail: String::new(),
-                                          always: None, session };
-        for (id, session) in [("s1", true), ("s2", false)] {
-            asks().insert(id.into(), Ask { place: config.data_dir(), agent: "vie".into(), card: card(session), at: 1.0,
+        let card = |always: Option<&str>| Card { kind: CALENDAR_WRITE, tool: "calendar_add", command: "calendar_add x".into(),
+                                                 summary: "Vie veut ajouter un événement".into(), detail: String::new(),
+                                                 always: always.map(str::to_string), session: false };
+        for (id, always) in [("w1", Some("Toujours autoriser")), ("w2", None), ("w3", Some("Toujours autoriser"))] {
+            asks().insert(id.into(), Ask { place: config.data_dir(), agent: "vie".into(), card: card(always), at: 1.0,
                                            answer: None, notify: Arc::new(Notify::new()), then: None,
                                            until: f64::INFINITY, for_session: false });
         }
         let items = pending_items(&config, Some("vie"));
-        let choices = |id: &str| items.iter().find(|i| i["request_id"] == id).unwrap()["choices"].clone();
-        assert_eq!(choices("s1"), json!(["once", "session", "deny"]));
-        assert_eq!(choices("s2"), json!(["once", "deny"]));
-        let s1 = items.iter().find(|i| i["request_id"] == "s1").unwrap();
-        assert_eq!(crate::approval_level::classify_card(s1), CALENDAR_WRITE);
-        assert_eq!(answer(&config, "vie", "s1", "session", "test"), Some(("session", false)));
-        assert!(asks().get("s1").unwrap().for_session);
-        assert_eq!(answer(&config, "vie", "s2", "session", "test"), Some(("once", false)), "not offered: once");
-        assert!(!asks().get("s2").unwrap().for_session);
-        asks().remove("s1");
-        asks().remove("s2");
-        assert!(!session_allows(&config, "vie", CALENDAR_WRITE, Some("h1")));
-        allow_session(&config, "vie", CALENDAR_WRITE, "h1");
-        assert!(session_allows(&config, "vie", CALENDAR_WRITE, Some("h1")));
-        assert!(!session_allows(&config, "vie", CALENDAR_WRITE, Some("h2")), "another conversation");
-        assert!(!session_allows(&config, "coach", CALENDAR_WRITE, Some("h1")), "another agent");
-        assert!(!session_allows(&config, "vie", CALENDAR_DELETE, Some("h1")), "another kind");
-        assert!(!session_allows(&config, "vie", CALENDAR_WRITE, None), "no session known");
-        // forgotten: one agent's (taken out of Google Calendar's list), then everyone's (disconnected)
-        allow_session(&config, "coach", CALENDAR_WRITE, "h1");
-        allow_session(&config, "coach", SITE_FORM, "h1");
-        forget_sessions(&config, CALENDAR_WRITE, Some(&["vie".to_string()]));
-        assert!(!session_allows(&config, "vie", CALENDAR_WRITE, Some("h1")));
-        assert!(session_allows(&config, "coach", CALENDAR_WRITE, Some("h1")), "another agent's kept");
-        forget_sessions(&config, CALENDAR_WRITE, None);
-        assert!(!session_allows(&config, "coach", CALENDAR_WRITE, Some("h1")));
-        assert!(session_allows(&config, "coach", SITE_FORM, Some("h1")), "another kind's kept");
+        let of = |id: &str| items.iter().find(|i| i["request_id"] == id).unwrap().clone();
+        for id in ["w1", "w2", "w3"] {
+            assert_eq!(of(id)["choices"], json!(["once", "deny"]), "{id}");
+            assert_eq!(crate::approval_level::classify_card(&of(id)), CALENDAR_WRITE);
+        }
+        assert_eq!(of("w1")["bip_always"], "Toujours autoriser");
+        assert_eq!(of("w1")["bip_always_kind"], CALENDAR_WRITE);
+        assert!(crate::approval_level::offers_always(of("w1")["bip_always_kind"].as_str().unwrap()), "kept by app.rs");
+        // another calendar's card: none, and the bridge adds none to it (card_place.rs `bridge_cards`)
+        let other = crate::approval_level::with_always(&config, of("w2"));
+        assert!(other.get("bip_always").is_none() && other.get("bip_always_kind").is_none(), "{other:?}");
+        assert_eq!(answer(&config, "vie", "w1", "always", "test"), Some(("always", false)));
+        assert_eq!(answer(&config, "vie", "w2", "always", "test"), Some(("once", false)), "not offered: once");
+        assert_eq!(answer(&config, "vie", "w3", "session", "test"), Some(("once", false)), "an older app's word");
+        for id in ["w1", "w2", "w3"] {
+            asks().remove(id);
+        }
     }
 
     /// Alex 18/11: an owner's card holds no call, waits for her alone, and only her « Oui » does what it says.
