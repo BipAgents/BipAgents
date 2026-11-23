@@ -816,6 +816,23 @@ pub fn etag(config: &Config, langs: &[String]) -> String {
     etag_of(&kept[&key], langs)
 }
 
+/// [`answer`] of one space (`?space=`, S5).
+pub fn answer_in(
+    config: &Config,
+    langs: &[String],
+    since: Option<u64>,
+    epoch: Option<&str>,
+    online_only: &str,
+    _space: &str,
+) -> (Value, String) {
+    answer(config, langs, since, epoch, online_only)
+}
+
+/// [`etag`] of one space's copy (S5).
+pub fn etag_in(config: &Config, langs: &[String], _space: &str) -> String {
+    etag(config, langs)
+}
+
 /// `GET /v1/notebook/index`: (the answer, its ETag). `since`/`epoch`: what the phone has.
 pub fn answer(config: &Config, langs: &[String], since: Option<u64>, epoch: Option<&str>, online_only: &str) -> (Value, String) {
     let (key, _) = refreshed(config);

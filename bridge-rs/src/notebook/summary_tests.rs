@@ -261,14 +261,15 @@ fn kept_searches_six_a_space_with_their_count() {
         sm::keep(&config, q, None, "all", None).unwrap();
     }
     assert_eq!(sm::keep(&config, "claire", None, "all", None), Err(Refused::KeptFull));
-    // another space has its own six (before S5: Pro counts nothing)
+    // another space has its own six (the demo has no Pro note: Pro counts nothing)
     sm::keep(&config, "claire", Some("Claire"), "pro", None).unwrap();
     let pro = listed("pro");
     assert_eq!((pro["kept"][0]["space"].clone(), pro["kept"][0]["count"].clone(), pro["kept"][0]["title"].clone()), (json!("pro"), json!(0), json!("Claire")));
-    assert_eq!(listed("all")["kept"].as_array().unwrap().len(), 6);
+    // (S5: `all` shows every space's kept searches, the setting off shows everything together; spaces.rs)
+    assert_eq!(listed("all")["kept"].as_array().unwrap().len(), 7);
     // deleted
     assert_eq!(sm::drop_kept(&config, &id).unwrap(), "all");
-    assert_eq!(listed("all")["kept"].as_array().unwrap().len(), 5);
+    assert_eq!(listed("all")["kept"].as_array().unwrap().len(), 6);
     assert_eq!(sm::drop_kept(&config, &id), Err(Refused::KeptUnknown));
     assert_eq!(sm::rename(&config, "k000000", "x"), Err(Refused::KeptUnknown));
     // refused: nothing to search, a number or a reference (never kept, never in the phone's copy), Santé, a category

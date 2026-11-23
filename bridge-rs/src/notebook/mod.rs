@@ -66,6 +66,9 @@ mod search_bench;
 pub mod search_words;
 #[cfg(test)]
 mod sommaire_contract;
+pub mod spaces;
+#[cfg(test)]
+mod spaces_tests;
 pub mod summary;
 #[cfg(test)]
 mod summary_tests;
@@ -2303,6 +2306,18 @@ pub fn edit(
 /// A new page made by the person in the app (`POST /v1/notebook/page`): its Markdown written by the bridge. Err(path)
 /// inside: a page of that name, alias, e-mail or phone is there already (the app opens it).
 pub fn new_page(config: &Config, part: Part, kind: &str, title: &str, who: &Who) -> anyhow::Result<Result<String, String>> {
+    new_page_in(config, part, kind, title, None, who)
+}
+
+/// [`new_page`] in the space of the app's open tab (`space`: « Écrire une page » in Pro; S5).
+pub fn new_page_in(
+    config: &Config,
+    part: Part,
+    kind: &str,
+    title: &str,
+    _space: Option<&str>,
+    who: &Who,
+) -> anyhow::Result<Result<String, String>> {
     let _guard = lock();
     let lang = fix_language(config)?;
     let w = words(&lang);
