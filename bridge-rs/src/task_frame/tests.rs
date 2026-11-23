@@ -31,15 +31,25 @@ fn contract() -> Value {
 
 const PARIS: Tz = chrono_tz::Europe::Paris;
 
-/// A day of this year (no year written then), about `days` from today (C13 of the review: never a fixed date): its
+/// The day `days` from today (reviews C13: never a fixed date, never one that depends on the day the tests run): its
 /// last second on the Paris clock.
-fn day_this_year(days: i64) -> chrono::DateTime<Tz> {
-    let today = chrono::Utc::now().with_timezone(&PARIS).date_naive();
-    let mut day = today + chrono::Duration::days(days);
-    if day.year() != today.year() {
-        day = today - chrono::Duration::days(days);
-    }
+fn day_from_today(days: i64) -> chrono::DateTime<Tz> {
+    let day = chrono::Utc::now().with_timezone(&PARIS).date_naive() + chrono::Duration::days(days);
     PARIS.from_local_datetime(&day.and_hms_opt(23, 59, 59).unwrap()).unwrap()
+}
+
+/// `d` as the bridge writes a day: « 30/11 » (fr, es), « Nov 30 » (en), « 30.11. » (de), and the year when it is not
+/// this year (review C9).
+fn day_as_written(lang: &str, d: chrono::DateTime<Tz>) -> String {
+    let this_year = d.year() == chrono::Utc::now().with_timezone(&PARIS).year();
+    match (lang, this_year) {
+        ("en", true) => d.format("%b %-d").to_string(),
+        ("en", false) => d.format("%b %-d, %Y").to_string(),
+        ("de", true) => format!("{}.{}.", d.day(), d.month()),
+        ("de", false) => format!("{}.{}.{}", d.day(), d.month(), d.year()),
+        (_, true) => format!("{}/{}", d.day(), d.month()),
+        (_, false) => format!("{}/{}/{}", d.day(), d.month(), d.year()),
+    }
 }
 
 fn epoch(d: chrono::DateTime<Tz>) -> f64 {
@@ -97,12 +107,12 @@ fn the_contract_s_texts_are_the_bridge_s() {
 
 #[test]
 fn dates_and_clocks_in_the_four_languages() {
-    let d = day_this_year(7);
+    let d = day_from_today(7);
     let last = epoch(d);
-    let (dm, en) = (format!("{}/{}", d.day(), d.month()), d.format("%b %-d").to_string());
+    let (dm, en) = (day_as_written("fr", d), day_as_written("en", d));
     assert_eq!(end_words("fr", Task::Routine, &End::Date(last), PARIS), format!("jusqu'au {dm}"));
     assert_eq!(end_words("en", Task::Routine, &End::Date(last), PARIS), format!("until {en}"));
-    assert_eq!(end_words("de", Task::Routine, &End::Date(last), PARIS), format!("bis {}.{}.", d.day(), d.month()));
+    assert_eq!(end_words("de", Task::Routine, &End::Date(last), PARIS), format!("bis {}", day_as_written("de", d)));
     assert_eq!(end_words("es", Task::Routine, &End::Date(last), PARIS), format!("hasta el {dm}"));
     assert_eq!(end_words("it", Task::Routine, &End::Date(last), PARIS), format!("until {en}"));
     assert_eq!((clock("fr", 8, 0), clock("en", 8, 0), clock("de", 8, 0), clock("es", 8, 0)),
@@ -110,12 +120,12 @@ fn dates_and_clocks_in_the_four_languages() {
     assert_eq!((clock("fr", 7, 30), clock("en", 15, 5), clock("de", 7, 30), clock("es", 19, 45)),
                ("vers 7 h 30".into(), "around 3:05 PM".into(), "gegen 7:30 Uhr".into(), "hacia las 19:45".into()));
     assert_eq!((clock("en", 0, 0), clock("en", 12, 0)), ("around 12 AM".into(), "around 12 PM".into()));
-    let s = day_this_year(-2);
+    let s = day_from_today(-2);
     let since = epoch(s) - 3600.0 * 16.0;
-    assert_eq!(since_words("fr", since, PARIS), format!("le {}/{}", s.day(), s.month()));
-    assert_eq!(since_words("de", since, PARIS), format!("dem {}.{}.", s.day(), s.month()));
+    assert_eq!(since_words("fr", since, PARIS), format!("le {}", day_as_written("fr", s)));
+    assert_eq!(since_words("de", since, PARIS), format!("dem {}", day_as_written("de", s)));
     assert_eq!(fix_since_line("en", &since_words("en", since, PARIS), reason_words("en", "looping")),
-               format!("Since {}: it was going round in circles.", s.format("%b %-d")));
+               format!("Since {}: it was going round in circles.", day_as_written("en", s)));
 }
 
 #[test]
@@ -137,8 +147,8 @@ fn every_agent_made_routine_watcher_and_trigger_has_an_owner_an_end_and_a_place(
     let quiet = routines::create(&config, "vie", "Archive", "every 2h", "x", None, Maker::Person { muted: true }).unwrap();
     assert_eq!(routines::view_of(&config, &quiet)["deliver_to"]["kind"], "silent");
     // a watcher, its end on its card and its views
-    let d = day_this_year(7);
-    let dm = format!("{}/{}", d.day(), d.month());
+    let d = day_from_today(7);
+    let dm = day_as_written("fr", d);
     let watch = connectors::Watch { every: "1h".into(), notify: "on_change".into(), until: Some(epoch(d)),
                                     ..Default::default() };
     let shown = crate::watchers::watch_view_in(&watch, "fr", PARIS);
@@ -443,7 +453,7 @@ fn a_once_watcher_and_a_watchers_end_are_read_from_its_watch() {
     let mut map = json!({"every": "1h", "notify": "on_change", "once": true}).as_object().cloned().unwrap();
     let w = crate::watchers::parse_watch_in(&map, PARIS).unwrap();
     assert!(w.once && w.until.is_none());
-    let d = day_this_year(7);
+    let d = day_from_today(7);
     map.insert("until".into(), json!(d.format("%Y-%m-%d").to_string()));
     map.insert("once".into(), json!(false));
     let w = crate::watchers::parse_watch_in(&map, PARIS).unwrap();
@@ -836,4 +846,53 @@ fn review2_a_count_its_agent_proposes_on_its_own_never_passes_90_days_either() {
         after.frame,
         after.repeat
     );
+}
+
+// -- review 2 (23/11, 13:52): red first ------------------------------------------------------------------------------
+
+/// B1 bis: every way a watcher comes back on (its switch, a « Oui » to its agent's card, the approval of a change) gives
+/// a default end passed meanwhile its 3 days more (`connectors::switched_on`).
+#[test]
+fn r2_every_way_back_on_gives_a_passed_default_end_three_days() {
+    let now = py::time_time();
+    let mut c = connectors::Connector {
+        id: "c_veille".into(),
+        enabled: false,
+        watch: Some(connectors::Watch { every: "1h".into(), notify: "on_change".into(), until: Some(now - DAY),
+                                        default_end: true, ..Default::default() }),
+        ..Default::default()
+    };
+    connectors::switched_on(&mut c, now);
+    assert!(c.enabled);
+    assert_eq!(c.watch.as_ref().and_then(|w| w.until), Some(now + KEEP_ASK_DAYS * DAY));
+    // an end the person gave stays
+    let mut asked = connectors::Connector {
+        watch: Some(connectors::Watch { every: "1h".into(), notify: "on_change".into(), until: Some(now - DAY),
+                                        ..Default::default() }),
+        ..Default::default()
+    };
+    connectors::switched_on(&mut asked, now);
+    assert_eq!(asked.watch.as_ref().and_then(|w| w.until), Some(now - DAY));
+}
+
+/// N1 (review 2): a « once » watcher of its agent's own that told its person is done: paused, no default end left, no
+/// « Garder 3 mois de plus ? », a « Garder ? » waiting taken.
+#[test]
+fn r2_a_once_watcher_done_is_never_asked_garder() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = config_in(dir.path());
+    let now = py::time_time();
+    watcher_of_its_own(&config, "c_billets", now + 10.0 * DAY, true);
+    connectors::change(&config, |s| {
+        let c = s.agents.get_mut("vie").unwrap().iter_mut().find(|c| c.id == "c_billets").unwrap();
+        if let Some(w) = c.watch.as_mut() {
+            w.once = true;
+        }
+    })
+    .unwrap();
+    crate::watchers::once_told(&config, "vie", "c_billets");
+    let done = connectors::get(&config, "vie", "c_billets").unwrap();
+    let w = done.watch.clone().unwrap();
+    assert!(!done.enabled && !w.default_end && w.until.is_none(), "{done:?}");
+    assert!(due(&config, now + 8.0 * DAY).is_empty(), "« Garder ? » for a once watcher done");
 }

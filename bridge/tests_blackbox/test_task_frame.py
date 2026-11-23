@@ -473,9 +473,7 @@ ISO = re.compile(r"\d{4}-\d\d-\d\dT[\d:.]+(Z|[+-]\d\d:\d\d)?")
 
 def normal(value, key=None):
     """An answer with what changes from one run to the next (ids, times, tokens) blanked."""
-    # (a card's conversation, `session_id`, and the one a routine was made in, `origin_session_id`: the turn it was made
-    # in, null outside any: the scenario's, not the bridge's)
-    if key in VOLATILE and (value is not None or key in ("session_id", "origin_session_id")):
+    if key in VOLATILE and value is not None:
         return "<v>"
     if isinstance(value, dict):
         return {k: normal(v, k) for k, v in value.items()}
@@ -550,3 +548,20 @@ def test_switching_a_broken_watcher_off_or_removing_it_takes_its_card(bridges, f
     assert cards(bridge, "bip-fix-", "vie") == []
     kept = json.loads((bridge.state_dir / "connectors" / "connectors.json").read_text())
     assert not kept["agents"]["vie"][0].get("frame", {}).get("fix"), kept["agents"]["vie"][0]
+
+
+def test_a_proposal_on_a_members_routine_is_hers_never_pushed_to_the_creator(bridges, fakes):
+    """Review 2 (C7 bis): a routine a family member asked for (`by`: her household) is hers, its agent's proposal too
+    (after her « Réparer », in the repair's turn, nobody's member turn): told to her bridge, never pushed to the
+    creator, who neither sees it nor may answer it."""
+    bridge = started(with_device(bridges))
+    fakes.hermes.add_session("api_main", [{"role": "user", "content": "Bonjour"}], title="Bot Chat")
+    rid = bridge.post("/v1/agents/wellness/routines", headers=AUTH,
+                      json={"name": "Menus", "schedule": "every 2h", "prompt": "Propose les menus."}).json()["job"]["id"]
+    edit_routine(bridge, rid, by="lea")
+    proposed = call(bridge, "routine_schedule", {"action": "update", "name": "Menus", "schedule": "every 3h"})
+    assert not proposed["isError"], text_of(proposed)
+    card = routine(bridge, rid)["change"]["card"]["id"]
+    time.sleep(1.5)
+    assert not [p for p in fakes.apns.payloads() if card in json.dumps(p)], "her routine's proposal pushed to the creator"
+    assert cards(bridge, "bip-rout-") == []
