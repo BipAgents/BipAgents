@@ -325,12 +325,15 @@
    "confirm_on": "Rallumer",
    "confirm_cancel": "Annuler",
    "popup_title": "Modèle extérieur",
-   "popup_text": "{agent} utilise un modèle extérieur ({provider}). Pour protéger ta vie privée, sa mémoire partagée, le Carnet, Santé et ses échanges avec tes autres agents sont éteints, et ses conversations repartent à neuf, sans ce qui y a été dit avant. Tu peux rallumer chacun dans sa page.",
+   "popup_text": "{agent} utilise un modèle extérieur ({provider}). Pour protéger ta vie privée, sa mémoire partagée, le Carnet, Santé et ses échanges avec tes autres agents (messages, fichiers et discussions) sont éteints, et ses conversations repartent à neuf : il ne relit plus ce qui y a été dit avant. Tu peux rallumer chacun dans sa page.",
    "popup_ok": "OK",
    "known_off": "Mémoire partagée éteinte : il ne reçoit pas ce que tes autres agents savent de toi.",
    "line_on_carnet_off": "Son Carnet est éteint : il ne reçoit pas ce que tes autres agents savent de toi.",
    "carnet_confirm_title": "Rallumer le Carnet ?",
-   "carnet_confirm_text": "{agent} utilise un modèle extérieur ({provider}). Ce qu’il lira de ton Carnet lui sera envoyé."
+   "carnet_confirm_text": "{agent} utilise un modèle extérieur ({provider}). Ce qu’il lira de ton Carnet lui sera envoyé.",
+   "carnet_confirm_text_circle": "{agent} utilise un modèle extérieur ({provider}). Ce qu’il lira de ton Carnet, et ce que tes autres agents savent de toi, lui sera envoyé.",
+   "health_confirm_title": "Rallumer Santé ?",
+   "health_confirm_text": "{agent} utilise un modèle extérieur ({provider}). Ce qu’il lira de ta santé lui sera envoyé."
   },
   "en": {
    "title": "Shared memory",
@@ -343,12 +346,15 @@
    "confirm_on": "Turn on",
    "confirm_cancel": "Cancel",
    "popup_title": "Outside model",
-   "popup_text": "{agent} uses an outside model ({provider}). To protect your privacy, its shared memory, the Notebook, Health and its exchanges with your other agents are off, and its conversations start afresh, without what was said before. You can turn each back on from its page.",
+   "popup_text": "{agent} uses an outside model ({provider}). To protect your privacy, its shared memory, the Notebook, Health and its exchanges with your other agents (messages, files and discussions) are off, and its conversations start afresh: it no longer reads what was said there before. You can turn each back on from its page.",
    "popup_ok": "OK",
    "known_off": "Shared memory off: it doesn’t get what your other agents know about you.",
    "line_on_carnet_off": "Its Notebook is off: it doesn’t get what your other agents know about you.",
    "carnet_confirm_title": "Turn the Notebook back on?",
-   "carnet_confirm_text": "{agent} uses an outside model ({provider}). What it reads of your Notebook will be sent to it."
+   "carnet_confirm_text": "{agent} uses an outside model ({provider}). What it reads of your Notebook will be sent to it.",
+   "carnet_confirm_text_circle": "{agent} uses an outside model ({provider}). What it reads of your Notebook, and what your other agents know about you, will be sent to it.",
+   "health_confirm_title": "Turn Health back on?",
+   "health_confirm_text": "{agent} uses an outside model ({provider}). What it reads of your health will be sent to it."
   },
   "de": {
    "title": "Gemeinsames Gedächtnis",
@@ -361,12 +367,15 @@
    "confirm_on": "Einschalten",
    "confirm_cancel": "Abbrechen",
    "popup_title": "Externes Modell",
-   "popup_text": "{agent} nutzt ein externes Modell ({provider}). Zum Schutz deiner Privatsphäre sind sein gemeinsames Gedächtnis, das Notizbuch, Gesundheit und sein Austausch mit deinen anderen Agenten aus, und seine Unterhaltungen beginnen neu, ohne das bisher Gesagte. Du kannst alles einzeln auf seiner Seite wieder einschalten.",
+   "popup_text": "{agent} nutzt ein externes Modell ({provider}). Zum Schutz deiner Privatsphäre sind sein gemeinsames Gedächtnis, das Notizbuch, Gesundheit und sein Austausch mit deinen anderen Agenten (Nachrichten, Dateien und Gespräche) aus, und seine Unterhaltungen beginnen neu: Was dort bisher gesagt wurde, liest er nicht mehr. Du kannst alles einzeln auf seiner Seite wieder einschalten.",
    "popup_ok": "OK",
    "known_off": "Gemeinsames Gedächtnis aus: Er bekommt nicht, was deine anderen Agenten über dich wissen.",
    "line_on_carnet_off": "Sein Notizbuch ist aus: Er bekommt nicht, was deine anderen Agenten über dich wissen.",
    "carnet_confirm_title": "Notizbuch wieder einschalten?",
-   "carnet_confirm_text": "{agent} nutzt ein externes Modell ({provider}). Was er aus deinem Notizbuch liest, wird ihm geschickt."
+   "carnet_confirm_text": "{agent} nutzt ein externes Modell ({provider}). Was er aus deinem Notizbuch liest, wird ihm geschickt.",
+   "carnet_confirm_text_circle": "{agent} nutzt ein externes Modell ({provider}). Was er aus deinem Notizbuch liest und was deine anderen Agenten über dich wissen, wird ihm geschickt.",
+   "health_confirm_title": "Gesundheit wieder einschalten?",
+   "health_confirm_text": "{agent} nutzt ein externes Modell ({provider}). Was er über deine Gesundheit liest, wird ihm geschickt."
   },
   "es": {
    "title": "Memoria compartida",
@@ -379,12 +388,15 @@
    "confirm_on": "Encender",
    "confirm_cancel": "Cancelar",
    "popup_title": "Modelo externo",
-   "popup_text": "{agent} usa un modelo externo ({provider}). Para proteger tu privacidad, su memoria compartida, el Cuaderno, Salud y sus intercambios con tus otros agentes están apagados, y sus conversaciones empiezan de nuevo, sin lo que se dijo antes. Puedes volver a encender cada uno desde su página.",
+   "popup_text": "{agent} usa un modelo externo ({provider}). Para proteger tu privacidad, su memoria compartida, el Cuaderno, Salud y sus intercambios con tus otros agentes (mensajes, archivos y discusiones) están apagados, y sus conversaciones empiezan de nuevo: ya no lee lo que se dijo antes en ellas. Puedes volver a encender cada uno desde su página.",
    "popup_ok": "OK",
    "known_off": "Memoria compartida apagada: no recibe lo que tus otros agentes saben de ti.",
    "line_on_carnet_off": "Su Cuaderno está apagado: no recibe lo que tus otros agentes saben de ti.",
    "carnet_confirm_title": "¿Volver a encender el Cuaderno?",
-   "carnet_confirm_text": "{agent} usa un modelo externo ({provider}). Lo que lea de tu Cuaderno se le enviará."
+   "carnet_confirm_text": "{agent} usa un modelo externo ({provider}). Lo que lea de tu Cuaderno se le enviará.",
+   "carnet_confirm_text_circle": "{agent} usa un modelo externo ({provider}). Lo que lea de tu Cuaderno, y lo que tus otros agentes saben de ti, se le enviará.",
+   "health_confirm_title": "¿Volver a encender Salud?",
+   "health_confirm_text": "{agent} usa un modelo externo ({provider}). Lo que lea de tu salud se le enviará."
   },
   "nl": {
    "title": "Gedeeld geheugen",
@@ -397,12 +409,15 @@
    "confirm_on": "Aanzetten",
    "confirm_cancel": "Annuleren",
    "popup_title": "Extern model",
-   "popup_text": "{agent} gebruikt een extern model ({provider}). Om je privacy te beschermen staan zijn gedeelde geheugen, het Notitieboek, Gezondheid en zijn uitwisseling met je andere agenten uit, en zijn gesprekken beginnen opnieuw, zonder wat er eerder is gezegd. Je kunt elk ervan weer aanzetten via zijn pagina.",
+   "popup_text": "{agent} gebruikt een extern model ({provider}). Om je privacy te beschermen staan zijn gedeelde geheugen, het Notitieboek, Gezondheid en zijn uitwisseling met je andere agenten (berichten, bestanden en discussies) uit, en zijn gesprekken beginnen opnieuw: wat er eerder is gezegd, leest hij niet meer. Je kunt elk ervan weer aanzetten via zijn pagina.",
    "popup_ok": "OK",
    "known_off": "Gedeeld geheugen uit: hij krijgt niet wat je andere agenten over je weten.",
    "line_on_carnet_off": "Zijn Notitieboek staat uit: hij krijgt niet wat je andere agenten over je weten.",
    "carnet_confirm_title": "Notitieboek weer aanzetten?",
-   "carnet_confirm_text": "{agent} gebruikt een extern model ({provider}). Wat hij uit je Notitieboek leest, wordt naar hem gestuurd."
+   "carnet_confirm_text": "{agent} gebruikt een extern model ({provider}). Wat hij uit je Notitieboek leest, wordt naar hem gestuurd.",
+   "carnet_confirm_text_circle": "{agent} gebruikt een extern model ({provider}). Wat hij uit je Notitieboek leest, en wat je andere agenten over je weten, wordt naar hem gestuurd.",
+   "health_confirm_title": "Gezondheid weer aanzetten?",
+   "health_confirm_text": "{agent} gebruikt een extern model ({provider}). Wat hij over je gezondheid leest, wordt naar hem gestuurd."
   }
  }
 }

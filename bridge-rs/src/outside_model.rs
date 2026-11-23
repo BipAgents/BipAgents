@@ -260,12 +260,36 @@ pub fn endpoints(data: &serde_json::Map<String, Value>) -> Vec<Endpoint> {
 /// Where a profile's models run, together (module doc): the first outside one (the main model first); else the main
 /// model's place.
 pub fn profile_place(data: &serde_json::Map<String, Value>, folder: &Path) -> Place {
+    profile_place_of(data, folder).0
+}
+
+/// [`profile_place`], and whether the outside model found is only a stand-in (a fallback, a helper, a delegate): its
+/// main model is not outside.
+fn profile_place_of(data: &serde_json::Map<String, Value>, folder: &Path) -> (Place, bool) {
     let all = endpoints(data);
     let places: Vec<Place> = all.iter().map(|e| model_place(e, folder)).collect();
-    if let Some(outside) = places.iter().find(|p| matches!(p, Place::Outside { .. })) {
-        return outside.clone();
+    if let Some(at) = places.iter().position(|p| matches!(p, Place::Outside { .. })) {
+        return (places[at].clone(), at > 0);
     }
-    places.into_iter().next().unwrap_or(Place::Unknown)
+    (places.into_iter().next().unwrap_or(Place::Unknown), false)
+}
+
+/// The place with its label saying « en secours » when the outside model is not the main one (review 2, C10: an agent
+/// on the Spark whose fallback is OpenRouter is not « on OpenRouter »).
+fn labelled(config: &Config, (place, stand_in): (Place, bool)) -> Place {
+    match place {
+        Place::Outside { provider, label } if stand_in => {
+            let word = match crate::notebook::language(config).as_str() {
+                "en" => "as a fallback",
+                "de" => "als Ersatz",
+                "es" => "de respaldo",
+                "nl" => "als reserve",
+                _ => "en secours",
+            };
+            Place::Outside { provider, label: format!("{label}, {word}") }
+        }
+        other => other,
+    }
 }
 
 /// Whether a profile's config names where its model runs (a `model` with a provider or an address; `model: <name>`,
@@ -286,7 +310,7 @@ pub fn place(config: &Config, agent: &AgentConfig) -> Place {
     let folder = crate::agents_admin::profile_folder(config, agent);
     let own = crate::shares::profile_config(&folder);
     if names_a_model(&own) {
-        return profile_place(&own, &folder);
+        return labelled(config, profile_place_of(&own, &folder));
     }
     if cfg!(test) && config.hermes.home.is_empty() {
         return Place::Unknown;
@@ -294,7 +318,7 @@ pub fn place(config: &Config, agent: &AgentConfig) -> Place {
     let home = std::path::PathBuf::from(crate::agents_admin::install_home(config));
     let hub = crate::shares::profile_config(&home);
     if names_a_model(&hub) {
-        return profile_place(&hub, &folder);
+        return labelled(config, profile_place_of(&hub, &folder));
     }
     Place::Unknown
 }

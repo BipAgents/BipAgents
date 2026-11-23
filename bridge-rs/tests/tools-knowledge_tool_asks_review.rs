@@ -257,3 +257,27 @@ async fn review_r10_a_connectors_card_never_wears_the_name_of_a_tool_of_the_regi
     );
     assert_ne!(line, "Lire, ajouter et cocher tes rappels", "the agent's own words as the card's line");
 }
+
+/// Shared memory, review 2 (C3): a Carnet card shown while Wellness ran on the person's own model, answered « Oui » once
+/// it went to an outside model (changed by SSH, say): refused (« depuis l'app seulement », where « Rallumer le
+/// Carnet ? » names the provider), its Carnet stays off.
+#[tokio::test]
+async fn shared_memory_a_card_waiting_from_before_never_turns_the_carnet_on_for_an_outside_model() {
+    let dir = tempfile::tempdir().unwrap();
+    let backend = FakeBackend::start().await;
+    let app = app(dir.path(), &backend, true);
+    let config = app.app.state.config();
+    bipbridge::notebook::set_enabled(&config, "wellness", false).unwrap();
+    let _turn = turn(&app, &backend, "run_carnet", "api_s1", &[], true).await;
+    ask(&app, "notebook", "Pour ranger ce que tu me dis").await;
+    let card = cards(&app).await.into_iter().next().expect("a card");
+    let id = card["request_id"].as_str().unwrap().to_string();
+    let agent = config.agent(Some("wellness")).cloned().unwrap();
+    let folder = bipbridge::agents_admin::profile_folder(&config, &agent);
+    std::fs::create_dir_all(&folder).unwrap();
+    std::fs::write(folder.join("config.yaml"), "model:\n  provider: openai-codex\n  default: gpt-6.1\n").unwrap();
+    let r = answer(&app, &id, json!({"allow": true})).await;
+    assert!(!bipbridge::notebook::enabled(&app.app.state.config(), "wellness"), "the Carnet on from a card, outside");
+    assert_eq!(r.status, 409, "{}", r.text());
+    assert!(r.text().contains("screen_only"), "{}", r.text());
+}

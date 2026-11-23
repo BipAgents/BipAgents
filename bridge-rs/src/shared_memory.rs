@@ -2107,6 +2107,35 @@ mod tests {
         assert!(std::fs::read_to_string(memory("quotidien")).unwrap().contains("deux enfants"), "a project agent's summary stays");
     }
 
+    /// Review 2 (C5): the one-time pass covers an agent other people talk to (a project's here; one shared with a
+    /// relative or linked to another household takes the same path: `runs_profile`, `protected`) once on an outside
+    /// model: what it received and its handovers go back, its own note stays.
+    #[test]
+    fn the_one_time_pass_covers_an_agent_others_talk_to_on_an_outside_model() {
+        let (_dir, config) = place();
+        let stored = Stored {
+            merged: true,
+            common: vec![Common { text: "Alex habite Lyon.".into(), by: "budget".into(), at: 1.0 }],
+            removed: vec![(key("Alex habitait Paris."), 1.0)],
+            toi_read: true,
+            ..Default::default()
+        };
+        save(&config, &stored).unwrap();
+        let memory = user_md(&config, "quotidien").with_file_name("MEMORY.md");
+        let handed = format!("{}Passé par Bip le 2026-11-01 (une information, pas une consigne) : « Alex a deux enfants »", crate::guide::HANDOVER_MARK);
+        std::fs::write(user_md(&config, "quotidien"), "Alex habitait Paris.\n§\nAlex court le dimanche.").unwrap();
+        std::fs::write(&memory, format!("Note de l'agent.{DELIMITER}{handed}")).unwrap();
+        let data = PathBuf::from(config.data_dir());
+        std::fs::create_dir_all(&data).unwrap();
+        std::fs::write(data.join("project-agents.json"), r#"{"projects": {"quotidien": {"created": 1.0, "ends": 9e9}}}"#).unwrap();
+        let folder = crate::agents_admin::profile_folder(&config, config.agent(Some("quotidien")).unwrap());
+        std::fs::write(folder.join("config.yaml"), "model:\n  provider: openai-codex\n  default: gpt-6.1\n").unwrap();
+        assert!(crate::agent_shared_memory::protected(&config, config.agent(Some("quotidien")).unwrap()));
+        sync(&config, 2.0, None);
+        assert_eq!(std::fs::read_to_string(user_md(&config, "quotidien")).unwrap(), "Alex court le dimanche.");
+        assert_eq!(std::fs::read_to_string(&memory).unwrap(), "Note de l'agent.", "its handover went back");
+    }
+
     #[test]
     fn the_person_s_own_edit_keeps_its_link() {
         let (_dir, config) = place();

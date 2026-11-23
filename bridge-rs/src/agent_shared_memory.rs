@@ -35,7 +35,7 @@
 //!
 //! The log says « shared memory on → off · agent X », nothing else. No Python counterpart.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::sync::Mutex;
 
@@ -76,6 +76,9 @@ pub struct Guarded {
     /// [`LINKS`])
     #[serde(default)]
     pub off: Vec<String>,
+    /// the Health categories it read when the bridge turned Health off, given back on the return (review 2, C9)
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub health: Vec<String>,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize, PartialEq)]
@@ -234,7 +237,44 @@ pub fn set(config: &Config, agent: &str, on: bool) -> std::io::Result<bool> {
         tracing::info!(target: "bipbridge::agents", "shared memory {} → {} · agent {agent}",
             if on { "off" } else { "on" }, if on { "on" } else { "off" });
     }
+    if let Some(one) = config.agent(Some(agent)) {
+        note_search(config, one);
+    }
     Ok(changed)
+}
+
+/// Review 2, B2-b: the agents whose turns close Hermes' `session_search` ([`protected`]: its shared memory off, a model
+/// outside or that the bridge cannot tell). The tool reads the agent's earlier conversations word for word (the
+/// « Nouvelles du Carnet » joined to the person's words, its answers that said what the others know): a conversation
+/// that « starts afresh » would otherwise read them back. Closed per turn (hermes.rs `start_run_body`, patch 0024
+/// `closed_tools`), as during a relative's turn; open again once the shared memory is back on. Kept here, read at each
+/// turn: noted at each guard (every message, every round) and at each change of the switch.
+static SEARCH_CLOSED: Mutex<BTreeSet<String>> = Mutex::new(BTreeSet::new());
+
+/// Review 2, C8: an agent « à l'écart » (rules.rs `aside`: the outside-model protection puts it there, the person may
+/// too) is out of the discussions between agents as well, until the person turns its links back on: no turn there
+/// (rooms.rs `candidates`), its hidden room conversation made anew ([`crate::rooms::drop_sessions`]), no room note
+/// joined to its own conversation and no `room_history` (rooms_memory.rs), no room mate's folder.
+pub fn out_of_rooms(config: &Config, agent: &str) -> bool {
+    config.agent(Some(agent)).is_some() && crate::rules::load(config).is_aside(agent)
+}
+
+/// Hermes' tool that reads the agent's earlier conversations.
+pub const SESSION_SEARCH: &str = "session_search";
+
+pub fn note_search(config: &Config, agent: &AgentConfig) {
+    let closed = protected(config, agent);
+    let mut set = SEARCH_CLOSED.lock().unwrap_or_else(|e| e.into_inner());
+    if closed {
+        set.insert(agent.name.clone());
+    } else {
+        set.remove(&agent.name);
+    }
+}
+
+/// Whether `agent`'s turns close [`SESSION_SEARCH`] now.
+pub fn search_closed(agent: &str) -> bool {
+    SEARCH_CLOSED.lock().unwrap_or_else(|e| e.into_inner()).contains(agent)
 }
 
 /// The person changed one of `agent`'s switches the protection had turned off ([`NOTEBOOK`], [`HEALTH`], [`LINKS`]):
@@ -300,7 +340,9 @@ pub fn guard_at(config: &Config, agent: &AgentConfig, now: f64) -> Changed {
 
 /// The defaults for where `agent`'s model runs now (outside_model::place), and what changed.
 pub fn guard_full_at(config: &Config, agent: &AgentConfig, now: f64) -> Guard {
-    guard_place(config, agent, crate::outside_model::place(config, agent), now)
+    let guard = guard_place(config, agent, crate::outside_model::place(config, agent), now);
+    note_search(config, agent);
+    guard
 }
 
 /// [`guard_full_at`] for a provider the agent is about to use (review R2: the protection is in place before the model
@@ -332,6 +374,7 @@ fn guard_place(config: &Config, agent: &AgentConfig, place: crate::outside_model
         match (target, record) {
             (Some((provider, label)), before) => {
                 // what was turned off for an earlier provider stays noted (a return gives it back)
+                let before_categories = before.as_ref().map(|g| g.health.clone()).unwrap_or_default();
                 let mut off: Vec<String> = before.map(|g| g.off).unwrap_or_default();
                 let mut note = |what: &str| {
                     if !off.iter().any(|w| w == what) {
@@ -346,7 +389,10 @@ fn guard_place(config: &Config, agent: &AgentConfig, place: crate::outside_model
                     out.changed.notebook = true;
                     note(NOTEBOOK);
                 }
-                if crate::health::enabled(config, name) && crate::health::set_enabled(config, name, false)? {
+                // the days kept stay, its categories are noted to give back as they were (review 2, C9)
+                let mut categories: Vec<String> = before_categories;
+                if let Some(read) = crate::health::set_off_keeping_days(config, name)? {
+                    categories = read.iter().map(|c| c.to_string()).collect();
                     out.health = true;
                     note(HEALTH);
                 }
@@ -361,6 +407,7 @@ fn guard_place(config: &Config, agent: &AgentConfig, place: crate::outside_model
                     })?;
                     out.links = Some(before_links);
                     note(LINKS);
+                    crate::rooms::drop_sessions(config, name); // its room conversations made anew (review 2, C8)
                 }
                 update(config, |s| {
                     if shared_on {
@@ -369,7 +416,7 @@ fn guard_place(config: &Config, agent: &AgentConfig, place: crate::outside_model
                     }
                     // its conversations go on in a new session, without what was said there (review B2)
                     s.fresh.insert(name.to_string(), iso_now());
-                    s.outside.insert(name.to_string(), Guarded { provider: provider.clone(), label, at: now, off });
+                    s.outside.insert(name.to_string(), Guarded { provider: provider.clone(), label, at: now, off, health: categories });
                 })?;
                 out.changed.shared = shared_on;
                 tracing::info!(target: "bipbridge::agents", agent = %name, provider = %provider,
@@ -383,6 +430,9 @@ fn guard_place(config: &Config, agent: &AgentConfig, place: crate::outside_model
                 }
                 if had(HEALTH) && crate::health::set_enabled(config, name, true)? {
                     out.health = true;
+                    if !g.health.is_empty() {
+                        crate::health::set_categories(config, name, &g.health)?; // as the person had chosen (review 2, C9)
+                    }
                 }
                 if had(LINKS) && crate::rules::load(config).is_aside(name) {
                     let before_links = crate::rules_live::offered_now(config);
@@ -557,7 +607,8 @@ pub async fn guard_before_and_follow(config: std::sync::Arc<Config>, agent: &Age
 /// new Hermes session each: Hermes replays a conversation's history at every turn (its turn notes of the memory, patch
 /// 0023, the « Nouvelles du Carnet » joined to the person's words), so what it was given before would otherwise go
 /// with every new turn. The thread stays the same (a `moved` segment, threads::Threads::link): the apps keep showing
-/// what was said. A conversation whose turn is going on is taken at the next look. Each agent's mark goes once all its
+/// what was said. Made where a turn starts (the send, `fresh_tip`; the queue, msg_queue.rs) and by the round, the net
+/// (a conversation whose turn is going on is taken at the next look). Each agent's mark goes once all its
 /// conversations begun before it have a new session.
 pub async fn fresh_sessions(state: &AppState) {
     let config = state.config();
@@ -571,6 +622,7 @@ pub async fn fresh_sessions(state: &AppState) {
             let _ = update(&config, |s| s.fresh.remove(&name));
             continue;
         };
+        let _one = FRESH.lock().await;
         let begun = match threads.begun_before(&name, &since).await {
             Ok(begun) => begun,
             Err(exc) => {
@@ -586,31 +638,8 @@ pub async fn fresh_sessions(state: &AppState) {
                 done = false; // a turn going on: at the next look
                 continue;
             }
-            let base = thread.title.clone().filter(|t| !t.trim().is_empty()).unwrap_or_else(|| "Conversation".into());
-            let base: String = base.chars().take(50).collect();
-            let mut made = None;
-            for attempt in 1..=9 {
-                let title = format!("{base} · {}", if attempt == 1 { since.chars().take(16).collect::<String>() } else { format!("{since} ({attempt})") });
-                match state.hermes.create_session(&agent, &title).await {
-                    Ok(session) => {
-                        made = Some(session);
-                        break;
-                    }
-                    Err(crate::hermes::HermesError::Http { status: 400 | 409, .. }) => continue,
-                    Err(exc) => {
-                        tracing::warn!(agent = %name, error = %exc, "a new session not made for a conversation");
-                        break;
-                    }
-                }
-            }
-            match made {
-                Some(session) => {
-                    if let Err(exc) = threads.link(&agent, thread, &session).await {
-                        tracing::warn!(agent = %name, error = %format!("{exc:#}"), "a new session not linked");
-                        done = false;
-                    }
-                }
-                None => done = false,
+            if make_fresh(&state.hermes, &threads, &agent, thread, &since).await.is_none() {
+                done = false;
             }
         }
         if done {
@@ -623,6 +652,72 @@ pub async fn fresh_sessions(state: &AppState) {
                 "its conversations go on in a new session, without what was said before");
         }
     }
+}
+
+/// One new session at a time (the send, the queue, the round): a conversation is moved once.
+static FRESH: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// Review 2, B2-a: the session a turn of `thread` goes on in. When the agent was marked (`fresh`) after the
+/// conversation's last session was linked, a new one is made and linked first, and returned; None: the conversation's
+/// session as it is (no mark, a hidden conversation, or made already).
+pub async fn fresh_tip(
+    config: &Config,
+    hermes: &crate::hermes::HermesClient,
+    threads: &crate::threads::Threads,
+    agent: &AgentConfig,
+    thread: &crate::threads::Thread,
+) -> Option<String> {
+    let since = read(config).fresh.get(&agent.name).cloned()?;
+    if thread.hidden {
+        return None;
+    }
+    let _one = FRESH.lock().await;
+    // seen again under the lock: moved already by another send, the queue or the round
+    let begun = threads.begun_before(&agent.name, &since).await.ok()?;
+    let thread = begun.iter().find(|t| t.id == thread.id)?;
+    make_fresh(hermes, threads, agent, thread, &since).await
+}
+
+/// A new Hermes session for `thread`, linked as its tip (titled with the conversation's title and when).
+async fn make_fresh(
+    hermes: &crate::hermes::HermesClient,
+    threads: &crate::threads::Threads,
+    agent: &AgentConfig,
+    thread: &crate::threads::Thread,
+    since: &str,
+) -> Option<String> {
+    let base = thread.title.clone().filter(|t| !t.trim().is_empty()).unwrap_or_else(|| "Conversation".into());
+    let base: String = base.chars().take(50).collect();
+    for attempt in 1..=9 {
+        let title = format!("{base} · {}", if attempt == 1 { since.chars().take(16).collect::<String>() } else { format!("{since} ({attempt})") });
+        match hermes.create_session(agent, &title).await {
+            Ok(session) => {
+                if let Err(exc) = threads.link(agent, thread, &session).await {
+                    tracing::warn!(agent = %agent.name, error = %format!("{exc:#}"), "a new session not linked");
+                    return None;
+                }
+                tracing::info!(target: "bipbridge::agents", agent = %agent.name, thread = %thread.id,
+                    "a conversation goes on in a new session, without what was said before");
+                return Some(session);
+            }
+            Err(crate::hermes::HermesError::Http { status: 400 | 409, .. }) => continue,
+            Err(exc) => {
+                tracing::warn!(agent = %agent.name, error = %exc, "a new session not made for a conversation");
+                return None;
+            }
+        }
+    }
+    None
+}
+
+/// Review 2, B2-a: before a turn of the agent starts (the send path): an outside model it went to without the bridge
+/// seeing it yet (changed by SSH, the bridge just started or updated) is protected now, not at the next round, so its
+/// conversation goes on in a new session at once.
+pub async fn guard_on_send(config: std::sync::Arc<Config>, agent: &AgentConfig) {
+    if !runs_profile(&config, &agent.name) {
+        return;
+    }
+    let _ = guard_and_follow(config, agent).await;
 }
 
 // --- the app's route ---------------------------------------------------------------------------------------------------
@@ -988,5 +1083,69 @@ mod tests {
         let bare = crate::agents_admin::pyyaml::load("model:\n  default: x\n").unwrap();
         let off = with_user_profile(&bare, true).unwrap();
         assert_eq!(off.get("memory").and_then(|m| m.get("user_profile_enabled")), Some(&Yaml::Bool(false)));
+    }
+
+    /// Review 2, C9: the protection never deletes the Health days kept on the bridge (it only stops giving them), even
+    /// when the agent was the only one with Health; the person's own « off » still does.
+    #[test]
+    fn the_health_days_kept_stay_through_the_protection() {
+        let (_dir, config) = place();
+        let gpt = config.agent(Some("gpt")).unwrap().clone();
+        for name in config.agents.keys() {
+            crate::health::set_enabled(&config, name, false).unwrap();
+        }
+        crate::health::set_enabled(&config, "gpt", true).unwrap();
+        let days = crate::health::days_dir(&config);
+        std::fs::create_dir_all(&days).unwrap();
+        std::fs::write(days.join("2026-11-20.json"), "{}").unwrap();
+        set_model(&config, "gpt", CODEX);
+        guard_full_at(&config, &gpt, 1.0);
+        assert!(!crate::health::enabled(&config, "gpt"));
+        assert!(days.join("2026-11-20.json").exists(), "the days kept were deleted by the protection");
+    }
+
+    /// Review 2, B2-b: Hermes' `session_search` is closed in every turn of an agent the protection covers (outside, or
+    /// its shared memory off), open again once it is back; the other options of a turn stay as they are.
+    #[test]
+    fn session_search_is_closed_while_the_protection_holds() {
+        // its own agent: the list is the process's, other tests guard theirs at the same time
+        let (dir, mut config) = place();
+        let space = dir.path().join("spaces/searcher");
+        std::fs::create_dir_all(space.join("profiles/searcher/memories")).unwrap();
+        std::fs::write(space.join("profiles/searcher/config.yaml"), SPARK).unwrap();
+        config.agents.insert(
+            "searcher".into(),
+            AgentConfig { name: "searcher".into(), space: Some(space.to_string_lossy().into_owned()), ..Default::default() },
+        );
+        let gpt = config.agent(Some("searcher")).unwrap().clone();
+        set_model(&config, "searcher", CODEX);
+        guard_full_at(&config, &gpt, 1.0);
+        assert!(search_closed("searcher"));
+        let options = crate::hermes::with_closed_search("searcher", Some(json!({"closed_tools": ["browser_*"], "reasoning": {"effort": "low"}})));
+        assert_eq!(options, Some(json!({"closed_tools": ["browser_*", "session_search"], "reasoning": {"effort": "low"}})));
+        assert_eq!(crate::hermes::with_closed_search("searcher", None), Some(json!({"closed_tools": ["session_search"]})));
+        set_model(&config, "searcher", SPARK);
+        guard_full_at(&config, &gpt, 2.0);
+        assert!(!search_closed("searcher"), "back on the Spark, shared memory given back: open again");
+        set(&config, "searcher", false).unwrap();
+        assert!(search_closed("searcher"), "the person turned it off: closed");
+        set(&config, "searcher", true).unwrap();
+        assert!(!search_closed("searcher"));
+        assert_eq!(crate::hermes::with_closed_search("searcher", None), None);
+    }
+
+    /// Review 2, C10: an agent on the person's own model whose fallback goes outside is named « (OpenRouter, en
+    /// secours) »: it is not « on OpenRouter ».
+    #[test]
+    fn an_outside_fallback_is_named_so() {
+        let (_dir, config) = place();
+        let gpt = config.agent(Some("gpt")).unwrap().clone();
+        set_model(&config, "gpt", &format!("{SPARK}fallback_providers:\n  - provider: openrouter\n    model: x\n"));
+        let (provider, label) = outside_now(&config, &gpt).unwrap();
+        // (in the install's language: « en secours » in French)
+        assert_eq!(provider, "openrouter");
+        assert!(["OpenRouter, en secours", "OpenRouter, as a fallback"].contains(&label.as_str()), "{label}");
+        set_model(&config, "gpt", "model:\n  provider: openrouter\n  default: x\n");
+        assert_eq!(outside_now(&config, &gpt).unwrap().1, "OpenRouter");
     }
 }

@@ -66,6 +66,9 @@ fn words(message: &Message) -> String {
 
 /// The rooms `agent` takes part in (its own on this install).
 fn rooms_of(config: &Config, agent: &str) -> Vec<Room> {
+    if crate::agent_shared_memory::out_of_rooms(config, agent) {
+        return Vec::new(); // « à l'écart »: none of the other agents' words (review 2, C8)
+    }
     rooms::all(config).into_iter().filter(|r| r.participants.iter().any(|p| p == agent)).collect()
 }
 
@@ -155,6 +158,9 @@ fn fold(text: &str) -> String {
 pub fn call(config: &Config, agent: &str, arguments: &Dict) -> Dict {
     let wanted = tk::strip(&tk::str_or_empty(arguments.get("room"))).to_string();
     let query = tk::strip(&tk::str_or_empty(arguments.get("query"))).to_string();
+    if crate::agent_shared_memory::out_of_rooms(config, agent) {
+        return tool_text("Your person keeps you apart from their other agents for now: their group discussions are closed to you.", true);
+    }
     let mine = rooms_of(config, agent);
     if mine.is_empty() {
         return tool_text("You take part in no group discussion.", false);

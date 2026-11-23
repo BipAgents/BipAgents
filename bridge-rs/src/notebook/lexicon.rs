@@ -350,7 +350,8 @@ const HEALTH_BROAD: &[&str] = &[
     "psicolog*", "psiquiatr*", "psicoterap*", "terapeut*", "terapia*", "ginecolog*", "pediatra*", "matrona*",
     "enfermer*", "medicos", "medica", "medicas",
     // nl
-    "huisarts*", "arts", "artsen", "tandarts*", "dokter*", "psycholoog*", "cardioloog*", "verpleeg*", "verloskund*",
+    "huisarts*", "artsen", "de arts", "naar de arts", "bij de arts", "tandarts*", "kinderarts*", "oogarts*",
+    "bedrijfsarts*", "dokter*", "psycholoog*", "cardioloog*", "verpleeg*", "verloskund*",
     "fysio*", "ziekenhuis*",
     // medicines and their kinds — fr, en, de, es, nl
     "antidepress*", "antidepresiv*", "anxiolyti*", "ansiolitic*", "somnifere*", "somnifero*", "neurolepti*",
@@ -388,12 +389,85 @@ const HEALTH_BROAD: &[&str] = &[
     "sexualit*", "sexuel*", "sexuell*", "sexual*", "sexualidad*", "seksualiteit*", "seksue*", "libido", "erecti*",
     "impuissan*", "homosexu*", "bisexu*", "transgenre*", "transgender*", "transexual*", "lgbt*", "gay", "lesbienne*",
     "lesbian*", "lesbisch*", "lesbiana*", "queer", "schwul*",
+    // review 2 (C6), the families of what people still say — blood pressure, a baby on its way
+    "fait de la tension", "fais de la tension", "faire de la tension", "a de la tension", "ai de la tension",
+    "tension arterielle", "sa tension", "ma tension", "ta tension", "blood pressure", "presion arterial",
+    "attend un bebe", "attends un bebe", "attendons un bebe", "attendent un bebe", "bebe en route", "expecting a baby",
+    "baby on the way", "trying for a baby", "trying to conceive", "trying for a child", "essaie d avoir un enfant",
+    "essayons d avoir un enfant", "erwartet ein baby", "erwarten ein baby", "baby unterwegs", "espera un bebe",
+    "esperando un bebe", "buscando un bebe", "buscando embarazo", "embarazad*", "encinta", "schwanger*",
+    "in verwachting", "verwacht een baby", "kinderwens*", "zwanger te worden",
+    // the body's carers, operations
+    "osteo", "osteos", "osteopath*", "osteopat*", "kine", "kines", "kinesitherap*", "chiropract*", "chiroprat*",
+    "quiropract*", "acupunct*", "acupunt*", "naturopath*", "homeopath*", "homoopath*", "physio", "physiotherap*",
+    "fisioterap*", "chirurg*", "cirug*", "cirujan*", "surgery", "surgeon*", "se fait operer", "se faire operer",
+    "s est fait operer", "fait operer", "operer du", "operer de la", "opere du", "operee du", "opere de la",
+    "operee de la", "operated on", "an operation", "having an operation", "had an operation", "operiert*",
+    "operieren*", "operation am", "operation an", "operado de", "operada de", "operar de", "geopereerd*",
+    // dark thoughts, self-harm
+    "idees noires", "idee noire", "envie de mourir", "dark thoughts", "self harm", "selbstverletz*", "automutil*",
+    "scarifi*", "autolesion*", "zelfbeschadig*", "dunkle gedanken", "pensamientos oscuros", "ideas negras",
+    "donkere gedachten",
+    // sexually transmitted infections (« IST » only after a word: in German « ist » is « is »)
+    "une ist", "des ist", "les ist", "d une ist", "une mst", "des mst", "les mst", "std", "stds", "sti", "stis",
+    "soa", "soa s", "herpes", "chlamydia", "syphilis", "sifilis", "gonorr*", "papillomavirus", "hpv",
+    "geschlechtskrank*", "transmision sexual",
+    // weight
+    "obese*", "obesit*", "obeso", "obesa", "obesos", "obesas", "obesidad", "obesitas", "adipos*", "surpoids",
+    "overweight", "ubergewicht*", "sobrepeso", "overgewicht", "perdre du poids", "lose weight", "losing weight",
+    "bajar de peso", "afvallen",
+    // gender identity, orientation
+    "trans", "transidentit*", "non binaire", "non binaires", "nonbinary", "non binary", "nichtbinar*", "no binario", "no binaria",
+    "non binair", "homo", "homos", "pansexu*", "asexuel*", "asexual*", "coming out",
+    // alcohol, drugs
+    "alcool*", "alcohol*", "alkohol*", "sober", "sobriety", "abstinen*", "alcooliques anonymes", "drogue*",
+    "drogas", "drogen", "drug", "drugs", "cannabis", "cocaine", "cocaina", "heroine", "heroin", "ecstasy", "mdma",
+    // the medicines by name, and the pills
+    "ozempic", "wegovy", "mounjaro", "saxenda", "zoloft", "sertraline", "fluoxetine", "paroxetine", "escitalopram",
+    "citalopram", "venlafaxine", "lexapro", "effexor", "deroxat", "seroplex", "adderall", "concerta",
+    "methylphenidat*", "valium", "diazepam", "lorazepam", "temesta", "stilnox", "zolpidem", "seresta", "tramadol",
+    "codeine", "morphine", "oxycodone", "opioid*", "opiace*", "metformin*", "viagra", "cialis", "truvada", "lyrica",
+    "abilify", "seroquel", "risperdal", "depakine", "lamictal", "kardegic", "plavix", "eliquis", "xarelto",
+    "methotrexate", "humira", "medicament*", "medicamento*", "medikament*", "medication*", "medicine", "medicines",
+    "pills", "comprime", "comprimes", "gelule*", "pastilla*", "pildora*", "sous traitement", "under treatment",
+    // periods
+    "ses regles", "mes regles", "tes regles", "avoir ses regles", "regles douloureuses", "her period", "my period",
+    "on her period", "on my period", "period pain", "period pains", "period cramps", "menstru*", "tiene la regla",
+    "con la regla", "ihre tage", "ongesteld*",
+    // a shrink, eating disorders, depressed
+    "a shrink", "her shrink", "his shrink", "my shrink", "the shrink", "counselling", "counseling", "counsellor*",
+    "eating disorder", "eating disorders", "trouble alimentaire", "troubles alimentaires", "tca", "essstorung*",
+    "trastorno alimentario", "trastornos alimentarios", "eetstoornis*", "binge eating", "hyperphagi*",
+    "deprimid*", "depressed", "depressiv*", "depressief", "depressieve",
+];
+
+/// The endings of German (and a few Dutch) compound words for carers and care: « Kinderarzt », « Zahnärztin »,
+/// « Uniklinik », « Physiotherapie » (review 2, C6).
+const HEALTH_BROAD_ENDINGS: &[&str] =
+    &["arzt", "arztin", "arztinnen", "arzte", "arzten", "klinik", "kliniken", "therapie", "therapien", "therapeut", "therapeutin"];
+
+/// Phrases a word of `HEALTH_BROAD` takes part in without health (review 2, C6), taken out first: the digital divide,
+/// a Grand Prix, a battery, the sport of breath-hold diving. Kept short: a plain fact held back only stays with the
+/// agent that learnt it, a health fact shared goes to all.
+const NOT_HEALTH_BROAD: &[&str] = &[
+    "fracture numerique", "fracture sociale", "fracture territoriale", "fracture generationnelle", "digital divide",
+    "gp de", "gp d", "gp of", "grand prix", "plongee en apnee", "apnee en mer", "apnee sportive", "en apnee",
+    "batterie au lithium", "batteries au lithium", "batterie lithium", "lithium ion", "lithium battery",
+    "lithium batteries", "litio", "lithium akku", "lithium accu",
 ];
 
 /// Whether a text might touch health, as people say it (`HEALTH_BROAD`, with `touches_health`): what is never shared
 /// between the person's agents (shared_memory.rs).
 pub fn touches_health_broad(text: &str) -> bool {
-    touches_health(text) || holds(text, HEALTH_BROAD)
+    if touches_health(text) {
+        return true;
+    }
+    let mut padded = format!(" {} ", fold(text));
+    for phrase in NOT_HEALTH_BROAD {
+        padded = padded.replace(&format!(" {phrase} "), " ");
+    }
+    hits(&padded, HEALTH_BROAD) > 0
+        || padded.split(' ').any(|w| w.len() > 6 && HEALTH_BROAD_ENDINGS.iter().any(|e| w.ends_with(e)))
 }
 
 /// A money fact (budget, salary, rent, loans…, or an amount).

@@ -700,9 +700,34 @@ impl Queues {
         self.start(&agent, &head).await;
     }
 
+    /// The session a turn of the conversation holding `session` goes on in now: a new one when the agent's shared memory
+    /// went off since (agent_shared_memory.rs `fresh_tip`), else its tip (None: not known here).
+    async fn tip_for(&self, config: &crate::config::Config, agent: &AgentConfig, session: &str) -> Option<String> {
+        let threads = crate::threads::upgrade(&self.hub.threads)?;
+        let thread = threads.thread_of(agent, session).await?;
+        if let Some(fresh) = crate::agent_shared_memory::fresh_tip(config, &self.hermes, &threads, agent, &thread).await {
+            return Some(fresh);
+        }
+        threads.segments(&thread.id).await.ok()?.last().map(|s| s.session_id.clone())
+    }
+
     /// Starts an item as a turn of its conversation (taken out of the list once Hermes has it).
     async fn start(&self, agent: &AgentConfig, item: &Item) -> Option<String> {
         let config = self.config.get();
+        // its conversation moved on to another session since it was queued (a new one for a shared memory off, review
+        // 2 B2-a; a migration): it starts there, and the others waiting for the old one follow it
+        let mut item = item.clone();
+        if let Some(tip) = self.tip_for(&config, agent, &item.session_id).await.filter(|tip| *tip != item.session_id) {
+            let old = std::mem::replace(&mut item.session_id, tip.clone());
+            self.update(&agent.name, |q| {
+                for waiting in q.items.iter_mut().filter(|i| i.session_id == old) {
+                    waiting.session_id = tip.clone();
+                }
+                q.changed();
+                (true, ())
+            });
+        }
+        let item = &item;
         // a family agent's common conversation (family_thread.rs): its writer's frame (the input lost by a restart: the
         // words framed again) and a member's instructions
         let again = crate::family_thread::input_again(&config, &agent.name, item.by.as_ref(), &item.text);

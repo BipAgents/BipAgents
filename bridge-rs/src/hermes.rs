@@ -542,6 +542,28 @@ pub fn head(text: &str, n: usize) -> String {
     text.chars().take(n).collect()
 }
 
+
+/// A turn's `model_options` with Hermes' `session_search` closed for an agent the shared-memory protection covers
+/// (agent_shared_memory.rs `search_closed`, review 2 B2-b: it would read the earlier conversations back word for
+/// word); the others' options as they are.
+pub fn with_closed_search(agent: &str, options: Option<Value>) -> Option<Value> {
+    if !crate::agent_shared_memory::search_closed(agent) {
+        return options;
+    }
+    let mut options = match options {
+        Some(Value::Object(map)) => map,
+        _ => Map::new(),
+    };
+    let closed = options.entry("closed_tools").or_insert_with(|| Value::Array(Vec::new()));
+    if let Value::Array(list) = closed {
+        let search = Value::String(crate::agent_shared_memory::SESSION_SEARCH.into());
+        if !list.contains(&search) {
+            list.push(search);
+        }
+    }
+    Some(Value::Object(options))
+}
+
 #[derive(Clone)]
 pub struct HermesClient {
     pub client: reqwest::Client,
@@ -969,7 +991,7 @@ impl HermesClient {
         if let Some(tools) = guest_tools {
             body.insert("guest_turn".into(), guest_turn(tools));
         }
-        if let Some(options) = model_options {
+        if let Some(options) = with_closed_search(&agent.name, model_options) {
             body.insert("model_options".into(), options);
         }
         body.insert("input".into(), input);

@@ -129,7 +129,7 @@ fn root(config: &Config) -> PathBuf {
     PathBuf::from(config.data_dir()).join("health")
 }
 
-fn days_dir(config: &Config) -> PathBuf {
+pub(crate) fn days_dir(config: &Config) -> PathBuf {
     root(config).join("days")
 }
 
@@ -194,11 +194,19 @@ fn categories_map(state: &Dict) -> Dict {
 
 /// `state` written with these agents' categories (only the agents with the switch on), then the days kept cut down
 /// to what some agent still reads.
-fn save_state(config: &Config, mut state: Dict, names: Vec<String>, categories: Dict) -> std::io::Result<()> {
+fn save_state(config: &Config, state: Dict, names: Vec<String>, categories: Dict) -> std::io::Result<()> {
+    save_state_days(config, state, names, categories, false)
+}
+
+/// [`save_state`]; `keep_days`: the days kept stay as they are (the outside-model protection, review 2 C9).
+fn save_state_days(config: &Config, mut state: Dict, names: Vec<String>, categories: Dict, keep_days: bool) -> std::io::Result<()> {
     let categories: Dict = categories.into_iter().filter(|(a, _)| names.contains(a)).collect();
     state.insert("agents".into(), json!(names));
     state.insert("categories".into(), Value::Object(categories));
     write_private(&root(config).join("agents.json"), &Value::Object(state.clone()))?;
+    if keep_days {
+        return Ok(());
+    }
     if names.is_empty() {
         remove_days(config)
     } else {
@@ -226,6 +234,24 @@ pub fn set_enabled(config: &Config, agent: &str, on: bool) -> std::io::Result<bo
     let changed = names.len() != before;
     save_state(config, state, names, categories)?;
     Ok(changed)
+}
+
+/// `agent`'s switch turned off by the outside-model protection (agent_shared_memory.rs, review 2 C9): the days kept
+/// stay (nothing more goes to it; the person's own « off » deletes them as before). Its categories, to give back
+/// (None: it was off). Returns them and whether it changed.
+pub fn set_off_keeping_days(config: &Config, agent: &str) -> std::io::Result<Option<Vec<&'static str>>> {
+    let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let state = read_state(config);
+    let mut names = agents_of(&state);
+    if !names.iter().any(|a| a == agent) {
+        return Ok(None);
+    }
+    let kept = categories_in(&state, agent);
+    let mut categories = categories_map(&state);
+    names.retain(|a| a != agent);
+    categories.remove(agent);
+    save_state_days(config, state, names, categories, true)?;
+    Ok(Some(kept))
 }
 
 /// The categories `agent` reads (its switch on; unknown names ignored). What no agent reads any more leaves the days
