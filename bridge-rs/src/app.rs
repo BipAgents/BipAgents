@@ -1393,6 +1393,10 @@ async fn bridge_card(
             None => Err(HttpError::new(404, "no such request (answered already?)")),
         }?));
     }
+    // « Réparer / Arrêter » or « Garder 3 mois de plus ? » (task_frame.rs): « Réparer » starts ONE turn of its agent
+    if let Some(id) = run_id.strip_prefix(crate::task_frame::RUN_PREFIX) {
+        return Ok(Some(crate::task_frame::approve(state, agent, id, &body.choice).await?));
+    }
     // a plan its agent proposed (plans.rs): « Prévoir » sets its moments (but those unticked), « Non merci » forgets it
     if let Some(id) = run_id.strip_prefix(crate::plans::RUN_PREFIX) {
         let skip = body.skip.clone().unwrap_or_default();

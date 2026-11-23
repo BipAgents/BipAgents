@@ -251,6 +251,30 @@ pub struct Trigger {
     pub session: String,
     pub session_day: String,
     pub events_total: u64,
+    /// Its end (task_frame.rs): its last moment (Unix seconds); none: until its person stops it (a plan's: with its
+    /// plan, plans.rs).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ends: Option<f64>,
+}
+
+/// Its frame as the apps read it (task_frame.rs, contracts/task-frame `fields`): who it is for, how it ends, where it
+/// answers (its own conversation, the Boîte points at it), its failed runs in a row.
+pub fn frame_view(config: &Config, t: &Trigger) -> Value {
+    use crate::task_frame::{End, Task};
+    let lang = crate::task_frame::lang_of_agent(config, &t.agent);
+    let end = match t.ends {
+        Some(at) => End::Date(at),
+        None if t.by == crate::plans::MAKER => End::Plan,
+        None => End::Never,
+    };
+    let failures = t.runs.iter().rev().take_while(|r| !r.ok).count();
+    json!({
+        "owner": crate::task_frame::owner(config, &t.agent, None),
+        "ends": crate::task_frame::ends_view(lang, Task::Routine, &end, crate::routines::zone(config)),
+        "deliver": {"kind": "boite", "session_id": if t.session.is_empty() { Value::Null } else { json!(t.session) },
+                    "title": null},
+        "failures": failures, "fix": null,
+    })
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -579,7 +603,7 @@ pub fn view(config: &Config, t: &Trigger) -> Value {
         json!({"account": m.account, "account_label": account_label(config, &m.account), "from": m.from,
                "words": m.words})
     });
-    json!({
+    let mut view = json!({
         "id": t.id, "agent": t.agent, "name": t.name, "prompt": t.prompt, "kind": t.kind, "state": state_of(t),
         "enabled": t.enabled, "mail": mail, "link": link, "budget_tokens": t.budget_tokens,
         "budget_eur": (crate::jobs::euros_for(config, t.budget_tokens) * 100.0).round() / 100.0,
@@ -589,7 +613,11 @@ pub fn view(config: &Config, t: &Trigger) -> Value {
         "pending": t.pending.len(), "events_total": t.events_total,
         "session_id": if t.session.is_empty() { Value::Null } else { json!(t.session) },
         "card_run_id": t.card.as_ref().map(|c| format!("{RUN_PREFIX}{}", c.id)),
-    })
+    });
+    if let (Some(map), Value::Object(more)) = (view.as_object_mut(), frame_view(config, t)) {
+        map.extend(more);
+    }
+    view
 }
 
 // --- making and changing -------------------------------------------------------------------------------------------------
@@ -1307,8 +1335,8 @@ in plain words.{link}",
 
 // --- the autonomous list -------------------------------------------------------------------------------------------------
 
-/// A row of « Ce que tes agents font tout seuls » (autonomous.rs), group `on_change`.
-pub fn autonomous_item(t: &Trigger) -> Value {
+/// A row of « Ce que tes agents font tout seuls » (autonomous.rs), group `on_change`, with its frame (task_frame.rs).
+pub fn autonomous_item(config: &Config, t: &Trigger) -> Value {
     let state = state_of(t);
     let actions: Vec<&str> = match state {
         "active" => vec!["pause", "delete"],
@@ -1321,7 +1349,7 @@ pub fn autonomous_item(t: &Trigger) -> Value {
         _ => "resume",
     };
     let last = t.runs.last().map(|r| json!({"at": r.at, "ok": r.ok, "error": if r.ok { Value::Null } else { json!(r.message) }}));
-    json!({
+    let mut item = json!({
         "id": format!("trigger:{}:{}", t.agent, t.id), "kind": "trigger", "group": "on_change", "agent": t.agent,
         "ref": t.id, "title": t.name,
         "when": {"kind": t.kind, "text": when_text(t), "from": t.mail.as_ref().map(|m| m.from.clone()),
@@ -1329,7 +1357,11 @@ pub fn autonomous_item(t: &Trigger) -> Value {
         "state": state, "raw_state": state, "last_run": last, "next_run": null, "cost": null,
         "actions": actions, "main_action": main,
         "detail": {"kind": t.kind, "pending": t.pending.len(), "events": t.events_total, "prompt": t.prompt},
-    })
+    });
+    if let (Some(map), Value::Object(more)) = (item.as_object_mut(), frame_view(config, t)) {
+        map.extend(more);
+    }
+    item
 }
 
 pub fn autonomous_items(config: &Config, only: Option<&str>) -> Vec<Value> {
@@ -1337,7 +1369,7 @@ pub fn autonomous_items(config: &Config, only: Option<&str>) -> Vec<Value> {
         .triggers
         .iter()
         .filter(|t| only.is_none_or(|a| a == t.agent) && config.agent(Some(&t.agent)).is_some())
-        .map(autonomous_item)
+        .map(|t| autonomous_item(config, t))
         .collect()
 }
 

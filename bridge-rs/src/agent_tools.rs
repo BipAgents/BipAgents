@@ -2060,6 +2060,15 @@ pub fn call_session_of(body: &[u8]) -> Option<String> {
 /// brake's rescue, one followed again after a restart), while no relative's or other household's turn goes on
 /// (shared_pages.rs `who`). Only then does « arrête de me proposer des choses » turn « Initiative » off
 /// (agent_proactive.rs), and only then is a plan « asked » (plans.rs: else the caps of what nobody asked for).
+/// A call of `tool` by `agent` asked in its person's own words (task_frame.rs: what it sets up then has no default
+/// end): a turn of its person's own conversation (`persons_own_call`), or no turn the hub follows (taken as asked).
+pub fn asked_by_person(state: &AppState, agent: &str, tool: &str) -> bool {
+    match state.hub.turn_of(agent, tool) {
+        Some(turn) => persons_own_call(state, agent, tool, Some(&turn.run_id)),
+        None => true,
+    }
+}
+
 fn persons_own_call(state: &AppState, agent: &str, tool: &str, turn_run: Option<&str>) -> bool {
     matches!(crate::shared_pages::who(state, agent, tool), crate::shared_pages::Who::Owner)
         && turn_run.is_some_and(|run| state.hub.persons_own_turn(agent, run))
@@ -2371,7 +2380,13 @@ async fn mcp_call(
         // made in this conversation: its report goes back there
         let origin = state.hub.asking_session(&agent.name);
         let cards_before = crate::card_place::waiting(&state, &agent.name);
-        let called = crate::routines::call(&state.config(), &agent.name, &arguments, origin.as_deref());
+        // asked in its person's own words (a family member's too), or outside any turn the hub follows: no default
+        // end; made on its own (a routine's, a watcher's, a task's turn, another agent's ask): it ends after 90 days
+        // (task_frame.rs)
+        let asked = member.is_some()
+            || turn_run.is_none()
+            || persons_own_call(&state, &agent.name, &name, turn_run.as_deref());
+        let called = crate::routines::call_asked(&state.config(), &agent.name, &arguments, origin.as_deref(), asked);
         let mut result = called.result;
         if let Some(id) = called.run {
             let state = state.clone();

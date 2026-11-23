@@ -440,6 +440,7 @@ mod tests {
                 every: "15m".into(),
                 notify: "on_change".into(),
                 purchase: Some(Purchase { site: site.into(), what: "Billet".into(), cents: 450, ..Default::default() }),
+                ..Default::default()
             }),
             ..Default::default()
         };
@@ -509,7 +510,7 @@ mod tests {
                 sites: vec!["api.tickets.example".into()],
                 status: connectors::APPROVED.into(),
                 enabled: true,
-                watch: Some(Watch { every: "15m".into(), notify: "on_change".into(), purchase: Some(purchase) }),
+                watch: Some(Watch { every: "15m".into(), notify: "on_change".into(), purchase: Some(purchase), ..Default::default() }),
                 ..Default::default()
             }
         };
@@ -547,7 +548,7 @@ mod tests {
             sites: vec!["api.tickets.example".into()],
             status: connectors::APPROVED.into(),
             enabled: true,
-            watch: Some(Watch { every: "15m".into(), notify: "on_change".into(), purchase: Some(purchase) }),
+            watch: Some(Watch { every: "15m".into(), notify: "on_change".into(), purchase: Some(purchase), ..Default::default() }),
             ..Default::default()
         };
         connectors::change(&config, |store| store.agents.insert("vie".into(), vec![conn])).unwrap();

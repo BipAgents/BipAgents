@@ -98,7 +98,7 @@ fn dates_and_clocks_in_the_four_languages() {
     let since = at("2026-11-21T07:00:00+01:00");
     assert_eq!(since_words("fr", since, PARIS), "le 21/11");
     assert_eq!(since_words("de", since, PARIS), "dem 21.11.");
-    assert_eq!(fix_since_line("en", &since_words("en", since, PARIS), &reason_words("en", "looping")),
+    assert_eq!(fix_since_line("en", &since_words("en", since, PARIS), reason_words("en", "looping")),
                "Since Nov 21: it was going round in circles.");
 }
 
@@ -180,7 +180,7 @@ fn a_change_from_once_to_a_repeat_says_its_rhythm_and_end_in_the_summary() {
     let r = routines::get(&config, &r.id).unwrap();
     let item = routines::change_item(&config, &r, r.change.as_ref().unwrap());
     assert_eq!(item["bip_summary"], json!(line));
-    assert!(item["bip_detail"].as_str().unwrap().contains(&format!("→ chaque jour vers 8 h, jusqu'au {day}")), "{item:?}");
+    assert!(item["bip_detail"].as_str().unwrap().contains(&format!("→ Chaque jour vers 8 h, jusqu'au {day}")), "{item:?}");
     // a repeat to another repeat: today's sentence
     let r2 = agents(&config, "Agenda", "every day at 7:00", &asked());
     let args = json!({"action": "update", "name": "Agenda", "schedule": "every day at 9:00"}).as_object().cloned().unwrap();

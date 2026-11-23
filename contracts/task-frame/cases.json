@@ -4,10 +4,10 @@
   "where": "Each item of GET /v1/autonomous of kind routine, watcher or trigger; the job view of GET /v1/agents/{agent}/routines (and the routine routes' {job}); the `watch` of a connector's detail and of its card (`bip_connector_watch`); GET /v1/triggers' items.",
   "owner": "{agent: the agent's id, person: \"you\" or the shown name of the family member who asked for it (a family agent's routine, routines.rs `by`)}",
   "ends": "{kind, at?, count?, text}: kind `date` (at: Unix seconds, its last moment), `count` (count: the runs left), `plan` (it goes with its plan, plans.rs), `once` (a one-time routine; a watcher `once`: it stops once it has told its person), `never` (until the person stops it). `text` in the agent's language (texts.<lang>.ends).",
-  "deliver": "{kind, title, session_id}: kind `conversation` (a routine made in a conversation: its reports go there; title: that conversation's, in /v1/autonomous only, else null), `boite` (the Boîte of the main conversation, or a watcher's or a trigger's own conversation that the Boîte points at), `silent` (a muted routine: its reports stay on its page). The apps say it with texts.<lang>.deliver.",
+  "deliver": "{kind, title, session_id}: kind `conversation` (a routine made in a conversation: its reports go there; title: that conversation's, in /v1/autonomous only, else null), `boite` (the Boîte of the main conversation, or a watcher's or a trigger's own conversation that the Boîte points at), `silent` (a muted routine: its reports stay on its page). The apps say it with texts.<lang>.deliver. In a routine's job view (GET /v1/agents/{agent}/routines, {job}) it is `deliver_to`: the job's own `deliver` stays Hermes' « local », as an app 1.0 reads it.",
   "approx": "true: runs « vers » its time (routines only). The job's schedule keeps the exact time (an app 1.0 shows « 8:00 »); `next_run_at` is the shifted one; `when` (in /v1/autonomous) gains `approx: true` and its French `text` says « vers 8 h ».",
   "failures": "the failed runs (routines) or checks (watchers) in a row",
-  "plan": "the plan it is a moment of (routines; null otherwise)",
+  "plan": "the plan it is a moment of (routines; null otherwise); a job had it already, a row of /v1/autonomous gains it",
   "fix": "the run id of its card waiting (`bip-fix-<id>`), else null"
  },
  "tools": {

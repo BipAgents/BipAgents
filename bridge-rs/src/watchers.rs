@@ -184,10 +184,34 @@ pub fn minutes_of(watch: &Watch) -> u32 {
     parse_every(&watch.every).unwrap_or(60)
 }
 
-/// The connector card's line: « Vérifie toutes les 15 min, ne réveille l'agent que si ça change ».
+/// The connector card's line: « Vérifie toutes les 15 min, ne réveille l'agent que si ça change », and its end
+/// (task_frame.rs: « , jusqu'au 30/11 », « , une seule fois, puis il s'arrête »; none: as before). Days in UTC: the
+/// cards use `card_text_in`.
 pub fn card_text(watch: &Watch) -> String {
+    card_text_in(watch, chrono_tz::Tz::UTC)
+}
+
+/// `card_text`, its end's day on the routines' clock `zone`.
+pub fn card_text_in(watch: &Watch, zone: chrono_tz::Tz) -> String {
     let when = if watch.notify == ON_CONDITION { "que si sa condition est remplie" } else { "que si ça change" };
-    format!("Vérifie {}, ne réveille l'agent {when}", every_text(minutes_of(watch)))
+    let line = format!("Vérifie {}, ne réveille l'agent {when}", every_text(minutes_of(watch)));
+    match crate::task_frame::card_end("fr", crate::task_frame::Task::Watcher, &end_of(Some(watch)), zone) {
+        Some(end) => format!("{line}, {end}"),
+        None if watch.once => format!("{line}, {}", crate::task_frame::end_words("fr", crate::task_frame::Task::Watcher,
+                                                                                 &crate::task_frame::End::Once, zone)),
+        None => line,
+    }
+}
+
+/// How a watcher ends (task_frame.rs): once it told its person (`once`), at its date (`until`), or until its person
+/// stops it.
+pub fn end_of(watch: Option<&Watch>) -> crate::task_frame::End {
+    use crate::task_frame::End;
+    match watch {
+        Some(w) if w.once => End::Once,
+        Some(Watch { until: Some(at), .. }) => End::Date(*at),
+        _ => End::Never,
+    }
 }
 
 /// A purchase watcher's own line on the card the person approves, shown with it (not under the « i »): that it buys,
@@ -201,8 +225,15 @@ pub fn purchase_text(p: &connectors::Purchase) -> String {
     format!("Il achètera « {} » sur {}{price} dès que possible : tu valideras le paiement", p.what, p.site)
 }
 
-/// The agent's `watch` checked: Err is the refusal's text.
+/// The agent's `watch` checked: Err is the refusal's text. Its end's day (`until`) in UTC: the agent's tools use
+/// `parse_watch_in`.
 pub fn parse_watch(map: &Dict) -> Result<Watch, String> {
+    parse_watch_in(map, chrono_tz::Tz::UTC)
+}
+
+/// `parse_watch`, its `until` a date through that day on the routines' clock `zone` (or a date and time), its `once`
+/// (task_frame.rs).
+pub fn parse_watch_in(map: &Dict, zone: chrono_tz::Tz) -> Result<Watch, String> {
     let every = map.get("every").map(py::py_str).unwrap_or_default();
     let minutes = parse_every(&every)?;
     let notify = map.get("notify").map(py::py_str).unwrap_or_default().trim().to_lowercase();
@@ -215,7 +246,13 @@ pub fn parse_watch(map: &Dict) -> Result<Watch, String> {
         None | Some(Value::Null) => None,
         Some(_) => return Err("watch.purchase: an object {site, what, price, currency}.".into()),
     };
-    Ok(Watch { every: every_label(minutes), notify, purchase })
+    let until = crate::routines::parse_until(&map.get("until").filter(|v| !v.is_null()).map(py::py_str).unwrap_or_default(), zone)
+        .map_err(|why| format!("watch.until: {why}"))?;
+    if until.is_some_and(|at| at <= py::time_time()) {
+        return Err("watch.until: that end has passed already; give a later one.".into());
+    }
+    let once = map.get("once").is_some_and(py::truthy);
+    Ok(Watch { every: every_label(minutes), notify, purchase, until, once, default_end: false })
 }
 
 /// A purchase watcher's `purchase` checked: the shop's host, what, the price expected.
@@ -247,11 +284,18 @@ an accented name in its xn-- form."
     Ok(connectors::Purchase { site, what, cents, currency })
 }
 
-/// The card's `bip_connector_watch`.
-pub fn watch_view(watch: &Watch) -> Value {
+/// The card's `bip_connector_watch`, with its end (task_frame.rs: `until`, `once`, `ends` in `lang`), days in UTC: the
+/// cards and views use `watch_view_in`.
+pub fn watch_view(watch: &Watch, lang: &str) -> Value {
+    watch_view_in(watch, lang, chrono_tz::Tz::UTC)
+}
+
+/// `watch_view`, days on the routines' clock `zone`.
+pub fn watch_view_in(watch: &Watch, lang: &str, zone: chrono_tz::Tz) -> Value {
     let minutes = minutes_of(watch);
-    json!({"every": watch.every, "minutes": minutes, "notify": watch.notify, "text": card_text(watch),
-           "every_text": every_text(minutes)})
+    let ends = crate::task_frame::ends_view(lang, crate::task_frame::Task::Watcher, &end_of(Some(watch)), zone);
+    json!({"every": watch.every, "minutes": minutes, "notify": watch.notify, "text": card_text_in(watch, zone),
+           "every_text": every_text(minutes), "until": watch.until, "once": watch.once, "ends": ends})
 }
 
 // --- the runtime ---------------------------------------------------------------------------------------------------------
@@ -297,12 +341,19 @@ pub struct Runtime {
     pub last_condition: bool,
     /// A change waits for the wake-ups' gap.
     pub pending: bool,
+    /// Its first failure in a row (0: none): the card « Réparer / Arrêter » says since when (task_frame.rs).
+    #[serde(skip_serializing_if = "crate::watchers::no_time")]
+    pub failing_since: f64,
     /// Its conversation in the agent's Hermes.
     pub session: String,
     pub runs: Vec<RunRecord>,
     /// A purchase watcher's last rehearsal (urgent_pay.rs).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rehearsal: Option<crate::urgent_pay::Rehearsed>,
+}
+
+pub(crate) fn no_time(at: &f64) -> bool {
+    *at <= 0.0
 }
 
 static LOCK: Mutex<()> = Mutex::new(());
@@ -370,7 +421,8 @@ pub fn next_check(rt: &Runtime, watch: &Watch, settings: &Settings) -> f64 {
 /// A connector's `watch` as the apps show it (its detail page and the autonomous list).
 pub fn detail_view(config: &Config, agent: &str, conn: &Connector, watch: &Watch) -> Value {
     let rt = load(config, agent, &conn.id);
-    let mut view = watch_view(watch);
+    let lang = crate::task_frame::lang_of_agent(config, agent);
+    let mut view = watch_view_in(watch, lang, crate::routines::zone(config));
     let runs: Vec<Value> = rt
         .runs
         .iter()
@@ -389,6 +441,21 @@ pub fn detail_view(config: &Config, agent: &str, conn: &Connector, watch: &Watch
         map.extend(more);
     }
     view
+}
+
+/// Its frame as « Ce que tes agents font tout seuls » reads it (task_frame.rs, contracts/task-frame `fields`): who it
+/// is for, how it ends, where it answers (its own conversation, the Boîte points at it), its failures in a row, its card.
+pub fn frame_view(config: &Config, agent: &str, conn: &Connector, rt: &Runtime) -> Value {
+    let lang = crate::task_frame::lang_of_agent(config, agent);
+    let end = end_of(conn.watch.as_ref());
+    json!({
+        "owner": crate::task_frame::owner(config, agent, None),
+        "ends": crate::task_frame::ends_view(lang, crate::task_frame::Task::Watcher, &end, crate::routines::zone(config)),
+        "deliver": {"kind": "boite", "session_id": if rt.session.is_empty() { Value::Null } else { json!(rt.session) },
+                    "title": null},
+        "failures": rt.failures,
+        "fix": conn.frame.fix.as_ref().map(|f| format!("{}{}", crate::task_frame::RUN_PREFIX, f.id)),
+    })
 }
 
 // --- what it printed ----------------------------------------------------------------------------------------------------
@@ -867,6 +934,7 @@ pub async fn check(state: &AppState, agent: &AgentConfig, id: &str, via: &str) -
         broken_cleared(&agent.name, id);
         rt.broken = false;
         rt.broken_told = false;
+        rt.failing_since = 0.0;
         if moved {
             rt.last_change_at = now;
         }
@@ -901,6 +969,16 @@ pub async fn check(state: &AppState, agent: &AgentConfig, id: &str, via: &str) -
         }
         (step, before, moved)
     });
+    // working: a card « Réparer / Arrêter » left goes (task_frame.rs)
+    if conn.frame.fix.as_ref().is_some_and(|f| f.variant == crate::task_frame::REPAIR) {
+        let gone = connectors::change(&config, |store| {
+            let c = store.agents.get_mut(&agent.name)?.iter_mut().find(|c| c.id == id)?;
+            c.frame.fix.take().filter(|f| f.variant == crate::task_frame::REPAIR).map(|f| f.id)
+        });
+        if let Ok(Some(fix)) = gone {
+            crate::task_frame::withdraw(&config, &fix);
+        }
+    }
     let took = now - started;
     if step != Step::Wake {
         let name = match step {
@@ -929,6 +1007,14 @@ pub async fn check(state: &AppState, agent: &AgentConfig, id: &str, via: &str) -
     });
     tracing::info!(target: "bipbridge::watchers", agent = %agent.name, watcher = %id, via, by_agent = told.by_agent,
         sent = told.sent, urgent = told.urgent, "watcher woke its agent");
+    if told.sent && watch.once {
+        // « une seule fois, puis il s'arrête »: it told its person, its end (task_frame.rs)
+        tracing::info!(target: "bipbridge::watchers", agent = %agent.name, watcher = %id, "a once watcher told its person: gone");
+        let (state, agent, id) = (state.clone(), agent.clone(), id.to_string());
+        tokio::spawn(async move {
+            connectors::remove(&state, &agent, &id).await;
+        });
+    }
     Outcome {
         ok: true,
         step: "woke".into(),
@@ -953,6 +1039,9 @@ async fn failed(state: &AppState, agent: &AgentConfig, conn: &Connector, err: Ru
         if counted {
             rt.checks += 1;
             rt.failures += 1;
+            if rt.failing_since <= 0.0 {
+                rt.failing_since = now;
+            }
             if rt.failures >= failures_max {
                 rt.broken = true;
             }
@@ -966,20 +1055,117 @@ async fn failed(state: &AppState, agent: &AgentConfig, conn: &Connector, err: Ru
         if tell {
             rt.broken_told_at = now;
         }
-        tell.then_some(rt.failures)
+        tell.then_some((rt.failures, rt.failing_since))
     });
     tracing::info!(target: "bipbridge::watchers", agent = %agent.name, watcher = %conn.id, via, error = %message, counted, "watcher check failed");
-    let Some(failures) = tell else {
+    let Some((failures, since)) = tell else {
         let step = if counted { "failed" } else { "skipped" };
         return Outcome::plain(false, step, &message);
     };
-    // never a turn of the model for a failure: the bridge's line to the person, its agent told with their next message
+    // never a turn of the model for a failure: the card « Réparer / Arrêter » for the person (task_frame.rs, in place
+    // of the bridge's line), its agent told with their next message
     tracing::warn!(target: "bipbridge::watchers", agent = %agent.name, watcher = %conn.id, failures,
         "watcher out of order: its person is told, no model call");
-    let lang = handback::language_of(&config, agent);
     broken_noted(&agent.name, &conn.id, broken_note(conn, failures, &err.agent_text()));
-    let sent = alert(state, agent, conn, template(&lang, &conn.name, "", true), &format!("{}:broken:{}", conn.id, now as i64)).await;
+    let sent = raise_fix(state, agent, conn, failures, since, reason_of(&err), now).await;
     Outcome { sent, ..Outcome::plain(false, "broken", &message) }
+}
+
+/// A watcher's failure as its card says it (task_frame.rs `reason_words`).
+fn reason_of(err: &RunError) -> &'static str {
+    match err {
+        RunError::Timeout => "timeout",
+        RunError::MissingSecret(_) => "secret",
+        _ => "check",
+    }
+}
+
+/// The card « Réparer / Arrêter » of a watcher « en panne » (one at a time), placed and pushed. False: one waits.
+async fn raise_fix(state: &AppState, agent: &AgentConfig, conn: &Connector, failures: u32, since: f64, reason: &str, now: f64) -> bool {
+    let config = state.config();
+    let fix = crate::task_frame::Fix {
+        id: py::token_hex(6),
+        at: now,
+        variant: crate::task_frame::REPAIR.into(),
+        since: if since > 0.0 { since } else { now },
+        failures,
+        reason: reason.into(),
+    };
+    let made = connectors::change(&config, |store| {
+        let c = store.agents.get_mut(&agent.name)?.iter_mut().find(|c| c.id == conn.id)?;
+        if c.frame.fix.as_ref().is_some_and(|f| f.variant == crate::task_frame::REPAIR) {
+            return None;
+        }
+        // a « Garder ? » waiting gives way
+        let old = c.frame.fix.replace(fix.clone()).map(|f| f.id);
+        Some(old)
+    });
+    let Ok(Some(old)) = made else { return false };
+    if let Some(old) = old {
+        crate::task_frame::withdraw(&config, &old);
+    }
+    let lang = crate::task_frame::lang_of_agent(&config, &agent.name);
+    let who = crate::routines::flat(&crate::routines::shown_agent(&config, &agent.name), crate::routines::NAME_MAX);
+    let line = crate::task_frame::fix_title(lang, crate::task_frame::Task::Watcher, &who,
+                                            &crate::routines::flat(&conn.name, crate::routines::NAME_MAX));
+    crate::task_frame::raise(state, agent, &format!("{}{}", crate::task_frame::RUN_PREFIX, fix.id), &line, true).await;
+    true
+}
+
+/// « Réparer » (task_frame.rs): ONE turn of its agent in the watcher's own conversation, with what failed; its reply
+/// there (a Boîte message, pushed: the person asked for it). It changes something only through connector_update's card.
+pub async fn repair(state: &AppState, agent: &AgentConfig, id: &str) {
+    let config = state.config();
+    let Some(conn) = connectors::get(&config, &agent.name, id) else { return };
+    let rt = load(&config, &agent.name, id);
+    let note = repair_note(&conn, rt.failures, &rt.last_message);
+    let pipeline = Pipeline::of(state);
+    let Some(session) = conversation(state, &pipeline, agent, &conn).await else {
+        tracing::warn!(target: "bipbridge::watchers", agent = %agent.name, watcher = %id, "repair: no conversation");
+        return;
+    };
+    let mut turn = Turn::new(agent, Kind::Watcher, &session, note);
+    turn.max_seconds = config.watchers.turn_max_seconds;
+    turn.busy_wait = 120.0;
+    let reply = match pipeline.run(&turn).await {
+        Ok(ran) if ran.answered() => read_reply(&ran.text).map(|(_, text)| text),
+        _ => None,
+    };
+    tracing::info!(target: "bipbridge::watchers", agent = %agent.name, watcher = %id, replied = reply.is_some(), "watcher repair turn");
+    let Some(text) = reply else { return };
+    let delivery = Delivery {
+        agent: agent.clone(),
+        session,
+        key: format!("watch:{id}:repair:{}", py::time_time() as i64),
+        title: conn.name.clone(),
+        text,
+        as_written: false,
+        run_id: None,
+        notify: true,
+        files: Vec::new(),
+    };
+    pipeline.deliver(&delivery).await;
+}
+
+/// The hidden note of « Réparer »: what failed, and how to change it (connector_update: its card).
+pub fn repair_note(conn: &Connector, failures: u32, message: &str) -> String {
+    format!(
+        "<!--bip:watch\nYour person asked you to repair your watcher « {} »: it failed {failures} times in a row (its \
+last error: {}) and keeps trying, less often. Find out why with your tools: if a password or an access is refused, ask \
+for it again with ask_secret; if the site changed, fix its program and call connector_update (your person approves the \
+change on its card). Change nothing any other way; never a site that forbids automatic checks. Then tell your person, \
+in their language, in one or two short plain sentences, what you found and what you did or propose. Never write the \
+error's technical words, file names or tool names.\n-->",
+        tk::in_note_line(&conn.name),
+        tk::in_note_line(message),
+    )
+}
+
+/// One line of the frame (task_frame.rs: its end told, its card unanswered for a week) in the watcher's conversation,
+/// not pushed.
+pub async fn tell_line(state: &AppState, agent: &AgentConfig, id: &str, text: &str) {
+    let Some(conn) = connectors::get(&state.config(), &agent.name, id) else { return };
+    alert(state, agent, &conn, text.to_string(), &format!("{id}:frame:{}", py::time_time() as i64)).await;
 }
 
 // --- the schedule -------------------------------------------------------------------------------------------------------
@@ -1049,10 +1235,10 @@ mod tests {
         assert_eq!(every_text(60), "toutes les heures");
         assert_eq!(every_text(360), "toutes les 6 h");
         assert_eq!(every_text(1440), "tous les jours");
-        let watch = Watch { every: "15m".into(), notify: ON_CHANGE.into(), purchase: None };
+        let watch = Watch { every: "15m".into(), notify: ON_CHANGE.into(), purchase: None, ..Default::default() };
         assert_eq!(card_text(&watch), "Vérifie toutes les 15 min, ne réveille l'agent que si ça change");
         let map = json!({"every": "2 h", "notify": "on_condition"}).as_object().cloned().unwrap();
-        assert_eq!(parse_watch(&map), Ok(Watch { every: "2h".into(), notify: ON_CONDITION.into(), purchase: None }));
+        assert_eq!(parse_watch(&map), Ok(Watch { every: "2h".into(), notify: ON_CONDITION.into(), purchase: None, ..Watch::default() }));
         let bad = json!({"every": "1h", "notify": "always"}).as_object().cloned().unwrap();
         assert!(parse_watch(&bad).unwrap_err().contains("notify"));
     }
@@ -1148,7 +1334,7 @@ mod tests {
             cents: 4500,
             currency: "EUR".into(),
         };
-        let watch = Watch { every: "15m".into(), notify: ON_CHANGE.into(), purchase: Some(purchase) };
+        let watch = Watch { every: "15m".into(), notify: ON_CHANGE.into(), purchase: Some(purchase), ..Default::default() };
         let after = Observation { state: json!({"stock": "en stock"}), summary: "En stock".into(), condition: None };
         let note = change_note(&conn, &watch, Some(("Rupture", &json!({"stock": "rupture"}))), &after);
         assert!(note.contains("approved this watcher to BUY « 2 billets Stromae » on shop.example, about 45.00 EUR"), "{note}");
@@ -1163,7 +1349,7 @@ mod tests {
     #[test]
     fn the_notes_carry_before_and_after() {
         let conn = Connector { name: "Prix du vélo".into(), description: "Le prix du vélo chez Decathlon".into(), ..Default::default() };
-        let watch = Watch { every: "1h".into(), notify: ON_CHANGE.into(), purchase: None };
+        let watch = Watch { every: "1h".into(), notify: ON_CHANGE.into(), purchase: None, ..Default::default() };
         let after = Observation { state: json!({"price": 1199}), summary: "1 199 €".into(), condition: None };
         let note = change_note(&conn, &watch, Some(("1 299 €", &json!({"price": 1299}))), &after);
         assert!(note.starts_with("<!--bip:watch\nYour watcher « Prix du vélo »") && note.ends_with("\n-->"));
@@ -1222,7 +1408,7 @@ mod tests {
 
     #[test]
     fn next_check_and_settings() {
-        let watch = Watch { every: "15m".into(), notify: ON_CHANGE.into(), purchase: None };
+        let watch = Watch { every: "15m".into(), notify: ON_CHANGE.into(), purchase: None, ..Default::default() };
         let settings = Settings::default();
         let mut rt = Runtime { due_at: 50.0, ..Default::default() };
         assert_eq!(next_check(&rt, &watch, &settings), 50.0);

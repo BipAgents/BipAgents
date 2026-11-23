@@ -71,17 +71,23 @@ fn clock(h: u32, m: u32) -> String {
     format!("{h}:{m:02}")
 }
 
-/// The French words for a `when` (the apps use their own, from the same fields).
+/// The French words for a `when` (the apps use their own, from the same fields); « vers 8 h » when `approx`
+/// (task_frame.rs).
 pub fn when_text(when: &Value) -> String {
     let int = |k: &str| when.get(k).and_then(Value::as_u64).unwrap_or(0) as u32;
+    let at = if when.get("approx").and_then(Value::as_bool).unwrap_or(false) {
+        crate::task_frame::clock("fr", int("hour"), int("minute"))
+    } else {
+        format!("à {}", clock(int("hour"), int("minute")))
+    };
     match when.get("kind").and_then(Value::as_str).unwrap_or("") {
-        "daily" => format!("Chaque jour à {}", clock(int("hour"), int("minute"))),
-        "weekdays" => format!("En semaine à {}", clock(int("hour"), int("minute"))),
+        "daily" => format!("Chaque jour {at}"),
+        "weekdays" => format!("En semaine {at}"),
         "weekly" => {
             let day = DAYS_FR.get((int("weekday").max(1) - 1) as usize).copied().unwrap_or("lundi");
-            format!("Chaque {day} à {}", clock(int("hour"), int("minute")))
+            format!("Chaque {day} {at}")
         }
-        "monthly" => format!("Le {} de chaque mois à {}", int("day"), clock(int("hour"), int("minute"))),
+        "monthly" => format!("Le {} de chaque mois {at}", int("day")),
         "every_hours" if int("hours") <= 1 => "Toutes les heures".into(),
         "every_hours" => format!("Toutes les {} h", int("hours")),
         "every_minutes" => format!("Toutes les {} minutes", int("minutes")),
@@ -143,8 +149,18 @@ fn interval_when(minutes: u64) -> Value {
     }
 }
 
-/// Hermes' `schedule` ({kind: cron, expr} / {kind: interval, minutes} / {kind: once, run_at}, or a plain string).
+/// Hermes' `schedule` ({kind: cron, expr} / {kind: interval, minutes} / {kind: once, run_at}, or a plain string), with
+/// `approx` (« vers 8 h », task_frame.rs) when the job says so.
 pub fn routine_when(job: &Dict) -> Value {
+    let mut when = exact_when(job);
+    if job.get("approx").and_then(Value::as_bool).unwrap_or(false) {
+        when["approx"] = json!(true);
+        when = with_text(when);
+    }
+    when
+}
+
+fn exact_when(job: &Dict) -> Value {
     let schedule = job.get("schedule").cloned().unwrap_or(Value::Null);
     if let Some(expr) = schedule.get("expr").and_then(Value::as_str) {
         return cron_when(expr);
@@ -317,6 +333,20 @@ pub fn routine_item(agent: &str, job: &Dict) -> Option<Value> {
         json!({"prompt": head(&prompt, 600), "muted": job.get("muted").and_then(Value::as_bool).unwrap_or(false),
                "session_id": job.get("last_session_id").cloned().unwrap_or(Value::Null)}),
     ))
+    .map(|mut item| {
+        // its frame (task_frame.rs, contracts/task-frame `fields`), when the job has it (routines.rs `view_of`)
+        if let Some(map) = item.as_object_mut() {
+            for key in ["owner", "ends", "approx", "failures", "plan", "fix"] {
+                if let Some(v) = job.get(key) {
+                    map.insert(key.into(), v.clone());
+                }
+            }
+            if let Some(v) = job.get("deliver_to") {
+                map.insert("deliver".into(), v.clone());
+            }
+        }
+        item
+    })
 }
 
 /// A background task or a mailbox scan (jobs.rs' list), None when done longer ago than `RECENT_SECONDS`.
@@ -525,10 +555,17 @@ pub async fn listing(state: &AppState, only: Option<&str>) -> Vec<Value> {
     let mut items = Vec::new();
     let zone = crate::routines::zone(&config);
     for r in crate::routines::list(&config, None) {
-        if agents.iter().any(|a| a.name == r.agent) {
-            items.extend(crate::routines::view(&r, zone).as_object().and_then(|job| routine_item(&r.agent, job)));
+        if let Some(agent) = agents.iter().find(|a| a.name == r.agent) {
+            let mut item = crate::routines::view_of(&config, &r).as_object().and_then(|job| routine_item(&r.agent, job));
+            // the conversation it answers in, by its title
+            if let Some(item) = item.as_mut().filter(|i| i["deliver"]["kind"] == "conversation") {
+                let thread = crate::threads::threads_of(state).thread_of(agent, &r.origin).await;
+                item["deliver"]["title"] = json!(thread.and_then(|t| t.title));
+            }
+            items.extend(item);
         }
     }
+    let _ = zone;
     let now = py::time_time();
     items.extend(crate::jobs::jobs_of(state).list(only).iter().filter_map(|job| job_item(job, now)));
     let zone = crate::dates::load(&config).zone();
@@ -537,7 +574,14 @@ pub async fn listing(state: &AppState, only: Option<&str>) -> Vec<Value> {
             items.extend(connector_item(&agent, &conn, zone));
             if conn.watch.is_some() {
                 let rt = crate::watchers::load(&config, &agent, &conn.id);
-                items.extend(watcher_item(&agent, &conn, &rt, &config.watchers));
+                let mut item = watcher_item(&agent, &conn, &rt, &config.watchers);
+                // its frame (task_frame.rs)
+                if let (Some(Value::Object(map)), Value::Object(more)) =
+                    (item.as_mut(), crate::watchers::frame_view(&config, &agent, &conn, &rt))
+                {
+                    map.extend(more);
+                }
+                items.extend(item);
             }
         }
     }
@@ -760,7 +804,7 @@ mod tests {
             name: "Créneau médecin".into(),
             status: connectors::APPROVED.into(),
             enabled: true,
-            watch: Some(connectors::Watch { every: "15m".into(), notify: "on_change".into(), purchase: None }),
+            watch: Some(connectors::Watch { every: "15m".into(), notify: "on_change".into(), purchase: None, ..Default::default() }),
             ..Default::default()
         };
         let rt = crate::watchers::Runtime {

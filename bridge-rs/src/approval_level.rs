@@ -122,6 +122,7 @@ pub const TABLE: &[Rule] = &[
     rule("site_send", true, false, "bip-site- (the proxy's cut, or the agent's sandbox_sites_request)", "Alex 11/11 (was not critical since 6/11; security audit PI-7, BV-9): data sent to a site never validated for that agent; one tool call would have opened an attacker-named host for unlimited sending, no push, no undo; reading sites never asks"),
     rule("routine_way", true, false, "bip-rout- (with bip_routine)", "Alex 11/11 (audit PI-6, was not critical since 6/11): a routine its agent made starts only with this answer, then runs unattended with all its tools"),
     rule("plan", true, false, "bip-plan-", "Alex 22/11 (§3.4): a plan the agent proposed on its own; « Prévoir » sets its moments (routines that run unattended) and what it watches (an e-mail trigger)"),
+    rule("task_fix", true, false, "bip-fix-", "Alex 22/11 (§4, Q8 A): « Réparer » a routine or a watcher that keeps failing starts a paid turn of its agent; « Garder » keeps one running 3 months more"),
     rule("routine_change", true, false, "bip-rout- (no bip_routine)", "the agent proposes new words or a new time for a routine, or wants it back on: it then runs unattended with all its tools (PI-6, 11/11)"),
     rule("phone_exit", true, false, "bip-exit-", "uses the person's phone and home connection"),
     rule("agent_hops", true, false, "bip-hops-", "agents went on writing to each other past the cap (« Continuer l'échange ? »): more model calls, no person in the loop"),
@@ -172,9 +173,10 @@ pub fn classify_card(item: &Dict) -> &'static str {
     if run.starts_with(crate::routines::RUN_PREFIX) && item.get("bip_routine").is_none() {
         return "routine_change"; // an agent's proposal for a routine (routines.rs): asked at every level
     }
-    const PREFIXES: [(&str, &str); 12] = [
+    const PREFIXES: [(&str, &str); 13] = [
         (crate::routines::RUN_PREFIX, "routine_way"),
         (crate::plans::RUN_PREFIX, "plan"),
+        (crate::task_frame::RUN_PREFIX, crate::task_frame::KIND),
         (crate::sandbox_sites::RUN_PREFIX, "site_send"),
         (crate::vault_logins::RUN_PREFIX, "vault_login"),
         (crate::secrets::RUN_PREFIX, "secret"),

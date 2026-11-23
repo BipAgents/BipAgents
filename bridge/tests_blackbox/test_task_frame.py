@@ -24,8 +24,9 @@ DAY = 86400.0
 #: The base's answers to an app 1.0 (recorded on int-1.1c 938d65f23 with TASK_FRAME_RECORD=1).
 RECORDED = Path(__file__).parent / "fixtures" / "task_frame_app_1_0.json"
 #: What this branch adds to them (contracts/task-frame `app_1_0.ignores`).
-ADDED = {"owner", "ends", "deliver", "deliver_to", "approx", "failures", "fix", "bip_fix", "bip_choices", "until",
-         "once", "default_end"}
+ADDED = {"owner", "ends", "deliver_to", "approx", "bip_fix", "bip_choices", "until", "once", "default_end"}
+#: Added to what carries a frame (a job, a row, a trigger: with its `owner`); a watcher's detail had `failures` already.
+FRAMED = {"deliver", "failures", "fix"}
 
 
 def routine_runs(fakes):
@@ -312,6 +313,9 @@ def test_what_the_agent_sets_up_on_its_own_ends_after_90_days_and_asks_3_days_be
     bridge = started(with_device(bridges))
     hermes = fakes.hermes
     hermes.add_session("api_main", [{"role": "user", "content": "Bonjour"}], title="Bot Chat")
+    # asked (no turn going on: taken as asked), no end given: until the person stops it
+    _, asked = made_by_agent(bridge, "Agenda", "every day at 8:00")
+    assert asked["bip_summary"] == "Wellness created the routine “Agenda”: every day around 8 AM. Start it?"
     host = bridge.post("/v1/agents/wellness/routines", headers=AUTH,
                        json={"name": "Veille", "schedule": "every 2h", "prompt": "Regarde."}).json()["job"]
     gate = threading.Event()
@@ -340,9 +344,6 @@ def test_what_the_agent_sets_up_on_its_own_ends_after_90_days_and_asks_3_days_be
     # « Garder »: 90 days more
     assert approve(bridge, keep, "once").status_code == 200
     assert jobs(bridge)["Météo"]["ends"]["at"] == soon + 90 * DAY and cards(bridge, "bip-fix-") == []
-    # asked in the person's own conversation (no turn here: taken as asked), no end given: until they stop it
-    _, asked = made_by_agent(bridge, "Agenda", "every day at 8:00")
-    assert asked["bip_summary"] == "Wellness created the routine “Agenda”: every day around 8 AM. Start it?"
     assert jobs(bridge)["Agenda"]["ends"] == {"kind": "never", "text": "until you stop it"}
 
 
@@ -432,6 +433,7 @@ def test_a_once_watcher_stops_once_it_told_its_person(bridges, fakes):
     assert woke["step"] == "woke" and woke["sent"] is True, woke
     assert wait_until(lambda: bridge.get("/v1/agents/vie/connectors", headers=AUTH).json()["items"] == [], timeout=20)
     assert not [i for i in autonomous(bridge, "vie") if i["kind"] == "watcher"]
+    assert wait_until(lambda: tw.boite(bridge), timeout=20)
     assert [i["text"] for i in tw.boite(bridge)] == ["Un créneau s'est libéré mercredi à 9 h."]
 
 
@@ -463,8 +465,12 @@ def normal(value, key=None):
 def without_added(value):
     if isinstance(value, dict):
         # (a job's own `deliver`, « local » in Hermes' shape, stays: the frame's is an object)
+        framed = "owner" in value
         out = {k: without_added(v) for k, v in value.items()
-               if k not in ADDED or (k == "deliver" and not isinstance(v, dict))}
+               if k not in ADDED and not (framed and k in FRAMED and (k != "deliver" or isinstance(v, dict)))}
+        if "group" in value:
+            # a row of « Ce que tes agents font tout seuls » gains its plan (a job had it already)
+            out.pop("plan", None)
         if isinstance(out.get("when"), dict):
             out["when"].pop("approx", None)
         return out
