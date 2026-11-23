@@ -131,7 +131,8 @@ fn text(v: &Value, key: &str) -> String {
 }
 
 fn folder_of(v: &Value, parent: Option<&str>) -> MailFolder {
-    let name = text(v, "displayName").replace(['|', '\n', '\r'], " ");
+    // the person's own names, defused all the same wherever they are said (review R1)
+    let name = crate::archives::defused(&text(v, "displayName").replace(['|', '\n', '\r'], " "));
     MailFolder {
         id: text(v, "id"),
         name: match parent {
@@ -326,7 +327,7 @@ async fn search(config: &Config, api: &Api, arguments: &Dict) -> Dict {
             )
         })
         .collect();
-    tool_text(&format!("{LABEL} › {}:\n{}\n<<<\n{}\n>>>", folder.name, crate::mailbox::UNTRUSTED, lines.join("\n")), false)
+    tool_text(&format!("{}\n<<<\n{LABEL} › {}:\n{}\n>>>", crate::mailbox::UNTRUSTED, folder.name, lines.join("\n")), false)
 }
 
 /// One mail as mail_read gives it (`from`, `reply_to`, `to`, `cc`, … as header lines), for `reply_address` too.
@@ -441,8 +442,9 @@ async fn save_attachment(config: &Config, agent: &AgentConfig, api: &Api, argume
         }
         Err(fault) => return outlook::fault_result(&fault, "I can't get that attachment just now."),
     };
-    let from = person_of(v.get("from").unwrap_or(&Value::Null));
-    let content_type = Some(text(chosen, "contentType")).filter(|t| !t.is_empty()).unwrap_or_else(|| "application/octet-stream".into());
+    // written by the sender: defused (review R9)
+    let from = defused(&person_of(v.get("from").unwrap_or(&Value::Null)), 200);
+    let content_type = Some(defused(&text(chosen, "contentType"), 100)).filter(|t| !t.is_empty()).unwrap_or_else(|| "application/octet-stream".into());
     let file = crate::tools_knowledge::email::Attachment { name: names[index].clone(), content_type, data };
     tracing::info!(agent = %agent.name, "outlook: mail attachment saved");
     crate::mailbox::store_attachment(config, agent, file, &from)
@@ -579,11 +581,22 @@ pub fn forget_scans() {
     SCANS.lock().unwrap_or_else(|e| e.into_inner()).clear();
 }
 
-/// A Graph message as mail_tidy.rs' row (its `uid`: the short number; `message_id`: Graph's id).
+/// Graph's messages as mail_tidy.rs' rows (their `uid`: the short numbers, made by one lot; `message_id`: Graph's id).
+pub fn rows_of(config: &Config, items: &[Value]) -> Vec<Row> {
+    let ids: Vec<String> = items.iter().map(|v| text(v, "id")).collect();
+    let shorts = outlook::short_ids(config, &ids);
+    items.iter().zip(shorts).map(|(v, n)| row_with(v, n)).collect()
+}
+
+/// One message as a row (`rows_of` for a page).
 pub fn row_of(config: &Config, v: &Value) -> Row {
+    row_with(v, outlook::short_id(config, &text(v, "id")))
+}
+
+fn row_with(v: &Value, n: u64) -> Row {
     let from = v.pointer("/from/emailAddress/address").and_then(Value::as_str).unwrap_or("").trim().to_lowercase();
     Row {
-        uid: outlook::short_id(config, &text(v, "id")) as u32,
+        uid: n as u32,
         from,
         subject: tk::head(&text(v, "subject").split_whitespace().collect::<Vec<_>>().join(" "), 300).to_string(),
         date: text(v, "receivedDateTime").get(..10).unwrap_or("").to_string(),
@@ -612,7 +625,7 @@ async fn scan(config: &Config, api: &Api, folder: &MailFolder, fresh: bool) -> R
         ("$select", "id,from,subject,receivedDateTime,isRead,flag,isDraft".to_string()),
     ];
     let (items, cut) = outlook::pages(api, &url, &params, &[PREFER_IMMUTABLE], SCAN_MAX).await?;
-    let rows: Vec<Row> = items.iter().map(|v| row_of(config, v)).collect();
+    let rows: Vec<Row> = rows_of(config, &items);
     let scanned = Scan { folder: folder.name.clone(), uid_validity: None, total: folder.total.max(rows.len()), rows, cut, at: now };
     SCANS.lock().unwrap_or_else(|e| e.into_inner()).insert(key, scanned.clone());
     Ok(scanned)
@@ -832,11 +845,12 @@ async fn bulk(state: &AppState, agent: &AgentConfig, api: &Api, arguments: &Dict
         Err(Ok(said)) => return tool_text(&said, true),
         Err(Err(fault)) => return outlook::fault_result(&fault, "I can't reach your Outlook mail just now."),
     };
-    // never Sent Items nor Drafts, as a source or a destination
+    // never Sent Items nor Drafts, as a source or a destination; not known: nothing done (review R6)
     let mut protected = Vec::new();
     for id in ["sentitems", "drafts"] {
-        if let Ok(f) = known_folder(api, id).await {
-            protected.push(f.id);
+        match known_folder(api, id).await {
+            Ok(f) => protected.push(f.id),
+            Err(fault) => return outlook::fault_result(&fault, "I can't reach your Outlook mail just now."),
         }
     }
     if protected.contains(&folder.id) {
@@ -880,8 +894,11 @@ async fn bulk(state: &AppState, agent: &AgentConfig, api: &Api, arguments: &Dict
     };
     let lang = crate::mail_tidy::language(&config, &agent.name);
     let shown = crate::mail_tidy::shown_agent(&config, &agent.name);
+    // a move to the Deleted Items is the trash, whatever its name (review R7): critical, as `trash`
+    let to_trash = matches!(action, Action::Move(_)) && known_folder(api, "deleteditems").await.is_ok_and(|f| f.id == dest);
+    let account = outlook::account_name(&config);
     let card = crate::person_ok::Card {
-        kind: kind_of(&action),
+        kind: if to_trash { "mail_trash" } else { kind_of(&action) },
         tool: "mail_bulk",
         command: command_of(&planned),
         summary: crate::mail_tidy::sentence(&lang, &shown, &planned.job),
@@ -900,7 +917,20 @@ async fn bulk(state: &AppState, agent: &AgentConfig, api: &Api, arguments: &Dict
 they say yes; say so in your report and go on with the rest.", false)
         }
     }
-    let done = act(api, &action, &planned.dest, &planned.job.message_ids).await;
+    // the account, the part and the agent still there (review C4): else nothing moves
+    let config = state.config();
+    if let Err(why) = outlook::still_allowed(&config, &agent.name, "mail", account.as_deref()) {
+        return tool_text(why, true);
+    }
+    let api = match outlook::signed_in(&config).await {
+        Ok(api) => api,
+        Err(fault) => return outlook::fault_result(&fault, "I can't reach your Outlook mail just now."),
+    };
+    let api = &api;
+    // flagged since the scan: left out (review R6)
+    let flagged = flagged_in(api, &folder.id).await;
+    let mails: Vec<String> = planned.job.message_ids.iter().filter(|id| !flagged.contains(*id)).cloned().collect();
+    let done = act(api, &action, &planned.dest, &mails).await;
     SCANS.lock().unwrap_or_else(|e| e.into_inner()).retain(|k, _| k.1 != folder.id && k.1 != planned.dest);
     let job = Done {
         id: planned.job.id.clone(),
@@ -928,6 +958,40 @@ they say yes; say so in your report and go on with the rest.", false)
     )
 }
 
+/// The flagged mails of a folder now (Graph's `$filter`): never tidied, even when the scan saw them unflagged.
+async fn flagged_in(api: &Api, folder: &str) -> std::collections::HashSet<String> {
+    let url = format!("{}/me/mailFolders/{folder}/messages", outlook::base(api));
+    let query = [
+        ("$filter", "flag/flagStatus eq 'flagged'".to_string()),
+        ("$select", "id".to_string()),
+        ("$top", PAGE.to_string()),
+    ];
+    match outlook::pages(api, &url, &query, &[PREFER_IMMUTABLE], SCAN_MAX).await {
+        Ok((items, _)) => items.iter().map(|v| text(v, "id")).collect(),
+        Err(_) => std::collections::HashSet::new(),
+    }
+}
+
+/// Among `mails`, those still in `folder` (review C1: an undo puts back only what the tidying left where it put it,
+/// as the IMAP boxes' undo finds them in the destination; one the person filed elsewhere since stays there).
+async fn still_in(api: &Api, mails: &[String], folder: &str) -> Vec<String> {
+    use futures::stream::{self, StreamExt};
+    let base = outlook::base(api);
+    let found: Vec<Option<String>> = stream::iter(mails.iter().cloned())
+        .map(|id| {
+            let base = base.clone();
+            async move {
+                let url = format!("{base}/me/messages/{id}");
+                let v = outlook::fetch(api, &url, &[("$select", "id,parentFolderId".to_string())], &[PREFER_IMMUTABLE]).await.ok()?;
+                (text(&v, "parentFolderId") == folder).then_some(id)
+            }
+        })
+        .buffer_unordered(AT_ONCE)
+        .collect()
+        .await;
+    found.into_iter().flatten().collect()
+}
+
 async fn undo(config: &Config, agent: &AgentConfig, api: &Api, id: &str) -> Dict {
     let Some(mut job) = jobs(config).into_iter().find(|j| j.id == id.trim() && j.agent == agent.name) else {
         return tool_text("no such job of yours (mail_bulk action status lists them)", true);
@@ -940,11 +1004,16 @@ async fn undo(config: &Config, agent: &AgentConfig, api: &Api, id: &str) -> Dict
         Ok(_) => Action::Move(job.from.clone()),
         Err(_) => return tool_text("this job can't be undone", true),
     };
-    let done = act(api, &back, &job.from, &job.mails).await;
+    // only those still where the tidying left them: the destination, or the folder of mails marked read
+    let left_in = if job.to.is_empty() { &job.from } else { &job.to };
+    let still = still_in(api, &job.mails, left_in).await;
+    let done = act(api, &back, &job.from, &still).await;
     job.undone = true;
     keep_job(config, &job);
     SCANS.lock().unwrap_or_else(|e| e.into_inner()).clear();
-    tool_text(&format!("Undone: {} of {} e-mails put back in {LABEL}.", done.len(), job.mails.len()), false)
+    let moved = job.mails.len() - still.len();
+    let moved = if moved > 0 { format!(" {moved} moved elsewhere since stay where they are.") } else { String::new() };
+    tool_text(&format!("Undone: {} of {} e-mails put back in {LABEL}.{moved}", done.len(), job.mails.len()), false)
 }
 
 // -- the tools ---------------------------------------------------------------------------------------------------------

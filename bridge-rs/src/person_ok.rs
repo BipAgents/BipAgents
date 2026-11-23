@@ -50,8 +50,16 @@ pub const RUN_PREFIX: &str = "bip-ok-";
 /// The tools whose call waits for the person's answer on this card (turn_status.rs `HOLDING`). Not `calendar_add` /
 /// `calendar_update`: the phone's are queued at once, and the turn's status would take their repeats for the person's
 /// wait instead of a loop (runs.rs' brake); a Google Calendar card shows in the conversation all the same.
-pub const HOLDS_THE_CALL: &[&str] =
-    &[crate::form_send::TOOL, "calendar_delete", "obsidian_create", "obsidian_append", "obsidian_edit", crate::drives_write::TOOL];
+pub const HOLDS_THE_CALL: &[&str] = &[
+    crate::form_send::TOOL,
+    "calendar_delete",
+    "obsidian_create",
+    "obsidian_append",
+    "obsidian_edit",
+    crate::drives_write::TOOL,
+    // Outlook's tidying (outlook_mail.rs) waits on its card; an IMAP box's returns at once (its card is mail_tidy.rs')
+    "mail_bulk",
+];
 /// A form sent to a site not allowed yet for this agent.
 pub const SITE_FORM: &str = "site_form";
 /// An event deleted from the person's calendar.

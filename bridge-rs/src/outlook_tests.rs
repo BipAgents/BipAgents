@@ -85,7 +85,7 @@ fn only_the_rights_of_what_is_switched_on_are_asked() {
     let tokens = |scope: Option<&str>| connections::Tokens { scope: scope.map(str::to_string), ..Default::default() };
     assert_eq!(granted(&tokens(Some("https://graph.microsoft.com/Mail.ReadWrite Contacts.Read"))),
                Parts { mail: true, calendar: false, contacts: true });
-    assert_eq!(granted(&tokens(None)), Parts::default(), "nothing listed: tried");
+    assert_eq!(granted(&tokens(None)), Parts { mail: false, calendar: false, contacts: false }, "nothing listed: none (R12)");
     assert_eq!(Parts::default().missing(mail_only), vec!["calendar", "contacts"]);
     // the agents get what is on AND given; the renewal asks just that
     let account = Account {
@@ -122,7 +122,8 @@ fn graphs_long_ids_become_short_numbers_and_back() {
     assert_eq!(crate::outlook_mail::graph_id(&config, &mail).as_deref(), Some("AAMk-1"));
     assert!(crate::outlook_mail::graph_id(&config, "abc123|INBOX|1").is_none());
     assert!(crate::outlook_mail::is_ours(&mail) && !crate::outlook_mail::is_ours("abc|INBOX|1"));
-    // the file is the place's own, 0600
+    // written by a lot, in the background; the file is the place's own, 0600
+    flush_ids(&config);
     use std::os::unix::fs::PermissionsExt;
     let mode = std::fs::metadata(dir.path().join("outlook/ids.json")).unwrap().permissions().mode();
     assert_eq!(mode & 0o777, 0o600);
@@ -161,7 +162,13 @@ fn which_mail_calls_are_outlooks() {
     let store = connections::store_of(&config);
     let mut stored = store.read().unwrap();
     stored.outlook = Some(Account {
-        link: Link { state: "connected".into(), agents: vec!["vie".into()], account: Some("lea@outlook.com".into()), ..Default::default() },
+        link: Link {
+            state: "connected".into(),
+            agents: vec!["vie".into()],
+            account: Some("lea@outlook.com".into()),
+            tokens: connections::Tokens { scope: Some(SCOPES.into()), ..Default::default() },
+            ..Default::default()
+        },
         parts: Parts::default(),
     });
     store.write(&stored).unwrap();
@@ -398,4 +405,68 @@ fn the_view_says_no_key() {
     // an older store's entry without `parts`: everything on
     let old: Account = serde_json::from_value(json!({"tokens": {"access_token": "a"}, "connected_at": 1.0, "state": "connected"})).unwrap();
     assert_eq!(old.parts, Parts::default());
+}
+
+#[test]
+fn the_short_ids_live_in_memory_and_are_written_by_a_lot() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = config_with(true, dir.path());
+    let longs: Vec<String> = (0..500).map(|i| format!("AAMk-{i}")).collect();
+    let ids = short_ids(&config, &longs);
+    assert_eq!(ids.len(), 500);
+    assert_eq!(short_ids(&config, &longs), ids, "the same numbers, from memory");
+    // the writer thread writes the lot by itself (WRITE_AFTER), the caller never waits on the disk
+    let path = dir.path().join("outlook/ids.json");
+    for _ in 0..50 {
+        if path.exists() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    let kept: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(kept["ids"].as_object().map(|o| o.len()), Some(500));
+    // forgotten (disconnected): gone from memory and disk, and a late write never brings them back
+    short_id(&config, "AAMk-late");
+    forget_local(&config);
+    std::thread::sleep(std::time::Duration::from_millis(800));
+    assert!(!path.exists(), "a write landed after the account was forgotten");
+    assert!(long_id(&config, ids[0]).is_none());
+}
+
+#[test]
+fn outlooks_contacts_follow_the_agents_rights_on_the_address_book() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = config_with(true, dir.path());
+    let mut data = crate::Dict::new();
+    data.insert("rights".into(), json!({"vie": {"phones": false, "birthdays": false}}));
+    crate::contacts::write(&config, &data).unwrap();
+    let given = crate::contacts::details_given(&config, "vie");
+    assert!(!crate::contacts::birthdays_given(&given));
+    let c = crate::outlook_contacts::contact_of(&config, &json!({"id": "C1", "displayName": "Léa", "mobilePhone": "+33 6",
+        "birthday": "1990-05-12T00:00:00Z", "emailAddresses": [{"address": "lea@example.org"}]})).unwrap();
+    let seen = crate::contacts::without_details(c, &given);
+    assert!(seen.get("phones").is_none() && seen.get("birthday").is_none(), "{seen}");
+    assert_eq!(seen["emails"], json!([{"value": "lea@example.org"}]));
+    // another agent, no rights set: everything
+    assert!(crate::contacts::birthdays_given(&crate::contacts::details_given(&config, "coach")));
+}
+
+#[test]
+fn an_event_is_in_its_calendar_only_when_graph_says_so_and_an_invitation_is_a_meeting() {
+    use crate::outlook_calendar::{in_calendar, is_meeting};
+    assert!(in_calendar(&json!({"calendar": {"id": "cal-1"}}), "cal-1"));
+    assert!(!in_calendar(&json!({"calendar": {"id": "cal-2"}}), "cal-1"));
+    assert!(!in_calendar(&json!({"id": "e1"}), "cal-1"), "not said: not proved");
+    assert!(is_meeting(&json!({"attendees": [{"emailAddress": {"address": "p@x"}}]})));
+    assert!(is_meeting(&json!({"attendees": [], "isOrganizer": false})), "someone else's invitation, guests hidden");
+    assert!(!is_meeting(&json!({"attendees": [], "isOrganizer": true})));
+    assert!(!is_meeting(&json!({})));
+}
+
+#[test]
+fn no_card_that_holds_its_call_is_for_the_level() {
+    let item = |run: &str| args(json!({"run_id": run, "bip_ok": {"kind": "mail_archive"}}));
+    assert!(!crate::approval_level::settled_by_level(&item("bip-ok-abc")));
+    assert!(crate::approval_level::settled_by_level(&item("bip-mail-abc")));
+    assert!(crate::person_ok::HOLDS_THE_CALL.contains(&"mail_bulk"), "its card holds the call (review C5)");
 }

@@ -162,10 +162,10 @@ fn scope_words(scopes: &str) -> Vec<String> {
         .collect()
 }
 
-/// The parts Microsoft gave, by the rights a token's answer lists (none listed: all of them, as drives.rs reads
-/// OneDrive's write right; tried, and a refusal said plainly).
+/// The parts Microsoft gave, by the rights a token's answer lists. None listed: none (review R12: closed by default;
+/// Microsoft always lists them, and a renewal without the list keeps the sign-in's, connections.rs `tokens_of`).
 pub fn granted(tokens: &connections::Tokens) -> Parts {
-    let Some(scopes) = tokens.scope.as_deref() else { return Parts::default() };
+    let Some(scopes) = tokens.scope.as_deref() else { return Parts { mail: false, calendar: false, contacts: false } };
     let words = scope_words(scopes);
     let has = |key: &str| {
         let wanted = PART_SCOPES.iter().find(|(k, _)| *k == key).map(|(_, s)| s.to_ascii_lowercase()).unwrap_or_default();
@@ -202,10 +202,33 @@ fn shared_with_others(config: &Config, agent: &str) -> bool {
     crate::family_agent::is_family(config, agent) || crate::project_agent::is_project(config, agent)
 }
 
+/// Whether `agent` is « protected »: what it reads goes only to a model that keeps nothing (review R13). The hook for
+/// the shared-memory branch (`outside_model::place`): when both meet, this returns false for a model outside or
+/// unknown, and Outlook is off for that agent by default, as the shared memory and the Carnet are. Until then, every
+/// agent of the place is.
+pub fn kept_on_the_place(config: &Config, agent: &str) -> bool {
+    let _ = (config, agent);
+    true
+}
+
+/// After the person's « Oui » (review C4): the account still connected and the same one as when the card was made
+/// (`account`), `part` still on and given, the agent still chosen. Err: what to tell the agent (nothing written).
+pub fn still_allowed(config: &Config, agent: &str, part: &str, account: Option<&str>) -> Result<(), &'static str> {
+    let now = stored(config);
+    let same = now.as_ref().is_some_and(|a| a.link.state == "connected" && a.link.account.as_deref() == account);
+    if !same || !parts_for(config, agent).is_some_and(|p| p.get(part)) {
+        return Err(TAKEN_BACK);
+    }
+    Ok(())
+}
+
+pub const TAKEN_BACK: &str = "Not done: while the card waited, your person disconnected Outlook or took this away from \
+you: nothing was written. Tell them plainly; ask again only once they connect it again for you.";
+
 /// What `agent` uses of the account: on, connected (or ended: it is told to ask for a new sign-in), chosen. None:
 /// nothing. Never the family's agent nor a project agent (shown to others).
 pub fn parts_for(config: &Config, agent: &str) -> Option<Parts> {
-    if !config.outlook.enabled || shared_with_others(config, agent) {
+    if !config.outlook.enabled || shared_with_others(config, agent) || !kept_on_the_place(config, agent) {
         return None;
     }
     stored(config).filter(|a| a.link.agents.iter().any(|x| x == agent)).map(|a| effective(&a))
@@ -386,7 +409,7 @@ pub async fn finish(config: &Config, query: HashMap<String, String>) -> ApiResul
         coded(502, "exchange_failed", &format!("Microsoft refused the sign-in ({status} {why})"))
     })?;
     let tokens = connections::tokens_of(&answer, None);
-    if tokens.scope.as_deref().is_some_and(|s| !given_for(s, asked)) {
+    if !tokens.scope.as_deref().is_some_and(|s| given_for(s, asked)) {
         return Err(coded(400, "denied", "Microsoft did not give every right asked"));
     }
     let api = Api::new(ep, tokens.access_token.clone(), None);
@@ -667,13 +690,32 @@ pub fn fault_result(fault: &Fault, plain: &str) -> crate::Dict {
 
 // -- short ids ---------------------------------------------------------------------------------------------------------
 
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 struct Ids {
     next: u64,
     ids: BTreeMap<u64, String>,
 }
 
-static IDS_LOCK: Mutex<()> = Mutex::new(());
+/// A place's table, kept in memory (review of outlook C3: read once, never again for each item), written by a lot:
+/// `dirty` until the writer thread has written it.
+#[derive(Debug, Default)]
+struct Table {
+    ids: Ids,
+    by_long: HashMap<String, u64>,
+    dirty: bool,
+    /// A write is on its way (one thread at a time per place).
+    writing: bool,
+    /// Bumped when the account's local data is forgotten: a write started before never lands after.
+    generation: u64,
+}
+
+/// The tables, by place (its data folder: tests run several bridges in one process). Only memory under this lock:
+/// the file is read once and written by a thread of its own.
+static TABLES: std::sync::LazyLock<Mutex<HashMap<String, Table>>> = std::sync::LazyLock::new(Default::default);
+/// The file's writes and its removal, one at a time (the writer thread, `flush_ids`, `forget_local`).
+static WRITE_LOCK: Mutex<()> = Mutex::new(());
+/// How long the writer waits for the rest of a lot before writing.
+const WRITE_AFTER: std::time::Duration = std::time::Duration::from_millis(300);
 
 fn folder(config: &Config) -> PathBuf {
     PathBuf::from(config.data_dir()).join("outlook")
@@ -692,7 +734,7 @@ pub fn write_file(config: &Config, name: &str, bytes: &[u8]) -> anyhow::Result<(
     let dir = folder(config);
     py::makedirs(&dir.to_string_lossy(), 0o700)?;
     let path = dir.join(name);
-    let tmp = dir.join(format!(".{name}.{}.tmp", std::process::id()));
+    let tmp = dir.join(format!(".{name}.{}.{}.tmp", std::process::id(), py::token_hex(4)));
     py::write_with_mode(&tmp.to_string_lossy(), bytes, 0o600)?;
     std::fs::rename(&tmp, &path)?;
     Ok(())
@@ -703,36 +745,101 @@ pub fn read_file(config: &Config, name: &str) -> Option<Vec<u8>> {
     std::fs::read(folder(config).join(name)).ok()
 }
 
-/// The short numbers of Graph's ids, made for those new (the same id always gets the same number).
+/// `f` on the place's table (read from its file the first time).
+fn with_table<T>(config: &Config, f: impl FnOnce(&mut Table) -> T) -> T {
+    let mut tables = TABLES.lock().unwrap_or_else(|e| e.into_inner());
+    let table = tables.entry(config.data_dir()).or_insert_with(|| {
+        let ids = load_ids(config);
+        let by_long = ids.ids.iter().map(|(n, id)| (id.clone(), *n)).collect();
+        Table { ids, by_long, ..Table::default() }
+    });
+    f(table)
+}
+
+/// The table written in the background (a thread: callers never wait on the disk, in or out of the runtime). One
+/// writer per place; what changes meanwhile is written by the same thread's next round.
+fn write_later(config: &Config) {
+    let start = with_table(config, |t| {
+        let start = t.dirty && !t.writing;
+        if start {
+            t.writing = true;
+        }
+        start
+    });
+    if !start {
+        return;
+    }
+    let config = config.clone();
+    std::thread::spawn(move || loop {
+        std::thread::sleep(WRITE_AFTER);
+        let lot = with_table(&config, |t| {
+            if !t.dirty {
+                t.writing = false;
+                return None;
+            }
+            t.dirty = false;
+            Some((t.ids.clone(), t.generation))
+        });
+        let Some((ids, generation)) = lot else { return };
+        let Ok(bytes) = serde_json::to_vec(&ids) else { continue };
+        let _writing = WRITE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // forgotten meanwhile (disconnected): never written again
+        if with_table(&config, |t| t.generation) != generation {
+            continue;
+        }
+        if let Err(e) = write_file(&config, "ids.json", &bytes) {
+            tracing::warn!(error = %e, "outlook: short ids not kept");
+        }
+    });
+}
+
+/// Writes the table now if it changed (tests; the writer thread does it otherwise).
+pub fn flush_ids(config: &Config) {
+    let _writing = WRITE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let lot = with_table(config, |t| {
+        let lot = t.dirty.then(|| t.ids.clone());
+        t.dirty = false;
+        lot
+    });
+    if let Some(bytes) = lot.and_then(|ids| serde_json::to_vec(&ids).ok()) {
+        if let Err(e) = write_file(config, "ids.json", &bytes) {
+            tracing::warn!(error = %e, "outlook: short ids not kept");
+        }
+    }
+}
+
+/// The short numbers of Graph's ids, made for those new (the same id always gets the same number). In memory; the
+/// new ones are written by a lot, in the background.
 pub fn short_ids(config: &Config, longs: &[String]) -> Vec<u64> {
-    let _guard = IDS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let mut ids = load_ids(config);
-    let mut known: HashMap<String, u64> = ids.ids.iter().map(|(n, id)| (id.clone(), *n)).collect();
-    let mut changed = false;
-    let out = longs
-        .iter()
-        .map(|long| match known.get(long) {
-            Some(n) => *n,
-            None => {
-                ids.next += 1;
-                let n = ids.next;
-                ids.ids.insert(n, long.clone());
-                known.insert(long.clone(), n);
-                changed = true;
-                n
+    let (out, changed) = with_table(config, |t| {
+        let mut changed = false;
+        let out: Vec<u64> = longs
+            .iter()
+            .map(|long| match t.by_long.get(long) {
+                Some(n) => *n,
+                None => {
+                    t.ids.next += 1;
+                    let n = t.ids.next;
+                    t.ids.ids.insert(n, long.clone());
+                    t.by_long.insert(long.clone(), n);
+                    changed = true;
+                    n
+                }
+            })
+            .collect();
+        if changed {
+            while t.ids.ids.len() > IDS_MAX {
+                let Some((oldest, long)) = t.ids.ids.pop_first() else { break };
+                if t.by_long.get(&long) == Some(&oldest) {
+                    t.by_long.remove(&long);
+                }
             }
-        })
-        .collect();
+            t.dirty = true;
+        }
+        (out, changed)
+    });
     if changed {
-        while ids.ids.len() > IDS_MAX {
-            let Some(oldest) = ids.ids.keys().next().copied() else { break };
-            ids.ids.remove(&oldest);
-        }
-        if let Ok(bytes) = serde_json::to_vec(&ids) {
-            if let Err(e) = write_file(config, "ids.json", &bytes) {
-                tracing::warn!(error = %e, "outlook: short ids not kept");
-            }
-        }
+        write_later(config);
     }
     out
 }
@@ -743,13 +850,18 @@ pub fn short_id(config: &Config, long: &str) -> u64 {
 
 /// Graph's id of a short number. None: not one of this account's.
 pub fn long_id(config: &Config, n: u64) -> Option<String> {
-    let _guard = IDS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    load_ids(config).ids.get(&n).cloned()
+    with_table(config, |t| t.ids.ids.get(&n).cloned())
 }
 
-/// The ids, drafts and tidyings of an account no longer connected.
+/// The ids, drafts and tidyings of an account no longer connected (a write on its way never lands after).
 fn forget_local(config: &Config) {
-    let _guard = IDS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _writing = WRITE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    with_table(config, |t| {
+        t.ids = Ids::default();
+        t.by_long.clear();
+        t.dirty = false;
+        t.generation += 1;
+    });
     let _ = std::fs::remove_dir_all(folder(config));
     crate::outlook_mail::forget_scans();
     crate::outlook_contacts::forget_cache();
@@ -824,9 +936,16 @@ async fn start_route(State(state): State<AppState>, Json(body): Json<StartBody>)
 
 async fn callback_route(State(state): State<AppState>, Json(body): Json<CallbackBody>) -> ApiResult<Response> {
     let config = state.config();
+    // the agents before (another account signed in: theirs change too, review R11), and after
+    let before = stored(&config).map(|a| a.link.agents).unwrap_or_default();
     let shown = finish(&config, connections::callback_query(&body.url)).await?;
-    let agents: Vec<String> =
+    let mut agents: Vec<String> =
         shown["agents"].as_array().into_iter().flatten().filter_map(Value::as_str).map(str::to_string).collect();
+    for a in before {
+        if !agents.contains(&a) {
+            agents.push(a);
+        }
+    }
     tools_changed(&config, &agents).await;
     Ok(web::ok(shown))
 }

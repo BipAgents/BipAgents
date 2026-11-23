@@ -32,6 +32,8 @@ pub const ID_PREFIX: &str = "outlook:";
 /// Calendars listed at most, the default one first.
 const MAX_CALENDARS: usize = 20;
 const PAGE: &str = "250";
+/// Events read at most from a calendar for one listing (its pages followed).
+const EVENTS_MAX: usize = 1000;
 /// The names that mean the default calendar.
 const OUTLOOK_NAMES: [&str; 6] =
     ["outlook", "outlook calendar", "agenda outlook", "calendrier outlook", "outlook-kalender", "calendario de outlook"];
@@ -71,13 +73,17 @@ pub fn split_ref(id: &str) -> Option<(u64, u64)> {
 
 /// Graph's calendar as kept here. None: no id.
 pub fn calendar_of(config: &Config, v: &Value) -> Option<Calendar> {
+    calendar_with(v, outlook::short_id(config, &text(v, "id")))
+}
+
+fn calendar_with(v: &Value, n: u64) -> Option<Calendar> {
     let key = text(v, "id");
     if key.is_empty() {
         return None;
     }
     let name = crate::archives::defused(tk::head(&text(v, "name").split_whitespace().collect::<Vec<_>>().join(" "), 120));
     Some(Calendar {
-        n: outlook::short_id(config, &key),
+        n,
         name: if name.is_empty() { LABEL.to_string() } else { name },
         writable: v.get("canEdit").and_then(Value::as_bool).unwrap_or(false),
         default: v.get("isDefaultCalendar").and_then(Value::as_bool).unwrap_or(false),
@@ -90,7 +96,9 @@ pub async fn calendars(config: &Config, api: &Api) -> Result<Vec<Calendar>, Faul
     let url = format!("{}/me/calendars", outlook::base(api));
     let query = [("$top", "50".to_string()), ("$select", "id,name,canEdit,isDefaultCalendar".to_string())];
     let (items, _) = outlook::pages(api, &url, &query, &[PREFER_IMMUTABLE], 100).await?;
-    let mut found: Vec<Calendar> = items.iter().filter_map(|v| calendar_of(config, v)).collect();
+    // their short numbers by one lot (review C3)
+    let shorts = outlook::short_ids(config, &items.iter().map(|v| text(v, "id")).collect::<Vec<_>>());
+    let mut found: Vec<Calendar> = items.iter().zip(shorts).filter_map(|(v, n)| calendar_with(v, n)).collect();
     // none marked (an older account): its first one is Outlook's own « Calendar »
     if !found.iter().any(|c| c.default) {
         if let Some(first) = found.first_mut() {
@@ -126,6 +134,16 @@ pub fn moment_of(v: &Value, all_day: bool, zone: chrono_tz::Tz) -> String {
 
 /// A Graph event as calendar.rs lists them. None: cancelled, no start.
 pub fn event_of(config: &Config, v: &Value, calendar: u64, zone: chrono_tz::Tz) -> Option<Value> {
+    event_with(v, calendar, outlook::short_id(config, &text(v, "id")), zone)
+}
+
+/// Graph's events of a page, their short numbers made by one lot (review C3).
+pub fn events_of(config: &Config, items: &[Value], calendar: u64, zone: chrono_tz::Tz) -> Vec<Value> {
+    let shorts = outlook::short_ids(config, &items.iter().map(|v| text(v, "id")).collect::<Vec<_>>());
+    items.iter().zip(shorts).filter_map(|(v, n)| event_with(v, calendar, n, zone)).collect()
+}
+
+fn event_with(v: &Value, calendar: u64, n: u64, zone: chrono_tz::Tz) -> Option<Value> {
     if v.get("isCancelled").and_then(Value::as_bool).unwrap_or(false) {
         return None;
     }
@@ -147,7 +165,7 @@ pub fn event_of(config: &Config, v: &Value, calendar: u64, zone: chrono_tz::Tz) 
     let defused = |s: String, max: usize| crate::archives::defused(tk::head(&s, max));
     let kind = text(v, "type");
     Some(json!({
-        "id": event_ref(calendar, outlook::short_id(config, &id)), "calendar": calendar_ref(calendar),
+        "id": event_ref(calendar, n), "calendar": calendar_ref(calendar),
         "title": defused(text(v, "subject"), 300), "start": start, "end": end, "all_day": all_day,
         "location": defused(v.pointer("/location/displayName").and_then(Value::as_str).unwrap_or("").to_string(), 300),
         "notes": defused(text(v, "bodyPreview"), 2000),
@@ -182,14 +200,21 @@ pub async fn listed(config: &Config, remote: &mut crate::caldav::Remote, from: N
     ];
     let base = outlook::base(&api);
     let urls: Vec<String> = found.iter().map(|c| format!("{base}/me/calendars/{}/calendarView", c.key)).collect();
-    let pages =
-        futures::future::join_all(urls.iter().map(|url| outlook::fetch(&api, url, &query, &[PREFER_IMMUTABLE]))).await;
+    // every page of the period (review R10), `EVENTS_MAX` at most a calendar, said when some are left
+    let pages = futures::future::join_all(
+        urls.iter().map(|url| outlook::pages(&api, url, &query, &[PREFER_IMMUTABLE], EVENTS_MAX)),
+    )
+    .await;
     for (calendar, page) in found.iter().zip(pages) {
         remote.calendars.push(json!({"id": calendar_ref(calendar.n), "title": calendar.name, "source": LABEL}));
         match page {
-            Ok(page) => {
-                let items = page.get("value").and_then(Value::as_array).cloned().unwrap_or_default();
-                remote.events.extend(items.iter().filter_map(|v| event_of(config, v, calendar.n, zone)));
+            Ok((items, more)) => {
+                remote.events.extend(events_of(config, &items, calendar.n, zone));
+                if more {
+                    remote.failed.push(format!(
+                        "{LABEL}, one of its calendars: more than {EVENTS_MAX} events in the period, the first ones only"
+                    ));
+                }
             }
             Err(fault) => remote.failed.push(format!("{LABEL}, one of its calendars: {}", outlook::words(&fault))),
         }
@@ -308,10 +333,24 @@ fn event_url(api: &Api, calendar: &str, id: &str) -> String {
     format!("{}/me/calendars/{calendar}/events/{id}", outlook::base(api))
 }
 
+/// The event, read by its calendar's path, with the calendar it is really in (`$expand`): Exchange's event ids are
+/// global, the path alone proves nothing (review C2).
 async fn read_event(api: &Api, calendar: &str, id: &str) -> Result<Value, Fault> {
     let url = event_url(api, calendar, id);
-    let select = "id,subject,start,end,isAllDay,location,bodyPreview,type,seriesMasterId,attendees,calendar,isCancelled";
-    outlook::fetch(api, &url, &[("$select", select.to_string())], &[PREFER_IMMUTABLE]).await
+    let select = "id,subject,start,end,isAllDay,location,bodyPreview,type,seriesMasterId,attendees,isOrganizer,isCancelled";
+    let query = [("$select", select.to_string()), ("$expand", "calendar($select=id)".to_string())];
+    outlook::fetch(api, &url, &query, &[PREFER_IMMUTABLE]).await
+}
+
+/// Whether the event read is in `calendar` (Graph's id of the card's calendar); not said: not proved, refused.
+pub fn in_calendar(raw: &Value, calendar: &str) -> bool {
+    raw.pointer("/calendar/id").and_then(Value::as_str).is_some_and(|id| id == calendar)
+}
+
+/// A meeting: guests listed, or someone else's invitation (its guests may be hidden, review R2).
+pub fn is_meeting(raw: &Value) -> bool {
+    raw.get("attendees").and_then(Value::as_array).is_some_and(|a| !a.is_empty())
+        || raw.get("isOrganizer").and_then(Value::as_bool) == Some(false)
 }
 
 fn fault_result(fault: &Fault) -> Dict {
@@ -366,11 +405,15 @@ pub async fn plan(config: &Config, api: &Api, name: &str, arguments: &Dict, cale
             let (_, e) = split_ref(&tk::str_or_empty(arguments.get("id"))).ok_or_else(unknown)?;
             let id = outlook::long_id(config, e).ok_or_else(unknown)?;
             let raw = read_event(api, &calendar.key, &id).await.map_err(|f| fault_result(&f))?;
+            // an event of another calendar under this one's number: no such event here, nothing asked (review C2)
+            if !in_calendar(&raw, &calendar.key) {
+                return Err(unknown());
+            }
             let current = event_of(config, &raw, calendar.n, zone).ok_or_else(|| tool_text("no such event any more", true))?;
             if current.get("recurring").and_then(Value::as_bool).unwrap_or(false) {
                 return Err(tool_text(REPEATING, true));
             }
-            if raw.get("attendees").and_then(Value::as_array).is_some_and(|a| !a.is_empty()) {
+            if is_meeting(&raw) {
                 return Err(tool_text(MEETING, true));
             }
             let etag = Some(text(&raw, "@odata.etag")).filter(|e| !e.is_empty());
@@ -639,7 +682,17 @@ pub async fn write_call(state: &AppState, agent: &AgentConfig, name: &str, argum
     use crate::person_ok::Answer;
     let refused = |a: &'static str, b: &'static str| if delete { a } else { b };
     match crate::person_ok::ask(state, agent, card).await {
-        Answer::Once | Answer::Always => Some(apply(&config, &api, &planned).await),
+        Answer::Once | Answer::Always => {
+            // the account, the agenda and the agent still there (review C4): else nothing written
+            let now = state.config();
+            if let Err(why) = outlook::still_allowed(&now, &agent.name, "calendar", account.as_deref()) {
+                return Some(tool_text(why, true));
+            }
+            match outlook::signed_in(&now).await {
+                Ok(fresh) => Some(apply(&now, &fresh, &planned).await),
+                Err(fault) => Some(fault_result(&fault)),
+            }
+        }
         Answer::Deny => Some(tool_text(refused(crate::calendar::DELETE_REFUSED, WRITE_REFUSED), true)),
         Answer::NoAnswer => Some(tool_text(refused(crate::calendar::DELETE_NO_ANSWER, WRITE_NO_ANSWER), true)),
         Answer::Held => Some(tool_text(refused(crate::calendar::DELETE_HELD, WRITE_HELD), false)),

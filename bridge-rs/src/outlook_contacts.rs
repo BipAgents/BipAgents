@@ -55,6 +55,16 @@ fn address_of(v: &Value) -> String {
 /// A Graph contact in the phone copy's shape (contacts.rs): {id, name, nickname, phones, emails, addresses, birthday,
 /// organization, job, groups}.
 pub fn contact_of(config: &Config, v: &Value) -> Option<Value> {
+    contact_with(v, outlook::short_id(config, &text(v, "id")))
+}
+
+/// Graph's contacts of a listing, their short numbers made by one lot (review C3).
+pub fn contacts_of(config: &Config, items: &[Value]) -> Vec<Value> {
+    let shorts = outlook::short_ids(config, &items.iter().map(|v| text(v, "id")).collect::<Vec<_>>());
+    items.iter().zip(shorts).filter_map(|(v, n)| contact_with(v, n)).collect()
+}
+
+fn contact_with(v: &Value, n: u64) -> Option<Value> {
     let id = text(v, "id");
     let name = {
         let shown = clean(&text(v, "displayName"), 300);
@@ -102,7 +112,7 @@ pub fn contact_of(config: &Config, v: &Value) -> Option<Value> {
         .map(|c| json!(clean(c, 100)))
         .collect();
     let mut out = json!({
-        "id": format!("{}{}", crate::outlook_calendar::ID_PREFIX, outlook::short_id(config, &id)),
+        "id": format!("{}{n}", crate::outlook_calendar::ID_PREFIX),
         "name": name, "phones": phones, "emails": emails, "addresses": addresses, "groups": groups,
     });
     for (key, graph) in [("nickname", "nickName"), ("organization", "companyName"), ("job", "jobTitle")] {
@@ -144,7 +154,7 @@ homePhones,mobilePhone,birthday,categories,homeAddress,businessAddress,otherAddr
     let (items, _) =
         outlook::pages(api, &url, &[("$top", "500".to_string()), ("$select", select.to_string())], &[PREFER_IMMUTABLE], MAX)
             .await?;
-    let contacts: Vec<Value> = items.iter().filter_map(|v| contact_of(config, v)).collect();
+    let contacts = contacts_of(config, &items);
     let groups = groups_of(&contacts);
     *CACHE.lock().unwrap_or_else(|e| e.into_inner()) = Some((place, now, groups.clone(), contacts.clone()));
     Ok((groups, contacts))
@@ -162,10 +172,15 @@ fn marked(result: Dict) -> Dict {
     }
 }
 
-/// One of the contacts' read tools on Outlook's contacts (None: a write, which stays the phone's).
-pub async fn call(config: &Config, name: &str, arguments: &Dict) -> Option<Dict> {
+/// One of the contacts' read tools on Outlook's contacts for `agent` (None: a write, which stays the phone's). The
+/// details its rights on the address book leave out are left out here too (review R8).
+pub async fn call(config: &Config, agent: &str, name: &str, arguments: &Dict) -> Option<Dict> {
     if !READ_TOOLS.contains(&name) {
         return None;
+    }
+    let given = crate::contacts::details_given(config, agent);
+    if name == "contacts_birthdays" && !crate::contacts::birthdays_given(&given) {
+        return Some(tool_text(&crate::phone_rights::refused("see their contacts' birthdays"), true));
     }
     let api = match outlook::signed_in(config).await {
         Ok(api) => api,
@@ -175,6 +190,7 @@ pub async fn call(config: &Config, name: &str, arguments: &Dict) -> Option<Dict>
         Ok(found) => found,
         Err(fault) => return Some(outlook::fault_result(&fault, "I can't reach your Outlook contacts just now.")),
     };
+    let contacts: Vec<Value> = contacts.into_iter().map(|c| crate::contacts::without_details(c, &given)).collect();
     let since = format!("read now from {LABEL}");
     Some(marked(crate::contacts::read_answer(name, arguments, &groups, &contacts, &since, py::time_time())))
 }

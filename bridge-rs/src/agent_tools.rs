@@ -440,11 +440,11 @@ fn own_tools(config: &Config, agent: &AgentConfig, offer: bool) -> Vec<Value> {
         tools.extend(crate::contacts::tools_of(config, &agent.name));
     } else if crate::outlook::contacts_for(config, &agent.name) {
         // Outlook's contacts only (outlook_contacts.rs): the read tools
-        tools.extend(
-            crate::contacts::tools()
-                .into_iter()
-                .filter(|t| crate::outlook_contacts::READ_TOOLS.contains(&t["name"].as_str().unwrap_or(""))),
-        );
+        let birthdays = crate::contacts::birthdays_given(&crate::contacts::details_given(config, &agent.name));
+        tools.extend(crate::contacts::tools().into_iter().filter(|t| {
+            let name = t["name"].as_str().unwrap_or("");
+            crate::outlook_contacts::READ_TOOLS.contains(&name) && (birthdays || name != "contacts_birthdays")
+        }));
     }
     if crate::agent_files::offered(config, &agent.name) {
         tools.push(crate::agent_files::tool());
@@ -1850,7 +1850,7 @@ the BipAgents app.",
         let phone = crate::contacts::enabled(&config, &agent.name);
         if crate::outlook::contacts_for(&config, &agent.name) {
             // the person's Outlook contacts (outlook_contacts.rs, read only), beside the phone's address book
-            match crate::outlook_contacts::call(&config, name, arguments).await {
+            match crate::outlook_contacts::call(&config, &agent.name, name, arguments).await {
                 Some(outlook) if phone => {
                     let mine = blocking(move || crate::contacts::call(&config, &agent_c.name, &name_c, &arguments_c, None)).await?;
                     return Ok(crate::outlook_contacts::beside(mine, outlook));

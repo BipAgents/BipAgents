@@ -150,6 +150,22 @@ pub fn tools_of(config: &Config, agent: &str) -> Vec<Value> {
         .collect()
 }
 
+/// The details `agent` may see of anyone's contacts (its rights on the address book, phone_rights.rs; all of them
+/// when the person set none): Outlook's contacts follow them too (outlook_contacts.rs, review R8).
+pub fn details_given(config: &Config, agent: &str) -> BTreeMap<&'static str, bool> {
+    rights::of(&read(config), agent, &rights::CONTACTS)
+}
+
+/// [`without`] for another module's contacts (Outlook's).
+pub fn without_details(contact: Value, given: &BTreeMap<&'static str, bool>) -> Value {
+    without(contact, given)
+}
+
+/// Whether `given` lets the agent see birthdays.
+pub fn birthdays_given(given: &BTreeMap<&'static str, bool>) -> bool {
+    given.get(BIRTHDAYS) != Some(&false)
+}
+
 /// A contact without the details `given` leaves out (an agent's rights, or what some agent here reads).
 fn without(mut contact: Value, given: &BTreeMap<&'static str, bool>) -> Value {
     if let Some(map) = contact.as_object_mut() {
