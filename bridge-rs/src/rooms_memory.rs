@@ -295,6 +295,20 @@ mod tests {
         assert!(take_note(&config, "bip").unwrap().contains("- You: J'ajoute"));
     }
 
+    /// Review 2 (red), C8: an agent « à l'écart » (an outside model's protection: rules.rs `aside`, the pop-up's « ses
+    /// échanges avec tes autres agents sont éteints ») still gets the other agents' words of its rooms joined to its
+    /// next one-to-one message (and answers in the room after them, its room session replaying the room's history).
+    #[test]
+    fn review2_an_agent_put_aside_gets_no_other_agent_s_words_from_its_rooms() {
+        let (_dir, config) = setup();
+        room(&config, "g000000000003", "Sport et santé", &["coach", "dev"]);
+        say(&config, "g000000000003", "person", "On fait le point ?");
+        say(&config, "g000000000003", "coach", "Ta rééducation du genou avance bien.");
+        crate::rules::change(&config, |r| r.aside.push("dev".into())).unwrap();
+        let note = take_note(&config, "dev");
+        assert!(note.as_deref().is_none_or(|n| !n.contains("rééducation")), "{note:?}");
+    }
+
     #[test]
     fn the_note_stays_short_newest_first() {
         let (_dir, config) = setup();

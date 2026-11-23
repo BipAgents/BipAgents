@@ -1899,6 +1899,64 @@ mod tests {
         assert!(missed.is_empty(), "shared as if not health: {missed:?}");
     }
 
+    /// Review 2 (red), C6: health as people still say it, after `HEALTH_BROAD`: blood pressure said « tension », a
+    /// baby on its way, the osteopath, an operation to come, dark thoughts, an STI, weight, gender identity, alcohol,
+    /// the newest pills, periods; a shrink, a brand, an eating disorder; the German compounds of « Arzt »; « deprimido ».
+    /// Each joins every agent's USER.md today.
+    #[test]
+    fn review2_health_as_people_still_say_it_never_joins_the_common_memory() {
+        let missed: Vec<&str> = [
+            "Alex fait de la tension.",
+            "Alex attend un bébé pour mars.",
+            "Alex va chez l'ostéo jeudi.",
+            "Alex se fait opérer du genou en janvier.",
+            "Alex a des idées noires.",
+            "Alex a une IST.",
+            "Alex est obèse.",
+            "Alex est trans.",
+            "Alex ne boit plus d'alcool depuis deux ans.",
+            "Alex est sous Ozempic.",
+            "Alex a ses règles.",
+            "Alex sees a shrink.",
+            "Alex takes Zoloft.",
+            "Alex has an eating disorder.",
+            "Alex is trying for a baby.",
+            "Alex geht mit Tiago zum Kinderarzt.",
+            "Alex wurde am Knie operiert.",
+            "Alex está deprimido.",
+            "Alex toma pastillas para dormir.",
+            "Alex is ongesteld.",
+        ]
+        .into_iter()
+        .filter(|t| !health_held(t))
+        .collect();
+        assert!(missed.is_empty(), "shared as if not health: {missed:?}");
+    }
+
+    /// Review 2 (red), C6: plain facts stay shared. The coordinator's three pass; words `HEALTH_BROAD` added hold back
+    /// common facts: the Dutch « arts » (the arts, Beaux-Arts, Arts et Métiers), « gp » (a Grand Prix), « fracture »
+    /// (la fracture numérique), « apnée » (the sport), « lithium » (a battery).
+    #[test]
+    fn review2_plain_facts_still_join_the_common_memory() {
+        let held: Vec<&str> = [
+            "Alex travaille sur le cœur de métier de sa boîte.",
+            "Alex a fait une opération bancaire.",
+            "Je suis en forme.",
+            "Alex a fait les Beaux-Arts.",
+            "Alex aime les arts martiaux.",
+            "Alex a fait Arts et Métiers.",
+            "Alex works in the arts.",
+            "Alex regarde le GP de Monaco.",
+            "Alex travaille sur la fracture numérique.",
+            "Alex fait de l'apnée en mer.",
+            "Alex a acheté une batterie au lithium.",
+        ]
+        .into_iter()
+        .filter(|t| health_held(t))
+        .collect();
+        assert!(held.is_empty(), "kept out of the common memory as health: {held:?}");
+    }
+
     fn shared_off(config: &Config, agent: &str) {
         crate::agent_shared_memory::set(config, agent, false).unwrap();
     }

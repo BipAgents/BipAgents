@@ -878,6 +878,27 @@ mod tests {
         assert!(enabled(&config, "gpt") && crate::notebook::enabled(&config, "gpt"));
     }
 
+    /// Review 2 (red), C9: Health comes back as the person had it. The protection turns it off with
+    /// health::set_enabled(false), which forgets the agent's categories, and the return turns it on with
+    /// health::set_enabled(true), which gives the defaults (activity, sleep, heart): an agent that read only the
+    /// person's activity reads their sleep and heart rate too after a return from outside (and one that read the cycle
+    /// loses it).
+    #[test]
+    fn review2_health_comes_back_with_the_categories_the_person_chose() {
+        let (_dir, config) = place();
+        let gpt = config.agent(Some("gpt")).unwrap().clone();
+        crate::health::set_enabled(&config, "gpt", true).unwrap();
+        crate::health::set_categories(&config, "gpt", &["activity"]).unwrap();
+        assert_eq!(crate::health::categories(&config, "gpt"), ["activity"]);
+        set_model(&config, "gpt", CODEX);
+        guard_full_at(&config, &gpt, 1.0);
+        assert!(!crate::health::enabled(&config, "gpt"));
+        set_model(&config, "gpt", SPARK);
+        guard_full_at(&config, &gpt, 2.0);
+        assert!(crate::health::enabled(&config, "gpt"));
+        assert_eq!(crate::health::categories(&config, "gpt"), ["activity"], "not what the person had chosen");
+    }
+
     /// The person's own changes of Health and of « à l'écart » are theirs: a return doesn't undo them.
     #[test]
     fn the_person_s_health_and_links_stay_as_they_set_them() {

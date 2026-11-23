@@ -260,6 +260,39 @@ def test_its_conversations_go_on_in_a_new_session(bridges, fakes):
     assert bridge.get("/v1/threads/main", headers=AUTH, params={"agent": "coach"}).json()["tip"] == after["tip"]
 
 
+def test_review2_a_message_waiting_behind_a_turn_never_goes_on_in_the_old_session(bridges, fakes):
+    """Review 2 (red), B2: a turn going on when the shared memory goes off (by the person, or the protection of an
+    outside model at a model change) keeps its conversation on the old session (`fresh_sessions`: « at the next
+    look »). A message waiting behind it (« Après ») was queued for that session (msg_queue.rs `item.session_id`) and
+    starts in it at the turn's end: Hermes replays the whole history there, memory notes and Carnet news included."""
+    import threading
+    import uuid
+    from bbkit.common import sse
+    from test_agent_create import idle, send as say
+    bridge, home = place(bridges, fakes)
+    say(bridge, fakes, "coach", "Bonjour Coach, je cours le dimanche.")
+    idle(bridge, "coach")
+    fakes.hermes.rounds = 1000
+    gate = threading.Event()
+    going, waiting = f"r{len(fakes.hermes.started) + 1}", f"r{len(fakes.hermes.started) + 2}"
+    fakes.hermes.runs[going] = [sse("run.started", run_id=going), gate, sse("run.completed", run_id=going, output="Voilà.")]
+    fakes.hermes.runs[waiting] = [sse("run.started", run_id=waiting), sse("run.completed", run_id=waiting, output="Ajouté.")]
+
+    def message(text, **extra):
+        return bridge.post("/v1/threads/main/messages", headers=AUTH,
+                           json={"agent": "coach", "client_id": uuid.uuid4().hex, "text": text, **extra})
+
+    first = message("Prépare mon plan de la semaine.")
+    assert first.status_code == 200 and first.json()["state"] == "started", first.text
+    old = first.json()["tip"]
+    later = message("Et ajoute le vélo.", after=True)
+    assert later.status_code == 200 and later.json()["state"] == "queued", later.text
+    assert put(bridge, "coach", {"on": False}).json() == {"id": "coach", "on": False}
+    gate.set()
+    assert wait_until(lambda: waiting in fakes.hermes.started, timeout=30)
+    assert fakes.hermes.started[waiting]["session_id"] != old, "the waiting message went on in the old session"
+
+
 def test_a_model_of_the_catalogue_on_an_outside_hub_keeps_the_carnet_off(bridges, fakes):
     """Review C4: Kerfy's catalogue says « Carnet on » for each of its agents; on a hub on an outside model the new
     agent is protected all the same, and it is never noted as the person's own gesture."""
