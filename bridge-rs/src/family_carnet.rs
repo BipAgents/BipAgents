@@ -767,7 +767,7 @@ pub fn summary_at(config: &Config, langs: &[String], today: NaiveDate, others: &
         lines.push(line);
     }
     json!({"v": V, "lang": shown, "title": t.carnet, "with": with_names(&shown, others),
-           "kept": kept_counted(config, &f, today), "total": {"count": f.items.len(), "title": t.all_notes},
+           "kept": kept_counted(config, &f, today, None), "total": {"count": f.items.len(), "title": t.all_notes},
            "categories": lines, "bar": {"placeholder": t.bar}, "version": version, "epoch": epoch})
 }
 
@@ -834,6 +834,8 @@ pub enum Refused {
     NumberRefused,
     NotWritten,
     NoFamily,
+    /// A list of tasks or of dates: no category of its own (its items have theirs; review 1 of S6, R6b).
+    ListNotFiled,
 }
 
 impl Refused {
@@ -850,6 +852,7 @@ impl Refused {
             Refused::NumberRefused => "number_refused",
             Refused::NotWritten => "not_written",
             Refused::NoFamily => "no_family",
+            Refused::ListNotFiled => "list_not_filed",
         }
     }
 
@@ -884,23 +887,81 @@ fn kept_all(data: &Dict) -> Vec<Dict> {
         .unwrap_or_default()
 }
 
-fn kept_counted(config: &Config, f: &Finder, today: NaiveDate) -> Vec<Value> {
+/// Who kept a search: the household (its id on this place; `self` for this place's own person). Never a name.
+pub const SELF: &str = "self";
+
+fn kept_by(k: &Dict) -> String {
+    tk::str_or_empty(k.get("by_household"))
+}
+
+/// The household's kept searches, each with what it finds now; `mine` (for `caller`, between the bridges only): the
+/// ones that household kept (review 1 of S6, B1: a member's « Oublie ça » matches them on her own place).
+fn kept_counted(config: &Config, f: &Finder, today: NaiveDate, caller: Option<&str>) -> Vec<Value> {
     kept_all(&crate::family_agent::notebook_data(config))
         .iter()
         .map(|k| {
             let q = tk::str_or_empty(k.get("q"));
             let category = k.get("category").and_then(Value::as_str).filter(|c| !c.is_empty()).map(str::to_string);
             let count = f.search(&q, today, category.as_deref(), None).counts.get("all").copied().unwrap_or(0);
-            json!({"id": k.get("id"), "q": q, "title": tk::str_or_empty(k.get("title")), "count": count, "space": null,
-                   "category": category})
+            let mut v = json!({"id": k.get("id"), "q": q, "title": tk::str_or_empty(k.get("title")), "count": count,
+                               "space": null, "category": category});
+            if let Some(caller) = caller {
+                v["mine"] = json!(kept_by(k) == caller);
+            }
+            v
         })
         .collect()
 }
 
 /// `KeptList`: the household's kept searches, each with what it finds now.
 pub fn kept_at(config: &Config, langs: &[String], today: NaiveDate) -> Value {
+    kept_for(config, langs, today, None)
+}
+
+fn kept_for(config: &Config, langs: &[String], today: NaiveDate, caller: Option<&str>) -> Value {
     let (f, _, _, _) = current(config, langs);
-    json!({"kept": kept_counted(config, &f, today), "max": KEPT_MAX})
+    json!({"kept": kept_counted(config, &f, today, caller), "max": KEPT_MAX})
+}
+
+/// The households whose person uses this place's family Carnet now (its family agents' members).
+fn members_now(config: &Config) -> HashSet<String> {
+    crate::family_agent::owns(config).iter().flat_map(|a| crate::agent_shares::shared_with(config, a)).collect()
+}
+
+/// The kept searches of a person who left (taken out of the family agents, a link removed: review 1 of S6, R3) go:
+/// only this place's own person's and its members' stay. How many went.
+pub fn prune_kept(config: &Config) -> usize {
+    let members = members_now(config);
+    let mut gone = 0;
+    let done = crate::family_agent::change_data(config, |data| {
+        let all = kept_all(data);
+        let left: Vec<Dict> =
+            all.iter().filter(|k| kept_by(k) == SELF || members.contains(&kept_by(k))).cloned().collect();
+        gone = all.len() - left.len();
+        if gone > 0 {
+            data.insert("kept".into(), json!(left));
+        }
+    });
+    if let Err(e) = done {
+        tracing::warn!(error = %e, "family Carnet: the kept searches of who left not taken out");
+    }
+    gone
+}
+
+/// The kept searches as the handover carries them to `receiver` (review 1 of S6, R3): the receiver's become her own
+/// (`self`), the leaving holder's own stay behind, the others' go as they are.
+pub fn handed_kept(kept: Option<&Value>, receiver: &str) -> Value {
+    let mut out = Vec::new();
+    for k in kept.and_then(Value::as_array).into_iter().flatten() {
+        let mut k = k.clone();
+        match k.get("by_household").and_then(Value::as_str) {
+            Some(SELF) | None => continue,
+            Some(h) if h == receiver => k["by_household"] = json!(SELF),
+            _ => {}
+        }
+        out.push(k);
+    }
+    json!(out)
 }
 
 fn chars(text: &str, most: usize) -> String {
@@ -919,7 +980,8 @@ fn write_kept(config: &Config, change: impl FnOnce(&mut Vec<Dict>) -> Result<(),
     done.map_err(|_| Refused::NotWritten)?
 }
 
-/// A search kept (« Garder ») for the household, by `by` (a member's name): the same words once; 6 at most.
+/// A search kept (« Garder ») for the household, by the household `by` (`self`: this place's person): the same words
+/// once; 6 at most.
 pub fn keep(config: &Config, q: &str, title: Option<&str>, category: Option<&str>, by: &str) -> Result<(), Refused> {
     let category = category.map(str::trim).filter(|c| !c.is_empty());
     if category.is_some_and(|x| !c::FAMILY.contains(&x)) {
@@ -944,8 +1006,8 @@ pub fn keep(config: &Config, q: &str, title: Option<&str>, category: Option<&str
         if all.len() >= KEPT_MAX {
             return Err(Refused::KeptFull);
         }
-        let k = json!({"id": format!("k{}", py::token_hex(3)), "q": q, "title": title, "category": category, "by": by,
-                       "at": tk::now_iso_seconds()});
+        let k = json!({"id": format!("k{}", py::token_hex(3)), "q": q, "title": title, "category": category,
+                       "by_household": by, "at": tk::now_iso_seconds()});
         all.push(k.as_object().cloned().unwrap_or_default());
         Ok(())
     })
@@ -974,11 +1036,11 @@ pub fn drop_kept(config: &Config, id: &str) -> Result<(), Refused> {
     })
 }
 
-/// « Oublie ça » on the holder (forget.rs `family`): the person's own kept searches whose words or title say it (the
-/// others' are theirs, as their lines); how many left.
-pub fn forget_kept(data: &mut Dict, person: &str, gone: &dyn Fn(&str) -> bool) -> usize {
+/// « Oublie ça » on the holder (forget.rs `family`): this place's own person's kept searches whose words or title say
+/// it (the others' are theirs, as their lines; a member's go by her own bridge: `forget_at_holder`); how many left.
+pub fn forget_kept(data: &mut Dict, gone: &dyn Fn(&str) -> bool) -> usize {
     let all = kept_all(data);
-    let mine = |k: &Dict| !person.is_empty() && tk::str_or_empty(k.get("by")) == person;
+    let mine = |k: &Dict| kept_by(k) == SELF;
     let left: Vec<Dict> = all
         .iter()
         .filter(|k| !(mine(k) && (gone(&tk::str_or_empty(k.get("q"))) || gone(&tk::str_or_empty(k.get("title"))))))
@@ -1213,6 +1275,9 @@ pub fn categorize(config: &Config, target: &Target, given: &[String], lang: &str
     let out = crate::family_agent::change_data(config, |data| -> Result<Value, Refused> {
         let rules = rules_of(data);
         let (note, before, before_by, word, teaches) = found(data, target, &rules).ok_or(Refused::NotFound)?;
+        if matches!(target, Target::List(_)) && matches!(str_of(note, "kind").as_str(), "tasks" | "dates") {
+            return Err(Refused::ListNotFiled);
+        }
         let had = note.get("categories").cloned();
         let had_by = note.get("categories_by").cloned();
         set(note, &cats, "person");
@@ -1388,9 +1453,21 @@ async fn hop(
     body: Option<Value>,
 ) -> Option<(u16, Value)> {
     let entry = state.households.get(household)?;
-    let url = format!("{}/family/fa/notebook{path}", crate::family_relay::reach_url(&entry));
+    hop_to(state, &entry, method, path, query, body).await
+}
+
+/// [`hop`] with the household's entry as it is (or was: a link just removed, `leave_holder`).
+async fn hop_to(
+    state: &AppState,
+    entry: &Dict,
+    method: reqwest::Method,
+    path: &str,
+    query: &[(String, String)],
+    body: Option<Value>,
+) -> Option<(u16, Value)> {
+    let url = format!("{}/family/fa/notebook{path}", crate::family_relay::reach_url(entry));
     let key = entry.get("key_out").map(py::py_str).unwrap_or_default();
-    let http = crate::door_tls::household_client(&state.http, &entry);
+    let http = crate::door_tls::household_client(&state.http, entry);
     let mut request = http.request(method, url).query(query).timeout(Duration::from_secs(15)).bearer_auth(key);
     if let Some(body) = body {
         request = request.json(&body);
@@ -1422,9 +1499,54 @@ async fn hop_checked(
         Some((404, v)) if v.get("detail").and_then(Value::as_str) == Some(crate::family_agent::NOT_SERVED) => {
             Ok(Hopped::Out)
         }
+        // the holder removed the link (its handover may never have come): out of the family (review 1 of S6, R1)
+        Some((401, v)) if v.get("detail").and_then(Value::as_str) == Some(crate::family_agent::UNKNOWN_HOUSEHOLD) => {
+            Ok(Hopped::Out)
+        }
+        // never a refusal of the holder's to the app as it is (the app would say its own server refused it)
+        Some((401 | 403, _)) => Err(HttpError::new(502, "their side does not answer right now: try again later")),
         Some((404, v)) if !v.get("detail").is_some_and(Value::is_object) => Ok(Hopped::Old),
         Some((status, v)) => Ok(Hopped::Answer(status, v)),
     }
+}
+
+/// This household's own kept searches on the holder's place (`mine`), those `take` wants deleted there; whether the
+/// holder answered every call. Only ids and the kept searches' own words travel: never what the person forgets.
+async fn drop_own_kept(state: &AppState, entry: &Dict, take: &(dyn Fn(&str, &str) -> bool + Sync)) -> bool {
+    let asked = vec![("mine".to_string(), "1".to_string())];
+    let Some((200, list)) = hop_to(state, entry, reqwest::Method::GET, "/kept", &asked, None).await else {
+        return false;
+    };
+    let mut reached = true;
+    for k in list["kept"].as_array().into_iter().flatten() {
+        if k.get("mine").and_then(Value::as_bool) != Some(true) || !take(&str_of(k, "q"), &str_of(k, "title")) {
+            continue;
+        }
+        let id = vec![("id".to_string(), str_of(k, "id"))];
+        reached &= hop_to(state, entry, reqwest::Method::DELETE, "/kept", &id, None).await.is_some();
+    }
+    reached
+}
+
+/// « Oublie ça » confirmed on a member's place (notebook api.rs `forget_confirm`; review 1 of S6, B1): her own kept
+/// searches on the holder's place that say it go (matched here, by `says`: the forgotten words stay on her place).
+/// Whether the holder was reached (false: the app says it, nothing is kept to try again). Her lines there: not reached
+/// (the holder applies its own « Oublie ça »; relaying the words is Alex's decision, status-carnet-s6.md).
+pub async fn forget_at_holder(state: &AppState, says: &(dyn Fn(&str) -> bool + Sync)) -> bool {
+    let Holder::At(household) = holder(&state.config()) else { return true };
+    let Some(entry) = state.households.get(&household) else { return false };
+    drop_own_kept(state, &entry, &|q, title| says(q) || says(title)).await
+}
+
+/// A member removed the link to the household holding her family Carnet (family_agent.rs `after_unlink`; review 1 of
+/// S6, R3): her bridge takes her kept searches off that place as she goes (best effort: the holder also drops them
+/// when it sees her gone).
+pub fn leave_holder(state: &AppState, entry: Dict) {
+    let state2 = state.clone();
+    state.spawn(async move {
+        let done = drop_own_kept(&state2, &entry, &|_, _| true).await;
+        tracing::info!(done = done, "family Carnet: her kept searches taken off the place she left");
+    });
 }
 
 /// A category of the path that is not the family's: 404 (S4's rule for `/category/{id}`).
@@ -1641,7 +1763,8 @@ async fn kept_drop(State(state): State<AppState>, q: QueryMap) -> ApiResult<Resp
     kept_relayed(state, q, reqwest::Method::DELETE, None).await
 }
 
-/// One change of the kept searches (`body`: POST; `?id=`: DELETE) by `by`, then the list.
+/// One change of the kept searches (`body`: POST; `?id=`: DELETE) by the household `by`, then the list (`mine` for
+/// `caller`, between the bridges, when asked).
 fn kept_here(
     config: &Config,
     method: &reqwest::Method,
@@ -1649,6 +1772,7 @@ fn kept_here(
     id: Option<&str>,
     by: &str,
     langs: &[String],
+    caller: Option<&str>,
 ) -> Result<Value, Refused> {
     match (method.as_str(), body) {
         ("POST", Some(b)) => {
@@ -1662,7 +1786,7 @@ fn kept_here(
         ("DELETE", _) => drop_kept(config, id.unwrap_or(""))?,
         _ => {}
     }
-    Ok(kept_at(config, langs, today()))
+    Ok(kept_for(config, langs, today(), caller))
 }
 
 async fn kept_relayed(
@@ -1678,16 +1802,14 @@ async fn kept_relayed(
         Holder::None => Err(no_family(&config, &shown)),
         Holder::Here => {
             let langs = langs_of(&config, &q);
-            let by = state.households.name();
-            let v = blocking(move || kept_here(&config, &method, body.as_ref(), id.as_deref(), &by, &langs)).await?;
+            let v =
+                blocking(move || kept_here(&config, &method, body.as_ref(), id.as_deref(), SELF, &langs, None)).await?;
             v.map(web::ok).map_err(|r| r.error(&shown))
         }
         Holder::At(h) => {
-            let body = body.map(|mut b| {
-                b.insert("person".into(), json!(state.households.name()));
-                Value::Object(b)
-            });
-            match hop_checked(&state, &h, method, "/kept", &query(&q, &["id", "lang"]), body).await? {
+            // (who keeps is the household the holder knows by its key: no name is sent)
+            match hop_checked(&state, &h, method, "/kept", &query(&q, &["id", "lang"]), body.map(Value::Object)).await?
+            {
                 Hopped::Answer(status, v) => Ok(answered(status, v)),
                 Hopped::Out => Err(no_family(&config, &shown)),
                 Hopped::Old => Err(old_holder()),
@@ -1706,28 +1828,24 @@ async fn searched(State(state): State<AppState>, q: QueryMap, body: Bytes) -> Ap
     if category.as_deref().is_some_and(|x| !c::FAMILY.contains(&x)) {
         return Err(Refused::CategoryUnknown.error(&shown));
     }
+    // out of the family: nothing kept, even with its category (review 1 of S6, R6a)
+    let here = match holder(&config) {
+        Holder::None => return Err(no_family(&config, &shown)),
+        Holder::Here => true,
+        Holder::At(_) => false,
+    };
     if body.get("private").is_some_and(py::truthy) || !may_keep(&words) {
         return Ok(web::no_content());
     }
+    // without a category: under its best result on the holder's own place; on a member's, kept nowhere and asked
+    // of nobody (review 1 of S6, R2: her words never leave her place; the app sends its best group's category)
     let category = match category {
         Some(c) => Some(c),
-        None => match holder(&config) {
-            Holder::None => return Err(no_family(&config, &shown)),
-            Holder::Here => {
-                let (c2, w2, langs) = (config.clone(), words.clone(), langs_of(&config, &q));
-                blocking(move || best_category(&c2, &w2, &langs, today())).await?
-            }
-            Holder::At(h) => {
-                let asked = vec![("q".to_string(), words.clone()), ("lang".to_string(), shown.clone())];
-                match hop_checked(&state, &h, reqwest::Method::GET, "/search", &asked, None).await? {
-                    Hopped::Answer(200, v) => {
-                        v["groups"].get(0).map(|g| str_of(g, "category")).filter(|c| !c.is_empty())
-                    }
-                    Hopped::Out => return Err(no_family(&config, &shown)),
-                    _ => None,
-                }
-            }
-        },
+        None if here => {
+            let (c2, w2, langs) = (config.clone(), words.clone(), langs_of(&config, &q));
+            blocking(move || best_category(&c2, &w2, &langs, today())).await?
+        }
+        None => None,
     };
     if let Some(category) = category {
         blocking(move || searched_add(&config, &words, &category)).await?;
@@ -1817,19 +1935,6 @@ fn caller(state: &AppState, headers: &HeaderMap) -> ApiResult<String> {
     crate::family_agent::served_household(state, headers)
 }
 
-/// A member's name, for « by » (the one her bridge sends, else her household's).
-fn member_name(config: &Config, household: &str, body: Option<&Dict>) -> String {
-    let given: String = body.map(|b| tk::squeeze(&tk::str_or_empty(b.get("person")))).unwrap_or_default();
-    if !given.is_empty() {
-        return given.chars().take(40).collect();
-    }
-    crate::households::Households::new(&crate::households::path_for(config))
-        .get(household)
-        .and_then(|h| h.get("name").map(py::py_str))
-        .filter(|n| !n.is_empty())
-        .unwrap_or_else(|| household.to_string())
-}
-
 async fn served_summary(State(state): State<AppState>, headers: HeaderMap, q: QueryMap) -> ApiResult<Response> {
     let household = caller(&state, &headers)?;
     let config = state.config();
@@ -1892,11 +1997,14 @@ async fn served_kept(
     let config = state.config();
     let shown = shown_lang(&config, &q);
     let body = body_of(&body)?;
-    let by = member_name(&config, &household, Some(&body));
     let id = web::query_str(&q, "id", false, Some(20))?;
     let langs = langs_of(&config, &q);
     let method = reqwest::Method::from_bytes(method.as_str().as_bytes()).unwrap_or(reqwest::Method::GET);
-    let v = blocking(move || kept_here(&config, &method, Some(&body), id.as_deref(), &by, &langs)).await?;
+    // `mine=1`: which ones this household kept (its « Oublie ça », its leaving: matched on its own place)
+    let mine = matches!(q.get("mine"), Some("1")).then(|| household.clone());
+    let v =
+        blocking(move || kept_here(&config, &method, Some(&body), id.as_deref(), &household, &langs, mine.as_deref()))
+            .await?;
     v.map(web::ok).map_err(|r| r.error(&shown))
 }
 

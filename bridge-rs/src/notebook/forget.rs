@@ -751,6 +751,12 @@ fn family_path(config: &Config) -> PathBuf {
 fn family(config: &Config, target: &Target, person: &str) -> Option<Dict> {
     let text = tk::read_text(&family_path(config)).ok()?;
     let Ok(Value::Object(mut data)) = serde_json::from_str::<Value>(&text) else { return None };
+    family_in(&mut data, target, person).then_some(data)
+}
+
+/// The person's lines that match taken out of the family Carnet `data`, and this place's own kept searches that say it
+/// (S6). Whether anything went.
+fn family_in(data: &mut Dict, target: &Target, person: &str) -> bool {
     let mine = |v: &Value| !person.is_empty() && tk::str_or_empty(v.get("by")) == person;
     let mut changed = false;
     if let Some(Value::Array(lists)) = data.get_mut("lists") {
@@ -774,9 +780,9 @@ fn family(config: &Config, target: &Target, person: &str) -> Option<Dict> {
             }
         }
     }
-    // the household's searches the person kept that say it (S6; the others' are theirs, as their lines)
-    changed |= crate::family_carnet::forget_kept(&mut data, person, &|q| target.says(q)) > 0;
-    changed.then_some(data)
+    // the household's searches this place's person kept that say it (S6; the others' are theirs, as their lines)
+    changed |= crate::family_carnet::forget_kept(data, &|q| target.says(q)) > 0;
+    changed
 }
 
 /// The plan applied, under the Carnet's lock. Returns what was erased (counts by place, never text).
@@ -871,12 +877,12 @@ pub fn apply(config: &Config, target: &Target, lang: &str, person: &str) -> anyh
             Err(err) => tracing::warn!(error = %err, "a forgotten fact not taken out of an archive's index"),
         }
     }
-    if let Some(data) = &plan.family {
-        let file = family_path(config);
-        let temporary = file.with_extension("tmp");
-        py::write_with_mode(&temporary.to_string_lossy(), py::dumps(&Value::Object(data.clone())).as_bytes(), 0o600)?;
-        std::fs::rename(&temporary, &file)?;
-        erased += 1;
+    if plan.family.is_some() {
+        // under the family Carnet's own lock, read again there: a member's or the agent's write in between is kept, and
+        // its temporary file is never another writer's (review 1 of S6, R4)
+        if crate::family_agent::change_data(config, |data| family_in(data, target, person))? {
+            erased += 1;
+        }
     }
     let now = py::time_time();
     let print = fingerprint(target, now);
@@ -1059,6 +1065,12 @@ pub fn preview(config: &Config, request: &Request, lang: &str, person: &str, car
 
 /// The confirmation: the token's request erased (Err(None): a token unknown, used or too old).
 pub fn confirm(config: &Config, token: &str, person: &str) -> anyhow::Result<Option<String>> {
+    Ok(confirm_target(config, token, person)?.map(|(text, _)| text))
+}
+
+/// [`confirm`], and what was forgotten (a member's bridge takes her own kept searches of the family Carnet off the
+/// holder's place with it, matched on her place: family_carnet.rs `forget_at_holder`).
+pub fn confirm_target(config: &Config, token: &str, person: &str) -> anyhow::Result<Option<(String, Option<Target>)>> {
     let pending = {
         let mut tokens = TOKENS.lock().unwrap_or_else(|e| e.into_inner());
         tokens.remove(token)
@@ -1066,7 +1078,7 @@ pub fn confirm(config: &Config, token: &str, person: &str) -> anyhow::Result<Opt
     let Some(pending) = pending.filter(|p| p.expires > py::time_time()) else { return Ok(None) };
     let target = match target(config, &pending.request) {
         Ok(t) => t,
-        Err(_) => return Ok(Some(texts(&pending.lang).done.to_string())),
+        Err(_) => return Ok(Some((texts(&pending.lang).done.to_string(), None))),
     };
     apply(config, &target, &pending.lang, person)?;
     // a paper's record forgotten: its photo too (papers.rs)
@@ -1074,7 +1086,7 @@ pub fn confirm(config: &Config, token: &str, person: &str) -> anyhow::Result<Opt
     if let Some(card) = &pending.card {
         set_card(config, card, "done")?;
     }
-    Ok(Some(texts(&pending.lang).done.to_string()))
+    Ok(Some((texts(&pending.lang).done.to_string(), Some(target))))
 }
 
 // -- the card in the conversation ----------------------------------------------------------------------------------
@@ -1318,8 +1330,11 @@ mod tests {
         assert!(token.starts_with("fg-"));
         assert_eq!(confirm(&config, &token, "Alex").unwrap().as_deref(), Some("Oublié."));
         assert_eq!(confirm(&config, &token, "Alex").unwrap(), None, "used once");
-        // nothing left anywhere the bridge keeps it (Hermes' conversations are not here)
-        let left = holding(dir.path(), &SECRETS);
+        // nothing left anywhere the bridge keeps it (Hermes' conversations are not here); Marc's own line of the family
+        // Carnet stays, his (checked below: written as the family Carnet always is, in UTF-8, since review 1 of S6 R4 —
+        // the escaped text of before hid it from this search)
+        let left: Vec<String> =
+            holding(dir.path(), &SECRETS).into_iter().filter(|p| !p.ends_with("family-notebook.json")).collect();
         assert!(left.is_empty(), "still there: {left:?}");
         // Léa's page as it was, in the history: the line erased there too
         for file in holding(&super::super::root(&config).join("history/versions"), &["Léa Martin"]) {

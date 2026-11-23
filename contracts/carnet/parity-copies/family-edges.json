@@ -1,0 +1,144 @@
+{
+ "_note": "S6, change 70 (review 1 of S6, R5): a family note without a category of its own (a date of a list of dates with no word of one) is grouped under Dates when it is in Dates' window, else under Autres; counted there.",
+ "v": 1,
+ "epoch": "familyedges1",
+ "version": 1,
+ "since": null,
+ "full": true,
+ "lang": "fr",
+ "made": "2026-11-22T07:00:00Z",
+ "dated": {
+  "before": 90,
+  "after": 730
+ },
+ "items": [
+  {
+   "id": "fam:list:dates/n1",
+   "kind": "list_item",
+   "title": "Dates",
+   "line": "Pique-nique chez Paul",
+   "date": "2026-12-06",
+   "who": "Léa",
+   "open": {
+    "list": "dates",
+    "item": "n1"
+   },
+   "fold": "pique nique chez paul"
+  },
+  {
+   "id": "fam:list:dates/n2",
+   "kind": "list_item",
+   "title": "Dates",
+   "line": "Brocante avec Lucie",
+   "date": "2025-03-02",
+   "who": "Léa",
+   "open": {
+    "list": "dates",
+    "item": "n2"
+   },
+   "fold": "brocante avec lucie"
+  },
+  {
+   "id": "fam:list:courses/c1",
+   "kind": "list_item",
+   "title": "Courses",
+   "line": "Lait",
+   "categories": [
+    "shopping"
+   ],
+   "who": "Marie",
+   "open": {
+    "list": "courses",
+    "item": "c1"
+   },
+   "fold": "lait"
+  }
+ ],
+ "removed": [],
+ "stop": [
+  "de",
+  "du",
+  "la",
+  "le",
+  "les",
+  "des",
+  "d",
+  "l",
+  "un",
+  "une",
+  "au",
+  "aux",
+  "et",
+  "a",
+  "en"
+ ],
+ "neighbours": {
+  "salle de gym": [
+   "salle de sport"
+  ],
+  "mamie": [
+   "grand mere"
+  ]
+ },
+ "dates": {
+  "lang": "fr",
+  "phrases": [
+   {
+    "words": "pendant les fetes",
+    "from": {
+     "unit": "day",
+     "n": 0
+    },
+    "to": {
+     "unit": "feast",
+     "feast": "epiphany"
+    }
+   },
+   {
+    "words": "aujourd hui",
+    "from": {
+     "unit": "day",
+     "n": 0
+    },
+    "to": {
+     "unit": "day",
+     "n": 0
+    }
+   },
+   {
+    "words": "depuis noel",
+    "from": {
+     "unit": "feast",
+     "feast": "christmas"
+    },
+    "to": {
+     "unit": "day",
+     "n": 0
+    }
+   }
+  ],
+  "feasts": {
+   "epiphany": {
+    "month": 1,
+    "day": 6
+   },
+   "christmas": {
+    "month": 12,
+    "day": 25
+   }
+  },
+  "easter": {
+   "2026": "2026-04-05",
+   "2027": "2027-03-28",
+   "2028": "2028-04-16",
+   "2029": "2029-04-01",
+   "2030": "2030-04-21",
+   "2031": "2031-04-13",
+   "2032": "2032-03-28",
+   "2033": "2033-04-17",
+   "2034": "2034-04-09",
+   "2035": "2035-03-25"
+  }
+ },
+ "kept": []
+}

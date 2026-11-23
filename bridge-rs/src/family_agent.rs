@@ -179,7 +179,8 @@ fn save(path: &PathBuf, data: &Dict) -> anyhow::Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let tmp = path.with_extension("tmp");
+    // a temporary file of its own, renamed over the file: never one another writer is writing (review 1 of S6, R4)
+    let tmp = path.with_extension(format!("{}.tmp", py::token_hex(4)));
     py::write_with_mode(
         &tmp.to_string_lossy(),
         py::Dumps::new().unicode().dumps(&Value::Object(data.clone())).as_bytes(),
@@ -477,13 +478,17 @@ fn seed_in(data: &mut Dict, lang: &str, by: &str, at: f64) {
 
 /// What a member's bridge hears when its household is in none of this place's family agents (404).
 pub(crate) const NOT_SERVED: &str = "no family agent for this household";
+/// What a member's bridge hears when this place no longer knows its key (the link removed here, 401).
+pub(crate) const UNKNOWN_HOUSEHOLD: &str = "unknown household";
 /// What the family Carnet's handover carries (family_carnet.rs, S6: its categories in the pages and lists, the
 /// household's kept searches, the rules its corrections taught): the Carnet as it is, never one person's searches.
 const HANDED: [&str; 4] = ["pages", "lists", "kept", "category_rules"];
 
-fn handed_notebook(config: &Config) -> Value {
+fn handed_notebook(config: &Config, receiver: &str) -> Value {
     let data = read(&notebook_path(config));
     let mut out = Map::from_iter(HANDED.iter().filter_map(|k| data.get(*k).map(|v| (k.to_string(), v.clone()))));
+    // the kept searches: the receiver's become hers, the leaving holder's stay behind (review 1 of S6, R3)
+    out.insert("kept".into(), crate::family_carnet::handed_kept(data.get("kept"), receiver));
     out.insert("updated".into(), data.get("updated").cloned().unwrap_or(json!(0)));
     Value::Object(out)
 }
@@ -1326,6 +1331,8 @@ async fn put_members(
     let gone: Vec<String> = before.iter().filter(|h| !after.contains(h)).cloned().collect();
     if !gone.is_empty() {
         crate::shared_files::forget_households(&config, &agent.name, &gone);
+        // their kept searches in the family Carnet, when they are in none of its agents now (review 1 of S6, R3)
+        crate::family_carnet::prune_kept(&config);
     }
     tell_all(&state, &agent, true).await;
     tracing::info!(agent = %agent.name, everyone = chosen.is_none(), members = after.len(), "family agent: its members changed");
@@ -1469,7 +1476,7 @@ fn household_of(state: &AppState, headers: &HeaderMap) -> ApiResult<String> {
     let header = headers.get("authorization").and_then(|v| v.to_str().ok()).unwrap_or("");
     let token = header.strip_prefix("Bearer ").unwrap_or(header).trim();
     let household = if token.is_empty() { None } else { state.households.caller(token) };
-    household.ok_or_else(|| HttpError::new(401, "unknown household"))
+    household.ok_or_else(|| HttpError::new(401, UNKNOWN_HOUSEHOLD))
 }
 
 /// The calling household and the family agents of this place it is in (their creator may have chosen the members):
@@ -1581,11 +1588,21 @@ pub fn after_unlink(state: &AppState, household: &str, entry: Option<Dict>) {
     if own_agent(&config).is_none() && known_all(&config).is_empty() && !handover_waits(&config) {
         crate::family_carnet::erase_searched(&config);
     }
+    // a member leaving the household that may hold her family Carnet: her kept searches there go with her (review 1
+    // of S6, R3; answered only by a holder she uses)
+    if own_agent(&config).is_none() {
+        if let Some(entry) = entry {
+            crate::family_carnet::leave_holder(state, entry);
+        }
+        return;
+    }
     let (Some(agent), Some(entry)) = (own_agent(&config), entry) else { return };
     let soul = crate::agents_admin::editable_soul(&config, &agent).unwrap_or_default();
     let lang = tk::str_or_empty(read(&state_path(&config)).get("lang"));
     let body = json!({"from": state.households.name(), "name": agent.display_name, "soul": soul, "lang": lang,
-                      "notebook": handed_notebook(&config)});
+                      "notebook": handed_notebook(&config, household)});
+    // that member's kept searches leave this place's family Carnet with her (review 1 of S6, R3)
+    crate::family_carnet::prune_kept(&config);
     let http = state.http.clone();
     let household = household.to_string();
     state.spawn(async move {

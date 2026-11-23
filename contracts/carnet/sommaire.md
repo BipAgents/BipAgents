@@ -262,7 +262,7 @@ app shows the family sommaire only when it is listed, and falls back to today's 
 | `GET search?q=&category=&lang=` | `FamilySearch`: by category in the order of their best result, the two best each, the chips' `counts` (the rule of `search-parity.json`) |
 | `GET index?since=&epoch=&lang=` | `FamilyIndex`: the phone's copy, as `/v1/notebook/index` (ETag `"<epoch>-v<version>-<languages>"`, 304, gzip, `since`/`epoch` diffs); `left: true` (epoch `left`, version 0, nothing in it, ETag `"left"`): this person has no family Carnet (any more) — the phone **erases its copy, its file too**. 502 (the holder does not answer): the phone keeps its copy |
 | `GET/POST/DELETE kept` | the household's kept searches, **common** (6, `family-notebook.json` `kept`): POST `{q, title?, category?}` or `{id, title}`, DELETE `?id=` → `KeptList` (`space` null); S4's codes |
-| `POST/DELETE searched` | a search made → 204: kept by **the person's own bridge** (`family-searched.json`), never on the holder's place, never told to another member nor to an agent; 3 a category, without a category under the best result's; DELETE `?q=&category=` |
+| `POST/DELETE searched` | a search made → 204: kept by **the person's own bridge** (`family-searched.json`), never on the holder's place, never told to another member nor to an agent; 3 a category; **the app sends its best group's category**: without one, a member's bridge keeps nothing and sends nothing anywhere (the holder's own: under the best result's); out of the family: 404 `no_family`, nothing kept; DELETE `?q=&category=` |
 | `POST categorize`, `POST categorize/undo` | « Ranger ailleurs »: `{page}`, `{list}`, `{list, item}` or `{item}` (a `FamilyIndexItem` id), `categories` 1–2 of `family_may_give` → `FamilyCategorized` (the toast in the app's language), `{undo}` → `FamilyUndone`; S1's codes |
 
 - **Filing** (no model, no token, at each write: the apps', a member's, the family agent's — its tools unchanged): the
@@ -271,7 +271,7 @@ app shows the family sommaire only when it is listed, and falls back to today's 
   Autres). A list of things (« Courses ») is filed by its title and its items follow it; an item of a list of tasks
   has its own words' (none: Autres); an item of a list of dates its own words', or none: it is then in Dates only (a
   birthday is `yearly`; the search groups such a note under Dates when dated, else Autres: the phones' family search
-  does the same, finder.rs). Pages by their title, then their text. A renamed page or list the bridge had filed is filed
+  does the same, finder.rs; parity cases `family-no-category-*`, `parity-copies/family-edges.json`). Pages by their title, then their text. A renamed page or list the bridge had filed is filed
   again; **the person's choice is never changed**. The family Carnet gets **no nightly model pass** (small, every
   member's writing, the holder's model is one person's: status-carnet-s6.md).
 - **Ids**: `fam:list:<list>/<item>`, `fam:page:<page>` (`open.path` is the page's id). Never in the copy: a line holding
@@ -281,9 +281,19 @@ app shows the family sommaire only when it is listed, and falls back to today's 
   the phones take it whole. The searches made never move: each person's are on her own place.
 - **Leaving** (taken out of the family agent by its creator, a link removed on either side, the holder gone): `left:
   true` from the index, 404 `no_family` from the other routes; the person's searches made are erased (unless a
-  handover waits for her to take the Carnet over).
+  handover waits for her to take the Carnet over). The holder's 401 `unknown household` (it removed the link, its
+  handover never came) is leaving too; another 401 or 403 of the holder's is a 502, never passed to the app. Her kept
+  searches leave the holder's place: the holder drops those of a household in none of its family agents (taken out,
+  link removed there), her bridge drops hers as she removes the link, and a handover gives the receiver hers (`self`)
+  and leaves the leaving holder's behind. Who kept a search is kept by household (`by_household`), never a name.
 - **« Oublie ça »**: on the holder's place, the person's own lines (as before), her own kept searches and her searches
-  made that say it (the others' are theirs); on a member's place, her own searches made.
+  made that say it (the others' are theirs), written under the family Carnet's own lock; on a member's place, her own
+  searches made, and her own kept searches held by the holder: her bridge asks which ones her household kept
+  (`GET /family/fa/notebook/kept?mine=1`, between the bridges), matches them itself and deletes those by id — the
+  forgotten words never leave her place; `POST /v1/notebook/forget/confirm` adds `family: "not_reached"` when the
+  holder did not answer (nothing kept to try again). Her lines on the holder's place are not reached (as before S6):
+  relaying the forgotten words to the holder would reach them, a decision for Alex.
+- **« Ranger ailleurs »** on a list of tasks or of dates: 400 `list_not_filed` (it has no category of its own).
 - **The person's own sommaire**: `Summary.spaces` is « Moi · Famille » (`all`, `family`) for a member of a family,
   else `[]` (S5 adds « Perso · Pro » to it).
 - **The 1.0 apps**: `GET /v1/family-agent/notebook`, `POST /v1/family-agent/notebook` and the family agent's tools
