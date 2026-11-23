@@ -3,9 +3,10 @@ bridge runs by itself (the fake podman plays the container here), with NO model 
 with the state the agent last knew: the first check notes where comparisons start, no change gives no turn, a change
 gives exactly ONE turn of the agent in the watcher's own conversation (a hidden note with the before and after), whose
 message goes to the Boîte (pushed only when it starts with URGENT, kept to itself with NOTHING); wake-ups are
-rate-limited; failures in a row make it « en panne »: the person is told once by the bridge's own line and the agent
-with their next message, and a failing watcher never runs the model (proactive agents part 5); the list « Ce que tes
-agents font tout seuls » shows it in « Quand quelque chose change »."""
+rate-limited; failures in a row make it « en panne »: the person is asked once « Réparer / Arrêter » by the bridge's
+own card (task-frame, contracts/task-frame) and the agent learns it with their next message, and a failing watcher never
+runs the model (proactive agents part 5); the list « Ce que tes agents font tout seuls » shows it in « Quand quelque
+chose change »."""
 import hashlib
 import json
 import time
@@ -44,7 +45,7 @@ REGISTER = {"name": "Créneau médecin", "sites": ["www.doctolib.example"],
             "watch": {"every": "15m", "notify": "on_change"}}
 
 
-def setup(bridges, fakes, watchers=None, notify="on_change"):
+def setup(bridges, fakes, watchers=None, notify="on_change", watch=None):
     bridge, hub, _ = isolated(bridges, fakes, agents=("vie",))
     bridge.config["agents"]["vie"].update({"isolated": True, "python": f"{bridge.fakebin}/podman exec -i hermes-vie python",
                                            "hermes_home": "/home/hermes/.hermes"})
@@ -67,7 +68,8 @@ def setup(bridges, fakes, watchers=None, notify="on_change"):
     tokens = json.loads(path.read_text())["tokens"]
     tokens["vie"] = hashlib.sha256(TOKEN.encode()).hexdigest()
     path.write_text(json.dumps({"tokens": tokens}))
-    result, card = approve_next(bridge, "connector_register", {**REGISTER, "watch": {"every": "15m", "notify": notify}})
+    result, card = approve_next(bridge, "connector_register",
+                                {**REGISTER, "watch": watch or {"every": "15m", "notify": notify}})
     assert "approved" in text(result), text(result)
     conn = bridge.get("/v1/agents/vie/connectors", headers=AUTH).json()["items"][0]
     return bridge, value, conn, card
@@ -90,6 +92,11 @@ def row(bridge, conn):
 
 def boite(bridge):
     return [i for i in boite_items(bridge) if i["title"] == "Créneau médecin"]
+
+
+def fix_cards(bridge):
+    items = bridge.get("/v1/approvals", headers=AUTH, params={"agent": "vie"}).json()["items"]
+    return [c for c in items if c["run_id"].startswith("bip-fix-")]
 
 
 def podman_runs(bridge):
@@ -227,19 +234,18 @@ def test_failures_in_a_row_mark_it_broken_and_the_person_is_told_once_without_th
     # no turn of the agent, no model call: not one run started in Hermes
     assert turns(fakes) == [] and list(fakes.hermes.started) == [] and not fakes.model.requests
     assert bridge.logged("watcher out of order: its person is told, no model call")
-    # the person: the bridge's line in the watcher's conversation (the agent's language here), not pushed
-    assert wait_until(lambda: boite(bridge), timeout=20)
-    [item] = boite(bridge)
-    assert item["text"] == "The watcher “Créneau médecin” isn't working for now."
-    created = [body for agent, body in fakes.hermes.created if agent == "vie"]
-    assert created and created[-1]["title"] == "Watcher: Créneau médecin" and item["session_id"]
+    # the person: the bridge's card « Réparer / Arrêter » (task-frame; the agent's language here), in place of its
+    # line, no model call before « Réparer »
+    assert wait_until(lambda: fix_cards(bridge), timeout=20)
+    [card] = fix_cards(bridge)
+    assert card["bip_summary"] == "Vie's watcher “Créneau médecin” stopped working. Have it repaired? (No: it stops.)"
     time.sleep(1)
-    assert not [p for p in fakes.apns.payloads() if p.get("outbox_id") == item["id"]]
+    assert boite(bridge) == []
     shown = row(bridge, conn)
     assert shown["detail"]["broken"] is True and shown["last_run"]["ok"] is False
     # told once: the next failure tells nobody
     value.write_text("fail")
-    assert check(bridge, conn)["step"] == "failed" and len(boite(bridge)) == 1
+    assert check(bridge, conn)["step"] == "failed" and len(fix_cards(bridge)) == 1
     assert list(fakes.hermes.started) == []
     # the agent learns it with the person's next message (once), where it can fix it or ask them
     note = waiting_notes(taken_notes(bridge, agent="vie", session="s1"))
@@ -259,15 +265,17 @@ def test_a_watcher_that_works_once_between_failures_tells_its_person_once_a_week
     assert check(bridge, conn)["step"] == "baseline"
     value.write_text("fail")
     assert [check(bridge, conn)["step"] for _ in range(3)] == ["failed", "failed", "broken"]
-    assert wait_until(lambda: boite(bridge), timeout=20)
+    assert wait_until(lambda: fix_cards(bridge), timeout=20)
     value.write_text("mardi 10:00")
     assert check(bridge, conn)["step"] == "same" and row(bridge, conn)["detail"]["broken"] is False
+    # working again: its card goes (task-frame)
+    assert fix_cards(bridge) == []
     value.write_text("fail")
     again = [check(bridge, conn) for _ in range(3)]
     assert [o["step"] for o in again] == ["failed", "failed", "failed"] and not again[-1]["sent"]
     assert row(bridge, conn)["detail"]["broken"] is True
     time.sleep(1)
-    assert len(boite(bridge)) == 1 and list(fakes.hermes.started) == []
+    assert fix_cards(bridge) == [] and boite(bridge) == [] and list(fakes.hermes.started) == []
 
 
 def test_a_watcher_working_again_takes_back_its_note_to_the_agent(bridges, fakes):
