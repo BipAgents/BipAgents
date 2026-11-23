@@ -41,6 +41,8 @@ pub mod assign;
 pub mod ask;
 pub mod categories;
 pub mod categories_pass;
+pub mod finder;
+pub mod index;
 pub mod fill;
 pub mod followups;
 pub mod forget;
@@ -61,8 +63,12 @@ pub mod reads;
 pub mod review;
 #[cfg(test)]
 mod search_bench;
+pub mod search_words;
 #[cfg(test)]
 mod sommaire_contract;
+pub mod summary;
+#[cfg(test)]
+mod summary_tests;
 pub mod tidy;
 pub mod tools;
 pub mod trip;
@@ -4089,6 +4095,8 @@ pub fn documents(config: &Config, part: Part) -> Vec<Value> {
     }
     // the Carnet's pages that name a file (its name, or its name without the extension)
     let pages = all_pages(config, part);
+    // each page's text folded once, not once for each document (review 1 of S3, R3: O(documents × pages) folds)
+    let bodies: Vec<String> = if found.is_empty() { Vec::new() } else { pages.iter().map(|(_, p)| fold(&p.body)).collect() };
     let mut out: Vec<Value> = Vec::new();
     found.sort_by_key(|d| std::cmp::Reverse(tk::str_or_empty(d.get("date"))));
     for mut item in found {
@@ -4110,12 +4118,10 @@ pub fn documents(config: &Config, part: Part) -> Vec<Value> {
         let name = fold(&tk::str_or_empty(item.get("name")));
         let subjects: Vec<Value> = pages
             .iter()
-            .filter(|(_, p)| KINDS.contains(&p.kind().as_str()))
-            .filter(|(_, p)| {
-                let body = fold(&p.body);
-                (stem.len() >= 4 && body.contains(&stem)) || (name.len() >= 6 && body.contains(&name))
-            })
-            .map(|(path, p)| json!({"title": p.title, "path": path, "kind": p.kind()}))
+            .zip(&bodies)
+            .filter(|((_, p), _)| KINDS.contains(&p.kind().as_str()))
+            .filter(|(_, body)| (stem.len() >= 4 && body.contains(&stem)) || (name.len() >= 6 && body.contains(&name)))
+            .map(|((path, p), _)| json!({"title": p.title, "path": path, "kind": p.kind()}))
             .collect();
         let subjects: Vec<Value> = linked.into_iter().chain(subjects).fold(Vec::new(), |mut all, s| {
             if !all.iter().any(|a: &Value| a["path"] == s["path"]) {

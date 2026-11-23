@@ -32,7 +32,7 @@ fn read(relative: &str) -> Value {
     serde_json::from_str(&std::fs::read_to_string(&file).unwrap_or_else(|e| panic!("{}: {e}", file.display()))).unwrap()
 }
 
-fn contract() -> Value {
+pub(super) fn contract() -> Value {
     read("contracts/carnet/sommaire.json")
 }
 
@@ -42,7 +42,7 @@ fn s(v: &Value) -> String {
 
 // -- the small type language ----------------------------------------------------------------------------------------
 
-fn check(v: &Value, ty: &Value, types: &serde_json::Map<String, Value>, at: &str, errors: &mut Vec<String>) {
+pub(super) fn check(v: &Value, ty: &Value, types: &serde_json::Map<String, Value>, at: &str, errors: &mut Vec<String>) {
     match ty {
         Value::Object(fields) => {
             let Some(o) = v.as_object() else {

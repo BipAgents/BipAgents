@@ -8,6 +8,12 @@
 //!                                              shows (close, next_date, status, facts)
 //!     GET    /v1/notebook/search?q=&lang=      the facts that answer, ready to show ({label, answer, page, path, date,
 //!                                              when}: tools::answers, the agents' search too), then the pages
+//!                                              &groups=1: + `groups`, `counts` (index.rs, finder.rs: the phones' rule;
+//!                                              &space=, &category=), `online` (&online=1: the drives the person
+//!                                              allowed); &sommaire=1: those keys only (today's not made). Without
+//!                                              either, today's keys only: an installed 1.0 app's search never makes
+//!                                              the copy
+//!     GET    /v1/notebook/index?since=&epoch=&lang=   the phone's search copy (index.rs; ETag, 304, a diff, gzip)
 //!     GET    /v1/notebook/offline              the copy the phone answers from offline (offline.rs; ETag, 304)
 //!     GET    /v1/notebook/known?agent=&lang=   « Ce que tes agents savent de toi » (known.rs)
 //!     POST   /v1/notebook/forget/preview       {texts? (≤ 5), page?, private?, card?}   « Oublie ça »: where it is, and a
@@ -43,6 +49,16 @@
 //!     GET    /v1/notebook/categorize/today     today's re-filings, each still undoable (categories_pass.rs)
 //!     POST   /v1/notebook/sorted               {action: ok|see}   the card « Ton Carnet est rangé par catégories »
 //!                                              (home `sorted`) answered → {card: null}
+//!     GET    /v1/notebook/summary?space=&lang=  the sommaire ready to show (summary.rs, S4): kept searches and
+//!                                              their counts, the categories' counts and grey words, the moment's
+//!                                              card, Santé locked
+//!     GET    /v1/notebook/category/{id}?space=&filter=&lang=&private=   a category's page: its sub-filters and
+//!                                              their counts, « Cherché ici », the latest (Santé: private=1 only)
+//!     GET    /v1/notebook/kept?space=          the kept searches (6 a space); POST {q, title?, space?, category?}
+//!                                              | {id, title}; DELETE ?id=
+//!     POST   /v1/notebook/searched             {q, category?, space?, private?}   a search made (« Cherché ici »),
+//!                                              never shown to an agent, never kept with Santé open → 204; DELETE
+//!                                              ?q=&space=&category= the one of these words, or all → 204
 //!     GET    /v1/notebook/history?path=        changes (a page's, or all), the newest first
 //!     POST   /v1/notebook/restore              {change}   the page as it was after that change
 //!     GET    /v1/notebook/tasks                open and recent tasks
@@ -295,11 +311,26 @@ async fn search(State(state): State<AppState>, q: QueryMap) -> ApiResult<Respons
     let part = part_of(&q);
     let shown = shown_language(&config, &q);
     let words = web::query_str(&q, "q", true, Some(200))?.unwrap_or_default();
+    let langs = super::index::langs(&super::language(&config), q.get("lang"));
+    let titles_lang = langs.last().cloned().unwrap_or_default();
+    let category = web::query_str(&q, "category", false, Some(20))?.filter(|c| !c.is_empty());
+    let space = web::query_str(&q, "space", false, Some(10))?.filter(|s| !s.is_empty());
+    let online = matches!(q.get("online"), Some("1" | "true" | "yes"));
+    // a new app asking for the sommaire's keys only: today's (answers, pages, tasks) not made
+    let sommaire_only = matches!(q.get("sommaire"), Some("1" | "true" | "yes"));
+    // the sommaire's keys only when asked: an installed 1.0 app's search never makes the copy (review 1 of S3, R3)
+    let with_groups = sommaire_only || matches!(q.get("groups"), Some("1" | "true" | "yes"));
+    let (online_words, online_lang) = (words.clone(), titles_lang.clone());
     let view = blocking(move || {
+        let today = chrono::Local::now().date_naive();
+        if sommaire_only {
+            let (groups, counts) =
+                sommaire_search(&config, part, &words, &langs, &titles_lang, category.as_deref(), space.as_deref(), today);
+            return Ok(json!({"groups": groups, "counts": counts}));
+        }
         let w = super::words(&super::language(&config));
         // the answers by the one rule the agents' search and the offline copy follow (offline.rs): split by the
         // bridge, the apps show them as they come
-        let today = chrono::Local::now().date_naive();
         let ctx = super::categories::Ctx::new(&config);
         let marks = super::categories::marks(&config);
         let found_answers = super::tools::answers(&config, &[part], &words);
@@ -339,10 +370,103 @@ async fn search(State(state): State<AppState>, q: QueryMap) -> ApiResult<Respons
             .collect();
         let tasks: Vec<Value> =
             found_tasks.iter().map(|t| super::categories::task_view(&ctx, t, &all, &marks, today)).collect();
-        Ok(json!({"answers": answers, "pages": pages, "tasks": tasks}))
+        if !with_groups {
+            return Ok(json!({"answers": answers, "pages": pages, "tasks": tasks}));
+        }
+        // the sommaire's search (S3): the phones' rule on the bridge's copy, by category
+        let (groups, counts) = sommaire_search(&config, part, &words, &langs, &titles_lang, category.as_deref(), space.as_deref(), today);
+        Ok(json!({"answers": answers, "pages": pages, "tasks": tasks, "groups": groups, "counts": counts}))
     })
     .await?;
+    let mut view = view;
+    // the online files the person allowed for the Carnet, only when asked (they take the network's time)
+    if with_groups {
+        view["online"] = if online && part == Part::Main && !online_words.trim().is_empty() {
+            crate::drives::carnet_search(&state.config(), &online_words, &online_lang).await.unwrap_or(Value::Null)
+        } else {
+            Value::Null
+        };
+    }
     Ok(web::ok(view))
+}
+
+/// The search of the sommaire (index.rs, finder.rs): `groups` (by first category, in the order of their best
+/// result, the two best each) and `counts` (`all`, and each category).
+#[allow(clippy::too_many_arguments)]
+fn sommaire_search(
+    config: &Config,
+    part: Part,
+    words: &str,
+    langs: &[String],
+    titles: &str,
+    category: Option<&str>,
+    space: Option<&str>,
+    today: chrono::NaiveDate,
+) -> (Value, Value) {
+    let finder = match part {
+        Part::Main => super::index::finder(config, langs),
+        // Santé, behind the app's lock: read now, kept nowhere
+        Part::Health => std::sync::Arc::new(super::index::health_finder(config, langs)),
+    };
+    let found = finder.search(words, today, category, space);
+    let groups: Vec<Value> = found
+        .groups
+        .iter()
+        .map(|g| {
+            json!({"category": g.category, "title": super::categories::title(titles, &g.category), "count": g.count,
+                   "top": g.top.iter().map(|at| super::index::item_view(&finder, *at, today)).collect::<Vec<_>>()})
+        })
+        .collect();
+    (json!(groups), json!(found.counts))
+}
+
+/// The phone's search copy (`Index`, contracts/carnet/sommaire.json): 304 when the phone has this version; a diff
+/// when it says its version and epoch; gzip when it accepts it.
+async fn index(State(state): State<AppState>, q: QueryMap, headers: axum::http::HeaderMap) -> ApiResult<Response> {
+    let config = state.config();
+    let since = match web::query_str(&q, "since", false, Some(20))? {
+        Some(s) => Some(s.trim().parse::<u64>().map_err(|_| carnet_error(400, "since_invalid", "en", json!({})))?),
+        None => None,
+    };
+    let epoch = web::query_str(&q, "epoch", false, Some(40))?;
+    let asked = q.get("lang").map(str::to_string);
+    let has = headers.get("if-none-match").and_then(|v| v.to_str().ok()).map(|v| v.trim().to_string());
+    let (body, etag) = blocking(move || {
+        let langs = super::index::langs(&super::language(&config), asked.as_deref());
+        // the phone has it: no answer made (review 1 of S3, R4: an 8 MB copy for a 304)
+        let now = super::index::etag(&config, &langs);
+        if has.as_deref() == Some(now.as_str()) {
+            return Ok((Value::Null, now));
+        }
+        let shown = langs.last().cloned().unwrap_or_default();
+        Ok(super::index::answer(&config, &langs, since, epoch.as_deref(), super::index::online_only(&shown)))
+    })
+    .await?;
+    let unchanged = body.is_null();
+    let gzip = headers
+        .get("accept-encoding")
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| v.split(',').any(|e| e.trim().split(';').next() == Some("gzip")));
+    let mut response = if unchanged {
+        let mut r = Response::new(Body::empty());
+        *r.status_mut() = axum::http::StatusCode::NOT_MODIFIED;
+        r
+    } else if gzip {
+        use std::io::Write as _;
+        let mut e = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        e.write_all(&serde_json::to_vec(&body).map_err(anyhow::Error::from)?).map_err(anyhow::Error::from)?;
+        let mut r = Response::new(Body::from(e.finish().map_err(anyhow::Error::from)?));
+        r.headers_mut().insert("content-type", HeaderValue::from_static("application/json"));
+        r.headers_mut().insert("content-encoding", HeaderValue::from_static("gzip"));
+        r
+    } else {
+        web::ok(body)
+    };
+    if let Ok(v) = HeaderValue::from_str(&etag) {
+        response.headers_mut().insert("etag", v);
+    }
+    response.headers_mut().insert("vary", HeaderValue::from_static("accept-encoding"));
+    Ok(no_store(response))
 }
 
 /// The copy the phone answers from offline (contract.md §6): 304 when the app has it already.
@@ -1440,6 +1564,7 @@ pub fn router() -> Router<AppState> {
         .route("/notebook/pages", get(list_pages))
         .route("/notebook/search", get(search))
         .route("/notebook/offline", get(offline))
+        .route("/notebook/index", get(index))
         .route("/notebook/known", get(known))
         .route("/notebook/forget/preview", post(forget_preview))
         .route("/notebook/forget/confirm", post(forget_confirm))
@@ -1460,6 +1585,10 @@ pub fn router() -> Router<AppState> {
         .route("/notebook/categorize/undo", post(categorize_undo))
         .route("/notebook/categorize/today", get(categorize_today))
         .route("/notebook/sorted", post(sorted_done))
+        .route("/notebook/summary", get(summary))
+        .route("/notebook/category/{id}", get(category_page))
+        .route("/notebook/kept", get(kept_list).post(kept_change).delete(kept_drop))
+        .route("/notebook/searched", post(searched).delete(searched_drop))
         .route("/notebook/history", get(history))
         .route("/notebook/restore", post(restore))
         .route("/notebook/tasks", get(list_tasks).post(add_task))
@@ -1960,4 +2089,171 @@ async fn categorize_undo(State(state): State<AppState>, q: QueryMap, Json(body):
         Some(view) => Ok(web::ok(view)),
         None => Err(carnet_error(404, "undo_gone", &shown, json!({}))),
     }
+}
+
+// -- the sommaire ready to show (plan « Le sommaire », S4: summary.rs) -------------------------------------------------
+
+fn sommaire_refused(r: super::summary::Refused, lang: &str) -> HttpError {
+    carnet_error(r.status(), r.code(), lang, json!({}))
+}
+
+/// `?space=` (all, perso, pro; none: all), else 400 `space_unknown`.
+fn space_of(q: &QueryMap, shown: &str) -> Result<&'static str, HttpError> {
+    super::summary::space_asked(q.get("space")).map_err(|r| sommaire_refused(r, shown))
+}
+
+/// The sommaire (`Summary`): what the Carnet's home shows, counted by the bridge.
+async fn summary(State(state): State<AppState>, q: QueryMap) -> ApiResult<Response> {
+    let config = state.config();
+    let shown = shown_language(&config, &q);
+    let space = space_of(&q, &shown)?;
+    let langs = super::index::langs(&super::language(&config), q.get("lang"));
+    let view = blocking(move || {
+        Ok(super::summary::summary_at(&config, space, &langs, chrono::Local::now().date_naive(), crate::py::time_time()))
+    })
+    .await?;
+    Ok(web::ok(view))
+}
+
+/// A category's page (`CategoryPage`); Santé's only behind the app's lock (`private=1`: 403 `health_locked`
+/// without), an unknown category 404 `category_unknown`.
+async fn category_page(State(state): State<AppState>, UrlPath(id): UrlPath<String>, q: QueryMap) -> ApiResult<Response> {
+    let config = state.config();
+    let shown = shown_language(&config, &q);
+    let space = space_of(&q, &shown)?;
+    let filter = web::query_str(&q, "filter", false, Some(40))?;
+    let private = part_of(&q) == Part::Health;
+    let langs = super::index::langs(&super::language(&config), q.get("lang"));
+    let today = chrono::Local::now().date_naive();
+    let page = blocking(move || Ok(super::summary::category_at(&config, &id, space, filter.as_deref(), &langs, private, today))).await?;
+    match page {
+        Ok(view) => Ok(web::ok(view)),
+        Err(r @ super::summary::Refused::CategoryUnknown) => Err(carnet_error(404, r.code(), &shown, json!({}))),
+        Err(r) => Err(sommaire_refused(r, &shown)),
+    }
+}
+
+/// The kept searches of `?space=` (`KeptList`).
+async fn kept_list(State(state): State<AppState>, q: QueryMap) -> ApiResult<Response> {
+    let config = state.config();
+    let shown = shown_language(&config, &q);
+    let space = space_of(&q, &shown)?;
+    let langs = super::index::langs(&super::language(&config), q.get("lang"));
+    let view = blocking(move || Ok(super::summary::kept_at(&config, space, &langs, chrono::Local::now().date_naive()))).await?;
+    Ok(web::ok(view))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct KeptChange {
+    #[serde(default)]
+    pub q: Option<String>,
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub space: Option<String>,
+    #[serde(default)]
+    pub category: Option<String>,
+    /// A kept search renamed: its id (with `title`).
+    #[serde(default)]
+    pub id: Option<String>,
+}
+
+impl Validate for KeptChange {
+    fn validate(&self, errors: &mut Vec<FieldError>) {
+        check_max_len(errors, "q", self.q.as_deref(), super::summary::Q_MAX);
+        check_max_len(errors, "title", self.title.as_deref(), super::summary::TITLE_MAX);
+        check_max_len(errors, "space", self.space.as_deref(), 10);
+        check_max_len(errors, "category", self.category.as_deref(), 20);
+        check_max_len(errors, "id", self.id.as_deref(), 20);
+    }
+}
+
+/// « Garder » a search (`{q, title?, space?, category?}`), or rename one (`{id, title}`): the space's list after it.
+async fn kept_change(State(state): State<AppState>, q: QueryMap, Json(body): Json<KeptChange>) -> ApiResult<Response> {
+    let config = state.config();
+    let shown = shown_language(&config, &q);
+    let space = super::summary::space_asked(body.space.as_deref()).map_err(|r| sommaire_refused(r, &shown))?;
+    let langs = super::index::langs(&super::language(&config), q.get("lang"));
+    let done = blocking(move || {
+        let changed = match (&body.id, &body.q) {
+            (Some(id), _) => super::summary::rename(&config, id, body.title.as_deref().unwrap_or("")),
+            (None, Some(words)) => super::summary::keep(&config, words, body.title.as_deref(), space, body.category.as_deref()),
+            (None, None) => Err(super::summary::Refused::KeptEmpty),
+        };
+        Ok(changed.map(|space| super::summary::kept_at(&config, &space, &langs, chrono::Local::now().date_naive())))
+    })
+    .await?;
+    done.map(web::ok).map_err(|r| sommaire_refused(r, &shown))
+}
+
+/// A kept search deleted (`?id=`): its space's list after it (404 `kept_unknown`).
+async fn kept_drop(State(state): State<AppState>, q: QueryMap) -> ApiResult<Response> {
+    let config = state.config();
+    let shown = shown_language(&config, &q);
+    let id = web::query_str(&q, "id", true, Some(20))?.unwrap_or_default();
+    let langs = super::index::langs(&super::language(&config), q.get("lang"));
+    let done = blocking(move || {
+        Ok(super::summary::drop_kept(&config, &id).map(|space| super::summary::kept_at(&config, &space, &langs, chrono::Local::now().date_naive())))
+    })
+    .await?;
+    done.map(web::ok).map_err(|r| sommaire_refused(r, &shown))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct Searched {
+    pub q: String,
+    #[serde(default)]
+    pub category: Option<String>,
+    #[serde(default)]
+    pub space: Option<String>,
+    /// Made with Santé open (the app's lock): never kept (review 1 of S4, R3).
+    #[serde(default, deserialize_with = "web::lax::bool")]
+    pub private: bool,
+}
+
+impl Validate for Searched {
+    fn validate(&self, errors: &mut Vec<FieldError>) {
+        check_max_len(errors, "q", Some(&self.q), super::summary::Q_MAX);
+        check_max_len(errors, "category", self.category.as_deref(), 20);
+        check_max_len(errors, "space", self.space.as_deref(), 10);
+    }
+}
+
+/// A search made (« Cherché ici », the grey words): 204, kept or not (Santé, a number, nothing found: not kept);
+/// never shown to an agent.
+async fn searched(State(state): State<AppState>, q: QueryMap, Json(body): Json<Searched>) -> ApiResult<Response> {
+    let config = state.config();
+    let shown = shown_language(&config, &q);
+    let space = super::summary::space_asked(body.space.as_deref()).map_err(|r| sommaire_refused(r, &shown))?;
+    let langs = super::index::langs(&super::language(&config), q.get("lang"));
+    let today = chrono::Local::now().date_naive();
+    if !body.private {
+        let done = blocking(move || Ok(super::summary::searched_at(&config, &body.q, body.category.as_deref(), space, &langs, today))).await?;
+        done.map_err(|r| sommaire_refused(r, &shown))?;
+    }
+    Ok(no_content())
+}
+
+fn no_content() -> Response {
+    let mut r = Response::new(Body::empty());
+    *r.status_mut() = axum::http::StatusCode::NO_CONTENT;
+    r
+}
+
+/// Searches made dropped (`?q=`: the one of these words, else all; `?space=`, `?category=` narrow it): 204. The
+/// gesture comes with A2/D2 (review 1 of S4, B2).
+async fn searched_drop(State(state): State<AppState>, q: QueryMap) -> ApiResult<Response> {
+    let config = state.config();
+    let shown = shown_language(&config, &q);
+    let words = web::query_str(&q, "q", false, Some(super::summary::Q_MAX))?.filter(|w| !w.trim().is_empty());
+    let space = match q.get("space").filter(|s| !s.trim().is_empty()) {
+        Some(s) => Some(super::summary::space_asked(Some(s)).map_err(|r| sommaire_refused(r, &shown))?),
+        None => None,
+    };
+    let category = web::query_str(&q, "category", false, Some(20))?.filter(|c| !c.trim().is_empty());
+    if category.as_deref().is_some_and(|c| !super::categories::PERSONAL.contains(&c)) {
+        return Err(sommaire_refused(super::summary::Refused::CategoryUnknown, &shown));
+    }
+    blocking(move || Ok(super::summary::drop_searched(&config, words.as_deref(), space, category.as_deref())?)).await?;
+    Ok(no_content())
 }
