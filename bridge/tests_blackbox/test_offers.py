@@ -246,21 +246,24 @@ def test_caps_two_offers_per_reply_one_unasked_waiting_shared_with_the_plans(bri
     assert len(cards) == 2
     for card in cards:
         assert answer(bridge, card, "deny").status_code == 200
-    # unasked (no turn of the person's): one card waiting at a time, plans and offers together
-    propose(bridge, trip())
-    waiting = call(bridge, "offer_act", search(about="Porto"), token=TOKEN)
+    # unasked (from a conversation no turn of the person's runs in: a routine's, a watcher's…): one card waiting at a
+    # time, plans and offers together
+    unasked = "api_unasked"
+    propose(bridge, trip(), session=unasked)
+    waiting = call(bridge, "offer_act", search(about="Porto"), token=TOKEN, session=unasked)
     assert not_done(waiting) and "already waits" in text_of(waiting), text_of(waiting)
     [plan] = plan_cards(bridge)
     assert answer(bridge, plan, "deny").status_code == 200
     # the same offer is not made twice in 14 days, whatever the answer
-    again = call(bridge, "offer_act", search(about="  lisbonne "), token=TOKEN)
+    again = call(bridge, "offer_act", search(about="  lisbonne "), token=TOKEN, session=unasked)
     assert not_done(again) and "you offered" in text_of(again), text_of(again)
     # a plan and an offer unasked today: 2 for this agent, then no more before tomorrow
-    make(bridge, search(about="Porto"))
+    make(bridge, search(about="Porto"), session=unasked)
     [card] = offer_cards(bridge)
     assert answer(bridge, card, "deny").status_code == 200
     third = call(bridge, "offer_act", {"kind": "draft", "label": "Je prépare la réponse ?", "about": "Madrid",
-                                       "prompt": "Écris un brouillon de réponse à Madrid."}, token=TOKEN)
+                                       "prompt": "Écris un brouillon de réponse à Madrid."}, token=TOKEN,
+                 session=unasked)
     assert not_done(third) and "already made 2" in text_of(third), text_of(third)
 
 
