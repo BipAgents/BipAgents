@@ -239,7 +239,8 @@ def test_s4_kept_searches_six_a_space_with_their_count(bridges):
         assert got.status_code == status and got.json()["detail"]["code"] == code, (body, got.status_code, got.text)
     # kept on the bridge: there after a restart
     bridge.restart()
-    assert [k["q"] for k in get(bridge, "/v1/notebook/kept")["kept"]] == ["à payer ce mois-ci", "voyage", "maison", "impôts", "marc"]
+    # (S5: `all` lists every space's, Pro's « claire » too)
+    assert [k["q"] for k in get(bridge, "/v1/notebook/kept")["kept"]] == ["à payer ce mois-ci", "voyage", "maison", "impôts", "marc", "claire"]
 
 
 def test_s4_a_search_made_feeds_searched_here_and_never_reaches_an_agent(bridges):
