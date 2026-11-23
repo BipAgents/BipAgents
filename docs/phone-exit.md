@@ -213,6 +213,7 @@ Codes (snake_case; `OPEN_ERR` payloads, the hub's answers to the proxy, the agen
 | `off` | bridge | the person (« Autoriser ») or the place switched it off |
 | `rate` | bridge | too many new streams this minute |
 | `literal_ip`, `local_name`, `bad_name`, `port` | both | the name or port |
+| `public_suffix` | bridge | the name is a public suffix itself (`github.io`, `co.uk`): no site of its own (the site is the registrable domain by the Public Suffix List, its private section included: `alice.github.io`) |
 | `private` | both | the name resolves to a private/local address |
 | `dns`, `connect` | phone | could not resolve / connect |
 | `sni_mismatch`, `sni_missing`, `not_tls` | both | the first bytes are not a ClientHello for that host |

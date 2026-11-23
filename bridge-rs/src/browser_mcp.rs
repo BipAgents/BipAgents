@@ -4093,6 +4093,8 @@ impl Proxy {
         if host.is_empty() {
             return;
         }
+        // the site a bot check is remembered by (`check_site`: the Public Suffix List with its private section, so
+        // `alice.github.io`, never `github.io`, as the phone exit's card names it: fix-ios-exit-card)
         let site = check_site(&host);
         let instance = arguments.and_then(|a| a.get("instance_id")).and_then(Value::as_str).unwrap_or("").to_string();
         let text = match response.get("result").and_then(Value::as_object) {
@@ -4109,7 +4111,9 @@ impl Proxy {
                 let mut words = answer.split_whitespace();
                 if let (Some(code), Some(ago)) = (words.next(), words.next().and_then(|a| a.parse::<u64>().ok())) {
                     if code != "NONE" && ago <= 60 {
-                        lines.push(crate::phone_exit::agent::refusal_text(code, &site));
+                        // named as the hub keys it (`site_key`, fix-ios-exit-card)
+                        let card_site = crate::phone_exit::checks::site_key(&host);
+                        lines.push(crate::phone_exit::agent::refusal_text(code, &card_site));
                     }
                 }
             }

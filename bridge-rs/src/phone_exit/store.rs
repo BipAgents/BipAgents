@@ -211,8 +211,13 @@ pub fn store_path(config: &Config) -> PathBuf {
     PathBuf::from(config.data_dir()).join("phone-exit.json")
 }
 
+/// The store as kept, without the sites saved under a public suffix before `site_of` refused them (`github.io`,
+/// `co.uk`: « Toujours » there routed every person's pages to the phone; review 2 R8, 22/11). Only ever narrower.
 pub fn load(config: &Config) -> Store {
-    std::fs::read(store_path(config)).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default()
+    let mut store: Store =
+        std::fs::read(store_path(config)).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
+    store.sites.retain(|site, _| !crate::cards::is_public_suffix(site));
+    store
 }
 
 fn write_private(path: &Path, body: &[u8]) -> std::io::Result<()> {
@@ -486,6 +491,25 @@ mod tests {
             max_minutes: 120.0,
             ..Session::default()
         }
+    }
+
+    /// Review 2 R8 (22/11): a site saved before the Public Suffix List (« Toujours » or « Jamais » for `github.io`,
+    /// `co.uk`) is dropped when the store is read: a whole suffix is never routed to the phone; nothing is widened.
+    #[test]
+    fn sites_saved_under_a_public_suffix_are_dropped() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = Config::with_key("k");
+        config.outbox.db_path = dir.path().join("bridge.db").to_string_lossy().into_owned();
+        let mut old = Store::default();
+        for (site, mode) in [("github.io", "always"), ("co.uk", "never"), ("ameli.fr", "always"), ("alice.github.io", "never")] {
+            old.sites.insert(site.into(), Site { mode: mode.into(), minimal: None, at: 0.0 });
+        }
+        std::fs::write(store_path(&config), serde_json::to_vec(&old).unwrap()).unwrap();
+        let store = load(&config);
+        assert_eq!(store.sites.keys().cloned().collect::<Vec<_>>(), vec!["alice.github.io", "ameli.fr"]);
+        assert_eq!(store.always_site("bob.github.io"), None);
+        assert_eq!(store.always_site("www.ameli.fr").as_deref(), Some("ameli.fr"));
+        assert!(store.routes("vie").iter().all(|(site, _)| site == "ameli.fr"), "{:?}", store.routes("vie"));
     }
 
     #[test]

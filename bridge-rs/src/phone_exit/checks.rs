@@ -122,14 +122,26 @@ pub fn host_of(raw: &str) -> String {
     host.trim_end_matches('.').to_string()
 }
 
-/// The site (registrable domain) a host or URL belongs to: `www.ameli.fr` → `ameli.fr`, `x.impots.gouv.fr` →
-/// `impots.gouv.fr`. Err: the refusal code of a name that can never go through the phone.
+/// The site (registrable domain, by the Public Suffix List with its private section: vault_match) a host or URL
+/// belongs to: `www.ameli.fr` → `ameli.fr`, `x.impots.gouv.fr` → `impots.gouv.fr`, `alice.github.io` →
+/// `alice.github.io` (never `github.io`: every person's pages, which the card would name and the phone grant with
+/// its subdomains). A name under a suffix the list doesn't know (a reserved `.example`, a TLD newer than the list):
+/// its last labels, as before (mail_tidy). Err: the refusal code of a name that can never go through the phone
+/// (`public_suffix`: a public suffix itself, `github.io`, `co.uk`).
 pub fn site_of(raw: &str) -> Result<String, &'static str> {
     let host = host_of(raw);
     if let Some(why) = name_refused(&host) {
         return Err(why);
     }
-    Ok(crate::mail_tidy::registrable(&host))
+    if crate::cards::is_public_suffix(&host) {
+        return Err("public_suffix");
+    }
+    Ok(crate::vault_match::registrable(&host).unwrap_or_else(|| crate::mail_tidy::registrable(&host)))
+}
+
+/// The site a host's refusals are kept under (`why`): its site, or the host itself when it has none.
+pub fn site_key(host: &str) -> String {
+    site_of(host).unwrap_or_else(|_| host_of(host))
 }
 
 /// The host is the site or one of its subdomains.
@@ -330,6 +342,32 @@ mod tests {
         for good in ["doctolib.fr", "www.doctolib.fr", "xn--bcher-kva.example", "assets.doctolib.fr"] {
             assert_eq!(name_refused(good), None, "{good}");
         }
+    }
+
+    /// 22/11 (fix-ios-exit-card, review 1 R1): the site a card names and the phone grants (the site and its
+    /// subdomains) follows the Public Suffix List, its private section included. `alice.github.io` is a site of its own:
+    /// never `github.io`, every person's pages. A name that is itself a public suffix is no site; a name under a suffix
+    /// the list doesn't know is read as before (the black-box tests' `.example` sites).
+    #[test]
+    fn sites_follow_the_public_suffix_list() {
+        for (raw, site) in [
+            ("alice.github.io", "alice.github.io"),
+            ("https://www.alice.github.io/blog", "alice.github.io"),
+            ("shop.myshopify.com", "shop.myshopify.com"),
+            ("www.bbc.co.uk", "bbc.co.uk"),
+            ("assure.ameli.fr", "ameli.fr"),
+            ("www.impots.gouv.fr", "impots.gouv.fr"),
+            ("ameli.fr", "ameli.fr"),
+            ("www.shop.example", "shop.example"),
+        ] {
+            assert_eq!(site_of(raw), Ok(site.to_string()), "{raw}");
+        }
+        for suffix in ["github.io", "co.uk", "gouv.fr", "myshopify.com", "https://github.io/"] {
+            assert_eq!(site_of(suffix), Err("public_suffix"), "{suffix}");
+        }
+        assert_eq!(site_of("8.8.8.8"), Err("literal_ip"));
+        assert_eq!(site_of("[2001:4860::8888]"), Err("literal_ip"));
+        assert_eq!(site_of("nas"), Err("local_name"));
     }
 
     #[test]

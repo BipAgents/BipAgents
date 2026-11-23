@@ -174,6 +174,8 @@ servers; they can switch it on, or do this step themselves (« Prendre la main �
         "never" => "Your person chose never to use their phone for this site. Tell them the site refuses servers; \
 they can do this step themselves (« Prendre la main »).",
         "too_many" => "Your person already has several of these cards waiting: wait for their answers.",
+        "public_suffix" => "That name is shared by many sites (like github.io): give the page's own site (like \
+alice.github.io) or its URL.",
         _ => "That is not a site name (give its name, like ameli.fr, or the page's URL).",
     }
 }
