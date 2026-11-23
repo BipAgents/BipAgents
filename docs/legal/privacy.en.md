@@ -637,7 +637,7 @@ Finland), apart from the machines of the servers.
 
 **Data.** The address itself, which the guichet links to your server. The mails received and sent by that address:
 their headers (senders, recipients, dates, subjects), their contents and their attachments. The address's password is
-made on Kerfy Studio's mail server and given once to your server, where it is kept with the agent's settings; the mail
+made on a Kerfy Studio machine and given once to your server, where it is kept with the agent's settings; the mail
 server only keeps a hashed form of it, and the guichet does not keep it. The addresses your agent may write to, its
 daily limit and the mails waiting for your approval are kept on your server.
 

@@ -667,7 +667,7 @@ Hetzner (Alemania o Finlandia), aparte de las máquinas de los servidores.
 
 **Datos.** La propia dirección, que el guichet vincula a tu servidor. Los correos recibidos y enviados por esa dirección:
 sus cabeceras (remitentes, destinatarios, fechas, asuntos), su contenido y sus adjuntos. La contraseña de la dirección
-se crea en el servidor de correo de Kerfy Studio y se entrega una sola vez a tu servidor, donde se guarda con los ajustes del
+se crea en una máquina de Kerfy Studio y se entrega una sola vez a tu servidor, donde se guarda con los ajustes del
 agente; el servidor de correo solo guarda un hash de ella, y el guichet no la guarda. Las direcciones a las que tu
 agente puede escribir, su límite diario y los correos que esperan tu aprobación se guardan en tu servidor.
 
