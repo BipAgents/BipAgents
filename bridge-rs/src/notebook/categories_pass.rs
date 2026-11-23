@@ -1727,7 +1727,8 @@ mod tests {
 
     // -- the one-time sort after a new version (carnet-categories, 22/11) ----------------------------------------------
 
-    /// A fake small model: each numbered note of the input answered `home` (« other » for « Truc 000 » to « Truc 009 »);
+    /// A fake small model: each numbered note of the input answered `home` (« other » for « Truc 000 » to « Truc 009 »,
+    /// `people` for « Truc 010 » to « Truc 019 »);
     /// its usage what the bridge counts (characters / 3.5 in, 15 tokens a note out). Each input kept.
     async fn fake_model(seen: Arc<Mutex<Vec<String>>>) -> String {
         use axum::extract::State;
@@ -1736,14 +1737,15 @@ mod tests {
             let system = body["messages"][0]["content"].as_str().unwrap_or("").to_string();
             let user = body["messages"][1]["content"].as_str().unwrap_or("").to_string();
             seen.lock().unwrap().push(user.clone());
-            let numbers: Vec<(usize, bool)> = user
+            let numbers: Vec<(usize, &str)> = user
                 .lines()
-                .filter_map(|l| l.split_once(". ").and_then(|(n, rest)| Some((n.parse().ok()?, rest.starts_with("Truc 00")))))
+                .filter_map(|l| {
+                    let (n, rest) = l.split_once(". ")?;
+                    let says = if rest.starts_with("Truc 00") { "other" } else if rest.starts_with("Truc 01") { "people" } else { "home" };
+                    Some((n.parse().ok()?, says))
+                })
                 .collect();
-            let lines: Vec<String> = numbers
-                .iter()
-                .map(|(n, other)| json!({"n": n, "categories": [if *other { "other" } else { "home" }]}).to_string())
-                .collect();
+            let lines: Vec<String> = numbers.iter().map(|(n, says)| json!({"n": n, "categories": [says]}).to_string()).collect();
             axum::Json(json!({"choices": [{"message": {"content": lines.join("\n")}}],
                               "usage": {"prompt_tokens": ((system.len() + user.len()) as f64 / 3.5).ceil() as i64,
                                         "completion_tokens": 15 * numbers.len()}}))
@@ -1869,11 +1871,13 @@ mod tests {
         assert!(inputs.iter().all(|u| !u.to_lowercase().contains("noix")));
         // what one page sends: its excerpt, `EXCERPT` characters at most
         assert!(inputs.iter().flat_map(|u| u.lines()).all(|l| tk::chars(l) <= EXCERPT + 5));
-        // kept only when the model gives a real category: its « other » leaves the words' (Truc 000 to 009)
-        assert_eq!(run["categorized_by_model"], json!(190));
+        // kept only when the model gives a real category that changes the page: its « other » leaves the words' (Truc
+        // 000 to 009), and so does a confirmation (Truc 020 and after: `home` again; review 2, R4)
+        assert_eq!(run["categorized_by_model"], json!(160));
         assert_eq!(stored_of(&config, "Sujets/Note 000.md"), Some((strings(&["home"]), "agent".into())));
         assert_eq!(stored_of(&config, "Sujets/Truc 000.md"), Some((strings(&["home"]), "auto".into())));
-        assert_eq!(stored_of(&config, "Sujets/Truc 010.md"), Some((strings(&["home"]), "agent".into())));
+        assert_eq!(stored_of(&config, "Sujets/Truc 010.md"), Some((strings(&["people"]), "agent".into())));
+        assert_eq!(stored_of(&config, "Sujets/Truc 020.md"), Some((strings(&["home"]), "auto".into())));
         assert_eq!(stored_of(&config, "Sujets/Cours de piano.md"), Some((strings(&["other"]), "auto".into())));
         assert_eq!(stored_of(&config, "Sujets/Truc 069.md"), Some((strings(&["home"]), "auto".into())));
         assert_eq!(stored_of(&config, "Sujets/Bidule.md"), Some((strings(&["work"]), "auto".into())));
@@ -1972,5 +1976,132 @@ mod tests {
         tokio::task::spawn_blocking(move || sort(&c2).unwrap()).await.unwrap();
         let run = night_recorded(&config).await;
         assert_eq!((titles_sent(&seen).len(), run["eur"].clone(), eur(&config)), (ONCE_MAX, json!(0.0), 0.0));
+    }
+
+    /// Review 2 (B1): a page that touches health by its title, or holds a health line, never goes to the model, in any
+    /// language; a line that only touches health is left out of the others' excerpt.
+    #[tokio::test]
+    async fn no_health_page_goes_to_the_model_in_any_language() {
+        for (lang, title, line, touches) in [
+            ("fr", "Prise de sang", "Allergique à la pénicilline", "Pharmacie de garde mardi"),
+            ("en", "GP appointment", "Allergic to peanuts", "Pharmacy on Tuesday"),
+            ("de", "Kinderarzt für Leo", "Ist schwanger", "Apotheke am Dienstag"),
+            ("es", "Cita médica", "Alergia al polen", "Farmacia el martes"),
+            ("nl", "Huisarts", "Allergisch voor pinda's", "Afspraak tandarts dinsdag"),
+        ] {
+            let seen = Arc::new(Mutex::new(Vec::new()));
+            let base = fake_model(seen.clone()).await;
+            let dir = tempfile::tempdir().unwrap();
+            let mut config = with_model(&dir, &base);
+            update_state(&config, |s| {
+                s.insert("language".into(), json!(if lang == "nl" { "en" } else { lang }));
+            })
+            .unwrap();
+            config.notebook.base_url = base.clone();
+            let root = part_root(&config, Part::Main);
+            let page = |t: &str, body: &str| format!("---\ntype: subject\n---\n# {t}\n\n{body}\n");
+            write_file(&root.join("Sujets/A.md"), &page(title, "## Autres\n- Mardi")).unwrap();
+            write_file(&root.join("Sujets/B.md"), &page("Bloc", &format!("## Autres\n- Quelque chose\n- {line}"))).unwrap();
+            write_file(&root.join("Sujets/C.md"), &page("Divers", &format!("## Autres\n- Rien\n- {touches}"))).unwrap();
+            write_file(&root.join("Sujets/D.md"), &page("Truc", "## Autres\n- Quelque chose")).unwrap();
+            let c2 = config.clone();
+            tokio::task::spawn_blocking(move || sort(&c2).unwrap()).await.unwrap();
+            night_recorded(&config).await;
+            let sent = seen.lock().unwrap().join("\n");
+            assert!(sent.contains("Divers") && sent.contains("Truc"), "{lang}: {sent}");
+            assert!(!sent.contains(title) && !sent.contains("Bloc") && !sent.contains(touches) && !sent.contains(line), "{lang}: {sent}");
+        }
+    }
+
+    /// A fake model that takes the request and closes without answering (a cut connection), each request kept.
+    async fn silent_model(seen: Arc<Mutex<Vec<String>>>) -> String {
+        use tokio::io::AsyncReadExt;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            while let Ok((mut socket, _)) = listener.accept().await {
+                let mut got = Vec::new();
+                let mut buf = vec![0u8; 65536];
+                // the whole request (its body ends the read when the client waits for an answer)
+                while let Ok(Ok(n)) = tokio::time::timeout(Duration::from_millis(300), socket.read(&mut buf)).await {
+                    if n == 0 {
+                        break;
+                    }
+                    got.extend_from_slice(&buf[..n]);
+                }
+                seen.lock().unwrap().push(String::from_utf8_lossy(&got).into_owned());
+                drop(socket);
+            }
+        });
+        format!("http://{address}/v1")
+    }
+
+    /// Review 2 (R1): a call that left and got no answer is counted at its most, and its pages are never sent again; a
+    /// model that cannot be reached costs nothing and its pages wait for another night.
+    #[tokio::test]
+    async fn a_call_without_an_answer_is_counted_and_never_sent_again() {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let base = silent_model(seen.clone()).await;
+        let dir = tempfile::tempdir().unwrap();
+        let config = with_model(&dir, &base);
+        carnet_for_the_model(&config);
+        let c2 = config.clone();
+        tokio::task::spawn_blocking(move || sort(&c2).unwrap()).await.unwrap();
+        let c2 = config.clone();
+        let first = tokio::task::spawn_blocking(move || candidates_once(&c2, NIGHT_MAX)).await.unwrap();
+        let most = most_cost(&config, &night_input(&first));
+        let run = night_recorded(&config).await;
+        assert_eq!(run["categories_reason"], json!("the model did not answer"), "{run:?}");
+        assert!((run["eur"].as_f64().unwrap() - (most * 1e6).round() / 1e6).abs() < 1e-9 && (eur(&config) - run["eur"].as_f64().unwrap()).abs() < 1e-9);
+        assert_eq!(read_state(&config)[KEY_ONCE]["left"], json!(ONCE_MAX - NIGHT_MAX));
+        // the next night: other pages, never the first ones again
+        night_recorded(&config).await;
+        let calls = seen.lock().unwrap().clone();
+        assert_eq!(calls.len(), 2);
+        let note = regex::Regex::new(r"\d+\. (Note \d+|Truc \d+)").unwrap();
+        let titles = |c: &str| note.captures_iter(c).map(|m| m[1].to_string()).collect::<HashSet<_>>();
+        assert!(titles(&calls[0]).len() == NIGHT_MAX && titles(&calls[0]).is_disjoint(&titles(&calls[1])));
+        // nothing listening: not reached, nothing counted, the pages wait
+        let dir = tempfile::tempdir().unwrap();
+        let free = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap();
+        let config = with_model(&dir, &format!("http://{free}/v1"));
+        carnet_for_the_model(&config);
+        let c2 = config.clone();
+        tokio::task::spawn_blocking(move || sort(&c2).unwrap()).await.unwrap();
+        let run = night_recorded(&config).await;
+        assert_eq!(run["categories_reason"], json!("the model could not be reached"), "{run:?}");
+        assert_eq!((eur(&config), read_state(&config)[KEY_ONCE]["left"].clone()), (0.0, json!(ONCE_MAX)));
+        assert!(super::super::strings(read_state(&config).get(KEY_TRIED)).is_empty());
+    }
+
+    /// Review 2 (R5): a page a work agent made is Travail by its maker, never sent as narrow even when its words say so
+    /// weakly.
+    #[tokio::test]
+    async fn a_work_agents_page_is_never_sent_as_narrow() {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let base = fake_model(seen.clone()).await;
+        let dir = tempfile::tempdir().unwrap();
+        let config = with_model(&dir, &base);
+        crate::agent_groups::set_group(&config, "kerfy", "Pro").unwrap();
+        let pro = Who::agent(&config, "kerfy");
+        // made by the work agent (its « create » in the history), then its text: only its first line says « client »
+        note(&config, Part::Main, "subject", "Truc pro", "status", &["Lancé".to_string()], &[], "", "", &pro).unwrap();
+        let root = part_root(&config, Part::Main);
+        write_file(&root.join("Sujets/Truc pro.md"), "---\ntype: subject\n---\n# Truc pro\n\n## En bref\nLe client.\n").unwrap();
+        write_file(&root.join("Sujets/Truc.md"), "---\ntype: subject\n---\n# Truc\n\n## En bref\nLe client.\n").unwrap();
+        let c2 = config.clone();
+        tokio::task::spawn_blocking(move || sort(&c2).unwrap()).await.unwrap();
+        night_recorded(&config).await;
+        let sent = titles_sent(&seen);
+        assert!(sent.contains(&"Truc".to_string()) && !sent.contains(&"Truc pro".to_string()), "{sent:?}");
+    }
+
+    /// Review 2 (R2): one pass at a time.
+    #[tokio::test]
+    async fn two_passes_never_run_at_once() {
+        let first = tidy::try_running().unwrap();
+        assert!(tidy::try_running().is_none());
+        drop(first);
+        assert!(tidy::try_running().is_some());
     }
 }

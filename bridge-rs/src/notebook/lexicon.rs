@@ -813,6 +813,26 @@ mod tests {
         }
     }
 
+    /// Review 2 of carnet-categories (B1): what touches health is held back in the five languages, compounds included;
+    /// filing (`is_health`) does not change.
+    #[test]
+    fn health_is_held_back_in_five_languages() {
+        for text in [
+            "Afspraak huisarts", "Gezondheid", "Naar de tandarts", "Ziekenhuis Utrecht", "Medicijnen ophalen bij de apotheek",
+            "Griepprik in oktober", "Kindertandarts van Daan", "Kinderarzt für Leo", "Hausarzt anrufen", "Termin beim Augenarzt",
+            "Apotheke", "Blutabnahme am Montag", "Augenklinik", "Cita médica", "Farmacia de guardia", "Análisis de sangre",
+            "Fisioterapeuta", "Médica de cabecera", "Prise de sang", "Pharmacie", "Radiographie du genou",
+            "Infirmière à domicile", "GP appointment", "Pharmacy", "Blood test on Monday", "Antibiotics",
+        ] {
+            assert!(touches_health(text), "{text}");
+        }
+        for text in ["Recept stamppot boerenkool", "Gastronomie", "Operations team", "Nursery place for Ollie", "Rezept Kartoffelsalat"] {
+            assert!(!touches_health(text), "{text}");
+        }
+        // filing reads the strict words only: unchanged
+        assert!(!is_health("Afspraak huisarts") && !is_health("Kinderarzt für Leo") && !is_health("Pharmacie"));
+    }
+
     /// Alex's Carnet, 10/11: things that are not health, filed in Santé by one word each.
     #[test]
     fn words_that_are_often_something_else_are_not_health() {

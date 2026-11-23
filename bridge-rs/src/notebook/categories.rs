@@ -1651,9 +1651,10 @@ mod tests {
     }
 
     /// The development set's floors (first category right): all languages together, and each language (22/11: S1's
-    /// table 66.9 %, 61–77 %; carnet-categories' 95.3 %, 92.5–97.1 %).
-    const DEV_FLOOR: f64 = 0.92;
-    const DEV_FLOOR_EACH: f64 = 0.90;
+    /// table 66.9 %, 61–77 %; carnet-categories' 95.3 %, 92.5–97.1 %; after its review 1: 94.7 %, 92.5–97.1 %; floors at
+    /// that measure, review 2 R11).
+    const DEV_FLOOR: f64 = 0.94;
+    const DEV_FLOOR_EACH: f64 = 0.92;
 
     /// Words a person writes that the table did not know (« Autres » before, carnet-categories): everyday words of
     /// each category in the five languages, their forms (plurals, verbs), German and Dutch compounds, phrases.

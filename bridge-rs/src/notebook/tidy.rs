@@ -302,6 +302,11 @@ fn clip(text: &str, n: usize) -> String {
     }
 }
 
+/// (review 2, tests first: not built yet)
+pub(crate) fn try_running() -> Option<()> {
+    Some(())
+}
+
 /// The pass, now. `forced`: run even if not due (the app's « ranger maintenant », the owner's tests). Returns the run's
 /// record (also kept in the state and logged).
 pub async fn run(config: &Config, hermes: &HermesClient, http: &reqwest::Client) -> Dict {
