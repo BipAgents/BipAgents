@@ -14,8 +14,9 @@
 //!                     (drives_write.rs: always behind the person's card or level, never a deletion)
 //!
 //! Writing (Alex 23/11, « Oui, ajoute »): a folder's `writers` (« {Agent} peut y écrire », off by default) may write
-//! there, in the three services. OneDrive signs in with `Files.ReadWrite` (Kerfy's Entra app, 23/11); Dropbox's write
-//! right (`files.content.write`) is asked at the sign-in only once a folder has a writer (or the connection had it).
+//! there, in the three services. The write right is asked at the sign-in only once a folder has a writer (review C6:
+//! OneDrive `Files.ReadWrite` instead of `Files.Read`; Dropbox `files.content.write` and `sharing.read`); without one
+//! any more, the next sign-in asks reading only.
 //!
 //! The whole drive (Alex 23/11, « Tout mon Dropbox »): a folder `{id: "root", root: true}`, Dropbox and OneDrive only
 //! (Google would need its restricted full-Drive scope). Dropbox: every item with a path in the person's own space
@@ -81,8 +82,7 @@
 //!     GET    /v1/drives/{service}/browse?folder= {folders: [{id, name, path}]} (OneDrive, Dropbox; root without folder)
 //!     PUT    /v1/drives/{service}/folders        {folders: [{id, agents, writers?}]}, the whole list → the drive
 //!                                                (`writers` left out: kept as they were; a writer is always a
-//!                                                reader; OneDrive: 422 not_writable; `id: "root"`: the whole drive,
-//!                                                Google: 422 whole_drive)
+//!                                                reader; `id: "root"`: the whole drive, Google: 422 whole_drive)
 //!     DELETE /v1/drives/{service}                {ok, revoked}
 //!     PUT    /v1/drives/{service}/carnet         {carnet: bool}   « Chercher aussi ici depuis le Carnet » (off by
 //!                                                default, Alex's decision 4 of the sommaire, 21/11): the Carnet's
@@ -119,6 +119,8 @@ pub const WRITE_TOOL: &str = "drive_write";
 pub const ROOT_ID: &str = "root";
 /// Dropbox's write right, asked only once a folder has a writer.
 pub const DROPBOX_WRITE_SCOPE: &str = "files.content.write";
+/// Asked with it (review C2): reading the shared links, so that nothing is saved where a link shows it to others.
+pub const DROPBOX_LINKS_SCOPE: &str = "sharing.read";
 /// Characters of text one `drive_read` page gives.
 pub const PAGE_CHARS: usize = 6000;
 /// The largest file read or copied (downloaded whole).
@@ -312,31 +314,27 @@ impl Provider {
         }
     }
 
-    /// What a sign-in asks. Google: `drive.file` alone, as its Picker requires (it also lets the app create files in
-    /// what was picked and change what it made or was picked: drives_write.rs, never a wider scope). OneDrive:
-    /// `Files.ReadWrite` (Alex 23/11, Kerfy's Entra app; Microsoft has no « chosen folders » right for personal
-    /// accounts: the bridge keeps to the chosen folders, writes only behind the person's card or level). Dropbox:
-    /// reading; its write right only when asked ([`Provider::scope_for`]).
+    /// What a sign-in asks to read. Google: `drive.file` alone, as its Picker requires (it also lets the app create
+    /// files in what was picked and change what it made or was picked: drives_write.rs, never a wider scope). OneDrive:
+    /// `Files.Read` (Microsoft has no « chosen folders » right for personal accounts: the bridge keeps to the chosen
+    /// folders). Dropbox: reading. The write right only when a folder has a writer ([`Provider::scope_for`]).
     pub fn scope(self) -> &'static str {
         match self {
             Provider::Google => "https://www.googleapis.com/auth/drive.file",
-            Provider::Microsoft => "Files.ReadWrite offline_access User.Read",
+            Provider::Microsoft => "Files.Read offline_access User.Read",
             Provider::Dropbox => "account_info.read files.metadata.read files.content.read",
         }
     }
 
-    /// The scope a sign-in asks: Dropbox's write right too when `write` (a folder has a writer, or the connection had
-    /// it); the others as [`Provider::scope`].
+    /// The scope a sign-in asks: with `write` (a folder has a writer: review C6, the same rule for OneDrive as for
+    /// Dropbox), OneDrive's `Files.ReadWrite` instead of `Files.Read`, Dropbox's write right and its links' reading;
+    /// Google as [`Provider::scope`]. A folder without writer any more: the next sign-in asks reading only again.
     pub fn scope_for(self, write: bool) -> String {
         match self {
-            Provider::Dropbox if write => format!("{} {DROPBOX_WRITE_SCOPE}", self.scope()),
+            Provider::Dropbox if write => format!("{} {DROPBOX_WRITE_SCOPE} {DROPBOX_LINKS_SCOPE}", self.scope()),
+            Provider::Microsoft if write => "Files.ReadWrite offline_access User.Read".to_string(),
             other => other.scope().to_string(),
         }
-    }
-
-    /// Writing is offered there (drives_write.rs): the three services (OneDrive since Kerfy's Entra app, 23/11).
-    pub fn writes(self) -> bool {
-        true
     }
 
     /// The whole drive can be given (Google: only with its restricted full-Drive scope, never asked).
@@ -715,8 +713,14 @@ pub fn fault_of(status: u16, retry_after: Option<u64>, body: &Value) -> Fault {
         404 => Fault::NotFound,
         409 => {
             let summary = body.get("error_summary").and_then(Value::as_str).unwrap_or_default();
-            if summary.is_empty() || summary.contains("not_found") {
+            let code = body.pointer("/error/code").and_then(Value::as_str).unwrap_or_default();
+            if code == "nameAlreadyExists" || code.contains("onflict") {
+                Fault::Changed // Graph: a name taken meanwhile
+            } else if summary.is_empty() || summary.contains("not_found") {
                 Fault::NotFound
+            } else if summary.contains("conflict") {
+                // a write on a revision gone, or a name taken meanwhile (drives_write.rs says which)
+                Fault::Changed
             } else {
                 Fault::Refused
             }
@@ -860,7 +864,8 @@ pub fn has_write_scope(provider: Provider, tokens: &Tokens) -> bool {
     let words = || tokens.scope.as_deref().unwrap_or_default().split_whitespace();
     match provider {
         Provider::Google => true,
-        Provider::Dropbox => words().any(|w| w == DROPBOX_WRITE_SCOPE),
+        // its links read too (review C2): a connection made with the write right alone asks once more
+        Provider::Dropbox => words().any(|w| w == DROPBOX_WRITE_SCOPE) && words().any(|w| w == DROPBOX_LINKS_SCOPE),
         Provider::Microsoft => {
             tokens.scope.is_none()
                 || words()
@@ -1069,11 +1074,11 @@ pub fn start(config: &Config, id: &str, agents: &[String], pick: Pick, client: &
     )
 }
 
-/// Whether a sign-in to `provider` asks the write right (Dropbox): a folder kept for it has a writer, or the
-/// connection kept already had it (« Reconnecter » never takes it away).
+/// Whether a sign-in to `provider` asks the write right (Dropbox, OneDrive): a folder kept for it has a writer. None
+/// any more: the next sign-in (« Reconnecter ») asks reading only, and the write right is gone (review remark).
 pub fn wants_write(config: &Config, provider: Provider) -> bool {
     let Some(link) = read_stored(config).ok().and_then(|s| s.drives.get(provider.id()).cloned()) else { return false };
-    link.folders.iter().any(|f| !f.writers.is_empty()) || has_write_scope(provider, &link.tokens)
+    link.folders.iter().any(|f| !f.writers.is_empty())
 }
 
 /// The sign-in `state` started, if it is one of `calendar`'s kind (a drive's, or the Google calendar's): the other
@@ -1328,7 +1333,7 @@ pub struct Item {
 }
 
 const GOOGLE_FOLDER: &str = "application/vnd.google-apps.folder";
-const GOOGLE_FIELDS: &str = "id,name,mimeType,size,modifiedTime,parents,trashed";
+const GOOGLE_FIELDS: &str = "id,name,mimeType,size,modifiedTime,parents,trashed,headRevisionId";
 /// What a write checks besides (drives_write.rs): open to others, in a shared drive, its revision.
 pub(crate) const WRITE_FIELDS: &str =
     "id,name,mimeType,size,modifiedTime,parents,trashed,shared,driveId,headRevisionId";
@@ -1941,7 +1946,7 @@ pub(crate) fn defused(text: &str) -> String {
 }
 
 /// Lines of names from a drive, between the markers that say they are data.
-fn marked(head: &str, lines: &[String]) -> String {
+pub(crate) fn marked(head: &str, lines: &[String]) -> String {
     format!("{head}\n{UNTRUSTED}\n<<<\n{}\n>>>", lines.join("\n"))
 }
 
@@ -1977,11 +1982,7 @@ pub async fn call(config: &Config, agent: &AgentConfig, name: &str, arguments: &
             .map(|(p, f)| {
                 let ended = stored.drives.get(p.id()).is_some_and(|l| l.state != "connected");
                 let name = if f.is_root() { format!("your person's whole {}", p.label()) } else { defused(&f.name) };
-                let writes = if f.writers.contains(&agent.name) && p.writes() {
-                    ", you may write in it (drive_write)"
-                } else {
-                    ""
-                };
+                let writes = if f.writers.contains(&agent.name) { ", you may write in it (drive_write)" } else { "" };
                 format!(
                     "- [{}] {name} ({}{}{writes}) — {}",
                     if f.file { "file" } else { "folder" },
@@ -2213,9 +2214,15 @@ async fn read(config: &Config, mine: &[(Provider, Folder)], file: &str, page: us
     let (part, pages) = page_of(&text, page);
     let page = page.clamp(1, pages);
     let next = if page < pages { format!("\n(next: page {})", page + 1) } else { String::new() };
+    // its revision, for a new version written over nothing unseen (drive_write's `seen`)
+    let revision = if item.rev.is_empty() || item.rev.len() > 200 {
+        String::new()
+    } else {
+        format!("\n(revision {}: give it as `seen` to drive_write for a new version)", defused(&item.rev))
+    };
     tool_text(
         &format!(
-            "{UNTRUSTED}\n<<<document {} — page {page}/{pages}\n{}\n>>>{next}",
+            "{UNTRUSTED}\n<<<document {} — page {page}/{pages}\n{}\n>>>{next}{revision}",
             defused(&item.name),
             defused(&part)
         ),
@@ -2510,9 +2517,6 @@ pub async fn set_folders(config: &Config, id: &str, chosen: &[Chosen]) -> ApiRes
             }),
             None => old.map(|o| o.writers.iter().filter(|a| agents.contains(a)).cloned().collect()).unwrap_or_default(),
         };
-        if !writers.is_empty() && !provider.writes() {
-            return Err(coded(422, "not_writable", &format!("writing in {} isn't possible yet", provider.label())));
-        }
         if let Some(old) = old {
             folders.retain(|f| f.id != old.id);
             folders.push(Folder { agents, writers, ..old.clone() });

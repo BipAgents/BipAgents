@@ -57,16 +57,18 @@ pub fn tool() -> Value {
     json!({
         "name": TOOL,
         "description": "Save a file in your person's online documents (Google Drive, OneDrive, Dropbox), only in a \
-    folder they let you write in (drive_folders says « you may write in it »): a NEW file (`folder` and `name`, with \
-    `text` or `file`), or a NEW VERSION of a file there (`replace`, with `text` or `file`; the old version stays in the \
-    service's history). Never deletes, moves or renames anything, never writes over a file. Your person sees it on a card \
-    and says yes first (a new file may go through at once when they chose so).",
+    folder they let you write in (drive_folders says « you may write in it »): a NEW file (`folder` and `name`, with `text` \
+    or `file`), or a NEW VERSION of a file there (`replace`, with `text` or `file`; the old version stays in the service's \
+    history). Never deletes, moves or renames anything, never writes over a file, never a program, a script, a shortcut or \
+    a link. Your person sees it on a card and says yes first (a new document or picture may go through at once when they \
+    chose so).",
         "inputSchema": {"type": "object", "properties": {
             "folder": {"type": "string", "description": format!("the folder to save in: {reference}")},
             "name": {"type": "string", "description": "the new file's name, e.g. « Compte rendu.md »", "maxLength": NAME_MAX},
             "text": {"type": "string", "description": "the content, as text (markdown or plain)"},
             "file": {"type": "string", "description": "or one of your files, as you see it (e.g. /envoi/devis.pdf), or a page's MEDIA: path"},
             "replace": {"type": "string", "description": format!("instead of `folder`: the file to add a new version to: {reference}")},
+            "seen": {"type": "string", "description": "with `replace`: the revision drive_read showed (nothing is saved if the file changed since)"},
         }},
         "annotations": {"readOnlyHint": false, "destructiveHint": false, "openWorldHint": true},
     })
@@ -78,8 +80,184 @@ fn arg(arguments: &Dict, key: &str) -> String {
     arguments.get(key).map(py::py_str).map(|s| s.trim().to_string()).unwrap_or_default()
 }
 
-/// A new file's name, or why not: one part of a path, nothing hidden, nothing a drive or a computer would take for
-/// something else.
+/// The types that run, install, or reach elsewhere when opened or merely shown in a folder (review B1, 23/11): never
+/// written, card or not. Dropbox and OneDrive copy a file onto the person's computers without the « downloaded from
+/// the internet » mark, so Windows and macOS would not warn before running it. Judged on the LAST extension
+/// (« Facture.pdf.bat » is a `.bat`).
+pub const RUNS: &[&str] = &[
+    // Windows: programs, scripts, installers, control panels, shortcuts and what a folder view fetches by itself
+    "exe",
+    "com",
+    "bat",
+    "cmd",
+    "scr",
+    "pif",
+    "cpl",
+    "msc",
+    "msi",
+    "msp",
+    "mst",
+    "dll",
+    "sys",
+    "drv",
+    "ocx",
+    "vbs",
+    "vbe",
+    "js",
+    "jse",
+    "wsf",
+    "wsh",
+    "ws",
+    "wsc",
+    "hta",
+    "ps1",
+    "ps1xml",
+    "ps2",
+    "ps2xml",
+    "psc1",
+    "psc2",
+    "psd1",
+    "psm1",
+    "reg",
+    "inf",
+    "lnk",
+    "url",
+    "scf",
+    "library-ms",
+    "searchconnector-ms",
+    "appref-ms",
+    "application",
+    "gadget",
+    "xbap",
+    "chm",
+    "hlp",
+    "mde",
+    "jar",
+    "jnlp",
+    "appx",
+    "appxbundle",
+    "msix",
+    "msixbundle",
+    "vhd",
+    "vhdx",
+    "iso",
+    "img",
+    "settingcontent-ms",
+    "diagcab",
+    "theme",
+    "themepack",
+    // Office with macros, add-ins
+    "docm",
+    "dotm",
+    "xlsm",
+    "xltm",
+    "xlam",
+    "xll",
+    "pptm",
+    "potm",
+    "ppam",
+    "ppsm",
+    "sldm",
+    // macOS and Linux: apps, installers, scripts, links
+    "app",
+    "command",
+    "tool",
+    "pkg",
+    "mpkg",
+    "dmg",
+    "workflow",
+    "action",
+    "scpt",
+    "scptd",
+    "applescript",
+    "osax",
+    "terminal",
+    "webloc",
+    "inetloc",
+    "fileloc",
+    "desktop",
+    "sh",
+    "bash",
+    "zsh",
+    "csh",
+    "ksh",
+    "fish",
+    "run",
+    "bin",
+    "appimage",
+    "deb",
+    "rpm",
+    "apk",
+    "xapk",
+    "aab",
+    "ipa",
+    // scripts a double-click may run where an interpreter is installed
+    "py",
+    "pyw",
+    "pyz",
+    "pl",
+    "rb",
+    "php",
+    "lua",
+    "vb",
+    "vba",
+];
+
+/// Names a folder view or Windows itself takes for something else.
+const SPECIAL_NAMES: &[&str] = &["desktop.ini", "autorun.inf", "thumbs.db", ".ds_store", "folder.htt"];
+/// Windows' reserved device names (with any extension: « NUL.txt » too).
+const RESERVED: &[&str] = &[
+    "con", "prn", "aux", "nul", "com1", "com2", "com3", "com4", "com5", "com6", "com7", "com8", "com9", "lpt1", "lpt2",
+    "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8", "lpt9",
+];
+
+/// What may be made at once, without a card, under « Seulement le critique » (review B1): documents and pictures.
+/// Anything else (not one of [`RUNS`]) asks the person on a card first, whatever their level. An HTML file only when
+/// it is one of the agent's own pages (locked: no network, nothing to run outside it).
+pub const AT_ONCE: &[&str] = &[
+    "txt", "md", "markdown", "csv", "tsv", "json", "pdf", "docx", "xlsx", "pptx", "odt", "ods", "odp", "rtf", "jpg",
+    "jpeg", "png", "gif", "webp", "heic", "heif", "bmp", "tif", "tiff",
+];
+
+/// Characters that show nothing, or turn the text around: a name with one looks like another (review A-noms).
+fn invisible(c: char) -> bool {
+    c.is_control()
+        || matches!(c,
+            '\u{ad}' | '\u{34f}' | '\u{61c}' | '\u{115f}' | '\u{1160}' | '\u{17b4}' | '\u{17b5}' | '\u{180b}'..='\u{180f}'
+            | '\u{200b}'..='\u{200f}' | '\u{2028}'..='\u{202e}' | '\u{2060}'..='\u{206f}' | '\u{3164}'
+            | '\u{fe00}'..='\u{fe0f}' | '\u{feff}' | '\u{ffa0}' | '\u{fff0}'..='\u{fffb}' | '\u{e0000}'..='\u{e0fff}')
+}
+
+/// Whether `name` (as it will be written) may be made at once, without a card: a document or a picture.
+pub fn at_once_kind(name: &str, from_page: bool) -> bool {
+    match extension(name).map(str::to_ascii_lowercase) {
+        Some(ext) if AT_ONCE.contains(&ext.as_str()) => true,
+        Some(ext) => from_page && (ext == "html" || ext == "htm"),
+        None => false,
+    }
+}
+
+/// Why a file named `name` is never written (a type that runs or reaches elsewhere, a reserved or special name).
+pub fn never_written(name: &str) -> Option<&'static str> {
+    let lower = name.to_lowercase();
+    if SPECIAL_NAMES.contains(&lower.as_str()) {
+        return Some("a name a computer reads by itself when it shows the folder: never written");
+    }
+    let stem = lower.split('.').next().unwrap_or_default().trim_end();
+    if RESERVED.contains(&stem) {
+        return Some("a name Windows keeps for itself (CON, NUL, COM1…): choose another");
+    }
+    match extension(&lower) {
+        Some(ext) if RUNS.contains(&ext) => Some(
+            "a kind of file that runs, installs or opens something else on a computer (a program, a script, a shortcut, \
+a link, a disk image, a document with macros): never written in your person's online documents, card or not",
+        ),
+        _ => None,
+    }
+}
+
+/// A new file's name, or why not: one part of a path, nothing hidden or invisible, nothing a drive or a computer would
+/// take for something else, never a type that runs ([`never_written`]).
 pub fn clean_name(raw: &str) -> Result<String, &'static str> {
     let name = raw.trim();
     if name.is_empty() {
@@ -94,9 +272,8 @@ pub fn clean_name(raw: &str) -> Result<String, &'static str> {
     if name.contains(['/', '\\']) {
         return Err("a name, not a path: no « / » nor « \\ » (save it in the folder itself)");
     }
-    let direction = |c: char| matches!(c, '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}');
-    if name.chars().any(|c| c.is_control() || direction(c)) {
-        return Err("no control characters in a name");
+    if name.chars().any(invisible) {
+        return Err("no control, invisible or direction characters in a name (it would look like another one)");
     }
     if name.contains([':', '*', '?', '"', '<', '>', '|']) {
         return Err("none of : * ? \" < > | in a name");
@@ -106,6 +283,9 @@ pub fn clean_name(raw: &str) -> Result<String, &'static str> {
     }
     if name.ends_with('.') || name.ends_with(' ') {
         return Err("a name can't end with « . »");
+    }
+    if let Some(why) = never_written(name) {
+        return Err(why);
     }
     Ok(name.to_string())
 }
@@ -127,7 +307,7 @@ pub fn name_with_extension(asked: &str, own: Option<&str>) -> String {
 }
 
 /// What is written.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Content {
     pub bytes: Vec<u8>,
     pub mime: String,
@@ -135,6 +315,8 @@ pub struct Content {
     pub text: Option<String>,
     /// The agent's file's own name (`file`).
     pub own_name: Option<String>,
+    /// One of the agent's own pages (locked: an HTML file may then be made at once, [`at_once_kind`]).
+    pub from_page: bool,
 }
 
 fn mime_of(name: &str, text: bool) -> String {
@@ -187,17 +369,23 @@ pub fn content_of(config: &Config, agent: &AgentConfig, text: &str, file: &str) 
             mime: String::new(),
             text: Some(text.to_string()),
             own_name: None,
+            from_page: false,
         });
     }
     let path = file.trim().trim_start_matches("MEDIA:").trim();
     let path = path.strip_prefix("file://").unwrap_or(path);
-    let (seen, mut handle) = match open_page(config, &agent.name, path) {
+    let page = open_page(config, &agent.name, path);
+    let from_page = page.is_some();
+    let (seen, mut handle) = match page {
         Some(found) => found?,
         None => crate::sent_files::open_working(config, agent, path).map_err(str::to_string)?,
     };
     let meta = handle.metadata().map_err(|e| e.to_string())?;
     if !meta.is_file() {
         return Err("not a file".into());
+    }
+    if meta.len() == 0 {
+        return Err("the file is empty: nothing to save".into());
     }
     if meta.len() > WRITE_MAX_BYTES {
         return Err(too_large());
@@ -208,7 +396,7 @@ pub fn content_of(config: &Config, agent: &AgentConfig, text: &str, file: &str) 
         return Err(too_large());
     }
     let own = seen.rsplit('/').next().unwrap_or(&seen).to_string();
-    Ok(Content { bytes, mime: String::new(), text: None, own_name: Some(own) })
+    Ok(Content { bytes, mime: String::new(), text: None, own_name: Some(own), from_page })
 }
 
 fn too_large() -> String {
@@ -266,11 +454,11 @@ pub fn card_detail(lang: &str, replace: bool, label: &str, content: &Content) ->
         out.push(
             pick5(
                 lang,
-                "L'ancienne version reste dans l'historique de {s}.",
-                "The old version stays in {s}'s history.",
-                "Die alte Version bleibt im Verlauf von {s}.",
-                "La versión anterior queda en el historial de {s}.",
-                "De oude versie blijft in de geschiedenis van {s}.",
+                "L'ancienne version reste dans l'historique de {s} (au moins 30 jours).",
+                "The old version stays in {s}'s history (at least 30 days).",
+                "Die alte Version bleibt im Verlauf von {s} (mindestens 30 Tage).",
+                "La versión anterior queda en el historial de {s} (al menos 30 días).",
+                "De oude versie blijft in de geschiedenis van {s} (minstens 30 dagen).",
             )
             .replace("{s}", label),
         );
@@ -278,8 +466,22 @@ pub fn card_detail(lang: &str, replace: bool, label: &str, content: &Content) ->
     match &content.text {
         Some(text) => {
             let shown: String = text.chars().take(SHOWN_CHARS).collect();
-            let cut = if text.chars().count() > SHOWN_CHARS { "…" } else { "" };
-            out.push(format!("{}{cut}", shown.trim_end()));
+            out.push(shown.trim_end().to_string());
+            // the rest is not on the card: how much there is (review A-carte)
+            if text.chars().count() > SHOWN_CHARS {
+                let all = size_text(lang, content.bytes.len() as u64);
+                out.push(
+                    pick5(
+                        lang,
+                        "… ({n} en tout)",
+                        "… ({n} in all)",
+                        "… ({n} insgesamt)",
+                        "… ({n} en total)",
+                        "… ({n} in totaal)",
+                    )
+                    .replace("{n}", &all),
+                );
+            }
         }
         None => {
             let size = size_text(lang, content.bytes.len() as u64);
@@ -342,36 +544,71 @@ fn refused(text: &str) -> Dict {
     tool_text(text, true)
 }
 
-/// `item` (or a folder above it, up to the folders given for writing) open to other people, or in a Google shared
-/// drive: never written into.
-async fn open_to_others(api: &Api, item: &Item, writable: &[Folder]) -> bool {
+/// Whether `item` (or a folder above it) is open to other people, or in a Google shared drive: never written into.
+/// - Dropbox: `sharing_info` (a shared folder and its content) or a shared link on it or on a folder above it
+///   (`sharing/list_shared_links`, needs `sharing.read`: asked with the write right; review C2).
+/// - OneDrive: the `shared` facet on it or on ANY folder above it, up to the drive's root (review C1: the facet is on
+///   the folder shared, not on what it holds); a parent that can't be read counts as shared.
+/// - Google: `shared` / `driveId` on it and its folders up to the folder given (`drive.file` lets nothing above it be
+///   read: what Google says of the folder picked and its content).
+async fn open_to_others(api: &Api, item: &Item, writable: &[Folder]) -> Result<bool, Fault> {
     if item.shared || item.shared_drive {
-        return true;
+        return Ok(true);
     }
-    // Dropbox says it of each item (`sharing_info`, a shared folder's content too); the others by their parents
-    if api.provider() == Provider::Dropbox {
-        return false;
-    }
-    let chosen: Vec<&str> = writable.iter().map(|f| f.id.as_str()).collect();
-    if chosen.contains(&item.id.as_str()) {
-        return false;
-    }
-    let mut queue = item.parents.clone();
-    let mut seen: Vec<String> = Vec::new();
-    while let Some(id) = queue.pop() {
-        if seen.contains(&id) || seen.len() >= drives::HOPS_MAX {
-            continue;
+    match api.provider() {
+        Provider::Dropbox => dropbox_linked(api, item).await,
+        Provider::Microsoft => {
+            let mut parent = item.parents.first().cloned();
+            for _ in 0..drives::HOPS_MAX {
+                let Some(id) = parent else { return Ok(false) };
+                let Ok(up) = api.item_with(&id, drives::WRITE_FIELDS).await else { return Ok(true) };
+                if up.shared || up.remote {
+                    return Ok(true);
+                }
+                parent = up.parents.first().cloned();
+            }
+            Ok(true) // deeper than the parents looked up: not known, so not written
         }
-        seen.push(id.clone());
-        let Ok(parent) = api.item_with(&id, drives::WRITE_FIELDS).await else { continue };
-        if parent.shared || parent.shared_drive {
-            return true;
-        }
-        if !chosen.contains(&parent.id.as_str()) {
-            queue.extend(parent.parents);
+        Provider::Google => {
+            let chosen: Vec<&str> = writable.iter().map(|f| f.id.as_str()).collect();
+            if chosen.contains(&item.id.as_str()) {
+                return Ok(false);
+            }
+            let mut queue = item.parents.clone();
+            let mut seen: Vec<String> = Vec::new();
+            while let Some(id) = queue.pop() {
+                if seen.contains(&id) || seen.len() >= drives::HOPS_MAX {
+                    continue;
+                }
+                seen.push(id.clone());
+                let Ok(parent) = api.item_with(&id, drives::WRITE_FIELDS).await else { continue };
+                if parent.shared || parent.shared_drive {
+                    return Ok(true);
+                }
+                if !chosen.contains(&parent.id.as_str()) {
+                    queue.extend(parent.parents);
+                }
+            }
+            Ok(false)
         }
     }
-    false
+}
+
+/// A Dropbox shared link on `item` or a folder above it (anyone with the link reads what is saved there).
+async fn dropbox_linked(api: &Api, item: &Item) -> Result<bool, Fault> {
+    if item.id == ROOT_ID || item.path.is_empty() {
+        return Ok(false); // the root itself can't be shared by a link
+    }
+    let v = api
+        .post(&format!("{}/sharing/list_shared_links", api.ep.api), json!({"path": item.path, "direct_only": false}))
+        .await?;
+    let links = v["links"].as_array().cloned().unwrap_or_default();
+    let above = |link: &Value| match link["path_lower"].as_str() {
+        // a link Dropbox gives for this path without saying where: counted
+        None | Some("") => true,
+        Some(at) => item.path == at || item.path.starts_with(&format!("{}/", at.trim_end_matches('/'))),
+    };
+    Ok(v["has_more"].as_bool() == Some(true) || links.iter().any(above))
 }
 
 /// The file named `name` in `folder`, when there is one (what the app may see of it).
@@ -412,15 +649,63 @@ async fn child_named(api: &Api, folder: &Item, name: &str) -> Result<Option<Item
     }
 }
 
-/// The name of the folder a file is in, for the card.
-async fn parent_name(api: &Api, item: &Item) -> Option<String> {
+/// The folders from the one given down to where the file goes (review A-carte: « Dropbox › Travail › 2019 », not
+/// a lone « 2019 »): the one given first; the whole drive's root not named; long paths shortened in the middle.
+async fn chain_of(api: &Api, target: &Item, replace: bool, writable: &[Folder]) -> Vec<String> {
+    let mut chain: Vec<String> = Vec::new();
     if api.provider() == Provider::Dropbox {
-        let shown = if item.display.is_empty() { &item.path } else { &item.display };
-        let (folder, _) = shown.rsplit_once('/')?;
-        return folder.rsplit('/').next().filter(|n| !n.is_empty()).map(str::to_string);
+        let shown = if target.display.is_empty() { target.path.clone() } else { target.display.clone() };
+        let folder =
+            if replace { shown.rsplit_once('/').map(|(f, _)| f.to_string()).unwrap_or_default() } else { shown };
+        let parts: Vec<&str> = folder.split('/').filter(|p| !p.is_empty()).collect();
+        let given = writable.iter().filter(|f| !f.file).find(|f| {
+            f.is_root() || {
+                let root = f.path.trim_end_matches('/');
+                let lower = folder.to_lowercase();
+                lower == root || lower.starts_with(&format!("{root}/"))
+            }
+        });
+        let depth = given.filter(|f| !f.is_root()).map(|f| f.path.split('/').filter(|p| !p.is_empty()).count());
+        match (given, depth) {
+            (Some(f), Some(d)) if d >= 1 => {
+                chain.push(f.name.clone());
+                chain.extend(parts.iter().skip(d).map(|p| p.to_string()));
+            }
+            _ => chain.extend(parts.iter().map(|p| p.to_string())),
+        }
+    } else {
+        let given: Vec<&str> = writable.iter().map(|f| f.id.as_str()).collect();
+        let mut at = if replace {
+            match target.parents.first() {
+                Some(id) => api.item(id).await.ok(),
+                None => None,
+            }
+        } else {
+            Some(target.clone())
+        };
+        for _ in 0..drives::HOPS_MAX {
+            let Some(item) = at.take() else { break };
+            let root = writable.iter().any(|f| f.is_root() && f.id == item.id);
+            if !root && !item.name.is_empty() {
+                chain.push(item.name.clone());
+            }
+            if given.contains(&item.id.as_str()) {
+                break;
+            }
+            at = match item.parents.first() {
+                Some(id) => api.item(id).await.ok(),
+                None => None,
+            };
+        }
+        chain.reverse();
     }
-    let parent = api.item(item.parents.first()?).await.ok()?;
-    Some(parent.name).filter(|n| !n.is_empty() && parent.id != ROOT_ID)
+    if chain.len() > 4 {
+        let last = chain.split_off(chain.len() - 2);
+        chain.truncate(1);
+        chain.push("…".into());
+        chain.extend(last);
+    }
+    chain
 }
 
 /// Where `agent` would write `asked` (a folder, or a file to version), checked at the service as for reading, then
@@ -473,6 +758,9 @@ app (Documents en ligne › {label})."
             "{asked} is a file: to add a new version of it, give it as `replace`; to save a new file, give its folder."
         )));
     }
+    if let Some(why) = replace.then(|| never_written(&target.name)).flatten() {
+        return Err(refused(&format!("{asked}: {why}.")));
+    }
     if replace && target.mime.starts_with("application/vnd.google-apps.") {
         return Err(refused(
             "A Google Docs, Sheets or Slides document can't get a new version from here: save a new file instead.",
@@ -486,10 +774,13 @@ app (Documents en ligne › {label})."
         }
         return Err(refused(&format!("{asked} is not in a folder your person let you read.")));
     }
-    if open_to_others(&api, &target, &writable).await {
+    let open = open_to_others(&api, &target, &writable)
+        .await
+        .map_err(|fault| drives::told(provider, &format!("{asked} can't be checked"), &fault))?;
+    if open {
         return Err(refused(&format!(
-            "{asked} is shared with other people (or in a shared drive): a file saved there would show to them. Not \
-from here: save it in a folder only your person sees."
+            "{asked} is shared with other people (a shared folder, a shared link or a shared drive, there or above \
+it): a file saved there would show to them. Not from here: save it in a folder only your person sees."
         )));
     }
     let name = if replace { target.name.clone() } else { name.to_string() };
@@ -507,17 +798,8 @@ your person wants it changed, or choose another name.",
             Err(fault) => return Err(drives::told(provider, &format!("{asked} can't be checked"), &fault)),
         }
     }
-    let folder_name = if replace {
-        parent_name(&api, &target).await
-    } else if target.id == ROOT_ID || writable.iter().any(|f| f.is_root() && f.id == target.id) {
-        None
-    } else {
-        Some(target.name.clone()).filter(|n| !n.is_empty())
-    };
-    let place = match folder_name {
-        Some(folder) => format!("{label} › {folder}"),
-        None => label.to_string(),
-    };
+    let chain = chain_of(&api, &target, replace, &writable).await;
+    let place = std::iter::once(label.to_string()).chain(chain).collect::<Vec<_>>().join(" › ");
     Ok(Plan { api, provider, target, replace, name, place })
 }
 
@@ -590,6 +872,46 @@ async fn google_upload(
         .await
 }
 
+/// OneDrive's new file (review C5): an upload session whose item says `conflictBehavior: fail` (documented; the
+/// small `PUT …/content` replaces by default), then the bytes sent in one piece to the address it gives, WITHOUT the
+/// bearer (Microsoft's rule for that address). Only a 201 is a new file: a 200 is said as a failure (never a file
+/// counted as new, never one « Annuler » could put in the bin), a 409 as a file of that name there meanwhile.
+async fn onedrive_new(api: &Api, plan: &Plan, content: &Content) -> Result<Value, Fault> {
+    let url = format!(
+        "{}/me/drive/items/{}:/{}:/createUploadSession",
+        api.ep.api,
+        drives::path_segment(&plan.target.id),
+        drives::path_segment(&plan.name)
+    );
+    let session =
+        api.post(&url, json!({"item": {"@microsoft.graph.conflictBehavior": "fail", "name": plan.name}})).await?;
+    let upload = session["uploadUrl"]
+        .as_str()
+        .filter(|u| u.starts_with("https://") || cfg!(test) || u.starts_with("http://127.0.0.1"));
+    let Some(upload) = upload else { return Err(Fault::Unavailable) };
+    let n = content.bytes.len();
+    let resp = drives::http()
+        .put(upload)
+        .header("content-length", n.to_string())
+        .header("content-range", format!("bytes 0-{}/{n}", n.saturating_sub(1)))
+        .body(content.bytes.clone())
+        .send()
+        .await
+        .map_err(|_| Fault::Unreachable)?;
+    let status = resp.status().as_u16();
+    let body: Value = resp.json().await.unwrap_or(Value::Null);
+    match status {
+        201 => Ok(body),
+        200 => Err(Fault::Other(
+            "OneDrive answered as for a file that was there already (200, not 201): not counted as a new file, \
+nothing to undo; look at it in OneDrive before saving again"
+                .into(),
+        )),
+        409 => Err(Fault::Changed),
+        other => Err(drives::fault_of(other, None, &body)),
+    }
+}
+
 /// The write itself: the new file, or the new version. Its item as the service gives it back.
 pub async fn write(plan: &Plan, content: &Content) -> Result<Item, Fault> {
     let api = &plan.api;
@@ -648,23 +970,7 @@ pub async fn write(plan: &Plan, content: &Content) -> Result<Item, Fault> {
             let url = format!("{}/files/{}", api.ep.content, drives::path_segment(&plan.target.id));
             google_upload(api, reqwest::Method::PATCH, url, json!({}), content, &mime).await?
         }
-        (Provider::Microsoft, false) => {
-            let url = format!(
-                "{}/me/drive/items/{}:/{}:/content",
-                api.ep.api,
-                drives::path_segment(&plan.target.id),
-                drives::path_segment(&plan.name)
-            );
-            let (bytes, mime) = (content.bytes.clone(), mime.clone());
-            api.json(Box::new(move |http: &reqwest::Client, token: &str| {
-                http.put(&url)
-                    .bearer_auth(token)
-                    .query(&[("@microsoft.graph.conflictBehavior", "fail")])
-                    .header("content-type", mime.clone())
-                    .body(bytes.clone())
-            }) as Build<'_>)
-                .await?
-        }
+        (Provider::Microsoft, false) => onedrive_new(api, plan, content).await?,
         (Provider::Microsoft, true) => {
             let url = format!("{}/me/drive/items/{}/content", api.ep.api, drives::path_segment(&plan.target.id));
             let (bytes, mime, tag) = (content.bytes.clone(), mime.clone(), plan.target.etag.clone());
@@ -688,7 +994,7 @@ pub async fn write(plan: &Plan, content: &Content) -> Result<Item, Fault> {
     Ok(made)
 }
 
-/// « Annuler » on a new file made at once (approval_level.rs `Undo::DriveFile`): put in the service's bin (Google's
+/// « Annuler » on a new file made at once ([`undo_line`]): put in the service's bin (Google's
 /// bin, Dropbox's deleted files, OneDrive's recycle bin: all recoverable there), only while it is the file that was
 /// made (`rev`: its revision then). Gone already: nothing to do.
 pub async fn undo_file(config: &Config, service: &str, id: &str, rev: &str) -> Result<(), String> {
@@ -731,6 +1037,97 @@ pub async fn undo_file(config: &Config, service: &str, id: &str, rev: &str) -> R
         Err(Fault::Changed) => Err(format!("changed in {} since it was saved: left as it is", provider.label())),
         Err(fault) => Err(fault.words(provider)),
     }
+}
+
+// -- « Annuler »: what undoes a new file made at once (review C3) ---------------------------------------------------
+
+/// Kept apart from approval-level.json (whose `Undo` a bridge put back to the version before doesn't know: it would
+/// read the person's levels and « Toujours » as the defaults): data_dir/drive-undo.json (0600), by « Validé pour toi »
+/// line, as long as the line (30 days).
+const UNDO_FILE: &str = "drive-undo.json";
+const UNDO_KEEP_SECONDS: f64 = 30.0 * 86400.0;
+static UNDO_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// A new file made at once: where it is, its revision then, and the account it was saved in.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct Made {
+    pub service: String,
+    pub id: String,
+    pub rev: String,
+    #[serde(default)]
+    pub account: Option<String>,
+    pub at: f64,
+}
+
+fn undo_path(config: &Config) -> std::path::PathBuf {
+    std::path::PathBuf::from(config.data_dir()).join(UNDO_FILE)
+}
+
+fn load_made(config: &Config) -> std::collections::BTreeMap<String, Made> {
+    std::fs::read_to_string(undo_path(config)).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default()
+}
+
+fn change_made<T>(config: &Config, f: impl FnOnce(&mut std::collections::BTreeMap<String, Made>) -> T) -> T {
+    let _guard = UNDO_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let mut all = load_made(config);
+    let out = f(&mut all);
+    let now = py::time_time();
+    all.retain(|_, m| now - m.at < UNDO_KEEP_SECONDS);
+    let file = undo_path(config);
+    let saved = (|| -> std::io::Result<()> {
+        if let Some(parent) = file.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let temporary = file.with_extension("tmp");
+        let text = serde_json::to_string(&all).map_err(std::io::Error::other)?;
+        py::write_with_mode(&temporary.to_string_lossy(), text.as_bytes(), 0o600)?;
+        std::fs::rename(&temporary, &file)
+    })();
+    if let Err(e) = saved {
+        tracing::warn!(error = %e, "drives: a new file's « Annuler » not kept");
+    }
+    out
+}
+
+/// The « Validé pour toi » line of a new file made at once, and what undoes it (in its own file). The line.
+pub fn record_made(config: &Config, line: crate::approval_level::Line, made: Made) -> crate::approval_level::Line {
+    let line = crate::approval_level::record(config, crate::approval_level::Line { undo: None, ..line });
+    let id = line.id.clone();
+    change_made(config, move |all| {
+        all.insert(id, made);
+    });
+    line
+}
+
+/// The lines whose new file can still be undone.
+pub fn undoable(config: &Config) -> std::collections::BTreeSet<String> {
+    load_made(config).into_keys().collect()
+}
+
+/// « Annuler » of line `id`: its new file in the service's bin (while unchanged, in the same account). None: not a
+/// line of a new file.
+pub async fn undo_line(config: &Config, id: &str) -> Option<Result<(), String>> {
+    let made = load_made(config).get(id).cloned()?;
+    let provider = Provider::of(&made.service)?;
+    // signed in with another account since: the file is in the one it was saved in (review remark A-annuler)
+    let now_account = drives::read_stored(config).ok().and_then(|s| s.drives.get(provider.id()).cloned());
+    let Some(link) = now_account else {
+        return Some(Err(format!("{} is not connected any more: the file stays where it was saved", provider.label())));
+    };
+    if made.account.is_some() && link.account.is_some() && made.account != link.account {
+        return Some(Err(format!(
+            "{} is connected to another account now: the file stays in the account it was saved in",
+            provider.label()
+        )));
+    }
+    let done = undo_file(config, &made.service, &made.id, &made.rev).await;
+    if done.is_ok() {
+        let id = id.to_string();
+        change_made(config, move |all| {
+            all.remove(&id);
+        });
+    }
+    Some(done)
 }
 
 // -- the call -------------------------------------------------------------------------------------------------------------
@@ -781,8 +1178,11 @@ pub async fn call(state: &AppState, agent: &AgentConfig, arguments: &Dict) -> Di
     } else {
         let asked_name = arg(arguments, "name");
         let asked_name = if asked_name.is_empty() { content.own_name.clone().unwrap_or_default() } else { asked_name };
-        match clean_name(&asked_name) {
-            Ok(clean) => name_with_extension(&clean, content.own_name.as_deref()),
+        // the name as it will be written (its extension added) is the one checked: « Facture » with a `.bat` file too
+        match clean_name(&asked_name)
+            .and_then(|clean| clean_name(&name_with_extension(&clean, content.own_name.as_deref())))
+        {
+            Ok(written) => written,
             Err(why) => return refused(&format!("Nothing saved: {why}.")),
         }
     };
@@ -793,19 +1193,48 @@ pub async fn call(state: &AppState, agent: &AgentConfig, arguments: &Dict) -> Di
     let lang = crate::mail_tidy::language(&config, &agent.name);
     let label = first.provider.label();
     let shown_name = drives::defused(&first.name);
+    // the revision the agent read (drive_read says it): changed since, never written over unseen (review A-révision)
+    let seen = arg(arguments, "seen");
+    if replacing && !seen.is_empty() && seen != first.target.rev {
+        return refused(&format!(
+            "{asked} changed in {label} since you read it: nothing was saved. Read it again (drive_read), then write."
+        ));
+    }
     let kind = if replacing { KIND_REPLACE } else { KIND_CREATE };
-    // a new file under « Seulement le critique »: no card, a « Validé pour toi » line with « Annuler »
-    let at_once = !replacing && crate::approval_level::auto_for(&config, &agent.name, KIND_CREATE);
+    // without a card only a document or a picture, and only a new file (review B1); anything else asks, whatever the
+    // level; a new version always asks
+    let at_once = !replacing
+        && at_once_kind(&first.name, content.from_page)
+        && crate::approval_level::auto_for(&config, &agent.name, KIND_CREATE);
     if !at_once {
+        // a new version's card holds the revision it shows (review C4): a « Oui » given to a card held overnight
+        // never lets a later call write over a change made since
+        let base = format!(
+            "{TOOL} {} {} {}",
+            drives::reference(first.provider, &first.target.id),
+            first.name,
+            digest(&first.name, &content.bytes)
+        );
+        let command =
+            if replacing { format!("{base} rev:{}/{}", first.target.rev, first.target.etag) } else { base.clone() };
+        if replacing {
+            let (c, a, prefix, now) = (config.clone(), agent.name.clone(), format!("{base} rev:"), command.clone());
+            let stale =
+                tokio::task::spawn_blocking(move || crate::held_approvals::take_stale_grant(&c, &a, &prefix, &now))
+                    .await
+                    .unwrap_or(false);
+            if stale {
+                tracing::info!(agent = %agent.name, "drives: the file changed after the card held: nothing written");
+                return refused(&format!(
+                    "« {shown_name} » changed in {label} since your person said yes on the card: nothing was saved. \
+Read it again and ask again if it still needs a new version."
+                ));
+            }
+        }
         let card = crate::person_ok::Card {
             kind,
             tool: TOOL,
-            command: format!(
-                "{TOOL} {} {} {}",
-                drives::reference(first.provider, &first.target.id),
-                first.name,
-                digest(&first.name, &content.bytes)
-            ),
+            command,
             summary: card_sentence(&lang, replacing, &shown_name, &first.place),
             detail: card_detail(&lang, replacing, label, &content),
             always: None,
@@ -854,41 +1283,59 @@ window: they pick « {shown_name} » in the app (Documents en ligne › Google D
 again. Nothing was saved."
                 ));
             }
+            if fault == Fault::Changed {
+                // Dropbox's `path/conflict`, OneDrive's 409/412: said as what happened (review A-conflit)
+                return refused(&if replacing {
+                    format!("« {shown_name} » changed in {label} meanwhile: nothing was saved. Read it again first.")
+                } else {
+                    format!(
+                        "A file named « {shown_name} » appeared there meanwhile: nothing was written over it. Choose \
+another name, or add a new version of that file (`replace`) if your person wants it changed."
+                    )
+                });
+            }
             return drives::told(planned.provider, &format!("« {shown_name} » not saved"), &fault);
         }
     };
     let reference = drives::reference(planned.provider, &made.id);
     tracing::info!(agent = %agent.name, service = planned.provider.id(), bytes = content.bytes.len(), replace = replacing,
                    "drives: a file written for the agent");
+    // names from the service (the folders, the file versioned) go between the markers that say they are data
+    let place_line = format!("« {shown_name} » in {}", drives::defused(&planned.place));
     if replacing {
         return tool_text(
             &format!(
-                "New version of « {shown_name} » saved in {} (the old one stays in {label}'s history): {reference}.",
-                planned.place
+                "A new version is saved (the old one stays in {label}'s history for at least 30 days): {reference}.\n{}",
+                drives::marked("Where:", &[place_line])
             ),
             false,
         );
     }
-    let mut said = format!("Saved: « {shown_name} » in {}, a new file: {reference}.", planned.place);
+    let mut said = format!("Saved, a new file: {reference}.\n{}", drives::marked("Where:", &[place_line]));
     if at_once {
-        crate::approval_level::record(
+        let account = drives::read_stored(&config)
+            .ok()
+            .and_then(|s| s.drives.get(planned.provider.id()).and_then(|l| l.account.clone()));
+        record_made(
             &config,
             crate::approval_level::Line {
                 agent: agent.name.clone(),
                 kind: KIND_CREATE.into(),
                 summary: line_sentence(&lang, &shown_name, &planned.place),
                 session_id: call_session(),
-                undo: Some(crate::approval_level::Undo::DriveFile {
-                    service: planned.provider.id().into(),
-                    id: made.id.clone(),
-                    rev: made.rev.clone(),
-                }),
                 ..Default::default()
+            },
+            Made {
+                service: planned.provider.id().into(),
+                id: made.id.clone(),
+                rev: made.rev.clone(),
+                account,
+                at: py::time_time(),
             },
         );
         said.push_str(
-            " Done at once (your person lets new files through without asking): tell them in a few words; the app \
-shows it with « Annuler ».",
+            "\nDone at once (your person lets new documents through without asking): tell them in a few words; the \
+app shows it with « Annuler ».",
         );
     }
     tool_text(&said, false)
