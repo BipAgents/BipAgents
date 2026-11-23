@@ -394,4 +394,83 @@ mod tests {
         assert!(!Value::Object(super::super::read_state(&config)).to_string().contains("Prednisolone"));
         assert_eq!(detect(&config).unwrap(), 0);
     }
+
+    #[test]
+    fn a_page_of_sante_is_never_the_cards_destination() {
+        // review of fix-misplaced-health, B1: a correction towards Santé (the person moved a point of Famille to a page
+        // of Santé) never makes a proposal, nor shows that page's title, on the card outside the lock
+        let (_dir, config) = setup();
+        let root = super::super::part_root(&config, Part::Main);
+        std::fs::create_dir_all(root.join("Domaines")).unwrap();
+        std::fs::write(
+            root.join("Domaines/Famille.md"),
+            "---\ntype: area\n---\n# Famille\n\n## Ce qui compte\n- Psy de Zoé : mardi 17 h — *Quotidien, 2026-11-03*\n\
+             - Psy de Zoé : jeudi 18 h, nouveau créneau — *Quotidien, 2026-11-05*\n",
+        )
+        .unwrap();
+        let to = moves::Target { part: Some(Part::Health), path: String::new(), title: "Psy de Zoé".into(), kind: "subject".into() };
+        let moved = moves::move_points(&config, Part::Main, "Domaines/Famille.md", None, &["Psy de Zoé : mardi 17 h".into()],
+            None, &to, "", &Who::you(&config), true)
+        .unwrap();
+        assert_eq!(moved.moved, 1);
+        let state = super::super::read_state(&config);
+        let corrections = state.get("corrections").and_then(Value::as_array).cloned().unwrap_or_default();
+        assert!(corrections.iter().any(|c| c["to_part"] == "health"), "{corrections:?}");
+        // the other one, like it, stays on Famille: not proposed towards Santé
+        assert_eq!(detect(&config).unwrap(), 0);
+        assert_eq!(card(&config, "fr"), None);
+        // an older bridge's card with such a destination: neither shown nor moved
+        let page = Page::parse("---\ntype: area\n---\n# Famille\n", "Famille");
+        let held = item(Part::Main, "Domaines/Famille.md", &page, "Psy de Zoé : jeudi 18 h, nouveau créneau", "Quotidien",
+                        to_page(Part::Health, "", "Psy de Zoé", "subject", ""), "moved");
+        let id = held["id"].as_str().unwrap().to_string();
+        super::super::update_state(&config, |s| {
+            s.insert("misplaced".into(), json!({"items": [held]}));
+        })
+        .unwrap();
+        assert_eq!(card(&config, "fr"), None);
+        for ids in [vec![id.clone()], vec![]] {
+            let (moved, _, card) = answer(&config, "move", &ids, "fr").unwrap();
+            assert_eq!((moved, card), (0, None));
+        }
+        assert!(std::fs::read_to_string(root.join("Domaines/Famille.md")).unwrap().contains("jeudi 18 h"));
+        let kept = super::super::read_state(&config).get("misplaced").cloned().unwrap_or(Value::Null);
+        assert!(!kept.to_string().contains("Psy de Zoé"), "{kept}");
+    }
+
+    #[test]
+    fn an_older_card_mixed_shows_and_moves_only_the_shared_points() {
+        // review of fix-misplaced-health, R2: one point of Santé and two of Famille kept by an older bridge
+        let (_dir, config) = setup();
+        let root = super::super::part_root(&config, Part::Main);
+        std::fs::create_dir_all(root.join("Domaines")).unwrap();
+        let famille = "---\ntype: area\n---\n# Famille\n\n## Ce qui compte\n- Judo de Zoé : mercredi 14 h — *Quotidien, 2026-11-03*\n\
+             - BipAgents : panorama concurrentiel livré le 25/10 — *Kerfy Studio, 2026-10-25*\n\
+             - BipAgents : aucun concurrent ne cumule agents, famille et serveur UE — *Kerfy Studio, 2026-10-25*\n";
+        std::fs::write(root.join("Domaines/Famille.md"), famille).unwrap();
+        let health = super::super::part_root(&config, Part::Health);
+        std::fs::create_dir_all(health.join("Domaines")).unwrap();
+        let sante = "---\ntype: area\n---\n# Santé\n\n## Ce qui compte\n- Prednisolone le matin — *Coach, 2026-11-01*\n";
+        std::fs::write(health.join("Domaines/Santé.md"), sante).unwrap();
+        let fam = Page::parse(famille, "Famille");
+        let to_bip = to_page(Part::Main, "", "BipAgents", "subject", "");
+        let items = vec![
+            item(Part::Health, "Domaines/Santé.md", &Page::parse(sante, "Santé"), "Prednisolone le matin", "Coach",
+                 to_page(Part::Main, "", "À ranger", "inbox", ""), "health"),
+            item(Part::Main, "Domaines/Famille.md", &fam, "BipAgents : panorama concurrentiel livré le 25/10", "Kerfy Studio", to_bip.clone(), "work"),
+            item(Part::Main, "Domaines/Famille.md", &fam, "BipAgents : aucun concurrent ne cumule agents, famille et serveur UE", "Kerfy Studio", to_bip, "work"),
+        ];
+        super::super::update_state(&config, |s| {
+            s.insert("misplaced".into(), json!({"items": items}));
+        })
+        .unwrap();
+        let shown = card(&config, "fr").unwrap();
+        assert_eq!(shown["title"], "2 points semblent mal rangés");
+        assert!(!shown.to_string().contains("Santé") && !shown.to_string().contains("Prednisolone"), "{shown}");
+        let (moved, toast, card) = answer(&config, "move", &[], "fr").unwrap();
+        assert_eq!((moved, toast.as_str(), card), (2, "Déplacé.", None));
+        assert_eq!(std::fs::read_to_string(health.join("Domaines/Santé.md")).unwrap(), sante);
+        let after = std::fs::read_to_string(root.join("Domaines/Famille.md")).unwrap();
+        assert!(after.contains("Judo") && !after.contains("BipAgents"), "{after}");
+    }
 }
