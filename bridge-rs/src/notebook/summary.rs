@@ -23,8 +23,11 @@
 //! - **« Oublie ça »** (forget.rs `apply`) takes with it the kept searches and the searches made whose words (or a kept
 //!   one's title) are what it forgets, in every space: the rule of an agent's memory line (`Target::hit`, folded, whole
 //!   words; a person's first name too when their page is forgotten whole).
-//! - **Spaces** (`all`, `perso`, `pro`): until S5 no note is Pro: `perso` is the whole Carnet and `pro` nothing; the
-//!   selector (`spaces`) stays empty until S5 (Perso · Pro) and S6 (Famille).
+//! - **Spaces** (`all`, `perso`, `pro`; S5, spaces.rs): a note's space is its page's (`space: pro`) or the person's
+//!   mark; `perso` is what is not Pro. The selector (`spaces`): the setting « Séparer Perso, Pro et Famille » on,
+//!   Perso then Pro (S6 adds Famille); off, none. A view of the kept searches: `all` every space's, `perso` Perso's
+//!   and those kept with the setting off (`all`), `pro` Pro's; 6 a view. The searches made: each space its own.
+//!   Santé is in no space: its line is in `all` and `perso`, its page ignores the space asked.
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -317,7 +320,7 @@ pub fn summary_at(config: &Config, space: &str, langs: &[String], today: NaiveDa
         }
         lines.push(line);
     }
-    json!({"v": V, "lang": shown, "title": t.carnet, "space": space, "spaces": [],
+    json!({"v": V, "lang": shown, "title": t.carnet, "space": space, "spaces": super::spaces::choices(config, &f, space, &shown),
            "kept": kept_with_counts(config, &f, space, today),
            "card": if space == "pro" { Value::Null } else { card(config, &shown, now) },
            "total": {"count": total, "title": t.all_notes}, "categories": lines,
@@ -421,8 +424,9 @@ pub fn category_at(
         if !private {
             return Err(Refused::HealthLocked);
         }
+        // (Santé is in no space: the whole of it, whatever the space asked; S5)
         let f = super::index::health_finder(config, langs);
-        let ats: Vec<usize> = (0..f.items.len()).filter(|at| in_space(&f, *at, space)).collect();
+        let ats: Vec<usize> = (0..f.items.len()).collect();
         let recent: Vec<Value> = latest(&f, &ats, id, today).into_iter().take(RECENT).map(|at| super::index::item_view(&f, at, today)).collect();
         return Ok(json!({"v": V, "id": id, "title": title, "count": ats.len(), "space": space, "filters": [],
                          "filter": null, "searched": [], "recent": recent, "bar": bar}));
@@ -465,16 +469,18 @@ fn kept_category(k: &Dict) -> Option<String> {
     k.get("category").and_then(Value::as_str).filter(|c| !c.is_empty()).map(str::to_string)
 }
 
-/// The kept searches of `space` (`Kept`), each with what it finds now (`count`: `all` of the sommaire's search).
+/// The kept searches of the view of `space` (`Kept`; spaces.rs `kept_in_view`: `all` every space's, `perso` also
+/// those kept with the setting off), each with what it finds now in that view (`count`: `all` of the sommaire's
+/// search).
 fn kept_with_counts(config: &Config, f: &Finder, space: &str, today: NaiveDate) -> Vec<Value> {
     kept_all(&super::read_state(config))
         .iter()
-        .filter(|k| kept_space(k) == space)
+        .filter(|k| super::spaces::kept_in_view(&kept_space(k), space))
         .map(|k| {
             let q = tk::str_or_empty(k.get("q"));
             let category = kept_category(k);
             let count = f.search(&q, today, category.as_deref(), narrowed(space)).counts.get("all").copied().unwrap_or(0);
-            let shown_space = if space == "all" { Value::Null } else { json!(space) };
+            let shown_space = if kept_space(k) == "all" { Value::Null } else { json!(kept_space(k)) };
             json!({"id": k.get("id"), "q": q, "title": tk::str_or_empty(k.get("title")), "count": count,
                    "space": shown_space, "category": category})
         })
@@ -511,7 +517,7 @@ fn chars(text: &str, most: usize) -> String {
 }
 
 /// A search kept (« Garder »): its words as typed, its title (the words when none), in `space`, in one category when
-/// made from its page. The same words again in the same place: kept once. Returns the space.
+/// made from its page. The same words again in the same place (its view): kept once; 6 a view. Returns the space.
 pub fn keep(config: &Config, q: &str, title: Option<&str>, space: &str, category: Option<&str>) -> Result<String, Refused> {
     let category = category.map(str::trim).filter(|c| !c.is_empty());
     match category {
@@ -533,11 +539,12 @@ pub fn keep(config: &Config, q: &str, title: Option<&str>, space: &str, category
     let _guard = super::lock();
     let state = super::read_state(config);
     let mut all = kept_all(&state);
-    let same = |k: &Dict| kept_space(k) == space && fold(&tk::str_or_empty(k.get("q"))) == fold(&q) && kept_category(k).as_deref() == category;
+    let shown = |k: &Dict| super::spaces::kept_in_view(&kept_space(k), space);
+    let same = |k: &Dict| shown(k) && fold(&tk::str_or_empty(k.get("q"))) == fold(&q) && kept_category(k).as_deref() == category;
     if all.iter().any(same) {
         return Ok(space.to_string());
     }
-    if all.iter().filter(|k| kept_space(k) == space).count() >= KEPT_MAX {
+    if all.iter().filter(|k| shown(k)).count() >= KEPT_MAX {
         return Err(Refused::KeptFull);
     }
     let mut k = Dict::new();
