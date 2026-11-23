@@ -785,3 +785,55 @@ fn r12_a_once_watcher_at_its_date_says_the_date() {
     });
     assert!(line.as_deref().is_some_and(|t| t.contains("jusqu'au")), "{found:?}");
 }
+
+// -- review 2 of task-frame (23/11): red tests of the review (briefs/review-task-frame.md), not the branch's --------
+
+/// B1 (« Remise en marche après sa date : 3 jours de plus », never gone at once): a watcher of its agent's own,
+/// switched off past its default end, then turned back on by a « Oui » to its agent's card (tool_asks.rs
+/// `Switch::Connector`, connectors.rs `set_enabled`), not by the app's switch (`switch_route`, which gives it 3 days
+/// more): deleted, with its program, at the clock's next look (20 s).
+#[test]
+fn review2_a_watcher_back_on_by_a_card_after_its_default_end_is_not_deleted_at_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = config_in(dir.path());
+    let now = py::time_time();
+    // off 2 days before its default end: « Garder ? » asked then (B1), not answered
+    watcher_of_its_own(&config, "c_veille", now + 2.0 * DAY, false);
+    assert!(matches!(due(&config, now).as_slice(), [Due::Raise { .. }]));
+    // a week later, still off: still there (B1)
+    let later = now + 9.0 * DAY;
+    assert!(!due(&config, later).iter().any(|d| matches!(d, Due::Remove { .. })));
+    // « Oui » to its agent's card « Connecteur « Prix du vélo » »: on again
+    connectors::set_enabled(&config, "vie", "c_veille", true).unwrap();
+    let found = due(&config, later + 20.0);
+    assert!(
+        !found.iter().any(|d| matches!(d, Due::Remove { .. })),
+        "turned back on by a « Oui », deleted at the clock's next look: {found:?}"
+    );
+}
+
+/// C9 (an end its agent sets on its own: within 90 days): a one-time routine its agent makes repeat on its own, with
+/// a number of runs that goes far past 90 days (`update`, `repeat`), gets neither an end within 90 days nor
+/// « Garder ? » (`create` caps the same count: c9_an_end_its_agent_sets_on_its_own_never_passes_90_days).
+#[test]
+fn review2_a_count_its_agent_proposes_on_its_own_never_passes_90_days_either() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = config_in(dir.path());
+    let tomorrow = chrono::Utc::now() + chrono::Duration::days(1);
+    let tomorrow = tomorrow.with_timezone(&PARIS).format("%Y-%m-%dT09:00").to_string();
+    agents(&config, "Dentiste", &tomorrow, &asked());
+    let args = json!({"action": "update", "name": "Dentiste", "schedule": "every 2h", "repeat": 100_000})
+        .as_object()
+        .cloned()
+        .unwrap();
+    // its own idea (a routine's turn, not the person's): `asked` false
+    let (_, card) = routines::call_asked(&config, "vie", &args, None, false).card.unwrap();
+    let now = py::time_time();
+    let after = routines::answer(&config, "vie", &card, "once").unwrap();
+    assert!(
+        after.frame.until.is_some_and(|u| u <= now + DEFAULT_END_DAYS * DAY + 5.0) && after.frame.default_end,
+        "100 000 runs every 2 h (about 23 years), no end within 90 days, no « Garder ? »: {:?} repeat {:?}",
+        after.frame,
+        after.repeat
+    );
+}
