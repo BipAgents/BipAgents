@@ -165,8 +165,9 @@ own space without asking, while risky commands (deleting, credential files, a do
 deleting shared files, the write tools of services you added and new sites still ask (`approvals.mode` stays
 `manual`). `bipagents sandbox adopt <agent>` moves such hand-made folders into volumes. `bipagents approvals [agent]
 [--last N]` lists what the agents asked, with your answer (from the bridge's own logs, read only). On a card that is
-not critical (sorting mail, writing in a service you connected, files in the agent's own space), « Toujours autoriser »
-is kept for that agent and that kind; the agent's settings list them and take them back. A card asked while nobody
+not critical (sorting mail, writing in a service you connected, files in the agent's own space), and on a card adding
+or changing an event in your Google Calendar (its primary calendar), « Toujours autoriser » is kept for that agent and
+that kind; the agent's settings list them and take them back. A card asked while nobody
 watches (a routine at night, a background task) no longer blocks the turn: it waits in the Boîte for up to 24 hours (or
 until the routine's next run), and the agent does that exact step after your « Oui ».
 

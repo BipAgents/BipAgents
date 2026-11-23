@@ -1273,7 +1273,8 @@ async fn bridge_card(
             Err(HttpError::new(404, "no such request (answered already?)"))
         }?));
     }
-    // a form to a site not allowed yet, an event deleted (person_ok.rs): « Oui », « Toujours pour ce site », « Non »
+    // a form to a site not allowed yet, an event deleted or a Google Calendar write (person_ok.rs): « Oui »,
+    // « Toujours autoriser » where offered, « Non »
     if let Some(id) = run_id.strip_prefix(crate::person_ok::RUN_PREFIX) {
         return Ok(Some(match crate::person_ok::answer(&state.config(), &agent.name, id, &body.choice, "notification") {
             Some((choice, done)) => {

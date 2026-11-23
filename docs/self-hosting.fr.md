@@ -171,8 +171,9 @@ services que tu as ajoutés et les nouveaux sites demandent toujours (`approvals
 `bipagents sandbox adopt <agent>` déplace ces dossiers faits à la main dans des volumes. `bipagents approvals [agent]
 [--last N]` liste ce que les agents ont demandé, avec ta réponse (depuis les journaux du bridge, en lecture seule).
 Sur une carte qui n'est pas critique (trier le courrier, écrire dans un service que tu as connecté, des fichiers dans
-l'espace de l'agent), « Toujours autoriser » est gardé pour cet agent et ce type ; les réglages de l'agent les listent
-et les retirent. Une carte demandée quand personne ne regarde (une routine la nuit, une tâche de fond) ne bloque plus
+l'espace de l'agent), et sur une carte qui ajoute ou modifie un rendez-vous de ton agenda Google (son agenda
+principal), « Toujours autoriser » est gardé pour cet agent et ce type ; les réglages de l'agent les listent et les
+retirent. Une carte demandée quand personne ne regarde (une routine la nuit, une tâche de fond) ne bloque plus
 le tour : elle attend dans la Boîte 24 heures au plus (ou jusqu'au prochain passage de la routine), et l'agent fait
 exactement cette étape après ton « Oui ».
 

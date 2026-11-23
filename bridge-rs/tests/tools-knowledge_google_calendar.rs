@@ -1,8 +1,9 @@
 //! The person's Google Calendar (google_calendar.rs), the whole journey against a small fake Google (its token
 //! endpoint, its calendar list and Calendar API v3): connected from the app's routes, its calendars listed beside the
 //! other calendars (the primary one, a shared one the person may write to, a read-only one; a hidden one left out),
-//! every add, change or deletion asked on the person's card first (« Oui », « Oui, pour cette conversation »,
-//! « Non »), the agents chosen and disconnected. No real Google account is ever called.
+//! every add, change or deletion asked on the person's card first (« Oui », « Toujours autoriser » for adds and
+//! changes in the primary calendar, « Non »), the agents chosen and disconnected. No real Google account is ever
+//! called.
 
 mod common;
 
@@ -318,7 +319,8 @@ async fn connect(app: &TestApp, h: &[(&str, &str)], code: &str) -> u16 {
 async fn connected_once_listed_and_every_write_asked_first() {
     let (url, google) = fake_google().await;
     let dir = tempfile::tempdir().unwrap();
-    let app = TestApp::new(config_for(dir.path(), &url, true));
+    let config = config_for(dir.path(), &url, true);
+    let app = TestApp::new(config.clone());
     let (k, v) = auth();
     let h = [(k, v.as_str())];
     let listed = app.get("/v1/google-calendar", &h).await.json();
@@ -375,20 +377,26 @@ async fn connected_once_listed_and_every_write_asked_first() {
     assert!(text.contains("Sport") && text.contains("repeats"), "{text}");
     assert!(writes(&google).is_empty());
 
+    // the person's level never lets a write through (Alex 20/11: never silently): « Seulement le critique » here
+    let level = app.send_json("PUT", "/v1/approval-level", &h, &json!({"level": "critical"})).await;
+    assert_eq!(level.status, 200, "{}", level.text());
+
     let add = json!({"title": "Coiffeur", "start": "2026-11-27T15:00", "duration_minutes": 30, "calendar": "Google Calendar"});
     // « Non »: nothing sent to Google
     let ((failed, said), card) =
         tokio::join!(tool(&app, "calendar_add", add.clone(), "h1"), common::answer_card(&app, "bip-ok-", "deny"));
     assert!(failed && said.contains("said no"), "{said}");
     assert_eq!(card["bip_summary"], "Coach wants to add an event to your Google Calendar: « Coiffeur »");
-    assert_eq!(card["choices"], json!(["once", "session", "deny"]));
+    // Alex 23/11: « Oui », « Toujours autoriser » or « Non »; never « Oui, pour cette conversation »
+    assert_eq!(card["choices"], json!(["once", "deny"]));
+    assert_eq!((card["bip_always"].as_str(), card["bip_always_kind"].as_str()), (Some("Always allow"), Some("calendar_write")));
     let detail = card["bip_detail"].as_str().unwrap();
     assert!(detail.contains("2026-11-27 15:00–15:30 (Google Calendar)"), "the primary one, not named: {card}");
     assert!(writes(&google).is_empty(), "written with no « Oui »");
 
-    // « Oui, pour cette conversation »: added, in the calendar's own time zone, guests never told
+    // « Oui »: added, in the calendar's own time zone, guests never told
     let ((failed, said), _) =
-        tokio::join!(tool(&app, "calendar_add", add.clone(), "h1"), common::answer_card(&app, "bip-ok-", "session"));
+        tokio::join!(tool(&app, "calendar_add", add.clone(), "h1"), common::answer_card(&app, "bip-ok-", "once"));
     assert!(!failed && said.contains("Added to Google Calendar") && said.contains("id google:primary:n"), "{said}");
     let posted = writes(&google);
     assert_eq!(posted.len(), 1);
@@ -397,10 +405,10 @@ async fn connected_once_listed_and_every_write_asked_first() {
     let body: Value = serde_json::from_str(&posted[0].3).unwrap();
     assert_eq!(body["start"], json!({"dateTime": "2026-11-27T15:00:00", "timeZone": "Europe/Paris"}));
     assert_eq!(body["end"], json!({"dateTime": "2026-11-27T15:30:00", "timeZone": "Europe/Paris"}));
-    // the same conversation: no card this time
-    let (failed, said) =
-        tool(&app, "calendar_add", json!({"title": "Pharmacie", "start": "2026-11-28", "calendar": "google"}), "h1")
-            .await;
+    // an older app's « Oui, pour cette conversation » (`session`): a plain « Oui », nothing kept
+    let pharmacy = json!({"title": "Pharmacie", "start": "2026-11-28", "calendar": "google"});
+    let ((failed, said), _) =
+        tokio::join!(tool(&app, "calendar_add", pharmacy, "h1"), common::answer_card(&app, "bip-ok-", "session"));
     assert!(!failed && said.contains("Added"), "{said}");
     assert_eq!(writes(&google).len(), 2);
     let all_day: Value = serde_json::from_str(&writes(&google)[1].3).unwrap();
@@ -408,20 +416,21 @@ async fn connected_once_listed_and_every_write_asked_first() {
         (all_day["start"].clone(), all_day["end"].clone()),
         (json!({"date": "2026-11-28"}), json!({"date": "2026-11-29"}))
     );
-    // another conversation: asked again (nobody answers: nothing done)
-    let (failed, said) = tool(&app, "calendar_add", add.clone(), "h2").await;
+    // the same conversation: asked again (nobody answers: nothing done)
+    let (failed, said) = tool(&app, "calendar_add", add.clone(), "h1").await;
     assert!(failed && said.contains("did not answer"), "{said}");
     assert_eq!(writes(&google).len(), 2);
 
-    // another calendar, named as the list shows it: its name on the card, written there; asked even in h1, where
-    // « Oui, pour cette conversation » was given for the primary one, and never offered for it (review 2)
+    // another calendar, named as the list shows it: its name on the card, written there; never « Toujours » for it
+    // (shared by someone else: asked each time, review 2, 21/11)
     let work = json!({"title": "Point", "start": "2026-11-27T09:00", "calendar": "travail"});
     let ((failed, said), card) =
-        tokio::join!(tool(&app, "calendar_add", work, "h1"), common::answer_card(&app, "bip-ok-", "once"));
+        tokio::join!(tool(&app, "calendar_add", work.clone(), "h1"), common::answer_card(&app, "bip-ok-", "once"));
     assert!(!failed && said.contains(&format!("id {WORK_REF}:n")), "{said}");
     assert_eq!(card["bip_summary"], "Coach wants to add an event to your Google Calendar: « Point »");
     assert!(card["bip_detail"].as_str().unwrap().contains("(« Travail » · Google Calendar)"), "{card}");
-    assert_eq!(card["choices"], json!(["once", "deny"]), "no « for this conversation » for another calendar");
+    assert_eq!(card["choices"], json!(["once", "deny"]));
+    assert!(card.get("bip_always").is_none() && card.get("bip_always_kind").is_none(), "{card}");
     let posted = writes(&google).last().cloned().unwrap();
     assert_eq!(posted.1, format!("/cal/calendars/{WORK}/events"));
     let body: Value = serde_json::from_str(&posted.3).unwrap();
@@ -454,6 +463,7 @@ async fn connected_once_listed_and_every_write_asked_first() {
     );
     assert!(!failed && said.contains("Changed in Google Calendar"), "{said}");
     assert_eq!(card["bip_summary"], "Coach wants to change an event in your Google Calendar: « Dentiste »");
+    assert_eq!((card["choices"].clone(), card["bip_always"].clone()), (json!(["once", "deny"]), json!("Always allow")));
     assert!(card["bip_detail"].as_str().unwrap().contains("2026-11-24 14:00–15:00"), "{card}");
     let patched = writes(&google).last().cloned().unwrap();
     assert_eq!((patched.0.as_str(), patched.1.as_str()), ("PATCH", "/cal/calendars/primary/events/e1"));
@@ -468,6 +478,7 @@ async fn connected_once_listed_and_every_write_asked_first() {
     );
     assert!(!failed && said.contains("Changed"), "{said}");
     assert_eq!(card["choices"], json!(["once", "deny"]), "{card}");
+    assert!(card.get("bip_always").is_none(), "another calendar: {card}");
     let key = (WORK.to_string(), "t1".to_string());
     assert_eq!(google.lock().unwrap().events[&key]["location"], "Salle 2");
     // changed at Google between the check and the « Oui » (made repeating, moved…): left as it is, told
@@ -496,18 +507,59 @@ async fn connected_once_listed_and_every_write_asked_first() {
     assert!(failed && said.contains("not one of each"), "{said}");
     assert_eq!(writes(&google).len(), before);
 
-    // a deletion: asked each time, never « for this conversation », sent with its etag
+    // « Toujours autoriser » (Alex 23/11): kept for Coach and listed in its settings
+    let ((failed, said), _) =
+        tokio::join!(tool(&app, "calendar_add", add.clone(), "h1"), common::answer_card(&app, "bip-ok-", "always"));
+    assert!(!failed && said.contains("Added"), "{said}");
+    let level = app.get("/v1/approval-level", &h).await.json();
+    let always = level["always"]["coach"].as_array().cloned().unwrap_or_default();
+    assert_eq!(always.iter().map(|k| (k["kind"].clone(), k["label"].clone())).collect::<Vec<_>>(),
+               [(json!("calendar_write"), json!("Change your calendar"))], "{level}");
+    // from then on Coach adds and changes in the primary calendar with no card, in any conversation (the person's
+    // level « Seulement le critique » had let nothing through), each one an « auto » line marked as such
+    let before = writes(&google).len();
+    let (failed, said) =
+        tool(&app, "calendar_add", json!({"title": "Garage", "start": "2026-11-30", "calendar": "google"}), "h5").await;
+    assert!(!failed && said.contains("Added"), "{said}");
+    let (failed, said) = tool(&app, "calendar_update", json!({"id": "google:primary:e1", "location": "Bron"}), "h6").await;
+    assert!(!failed && said.contains("Changed"), "{said}");
+    assert_eq!(writes(&google).len(), before + 2);
+    let auto = app.get("/v1/approvals/auto?agent=coach", &h).await.json();
+    let lines: Vec<(String, bool)> = auto["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|l| l["kind"] == "calendar_write")
+        .map(|l| (l["summary"].as_str().unwrap().to_string(), l["always"] == true))
+        .collect();
+    assert_eq!(lines, [
+        ("Coach wants to change an event in your Google Calendar: « Dentiste » (always allowed)".to_string(), true),
+        ("Coach wants to add an event to your Google Calendar: « Garage » (always allowed)".to_string(), true),
+    ], "{auto}");
+    // still asked: another calendar (no « Toujours » for it)
+    let ((failed, _), card) =
+        tokio::join!(tool(&app, "calendar_add", work, "h5"), common::answer_card(&app, "bip-ok-", "once"));
+    assert!(!failed && card.get("bip_always").is_none(), "{card}");
+
+    // a deletion: asked each time, never « Toujours », sent with its etag
     let ((failed, said), card) = tokio::join!(
         tool(&app, "calendar_delete", json!({"id": "google:primary:e1"}), "h1"),
         common::answer_card(&app, "bip-ok-", "once")
     );
     assert!(!failed && said.contains("Deleted from Google Calendar"), "{said}");
     assert_eq!(card["choices"], json!(["once", "deny"]));
+    assert!(card.get("bip_always").is_none(), "{card}");
     assert_eq!(card["bip_summary"], "Coach wants to delete an event from your Google Calendar: « Dentiste »");
     assert!(!google.lock().unwrap().events.contains_key(&(PRIMARY.to_string(), "e1".to_string())));
     let deleted = writes(&google).last().cloned().unwrap();
     assert_eq!((deleted.0.as_str(), deleted.2.contains("sendUpdates=none")), ("DELETE", true));
     assert!(!deleted.4.is_empty(), "no If-Match: {deleted:?}");
+
+    // the bridge started again: kept
+    let app = TestApp::new(config.clone());
+    let (failed, said) =
+        tool(&app, "calendar_add", json!({"title": "Vélo", "start": "2026-12-01", "calendar": "google"}), "h7").await;
+    assert!(!failed && said.contains("Added"), "after a restart: {said}");
 
     // the agents chosen again: none, no tools
     let none = app.send_json("PUT", "/v1/google-calendar/agents", &h, &json!({"agents": []})).await;
@@ -516,25 +568,28 @@ async fn connected_once_listed_and_every_write_asked_first() {
     let (failed, _) = tool(&app, "calendar_delete", json!({"id": "google:primary:inv"}), "h1").await;
     assert!(failed);
     assert!(google.lock().unwrap().events.contains_key(&(PRIMARY.to_string(), "inv".to_string())));
-    // chosen again: its « Oui, pour cette conversation » went when it was taken out, asked again in h1
+    // its « Toujours » went when it was taken out: chosen again, it is asked again
+    assert!(app.get("/v1/approval-level", &h).await.json()["always"].get("coach").is_none());
     let again = app.send_json("PUT", "/v1/google-calendar/agents", &h, &json!({"agents": ["coach"]})).await;
     assert_eq!(again.status, 200, "{}", again.text());
     let before = writes(&google).len();
     let (failed, said) = tool(&app, "calendar_add", add.clone(), "h1").await;
     assert!(failed && said.contains("did not answer"), "{said}");
     assert_eq!(writes(&google).len(), before);
-    // « Oui, pour cette conversation » again in h1
+    // « Toujours autoriser » again
     let ((failed, _), _) =
-        tokio::join!(tool(&app, "calendar_add", add.clone(), "h1"), common::answer_card(&app, "bip-ok-", "session"));
+        tokio::join!(tool(&app, "calendar_add", add.clone(), "h1"), common::answer_card(&app, "bip-ok-", "always"));
     assert!(!failed);
+    assert!(app.get("/v1/approval-level", &h).await.json()["always"].get("coach").is_some());
 
-    // disconnected: forgotten here, revoked at Google (no Google Drive shares its grant)
+    // disconnected: forgotten here, revoked at Google (no Google Drive shares its grant), its « Toujours » gone
     let gone = app.send_json("DELETE", "/v1/google-calendar", &h, &json!({})).await;
     assert_eq!(gone.status, 200, "{}", gone.text());
     assert_eq!(gone.json()["revoked"], true);
     assert_eq!(google.lock().unwrap().revoked, 1);
     assert_eq!(app.get("/v1/google-calendar", &h).await.json()["state"], "not_connected");
-    // connected again: what was allowed for that conversation went with the old connection
+    assert!(app.get("/v1/approval-level", &h).await.json()["always"].get("coach").is_none());
+    // connected again: what was allowed went with the old connection
     assert_eq!(connect(&app, &h, "good").await, 200);
     let before = writes(&google).len();
     let (failed, said) = tool(&app, "calendar_add", add, "h1").await;
