@@ -809,7 +809,6 @@ pub async fn call(state: &AppState, agent: &AgentConfig, arguments: &Dict) -> Di
             summary: card_sentence(&lang, replacing, &shown_name, &first.place),
             detail: card_detail(&lang, replacing, label, &content),
             always: None,
-            session: false,
         };
         match crate::person_ok::ask(state, agent, card).await {
             crate::person_ok::Answer::Once | crate::person_ok::Answer::Always => {}

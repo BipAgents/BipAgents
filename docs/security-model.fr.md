@@ -143,9 +143,13 @@ créée par un agent ; dépasser un budget.
 - **Pas de « toujours » pour ce qui compte.** Hermes tourne en `approvals.mode: manual` (hors d'un bac à sable isolé,
   ses commandes à risque demandent ; dedans, voir [isolement](#-isolement)). « Toujours autoriser » n'existe que pour
   six sortes non critiques (`ALWAYS_KINDS` : archiver, marquer comme lu, déplacer un mail, une règle de tri, écrire
-  dans un service que tu as connecté, des fichiers dans l'espace de l'agent), n'est accordé que par ta propre réponse
-  (jamais par le bridge, un proche ou un outil d'agent), se retrouve dans les réglages de l'agent et se retire. Il
-  n'est jamais proposé pour un paiement, un secret, un identifiant, une commande ou une carte de l'agent de la famille.
+  dans un service que tu as connecté, des fichiers dans l'espace de l'agent) et une sorte critique que sa règle nomme
+  (`own_always` : ajouter ou modifier un rendez-vous de ton agenda Google, son agenda principal seulement ; ton niveau
+  de validation ne le laisse jamais passer, et supprimer un rendez-vous est demandé à chaque fois), n'est accordé que
+  par ta propre réponse (jamais par le bridge, un proche ou un outil d'agent), se retrouve dans les réglages de l'agent
+  et se retire (celui de Google Calendar part aussi quand l'agent est retiré de sa liste ou que Google Calendar est
+  déconnecté). Il n'est jamais proposé pour un paiement, un secret, un identifiant, une commande ou une carte de
+  l'agent de la famille.
   Quand l'app envoie « toujours » pour une validation de Hermes, le bridge répond « une fois » à Hermes et garde la
   règle lui-même, pour pouvoir la retirer.
 - **Les demandes en masse se regroupent, les décisions non.** Les demandes semblables d'un même agent forment une

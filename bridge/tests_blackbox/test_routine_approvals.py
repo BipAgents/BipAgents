@@ -227,7 +227,7 @@ def test_toujours_lets_mail_moves_go_alone_until_taken_back_and_never_a_trash(br
     made = call(bridge, "mail_bulk", {"action": "move:Banque", "domain": "banque.example"}, token=MAIL_TOKEN)
     assert "Approved at once" not in text_of(made), made
     [card] = mail_cards(bridge)
-    assert card["bip_always"].startswith(("Toujours autoriser", "Always let")), card
+    assert card["bip_always"] in ("Toujours autoriser", "Always allow"), card   # every card's words (Alex 23/11)
     yes = bridge.post("/v1/approve", headers=AUTH,
                       json={"agent": "coach", "run_id": card["run_id"], "request_id": card["request_id"], "choice": "always"})
     assert yes.status_code == 200, yes.text
@@ -281,7 +281,8 @@ def test_toujours_on_a_service_write_is_per_service_and_hermes_only_hears_once(b
     gates = [watched("r_a", "q_a", "notion")]
     assert wait_until(lambda: [a for a in approvals(bridge) if a.get("request_id") == "q_a"], timeout=10)
     [first] = [a for a in approvals(bridge) if a.get("request_id") == "q_a"]
-    assert first["bip_always_kind"] == "service_write:notion" and "Notion" in first["bip_always"], first
+    assert first["bip_always_kind"] == "service_write:notion", first
+    assert first["bip_always"] in ("Toujours autoriser", "Always allow"), first   # every card's words (Alex 23/11)
     yes = bridge.post("/v1/approve", headers=AUTH,
                       json={"agent": "wellness", "run_id": "r_a", "request_id": "q_a", "choice": "always"})
     assert yes.status_code == 200, yes.text
