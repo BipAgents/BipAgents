@@ -627,6 +627,12 @@ def write_answered(bridge, choice, meanwhile=None, **arguments):
         return result.result(timeout=60), card
 
 
+def write_tool(bridge, **arguments):
+    """drive_write without a card answered: (its text, whether it was refused); `name` is one of its arguments."""
+    result = call(bridge, "drive_write", arguments)
+    return text_of(result), result["isError"] or not_done(result)
+
+
 def folders_put(bridge, drive, rows):
     put = bridge.put(f"/v1/drives/{drive}/folders", headers=AUTH, json={"folders": rows})
     assert put.status_code == 200, put.text
@@ -643,12 +649,12 @@ def test_dropbox_writes_after_the_persons_yes_only_where_its_switch_is_on(bridge
         shown = folders_put(bridge, "dropbox", [{"id": "id:w", "agents": ["wellness"]}])
         assert shown["folders"] == [{"id": "id:w", "name": "Work", "file": False, "agents": ["wellness"]}], "1.0's shape"
         # the switch off: the agent says how to turn it on, nothing asked
-        said, failed = tool(bridge, "drive_write", folder="dropbox:id:w", name="Compte rendu", text="# Réunion")
+        said, failed = write_tool(bridge, folder="dropbox:id:w", name="Compte rendu", text="# Réunion")
         assert failed and "peut y écrire" in said and not cards(bridge), said
         # on, but Dropbox hasn't given the right yet: the person reconnects once (its folders and switches kept)
         shown = folders_put(bridge, "dropbox", [{"id": "id:w", "agents": ["wellness"], "writers": ["wellness"]}])
         assert shown["folders"][0]["writers"] == ["wellness"] and shown["writable"] is False
-        said, failed = tool(bridge, "drive_write", folder="dropbox:id:w", name="Compte rendu", text="# Réunion")
+        said, failed = write_tool(bridge, folder="dropbox:id:w", name="Compte rendu", text="# Réunion")
         assert failed and "right to write" in said and not cards(bridge), said
         _, shown = connect(bridge, service, "dropbox")
         assert service.authorized[-1]["scope"].endswith(" files.content.write")
@@ -664,7 +670,7 @@ def test_dropbox_writes_after_the_persons_yes_only_where_its_switch_is_on(bridge
         new_id = service.written[-1][1]
         assert service.dropbox[new_id]["path_lower"] == "/work/compte rendu.md"
         # never over a file: the same name again is refused before any card
-        said, failed = tool(bridge, "drive_write", folder="dropbox:id:w", name="Compte rendu.md", text="x")
+        said, failed = write_tool(bridge, folder="dropbox:id:w", name="Compte rendu.md", text="x")
         assert failed and "exists already" in said and not cards(bridge), said
         # « Non »: nothing
         before = len(service.written)
@@ -676,9 +682,9 @@ def test_dropbox_writes_after_the_persons_yes_only_where_its_switch_is_on(bridge
         assert card["bip_ok"]["kind"] == "drive_replace", card
         assert service.dropbox_content["id:f"] == b"plan v2" and service.dropbox["id:f"]["rev"] != "r1"
         # never outside: the look-alike, a path for a name
-        said, failed = tool(bridge, "drive_write", folder="dropbox:id:ws", name="x.md", text="x")
+        said, failed = write_tool(bridge, folder="dropbox:id:ws", name="x.md", text="x")
         assert failed and not cards(bridge), said
-        said, failed = tool(bridge, "drive_write", folder="dropbox:id:w", name="../x.md", text="x")
+        said, failed = write_tool(bridge, folder="dropbox:id:w", name="../x.md", text="x")
         assert failed and "path" in said and not cards(bridge), said
         # the folder taken back while the card waits: nothing written
         before = len(service.written)
@@ -731,7 +737,7 @@ def test_google_and_onedrive_write_and_the_whole_drive(bridges, fakes):
         assert not result["isError"], result
         made = service.written[-1]
         assert made[0] == "google_drive" and service.google[made[1]]["parents"] == ["gf"] and made[2] == b"- pain"
-        said, failed = tool(bridge, "drive_write", replace="google_drive:gp", text="x")
+        said, failed = write_tool(bridge, replace="google_drive:gp", text="x")
         assert failed and "peut y écrire" in said, "its own switch, off"
         # OneDrive: Files.ReadWrite, a new file with its card, then the whole OneDrive read from its root
         _, shown = connect(bridge, service, "onedrive")
