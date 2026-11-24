@@ -1081,6 +1081,22 @@ mod tests {
         assert_eq!(long_text_name("---\n\n  "), "message.txt");
     }
 
+    /// 6. lt-nom-du-fichier A (Alex 24/11): shown with its spaces, never « _ »; what no file name may hold out (`/`,
+    /// `\`, `:`, control and invisible characters), no leading dot, 60 characters at most. The attachment carries this
+    /// name; the disk keeps its safe form (`<month>/<id12>-<name>`).
+    #[test]
+    fn a6_a_long_texts_name_keeps_its_spaces_and_stays_safe() {
+        assert_eq!(long_text_name("Vélo : bilan/2026\\ville\tà\u{200B}vélo\n"), "Vélo bilan 2026 ville à vélo.txt");
+        assert_eq!(long_text_name("...caché\n"), "caché.txt");
+        assert_eq!(long_text_name("a/b"), "a b.txt");
+        let long = long_text_name(&"Pourquoi le vélo électrique a gagné la ville ".repeat(3));
+        assert!(long.chars().count() <= 64 && long.ends_with(".txt") && long.contains(' ') && !long.contains('_'), "{long}");
+        let src = std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/threads/send.rs")).unwrap();
+        let made = &src[src.find("async fn long_text_as_file").unwrap()..];
+        let made = &made[..made.find("\n}\n").unwrap()];
+        assert!(made.contains("name: Some(name)"), "the attachment named after the stored file (« _ »): {made}");
+    }
+
     #[test]
     fn a_message_takes_a_long_text_up_to_its_limit() {
         let check = |chars: usize| {
