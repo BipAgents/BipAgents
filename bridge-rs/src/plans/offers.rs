@@ -89,7 +89,7 @@ const DAY: f64 = 86400.0;
 
 // -- the store -----------------------------------------------------------------------------------------------------------
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Offer {
     pub id: String,
     pub agent: String,
@@ -130,6 +130,40 @@ pub struct Offer {
     /// note of its « Oui » (review, remark).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub outside: bool,
+    /// « Intelligente » (offer_ideas.rs): `smart` for the free form (its `kind` is `smart` too); empty: basic.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub mode: String,
+    /// A free-form offer's family (offer_ideas.rs `family_of`): what the caps and the learning count it by.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub family: String,
+    /// What it will work with (checked), what will ask its own card later, and the card's lines for them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub uses: Vec<Value>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub later: Vec<String>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub uses_text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub later_text: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub site_text: Option<String>,
+    /// The routine its card shows (its rhythm, its end): the « Oui » starts it (offer_ideas.rs `grant`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub routine: Option<crate::offer_ideas::RoutineAsk>,
+    /// A day's pass's idea (offer_ideas.rs), placed in `session` (None: the main conversation).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub idea: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session: Option<String>,
+}
+
+/// What the caps and the learning count an offer by: its kind, or a free-form offer's family (offer_ideas.rs).
+pub fn learn_key(offer: &Offer) -> &str {
+    if offer.family.is_empty() {
+        &offer.kind
+    } else {
+        &offer.family
+    }
 }
 
 /// What the caps and the learning know an offer by (review R4).
@@ -368,7 +402,7 @@ pub fn topic_print(agent: &str, about: &str) -> String {
 
 /// An offer made: its print kept `SAME_DAYS`.
 pub fn remember(store: &mut Store, offer: &Offer, now: f64) {
-    let print = same_print(&offer.agent, &offer.kind, subject_of(offer));
+    let print = same_print(&offer.agent, learn_key(offer), subject_of(offer));
     store.same.push(Print { agent: offer.agent.clone(), print, at: now });
 }
 
@@ -406,17 +440,9 @@ pub fn record(store: &mut Store, agent: &str, kind: &str, about: &str, outcome: 
     }
 }
 
-/// A kind's name in the learning line.
+/// A kind's name in the learning line (a free-form offer's family's too: offer_ideas.rs).
 fn plural(kind: &str) -> &'static str {
-    match kind {
-        "route" => "routes",
-        "reminder" => "reminders",
-        "calendar" => "calendar events",
-        "search" => "searches",
-        "draft" => "drafts",
-        "page" => "pages",
-        _ => "shopping",
-    }
+    crate::offer_ideas::plural(kind)
 }
 
 /// « Your person often declines: pages, shopping. Often accepts: search, routes. » (§3b.4): of the kinds it may offer
@@ -862,6 +888,7 @@ pub fn spec_of(
         first: false,
         subject,
         outside: false,
+        ..Offer::default()
     })
 }
 
@@ -948,11 +975,11 @@ pub fn refused(store: &Store, plans: &super::Store, offer: &Offer, run: Option<&
 pub fn rule_refusal(store: &Store, offer: &Offer, now: f64) -> Option<String> {
     let agent = offer.agent.as_str();
     let subject = subject_of(offer);
-    let same = same_print(agent, &offer.kind, subject);
+    let same = same_print(agent, learn_key(offer), subject);
     if store.same.iter().any(|p| p.agent == agent && p.print == same && now - p.at < SAME_DAYS * DAY) {
         return Some(format!(
             "Not done: you offered this ({}, « {} ») in the last {} days. Don't offer it again.",
-            offer.kind, offer.about, SAME_DAYS as u32
+            learn_key(offer), offer.about, SAME_DAYS as u32
         ));
     }
     let topic = topic_print(agent, subject);
@@ -962,11 +989,11 @@ pub fn rule_refusal(store: &Store, offer: &Offer, now: f64) -> Option<String> {
             offer.about
         ));
     }
-    if quiet(store, agent, &offer.kind, now) {
+    if quiet(store, agent, learn_key(offer), now) {
         return Some(format!(
             "Not done: your person said no thanks to your {} lately: don't offer them for now (it is not « Initiative » \
              off: just that kind, for a while).",
-            plural(&offer.kind)
+            plural(learn_key(offer))
         ));
     }
     None
@@ -1004,22 +1031,48 @@ pub fn card_item(config: &Config, offer: &Offer) -> Dict {
     let lang = lang_of(config, &offer.agent);
     let shown = shown_agent(config, &offer.agent);
     let sentence = summary(lang, &shown, &offer.label);
-    let mut under_i = detail(lang, offer, person_zone(config));
-    if offer.outside {
-        under_i = format!("{}\n{under_i}", texts(lang).outside);
-    }
-    if offer.first {
-        under_i.push('\n');
-        under_i.push_str(texts(lang).first_card);
-    }
-    let item = json!({
+    // a free-form offer (offer_ideas.rs, contracts/smart-offers): its lines, drawn by an app 1.1's card itself and put
+    // after the prompt under « i » for an app 1.0 (its generic card has no other place for them)
+    let smart = offer.mode == crate::offer_ideas::MODE;
+    let lines: Vec<&str> =
+        [Some(offer.uses_text.as_str()).filter(|t| !t.is_empty()), offer.later_text.as_deref(), offer.site_text.as_deref()]
+            .into_iter()
+            .flatten()
+            .collect();
+    let under = |with_lines: bool| {
+        let mut out = detail(lang, offer, person_zone(config));
+        if with_lines && !lines.is_empty() {
+            out = format!("{out}\n{}", lines.join("\n"));
+        }
+        if offer.outside {
+            out = format!("{}\n{out}", texts(lang).outside);
+        }
+        if offer.first {
+            out.push('\n');
+            out.push_str(texts(lang).first_card);
+        }
+        out
+    };
+    let mut item = json!({
         "agent": offer.agent, "run_id": format!("{RUN_PREFIX}{}", offer.id), "request_id": offer.id,
         "command": format!("{TOOL_NAME} · {}", offer.label), "description": sentence, "choices": ["once", "deny"],
-        "created_at": offer.made, "session_id": null, "bip_summary": sentence, "bip_detail": under_i,
+        "created_at": offer.made, "session_id": null, "bip_summary": sentence, "bip_detail": under(smart),
         "bip_offer": {"id": offer.id, "kind": offer.kind, "about": offer.about, "label": offer.label, "agent": shown,
-                      "plan": offer.plan, "pill": offer.pill, "mode": "basic", "expires_at": offer.expires,
-                      "outside": offer.outside},
+                      "plan": offer.plan, "pill": offer.pill,
+                      "mode": if smart { crate::offer_ideas::MODE } else { "basic" },
+                      "expires_at": offer.expires, "outside": offer.outside},
     });
+    if smart {
+        let o = &mut item["bip_offer"];
+        o["family"] = json!(offer.family);
+        o["uses_text"] = json!(offer.uses_text);
+        o["later_text"] = json!(offer.later_text);
+        o["site"] = json!(offer.site);
+        o["site_text"] = json!(offer.site_text);
+        // what an app 1.1 shows under « i » (its card draws the lines above itself)
+        o["detail"] = json!(under(false));
+        o["idea"] = json!(offer.idea);
+    }
     item.as_object().cloned().unwrap_or_default()
 }
 
@@ -1143,6 +1196,13 @@ pub async fn call(
              people talk to you: offer nothing on your own. Do what they ask.",
         );
     }
+    if crate::offer_ideas::free_form(&config, &agent.name, arguments) {
+        // « Intelligente »: any action it can really do here, every use checked (offer_ideas.rs)
+        return match crate::offer_ideas::call(state, agent, arguments, asked, run, outside) {
+            Ok(offer) => made_called(&config, agent, &offer),
+            Err(why) => refusal(&why),
+        };
+    }
     let now = py::time_time();
     let person = person_zone(&config);
     let can = can(&config, agent);
@@ -1155,30 +1215,46 @@ pub async fn call(
     }
     offer.asked = asked;
     offer.outside = outside;
-    let plans = super::load(&config);
-    let made = change(&config, |s| {
-        if let Some(why) = refused(s, &plans, &offer, run, person, now) {
-            return Err(why);
-        }
-        remember(s, &offer, now);
-        s.made.push(Made { agent: offer.agent.clone(), at: now, asked, run: run.map(str::to_string), pill: false });
-        s.offers.push(offer.clone());
-        Ok(())
-    });
-    if let Err(why) = made {
+    if let Err(why) = keep_made(&config, &mut offer, run, now) {
         return refusal(&why);
     }
-    if first_card(&config, &agent.name) {
-        change(&config, |s| s.offers.iter_mut().filter(|o| o.id == offer.id).for_each(|o| o.first = true));
+    made_called(&config, agent, &offer)
+}
+
+/// `offer` kept and counted, if the caps and the rules allow it (`run`: the person's turn it is made in, with
+/// `offer.asked`); the agent's first card marked. Err: the refusal, in the agent's words.
+pub fn keep_made(config: &Config, offer: &mut Offer, run: Option<&str>, now: f64) -> Result<(), String> {
+    let person = person_zone(config);
+    let plans = super::load(config);
+    let asked = offer.asked;
+    let kept = offer.clone();
+    change(config, |s| {
+        if let Some(why) = refused(s, &plans, &kept, run, person, now) {
+            return Err(why);
+        }
+        remember(s, &kept, now);
+        s.made.push(Made { agent: kept.agent.clone(), at: now, asked, run: run.map(str::to_string), pill: false });
+        s.offers.push(kept.clone());
+        Ok(())
+    })?;
+    if first_card(config, &offer.agent) {
+        offer.first = true;
+        let id = offer.id.clone();
+        change(config, |s| s.offers.iter_mut().filter(|o| o.id == id).for_each(|o| o.first = true));
     }
-    tracing::info!(target: "bipbridge::offers", agent = %agent.name, offer = %offer.id, kind = %offer.kind, asked,
+    tracing::info!(target: "bipbridge::offers", agent = %offer.agent, offer = %offer.id, kind = %offer.kind, asked,
                    "offer card made");
+    Ok(())
+}
+
+/// What the agent reads once its card is made, and the card to place and push.
+fn made_called(config: &Config, agent: &AgentConfig, offer: &Offer) -> Called {
     let text = format!(
         "Offer card made: « {} ». It waits for your person's « Oui » or « Non merci »: nothing is done before. Don't \
          ask them again in words.",
         offer.label
     );
-    let lang = lang_of(&config, &agent.name);
+    let lang = lang_of(config, &agent.name);
     Called {
         result: tool_text(&text, false),
         card: Some((notification(lang, &offer.label), offer.id.clone())),
@@ -1289,7 +1365,8 @@ pub fn answer(config: &Config, agent: &str, id: &str, yes: bool, now: f64) -> Op
     change(config, |s| {
         let at = s.offers.iter().position(|o| o.agent == agent && o.id == id && o.expires > now)?;
         let offer = s.offers.remove(at);
-        record(s, agent, &offer.kind, subject_of(&offer), if yes { YES } else { NO }, now);
+        let key = learn_key(&offer).to_string();
+        record(s, agent, &key, subject_of(&offer), if yes { YES } else { NO }, now);
         Some(offer)
     })
 }
@@ -1303,7 +1380,7 @@ pub fn expire(config: &Config, now: f64) -> Vec<Offer> {
         let (gone, kept): (Vec<Offer>, Vec<Offer>) = std::mem::take(&mut s.offers).into_iter().partition(|o| o.expires <= now);
         s.offers = kept;
         for o in &gone {
-            record(s, &o.agent, &o.kind, subject_of(o), EXPIRED, now);
+            record(s, &o.agent, learn_key(o), subject_of(o), EXPIRED, now);
         }
         gone
     })
@@ -1334,8 +1411,8 @@ pub fn yes_note(offer: &Offer) -> String {
          goes through its own card. It was offered as a {}: {}. Do that, and nothing else.{outside}\n-->",
         offer.label,
         offer.prompt,
-        offer.kind,
-        yes_scope(&offer.kind)
+        if offer.mode == crate::offer_ideas::MODE { "free-form offer" } else { offer.kind.as_str() },
+        if offer.mode == crate::offer_ideas::MODE { crate::offer_ideas::yes_scope(offer) } else { yes_scope(&offer.kind).to_string() }
     )
 }
 
@@ -1371,6 +1448,8 @@ pub async fn approve(state: &AppState, agent: &AgentConfig, id: &str, choice: &s
             body["routine"] = json!(reminder(&config, &offer, origin.as_deref()));
         }
         _ => {
+            // a free-form offer's routine: the « Oui » is its start, in its turn (offer_ideas.rs)
+            crate::offer_ideas::grant(&config, &offer, py::time_time());
             // kept until done: a restart meanwhile does it then (review, remark)
             let doing = Doing { offer, session: place.session.clone(), report: place.report.clone(), at: py::time_time(), tries: 1 };
             change(&config, |s| s.doing.push(doing.clone()));
@@ -1451,7 +1530,7 @@ fn reminder(config: &Config, offer: &Offer, origin: Option<&str>) -> String {
 /// no model. `files`: the work's (a map).
 async fn tell(state: &AppState, agent: &AgentConfig, place: &crate::card_place::Place, offer: &Offer, text: String, files: Vec<String>) {
     let pipeline = Pipeline::of(state);
-    let shown = if offer.asked { place.report.clone().or(place.session.clone()) } else { None };
+    let shown = if offer.asked || offer.session.is_some() { place.report.clone().or(place.session.clone()) } else { None };
     let session = match shown {
         Some(s) => crate::card_place::report_of(state, agent, &s).await.unwrap_or(s),
         None => pipeline.tip(agent, "main").await,
@@ -1543,7 +1622,9 @@ pub fn still_writes(config: &Config, agent: &str, offer: &Offer) -> bool {
 /// reply there; it could not run (the month's credit, busy, unreachable): one line, no model.
 async fn turn(state: &AppState, agent: &AgentConfig, offer: &Offer, place: &crate::card_place::Place) {
     let pipeline = Pipeline::of(state);
-    let conversation = if offer.asked { crate::card_place::resume_in(place) } else { "main".to_string() };
+    // a day's pass's idea placed in a conversation: its turn there (offer_ideas.rs)
+    let conversation =
+        if offer.asked || offer.session.is_some() { crate::card_place::resume_in(place) } else { "main".to_string() };
     let mut turn = Turn::new(agent, crate::background_turn::Kind::Card, &conversation, yes_note(offer));
     turn.budget = Some(TURN_BUDGET);
     turn.max_seconds = TURN_SECONDS;

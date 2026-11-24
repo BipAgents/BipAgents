@@ -12,6 +12,8 @@ fn now() -> f64 {
 fn config_in(dir: &std::path::Path) -> Config {
     let mut config = Config::with_key("k");
     config.outbox.db_path = dir.join("bridge.db").to_string_lossy().into_owned();
+    // the profiles in the test's folder, never the machine's ~/.hermes
+    config.hermes.home = dir.join("hermes").to_string_lossy().into_owned();
     for name in ["vie", "coach"] {
         config.agents.insert(name.into(), AgentConfig { name: name.into(), ..Default::default() });
     }
@@ -244,7 +246,7 @@ fn two_no_thanks_in_a_family_quiet_it_30_days() {
     let c = check(&vie(), &semi(&day(30)), "fr", PARIS, n).unwrap();
     let offer = offer_of(&c, "vie", n);
     assert_eq!(offers::learn_key(&offer), "connector");
-    assert!(offers::rule_refusal(&store, &offer, n + 2.0).unwrap().contains("your connectors"));
+    assert!(offers::rule_refusal(&store, &offer, n + 2.0).unwrap().contains("your connectors lately"));
 }
 
 #[test]
@@ -260,8 +262,11 @@ fn a_low_yes_rate_quiets_a_family() {
     assert!(!offers::quiet(&store, "vie", "page", n + 10.0));
     offers::record(&mut store, "vie", "page", "S7", offers::EXPIRED, n + 11.0);
     offers::record(&mut store, "vie", "page", "S8", offers::EXPIRED, n + 12.0);
+    // 1 yes over 1 + 1 + 6/2 = 5: 20 %, not under
+    assert!(!offers::quiet(&store, "vie", "page", n + 13.0));
+    offers::record(&mut store, "vie", "page", "S9", offers::EXPIRED, n + 14.0);
     // 1 yes over 1 + 1 + 7/2 = 5.5: 18 %
-    assert!(offers::quiet(&store, "vie", "page", n + 13.0));
+    assert!(offers::quiet(&store, "vie", "page", n + 15.0));
 }
 
 #[test]
@@ -331,7 +336,7 @@ fn a_quiet_day_makes_at_most_one_pass_a_busy_day_at_most_four() {
     assert_eq!(passes_in(&[(9 * 60, 1, false), (18 * 60, 1, false)]), 0, "two messages: no pass");
     assert_eq!(passes_in(&[(9 * 60, 1, false), (11 * 60, 0, true)]), 1, "an appointment coming: one");
     // a normal day: a dozen messages in two moments, an event
-    let normal = [(8 * 60, 6, false), (13 * 60, 0, true), (19 * 60, 6, false)];
+    let normal = [(8 * 60, 6, false), (8 * 60 + 5, 0, true), (19 * 60, 6, false)];
     assert_eq!(passes_in(&normal), 2);
     // a busy day: 40 messages all day long, events: 4 at most, 2 h apart
     let busy: Vec<(u32, usize, bool)> = (7..23).map(|h| (h * 60, 3, h % 3 == 0)).collect();
@@ -494,7 +499,7 @@ fn an_event_counts_only_for_a_smart_agent_and_only_reports_and_moments() {
     assert!(event_key("watch:c1") && event_key("trigger:t:run") && event_key("routine:r1:said:1") && event_key("plan:p:1"));
     assert!(!event_key("offer:o1:1") && !event_key("handback:offer-r"));
     noted(&config, "vie", "watch:c1");
-    assert!(load(&config).agents.get("vie").is_none(), "basic: nothing kept");
+    assert!(!load(&config).agents.contains_key("vie"), "basic: nothing kept");
     crate::agent_proactive::set_level(&config, "vie", crate::agent_proactive::Level::Smart).unwrap();
     noted(&config, "vie", "watch:c1");
     noted(&config, "vie", "offer:o1:1");

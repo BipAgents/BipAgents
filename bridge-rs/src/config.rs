@@ -780,6 +780,9 @@ pub struct Config {
     /// `[watchers]` (watchers.rs): not in the serialized form either.
     #[serde(skip)]
     pub watchers: crate::watchers::Settings,
+    /// `[proactive]` (offer_ideas.rs): the day's passes of the smart « Initiative ». Not serialized either.
+    #[serde(skip)]
+    pub proactive: crate::offer_ideas::Settings,
     /// `[triggers]` (triggers.rs): routines started by an e-mail or a link. Not serialized either.
     #[serde(skip)]
     pub triggers: crate::triggers::Settings,
@@ -925,6 +928,7 @@ impl Config {
             google_calendar: crate::google_calendar::Settings::default(),
             app_floor: crate::app_floor::Settings::default(),
             watchers: crate::watchers::Settings::default(),
+            proactive: crate::offer_ideas::Settings::default(),
             triggers: crate::triggers::Settings::default(),
             agent_restart: crate::agent_restart::Settings::default(),
             tidy: crate::space_tidy::Settings::default(),
@@ -1980,6 +1984,7 @@ pub fn parse_config(data: &Value, source_path: Option<&str>) -> Result<Config> {
         google_calendar: crate::google_calendar::Settings::from_table(table(data, "google_calendar")),
         app_floor: crate::app_floor::Settings::from_table(table(data, "app_floor")),
         watchers: crate::watchers::Settings::from_table(table(data, "watchers")),
+        proactive: crate::offer_ideas::Settings::from_table(table(data, "proactive")),
         triggers: crate::triggers::Settings::from_table(table(data, "triggers")),
         agent_restart: crate::agent_restart::Settings::from_table(table(data, "agent_restart")),
         tidy: crate::space_tidy::Settings::from_table(table(data, "tidy")),

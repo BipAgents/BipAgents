@@ -479,15 +479,10 @@ fn own_tools(config: &Config, agent: &AgentConfig, offer: bool) -> Vec<Value> {
     if crate::plans::offered(config, &agent.name) {
         tools.push(crate::plans::tool_with(&offer_kinds));
     }
-    // an offer to act (plans/offers.rs): only the kinds it can do here, now
-    if !offer_kinds.is_empty() {
-        let line = crate::plans::offers::learning_line(
-            &crate::plans::offers::load(config),
-            &agent.name,
-            &offer_kinds,
-            py::time_time(),
-        );
-        tools.push(crate::plans::offers::tool(&offer_kinds, line.as_deref()));
+    // an offer to act (plans/offers.rs): only the kinds it can do here, now; in smart « Initiative », any action it can
+    // really do, every use checked (offer_ideas.rs)
+    if let Some(tool) = crate::offer_ideas::offer_tool(config, agent, &offer_kinds, &tools) {
+        tools.push(tool);
     }
 
     if !crate::routines::enabled(config, &agent.name) {
