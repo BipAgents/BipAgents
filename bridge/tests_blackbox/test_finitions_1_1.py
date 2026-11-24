@@ -51,7 +51,9 @@ def test_f6_a_message_not_sent_is_deleted_for_good_and_nothing_else_ever_is(brid
     gate = threading.Event()
     fakes.hermes.runs["r1"] = [sse("run.started", run_id="r1"), gate, sse("run.cancelled", run_id="r1")]
     fakes.hermes.runs["r2"] = [sse("run.completed", run_id="r2", output="Pas encore.")]
-    first, hello = "C1D00000-0000-4000-8000-0000000000F1", "C1D00000-0000-4000-8000-0000000000F2"
+    fakes.hermes.runs["r3"] = [sse("run.completed", run_id="r3", output="Oui, je suis là.")]
+    first, hello, later = ("C1D00000-0000-4000-8000-0000000000F1", "C1D00000-0000-4000-8000-0000000000F2",
+                           "C1D00000-0000-4000-8000-0000000000F3")
     assert send(bridge, thread, first, "Range le carnet").json()["state"] == "started"
     assert send(bridge, thread, hello, "Hello?").json()["state"] == "steered"
     # while its turn goes on, it is being sent: refused
@@ -59,12 +61,22 @@ def test_f6_a_message_not_sent_is_deleted_for_good_and_nothing_else_ever_is(brid
     assert bridge.post(f"/v1/threads/{thread}/stop", headers=AUTH, json={}).json()["stopped"] is True
     gate.set()
     assert wait_until(lambda: page(bridge, thread)["pending"]["run"] is None, timeout=15)
-    stored(fakes, user("Range le carnet"))
+    # a message a turn took and answered (Hermes stored it): never deleted, nor its reply
+    assert send(bridge, thread, later, "tu as pu avancer ?").json()["state"] == "started"
+    stored(fakes, user("tu as pu avancer ?"), said("Pas encore."))
+    def answered():
+        items = page(bridge, thread)["items"]
+        return items[-1]["text"] == "Pas encore." or any(
+            i.get("client_id") == later and not i["id"].startswith("s_") for i in items)
+    assert wait_until(lambda: page(bridge, thread)["pending"]["run"] is None and answered(), timeout=20)
     time.sleep(11)   # a while after it was sent, nothing running: « Pas envoyé »
-    assert [i.get("not_sent") for i in page(bridge, thread)["items"] if i["id"] == f"s_{hello}"] == [True]
-    # a message a turn took (Hermes stored its row) is never deleted, nor its reply
-    assert forget(bridge, thread, first).status_code == 409
-    # unknown here: 404 (another id, another conversation, a bad id 422)
+    items = page(bridge, thread)["items"]
+    assert [i.get("not_sent") for i in items if i["id"] == f"s_{hello}"] == [True], items
+    took = [i for i in items if i.get("client_id") == later]
+    assert len(took) == 1 and not took[0]["id"].startswith("s_"), items
+    refused = forget(bridge, thread, later)
+    assert refused.status_code == 409, refused.text
+    # unknown here: 404 (another id, another conversation), a bad id 422
     assert forget(bridge, thread, "C1D00000-0000-4000-8000-0000000000FF").status_code == 404
     assert forget(bridge, "main-of-nobody", hello).status_code == 404
     assert forget(bridge, thread, "x").status_code == 422
@@ -73,12 +85,13 @@ def test_f6_a_message_not_sent_is_deleted_for_good_and_nothing_else_ever_is(brid
     assert gone.status_code == 200 and gone.json() == {"client_id": hello, "thread": thread, "forgot": True}, gone.text
     items = page(bridge, thread)["items"]
     assert not [i for i in items if i["id"] == f"s_{hello}"], "still shown"
-    assert [i["text"] for i in items if i.get("role") == "person"] == ["Bonjour", "Range le carnet"]
+    texts = [i["text"] for i in items]
+    assert "tu as pu avancer ?" in texts and "Pas encore." in texts and "Hello?" not in texts, texts
     if version is not None:   # the phones told (a `thread` hint)
         assert bridge.get(f"/v1/threads/{thread}", headers=AUTH, params={"agent": "wellness"}).json()["version"] > version
     # a second time: nothing there any more
     assert forget(bridge, thread, hello).status_code == 404
     # sent again under its id later (a phone that never knew): it goes for real, as a new message
-    assert send(bridge, thread, hello, "Hello?").json()["state"] == "started"
-    stored(fakes, user("Hello?"), said("Pas encore."))
-    assert wait_until(lambda: page(bridge, thread)["items"][-1]["text"] == "Pas encore.", timeout=15)
+    again = send(bridge, thread, hello, "Hello?").json()
+    assert again["state"] == "started" and again["run_id"] == "r3", again
+    assert fakes.hermes.started["r3"]["input"].endswith("Hello?")
