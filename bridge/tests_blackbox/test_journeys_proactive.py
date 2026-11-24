@@ -372,7 +372,10 @@ def test_j70_replies_due_consent_then_the_evening_card_then_drafts_never_sent(jo
     assert offer["label"] == (f"Je te dis quand un e-mail attend ta réponse depuis plus d’un jour, dans {pj.ME} ? "
                               "Je ne lis que l’expéditeur et l’objet.")
     assert not generic_problems(consent), generic_problems(consent)
-    assert [m["state"] for m in replies(journey)] == ["asked"] and fakes.imap.idling == 0
+    # (its state « asked » is written just after the card is placed, plans/sources.rs `consent_cards`: an instant
+    # where the mailbox still reads « off », seen once on 24/11; harmless, waited for here)
+    assert wait_until(lambda: [m["state"] for m in replies(journey)] == ["asked"], timeout=10), replies(journey)
+    assert fakes.imap.idling == 0
     assert approve(journey, consent, "once") == {"ok": True, "choice": "once", "kind": "reply_watch", "by": "bridge"}
     assert wait_until(lambda: fakes.imap.idling >= 1, timeout=30), fakes.imap.commands[-5:]
     # the day's e-mails: two wait for a reply; one answered (in Sent) and a mass mailing never shown

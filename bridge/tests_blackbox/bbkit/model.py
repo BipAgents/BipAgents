@@ -163,6 +163,8 @@ class ScriptedModel:
             status = {"status": run.status, "pending_controls": list(run.pending)}
             if run.done:
                 status.update(output=run.output, usage={"input_tokens": 1200, "output_tokens": 80})
+                if getattr(run, "error", None):
+                    status["error"] = run.error
             return JSONResponse(status)
         return None
 
@@ -308,6 +310,7 @@ class ScriptedModel:
         try:
             self._answer(run)
         except Exception as exc:  # noqa: BLE001 - the run ends failed, never hangs
+            run.error = str(exc)   # also in its status, as Hermes gives it (task_frame.rs `ai_silent` reads it)
             run.emit("run.failed", error=str(exc))
             run.status = "failed"
             run.finish()
