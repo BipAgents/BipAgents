@@ -139,7 +139,7 @@ def test_a_service_with_a_token_needs_the_agents_own_space(bridges, fakes):
     bridge.commands.clear()
     refused = bridge.post("/v1/agents/maison/services", headers=AUTH, json=body)
     assert refused.status_code == 409 and refused.json() == {"detail": {"code": "cannot_hold",
-                                                                         "agents": {"maison": "needs_own_space"}}}
+                                                                         "agents": {"maison": "not_configured"}}}
     assert bridge.commands.of("hermes") == [] and not (folder / ".env").exists()
     # Without a token and not personal: fine in the shared hub.
     added = bridge.post("/v1/agents/maison/services", headers=AUTH,

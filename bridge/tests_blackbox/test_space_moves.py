@@ -37,9 +37,11 @@ def test_a_move_whose_hub_delete_fails_stands_and_a_left_space_is_taken_up(bridg
     assert wait_until(moved, timeout=120), bridge.log_tail(4000)
     assert not (left / "LEFT-BY-AN-EARLIER-MOVE").exists()
     assert (left / "profiles" / "fete").is_dir()
-    log = bridge.log_tail(6000)
-    assert "a space left by a move that didn't finish" in log
-    assert "the hub kept the moved agent's profile" in log and cause in log
+    assert "a space left by a move that didn't finish" in bridge.log_tail(6000)
+    # (the hub's copy deleted once the move ended: own_space.rs `finish`)
+    assert wait_until(lambda: "the hub kept the moved agent's profile" in bridge.log_tail(8000), timeout=20), \
+        bridge.log_tail(4000)
+    assert cause in bridge.log_tail(8000)
     deletes = lambda: [e for e in bridge.commands.of("hermes") if e == ["profile", "delete", "fete", "--yes"]]
     assert wait_until(lambda: len(deletes()) >= 2 and not (hub / "profiles" / "fete").is_dir(), timeout=30), \
         bridge.log_tail(4000)

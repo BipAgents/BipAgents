@@ -103,7 +103,7 @@ async fn a_shared_hub_agent_cannot_hold_credentials() {
         Some(VaultError::CannotHold(reasons)) => {
             assert_eq!(
                 reasons.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect::<Vec<_>>(),
-                vec![("budget", "needs_own_space")]
+                vec![("budget", "not_configured")]
             )
         }
         other => panic!("{other:?}"),
