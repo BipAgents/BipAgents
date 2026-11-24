@@ -54,7 +54,7 @@ DAY = ["C'est l'anniversaire de Léa dimanche", "Elle adore la céramique", "Je 
 
 WATCHED = {
     "velo": {"name": "Prix du vélo", "sites": ["www.velos.example"], "description": "Le prix du vélo Riverside",
-             "icon": "shopping"},
+             "icon": "fitness"},
     "creneau": {"name": "Créneau médecin", "sites": ["www.doctolib.example"],
                 "description": "Les créneaux libres du Dr Martin", "icon": "health"},
 }
@@ -138,8 +138,11 @@ def watchers(journey) -> Dict[str, Dict[str, Any]]:
         with ThreadPoolExecutor(1) as pool:
             call = pool.submit(journey.mcp, "/v1/agent-tools/connectors", "connector_register", arguments)
             found: List[Dict[str, Any]] = []
-            assert wait_until(lambda: found.extend(c for c in approvals(bridge, "bip-conn-")
-                                                   if c["request_id"] not in seen) or found, timeout=30)
+            wait_until(lambda: found.extend(c for c in approvals(bridge, "bip-conn-")
+                                            if c["request_id"] not in seen) or found or call.done(), timeout=30)
+            if not found:   # its call ended without a card: why
+                raise AssertionError(f"no connector card for {about['name']}: "
+                                     f"{call.exception(timeout=1) if call.done() else 'still waiting'}")
             allowed = bridge.post(f"/v1/connectors/requests/{found[0]['request_id']}", headers=AUTH, json={"allow": True})
             assert allowed.status_code == 200, allowed.text
             assert "approved" in call.result(timeout=60)

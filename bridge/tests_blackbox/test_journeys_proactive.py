@@ -46,6 +46,24 @@ def journey(bridges, fakes):
     return made
 
 
+PROACTIVE_CARDS = ("bip-plan-", "bip-offer-", "bip-fix-")
+
+
+def wordless(page):
+    """The answered plan, offer and fix cards of the page that say nothing of what was asked (no command, description
+    nor topic in the timeline's `approval` item): `test_j68_an_answered_plan_or_offer_says_what_was_asked`."""
+    return [i for i in page.get("items") or [] if i.get("kind") == "approval"
+            and str((i.get("approval") or {}).get("run_id") or "").startswith(PROACTIVE_CARDS)
+            and not any((i["approval"].get(k) for k in ("command", "description", "topic")))]
+
+
+def drawable(journey, page):
+    """The page checked as both apps draw it (bbkit/displayable_people.py), but for the wordless answered cards of
+    this release (`wordless`: a defect of their own, red in its own test, so the rest of each journey still runs)."""
+    left = {i["id"] for i in wordless(page)}
+    shown.check_page(journey.bridge, {**page, "items": [i for i in page["items"] if i.get("id") not in left]}, AGENT)
+
+
 def cid(n: int) -> str:
     return f"J0URNEY0-0000-4000-8000-{n:012d}"
 
@@ -126,7 +144,7 @@ def test_j67_initiative_three_states_change_what_the_agent_proposes(journey):
     assert "plan_propose" in tool_names(journey) and "offer_act" in tool_names(journey)
     assert journey.send(cid(671), "Je pars à Lisbonne dans trois jours, vol TP 433 #plan").status_code == 200
     page = reply_done(journey, "Je te propose un plan pour Lisbonne")
-    shown.check_page(journey.bridge, page, AGENT)
+    drawable(journey, page)
     [plan] = waiting(journey, "bip-plan-")
     assert approve(journey, plan, "deny") == {"ok": True, "choice": "deny"}
     # « Éteinte »: plan_propose and offer_act are not even listed; the same words, no card
@@ -135,7 +153,7 @@ def test_j67_initiative_three_states_change_what_the_agent_proposes(journey):
     assert "offer_act" not in tool_names(journey)
     assert journey.send(cid(672), "Et je pars aussi à Porto la semaine d'après #plan").status_code == 200
     page = reply_done(journey, "bon voyage à Lisbonne")
-    shown.check_page(journey.bridge, page, AGENT)
+    drawable(journey, page)
     assert not [c for c in page["pending"].get("approvals") or [] if c["run_id"].startswith(("bip-plan-", "bip-offer-"))]
     assert settings(journey)["proactive"] == {"level": "off", "smart_ok": settings(journey)["proactive"]["smart_ok"]}
     # « Intelligente »: offer_act's free form (uses, later)
@@ -156,7 +174,7 @@ def test_j67_initiative_three_states_change_what_the_agent_proposes(journey):
 def test_j68_a_plan_one_card_a_moment_unticked_a_pill_yes_its_work_and_plan_set(journey):
     assert journey.send(cid(681), "Je pars à Lisbonne dans trois jours, vol TP 433 #plan").status_code == 200
     page = reply_done(journey, "Je te propose un plan pour Lisbonne")
-    shown.check_page(journey.bridge, page, AGENT)
+    drawable(journey, page)
     [card] = waiting(journey, "bip-plan-")
     assert not generic_problems(card), generic_problems(card)
     plan = card["bip_plan"]
@@ -185,7 +203,7 @@ def test_j68_a_plan_one_card_a_moment_unticked_a_pill_yes_its_work_and_plan_set(
     page = reply_done(journey, "Voici ta liste de bagages pour Lisbonne", timeout=90)
     started = journey.model.inputs[asked:]
     assert started and any("liste de bagages" in json.dumps(i["input"], ensure_ascii=False) for i in started), started
-    shown.check_page(journey.bridge, page, AGENT)
+    drawable(journey, page)
     # « Prévoir » with « Ta chambre est prête » unticked
     skipped = next(m["id"] for m in plan["moments"] if "chambre" in m["what"])
     done = approve(journey, card, "once", skip=[skipped])
@@ -196,13 +214,31 @@ def test_j68_a_plan_one_card_a_moment_unticked_a_pill_yes_its_work_and_plan_set(
     assert not [j for j in jobs if "chambre" in j["say"]], jobs
     # « Plan prévu »: the answered card in the conversation, its moments in « Ce que tes agents font tout seuls »
     page = journey.page()
-    shown.check_page(journey.bridge, page, AGENT)
+    drawable(journey, page)
     assert not [c for c in page["pending"].get("approvals") or [] if c["run_id"] == card["run_id"]]
     listed = autonomous(journey, plan=plan["id"])
     assert sorted(i["ref"] for i in listed) == sorted(j["id"] for j in jobs), listed
     # the other pill unanswered stays its own card, an app 1.0's « Non » takes it
     reminder = next(c for c in offers.values() if "taxi" in c["bip_offer"]["label"])
     assert approve(journey, reminder, "deny", headers=APP_1_0) == {"ok": True, "choice": "deny"}
+
+
+def test_j68_an_answered_plan_or_offer_says_what_was_asked(journey):
+    """What every device (another phone, the app reinstalled, an app 1.0) draws of a plan or an offer once answered
+    comes from the timeline's `approval` item (approvals_log.rs, threads/mod.rs `kept`): it must say what was asked
+    (its command, description or topic), as every other card's answered item does (bbkit/displayable.py). RED on
+    journeys-1-1 (24/11): the answered `bip-plan-` and `bip-offer-` items have none of them (their « Oui » / « Non »
+    never goes through app.rs' generic log, which keeps the card as shown)."""
+    assert journey.send(cid(685), "Je pars à Lisbonne dans trois jours, vol TP 433 #plan").status_code == 200
+    reply_done(journey, "Je te propose un plan pour Lisbonne")
+    [plan] = waiting(journey, "bip-plan-")
+    pill = next(c for c in waiting(journey, "bip-offer-") if "taxi" in c["bip_offer"]["label"])
+    approve(journey, pill, "deny")
+    approve(journey, plan, "once")
+    page = journey.page()
+    answered = [i for i in page["items"] if i.get("kind") == "approval"]
+    assert {i["approval"]["run_id"] for i in answered} >= {plan["run_id"], pill["run_id"]}, answered
+    assert wordless(page) == [], [i["approval"] for i in wordless(page)]
 
 
 # -- J69 « Réparer / Arrêter » -----------------------------------------------------------------------------------------
@@ -239,6 +275,9 @@ def broken(journey, watcher):
 
 
 def test_j69_repair_or_stop_a_broken_watcher_told_before_it_stops_and_one_card_when_its_ai_is_silent(journey, fakes):
+    # a phone to push to (an iPhone of the test's: APNs' fake)
+    assert journey.bridge.post("/v1/devices", headers=AUTH, json={"token": "e" * 64, "environment": "sandbox",
+                                                                  "agent_ids": [AGENT]}).status_code == 200
     watched = pj.watchers(journey)
     before = len(journey.model.inputs)
     # « Prix du vélo » en panne: the card, no model call; its words as both apps draw them, and an app 1.0's
@@ -348,9 +387,11 @@ def test_j70_replies_due_consent_then_the_evening_card_then_drafts_never_sent(jo
         (s.split(" <")[0], subject) for s, subject in pj.DUE), items
     assert all(isinstance(i["since"], str) and i["since"] for i in items), items
     assert "Les brouillons vont dans tes Brouillons ; rien n’est envoyé." in card["bip_detail"]
-    assert not generic_problems(card) and card["bip_summary"] == "Vie propose : Je prépare les brouillons ?"
+    assert not generic_problems(card), generic_problems(card)
+    # an app 1.0: its sentence says the e-mails and the question (« Vie · 2 e-mails … . Je prépare les brouillons ? »)
+    assert card["bip_summary"].startswith(offer["top"]) and card["bip_summary"].endswith("Je prépare les brouillons ?")
     assert fetched_bodies(fakes) == [], "a body read before « Oui »"
-    shown.check_page(journey.bridge, journey.page(), AGENT)
+    drawable(journey, journey.page())
     # « Oui »: ONE turn that drafts the replies, never sends
     asked = len(journey.model.inputs)
     assert approve(journey, card, "once")["choice"] == "once"
@@ -403,7 +444,7 @@ def test_j71_a_smart_pass_over_a_day_offers_with_what_and_the_amber_line_yes_sta
     assert pj.IDEA["prompt"] in card["bip_detail"] and "Avec : une page" in card["bip_detail"]
     sent = passes(fakes)[-1]["body"]["messages"][1]["content"]
     assert "anniversaire de Léa" in sent, sent
-    shown.check_page(journey.bridge, journey.page(), AGENT)
+    drawable(journey, journey.page())
     # « Oui »: its turn starts, with the prompt shown under « i »
     asked = len(journey.model.inputs)
     yes = approve(journey, card, "once")

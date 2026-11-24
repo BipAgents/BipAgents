@@ -183,6 +183,7 @@ class ScriptedModel:
             run_id = f"run_j{self.count}"
         visible = NOTES.sub("", words)
         run = Run(run_id, agent, session, visible, photos, DOC_LINE.findall(visible))
+        run.raw = words   # with the bridge's hidden notes (an offer's « Oui »: its prompt may sit in one)
         self.runs[run_id] = run
         if "#jours" in visible.lower() and not self.hermes.messages.get((agent, session)):
             for row in history():
@@ -571,7 +572,8 @@ class PeopleModel(ScriptedModel):
             # J69: the agent's AI doesn't answer (task_frame.rs `ai_silent` reads Hermes' error)
             raise RuntimeError("APIConnectionError: Connection error.")
         if not any(m in words for m in self.MARKERS):
-            work = next((said for key, said in self.OFFER_WORK.items() if key in words), None)
+            raw = (getattr(run, "raw", "") or "").lower()
+            work = next((said for key, said in self.OFFER_WORK.items() if key in words or key in raw), None)
             if work:   # the turn of a « Oui » to an offer: it sets to work
                 said = self.say(run, work)
                 self.store(run.agent, run.session, {"role": "assistant", "content": said, "timestamp": time.time()})
