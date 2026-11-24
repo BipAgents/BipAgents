@@ -33,11 +33,12 @@
 //! No Python counterpart.
 
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{LazyLock, Mutex};
 
 use chrono::TimeZone;
 use chrono_tz::Tz;
 use serde::{Deserialize, Serialize};
+use regex::Regex;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
@@ -193,22 +194,31 @@ pub fn subject_of(offer: &Offer) -> &str {
 }
 
 /// The words that make an offer one of buying something, in the four languages (folded: no accents, lowercase), at a
-/// word's start. Not « compr… » alone: French « comprendre ».
-const SHOPPING_WORDS: [&str; 13] = ["achet", "achat", "commander", "buy", "purchas", "shopping", "kauf", "einkauf",
-                                     "bestell", "comprar", "compra", "panier", "warenkorb"];
+/// word's start: buying, a basket, a price, a shop. Not « compr… » alone: French « comprendre ».
+const SHOPPING_WORDS: [&str; 20] = ["achet", "achat", "commander", "panier", "prix", "magasin", "boutique", "buy",
+    "purchas", "shop", "price", "basket", "kauf", "einkauf", "bestell", "warenkorb", "preis", "comprar", "compra", "precio"];
+
+/// What says that nothing will be bought (« Rien ne sera acheté », « sans rien acheter », « nothing is bought »), taken
+/// out before the words are looked for.
+static NOTHING_BOUGHT: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\b(rien|nothing|nichts|nada|ne|sans|without|ohne|sin|never|jamais)\W+(\w+\W+){0,3}?(achet|buy|bought|kauf|gekauft|compr)\w*")
+        .unwrap()
+});
 
 /// The subject an offer is also counted by, whatever its kind (bench 1.1 problem 7, the choice of 24/11): « buying
 /// something ». Two « Non merci » to it in a row quiet it for `QUIET_DAYS`: a search « où acheter X », a page or a
 /// free-form offer about buying is then not offered either (the bench: after two declined « où acheter » searches,
-/// the agents offered them again as pages or as free-form ones, and the bridge let them through). None: no such
-/// subject (an offer is then counted by its kind, family and topic only, as before).
+/// the agents offered them again as pages or as free-form ones, and the bridge let them through; on the new bench the
+/// labels often said « je te cherche des chaussures livrables avant dimanche » or « les meilleurs téléphones avec leurs
+/// prix »: its words and its prompt are read, what says nothing is bought aside). None: no such subject (counted by
+/// its kind, family and topic only, as before).
 pub fn theme_of(offer: &Offer) -> Option<&'static str> {
     if offer.family == "shopping" || offer.kind == "cart" {
         return Some(SHOPPING);
     }
-    // (not its prompt: « Rien ne sera acheté » is said of many a search that buys nothing)
-    let text = [offer.label.as_str(), offer.about.as_str(), offer.subject.as_str()].join(" ");
-    folded(&text).split_whitespace().any(|w| SHOPPING_WORDS.iter().any(|s| w.starts_with(s))).then_some(SHOPPING)
+    let text = [offer.label.as_str(), offer.about.as_str(), offer.subject.as_str(), offer.prompt.as_str()].join(" ");
+    let text = NOTHING_BOUGHT.replace_all(&folded(&text), " ").into_owned();
+    text.split_whitespace().any(|w| SHOPPING_WORDS.iter().any(|s| w.starts_with(s))).then_some(SHOPPING)
 }
 
 /// `theme_of`'s one subject, as the learning counts it (a key of its own beside the kinds: « theme:shopping »).

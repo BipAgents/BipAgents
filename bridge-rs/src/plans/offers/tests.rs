@@ -887,7 +887,16 @@ fn bench_two_no_thanks_to_buying_quiet_buying_whatever_the_kind() {
                           ("es", "¿Busco dónde comprar un hervidor?")] {
         assert!(refused(&store, &plans, &buy("page", label, "Kettle"), None, PARIS, n + 10.0).is_some(), "{lang}");
     }
-    // not about buying: as before
+    // the new bench's labels: buying said by a price or by the work under « i », not by « acheter »
+    let phones = buy("page", "Je cherche les meilleurs téléphones du moment avec leurs prix ?", "Téléphone");
+    assert!(refused(&store, &plans, &phones, None, PARIS, n + 10.0).is_some());
+    let mut shoes = buy("page", "Je te cherche des chaussures de running livrables avant dimanche ?", "Chaussures");
+    shoes.prompt = "Trouve où les acheter près de chez elle, livrables avant dimanche.".into();
+    assert_eq!(theme_of(&shoes), Some(SHOPPING));
+    // not about buying: as before (« rien ne sera acheté » says it buys nothing)
+    let mut nothing = buy("page", "Je te prépare la liste de bagages ?", "Liste");
+    nothing.prompt = "Une page avec la liste. Rien ne sera acheté, sans rien acheter non plus.".into();
+    assert_eq!(theme_of(&nothing), None, "{}", nothing.prompt);
     let list = buy("page", "Je te fais la liste de bagages ?", "Bagages");
     assert!(refused(&store, &plans, &list, None, PARIS, n + 10.0).is_none());
     let understand = buy("page", "Je t'aide à comprendre ta facture ?", "Facture");
