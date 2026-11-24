@@ -381,6 +381,15 @@ fn down_for_restart(agent: &AgentConfig, exc: &crate::hermes::HermesError) -> bo
 /// The conversation's tip, made when it has none yet (its first message): a Hermes session titled from the words.
 async fn tip_of(state: &AppState, threads: &Threads, agent: &AgentConfig, thread: &Thread, words: &str) -> ApiResult<String> {
     if let Some(tip) = threads.line(agent, thread).await.map_err(unavailable)?.last() {
+        // its shared memory off since (the person, an outside model): a new session first, unless a turn goes on there
+        // (the words join it, or wait in the queue, which moves them; agent_shared_memory.rs `fresh_tip`, review 2 B2-a)
+        if state.hub.session_run(&agent.name, &tip.session_id).is_none() {
+            if let Some(fresh) =
+                crate::agent_shared_memory::fresh_tip(&state.config(), &state.hermes, threads, agent, thread).await
+            {
+                return Ok(fresh);
+            }
+        }
         return Ok(tip.session_id.clone());
     }
     let first: String = words.chars().take(60).collect();
@@ -603,6 +612,8 @@ pub async fn send(state: &AppState, agent: &AgentConfig, thread: Option<Thread>,
         let pooled = move || crate::shared_files::share_own_files(&config, &shared, &files, &person);
         let _ = tokio::task::spawn_blocking(pooled).await;
     }
+    // an outside model the bridge has not seen yet (SSH, a restart, the update): protected before this turn (B2-a)
+    crate::agent_shared_memory::guard_on_send(state.config(), agent).await;
     let tip = tip_of(state, &threads, agent, &thread, &words).await?;
     let tip = tip.as_str();
     let answer = |state: &str, run: Option<&str>| {

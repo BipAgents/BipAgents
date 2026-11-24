@@ -66,6 +66,9 @@ fn words(message: &Message) -> String {
 
 /// The rooms `agent` takes part in (its own on this install).
 fn rooms_of(config: &Config, agent: &str) -> Vec<Room> {
+    if crate::agent_shared_memory::out_of_rooms(config, agent) {
+        return Vec::new(); // « à l'écart »: none of the other agents' words (review 2, C8)
+    }
     rooms::all(config).into_iter().filter(|r| r.participants.iter().any(|p| p == agent)).collect()
 }
 
@@ -155,6 +158,9 @@ fn fold(text: &str) -> String {
 pub fn call(config: &Config, agent: &str, arguments: &Dict) -> Dict {
     let wanted = tk::strip(&tk::str_or_empty(arguments.get("room"))).to_string();
     let query = tk::strip(&tk::str_or_empty(arguments.get("query"))).to_string();
+    if crate::agent_shared_memory::out_of_rooms(config, agent) {
+        return tool_text("Your person keeps you apart from their other agents for now: their group discussions are closed to you.", true);
+    }
     let mine = rooms_of(config, agent);
     if mine.is_empty() {
         return tool_text("You take part in no group discussion.", false);
@@ -293,6 +299,20 @@ mod tests {
         assert!(next.contains("« Sport »") && !next.contains("Site du club"), "{next}");
         // another agent of the room has its own mark
         assert!(take_note(&config, "bip").unwrap().contains("- You: J'ajoute"));
+    }
+
+    /// Review 2 (red), C8: an agent « à l'écart » (an outside model's protection: rules.rs `aside`, the pop-up's « ses
+    /// échanges avec tes autres agents sont éteints ») still gets the other agents' words of its rooms joined to its
+    /// next one-to-one message (and answers in the room after them, its room session replaying the room's history).
+    #[test]
+    fn review2_an_agent_put_aside_gets_no_other_agent_s_words_from_its_rooms() {
+        let (_dir, config) = setup();
+        room(&config, "g000000000003", "Sport et santé", &["coach", "dev"]);
+        say(&config, "g000000000003", "person", "On fait le point ?");
+        say(&config, "g000000000003", "coach", "Ta rééducation du genou avance bien.");
+        crate::rules::change(&config, |r| r.aside.push("dev".into())).unwrap();
+        let note = take_note(&config, "dev");
+        assert!(note.as_deref().is_none_or(|n| !n.contains("rééducation")), "{note:?}");
     }
 
     #[test]

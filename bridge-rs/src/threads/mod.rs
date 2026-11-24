@@ -284,6 +284,20 @@ impl Threads {
             .collect())
     }
 
+    /// The threads of `agent` whose newest segment was added before `before` (an ISO time, as `added_at`): the
+    /// conversations to go on in a new session (agent_shared_memory.rs `fresh_sessions`).
+    pub async fn begun_before(&self, agent: &str, before: &str) -> anyhow::Result<Vec<Thread>> {
+        let rows = self
+            .store
+            .run(
+                "SELECT t.* FROM threads t WHERE t.agent = ? AND (SELECT MAX(s.added_at) FROM thread_segments s \
+                 WHERE s.thread_id = t.id) < ?",
+                vec![text(agent), text(before)],
+            )
+            .await?;
+        Ok(rows.iter().map(Thread::of).collect())
+    }
+
     /// The thread holding `session` already (None: none yet, or the store unreadable).
     pub async fn thread_of(&self, agent: &AgentConfig, session: &str) -> Option<Thread> {
         let id = self.thread_of_session(&agent.name, session).await.ok().flatten()?;

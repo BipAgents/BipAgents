@@ -558,7 +558,8 @@ async fn turn(
     wait: f64,
     chain: Option<&str>,
 ) -> Answer {
-    let hermes = HermesClient::new(http.clone());
+    // the place's files read as the turn starts (`session_search` closed for an agent the protection covers)
+    let hermes = HermesClient::of_place(http.clone(), crate::config::SharedConfig::new(config.clone()));
     let input = crate::dates::now::stamped(config, target, framed);
     let mut started = None;
     let mut refused = None;

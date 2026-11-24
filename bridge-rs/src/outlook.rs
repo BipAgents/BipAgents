@@ -38,7 +38,8 @@
 //!
 //! App routes (the bridge key; 404 while off). Errors `{"detail": {"code", "message"}}` as drives.rs':
 //!
-//!     GET    /v1/outlook             {enabled, configured, state, account, connected_at, agents, parts, missing}
+//!     GET    /v1/outlook             {enabled, configured, state, account, connected_at, agents, parts, missing,
+//!                                     outside: {agent: provider's label}}
 //!     POST   /v1/outlook/start       {agents, parts?} → {authorize_url, state, redirect_uri, expires_in}
 //!     POST   /v1/outlook/callback    {url} → as listed  (400 denied | admin_consent | unknown_state | bad_callback)
 //!     PUT    /v1/outlook/agents      {agents, parts?: {mail, calendar, contacts}} → as listed
@@ -202,13 +203,58 @@ fn shared_with_others(config: &Config, agent: &str) -> bool {
     crate::family_agent::is_family(config, agent) || crate::project_agent::is_project(config, agent)
 }
 
-/// Whether `agent` is « protected »: what it reads goes only to a model that keeps nothing (review R13). The hook for
-/// the shared-memory branch (`outside_model::place`): when both meet, this returns false for a model outside or
-/// unknown, and Outlook is off for that agent by default, as the shared memory and the Carnet are. Until then, every
-/// agent of the place is.
+/// Whether what `agent` reads of the account stays with a model that keeps nothing (review R13; choice B, Alex 24/11):
+/// false for a model outside or one the bridge cannot tell (`outside_model::place`, read at every call: a model
+/// changed by SSH counts at once, before the shared memory's guard has seen it), unless the person turned Outlook back
+/// on for it on that provider (« Rallumer Outlook ? », agent_shared_memory::outlook_allowed). An agent off this way
+/// stays chosen: back on a model that is not outside, it has Outlook again as the person had it.
 pub fn kept_on_the_place(config: &Config, agent: &str) -> bool {
-    let _ = (config, agent);
-    true
+    let Some(found) = config.agent(Some(agent)) else { return false };
+    crate::agent_shared_memory::outlook_allowed(config, found)
+}
+
+/// Whether `agent` is among the account's chosen agents (whether it uses it now or not).
+pub fn chosen(config: &Config, agent: &str) -> bool {
+    stored(config).is_some_and(|a| a.link.agents.iter().any(|x| x == agent))
+}
+
+/// Whether `agent` is chosen but off for its model ([`kept_on_the_place`] false): the apps say why, and ask
+/// « Rallumer Outlook ? » before choosing it again.
+pub fn held(config: &Config, agent: &str) -> bool {
+    config.outlook.enabled && config.agent(Some(agent)).is_some() && !kept_on_the_place(config, agent) && chosen(config, agent)
+}
+
+/// An agent of the place off for its model now (outside or unknown, not allowed by the person: [`kept_on_the_place`]).
+fn held_now(config: &Config, agent: &str) -> bool {
+    config.agent(Some(agent)).is_some() && !kept_on_the_place(config, agent)
+}
+
+/// The agents the person may choose that are on an outside model and don't get Outlook for it: {name: provider's
+/// label} (the apps' line under its row, and « Rallumer Outlook ? » before choosing it).
+fn outside_agents(config: &Config) -> serde_json::Map<String, Value> {
+    config
+        .agents
+        .values()
+        .filter(|a| !shared_with_others(config, &a.name) && !crate::agent_shared_memory::outlook_allowed(config, a))
+        .filter_map(|a| crate::agent_shared_memory::outside_now(config, a).map(|(_, label)| (a.name.clone(), json!(label))))
+        .collect()
+}
+
+/// After the person's choice (`set_agents`, `finish`): each agent of `chosen` still off for its model was chosen with
+/// « Rallumer Outlook ? » answered (the apps never send one otherwise): allowed on its provider. Each of `removed`
+/// loses what was allowed. The agents allowed now.
+fn person_chose(config: &Config, chosen: &[String], removed: &[String]) -> Vec<String> {
+    let mut allowed = Vec::new();
+    for name in chosen {
+        if let Some(agent) = config.agent(Some(name)).filter(|_| held_now(config, name)) {
+            crate::agent_shared_memory::outlook_turned_on(config, agent);
+            allowed.push(name.clone());
+        }
+    }
+    for name in removed {
+        crate::agent_shared_memory::outlook_turned_off(config, name);
+    }
+    allowed
 }
 
 /// After the person's « Oui » (review C4): the account still connected and the same one as when the card was made
@@ -259,7 +305,9 @@ pub fn view(config: &Config, account: Option<&Account>) -> Value {
         "state": account.map(|a| a.link.state.as_str()).unwrap_or("not_connected"),
         "account": account.and_then(|a| a.link.account.clone()),
         "connected_at": account.map(|a| a.link.connected_at),
-        "agents": account.map(|a| a.link.agents.clone()).unwrap_or_default(),
+        // the agents that use it now: one chosen but off for its model is in `outside` (choice B)
+        "agents": account.map(|a| a.link.agents.iter().filter(|x| !held_now(config, x)).cloned().collect::<Vec<_>>()).unwrap_or_default(),
+        "outside": outside_agents(config),
         "parts": account.map(|a| a.parts).unwrap_or_default(),
         // switched on and not given by Microsoft yet: « Reconnecter » asks it
         "missing": account.map(|a| a.parts.missing(granted(&a.link.tokens))).unwrap_or_default(),
@@ -422,6 +470,15 @@ pub async fn finish(config: &Config, query: HashMap<String, String>) -> ApiResul
         let other_account = previous.as_ref().is_some_and(|p| {
             p.link.account.is_some() && account.is_some() && p.link.account != account
         });
+        // chosen in the app while off for its model: « Rallumer Outlook ? » answered (one the app did not ask, allowed
+        // for the previous account only, is not)
+        let answered: Vec<String> = flow.agents.iter().filter(|a| held_now(config, a)).cloned().collect();
+        if other_account {
+            // another account: what the person allowed for the previous one is asked again (review B1)
+            for a in previous.iter().flat_map(|p| &p.link.agents) {
+                crate::agent_shared_memory::outlook_turned_off(config, a);
+            }
+        }
         let same = previous.filter(|_| !other_account);
         // what was asked is what they use (the app sends what the person switched on)
         let parts = asked;
@@ -443,6 +500,7 @@ pub async fn finish(config: &Config, query: HashMap<String, String>) -> ApiResul
         };
         stored.outlook = Some(Account { link: link.clone(), parts });
         store.write(&stored)?;
+        person_chose(config, &answered, &[]);
         (link, parts, other_account)
     };
     if other_account {
@@ -468,6 +526,15 @@ pub async fn set_agents(config: &Config, agents: &[String], parts: Option<Parts>
         let store = connections::store_of(config);
         let mut stored = store.read()?;
         let account = stored.outlook.as_mut().ok_or_else(not_connected)?;
+        // one off for its model, that the app showed off and so left out: still chosen (back on a model that is not
+        // outside, it has it again as the person had it; choice B)
+        let asked = agents.clone();
+        let mut agents = agents.clone();
+        for a in &account.link.agents {
+            if !agents.contains(a) && held_now(config, a) {
+                agents.push(a.clone());
+            }
+        }
         let before = std::mem::replace(&mut account.link.agents, agents.clone());
         let before_parts = account.parts;
         if let Some(parts) = parts {
@@ -485,8 +552,14 @@ pub async fn set_agents(config: &Config, agents: &[String], parts: Option<Parts>
             }
         }
         let calendar_off = before_parts.calendar && !account.parts.calendar;
-        let shown = view(config, Some(&*account));
         store.write(&stored)?;
+        // « Rallumer Outlook ? » answered for an agent on an outside model: its tools change too
+        for a in person_chose(config, &asked, &removed) {
+            if !changed.contains(&a) {
+                changed.push(a);
+            }
+        }
+        let shown = view(config, stored.outlook.as_ref());
         (shown, changed, removed, calendar_off)
     };
     // their « Toujours » for Outlook's calendar goes with it: chosen again, they are asked again
@@ -507,6 +580,10 @@ pub async fn disconnect(config: &Config) -> ApiResult<(Value, Vec<String>)> {
         let mut stored = store.read()?;
         let account = stored.outlook.take().ok_or_else(|| if config.outlook.enabled { not_connected() } else { off() })?;
         store.write(&stored)?;
+        // « Rallumer Outlook ? » goes with it: connected again, maybe with another account, it is asked again (review B1)
+        for a in &account.link.agents {
+            crate::agent_shared_memory::outlook_turned_off(config, a);
+        }
         account
     };
     revoke_always(config, None).await;

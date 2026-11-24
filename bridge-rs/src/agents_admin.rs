@@ -2254,10 +2254,14 @@ pub async fn read_settings(config: &Config, agent: &AgentConfig, http: &reqwest:
               "group": crate::agent_groups::group_of(config, &agent.name)})))
 }
 
-/// « Initiative » (agent_proactive.rs) in `settings`, except for an agent other people talk to (no such setting).
+/// « Initiative » (agent_proactive.rs) in `settings`, except for an agent other people talk to (no such setting); and
+/// « Mémoire partagée » (agent_shared_memory.rs), for an agent of the person's own that this bridge runs.
 fn with_proactive(config: &Config, agent: &AgentConfig, mut settings: Value) -> Value {
     if let (Some(proactive), Value::Object(map)) = (crate::agent_proactive::view(config, agent), &mut settings) {
         map.insert("proactive".into(), proactive);
+    }
+    if let (Some(shared), Value::Object(map)) = (crate::agent_shared_memory::view(config, agent), &mut settings) {
+        map.insert("shared_memory".into(), shared);
     }
     settings
 }
@@ -2348,6 +2352,8 @@ pub async fn write_settings(
         crate::answer_style::set(shared, agent, &style, body.answer_style_custom.as_deref())?;
     }
     if let Some(on) = body.health {
+        // the person's own choice from now on (an outside model's default no longer brings it back)
+        crate::agent_shared_memory::person_set(&config, &agent.name, crate::agent_shared_memory::HEALTH);
         set_health(&config, agent, on, run).await?;
     }
     if let Some(categories) = &body.health_categories {
@@ -2363,11 +2369,18 @@ pub async fn write_settings(
         }
     }
     if let Some(on) = body.notebook {
+        // the person's own choice from now on (an outside model's default no longer brings it back: agent_shared_memory.rs)
+        crate::agent_shared_memory::person_set_notebook(&config, &agent.name);
         if crate::notebook::set_enabled(&config, &agent.name, on)? {
             // Its tools' entry changes (the notebook tools listed or not) and its rule with them.
             if let Err(exc) = crate::agent_tools::register(&config, agent, run).await {
                 let error = tail(&exc.to_string(), 200);
                 tracing::warn!(target: "bipbridge::agents", agent = %agent.name, error = %error, "agent tools not registered");
+            }
+            // in or out of the shared memory's circle at once: what it had received taken back, its prompts refreshed
+            crate::shared_memory::sync(&config, crate::py::time_time(), None);
+            if crate::shared_memory::take_refresh(&agent.name) {
+                refresh_prompts_soon(config.clone(), agent.clone(), run.clone());
             }
         }
     }
@@ -2769,6 +2782,16 @@ async fn put_model(
 ) -> ApiResult<Response> {
     let config = state.config();
     let agent = editable(&config, &agent_id).map_err(|_| not_managed())?;
+    // a model that runs outside (an Ollama cloud model on the person's Ollama: review R3): the protection before the
+    // model is written (review R2)
+    if read_model(&config, &agent).is_some() {
+        let name = body.name.clone();
+        if let Some((p, l)) = crate::outside_model::outside_after(&config, &agent, |m| {
+            m.insert("default".into(), json!(name));
+        }) {
+            crate::agent_shared_memory::guard_before_and_follow(config.clone(), &agent, &p, &l).await;
+        }
+    }
     let model = {
         let _guard = LOCK.lock().await;
         match set_model(&config, &agent, &body.name, body.vision) {
@@ -2780,6 +2803,8 @@ async fn put_model(
         }
     };
     tracing::info!(target: "bipbridge::agents", agent = %agent.name, model = %body.name, "agent model changed");
+    crate::agent_shared_memory::guard_and_follow(config.clone(), &agent).await;
+    crate::agent_shared_memory::fresh_sessions(&state).await;
     Ok(web::ok(json!({"id": agent.name, "model": model})))
 }
 
