@@ -121,6 +121,26 @@ def test_a_hub_agent_asks_a_secret_moves_by_itself_then_gets_the_card(bridges, f
         assert not_done(again.result(timeout=30))
 
 
+def test_no_move_when_its_space_would_hold_the_desktop_too(bridges, fakes):
+    """Investigation of 24/11: a home install without the visible browser's containers (the person answered « n »),
+    whose agents' sandbox holds Hermes' Bot Desktop (installer setup_desktop, `bot_desktop.auto_start`), isolates no
+    sandbox. Its space would get the same settings and refuse the secret all the same: the agent moved (~250 MB), kept
+    nothing, and stayed mute. Now nothing moves: the refusal that exists, at once."""
+    bridge, hub = hub_place(bridges, fakes, project="fete")
+    (hub / "config.yaml").write_text("model:\n  provider: custom\n  default: glm\nbot_desktop:\n  auto_start: true\n")
+    bridge.start()
+    wait_registered(bridge, ["coach", "fete"])
+    use_token_of(hub)
+    assert "bipagents_connectors" not in entries(hub, "coach")   # not offered either
+    result = tool(bridge, "ask_secret", ASK)
+    assert result["isError"] and text(result).startswith("Connectors and secrets aren't available to you here"), \
+        text(result)
+    assert not (bridge.root / "spaces" / "coach").exists() and (hub / "profiles" / "coach").is_dir()
+    assert tomllib.loads(bridge.toml_text())["agents"]["coach"].get("isolated") is not True
+    assert not secret_cards(bridge)
+    assert "moving into its own space" not in bridge.log_tail(4000)
+
+
 def test_a_move_that_fails_is_one_plain_answer_and_not_retried_at_once(bridges, fakes):
     bridge, hub = hub_place(bridges, fakes, start="exit 3", project="fete")
     bridge.start()
