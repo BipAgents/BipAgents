@@ -866,6 +866,49 @@ mod tests {
         assert_eq!(rebind_api_sessions(dir.path(), "/space/profiles/coach").unwrap(), 0); // once
     }
 
+    /// Investigation of 24/11 (bench 1.1, problem 10: Lumi and Iris mute after their move, 502 at every message, a
+    /// bridge restart changes nothing). An agent that moves at its first secret (own_space.rs `ready`) does so in the
+    /// middle of a hub turn; its space's gateway starts and takes the next runtime epoch in the profile's database
+    /// (Hermes `begin_runtime_epoch`: hub's + 1); once the hub turn ends, `finish` copies the hub's database over the
+    /// space's (`resync_database`) and puts the hub's epoch back. From then on the space's Hermes refuses every turn
+    /// (`POST /v1/runs` → 409 `stale_epoch`, hermes_state_runtime.py `_epoch`) until its gateway restarts. Reproduced on
+    /// a lab of origin/main d37d74e5f and bench-1-1 7d80f6557 (aibox, Hermes 0.23.1). The copy must keep the runtime
+    /// tables of the Hermes serving the target.
+    #[test]
+    fn red_a_resync_keeps_the_runtime_epoch_of_the_hermes_serving_the_target() {
+        let dir = tempfile::tempdir().unwrap();
+        let (hub, space) = (dir.path().join("hub/profiles/lumi"), dir.path().join("space/profiles/lumi"));
+        std::fs::create_dir_all(&hub).unwrap();
+        std::fs::create_dir_all(&space).unwrap();
+        // Hermes' tables, as 0.23.1 makes them (the columns the check reads)
+        let make = |at: &Path, epoch: i64, instance: &str, said: &str| {
+            let conn = rusqlite::Connection::open(at.join("state.db")).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE runtime_epoch (singleton INTEGER PRIMARY KEY CHECK (singleton = 1), epoch INTEGER NOT NULL, \
+                 instance_id TEXT NOT NULL);
+                 CREATE TABLE messages (session_id TEXT, content TEXT);",
+            )
+            .unwrap();
+            conn.execute("INSERT INTO runtime_epoch VALUES (1, ?1, ?2)", rusqlite::params![epoch, instance]).unwrap();
+            conn.execute("INSERT INTO messages VALUES ('api_1', ?1)", [said]).unwrap();
+        };
+        // the hub's gateway serves the profile at epoch 1; the space's, started on the move's first copy, at epoch 2
+        make(&hub, 1, "hub-gateway", "the hub turn's end");
+        make(&space, 2, "space-gateway", "before the hub turn ended");
+        resync_database(&hub, &space, "/space/profiles/lumi").unwrap();
+        let conn = rusqlite::Connection::open(space.join("state.db")).unwrap();
+        let said: String = conn.query_row("SELECT content FROM messages", [], |r| r.get(0)).unwrap();
+        assert_eq!(said, "the hub turn's end", "the hub turn's end copied into the space");
+        let (epoch, instance): (i64, String) = conn
+            .query_row("SELECT epoch, instance_id FROM runtime_epoch WHERE singleton = 1", [], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap();
+        assert_eq!(
+            (epoch, instance.as_str()),
+            (2, "space-gateway"),
+            "the space's Hermes keeps its own epoch: with the hub's, it answers every turn 409 stale_epoch"
+        );
+    }
+
     #[test]
     fn quoting_and_commands() {
         assert_eq!(shlex_quote("/opt/hermes"), "/opt/hermes");
