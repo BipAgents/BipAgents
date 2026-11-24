@@ -728,6 +728,17 @@ is not this turn's), or a tool whose card is to act on (a payment, a task, an ag
 can't say); `next`: when to ask again (1 s while it runs, 1.5 s while it waits; null: settled). The thread's hint is a
 reason to ask sooner. An older bridge answers 404: the apps read the timeline as before.
 
+**A message « Pas envoyé » deleted** (send.rs `forget`, finitions 1.1, an addition: an app 1.0 never calls it):
+
+```text
+DELETE /v1/threads/{thread}/sends/{client_id}?agent=   → {client_id, thread, forgot: true}
+```
+
+Only a message no turn took and none will (`not_sent`): its `thread_sends` row and its line said at once go, the
+phones get a `thread` hint (`forgot`). A message Hermes stored (sent, maybe answered), one waiting in the queue or in
+a turn going on: 409, nothing touched. Unknown here (another conversation, a discussion, a shared agent's): 404, the
+app takes its bubble away all the same. An older bridge: 404/405 too.
+
 Run state comes from the timeline only: `pending.run` (is the turn still going?), `pending.approvals` /
 `pending.questions` (what it waits for) and the events stream; the apps ask Hermes nothing about a run (their
 `getRun` / `checkRun` and the old `GET /v1/sessions/{id}/state` poll are gone).

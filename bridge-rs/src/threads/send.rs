@@ -477,6 +477,44 @@ pub fn lost(item: &Item) -> bool {
     item.body.contains_key("sending") && utcnow().timestamp() as f64 - item.at > LOST_AFTER
 }
 
+/// `DELETE /v1/threads/{thread}/sends/{client_id}` (finitions 1.1, an addition: an app 1.0 never calls it): the
+/// person deletes a message shown « Pas envoyé » (`lost`), which the bridge would otherwise keep showing for
+/// `SENDS_KEPT_SECONDS`. Only such a message: one a turn took (Hermes stored its row: `message_id`), one waiting in the
+/// queue or in a turn going on is refused (409), and nothing of Hermes' (a message sent, its reply) is ever touched.
+/// Its rows go (`thread_sends`, its line said at once `thread_instant`), the phones are told (a `thread` hint, `forgot`).
+pub async fn forget(state: &AppState, agent: &AgentConfig, thread: &Thread, client_id: &str) -> ApiResult<Value> {
+    let threads = threads_of(state);
+    let rows = state
+        .store
+        .run(
+            "SELECT thread_id, message_id FROM thread_sends WHERE agent = ? AND client_id = ?",
+            vec![text(&agent.name), text(client_id)],
+        )
+        .await?;
+    let Some(row) = rows.first().filter(|r| r.get("thread_id").and_then(Value::as_str) == Some(thread.id.as_str())) else {
+        return Err(HttpError::not_found());
+    };
+    let refused = || HttpError::new(409, "only a message never sent (« not_sent ») can be deleted");
+    if row.get("message_id").and_then(Value::as_str).is_some_and(|m| !m.is_empty()) {
+        return Err(refused());
+    }
+    if known_now(state, &threads, agent, client_id, &thread.id).await.is_some() {
+        return Err(refused()); // waiting in the queue, a turn going on, or stored since: not « Pas envoyé »
+    }
+    for table in ["thread_sends", "thread_instant"] {
+        state
+            .store
+            .run(
+                &format!("DELETE FROM {table} WHERE agent = ? AND client_id = ?"),
+                vec![text(&agent.name), text(client_id)],
+            )
+            .await?;
+    }
+    tracing::info!(agent = %agent.name, thread = %thread.id, "a message never sent deleted by its person");
+    let _ = threads.bump(thread, "forgot").await;
+    Ok(json!({"client_id": client_id, "thread": thread.id, "forgot": true}))
+}
+
 /// How long a sent message may wait unstored, nothing running, before it counts as lost (its run is registered by the
 /// same request that sends it: a few seconds cover the clocks).
 const LOST_AFTER: f64 = 10.0;

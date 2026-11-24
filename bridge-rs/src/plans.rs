@@ -313,6 +313,9 @@ pub struct Texts {
     pub weeks: (&'static str, &'static str),
     /// Before a plan's offers (§7.2, validated): its « i » says each one whole.
     pub offers: &'static str,
+    /// The card's top line in an app 1.1 (§7.2, validated; `bip_plan.top`): a trip's or an appointment's, a habit's.
+    pub top: &'static str,
+    pub top_habit: &'static str,
 }
 
 pub static TEXTS: [Texts; 4] = [
@@ -342,6 +345,8 @@ pub static TEXTS: [Texts; 4] = [
         around: "vers",
         weeks: ("semaine", "semaines"),
         offers: "Je peux aussi :",
+        top: "{agent} propose un plan · {title}",
+        top_habit: "{agent} propose une habitude · {title}",
     },
     Texts {
         lang: "en",
@@ -369,6 +374,8 @@ pub static TEXTS: [Texts; 4] = [
         around: "around",
         weeks: ("week", "weeks"),
         offers: "I can also:",
+        top: "{agent} suggests a plan · {title}",
+        top_habit: "{agent} suggests a habit · {title}",
     },
     Texts {
         lang: "de",
@@ -396,6 +403,8 @@ pub static TEXTS: [Texts; 4] = [
         around: "gegen",
         weeks: ("Woche", "Wochen"),
         offers: "Ich kann auch:",
+        top: "{agent} schlägt einen Plan vor · {title}",
+        top_habit: "{agent} schlägt eine Gewohnheit vor · {title}",
     },
     Texts {
         lang: "es",
@@ -423,6 +432,8 @@ pub static TEXTS: [Texts; 4] = [
         around: "hacia",
         weeks: ("semana", "semanas"),
         offers: "También puedo:",
+        top: "{agent} propone un plan · {title}",
+        top_habit: "{agent} propone un hábito · {title}",
     },
 ];
 
@@ -454,6 +465,13 @@ pub fn summary(lang: &str, agent: &str, title: &str, n: usize) -> String {
     } else {
         text
     }
+}
+
+/// The card's top line in an app 1.1, in the agent's language like the rest of the card: « Vie propose un plan ·
+/// Lisbonne », « Vie propose une habitude · Boire plus d’eau » (an app 1.0 ignores it; an app 1.1 before it: the phone's).
+pub fn top(lang: &str, agent: &str, title: &str, kind: &str) -> String {
+    let t = texts(lang);
+    fill(if kind == "habit" { t.top_habit } else { t.top }, &[("agent", agent), ("title", title)])
 }
 
 pub fn notification(lang: &str, title: &str) -> String {
@@ -1098,6 +1116,7 @@ pub fn card_item(config: &Config, plan: &Plan) -> Dict {
         "command": format!("{TOOL_NAME} · {}", plan.title), "description": sentence, "choices": ["once", "deny"],
         "created_at": plan.made, "session_id": null, "bip_summary": sentence, "bip_detail": detail.join("\n"),
         "bip_plan": {"id": plan.id, "kind": plan.kind, "title": plan.title, "agent": shown, "moments": moments,
+                     "top": top(lang, &shown, &plan.title, &plan.kind),
                      "rhythm_text": plan.repeat.as_ref().map(|r| rhythm_text(lang, r)), "watch_text": watch,
                      "offers": offers::pills_of(config, &plan.id)},
     });

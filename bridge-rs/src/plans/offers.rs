@@ -1103,7 +1103,9 @@ pub fn card_item(config: &Config, offer: &Offer) -> Dict {
         "bip_offer": {"id": offer.id, "kind": offer.kind, "about": offer.about, "label": offer.label, "agent": shown,
                       "plan": offer.plan, "pill": offer.pill,
                       "mode": if smart { crate::offer_ideas::MODE } else { "basic" },
-                      "expires_at": offer.expires, "outside": offer.outside},
+                      "expires_at": offer.expires, "outside": offer.outside,
+                      // its top line in the agent's language (a bridge's own card: its own); an app 1.0 ignores it
+                      "top": if offer.top.is_empty() { top(lang, &shown, &offer.about) } else { offer.top.clone() }},
     });
     // the bridge's own cards (plans/sources.rs, contracts/plans-sources): additions an app 1.0 ignores
     if !offer.source.is_empty() {
@@ -1111,9 +1113,6 @@ pub fn card_item(config: &Config, offer: &Offer) -> Dict {
         more["source"] = json!(offer.source);
         if !offer.items.is_empty() {
             more["items"] = json!(offer.items);
-        }
-        if !offer.top.is_empty() {
-            more["top"] = json!(offer.top);
         }
         if !offer.mailbox.is_empty() {
             more["mailbox"] = json!(offer.mailbox);
@@ -1711,26 +1710,24 @@ async fn turn(state: &AppState, agent: &AgentConfig, offer: &Offer, place: &crat
         turn.options = Some(json!({"closed_tools": super::sources::REPLIES_CLOSED_TOOLS}));
     }
     let title = shown_agent(&config, &agent.name);
-    let opened = std::sync::Mutex::new(None::<String>);
     let mut started = None;
     let ran = pipeline
         .run_then(&turn, |run| {
-            if let Some(ids) = gated.clone() {
-                super::sources::set_gate(&agent.name, run, Some(ids));
-                *opened.lock().unwrap_or_else(|e| e.into_inner()) = Some(run.to_string());
-            }
             // the routine a free-form offer showed may start in this run, and in no other (offer_ideas.rs, review B1)
             crate::offer_ideas::grant_run(&config, &offer.id, run);
             // the run marked as an offer's « Oui » while it works (card_pay: its payment asks calmly)
             yes_run(&agent.name, run, true);
+            if let Some(ids) = gated.clone() {
+                super::sources::set_gate(&agent.name, run, Some(ids));
+            }
             started = Some(run.to_string());
         })
         .await;
-    if let Some(run) = opened.lock().unwrap_or_else(|e| e.into_inner()).take() {
-        super::sources::set_gate(&agent.name, &run, None);
-    }
     if let Some(run) = &started {
         yes_run(&agent.name, run, false);
+        if gated.is_some() {
+            super::sources::set_gate(&agent.name, run, None);
+        }
     }
     match ran {
         Ok(ran) if ran.answered() && !crate::background_turn::is_silent(&ran.text) => {

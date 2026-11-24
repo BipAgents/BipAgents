@@ -1427,8 +1427,12 @@ pub async fn evening(state: &AppState) {
         match offers::place_bridge(state, &agent, offer).await {
             Ok(id) => {
                 let ids: Vec<String> = due.iter().map(|m| m.message_id.clone()).collect();
+                // only those still waiting: the card was visible (and answered, maybe) while it was pushed — a
+                // « Non merci » or « Oui » given meanwhile stays (finitions 1.1: test_reply_due seen red once under load)
                 change(&config, |s| {
-                    for m in s.mails.iter_mut().filter(|m| m.account == mailbox.account && ids.contains(&m.message_id)) {
+                    for m in s.mails.iter_mut().filter(|m| {
+                        m.account == mailbox.account && ids.contains(&m.message_id) && m.state == WAITING
+                    }) {
                         m.state = SHOWN.into();
                     }
                 });
