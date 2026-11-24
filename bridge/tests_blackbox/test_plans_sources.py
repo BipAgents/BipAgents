@@ -78,6 +78,11 @@ def sources_home_place(bridges, fakes):
         "python": f"{bridge.fakebin}/podman exec -i hermes-coach python", "hermes_home": "/home/hermes/.hermes"}
     bridge.commands.rule("podman", ["exec", "-i", "hermes-coach"], stdout=ANSWER)
     bridge.config["hermes"] = {"isolated": True, "bin": str(bridge.fakebin / "hermes"), "hub_url": fakes.hermes.url}
+    # the install's model the person's own (as conftest.managed_install): a model the bridge cannot tell is outside,
+    # and an agent on a model outside reads no calendar to propose (plans/sources.rs `outside`)
+    hub = bridge.home / ".hermes"
+    hub.mkdir(parents=True, exist_ok=True)
+    (hub / "config.yaml").write_text("model:\n  provider: lmstudio\n")
     bridge.config["maps"].update(streets="osrm", streets_url=fakes.maps.url)
     with_sources(bridge.config)
     bridge.start()

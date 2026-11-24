@@ -1666,23 +1666,10 @@ pub fn candidates(answer: &str) -> Vec<Value> {
 
 // -- the model and where it is -------------------------------------------------------------------------------------------
 
-/// Whether `agent`'s model sends what it reads outside our European providers or the person's own machine.
-///
-/// HOOK (shared-memory): `crate::outside_model::place(config, agent)` comes with `shared-memory`, not yet in
-/// int-1.1d; once there, this is `!matches!(place, Place::Own | Place::Europe)` (« in doubt, it protects »). Meanwhile
-/// the profile's main model alone: a provider Hermes knows by name (OpenAI, Anthropic, Google…), OpenRouter, or a
-/// public address that is not EUrouter's or Mistral's, is outside; no model readable is not (the hub's then).
+/// Whether `agent`'s model sends what it reads outside our European providers or the person's own machine
+/// (`outside_model::place`, read at every call): one the bridge cannot tell counts as outside (« in doubt, it protects »).
 pub fn outside_model(config: &Config, agent: &AgentConfig) -> bool {
-    let profile = crate::shares::profile_config(&crate::agents_admin::profile_folder(config, agent));
-    let Some(model) = profile.get("model").and_then(Value::as_object) else { return false };
-    let provider = tk::str_or_empty(model.get("provider")).to_lowercase();
-    let base = tk::str_or_empty(model.get("base_url"));
-    const OUTSIDE: [&str; 14] = ["openai", "openai-codex", "codex", "anthropic", "gemini", "google", "xai", "openrouter",
-                                 "deepseek", "groq", "together", "fireworks", "perplexity", "auto"];
-    if OUTSIDE.contains(&provider.as_str()) {
-        return true;
-    }
-    !base.is_empty() && !pass_target_ok(&base)
+    !matches!(crate::outside_model::place(config, agent), crate::outside_model::Place::Own | crate::outside_model::Place::Europe)
 }
 
 /// Whether a pass may send to this address: the person's own machine or network, or our European providers.
