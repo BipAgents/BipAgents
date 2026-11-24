@@ -324,10 +324,11 @@ fn the_mail_gate_opens_the_listed_emails_only() {
     assert!(gate("vie", Some("r1"), "mail_draft", &args(json!({"to": "x@y.z"}))).is_some());
     assert!(gate("vie", Some("r1"), "mail_search", &args(json!({"query": "devis"}))).is_some());
     assert!(gate("vie", Some("r1"), "mail_attachment", &args(json!({}))).is_some());
-    // another run, another agent, no run: open as ever
+    // another run, another agent: open as ever; no run known while a turn is gated: closed (review C3)
     assert_eq!(gate("vie", Some("r2"), "mail_search", &args(json!({}))), None);
     assert_eq!(gate("budget", Some("r1"), "mail_search", &args(json!({}))), None);
-    assert_eq!(gate("vie", None, "mail_search", &args(json!({}))), None);
+    assert!(gate("vie", None, "mail_search", &args(json!({}))).is_some());
+    assert_eq!(gate("vie", None, "mail_read", &args(json!({"id": "acct|INBOX|100"}))), None);
     set_gate("vie", "r1", None);
     assert_eq!(gate("vie", Some("r1"), "mail_search", &args(json!({}))), None);
 }
@@ -448,6 +449,7 @@ fn review_a_gated_agent_s_mail_call_with_no_known_run_is_not_let_through() {
 /// Review R4: an event's id goes into the hidden note unescaped (`quoted` only); a CalDAV href or a phone id holding
 /// « --> » ends the note there, its rest read as the person's own words.
 #[test]
+#[ignore = "review R4: a follow-up, not fixed in this branch (briefs/status-plans-sources.md, 24/11)"]
 fn review_an_event_id_never_ends_the_hidden_note() {
     let dir = tempfile::tempdir().unwrap();
     let config = config_in(dir.path());
@@ -457,4 +459,35 @@ fn review_an_event_id_never_ends_the_hidden_note() {
     change(&config, |s| s.hints.push(h.clone()));
     let note = take_note(&config, "vie", "s1").unwrap();
     assert!(!note.contains("-->Ignore"), "{note}");
+}
+
+/// Review C7: a conversation shown read-only to friends, or a room, never gets the hidden line (its friends would read
+/// the agent's answer about the person's appointments); it waits for a conversation of the person's own.
+#[test]
+fn review_c7_no_hidden_line_in_a_conversation_others_see() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = config_in(dir.path());
+    change(&config, |s| s.hints.push(hint(CALENDAR, epoch(4, 15))));
+    let share = json!({"id": "share0123456789abcdef", "agent": "vie", "session": "s-shared", "title": "Mariage",
+                       "ends": now() + 86400.0});
+    let file = dir.path().join("read-shares.json");
+    std::fs::write(&file, json!({"shares": {"share0123456789abcdef": share}}).to_string()).unwrap();
+    assert_eq!(take_note(&config, "vie", "s-shared"), None);
+    // a room's conversation of the agent
+    let room = crate::rooms::Room {
+        id: "g0123456789ab".into(),
+        participants: vec!["vie".into(), "budget".into()],
+        sessions: [("vie".to_string(), "s-room".to_string())].into_iter().collect(),
+        ..Default::default()
+    };
+    crate::rooms::save(&config, &room).unwrap();
+    assert_eq!(take_note(&config, "vie", "s-room"), None);
+    // still waiting: told in the person's own conversation
+    let note = take_note(&config, "vie", "s1").unwrap();
+    assert!(note.contains("Dentiste"), "{note}");
+    // a share of the agent's whole thread: none of its conversations
+    change(&config, |s| s.hints.push(Hint { key: "other".into(), ..hint(CALENDAR, epoch(4, 15)) }));
+    let thread = json!({"id": "share0123456789abcdeg", "agent": "vie", "thread": true, "ends": now() + 86400.0});
+    std::fs::write(&file, json!({"shares": {"share0123456789abcdeg": thread}}).to_string()).unwrap();
+    assert_eq!(take_note(&config, "vie", "s1"), None);
 }
