@@ -88,10 +88,29 @@ class FakeImap:
         self.sock.bind(("127.0.0.1", 0))
         self.sock.listen(16)
         self.port = self.sock.getsockname()[1]
+        # Each reset starts a new generation (24/11, test_reply_due flaky in parallel runs): a connection of the test
+        # before — its bridge stopped, its socket not read yet, an IDLE still looping — never counts in the next one
+        # (its `finally: idling -= 1` once made the next test's count -1). reset() closes the open connections and
+        # waits for their threads; a connection of an older generation stops at its next line.
+        self.generation = 0
+        self._live: Dict[int, dict] = {}
+        self._live_lock = threading.Lock()
         self.reset()
         threading.Thread(target=self._accept, name="fake-imap", daemon=True).start()
 
     def reset(self) -> None:
+        with self._live_lock:
+            self.generation += 1
+            live = list(self._live.values())
+        for state in live:
+            try:
+                state["conn"].shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+        for state in live:
+            thread = state.get("thread")
+            if thread is not None and thread is not threading.current_thread():
+                thread.join(timeout=3)
         self.users: Dict[str, str] = {}
         self.folders: Dict[str, List[Tuple[int, bytes]]] = {"INBOX": [], "Brouillons": [], "Sent": []}
         self.commands: List[str] = []
@@ -146,9 +165,16 @@ class FakeImap:
             threading.Thread(target=self._session, args=(conn,), daemon=True).start()
 
     # -- one connection ---------------------------------------------------------------------------------------------
+    def _current(self, state) -> bool:
+        """Whether this connection is of the generation now (not left over from the test before a reset)."""
+        return state["generation"] == self.generation
+
     def _session(self, conn: socket.socket) -> None:
         stream = conn.makefile("rwb")
-        state = {"user": None, "folder": None, "conn": conn, "stream": stream}
+        state = {"user": None, "folder": None, "conn": conn, "stream": stream, "generation": self.generation,
+                 "thread": threading.current_thread()}
+        with self._live_lock:
+            self._live[id(state)] = state
         try:
             self._send(state, b"* OK [CAPABILITY IMAP4rev1" + (b" STARTTLS" if self.starttls else b"")
                        + b"] fake IMAP ready\r\n")
@@ -165,16 +191,22 @@ class FakeImap:
                     state["stream"].readline()
                 tag, _, rest = text.partition(" ")
                 command, _, args = rest.partition(" ")
-                self.commands.append(f"{command.upper()} {args}".strip() if command.upper() != "LOGIN" else "LOGIN")
+                with self._live_lock:
+                    if not self._current(state):
+                        return
+                    self.commands.append(f"{command.upper()} {args}".strip() if command.upper() != "LOGIN" else "LOGIN")
                 if not self._dispatch(state, tag, command.upper(), args, payload):
                     return
         except (OSError, ssl.SSLError, ValueError):
             return
         finally:
-            try:
-                conn.close()
-            except OSError:
-                pass
+            with self._live_lock:
+                self._live.pop(id(state), None)
+            for sock in {id(conn): conn, id(state["conn"]): state["conn"]}.values():
+                try:
+                    sock.close()
+                except OSError:
+                    pass
 
     def _send(self, state, data: bytes) -> None:
         state["stream"].write(data)
@@ -216,8 +248,11 @@ class FakeImap:
             folder = state["folder"] or "INBOX"
             start = len(self.folders.get(folder, []))
             self._send(state, b"+ idling\r\n")
-            self.idles += 1
-            self.idling += 1
+            with self._live_lock:
+                if not self._current(state):
+                    return False
+                self.idles += 1
+                self.idling += 1
             told = False
             conn = state["conn"]
             try:
@@ -233,7 +268,10 @@ class FakeImap:
                             return False
                         break
             finally:
-                self.idling -= 1
+                # (a reset meanwhile counted it out already)
+                with self._live_lock:
+                    if self._current(state):
+                        self.idling -= 1
             self._ok(state, tag, "IDLE terminated")
         elif command == "LIST" and self.hydroxide:
             for flags, name in self.HYDROXIDE + [("\\Noinferiors", n) for n in self.hydroxide_own]:
