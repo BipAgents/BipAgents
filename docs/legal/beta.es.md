@@ -2,13 +2,13 @@
 
 # Condiciones de la beta
 
-> Última actualización: 18 de noviembre de 2026.
+> Última actualización: 24 de noviembre de 2026.
 
 La beta pública de BipAgents te permite probar la app y la oferta todo incluido antes de que abran las suscripciones.
 La ofrece Kerfy Studio, el editor de BipAgents.
 
 - **Con invitación.** La beta pública se abre con un código de invitación, válido una sola vez, hasta un máximo de
-  100 plazas.
+  200 plazas.
 - **Gratuita.** La beta no cuesta nada: no se pide ningún medio de pago y no se puede comprar nada en la app durante la
   beta. (Si activas los pagos de tus agentes, son tus propias compras, pagadas con tu tarjeta: ver la [política de
   privacidad](privacy.es.md), sección 5.10.)
