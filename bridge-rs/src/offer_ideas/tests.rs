@@ -667,3 +667,39 @@ fn a_pass_to_a_name_of_the_persons_network_is_their_own_model() {
     assert!(!own_target("https://api.eurouter.ai/v1") && !own_target("https://api.mistral.ai/v1"));
     assert!(!own_target("http://[2001:db8::1]:8000/v1"), "a public IPv6 address is not their network");
 }
+
+// -- verification of the fixes of review 1 (24/11, briefs/review-smart-offers.md « Vérification du correctif »): red,
+// no fix ------------------------------------------------------------------------------------------------------------
+
+/// B2 (documents): a photo the person sends is seen natively by the agent (Hermes keeps images in the history since
+/// upstream #139873; patch 0004 dropped), no `vision_analyze` call: the agent's words that read a letter, a statement
+/// or a prescription off it must stay out of a pass like a `read_file`'s.
+#[test]
+fn verify_b2_the_agents_words_on_a_photo_the_person_sent_stay_out_of_a_pass() {
+    let photo = json!({"role": "user", "content": [
+        {"type": "text", "text": "Tu peux me lire ce courrier ?"},
+        {"type": "image_url", "image_url": {"url": "/home/p/.hermes/media/courrier.jpg"}},
+    ]})
+    .as_object()
+    .unwrap()
+    .clone();
+    let (turns, _) = new_turns(&[photo, message("assistant", "Le courrier du bailleur dit : loyer mensuel 987 euros dès janvier.")]);
+    assert!(
+        turns.iter().all(|(_, reply)| !reply.contains("987 euros")),
+        "a document's content read off a photo sent to a pass: {turns:?}"
+    );
+}
+
+/// B2 (tools): « dans le doute, il protège » — a tool `kind_of` does not know (a bridge tool added later, a Hermes
+/// built-in) is private by default; and the bridge's readers of the person's own data that the list misses.
+#[test]
+fn verify_b2_an_unknown_tool_and_the_missed_readers_keep_the_agents_words_out() {
+    let mut open = Vec::new();
+    for tool in ["mcp_bipagents_some_new_reader", "mcp_bipagents_reminders_list", "reminders_list", "ha_get_state",
+                 "computer_use", "kanban_list"] {
+        if !reads_private(tool) {
+            open.push(tool);
+        }
+    }
+    assert!(open.is_empty(), "the agent's words after these go to a pass: {open:?}");
+}
