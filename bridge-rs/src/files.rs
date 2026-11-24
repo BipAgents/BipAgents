@@ -466,8 +466,9 @@ pub fn open_to_sandbox(root: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Delete stored uploads older than `retention_days` (only files the bridge wrote).
-pub fn purge_uploads(root: &str, retention_days: i64, now: Option<f64>) -> usize {
+/// Delete stored uploads older than `retention_days` (only files the bridge wrote), never those in `kept`
+/// (`<month>/<id12>-<name>`: the long texts' files, kept with their conversation, threads/long_texts.rs).
+pub fn purge_uploads(root: &str, retention_days: i64, now: Option<f64>, kept: &std::collections::HashSet<String>) -> usize {
     if root.is_empty() || !std::path::Path::new(root).is_dir() {
         return 0;
     }
@@ -486,7 +487,7 @@ pub fn purge_uploads(root: &str, retention_days: i64, now: Option<f64>) -> usize
                 let entry = entry.file_name().to_string_lossy().into_owned();
                 let path = crate::py::join(&month_dir, &entry);
                 let p = std::path::Path::new(&path);
-                if !STORED_NAME.is_match(&entry) || !p.is_file() || p.is_symlink() {
+                if !STORED_NAME.is_match(&entry) || !p.is_file() || p.is_symlink() || kept.contains(&format!("{month}/{entry}")) {
                     continue;
                 }
                 let Ok(meta) = std::fs::metadata(p) else { continue };
@@ -545,7 +546,24 @@ mod tests {
         for f in [&old, &foreign] {
             std::fs::File::options().write(true).open(f).unwrap().set_modified(long_ago).unwrap();
         }
-        assert_eq!(purge_uploads(&dir.path().to_string_lossy(), 30, None), 1);
+        assert_eq!(purge_uploads(&dir.path().to_string_lossy(), 30, None, &Default::default()), 1);
         assert!(!old.exists() && new.exists() && foreign.exists());
+    }
+
+    /// A long text's file lives with its conversation (Alex 24/11): never purged after the days, however old.
+    #[test]
+    fn purge_leaves_a_long_texts_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let month = dir.path().join("2026-01");
+        std::fs::create_dir(&month).unwrap();
+        let (text, sent) = (month.join("0123456789ab-Article.txt"), month.join("0123456789ac-old.pdf"));
+        let long_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(400 * 86400);
+        for f in [&text, &sent] {
+            std::fs::write(f, b"x").unwrap();
+            std::fs::File::options().write(true).open(f).unwrap().set_modified(long_ago).unwrap();
+        }
+        let kept = ["2026-01/0123456789ab-Article.txt".to_string()].into_iter().collect();
+        assert_eq!(purge_uploads(&dir.path().to_string_lossy(), 30, None, &kept), 1);
+        assert!(text.exists() && !sent.exists());
     }
 }

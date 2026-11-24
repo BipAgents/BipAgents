@@ -93,6 +93,14 @@ CREATE TABLE IF NOT EXISTS thread_instant (
     created_at TEXT NOT NULL,
     PRIMARY KEY (agent, client_id)
 );
+CREATE TABLE IF NOT EXISTS long_text_files (
+    agent TEXT NOT NULL,
+    path TEXT NOT NULL,
+    thread_id TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (agent, path)
+);
+CREATE INDEX IF NOT EXISTS long_text_files_thread ON long_text_files (agent, thread_id);
 CREATE TABLE IF NOT EXISTS turn_times (
     agent TEXT NOT NULL,
     run_id TEXT NOT NULL,
