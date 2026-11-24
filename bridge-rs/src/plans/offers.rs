@@ -1167,6 +1167,57 @@ pub fn pills_of(config: &Config, plan: &str) -> Vec<String> {
         .collect()
 }
 
+/// The pills of a plan's card, waiting or answered, in the order they were made, ready to draw (`bip_plan.pills`):
+/// {id, run_id, state: « waiting » | « accepted » | « refused » | « expired », text}. `text`: a waiting pill's
+/// question; an accepted one keeps its words, with ✓ and without « ? » (design §3.1, §7.3: « ✓ Je te fais la liste
+/// de bagages »), drawn in the card, never as a line apart. A refused or expired one: its question (the apps 1.1
+/// leave it out of the card). An app 1.0 reads neither: each offer is its own card.
+pub fn pill_views(config: &Config, plan: &super::Plan) -> Vec<Value> {
+    let now = py::time_time();
+    let mut rows: Vec<(f64, Value)> = load(config)
+        .offers
+        .into_iter()
+        .filter(|o| o.pill && o.plan.as_deref() == Some(plan.id.as_str()) && o.expires > now)
+        .map(|o| (o.made, pill_view(&o.id, "waiting", o.label.clone())))
+        .collect();
+    for done in &plan.pills {
+        if rows.iter().any(|(_, r)| r["id"] == json!(done.id)) {
+            continue;
+        }
+        let (state, text) = match done.outcome.as_str() {
+            YES => ("accepted", pill_done(&done.label)),
+            NO => ("refused", done.label.clone()),
+            _ => ("expired", done.label.clone()),
+        };
+        rows.push((done.made, pill_view(&done.id, state, text)));
+    }
+    rows.sort_by(|a, b| a.0.total_cmp(&b.0));
+    rows.into_iter().map(|(_, r)| r).collect()
+}
+
+fn pill_view(id: &str, state: &str, text: String) -> Value {
+    json!({"id": id, "run_id": format!("{RUN_PREFIX}{id}"), "state": state, "text": text})
+}
+
+/// An accepted pill's words: ✓, its question without « ? » (contracts/offers `texts.rules.label`).
+pub fn pill_done(label: &str) -> String {
+    let words = label.trim().trim_end_matches(['?', '？', ' ', '\u{00A0}', '\u{202F}']);
+    format!("✓ {words}")
+}
+
+/// A plan's offer shown on its card answered or gone past its time: kept on its plan, which goes on drawing it
+/// (`pill_views`).
+fn pill_answered(config: &Config, offer: &Offer, outcome: &str) {
+    let Some(plan) = offer.plan.as_deref().filter(|_| offer.pill) else { return };
+    let done = super::PillDone { id: offer.id.clone(), label: offer.label.clone(), outcome: outcome.into(), made: offer.made };
+    super::change(config, |s| {
+        if let Some(p) = s.plans.iter_mut().find(|p| p.id == plan && p.agent == offer.agent) {
+            p.pills.retain(|d| d.id != done.id);
+            p.pills.push(done);
+        }
+    });
+}
+
 /// The validation's kind of an offer's card (approval_level.rs): a calendar offer is that write's own card.
 pub fn kind_of(item: &Dict) -> &'static str {
     let kind = item.get("bip_offer").and_then(|o| o.get("kind")).and_then(Value::as_str);
@@ -1472,6 +1523,10 @@ pub async fn approve(state: &AppState, agent: &AgentConfig, id: &str, choice: &s
     let Some(offer) = taken else {
         return Err(HttpError::new(404, "no such request (answered already?)"));
     };
+    {
+        let (c, o) = (config.clone(), offer.clone());
+        let _ = tokio::task::spawn_blocking(move || pill_answered(&c, &o, if yes { YES } else { NO })).await;
+    }
     tracing::info!(target: "bipbridge::offers", agent = %agent.name, offer = %offer.id, kind = %offer.kind, yes,
                    "offer answered");
     if !offer.source.is_empty() {
@@ -1906,6 +1961,7 @@ pub async fn tick(state: &AppState) {
     }
     for offer in expire(&config, now) {
         tracing::info!(target: "bipbridge::offers", agent = %offer.agent, offer = %offer.id, "offer expired");
+        pill_answered(&config, &offer, EXPIRED);
         let Some(agent) = config.agent(Some(&offer.agent)).cloned() else { continue };
         let run_id = format!("{RUN_PREFIX}{}", offer.id);
         // its decision kept where the card showed: the main conversation's tip for one nobody asked for, even before
@@ -1925,7 +1981,8 @@ pub async fn tick(state: &AppState) {
                 tracing::debug!(target: "bipbridge::offers", agent = %agent.name, error = %err, "expiry not kept");
             }
         }
-        crate::card_place::answered_via(state, &agent, &run_id, EXPIRED, None).await;
+        let shown = card_item(&config, &offer);
+        crate::card_place::answered_via(state, &agent, &run_id, EXPIRED, None, Some(&shown)).await;
     }
 }
 

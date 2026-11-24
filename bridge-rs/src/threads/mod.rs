@@ -948,6 +948,12 @@ impl Threads {
                         "run_id": entry.get("run_id"), "request_id": entry.get("request_id"), "command": entry.get("command"),
                         "description": entry.get("description"), "topic": entry.get("topic"),
                         "choice": entry.get("choice"), "state": "answered"}));
+                    // a plan's offer shown on its card: the apps 1.1 draw its answer there (plans/offers.rs `pill_views`)
+                    if let (Some(plan), Some(Value::Object(a))) =
+                        (entry.get("pill_of").filter(|p| p.is_string()), body.get_mut("approval"))
+                    {
+                        a.insert("pill_of".into(), plan.clone());
+                    }
                     out.push((answered_id(Some(key.0), Some(key.1)), at, session.clone(), body));
                 }
                 for record in calls.as_ref().map(|c| c.records(&name, session)).unwrap_or_default() {

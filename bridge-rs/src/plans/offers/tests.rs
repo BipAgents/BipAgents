@@ -266,7 +266,7 @@ fn two_offers_per_reply_and_the_unasked_caps_shared_with_plans() {
         id: "p1".into(), agent: "vie".into(), kind: "trip".into(), title: "Lisbonne".into(), city: "Lisbonne".into(),
         zone: "Europe/Lisbon".into(), moments: Vec::new(), repeat: None, watch: Vec::new(), event: None,
         state: crate::plans::WAITING.into(), made: n, asked: false, first: false, origin: String::new(),
-        routines: Vec::new(), trigger: None, ends: 0.0,
+        routines: Vec::new(), trigger: None, ends: 0.0, pills: Vec::new(),
     });
     assert!(refused(&Store::default(), &plans_waiting, &unasked, None, PARIS, now()).is_some());
     let mut day = crate::plans::Store::default();
@@ -650,7 +650,7 @@ fn plan_of(id: &str, state: &str, n: f64) -> crate::plans::Plan {
         id: id.into(), agent: "vie".into(), kind: "trip".into(), title: "Lisbonne".into(), city: "Lisbonne".into(),
         zone: "Europe/Lisbon".into(), moments: Vec::new(), repeat: None, watch: Vec::new(), event: None,
         state: state.into(), made: n, asked: true, first: false, origin: String::new(), routines: Vec::new(),
-        trigger: None, ends: n + 3.0 * DAY,
+        trigger: None, ends: n + 3.0 * DAY, pills: Vec::new(),
     }
 }
 
@@ -681,6 +681,46 @@ fn r5_a_plan_gone_takes_its_pills_with_it() {
     let left = load(&config);
     assert_eq!(left.offers.iter().map(|o| o.plan.clone().unwrap()).collect::<Vec<_>>(), vec!["p2".to_string()]);
     assert!(left.answers.is_empty());
+}
+
+/// J68 (24/11): a pill answered stays on its plan's card, ready to draw: « ✓ <its words> » for a « Oui » (no « ? »),
+/// in the order the pills were made; one waiting is still its question; a « Non » or one past its time says so.
+#[test]
+fn j68_an_answered_pill_stays_on_its_plan_s_card() {
+    let n = now();
+    let dir = tempfile::tempdir().unwrap();
+    let config = config_in(dir.path());
+    crate::plans::change(&config, |s| s.plans.push(plan_of("p1", crate::plans::WAITING, n)));
+    let (bagages, hotels, taxi) = (
+        pill_of("p1", "page", "Je te fais la liste de bagages ?", n),
+        pill_of("p1", "search", "Je regarde les hôtels\u{00A0}?", n + 1.0),
+        pill_of("p1", "search", "Je cherche un taxi ?", n + 2.0),
+    );
+    change(&config, |s| s.offers.extend([bagages.clone(), hotels.clone(), taxi.clone()]));
+    let view = |config: &Config| {
+        let plan = crate::plans::load(config).plans.into_iter().find(|p| p.id == "p1").unwrap();
+        pill_views(config, &plan).into_iter().map(|v| (v["id"].as_str().unwrap().to_string(),
+            v["state"].as_str().unwrap().to_string(), v["text"].as_str().unwrap().to_string())).collect::<Vec<_>>()
+    };
+    let w = |o: &Offer, state: &str, text: &str| (o.id.clone(), state.to_string(), text.to_string());
+    assert_eq!(view(&config), vec![w(&bagages, "waiting", "Je te fais la liste de bagages ?"),
+                                   w(&hotels, "waiting", "Je regarde les hôtels\u{00A0}?"),
+                                   w(&taxi, "waiting", "Je cherche un taxi ?")]);
+    for (o, yes) in [(&bagages, true), (&taxi, false)] {
+        let taken = answer(&config, "vie", &o.id, yes, n).unwrap();
+        pill_answered(&config, &taken, if yes { YES } else { NO });
+    }
+    assert_eq!(view(&config), vec![w(&bagages, "accepted", "✓ Je te fais la liste de bagages"),
+                                   w(&hotels, "waiting", "Je regarde les hôtels\u{00A0}?"),
+                                   w(&taxi, "refused", "Je cherche un taxi ?")]);
+    // the card still lists only the waiting one in `offers` (what an app before this reads)
+    assert_eq!(pills_of(&config, "p1"), vec![hotels.id.clone()]);
+    for gone in expire(&config, n + 10.0 * DAY) {
+        pill_answered(&config, &gone, EXPIRED);
+    }
+    assert_eq!(view(&config)[1], w(&hotels, "expired", "Je regarde les hôtels\u{00A0}?"));
+    assert_eq!(pill_done("Je regarde les hôtels\u{202F}?  "), "✓ Je regarde les hôtels");
+    assert_eq!(pill_done("Je te fais la liste"), "✓ Je te fais la liste");
 }
 
 /// R7: at « Oui », the calendar of the card is checked again, as on the card: Google Calendar still given to the

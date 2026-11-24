@@ -1724,6 +1724,7 @@ pub async fn appointment_yes(state: &AppState, agent: &AgentConfig, offer: &Offe
         routines: Vec::new(),
         trigger: None,
         ends: 0.0,
+        pills: Vec::new(),
     };
     if !plan.moments.is_empty() {
         let (c, name, id) = (config.clone(), agent.name.clone(), plan.id.clone());

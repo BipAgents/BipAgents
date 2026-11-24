@@ -130,7 +130,7 @@ fn an_event_with_its_plan_is_planned() {
         id: "p".into(), agent: "vie".into(), kind: kind.into(), title: title.into(), city: String::new(),
         zone: "Europe/Paris".into(), moments: vec![moment(at)], repeat: None, watch: Vec::new(), event,
         state: "set".into(), made: 0.0, asked: true, first: false, origin: String::new(), routines: Vec::new(),
-        trigger: None, ends: 0.0,
+        trigger: None, ends: 0.0, pills: Vec::new(),
     };
     // followed by id
     plans.plans = vec![plan("trip", "Autre", Some(EventRef { source: "phone".into(), id: "e1".into(), start: 0.0,

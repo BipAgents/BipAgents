@@ -141,7 +141,7 @@
    "lang": "The agent's language (names.rs `agent_language`); another than these four: English.",
    "validated": "top, buttons, after_once, after_deny, expired, notification, summary (§7.3) and first_card (§7.1): validated by Alex on 22/11.",
    "new": "route_done, route_failed, calendar_failed, not_started, detail_route, detail_reminder, detail_calendar, home, phone_calendar, outside: new, for Alex's OK (passation-pro briefs/status-offers.md, « Textes à valider »).",
-   "label": "The offer's question is the agent's words, in the person's language; an accepted pill keeps its words, with ✓ and without « ? » (the apps)."
+   "label": "The offer's question is the agent's words, in the person's language; an accepted pill keeps its words, with ✓ and without « ? » (the bridge writes it: `bip_plan.pills[].text`, contracts/plans `offers`)."
   },
   "fr": {
    "top": "{agent} propose · {about}",
