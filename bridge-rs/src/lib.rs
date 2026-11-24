@@ -231,6 +231,8 @@ pub mod rooms;
 pub mod routines;
 // plans an agent proposes on its own (proactive agents, part 3)
 pub mod plans;
+/// « Initiative » smart: any action the agent can really do, checked; the day's passes (proactive agents 3b).
+pub mod offer_ideas;
 // what the agents do on their own: its owner, its end, where it answers, a repair or a stop (proactive agents, part 4)
 pub mod task_frame;
 pub mod rooms_handoff;

@@ -36,7 +36,7 @@ const RESULT_MAX: usize = 2000;
 /// Leading rows of a continuation compared with its parent's last rows (a copied tail is not shown twice).
 const TAIL: usize = 40;
 
-static NOTES: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"<!--\s*bip:[\s\S]*?(?:-->|$)").expect("valid regex"));
+pub(crate) static NOTES: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"<!--\s*bip:[\s\S]*?(?:-->|$)").expect("valid regex"));
 static PHOTO_MARK: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?m)^[ \t]*\[(?:screenshot|image envoyée plus tôt|image)\][ \t]*\n?").expect("valid regex")
 });
@@ -167,7 +167,7 @@ pub fn message_id(agent: &str, session: &str, row: &Row) -> String {
 }
 
 /// The words of a content (a string, or parts) and how many photos it carries.
-fn words_and_images(content: &Value) -> (String, usize) {
+pub(crate) fn words_and_images(content: &Value) -> (String, usize) {
     match content {
         Value::String(s) => (s.clone(), 0),
         Value::Array(parts) => {
