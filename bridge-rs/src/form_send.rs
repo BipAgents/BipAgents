@@ -301,6 +301,7 @@ pub async fn call(state: &AppState, agent: &AgentConfig, arguments: &Dict) -> Di
         detail: if what.is_empty() { host.clone() } else { detail(&lang, &what) },
         // every card's « Toujours » words (approval_level.rs): this site, for good (« Sites autorisés »)
         always: Some(crate::approval_level::always_label(&lang).to_string()),
+        always_key: None,
     };
     tracing::info!(agent = %agent.name, site = %host, "a form's sending asked of the person");
     // the asking conversation, when the call said it (Hermes patch 0028): its « Oui » is that one's

@@ -112,6 +112,7 @@ pub const TABLE: &[Rule] = &[
     rule("task_start", false, true, "propose_task (≤ 0,50 €)", "a background task within a small budget of the month's credit; paused from its line"),
     rule("service_write", false, false, "Hermes: MCP tool that creates or changes, on a service the person connected", "writes in the person's own service (a Notion page, a note): nothing sent to anyone, nothing deleted"),
     rule("files_write", false, false, "Hermes: bipagents_files (not delete)", "files in the agent's own space"),
+    rule("contacts_write", false, false, "bip-ok- contacts_write (outlook_contacts.rs)", "Alex 24/11: adds a contact to the person's Outlook contacts or changes one (only the fields given, phones and e-mails added, never removed); never deletes; as a write in their own service"),
     rule("drive_write", false, true, "bip-ok- drive_write (drives_write.rs)", "Alex 23/11: a NEW file in a folder of the person's online documents they let this agent write in; nothing replaced, nothing deleted; undone by putting that new file in the service's bin"),
     // -- critical: always asked
     rule("payment", true, false, "Hermes: card_pay, Link, hand-over elicitations", "spends money or uses a payment card"),
@@ -336,6 +337,9 @@ pub enum Undo {
     MailRule { rule: String },
     /// jobs.rs' task: paused.
     Task { job: String },
+    /// An Outlook tidying done at once (outlook_mail.rs, 1.1): its mails put back, those still where it put them.
+    /// (A bridge before it reads this line as having nothing to undo: `known_undo`.)
+    OutlookJob { job: String },
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -411,8 +415,10 @@ pub fn auto_for(config: &Config, agent: &str, kind: &str) -> bool {
 /// The kinds a « Toujours » may cover: not critical, asked as a card (the mail ones) or a Hermes approval (a write in
 /// one service, per service; files in the agent's own space); and the critical one its rule names (`own_always`: a
 /// Google Calendar add or change, Alex 23/11). Anything else is never offered.
-pub const ALWAYS_KINDS: [&str; 7] =
-    ["mail_archive", "mail_mark_read", "mail_move", "mail_rule", "service_write", "files_write", "calendar_write"];
+pub const ALWAYS_KINDS: [&str; 8] = [
+    "mail_archive", "mail_mark_read", "mail_move", "mail_rule", "service_write", "files_write", "calendar_write",
+    "contacts_write",
+];
 
 static SERVICE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^[a-z0-9][a-z0-9_.-]{0,63}$").expect("valid regex"));
 
@@ -427,7 +433,8 @@ pub fn offers_always(key: &str) -> bool {
     ALWAYS_KINDS.contains(&kind)
         && (!rule.critical || rule.own_always)
         && match service {
-            Some(s) => (kind == "service_write" && SERVICE.is_match(s)) || key == crate::person_ok::CALENDAR_WRITE_OUTLOOK,
+            // an Outlook account's default calendar: `calendar_write:outlook`, another account's `…:outlook:<id>`
+            Some(s) => (kind == "service_write" && SERVICE.is_match(s)) || crate::outlook::always_account(key).is_some(),
             None => kind != "service_write",
         }
 }
@@ -517,7 +524,7 @@ fn always_words(key: &str) -> Option<[String; 4]> {
         return None;
     }
     let s = |a: &str, b: &str, c: &str, d: &str| Some([a, b, c, d].map(str::to_string));
-    if key == crate::person_ok::CALENDAR_WRITE_OUTLOOK {
+    if crate::outlook::always_account(key).is_some() {
         // Alex 23/11 (outlook_calendar.rs: its adds and changes)
         return s(
             "modifier ton agenda Outlook",
@@ -560,6 +567,13 @@ fn always_words(key: &str) -> Option<[String; 4]> {
                 "sort your e-mails with rules",
                 "deine E-Mails mit Regeln sortieren",
                 "ordenar tus correos con reglas",
+            ),
+            // Alex 24/11 (outlook_contacts.rs: its adds and changes)
+            "contacts_write" => s(
+                "ajouter et changer tes contacts Outlook",
+                "add and change your Outlook contacts",
+                "deine Outlook-Kontakte hinzufügen und ändern",
+                "añadir y cambiar tus contactos de Outlook",
             ),
             "files_write" => s(
                 "enregistrer des fichiers dans son espace",
@@ -687,7 +701,15 @@ pub fn view(config: &Config) -> Value {
             keys.sort_by(|x, y| x.1.total_cmp(y.1));
             let list: Vec<Value> = keys
                 .into_iter()
-                .filter_map(|(key, at)| always_short(&lang, key).map(|label| json!({"kind": key, "label": label, "at": iso(*at)})))
+                .filter_map(|(key, at)| {
+                    let label = always_short(&lang, key)?;
+                    // an Outlook calendar's, with several accounts: which one (outlook.rs)
+                    let label = match crate::outlook::always_account(key).and_then(|id| crate::outlook::address(config, id)) {
+                        Some(address) if crate::outlook::several(config) => format!("{label} ({address})"),
+                        _ => label,
+                    };
+                    Some(json!({"kind": key, "label": label, "at": iso(*at)}))
+                })
                 .collect();
             (a.clone(), Value::Array(list))
         })
@@ -861,6 +883,11 @@ pub async fn undo(state: &AppState, id: &str) -> Result<Line, UndoRefused> {
             .map_err(|e| UndoRefused::Failed(e.to_string()))?
             .map_err(UndoRefused::Failed)?;
         }
+        Undo::MailRule { rule } if crate::outlook_rules::is_ours(&config, &rule) => {
+            // an Outlook mailbox's rule (outlook_rules.rs): its last run put back at Graph, then stopped
+            let _ = crate::outlook_rules::undo_last(&config, Some(&agent), &rule).await;
+            crate::mail_rules::stop(&config, Some(&agent), &rule).map_err(|e| UndoRefused::Failed(e.to_string()))?;
+        }
         Undo::MailRule { rule } => {
             tokio::task::spawn_blocking(move || -> Result<(), String> {
                 // its last run put back (nothing filed yet: nothing to put back), then stopped
@@ -874,6 +901,9 @@ pub async fn undo(state: &AppState, id: &str) -> Result<Line, UndoRefused> {
         }
         Undo::Task { job } => {
             crate::jobs::jobs_of(state).pause(&job).await.map_err(|e| UndoRefused::Failed(e.to_string()))?;
+        }
+        Undo::OutlookJob { job } => {
+            crate::outlook_mail::undo_line(&config, &agent, &job).await.map_err(UndoRefused::Failed)?;
         }
     }
     let now = py::time_time();
@@ -923,6 +953,23 @@ fn undo_of(item: &Dict, kind: &str) -> Option<Undo> {
         "mail_rule" => Some(Undo::MailRule { rule: id }),
         _ => None,
     }
+}
+
+/// What holds its own call and so makes its card itself (outlook_mail.rs, outlook_contacts.rs, drives_write.rs,
+/// obsidian.rs): whether the person's level, or one of their « Toujours » for this kind, lets it through BEFORE any
+/// card, exactly as `settle_new` would let an IMAP box's card through (`auto_for`). Some(always): through, by a
+/// « Toujours » (true) or by « Seulement le critique » (false); None: its card is asked.
+pub fn at_once(config: &Config, agent: &str, kind: &str) -> Option<bool> {
+    auto_for(config, agent, kind).then(|| level_for(config, agent) != CRITICAL)
+}
+
+/// The line of what `at_once` let through (« Validé pour toi », marked when a « Toujours » did), in the call's
+/// conversation's row.
+pub fn record_at_once(config: &Config, agent: &str, kind: &str, summary: &str, always: bool, undo: Option<Undo>,
+                      count: Option<u64>) -> Line {
+    let summary = if always { marked(config, agent, summary) } else { summary.to_string() };
+    let session = crate::runs::CALL_SESSION.try_with(|s| s.clone()).ok().flatten().filter(|s| !s.is_empty());
+    record(config, Line { agent: agent.into(), kind: kind.into(), summary, session_id: session, undo, count, always, ..Line::default() })
 }
 
 /// Would a card like `item` be approved at once for `agent`? (Its notification is then not sent.)

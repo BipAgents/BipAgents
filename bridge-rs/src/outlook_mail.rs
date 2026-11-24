@@ -9,15 +9,20 @@
 //!                      the address mailbox.rs' `reply_address` allows; one draft per mail answered. Never sent: the
 //!                      bridge asks no `Mail.Send`
 //!     mail_overview    the newest headers counted by sender domain (mail_tidy.rs' overview)
-//!     mail_bulk        archive, mark_read, move:<folder>, trash (Deleted Items) by mail_tidy.rs' selectors: ONE card
-//!                      (person_ok.rs, `bip-ok-`, kinds `mail_archive` / `mail_mark_read` / `mail_move` /
-//!                      `mail_trash`) before anything moves, asked each time in this first version; then done here,
-//!                      `MAX_PER_CARD` at most, and kept `UNDO_DAYS` for its undo (`mail_bulk(action: "undo", job)`)
+//!     mail_bulk        archive, mark_read, move:<folder>, trash (Deleted Items) by mail_tidy.rs' selectors, by the
+//!                      person's approval level as an IMAP box's (1.1, Alex 24/11: approval_level.rs `at_once`):
+//!                      « Seulement le critique » or their « Toujours » for that kind lets it through at once, its line
+//!                      in « Validé pour toi » with « Annuler » (`Undo::OutlookJob`); else ONE card (person_ok.rs,
+//!                      `bip-ok-`, kinds `mail_archive` / `mail_mark_read` / `mail_move` / `mail_trash`, « Toujours
+//!                      autoriser » but for the trash) before anything moves; the trash always asks. Then done here,
+//!                      `MAX_PER_CARD` at most, kept `UNDO_DAYS` for its undo (`mail_bulk(action: "undo", job)`).
+//!                      `rule: true`, `rules`, `stop_rule`, `undo_rule`: the IMAP boxes' standing rules (outlook_rules.rs)
 //!
 //! Ids: `outlook|<folder>|<n>` (outlook.rs' short numbers for Graph's immutable ids, `is_mail_id` shaped). What a mail
 //! says is someone else's text: between mailbox.rs' markers, defused (archives.rs). Flagged mails, drafts and the
-//! person's own mails are never tidied; Sent Items and Drafts are never a source nor a destination. No standing rules
-//! here (mail_rules.rs reads IMAP's new mail): the person sets them in Outlook.
+//! person's own mails are never tidied; Sent Items and Drafts are never a source nor a destination. Several accounts
+//! (outlook.rs): a call is for the account of the id it names, else the one its `mailbox` names (its address), else
+//! the agent's first one; the answers name each one when there are several.
 //!
 //!     <data>/outlook/drafts.json   the drafts made in answer to a mail (30 days)
 //!     <data>/outlook/jobs.json     the tidyings done, for their undo (30 days)
@@ -34,7 +39,7 @@ use crate::app::AppState;
 use crate::config::{AgentConfig, Config};
 use crate::drives::{Api, Fault};
 use crate::mail_tidy::{Action, Job, Row, Scan, Selector};
-use crate::outlook::{self, LABEL, PREFER_IMMUTABLE};
+use crate::outlook::{self, AccountId, LABEL, PREFER_IMMUTABLE};
 use crate::tools_knowledge::{self as tk, tool_text};
 use crate::{py, Dict};
 
@@ -67,12 +72,22 @@ pub fn is_ours(id: &str) -> bool {
     id.trim().to_lowercase().starts_with(&format!("{}|", outlook::BOX_ID))
 }
 
-/// Whether `wanted` (a `mailbox` argument) names Outlook: « Outlook », « … (Outlook) », or its address.
+/// Whether `wanted` (a `mailbox` argument) names Outlook: « Outlook », « … (Outlook) », an account's address or its
+/// mailbox's id (`outlook-2`).
 pub fn names_us(config: &Config, wanted: &str) -> bool {
     let wanted = wanted.trim().to_lowercase();
     wanted == "outlook"
         || wanted.ends_with("(outlook)")
-        || outlook::account_name(config).is_some_and(|a| a.trim().to_lowercase() == wanted)
+        || outlook::key_account(&wanted).is_some()
+        || outlook::all(config).iter().any(|a| a.link.account.as_deref().is_some_and(|x| x.trim().to_lowercase() == wanted))
+}
+
+/// The account a `mailbox` argument names among `agent`'s with mail: its address, its mailbox's id, « Outlook (its
+/// address) »; « Outlook » or nothing: the first one. None: none of its — never its first one for another's name
+/// (review C2).
+pub fn named_account(config: &Config, agent: &str, wanted: &str) -> Option<AccountId> {
+    let mine: Vec<AccountId> = outlook::accounts_with(config, agent, "mail").iter().map(|a| a.id).collect();
+    outlook::named_among(config, wanted, &mine)
 }
 
 /// Whether this mail tool's call is for Outlook: `agent` uses its mail, and the call names it (an id of its, its name)
@@ -89,13 +104,29 @@ pub fn takes(config: &Config, agent: &str, name: &str, arguments: &Dict, imap_bo
         "mail_read" | "mail_attachment" => is_ours(&arg("id")),
         "mail_draft" if !arg("reply_to_id").is_empty() => is_ours(&arg("reply_to_id")),
         "mail_bulk" if arg("job").starts_with(JOB_PREFIX) => true,
+        // one of its Outlook mailbox's standing rules (outlook_rules.rs)
+        "mail_bulk" if crate::outlook_rules::account_of_rule(config, agent, &arg("rule_id")).is_some() => true,
         _ => names_us(config, &arg("mailbox")),
     }
 }
 
-/// A line for the IMAP boxes' answers when the agent also has Outlook (it would not know otherwise).
-pub fn also_line() -> String {
-    format!("(Your person's {LABEL} mailbox too: mailbox \"{LABEL}\".)")
+/// A line for the IMAP boxes' answers when the agent also has Outlook (it would not know otherwise): its mailboxes'
+/// names (`but`: the one this answer is of, left out).
+pub fn also_line(config: &Config, agent: &str, but: Option<AccountId>) -> String {
+    let mine = outlook::accounts_with(config, agent, "mail");
+    let names: Vec<String> = mine
+        .iter()
+        .filter(|a| Some(a.id) != but)
+        .map(|a| match a.link.account.as_deref().filter(|_| mine.len() > 1) {
+            Some(address) => format!("mailbox \"{}\"", crate::archives::defused(address)),
+            None => format!("mailbox \"{LABEL}\""),
+        })
+        .collect();
+    match (names.as_slice(), but.is_some()) {
+        ([], _) => String::new(),
+        (_, true) => format!("(Your person's other {LABEL} mailbox too: {}.)", names.join(", ")),
+        (_, false) => format!("(Your person's {LABEL} mailbox too: {}.)", names.join(", ")),
+    }
 }
 
 // -- folders -----------------------------------------------------------------------------------------------------------
@@ -227,13 +258,13 @@ fn people_of(v: &Value, key: &str) -> String {
     v.get(key).and_then(Value::as_array).map(|a| a.iter().map(person_of).collect::<Vec<_>>().join(", ")).unwrap_or_default()
 }
 
-/// A mail's id for the agents.
-pub fn mail_ref(config: &Config, folder: &str, graph_id: &str) -> String {
-    format!("{}|{}|{}", outlook::BOX_ID, id_part(folder), outlook::short_id(config, graph_id))
+/// A mail's id for the agents (its number names its account).
+pub fn mail_ref(config: &Config, account: AccountId, folder: &str, graph_id: &str) -> String {
+    format!("{}|{}|{}", outlook::BOX_ID, id_part(folder), outlook::short_id(config, account, graph_id))
 }
 
-/// Graph's id of an agent's mail id. None: not one of Outlook's known ones.
-pub fn graph_id(config: &Config, id: &str) -> Option<String> {
+/// The account and Graph's id of an agent's mail id. None: not one of Outlook's known ones.
+pub fn graph_id(config: &Config, id: &str) -> Option<(AccountId, String)> {
     let mut parts = id.trim().split('|');
     let (boxed, _, n) = (parts.next()?, parts.next()?, parts.next()?);
     if !boxed.eq_ignore_ascii_case(outlook::BOX_ID) || parts.next().is_some() {
@@ -274,7 +305,8 @@ fn since_day(days: Option<i64>) -> Option<String> {
     Some((chrono::Utc::now().date_naive() - chrono::Duration::days(days)).format("%Y-%m-%d").to_string())
 }
 
-async fn search(config: &Config, api: &Api, arguments: &Dict) -> Dict {
+async fn search(config: &Config, account: AccountId, api: &Api, arguments: &Dict) -> Dict {
+    let label = outlook::label(config, account);
     let arg = |k: &str| tk::str_or_empty(arguments.get(k));
     let folder = match open_folder(api, &arg("folder")).await {
         Ok(f) => f,
@@ -304,14 +336,14 @@ async fn search(config: &Config, api: &Api, arguments: &Dict) -> Dict {
     let items = page.get("value").and_then(Value::as_array).cloned().unwrap_or_default();
     if items.is_empty() {
         let said = if query.is_empty() && sender.is_empty() && since.is_none() {
-            format!("No e-mail in {LABEL} › « {} ».", folder.name)
+            format!("No e-mail in {label} › « {} ».", folder.name)
         } else {
-            format!("No e-mail found in {LABEL} › « {} ».", folder.name)
+            format!("No e-mail found in {label} › « {} ».", folder.name)
         };
         return tool_text(&said, false);
     }
     let ids: Vec<String> = items.iter().map(|v| text(v, "id")).collect();
-    let shorts = outlook::short_ids(config, &ids);
+    let shorts = outlook::short_ids(config, account, &ids);
     let lines: Vec<String> = items
         .iter()
         .zip(shorts)
@@ -327,7 +359,7 @@ async fn search(config: &Config, api: &Api, arguments: &Dict) -> Dict {
             )
         })
         .collect();
-    tool_text(&format!("{}\n<<<\n{LABEL} › {}:\n{}\n>>>", crate::mailbox::UNTRUSTED, folder.name, lines.join("\n")), false)
+    tool_text(&format!("{}\n<<<\n{label} › {}:\n{}\n>>>", crate::mailbox::UNTRUSTED, folder.name, lines.join("\n")), false)
 }
 
 /// One mail as mail_read gives it (`from`, `reply_to`, `to`, `cc`, … as header lines), for `reply_address` too.
@@ -360,8 +392,13 @@ async fn attachments(api: &Api, id: &str) -> Result<Vec<Value>, Fault> {
         .collect())
 }
 
-async fn read(config: &Config, api: &Api, id: &str) -> Dict {
-    let Some(graph) = graph_id(config, id) else { return unknown_id(id) };
+/// Graph's id of a mail id of `account` (another account's: unknown).
+fn graph_of(config: &Config, account: AccountId, id: &str) -> Option<String> {
+    graph_id(config, id).filter(|(of, _)| *of == account).map(|(_, long)| long)
+}
+
+async fn read(config: &Config, account: AccountId, api: &Api, id: &str) -> Dict {
+    let Some(graph) = graph_of(config, account, id) else { return unknown_id(id) };
     let v = match message(api, &graph).await {
         Ok(v) => v,
         Err(fault) => return outlook::fault_result(&fault, "I can't read that Outlook mail just now."),
@@ -408,9 +445,9 @@ async fn read(config: &Config, api: &Api, id: &str) -> Dict {
     tool_text(&format!("{}\n<<<\n{head}\n{body}{cut}\n>>>", crate::mailbox::UNTRUSTED), false)
 }
 
-async fn save_attachment(config: &Config, agent: &AgentConfig, api: &Api, arguments: &Dict) -> Dict {
+async fn save_attachment(config: &Config, account: AccountId, agent: &AgentConfig, api: &Api, arguments: &Dict) -> Dict {
     let id = tk::str_or_empty(arguments.get("id"));
-    let Some(graph) = graph_id(config, &id) else { return unknown_id(&id) };
+    let Some(graph) = graph_of(config, account, &id) else { return unknown_id(&id) };
     if let Some(refused) = crate::mailbox::files_refused(agent) {
         return refused;
     }
@@ -458,6 +495,12 @@ struct Made {
     original: String,
     draft: String,
     at: f64,
+    #[serde(default = "first_account")]
+    account: AccountId,
+}
+
+fn first_account() -> AccountId {
+    outlook::FIRST
 }
 
 static FILES_LOCK: Mutex<()> = Mutex::new(());
@@ -486,20 +529,20 @@ fn recipients(to: &str) -> Vec<Value> {
     crate::mailbox::header_addresses(to).into_iter().map(|a| json!({"emailAddress": {"address": a}})).collect()
 }
 
-async fn draft(config: &Config, agent: &AgentConfig, api: &Api, arguments: &Dict) -> Dict {
+async fn draft(config: &Config, account: AccountId, agent: &AgentConfig, api: &Api, arguments: &Dict) -> Dict {
+    let label = outlook::label(config, account);
     let arg = |k: &str| tk::str_or_empty(arguments.get(k));
     let reply = arg("reply_to_id");
     let mut to = tk::strip(&arg("to")).to_string();
     let mut original: Option<String> = None;
     let mut sent_by: Vec<String> = Vec::new();
     if !reply.is_empty() {
-        let Some(graph) = graph_id(config, &reply) else { return unknown_id(&reply) };
+        let Some(graph) = graph_of(config, account, &reply) else { return unknown_id(&reply) };
         let v = match message(api, &graph).await {
             Ok(v) => v,
             Err(fault) => return outlook::fault_result(&fault, "I can't reach that Outlook mail just now."),
         };
-        let own: Vec<String> =
-            outlook::account_name(config).map(|a| crate::mailbox::addresses(&a)).unwrap_or_default();
+        let own = own(config, account);
         to = match crate::mailbox::reply_address(&headers_of(&v), &to, &own) {
             Ok(to) => to,
             Err(e) => return tool_text(&e.0, true),
@@ -511,7 +554,7 @@ async fn draft(config: &Config, agent: &AgentConfig, api: &Api, arguments: &Dict
                 if d.get("isDraft").and_then(Value::as_bool).unwrap_or(false) {
                     return tool_text(
                         &format!(
-                            "Not made: a draft answering this e-mail is already in {LABEL} › Drafts. The person reads \
+                            "Not made: a draft answering this e-mail is already in {label} › Drafts. The person reads \
 it and sends it; to change it, they edit that draft. Don't make another one."
                         ),
                         true,
@@ -556,41 +599,55 @@ it and sends it; to change it, they edit that draft. Don't make another one."
     };
     tracing::info!(agent = %agent.name, "outlook: mail draft");
     if let Some(graph) = original {
-        keep_draft(config, Made { original: graph, draft: text(&made, "id"), at: py::time_time() });
+        keep_draft(config, Made { original: graph, draft: text(&made, "id"), at: py::time_time(), account });
     }
     let elsewhere = !sent_by.is_empty() && crate::mailbox::header_addresses(&to).iter().any(|a| !sent_by.contains(a));
     let said = if elsewhere {
         format!(
-            "Draft saved in {LABEL} › Drafts, to {to} (its Reply-To; the e-mail came from {}). Tell the person both \
+            "Draft saved in {label} › Drafts, to {to} (its Reply-To; the e-mail came from {}). Tell the person both \
 addresses: they check them, read the draft and send it themselves.",
             sent_by.join(", ")
         )
     } else {
-        format!("Draft saved in {LABEL} › Drafts, to {to}. Tell the person: they read it and send it themselves.")
+        format!("Draft saved in {label} › Drafts, to {to}. Tell the person: they read it and send it themselves.")
     };
     tool_text(&said, false)
 }
 
 // -- tidying -----------------------------------------------------------------------------------------------------------
 
-type ScanKey = (String, String);
+/// (place, account, folder)
+type ScanKey = (String, AccountId, String);
 static SCANS: LazyLock<Mutex<HashMap<ScanKey, Scan>>> = LazyLock::new(Default::default);
 
-/// The scans kept (an account disconnected).
-pub fn forget_scans() {
-    SCANS.lock().unwrap_or_else(|e| e.into_inner()).clear();
+/// The scans kept of account `account` (disconnected, or its mails moved: read again).
+pub fn forget_scans(account: AccountId) {
+    SCANS.lock().unwrap_or_else(|e| e.into_inner()).retain(|k, _| k.1 != account);
 }
 
-/// Graph's messages as mail_tidy.rs' rows (their `uid`: the short numbers, made by one lot; `message_id`: Graph's id).
-pub fn rows_of(config: &Config, items: &[Value]) -> Vec<Row> {
+/// The drafts and tidyings kept of an account disconnected (the others' kept).
+pub fn forget_account(config: &Config, account: AccountId) {
+    let _guard = FILES_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let drafts: Vec<Made> = made_drafts(config).into_iter().filter(|d| d.account != account).collect();
+    let jobs: Vec<Done> = jobs(config).into_iter().filter(|j| j.account != account).collect();
+    for (name, bytes) in [("drafts.json", serde_json::to_vec(&drafts)), ("jobs.json", serde_json::to_vec(&jobs))] {
+        if let Err(e) = bytes.map_err(anyhow::Error::from).and_then(|b| outlook::write_file(config, name, &b)) {
+            tracing::warn!(error = %e, "outlook: a disconnected account's notes not forgotten");
+        }
+    }
+}
+
+/// Graph's messages of `account` as mail_tidy.rs' rows (their `uid`: the short numbers, made by one lot;
+/// `message_id`: Graph's id).
+pub fn rows_of(config: &Config, account: AccountId, items: &[Value]) -> Vec<Row> {
     let ids: Vec<String> = items.iter().map(|v| text(v, "id")).collect();
-    let shorts = outlook::short_ids(config, &ids);
+    let shorts = outlook::short_ids(config, account, &ids);
     items.iter().zip(shorts).map(|(v, n)| row_with(v, n)).collect()
 }
 
 /// One message as a row (`rows_of` for a page).
-pub fn row_of(config: &Config, v: &Value) -> Row {
-    row_with(v, outlook::short_id(config, &text(v, "id")))
+pub fn row_of(config: &Config, account: AccountId, v: &Value) -> Row {
+    row_with(v, outlook::short_id(config, account, &text(v, "id")))
 }
 
 fn row_with(v: &Value, n: u64) -> Row {
@@ -608,8 +665,8 @@ fn row_with(v: &Value, n: u64) -> Row {
     }
 }
 
-async fn scan(config: &Config, api: &Api, folder: &MailFolder, fresh: bool) -> Result<Scan, Fault> {
-    let key = (config.data_dir(), folder.id.clone());
+pub async fn scan(config: &Config, account: AccountId, api: &Api, folder: &MailFolder, fresh: bool) -> Result<Scan, Fault> {
+    let key = (config.data_dir(), account, folder.id.clone());
     let now = py::time_time();
     if !fresh {
         if let Some(kept) = SCANS.lock().unwrap_or_else(|e| e.into_inner()).get(&key) {
@@ -625,38 +682,52 @@ async fn scan(config: &Config, api: &Api, folder: &MailFolder, fresh: bool) -> R
         ("$select", "id,from,subject,receivedDateTime,isRead,flag,isDraft".to_string()),
     ];
     let (items, cut) = outlook::pages(api, &url, &params, &[PREFER_IMMUTABLE], SCAN_MAX).await?;
-    let rows: Vec<Row> = rows_of(config, &items);
+    let rows: Vec<Row> = rows_of(config, account, &items);
     let scanned = Scan { folder: folder.name.clone(), uid_validity: None, total: folder.total.max(rows.len()), rows, cut, at: now };
     SCANS.lock().unwrap_or_else(|e| e.into_inner()).insert(key, scanned.clone());
     Ok(scanned)
 }
 
-fn own(config: &Config) -> Vec<String> {
-    outlook::account_name(config).map(|a| crate::mailbox::addresses(&a)).unwrap_or_default()
+/// The person's own addresses in account `account` (never tidied).
+pub fn own(config: &Config, account: AccountId) -> Vec<String> {
+    outlook::address(config, account).map(|a| crate::mailbox::addresses(&a)).unwrap_or_default()
 }
 
-/// mail_tidy.rs' overview, its last line for Outlook (no standing rules here).
-pub fn overview_for(scanned: &Scan, own: &[String]) -> String {
-    let text = crate::mail_tidy::overview_text(LABEL, scanned, own, &[]);
+/// The `mailbox` argument naming account `account` (its address when the place keeps several).
+pub fn mailbox_word(config: &Config, account: AccountId) -> String {
+    match outlook::address(config, account).filter(|_| outlook::several(config)) {
+        Some(address) => crate::archives::defused(&address),
+        None => LABEL.to_string(),
+    }
+}
+
+/// mail_tidy.rs' overview of mailbox `label`, its next step naming the mailbox (`word`); its mailing lists aren't read
+/// here, so standing rules name a sender or a domain.
+pub fn overview_for(label: &str, word: &str, scanned: &Scan, own: &[String]) -> String {
+    let text = crate::mail_tidy::overview_text(label, scanned, own, &[]);
     let kept = match text.rfind("\nNext:") {
         Some(at) => text[..at].to_string(),
         None => text,
     };
     format!(
-        "{kept}\nNext: mail_bulk(action, groups or criteria, mailbox \"{LABEL}\") makes a card for the person; nothing \
-moves before their Oui. Standing rules are set by the person in Outlook itself."
+        "{kept}\nNext: mail_bulk(action, groups or criteria, mailbox \"{word}\") makes a card for the person; nothing \
+moves before their Oui. A sender that keeps coming (server providers, shops, banks, newsletters): add rule: true to file \
+it from now on too (a sender or a domain; a folder rather than the trash; invoices to « Factures »)."
     )
 }
 
-async fn overview(config: &Config, api: &Api, arguments: &Dict) -> Dict {
+async fn overview(config: &Config, account: AccountId, api: &Api, arguments: &Dict) -> Dict {
     let folder = match open_folder(api, &tk::str_or_empty(arguments.get("folder"))).await {
         Ok(f) => f,
         Err(Ok(said)) => return tool_text(&said, true),
         Err(Err(fault)) => return outlook::fault_result(&fault, "I can't reach your Outlook mail just now."),
     };
     let fresh = arguments.get("fresh").map(py::truthy).unwrap_or(false);
-    match scan(config, api, &folder, fresh).await {
-        Ok(scanned) => tool_text(&overview_for(&scanned, &own(config)), false),
+    match scan(config, account, api, &folder, fresh).await {
+        Ok(scanned) => tool_text(
+            &overview_for(&outlook::label(config, account), &mailbox_word(config, account), &scanned, &own(config, account)),
+            false,
+        ),
         Err(fault) => outlook::fault_result(&fault, "I can't read your Outlook mail just now."),
     }
 }
@@ -684,11 +755,14 @@ pub struct Done {
     pub mails: Vec<String>,
     pub at: f64,
     pub undone: bool,
+    /// The account it was done in.
+    #[serde(default = "first_account")]
+    pub account: AccountId,
 }
 
 pub const JOB_PREFIX: &str = "outlook-";
 
-fn jobs(config: &Config) -> Vec<Done> {
+pub fn jobs(config: &Config) -> Vec<Done> {
     let now = py::time_time();
     outlook::read_file(config, "jobs.json")
         .and_then(|b| serde_json::from_slice::<Vec<Done>>(&b).ok())
@@ -718,8 +792,9 @@ pub struct Planned {
 
 /// The mails `selector` takes in `scanned` (mail_tidy.rs' rules: never the flagged ones, drafts nor the person's own;
 /// for mark_read, the unread ones), the card's job for them. Err: plain words.
-pub fn plan(agent: &str, scanned: &Scan, folder: &MailFolder, action: Action, selector: &Selector, own: &[String],
-            dest: &str) -> Result<Planned, String> {
+#[allow(clippy::too_many_arguments)]
+pub fn plan(agent: &str, label: &str, scanned: &Scan, folder: &MailFolder, action: Action, selector: &Selector,
+            own: &[String], dest: &str) -> Result<Planned, String> {
     selector.check(&|g| crate::mail_tidy::known_group(scanned, g))?;
     if !selector.list_id.is_empty() || selector.groups.iter().any(|g| g.starts_with("list:")) {
         return Err(format!("{LABEL}'s mailing lists aren't read here: name a sender (from) or a domain"));
@@ -750,7 +825,7 @@ pub fn plan(agent: &str, scanned: &Scan, folder: &MailFolder, action: Action, se
         id: format!("{JOB_PREFIX}{}", py::token_hex(6)),
         agent: agent.to_string(),
         account: outlook::BOX_ID.into(),
-        mailbox: LABEL.into(),
+        mailbox: label.to_string(),
         folder: folder.name.clone(),
         action: Some(action),
         dest: dest.to_string(),
@@ -773,7 +848,7 @@ fn command_of(planned: &Planned) -> String {
     let digest = Sha256::digest(planned.job.message_ids.join(",").as_bytes());
     let hex: String = digest.iter().take(8).map(|b| format!("{b:02x}")).collect();
     let action = planned.job.action.as_ref().map(Action::word).unwrap_or_default();
-    format!("mail_bulk {action} {} {LABEL} › {} {hex}", planned.job.message_ids.len(), planned.job.folder)
+    format!("mail_bulk {action} {} {} › {} {hex}", planned.job.message_ids.len(), planned.job.mailbox, planned.job.folder)
 }
 
 /// Each mail moved (or marked) at Graph, `AT_ONCE` at a time: the ones done.
@@ -802,35 +877,34 @@ async fn act(api: &Api, action: &Action, dest: &str, mails: &[String]) -> Vec<St
     results.into_iter().flatten().collect()
 }
 
-fn done_words(action: &Action, n: usize, folder: &str, dest_name: &str) -> String {
+fn done_words(label: &str, action: &Action, n: usize, folder: &str, dest_name: &str) -> String {
     match action {
-        Action::MarkRead => format!("{n} e-mails marked read in {LABEL} › {folder}"),
-        Action::Trash => format!("{n} e-mails put in {LABEL}'s Deleted Items (from {folder})"),
-        Action::Archive => format!("{n} e-mails archived in {LABEL} (from {folder})"),
-        _ => format!("{n} e-mails moved to {LABEL} › {dest_name} (from {folder})"),
+        Action::MarkRead => format!("{n} e-mails marked read in {label} › {folder}"),
+        Action::Trash => format!("{n} e-mails put in {label}'s Deleted Items (from {folder})"),
+        Action::Archive => format!("{n} e-mails archived in {label} (from {folder})"),
+        _ => format!("{n} e-mails moved to {label} › {dest_name} (from {folder})"),
     }
 }
 
-async fn bulk(state: &AppState, agent: &AgentConfig, api: &Api, arguments: &Dict) -> Dict {
+async fn bulk(state: &AppState, agent: &AgentConfig, account: AccountId, api: &Api, arguments: &Dict) -> Dict {
     let config = state.config();
+    let label = outlook::label(&config, account);
     let arg = |k: &str| tk::str_or_empty(arguments.get(k));
     let word = tk::strip(&arg("action")).to_lowercase();
     if crate::mail_rules::WORDS.contains(&word.as_str()) || arguments.get("rule").is_some_and(py::truthy) {
-        return tool_text(
-            &format!("Standing rules aren't available for {LABEL} here: the person sets them in Outlook itself \
-(Settings › Mail › Rules). A one-time tidying (archive, move, mark_read) works."),
-            true,
-        );
+        // the standing rules: the IMAP boxes' (mail_rules.rs), on this mailbox (outlook_rules.rs)
+        return crate::outlook_rules::call(&config, &agent.name, account, api, &word, arguments).await;
     }
     if word == "status" {
-        let mine: Vec<String> = jobs(&config)
+        let mut mine: Vec<String> = jobs(&config)
             .iter()
-            .filter(|j| j.agent == agent.name)
+            .filter(|j| j.agent == agent.name && j.account == account)
             .rev()
             .take(5)
             .map(|j| format!("Job {} · {} · {} e-mails{}", j.id, j.action, j.mails.len(), if j.undone { " · undone" } else { "" }))
             .collect();
-        return tool_text(&if mine.is_empty() { format!("No {LABEL} tidying yet.") } else { mine.join("\n") }, false);
+        mine.extend(crate::mail_rules::status_lines(&config, &agent.name).into_iter().filter(|l| l.contains(&label)));
+        return tool_text(&if mine.is_empty() { format!("No {label} tidying yet.") } else { mine.join("\n") }, false);
     }
     if word == "undo" {
         return undo(&config, agent, api, &arg("job")).await;
@@ -856,82 +930,68 @@ async fn bulk(state: &AppState, agent: &AgentConfig, api: &Api, arguments: &Dict
     if protected.contains(&folder.id) {
         return tool_text(&format!("{} is the person's sent mail or drafts: never touched", folder.name), true);
     }
-    let (dest, dest_name) = match &action {
-        Action::MarkRead => (String::new(), String::new()),
-        Action::Archive | Action::Trash | Action::Move(_) => {
-            let wanted = match &action {
-                Action::Archive => "archive".to_string(),
-                Action::Trash => "deleteditems".to_string(),
-                Action::Move(f) => f.clone(),
-                _ => String::new(),
-            };
-            let found = match well_known(&wanted) {
-                Some(id) => known_folder(api, id).await.map_err(Err),
-                None => open_folder(api, &wanted).await,
-            };
-            match found {
-                Ok(f) if protected.contains(&f.id) => {
-                    return tool_text(&format!("{} is the sent mail or drafts: not a destination", f.name), true)
-                }
-                Ok(f) if f.id == folder.id => return tool_text(&format!("the messages are already in {}", f.name), true),
-                Ok(f) => (f.id, f.name),
-                Err(Ok(said)) => return tool_text(&said, true),
-                Err(Err(Fault::NotFound)) => {
-                    return tool_text(&format!("this {LABEL} mailbox has no such folder: use move:<one of its folders>"), true)
-                }
-                Err(Err(fault)) => return outlook::fault_result(&fault, "I can't reach your Outlook mail just now."),
-            }
-        }
-        _ => return tool_text("action: archive, mark_read, move:<folder> or trash (or status, undo)", true),
+    let (dest, dest_name) = match destination(api, &action, &folder, &protected).await {
+        Ok(found) => found,
+        Err(said) => return said,
     };
-    let scanned = match scan(&config, api, &folder, false).await {
+    let scanned = match scan(&config, account, api, &folder, false).await {
         Ok(s) => s,
         Err(fault) => return outlook::fault_result(&fault, "I can't read your Outlook mail just now."),
     };
-    let planned = match plan(&agent.name, &scanned, &folder, action.clone(), &selector, &own(&config), &dest) {
-        Ok(p) => p,
-        Err(why) => return tool_text(&why, true),
-    };
+    let planned =
+        match plan(&agent.name, &label, &scanned, &folder, action.clone(), &selector, &own(&config, account), &dest) {
+            Ok(p) => p,
+            Err(why) => return tool_text(&why, true),
+        };
     let lang = crate::mail_tidy::language(&config, &agent.name);
     let shown = crate::mail_tidy::shown_agent(&config, &agent.name);
     // a move to the Deleted Items is the trash, whatever its name (review R7): critical, as `trash`
     let to_trash = matches!(action, Action::Move(_)) && known_folder(api, "deleteditems").await.is_ok_and(|f| f.id == dest);
-    let account = outlook::account_name(&config);
-    let card = crate::person_ok::Card {
-        kind: if to_trash { "mail_trash" } else { kind_of(&action) },
-        tool: "mail_bulk",
-        command: command_of(&planned),
-        summary: crate::mail_tidy::sentence(&lang, &shown, &planned.job),
-        detail: crate::mail_tidy::detail(&lang, &planned.job),
-        always: None,
-    };
-    use crate::person_ok::Answer;
-    match crate::person_ok::ask(state, agent, card).await {
-        Answer::Once | Answer::Always => {}
-        Answer::Deny => return tool_text("Your person said no: nothing was moved in their Outlook. Ask what they want instead.", true),
-        Answer::NoAnswer => {
-            return tool_text("Your person didn't answer the card in time: nothing was moved in their Outlook. Say it waits for their OK.", true)
-        }
-        Answer::Held => {
-            return tool_text("Your person isn't there now: the card waits for them in their app. Nothing is moved until \
+    let kind = if to_trash { "mail_trash" } else { kind_of(&action) };
+    let summary = crate::mail_tidy::sentence(&lang, &shown, &planned.job);
+    let address = outlook::address(&config, account);
+    // 1.1 (Alex 24/11): the person's level as for an IMAP box's card (approval_level.rs `at_once`): « Seulement le
+    // critique », or their « Toujours » for this kind, lets it through with no card; the trash never
+    let at_once = crate::approval_level::at_once(&config, &agent.name, kind);
+    if at_once.is_none() {
+        let card = crate::person_ok::Card {
+            kind,
+            tool: "mail_bulk",
+            command: command_of(&planned),
+            summary: summary.clone(),
+            detail: crate::mail_tidy::detail(&lang, &planned.job),
+            // « Toujours autoriser » for that kind, as on the IMAP boxes' cards (never for the trash: critical)
+            always: crate::approval_level::always_button(&lang, kind),
+            always_key: None,
+        };
+        use crate::person_ok::Answer;
+        match crate::person_ok::ask(state, agent, card).await {
+            Answer::Once | Answer::Always => {}
+            Answer::Deny => return tool_text("Your person said no: nothing was moved in their Outlook. Ask what they want instead.", true),
+            Answer::NoAnswer => {
+                return tool_text("Your person didn't answer the card in time: nothing was moved in their Outlook. Say it waits for their OK.", true)
+            }
+            Answer::Held => {
+                return tool_text("Your person isn't there now: the card waits for them in their app. Nothing is moved until \
 they say yes; say so in your report and go on with the rest.", false)
+            }
         }
     }
     // the account, the part and the agent still there (review C4): else nothing moves
     let config = state.config();
-    if let Err(why) = outlook::still_allowed(&config, &agent.name, "mail", account.as_deref()) {
+    if let Err(why) = outlook::still_allowed(&config, &agent.name, "mail", account, address.as_deref()) {
         return tool_text(why, true);
     }
-    let api = match outlook::signed_in(&config).await {
+    let fresh = match outlook::signed_in(&config, account).await {
         Ok(api) => api,
         Err(fault) => return outlook::fault_result(&fault, "I can't reach your Outlook mail just now."),
     };
-    let api = &api;
+    let api = &fresh;
     // flagged since the scan: left out (review R6)
     let flagged = flagged_in(api, &folder.id).await;
     let mails: Vec<String> = planned.job.message_ids.iter().filter(|id| !flagged.contains(*id)).cloned().collect();
     let done = act(api, &action, &planned.dest, &mails).await;
-    SCANS.lock().unwrap_or_else(|e| e.into_inner()).retain(|k, _| k.1 != folder.id && k.1 != planned.dest);
+    forget_scans(account);
     let job = Done {
         id: planned.job.id.clone(),
         agent: agent.name.clone(),
@@ -941,21 +1001,93 @@ they say yes; say so in your report and go on with the rest.", false)
         mails: done.clone(),
         at: py::time_time(),
         undone: false,
+        account,
     };
     keep_job(&config, &job);
-    tracing::info!(agent = %agent.name, action = %job.action, done = done.len(), "outlook: mails tidied");
+    tracing::info!(agent = %agent.name, action = %job.action, done = done.len(), at_once = at_once.is_some(), "outlook: mails tidied");
     let skipped = planned.job.message_ids.len() - done.len();
     let skipped = if skipped > 0 { format!(" ({skipped} could not be done: gone or changed)") } else { String::new() };
     let more = if planned.job.uids.len() >= MAX_PER_CARD { format!(" At most {MAX_PER_CARD} per card: call again for the rest.") } else { String::new() };
-    tool_text(
-        &format!(
-            "Done: {}{skipped}. Job {}: mail_bulk(action: \"undo\", job: \"{}\") puts them back for 30 days.{more}",
-            done_words(&action, done.len(), &folder.name, &dest_name),
-            job.id,
-            job.id
-        ),
-        false,
-    )
+    let mut said = format!(
+        "Done: {}{skipped}. Job {}: mail_bulk(action: \"undo\", job: \"{}\") puts them back for 30 days.{more}",
+        done_words(&label, &action, done.len(), &folder.name, &dest_name),
+        job.id,
+        job.id
+    );
+    if let Some(always) = at_once {
+        // its line in « Validé pour toi », with « Annuler » (approval_level.rs `Undo::OutlookJob`)
+        let undo = Some(crate::approval_level::Undo::OutlookJob { job: job.id.clone() });
+        crate::approval_level::record_at_once(&config, &agent.name, kind, &summary, always, undo, Some(done.len() as u64));
+        said.push('\n');
+        said.push_str(&crate::approval_level::told(&[summary]));
+    }
+    tool_text(&said, false)
+}
+
+/// Where `action` sends the mails of `folder`: Graph's folder id and its name (none for marking read). Err: the
+/// tool's answer.
+async fn destination(api: &Api, action: &Action, folder: &MailFolder, protected: &[String]) -> Result<(String, String), Dict> {
+    let wanted = match action {
+        Action::MarkRead => return Ok((String::new(), String::new())),
+        Action::Archive => "archive".to_string(),
+        Action::Trash => "deleteditems".to_string(),
+        Action::Move(f) => f.clone(),
+        _ => return Err(tool_text("action: archive, mark_read, move:<folder> or trash (or status, undo)", true)),
+    };
+    let found = match well_known(&wanted) {
+        Some(id) => known_folder(api, id).await.map_err(Err),
+        None => open_folder(api, &wanted).await,
+    };
+    match found {
+        Ok(f) if protected.contains(&f.id) => Err(tool_text(&format!("{} is the sent mail or drafts: not a destination", f.name), true)),
+        Ok(f) if f.id == folder.id => Err(tool_text(&format!("the messages are already in {}", f.name), true)),
+        Ok(f) => Ok((f.id, f.name)),
+        Err(Ok(said)) => Err(tool_text(&said, true)),
+        Err(Err(Fault::NotFound)) => {
+            Err(tool_text(&format!("this {LABEL} mailbox has no such folder: use move:<one of its folders>"), true))
+        }
+        Err(Err(fault)) => Err(outlook::fault_result(&fault, "I can't reach your Outlook mail just now.")),
+    }
+}
+
+/// [`destination`] for another module (outlook_rules.rs): Sent Items and Drafts read first, never one of them.
+/// Whether folder `id` is the Deleted Items (a move there is the trash, whatever its name). Err: Graph not reached
+/// (plain words): the caller does nothing rather than guess.
+pub async fn is_deleted_items(api: &Api, id: &str) -> Result<bool, String> {
+    known_folder(api, "deleteditems").await.map(|f| f.id == id).map_err(|f| outlook::words(&f))
+}
+
+pub async fn destination_for(api: &Api, action: &Action, folder: &MailFolder) -> Result<(String, String), String> {
+    let mut protected = Vec::new();
+    for id in ["sentitems", "drafts"] {
+        protected.push(known_folder(api, id).await.map_err(|f| outlook::words(&f))?.id);
+    }
+    if protected.contains(&folder.id) {
+        return Err(format!("{} is the person's sent mail or drafts: never touched", folder.name));
+    }
+    destination(api, action, folder, &protected).await.map_err(|d| {
+        d.get("content").and_then(|c| c.get(0)).and_then(|c| c.get("text")).and_then(Value::as_str).unwrap_or("").to_string()
+    })
+}
+
+/// [`act`] for another module (outlook_rules.rs): the mails moved (or marked) at Graph, the ones done.
+pub async fn act_on(api: &Api, action: &Action, dest: &str, mails: &[String]) -> Vec<String> {
+    act(api, action, dest, mails).await
+}
+
+/// [`flagged_in`] for another module.
+pub async fn flagged(api: &Api, folder: &str) -> std::collections::HashSet<String> {
+    flagged_in(api, folder).await
+}
+
+/// [`still_in`] for another module.
+pub async fn still_there(api: &Api, mails: &[String], folder: &str) -> Vec<String> {
+    still_in(api, mails, folder).await
+}
+
+/// The inbox (Graph's well-known folder), for another module.
+pub async fn inbox(api: &Api) -> Result<MailFolder, Fault> {
+    known_folder(api, "inbox").await
 }
 
 /// The flagged mails of a folder now (Graph's `$filter`): never tidied, even when the scan saw them unflagged.
@@ -993,16 +1125,25 @@ async fn still_in(api: &Api, mails: &[String], folder: &str) -> Vec<String> {
 }
 
 async fn undo(config: &Config, agent: &AgentConfig, api: &Api, id: &str) -> Dict {
-    let Some(mut job) = jobs(config).into_iter().find(|j| j.id == id.trim() && j.agent == agent.name) else {
-        return tool_text("no such job of yours (mail_bulk action status lists them)", true);
+    match undo_job(config, &agent.name, api, id).await {
+        Ok(said) => tool_text(&said, false),
+        Err(said) => tool_text(&said, true),
+    }
+}
+
+/// Job `id` of `agent` undone at Graph (`api`: its account's): the mails still where it put them put back. The
+/// answer's words; Err: why not.
+async fn undo_job(config: &Config, agent: &str, api: &Api, id: &str) -> Result<String, String> {
+    let Some(mut job) = jobs(config).into_iter().find(|j| j.id == id.trim() && j.agent == agent) else {
+        return Err("no such job of yours (mail_bulk action status lists them)".into());
     };
     if job.undone {
-        return tool_text(&format!("job {} was undone already", job.id), true);
+        return Err(format!("job {} was undone already", job.id));
     }
     let back = match Action::parse(&job.action) {
         Ok(Action::MarkRead) => Action::MarkUnread,
         Ok(_) => Action::Move(job.from.clone()),
-        Err(_) => return tool_text("this job can't be undone", true),
+        Err(_) => return Err("this job can't be undone".into()),
     };
     // only those still where the tidying left them: the destination, or the folder of mails marked read
     let left_in = if job.to.is_empty() { &job.from } else { &job.to };
@@ -1010,28 +1151,113 @@ async fn undo(config: &Config, agent: &AgentConfig, api: &Api, id: &str) -> Dict
     let done = act(api, &back, &job.from, &still).await;
     job.undone = true;
     keep_job(config, &job);
-    SCANS.lock().unwrap_or_else(|e| e.into_inner()).clear();
+    forget_scans(job.account);
     let moved = job.mails.len() - still.len();
     let moved = if moved > 0 { format!(" {moved} moved elsewhere since stay where they are.") } else { String::new() };
-    tool_text(&format!("Undone: {} of {} e-mails put back in {LABEL}.{moved}", done.len(), job.mails.len()), false)
+    tracing::info!(agent, job = %job.id, back = done.len(), "outlook: tidying undone");
+    Ok(format!("Undone: {} of {} e-mails put back in {}.{moved}", done.len(), job.mails.len(), outlook::label(config, job.account)))
+}
+
+/// « Annuler » on the line of a tidying done at once (approval_level.rs `Undo::OutlookJob`): its account signed in
+/// again, the job undone. Err: why not (its account disconnected, the job undone already…).
+pub async fn undo_line(config: &Config, agent: &str, id: &str) -> Result<(), String> {
+    let account = jobs(config)
+        .into_iter()
+        .find(|j| j.id == id && j.agent == agent)
+        .map(|j| j.account)
+        .ok_or_else(|| "this tidying is too old to be undone".to_string())?;
+    if outlook::one(config, account).is_none() {
+        return Err("this Outlook account is no longer connected".into());
+    }
+    let api = outlook::signed_in(config, account).await.map_err(|f| outlook::words(&f))?;
+    undo_job(config, agent, &api, id).await.map(|_| ())
 }
 
 // -- the tools ---------------------------------------------------------------------------------------------------------
 
+fn no_mailbox() -> Dict {
+    tool_text(&format!("{LABEL}'s mail isn't yours: your person switches « Mails » on for you in Outlook's page of the app."), true)
+}
+
+/// The account a mail tool's call is for: the one of the id it names (a mail's, a job's, a rule's), else the one its
+/// `mailbox` names, else `agent`'s first one with mail. Err: the tool's answer (an id of no account of its).
+pub fn account_of_call(config: &Config, agent: &str, name: &str, arguments: &Dict) -> Result<AccountId, Dict> {
+    let mine: Vec<AccountId> = outlook::accounts_with(config, agent, "mail").iter().map(|a| a.id).collect();
+    if mine.is_empty() {
+        return Err(no_mailbox());
+    }
+    let arg = |k: &str| tk::str_or_empty(arguments.get(k)).trim().to_string();
+    let of_id = |id: &str| match graph_id(config, id) {
+        Some((account, _)) if mine.contains(&account) => Ok(account),
+        _ => Err(unknown_id(id)),
+    };
+    match name {
+        "mail_read" | "mail_attachment" if is_ours(&arg("id")) => return of_id(&arg("id")),
+        "mail_draft" if is_ours(&arg("reply_to_id")) => return of_id(&arg("reply_to_id")),
+        "mail_bulk" if arg("job").starts_with(JOB_PREFIX) => {
+            let job = jobs(config).into_iter().find(|j| j.id == arg("job") && j.agent == agent);
+            return match job {
+                Some(j) if mine.contains(&j.account) => Ok(j.account),
+                _ => Err(tool_text("no such job of yours (mail_bulk action status lists them)", true)),
+            };
+        }
+        "mail_bulk" if !arg("rule_id").is_empty() => {
+            if let Some(account) = crate::outlook_rules::account_of_rule(config, agent, &arg("rule_id")) {
+                if mine.contains(&account) {
+                    return Ok(account);
+                }
+            }
+        }
+        _ => {}
+    }
+    named_account(config, agent, &arg("mailbox")).ok_or_else(|| not_named(config, agent, &arg("mailbox")))
+}
+
+/// A `mailbox` named that is none of `agent`'s Outlook mailboxes: nothing done, its own named.
+fn not_named(config: &Config, agent: &str, wanted: &str) -> Dict {
+    let names: Vec<String> = outlook::accounts_with(config, agent, "mail")
+        .iter()
+        .map(|a| format!("\"{}\"", a.link.account.as_deref().map(crate::archives::defused).unwrap_or_else(|| LABEL.to_string())))
+        .collect();
+    tool_text(
+        &format!(
+            "no {LABEL} mailbox of yours is \"{}\": nothing was done. Yours: {} (or leave out `mailbox` for the first).",
+            crate::archives::defused(tk::head(wanted, 120)),
+            names.join(", ")
+        ),
+        true,
+    )
+}
+
 /// One of the mail tools for Outlook (`takes` said it is), for `agent`.
 pub async fn call(state: &AppState, agent: &AgentConfig, name: &str, arguments: &Dict) -> Dict {
     let config = state.config();
-    let api = match outlook::signed_in(&config).await {
+    let account = match account_of_call(&config, &agent.name, name, arguments) {
+        Ok(account) => account,
+        Err(said) => return said,
+    };
+    let api = match outlook::signed_in(&config, account).await {
         Ok(api) => api,
         Err(fault) => return outlook::fault_result(&fault, "I can't reach your Outlook mail just now."),
     };
-    match name {
-        "mail_search" => search(&config, &api, arguments).await,
-        "mail_read" => read(&config, &api, &tk::str_or_empty(arguments.get("id"))).await,
-        "mail_attachment" => save_attachment(&config, agent, &api, arguments).await,
-        "mail_draft" => draft(&config, agent, &api, arguments).await,
-        "mail_overview" => overview(&config, &api, arguments).await,
-        "mail_bulk" => bulk(state, agent, &api, arguments).await,
+    let mut result = match name {
+        "mail_search" => search(&config, account, &api, arguments).await,
+        "mail_read" => read(&config, account, &api, &tk::str_or_empty(arguments.get("id"))).await,
+        "mail_attachment" => save_attachment(&config, account, agent, &api, arguments).await,
+        "mail_draft" => draft(&config, account, agent, &api, arguments).await,
+        "mail_overview" => overview(&config, account, &api, arguments).await,
+        "mail_bulk" => bulk(state, agent, account, &api, arguments).await,
         _ => tool_text(&format!("unknown tool: {name}"), true),
+    };
+    if name == "mail_search" {
+        // its other Outlook mailboxes named (it would not know they are there)
+        let also = also_line(&config, &agent.name, Some(account));
+        if !also.is_empty() {
+            if let Some(Value::String(said)) = result.get_mut("content").and_then(|c| c.get_mut(0)).and_then(|c| c.get_mut("text")) {
+                said.push('\n');
+                said.push_str(&also);
+            }
+        }
     }
+    result
 }

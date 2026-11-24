@@ -1180,6 +1180,7 @@ pub async fn write_call(state: &AppState, agent: &AgentConfig, name: &str, argum
         } else {
             None
         },
+        always_key: None,
     };
     use crate::person_ok::Answer;
     let refused = |a: &'static str, b: &'static str| if delete { a } else { b };
