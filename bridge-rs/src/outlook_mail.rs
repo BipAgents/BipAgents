@@ -83,19 +83,11 @@ pub fn names_us(config: &Config, wanted: &str) -> bool {
 }
 
 /// The account a `mailbox` argument names among `agent`'s with mail: its address, its mailbox's id, « Outlook (its
-/// address) »; « Outlook » or nothing: the first one. None: none of its.
+/// address) »; « Outlook » or nothing: the first one. None: none of its — never its first one for another's name
+/// (review C2).
 pub fn named_account(config: &Config, agent: &str, wanted: &str) -> Option<AccountId> {
-    let mine = outlook::accounts_with(config, agent, "mail");
-    let wanted = wanted.trim().to_lowercase();
-    let inner = wanted.strip_prefix("outlook (").and_then(|w| w.strip_suffix(')')).unwrap_or(&wanted).trim().to_string();
-    let by_address = mine.iter().find(|a| a.link.account.as_deref().is_some_and(|x| x.trim().to_lowercase() == inner));
-    if let Some(found) = by_address {
-        return Some(found.id);
-    }
-    if let Some(id) = outlook::key_account(&inner) {
-        return mine.iter().find(|a| a.id == id).map(|a| a.id);
-    }
-    mine.first().map(|a| a.id)
+    let mine: Vec<AccountId> = outlook::accounts_with(config, agent, "mail").iter().map(|a| a.id).collect();
+    outlook::named_among(config, wanted, &mine)
 }
 
 /// Whether this mail tool's call is for Outlook: `agent` uses its mail, and the call names it (an id of its, its name)
@@ -1059,6 +1051,12 @@ async fn destination(api: &Api, action: &Action, folder: &MailFolder, protected:
 }
 
 /// [`destination`] for another module (outlook_rules.rs): Sent Items and Drafts read first, never one of them.
+/// Whether folder `id` is the Deleted Items (a move there is the trash, whatever its name). Err: Graph not reached
+/// (plain words): the caller does nothing rather than guess.
+pub async fn is_deleted_items(api: &Api, id: &str) -> Result<bool, String> {
+    known_folder(api, "deleteditems").await.map(|f| f.id == id).map_err(|f| outlook::words(&f))
+}
+
 pub async fn destination_for(api: &Api, action: &Action, folder: &MailFolder) -> Result<(String, String), String> {
     let mut protected = Vec::new();
     for id in ["sentitems", "drafts"] {
@@ -1212,7 +1210,23 @@ pub fn account_of_call(config: &Config, agent: &str, name: &str, arguments: &Dic
         }
         _ => {}
     }
-    named_account(config, agent, &arg("mailbox")).ok_or_else(no_mailbox)
+    named_account(config, agent, &arg("mailbox")).ok_or_else(|| not_named(config, agent, &arg("mailbox")))
+}
+
+/// A `mailbox` named that is none of `agent`'s Outlook mailboxes: nothing done, its own named.
+fn not_named(config: &Config, agent: &str, wanted: &str) -> Dict {
+    let names: Vec<String> = outlook::accounts_with(config, agent, "mail")
+        .iter()
+        .map(|a| format!("\"{}\"", a.link.account.as_deref().map(crate::archives::defused).unwrap_or_else(|| LABEL.to_string())))
+        .collect();
+    tool_text(
+        &format!(
+            "no {LABEL} mailbox of yours is \"{}\": nothing was done. Yours: {} (or leave out `mailbox` for the first).",
+            crate::archives::defused(tk::head(wanted, 120)),
+            names.join(", ")
+        ),
+        true,
+    )
 }
 
 /// One of the mail tools for Outlook (`takes` said it is), for `agent`.

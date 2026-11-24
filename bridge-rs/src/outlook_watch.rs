@@ -4,8 +4,9 @@
 //!
 //! How (the simplest that holds, chosen over Graph's two other ways): each mailbox some active routine or rule needs is
 //! looked at every `[triggers] poll_minutes` (2 minutes at most): ONE `GET /me/mailFolders/inbox/messages` of the mails
-//! received since where it was left (`receivedDateTime ge`, the oldest first, `PER_LOOK` at most), the ids seen in the
-//! last minutes kept so that a mail is offered once even when two share a second. No web hook (Graph's subscriptions):
+//! received since where it was left (`receivedDateTime ge`, the oldest first, `PER_LOOK` new ones at most; its next
+//! pages read too when a page is all seen), the ids seen in the last minutes kept so that a mail is offered once even
+//! when two share a second. No web hook (Graph's subscriptions):
 //! they need a public address that Graph reaches (a home has none), a validation round, a renewal every 3 days at most
 //! for mail, and still a look to catch what was missed while the place was down. No delta query either: its first
 //! round walks the whole inbox (tens of thousands of mails), and it tells every change of every mail (read, flagged,
@@ -42,6 +43,8 @@ pub const MAX_MINUTES: f64 = 2.0;
 /// one seen is never lost.
 const OVERLAP_SECONDS: i64 = 120;
 const SEEN_MAX: usize = 500;
+/// Pages one look reads at most: more than the ids kept seen (`SEEN_MAX`), so a look always reaches past them.
+const MAX_PAGES: usize = SEEN_MAX / PER_LOOK + 2;
 const SELECT: &str = "id,subject,from,receivedDateTime,internetMessageId,isRead,flag,isDraft,hasAttachments";
 
 /// Where an inbox was left: the newest `receivedDateTime` read, the ids seen since `after - OVERLAP_SECONDS`.
@@ -178,9 +181,22 @@ pub async fn look_at(config: &Config, account: AccountId) -> Result<usize, Strin
         ("$top", PER_LOOK.to_string()),
         ("$select", SELECT.to_string()),
     ];
-    let page = outlook::fetch(&api, &url, &query, &[PREFER_IMMUTABLE]).await.map_err(|f| outlook::words(&f))?;
-    let items = page.get("value").and_then(Value::as_array).cloned().unwrap_or_default();
-    let new: Vec<Value> = items.iter().filter(|m| !cursor.seen.contains(&text(m, "id"))).cloned().collect();
+    // the pages after a page all seen read too (review C1: 50 mails or more within the overlap would otherwise stop
+    // the watch for good), until `PER_LOOK` new ones or `MAX_PAGES` pages: the seen ones (`SEEN_MAX`) fit in them
+    let mut page = outlook::fetch(&api, &url, &query, &[PREFER_IMMUTABLE]).await.map_err(|f| outlook::words(&f))?;
+    let mut items: Vec<Value> = Vec::new();
+    let mut new: Vec<Value> = Vec::new();
+    for read in 1.. {
+        let got = page.get("value").and_then(Value::as_array).cloned().unwrap_or_default();
+        new.extend(got.iter().filter(|m| !cursor.seen.contains(&text(m, "id"))).cloned());
+        items.extend(got);
+        let Some(next) = outlook::next_page(&api, &page).filter(|_| new.len() < PER_LOOK) else { break };
+        if read >= MAX_PAGES {
+            tracing::warn!(account, read, "outlook: more mail within two minutes than a look reads; the rest next look");
+            break;
+        }
+        page = outlook::fetch(&api, &next, &[], &[PREFER_IMMUTABLE]).await.map_err(|f| outlook::words(&f))?;
+    }
     // where it is left: the newest stamp read, the ids of the last minutes
     if let Some(newest) = items.iter().map(|m| text(m, "receivedDateTime")).max() {
         if newest > cursor.after {
@@ -190,7 +206,9 @@ pub async fn look_at(config: &Config, account: AccountId) -> Result<usize, Strin
     let floor = chrono::DateTime::parse_from_rfc3339(&cursor.after)
         .map(|d| stamp(d.with_timezone(&chrono::Utc) - chrono::Duration::seconds(OVERLAP_SECONDS)))
         .unwrap_or_default();
-    let mut seen: Vec<String> = items.iter().filter(|m| text(m, "receivedDateTime") >= floor).map(|m| text(m, "id")).collect();
+    // the newest first: `SEEN_MAX` keeps the ones a next look meets last
+    let mut seen: Vec<String> =
+        items.iter().rev().filter(|m| text(m, "receivedDateTime") >= floor).map(|m| text(m, "id")).collect();
     let older: Vec<String> = cursor.seen.iter().filter(|id| !seen.contains(id)).cloned().collect();
     seen.extend(older);
     seen.truncate(SEEN_MAX);

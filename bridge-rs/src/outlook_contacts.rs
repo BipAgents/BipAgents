@@ -268,12 +268,20 @@ fn account_for(config: &Config, agent: &str, name: &str, arguments: &Dict, phone
     if writable.is_empty() {
         return if readable.is_empty() && phone { Ok(None) } else { Err(tool_text(READ_ONLY, true)) };
     }
-    let by_address = outlook::all(config)
-        .into_iter()
-        .filter(|a| writable.contains(&a.id))
-        .find(|a| a.link.account.as_deref().is_some_and(|x| x.trim().to_lowercase() == book))
-        .map(|a| a.id);
-    Ok(Some(by_address.unwrap_or(writable[0])))
+    // the book named, among those it writes: never another one instead (review C2)
+    match outlook::named_among(config, &book, &writable) {
+        Some(account) => Ok(Some(account)),
+        None if outlook::named_among(config, &book, &readable).is_some() => Err(tool_text(READ_ONLY, true)),
+        None => Err(tool_text(
+            &format!(
+                "no {} address book of yours is \"{}\": nothing was written. Use \"{}\" or one of their addresses.",
+                outlook::LABEL,
+                crate::archives::defused(tk::head(&book, 120)),
+                outlook::LABEL
+            ),
+            true,
+        )),
+    }
 }
 
 fn addresses_of(values: &[String], name: &str) -> Vec<Value> {
@@ -379,9 +387,11 @@ async fn plan_update(api: &Api, graph: &str, arguments: &Dict, birthdays: bool) 
         }
         body["displayName"] = json!(name);
     }
+    // only added or changed, never erased: an empty one changes nothing (review C4)
     for (key, graph, max) in [("nickname", "nickName", 200), ("organization", "companyName", 300), ("job", "jobTitle", 300)] {
-        if arguments.contains_key(key) {
-            body[graph] = json!(arg(key, max));
+        let value = arg(key, max);
+        if !value.is_empty() {
+            body[graph] = json!(value);
         }
     }
     let day = arg("birthday", 20);

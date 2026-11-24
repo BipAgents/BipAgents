@@ -134,9 +134,15 @@ async fn propose(config: &Config, agent: &str, account: AccountId, api: &Api, ar
     if !wanted.trim().is_empty() && outlook_mail::well_known(&wanted) != Some("inbox") {
         return Err(format!("a rule on {} files the new mail of the inbox: leave out `folder`", outlook::LABEL));
     }
-    let dest = match &action {
-        None => String::new(),
-        Some(a) => outlook_mail::destination_for(api, a, &inbox).await?.1,
+    let (action, dest) = match action {
+        None => (None, String::new()),
+        Some(a) => {
+            let (id, name) = outlook_mail::destination_for(api, &a, &inbox).await?;
+            // a move into the Deleted Items is the trash, whatever the name it is given (review B1, as a tidying's,
+            // R7): a trash rule, its card « vont à la corbeille », critical (`mail_rule_trash`: asked at every level)
+            let trash = matches!(a, Action::Move(_)) && outlook_mail::is_deleted_items(api, &id).await?;
+            (Some(if trash { Action::Trash } else { a }), name)
+        }
     };
     let key = outlook::mailbox_key(account);
     let rules = mail_rules::rules_of(config, None);
@@ -202,6 +208,13 @@ async fn apply_rows(api: &Api, rule: &Rule, inbox: &str, rows: &[Row]) -> Result
                 _ => return Err("this rule's action can't be done".into()),
             };
             let (dest, _) = outlook_mail::destination_for(api, &moved, &folder).await?;
+            // its folder (read again by its name at each run) now the Deleted Items: never, the person approved a move
+            // (review B1); a trash rule is its own card
+            if matches!(moved, Action::Move(_)) && outlook_mail::is_deleted_items(api, &dest).await? {
+                return Err("this rule's folder is now the Deleted Items: nothing filed (a rule into the trash is asked \
+on its own card)"
+                    .into());
+            }
             let ids: Vec<String> = rows.iter().map(|r| r.message_id.clone()).collect();
             run.moved_ids = outlook_mail::act_on(api, &moved, &dest, &ids).await;
             run.count = run.moved_ids.len();

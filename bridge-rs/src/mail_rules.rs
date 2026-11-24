@@ -482,6 +482,13 @@ pub fn propose(
     if !names_plain(&[&scan.folder]) {
         return Err("a folder name has no line break or control character".into());
     }
+    // a move into the trash is the trash, whatever the name it is given (review outlook-plus B1): a trash rule, its
+    // card « vont à la corbeille », critical (`mail_rule_trash`: asked at every level)
+    let into_trash = |f: &str| folders.is_trash(f) || folders.destination(f).is_ok_and(|(real, _)| folders.is_trash(&real));
+    let action = match action {
+        Some(Action::Move(f)) if into_trash(&f) => Some(Action::Trash),
+        other => other,
+    };
     let dest = match &action {
         None => String::new(),
         Some(Action::Archive) => folders.archive().0,
@@ -600,6 +607,17 @@ pub fn last_undone(config: &Config, id: &str) -> std::io::Result<()> {
         if let Some(last) = s.rules.iter_mut().find(|r| r.id == id).and_then(|r| r.last.as_mut()) {
             last.undone = true;
         }
+    })
+}
+
+/// Mailbox `account` gone (an Outlook account disconnected, outlook.rs): its rules stopped as by « Arrêter » (what
+/// they filed stays filed) and its cards taken away. The number of rules and cards.
+pub fn forget_mailbox(config: &Config, account: &str) -> std::io::Result<usize> {
+    change(config, |s| {
+        let before = s.rules.len() + s.cards.len();
+        s.rules.retain(|r| r.account != account);
+        s.cards.retain(|c| c.account != account);
+        before - s.rules.len() - s.cards.len()
     })
 }
 

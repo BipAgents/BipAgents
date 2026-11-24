@@ -45,7 +45,8 @@ async fn settle() {
 async fn review_a_rule_into_the_deleted_items_waits_for_the_person_at_every_level() {
     let (url, graph) = fake_graph().await;
     let dir = tempfile::tempdir().unwrap();
-    let app = common::TestApp::new(config_for(dir.path(), &url, true));
+    let config = config_for(dir.path(), &url, true);
+    let app = common::TestApp::new(config.clone());
     let (k, v) = auth();
     let h = [(k, v.as_str())];
     assert_eq!(connect(&app, &h, "good").await.0, 200);
@@ -68,7 +69,9 @@ async fn review_a_rule_into_the_deleted_items_waits_for_the_person_at_every_leve
     assert!(!failed, "{said}");
     settle().await;
     let moved = graph.lock().unwrap().messages["m2"]["parentFolderId"].clone();
-    let waiting = cards(&app, &h, "bip-mailrule-").await.len();
+    // (two trash rules of one mailbox show as ONE card, card_place.rs `fold_key`: both wait in the rules' store)
+    let waiting = bipbridge::mail_rules::cards_of(&config, Some("coach")).len();
+    assert!(!cards(&app, &h, "bip-mailrule-").await.is_empty(), "no rule card shown");
     assert!(
         moved == "inbox-id" && waiting == 2 && !said.contains("Approved at once"),
         "a rule into the Deleted Items let through by the level, without the person: m2 now in {moved}, {waiting} rule \
@@ -118,8 +121,12 @@ async fn review_a_disconnected_accounts_rules_and_routines_never_act_on_the_next
     let filed = second.lock().unwrap().messages["n9"]["parentFolderId"].clone();
     let queued = bipbridge::triggers::load(&config).triggers.iter().map(|t| t.pending.len()).sum::<usize>();
     let rules = app.get("/v1/mail/rules?agent=coach", &h).await.json()["items"].clone();
+    // and on the page: its rule stopped, its routine kept, turned off (no other account's number given again)
+    assert_ne!(number, json!(1), "number 1 given again");
+    let routines = bipbridge::triggers::load(&config).triggers;
+    assert!(routines.iter().all(|t| !t.enabled) && routines.len() == 1, "{routines:?}");
     assert!(
-        filed == "inbox-id" && queued == 0,
+        filed == "inbox-id" && queued == 0 && rules.as_array().is_some_and(|r| r.is_empty()),
         "the disconnected account's rule and routine acted on the next account (number {number} again): its new mail \
 now in {filed}, {queued} queued for the routine set on the other mailbox; rules shown: {rules}"
     );

@@ -844,6 +844,28 @@ pub fn pending_items(config: &Config, agent: Option<&str>) -> Vec<Dict> {
     items
 }
 
+/// Mailbox `account` gone (an Outlook account disconnected, outlook.rs): its e-mail routines turned off (kept, shown
+/// paused, their waiting mails dropped), those still waiting for the person's OK forgotten as on « Non ». The number.
+pub fn mailbox_gone(config: &Config, account: &str) -> usize {
+    let n = change(config, |store| {
+        let on = |t: &Trigger| t.kind == MAIL && t.mail.as_ref().is_some_and(|m| m.account == account);
+        let before = store.triggers.len();
+        store.triggers.retain(|t| !(on(t) && t.card.is_some() && !t.enabled));
+        let mut n = before - store.triggers.len();
+        for t in store.triggers.iter_mut().filter(|t| on(t)) {
+            n += usize::from(t.enabled || !t.pending.is_empty());
+            t.enabled = false;
+            t.pending.clear();
+            t.updated = py::time_time();
+        }
+        n
+    });
+    if n > 0 {
+        tracing::info!(target: "bipbridge::triggers", account, n, "a gone mailbox's routines turned off");
+    }
+    n
+}
+
 /// The person answered card `card_id`: on (« Oui »), or the proposal forgotten. None: no such card.
 pub fn answer(config: &Config, agent: &str, card_id: &str, allow: bool) -> Option<bool> {
     let found = change(config, |store| {

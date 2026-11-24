@@ -120,7 +120,7 @@ impl Settings {
 
 // -- what is kept ------------------------------------------------------------------------------------------------------
 
-/// An account's number on this place (1 for the first one ever connected; never reused while it is connected).
+/// An account's number on this place (1 for the first one ever connected; never given again, `Stored.outlook_last`).
 pub type AccountId = u32;
 /// The first account's number (an account kept before 1.1 has none: it is this one).
 pub const FIRST: AccountId = 1;
@@ -441,6 +441,30 @@ pub fn contacts_write_for(config: &Config, agent: &str) -> bool {
     parts_for(config, agent).is_some_and(|p| p.get("contacts_write"))
 }
 
+/// The account a name an agent gives (a `mailbox`, a `book`) designates among `mine` (its accounts for that use):
+/// nothing or « Outlook » → the first of them; its address, « Outlook (its address) », « its address (Outlook) » or its
+/// mailbox's id (`outlook-2`) → that one. None: any other name — never another account instead (review C2).
+pub fn named_among(config: &Config, wanted: &str, mine: &[AccountId]) -> Option<AccountId> {
+    let wanted = wanted.trim().to_lowercase();
+    let inner = wanted
+        .strip_prefix("outlook (")
+        .and_then(|w| w.strip_suffix(')'))
+        .or_else(|| wanted.strip_suffix("(outlook)"))
+        .unwrap_or(&wanted)
+        .trim();
+    if inner.is_empty() || inner == "outlook" {
+        return mine.first().copied();
+    }
+    if let Some(id) = key_account(inner) {
+        return mine.contains(&id).then_some(id);
+    }
+    all(config)
+        .into_iter()
+        .filter(|a| mine.contains(&a.id))
+        .find(|a| a.link.account.as_deref().is_some_and(|x| x.trim().to_lowercase() == inner))
+        .map(|a| a.id)
+}
+
 /// Account `id`'s address (its name for the agents and the cards), when known.
 pub fn address(config: &Config, id: AccountId) -> Option<String> {
     one(config, id).and_then(|a| a.link.account)
@@ -670,7 +694,9 @@ pub async fn finish(config: &Config, query: HashMap<String, String>) -> ApiResul
         if added && accounts_in(&stored).len() >= MAX_ACCOUNTS {
             return Err(coded(409, "too_many", &format!("at most {MAX_ACCOUNTS} Microsoft accounts")));
         }
-        let id = kept.unwrap_or_else(|| accounts_in(&stored).iter().map(|a| a.id).max().unwrap_or(0) + 1);
+        // a new number, never one given before (review B2): an account disconnected keeps its number to itself
+        let id = kept.unwrap_or_else(|| accounts_in(&stored).iter().map(|a| a.id).max().unwrap_or(0).max(stored.outlook_last) + 1);
+        stored.outlook_last = stored.outlook_last.max(id);
         let mut agents = kept.and_then(|id| account_in(&stored, id)).map(|a| a.link.agents.clone()).unwrap_or_default();
         for a in &flow.agents {
             if !agents.contains(a) {
@@ -765,7 +791,15 @@ pub async fn disconnect(config: &Config, id: Option<AccountId>) -> ApiResult<(Va
     };
     revoke_always(config, account.id, None).await;
     forget_local(config, account.id);
-    tracing::info!(account = account.id, "outlook: disconnected");
+    // its mailbox's standing rules stopped and its routines turned off, their cards waiting taken away (review B2):
+    // nothing set on this mailbox ever acts on another
+    let key = mailbox_key(account.id);
+    let rules = crate::mail_rules::forget_mailbox(config, &key).unwrap_or_else(|e| {
+        tracing::warn!(error = %e, "outlook: a disconnected account's rules not stopped");
+        0
+    });
+    let routines = crate::triggers::mailbox_gone(config, &key);
+    tracing::info!(account = account.id, rules, routines, "outlook: disconnected");
     Ok((json!({"ok": true, "revoked": false, "account": account.id}), account.link.agents))
 }
 

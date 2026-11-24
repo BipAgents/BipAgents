@@ -299,6 +299,14 @@ pub struct Stored {
     /// stays in `outlook`, where a bridge before them reads it). Same file and key.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub outlook_more: Vec<crate::outlook::Account>,
+    /// The highest number ever given to a Microsoft account of « Outlook » on this place: never given again (review
+    /// outlook-plus B2: a mailbox's id `outlook-<n>` names one account only, its rules and routines never another's).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub outlook_last: u32,
+}
+
+fn is_zero(n: &u32) -> bool {
+    *n == 0
 }
 
 /// The encrypted file (Fernet, as mailbox.rs) and its key.

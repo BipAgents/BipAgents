@@ -581,6 +581,13 @@ Propose one of those."
         self.by_flag("\\Trash").or_else(|| self.by_name(&TRASH_NAMES))
     }
 
+    /// Whether `folder` is this mailbox's trash: its trash folder, or a name people give the trash (a move there is the
+    /// trash: review outlook-plus B1).
+    pub fn is_trash(&self, folder: &str) -> bool {
+        let lower = folder.trim().to_lowercase();
+        self.trash().is_some_and(|t| t.to_lowercase() == lower) || TRASH_NAMES.contains(&lower.as_str())
+    }
+
     /// Where archived mail goes, and whether it has to be made.
     pub fn archive(&self) -> (String, bool) {
         if self.gmail() {
