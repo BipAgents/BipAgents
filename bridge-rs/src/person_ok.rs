@@ -29,8 +29,13 @@
 //!   each time.
 //!
 //! - **Outlook** (outlook.rs, Alex 23/11): an event added or changed in its calendar (`calendar_write:outlook`, as
-//!   Google Calendar's, its « Toujours » kept apart), an event deleted (`calendar_delete`), mails tidied in its mailbox
-//!   (`mail_archive`, `mail_move`, `mail_mark_read`, `mail_trash`: asked on this card each time in this first version).
+//!   Google Calendar's, its « Toujours » kept apart, and each account's apart: `calendar_write:outlook:<id>`), an event
+//!   deleted (`calendar_delete`), mails tidied in its mailbox (`mail_archive`, `mail_move`, `mail_mark_read`,
+//!   `mail_trash`) and a contact added or changed (`contacts_write`). 1.1 (Alex 24/11): the tidyings and the contacts
+//!   follow the approval level as the IMAP boxes' do — outlook_mail.rs and outlook_contacts.rs look at it BEFORE making
+//!   this card (approval_level.rs `at_once`): let through, no card, a line in « Validé pour toi »; else this card, with
+//!   « Toujours autoriser » for its kind when it isn't critical. Once made, a card is still never answered by the
+//!   level (approval_level.rs `settled_by_level`).
 //!
 //! The other kinds are critical (approval_level.rs: always asked, whatever the level). Not a Python module.
 
@@ -73,6 +78,9 @@ pub const CALENDAR_WRITE: &str = "calendar_write";
 /// The same in their Outlook calendar (outlook_calendar.rs): a `calendar_write` (critical) whose « Toujours » is kept
 /// under its own key (approval_level.rs): one given for Google Calendar never lets Outlook's through, nor the reverse.
 pub const CALENDAR_WRITE_OUTLOOK: &str = "calendar_write:outlook";
+/// A contact added to or changed in the person's Outlook contacts (outlook_contacts.rs, 1.1): not critical, by the
+/// approval level as a write in their own service, its « Toujours » under its kind.
+pub const CONTACTS_WRITE: &str = "contacts_write";
 
 /// What the card shows and what it is for.
 #[derive(Debug, Clone)]
@@ -87,6 +95,9 @@ pub struct Card {
     pub detail: String,
     /// The « Toujours » button's words, when it is offered (approval_level.rs `always_button`).
     pub always: Option<String>,
+    /// What that « Toujours » is kept under when it is not the card's kind (`bip_always_kind`): another Outlook
+    /// account's calendar (`calendar_write:outlook:<id>`, outlook.rs `always_key`).
+    pub always_key: Option<String>,
 }
 
 /// The person's answer.
@@ -141,6 +152,8 @@ pub fn kind_of(item: &Dict) -> &'static str {
         Some("mail_mark_read") => "mail_mark_read",
         Some("mail_move") => "mail_move",
         Some("mail_trash") => "mail_trash",
+        // an Outlook contact added or changed (outlook_contacts.rs)
+        Some(CONTACTS_WRITE) => CONTACTS_WRITE,
         // a file saved in the person's online documents (drives_write.rs): a new one, or a new version (critical)
         Some(crate::drives_write::KIND_CREATE) => crate::drives_write::KIND_CREATE,
         Some(crate::drives_write::KIND_REPLACE) => crate::drives_write::KIND_REPLACE,
@@ -174,7 +187,7 @@ pub fn pending_items(config: &Config, agent: Option<&str>) -> Vec<Dict> {
             });
             if let Some(always) = &a.card.always {
                 item["bip_always"] = json!(always);
-                item["bip_always_kind"] = json!(a.card.kind);
+                item["bip_always_kind"] = json!(a.card.always_key.as_deref().unwrap_or(a.card.kind));
             }
             item.as_object().cloned().map(|d| (a.at, d))
         })
@@ -392,7 +405,7 @@ mod tests {
         config.outbox.db_path = dir.path().join("bridge.db").to_string_lossy().into_owned();
         let card = Card { kind: SITE_FORM, tool: crate::form_send::TOOL, command: "ask_to_send shop.example".into(),
                           summary: "Envoyer sur ce site ? Vie veut envoyer un formulaire à shop.example".into(),
-                          detail: "message".into(), always: Some("Toujours autoriser".into()) };
+                          detail: "message".into(), always: Some("Toujours autoriser".into()), always_key: None };
         asks().insert("t1abc".into(), Ask { place: config.data_dir(), agent: "vie".into(), card, at: 1.0,
                                             answer: None, notify: Arc::new(Notify::new()), then: None,
                                             until: f64::INFINITY });
@@ -424,7 +437,7 @@ mod tests {
         config.outbox.db_path = dir.path().join("bridge.db").to_string_lossy().into_owned();
         let card = |always: Option<&str>| Card { kind: CALENDAR_WRITE, tool: "calendar_add", command: "calendar_add x".into(),
                                                  summary: "Vie veut ajouter un événement".into(), detail: String::new(),
-                                                 always: always.map(str::to_string) };
+                                                 always: always.map(str::to_string), always_key: None };
         let label = crate::approval_level::always_button("fr", CALENDAR_WRITE);
         for (id, always) in [("w1", label.as_deref()), ("w2", None), ("w3", label.as_deref())] {
             asks().insert(id.into(), Ask { place: config.data_dir(), agent: "vie".into(), card: card(always), at: 1.0,
@@ -459,7 +472,7 @@ mod tests {
         config.outbox.db_path = dir.path().join("bridge.db").to_string_lossy().into_owned();
         let card = |title: &str| Card { kind: CALENDAR_DELETE, tool: "calendar_delete", command: format!("x {title}"),
                                         summary: format!("Famille veut supprimer « {title} » de ton agenda ?"),
-                                        detail: String::new(), always: None };
+                                        detail: String::new(), always: None, always_key: None };
         let then = Then::DeleteEvent { agent: "famille__alex".into(), id: "m1".into() };
         let run = ask_owner(&config, "vie", card("Dentiste"), then.clone());
         let id = run.strip_prefix(RUN_PREFIX).unwrap().to_string();

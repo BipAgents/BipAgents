@@ -575,6 +575,62 @@ fn another_agents_rules_and_cards_stay_apart() {
     assert!(mail_rules::stop(&config, Some("vie"), &card.id).unwrap().is_none());
 }
 
+/// Review of outlook-plus B1, the IMAP side (24/11): a rule `move:<the trash>` (by its folder's name, or by a name
+/// people give the trash) sends every new mail of that sender to the trash. It is a trash rule: its card says so and is
+/// critical (`mail_rule_trash`: asked at every level), never `mail_rule`, which « Seulement le critique » lets through.
+#[test]
+fn a_rule_into_the_trash_by_a_folder_name_is_a_trash_rule_asked_at_every_level() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = setup(dir.path(), "t6");
+    let srv = server(false);
+    {
+        let mut s = srv.lock().unwrap();
+        s.folders.insert("Corbeille".into(), vec![]);
+        s.specials.insert("Corbeille".into(), "\\HasNoChildren \\Trash".into());
+        s.folders.insert("Factures".into(), vec![]);
+    }
+    hetzner(&srv);
+    let open = opener(&srv);
+    for (action, domain) in [("move:Corbeille", "hetzner.com"), ("move:Trash", "friends.example"), ("move:corbeille", "shop.example")] {
+        let called = mail_tidy::call(
+            &config,
+            "coach",
+            "mail_bulk",
+            &args(json!({"action": action, "rule": true, "domain": domain})),
+            &open,
+        )
+        .unwrap();
+        let (error, said) = text(&called);
+        assert!(!error, "{action}: {said}");
+        let card = called.rules.into_iter().next().unwrap();
+        let item = mail_rules::pending_items(&config, Some("coach"))
+            .into_iter()
+            .find(|i| i["request_id"] == json!(card.id))
+            .unwrap();
+        let kind = bipbridge::approval_level::classify_card(&item);
+        assert!(
+            kind == "mail_rule_trash" && bipbridge::approval_level::rule_of(kind).critical && card.dest == "Corbeille",
+            "{action}: a rule into the trash classed {kind} (dest {}, card {})",
+            card.dest,
+            item["bip_mail_rule"]
+        );
+        assert!(item["bip_summary"].as_str().unwrap().contains("corbeille"), "{}", item["bip_summary"]);
+    }
+    // a folder of its own stays a move (not critical)
+    let called = mail_tidy::call(
+        &config,
+        "coach",
+        "mail_bulk",
+        &args(json!({"action": "move:Factures", "rule": true, "from": "billing@mail.hetzner.com"})),
+        &open,
+    )
+    .unwrap();
+    let card = called.rules.into_iter().next().unwrap();
+    let item =
+        mail_rules::pending_items(&config, Some("coach")).into_iter().find(|i| i["request_id"] == json!(card.id)).unwrap();
+    assert_eq!(bipbridge::approval_level::classify_card(&item), "mail_rule");
+}
+
 /// hydroxide's folders (its 8, each `\\Noinferiors`), the Syndic's mails in the inbox, and the person's own folders.
 fn hydroxide(own: &[&str]) -> Shared {
     let mut s = Server { next_uid: 1000, hydroxide: true, ..Server::default() };

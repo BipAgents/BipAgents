@@ -1321,6 +1321,7 @@ Read it again and ask again if it still needs a new version."
             summary: card_sentence(&lang, replacing, &shown_name, &first.place),
             detail: card_detail(&lang, replacing, label, &content),
             always: None,
+            always_key: None,
         };
         match crate::person_ok::ask(state, agent, card).await {
             crate::person_ok::Answer::Once | crate::person_ok::Answer::Always => {}

@@ -260,6 +260,8 @@ pub mod outlook; // « Outlook »: a Microsoft account's mail, calendar and cont
 pub mod outlook_calendar;
 pub mod outlook_contacts;
 pub mod outlook_mail;
+pub mod outlook_rules; // an Outlook mailbox's standing rules (mail_rules.rs' own, filed by Graph)
+pub mod outlook_watch; // an Outlook mailbox's new mail for the routines and the rules (Graph, from where it was left)
 pub mod calendar;
 pub mod card_details;
 pub mod card_fill;

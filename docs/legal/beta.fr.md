@@ -2,13 +2,13 @@
 
 # Conditions de la bêta
 
-> Dernière mise à jour : 18 novembre 2026.
+> Dernière mise à jour : 24 novembre 2026.
 
 La bêta publique de BipAgents permet d'essayer l'app et l'offre tout compris avant l'ouverture des abonnements. Elle
 est proposée par Kerfy Studio, l'éditeur de BipAgents.
 
 - **Sur invitation.** La bêta publique s'ouvre avec un code d'invitation, valable une seule fois, dans la limite de
-  100 places.
+  200 places.
 - **Gratuite.** La bêta ne coûte rien : aucun moyen de paiement n'est demandé et aucun achat n'est possible dans l'app
   pendant la bêta. (Si tu actives les paiements par tes agents, ce sont tes propres achats, payés avec ta carte : voir
   la [politique de confidentialité](privacy.fr.md), section 5.10.)

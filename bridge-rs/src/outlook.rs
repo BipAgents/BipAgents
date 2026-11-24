@@ -4,13 +4,22 @@
 //!
 //! - the mail tools (outlook_mail.rs): `mail_search`, `mail_read`, `mail_attachment`, `mail_draft` and the tidying
 //!   `mail_overview` / `mail_bulk`, on a mailbox named « Outlook » beside the IMAP ones (mailbox.rs). Nothing is ever
-//!   sent: a draft waits in Outlook's Drafts for the person; a tidying (archive, move, mark read, trash) waits for the
-//!   person's card (person_ok.rs);
+//!   sent: a draft waits in Outlook's Drafts for the person; a tidying (archive, move, mark read, trash) follows the
+//!   person's approval level as an IMAP box's (1.1: done at once under « Seulement le critique », its line with
+//!   « Annuler »; else its card, person_ok.rs); its standing sort rules are the IMAP boxes' (mail_rules.rs), and its
+//!   new mail starts the routines that wait for one (outlook_watch.rs);
 //! - the calendar tools (outlook_calendar.rs): its calendars listed beside the phone's, the mailboxes' and Google's;
 //!   every add or change asked on the same card as Google Calendar's (`calendar_write`, « Toujours autoriser » for the
 //!   default calendar only, kept apart from Google's), every deletion asked each time (`calendar_delete`);
-//! - the contacts' read tools (outlook_contacts.rs): `contacts_search`, `contacts_birthdays`, `contacts_list_group`,
-//!   read only (`Contacts.Read`).
+//! - the contacts' tools (outlook_contacts.rs): `contacts_search`, `contacts_birthdays`, `contacts_list_group`
+//!   (`Contacts.Read`), and once « Ajouter et changer des contacts » is on, `contacts_add` / `contacts_update` on cards
+//!   by the approval level (`Contacts.ReadWrite`; never a deletion).
+//!
+//! Several Microsoft accounts per place (Alex 24/11, `MAX_ACCOUNTS`): each its number (`id`), its own tokens, parts,
+//! agents, « Toujours » for its default calendar ([`always_key`]) and « Déconnecter »; a second one never breaks the
+//! first. The first is kept where a bridge before these additions reads it (`Stored.outlook`), the others beside
+//! (`Stored.outlook_more`); the view keeps the first one in its old fields, so an app that knows one account stays
+//! right. With several, the agents' answers and the cards name each account (« Outlook (lea@outlook.com) »).
 //!
 //! The sign-in is OneDrive's (drives.rs): the same Microsoft client (Kerfy's Entra app by default, `/common`, any
 //! directory and personal accounts, `bipagents://oauth/callback`, code + PKCE, no secret), its own grant and tokens kept
@@ -39,11 +48,14 @@
 //! App routes (the bridge key; 404 while off). Errors `{"detail": {"code", "message"}}` as drives.rs':
 //!
 //!     GET    /v1/outlook             {enabled, configured, state, account, connected_at, agents, parts, missing,
-//!                                     outside: {agent: provider's label}}
-//!     POST   /v1/outlook/start       {agents, parts?} → {authorize_url, state, redirect_uri, expires_in}
-//!     POST   /v1/outlook/callback    {url} → as listed  (400 denied | admin_consent | unknown_state | bad_callback)
-//!     PUT    /v1/outlook/agents      {agents, parts?: {mail, calendar, contacts}} → as listed
-//!     DELETE /v1/outlook             {ok, revoked}
+//!                                      outside: {agent: provider's label}, accounts: [{id, mailbox, state, account, connected_at, agents, parts,
+//!                                      missing}], max_accounts}   (the old fields: the first account)
+//!     POST   /v1/outlook/start       {agents, parts?, account?} → {authorize_url, state, redirect_uri, expires_in}
+//!     POST   /v1/outlook/callback    {url} → as listed  (400 denied | admin_consent | unknown_state | bad_callback,
+//!                                      409 too_many)
+//!     PUT    /v1/outlook/agents      {agents, parts?: {mail, calendar, contacts, contacts_write?}, account?} → as
+//!                                      listed  (no `account`: the first; no `contacts_write`: kept)
+//!     DELETE /v1/outlook[?account=]  {ok, revoked, account}  (no `account`: the first)
 //!
 //! Not a Python module.
 
@@ -67,12 +79,16 @@ use crate::tools_knowledge::{tool_failure, tool_text};
 use crate::web::{self, check_max_items, ApiResult, FieldError, HttpError, Json, Validate};
 
 /// What a sign-in with every part asks (Graph's delegated rights; Kerfy's Entra app lists them): mail read, drafted
-/// and tidied (never `Mail.Send`), the calendars read and written, the contacts read. Always the base ones
-/// ([`BASE_SCOPES`]), then each part's ([`scopes_for`]).
-pub const SCOPES: &str = "offline_access User.Read Mail.ReadWrite Calendars.ReadWrite Contacts.Read";
+/// and tidied (never `Mail.Send`), the calendars read and written, the contacts read and written (1.1: added and
+/// changed, never deleted). Always the base ones ([`BASE_SCOPES`]), then each part's ([`scopes_for`]).
+pub const SCOPES: &str = "offline_access User.Read Mail.ReadWrite Calendars.ReadWrite Contacts.ReadWrite";
 pub const BASE_SCOPES: &str = "offline_access User.Read";
-/// Each part's right: (part, scope).
-const PART_SCOPES: [(&str, &str); 3] = [("mail", "Mail.ReadWrite"), ("calendar", "Calendars.ReadWrite"), ("contacts", "Contacts.Read")];
+pub const MAIL_SCOPE: &str = "Mail.ReadWrite";
+pub const CALENDAR_SCOPE: &str = "Calendars.ReadWrite";
+/// The contacts read only (« Contacts » on, « Ajouter et changer des contacts » off).
+pub const CONTACTS_SCOPE: &str = "Contacts.Read";
+/// The contacts read and written (« Ajouter et changer des contacts » on): asked instead of `Contacts.Read`.
+pub const CONTACTS_WRITE_SCOPE: &str = "Contacts.ReadWrite";
 /// The rights a full sign-in must give (lower case, without Graph's address).
 const NEEDED: [&str; 3] = ["mail.readwrite", "calendars.readwrite", "contacts.read"];
 /// Its name in the agents' tools and on the cards (the same in every language).
@@ -104,53 +120,122 @@ impl Settings {
 
 // -- what is kept ------------------------------------------------------------------------------------------------------
 
-/// What of the account the chosen agents use (all of it at first).
+/// An account's number on this place (1 for the first one ever connected; never given again, `Stored.outlook_last`).
+pub type AccountId = u32;
+/// The first account's number (an account kept before 1.1 has none: it is this one).
+pub const FIRST: AccountId = 1;
+/// Microsoft accounts one place keeps at most (Alex 24/11: several per place).
+pub const MAX_ACCOUNTS: usize = 5;
+
+fn first_id() -> AccountId {
+    FIRST
+}
+
+/// What of the account the chosen agents use (mail, calendar and contacts at first; the contacts written only once
+/// switched on, and only with the contacts read).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Parts {
     pub mail: bool,
     pub calendar: bool,
     pub contacts: bool,
+    /// Outlook's contacts added and changed (never deleted), on cards by the approval level (outlook_contacts.rs).
+    pub contacts_write: bool,
 }
 
 impl Default for Parts {
     fn default() -> Parts {
-        Parts { mail: true, calendar: true, contacts: true }
+        Parts { mail: true, calendar: true, contacts: true, contacts_write: false }
     }
 }
 
+/// The parts' keys, in their order on the screen.
+pub const PART_KEYS: [&str; 4] = ["mail", "calendar", "contacts", "contacts_write"];
+
 impl Parts {
+    pub const NONE: Parts = Parts { mail: false, calendar: false, contacts: false, contacts_write: false };
+
     pub fn get(self, key: &str) -> bool {
         match key {
             "mail" => self.mail,
             "calendar" => self.calendar,
-            _ => self.contacts,
+            "contacts" => self.contacts,
+            "contacts_write" => self.contacts_write && self.contacts,
+            _ => false,
         }
     }
 
     /// Only what both have.
     pub fn and(self, other: Parts) -> Parts {
-        Parts { mail: self.mail && other.mail, calendar: self.calendar && other.calendar, contacts: self.contacts && other.contacts }
+        Parts {
+            mail: self.mail && other.mail,
+            calendar: self.calendar && other.calendar,
+            contacts: self.contacts && other.contacts,
+            contacts_write: self.get("contacts_write") && other.get("contacts_write"),
+        }
+    }
+
+    /// What either has (the parts an agent gets of all its accounts, for its tools' list).
+    pub fn or(self, other: Parts) -> Parts {
+        Parts {
+            mail: self.mail || other.mail,
+            calendar: self.calendar || other.calendar,
+            contacts: self.contacts || other.contacts,
+            contacts_write: self.get("contacts_write") || other.get("contacts_write"),
+        }
     }
 
     pub fn any(self) -> bool {
         self.mail || self.calendar || self.contacts
     }
 
-    /// The parts on here and not in `given` (`mail`, `calendar`, `contacts`).
+    /// The parts on here and not in `given` (`mail`, `calendar`, `contacts`, `contacts_write`).
     pub fn missing(self, given: Parts) -> Vec<&'static str> {
-        PART_SCOPES.iter().map(|(key, _)| *key).filter(|key| self.get(key) && !given.get(key)).collect()
+        PART_KEYS.iter().copied().filter(|key| self.get(key) && !given.get(key)).collect()
     }
 }
 
-/// The rights a sign-in asks for `parts`: the base ones, then each part's on.
+/// The parts sent by an app: `contacts_write` left out (an app before 1.1's additions) keeps what was kept.
+#[derive(Debug, Clone, Copy, Default, Deserialize)]
+pub struct PartsBody {
+    #[serde(default)]
+    pub mail: Option<bool>,
+    #[serde(default)]
+    pub calendar: Option<bool>,
+    #[serde(default)]
+    pub contacts: Option<bool>,
+    #[serde(default)]
+    pub contacts_write: Option<bool>,
+}
+
+impl PartsBody {
+    /// The parts it says, over `kept` for what it leaves out.
+    pub fn over(self, kept: Parts) -> Parts {
+        Parts {
+            mail: self.mail.unwrap_or(kept.mail),
+            calendar: self.calendar.unwrap_or(kept.calendar),
+            contacts: self.contacts.unwrap_or(kept.contacts),
+            contacts_write: self.contacts_write.unwrap_or(kept.contacts_write),
+        }
+    }
+}
+
+/// The rights a sign-in asks for `parts`: the base ones, then each part's on (the contacts: `Contacts.ReadWrite` when
+/// they are written, else `Contacts.Read`).
 pub fn scopes_for(parts: Parts) -> String {
     let mut scopes = BASE_SCOPES.to_string();
-    for (key, scope) in PART_SCOPES {
+    for (key, scope) in [("mail", MAIL_SCOPE), ("calendar", CALENDAR_SCOPE)] {
         if parts.get(key) {
             scopes.push(' ');
             scopes.push_str(scope);
         }
+    }
+    if parts.get("contacts_write") {
+        scopes.push(' ');
+        scopes.push_str(CONTACTS_WRITE_SCOPE);
+    } else if parts.contacts {
+        scopes.push(' ');
+        scopes.push_str(CONTACTS_SCOPE);
     }
     scopes
 }
@@ -166,13 +251,15 @@ fn scope_words(scopes: &str) -> Vec<String> {
 /// The parts Microsoft gave, by the rights a token's answer lists. None listed: none (review R12: closed by default;
 /// Microsoft always lists them, and a renewal without the list keeps the sign-in's, connections.rs `tokens_of`).
 pub fn granted(tokens: &connections::Tokens) -> Parts {
-    let Some(scopes) = tokens.scope.as_deref() else { return Parts { mail: false, calendar: false, contacts: false } };
+    let Some(scopes) = tokens.scope.as_deref() else { return Parts::NONE };
     let words = scope_words(scopes);
-    let has = |key: &str| {
-        let wanted = PART_SCOPES.iter().find(|(k, _)| *k == key).map(|(_, s)| s.to_ascii_lowercase()).unwrap_or_default();
-        words.contains(&wanted)
-    };
-    Parts { mail: has("mail"), calendar: has("calendar"), contacts: has("contacts") }
+    let has = |scope: &str| words.contains(&scope.to_ascii_lowercase());
+    Parts {
+        mail: has(MAIL_SCOPE),
+        calendar: has(CALENDAR_SCOPE),
+        contacts: has(CONTACTS_SCOPE) || has(CONTACTS_WRITE_SCOPE),
+        contacts_write: has(CONTACTS_WRITE_SCOPE),
+    }
 }
 
 /// What the agents get of the account: what the person switched on, among what Microsoft gave.
@@ -180,23 +267,111 @@ pub fn effective(account: &Account) -> Parts {
     account.parts.and(granted(&account.link.tokens))
 }
 
-/// The rights a renewal asks (Microsoft: those of the sign-in or fewer, never more): the parts the agents get.
-pub fn renewal_scope(stored: &connections::Stored) -> String {
-    scopes_for(stored.outlook.as_ref().map(effective).unwrap_or(Parts { mail: false, calendar: false, contacts: false }))
+/// The rights a renewal of account `id` asks (Microsoft: those of the sign-in or fewer, never more): the parts its
+/// agents get.
+pub fn renewal_scope(stored: &connections::Stored, id: AccountId) -> String {
+    scopes_for(account_in(stored, id).map(effective).unwrap_or(Parts::NONE))
 }
 
-/// The Microsoft account connected (connections' encrypted store, `outlook`): its tokens, account, agents (`Link`),
-/// and what of it they use.
+/// A Microsoft account connected (connections' encrypted store, `outlook` then `outlook_more`): its number, tokens,
+/// address, agents (`Link`), and what of it they use.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct Account {
     #[serde(flatten)]
     pub link: Link,
     #[serde(default)]
     pub parts: Parts,
+    #[serde(default = "first_id")]
+    pub id: AccountId,
 }
 
+/// The accounts kept, the first one first (`Stored.outlook`: the one a bridge before 1.1's additions reads too).
+pub fn accounts_in(stored: &connections::Stored) -> Vec<&Account> {
+    stored.outlook.iter().chain(stored.outlook_more.iter()).collect()
+}
+
+pub fn account_in(stored: &connections::Stored, id: AccountId) -> Option<&Account> {
+    accounts_in(stored).into_iter().find(|a| a.id == id)
+}
+
+pub fn account_in_mut(stored: &mut connections::Stored, id: AccountId) -> Option<&mut Account> {
+    if stored.outlook.as_ref().is_some_and(|a| a.id == id) {
+        return stored.outlook.as_mut();
+    }
+    stored.outlook_more.iter_mut().find(|a| a.id == id)
+}
+
+/// Account `id` taken out of the store; the next one becomes the first (what an older bridge reads).
+fn take_account(stored: &mut connections::Stored, id: AccountId) -> Option<Account> {
+    if stored.outlook.as_ref().is_some_and(|a| a.id == id) {
+        let taken = stored.outlook.take();
+        if !stored.outlook_more.is_empty() {
+            stored.outlook = Some(stored.outlook_more.remove(0));
+        }
+        return taken;
+    }
+    let at = stored.outlook_more.iter().position(|a| a.id == id)?;
+    Some(stored.outlook_more.remove(at))
+}
+
+fn push_account(stored: &mut connections::Stored, account: Account) {
+    if stored.outlook.is_none() {
+        stored.outlook = Some(account);
+    } else {
+        stored.outlook_more.push(account);
+    }
+}
+
+/// Every account kept, the first one first.
+pub fn all(config: &Config) -> Vec<Account> {
+    connections::store_of(config).read().map(|s| accounts_in(&s).into_iter().cloned().collect()).unwrap_or_default()
+}
+
+/// Account `id`.
+pub fn one(config: &Config, id: AccountId) -> Option<Account> {
+    all(config).into_iter().find(|a| a.id == id)
+}
+
+/// The first account (the one an app before 1.1's additions shows).
 pub fn stored(config: &Config) -> Option<Account> {
-    connections::store_of(config).read().ok()?.outlook
+    all(config).into_iter().next()
+}
+
+/// The mailbox's id of account `id` for the routines and the standing rules (triggers.rs, mail_rules.rs): never an
+/// IMAP box's (theirs are random hex).
+pub fn mailbox_key(id: AccountId) -> String {
+    format!("{BOX_ID}-{id}")
+}
+
+/// The account a mailbox's id names (`outlook-2`). None: an IMAP box's.
+pub fn key_account(key: &str) -> Option<AccountId> {
+    key.strip_prefix(&format!("{BOX_ID}-"))?.parse().ok()
+}
+
+/// The highest account number a standing rule (or its card) or a routine still names (`outlook-<n>`); 0: none.
+fn highest_number_set(config: &Config) -> AccountId {
+    let rules = crate::mail_rules::rules_of(config, None).into_iter().chain(crate::mail_rules::cards_of(config, None));
+    let routines = crate::triggers::load(config).triggers.into_iter().filter_map(|t| t.mail).map(|m| m.account);
+    rules.map(|r| r.account).chain(routines).filter_map(|k| key_account(&k)).max().unwrap_or(0)
+}
+
+/// The key of the « Toujours » for adds and changes in account `id`'s default calendar (the first account's is
+/// `calendar_write:outlook`, as before; another's `calendar_write:outlook:<id>`): apart from Google Calendar's, and
+/// each account's apart from the others'.
+pub fn always_key(id: AccountId) -> String {
+    if id == FIRST {
+        ALWAYS_KEY.to_string()
+    } else {
+        format!("{ALWAYS_KEY}:{id}")
+    }
+}
+
+/// The account an `always_key` is of. None: not one of Outlook's.
+pub fn always_account(key: &str) -> Option<AccountId> {
+    if key == ALWAYS_KEY {
+        return Some(FIRST);
+    }
+    key.strip_prefix(&format!("{ALWAYS_KEY}:"))?.parse().ok().filter(|n| *n > 0)
 }
 
 fn shared_with_others(config: &Config, agent: &str) -> bool {
@@ -213,9 +388,9 @@ pub fn kept_on_the_place(config: &Config, agent: &str) -> bool {
     crate::agent_shared_memory::outlook_allowed(config, found)
 }
 
-/// Whether `agent` is among the account's chosen agents (whether it uses it now or not).
+/// Whether `agent` is chosen in at least one account (whether it uses it now or not).
 pub fn chosen(config: &Config, agent: &str) -> bool {
-    stored(config).is_some_and(|a| a.link.agents.iter().any(|x| x == agent))
+    all(config).iter().any(|a| a.link.agents.iter().any(|x| x == agent))
 }
 
 /// Whether `agent` is chosen but off for its model ([`kept_on_the_place`] false): the apps say why, and ask
@@ -257,12 +432,12 @@ fn person_chose(config: &Config, chosen: &[String], removed: &[String]) -> Vec<S
     allowed
 }
 
-/// After the person's « Oui » (review C4): the account still connected and the same one as when the card was made
-/// (`account`), `part` still on and given, the agent still chosen. Err: what to tell the agent (nothing written).
-pub fn still_allowed(config: &Config, agent: &str, part: &str, account: Option<&str>) -> Result<(), &'static str> {
-    let now = stored(config);
-    let same = now.as_ref().is_some_and(|a| a.link.state == "connected" && a.link.account.as_deref() == account);
-    if !same || !parts_for(config, agent).is_some_and(|p| p.get(part)) {
+/// After the person's « Oui » (review C4): account `id` still connected and the same one as when the card was made
+/// (`address`), `part` still on and given, the agent still chosen. Err: what to tell the agent (nothing written).
+pub fn still_allowed(config: &Config, agent: &str, part: &str, id: AccountId, address: Option<&str>) -> Result<(), &'static str> {
+    let now = one(config, id);
+    let same = now.as_ref().is_some_and(|a| a.link.state == "connected" && a.link.account.as_deref() == address);
+    if !same || !parts_of(config, agent, id).is_some_and(|p| p.get(part)) {
         return Err(TAKEN_BACK);
     }
     Ok(())
@@ -271,13 +446,35 @@ pub fn still_allowed(config: &Config, agent: &str, part: &str, account: Option<&
 pub const TAKEN_BACK: &str = "Not done: while the card waited, your person disconnected Outlook or took this away from \
 you: nothing was written. Tell them plainly; ask again only once they connect it again for you.";
 
-/// What `agent` uses of the account: on, connected (or ended: it is told to ask for a new sign-in), chosen. None:
-/// nothing. Never the family's agent nor a project agent (shown to others).
-pub fn parts_for(config: &Config, agent: &str) -> Option<Parts> {
-    if !config.outlook.enabled || shared_with_others(config, agent) || !kept_on_the_place(config, agent) {
-        return None;
+fn agent_may(config: &Config, agent: &str) -> bool {
+    config.outlook.enabled && !shared_with_others(config, agent) && kept_on_the_place(config, agent)
+}
+
+/// The accounts `agent` uses, each with what it uses of it (connected or ended: it is told to ask for a new sign-in),
+/// the first one first. Never for the family's agent nor a project agent (shown to others).
+pub fn accounts_for(config: &Config, agent: &str) -> Vec<(Account, Parts)> {
+    if !agent_may(config, agent) {
+        return Vec::new();
     }
-    stored(config).filter(|a| a.link.agents.iter().any(|x| x == agent)).map(|a| effective(&a))
+    all(config).into_iter().filter(|a| a.link.agents.iter().any(|x| x == agent)).map(|a| {
+        let parts = effective(&a);
+        (a, parts)
+    }).collect()
+}
+
+/// The accounts `agent` uses `part` of (`mail`, `calendar`, `contacts`, `contacts_write`), the first one first.
+pub fn accounts_with(config: &Config, agent: &str, part: &str) -> Vec<Account> {
+    accounts_for(config, agent).into_iter().filter(|(_, p)| p.get(part)).map(|(a, _)| a).collect()
+}
+
+/// What `agent` uses of account `id`. None: nothing.
+pub fn parts_of(config: &Config, agent: &str, id: AccountId) -> Option<Parts> {
+    accounts_for(config, agent).into_iter().find(|(a, _)| a.id == id).map(|(_, p)| p)
+}
+
+/// What `agent` uses of all its accounts together (its tools' list). None: no account.
+pub fn parts_for(config: &Config, agent: &str) -> Option<Parts> {
+    accounts_for(config, agent).into_iter().map(|(_, p)| p).reduce(Parts::or)
 }
 
 pub fn mail_for(config: &Config, agent: &str) -> bool {
@@ -292,25 +489,88 @@ pub fn contacts_for(config: &Config, agent: &str) -> bool {
     parts_for(config, agent).is_some_and(|p| p.contacts)
 }
 
-/// The account's address (its name for the agents and the cards), when known.
-pub fn account_name(config: &Config) -> Option<String> {
-    stored(config).and_then(|a| a.link.account)
+pub fn contacts_write_for(config: &Config, agent: &str) -> bool {
+    parts_for(config, agent).is_some_and(|p| p.get("contacts_write"))
 }
 
-/// The person's view of it (the app's screen).
-pub fn view(config: &Config, account: Option<&Account>) -> Value {
+/// The account a name an agent gives (a `mailbox`, a `book`) designates among `mine` (its accounts for that use):
+/// nothing or « Outlook » → the first of them; its address, « Outlook (its address) », « its address (Outlook) » or its
+/// mailbox's id (`outlook-2`) → that one. None: any other name — never another account instead (review C2).
+pub fn named_among(config: &Config, wanted: &str, mine: &[AccountId]) -> Option<AccountId> {
+    let wanted = wanted.trim().to_lowercase();
+    let inner = wanted
+        .strip_prefix("outlook (")
+        .and_then(|w| w.strip_suffix(')'))
+        .or_else(|| wanted.strip_suffix("(outlook)"))
+        .unwrap_or(&wanted)
+        .trim();
+    if inner.is_empty() || inner == "outlook" {
+        return mine.first().copied();
+    }
+    if let Some(id) = key_account(inner) {
+        return mine.contains(&id).then_some(id);
+    }
+    all(config)
+        .into_iter()
+        .filter(|a| mine.contains(&a.id))
+        .find(|a| a.link.account.as_deref().is_some_and(|x| x.trim().to_lowercase() == inner))
+        .map(|a| a.id)
+}
+
+/// Account `id`'s address (its name for the agents and the cards), when known.
+pub fn address(config: &Config, id: AccountId) -> Option<String> {
+    one(config, id).and_then(|a| a.link.account)
+}
+
+/// Whether the place keeps several accounts (the agents' answers and the cards then name each one).
+pub fn several(config: &Config) -> bool {
+    all(config).len() > 1
+}
+
+/// Account `id` as the agents and the cards read it: « Outlook », or « Outlook (address) » when the place keeps several.
+pub fn label(config: &Config, id: AccountId) -> String {
+    match address(config, id).filter(|_| several(config)) {
+        Some(address) => format!("{LABEL} ({})", crate::archives::defused(&address)),
+        None => LABEL.to_string(),
+    }
+}
+
+/// The agents of `account` that use it now: one chosen but off for its model is in the view's `outside` (choice B).
+fn using_now(config: &Config, account: &Account) -> Vec<String> {
+    account.link.agents.iter().filter(|x| !held_now(config, x)).cloned().collect()
+}
+
+fn account_view(config: &Config, account: &Account) -> Value {
+    json!({
+        "id": account.id,
+        "mailbox": mailbox_key(account.id),
+        "state": account.link.state,
+        "account": account.link.account,
+        "connected_at": account.link.connected_at,
+        "agents": using_now(config, account),
+        "parts": account.parts,
+        // switched on and not given by Microsoft yet: « Reconnecter » asks it
+        "missing": account.parts.missing(granted(&account.link.tokens)),
+    })
+}
+
+/// The person's view (the app's screen): the first account in the fields an app before 1.1's additions reads, every
+/// account in `accounts`.
+pub fn view(config: &Config, accounts: &[Account]) -> Value {
+    let first = accounts.first();
     json!({
         "enabled": config.outlook.enabled,
         "configured": drives::endpoints(config, Provider::Microsoft).is_some(),
-        "state": account.map(|a| a.link.state.as_str()).unwrap_or("not_connected"),
-        "account": account.and_then(|a| a.link.account.clone()),
-        "connected_at": account.map(|a| a.link.connected_at),
+        "state": first.map(|a| a.link.state.as_str()).unwrap_or("not_connected"),
+        "account": first.and_then(|a| a.link.account.clone()),
+        "connected_at": first.map(|a| a.link.connected_at),
         // the agents that use it now: one chosen but off for its model is in `outside` (choice B)
-        "agents": account.map(|a| a.link.agents.iter().filter(|x| !held_now(config, x)).cloned().collect::<Vec<_>>()).unwrap_or_default(),
+        "agents": first.map(|a| using_now(config, a)).unwrap_or_default(),
         "outside": outside_agents(config),
-        "parts": account.map(|a| a.parts).unwrap_or_default(),
-        // switched on and not given by Microsoft yet: « Reconnecter » asks it
-        "missing": account.map(|a| a.parts.missing(granted(&a.link.tokens))).unwrap_or_default(),
+        "parts": first.map(|a| a.parts).unwrap_or_default(),
+        "missing": first.map(|a| a.parts.missing(granted(&a.link.tokens))).unwrap_or_default(),
+        "accounts": accounts.iter().map(|a| account_view(config, a)).collect::<Vec<_>>(),
+        "max_accounts": MAX_ACCOUNTS,
     })
 }
 
@@ -370,19 +630,25 @@ pub fn given_for(scopes: &str, parts: Parts) -> bool {
     parts.missing(granted(&connections::Tokens { scope: Some(scopes.to_string()), ..Default::default() })).is_empty()
 }
 
-/// The parts a sign-in under way asks, by its state (drives' `Flow` has no room for them).
-static ASKED: std::sync::LazyLock<Mutex<HashMap<String, (std::time::Instant, Parts)>>> =
-    std::sync::LazyLock::new(Default::default);
+/// A sign-in under way, by its state (drives' `Flow` has no room for them): the parts it asks, the account it
+/// reconnects (None: a new one, or the same address signed in again).
+type Asked = (std::time::Instant, Parts, Option<AccountId>);
+static ASKED: std::sync::LazyLock<Mutex<HashMap<String, Asked>>> = std::sync::LazyLock::new(Default::default);
 
 /// A sign-in for `agents` (the same on iPhone and Android: Microsoft's web sign-in, back to the app's address),
-/// asking the rights of `parts` (none given: those kept for the account, else all of them).
-pub fn start(config: &Config, agents: &[String], parts: Option<Parts>) -> ApiResult<Value> {
+/// asking the rights of `parts` (none given: those kept for `account`, else the first account's, else the default
+/// ones). `account`: the one « Reconnecter » is for; None: « Connecter », « Ajouter un compte Microsoft ».
+pub fn start(config: &Config, agents: &[String], parts: Option<PartsBody>, account: Option<AccountId>) -> ApiResult<Value> {
     if !config.outlook.enabled {
         return Err(off());
     }
     let ep = drives::endpoints(config, Provider::Microsoft).ok_or_else(not_configured)?;
     let agents = agents_checked(config, agents)?;
-    let parts = parts.or_else(|| stored(config).map(|a| a.parts)).unwrap_or_default();
+    let kept = match account {
+        Some(id) => Some(one(config, id).ok_or_else(not_connected)?.parts),
+        None => stored(config).map(|a| a.parts),
+    };
+    let parts = parts.map(|p| p.over(kept.unwrap_or_default())).or(kept).unwrap_or_default();
     if !parts.any() {
         return Err(coded(422, "parts", "switch on mail, calendar or contacts"));
     }
@@ -391,8 +657,8 @@ pub fn start(config: &Config, agents: &[String], parts: Option<Parts>) -> ApiRes
     let url = authorize_url(&ep, &state, &verifier, parts);
     {
         let mut asked = ASKED.lock().unwrap_or_else(|e| e.into_inner());
-        asked.retain(|_, (at, _)| at.elapsed().as_secs() < FLOW_SECONDS);
-        asked.insert(state.clone(), (std::time::Instant::now(), parts));
+        asked.retain(|_, (at, _, _)| at.elapsed().as_secs() < FLOW_SECONDS);
+        asked.insert(state.clone(), (std::time::Instant::now(), parts, account));
     }
     drives::keep_flow(
         &state,
@@ -402,7 +668,7 @@ pub fn start(config: &Config, agents: &[String], parts: Option<Parts>) -> ApiRes
             agents,
             client: String::new(),
             started: std::time::Instant::now(),
-            slot: Slot::Outlook,
+            slot: Slot::Outlook(account.unwrap_or(0)),
         },
     );
     Ok(json!({"authorize_url": url, "state": state, "redirect_uri": ep.client.redirect_uri, "expires_in": FLOW_SECONDS}))
@@ -419,9 +685,18 @@ fn admin_needed(query: &HashMap<String, String>) -> bool {
     said.contains("consent_required") || said.contains("AADSTS65001") || said.contains("AADSTS90094")
 }
 
-/// The callback (the address the web sign-in came back to): the code exchanged, the account named, the agents chosen
-/// at start kept (the same account signed in again keeps its agents and parts; another one starts afresh).
-pub async fn finish(config: &Config, query: HashMap<String, String>) -> ApiResult<Value> {
+fn same_address(a: Option<&str>, b: Option<&str>) -> bool {
+    match (a, b) {
+        (Some(a), Some(b)) => a.trim().eq_ignore_ascii_case(b.trim()),
+        _ => false,
+    }
+}
+
+/// The callback (the address the web sign-in came back to): the code exchanged, the account named. The same address
+/// as an account kept updates it (its agents kept, those chosen at start added; its parts those asked); another one is
+/// ADDED beside the others (Alex 24/11: a second account never breaks the first), `MAX_ACCOUNTS` at most. Returns the
+/// view and the account's number.
+pub async fn finish(config: &Config, query: HashMap<String, String>) -> ApiResult<(Value, AccountId)> {
     if !config.outlook.enabled {
         return Err(off());
     }
@@ -433,17 +708,17 @@ pub async fn finish(config: &Config, query: HashMap<String, String>) -> ApiResul
     }
     let flow = query
         .get("state")
-        .and_then(|s| drives::take_flow_of(s, |slot| slot == Slot::Outlook))
+        .and_then(|s| drives::take_flow_of(s, |slot| matches!(slot, Slot::Outlook(_))))
         .ok_or_else(|| coded(400, "unknown_state", "this sign-in is too old: start again"))?;
     let code = query
         .get("code")
         .filter(|c| !c.is_empty())
         .ok_or_else(|| coded(400, "bad_callback", "the sign-in came back without its code"))?;
     let ep = drives::endpoints(config, Provider::Microsoft).ok_or_else(not_configured)?;
-    let asked = query
+    let (asked, reconnect) = query
         .get("state")
         .and_then(|s| ASKED.lock().unwrap_or_else(|e| e.into_inner()).remove(s))
-        .map(|(_, parts)| parts)
+        .map(|(_, parts, account)| (parts, account))
         .unwrap_or_default();
     let form = vec![
         ("grant_type", "authorization_code".to_string()),
@@ -461,28 +736,35 @@ pub async fn finish(config: &Config, query: HashMap<String, String>) -> ApiResul
         return Err(coded(400, "denied", "Microsoft did not give every right asked"));
     }
     let api = Api::new(ep, tokens.access_token.clone(), None);
-    let account = api.account().await.or_else(|| connections::account_of(&answer));
-    let (link, parts, other_account) = {
+    let address = api.account().await.or_else(|| connections::account_of(&answer));
+    let (accounts, id, added) = {
         let _guard = connections::LOCK.lock().await;
         let store = connections::store_of(config);
         let mut stored = store.read()?;
-        let previous = stored.outlook.take();
-        let other_account = previous.as_ref().is_some_and(|p| {
-            p.link.account.is_some() && account.is_some() && p.link.account != account
-        });
-        // chosen in the app while off for its model: « Rallumer Outlook ? » answered (one the app did not ask, allowed
-        // for the previous account only, is not)
-        let answered: Vec<String> = flow.agents.iter().filter(|a| held_now(config, a)).cloned().collect();
-        if other_account {
-            // another account: what the person allowed for the previous one is asked again (review B1)
-            for a in previous.iter().flat_map(|p| &p.link.agents) {
-                crate::agent_shared_memory::outlook_turned_off(config, a);
-            }
+        // the same Microsoft account: the one kept of its address; without an address, the one « Reconnecter » named
+        let kept = accounts_in(&stored)
+            .into_iter()
+            .find(|a| same_address(a.link.account.as_deref(), address.as_deref()))
+            .or_else(|| {
+                address.is_none().then(|| reconnect.and_then(|id| account_in(&stored, id))).flatten()
+            })
+            .map(|a| a.id);
+        let added = kept.is_none();
+        if added && accounts_in(&stored).len() >= MAX_ACCOUNTS {
+            return Err(coded(409, "too_many", &format!("at most {MAX_ACCOUNTS} Microsoft accounts")));
         }
-        let same = previous.filter(|_| !other_account);
-        // what was asked is what they use (the app sends what the person switched on)
-        let parts = asked;
-        let mut agents = same.map(|a| a.link.agents).unwrap_or_default();
+        // a new number, never one given before (review B2): an account disconnected keeps its number to itself
+        // the counter can be 0 or lost (an account kept before it, a rollback that rewrote the store): the numbers
+        // still named by standing rules and routines are never given again either
+        let id = kept.unwrap_or_else(|| {
+            let kept_max = accounts_in(&stored).iter().map(|a| a.id).max().unwrap_or(0);
+            kept_max.max(stored.outlook_last).max(highest_number_set(config)) + 1
+        });
+        // chosen in the app while off for its model: « Rallumer Outlook ? » answered (an account added asks nothing
+        // again of the others: what the person allowed is the agent's, on its provider)
+        let answered: Vec<String> = flow.agents.iter().filter(|a| held_now(config, a)).cloned().collect();
+        stored.outlook_last = stored.outlook_last.max(id);
+        let mut agents = kept.and_then(|id| account_in(&stored, id)).map(|a| a.link.agents.clone()).unwrap_or_default();
         for a in &flow.agents {
             if !agents.contains(a) {
                 agents.push(a.clone());
@@ -490,7 +772,7 @@ pub async fn finish(config: &Config, query: HashMap<String, String>) -> ApiResul
         }
         let link = Link {
             tokens,
-            account,
+            account: address,
             connected_at: py::time_time(),
             state: "connected".into(),
             client: String::new(),
@@ -498,36 +780,42 @@ pub async fn finish(config: &Config, query: HashMap<String, String>) -> ApiResul
             agents,
             carnet: false,
         };
-        stored.outlook = Some(Account { link: link.clone(), parts });
+        // what was asked is what they use (the app sends what the person switched on)
+        let account = Account { link, parts: asked, id };
+        match account_in_mut(&mut stored, id) {
+            Some(slot) => *slot = account,
+            None => push_account(&mut stored, account),
+        }
         store.write(&stored)?;
         person_chose(config, &answered, &[]);
-        (link, parts, other_account)
+        (accounts_in(&stored).into_iter().cloned().collect::<Vec<_>>(), id, added)
     };
-    if other_account {
-        // another account: the previous one's short ids, drafts and tidyings are of no use
-        forget_local(config);
-        revoke_always(config, None).await;
-    }
-    tracing::info!(agents = link.agents.len(), "outlook: connected");
-    Ok(view(config, Some(&Account { link, parts })))
+    tracing::info!(account = id, added, accounts = accounts.len(), "outlook: connected");
+    Ok((view(config, &accounts), id))
 }
 
-/// The agents chosen now (the whole list) and, when given, what they use. Returns the view and the agents whose tools
-/// change.
-pub async fn set_agents(config: &Config, agents: &[String], parts: Option<Parts>) -> ApiResult<(Value, Vec<String>)> {
+/// The agents chosen now for account `id` (None: the first; the whole list) and, when given, what they use. Returns
+/// the view and the agents whose tools change.
+pub async fn set_agents(
+    config: &Config,
+    agents: &[String],
+    parts: Option<PartsBody>,
+    id: Option<AccountId>,
+) -> ApiResult<(Value, Vec<String>)> {
     if !config.outlook.enabled {
         return Err(off());
     }
     // an agent deleted since the app listed them: left out, never a refusal (as drives.rs)
     let present: Vec<String> = agents.iter().filter(|a| config.agent(Some(a.as_str())).is_some()).cloned().collect();
     let agents = agents_checked(config, &present)?;
-    let (shown, changed, removed, calendar_off) = {
+    let (shown, changed, removed, calendar_off, id) = {
         let _guard = connections::LOCK.lock().await;
         let store = connections::store_of(config);
         let mut stored = store.read()?;
-        let account = stored.outlook.as_mut().ok_or_else(not_connected)?;
-        // one off for its model, that the app showed off and so left out: still chosen (back on a model that is not
-        // outside, it has it again as the person had it; choice B)
+        let id = id.or_else(|| stored.outlook.as_ref().map(|a| a.id)).ok_or_else(not_connected)?;
+        let account = account_in_mut(&mut stored, id).ok_or_else(not_connected)?;
+        // one off for its model, that the app showed off and so left out: still chosen in this account (back on a
+        // model that is not outside, it has it again as the person had it; choice B)
         let asked = agents.clone();
         let mut agents = agents.clone();
         for a in &account.link.agents {
@@ -538,7 +826,7 @@ pub async fn set_agents(config: &Config, agents: &[String], parts: Option<Parts>
         let before = std::mem::replace(&mut account.link.agents, agents.clone());
         let before_parts = account.parts;
         if let Some(parts) = parts {
-            account.parts = parts;
+            account.parts = parts.over(before_parts);
         }
         let removed: Vec<String> = before.iter().filter(|a| !agents.contains(a)).cloned().collect();
         let mut changed: Vec<String> =
@@ -553,59 +841,79 @@ pub async fn set_agents(config: &Config, agents: &[String], parts: Option<Parts>
         }
         let calendar_off = before_parts.calendar && !account.parts.calendar;
         store.write(&stored)?;
-        // « Rallumer Outlook ? » answered for an agent on an outside model: its tools change too
-        for a in person_chose(config, &asked, &removed) {
+        // « Rallumer Outlook ? » answered for an agent on an outside model: its tools change too; what one taken out of
+        // this account was allowed goes only when no other account has it chosen (review C5 of outlook-plus)
+        let elsewhere: Vec<String> = accounts_in(&stored).iter().flat_map(|a| a.link.agents.clone()).collect();
+        let gone: Vec<String> = removed.iter().filter(|a| !elsewhere.contains(a)).cloned().collect();
+        for a in person_chose(config, &asked, &gone) {
             if !changed.contains(&a) {
                 changed.push(a);
             }
         }
-        let shown = view(config, stored.outlook.as_ref());
-        (shown, changed, removed, calendar_off)
+        let shown = view(config, &accounts_in(&stored).into_iter().cloned().collect::<Vec<_>>());
+        (shown, changed, removed, calendar_off, id)
     };
-    // their « Toujours » for Outlook's calendar goes with it: chosen again, they are asked again
+    // their « Toujours » for this account's calendar goes with it: chosen again, they are asked again
     if calendar_off {
-        revoke_always(config, None).await;
+        revoke_always(config, id, None).await;
     } else {
-        revoke_always(config, Some(&removed)).await;
+        revoke_always(config, id, Some(&removed)).await;
     }
     Ok((shown, changed))
 }
 
-/// Forgets it here (Microsoft can't be asked to revoke a public client's grant). Works with the switch off too.
-/// The agents that had it.
-pub async fn disconnect(config: &Config) -> ApiResult<(Value, Vec<String>)> {
+/// Account `id` (None: the first) forgotten here (Microsoft can't be asked to revoke a public client's grant); the
+/// others untouched. Works with the switch off too. The answer, and the agents that had it.
+pub async fn disconnect(config: &Config, id: Option<AccountId>) -> ApiResult<(Value, Vec<String>)> {
     let account = {
         let _guard = connections::LOCK.lock().await;
         let store = connections::store_of(config);
         let mut stored = store.read()?;
-        let account = stored.outlook.take().ok_or_else(|| if config.outlook.enabled { not_connected() } else { off() })?;
+        let missing = || if config.outlook.enabled { not_connected() } else { off() };
+        let id = id.or_else(|| stored.outlook.as_ref().map(|a| a.id)).ok_or_else(missing)?;
+        let account = take_account(&mut stored, id).ok_or_else(missing)?;
+        stored.outlook_last = stored.outlook_last.max(id);
         store.write(&stored)?;
-        // « Rallumer Outlook ? » goes with it: connected again, maybe with another account, it is asked again (review B1)
-        for a in &account.link.agents {
+        // « Rallumer Outlook ? » goes with it for the agents no other account has chosen: connected again, maybe with
+        // another account, it is asked again (review B1 of shared-memory-1.1, C5 of outlook-plus)
+        let elsewhere: Vec<String> = accounts_in(&stored).iter().flat_map(|a| a.link.agents.clone()).collect();
+        for a in account.link.agents.iter().filter(|a| !elsewhere.contains(a)) {
             crate::agent_shared_memory::outlook_turned_off(config, a);
         }
         account
     };
-    revoke_always(config, None).await;
-    forget_local(config);
-    tracing::info!("outlook: disconnected");
-    Ok((json!({"ok": true, "revoked": false}), account.link.agents))
+    revoke_always(config, account.id, None).await;
+    forget_local(config, account.id);
+    // its mailbox's standing rules stopped and its routines turned off, their cards waiting taken away (review B2):
+    // nothing set on this mailbox ever acts on another
+    let key = mailbox_key(account.id);
+    let rules = crate::mail_rules::forget_mailbox(config, &key).unwrap_or_else(|e| {
+        tracing::warn!(error = %e, "outlook: a disconnected account's rules not stopped");
+        0
+    });
+    let routines = crate::triggers::mailbox_gone(config, &key);
+    tracing::info!(account = account.id, rules, routines, "outlook: disconnected");
+    Ok((json!({"ok": true, "revoked": false, "account": account.id}), account.link.agents))
 }
 
-/// The « Toujours » of `agents` (None: every agent) for Outlook's calendar taken back, their personalities rendered
-/// again.
-async fn revoke_always(config: &Config, agents: Option<&[String]>) {
-    for agent in crate::approval_level::revoke_always_of(config, ALWAYS_KEY, agents) {
+/// The « Toujours » of `agents` (None: every agent) for account `id`'s calendar taken back, their personalities
+/// rendered again.
+async fn revoke_always(config: &Config, id: AccountId, agents: Option<&[String]>) {
+    for agent in crate::approval_level::revoke_always_of(config, &always_key(id), agents) {
         crate::approval_level::granted_now(config, &agent).await;
     }
 }
 
-/// The switch turned off with an account still connected: forgotten at the bridge's start.
+/// The switch turned off with accounts still connected: all forgotten at the bridge's start.
 pub async fn ended_when_off(config: &Config) -> bool {
-    if config.outlook.enabled || stored(config).is_none() {
+    if config.outlook.enabled || all(config).is_empty() {
         return false;
     }
-    disconnect(config).await.is_ok()
+    let mut ended = false;
+    for account in all(config) {
+        ended |= disconnect(config, Some(account.id)).await.is_ok();
+    }
+    ended
 }
 
 /// [`ended_when_off`] at the bridge's start.
@@ -613,16 +921,22 @@ pub async fn end_when_off(state: AppState) {
     ended_when_off(&state.config()).await;
 }
 
-/// An agent deleted (agents_admin.rs): no longer among the chosen ones.
+/// An agent deleted (agents_admin.rs): no longer among any account's chosen ones.
 pub async fn forget_agent(config: &Config, agent: &str) {
     let _guard = connections::LOCK.lock().await;
     let store = connections::store_of(config);
     let Ok(mut stored) = store.read() else { return };
-    let Some(account) = stored.outlook.as_mut() else { return };
-    let before = account.link.agents.len();
-    account.link.agents.retain(|a| a != agent);
-    crate::approval_level::revoke_always_of(config, ALWAYS_KEY, Some(&[agent.to_string()]));
-    if account.link.agents.len() != before {
+    let mut changed = false;
+    let ids: Vec<AccountId> = accounts_in(&stored).iter().map(|a| a.id).collect();
+    for id in ids {
+        if let Some(account) = account_in_mut(&mut stored, id) {
+            let before = account.link.agents.len();
+            account.link.agents.retain(|a| a != agent);
+            changed |= account.link.agents.len() != before;
+        }
+        crate::approval_level::revoke_always_of(config, &always_key(id), Some(&[agent.to_string()]));
+    }
+    if changed {
         if let Err(e) = store.write(&stored) {
             tracing::warn!(error = %e, "outlook: a deleted agent can't be taken out");
         }
@@ -631,9 +945,9 @@ pub async fn forget_agent(config: &Config, agent: &str) {
 
 // -- Graph -------------------------------------------------------------------------------------------------------------
 
-/// A working Graph access for the account (renewed first when it ends within five minutes).
-pub async fn signed_in(config: &Config) -> Result<Api, Fault> {
-    drives::access_slot(config, Slot::Outlook).await
+/// A working Graph access for account `id` (renewed first when it ends within five minutes).
+pub async fn signed_in(config: &Config, id: AccountId) -> Result<Api, Fault> {
+    drives::access_slot(config, Slot::Outlook(id)).await
 }
 
 /// Graph's address (`https://graph.microsoft.com/v1.0`, or bridge.toml's for Microsoft in `[drives]`).
@@ -885,14 +1199,36 @@ pub fn flush_ids(config: &Config) {
     }
 }
 
-/// The short numbers of Graph's ids, made for those new (the same id always gets the same number). In memory; the
-/// new ones are written by a lot, in the background.
-pub fn short_ids(config: &Config, longs: &[String]) -> Vec<u64> {
+/// A Graph id as the table keeps it: the first account's as it is (as before 1.1's additions), another's after its
+/// number (`2:AAMk…`; Graph's ids never start with digits and a colon).
+fn entry(id: AccountId, long: &str) -> String {
+    if id == FIRST {
+        long.to_string()
+    } else {
+        format!("{id}:{long}")
+    }
+}
+
+/// The account and Graph's id of a table's entry.
+fn split_entry(kept: &str) -> (AccountId, String) {
+    match kept.split_once(':') {
+        Some((n, long)) if !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()) => {
+            (n.parse().unwrap_or(FIRST), long.to_string())
+        }
+        _ => (FIRST, kept.to_string()),
+    }
+}
+
+/// The short numbers of account `id`'s Graph ids, made for those new (the same id always gets the same number; the
+/// numbers are the place's, one table for all its accounts: a number names its account). In memory; the new ones are
+/// written by a lot, in the background.
+pub fn short_ids(config: &Config, id: AccountId, longs: &[String]) -> Vec<u64> {
     let (out, changed) = with_table(config, |t| {
         let mut changed = false;
         let out: Vec<u64> = longs
             .iter()
-            .map(|long| match t.by_long.get(long) {
+            .map(|long| entry(id, long))
+            .map(|long| match t.by_long.get(&long) {
                 Some(n) => *n,
                 None => {
                     t.ids.next += 1;
@@ -921,27 +1257,52 @@ pub fn short_ids(config: &Config, longs: &[String]) -> Vec<u64> {
     out
 }
 
-pub fn short_id(config: &Config, long: &str) -> u64 {
-    short_ids(config, &[long.to_string()]).first().copied().unwrap_or(0)
+pub fn short_id(config: &Config, id: AccountId, long: &str) -> u64 {
+    short_ids(config, id, &[long.to_string()]).first().copied().unwrap_or(0)
 }
 
-/// Graph's id of a short number. None: not one of this account's.
-pub fn long_id(config: &Config, n: u64) -> Option<String> {
-    with_table(config, |t| t.ids.ids.get(&n).cloned())
+/// The account and Graph's id of a short number. None: not one of this place's.
+pub fn long_id(config: &Config, n: u64) -> Option<(AccountId, String)> {
+    with_table(config, |t| t.ids.ids.get(&n).map(|kept| split_entry(kept)))
 }
 
-/// The ids, drafts and tidyings of an account no longer connected (a write on its way never lands after).
-fn forget_local(config: &Config) {
+/// Graph's id of a short number of account `id`. None: not one of that account's.
+pub fn long_id_of(config: &Config, id: AccountId, n: u64) -> Option<String> {
+    long_id(config, n).filter(|(of, _)| *of == id).map(|(_, long)| long)
+}
+
+/// The ids, drafts, tidyings and watch of account `id`, no longer connected (a write on its way never lands after);
+/// the others' kept. The last one gone: the whole folder.
+fn forget_local(config: &Config, id: AccountId) {
     let _writing = WRITE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    with_table(config, |t| {
-        t.ids = Ids::default();
-        t.by_long.clear();
-        t.dirty = false;
+    let last = all(config).is_empty();
+    let kept = with_table(config, |t| {
+        if last {
+            t.ids = Ids::default();
+            t.by_long.clear();
+            t.dirty = false;
+        } else {
+            t.ids.ids.retain(|_, kept| split_entry(kept).0 != id);
+            t.by_long.retain(|kept, _| split_entry(kept).0 != id);
+            t.dirty = false;
+        }
         t.generation += 1;
+        (!last).then(|| t.ids.clone())
     });
-    let _ = std::fs::remove_dir_all(folder(config));
-    crate::outlook_mail::forget_scans();
-    crate::outlook_contacts::forget_cache();
+    match kept {
+        None => {
+            let _ = std::fs::remove_dir_all(folder(config));
+        }
+        Some(ids) => {
+            if let Err(e) = serde_json::to_vec(&ids).map_err(anyhow::Error::from).and_then(|b| write_file(config, "ids.json", &b)) {
+                tracing::warn!(error = %e, "outlook: short ids not kept");
+            }
+            crate::outlook_mail::forget_account(config, id);
+            crate::outlook_watch::forget_account(config, id);
+        }
+    }
+    crate::outlook_mail::forget_scans(id);
+    crate::outlook_contacts::forget_cache(id);
 }
 
 // -- routes ------------------------------------------------------------------------------------------------------------
@@ -952,7 +1313,10 @@ pub struct StartBody {
     pub agents: Vec<String>,
     /// What they will use (an older app sends none: those kept, else all of them).
     #[serde(default)]
-    pub parts: Option<Parts>,
+    pub parts: Option<PartsBody>,
+    /// The account « Reconnecter » is for (None: connect one, or add another).
+    #[serde(default)]
+    pub account: Option<AccountId>,
 }
 
 impl Validate for StartBody {
@@ -978,7 +1342,10 @@ pub struct AgentsBody {
     #[serde(default)]
     pub agents: Vec<String>,
     #[serde(default)]
-    pub parts: Option<Parts>,
+    pub parts: Option<PartsBody>,
+    /// The account they are for (None: the first, as an app before 1.1's additions sends it).
+    #[serde(default)]
+    pub account: Option<AccountId>,
 }
 
 impl Validate for AgentsBody {
@@ -1004,21 +1371,20 @@ async fn listing_route(State(state): State<AppState>) -> ApiResult<Response> {
     if !config.outlook.enabled {
         return Err(off());
     }
-    Ok(web::ok(view(&config, stored(&config).as_ref())))
+    Ok(web::ok(view(&config, &all(&config))))
 }
 
 async fn start_route(State(state): State<AppState>, Json(body): Json<StartBody>) -> ApiResult<Response> {
-    Ok(web::ok(start(&state.config(), &body.agents, body.parts)?))
+    Ok(web::ok(start(&state.config(), &body.agents, body.parts, body.account)?))
 }
 
 async fn callback_route(State(state): State<AppState>, Json(body): Json<CallbackBody>) -> ApiResult<Response> {
     let config = state.config();
-    // the agents before (another account signed in: theirs change too, review R11), and after
-    let before = stored(&config).map(|a| a.link.agents).unwrap_or_default();
-    let shown = finish(&config, connections::callback_query(&body.url)).await?;
-    let mut agents: Vec<String> =
-        shown["agents"].as_array().into_iter().flatten().filter_map(Value::as_str).map(str::to_string).collect();
-    for a in before {
+    // the agents before and after (review R11: every account's, an account added changes its agents' tools)
+    let before: Vec<String> = all(&config).into_iter().flat_map(|a| a.link.agents).collect();
+    let (shown, _) = finish(&config, connections::callback_query(&body.url)).await?;
+    let mut agents: Vec<String> = Vec::new();
+    for a in all(&config).into_iter().flat_map(|a| a.link.agents).chain(before) {
         if !agents.contains(&a) {
             agents.push(a);
         }
@@ -1029,14 +1395,18 @@ async fn callback_route(State(state): State<AppState>, Json(body): Json<Callback
 
 async fn agents_route(State(state): State<AppState>, Json(body): Json<AgentsBody>) -> ApiResult<Response> {
     let config = state.config();
-    let (shown, changed) = set_agents(&config, &body.agents, body.parts).await?;
+    let (shown, changed) = set_agents(&config, &body.agents, body.parts, body.account).await?;
     tools_changed(&config, &changed).await;
     Ok(web::ok(shown))
 }
 
-async fn disconnect_route(State(state): State<AppState>) -> ApiResult<Response> {
+async fn disconnect_route(State(state): State<AppState>, q: web::QueryMap) -> ApiResult<Response> {
     let config = state.config();
-    let (answer, agents) = disconnect(&config).await?;
+    let account = match q.get("account").map(|a| a.trim()).filter(|a| !a.is_empty()) {
+        Some(a) => Some(a.parse::<AccountId>().map_err(|_| coded(422, "account", "account: a number"))?),
+        None => None,
+    };
+    let (answer, agents) = disconnect(&config, account).await?;
     tools_changed(&config, &agents).await;
     Ok(web::ok(answer))
 }

@@ -4,7 +4,7 @@
     "name": "Français"
   },
   "meta": {
-    "title": "BipAgents — Des agents personnels qui ne vendent jamais tes données.",
+    "title": "BipAgents — Des agents personnels, privés par conception.",
     "description": "Des agents IA personnels pour toute la famille : privés, dans ton propre espace en Europe ou chez toi, et moins chers qu’une seule place ailleurs. Construit sur Hermes Agent."
   },
   "a11y": {
@@ -23,7 +23,8 @@
     "family": "Ensemble"
   },
   "hero": {
-    "slogan": "Des agents personnels qui ne vendent jamais tes données.",
+    "slogan": "Des agents personnels, privés par conception.",
+    "trust": "Ils ne vendent jamais tes données et ne les partagent qu’avec ton accord. Ni lues par nous, ni gardées par l’IA, ni utilisées pour l’entraîner.",
     "sub": "Gratuit pour toute la famille, ou moins cher qu’un abonnement ChatGPT ou Claude.",
     "eu": "Serveurs dans l’UE, ou chez toi",
     "badge": "Construit sur Hermes Agent",
