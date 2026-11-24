@@ -36,10 +36,12 @@
 //!   of the month over the days left (`day_budget`): a busy start of the month never empties its end. Reached: no pass
 //!   that day, nothing said to the person; the offers at the end of a turn go on. On the person's own model: no euros,
 //!   4 passes a day at most, only while no turn runs on this place.
-//! - **Privacy** (§3b.7): a pass reads, for one agent, only its own conversations (never a room's, a relative's, the
-//!   family's, another agent's, a trigger's mail), the new turns since the last pass, without a health turn, without the
-//!   agent's words where it read a mail, a document or the vault; the titles, days and places of the next 7 days of the
-//!   phone's calendar when it reads it; the Carnet's dates when the Carnet is on for it. Never to a model outside our
+//! - **Privacy** (§3b.7, strict since 24/11, Alex's pick): a pass reads, for one agent, only its own conversations
+//!   (never a room's, a relative's, the family's, another agent's, a trigger's mail), the new turns since the last
+//!   pass; none at all of an agent with « Santé » (as the Carnet's pass, `notebook::health_agent`); never a turn where
+//!   the person sent a photo or a file; the agent's words only where every tool it called is of a short safe list
+//!   (`SAFE_KINDS`), anything else private by default; the titles, days and places of the next 7 days of the phone's
+//!   calendar when it reads it; the Carnet's dates when the Carnet is on for it. Never to a model outside our
 //!   European providers or the person's own (`outside_model`, `pass_model`). Kept: numbers and a cost only.
 //!
 //! Kept here (no words of the person's):
@@ -1422,95 +1424,60 @@ fn called(message: &Dict) -> Vec<String> {
     out
 }
 
-/// The bridge's own MCP servers and its browser's (`mcp_<server>_<tool>`, `mcp__<server>__<tool>`): any other
-/// server's tool is a connector's (`bipconn_<id>`, or the person's own servers), which reads their data at a service.
-const OWN_SERVERS: [&str; 2] = ["bipagents", "stealth"];
+/// The only kinds of tools (tool_kinds.rs, threads/layout.rs `kind_of`) after which the agent's words may go to a pass
+/// (strict, Alex 24/11: « dans le doute, il protège »): the weather, a web search and a public page read by the bridge
+/// (`web_extract`, never the browser: the person may be signed in there), a route and a map, the standard dates and
+/// clock changes, a page the agent makes, its own to-do list. Nothing of these brings the person's own data.
+const SAFE_KINDS: [&str; 8] = ["weather", "webSearch", "webRead", "route", "map", "upcomingDates", "createPage", "todo"];
 
-/// The kinds of tools (tool_kinds.rs, threads/layout.rs `kind_of`) that bring the person's private content into the
-/// agent's words (§3b.7 « Jamais » and review B2): mails (search, reading, attachments, overview, the bulk ones that
-/// list them), files and documents (drives, Obsidian, the Archives, files on the machine or shared, a page's data),
-/// the Carnet and the family's Carnet, other conversations (rooms, Hermes' search over every conversation, another
-/// agent's or a sub-agent's answer), contacts and the vault's contact details, the vault's logins and cards, a
-/// calendar's events (their notes and guests: the pass reads the calendar's titles itself), shared expenses, a photo
-/// or a video looked at (a document's picture), the knowledge base, a command run on the machine (it may print any
-/// file). The health tools are not here: a health turn and all after it are left out (`new_turns`).
-const PRIVATE_KINDS: [&str; 30] = [
-    "mailSearch", "mailRead", "mailAttachment", "mailOverview", "mailBulk",
-    "driveSearch", "driveRead", "obsidianSearch", "obsidianRead", "archiveSearch", "archiveRead", "archiveRecords",
-    "readFile", "sharedFiles",
-    "notebookSearch", "notebookRead", "familyNotebookRead",
-    "roomHistory", "sessionSearch", "messageAgent", "delegate",
-    "contactsRead", "contactDetailsRead", "account", "payment",
-    "calendarRead", "sharedExpense", "vision", "video", "knowledge",
-];
-
-/// A tool call whose result the agent's words then carry, never sent to a pass (review B2): a kind of `PRIVATE_KINDS`,
-/// a page's content read back (`read_page`, `page_data`: a page may hold what a mail said), the terminal or code run,
-/// anything of the vault (`vault_*`, its server), any connector's tool (another MCP server than the bridge's own).
+/// A tool call whose result the agent's words may carry, so they never go to a pass: every tool but one of the
+/// bridge's own of `SAFE_KINDS` — an unknown one, a new one of the bridge's, Hermes' built-ins off the list, the
+/// browser (`browser_*`, `mcp_stealth_*`), the vault, and any connector's (another MCP server than the bridge's).
 fn reads_private(tool: &str) -> bool {
     let tool = tool.trim().to_lowercase();
-    let server = match tool.strip_prefix("mcp__") {
-        Some(rest) => rest.split_once("__").map(|(server, _)| server.to_string()),
-        None => tool.strip_prefix("mcp_").map(|rest| rest.to_string()),
+    let own = match tool.strip_prefix("mcp__") {
+        Some(rest) => rest.split_once("__").is_some_and(|(server, _)| server == "bipagents"),
+        None => tool.strip_prefix("mcp_").is_none_or(|rest| rest.starts_with("bipagents_") && !rest.starts_with("bipagents_vault")),
     };
-    if let Some(server) = &server {
-        // `mcp_<server>_<tool>` has no clear end of the server's name: what starts with one of ours is ours
-        if !OWN_SERVERS.iter().any(|own| server.starts_with(own)) || server.starts_with("bipagents_vault") {
-            return true;
-        }
-    }
-    let kind = crate::threads::layout::kind_of(&tool);
-    let bare = tool.rsplit("__").next().unwrap_or(&tool);
-    let bare = ["mcp_bipagents_files_", "mcp_bipagents_pay_", "mcp_bipagents_", "mcp_stealth_"]
-        .iter()
-        .find_map(|p| bare.strip_prefix(p))
-        .unwrap_or(bare);
-    PRIVATE_KINDS.contains(&kind)
-        || ["terminal", "compute"].contains(&kind)
-        || ["read_page", "page_data"].contains(&bare)
-        || bare.starts_with("vault")
+    !own || !SAFE_KINDS.contains(&crate::threads::layout::kind_of(&tool))
 }
 
-/// A health tool's call (the private health part, §3b.7: « même s'il l'a »).
-fn reads_health(tool: &str) -> bool {
-    tool.to_lowercase().contains("health")
-}
-
-/// Whether a health tool served in these messages (a conversation's, before the cursor): nothing of that conversation
-/// is read from there on (review B2).
-pub fn health_seen(messages: &[Dict]) -> bool {
-    messages.iter().any(|m| called(m).iter().any(|t| reads_health(t)))
+/// Whether a person's message brings a photo or a file (a document, a long text sent as a `.txt`): its turn is never
+/// read, the person's words nor the agent's (the agent reads a photo natively, no tool told).
+fn brings_files(message: &Dict) -> bool {
+    let content = message.get("content").cloned().unwrap_or(Value::Null);
+    let (words, images) = crate::threads::timeline::words_and_images(&content);
+    images > 0 || !crate::threads::timeline::visible(&words, "", 0).1.is_empty()
 }
 
 /// The new turns of a conversation (`messages` after the cursor): the person's words (threads/timeline.rs
-/// `person_text`: their time line and the bridge's notes off, review B3) and the agent's. A health turn and every turn
-/// after it are left out, the person's words too (the next ones may say the figures again, review B2); the agent's
-/// words are left out where it read private content (`reads_private`). And the person's messages kept, counted.
+/// `person_text`: their time line and the bridge's notes off, review B3) and the agent's. A turn where the person sent
+/// a photo or a file is left out whole (`brings_files`); the agent's words are left out where it called any tool off
+/// the safe list (`reads_private`). And the person's messages kept, counted.
 pub fn new_turns(messages: &[Dict]) -> (Vec<(String, String)>, usize) {
-    let mut out: Vec<(String, String, bool)> = Vec::new();
+    // (person, agent, private: the agent's words out, files: the whole turn out)
+    let mut out: Vec<(String, String, bool, bool)> = Vec::new();
     for m in messages {
         if m.get("display_kind").and_then(Value::as_str) == Some("hidden") {
             continue;
         }
-        let tools = called(m);
-        if tools.iter().any(|t| reads_health(t)) {
-            // the health turn left out, and all that follows in this conversation
-            out.pop();
-            break;
-        }
         match m.get("role").and_then(Value::as_str).unwrap_or("") {
             "user" => {
+                if brings_files(m) {
+                    out.push((String::new(), String::new(), true, true));
+                    continue;
+                }
                 let raw = crate::instant_reply::without_note(&crate::notebook::tidy::content(m));
                 let Some(words) = crate::threads::timeline::person_text(&raw) else { continue };
                 let text = tk::squeeze(&words);
                 if text.is_empty() {
                     continue;
                 }
-                out.push((text, String::new(), false));
+                out.push((text, String::new(), false, false));
             }
             "assistant" | "tool" => {
                 if let Some(last) = out.last_mut() {
-                    if tools.iter().any(|t| reads_private(t)) {
+                    if called(m).iter().any(|t| reads_private(t)) {
                         last.2 = true;
                     }
                     if m.get("role").and_then(Value::as_str) == Some("assistant") {
@@ -1524,8 +1491,9 @@ pub fn new_turns(messages: &[Dict]) -> (Vec<(String, String)>, usize) {
             _ => {}
         }
     }
+    out.retain(|(_, _, _, files)| !files);
     let people = out.len();
-    let turns = out.into_iter().map(|(person, reply, private)| (person, if private { String::new() } else { reply })).collect();
+    let turns = out.into_iter().map(|(person, reply, private, _)| (person, if private { String::new() } else { reply })).collect();
     (turns, people)
 }
 
@@ -1752,6 +1720,10 @@ async fn gather(state: &AppState, config: &Config, agent: &AgentConfig, now: f64
     let mut conversations = Vec::new();
     let mut new = 0;
     let mut last_active: f64 = 0.0;
+    // An agent with « Santé »: none of its conversations goes to a pass (its memory, another conversation, a compacted
+    // one may say the figures again), only the calendar and the Carnet's dates — the Carnet's pass's rule
+    // (notebook/tidy.rs). Its turns are counted, the cursors move: nothing of them is read later either.
+    let health = crate::notebook::health_agent(config, &agent.name);
     for session in sessions.iter().filter(|s| readable(config, &agent.name, s)) {
         let id = tk::str_or_empty(session.get("id"));
         let active = crate::live_brief::seconds(session.get("last_active")).unwrap_or(0.0);
@@ -1769,13 +1741,9 @@ async fn gather(state: &AppState, config: &Config, agent: &AgentConfig, now: f64
         let messages = state.hermes.session_messages(agent, &id).await?;
         let start = before.unwrap_or(0).min(messages.len());
         cursors.insert(id.clone(), messages.len());
-        if health_seen(&messages[..start]) {
-            // a health turn earlier in this conversation: nothing of it is read any more (review B2)
-            continue;
-        }
         let (turns, people) = new_turns(&messages[start..]);
         new += people;
-        if !turns.is_empty() {
+        if !health && !turns.is_empty() {
             conversations.push((id, turns));
         }
     }

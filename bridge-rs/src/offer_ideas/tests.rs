@@ -383,19 +383,14 @@ fn a_pass_never_reads_health_family_rooms_vault_or_mail_bodies_and_only_whats_ne
     assert!(!readable(&config, "vie", &s("s2", &format!("{} r1", crate::rooms::SESSION_TITLE), json!({}))), "a room's");
     assert!(!readable(&config, "vie", &s("s3", "x", json!({"hidden": true}))), "a hidden one (a task's, a room's)");
     assert!(!readable(&config, "vie", &s("s4", "x", json!({"source": "cron"}))), "a routine's");
-    // only the new turns, a health turn and all after it out (review B2), the agent's words where it read a mail or the
-    // vault
+    // only the new turns, the agent's words where it read a mail or the vault (an agent with « Santé »: none of its
+    // conversations at all, `gather`, strict B2 of 24/11)
     let messages = vec![
         message("user", "Je prépare le semi de Lyon en avril"),
         message("assistant", "Super, on s'y met."),
         message("user", "Lis le mail de la mairie"),
         with_tool("", "mcp_bipagents_mail_read"),
         message("assistant", "La mairie dit que le dossier 4471 est prêt."),
-        message("user", "Ma fréquence cardiaque au repos ?"),
-        with_tool("", "mcp_bipagents_health_read"),
-        message("assistant", "52 battements par minute."),
-        message("user", "Et donc à 52, je cours ?"),
-        message("assistant", "Oui, à 52 tu peux."),
         json!({"role": "user", "content": "<!--bip:offer note-->", "display_kind": "hidden"}).as_object().unwrap().clone(),
     ];
     let (turns, people) = new_turns(&messages);
@@ -621,9 +616,9 @@ fn review_b3_the_persons_messages_with_their_time_line_are_read_and_counted() {
 
 // -- the fixes of review 1 (24/11) -------------------------------------------------------------------------------------
 
-/// B2: the tools whose result the agent's words then carry (mails, files, documents, the Carnet, other conversations,
-/// contacts, the vault, a connector's data…) keep those words out of a pass; the web, the weather, a page made, its
-/// own bookkeeping do not.
+/// B2 (strict, 24/11): every tool keeps the agent's words out of a pass (mails, files, documents, the Carnet, other
+/// conversations, contacts, the vault, the browser, its memory, a connector's data, an unknown one…) but the bridge's
+/// own of the safe list: the weather, the web, a route or a map, the standard dates, a page made, its to-do list.
 #[test]
 fn every_tool_that_reads_private_content_keeps_the_agents_words_out_of_a_pass() {
     for tool in [
@@ -634,30 +629,50 @@ fn every_tool_that_reads_private_content_keeps_the_agents_words_out_of_a_pass() 
         "message_agent", "delegate_task", "contacts_search", "vault_contact_details", "vault_login",
         "mcp__bipagents_vault__vault_login", "list_cards", "calendar_events", "expense", "vision_analyze",
         "video_analyze", "read_page", "page_data", "terminal", "execute_code", "mcp_bipconn_c1_get_activities",
-        "mcp__notion__search",
+        "mcp__notion__search", "mcp_stealth_navigate", "browser_navigate", "memory", "mcp_bipagents_routine_schedule",
+        "mcp_bipagents_offer_act", "health", "mcp__acme__weather", "mcp_acme_weather", "tool_call", "",
     ] {
         assert!(reads_private(tool), "{tool}: private content");
     }
-    for tool in ["web_search", "web_extract", "mcp_stealth_navigate", "weather", "route", "create_page", "memory",
-                 "todo", "mcp_bipagents_routine_schedule", "mcp_bipagents_offer_act", "upcoming_dates"] {
+    for tool in ["web_search", "web_extract", "weather", "mcp_bipagents_weather", "mcp__bipagents__route", "map_image",
+                 "create_page", "todo", "upcoming_dates"] {
         assert!(!reads_private(tool), "{tool}: no private content");
     }
 }
 
-/// B2: a health turn earlier in a conversation (before the cursor): nothing of it is read any more.
+/// B2: a call through the tool search (`tool_call`) keeps the agent's words out like the call it wraps.
 #[test]
-fn a_health_turn_before_the_cursor_closes_the_conversation_to_the_passes() {
-    let mut health = message("assistant", "");
-    health.insert("tool_calls".into(), json!([{"function": {"name": "mcp_bipagents_health", "arguments": "{}"}}]));
-    assert!(health_seen(&[message("user", "Comment j'ai dormi ?"), health]));
-    // through the tool search too
+fn a_call_through_the_tool_search_keeps_the_agents_words_out_of_a_pass() {
     let mut wrapped = with_tool("", "tool_call");
-    wrapped["tool_calls"][0]["function"]["arguments"] = json!(r#"{"name": "health", "arguments": {}}"#);
-    assert!(health_seen(&[wrapped.clone()]));
     wrapped["tool_calls"][0]["function"]["arguments"] = json!(r#"{"calls": [{"name": "mcp_bipagents_mail_search"}]}"#);
     let (turns, _) = new_turns(&[message("user", "Un mail de la banque ?"), wrapped, message("assistant", "Découvert : 1 234,56 €.")]);
     assert_eq!(turns, vec![("Un mail de la banque ?".to_string(), String::new())]);
-    assert!(!health_seen(&[message("user", "Je prépare le semi"), message("assistant", "Super.")]));
+    let (turns, _) = new_turns(&[message("user", "Je prépare le semi"), message("assistant", "Super.")]);
+    assert_eq!(turns, vec![("Je prépare le semi".to_string(), "Super.".to_string())]);
+}
+
+/// B2 (strict, 24/11): a turn where the person sent a photo or a file (a document, a long text as a `.txt`) is left out
+/// whole, their words too, and not counted; the turns around it are read.
+#[test]
+fn a_turn_with_a_photo_or_a_file_of_the_persons_is_left_out_whole() {
+    let document = message("user", "Regarde mon relevé\n\n[Pièce jointe : releve.pdf (application/pdf, 12 Ko) → /uploads/2026-11/releve.pdf]");
+    let long_text = message("user", "[Pièce jointe : texte.txt (text/plain, 40 Ko) → /uploads/2026-11/texte.txt]");
+    let saved = message("user", "Et ça ?\n[Image attached at: /home/p/.hermes/media/ordonnance.jpg]");
+    let (turns, people) = new_turns(&[
+        message("user", "Je prépare le semi"),
+        message("assistant", "Super."),
+        document,
+        message("assistant", "Solde : 2 345,67 €."),
+        long_text,
+        message("assistant", "Ton texte parle de ton divorce."),
+        saved,
+        message("assistant", "L'ordonnance dit 20 mg."),
+        message("user", "Et samedi ?"),
+        message("assistant", "Footing léger."),
+    ]);
+    assert_eq!(people, 2);
+    assert_eq!(turns, vec![("Je prépare le semi".to_string(), "Super.".to_string()),
+                           ("Et samedi ?".to_string(), "Footing léger.".to_string())]);
 }
 
 /// B4: the person's own model is where the pass goes: a name of their network too (the Spark), never a public address.

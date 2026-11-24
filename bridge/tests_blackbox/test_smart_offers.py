@@ -306,20 +306,18 @@ def test_at_the_places_cap_passes_stop_silently_and_end_of_turn_offers_go_on(bri
 def test_a_pass_never_reads_health_rooms_or_mail_bodies_and_never_goes_to_a_model_outside(bridges, fakes):
     bridge = smart_place(bridges, fakes)
     look(bridge)
-    health = [{"role": "user", "content": "Ma tension ce matin ?"},
-              {"role": "assistant", "content": "", "tool_calls": [{"function": {"name": "mcp_bipagents_health_read", "arguments": "{}"}}]},
-              {"role": "assistant", "content": "Tension 13/8, pouls 61."}]
     mail = [{"role": "user", "content": "Lis le mail de la mairie"},
             {"role": "assistant", "content": "", "tool_calls": [{"function": {"name": "mcp_bipagents_mail_read", "arguments": "{}"}}]},
             {"role": "assistant", "content": "La mairie dit que le dossier 4471 est prêt."}]
-    # the mail first: a health turn and all after it are left out (review B2)
-    add(fakes, "s1", talk(3) + mail + health)
+    # health: an agent with « Santé » has none of its conversations read (strict B2, test_review_smart_offers.py and
+    # test_verify_smart_offers.py)
+    add(fakes, "s1", talk(3) + mail)
     add(fakes, "room", talk(5, words="Secret du salon"), title="BipAgents · discussion r1", hidden=True)
     [run] = look(bridge)
     assert run["model_called"] is True, run
     sent = passes(fakes)[0]["body"]["messages"][1]["content"]
     assert "Je prépare le semi" in sent and "Lis le mail de la mairie" in sent
-    for secret in ("13/8", "pouls", "Tension", "4471", "Secret du salon"):
+    for secret in ("4471", "Secret du salon"):
         assert secret not in sent, secret
     # its model outside our European providers or the person's own: no pass at all
     profile = bridge.root / ".hermes" / "profiles" / "coach" / "config.yaml"
