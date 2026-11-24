@@ -1075,8 +1075,13 @@ async fn consent_cards(state: &AppState, now: f64) {
         let Some(a) = config.agent(Some(&agent)).cloned() else { continue };
         let address = tk::str_or_empty(account.get("username"));
         let offer = consent_offer(&config, &agent, &id, &address, now);
+        let seen = known.cloned();
         match offers::place_bridge(state, &a, offer).await {
             Ok(_) => change(&config, |s| {
+                // answered while it was being placed (its « Oui » turned the watch on): never written back to « asked »
+                if s.mailboxes.iter().find(|m| m.account == id).cloned() != seen {
+                    return;
+                }
                 let asks = s.mailboxes.iter().find(|m| m.account == id).map(|m| m.asks).unwrap_or(0) + 1;
                 s.mailboxes.retain(|m| m.account != id);
                 s.mailboxes.push(Mailbox {
