@@ -193,22 +193,29 @@ fn a_routine_or_watcher_offer_prints_its_rhythm_and_end_and_yes_starts_it() {
     assert_eq!(cw.family, "routine");
     assert!(cw.routine.is_none());
     assert!(yes_scope(&offer_of(&cw, "vie", now())).contains("A watcher is a connector: it keeps its own card"));
-    // « Oui »: the routine it showed starts with the yes turn, once
+    // « Oui »: the routine it showed starts with the yes turn (its run), once
     offer.id = "o1".into();
     grant(&config, &offer, now());
+    grant_run(&config, "o1", "run-yes");
     assert!(yes_scope(&offer).contains("your person's yes starts it"));
-    let make = |schedule: &str, until: &str| {
-        let made = crate::routines::call_asked(
+    let make_in = |schedule: &str, until: &str, run: &str| {
+        let made = crate::routines::call_in_turn(
             &config,
             "vie",
             &json!({"action": "create", "name": format!("Point {schedule}"), "schedule": schedule,
                     "prompt": "Fais le point de la semaine d'entraînement.", "until": until}).as_object().unwrap().clone(),
             None,
             false,
+            Some(run),
         );
         let name = format!("Point {schedule}");
         (made, crate::routines::list(&config, Some("vie")).into_iter().find(|r| r.name == name).unwrap())
     };
+    let make = |schedule: &str, until: &str| make_in(schedule, until, "run-yes");
+    // the same rhythm and end in another turn: its own card (review B1)
+    let (_, elsewhere) = make_in("every sunday at 19:00", &ends, "run-other");
+    assert!(elsewhere.awaits_start && !elsewhere.enabled, "another turn keeps its card");
+    crate::routines::delete(&config, &elsewhere.id);
     // another agent's, another rhythm, a later end: their own card
     let (_, other) = make("every saturday at 19:00", &ends);
     assert!(other.awaits_start && !other.enabled, "another rhythm keeps its card");
@@ -376,20 +383,23 @@ fn a_pass_never_reads_health_family_rooms_vault_or_mail_bodies_and_only_whats_ne
     assert!(!readable(&config, "vie", &s("s2", &format!("{} r1", crate::rooms::SESSION_TITLE), json!({}))), "a room's");
     assert!(!readable(&config, "vie", &s("s3", "x", json!({"hidden": true}))), "a hidden one (a task's, a room's)");
     assert!(!readable(&config, "vie", &s("s4", "x", json!({"source": "cron"}))), "a routine's");
-    // only the new turns, a health turn out, the agent's words where it read a mail or the vault
+    // only the new turns, a health turn and all after it out (review B2), the agent's words where it read a mail or the
+    // vault
     let messages = vec![
         message("user", "Je prépare le semi de Lyon en avril"),
         message("assistant", "Super, on s'y met."),
-        message("user", "Ma fréquence cardiaque au repos ?"),
-        with_tool("", "mcp_bipagents_health_read"),
-        message("assistant", "52 battements par minute."),
         message("user", "Lis le mail de la mairie"),
         with_tool("", "mcp_bipagents_mail_read"),
         message("assistant", "La mairie dit que le dossier 4471 est prêt."),
+        message("user", "Ma fréquence cardiaque au repos ?"),
+        with_tool("", "mcp_bipagents_health_read"),
+        message("assistant", "52 battements par minute."),
+        message("user", "Et donc à 52, je cours ?"),
+        message("assistant", "Oui, à 52 tu peux."),
         json!({"role": "user", "content": "<!--bip:offer note-->", "display_kind": "hidden"}).as_object().unwrap().clone(),
     ];
     let (turns, people) = new_turns(&messages);
-    assert_eq!(people, 3);
+    assert_eq!(people, 2);
     assert_eq!(turns, vec![("Je prépare le semi de Lyon en avril".to_string(), "Super, on s'y met.".to_string()),
                            ("Lis le mail de la mairie".to_string(), String::new())]);
     let sent = input("mardi", "fr", &[], None, &[("s1".into(), turns.clone())], &["Wed 2026-11-25 09:00 · Kiné · Lyon".into()],
@@ -607,4 +617,53 @@ fn review_b3_the_persons_messages_with_their_time_line_are_read_and_counted() {
     let said: Vec<&str> = turns.iter().map(|(p, _)| p.as_str()).collect();
     assert!(said.iter().any(|p| p.contains("semi de Lyon")) && said.iter().any(|p| p.contains("On part samedi")), "{said:?}");
     assert!(said.iter().all(|p| !p.contains("<!--bip")), "the bridge's notes are not the person's words: {said:?}");
+}
+
+// -- the fixes of review 1 (24/11) -------------------------------------------------------------------------------------
+
+/// B2: the tools whose result the agent's words then carry (mails, files, documents, the Carnet, other conversations,
+/// contacts, the vault, a connector's data…) keep those words out of a pass; the web, the weather, a page made, its
+/// own bookkeeping do not.
+#[test]
+fn every_tool_that_reads_private_content_keeps_the_agents_words_out_of_a_pass() {
+    for tool in [
+        "mcp_bipagents_mail_search", "mcp__bipagents__mail_read", "mail_list", "mail_attachment", "mail_overview", "mail_tidy",
+        "mcp_bipagents_drive_search", "drive_read", "drive_list", "obsidian_search", "obsidian_read", "archive_search",
+        "archive_read", "archive_records", "read_file", "search_files", "read_sent_file", "shared_files_read",
+        "notebook_read", "notebook_search", "family_notebook_read", "room_history", "session_search", "ask_agent",
+        "message_agent", "delegate_task", "contacts_search", "vault_contact_details", "vault_login",
+        "mcp__bipagents_vault__vault_login", "list_cards", "calendar_events", "expense", "vision_analyze",
+        "video_analyze", "read_page", "page_data", "terminal", "execute_code", "mcp_bipconn_c1_get_activities",
+        "mcp__notion__search",
+    ] {
+        assert!(reads_private(tool), "{tool}: private content");
+    }
+    for tool in ["web_search", "web_extract", "mcp_stealth_navigate", "weather", "route", "create_page", "memory",
+                 "todo", "mcp_bipagents_routine_schedule", "mcp_bipagents_offer_act", "upcoming_dates"] {
+        assert!(!reads_private(tool), "{tool}: no private content");
+    }
+}
+
+/// B2: a health turn earlier in a conversation (before the cursor): nothing of it is read any more.
+#[test]
+fn a_health_turn_before_the_cursor_closes_the_conversation_to_the_passes() {
+    let mut health = message("assistant", "");
+    health.insert("tool_calls".into(), json!([{"function": {"name": "mcp_bipagents_health", "arguments": "{}"}}]));
+    assert!(health_seen(&[message("user", "Comment j'ai dormi ?"), health]));
+    // through the tool search too
+    let mut wrapped = with_tool("", "tool_call");
+    wrapped["tool_calls"][0]["function"]["arguments"] = json!(r#"{"name": "health", "arguments": {}}"#);
+    assert!(health_seen(&[wrapped.clone()]));
+    wrapped["tool_calls"][0]["function"]["arguments"] = json!(r#"{"calls": [{"name": "mcp_bipagents_mail_search"}]}"#);
+    let (turns, _) = new_turns(&[message("user", "Un mail de la banque ?"), wrapped, message("assistant", "Découvert : 1 234,56 €.")]);
+    assert_eq!(turns, vec![("Un mail de la banque ?".to_string(), String::new())]);
+    assert!(!health_seen(&[message("user", "Je prépare le semi"), message("assistant", "Super.")]));
+}
+
+/// B4: the person's own model is where the pass goes: a name of their network too (the Spark), never a public address.
+#[test]
+fn a_pass_to_a_name_of_the_persons_network_is_their_own_model() {
+    assert!(own_target("http://sparks:8888/v1") && own_target("http://192.168.1.4:8000/v1") && own_target("http://spark.local/v1"));
+    assert!(!own_target("https://api.eurouter.ai/v1") && !own_target("https://api.mistral.ai/v1"));
+    assert!(!own_target("http://[2001:db8::1]:8000/v1"), "a public IPv6 address is not their network");
 }

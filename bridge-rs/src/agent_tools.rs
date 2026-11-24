@@ -2427,7 +2427,8 @@ async fn mcp_call(
             Some(_) => turn_run.as_deref().is_some_and(|run| state.hub.conversation_turn(&agent.name, run)),
             None => persons_own_call(&state, &agent.name, &name, turn_run.as_deref()),
         };
-        let called = crate::routines::call_asked(&state.config(), &agent.name, &arguments, origin.as_deref(), asked);
+        let called =
+            crate::routines::call_in_turn(&state.config(), &agent.name, &arguments, origin.as_deref(), asked, turn_run.as_deref());
         let mut result = called.result;
         if let Some(id) = called.run {
             let state = state.clone();

@@ -15,7 +15,8 @@
 //!   card; the offer's « Oui » never grants them.
 //! - **The « Oui »**: one turn of the agent with exactly the prompt under « i » (plans/offers.rs `turn`). A routine the
 //!   card showed (its rhythm and its end) starts with that turn: the « Oui » was its start (`grant`, routines.rs
-//!   `call_asked`), once, within the turn, the same rhythm and no later end; anything else keeps its own card. A
+//!   `call_in_turn`), once, within that very turn (its run, `grant_run`), the same rhythm and no later end; anything
+//!   else, and any other turn, keeps its own card. A
 //!   watcher is code, a connector: it keeps its card.
 //! - **The families** (§3b.4, `family_of`): search, browser, mail, calendar, page, routine (routines and watchers),
 //!   shopping, connector, other — from its main `use`, through tool_kinds.rs. The learning of plans/offers.rs counts
@@ -45,7 +46,7 @@
 //!
 //!     <data>/offer_ideas.json (0600)   {agents: {<agent>: {last_pass, passes, cursors, events, calendar, dates}},
 //!                                       spend: {month, eur, passes, model_calls, tokens_in, tokens_out, days},
-//!                                       runs: [numbers], grants: [{agent, offer, schedule, until, count, at}]}
+//!                                       runs: [numbers], grants: [{agent, offer, schedule, until, count, at, run}]}
 //!
 //! App routes (the bridge key):
 //!
@@ -1114,6 +1115,10 @@ pub struct Grant {
     pub offer: String,
     pub routine: RoutineAsk,
     pub at: f64,
+    /// The yes turn's run (plans/offers.rs `turn`, once Hermes took it): the only turn whose `routine_schedule` the
+    /// grant starts (review B1); None until then: no turn may use it.
+    #[serde(default)]
+    pub run: Option<String>,
 }
 
 /// What the yes turn reads of a free-form offer, after the prompt (plans/offers.rs `yes_note`).
@@ -1153,14 +1158,28 @@ pub fn grant(config: &Config, offer: &Offer, now: f64) {
     }
     change(config, |s| {
         s.grants.retain(|g| now - g.at < GRANT_SECONDS);
-        s.grants.push(Grant { agent: offer.agent.clone(), offer: offer.id.clone(), routine, at: now });
+        s.grants.push(Grant { agent: offer.agent.clone(), offer: offer.id.clone(), routine, at: now, run: None });
     });
 }
 
-/// Whether the person's « Oui » to an offer started routine `r` just made by its agent (routines.rs `call_asked`): a
-/// grant of that agent's within `GRANT_SECONDS`, the same rhythm, its end no later; used up.
-pub fn started_by_yes(config: &Config, agent: &str, r: &crate::routines::Routine) -> bool {
+/// The yes turn of `offer` started as `run` (plans/offers.rs `turn`): its grant belongs to that run alone (review B1).
+pub fn grant_run(config: &Config, offer: &str, run: &str) {
+    if !path(config).exists() {
+        return;
+    }
+    change(config, |s| {
+        if let Some(g) = s.grants.iter_mut().find(|g| g.offer == offer) {
+            g.run = Some(run.to_string());
+        }
+    });
+}
+
+/// Whether the person's « Oui » to an offer started routine `r` just made by its agent in the turn `run` (routines.rs
+/// `call_in_turn`): a grant of that agent's bound to that very run (the yes turn, review B1), within `GRANT_SECONDS`,
+/// the same rhythm, its end no later; used up. Made in any other turn, or in none: false (its own card).
+pub fn started_by_yes(config: &Config, agent: &str, r: &crate::routines::Routine, run: Option<&str>) -> bool {
     let now = py::time_time();
+    let Some(run) = run.filter(|r| !r.is_empty()) else { return false };
     if !path(config).exists() {
         return false;
     }
@@ -1170,7 +1189,11 @@ pub fn started_by_yes(config: &Config, agent: &str, r: &crate::routines::Routine
             (None, Some(n)) => r.repeat.is_some_and(|m| m <= n) || (r.frame.count > 0 && r.frame.count <= n),
             _ => false,
         };
-        g.agent == agent && now - g.at < GRANT_SECONDS && g.routine.schedule == r.schedule && end_ok
+        g.agent == agent
+            && g.run.as_deref() == Some(run)
+            && now - g.at < GRANT_SECONDS
+            && g.routine.schedule == r.schedule
+            && end_ok
     };
     change(config, |s| match s.grants.iter().position(fits) {
         Some(i) => {
@@ -1370,51 +1393,125 @@ pub fn readable(config: &Config, agent: &str, session: &Dict) -> bool {
         && !crate::triggers::outside_session(config, agent, id)
 }
 
+/// The tools a message called, lower case; a call through the tool search (`tool_call`) names the ones it wraps too
+/// (vault_line.rs `wrapped_call`): a mail read that way is still a mail read (review B2).
 fn called(message: &Dict) -> Vec<String> {
-    match message.get("tool_calls") {
-        Some(Value::Array(calls)) => calls
-            .iter()
-            .filter_map(|c| c.get("function").and_then(|f| f.get("name")).or_else(|| c.get("name")).and_then(Value::as_str))
-            .map(str::to_lowercase)
-            .collect(),
-        _ => Vec::new(),
+    let Some(Value::Array(calls)) = message.get("tool_calls") else { return Vec::new() };
+    let mut out = Vec::new();
+    for c in calls {
+        let function = c.get("function");
+        let Some(name) = function.and_then(|f| f.get("name")).or_else(|| c.get("name")).and_then(Value::as_str) else {
+            continue;
+        };
+        let name = name.to_lowercase();
+        if name.ends_with("tool_call") {
+            let arguments = function.and_then(|f| f.get("arguments")).or_else(|| c.get("arguments"));
+            let arguments = match arguments {
+                Some(Value::String(text)) => serde_json::from_str::<Value>(text).unwrap_or(Value::Null),
+                Some(v) => v.clone(),
+                None => Value::Null,
+            };
+            let inner: Vec<Value> = match arguments.get("calls") {
+                Some(Value::Array(calls)) => calls.clone(),
+                _ => vec![arguments],
+            };
+            out.extend(inner.iter().filter_map(|i| i.get("name").and_then(Value::as_str)).map(str::to_lowercase));
+        }
+        out.push(name);
     }
+    out
 }
 
-/// A tool whose results the agent's words then carry: a mail's or a document's text, the vault's.
+/// The bridge's own MCP servers and its browser's (`mcp_<server>_<tool>`, `mcp__<server>__<tool>`): any other
+/// server's tool is a connector's (`bipconn_<id>`, or the person's own servers), which reads their data at a service.
+const OWN_SERVERS: [&str; 2] = ["bipagents", "stealth"];
+
+/// The kinds of tools (tool_kinds.rs, threads/layout.rs `kind_of`) that bring the person's private content into the
+/// agent's words (§3b.7 « Jamais » and review B2): mails (search, reading, attachments, overview, the bulk ones that
+/// list them), files and documents (drives, Obsidian, the Archives, files on the machine or shared, a page's data),
+/// the Carnet and the family's Carnet, other conversations (rooms, Hermes' search over every conversation, another
+/// agent's or a sub-agent's answer), contacts and the vault's contact details, the vault's logins and cards, a
+/// calendar's events (their notes and guests: the pass reads the calendar's titles itself), shared expenses, a photo
+/// or a video looked at (a document's picture), the knowledge base, a command run on the machine (it may print any
+/// file). The health tools are not here: a health turn and all after it are left out (`new_turns`).
+const PRIVATE_KINDS: [&str; 30] = [
+    "mailSearch", "mailRead", "mailAttachment", "mailOverview", "mailBulk",
+    "driveSearch", "driveRead", "obsidianSearch", "obsidianRead", "archiveSearch", "archiveRead", "archiveRecords",
+    "readFile", "sharedFiles",
+    "notebookSearch", "notebookRead", "familyNotebookRead",
+    "roomHistory", "sessionSearch", "messageAgent", "delegate",
+    "contactsRead", "contactDetailsRead", "account", "payment",
+    "calendarRead", "sharedExpense", "vision", "video", "knowledge",
+];
+
+/// A tool call whose result the agent's words then carry, never sent to a pass (review B2): a kind of `PRIVATE_KINDS`,
+/// a page's content read back (`read_page`, `page_data`: a page may hold what a mail said), the terminal or code run,
+/// anything of the vault (`vault_*`, its server), any connector's tool (another MCP server than the bridge's own).
 fn reads_private(tool: &str) -> bool {
-    ["mail_read", "mail_attachment", "mail_overview", "archive_read", "drive_read", "obsidian_read", "vault", "read_sent_file", "contacts"]
+    let tool = tool.trim().to_lowercase();
+    let server = match tool.strip_prefix("mcp__") {
+        Some(rest) => rest.split_once("__").map(|(server, _)| server.to_string()),
+        None => tool.strip_prefix("mcp_").map(|rest| rest.to_string()),
+    };
+    if let Some(server) = &server {
+        // `mcp_<server>_<tool>` has no clear end of the server's name: what starts with one of ours is ours
+        if !OWN_SERVERS.iter().any(|own| server.starts_with(own)) || server.starts_with("bipagents_vault") {
+            return true;
+        }
+    }
+    let kind = crate::threads::layout::kind_of(&tool);
+    let bare = tool.rsplit("__").next().unwrap_or(&tool);
+    let bare = ["mcp_bipagents_files_", "mcp_bipagents_pay_", "mcp_bipagents_", "mcp_stealth_"]
         .iter()
-        .any(|t| tool.contains(t))
+        .find_map(|p| bare.strip_prefix(p))
+        .unwrap_or(bare);
+    PRIVATE_KINDS.contains(&kind)
+        || ["terminal", "compute"].contains(&kind)
+        || ["read_page", "page_data"].contains(&bare)
+        || bare.starts_with("vault")
 }
 
-/// The new turns of a conversation (`messages` after the cursor): the person's words and the agent's, a health turn
-/// left out, the agent's words left out where it read a mail, a document or the vault. And the person's messages
-/// counted.
+/// A health tool's call (the private health part, §3b.7: « même s'il l'a »).
+fn reads_health(tool: &str) -> bool {
+    tool.to_lowercase().contains("health")
+}
+
+/// Whether a health tool served in these messages (a conversation's, before the cursor): nothing of that conversation
+/// is read from there on (review B2).
+pub fn health_seen(messages: &[Dict]) -> bool {
+    messages.iter().any(|m| called(m).iter().any(|t| reads_health(t)))
+}
+
+/// The new turns of a conversation (`messages` after the cursor): the person's words (threads/timeline.rs
+/// `person_text`: their time line and the bridge's notes off, review B3) and the agent's. A health turn and every turn
+/// after it are left out, the person's words too (the next ones may say the figures again, review B2); the agent's
+/// words are left out where it read private content (`reads_private`). And the person's messages kept, counted.
 pub fn new_turns(messages: &[Dict]) -> (Vec<(String, String)>, usize) {
-    let mut out: Vec<(String, String, bool, bool)> = Vec::new();
-    let mut people = 0;
+    let mut out: Vec<(String, String, bool)> = Vec::new();
     for m in messages {
         if m.get("display_kind").and_then(Value::as_str) == Some("hidden") {
             continue;
         }
+        let tools = called(m);
+        if tools.iter().any(|t| reads_health(t)) {
+            // the health turn left out, and all that follows in this conversation
+            out.pop();
+            break;
+        }
         match m.get("role").and_then(Value::as_str).unwrap_or("") {
             "user" => {
-                let text = tk::squeeze(&crate::instant_reply::without_note(&crate::notebook::tidy::content(m)));
-                if text.is_empty() || text.starts_with("<!--bip") {
+                let raw = crate::instant_reply::without_note(&crate::notebook::tidy::content(m));
+                let Some(words) = crate::threads::timeline::person_text(&raw) else { continue };
+                let text = tk::squeeze(&words);
+                if text.is_empty() {
                     continue;
                 }
-                people += 1;
-                out.push((text, String::new(), false, false));
+                out.push((text, String::new(), false));
             }
             "assistant" | "tool" => {
-                let tools = called(m);
                 if let Some(last) = out.last_mut() {
-                    if tools.iter().any(|t| t.contains("health")) {
-                        last.2 = true;
-                    }
                     if tools.iter().any(|t| reads_private(t)) {
-                        last.3 = true;
+                        last.2 = true;
                     }
                     if m.get("role").and_then(Value::as_str) == Some("assistant") {
                         let text = tk::squeeze(&crate::spoken::strip(&crate::notebook::tidy::content(m)));
@@ -1427,11 +1524,8 @@ pub fn new_turns(messages: &[Dict]) -> (Vec<(String, String)>, usize) {
             _ => {}
         }
     }
-    let turns = out
-        .into_iter()
-        .filter(|(_, _, health, _)| !health)
-        .map(|(person, reply, _, private)| (person, if private { String::new() } else { reply }))
-        .collect();
+    let people = out.len();
+    let turns = out.into_iter().map(|(person, reply, private)| (person, if private { String::new() } else { reply })).collect();
     (turns, people)
 }
 
@@ -1594,16 +1688,27 @@ pub fn pass_target_ok(base_url: &str) -> bool {
     ["eurouter.ai", "mistral.ai"].iter().any(|d| host == *d || host.ends_with(&format!(".{d}")))
 }
 
+/// Whether a pass sent to `base` goes to the person's own model (review B4): an address of this machine or their
+/// network (`local_base`), or a name of their network as `pass_target_ok` takes it (`http://sparks:8888/v1`).
+fn own_target(base: &str) -> bool {
+    let host = host_of(base);
+    crate::turn_status::local_base(base) || (!host.is_empty() && !host.contains('.') && !host.contains(':'))
+}
+
 /// The model a pass of `agent` calls: (base url, model, key, the person's own). `[notebook] base_url` and `key`
-/// when set, else the agent's own provider with `[notebook] model` (its own model on the person's machine).
+/// when set, else the agent's own provider with `[notebook] model` (its own model on the person's machine). The
+/// person's own is where the pass is sent (review B4): a local address (the Spark) costs no euros and waits for the
+/// place's turns; any other is counted and capped, whatever the agent's own model is.
 pub fn pass_model(config: &Config, agent: &AgentConfig) -> Option<(String, String, String, bool)> {
-    // the person's own: the agent's model on their machine (the Spark), whatever server the install's pass names
-    let local = crate::turn_status::local_model(config, agent);
     if !config.notebook.base_url.is_empty() {
+        let base = config.notebook.base_url.clone();
         let key = config.notebook.key.clone().unwrap_or_default();
-        return Some((config.notebook.base_url.clone(), config.notebook.model.clone(), key, local));
+        let local = own_target(&base);
+        return Some((base, config.notebook.model.clone(), key, local));
     }
     let found = crate::mail_scan::model_of(config, agent).ok()?;
+    let local = own_target(&found["base_url"]);
+    // on the person's machine: its own model (the install's small model is not there)
     let name = if local || config.notebook.model.is_empty() { found["model"].clone() } else { config.notebook.model.clone() };
     Some((found["base_url"].clone(), name, found["key"].clone(), local))
 }
@@ -1664,6 +1769,10 @@ async fn gather(state: &AppState, config: &Config, agent: &AgentConfig, now: f64
         let messages = state.hermes.session_messages(agent, &id).await?;
         let start = before.unwrap_or(0).min(messages.len());
         cursors.insert(id.clone(), messages.len());
+        if health_seen(&messages[..start]) {
+            // a health turn earlier in this conversation: nothing of it is read any more (review B2)
+            continue;
+        }
         let (turns, people) = new_turns(&messages[start..]);
         new += people;
         if !turns.is_empty() {
@@ -1717,9 +1826,16 @@ async fn gather(state: &AppState, config: &Config, agent: &AgentConfig, now: f64
     }))
 }
 
+/// One look at a time on this place (review B5): the scheduler's tick and `POST /v1/proactive/passes`, or two POSTs,
+/// would each see the same pass due and each call the model. The second waits, then reads the state again (2 h since
+/// the last pass, 4 a day, the day's budget) under the same lock.
+static LOOKING: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 /// One look of the place's smart agents (the scheduler's tick, `POST /v1/proactive/passes`): the passes due, the agent
 /// with the most new first, while the day's budget allows. Returns the records of this look.
 pub async fn look(state: &AppState) -> Vec<Value> {
+    // the decision and the call under one lock: the state is read after the look before it was counted
+    let _looking = LOOKING.lock().await;
     let config = state.config();
     let agents = smart_agents(&config);
     let mut records = Vec::new();

@@ -1630,7 +1630,9 @@ async fn turn(state: &AppState, agent: &AgentConfig, offer: &Offer, place: &crat
     turn.max_seconds = TURN_SECONDS;
     let config = state.config();
     let title = shown_agent(&config, &agent.name);
-    match pipeline.run(&turn).await {
+    // the routine a free-form offer showed may start in this run, and in no other (offer_ideas.rs, review B1)
+    let started = |run: &str| crate::offer_ideas::grant_run(&config, &offer.id, run);
+    match pipeline.run_then(&turn, started).await {
         Ok(ran) if ran.answered() && !crate::background_turn::is_silent(&ran.text) => {
             let delivery = Delivery {
                 agent: agent.clone(),

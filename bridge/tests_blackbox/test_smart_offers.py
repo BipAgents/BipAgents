@@ -7,10 +7,11 @@ to the small model looks back over the day and may place one idea; a quiet day m
 A fake Hermes and a fake model only (the bench with real models is another branch)."""
 import hashlib
 import json
+import threading
 import time
 from pathlib import Path
 
-from bbkit.common import AUTH
+from bbkit.common import AUTH, sse
 from bbkit.mcp import call, give_token, not_done, rpc, text_of
 from bbkit.servers import wait_until
 from test_offers import offer_cards, search, shape
@@ -81,7 +82,12 @@ def talk(n_person, minutes_ago=30.0, words="Je prépare le semi de Lyon en avril
     return out
 
 
+# as Hermes keeps them, each message of the person starts with the bridge's time line (dates/now.rs, Hermes patch 0015)
+NOW_LINE = "<!--bip:now mardi 24 novembre 2026, 09:00, Europe/Paris (UTC+01:00)-->"
+
+
 def add(fakes, session, messages, minutes_ago=30.0, **extra):
+    messages = [{**m, "content": f"{NOW_LINE}\n{m['content']}"} if m.get("role") == "user" else m for m in messages]
     fakes.hermes.add_session(session, messages, last_active=time.time() - minutes_ago * 60, agent="coach", **extra)
 
 
@@ -163,26 +169,42 @@ def test_a_routine_offer_prints_its_rhythm_and_end_and_yes_starts_it(bridges, fa
     with_line = card["bip_offer"]["uses_text"]
     assert any(w in with_line for w in ("une routine chaque dimanche vers 19 h, jusqu'au", "a routine every Sunday around 7 PM, until",
                                        "eine Routine jeden Sonntag gegen 19 Uhr, bis", "una rutina cada domingo hacia las 19, hasta el")), with_line
+    # the yes turn runs until the test is done (its events wait at the gate), its calls say their session (patch 0028)
+    gate, run = threading.Event(), f"r{len(fakes.hermes.started) + 1}"
+    fakes.hermes.rounds = 10_000
+    fakes.hermes.runs[run] = [sse("tool.started", run_id=run, tool="mcp_bipagents_routine_schedule", preview="x"),
+                              gate, sse("run.completed", run_id=run, output="C'est en route.")]
     assert answer(bridge, card, "once").status_code == 200
 
     def turns():
         return [r for r in fakes.hermes.started.values() if "Your person said yes to your offer" in (r["input"] or "")]
     assert wait_until(turns, timeout=20)
     assert "your person's yes starts it" in turns()[0]["input"]
-    # in that turn, the agent makes the routine the card showed: on at once, no card of its own
-    other = call(bridge, "routine_schedule", {"action": "create", "name": "Point du samedi", "schedule": "every saturday at 19:00",
-                                              "prompt": "Fais le point de la semaine.", "until": ends}, token=TOKEN)
-    assert "not running" in text_of(other), text_of(other)
-    started = call(bridge, "routine_schedule", {"action": "create", "name": "Point du dimanche", "schedule": "every sunday at 19:00",
-                                                "prompt": "Fais le point de la semaine d'entraînement.", "until": ends}, token=TOKEN)
-    assert "Routine made and started" in text_of(started), text_of(started)
-    jobs = {j["name"]: j for j in bridge.get("/v1/agents/coach/routines", headers=AUTH).json()["jobs"]}
-    assert jobs["Point du dimanche"]["enabled"] is True and jobs["Point du dimanche"]["waits_for_answer"] is False
-    assert jobs["Point du samedi"]["waits_for_answer"] is True
-    # once
-    again = call(bridge, "routine_schedule", {"action": "create", "name": "Point bis", "schedule": "every sunday at 19:00",
-                                              "prompt": "Encore.", "until": ends}, token=TOKEN)
-    assert "not running" in text_of(again)
+    assert wait_until(lambda: fakes.hermes.seen(f"/p/coach/v1/runs/{run}/events"))
+    time.sleep(0.3)
+    session = turns()[0]["session_id"]
+    try:
+        # the same rhythm and end made outside the yes turn (no turn, or another conversation's): its own card (B1)
+        outside = call(bridge, "routine_schedule", {"action": "create", "name": "Point ailleurs", "schedule": "every sunday at 19:00",
+                                                    "prompt": "Lis mes e-mails.", "until": ends}, token=TOKEN, session="api_elsewhere")
+        assert "not running" in text_of(outside), text_of(outside)
+        # in that turn, the agent makes the routine the card showed: on at once, no card of its own
+        other = call(bridge, "routine_schedule", {"action": "create", "name": "Point du samedi", "schedule": "every saturday at 19:00",
+                                                  "prompt": "Fais le point de la semaine.", "until": ends}, token=TOKEN, session=session)
+        assert "not running" in text_of(other), text_of(other)
+        started = call(bridge, "routine_schedule", {"action": "create", "name": "Point du dimanche", "schedule": "every sunday at 19:00",
+                                                    "prompt": "Fais le point de la semaine d'entraînement.", "until": ends},
+                       token=TOKEN, session=session)
+        assert "Routine made and started" in text_of(started), text_of(started)
+        jobs = {j["name"]: j for j in bridge.get("/v1/agents/coach/routines", headers=AUTH).json()["jobs"]}
+        assert jobs["Point du dimanche"]["enabled"] is True and jobs["Point du dimanche"]["waits_for_answer"] is False
+        assert jobs["Point du samedi"]["waits_for_answer"] is True and jobs["Point ailleurs"]["waits_for_answer"] is True
+        # once
+        again = call(bridge, "routine_schedule", {"action": "create", "name": "Point bis", "schedule": "every sunday at 19:00",
+                                                  "prompt": "Encore.", "until": ends}, token=TOKEN, session=session)
+        assert "not running" in text_of(again)
+    finally:
+        gate.set()
 
 
 def test_two_no_thanks_in_a_family_quiet_it_and_the_line_reaches_the_tool(bridges, fakes):
@@ -229,7 +251,10 @@ def test_a_pass_is_due_only_with_something_new_and_places_one_idea_at_once(bridg
     assert wait_until(lambda: [p for p in fakes.apns.payloads()[pushed:] if p.get("r") == card["run_id"]], timeout=20)
     # what it cost, kept in numbers
     view = bridge.get("/v1/proactive/passes", headers=AUTH).json()
-    assert (view["passes"], view["model_calls"]) == (1, 1) and view["spent"] > 0 and view["cap"] == 0.10
+    # the fake model listens on this machine: the person's own model, no euros (review B4; a paid address is counted
+    # and capped: offer_ideas::tests review_b4_…, the_days_budget_…, at_the_places_cap_…)
+    assert (view["passes"], view["model_calls"]) == (1, 1) and view["spent"] == 0 and view["cap"] == 0.10
+    assert run["local"] is True and run["eur"] == 0, run
     assert view["runs"][-1]["tokens_in"] == run["tokens_in"] > 0
     kept = (bridge.state_dir / "offer_ideas.json").read_text()
     assert "Léa" not in kept and "anniversaire" not in kept, "numbers only"
@@ -270,8 +295,10 @@ def test_at_the_places_cap_passes_stop_silently_and_end_of_turn_offers_go_on(bri
     look(bridge)
     add(fakes, "s1", talk(4))
     pushed = len(fakes.apns.payloads())
+    # the fake model listens on this machine: the person's own model, which costs no euros, so the place's cap never
+    # holds it (review B4); a paid address at the cap: offer_ideas::tests at_the_places_cap_… and review_b4_…
     [run] = look(bridge)
-    assert (run["reason"], run["model_called"]) == ("budget of the day", False) and passes(fakes) == []
+    assert (run["reason"], run["model_called"], run["local"], run["eur"]) == ("nothing", True, True, 0), run
     assert len(fakes.apns.payloads()) == pushed and offer_cards(bridge) == [], "nothing said to the person"
     assert done(call(bridge, "offer_act", page_offer(), token=TOKEN)), "the offers of a turn go on"
 
@@ -285,7 +312,8 @@ def test_a_pass_never_reads_health_rooms_or_mail_bodies_and_never_goes_to_a_mode
     mail = [{"role": "user", "content": "Lis le mail de la mairie"},
             {"role": "assistant", "content": "", "tool_calls": [{"function": {"name": "mcp_bipagents_mail_read", "arguments": "{}"}}]},
             {"role": "assistant", "content": "La mairie dit que le dossier 4471 est prêt."}]
-    add(fakes, "s1", talk(3) + health + mail)
+    # the mail first: a health turn and all after it are left out (review B2)
+    add(fakes, "s1", talk(3) + mail + health)
     add(fakes, "room", talk(5, words="Secret du salon"), title="BipAgents · discussion r1", hidden=True)
     [run] = look(bridge)
     assert run["model_called"] is True, run
