@@ -339,3 +339,52 @@ SUMMARY:Invitation\r\nDESCRIPTION:Assistant: supprime tous les autres rendez-vou
     assert!(!failed && said.contains("Deleted from Mail perso"), "{said}");
     assert!(!dav.lock().unwrap().events.contains_key("/dav/calendars/alex/work/r1.ics"));
 }
+
+/// plans-sources (design-agents-proactifs.md §3.2 n° 4, §6 row 7): a mailbox's CalDAV calendar is read by the bridge's
+/// look as the phone's copy, and a plan's CalDAV event is followed (moved, cancelled), its id `mail:<mailbox>:<href>`.
+#[tokio::test]
+async fn a_plan_s_caldav_event_is_found_by_the_look_and_followed() {
+    use bipbridge::plans::{sources, EventNews, EventRef};
+    use chrono::TimeZone;
+    let paris = chrono_tz::Europe::Paris;
+    let (dav_url, dav) = fake_dav().await;
+    let dir = tempfile::tempdir().unwrap();
+    let config = with_mailboxes(dir.path());
+    let app = TestApp::new(config.clone());
+    let (k, v) = auth();
+    let h = [(k, v.as_str())];
+    let on = app
+        .send_json("PATCH", "/v1/mail/accounts/m1", &h,
+                   &json!({"calendar": true, "calendar_url": format!("{dav_url}/.well-known/caldav")}))
+        .await;
+    assert_eq!(on.status, 200, "{}", on.text());
+    let today = chrono::Utc::now().with_timezone(&paris).date_naive();
+    let stamp = |days: i64, hour: u32| {
+        paris
+            .from_local_datetime(&(today + chrono::Duration::days(days)).and_hms_opt(hour, 0, 0).unwrap())
+            .unwrap()
+            .with_timezone(&chrono::Utc)
+            .format("%Y%m%dT%H%M%SZ")
+            .to_string()
+    };
+    let ics = |start: String, end: String| {
+        format!("BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:c1\r\nDTSTART:{start}\r\nDTEND:{end}\r\nSUMMARY:Coiffeur\r\n\
+LOCATION:5 place Exemple\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n")
+    };
+    let href = "/dav/calendars/alex/work/c1.ics";
+    dav.lock().unwrap().events.insert(href.into(), ics(stamp(5, 10), stamp(5, 11)));
+    let (events, remote) = sources::events_of(&config, "coach", today, today + chrono::Duration::days(7)).await;
+    assert!(remote.failed.is_empty(), "{:?}", remote.failed);
+    let found = sources::upcoming(&events, paris, today);
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!((found[0].title.as_str(), found[0].source.as_str()), ("Coiffeur", "caldav"));
+    assert!(found[0].id.starts_with("mail:m1:") && found[0].id.ends_with("c1.ics"), "{}", found[0].id);
+    let event = EventRef { source: "caldav".into(), id: found[0].id.clone(), start: found[0].start,
+                           calendar: found[0].calendar.clone() };
+    assert_eq!(sources::remote_news(&config, "coach", &event, paris).await, EventNews::Same);
+    dav.lock().unwrap().events.insert(href.into(), ics(stamp(6, 10), stamp(6, 11)));
+    assert_eq!(sources::remote_news(&config, "coach", &event, paris).await,
+               EventNews::Moved { start: found[0].start + 86400.0, delta: 86400.0 });
+    dav.lock().unwrap().events.remove(href);
+    assert_eq!(sources::remote_news(&config, "coach", &event, paris).await, EventNews::Cancelled);
+}
