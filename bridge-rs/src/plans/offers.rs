@@ -443,7 +443,7 @@ pub fn topic_print(agent: &str, about: &str) -> String {
 
 /// An offer made: its print kept `SAME_DAYS`.
 pub fn remember(store: &mut Store, offer: &Offer, now: f64) {
-    let print = same_print(&offer.agent, learn_key(offer), subject_of(offer));
+    let print = same_print(&offer.agent, &learn_key(offer), subject_of(offer));
     store.same.push(Print { agent: offer.agent.clone(), print, at: now });
 }
 
@@ -1017,7 +1017,7 @@ pub fn refused(store: &Store, plans: &super::Store, offer: &Offer, run: Option<&
 pub fn rule_refusal(store: &Store, offer: &Offer, now: f64) -> Option<String> {
     let agent = offer.agent.as_str();
     let subject = subject_of(offer);
-    let same = same_print(agent, learn_key(offer), subject);
+    let same = same_print(agent, &learn_key(offer), subject);
     if store.same.iter().any(|p| p.agent == agent && p.print == same && now - p.at < SAME_DAYS * DAY) {
         return Some(format!(
             "Not done: you offered this ({}, « {} ») in the last {} days. Don't offer it again.",
@@ -1035,7 +1035,7 @@ pub fn rule_refusal(store: &Store, offer: &Offer, now: f64) -> Option<String> {
         return Some(format!(
             "Not done: your person said no thanks to your {} lately: don't offer them for now (it is not « Initiative » \
              off: just that kind, for a while).",
-            plural(learn_key(offer))
+            plural(if offer.family.is_empty() { &offer.kind } else { &offer.family })
         ));
     }
     None
