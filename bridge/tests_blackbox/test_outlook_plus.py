@@ -251,10 +251,10 @@ def cards(bridge, prefix="bip-ok-"):
     return [i for i in items if i["run_id"].startswith(prefix)]
 
 
-def answered(bridge, choice, name, **arguments):
+def answered(bridge, choice, tool_name, **arguments):
     """A tool's call while the person answers its card."""
     with ThreadPoolExecutor(1) as pool:
-        result = pool.submit(call, bridge, name, arguments)
+        result = pool.submit(call, bridge, tool_name, arguments)
         assert wait_until(lambda: cards(bridge), timeout=30), "no card"
         [card] = cards(bridge)
         said = bridge.post("/v1/approve", headers=AUTH,
