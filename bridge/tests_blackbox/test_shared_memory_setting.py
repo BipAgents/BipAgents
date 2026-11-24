@@ -321,3 +321,25 @@ def test_custom_without_its_address_and_a_model_it_cannot_tell_are_protected(bri
     (home / "config.yaml").write_text("")
     assert wait_until(lambda: shared(settings(bridge, "budget"))["on"] is False, timeout=40)
     assert shared(settings(bridge, "budget"))["outside"]["provider"] == "unknown"
+
+
+def test_review3_a_card_answered_during_the_switch_never_resumes_in_the_old_session(bridges, fakes):
+    """Review 3 (red), B2-a: the send and the « Après » queue read the `fresh` mark where their turn starts
+    (agent_shared_memory.rs `fresh_tip`), the bridge's own turns in a conversation do not: background_turn.rs
+    `Pipeline::tip` / `wait_idle` take the thread's last session as it is (a card answered, card_place.rs
+    `resume_turn`; a sub-agent's report, handback.rs; what was noted in a voice call). A card answered while the turn
+    goes on, the shared memory turned off meanwhile (by the person, or the protection of an outside model at a model
+    change): the turn keeps the old session (« a turn going on: at the next look »), and once it ends the card's turn
+    starts in that old session, where Hermes replays the whole history."""
+    from test_cards_resume import mail_in_a_turn, resumed
+    from test_mail_cards import answer as mail_answer
+    bridge, gate, [card] = mail_in_a_turn(bridges, fakes, "api_switch", "run_switch", [("move:Banque", "banque.example")])
+    assert mail_answer(bridge, card).status_code == 200
+    assert put(bridge, "coach", {"on": False}).json() == {"id": "coach", "on": False}
+    gate.set()
+
+    def card_turns():
+        return [r for r in list(fakes.hermes.started.values()) if "<!--bip:card" in str(r.get("input"))]
+
+    assert wait_until(card_turns, timeout=30), list(fakes.hermes.started.values())
+    assert resumed(fakes, "api_switch") == [], "the card's turn went on in the old session"
