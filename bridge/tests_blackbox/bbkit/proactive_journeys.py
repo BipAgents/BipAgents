@@ -86,14 +86,15 @@ def local(days: int, hour: int, minute: int = 0, zone: str = "Europe/Paris") -> 
     return f"{day.isoformat()}T{hour:02d}:{minute:02d}"
 
 
-def trip() -> Dict[str, Any]:
-    """Lisbon in three days: three moments, two offers (a page and a reminder: what Vie can do here, plans/offers.rs)."""
-    return {"kind": "trip", "title": "Lisbonne", "zone": "Europe/Lisbon", "city": "Lisbonne",
+def trip(title: str = "Lisbonne") -> Dict[str, Any]:
+    """Lisbon (or Porto: J67's, a plan declined is not proposed again for 14 days) in three days: three moments, two
+    offers (a page and a reminder: what Vie can do here, plans/offers.rs)."""
+    return {"kind": "trip", "title": title, "zone": "Europe/Lisbon", "city": title,
             "moments": [
                 {"at": local(2, 9, 15), "zone": "Europe/Paris", "what": "Enregistrement en ligne",
                  "say": "L’enregistrement en ligne du TP 433 est ouvert", "link": "https://www.flytap.com/checkin"},
                 {"at": local(3, 10, 50, "Europe/Lisbon"), "what": "Arrivée : métro rouge vers le centre",
-                 "say": "Bienvenue à Lisbonne : le métro rouge va au centre en 20 min."},
+                 "say": f"Bienvenue à {title} : le métro va au centre en 20 min."},
                 {"at": local(3, 15, 0, "Europe/Lisbon"), "what": "Ta chambre est prête",
                  "say": "Ta chambre est prête à partir de 15:00."}],
             "offers": [
@@ -112,7 +113,8 @@ def install(journey) -> None:
     """Vie's proposing turns (PeopleModel's `#plan`, `#offre`) call the bridge's own tools as Vie, in the turn."""
     from .people import mcp_as
     bridge, token = journey.bridge, journey.token
-    journey.model.calls["plan"] = lambda run: mcp_as(bridge, token, "/v1/agent-tools/mcp", "plan_propose", trip())
+    journey.model.calls["plan"] = lambda run: mcp_as(bridge, token, "/v1/agent-tools/mcp", "plan_propose",
+                                                     trip("Porto" if "porto" in run.words.lower() else "Lisbonne"))
     journey.model.calls["offer"] = lambda run: mcp_as(bridge, token, "/v1/agent-tools/mcp", "offer_act", offer())
 
 

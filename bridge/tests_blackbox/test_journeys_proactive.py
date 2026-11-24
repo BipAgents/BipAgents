@@ -152,7 +152,7 @@ def test_j67_initiative_three_states_change_what_the_agent_proposes(journey):
     assert wait_until(lambda: "plan_propose" not in tool_names(journey), timeout=20), sorted(tool_names(journey))
     assert "offer_act" not in tool_names(journey)
     assert journey.send(cid(672), "Et je pars aussi à Porto la semaine d'après #plan").status_code == 200
-    page = reply_done(journey, "bon voyage à Lisbonne")
+    page = reply_done(journey, "bon voyage à Porto")
     drawable(journey, page)
     assert not [c for c in page["pending"].get("approvals") or [] if c["run_id"].startswith(("bip-plan-", "bip-offer-"))]
     assert settings(journey)["proactive"] == {"level": "off", "smart_ok": settings(journey)["proactive"]["smart_ok"]}

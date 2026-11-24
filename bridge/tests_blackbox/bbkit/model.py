@@ -646,8 +646,9 @@ class PeopleModel(ScriptedModel):
             # J67–J68: a trip coming up, ONE card for the whole plan in this turn (or none: « Initiative » off)
             opening += self.say(run, "Je regarde ton voyage. ")
             made = step("plan", "mcp_bipagents_plan_propose", {"kind": "trip", "title": "Lisbonne"})
-            lines.append("D’accord, bon voyage à Lisbonne !" if made.startswith("Error") or "Not done" in made
-                         else "Je te propose un plan pour Lisbonne.")
+            where = "Porto" if "porto" in words else "Lisbonne"
+            lines.append(f"D’accord, bon voyage à {where} !" if made.startswith("Error") or "Not done" in made
+                         else f"Je te propose un plan pour {where}.")
         if "#offre" in words and "offer" in self.calls:
             opening += self.say(run, "Je note tes menus. ")
             made = step("offer", "mcp_bipagents_offer_act", {"kind": "page", "about": "Menus de la semaine"})
