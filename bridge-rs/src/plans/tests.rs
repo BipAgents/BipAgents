@@ -531,7 +531,20 @@ fn bench_a_habit_as_the_models_write_it_is_taken() {
     let none = json!({"kind": "habit", "title": "Eau", "moments": [{"what": "Eau", "say": "Un verre ?"}]});
     let said = draft(&args(&none), "vie", PARIS, PARIS, now).unwrap_err();
     assert!(said.contains("\"repeat\": {\"days\"") && said.contains("weeks"), "{said}");
-    let three = json!({"kind": "habit", "title": "Eau", "moments": [{"what": "a", "say": "b"}, {"what": "c", "say": "d"}],
-                       "repeat": {"days": "daily", "times": ["09:00"]}});
-    assert!(draft(&args(&three), "vie", PARIS, PARIS, now).unwrap_err().contains("repeat.times"));
+    // one moment per time of day (GLM « boire plus d'eau », proactive-tune's bench): its times from them, its first words
+    let water = json!({"kind": "habit", "title": "Boire plus d'eau", "moments": [
+        {"at": "2026-11-25T09:00", "what": "Verre d'eau du matin", "say": "Un grand verre d'eau 💧",
+         "repeat": {"days": "daily"}},
+        {"at": "2026-11-25T13:00", "what": "Verre d'eau du midi", "say": "Ta gourde 💧"}]});
+    let plan = draft(&args(&water), "vie", PARIS, PARIS, now).unwrap().plan;
+    assert_eq!(plan.moments.len(), 1);
+    assert_eq!(plan.moments[0].what, "Verre d'eau du matin");
+    assert_eq!(plan.repeat.unwrap().times, vec!["09:00".to_string(), "13:00".to_string()]);
+    // one moment per day (GLM « courir »): its rhythm given stays; none given, the days from the moments
+    let run = json!({"kind": "habit", "title": "Courir", "moments": [
+        {"at": "2026-11-30T08:00", "what": "Course (lundi)", "say": "Ta course !"},
+        {"at": "2026-12-02T08:00", "what": "Course (mercredi)", "say": "Ta course !"},
+        {"at": "2026-12-05T08:00", "what": "Course (samedi)", "say": "Ta course !"}]});
+    let r = draft(&args(&run), "vie", PARIS, PARIS, now).unwrap().plan.repeat.unwrap();
+    assert_eq!((r.days.as_str(), r.times.clone()), ("1,3,6", vec!["08:00".to_string()]));
 }

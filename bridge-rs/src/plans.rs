@@ -702,6 +702,34 @@ pub fn draft(arguments: &Dict, agent: &str, person: Tz, routines: Tz, now: f64) 
     if habit && repeat_arg.is_none() {
         repeat_arg = list.iter().find_map(|m| m.get("repeat").filter(|v| v.is_object()).cloned());
     }
+    // a habit written as one moment per time or day (bench of proactive-tune: GLM and DeepSeek, one of each two
+    // habits): the first moment's words, its rhythm from the moments when it gives none
+    if habit && list.len() > 1 && list.len() <= MAX_MOMENTS * 2 {
+        let at_of = |m: &Value| parse_at(&text_arg(m.get("at")), person);
+        let ats: Vec<f64> = list.iter().filter_map(at_of).collect();
+        let mut rhythm = repeat_arg.clone().unwrap_or_else(|| json!({}));
+        if rhythm.get("times").is_none_or(|t| t.as_array().is_some_and(|a| a.is_empty())) && !ats.is_empty() {
+            let mut times: Vec<String> = ats
+                .iter()
+                .filter_map(|a| person.timestamp_opt(*a as i64, 0).single().map(|d| d.format("%H:%M").to_string()))
+                .collect();
+            times.sort();
+            times.dedup();
+            rhythm["times"] = json!(times);
+        }
+        if rhythm.get("days").is_none() {
+            let mut days: Vec<&str> = ats
+                .iter()
+                .filter_map(|a| person.timestamp_opt(*a as i64, 0).single())
+                .map(|d| DAY_WORDS[d.weekday().num_days_from_monday() as usize])
+                .collect();
+            days.sort_by_key(|d| DAY_WORDS.iter().position(|w| w == d));
+            days.dedup();
+            rhythm["days"] = if days.len() <= 1 { json!("daily") } else { json!(days) };
+        }
+        repeat_arg = Some(rhythm);
+        list.truncate(1);
+    }
     if list.is_empty() || list.len() > MAX_MOMENTS || (habit && list.len() != 1) {
         return Err(if habit {
             format!("moments: exactly one for a habit, its times of day in repeat.times ({REPEAT_EXAMPLE})")
