@@ -618,6 +618,8 @@ impl Pipeline {
 
     async fn deliver_as(&self, d: &Delivery, urgent: bool) -> bool {
         let agent = &d.agent;
+        // a report or a moment: a smart agent's next pass of the day may be due (offer_ideas.rs)
+        crate::offer_ideas::noted(&self.config.get(), &agent.name, &d.key);
         // a watcher's or a trigger's same words just told in this conversation: there again, never pushed twice
         let repeat = reports_once(&d.key)
             && same_report(&self.config.get().data_dir(), &agent.name, &d.session, &d.text, py::time_time());

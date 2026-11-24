@@ -1,0 +1,301 @@
+{
+ "about": "« Initiative » smart (proactive agents 3b, passation-pro briefs/design-agents-proactifs.md §3b; bridge-rs/src/offer_ideas.rs). Additions only to contracts/offers: an app 1.0 draws a smart offer as the generic Oui / Non card it already draws (bip_summary, bip_detail under « i »), an app 1.1 draws OfferCard with the lines below.",
+ "tool": {
+  "name": "offer_act",
+  "smart_only": "the free form is listed only for an agent whose level is smart (contracts/proactive); a basic agent's call with `uses` and no `kind` is refused the basic way (« Not done: kind: … »)",
+  "free_form": {
+   "label": "≤ 80, the question",
+   "prompt": "≤ 600, exactly what the agent does at « Oui », shown under « i »",
+   "topic": "1 to 3 words (≤ 40): the card's top line « {agent} propose · {topic} »",
+   "uses": "1 to 6 items, each one of the shapes below, every one checked",
+   "later": "the steps that keep their own card"
+  },
+  "basic_form": "kind, label, about, prompt | params, site: as contracts/offers (route, reminder, calendar stay done by the bridge, no model)",
+  "required": [
+   "label"
+  ],
+  "uses": [
+   {
+    "tool": "<one of its tools now; one behind the tool search counts>"
+   },
+   {
+    "connector": "<id, slug or name: approved, on, not broken>"
+   },
+   {
+    "skill": "<installed for it>"
+   },
+   {
+    "mailbox": "<label, address or provider; empty: any of its own>",
+    "do": "read | draft"
+   },
+   {
+    "calendar": "phone | google | caldav (empty: any)",
+    "do": "read | write"
+   },
+   {
+    "browser": true,
+    "site": "<host, optional: never allowed yet → said on the card>"
+   },
+   {
+    "routine": {
+     "schedule": "routines.rs schedule (« every sunday at 19:00 », a cron…)",
+     "ends": "YYYY-MM-DD or a number of runs"
+    }
+   },
+   {
+    "watcher": {
+     "every": "15m … 7d",
+     "ends": "YYYY-MM-DD or a number of runs"
+    }
+   },
+   {
+    "task": {
+     "budget": "euros, optional: above the usual, said on the card"
+    }
+   }
+  ],
+  "refusal": "Not done: missing <what> here; don't offer it. Nothing was made."
+ },
+ "later": [
+  "pay",
+  "send",
+  "book",
+  "delete",
+  "share"
+ ],
+ "families": [
+  "search",
+  "browser",
+  "mail",
+  "calendar",
+  "page",
+  "routine",
+  "shopping",
+  "connector",
+  "other"
+ ],
+ "family_rule": "its first use's (tool_kinds.rs for a tool); a browser, a search or other with « pay » later: shopping",
+ "never_the_offer": [
+  "pay_with_card",
+  "pay_with_link",
+  "confirm_payment",
+  "hand_over_payment",
+  "mail_send",
+  "mail_reply",
+  "send_message",
+  "ask_to_send",
+  "send_file_to_service",
+  "tell_family",
+  "give_file",
+  "friends_card",
+  "meet",
+  "calendar_delete",
+  "delete_page",
+  "shared_files_delete",
+  "mail_trash",
+  "terminal",
+  "process_manage",
+  "execute_code",
+  "computer_use",
+  "ask_phone_exit"
+ ],
+ "never_rule": "these tools as a use: refused (« … is never the offer itself … put « pay » in later »); a later step never granted by the offer's « Oui »",
+ "card": {
+  "run_id": "bip-offer-<id>",
+  "choices": [
+   "once",
+   "deny"
+  ],
+  "bip_offer_adds": {
+   "mode": "smart (basic offers: basic)",
+   "kind": "smart",
+   "family": "one of families",
+   "uses_text": "« Avec : Garmin · une page · une routine chaque dimanche vers 19 h, jusqu'au 12/4 »",
+   "later_text": "the amber line or null",
+   "site": "a site never allowed or null",
+   "site_text": "« Il te demandera l'accès à {site}. » or null",
+   "detail": "what an app 1.1 shows under « i » (the prompt, the outside line first, the first card's hint last)",
+   "idea": "true: a day's pass's idea"
+  },
+  "bip_detail": "an app 1.0's « i »: the prompt, then uses_text, later_text, site_text, one a line (the outside line first, the first card's hint last)",
+  "notification": "contracts/notifications card/offer: « Propose : {question} », never urgent"
+ },
+ "answers": {
+  "once": "one turn of the agent with exactly the prompt (contracts/offers); a routine the card showed starts with it (made with routine_schedule in that turn: the same rhythm, no later end, once, within 20 min): no card of its own; a watcher keeps its connector card; anything paying, sending, booking, deleting, sharing keeps its own card",
+  "deny": "counted for its family (two in a row, or 5 with under 20 % yes: quiet 30 days; its topic not again for 30 days)",
+  "outside": "an offer made while reading a message from outside grants no routine: its card is shown"
+ },
+ "passes": {
+  "defaults": {
+   "passes_cap": 0.1,
+   "tick_seconds": 900,
+   "quiet_minutes": 20.0,
+   "gap_hours": 2.0,
+   "passes_per_day": 4,
+   "min_messages": 3,
+   "input_chars": 3500
+  },
+  "config": "[proactive] passes_cap, tick_seconds, quiet_minutes, gap_hours, passes_per_day, min_messages, input_chars",
+  "due": "smart, the person's own agent, not on a model outside; new since its last pass: min_messages of the person in its own conversations or an event (a watcher's, trigger's, routine's report, a plan's moment, the next 7 days of the phone's calendar changed, the Carnet's dates changed); gap_hours since its last pass; passes_per_day at most; quiet_minutes with no turn; none of its cards waiting and the day's caps not reached; the day's budget left. The first look of an agent only marks where reading starts.",
+  "budget": "the day's budget = (passes_cap − what the month spent before today) ÷ the days left, today included − what today spent; reached: no pass that day, nothing said",
+  "own_model": "on the person's own model: 0 €, only while no turn runs on the place",
+  "call": "one call to [notebook] model at the agent's provider (its own model on the person's machine), no tools, instructions starting « You look back over », what is new between <<<DATA and DATA>>>; at most 2 candidates (the free form + conversation: c1, c2…)",
+  "placed": "the first candidate that passes the checks and the caps: a card at once in its conversation (else the main one), pushed, counted in the day's unasked cards",
+  "routes": {
+   "GET /v1/proactive/passes": {
+    "month": "YYYY-MM",
+    "cap": 0.1,
+    "spent": 0.0,
+    "today_budget": 0.0,
+    "passes": 0,
+    "model_calls": 0,
+    "tokens_in": 0,
+    "tokens_out": 0,
+    "runs": [
+     "records"
+    ]
+   },
+   "POST /v1/proactive/passes": {
+    "runs": [
+     "records of this look: the same pre-filter, nothing forced"
+    ]
+   }
+  },
+  "record": [
+   "at",
+   "agent",
+   "reason",
+   "model_called",
+   "tokens_in",
+   "tokens_out",
+   "eur",
+   "local",
+   "candidates",
+   "refused",
+   "placed",
+   "new_messages",
+   "events"
+  ],
+  "reasons": [
+   "nothing new",
+   "passes of the day",
+   "too soon",
+   "conversation going on",
+   "caps",
+   "budget of the day",
+   "no model to call",
+   "placed",
+   "refused",
+   "nothing",
+   "the model answered <status>"
+  ]
+ },
+ "app_1_0": "a smart offer is the generic card: bip_summary « Vie propose : Je te fais un plan d'entraînement jusqu'au semi ? », under « i » the prompt and the lines; Oui / Non; its keys and types those of a basic offer's card (bip_offer's own keys aside)",
+ "examples": [
+  {
+   "name": "semi",
+   "arguments": {
+    "label": "Je te fais un plan d'entraînement jusqu'au semi, avec un point chaque dimanche ?",
+    "topic": "Semi de Lyon",
+    "prompt": "Fais une page avec un plan d'entraînement de 8 semaines jusqu'au semi de Lyon, et une routine qui fait le point chaque dimanche soir.",
+    "uses": [
+     {
+      "connector": "garmin"
+     },
+     {
+      "tool": "create_page"
+     },
+     {
+      "routine": {
+       "schedule": "every sunday at 19:00",
+       "ends": "2027-04-12"
+      }
+     }
+    ]
+   },
+   "uses_text_fr": "Avec : Garmin · une page · une routine chaque dimanche vers 19 h, jusqu'au 12/4/2027"
+  },
+  {
+   "name": "inscription",
+   "arguments": {
+    "label": "Je remplis ton inscription au semi ?",
+    "topic": "Semi de Lyon",
+    "prompt": "Remplis l'inscription au semi de Lyon sur le site, jusqu'à la page de paiement.",
+    "uses": [
+     {
+      "browser": true,
+      "site": "www.example-semi.fr"
+     }
+    ],
+    "later": [
+     "pay"
+    ]
+   },
+   "later_text_fr": "Il te demandera ton accord avant de payer.",
+   "site_text_fr": "Il te demandera l’accès à www.example-semi.fr."
+  }
+ ],
+ "texts": {
+  "fr": {
+   "with": "Avec : {uses}",
+   "routine": "une routine {when}, {end}",
+   "watcher": "un veilleur {when}, {end}",
+   "draft": "{mailbox} (brouillon)",
+   "later": "Il te demandera ton accord avant de {verbs}.",
+   "site": "Il te demandera l’accès à {site}.",
+   "verbs": [
+    "payer",
+    "envoyer",
+    "réserver",
+    "supprimer",
+    "partager"
+   ]
+  },
+  "en": {
+   "with": "With: {uses}",
+   "routine": "a routine {when}, {end}",
+   "watcher": "a watcher {when}, {end}",
+   "draft": "{mailbox} (draft)",
+   "later": "It will ask you before it {verbs}.",
+   "site": "It will ask you for access to {site}.",
+   "verbs": [
+    "pays",
+    "sends",
+    "books",
+    "deletes",
+    "shares"
+   ]
+  },
+  "de": {
+   "with": "Mit: {uses}",
+   "routine": "eine Routine {when}, {end}",
+   "watcher": "ein Wächter {when}, {end}",
+   "draft": "{mailbox} (Entwurf)",
+   "later": "Es fragt dich, bevor es {verbs}.",
+   "site": "Es fragt dich nach dem Zugang zu {site}.",
+   "verbs": [
+    "bezahlt",
+    "sendet",
+    "bucht",
+    "löscht",
+    "teilt"
+   ]
+  },
+  "es": {
+   "with": "Con: {uses}",
+   "routine": "una rutina {when}, {end}",
+   "watcher": "un vigilante {when}, {end}",
+   "draft": "{mailbox} (borrador)",
+   "later": "Te pedirá permiso antes de {verbs}.",
+   "site": "Te pedirá acceso a {site}.",
+   "verbs": [
+    "pagar",
+    "enviar",
+    "reservar",
+    "borrar",
+    "compartir"
+   ]
+  }
+ },
+ "texts_to_validate": "the pieces of « Avec : » the design did not write (« le navigateur », « une page », « la recherche web », « une tâche de fond », « une tâche de fond (jusqu'à {eur} €) », « l'agenda de ton téléphone », « un de ses outils ») and the joined verbs (« payer ou de réserver »): status-smart-offers.md"
+}
