@@ -537,11 +537,20 @@ class PeopleModel(ScriptedModel):
 | `#rangement` | files a fact on the Carnet's « Famille » page again (`notebook_write`): J52, after the person moved one like it |
 | `#fichiers` | lists the files everyone sent the agent (`read_sent_file`, no path): J55, a shared agent's pool |
 | `#demande-outil` | asks for a tool it has off (`ask_for_tool`: « rappels », « mails », « meteo » or « calendrier » in the words), waits for the card's answer, then goes on or does without: J59–J63 |
+| `#plan` | proposes a plan for Lisbon (`plan_propose`, bbkit/proactive_journeys.py `trip`: three moments, two offers) in its turn: J67, J68 |
+| `#offre` | offers to act (`offer_act`: a page of the week's menus) at the end of its turn: J67 |
+| `#ia-muette` | its AI doesn't answer: the run fails as Hermes says it then (« APIConnectionError: Connection error. »): J69's routines |
+
+    A turn started by a « Oui » to an offer (its prompt: the bagages', the menus', the gift ideas') says it set to work.
 
     A run started with `message` instead of `input` (another household's agent through `/peer/…`) is read the same."""
 
     MARKERS = ("#routine", "#tache", "#famille", "#etapes", "#relais", "#carnet", "#rangement", "#fichiers",
-               "#demande-outil")
+               "#demande-outil", "#plan", "#offre", "#ia-muette")
+    #: The words of an offer's prompt (bbkit/proactive_journeys.py): its « Oui »'s turn, and what it answers.
+    OFFER_WORK = {"liste de bagages": "Voici ta liste de bagages pour Lisbonne.",
+                  "menus de la semaine": "Voici les menus de la semaine et la liste des courses.",
+                  "idées de cadeau": "Voici 3 idées de cadeau pour Léa, autour de 40 €."}
 
     @classmethod
     def upgrade(cls, model: ScriptedModel) -> "PeopleModel":
@@ -558,7 +567,18 @@ class PeopleModel(ScriptedModel):
 
     def _answer(self, run: Run) -> None:
         words = run.words.lower()
+        if "#ia-muette" in words:
+            # J69: the agent's AI doesn't answer (task_frame.rs `ai_silent` reads Hermes' error)
+            raise RuntimeError("APIConnectionError: Connection error.")
         if not any(m in words for m in self.MARKERS):
+            work = next((said for key, said in self.OFFER_WORK.items() if key in words), None)
+            if work:   # the turn of a « Oui » to an offer: it sets to work
+                said = self.say(run, work)
+                self.store(run.agent, run.session, {"role": "assistant", "content": said, "timestamp": time.time()})
+                run.status, run.output = "completed", said
+                run.emit("run.completed", output=said, usage={"input_tokens": 1200, "output_tokens": 80})
+                run.finish()
+                return
             return super()._answer(run)
         calls: List[Dict] = []
         results: List[Dict] = []
@@ -617,6 +637,17 @@ class PeopleModel(ScriptedModel):
                 lines.append("D’accord, je fais sans.")
             else:
                 lines.append("Une carte t’attend dans l’app.")
+        if "#plan" in words and "plan" in self.calls:
+            # J67–J68: a trip coming up, ONE card for the whole plan in this turn (or none: « Initiative » off)
+            opening += self.say(run, "Je regarde ton voyage. ")
+            made = step("plan", "mcp_bipagents_plan_propose", {"kind": "trip", "title": "Lisbonne"})
+            lines.append("D’accord, bon voyage à Lisbonne !" if made.startswith("Error") or "Not done" in made
+                         else "Je te propose un plan pour Lisbonne.")
+        if "#offre" in words and "offer" in self.calls:
+            opening += self.say(run, "Je note tes menus. ")
+            made = step("offer", "mcp_bipagents_offer_act", {"kind": "page", "about": "Menus de la semaine"})
+            lines.append("C’est noté pour tes menus." if made.startswith("Error") or "Not done" in made
+                         else "Je te propose un suivi des menus.")
         if "#fichiers" in words and "files" in self.calls:
             # the files everyone who uses the agent sent it (its pool), named in the reply
             opening += self.say(run, "Je regarde les fichiers. ")
