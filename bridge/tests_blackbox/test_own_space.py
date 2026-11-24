@@ -133,8 +133,7 @@ def test_no_move_when_its_space_would_hold_the_desktop_too(bridges, fakes):
     use_token_of(hub)
     assert "bipagents_connectors" not in entries(hub, "coach")   # not offered either
     result = tool(bridge, "ask_secret", ASK)
-    assert result["isError"] and text(result).startswith("Connectors and secrets aren't available to you here"), \
-        text(result)
+    assert not_done(result) and "Connectors and secrets aren't available to you here" in text(result), text(result)
     assert not (bridge.root / "spaces" / "coach").exists() and (hub / "profiles" / "coach").is_dir()
     assert tomllib.loads(bridge.toml_text())["agents"]["coach"].get("isolated") is not True
     assert not secret_cards(bridge)
