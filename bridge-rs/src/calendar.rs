@@ -1173,6 +1173,18 @@ mod tests {
         assert!(!add_asked(&other));
     }
 
+    /// Review of proactive-tune (24/11): `add_asked` lets the add through when the agent's last words named the calendar,
+    /// whatever the person answered — a « Non » to « Je l'ajoute à ton agenda ? » too.
+    #[test]
+    fn review_a_no_to_the_agents_calendar_question_never_lets_the_add_through() {
+        let msg = |role: &str, text: &str| -> Dict { json!({"role": role, "content": text}).as_object().cloned().unwrap() };
+        for no in ["Non", "Non merci, je le ferai moi-même", "No thanks", "Nein danke", "No, gracias", "Nee, dank je"] {
+            let said = [msg("user", "J'ai rendez-vous chez le dentiste jeudi à 15 h."),
+                        msg("assistant", "C'est noté. Je l'ajoute à ton agenda ?"), msg("user", no)];
+            assert!(!add_asked(&said), "added after « {no} »");
+        }
+    }
+
     #[test]
     fn moments_as_agents_write_them() {
         assert_eq!(Moment::parse("2026-10-30").map(|m| m.write()).as_deref(), Some("2026-10-30"));

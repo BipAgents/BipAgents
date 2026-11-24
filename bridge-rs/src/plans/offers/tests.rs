@@ -943,3 +943,24 @@ fn bench_an_offer_never_books_pays_buys_or_sends_itself() {
         assert!(acts_itself(label).is_none(), "{label}");
     }
 }
+
+/// Review of proactive-tune (24/11): `acts_itself` refuses offers that do none of booking, paying, buying or sending —
+/// a reminder « sent » to the person, a parcel's « envío » (Spanish noun), a reminder of a « pago » (Spanish noun). A
+/// reminder offer is the bridge's own (BY_BRIDGE): it never books, pays or sends anything.
+#[test]
+fn review_a_reminder_or_a_parcel_is_not_booking_paying_or_sending() {
+    for label in ["Je t'envoie un rappel jeudi à 9 h ?", "Shall I send you a reminder on Thursday at 9?",
+                  "¿Te recuerdo el pago del alquiler el día 1?", "¿Sigo el envío de tu paquete?"] {
+        assert!(acts_itself(label).is_none(), "refused, though it books, pays, buys or sends nothing: {label}");
+    }
+}
+
+/// Review of proactive-tune (24/11): the same booking asked in the words models use most still passes `acts_itself`
+/// (« Want me to… », « Soll ich … reservieren? », « Tu veux que je la réserve ? », Dutch, the apps' fifth language).
+#[test]
+fn review_an_offer_that_books_said_another_way_is_refused_too() {
+    for label in ["Want me to book the table for Saturday?", "Soll ich den Tisch für Samstag reservieren?",
+                  "Tu veux que je la réserve pour samedi ?", "Zal ik de tafel voor zaterdag reserveren?"] {
+        assert!(acts_itself(label).is_some(), "let through: {label}");
+    }
+}
