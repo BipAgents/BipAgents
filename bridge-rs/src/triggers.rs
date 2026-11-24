@@ -728,11 +728,9 @@ pub fn create(config: &Config, agent: &str, f: &Fields, by: &str) -> Result<Trig
     }
     if by == "person" || by == crate::plans::MAKER || by == REPLIES {
         // the person's own, a plan's e-mail watch (the person said « Prévoir » to the plan's card, plans.rs), or a
-        // replies-due watch (their « Oui » to its consent card, plans/sources.rs: it ends in 90 days)
+        // replies-due watch (their « Oui » to its consent card, plans/sources.rs): no end of its own, never stopped
+        // without the person (Alex's B2, 24/11)
         t.enabled = true;
-        if by == REPLIES {
-            t.ends = Some(now + crate::task_frame::DEFAULT_END_DAYS * 86400.0);
-        }
     } else {
         t.card = Some(Card { id: py::token_hex(6), at: now });
     }

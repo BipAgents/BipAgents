@@ -170,9 +170,9 @@ pub struct Offer {
     pub session: Option<String>,
 }
 
-/// What the caps and the learning count an offer by: its kind, a free-form offer's family (offer_ideas.rs), or for the
-/// bridge's own cards their source and kind (« calendar:appointment », « replies:draft »: never one of the agent's
-/// kinds, plans/sources.rs).
+/// What the caps and the learning count an offer by: a free-form offer's family (offer_ideas.rs), else its kind, or
+/// for the bridge's own cards their source and kind (« calendar:appointment », « replies:draft »: never one of the
+/// agent's kinds, plans/sources.rs).
 pub fn learn_key(offer: &Offer) -> String {
     if !offer.family.is_empty() {
         offer.family.clone()
@@ -1035,7 +1035,7 @@ pub fn rule_refusal(store: &Store, offer: &Offer, now: f64) -> Option<String> {
         return Some(format!(
             "Not done: your person said no thanks to your {} lately: don't offer them for now (it is not « Initiative » \
              off: just that kind, for a while).",
-            plural(if offer.family.is_empty() { &offer.kind } else { &offer.family })
+            plural(&learn_key(offer))
         ));
     }
     None
