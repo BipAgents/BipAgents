@@ -171,9 +171,9 @@ pub struct Offer {
     pub session: Option<String>,
 }
 
-/// What the caps and the learning count an offer by: a free-form offer's family (offer_ideas.rs); for the bridge's own
-/// cards their source and kind (« calendar:appointment », « replies:draft »: never one of the agent's kinds,
-/// plans/sources.rs); else its kind.
+/// What the caps and the learning count an offer by: a free-form offer's family (offer_ideas.rs), else its kind, or
+/// for the bridge's own cards their source and kind (« calendar:appointment », « replies:draft »: never one of the
+/// agent's kinds, plans/sources.rs).
 pub fn learn_key(offer: &Offer) -> String {
     if !offer.family.is_empty() {
         offer.family.clone()
@@ -970,10 +970,6 @@ pub fn spec_of(
         first: false,
         subject,
         outside: false,
-        source: String::new(),
-        items: Vec::new(),
-        top: String::new(),
-        mailbox: String::new(),
         ..Offer::default()
     })
 }
@@ -1773,21 +1769,22 @@ async fn turn(state: &AppState, agent: &AgentConfig, offer: &Offer, place: &crat
     let mut started = None;
     let ran = pipeline
         .run_then(&turn, |run| {
-            yes_run(&agent.name, run, true);
-            started = Some(run.to_string());
-            // the routine a free-form offer showed may start in this run, and in no other (offer_ideas.rs, review B1)
-            crate::offer_ideas::grant_run(&config, &offer.id, run);
             if let Some(ids) = gated.clone() {
                 super::sources::set_gate(&agent.name, run, Some(ids));
                 *opened.lock().unwrap_or_else(|e| e.into_inner()) = Some(run.to_string());
             }
+            // the routine a free-form offer showed may start in this run, and in no other (offer_ideas.rs, review B1)
+            crate::offer_ideas::grant_run(&config, &offer.id, run);
+            // the run marked as an offer's « Oui » while it works (card_pay: its payment asks calmly)
+            yes_run(&agent.name, run, true);
+            started = Some(run.to_string());
         })
         .await;
-    if let Some(run_id) = &started {
-        yes_run(&agent.name, run_id, false);
-    }
     if let Some(run) = opened.lock().unwrap_or_else(|e| e.into_inner()).take() {
         super::sources::set_gate(&agent.name, &run, None);
+    }
+    if let Some(run) = &started {
+        yes_run(&agent.name, run, false);
     }
     match ran {
         Ok(ran) if ran.answered() && !crate::background_turn::is_silent(&ran.text) => {

@@ -310,6 +310,9 @@ class FakeHermes(Fake):
                           "configured": True, "tools": ["web_search"]}]
         self.started: Dict[str, Dict[str, Any]] = {}    # runs made by POST /v1/runs
         self.start_failures = 0   # POST /v1/runs answered 502 this many times first (a gateway restarting)
+        # POST /v1/runs answered 429 « Too many concurrent runs » with Retry-After: 1 this many times first (a hub at
+        # its `gateway.api_server.max_concurrent_runs`); then as usual
+        self.start_busy = 0
         self.rounds, self.step = 3, 40_000
         self.run_output = "Rapport : trois écoles comparées, page « Écoles »."
         self.run_outputs: Dict[str, str] = {}   # run id -> its own output (else run_output)
@@ -379,6 +382,12 @@ class FakeHermes(Fake):
                 failing, self.start_failures = self.start_failures > 0, max(0, self.start_failures - 1)
             if failing:
                 return JSONResponse({"error": "gateway restarting"}, status_code=502)
+            with self.lock:
+                busy, self.start_busy = self.start_busy > 0, max(0, self.start_busy - 1)
+            if busy:
+                return JSONResponse({"error": {"message": "Too many concurrent runs (max 16)", "type": "rate_limit_error",
+                                               "code": "rate_limit_exceeded"}}, status_code=429,
+                                    headers={"Retry-After": "1"})
             body = seen.json() or {}
             now, text = split_now(body.get("input"))
             with self.lock:

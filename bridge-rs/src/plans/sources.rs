@@ -41,7 +41,6 @@ use serde_json::{json, Value};
 use super::offers::{self, Offer};
 use super::{fill, lang_of, person_zone, shown_agent, EventRef, Moment, Plan};
 use crate::app::AppState;
-use crate::background_turn::{Delivery, Pipeline};
 use crate::config::{AgentConfig, Config};
 use crate::tools_knowledge as tk;
 use crate::web::{self, ApiResult, HttpError};
@@ -261,8 +260,9 @@ pub fn change<T>(config: &Config, f: impl FnOnce(&mut Store) -> T) -> T {
 
 // -- who -------------------------------------------------------------------------------------------------------------------
 
-/// « Modèle extérieur » (`outside_model::place`): an agent whose model is outside our European providers and the
-/// person's own (or a model it cannot tell) never has their calendar or e-mails read to propose.
+/// « Modèle extérieur » (`outside_model::place`, read at every call: a change of model counts at once): an agent whose
+/// model is outside our European providers and the person's own, or one the bridge cannot tell, never has their
+/// calendar or e-mails read to propose.
 pub fn outside(config: &Config, agent: &str) -> bool {
     config.agent(Some(agent)).is_some_and(|a| {
         matches!(crate::outside_model::place(config, a), crate::outside_model::Place::Outside { .. } | crate::outside_model::Place::Unknown)
@@ -1074,8 +1074,13 @@ async fn consent_cards(state: &AppState, now: f64) {
         let Some(a) = config.agent(Some(&agent)).cloned() else { continue };
         let address = tk::str_or_empty(account.get("username"));
         let offer = consent_offer(&config, &agent, &id, &address, now);
+        let seen = known.cloned();
         match offers::place_bridge(state, &a, offer).await {
             Ok(_) => change(&config, |s| {
+                // answered while it was being placed (its « Oui » turned the watch on): never written back to « asked »
+                if s.mailboxes.iter().find(|m| m.account == id).cloned() != seen {
+                    return;
+                }
                 let asks = s.mailboxes.iter().find(|m| m.account == id).map(|m| m.asks).unwrap_or(0) + 1;
                 s.mailboxes.retain(|m| m.account != id);
                 s.mailboxes.push(Mailbox {
@@ -1156,6 +1161,16 @@ pub fn watch_off(config: &Config, account: &str, state: &str) {
     let known = load(config).mailboxes.into_iter().find(|m| m.account == account);
     if let Some(t) = known.as_ref().and_then(|m| m.trigger.clone()) {
         crate::triggers::remove(config, &t);
+    }
+    // and any replies-due watch of this mailbox the store lost track of (review B1 of plans-cards): never one left running
+    let lost: Vec<String> = crate::triggers::load(config)
+        .triggers
+        .into_iter()
+        .filter(|t| t.by == crate::triggers::REPLIES && t.mail.as_ref().is_some_and(|m| m.account == account))
+        .map(|t| t.id)
+        .collect();
+    for id in lost {
+        crate::triggers::remove(config, &id);
     }
     // its replies card still waiting goes too (its e-mails' headers with it)
     if let Some(address) = known.map(|m| m.address).filter(|a| !a.is_empty()) {
@@ -1808,11 +1823,29 @@ pub fn mailboxes_gone(config: &Config) -> Vec<String> {
     gone
 }
 
-/// The watches that stopped (their trigger deleted, paused, ended, the mailbox no longer the agent's): their headers
-/// forgotten; an end reached: one Boîte line, the consent card may come again.
+/// A watch past its default end (90 days) goes on « jusqu'à ce que tu l'arrêtes »: never stopped without the person
+/// (Alex's B2, 24/11, alex-choices-1-1). Returns the mailboxes whose end was taken away. (Its « Garder ? » card, as a
+/// routine's, is not there yet.)
+pub fn keep_past_end(config: &Config, now: f64) -> Vec<String> {
+    if !load(config).mailboxes.iter().any(|m| m.state == ON && m.ends > 0.0 && now > m.ends) {
+        return Vec::new();
+    }
+    change(config, |s| {
+        let mut kept = Vec::new();
+        for m in s.mailboxes.iter_mut().filter(|m| m.state == ON && m.ends > 0.0 && now > m.ends) {
+            m.ends = 0.0;
+            kept.push(m.account.clone());
+        }
+        kept
+    })
+}
+
+/// The watches that stopped (their trigger deleted, paused, the mailbox no longer the agent's): their headers
+/// forgotten. One past its default end goes on (`keep_past_end`).
 async fn reconcile(state: &AppState) {
     let config = state.config();
     let now = py::time_time();
+    keep_past_end(&config, now);
     let store = load(&config);
     if !store.mailboxes.iter().any(|m| m.state == ON) {
         return;
@@ -1823,30 +1856,6 @@ async fn reconcile(state: &AppState) {
         let trigger = m.trigger.as_ref().and_then(|id| triggers.iter().find(|t| &t.id == id));
         match trigger {
             None => watch_off(&config, &m.account, OFF),
-            Some(_) if m.ends > 0.0 && now > m.ends => {
-                watch_off(&config, &m.account, OFF);
-                change(&config, |s| s.mailboxes.retain(|x| x.account != m.account));
-                if let Some(agent) = config.agent(Some(&m.agent)).cloned() {
-                    let lang = lang_of(&config, &agent.name);
-                    let end = crate::task_frame::end_words(lang, crate::task_frame::Task::Routine, &crate::task_frame::End::Date(m.ends), person_zone(&config));
-                    let name = fill(texts(lang).watch_name, &[("mailbox", &m.address)]);
-                    let pipeline = Pipeline::of(state);
-                    let session = pipeline.tip(&agent, "main").await;
-                    let line = crate::task_frame::ended_line(lang, crate::task_frame::Task::Routine, &name, &end);
-                    let delivery = Delivery {
-                        agent,
-                        session,
-                        key: format!("replies-end:{}", m.account),
-                        title: name,
-                        text: line,
-                        as_written: false,
-                        run_id: None,
-                        notify: false,
-                        files: Vec::new(),
-                    };
-                    pipeline.deliver(&delivery).await;
-                }
-            }
             Some(t) if !t.enabled || !may(&config, &m.agent) => {
                 if store.mails.iter().any(|x| x.account == m.account) {
                     change(&config, |s| s.mails.retain(|x| x.account != m.account));

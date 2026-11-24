@@ -436,16 +436,42 @@ fn own_tools(config: &Config, agent: &AgentConfig, offer: bool) -> Vec<Value> {
     if crate::meet::offered(config, &agent.name) {
         tools.push(crate::meet::tool()); // a date to find with a relative's household (meet.rs)
     }
-    if crate::contacts::enabled(config, &agent.name) {
-        tools.extend(crate::contacts::tools_of(config, &agent.name));
+    // Outlook's contacts written (outlook_contacts.rs, 1.1): « Ajouter et changer des contacts » on for one of its
+    // accounts, and the agent may change contacts (its address book's right)
+    let given = crate::contacts::details_given(config, &agent.name);
+    let outlook_writes = crate::outlook::contacts_write_for(config, &agent.name) && given[crate::phone_rights::WRITE];
+    let phone_contacts = crate::contacts::enabled(config, &agent.name);
+    let mut contact_tools: Vec<Value> = if phone_contacts {
+        crate::contacts::tools_of(config, &agent.name)
     } else if crate::outlook::contacts_for(config, &agent.name) {
-        // Outlook's contacts only (outlook_contacts.rs): the read tools
-        let birthdays = crate::contacts::birthdays_given(&crate::contacts::details_given(config, &agent.name));
-        tools.extend(crate::contacts::tools().into_iter().filter(|t| {
-            let name = t["name"].as_str().unwrap_or("");
-            crate::outlook_contacts::READ_TOOLS.contains(&name) && (birthdays || name != "contacts_birthdays")
-        }));
+        // Outlook's contacts only (outlook_contacts.rs): the read tools (and the writes when on)
+        let birthdays = crate::contacts::birthdays_given(&given);
+        crate::contacts::tools()
+            .into_iter()
+            .filter(|t| {
+                let name = t["name"].as_str().unwrap_or("");
+                (crate::outlook_contacts::READ_TOOLS.contains(&name) || outlook_writes)
+                    && (birthdays || name != "contacts_birthdays")
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+    if outlook_writes {
+        if phone_contacts && !contact_tools.iter().any(|t| t["name"] == "contacts_add") {
+            // the phone's address book read only for it: Outlook's writes all the same
+            contact_tools.extend(
+                crate::contacts::tools().into_iter().filter(|t| crate::outlook_contacts::WRITE_TOOLS.contains(&t["name"].as_str().unwrap_or(""))),
+            );
+        }
+        let several = crate::outlook::accounts_with(config, &agent.name, "contacts_write").len() > 1;
+        for tool in contact_tools.iter_mut().filter(|t| t["name"] == "contacts_add") {
+            if phone_contacts || several {
+                tool["inputSchema"]["properties"]["book"] = crate::outlook_contacts::book_property(phone_contacts);
+            }
+        }
     }
+    tools.extend(contact_tools);
     if crate::agent_files::offered(config, &agent.name) {
         tools.push(crate::agent_files::tool());
     }
@@ -1550,6 +1576,7 @@ async fn delete_card(state: &AppState, agent: &AgentConfig, arguments: &Dict, fa
         summary: crate::calendar::delete_sentence(&lang, &shown, &title),
         detail: format!("{when}\n{}", crate::cards::quoted(&title, 300)),
         always: None,
+        always_key: None,
     };
     match crate::person_ok::ask(state, agent, card).await {
         crate::person_ok::Answer::Once | crate::person_ok::Answer::Always => None,
@@ -1771,16 +1798,18 @@ the BipAgents app.",
         .await;
     }
     if mailbox::MAIL_TOOL_NAMES.contains(&name) {
-        let also = name == "mail_search" && crate::outlook::mail_for(&config, &agent.name);
+        let also = (name == "mail_search" && crate::outlook::mail_for(&config, &agent.name))
+            .then(|| crate::outlook_mail::also_line(&config, &agent.name, None))
+            .filter(|line| !line.is_empty());
         let mut result = blocking(move || {
             mailbox::call(&config, &agent_c.name, &name_c, &arguments_c, &mailbox::default_connect())
         })
         .await?;
-        if also {
-            // the person's Outlook mailbox too (outlook_mail.rs): named, or the agent would not know it is there
+        if let Some(also) = also {
+            // the person's Outlook mailboxes too (outlook_mail.rs): named, or the agent would not know they are there
             if let Some(Value::String(said)) = result.get_mut("content").and_then(|c| c.get_mut(0)).and_then(|c| c.get_mut("text")) {
                 said.push('\n');
-                said.push_str(&crate::outlook_mail::also_line());
+                said.push_str(&also);
             }
         }
         return Ok(result);
@@ -1845,7 +1874,7 @@ the BipAgents app.",
         if name == "calendar_list" && crate::outlook::calendar_for(&config, &agent.name) {
             // the person's Outlook calendars, read now (outlook_calendar.rs; its writes: a card first, `mcp_call`)
             if let Ok((from, to)) = crate::calendar::range(arguments, None) {
-                crate::outlook_calendar::listed(&config, &mut remote, from, to).await;
+                crate::outlook_calendar::listed(&config, &agent.name, &mut remote, from, to).await;
             }
         }
         let result =
@@ -2534,14 +2563,43 @@ async fn mcp_call(
                 }
             }
         }
-        // their Outlook mailbox (outlook_mail.rs): read, searched, drafted; tidied only after the person's card
+        // their Outlook contacts (outlook_contacts.rs, 1.1): added or changed by the person's level, else on a card
+        if let Some(mut result) = crate::outlook_contacts::write_call(&state, &agent, &name, &arguments).await {
+            wrote(&agent.name, &name, &arguments, &mut result);
+            return Ok(answer(result));
+        }
+        // their Outlook mailbox (outlook_mail.rs): read, searched, drafted; tidied by the person's level as an IMAP
+        // box's (else after their card)
         if mailbox::MAIL_TOOL_NAMES.contains(&name.as_str()) || crate::mail_tidy::TOOL_NAMES.contains(&name.as_str()) {
             let (c, a) = (state.config(), agent.name.clone());
             let boxes = tokio::task::spawn_blocking(move || mailbox::of(&c).of_agent(&a).map(|b| b.len()).unwrap_or(0))
                 .await
                 .unwrap_or(0);
             if crate::outlook_mail::takes(&state.config(), &agent.name, &name, &arguments, boxes) {
+                let cards_before = crate::card_place::waiting(&state, &agent.name);
                 let mut result = crate::outlook_mail::call(&state, &agent, &name, &arguments).await;
+                // a standing rule's card it made (outlook_rules.rs: the IMAP boxes' `bip-mailrule-`), as theirs: in this
+                // turn's conversation, let through by the person's level (`settle_new`), else pushed
+                crate::card_place::place_new(&state, &agent, &cards_before, turn_run.as_deref()).await;
+                let session =
+                    turn_run.as_deref().and_then(|r| state.hub.subscription(&agent.name, r)).and_then(|s| s.session_id());
+                let auto = crate::approval_level::settle_new(&state, &agent, &cards_before, session.as_deref()).await;
+                if !auto.is_empty() {
+                    crate::loop_brake::add_note(&mut result, &crate::approval_level::told(&auto));
+                }
+                let config = state.config();
+                for rule in crate::mail_rules::cards_of(&config, Some(&agent.name)) {
+                    let run_id = format!("{}{}", crate::mail_rules::RUN_PREFIX, rule.id);
+                    if cards_before.contains(&run_id) {
+                        continue;
+                    }
+                    let line = crate::mail_rules::item_of(&config, &rule)
+                        .get("bip_summary")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_string();
+                    state.push.notify_bridge_card(&agent.name, &line, "mail_request", &run_id).await;
+                }
                 wrote(&agent.name, &name, &arguments, &mut result);
                 return Ok(answer(result));
             }

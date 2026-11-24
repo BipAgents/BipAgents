@@ -210,6 +210,94 @@ fn no_source_for_an_agent_others_use_or_turned_off_and_outside_is_a_hook() {
     assert_eq!(trip_agent(&config).as_deref(), Some("budget"));
 }
 
+/// An agent on a model outside (or one the bridge cannot tell) is given neither the agenda's line nor the headers of
+/// the replies due (shared-memory-1.1's `outside_model::place`).
+#[test]
+fn an_agent_on_an_outside_model_gets_no_agenda_line_and_no_replies_due_headers() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut config = config_in(dir.path());
+    config.hermes.home = dir.path().join("hub").to_string_lossy().into_owned();
+    std::fs::create_dir_all(dir.path().join("hub")).unwrap();
+    std::fs::write(dir.path().join("hub/config.yaml"),
+        "model:\n  provider: custom\n  base_url: https://api.eurouter.ai/api/v1\n  default: glm-5.3\n").unwrap();
+    let coach = config.agent(Some("coach")).unwrap().clone();
+    let profile = crate::agents_admin::profile_folder(&config, &coach);
+    std::fs::create_dir_all(&profile).unwrap();
+    std::fs::write(profile.join("config.yaml"), "model:\n  provider: openai\n  default: gpt-6.1\n").unwrap();
+    assert!(!outside(&config, "vie") && may(&config, "vie"), "Vie on EUrouter");
+    assert!(outside(&config, "coach") && !may(&config, "coach"), "Coach on OpenAI");
+    // the agenda's line: Vie's told, Coach's never
+    let mut h = hint(CALENDAR, epoch(4, 15));
+    h.agent = "coach".into();
+    change(&config, |s| s.hints.push(h.clone()));
+    assert_eq!(take_note(&config, "coach", "s1"), None);
+    change(&config, |s| s.hints.push(Hint { agent: "vie".into(), key: "vie:k".into(), ..h.clone() }));
+    assert!(take_note(&config, "vie", "s1").is_some());
+    // a new e-mail of Coach's watched mailbox: its headers never kept
+    let trigger = crate::triggers::Trigger {
+        id: "t1".into(),
+        agent: "coach".into(),
+        mail: Some(crate::triggers::MailFilter { account: "acct".into(), ..Default::default() }),
+        ..Default::default()
+    };
+    assert!(!seen_mail(&config, &trigger, &mail_event("Marie Dupont <marie@example.org>", "<m1@x>", false)));
+    // no model the bridge can tell: outside too
+    std::fs::remove_file(dir.path().join("hub/config.yaml")).unwrap();
+    assert!(outside(&config, "vie") && !may(&config, "vie"));
+    assert_eq!(take_note(&config, "vie", "s1"), None);
+}
+
+/// Alex's B2 (24/11): a replies-due watch past its default end (90 days) goes on « jusqu'à ce que tu l'arrêtes », never
+/// stopped without the person; one still before its end, or off, is left as it is.
+#[test]
+fn a_replies_watch_past_its_90_days_goes_on_never_stopped_without_the_person() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = config_in(dir.path());
+    let n = now();
+    let watch = |account: &str, state: &str, ends: f64| Mailbox {
+        account: account.into(), agent: "vie".into(), address: format!("{account}@example.org"), state: state.into(),
+        trigger: Some(format!("t-{account}")), ends, ..Mailbox::default()
+    };
+    change(&config, |s| {
+        s.mailboxes.push(watch("past", ON, n - 60.0));
+        s.mailboxes.push(watch("soon", ON, n + 3.0 * 86400.0));
+        s.mailboxes.push(watch("off", OFF, n - 60.0));
+    });
+    assert_eq!(keep_past_end(&config, n), vec!["past".to_string()]);
+    let kept = load(&config).mailboxes;
+    let of = |a: &str| kept.iter().find(|m| m.account == a).cloned().unwrap();
+    assert_eq!((of("past").state.as_str(), of("past").ends), (ON, 0.0), "still watched, with no end");
+    assert_eq!(of("soon").ends, n + 3.0 * 86400.0);
+    assert_eq!(of("off").ends, n - 60.0);
+    // later: the other one past its end goes on too; the first, with no end now, is not touched again
+    assert_eq!(keep_past_end(&config, n + 4.0 * 86400.0), vec!["soon".to_string()]);
+    assert!(load(&config).mailboxes.iter().filter(|m| m.state == ON).all(|m| m.ends == 0.0));
+}
+
+/// Review B1 of plans-cards: switching a mailbox's watch off removes every replies-due watch of that mailbox, also one
+/// the store lost track of (its trigger forgotten); another mailbox's, or the person's own e-mail routine, stay.
+#[test]
+fn watch_off_removes_every_replies_watch_of_its_mailbox_even_one_the_store_forgot() {
+    use crate::triggers::{MailFilter, Trigger, MAIL, REPLIES};
+    let dir = tempfile::tempdir().unwrap();
+    let config = config_in(dir.path());
+    let watch = |id: &str, account: &str, by: &str| Trigger {
+        id: id.into(), agent: "vie".into(), kind: MAIL.into(), by: by.into(), enabled: true,
+        mail: Some(MailFilter { account: account.into(), ..Default::default() }), ..Default::default()
+    };
+    crate::triggers::change(&config, |s| {
+        s.triggers.push(watch("lost", "acct", REPLIES));
+        s.triggers.push(watch("other", "acct2", REPLIES));
+        s.triggers.push(watch("mine", "acct", "person"));
+    });
+    // the store has the mailbox on, but no trigger (the race of the consent card)
+    change(&config, |s| s.mailboxes.push(Mailbox { account: "acct".into(), agent: "vie".into(), state: ON.into(), ..Mailbox::default() }));
+    watch_off(&config, "acct", OFF);
+    let left: Vec<String> = crate::triggers::load(&config).triggers.into_iter().map(|t| t.id).collect();
+    assert_eq!(left, vec!["other".to_string(), "mine".to_string()]);
+    assert_eq!(load(&config).mailboxes[0].state, OFF);
+}
+
 fn headers(pairs: &'static [(&'static str, &'static str)]) -> impl Fn(&str) -> Option<String> {
     move |k| pairs.iter().find(|(n, _)| n.eq_ignore_ascii_case(k)).map(|(_, v)| v.to_string())
 }

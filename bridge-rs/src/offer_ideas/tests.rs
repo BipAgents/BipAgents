@@ -497,8 +497,7 @@ fn a_pass_goes_only_to_our_european_providers_or_the_persons_own_model() {
     let dir = tempfile::tempdir().unwrap();
     let config = config_in(dir.path());
     let agent = config.agent(Some("vie")).cloned().unwrap();
-    // no model readable: `outside_model::place` says Unknown, which counts as outside (« in doubt, it protects »)
-    assert!(outside_model(&config, &agent), "no model readable: Unknown, outside");
+    assert!(outside_model(&config, &agent), "no model readable: outside (« in doubt, it protects »)");
     let folder = crate::agents_admin::profile_folder(&config, &agent);
     std::fs::create_dir_all(&folder).unwrap();
     for (yaml, outside) in [("model:\n  provider: anthropic\n  default: claude\n", true),
@@ -508,6 +507,29 @@ fn a_pass_goes_only_to_our_european_providers_or_the_persons_own_model() {
         std::fs::write(folder.join("config.yaml"), yaml).unwrap();
         assert_eq!(outside_model(&config, &agent), outside, "{yaml}");
     }
+}
+
+/// An agent on a model outside makes no pass (`look` skips it: `outside_model`, now `outside_model::place`): its own
+/// profile's model, else the hub's, read at every call; the black-box side is test_smart_offers.py
+/// `…never_goes_to_a_model_outside`.
+#[test]
+fn an_agent_on_an_outside_model_makes_no_pass() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = config_in(dir.path());
+    let hub = std::path::PathBuf::from(crate::agents_admin::install_home(&config));
+    std::fs::create_dir_all(&hub).unwrap();
+    std::fs::write(hub.join("config.yaml"), "model:\n  provider: custom\n  base_url: https://api.eurouter.ai/api/v1\n  default: glm-5.3\n")
+        .unwrap();
+    let (vie, coach) = (config.agent(Some("vie")).cloned().unwrap(), config.agent(Some("coach")).cloned().unwrap());
+    assert!(!outside_model(&config, &vie) && !outside_model(&config, &coach), "both on the hub's EUrouter");
+    let folder = crate::agents_admin::profile_folder(&config, &coach);
+    std::fs::create_dir_all(&folder).unwrap();
+    std::fs::write(folder.join("config.yaml"), "model:\n  provider: openai\n  default: gpt-6.1\n").unwrap();
+    assert!(outside_model(&config, &coach) && !outside_model(&config, &vie), "Coach on OpenAI: no pass; Vie's go on");
+    // back on a European model: its passes again, at once
+    std::fs::write(folder.join("config.yaml"), "model:\n  provider: custom\n  base_url: https://api.mistral.ai/v1\n  default: m\n")
+        .unwrap();
+    assert!(!outside_model(&config, &coach));
 }
 
 #[test]

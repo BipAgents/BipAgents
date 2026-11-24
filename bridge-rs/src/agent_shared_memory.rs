@@ -1243,7 +1243,7 @@ mod tests {
             ..Default::default()
         };
         let stored = crate::connections::Stored {
-            outlook: Some(crate::outlook::Account { link, parts: Default::default() }),
+            outlook: Some(crate::outlook::Account { link, parts: Default::default(), id: 1 }),
             ..Default::default()
         };
         crate::connections::store_of(config).write(&stored).unwrap();
@@ -1273,15 +1273,15 @@ mod tests {
         assert!(!outlook::mail_for(&config, "gpt") && outlook::held(&config, "gpt") && !outlook::held(&config, "budget"));
         // its page says so (and the pop-up names Outlook), the Outlook screen too
         assert_eq!(view(&config, &gpt).unwrap()["outside"]["outlook"], json!(true));
-        let shown = outlook::view(&config, outlook::stored(&config).as_ref());
+        let shown = outlook::view(&config, &outlook::all(&config));
         assert_eq!((&shown["agents"], &shown["outside"]), (&json!(["budget"]), &json!({"gpt": "OpenAI"})));
         // the app changes what they use (gpt shown off, so left out): gpt stays chosen, still off
-        let mail_only = crate::outlook::Parts { mail: true, calendar: false, contacts: false };
-        let (shown, _) = outlook::set_agents(&config, &names(&["budget"]), Some(mail_only)).await.unwrap();
+        let mail_only = crate::outlook::PartsBody { mail: Some(true), calendar: Some(false), contacts: Some(false), contacts_write: None };
+        let (shown, _) = outlook::set_agents(&config, &names(&["budget"]), Some(mail_only), None).await.unwrap();
         assert_eq!(shown["agents"], json!(["budget"]));
         assert!(outlook::chosen(&config, "gpt") && !outlook::mail_for(&config, "gpt"));
         // « Rallumer Outlook ? » → « Rallumer »: chosen in the app, on for OpenAI
-        let (shown, changed) = outlook::set_agents(&config, &names(&["budget", "gpt"]), None).await.unwrap();
+        let (shown, changed) = outlook::set_agents(&config, &names(&["budget", "gpt"]), None, None).await.unwrap();
         assert!(outlook::mail_for(&config, "gpt") && changed.contains(&"gpt".to_string()), "{changed:?}");
         assert_eq!((&shown["agents"], &shown["outside"]), (&json!(["budget", "gpt"]), &json!({})));
         assert!(view(&config, &gpt).unwrap()["outside"].get("outlook").is_none());
@@ -1300,8 +1300,8 @@ mod tests {
         // turned back on, then taken out by the person while outside: not given back on the return
         set_model(&config, "gpt", CODEX);
         guard_full_at(&config, &gpt, 5.0);
-        outlook::set_agents(&config, &names(&["budget", "gpt"]), None).await.unwrap();
-        outlook::set_agents(&config, &names(&["budget"]), None).await.unwrap();
+        outlook::set_agents(&config, &names(&["budget", "gpt"]), None, None).await.unwrap();
+        outlook::set_agents(&config, &names(&["budget"]), None, None).await.unwrap();
         assert!(!outlook::chosen(&config, "gpt") && read(&config).outlook_ok.is_empty());
         set_model(&config, "gpt", SPARK);
         guard_full_at(&config, &gpt, 6.0);
@@ -1335,12 +1335,12 @@ mod tests {
         let gpt = config.agent(Some("gpt")).unwrap().clone();
         guard_full_at(&config, &gpt, 1.0);
         // « Rallumer Outlook ? » → « Rallumer »
-        outlook::set_agents(&config, &names(&["budget", "gpt"]), None).await.unwrap();
+        outlook::set_agents(&config, &names(&["budget", "gpt"]), None, None).await.unwrap();
         assert!(outlook::mail_for(&config, "gpt"));
         // the person disconnects Outlook
-        outlook::disconnect(&config).await.unwrap();
+        outlook::disconnect(&config, None).await.unwrap();
         // the screen before connecting again: gpt is said and asked first
-        let shown = outlook::view(&config, outlook::stored(&config).as_ref());
+        let shown = outlook::view(&config, &outlook::all(&config));
         assert_eq!(shown["outside"], json!({"gpt": "OpenAI"}), "not asked again after a disconnection: {shown}");
         assert!(read(&config).outlook_ok.is_empty(), "« Rallumer » kept after the disconnection: {:?}", read(&config).outlook_ok);
         // connected again (here: the account written back as a sign-in would) with gpt among the agents sent without

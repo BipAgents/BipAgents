@@ -1671,7 +1671,7 @@ pub fn candidates(answer: &str) -> Vec<Value> {
 // -- the model and where it is -------------------------------------------------------------------------------------------
 
 /// Whether `agent`'s model sends what it reads outside our European providers or the person's own machine
-/// (`outside_model::place`: a model it cannot tell counts as outside, « in doubt, it protects »).
+/// (`outside_model::place`, read at every call): one the bridge cannot tell counts as outside (« in doubt, it protects »).
 pub fn outside_model(config: &Config, agent: &AgentConfig) -> bool {
     !matches!(crate::outside_model::place(config, agent), crate::outside_model::Place::Own | crate::outside_model::Place::Europe)
 }
