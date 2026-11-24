@@ -5,6 +5,7 @@ site never allowed; never paying, sending, booking, deleting or sharing as the o
 and the routine its card showed. A few times a day, when something happened and the conversation is quiet, ONE call
 to the small model looks back over the day and may place one idea; a quiet day makes no pass, the place's cap holds.
 A fake Hermes and a fake model only (the bench with real models is another branch)."""
+import hashlib
 import json
 import time
 from pathlib import Path
@@ -27,8 +28,23 @@ def smart_place(bridges, fakes, **proactive):
                  proactive={"tick_seconds": 3600, **proactive})
     bridge = place(bridges, fakes, change=change)
     assert bridge.put("/v1/agents/coach/proactive", headers=AUTH, json={"level": "smart"}).json()["level"] == "smart"
-    give_token(bridge, "coach", TOKEN)
+    settle_token(bridge)
     return bridge
+
+
+def settle_token(bridge, agent="coach"):
+    """Smart changes offer_act (its free form): the bridge may register the agent's tools again in the background, with
+    a token of its own (agent_tools.rs `register_at`); once it did (or didn't, within a few seconds), the test's back."""
+    path = bridge.state_dir / "agent-tools.json"
+    ours = hashlib.sha256(TOKEN.encode()).hexdigest()
+
+    def theirs():
+        try:
+            return json.loads(path.read_text())["tokens"].get(agent) != ours
+        except (OSError, ValueError, KeyError):
+            return False
+    wait_until(theirs, timeout=8)
+    give_token(bridge, agent, TOKEN)
 
 
 def tool(bridge):
@@ -82,7 +98,7 @@ def test_only_a_smart_agent_gets_the_free_form_and_a_basic_one_is_refused_it(bri
     assert not_done(refused) and text_of(refused).startswith("Not done: kind:"), text_of(refused)
     assert offer_cards(bridge) == []
     assert bridge.put("/v1/agents/coach/proactive", headers=AUTH, json={"level": "smart"}).status_code == 200
-    give_token(bridge, "coach", TOKEN)
+    settle_token(bridge)
     smart = tool(bridge)
     props = smart["inputSchema"]["properties"]
     assert {"uses", "later", "topic", "kind"} <= set(props) and props["later"]["items"]["enum"] == CASES["later"]
@@ -179,8 +195,8 @@ def test_two_no_thanks_in_a_family_quiet_it_and_the_line_reaches_the_tool(bridge
     assert not_done(refused) and "said no thanks to your pages" in text_of(refused), text_of(refused)
     settings = bridge.get("/v1/agents/coach/settings", headers=AUTH).json()
     assert settings["proactive"]["level"] == "smart"
-    # another family goes on
-    assert done(call(bridge, "offer_act", page_offer(topic="Cadeau", uses=[{"tool": "web_search"}]), token=TOKEN))
+    # the tool's description says it once a threshold passes (3 answers): not yet, and its pages are out of the learning
+    assert "often" not in tool(bridge)["description"]
     kept = (bridge.state_dir / "offers.json").read_text()
     assert "Courses" not in kept and "Menus" not in kept
 

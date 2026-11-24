@@ -1833,6 +1833,7 @@ async fn pass(state: &AppState, config: &Config, g: &mut Gathered, now: f64, zon
     record["tokens_out"] = json!(tokens_out);
     record["eur"] = json!((eur * 1_000_000.0).round() / 1_000_000.0);
     record["local"] = json!(local);
+    record["chars"] = json!(INSTRUCTIONS.len() + user.len());
     // the pass counted (a failed call too: it may have cost), the cursors and prints moved
     let (cursors, calendar, dates) = (g.cursors.clone(), g.calendar.clone(), g.dates_print.clone());
     let name_of = agent.name.clone();

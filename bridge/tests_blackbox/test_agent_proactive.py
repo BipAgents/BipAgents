@@ -105,6 +105,8 @@ def test_stop_suggesting_turns_it_off_only_in_the_persons_own_turn(bridges, fake
     bridge, _ = own_and_project(bridges, fakes)
     give_token(bridge, "budget", TOKEN)
     assert put(bridge, "budget", {"level": "smart"}).status_code == 200
+    # smart: offer_act has its free form (offer_ideas.rs), so its tools' list changed and was registered again
+    token_back(bridge)
     # its tool, for every app version: « arrête de me proposer des choses »
     assert "proactive_off" in tool_names(bridge)
     [tool] = [t for t in rpc(bridge, "tools/list", token=TOKEN).json()["result"]["tools"] if t["name"] == "proactive_off"]
