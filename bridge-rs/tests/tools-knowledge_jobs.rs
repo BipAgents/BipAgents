@@ -1056,7 +1056,9 @@ async fn a_places_first_task_browser_needs_only_the_servers_room_and_the_second_
 /// 24/11, the server's own check (`memory_short`) for a task browser: MemAvailable read at each start knew nothing of
 /// a browser just set up, which only takes its memory at its first page. Two starts at once with 1.5 GB free both
 /// passed (two browsers: up to 1.6 GB). The browsers set up but not started yet now count, starts under way included:
-/// one goes, the other waits its turn (« memory », never refused).
+/// one goes, the other waits its turn (« memory », never refused). Finitions 1.1: the place's first browser asks 2 GB
+/// (`f5_…`), so the case is 2.5 GB free: the first goes (2 GB), the second needs 1 GB for itself and 1 GB for the
+/// first one not started yet… and 1 GB more as the place's first is still unstarted: it waits.
 #[tokio::test]
 async fn two_browsing_tasks_started_at_once_never_both_pass_the_servers_check() {
     let dir = tempfile::tempdir().unwrap();
@@ -1064,7 +1066,7 @@ async fn two_browsing_tasks_started_at_once_never_both_pass_the_servers_check() 
     let (mut config, agent) = setup(dir.path(), &url);
     agent_browser(&mut config, dir.path(), 16);
     let mut jobs = Arc::try_unwrap(board(&config, None)).ok().unwrap();
-    jobs.memory = Arc::new(|| Some(1500));
+    jobs.memory = Arc::new(|| Some(2500));
     let board = Arc::new(jobs);
     let (a, b) = tokio::join!(
         board.create(&agent, "Comparer", "Compare trois offres sur leurs sites.", 0.50, None),
@@ -1084,6 +1086,29 @@ async fn two_browsing_tasks_started_at_once_never_both_pass_the_servers_check() 
     let alone = board.create(&agent, "Comparer", "Compare trois offres.", 0.50, None).await.unwrap();
     assert_eq!(alone["state"], "running", "{alone:?}");
     board.forget(&id_of(&alone)).await.unwrap();
+}
+
+/// Finitions 1.1, point 5 (review subtasks-five A1): the place's FIRST task browser needs twice `browser_free_mb` of
+/// the server's free memory. Each place's bridge reads MemAvailable at its own minute and a browser takes its memory
+/// only at its first pages: two places starting their first browser in the same minute with 1.0–1.7 GB free both
+/// passed at 1 GB each, and the server swapped. With 2 GB asked, two such starts fit. Never refused: it waits.
+#[tokio::test]
+async fn f5_a_places_first_task_browser_needs_twice_the_free_memory() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_fake, url) = gateway(1000, 10).await;
+    let (mut config, agent) = setup(dir.path(), &url);
+    agent_browser(&mut config, dir.path(), 16);
+    assert_eq!(config.jobs.browser_free_mb, 1024);
+    let free = Arc::new(Mutex::new(Some(1700u64)));
+    let mut jobs = Arc::try_unwrap(board(&config, None)).ok().unwrap();
+    let probe = free.clone();
+    jobs.memory = Arc::new(move || *probe.lock().unwrap());
+    let board = Arc::new(jobs);
+    let job = board.create(&agent, "Comparer", "Compare trois offres sur leurs sites.", 0.50, None).await.unwrap();
+    assert_eq!((job["state"].as_str(), job["reason"].as_str()), (Some("paused"), Some("memory")), "1.7 GB: {job:?}");
+    *free.lock().unwrap() = Some(2048);
+    assert_eq!(board.resume_after_memory().await, 1, "2 GB free: the first browser goes");
+    board.forget(&id_of(&job)).await.unwrap();
 }
 
 /// 24/11, « une tâche ne doit jamais attendre sans fin » (Alex): a task waiting for room (« memory », « space ») is
