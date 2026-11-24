@@ -549,8 +549,8 @@ pub fn given_for(scopes: &str, parts: Parts) -> bool {
 
 /// A sign-in under way, by its state (drives' `Flow` has no room for them): the parts it asks, the account it
 /// reconnects (None: a new one, or the same address signed in again).
-static ASKED: std::sync::LazyLock<Mutex<HashMap<String, (std::time::Instant, Parts, Option<AccountId>)>>> =
-    std::sync::LazyLock::new(Default::default);
+type Asked = (std::time::Instant, Parts, Option<AccountId>);
+static ASKED: std::sync::LazyLock<Mutex<HashMap<String, Asked>>> = std::sync::LazyLock::new(Default::default);
 
 /// A sign-in for `agents` (the same on iPhone and Android: Microsoft's web sign-in, back to the app's address),
 /// asking the rights of `parts` (none given: those kept for `account`, else the first account's, else the default
