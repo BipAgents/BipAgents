@@ -291,6 +291,10 @@ pub struct Stored {
     /// Drive's clients, and the agents that may use it (`Link.agents`). Same file and key.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub google_calendar: Option<crate::drives::Link>,
+    /// « Outlook » (outlook.rs): the Microsoft account's mail, calendar and contacts, its own sign-in with OneDrive's
+    /// Microsoft client, the agents that may use them and what of it they use. Same file and key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outlook: Option<crate::outlook::Account>,
 }
 
 /// The encrypted file (Fernet, as mailbox.rs) and its key.

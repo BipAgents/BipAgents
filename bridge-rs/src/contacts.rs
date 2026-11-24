@@ -150,6 +150,22 @@ pub fn tools_of(config: &Config, agent: &str) -> Vec<Value> {
         .collect()
 }
 
+/// The details `agent` may see of anyone's contacts (its rights on the address book, phone_rights.rs; all of them
+/// when the person set none): Outlook's contacts follow them too (outlook_contacts.rs, review R8).
+pub fn details_given(config: &Config, agent: &str) -> BTreeMap<&'static str, bool> {
+    rights::of(&read(config), agent, &rights::CONTACTS)
+}
+
+/// [`without`] for another module's contacts (Outlook's).
+pub fn without_details(contact: Value, given: &BTreeMap<&'static str, bool>) -> Value {
+    without(contact, given)
+}
+
+/// Whether `given` lets the agent see birthdays.
+pub fn birthdays_given(given: &BTreeMap<&'static str, bool>) -> bool {
+    given.get(BIRTHDAYS) != Some(&false)
+}
+
 /// A contact without the details `given` leaves out (an agent's rights, or what some agent here reads).
 fn without(mut contact: Value, given: &BTreeMap<&'static str, bool>) -> Value {
     if let Some(map) = contact.as_object_mut() {
@@ -399,7 +415,6 @@ BipAgents app.",
     // so they are neither shown nor searched in.
     let given = rights::of(&data, agent, &rights::CONTACTS);
     let groups = list_of(&data, "groups");
-    let group_title = |id: &str| groups.iter().rev().find(|g| text(g, "id") == id).map(|g| text(g, "title"));
     // A group's id from its name (or its id).
     let group_id = |wanted: &str| -> Option<String> {
         let wanted = folded(wanted);
@@ -408,133 +423,15 @@ BipAgents app.",
     let contacts: Vec<Value> = list_of(&data, "contacts").into_iter().map(|c| without(c, &given)).collect();
     let arg = |k: &str| tk::strip(&tk::str_or_empty(arguments.get(k))).to_string();
     let since = crate::phone_copy::freshness(&data, now, age).unwrap_or_else(|| "the phone hasn't shared it yet".to_string());
-    // The contacts of the group asked for (all without one). Err: no such group.
-    let in_group = |wanted: &str| -> Result<Vec<&Value>, String> {
-        if wanted.is_empty() {
-            return Ok(contacts.iter().collect());
-        }
-        let Some(id) = group_id(wanted) else {
-            let names: Vec<String> = groups.iter().map(|g| text(g, "title")).collect();
-            return Err(if names.is_empty() {
-                "no group shared (the person shares their address book without groups)".to_string()
-            } else {
-                format!("no such group; the groups: {}", names.join(", "))
-            });
-        };
-        Ok(contacts.iter().filter(|c| items(c, "groups").iter().any(|g| g.as_str() == Some(id.as_str()))).collect())
-    };
     match name {
-        "contacts_search" => {
-            let query = arg("query");
-            let rows = match in_group(&arg("group")) {
-                Ok(rows) => rows,
-                Err(why) => return Ok(tool_text(&why, true)),
-            };
-            if query.is_empty() && arg("group").is_empty() {
-                return Ok(tool_text("a query is needed (a name, an e-mail, a phone number…)", true));
-            }
-            let wanted = folded(&query);
-            let digits = phone_key(&query);
-            let found: Vec<&&Value> = rows
-                .iter()
-                .filter(|c| {
-                    let words = ["name", "nickname", "organization", "job"]
-                        .iter()
-                        .any(|k| folded(&text(c, k)).contains(&wanted));
-                    let mail = items(c, "emails").iter().any(|e| folded(&text(e, "value")).contains(&wanted));
-                    let phone = digits.len() >= 4
-                        && items(c, "phones").iter().any(|p| phone_key(&text(p, "value")).contains(&digits));
-                    words || mail || phone
-                })
-                .collect();
-            if found.is_empty() {
-                return Ok(tool_text(&format!("No contact matches ({since})."), false));
-            }
-            let lines: Vec<String> = found.iter().take(MAX_FOUND).map(|c| shown(c, &group_title)).collect();
-            let more = if found.len() > MAX_FOUND {
-                format!("\n({} more: ask more precisely)", found.len() - MAX_FOUND)
-            } else {
-                String::new()
-            };
-            Ok(tool_text(&format!("{} found, {since}:\n{}{more}", found.len(), lines.join("\n")), false))
-        }
         "contacts_birthdays" if !given[BIRTHDAYS] => {
             Ok(crate::tool_answers::lifted_in_the_app(tool_text(&rights::refused("see their contacts' birthdays"), true)))
         }
         "contacts_add" | "contacts_update" if !given[WRITE] => {
             Ok(crate::tool_answers::lifted_in_the_app(tool_text(&rights::refused("add or change their contacts"), true)))
         }
-        "contacts_birthdays" => {
-            let days = match arguments.get("days").map(|v| py::py_float(v).map(|d| d as i64)) {
-                None | Some(Ok(0)) => DEFAULT_DAYS,
-                Some(Ok(d)) if (1..=366).contains(&d) => d,
-                _ => return Ok(tool_text("days: from 1 to 366", true)),
-            };
-            let rows = match in_group(&arg("group")) {
-                Ok(rows) => rows,
-                Err(why) => return Ok(tool_text(&why, true)),
-            };
-            let today = today(now);
-            let last = today + Duration::days(days);
-            let mut coming: Vec<(NaiveDate, String)> = rows
-                .iter()
-                .filter_map(|c| {
-                    let (year, month, day) = birthday(&text(c, "birthday"))?;
-                    let on = next_birthday(today, month, day).filter(|d| *d <= last)?;
-                    let when = match (on - today).num_days() {
-                        0 => "today".to_string(),
-                        1 => "tomorrow".to_string(),
-                        n => format!("in {n} days"),
-                    };
-                    let turns = year.map(|y| format!(" · turns {}", on.year() - y)).unwrap_or_default();
-                    Some((on, format!("- {on} ({when}) · {}{turns} · id {}", text(c, "name"), text(c, "id"))))
-                })
-                .collect();
-            coming.sort();
-            if coming.is_empty() {
-                return Ok(tool_text(&format!("No birthday in the next {days} days ({since})."), false));
-            }
-            let lines: Vec<String> = coming.into_iter().map(|(_, line)| line).collect();
-            Ok(tool_text(&format!("The next {days} days, {since}:\n{}", lines.join("\n")), false))
-        }
-        "contacts_list_group" => {
-            let wanted = arg("group");
-            if wanted.is_empty() {
-                if groups.is_empty() {
-                    return Ok(tool_text(&format!("No group shared; {} contacts ({since}).", contacts.len()), false));
-                }
-                let lines: Vec<String> = groups
-                    .iter()
-                    .map(|g| {
-                        let id = text(g, "id");
-                        let size = contacts
-                            .iter()
-                            .filter(|c| items(c, "groups").iter().any(|x| x.as_str() == Some(id.as_str())))
-                            .count();
-                        format!("- {} ({size})", text(g, "title"))
-                    })
-                    .collect();
-                return Ok(tool_text(
-                    &format!("The groups, {since} ({} contacts in all):\n{}", contacts.len(), lines.join("\n")),
-                    false,
-                ));
-            }
-            let rows = match in_group(&wanted) {
-                Ok(rows) => rows,
-                Err(why) => return Ok(tool_text(&why, true)),
-            };
-            if rows.is_empty() {
-                return Ok(tool_text(&format!("Nobody in « {wanted} » ({since})."), false));
-            }
-            let mut rows = rows;
-            rows.sort_by_key(|c| folded(&text(c, "name")));
-            let lines: Vec<String> = rows.iter().take(MAX_LISTED).map(|c| short(c)).collect();
-            let more =
-                if rows.len() > MAX_LISTED { format!("\n({} more)", rows.len() - MAX_LISTED) } else { String::new() };
-            Ok(tool_text(
-                &format!("« {wanted} », {} contacts, {since}:\n{}{more}", rows.len(), lines.join("\n")),
-                false,
-            ))
+        "contacts_search" | "contacts_birthdays" | "contacts_list_group" => {
+            Ok(read_answer(name, arguments, &groups, &contacts, &since, now))
         }
         "contacts_add" | "contacts_update" => {
             let mut args = Dict::new();
@@ -626,6 +523,146 @@ phone has done it and shared the address book again.",
         _ => Ok(tool_text(&format!("unknown tool: {name}"), true)),
     }
 }
+
+/// The read tools' answers (`contacts_search`, `contacts_birthdays`, `contacts_list_group`) on `groups` and
+/// `contacts` in the phone copy's shape: the phone's, or Outlook's (outlook_contacts.rs). `since`: how fresh they are.
+pub fn read_answer(name: &str, arguments: &Dict, groups: &[Value], contacts: &[Value], since: &str, now: f64) -> Dict {
+    let group_title = |id: &str| groups.iter().rev().find(|g| text(g, "id") == id).map(|g| text(g, "title"));
+    // A group's id from its name (or its id).
+    let group_id = |wanted: &str| -> Option<String> {
+        let wanted = folded(wanted);
+        groups.iter().find(|g| folded(&text(g, "title")) == wanted || text(g, "id") == wanted).map(|g| text(g, "id"))
+    };
+    let arg = |k: &str| tk::strip(&tk::str_or_empty(arguments.get(k))).to_string();
+    // The contacts of the group asked for (all without one). Err: no such group.
+    let in_group = |wanted: &str| -> Result<Vec<&Value>, String> {
+        if wanted.is_empty() {
+            return Ok(contacts.iter().collect());
+        }
+        let Some(id) = group_id(wanted) else {
+            let names: Vec<String> = groups.iter().map(|g| text(g, "title")).collect();
+            return Err(if names.is_empty() {
+                "no group shared (the person shares their address book without groups)".to_string()
+            } else {
+                format!("no such group; the groups: {}", names.join(", "))
+            });
+        };
+        Ok(contacts.iter().filter(|c| items(c, "groups").iter().any(|g| g.as_str() == Some(id.as_str()))).collect())
+    };
+    let answer = || -> anyhow::Result<Dict> {
+        match name {
+        "contacts_search" => {
+            let query = arg("query");
+            let rows = match in_group(&arg("group")) {
+                Ok(rows) => rows,
+                Err(why) => return Ok(tool_text(&why, true)),
+            };
+            if query.is_empty() && arg("group").is_empty() {
+                return Ok(tool_text("a query is needed (a name, an e-mail, a phone number…)", true));
+            }
+            let wanted = folded(&query);
+            let digits = phone_key(&query);
+            let found: Vec<&&Value> = rows
+                .iter()
+                .filter(|c| {
+                    let words = ["name", "nickname", "organization", "job"]
+                        .iter()
+                        .any(|k| folded(&text(c, k)).contains(&wanted));
+                    let mail = items(c, "emails").iter().any(|e| folded(&text(e, "value")).contains(&wanted));
+                    let phone = digits.len() >= 4
+                        && items(c, "phones").iter().any(|p| phone_key(&text(p, "value")).contains(&digits));
+                    words || mail || phone
+                })
+                .collect();
+            if found.is_empty() {
+                return Ok(tool_text(&format!("No contact matches ({since})."), false));
+            }
+            let lines: Vec<String> = found.iter().take(MAX_FOUND).map(|c| shown(c, &group_title)).collect();
+            let more = if found.len() > MAX_FOUND {
+                format!("\n({} more: ask more precisely)", found.len() - MAX_FOUND)
+            } else {
+                String::new()
+            };
+            Ok(tool_text(&format!("{} found, {since}:\n{}{more}", found.len(), lines.join("\n")), false))
+        }
+        "contacts_birthdays" => {
+            let days = match arguments.get("days").map(|v| py::py_float(v).map(|d| d as i64)) {
+                None | Some(Ok(0)) => DEFAULT_DAYS,
+                Some(Ok(d)) if (1..=366).contains(&d) => d,
+                _ => return Ok(tool_text("days: from 1 to 366", true)),
+            };
+            let rows = match in_group(&arg("group")) {
+                Ok(rows) => rows,
+                Err(why) => return Ok(tool_text(&why, true)),
+            };
+            let today = today(now);
+            let last = today + Duration::days(days);
+            let mut coming: Vec<(NaiveDate, String)> = rows
+                .iter()
+                .filter_map(|c| {
+                    let (year, month, day) = birthday(&text(c, "birthday"))?;
+                    let on = next_birthday(today, month, day).filter(|d| *d <= last)?;
+                    let when = match (on - today).num_days() {
+                        0 => "today".to_string(),
+                        1 => "tomorrow".to_string(),
+                        n => format!("in {n} days"),
+                    };
+                    let turns = year.map(|y| format!(" · turns {}", on.year() - y)).unwrap_or_default();
+                    Some((on, format!("- {on} ({when}) · {}{turns} · id {}", text(c, "name"), text(c, "id"))))
+                })
+                .collect();
+            coming.sort();
+            if coming.is_empty() {
+                return Ok(tool_text(&format!("No birthday in the next {days} days ({since})."), false));
+            }
+            let lines: Vec<String> = coming.into_iter().map(|(_, line)| line).collect();
+            Ok(tool_text(&format!("The next {days} days, {since}:\n{}", lines.join("\n")), false))
+        }
+        "contacts_list_group" => {
+            let wanted = arg("group");
+            if wanted.is_empty() {
+                if groups.is_empty() {
+                    return Ok(tool_text(&format!("No group shared; {} contacts ({since}).", contacts.len()), false));
+                }
+                let lines: Vec<String> = groups
+                    .iter()
+                    .map(|g| {
+                        let id = text(g, "id");
+                        let size = contacts
+                            .iter()
+                            .filter(|c| items(c, "groups").iter().any(|x| x.as_str() == Some(id.as_str())))
+                            .count();
+                        format!("- {} ({size})", text(g, "title"))
+                    })
+                    .collect();
+                return Ok(tool_text(
+                    &format!("The groups, {since} ({} contacts in all):\n{}", contacts.len(), lines.join("\n")),
+                    false,
+                ));
+            }
+            let rows = match in_group(&wanted) {
+                Ok(rows) => rows,
+                Err(why) => return Ok(tool_text(&why, true)),
+            };
+            if rows.is_empty() {
+                return Ok(tool_text(&format!("Nobody in « {wanted} » ({since})."), false));
+            }
+            let mut rows = rows;
+            rows.sort_by_key(|c| folded(&text(c, "name")));
+            let lines: Vec<String> = rows.iter().take(MAX_LISTED).map(|c| short(c)).collect();
+            let more =
+                if rows.len() > MAX_LISTED { format!("\n({} more)", rows.len() - MAX_LISTED) } else { String::new() };
+            Ok(tool_text(
+                &format!("« {wanted} », {} contacts, {since}:\n{}{more}", rows.len(), lines.join("\n")),
+                false,
+            ))
+        }
+            _ => Ok(tool_text(&format!("unknown tool: {name}"), true)),
+        }
+    };
+    answer().unwrap_or_else(|e| tool_text(&e.to_string(), true))
+}
+
 
 /// What a request queued for the phone answers (the phone is woken when it starts so).
 pub const ASKED: &str =

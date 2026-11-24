@@ -761,12 +761,14 @@ pub struct Link {
     pub carnet: bool,
 }
 
-/// Which connection kept in the store: a drive, or the Google calendar (google_calendar.rs: the same Google clients,
-/// its own grant and tokens, `Stored.google_calendar`).
+/// Which connection kept in the store: a drive, the Google calendar (google_calendar.rs: the same Google clients,
+/// its own grant and tokens, `Stored.google_calendar`) or Outlook (outlook.rs: OneDrive's Microsoft client, its own
+/// tokens, `Stored.outlook`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Slot {
     Drive(Provider),
     Calendar,
+    Outlook,
 }
 
 impl Slot {
@@ -774,6 +776,7 @@ impl Slot {
         match self {
             Slot::Drive(provider) => provider,
             Slot::Calendar => Provider::Google,
+            Slot::Outlook => Provider::Microsoft,
         }
     }
 
@@ -781,6 +784,7 @@ impl Slot {
         match self {
             Slot::Drive(provider) => stored.drives.get(provider.id()),
             Slot::Calendar => stored.google_calendar.as_ref(),
+            Slot::Outlook => stored.outlook.as_ref().map(|a| &a.link),
         }
     }
 
@@ -788,6 +792,7 @@ impl Slot {
         match self {
             Slot::Drive(provider) => stored.drives.get_mut(provider.id()),
             Slot::Calendar => stored.google_calendar.as_mut(),
+            Slot::Outlook => stored.outlook.as_mut().map(|a| &mut a.link),
         }
     }
 
@@ -795,6 +800,7 @@ impl Slot {
         match self {
             Slot::Drive(provider) => provider.id(),
             Slot::Calendar => "google_calendar",
+            Slot::Outlook => "outlook",
         }
     }
 
@@ -804,7 +810,7 @@ impl Slot {
         let other = match self {
             Slot::Drive(Provider::Google) => Slot::Calendar,
             Slot::Calendar => Slot::Drive(Provider::Google),
-            Slot::Drive(_) => return false,
+            Slot::Drive(_) | Slot::Outlook => return false,
         };
         other.link(stored).is_some_and(|l| l.client == client)
     }
@@ -1077,10 +1083,15 @@ pub fn wants_write(config: &Config, provider: Provider) -> bool {
 }
 
 /// The sign-in `state` started, if it is one of `calendar`'s kind (a drive's, or the Google calendar's): the other
-/// kind's stays for its own callback.
+/// kinds' (Outlook's too) stay for their own callback.
 pub(crate) fn take_flow(state: &str, calendar: bool) -> Option<Flow> {
+    take_flow_of(state, |slot| if calendar { slot == Slot::Calendar } else { matches!(slot, Slot::Drive(_)) })
+}
+
+/// The sign-in `state` started, if its slot is one `ours` takes (outlook.rs: `Slot::Outlook` only).
+pub(crate) fn take_flow_of(state: &str, ours: impl Fn(Slot) -> bool) -> Option<Flow> {
     let mut flows = FLOWS.lock().unwrap_or_else(|e| e.into_inner());
-    if flows.get(state).is_some_and(|f| (f.slot == Slot::Calendar) != calendar) {
+    if flows.get(state).is_some_and(|f| !ours(f.slot)) {
         return None;
     }
     flows.remove(state).filter(|f| f.started.elapsed().as_secs() < FLOW_SECONDS)
@@ -1225,6 +1236,7 @@ async fn renew(config: &Config, slot: Slot, refused: Option<&str>) -> Result<Str
     let _guard = connections::LOCK.lock().await;
     let store = connections::store_of(config);
     let mut stored = store.read().map_err(|e| Fault::Other(e.to_string()))?;
+    let outlook_scope = (slot == Slot::Outlook).then(|| crate::outlook::renewal_scope(&stored));
     let link = slot.link_mut(&mut stored).ok_or(Fault::Other("not connected".into()))?;
     if link.state != "connected" {
         return Err(Fault::Expired);
@@ -1243,7 +1255,11 @@ async fn renew(config: &Config, slot: Slot, refused: Option<&str>) -> Result<Str
         let _ = store.write(&stored);
         return Err(Fault::Expired);
     };
-    let form = vec![("grant_type", "refresh_token".to_string()), ("refresh_token", refresh)];
+    let mut form = vec![("grant_type", "refresh_token".to_string()), ("refresh_token", refresh)];
+    if let Some(scope) = outlook_scope {
+        // the renewal asks the rights its agents use (Microsoft: those of the sign-in or fewer, never more)
+        form.push(("scope", scope));
+    }
     match ep.token_call(&http(), form).await {
         Ok(answer) => {
             link.tokens = connections::tokens_of(&answer, Some(&link.tokens));

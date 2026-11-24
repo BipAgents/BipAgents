@@ -423,7 +423,7 @@ pub fn offers_always(key: &str) -> bool {
     ALWAYS_KINDS.contains(&kind)
         && (!rule.critical || rule.own_always)
         && match service {
-            Some(s) => kind == "service_write" && SERVICE.is_match(s),
+            Some(s) => (kind == "service_write" && SERVICE.is_match(s)) || key == crate::person_ok::CALENDAR_WRITE_OUTLOOK,
             None => kind != "service_write",
         }
 }
@@ -513,6 +513,15 @@ fn always_words(key: &str) -> Option<[String; 4]> {
         return None;
     }
     let s = |a: &str, b: &str, c: &str, d: &str| Some([a, b, c, d].map(str::to_string));
+    if key == crate::person_ok::CALENDAR_WRITE_OUTLOOK {
+        // Alex 23/11 (outlook_calendar.rs: its adds and changes)
+        return s(
+            "modifier ton agenda Outlook",
+            "change your Outlook calendar",
+            "deinen Outlook-Kalender ändern",
+            "modificar tu calendario de Outlook",
+        );
+    }
     match key.split_once(':') {
         Some((_, service)) => {
             let n = capitalized(&service.replace(['_', '-'], " "));
@@ -956,11 +965,22 @@ pub async fn settle_card(state: &AppState, agent: &AgentConfig, run_id: &str) ->
     approve_item(state, agent, &item, None).await
 }
 
+/// Whether the level (or a « Toujours ») may answer this card in the person's place after another call (`settle_new`,
+/// `settle_card`). Never a card of person_ok.rs (`bip-ok-`, review of outlook B1, 23/11): it holds its own call, and
+/// its module looked at the level and the « Toujours » before making it (drives_write.rs, obsidian.rs,
+/// google_calendar.rs, outlook_*.rs); only the person's own answer settles it, whatever its kind.
+pub fn settled_by_level(item: &Dict) -> bool {
+    !item.get("run_id").and_then(Value::as_str).unwrap_or("").starts_with(crate::person_ok::RUN_PREFIX)
+}
+
 /// One card answered as the person's « Oui » would, when not critical: logged in the history, `taken` (no turn resumed
 /// for it: the caller tells the agent). Its sentence; None: critical, or not answered.
 async fn approve_item(state: &AppState, agent: &AgentConfig, item: &Dict, session: Option<&str>) -> Option<String> {
     let config = state.config();
     let run_id = item.get("run_id").and_then(Value::as_str).unwrap_or("").to_string();
+    if !settled_by_level(item) {
+        return None;
+    }
     let kind = classify_card(item);
     if !auto_for(&config, &agent.name, kind) {
         return None;
