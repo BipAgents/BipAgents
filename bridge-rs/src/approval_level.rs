@@ -139,6 +139,7 @@ pub const TABLE: &[Rule] = &[
     rule("site_send", true, false, "bip-site- (the proxy's cut, or the agent's sandbox_sites_request)", "Alex 11/11 (was not critical since 6/11; security audit PI-7, BV-9): data sent to a site never validated for that agent; one tool call would have opened an attacker-named host for unlimited sending, no push, no undo; reading sites never asks"),
     rule("routine_way", true, false, "bip-rout- (with bip_routine)", "Alex 11/11 (audit PI-6, was not critical since 6/11): a routine its agent made starts only with this answer, then runs unattended with all its tools"),
     rule("plan", true, false, "bip-plan-", "Alex 22/11 (§3.4): a plan the agent proposed on its own; « Prévoir » sets its moments (routines that run unattended) and what it watches (an e-mail trigger)"),
+    rule("offer", true, false, "bip-offer- (not calendar)", "Alex 22/11 (§3.4): an offer to act the agent made on its own; « Oui » starts a paid turn (a search, drafts, a page, a basket) or the bridge's own work; else « Seulement le critique » would accept them all"),
     rule("task_fix", true, false, "bip-fix-", "Alex 22/11 (§4, Q8 A): « Réparer » a routine or a watcher that keeps failing starts a paid turn of its agent; « Garder » keeps one running 3 months more"),
     rule("routine_change", true, false, "bip-rout- (no bip_routine)", "the agent proposes new words or a new time for a routine, or wants it back on: it then runs unattended with all its tools (PI-6, 11/11)"),
     rule("phone_exit", true, false, "bip-exit-", "uses the person's phone and home connection"),
@@ -187,6 +188,9 @@ pub fn classify_card(item: &Dict) -> &'static str {
     }
     if run.starts_with(crate::person_ok::RUN_PREFIX) {
         return crate::person_ok::kind_of(item); // a form to a new site, an event deleted (person_ok.rs)
+    }
+    if run.starts_with(crate::plans::offers::RUN_PREFIX) {
+        return crate::plans::offers::kind_of(item); // an offer (critical); a calendar one is the write's own card
     }
     if run.starts_with(crate::routines::RUN_PREFIX) && item.get("bip_routine").is_none() {
         return "routine_change"; // an agent's proposal for a routine (routines.rs): asked at every level
@@ -608,7 +612,8 @@ fn marked(config: &Config, agent: &str, summary: &str) -> String {
 /// (its `Card.always`: a Google Calendar card offers it for its primary calendar only).
 pub fn with_always(config: &Config, mut item: Dict) -> Dict {
     let run = item.get("run_id").and_then(Value::as_str).unwrap_or("");
-    if run.starts_with(crate::person_ok::RUN_PREFIX) {
+    // an offer's card: answered each time, never « Toujours » (plans/offers.rs; review of offers, R2)
+    if run.starts_with(crate::person_ok::RUN_PREFIX) || run.starts_with(crate::plans::offers::RUN_PREFIX) {
         return item;
     }
     // a held Hermes approval (held_approvals.rs) as Hermes' own would be; the bridge's cards by their kind

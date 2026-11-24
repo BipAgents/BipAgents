@@ -1565,11 +1565,15 @@ pub async fn fire_via(state: &AppState, id: &str, via: Via) {
     });
     let pipeline = Pipeline::of(state);
     if let Some(words) = r.say.as_deref().filter(|w| !w.trim().is_empty()) {
-        // a plan's moment (plans.rs): its words as written, where its plan's card showed, no turn of the model
-        let status = say(state, &pipeline, &agent, &r, words, now).await;
-        tracing::info!(target: "bipbridge::routines", agent = %agent.name, routine = %r.id, status, "plan moment said");
+        // a plan's moment (plans.rs): its words as written, where its plan's card showed, no turn of the model; one
+        // that offers: its card (plans/offers.rs), no turn either
+        let status = match crate::plans::offers::at_moment(state, &agent, &r).await {
+            Some(placed) => placed,
+            None => say(state, &pipeline, &agent, &r, words, now).await.to_string(),
+        };
+        tracing::info!(target: "bipbridge::routines", agent = %agent.name, routine = %r.id, status = %status, "plan moment said");
         let _ = update(&config, id, |x| {
-            x.last_status = status.into();
+            x.last_status = status.clone();
             Ok(())
         });
         return;

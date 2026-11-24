@@ -120,6 +120,13 @@ pub struct Moment {
     /// A route, found and timed at « Prévoir » (its `at` the arrival until then: review 2, R9).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub leg: Option<Leg>,
+    /// A moment that offers instead of saying (plans/offers.rs): its offer as the agent gave it, checked; at its time
+    /// the bridge places its card, no model.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub offer: Option<Value>,
+    /// Its routine, once set (« Prévoir »).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub routine: Option<String>,
 }
 
 /// A route moment waiting for « Prévoir » to be found and timed (review 2, R9: nothing goes to a geocoder or a router
@@ -300,6 +307,8 @@ pub struct Texts {
     pub weekends: &'static str,
     pub around: &'static str,
     pub weeks: (&'static str, &'static str),
+    /// Before a plan's offers (§7.2, validated): its « i » says each one whole.
+    pub offers: &'static str,
 }
 
 pub static TEXTS: [Texts; 4] = [
@@ -328,6 +337,7 @@ pub static TEXTS: [Texts; 4] = [
         weekends: "Le week-end",
         around: "vers",
         weeks: ("semaine", "semaines"),
+        offers: "Je peux aussi :",
     },
     Texts {
         lang: "en",
@@ -354,6 +364,7 @@ pub static TEXTS: [Texts; 4] = [
         weekends: "Weekends",
         around: "around",
         weeks: ("week", "weeks"),
+        offers: "I can also:",
     },
     Texts {
         lang: "de",
@@ -380,6 +391,7 @@ pub static TEXTS: [Texts; 4] = [
         weekends: "Am Wochenende",
         around: "gegen",
         weeks: ("Woche", "Wochen"),
+        offers: "Ich kann auch:",
     },
     Texts {
         lang: "es",
@@ -406,6 +418,7 @@ pub static TEXTS: [Texts; 4] = [
         weekends: "Los fines de semana",
         around: "hacia",
         weeks: ("semana", "semanas"),
+        offers: "También puedo:",
     },
 ];
 
@@ -713,11 +726,31 @@ pub fn draft(arguments: &Dict, agent: &str, person: Tz, routines: Tz, now: f64) 
                 urgent: true,
                 route: true,
                 leg: None,
+                offer: None,
+                routine: None,
             });
             continue;
         }
         let what = plain(item.get("what"), &format!("moment {}: what", i + 1), WHAT_MAX)?;
-        let mut say = plain(item.get("say"), &format!("moment {}: say", i + 1), SAY_MAX)?;
+        // a moment that offers says nothing: a line to tell, a card to decide (plans/offers.rs)
+        let offer = item.get("offer").filter(|o| !o.is_null()).cloned();
+        if let Some(o) = &offer {
+            if habit || !o.is_object() {
+                return Err(format!("moment {}: offer: an object {{kind, label, prompt | params}}, never for a habit", i + 1));
+            }
+            if item.get("say").is_some_and(|v| !v.is_null()) || item.get("link").is_some_and(|v| !v.is_null()) {
+                return Err(format!(
+                    "moment {}: offer: a moment that offers says nothing: give `what` and `offer`, no `say` nor \
+                     `link` (a line to tell, a card to decide)",
+                    i + 1
+                ));
+            }
+        }
+        let mut say = if offer.is_some() {
+            String::new()
+        } else {
+            plain(item.get("say"), &format!("moment {}: say", i + 1), SAY_MAX)?
+        };
         let link = text_arg(item.get("link"));
         if !link.is_empty() {
             if !link.starts_with("https://") || link.contains(char::is_whitespace) || link.len() > 300 {
@@ -742,7 +775,18 @@ pub fn draft(arguments: &Dict, agent: &str, person: Tz, routines: Tz, now: f64) 
         if urgent && habit {
             return Err("moment 1: urgent: never for a habit (every day at the phone's urgent level)".into());
         }
-        moments.push(Moment { id, at, zone: moment_zone.name().to_string(), what, say, urgent, route: false, leg: None });
+        moments.push(Moment {
+            id,
+            at,
+            zone: moment_zone.name().to_string(),
+            what,
+            say,
+            urgent,
+            route: false,
+            leg: None,
+            offer,
+            routine: None,
+        });
     }
     if moments.iter().filter(|m| m.urgent).count() > URGENT_MAX {
         return Err(format!(
@@ -1008,8 +1052,9 @@ fn moment_views(config: &Config, plan: &Plan, lang: &str) -> Vec<Value> {
                 Some(_) => before_text(lang, m.at, zone_of(&m.zone), person, &plan.city),
                 None => when_text(lang, m.at, zone_of(&m.zone), person, &plan.city),
             });
+            let offer = m.offer.as_ref().map(|o| json!({"kind": o.get("kind"), "label": o.get("label"), "prompt": o.get("prompt")}));
             json!({"id": m.id, "at": m.at, "zone": m.zone, "when_text": when, "what": m.what, "say": m.say,
-                   "urgent": m.urgent, "route": m.route, "pending": m.leg.is_some()})
+                   "urgent": m.urgent, "route": m.route, "pending": m.leg.is_some(), "offer": offer})
         })
         .collect()
 }
@@ -1026,10 +1071,18 @@ pub fn card_item(config: &Config, plan: &Plan) -> Dict {
         .iter()
         .map(|m| {
             let s = |k: &str| m[k].as_str().unwrap_or("").to_string();
-            format!("{} — {} : {}", s("when_text"), s("what"), s("say"))
+            // a moment that offers: its question and what will be asked (its card comes at its time: review, remark)
+            let said = match (m["offer"]["label"].as_str(), m["offer"]["prompt"].as_str()) {
+                (Some(label), Some(prompt)) => format!("{label} — {prompt}"),
+                (Some(label), None) => label.to_string(),
+                _ => s("say"),
+            };
+            format!("{} — {} : {said}", s("when_text"), s("what"))
         })
         .collect();
     detail.extend(watch.clone());
+    // its offers shown on its card, each whole (design §3.1; review, remark)
+    detail.extend(offers::pill_lines(config, &plan.id, lang));
     detail.push(t.under_i.to_string());
     if plan.first {
         detail.push(t.first_card.to_string());
@@ -1040,7 +1093,7 @@ pub fn card_item(config: &Config, plan: &Plan) -> Dict {
         "created_at": plan.made, "session_id": null, "bip_summary": sentence, "bip_detail": detail.join("\n"),
         "bip_plan": {"id": plan.id, "kind": plan.kind, "title": plan.title, "agent": shown, "moments": moments,
                      "rhythm_text": plan.repeat.as_ref().map(|r| rhythm_text(lang, r)), "watch_text": watch,
-                     "offers": []},
+                     "offers": offers::pills_of(config, &plan.id)},
     });
     item.as_object().cloned().unwrap_or_default()
 }
@@ -1058,7 +1111,34 @@ pub fn pending_items(config: &Config, agent: Option<&str>) -> Vec<Dict> {
 
 // -- the tool -----------------------------------------------------------------------------------------------------------
 
+/// `plan_propose` without offers.
 pub fn tool() -> Value {
+    tool_with(&[])
+}
+
+/// `plan_propose`, its offers of `kinds` (what offer_act lists for this agent, plans/offers.rs `kinds_for`): on its
+/// card (`offers`) and at a moment (a moment's `offer`); none: neither.
+pub fn tool_with(kinds: &[&str]) -> Value {
+    let mut tool = plan_tool();
+    if kinds.is_empty() {
+        return tool;
+    }
+    let line = format!(
+        " You can also offer to do things, of these kinds only: {} (as offer_act's): up to 2 `offers` shown at once on \
+the card (« Je regarde les hôtels ? »), or a moment that offers at its time instead of saying (`offer`, no `say`).",
+        kinds.join(", ")
+    );
+    if let Some(Value::String(d)) = tool.get_mut("description") {
+        d.push_str(&line);
+    }
+    let props = &mut tool["inputSchema"]["properties"];
+    props["offers"] = json!({"type": "array", "maxItems": offers::PER_REPLY,
+                             "items": offers::plan_schema(kinds, offers::PILL_MAX)});
+    props["moments"]["items"]["properties"]["offer"] = offers::plan_schema(kinds, offers::LABEL_MAX);
+    tool
+}
+
+fn plan_tool() -> Value {
     json!({
         "name": TOOL_NAME,
         "description": "Propose a plan to your person, on ONE card they answer « Prévoir » (set it up) or « Non merci »: \
@@ -1111,10 +1191,12 @@ their sender's domain: you'll see only their sender, subject and date",
 pub struct Called {
     pub result: Dict,
     pub card: Option<(String, String)>,
+    /// The offers made with it, shown on its card (plans/offers.rs): their ids.
+    pub offers: Vec<String>,
 }
 
 fn refusal(text: &str) -> Called {
-    Called { result: tool_text(text, true), card: None }
+    Called { result: tool_text(text, true), card: None, offers: Vec::new() }
 }
 
 /// A place found by the geocoder (map_image's), coordinates only.
@@ -1324,6 +1406,23 @@ pub async fn call(state: &AppState, agent: &AgentConfig, arguments: &Dict, asked
     if let Err(why) = resolve_routes(state, &config, &mut draft, lang) {
         return refusal(&format!("Not done: {why}. Nothing was made."));
     }
+    // its offers (plans/offers.rs): only the kinds offer_act lists for this agent; a wrong one refuses the plan
+    let kinds = offers::kinds_for(&config, agent);
+    let specs = arguments.get("offers").and_then(Value::as_array).cloned().unwrap_or_default();
+    let mut pills = match offers::plan_offers(&specs, &agent.name, &draft.plan.title, &kinds, person, now) {
+        Ok(p) => p,
+        Err(why) => return refusal(&format!("{why} Nothing was made.")),
+    };
+    for (i, m) in draft.plan.moments.iter().enumerate() {
+        let Some(spec) = &m.offer else { continue };
+        if let Err(why) = offers::spec_of(spec, &agent.name, &draft.plan.title, &kinds, person, now, offers::LABEL_MAX) {
+            let why = why.strip_prefix("Not done: ").unwrap_or(&why).to_string();
+            return refusal(&format!("Not done: moment {}: offer: {why} Nothing was made.", i + 1));
+        }
+    }
+    if let Err(why) = offers::make_pills(state, agent, &mut pills, asked, run, person, now) {
+        return refusal(&format!("{why} Nothing was made."));
+    }
     let mut notes = Vec::new();
     let mut plan = draft.plan;
     if let Some(event) = plan.event.clone() {
@@ -1363,9 +1462,16 @@ pub async fn call(state: &AppState, agent: &AgentConfig, arguments: &Dict, asked
         }
     }
     plan.asked = asked;
+    // unasked: its offers' cards count with the plans' (one waiting, the day's caps)
+    let offered = offers::load(&config);
     let made = change(&config, |store| {
         if let Some(why) = refused(store, &plan, run, person, now) {
             return Err(why);
+        }
+        if !asked {
+            if let Some(why) = offers::unasked_refusal(&offered, store, &plan.agent, person, now) {
+                return Err(why);
+            }
         }
         plan.first = !store.hinted.contains(&plan.agent);
         if plan.first {
@@ -1392,8 +1498,16 @@ pub async fn call(state: &AppState, agent: &AgentConfig, arguments: &Dict, asked
         text.push(' ');
         text.push_str(&note);
     }
+    let pills = offers::keep_pills(&config, &pills, &plan.id, asked, run, now);
+    if !pills.is_empty() {
+        text.push_str(&format!(
+            " Its card shows your {} offer{} too: done only if your person taps it.",
+            pills.len(),
+            if pills.len() == 1 { "" } else { "s" }
+        ));
+    }
     let line = notification(lang, &plan.title);
-    Called { result: tool_text(&text, false), card: Some((line, plan.id)) }
+    Called { result: tool_text(&text, false), card: Some((line, plan.id)), offers: pills }
 }
 
 // -- the answer ---------------------------------------------------------------------------------------------------------
@@ -1465,17 +1579,20 @@ pub fn answer(config: &Config, agent: &str, id: &str, yes: bool, skip: &[String]
         if !yes {
             let plan = store.plans.remove(at);
             store.declined.push(Print { agent: plan.agent.clone(), print: print_of(&plan.agent, &plan.title), at: now });
-            return Some(None);
+            return Some(Some(plan));
         }
         let plan = &mut store.plans[at];
         plan.state = SET.into();
         plan.origin = origin.to_string();
         Some(Some(plan.clone()))
     })?;
-    let Some(plan) = taken else {
+    let plan = taken?;
+    if !yes {
+        // its offers shown on its card go with it (plans/offers.rs)
+        offers::withdraw_plan(config, &plan.id);
         tracing::info!(target: "bipbridge::plans", agent, plan = id, "plan declined");
         return Some(Answer::Declined);
-    };
+    }
     let (made, kept, passed) = set_up(config, &plan, skip, now);
     let of = plan.moments.len();
     let ends = match &plan.repeat {
@@ -1487,6 +1604,11 @@ pub fn answer(config: &Config, agent: &str, id: &str, yes: bool, skip: &[String]
             p.routines = made.0.clone();
             p.trigger = made.1.clone();
             p.ends = ends;
+            for (moment, routine) in &made.2 {
+                if let Some(m) = p.moments.iter_mut().find(|m| &m.id == moment) {
+                    m.routine = Some(routine.clone());
+                }
+            }
         }
     });
     let watch = (!plan.watch.is_empty()).then_some(made.1.is_some());
@@ -1494,10 +1616,14 @@ pub fn answer(config: &Config, agent: &str, id: &str, yes: bool, skip: &[String]
     Some(Answer::Set { kept, of, passed, watch })
 }
 
+/// The routines, the trigger and the moments that offer (their moment and routine ids) of a plan set up.
+type SetUp = (Vec<String>, Option<String>, Vec<(String, String)>);
+
 /// « Prévoir »: each moment kept a routine (a habit, its routines on a clock), the watch its trigger. ((routines,
-/// trigger), kept, passed)
-fn set_up(config: &Config, plan: &Plan, skip: &[String], now: f64) -> ((Vec<String>, Option<String>), usize, usize) {
+/// trigger, moments that offer), kept, passed)
+fn set_up(config: &Config, plan: &Plan, skip: &[String], now: f64) -> (SetUp, usize, usize) {
     let mut routines = Vec::new();
+    let mut offered = Vec::new();
     let (mut kept, mut passed) = (0, 0);
     let origin = Some(plan.origin.as_str()).filter(|o| !o.is_empty());
     for m in &plan.moments {
@@ -1529,23 +1655,29 @@ fn set_up(config: &Config, plan: &Plan, skip: &[String], now: f64) -> ((Vec<Stri
             passed += 1;
             continue;
         }
+        // a moment that offers: its routine carries its line on the card, its card placed at its time
+        // (plans/offers.rs `at_moment`), never a turn
+        let words = if m.offer.is_some() { &m.what } else { &m.say };
         let made = crate::routines::create_said(
             config,
             &plan.agent,
             &name,
             crate::routines::Schedule::Once { at: m.at },
-            &m.say,
+            words,
             m.urgent,
             &plan.id,
             origin,
             Some(1),
             now,
         );
+        if m.offer.is_some() {
+            offered.push((m.id.clone(), made.id.clone()));
+        }
         routines.push(made.id);
         kept += 1;
     }
     let trigger = (!plan.watch.is_empty()).then(|| watch_trigger(config, plan)).flatten();
-    ((routines, trigger), kept, passed)
+    ((routines, trigger, offered), kept, passed)
 }
 
 /// The senders' e-mails watched: an e-mail trigger on their domains, on at once (the person said « Prévoir »).
@@ -1578,8 +1710,10 @@ fn watch_trigger(config: &Config, plan: &Plan) -> Option<String> {
     }
 }
 
-/// A plan gone: its routines and its trigger with it.
+/// A plan gone, however (its event cancelled, its end, « Initiative » off): its routines, its trigger and its offers
+/// still waiting with it (review R5), counted for nothing.
 fn remove(config: &Config, plan: &Plan) {
+    offers::withdraw_plan(config, &plan.id);
     for id in &plan.routines {
         crate::routines::delete(config, id);
     }
@@ -1798,8 +1932,13 @@ pub async fn watch(state: AppState) {
     loop {
         tokio::time::sleep(Duration::from_secs(TICK_SECONDS)).await;
         tick(&state).await;
+        // the offers' end: expired, or their agent turned off (plans/offers.rs)
+        offers::tick(&state).await;
     }
 }
+
+/// Offers to act (`offer_act`, the `bip-offer-` card; plans/offers.rs).
+pub mod offers;
 
 #[cfg(test)]
 mod tests;

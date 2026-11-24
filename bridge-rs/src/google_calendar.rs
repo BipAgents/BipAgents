@@ -1191,6 +1191,26 @@ pub async fn write_call(state: &AppState, agent: &AgentConfig, name: &str, argum
     }
 }
 
+/// An event the person accepted on an offer's card (plans/offers.rs: that card was this write's, it showed the event
+/// exactly), added to the primary calendar as `event` says (calendar.rs `new_event`'s fields), no other card. Err: why
+/// not, in a few words for the log.
+pub async fn add_accepted(config: &Config, event: &Dict) -> Result<(), String> {
+    let api = signed_in(config).await.map_err(|f| words(&f))?;
+    let account = stored(config).and_then(|l| l.account);
+    let found = calendars(config, &api, account.as_deref()).await.map_err(|f| words(&f))?;
+    let calendar = found.iter().find(|c| c.is_primary()).cloned().unwrap_or_else(|| Calendar::primary(account.as_deref()));
+    if !calendar.writable {
+        return Err("its primary calendar is read only".into());
+    }
+    let planned =
+        plan(config, &api, "calendar_add", event, &calendar).await.map_err(|_| "not taken as given".to_string())?;
+    let done = apply(config, &api, &planned).await;
+    match done.get("isError").and_then(Value::as_bool) {
+        Some(false) => Ok(()),
+        _ => Err("Google Calendar refused it".into()),
+    }
+}
+
 // -- routes ------------------------------------------------------------------------------------------------------------
 
 #[derive(Debug, Deserialize)]
