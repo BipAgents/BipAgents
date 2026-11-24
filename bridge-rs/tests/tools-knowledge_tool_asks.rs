@@ -16,6 +16,12 @@ const TOKEN: &str = "agent-token-for-wellness-0123456789";
 fn app(dir: &std::path::Path, backend: &FakeBackend, on: bool, wait: f64) -> TestApp {
     let mut data = config_dict(dir, &backend.urls());
     data["tools"] = json!({"ask_in_conversation": on, "wait_seconds": wait});
+    // the install's model: the person's own, in the test's folder (never the machine's ~/.hermes: a model there the
+    // bridge reads as outside keeps the Carnet and Santé off the cards, agent_shared_memory.rs)
+    let hub = dir.join("hub");
+    std::fs::create_dir_all(&hub).unwrap();
+    std::fs::write(hub.join("config.yaml"), "model:\n  provider: lmstudio\n").unwrap();
+    data["hermes"]["home"] = json!(hub.to_string_lossy());
     // a second agent of the person's, for « Aussi pour… »
     let mut paul = data["agents"]["Wellness"].clone();
     paul["display_name"] = json!("Paul");

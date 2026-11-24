@@ -93,6 +93,10 @@ pub mod voices;
 pub mod agent_groups;
 pub mod agent_notify;
 pub mod agent_proactive;
+/// « Mémoire partagée » per agent, off by default on an outside model (no Python counterpart).
+pub mod agent_shared_memory;
+/// Whether an agent's model is outside our European providers and the person's own (no Python counterpart).
+pub mod outside_model;
 pub mod msg_queue;
 pub mod agent_feed;
 pub mod agent_shares;

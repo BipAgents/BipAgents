@@ -643,6 +643,8 @@ async fn set_aside(State(state): State<AppState>, JsonObject(body): JsonObject) 
     let (agent, on) = (text(&body, "agent"), flag(&body, "on")?);
     let world = World::of(&state.config(), false);
     own_agent(&world, &agent)?;
+    // the person's own choice from now on (an outside model's default no longer brings it back: agent_shared_memory.rs)
+    crate::agent_shared_memory::person_set(&state.config(), &agent, crate::agent_shared_memory::LINKS);
     // what the households are told changes (rules.rs `Wire`: yours left out of `all`)
     let told: Vec<String> = world.linked.iter().cloned().collect();
     let now = py::time_time();

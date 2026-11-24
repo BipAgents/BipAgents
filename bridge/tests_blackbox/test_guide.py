@@ -22,7 +22,7 @@ def place(bridges, fakes, agents=("agent",)):
         folder = profile(home, name)
         (folder / "SOUL.md").write_text(f"Tu es {name.title()}, l'agent du quotidien de ton utilisateur.\n")
         (folder / "profile.yaml").write_text("description: Le quotidien\n")
-        (folder / "config.yaml").write_text("model:\n  provider: custom\n")
+        (folder / "config.yaml").write_text("model:\n  provider: lmstudio\n")   # the person's own (custom without its address: outside)
     bridge.start()
     wait_registered(bridge, agents)
     return bridge, home

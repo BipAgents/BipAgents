@@ -23,6 +23,9 @@ fn with_agent(dir: &std::path::Path) -> (Config, std::path::PathBuf) {
         json!({"display_name": "Coach", "hermes_url": "http://127.0.0.1:8642/p/coach", "hermes_key": "k"});
     let folder = dir.join(".hermes/profiles/coach");
     std::fs::create_dir_all(&folder).unwrap();
+    // the install's model: the person's own (a model the bridge cannot tell is protected as outside:
+    // agent_shared_memory.rs)
+    std::fs::write(dir.join(".hermes/config.yaml"), "model:\n  provider: lmstudio\n").unwrap();
     std::fs::write(folder.join("SOUL.md"), souls::with_language("Tu es Coach.\n", Some("fr"))).unwrap();
     // Its Hermes already holds the tools' entry with its token (kept when the entry changes).
     std::fs::write(
