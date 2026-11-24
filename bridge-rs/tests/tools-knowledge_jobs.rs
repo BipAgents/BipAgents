@@ -684,7 +684,8 @@ fn hinted(board: Arc<Jobs>, hints: &Hinted) -> Arc<Jobs> {
     Arc::new(jobs)
 }
 
-/// Sub-tasks (Alex 19/11): one agent runs up to three tasks at once (the install's three too), the fourth refused.
+/// Sub-tasks (Alex 19/11; five since 24/11): one agent runs up to five tasks at once (the install's five too), the
+/// sixth refused.
 #[tokio::test]
 async fn several_tasks_of_one_agent_run_at_once() {
     let dir = tempfile::tempdir().unwrap();
@@ -692,14 +693,14 @@ async fn several_tasks_of_one_agent_run_at_once() {
     let (config, agent) = setup(dir.path(), &url);
     let board = board(&config, None);
     let mut ids = Vec::new();
-    for title in ["Mails", "Assurances", "Vacances"] {
+    for title in ["Mails", "Assurances", "Vacances", "Impôts", "Garage"] {
         let job = board.create(&agent, title, "Fais-le en entier.", 0.50, None).await.unwrap();
         assert_eq!(job["state"], "running", "{title}");
         ids.push(id_of(&job));
     }
-    let fourth = board.create(&agent, "Encore", "Encore une.", 0.50, None).await.unwrap_err();
-    assert!(fourth.to_string().contains("three background tasks"), "{fourth}");
-    assert_eq!(jobs::AGENT_RUNNING_MAX, 3);
+    let sixth = board.create(&agent, "Encore", "Encore une.", 0.50, None).await.unwrap_err();
+    assert!(sixth.to_string().contains("five background tasks"), "{sixth}");
+    assert_eq!((jobs::AGENT_RUNNING_MAX, jobs::RUNNING_MAX), (5, 5));
     for id in ids {
         board.forget(&id).await.unwrap();
     }
@@ -751,7 +752,7 @@ async fn starts_at_once_never_pass_the_agent_s_cap() {
     let (_fake, url) = gateway(1000, 10).await;
     let (config, agent) = setup(dir.path(), &url);
     let board = board(&config, None);
-    let starts = (0..5).map(|n| {
+    let starts = (0..jobs::AGENT_RUNNING_MAX + 2).map(|n| {
         let (board, agent) = (board.clone(), agent.clone());
         async move { board.create(&agent, &format!("Tâche {n}"), "Fais-le en entier.", 0.50, None).await }
     });

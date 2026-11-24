@@ -74,12 +74,16 @@ use crate::{py, Dict};
 pub const POLL_SECONDS: f64 = 10.0;
 /// A run going on longer is paused: the person resumes it if it was worth it.
 pub const MAX_STEP_SECONDS: f64 = 3.0 * 3600.0;
-/// Tasks running at once on this install (one per agent).
-pub const RUNNING_MAX: usize = 3;
-/// Tasks of one agent running at once (sub-tasks, Alex 19/11: « 2 petits Bips travaillent pour Vie »). The install's
-/// `RUNNING_MAX` stays 3: each task is a run of the agent's Hermes beside the person's conversations, measured at about
-/// 320 MB a person on a VPS-2 (2026-10-19) and gated by heavy_work's room; one agent may take all three.
-pub const AGENT_RUNNING_MAX: usize = 3;
+/// Tasks running at once on this install (a person's), all agents together; more wait their turn.
+/// Five since 24/11 (three before), measured on the build server with a real Hermes 0.23.1 and a fake model: a task
+/// without a browser is a run in the agent's Hermes, 2–5 MB more each once it is warm (five at once: +12 MB); a task
+/// with a browser of its own is 0.45–0.75 GB (its container on a heavy page) and ~60 MB beside it (podman exec,
+/// pasta, conmon). Memory is not this count's job: such a browser starts only when it fits (`memory_short`,
+/// heavy_work.rs `browser_fits`), otherwise its task waits (never refused).
+pub const RUNNING_MAX: usize = 5;
+/// Tasks of one agent running at once (sub-tasks, Alex 19/11: « 2 petits Bips travaillent pour Vie »); one agent may
+/// take all five of the install's `RUNNING_MAX`.
+pub const AGENT_RUNNING_MAX: usize = 5;
 /// Seconds between two « step » hints of one agent's tasks (the others go at once).
 pub const HINT_STEP_GAP: f64 = 60.0;
 /// A finished task stays new on the home this long at most (an app that never says « seen », Android, an older iPhone).
@@ -903,7 +907,7 @@ impl Jobs {
             .collect();
         let mine = running.iter().filter(|j| agent_of(j) == agent).count() + reserved.get(agent).copied().unwrap_or(0);
         if mine >= AGENT_RUNNING_MAX {
-            return Err(JobError("this agent already has three background tasks running".into()));
+            return Err(JobError("this agent already has five background tasks running".into()));
         }
         if running.len() + reserved.values().sum::<usize>() >= RUNNING_MAX {
             return Err(JobError("enough background tasks are running here for now".into()));
@@ -1892,7 +1896,7 @@ instead (they start it with one tap) and tell them so in one plain sentence.",
         Some(Some(euros)) => euros.max(0.01),
     };
     // only the person starts tasks, or the agent in their turn: a background task never starts its siblings (review
-    // 1, 19/11: three at once per agent now); it proposes them, the person starts them
+    // 1, 19/11: several at once per agent now); it proposes them, the person starts them
     if from_background(jobs, agent, START_TASK) {
         return Ok(tool_text(
             "Not started: you are working in a background task, which never starts other tasks itself. Propose it with \
