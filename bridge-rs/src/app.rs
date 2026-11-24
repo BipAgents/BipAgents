@@ -146,7 +146,7 @@ impl Services {
                 ..Default::default()
             },
         ));
-        let hermes = HermesClient::new(http.clone());
+        let hermes = HermesClient::of_place(http.clone(), shared.clone());
         let briefs = Arc::new(Briefs::new(&py::join(&data_dir, "briefs"), hermes.clone(), shared.clone()));
         // when each routine last ran (sleep.rs: a place with routines stays up)
         let routines_config = shared.clone();

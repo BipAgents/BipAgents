@@ -545,9 +545,10 @@ pub fn head(text: &str, n: usize) -> String {
 
 /// A turn's `model_options` with Hermes' `session_search` closed for an agent the shared-memory protection covers
 /// (agent_shared_memory.rs `search_closed`, review 2 B2-b: it would read the earlier conversations back word for
-/// word); the others' options as they are.
-pub fn with_closed_search(agent: &str, options: Option<Value>) -> Option<Value> {
-    if !crate::agent_shared_memory::search_closed(agent) {
+/// word), read from the place's files as the turn starts (review 3: a restart forgets nothing); the others' options
+/// as they are.
+pub fn with_closed_search(config: &crate::config::Config, agent: &AgentConfig, options: Option<Value>) -> Option<Value> {
+    if !crate::agent_shared_memory::search_closed(config, agent) {
         return options;
     }
     let mut options = match options {
@@ -567,11 +568,26 @@ pub fn with_closed_search(agent: &str, options: Option<Value>) -> Option<Value> 
 #[derive(Clone)]
 pub struct HermesClient {
     pub client: reqwest::Client,
+    /// The place's configuration, read as each turn starts (`with_closed_search`); None: a client of the tests.
+    config: Option<crate::config::SharedConfig>,
 }
 
 impl HermesClient {
     pub fn new(client: reqwest::Client) -> Self {
-        HermesClient { client }
+        HermesClient { client, config: None }
+    }
+
+    /// The bridge's client: its turns read the place's configuration as they start (`with_closed_search`).
+    pub fn of_place(client: reqwest::Client, config: crate::config::SharedConfig) -> Self {
+        HermesClient { client, config: Some(config) }
+    }
+
+    /// A turn's `model_options` as Hermes gets them ([`with_closed_search`]).
+    pub(crate) fn turn_options(&self, agent: &AgentConfig, options: Option<Value>) -> Option<Value> {
+        match &self.config {
+            Some(config) => with_closed_search(&config.get(), agent, options),
+            None => options,
+        }
     }
 
     fn headers(agent: &AgentConfig, accept: &str) -> reqwest::header::HeaderMap {
@@ -897,6 +913,9 @@ impl HermesClient {
         for (k, v) in extra.unwrap_or_default() {
             body.insert(k, v);
         }
+        if let Some(options) = self.turn_options(agent, body.remove("model_options")) {
+            body.insert("model_options".into(), options);
+        }
         let data = self
             .send(
                 agent,
@@ -915,6 +934,12 @@ impl HermesClient {
     pub async fn chat_stream(&self, agent: &AgentConfig, session_id: &str, body: Value) -> Result<reqwest::Response, HermesError> {
         turn_ready(agent).await;
         ready(agent).await;
+        let mut body = body;
+        if let Some(map) = body.as_object_mut() {
+            if let Some(options) = self.turn_options(agent, map.remove("model_options")) {
+                map.insert("model_options".into(), options);
+            }
+        }
         let url = format!("{}/api/sessions/{session_id}/chat/stream", agent.hermes_url);
         let resp = self.client.post(url).headers(Self::headers(agent, "text/event-stream")).json(&body).send().await?;
         let status = resp.status().as_u16();
@@ -991,7 +1016,7 @@ impl HermesClient {
         if let Some(tools) = guest_tools {
             body.insert("guest_turn".into(), guest_turn(tools));
         }
-        if let Some(options) = with_closed_search(&agent.name, model_options) {
+        if let Some(options) = self.turn_options(agent, model_options) {
             body.insert("model_options".into(), options);
         }
         body.insert("input".into(), input);

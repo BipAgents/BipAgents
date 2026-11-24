@@ -35,7 +35,7 @@
 //!
 //! The log says « shared memory on → off · agent X », nothing else. No Python counterpart.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
@@ -237,19 +237,8 @@ pub fn set(config: &Config, agent: &str, on: bool) -> std::io::Result<bool> {
         tracing::info!(target: "bipbridge::agents", "shared memory {} → {} · agent {agent}",
             if on { "off" } else { "on" }, if on { "on" } else { "off" });
     }
-    if let Some(one) = config.agent(Some(agent)) {
-        note_search(config, one);
-    }
     Ok(changed)
 }
-
-/// Review 2, B2-b: the agents whose turns close Hermes' `session_search` ([`protected`]: its shared memory off, a model
-/// outside or that the bridge cannot tell). The tool reads the agent's earlier conversations word for word (the
-/// « Nouvelles du Carnet » joined to the person's words, its answers that said what the others know): a conversation
-/// that « starts afresh » would otherwise read them back. Closed per turn (hermes.rs `start_run_body`, patch 0024
-/// `closed_tools`), as during a relative's turn; open again once the shared memory is back on. Kept here, read at each
-/// turn: noted at each guard (every message, every round) and at each change of the switch.
-static SEARCH_CLOSED: Mutex<BTreeSet<String>> = Mutex::new(BTreeSet::new());
 
 /// Review 2, C8: an agent « à l'écart » (rules.rs `aside`: the outside-model protection puts it there, the person may
 /// too) is out of the discussions between agents as well, until the person turns its links back on: no turn there
@@ -262,19 +251,15 @@ pub fn out_of_rooms(config: &Config, agent: &str) -> bool {
 /// Hermes' tool that reads the agent's earlier conversations.
 pub const SESSION_SEARCH: &str = "session_search";
 
-pub fn note_search(config: &Config, agent: &AgentConfig) {
-    let closed = protected(config, agent);
-    let mut set = SEARCH_CLOSED.lock().unwrap_or_else(|e| e.into_inner());
-    if closed {
-        set.insert(agent.name.clone());
-    } else {
-        set.remove(&agent.name);
-    }
-}
-
-/// Whether `agent`'s turns close [`SESSION_SEARCH`] now.
-pub fn search_closed(agent: &str) -> bool {
-    SEARCH_CLOSED.lock().unwrap_or_else(|e| e.into_inner()).contains(agent)
+/// Review 2, B2-b: whether `agent`'s turns close Hermes' [`SESSION_SEARCH`] ([`protected`]: its shared memory off, a
+/// model outside or that the bridge cannot tell). The tool reads the agent's earlier conversations word for word (the
+/// « Nouvelles du Carnet » joined to the person's words, its answers that said what the others know): a conversation
+/// that « starts afresh » would otherwise read them back. Closed per turn (hermes.rs `start_run_body`, a Live call's
+/// turns, patch 0024 `closed_tools`), as during a relative's turn; open again once the shared memory is back on.
+/// Review 3: read from the disk as each turn starts, never from a list kept in memory (empty after a restart, until a
+/// guard had run).
+pub fn search_closed(config: &Config, agent: &AgentConfig) -> bool {
+    protected(config, agent)
 }
 
 /// The person changed one of `agent`'s switches the protection had turned off ([`NOTEBOOK`], [`HEALTH`], [`LINKS`]):
@@ -340,9 +325,7 @@ pub fn guard_at(config: &Config, agent: &AgentConfig, now: f64) -> Changed {
 
 /// The defaults for where `agent`'s model runs now (outside_model::place), and what changed.
 pub fn guard_full_at(config: &Config, agent: &AgentConfig, now: f64) -> Guard {
-    let guard = guard_place(config, agent, crate::outside_model::place(config, agent), now);
-    note_search(config, agent);
-    guard
+    guard_place(config, agent, crate::outside_model::place(config, agent), now)
 }
 
 /// [`guard_full_at`] for a provider the agent is about to use (review R2: the protection is in place before the model
@@ -676,6 +659,16 @@ pub async fn fresh_tip(
     let begun = threads.begun_before(&agent.name, &since).await.ok()?;
     let thread = begun.iter().find(|t| t.id == thread.id)?;
     make_fresh(hermes, threads, agent, thread, &since).await
+}
+
+/// Review 3, B2-a: whether `session` is the session of a conversation its agent's shared memory went off after (the
+/// agent marked `fresh`, the conversation not moved yet, as [`fresh_tip`] reads it): a turn the bridge goes on with
+/// there (runs.rs: a restart for new words, the brake's rescue, a promise's continuation) would replay what it was
+/// given before. A hidden conversation is never moved.
+pub async fn left_behind(config: &Config, threads: &crate::threads::Threads, agent: &AgentConfig, session: &str) -> bool {
+    let Some(since) = read(config).fresh.get(&agent.name).cloned() else { return false };
+    let Some(thread) = threads.thread_of(agent, session).await.filter(|t| !t.hidden) else { return false };
+    threads.begun_before(&agent.name, &since).await.is_ok_and(|begun| begun.iter().any(|t| t.id == thread.id))
 }
 
 /// A new Hermes session for `thread`, linked as its tip (titled with the conversation's title and when).
@@ -1108,7 +1101,6 @@ mod tests {
     /// its shared memory off), open again once it is back; the other options of a turn stay as they are.
     #[test]
     fn session_search_is_closed_while_the_protection_holds() {
-        // its own agent: the list is the process's, other tests guard theirs at the same time
         let (dir, mut config) = place();
         let space = dir.path().join("spaces/searcher");
         std::fs::create_dir_all(space.join("profiles/searcher/memories")).unwrap();
@@ -1120,24 +1112,25 @@ mod tests {
         let gpt = config.agent(Some("searcher")).unwrap().clone();
         set_model(&config, "searcher", CODEX);
         guard_full_at(&config, &gpt, 1.0);
-        assert!(search_closed("searcher"));
-        let options = crate::hermes::with_closed_search("searcher", Some(json!({"closed_tools": ["browser_*"], "reasoning": {"effort": "low"}})));
+        assert!(search_closed(&config, &gpt));
+        let options = crate::hermes::with_closed_search(&config, &gpt, Some(json!({"closed_tools": ["browser_*"], "reasoning": {"effort": "low"}})));
         assert_eq!(options, Some(json!({"closed_tools": ["browser_*", "session_search"], "reasoning": {"effort": "low"}})));
-        assert_eq!(crate::hermes::with_closed_search("searcher", None), Some(json!({"closed_tools": ["session_search"]})));
+        assert_eq!(crate::hermes::with_closed_search(&config, &gpt, None), Some(json!({"closed_tools": ["session_search"]})));
         set_model(&config, "searcher", SPARK);
         guard_full_at(&config, &gpt, 2.0);
-        assert!(!search_closed("searcher"), "back on the Spark, shared memory given back: open again");
+        assert!(!search_closed(&config, &gpt), "back on the Spark, shared memory given back: open again");
         set(&config, "searcher", false).unwrap();
-        assert!(search_closed("searcher"), "the person turned it off: closed");
+        assert!(search_closed(&config, &gpt), "the person turned it off: closed");
         set(&config, "searcher", true).unwrap();
-        assert!(!search_closed("searcher"));
-        assert_eq!(crate::hermes::with_closed_search("searcher", None), None);
+        assert!(!search_closed(&config, &gpt));
+        assert_eq!(crate::hermes::with_closed_search(&config, &gpt, None), None);
     }
 
-    /// Review 3 (red), B2-b: `session_search` is closed from a list kept in memory only ([`SEARCH_CLOSED`]), filled by
-    /// a guard (the send, the routes, the round: the first one 20 s after the start). After a restart (every update),
-    /// an agent protected on the disk gets it open in the turns the bridge starts before then: a card answered across
-    /// the restart (card_place.rs resumes it at once), a queued message, a room, a routine, a report handed back.
+    /// Review 3, B2-b: `session_search` was closed from a list kept in memory only, filled by a guard (the send, the
+    /// routes, the round: the first one 20 s after the start). After a restart (every update), an agent protected on
+    /// the disk got it open in the turns the bridge starts before then: a card answered across the restart
+    /// (card_place.rs resumes it at once), a queued message, a room, a routine, a report handed back. Now read from
+    /// the disk as each turn starts.
     #[test]
     fn review3_session_search_is_closed_after_a_restart_too() {
         let (dir, mut config) = place();
@@ -1152,14 +1145,16 @@ mod tests {
         set_model(&config, "restarted", CODEX);
         guard_full_at(&config, &gpt, 1.0);
         assert!(protected(&config, &gpt));
-        // the bridge restarts: the process's list starts empty, what is on the disk stays
-        SEARCH_CLOSED.lock().unwrap_or_else(|e| e.into_inner()).remove("restarted");
+        // the bridge restarts: nothing of the guard kept in memory, what is on the disk stays
         assert!(protected(&config, &gpt), "still protected after the restart");
         assert_eq!(
-            crate::hermes::with_closed_search("restarted", None),
+            crate::hermes::with_closed_search(&config, &gpt, None),
             Some(json!({"closed_tools": ["session_search"]})),
             "a turn started before the first guard reads the old conversations"
         );
+        // the bridge's own client (app.rs, agent_pairs.rs) reads the place as each turn starts
+        let client = crate::hermes::HermesClient::of_place(reqwest::Client::new(), crate::config::SharedConfig::new(config.clone()));
+        assert_eq!(client.turn_options(&gpt, None), Some(json!({"closed_tools": ["session_search"]})));
     }
 
     /// Review 2, C10: an agent on the person's own model whose fallback goes outside is named « (OpenRouter, en

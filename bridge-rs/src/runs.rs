@@ -2350,6 +2350,16 @@ more steps in this turn. Don't repeat what failed: change approach.", crate::loo
         st.restart.take()
     }
 
+    /// Review 3, B2-a: `session` left behind by its agent's shared memory going off (agent_shared_memory.rs
+    /// `left_behind`): no turn of the bridge's goes on there. The restart's words wait in line (the queue starts them
+    /// in the new session); no rescue, no continuation.
+    async fn left_behind(&self, agent: &AgentConfig, session: &str) -> bool {
+        let (Some(shared), Some(threads)) = (self.config.as_ref(), crate::threads::upgrade(&self.threads)) else {
+            return false;
+        };
+        crate::agent_shared_memory::left_behind(&shared.get(), &threads, agent, session).await
+    }
+
     /// A run stopped for the person's new words (`interrupt`) ended: the same conversation's next turn starts at once
     /// with them, told its answer was cut (`turn_restart::NOTE`; only the next message when the run ended by itself
     /// meanwhile). Like the brake's rescue turn, its events go on in this run's stream after a `loop_rescue_started`
@@ -2376,58 +2386,65 @@ more steps in this turn. Don't repeat what failed: change approach.", crate::loo
             a.client_id == b.client_id && a.said == b.said
         };
         let mut attempt = 0u64;
+        let behind = self.left_behind(&agent, &session).await;
         let (next, plan) = loop {
             let Some(plan) = current() else {
                 tracing::info!(agent = %agent.name, run_id = %sub.run_id, "restart: stopped by the person, nothing starts");
                 return terminal;
             };
-            let started = self
-                .hermes
-                .start_run_input(&agent, plan.input(cut), &session, plan.instructions.as_deref(), plan.options.clone())
-                .await;
-            let refused = match started {
-                Ok(id) if crate::app::RUN_ID.is_match(&id) => {
-                    // the plan done and the new run the conversation's, at once (no message falls between them), unless
-                    // the plan was withdrawn (Stop) or replaced (words after a Stop) while it started
-                    let now = {
-                        let mut inner = lock(&self.inner);
-                        let mut st = lock(&sub.state);
-                        match st.restart.clone() {
-                            Some(now) if same(&now, &plan) => {
-                                st.restart = None;
-                                st.restarted_as = Some(id.clone());
-                                drop(st);
-                                let restarted = self.get_or_start(&mut inner, &agent, &id);
-                                let mut st = lock(&restarted.state);
-                                st.kept = true;
-                                st.watched = watched;
-                                st.end_push = false; // this run's end tells it
-                                st.session_id = Some(session.clone());
-                                st.phone = plan.phone.clone().or(phone.clone());
-                                st.followed_since = since; // the turn's clocks (safety net, working line) from its start
-                                st.restart_of = Some(sub.run_id.clone());
-                                None
+            let refused = if behind {
+                tracing::info!(agent = %agent.name, run_id = %sub.run_id,
+                    "restart: its shared memory went off since, the words wait in line for the new session");
+                true
+            } else {
+                match self
+                    .hermes
+                    .start_run_input(&agent, plan.input(cut), &session, plan.instructions.as_deref(), plan.options.clone())
+                    .await
+                {
+                    Ok(id) if crate::app::RUN_ID.is_match(&id) => {
+                        // the plan done and the new run the conversation's, at once (no message falls between them),
+                        // unless the plan was withdrawn (Stop) or replaced (words after a Stop) while it started
+                        let now = {
+                            let mut inner = lock(&self.inner);
+                            let mut st = lock(&sub.state);
+                            match st.restart.clone() {
+                                Some(now) if same(&now, &plan) => {
+                                    st.restart = None;
+                                    st.restarted_as = Some(id.clone());
+                                    drop(st);
+                                    let restarted = self.get_or_start(&mut inner, &agent, &id);
+                                    let mut st = lock(&restarted.state);
+                                    st.kept = true;
+                                    st.watched = watched;
+                                    st.end_push = false; // this run's end tells it
+                                    st.session_id = Some(session.clone());
+                                    st.phone = plan.phone.clone().or(phone.clone());
+                                    st.followed_since = since; // the turn's clocks (safety net, working line) from its start
+                                    st.restart_of = Some(sub.run_id.clone());
+                                    None
+                                }
+                                other => Some(other),
                             }
-                            other => Some(other),
+                        };
+                        let Some(other) = now else { break (id, plan) };
+                        tracing::info!(agent = %agent.name, run_id = %sub.run_id, next = %id,
+                            "restart: stopped by the person while it started, the new turn stopped");
+                        if let Err(err) = self.hermes.stop_run(&agent, &id).await {
+                            tracing::warn!(agent = %agent.name, run_id = %id, error = %err, "restart: stop refused");
                         }
-                    };
-                    let Some(other) = now else { break (id, plan) };
-                    tracing::info!(agent = %agent.name, run_id = %sub.run_id, next = %id,
-                        "restart: stopped by the person while it started, the new turn stopped");
-                    if let Err(err) = self.hermes.stop_run(&agent, &id).await {
-                        tracing::warn!(agent = %agent.name, run_id = %id, error = %err, "restart: stop refused");
+                        if other.is_none() {
+                            return terminal;
+                        }
+                        false // their words written after the Stop: started in turn
                     }
-                    if other.is_none() {
-                        return terminal;
+                    Ok(_) => true,
+                    Err(err) => {
+                        tracing::info!(agent = %agent.name, run_id = %sub.run_id, error = %err, attempt = attempt,
+                            "restart: new turn not started yet");
+                        attempt += 1;
+                        attempt >= 5
                     }
-                    false // their words written after the Stop: started in turn
-                }
-                Ok(_) => true,
-                Err(err) => {
-                    tracing::info!(agent = %agent.name, run_id = %sub.run_id, error = %err, attempt = attempt,
-                        "restart: new turn not started yet");
-                    attempt += 1;
-                    attempt >= 5
                 }
             };
             if refused {
@@ -2497,8 +2514,13 @@ more steps in this turn. Don't repeat what failed: change approach.", crate::loo
             Some(s) => Some(s),
             None => self.hermes.run(&agent, &sub.run_id).await.ok().and_then(|r| as_str(r.get("session_id"))),
         };
+        // its shared memory went off since: no rescue in the old session (review 3, B2-a)
+        let behind = match &session {
+            Some(s) => self.left_behind(&agent, s).await,
+            None => false,
+        };
         let mut started = None;
-        if let Some(session) = &session {
+        if let Some(session) = session.as_ref().filter(|_| !behind) {
             let mut input = crate::loop_brake::rescue_input(&over, &lang);
             if let Some(config) = &self.config {
                 input = crate::dates::now::stamped(&config.get(), &agent, &input);
@@ -2716,6 +2738,11 @@ more steps in this turn. Don't repeat what failed: change approach.", crate::loo
                 None => return (terminal, None),
             },
         };
+        // its shared memory went off since: no continuation in the old session (review 3, B2-a)
+        if self.left_behind(&agent, &session).await {
+            tracing::info!(agent = %agent.name, run_id = %sub.run_id, "promise: its shared memory went off since, no continuation");
+            return (terminal, None);
+        }
         // the person stepped in since the turn ended: Stop tapped, words steered in, or a message waiting in line for
         // this conversation (Hermes refused it to the ended turn): what they said decides, not the promise
         let stepped_in = || {

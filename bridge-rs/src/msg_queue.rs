@@ -713,6 +713,9 @@ impl Queues {
 
     /// Starts an item as a turn of its conversation (taken out of the list once Hermes has it).
     async fn start(&self, agent: &AgentConfig, item: &Item) -> Option<String> {
+        // an outside model the bridge has not seen yet (SSH, a restart, the update): protected before this turn, as
+        // the send does (review 3, B2-a)
+        crate::agent_shared_memory::guard_on_send(self.config.get(), agent).await;
         let config = self.config.get();
         // its conversation moved on to another session since it was queued (a new one for a shared memory off, review
         // 2 B2-a; a migration): it starts there, and the others waiting for the old one follow it
