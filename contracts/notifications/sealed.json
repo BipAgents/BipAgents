@@ -600,6 +600,36 @@
       }
     },
     {
+      "variant": "card/offer",
+      "agent": "vie",
+      "payload": {
+        "aps": {
+          "alert": {
+            "loc-key": "notif.mail_card",
+            "body": "notif.mail_card"
+          },
+          "thread-id": "vie/t_contract",
+          "mutable-content": 1,
+          "category": "BRIDGE_CARD",
+          "sound": "default",
+          "badge": 1
+        },
+        "v": 2,
+        "n": "n_contract",
+        "t": "mail_card",
+        "agent": "vie",
+        "c": "t_contract",
+        "r": "bip-offer-0123456789ab",
+        "enc": "BGw+Irpanti1Gge/ybkPSq0YPmkv3ztFgIucKLGA1wOFL55GolHdFR68vwmYm7BtlBvc23RpTp584BOSySDCSRFEXSqP3XxjMLIzcRYiCmUDGHhqqxj7FeC/nBdfViV+S+aZL0cuowAGlLTNN3l9D5YrixNfFM+GeuZDFA9C9w581Yuzia5/G3WAzMahxRtQB8wucWDTECS6RMCpIpA8u4/meCvpcx5BaRNls41h"
+      },
+      "shown": {
+        "v": 1,
+        "t": "mail_card",
+        "title": "Vie",
+        "body": "Propose : Je regarde les hôtels ?"
+      }
+    },
+    {
       "variant": "email_held/default",
       "agent": "vie",
       "payload": {

@@ -111,7 +111,7 @@ def test_a_trip_is_one_card_with_its_moments_and_nothing_runs_before_yes(bridges
     tools = rpc(bridge, "tools/list", token=TOKEN).json()["result"]["tools"]
     [tool] = [t for t in tools if t["name"] == "plan_propose"]
     assert set(tool["inputSchema"]["properties"]) >= {"kind", "title", "zone", "moments", "watch", "event", "repeat"}
-    assert "offers" not in tool["inputSchema"]["properties"]   # offer_act's branch
+    assert "offers" in tool["inputSchema"]["properties"]   # the kinds offer_act lists for Coach (plans/offers.rs)
     made = propose(bridge, trip(watch={"mail_from": [{"name": "TAP", "domain": "flytap.com"}]}))
     # ONE card, nothing scheduled, no model called by the bridge
     assert "Prévoir" in text_of(made) and "nothing runs" in text_of(made)

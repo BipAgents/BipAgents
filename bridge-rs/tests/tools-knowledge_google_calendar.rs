@@ -623,3 +623,31 @@ async fn an_ended_connection_is_told_to_the_agent_never_a_silent_empty_list() {
         tool(&app, "calendar_add", json!({"title": "x", "start": "2026-11-27", "calendar": "google"}), "h1").await;
     assert!(failed && said.contains("connected again"), "{said}");
 }
+
+/// Review of offers (23/11, R8): an event the person accepted on an offer's card (plans/offers.rs) is written in the
+/// primary calendar exactly as the card showed it, its title, its times and its place, nothing else (no description:
+/// review R3), and with no card of its own (that card was this write's).
+#[tokio::test]
+async fn an_accepted_offer_writes_exactly_its_event_in_the_primary_calendar() {
+    let (url, google) = fake_google().await;
+    let dir = tempfile::tempdir().unwrap();
+    let config = config_for(dir.path(), &url, true);
+    let app = TestApp::new(config.clone());
+    let (k, v) = auth();
+    let h = [(k, v.as_str())];
+    assert_eq!(connect(&app, &h, "good").await, 200);
+    let fields = json!({"title": "Dentiste", "start": "2026-12-03T15:00", "duration_minutes": 45, "location": "Lyon"});
+    let event = bipbridge::calendar::new_event(fields.as_object().unwrap()).unwrap();
+    let before = writes(&google).len();
+    bipbridge::google_calendar::add_accepted(&config, event.as_object().unwrap()).await.unwrap();
+    let made = writes(&google);
+    assert_eq!(made.len(), before + 1, "{made:?}");
+    let (method, path, _, body, _) = made.last().unwrap().clone();
+    assert_eq!(method, "POST");
+    assert!(path == "/cal/calendars/primary/events" || path == format!("/cal/calendars/{PRIMARY}/events"), "{path}");
+    let body: Value = serde_json::from_str(&body).unwrap();
+    let keys: Vec<&str> = body.as_object().unwrap().keys().map(String::as_str).collect();
+    assert_eq!(keys.iter().copied().collect::<std::collections::BTreeSet<_>>(),
+               ["end", "location", "start", "summary"].into_iter().collect(), "{body}");
+    assert_eq!((body["summary"].as_str(), body["location"].as_str()), (Some("Dentiste"), Some("Lyon")));
+}

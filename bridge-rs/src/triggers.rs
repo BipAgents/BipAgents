@@ -389,6 +389,12 @@ pub fn headers_only_session(config: &Config, agent: &str, session: &str) -> bool
         && load(config).triggers.iter().any(|t| t.agent == agent && t.session == session && headers_only(t))
 }
 
+/// `session` is the conversation of one of `agent`'s routines started by an e-mail or a link: its turns read a message
+/// from outside (an offer made there is said so: plans/offers.rs).
+pub fn outside_session(config: &Config, agent: &str, session: &str) -> bool {
+    !session.is_empty() && load(config).triggers.iter().any(|t| t.agent == agent && t.session == session)
+}
+
 /// The address of a From line, lowercased (« TAP <Info@FlyTap.com> » → « info@flytap.com »); None without one.
 pub fn address_of(from: &str) -> Option<String> {
     let inner = match (from.rfind('<'), from.rfind('>')) {
