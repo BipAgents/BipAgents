@@ -614,6 +614,7 @@ class FakeModel(Fake):
         # a smart agent's pass of the day (offer_ideas.rs: its instructions start « You look back over »): the candidates
         # it answers, one JSON object a line (none: the most common answer); its usage counts what it was sent
         self.idea_lines: List[Dict[str, Any]] = []
+        self.idea_delay = 0.0   # how long a pass's answer takes (review-smart-offers: two looks at once)
 
     def records_answer(self, user: str) -> str:
         documents = []
@@ -670,6 +671,8 @@ class FakeModel(Fake):
                                      "usage": {"prompt_tokens": 800, "completion_tokens": 40}},
                                     status_code=self.status)
             if body["messages"][0]["content"].startswith("You look back over"):
+                if self.idea_delay:
+                    await asyncio.sleep(self.idea_delay)
                 content = "\n".join(json.dumps(line, ensure_ascii=False) for line in self.idea_lines)
                 sent = sum(len(m["content"]) for m in body["messages"])
                 return JSONResponse({"choices": [{"message": {"content": content}}],
