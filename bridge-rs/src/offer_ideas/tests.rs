@@ -485,7 +485,8 @@ fn a_pass_goes_only_to_our_european_providers_or_the_persons_own_model() {
     let dir = tempfile::tempdir().unwrap();
     let config = config_in(dir.path());
     let agent = config.agent(Some("vie")).cloned().unwrap();
-    assert!(!outside_model(&config, &agent), "no model readable: the hub's (shared-memory's hook tightens it)");
+    // no model readable: `outside_model::place` says Unknown, which counts as outside (« in doubt, it protects »)
+    assert!(outside_model(&config, &agent), "no model readable: Unknown, outside");
     let folder = crate::agents_admin::profile_folder(&config, &agent);
     std::fs::create_dir_all(&folder).unwrap();
     for (yaml, outside) in [("model:\n  provider: anthropic\n  default: claude\n", true),
