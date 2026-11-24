@@ -964,3 +964,53 @@ fn review_an_offer_that_books_said_another_way_is_refused_too() {
         assert!(acts_itself(label).is_some(), "let through: {label}");
     }
 }
+
+/// Fixes of the review (24/11): booking, paying or buying said in the apps' five languages is refused, sending on the
+/// person's behalf too; what goes to the person themselves (a reminder, a list sent to them) and nouns are not.
+#[test]
+fn fixes_acts_itself_reads_the_agents_own_verb_in_five_languages() {
+    for label in ["Je peux payer la facture ?", "Tu veux que je te commande les cartouches ?", "J'achète le billet ?",
+                  "Would you like me to order the cartridges?", "Do you want me to pay the bill?", "Shall I email Paul the plan?",
+                  "Soll ich die Rechnung bezahlen?", "Möchtest du, dass ich die Karten bestelle?", "Soll ich Paul die Einladung schicken?",
+                  "¿Quieres que pague la factura?", "¿Compro las entradas?", "¿Le mando el correo a Paul?",
+                  "Zal ik het voor je bestellen?", "Ik betaal de rekening?", "Zal ik de mail naar Paul sturen?"] {
+        assert!(acts_itself(label).is_some(), "let through: {label}");
+    }
+    for label in ["Je t'envoie la liste ?", "Je te mets un rappel pour payer le loyer ?", "Shall I send you the list?",
+                  "Shall I compare the prices?", "Soll ich dir eine Erinnerung schicken?", "¿Te envío un recordatorio?",
+                  "¿Te mando la lista?", "Zal ik je een herinnering sturen?", "Zal ik het je sturen?",
+                  "¿Busco el mejor precio del seguro?", "Tu veux voir la réserve naturelle ?"] {
+        assert!(acts_itself(label).is_none(), "refused: {label}");
+    }
+    // the bridge's own kinds never book, pay or send: a reminder offer is never refused for its words
+    let mut a = offer("reminder", "Loyer");
+    a.insert("label".into(), json!("Je paie le loyer : je te le rappelle le 1er ?"));
+    assert!(acts_itself("Je paie le loyer : je te le rappelle le 1er ?").is_some());
+    assert!(draft(&a, "vie", &all(), PARIS, now()).is_ok(), "a reminder offer refused for its words");
+}
+
+/// Fixes of the review (24/11): « buying » is not a shopping list, a price alone or basketball, in any language; it is
+/// Dutch too, and a cheap find.
+#[test]
+fn fixes_buying_is_buying_in_five_languages() {
+    let o = |label: &str| {
+        let mut a = offer("page", "Sujet");
+        a.insert("label".into(), json!(label));
+        a.insert("prompt".into(), json!("Une page."));
+        draft(&a, "vie", &all(), PARIS, now()).unwrap()
+    };
+    for label in ["Je te mets un rappel pour la shopping list ?", "Soll ich deine Einkaufsliste als Seite machen?",
+                  "¿Te preparo la lista de la compra?", "Shall I make your shopping list a page?", "Grocery list for Saturday?",
+                  "Je compare les prix de l'électricité ?", "Le prix du contrôle technique en page ?", "The price of the MOT?",
+                  "Der Preis der Hauptuntersuchung?", "¿El precio de la ITV?", "De prijs van de APK?",
+                  "Les horaires du basketball de Tom ?", "Basketball training times?", "Je t'aide à comprendre ta facture ?",
+                  "Kooperation mit der Schule als Seite?"] {
+        assert_eq!(theme_of(&o(label)), None, "{label}");
+    }
+    for label in ["Je te trouve un aspirateur pas cher ?", "Où acheter des chaussures ?", "Les meilleurs téléphones avec leurs prix ?",
+                  "Where to buy a kettle?", "Cheap flights to Lisbon?", "Ich schaue, wo es günstig einen Wasserkocher gibt?",
+                  "¿Dónde comprar un hervidor barato?", "Zal ik zoeken waar je een waterkoker kunt kopen?", "Ik zoek de beste aanbieding?",
+                  "De goedkoopste winkel voor fietsen?", "Wat koop ik voor Tom?"] {
+        assert_eq!(theme_of(&o(label)), Some(SHOPPING), "{label}");
+    }
+}
