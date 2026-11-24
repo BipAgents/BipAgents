@@ -747,7 +747,7 @@ impl Selector {
         true
     }
 
-    fn cutoff(&self) -> String {
+    pub(crate) fn cutoff(&self) -> String {
         let days = self.older_than_days.unwrap_or(0).clamp(0, 36500);
         (chrono::Local::now().date_naive() - chrono::Duration::days(days)).format("%Y-%m-%d").to_string()
     }

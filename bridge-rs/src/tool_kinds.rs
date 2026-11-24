@@ -78,6 +78,7 @@ pub const KINDS: &[Kind] = &[
     Kind { id: "archiveRead", names: &["archive_read"], prefixes: &[], step: Some("archiveRead") },
     Kind { id: "driveSearch", names: &["drive_search", "drive_list", "drive_folders"], prefixes: &[], step: Some("driveSearch") },
     Kind { id: "driveRead", names: &["drive_read", "drive_save"], prefixes: &[], step: Some("driveRead") },
+    Kind { id: "driveWrite", names: &["drive_write"], prefixes: &[], step: Some("driveWrite") },
     Kind { id: "obsidianSearch", names: &["obsidian_search", "obsidian_list"], prefixes: &[], step: Some("obsidianSearch") },
     Kind { id: "obsidianRead", names: &["obsidian_read"], prefixes: &[], step: Some("obsidianRead") },
     Kind { id: "obsidianWrite", names: &["obsidian_create", "obsidian_append", "obsidian_edit"], prefixes: &[], step: Some("obsidianWrite") },
@@ -466,6 +467,12 @@ pub const STEPS: &[Step] = &[
         id: "driveRead",
         one: ["Lire un document en ligne", "Read an online document", "Ein Online-Dokument lesen", "Leer un documento en línea"],
         many: ["Lire {n} documents en ligne", "Read {n} online documents", "{n} Online-Dokumente lesen", "Leer {n} documentos en línea"],
+        backstage: false,
+    },
+    Step {
+        id: "driveWrite",
+        one: ["Enregistrer dans tes documents en ligne", "Save in your online documents", "In deinen Online-Dokumenten speichern", "Guardar en tus documentos en línea"],
+        many: ["Enregistrer {n} fichiers dans tes documents en ligne", "Save {n} files in your online documents", "{n} Dateien in deinen Online-Dokumenten speichern", "Guardar {n} archivos en tus documentos en línea"],
         backstage: false,
     },
     Step {
