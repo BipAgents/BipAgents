@@ -473,9 +473,21 @@ fn own_tools(config: &Config, agent: &AgentConfig, offer: bool) -> Vec<Value> {
     if crate::phone_exit::agent::offered(config, &agent.name) {
         tools.push(crate::phone_exit::agent::tool());
     }
-    // a plan it proposes on its own (plans.rs): « Initiative » not off, its own person's agent, its routines on
+    // a plan it proposes on its own (plans.rs): « Initiative » not off, its own person's agent, its routines on; with
+    // the offers it may make (plans/offers.rs)
+    let offer_kinds = crate::plans::offers::kinds_for(config, agent);
     if crate::plans::offered(config, &agent.name) {
-        tools.push(crate::plans::tool());
+        tools.push(crate::plans::tool_with(&offer_kinds));
+    }
+    // an offer to act (plans/offers.rs): only the kinds it can do here, now
+    if !offer_kinds.is_empty() {
+        let line = crate::plans::offers::learning_line(
+            &crate::plans::offers::load(config),
+            &agent.name,
+            &offer_kinds,
+            py::time_time(),
+        );
+        tools.push(crate::plans::offers::tool(&offer_kinds, line.as_deref()));
     }
 
     if !crate::routines::enabled(config, &agent.name) {
@@ -2460,7 +2472,32 @@ async fn mcp_call(
             let shown_in = if asked { turn_run.as_deref() } else { None };
             crate::card_place::place_new(&state, &agent, &cards_before, shown_in).await;
             crate::card_place::taken(&state.config(), &run_id);
+            // its offers on its card (plans/offers.rs): placed with it, never pushed apart from it
+            for offer in &called.offers {
+                crate::card_place::taken(&state.config(), &format!("{}{offer}", crate::plans::offers::RUN_PREFIX));
+            }
             state.push.notify_bridge_card(&agent.name, &line, crate::plans::PUSH_KEY, &run_id).await;
+        }
+        wrote(&agent.name, &name, &arguments, &mut result);
+        return Ok(answer(result));
+    }
+    if name == crate::plans::offers::TOOL_NAME {
+        // ONE card (plans/offers.rs), in this turn's conversation (unasked: the main one) and pushed; nothing to tell
+        // the agent when it is answered (`taken`): its « Oui » is done by the bridge, or starts its one turn
+        let asked = persons_own_call(&state, &agent.name, &name, turn_run.as_deref());
+        let cards_before = crate::card_place::waiting(&state, &agent.name);
+        // made in a turn that reads a message from outside (an e-mail's or a link's routine): said on its card
+        let session = turn_run.as_deref().and_then(|r| state.hub.subscription(&agent.name, r)).and_then(|s| s.session_id());
+        let outside = session.is_some_and(|s| crate::triggers::outside_session(&state.config(), &agent.name, &s));
+        let called =
+            crate::plans::offers::call(&state, &agent, &arguments, asked, turn_run.as_deref(), outside).await;
+        let mut result = called.result;
+        if let Some((line, id)) = called.card {
+            let run_id = format!("{}{id}", crate::plans::offers::RUN_PREFIX);
+            let shown_in = if asked { turn_run.as_deref() } else { None };
+            crate::card_place::place_new(&state, &agent, &cards_before, shown_in).await;
+            crate::card_place::taken(&state.config(), &run_id);
+            state.push.notify_bridge_card(&agent.name, &line, crate::plans::offers::PUSH_KEY, &run_id).await;
         }
         wrote(&agent.name, &name, &arguments, &mut result);
         return Ok(answer(result));

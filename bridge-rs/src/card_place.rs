@@ -172,6 +172,7 @@ pub fn bridge_cards(state: &AppState, config: &Config, agent: Option<&str>) -> V
     items.extend(crate::phone_exit::store::pending_items(config, agent));
     items.extend(crate::routines::pending_items(config, agent));
     items.extend(crate::plans::pending_items(config, agent));
+    items.extend(crate::plans::offers::pending_items(config, agent));
     items.extend(crate::task_frame::pending_items(config, agent));
     items.extend(crate::agent_hops::pending_items(config, agent));
     items.extend(crate::held_approvals::pending_items(config, agent));
@@ -728,7 +729,8 @@ pub async fn answered_unplaced(state: &AppState, agent: &AgentConfig, run_id: &s
 /// The card `place` answered with `choice`: kept until the agent knows it (`settle`). A card never placed was asked
 /// in no conversation: nobody to tell.
 fn decide(state: &AppState, run_id: &str, place: &Place, choice: &str) {
-    if place.agent.is_empty() {
+    if place.agent.is_empty() || run_id.starts_with(crate::plans::offers::RUN_PREFIX) {
+        // an offer's card never resumes its agent: its « Oui » does what it must itself (plans/offers.rs; review R1)
         return;
     }
     let followed = place.run.as_deref().and_then(|r| state.hub.subscription(&place.agent, r)).map(|sub| {

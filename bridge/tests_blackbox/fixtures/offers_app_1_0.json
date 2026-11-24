@@ -1,0 +1,74 @@
+{
+ "plan_card": {
+  "agent": "coach",
+  "bip_detail": "<when> — Enregistrement en ligne : L’enregistrement en ligne du TP 433 est ouvert https://www.flytap.com/checkin\n<when> · Lisbonne time — Arrivée : métro rouge vers le centre : Bienvenue à Lisbonne : le métro rouge va au centre en 20 min.\n<when> · Lisbonne time — Ta chambre est prête : Ta chambre est prête à partir de 15:00.\nNothing is sent or booked: just reminders at the right time.\nYou can set its suggestions at the bottom of its page.",
+  "bip_plan": {
+   "agent": "Coach",
+   "id": "<v>",
+   "kind": "trip",
+   "moments": [
+    {
+     "at": "<v>",
+     "id": "<v>",
+     "pending": false,
+     "route": false,
+     "say": "L’enregistrement en ligne du TP 433 est ouvert https://www.flytap.com/checkin",
+     "urgent": false,
+     "what": "Enregistrement en ligne",
+     "when_text": "<when>",
+     "zone": "Europe/Paris"
+    },
+    {
+     "at": "<v>",
+     "id": "<v>",
+     "pending": false,
+     "route": false,
+     "say": "Bienvenue à Lisbonne : le métro rouge va au centre en 20 min.",
+     "urgent": false,
+     "what": "Arrivée : métro rouge vers le centre",
+     "when_text": "<when> · Lisbonne time",
+     "zone": "Europe/Lisbon"
+    },
+    {
+     "at": "<v>",
+     "id": "<v>",
+     "pending": false,
+     "route": false,
+     "say": "Ta chambre est prête à partir de 15:00.",
+     "urgent": false,
+     "what": "Ta chambre est prête",
+     "when_text": "<when> · Lisbonne time",
+     "zone": "Europe/Lisbon"
+    }
+   ],
+   "offers": [],
+   "rhythm_text": null,
+   "title": "Lisbonne",
+   "watch_text": null
+  },
+  "bip_summary": "Coach suggests a plan for Lisbonne: 3 moments. Set it up?",
+  "choices": [
+   "once",
+   "deny"
+  ],
+  "command": "plan_propose · Lisbonne",
+  "created_at": "<v>",
+  "description": "Coach suggests a plan for Lisbonne: 3 moments. Set it up?",
+  "request_id": "<v>",
+  "run_id": "<v>",
+  "session_id": null
+ },
+ "plan_shape": {
+  "agent": "str",
+  "bip_detail": "str",
+  "bip_plan": "dict",
+  "bip_summary": "str",
+  "choices": "list",
+  "command": "str",
+  "created_at": "str",
+  "description": "str",
+  "request_id": "str",
+  "run_id": "str",
+  "session_id": "NoneType"
+ }
+}

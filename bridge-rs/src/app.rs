@@ -1402,6 +1402,10 @@ async fn bridge_card(
         }
         return Ok(Some(crate::task_frame::approve(state, agent, id, &body.choice).await?));
     }
+    // an offer to act its agent made (plans/offers.rs): « Oui » done by the bridge or one turn of the agent
+    if let Some(id) = run_id.strip_prefix(crate::plans::offers::RUN_PREFIX) {
+        return Ok(Some(crate::plans::offers::approve(state, agent, id, &body.choice).await?));
+    }
     // a plan its agent proposed (plans.rs): « Prévoir » sets its moments (but those unticked), « Non merci » forgets it
     if let Some(id) = run_id.strip_prefix(crate::plans::RUN_PREFIX) {
         let skip = body.skip.clone().unwrap_or_default();

@@ -127,6 +127,8 @@ impl Kind {
             "tool_request" => Kind::MailCard,
             // a plan its agent proposed (plans.rs `PUSH_KEY`): a request too, never « Un connecteur attend ton accord »
             crate::plans::PUSH_KEY => Kind::MailCard,
+            // an offer to act (plans/offers.rs `PUSH_KEY`): a request, as a plan's
+            crate::plans::offers::PUSH_KEY => Kind::MailCard,
             _ => Kind::Connector,
         }
     }

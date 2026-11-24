@@ -1,0 +1,231 @@
+{
+ "about": "Offers to act in basic « Initiative » (passation-pro briefs/design-agents-proactifs.md §2.1, §3.1–3.5, §3.3, §3b.4 « the same rule holds in basic, per kind », §6 row 6, §7.1, §7.3; Alex 22/11: D1 A, D2 A, D4 B; texts validated 22/11 08:53). The agent offers to DO something, not only to remind: « Je regarde les hôtels ? », « Je te mets un rappel ? », « Je cherche le trajet ? ». One offer is ONE card (`bip-offer-<id>`) with two buttons, « Oui » / « Non merci ». It may only offer what it can really do here, now: a closed list of seven kinds, the ones it can't do are neither in its tool's description nor accepted. Nothing is done and nothing costs before « Oui »; then the bridge does it itself (route, reminder, calendar: no model) or the agent gets one turn in the offer's conversation with exactly the words under « i » (search, draft, page, cart: drafts and searches only; nothing booked, paid or sent without its own card). Only the person answers. Kept in `<data>/offers.json` (0600) by bridge-rs/src/plans/offers.rs (`plans::offers`, after plans.rs). Read by bridge/tests_blackbox/test_offers.py and plans/offers/tests.rs (the bridge), and by the apps' OfferCard (branches plans-ios, plans-android). Additions only: an app 1.0 draws its generic Yes / No card for any unknown `bip-` card. The smart offers (§3b: any action it can do, `uses`, `later`, the passes of the day) are branch 12 (`smart-offers`); the calendar's, the Carnet's trips' and the replies due's offers made by the bridge are branch 7 (`plans-sources`).",
+ "tool": {
+  "name": "offer_act",
+  "listed": "To the person's own agents whose « Initiative » is not off (contracts/proactive: basic; smart too until branch 12 brings its free form) and that can do at least one kind here now; never to an agent other people talk to (vault.rs `others_facing`). Off, others-facing or no kind: not listed, and a call is refused.",
+  "description": "Says when to offer (something to come in the person's own life with a clear next step; to end a routine's, a watcher's or a trigger's turn when what it found calls for an action, rather than a question), when never (the past, a « maybe », someone else's life, what they just refused), at most 2 offers per reply, drafts and searches only (never book, pay or send: those keep their own card), then ONLY the kinds this agent can do here now, one line each, then the learning line when there is one (`learning`).",
+  "arguments": {
+   "kind": "one of the kinds listed for this agent (`kinds`); the enum of the schema holds only those",
+   "label": "the question on the card, in the person's language, 1 to 80 characters, plain text (« Je regarde les hôtels près de Baixa ? »)",
+   "about": "what it is about, 1 to 40 characters, plain text: the card's top line « {agent} propose · {about} » (« Lisbonne », « Mariage samedi »)",
+   "prompt": "search, draft, page, cart: what the agent will be asked at « Oui », exactly (shown under « i »), 1 to 600 characters, plain text on one line (no markup: no <, >, `, ](, **; links in https only). Refused for route, reminder, calendar.",
+   "params": "route, reminder, calendar: what the bridge will do, exactly (shown under « i »); refused for the others. A closed list of fields, kind by kind (review R3): any other field is refused « Not done: params.<field>: … » (a calendar offer never writes notes, attendees nor a calendar of its choosing). route {to (1–200), from? (1–200; default the person's home: the « Coordonnées » entry labelled home that this agent reads, plans.rs `home_of`), mode?: walking | driving | transit (default walking)} · reminder {at (« YYYY-MM-DDTHH:MM » on the person's clock, or with an offset; to come), say (1–240, plain text, as the reminder will say it)} · calendar {title (1–120), start (an ISO date-time or a date, to come), end? or duration_minutes?, location? (≤ 200)}",
+   "site": "cart only, required: the shop's host name (« www.decathlon.fr »)"
+  },
+  "kinds": [
+   {"kind": "route", "example": "Je cherche le trajet ?", "needs": "the street routing on (`[maps] streets` not « off ») and a start: `from`, or a home address in « Coordonnées » this agent reads", "yes": "the bridge geocodes both places (Nominatim) and asks OSRM for the time (coordinates only), then puts one Boîte line in the offer's conversation, texts.<lang>.route_done, with the map of the way attached (maps.rs, the same map card as `map_image`); not found: texts.<lang>.route_failed. 0 model."},
+   {"kind": "reminder", "example": "Je te mets un rappel ?", "needs": "its « Routines » on", "yes": "the bridge makes a one-time routine whose words are `params.say`, at `params.at` (routines.rs `create_said`: delivered as written, no model). 0 model."},
+   {"kind": "calendar", "example": "Je l’ajoute à ton agenda ?", "needs": "a calendar it may write to: the phone's (calendar.rs `writes`), else Google Calendar's (google_calendar.rs `offered`)", "yes": "the bridge writes exactly the event the card shows: the phone's calendar through its queue (the phone woken by a silent push), or Google Calendar's primary calendar. This card is that write's card (`calendar_write`, critical): no other card. Not written: texts.<lang>.calendar_failed. 0 model."},
+   {"kind": "search", "example": "Je regarde les hôtels ?", "needs": "the web search (Hermes' `web` toolset not known off) or its own browser on", "yes": "one turn of the agent in the offer's conversation (`yes_note`), its reply where it is: results, nothing booked"},
+   {"kind": "draft", "example": "Je prépare la réponse ?", "needs": "always (a mailbox's Drafts when it has one, else a ```draft block)", "yes": "one turn that writes drafts, never sent"},
+   {"kind": "page", "example": "Je te fais la liste de bagages ?", "needs": "always (`create_page`)", "yes": "one turn that makes the page"},
+   {"kind": "cart", "example": "Je le mets au panier ?", "needs": "payments allowed to this agent with a card of its own (card_pay.rs `shopping`: Card), its own browser on, and `site` allowed by one of its cards (cards.rs `site_allowed`: a card with no sites allows any)", "yes": "one turn that fills the basket up to the payment page; paying keeps its own card (« Oui, payer »)"}
+  ],
+  "can_not": "A kind it can't do now (not in its list) is refused: « Not done: you can't <what> here; don't offer it. »",
+  "yes_note": "The turn at « Oui » reads, hidden: « Your person said yes to your offer: « <prompt> ». Do exactly that now. Drafts only: never book, pay or send; anything like that goes through its own card. » (design §3.3)",
+  "answers_to_the_agent": {
+   "made": "« Offer card made: « <label> ». It waits for your person's « Oui » or « Non merci »: nothing is done before. Don't ask them again in words. »",
+   "refused": "Every refusal starts with « Not done: » and says why in one sentence; nothing is kept, no card."
+  },
+  "refusals": [
+   {"name": "off", "about": "« Initiative » off, or an agent other people talk to", "says": "Not done: your person turned your suggestions off"},
+   {"name": "kind", "about": "a kind not of the seven", "says": "Not done: kind:"},
+   {"name": "can_not", "about": "one of the seven it can't do here now", "says": "Not done: you can't"},
+   {"name": "plain", "about": "markup, a line break or an http:// link in label, about, prompt or say", "says": "Not done:"},
+   {"name": "prompt_or_params", "about": "a prompt for route, reminder or calendar; params for the others; either missing", "says": "Not done:"},
+   {"name": "past", "about": "a reminder's `at` or an event's start not to come", "says": "Not done: params"},
+   {"name": "site", "about": "cart: no site, or one none of its cards allows", "says": "Not done: site"},
+   {"name": "per_reply", "about": "a third offer in the same turn of the person's conversation (a plan's offers count)", "says": "Not done: two offers per reply"},
+   {"name": "same", "about": "the same offer (its kind and its subject) made in the last 14 days, whatever the answer", "says": "Not done: you offered"},
+   {"name": "kind_quiet", "about": "a kind its person said « Non merci » to twice in a row, or rarely accepts (`learning`): quiet 30 days", "says": "Not done: your person said no thanks"},
+   {"name": "topic_declined", "about": "a subject its person said « Non merci » to in the last 30 days", "says": "Not done: your person said no"},
+   {"name": "one_waiting", "about": "unasked: a card of this agent (an offer or a plan) already waits", "says": "Not done: one of your cards already waits"},
+   {"name": "agent_day", "about": "unasked: 2 cards of this agent today (plans and offers together)", "says": "Not done: you already made 2"},
+   {"name": "place_day", "about": "unasked: 4 cards on this place today (plans and offers together)", "says": "Not done: your person's agents made 4"}
+  ]
+ },
+ "caps": {
+  "about": "Help without bothering (D2 A, §3.2), the plans' own counts shared (contracts/plans `caps`): « asked » is a call in a turn of the person's own conversation (agent_tools.rs `persons_own_call`); anything else is unasked. A plan's offers shown on its card (`plan_propose.offers`) count in the reply's 2 and never as cards of their own.",
+  "offers_per_reply": 2,
+  "unasked_per_agent_per_day": 2,
+  "unasked_per_place_per_day": 4,
+  "unasked_waiting_per_agent": 1,
+  "same_offer_days": 14,
+  "expires_hours": 24,
+  "expires_also": "a reminder's `at`, an event's start: an offer whose moment has passed expires then",
+  "cost_before_yes": 0
+ },
+ "learning": {
+  "about": "§3b.4, « la même règle vaut en basique, par sorte »: counters per agent and kind over 30 sliding days, no text kept (yes, no, expired, at).",
+  "two_no_in_a_row": "two « Non merci » in a row for a kind (an expiry in between breaks nothing, a « Oui » starts the series again): that kind is quiet for 30 days for this agent: out of its list, refused",
+  "low_yes_rate": "at least 5 offers of a kind in 30 days and less than 20 % yes (an expired one counts half a no): quiet 30 days",
+  "topic": "a subject (`about`, case and spaces aside) its person said « Non merci » to is not offered again for 30 days",
+  "line": "the agent knows: one line in its tool's description, « Your person often declines: <kinds>. Often accepts: <kinds>. » (a kind with at least 3 answers in 30 days: under a third yes, declines; two thirds or more, accepts; quiet kinds are out of the list already). It changes only when a threshold passes (the prompt cache holds).",
+  "not_off": "« Non merci » is never « Éteinte »: it holds for that card; « Initiative » changes only on the agent's page or by « arrête de me proposer des choses »"
+ },
+ "card": {
+  "run_id": "bip-offer-<id>",
+  "choices": ["once", "deny"],
+  "fields": "agent, run_id, request_id (<id>), command (« offer_act · <label> »), description (= bip_summary), choices, created_at, session_id, bip_summary, bip_detail, bip_offer",
+  "bip_summary": "texts.<lang>.summary (the app 1.0's whole card)",
+  "bip_detail": "search, draft, page, cart: the prompt, whole, as the agent will read it at « Oui »; route, reminder, calendar: what the bridge will do (texts.<lang>.detail_route / detail_reminder / detail_calendar); on the agent's first plan or offer card, texts.<lang>.first_card after it",
+  "bip_offer": "{id, kind, about, label, agent (its shown name), plan (the plan's id, or null), pill (shown inside its plan's card), mode: « basic », expires_at (Unix seconds), outside (made in a turn that read a message from outside: an e-mail's or a link's routine; then texts.<lang>.outside is the first line of bip_detail, and the note of its « Oui » says its words may be that message's)}",
+  "push": "The existing card notification (contracts/notifications/types/card.json, variant `offer`: key `offer_request` → `t: mail_card`, the neutral « Une demande attend ton accord »; `r` the card's run id), its sealed words texts.<lang>.notification. A plan's offers shown on its card are not pushed (the plan is).",
+  "approval_kind": "offer (critical, never auto-approved, no « Toujours »); a `calendar` offer is `calendar_write` (critical: this card is the write's card)",
+  "only_the_person": "Only the person's own `/v1/approve` answers it: never « Seulement le critique » nor a « Toujours » (critical), never a relative (an agent others use makes none; a relative's run 403), never another agent nor any tool (none answers a card), never a card answered for them (`card_place` resumes nothing: the call took it)."
+ },
+ "answers": [
+  {"name": "no_toujours", "body": {"choice": "always"}, "status": 422, "about": "`always` and `session` are refused (review R2): an offer is answered each time, and its card never carries `bip_always` (approval_level.rs `with_always` skips `bip-offer-`), a calendar one neither."},
+  {"name": "once", "body": {"choice": "once"}, "status": 200, "answer": {"ok": true, "choice": "once", "kind": "<kind>", "by": "bridge | agent"}, "about": "« Oui »: the bridge does it (route, reminder, calendar) or starts the agent's one turn (search, draft, page, cart). A reminder's answer also carries `routine` (its id)."},
+  {"name": "deny", "body": {"choice": "deny"}, "status": 200, "answer": {"ok": true, "choice": "deny"}, "about": "« Non merci »: forgotten, counted for its kind (`learning`)."},
+  {"name": "unknown_word", "body": {"choice": "maybe"}, "status": 422, "about": "Anything else changes nothing: the card keeps asking."},
+  {"name": "answered_twice", "body": {"choice": "once"}, "status": 404},
+  {"name": "expired", "status": 404, "about": "After its expiry: gone, nothing done."}
+ ],
+ "after": {
+  "expired": "After 24 h (or its moment passed), the card goes without a notification, counted expired for its kind, and its decision is kept for the conversation as `choice: « expired »` (approvals_log.rs): an app 1.1 folds it into texts.<lang>.expired; the apps 1.0 ignore a choice they don't know (no line).",
+  "turned_off": "« Initiative » turned off: the offers still waiting go without a word (not counted).",
+  "plan_declined": "A plan's « Non merci »: its offers shown on its card go with it (not counted). Its « Prévoir »: they keep waiting (drawn on their own once the plan's card is folded) until answered or expired.",
+  "no_resume": "An offer's card never resumes its agent through the cards' generic way (card_place.rs `decide`; review R1): « Non merci », « Oui » to a route, a reminder or an event, and the expiry start no turn; « Oui » to a search, a draft, a page or a cart starts its one planned turn, once.",
+  "restart": "A « Oui » whose work (a route, an event, the agent's turn) had not ended when the bridge stopped is done after its restart (`doing` in offers.json, `MAX_TRIES` = 2 tries at most).",
+  "turn_not_run": "The agent's turn could not run (the month's credit, the conversation busy for 10 minutes, Hermes unreachable): one Boîte line texts.<lang>.not_started, no model."
+ },
+ "plans": {
+  "offers": "plan_propose gains `offers` (0 to 2: {kind, label (1–60), prompt | params, site?}, about = the plan's title), shown at once on its card as pills: each its own `bip-offer-` card with `plan` and `pill: true`, listed in `bip_plan.offers` (their ids). Only the kinds offer_act lists for this agent; a wrong one refuses the plan (« Not done: offers: … »). Not pushed apart from the plan. Unasked, each pill counts in the day's cards nobody asked for (an app 1.0 shows it as its own card; coordinator, choice 4): the plan and its pills must fit. Gone with their plan however it goes (« Non merci », its event cancelled, its end; review R5). The plan's « i » says each one whole (« Je peux aussi : <question> — <what will be done> »).",
+  "subject": "A plan's offer (a pill, a moment's) is known by its plan's title and its own question for the caps and the learning (review R4): never « the same offer » or « a subject declined » because of another offer of its plan.",
+  "moment_offer": "A moment may offer instead of saying: {at, what, offer: {kind, label (1–80), prompt | params, site?}} (no `say`: a line to tell, a card to decide). At its time, the bridge places its card, no model: about = the plan's title, unasked; held by the daily caps, it waits for the next day at its time, while its plan lasts (design §3.2, coordinator's choice 2); held by a rule (the same offer, a subject declined, a kind quiet), « Initiative » off, or a kind it can't do any more: not placed, logged. Expires 24 h later. Its line on the plan card's « i »: « <when> — <what> : <label> — <prompt> ».",
+  "bip_plan_offers": "the ids of the plan's offers shown on its card (pills); [] when none"
+ },
+ "app_1_0": {
+  "about": "What an app 1.0 (iPhone and Android) already does with a card whose run id it doesn't know: its generic card (no app change). Checked by test_offers.py against the plan card a 1.0 already draws generically (`bip-plan-`, recorded on the base: fixtures/offers_app_1_0.json): the same keys and types, bip_offer aside. To check on both 1.0 apps with int-1.1 (« apps 1.0 contre le pont 1.1 »).",
+  "draws": "bip_summary as the card's sentence, bip_detail under « i », « Oui » / « Non » sending `once` / `deny`, the notification's sealed words",
+  "ignores": ["bip_offer", "bip_plan.offers"],
+  "pills": "a plan's offers as their own generic cards just below the plan's"
+ },
+ "examples": [
+  {
+   "name": "hotels",
+   "about": "§3.1: Vie, in the plan of Lisbon, « Je regarde les hôtels près de Baixa ? »",
+   "agent": {"id": "vie", "shown": "Vie", "lang": "fr"},
+   "arguments": {"kind": "search", "label": "Je regarde les hôtels près de Baixa ?", "about": "Lisbonne",
+                 "prompt": "Cherche 3 hôtels près de Baixa à Lisbonne du 25 au 28/11, moins de 150 € la nuit, avec les avis et le prix total. Ne réserve rien."},
+   "card": {"bip_summary": "Vie propose : Je regarde les hôtels près de Baixa ?",
+            "top": "Vie propose · Lisbonne",
+            "notification": "Propose : Je regarde les hôtels près de Baixa ?",
+            "after_once": "✓ Oui · Je regarde les hôtels près de Baixa ?",
+            "after_deny": "Non merci · Je regarde les hôtels près de Baixa ?",
+            "expired": "Passée · Je regarde les hôtels près de Baixa ?"}
+  },
+  {
+   "name": "gift",
+   "about": "§3.1: « Vie propose · Mariage samedi — Je cherche une idée de cadeau autour de 50 € ? »",
+   "arguments": {"kind": "search", "label": "Je cherche une idée de cadeau autour de 50 € ?", "about": "Mariage samedi",
+                 "prompt": "Trouve 3 idées de cadeau de mariage autour de 50 €, avec où les acheter."}
+  },
+  {
+   "name": "bike",
+   "about": "§3.1, after a watcher: « Vie propose · Prix du vélo — Il est à 1 199 €. Je le mets au panier ? (tu valideras le paiement) »",
+   "arguments": {"kind": "cart", "label": "Il est à 1 199 €. Je le mets au panier ? (tu valideras le paiement)", "about": "Prix du vélo",
+                 "site": "www.decathlon.fr", "prompt": "Mets le vélo Riverside 920 en taille M au panier sur decathlon.fr, jusqu’à la page de paiement. Ne paie pas."}
+  },
+  {
+   "name": "reminder",
+   "arguments": {"kind": "reminder", "label": "Je te mets un rappel ?", "about": "Dentiste",
+                 "params": {"at": "2026-11-25T19:00", "say": "Dentiste demain à 15:00."}},
+   "card": {"bip_detail": "Un rappel mer. 25 · 19:00 : « Dentiste demain à 15:00. »"}
+  }
+ ],
+ "texts": {
+  "rules": {
+   "apostrophes": "The bridge writes the apps' typographic apostrophe (’).",
+   "lang": "The agent's language (names.rs `agent_language`); another than these four: English.",
+   "validated": "top, buttons, after_once, after_deny, expired, notification, summary (§7.3) and first_card (§7.1): validated by Alex on 22/11.",
+   "new": "route_done, route_failed, calendar_failed, not_started, detail_route, detail_reminder, detail_calendar, home, phone_calendar, outside: new, for Alex's OK (passation-pro briefs/status-offers.md, « Textes à valider »).",
+   "label": "The offer's question is the agent's words, in the person's language; an accepted pill keeps its words, with ✓ and without « ? » (the apps)."
+  },
+  "fr": {
+   "top": "{agent} propose · {about}",
+   "buttons": ["Oui", "Non merci"],
+   "after_once": "✓ Oui · {question}",
+   "after_deny": "Non merci · {question}",
+   "expired": "Passée · {question}",
+   "notification": "Propose : {question}",
+   "summary": "{agent} propose : {question}",
+   "first_card": "Tu règles ses propositions en bas de sa page.",
+   "route_done": "Trajet pour {place} · {n} min {mode}",
+   "route_failed": "Je n’ai pas pu calculer le trajet pour {place}.",
+   "calendar_failed": "Je n’ai pas pu ajouter « {title} » à ton agenda.",
+   "not_started": "Je n’ai pas pu m’y mettre pour l’instant. Redemande-le-moi quand tu veux.",
+   "detail_route": "Le trajet {mode} de {from} à {to}",
+   "detail_reminder": "Un rappel {when} : « {say} »",
+   "detail_calendar": "Dans {calendar} : « {title} », {when}",
+   "home": "chez toi",
+   "phone_calendar": "l’agenda de ton téléphone",
+   "outside": "Proposé en lisant un message reçu de l’extérieur.",
+   "modes": {"walking": "à pied", "driving": "en voiture", "transit": "en transports"}
+  },
+  "en": {
+   "top": "{agent} suggests · {about}",
+   "buttons": ["Yes", "No thanks"],
+   "after_once": "✓ Yes · {question}",
+   "after_deny": "No thanks · {question}",
+   "expired": "Expired · {question}",
+   "notification": "Suggests: {question}",
+   "summary": "{agent} suggests: {question}",
+   "first_card": "You can set its suggestions at the bottom of its page.",
+   "route_done": "Route to {place} · {n} min {mode}",
+   "route_failed": "I couldn’t work out the route to {place}.",
+   "calendar_failed": "I couldn’t add “{title}” to your calendar.",
+   "not_started": "I couldn’t get to it just now. Ask me again whenever you like.",
+   "detail_route": "The route {mode} from {from} to {to}",
+   "detail_reminder": "A reminder {when}: “{say}”",
+   "detail_calendar": "In {calendar}: “{title}”, {when}",
+   "home": "home",
+   "phone_calendar": "your phone’s calendar",
+   "outside": "Suggested while reading a message from outside.",
+   "modes": {"walking": "on foot", "driving": "by car", "transit": "by transit"}
+  },
+  "de": {
+   "top": "{agent} schlägt vor · {about}",
+   "buttons": ["Ja", "Nein danke"],
+   "after_once": "✓ Ja · {question}",
+   "after_deny": "Nein danke · {question}",
+   "expired": "Abgelaufen · {question}",
+   "notification": "Schlägt vor: {question}",
+   "summary": "{agent} schlägt vor: {question}",
+   "first_card": "Seine Vorschläge stellst du unten auf seiner Seite ein.",
+   "route_done": "Weg nach {place} · {n} Min. {mode}",
+   "route_failed": "Ich konnte den Weg nach {place} nicht berechnen.",
+   "calendar_failed": "Ich konnte „{title}“ nicht in deinen Kalender eintragen.",
+   "not_started": "Ich konnte mich gerade nicht darum kümmern. Frag mich einfach noch einmal.",
+   "detail_route": "Der Weg {mode} von {from} nach {to}",
+   "detail_reminder": "Eine Erinnerung {when}: „{say}“",
+   "detail_calendar": "In {calendar}: „{title}“, {when}",
+   "home": "zu Hause",
+   "phone_calendar": "dem Kalender deines Telefons",
+   "outside": "Vorgeschlagen beim Lesen einer Nachricht von außen.",
+   "modes": {"walking": "zu Fuß", "driving": "mit dem Auto", "transit": "mit Bus und Bahn"}
+  },
+  "es": {
+   "top": "{agent} propone · {about}",
+   "buttons": ["Sí", "No, gracias"],
+   "after_once": "✓ Sí · {question}",
+   "after_deny": "No, gracias · {question}",
+   "expired": "Caducada · {question}",
+   "notification": "Propone: {question}",
+   "summary": "{agent} propone: {question}",
+   "first_card": "Puedes ajustar sus propuestas al final de su página.",
+   "route_done": "Trayecto hasta {place} · {n} min {mode}",
+   "route_failed": "No pude calcular el trayecto hasta {place}.",
+   "calendar_failed": "No pude añadir «{title}» a tu agenda.",
+   "not_started": "No he podido ponerme con ello ahora. Pídemelo de nuevo cuando quieras.",
+   "detail_route": "El trayecto {mode} desde {from} hasta {to}",
+   "detail_reminder": "Un recordatorio {when}: «{say}»",
+   "detail_calendar": "En {calendar}: «{title}», {when}",
+   "home": "tu casa",
+   "phone_calendar": "la agenda de tu teléfono",
+   "outside": "Propuesto al leer un mensaje recibido de fuera.",
+   "modes": {"walking": "a pie", "driving": "en coche", "transit": "en transporte público"}
+  }
+ }
+}

@@ -19,8 +19,9 @@ use crate::config::Config;
 pub const KEEP: usize = 1000;
 /// Hermes' words, the space cards' (storage_watch.rs) and the tip cards' (feature_tips.rs).
 /// `deny_always`: a send card's « Refuser toujours » (sandbox_sites.rs, 11/11). `self`: a secret card's « Je le taperai
-/// moi-même » (secrets.rs, 17/11).
-const CHOICES: [&str; 13] = [
+/// moi-même » (secrets.rs, 17/11). `expired`: an offer to act nobody answered in time (plans/offers.rs: the apps 1.1
+/// fold it into « Passée », the apps 1.0 show no line for a choice they don't know).
+const CHOICES: [&str; 14] = [
     "once",
     "session",
     "always",
@@ -34,6 +35,7 @@ const CHOICES: [&str; 13] = [
     "later",
     "never",
     "self",
+    "expired",
 ];
 static WRITING: Mutex<()> = Mutex::new(());
 

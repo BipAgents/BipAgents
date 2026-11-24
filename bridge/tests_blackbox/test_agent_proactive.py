@@ -213,9 +213,10 @@ def test_an_app_1_0_sees_its_settings_as_before(bridges, fakes):
     # its tools registered again (a new list), with a token of its own since this test's isn't its Hermes profile's
     # (agent_tools.rs `register_at`): this test's back
     give_token(bridge, "budget", TOKEN)
-    # nothing it had goes but what proposes on its own (plan_propose; offers come with a later branch)
-    assert "plan_propose" in tools_before and "plan_propose" not in tool_names(bridge)
-    assert set(tools_before) - {"plan_propose"} <= set(tool_names(bridge))
+    # nothing it had goes but what proposes on its own (plan_propose, offer_act: plans/offers.rs)
+    proposing = {"plan_propose", "offer_act"}
+    assert proposing <= set(tools_before) and not proposing & set(tool_names(bridge))
+    assert set(tools_before) - proposing <= set(tool_names(bridge))
 
 
 def test_a_watchers_urgent_message_is_time_sensitive_and_the_same_words_are_pushed_once(bridges, fakes):

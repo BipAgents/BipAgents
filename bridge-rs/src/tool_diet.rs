@@ -551,7 +551,7 @@ pub fn fits(tool: &Value, arguments: &crate::Dict) -> bool {
 /// Tools that act or propose a card for the person: a call with another tool's arguments is never run as that other
 /// tool when either is one of these (2026-10-30 bench, DeepSeek: `propose_task` written with `propose_agent`'s
 /// arguments made an agent card). The call then fails on its own tool's arguments and the model calls the right one.
-pub const NEVER_REROUTED: [&str; 12] = [
+pub const NEVER_REROUTED: [&str; 13] = [
     "propose_agent",
     "propose_team",
     "propose_room",
@@ -566,6 +566,8 @@ pub const NEVER_REROUTED: [&str; 12] = [
     crate::agent_proactive::OFF_TOOL,
     // a plan's card (plans.rs)
     crate::plans::TOOL_NAME,
+    // an offer's card (plans/offers.rs)
+    crate::plans::offers::TOOL_NAME,
 ];
 
 /// The tool a call was meant for, among `tools`: `name` when its arguments fit it (or fit nothing better), else the
