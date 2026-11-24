@@ -2905,13 +2905,7 @@ async fn set_agent_links(State(state): State<AppState>, request: Request) -> Api
         _ => Vec::new(),
     };
     manual.sort();
-    // An agent another household's agents talk to: out of the person's hub once idle (own_space.rs).
     let config = state.config();
-    for agent in config.agents.values() {
-        if crate::own_space::should_leave_hub(&config, agent) {
-            crate::own_space::apart_when_idle(&state, &agent.name);
-        }
-    }
     // Who may write to whom decides who gets send_files_to_agent (agent_files.rs): their tools' list follows.
     let run = default_run();
     for agent in config.agents.values() {
@@ -3035,19 +3029,13 @@ async fn test_service(
 }
 
 /// The agent out of the shared hub into its own space, its conversations, memory and files with it, by itself
-/// (own_space.rs: its first secret, or other people talk to it). Takes up to two minutes. `keep_hub`: the hub keeps
-/// serving its profile until `Spaces::forget_in_hub` (a turn going on there ends there).
-pub async fn move_into_space(state: &AppState, agent: &AgentConfig, keep_hub: bool) -> ApiResult<AgentConfig> {
+/// (own_space.rs: a project agent). Takes up to two minutes. The hub keeps serving its profile until
+/// `Spaces::forget_in_hub` (a turn going on there ends there, own_space.rs `finish`).
+pub async fn move_into_space(state: &AppState, agent: &AgentConfig) -> ApiResult<AgentConfig> {
     let _guard = LOCK.lock().await;
     let run = default_run();
     let spaces = crate::spaces::Spaces::new(run.clone());
-    let config = state.config();
-    let moving = if keep_hub {
-        spaces.move_agent_keeping_hub(&config, agent, &state.http).await
-    } else {
-        spaces.move_agent(&state.config, agent, &state.http).await
-    };
-    let moved = match moving {
+    let moved = match spaces.move_agent_keeping_hub(&state.config(), agent, &state.http).await {
         Ok(moved) => moved,
         Err(exc) => {
             if let Some(e) = exc.downcast_ref::<crate::spaces::SpaceError>() {

@@ -8,7 +8,7 @@
 //! never an agent whose credentials the hub couldn't keep (vault.rs `holds_in_hub`: the hub's Python, its tools in a
 //! sandbox of their own; the family's agent holds none, only the hub's privacy counts for it), never a space this
 //! bridge didn't make (`[spaces] root`), never an agent set up by hand, never on an install that doesn't protect the
-//! vault. An agent that moved at its first secret and that nobody else talks to stays where it is.
+//! vault. An agent that moved at its first secret (before 24/11) and that nobody else talks to stays where it is.
 //!
 //! How (agents_admin.rs `move_back_to_hub`): once it does nothing (agent_restart.rs `activity`, as for the way out),
 //! its profile is copied into the hub while its space keeps serving, the hub takes it up, its conversations are copied
@@ -67,8 +67,7 @@ fn comes_back_with(config: &Config, agent: &AgentConfig, sandboxed: bool) -> boo
     if crate::project_agent::is_project(config, &agent.name) || !crate::vault::others_facing(config, &agent.name) {
         return false;
     }
-    let breakers = crate::vault::hub_breakers(config);
-    if config.agents.values().any(|a| crate::vault::in_hub(config, a) && breakers.contains(&a.name)) {
+    if crate::vault::hub_leaving(config) {
         return false; // the hub isn't private now
     }
     crate::family_agent::is_family(config, &agent.name) || (!config.hermes.python.is_empty() && sandboxed)

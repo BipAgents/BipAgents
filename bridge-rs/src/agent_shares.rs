@@ -1446,11 +1446,6 @@ async fn put_shares(
         told.insert(household.clone(), json!(tell_relative(&state, household, &agent, shared).await));
     }
     tracing::info!(agent = %agent.name, added = ?added, removed = ?removed, "shared agent: shares set");
-    if !added.is_empty() {
-        // others see its conversations: out of the shared memory (vault.rs `others_facing`); it stays in the hub, their
-        // turns are guest turns (own_space.rs: since 21/11 only a project agent leaves it)
-        crate::own_space::apart_when_idle(&state, &agent.name);
-    }
     let mut view = share_view(&config, &agent);
     view["told"] = Value::Object(told);
     Ok(web::ok(view))
