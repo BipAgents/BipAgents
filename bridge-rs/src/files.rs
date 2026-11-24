@@ -73,7 +73,7 @@ fn is_safe(c: char) -> bool {
     c == '_' || is_alnum(c) || ".-+@()[],".contains(c)
 }
 
-fn is_control_like(c: char) -> bool {
+pub(crate) fn is_control_like(c: char) -> bool {
     use GeneralCategory::*;
     matches!(get_general_category(c), Control | Format | Surrogate | PrivateUse | Unassigned)
 }
@@ -468,7 +468,12 @@ pub fn open_to_sandbox(root: &str) -> anyhow::Result<()> {
 
 /// Delete stored uploads older than `retention_days` (only files the bridge wrote), never those in `kept`
 /// (`<month>/<id12>-<name>`: the long texts' files, kept with their conversation, threads/long_texts.rs).
-pub fn purge_uploads(root: &str, retention_days: i64, now: Option<f64>, kept: &std::collections::HashSet<String>) -> usize {
+pub fn purge_uploads(
+    root: &str,
+    retention_days: i64,
+    now: Option<f64>,
+    kept: &std::collections::HashSet<String>,
+) -> usize {
     if root.is_empty() || !std::path::Path::new(root).is_dir() {
         return 0;
     }
@@ -487,7 +492,11 @@ pub fn purge_uploads(root: &str, retention_days: i64, now: Option<f64>, kept: &s
                 let entry = entry.file_name().to_string_lossy().into_owned();
                 let path = crate::py::join(&month_dir, &entry);
                 let p = std::path::Path::new(&path);
-                if !STORED_NAME.is_match(&entry) || !p.is_file() || p.is_symlink() || kept.contains(&format!("{month}/{entry}")) {
+                if !STORED_NAME.is_match(&entry)
+                    || !p.is_file()
+                    || p.is_symlink()
+                    || kept.contains(&format!("{month}/{entry}"))
+                {
                     continue;
                 }
                 let Ok(meta) = std::fs::metadata(p) else { continue };

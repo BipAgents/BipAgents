@@ -997,7 +997,7 @@ async fn test_route(State(state): State<AppState>, Path(agent): Path<String>) ->
     let id = py::uuid4_hex()[..12].to_string();
     let line = test_line(&crate::handback::language_of(&config, &agent));
     let sent =
-        state.push.notify_payment_urgent(&agent.name, &format!("bip-paytest-{id}"), &id, line, None, true).await;
+        state.push.notify_payment_urgent(&agent.name, &format!("bip-paytest-{id}"), &id, line, None, true, false).await;
     Ok(web::ok(json!({"ok": true, "sent": sent})))
 }
 
