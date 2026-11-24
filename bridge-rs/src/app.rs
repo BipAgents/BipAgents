@@ -308,6 +308,7 @@ impl AppState {
         // the family agents' one common conversation (family_thread.rs): the queue's turns reach it; the conversations
         // of before (one per member) cleared once
         crate::family_thread::init(self);
+        crate::space_heal::init(&self.config); // a space's Hermes whose epoch went stale: restarted once (space_heal.rs)
         let me = self.clone();
         self.spawn(async move { crate::family_thread::migrate(&me).await });
         // what takes the place's space, measured; the 80/95 % cards, the pause when full (storage_watch.rs)
