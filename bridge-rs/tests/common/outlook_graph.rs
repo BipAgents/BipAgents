@@ -201,8 +201,17 @@ pub async fn serve(State(graph): State<Shared>, method: Method, uri: Uri, header
             if q.get("$orderby").is_some_and(|o| o.ends_with(" asc")) {
                 found.reverse();
             }
+            // Graph's pages: `$skip`, and the next page's address while more are left
             let top: usize = q.get("$top").and_then(|t| t.parse().ok()).unwrap_or(10);
-            found.truncate(top);
+            let skip: usize = q.get("$skip").and_then(|t| t.parse().ok()).unwrap_or(0);
+            let more = found.len() > skip + top;
+            let found: Vec<Value> = found.into_iter().skip(skip).take(top).collect();
+            if more {
+                let mut next = q.clone();
+                next.insert("$skip".into(), (skip + top).to_string());
+                let next = url::form_urlencoded::Serializer::new(String::new()).extend_pairs(next.iter()).finish();
+                return reply(200, json!({"value": found, "@odata.nextLink": format!("http://{}{path}?{next}", header("host"))}));
+            }
             reply(200, json!({"value": found}))
         }
         ("GET", ["messages", id]) => g.messages.get(*id).cloned().map(|m| reply(200, m)).unwrap_or_else(not_found),

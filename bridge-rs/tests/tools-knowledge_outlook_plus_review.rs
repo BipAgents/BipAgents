@@ -1,12 +1,13 @@
 //! Review of `outlook-plus` (24/11, briefs/review-outlook-plus.md): its blockers shown red against the small fake
-//! Microsoft (tests/common/outlook_graph.rs), and a few checks of what holds. No fix here. No real Microsoft account.
+//! Microsoft (tests/common/outlook_graph.rs), and a few checks of what holds. Red first, then fixed on `outlook-plus`. No real Microsoft account.
 //!
 //! - B1: a standing rule that files every new mail of a sender into the Deleted Items is the trash (outlook_mail.rs
 //!   says so for a tidying, review R7), yet its card goes through under « Seulement le critique »;
 //! - B2: an account's number is used again for the next account connected: the rules and routines of the account
 //!   disconnected then act on the new one, a mailbox the person never set them on.
-//! - « à corriger », ignored here (not blockers): a burst of 50 mails or more within two minutes stops the watch for
-//!   good.
+//! - « à corriger » (24/11 fixes): a burst of 50 mails or more within two minutes stopped the watch for good (C1); a
+//!   mailbox or an address book named that isn't the agent's became its first account (C2); an empty string in
+//!   `contacts_update` erased a field (C4).
 
 mod common;
 #[path = "common/outlook_graph.rs"]
@@ -171,11 +172,10 @@ async fn review_a_sixth_account_is_refused_and_nothing_of_it_kept() {
     assert!(!shown.to_string().contains("other-1"), "a token in the view: {shown}");
 }
 
-/// « À corriger » (not a blocker, ignored so the branch stays red only on its blockers): 50 mails or more received
-/// within two minutes stop the watch for good. Each look reads the 50 oldest since `after − 2 min`; all of them seen,
-/// `after` never moves, and every later mail of that inbox is never offered to its routines nor sorted by its rules.
+/// C1: 50 mails or more received within two minutes never stop the watch. Each look reads from `after − 2 min`, the
+/// oldest first: a page all seen, the next pages (`@odata.nextLink`) are read too, so `after` moves on and every later
+/// mail of that inbox is offered to its routines and sorted by its rules.
 #[tokio::test]
-#[ignore = "review outlook-plus, à corriger C1 (not a blocker): run with --include-ignored"]
 async fn review_a_burst_of_mail_never_stops_the_watch() {
     let (url, graph) = fake_graph().await;
     let dir = tempfile::tempdir().unwrap();
@@ -204,4 +204,79 @@ async fn review_a_burst_of_mail_never_stops_the_watch() {
     let left: Vec<String> =
         g.messages.iter().filter(|(id, m)| (id.starts_with('b') || *id == "late") && m["isRead"] == false).map(|(id, _)| id.clone()).collect();
     assert!(left.is_empty(), "never looked at again: {left:?}");
+}
+
+/// C2. A mailbox or an address book the agent names that isn't one of its (another account's address, another
+/// account's `outlook-<n>`, an address of no account) is refused with plain words: never the agent's first account
+/// instead. Coach has the first account's mail and contacts (written), the second account's contacts read only.
+#[tokio::test]
+async fn review_a_mailbox_or_book_named_that_isnt_the_agents_is_refused_never_the_first() {
+    let (url, graph) = fake_graph().await;
+    let second = add_second(&graph);
+    let dir = tempfile::tempdir().unwrap();
+    let app = common::TestApp::new(config_for(dir.path(), &url, true));
+    let (k, v) = auth();
+    let h = [(k, v.as_str())];
+    let first = json!({"agents": ["coach"], "parts": {"mail": true, "calendar": false, "contacts": true, "contacts_write": true}});
+    assert_eq!(connect_with(&app, &h, "good", first).await.0, 200);
+    let read_only = json!({"agents": ["coach"], "parts": {"mail": false, "calendar": false, "contacts": true, "contacts_write": false}});
+    let (status, shown) = connect_with(&app, &h, "second", read_only).await;
+    assert_eq!(status, 200, "{shown}");
+    level(&app, &h, "critical").await;
+
+    // the mail: another account's address or number, an address of no account
+    for wanted in [SECOND, "outlook-2", "travail@example.org", "Outlook (travail@example.org)"] {
+        let (failed, said) =
+            tool(&app, "mail_bulk", json!({"action": "archive", "domain": "shop.example", "mailbox": wanted}), "h1").await;
+        assert!(failed, "{wanted}: tidied somewhere: {said}");
+        let (failed, said) = tool(&app, "mail_search", json!({"mailbox": wanted}), "h1").await;
+        assert!(failed && !said.contains("Votre facture"), "{wanted}: the first account searched instead: {said}");
+    }
+    assert_eq!(graph.lock().unwrap().messages["m2"]["parentFolderId"], "inbox-id", "the first account tidied");
+    assert_eq!(second.lock().unwrap().messages["s2"]["parentFolderId"], "inbox-id", "the second account tidied");
+
+    // the contacts: the second's book is read only for Coach, an unknown book is no book of its
+    let before = graph.lock().unwrap().contacts.len();
+    for book in [SECOND, "travail@example.org"] {
+        let (failed, said) = tool(&app, "contacts_add", json!({"name": "Nina Durand", "book": book}), "h2").await;
+        assert!(failed, "{book}: added somewhere: {said}");
+    }
+    assert_eq!(graph.lock().unwrap().contacts.len(), before, "added to the first account's contacts");
+    assert_eq!(second.lock().unwrap().contacts.len(), 1, "added to the second account's contacts");
+    // the control: its own book by its address
+    let (failed, said) = tool(&app, "contacts_add", json!({"name": "Nina Durand", "book": ACCOUNT}), "h2").await;
+    assert!(!failed && said.contains("Added"), "{said}");
+    assert_eq!(graph.lock().unwrap().contacts.len(), before + 1);
+}
+
+/// C4. `contacts_update` only adds and changes: an empty `organization`, `job` or `nickname` changes nothing (no card,
+/// no « Annuler » would bring it back).
+#[tokio::test]
+async fn review_an_empty_string_never_erases_a_contacts_field() {
+    let (url, graph) = fake_graph().await;
+    let dir = tempfile::tempdir().unwrap();
+    let app = common::TestApp::new(config_for(dir.path(), &url, true));
+    let (k, v) = auth();
+    let h = [(k, v.as_str())];
+    let parts = json!({"agents": ["coach"], "parts": {"mail": false, "calendar": false, "contacts": true, "contacts_write": true}});
+    assert_eq!(connect_with(&app, &h, "good", parts).await.0, 200);
+    level(&app, &h, "critical").await;
+    {
+        let mut g = graph.lock().unwrap();
+        let paul = g.contacts.iter_mut().find(|c| c["id"] == "c2").unwrap();
+        paul["jobTitle"] = json!("Designer");
+        paul["nickName"] = json!("Polo");
+    }
+    let (failed, found) = tool(&app, "contacts_search", json!({"query": "Paul"}), "h1").await;
+    assert!(!failed, "{found}");
+    let id = id_of(&found, "Paul");
+    let (_, said) = tool(&app, "contacts_update", json!({"id": id, "organization": "", "job": " ", "nickname": ""}), "h1").await;
+    let (_, said_too) = tool(&app, "contacts_update", json!({"id": id, "organization": "", "add_to_group": "Amis"}), "h1").await;
+    let g = graph.lock().unwrap();
+    let paul = g.contacts.iter().find(|c| c["id"] == "c2").unwrap();
+    assert!(
+        paul["companyName"] == "Kerfy" && paul["jobTitle"] == "Designer" && paul["nickName"] == "Polo",
+        "a field erased by an empty string: {paul} (told: {said} / {said_too})"
+    );
+    assert_eq!(paul["categories"], json!(["Travail", "Amis"]), "the group still added: {said_too}");
 }
