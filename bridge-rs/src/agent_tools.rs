@@ -2558,7 +2558,10 @@ async fn mcp_call(
                 if let Ok(messages) = state.hub.hermes.session_messages(&agent, &session).await {
                     if !crate::calendar::add_asked(&messages) {
                         tracing::info!(agent = %agent.name, "a calendar add nobody asked for: refused, to offer first");
-                        return Ok(answer(tool_text(crate::calendar::UNASKED_ADD, true)));
+                        // counted as a refusal (loop_brake.rs): asked again, the same add is stopped at its third ask
+                        let mut result = tool_text(crate::calendar::UNASKED_ADD, true);
+                        wrote(&agent.name, &name, &arguments, &mut result);
+                        return Ok(answer(result));
                     }
                 }
             }
