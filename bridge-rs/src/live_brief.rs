@@ -1074,6 +1074,8 @@ pub async fn message_notes(state: &AppState, agent: &AgentConfig, session: &str,
                 crate::rooms_memory::take_note(&config, &agent.name), // what's new in its rooms (rooms_memory.rs)
                 crate::friends_cards::take_note(&config, &agent.name), // friends' taps on its cards (friends_cards.rs)
                 named(crate::storage_watch::take_note(&config, &agent.name)), // the place's space (storage_watch.rs)
+                // what is coming with no plan: an appointment, a trip (plans/sources.rs), told once
+                crate::plans::sources::take_note(&config, &agent.name, &session),
                 crate::feature_tips::on_message(&config, &agent.name, &session, &text, &kinds, &moment, crate::py::time_time()),
                 // a voice message: its reply will be listened to (spoken.rs, the radio rules)
                 kinds.iter().any(|k| k == "voice").then(|| crate::spoken::voice_note(&lang)),

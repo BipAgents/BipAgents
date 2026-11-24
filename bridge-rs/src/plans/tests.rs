@@ -137,7 +137,8 @@ fn what_the_agent_writes_is_checked_before_any_card() {
         })),
         ("repeat_on_a_trip", Box::new(|a: &mut Value| a["repeat"] = json!({"days": "daily", "times": ["10:00"], "weeks": 1}))),
         ("long_say", Box::new(|a: &mut Value| a["moments"][1]["say"] = json!("a".repeat(SAY_MAX + 1)))),
-        ("event", Box::new(|a: &mut Value| a["event"] = json!({"source": "google", "id": "x"}))),
+        // (Google and CalDAV are sources since plans-sources: another one is still refused)
+        ("event", Box::new(|a: &mut Value| a["event"] = json!({"source": "outlook", "id": "x"}))),
     ];
     for (name, change) in cases {
         assert!(with(&*change).is_err(), "{name}");

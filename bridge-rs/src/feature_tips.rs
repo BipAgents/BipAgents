@@ -531,6 +531,11 @@ impl Store {
     }
 }
 
+/// The person's messages to `agent` these 14 days (plans/sources.rs: who the person writes to most).
+pub fn talks_of(config: &Config, agent: &str) -> u32 {
+    load(config).talks.get(agent).map(|d| d.values().sum::<u32>()).unwrap_or(0)
+}
+
 fn store_path(config: &Config) -> PathBuf {
     PathBuf::from(config.data_dir()).join("tips.json")
 }

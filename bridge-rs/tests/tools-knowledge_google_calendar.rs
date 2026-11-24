@@ -651,3 +651,51 @@ async fn an_accepted_offer_writes_exactly_its_event_in_the_primary_calendar() {
                ["end", "location", "start", "summary"].into_iter().collect(), "{body}");
     assert_eq!((body["summary"].as_str(), body["location"].as_str()), (Some("Dentiste"), Some("Lyon")));
 }
+
+/// plans-sources (design-agents-proactifs.md §3.2 n° 4, §3.4 « L'agenda », §6 row 7): the bridge's look reads Google
+/// Calendar as the phone's copy (an appointment in 1 to 7 days with a place; a repeating one never), and a plan's
+/// Google event is followed by its `calendar_event` watch: moved, cancelled, or the same.
+#[tokio::test]
+async fn a_plan_s_google_event_is_found_by_the_look_and_followed() {
+    use bipbridge::plans::{sources, EventNews, EventRef};
+    use chrono::TimeZone;
+    let paris = chrono_tz::Europe::Paris;
+    let (url, google) = fake_google().await;
+    let dir = tempfile::tempdir().unwrap();
+    let config = config_for(dir.path(), &url, true);
+    let app = TestApp::new(config.clone());
+    let (k, v) = auth();
+    let h = [(k, v.as_str())];
+    assert_eq!(connect(&app, &h, "good").await, 200);
+    let today = chrono::Utc::now().with_timezone(&paris).date_naive();
+    let at = |days: i64, hour: u32| {
+        paris.from_local_datetime(&(today + chrono::Duration::days(days)).and_hms_opt(hour, 0, 0).unwrap()).unwrap().to_rfc3339()
+    };
+    {
+        let mut g = google.lock().unwrap();
+        g.add(PRIMARY, json!({"id": "d1", "summary": "Ostéo", "location": "12 rue Exemple, Lyon",
+                              "start": {"dateTime": at(3, 15)}, "end": {"dateTime": at(3, 16)}}));
+        g.add(PRIMARY, json!({"id": "w_2", "recurringEventId": "w", "summary": "Yoga", "location": "Salle",
+                              "start": {"dateTime": at(2, 18)}, "end": {"dateTime": at(2, 19)}}));
+    }
+    let (events, remote) = sources::events_of(&config, "coach", today, today + chrono::Duration::days(7)).await;
+    assert!(remote.failed.is_empty(), "{:?}", remote.failed);
+    let found = sources::upcoming(&events, paris, today);
+    // (the primary calendar is known as « primary »)
+    let id = bipbridge::google_calendar::event_ref("primary", "d1");
+    assert_eq!(found.iter().map(|f| (f.title.as_str(), f.source.as_str(), f.id.as_str())).collect::<Vec<_>>(),
+               [("Ostéo", "google", id.as_str())]);
+    let event = EventRef { source: "google".into(), id: id.clone(), start: found[0].start, calendar: found[0].calendar.clone() };
+    assert_eq!(sources::remote_news(&config, "coach", &event, paris).await, EventNews::Same);
+    // moved by an hour in Google Calendar
+    google.lock().unwrap().events.get_mut(&(PRIMARY.to_string(), "d1".to_string())).unwrap()["start"] =
+        json!({"dateTime": at(3, 16)});
+    assert_eq!(sources::remote_news(&config, "coach", &event, paris).await,
+               EventNews::Moved { start: found[0].start + 3600.0, delta: 3600.0 });
+    // deleted there: cancelled (its calendar still answers)
+    google.lock().unwrap().events.remove(&(PRIMARY.to_string(), "d1".to_string()));
+    assert_eq!(sources::remote_news(&config, "coach", &event, paris).await, EventNews::Cancelled);
+    // a calendar no longer listed changes nothing (never a cancellation)
+    google.lock().unwrap().calendars.clear();
+    assert_eq!(sources::remote_news(&config, "coach", &event, paris).await, EventNews::Same);
+}
