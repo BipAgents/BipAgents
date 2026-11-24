@@ -840,11 +840,17 @@ mod tests {
     fn what_the_after_call_turn_made_reaches_the_person_without_its_reply() {
         let agent = AgentConfig { name: "vie".into(), ..Default::default() };
         let ran = |status: &str, text: &str| crate::background_turn::Ran {
-            run_id: "run_1".into(), session: "api_s".into(), status: status.into(), text: text.into(), tokens: 1,
-            stopped: None, error: String::new(),
+            run_id: "run_1".into(),
+            session: "api_s".into(),
+            status: status.into(),
+            text: text.into(),
+            tokens: 1,
+            stopped: None,
+            error: String::new(),
         };
         let page = vec!["/bipagents/pages/vie/prononcer.html".to_string()];
-        let replied = after_call_delivery(&agent, "fr", "live_1", &ran("completed", "Voilà l'audio."), page.clone()).unwrap();
+        let replied =
+            after_call_delivery(&agent, "fr", "live_1", &ran("completed", "Voilà l'audio."), page.clone()).unwrap();
         assert!(replied.as_written);
         assert_eq!((replied.text.as_str(), replied.files.clone()), ("Voilà l'audio.", page.clone()));
         let stopped = after_call_delivery(&agent, "fr", "live_1", &ran("cancelled", ""), page.clone()).unwrap();

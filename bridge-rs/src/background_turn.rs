@@ -567,7 +567,15 @@ impl Pipeline {
         tracing::info!(target: "bipbridge::background_turn", agent = %agent.name, run_id = %run_id, status = %status,
             tokens = tokens, "background turn ended");
         let stopped = self.hub.as_ref().and_then(|h| h.brake_said(&agent.name, run_id));
-        Ran { run_id: run_id.to_string(), session: session.to_string(), status, text, tokens, stopped, error: end.error }
+        Ran {
+            run_id: run_id.to_string(),
+            session: session.to_string(),
+            status,
+            text,
+            tokens,
+            stopped,
+            error: end.error,
+        }
     }
 
     /// A turn the brake stopped whose person gets no other word (a set-up turn, a routine run by its link, the turn

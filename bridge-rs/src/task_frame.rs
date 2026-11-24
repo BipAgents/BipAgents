@@ -900,9 +900,11 @@ pub fn settle(config: &Config, agent: &str, fix_id: &str, yes: bool) -> Option<S
     let shared = routines::change(config, |b| {
         // the common card of an agent whose AI didn't answer: its routines on again (« Réessayer »), or left paused
         let mut first = None;
-        for r in b.routines.iter_mut().filter(|r| {
-            r.agent == agent && r.frame.fix.as_ref().is_some_and(|f| f.id == fix_id && f.variant == AI)
-        }) {
+        for r in b
+            .routines
+            .iter_mut()
+            .filter(|r| r.agent == agent && r.frame.fix.as_ref().is_some_and(|f| f.id == fix_id && f.variant == AI))
+        {
             r.frame.fix = None;
             resumed(&mut r.frame);
             if yes {
@@ -1093,9 +1095,8 @@ fn unanswered(fix: &Option<Fix>, now: f64) -> bool {
 
 /// A watcher's « Réparer / Arrêter » to ask again before it stops (`WARN_DAYS` before `NO_ANSWER_DAYS`).
 fn watch_warns(fix: &Option<Fix>, now: f64) -> bool {
-    fix.as_ref().is_some_and(|f| {
-        f.variant == REPAIR && f.warned_at <= 0.0 && now - f.at >= (NO_ANSWER_DAYS - WARN_DAYS) * DAY
-    })
+    fix.as_ref()
+        .is_some_and(|f| f.variant == REPAIR && f.warned_at <= 0.0 && now - f.at >= (NO_ANSWER_DAYS - WARN_DAYS) * DAY)
 }
 
 /// A watcher's « Réparer / Arrêter » unanswered: switched off only after its warning said the day (Alex 24/11: never
@@ -1167,13 +1168,15 @@ pub fn due(config: &Config, now: f64) -> Vec<Due> {
                         r.frame.until = Some(now + REMIND_DAYS * DAY);
                         (r.frame.fix, r.frame.keep_asked, r.frame.reminded) = (Some(fix), true, true);
                         let name = routines::flat(&r.name, routines::NAME_MAX);
-                        let line = keep_sentence(lang, Task::Routine, &name, &day_words(lang, now + REMIND_DAYS * DAY, zone));
+                        let line =
+                            keep_sentence(lang, Task::Routine, &name, &day_words(lang, now + REMIND_DAYS * DAY, zone));
                         out.push(Due::Raise { agent: r.agent.clone(), run_id, line, push: true });
                     }
                     Overdue::Forever => {
                         // unanswered again: on « until you stop it », its card gone, nothing more pushed (B2)
                         withdrawn.extend(r.frame.fix.take().map(|f| f.id));
-                        (r.frame.until, r.frame.default_end, r.frame.keep_asked, r.frame.reminded) = (None, false, false, false);
+                        (r.frame.until, r.frame.default_end, r.frame.keep_asked, r.frame.reminded) =
+                            (None, false, false, false);
                         tracing::info!(target: "bipbridge::task_frame", agent = %r.agent, routine = %r.id,
                                        "default end unanswered twice: on until its person stops it");
                     }
@@ -1265,7 +1268,12 @@ pub fn due(config: &Config, now: f64) -> Vec<Due> {
                                 w.until = Some(now + REMIND_DAYS * DAY);
                             }
                             (conn.frame.fix, conn.frame.keep_asked, conn.frame.reminded) = (Some(fix), true, true);
-                            let line = keep_sentence(lang, Task::Watcher, &name, &day_words(lang, now + REMIND_DAYS * DAY, zone));
+                            let line = keep_sentence(
+                                lang,
+                                Task::Watcher,
+                                &name,
+                                &day_words(lang, now + REMIND_DAYS * DAY, zone),
+                            );
                             out.push(Due::Raise { agent: agent.clone(), run_id, line, push: true });
                         }
                         Overdue::Forever => {

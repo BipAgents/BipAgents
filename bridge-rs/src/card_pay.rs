@@ -93,7 +93,6 @@ pub const HOLDS_THE_CALL: &[&str] = &[PAY];
 /// then the fill and the bank).
 pub const TOOL_TIMEOUT: u32 = 900;
 
-
 /// A payment asked in a turn nobody follows (a watcher, a routine) waits this long for the person, from its push
 /// (`urgent`; internal/notes/watcher-urgent-pay.md).
 pub const URGENT_WINDOW: Duration = Duration::from_secs(600);
@@ -1643,8 +1642,14 @@ async fn pay(state: &AppState, agent: &AgentConfig, arguments: &Dict, asker: &As
         payment["via"] = json!(host);
     }
     state.vault.record_card_payment(&card.id, payment, Some(reservation)).await?;
-    crate::vault_contacts::note_mark(state, &agent.name, SERVER_NAME, PAY, &crate::vault_contacts::mark(&card.id, &card.label))
-        .await;
+    crate::vault_contacts::note_mark(
+        state,
+        &agent.name,
+        SERVER_NAME,
+        PAY,
+        &crate::vault_contacts::mark(&card.id, &card.label),
+    )
+    .await;
     journal(&config, &entry, &agent.name, "typed");
     tracing::info!(agent = %agent.name, site = %host, fields = %filled.join(","), "card payment: card typed");
     ending.typed = true; // watched from here until the page moves on (`Ending`)

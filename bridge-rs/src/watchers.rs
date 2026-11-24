@@ -571,11 +571,7 @@ fn shown_state(summary: &str, state: Option<&Value>) -> String {
 /// The note of a change (hidden in the apps).
 pub fn change_note(conn: &Connector, watch: &Watch, before: Option<(&str, &Value)>, after: &Observation) -> String {
     let every = every_english(minutes_of(watch));
-    let what = if watch.notify == ON_CONDITION {
-        "its condition holds now"
-    } else {
-        "it just saw a change"
-    };
+    let what = if watch.notify == ON_CONDITION { "its condition holds now" } else { "it just saw a change" };
     let before = match before {
         Some((summary, state)) => shown_state(summary, Some(state)),
         None => "(its first check)".into(),

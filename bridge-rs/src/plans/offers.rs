@@ -1050,11 +1050,8 @@ pub fn card_item(config: &Config, offer: &Offer) -> Dict {
 /// The offer cards waiting for the person (not expired), oldest first.
 pub fn pending_items(config: &Config, agent: Option<&str>) -> Vec<Dict> {
     let now = py::time_time();
-    let mut offers: Vec<Offer> = load(config)
-        .offers
-        .into_iter()
-        .filter(|o| o.expires > now && agent.is_none_or(|a| o.agent == a))
-        .collect();
+    let mut offers: Vec<Offer> =
+        load(config).offers.into_iter().filter(|o| o.expires > now && agent.is_none_or(|a| o.agent == a)).collect();
     offers.sort_by(|a, b| a.made.total_cmp(&b.made));
     offers.iter().map(|o| card_item(config, o)).collect()
 }
@@ -1209,9 +1206,8 @@ pub fn plan_offers(
     specs
         .iter()
         .map(|spec| {
-            spec_of(spec, agent, title, kinds, person, now, PILL_MAX).map_err(|why| {
-                format!("Not done: offers: {}", why.strip_prefix("Not done: ").unwrap_or(&why))
-            })
+            spec_of(spec, agent, title, kinds, person, now, PILL_MAX)
+                .map_err(|why| format!("Not done: offers: {}", why.strip_prefix("Not done: ").unwrap_or(&why)))
         })
         .collect()
 }
@@ -1322,9 +1318,11 @@ fn yes_scope(kind: &str) -> &'static str {
         "search" => "you look things up and report back; nothing booked, nothing bought",
         "draft" => "you write drafts, never sent",
         "page" => "you make a page",
-        _ => "you fill the basket up to the payment page, never paying. Then stop and tell your person plainly that the \
+        _ => {
+            "you fill the basket up to the payment page, never paying. Then stop and tell your person plainly that the \
 basket is ready and waits for them: they pay it themselves on the shop's site, or they add a payment card for you; \
-if you have a payment card this shop takes, its own card asks them",
+if you have a payment card this shop takes, its own card asks them"
+        }
     }
 }
 

@@ -672,8 +672,15 @@ fn c5_a_repair_that_fails_says_so_and_asks_again() {
     watcher_of_its_own(&config, "c_veille", now + 30.0 * DAY, true);
     connectors::change(&config, |s| {
         let c = s.agents.get_mut("vie").unwrap().iter_mut().find(|c| c.id == "c_veille").unwrap();
-        c.frame.fix = Some(Fix { id: "w1".into(), at: now, variant: REPAIR.into(), failures: 4, reason: "check".into(),
-                                 since: now });
+        c.frame.fix = Some(Fix {
+            id: "w1".into(),
+            at: now,
+            variant: REPAIR.into(),
+            failures: 4,
+            reason: "check".into(),
+            since: now,
+            ..Fix::default()
+        });
     })
     .unwrap();
     settle(&config, "vie", "w1", true).unwrap();
@@ -904,13 +911,20 @@ fn broken_watcher(config: &Config, id: &str, at: f64) {
     watcher_of_its_own(config, id, at + 60.0 * DAY, true);
     connectors::change(config, |s| {
         let c = s.agents.get_mut("vie").unwrap().iter_mut().find(|c| c.id == id).unwrap();
-        c.frame.fix = Some(Fix { id: "f_panne".into(), at, variant: REPAIR.into(), since: at - DAY, failures: 3,
-                                 reason: "check".into(), ..Fix::default() });
+        c.frame.fix = Some(Fix {
+            id: "f_panne".into(),
+            at,
+            variant: REPAIR.into(),
+            since: at - DAY,
+            failures: 3,
+            reason: "check".into(),
+            ..Fix::default()
+        });
     })
     .unwrap();
 }
 
-/// 1. tf-ligne-panne-veilleur-remplacee (Alex: « prévenir avant de l'arrêter, et envoyer une carte pour continuer ou
+/// Point 1: tf-ligne-panne-veilleur-remplacee (Alex: « prévenir avant de l'arrêter, et envoyer une carte pour continuer ou
 /// non »): a watcher's card unanswered is asked again, pushed, saying the day it stops; only then, and never before
 /// that day, is it switched off.
 #[test]
@@ -921,7 +935,9 @@ fn a1_a_watcher_is_told_before_it_stops_with_a_card_to_go_on_or_not() {
     broken_watcher(&config, "c_panne", now);
     assert!(due(&config, now + 3.9 * DAY).is_empty());
     let warned = due(&config, now + 4.0 * DAY + 10.0);
-    let [Due::Raise { run_id, line, push: true, .. }] = warned.as_slice() else { panic!("no warning card: {warned:?}") };
+    let [Due::Raise { run_id, line, push: true, .. }] = warned.as_slice() else {
+        panic!("no warning card: {warned:?}")
+    };
     assert_ne!(run_id, "bip-fix-f_panne", "the same card, not placed again");
     let stops = day_words("fr", now + NO_ANSWER_DAYS * DAY, PARIS);
     assert!(line.ends_with(&format!("Sans réponse, il s'arrête le {stops}.")), "{line}");
@@ -929,8 +945,14 @@ fn a1_a_watcher_is_told_before_it_stops_with_a_card_to_go_on_or_not() {
     assert!(c.enabled, "still on: the person decides");
     let [item] = pending_items(&config, Some("vie")).try_into().unwrap();
     assert_eq!(item["bip_choices"], json!(["repair", "stop"]));
-    assert!(item["bip_fix"]["text"].as_str().unwrap().ends_with(&format!(" Sans réponse, il s'arrête le {stops}.")), "{item:?}");
-    assert!(item["bip_summary"].as_str().unwrap().ends_with(&format!("(Non : il s'arrête.) Sans réponse, il s'arrête le {stops}.")));
+    assert!(
+        item["bip_fix"]["text"].as_str().unwrap().ends_with(&format!(" Sans réponse, il s'arrête le {stops}.")),
+        "{item:?}"
+    );
+    assert!(item["bip_summary"]
+        .as_str()
+        .unwrap()
+        .ends_with(&format!("(Non : il s'arrête.) Sans réponse, il s'arrête le {stops}.")));
     assert!(item["bip_fix"]["stops_at"].as_f64().is_some());
     assert!(due(&config, now + 6.9 * DAY).is_empty(), "warned once");
     let found = due(&config, now + 7.0 * DAY + 10.0);
@@ -945,17 +967,21 @@ fn a1_a_watcher_is_told_before_it_stops_with_a_card_to_go_on_or_not() {
     assert!(matches!(due(&config, now + 12.0 * DAY + 10.0).as_slice(), [Due::Line { .. }]));
 }
 
-/// 1. Its agent never removes a watcher on its own (outside a turn of its person's): only its person stops it.
+/// Point 1: Its agent never removes a watcher on its own (outside a turn of its person's): only its person stops it.
 #[test]
 fn a1_the_agent_alone_never_removes_a_watcher() {
-    let src = std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/connectors.rs")).unwrap();
+    let src =
+        std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/connectors.rs")).unwrap();
     let remove = &src[src.find("        REMOVE => {").unwrap()..];
     let remove = &remove[..remove.find("        LIST =>").unwrap()];
-    assert!(remove.contains("asked_by_person(state, &agent.name, REMOVE)") && remove.contains("only your person stops a watcher"),
-            "connector_remove removes a watcher its person never asked to stop: {remove}");
+    assert!(
+        remove.contains("asked_by_person(state, &agent.name, REMOVE)")
+            && remove.contains("only your person stops a watcher"),
+        "connector_remove removes a watcher its person never asked to stop: {remove}"
+    );
 }
 
-/// 2. tf-carte-commune-ia-eteinte B: the AI of an agent doesn't answer (its model's server off): ONE card for the
+/// Point 2: tf-carte-commune-ia-eteinte B: the AI of an agent doesn't answer (its model's server off): ONE card for the
 /// agent, « son IA ne répond pas », its routines named; « Réessayer » turns them all back on, « Arrêter » leaves them
 /// paused; a family member's routine keeps its own card.
 #[test]
@@ -971,9 +997,11 @@ fn a2_one_card_per_agent_when_its_ai_does_not_answer() {
     let dir = tempfile::tempdir().unwrap();
     let config = config_in(dir.path());
     let now = py::time_time();
-    let one = routines::create(&config, "vie", "Courriels", "every 2h", "x", None, Maker::Person { muted: false }).unwrap();
+    let one =
+        routines::create(&config, "vie", "Courriels", "every 2h", "x", None, Maker::Person { muted: false }).unwrap();
     let two = routines::create(&config, "vie", "Météo", "every 2h", "x", None, Maker::Person { muted: false }).unwrap();
-    let other = routines::create(&config, "coach", "Sport", "every 2h", "x", None, Maker::Person { muted: false }).unwrap();
+    let other =
+        routines::create(&config, "coach", "Sport", "every 2h", "x", None, Maker::Person { muted: false }).unwrap();
     let fail = |id: &str, n: f64| routines::failed_as(&config, id, routines::Ended::Failed, true, now + n, false);
     fail(&one.id, 0.0);
     fail(&one.id, 1.0);
@@ -990,7 +1018,13 @@ fn a2_one_card_per_agent_when_its_ai_does_not_answer() {
     assert_eq!(item["bip_fix"]["title"], "Vie · son IA ne répond pas");
     assert_eq!(item["bip_fix"]["buttons"], json!(["Réessayer", "Arrêter"]));
     assert_eq!(item["bip_fix"]["routines"], json!(["Courriels", "Météo"]));
-    assert!(item["bip_fix"]["text"].as_str().unwrap().ends_with(" : ses routines n'ont pas pu tourner (« Courriels », « Météo »)."), "{item:?}");
+    assert!(
+        item["bip_fix"]["text"]
+            .as_str()
+            .unwrap()
+            .ends_with(" : ses routines n'ont pas pu tourner (« Courriels », « Météo »)."),
+        "{item:?}"
+    );
     assert_eq!(item["bip_summary"], "L'IA de Vie ne répond pas : ses routines n'ont pas pu tourner (« Courriels », « Météo »). Réessayer ? (Non : elles s'arrêtent.)");
     assert_eq!(item["choices"], json!(["once", "deny"]));
     assert_eq!(crate::approval_level::classify_card(item), KIND);
@@ -1019,14 +1053,15 @@ fn a2_one_card_per_agent_when_its_ai_does_not_answer() {
     let r = routines::get(&config, &one.id).unwrap();
     assert!(!r.enabled && r.frame.fix.is_none());
     // another failure stays a routine's own card
-    let own = routines::create(&config, "vie", "Rangement", "every 2h", "x", None, Maker::Person { muted: false }).unwrap();
+    let own =
+        routines::create(&config, "vie", "Rangement", "every 2h", "x", None, Maker::Person { muted: false }).unwrap();
     for n in 0..3 {
         routines::failed(&config, &own.id, routines::Ended::Failed, now + f64::from(n), false);
     }
     assert_eq!(pending_items(&config, Some("vie"))[0]["bip_fix"]["variant"], REPAIR);
 }
 
-/// 2. The common card's texts in the four languages (to be validated by Alex), and the warning of 1: the contract's.
+/// Point 2: The common card's texts in the four languages (to be validated by Alex), and the warning of 1: the contract's.
 #[test]
 fn a2_the_new_cards_texts_are_the_contracts() {
     let texts = &contract()["texts"];
@@ -1056,7 +1091,7 @@ fn a2_the_common_card_speaks_four_languages() {
     }
 }
 
-/// 3. tf-fin-par-defaut-de-lui-meme B2: what its agent set up on its own never stops at its default end without its
+/// Point 3: tf-fin-par-defaut-de-lui-meme B2: what its agent set up on its own never stops at its default end without its
 /// person: unanswered, it goes on and « Garder ? » is asked once more, pushed, 14 days later; unanswered again, it
 /// goes on « until you stop it ». « La laisser s'arrêter » makes the end hers.
 #[test]
@@ -1096,7 +1131,7 @@ fn a3_a_default_end_never_stops_it_without_its_person() {
     assert!(routines::get(&config, &other.id).is_none(), "« La laisser s'arrêter » kept it");
 }
 
-/// 3. The same for a watcher of its agent's own.
+/// Point 3: The same for a watcher of its agent's own.
 #[test]
 fn a3_a_watchers_default_end_never_removes_it_without_its_person() {
     let dir = tempfile::tempdir().unwrap();

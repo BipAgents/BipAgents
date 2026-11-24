@@ -451,17 +451,14 @@ pub fn parse(text: &str, zone: Tz) -> Result<Schedule, String> {
     if let Some(minutes) = unit(rest) {
         return Ok(Schedule::Interval { minutes });
     }
-    let at = chrono::DateTime::parse_from_rfc3339(raw)
-        .map(|d| d.timestamp() as f64)
-        .ok()
-        .or_else(|| {
-            ["%Y-%m-%dT%H:%M", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M"].iter().find_map(|f| {
-                NaiveDateTime::parse_from_str(raw, f)
-                    .ok()
-                    .and_then(|n| zone.from_local_datetime(&n).earliest())
-                    .map(|d| d.timestamp() as f64)
-            })
-        });
+    let at = chrono::DateTime::parse_from_rfc3339(raw).map(|d| d.timestamp() as f64).ok().or_else(|| {
+        ["%Y-%m-%dT%H:%M", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M"].iter().find_map(|f| {
+            NaiveDateTime::parse_from_str(raw, f)
+                .ok()
+                .and_then(|n| zone.from_local_datetime(&n).earliest())
+                .map(|d| d.timestamp() as f64)
+        })
+    });
     at.map(|at| Schedule::Once { at })
         .ok_or_else(|| format!("« {raw} » is not a schedule: give a cron expression (0 8 * * 1-5), « every 2h », « every day at 7:30 » or a date (2026-11-04T18:00)"))
 }
@@ -1706,7 +1703,14 @@ pub fn failed(config: &Config, id: &str, why: Ended, now: f64, scheduled: bool) 
 /// `failed`, `ai`: its agent's AI didn't answer (task_frame.rs `ai_silent`): at the 3rd in a row, its agent's ONE card
 /// `AI` (made, or joined when one waits), not a card of its own (Alex 24/11, tf-carte-commune-ia-eteinte B). A family
 /// member's routine keeps its own card (hers to answer: review C7).
-pub fn failed_as(config: &Config, id: &str, why: Ended, ai: bool, now: f64, scheduled: bool) -> Option<crate::task_frame::After> {
+pub fn failed_as(
+    config: &Config,
+    id: &str,
+    why: Ended,
+    ai: bool,
+    now: f64,
+    scheduled: bool,
+) -> Option<crate::task_frame::After> {
     use crate::task_frame::{After, Fix, AI, REPAIR};
     let mut after = None;
     let mut replaced = None;
@@ -2255,15 +2259,15 @@ pub fn tool() -> Value {
     json!({
         "name": TOOL_NAME,
         "description": "Your routines on a clock: things you do by yourself at set times (each morning, every \
-weekday at 9, every 2 hours, once tomorrow at 18:00). `create` (name, schedule, prompt: what to do each time, in your \
-person's words), `list`, `update` (name: the routine's; schedule and/or prompt), `pause`, `resume`, `run` (now, \
-once), `delete`. A schedule: a cron expression (`30 7 * * 1-5`), `every 2h`, `every day at 7:30`, `weekdays at 9am`, \
-`every monday 18h`, or a date and time (`2026-11-04T18:00`). `create` makes it, but it does not run until your \
-person says yes on its card in the app, which shows them all of its prompt. Its reports then come to them in the \
-conversation, with a notification; they can make it silent on the routine's page. Say how it ends: `until` (a date) or \
-`repeat` (a number of runs) when your person said so; one you set up on your own with no end: after 90 days your \
-person is asked whether to keep it, and it never stops without them. On a clock it runs « around » its time (a few minutes before or after): `approx: false` only when your person \
-asked for an exact time. For something that should react to an e-mail or a link, use routine_trigger instead.",
+    weekday at 9, every 2 hours, once tomorrow at 18:00). `create` (name, schedule, prompt: what to do each time, in your \
+    person's words), `list`, `update` (name: the routine's; schedule and/or prompt), `pause`, `resume`, `run` (now, \
+    once), `delete`. A schedule: a cron expression (`30 7 * * 1-5`), `every 2h`, `every day at 7:30`, `weekdays at 9am`, \
+    `every monday 18h`, or a date and time (`2026-11-04T18:00`). `create` makes it, but it does not run until your \
+    person says yes on its card in the app, which shows them all of its prompt. Its reports then come to them in the \
+    conversation, with a notification; they can make it silent on the routine's page. Say how it ends: `until` (a date) or \
+    `repeat` (a number of runs) when your person said so; one you set up on your own with no end: after 90 days your \
+    person is asked whether to keep it, and it never stops without them. On a clock it runs « around » its time (a few minutes before or after): `approx: false` only when your person \
+    asked for an exact time. For something that should react to an e-mail or a link, use routine_trigger instead.",
         "inputSchema": {"type": "object", "properties": {
             "action": {"type": "string", "enum": ["create", "list", "update", "pause", "resume", "run", "delete"]},
             "name": {"type": "string", "description": "a few words, in the person's language"},

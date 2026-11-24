@@ -810,25 +810,30 @@ fn remark_the_plan_s_i_says_its_offers_whole() {
     assert!(detail.contains(&pill.prompt) && detail.contains(&pill.label), "{detail}");
 }
 
-/// 4. of-panier-exige-carte B (Alex 24/11: « il peut créer un panier et dire qu'il attend ton paiement ou une carte à
+/// Point 4: of-panier-exige-carte B (Alex 24/11: « il peut créer un panier et dire qu'il attend ton paiement ou une carte à
 /// rentrer »): a basket needs its browser only, any shop; its « Oui » fills it, then stops and says it waits for its
 /// person's payment or a card they add; never paying.
 #[test]
 fn a4_a_basket_without_a_card_of_its_own_waits_for_its_person() {
-    let src = std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/plans/offers.rs")).unwrap();
+    let src =
+        std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/plans/offers.rs")).unwrap();
     let can = &src[src.find("pub fn can(config").unwrap()..];
     let can = &can[..can.find("\n}\n").unwrap()];
     assert!(!can.contains("card_pay::shopping"), "a basket still needs a card of the agent's: {can}");
     assert!(!src.contains("don't offer a basket there"), "a shop refused for want of a card of the agent's");
     let note = yes_note(&read("cart", "Vélo"));
     assert!(note.contains("never paying"), "{note}");
-    assert!(note.contains("waits for them") && note.contains("they pay it themselves") && note.contains("add a payment card"),
-            "{note}");
+    assert!(
+        note.contains("waits for them")
+            && note.contains("they pay it themselves")
+            && note.contains("add a payment card"),
+        "{note}"
+    );
     assert!(!can_not_words("cart").contains("card"), "{}", can_not_words("cart"));
     assert!(kind_line("cart").contains("with none, the basket waits for their payment"), "{}", kind_line("cart"));
 }
 
-/// 5. of-tour-du-oui-sans-personne B: the run of an offer's « Oui » is known while it goes on (card_pay.rs `urgent`
+/// Point 5: of-tour-du-oui-sans-personne B: the run of an offer's « Oui » is known while it goes on (card_pay.rs `urgent`
 /// pushes its payment plainly), forgotten after.
 #[test]
 fn a5_the_run_of_a_yes_is_known_while_it_goes_on() {
@@ -837,8 +842,12 @@ fn a5_the_run_of_a_yes_is_known_while_it_goes_on() {
     assert!(from_offer("vie", "run_a5") && !from_offer("coach", "run_a5") && !from_offer("vie", "run_other"));
     yes_run("vie", "run_a5", false);
     assert!(!from_offer("vie", "run_a5"));
-    let src = std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/card_pay.rs")).unwrap();
+    let src =
+        std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/card_pay.rs")).unwrap();
     let urgent = &src[src.find("pub async fn urgent(").unwrap()..];
     let urgent = &urgent[..urgent.find("\n}\n").unwrap()];
-    assert!(urgent.contains("offers::from_offer(&agent.name, run_id)") && urgent.contains("notify_payment_calm"), "{urgent}");
+    assert!(
+        urgent.contains("offers::from_offer(&agent.name, run_id)") && urgent.contains("notify_payment_calm"),
+        "{urgent}"
+    );
 }

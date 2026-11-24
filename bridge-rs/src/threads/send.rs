@@ -599,12 +599,20 @@ async fn long_text_as_file(state: &AppState, agent: &AgentConfig, text: &str) ->
 /// control and invisible characters: a space each, runs of spaces one), no leading dot, 60 characters at most, `.txt`.
 /// Stored on the disk under its safe form (files.rs `sanitize_filename`: `<month>/<id12>-<name>`).
 fn long_text_name(text: &str) -> String {
-    let first = text.lines().map(|l| l.trim().trim_start_matches('#').trim()).find(|l| l.chars().any(char::is_alphanumeric));
-    let cleaned: String = first
-        .unwrap_or("message")
-        .chars()
-        .map(|c| if matches!(c, '/' | '\\' | ':') || c.is_control() || crate::files::is_control_like(c) { ' ' } else { c })
-        .collect();
+    let first =
+        text.lines().map(|l| l.trim().trim_start_matches('#').trim()).find(|l| l.chars().any(char::is_alphanumeric));
+    let cleaned: String =
+        first
+            .unwrap_or("message")
+            .chars()
+            .map(|c| {
+                if matches!(c, '/' | '\\' | ':') || c.is_control() || crate::files::is_control_like(c) {
+                    ' '
+                } else {
+                    c
+                }
+            })
+            .collect();
     let spaced = cleaned.split_whitespace().collect::<Vec<_>>().join(" ");
     let mut name: String = spaced.trim_start_matches('.').trim().chars().take(60).collect();
     name = name.trim_end_matches(|c: char| !c.is_alphanumeric()).to_string();
@@ -659,7 +667,10 @@ pub async fn send(state: &AppState, agent: &AgentConfig, thread: Option<Thread>,
         let Some(file) = long_text_as_file(state, agent, body.text.trim()).await else {
             return Err(HttpError::new(
                 422,
-                format!("a message's words are {} characters at most: send a longer text as a file", crate::msg_queue::TEXT_MAX),
+                format!(
+                    "a message's words are {} characters at most: send a longer text as a file",
+                    crate::msg_queue::TEXT_MAX
+                ),
             ));
         };
         long_text = file.path.clone();
@@ -705,9 +716,7 @@ pub async fn send(state: &AppState, agent: &AgentConfig, thread: Option<Thread>,
     }
     let tip = tip_of(state, &threads, agent, &thread, &words).await?;
     let tip = tip.as_str();
-    let answer = |state: &str, run: Option<&str>| {
-        json!({"client_id": body.client_id, "thread": thread.id, "state": state, "run_id": run, "tip": tip})
-    };
+    let answer = |state: &str, run: Option<&str>| json!({"client_id": body.client_id, "thread": thread.id, "state": state, "run_id": run, "tip": tip});
     keep(&threads, &agent.name, &thread.id, &body.client_id, &said, &body.attachments).await?;
     let queues = queues_of(state);
     let running = state.hub.session_run(&agent.name, tip);
@@ -1081,7 +1090,8 @@ mod tests {
         assert!(!squeezed("Pourquoi le vélo a gagné la ville").contains(&sought(article)));
         // a line the timeline takes out of a row ([image], a tool's markup) is looked for without it
         let marked = "Regarde ça\n[image]\nC'est beau";
-        let (shown, _) = super::super::timeline::visible(&super::super::timeline::person_text(marked).unwrap(), "m_2", 0);
+        let (shown, _) =
+            super::super::timeline::visible(&super::super::timeline::person_text(marked).unwrap(), "m_2", 0);
         assert!(squeezed(&shown).contains(&sought(marked)), "{shown:?}");
         // words that are only machinery: looked for as they are
         assert_eq!(sought("[image]"), "[image]");
@@ -1089,12 +1099,15 @@ mod tests {
 
     #[test]
     fn a_long_text_is_named_after_its_first_line() {
-        assert_eq!(long_text_name("\n\n# Pourquoi le vélo électrique a gagné la ville !\n\nTexte"), "Pourquoi le vélo électrique a gagné la ville.txt");
+        assert_eq!(
+            long_text_name("\n\n# Pourquoi le vélo électrique a gagné la ville !\n\nTexte"),
+            "Pourquoi le vélo électrique a gagné la ville.txt"
+        );
         assert_eq!(long_text_name(&"mot ".repeat(40)).chars().count(), 59 + 4);
         assert_eq!(long_text_name("---\n\n  "), "message.txt");
     }
 
-    /// 6. lt-nom-du-fichier A (Alex 24/11): shown with its spaces, never « _ »; what no file name may hold out (`/`,
+    /// Point 6: lt-nom-du-fichier A (Alex 24/11): shown with its spaces, never « _ »; what no file name may hold out (`/`,
     /// `\`, `:`, control and invisible characters), no leading dot, 60 characters at most. The attachment carries this
     /// name; the disk keeps its safe form (`<month>/<id12>-<name>`).
     #[test]
@@ -1103,8 +1116,12 @@ mod tests {
         assert_eq!(long_text_name("...caché\n"), "caché.txt");
         assert_eq!(long_text_name("a/b"), "a b.txt");
         let long = long_text_name(&"Pourquoi le vélo électrique a gagné la ville ".repeat(3));
-        assert!(long.chars().count() <= 64 && long.ends_with(".txt") && long.contains(' ') && !long.contains('_'), "{long}");
-        let src = std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/threads/send.rs")).unwrap();
+        assert!(
+            long.chars().count() <= 64 && long.ends_with(".txt") && long.contains(' ') && !long.contains('_'),
+            "{long}"
+        );
+        let src = std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/threads/send.rs"))
+            .unwrap();
         let made = &src[src.find("async fn long_text_as_file").unwrap()..];
         let made = &made[..made.find("\n}\n").unwrap()];
         assert!(made.contains("name: Some(name)"), "the attachment named after the stored file (« _ »): {made}");
@@ -1114,7 +1131,8 @@ mod tests {
     fn a_message_takes_a_long_text_up_to_its_limit() {
         let check = |chars: usize| {
             let mut errors = Vec::new();
-            let body: NewMessage = serde_json::from_value(json!({"client_id": "0F0E-1A2B-3C4D", "text": "é".repeat(chars)})).unwrap();
+            let body: NewMessage =
+                serde_json::from_value(json!({"client_id": "0F0E-1A2B-3C4D", "text": "é".repeat(chars)})).unwrap();
             body.validate(&mut errors);
             errors.len()
         };
