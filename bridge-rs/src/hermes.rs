@@ -985,6 +985,8 @@ impl HermesClient {
         let key = format!("bip-{}", crate::py::token_urlsafe(24));
         let url = format!("{}/v1/runs", agent.hermes_url);
         let mut attempt = 1;
+        // the hub's tries apart: a full hub (429) clears as soon as one of its runs ends, never a reason to stop early
+        let mut busy = 0;
         let data = loop {
             ready(agent).await;
             let sent = self
@@ -1013,6 +1015,21 @@ impl HermesClient {
                     }
                     if queued {
                         tracing::warn!(agent = %agent.name, "run accepted while its gateway restarts: not sent again");
+                    }
+                    if status == 429 {
+                        // the hub at its `gateway.api_server.max_concurrent_runs`: its wait, then the same key again
+                        busy += 1;
+                        match retry.filter(|_| busy < BUSY_ATTEMPTS) {
+                            Some(wait) => {
+                                tracing::info!(agent = %agent.name, tries = busy, "run start: the hub is full, tried again");
+                                tokio::time::sleep(Duration::from_secs_f64(wait)).await;
+                                continue;
+                            }
+                            None => {
+                                tracing::warn!(agent = %agent.name, tries = busy, "run start: the hub stayed full");
+                                return Err(HermesError::http(status, head(&text, 500)));
+                            }
+                        }
                     }
                     match retry.filter(|_| attempt < START_ATTEMPTS) {
                         Some(wait) => wait,
@@ -1123,6 +1140,11 @@ impl HermesClient {
 
 /// A run start is tried at most this many times (one `Idempotency-Key`: Hermes runs it once).
 pub const START_ATTEMPTS: u32 = 4;
+/// A start the hub refuses for being full (429: Hermes' `gateway.api_server.max_concurrent_runs`, 16 runs at once
+/// with the installer's setting, all of the person's agents together) is tried this many times, after the wait Hermes
+/// asks each time (`Retry-After: 1`): about 12 s for one of its runs to end. Past that the 429 itself: a person's
+/// message then waits in line (threads/send.rs `waits_in_line`), a task or a routine says it couldn't start.
+pub const BUSY_ATTEMPTS: u32 = 12;
 /// The longest wait between two tries, in seconds (a parked profile asks 30).
 pub const START_WAIT_MAX: f64 = 10.0;
 /// The error of a run Hermes lost in a restart (`resolve_unknown`).
@@ -1137,13 +1159,14 @@ pub fn admission_queued(status: u16, headers: &reqwest::header::HeaderMap) -> bo
 
 /// The wait Hermes asks for before a request is sent again (seconds): a 503 with `Retry-After` (its store busy, the
 /// profile draining or parked, a chain moved, a gateway restarting), within `[0.2, START_WAIT_MAX]`. Never for an
-/// accepted turn (`admission_queued`).
+/// accepted turn (`admission_queued`). A 429 (the hub full: `BUSY_ATTEMPTS`) always: its `Retry-After`, else a second.
 pub fn retry_after(status: u16, headers: &reqwest::header::HeaderMap) -> Option<f64> {
-    if status != 503 || admission_queued(status, headers) {
-        return None;
+    let asked = || headers.get("retry-after")?.to_str().ok()?.trim().parse::<f64>().ok().filter(|s| s.is_finite());
+    match status {
+        429 => Some(asked().unwrap_or(1.0).clamp(0.2, START_WAIT_MAX)),
+        503 if !admission_queued(status, headers) => Some(asked()?.clamp(0.2, START_WAIT_MAX)),
+        _ => None,
     }
-    let seconds = headers.get("retry-after")?.to_str().ok()?.trim().parse::<f64>().ok()?;
-    Some(seconds.clamp(0.2, START_WAIT_MAX))
 }
 
 /// A body's chunks, each read within `timeout` (httpx's read timeout): a silent stream ends with `ReadTimeout`.

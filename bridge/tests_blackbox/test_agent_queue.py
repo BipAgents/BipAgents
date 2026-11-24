@@ -106,6 +106,34 @@ def test_a_message_added_while_nothing_runs_goes_at_once(bridges, fakes):
     assert wait_until(lambda: queue(bridge)["items"] == [], timeout=10)
 
 
+def test_a_message_sent_while_the_hub_is_full_is_never_lost(bridges, fakes):
+    """24/11: a hub takes at most `max_concurrent_runs` runs at once (all the person's agents, their tasks, the Live,
+    the routines) and answers the next one 429 with Retry-After: 1. The bridge answered the person « your agent isn't
+    answering right now » and the message was gone. Now: tried again after Hermes' wait, and a hub still full past the
+    bridge's tries keeps the message in line (`queued`, « En attente »), started once Hermes takes it."""
+    bridge = bridges.new().start()
+    fakes.hermes.rounds = 1000
+    fakes.hermes.add_session(SESSION, [])
+    fakes.hermes.runs["r1"] = turn("r1", output="Voici.")
+    fakes.hermes.runs["r2"] = turn("r2", output="Voilà.")
+    fakes.hermes.start_busy = 2   # two runs end meanwhile
+    answer = send(bridge, "Compare trois écoles")
+    assert answer.status_code == 200, answer.text
+    assert answer.json()["state"] == "started" and answer.json()["run_id"] == "r1", answer.json()
+    assert fakes.hermes.start_busy == 0
+    fakes.hermes.add_session("api_q2", [])
+    fakes.hermes.start_busy = 1000   # full for long
+    begun = time.time()
+    answer = send(bridge, "Et les horaires ?", session="api_q2")
+    assert answer.status_code == 200, answer.text
+    assert answer.json()["state"] == "queued" and answer.json()["run_id"] is None, answer.json()
+    assert time.time() - begun < 40, "the app's request waited too long"
+    assert texts(queue(bridge)) == ["Et les horaires ?"]
+    fakes.hermes.start_busy = 0   # a run ended: room again
+    assert wait_until(lambda: any(w.startswith("Et les horaires") for w in started_inputs(fakes)), timeout=40)
+    assert wait_until(lambda: queue(bridge)["items"] == [], timeout=10)
+
+
 def test_words_steered_reach_the_running_turn(bridges, fakes):
     bridge = bridges.new().start()
     fakes.hermes.rounds = 1000
