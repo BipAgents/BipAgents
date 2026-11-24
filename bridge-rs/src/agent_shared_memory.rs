@@ -1134,6 +1134,34 @@ mod tests {
         assert_eq!(crate::hermes::with_closed_search("searcher", None), None);
     }
 
+    /// Review 3 (red), B2-b: `session_search` is closed from a list kept in memory only ([`SEARCH_CLOSED`]), filled by
+    /// a guard (the send, the routes, the round: the first one 20 s after the start). After a restart (every update),
+    /// an agent protected on the disk gets it open in the turns the bridge starts before then: a card answered across
+    /// the restart (card_place.rs resumes it at once), a queued message, a room, a routine, a report handed back.
+    #[test]
+    fn review3_session_search_is_closed_after_a_restart_too() {
+        let (dir, mut config) = place();
+        let space = dir.path().join("spaces/restarted");
+        std::fs::create_dir_all(space.join("profiles/restarted/memories")).unwrap();
+        std::fs::write(space.join("profiles/restarted/config.yaml"), SPARK).unwrap();
+        config.agents.insert(
+            "restarted".into(),
+            AgentConfig { name: "restarted".into(), space: Some(space.to_string_lossy().into_owned()), ..Default::default() },
+        );
+        let gpt = config.agent(Some("restarted")).unwrap().clone();
+        set_model(&config, "restarted", CODEX);
+        guard_full_at(&config, &gpt, 1.0);
+        assert!(protected(&config, &gpt));
+        // the bridge restarts: the process's list starts empty, what is on the disk stays
+        SEARCH_CLOSED.lock().unwrap_or_else(|e| e.into_inner()).remove("restarted");
+        assert!(protected(&config, &gpt), "still protected after the restart");
+        assert_eq!(
+            crate::hermes::with_closed_search("restarted", None),
+            Some(json!({"closed_tools": ["session_search"]})),
+            "a turn started before the first guard reads the old conversations"
+        );
+    }
+
     /// Review 2, C10: an agent on the person's own model whose fallback goes outside is named « (OpenRouter, en
     /// secours) »: it is not « on OpenRouter ».
     #[test]
