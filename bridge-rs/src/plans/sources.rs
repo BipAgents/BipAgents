@@ -41,7 +41,6 @@ use serde_json::{json, Value};
 use super::offers::{self, Offer};
 use super::{fill, lang_of, person_zone, shown_agent, EventRef, Moment, Plan};
 use crate::app::AppState;
-use crate::background_turn::{Delivery, Pipeline};
 use crate::config::{AgentConfig, Config};
 use crate::tools_knowledge as tk;
 use crate::web::{self, ApiResult, HttpError};
@@ -1814,11 +1813,29 @@ pub fn mailboxes_gone(config: &Config) -> Vec<String> {
     gone
 }
 
-/// The watches that stopped (their trigger deleted, paused, ended, the mailbox no longer the agent's): their headers
-/// forgotten; an end reached: one Boîte line, the consent card may come again.
+/// A watch past its default end (90 days) goes on « jusqu'à ce que tu l'arrêtes »: never stopped without the person
+/// (Alex's B2, 24/11, alex-choices-1-1). Returns the mailboxes whose end was taken away. (Its « Garder ? » card, as a
+/// routine's, is not there yet.)
+pub fn keep_past_end(config: &Config, now: f64) -> Vec<String> {
+    if !load(config).mailboxes.iter().any(|m| m.state == ON && m.ends > 0.0 && now > m.ends) {
+        return Vec::new();
+    }
+    change(config, |s| {
+        let mut kept = Vec::new();
+        for m in s.mailboxes.iter_mut().filter(|m| m.state == ON && m.ends > 0.0 && now > m.ends) {
+            m.ends = 0.0;
+            kept.push(m.account.clone());
+        }
+        kept
+    })
+}
+
+/// The watches that stopped (their trigger deleted, paused, the mailbox no longer the agent's): their headers
+/// forgotten. One past its default end goes on (`keep_past_end`).
 async fn reconcile(state: &AppState) {
     let config = state.config();
     let now = py::time_time();
+    keep_past_end(&config, now);
     let store = load(&config);
     if !store.mailboxes.iter().any(|m| m.state == ON) {
         return;
@@ -1829,30 +1846,6 @@ async fn reconcile(state: &AppState) {
         let trigger = m.trigger.as_ref().and_then(|id| triggers.iter().find(|t| &t.id == id));
         match trigger {
             None => watch_off(&config, &m.account, OFF),
-            Some(_) if m.ends > 0.0 && now > m.ends => {
-                watch_off(&config, &m.account, OFF);
-                change(&config, |s| s.mailboxes.retain(|x| x.account != m.account));
-                if let Some(agent) = config.agent(Some(&m.agent)).cloned() {
-                    let lang = lang_of(&config, &agent.name);
-                    let end = crate::task_frame::end_words(lang, crate::task_frame::Task::Routine, &crate::task_frame::End::Date(m.ends), person_zone(&config));
-                    let name = fill(texts(lang).watch_name, &[("mailbox", &m.address)]);
-                    let pipeline = Pipeline::of(state);
-                    let session = pipeline.tip(&agent, "main").await;
-                    let line = crate::task_frame::ended_line(lang, crate::task_frame::Task::Routine, &name, &end);
-                    let delivery = Delivery {
-                        agent,
-                        session,
-                        key: format!("replies-end:{}", m.account),
-                        title: name,
-                        text: line,
-                        as_written: false,
-                        run_id: None,
-                        notify: false,
-                        files: Vec::new(),
-                    };
-                    pipeline.deliver(&delivery).await;
-                }
-            }
             Some(t) if !t.enabled || !may(&config, &m.agent) => {
                 if store.mails.iter().any(|x| x.account == m.account) {
                     change(&config, |s| s.mails.retain(|x| x.account != m.account));

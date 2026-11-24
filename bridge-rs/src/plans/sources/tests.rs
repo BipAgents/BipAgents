@@ -247,6 +247,33 @@ fn an_agent_on_an_outside_model_gets_no_agenda_line_and_no_replies_due_headers()
     assert_eq!(take_note(&config, "vie", "s1"), None);
 }
 
+/// Alex's B2 (24/11): a replies-due watch past its default end (90 days) goes on « jusqu'à ce que tu l'arrêtes », never
+/// stopped without the person; one still before its end, or off, is left as it is.
+#[test]
+fn a_replies_watch_past_its_90_days_goes_on_never_stopped_without_the_person() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = config_in(dir.path());
+    let n = now();
+    let watch = |account: &str, state: &str, ends: f64| Mailbox {
+        account: account.into(), agent: "vie".into(), address: format!("{account}@example.org"), state: state.into(),
+        trigger: Some(format!("t-{account}")), ends, ..Mailbox::default()
+    };
+    change(&config, |s| {
+        s.mailboxes.push(watch("past", ON, n - 60.0));
+        s.mailboxes.push(watch("soon", ON, n + 3.0 * 86400.0));
+        s.mailboxes.push(watch("off", OFF, n - 60.0));
+    });
+    assert_eq!(keep_past_end(&config, n), vec!["past".to_string()]);
+    let kept = load(&config).mailboxes;
+    let of = |a: &str| kept.iter().find(|m| m.account == a).cloned().unwrap();
+    assert_eq!((of("past").state.as_str(), of("past").ends), (ON, 0.0), "still watched, with no end");
+    assert_eq!(of("soon").ends, n + 3.0 * 86400.0);
+    assert_eq!(of("off").ends, n - 60.0);
+    // later: the other one past its end goes on too; the first, with no end now, is not touched again
+    assert_eq!(keep_past_end(&config, n + 4.0 * 86400.0), vec!["soon".to_string()]);
+    assert!(load(&config).mailboxes.iter().filter(|m| m.state == ON).all(|m| m.ends == 0.0));
+}
+
 fn headers(pairs: &'static [(&'static str, &'static str)]) -> impl Fn(&str) -> Option<String> {
     move |k| pairs.iter().find(|(n, _)| n.eq_ignore_ascii_case(k)).map(|(_, v)| v.to_string())
 }
