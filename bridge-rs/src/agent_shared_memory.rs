@@ -1319,4 +1319,33 @@ mod tests {
         assert!(read(&config).outside.is_empty(), "never seen by the guard");
         assert!(!crate::outlook::mail_for(&config, "gpt") && crate::outlook::held(&config, "gpt"));
     }
+
+    /// Review of shared-memory-1.1 (24/11), blocker: « Rallumer Outlook ? » answered for gpt on OpenAI, then the person
+    /// disconnects Outlook (every agent taken out at once). Connecting it again — maybe another Microsoft account — must
+    /// ask again: gpt is listed under `outside` (its line, « Rallumer Outlook ? », never chosen for the person when it is
+    /// the only agent). Today `outlook_ok` survives the disconnection: gpt is shown as a normal agent, chosen d'office
+    /// when alone, and gets the new account's mail, calendar and contacts on OpenAI without the question.
+    #[tokio::test]
+    async fn review_sm11_a_disconnection_forgets_rallumer_outlook() {
+        use crate::outlook;
+        let (_dir, mut config) = place();
+        outlook_for(&mut config, &["budget"]);
+        set_model(&config, "budget", EUROUTER);
+        set_model(&config, "gpt", CODEX);
+        let gpt = config.agent(Some("gpt")).unwrap().clone();
+        guard_full_at(&config, &gpt, 1.0);
+        // « Rallumer Outlook ? » → « Rallumer »
+        outlook::set_agents(&config, &names(&["budget", "gpt"]), None).await.unwrap();
+        assert!(outlook::mail_for(&config, "gpt"));
+        // the person disconnects Outlook
+        outlook::disconnect(&config).await.unwrap();
+        // the screen before connecting again: gpt is said and asked first
+        let shown = outlook::view(&config, outlook::stored(&config).as_ref());
+        assert_eq!(shown["outside"], json!({"gpt": "OpenAI"}), "not asked again after a disconnection: {shown}");
+        assert!(read(&config).outlook_ok.is_empty(), "« Rallumer » kept after the disconnection: {:?}", read(&config).outlook_ok);
+        // connected again (here: the account written back as a sign-in would) with gpt among the agents sent without
+        // the question: it must not have Outlook until « Rallumer » is answered again
+        outlook_for(&mut config, &["gpt"]);
+        assert!(!outlook::mail_for(&config, "gpt"), "gpt reads the reconnected mailbox on OpenAI without being asked");
+    }
 }
