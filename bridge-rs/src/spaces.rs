@@ -183,10 +183,18 @@ pub fn copy_profile(source: &Path, target: &Path) -> anyhow::Result<()> {
     copy_profile_except(source, target, &[])
 }
 
+/// Hermes' live state of the gateway serving a profile (`runtime/`: its open chats' leases, active_sessions.json,
+/// held by that gateway's pid; its Bot Chat deliveries, pinned to that profile home): never copied. Lab of 24/11: an
+/// agent moved at its first secret took the hub's lease on the conversation it was moving from, and its space
+/// answered every message there « This chat is open in another Hermes window/terminal » while the hub's gateway lived.
+const PROFILE_RUNTIME: &str = "runtime";
+
 /// [`copy_profile`] without the profile's own `except` (its Hermes vault on a place whose copies are in memory,
-/// hermes_copies.rs: never copied, the bridge rebuilds it for the new home).
+/// hermes_copies.rs: never copied, the bridge rebuilds it for the new home) nor its gateway's live state
+/// ([`PROFILE_RUNTIME`]).
 pub fn copy_profile_except(source: &Path, target: &Path, except: &[&str]) -> anyhow::Result<()> {
-    copy_tree(source, target, except)?;
+    let except: Vec<&str> = except.iter().copied().chain([PROFILE_RUNTIME]).collect();
+    copy_tree(source, target, &except)?;
     let database = source.join("state.db");
     if database.exists() {
         let src = rusqlite::Connection::open_with_flags(&database, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
@@ -1022,6 +1030,24 @@ mod tests {
         hermes_db(&other, None, "no gateway yet", "queued");
         resync_database(&hub, &other, "/other").unwrap();
         assert_eq!(read_db(&other), ("said in the hub".into(), Some((3, "hub-gateway".into())), "terminal".into()));
+    }
+
+    /// Lab of 24/11: the hub's lease on the conversation the agent moved from (`runtime/active_sessions.json`, held
+    /// by the hub's gateway pid) went with it, and its space refused every turn there. A folder named so deeper in the
+    /// profile (a skill's) is copied.
+    #[test]
+    fn a_profile_s_copy_leaves_its_gateway_s_live_state_out() {
+        let dir = tempfile::tempdir().unwrap();
+        let (from, to) = (dir.path().join("hub/profiles/vie"), dir.path().join("space/profiles/vie"));
+        std::fs::create_dir_all(from.join("runtime/bot_live_delivery")).unwrap();
+        std::fs::write(from.join("runtime/active_sessions.json"), r#"{"entries": [{"pid": 1}]}"#).unwrap();
+        std::fs::create_dir_all(from.join("skills/x/runtime")).unwrap();
+        std::fs::write(from.join("skills/x/runtime/tool.py"), "print(1)").unwrap();
+        std::fs::write(from.join("SOUL.md"), "Tu es Vie.").unwrap();
+        copy_profile(&from, &to).unwrap();
+        assert!(!to.join("runtime").exists());
+        assert_eq!(std::fs::read_to_string(to.join("SOUL.md")).unwrap(), "Tu es Vie.");
+        assert!(to.join("skills/x/runtime/tool.py").exists());
     }
 
     #[test]
