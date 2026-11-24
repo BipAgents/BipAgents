@@ -69,6 +69,9 @@ use crate::web::{self, ApiResult, HttpError, QueryMap};
 use crate::{py, Dict};
 
 pub const MAIL: &str = "mail";
+/// Who made a mailbox's replies-due watch (plans/sources.rs): the bridge, on the person's « Oui » to its consent card.
+/// Its new messages' headers go to plans/sources.rs `seen_mail`, never to a turn: it runs no model.
+pub const REPLIES: &str = "replies";
 pub const LINK: &str = "link";
 pub const HOOK_PATH: &str = "/hook";
 /// The approval card of a trigger an agent proposed (`/v1/approvals`, `/v1/approve`).
@@ -195,6 +198,10 @@ pub struct Event {
     /// Runs that could not start with this event (put back each time, `START_TRIES` at most).
     #[serde(skip_serializing_if = "is_zero")]
     pub tries: u32,
+    /// A mass mailing by its headers (List-Id, List-Unsubscribe, Precedence bulk / list / junk, Auto-Submitted,
+    /// X-Auto-Response-Suppress): a replies-due watch leaves it out (plans/sources.rs).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub bulk: bool,
 }
 
 fn is_zero(n: &u32) -> bool {
@@ -379,7 +386,12 @@ pub fn matches(filter: &MailFilter, from: &str, subject: &str, text: &str) -> bo
 /// reading the sender's address, the subject and the date (`turn_text`); the IMAP watch then fetches no text
 /// (triggers_mail.rs `reads_text`).
 pub fn headers_only(t: &Trigger) -> bool {
-    t.by == crate::plans::MAKER
+    t.by == crate::plans::MAKER || t.by == REPLIES
+}
+
+/// A mailbox's replies-due watch (`REPLIES`): its messages' headers to plans/sources.rs, never a turn.
+pub fn replies_watch(t: &Trigger) -> bool {
+    t.by == REPLIES
 }
 
 /// `session` is the conversation of `agent`'s plan watch (`headers_only`): its turn reads the headers it was given,
@@ -714,9 +726,13 @@ pub fn create(config: &Config, agent: &str, f: &Fields, by: &str) -> Result<Trig
     if kind == LINK {
         t.token = new_token();
     }
-    if by == "person" || by == crate::plans::MAKER {
-        // the person's own, or a plan's e-mail watch: the person said « Prévoir » to the plan's card (plans.rs)
+    if by == "person" || by == crate::plans::MAKER || by == REPLIES {
+        // the person's own, a plan's e-mail watch (the person said « Prévoir » to the plan's card, plans.rs), or a
+        // replies-due watch (their « Oui » to its consent card, plans/sources.rs: it ends in 90 days)
         t.enabled = true;
+        if by == REPLIES {
+            t.ends = Some(now + crate::task_frame::DEFAULT_END_DAYS * 86400.0);
+        }
     } else {
         t.card = Some(Card { id: py::token_hex(6), at: now });
     }
@@ -734,7 +750,10 @@ pub fn create(config: &Config, agent: &str, f: &Fields, by: &str) -> Result<Trig
 pub fn update(config: &Config, id: &str, f: &Fields) -> Result<Trigger, String> {
     let before = get(config, id).ok_or_else(|| "no such routine".to_string())?;
     let mut t = before.clone();
-    apply(config, &mut t, f)?;
+    // a replies-due watch is the bridge's: only paused or resumed (its words and its mailbox stay)
+    if !replies_watch(&before) {
+        apply(config, &mut t, f)?;
+    }
     if let Some(on) = f.enabled {
         t.enabled = on;
         if on {
@@ -1195,6 +1214,10 @@ async fn run_route(State(state): State<AppState>, UrlPath(id): UrlPath<String>, 
         .and_then(|v| v.get("text").and_then(Value::as_str).map(str::to_string))
         .unwrap_or_default();
     let Some(t) = get(&config, &id) else { return Err(HttpError::new(404, "no such routine")) };
+    if replies_watch(&t) {
+        // it runs no turn: nothing to try
+        return Err(HttpError::new(409, "this watch runs no turn: it only tells which e-mails wait for a reply"));
+    }
     let event = Event {
         kind: "test".into(),
         text: tk::head(&text, EVENT_CHARS).to_string(),
@@ -1366,6 +1389,11 @@ pub fn autonomous_item(config: &Config, t: &Trigger) -> Value {
     });
     if let (Some(map), Value::Object(more)) = (item.as_object_mut(), frame_view(config, t)) {
         map.extend(more);
+    }
+    if replies_watch(t) {
+        // additions an app 1.0 ignores (contracts/plans-sources `app_1_0`)
+        item["when"]["replies"] = json!(true);
+        item["detail"]["replies"] = json!({"account": t.mail.as_ref().map(|m| m.account.clone())});
     }
     item
 }

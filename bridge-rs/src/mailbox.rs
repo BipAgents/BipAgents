@@ -1678,6 +1678,9 @@ async fn change(
     let account = found[index].clone();
     tokio::task::spawn_blocking(move || store.write(&found)).await.map_err(anyhow::Error::from)??;
     crate::mcp_sessions::poke(); // its agents' tools may have changed (mcp_sessions.rs)
+    // taken from an agent: that agent's replies-due watch stops, its headers go (plans/sources.rs)
+    let c = config.clone();
+    let _ = tokio::task::spawn_blocking(move || crate::plans::sources::mailboxes_gone(&c)).await;
 
     // Its agents' tools: the calendar's listed or not (a changed entry makes their Hermes fetch the list again), and the
     // mail tools in view for an agent given a mailbox or no longer (tool_diet.rs `MAIL_DIRECT`).
@@ -1715,6 +1718,9 @@ async fn remove(State(state): State<AppState>, UrlPath(account_id): UrlPath<Stri
         .collect();
     tokio::task::spawn_blocking(move || store.write(&kept)).await.map_err(anyhow::Error::from)??;
     crate::mcp_sessions::poke(); // its agents' tools may have changed (mcp_sessions.rs)
+    // its replies-due watch stops, its headers go (plans/sources.rs)
+    let c = state.config();
+    let _ = tokio::task::spawn_blocking(move || crate::plans::sources::mailboxes_gone(&c)).await;
 
     // their mail tools back behind the search when it was their only mailbox
     reconcile_agents(&state.config(), gone).await;

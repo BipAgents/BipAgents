@@ -130,6 +130,29 @@ pub struct Offer {
     /// note of its « Oui » (review, remark).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub outside: bool,
+    /// What the bridge made it from itself (plans/sources.rs: « calendar », « trip », « replies »); empty: the agent's.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub source: String,
+    /// A replies card's e-mails as shown ({from, subject, since}: their headers only).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub items: Vec<Value>,
+    /// Its top line when it is not « {agent} propose · {about} » (a replies card's: « Vie · 3 e-mails attendent ta
+    /// réponse »).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub top: String,
+    /// The mailbox's address it is about (a replies card, a mailbox's consent card).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub mailbox: String,
+}
+
+/// What the learning counts an offer's answers by: its kind, or for the bridge's own cards their source and kind
+/// (« calendar:appointment », « replies:draft »: never one of the agent's kinds, plans/sources.rs).
+pub fn learn_key(offer: &Offer) -> String {
+    if offer.source.is_empty() {
+        offer.kind.clone()
+    } else {
+        format!("{}:{}", offer.source, offer.kind)
+    }
 }
 
 /// What the caps and the learning know an offer by (review R4).
@@ -862,6 +885,10 @@ pub fn spec_of(
         first: false,
         subject,
         outside: false,
+        source: String::new(),
+        items: Vec::new(),
+        top: String::new(),
+        mailbox: String::new(),
     })
 }
 
@@ -877,6 +904,7 @@ fn params_of(kind: &str) -> &'static [&'static str] {
 /// Done by the bridge itself at « Oui ».
 pub fn by_bridge(offer: &Offer) -> bool {
     BY_BRIDGE.contains(&offer.kind.as_str())
+        || [super::sources::APPOINTMENT, super::sources::REPLY_WATCH].contains(&offer.kind.as_str())
 }
 
 // -- the caps -----------------------------------------------------------------------------------------------------------
@@ -962,7 +990,7 @@ pub fn rule_refusal(store: &Store, offer: &Offer, now: f64) -> Option<String> {
             offer.about
         ));
     }
-    if quiet(store, agent, &offer.kind, now) {
+    if quiet(store, agent, &learn_key(offer), now) {
         return Some(format!(
             "Not done: your person said no thanks to your {} lately: don't offer them for now (it is not « Initiative » \
              off: just that kind, for a while).",
@@ -1003,7 +1031,8 @@ pub fn pills_room(store: &Store, plans: &super::Store, agent: &str, pills: usize
 pub fn card_item(config: &Config, offer: &Offer) -> Dict {
     let lang = lang_of(config, &offer.agent);
     let shown = shown_agent(config, &offer.agent);
-    let sentence = summary(lang, &shown, &offer.label);
+    // a replies card: its own top line (« Vie · 3 e-mails attendent ta réponse »), then its question
+    let sentence = if offer.top.is_empty() { summary(lang, &shown, &offer.label) } else { format!("{}. {}", offer.top, offer.label) };
     let mut under_i = detail(lang, offer, person_zone(config));
     if offer.outside {
         under_i = format!("{}\n{under_i}", texts(lang).outside);
@@ -1012,7 +1041,7 @@ pub fn card_item(config: &Config, offer: &Offer) -> Dict {
         under_i.push('\n');
         under_i.push_str(texts(lang).first_card);
     }
-    let item = json!({
+    let mut item = json!({
         "agent": offer.agent, "run_id": format!("{RUN_PREFIX}{}", offer.id), "request_id": offer.id,
         "command": format!("{TOOL_NAME} · {}", offer.label), "description": sentence, "choices": ["once", "deny"],
         "created_at": offer.made, "session_id": null, "bip_summary": sentence, "bip_detail": under_i,
@@ -1020,6 +1049,20 @@ pub fn card_item(config: &Config, offer: &Offer) -> Dict {
                       "plan": offer.plan, "pill": offer.pill, "mode": "basic", "expires_at": offer.expires,
                       "outside": offer.outside},
     });
+    // the bridge's own cards (plans/sources.rs, contracts/plans-sources): additions an app 1.0 ignores
+    if !offer.source.is_empty() {
+        let more = &mut item["bip_offer"];
+        more["source"] = json!(offer.source);
+        if !offer.items.is_empty() {
+            more["items"] = json!(offer.items);
+        }
+        if !offer.top.is_empty() {
+            more["top"] = json!(offer.top);
+        }
+        if !offer.mailbox.is_empty() {
+            more["mailbox"] = json!(offer.mailbox);
+        }
+    }
     item.as_object().cloned().unwrap_or_default()
 }
 
@@ -1289,7 +1332,7 @@ pub fn answer(config: &Config, agent: &str, id: &str, yes: bool, now: f64) -> Op
     change(config, |s| {
         let at = s.offers.iter().position(|o| o.agent == agent && o.id == id && o.expires > now)?;
         let offer = s.offers.remove(at);
-        record(s, agent, &offer.kind, subject_of(&offer), if yes { YES } else { NO }, now);
+        record(s, agent, &learn_key(&offer), subject_of(&offer), if yes { YES } else { NO }, now);
         Some(offer)
     })
 }
@@ -1303,7 +1346,7 @@ pub fn expire(config: &Config, now: f64) -> Vec<Offer> {
         let (gone, kept): (Vec<Offer>, Vec<Offer>) = std::mem::take(&mut s.offers).into_iter().partition(|o| o.expires <= now);
         s.offers = kept;
         for o in &gone {
-            record(s, &o.agent, &o.kind, subject_of(o), EXPIRED, now);
+            record(s, &o.agent, &learn_key(o), subject_of(o), EXPIRED, now);
         }
         gone
     })
@@ -1358,6 +1401,11 @@ pub async fn approve(state: &AppState, agent: &AgentConfig, id: &str, choice: &s
     };
     tracing::info!(target: "bipbridge::offers", agent = %agent.name, offer = %offer.id, kind = %offer.kind, yes,
                    "offer answered");
+    if !offer.source.is_empty() {
+        // the bridge's own card (plans/sources.rs): its e-mails drafted or declined, its mailbox declined
+        let (c, o) = (config.clone(), offer.clone());
+        let _ = tokio::task::spawn_blocking(move || super::sources::answered(&c, &o, yes)).await;
+    }
     if !yes {
         return Ok(web::ok(json!({"ok": true, "choice": "deny"})));
     }
@@ -1365,6 +1413,16 @@ pub async fn approve(state: &AppState, agent: &AgentConfig, id: &str, choice: &s
                           "by": if by_bridge(&offer) { "bridge" } else { "agent" }});
     let kind = offer.kind.clone();
     match kind.as_str() {
+        super::sources::REPLY_WATCH => {
+            // its mailbox's replies-due watch on (plans/sources.rs): a trigger of the bridge, headers only
+            let account = param(&offer, "account").to_string();
+            let (c, name) = (config.clone(), agent.name.clone());
+            match tokio::task::spawn_blocking(move || super::sources::watch_on(&c, &name, &account)).await {
+                Ok(Ok(trigger)) => tracing::info!(target: "bipbridge::offers", offer = %offer.id, trigger = %trigger, "replies watch on"),
+                Ok(Err(why)) => tracing::info!(target: "bipbridge::offers", offer = %offer.id, why = %why, "replies watch not made"),
+                Err(e) => tracing::warn!(target: "bipbridge::offers", error = %e, "replies watch not made"),
+            }
+        }
         "reminder" => {
             // where the card showed for the person: its line lands there (never a hidden conversation)
             let origin = if offer.asked { place.report.clone().or(place.session.clone()) } else { None };
@@ -1405,10 +1463,26 @@ async fn work(state: &AppState, agent: &AgentConfig, doing: Doing) {
     match doing.offer.kind.as_str() {
         "route" => route(state, agent, &doing.offer, &place).await,
         "calendar" => calendar(state, agent, &doing.offer, &place).await,
+        super::sources::APPOINTMENT => super::sources::appointment_yes(state, agent, &doing.offer).await,
         _ => turn(state, agent, &doing.offer, &place).await,
     }
     change(&state.config(), |s| s.doing.retain(|d| d.offer.id != id));
     running(&id, false);
+}
+
+/// The replies cards' « Oui » still being done for `agent` (their turn may go on in Hermes after a restart: plans/sources.rs
+/// `gate_unknown_run`), started within the last two turns' time.
+pub fn replies_doing(config: &Config, agent: &str) -> Vec<Offer> {
+    let now = py::time_time();
+    if !path(config).exists() {
+        return Vec::new();
+    }
+    load(config)
+        .doing
+        .into_iter()
+        .filter(|d| d.offer.agent == agent && d.offer.source == super::sources::REPLIES && now - d.at < 2.0 * TURN_SECONDS)
+        .map(|d| d.offer)
+        .collect()
 }
 
 /// The « Oui »'s works a restart left undone (not run by this bridge, started more than `STALE_SECONDS` ago, tried
@@ -1544,12 +1618,35 @@ pub fn still_writes(config: &Config, agent: &str, offer: &Offer) -> bool {
 async fn turn(state: &AppState, agent: &AgentConfig, offer: &Offer, place: &crate::card_place::Place) {
     let pipeline = Pipeline::of(state);
     let conversation = if offer.asked { crate::card_place::resume_in(place) } else { "main".to_string() };
-    let mut turn = Turn::new(agent, crate::background_turn::Kind::Card, &conversation, yes_note(offer));
+    let config = state.config();
+    // the bridge's own cards (plans/sources.rs): a trip's (its plan proposed now is the person's ask), a replies
+    // card's (its turn opens those e-mails only)
+    let note = super::sources::yes_note(&config, offer).unwrap_or_else(|| yes_note(offer));
+    if offer.source == super::sources::TRIP {
+        super::sources::grant(&config, &agent.name, py::time_time());
+    }
+    let gated = (offer.source == super::sources::REPLIES).then(|| super::sources::mail_ids(offer));
+    let mut turn = Turn::new(agent, crate::background_turn::Kind::Card, &conversation, note);
     turn.budget = Some(TURN_BUDGET);
     turn.max_seconds = TURN_SECONDS;
-    let config = state.config();
+    if gated.is_some() {
+        // closed by Hermes too, whatever the bridge knows of the turn (review C3)
+        turn.options = Some(json!({"closed_tools": super::sources::REPLIES_CLOSED_TOOLS}));
+    }
     let title = shown_agent(&config, &agent.name);
-    match pipeline.run(&turn).await {
+    let opened = std::sync::Mutex::new(None::<String>);
+    let ran = pipeline
+        .run_then(&turn, |run| {
+            if let Some(ids) = gated.clone() {
+                super::sources::set_gate(&agent.name, run, Some(ids));
+                *opened.lock().unwrap_or_else(|e| e.into_inner()) = Some(run.to_string());
+            }
+        })
+        .await;
+    if let Some(run) = opened.lock().unwrap_or_else(|e| e.into_inner()).take() {
+        super::sources::set_gate(&agent.name, &run, None);
+    }
+    match ran {
         Ok(ran) if ran.answered() && !crate::background_turn::is_silent(&ran.text) => {
             let delivery = Delivery {
                 agent: agent.clone(),
@@ -1654,6 +1751,39 @@ pub async fn at_moment(state: &AppState, agent: &AgentConfig, r: &crate::routine
     state.push.notify_bridge_card(&agent.name, &notification(lang, &offer.label), PUSH_KEY, &run_id).await;
     tracing::info!(target: "bipbridge::offers", agent = %agent.name, plan = %plan.id, offer = %offer.id, "moment's offer placed");
     Some("offer placed".into())
+}
+
+/// The bridge's own card (plans/sources.rs), placed with no turn (the main conversation shows it), taken (nothing
+/// resumes the agent when it is answered) and pushed: the caps of the cards nobody asked for, the rules (the same
+/// offer in 14 days, a subject declined, its source quiet). Err: why not, and whether it is only held by the caps.
+pub async fn place_bridge(state: &AppState, agent: &AgentConfig, mut offer: Offer) -> Result<String, (String, bool)> {
+    let config = state.config();
+    let (now, person) = (py::time_time(), person_zone(&config));
+    let plans = super::load(&config);
+    let made = change(&config, |s| {
+        if let Some(why) = rule_refusal(s, &offer, now) {
+            return Err((why, false));
+        }
+        if let Some(why) = unasked_refusal(s, &plans, &agent.name, person, now) {
+            return Err((why, true));
+        }
+        remember(s, &offer, now);
+        s.made.push(Made { agent: offer.agent.clone(), at: now, asked: false, run: None, pill: false });
+        s.offers.push(offer.clone());
+        Ok(())
+    });
+    made?;
+    if first_card(&config, &agent.name) {
+        offer.first = true;
+        change(&config, |s| s.offers.iter_mut().filter(|o| o.id == offer.id).for_each(|o| o.first = true));
+    }
+    let run_id = format!("{RUN_PREFIX}{}", offer.id);
+    crate::card_place::place_for(state, agent, &run_id, None).await;
+    crate::card_place::taken(&config, &run_id);
+    let lang = lang_of(&config, &agent.name);
+    let line = super::sources::notification(lang, &offer).unwrap_or_else(|| notification(lang, &offer.label));
+    state.push.notify_bridge_card(&agent.name, &line, PUSH_KEY, &run_id).await;
+    Ok(offer.id)
 }
 
 /// One look (plans.rs `watch`): the offers past their time go without a word (their decision kept as « expired »,
