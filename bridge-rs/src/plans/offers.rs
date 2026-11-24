@@ -299,17 +299,27 @@ static TO_THE_PERSON: LazyLock<Regex> = LazyLock::new(|| {
 /// German and Dutch put the verb at the end (« Soll ich den Tisch für Samstag reservieren? », « Zal ik de tafel …
 /// reserveren? »): their modal's lead, the verbs that book, pay or buy, those that send, and the words that start
 /// another clause or subject before the verb (« Soll ich schauen, wo du … kaufen kannst? »: the person buys).
-const MODALS: [(&[&str], &[&str], &[&str], &[&str]); 2] = [
-    (&["soll ich", "kann ich", "darf ich", "dass ich"],
-     &["buchen", "reservieren", "bezahlen", "zahlen", "bestellen", "kaufen", "uberweisen", "buche", "reserviere", "bezahle",
-       "zahle", "bestelle", "kaufe", "uberweise"],
-     &["senden", "schicken", "verschicken", "sende", "schicke", "verschicke"],
-     &["wo", "wie", "was", "ob", "du", "ihr", "man", "wann", "welche", "welchen", "welcher", "welches", "wer", "damit",
-       "wenn", "falls"]),
-    (&["zal ik", "kan ik", "moet ik", "mag ik", "dat ik"],
-     &["boeken", "reserveren", "betalen", "bestellen", "kopen"],
-     &["sturen", "versturen", "verzenden", "mailen", "opsturen"],
-     &["waar", "hoe", "wat", "of", "wanneer", "welke", "welk", "wie", "om", "jij", "u", "men", "als"]),
+struct Modal {
+    leads: &'static [&'static str],
+    books: &'static [&'static str],
+    sends: &'static [&'static str],
+    stops: &'static [&'static str],
+}
+const MODALS: [Modal; 2] = [
+    Modal {
+        leads: &["soll ich", "kann ich", "darf ich", "dass ich"],
+        books: &["buchen", "reservieren", "bezahlen", "zahlen", "bestellen", "kaufen", "uberweisen", "buche", "reserviere",
+                 "bezahle", "zahle", "bestelle", "kaufe", "uberweise"],
+        sends: &["senden", "schicken", "verschicken", "sende", "schicke", "verschicke"],
+        stops: &["wo", "wie", "was", "ob", "du", "ihr", "man", "wann", "welche", "welchen", "welcher", "welches", "wer",
+                 "damit", "wenn", "falls"],
+    },
+    Modal {
+        leads: &["zal ik", "kan ik", "moet ik", "mag ik", "dat ik"],
+        books: &["boeken", "reserveren", "betalen", "bestellen", "kopen"],
+        sends: &["sturen", "versturen", "verzenden", "mailen", "opsturen"],
+        stops: &["waar", "hoe", "wat", "of", "wanneer", "welke", "welk", "wie", "om", "jij", "u", "men", "als"],
+    },
 ];
 /// Words between a modal's lead and its verb, at most.
 const MODAL_GAP: usize = 8;
@@ -318,17 +328,17 @@ const MODAL_GAP: usize = 8;
 fn modal_acts(clause: &str) -> (bool, bool) {
     let words: Vec<&str> = clause.split_whitespace().collect();
     let (mut books, mut sends) = (false, false);
-    for (leads, book_verbs, send_verbs, stops) in MODALS {
+    for modal in &MODALS {
         for i in 0..words.len().saturating_sub(1) {
-            if !leads.contains(&format!("{} {}", words[i], words[i + 1]).as_str()) {
+            if !modal.leads.contains(&format!("{} {}", words[i], words[i + 1]).as_str()) {
                 continue;
             }
             for w in words.iter().skip(i + 2).take(MODAL_GAP + 1) {
-                if stops.contains(w) {
+                if modal.stops.contains(w) {
                     break;
                 }
-                books |= book_verbs.contains(w);
-                sends |= send_verbs.contains(w);
+                books |= modal.books.contains(w);
+                sends |= modal.sends.contains(w);
             }
         }
     }
