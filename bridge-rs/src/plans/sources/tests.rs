@@ -274,6 +274,30 @@ fn a_replies_watch_past_its_90_days_goes_on_never_stopped_without_the_person() {
     assert!(load(&config).mailboxes.iter().filter(|m| m.state == ON).all(|m| m.ends == 0.0));
 }
 
+/// Review B1 of plans-cards: switching a mailbox's watch off removes every replies-due watch of that mailbox, also one
+/// the store lost track of (its trigger forgotten); another mailbox's, or the person's own e-mail routine, stay.
+#[test]
+fn watch_off_removes_every_replies_watch_of_its_mailbox_even_one_the_store_forgot() {
+    use crate::triggers::{MailFilter, Trigger, MAIL, REPLIES};
+    let dir = tempfile::tempdir().unwrap();
+    let config = config_in(dir.path());
+    let watch = |id: &str, account: &str, by: &str| Trigger {
+        id: id.into(), agent: "vie".into(), kind: MAIL.into(), by: by.into(), enabled: true,
+        mail: Some(MailFilter { account: account.into(), ..Default::default() }), ..Default::default()
+    };
+    crate::triggers::change(&config, |s| {
+        s.triggers.push(watch("lost", "acct", REPLIES));
+        s.triggers.push(watch("other", "acct2", REPLIES));
+        s.triggers.push(watch("mine", "acct", "person"));
+    });
+    // the store has the mailbox on, but no trigger (the race of the consent card)
+    change(&config, |s| s.mailboxes.push(Mailbox { account: "acct".into(), agent: "vie".into(), state: ON.into(), ..Mailbox::default() }));
+    watch_off(&config, "acct", OFF);
+    let left: Vec<String> = crate::triggers::load(&config).triggers.into_iter().map(|t| t.id).collect();
+    assert_eq!(left, vec!["other".to_string(), "mine".to_string()]);
+    assert_eq!(load(&config).mailboxes[0].state, OFF);
+}
+
 fn headers(pairs: &'static [(&'static str, &'static str)]) -> impl Fn(&str) -> Option<String> {
     move |k| pairs.iter().find(|(n, _)| n.eq_ignore_ascii_case(k)).map(|(_, v)| v.to_string())
 }

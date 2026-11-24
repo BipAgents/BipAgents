@@ -1162,6 +1162,16 @@ pub fn watch_off(config: &Config, account: &str, state: &str) {
     if let Some(t) = known.as_ref().and_then(|m| m.trigger.clone()) {
         crate::triggers::remove(config, &t);
     }
+    // and any replies-due watch of this mailbox the store lost track of (review B1 of plans-cards): never one left running
+    let lost: Vec<String> = crate::triggers::load(config)
+        .triggers
+        .into_iter()
+        .filter(|t| t.by == crate::triggers::REPLIES && t.mail.as_ref().is_some_and(|m| m.account == account))
+        .map(|t| t.id)
+        .collect();
+    for id in lost {
+        crate::triggers::remove(config, &id);
+    }
     // its replies card still waiting goes too (its e-mails' headers with it)
     if let Some(address) = known.map(|m| m.address).filter(|a| !a.is_empty()) {
         if offers::load(config).offers.iter().any(|o| o.source == REPLIES && o.kind == DRAFT && o.mailbox == address) {
