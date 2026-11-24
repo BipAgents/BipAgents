@@ -478,8 +478,16 @@ pub fn askable(config: &Config, agent: &AgentConfig) -> Vec<Item> {
         return Vec::new();
     }
     let sets = ProfileSets::new();
-    let mut out: Vec<Item> =
-        REGISTRY.iter().map(Entry::item).filter(|item| is_on_with(config, agent, item, &sets) == Some(false)).collect();
+    // on an outside model, the Carnet and Health are never asked for from a conversation: a « Oui » there would send
+    // the person's notes or health to it without the app's explanation (agent_shared_memory.rs, 2026-11-23); the
+    // person turns them on in the app, knowingly
+    let outside = crate::agent_shared_memory::kept_from_cards(config, agent);
+    let mut out: Vec<Item> = REGISTRY
+        .iter()
+        .map(Entry::item)
+        .filter(|item| !(outside && matches!(item.switch, Switch::Notebook | Switch::Health)))
+        .filter(|item| is_on_with(config, agent, item, &sets) == Some(false))
+        .collect();
     // Hermes' toolsets this file doesn't name, as the app last read them (the generic way: a new toolset is askable)
     let known: Vec<&str> = REGISTRY.iter().map(|e| e.id).chain(NOT_ASKABLE.iter().map(|n| n.0)).collect();
     if crate::agents_admin::managed(config, &agent.name).is_ok() {
@@ -521,7 +529,8 @@ fn item_of_ask(config: &Config, agent: &AgentConfig, ask: &Ask) -> Option<Item> 
     })
 }
 
-/// The person's other agents `item` could be given to as well: their own, eligible, with it off (D3 A).
+/// The person's other agents `item` could be given to as well: their own, eligible, with it off (D3 A). Never the
+/// Carnet or Health for an agent on an outside model (review C3: only from the app, with its explanation).
 pub fn also_for(config: &Config, asking: &AgentConfig, item: &Item) -> Vec<AgentConfig> {
     if !item.also {
         return Vec::new();
@@ -530,8 +539,14 @@ pub fn also_for(config: &Config, asking: &AgentConfig, item: &Item) -> Vec<Agent
         .agents
         .values()
         .filter(|a| a.name != asking.name && eligible(config, a) && is_on(config, a, item) == Some(false))
+        .filter(|a| !(guarded_item(item) && crate::agent_shared_memory::kept_from_cards(config, a)))
         .cloned()
         .collect()
+}
+
+/// The tools an outside model never gets from a card (review C3).
+fn guarded_item(item: &Item) -> bool {
+    matches!(item.switch, Switch::Notebook | Switch::Health)
 }
 
 // -- the agent's tool ---------------------------------------------------------------------------------------------------
@@ -1345,8 +1360,14 @@ pub async fn answer(state: &AppState, id: &str, answer: &Answer, via: &str) -> R
     if answer.also.iter().any(|n| !ask.also.contains(n)) {
         return Err(Refusal::BadAlso);
     }
+    // looked at again now (review C3): an agent gone to an outside model since the card was shown gets neither the
+    // Carnet nor Health from it, only from the app
+    if guarded_item(&item) && crate::agent_shared_memory::kept_from_cards(&config, &agent) {
+        return Err(Refusal::ScreenOnly);
+    }
     let mut targets = vec![agent.clone()];
     targets.extend(answer.also.iter().filter_map(|n| config.agent(Some(n)).cloned()));
+    targets.retain(|a| !(guarded_item(&item) && crate::agent_shared_memory::kept_from_cards(&config, a)));
     // what still needs turning on (the asking agent may have got it meanwhile)
     let off: Vec<AgentConfig> = targets.iter().filter(|a| is_on(&config, a, &item) != Some(true)).cloned().collect();
     if !off.is_empty() {
@@ -1561,6 +1582,44 @@ mod tests {
                 assert!(named(&c[1]), "Android tile « {} »", &c[1]);
             }
         }
+    }
+
+    /// An agent on an outside model never asks for the Carnet or Health in its conversation (2026-11-23).
+    #[test]
+    fn an_outside_model_never_asks_for_the_carnet_or_health() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = config_in(&dir, true);
+        config.hermes.home = dir.path().join("hub").to_string_lossy().into_owned(); // (never the machine's ~/.hermes)
+        let vie = agent(&config, "vie");
+        crate::notebook::set_enabled(&config, "vie", false).unwrap();
+        let ids = |c: &Config| askable(c, &vie).into_iter().map(|i| i.id).collect::<Vec<String>>();
+        assert!(ids(&config).contains(&"notebook".to_string()), "{:?}", ids(&config));
+        let folder = crate::agents_admin::profile_folder(&config, &vie);
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::write(folder.join("config.yaml"), "model:\n  provider: openai-codex\n  default: gpt-6.1\n").unwrap();
+        let now = ids(&config);
+        assert!(!now.contains(&"notebook".to_string()) && !now.contains(&"health".to_string()), "{now:?}");
+        assert!(now.contains(&"weather".to_string()), "the others stay askable: {now:?}");
+    }
+
+    /// Review 23/11 (red): « Aussi pour… » on another agent's Carnet card never lists an agent on an outside model; a
+    /// ticked « Oui » there turns its Carnet on without the app's explanation, the very thing `askable` keeps out.
+    #[test]
+    fn review_also_never_offers_the_carnet_to_an_agent_on_an_outside_model() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = config_in(&dir, true);
+        config.hermes.home = dir.path().join("hub").to_string_lossy().into_owned(); // (never the machine's ~/.hermes)
+        for name in ["vie", "paul", "maison"] {
+            crate::notebook::set_enabled(&config, name, false).unwrap();
+        }
+        let paul = agent(&config, "paul");
+        let folder = crate::agents_admin::profile_folder(&config, &paul);
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::write(folder.join("config.yaml"), "model:\n  provider: openai-codex\n  default: gpt-6.1\n").unwrap();
+        let notebook = REGISTRY.iter().find(|e| e.id == "notebook").unwrap().item();
+        let names: Vec<String> = also_for(&config, &agent(&config, "vie"), &notebook).into_iter().map(|a| a.name).collect();
+        assert!(names.contains(&"maison".to_string()), "{names:?}");
+        assert!(!names.contains(&"paul".to_string()), "an outside model offered the Carnet: {names:?}");
     }
 
     #[test]

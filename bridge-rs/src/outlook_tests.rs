@@ -10,6 +10,10 @@ fn config_with(enabled: bool, dir: &std::path::Path) -> Config {
     let mut config = Config::with_key("k");
     config.outlook = Settings::from_table(&json!({"enabled": enabled}));
     config.outbox.db_path = dir.join("outbox.sqlite3").to_string_lossy().into_owned();
+    // the place's agents (no Hermes home of its own in a unit test: their model is the person's own)
+    for name in ["vie", "coach"] {
+        config.agents.insert(name.into(), crate::config::AgentConfig { name: name.into(), ..Default::default() });
+    }
     config
 }
 

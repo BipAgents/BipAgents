@@ -35,7 +35,7 @@ def hub_place(bridges, fakes, agents=("coach",), start=None, protected=True, pro
         bridge.state_dir.mkdir(parents=True, exist_ok=True)
         (bridge.state_dir / "project-agents.json").write_text(json.dumps({"projects": {project: {
             "created": time.time(), "ends": time.time() + 86400, "archived": None, "from": None, "lang": "fr"}}}))
-    (hub / "config.yaml").write_text("model:\n  provider: custom\n  default: glm\n")
+    (hub / "config.yaml").write_text("model:\n  provider: custom\n  default: glm\n  base_url: http://gpu:8888/v1\n")   # the person's own server
     (hub / ".env").write_text("CUSTOM_MODEL_API_KEY=sk-hub\n")
     for name in agents:
         folder = profile(hub, name)

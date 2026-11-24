@@ -433,6 +433,21 @@ pub fn change<T>(config: &Config, id: &str, edit: impl FnOnce(&mut Room) -> T) -
 }
 
 /// Every room of this install, the most recently active first.
+/// `agent`'s hidden conversations of its rooms forgotten (made anew at its next turn there): an agent put « à l'écart »
+/// (review 2, C8), so a room's history is not replayed to it. How many rooms changed.
+pub fn drop_sessions(config: &Config, agent: &str) -> usize {
+    let mut dropped = 0;
+    for room in all(config).into_iter().filter(|r| r.sessions.contains_key(agent)) {
+        if let Ok(Some(true)) = change(config, &room.id, |r| r.sessions.remove(agent).is_some()) {
+            dropped += 1;
+        }
+    }
+    if dropped > 0 {
+        tracing::info!(agent = %agent, rooms = dropped, "rooms: its conversations there made anew (kept apart)");
+    }
+    dropped
+}
+
 pub fn all(config: &Config) -> Vec<Room> {
     let mut out: Vec<Room> = std::fs::read_dir(folder(config))
         .into_iter()
@@ -465,9 +480,14 @@ pub fn mates(config: &Config, agent: &str) -> BTreeMap<String, BTreeSet<String>>
     if config.agent(Some(agent)).is_none() {
         return out;
     }
+    if crate::agent_shared_memory::out_of_rooms(config, agent) {
+        return out; // kept apart: no room mate's folder (review 2, C8)
+    }
     for room in all(config).into_iter().filter(|room| room.participants.iter().any(|p| p == agent)) {
         for p in room.participants.iter().filter(|p| *p != agent && config.agent(Some(p)).is_some()) {
-            out.entry(p.clone()).or_default().insert(room.id.clone());
+            if !crate::agent_shared_memory::out_of_rooms(config, p) {
+                out.entry(p.clone()).or_default().insert(room.id.clone());
+            }
         }
     }
     out
@@ -1177,6 +1197,8 @@ impl Rooms {
     fn candidates(&self, config: &Config, room: &Room) -> Vec<Candidate> {
         room.participants
             .iter()
+            // « à l'écart » (an outside model's protection, or the person): no turn here (review 2, C8)
+            .filter(|id| !crate::agent_shared_memory::out_of_rooms(config, id))
             .filter_map(|id| match config.agent(Some(id)) {
                 Some(a) => Some(candidate(config, a)),
                 None => room.guests.get(id).map(|name| Candidate {
@@ -1545,6 +1567,11 @@ impl Rooms {
         let Some(agent) = config.agent(Some(&turn.agent)).cloned() else {
             return Outcome { reply: Err("this agent isn't on this install any more".into()), tokens: none, capped: false };
         };
+        if crate::agent_shared_memory::out_of_rooms(&config, &agent.name) {
+            // kept apart since it was picked (review 2, C8): no turn, and its room conversation made anew
+            drop_sessions(&config, &agent.name);
+            return Outcome { reply: Err("this agent is kept apart from the other agents".into()), tokens: none, capped: false };
+        }
         let session = match self.session_for(id, &agent).await {
             Ok(session) => session,
             Err(why) => return Outcome { reply: Err(why), tokens: none, capped: false },

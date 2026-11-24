@@ -405,16 +405,34 @@ impl Pipeline {
     /// the name as given when the bridge has no conversations (tests) or does not know it.
     pub async fn tip(&self, agent: &AgentConfig, thread: &str) -> String {
         let Some(threads) = self.threads() else { return thread.to_string() };
-        let found = if thread == "main" || thread.starts_with("t_") {
-            threads.named(Some(agent), thread).await.ok().map(|(_, t)| t)
-        } else {
-            threads.resolve(agent, thread).await.ok().flatten()
-        };
-        let Some(found) = found else { return thread.to_string() };
+        let Some(found) = Self::conversation(&threads, agent, thread).await else { return thread.to_string() };
         match threads.line(agent, &found).await.ok().and_then(|s| s.last().map(|s| s.session_id.clone())) {
             Some(tip) => tip,
             None => thread.to_string(),
         }
+    }
+
+    /// The conversation `thread` names (a thread id, `main`, or one of its sessions).
+    async fn conversation(threads: &crate::threads::Threads, agent: &AgentConfig, thread: &str) -> Option<crate::threads::Thread> {
+        if thread == "main" || thread.starts_with("t_") {
+            threads.named(Some(agent), thread).await.ok().map(|(_, t)| t)
+        } else {
+            threads.resolve(agent, thread).await.ok().flatten()
+        }
+    }
+
+    /// Review 3, B2-a: the session a turn of `thread` starts in, read as it starts: `session` (its tip), or a new one
+    /// made and linked first when the agent's shared memory went off since (the person, an outside model:
+    /// agent_shared_memory.rs `fresh_tip`, as the send and the queue), unless a turn goes on there.
+    async fn fresh(&self, agent: &AgentConfig, thread: &str, session: String) -> String {
+        let Some(threads) = self.threads() else { return session };
+        if self.hub.as_ref().is_some_and(|h| h.session_run(&agent.name, &session).is_some()) {
+            return session;
+        }
+        let Some(found) = Self::conversation(&threads, agent, thread).await else { return session };
+        crate::agent_shared_memory::fresh_tip(&self.config.get(), &self.hermes, &threads, agent, &found)
+            .await
+            .unwrap_or(session)
     }
 
     /// A work conversation of its own (« 🧩 <title> », « ⚡ <name> · 2/11 », « Veilleur : … »): `kept` while Hermes
@@ -459,24 +477,34 @@ impl Pipeline {
     /// agent), waited for up to `busy_wait`.
     pub async fn wait_idle(&self, turn: &Turn) -> Result<String, NotRun> {
         let agent = &turn.agent;
-        let session = self.tip(agent, &turn.thread).await;
+        // an outside model the bridge has not seen yet (SSH, a restart, the update): protected before this turn, as
+        // the send does (review 3, B2-a)
+        crate::agent_shared_memory::guard_on_send(self.config.get(), agent).await;
+        let mut session = self.tip(agent, &turn.thread).await;
         let mut waited = 0.0;
-        while let Some(hub) = self.hub.as_ref().filter(|_| turn.busy_wait > 0.0) {
-            let busy = if turn.kind.waits_for_agent() {
-                hub.agent_running(&agent.name)
-            } else {
-                hub.session_busy(&agent.name, &session)
-            };
-            if !busy {
-                break;
+        loop {
+            while let Some(hub) = self.hub.as_ref().filter(|_| turn.busy_wait > 0.0) {
+                let busy = if turn.kind.waits_for_agent() {
+                    hub.agent_running(&agent.name)
+                } else {
+                    hub.session_busy(&agent.name, &session)
+                };
+                if !busy {
+                    break;
+                }
+                if waited >= turn.busy_wait {
+                    return Err(NotRun::Busy);
+                }
+                tokio::time::sleep(Duration::from_secs_f64(self.poll)).await;
+                waited += self.poll;
             }
-            if waited >= turn.busy_wait {
-                return Err(NotRun::Busy);
+            // read once the conversation is free: its shared memory may have gone off while the turn there went on
+            let now = self.fresh(agent, &turn.thread, self.tip(agent, &turn.thread).await).await;
+            if now == session {
+                return Ok(session);
             }
-            tokio::time::sleep(Duration::from_secs_f64(self.poll)).await;
-            waited += self.poll;
+            session = now;
         }
-        Ok(session)
     }
 
     /// The run hub follows the turn's run (again after a restart): approvals and questions pushed, the brake's
@@ -597,9 +625,10 @@ impl Pipeline {
 
     /// `run`, with `started` told the run's id as soon as Hermes took the turn (card_place.rs: an answer told once).
     pub async fn run_then(&self, turn: &Turn, started: impl FnOnce(&str)) -> Result<Ran, NotRun> {
-        let session = self.tip(&turn.agent, &turn.thread).await;
-        let before = self.hermes.session(&turn.agent, &session).await.map(|s| tokens_of(&s)).unwrap_or(0);
+        let tip = self.tip(&turn.agent, &turn.thread).await;
+        let before = self.hermes.session(&turn.agent, &tip).await.map(|s| tokens_of(&s)).unwrap_or(0);
         let (run_id, session) = self.start(turn).await?;
+        let before = if session == tip { before } else { 0 }; // a new session (`fresh`): nothing in it before
         started(&run_id);
         Ok(self.wait(&turn.agent, &run_id, &session, turn.max_seconds, before).await)
     }
