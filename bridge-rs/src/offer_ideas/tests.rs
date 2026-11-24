@@ -718,3 +718,44 @@ fn verify_b2_an_unknown_tool_and_the_missed_readers_keep_the_agents_words_out() 
     }
     assert!(open.is_empty(), "the agent's words after these go to a pass: {open:?}");
 }
+
+/// B2 (strict, 24/11, compaction): when Hermes compacts a conversation it writes a summary as a `user` row (« [CONTEXT
+/// COMPACTION — REFERENCE ONLY] … », alone, or merged after a kept message behind « [END OF PRIOR CONTEXT — COMPACTION
+/// SUMMARY BELOW] », flagged `_compressed_summary` in its store): it may say again what a mail or a photo of the
+/// compacted turns said. It, and every row Hermes writes itself as `user` (its « [System: … » nudges, the
+/// continuation marker), is never the person's words, nor the agent's reply after it.
+#[test]
+fn a_compaction_summary_and_hermes_own_user_rows_never_reach_a_pass() {
+    let summary = message("user", "[CONTEXT COMPACTION — REFERENCE ONLY] Earlier turns were compacted into the summary \
+        below. ## Historical Task Snapshot: the bank's mail says overdraft 1 234,56 €.");
+    let merged = message("user", "D'accord\n\n[END OF PRIOR CONTEXT — COMPACTION SUMMARY BELOW]\n\n[CONTEXT COMPACTION — \
+        REFERENCE ONLY] Earlier turns were compacted: the landlord's letter says rent 987 euros.");
+    let mut flagged = message("user", "Résumé : le relevé dit solde 2 345,67 €.");
+    flagged.insert("_compressed_summary".into(), json!(true));
+    let legacy = message("user", "[CONTEXT SUMMARY]: payslip 3 210 € net.");
+    let nudge = message("user", "[System: Continue now. Execute the required tool calls and only send your final answer \
+        after completing the task.]");
+    let continuation = message("user", "Continue from the compressed conversation context above. This marker exists \
+        because no human user turn was available.");
+    let (turns, people) = new_turns(&[
+        message("user", "Je prépare le semi"),
+        message("assistant", "Super."),
+        summary,
+        message("assistant", "Ton découvert est de 1 234,56 €."),
+        merged,
+        flagged,
+        legacy,
+        nudge,
+        continuation,
+        message("assistant", "Loyer 987 euros, solde 2 345,67 €."),
+        message("user", "Et samedi ?"),
+        message("assistant", "Footing léger."),
+    ]);
+    let sent = format!("{turns:?}");
+    for secret in ["1 234,56", "987", "2 345,67", "3 210", "COMPACTION", "System:", "Continue from"] {
+        assert!(!sent.contains(secret), "Hermes' own row sent to a pass: {secret:?} in {sent}");
+    }
+    assert_eq!(people, 2, "{turns:?}");
+    assert_eq!(turns, vec![("Je prépare le semi".to_string(), "Super.".to_string()),
+                           ("Et samedi ?".to_string(), "Footing léger.".to_string())]);
+}

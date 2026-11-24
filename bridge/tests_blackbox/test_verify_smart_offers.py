@@ -60,3 +60,29 @@ def test_verify_b2_health_figures_never_reach_a_pass_once_the_conversation_is_co
     sent = sent_of(fakes)
     for secret in ("5 h 12", "pouls"):
         assert secret not in sent, f"health figures sent to a pass after a compaction: {secret!r} in\n{sent}"
+
+
+def test_verify_b2_a_compaction_summary_never_brings_a_mails_figure_to_a_pass(bridges, fakes):
+    """Strict B2 (24/11), an agent WITHOUT Santé: Hermes compacts a conversation and its summary (a `user` row it
+    writes itself, « [CONTEXT COMPACTION — REFERENCE ONLY] … ») says again what a mail of the compacted turns said;
+    so does a summary merged after a kept message, and the agent's reply right after it. Here the conversation goes
+    on from the summary (a continuation read from its start, as a compression's child session is). None reaches a
+    pass; the person's words after it do."""
+    bridge = smart_place(bridges, fakes, gap_hours=0)
+    look(bridge)
+    add(fakes, "s1", talk(3))
+    [run] = look(bridge)
+    assert run["model_called"] is True, run
+    summary = {"role": "user", "content": "[CONTEXT COMPACTION — REFERENCE ONLY] Earlier turns were compacted into the "
+                                          "summary below. The bank's mail says the overdraft is 1 234,56 €."}
+    merged = {"role": "user", "content": "Merci\n\n[END OF PRIOR CONTEXT — COMPACTION SUMMARY BELOW]\n\n[CONTEXT "
+                                         "COMPACTION — REFERENCE ONLY] The landlord's letter: rent 987 euros."}
+    after = [{"role": "assistant", "content": "Ton découvert est de 1 234,56 €, ton loyer 987 euros."}]
+    add(fakes, "s2", [summary, merged] + after + talk(4, words="On reprend le plan du semi"))
+    calls = len(passes(fakes))
+    [run] = look(bridge)
+    assert run["model_called"] is True and len(passes(fakes)) == calls + 1, run
+    sent = sent_of(fakes)
+    assert "On reprend le plan du semi" in sent, "the person's words stay"
+    for secret in ("1 234,56", "987", "COMPACTION"):
+        assert secret not in sent, f"a compaction summary sent to a pass: {secret!r} in\n{sent}"
