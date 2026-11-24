@@ -84,7 +84,8 @@ def test_1_a_watcher_unanswered_is_asked_again_saying_the_day_it_stops_then_stop
 def test_1_its_agent_alone_never_removes_a_watcher(bridges, fakes):
     bridge, _, conn, _ = tw.setup(bridges, fakes)
     removed = connector_tool(bridge, "connector_remove", {"name": "Créneau médecin"})
-    assert removed["isError"] and "only your person stops a watcher" in text_of(removed), text_of(removed)
+    assert text_of(removed).startswith("Not done: ") and "only your person stops a watcher" in text_of(removed), \
+        text_of(removed)
     assert connector(bridge, conn["id"])["enabled"] is True
 
 
