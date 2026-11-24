@@ -246,9 +246,14 @@ pub mod browsers;
 pub mod caldav;
 pub mod connections;
 pub mod drives;
+pub mod drives_write;
 pub mod obsidian;
 pub mod obsidian_ob;
 pub mod google_calendar;
+pub mod outlook; // « Outlook »: a Microsoft account's mail, calendar and contacts through Graph (off by default)
+pub mod outlook_calendar;
+pub mod outlook_contacts;
+pub mod outlook_mail;
 pub mod calendar;
 pub mod card_details;
 pub mod card_fill;

@@ -112,6 +112,7 @@ pub const TABLE: &[Rule] = &[
     rule("task_start", false, true, "propose_task (≤ 0,50 €)", "a background task within a small budget of the month's credit; paused from its line"),
     rule("service_write", false, false, "Hermes: MCP tool that creates or changes, on a service the person connected", "writes in the person's own service (a Notion page, a note): nothing sent to anyone, nothing deleted"),
     rule("files_write", false, false, "Hermes: bipagents_files (not delete)", "files in the agent's own space"),
+    rule("drive_write", false, true, "bip-ok- drive_write (drives_write.rs)", "Alex 23/11: a NEW file in a folder of the person's online documents they let this agent write in; nothing replaced, nothing deleted; undone by putting that new file in the service's bin"),
     // -- critical: always asked
     rule("payment", true, false, "Hermes: card_pay, Link, hand-over elicitations", "spends money or uses a payment card"),
     rule("secret", true, false, "bip-secret-", "a password, key or code typed for the agent"),
@@ -120,6 +121,7 @@ pub const TABLE: &[Rule] = &[
     rule("mail_trash", true, false, "bip-mail- trash", "deletes (to the trash, then gone)"),
     rule("notes_change", true, false, "bip-ok- notes_change", "Alex 20/11: changes text already in one of the person's Obsidian notes, synced to all their devices (a copy is kept first)"),
     rule("calendar_delete", true, false, "bip-ok- calendar_delete", "audit 1.3, Alex 17/11: deletes an event of the person's calendar (a mailbox's at once, no trash), like mail_trash"),
+    rule("drive_replace", true, false, "bip-ok- drive_replace (drives_write.rs)", "Alex 23/11: a new version of a file of the person's online documents (the old one stays in the service's history): always asked"),
     critical_unless_always("calendar_write", "bip-ok- calendar_write (google_calendar.rs)", "Alex 20/11: adds or changes an event of the person's Google Calendar, never silently; Alex 23/11: only the person's « Toujours autoriser » for that agent lets it through (its primary calendar), never the level"),
     rule("site_form", true, false, "bip-ok- site_form (ask_to_send)", "audit 1.2, Alex 17/11 « Oui, 1re fois par site »: the agent's browser sends a form to a site not allowed yet for it; its « Toujours autoriser » keeps it in « Sites autorisés »"),
     rule("mail_rule_trash", true, false, "bip-mailrule- trash", "deletes every new matching mail"),
@@ -301,8 +303,9 @@ pub struct Line {
     pub run_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
-    /// What undoes it (None: nothing to undo).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// What undoes it (None: nothing to undo). One this bridge doesn't know (the `drive_file` a bridge on cc88657ce
+    /// wrote, review 2 of drive-write) reads as none: never the whole file failing, never the levels lost.
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "known_undo")]
     pub undo: Option<Undo>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub undone_at: Option<f64>,
@@ -312,6 +315,16 @@ pub struct Line {
     /// Approved by a « Toujours » of the person (not by the level).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub always: bool,
+    /// A new file of drives_write.rs to put back in its service's bin: kept in its own file (drive-undo.json, review
+    /// C3: a bridge put back to the version before still reads this one), never written here.
+    #[serde(skip)]
+    pub drive_undo: bool,
+}
+
+/// A line's `undo` as kept, or none when it is of a kind this bridge doesn't know.
+fn known_undo<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<Undo>, D::Error> {
+    let kept = Option::<Value>::deserialize(d)?;
+    Ok(kept.and_then(|v| serde_json::from_value(v).ok()))
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -414,7 +427,7 @@ pub fn offers_always(key: &str) -> bool {
     ALWAYS_KINDS.contains(&kind)
         && (!rule.critical || rule.own_always)
         && match service {
-            Some(s) => kind == "service_write" && SERVICE.is_match(s),
+            Some(s) => (kind == "service_write" && SERVICE.is_match(s)) || key == crate::person_ok::CALENDAR_WRITE_OUTLOOK,
             None => kind != "service_write",
         }
 }
@@ -504,6 +517,15 @@ fn always_words(key: &str) -> Option<[String; 4]> {
         return None;
     }
     let s = |a: &str, b: &str, c: &str, d: &str| Some([a, b, c, d].map(str::to_string));
+    if key == crate::person_ok::CALENDAR_WRITE_OUTLOOK {
+        // Alex 23/11 (outlook_calendar.rs: its adds and changes)
+        return s(
+            "modifier ton agenda Outlook",
+            "change your Outlook calendar",
+            "deinen Outlook-Kalender ändern",
+            "modificar tu calendario de Outlook",
+        );
+    }
     match key.split_once(':') {
         Some((_, service)) => {
             let n = capitalized(&service.replace(['_', '-'], " "));
@@ -776,7 +798,7 @@ pub fn line_view(line: &Line) -> Value {
     json!({
         "id": line.id, "agent": line.agent, "kind": line.kind, "summary": line.summary, "at": iso(line.at),
         "run_id": line.run_id, "session_id": line.session_id,
-        "undo": line.undo.is_some() && line.undone_at.is_none(), "undone": line.undone_at.is_some(),
+        "undo": (line.undo.is_some() || line.drive_undo) && line.undone_at.is_none(), "undone": line.undone_at.is_some(),
         "always": line.always,
     })
 }
@@ -786,6 +808,11 @@ pub fn lines(config: &Config, agent: Option<&str>, limit: usize) -> Vec<Line> {
     let mut all: Vec<Line> = load(config).lines.into_iter().filter(|l| agent.is_none_or(|a| l.agent == a)).collect();
     all.sort_by(|a, b| b.at.total_cmp(&a.at));
     all.truncate(limit);
+    // a new file's « Annuler » (drives_write.rs, its own file)
+    let files = crate::drives_write::undoable(config);
+    for line in &mut all {
+        line.drive_undo = files.contains(&line.id);
+    }
     all
 }
 
@@ -805,7 +832,23 @@ pub async fn undo(state: &AppState, id: &str) -> Result<Line, UndoRefused> {
     if line.undone_at.is_some() {
         return Err(UndoRefused::Undone);
     }
-    let undo = line.undo.clone().ok_or(UndoRefused::NotUndoable)?;
+    let Some(undo) = line.undo.clone() else {
+        // a new file in the person's online documents (drives_write.rs keeps what undoes it)
+        return match crate::drives_write::undo_line(&config, id).await {
+            Some(Ok(())) => {
+                let now = py::time_time();
+                let done = change(&config, |b| {
+                    let l = b.lines.iter_mut().find(|l| l.id == id)?;
+                    l.undone_at = Some(now);
+                    Some(l.clone())
+                });
+                tracing::info!(target: "bipbridge::approval_level", agent = %line.agent, kind = %line.kind, "auto approval undone");
+                done.ok_or(UndoRefused::NotFound)
+            }
+            Some(Err(why)) => Err(UndoRefused::Failed(why)),
+            None => Err(UndoRefused::NotUndoable),
+        };
+    };
     let (c, agent) = (config.clone(), line.agent.clone());
     match undo {
         Undo::MailJob { job } => {
@@ -927,11 +970,22 @@ pub async fn settle_card(state: &AppState, agent: &AgentConfig, run_id: &str) ->
     approve_item(state, agent, &item, None).await
 }
 
+/// Whether the level (or a « Toujours ») may answer this card in the person's place after another call (`settle_new`,
+/// `settle_card`). Never a card of person_ok.rs (`bip-ok-`, review of outlook B1, 23/11): it holds its own call, and
+/// its module looked at the level and the « Toujours » before making it (drives_write.rs, obsidian.rs,
+/// google_calendar.rs, outlook_*.rs); only the person's own answer settles it, whatever its kind.
+pub fn settled_by_level(item: &Dict) -> bool {
+    !item.get("run_id").and_then(Value::as_str).unwrap_or("").starts_with(crate::person_ok::RUN_PREFIX)
+}
+
 /// One card answered as the person's « Oui » would, when not critical: logged in the history, `taken` (no turn resumed
 /// for it: the caller tells the agent). Its sentence; None: critical, or not answered.
 async fn approve_item(state: &AppState, agent: &AgentConfig, item: &Dict, session: Option<&str>) -> Option<String> {
     let config = state.config();
     let run_id = item.get("run_id").and_then(Value::as_str).unwrap_or("").to_string();
+    if !settled_by_level(item) {
+        return None;
+    }
     let kind = classify_card(item);
     if !auto_for(&config, &agent.name, kind) {
         return None;
@@ -1136,7 +1190,7 @@ pub fn groups(config: &Config, agent: Option<&str>, limit: usize) -> Vec<Value> 
                 "id": format!("approved:{}", newest.id),
                 "agent": newest.agent, "kind": newest.kind, "title": title, "at": iso(newest.at),
                 "count": members.len(),
-                "undo": members.iter().any(|l| l.undo.is_some() && l.undone_at.is_none()),
+                "undo": members.iter().any(|l| (l.undo.is_some() || l.drive_undo) && l.undone_at.is_none()),
                 "undone": members.iter().all(|l| l.undone_at.is_some()),
                 "items": members.iter().map(|l| line_view(l)).collect::<Vec<_>>(),
             })
@@ -1154,6 +1208,7 @@ fn folded_title(lang: &str, kind: &str, n: u64) -> String {
         ("fr", "task_start") => format!("{n} tâches de fond lancées"),
         ("fr", "service_write") => format!("{n} changements dans tes services"),
         ("fr", "files_write") => format!("{n} fichiers enregistrés"),
+        ("fr", "drive_write") => format!("{n} fichiers enregistrés dans tes documents en ligne"),
         ("fr", _) => format!("{n} actions validées pour toi"),
         ("de", "mail_archive") => format!("{n} E-Mails archiviert"),
         ("de", "mail_mark_read") => format!("{n} E-Mails als gelesen markiert"),
@@ -1162,6 +1217,7 @@ fn folded_title(lang: &str, kind: &str, n: u64) -> String {
         ("de", "task_start") => format!("{n} Hintergrundaufgaben gestartet"),
         ("de", "service_write") => format!("{n} Änderungen in deinen Diensten"),
         ("de", "files_write") => format!("{n} Dateien gespeichert"),
+        ("de", "drive_write") => format!("{n} Dateien in deinen Online-Dokumenten gespeichert"),
         ("de", _) => format!("{n} Aktionen für dich bestätigt"),
         ("es", "mail_archive") => format!("{n} correos archivados"),
         ("es", "mail_mark_read") => format!("{n} correos marcados como leídos"),
@@ -1170,6 +1226,7 @@ fn folded_title(lang: &str, kind: &str, n: u64) -> String {
         ("es", "task_start") => format!("{n} tareas en segundo plano iniciadas"),
         ("es", "service_write") => format!("{n} cambios en tus servicios"),
         ("es", "files_write") => format!("{n} archivos guardados"),
+        ("es", "drive_write") => format!("{n} archivos guardados en tus documentos en línea"),
         ("es", _) => format!("{n} acciones validadas para ti"),
         (_, "mail_archive") => format!("{n} e-mails archived"),
         (_, "mail_mark_read") => format!("{n} e-mails marked as read"),
@@ -1178,6 +1235,8 @@ fn folded_title(lang: &str, kind: &str, n: u64) -> String {
         (_, "task_start") => format!("{n} background tasks started"),
         (_, "service_write") => format!("{n} changes in your services"),
         (_, "files_write") => format!("{n} files saved"),
+        ("nl", "drive_write") => format!("{n} bestanden opgeslagen in je online documenten"),
+        (_, "drive_write") => format!("{n} files saved in your online documents"),
         _ => format!("{n} actions approved for you"),
     }
 }

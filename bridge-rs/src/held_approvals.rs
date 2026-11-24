@@ -278,6 +278,21 @@ pub fn take_grant(config: &Config, agent: &str, command: &str, args_sha: &str) -
     })
 }
 
+/// A grant of `agent` for a command starting with `prefix` but other than `command` (drives_write.rs: the same new
+/// version asked again for another revision of its file, changed since the person's « Oui »), taken so that it is never
+/// used. True when there was one.
+pub fn take_stale_grant(config: &Config, agent: &str, prefix: &str, command: &str) -> bool {
+    if prefix.is_empty() || !path(config).exists() {
+        return false;
+    }
+    let now = py::time_time();
+    change(config, |b| {
+        let before = b.grants.len();
+        b.grants.retain(|g| !(g.agent == agent && g.command.starts_with(prefix) && g.command != command && now < g.until));
+        b.grants.len() != before
+    })
+}
+
 /// A held card by its id (answered or not).
 pub fn get(config: &Config, id: &str) -> Option<Held> {
     load(config).held.into_iter().find(|h| h.id == id)
@@ -513,5 +528,21 @@ mod tests {
         // the call she read, once
         assert!(take_grant(&config, "vie", gate, &args_sha(&a)).is_some());
         assert!(take_grant(&config, "vie", gate, &args_sha(&a)).is_none());
+    }
+
+    /// drives_write.rs (review C4): a new version's « Oui » given overnight, the file changed since: the call made
+    /// again for the new revision finds that stale grant, takes it (never used), and writes nothing.
+    #[test]
+    fn a_grant_for_another_revision_is_taken_never_used() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = config_in(&dir);
+        let ask = data(json!({"command": "drive_write dropbox:id:f plan.txt abc rev:r1/", "bip_summary": "Nouvelle version"}));
+        let (card, _) = hold(&config, "vie", "run_1", Some("s1"), &ask, None, py::time_time() + 3600.0);
+        answer(&config, "vie", &card.id, true).unwrap();
+        let prefix = "drive_write dropbox:id:f plan.txt abc rev:";
+        assert!(!take_stale_grant(&config, "vie", prefix, "drive_write dropbox:id:f plan.txt abc rev:r1/"), "the same revision");
+        assert!(!take_stale_grant(&config, "coach", prefix, "drive_write dropbox:id:f plan.txt abc rev:r2/"), "another agent's");
+        assert!(take_stale_grant(&config, "vie", prefix, "drive_write dropbox:id:f plan.txt abc rev:r2/"));
+        assert!(take_grant(&config, "vie", &card.command, &card.args_sha).is_none(), "gone, never used");
     }
 }

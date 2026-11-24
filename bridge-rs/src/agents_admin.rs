@@ -3172,6 +3172,7 @@ async fn remove_agent(state: AppState, agent_id: String) -> ApiResult<Response> 
         crate::drives::forget_agent(&state.config(), &agent.name).await; // its online documents' folders
         crate::obsidian::forget_agent(&state.config(), &agent.name); // the Obsidian vault's agents
         crate::google_calendar::forget_agent(&state.config(), &agent.name).await; // its Google Calendar
+        crate::outlook::forget_agent(&state.config(), &agent.name).await; // its Outlook
         crate::secrets::forget(&agent);
         state.vault.forget_agent(&state.config(), &agent.name).await
     }
