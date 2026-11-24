@@ -7,7 +7,8 @@ in threes or more are two (`tidy`): an article copied from a web page has such g
 as sent, and its `s_` item stayed at the end, « Pas envoyé » once the turn was over.
 
 Texts over the bridge's 20 000 characters for one message's words were refused (422, « Pas envoyé » with an error,
-nothing sent): they now go whole as a text file joined to the message, the agent told to read it.
+nothing sent): they now go whole as a text file joined to the message, the agent told to read it, up to 200 000
+characters (Alex 24/11); the file lives with its conversation.
 
 Synthetic articles only, never anyone's real text."""
 import random
@@ -137,8 +138,52 @@ def test_a_text_over_twenty_thousand_characters_goes_whole_as_a_text_file(bridge
     assert [(a["kind"], a["mime"]) for a in row["attachments"]] == [("document", "text/plain")]
 
 
-def test_a_text_too_long_even_for_a_file_is_refused_with_its_limit(bridges, fakes):
+def long_files(bridge):
+    return sorted(p for p in uploads(bridge).rglob("*.txt") if p.is_file())
+
+
+def test_two_hundred_thousand_characters_go_whole_as_a_text_file(bridges, fakes):
+    """Alex 24/11: 200 000 characters at most (two of Hermes' `read_file` reads, about 50 000 tokens)."""
     bridge, thread = setup(bridges, fakes)
-    too_long = send(bridge, thread, "C1D00000-0000-4000-8000-00000000C001", "a" * 1_000_001)
-    assert too_long.status_code in (413, 422), too_long.status_code
+    text = article(210_000, seed=3)[:199_990].rstrip()
+    text += "x" * (199_999 - len(text)) + "."
+    assert len(text) == 200_000
+    fakes.hermes.runs["r1"] = [sse("run.started", run_id="r1"), sse("run.completed", run_id="r1", output="Lu.")]
+    sent = send(bridge, thread, "C1D00000-0000-4000-8000-00000000C200", text)
+    assert sent.status_code == 200, sent.text[:300]
+    given = fakes.hermes.started["r1"]["input"]
+    assert "[Pièce jointe : " in given and "<!--bip:long_text" in given and len(given) < 2_000, given[:300]
+    files = long_files(bridge)
+    assert len(files) == 1 and files[0].read_text(encoding="utf-8") == text
+
+
+def test_a_text_over_two_hundred_thousand_characters_is_refused_as_before(bridges, fakes):
+    """Refused as a text over 20 000 characters was before (the same 422, an app 1.0 shows « Pas envoyé »)."""
+    bridge, thread = setup(bridges, fakes)
+    too_long = send(bridge, thread, "C1D00000-0000-4000-8000-00000000C001", "a" * 200_001)
+    assert too_long.status_code == 422, too_long.status_code
+    detail = too_long.json()["detail"]
+    assert [(d["type"], d["loc"]) for d in detail] == [("string_too_long", ["body", "text"])], detail
     assert not fakes.hermes.started
+    assert long_files(bridge) == []
+
+
+def test_a_long_texts_file_goes_with_its_conversation(bridges, fakes):
+    """Alex 24/11: the file of a long text lives with its conversation and is deleted with it; the agent's other
+    files stay."""
+    bridge, _ = setup(bridges, fakes)
+    other = bridge.post("/v1/files", headers=AUTH, data={"agent": "wellness"},
+                        files={"file": ("notes.pdf", b"%PDF-1.4 x", "application/pdf")})
+    assert other.status_code in (200, 201), other.text
+    fakes.hermes.runs["r1"] = [sse("run.started", run_id="r1"), sse("run.completed", run_id="r1", output="Lu.")]
+    sent = send(bridge, "new", "C1D00000-0000-4000-8000-00000000D001", article(60_000, seed=4))
+    assert sent.status_code == 200, sent.text[:300]
+    thread = sent.json()["thread"]
+    files = long_files(bridge)
+    assert len(files) == 1, files
+    kept = [p for p in uploads(bridge).rglob("*") if p.is_file() and p.suffix == ".pdf"]
+    assert len(kept) == 1
+    deleted = bridge.delete(f"/v1/threads/{thread}", headers=AUTH, params={"agent": "wellness"})
+    assert deleted.status_code == 204, deleted.text
+    assert long_files(bridge) == [], "the long text's file stayed after its conversation was deleted"
+    assert kept[0].exists(), "another file of the agent went with the conversation"

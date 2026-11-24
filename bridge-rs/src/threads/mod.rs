@@ -31,6 +31,7 @@
 pub mod follow;
 mod instant;
 pub mod layout;
+pub mod long_texts;
 pub mod send;
 pub mod source;
 pub mod timeline;
@@ -474,6 +475,10 @@ impl Threads {
         let _guard = self.registry.lock().await;
         let rows = self.store.run("SELECT * FROM threads WHERE agent = ?", vec![text(agent)]).await?;
         self.store.forget_agent_turn_times(agent).await?;
+        let config = self.config.get();
+        if let Some(a) = config.agents.get(agent) {
+            long_texts::forget(&self.store, &config, a, None).await?; // their long texts' files with them
+        }
         for thread in rows.iter().map(Thread::of) {
             self.store.run("DELETE FROM thread_segments WHERE thread_id = ?", vec![text(&thread.id)]).await?;
             self.store.run("DELETE FROM notifications WHERE thread_id = ?", vec![text(&thread.id)]).await?;
@@ -1250,6 +1255,8 @@ async fn delete_thread(
     // started again under the same id (6/11, release journeys)
     threads.store.run("DELETE FROM thread_sends WHERE thread_id = ?", vec![text(&thread.id)]).await?;
     threads.store.run("DELETE FROM thread_instant WHERE thread_id = ?", vec![text(&thread.id)]).await?;
+    // its long texts' files with it (long_texts.rs, Alex 24/11)
+    long_texts::forget(&threads.store, &state.config(), &agent, Some(&thread.id)).await?;
     if thread.kind != "main" {
         threads.store.run("DELETE FROM threads WHERE id = ?", vec![text(&thread.id)]).await?;
     }

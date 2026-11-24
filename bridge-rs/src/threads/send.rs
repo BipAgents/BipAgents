@@ -43,8 +43,9 @@ pub static CLIENT_ID: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^[A-Za-z0-
 /// Files one message carries at most.
 const ATTACHMENTS_MAX: usize = 10;
 /// A text one message takes at most (characters): over msg_queue.rs `TEXT_MAX`, its words go whole as a text file
-/// joined to the message (`long_text_as_file`).
-pub const LONG_TEXT_MAX: usize = 1_000_000;
+/// joined to the message (`long_text_as_file`). 200 000 (Alex 24/11): two of Hermes' `read_file` reads (100 000
+/// characters each), about 50 000 tokens; over it refused as a text over `TEXT_MAX` was before (the apps say it first).
+pub const LONG_TEXT_MAX: usize = 200_000;
 /// The agent's note on a message whose words went as a text file (never shown: a `<!--bip:` note).
 const LONG_TEXT_NOTE: &str = "<!--bip:long_text The person's message was too long to go as words: it is whole in the \
                               attached text file. Read the whole file before answering.-->";
@@ -639,6 +640,7 @@ pub async fn send(state: &AppState, agent: &AgentConfig, thread: Option<Thread>,
         }
     }
     let mut body = body;
+    let mut long_text = None;
     if body.text.trim().chars().count() > crate::msg_queue::TEXT_MAX {
         // too long for one message's words (an article pasted, 23/11): whole as a text file, the agent told to read it
         let Some(file) = long_text_as_file(state, agent, body.text.trim()).await else {
@@ -647,6 +649,7 @@ pub async fn send(state: &AppState, agent: &AgentConfig, thread: Option<Thread>,
                 format!("a message's words are {} characters at most: send a longer text as a file", crate::msg_queue::TEXT_MAX),
             ));
         };
+        long_text = file.path.clone();
         body.attachments.push(file);
         body.text = String::new();
         body.notes = Some(match body.notes.take().filter(|n| !n.trim().is_empty()) {
@@ -658,6 +661,10 @@ pub async fn send(state: &AppState, agent: &AgentConfig, thread: Option<Thread>,
         Some(t) => t,
         None => threads.create(&agent.name, "side", None, Value::Null, false).await?,
     };
+    if let Some(path) = &long_text {
+        // its file lives with this conversation (long_texts.rs, Alex 24/11)
+        super::long_texts::keep(&state.store, agent, &thread.id, path).await?;
+    }
     let words = body.text.trim().to_string();
     let phone = body.phone.as_deref().and_then(crate::reminders::phone_named);
     // a family agent's one conversation (family_thread.rs): each message framed with who writes, the creator's too
@@ -1082,7 +1089,8 @@ mod tests {
             body.validate(&mut errors);
             errors.len()
         };
-        assert_eq!((check(150_000), check(LONG_TEXT_MAX), check(LONG_TEXT_MAX + 1)), (0, 0, 1));
+        assert_eq!((check(150_000), check(200_000), check(200_001)), (0, 0, 1));
+        assert_eq!(LONG_TEXT_MAX, 200_000);
     }
 
     /// The phone a message is sent from (7/11: where a reminder asked in its turn goes): « ios » or « android ».

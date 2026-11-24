@@ -435,8 +435,10 @@ async fn purge_loop(state: AppState) {
                     if days <= 0 {
                         continue; // kept always: the person's choice
                     }
+                    // the long texts' files live with their conversation (threads/long_texts.rs)
+                    let kept = crate::threads::long_texts::kept(&state.store, &agent.name).await?;
                     let removed =
-                        tokio::task::spawn_blocking(move || crate::files::purge_uploads(&root, days, None)).await?;
+                        tokio::task::spawn_blocking(move || crate::files::purge_uploads(&root, days, None, &kept)).await?;
                     if removed > 0 {
                         tracing::info!(agent = %agent.name, removed = removed, "uploads purged");
                         // and from its sandbox's copy (sandbox.rs)

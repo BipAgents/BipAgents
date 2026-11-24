@@ -3163,6 +3163,8 @@ async fn remove_agent(state: AppState, agent_id: String) -> ApiResult<Response> 
     let _guard = LOCK.lock().await;
     let family = crate::family_agent::is_family(&state.config(), &agent.name);
     let result = async {
+        // its long texts' files (threads/long_texts.rs), while its uploads folder is still known
+        crate::threads::long_texts::forget(&state.store, &state.config(), &agent, None).await?;
         delete_agent(&state.config, &agent, &default_run()).await?;
         if family {
             crate::family_agent::deleted(&state, &agent); // the members' apps drop it at once
