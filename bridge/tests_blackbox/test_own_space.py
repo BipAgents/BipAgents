@@ -1,10 +1,9 @@
-"""Credentials and the shared hub (bridge-rs/src/own_space.rs, vault.rs `holds_in_hub`). In a hub only the person's
-own agents use, an agent keeps its secrets right there: the card comes at once, nothing moves. In a hub that also
-hosts an agent other people talk to (the family's agent, a project agent, one shared with or linked to a relative), an
-agent moves into its own space by itself the first time it needs to keep a secret: the secrets' and connectors' tools
-are offered to it (never to the family's agent nor a project agent, never on an install that doesn't protect the
-vault), its first ask_secret moves it at once with no card, keeping its conversations, memory and files, then raises
-the secret card as usual; a move that fails is one plain answer, not retried at once."""
+"""Credentials and the shared hub (bridge-rs/src/own_space.rs, vault.rs `holds_in_hub`). The person's own agents keep
+their secrets right where they are, in the hub, and never move for it (Alex, 24/11, for 1.1). Only a project agent
+breaks the hub's privacy (its guests' turns are its own): it leaves the hub as soon as it is made, its share opening
+once that move ended; while one is still on its way out, the hub's agents keep nothing new (an agent's ask waits for the
+move under way, or gets one plain answer at once). Agents other people talk to otherwise (the family's agent, one
+shared with a relative, one another household's agents write to) stay in the hub (21/11, guest turns)."""
 import json
 import time
 import tomllib
@@ -56,9 +55,9 @@ def use_token_of(hub):
     TOKEN = entries(hub, "coach")["bipagents"]["headers"]["Authorization"].split()[1]
 
 
-def tool(bridge, name, arguments):
+def tool(bridge, name, arguments, timeout=180):
     body = {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": name, "arguments": arguments}}
-    resp = bridge.post(TOOLS, json=body, headers={"Authorization": f"Bearer {TOKEN}"}, timeout=180)
+    resp = bridge.post(TOOLS, json=body, headers={"Authorization": f"Bearer {TOKEN}"}, timeout=timeout)
     assert resp.status_code == 200, resp.text
     return resp.json()["result"]
 
@@ -77,48 +76,56 @@ def entries(hub, name):
     return yaml.safe_load(path.read_text()).get("mcp_servers", {}) if path.exists() else {}
 
 
-def test_a_hub_agent_asks_a_secret_moves_by_itself_then_gets_the_card(bridges, fakes):
+def why(bridge):
+    return {a["id"]: a.get("why") for a in bridge.get("/v1/vault", headers=AUTH).json()["agents"]}
+
+
+def test_an_agent_asking_a_secret_while_a_project_agent_is_in_the_hub_never_moves(bridges, fakes):
+    """24/11: a project agent still in the hub (made before, its move out at start not due yet): the person's agent
+    keeps the tools, its ask gets the plain answer at once (no move under way to wait for) and nothing moves; the app's
+    give says « dans quelques minutes » (needs_own_space). Red before: Coach moved into a space of its own."""
     bridge, hub = hub_place(bridges, fakes, project="fete")
     bridge.start()
     wait_registered(bridge, ["coach", "fete"])
     use_token_of(hub)
-    # offered in the hub: the connectors' and the vault's account tools
     servers = entries(hub, "coach")
     assert "bipagents_connectors" in servers and "bipagents_vault" in servers
+    result = tool(bridge, "ask_secret", ASK, timeout=30)
+    assert not_done(result) and "try again a bit later" in text(result) and "space" not in text(result)
+    assert not secret_cards(bridge)
+    assert not (bridge.root / "spaces" / "coach").exists() and (hub / "profiles" / "coach").is_dir()
+    assert not tomllib.loads(bridge.toml_text())["agents"]["coach"].get("isolated")
+    assert why(bridge)["coach"] == "needs_own_space"
+    assert "moving into its own space" not in bridge.log_tail(20000)
+    assert not any(e["argv"][:2] == ["profile", "delete"] for e in bridge.commands.entries("hermes"))
+
+
+@pytest.mark.slow
+def test_an_ask_while_the_project_agent_leaves_waits_and_keeps_the_secret_in_the_hub(bridges, fakes):
+    """The project agent's move out of the hub under way (its space slow to start): the person's agent asking a secret
+    waits for it, then gets the card and keeps the secret right in the hub. Red before: Coach moved too."""
+    bridge, hub = hub_place(bridges, fakes, project="fete", hub_python=hub_podman, tidy_after=0)
+    bridge.config["spaces"]["start"] = f"sleep 12; {bridge.fakebin}/fake-gateway {{home}}"
+    bridge.commands.rule("podman", ["exec", "-i", "hermes-hub"], stdout=json.dumps({"id": "vault_1"}) + "\n")
+    bridge.start()
+    wait_registered(bridge, ["coach", "fete"])
+    use_token_of(hub)
+    assert wait_until(lambda: "moving out of the shared hub" in bridge.log_tail(20000), timeout=30), bridge.log_tail(4000)
+    fete_out = lambda: tomllib.loads(bridge.toml_text())["agents"]["fete"].get("isolated") is True
+    assert not fete_out()
     with ThreadPoolExecutor(1) as pool:
         call = pool.submit(tool, bridge, "ask_secret", ASK)
-        # no card for the move: the secret's card comes once it's done
         assert wait_until(lambda: secret_cards(bridge), timeout=60), bridge.log_tail(4000)
-        assert not [i for i in bridge.get("/v1/approvals", headers=AUTH).json()["items"]
-                    if not i["run_id"].startswith("bip-secret-")]
-        root = bridge.root / "spaces" / "coach"
-        section = tomllib.loads(bridge.toml_text())["agents"]["coach"]
-        assert section["isolated"] is True and section["space"] == str(root)
-        moved = root / "profiles" / "coach"
-        assert (moved / "memories" / "MEMORY.md").read_text() == "Alex court le dimanche."
-        assert (moved / "SOUL.md").read_text().startswith("Tu es Coach.")
+        assert fete_out()   # the card came once the project agent was out
         card = secret_cards(bridge)[0]
-        assert card["description"] == "Coach a besoin de ton accès Garmin (connect.garmin.example)"
         sent = bridge.post(f"/v1/vault/secrets/requests/{card['request_id']}", headers=AUTH,
                            json={"allow": True, "value": "Fake-Pa55word", "identifier": "alex@example.org"})
         assert sent.status_code == 200, sent.text
         result = call.result(timeout=60)
     assert not result["isError"] and "Saved as « garmin »" in text(result), text(result)
-    assert "Fake-Pa55word" not in json.dumps(result)
-    # the hub forgets it once no turn of it goes on there
-    assert wait_until(lambda: any(e["argv"] == ["profile", "delete", "coach", "--yes"]
-                                  for e in bridge.commands.entries("hermes")), timeout=20)
-    vault = {a["id"]: a.get("why") for a in bridge.get("/v1/vault", headers=AUTH).json()["agents"]}
-    assert vault["coach"] is None
-    # in its space now: the next secret is asked at once, nothing moves again
-    with ThreadPoolExecutor(1) as pool:
-        again = pool.submit(tool, bridge, "ask_secret", {**ASK, "name": "strava", "site": "strava.example"})
-        assert wait_until(lambda: secret_cards(bridge) or again.done(), timeout=20)
-        assert not again.done(), again.result()
-        card = secret_cards(bridge)[0]
-        assert bridge.post(f"/v1/vault/secrets/requests/{card['request_id']}", headers=AUTH,
-                           json={"allow": False}).status_code == 200
-        assert not_done(again.result(timeout=30))
+    assert not (bridge.root / "spaces" / "coach").exists() and (hub / "profiles" / "coach").is_dir()
+    assert not tomllib.loads(bridge.toml_text())["agents"]["coach"].get("isolated")
+    assert why(bridge)["coach"] is None
 
 
 def test_no_move_when_its_space_would_hold_the_desktop_too(bridges, fakes):
@@ -138,24 +145,6 @@ def test_no_move_when_its_space_would_hold_the_desktop_too(bridges, fakes):
     assert tomllib.loads(bridge.toml_text())["agents"]["coach"].get("isolated") is not True
     assert not secret_cards(bridge)
     assert "moving into its own space" not in bridge.log_tail(4000)
-
-
-def test_a_move_that_fails_is_one_plain_answer_and_not_retried_at_once(bridges, fakes):
-    bridge, hub = hub_place(bridges, fakes, start="exit 3", project="fete")
-    bridge.start()
-    wait_registered(bridge, ["coach", "fete"])
-    use_token_of(hub)
-    first = tool(bridge, "ask_secret", ASK)
-    assert not_done(first) and "try again a bit later" in text(first) and "space" not in text(first)
-    assert not secret_cards(bridge)
-    assert not (bridge.root / "spaces" / "coach").exists() and (hub / "profiles" / "coach").is_dir()
-    starts = len(bridge.commands.entries("hermes"))
-    second = tool(bridge, "ask_secret", ASK)
-    assert not_done(second) and text(second) == text(first)
-    assert len(bridge.commands.entries("hermes")) == starts      # nothing tried again within two minutes
-    # a call the tool refuses anyway moves nothing
-    bad = tool(bridge, "ask_secret", {**ASK, "name": "G"})
-    assert not_done(bad) and "name:" in text(bad)
 
 
 def test_family_project_and_unprotected_agents_are_never_offered_the_tools(bridges, fakes):
@@ -221,7 +210,7 @@ def test_a_hub_of_the_person_s_own_agents_keeps_secrets_without_moving(bridges, 
     assert request["home"] == str(hub / "profiles" / "coach") and request["op"] == "add"
 
 
-def test_an_others_facing_agent_never_gets_credentials_and_its_hub_keeps_moving(bridges, fakes):
+def test_while_a_project_agent_is_in_the_hub_nobody_there_gets_credentials(bridges, fakes):
     bridge, hub = hub_place(bridges, fakes, agents=("coach", "famille"), project="fete", hub_python=hub_podman)
     (bridge.state_dir / "family-agent.json").write_text(json.dumps({"agent": "famille", "created": 1.0, "lang": "fr"}))
     bridge.start()
@@ -233,7 +222,7 @@ def test_an_others_facing_agent_never_gets_credentials_and_its_hub_keeps_moving(
                                                             "identifier": "a@b.c", "password": "p", "agents": [name]})
         assert made.status_code >= 400, made.text
     assert not hub_vault_calls(bridge)
-    assert "bipagents_connectors" in entries(hub, "coach")   # offered: its first secret moves it
+    assert "bipagents_connectors" in entries(hub, "coach")   # offered: kept in the hub once the project agent is out
 
 
 def test_an_agent_another_household_writes_to_stays_in_the_hub_and_the_hub_stays_private(bridges, fakes):
@@ -252,11 +241,15 @@ def test_an_agent_another_household_writes_to_stays_in_the_hub_and_the_hub_stays
     assert not (bridge.root / "spaces" / "cuisine").exists()
 
 
-@pytest.mark.slow
-def test_a_new_project_agent_leaves_the_hub_so_it_stays_private(bridges, fakes):
-    """An agent other people talk to lives in its own space (moved a minute after it is made, once idle); the hub
-    keeps only the person's agents, whose credentials then stay there."""
+def test_a_new_project_agent_leaves_the_hub_at_once_and_its_share_opens_after(bridges, fakes):
+    """A project agent never lives in the person's hub: made, it moves into its own space at once (no minute's wait,
+    no turn awaited), and its friends' share, asked meanwhile, opens once that move ended. The hub keeps only the
+    person's agents, whose credentials stay there. Red before: it moved a minute later, the share opened in the hub."""
+    from test_project_agents import share_body
+    from test_read_shares import FakeGuichet
+
     bridge, hub = hub_place(bridges, fakes, agents=("coach",), hub_python=hub_podman)
+    bridge.config["spaces"]["start"] = f"sleep 3; {bridge.fakebin}/fake-gateway {{home}}"
     bridge.start()
     wait_registered(bridge, ["coach"])
     made = bridge.post("/v1/project-agents", headers=AUTH, json={"name": "Fête", "ends": time.time() + 86400})
@@ -266,11 +259,17 @@ def test_a_new_project_agent_leaves_the_hub_so_it_stays_private(bridges, fakes):
     def moved():
         section = tomllib.loads(bridge.toml_text())["agents"].get(agent, {})
         return section.get("isolated") is True and section.get("space") == str(bridge.root / "spaces" / agent)
-    assert wait_until(moved, timeout=150), bridge.log_tail(4000)
+    assert not moved()
+    guichet = FakeGuichet().start()
+    try:
+        shared = bridge.post("/v1/read-shares", headers=AUTH, json=share_body(guichet, agent), timeout=60)
+        assert moved(), bridge.log_tail(4000)   # the share waited for the move
+        assert shared.status_code == 200, shared.text
+    finally:
+        guichet.stop()
     assert wait_until(lambda: any(e["argv"] == ["profile", "delete", agent, "--yes"]
                                   for e in bridge.commands.entries("hermes")), timeout=20)
-    vault = {a["id"]: a.get("why") for a in bridge.get("/v1/vault", headers=AUTH).json()["agents"]}
-    assert vault["coach"] is None
+    assert why(bridge)["coach"] is None
 
 
 @pytest.mark.slow
