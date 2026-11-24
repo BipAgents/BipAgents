@@ -110,6 +110,9 @@ pub enum Notice {
         session_id: Option<String>,
         #[serde(default)]
         test: bool,
+        /// Not urgent (the work of an offer's « Oui », Alex 24/11): the same card and « Payer », pushed plainly.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        calm: bool,
     },
     /// A silent push (`run_finished`, `reminders`, `calendar`, `contacts`, `read`).
     #[serde(rename = "notify_silent")]
@@ -275,7 +278,7 @@ impl Notice {
             Notice::Login { host, id } => card(agent, Kind::Login, &login_line(&context.lang, host), id),
             Notice::Card { line, key, id } => card(agent, Kind::of_card(key), line, id),
             Notice::Meet { line, id } => card(agent, Kind::Meet, line, id),
-            Notice::PaymentUrgent { run_id, request_id, line, session_id, test } => {
+            Notice::PaymentUrgent { run_id, request_id, line, session_id, test, calm } => {
                 // an approval's pointer (older apps open its conversation), the bridge's card in `run_id`, urgent:
                 // its own category (« Payer »), time-sensitive (iOS), the urgent channel (Android: `urgent`)
                 let mut event = Event::new(agent, Kind::Approval, request_id)
@@ -285,14 +288,18 @@ impl Notice {
                     .collapse(request_id)
                     .with("run_id", json!(run_id))
                     .with("request_id", json!(request_id))
-                    .with("pay", json!(request_id))
-                    .with("urgent", json!(1));
+                    .with("pay", json!(request_id));
+                if !*calm {
+                    event = event.with("urgent", json!(1));
+                }
                 if *test {
                     event = event.with("test", json!(1));
                 }
                 event.aps.insert("category".into(), json!(PAYMENT_CATEGORY));
-                event.aps.insert("interruption-level".into(), json!("time-sensitive"));
-                event.aps.insert("relevance-score".into(), json!(1));
+                if !*calm {
+                    event.aps.insert("interruption-level".into(), json!("time-sensitive"));
+                    event.aps.insert("relevance-score".into(), json!(1));
+                }
                 event
             }
             Notice::Silent { .. } => return None,

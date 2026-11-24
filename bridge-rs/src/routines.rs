@@ -1583,6 +1583,8 @@ pub async fn fire_via(state: &AppState, id: &str, via: Via) {
     let mut ran_in = String::new();
     // a run that ended without its report (task_frame.rs counts it): why, its run, its conversation
     let mut failure: Option<(Ended, String, String)> = None;
+    // its agent's AI didn't answer (task_frame.rs `ai_silent`)
+    let mut ai = false;
     // a run the month's credit held: neither a failure nor a success
     let mut counted = true;
     let not_started = || format!("{}", now as i64);
@@ -1631,6 +1633,8 @@ pub async fn fire_via(state: &AppState, id: &str, via: Via) {
                     } else {
                         Ended::Failed
                     };
+                    // its agent's AI didn't answer (Alex 24/11): its agent's one card, not one per routine
+                    ai = why == Ended::Failed && crate::task_frame::ai_silent(&ran.error);
                     failure = Some((why, ran.run_id.clone(), ran.session.clone()));
                     format!("ended {}", ran.status)
                 }
@@ -1643,7 +1647,9 @@ pub async fn fire_via(state: &AppState, id: &str, via: Via) {
     };
     match failure {
         // (counted from its end, not its start: a run cut after 30 min is tried again 15 min later, review C3 a)
-        Some((why, run, session)) => match failed(&config, id, why, py::time_time(), via == Via::Schedule) {
+        Some((why, run, session)) => match failed_as(&config, id, why, ai, py::time_time(), via == Via::Schedule) {
+            // its agent's common card waits already: nothing more (Alex 24/11)
+            Some(crate::task_frame::After::Joined) => status.push_str(", paused"),
             // tried again in silence in 15 minutes (task_frame.rs)
             Some(crate::task_frame::After::Retry(_)) => status.push_str(", retry"),
             // 3 in a row: paused, the card « Réparer / Arrêter » (no model call before « Réparer »)
@@ -1652,7 +1658,11 @@ pub async fn fire_via(state: &AppState, id: &str, via: Via) {
                 if let Some(fix) = get(&config, id).and_then(|x| x.frame.fix) {
                     let lang = crate::task_frame::lang_of_agent(&config, &agent.name);
                     let (who, name) = (flat(&shown_agent(&config, &agent.name), NAME_MAX), flat(&r.name, NAME_MAX));
-                    let line = crate::task_frame::fix_title(lang, crate::task_frame::Task::Routine, &who, &name);
+                    let line = if fix.variant == crate::task_frame::AI {
+                        crate::task_frame::ai_title(lang, &who)
+                    } else {
+                        crate::task_frame::fix_title(lang, crate::task_frame::Task::Routine, &who, &name)
+                    };
                     let run_id = format!("{}{}", crate::task_frame::RUN_PREFIX, fix.id);
                     crate::task_frame::raise(state, &agent, &run_id, &line, true).await;
                 }
@@ -1690,13 +1700,47 @@ pub async fn fire_via(state: &AppState, id: &str, via: Via) {
 /// follows: a silent retry, today's notice, or (3 in a row) paused with the card « Réparer / Arrêter ». None: no such
 /// routine.
 pub fn failed(config: &Config, id: &str, why: Ended, now: f64, scheduled: bool) -> Option<crate::task_frame::After> {
-    use crate::task_frame::{After, Fix, REPAIR};
+    failed_as(config, id, why, false, now, scheduled)
+}
+
+/// `failed`, `ai`: its agent's AI didn't answer (task_frame.rs `ai_silent`): at the 3rd in a row, its agent's ONE card
+/// `AI` (made, or joined when one waits), not a card of its own (Alex 24/11, tf-carte-commune-ia-eteinte B). A family
+/// member's routine keeps its own card (hers to answer: review C7).
+pub fn failed_as(config: &Config, id: &str, why: Ended, ai: bool, now: f64, scheduled: bool) -> Option<crate::task_frame::After> {
+    use crate::task_frame::{After, Fix, AI, REPAIR};
     let mut after = None;
     let mut replaced = None;
+    // its agent's common card waiting, if any
+    let agent = get(config, id).map(|r| r.agent).unwrap_or_default();
+    let common = all(config, Some(agent.as_str()))
+        .into_iter()
+        .find_map(|r| r.frame.fix.filter(|f| f.variant == AI && r.by.is_none()));
     let _ = update(config, id, |r| {
-        let step = crate::task_frame::after_failure(&mut r.frame, now, scheduled, r.next_run);
-        r.frame.reason = reason_of(why).into();
-        if step == After::Repair {
+        let mut step = crate::task_frame::after_failure(&mut r.frame, now, scheduled, r.next_run);
+        let ai = ai && r.by.is_none();
+        r.frame.reason = if ai { AI } else { reason_of(why) }.into();
+        if step == After::Repair && ai {
+            replaced = r.frame.fix.take().map(|f| f.id);
+            if replaced.is_some() {
+                r.frame.keep_asked = false;
+            }
+            (r.enabled, r.frame.retry_at) = (false, None);
+            r.frame.fix = Some(match &common {
+                Some(f) => {
+                    step = After::Joined;
+                    f.clone()
+                }
+                None => Fix {
+                    id: py::token_hex(6),
+                    at: now,
+                    variant: AI.into(),
+                    since: r.frame.failing_since,
+                    failures: r.frame.failures,
+                    reason: AI.into(),
+                    ..Fix::default()
+                },
+            });
+        } else if step == After::Repair {
             replaced = r.frame.fix.take().map(|f| f.id);
             if replaced.is_some() {
                 // its « Garder ? » given way: asked again once it is answered (review C6)
@@ -1711,6 +1755,7 @@ pub fn failed(config: &Config, id: &str, why: Ended, now: f64, scheduled: bool) 
                 since: r.frame.failing_since,
                 failures: r.frame.failures,
                 reason: reason_of(why).into(),
+                ..Fix::default()
             });
         }
         after = Some(step);
@@ -1756,6 +1801,7 @@ pub fn repair_failed(config: &Config, id: &str, now: f64) -> Option<String> {
                 since,
                 failures: r.frame.failures.max(crate::task_frame::FAILURES_MAX),
                 reason,
+                ..Fix::default()
             });
         }
         Ok(())
@@ -2215,8 +2261,8 @@ once), `delete`. A schedule: a cron expression (`30 7 * * 1-5`), `every 2h`, `ev
 `every monday 18h`, or a date and time (`2026-11-04T18:00`). `create` makes it, but it does not run until your \
 person says yes on its card in the app, which shows them all of its prompt. Its reports then come to them in the \
 conversation, with a notification; they can make it silent on the routine's page. Say how it ends: `until` (a date) or \
-`repeat` (a number of runs) when your person said so; one you set up on your own with no end stops by itself after 90 \
-days. On a clock it runs « around » its time (a few minutes before or after): `approx: false` only when your person \
+`repeat` (a number of runs) when your person said so; one you set up on your own with no end: after 90 days your \
+person is asked whether to keep it, and it never stops without them. On a clock it runs « around » its time (a few minutes before or after): `approx: false` only when your person \
 asked for an exact time. For something that should react to an e-mail or a link, use routine_trigger instead.",
         "inputSchema": {"type": "object", "properties": {
             "action": {"type": "string", "enum": ["create", "list", "update", "pause", "resume", "run", "delete"]},
@@ -2364,7 +2410,7 @@ name for this one.",
                     let when = view(&r, zone)["schedule_display"].as_str().unwrap_or("").to_string();
                     let ends = match (end_of(&r), r.frame.default_end) {
                         (crate::task_frame::End::Date(at), true) => format!(
-                            " It stops by itself on {} (90 days: no end was given).",
+                            " On {} (90 days: no end was given) your person is asked whether to keep it.",
                             crate::task_frame::day_words("en", at, zone)
                         ),
                         _ => String::new(),
@@ -2407,7 +2453,7 @@ says yes on its card in the app (if they say no, it is deleted).{ends} Tell them
                 crate::card_place::taken(config, &format!("{RUN_PREFIX}{}", c.id));
             }
             if let Some(fix) = &r.frame.fix {
-                crate::task_frame::withdraw(config, &fix.id);
+                crate::task_frame::release(config, &fix.id, &r.id);
             }
             (format!("Routine « {} » deleted.", r.name), false, None)
         }
@@ -2648,7 +2694,7 @@ async fn delete_route(State(state): State<AppState>, UrlPath(id): UrlPath<String
             crate::card_place::taken(&config, &format!("{RUN_PREFIX}{}", card.id));
         }
         if let Some(fix) = &r.frame.fix {
-            crate::task_frame::withdraw(&config, &fix.id);
+            crate::task_frame::release(&config, &fix.id, &r.id);
         }
     }
     if delete(&config, &id) {
@@ -2703,7 +2749,8 @@ async fn action_route(State(state): State<AppState>, UrlPath((id, action)): UrlP
     .ok_or_else(HttpError::not_found)?;
     withdraw(&config, dropped);
     if let Some(fix) = fix {
-        crate::task_frame::withdraw(&config, &fix);
+        // (its agent's common card `AI` stays while another routine holds it)
+        crate::task_frame::release(&config, &fix, &r.id);
     }
     Ok(job(&config, &r))
 }

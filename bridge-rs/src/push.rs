@@ -681,6 +681,21 @@ impl PushService {
             line: line.into(),
             session_id: own(session_id),
             test,
+            calm: false,
+        };
+        self.notify(agent, notice).await
+    }
+
+    /// `notify_payment_urgent` without the urgency (the work of an offer's « Oui », card_pay.rs `urgent`): the same
+    /// card and « Payer », a plain notification (no time-sensitive level, the usual channel).
+    pub async fn notify_payment_calm(&self, agent: &str, run_id: &str, request_id: &str, line: &str, session_id: Option<&str>) -> usize {
+        let notice = Notice::PaymentUrgent {
+            run_id: run_id.into(),
+            request_id: request_id.into(),
+            line: line.into(),
+            session_id: own(session_id),
+            test: false,
+            calm: true,
         };
         self.notify(agent, notice).await
     }

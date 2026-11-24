@@ -582,7 +582,8 @@ async fn long_text_as_file(state: &AppState, agent: &AgentConfig, text: &str) ->
         }
         Some(Attachment {
             kind: "document".into(),
-            name: file["filename"].as_str().map(str::to_string),
+            // shown with its spaces (Alex 24/11, lt-nom-du-fichier A); stored under its safe name (`path`)
+            name: Some(name),
             mime: Some("text/plain".into()),
             size: file["size"].as_u64(),
             path: file["path"].as_str().map(str::to_string),
@@ -593,11 +594,23 @@ async fn long_text_as_file(state: &AppState, agent: &AgentConfig, text: &str) ->
     stored.await.ok().flatten()
 }
 
-/// A long text's file name: its first line with words (a title's `#` out), 60 characters at most, `.txt`.
+/// A long text's file name as shown (Alex 24/11, lt-nom-du-fichier A: with its spaces, « Pourquoi le vélo électrique a
+/// gagné la ville.txt »): its first line with words (a title's `#` out), what no file name may hold out (`/`, `\`, `:`,
+/// control and invisible characters: a space each, runs of spaces one), no leading dot, 60 characters at most, `.txt`.
+/// Stored on the disk under its safe form (files.rs `sanitize_filename`: `<month>/<id12>-<name>`).
 fn long_text_name(text: &str) -> String {
     let first = text.lines().map(|l| l.trim().trim_start_matches('#').trim()).find(|l| l.chars().any(char::is_alphanumeric));
-    let mut name: String = first.unwrap_or("message").chars().take(60).collect();
+    let cleaned: String = first
+        .unwrap_or("message")
+        .chars()
+        .map(|c| if matches!(c, '/' | '\\' | ':') || c.is_control() || crate::files::is_control_like(c) { ' ' } else { c })
+        .collect();
+    let spaced = cleaned.split_whitespace().collect::<Vec<_>>().join(" ");
+    let mut name: String = spaced.trim_start_matches('.').trim().chars().take(60).collect();
     name = name.trim_end_matches(|c: char| !c.is_alphanumeric()).to_string();
+    if name.is_empty() {
+        name = "message".into();
+    }
     format!("{name}.txt")
 }
 

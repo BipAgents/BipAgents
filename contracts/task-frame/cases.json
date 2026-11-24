@@ -1,5 +1,5 @@
 {
- "about": "The frame of what the agents do on their own (passation-pro briefs/design-agents-proactifs.md §4, §6 row 3, §7.4, §7.5; Alex 22/11: Q6 A, Q7 A, Q8 A; texts validated 22/11 but those listed in `texts.rules.new`). Every routine (routines.rs), watcher (watchers.rs, connectors.rs) and trigger (triggers.rs) has an owner (the agent that does it, the person it is for), an end, and a place where it answers. A « Oui » to a one-time thing is one time; a repeat asks its own « Oui », its card saying its rhythm and its end. The agent's routines run « vers 8 h » (a stable shift of −10 to +10 min drawn from their id); the person's stay exact. What fails is repaired in its frame or stopped with a word: a card `bip-fix-<id>` « Réparer / Arrêter », no model call before « Réparer ». Additions only: an app 1.0 ignores the new fields and draws the generic Yes / No card it already draws for an unknown `bip-` card. Read by bridge/tests_blackbox/test_task_frame.py and task_frame.rs' tests (the bridge), and by the apps' FixCard and lists (branch task-frame-apps).",
+ "about": "The frame of what the agents do on their own (passation-pro briefs/design-agents-proactifs.md §4, §6 row 3, §7.4, §7.5; Alex 22/11: Q6 A, Q7 A, Q8 A; texts validated 22/11 but those listed in `texts.rules.new`). Every routine (routines.rs), watcher (watchers.rs, connectors.rs) and trigger (triggers.rs) has an owner (the agent that does it, the person it is for), an end, and a place where it answers. A « Oui » to a one-time thing is one time; a repeat asks its own « Oui », its card saying its rhythm and its end. The agent's routines run « vers 8 h » (a stable shift of −10 to +10 min drawn from their id); the person's stay exact. What fails is repaired in its frame or stopped with a word: a card `bip-fix-<id>` « Réparer / Arrêter », no model call before « Réparer ». Additions only: an app 1.0 ignores the new fields and draws the generic Yes / No card it already draws for an unknown `bip-` card. Read by bridge/tests_blackbox/test_task_frame.py and task_frame.rs' tests (the bridge), and by the apps' FixCard and lists (branch task-frame-apps). Alex 24/11 (passation-pro textes-1-1/decisions.md): a watcher's fix card is asked again before it stops (`cards.fix_warned`), one card per agent whose AI doesn't answer (`cards.ai`), no end at a default end without the person (`after.default_end`); their new texts (`texts.<lang>.warn`, `ai_*`) are to be validated by Alex.",
  "fields": {
   "where": "Each item of GET /v1/autonomous of kind routine, watcher or trigger; the job view of GET /v1/agents/{agent}/routines (and the routine routes' {job}); the `watch` of a connector's detail and of its card (`bip_connector_watch`); GET /v1/triggers' items.",
   "owner": "{agent: the agent's id, person: \"you\" or the shown name of the family member who asked for it (a family agent's routine, routines.rs `by`)}",
@@ -50,8 +50,30 @@
    "bip_summary": "texts.<lang>.keep.<task>",
    "bip_detail": "the same sentence",
    "bip_fix": "{kind, ref, name, variant: keep, ends_at (Unix seconds), title (the agent's shown name), text (= bip_summary), buttons (texts.<lang>.keep_buttons.<task>)}",
-   "when": "3 days before a default end (tools.default_end), once; never for an end the agent or the person gave.",
-   "placed": "As the fix card; not pushed (nothing urgent: it ends as planned without an answer)."
+   "when": "3 days before a default end (tools.default_end), once; never for an end the agent or the person gave. Unanswered at its date (Alex 24/11, B2): asked again once, pushed, its date 14 days later (`after.default_end`).",
+   "placed": "As the fix card; not pushed the first time; its reminder at the default end is pushed (« Une demande attend ton accord »)."
+  },
+  "fix_warned": {
+   "about": "A watcher's fix card unanswered for 4 days (Alex 24/11, tf-ligne-panne-veilleur-remplacee: « prévenir avant de l'arrêter »): the same card again with a new <id>, placed and pushed, saying the day it stops with no answer; switched off at that day only (7 days after the first card, 3 days after this one at the earliest).",
+   "bip_summary": "texts.<lang>.fix_summary.watcher + ' ' + texts.<lang>.warn",
+   "bip_fix": "the fix card's, its `text` ending with ' ' + texts.<lang>.warn, and `stops_at` (Unix seconds)",
+   "push": "texts.<lang>.fix_top.watcher + ' · ' + texts.<lang>.warn"
+  },
+  "ai": {
+   "about": "An agent whose AI doesn't answer (its model's server off, out of reach, overloaded: task_frame.rs `ai_silent`, read from Hermes' error of the failed run) has ONE card for its routines stopped by it, not one per routine (Alex 24/11, tf-carte-commune-ia-eteinte B): its routines paused at their 3rd failed run in a row each join it. A family member's routine keeps its own fix card.",
+   "run_id": "bip-fix-<id>",
+   "choices": [
+    "once",
+    "deny"
+   ],
+   "bip_choices": [
+    "repair",
+    "stop"
+   ],
+   "bip_summary": "texts.<lang>.ai_summary (the app 1.0's whole card: « Oui » = Réessayer, « Non » = Arrêter)",
+   "bip_detail": "texts.<lang>.ai_under_i",
+   "bip_fix": "{kind: agent_ai, ref (the agent), name (its shown name), variant: ai, since, routines (their names), failures, reason: ai, title (texts.<lang>.ai_top), text (texts.<lang>.ai_since), buttons (texts.<lang>.ai_buttons)}",
+   "answers": "« Réessayer » (once): its routines on again, their count from zero, no model turn. « Arrêter » (deny): they stay paused on their page. Never gone after 7 days: it waits (its routines are paused already). A routine turned back on, or deleted, leaves it to the others."
   }
  },
  "answers": [
@@ -109,9 +131,10 @@
  ],
  "after": {
   "retry": "A scheduled run that fails a first time (none failed just before) is tried again, in silence, 15 minutes after its end (review C3 a) with the same words, unless its next run comes first: no Boîte line, no push. Failed again: today's notice (routines.rs `ended_notice`). A retry missed by more than 2 hours (the bridge down) is not run late: today's notice then (C3 b). A pause drops a retry waiting (C3 d); the last run's retry is never dropped by its end (C3 c). The person's « Lancer maintenant » and the agent's `run` are never retried in silence: told at once, as today.",
-  "end": "An end reached: the routine (a `date` end; a `count` end given here, `frame.count`: a job moved from Hermes stays « terminée » as before; a one-time routine too), the watcher (removed) or the trigger goes, its cards with it; never while its last run's retry waits, never a paused one at its default end. One that ran more than 7 days leaves one Boîte line, not pushed: texts.<lang>.ended.<task>, a count end saying the runs it was given (review C1), a watcher at its date its date (R12). A watcher `once` stops once its agent told its person what they wait for (never the bridge's own line when its turn failed; its wake-up's note says it is « once »): paused on its page, never deleted (review C2), with no end left nor « Garder ? »: its work is done (review 2, N1).",
-  "no_answer": "A fix card waiting 7 days: the card goes, the routine stays paused (a watcher is switched off), one Boîte line, not pushed: texts.<lang>.stopped.<task>.",
-  "approx": "« vers »: the run at its time shifted by −10 to +10 minutes (whole minutes, stable for the routine: sha256 of its id, plans.rs `approx_shift`). A one-time or an interval schedule is never shifted unless `approx` is given true for a one-time one. Never to the day before nor after: a run at 0:00 shifted back is shifted forward instead (R8)."
+  "end": "An end reached: the routine (a `date` end; a `count` end given here, `frame.count`: a job moved from Hermes stays « terminée » as before; a one-time routine too), the watcher (removed) or the trigger goes, its cards with it; never while its last run's retry waits, never at a default end (Alex 24/11, B2: `default_end`). One that ran more than 7 days leaves one Boîte line, not pushed: texts.<lang>.ended.<task>, a count end saying the runs it was given (review C1), a watcher at its date its date (R12). A watcher `once` stops once its agent told its person what they wait for (never the bridge's own line when its turn failed; its wake-up's note says it is « once »): paused on its page, never deleted (review C2), with no end left nor « Garder ? »: its work is done (review 2, N1).",
+  "no_answer": "A routine's fix card waiting 7 days: the card goes, the routine stays paused, one Boîte line, not pushed: texts.<lang>.stopped.routine. A watcher's: asked again after 4 days (`cards.fix_warned`), switched off at the day it said (7 days at the earliest), one Boîte line: texts.<lang>.stopped.watcher. The common card `ai` waits.",
+  "approx": "« vers »: the run at its time shifted by −10 to +10 minutes (whole minutes, stable for the routine: sha256 of its id, plans.rs `approx_shift`). A one-time or an interval schedule is never shifted unless `approx` is given true for a one-time one. Never to the day before nor after: a run at 0:00 shifted back is shifted forward instead (R8).",
+  "default_end": "A default end (what its agent set up on its own) never ends it without its person (Alex 24/11, tf-fin-par-defaut-de-lui-meme B2). « Garder » (keep): 90 days more. « La laisser s'arrêter » (stop): the end becomes the person's, reached at its date. Unanswered at its date: it goes on, the « Garder ? » card asked again once, pushed, its date 14 days later; unanswered again: it goes on « until you stop it » (ends.kind never), the card gone, nothing more pushed."
  },
  "app_1_0": {
   "about": "What an app 1.0 (iPhone and Android) already does: no app change. To check on both 1.0 apps with int-1.1 (« apps 1.0 contre le pont 1.1 »).",
@@ -137,7 +160,7 @@
    "lang": "The agent's language (names.rs `agent_language`); another than these four: English. Dutch: not yet (texts to validate, briefs/status-task-frame.md).",
    "dates": "A day: fr « 30/11 », en « Nov 30 », de « 30.11. », es « 30/11 »; not this year, with its year (review C9): « 30/11/2027 », « Nov 30, 2027 », « 30.11.2027 », « 30/11/2027 ». « Depuis {since} »: fr « le 21/11 », en « Nov 21 », de « dem 21.11. », es « el 21/11 ».",
    "clock": "« vers 8 h » / « around 8 AM » / « gegen 8 Uhr » / « hacia las 8 »; with minutes « vers 7 h 30 », « around 7:30 AM », « gegen 7:30 Uhr », « hacia las 7:30 ».",
-   "new": "Not in the design's §7 as written, to validate by Alex: clock_minutes, ends.never, ends.once.routine, ended.watcher, keep.routine, keep_buttons.routine, fix_since's date form, the reasons, fix_under_i.routine (fr; de/es from the §7.5 notes), fix_summary.routine, stopped.routine, repair_failed (review C5), the year of a day not this year (review C9)."
+   "new": "Not in the design's §7 as written, to validate by Alex: clock_minutes, ends.never, ends.once.routine, ended.watcher, keep.routine, keep_buttons.routine, fix_since's date form, the reasons, fix_under_i.routine (fr; de/es from the §7.5 notes), fix_summary.routine, stopped.routine, repair_failed (review C5), the year of a day not this year (review C9). Alex 24/11 (to validate): warn, ai_top, ai_since, ai_buttons, ai_under_i, ai_summary."
   },
   "fr": {
    "clock": "vers {h} h",
@@ -213,7 +236,16 @@
    "repair_failed": {
     "routine": "La routine « {name} » n'a pas pu être réparée pour l'instant : elle reste en pause.",
     "watcher": "Le veilleur « {name} » n'a pas pu être réparé pour l'instant."
-   }
+   },
+   "warn": "Sans réponse, il s'arrête le {date}.",
+   "ai_top": "{agent} · son IA ne répond pas",
+   "ai_since": "Depuis {since} : ses routines n'ont pas pu tourner ({names}).",
+   "ai_buttons": [
+    "Réessayer",
+    "Arrêter"
+   ],
+   "ai_under_i": "Réessayer : ses routines reprennent ; allume son IA avant si elle est éteinte. Arrêter : elles ne tournent plus et restent sur leur page.",
+   "ai_summary": "L'IA de {agent} ne répond pas : ses routines n'ont pas pu tourner ({names}). Réessayer ? (Non : elles s'arrêtent.)"
   },
   "en": {
    "clock": "around {h12} {ampm}",
@@ -289,7 +321,16 @@
    "repair_failed": {
     "routine": "The routine “{name}” couldn't be repaired for now: it stays paused.",
     "watcher": "The watcher “{name}” couldn't be repaired for now."
-   }
+   },
+   "warn": "With no answer, it stops on {date}.",
+   "ai_top": "{agent} · its AI isn't answering",
+   "ai_since": "Since {since}: its routines couldn't run ({names}).",
+   "ai_buttons": [
+    "Try again",
+    "Stop"
+   ],
+   "ai_under_i": "Try again: its routines start again; switch its AI on first if it's off. Stop: they no longer run and stay on their page.",
+   "ai_summary": "{agent}'s AI isn't answering: its routines couldn't run ({names}). Try again? (No: they stop.)"
   },
   "de": {
    "clock": "gegen {h} Uhr",
@@ -365,7 +406,16 @@
    "repair_failed": {
     "routine": "Die Routine „{name}“ konnte vorerst nicht repariert werden: Sie bleibt pausiert.",
     "watcher": "Der Wächter „{name}“ konnte vorerst nicht repariert werden."
-   }
+   },
+   "warn": "Ohne Antwort stoppt er am {date}.",
+   "ai_top": "{agent} · seine KI antwortet nicht",
+   "ai_since": "Seit {since}: Seine Routinen konnten nicht laufen ({names}).",
+   "ai_buttons": [
+    "Erneut versuchen",
+    "Stoppen"
+   ],
+   "ai_under_i": "Erneut versuchen: Seine Routinen laufen wieder; schalte seine KI vorher ein, falls sie aus ist. Stoppen: Sie laufen nicht mehr und bleiben auf ihrer Seite.",
+   "ai_summary": "Die KI von {agent} antwortet nicht: Seine Routinen konnten nicht laufen ({names}). Erneut versuchen? (Nein: Sie stoppen.)"
   },
   "es": {
    "clock": "hacia las {h}",
@@ -441,7 +491,16 @@
    "repair_failed": {
     "routine": "La rutina «{name}» no se ha podido reparar por ahora: sigue en pausa.",
     "watcher": "El vigilante «{name}» no se ha podido reparar por ahora."
-   }
+   },
+   "warn": "Sin respuesta, se detiene el {date}.",
+   "ai_top": "{agent} · su IA no responde",
+   "ai_since": "Desde {since}: sus rutinas no han podido funcionar ({names}).",
+   "ai_buttons": [
+    "Reintentar",
+    "Detener"
+   ],
+   "ai_under_i": "Reintentar: sus rutinas vuelven a funcionar; enciende antes su IA si está apagada. Detener: dejan de funcionar y se quedan en su página.",
+   "ai_summary": "La IA de {agent} no responde: sus rutinas no han podido funcionar ({names}). ¿Reintentar? (No: se detienen.)"
   }
  }
 }

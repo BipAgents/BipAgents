@@ -841,7 +841,7 @@ mod tests {
         let agent = AgentConfig { name: "vie".into(), ..Default::default() };
         let ran = |status: &str, text: &str| crate::background_turn::Ran {
             run_id: "run_1".into(), session: "api_s".into(), status: status.into(), text: text.into(), tokens: 1,
-            stopped: None,
+            stopped: None, error: String::new(),
         };
         let page = vec!["/bipagents/pages/vie/prononcer.html".to_string()];
         let replied = after_call_delivery(&agent, "fr", "live_1", &ran("completed", "Voilà l'audio."), page.clone()).unwrap();

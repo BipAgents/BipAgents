@@ -1026,7 +1026,22 @@ fn a2_one_card_per_agent_when_its_ai_does_not_answer() {
     assert_eq!(pending_items(&config, Some("vie"))[0]["bip_fix"]["variant"], REPAIR);
 }
 
-/// 2. The common card's texts in the four languages (to be validated by Alex).
+/// 2. The common card's texts in the four languages (to be validated by Alex), and the warning of 1: the contract's.
+#[test]
+fn a2_the_new_cards_texts_are_the_contracts() {
+    let texts = &contract()["texts"];
+    for lang in ["fr", "en", "de", "es"] {
+        let c = &texts[lang];
+        let s = |k: &str| c[k].as_str().unwrap().to_string();
+        assert_eq!(warn_sentence(lang, "{date}"), s("warn"), "{lang}");
+        assert_eq!(ai_title(lang, "{agent}"), s("ai_top"), "{lang}");
+        assert_eq!(ai_since_line(lang, "{since}", "{names}"), s("ai_since"), "{lang}");
+        assert_eq!(json!(ai_buttons(lang)), c["ai_buttons"], "{lang}");
+        assert_eq!(ai_under_i(lang), s("ai_under_i"), "{lang}");
+        assert_eq!(ai_summary(lang, "{agent}", "{names}"), s("ai_summary"), "{lang}");
+    }
+}
+
 #[test]
 fn a2_the_common_card_speaks_four_languages() {
     for (lang, title, buttons) in [

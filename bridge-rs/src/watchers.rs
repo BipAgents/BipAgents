@@ -1096,6 +1096,7 @@ async fn raise_fix(state: &AppState, agent: &AgentConfig, conn: &Connector, fail
         since: if since > 0.0 { since } else { now },
         failures,
         reason: reason.into(),
+        ..Default::default()
     };
     let made = connectors::change(&config, |store| {
         let c = store.agents.get_mut(&agent.name)?.iter_mut().find(|c| c.id == conn.id)?;
@@ -1195,6 +1196,7 @@ pub fn repair_failed(config: &Config, agent: &str, id: &str, now: f64) -> Option
             since: if rt.failing_since > 0.0 { rt.failing_since } else { now },
             failures: rt.failures,
             reason: "check".into(),
+            ..Default::default()
         });
         Some(c.name.clone())
     })
