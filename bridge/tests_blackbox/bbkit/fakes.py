@@ -611,6 +611,9 @@ class FakeModel(Fake):
         # your tools »): its answer, and how long it takes
         self.first_answer = "Je compare les trains Lyon–Paris de samedi matin, les moins chers d'abord."
         self.first_delay = 0.0
+        # a smart agent's pass of the day (offer_ideas.rs: its instructions start « You look back over »): the candidates
+        # it answers, one JSON object a line (none: the most common answer); its usage counts what it was sent
+        self.idea_lines: List[Dict[str, Any]] = []
 
     def records_answer(self, user: str) -> str:
         documents = []
@@ -665,6 +668,12 @@ class FakeModel(Fake):
                 content = "\n".join(json.dumps(line, ensure_ascii=False) for line in self.category_lines)
                 return JSONResponse({"choices": [{"message": {"content": content}}],
                                      "usage": {"prompt_tokens": 800, "completion_tokens": 40}},
+                                    status_code=self.status)
+            if body["messages"][0]["content"].startswith("You look back over"):
+                content = "\n".join(json.dumps(line, ensure_ascii=False) for line in self.idea_lines)
+                sent = sum(len(m["content"]) for m in body["messages"])
+                return JSONResponse({"choices": [{"message": {"content": content}}],
+                                     "usage": {"prompt_tokens": -(-sent * 2 // 7), "completion_tokens": max(1, -(-len(content) * 2 // 7))}},
                                     status_code=self.status)
             if body["messages"][0]["content"].startswith("You tidy"):
                 content = "\n".join(json.dumps(line, ensure_ascii=False) for line in self.notebook_lines)
