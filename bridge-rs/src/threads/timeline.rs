@@ -167,7 +167,7 @@ pub fn message_id(agent: &str, session: &str, row: &Row) -> String {
 }
 
 /// The words of a content (a string, or parts) and how many photos it carries.
-fn words_and_images(content: &Value) -> (String, usize) {
+pub(crate) fn words_and_images(content: &Value) -> (String, usize) {
     match content {
         Value::String(s) => (s.clone(), 0),
         Value::Array(parts) => {

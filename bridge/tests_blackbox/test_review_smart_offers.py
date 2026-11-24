@@ -32,7 +32,8 @@ def test_review_b2_a_pass_never_reads_the_health_figures_of_the_turns_after_a_he
     [run] = look(bridge)
     assert run["model_called"] is True, run
     sent = sent_of(fakes)
-    assert "Je prépare le semi" in sent, sent
+    # strict B2 (Alex, 24/11): none of the conversations of an agent with « Santé » goes to a pass, like the Carnet's
+    assert "Je prépare le semi" not in sent and "Person:" not in sent, sent
     for secret in ("5 h 12", "pouls"):
         assert secret not in sent, f"health figures sent to a pass: {secret!r} in\n{sent}"
 
