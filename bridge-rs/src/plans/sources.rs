@@ -702,6 +702,14 @@ fn quoted(text: &str) -> String {
     serde_json::to_string(text).unwrap_or_else(|_| "\"\"".into())
 }
 
+/// Whether others read `session` of `agent`: a live read-only share of it (or of the agent's whole thread,
+/// read_shares.rs), or one of the agent's rooms (rooms.rs).
+fn seen_by_others(config: &Config, agent: &str, session: &str) -> bool {
+    !crate::read_shares::shares_for(config, agent, session).is_empty()
+        || !crate::read_shares::thread_shares(config, agent).is_empty()
+        || crate::rooms::all(config).iter().any(|r| r.sessions.get(agent).is_some_and(|s| s == session))
+}
+
 /// The hidden line the person's next message to `agent` carries: what is coming with no plan, told once (its words
 /// dropped then). None: nothing to tell, or not here (a routine's conversation, the family's common one).
 pub fn take_note(config: &Config, agent: &str, session: &str) -> Option<String> {
@@ -711,6 +719,11 @@ pub fn take_note(config: &Config, agent: &str, session: &str) -> Option<String> 
     let now = py::time_time();
     let waiting = |h: &Hint| h.agent == agent && !h.told && !h.carded && h.start > now;
     if !path(config).exists() || !load(config).hints.iter().any(waiting) {
+        return None;
+    }
+    // a conversation others see (shown read-only to friends, a room of agents): kept for a conversation of the
+    // person's own, as the agent's private tools there (review C7)
+    if seen_by_others(config, agent, session) {
         return None;
     }
     let zone = person_zone(config);
@@ -1094,6 +1107,12 @@ pub fn watch_on(config: &Config, agent: &str, account: &str) -> Result<String, S
         .triggers
         .into_iter()
         .find(|t| t.by == crate::triggers::REPLIES && t.mail.as_ref().is_some_and(|m| m.account == account));
+    // « from its newest message: nothing older is ever read » (the contract): a mailbox nothing watches now keeps the
+    // cursor an earlier watch left (an e-mail routine, a plan's watch, weeks ago): forgotten, so the watch starts at the
+    // « Oui » (review C5)
+    if !crate::triggers_mail::needed(config).contains_key(account) {
+        crate::triggers_mail::forget_cursor(config, account);
+    }
     let lang = lang_of(config, agent);
     let t = texts(lang);
     let trigger = match existing {
@@ -1189,12 +1208,15 @@ pub fn seen_mail(config: &Config, trigger: &crate::triggers::Trigger, event: &cr
     if !may(config, &trigger.agent) {
         return false;
     }
-    let own = crate::mailbox::of(config)
-        .read()
+    // a mailbox removed, or no longer the agent's: nothing kept (review C1; `reconcile` stops its watch)
+    let Some(own) = crate::mailbox::of(config)
+        .of_agent(&trigger.agent)
         .ok()
         .and_then(|l| l.into_iter().find(|a| tk::str_or_empty(a.get("id")) == account))
         .map(|a| tk::str_or_empty(a.get("username")))
-        .unwrap_or_default();
+    else {
+        return false;
+    };
     if !worth(event, &own) {
         return false;
     }
@@ -1252,9 +1274,25 @@ fn sent_folder(rows: &[(String, String)]) -> Option<String> {
     rows.iter().find(|(_, n)| usual.contains(&n.to_lowercase().as_str())).map(|(_, n)| n.clone())
 }
 
+/// Whether a Message-ID can be asked of the Sent folder: printable ASCII only. Anyone may send another one (`<zoé.1@…>`,
+/// a tab inside), which an IMAP argument can't carry (review C4): that e-mail is judged by its flags only.
+fn searchable(message_id: &str) -> bool {
+    !message_id.is_empty() && message_id.bytes().all(|b| (0x20..0x7f).contains(&b))
+}
+
+/// What the evening look found of its e-mails (`dealt_with`).
+#[derive(Debug, Default, PartialEq)]
+pub struct Dealt {
+    /// The Message-IDs dealt with already.
+    pub done: Vec<String>,
+    /// Those whose Sent search failed: not due tonight, looked at again the next evening (never the others' fault).
+    pub unchecked: Vec<String>,
+}
+
 /// Of `mails`, the Message-IDs dealt with already: answered (a message of Sent cites it: In-Reply-To or References;
 /// flagged \Answered) or gone from the inbox. Err: the mailbox or its Sent folder couldn't be read (nothing is due).
-pub fn dealt_with(conn: &mut crate::mailbox::Connection, mails: &[Mail]) -> Result<Vec<String>, String> {
+/// One e-mail's search failing sets that e-mail aside only (`unchecked`, review C4).
+pub fn dealt_with(conn: &mut crate::mailbox::Connection, mails: &[Mail]) -> Result<Dealt, String> {
     use crate::tools_knowledge::imap::Data;
     let mut done = Vec::new();
     let (status, _) = conn.select(&crate::mailbox::quote_box(crate::triggers_mail::FOLDER), true).map_err(|e| e.to_string())?;
@@ -1289,18 +1327,26 @@ pub fn dealt_with(conn: &mut crate::mailbox::Connection, mails: &[Mail]) -> Resu
     if status != "OK" {
         return Err("the Sent folder could not be opened".into());
     }
-    let open: Vec<&Mail> = mails.iter().filter(|m| !done.contains(&m.message_id)).collect();
+    let open: Vec<&Mail> = mails.iter().filter(|m| !done.contains(&m.message_id) && searchable(&m.message_id)).collect();
+    let mut unchecked = Vec::new();
     for m in open {
         let id = crate::mailbox::quote(&m.message_id);
         for header in ["In-Reply-To", "References"] {
-            let (status, data) = conn.uid("SEARCH", &["HEADER", header, &id]).map_err(|e| e.to_string())?;
-            if status == "OK" && !numbers(&data).is_empty() {
-                done.push(m.message_id.clone());
-                break;
+            match conn.uid("SEARCH", &["HEADER", header, &id]) {
+                Ok((status, data)) if status == "OK" && !numbers(&data).is_empty() => {
+                    done.push(m.message_id.clone());
+                    break;
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    tracing::info!(target: "bipbridge::plans", why = %e, "one reply due not checked");
+                    unchecked.push(m.message_id.clone());
+                    break;
+                }
             }
         }
     }
-    Ok(done)
+    Ok(Dealt { done, unchecked })
 }
 
 /// The evening look of each mailbox watched: its e-mails due, dealt with ones set aside (IMAP, headers only), then
@@ -1339,7 +1385,7 @@ pub async fn evening(state: &AppState) {
         })
         .await
         .unwrap_or_else(|e| Err(e.to_string()));
-        let dealt = match dealt {
+        let Dealt { done: dealt, unchecked } = match dealt {
             Ok(d) => d,
             Err(why) => {
                 tracing::info!(target: "bipbridge::plans", account = %mailbox.account, why = %why, "replies due not checked");
@@ -1352,7 +1398,11 @@ pub async fn evening(state: &AppState) {
                 m.done_at = now;
             }
         });
-        let due: Vec<Mail> = list.into_iter().filter(|m| !dealt.contains(&m.message_id)).take(ITEMS_MAX).collect();
+        let due: Vec<Mail> = list
+            .into_iter()
+            .filter(|m| !dealt.contains(&m.message_id) && !unchecked.contains(&m.message_id))
+            .take(ITEMS_MAX)
+            .collect();
         if !due.iter().any(|m| m.state == WAITING) {
             continue;
         }
@@ -1510,10 +1560,34 @@ pub fn set_gate(agent: &str, run: &str, ids: Option<Vec<String>>) {
 
 /// In a replies card's « Oui » turn (`run`), a mail tool's refusal: `mail_read` opens those e-mails only, `mail_draft`
 /// answers those only, `mail_search` and `mail_attachment` are closed. None: allowed (or not such a turn).
+/// A call whose run the hub can't tell (`run` None: a sub-agent's session, a Hermes without patch 0028, the bridge
+/// restarted mid-turn) while one of the agent's replies turns is gated: closed the same way, its e-mails only (review
+/// C3: in doubt, closed).
 pub fn gate(agent: &str, run: Option<&str>, tool: &str, arguments: &Dict) -> Option<String> {
-    let run = run?;
     let gates = GATES.lock().unwrap_or_else(|e| e.into_inner());
-    let ids = gates.as_ref()?.get(&(agent.to_string(), run.to_string()))?;
+    let gates = gates.as_ref()?;
+    let ids: Vec<String> = match run {
+        Some(run) => gates.get(&(agent.to_string(), run.to_string()))?.clone(),
+        None => gates.iter().filter(|((a, _), _)| a == agent).flat_map(|(_, ids)| ids.iter().cloned()).collect(),
+    };
+    if ids.is_empty() {
+        return None;
+    }
+    refusal(&ids, tool, arguments)
+}
+
+/// A call whose run the hub can't tell, after a restart (`GATES` lost, its turn still going on in Hermes): the replies
+/// « Oui » the offers still do for `agent` (plans/offers.rs `doing`, on disk) close its mail tools the same way.
+pub fn gate_unknown_run(config: &Config, agent: &str, tool: &str, arguments: &Dict) -> Option<String> {
+    let doing = offers::replies_doing(config, agent);
+    if doing.is_empty() {
+        return None;
+    }
+    let ids: Vec<String> = doing.iter().flat_map(mail_ids).collect();
+    refusal(&ids, tool, arguments)
+}
+
+fn refusal(ids: &[String], tool: &str, arguments: &Dict) -> Option<String> {
     let arg = |k: &str| arguments.get(k).and_then(Value::as_str).unwrap_or("").trim().to_string();
     let listed = |id: &str| ids.iter().any(|i| i == id);
     match tool {
@@ -1531,6 +1605,27 @@ pub fn gate(agent: &str, run: Option<&str>, tool: &str, arguments: &Dict) -> Opt
         ),
     }
 }
+
+/// The tools a replies card's « Oui » turn may not run (Hermes patch 0024 `closed_tools`, refused in its dispatcher
+/// whatever the bridge knows of the turn: a sub-agent's call, a restart; review C3): every mail tool but `mail_read`
+/// and `mail_draft`, and what could carry an e-mail's words elsewhere or let another agent read them (the web, the
+/// browsers, commands, code, sub-agents). Its note asks for nothing else.
+pub const REPLIES_CLOSED_TOOLS: [&str; 14] = [
+    "browser_*",
+    "computer_use",
+    "delegate_task",
+    "execute_code",
+    "mcp__bipagents__ask_agent",
+    "mcp__bipagents__mail_attachment",
+    "mcp__bipagents__mail_bulk",
+    "mcp__bipagents__mail_overview",
+    "mcp__bipagents__mail_search",
+    "mcp__bipagents__start_task",
+    "mcp__stealth__*",
+    "terminal",
+    "web_extract",
+    "web_search",
+];
 
 // -- an appointment's « Oui » -------------------------------------------------------------------------------------------------------
 
@@ -1686,14 +1781,44 @@ pub async fn follow(state: &AppState) {
 
 // -- the tick ---------------------------------------------------------------------------------------------------------------------
 
+/// The watched mailboxes removed, or taken from their agent (review C1): their watch off at once, its headers and its
+/// card gone (mailbox.rs calls it when a mailbox is removed or changed; `reconcile` too). Their accounts. A mailbox
+/// list that can't be read decides nothing.
+pub fn mailboxes_gone(config: &Config) -> Vec<String> {
+    if !path(config).exists() {
+        return Vec::new();
+    }
+    let on: Vec<Mailbox> = load(config).mailboxes.into_iter().filter(|m| m.state == ON).collect();
+    if on.is_empty() {
+        return Vec::new();
+    }
+    let Ok(accounts) = crate::mailbox::of(config).read() else { return Vec::new() };
+    let mut gone = Vec::new();
+    for m in on {
+        let kept = accounts.iter().any(|a| {
+            tk::str_or_empty(a.get("id")) == m.account && tk::py_in(&m.agent, a.get("agents").unwrap_or(&json!([])))
+        });
+        if !kept {
+            watch_off(config, &m.account, OFF);
+            tracing::info!(target: "bipbridge::plans", agent = %m.agent, "replies due watch stopped: its mailbox is gone");
+            gone.push(m.account);
+        }
+    }
+    gone
+}
+
 /// The watches that stopped (their trigger deleted, paused, ended, the mailbox no longer the agent's): their headers
 /// forgotten; an end reached: one Boîte line, the consent card may come again.
 async fn reconcile(state: &AppState) {
     let config = state.config();
     let now = py::time_time();
     let store = load(&config);
+    if !store.mailboxes.iter().any(|m| m.state == ON) {
+        return;
+    }
     let triggers = crate::triggers::load(&config).triggers;
-    for m in store.mailboxes.iter().filter(|m| m.state == ON) {
+    let gone = mailboxes_gone(&config);
+    for m in store.mailboxes.iter().filter(|m| m.state == ON && !gone.contains(&m.account)) {
         let trigger = m.trigger.as_ref().and_then(|id| triggers.iter().find(|t| &t.id == id));
         match trigger {
             None => watch_off(&config, &m.account, OFF),

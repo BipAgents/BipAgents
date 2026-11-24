@@ -1470,6 +1470,21 @@ async fn work(state: &AppState, agent: &AgentConfig, doing: Doing) {
     running(&id, false);
 }
 
+/// The replies cards' « Oui » still being done for `agent` (their turn may go on in Hermes after a restart: plans/sources.rs
+/// `gate_unknown_run`), started within the last two turns' time.
+pub fn replies_doing(config: &Config, agent: &str) -> Vec<Offer> {
+    let now = py::time_time();
+    if !path(config).exists() {
+        return Vec::new();
+    }
+    load(config)
+        .doing
+        .into_iter()
+        .filter(|d| d.offer.agent == agent && d.offer.source == super::sources::REPLIES && now - d.at < 2.0 * TURN_SECONDS)
+        .map(|d| d.offer)
+        .collect()
+}
+
 /// The « Oui »'s works a restart left undone (not run by this bridge, started more than `STALE_SECONDS` ago, tried
 /// fewer than `MAX_TRIES` times).
 pub fn stale(store: &Store, running: &std::collections::HashSet<String>, now: f64) -> Vec<Doing> {
@@ -1614,6 +1629,10 @@ async fn turn(state: &AppState, agent: &AgentConfig, offer: &Offer, place: &crat
     let mut turn = Turn::new(agent, crate::background_turn::Kind::Card, &conversation, note);
     turn.budget = Some(TURN_BUDGET);
     turn.max_seconds = TURN_SECONDS;
+    if gated.is_some() {
+        // closed by Hermes too, whatever the bridge knows of the turn (review C3)
+        turn.options = Some(json!({"closed_tools": super::sources::REPLIES_CLOSED_TOOLS}));
+    }
     let title = shown_agent(&config, &agent.name);
     let opened = std::sync::Mutex::new(None::<String>);
     let ran = pipeline

@@ -71,12 +71,28 @@ fn save_cursor(config: &Config, account: &str, cursor: &Cursor) {
     let _held = CURSORS.lock().unwrap_or_else(|e| e.into_inner());
     let mut all = load_cursors(config);
     all.insert(account.to_string(), cursor.clone());
+    write_cursors(config, &all);
+}
+
+/// (under `CURSORS`)
+fn write_cursors(config: &Config, all: &HashMap<String, Cursor>) {
     let file = cursors_path(config);
-    if let Ok(body) = serde_json::to_vec(&all) {
+    if let Ok(body) = serde_json::to_vec(all) {
         let tmp = file.with_extension("part");
         if py::write_with_mode(&tmp.to_string_lossy(), &body, 0o600).is_ok() {
             let _ = std::fs::rename(&tmp, &file);
         }
+    }
+}
+
+/// Where `account`'s inbox was left forgotten: its next connection starts from its newest message. For a watch that
+/// must read nothing from before it was turned on (plans/sources.rs `watch_on`, review C5), when nothing watches that
+/// mailbox now (its cursor is where an earlier watch left it, maybe weeks ago).
+pub fn forget_cursor(config: &Config, account: &str) {
+    let _held = CURSORS.lock().unwrap_or_else(|e| e.into_inner());
+    let mut all = load_cursors(config);
+    if all.remove(account).is_some() {
+        write_cursors(config, &all);
     }
 }
 

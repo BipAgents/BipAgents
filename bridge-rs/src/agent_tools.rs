@@ -2315,8 +2315,12 @@ async fn mcp_call(
                 false,
             )));
         }
-        // a replies card's « Oui » (plans/sources.rs): its turn opens and answers those e-mails only
-        if let Some(refused) = crate::plans::sources::gate(&agent.name, turn_run.as_deref(), &name, &arguments) {
+        // a replies card's « Oui » (plans/sources.rs): its turn opens and answers those e-mails only; a call whose turn
+        // the hub can't tell is closed the same way while such a turn goes on, a restart's too (review C3)
+        let refused = crate::plans::sources::gate(&agent.name, turn_run.as_deref(), &name, &arguments).or_else(|| {
+            turn_run.is_none().then(|| crate::plans::sources::gate_unknown_run(&state.config(), &agent.name, &name, &arguments)).flatten()
+        });
+        if let Some(refused) = refused {
             return Ok(answer(tool_text(&refused, false)));
         }
     }

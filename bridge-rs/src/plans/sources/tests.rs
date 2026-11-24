@@ -491,3 +491,31 @@ fn review_c7_no_hidden_line_in_a_conversation_others_see() {
     std::fs::write(&file, json!({"shares": {"share0123456789abcdeg": thread}}).to_string()).unwrap();
     assert_eq!(take_note(&config, "vie", "s1"), None);
 }
+
+/// Review C3, a restart: the gates in memory are lost while the turn goes on in Hermes; the « Oui » the offers still do
+/// (on disk) close the agent's mail calls with no known run the same way.
+#[test]
+fn review_c3_after_a_restart_a_replies_yes_still_done_closes_mail_calls_with_no_known_run() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = config_in(dir.path());
+    let args = |pairs: Value| pairs.as_object().unwrap().clone();
+    assert_eq!(gate_unknown_run(&config, "vie", "mail_search", &args(json!({}))), None);
+    let n = now();
+    let offer = replies_offer(&config, "vie", "acct", "a@example.org", &[mail("acct", "<m1@x>", n - 2.0 * DAY, WAITING)], n);
+    let ids = mail_ids(&offer);
+    offers::change(&config, |s| s.doing.push(offers::Doing { offer, session: None, report: None, at: n, tries: 1 }));
+    assert!(gate_unknown_run(&config, "vie", "mail_search", &args(json!({"query": "x"}))).is_some());
+    assert!(gate_unknown_run(&config, "vie", "mail_read", &args(json!({"id": "acct|INBOX|90"}))).is_some());
+    assert_eq!(gate_unknown_run(&config, "vie", "mail_read", &args(json!({"id": ids[0]}))), None);
+    assert_eq!(gate_unknown_run(&config, "budget", "mail_search", &args(json!({}))), None);
+    // and its turn closes them in Hermes too (patch 0024), whatever the bridge knows of it
+    assert!(REPLIES_CLOSED_TOOLS.contains(&"mcp__bipagents__mail_search"));
+    assert!(!REPLIES_CLOSED_TOOLS.iter().any(|t| t.ends_with("mail_read") || t.ends_with("mail_draft")));
+}
+
+/// Review C4: a Message-ID an IMAP argument can't carry is judged by its flags only, never sent to the Sent search.
+#[test]
+fn review_c4_an_odd_message_id_is_never_searched() {
+    assert!(searchable("<p1@example.net>"));
+    assert!(!searchable("<zoé.1@example.org>") && !searchable("<a\tb@x>") && !searchable(""));
+}

@@ -190,6 +190,13 @@ def test_the_reply_card_is_built_from_headers_only_and_bodies_are_read_only_afte
     assert f"{account}|INBOX|101" in text and f"{account}|INBOX|102" in text and UNTRUSTED in text, text
     assert "4 200" not in text and "Never send" in text, text   # the bodies are for mail_read, in that turn only
     session = turn["session_id"]
+    # closed by Hermes too (patch 0024), whatever the bridge knows of the turn; a call from a session the hub doesn't
+    # follow (a sub-agent's) is closed the same way while the turn goes on (review C3)
+    closed = (turn["model_options"] or {}).get("closed_tools") or []
+    assert "mcp__bipagents__mail_search" in closed and "delegate_task" in closed, turn["model_options"]
+    assert not [t for t in closed if t.endswith(("mail_read", "mail_draft"))], closed
+    unknown = call(bridge, "mail_search", {"query": "devis"}, token=TOKEN, session="sub-agent-session")
+    assert not_done(unknown), text_of(unknown)
     read = call(bridge, "mail_read", {"id": f"{account}|INBOX|101"}, token=TOKEN, session=session)
     assert not not_done(read) and "4 200" in text_of(read), text_of(read)
     other = call(bridge, "mail_read", {"id": f"{account}|INBOX|90"}, token=TOKEN, session=session)
