@@ -894,12 +894,24 @@ impl HermesClient {
         turn_ready(agent).await;
         ready(agent).await;
         let url = format!("{}/api/sessions/{session_id}/chat/stream", agent.hermes_url);
-        let resp = self.client.post(url).headers(Self::headers(agent, "text/event-stream")).json(&body).send().await?;
-        let status = resp.status().as_u16();
-        if status != 200 {
-            return Err(HermesError::http(status, head(&resp.text().await.unwrap_or_default(), 500)));
+        let mut healed = false;
+        loop {
+            let resp =
+                self.client.post(&url).headers(Self::headers(agent, "text/event-stream")).json(&body).send().await?;
+            let status = resp.status().as_u16();
+            if status == 200 {
+                return Ok(resp);
+            }
+            let text = resp.text().await.unwrap_or_default();
+            // as a run's start (`start_run_body`): its space's gateway restarted once, the turn tried again once
+            if !healed && crate::space_heal::is_stale_epoch(status, &text) {
+                healed = true;
+                if crate::space_heal::heal(&self.client, agent).await {
+                    continue;
+                }
+            }
+            return Err(HermesError::http(status, head(&text, 500)));
         }
-        Ok(resp)
     }
 
     /// `POST /v1/runs` in a conversation: the run's id (it goes on in Hermes; follow it with `run`).
@@ -984,7 +996,7 @@ impl HermesClient {
         // (202, `Idempotency-Replayed`) instead of starting another.
         let key = format!("bip-{}", crate::py::token_urlsafe(24));
         let url = format!("{}/v1/runs", agent.hermes_url);
-        let mut attempt = 1;
+        let (mut attempt, mut healed) = (1, false);
         let data = loop {
             ready(agent).await;
             let sent = self
@@ -1010,6 +1022,14 @@ impl HermesClient {
                     let text = resp.text().await?;
                     if [200, 201, 202].contains(&status) {
                         break serde_json::from_str::<Value>(&text).unwrap_or_else(|_| json!({}));
+                    }
+                    // its space's Hermes no longer owns its epoch: its gateway restarted once, the turn tried again
+                    // (refused, nothing was admitted: the same key)
+                    if !healed && crate::space_heal::is_stale_epoch(status, &text) {
+                        healed = true;
+                        if crate::space_heal::heal(&self.client, agent).await {
+                            continue;
+                        }
                     }
                     if queued {
                         tracing::warn!(agent = %agent.name, "run accepted while its gateway restarts: not sent again");

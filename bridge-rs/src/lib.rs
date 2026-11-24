@@ -145,6 +145,7 @@ pub mod shares;
 pub mod names; // the app's things by their names in the person's language
 pub mod souls;
 pub mod space;
+pub mod space_heal;
 pub mod spaces;
 pub mod ssh_keys;
 pub mod steps;
