@@ -40,7 +40,7 @@
     "trip": {"source": "trip", "by": "agent", "label": "texts.<lang>.trip_offer", "about": "the trip's city", "bip_detail": "texts.<lang>.trip_prompt"},
     "reply_watch": {"source": "replies", "by": "bridge", "label": "texts.<lang>.consent", "about": "the mailbox's address", "bip_detail": "texts.<lang>.consent_under_i", "bip_offer": "+ mailbox (its address)"},
     "draft": {"source": "replies", "by": "agent", "label": "texts.<lang>.replies_question", "about": "texts.<lang>.replies_about", "bip_summary": "texts.<lang>.replies_top (or replies_top_one) + « . » + the question: an app 1.0's whole card", "bip_detail": "the e-mails' lines + texts.<lang>.replies_under_i", "bip_offer": "+ items [{from, subject, since}], top, mailbox", "push": "texts.<lang>.replies_notification (or replies_notification_one)"},
-    "learning": "Counted as the agent's offers are (two « Non merci » in a row, a low share of yes: quiet 30 days), per source (`calendar`, `trip`, `replies`): never the agent's own kinds."
+    "learning": "Counted as the agent's offers are (two « Non merci » in a row, a low share of yes: quiet 30 days), by source and kind (`calendar:appointment`, `trip:trip`, `replies:reply_watch`, `replies:draft`): never one of the agent's own kinds."
   },
   "app_1_0": {
     "cards": "Each card above as its generic card: bip_summary, bip_detail under « i », « Oui » / « Non » (`once` / `deny`). A replies card's bip_summary says how many e-mails wait and the question; its e-mails are under « i ».",

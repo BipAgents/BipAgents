@@ -161,7 +161,21 @@ fn reads_text(config: &Config, account: &str) -> bool {
 }
 
 /// What a plan's watch fetches of a new message: these headers, never its text.
-const HEADERS_ONLY: &str = "(BODY.PEEK[HEADER.FIELDS (FROM SUBJECT DATE MESSAGE-ID)])";
+/// (A replies-due watch also needs a mass mailing's headers: still headers only, plans/sources.rs.)
+const HEADERS_ONLY: &str = "(BODY.PEEK[HEADER.FIELDS (FROM SUBJECT DATE MESSAGE-ID LIST-ID LIST-UNSUBSCRIBE PRECEDENCE \
+AUTO-SUBMITTED X-AUTO-RESPONSE-SUPPRESS)])";
+
+/// A mass mailing by its headers (`Event.bulk`).
+pub fn bulk_of(get: impl Fn(&str) -> Option<String>) -> bool {
+    let has = |k: &str| get(k).is_some_and(|v| !v.trim().is_empty());
+    let precedence = get("Precedence").unwrap_or_default().trim().to_lowercase();
+    let auto = get("Auto-Submitted").unwrap_or_default().trim().to_lowercase();
+    has("List-Id")
+        || has("List-Unsubscribe")
+        || has("X-Auto-Response-Suppress")
+        || ["bulk", "list", "junk"].contains(&precedence.as_str())
+        || (!auto.is_empty() && auto != "no")
+}
 
 /// New messages' headers (mail_rules.rs: sender, list, flags, Message-ID), never their text.
 fn headers_of(conn: &mut Connection, uids: &[u64]) -> Result<Vec<crate::mail_tidy::Row>, String> {
@@ -205,6 +219,7 @@ fn read_one(conn: &mut Connection, account: &str, uid: u64, text: bool) -> Resul
         message_id: message.get("Message-ID").unwrap_or_default().trim().to_string(),
         mail_ref: format!("{account}|{FOLDER}|{uid}"),
         text,
+        bulk: bulk_of(|k| message.get(k)),
         ..Event::default()
     }))
 }
@@ -316,6 +331,13 @@ pub fn offer(config: &Config, account: &str, event: &Event) -> usize {
     for t in triggers::load(config).triggers {
         let Some(filter) = t.mail.as_ref().filter(|m| m.account == account) else { continue };
         if !t.enabled || t.kind != MAIL {
+            continue;
+        }
+        if triggers::replies_watch(&t) {
+            // a replies-due watch: its headers kept by plans/sources.rs (no turn, no queue)
+            if crate::plans::sources::seen_mail(config, &t, event) {
+                tracing::info!(target: "bipbridge::triggers", agent = %t.agent, trigger = %t.id, "e-mail kept for the replies due");
+            }
             continue;
         }
         if !triggers::takes(&t, filter, event) {

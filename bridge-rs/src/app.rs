@@ -1947,6 +1947,7 @@ fn assemble(state: &AppState, config: &Config) -> Router {
         .merge(crate::templates::router())
         .merge(crate::autonomous::router())
         .merge(crate::triggers::router())
+        .merge(crate::plans::sources::router())
         .merge(crate::routines::router())
         .merge(crate::approval_level::router())
         .merge(crate::handover::app_router())

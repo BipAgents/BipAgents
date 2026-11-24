@@ -210,6 +210,10 @@ fn no_source_for_an_agent_others_use_or_turned_off_and_outside_is_a_hook() {
     assert_eq!(trip_agent(&config).as_deref(), Some("budget"));
 }
 
+fn headers(pairs: &'static [(&'static str, &'static str)]) -> impl Fn(&str) -> Option<String> {
+    move |k| pairs.iter().find(|(n, _)| n.eq_ignore_ascii_case(k)).map(|(_, v)| v.to_string())
+}
+
 fn mail_event(from: &str, id: &str, bulk: bool) -> crate::triggers::Event {
     crate::triggers::Event {
         kind: "mail".into(),
@@ -238,9 +242,6 @@ fn bulk_lists_robots_and_own_mail_are_not_kept() {
     assert_eq!(sender_shown("paul@example.net"), "paul@example.net");
     assert_eq!(sender_shown("Paul <script> <paul@example.net>"), "Paul script");
     // the list headers make a mass mailing
-    let headers = |pairs: &'static [(&str, &str)]| {
-        move |k: &str| pairs.iter().find(|(n, _)| n.eq_ignore_ascii_case(k)).map(|(_, v)| v.to_string())
-    };
     assert!(crate::triggers_mail::bulk_of(headers(&[("List-Unsubscribe", "<mailto:u@x>")])));
     assert!(crate::triggers_mail::bulk_of(headers(&[("Precedence", "bulk")])));
     assert!(crate::triggers_mail::bulk_of(headers(&[("Auto-Submitted", "auto-generated")])));
@@ -366,7 +367,7 @@ fn the_bridge_s_cards_are_offers_of_its_own_kinds() {
     assert!(offer.expires <= h.start - 2.0 * 3600.0 + 1.0);
     // not one of the agent's kinds: never in offer_act, never quieting its own
     assert!(!offers::KINDS.contains(&APPOINTMENT) && !offers::KINDS.contains(&REPLY_WATCH));
-    assert!(offers::by_bridge(&offer) && offers::learn_key(&offer) == CALENDAR);
+    assert!(offers::by_bridge(&offer) && offers::learn_key(&offer) == "calendar:appointment");
     let card = offers::card_item(&config, &offer);
     assert_eq!(card["choices"], json!(["once", "deny"]));
     assert_eq!(offers::kind_of(&card), offers::KIND); // critical (approval_level.rs)
@@ -387,9 +388,17 @@ fn the_bridge_s_cards_are_offers_of_its_own_kinds() {
 fn two_no_thanks_to_the_bridge_s_cards_quiet_their_source_not_the_agent_s_kind() {
     let n = now();
     let mut s = offers::Store::default();
-    offers::record(&mut s, "vie", REPLIES, "replies:a:1", offers::NO, n);
-    offers::record(&mut s, "vie", REPLIES, "replies:a:2", offers::NO, n);
-    assert!(offers::quiet(&s, "vie", REPLIES, n) && !offers::quiet(&s, "vie", "draft", n));
+    let dir = tempfile::tempdir().unwrap();
+    let config = config_in(dir.path());
+    let card = replies_offer(&config, "vie", "acct", "alex@proton.me", &[mail("acct", "<1>", n - DAY, WAITING)], n);
+    let key = offers::learn_key(&card);
+    assert_eq!(key, "replies:draft");
+    offers::record(&mut s, "vie", &key, "replies:a:1", offers::NO, n);
+    offers::record(&mut s, "vie", &key, "replies:a:2", offers::NO, n);
+    assert!(offers::quiet(&s, "vie", &key, n) && !offers::quiet(&s, "vie", "draft", n));
+    assert!(offers::rule_refusal(&s, &card, n).is_some());
+    // the agent's own drafts stay offerable
+    assert_eq!(offers::available(&s, "vie", &["draft"], n), ["draft"]);
 }
 
 #[test]

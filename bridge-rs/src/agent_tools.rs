@@ -2279,6 +2279,10 @@ async fn mcp_call(
                 false,
             )));
         }
+        // a replies card's « Oui » (plans/sources.rs): its turn opens and answers those e-mails only
+        if let Some(refused) = crate::plans::sources::gate(&agent.name, turn_run.as_deref(), &name, &arguments) {
+            return Ok(answer(tool_text(&refused, false)));
+        }
     }
     // the Carnet's tools: the turn's pages, capped, and its session for the line under the answer (notebook/reads.rs)
     let carnet = carnet_turn(&state, &agent.name, turn.as_ref());

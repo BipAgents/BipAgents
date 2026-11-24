@@ -783,6 +783,9 @@ pub struct Config {
     /// `[triggers]` (triggers.rs): routines started by an e-mail or a link. Not serialized either.
     #[serde(skip)]
     pub triggers: crate::triggers::Settings,
+    /// `[plans_sources]` (plans/sources.rs): the calendars', trips' and replies' looks. Not serialized either.
+    #[serde(skip)]
+    pub plans_sources: crate::plans::sources::Settings,
     /// `[agent_restart]` (agent_restart.rs): not in the serialized form either.
     #[serde(skip)]
     pub agent_restart: crate::agent_restart::Settings,
@@ -926,6 +929,7 @@ impl Config {
             app_floor: crate::app_floor::Settings::default(),
             watchers: crate::watchers::Settings::default(),
             triggers: crate::triggers::Settings::default(),
+            plans_sources: crate::plans::sources::Settings::default(),
             agent_restart: crate::agent_restart::Settings::default(),
             tidy: crate::space_tidy::Settings::default(),
             shared_pages: crate::shared_pages::Settings::default(),
@@ -1981,6 +1985,7 @@ pub fn parse_config(data: &Value, source_path: Option<&str>) -> Result<Config> {
         app_floor: crate::app_floor::Settings::from_table(table(data, "app_floor")),
         watchers: crate::watchers::Settings::from_table(table(data, "watchers")),
         triggers: crate::triggers::Settings::from_table(table(data, "triggers")),
+        plans_sources: crate::plans::sources::Settings::from_table(table(data, "plans_sources")),
         agent_restart: crate::agent_restart::Settings::from_table(table(data, "agent_restart")),
         tidy: crate::space_tidy::Settings::from_table(table(data, "tidy")),
         shared_pages: crate::shared_pages::Settings::from_table(table(data, "shared_pages")),

@@ -21,7 +21,8 @@
 //!   (`watch_failed`). An event of the phone's calendar copy (calendar.rs) is compared with each copy the phone sends
 //!   (`tick`): moved, the moments move by as much, one line; cancelled, the plan goes, one line; no model either way.
 //!   A repeating event is never followed (`phone_event`: all its occurrences share one id on both phones); an event
-//!   whose calendar left the copy is not cancelled. Google and CalDAV events come with plans-sources (§6 row 7).
+//!   whose calendar left the copy is not cancelled. A Google or CalDAV event is read again every hour by the bridge's
+//!   `calendar_event` watch (plans/sources.rs `follow`): the same lines, no model.
 //! - **Only from an agent that may propose** (agent_proactive.rs `proposes`): « Initiative » not off
 //!   (contracts/proactive), the person's own agent (never one other people talk to); its « Routines » on.
 //! - **The caps** (D2 A): one plan per reply in the person's own turn (agent_tools.rs `persons_own_call`, as
@@ -99,6 +100,8 @@ const MOVED_MIN_SECONDS: f64 = 60.0;
 pub const WAITING: &str = "waiting";
 pub const SET: &str = "set";
 pub const KINDS: [&str; 3] = ["trip", "appointment", "habit"];
+/// The calendars a plan's `event` may be of (plans/sources.rs).
+pub const EVENT_SOURCES: [&str; 3] = ["phone", "google", "caldav"];
 pub const MODES: [&str; 3] = ["walking", "driving", "transit"];
 
 // -- the store -----------------------------------------------------------------------------------------------------------
@@ -161,9 +164,10 @@ pub struct Sender {
     pub domain: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct EventRef {
-    /// « phone » (calendar.rs).
+    /// « phone » (calendar.rs), « google » (google_calendar.rs), « caldav » (caldav.rs: a mailbox's calendar):
+    /// plans/sources.rs.
     pub source: String,
     pub id: String,
     /// Its start as last seen (Unix seconds).
@@ -836,8 +840,10 @@ pub fn draft(arguments: &Dict, agent: &str, person: Tz, routines: Tz, now: f64) 
         Some(e) => {
             let source = text_arg(e.get("source")).to_lowercase();
             let id = text_arg(e.get("id"));
-            if source != "phone" || id.is_empty() || id.len() > 300 {
-                return Err("event: {source: phone, id} (an event of the phone's calendar)".into());
+            if !EVENT_SOURCES.contains(&source.as_str()) || id.is_empty() || id.len() > 300 {
+                return Err("event: {source: phone | google | caldav, id} (an event of a calendar you read, its id as \
+                            calendar_list gives it)"
+                    .into());
             }
             Some(EventRef { source, id, start: 0.0, calendar: String::new() })
         }
@@ -1178,9 +1184,10 @@ Disturb. 2 at most per plan (a route counts), never for a habit"},
 their sender's domain: you'll see only their sender, subject and date",
                     "properties": {"mail_from": {"type": "array", "maxItems": SENDERS_MAX, "items": {"type": "object",
                         "properties": {"name": {"type": "string"}, "domain": {"type": "string"}}}}}},
-                "event": {"type": "object", "description": "the event of your person's phone calendar it is about \
-(one that doesn't repeat: a repeating one is not followed)",
-                    "properties": {"source": {"type": "string", "enum": ["phone"]}, "id": {"type": "string"}}},
+                "event": {"type": "object", "description": "the event of your person's calendar it is about, its \
+id as calendar_list gives it (phone: their phone's calendar; google: Google Calendar; caldav: a mailbox's calendar). One \
+that doesn't repeat: a repeating one is not followed",
+                    "properties": {"source": {"type": "string", "enum": EVENT_SOURCES}, "id": {"type": "string"}}},
             },
             "required": ["kind", "title", "moments"],
         },
@@ -1426,9 +1433,15 @@ pub async fn call(state: &AppState, agent: &AgentConfig, arguments: &Dict, asked
     let mut notes = Vec::new();
     let mut plan = draft.plan;
     if let Some(event) = plan.event.clone() {
-        let found = match crate::calendar::reads(&config, &agent.name) {
-            true => phone_event(&crate::calendar::read(&config), &event.id, person),
-            false => PhoneEvent::Missing,
+        let found = match event.source.as_str() {
+            "phone" if crate::calendar::reads(&config, &agent.name) => {
+                phone_event(&crate::calendar::read(&config), &event.id, person)
+            }
+            // Google's and CalDAV's: read now from the calendars this agent reads (plans/sources.rs)
+            "google" | "caldav" if sources::reads_calendar(&config, &agent.name) => {
+                sources::remote_event(&config, &agent.name, &event.id, person).await
+            }
+            _ => PhoneEvent::Missing,
         };
         match found {
             PhoneEvent::Found { start, calendar } => plan.event = Some(EventRef { start, calendar, ..event }),
@@ -1442,8 +1455,8 @@ pub async fn call(state: &AppState, agent: &AgentConfig, arguments: &Dict, asked
                 plan.event = None;
             }
             PhoneEvent::Missing => {
-                return refusal("Not done: event: no such event in your person's phone calendar that you may read. \
-                                Propose the plan without `event`, or not at all.")
+                return refusal("Not done: event: no such event in your person's calendars that you may read (its id as \
+                                calendar_list gives it). Propose the plan without `event`, or not at all.")
             }
         }
     }
@@ -1461,6 +1474,9 @@ pub async fn call(state: &AppState, agent: &AgentConfig, arguments: &Dict, asked
             plan.watch.clear();
         }
     }
+    // a trip card's « Oui » (plans/sources.rs `grant`): the plan proposed now is the person's ask
+    let granted = !asked && sources::granted(&config, &agent.name, now);
+    let asked = asked || granted;
     plan.asked = asked;
     // unasked: its offers' cards count with the plans' (one waiting, the day's caps)
     let offered = offers::load(&config);
@@ -1485,6 +1501,9 @@ pub async fn call(state: &AppState, agent: &AgentConfig, arguments: &Dict, asked
         Ok(plan) => plan,
         Err(why) => return refusal(&why),
     };
+    if granted {
+        sources::use_grant(&config, &agent.name);
+    }
     tracing::info!(target: "bipbridge::plans", agent = %agent.name, plan = %plan.id, kind = %plan.kind,
                    moments = plan.moments.len(), asked, "plan card made");
     let mut text = format!(
@@ -1906,22 +1925,29 @@ pub async fn tick(state: &AppState) {
     let person = person_zone(&config);
     for plan in watched {
         let Some(event) = &plan.event else { continue };
-        let lang = lang_of(&config, &plan.agent);
-        match event_news(event, &copy, person) {
-            EventNews::Same => {}
-            EventNews::Moved { start, delta } => {
-                shift(&config, plan, start, delta);
-                tracing::info!(target: "bipbridge::plans", plan = %plan.id, delta, "plan's event moved");
-                if plan.state == SET {
-                    tell(state, plan, moved_line(lang, &plan.title, start, person)).await;
-                }
+        apply_news(state, plan, event_news(event, &copy, person), person).await;
+    }
+}
+
+/// What the calendar says of a plan's event, done: moved, its moments move by as much, one line; cancelled, the plan
+/// goes, one line; no model either way (the phone's copy here, Google's and CalDAV's: plans/sources.rs `follow`).
+async fn apply_news(state: &AppState, plan: &Plan, news: EventNews, person: Tz) {
+    let config = state.config();
+    let lang = lang_of(&config, &plan.agent);
+    match news {
+        EventNews::Same => {}
+        EventNews::Moved { start, delta } => {
+            shift(&config, plan, start, delta);
+            tracing::info!(target: "bipbridge::plans", plan = %plan.id, delta, "plan's event moved");
+            if plan.state == SET {
+                tell(state, plan, moved_line(lang, &plan.title, start, person)).await;
             }
-            EventNews::Cancelled => {
-                remove(&config, plan);
-                tracing::info!(target: "bipbridge::plans", plan = %plan.id, "plan's event cancelled");
-                if plan.state == SET {
-                    tell(state, plan, cancelled_line(lang, &plan.title)).await;
-                }
+        }
+        EventNews::Cancelled => {
+            remove(&config, plan);
+            tracing::info!(target: "bipbridge::plans", plan = %plan.id, "plan's event cancelled");
+            if plan.state == SET {
+                tell(state, plan, cancelled_line(lang, &plan.title)).await;
             }
         }
     }
@@ -1934,11 +1960,16 @@ pub async fn watch(state: AppState) {
         tick(&state).await;
         // the offers' end: expired, or their agent turned off (plans/offers.rs)
         offers::tick(&state).await;
+        // the calendars, the Carnet's trips and the replies due (plans/sources.rs)
+        sources::tick(&state).await;
     }
 }
 
 /// Offers to act (`offer_act`, the `bip-offer-` card; plans/offers.rs).
 pub mod offers;
+
+/// The sources the bridge reads itself: the calendars, the Carnet's trips, the replies due (plans/sources.rs).
+pub mod sources;
 
 #[cfg(test)]
 mod tests;
