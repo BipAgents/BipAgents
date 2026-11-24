@@ -210,6 +210,43 @@ fn no_source_for_an_agent_others_use_or_turned_off_and_outside_is_a_hook() {
     assert_eq!(trip_agent(&config).as_deref(), Some("budget"));
 }
 
+/// An agent on a model outside (or one the bridge cannot tell) is given neither the agenda's line nor the headers of
+/// the replies due (shared-memory-1.1's `outside_model::place`).
+#[test]
+fn an_agent_on_an_outside_model_gets_no_agenda_line_and_no_replies_due_headers() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut config = config_in(dir.path());
+    config.hermes.home = dir.path().join("hub").to_string_lossy().into_owned();
+    std::fs::create_dir_all(dir.path().join("hub")).unwrap();
+    std::fs::write(dir.path().join("hub/config.yaml"),
+        "model:\n  provider: custom\n  base_url: https://api.eurouter.ai/api/v1\n  default: glm-5.3\n").unwrap();
+    let coach = config.agent(Some("coach")).unwrap().clone();
+    let profile = crate::agents_admin::profile_folder(&config, &coach);
+    std::fs::create_dir_all(&profile).unwrap();
+    std::fs::write(profile.join("config.yaml"), "model:\n  provider: openai\n  default: gpt-6.1\n").unwrap();
+    assert!(!outside(&config, "vie") && may(&config, "vie"), "Vie on EUrouter");
+    assert!(outside(&config, "coach") && !may(&config, "coach"), "Coach on OpenAI");
+    // the agenda's line: Vie's told, Coach's never
+    let mut h = hint(CALENDAR, epoch(4, 15));
+    h.agent = "coach".into();
+    change(&config, |s| s.hints.push(h.clone()));
+    assert_eq!(take_note(&config, "coach", "s1"), None);
+    change(&config, |s| s.hints.push(Hint { agent: "vie".into(), key: "vie:k".into(), ..h.clone() }));
+    assert!(take_note(&config, "vie", "s1").is_some());
+    // a new e-mail of Coach's watched mailbox: its headers never kept
+    let trigger = crate::triggers::Trigger {
+        id: "t1".into(),
+        agent: "coach".into(),
+        mail: Some(crate::triggers::MailFilter { account: "acct".into(), ..Default::default() }),
+        ..Default::default()
+    };
+    assert!(!seen_mail(&config, &trigger, &mail_event("Marie Dupont <marie@example.org>", "<m1@x>", false)));
+    // no model the bridge can tell: outside too
+    std::fs::remove_file(dir.path().join("hub/config.yaml")).unwrap();
+    assert!(outside(&config, "vie") && !may(&config, "vie"));
+    assert_eq!(take_note(&config, "vie", "s1"), None);
+}
+
 fn headers(pairs: &'static [(&'static str, &'static str)]) -> impl Fn(&str) -> Option<String> {
     move |k| pairs.iter().find(|(n, _)| n.eq_ignore_ascii_case(k)).map(|(_, v)| v.to_string())
 }

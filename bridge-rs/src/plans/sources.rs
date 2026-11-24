@@ -261,12 +261,13 @@ pub fn change<T>(config: &Config, f: impl FnOnce(&mut Store) -> T) -> T {
 
 // -- who -------------------------------------------------------------------------------------------------------------------
 
-/// The hook of « Modèle extérieur » (branch shared-memory, `outside_model::place`): an agent whose model is outside our
-/// European providers and the person's own never has their calendar or e-mails read to propose. Until that branch is
-/// in, no agent is (fill in: `matches!(outside_model::place(config, agent), Place::Outside { .. } | Place::Unknown)`).
+/// « Modèle extérieur » (`outside_model::place`, read at every call: a change of model counts at once): an agent whose
+/// model is outside our European providers and the person's own, or one the bridge cannot tell, never has their
+/// calendar or e-mails read to propose.
 pub fn outside(config: &Config, agent: &str) -> bool {
-    let _ = (config, agent);
-    false
+    config.agent(Some(agent)).is_some_and(|a| {
+        matches!(crate::outside_model::place(config, a), crate::outside_model::Place::Outside { .. } | crate::outside_model::Place::Unknown)
+    })
 }
 
 /// The sources are read for `agent`: it exists, proposes (« Initiative » not off, never an agent other people talk
