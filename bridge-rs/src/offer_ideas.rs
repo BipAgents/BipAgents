@@ -1450,10 +1450,51 @@ fn brings_files(message: &Dict) -> bool {
     images > 0 || !crate::threads::timeline::visible(&words, "", 0).1.is_empty()
 }
 
+/// Hermes' own markers of the `user` rows it writes itself (pinned v0.23.1 3b4215785, agent/context_compressor.py
+/// `is_compaction_summary_message` and `_is_synthetic_compression_user_turn`, which classify by content too because
+/// its store and API drop the metadata flag): a compaction's summary (`SUMMARY_PREFIX`, the five historical ones,
+/// `LEGACY_SUMMARY_PREFIX`), a summary merged after a kept message (`_MERGED_SUMMARY_DELIMITER`, `_SUMMARY_END_MARKER`),
+/// its task list carried over (tools/todo_tool.py `TODO_INJECTION_HEADER`), a background process notice; its recovery
+/// nudges (agent/conversation_loop.py, all « [System: … » but two) and the continuation marker, exactly.
+const HERMES_MARKS: [&str; 5] = [
+    "[CONTEXT COMPACTION",
+    "[CONTEXT SUMMARY]:",
+    "[END OF PRIOR CONTEXT — COMPACTION SUMMARY BELOW]",
+    "--- END OF CONTEXT SUMMARY",
+    "[Your active task list was preserved across context compression]",
+];
+const HERMES_OPENINGS: [&str; 2] = ["[System: ", "[IMPORTANT: Background process "];
+const HERMES_LINES: [&str; 5] = [
+    "Continue from the compressed conversation context above. This marker exists because no human user turn was available.",
+    "Continue from the compressed conversation context above. This marker exists because the compacted transcript \
+     contained no preserved user turn.",
+    "You've reached the maximum number of tool-calling iterations allowed. Please provide a final response summarizing \
+     what you've found and accomplished so far, without calling any more tools.",
+    "Your previous turn indicated a tool call but none was included. Do not narrate a plan or restate intent — issue \
+     the actual tool call now to continue the task.",
+    "You just executed tool calls but returned an empty response. Please process the tool results above and continue \
+     with the task.",
+];
+
+/// Whether a `user` row is one Hermes wrote itself, never the person (`HERMES_MARKS`): a compaction's summary may say
+/// again what a mail or a photo of the compacted turns said (strict B2, 24/11). Its flag `_compressed_summary` when a
+/// reader gives it (the store's rows), else its words, the bridge's notes off.
+fn hermes_wrote(message: &Dict) -> bool {
+    if message.get("_compressed_summary").is_some_and(crate::py::truthy) {
+        return true;
+    }
+    let raw = crate::threads::timeline::NOTES.replace_all(&crate::notebook::tidy::content(message), "").into_owned();
+    let text = raw.trim();
+    HERMES_MARKS.iter().any(|m| text.contains(m))
+        || HERMES_OPENINGS.iter().any(|o| text.starts_with(o))
+        || HERMES_LINES.contains(&text)
+}
+
 /// The new turns of a conversation (`messages` after the cursor): the person's words (threads/timeline.rs
 /// `person_text`: their time line and the bridge's notes off, review B3) and the agent's. A turn where the person sent
-/// a photo or a file is left out whole (`brings_files`); the agent's words are left out where it called any tool off
-/// the safe list (`reads_private`). And the person's messages kept, counted.
+/// a photo or a file is left out whole (`brings_files`), so is a row Hermes wrote itself with what follows it until the
+/// person's next message (`hermes_wrote`: a compaction's summary, a nudge); the agent's words are left out where it
+/// called any tool off the safe list (`reads_private`). And the person's messages kept, counted.
 pub fn new_turns(messages: &[Dict]) -> (Vec<(String, String)>, usize) {
     // (person, agent, private: the agent's words out, files: the whole turn out)
     let mut out: Vec<(String, String, bool, bool)> = Vec::new();
@@ -1463,7 +1504,7 @@ pub fn new_turns(messages: &[Dict]) -> (Vec<(String, String)>, usize) {
         }
         match m.get("role").and_then(Value::as_str).unwrap_or("") {
             "user" => {
-                if brings_files(m) {
+                if brings_files(m) || hermes_wrote(m) {
                     out.push((String::new(), String::new(), true, true));
                     continue;
                 }
