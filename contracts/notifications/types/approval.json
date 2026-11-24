@@ -7,7 +7,7 @@
     "runs.rs push_unseen (~973), ~2060 -> notify_approval_values",
     "agent_shares.rs:1141 (agent shared by a relative)",
     "rooms.rs (room_id: a group discussion's turn)",
-    "card_pay.rs urgent -> notify_payment_urgent (a turn nobody follows asks a card payment: urgent, « Payer »); urgent_pay.rs test_route (test)"
+    "card_pay.rs urgent -> notify_payment_urgent (a turn nobody follows asks a card payment: urgent, « Payer »; the work of an offer's « Oui »: calm, not urgent); urgent_pay.rs test_route (test)"
   ],
   "policy": {
     "per_agent_switch": false
@@ -366,6 +366,61 @@
         "request_id": "pay_0123456789ab",
         "pay": "pay_0123456789ab",
         "urgent": 1
+      },
+      "push": {
+        "push_type": "alert",
+        "priority": 10,
+        "collapse_id": "pay_0123456789ab"
+      }
+    },
+    {
+      "name": "calm_payment",
+      "about": "The same card payment asked by the work of an offer's « Oui » (Alex 24/11, of-tour-du-oui-sans-personne B): the same card and « Payer », a plain notification (not time-sensitive, the usual channel: no urgent).",
+      "bridge": {
+        "agent": "vie",
+        "context": {
+          "title": "Vie",
+          "lang": "fr"
+        },
+        "pointer": {
+          "n": "n_contract",
+          "thread": "t_contract",
+          "message": "m_contract",
+          "badge": 1
+        },
+        "input": {
+          "fn": "notify_payment_urgent",
+          "args": {
+            "run_id": "bip-pay-pay_0123456789ab",
+            "request_id": "pay_0123456789ab",
+            "line": "A trouvé : Billet Stromae à 45,00 € sur ticketmaster.fr",
+            "session_id": "sess_w",
+            "test": false,
+            "calm": true
+          }
+        }
+      },
+      "payload": {
+        "aps": {
+          "alert": {
+            "loc-key": "notif.approval",
+            "body": "notif.approval"
+          },
+          "thread-id": "vie/t_contract",
+          "mutable-content": 1,
+          "category": "PAYMENT",
+          "sound": "default",
+          "badge": 1
+        },
+        "v": 2,
+        "n": "n_contract",
+        "t": "approval",
+        "agent": "vie",
+        "c": "t_contract",
+        "r": "pay_0123456789ab",
+        "run_id": "bip-pay-pay_0123456789ab",
+        "request_id": "pay_0123456789ab",
+        "pay": "pay_0123456789ab"
       },
       "push": {
         "push_type": "alert",

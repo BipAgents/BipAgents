@@ -287,6 +287,39 @@
       }
     },
     {
+      "variant": "approval/calm_payment",
+      "agent": "vie",
+      "payload": {
+        "aps": {
+          "alert": {
+            "loc-key": "notif.approval",
+            "body": "notif.approval"
+          },
+          "thread-id": "vie/t_contract",
+          "mutable-content": 1,
+          "category": "PAYMENT",
+          "sound": "default",
+          "badge": 1
+        },
+        "v": 2,
+        "n": "n_contract",
+        "t": "approval",
+        "agent": "vie",
+        "c": "t_contract",
+        "r": "pay_0123456789ab",
+        "run_id": "bip-pay-pay_0123456789ab",
+        "request_id": "pay_0123456789ab",
+        "pay": "pay_0123456789ab",
+        "enc": "BJTi8QqweuJW2BjByDJ8fn13jao84IADttcFmL+TA/DsEDwOX2uMEoEfj77pavQZX5bsRFDJ1h7DbW9qdVuWLMks0bc3oigK9nCc/Lq6oCXsGl/OXiUrqp+NAAkX/JRlxMOqXV7vpDYJ9Fxl0QtONEynB33k4l5dXtp1/v2T/Mexa/wRggrdZIEzQ/iWjcrwPsx3rXdJWgz6ruMMhi5Gn6hyhepVzXgStewSNC0oCUHG0lqNz0Jr/kQeNJu0p/SPVQFV2nIa"
+      },
+      "shown": {
+        "v": 1,
+        "t": "approval",
+        "title": "Vie",
+        "body": "A trouvé : Billet Stromae à 45,00 € sur ticketmaster.fr"
+      }
+    },
+    {
       "variant": "approval/urgent_test",
       "agent": "vie",
       "payload": {

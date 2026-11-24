@@ -268,6 +268,29 @@ pub struct Store {
 static LOCK: Mutex<()> = Mutex::new(());
 /// The « Oui »'s works this bridge runs now (`stale`).
 static RUNNING: Mutex<Option<std::collections::HashSet<String>>> = Mutex::new(None);
+/// The Hermes runs of the « Oui »'s turns going on (`agent/run_id`): what they ask while nobody follows them is pushed
+/// as a plain notification, never an urgent one (Alex 24/11, of-tour-du-oui-sans-personne B; card_pay.rs `urgent`).
+static YES_RUNS: Mutex<Option<std::collections::HashSet<String>>> = Mutex::new(None);
+
+fn yes_run(agent: &str, run_id: &str, on: bool) {
+    let mut set = YES_RUNS.lock().unwrap_or_else(|e| e.into_inner());
+    let set = set.get_or_insert_with(Default::default);
+    let key = format!("{agent}/{run_id}");
+    if on {
+        set.insert(key);
+    } else {
+        set.remove(&key);
+    }
+}
+
+/// Run `run_id` of `agent` is the turn of an offer's « Oui » (its work, started by the person's touch).
+pub fn from_offer(agent: &str, run_id: &str) -> bool {
+    YES_RUNS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .as_ref()
+        .is_some_and(|set| set.contains(&format!("{agent}/{run_id}")))
+}
 
 fn path(config: &Config) -> PathBuf {
     PathBuf::from(config.data_dir()).join("offers.json")
@@ -320,7 +343,8 @@ pub struct Can {
     pub web: bool,
     /// Its own browser on.
     pub browser: bool,
-    /// Payments allowed to it with a card of its own (card_pay.rs `shopping`).
+    /// It may fill a basket: its browser on. A card of its own is not needed (Alex 24/11, of-panier-exige-carte B):
+    /// the basket then waits for its person's payment, or for a card they add.
     pub cart: bool,
 }
 
@@ -360,8 +384,8 @@ pub fn can(config: &Config, agent: &AgentConfig) -> Can {
         calendar,
         web,
         browser,
-        // its card read only when it could shop at all (its browser on)
-        cart: browser && matches!(crate::card_pay::shopping(config, agent), crate::souls::Shopping::Card(_)),
+        // a basket needs its browser only: with no card of its own, it waits for its person's payment (Alex 24/11)
+        cart: browser,
     }
 }
 
@@ -689,8 +713,8 @@ duration_minutes, location}",
         "search" => "you look things up and report back, nothing booked: prompt",
         "draft" => "you write drafts, never sent (in their mailbox's Drafts, else in a ```draft block): prompt",
         "page" => "you make a page for them (a list, a small tracker): prompt",
-        _ => "you fill a basket on a shop's site up to its payment page, never paying (their card asks them then): \
-prompt and site (the shop's host name)",
+        _ => "you fill a basket on a shop's site up to its payment page, never paying (a payment card of yours asks them \
+then; with none, the basket waits for their payment or for a card they add): prompt and site (the shop's host name)",
     }
 }
 
@@ -703,7 +727,7 @@ fn can_not_words(kind: &str) -> &'static str {
         "search" => "search the web",
         "draft" => "write drafts",
         "page" => "make pages",
-        _ => "fill a shopping basket (no payments, no card or no browser for you)",
+        _ => "fill a shopping basket (no browser for you)",
     }
 }
 
@@ -1112,11 +1136,8 @@ pub fn card_item(config: &Config, offer: &Offer) -> Dict {
 /// The offer cards waiting for the person (not expired), oldest first.
 pub fn pending_items(config: &Config, agent: Option<&str>) -> Vec<Dict> {
     let now = py::time_time();
-    let mut offers: Vec<Offer> = load(config)
-        .offers
-        .into_iter()
-        .filter(|o| o.expires > now && agent.is_none_or(|a| o.agent == a))
-        .collect();
+    let mut offers: Vec<Offer> =
+        load(config).offers.into_iter().filter(|o| o.expires > now && agent.is_none_or(|a| o.agent == a)).collect();
     offers.sort_by(|a, b| a.made.total_cmp(&b.made));
     offers.iter().map(|o| card_item(config, o)).collect()
 }
@@ -1162,19 +1183,6 @@ fn refusal(text: &str) -> Called {
     Called { result: tool_text(text, true), card: None, offers: Vec::new() }
 }
 
-/// A cart's shop allowed by one of `agent`'s payment cards (a card with no sites allows any: cards.rs).
-fn site_ok(config: &Config, agent: &str, site: &str) -> bool {
-    let vault = crate::vault::Vault::new(&py::join(&config.data_dir(), "vault"));
-    vault.cards_of(agent).iter().any(|(_, card)| {
-        let sites: Vec<String> = card
-            .get("sites")
-            .and_then(Value::as_array)
-            .map(|l| l.iter().filter_map(Value::as_str).map(str::to_string).collect())
-            .unwrap_or_default();
-        crate::cards::site_allowed(&sites, site)
-    })
-}
-
 /// What the bridge checks beyond the arguments, on the place: a route's start (the person's home when no `from`:
 /// read here, sent nowhere before « Oui »), a calendar offer's calendar, a cart's shop.
 fn prepare(state: &AppState, config: &Config, agent: &AgentConfig, can: &Can, offer: &mut Offer) -> Result<(), String> {
@@ -1191,13 +1199,9 @@ fn prepare(state: &AppState, config: &Config, agent: &AgentConfig, can: &Can, of
             }
             Ok(())
         }
-        "cart" => match offer.site.as_deref() {
-            Some(site) if site_ok(config, &agent.name, site) => Ok(()),
-            Some(site) => Err(not_done(format!(
-                "site: none of the payment cards you may use allows {site}: don't offer a basket there"
-            ))),
-            None => Err(not_done("site: the shop's host name")),
-        },
+        // any shop: with no payment card of its own for it, the basket waits for its person (Alex 24/11)
+        "cart" if offer.site.is_some() => Ok(()),
+        "cart" => Err(not_done("site: the shop's host name")),
         _ => Ok(()),
     }
 }
@@ -1311,9 +1315,8 @@ pub fn plan_offers(
     specs
         .iter()
         .map(|spec| {
-            spec_of(spec, agent, title, kinds, person, now, PILL_MAX).map_err(|why| {
-                format!("Not done: offers: {}", why.strip_prefix("Not done: ").unwrap_or(&why))
-            })
+            spec_of(spec, agent, title, kinds, person, now, PILL_MAX)
+                .map_err(|why| format!("Not done: offers: {}", why.strip_prefix("Not done: ").unwrap_or(&why)))
         })
         .collect()
 }
@@ -1424,7 +1427,11 @@ fn yes_scope(kind: &str) -> &'static str {
         "search" => "you look things up and report back; nothing booked, nothing bought",
         "draft" => "you write drafts, never sent",
         "page" => "you make a page",
-        _ => "you fill the basket up to the payment page, never paying",
+        _ => {
+            "you fill the basket up to the payment page, never paying. Then stop and tell your person plainly that the \
+basket is ready and waits for them: they pay it themselves on the shop's site, or they add a payment card for you; \
+if you have a payment card this shop takes, its own card asks them"
+        }
     }
 }
 
@@ -1704,19 +1711,23 @@ async fn turn(state: &AppState, agent: &AgentConfig, offer: &Offer, place: &crat
         turn.options = Some(json!({"closed_tools": super::sources::REPLIES_CLOSED_TOOLS}));
     }
     let title = shown_agent(&config, &agent.name);
-    let opened = std::sync::Mutex::new(None::<String>);
+    let mut started = None;
     let ran = pipeline
         .run_then(&turn, |run| {
             // the routine a free-form offer showed may start in this run, and in no other (offer_ideas.rs, review B1)
             crate::offer_ideas::grant_run(&config, &offer.id, run);
+            yes_run(&agent.name, run, true);
             if let Some(ids) = gated.clone() {
                 super::sources::set_gate(&agent.name, run, Some(ids));
-                *opened.lock().unwrap_or_else(|e| e.into_inner()) = Some(run.to_string());
             }
+            started = Some(run.to_string());
         })
         .await;
-    if let Some(run) = opened.lock().unwrap_or_else(|e| e.into_inner()).take() {
-        super::sources::set_gate(&agent.name, &run, None);
+    if let Some(run) = &started {
+        yes_run(&agent.name, run, false);
+        if gated.is_some() {
+            super::sources::set_gate(&agent.name, run, None);
+        }
     }
     match ran {
         Ok(ran) if ran.answered() && !crate::background_turn::is_silent(&ran.text) => {

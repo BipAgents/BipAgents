@@ -195,7 +195,7 @@ def test_a_failing_routine_is_retried_in_silence_then_told_then_paused_with_repa
     hermes = fakes.hermes
     hermes.add_session("api_main", [{"role": "user", "content": "Bonjour"}], title="Bot Chat")
     for n in (1, 2, 3):
-        hermes.run_info[f"r{n}"] = {"status": "failed", "error": "model unreachable"}
+        hermes.run_info[f"r{n}"] = {"status": "failed", "error": "a tool crashed"}
     made = bridge.post("/v1/agents/wellness/routines", headers=AUTH,
                        json={"name": "Courriels", "schedule": "every 2h", "prompt": "Regarde mes e-mails."}).json()["job"]
     rid = made["id"]
