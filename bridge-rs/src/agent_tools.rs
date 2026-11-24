@@ -610,6 +610,10 @@ pub fn agent_for(config: &Config, token: &str) -> Option<AgentConfig> {
 /// `hermes config set` that failed (Python's RuntimeError/OSError).
 pub async fn register(config: &Config, agent: &AgentConfig, run: &Run) -> anyhow::Result<bool> {
     crate::mcp_sessions::poke(); // its tools may have changed: its open MCP streams check now (mcp_sessions.rs)
+    // an outside model's defaults before its tools are given (a new agent cloned from a hub on such a model, the
+    // agents of before at the bridge's start): its Carnet off, its shared memory off (agent_shared_memory.rs); what
+    // it had received is taken back at the shared memory's next look, its prompts refreshed then
+    let guarded = crate::agent_shared_memory::guard_full(config, agent);
     let tools = tools_for(config, agent);
     let url = if tools.as_slice() != install_tools(config) {
         url_with(config, &version_of(&tools))
@@ -659,6 +663,16 @@ pub async fn register(config: &Config, agent: &AgentConfig, run: &Run) -> anyhow
         tracing::warn!(agent = %agent.name, error = %last_chars(&exc.to_string(), 200), "Obsidian skills not set");
         false
     });
+    if guarded.any() {
+        crate::shared_memory::sync(config, crate::py::time_time(), None); // (a few small files)
+        crate::shared_memory::take_refresh(&agent.name);
+        if let Some(before) = guarded.links.clone() {
+            // « à l'écart » (in force at once): the others' tools and contacts follow at the shared memory's next look
+            // (rules_live::agents_changed gives tools again: never from here)
+            crate::agent_shared_memory::links_changed_later(before);
+        }
+        crate::agents_admin::refresh_prompts(config, agent, run).await;
+    }
     Ok(changed || paying || accounts || connecting || handing || link || reconciled || styled || notes)
 }
 
@@ -755,6 +769,7 @@ pub fn forget(config: &Config, name: &str) {
     crate::approval_level::forget(config, name);
     crate::maps::forget(config, name);
     crate::notebook::forget(config, name);
+    crate::agent_shared_memory::forget(config, name);
     crate::archives::forget(config, name);
     if let Err(err) = keep_token(config, name, None) {
         tracing::warn!(agent = %name, error = %err, "agent tools token not removed");

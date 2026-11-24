@@ -66,6 +66,10 @@ async fn an_edit_of_what_it_knows_about_you_goes_to_all_own_agents() {
     let dir = tempfile::tempdir().unwrap();
     let mut dict = config_dict(dir.path(), &Urls::default());
     dict["hermes"] = json!({"bin": "/opt/hermes", "home": dir.path().join(".hermes").to_string_lossy(), "hub_url": "http://127.0.0.1:8642"});
+    // the install's model: the person's own (a model the bridge cannot tell is protected as outside:
+    // agent_shared_memory.rs)
+    std::fs::create_dir_all(dir.path().join(".hermes")).unwrap();
+    std::fs::write(dir.path().join(".hermes/config.yaml"), "model:\n  provider: lmstudio\n").unwrap();
     for (name, shown) in [("coach", "Coach"), ("budget", "Budget")] {
         dict["agents"][name] =
             json!({"display_name": shown, "hermes_url": format!("http://127.0.0.1:8642/p/{name}"), "hermes_key": "k"});

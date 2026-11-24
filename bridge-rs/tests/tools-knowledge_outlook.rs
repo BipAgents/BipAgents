@@ -25,6 +25,7 @@ use serde_json::{json, Value};
 const TOKEN: &str = "outlook-agent-token";
 const GIVEN: &str = "Mail.ReadWrite Calendars.ReadWrite Contacts.Read User.Read profile openid email";
 const ACCOUNT: &str = "lea@outlook.com";
+const OTHER_ACCOUNT: &str = "paul@outlook.com";
 
 #[derive(Default)]
 struct Graph {
@@ -134,6 +135,8 @@ async fn serve(State(graph): State<Shared>, method: Method, uri: Uri, headers: H
         };
         return match (f.get("grant_type").map(String::as_str), f.get("code").map(String::as_str)) {
             (Some("authorization_code"), Some("good")) if f.contains_key("code_verifier") => given("at-1", "rt-1"),
+            // another Microsoft account signs in (its own token: `/me` names it)
+            (Some("authorization_code"), Some("other")) if f.contains_key("code_verifier") => given("at-3", "rt-3"),
             // Microsoft says nothing of what it gave: refused (review R12, closed by default)
             (Some("authorization_code"), Some("noscope")) => {
                 reply(200, json!({"access_token": "at-1", "refresh_token": "rt-1", "expires_in": 3600}))
@@ -154,7 +157,7 @@ async fn serve(State(graph): State<Shared>, method: Method, uri: Uri, headers: H
             _ => reply(400, json!({"error": "invalid_grant"})),
         };
     }
-    if !matches!(header("authorization").as_str(), "Bearer at-1" | "Bearer at-2") {
+    if !matches!(header("authorization").as_str(), "Bearer at-1" | "Bearer at-2" | "Bearer at-3") {
         return reply(401, json!({"error": {"code": "InvalidAuthenticationToken"}}));
     }
     let Some(rest) = path.strip_prefix("/graph/me") else { return reply(404, json!({"path": path})) };
@@ -162,6 +165,9 @@ async fn serve(State(graph): State<Shared>, method: Method, uri: Uri, headers: H
     let mut g = graph.lock().unwrap();
     let parts: Vec<&str> = rest.trim_start_matches('/').split('/').collect();
     match (method.as_str(), parts.as_slice()) {
+        ("GET", [""]) if header("authorization") == "Bearer at-3" => {
+            reply(200, json!({"mail": OTHER_ACCOUNT, "userPrincipalName": OTHER_ACCOUNT, "displayName": "Paul"}))
+        }
         ("GET", [""]) => reply(200, json!({"mail": ACCOUNT, "userPrincipalName": ACCOUNT, "displayName": "Léa"})),
         ("GET", ["mailFolders"]) => {
             let top: Vec<Value> = g.folders.iter().filter(|f| f.get("parent").is_none()).cloned().collect();
@@ -402,6 +408,14 @@ fn config_for(dir: &std::path::Path, graph: &str, enabled: bool) -> Config {
         "auth_url": format!("{graph}/authorize"), "token_url": format!("{graph}/token"), "api_url": format!("{graph}/graph"),
     }});
     dict["outlook"] = json!({"enabled": enabled});
+    // the hub's model is ours (EUrouter): an agent on a model outside or that the bridge can't tell has no Outlook
+    // (choice B, agent_shared_memory::outlook_allowed)
+    std::fs::create_dir_all(dir.join(".hermes")).unwrap();
+    std::fs::write(
+        dir.join(".hermes/config.yaml"),
+        "model:\n  provider: custom\n  base_url: https://api.eurouter.ai/api/v1\n  default: glm-5.3\n",
+    )
+    .unwrap();
     let config = parse_config(&dict, None).unwrap();
     let mut tokens = IndexMap::new();
     tokens.insert("coach".to_string(), agent_tools::digest(TOKEN));
@@ -780,6 +794,89 @@ async fn the_contacts_read_never_written() {
     one_block(&work);
     let (failed, said) = tool(&app, "contacts_add", json!({"name": "Nouveau"}), "h1").await;
     assert!(failed && said.contains("read only"), "{said}");
+}
+
+/// Choice B (Alex 24/11): Coach moved to ChatGPT (openai-codex) has no Outlook at once: its contacts' read is the
+/// phone's again, the Outlook screen lists it under `outside` (not among the agents that use it). The person chooses it
+/// again (« Rallumer Outlook ? » answered): Outlook is back for it, on OpenAI only.
+#[tokio::test]
+async fn choice_b_an_agent_on_openai_codex_has_no_outlook_until_the_person_turns_it_back_on() {
+    let (url, _graph) = fake_graph().await;
+    let dir = tempfile::tempdir().unwrap();
+    let config = config_for(dir.path(), &url, true);
+    let app = TestApp::new(config.clone());
+    // its tools given again (agent_tools::register) give it a new key: the test's kept
+    let keep_key = || {
+        let mut tokens = IndexMap::new();
+        tokens.insert("coach".to_string(), agent_tools::digest(TOKEN));
+        agent_tools::save_tokens(&config, &tokens).unwrap();
+    };
+    let (k, v) = auth();
+    let h = [(k, v.as_str())];
+    assert_eq!(connect(&app, &h, "good").await.0, 200);
+    let (failed, found) = tool(&app, "contacts_search", json!({"query": "léa"}), "h1").await;
+    assert!(!failed && found.contains("Léa Martin"), "{found}");
+    // its model goes outside (by SSH: no route, no guard yet)
+    let profile = dir.path().join(".hermes/profiles/coach");
+    std::fs::create_dir_all(&profile).unwrap();
+    std::fs::write(profile.join("config.yaml"), "model:\n  provider: openai-codex\n  default: gpt-6.1\n").unwrap();
+    let (_, found) = tool(&app, "contacts_search", json!({"query": "léa"}), "h1").await;
+    assert!(!found.contains("Léa Martin") && !found.contains("read now from Outlook"), "Outlook still read: {found}");
+    let shown = app.get("/v1/outlook", &h).await.json();
+    assert_eq!((&shown["agents"], &shown["outside"]), (&json!([]), &json!({"coach": "OpenAI"})), "{shown}");
+    // what they use changed from the app (Coach shown off, left out): Coach stays chosen, still off
+    let mail_only = json!({"agents": [], "parts": {"mail": true, "calendar": false, "contacts": true}});
+    let shown = app.send_json("PUT", "/v1/outlook/agents", &h, &mail_only).await.json();
+    keep_key();
+    assert_eq!(shown["outside"], json!({"coach": "OpenAI"}), "{shown}");
+    let (_, found) = tool(&app, "contacts_search", json!({"query": "léa"}), "h1").await;
+    assert!(!found.contains("Léa Martin"), "{found}");
+    // « Rallumer Outlook ? » → « Rallumer »
+    let again = json!({"agents": ["coach"], "parts": {"mail": true, "calendar": false, "contacts": true}});
+    let shown = app.send_json("PUT", "/v1/outlook/agents", &h, &again).await.json();
+    keep_key();
+    assert_eq!((&shown["agents"], &shown["outside"]), (&json!(["coach"]), &json!({})), "{shown}");
+    let (failed, found) = tool(&app, "contacts_search", json!({"query": "léa"}), "h1").await;
+    assert!(!failed && found.contains("Léa Martin"), "{found}");
+    // another outside provider: off again
+    std::fs::write(profile.join("config.yaml"), "model:\n  provider: anthropic\n  default: claude-sonnet-5-5\n").unwrap();
+    let (_, found) = tool(&app, "contacts_search", json!({"query": "léa"}), "h1").await;
+    assert!(!found.contains("Léa Martin"), "{found}");
+    assert_eq!(app.get("/v1/outlook", &h).await.json()["outside"], json!({"coach": "Anthropic"}));
+}
+
+/// Review B1 of shared-memory-1.1 (24/11): « Rallumer Outlook ? » answered for Coach on OpenAI, then another Microsoft
+/// account signs in. The app did not ask again (Coach was not listed as outside), so Coach sent among the agents of
+/// that sign-in must not read the new account on OpenAI: it is listed under `outside` again, asked again.
+#[tokio::test]
+async fn review_sm11_another_account_asks_rallumer_outlook_again() {
+    let (url, _graph) = fake_graph().await;
+    let dir = tempfile::tempdir().unwrap();
+    let config = config_for(dir.path(), &url, true);
+    let app = TestApp::new(config.clone());
+    let keep_key = || {
+        let mut tokens = IndexMap::new();
+        tokens.insert("coach".to_string(), agent_tools::digest(TOKEN));
+        agent_tools::save_tokens(&config, &tokens).unwrap();
+    };
+    let (k, v) = auth();
+    let h = [(k, v.as_str())];
+    let profile = dir.path().join(".hermes/profiles/coach");
+    std::fs::create_dir_all(&profile).unwrap();
+    std::fs::write(profile.join("config.yaml"), "model:\n  provider: openai-codex\n  default: gpt-6.1\n").unwrap();
+    assert_eq!(connect_with(&app, &h, "good", json!({"agents": []})).await.0, 200);
+    assert_eq!(app.get("/v1/outlook", &h).await.json()["outside"], json!({"coach": "OpenAI"}));
+    // « Rallumer Outlook ? » → « Rallumer »
+    let shown = app.send_json("PUT", "/v1/outlook/agents", &h, &json!({"agents": ["coach"]})).await.json();
+    keep_key();
+    assert_eq!((&shown["agents"], &shown["outside"]), (&json!(["coach"]), &json!({})), "{shown}");
+    // another account signs in, Coach sent with it (the app had no question to ask)
+    let (status, shown) = connect(&app, &h, "other").await;
+    keep_key();
+    assert_eq!((status, shown["account"].as_str()), (200, Some(OTHER_ACCOUNT)), "{shown}");
+    assert_eq!(shown["outside"], json!({"coach": "OpenAI"}), "not asked again for another account: {shown}");
+    let (_, found) = tool(&app, "contacts_search", json!({"query": "léa"}), "h1").await;
+    assert!(!found.contains("Léa Martin") && !found.contains("read now from Outlook"), "the new account read on OpenAI: {found}");
 }
 
 /// Only the rights of what the person switched on (as OneDrive asks its write right only once an agent writes): the
