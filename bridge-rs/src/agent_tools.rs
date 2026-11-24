@@ -2522,6 +2522,18 @@ async fn mcp_call(
             wrote(&agent.name, &name, &arguments, &mut result);
             return Ok(answer(result));
         }
+        // the phone's calendar (or a mailbox's) in the person's own turn: only what they asked for (bench 1.1, problem
+        // 9: events only mentioned were added); else offered first. Their conversation unread: as before
+        if name == "calendar_add" && persons_own_call(&state, &agent.name, &name, turn_run.as_deref()) {
+            if let Some(session) = crate::runs::CALL_SESSION.try_with(|s| s.clone()).ok().flatten() {
+                if let Ok(messages) = state.hub.hermes.session_messages(&agent, &session).await {
+                    if !crate::calendar::add_asked(&messages) {
+                        tracing::info!(agent = %agent.name, "a calendar add nobody asked for: refused, to offer first");
+                        return Ok(answer(tool_text(crate::calendar::UNASKED_ADD, true)));
+                    }
+                }
+            }
+        }
         // their Outlook mailbox (outlook_mail.rs): read, searched, drafted; tidied only after the person's card
         if mailbox::MAIL_TOOL_NAMES.contains(&name.as_str()) || crate::mail_tidy::TOOL_NAMES.contains(&name.as_str()) {
             let (c, a) = (state.config(), agent.name.clone());
