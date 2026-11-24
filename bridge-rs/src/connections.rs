@@ -295,6 +295,10 @@ pub struct Stored {
     /// Microsoft client, the agents that may use them and what of it they use. Same file and key.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub outlook: Option<crate::outlook::Account>,
+    /// The other Microsoft accounts of « Outlook » (outlook.rs, 1.1: several per place), beside the first one (which
+    /// stays in `outlook`, where a bridge before them reads it). Same file and key.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub outlook_more: Vec<crate::outlook::Account>,
 }
 
 /// The encrypted file (Fernet, as mailbox.rs) and its key.

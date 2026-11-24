@@ -567,6 +567,13 @@ pub fn base_url(config: &Config) -> Option<String> {
 }
 
 fn account_label(config: &Config, id: &str) -> String {
+    if let Some(n) = crate::outlook::key_account(id) {
+        // an Outlook mailbox (outlook_watch.rs): « Outlook · its address »
+        return match crate::outlook::address(config, n) {
+            Some(address) => format!("{} · {address}", crate::outlook::LABEL),
+            None => crate::outlook::LABEL.to_string(),
+        };
+    }
     crate::mailbox::of(config)
         .read()
         .ok()
@@ -642,6 +649,14 @@ pub struct Fields {
 
 /// The mailbox `account` exists and `agent` may read it. Err: plain words.
 fn check_account(config: &Config, agent: &str, account: &str) -> Result<(), String> {
+    if let Some(n) = crate::outlook::key_account(account) {
+        // an Outlook mailbox: its account connected, its mail given to this agent (outlook.rs)
+        return match crate::outlook::parts_of(config, agent, n) {
+            Some(parts) if parts.mail => Ok(()),
+            _ if crate::outlook::one(config, n).is_none() => Err("no such mailbox".into()),
+            _ => Err("this agent can't read that mailbox (give it the mailbox in Applis et outils › Outlook first)".into()),
+        };
+    }
     let accounts = crate::mailbox::of(config).read().map_err(|e| e.to_string())?;
     let Some(found) = accounts.iter().find(|a| tk::str_or_empty(a.get("id")) == account) else {
         return Err("no such mailbox".into());
@@ -1257,6 +1272,13 @@ fn arg(arguments: &Dict, key: &str) -> String {
 /// The mailbox an agent names (its id, address or label), among those it may read.
 fn account_named(config: &Config, agent: &str, name: &str) -> Result<String, String> {
     let accounts = crate::mailbox::of(config).of_agent(agent).map_err(|e| e.to_string())?;
+    // an Outlook mailbox it reads (outlook.rs): named (« Outlook », its address), or its only mailbox
+    let outlook = crate::outlook::accounts_with(config, agent, "mail");
+    if !outlook.is_empty() && (crate::outlook_mail::names_us(config, name) || (accounts.is_empty() && name.trim().is_empty())) {
+        if let Some(n) = crate::outlook_mail::named_account(config, agent, name) {
+            return Ok(crate::outlook::mailbox_key(n));
+        }
+    }
     if accounts.is_empty() {
         return Err("You have no mailbox: the person connects one for you in Réglages › Boîtes mail.".into());
     }

@@ -13,7 +13,7 @@ use axum::response::Response;
 use axum::Router;
 use bipbridge::agent_tools;
 use bipbridge::config::{parse_config, Config};
-use super::common::{self, auth, config_dict, TestApp, Urls};
+use super::common::{config_dict, TestApp, Urls};
 use indexmap::IndexMap;
 use serde_json::{json, Value};
 

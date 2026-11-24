@@ -83,6 +83,8 @@ async fn tidying_follows_the_level_as_the_imap_boxes_and_its_line_undoes_it() {
     let again = app.send_json("POST", &format!("/v1/approvals/auto/{}/undo", line["id"].as_str().unwrap()), &h, &json!({})).await;
     assert_ne!(again.status, 200, "undone twice");
 
+    // the person puts hers back in the inbox herself
+    graph.lock().unwrap().messages.get_mut("m2").unwrap()["parentFolderId"] = json!("inbox-id");
     // the trash: critical, a card at every level
     let ((failed, _), card) = tokio::join!(
         tool(&app, "mail_bulk", json!({"action": "trash", "from": "deals@mail.shop.example"}), "h1"),
@@ -103,7 +105,6 @@ async fn tidying_follows_the_level_as_the_imap_boxes_and_its_line_undoes_it() {
     assert_eq!(card["bip_always"], "Always allow");
     // that « Toujours » lets the next one through, its line marked
     graph.lock().unwrap().messages.get_mut("m2").unwrap()["isRead"] = json!(false);
-    graph.lock().unwrap().messages.get_mut("m2").unwrap()["parentFolderId"] = json!("inbox-id");
     let (failed, said) = tool(&app, "mail_bulk", json!({"action": "mark_read", "from": "news@shop.example"}), "h2").await;
     assert!(!failed && said.contains("marked read"), "{said}");
     assert!(cards(&app, &h, "bip-ok-").await.is_empty());
@@ -404,8 +405,7 @@ async fn a_contact_created_then_changed_on_cards_by_the_level() {
     // found by the search, its id an Outlook one
     let (failed, found) = tool(&app, "contacts_search", json!({"query": "nina"}), "h1").await;
     assert!(!failed && found.contains("Nina Durand"), "{found}");
-    let id = found.split("\"id\": \"").nth(1).or_else(|| found.split("id: ").nth(1)).map(|s| s.split(['"', ' ', ',', '\n']).next().unwrap().to_string());
-    let id = id.unwrap_or_else(|| panic!("no id: {found}"));
+    let id = id_of(&found, "Nina Durand");
     assert!(id.starts_with("outlook:"), "{id} / {found}");
 
     // changed at once under « Seulement le critique », its line kept; a phone added, never one removed
@@ -469,3 +469,4 @@ async fn the_contacts_write_switched_on_later_is_missing_until_reconnected() {
     assert_eq!(shown["missing"], json!([]));
     assert!(tools_named(&app, "contacts_").await.contains(&"contacts_add".to_string()));
 }
+

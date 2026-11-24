@@ -941,6 +941,7 @@ async fn approved(state: &AppState, agent: &AgentConfig, tool: &'static str, wha
         summary,
         detail,
         always,
+        always_key: None,
     };
     match crate::person_ok::ask(state, agent, card).await {
         crate::person_ok::Answer::Once => None,

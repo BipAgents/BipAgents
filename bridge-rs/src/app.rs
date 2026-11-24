@@ -340,6 +340,7 @@ impl AppState {
         self.spawn(crate::triggers::scheduler(self.clone())); // routines started by an e-mail or a link
         self.spawn(crate::plans::watch(self.clone())); // plans: their end, their phone event moved or cancelled
         self.spawn(crate::triggers_mail::supervisor(self.clone())); // their mailboxes, by IMAP IDLE
+        self.spawn(crate::outlook_watch::run_forever(self.clone())); // and the Outlook ones, by Graph (outlook_watch.rs)
         self.spawn(crate::archives::scheduler(self.config.clone()));
         crate::agent_email::start(self);
         self.spawn(self.briefs.clone().run());

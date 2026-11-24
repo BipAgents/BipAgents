@@ -87,7 +87,7 @@ async fn an_agent_proposes_a_routine_on_its_outlook_mailbox() {
         .send_json("POST", "/v1/agents/coach/triggers", &h, &json!({
             "name": "X", "prompt": "Y", "kind": "mail", "mail": {"account": "outlook-1"}}))
         .await;
-    assert_eq!(refused.status, 422, "{}", refused.text());
+    assert_eq!(refused.status, 400, "{}", refused.text());
 }
 
 /// A standing rule on the Outlook inbox files each new matching mail as it comes (no model, no card), once; the person's

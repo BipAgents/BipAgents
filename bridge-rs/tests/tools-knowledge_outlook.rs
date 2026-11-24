@@ -11,9 +11,9 @@ mod common;
 #[path = "common/outlook_graph.rs"]
 mod graph;
 
-use common::auth;
+use common::{auth, TestApp};
 use graph::*;
-use serde_json::json;
+use serde_json::{json, Value};
 
 
 #[tokio::test]
@@ -154,7 +154,8 @@ async fn connected_once_mail_read_searched_drafted_and_tidied_after_a_card() {
     assert_eq!(card["bip_ok"]["kind"], "mail_archive");
     assert_eq!(card["bip_summary"], "Coach wants to archive 2 e-mails (from shop.example)");
     assert_eq!(card["choices"], json!(["once", "deny"]));
-    assert!(card.get("bip_always").is_none(), "{card}");
+    // « Toujours autoriser » for that kind, as on the IMAP boxes' cards (1.1)
+    assert_eq!(card["bip_always_kind"], "mail_archive", "{card}");
     assert!(!card["bip_detail"].as_str().unwrap().contains(">>>"), "{card}");
     assert_eq!(writes(&graph).len(), before, "moved with no « Oui »");
     // « Oui » (under « Seulement le critique » it goes through at once: tools-knowledge_outlook_plus.rs)
@@ -517,18 +518,18 @@ fn review_measure_short_ids_per_item() {
     // a Graph immutable id is about 150 characters
     let long = |i: usize| format!("AAkALgAAAAAAHYQDEapmEc2byACqAC-EWg0A8wJ6kpILh0iwP9uiPwNhsQAAA{i:0>90}");
     let all: Vec<String> = (0..20_000).map(long).collect();
-    bipbridge::outlook::short_ids(&config, &all);
+    bipbridge::outlook::short_ids(&config, 1, &all);
     bipbridge::outlook::flush_ids(&config);
     let size = std::fs::metadata(dir.path().join("data").join("outlook").join("ids.json")).map(|m| m.len()).unwrap_or(0);
     let started = std::time::Instant::now();
     for i in 0..3000 {
         let v = json!({"id": long(i), "displayName": format!("Contact {i}")});
-        assert!(bipbridge::outlook_contacts::contact_of(&config, &v).is_some());
+        assert!(bipbridge::outlook_contacts::contact_of(&config, 1, &v).is_some());
     }
     let known = started.elapsed();
     let started = std::time::Instant::now();
     for i in 0..300 {
-        bipbridge::outlook::short_id(&config, &format!("new{i:0>147}"));
+        bipbridge::outlook::short_id(&config, 1, &format!("new{i:0>147}"));
     }
     let new = started.elapsed();
     eprintln!("REVIEW-MEASURE ids.json {size} bytes; 3000 known contacts read: {known:?}; 300 new ids: {new:?}");

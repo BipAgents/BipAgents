@@ -768,7 +768,8 @@ pub struct Link {
 pub enum Slot {
     Drive(Provider),
     Calendar,
-    Outlook,
+    /// An Outlook account, by its number (outlook.rs; 0: a sign-in under way that names none).
+    Outlook(u32),
 }
 
 impl Slot {
@@ -776,7 +777,7 @@ impl Slot {
         match self {
             Slot::Drive(provider) => provider,
             Slot::Calendar => Provider::Google,
-            Slot::Outlook => Provider::Microsoft,
+            Slot::Outlook(_) => Provider::Microsoft,
         }
     }
 
@@ -784,7 +785,7 @@ impl Slot {
         match self {
             Slot::Drive(provider) => stored.drives.get(provider.id()),
             Slot::Calendar => stored.google_calendar.as_ref(),
-            Slot::Outlook => stored.outlook.as_ref().map(|a| &a.link),
+            Slot::Outlook(id) => crate::outlook::account_in(stored, id).map(|a| &a.link),
         }
     }
 
@@ -792,7 +793,7 @@ impl Slot {
         match self {
             Slot::Drive(provider) => stored.drives.get_mut(provider.id()),
             Slot::Calendar => stored.google_calendar.as_mut(),
-            Slot::Outlook => stored.outlook.as_mut().map(|a| &mut a.link),
+            Slot::Outlook(id) => crate::outlook::account_in_mut(stored, id).map(|a| &mut a.link),
         }
     }
 
@@ -800,7 +801,7 @@ impl Slot {
         match self {
             Slot::Drive(provider) => provider.id(),
             Slot::Calendar => "google_calendar",
-            Slot::Outlook => "outlook",
+            Slot::Outlook(_) => "outlook",
         }
     }
 
@@ -810,7 +811,7 @@ impl Slot {
         let other = match self {
             Slot::Drive(Provider::Google) => Slot::Calendar,
             Slot::Calendar => Slot::Drive(Provider::Google),
-            Slot::Drive(_) | Slot::Outlook => return false,
+            Slot::Drive(_) | Slot::Outlook(_) => return false,
         };
         other.link(stored).is_some_and(|l| l.client == client)
     }
@@ -1088,7 +1089,7 @@ pub(crate) fn take_flow(state: &str, calendar: bool) -> Option<Flow> {
     take_flow_of(state, |slot| if calendar { slot == Slot::Calendar } else { matches!(slot, Slot::Drive(_)) })
 }
 
-/// The sign-in `state` started, if its slot is one `ours` takes (outlook.rs: `Slot::Outlook` only).
+/// The sign-in `state` started, if its slot is one `ours` takes (outlook.rs: `Slot::Outlook(_)` only).
 pub(crate) fn take_flow_of(state: &str, ours: impl Fn(Slot) -> bool) -> Option<Flow> {
     let mut flows = FLOWS.lock().unwrap_or_else(|e| e.into_inner());
     if flows.get(state).is_some_and(|f| !ours(f.slot)) {
@@ -1236,7 +1237,10 @@ async fn renew(config: &Config, slot: Slot, refused: Option<&str>) -> Result<Str
     let _guard = connections::LOCK.lock().await;
     let store = connections::store_of(config);
     let mut stored = store.read().map_err(|e| Fault::Other(e.to_string()))?;
-    let outlook_scope = (slot == Slot::Outlook).then(|| crate::outlook::renewal_scope(&stored));
+    let outlook_scope = match slot {
+        Slot::Outlook(id) => Some(crate::outlook::renewal_scope(&stored, id)),
+        _ => None,
+    };
     let link = slot.link_mut(&mut stored).ok_or(Fault::Other("not connected".into()))?;
     if link.state != "connected" {
         return Err(Fault::Expired);

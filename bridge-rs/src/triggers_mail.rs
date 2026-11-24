@@ -11,7 +11,8 @@
 //! second or so of being told to.
 //!
 //! The standing mail rules' mailboxes (mail_rules.rs) are watched the same way: each new message's headers go to their
-//! `sort_new` (only a mailbox a routine wants has its messages read whole).
+//! `sort_new` (only a mailbox a routine wants has its messages read whole). An Outlook mailbox (`outlook-<n>`) is no
+//! IMAP box: outlook_watch.rs looks at it by Graph and offers its new mail here (`offer`).
 //!
 //!     <data>/triggers-mail.json (0600)   {account: {validity, last_uid}}   where each inbox was left
 //!
@@ -142,7 +143,7 @@ fn newest_uid(conn: &mut Connection) -> Result<u64, String> {
 }
 
 /// Whether some active e-mail routine of this mailbox wants its new messages.
-fn has_routines(config: &Config, account: &str) -> bool {
+pub(crate) fn has_routines(config: &Config, account: &str) -> bool {
     triggers::load(config)
         .triggers
         .iter()
@@ -151,7 +152,7 @@ fn has_routines(config: &Config, account: &str) -> bool {
 
 /// Whether some active e-mail routine of this mailbox reads its messages' text: a plan's watch reads their headers
 /// only (triggers.rs `headers_only`), so a mailbox watched only for plans has no message read whole.
-fn reads_text(config: &Config, account: &str) -> bool {
+pub(crate) fn reads_text(config: &Config, account: &str) -> bool {
     triggers::load(config).triggers.iter().any(|t| {
         t.enabled
             && t.kind == MAIL

@@ -575,6 +575,34 @@ pub fn answer(config: &Config, agent: &str, id: &str, allow: bool, via: &str) ->
     Ok(Some(card))
 }
 
+/// A rule's card made by another mailbox's module (outlook_rules.rs: an Outlook mailbox's), kept with the others.
+pub fn add_card(config: &Config, card: Rule) -> std::io::Result<()> {
+    change(config, |s| s.cards.push(card))
+}
+
+/// [`record`] for another mailbox's module (outlook_rules.rs).
+pub fn record_run(config: &Config, id: &str, run: Run, error: &str) -> std::io::Result<()> {
+    record(config, id, run, error)
+}
+
+/// The mails already there of rule `id` filed (outlook_rules.rs).
+pub fn existing_filed(config: &Config, id: &str) -> std::io::Result<()> {
+    change(config, |s| {
+        if let Some(r) = s.rules.iter_mut().find(|r| r.id == id) {
+            r.existing_done = true;
+        }
+    })
+}
+
+/// Rule `id`'s last run undone (outlook_rules.rs).
+pub fn last_undone(config: &Config, id: &str) -> std::io::Result<()> {
+    change(config, |s| {
+        if let Some(last) = s.rules.iter_mut().find(|r| r.id == id).and_then(|r| r.last.as_mut()) {
+            last.undone = true;
+        }
+    })
+}
+
 /// « Arrêter cette règle » (the person, or the agent for its own). What it filed stays filed.
 pub fn stop(config: &Config, agent: Option<&str>, id: &str) -> std::io::Result<Option<Rule>> {
     change(config, |s| {
@@ -726,8 +754,13 @@ pub fn run_existing(config: &Config, id: &str, opener: &Connect) -> anyhow::Resu
     Ok(())
 }
 
-/// `run_existing` on a thread of its own (once at a time per rule).
+/// `run_existing` on a thread of its own (once at a time per rule). An Outlook mailbox's rule: by Graph, on the
+/// runtime (outlook_rules.rs).
 pub fn start(config: &Config, id: &str, opener: Connect) {
+    if crate::outlook_rules::is_ours(config, id) {
+        crate::outlook_rules::start(config, id);
+        return;
+    }
     let config = config.clone();
     let id = id.to_string();
     if !ACTIVE.lock().unwrap_or_else(|e| e.into_inner()).insert(id.clone()) {
@@ -1147,9 +1180,14 @@ async fn stop_route(State(state): State<AppState>, UrlPath(id): UrlPath<String>)
 async fn undo_route(State(state): State<AppState>, UrlPath(id): UrlPath<String>) -> ApiResult<Response> {
     let config = state.config();
     let c = config.clone();
-    let done = tokio::task::spawn_blocking(move || undo_last(&c, None, &id, &mailbox::default_connect()))
-        .await
-        .map_err(anyhow::Error::from)?;
+    let done = if crate::outlook_rules::is_ours(&config, &id) {
+        // an Outlook mailbox's rule: put back at Graph (outlook_rules.rs)
+        crate::outlook_rules::undo_last(&config, None, &id).await
+    } else {
+        tokio::task::spawn_blocking(move || undo_last(&c, None, &id, &mailbox::default_connect()))
+            .await
+            .map_err(anyhow::Error::from)?
+    };
     match done {
         Ok(count) => Ok(web::ok(json!({"ok": true, "count": count}))),
         Err(why) => Err(HttpError::new(409, why)),
