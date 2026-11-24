@@ -681,7 +681,8 @@ async fn a_plan_s_google_event_is_found_by_the_look_and_followed() {
     let (events, remote) = sources::events_of(&config, "coach", today, today + chrono::Duration::days(7)).await;
     assert!(remote.failed.is_empty(), "{:?}", remote.failed);
     let found = sources::upcoming(&events, paris, today);
-    let id = bipbridge::google_calendar::event_ref(PRIMARY, "d1");
+    // (the primary calendar is known as « primary »)
+    let id = bipbridge::google_calendar::event_ref("primary", "d1");
     assert_eq!(found.iter().map(|f| (f.title.as_str(), f.source.as_str(), f.id.as_str())).collect::<Vec<_>>(),
                [("Ostéo", "google", id.as_str())]);
     let event = EventRef { source: "google".into(), id: id.clone(), start: found[0].start, calendar: found[0].calendar.clone() };

@@ -1289,7 +1289,8 @@ pub fn dealt_with(conn: &mut crate::mailbox::Connection, mails: &[Mail]) -> Resu
     if status != "OK" {
         return Err("the Sent folder could not be opened".into());
     }
-    for m in mails.iter().filter(|m| !done.contains(&m.message_id)) {
+    let open: Vec<&Mail> = mails.iter().filter(|m| !done.contains(&m.message_id)).collect();
+    for m in open {
         let id = crate::mailbox::quote(&m.message_id);
         for header in ["In-Reply-To", "References"] {
             let (status, data) = conn.uid("SEARCH", &["HEADER", header, &id]).map_err(|e| e.to_string())?;
@@ -1475,7 +1476,8 @@ short line which drafts are ready.\n{}\n{}\n-->",
 // -- the turn's gate (a replies card's « Oui ») ---------------------------------------------------------------------------------
 
 /// The runs of a replies card's « Oui »: (agent, run) → the e-mails' ids it may open and answer.
-static GATES: Mutex<Option<HashMap<(String, String), Vec<String>>>> = Mutex::new(None);
+type Gates = HashMap<(String, String), Vec<String>>;
+static GATES: Mutex<Option<Gates>> = Mutex::new(None);
 
 /// The e-mails' ids a replies card's « Oui » may open (`<account>|INBOX|<uid>`).
 pub fn mail_ids(offer: &Offer) -> Vec<String> {

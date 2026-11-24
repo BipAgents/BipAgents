@@ -259,14 +259,13 @@ fn mail(account: &str, id: &str, seen: f64, state: &str) -> Mail {
 #[test]
 fn a_reply_is_due_after_24h_and_headers_go_14_days_after_dealt_with() {
     let n = now();
-    let mut store = Store::default();
-    store.mails = vec![
+    let store = Store { mails: vec![
         mail("a", "<1>", n - 3.0 * DAY, SHOWN),
         mail("a", "<2>", n - 1.5 * DAY, WAITING),
         mail("a", "<3>", n - 3600.0, WAITING),
         mail("a", "<4>", n - 2.0 * DAY, ANSWERED),
         mail("b", "<5>", n - 2.0 * DAY, WAITING),
-    ];
+    ], ..Store::default() };
     let due: Vec<String> = candidates(&store, "a", 24.0, n).into_iter().map(|m| m.message_id).collect();
     assert_eq!(due, ["<1>", "<2>"]);
     let mut kept = Store {
