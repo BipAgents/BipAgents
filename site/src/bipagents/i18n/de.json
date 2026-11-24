@@ -4,7 +4,7 @@
     "name": "Deutsch"
   },
   "meta": {
-    "title": "BipAgents — Persönliche Agenten, die deine Daten nie verkaufen.",
+    "title": "BipAgents — Persönliche Agenten, von Grund auf privat.",
     "description": "Persönliche KI-Agenten für die ganze Familie: privat, auf deinem eigenen Server in Europa oder bei dir zu Hause, und günstiger als ein einziger Platz anderswo. Gebaut auf Hermes Agent."
   },
   "a11y": {
@@ -23,8 +23,8 @@
     "family": "Zusammen"
   },
   "hero": {
-    "slogan": "Persönliche Agenten, die deine Daten nie verkaufen und nur mit deiner Zustimmung teilen.",
-    "trust": "Nie von uns gelesen, nie von der KI gespeichert, nie zum Training genutzt.",
+    "slogan": "Persönliche Agenten, von Grund auf privat.",
+    "trust": "Sie verkaufen deine Daten nie und teilen sie nur mit deiner Zustimmung. Nie von uns gelesen, nie von der KI gespeichert, nie zum Training genutzt.",
     "sub": "Kostenlos für die ganze Familie, oder günstiger als ein ChatGPT- oder Claude-Abo.",
     "eu": "Server in der EU oder bei dir zu Hause",
     "badge": "Gebaut auf Hermes Agent",
