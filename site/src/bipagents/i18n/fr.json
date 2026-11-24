@@ -24,6 +24,7 @@
   },
   "hero": {
     "slogan": "Des agents personnels qui ne vendent jamais tes données.",
+    "trust": "Ni lues par nous, ni gardées par l’IA, ni utilisées pour l’entraîner.",
     "sub": "Gratuit pour toute la famille, ou moins cher qu’un abonnement ChatGPT ou Claude.",
     "eu": "Serveurs dans l’UE, ou chez toi",
     "badge": "Construit sur Hermes Agent",
