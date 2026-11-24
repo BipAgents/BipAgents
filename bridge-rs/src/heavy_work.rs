@@ -29,7 +29,9 @@
 //!
 //! Background tasks pass the same check before each start (jobs.rs `launch`, `task_gate`): a place pressed, full, or
 //! with another agent's heavy job on gets the task queued (paused, reason « space »), started by itself once the check
-//! clears (`backstop`, each minute).
+//! clears (`backstop`, each minute); a task with a browser of its own also needs room for it (`browser_fits`; the
+//! place's first one only the server's, 24/11). A task waiting long for room is told to the person once
+//! (jobs.rs `tell_long_waits`).
 //!
 //! Self-installs: the tools aren't offered, and a call answers `go`. Family, project and shared agents never get them
 //! (agent_tools.rs `tools_for`; a relative's or shared turn closes them as any other own tool).
@@ -473,30 +475,27 @@ pub fn task_gate(config: &Config, agent: &str, room: &Room, now: f64) -> Option<
     None
 }
 
-/// A task of `agent` with a browser of its own (browsers.rs `setup_task`, 0.5–0.8 GB measured 20/11) fits under the
-/// place's `memory.high`: `[jobs] browser_free_mb` for it and for each task browser set up but not started yet
-/// (no unit: it starts on its first call), on top of the programs' memory (`anon`, else all of it). Otherwise it
-/// waits for room, never refused (Alex 20/11).
+/// A task of `agent` with a browser of its own (browsers.rs `setup_task`, 0.45–0.8 GB measured 20/11 and 24/11) fits
+/// under the place's `memory.high`: `[jobs] browser_free_mb` for it and for each of the place's task browsers not
+/// started yet (jobs.rs `task_browsers`: set up or starting, no unit yet), on top of the programs' memory (`anon`, else
+/// all of it). Otherwise it waits for room, never refused (Alex 20/11).
+///
+/// The place's FIRST task browser (none running nor starting) skips this ceiling (24/11): with six places on a VPS-2
+/// the guichet allows, each place's MemoryHigh is ≈ 1 040 MB and ≈ 380 MB of it is taken at rest, so it never fitted
+/// and a browsing task waited without end there. It passes the server's check alone (jobs.rs `memory_short_in`,
+/// MemAvailable): the server never swaps for it; at worst the place's own slice slows itself above its MemoryHigh
+/// (its MemoryMax is 1 GB higher), its neighbours untouched.
 fn browser_fits(config: &Config, agent: &str, memory: &Memory) -> bool {
     let need = config.jobs.browser_free_mb * 1024 * 1024;
     if need == 0 || !crate::browsers::gives_task_browsers(config, agent) {
         return true;
     }
     let (Some(high), Some(used)) = (memory.high, memory.anon.or(memory.current)) else { return true };
-    let host = crate::browsers::Host::real(config);
-    let pending = std::fs::read_dir(&config.browser.root)
-        .map(|entries| {
-            entries
-                .flatten()
-                .filter(|e| {
-                    let name = e.file_name().to_string_lossy().into_owned();
-                    crate::browsers::task_browser_agent(&name).is_some()
-                        && !host.unit_path(&name).exists()
-                })
-                .count() as u64
-        })
-        .unwrap_or(0);
-    high.saturating_sub(used) >= need * (1 + pending)
+    let browsers = crate::jobs::task_browsers(config);
+    if browsers.live == 0 {
+        return true;
+    }
+    high.saturating_sub(used) >= need * (1 + browsers.unstarted)
 }
 
 /// `task_gate` measured now, on the offer only (a self-install's tasks always start).
@@ -566,6 +565,8 @@ pub fn holding() -> bool {
 pub async fn backstop(state: &crate::app::AppState) {
     // tasks waiting for free memory for their own browser (jobs.rs `MEMORY_REASON`), on any install
     crate::jobs::jobs_of(state).resume_after_memory().await;
+    // a task waiting long for room (memory, space) is told to the person once, never left waiting in silence
+    crate::jobs::jobs_of(state).tell_long_waits().await;
     if !crate::handover::on_offer() {
         return;
     }
