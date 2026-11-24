@@ -473,6 +473,18 @@ fn candidates_are_at_most_two_json_objects_and_mostly_none() {
     assert_eq!(candidates(&format!("[{one}, {one}, {one}]")).len(), 2);
 }
 
+/// Bench 1.1 (24/11, `briefs/bench-1-1.md`): the person's own model reached over their Tailscale network (Alex's
+/// Spark at 100.87.65.57:8888, or a `*.ts.net` name) is « Own » for `outside_model::place`, yet `pass_target_ok`
+/// refuses it: every look of the lab's Spark agent said « no model to call », so a smart agent on the person's own
+/// model over Tailscale never gets a pass. RED today.
+#[test]
+fn bench_a_pass_may_go_to_the_persons_own_model_on_their_tailnet() {
+    assert!(pass_target_ok("http://100.87.65.57:8888/v1"), "Tailscale's 100.64.0.0/10 is the person's own network");
+    assert!(pass_target_ok("http://spark.tail1234.ts.net:8888/v1"), "a MagicDNS name is the person's own network");
+    // the same answer as the module that decides « outside » (shared-memory)
+    assert!(matches!(crate::outside_model::place_of("custom", "http://100.87.65.57:8888/v1"), crate::outside_model::Place::Own));
+}
+
 #[test]
 fn a_pass_goes_only_to_our_european_providers_or_the_persons_own_model() {
     assert!(pass_target_ok("https://api.eurouter.ai/v1"));
