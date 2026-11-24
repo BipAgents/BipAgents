@@ -402,6 +402,13 @@ fn down_for_restart(agent: &AgentConfig, exc: &crate::hermes::HermesError) -> bo
     (exc.is_transport() || matches!(exc.status(), Some(502..=504))) && crate::agent_restart::restarting(agent)
 }
 
+/// A message that waits in line (« En attente », msg_queue.rs) instead of failing: its agent's gateway just
+/// restarted by the bridge, or its hub full past the bridge's tries (429: hermes.rs `BUSY_ATTEMPTS`; 24/11) — it
+/// starts once Hermes takes it (each run's end and every few seconds).
+fn waits_in_line(agent: &AgentConfig, exc: &crate::hermes::HermesError) -> bool {
+    exc.status() == Some(429) || down_for_restart(agent, exc)
+}
+
 /// The conversation's tip, made when it has none yet (its first message): a Hermes session titled from the words.
 async fn tip_of(state: &AppState, threads: &Threads, agent: &AgentConfig, thread: &Thread, words: &str) -> ApiResult<String> {
     if let Some(tip) = threads.line(agent, thread).await.map_err(unavailable)?.last() {
@@ -903,9 +910,10 @@ pub async fn send(state: &AppState, agent: &AgentConfig, thread: Option<Thread>,
             Some(status @ (400 | 413 | 415 | 422)) => {
                 return Err(HttpError::new(status, "your agent refused this message"))
             }
-            _ if down_for_restart(agent, &exc) => {
-                // its gateway restarted by the bridge a moment ago (agent_restart.rs): the message waits in line and
-                // starts when Hermes answers again (« En attente », msg_queue.rs), it never fails for that
+            _ if waits_in_line(agent, &exc) => {
+                // its gateway restarted by the bridge a moment ago (agent_restart.rs), or its hub full (429): the
+                // message waits in line and starts when Hermes takes it (« En attente », msg_queue.rs), it never fails
+                // for that
                 let sent = Sent {
                     client_id: Some(body.client_id.clone()),
                     input: Some(input),
@@ -918,7 +926,7 @@ pub async fn send(state: &AppState, agent: &AgentConfig, thread: Option<Thread>,
                 queues
                     .add(agent, tip, &words, None, false, sent)
                     .map_err(|_| HttpError::new(409, "too many messages waiting"))?;
-                tracing::info!(agent = %agent.name, "message sent while its gateway restarts: it waits in line");
+                tracing::info!(agent = %agent.name, status = ?exc.status(), "message sent while its Hermes can't take it: it waits in line");
                 threads.bump(&thread, "sent").await?;
                 told(tip);
                 return Ok(answer("queued", None));
@@ -1149,6 +1157,19 @@ mod tests {
         };
         assert_eq!((check(150_000), check(200_000), check(200_001)), (0, 0, 1));
         assert_eq!(LONG_TEXT_MAX, 200_000);
+    }
+
+    /// 24/11: a hub full (Hermes' 429 past the bridge's tries, hermes.rs `BUSY_ATTEMPTS`) never fails the person's
+    /// message: it waits in line (« En attente ») and starts once a run of the hub ends, as for a gateway the bridge
+    /// just restarted. Hermes down otherwise stays the plain error.
+    #[test]
+    fn a_message_waits_in_line_when_the_hub_is_full() {
+        // a gateway no other test restarts (agent_restart.rs keeps the restarts by space, the hub's « », for the
+        // whole process)
+        let agent = AgentConfig { name: "vie".into(), space: Some("hub-full-test".into()), ..AgentConfig::default() };
+        assert!(waits_in_line(&agent, &crate::hermes::HermesError::http(429, "Too many concurrent runs (max 16)")));
+        assert!(!waits_in_line(&agent, &crate::hermes::HermesError::http(502, "")));
+        assert!(!waits_in_line(&agent, &crate::hermes::HermesError::http(409, "")));
     }
 
     /// The phone a message is sent from (7/11: where a reminder asked in its turn goes): « ios » or « android ».

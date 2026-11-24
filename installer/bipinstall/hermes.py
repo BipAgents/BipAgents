@@ -323,6 +323,11 @@ CLARIFY_ON = ("tools", "enable", "clarify", "--platform", "api_server")   # the 
 # lowers an `agent.clarify_timeout` of 3600 to 90: the legacy `clarify.timeout`, read first by 0.22.5 and 0.23.1 and
 # touched by no migration, keeps the hour (bridge-rs/src/tool_diet.rs `with_clarify` writes both, at each start).
 CLARIFY_WAIT = (("agent.clarify_timeout", "3600"), ("clarify.timeout", "3600"))
+# Runs the hub takes at once, all its agents together (24/11): Hermes 0.23.1 answers 429 past
+# `gateway.api_server.max_concurrent_runs` (10 by default), read when its gateway starts (gateway/platforms/
+# api_server.py `_resolve_max_concurrent_runs`). Five background tasks left five runs for the conversations, the Live
+# and the routines; a run without a browser costs a few MB (the model is remote), so 16.
+HUB_RUNS = ("gateway.api_server.max_concurrent_runs", "16")
 DISK_TOOLS = ("terminal", "file", "code_execution", "browser")   # the local browser opens file:// pages
 
 DESKTOP_BINARIES = ("Xvnc", "xfwm4", "xfce4-panel", "xfdesktop", "xfsettingsd", "dbus-run-session", "xauth", "xdpyinfo")
@@ -386,6 +391,7 @@ def setup_hub(runner: Runner, port: int, model: Model, sandbox: Optional[str] = 
     # Hermes 0.23 refuses (shorter than 16): no API server, so no agent was ever served on a fresh install
     for setting, value in CLARIFY_WAIT:
         _config(runner, HUB_PROFILE, setting, value)
+    _config(runner, HUB_PROFILE, *HUB_RUNS)
     _config(runner, HUB_PROFILE, "API_SERVER_ENABLED", "true")
     _config(runner, HUB_PROFILE, "API_SERVER_HOST", "127.0.0.1")
     _config(runner, HUB_PROFILE, "API_SERVER_PORT", str(port))

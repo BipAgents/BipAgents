@@ -254,6 +254,43 @@ async fn an_accepted_but_queued_start_is_never_sent_again() {
     assert_eq!(posted(&fake, "/v1/runs").len(), 3 + bipbridge::hermes::START_ATTEMPTS as usize);
 }
 
+/// 24/11: a hub takes at most `gateway.api_server.max_concurrent_runs` runs at once (all its agents together: 10 by
+/// Hermes' default, 16 set by the installer) and answers the next start 429 with `Retry-After: 1`. The bridge tried
+/// a 503 again but not a 429: the person's message failed. It is now tried again after the wait Hermes asks, under the
+/// same key, up to `BUSY_ATTEMPTS` times; past that the 429 itself (the message then waits in line, threads/send.rs).
+#[tokio::test]
+async fn a_run_start_refused_by_a_full_hub_is_tried_again() {
+    let hermes = HermesClient::new(reqwest::Client::new());
+    let (agent, fake) = fake_hermes().await;
+    for _ in 0..2 {
+        fake.starts.lock().unwrap().push((429, Some(("retry-after", "0"))));
+    }
+    assert_eq!(hermes.start_run(&agent, "Bonjour", "api_s", None).await.unwrap(), "run_7");
+    let seen = fake.seen.lock().unwrap().clone();
+    let keys: Vec<Option<String>> = seen.iter().filter(|s| s.1 == "/v1/runs").map(|s| s.2.clone()).collect();
+    assert_eq!(keys.len(), 3);
+    assert!(keys[0].is_some() && keys.iter().all(|k| *k == keys[0]), "one key for every try: {keys:?}");
+    // without a Retry-After too (always passing: the cap clears as soon as one run ends)
+    fake.starts.lock().unwrap().push((429, None));
+    assert_eq!(hermes.start_run(&agent, "Encore", "api_s", None).await.unwrap(), "run_7");
+    assert_eq!(posted(&fake, "/v1/runs").len(), 5);
+    // a hub full for longer than the bridge waits: its 429, never a lost start
+    let busy = bipbridge::hermes::BUSY_ATTEMPTS;
+    assert!((8..=30).contains(&busy), "{busy}");
+    for _ in 0..busy {
+        fake.starts.lock().unwrap().push((429, Some(("retry-after", "0"))));
+    }
+    assert_eq!(hermes.start_run(&agent, "Bonjour", "api_s", None).await.unwrap_err().status(), Some(429));
+    assert_eq!(posted(&fake, "/v1/runs").len(), 5 + busy as usize);
+    // the wait Hermes asks for, kept within bounds
+    let mut headers = reqwest::header::HeaderMap::new();
+    headers.insert("retry-after", "1".parse().unwrap());
+    assert_eq!(bipbridge::hermes::retry_after(429, &headers), Some(1.0));
+    headers.insert("retry-after", "600".parse().unwrap());
+    assert_eq!(bipbridge::hermes::retry_after(429, &headers), Some(bipbridge::hermes::START_WAIT_MAX));
+    assert_eq!(bipbridge::hermes::retry_after(429, &reqwest::header::HeaderMap::new()), Some(1.0));
+}
+
 #[tokio::test]
 async fn a_prompts_events_carry_its_request_id() {
     let hermes = HermesClient::new(reqwest::Client::new());

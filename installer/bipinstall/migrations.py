@@ -186,6 +186,69 @@ def clarify_hour(runner: hermes.Runner, home: Path) -> str:
     return f"a question waits an hour for your answer ({count} Hermes)"
 
 
+def _hub_roots(home: Path) -> List[Path]:
+    """The hub of each Hermes of this account: ~/.hermes and each space's, those with a config.yaml."""
+    roots = [home / ".hermes"] + sorted((home / ".local" / "share" / "bipagents" / "spaces").glob("*"))
+    return [root for root in roots if (root / "config.yaml").is_file()]
+
+
+def _runs_cap(root: Path) -> Optional[int]:
+    """The hub's `gateway.api_server.max_concurrent_runs` as Hermes reads it (None: absent or unreadable)."""
+    import yaml
+    try:
+        data = yaml.safe_load((root / "config.yaml").read_text(encoding="utf-8")) or {}
+        value = data["gateway"]["api_server"]["max_concurrent_runs"]
+    except (OSError, ValueError, yaml.YAMLError, KeyError, TypeError):
+        return None
+    if isinstance(value, bool):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def hub_runs(runner: hermes.Runner, home: Path) -> str:
+    """The hub takes 16 runs at once (2026-11-24, hermes.HUB_RUNS): Hermes answers 429 past its
+    `gateway.api_server.max_concurrent_runs` (10 by default) and the hub serves all of the person's agents, their five
+    background tasks, the Live and the routines together. Written through Hermes' own `config set` (that one key: every
+    other setting stays) where it is absent or lower; a cap turned off (0) or set higher is left. Hermes reads it when
+    its gateway starts: the running gateways restart once, their turns ended first, only when a hub changed."""
+    key, value = hermes.HUB_RUNS
+    changed, env = [], runner.env
+    for root in _hub_roots(home):
+        cap = _runs_cap(root)
+        if cap is not None and (cap == 0 or cap >= int(value)):
+            continue
+        runner.env = {**env, "HERMES_HOME": str(root)}
+        runner.run([hermes.hermes_bin(), "config", "set", key, value], check=False)
+        changed.append(root)
+    runner.env = env
+    if not changed:
+        return f"the hub already takes {value} runs at once"
+    _gateways_try_restart(runner)
+    return f"the hub takes {value} runs at once ({len(changed)} Hermes; gateways restarted)"
+
+
+def _gateways_try_restart(runner: hermes.Runner) -> None:
+    """Every gateway that runs restarted to read its config again, its turns ended first (drain.py); one stopped (a
+    restore, a move: they start it themselves afterwards) stays stopped."""
+    import os
+    from . import drain
+    from .update import gateway_units
+    if not runner.dry:
+        drain.until_quiet(what="gateways")
+    for how, name in gateway_units():
+        if how == "systemd":
+            runner.run(["systemctl", "--user", "try-restart", name], check=False)
+        elif how == "launchd":
+            runner.run(["launchctl", "kickstart", "-k", f"gui/{os.getuid()}/{name}"], check=False)
+        else:
+            runner.run([hermes.hermes_bin(), "gateway", "restart"], check=False)
+    if not runner.dry:
+        drain.done()
+
+
 def hub_key(runner: hermes.Runner, home: Path) -> str:
     """The hub's own key again (2026-11-13): an install made between 10/11 and 13/11 got « clarify.timeout » as its
     hub's API_SERVER_KEY (setup_hub's clarify loop reused the name `key`), which Hermes 0.23 refuses (shorter than
@@ -316,6 +379,7 @@ MIGRATIONS: List[Tuple[str, Callable[[hermes.Runner, Path], str]]] = [
     ("2026-11-12-push-service-everywhere", push_service_everywhere),
     ("2026-11-13-hub-key", hub_key),
     (OFFER_CARDS_ON, offer_cards_on),
+    ("2026-11-24-hub-runs-16", hub_runs),
 ]
 
 # BipAgents' own settings (bridge.toml), never the person's Hermes: applied on an install over their own Hermes too.
