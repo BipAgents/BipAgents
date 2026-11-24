@@ -215,6 +215,10 @@ pub struct Plan {
     /// « Oui » (plans/offers.rs `pill_views`; J68, 24/11: an accepted pill left the card).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pills: Vec<PillDone>,
+    /// The ids of its pills in the card's order, kept when the first one is answered: an answered pill stays where it
+    /// was on the card.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pill_order: Vec<String>,
 }
 
 /// A pill of a plan's card answered (or gone past its time): its words as the card showed them, its outcome
@@ -901,6 +905,7 @@ pub fn draft(arguments: &Dict, agent: &str, person: Tz, routines: Tz, now: f64) 
         trigger: None,
         ends: 0.0,
         pills: Vec::new(),
+        pill_order: Vec::new(),
     };
     Ok(Draft { plan, routes })
 }

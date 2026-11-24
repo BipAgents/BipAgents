@@ -1166,21 +1166,22 @@ pub fn pills_of(config: &Config, plan: &str) -> Vec<String> {
         .collect()
 }
 
-/// The pills of a plan's card, waiting or answered, in the order they were made, ready to draw (`bip_plan.pills`):
-/// {id, run_id, state: « waiting » | « accepted » | « refused » | « expired », text}. `text`: a waiting pill's
-/// question; an accepted one keeps its words, with ✓ and without « ? » (design §3.1, §7.3: « ✓ Je te fais la liste
-/// de bagages »), drawn in the card, never as a line apart. A refused or expired one: its question (the apps 1.1
-/// leave it out of the card). An app 1.0 reads neither: each offer is its own card.
+/// The pills of a plan's card, waiting or answered, in the card's order (`Plan::pill_order` once one was answered,
+/// else as they were made), ready to draw (`bip_plan.pills`): {id, run_id, state: « waiting » | « accepted » |
+/// « refused » | « expired », text}. `text`: a waiting pill's question; an accepted one keeps its words, with ✓ and
+/// without « ? » (design §3.1, §7.3: « ✓ Je te fais la liste de bagages »), drawn in the card where it was, never as a
+/// line apart. A refused or expired one: its question (the apps 1.1 leave it out of the card). An app 1.0 reads
+/// neither: each offer is its own card.
 pub fn pill_views(config: &Config, plan: &super::Plan) -> Vec<Value> {
     let now = py::time_time();
-    let mut rows: Vec<(f64, Value)> = load(config)
+    let mut rows: Vec<(String, f64, Value)> = load(config)
         .offers
         .into_iter()
         .filter(|o| o.pill && o.plan.as_deref() == Some(plan.id.as_str()) && o.expires > now)
-        .map(|o| (o.made, pill_view(&o.id, "waiting", o.label.clone())))
+        .map(|o| (o.id.clone(), o.made, pill_view(&o.id, "waiting", o.label.clone())))
         .collect();
     for done in &plan.pills {
-        if rows.iter().any(|(_, r)| r["id"] == json!(done.id)) {
+        if rows.iter().any(|(id, _, _)| *id == done.id) {
             continue;
         }
         let (state, text) = match done.outcome.as_str() {
@@ -1188,10 +1189,20 @@ pub fn pill_views(config: &Config, plan: &super::Plan) -> Vec<Value> {
             NO => ("refused", done.label.clone()),
             _ => ("expired", done.label.clone()),
         };
-        rows.push((done.made, pill_view(&done.id, state, text)));
+        rows.push((done.id.clone(), done.made, pill_view(&done.id, state, text)));
     }
-    rows.sort_by(|a, b| a.0.total_cmp(&b.0));
-    rows.into_iter().map(|(_, r)| r).collect()
+    let place = |id: &str| plan.pill_order.iter().position(|o| o == id).unwrap_or(usize::MAX);
+    // stable: pills made together keep the order they were made in
+    rows.sort_by(|a, b| place(&a.0).cmp(&place(&b.0)).then(a.1.total_cmp(&b.1)));
+    rows.into_iter().map(|(_, _, r)| r).collect()
+}
+
+/// The ids of the pills of `offer`'s plan as its card shows them now (the store's order: as they were made), taken
+/// before an answer or an expiry takes one out (`pill_answered` keeps it on the plan).
+fn card_order(store: &Store, offer: &str) -> Vec<String> {
+    let plan = store.offers.iter().find(|o| o.id == offer && o.pill).and_then(|o| o.plan.clone());
+    let Some(plan) = plan else { return Vec::new() };
+    store.offers.iter().filter(|o| o.pill && o.plan.as_deref() == Some(plan.as_str())).map(|o| o.id.clone()).collect()
 }
 
 fn pill_view(id: &str, state: &str, text: String) -> Value {
@@ -1206,11 +1217,15 @@ pub fn pill_done(label: &str) -> String {
 
 /// A plan's offer shown on its card answered or gone past its time: kept on its plan, which goes on drawing it
 /// (`pill_views`).
-fn pill_answered(config: &Config, offer: &Offer, outcome: &str) {
+/// `order`: the card's pills before it was taken out (`card_order`), kept with the first one answered.
+fn pill_answered(config: &Config, offer: &Offer, outcome: &str, order: Vec<String>) {
     let Some(plan) = offer.plan.as_deref().filter(|_| offer.pill) else { return };
     let done = super::PillDone { id: offer.id.clone(), label: offer.label.clone(), outcome: outcome.into(), made: offer.made };
     super::change(config, |s| {
         if let Some(p) = s.plans.iter_mut().find(|p| p.id == plan && p.agent == offer.agent) {
+            if p.pill_order.is_empty() {
+                p.pill_order = order;
+            }
             p.pills.retain(|d| d.id != done.id);
             p.pills.push(done);
         }
@@ -1516,16 +1531,20 @@ pub async fn approve(state: &AppState, agent: &AgentConfig, id: &str, choice: &s
     let config = state.config();
     let place = crate::card_place::of(&config, &format!("{RUN_PREFIX}{id}")).unwrap_or_default();
     let (c, name, oid) = (config.clone(), agent.name.clone(), id.to_string());
-    let taken = tokio::task::spawn_blocking(move || answer(&c, &name, &oid, yes, py::time_time()))
-        .await
-        .map_err(anyhow::Error::from)?;
+    let taken = tokio::task::spawn_blocking(move || {
+        let order = card_order(&load(&c), &oid);
+        let offer = answer(&c, &name, &oid, yes, py::time_time());
+        // a pill: kept on its plan's card, where it was (J68)
+        if let Some(o) = &offer {
+            pill_answered(&c, o, if yes { YES } else { NO }, order);
+        }
+        offer
+    })
+    .await
+    .map_err(anyhow::Error::from)?;
     let Some(offer) = taken else {
         return Err(HttpError::new(404, "no such request (answered already?)"));
     };
-    {
-        let (c, o) = (config.clone(), offer.clone());
-        let _ = tokio::task::spawn_blocking(move || pill_answered(&c, &o, if yes { YES } else { NO })).await;
-    }
     tracing::info!(target: "bipbridge::offers", agent = %agent.name, offer = %offer.id, kind = %offer.kind, yes,
                    "offer answered");
     if !offer.source.is_empty() {
@@ -1956,9 +1975,10 @@ pub async fn tick(state: &AppState) {
         let state = state.clone();
         tokio::spawn(async move { work(&state, &agent, doing).await });
     }
+    let before = load(&config);
     for offer in expire(&config, now) {
         tracing::info!(target: "bipbridge::offers", agent = %offer.agent, offer = %offer.id, "offer expired");
-        pill_answered(&config, &offer, EXPIRED);
+        pill_answered(&config, &offer, EXPIRED, card_order(&before, &offer.id));
         let Some(agent) = config.agent(Some(&offer.agent)).cloned() else { continue };
         let run_id = format!("{RUN_PREFIX}{}", offer.id);
         // its decision kept where the card showed: the main conversation's tip for one nobody asked for, even before

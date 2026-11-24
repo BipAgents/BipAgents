@@ -212,7 +212,8 @@ def test_j68_a_plan_one_card_a_moment_unticked_a_pill_yes_its_work_and_plan_set(
                                                   "state": "accepted", "text": "✓ Je te fais la liste de bagages"}, pills
     assert pills[taxi["bip_offer"]["id"]]["state"] == "waiting", pills
     assert pills[taxi["bip_offer"]["id"]]["text"] == taxi["bip_offer"]["label"], pills
-    assert sorted(pills) == sorted(plan["offers"]), (still["bip_plan"]["pills"], plan["offers"])
+    # where it was on the card: the pills in the card's order
+    assert [p["id"] for p in still["bip_plan"]["pills"]] == plan["offers"], (still["bip_plan"]["pills"], plan["offers"])
     assert still["bip_plan"]["offers"] == [taxi["bip_offer"]["id"]], still["bip_plan"]
     [item] = [i for i in page["items"] if i.get("kind") == "approval" and i["approval"]["run_id"] == bagages["run_id"]]
     assert item["approval"].get("pill_of") == plan["id"], item

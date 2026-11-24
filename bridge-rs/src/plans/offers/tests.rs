@@ -266,7 +266,7 @@ fn two_offers_per_reply_and_the_unasked_caps_shared_with_plans() {
         id: "p1".into(), agent: "vie".into(), kind: "trip".into(), title: "Lisbonne".into(), city: "Lisbonne".into(),
         zone: "Europe/Lisbon".into(), moments: Vec::new(), repeat: None, watch: Vec::new(), event: None,
         state: crate::plans::WAITING.into(), made: n, asked: false, first: false, origin: String::new(),
-        routines: Vec::new(), trigger: None, ends: 0.0, pills: Vec::new(),
+        routines: Vec::new(), trigger: None, ends: 0.0, pills: Vec::new(), pill_order: Vec::new(),
     });
     assert!(refused(&Store::default(), &plans_waiting, &unasked, None, PARIS, now()).is_some());
     let mut day = crate::plans::Store::default();
@@ -650,7 +650,7 @@ fn plan_of(id: &str, state: &str, n: f64) -> crate::plans::Plan {
         id: id.into(), agent: "vie".into(), kind: "trip".into(), title: "Lisbonne".into(), city: "Lisbonne".into(),
         zone: "Europe/Lisbon".into(), moments: Vec::new(), repeat: None, watch: Vec::new(), event: None,
         state: state.into(), made: n, asked: true, first: false, origin: String::new(), routines: Vec::new(),
-        trigger: None, ends: n + 3.0 * DAY, pills: Vec::new(),
+        trigger: None, ends: n + 3.0 * DAY, pills: Vec::new(), pill_order: Vec::new(),
     }
 }
 
@@ -684,7 +684,7 @@ fn r5_a_plan_gone_takes_its_pills_with_it() {
 }
 
 /// J68 (24/11): a pill answered stays on its plan's card, ready to draw: « ✓ <its words> » for a « Oui » (no « ? »),
-/// in the order the pills were made; one waiting is still its question; a « Non » or one past its time says so.
+/// where it was on the card (pills made in the same call share their time); one waiting is still its question; a « Non » or one past its time says so.
 #[test]
 fn j68_an_answered_pill_stays_on_its_plan_s_card() {
     let n = now();
@@ -693,8 +693,8 @@ fn j68_an_answered_pill_stays_on_its_plan_s_card() {
     crate::plans::change(&config, |s| s.plans.push(plan_of("p1", crate::plans::WAITING, n)));
     let (bagages, hotels, taxi) = (
         pill_of("p1", "page", "Je te fais la liste de bagages ?", n),
-        pill_of("p1", "search", "Je regarde les hôtels\u{00A0}?", n + 1.0),
-        pill_of("p1", "search", "Je cherche un taxi ?", n + 2.0),
+        pill_of("p1", "search", "Je regarde les hôtels\u{00A0}?", n),
+        pill_of("p1", "search", "Je cherche un taxi ?", n),
     );
     change(&config, |s| s.offers.extend([bagages.clone(), hotels.clone(), taxi.clone()]));
     let view = |config: &Config| {
@@ -707,16 +707,18 @@ fn j68_an_answered_pill_stays_on_its_plan_s_card() {
                                    w(&hotels, "waiting", "Je regarde les hôtels\u{00A0}?"),
                                    w(&taxi, "waiting", "Je cherche un taxi ?")]);
     for (o, yes) in [(&bagages, true), (&taxi, false)] {
+        let order = card_order(&load(&config), &o.id);
         let taken = answer(&config, "vie", &o.id, yes, n).unwrap();
-        pill_answered(&config, &taken, if yes { YES } else { NO });
+        pill_answered(&config, &taken, if yes { YES } else { NO }, order);
     }
     assert_eq!(view(&config), vec![w(&bagages, "accepted", "✓ Je te fais la liste de bagages"),
                                    w(&hotels, "waiting", "Je regarde les hôtels\u{00A0}?"),
                                    w(&taxi, "refused", "Je cherche un taxi ?")]);
     // the card still lists only the waiting one in `offers` (what an app before this reads)
     assert_eq!(pills_of(&config, "p1"), vec![hotels.id.clone()]);
+    let before = load(&config);
     for gone in expire(&config, n + 10.0 * DAY) {
-        pill_answered(&config, &gone, EXPIRED);
+        pill_answered(&config, &gone, EXPIRED, card_order(&before, &gone.id));
     }
     assert_eq!(view(&config)[1], w(&hotels, "expired", "Je regarde les hôtels\u{00A0}?"));
     assert_eq!(pill_done("Je regarde les hôtels\u{202F}?  "), "✓ Je regarde les hôtels");
