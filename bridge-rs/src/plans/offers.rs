@@ -839,7 +839,10 @@ pub fn draft(arguments: &Dict, agent: &str, kinds: &[&str], person: Tz, now: f64
     if !kinds.contains(&kind.as_str()) {
         return Err(not_done(format!("you can't {} here; don't offer it.", can_not_words(&kind))));
     }
-    let about = plain(arguments.get("about"), "about", ABOUT_MAX).map_err(not_done)?;
+    // what it is about as models give it (proactive-tune's bench: 14 refusals): their `topic` when no `about`, either
+    // cut at a word to its length
+    let given = [arguments.get("about"), arguments.get("topic")].into_iter().flatten().map(|v| text_arg(Some(v))).find(|t| !t.is_empty());
+    let about = plain(given.map(|t| json!(super::shortened(&t, ABOUT_MAX))).as_ref(), "about", ABOUT_MAX).map_err(not_done)?;
     spec_of(&spec, agent, &about, kinds, person, now, LABEL_MAX)
 }
 

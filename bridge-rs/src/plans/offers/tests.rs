@@ -906,3 +906,21 @@ fn bench_two_no_thanks_to_buying_quiet_buying_whatever_the_kind() {
     // 30 days, then it may again
     assert!(refused(&store, &plans, &page, None, PARIS, n + 31.0 * DAY).is_none());
 }
+
+/// Proactive-tune's bench (24/11): `offer_act` refused 14 times for « about: 1 to 40 characters » — the models gave
+/// `topic` (the smart offers' word) or a longer `about`, then wrote it again. Taken now: `topic` when no `about`, cut at
+/// a word to 40.
+#[test]
+fn bench_an_offer_s_subject_as_the_models_write_it_is_taken() {
+    let n = now();
+    let mut a = offer("search", "x");
+    a.remove("about");
+    a.insert("topic".into(), json!("Cadeau de Léa"));
+    assert_eq!(draft(&a, "vie", &all(), PARIS, n).unwrap().about, "Cadeau de Léa");
+    let long = offer("search", "Les chaussures de running neuves à trouver avant dimanche matin");
+    let about = draft(&long, "vie", &all(), PARIS, n).unwrap().about;
+    assert!(about.chars().count() <= ABOUT_MAX && about.ends_with('…') && about.starts_with("Les chaussures"), "{about}");
+    let mut none = offer("search", "x");
+    none.remove("about");
+    assert!(draft(&none, "vie", &all(), PARIS, n).unwrap_err().contains("about"), "nothing given: still asked");
+}

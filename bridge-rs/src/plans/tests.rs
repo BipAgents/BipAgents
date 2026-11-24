@@ -527,6 +527,11 @@ fn bench_a_habit_as_the_models_write_it_is_taken() {
     assert_eq!(run.days, "2,4,6", "Tuesday, Thursday, Saturday");
     let sunday = json!({"kind": "habit", "title": "Yoga", "moments": [{"what": "Yoga"}], "repeat": {"days": [7], "times": ["09:00"]}});
     assert_eq!(draft(&args(&sunday), "vie", PARIS, PARIS, now).unwrap().plan.repeat.unwrap().days, "0");
+    // a line too long for the card: cut at a word (the bench's « Joggen – Mo, Mi, Fr, 8 Uhr, 30 Minuten locker… »)
+    let long = json!({"kind": "habit", "title": "Joggen", "repeat": {"days": "daily", "times": ["08:00"]},
+                      "moments": [{"what": "Joggen am Morgen, dreißig Minuten locker im Park und danach ausgiebig dehnen nicht vergessen", "say": "Los!"}]});
+    let what = draft(&args(&long), "vie", PARIS, PARIS, now).unwrap().plan.moments[0].what.clone();
+    assert!(what.chars().count() <= WHAT_MAX && what.ends_with('…'), "{what}");
     // what is still refused says the shape the tool takes, so the next call is right
     let none = json!({"kind": "habit", "title": "Eau", "moments": [{"what": "Eau", "say": "Un verre ?"}]});
     let said = draft(&args(&none), "vie", PARIS, PARIS, now).unwrap_err();

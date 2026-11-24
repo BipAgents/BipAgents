@@ -638,6 +638,29 @@ fn text_arg(value: Option<&Value>) -> String {
     value.and_then(Value::as_str).map(str::trim).unwrap_or("").to_string()
 }
 
+/// `text` within `max` characters, cut at a word with « … » when longer (a card's short line a model wrote too long:
+/// bench of proactive-tune, a moment's `what` and an offer's `about` refused for a few characters, then written again).
+pub(crate) fn shortened(text: &str, max: usize) -> String {
+    let text = text.trim();
+    if text.chars().count() <= max {
+        return text.to_string();
+    }
+    let mut out = String::new();
+    for word in text.split_whitespace() {
+        if out.chars().count() + word.chars().count() + 2 > max {
+            break;
+        }
+        if !out.is_empty() {
+            out.push(' ');
+        }
+        out.push_str(word);
+    }
+    if out.is_empty() {
+        out = text.chars().take(max - 1).collect();
+    }
+    format!("{}…", out.trim_end_matches([',', ';', ':', '-', '—', '·', ' ']))
+}
+
 /// Plain text a card shows and the bridge says: no markup, no line break, links in https only.
 fn plain(value: Option<&Value>, field: &str, max: usize) -> Result<String, String> {
     let text = text_arg(value);
@@ -793,7 +816,7 @@ pub fn draft(arguments: &Dict, agent: &str, person: Tz, routines: Tz, now: f64) 
             });
             continue;
         }
-        let what = plain(item.get("what"), &format!("moment {}: what", i + 1), WHAT_MAX)?;
+        let what = plain(Some(&json!(shortened(&text_arg(item.get("what")), WHAT_MAX))), &format!("moment {}: what", i + 1), WHAT_MAX)?;
         // a moment that offers says nothing: a line to tell, a card to decide (plans/offers.rs)
         let offer = item.get("offer").filter(|o| !o.is_null()).cloned();
         if let Some(o) = &offer {
