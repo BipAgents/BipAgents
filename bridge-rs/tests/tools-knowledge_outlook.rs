@@ -18,6 +18,15 @@ use indexmap::IndexMap;
 use serde_json::{json, Value};
 
 
+/// The view's `outside` without Wellness (the shared fake's other agent, on no model the bridge can tell): Coach's line.
+fn coach_outside(shown: &Value) -> Value {
+    let mut outside = shown["outside"].clone();
+    if let Some(o) = outside.as_object_mut() {
+        o.remove("wellness");
+    }
+    outside
+}
+
 #[tokio::test]
 async fn off_by_default_nothing_shows() {
     let (url, _graph) = fake_graph().await;
@@ -361,26 +370,26 @@ async fn choice_b_an_agent_on_openai_codex_has_no_outlook_until_the_person_turns
     let (_, found) = tool(&app, "contacts_search", json!({"query": "léa"}), "h1").await;
     assert!(!found.contains("Léa Martin") && !found.contains("read now from Outlook"), "Outlook still read: {found}");
     let shown = app.get("/v1/outlook", &h).await.json();
-    assert_eq!((&shown["agents"], &shown["outside"]), (&json!([]), &json!({"coach": "OpenAI"})), "{shown}");
+    assert_eq!((&shown["agents"], &coach_outside(&shown)), (&json!([]), &json!({"coach": "OpenAI"})), "{shown}");
     // what they use changed from the app (Coach shown off, left out): Coach stays chosen, still off
     let mail_only = json!({"agents": [], "parts": {"mail": true, "calendar": false, "contacts": true}});
     let shown = app.send_json("PUT", "/v1/outlook/agents", &h, &mail_only).await.json();
     keep_key();
-    assert_eq!(shown["outside"], json!({"coach": "OpenAI"}), "{shown}");
+    assert_eq!(coach_outside(&shown), json!({"coach": "OpenAI"}), "{shown}");
     let (_, found) = tool(&app, "contacts_search", json!({"query": "léa"}), "h1").await;
     assert!(!found.contains("Léa Martin"), "{found}");
     // « Rallumer Outlook ? » → « Rallumer »
     let again = json!({"agents": ["coach"], "parts": {"mail": true, "calendar": false, "contacts": true}});
     let shown = app.send_json("PUT", "/v1/outlook/agents", &h, &again).await.json();
     keep_key();
-    assert_eq!((&shown["agents"], &shown["outside"]), (&json!(["coach"]), &json!({})), "{shown}");
+    assert_eq!((&shown["agents"], &coach_outside(&shown)), (&json!(["coach"]), &json!({})), "{shown}");
     let (failed, found) = tool(&app, "contacts_search", json!({"query": "léa"}), "h1").await;
     assert!(!failed && found.contains("Léa Martin"), "{found}");
     // another outside provider: off again
     std::fs::write(profile.join("config.yaml"), "model:\n  provider: anthropic\n  default: claude-sonnet-5-5\n").unwrap();
     let (_, found) = tool(&app, "contacts_search", json!({"query": "léa"}), "h1").await;
     assert!(!found.contains("Léa Martin"), "{found}");
-    assert_eq!(app.get("/v1/outlook", &h).await.json()["outside"], json!({"coach": "Anthropic"}));
+    assert_eq!(coach_outside(&app.get("/v1/outlook", &h).await.json()), json!({"coach": "Anthropic"}));
 }
 
 /// Review C5 of outlook-plus (with shared-memory-1.1's « Rallumer Outlook ? »), two accounts: Coach on OpenAI has
@@ -404,12 +413,12 @@ async fn review_c5_two_accounts_an_agent_on_an_outside_model_and_rallumer_outloo
     let profile = dir.path().join(".hermes/profiles/coach");
     std::fs::create_dir_all(&profile).unwrap();
     std::fs::write(profile.join("config.yaml"), "model:\n  provider: openai-codex\n  default: gpt-6.1\n").unwrap();
-    // both accounts connected with Coach chosen by an app that did not ask: off for its model in both
-    assert_eq!(connect(&app, &h, "good").await.0, 200);
-    let (status, shown) = connect(&app, &h, "second").await;
+    // both accounts connected without Coach (an agent off for its model sent with a sign-in is « Rallumer » answered)
+    assert_eq!(connect_with(&app, &h, "good", json!({"agents": []})).await.0, 200);
+    let (status, shown) = connect_with(&app, &h, "second", json!({"agents": []})).await;
     keep_key();
     assert_eq!((status, shown["accounts"].as_array().map(Vec::len)), (200, Some(2)), "{shown}");
-    assert_eq!(shown["outside"], json!({"coach": "OpenAI"}), "{shown}");
+    assert_eq!(coach_outside(&shown), json!({"coach": "OpenAI"}), "{shown}");
     for account in shown["accounts"].as_array().unwrap() {
         assert_eq!(account["agents"], json!([]), "Coach shown using an account: {shown}");
     }
@@ -419,17 +428,22 @@ async fn review_c5_two_accounts_an_agent_on_an_outside_model_and_rallumer_outloo
     // « Rallumer Outlook ? » → « Rallumer » in the first account: Coach's, both accounts
     let shown = app.send_json("PUT", "/v1/outlook/agents", &h, &json!({"account": 1, "agents": ["coach"]})).await.json();
     keep_key();
-    assert_eq!(shown["outside"], json!({}), "{shown}");
+    assert_eq!(coach_outside(&shown), json!({}), "{shown}");
     assert!(!tools_named(&app, "contacts_").await.is_empty(), "Coach allowed, no contacts tool");
+    // chosen in the second account too: nothing asked again (« Rallumer » is Coach's on OpenAI)
+    let shown = app.send_json("PUT", "/v1/outlook/agents", &h, &json!({"account": 2, "agents": ["coach"]})).await.json();
+    keep_key();
+    assert_eq!(coach_outside(&shown), json!({}), "{shown}");
+    assert!(shown["accounts"].as_array().unwrap().iter().all(|a| a["agents"] == json!(["coach"])), "{shown}");
     // the second account disconnected: Coach still chosen in the first, still allowed
     assert_eq!(app.send_json("DELETE", "/v1/outlook?account=2", &h, &json!({})).await.status, 200);
     keep_key();
     let shown = app.get("/v1/outlook", &h).await.json();
-    assert_eq!((&shown["agents"], &shown["outside"]), (&json!(["coach"]), &json!({})), "{shown}");
+    assert_eq!((&shown["agents"], &coach_outside(&shown)), (&json!(["coach"]), &json!({})), "{shown}");
     // the last one disconnected: asked again next time
     assert_eq!(app.send_json("DELETE", "/v1/outlook?account=1", &h, &json!({})).await.status, 200);
     keep_key();
-    assert_eq!(app.get("/v1/outlook", &h).await.json()["outside"], json!({"coach": "OpenAI"}));
+    assert_eq!(coach_outside(&app.get("/v1/outlook", &h).await.json()), json!({"coach": "OpenAI"}));
 }
 
 /// Only the rights of what the person switched on (as OneDrive asks its write right only once an agent writes): the
