@@ -611,6 +611,19 @@ pub fn cancelled_line(lang: &str, title: &str) -> String {
 
 const DAY_WORDS: [&str; 7] = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
 
+/// A day of the week as models write it (« mon », « Mon. », « monday », « thurs »): its index from Monday. Only a day's
+/// whole word: « monthly » is not Monday.
+fn day_of(word: &str) -> Option<usize> {
+    let word = word.trim().trim_end_matches('.').to_lowercase();
+    const FULL: [&str; 7] = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"];
+    const ALSO: [(&str, usize); 4] = [("tues", 1), ("thur", 3), ("thurs", 3), ("weds", 2)];
+    DAY_WORDS
+        .iter()
+        .position(|w| *w == word)
+        .or_else(|| FULL.iter().position(|w| *w == word))
+        .or_else(|| ALSO.iter().find(|(w, _)| *w == word).map(|(_, i)| *i))
+}
+
 fn hour_minute(text: &str) -> Option<(u32, u32)> {
     let (h, m) = text.trim().split_once(':')?;
     let (h, m): (u32, u32) = (h.parse().ok()?, m.parse().ok()?);
@@ -726,32 +739,13 @@ pub fn draft(arguments: &Dict, agent: &str, person: Tz, routines: Tz, now: f64) 
         repeat_arg = list.iter().find_map(|m| m.get("repeat").filter(|v| v.is_object()).cloned());
     }
     // a habit written as one moment per time or day (bench of proactive-tune: GLM and DeepSeek, one of each two
-    // habits): the first moment's words, its rhythm from the moments when it gives none
+    // habits): one moment, its rhythm from the moments when it gives none. Only when it is one thing said the same way
+    // at each moment (the review of 24/11: « course » Monday 18:30 and « piscine » Wednesday 07:00 became « course »
+    // both days at both times), on days × times; else refused with the shape, never guessed
     if habit && list.len() > 1 && list.len() <= MAX_MOMENTS * 2 {
-        let at_of = |m: &Value| parse_at(&text_arg(m.get("at")), person);
-        let ats: Vec<f64> = list.iter().filter_map(at_of).collect();
-        let mut rhythm = repeat_arg.clone().unwrap_or_else(|| json!({}));
-        if rhythm.get("times").is_none_or(|t| t.as_array().is_some_and(|a| a.is_empty())) && !ats.is_empty() {
-            let mut times: Vec<String> = ats
-                .iter()
-                .filter_map(|a| person.timestamp_opt(*a as i64, 0).single().map(|d| d.format("%H:%M").to_string()))
-                .collect();
-            times.sort();
-            times.dedup();
-            rhythm["times"] = json!(times);
-        }
-        if rhythm.get("days").is_none() {
-            let mut days: Vec<&str> = ats
-                .iter()
-                .filter_map(|a| person.timestamp_opt(*a as i64, 0).single())
-                .map(|d| DAY_WORDS[d.weekday().num_days_from_monday() as usize])
-                .collect();
-            days.sort_by_key(|d| DAY_WORDS.iter().position(|w| w == d));
-            days.dedup();
-            rhythm["days"] = if days.len() <= 1 { json!("daily") } else { json!(days) };
-        }
-        repeat_arg = Some(rhythm);
-        list.truncate(1);
+        let merged = merge_habit_moments(&list, repeat_arg.as_ref(), person)?;
+        repeat_arg = Some(merged.1);
+        list = vec![merged.0];
     }
     if list.is_empty() || list.len() > MAX_MOMENTS || (habit && list.len() != 1) {
         return Err(if habit {
@@ -953,6 +947,74 @@ pub fn draft(arguments: &Dict, agent: &str, person: Tz, routines: Tz, now: f64) 
     Ok(Draft { plan, routes })
 }
 
+/// A habit's line without what tells its moments apart (« Course (lundi) » → « course »), to compare them.
+fn habit_words(text: &str) -> String {
+    let t = text.trim();
+    let t = match t.rfind(" (") {
+        Some(i) if t.ends_with(')') => &t[..i],
+        _ => t,
+    };
+    t.trim().to_lowercase()
+}
+
+/// A habit written as one moment per time or day, made one moment and its rhythm (`repeat` as given, its times and
+/// days from the moments when it gives none). Err, the shape, when the moments are not one thing said the same way
+/// (their `what` and `say`), when they are not each of their days at each of their times, or when all are on one day
+/// and no days are given (every day, or that day each week?).
+fn merge_habit_moments(list: &[Value], given: Option<&Value>, person: Tz) -> Result<(Value, Value), String> {
+    let one_habit = || format!("moments: a habit is one moment, said the same way at each of its times (repeat.times); \
+for another activity or other words, one plan_propose each ({REPEAT_EXAMPLE})");
+    for field in ["what", "say"] {
+        let mut said: Vec<String> = list.iter().map(|m| habit_words(&text_arg(m.get(field)))).filter(|w| !w.is_empty()).collect();
+        said.dedup();
+        if said.len() > 1 {
+            return Err(one_habit());
+        }
+    }
+    let at_of = |m: &Value| parse_at(&text_arg(m.get("at")), person);
+    let pairs: Vec<(usize, String)> = list
+        .iter()
+        .filter_map(at_of)
+        .filter_map(|a| person.timestamp_opt(a as i64, 0).single())
+        .map(|d| (d.weekday().num_days_from_monday() as usize, d.format("%H:%M").to_string()))
+        .collect();
+    let mut rhythm = given.cloned().unwrap_or_else(|| json!({}));
+    let mut times: Vec<String> = pairs.iter().map(|(_, t)| t.clone()).collect();
+    times.sort();
+    times.dedup();
+    let mut days: Vec<usize> = pairs.iter().map(|(d, _)| *d).collect();
+    days.sort();
+    days.dedup();
+    if !pairs.is_empty() {
+        let mut distinct = pairs.clone();
+        distinct.sort();
+        distinct.dedup();
+        if distinct.len() != days.len() * times.len() {
+            return Err(format!("moments: each day at the same times; for other times on other days, one plan_propose \
+each ({REPEAT_EXAMPLE})"));
+        }
+    }
+    if rhythm.get("times").is_none_or(|t| t.as_array().is_some_and(|a| a.is_empty())) && !times.is_empty() {
+        rhythm["times"] = json!(times);
+    }
+    if rhythm.get("days").is_none() && !days.is_empty() {
+        if days.len() == 1 {
+            return Err(format!("repeat.days: which days (daily, weekdays, weekends or a list) ({REPEAT_EXAMPLE})"));
+        }
+        rhythm["days"] = json!(days.iter().map(|d| DAY_WORDS[*d]).collect::<Vec<_>>());
+    }
+    // its words: the first moment's, without what told one day from another
+    let mut moment = list[0].clone();
+    let first = text_arg(list[0].get("what"));
+    let first = first.trim();
+    if list.iter().any(|m| text_arg(m.get("what")).trim() != first) {
+        if let Some(i) = first.rfind(" (").filter(|_| first.ends_with(')')) {
+            moment["what"] = json!(first[..i].trim());
+        }
+    }
+    Ok((moment, rhythm))
+}
+
 /// A habit's rhythm read: its first day is its moment's `at` (else tomorrow, on the routines' clock).
 fn read_repeat(value: &Value, at: f64, routines: Tz, now: f64) -> Result<Repeat, String> {
     // one day or a list in one text (« mon, wed, fri »): its list
@@ -960,9 +1022,7 @@ fn read_repeat(value: &Value, at: f64, routines: Tz, now: f64) -> Result<Repeat,
         Some(Value::String(word)) if word.contains([',', ' ']) && !matches!(word.trim(), "every day") => Some(Value::Array(
             word.split([',', ' ']).map(str::trim).filter(|w| !w.is_empty()).map(|w| json!(w)).collect(),
         )),
-        Some(Value::String(word)) if DAY_WORDS.iter().any(|w| word.trim().to_lowercase().starts_with(w)) => {
-            Some(json!([word]))
-        }
+        Some(Value::String(word)) if day_of(word).is_some() => Some(json!([word])),
         Some(Value::Number(n)) => Some(json!([n])),
         other => other.cloned(),
     };
@@ -971,22 +1031,20 @@ fn read_repeat(value: &Value, at: f64, routines: Tz, now: f64) -> Result<Repeat,
             "daily" | "every day" | "everyday" => ("*".to_string(), "daily".to_string()),
             "weekdays" => ("1-5".to_string(), "weekdays".to_string()),
             "weekends" => ("0,6".to_string(), "weekends".to_string()),
-            _ => return Err("repeat.days: daily, weekdays, weekends or a list of days".into()),
+            // « monthly », « every other week »…: not a habit's rhythm (it used to be « mon », every Monday)
+            _ => return Err("repeat.days: daily, weekdays, weekends or a list of days of the week".into()),
         },
         Some(Value::Array(list)) => {
             let mut picked: Vec<usize> = Vec::new();
             for d in list {
-                // a day's number as models write it: 1 Monday … 6 Saturday, 7 or 0 Sunday (ISO and cron agree but
-                // for Sunday)
+                // a day's number as models write it, ISO's: 1 Monday … 7 Sunday. 0 is refused, never guessed: Sunday
+                // for cron, Monday for Python (the review of 24/11: [0, 2, 4] read Sunday, Tuesday, Thursday)
                 let i = match d.as_u64() {
                     Some(n @ 1..=7) => Some(n as usize - 1),
-                    Some(0) => Some(6),
-                    _ => {
-                        let word = d.as_str().unwrap_or("").trim().to_lowercase();
-                        DAY_WORDS.iter().position(|w| word.starts_with(w))
-                    }
+                    Some(_) => None,
+                    None => d.as_str().and_then(day_of),
                 };
-                let i = i.ok_or("repeat.days: mon, tue, wed, thu, fri, sat, sun")?;
+                let i = i.ok_or("repeat.days: mon, tue, wed, thu, fri, sat, sun (or 1 Monday … 7 Sunday)")?;
                 if !picked.contains(&i) {
                     picked.push(i);
                 }

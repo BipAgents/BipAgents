@@ -541,15 +541,70 @@ fn bench_a_habit_as_the_models_write_it_is_taken() {
         {"at": "2026-11-25T09:00", "what": "Verre d'eau du matin", "say": "Un grand verre d'eau 💧",
          "repeat": {"days": "daily"}},
         {"at": "2026-11-25T13:00", "what": "Verre d'eau du midi", "say": "Ta gourde 💧"}]});
+    // its moments said differently (« Ta gourde » at 13:00): refused with the shape, never one moment's words for all
+    // (the review of 24/11)
+    let said = draft(&args(&water), "vie", PARIS, PARIS, now).unwrap_err();
+    assert!(said.contains("said the same way") && said.contains("\"repeat\": {\"days\""), "{said}");
+    let water = json!({"kind": "habit", "title": "Boire plus d'eau", "moments": [
+        {"at": "2026-11-25T09:00", "what": "Verre d'eau", "say": "Un grand verre d'eau 💧", "repeat": {"days": "daily"}},
+        {"at": "2026-11-25T13:00", "what": "Verre d'eau", "say": "Un grand verre d'eau 💧"}]});
     let plan = draft(&args(&water), "vie", PARIS, PARIS, now).unwrap().plan;
     assert_eq!(plan.moments.len(), 1);
-    assert_eq!(plan.moments[0].what, "Verre d'eau du matin");
+    assert_eq!(plan.moments[0].what, "Verre d'eau");
     assert_eq!(plan.repeat.unwrap().times, vec!["09:00".to_string(), "13:00".to_string()]);
     // one moment per day (GLM « courir »): its rhythm given stays; none given, the days from the moments
     let run = json!({"kind": "habit", "title": "Courir", "moments": [
         {"at": "2026-11-30T08:00", "what": "Course (lundi)", "say": "Ta course !"},
         {"at": "2026-12-02T08:00", "what": "Course (mercredi)", "say": "Ta course !"},
         {"at": "2026-12-05T08:00", "what": "Course (samedi)", "say": "Ta course !"}]});
-    let r = draft(&args(&run), "vie", PARIS, PARIS, now).unwrap().plan.repeat.unwrap();
+    let plan = draft(&args(&run), "vie", PARIS, PARIS, now).unwrap().plan;
+    let r = plan.repeat.unwrap();
     assert_eq!((r.days.as_str(), r.times.clone()), ("1,3,6", vec!["08:00".to_string()]));
+    assert_eq!(plan.moments[0].what, "Course", "what told one day from another left out");
+}
+
+/// Fixes of the review (24/11): `plan_propose` reads a habit's rhythm as the tool writes it, refuses with the shape what
+/// it would have to guess, and never merges moments that say different things.
+#[test]
+fn fixes_a_habits_rhythm_is_read_never_guessed() {
+    let now = at("2026-11-24T14:00:00+01:00");
+    let habit = |repeat: Value| json!({"kind": "habit", "title": "Yoga", "moments": [{"what": "Yoga", "say": "Yoga ?"}],
+                                       "repeat": repeat});
+    // « monthly » is not Monday any more; nor any word that only starts like a day
+    for days in [json!("monthly"), json!("Monthly"), json!("every other week"), json!(["monthly"]), json!("sunny")] {
+        let said = draft(&args(&habit(json!({"days": days, "times": ["09:00"]}))), "vie", PARIS, PARIS, now).unwrap_err();
+        assert!(said.contains("repeat.days") && said.contains("\"repeat\": {\"days\""), "{days}: {said}");
+    }
+    // the days as words, whole or short, one or a list
+    for (days, cron) in [(json!("mon"), "1"), (json!("Monday"), "1"), (json!(["Mon.", "thurs", "Sunday"]), "1,4,0"),
+                         (json!("tue, fri"), "2,5"), (json!("weekdays"), "1-5")] {
+        let r = draft(&args(&habit(json!({"days": days, "times": ["09:00"]}))), "vie", PARIS, PARIS, now)
+            .unwrap_or_else(|e| panic!("{days}: {e}")).plan.repeat.unwrap();
+        assert_eq!(r.days, cron, "{days}");
+    }
+    // numbers: ISO's (1 Monday … 7 Sunday); 0, 8 or a fraction refused with the shape (Python's 0 is Monday)
+    let r = draft(&args(&habit(json!({"days": [1, 3, 7], "times": ["09:00"]}))), "vie", PARIS, PARIS, now).unwrap().plan.repeat.unwrap();
+    assert_eq!(r.days, "1,3,0");
+    for days in [json!([0, 2, 4]), json!([8]), json!([1.5]), json!(0)] {
+        let said = draft(&args(&habit(json!({"days": days, "times": ["09:00"]}))), "vie", PARIS, PARIS, now).unwrap_err();
+        assert!(said.contains("repeat.days") && said.contains("\"repeat\": {\"days\""), "{days}: {said}");
+    }
+    // two activities at two moments: refused, never « course » both days at both times
+    let two = json!({"kind": "habit", "title": "Sport", "moments": [
+        {"at": "2026-11-30T18:30", "what": "Course", "say": "Ta course !"},
+        {"at": "2026-12-02T07:00", "what": "Piscine", "say": "Ta piscine !"}]});
+    let said = draft(&args(&two), "vie", PARIS, PARIS, now).unwrap_err();
+    assert!(said.contains("one plan_propose each"), "{said}");
+    // one thing, but other times on other days: refused too (not every day at every time)
+    let mixed = json!({"kind": "habit", "title": "Course", "moments": [
+        {"at": "2026-11-30T18:30", "what": "Course", "say": "Ta course !"},
+        {"at": "2026-12-02T07:00", "what": "Course", "say": "Ta course !"}]});
+    let said = draft(&args(&mixed), "vie", PARIS, PARIS, now).unwrap_err();
+    assert!(said.contains("each day at the same times"), "{said}");
+    // two moments on one day and no days given: every day, or that day each week? asked, not « daily »
+    let one_day = json!({"kind": "habit", "title": "Eau", "moments": [
+        {"at": "2026-11-25T09:00", "what": "Eau", "say": "Un verre ?"},
+        {"at": "2026-11-25T13:00", "what": "Eau", "say": "Un verre ?"}]});
+    let said = draft(&args(&one_day), "vie", PARIS, PARIS, now).unwrap_err();
+    assert!(said.contains("repeat.days: which days"), "{said}");
 }
