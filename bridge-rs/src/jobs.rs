@@ -90,6 +90,11 @@ pub const HINT_STEP_GAP: f64 = 60.0;
 pub const UNSEEN_DAYS: f64 = 7.0;
 /// An agent's proposals waiting for the person.
 pub const PROPOSALS_MAX: usize = 5;
+/// A task waiting for room (« memory », « space ») this long is told to the person, once (`tell_long_waits`): Alex's
+/// rule, a task never waits without end in silence. Fifteen minutes: a wait of a few minutes is the usual case (another
+/// task's step ending, its browser idle after ten minutes, a heavy page's peak gone: the minute's check starts it), so
+/// it isn't told; past a quarter of an hour the person who asked is expecting news and the lack of room is lasting.
+pub const WAIT_TOLD_AFTER: f64 = 15.0 * 60.0;
 /// A task paused because the place was too full (heavy_work.rs).
 pub const SPACE_REASON: &str = "space";
 /// A task that would browse in a browser of its own, waiting for free memory (`[jobs] browser_free_mb`).
@@ -166,6 +171,7 @@ pub fn drafts_line(config: &crate::config::Config, agent: &crate::config::AgentC
 pub const DONE_BODY: &str = "Tâche de fond terminée";
 pub const PAUSED_BODY: &str = "Tâche de fond en pause";
 pub const PROPOSED_BODY: &str = "Tâche de fond proposée";
+pub const WAITING_BODY: &str = "Tâche de fond en attente";
 
 /// A push's body (`DONE_BODY`…) in `agent`'s language: what the phone shows, as it is (Android), or when the iOS
 /// catalog has no such key.
@@ -174,6 +180,7 @@ fn push_body(config: &crate::config::Config, agent: &AgentConfig, body: &str) ->
     match body {
         DONE_BODY => n.task_done,
         PAUSED_BODY => n.task_paused,
+        WAITING_BODY => n.task_waiting,
         _ => n.task_proposed,
     }
 }
@@ -977,14 +984,10 @@ impl Jobs {
         !running.is_empty()
     }
 
-    /// Whether a task of `agent` would get a browser of its own (browsers.rs `setup_task`) and the place's free memory
-    /// is under `[jobs] browser_free_mb`.
+    /// Whether a task of `agent` would get a browser of its own (browsers.rs `setup_task`) and the server's free memory
+    /// is short for it (`memory_short_in`).
     fn memory_short(&self, agent: &str) -> bool {
-        let config = self.config.get();
-        let floor = config.jobs.browser_free_mb;
-        floor > 0
-            && crate::browsers::gives_task_browsers(&config, agent)
-            && (self.memory)().is_some_and(|free| free < floor)
+        memory_short_in(&self.config.get(), agent, &self.memory)
     }
 
     /// A waiting task whose agent was deleted: ended as failed (« this agent isn't on this install any more »), its
@@ -1033,6 +1036,52 @@ impl Jobs {
             }
         }
         0
+    }
+
+    /// The tasks waiting for room (« memory », « space ») past `WAIT_TOLD_AFTER`: the person told once, in plain words,
+    /// that the task goes by itself as soon as there is room and that they may cancel it (called every minute,
+    /// heavy_work.rs `backstop`). A wait is timed from its queueing (`launch`), else from the first minute it is seen
+    /// (a task the backstop paused mid-run). How many were told.
+    pub async fn tell_long_waits(&self) -> usize {
+        let config = self.config.get();
+        let now = py::time_time();
+        let mut told = 0;
+        // read again just before it is written: a task started meanwhile (a person's « Reprendre ») is never put back
+        let waiting = |id: &str| {
+            load(&config, id).filter(|j| {
+                state_of(j) == "paused"
+                    && j.get("reason").and_then(Value::as_str).is_some_and(|r| [MEMORY_REASON, SPACE_REASON].contains(&r))
+            })
+        };
+        for job in tasks(&config) {
+            let id = tk::str_or_empty(job.get("id"));
+            let Some(mut job) = waiting(&id) else { continue };
+            let reason = tk::str_or_empty(job.get("reason"));
+            let Some(since) = job.get("waiting_since").and_then(Value::as_f64) else {
+                job.insert("waiting_since".into(), json!(now));
+                let _ = save(&config, &job);
+                continue;
+            };
+            if now - since < WAIT_TOLD_AFTER || job.get("wait_told") == Some(&json!(true)) {
+                continue;
+            }
+            job.insert("wait_told".into(), json!(true));
+            if save(&config, &job).is_err() {
+                continue; // never told again and again for a file that can't be written
+            }
+            let Ok(agent) = self.agent(&agent_of(&job)) else { continue };
+            tracing::info!(agent = %agent.name, job = %tk::str_or_empty(job.get("id")), reason = %reason, minutes = ((now - since) / 60.0) as u64,
+                "a task waiting long for room: the person told");
+            if let Some(tell) = &self.tell {
+                let body = push_body(&config, &agent, WAITING_BODY);
+                let why = crate::names::names(&crate::handback::language_of(&config, &agent)).task_waiting_why;
+                let line = format!("{body}{} {}\n{why}", colon(body), tk::str_or_empty(job.get("title")));
+                let session = job.get("session_id").filter(|v| !v.is_null()).map(py::py_str);
+                tell(agent.name.clone(), session, line, tk::str_or_empty(job.get("id")), body.into()).await;
+            }
+            told += 1;
+        }
+        told
     }
 
     /// The credit back (a pack, the new month): the tasks and mail scans paused for it go on by themselves.
@@ -1092,27 +1141,33 @@ impl Jobs {
             tracing::info!(agent = %agent.name, job = %tk::str_or_empty(job.get("id")), "job queued: place moving");
             return Ok(());
         }
-        let (c, name) = (self.config.get(), agent.name.clone());
-        if let Some(why) = tokio::task::spawn_blocking(move || crate::heavy_work::task_waits(&c, &name)).await? {
-            // The place's room as heavy_work reads it (heavy_work.rs): queued, started by itself once there is room.
-            job.insert("state".into(), json!("paused"));
-            job.insert("reason".into(), json!(SPACE_REASON));
-            job.insert("queued_text".into(), json!(text));
-            save(&self.config.get(), job)?;
-            tracing::info!(agent = %agent.name, job = %tk::str_or_empty(job.get("id")), why, "job queued: no room now");
-            return Ok(());
-        }
-        // a browser of its own (browsers.rs `setup_task`) needs free memory: short of it, the task waits its turn
-        // (Alex 20/11, never refused), started by `resume_after_memory` once there is room
-        if self.memory_short(&agent.name) {
-            job.insert("state".into(), json!("paused"));
-            job.insert("reason".into(), json!(MEMORY_REASON));
-            job.insert("queued_text".into(), json!(text));
-            save(&self.config.get(), job)?;
-            tracing::info!(agent = %agent.name, job = %tk::str_or_empty(job.get("id")), "job queued: free memory short for its browser");
-            self.hint_apps(&agent.name, &tk::str_or_empty(job.get("id")), "paused").await;
-            return Ok(());
-        }
+        let (c, name, memory) = (self.config.get(), agent.name.clone(), self.memory.clone());
+        // both checks and the start's hold at once (`start_check`): starts at once each see the others' browsers
+        let browser_start = match tokio::task::spawn_blocking(move || start_check(&c, &name, &memory)).await? {
+            Ok(hold) => hold,
+            Err(StartWait::Room(why)) => {
+                // The place's room as heavy_work reads it (heavy_work.rs): queued, started by itself once there is room.
+                job.insert("state".into(), json!("paused"));
+                job.insert("reason".into(), json!(SPACE_REASON));
+                job.insert("queued_text".into(), json!(text));
+                waiting_from_now(job);
+                save(&self.config.get(), job)?;
+                tracing::info!(agent = %agent.name, job = %tk::str_or_empty(job.get("id")), why, "job queued: no room now");
+                return Ok(());
+            }
+            Err(StartWait::Memory) => {
+                // a browser of its own (browsers.rs `setup_task`) needs free memory: short of it, the task waits its
+                // turn (Alex 20/11, never refused), started by `resume_after_memory` once there is room
+                job.insert("state".into(), json!("paused"));
+                job.insert("reason".into(), json!(MEMORY_REASON));
+                job.insert("queued_text".into(), json!(text));
+                waiting_from_now(job);
+                save(&self.config.get(), job)?;
+                tracing::info!(agent = %agent.name, job = %tk::str_or_empty(job.get("id")), "job queued: free memory short for its browser");
+                self.hint_apps(&agent.name, &tk::str_or_empty(job.get("id")), "paused").await;
+                return Ok(());
+            }
+        };
         let refused = |err: HermesError| -> anyhow::Error {
             match &err {
                 HermesError::Http { status, .. } => JobError(format!("the agent refused the task ({status})")).into(),
@@ -1192,10 +1247,13 @@ impl Jobs {
             ("finished", Value::Null),
             ("runs", json!(runs)),
             ("stopping", Value::Null),
+            ("waiting_since", Value::Null),
+            ("wait_told", Value::Null),
         ] {
             job.insert(key.into(), value);
         }
         save(&self.config.get(), job)?;
+        drop(browser_start); // its browser counted by its folder from now on (`task_browsers`)
         unstarted.disarm();
         let id = tk::str_or_empty(job.get("id"));
         self.follow(&id);
@@ -2289,6 +2347,114 @@ pub fn router() -> Router<AppState> {
         .route("/jobs/{job_id}/resume", post(resume_route))
         .route("/jobs/{job_id}/seen", post(seen_route))
         .route("/jobs/{job_id}", delete(forget_route))
+}
+
+/// A task queued for room: its wait timed from now, unless it was waiting already (`tell_long_waits`).
+fn waiting_from_now(job: &mut Dict) {
+    if !job.get("waiting_since").is_some_and(Value::is_number) {
+        job.insert("waiting_since".into(), json!(py::time_time()));
+    }
+}
+
+/// Why a task can't start now (`start_check`): the place's room (heavy_work.rs `task_gate`: « space », « busy »), or the
+/// server's free memory for its browser (« memory »).
+enum StartWait {
+    Room(&'static str),
+    Memory,
+}
+
+/// One start's checks at a time on this bridge: the room, then the server's memory, then its browser held as
+/// starting (`BrowserStart`) before the next start reads them. Two starts at once (a model's parallel start_task,
+/// two devices) each read the same room and went, both as « the first ».
+static START_GATE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Task browsers past their start's check and not yet counted by their folder (`task_browsers`), by browsers' root
+/// (one place: tests each have their own).
+static STARTING: LazyLock<std::sync::Mutex<HashMap<String, u64>>> = LazyLock::new(Default::default);
+
+/// A task browser starting (`start_check`), counted in `task_browsers` until dropped (once its task is saved
+/// running, its folder counts it; or when the start fails).
+pub struct BrowserStart(Option<String>);
+
+impl BrowserStart {
+    fn hold(config: &crate::config::Config, agent: &str) -> BrowserStart {
+        if !crate::browsers::gives_task_browsers(config, agent) {
+            return BrowserStart(None);
+        }
+        let root = config.browser.root.clone();
+        *STARTING.lock().unwrap_or_else(|e| e.into_inner()).entry(root.clone()).or_default() += 1;
+        BrowserStart(Some(root))
+    }
+}
+
+impl Drop for BrowserStart {
+    fn drop(&mut self) {
+        let Some(root) = self.0.take() else { return };
+        let mut starting = STARTING.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(n) = starting.get_mut(&root) {
+            *n = n.saturating_sub(1);
+            if *n == 0 {
+                starting.remove(&root);
+            }
+        }
+    }
+}
+
+/// `launch`'s checks for a task of `agent`, under `START_GATE`: the place's room (on the offer), the server's free
+/// memory for a browser of its own, then that browser held as starting.
+fn start_check(config: &crate::config::Config, agent: &str, memory: &MemoryProbe) -> Result<BrowserStart, StartWait> {
+    let _gate = START_GATE.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(why) = crate::heavy_work::task_waits(config, agent) {
+        return Err(StartWait::Room(why));
+    }
+    if memory_short_in(config, agent, memory) {
+        return Err(StartWait::Memory);
+    }
+    Ok(BrowserStart::hold(config, agent))
+}
+
+/// The place's task browsers that take memory or soon will (24/11): those of a task running or stopping, and those
+/// starting (`BrowserStart`). `unstarted`: of these, the ones whose container hasn't started yet (no unit: it starts on
+/// the task's first call), so not in any memory read yet.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct TaskBrowsers {
+    pub live: u64,
+    pub unstarted: u64,
+}
+
+pub fn task_browsers(config: &crate::config::Config) -> TaskBrowsers {
+    let mut found = TaskBrowsers::default();
+    let mut host: Option<crate::browsers::Host> = None;
+    for entry in std::fs::read_dir(&config.browser.root).into_iter().flatten().flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let (Some(_), Some((_, job))) = (crate::browsers::task_browser_agent(&name), name.split_once("--")) else {
+            continue;
+        };
+        if !load(config, job).is_some_and(|j| ["running", "stopping"].contains(&state_of(&j).as_str())) {
+            continue; // a paused task's browser: stopped once idle, checked again at its resume
+        }
+        found.live += 1;
+        if !host.get_or_insert_with(|| crate::browsers::Host::real(config)).unit_path(&name).exists() {
+            found.unstarted += 1;
+        }
+    }
+    let starting = STARTING.lock().unwrap_or_else(|e| e.into_inner()).get(&config.browser.root).copied().unwrap_or(0);
+    found.live += starting;
+    found.unstarted += starting;
+    found
+}
+
+/// A task of `agent` would get a browser of its own (browsers.rs `setup_task`) and the server's free memory
+/// (MemAvailable) is under `[jobs] browser_free_mb` for it and for each of the place's task browsers not started yet
+/// (`task_browsers`: their memory isn't taken yet). The only memory check of the place's first task browser (24/11:
+/// heavy_work.rs `browser_fits`), so the server never swaps for it.
+fn memory_short_in(config: &crate::config::Config, agent: &str, memory: &MemoryProbe) -> bool {
+    let floor = config.jobs.browser_free_mb;
+    if floor == 0 || !crate::browsers::gives_task_browsers(config, agent) {
+        return false;
+    }
+    let Some(free) = memory() else { return false };
+    free < floor * (1 + task_browsers(config).unstarted)
 }
 
 /// A task's own browser set up by `launch`, removed again unless the task started (`disarm`).
