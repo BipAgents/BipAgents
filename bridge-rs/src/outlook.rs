@@ -348,6 +348,13 @@ pub fn key_account(key: &str) -> Option<AccountId> {
     key.strip_prefix(&format!("{BOX_ID}-"))?.parse().ok()
 }
 
+/// The highest account number a standing rule (or its card) or a routine still names (`outlook-<n>`); 0: none.
+fn highest_number_set(config: &Config) -> AccountId {
+    let rules = crate::mail_rules::rules_of(config, None).into_iter().chain(crate::mail_rules::cards_of(config, None));
+    let routines = crate::triggers::load(config).triggers.into_iter().filter_map(|t| t.mail).map(|m| m.account);
+    rules.map(|r| r.account).chain(routines).filter_map(|k| key_account(&k)).max().unwrap_or(0)
+}
+
 /// The key of the « Toujours » for adds and changes in account `id`'s default calendar (the first account's is
 /// `calendar_write:outlook`, as before; another's `calendar_write:outlook:<id>`): apart from Google Calendar's, and
 /// each account's apart from the others'.
@@ -695,7 +702,12 @@ pub async fn finish(config: &Config, query: HashMap<String, String>) -> ApiResul
             return Err(coded(409, "too_many", &format!("at most {MAX_ACCOUNTS} Microsoft accounts")));
         }
         // a new number, never one given before (review B2): an account disconnected keeps its number to itself
-        let id = kept.unwrap_or_else(|| accounts_in(&stored).iter().map(|a| a.id).max().unwrap_or(0).max(stored.outlook_last) + 1);
+        // the counter can be 0 or lost (an account kept before it, a rollback that rewrote the store): the numbers
+        // still named by standing rules and routines are never given again either
+        let id = kept.unwrap_or_else(|| {
+            let kept_max = accounts_in(&stored).iter().map(|a| a.id).max().unwrap_or(0);
+            kept_max.max(stored.outlook_last).max(highest_number_set(config)) + 1
+        });
         stored.outlook_last = stored.outlook_last.max(id);
         let mut agents = kept.and_then(|id| account_in(&stored, id)).map(|a| a.link.agents.clone()).unwrap_or_default();
         for a in &flow.agents {
@@ -786,6 +798,7 @@ pub async fn disconnect(config: &Config, id: Option<AccountId>) -> ApiResult<(Va
         let missing = || if config.outlook.enabled { not_connected() } else { off() };
         let id = id.or_else(|| stored.outlook.as_ref().map(|a| a.id)).ok_or_else(missing)?;
         let account = take_account(&mut stored, id).ok_or_else(missing)?;
+        stored.outlook_last = stored.outlook_last.max(id);
         store.write(&stored)?;
         account
     };
