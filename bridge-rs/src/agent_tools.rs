@@ -2431,6 +2431,12 @@ async fn mcp_call(
         wrote(&agent.name, &name, &arguments, &mut result);
         return Ok(answer(result));
     }
+    if name == crate::drives_write::TOOL {
+        // a file saved in the person's online documents: its card, or their level (drives_write.rs, person_ok.rs)
+        let mut result = crate::drives_write::call(&state, &agent, &arguments).await;
+        wrote(&agent.name, &name, &arguments, &mut result);
+        return Ok(answer(result));
+    }
     if crate::obsidian::TOOL_NAMES.contains(&name.as_str()) {
         // the person's Obsidian notes: each write with its card (obsidian.rs, person_ok.rs)
         let mut result = crate::obsidian::call(&state, &agent, &name, &arguments).await;

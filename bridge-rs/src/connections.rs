@@ -619,7 +619,13 @@ pub(crate) async fn token_request(
     match answer {
         Value::Object(map) if (200..300).contains(&status) && s(&map, "access_token").is_some() => Ok(map),
         other => {
-            let why = other.get("error").and_then(Value::as_str).unwrap_or("no access token").to_string();
+            let mut why = other.get("error").and_then(Value::as_str).unwrap_or("no access token").to_string();
+            // Microsoft's own code (« AADSTS7000218 »: a secret asked of a public client), for the logs
+            if let Some(code) = other.get("error_description").and_then(Value::as_str).and_then(|d| {
+                d.split(|c: char| !c.is_ascii_alphanumeric()).find(|w| w.starts_with("AADSTS"))
+            }) {
+                why = format!("{why} {code}");
+            }
             Err((status, why))
         }
     }

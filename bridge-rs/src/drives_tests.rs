@@ -321,7 +321,11 @@ fn off_by_default_and_a_client_needs_its_id() {
 fn kerfy_clients_by_default_still_off() {
     let s = Settings::default();
     assert!(!s.enabled);
-    assert_eq!(s.clients.keys().collect::<Vec<_>>(), ["google_drive", "dropbox"]);
+    // OneDrive too since Kerfy's Entra app (23/11, public: code + PKCE, Files.ReadWrite)
+    assert_eq!(s.clients.keys().collect::<Vec<_>>(), ["google_drive", "onedrive", "dropbox"]);
+    assert_eq!(s.clients["onedrive"].client_id, "7a6cdda3-8fba-493e-9bf6-dc2c3506365a");
+    assert_eq!(s.clients["onedrive"].redirect_uri, connections::APP_REDIRECT);
+    assert!(s.clients["onedrive"].client_secret.is_none());
     let google = &s.clients["google_drive"];
     assert_eq!(google.client_id, "294378308537-lf952kvkp8c1oi07tsi1g6qe16dbhu78.apps.googleusercontent.com");
     assert_eq!(
@@ -381,6 +385,7 @@ fn the_sign_in_addresses() {
     let ms = endpoints(&config, Provider::Microsoft).unwrap();
     let url = authorize_url(&ms, "st", "v", Pick::Folders);
     assert!(url.starts_with("https://login.example/authorize?"));
+    // reading until a folder has a writer (review C6, as Dropbox): drives_write_tests.rs asks the write right
     assert_eq!(connections::callback_query(&url)["scope"], "Files.Read offline_access User.Read");
     assert_eq!(ms.client.auth_method, "none");
     let dbx = endpoints(&config, Provider::Dropbox).unwrap();
@@ -432,13 +437,19 @@ async fn onedrive_folder_by_folder() {
     let root = browse(&config, "onedrive", None).await.unwrap();
     let names: Vec<&str> = root["folders"].as_array().unwrap().iter().map(|f| f["name"].as_str().unwrap()).collect();
     assert_eq!(names, ["Docs", "Privé"], "folders only");
-    let wrong = set_folders(&config, "onedrive", &[Chosen { id: "F1".into(), agents: vec!["vie".into()] }]).await;
+    let wrong =
+        set_folders(&config, "onedrive", &[Chosen { id: "F1".into(), agents: vec!["vie".into()], writers: None }])
+            .await;
     assert_eq!(wrong.unwrap_err().status.as_u16(), 422, "a file is not a folder");
     // an agent that doesn't exist (deleted since the app listed it): left out, never a refusal (review 18/11)
-    let unknown = set_folders(&config, "onedrive", &[Chosen { id: "D".into(), agents: vec!["nobody".into()] }]).await;
+    let unknown =
+        set_folders(&config, "onedrive", &[Chosen { id: "D".into(), agents: vec!["nobody".into()], writers: None }])
+            .await;
     assert_eq!(unknown.unwrap()["folders"][0]["agents"], json!([]));
     let shown =
-        set_folders(&config, "onedrive", &[Chosen { id: "D".into(), agents: vec!["vie".into()] }]).await.unwrap();
+        set_folders(&config, "onedrive", &[Chosen { id: "D".into(), agents: vec!["vie".into()], writers: None }])
+            .await
+            .unwrap();
     assert_eq!(shown["folders"][0]["name"], "Docs");
     assert!(offered(&config, "vie") && !offered(&config, "kerfy"));
 
@@ -491,7 +502,9 @@ async fn dropbox_by_path_never_a_look_alike_folder() {
     let (_dir, config) = setup(&base);
     let shown = connect(&config, "dropbox", &[], "").await;
     assert_eq!(shown["account"], "d@example.org");
-    set_folders(&config, "dropbox", &[Chosen { id: "id:w".into(), agents: vec!["vie".into()] }]).await.unwrap();
+    set_folders(&config, "dropbox", &[Chosen { id: "id:w".into(), agents: vec!["vie".into()], writers: None }])
+        .await
+        .unwrap();
     let vie = config.agents["vie"].clone();
     let read = text(&call(&config, &vie, "drive_read", &args(json!({"file": "dropbox:id:f"}))).await);
     assert!(read.contains("plan"), "{read}");
@@ -513,7 +526,8 @@ async fn google_keeps_what_the_picker_gave_and_reads_its_documents_as_text() {
     let read = text(&call(&config, &vie, "drive_read", &args(json!({"file": "google_drive:gd"}))).await);
     assert!(read.contains("Le bail commence le 1er mars."), "{read}");
     // only what was picked can be chosen; Google has no folder browsing here
-    let not_picked = set_folders(&config, "google_drive", &[Chosen { id: "gd".into(), agents: vec![] }]).await;
+    let not_picked =
+        set_folders(&config, "google_drive", &[Chosen { id: "gd".into(), agents: vec![], writers: None }]).await;
     assert_eq!(not_picked.unwrap_err().status.as_u16(), 422);
     assert_eq!(browse(&config, "google_drive", None).await.unwrap_err().status.as_u16(), 422);
 }
@@ -523,7 +537,9 @@ async fn an_ending_token_is_renewed_and_a_refused_renewal_ends_the_connection() 
     let (base, seen) = serve().await;
     let (_dir, config) = setup(&base);
     connect(&config, "onedrive", &[], "").await;
-    set_folders(&config, "onedrive", &[Chosen { id: "D".into(), agents: vec!["vie".into()] }]).await.unwrap();
+    set_folders(&config, "onedrive", &[Chosen { id: "D".into(), agents: vec!["vie".into()], writers: None }])
+        .await
+        .unwrap();
     let age = |refresh: &str| {
         let store = connections::store_of(&config);
         let mut stored = store.read().unwrap();
@@ -560,7 +576,9 @@ async fn off_means_no_routes_no_tools() {
     let (base, _seen) = serve().await;
     let (_dir, mut config) = setup(&base);
     connect(&config, "onedrive", &[], "").await;
-    set_folders(&config, "onedrive", &[Chosen { id: "D".into(), agents: vec!["vie".into()] }]).await.unwrap();
+    set_folders(&config, "onedrive", &[Chosen { id: "D".into(), agents: vec!["vie".into()], writers: None }])
+        .await
+        .unwrap();
     config.drives.enabled = false;
     assert!(!offered(&config, "vie"));
     assert_eq!(start(&config, "onedrive", &[], Pick::Folders, "").unwrap_err().status.as_u16(), 404);
@@ -669,7 +687,10 @@ async fn google_folders_files_parents_and_the_bin() {
     let shown = set_folders(
         &config,
         "google_drive",
-        &[Chosen { id: "gp".into(), agents: vec!["kerfy".into()] }, Chosen { id: "gd".into(), agents: vec![] }],
+        &[
+            Chosen { id: "gp".into(), agents: vec!["kerfy".into()], writers: None },
+            Chosen { id: "gd".into(), agents: vec![], writers: None },
+        ],
     )
     .await
     .unwrap();
@@ -686,7 +707,9 @@ async fn dropbox_follows_a_moved_folder_by_its_id() {
     let (base, _seen) = serve().await;
     let (_dir, config) = setup(&base);
     connect(&config, "dropbox", &[], "").await;
-    set_folders(&config, "dropbox", &[Chosen { id: "id:w".into(), agents: vec!["vie".into()] }]).await.unwrap();
+    set_folders(&config, "dropbox", &[Chosen { id: "id:w".into(), agents: vec!["vie".into()], writers: None }])
+        .await
+        .unwrap();
     // the kept path is stale (renamed since): the id says where it is now
     let store = connections::store_of(&config);
     let mut stored = store.read().unwrap();
@@ -705,7 +728,9 @@ async fn onedrive_pages_slow_downs_and_refused_tokens() {
     let (base, seen) = serve().await;
     let (_dir, config) = setup(&base);
     connect(&config, "onedrive", &[], "").await;
-    set_folders(&config, "onedrive", &[Chosen { id: "D".into(), agents: vec!["vie".into()] }]).await.unwrap();
+    set_folders(&config, "onedrive", &[Chosen { id: "D".into(), agents: vec!["vie".into()], writers: None }])
+        .await
+        .unwrap();
     let vie = config.agents["vie"].clone();
     // two pages, followed
     let big = text(&call(&config, &vie, "drive_list", &args(json!({"folder": "onedrive:BIG"}))).await);
@@ -726,7 +751,9 @@ async fn onedrive_pages_slow_downs_and_refused_tokens() {
     assert!(seen.lock().unwrap().iter().any(|(_, p, a)| p == "/token" && a.is_none()));
     assert_eq!(store.read().unwrap().drives["onedrive"].tokens.access_token, "at-2");
     // a remote folder can't be chosen
-    let e = set_folders(&config, "onedrive", &[Chosen { id: "R".into(), agents: vec![] }]).await.unwrap_err();
+    let e = set_folders(&config, "onedrive", &[Chosen { id: "R".into(), agents: vec![], writers: None }])
+        .await
+        .unwrap_err();
     assert_eq!(e.detail["code"], "not_folder");
     // search in a folder inside the chosen one; outside: refused
     let inner = text(&call(&config, &vie, "drive_search", &args(json!({"words": "x", "folder": "onedrive:S"}))).await);
@@ -740,7 +767,9 @@ async fn another_account_signed_in_forgets_the_folders() {
     let (base, _seen) = serve().await;
     let (_dir, config) = setup(&base);
     connect(&config, "onedrive", &[], "").await;
-    set_folders(&config, "onedrive", &[Chosen { id: "D".into(), agents: vec!["vie".into()] }]).await.unwrap();
+    set_folders(&config, "onedrive", &[Chosen { id: "D".into(), agents: vec!["vie".into()], writers: None }])
+        .await
+        .unwrap();
     // the same account again (« Reconnecter »): kept
     let same = connect(&config, "onedrive", &[], "").await;
     assert_eq!(same["folders"].as_array().unwrap().len(), 1);
@@ -759,7 +788,9 @@ async fn review_a_document_cannot_close_the_untrusted_block() {
     let (base, _seen) = serve().await;
     let (_dir, config) = setup(&base);
     connect(&config, "onedrive", &[], "").await;
-    set_folders(&config, "onedrive", &[Chosen { id: "D".into(), agents: vec!["vie".into()] }]).await.unwrap();
+    set_folders(&config, "onedrive", &[Chosen { id: "D".into(), agents: vec!["vie".into()], writers: None }])
+        .await
+        .unwrap();
     let vie = config.agents["vie"].clone();
     let read = text(&call(&config, &vie, "drive_read", &args(json!({"file": "onedrive:INJ"}))).await);
     assert_eq!(read.matches(">>>").count(), 1, "{read}");
@@ -772,7 +803,9 @@ async fn review_listed_names_are_marked_untrusted() {
     let (base, _seen) = serve().await;
     let (_dir, config) = setup(&base);
     connect(&config, "onedrive", &[], "").await;
-    set_folders(&config, "onedrive", &[Chosen { id: "D".into(), agents: vec!["vie".into()] }]).await.unwrap();
+    set_folders(&config, "onedrive", &[Chosen { id: "D".into(), agents: vec!["vie".into()], writers: None }])
+        .await
+        .unwrap();
     let vie = config.agents["vie"].clone();
     let listed = text(&call(&config, &vie, "drive_list", &args(json!({"folder": "onedrive:D"}))).await);
     assert!(listed.contains(UNTRUSTED), "{listed}");
@@ -787,14 +820,18 @@ async fn review_a_deleted_agent_neither_blocks_the_folders_nor_stays_granted() {
     let (base, _seen) = serve().await;
     let (_dir, mut config) = setup(&base);
     connect(&config, "onedrive", &[], "").await;
-    let shown =
-        set_folders(&config, "onedrive", &[Chosen { id: "D".into(), agents: vec!["vie".into(), "kerfy".into()] }])
-            .await
-            .unwrap();
+    let shown = set_folders(
+        &config,
+        "onedrive",
+        &[Chosen { id: "D".into(), agents: vec!["vie".into(), "kerfy".into()], writers: None }],
+    )
+    .await
+    .unwrap();
     assert_eq!(shown["folders"][0]["agents"], json!(["vie", "kerfy"]));
     config.agents.shift_remove("vie"); // deleted in the app
                                        // the app turns kerfy off on that folder: it sends the list it was shown, minus kerfy
-    let after = set_folders(&config, "onedrive", &[Chosen { id: "D".into(), agents: vec!["vie".into()] }]).await;
+    let after =
+        set_folders(&config, "onedrive", &[Chosen { id: "D".into(), agents: vec!["vie".into()], writers: None }]).await;
     assert!(after.is_ok(), "the folder can't be changed any more: {:?}", after.err().map(|e| e.status));
     let stored = read_stored(&config).unwrap();
     assert!(
@@ -809,7 +846,9 @@ async fn review_a_share_confirmation_names_the_online_documents() {
     let (base, _seen) = serve().await;
     let (_dir, config) = setup(&base);
     connect(&config, "onedrive", &[], "").await;
-    set_folders(&config, "onedrive", &[Chosen { id: "D".into(), agents: vec!["vie".into()] }]).await.unwrap();
+    set_folders(&config, "onedrive", &[Chosen { id: "D".into(), agents: vec!["vie".into()], writers: None }])
+        .await
+        .unwrap();
     let private = crate::agent_shares::private_tools(&config, "vie");
     assert!(private.iter().any(|t| t.contains("drive") || t.contains("document")), "{private:?}");
 }
@@ -869,9 +908,13 @@ async fn a_deleted_agent_is_taken_out_of_every_folder() {
     let (base, _seen) = serve().await;
     let (_dir, config) = setup(&base);
     connect(&config, "onedrive", &[], "").await;
-    set_folders(&config, "onedrive", &[Chosen { id: "D".into(), agents: vec!["vie".into(), "kerfy".into()] }])
-        .await
-        .unwrap();
+    set_folders(
+        &config,
+        "onedrive",
+        &[Chosen { id: "D".into(), agents: vec!["vie".into(), "kerfy".into()], writers: None }],
+    )
+    .await
+    .unwrap();
     forget_agent(&config, "vie").await;
     assert_eq!(read_stored(&config).unwrap().drives["onedrive"].folders[0].agents, vec!["kerfy".to_string()]);
 }

@@ -460,6 +460,7 @@ pub fn words(fault: &Fault) -> String {
         Fault::Refused => format!("{LABEL} refuses this one"),
         Fault::Unreachable => format!("{LABEL} can't be reached right now"),
         Fault::Changed => CHANGED.to_string(),
+        Fault::MissingScope => format!("{LABEL} hasn't given BipAgents this right: your person reconnects it in the app"),
         Fault::TooLarge => "too large".to_string(),
         Fault::Other(why) => why.clone(),
     }
