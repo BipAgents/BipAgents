@@ -22,13 +22,19 @@
 //!   change they make of it clears the note. Back on a model that is not outside: what the bridge had turned off and
 //!   the person never touched is turned on again. Until the guard ran (a model changed by SSH a few seconds ago), the
 //!   agent is already kept out of the circle ([`enabled`]). Its in-conversation asks for the Carnet and Health are not
-//!   offered (tool_asks.rs `askable`).
+//!   offered (tool_asks.rs `askable`);
+//! - **Outlook** (choice B, Alex 24/11): an agent on an outside model, or one the bridge cannot tell, doesn't get the
+//!   person's Outlook (outlook.rs `kept_on_the_place`, read from where its model runs at every call: a model changed
+//!   by SSH counts at once), until the person turns it back on for it, knowingly (« Rallumer Outlook ? » in the apps:
+//!   [`outlook_turned_on`], kept for that provider only). It stays chosen meanwhile, so a return to a model that is
+//!   not outside gives it back as the person had it; a new outside provider asks again.
 //!
-//!     data_dir/agent_shared_memory.json   {"off": [agent], "outside": {agent: {"provider", "label", "at", "off": [what]}}}
-//!                                         (0600)
+//!     data_dir/agent_shared_memory.json   {"off": [agent], "outside": {agent: {"provider", "label", "at", "off": [what]}},
+//!                                          "outlook_ok": {agent: provider}}  (0600)
 //!     PUT /v1/agents/{agent_id}/shared-memory {on} → {id, on}   404 unknown agent, 409 others_facing, 400 by_hand
 //!
-//! `GET /v1/agents/{agent_id}/settings` gives `shared_memory: {on, outside: {provider, label} | null}` (agents_admin.rs),
+//! `GET /v1/agents/{agent_id}/settings` gives `shared_memory: {on, outside: {provider, label, since, outlook?} | null}`
+//! (agents_admin.rs; `outlook: true` while it is chosen in Outlook and off for this model),
 //! absent for an agent without the setting: its presence tells the apps this bridge has it
 //! (contracts/shared-memory/cases.json). An app 1.0 doesn't show it: the bridge applies the defaults and the cleaning
 //! all the same.
@@ -96,6 +102,10 @@ pub struct Stored {
     /// stays)
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub profile_off: Vec<String>,
+    /// the agents on an outside model whose Outlook the person turned back on, knowingly: for which provider (choice
+    /// B, Alex 24/11; [`outlook_allowed`])
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub outlook_ok: BTreeMap<String, String>,
 }
 
 fn path(config: &Config) -> PathBuf {
@@ -205,6 +215,39 @@ pub fn kept_from_cards(config: &Config, agent: &AgentConfig) -> bool {
     }
 }
 
+/// Whether `agent` may use the person's Outlook as far as the protection goes (outlook.rs `kept_on_the_place`; choice
+/// B, Alex 24/11): its model is ours or the person's own; or it is outside (a model the bridge cannot tell counts,
+/// even one the guard has never seen) and the person turned Outlook back on for it on that very provider.
+pub fn outlook_allowed(config: &Config, agent: &AgentConfig) -> bool {
+    match outside_now(config, agent) {
+        None => true,
+        Some((provider, _)) => read(config).outlook_ok.get(&agent.name) == Some(&provider),
+    }
+}
+
+/// « Rallumer Outlook ? » answered « Rallumer » (the person chose `agent` in Outlook while it was on an outside model:
+/// outlook.rs `set_agents`, `finish`): allowed for the provider it is on now. Nothing for a model that is not outside.
+pub fn outlook_turned_on(config: &Config, agent: &AgentConfig) {
+    let Some((provider, _)) = outside_now(config, agent) else { return };
+    let done = update(config, |s| {
+        s.outlook_ok.insert(agent.name.clone(), provider.clone());
+    });
+    match done {
+        Ok(()) => tracing::info!(target: "bipbridge::agents", agent = %agent.name, provider = %provider, "outside model: Outlook turned back on by the person"),
+        Err(err) => tracing::warn!(agent = %agent.name, error = %err, "outlook note not written"),
+    }
+}
+
+/// The person took `agent` out of Outlook: what they had allowed goes with it (chosen again on an outside model, it
+/// is asked again).
+pub fn outlook_turned_off(config: &Config, agent: &str) {
+    if let Err(err) = update(config, |s| {
+        s.outlook_ok.remove(agent);
+    }) {
+        tracing::warn!(agent = %agent, error = %err, "outlook note not written");
+    }
+}
+
 /// [`turned_off`] for a caller that has already left out the agents other people talk to (notebook/news.rs
 /// `concerned`), the switches read once (`stored`).
 pub fn off_for(config: &Config, agent: &AgentConfig, stored: &Stored) -> bool {
@@ -301,11 +344,19 @@ pub struct Guard {
     pub changed: Changed,
     pub health: bool,
     pub links: Option<Vec<(String, bool)>>,
+    /// it is chosen in Outlook, which it loses or gets back with the model (outlook.rs `kept_on_the_place`): its
+    /// tools are given again
+    pub outlook: bool,
 }
 
 impl Guard {
     pub fn any(&self) -> bool {
-        self.changed.any() || self.health || self.links.is_some()
+        self.changed.any() || self.health || self.links.is_some() || self.outlook
+    }
+
+    /// Its tools change (its Carnet, Health or Outlook): given again.
+    pub fn tools(&self) -> bool {
+        self.changed.notebook || self.health || self.outlook
     }
 }
 
@@ -399,11 +450,14 @@ fn guard_place(config: &Config, agent: &AgentConfig, place: crate::outside_model
                     }
                     // its conversations go on in a new session, without what was said there (review B2)
                     s.fresh.insert(name.to_string(), iso_now());
+                    // Outlook allowed on another provider: asked again on this one (choice B)
+                    s.outlook_ok.retain(|a, p| a != name || *p == provider);
                     s.outside.insert(name.to_string(), Guarded { provider: provider.clone(), label, at: now, off, health: categories });
                 })?;
                 out.changed.shared = shared_on;
+                out.outlook = crate::outlook::chosen(config, name);
                 tracing::info!(target: "bipbridge::agents", agent = %name, provider = %provider,
-                    "outside model: shared memory, Carnet, Health and links off by default");
+                    "outside model: shared memory, Carnet, Health, Outlook and links off by default");
             }
             (None, Some(g)) => {
                 // back on our providers or the person's own model (read as such: never « in doubt »)
@@ -433,7 +487,9 @@ fn guard_place(config: &Config, agent: &AgentConfig, place: crate::outside_model
                         out.changed.shared = true;
                     }
                     s.outside.remove(name);
+                    s.outlook_ok.remove(name); // a next outside model asks again (choice B)
                 })?;
+                out.outlook = crate::outlook::chosen(config, name); // back, as the person had it
                 tracing::info!(target: "bipbridge::agents", agent = %name, "no longer on an outside model");
             }
             (None, None) => {}
@@ -456,7 +512,11 @@ pub fn view(config: &Config, agent: &AgentConfig) -> Option<Value> {
     let stored = read(config);
     let outside = outside_now(config, agent).map(|(provider, label)| {
         let since = stored.outside.get(&agent.name).filter(|g| g.provider == provider).map(|g| g.at);
-        json!({"provider": provider, "label": label, "since": since})
+        let mut shown = json!({"provider": provider, "label": label, "since": since});
+        if crate::outlook::held(config, &agent.name) {
+            shown["outlook"] = json!(true); // chosen in Outlook, off for it (« Rallumer Outlook ? », choice B)
+        }
+        shown
     });
     let on = switched_on(config, agent, &stored);
     let circle = on && crate::shared_memory::membership(config, &agent.name).is_some();
@@ -514,6 +574,7 @@ pub fn forget(config: &Config, agent: &str) {
         s.outside.remove(agent);
         s.fresh.remove(agent);
         s.profile_off.retain(|a| a != agent);
+        s.outlook_ok.remove(agent);
     });
     if let Err(err) = done {
         tracing::warn!(agent = %agent, error = %err, "shared memory switch not removed");
@@ -573,7 +634,7 @@ pub async fn guard_and_follow(config: std::sync::Arc<Config>, agent: &AgentConfi
     let guard = guard_full(&config, agent);
     let any = guard.any();
     if any {
-        follow(config, &agent.name, guard.changed.notebook || guard.health, guard.links).await;
+        follow(config, &agent.name, guard.tools(), guard.links).await;
     }
     any
 }
@@ -582,7 +643,7 @@ pub async fn guard_and_follow(config: std::sync::Arc<Config>, agent: &AgentConfi
 pub async fn guard_before_and_follow(config: std::sync::Arc<Config>, agent: &AgentConfig, provider: &str, label: &str) {
     let guard = guard_before(&config, agent, provider, label);
     if guard.any() {
-        follow(config, &agent.name, guard.changed.notebook || guard.health, guard.links).await;
+        follow(config, &agent.name, guard.tools(), guard.links).await;
     }
 }
 
@@ -1170,5 +1231,92 @@ mod tests {
         assert!(["OpenRouter, en secours", "OpenRouter, as a fallback"].contains(&label.as_str()), "{label}");
         set_model(&config, "gpt", "model:\n  provider: openrouter\n  default: x\n");
         assert_eq!(outside_now(&config, &gpt).unwrap().1, "OpenRouter");
+    }
+
+    /// The person's Outlook with `agents` chosen, all of it (outlook.rs).
+    fn outlook_for(config: &mut Config, agents: &[&str]) {
+        config.outlook = crate::outlook::Settings { enabled: true };
+        let link = crate::drives::Link {
+            state: "connected".into(),
+            agents: agents.iter().map(|a| a.to_string()).collect(),
+            tokens: crate::connections::Tokens { scope: Some(crate::outlook::SCOPES.into()), ..Default::default() },
+            ..Default::default()
+        };
+        let stored = crate::connections::Stored {
+            outlook: Some(crate::outlook::Account { link, parts: Default::default() }),
+            ..Default::default()
+        };
+        crate::connections::store_of(config).write(&stored).unwrap();
+    }
+
+    fn names(list: &[&str]) -> Vec<String> {
+        list.iter().map(|a| a.to_string()).collect()
+    }
+
+    /// Choice B (Alex 24/11): an agent on openai-codex has no Outlook (`mail_for`), at once, before any guard; the
+    /// person may turn it back on (« Rallumer Outlook ? »), for that provider only; a return to the person's own model
+    /// gives it back as they had it.
+    #[tokio::test]
+    async fn choice_b_an_agent_on_openai_codex_has_no_outlook_until_the_person_says_so() {
+        use crate::outlook;
+        let (_dir, mut config) = place();
+        outlook_for(&mut config, &["gpt", "budget"]);
+        set_model(&config, "budget", EUROUTER);
+        set_model(&config, "gpt", CODEX);
+        let gpt = config.agent(Some("gpt")).unwrap().clone();
+        // before the guard ran (a model changed by SSH): already off
+        assert!(!outlook::mail_for(&config, "gpt") && !outlook::calendar_for(&config, "gpt"));
+        assert!(!outlook::contacts_for(&config, "gpt") && !outlook::kept_on_the_place(&config, "gpt"));
+        assert!(outlook::mail_for(&config, "budget"), "ours: untouched");
+        let guarded = guard_full_at(&config, &gpt, 1.0);
+        assert!(guarded.outlook && guarded.tools(), "its tools given again without Outlook");
+        assert!(!outlook::mail_for(&config, "gpt") && outlook::held(&config, "gpt") && !outlook::held(&config, "budget"));
+        // its page says so (and the pop-up names Outlook), the Outlook screen too
+        assert_eq!(view(&config, &gpt).unwrap()["outside"]["outlook"], json!(true));
+        let shown = outlook::view(&config, outlook::stored(&config).as_ref());
+        assert_eq!((&shown["agents"], &shown["outside"]), (&json!(["budget"]), &json!({"gpt": "OpenAI"})));
+        // the app changes what they use (gpt shown off, so left out): gpt stays chosen, still off
+        let mail_only = crate::outlook::Parts { mail: true, calendar: false, contacts: false };
+        let (shown, _) = outlook::set_agents(&config, &names(&["budget"]), Some(mail_only)).await.unwrap();
+        assert_eq!(shown["agents"], json!(["budget"]));
+        assert!(outlook::chosen(&config, "gpt") && !outlook::mail_for(&config, "gpt"));
+        // « Rallumer Outlook ? » → « Rallumer »: chosen in the app, on for OpenAI
+        let (shown, changed) = outlook::set_agents(&config, &names(&["budget", "gpt"]), None).await.unwrap();
+        assert!(outlook::mail_for(&config, "gpt") && changed.contains(&"gpt".to_string()), "{changed:?}");
+        assert_eq!((&shown["agents"], &shown["outside"]), (&json!(["budget", "gpt"]), &json!({})));
+        assert!(view(&config, &gpt).unwrap()["outside"].get("outlook").is_none());
+        assert_eq!(guard_full_at(&config, &gpt, 2.0), Guard::default(), "the same provider: as the person set it");
+        assert!(outlook::mail_for(&config, "gpt"));
+        // another outside provider: off again, asked again
+        set_model(&config, "gpt", ANTHROPIC);
+        assert!(!outlook::mail_for(&config, "gpt"), "off before the guard sees Anthropic");
+        assert!(guard_full_at(&config, &gpt, 3.0).outlook);
+        assert!(!outlook::mail_for(&config, "gpt") && read(&config).outlook_ok.is_empty());
+        // back on the person's own model: Outlook again, as they had it
+        set_model(&config, "gpt", SPARK);
+        assert!(outlook::mail_for(&config, "gpt"));
+        assert!(guard_full_at(&config, &gpt, 4.0).outlook);
+        assert!(outlook::mail_for(&config, "gpt") && read(&config).outlook_ok.is_empty());
+        // turned back on, then taken out by the person while outside: not given back on the return
+        set_model(&config, "gpt", CODEX);
+        guard_full_at(&config, &gpt, 5.0);
+        outlook::set_agents(&config, &names(&["budget", "gpt"]), None).await.unwrap();
+        outlook::set_agents(&config, &names(&["budget"]), None).await.unwrap();
+        assert!(!outlook::chosen(&config, "gpt") && read(&config).outlook_ok.is_empty());
+        set_model(&config, "gpt", SPARK);
+        guard_full_at(&config, &gpt, 6.0);
+        assert!(!outlook::mail_for(&config, "gpt"), "the person's choice stays");
+    }
+
+    /// Choice B, « in doubt »: a model the bridge cannot tell has no Outlook, even before any guard saw it.
+    #[test]
+    fn choice_b_a_model_it_cannot_tell_has_no_outlook() {
+        let (_dir, mut config) = place();
+        outlook_for(&mut config, &["gpt"]);
+        set_model(&config, "gpt", "model: {}\n");
+        let gpt = config.agent(Some("gpt")).unwrap().clone();
+        assert_eq!(crate::outside_model::place(&config, &gpt), crate::outside_model::Place::Unknown);
+        assert!(read(&config).outside.is_empty(), "never seen by the guard");
+        assert!(!crate::outlook::mail_for(&config, "gpt") && crate::outlook::held(&config, "gpt"));
     }
 }

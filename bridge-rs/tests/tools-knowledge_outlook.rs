@@ -402,6 +402,14 @@ fn config_for(dir: &std::path::Path, graph: &str, enabled: bool) -> Config {
         "auth_url": format!("{graph}/authorize"), "token_url": format!("{graph}/token"), "api_url": format!("{graph}/graph"),
     }});
     dict["outlook"] = json!({"enabled": enabled});
+    // the hub's model is ours (EUrouter): an agent on a model outside or that the bridge can't tell has no Outlook
+    // (choice B, agent_shared_memory::outlook_allowed)
+    std::fs::create_dir_all(dir.join(".hermes")).unwrap();
+    std::fs::write(
+        dir.join(".hermes/config.yaml"),
+        "model:\n  provider: custom\n  base_url: https://api.eurouter.ai/api/v1\n  default: glm-5.3\n",
+    )
+    .unwrap();
     let config = parse_config(&dict, None).unwrap();
     let mut tokens = IndexMap::new();
     tokens.insert("coach".to_string(), agent_tools::digest(TOKEN));
@@ -780,6 +788,55 @@ async fn the_contacts_read_never_written() {
     one_block(&work);
     let (failed, said) = tool(&app, "contacts_add", json!({"name": "Nouveau"}), "h1").await;
     assert!(failed && said.contains("read only"), "{said}");
+}
+
+/// Choice B (Alex 24/11): Coach moved to ChatGPT (openai-codex) has no Outlook at once: its contacts' read is the
+/// phone's again, the Outlook screen lists it under `outside` (not among the agents that use it). The person chooses it
+/// again (« Rallumer Outlook ? » answered): Outlook is back for it, on OpenAI only.
+#[tokio::test]
+async fn choice_b_an_agent_on_openai_codex_has_no_outlook_until_the_person_turns_it_back_on() {
+    let (url, _graph) = fake_graph().await;
+    let dir = tempfile::tempdir().unwrap();
+    let config = config_for(dir.path(), &url, true);
+    let app = TestApp::new(config.clone());
+    // its tools given again (agent_tools::register) give it a new key: the test's kept
+    let keep_key = || {
+        let mut tokens = IndexMap::new();
+        tokens.insert("coach".to_string(), agent_tools::digest(TOKEN));
+        agent_tools::save_tokens(&config, &tokens).unwrap();
+    };
+    let (k, v) = auth();
+    let h = [(k, v.as_str())];
+    assert_eq!(connect(&app, &h, "good").await.0, 200);
+    let (failed, found) = tool(&app, "contacts_search", json!({"query": "léa"}), "h1").await;
+    assert!(!failed && found.contains("Léa Martin"), "{found}");
+    // its model goes outside (by SSH: no route, no guard yet)
+    let profile = dir.path().join(".hermes/profiles/coach");
+    std::fs::create_dir_all(&profile).unwrap();
+    std::fs::write(profile.join("config.yaml"), "model:\n  provider: openai-codex\n  default: gpt-6.1\n").unwrap();
+    let (_, found) = tool(&app, "contacts_search", json!({"query": "léa"}), "h1").await;
+    assert!(!found.contains("Léa Martin") && !found.contains("read now from Outlook"), "Outlook still read: {found}");
+    let shown = app.get("/v1/outlook", &h).await.json();
+    assert_eq!((&shown["agents"], &shown["outside"]), (&json!([]), &json!({"coach": "OpenAI"})), "{shown}");
+    // what they use changed from the app (Coach shown off, left out): Coach stays chosen, still off
+    let mail_only = json!({"agents": [], "parts": {"mail": true, "calendar": false, "contacts": true}});
+    let shown = app.send_json("PUT", "/v1/outlook/agents", &h, &mail_only).await.json();
+    keep_key();
+    assert_eq!(shown["outside"], json!({"coach": "OpenAI"}), "{shown}");
+    let (_, found) = tool(&app, "contacts_search", json!({"query": "léa"}), "h1").await;
+    assert!(!found.contains("Léa Martin"), "{found}");
+    // « Rallumer Outlook ? » → « Rallumer »
+    let again = json!({"agents": ["coach"], "parts": {"mail": true, "calendar": false, "contacts": true}});
+    let shown = app.send_json("PUT", "/v1/outlook/agents", &h, &again).await.json();
+    keep_key();
+    assert_eq!((&shown["agents"], &shown["outside"]), (&json!(["coach"]), &json!({})), "{shown}");
+    let (failed, found) = tool(&app, "contacts_search", json!({"query": "léa"}), "h1").await;
+    assert!(!failed && found.contains("Léa Martin"), "{found}");
+    // another outside provider: off again
+    std::fs::write(profile.join("config.yaml"), "model:\n  provider: anthropic\n  default: claude-sonnet-5-5\n").unwrap();
+    let (_, found) = tool(&app, "contacts_search", json!({"query": "léa"}), "h1").await;
+    assert!(!found.contains("Léa Martin"), "{found}");
+    assert_eq!(app.get("/v1/outlook", &h).await.json()["outside"], json!({"coach": "Anthropic"}));
 }
 
 /// Only the rights of what the person switched on (as OneDrive asks its write right only once an agent writes): the
