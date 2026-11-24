@@ -123,6 +123,8 @@ def test_hermes_setup_commands(monkeypatch, tmp_path):
     assert "-p default tools enable clarify --platform api_server" in log   # the app's question card (cloned)
     # its question waits an hour, in the two keys Hermes reads (0.23's migration v53 lowers only the first)
     assert "config set agent.clarify_timeout 3600" in log and "config set clarify.timeout 3600" in log
+    # 16 runs at once on the hub, all its agents together (Hermes' default 10 left 5 to the conversations with 5 tasks)
+    assert "config set gateway.api_server.max_concurrent_runs 16" in log
     # the hub's sandbox, as the app's agents; its description in one argument (« -budget » is never an option)
     assert "profile create finance --clone-from default --no-alias --description=Budget" in log
     # the keys in the profiles' .env, never on a command line (/proc is world-readable; audit 11/11, BV-6)
@@ -1285,6 +1287,72 @@ def test_an_update_gives_every_hub_an_hour_for_a_question(tmp_path):
     migrations.clarify_hour(runner, tmp_path)
     assert ran[4:] == ran[:4]   # the same again
     assert "2026-11-10-clarify-hour" in [mid for mid, _ in migrations.MIGRATIONS]
+
+
+def test_an_existing_hub_takes_sixteen_runs_at_once_its_other_settings_kept(tmp_path, monkeypatch):
+    """24/11: Hermes takes at most `gateway.api_server.max_concurrent_runs` runs at once per hub (10 by default; the
+    11th gets 429). With five background tasks, five were left for the conversations, the Live and the routines. The
+    update writes 16 in the hub of each Hermes of this account (~/.hermes, each space's) through Hermes' own `config
+    set` (it edits that one key: every other setting stays), only where it is absent or lower; a cap the person turned
+    off (0) or raised is theirs. Hermes reads it when its gateway starts: the gateways restart once (their turns end
+    first), only when a hub changed; a stopped one (a restore, a move) is left stopped. A second run changes nothing."""
+    import yaml
+    from bipinstall import migrations
+    hubs = {
+        ".hermes": {"model": {"default": "glm"}, "gateway": {"strict": True, "multiplex_profiles": True},
+                    "approvals": {"mode": "manual"}},
+        ".local/share/bipagents/spaces/lea": {"gateway": {"api_server": {"max_concurrent_runs": 10}}},
+        ".local/share/bipagents/spaces/off": {"gateway": {"api_server": {"max_concurrent_runs": 0}}},
+        ".local/share/bipagents/spaces/big": {"gateway": {"api_server": {"max_concurrent_runs": 32}}},
+    }
+    for folder, data in hubs.items():
+        (tmp_path / folder).mkdir(parents=True)
+        (tmp_path / folder / "config.yaml").write_text(yaml.safe_dump(data))
+    (tmp_path / ".local/share/bipagents/spaces/empty").mkdir()
+    before = {folder: (tmp_path / folder / "config.yaml").read_text() for folder in hubs}
+    runner = hermes.Runner()
+    runner.env = {"KEEP": "1"}
+    ran, restarts = [], []
+
+    def run(args, check=True, **kw):
+        ran.append((list(args[1:]), runner.env["HERMES_HOME"], check))
+        return ""
+    runner.run = run
+    monkeypatch.setattr(migrations, "_gateways_try_restart", lambda r: restarts.append(r))
+    said = migrations.hub_runs(runner, tmp_path)
+    key = ["config", "set", "gateway.api_server.max_concurrent_runs", "16"]
+    assert [(a, h) for a, h, _ in ran] == [(key, str(tmp_path / ".hermes")),
+                                           (key, str(tmp_path / ".local/share/bipagents/spaces/lea"))]
+    assert all(check is False for *_, check in ran) and runner.env == {"KEEP": "1"}
+    assert restarts == [runner] and "16" in said and "(2 Hermes" in said
+    # nothing of ours touched the files: Hermes' `config set` edits its one key
+    assert {folder: (tmp_path / folder / "config.yaml").read_text() for folder in hubs} == before
+    # once Hermes wrote it, nothing more to do (no restart either)
+    for folder in (".hermes", ".local/share/bipagents/spaces/lea"):
+        data = yaml.safe_load((tmp_path / folder / "config.yaml").read_text())
+        data.setdefault("gateway", {}).setdefault("api_server", {})["max_concurrent_runs"] = 16
+        (tmp_path / folder / "config.yaml").write_text(yaml.safe_dump(data))
+    ran.clear()
+    restarts.clear()
+    again = migrations.hub_runs(runner, tmp_path)
+    assert ran == [] and restarts == [] and "already" in again
+    assert "2026-11-24-hub-runs-16" in [mid for mid, _ in migrations.MIGRATIONS]
+    assert "2026-11-24-hub-runs-16" not in migrations.BRIDGE_ONLY   # the person's own Hermes: theirs to decide
+    assert hermes.HUB_RUNS == ("gateway.api_server.max_concurrent_runs", "16")
+
+
+def test_the_hub_runs_restart_leaves_a_stopped_gateway_stopped(monkeypatch):
+    """The gateways restarted to read the new cap: `try-restart`, so one a restore or a move stopped (they start it
+    themselves once everything is back) is not started early."""
+    from bipinstall import migrations, update
+    monkeypatch.setattr(update, "gateway_units", lambda: [("systemd", "bipagents-hermes"),
+                                                          ("systemd", "bipagents-space-lea")])
+    runner = hermes.Runner(dry=True)
+    ran = []
+    runner.run = lambda args, check=True, **kw: ran.append(list(args)) or ""
+    migrations._gateways_try_restart(runner)
+    assert ran == [["systemctl", "--user", "try-restart", "bipagents-hermes"],
+                   ["systemctl", "--user", "try-restart", "bipagents-space-lea"]]
 
 
 def test_a_hub_installed_with_the_clarify_key_gets_its_own_key_again(tmp_path):

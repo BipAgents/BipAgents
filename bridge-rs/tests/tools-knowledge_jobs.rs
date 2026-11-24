@@ -684,7 +684,8 @@ fn hinted(board: Arc<Jobs>, hints: &Hinted) -> Arc<Jobs> {
     Arc::new(jobs)
 }
 
-/// Sub-tasks (Alex 19/11): one agent runs up to three tasks at once (the install's three too), the fourth refused.
+/// Sub-tasks (Alex 19/11; five since 24/11): one agent runs up to five tasks at once (the install's five too), the
+/// sixth refused.
 #[tokio::test]
 async fn several_tasks_of_one_agent_run_at_once() {
     let dir = tempfile::tempdir().unwrap();
@@ -692,14 +693,14 @@ async fn several_tasks_of_one_agent_run_at_once() {
     let (config, agent) = setup(dir.path(), &url);
     let board = board(&config, None);
     let mut ids = Vec::new();
-    for title in ["Mails", "Assurances", "Vacances"] {
+    for title in ["Mails", "Assurances", "Vacances", "Impôts", "Garage"] {
         let job = board.create(&agent, title, "Fais-le en entier.", 0.50, None).await.unwrap();
         assert_eq!(job["state"], "running", "{title}");
         ids.push(id_of(&job));
     }
-    let fourth = board.create(&agent, "Encore", "Encore une.", 0.50, None).await.unwrap_err();
-    assert!(fourth.to_string().contains("three background tasks"), "{fourth}");
-    assert_eq!(jobs::AGENT_RUNNING_MAX, 3);
+    let sixth = board.create(&agent, "Encore", "Encore une.", 0.50, None).await.unwrap_err();
+    assert!(sixth.to_string().contains("five background tasks"), "{sixth}");
+    assert_eq!((jobs::AGENT_RUNNING_MAX, jobs::RUNNING_MAX), (5, 5));
     for id in ids {
         board.forget(&id).await.unwrap();
     }
@@ -751,7 +752,7 @@ async fn starts_at_once_never_pass_the_agent_s_cap() {
     let (_fake, url) = gateway(1000, 10).await;
     let (config, agent) = setup(dir.path(), &url);
     let board = board(&config, None);
-    let starts = (0..5).map(|n| {
+    let starts = (0..jobs::AGENT_RUNNING_MAX + 2).map(|n| {
         let (board, agent) = (board.clone(), agent.clone());
         async move { board.create(&agent, &format!("Tâche {n}"), "Fais-le en entier.", 0.50, None).await }
     });
@@ -1005,33 +1006,133 @@ async fn a_deleted_agents_task_leaves_no_copy_of_its_logins() {
     assert!(!own.exists(), "the deleted agent's logins copied for its task are still there: {}", own.display());
 }
 
-/// Review 2 (focus 4: measured 0.5–0.8 GB per browsing task, 20/11): the only room check is at a task's start,
-/// « pressed » at 90 % of the place's memory.high (heavy_work.rs `task_gate`); the browser of the task starts later,
-/// on its first call, with no check. A place at 75 % of a 1.6 GB memory.high (a VPS-2 shared by four people: 80 % of
-/// 8 GB ÷ 4, MemoryMax 1.5×) starts a task of an agent with a browser, and three of them at once: each browser takes
-/// 0.5–0.8 GB more, past memory.high (throttled) and MemoryMax (the kernel kills in the place). A task whose browser
-/// can't fit must wait for room (queued, never refused).
-#[test]
-fn a_task_whose_browser_cant_fit_in_the_room_waits_for_it() {
+/// Review 2 (focus 4: measured 0.5–0.8 GB per browsing task, 20/11): a task whose browser can't fit in the place's
+/// room waits for it (queued, never refused). 24/11: that is the place's SECOND task browser on: six places on a
+/// VPS-2 (MemoryHigh 1 040 MB each, ≈ 380 MB taken at rest) left less than `browser_free_mb` (1 024 MB) under the
+/// ceiling, so a browsing task never started there, with three tasks as with five, and waited for ever. The place's
+/// first task browser now needs only the server's room (`memory_short`, MemAvailable): at worst the place's own slice
+/// slows itself above its MemoryHigh (MemoryMax is 1 GB higher), its neighbours untouched; from the second on, the
+/// place's ceiling counts as before (a 1.6 GB place at 1.0 GB: its second waits).
+#[tokio::test]
+async fn a_places_first_task_browser_needs_only_the_servers_room_and_the_second_waits() {
+    use bipbridge::heavy_work::{task_gate, Memory, Room};
     let dir = tempfile::tempdir().unwrap();
-    let (mut config, _agent) = setup(dir.path(), "http://127.0.0.1:9");
+    let (_fake, url) = gateway(1000, 10).await;
+    let (mut config, agent) = setup(dir.path(), &url);
     agent_browser(&mut config, dir.path(), 16);
-    let gb = 1_000_000_000u64;
-    let room = bipbridge::heavy_work::Room {
-        disk_total: Some(50 * gb),
-        disk_free: Some(40 * gb),
-        memory: bipbridge::heavy_work::Memory {
-            current: Some(1_200_000_000),
-            high: Some(1_600_000_000),
+    let mb = 1024 * 1024u64;
+    let room = |high: u64, anon: u64| Room {
+        disk_total: Some(50_000 * mb),
+        disk_free: Some(40_000 * mb),
+        memory: Memory {
+            current: Some((anon + 40) * mb),
+            high: Some(high * mb),
             stalled: Some(0.0),
             high_events: Some(0),
-            anon: Some(1_000_000_000),
+            anon: Some(anon * mb),
         },
         ..Default::default()
     };
-    assert!(!room.memory.pressed(), "not pressed: the case is the browser's room, not the pressure");
-    let gate = bipbridge::heavy_work::task_gate(&config, "coach", &room, bipbridge::py::time_time());
-    assert!(gate.is_some(), "0.4 GB left under memory.high, a browsing task takes 0.5–0.8 GB: started anyway");
+    let (six, four) = (room(1040, 380), room(1600, 1000));
+    assert!(!six.memory.pressed() && !four.memory.pressed(), "the case is the browser's room, not the pressure");
+    let now = bipbridge::py::time_time();
+    assert_eq!(task_gate(&config, "coach", &six, now), None, "six places: the first task browser never started");
+    assert_eq!(task_gate(&config, "coach", &four, now), None);
+    // the first one runs (its browser set up, not started yet: it starts on its first call)
+    let mut jobs = Arc::try_unwrap(board(&config, None)).ok().unwrap();
+    jobs.memory = Arc::new(|| Some(8000));
+    let board = Arc::new(jobs);
+    let first = board.create(&agent, "Comparer", "Compare trois offres sur leurs sites.", 0.50, None).await.unwrap();
+    assert_eq!(first["state"], "running", "{first:?}");
+    let own = bipbridge::browsers::folder(&config, &bipbridge::browsers::task_browser("coach", &id_of(&first)));
+    assert!(own.join("mcp.json").is_file(), "no browser of its own");
+    assert_eq!(task_gate(&config, "coach", &six, now), Some("busy"), "the second: the place's ceiling counts");
+    assert_eq!(task_gate(&config, "coach", &four, now), Some("busy"), "0.6 GB left under a 1.6 GB ceiling");
+    assert_eq!(task_gate(&config, "coach", &room(4096, 1000), now), None, "room in the place: it goes");
+    board.forget(&id_of(&first)).await.unwrap();
+    assert_eq!(task_gate(&config, "coach", &six, now), None, "the first gone: the next one is the first again");
+}
+
+/// 24/11, the server's own check (`memory_short`) for a task browser: MemAvailable read at each start knew nothing of
+/// a browser just set up, which only takes its memory at its first page. Two starts at once with 1.5 GB free both
+/// passed (two browsers: up to 1.6 GB). The browsers set up but not started yet now count, starts under way included:
+/// one goes, the other waits its turn (« memory », never refused).
+#[tokio::test]
+async fn two_browsing_tasks_started_at_once_never_both_pass_the_servers_check() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_fake, url) = gateway(1000, 10).await;
+    let (mut config, agent) = setup(dir.path(), &url);
+    agent_browser(&mut config, dir.path(), 16);
+    let mut jobs = Arc::try_unwrap(board(&config, None)).ok().unwrap();
+    jobs.memory = Arc::new(|| Some(1500));
+    let board = Arc::new(jobs);
+    let (a, b) = tokio::join!(
+        board.create(&agent, "Comparer", "Compare trois offres sur leurs sites.", 0.50, None),
+        board.create(&agent, "Réserver", "Trouve un créneau chez le dentiste.", 0.50, None),
+    );
+    let (a, b) = (a.unwrap(), b.unwrap());
+    let mut states = vec![
+        (a["state"].as_str().unwrap().to_string(), a["reason"].as_str().map(str::to_string)),
+        (b["state"].as_str().unwrap().to_string(), b["reason"].as_str().map(str::to_string)),
+    ];
+    states.sort();
+    assert_eq!(states, [("paused".to_string(), Some("memory".to_string())), ("running".to_string(), None)]);
+    // one alone with that much free: it goes
+    for job in [&a, &b] {
+        board.forget(&id_of(job)).await.unwrap();
+    }
+    let alone = board.create(&agent, "Comparer", "Compare trois offres.", 0.50, None).await.unwrap();
+    assert_eq!(alone["state"], "running", "{alone:?}");
+    board.forget(&id_of(&alone)).await.unwrap();
+}
+
+/// 24/11, « une tâche ne doit jamais attendre sans fin » (Alex): a task waiting for room (« memory », « space ») is
+/// never silent. Past `WAIT_TOLD_AFTER` the person is told once, in plain words, that it goes by itself as soon as
+/// there is room and that they may cancel it; never again for that wait. A task paused for room mid-run (the
+/// backstop) is timed from the first minute it is seen waiting.
+#[tokio::test]
+async fn a_task_waiting_long_for_room_is_told_to_the_person_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_fake, url) = gateway(1000, 10).await;
+    let (mut config, agent) = setup(dir.path(), &url);
+    agent_browser(&mut config, dir.path(), 16);
+    let told: Told = Default::default();
+    let mut jobs = Arc::try_unwrap(board(&config, Some(&told))).ok().unwrap();
+    jobs.memory = Arc::new(|| Some(600));
+    let board = Arc::new(jobs);
+    let job = board.create(&agent, "Comparer", "Compare trois offres sur leurs sites.", 0.50, None).await.unwrap();
+    let id = id_of(&job);
+    assert_eq!(job["reason"], "memory");
+    let told_after = std::hint::black_box(jobs::WAIT_TOLD_AFTER);
+    assert!((600.0..=1800.0).contains(&told_after), "between 10 and 30 minutes");
+    assert_eq!(board.tell_long_waits().await, 0, "just queued: nothing said");
+    // a while later
+    let mut saved = jobs::load(&config, &id).unwrap();
+    let since = saved["waiting_since"].as_f64().expect("its wait timed from its queueing");
+    saved.insert("waiting_since".into(), json!(since - jobs::WAIT_TOLD_AFTER - 60.0));
+    jobs::save(&config, &saved).unwrap();
+    assert_eq!(board.tell_long_waits().await, 1);
+    let said = told.lock().unwrap().clone();
+    assert_eq!(said.len(), 1);
+    let (who, _session, line, body) = &said[0];
+    assert_eq!((who.as_str(), body.as_str()), ("coach", "Tâche de fond en attente"));
+    assert!(line.starts_with("Tâche de fond en attente : Comparer\n"), "{line}");
+    assert!(line.contains("toute seule") && line.contains("annuler"), "{line}");
+    for word in ["mémoire", "RAM", "Mo", "navigateur"] {
+        assert!(!line.contains(word), "plain words only: {line}");
+    }
+    assert_eq!(board.tell_long_waits().await, 0, "told once");
+    // a task paused for room mid-run, never timed: from now
+    let mut paused = jobs::load(&config, &id).unwrap();
+    for key in ["waiting_since", "wait_told"] {
+        paused.remove(key);
+    }
+    paused.insert("reason".into(), json!("space"));
+    jobs::save(&config, &paused).unwrap();
+    assert_eq!(board.tell_long_waits().await, 0);
+    assert!(jobs::load(&config, &id).unwrap()["waiting_since"].as_f64().is_some());
+    assert_eq!(told.lock().unwrap().len(), 1);
+    board.forget(&id).await.unwrap();
 }
 
 /// Review 2: the bridge's MCP servers run each call in a spawned task (card_pay.rs `serve_call`: `let mut work =
