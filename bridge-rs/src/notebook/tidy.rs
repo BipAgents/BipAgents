@@ -85,7 +85,8 @@ pub fn looks_durable(text: &str) -> bool {
     tk::chars(text) >= 15 && (DURABLE.is_match(text) || NAME.is_match(text))
 }
 
-fn content(message: &Dict) -> String {
+/// A message's text (its parts joined): offer_ideas.rs too.
+pub(crate) fn content(message: &Dict) -> String {
     match message.get("content") {
         Some(Value::Array(parts)) => {
             parts.iter().filter_map(|p| p.get("text").and_then(Value::as_str)).collect::<Vec<_>>().join(" ")
@@ -294,7 +295,8 @@ async fn gather(hermes: &HermesClient, config: &Config, agent: &AgentConfig, sin
     Ok(Gathered { agent: agent.clone(), health: super::health_agent(config, &agent.name), seen, kept, cursors })
 }
 
-fn clip(text: &str, n: usize) -> String {
+/// `text` cut at `n` characters, « … » after: offer_ideas.rs too.
+pub(crate) fn clip(text: &str, n: usize) -> String {
     if tk::chars(text) <= n {
         text.to_string()
     } else {

@@ -353,6 +353,26 @@ pub async fn place_for(state: &AppState, agent: &AgentConfig, card: &str, run_id
     place(state, agent, &[card.to_string()], run_id).await;
 }
 
+/// A card made with no turn for one conversation of `agent` (`session`): a day's pass's idea (offer_ideas.rs), shown
+/// where it is about.
+pub async fn place_in(state: &AppState, agent: &AgentConfig, card: &str, session: &str) {
+    let report = report_of(state, agent, session).await;
+    let config = state.config();
+    let summary = bridge_cards(state, &config, Some(&agent.name)).iter().find(|i| run_id_of(i) == card).map(summary_of);
+    let place = Place {
+        agent: agent.name.clone(),
+        session: Some(session.to_string()),
+        report: report.clone(),
+        summary: summary.unwrap_or_default(),
+        ..Place::default()
+    };
+    if let Err(err) = keep(&config, card, place) {
+        tracing::warn!(agent = %agent.name, error = %err, "card place not kept");
+    }
+    let threads = crate::threads::threads_of(state);
+    threads.touch(&agent.name, report.as_deref().or(Some(session)), "asked").await;
+}
+
 /// A card of this kind can show in a conversation.
 fn placeable(run_id: &str) -> bool {
     !NOT_IN_CONVERSATIONS.iter().any(|p| run_id.starts_with(p))

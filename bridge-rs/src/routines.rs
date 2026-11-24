@@ -740,6 +740,16 @@ pub fn create_said(
     routine
 }
 
+/// A schedule as a card says it in `lang` (« Chaque dimanche vers 19 h »), « vers » when `approx`: a smart offer's
+/// routine (offer_ideas.rs).
+pub fn schedule_words(schedule: &Schedule, approx: bool, zone: Tz, lang: &str) -> String {
+    let r: Option<Routine> = serde_json::from_value(
+        json!({"id": "", "agent": "", "name": "", "prompt": "", "schedule": schedule, "approx": approx}),
+    )
+    .ok();
+    r.map(|r| when_in(&r, schedule, zone, lang)).unwrap_or_default()
+}
+
 /// A one-time routine moved by `delta` seconds (a plan's appointment moved, plans.rs).
 pub fn shift_once(config: &Config, id: &str, delta: f64) {
     change(config, |b| {
@@ -2326,6 +2336,12 @@ fn ask_of(arguments: &Dict, zone: Tz, asked: bool) -> Result<Ask, String> {
 /// `routine_schedule`; `asked`: in a turn of its person's own conversation (agent_tools.rs `persons_own_call`): no
 /// default end for what it makes then (task_frame.rs).
 pub fn call_asked(config: &Config, agent: &str, arguments: &Dict, origin: Option<&str>, asked: bool) -> Called {
+    call_in_turn(config, agent, arguments, origin, asked, None)
+}
+
+/// `call_asked` in the turn `run` the hub follows (agent_tools.rs): the yes turn of a smart offer may start the
+/// routine its card showed there, and in no other turn (offer_ideas.rs `started_by_yes`, review B1).
+pub fn call_in_turn(config: &Config, agent: &str, arguments: &Dict, origin: Option<&str>, asked: bool, run: Option<&str>) -> Called {
     let zone = zone(config);
     let mine = all(config, Some(agent));
     let name = arg(arguments, "name");
@@ -2359,6 +2375,13 @@ name for this one.",
                     create_framed(config, agent, &name, &arg(arguments, "schedule"), &prompt, origin, by, &ask)
                 });
             match made {
+                Ok(r) if r.card.is_some() && crate::offer_ideas::started_by_yes(config, agent, &r, run) => {
+                    // the routine a smart offer's card showed (its rhythm, its end): the person's « Oui » was its start
+                    let card_id = r.card.as_ref().map(|c| c.id.clone()).unwrap_or_default();
+                    let started = answer(config, agent, &card_id, "once").unwrap_or(r);
+                    (format!("Routine made and started: « {} ». Your person's « Oui » to your offer, which showed its \
+rhythm and its end, was its start: no card.", started.name), false, None)
+                }
                 Ok(r) => {
                     card = r.card.as_ref().map(|c| (card_sentence(config, &r), c.id.clone()));
                     let when = view(&r, zone)["schedule_display"].as_str().unwrap_or("").to_string();
