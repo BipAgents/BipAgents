@@ -1,0 +1,423 @@
+{
+ "about": "« Mémoire partagée », per agent, at the bottom of its page, and the defaults for an agent on an outside model (Alex 23/11: « on construit et on met un pop-up explicatif quand c'est un modèle externe : la mémoire partagée et le Carnet sont désactivés par défaut pour un modèle connecté »; passation-pro briefs/status-shared-memory.md). The bridge keeps it (bridge-rs/src/agent_shared_memory.rs, outside_model.rs, shared_memory.rs) and tells it in the agent's settings; the apps draw it (AgentPageView.swift, AgentPageScreen.kt). Read by bridge/tests_blackbox/test_shared_memory_setting.py (the bridge's answers), HermesKit AgentSharedMemoryTests and Android AgentSharedMemoryTest (what the apps read and draw). Additions only: an app 1.0 ignores `shared_memory` and draws nothing; the bridge applies the defaults and the cleaning all the same.",
+ "routes": {
+  "settings": "GET /v1/agents/{agent_id}/settings: + `shared_memory: {on, circle, outside: {provider, label, since} | null}`; absent for an agent without the setting (other people talk to it: the family's agent, a project agent, an agent shared with a relative or linked with another household's agents; set up by hand; a profile of a Hermes the person brought). `on`: its switch; `circle`: it receives the common memory now (its switch on and its Carnet on); `outside.since`: when the protection applied (the pop-up is shown again after a new one). `outside.provider` « unknown »: a model the bridge cannot tell (protected as outside), `label` then says so in the person's language. Its presence is the capability: the apps draw the switch only then.",
+  "put": "PUT /v1/agents/{agent_id}/shared-memory {on} → {id, on}. 404: not an agent of this place. 409 {\"detail\": \"others_facing\"}: an agent other people talk to. 400 {\"detail\": \"by_hand\"}: set up by hand, or a brought Hermes' profile. 422: no `on`, or not a boolean.",
+  "file": "<data>/agent_shared_memory.json (0600): {\"off\": [agent], \"outside\": {agent: {provider, label, at, off: [\"shared_memory\" | \"notebook\"]}}}. An agent absent from `off` has it on, unless it is on an outside model the bridge has not seen yet.",
+  "off": "Out of the shared memory's circle; what it received from the common list taken out of its USER.md (the keys the bridge wrote there; for what it received before 23/11, the common entries learnt by someone else and what was in the list once), what it wrote itself kept; the handovers another agent left in its MEMORY.md (« ↪ Passé par … ») taken out too; memories/.prompt-day.json removed; `memory.user_profile_enabled: false` in its profile's config.yaml (a `false` the person wrote stays); no Carnet news; no handover into its MEMORY.md; no imported facts in its USER.md; each of its conversations goes on in a new Hermes session (the same thread: the apps keep showing what was said; Hermes no longer replays the history); its conversations' prompts refreshed. The same cleaning when it leaves the circle for any other reason (its Carnet off, shared with a relative).",
+  "outside": "« Modèle extérieur »: one of the models of its profile's config.yaml (else the hub's) — `model`, `fallback_model`, `fallback_providers`, `auxiliary.*`, `delegation`, `smart_model_routing` — is neither the person's own (an address of this machine, the local network, their Tailscale network; Ollama, LM Studio, llama.cpp, vLLM named without an address, but never an Ollama `…:cloud` model) nor one of our European providers (exactly eurouter.ai or mistral.ai); a provider Hermes knows by name (OpenAI, Anthropic…) counts whatever address is beside it; `custom` without its address follows the profile's CUSTOM_BASE_URL / OPENROUTER_BASE_URL, else OpenRouter. A model the bridge cannot tell is protected as outside when nothing is noted yet. Then, once per provider: shared memory, Carnet, Health off and the agent « à l'écart » of the other agents (rules.rs `aside`), its conversations in new sessions; at its creation (a model of the catalogue too), before a model route writes an outside model, at the bridge's start and every 15 s. Its in-conversation asks for the Carnet and Health are not offered, nor « Aussi pour… » for it, nor an older card's « Oui ». The person may turn each back on (the apps ask first for the shared memory and the Carnet); back on a model that is not outside, what the bridge had turned off and the person never touched comes back on. Agents other people talk to get the same protection (no shared memory setting)."
+ },
+ "settings": [
+  {
+   "name": "own_agent_default",
+   "about": "One of the person's own agents on our provider: on.",
+   "agent": "own",
+   "model": "eurouter",
+   "stored": null,
+   "shared_memory": {
+    "on": true,
+    "circle": true,
+    "outside": null
+   },
+   "notebook": {
+    "on": true
+   }
+  },
+  {
+   "name": "own_agent_off",
+   "about": "Turned off on its page.",
+   "agent": "own",
+   "model": "eurouter",
+   "stored": false,
+   "shared_memory": {
+    "on": false,
+    "circle": false,
+    "outside": null
+   },
+   "notebook": {
+    "on": true
+   }
+  },
+  {
+   "name": "outside_default",
+   "about": "Created on an outside model (a hub on ChatGPT through Codex): both off by default.",
+   "agent": "outside",
+   "model": "openai-codex",
+   "stored": null,
+   "shared_memory": {
+    "on": false,
+    "circle": false,
+    "outside": {
+     "provider": "openai-codex",
+     "label": "OpenAI"
+    }
+   },
+   "notebook": {
+    "on": false
+   }
+  },
+  {
+   "name": "outside_on_knowingly",
+   "about": "Turned back on by the person, knowingly: stays on.",
+   "agent": "outside",
+   "model": "openai-codex",
+   "stored": true,
+   "shared_memory": {
+    "on": true,
+    "circle": false,
+    "outside": {
+     "provider": "openai-codex",
+     "label": "OpenAI"
+    }
+   },
+   "notebook": {
+    "on": false
+   }
+  },
+  {
+   "name": "project_agent",
+   "about": "An agent other people talk to: no `shared_memory` at all.",
+   "agent": "others_facing",
+   "model": "eurouter",
+   "stored": null,
+   "shared_memory": null,
+   "notebook": null
+  }
+ ],
+ "put": [
+  {
+   "name": "to_off",
+   "agent": "own",
+   "body": {
+    "on": false
+   },
+   "status": 200,
+   "answer": {
+    "on": false
+   }
+  },
+  {
+   "name": "back_on",
+   "agent": "own",
+   "body": {
+    "on": true
+   },
+   "status": 200,
+   "answer": {
+    "on": true
+   }
+  },
+  {
+   "name": "others_facing",
+   "agent": "others_facing",
+   "body": {
+    "on": true
+   },
+   "status": 409,
+   "answer": {
+    "detail": "others_facing"
+   }
+  },
+  {
+   "name": "unknown_agent",
+   "agent": "nobody",
+   "body": {
+    "on": false
+   },
+   "status": 404,
+   "answer": null
+  },
+  {
+   "name": "no_on",
+   "agent": "own",
+   "body": {},
+   "status": 422,
+   "answer": null
+  },
+  {
+   "name": "not_a_boolean",
+   "agent": "own",
+   "body": {
+    "on": "yes"
+   },
+   "status": 422,
+   "answer": null
+  }
+ ],
+ "app": {
+  "rules": {
+   "apostrophes": "The texts are written with the apps' typographic apostrophe (’).",
+   "where": "At the bottom of the agent's page, right after « Initiative »: a small heading, one switch, one grey line under it. Nothing else on the page moves.",
+   "hidden": "No `shared_memory` in the settings (an app 1.1 on an older bridge, an agent without the setting): nothing drawn, not even the heading.",
+   "line": "The grey line says what the state does: `line_on` / `line_off`; on but out of the circle (its Carnet off): `line_on_carnet_off`; for an agent on an outside model, `line_outside_on` (in the circle) / `line_outside_off` with {provider} = `outside.label`.",
+   "tap": "Turning it off: at once, PUT {on: false}. Turning it on for an agent on an outside model: first `confirm_title` / `confirm_text` with `confirm_on` and `confirm_cancel`; only `confirm_on` sends PUT {on: true}. Otherwise at once. The answer's `on` is kept; a failure puts the previous state back with the app's usual error line.",
+   "popup": "Once per agent, provider and protection (`outside.provider`, `outside.since`), on this phone: when the app reads the settings of an agent with `outside` and `on` false (opening its page or its conversation, its tools), an alert `popup_title` / `popup_text`, {agent} = its name and {provider} = `outside.label`, one button `popup_ok`. Never in the demo, never for an agent whose shared memory is on.",
+   "demo": "The demo keeps the switch on the phone (on for every agent, none on an outside model).",
+   "carnet": "Turning the Carnet on (« Applis et outils ») for an agent with `outside`: first `carnet_confirm_title` / `carnet_confirm_text`, `confirm_on` / `confirm_cancel`; only `confirm_on` turns it on."
+  },
+  "cases": [
+   {
+    "name": "absent",
+    "shared_memory": null,
+    "notebook": true,
+    "shown": null,
+    "popup": false
+   },
+   {
+    "name": "on",
+    "shared_memory": {
+     "on": true,
+     "circle": true,
+     "outside": null
+    },
+    "notebook": true,
+    "shown": {
+     "on": true,
+     "line": "line_on"
+    },
+    "popup": false
+   },
+   {
+    "name": "on_carnet_off",
+    "about": "Its switch on, its Carnet off: out of the circle.",
+    "shared_memory": {
+     "on": true,
+     "circle": false,
+     "outside": null
+    },
+    "notebook": false,
+    "shown": {
+     "on": true,
+     "line": "line_on_carnet_off"
+    },
+    "popup": false
+   },
+   {
+    "name": "off",
+    "shared_memory": {
+     "on": false,
+     "circle": false,
+     "outside": null
+    },
+    "notebook": true,
+    "shown": {
+     "on": false,
+     "line": "line_off"
+    },
+    "popup": false
+   },
+   {
+    "name": "outside_off",
+    "shared_memory": {
+     "on": false,
+     "circle": false,
+     "outside": {
+      "provider": "openai-codex",
+      "label": "OpenAI",
+      "since": 1763900000.0
+     }
+    },
+    "notebook": false,
+    "shown": {
+     "on": false,
+     "line": "line_outside_off"
+    },
+    "popup": true
+   },
+   {
+    "name": "outside_off_carnet_on",
+    "shared_memory": {
+     "on": false,
+     "circle": false,
+     "outside": {
+      "provider": "anthropic",
+      "label": "Anthropic",
+      "since": 1763900000.0
+     }
+    },
+    "notebook": true,
+    "shown": {
+     "on": false,
+     "line": "line_outside_off"
+    },
+    "popup": true
+   },
+   {
+    "name": "outside_on",
+    "shared_memory": {
+     "on": true,
+     "circle": true,
+     "outside": {
+      "provider": "openai-codex",
+      "label": "OpenAI",
+      "since": 1763900000.0
+     }
+    },
+    "notebook": true,
+    "shown": {
+     "on": true,
+     "line": "line_outside_on"
+    },
+    "popup": false
+   },
+   {
+    "name": "outside_on_carnet_off",
+    "shared_memory": {
+     "on": true,
+     "circle": false,
+     "outside": {
+      "provider": "openai-codex",
+      "label": "OpenAI",
+      "since": 1763900000.0
+     }
+    },
+    "notebook": false,
+    "shown": {
+     "on": true,
+     "line": "line_on_carnet_off"
+    },
+    "popup": false
+   },
+   {
+    "name": "unknown",
+    "about": "A model the bridge cannot tell: protected as outside.",
+    "shared_memory": {
+     "on": false,
+     "circle": false,
+     "outside": {
+      "provider": "unknown",
+      "label": "un modèle que BipAgents ne reconnaît pas",
+      "since": 1763900000.0
+     }
+    },
+    "notebook": false,
+    "shown": {
+     "on": false,
+     "line": "line_outside_off"
+    },
+    "popup": true
+   },
+   {
+    "name": "older_bridge",
+    "about": "`circle` and `outside.since` missing (the bridge of 8c8b0f0ce): `circle` taken as `on`, the pop-up keyed without a time.",
+    "shared_memory": {
+     "on": true,
+     "outside": null
+    },
+    "notebook": true,
+    "shown": {
+     "on": true,
+     "line": "line_on"
+    },
+    "popup": false
+   }
+  ]
+ },
+ "texts": {
+  "fr": {
+   "title": "Mémoire partagée",
+   "line_on": "Il sait ce que tes autres agents savent de toi.",
+   "line_off": "Il ne reçoit pas ce que tes autres agents savent de toi.",
+   "line_outside_on": "Modèle extérieur ({provider}) : ce que tes agents savent de toi lui est envoyé.",
+   "line_outside_off": "Modèle extérieur ({provider}) : ce que tes agents savent de toi ne lui est pas donné.",
+   "confirm_title": "Rallumer la mémoire partagée ?",
+   "confirm_text": "{agent} utilise un modèle extérieur ({provider}). Ce que tes agents savent de toi lui sera envoyé.",
+   "confirm_on": "Rallumer",
+   "confirm_cancel": "Annuler",
+   "popup_title": "Modèle extérieur",
+   "popup_text": "{agent} utilise un modèle extérieur ({provider}). Pour protéger ta vie privée, sa mémoire partagée, le Carnet, Santé et ses échanges avec tes autres agents (messages, fichiers et discussions) sont éteints, et ses conversations repartent à neuf : il ne relit plus ce qui y a été dit avant. Tu peux rallumer chacun dans sa page.",
+   "popup_ok": "OK",
+   "known_off": "Mémoire partagée éteinte : il ne reçoit pas ce que tes autres agents savent de toi.",
+   "line_on_carnet_off": "Son Carnet est éteint : il ne reçoit pas ce que tes autres agents savent de toi.",
+   "carnet_confirm_title": "Rallumer le Carnet ?",
+   "carnet_confirm_text": "{agent} utilise un modèle extérieur ({provider}). Ce qu’il lira de ton Carnet lui sera envoyé.",
+   "carnet_confirm_text_circle": "{agent} utilise un modèle extérieur ({provider}). Ce qu’il lira de ton Carnet, et ce que tes autres agents savent de toi, lui sera envoyé.",
+   "health_confirm_title": "Rallumer Santé ?",
+   "health_confirm_text": "{agent} utilise un modèle extérieur ({provider}). Ce qu’il lira de ta santé lui sera envoyé."
+  },
+  "en": {
+   "title": "Shared memory",
+   "line_on": "It knows what your other agents know about you.",
+   "line_off": "It doesn’t get what your other agents know about you.",
+   "line_outside_on": "Outside model ({provider}): what your agents know about you is sent to it.",
+   "line_outside_off": "Outside model ({provider}): what your agents know about you isn’t given to it.",
+   "confirm_title": "Turn shared memory back on?",
+   "confirm_text": "{agent} uses an outside model ({provider}). What your agents know about you will be sent to it.",
+   "confirm_on": "Turn on",
+   "confirm_cancel": "Cancel",
+   "popup_title": "Outside model",
+   "popup_text": "{agent} uses an outside model ({provider}). To protect your privacy, its shared memory, the Notebook, Health and its exchanges with your other agents (messages, files and discussions) are off, and its conversations start afresh: it no longer reads what was said there before. You can turn each back on from its page.",
+   "popup_ok": "OK",
+   "known_off": "Shared memory off: it doesn’t get what your other agents know about you.",
+   "line_on_carnet_off": "Its Notebook is off: it doesn’t get what your other agents know about you.",
+   "carnet_confirm_title": "Turn the Notebook back on?",
+   "carnet_confirm_text": "{agent} uses an outside model ({provider}). What it reads of your Notebook will be sent to it.",
+   "carnet_confirm_text_circle": "{agent} uses an outside model ({provider}). What it reads of your Notebook, and what your other agents know about you, will be sent to it.",
+   "health_confirm_title": "Turn Health back on?",
+   "health_confirm_text": "{agent} uses an outside model ({provider}). What it reads of your health will be sent to it."
+  },
+  "de": {
+   "title": "Gemeinsames Gedächtnis",
+   "line_on": "Er weiß, was deine anderen Agenten über dich wissen.",
+   "line_off": "Er bekommt nicht, was deine anderen Agenten über dich wissen.",
+   "line_outside_on": "Externes Modell ({provider}): Was deine Agenten über dich wissen, wird ihm geschickt.",
+   "line_outside_off": "Externes Modell ({provider}): Was deine Agenten über dich wissen, bekommt er nicht.",
+   "confirm_title": "Gemeinsames Gedächtnis wieder einschalten?",
+   "confirm_text": "{agent} nutzt ein externes Modell ({provider}). Was deine Agenten über dich wissen, wird ihm geschickt.",
+   "confirm_on": "Einschalten",
+   "confirm_cancel": "Abbrechen",
+   "popup_title": "Externes Modell",
+   "popup_text": "{agent} nutzt ein externes Modell ({provider}). Zum Schutz deiner Privatsphäre sind sein gemeinsames Gedächtnis, das Notizbuch, Gesundheit und sein Austausch mit deinen anderen Agenten (Nachrichten, Dateien und Gespräche) aus, und seine Unterhaltungen beginnen neu: Was dort bisher gesagt wurde, liest er nicht mehr. Du kannst alles einzeln auf seiner Seite wieder einschalten.",
+   "popup_ok": "OK",
+   "known_off": "Gemeinsames Gedächtnis aus: Er bekommt nicht, was deine anderen Agenten über dich wissen.",
+   "line_on_carnet_off": "Sein Notizbuch ist aus: Er bekommt nicht, was deine anderen Agenten über dich wissen.",
+   "carnet_confirm_title": "Notizbuch wieder einschalten?",
+   "carnet_confirm_text": "{agent} nutzt ein externes Modell ({provider}). Was er aus deinem Notizbuch liest, wird ihm geschickt.",
+   "carnet_confirm_text_circle": "{agent} nutzt ein externes Modell ({provider}). Was er aus deinem Notizbuch liest und was deine anderen Agenten über dich wissen, wird ihm geschickt.",
+   "health_confirm_title": "Gesundheit wieder einschalten?",
+   "health_confirm_text": "{agent} nutzt ein externes Modell ({provider}). Was er über deine Gesundheit liest, wird ihm geschickt."
+  },
+  "es": {
+   "title": "Memoria compartida",
+   "line_on": "Sabe lo que tus otros agentes saben de ti.",
+   "line_off": "No recibe lo que tus otros agentes saben de ti.",
+   "line_outside_on": "Modelo externo ({provider}): lo que tus agentes saben de ti se le envía.",
+   "line_outside_off": "Modelo externo ({provider}): lo que tus agentes saben de ti no se le da.",
+   "confirm_title": "¿Volver a encender la memoria compartida?",
+   "confirm_text": "{agent} usa un modelo externo ({provider}). Lo que tus agentes saben de ti se le enviará.",
+   "confirm_on": "Encender",
+   "confirm_cancel": "Cancelar",
+   "popup_title": "Modelo externo",
+   "popup_text": "{agent} usa un modelo externo ({provider}). Para proteger tu privacidad, su memoria compartida, el Cuaderno, Salud y sus intercambios con tus otros agentes (mensajes, archivos y discusiones) están apagados, y sus conversaciones empiezan de nuevo: ya no lee lo que se dijo antes en ellas. Puedes volver a encender cada uno desde su página.",
+   "popup_ok": "OK",
+   "known_off": "Memoria compartida apagada: no recibe lo que tus otros agentes saben de ti.",
+   "line_on_carnet_off": "Su Cuaderno está apagado: no recibe lo que tus otros agentes saben de ti.",
+   "carnet_confirm_title": "¿Volver a encender el Cuaderno?",
+   "carnet_confirm_text": "{agent} usa un modelo externo ({provider}). Lo que lea de tu Cuaderno se le enviará.",
+   "carnet_confirm_text_circle": "{agent} usa un modelo externo ({provider}). Lo que lea de tu Cuaderno, y lo que tus otros agentes saben de ti, se le enviará.",
+   "health_confirm_title": "¿Volver a encender Salud?",
+   "health_confirm_text": "{agent} usa un modelo externo ({provider}). Lo que lea de tu salud se le enviará."
+  },
+  "nl": {
+   "title": "Gedeeld geheugen",
+   "line_on": "Hij weet wat je andere agenten over je weten.",
+   "line_off": "Hij krijgt niet wat je andere agenten over je weten.",
+   "line_outside_on": "Extern model ({provider}): wat je agenten over je weten, wordt naar hem gestuurd.",
+   "line_outside_off": "Extern model ({provider}): wat je agenten over je weten, krijgt hij niet.",
+   "confirm_title": "Gedeeld geheugen weer aanzetten?",
+   "confirm_text": "{agent} gebruikt een extern model ({provider}). Wat je agenten over je weten, wordt naar hem gestuurd.",
+   "confirm_on": "Aanzetten",
+   "confirm_cancel": "Annuleren",
+   "popup_title": "Extern model",
+   "popup_text": "{agent} gebruikt een extern model ({provider}). Om je privacy te beschermen staan zijn gedeelde geheugen, het Notitieboek, Gezondheid en zijn uitwisseling met je andere agenten (berichten, bestanden en discussies) uit, en zijn gesprekken beginnen opnieuw: wat er eerder is gezegd, leest hij niet meer. Je kunt elk ervan weer aanzetten via zijn pagina.",
+   "popup_ok": "OK",
+   "known_off": "Gedeeld geheugen uit: hij krijgt niet wat je andere agenten over je weten.",
+   "line_on_carnet_off": "Zijn Notitieboek staat uit: hij krijgt niet wat je andere agenten over je weten.",
+   "carnet_confirm_title": "Notitieboek weer aanzetten?",
+   "carnet_confirm_text": "{agent} gebruikt een extern model ({provider}). Wat hij uit je Notitieboek leest, wordt naar hem gestuurd.",
+   "carnet_confirm_text_circle": "{agent} gebruikt een extern model ({provider}). Wat hij uit je Notitieboek leest, en wat je andere agenten over je weten, wordt naar hem gestuurd.",
+   "health_confirm_title": "Gezondheid weer aanzetten?",
+   "health_confirm_text": "{agent} gebruikt een extern model ({provider}). Wat hij over je gezondheid leest, wordt naar hem gestuurd."
+  }
+ }
+}

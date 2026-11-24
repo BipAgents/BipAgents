@@ -68,6 +68,7 @@ the drift.
 | sandbox and shares (`terminal.*`, `command_allowlist`) | bridge stores | through `hermes` (keeps Hermes' `.env` mirror) |
 | time zones | person's zone (dates) | `timezone`, `cron.timezone` through `edit` |
 | SOUL blocks (language, payments, shared memory, server, health…) | `bridge.toml` + feature stores | `SOUL.md` through `edit_text` |
+| « Mémoire partagée » (off by default on an outside model) | `<data>/agent_shared_memory.json` (agent_shared_memory.rs; outside_model.rs reads `model.*`) | `memory.user_profile_enabled: false` while off, through `edit` in `reconcile`; the shared memory block of `SOUL.md` |
 
 The phones keep no copy of what the bridge keeps: `GET /v1/agents` lists each agent's name, look, group and
 language (from the record), and a change made in an app goes to the bridge at once (`PATCH /v1/agents/<id>/settings`

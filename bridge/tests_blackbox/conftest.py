@@ -115,6 +115,10 @@ def managed_install(bridge: Bridge, fakes, agents=("coach",), **hermes: Any) -> 
     serves `agents` from the hub (`<hub>/p/<name>`). Returns the hub's HERMES_HOME."""
     home = bridge.root / ".hermes"
     (home / "profiles").mkdir(parents=True, exist_ok=True)
+    # the install's model: the person's own (LM Studio), so its agents are not « outside » (agent_shared_memory.rs: a
+    # model the bridge cannot tell is protected as outside); a test writes its own over it
+    if not (home / "config.yaml").exists():
+        (home / "config.yaml").write_text("model:\n  provider: lmstudio\n")
     bridge.config["hermes"] = {"root": patched_hermes(bridge.root), "bin": str(bridge.fakebin / "hermes"),
                                "home": str(home), "hub_url": fakes.hermes.url, **hermes}
     for name in agents:
