@@ -924,3 +924,22 @@ fn bench_an_offer_s_subject_as_the_models_write_it_is_taken() {
     none.remove("about");
     assert!(draft(&none, "vie", &all(), PARIS, n).unwrap_err().contains("about"), "nothing given: still asked");
 }
+
+/// Proactive-tune's bench (24/11): the Spark's smart agent offered « Je réserve la table de 8 chez L'Auberge des
+/// Canuts, samedi 28 au soir ? » and the bridge showed it. An offer that is itself booking, paying, buying or sending
+/// is refused (design §3b.3: they are only later steps with their own card); looking or comparing is not.
+#[test]
+fn bench_an_offer_never_books_pays_buys_or_sends_itself() {
+    for label in ["Je réserve la table de 8 chez L'Auberge des Canuts, samedi 28 au soir ?", "Je te commande les cartouches ?",
+                  "Je paie la facture ?", "J'envoie le mail au banquier ?", "Shall I book the table for Saturday?",
+                  "Soll ich den Tisch buchen? Ich buche ihn für dich.", "¿Te reservo la mesa?"] {
+        assert!(acts_itself(label).is_some(), "{label}");
+        let mut a = offer("search", "Dîner");
+        a.insert("label".into(), json!(label));
+        assert!(draft(&a, "vie", &all(), PARIS, now()).is_err(), "{label}");
+    }
+    for label in ["Je cherche un resto pour samedi ?", "Je compare les prix des cartouches ?", "Je prépare le brouillon ?",
+                  "Je te mets un rappel pour réserver ?", "Shall I find a table for Saturday?"] {
+        assert!(acts_itself(label).is_none(), "{label}");
+    }
+}

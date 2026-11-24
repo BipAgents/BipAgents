@@ -674,6 +674,9 @@ fn matches_any(names: &[String], wanted: &str) -> bool {
 pub fn check(have: &Have, spec: &Value, lang: &str, zone: Tz, now: f64) -> Result<Checked, String> {
     let t = texts(lang);
     let label = plain(spec.get("label"), "label", LABEL_MAX)?;
+    if let Some(refused) = crate::plans::offers::acts_itself(&label) {
+        return Err(refused);
+    }
     let prompt = text_arg(spec.get("prompt"));
     if prompt.is_empty() || prompt.chars().count() > PROMPT_MAX || prompt.contains(['<', '>', '`']) {
         return Err(not_done(format!("prompt: what you'll do at their yes, exactly, plain text, 1 to {PROMPT_MAX} characters")));

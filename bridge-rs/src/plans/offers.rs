@@ -221,6 +221,26 @@ pub fn theme_of(offer: &Offer) -> Option<&'static str> {
     text.split_whitespace().any(|w| SHOPPING_WORDS.iter().any(|s| w.starts_with(s))).then_some(SHOPPING)
 }
 
+/// An offer whose question is itself to book, pay, buy or send (« Je réserve la table de 8 chez … ? », the Spark on
+/// proactive-tune's bench): never an offer (design §3b.3, the critical kinds), only a later step with its own card.
+static ACTS_ITSELF: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(concat!(
+        r"\b(je (te |vous )?(reserve|paie|paye|commande|achete|envoie)|j envoie|je t envoie",
+        r"|(i ll|i will|shall i|should i|can i) (book|pay|order|send|buy|reserve)",
+        r"|ich (buche|reserviere|bezahle|bestelle|kaufe|sende|schicke)",
+        r"|(te |lo |la )?(reservo|pago|compro|envio))\b"
+    ))
+    .unwrap()
+});
+
+/// The refusal of an offer that would book, pay, buy or send itself (`ACTS_ITSELF`), None otherwise.
+pub fn acts_itself(label: &str) -> Option<String> {
+    ACTS_ITSELF.is_match(&folded(label)).then(|| {
+        not_done("the offer itself can't be to book, pay, buy or send: offer the step before it (find, compare, prepare) \
+and say the booking, payment or sending will ask its own card.")
+    })
+}
+
 /// `theme_of`'s one subject, as the learning counts it (a key of its own beside the kinds: « theme:shopping »).
 pub const SHOPPING: &str = "theme:shopping";
 
@@ -865,6 +885,9 @@ pub fn spec_of(
         return Err(not_done(format!("you can't {} here; don't offer it.", can_not_words(&kind))));
     }
     let label = plain(spec.get("label"), "label", label_max).map_err(not_done)?;
+    if let Some(refused) = acts_itself(&label) {
+        return Err(refused);
+    }
     let given_params = spec.get("params").filter(|p| !p.is_null());
     let mut until: Option<f64> = None;
     let (prompt, params, site) = if BY_BRIDGE.contains(&kind.as_str()) {
