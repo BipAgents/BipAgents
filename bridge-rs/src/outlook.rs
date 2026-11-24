@@ -470,6 +470,15 @@ pub async fn finish(config: &Config, query: HashMap<String, String>) -> ApiResul
         let other_account = previous.as_ref().is_some_and(|p| {
             p.link.account.is_some() && account.is_some() && p.link.account != account
         });
+        // chosen in the app while off for its model: « Rallumer Outlook ? » answered (one the app did not ask, allowed
+        // for the previous account only, is not)
+        let answered: Vec<String> = flow.agents.iter().filter(|a| held_now(config, a)).cloned().collect();
+        if other_account {
+            // another account: what the person allowed for the previous one is asked again (review B1)
+            for a in previous.iter().flat_map(|p| &p.link.agents) {
+                crate::agent_shared_memory::outlook_turned_off(config, a);
+            }
+        }
         let same = previous.filter(|_| !other_account);
         // what was asked is what they use (the app sends what the person switched on)
         let parts = asked;
@@ -491,7 +500,7 @@ pub async fn finish(config: &Config, query: HashMap<String, String>) -> ApiResul
         };
         stored.outlook = Some(Account { link: link.clone(), parts });
         store.write(&stored)?;
-        person_chose(config, &flow.agents, &[]); // chosen on an outside model: « Rallumer Outlook ? » answered
+        person_chose(config, &answered, &[]);
         (link, parts, other_account)
     };
     if other_account {
@@ -571,6 +580,10 @@ pub async fn disconnect(config: &Config) -> ApiResult<(Value, Vec<String>)> {
         let mut stored = store.read()?;
         let account = stored.outlook.take().ok_or_else(|| if config.outlook.enabled { not_connected() } else { off() })?;
         store.write(&stored)?;
+        // « Rallumer Outlook ? » goes with it: connected again, maybe with another account, it is asked again (review B1)
+        for a in &account.link.agents {
+            crate::agent_shared_memory::outlook_turned_off(config, a);
+        }
         account
     };
     revoke_always(config, None).await;
