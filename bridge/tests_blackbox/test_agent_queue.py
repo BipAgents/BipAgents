@@ -290,7 +290,8 @@ def test_the_queue_answers_for_known_agents_only_and_keeps_its_limits(bridges, f
     start(bridge, fakes)
     assert bridge.get("/v1/agents/nope/queue", headers=AUTH).status_code == 404
     assert bridge.get("/v1/agents/wellness/queue").status_code == 401
-    assert send(bridge, "x" * 20_001, after=True).status_code == 422
+    # a message's words over 20 000 characters go as a text file (23/11, test_long_text.py): refused over 1 000 000
+    assert send(bridge, "x" * 1_000_001, after=True).status_code == 422
     for i in range(30):
         add(bridge, f"m{i}", run_id="r1")
     assert send(bridge, "one more", after=True).status_code == 409

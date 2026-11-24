@@ -1253,6 +1253,6 @@ fn purge_only_old_bridge_files() {
     for f in [&old, &foreign] {
         std::fs::File::options().write(true).open(f).unwrap().set_modified(long_ago).unwrap();
     }
-    assert_eq!(files::purge_uploads(&s(dir.path()), 30, None), 1);
+    assert_eq!(files::purge_uploads(&s(dir.path()), 30, None, &Default::default()), 1);
     assert!(!old.exists() && new.exists() && foreign.exists());
 }

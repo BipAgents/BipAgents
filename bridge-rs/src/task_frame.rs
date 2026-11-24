@@ -5,8 +5,11 @@
 //! - an owner: the agent that does it, the person it is for (« you », or the family member who asked for it);
 //! - an end: a date, a number of runs, its plan's end, « once » (a one-time routine; a watcher that stops once it told
 //!   its person), or « until you stop it ». What its agent sets up on its own (not in a turn of the person's own
-//!   conversation) with no end given ends `DEFAULT_END_DAYS` after; `KEEP_ASK_DAYS` before, a card « Garder 3 mois de
-//!   plus ? » (`KEEP`). An end reached goes quietly: one Boîte line, not pushed, for what ran more than a week;
+//!   conversation) with no end given has a default end `DEFAULT_END_DAYS` after; `KEEP_ASK_DAYS` before, a card
+//!   « Garder 3 mois de plus ? » (`KEEP`). It never ends there without its person (Alex 24/11, B2): « La laisser
+//!   s'arrêter » makes the end hers; unanswered at its date, it goes on and the card is asked once more, pushed
+//!   (`REMIND_DAYS` later); unanswered again, it goes on « until you stop it ». An end its person gave (a date, a
+//!   number of runs) is reached quietly: one Boîte line, not pushed, for what ran more than a week;
 //! - a place where it answers: the conversation it was made in, the Boîte, or silently on its page (`deliver`).
 //!
 //! A « Oui » to a one-time thing is one time; a repeat asks its own « Oui », its card saying its rhythm and its end
@@ -19,7 +22,10 @@
 //! paid turn). A watcher « en panne » asks the same card in place of the bridge's line, with no model call before
 //! « Réparer ». « Réparer » is ONE turn of its agent in its conversation, with what failed: it can change something only
 //! through the existing cards (routine_schedule's proposals, connector_update). « Arrêter » pauses, never deletes. A
-//! card nobody answers for `NO_ANSWER_DAYS`: gone, the task paused, one line.
+//! card nobody answers for `NO_ANSWER_DAYS`: gone, the task paused, one line; a watcher's is asked again `WARN_DAYS`
+//! before, pushed, saying the day it stops (Alex 24/11: a watcher never stops without a card saying so first). An
+//! agent whose AI doesn't answer (`ai_silent`) has ONE card for its routines stopped by it (`AI`: « Réessayer /
+//! Arrêter », Alex 24/11 B), not one per routine; it waits for its answer, its routines paused.
 //!
 //! Kept with each one, in today's files: `routines.json` (each routine's `frame`, `approx`), `connectors.json` (a
 //! watcher's `watch.until`, `watch.once`, `watch.default_end` and its connector's `frame`), `triggers.json` (`ends`).
@@ -45,8 +51,19 @@ pub const RUN_PREFIX: &str = "bip-fix-";
 pub const KIND: &str = "task_fix";
 pub const REPAIR: &str = "repair";
 pub const KEEP: &str = "keep";
-/// What its agent sets up on its own with no end given: ends after this (Alex Q6 A).
+/// The one card of an agent whose AI doesn't answer (Alex 24/11, tf-carte-commune-ia-eteinte B): its routines stopped
+/// by it share it, one card for the agent instead of one per routine.
+pub const AI: &str = "ai";
+/// What its agent sets up on its own with no end given: « Garder ? » asked at this age, never ended without its person
+/// (Alex 24/11, tf-fin-par-defaut-de-lui-meme B2; was: ended after this, Q6 A).
 pub const DEFAULT_END_DAYS: f64 = 90.0;
+/// « Garder ? » unanswered at its date: it goes on, the card asked once more (pushed), its date this much later; still
+/// unanswered then, it goes on « until you stop it », the card gone, nothing pushed again (B2: never more than one
+/// reminder).
+pub const REMIND_DAYS: f64 = 14.0;
+/// A watcher's « Réparer / Arrêter » unanswered: its card again, pushed, saying the day it stops, this long before
+/// `NO_ANSWER_DAYS` (Alex 24/11, tf-ligne-panne-veilleur-remplacee: « prévenir avant de l'arrêter »).
+pub const WARN_DAYS: f64 = 3.0;
 /// « Garder »: its end this much later.
 pub const KEEP_DAYS_MORE: f64 = 90.0;
 /// « Garder 3 mois de plus ? » this long before a default end.
@@ -144,6 +161,9 @@ pub struct Frame {
     /// « Réparer » answered: its agent's proposal turns it back on with the person's « Oui ».
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub repairing: bool,
+    /// « Garder ? » asked again at its default end (`REMIND_DAYS`): once, never more.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub reminded: bool,
 }
 
 impl Frame {
@@ -163,8 +183,26 @@ pub struct Fix {
     /// Its first failure in a row.
     pub since: f64,
     pub failures: u32,
-    /// `looping`, `too_long`, `failed`, `not_started` (a routine's run), `timeout`, `secret`, `check` (a watcher's).
+    /// `looping`, `too_long`, `failed`, `not_started` (a routine's run), `timeout`, `secret`, `check` (a watcher's),
+    /// `ai` (its agent's AI doesn't answer: `AI`).
     pub reason: String,
+    /// A watcher's « Réparer / Arrêter » asked again, saying the day it stops (`WARN_DAYS`): when.
+    #[serde(skip_serializing_if = "is_none_f")]
+    pub warned_at: f64,
+}
+
+/// A run that failed because its agent's AI doesn't answer (its model's server off, out of reach, overloaded: the
+/// Spark switched off at home), read from the words Hermes ends the run with; never a failure of the routine itself.
+pub fn ai_silent(error: &str) -> bool {
+    static SILENT: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(concat!(
+            r"(?i)connection (error|refused|reset|aborted)|connecterror|apiconnectionerror|apitimeouterror|timed out|",
+            r"\btimeout\b|unreachable|name or service not known|no route to host|failed to connect|could ?n[o']t connect|",
+            r"server disconnected|service unavailable|bad gateway|gateway time-?out|\b50[234]\b|overloaded",
+        ))
+        .expect("valid regex")
+    });
+    SILENT.is_match(error)
 }
 
 /// « vers »: whole minutes, −10 to +10, stable for one id (the same digest as a plan's habits, plans.rs).
@@ -179,8 +217,10 @@ pub enum After {
     Retry(f64),
     /// Today's notice.
     Tell,
-    /// Paused, the card « Réparer / Arrêter ».
+    /// Paused, the card « Réparer / Arrêter » (or its agent's common card `AI`, made now).
     Repair,
+    /// Paused, joined to its agent's common card `AI` already waiting: nothing more to place nor push.
+    Joined,
 }
 
 /// A run failed at `now` (`scheduled`: by its clock, not « Lancer maintenant » nor its retry; `next`: its next run):
@@ -256,9 +296,10 @@ pub fn back_on_end(until: Option<f64>, default_end: bool, now: f64) -> Option<f6
     }
 }
 
-/// The person turned it back on: a card « Réparer / Arrêter » goes (its id), the count starts again.
+/// The person turned it back on: a card « Réparer / Arrêter » goes (its id; the common card `AI` too, which other
+/// routines may still hold: `release`), the count starts again.
 pub fn resumed(frame: &mut Frame) -> Option<String> {
-    let id = frame.fix.as_ref().filter(|f| f.variant == REPAIR).map(|f| f.id.clone());
+    let id = frame.fix.as_ref().filter(|f| f.variant == REPAIR || f.variant == AI).map(|f| f.id.clone());
     if id.is_some() {
         frame.fix = None;
     }
@@ -589,6 +630,65 @@ pub fn keep_buttons(lang: &str, task: Task) -> [&'static str; 2] {
     }
 }
 
+/// A watcher's « Réparer / Arrêter » asked again before it stops (`WARN_DAYS`; Alex 24/11: « prévenir avant de
+/// l'arrêter »). To be validated by Alex.
+pub fn warn_sentence(lang: &str, date: &str) -> String {
+    match lang_of(lang) {
+        "fr" => format!("Sans réponse, il s'arrête le {date}."),
+        "de" => format!("Ohne Antwort stoppt er am {date}."),
+        "es" => format!("Sin respuesta, se detiene el {date}."),
+        _ => format!("With no answer, it stops on {date}."),
+    }
+}
+
+/// The one card of an agent whose AI doesn't answer (`AI`), its top line. To be validated by Alex.
+pub fn ai_title(lang: &str, who: &str) -> String {
+    match lang_of(lang) {
+        "fr" => format!("{who} · son IA ne répond pas"),
+        "de" => format!("{who} · seine KI antwortet nicht"),
+        "es" => format!("{who} · su IA no responde"),
+        _ => format!("{who} · its AI isn't answering"),
+    }
+}
+
+/// « Depuis {since} : ses routines n'ont pas pu tourner ({names}). »
+pub fn ai_since_line(lang: &str, since: &str, names: &str) -> String {
+    match lang_of(lang) {
+        "fr" => format!("Depuis {since} : ses routines n'ont pas pu tourner ({names})."),
+        "de" => format!("Seit {since}: Seine Routinen konnten nicht laufen ({names})."),
+        "es" => format!("Desde {since}: sus rutinas no han podido funcionar ({names})."),
+        _ => format!("Since {since}: its routines couldn't run ({names})."),
+    }
+}
+
+pub fn ai_buttons(lang: &str) -> [&'static str; 2] {
+    match lang_of(lang) {
+        "fr" => ["Réessayer", "Arrêter"],
+        "de" => ["Erneut versuchen", "Stoppen"],
+        "es" => ["Reintentar", "Detener"],
+        _ => ["Try again", "Stop"],
+    }
+}
+
+pub fn ai_under_i(lang: &str) -> &'static str {
+    match lang_of(lang) {
+        "fr" => "Réessayer : ses routines reprennent ; allume son IA avant si elle est éteinte. Arrêter : elles ne tournent plus et restent sur leur page.",
+        "de" => "Erneut versuchen: Seine Routinen laufen wieder; schalte seine KI vorher ein, falls sie aus ist. Stoppen: Sie laufen nicht mehr und bleiben auf ihrer Seite.",
+        "es" => "Reintentar: sus rutinas vuelven a funcionar; enciende antes su IA si está apagada. Detener: dejan de funcionar y se quedan en su página.",
+        _ => "Try again: its routines start again; switch its AI on first if it's off. Stop: they no longer run and stay on their page.",
+    }
+}
+
+/// The app 1.0's whole card (`bip_summary`): « Oui » tries again, « Non » stops them.
+pub fn ai_summary(lang: &str, who: &str, names: &str) -> String {
+    match lang_of(lang) {
+        "fr" => format!("L'IA de {who} ne répond pas : ses routines n'ont pas pu tourner ({names}). Réessayer ? (Non : elles s'arrêtent.)"),
+        "de" => format!("Die KI von {who} antwortet nicht: Seine Routinen konnten nicht laufen ({names}). Erneut versuchen? (Nein: Sie stoppen.)"),
+        "es" => format!("La IA de {who} no responde: sus rutinas no han podido funcionar ({names}). ¿Reintentar? (No: se detienen.)"),
+        _ => format!("{who}'s AI isn't answering: its routines couldn't run ({names}). Try again? (No: they stop.)"),
+    }
+}
+
 /// « you », or the shown name of the family member who asked for it.
 pub fn owner(config: &Config, agent: &str, by: Option<&str>) -> Value {
     let person = match by {
@@ -627,11 +727,22 @@ pub fn card_item(config: &Config, about: &About) -> Dict {
         (sentence.clone(), sentence, bip)
     } else {
         let since = if fix.since > 0.0 { fix.since } else { fix.at };
-        let text = fix_since_line(lang, &since_words(lang, since, zone), reason_words(lang, &fix.reason));
-        let bip = json!({"kind": task.key(), "ref": about.id, "name": name, "variant": REPAIR, "since": since,
-                         "failures": fix.failures, "reason": fix.reason, "title": fix_title(lang, task, &who, &name),
-                         "text": text, "buttons": fix_buttons(lang)});
-        (fix_summary(lang, task, &who, &name), fix_under_i(lang, task, &who), bip)
+        let mut text = fix_since_line(lang, &since_words(lang, since, zone), reason_words(lang, &fix.reason));
+        let mut summary = fix_summary(lang, task, &who, &name);
+        // a watcher's card asked again before it stops: the day it stops, said (Alex 24/11)
+        let stops_at = (task == Task::Watcher && fix.warned_at > 0.0).then(|| stops_at(fix));
+        if let Some(at) = stops_at {
+            let warn = warn_sentence(lang, &day_words(lang, at, zone));
+            text = format!("{text} {warn}");
+            summary = format!("{summary} {warn}");
+        }
+        let mut bip = json!({"kind": task.key(), "ref": about.id, "name": name, "variant": REPAIR, "since": since,
+                             "failures": fix.failures, "reason": fix.reason, "title": fix_title(lang, task, &who, &name),
+                             "text": text, "buttons": fix_buttons(lang)});
+        if let Some(at) = stops_at {
+            bip["stops_at"] = json!(at);
+        }
+        (summary, fix_under_i(lang, task, &who), bip)
     };
     let item = json!({
         "agent": about.agent, "run_id": format!("{RUN_PREFIX}{}", fix.id), "request_id": fix.id,
@@ -642,15 +753,70 @@ pub fn card_item(config: &Config, about: &About) -> Dict {
     item.as_object().cloned().unwrap_or_default()
 }
 
-/// The cards waiting for `agent` (None: every agent), oldest first.
-pub fn pending_items(config: &Config, agent: Option<&str>) -> Vec<Dict> {
+/// When a watcher's warned card stops it with no answer: `NO_ANSWER_DAYS` after the card, `WARN_DAYS` after the
+/// warning at the earliest (a bridge down meanwhile never takes the days the warning said).
+pub fn stops_at(fix: &Fix) -> f64 {
+    (fix.at + NO_ANSWER_DAYS * DAY).max(fix.warned_at + WARN_DAYS * DAY)
+}
+
+/// The one card of `agent` whose AI doesn't answer (`AI`), for its routines `names` (in `/v1/approvals`' shape; an
+/// app 1.0 shows its generic card: « Oui » tries again, « Non » stops them).
+pub fn ai_card_item(config: &Config, agent: &str, fix: &Fix, names: &[String]) -> Dict {
+    let lang = lang_of_agent(config, agent);
+    let zone = routines::zone(config);
+    let who = routines::flat(&routines::shown_agent(config, agent), routines::NAME_MAX);
+    let names: Vec<String> = names.iter().map(|n| routines::flat(n, routines::NAME_MAX)).collect();
+    let shown = names.iter().map(|n| quoted(lang, n)).collect::<Vec<_>>().join(", ");
+    let since = if fix.since > 0.0 { fix.since } else { fix.at };
+    let summary = ai_summary(lang, &who, &shown);
+    let bip = json!({"kind": "agent_ai", "ref": agent, "name": who, "variant": AI, "since": since, "routines": names,
+                     "failures": fix.failures, "reason": AI, "title": ai_title(lang, &who),
+                     "text": ai_since_line(lang, &since_words(lang, since, zone), &shown), "buttons": ai_buttons(lang)});
+    let item = json!({
+        "agent": agent, "run_id": format!("{RUN_PREFIX}{}", fix.id), "request_id": fix.id,
+        "command": format!("{KIND} · {who}"), "description": summary, "choices": ["once", "deny"],
+        "bip_choices": [REPAIR, "stop"], "created_at": fix.at, "session_id": null, "bip_summary": summary,
+        "bip_detail": ai_under_i(lang), "bip_fix": bip,
+    });
+    item.as_object().cloned().unwrap_or_default()
+}
+
+/// A routine's name in quotes, as the cards write it.
+fn quoted(lang: &str, name: &str) -> String {
+    match lang_of(lang) {
+        "fr" => format!("« {name} »"),
+        "de" => format!("„{name}“"),
+        "es" => format!("«{name}»"),
+        _ => format!("“{name}”"),
+    }
+}
+
+/// The routines' cards: one per routine, and one per common card `AI` (its routines named, oldest first).
+pub fn routine_items(config: &Config, list: &[Routine]) -> Vec<(f64, Dict)> {
     let mut items: Vec<(f64, Dict)> = Vec::new();
-    // a family member's routine: hers (routines.rs `member_items`, review C7)
-    for r in routines::all(config, agent).into_iter().filter(|r| r.by.is_none()) {
-        if let Some(fix) = &r.frame.fix {
-            items.push((fix.at, routine_card(config, &r, fix)));
+    let mut shared: Vec<(String, String, Fix, Vec<String>)> = Vec::new();
+    for r in list {
+        let Some(fix) = &r.frame.fix else { continue };
+        if fix.variant == AI {
+            match shared.iter_mut().find(|(agent, id, _, _)| *agent == r.agent && *id == fix.id) {
+                Some((_, _, _, names)) => names.push(r.name.clone()),
+                None => shared.push((r.agent.clone(), fix.id.clone(), fix.clone(), vec![r.name.clone()])),
+            }
+        } else {
+            items.push((fix.at, routine_card(config, r, fix)));
         }
     }
+    for (agent, _, fix, names) in shared {
+        items.push((fix.at, ai_card_item(config, &agent, &fix, &names)));
+    }
+    items
+}
+
+/// The cards waiting for `agent` (None: every agent), oldest first.
+pub fn pending_items(config: &Config, agent: Option<&str>) -> Vec<Dict> {
+    // a family member's routine: hers (routines.rs `member_items`, review C7)
+    let mine: Vec<Routine> = routines::all(config, agent).into_iter().filter(|r| r.by.is_none()).collect();
+    let mut items = routine_items(config, &mine);
     for (name, conn) in connectors::all(config) {
         if agent.is_some_and(|a| a != name) {
             continue;
@@ -682,6 +848,17 @@ pub fn fix_by(config: &Config, agent: &str, fix_id: &str) -> Option<String> {
 /// A card gone (answered elsewhere, its task gone or working again): no turn resumed for it, its places told.
 pub fn withdraw(config: &Config, fix_id: &str) {
     crate::card_place::taken(config, &format!("{RUN_PREFIX}{fix_id}"));
+}
+
+/// Routine `routine` let go of card `fix_id` (deleted, turned back on): the card withdrawn unless another routine
+/// still holds it (the common card `AI` of their agent).
+pub fn release(config: &Config, fix_id: &str, routine: &str) {
+    let held = routines::all(config, None)
+        .iter()
+        .any(|r| r.id != routine && r.frame.fix.as_ref().is_some_and(|f| f.id == fix_id));
+    if !held {
+        withdraw(config, fix_id);
+    }
 }
 
 /// A card just made: in the main conversation and the Boîte (no turn asked it), pushed when `push` as a request
@@ -719,15 +896,41 @@ pub struct Settled {
 /// The person answered card `fix_id` of `agent` (`yes`: « Réparer » / « Garder »): its task changed as the answer says;
 /// None: no such card. « Réparer »'s turn is the caller's (`approve`).
 pub fn settle(config: &Config, agent: &str, fix_id: &str, yes: bool) -> Option<Settled> {
+    let (zone, now) = (routines::zone(config), py::time_time());
+    let shared = routines::change(config, |b| {
+        // the common card of an agent whose AI didn't answer: its routines on again (« Réessayer »), or left paused
+        let mut first = None;
+        for r in b
+            .routines
+            .iter_mut()
+            .filter(|r| r.agent == agent && r.frame.fix.as_ref().is_some_and(|f| f.id == fix_id && f.variant == AI))
+        {
+            r.frame.fix = None;
+            resumed(&mut r.frame);
+            if yes {
+                r.frame.until = back_on_end(r.frame.until, r.frame.default_end, now);
+                r.enabled = true;
+                r.next_run = routines::next_run_of(r, now, zone);
+            } else {
+                (r.enabled, r.next_run) = (false, None);
+            }
+            first.get_or_insert_with(|| r.id.clone());
+        }
+        first.map(|id| Settled { task: Task::Routine, id, variant: AI.into(), yes })
+    });
+    if shared.is_some() {
+        return shared;
+    }
     let found = routines::change(config, |b| {
         let r = b.routines.iter_mut().find(|r| r.agent == agent && r.frame.fix.as_ref().is_some_and(|f| f.id == fix_id))?;
         let fix = r.frame.fix.take()?;
         match (fix.variant.as_str(), yes) {
             (KEEP, true) => {
                 r.frame.until = r.frame.until.map(|u| u + KEEP_DAYS_MORE * DAY);
-                r.frame.keep_asked = false;
+                (r.frame.keep_asked, r.frame.reminded) = (false, false);
             }
-            (KEEP, false) => {}
+            // « La laisser s'arrêter »: its end is the person's now, reached at its date (B2)
+            (KEEP, false) => (r.frame.default_end, r.frame.reminded) = (false, false),
             (_, true) => r.frame.repairing = true,
             (_, false) => {
                 // « Arrêter »: paused, on its page
@@ -750,9 +953,16 @@ pub fn settle(config: &Config, agent: &str, fix_id: &str, yes: bool) -> Option<S
                 if let Some(w) = conn.watch.as_mut() {
                     w.until = w.until.map(|u| u + KEEP_DAYS_MORE * DAY);
                 }
-                conn.frame.keep_asked = false;
+                (conn.frame.keep_asked, conn.frame.reminded) = (false, false);
             }
-            (KEEP, false) | (_, true) => {}
+            // « Le laisser s'arrêter »: its end is the person's now (B2)
+            (KEEP, false) => {
+                if let Some(w) = conn.watch.as_mut() {
+                    w.default_end = false;
+                }
+                conn.frame.reminded = false;
+            }
+            (_, true) => {}
             // « Arrêter »: switched off, on its page
             (_, false) => conn.enabled = false,
         }
@@ -814,12 +1024,49 @@ fn paused(r: &Routine) -> bool {
 }
 
 fn routine_ends_now(r: &Routine, now: f64) -> bool {
-    if r.frame.retry_at.is_some() || (r.frame.default_end && paused(r)) {
-        // its last run's retry waits (review C3 c); a default end waits for « Garder ? » while it is paused (B1)
+    if r.frame.retry_at.is_some() {
+        // its last run's retry waits (review C3 c)
         return false;
     }
-    r.frame.until.is_some_and(|u| now > u)
+    // a default end never ends it: « Garder ? » asks, nothing stops without its person (B2; paused: B1)
+    (!r.frame.default_end && r.frame.until.is_some_and(|u| now > u))
         || (r.frame.count > 0 && routines::end_of(r) == End::Count(0) && r.next_run.is_none())
+}
+
+/// What a default end passed without an answer leads to (B2), for a task on: nothing yet (a card « Réparer » waits:
+/// its « Garder ? » comes after), « Garder ? » asked again once, or on « until you stop it ».
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Overdue {
+    Wait,
+    Remind,
+    Forever,
+}
+
+/// A default end `until` passed at `now` (`fix`: the card waiting, `reminded`: asked again already).
+pub fn overdue(until: Option<f64>, fix: &Option<Fix>, reminded: bool, now: f64) -> Overdue {
+    if until.is_none_or(|u| now <= u) || fix.as_ref().is_some_and(|f| f.variant != KEEP) {
+        return Overdue::Wait;
+    }
+    if reminded {
+        Overdue::Forever
+    } else {
+        Overdue::Remind
+    }
+}
+
+fn routine_overdue(r: &Routine, now: f64) -> Overdue {
+    if !r.frame.default_end || paused(r) || r.awaits_start {
+        return Overdue::Wait;
+    }
+    overdue(r.frame.until, &r.frame.fix, r.frame.reminded, now)
+}
+
+fn watch_overdue(conn: &connectors::Connector, now: f64) -> Overdue {
+    let Some(watch) = &conn.watch else { return Overdue::Wait };
+    if !watch.default_end || !conn.enabled || conn.status != connectors::APPROVED {
+        return Overdue::Wait;
+    }
+    overdue(watch.until, &conn.frame.fix, conn.frame.reminded, now)
 }
 
 fn routine_asks_keep(r: &Routine, now: f64) -> bool {
@@ -840,15 +1087,28 @@ fn watch_slides(conn: &connectors::Connector, now: f64) -> bool {
     !conn.enabled && conn.watch.as_ref().is_some_and(|w| w.default_end && w.until.is_some_and(|u| u < now))
 }
 
+/// A routine's « Réparer / Arrêter » unanswered for `NO_ANSWER_DAYS` (the common card `AI` waits: its routines are
+/// paused already).
 fn unanswered(fix: &Option<Fix>, now: f64) -> bool {
-    fix.as_ref().is_some_and(|f| f.variant != KEEP && now - f.at >= NO_ANSWER_DAYS * DAY)
+    fix.as_ref().is_some_and(|f| f.variant == REPAIR && now - f.at >= NO_ANSWER_DAYS * DAY)
+}
+
+/// A watcher's « Réparer / Arrêter » to ask again before it stops (`WARN_DAYS` before `NO_ANSWER_DAYS`).
+fn watch_warns(fix: &Option<Fix>, now: f64) -> bool {
+    fix.as_ref()
+        .is_some_and(|f| f.variant == REPAIR && f.warned_at <= 0.0 && now - f.at >= (NO_ANSWER_DAYS - WARN_DAYS) * DAY)
+}
+
+/// A watcher's « Réparer / Arrêter » unanswered: switched off only after its warning said the day (Alex 24/11: never
+/// stopped without a card that said so first).
+fn watch_unanswered(fix: &Option<Fix>, now: f64) -> bool {
+    fix.as_ref().is_some_and(|f| f.variant == REPAIR && f.warned_at > 0.0 && now >= stops_at(f))
 }
 
 fn watch_ends_now(conn: &connectors::Connector, now: f64) -> bool {
     let Some(watch) = &conn.watch else { return false };
-    // switched off: its default end waits for « Garder ? » (review B1); not approved (a change refused, waiting): it
-    // doesn't run, its end neither (R6)
-    if (watch.default_end && !conn.enabled) || conn.status != connectors::APPROVED {
+    // a default end never ends it (B2); not approved (a change refused, waiting): it doesn't run, its end neither (R6)
+    if watch.default_end || conn.status != connectors::APPROVED {
         return false;
     }
     watch.until.is_some_and(|u| now > u)
@@ -874,7 +1134,8 @@ pub fn due(config: &Config, now: f64) -> Vec<Due> {
             && (routine_ends_now(r, now)
                 || routine_asks_keep(r, now)
                 || unanswered(&r.frame.fix, now)
-                || routine_slides(r, now))
+                || routine_slides(r, now)
+                || routine_overdue(r, now) != Overdue::Wait)
     });
     if routine_work {
         let mut gone: Vec<Routine> = Vec::new();
@@ -896,6 +1157,29 @@ pub fn due(config: &Config, now: f64) -> Vec<Due> {
                 }
                 if routine_slides(r, now) {
                     r.frame.until = Some(now + KEEP_ASK_DAYS * DAY);
+                }
+                match routine_overdue(r, now) {
+                    Overdue::Wait => {}
+                    Overdue::Remind => {
+                        // « Garder ? » unanswered at its date: it goes on, asked once more, pushed (B2)
+                        withdrawn.extend(r.frame.fix.take().map(|f| f.id));
+                        let fix = Fix { id: py::token_hex(6), at: now, variant: KEEP.into(), ..Fix::default() };
+                        let run_id = format!("{RUN_PREFIX}{}", fix.id);
+                        r.frame.until = Some(now + REMIND_DAYS * DAY);
+                        (r.frame.fix, r.frame.keep_asked, r.frame.reminded) = (Some(fix), true, true);
+                        let name = routines::flat(&r.name, routines::NAME_MAX);
+                        let line =
+                            keep_sentence(lang, Task::Routine, &name, &day_words(lang, now + REMIND_DAYS * DAY, zone));
+                        out.push(Due::Raise { agent: r.agent.clone(), run_id, line, push: true });
+                    }
+                    Overdue::Forever => {
+                        // unanswered again: on « until you stop it », its card gone, nothing more pushed (B2)
+                        withdrawn.extend(r.frame.fix.take().map(|f| f.id));
+                        (r.frame.until, r.frame.default_end, r.frame.keep_asked, r.frame.reminded) =
+                            (None, false, false, false);
+                        tracing::info!(target: "bipbridge::task_frame", agent = %r.agent, routine = %r.id,
+                                       "default end unanswered twice: on until its person stops it");
+                    }
                 }
                 if routine_asks_keep(r, now) {
                     let fix = Fix { id: py::token_hex(6), at: now, variant: KEEP.into(), ..Fix::default() };
@@ -931,7 +1215,12 @@ pub fn due(config: &Config, now: f64) -> Vec<Due> {
     let watchers = connectors::all(config);
     let watcher_work = watchers.iter().any(|(_, c)| {
         c.watch.is_some()
-            && (watch_ends_now(c, now) || watch_asks_keep(c, now) || unanswered(&c.frame.fix, now) || watch_slides(c, now))
+            && (watch_ends_now(c, now)
+                || watch_asks_keep(c, now)
+                || watch_warns(&c.frame.fix, now)
+                || watch_unanswered(&c.frame.fix, now)
+                || watch_slides(c, now)
+                || watch_overdue(c, now) != Overdue::Wait)
     });
     if watcher_work {
         let mut gone: Vec<(String, connectors::Connector)> = Vec::new();
@@ -944,15 +1233,57 @@ pub fn due(config: &Config, now: f64) -> Vec<Due> {
                         continue;
                     }
                     let lang = lang_of_agent(config, agent);
-                    if unanswered(&conn.frame.fix, now) {
+                    let name = routines::flat(&conn.name, routines::NAME_MAX);
+                    if watch_warns(&conn.frame.fix, now) {
+                        // its card again, pushed, saying the day it stops with no answer (Alex 24/11)
+                        if let Some(old) = conn.frame.fix.take() {
+                            withdrawn.push(old.id.clone());
+                            let fix = Fix { id: py::token_hex(6), warned_at: now, ..old };
+                            let run_id = format!("{RUN_PREFIX}{}", fix.id);
+                            let who = routines::flat(&routines::shown_agent(config, agent), routines::NAME_MAX);
+                            let warn = warn_sentence(lang, &day_words(lang, stops_at(&fix), zone));
+                            let line = format!("{} · {warn}", fix_title(lang, Task::Watcher, &who, &name));
+                            conn.frame.fix = Some(fix);
+                            out.push(Due::Raise { agent: agent.clone(), run_id, line, push: true });
+                        }
+                    }
+                    if watch_unanswered(&conn.frame.fix, now) {
                         withdrawn.extend(conn.frame.fix.take().map(|f| f.id));
                         conn.enabled = false;
-                        let text = stopped_line(lang, Task::Watcher, &routines::flat(&conn.name, routines::NAME_MAX));
+                        let text = stopped_line(lang, Task::Watcher, &name);
                         out.push(Due::Line { agent: agent.clone(), task: Task::Watcher, id: conn.id.clone(), text });
                     }
                     if watch_slides(conn, now) {
                         if let Some(w) = conn.watch.as_mut() {
                             w.until = Some(now + KEEP_ASK_DAYS * DAY);
+                        }
+                    }
+                    match watch_overdue(conn, now) {
+                        Overdue::Wait => {}
+                        Overdue::Remind => {
+                            withdrawn.extend(conn.frame.fix.take().map(|f| f.id));
+                            let fix = Fix { id: py::token_hex(6), at: now, variant: KEEP.into(), ..Fix::default() };
+                            let run_id = format!("{RUN_PREFIX}{}", fix.id);
+                            if let Some(w) = conn.watch.as_mut() {
+                                w.until = Some(now + REMIND_DAYS * DAY);
+                            }
+                            (conn.frame.fix, conn.frame.keep_asked, conn.frame.reminded) = (Some(fix), true, true);
+                            let line = keep_sentence(
+                                lang,
+                                Task::Watcher,
+                                &name,
+                                &day_words(lang, now + REMIND_DAYS * DAY, zone),
+                            );
+                            out.push(Due::Raise { agent: agent.clone(), run_id, line, push: true });
+                        }
+                        Overdue::Forever => {
+                            withdrawn.extend(conn.frame.fix.take().map(|f| f.id));
+                            if let Some(w) = conn.watch.as_mut() {
+                                (w.until, w.default_end) = (None, false);
+                            }
+                            (conn.frame.keep_asked, conn.frame.reminded) = (false, false);
+                            tracing::info!(target: "bipbridge::task_frame", agent = %agent, watcher = %conn.id,
+                                           "default end unanswered twice: on until its person stops it");
                         }
                     }
                     if watch_asks_keep(conn, now) {

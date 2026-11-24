@@ -93,7 +93,6 @@ pub const HOLDS_THE_CALL: &[&str] = &[PAY];
 /// then the fill and the bank).
 pub const TOOL_TIMEOUT: u32 = 900;
 
-
 /// A payment asked in a turn nobody follows (a watcher, a routine) waits this long for the person, from its push
 /// (`urgent`; internal/notes/watcher-urgent-pay.md).
 pub const URGENT_WINDOW: Duration = Duration::from_secs(600);
@@ -1036,7 +1035,13 @@ pub async fn urgent(state: &AppState, agent: &AgentConfig, run_id: &str, session
     // pay_with_card, waiting, tells the turn the answer itself: never a turn resumed with « ALLOWED » (card_place.rs)
     crate::card_place::taken(&state.config(), &card);
     let line = crate::urgent_pay::found_line(&crate::handback::language_of(&state.config(), agent), &about);
-    state.push.notify_payment_urgent(&agent.name, &card, &id, &line, session.as_deref(), false).await;
+    // the work of an offer's « Oui » (the person just touched it): a plain notification, the same card (Alex 24/11,
+    // of-tour-du-oui-sans-personne B)
+    let calm = crate::plans::offers::from_offer(&agent.name, run_id);
+    if calm {
+        tracing::info!(agent = %agent.name, run_id, "card payment of an offer's work: pushed as a plain notification");
+    }
+    state.push.notify_payment_urgent(&agent.name, &card, &id, &line, session.as_deref(), false, calm).await;
     true
 }
 
@@ -1636,8 +1641,14 @@ async fn pay(state: &AppState, agent: &AgentConfig, arguments: &Dict, asker: &As
         payment["via"] = json!(host);
     }
     state.vault.record_card_payment(&card.id, payment, Some(reservation)).await?;
-    crate::vault_contacts::note_mark(state, &agent.name, SERVER_NAME, PAY, &crate::vault_contacts::mark(&card.id, &card.label))
-        .await;
+    crate::vault_contacts::note_mark(
+        state,
+        &agent.name,
+        SERVER_NAME,
+        PAY,
+        &crate::vault_contacts::mark(&card.id, &card.label),
+    )
+    .await;
     journal(&config, &entry, &agent.name, "typed");
     tracing::info!(agent = %agent.name, site = %host, fields = %filled.join(","), "card payment: card typed");
     ending.typed = true; // watched from here until the page moves on (`Ending`)

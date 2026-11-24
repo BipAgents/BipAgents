@@ -951,7 +951,7 @@ pub fn tools() -> Vec<Value> {
             "price": {"type": "string", "description": "the price expected, e.g. 45.00 (leave out if unknown)"},
             "currency": {"type": "string", "description": "e.g. EUR"},
         }, "required": ["site", "what"]},
-        "until": {"type": "string", "description": "its end, when your person said one: a date (2026-11-30, through that day) or a date and time. One you set up on your own with no end stops by itself after 90 days"},
+        "until": {"type": "string", "description": "its end, when your person said one: a date (2026-11-30, through that day) or a date and time. One you set up on your own with no end: after 90 days your person is asked whether to keep it, and it never stops without them"},
         "once": {"type": "boolean", "description": "true: it stops once it has told your person (« préviens-moi quand les billets sont en vente »)"},
     }, "required": ["every", "notify"]});
     let fields = json!({
@@ -1603,6 +1603,14 @@ pub async fn call(state: &AppState, agent: &AgentConfig, name: &str, arguments: 
         REMOVE => {
             let config = state.config();
             match named(&config, &agent.name, &arg(arguments, "name")) {
+                // a watcher never stops without its person (Alex 24/11): removed only when they asked in this turn
+                Some(conn) if conn.watch.is_some() && !crate::agent_tools::asked_by_person(state, &agent.name, REMOVE) => {
+                    Ok(refusal(&format!(
+                        "Not done: « {} » is a watcher, and only your person stops a watcher. Tell them what you see in \
+                         your next message to them: they stop it from its page, or ask you to.",
+                        conn.name
+                    )))
+                }
                 Some(conn) if remove(state, agent, &conn.id).await => Ok(text(&format!("« {} » is removed.", conn.name))),
                 _ => Ok(refusal("You have no connector of that name.")),
             }
