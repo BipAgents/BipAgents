@@ -357,6 +357,31 @@ fn repair_is_one_turn_and_only_through_existing_cards() {
     assert_eq!(r.schedule, Schedule::Interval { minutes: 180 });
 }
 
+/// Bench 1.1 (24/11, DeepSeek V4.1 Flash on the lab, `briefs/bench-1-1.md`): in its « Réparer » turn the agent called
+/// `routine_schedule` `run` on the paused routine and the bridge ran it at once (« Routine « Météo du matin » starts
+/// now. »), a second paid turn the person never said yes to, while the routine was to stay paused until their « Oui »
+/// (§4.1 rule 6: « Réparer » = ONE turn, a change only through the existing cards). RED: nothing refuses it today.
+#[test]
+fn bench_a_routine_being_repaired_is_not_run_by_its_agent_before_the_persons_yes() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = config_in(dir.path());
+    let r = routines::create(&config, "vie", "Météo du matin", "every 2h", "La météo de Lyon.", None,
+                             Maker::Person { muted: false }).unwrap();
+    let now = py::time_time();
+    for n in 0..3 {
+        routines::failed(&config, &r.id, routines::Ended::Looping, now + f64::from(n), false);
+    }
+    let fix = routines::get(&config, &r.id).unwrap().frame.fix.unwrap();
+    settle(&config, "vie", &fix.id, true).unwrap();
+    assert!(routines::get(&config, &r.id).unwrap().frame.repairing);
+    // its agent, in the repair turn, asks to run it now
+    let args = json!({"action": "run", "name": "Météo du matin"}).as_object().cloned().unwrap();
+    let called = routines::call_asked(&config, "vie", &args, None, true);
+    assert!(called.run.is_none(), "the paused routine was run by its agent during its repair: {:?}", called.result);
+    let r = routines::get(&config, &r.id).unwrap();
+    assert!(!r.enabled && r.frame.repairing, "still paused until the person's « Oui »");
+}
+
 #[test]
 fn no_answer_in_7_days_pauses_with_one_line() {
     let dir = tempfile::tempdir().unwrap();
