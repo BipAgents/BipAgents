@@ -658,6 +658,16 @@ is sent, `known` with where the message is now: `queued: true` (still in the que
 turn going on (the phone follows it again), or neither (its turn is over: the timeline has it). A message that never
 reached the bridge stays on the phone « Pas envoyé », and a tap sends it again with the same `client_id`: both apps,
 one rule.
+**Matching the stored row** (`with_sends`): the first person's row since the send holding its words as the timeline
+shows them (`person_text`, `visible`: blank lines in threes tidied, the machinery's lines out), each run of spaces and
+line breaks one space on both sides (23/11, Alex: an article pasted from a web page, blank lines in threes, stayed
+« Pas envoyé » after its answer). **A long text** (23/11): `text` up to 200 000 characters (Alex 24/11: two of Hermes' `read_file` reads; over
+it the same 422 `string_too_long` as over 20 000 before, and the apps 1.1 say it before sending); over 20 000 (one
+message's words, msg_queue.rs `TEXT_MAX`) it is stored whole as a text file with the agent's uploads, named after its
+first line, and goes as that document (its reference line, `text` empty) with a hidden `<!--bip:long_text …-->` note
+telling the agent to read the whole file; every app draws the file. An agent without uploads: 422 as before. That
+file lives with its conversation (threads/long_texts.rs, `long_text_files`): never purged after the « Fichiers
+envoyés » days, deleted with the conversation and with its agent.
 **The agent's line said at once** (instant_reply.rs, 19/11, « comme Grok Bot »): words `steered` into a turn that
 acted already, or a message `queued` behind a turn going on, get within about a second one short sentence from the
 agent's own model (its address and key; no tools, no thinking, 3 s at most, else a sentence of the bridge's table in
