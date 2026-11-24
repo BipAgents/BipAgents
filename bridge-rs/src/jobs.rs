@@ -2447,14 +2447,22 @@ pub fn task_browsers(config: &crate::config::Config) -> TaskBrowsers {
 /// A task of `agent` would get a browser of its own (browsers.rs `setup_task`) and the server's free memory
 /// (MemAvailable) is under `[jobs] browser_free_mb` for it and for each of the place's task browsers not started yet
 /// (`task_browsers`: their memory isn't taken yet). The only memory check of the place's first task browser (24/11:
-/// heavy_work.rs `browser_fits`), so the server never swaps for it.
+/// heavy_work.rs `browser_fits`).
+///
+/// While none of the place's task browsers has started (its first, or a second one while the first is still setting
+/// up), one `browser_free_mb` more is asked (finitions 1.1, review subtasks-five A1): each place's bridge reads
+/// MemAvailable at its own minute and knows nothing of the other places' browsers just set up, which take their memory
+/// only at their first pages. Two places starting their first browser in the same minute then both fit; three or more
+/// at once may still go past it, the kernel's zram taking the excess before the disk's swap.
 fn memory_short_in(config: &crate::config::Config, agent: &str, memory: &MemoryProbe) -> bool {
     let floor = config.jobs.browser_free_mb;
     if floor == 0 || !crate::browsers::gives_task_browsers(config, agent) {
         return false;
     }
     let Some(free) = memory() else { return false };
-    free < floor * (1 + task_browsers(config).unstarted)
+    let browsers = task_browsers(config);
+    let other_places = if browsers.live <= browsers.unstarted { floor } else { 0 };
+    free < floor * (1 + browsers.unstarted) + other_places
 }
 
 /// A task's own browser set up by `launch`, removed again unless the task started (`disarm`).

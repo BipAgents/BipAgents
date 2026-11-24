@@ -1522,6 +1522,24 @@ async fn sends_route(
     Ok(web::ok(follow::state_of(&items, &approvals, &questions, live.as_ref(), queued, &client_id, &thread.id)))
 }
 
+/// `DELETE /v1/threads/{thread}/sends/{client_id}?agent=`: a message « Pas envoyé » deleted (send.rs `forget`). A
+/// discussion's or a shared agent's has none here (404).
+async fn forget_route(
+    State(state): State<AppState>,
+    UrlPath((id, client_id)): UrlPath<(String, String)>,
+    q: QueryMap,
+) -> ApiResult<Response> {
+    if !send::CLIENT_ID.is_match(&client_id) {
+        return Err(HttpError::new(422, "client_id: 8 to 64 letters, digits, - or _"));
+    }
+    if crate::rooms::of_thread(&id).is_some() {
+        return Err(HttpError::not_found());
+    }
+    let threads = threads_of(&state);
+    let (agent, thread) = threads.named(agent_param(&state, &q)?.as_ref(), &id).await?;
+    Ok(web::ok(send::forget(&state, &agent, &thread, &client_id).await?))
+}
+
 /// A thread's items and the agent whose files they are: a conversation's, or a room's (`None`: each item's `from`).
 async fn all_items(state: &AppState, id: &str, q: &QueryMap) -> ApiResult<(Option<AgentConfig>, String, Vec<Item>)> {
     if crate::rooms::of_thread(id).is_some() {
@@ -1942,7 +1960,7 @@ pub fn router() -> Router<AppState> {
         .route("/threads/{thread}/attachments/{attachment}", get(attachment_route))
         .route("/threads/{thread}/messages", post(send_route))
         .route("/threads/{thread}/stop", post(stop_route))
-        .route("/threads/{thread}/sends/{client_id}", get(sends_route))
+        .route("/threads/{thread}/sends/{client_id}", get(sends_route).delete(forget_route))
 }
 
 /// The person's message (send.rs); a shared agent's goes to its owner's bridge (agent_shares.rs).

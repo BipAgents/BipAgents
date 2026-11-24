@@ -1103,7 +1103,9 @@ pub fn card_item(config: &Config, offer: &Offer) -> Dict {
         "bip_offer": {"id": offer.id, "kind": offer.kind, "about": offer.about, "label": offer.label, "agent": shown,
                       "plan": offer.plan, "pill": offer.pill,
                       "mode": if smart { crate::offer_ideas::MODE } else { "basic" },
-                      "expires_at": offer.expires, "outside": offer.outside},
+                      "expires_at": offer.expires, "outside": offer.outside,
+                      // its top line in the agent's language (a bridge's own card: its own); an app 1.0 ignores it
+                      "top": if offer.top.is_empty() { top(lang, &shown, &offer.about) } else { offer.top.clone() }},
     });
     // the bridge's own cards (plans/sources.rs, contracts/plans-sources): additions an app 1.0 ignores
     if !offer.source.is_empty() {
@@ -1111,9 +1113,6 @@ pub fn card_item(config: &Config, offer: &Offer) -> Dict {
         more["source"] = json!(offer.source);
         if !offer.items.is_empty() {
             more["items"] = json!(offer.items);
-        }
-        if !offer.top.is_empty() {
-            more["top"] = json!(offer.top);
         }
         if !offer.mailbox.is_empty() {
             more["mailbox"] = json!(offer.mailbox);
