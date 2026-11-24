@@ -92,7 +92,8 @@ pub fn tools() -> Vec<Value> {
         json!({
             "name": "calendar_add",
             "description": "Add an event to the person's phone calendar (it appears when their phone next syncs, usually \
-        within minutes). start: an ISO date-time in the person's local time (2026-10-30T10:00), or a date for an all-day \
+        within minutes). Only when they ask for it or said yes to it: an event they only mention, you offer first (a \
+        card, or a question when your « Initiative » is off). start: an ISO date-time in the person's local time (2026-10-30T10:00), or a date for an all-day \
         event; end, or duration_minutes (default 60); calendar: a calendar's name (default: the phone's default one).",
             "inputSchema": {"type": "object", "properties": {
                 "title": {"type": "string"}, "start": {"type": "string"}, "end": {"type": "string"},
@@ -1116,6 +1117,18 @@ pub fn router() -> Router<AppState> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Bench 1.1 (24/11, problem 9): on a mere « j'ai rendez-vous… », the Spark added 7 events to the phone's calendar
+    /// (2 with « Initiative » off), DeepSeek 2. The design (§3.3, kind `calendar`) has an unasked add as an offer, « Je
+    /// l'ajoute à ton agenda ? » on a card; the phone's adds need no card of their own (the person chose the agent).
+    /// Both the tool and the level's rule say it: only when asked, else offered first.
+    #[test]
+    fn bench_an_event_only_mentioned_is_offered_never_added() {
+        let add = tools().into_iter().find(|t| t["name"] == "calendar_add").unwrap();
+        let said = add["description"].as_str().unwrap();
+        assert!(said.contains("Only when they ask for it or said yes to it") && said.contains("you offer first"), "{said}");
+        assert!(crate::agent_proactive::BASIC_RULE.contains("Add to their calendar only when asked; else offer it"));
+    }
 
     #[test]
     fn moments_as_agents_write_them() {

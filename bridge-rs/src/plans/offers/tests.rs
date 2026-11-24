@@ -851,3 +851,49 @@ fn a5_the_run_of_a_yes_is_known_while_it_goes_on() {
         "{urgent}"
     );
 }
+
+/// Bench 1.1 (24/11, problem 7, forced learning): after two « Non merci » to « Je cherche où acheter… ? » searches,
+/// the agents offered buying again as a page or a free-form offer (GLM 2 of 6, DeepSeek 5 of 10), and the bridge let
+/// them through: the silence was by kind. Now « buying something » is a subject of its own (`theme_of`): two « Non
+/// merci » to it quiet it 30 days whatever the kind; what is not about buying goes on.
+#[test]
+fn bench_two_no_thanks_to_buying_quiet_buying_whatever_the_kind() {
+    let n = now();
+    let dir = tempfile::tempdir().unwrap();
+    let config = config_in(dir.path());
+    let buy = |kind: &str, label: &str, about: &str| {
+        let a = json!({"kind": kind, "label": label, "about": about, "prompt": "Compare 3 offres, rien n'est acheté."});
+        draft(&args(&a), "vie", &all(), PARIS, n).unwrap()
+    };
+    for (i, (label, about)) in [("Je cherche où acheter tes chaussures de running ?", "Chaussures de running"),
+                                ("Je cherche où acheter le nouvel aspirateur ?", "Aspirateur")].iter().enumerate() {
+        let o = buy("search", label, about);
+        let id = o.id.clone();
+        change(&config, |s| s.offers.push(o));
+        assert!(answer(&config, "vie", &id, false, n + i as f64).is_some());
+    }
+    let store = load(&config);
+    let plans = crate::plans::Store::default();
+    // the bench's next offers: a search, a page, a free-form offer of the family « shopping »
+    let search = refused(&store, &plans, &buy("search", "Je cherche où acheter un grille-pain ?", "Grille-pain"), None, PARIS, n + 10.0);
+    assert!(search.is_some_and(|w| w.contains("buy")));
+    let page = buy("page", "Je cherche où acheter des lunettes de natation ?", "Lunettes de natation");
+    let why = refused(&store, &plans, &page, None, PARIS, n + 10.0).expect("a page about buying, quiet too");
+    assert!(why.contains("whatever the kind"), "{why}");
+    let mut smart = buy("page", "Je te trouve une lampe de chevet ?", "Lampe de chevet");
+    smart.family = "shopping".into();
+    assert!(refused(&store, &plans, &smart, None, PARIS, n + 10.0).is_some(), "a free-form offer of the family shopping");
+    for (lang, label) in [("en", "Shall I find where to buy a kettle?"), ("de", "Soll ich schauen, wo du einen Wasserkocher kaufen kannst?"),
+                          ("es", "¿Busco dónde comprar un hervidor?")] {
+        assert!(refused(&store, &plans, &buy("page", label, "Kettle"), None, PARIS, n + 10.0).is_some(), "{lang}");
+    }
+    // not about buying: as before
+    let list = buy("page", "Je te fais la liste de bagages ?", "Bagages");
+    assert!(refused(&store, &plans, &list, None, PARIS, n + 10.0).is_none());
+    let understand = buy("page", "Je t'aide à comprendre ta facture ?", "Facture");
+    assert!(refused(&store, &plans, &understand, None, PARIS, n + 10.0).is_none(), "« comprendre » is not « comprar »");
+    // the agent reads it before trying
+    assert!(learning_line(&store, "vie", &all(), n + 10.0).is_some_and(|l| l.contains("buying")));
+    // 30 days, then it may again
+    assert!(refused(&store, &plans, &page, None, PARIS, n + 31.0 * DAY).is_none());
+}

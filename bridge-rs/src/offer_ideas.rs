@@ -233,10 +233,6 @@ fn lower_first(text: &str) -> String {
     c.next().map(|f| f.to_lowercase().collect::<String>() + c.as_str()).unwrap_or_default()
 }
 
-fn host_of(url: &str) -> String {
-    url::Url::parse(url.trim()).ok().and_then(|u| u.host_str().map(|h| h.trim_matches(['[', ']']).to_ascii_lowercase())).unwrap_or_default()
-}
-
 fn clean_host(site: &str) -> Option<String> {
     let site = site.trim().to_lowercase();
     let site = site.strip_prefix("https://").unwrap_or(&site);
@@ -748,6 +744,12 @@ a skill, a mailbox, a calendar, your browser, a routine, a watcher or a task)"))
                 }
             } else if !have.tools.contains(tool) {
                 return Err(not_done(format!("missing the tool {tool} here (not one of your tools now); don't offer it.")));
+            } else if tool_family(tool) == "mail" && have.mailboxes.is_empty() {
+                // no mailbox linked (bench 1.1: « Avec : tes e-mails » on an agent with none): a draft is written in
+                // its reply, nothing of « your e-mails » on the card; reading mail can't be done
+                if tool != "mail_draft" {
+                    return Err(not_done("missing a mailbox here (none is linked to you); don't offer it."));
+                }
             } else {
                 add(tool_words(t, tool));
             }
@@ -890,7 +892,7 @@ a skill, a mailbox, a calendar, your browser, a routine, a watcher or a task)"))
         }
     }
     let family = family_of(&kept, &later);
-    let uses_text = fill(t.with, &[("uses", &pieces.join(" · "))]);
+    let uses_text = if pieces.is_empty() { String::new() } else { fill(t.with, &[("uses", &pieces.join(" · "))]) };
     let site_text = site.as_ref().map(|s| fill(t.site, &[("site", s)]));
     Ok(Checked {
         label,
@@ -952,6 +954,8 @@ pub fn capabilities(have: &Have) -> Vec<String> {
         ("map_image", "a map")];
     for (tool, words) in shown {
         if have.tools.contains(tool) {
+            // no mailbox linked: its drafts are written in the reply (bench 1.1)
+            let words = if tool == "mail_draft" && have.mailboxes.is_empty() { "a draft written in your reply (no mailbox)" } else { words };
             out.push(format!("{{\"tool\": \"{tool}\"}} {words}"));
         }
     }
@@ -1672,23 +1676,16 @@ pub fn outside_model(config: &Config, agent: &AgentConfig) -> bool {
     !matches!(crate::outside_model::place(config, agent), crate::outside_model::Place::Own | crate::outside_model::Place::Europe)
 }
 
-/// Whether a pass may send to this address: the person's own machine or network, or our European providers.
+/// Whether a pass may send to this address: the person's own machine or network (their Tailscale network too), or our
+/// European providers — the same rule as `outside_model::place` (bench 1.1: the Spark over Tailscale got no pass).
 pub fn pass_target_ok(base_url: &str) -> bool {
-    if crate::turn_status::local_base(base_url) {
-        return true;
-    }
-    let host = host_of(base_url);
-    if !host.is_empty() && !host.contains('.') {
-        return true; // a name of the local network (http://sparks:8888/v1)
-    }
-    ["eurouter.ai", "mistral.ai"].iter().any(|d| host == *d || host.ends_with(&format!(".{d}")))
+    own_target(base_url) || crate::outside_model::european_address(base_url)
 }
 
-/// Whether a pass sent to `base` goes to the person's own model (review B4): an address of this machine or their
-/// network (`local_base`), or a name of their network as `pass_target_ok` takes it (`http://sparks:8888/v1`).
+/// Whether a pass sent to `base` goes to the person's own model (review B4): this machine, their network, a name of
+/// their network (`http://sparks:8888/v1`) or their Tailscale network, as `outside_model::own_address` says.
 fn own_target(base: &str) -> bool {
-    let host = host_of(base);
-    crate::turn_status::local_base(base) || (!host.is_empty() && !host.contains('.') && !host.contains(':'))
+    crate::outside_model::own_address(base)
 }
 
 /// The model a pass of `agent` calls: (base url, model, key, the person's own). `[notebook] base_url` and `key`
@@ -1863,14 +1860,27 @@ fn month_of(zone: Tz, now: f64) -> String {
 }
 
 /// The prices a pass of `agent` is counted at: its own model's (the router's list on the offer) unless `[notebook]
-/// model` names another; the install's otherwise.
-async fn prices(config: &Config, agent: &AgentConfig) -> crate::task_cost::Prices {
+/// model` names another; the install's otherwise. On a home install (no guichet list), a pass to our European
+/// router with a model it lists is counted at that router's prices (`home_prices`).
+async fn prices(config: &Config, agent: &AgentConfig, model: Option<&(String, String, String, bool)>) -> crate::task_cost::Prices {
+    if let Some(p) = model.and_then(|(base, name, _, _)| home_prices(crate::handover::on_offer(), base, name)) {
+        return p;
+    }
     if config.notebook.model.is_empty() && config.notebook.base_url.is_empty() {
         crate::task_cost::for_agent(config, agent).await
     } else {
         let n = &config.notebook;
         crate::task_cost::Prices { input: n.price_in.max(0.0), cached: n.price_in.max(0.0), output: n.price_out.max(0.0) }
     }
+}
+
+/// A home install's pass to our European router (`base`) with a model of `task_cost::ROUTER_PRICES`: those prices
+/// (bench 1.1 problem 12). None on a place of the offer (the guichet's list), elsewhere, or for a model not listed.
+pub fn home_prices(on_offer: bool, base: &str, model: &str) -> Option<crate::task_cost::Prices> {
+    if on_offer || !crate::outside_model::european_address(base) {
+        return None;
+    }
+    crate::task_cost::router_prices(model)
 }
 
 /// A pass for one agent when the pre-filter says it is due: one model call, its candidates checked, the first good
@@ -1900,7 +1910,7 @@ async fn pass(state: &AppState, config: &Config, g: &mut Gathered, now: f64, zon
     let when = zone.timestamp_opt(now as i64, 0).single().map(|d| d.format("%A %Y-%m-%d %H:%M").to_string()).unwrap_or_default();
     let user = input(&format!("{when} ({})", zone.name()), lang, &can_use, learning.as_deref(), &g.conversations, &g.events, &g.dates,
                      config.proactive.input_chars);
-    let p = prices(config, &agent).await;
+    let p = prices(config, &agent, model.as_ref()).await;
     let estimate = p.cost(offers_tokens(INSTRUCTIONS.len() + user.len()), 0, MAX_OUTPUT_TOKENS);
     let spent = spend_of(&load(config), &month);
     let today_spent = spent.days.get(&today).copied().unwrap_or(0.0);
@@ -1915,9 +1925,7 @@ async fn pass(state: &AppState, config: &Config, g: &mut Gathered, now: f64, zon
         return record;
     };
     record["model_called"] = json!(true);
-    let mut body = json!({"model": name, "temperature": 0, "max_tokens": MAX_OUTPUT_TOKENS,
-                          "messages": [{"role": "system", "content": INSTRUCTIONS}, {"role": "user", "content": user}]});
-    crate::model_route::add_to_body(&config.model_provider_order, &base, &mut body);
+    let body = pass_body(&name, &base, &user, &config.model_provider_order);
     let sent = state
         .http
         .post(format!("{base}/chat/completions"))
@@ -1985,6 +1993,17 @@ async fn pass(state: &AppState, config: &Config, g: &mut Gathered, now: f64, zon
     record["refused"] = json!(refused);
     record["reason"] = json!(if record["placed"] == json!(true) { "placed" } else if refused > 0 { "refused" } else { "nothing" });
     finish(config, record)
+}
+
+/// A pass's request: no tools, `MAX_OUTPUT_TOKENS`, never thinking where the model can be told (`no_thinking`): a
+/// thinking model spent them all before any answer (bench 1.1, DeepSeek V4.1 Flash: 400 tokens of thinking, 0 idea in
+/// 10 days). GLM through EUrouter keeps its « low » floor (about 150 tokens out in all).
+pub fn pass_body(model: &str, base: &str, user: &str, provider_order: &[String]) -> Value {
+    let mut body = json!({"model": model, "temperature": 0, "max_tokens": MAX_OUTPUT_TOKENS,
+                          "messages": [{"role": "system", "content": INSTRUCTIONS}, {"role": "user", "content": user}]});
+    crate::model_route::no_thinking(base, &mut body);
+    crate::model_route::add_to_body(provider_order, base, &mut body);
+    body
 }
 
 fn finish(config: &Config, record: Value) -> Value {

@@ -192,6 +192,28 @@ pub fn subject_of(offer: &Offer) -> &str {
     }
 }
 
+/// The words that make an offer one of buying something, in the four languages (folded: no accents, lowercase), at a
+/// word's start. Not « compr… » alone: French « comprendre ».
+const SHOPPING_WORDS: [&str; 13] = ["achet", "achat", "commander", "buy", "purchas", "shopping", "kauf", "einkauf",
+                                     "bestell", "comprar", "compra", "panier", "warenkorb"];
+
+/// The subject an offer is also counted by, whatever its kind (bench 1.1 problem 7, the choice of 24/11): « buying
+/// something ». Two « Non merci » to it in a row quiet it for `QUIET_DAYS`: a search « où acheter X », a page or a
+/// free-form offer about buying is then not offered either (the bench: after two declined « où acheter » searches,
+/// the agents offered them again as pages or as free-form ones, and the bridge let them through). None: no such
+/// subject (an offer is then counted by its kind, family and topic only, as before).
+pub fn theme_of(offer: &Offer) -> Option<&'static str> {
+    if offer.family == "shopping" || offer.kind == "cart" {
+        return Some(SHOPPING);
+    }
+    // (not its prompt: « Rien ne sera acheté » is said of many a search that buys nothing)
+    let text = [offer.label.as_str(), offer.about.as_str(), offer.subject.as_str()].join(" ");
+    folded(&text).split_whitespace().any(|w| SHOPPING_WORDS.iter().any(|s| w.starts_with(s))).then_some(SHOPPING)
+}
+
+/// `theme_of`'s one subject, as the learning counts it (a key of its own beside the kinds: « theme:shopping »).
+pub const SHOPPING: &str = "theme:shopping";
+
 /// A « Oui » whose work is not done yet (a route, an event, the agent's turn): done again after a restart (review,
 /// remark), `MAX_TRIES` times at most.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -502,14 +524,20 @@ pub fn learning_line(store: &Store, agent: &str, kinds: &[&'static str], now: f6
             accepts.push(plural(kind));
         }
     }
-    match (declines.is_empty(), accepts.is_empty()) {
+    let line = match (declines.is_empty(), accepts.is_empty()) {
         (true, true) => None,
         (false, true) => Some(format!("Your person often declines: {}.", declines.join(", "))),
         (true, false) => Some(format!("Your person often accepts: {}.", accepts.join(", "))),
         (false, false) => {
             Some(format!("Your person often declines: {}. Often accepts: {}.", declines.join(", "), accepts.join(", ")))
         }
+    };
+    // buying things declined twice (`theme_of`): whatever the kind, told before it tries
+    if !quiet(store, agent, SHOPPING, now) {
+        return line;
     }
+    let shopping = "They declined your offers to look for things to buy: offer nothing about buying for now.";
+    Some(line.map(|l| format!("{l} {shopping}")).unwrap_or_else(|| shopping.to_string()))
 }
 
 // -- the texts (contracts/offers/cases.json `texts`) -------------------------------------------------------------------
@@ -1035,6 +1063,12 @@ pub fn rule_refusal(store: &Store, offer: &Offer, now: f64) -> Option<String> {
             offer.about
         ));
     }
+    if theme_of(offer).is_some_and(|theme| quiet(store, agent, theme, now)) {
+        return Some("Not done: your person said no thanks to your offers to look for things to buy lately: don't \
+offer buying anything for now, whatever the kind (a search, a page or another offer). It is not « Initiative » off: just \
+that, for a while."
+            .into());
+    }
     if quiet(store, agent, &learn_key(offer), now) {
         return Some(format!(
             "Not done: your person said no thanks to your {} lately: don't offer them for now (it is not « Initiative » \
@@ -1405,7 +1439,11 @@ pub fn answer(config: &Config, agent: &str, id: &str, yes: bool, now: f64) -> Op
     change(config, |s| {
         let at = s.offers.iter().position(|o| o.agent == agent && o.id == id && o.expires > now)?;
         let offer = s.offers.remove(at);
-        record(s, agent, &learn_key(&offer), subject_of(&offer), if yes { YES } else { NO }, now);
+        let outcome = if yes { YES } else { NO };
+        record(s, agent, &learn_key(&offer), subject_of(&offer), outcome, now);
+        if let Some(theme) = theme_of(&offer) {
+            record(s, agent, theme, subject_of(&offer), outcome, now);
+        }
         Some(offer)
     })
 }
@@ -1420,6 +1458,9 @@ pub fn expire(config: &Config, now: f64) -> Vec<Offer> {
         s.offers = kept;
         for o in &gone {
             record(s, &o.agent, &learn_key(o), subject_of(o), EXPIRED, now);
+            if let Some(theme) = theme_of(o) {
+                record(s, &o.agent, theme, subject_of(o), EXPIRED, now);
+            }
         }
         gone
     })

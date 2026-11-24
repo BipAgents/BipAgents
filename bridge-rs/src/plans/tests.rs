@@ -493,3 +493,45 @@ fn the_home_is_said_in_every_language_and_never_someone_elses_nor_a_holiday_one(
         assert!(home_of(&[entry(label)]).is_none(), "{label}");
     }
 }
+
+/// Bench 1.1 (24/11, `briefs/bench-1-1.md` problem 5): 6 of GLM-5.3 Flash's 8 habits refused for their shape, and the
+/// Spark's too: `repeat` inside the moment, `weeks` forgotten, days as numbers, `what` or `say` left out. Each shape
+/// the models wrote is taken now (weeks: `DEFAULT_WEEKS`); a refusal left says the right shape at once.
+#[test]
+fn bench_a_habit_as_the_models_write_it_is_taken() {
+    let now = at("2026-11-24T14:00:00+01:00");
+    let shapes = [
+        // GLM « boire plus d'eau »: no weeks, the rhythm in the moment and beside it
+        json!({"kind": "habit", "title": "Boire plus d'eau", "moments": [{"repeat": {"days": "daily", "times": ["10:00", "15:00"]},
+               "say": "Pense à ton verre d'eau 💧", "what": "Un verre d'eau ?"}],
+               "repeat": {"days": "daily", "times": ["10:00", "15:00"]}}),
+        // GLM « courir »: days as numbers, no `what`
+        json!({"kind": "habit", "title": "Courir 3 fois par semaine", "moments": [{"say": "C'est l'heure de ta sortie de course !"}],
+               "repeat": {"days": [2, 4, 6], "times": ["09:00"]}}),
+        // the Spark « Joggen »: only in the moment
+        json!({"kind": "habit", "title": "Joggen – 3× pro Woche", "moments": [{"repeat": {"days": ["mon", "wed", "fri"],
+               "times": ["08:00"], "weeks": 12}, "what": "Joggen – Mo, Mi, Fr, 8 Uhr"}]}),
+        // a day list in one text, one time as text, weeks as text
+        json!({"kind": "habit", "title": "Spanisch", "moments": [{"what": "Spanisch", "say": "20 Minuten?"}],
+               "repeat": {"days": "mon, tue, wed", "times": "20:00", "weeks": "3"}}),
+    ];
+    for shape in &shapes {
+        let plan = draft(&args(shape), "vie", PARIS, PARIS, now).unwrap_or_else(|e| panic!("{shape}: {e}")).plan;
+        let r = plan.repeat.clone().unwrap();
+        assert!(!plan.moments[0].what.is_empty() && !plan.moments[0].say.is_empty(), "{shape}");
+        assert!((1..=WEEKS_MAX).contains(&r.weeks), "{shape}");
+    }
+    let water = draft(&args(&shapes[0]), "vie", PARIS, PARIS, now).unwrap().plan.repeat.unwrap();
+    assert_eq!(water.weeks, DEFAULT_WEEKS);
+    let run = draft(&args(&shapes[1]), "vie", PARIS, PARIS, now).unwrap().plan.repeat.unwrap();
+    assert_eq!(run.days, "2,4,6", "Tuesday, Thursday, Saturday");
+    let sunday = json!({"kind": "habit", "title": "Yoga", "moments": [{"what": "Yoga"}], "repeat": {"days": [7], "times": ["09:00"]}});
+    assert_eq!(draft(&args(&sunday), "vie", PARIS, PARIS, now).unwrap().plan.repeat.unwrap().days, "0");
+    // what is still refused says the shape the tool takes, so the next call is right
+    let none = json!({"kind": "habit", "title": "Eau", "moments": [{"what": "Eau", "say": "Un verre ?"}]});
+    let said = draft(&args(&none), "vie", PARIS, PARIS, now).unwrap_err();
+    assert!(said.contains("\"repeat\": {\"days\"") && said.contains("weeks"), "{said}");
+    let three = json!({"kind": "habit", "title": "Eau", "moments": [{"what": "a", "say": "b"}, {"what": "c", "say": "d"}],
+                       "repeat": {"days": "daily", "times": ["09:00"]}});
+    assert!(draft(&args(&three), "vie", PARIS, PARIS, now).unwrap_err().contains("repeat.times"));
+}

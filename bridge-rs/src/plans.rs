@@ -79,6 +79,12 @@ pub const NAME_MAX: usize = 40;
 pub const SENDERS_MAX: usize = 3;
 pub const TIMES_MAX: usize = 4;
 pub const WEEKS_MAX: u32 = 12;
+/// A habit's weeks when its agent gives none (bench 1.1: `weeks` forgotten in most of GLM's habits, the design's
+/// example says 2 weeks): it stops on its own (§4.1 rule 2), the card says how long.
+pub const DEFAULT_WEEKS: u32 = 2;
+/// A habit's rhythm as the tool takes it, added to a refusal of its shape so the model fixes it at its next call.
+const REPEAT_EXAMPLE: &str = "e.g. \"repeat\": {\"days\": [\"mon\", \"wed\", \"fri\"], \"times\": [\"18:30\"], \"weeks\": 4} \
+beside `moments`, and one moment {\"what\", \"say\"}";
 /// Urgent moments of a plan, at most (leaving, a check-in): never a habit's.
 pub const URGENT_MAX: usize = 2;
 /// The caps (D2 A, §3.2).
@@ -688,10 +694,34 @@ pub fn draft(arguments: &Dict, agent: &str, person: Tz, routines: Tz, now: f64) 
         Some(v) => plain(Some(v), "city", CITY_MAX)?,
         None => zone_city(zone.name()),
     };
-    let list = arguments.get("moments").and_then(Value::as_array).cloned().unwrap_or_default();
+    let mut list = arguments.get("moments").and_then(Value::as_array).cloned().unwrap_or_default();
     let habit = kind == "habit";
+    // a habit's rhythm as models write it (bench 1.1, 6 refusals of 8 for GLM): `repeat` inside its moment rather
+    // than beside it, taken from there; its moment's `at` is its first day
+    let mut repeat_arg = arguments.get("repeat").filter(|v| !v.is_null()).cloned();
+    if habit && repeat_arg.is_none() {
+        repeat_arg = list.iter().find_map(|m| m.get("repeat").filter(|v| v.is_object()).cloned());
+    }
     if list.is_empty() || list.len() > MAX_MOMENTS || (habit && list.len() != 1) {
-        return Err(if habit { "moments: exactly one for a habit".into() } else { format!("moments: 1 to {MAX_MOMENTS}") });
+        return Err(if habit {
+            format!("moments: exactly one for a habit, its times of day in repeat.times ({REPEAT_EXAMPLE})")
+        } else {
+            format!("moments: 1 to {MAX_MOMENTS}")
+        });
+    }
+    if habit {
+        // a habit's line and words: one given stands for the other, its title for both
+        if let Some(Value::Object(m)) = list.first_mut() {
+            let given = |m: &serde_json::Map<String, Value>, k: &str| text_arg(m.get(k)).chars().count() > 0;
+            if !given(m, "what") {
+                let what = if given(m, "say") { text_arg(m.get("say")) } else { title.clone() };
+                m.insert("what".into(), json!(what.chars().take(WHAT_MAX).collect::<String>()));
+            }
+            if !given(m, "say") {
+                let say = text_arg(m.get("what"));
+                m.insert("say".into(), json!(say));
+            }
+        }
     }
     let mut moments = Vec::new();
     let mut routes = Vec::new();
@@ -798,9 +828,9 @@ pub fn draft(arguments: &Dict, agent: &str, person: Tz, routines: Tz, now: f64) 
              is urgent already"
         ));
     }
-    let repeat = match (habit, arguments.get("repeat").filter(|v| !v.is_null())) {
+    let repeat = match (habit, repeat_arg.as_ref()) {
         (true, Some(r)) => {
-            let r = read_repeat(r, moments[0].at, routines, now)?;
+            let r = read_repeat(r, moments[0].at, routines, now).map_err(|e| format!("{e} ({REPEAT_EXAMPLE})"))?;
             // its moment: its first run (the card says its rhythm)
             let after = first_midnight(&r, routines).max(now) - 1.0;
             moments[0].at = habit_schedules(&r, 0)
@@ -812,8 +842,8 @@ pub fn draft(arguments: &Dict, agent: &str, person: Tz, routines: Tz, now: f64) 
             }
             Some(r)
         }
-        (true, None) => return Err("repeat: a habit needs its rhythm ({days, times, weeks})".into()),
-        (false, Some(_)) => return Err("repeat: for a habit only".into()),
+        (true, None) => return Err(format!("repeat: a habit needs its rhythm ({REPEAT_EXAMPLE})")),
+        (false, Some(_)) => return Err("repeat: for a habit only (kind habit, one moment)".into()),
         (false, None) => None,
     };
     let watch = match arguments.get("watch").filter(|v| !v.is_null()) {
@@ -874,9 +904,20 @@ pub fn draft(arguments: &Dict, agent: &str, person: Tz, routines: Tz, now: f64) 
 
 /// A habit's rhythm read: its first day is its moment's `at` (else tomorrow, on the routines' clock).
 fn read_repeat(value: &Value, at: f64, routines: Tz, now: f64) -> Result<Repeat, String> {
-    let (days, said) = match value.get("days") {
+    // one day or a list in one text (« mon, wed, fri »): its list
+    let listed = match value.get("days") {
+        Some(Value::String(word)) if word.contains([',', ' ']) && !matches!(word.trim(), "every day") => Some(Value::Array(
+            word.split([',', ' ']).map(str::trim).filter(|w| !w.is_empty()).map(|w| json!(w)).collect(),
+        )),
+        Some(Value::String(word)) if DAY_WORDS.iter().any(|w| word.trim().to_lowercase().starts_with(w)) => {
+            Some(json!([word]))
+        }
+        Some(Value::Number(n)) => Some(json!([n])),
+        other => other.cloned(),
+    };
+    let (days, said) = match listed.as_ref() {
         Some(Value::String(word)) => match word.trim().to_lowercase().as_str() {
-            "daily" => ("*".to_string(), "daily".to_string()),
+            "daily" | "every day" | "everyday" => ("*".to_string(), "daily".to_string()),
             "weekdays" => ("1-5".to_string(), "weekdays".to_string()),
             "weekends" => ("0,6".to_string(), "weekends".to_string()),
             _ => return Err("repeat.days: daily, weekdays, weekends or a list of days".into()),
@@ -884,11 +925,17 @@ fn read_repeat(value: &Value, at: f64, routines: Tz, now: f64) -> Result<Repeat,
         Some(Value::Array(list)) => {
             let mut picked: Vec<usize> = Vec::new();
             for d in list {
-                let word = d.as_str().unwrap_or("").trim().to_lowercase();
-                let i = DAY_WORDS
-                    .iter()
-                    .position(|w| word.starts_with(w))
-                    .ok_or("repeat.days: mon, tue, wed, thu, fri, sat, sun")?;
+                // a day's number as models write it: 1 Monday … 6 Saturday, 7 or 0 Sunday (ISO and cron agree but
+                // for Sunday)
+                let i = match d.as_u64() {
+                    Some(n @ 1..=7) => Some(n as usize - 1),
+                    Some(0) => Some(6),
+                    _ => {
+                        let word = d.as_str().unwrap_or("").trim().to_lowercase();
+                        DAY_WORDS.iter().position(|w| word.starts_with(w))
+                    }
+                };
+                let i = i.ok_or("repeat.days: mon, tue, wed, thu, fri, sat, sun")?;
                 if !picked.contains(&i) {
                     picked.push(i);
                 }
@@ -904,15 +951,20 @@ fn read_repeat(value: &Value, at: f64, routines: Tz, now: f64) -> Result<Repeat,
         }
         _ => return Err("repeat.days: daily, weekdays, weekends or a list of days".into()),
     };
-    let times: Vec<String> = value
-        .get("times")
-        .and_then(Value::as_array)
-        .map(|l| l.iter().filter_map(Value::as_str).map(|s| s.trim().to_string()).collect())
-        .unwrap_or_default();
+    let times: Vec<String> = match value.get("times") {
+        Some(Value::String(one)) => one.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect(),
+        other => other
+            .and_then(Value::as_array)
+            .map(|l| l.iter().filter_map(Value::as_str).map(|s| s.trim().to_string()).collect())
+            .unwrap_or_default(),
+    };
     if times.is_empty() || times.len() > TIMES_MAX || times.iter().any(|t| hour_minute(t).is_none()) {
         return Err(format!("repeat.times: 1 to {TIMES_MAX} times « HH:MM »"));
     }
-    let weeks = value.get("weeks").and_then(Value::as_u64).unwrap_or(0);
+    let weeks = match value.get("weeks").filter(|v| !v.is_null()) {
+        None => u64::from(DEFAULT_WEEKS),
+        Some(w) => w.as_u64().or_else(|| w.as_str().and_then(|t| t.trim().parse().ok())).unwrap_or(0),
+    };
     if weeks == 0 || weeks > u64::from(WEEKS_MAX) {
         return Err(format!("repeat.weeks: 1 to {WEEKS_MAX}"));
     }
@@ -1176,10 +1228,10 @@ Disturb. 2 at most per plan (a route counts), never for a habit"},
                                            "from": {"type": "string", "description": "default: your person's home \
 (their contact details' entry labelled as home), timed once they say « Prévoir »"}},
                             "required": ["to", "arrive_by"]}}}},
-                "repeat": {"type": "object", "description": "a habit's rhythm",
+                "repeat": {"type": "object", "description": "a habit's rhythm, here beside moments",
                     "properties": {"days": {"description": "daily, weekdays, weekends, or [mon, wed, fri]"},
                                    "times": {"type": "array", "items": {"type": "string"}, "description": "HH:MM, 1 to 4"},
-                                   "weeks": {"type": "integer", "minimum": 1, "maximum": WEEKS_MAX}}},
+                                   "weeks": {"type": "integer", "minimum": 1, "maximum": WEEKS_MAX, "description": "default 2"}}},
                 "watch": {"type": "object", "description": "e-mails to watch for a change (an airline's, a hotel's), by \
 their sender's domain: you'll see only their sender, subject and date",
                     "properties": {"mail_from": {"type": "array", "maxItems": SENDERS_MAX, "items": {"type": "object",

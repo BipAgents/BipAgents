@@ -772,3 +772,62 @@ fn a_compaction_summary_and_hermes_own_user_rows_never_reach_a_pass() {
     assert_eq!(turns, vec![("Je prépare le semi".to_string(), "Super.".to_string()),
                            ("Et samedi ?".to_string(), "Footing léger.".to_string())]);
 }
+
+/// Bench 1.1 (24/11, `briefs/bench-1-1.md` problem 6): every pass of DeepSeek V4.1 Flash gave exactly its 400 output
+/// tokens, all thinking, and no idea in 10 days. A pass never thinks where the model can be told: the template's
+/// switch, and « none » at our router; GLM through EUrouter keeps its « low » floor (it answered within the 400).
+#[test]
+fn bench_a_pass_never_spends_its_tokens_thinking() {
+    let deepseek = pass_body("deepseek-v4.1-flash", "https://api.eurouter.ai/api/v1", "x", &[]);
+    assert_eq!(deepseek["reasoning_effort"], "none", "{deepseek}");
+    assert_eq!(deepseek["chat_template_kwargs"]["enable_thinking"], false);
+    let spark = pass_body("GLM-5.3-Flash-EXL3", "http://100.87.65.57:8888/v1", "x", &[]);
+    assert_eq!(spark["chat_template_kwargs"]["enable_thinking"], false, "the person's own model told too");
+    let glm = pass_body("z-ai/glm-5.3-flash", "https://api.eurouter.ai/api/v1", "x", &[]);
+    assert_eq!(glm["reasoning_effort"], crate::agents_admin::GLM_THINKING, "GLM keeps its floor");
+    assert!(glm.get("chat_template_kwargs").is_none());
+    assert_eq!(glm["max_tokens"], MAX_OUTPUT_TOKENS);
+}
+
+/// Bench 1.1 (24/11, problem 12): on a home install a pass was counted at `[notebook]`'s 0.50 / 1.50 € a million,
+/// 5 times what the lab's key paid for GLM-5.3 Flash (0.00009 € a pass), so the 0.10 € cap came after about 200
+/// passes instead of 1 100. A pass to our European router with a model it lists is counted at its prices.
+#[test]
+fn bench_a_home_installs_pass_is_counted_at_the_routers_prices() {
+    let eurouter = "https://api.eurouter.ai/api/v1";
+    let glm = home_prices(false, eurouter, "glm-5.3-flash").expect("GLM at EUrouter on a home install");
+    // the bench's measured pass: about 650 tokens in, 150 out
+    let eur = glm.cost(650, 0, 150);
+    assert!(eur < 0.00015, "{eur}");
+    let old = crate::task_cost::configured_on(&Config::with_key("k"), false).cost(650, 0, 150);
+    assert!(old > 4.0 * eur, "the old count: {old}");
+    assert!(home_prices(false, eurouter, "deepseek/deepseek-v4.1-flash").is_some());
+    assert!(home_prices(true, eurouter, "glm-5.3-flash").is_none(), "the offer: the guichet's list");
+    assert!(home_prices(false, "https://api.openai.com/v1", "glm-5.3-flash").is_none());
+    assert!(home_prices(false, eurouter, "some-other-model").is_none(), "unknown: the install's prices");
+}
+
+/// Bench 1.1 (24/11, problem 8): three of GLM's pass ideas said « Avec : tes e-mails » on an agent with no mailbox
+/// linked (`mail_draft` is listed, it then writes a ```draft block). Without a mailbox, a draft says nothing of « your
+/// e-mails », reading mail is refused, and what it can use says so.
+#[test]
+fn bench_no_mailbox_never_says_your_e_mails() {
+    let mut have = vie();
+    have.mailboxes.clear();
+    let invite = json!({"label": "Je prépare les invitations de Tom ?", "topic": "Invitations Tom",
+                        "prompt": "Rédige le texte d'invitation et un brouillon d'e-mail aux parents.",
+                        "uses": [{"tool": "mail_draft"}, {"tool": "create_page"}]});
+    let c = check(&have, &invite, "fr", PARIS, now()).unwrap();
+    assert!(!c.uses_text.contains("e-mails"), "{}", c.uses_text);
+    assert_eq!(c.uses_text, "Avec : une page");
+    let alone = json!({"label": "Je prépare la réponse ?", "topic": "Banquier", "prompt": "Rédige une réponse.",
+                       "uses": [{"tool": "mail_draft"}]});
+    assert_eq!(check(&have, &alone, "fr", PARIS, now()).unwrap().uses_text, "", "no « Avec : » line left empty");
+    let read = json!({"label": "Je regarde tes mails ?", "topic": "Mails", "prompt": "Cherche le mail.",
+                      "uses": [{"tool": "mail_search"}]});
+    assert!(check(&have, &read, "fr", PARIS, now()).unwrap_err().contains("missing a mailbox"));
+    assert!(capabilities(&have).iter().any(|c| c.contains("mail_draft") && c.contains("no mailbox")));
+    // with a mailbox: as before
+    let c = check(&vie(), &invite, "fr", PARIS, now()).unwrap();
+    assert!(c.uses_text.contains("tes e-mails"), "{}", c.uses_text);
+}
