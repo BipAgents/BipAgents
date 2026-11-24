@@ -891,3 +891,22 @@ fn a5_the_run_of_a_yes_is_known_while_it_goes_on() {
         "{urgent}"
     );
 }
+
+/// Finitions 1.1, point 1: every offer card carries its top line (`bip_offer.top`), in the agent's language (an app 1.1
+/// drew « {agent} propose · {about} » in the phone's); a bridge's own card keeps its own (« Vie · 3 e-mails… »).
+#[test]
+fn f1_every_offer_card_carries_its_top_line_in_the_agent_s_language() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = config_in(dir.path());
+    let lang = lang_of(&config, "vie");
+    let offer = Offer {
+        id: "o1".into(), agent: "vie".into(), kind: "search".into(), about: "Lisbonne".into(),
+        label: "Je regarde les hôtels ?".into(), made: 1.0, expires: f64::MAX, ..Offer::default()
+    };
+    let card = card_item(&config, &offer);
+    assert_eq!(card["bip_offer"]["top"], json!(top(lang, "vie", "Lisbonne")), "{card:?}");
+    let own = Offer { source: "replies".into(), top: "Vie · 3 e-mails attendent ta réponse".into(), ..offer.clone() };
+    assert_eq!(card_item(&config, &own)["bip_offer"]["top"], json!("Vie · 3 e-mails attendent ta réponse"));
+    let smart = Offer { mode: crate::offer_ideas::MODE.into(), family: "search".into(), ..offer };
+    assert_eq!(card_item(&config, &smart)["bip_offer"]["top"], json!(top(lang, "vie", "Lisbonne")));
+}

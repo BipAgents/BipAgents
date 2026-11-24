@@ -183,51 +183,115 @@ pub fn copy_profile(source: &Path, target: &Path) -> anyhow::Result<()> {
     copy_profile_except(source, target, &[])
 }
 
+/// Hermes' live state of the gateway serving a profile (`runtime/`: its open chats' leases, active_sessions.json,
+/// held by that gateway's pid; its Bot Chat deliveries, pinned to that profile home): never copied. Lab of 24/11: an
+/// agent moved at its first secret took the hub's lease on the conversation it was moving from, and its space
+/// answered every message there « This chat is open in another Hermes window/terminal » while the hub's gateway lived.
+const PROFILE_RUNTIME: &str = "runtime";
+
 /// [`copy_profile`] without the profile's own `except` (its Hermes vault on a place whose copies are in memory,
-/// hermes_copies.rs: never copied, the bridge rebuilds it for the new home).
+/// hermes_copies.rs: never copied, the bridge rebuilds it for the new home) nor its gateway's live state
+/// ([`PROFILE_RUNTIME`]).
 pub fn copy_profile_except(source: &Path, target: &Path, except: &[&str]) -> anyhow::Result<()> {
-    copy_tree(source, target, except)?;
+    let except: Vec<&str> = except.iter().copied().chain([PROFILE_RUNTIME]).collect();
+    copy_tree(source, target, &except)?;
     let database = source.join("state.db");
     if database.exists() {
         let src = rusqlite::Connection::open_with_flags(&database, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
-        let mut dst = rusqlite::Connection::open(target.join("state.db"))?;
-        {
-            let backup = rusqlite::backup::Backup::new(&src, &mut dst)?;
-            // Python's `src.backup(dst)`: every page in one step (-1), 250 ms between tries when busy or locked.
-            loop {
-                match backup.step(-1)? {
-                    rusqlite::backup::StepResult::Done => break,
-                    rusqlite::backup::StepResult::More => {}
-                    _ => std::thread::sleep(Duration::from_millis(250)),
-                }
-            }
-        }
+        backup_into(&src, &mut rusqlite::Connection::open(target.join("state.db"))?)?;
     }
     Ok(())
 }
 
 /// The hub's copy of the conversations again into the space (SQLite backup), after a turn that went on in the hub
 /// while the agent moved: its end is kept too. Its API conversations are then the space's (`rebind_api_sessions`).
+/// The way back (agents_admin.rs `move_back_to_hub`, own_space_back.rs `finish`) copies the space's into the hub the
+/// same way.
+///
+/// The target's database is served by a running Hermes (the space's gateway, or the hub's once it adopted the copy):
+/// its runtime epoch (`runtime_epoch`, Hermes `begin_runtime_epoch`: the next epoch at each start) stays the target's.
+/// With the source's, that Hermes refused every turn (`POST /v1/runs` → 409 `stale_epoch`) until its gateway restarted
+/// (investigation of 24/11: agents mute after their move at their first secret). Only that row: the rest of Hermes'
+/// runtime ledger (`session_admissions`, `worker_executions`, `worker_receipts`) is the source's, as a restart finds
+/// it after a restore (hermes_cli/backup_restore.py `_restore_epoch_source`: the whole ledger, an epoch floor). It is
+/// consistent with the source's conversations (`sessions.runtime_generation`), its rows are owned by the source's
+/// epoch, below the target's (the target's Hermes began its own on a copy of the source's database), and it holds
+/// the end of the source's turn (`terminal`), where the target's has it `unknown` (its start recovered it as a turn
+/// lost: `recover_session_inputs`), which blocks that conversation (`claim_session_input`: `unknown_execution`).
+/// The row is written into a staged copy before it is published, so the target's Hermes never reads the source's.
 pub fn resync_database(source: &Path, target: &Path, profile_id: &str) -> anyhow::Result<()> {
     let database = source.join("state.db");
     if !database.exists() {
         return Ok(());
     }
     let src = rusqlite::Connection::open_with_flags(&database, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
-    let mut dst = rusqlite::Connection::open(target.join("state.db"))?;
-    {
-        let backup = rusqlite::backup::Backup::new(&src, &mut dst)?;
-        loop {
-            match backup.step(-1)? {
-                rusqlite::backup::StepResult::Done => break,
-                rusqlite::backup::StepResult::More => {}
-                _ => std::thread::sleep(Duration::from_millis(250)),
+    let kept = served_epoch(&target.join("state.db"))?;
+    let staged = target.join(".state.db.bip-resync");
+    let result = (|| -> anyhow::Result<()> {
+        let from = match &kept {
+            None => src,
+            Some((epoch, instance)) => {
+                remove_database(&staged);
+                let mut stage = rusqlite::Connection::open(&staged)?;
+                backup_into(&src, &mut stage)?;
+                drop(src);
+                stage.execute_batch(RUNTIME_EPOCH_TABLE)?;
+                stage.execute(
+                    "INSERT INTO runtime_epoch(singleton, epoch, instance_id) VALUES(1, ?1, ?2) ON CONFLICT(singleton) \
+                     DO UPDATE SET epoch = excluded.epoch, instance_id = excluded.instance_id",
+                    rusqlite::params![epoch, instance],
+                )?;
+                stage
             }
-        }
-    }
-    drop(dst);
+        };
+        let mut dst = rusqlite::Connection::open(target.join("state.db"))?;
+        backup_into(&from, &mut dst)?;
+        Ok(())
+    })();
+    remove_database(&staged);
+    result?;
     rebind_api_sessions(target, profile_id)?;
     Ok(())
+}
+
+/// Hermes' `runtime_epoch` table (hermes_state_common.py, v0.23.1).
+const RUNTIME_EPOCH_TABLE: &str = "CREATE TABLE IF NOT EXISTS runtime_epoch (singleton INTEGER PRIMARY KEY CHECK \
+(singleton = 1), epoch INTEGER NOT NULL CHECK (epoch > 0), instance_id TEXT NOT NULL);";
+
+/// The runtime epoch of the Hermes serving `database` (epoch, instance id): None without a database, a table or a row.
+fn served_epoch(database: &Path) -> rusqlite::Result<Option<(i64, String)>> {
+    if !database.exists() {
+        return Ok(None);
+    }
+    let conn = rusqlite::Connection::open_with_flags(database, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    let has_table: bool = conn
+        .query_row("SELECT 1 FROM sqlite_master WHERE type='table' AND name='runtime_epoch'", [], |_| Ok(true))
+        .or_else(|e| if e == rusqlite::Error::QueryReturnedNoRows { Ok(false) } else { Err(e) })?;
+    if !has_table {
+        return Ok(None);
+    }
+    conn.query_row("SELECT epoch, instance_id FROM runtime_epoch WHERE singleton = 1", [], |r| Ok((r.get(0)?, r.get(1)?)))
+        .map(Some)
+        .or_else(|e| if e == rusqlite::Error::QueryReturnedNoRows { Ok(None) } else { Err(e) })
+}
+
+/// Every page of `src` into `dst` (Python's `src.backup(dst)`: one step, 250 ms between tries when busy or locked).
+fn backup_into(src: &rusqlite::Connection, dst: &mut rusqlite::Connection) -> rusqlite::Result<()> {
+    let backup = rusqlite::backup::Backup::new(src, dst)?;
+    loop {
+        match backup.step(-1)? {
+            rusqlite::backup::StepResult::Done => return Ok(()),
+            rusqlite::backup::StepResult::More => {}
+            _ => std::thread::sleep(Duration::from_millis(250)),
+        }
+    }
+}
+
+/// A database file and its journals, gone.
+fn remove_database(path: &Path) {
+    for suffix in ["", "-wal", "-shm", "-journal"] {
+        let _ = std::fs::remove_file(format!("{}{suffix}", path.display()));
+    }
 }
 
 /// Hermes' record of an API conversation's owner (`state_meta`, gateway/session_api.py `_BINDING_PREFIX`, v0.22.5):
@@ -864,6 +928,126 @@ mod tests {
         assert_eq!(moved["entry"]["origin"]["profile"], "coach"); // the rest as it was
         assert_eq!(value("gateway.local_policy.v1:local-1")["profile_id"], "/hub/profiles/coach"); // not an API one
         assert_eq!(rebind_api_sessions(dir.path(), "/space/profiles/coach").unwrap(), 0); // once
+    }
+
+    /// Investigation of 24/11 (bench 1.1, problem 10: Lumi and Iris mute after their move, 502 at every message, a
+    /// bridge restart changes nothing). An agent that moves at its first secret (own_space.rs `ready`) does so in the
+    /// middle of a hub turn; its space's gateway starts and takes the next runtime epoch in the profile's database
+    /// (Hermes `begin_runtime_epoch`: hub's + 1); once the hub turn ends, `finish` copies the hub's database over the
+    /// space's (`resync_database`) and puts the hub's epoch back. From then on the space's Hermes refuses every turn
+    /// (`POST /v1/runs` → 409 `stale_epoch`, hermes_state_runtime.py `_epoch`) until its gateway restarts. Reproduced on
+    /// a lab of origin/main d37d74e5f and bench-1-1 7d80f6557 (aibox, Hermes 0.23.1). The copy must keep the runtime
+    /// tables of the Hermes serving the target.
+    #[test]
+    fn red_a_resync_keeps_the_runtime_epoch_of_the_hermes_serving_the_target() {
+        let dir = tempfile::tempdir().unwrap();
+        let (hub, space) = (dir.path().join("hub/profiles/lumi"), dir.path().join("space/profiles/lumi"));
+        std::fs::create_dir_all(&hub).unwrap();
+        std::fs::create_dir_all(&space).unwrap();
+        // Hermes' tables, as 0.23.1 makes them (the columns the check reads)
+        let make = |at: &Path, epoch: i64, instance: &str, said: &str| {
+            let conn = rusqlite::Connection::open(at.join("state.db")).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE runtime_epoch (singleton INTEGER PRIMARY KEY CHECK (singleton = 1), epoch INTEGER NOT NULL, \
+                 instance_id TEXT NOT NULL);
+                 CREATE TABLE messages (session_id TEXT, content TEXT);",
+            )
+            .unwrap();
+            conn.execute("INSERT INTO runtime_epoch VALUES (1, ?1, ?2)", rusqlite::params![epoch, instance]).unwrap();
+            conn.execute("INSERT INTO messages VALUES ('api_1', ?1)", [said]).unwrap();
+        };
+        // the hub's gateway serves the profile at epoch 1; the space's, started on the move's first copy, at epoch 2
+        make(&hub, 1, "hub-gateway", "the hub turn's end");
+        make(&space, 2, "space-gateway", "before the hub turn ended");
+        resync_database(&hub, &space, "/space/profiles/lumi").unwrap();
+        let conn = rusqlite::Connection::open(space.join("state.db")).unwrap();
+        let said: String = conn.query_row("SELECT content FROM messages", [], |r| r.get(0)).unwrap();
+        assert_eq!(said, "the hub turn's end", "the hub turn's end copied into the space");
+        let (epoch, instance): (i64, String) = conn
+            .query_row("SELECT epoch, instance_id FROM runtime_epoch WHERE singleton = 1", [], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap();
+        assert_eq!(
+            (epoch, instance.as_str()),
+            (2, "space-gateway"),
+            "the space's Hermes keeps its own epoch: with the hub's, it answers every turn 409 stale_epoch"
+        );
+    }
+
+    /// Hermes' runtime tables as 0.23.1 makes them (the columns the checks read), one conversation, one turn's
+    /// admission in `status`, the gateway at `epoch`.
+    fn hermes_db(at: &Path, epoch: Option<(i64, &str)>, said: &str, status: &str) {
+        std::fs::create_dir_all(at).unwrap();
+        let conn = rusqlite::Connection::open(at.join("state.db")).unwrap();
+        conn.execute_batch(&format!(
+            "PRAGMA journal_mode=WAL; {RUNTIME_EPOCH_TABLE}
+             CREATE TABLE messages (session_id TEXT, content TEXT);
+             CREATE TABLE session_admissions (admission_id TEXT, status TEXT, owner_epoch INTEGER);"
+        ))
+        .unwrap();
+        if let Some((epoch, instance)) = epoch {
+            conn.execute("INSERT INTO runtime_epoch VALUES (1, ?1, ?2)", rusqlite::params![epoch, instance]).unwrap();
+        }
+        conn.execute("INSERT INTO messages VALUES ('api_1', ?1)", [said]).unwrap();
+        conn.execute("INSERT INTO session_admissions VALUES ('a1', ?1, 1)", [status]).unwrap();
+    }
+
+    fn read_db(at: &Path) -> (String, Option<(i64, String)>, String) {
+        let conn = rusqlite::Connection::open(at.join("state.db")).unwrap();
+        let said = conn.query_row("SELECT content FROM messages", [], |r| r.get(0)).unwrap();
+        let status = conn.query_row("SELECT status FROM session_admissions", [], |r| r.get(0)).unwrap();
+        (said, served_epoch(&at.join("state.db")).unwrap(), status)
+    }
+
+    /// The way back (agents_admin.rs `move_back_to_hub`, own_space_back.rs `finish`): the space's conversations copied
+    /// into the hub once the hub's gateway adopted the agent's copy (its epoch then the next one): the hub keeps its own.
+    /// The rest of the ledger is the source's: its turn's end (`terminal`), not the `unknown` the target's start made of
+    /// it (which blocks that conversation).
+    #[test]
+    fn the_way_back_keeps_the_hub_s_runtime_epoch_and_takes_the_space_s_ledger() {
+        let dir = tempfile::tempdir().unwrap();
+        let (space, hub) = (dir.path().join("space/profiles/lumi"), dir.path().join("hub/profiles/lumi"));
+        hermes_db(&space, Some((7, "space-gateway")), "the space turn's end", "terminal");
+        hermes_db(&hub, Some((8, "hub-gateway")), "before the space turn ended", "unknown");
+        resync_database(&space, &hub, "/hub/profiles/lumi").unwrap();
+        assert_eq!(
+            read_db(&hub),
+            ("the space turn's end".into(), Some((8, "hub-gateway".into())), "terminal".into())
+        );
+        let left: Vec<String> = std::fs::read_dir(&hub).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into()).collect();
+        assert!(!left.iter().any(|n| n.contains("bip-resync")), "{left:?}");
+    }
+
+    /// A target without a database, or whose database has no epoch: copied as before (the source's, whole).
+    #[test]
+    fn a_target_without_an_epoch_gets_the_source_s_whole() {
+        let dir = tempfile::tempdir().unwrap();
+        let (hub, space) = (dir.path().join("hub"), dir.path().join("space"));
+        hermes_db(&hub, Some((3, "hub-gateway")), "said in the hub", "terminal");
+        std::fs::create_dir_all(&space).unwrap();
+        resync_database(&hub, &space, "/space").unwrap();
+        assert_eq!(read_db(&space), ("said in the hub".into(), Some((3, "hub-gateway".into())), "terminal".into()));
+        let other = dir.path().join("other");
+        hermes_db(&other, None, "no gateway yet", "queued");
+        resync_database(&hub, &other, "/other").unwrap();
+        assert_eq!(read_db(&other), ("said in the hub".into(), Some((3, "hub-gateway".into())), "terminal".into()));
+    }
+
+    /// Lab of 24/11: the hub's lease on the conversation the agent moved from (`runtime/active_sessions.json`, held
+    /// by the hub's gateway pid) went with it, and its space refused every turn there. A folder named so deeper in the
+    /// profile (a skill's) is copied.
+    #[test]
+    fn a_profile_s_copy_leaves_its_gateway_s_live_state_out() {
+        let dir = tempfile::tempdir().unwrap();
+        let (from, to) = (dir.path().join("hub/profiles/vie"), dir.path().join("space/profiles/vie"));
+        std::fs::create_dir_all(from.join("runtime/bot_live_delivery")).unwrap();
+        std::fs::write(from.join("runtime/active_sessions.json"), r#"{"entries": [{"pid": 1}]}"#).unwrap();
+        std::fs::create_dir_all(from.join("skills/x/runtime")).unwrap();
+        std::fs::write(from.join("skills/x/runtime/tool.py"), "print(1)").unwrap();
+        std::fs::write(from.join("SOUL.md"), "Tu es Vie.").unwrap();
+        copy_profile(&from, &to).unwrap();
+        assert!(!to.join("runtime").exists());
+        assert_eq!(std::fs::read_to_string(to.join("SOUL.md")).unwrap(), "Tu es Vie.");
+        assert!(to.join("skills/x/runtime/tool.py").exists());
     }
 
     #[test]

@@ -51,11 +51,22 @@ const HUB_WAIT: Duration = Duration::from_secs(30 * 60);
 /// An agent of the shared hub that moves into its own space by itself when it needs to keep a secret: one that may not
 /// hold it in the hub (`vault::holds_in_hub`: the hub hosts an agent other people talk to, or its tools have no
 /// sandbox of their own), never the family's agent nor a project agent, never on an install that doesn't protect the
-/// vault (`unprotected_install`). Asked again at each call.
+/// vault (`unprotected_install`), never when its space could not hold it either (`space_could_hold`). Asked again at
+/// each call.
 pub fn may_move(config: &Config, agent: &AgentConfig) -> bool {
     crate::vault::holder(config, agent).as_deref() == Some("needs_own_space")
         && !crate::family_agent::is_family(config, &agent.name)
         && !crate::project_agent::is_project(config, &agent.name)
+        && space_could_hold(config, agent)
+}
+
+/// Whether the agent's space would isolate its sandbox (sandbox.rs `isolates`, which connectors and secrets need):
+/// not when Hermes' Bot Desktop runs in it (`desktop_in_sandbox`: an install without the visible browser's containers,
+/// the person answered « n »). The space gets the hub's settings and the agent's profile as they are, so its sandbox
+/// would hold the desktop too. Investigation of 24/11: such an agent moved at its first secret (~250 MB), was then
+/// refused the secret all the same in its space, and stayed mute there (its Hermes' epoch, `spaces::resync_database`).
+fn space_could_hold(config: &Config, agent: &AgentConfig) -> bool {
+    crate::shares::profile_dir(config, agent).is_none_or(|folder| !crate::sandbox::desktop_in_sandbox(config, &folder))
 }
 
 /// The agent may hold credentials now, or will once moved: the tools that keep some are offered.
@@ -352,6 +363,39 @@ mod tests {
             }
         }
         assert!(is_failure(&tool_text(FAILED_FOR_AGENT, true)));
+    }
+
+    /// Investigation of 24/11: an install without the visible browser's containers whose agents' sandbox holds
+    /// Hermes' Bot Desktop (the person answered « n », installer setup_desktop) isolates no sandbox, so its hub's
+    /// agents may not hold credentials there (`holder`: needs_own_space); their space would get the same settings and
+    /// refuse the secret all the same. They don't move: the existing refusal at once.
+    #[test]
+    fn no_move_when_the_space_would_hold_the_desktop_too() {
+        let dir = tempfile::tempdir().unwrap();
+        let hub = dir.path().join("hermes");
+        std::fs::create_dir_all(hub.join("profiles/coach")).unwrap();
+        let mut config = Config::with_key("k".repeat(32));
+        config.hermes.isolated = true;
+        config.hermes.bin = "/usr/bin/hermes".into();
+        config.hermes.hub_url = "http://127.0.0.1:8642".into();
+        config.hermes.home = hub.to_string_lossy().into_owned();
+        config.hermes.python = vec!["/usr/bin/python3".into()];
+        let coach =
+            AgentConfig { name: "coach".into(), hermes_url: "http://127.0.0.1:8642/p/coach".into(), ..Default::default() };
+        config.agents.insert("coach".into(), coach.clone());
+        std::fs::write(hub.join("config.yaml"), "bot_desktop:\n  auto_start: true\n").unwrap();
+        assert_eq!(crate::vault::holder(&config, &coach).as_deref(), Some("needs_own_space"));
+        assert!(!space_could_hold(&config, &coach));
+        assert!(!may_move(&config, &coach) && !may_hold(&config, &coach));
+        // its desktop in the gateway, or none: its space could hold it
+        std::fs::write(hub.join("config.yaml"), "bot_desktop:\n  auto_start: true\n  placement: gateway\n").unwrap();
+        assert!(space_could_hold(&config, &coach));
+        std::fs::write(hub.join("config.yaml"), "model:\n  default: glm\n").unwrap();
+        assert!(space_could_hold(&config, &coach));
+        // the visible browser's containers: no desktop in any sandbox
+        std::fs::write(hub.join("config.yaml"), "bot_desktop:\n  auto_start: true\n").unwrap();
+        config.browser.enabled = true;
+        assert!(space_could_hold(&config, &coach));
     }
 
     #[test]

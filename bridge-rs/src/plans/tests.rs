@@ -493,3 +493,24 @@ fn the_home_is_said_in_every_language_and_never_someone_elses_nor_a_holiday_one(
         assert!(home_of(&[entry(label)]).is_none(), "{label}");
     }
 }
+
+/// Finitions 1.1, point 1: the card's top line comes from the bridge (`bip_plan.top`), in the agent's language like the
+/// rest of the card (an app 1.1 drew it in the phone's; an app 1.0 ignores the key). A habit says « une habitude ».
+#[test]
+fn f1_a_plan_card_carries_its_top_line_in_the_agent_s_language() {
+    let texts = &contract()["texts"];
+    for t in TEXTS.iter() {
+        let c = &texts[t.lang];
+        let fill = |key: &str| c[key].as_str().unwrap().replace("{agent}", "Vie").replace("{title}", "Lisbonne");
+        assert_eq!(top(t.lang, "Vie", "Lisbonne", "trip"), fill("top"), "{}", t.lang);
+        assert_eq!(top(t.lang, "Vie", "Lisbonne", "appointment"), fill("top"), "{}", t.lang);
+        assert_eq!(top(t.lang, "Vie", "Lisbonne", "habit"), fill("top_habit"), "{}", t.lang);
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let config = config_in(dir.path());
+    let plan = lisbon().plan;
+    change(&config, |s| s.plans.push(plan.clone()));
+    let card = &pending_items(&config, Some("vie"))[0];
+    let lang = lang_of(&config, "vie");
+    assert_eq!(card["bip_plan"]["top"], json!(top(lang, "vie", "Lisbonne", "trip")), "{card:?}");
+}

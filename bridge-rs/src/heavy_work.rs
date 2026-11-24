@@ -483,8 +483,10 @@ pub fn task_gate(config: &Config, agent: &str, room: &Room, now: f64) -> Option<
 /// The place's FIRST task browser (none running nor starting) skips this ceiling (24/11): with six places on a VPS-2
 /// the guichet allows, each place's MemoryHigh is ≈ 1 040 MB and ≈ 380 MB of it is taken at rest, so it never fitted
 /// and a browsing task waited without end there. It passes the server's check alone (jobs.rs `memory_short_in`,
-/// MemAvailable): the server never swaps for it; at worst the place's own slice slows itself above its MemoryHigh
-/// (its MemoryMax is 1 GB higher), its neighbours untouched.
+/// MemAvailable, twice `browser_free_mb` for a place's first: finitions 1.1). That check is made by each place for
+/// itself: two places starting their first browser in the same minute fit, more at once may push the server into its
+/// zram, then its swap (review subtasks-five A1). In the place, at worst its own slice slows itself above its
+/// MemoryHigh (its MemoryMax is 1 GB higher), its neighbours untouched.
 fn browser_fits(config: &Config, agent: &str, memory: &Memory) -> bool {
     let need = config.jobs.browser_free_mb * 1024 * 1024;
     if need == 0 || !crate::browsers::gives_task_browsers(config, agent) {
