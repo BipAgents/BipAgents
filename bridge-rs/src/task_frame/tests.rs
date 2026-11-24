@@ -229,8 +229,10 @@ fn approx_routines_fire_within_ten_minutes_stable_per_routine() {
     assert_eq!(approx_seconds("r7"), approx_seconds("r7"));
     let r = agents(&config, "Météo", "every day at 8:00", &asked());
     assert!(r.approx);
-    // on a clock without summer time (UTC): its run « vers 8 h » then its next one, the next day
-    let (utc, after) = (Tz::UTC, py::time_time());
+    // on a clock without summer time (UTC): its run « vers 8 h » then its next one, the next day. A fixed hour far
+    // from 8 h (2026-11-18 03:00 UTC): from the real clock, between 8 h and 8 h + its shift, the exact 8 h is today's
+    // and its run « vers 8 h » tomorrow's (int-1.1d, 24/11 at 09:14 Paris: left 86340, right -60)
+    let (utc, after) = (Tz::UTC, 1_794_970_800.0);
     let exact = routines::next_after(&r.schedule, after - 900.0, utc).unwrap();
     let next = routines::next_run_of(&r, after - 900.0, utc).unwrap();
     assert_eq!(next - exact, approx_seconds(&r.id));
