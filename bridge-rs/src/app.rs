@@ -339,6 +339,7 @@ impl AppState {
         self.spawn(crate::routines::scheduler(self.clone())); // routines on a clock (Hermes' cron runs none)
         self.spawn(crate::triggers::scheduler(self.clone())); // routines started by an e-mail or a link
         self.spawn(crate::plans::watch(self.clone())); // plans: their end, their phone event moved or cancelled
+        self.spawn(crate::offer_ideas::scheduler(self.clone())); // the smart « Initiative »'s passes of the day
         self.spawn(crate::triggers_mail::supervisor(self.clone())); // their mailboxes, by IMAP IDLE
         self.spawn(crate::archives::scheduler(self.config.clone()));
         crate::agent_email::start(self);
@@ -1932,6 +1933,7 @@ fn assemble(state: &AppState, config: &Config) -> Router {
         .merge(crate::agent_notify::router())
         .merge(crate::agent_proactive::router())
         .merge(crate::agent_shared_memory::router())
+        .merge(crate::offer_ideas::router())
         .merge(crate::msg_queue::router())
         .merge(crate::threads::router())
         .merge(crate::used::router())

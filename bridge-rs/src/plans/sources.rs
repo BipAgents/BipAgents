@@ -809,6 +809,7 @@ fn bridge_offer(agent: &str, kind: &str, source: &str, label: String, about: Str
         items: Vec::new(),
         top: String::new(),
         mailbox: String::new(),
+        ..Offer::default()
     }
 }
 
