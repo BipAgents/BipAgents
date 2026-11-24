@@ -665,7 +665,9 @@ impl PushService {
     }
 
     /// A card payment that waits for the person in a turn nobody follows (card_pay.rs `urgent`), or its test
-    /// (« Faire un essai »): pushed urgent, « Payer » opening the card.
+    /// (« Faire un essai »): pushed urgent, « Payer » opening the card; `calm`: the same without the urgency (the work
+    /// of an offer's « Oui », Alex 24/11: a plain notification).
+    #[allow(clippy::too_many_arguments)]
     pub async fn notify_payment_urgent(
         &self,
         agent: &str,
@@ -674,6 +676,7 @@ impl PushService {
         line: &str,
         session_id: Option<&str>,
         test: bool,
+        calm: bool,
     ) -> usize {
         let notice = Notice::PaymentUrgent {
             run_id: run_id.into(),
@@ -681,28 +684,7 @@ impl PushService {
             line: line.into(),
             session_id: own(session_id),
             test,
-            calm: false,
-        };
-        self.notify(agent, notice).await
-    }
-
-    /// `notify_payment_urgent` without the urgency (the work of an offer's « Oui », card_pay.rs `urgent`): the same
-    /// card and « Payer », a plain notification (no time-sensitive level, the usual channel).
-    pub async fn notify_payment_calm(
-        &self,
-        agent: &str,
-        run_id: &str,
-        request_id: &str,
-        line: &str,
-        session_id: Option<&str>,
-    ) -> usize {
-        let notice = Notice::PaymentUrgent {
-            run_id: run_id.into(),
-            request_id: request_id.into(),
-            line: line.into(),
-            session_id: own(session_id),
-            test: false,
-            calm: true,
+            calm,
         };
         self.notify(agent, notice).await
     }

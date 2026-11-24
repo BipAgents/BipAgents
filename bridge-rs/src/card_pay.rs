@@ -1035,14 +1035,13 @@ pub async fn urgent(state: &AppState, agent: &AgentConfig, run_id: &str, session
     // pay_with_card, waiting, tells the turn the answer itself: never a turn resumed with « ALLOWED » (card_place.rs)
     crate::card_place::taken(&state.config(), &card);
     let line = crate::urgent_pay::found_line(&crate::handback::language_of(&state.config(), agent), &about);
-    if crate::plans::offers::from_offer(&agent.name, run_id) {
-        // the work of an offer's « Oui » (the person just touched it): a plain notification, the same card (Alex
-        // 24/11, of-tour-du-oui-sans-personne B)
+    // the work of an offer's « Oui » (the person just touched it): a plain notification, the same card (Alex 24/11,
+    // of-tour-du-oui-sans-personne B)
+    let calm = crate::plans::offers::from_offer(&agent.name, run_id);
+    if calm {
         tracing::info!(agent = %agent.name, run_id, "card payment of an offer's work: pushed as a plain notification");
-        state.push.notify_payment_calm(&agent.name, &card, &id, &line, session.as_deref()).await;
-    } else {
-        state.push.notify_payment_urgent(&agent.name, &card, &id, &line, session.as_deref(), false).await;
     }
+    state.push.notify_payment_urgent(&agent.name, &card, &id, &line, session.as_deref(), false, calm).await;
     true
 }
 

@@ -847,7 +847,7 @@ fn a5_the_run_of_a_yes_is_known_while_it_goes_on() {
     let urgent = &src[src.find("pub async fn urgent(").unwrap()..];
     let urgent = &urgent[..urgent.find("\n}\n").unwrap()];
     assert!(
-        urgent.contains("offers::from_offer(&agent.name, run_id)") && urgent.contains("notify_payment_calm"),
+        urgent.contains("offers::from_offer(&agent.name, run_id)") && urgent.contains("session.as_deref(), false, calm)"),
         "{urgent}"
     );
 }
