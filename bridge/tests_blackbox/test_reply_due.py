@@ -5,6 +5,7 @@ contracts/plans-sources/cases.json `replies`). Off for every mailbox: ONE card a
 mass mailings, lists, robots and the person's own are left out; « vers 18 h » the e-mails waiting more than a day with
 no reply in Sent come on ONE card built from those headers, no model; its « Oui » is one turn that reads those e-mails
 only and writes their drafts, never sends; « Non merci » hides them. Stopping the watch forgets every header."""
+import asyncio
 import email.utils
 import json
 import threading
@@ -126,6 +127,21 @@ def test_a_mailbox_is_watched_only_after_its_own_yes(bridges, fakes):
     assert off.json()["state"] == "off"
     assert wait_until(lambda: fakes.imap.idling == 0, timeout=30), why()
     assert bridge.put("/v1/agents/coach/replies", headers=AUTH, json={"account": "nope", "on": True}).status_code == 404
+
+
+def test_a_consent_card_is_never_listed_before_its_mailbox_says_asked(bridges, fakes):
+    """test_a_mailbox_is_watched_only_after_its_own_yes was red once in a full run (24/11, 20:04) and 10 times in 51
+    in a stress of 25/11 (it right after each other fake-IMAP file, 10 at once), always at its « asked »: the card was
+    listed while the mailbox still said « off ». The bridge placed the card and waited for its push before writing
+    « asked » (plans/sources.rs `consent_cards`). A slow push shows it every time."""
+    async def slow_push(seen):
+        await asyncio.sleep(2)
+    fakes.apns.override = slow_push
+    bridge, _ = reply_place(bridges, fakes)
+    assert wait_until(lambda: offer_cards(bridge, source="replies"), timeout=20), imap_state(fakes, bridge)
+    assert [m["state"] for m in replies(bridge)] == ["asked"], imap_state(fakes, bridge)
+    # and its push did go
+    assert wait_until(lambda: fakes.apns.pushes(), timeout=10)
 
 
 def test_a_reply_is_due_without_a_sent_reply_bulk_lists_robots_and_own_mail_left_out(bridges, fakes):
