@@ -254,6 +254,12 @@ fn replies_watch(account: &str, ends: f64) -> Mailbox {
     }
 }
 
+/// The agents speaking French (none set: English), as the cards' validated words are checked here.
+fn french(mut config: Config) -> Config {
+    config.browser.language = "fr".into();
+    config
+}
+
 fn mailbox_of(config: &Config, account: &str) -> Mailbox {
     load(config).mailboxes.into_iter().find(|m| m.account == account).unwrap()
 }
@@ -272,7 +278,7 @@ fn keep_items(config: &Config) -> Vec<Dict> {
 #[test]
 fn keep_a_replies_watch_asks_garder_once_three_days_before_its_end_never_twice() {
     let dir = tempfile::tempdir().unwrap();
-    let config = config_in(dir.path());
+    let config = french(config_in(dir.path()));
     let n = now();
     change(&config, |s| {
         s.mailboxes.push(replies_watch("soon", n + 2.0 * DAY));
@@ -316,7 +322,7 @@ fn keep_a_replies_watch_asks_garder_once_three_days_before_its_end_never_twice()
 #[test]
 fn keep_unanswered_at_its_end_the_watch_goes_on_asked_once_more_pushed_then_until_stopped() {
     let dir = tempfile::tempdir().unwrap();
-    let config = config_in(dir.path());
+    let config = french(config_in(dir.path()));
     let n = now();
     change(&config, |s| {
         s.mailboxes.push(replies_watch("box", n + 2.0 * DAY));
@@ -353,7 +359,7 @@ fn keep_unanswered_at_its_end_the_watch_goes_on_asked_once_more_pushed_then_unti
 #[test]
 fn keep_garder_gives_90_days_more_and_le_laisser_s_arreter_ends_it_at_its_date() {
     let dir = tempfile::tempdir().unwrap();
-    let config = config_in(dir.path());
+    let config = french(config_in(dir.path()));
     let n = now();
     change(&config, |s| {
         s.mailboxes.push(replies_watch("kept", n + 2.0 * DAY));
@@ -379,6 +385,9 @@ fn keep_garder_gives_90_days_more_and_le_laisser_s_arreter_ends_it_at_its_date()
     let found = keep_due(&config, n + 2.5 * DAY + 60.0);
     let [KeepDue::End { agent, account, name, ends }] = found.as_slice() else { panic!("{found:?}") };
     assert_eq!((agent.as_str(), account.as_str(), name.as_str(), *ends), ("vie", "let", "Réponses dues · let@example.org", n + 2.5 * DAY));
+    // (`reconcile` switches it off then)
+    watch_off(&config, "let", OFF);
+    assert!(keep_due(&config, n + 3.0 * DAY).is_empty(), "said twice");
     // the kept one, 3 days before its new end: asked again (a new period)
     let found = keep_due(&config, n + 89.5 * DAY);
     assert!(matches!(found.as_slice(), [KeepDue::Raise { push: false, .. }]), "{found:?}");

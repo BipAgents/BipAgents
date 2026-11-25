@@ -527,6 +527,10 @@ def pushed(fakes, run_id):
 def test_j72_replies_watch_keep_card_garder_a_reminder_then_on_until_stopped_or_let_stop(journey, fakes):
     assert journey.bridge.post("/v1/devices", headers=AUTH, json={"token": "f" * 64, "environment": "sandbox",
                                                                   "agent_ids": [AGENT]}).status_code == 200
+    # a word to Vie first: its main conversation has its session, where an answered card's line is kept
+    before = said(journey, "Bien reçu")
+    assert journey.send(cid(720), "Bonjour Vie").status_code == 200
+    reply_done(journey, "Bien reçu", before=before)
     added = journey.bridge.post("/v1/mail/accounts", headers=AUTH, json=pj.mailbox(fakes))
     assert added.status_code == 201, added.text
     account = added.json()["id"]
@@ -558,9 +562,12 @@ def test_j72_replies_watch_keep_card_garder_a_reminder_then_on_until_stopped_or_
     assert not keep_cards(journey)
     [box] = replies(journey)
     assert box["state"] == "on" and abs(box["ends"] - (ends + 90 * DAY)) < 2, box
-    answered = [i["approval"] for i in journey.page()["items"]
+    def answered():
+        return [i["approval"] for i in journey.page()["items"]
                 if i.get("kind") == "approval" and i["approval"]["run_id"] == card["run_id"]]
-    assert answered and answered[0].get("command") and answered[0].get("description") == fix["text"], answered
+    assert wait_until(answered, timeout=15), [i.get("kind") for i in journey.page()["items"]][-8:]
+    line = answered()[0]
+    assert line.get("command") and line.get("description") == fix["text"], line
     assert fakes.imap.idling >= 1
     # its new end comes (asked again, quiet), then passes with no answer: on, the card once more, pushed, 14 days later
     edit_box(journey, account, lambda: keep_cards(journey), ends=time.time() + 2 * DAY)
