@@ -1102,28 +1102,39 @@ async fn consent_cards(state: &AppState, now: f64) {
         let address = tk::str_or_empty(account.get("username"));
         let offer = consent_offer(&config, &agent, &id, &address, now);
         let seen = known.cloned();
-        match offers::place_bridge(state, &a, offer).await {
-            Ok(_) => change(&config, |s| {
-                // answered while it was being placed (its « Oui » turned the watch on): never written back to « asked »
-                if s.mailboxes.iter().find(|m| m.account == id).cloned() != seen {
-                    return;
-                }
-                let asks = s.mailboxes.iter().find(|m| m.account == id).map(|m| m.asks).unwrap_or(0) + 1;
-                s.mailboxes.retain(|m| m.account != id);
-                s.mailboxes.push(Mailbox {
-                    account: id.clone(),
-                    agent: agent.clone(),
-                    address: address.clone(),
-                    state: ASKED.into(),
-                    asks,
-                    asked_at: now,
-                    trigger: None,
-                    ..Mailbox::default()
-                });
-            }),
-            Err((why, _)) => {
-                tracing::info!(target: "bipbridge::plans", agent = %agent, why = %why, "a mailbox's consent card not placed")
+        // « asked » written before the card is placed, so the card is never listed (nor pushed) while its mailbox
+        // still says « off » (25/11: test_reply_due's flaky assert; the card was placed and its push awaited first);
+        // the card not placed after all, the mailbox goes back to what it was
+        let asked = Mailbox {
+            account: id.clone(),
+            agent: agent.clone(),
+            address: address.clone(),
+            state: ASKED.into(),
+            asks: seen.as_ref().map(|m| m.asks).unwrap_or(0) + 1,
+            asked_at: now,
+            trigger: None,
+            ..Mailbox::default()
+        };
+        let written = change(&config, |s| {
+            // changed meanwhile (the person's own switch): not asked over it
+            if s.mailboxes.iter().find(|m| m.account == id).cloned() != seen {
+                return false;
             }
+            s.mailboxes.retain(|m| m.account != id);
+            s.mailboxes.push(asked.clone());
+            true
+        });
+        if !written {
+            continue;
+        }
+        if let Err((why, _)) = offers::place_bridge(state, &a, offer).await {
+            tracing::info!(target: "bipbridge::plans", agent = %agent, why = %why, "a mailbox's consent card not placed");
+            change(&config, |s| {
+                if s.mailboxes.iter().any(|m| m.account == id && *m == asked) {
+                    s.mailboxes.retain(|m| m.account != id);
+                    s.mailboxes.extend(seen.clone());
+                }
+            });
         }
     }
 }

@@ -146,55 +146,80 @@ def test_an_appointment_with_its_plan_is_never_told(bridges, fakes):
     assert note is None or "<!--bip:plans" not in note, note
 
 
+def state_of(bridge, fakes):
+    """What a failure of the day-before test needs to be understood (flaky twice on 24/11 at 16:49, never since): the
+    test's clock and the bridge's (its answer's Date), the plans kept and their routines, the cards, the sources."""
+    try:
+        bridge_date = bridge.get("/v1/approvals", headers=AUTH, params={"agent": "coach"}).headers.get("date")
+    except Exception as err:   # noqa: BLE001 — a diagnosis, never a failure of its own
+        bridge_date = f"unknown ({err})"
+    try:
+        jobs = {p.get("id"): plan_jobs(bridge, p.get("id")) for p in plans_kept(bridge)}
+    except Exception as err:   # noqa: BLE001
+        jobs = f"unknown ({err})"
+    try:
+        cards = [(c.get("run_id"), c.get("bip_offer")) for c in
+                 bridge.get("/v1/approvals", headers=AUTH, params={"agent": "coach"}).json()["items"]]
+    except Exception as err:   # noqa: BLE001
+        cards = f"unknown ({err})"
+    return json.dumps({"test_now": datetime.datetime.now(PARIS).isoformat(), "test_time": time.time(),
+                       "bridge_date": bridge_date, "plans_kept": plans_kept(bridge), "plan_jobs": jobs, "cards": cards,
+                       "sources_kept": sources_kept(bridge), "maps_seen": [p for p in ("/search", "/routed-")
+                                                                            if fakes.maps.seen(p)],
+                       "hermes_started": fakes.hermes.started}, default=str, ensure_ascii=False, indent=1)
+
+
 def test_without_an_exchange_the_day_before_one_card_and_yes_sets_the_plan_without_the_model(bridges, fakes):
     bridge = sources_home_place(bridges, fakes)
     share_calendar(bridge, event("e1", "Dentiste", 1))
+    why = lambda: state_of(bridge, fakes)  # noqa: E731
     # the day before (tomorrow's event) and no exchange: ONE card placed by the bridge
-    assert wait_until(lambda: offer_cards(bridge, source="calendar"), timeout=20)
+    assert wait_until(lambda: offer_cards(bridge, source="calendar"), timeout=20), why()
     [card] = offer_cards(bridge)
     offer = card["bip_offer"]
     texts = TEXTS[lang_of(card)]
-    assert (offer["kind"], offer["source"], offer["about"]) == ("appointment", "calendar", "Dentiste"), offer
-    assert card["choices"] == ["once", "deny"] and card["bip_summary"].endswith(offer["label"]), card
-    assert offer["label"].startswith("Dentiste ") and texts["calendar_offer"].split(" · ")[1] in offer["label"]
-    assert "15:00" in offer["label"], offer["label"]
+    assert (offer["kind"], offer["source"], offer["about"]) == ("appointment", "calendar", "Dentiste"), why()
+    assert card["choices"] == ["once", "deny"] and card["bip_summary"].endswith(offer["label"]), (card, why())
+    assert offer["label"].startswith("Dentiste ") and texts["calendar_offer"].split(" · ")[1] in offer["label"], why()
+    assert "15:00" in offer["label"], why()
     detail = card["bip_detail"]
-    assert texts["calendar_detail_route"].format(place="Cabinet du Dr Martin, 12 rue Exemple, Lyon") in detail, detail
-    assert texts["calendar_detail_follow"] in detail, detail
+    assert texts["calendar_detail_route"].format(place="Cabinet du Dr Martin, 12 rue Exemple, Lyon") in detail, (detail, why())
+    assert texts["calendar_detail_follow"] in detail, (detail, why())
     # critical, never « Toujours »: the person answers it each time
-    assert "bip_always" not in card
-    assert answer(bridge, card, "always").status_code == 422
+    assert "bip_always" not in card, why()
+    assert answer(bridge, card, "always").status_code == 422, why()
     # nothing found or timed before « Oui », nothing run
-    assert not fakes.maps.seen("/search") and not fakes.maps.seen("/routed-")
-    assert fakes.hermes.started == {}
+    assert not fakes.maps.seen("/search") and not fakes.maps.seen("/routed-"), why()
+    assert fakes.hermes.started == {}, why()
     yes = answer(bridge, card, "once")
-    assert yes.json() == {"ok": True, "choice": "once", "kind": "appointment", "by": "bridge"}, yes.text
+    assert yes.json() == {"ok": True, "choice": "once", "kind": "appointment", "by": "bridge"}, (yes.text, why())
 
     def plan():
         return next((p for p in plans_kept(bridge) if p.get("event", {}).get("id") == "e1"), None)
-    assert wait_until(lambda: plan() and plan()["state"] == "set" and plan()["routines"], timeout=30), plans_kept(bridge)
+    assert wait_until(lambda: plan() and plan()["state"] == "set" and plan()["routines"], timeout=30), why()
     made = plan()
-    assert made["kind"] == "appointment" and made["title"] == "Dentiste" and made["event"]["source"] == "phone"
+    assert made["kind"] == "appointment" and made["title"] == "Dentiste" and made["event"]["source"] == "phone", why()
     jobs = plan_jobs(bridge, made["id"])
     walking = PLAN_TEXTS[lang_of(card)]["modes"]["walking"]
-    route = next(j for j in jobs if j["urgent"])
+    route = next((j for j in jobs if j["urgent"]), None)
+    assert route is not None, why()
     assert route["say"] == PLAN_TEXTS[lang_of(card)]["route"].format(
-        place="Cabinet du Dr Martin, 12 rue Exemple, Lyon", n=25, mode=walking), route
+        place="Cabinet du Dr Martin, 12 rue Exemple, Lyon", n=25, mode=walking), why()
     start = datetime.datetime.fromisoformat(at(1, 15)).timestamp()
-    assert datetime.datetime.fromisoformat(route["next_run_at"]).timestamp() == start - 30 * 60, route
+    assert datetime.datetime.fromisoformat(route["next_run_at"]).timestamp() == start - 30 * 60, why()
     eve = datetime.datetime.fromisoformat(at(0, 19)).timestamp()
     reminders = [j for j in jobs if not j["urgent"]]
     if eve > time.time() + 60:
-        [reminder] = reminders
-        assert reminder["say"] == texts["calendar_reminder"].format(title="Dentiste", time="15:00"), reminder
+        assert len(reminders) == 1, why()
+        assert reminders[0]["say"] == texts["calendar_reminder"].format(title="Dentiste", time="15:00"), why()
     else:
-        assert reminders == []   # the day before at 19:00 had passed: only when to leave
+        assert reminders == [], why()   # the day before at 19:00 had passed: only when to leave
     # the home and the place went to the geocoder only now; no model at all
-    assert fakes.maps.seen("/search")
-    assert fakes.hermes.started == {}
+    assert fakes.maps.seen("/search"), why()
+    assert fakes.hermes.started == {}, why()
     # never twice for that event
     time.sleep(1.5)
-    assert offer_cards(bridge) == []
+    assert offer_cards(bridge) == [], why()
 
 
 def test_a_trip_in_the_carnet_is_offered_two_days_before_and_yes_is_one_turn_that_may_propose_its_plan(bridges, fakes):

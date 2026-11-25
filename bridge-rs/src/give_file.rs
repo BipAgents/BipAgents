@@ -144,6 +144,27 @@ fn megabytes(bytes: u64) -> u64 {
     bytes / (1024 * 1024)
 }
 
+/// A call without `path`. Its arguments another tool's (or none): give_file was the wrong tool, the model is told
+/// which one they fit, or to call the one it meant by its own name (bench 1.1: DeepSeek and the Spark called give_file
+/// with proactive_off's or routine_schedule's arguments, and with none, again and again, as a catch-all).
+pub fn no_path(tools: &[Value], arguments: &Dict) -> String {
+    let own = arguments.keys().all(|k| k == "path" || k == "title");
+    if own && !arguments.is_empty() {
+        return "Give `path`: the file as you see it, e.g. /envoi/devis.pdf.".into();
+    }
+    let fits: Vec<&str> = tools
+        .iter()
+        .filter(|t| !arguments.is_empty() && crate::tool_diet::fits(t, arguments))
+        .filter_map(|t| t.get("name").and_then(Value::as_str))
+        .filter(|n| *n != TOOL_NAME)
+        .collect();
+    let meant = match fits.as_slice() {
+        [one] => format!("These arguments are {one}'s: call {one} itself."),
+        _ => "If you meant another tool, call it by its own name (from your list, or through tool_call).".into(),
+    };
+    format!("Not done: give_file only hands your person a file you made, and needs `path` (e.g. /envoi/devis.pdf). {meant} Don't call give_file for anything else.")
+}
+
 /// One call, for `agent`.
 pub async fn call(config: &Config, agent: &AgentConfig, arguments: &Dict) -> Dict {
     call_with(config, agent, arguments, crate::connections::catalog()).await
@@ -155,7 +176,7 @@ pub async fn call_with(config: &Config, agent: &AgentConfig, arguments: &Dict, c
     let path = raw.trim().trim_start_matches("MEDIA:").trim();
     let path = path.strip_prefix("file://").unwrap_or(path).to_string();
     if path.is_empty() {
-        return tool_text("Give `path`: the file as you see it, e.g. /envoi/devis.pdf.", true);
+        return tool_text(&no_path(&crate::agent_tools::tools_for(config, agent), arguments), true);
     }
     let title = arguments.get("title").map(crate::py::py_str).unwrap_or_default();
     let drive_allowed = may_use_drive(config, &agent.name);
@@ -404,6 +425,25 @@ mod tests {
 
     fn args(v: Value) -> Dict {
         serde_json::from_value(v).unwrap()
+    }
+
+    /// Bench 1.1 (24/11, problem 4): DeepSeek and the Spark used give_file as a catch-all (proactive_off's `reason`,
+    /// a routine's arguments, nothing at all) and got « Give `path` » back each time, then said « c'est noté ». Its
+    /// refusal now says give_file was the wrong tool, and which tool the arguments are when one takes them.
+    #[test]
+    fn bench_give_file_called_for_another_tool_says_so() {
+        let tools = vec![tool(), crate::agent_proactive::off_tool(), json!({"name": "routine_schedule", "inputSchema":
+            {"type": "object", "properties": {"action": {}, "name": {}, "schedule": {}, "prompt": {}}, "required": ["action"]}})];
+        let off = no_path(&tools, &args(json!({"reason": "Ton utilisateur t'a demandé d'arrêter."})));
+        assert!(off.contains("proactive_off's: call proactive_off itself") && off.contains("only hands your person a file"), "{off}");
+        let routine = no_path(&tools, &args(json!({"action": "create", "name": "Veille", "schedule": "every day at 9:00"})));
+        assert!(routine.contains("routine_schedule's"), "{routine}");
+        let none = no_path(&tools, &Dict::new());
+        assert!(none.contains("call it by its own name") && none.contains("Don't call give_file for anything else"), "{none}");
+        let unknown = no_path(&tools, &args(json!({"mode": "stop_all"})));
+        assert!(unknown.contains("call it by its own name"), "{unknown}");
+        // its own arguments without a path: as before
+        assert_eq!(no_path(&tools, &args(json!({"title": "Devis"}))), "Give `path`: the file as you see it, e.g. /envoi/devis.pdf.");
     }
 
     fn text(d: &Dict) -> String {

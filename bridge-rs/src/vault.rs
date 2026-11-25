@@ -14,10 +14,11 @@
 //! et aucun agent ne sort du hub parce que d'autres lui parlent ») what other people send an agent (a relative of a
 //! shared agent, the family, another household's agents) runs as a guest turn (Hermes patch 0018: no terminal, no
 //! files, no vault, no browser), so an agent other people talk to (`others_facing`) stays in the hub and keeps the
-//! hub private; only a project agent breaks it (`hub_breakers`: its guests' turns are its own), and while the hub
-//! hosts one, its agents move into their own space at their first secret (own_space.rs), as before. Who may use
-//! which item (`others_facing` asks the person first, vault_contacts.rs) is unchanged. Trade-off: one agent tricked
-//! by what it read could reach the person's other agents' passwords, in exchange for no extra container per agent.
+//! hub private; only a project agent breaks it (`hub_breakers`: its guests' turns are its own). Since 24/11 (Alex,
+//! for 1.1) the person's agents never move: a project agent leaves the hub as soon as it is made (own_space.rs), and
+//! only while one is still on its way out do the hub's agents keep nothing new (`hub_leaving`). Who may use which
+//! item (`others_facing` asks the person first, vault_contacts.rs) is unchanged. Trade-off: one agent tricked by what
+//! it read could reach the person's other agents' passwords, in exchange for no extra container per agent.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -438,31 +439,39 @@ pub fn others_names(config: &Config, agent: &str) -> Vec<String> {
 }
 
 /// Whether `agent`, of the shared hub, holds credentials right there, with no move (Alex, 2026-10-28: a person's own
-/// agents are no longer separated from each other): the install protects the vault, the hub's Python can write its
-/// items, the agent's tools run in a sandbox of their own (sandbox.rs: connectors need one, the move gives it one),
-/// the agent breaks the hub's privacy no more than the others and the hub hosts no agent that does (`hub_breakers`).
-/// `holder` asks at each secret's use, not only when the tools are offered: once a project agent appears in the hub, a
-/// new secret moves its agent as before.
+/// agents are no longer separated from each other; 24/11: they never move): `may_hold_in_hub`, and no agent that
+/// breaks the hub's privacy is still on its way out of it (`hub_leaving`).
 pub fn holds_in_hub(config: &Config, agent: &AgentConfig) -> bool {
-    hub_may_hold(config, agent, &hub_breakers(config))
-        && crate::sandbox::isolates(config, agent)
+    may_hold_in_hub(config, agent) && !hub_leaving(config)
 }
 
-/// `holds_in_hub` but the sandbox (unit tests). `breakers`: `hub_breakers`.
-fn hub_may_hold(config: &Config, agent: &AgentConfig, breakers: &std::collections::HashSet<String>) -> bool {
+/// Whether `agent` holds credentials in the hub once no agent is on its way out of it: the install protects the vault,
+/// the hub's Python can write its items, the agent's tools run in a sandbox of their own (sandbox.rs: connectors need
+/// one) and it doesn't break the hub's privacy itself (`hub_breakers`).
+pub fn may_hold_in_hub(config: &Config, agent: &AgentConfig) -> bool {
+    hub_may_hold(config, agent) && crate::sandbox::isolates(config, agent)
+}
+
+/// `may_hold_in_hub` but the sandbox (unit tests).
+fn hub_may_hold(config: &Config, agent: &AgentConfig) -> bool {
     config.hermes.isolated
         && !agent.isolated
         && in_hub(config, agent)
         && !config.hermes.python.is_empty()
-        && !breakers.contains(&agent.name)
-        && !config.agents.values().any(|a| in_hub(config, a) && breakers.contains(&a.name))
+        && !leaves_hub(config, &agent.name)
 }
 
-/// The hub's agents holding credentials although the hub now hosts an agent that breaks its privacy (`hub_breakers`;
-/// logged at start and at each move: their items stay in their profile's vault until they move or are taken back).
+/// Whether an agent that breaks the hub's privacy (`hub_breakers`) is still in the hub: on its way out (own_space.rs:
+/// made a moment ago, or found there at start), the hub's agents keep nothing new meanwhile.
+pub fn hub_leaving(config: &Config) -> bool {
+    let breakers = hub_breakers(config);
+    config.agents.values().any(|a| in_hub(config, a) && breakers.contains(&a.name))
+}
+
+/// The hub's agents holding credentials although the hub still hosts an agent that breaks its privacy (`hub_leaving`;
+/// logged at start and at each move: their items stay in their profile's vault).
 pub fn hub_holders_at_risk(config: &Config, records: &[Dict]) -> Vec<String> {
-    let facing = hub_breakers(config);
-    if !config.agents.values().any(|a| in_hub(config, a) && facing.contains(&a.name)) {
+    if !hub_leaving(config) {
         return Vec::new();
     }
     let mut out: Vec<String> = config
@@ -522,12 +531,18 @@ pub fn holder(config: &Config, agent: &AgentConfig) -> Option<String> {
         return Some("unprotected_install".into()); // the agents could read the bridge's own copy: no credentials at all
     }
     if !agent.isolated {
-        if holds_in_hub(config, agent) {
+        // One set up by hand is up to its administrator (its own container, then `isolated`, `python` and
+        // `hermes_home` in this file); one of the shared hub never moves for a secret (24/11).
+        let why = if !in_hub(config, agent) || config.hermes.python.is_empty() {
+            "not_configured"
+        } else if holds_in_hub(config, agent) {
             return None; // one of the person's own agents, in a hub only they use
-        }
-        // An agent of the shared hub moves into its own space by itself (own_space.rs); one set up by hand is up to its
-        // administrator (its own container, then `isolated`, `python` and `hermes_home` in this file).
-        return Some(if in_hub(config, agent) { "needs_own_space" } else { "not_configured" }.into());
+        } else if hub_leaving(config) && (leaves_hub(config, &agent.name) || may_hold_in_hub(config, agent)) {
+            "needs_own_space" // a moment: an agent other people talk to is on its way out of the hub
+        } else {
+            "needs_sandbox"
+        };
+        return Some(why.into());
     }
     if agent.space.as_deref().map(|s| !s.is_empty()).unwrap_or(false) && !agent.sandboxed {
         // Its own gateway, but under the same account as the hub's agents, without a sandbox: they could still
@@ -2649,8 +2664,9 @@ mod tests {
         config
     }
 
+    /// `holds_in_hub` but the sandbox.
     fn may(config: &Config, name: &str) -> bool {
-        hub_may_hold(config, &config.agents[name], &hub_breakers(config))
+        hub_may_hold(config, &config.agents[name]) && !hub_leaving(config)
     }
 
     #[test]
@@ -2674,7 +2690,9 @@ mod tests {
         let mut no_python = config.clone();
         no_python.hermes.python.clear();
         assert!(!may(&no_python, "coach"));
-        assert_eq!(holder(&no_python, &no_python.agents["coach"]).as_deref(), Some("needs_own_space"));
+        assert_eq!(holder(&no_python, &no_python.agents["coach"]).as_deref(), Some("not_configured")); // it never moves
+        // nor when its tools have no sandbox of their own (sandbox.rs `isolates`): it never moves for it either (24/11)
+        assert_eq!(holder(&config, &config.agents["coach"]).as_deref(), Some("needs_sandbox"));
     }
 
     #[test]
@@ -2721,16 +2739,19 @@ mod tests {
         assert!(!refused_by_vault("?"));
     }
 
+    /// 24/11 (Alex, 1.1): only a project agent breaks the hub's privacy (its guests' turns are its own); it leaves the
+    /// hub as soon as it is made, and only while it is still there do the person's agents keep nothing new (the app's
+    /// `needs_own_space`: « … pourra en garder dans quelques minutes »). None of them ever moves for it.
     #[test]
-    fn only_a_project_agent_in_the_hub_keeps_everyone_moving() {
-        // a project agent: its guests' turns are its own, the hub isn't private with it there
+    fn only_a_project_agent_on_its_way_out_holds_the_hub_s_agents_back() {
         let dir = tempfile::tempdir().unwrap();
         let config = place(dir.path(), &["coach", "fete"]);
         let projects = r#"{"projects": {"fete": {"created": 1.0, "ends": 9999999999.0, "archived": null}}}"#;
         std::fs::write(dir.path().join("project-agents.json"), projects).unwrap();
         assert!(others_facing(&config, "fete") && !others_facing(&config, "coach"));
+        assert!(hub_leaving(&config));
         assert!(!may(&config, "fete") && !may(&config, "coach"));
-        assert_eq!(holder(&config, &config.agents["coach"]).as_deref(), Some("needs_own_space"));
+        assert!(hub_may_hold(&config, &config.agents["coach"]) && !hub_may_hold(&config, &config.agents["fete"]));
         assert_eq!(holder(&config, &config.agents["fete"]).as_deref(), Some("needs_own_space"));
         // the start's tidy moves it out (own_space.rs), never on an unprotected install
         assert_eq!(crate::own_space::to_tidy(&config), vec!["fete".to_string()]);
@@ -2743,7 +2764,7 @@ mod tests {
         fete.isolated = true;
         fete.space = Some("/srv/spaces/fete".into());
         fete.hermes_url = "http://127.0.0.1:8700".into();
-        assert!(may(&moved, "coach"));
+        assert!(!hub_leaving(&moved) && may(&moved, "coach"));
         assert!(crate::own_space::to_tidy(&moved).is_empty());
     }
 
@@ -2769,7 +2790,7 @@ mod tests {
             std::fs::write(dir.path().join(file), text).unwrap();
             assert_eq!(others_facing(&config, "fete"), facing, "{which}");
             assert!(!others_facing(&config, "coach"), "{which}");
-            assert!(may(&config, "coach") && may(&config, "fete"), "{which}: the hub stays private");
+            assert!(!hub_leaving(&config) && may(&config, "coach") && may(&config, "fete"), "{which}: the hub stays private");
             assert!(crate::own_space::to_tidy(&config).is_empty(), "{which}: nobody moves");
             assert!(!crate::own_space::should_leave_hub(&config, &config.agents["fete"]), "{which}");
         }

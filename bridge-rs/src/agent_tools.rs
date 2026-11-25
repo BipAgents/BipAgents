@@ -2551,6 +2551,21 @@ async fn mcp_call(
             wrote(&agent.name, &name, &arguments, &mut result);
             return Ok(answer(result));
         }
+        // the phone's calendar (or a mailbox's) in the person's own turn: only what they asked for (bench 1.1, problem
+        // 9: events only mentioned were added); else offered first. Their conversation unread: as before
+        if name == "calendar_add" && persons_own_call(&state, &agent.name, &name, turn_run.as_deref()) {
+            if let Some(session) = crate::runs::CALL_SESSION.try_with(|s| s.clone()).ok().flatten() {
+                if let Ok(messages) = state.hub.hermes.session_messages(&agent, &session).await {
+                    if !crate::calendar::add_asked(&messages) {
+                        tracing::info!(agent = %agent.name, "a calendar add nobody asked for: refused, to offer first");
+                        // counted as a refusal (loop_brake.rs): asked again, the same add is stopped at its third ask
+                        let mut result = tool_text(crate::calendar::UNASKED_ADD, true);
+                        wrote(&agent.name, &name, &arguments, &mut result);
+                        return Ok(answer(result));
+                    }
+                }
+            }
+        }
         // their Outlook contacts (outlook_contacts.rs, 1.1): added or changed by the person's level, else on a card
         if let Some(mut result) = crate::outlook_contacts::write_call(&state, &agent, &name, &arguments).await {
             wrote(&agent.name, &name, &arguments, &mut result);

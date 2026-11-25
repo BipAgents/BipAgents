@@ -912,3 +912,184 @@ fn f1_every_offer_card_carries_its_top_line_in_the_agent_s_language() {
     let smart = Offer { mode: crate::offer_ideas::MODE.into(), family: "search".into(), ..offer };
     assert_eq!(card_item(&config, &smart)["bip_offer"]["top"], json!(top(lang, "vie", "Lisbonne")));
 }
+
+/// Bench 1.1 (24/11, problem 7, forced learning): after two « Non merci » to « Je cherche où acheter… ? » searches,
+/// the agents offered buying again as a page or a free-form offer (GLM 2 of 6, DeepSeek 5 of 10), and the bridge let
+/// them through: the silence was by kind. Now « buying something » is a subject of its own (`theme_of`): two « Non
+/// merci » to it quiet it 30 days whatever the kind; what is not about buying goes on.
+#[test]
+fn bench_two_no_thanks_to_buying_quiet_buying_whatever_the_kind() {
+    let n = now();
+    let dir = tempfile::tempdir().unwrap();
+    let config = config_in(dir.path());
+    let buy = |kind: &str, label: &str, about: &str| {
+        let a = json!({"kind": kind, "label": label, "about": about, "prompt": "Compare 3 offres, rien n'est acheté."});
+        draft(&args(&a), "vie", &all(), PARIS, n).unwrap()
+    };
+    for (i, (label, about)) in [("Je cherche où acheter tes chaussures de running ?", "Chaussures de running"),
+                                ("Je cherche où acheter le nouvel aspirateur ?", "Aspirateur")].iter().enumerate() {
+        let o = buy("search", label, about);
+        let id = o.id.clone();
+        change(&config, |s| s.offers.push(o));
+        assert!(answer(&config, "vie", &id, false, n + i as f64).is_some());
+    }
+    let store = load(&config);
+    let plans = crate::plans::Store::default();
+    // the bench's next offers: a search, a page, a free-form offer of the family « shopping »
+    let search = refused(&store, &plans, &buy("search", "Je cherche où acheter un grille-pain ?", "Grille-pain"), None, PARIS, n + 10.0);
+    assert!(search.is_some_and(|w| w.contains("buy")));
+    let page = buy("page", "Je cherche où acheter des lunettes de natation ?", "Lunettes de natation");
+    let why = refused(&store, &plans, &page, None, PARIS, n + 10.0).expect("a page about buying, quiet too");
+    assert!(why.contains("whatever the kind"), "{why}");
+    let mut smart = buy("page", "Je te trouve une lampe de chevet ?", "Lampe de chevet");
+    smart.family = "shopping".into();
+    assert!(refused(&store, &plans, &smart, None, PARIS, n + 10.0).is_some(), "a free-form offer of the family shopping");
+    for (lang, label) in [("en", "Shall I find where to buy a kettle?"), ("de", "Soll ich schauen, wo du einen Wasserkocher kaufen kannst?"),
+                          ("es", "¿Busco dónde comprar un hervidor?")] {
+        assert!(refused(&store, &plans, &buy("page", label, "Kettle"), None, PARIS, n + 10.0).is_some(), "{lang}");
+    }
+    // the new bench's labels: buying said by a price or by the work under « i », not by « acheter »
+    let phones = buy("page", "Je cherche les meilleurs téléphones du moment avec leurs prix ?", "Téléphone");
+    assert!(refused(&store, &plans, &phones, None, PARIS, n + 10.0).is_some());
+    let mut shoes = buy("page", "Je te cherche des chaussures de running livrables avant dimanche ?", "Chaussures");
+    shoes.prompt = "Trouve où les acheter près de chez elle, livrables avant dimanche.".into();
+    assert_eq!(theme_of(&shoes), Some(SHOPPING));
+    // not about buying: as before (« rien ne sera acheté » says it buys nothing)
+    let mut nothing = buy("page", "Je te prépare la liste de bagages ?", "Liste");
+    nothing.prompt = "Une page avec la liste. Rien ne sera acheté, sans rien acheter non plus.".into();
+    assert_eq!(theme_of(&nothing), None, "{}", nothing.prompt);
+    let list = buy("page", "Je te fais la liste de bagages ?", "Bagages");
+    assert!(refused(&store, &plans, &list, None, PARIS, n + 10.0).is_none());
+    let understand = buy("page", "Je t'aide à comprendre ta facture ?", "Facture");
+    assert!(refused(&store, &plans, &understand, None, PARIS, n + 10.0).is_none(), "« comprendre » is not « comprar »");
+    // the agent reads it before trying
+    assert!(learning_line(&store, "vie", &all(), n + 10.0).is_some_and(|l| l.contains("buying")));
+    // 30 days, then it may again
+    assert!(refused(&store, &plans, &page, None, PARIS, n + 31.0 * DAY).is_none());
+}
+
+/// Proactive-tune's bench (24/11): `offer_act` refused 14 times for « about: 1 to 40 characters » — the models gave
+/// `topic` (the smart offers' word) or a longer `about`, then wrote it again. Taken now: `topic` when no `about`, cut at
+/// a word to 40.
+#[test]
+fn bench_an_offer_s_subject_as_the_models_write_it_is_taken() {
+    let n = now();
+    let mut a = offer("search", "x");
+    a.remove("about");
+    a.insert("topic".into(), json!("Cadeau de Léa"));
+    assert_eq!(draft(&a, "vie", &all(), PARIS, n).unwrap().about, "Cadeau de Léa");
+    let long = offer("search", "Les chaussures de running neuves à trouver avant dimanche matin");
+    let about = draft(&long, "vie", &all(), PARIS, n).unwrap().about;
+    assert!(about.chars().count() <= ABOUT_MAX && about.ends_with('…') && about.starts_with("Les chaussures"), "{about}");
+    let mut none = offer("search", "x");
+    none.remove("about");
+    assert!(draft(&none, "vie", &all(), PARIS, n).unwrap_err().contains("about"), "nothing given: still asked");
+}
+
+/// Proactive-tune's bench (24/11): the Spark's smart agent offered « Je réserve la table de 8 chez L'Auberge des
+/// Canuts, samedi 28 au soir ? » and the bridge showed it. An offer that is itself booking, paying, buying or sending
+/// is refused (design §3b.3: they are only later steps with their own card); looking or comparing is not.
+#[test]
+fn bench_an_offer_never_books_pays_buys_or_sends_itself() {
+    for label in ["Je réserve la table de 8 chez L'Auberge des Canuts, samedi 28 au soir ?", "Je te commande les cartouches ?",
+                  "Je paie la facture ?", "J'envoie le mail au banquier ?", "Shall I book the table for Saturday?",
+                  "Soll ich den Tisch buchen? Ich buche ihn für dich.", "¿Te reservo la mesa?"] {
+        assert!(acts_itself(label).is_some(), "{label}");
+        let mut a = offer("search", "Dîner");
+        a.insert("label".into(), json!(label));
+        assert!(draft(&a, "vie", &all(), PARIS, now()).is_err(), "{label}");
+    }
+    for label in ["Je cherche un resto pour samedi ?", "Je compare les prix des cartouches ?", "Je prépare le brouillon ?",
+                  "Je te mets un rappel pour réserver ?", "Shall I find a table for Saturday?"] {
+        assert!(acts_itself(label).is_none(), "{label}");
+    }
+}
+
+/// Review of proactive-tune (24/11): `acts_itself` refuses offers that do none of booking, paying, buying or sending —
+/// a reminder « sent » to the person, a parcel's « envío » (Spanish noun), a reminder of a « pago » (Spanish noun). A
+/// reminder offer is the bridge's own (BY_BRIDGE): it never books, pays or sends anything.
+#[test]
+fn review_a_reminder_or_a_parcel_is_not_booking_paying_or_sending() {
+    for label in ["Je t'envoie un rappel jeudi à 9 h ?", "Shall I send you a reminder on Thursday at 9?",
+                  "¿Te recuerdo el pago del alquiler el día 1?", "¿Sigo el envío de tu paquete?"] {
+        assert!(acts_itself(label).is_none(), "refused, though it books, pays, buys or sends nothing: {label}");
+    }
+}
+
+/// Review of proactive-tune (24/11): the same booking asked in the words models use most still passes `acts_itself`
+/// (« Want me to… », « Soll ich … reservieren? », « Tu veux que je la réserve ? », Dutch, the apps' fifth language).
+#[test]
+fn review_an_offer_that_books_said_another_way_is_refused_too() {
+    for label in ["Want me to book the table for Saturday?", "Soll ich den Tisch für Samstag reservieren?",
+                  "Tu veux que je la réserve pour samedi ?", "Zal ik de tafel voor zaterdag reserveren?"] {
+        assert!(acts_itself(label).is_some(), "let through: {label}");
+    }
+}
+
+/// Fixes of the review (24/11): booking, paying or buying said in the apps' five languages is refused, sending on the
+/// person's behalf too; what goes to the person themselves (a reminder, a list sent to them) and nouns are not.
+#[test]
+fn fixes_acts_itself_reads_the_agents_own_verb_in_five_languages() {
+    for label in ["Je peux payer la facture ?", "Tu veux que je te commande les cartouches ?", "J'achète le billet ?",
+                  "Would you like me to order the cartridges?", "Do you want me to pay the bill?", "Shall I email Paul the plan?",
+                  "Soll ich die Rechnung bezahlen?", "Möchtest du, dass ich die Karten bestelle?", "Soll ich Paul die Einladung schicken?",
+                  "¿Quieres que pague la factura?", "¿Compro las entradas?", "¿Le mando el correo a Paul?",
+                  "Zal ik het voor je bestellen?", "Ik betaal de rekening?", "Zal ik de mail naar Paul sturen?"] {
+        assert!(acts_itself(label).is_some(), "let through: {label}");
+    }
+    for label in ["Je t'envoie la liste ?", "Je te mets un rappel pour payer le loyer ?", "Shall I send you the list?",
+                  "Shall I compare the prices?", "Soll ich dir eine Erinnerung schicken?", "¿Te envío un recordatorio?",
+                  "¿Te mando la lista?", "Zal ik je een herinnering sturen?", "Zal ik het je sturen?",
+                  "¿Busco el mejor precio del seguro?", "Tu veux voir la réserve naturelle ?"] {
+        assert!(acts_itself(label).is_none(), "refused: {label}");
+    }
+    // the bridge's own kinds never book, pay or send: a reminder offer is never refused for its words
+    let mut a = offer("reminder", "Loyer");
+    a.insert("label".into(), json!("Je paie le loyer : je te le rappelle le 1er ?"));
+    assert!(acts_itself("Je paie le loyer : je te le rappelle le 1er ?").is_some());
+    assert!(draft(&a, "vie", &all(), PARIS, now()).is_ok(), "a reminder offer refused for its words");
+}
+
+/// Fixes of the review (24/11): « buying » is not a shopping list, a price alone or basketball, in any language; it is
+/// Dutch too, and a cheap find.
+#[test]
+fn fixes_buying_is_buying_in_five_languages() {
+    let o = |label: &str| {
+        let mut a = offer("page", "Sujet");
+        a.insert("label".into(), json!(label));
+        a.insert("prompt".into(), json!("Une page."));
+        draft(&a, "vie", &all(), PARIS, now()).unwrap()
+    };
+    for label in ["Je te mets un rappel pour la shopping list ?", "Soll ich deine Einkaufsliste als Seite machen?",
+                  "¿Te preparo la lista de la compra?", "Shall I make your shopping list a page?", "Grocery list for Saturday?",
+                  "Je compare les prix de l'électricité ?", "Le prix du contrôle technique en page ?", "The price of the MOT?",
+                  "Der Preis der Hauptuntersuchung?", "¿El precio de la ITV?", "De prijs van de APK?",
+                  "Les horaires du basketball de Tom ?", "Basketball training times?", "Je t'aide à comprendre ta facture ?",
+                  "Kooperation mit der Schule als Seite?"] {
+        assert_eq!(theme_of(&o(label)), None, "{label}");
+    }
+    for label in ["Je te trouve un aspirateur pas cher ?", "Où acheter des chaussures ?", "Les meilleurs téléphones avec leurs prix ?",
+                  "Where to buy a kettle?", "Cheap flights to Lisbon?", "Ich schaue, wo es günstig einen Wasserkocher gibt?",
+                  "¿Dónde comprar un hervidor barato?", "Zal ik zoeken waar je een waterkoker kunt kopen?", "Ik zoek de beste aanbieding?",
+                  "De goedkoopste winkel voor fietsen?", "Wat koop ik voor Tom?"] {
+        assert_eq!(theme_of(&o(label)), Some(SHOPPING), "{label}");
+    }
+}
+
+/// Verification of the fixes (25/11): a reminder sent to someone else is sent on the person's behalf (refused, as
+/// before the fix); only one to the person themselves passes.
+#[test]
+fn verify_a_reminder_to_someone_else_is_sending() {
+    for label in ["Shall I send a reminder to Paul?", "Shall I send the reminder to the whole team?",
+                  "J'envoie un rappel à tes invités ?", "J'envoie le rappel de paiement à ton locataire ?",
+                  "Soll ich deinen Gästen eine Erinnerung schicken?", "Soll ich Paul eine Erinnerung schicken?",
+                  "¿Le mando un recordatorio a Paul?", "¿Envío el recordatorio a tus invitados?",
+                  "Zal ik Paul een herinnering sturen?"] {
+        assert!(acts_itself(label).is_some(), "let through: {label}");
+    }
+    for label in ["Je t'envoie un rappel jeudi ?", "Shall I send you a reminder?", "Soll ich dir eine Erinnerung schicken?",
+                  "Soll ich Ihnen eine Erinnerung schicken?", "¿Te envío un recordatorio?", "Zal ik je een herinnering sturen?",
+                  "Zal ik u een herinnering sturen?", "Shall I send you a reminder on Thursday at 9?"] {
+        assert!(acts_itself(label).is_none(), "refused: {label}");
+    }
+}

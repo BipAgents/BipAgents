@@ -915,6 +915,10 @@ async fn create(State(state): State<AppState>, body: Bytes) -> ApiResult<Respons
     if thread && !thread_shares(&config, &agent.name).is_empty() {
         return Err(HttpError::new(409, "this project is shared already"));
     }
+    if thread {
+        // its friends reach it once it is out of the person's hub (own_space.rs: it leaves as soon as it is made)
+        crate::own_space::out_of_hub(&agent.name).await;
+    }
     let session = if thread { String::new() } else { text_field(&body, "session", 200)? };
     let title = text_field(&body, "title", 120)?;
     let from = text_field(&body, "from", 40)?;
