@@ -72,30 +72,37 @@ def test_a_tasks_report_and_its_page_show_its_words_only(bridges, fakes):
 
 
 def test_a_report_kept_with_its_spoken_version_is_cleaned_at_start(bridges):
-    """A task that ended before 25/11: its report and its page cleaned once when the bridge starts."""
+    """A task that ended before 25/11: its report and its page cleaned once when the bridge starts. A long one (its
+    report keeps the first 4 000 characters, its page has them all) has its spoken version on its page only."""
     bridge = bridges.new()
-    job_id = "t0123456789ab"
     folder = bridge.state_dir / "jobs"
     folder.mkdir(parents=True, exist_ok=True)
-    (folder / f"{job_id}.json").write_text(json.dumps({
-        "id": job_id, "kind": "task", "agent": "wellness", "title": "Tickets", "prompt": "Retrouve mes tickets.",
-        "state": "done", "report": REPORT, "created": 1_000.0, "started": 1_000.0, "finished": 1_100.0, "seen": True}))
     pages = bridge.state_dir / "agent-pages" / "wellness"
     pages.mkdir(parents=True, exist_ok=True)
     escaped = SAY.replace("<", "&lt;").replace(">", "&gt;").replace("'", "&#x27;")
-    html = (f"<!doctype html><html><head><title>Report — Tickets</title></head><body><main>\n<h1>Report — Tickets</h1>\n"
-            f"<p>Les deux tickets sont ci-dessous.</p>\n<ul>\n<li>Tuyau Geolia 25 m : 39,90 €</li>\n</ul>\n"
-            f"<p>{escaped}</p>\n</main></body></html>")
-    for name, text in [(f"rapport-{job_id}.source", html), (f"rapport-{job_id}.html", html),
-                       (f"rapport-{job_id}.json", json.dumps({"title": "Report — Tickets", "version": 1,
-                                                              "created": "2026-11-20T08:00:00", "bytes": len(html)}))]:
-        (pages / name).write_text(text)
+    long_words = "<li>Tuyau Geolia 25 m : 39,90 €</li>\n" * 150
+    kept = {"t0123456789ab": (REPORT, "<li>Tuyau Geolia 25 m : 39,90 €</li>\n"),
+            "t0123456789ac": ("- Tuyau Geolia 25 m : 39,90 €\n" * 130, long_words)}
+    for job_id, (report, items) in kept.items():
+        (folder / f"{job_id}.json").write_text(json.dumps({
+            "id": job_id, "kind": "task", "agent": "wellness", "title": "Tickets", "prompt": "Retrouve mes tickets.",
+            "state": "done", "report": report[:4000], "created": 1_000.0, "started": 1_000.0, "finished": 1_100.0,
+            "seen": True}))
+        html = (f"<!doctype html><html><head><title>Report — Tickets</title></head><body><main>\n"
+                f"<h1>Report — Tickets</h1>\n<p>Les deux tickets sont ci-dessous.</p>\n<ul>\n{items}</ul>\n"
+                f"<p>{escaped}</p>\n</main></body></html>")
+        for name, text in [(f"rapport-{job_id}.source", html), (f"rapport-{job_id}.html", html),
+                           (f"rapport-{job_id}.json", json.dumps({"title": "Report — Tickets", "version": 1,
+                                                                  "created": "2026-11-20T08:00:00", "bytes": len(html)}))]:
+            (pages / name).write_text(text)
     bridge.start()
-    job = next(j for j in jobs(bridge) if j["id"] == job_id)
-    assert job["report"] == WORDS, job["report"]
-    page = bridge.get("/v1/media", headers=AUTH, params={"path": f"/bipagents/pages/wellness/rapport-{job_id}.html"})
-    assert page.status_code == 200 and "Tuyau Geolia 25 m" in page.text
-    assert words_only(page.text), page.text
+    listed = {j["id"]: j for j in jobs(bridge)}
+    assert listed["t0123456789ab"]["report"] == WORDS, listed["t0123456789ab"]["report"]
+    assert listed["t0123456789ac"]["report"] == kept["t0123456789ac"][0][:4000]
+    for job_id in kept:
+        page = bridge.get("/v1/media", headers=AUTH, params={"path": f"/bipagents/pages/wellness/rapport-{job_id}.html"})
+        assert page.status_code == 200 and "Tuyau Geolia 25 m" in page.text
+        assert words_only(page.text), (job_id, page.text[-400:])
 
 
 def test_a_read_only_share_carries_the_words_only(bridge, fakes):
