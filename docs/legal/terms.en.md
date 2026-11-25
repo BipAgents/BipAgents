@@ -2,7 +2,7 @@ English · [Français](terms.fr.md) · [Deutsch](terms.de.md) · [Español](term
 
 # BipAgents terms of use
 
-> Last updated: 18 November 2026.
+> Last updated: 25 November 2026.
 
 ## 1. Purpose
 
@@ -67,16 +67,14 @@ and whether any payment influences their order; this change will be announced as
 
 ## 6. Licence and open source
 
-- BipAgents' **source code** is published under the **MIT licence**: https://github.com/BipAgents/BipAgents. You may use, copy, modify and
-  redistribute it under that licence, which prevails over these terms for everything about the source code.
-- The **Bips themselves** are not under the MIT licence: their drawings, the app's icon, their babble, their voices,
-  the demo's recordings and the screenshots.
-  You may show them to present BipAgents and build BipAgents with them, not reuse them in another app or product (the
-  repository's LICENSE-ASSETS file).
+- BipAgents' **source code** and **the Bips** (their drawings, their babble, their voices, the screenshots) are
+  published under the **MIT licence**: https://github.com/BipAgents/BipAgents. You may use, copy, modify and
+  redistribute them under that licence, which prevails over these terms for everything published in the repository.
+- The name "BipAgents" (or "Bip Agents") and the app's icon are our marks: the MIT licence does not grant them, nor
+  the name "Kerfy Studio". You may say a product is built on BipAgents or compatible with it, not present another
+  product as ours; a fork you distribute must change its name and icon (the repository's TRADEMARKS.md file).
 - Third-party components (Hermes Agent, fonts, Kyutai's voice models…) remain under their own licences, listed in the
   repository.
-- The MIT licence covers the code; it does not give you the right to use the names "BipAgents" and "Kerfy Studio" to
-  present another product as ours.
 - **Version downloaded from the App Store**: Apple's standard Licensed Application End User License Agreement applies
   in addition to these terms. These terms are between you and Kerfy Studio, not Apple; Apple is not responsible for
   the app or its content and has no obligation to provide maintenance or support for it.

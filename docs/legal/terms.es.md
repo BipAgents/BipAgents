@@ -2,7 +2,7 @@
 
 # Condiciones de uso de BipAgents
 
-> Última actualización: 18 de noviembre de 2026.
+> Última actualización: 25 de noviembre de 2026.
 
 ## 1. Objeto
 
@@ -71,17 +71,15 @@ anunciará como se prevé en la sección 19.
 
 ## 6. Licencia y software libre
 
-- El **código fuente** de BipAgents se publica con **licencia MIT**: https://github.com/BipAgents/BipAgents. Puedes usarlo, copiarlo,
-  modificarlo y redistribuirlo según esa licencia, que prevalece sobre estas condiciones en todo lo relativo al código
-  fuente.
-- Los **Bips en sí** no están bajo licencia MIT: sus dibujos, el icono de la app, su balbuceo, sus voces, las
-  grabaciones de la demo y las capturas de
-  pantalla. Puedes mostrarlos para presentar BipAgents y compilar BipAgents con ellos, no reutilizarlos en otra app u
-  otro producto (archivo LICENSE-ASSETS del repositorio).
+- El **código fuente** de BipAgents **y los Bips** (sus dibujos, su balbuceo, sus voces, las capturas de pantalla) se
+  publican con **licencia MIT**: https://github.com/BipAgents/BipAgents. Puedes usarlos, copiarlos, modificarlos y
+  redistribuirlos según esa licencia, que prevalece sobre estas condiciones en todo lo publicado en el repositorio.
+- El nombre «BipAgents» (o «Bip Agents») y el icono de la app son nuestras marcas: la licencia MIT no los concede, ni
+  tampoco el nombre «Kerfy Studio». Puedes decir que un producto está construido sobre BipAgents o es compatible con
+  él, no presentar otro producto como el nuestro; un fork que distribuyas debe cambiar de nombre y de icono (archivo
+  TRADEMARKS.md del repositorio).
 - Los componentes de terceros (Hermes Agent, tipografías, modelos de voz de Kyutai…) siguen bajo su propia licencia,
   indicada en el repositorio.
-- La licencia MIT se refiere al código; no te da derecho a usar los nombres «BipAgents» y «Kerfy Studio» para
-  presentar otro producto como el nuestro.
 - **Versión descargada del App Store**: el contrato de licencia estándar de Apple para apps («Licensed Application End
   User License Agreement») se aplica además de estas condiciones. Estas condiciones se celebran entre tú y Kerfy
   Studio, no con Apple; Apple no es responsable de la app ni de su contenido y no tiene ninguna obligación de
