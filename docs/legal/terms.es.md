@@ -75,7 +75,7 @@ anunciará como se prevé en la sección 19.
   modificarlo y redistribuirlo según esa licencia, que prevalece sobre estas condiciones en todo lo relativo al código
   fuente.
 - Los **Bips en sí** no están bajo licencia MIT: sus dibujos, el icono de la app, su balbuceo, sus voces, las
-  grabaciones de la demo (el pódcast, grabado con Fish Audio Drama 3 — «Built with Fish Audio») y las capturas de
+  grabaciones de la demo y las capturas de
   pantalla. Puedes mostrarlos para presentar BipAgents y compilar BipAgents con ellos, no reutilizarlos en otra app u
   otro producto (archivo LICENSE-ASSETS del repositorio).
 - Los componentes de terceros (Hermes Agent, tipografías, modelos de voz de Kyutai…) siguen bajo su propia licencia,
@@ -204,8 +204,8 @@ defecto y su documentación, y para avisar a los proyectos afectados cuando es �
 
 La demo integrada está **simulada** en tu teléfono, sin cuenta ni servidor. Sus agentes, personas, lugares, marcas,
 importes y datos son **ficticios**; ilustra lo que pueden hacer los agentes, sin reflejar exactamente lo que hará un
-agente real ni la calidad de un modelo concreto. Las voces de su pódcast se grabaron con Fish Audio Drama 3 («Built
-with Fish Audio»).
+agente real ni la calidad de un modelo concreto. Su pódcast lo leen las voces de los
+Bips.
 
 ## 13. El relé de notificaciones: reglas y contactos
 

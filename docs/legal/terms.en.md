@@ -70,7 +70,7 @@ and whether any payment influences their order; this change will be announced as
 - BipAgents' **source code** is published under the **MIT licence**: https://github.com/BipAgents/BipAgents. You may use, copy, modify and
   redistribute it under that licence, which prevails over these terms for everything about the source code.
 - The **Bips themselves** are not under the MIT licence: their drawings, the app's icon, their babble, their voices,
-  the demo's recordings (the podcast, recorded with Fish Audio Drama 3 — "Built with Fish Audio") and the screenshots.
+  the demo's recordings and the screenshots.
   You may show them to present BipAgents and build BipAgents with them, not reuse them in another app or product (the
   repository's LICENSE-ASSETS file).
 - Third-party components (Hermes Agent, fonts, Kyutai's voice models…) remain under their own licences, listed in the
@@ -189,8 +189,8 @@ documentation, and warn the projects concerned when useful.
 
 The built-in demo is **simulated** on your phone, with no account and no server. Its agents, people, places, brands,
 amounts and data are **fictional**; it illustrates what agents can do, without reflecting exactly what a real agent
-will do or the quality of a given model. Its podcast voices were recorded with Fish Audio Drama 3 ("Built with Fish
-Audio").
+will do or the quality of a given model. Its podcast is spoken by the Bips' own
+voices.
 
 ## 13. The notification relay: rules and contacts
 

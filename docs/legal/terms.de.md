@@ -79,7 +79,7 @@ diese Änderung wird wie in Abschnitt 19 vorgesehen angekündigt.
   nach dieser Lizenz nutzen, kopieren, ändern und weitergeben; sie hat für alles, was den Quellcode betrifft, Vorrang
   vor diesen Bedingungen.
 - Die **Bips selbst** stehen nicht unter der MIT-Lizenz: ihre Zeichnungen, das Icon der App, ihr Geplapper, ihre
-  Stimmen, die Aufnahmen der Demo (der Podcast, aufgenommen mit Fish Audio Drama 3 — „Built with Fish Audio“) und die
+  Stimmen, die Aufnahmen der Demo und die
   Bildschirmfotos. Du darfst sie zeigen, um BipAgents vorzustellen, und BipAgents mit ihnen bauen, sie aber nicht in
   eine andere App oder ein anderes Produkt übernehmen (Datei LICENSE-ASSETS im Repository).
 - Komponenten Dritter (Hermes Agent, Schriften, Stimmmodelle von Kyutai …) bleiben unter ihrer eigenen Lizenz, die im
@@ -213,8 +213,8 @@ informieren.
 
 Die eingebaute Demo ist auf deinem Telefon **simuliert**, ohne Konto und ohne Server. Ihre Agenten, Personen, Orte,
 Marken, Beträge und Daten sind **erfunden**; sie zeigt, was Agenten tun können, ohne genau abzubilden, was ein echter
-Agent tun wird, oder die Qualität eines bestimmten Modells. Die Stimmen ihres Podcasts wurden mit Fish Audio Drama 3
-aufgenommen („Built with Fish Audio“).
+Agent tun wird, oder die Qualität eines bestimmten Modells. Ihr Podcast wird von den Stimmen
+der Bips gesprochen.
 
 ## 13. Das Relay für Benachrichtigungen: Regeln und Kontakte
 

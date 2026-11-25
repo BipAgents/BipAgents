@@ -957,8 +957,8 @@ Wenn du dein Google-Konto verbindest, erhält dein Server von Google nur, was du
 
 Die eingebaute Demo läuft vollständig auf deinem Telefon: erfundene Agenten und Daten, kein Konto, kein Server, und
 nichts wird an Kerfy Studio geschickt. Du kannst sie schon beim ersten Start mit „Nur die Demo“ öffnen. Ihr Podcast
-ist eine vorab aufgenommene Audiodatei, die in der App enthalten ist (Stimmen: Fish Audio Drama 3, „Built with Fish
-Audio“). Wenn du mit der Demo sprichst, gilt die Spracherkennung des Telefons (Abschnitt 7).
+ist eine vorab aufgenommene Audiodatei, die in der App enthalten ist (die Stimmen der Bips).
+Wenn du mit der Demo sprichst, gilt die Spracherkennung des Telefons (Abschnitt 7).
 
 ## 9. Die Stimmen
 
