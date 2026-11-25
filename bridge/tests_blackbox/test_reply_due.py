@@ -278,6 +278,28 @@ def test_no_thanks_hides_those_emails_and_stopping_the_watch_forgets_them(bridge
     assert [m["state"] for m in replies(bridge)] == ["off"]
 
 
+def test_a_no_thanks_answered_before_the_cards_push_is_kept(bridges, fakes):
+    """test_no_thanks_hides_those_emails_and_stopping_the_watch_forgets_them was red on 24/11 (16:37) and on 25/11
+    (17:00): « Devis cuisine » « shown », not « declined ». The bridge placed the replies card, waited for its push,
+    then marked its e-mails « shown » over a « Non merci » answered meanwhile (plans/sources.rs `evening`): the
+    declined e-mail would come back the next evening. A slow push shows it every time."""
+    bridge, _ = reply_place(bridges, fakes)
+    turn_on(bridge, fakes)
+
+    async def slow_push(seen):
+        await asyncio.sleep(2)
+    fakes.apns.override = slow_push
+    fakes.imap.add("INBOX", 101, mail("Marie Dupont <marie@example.org>", "Devis cuisine", "<m1@example.org>"))
+    assert wait_until(lambda: offer_cards(bridge, source="replies"), timeout=30), imap_state(fakes, bridge)
+    [card] = offer_cards(bridge)
+    assert answer(bridge, card, "deny").json() == {"ok": True, "choice": "deny"}
+    time.sleep(3)   # the push answered, the card's placement over
+
+    def kept(subject):
+        return next((m for m in sources_kept(bridge).get("mails", []) if m["subject"] == subject), None)
+    assert kept("Devis cuisine")["state"] == "declined", sources_kept(bridge)
+
+
 def test_no_reply_watch_for_an_agent_turned_off(bridges, fakes):
     def change(c):
         c["plans_sources"] = dict(SOURCES)
