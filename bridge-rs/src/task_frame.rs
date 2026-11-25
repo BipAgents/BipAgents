@@ -1229,6 +1229,9 @@ fn watch_asks_keep(conn: &connectors::Connector, now: f64) -> bool {
 /// One look at `now`: ends reached, « Garder ? » to ask, cards nobody answered for a week. The state changes are
 /// made here (a routine at its end removed, a card asked or gone); what to tell and raise is returned (`tick`).
 pub fn due(config: &Config, now: f64) -> Vec<Due> {
+    // a « Garder ? » reminder is pushed: never in the place's quiet hours (22:00 → 08:00 by default), it waits for the
+    // morning (25/11)
+    let night = crate::notebook::ask::is_quiet(config, now);
     let mut out = Vec::new();
     let zone = routines::zone(config);
     let mine = routines::all(config, None);
@@ -1263,6 +1266,7 @@ pub fn due(config: &Config, now: f64) -> Vec<Due> {
                 }
                 match routine_overdue(r, now) {
                     Overdue::Wait => {}
+                    Overdue::Remind if night => {}
                     Overdue::Remind => {
                         // « Garder ? » unanswered at its date: it goes on, asked once more, pushed (B2)
                         withdrawn.extend(r.frame.fix.take().map(|f| f.id));
@@ -1362,6 +1366,7 @@ pub fn due(config: &Config, now: f64) -> Vec<Due> {
                     }
                     match watch_overdue(conn, now) {
                         Overdue::Wait => {}
+                        Overdue::Remind if night => {}
                         Overdue::Remind => {
                             withdrawn.extend(conn.frame.fix.take().map(|f| f.id));
                             let fix = Fix { id: py::token_hex(6), at: now, variant: KEEP.into(), ..Fix::default() };

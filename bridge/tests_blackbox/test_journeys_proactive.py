@@ -527,6 +527,9 @@ def pushed(fakes, run_id):
 def test_j72_replies_watch_keep_card_garder_a_reminder_then_on_until_stopped_or_let_stop(journey, fakes):
     assert journey.bridge.post("/v1/devices", headers=AUTH, json={"token": "f" * 64, "environment": "sandbox",
                                                                   "agent_ids": [AGENT]}).status_code == 200
+    # quiet hours of one minute: the reminder is pushed whatever the hour (it waits for the morning otherwise)
+    assert journey.bridge.patch("/v1/notebook/settings", headers=AUTH,
+                                json={"quiet": {"from": "03:00", "to": "03:01"}}).status_code == 200
     # a word to Vie first: its main conversation has its session, where an answered card's line is kept
     before = said(journey, "Bien reçu")
     assert journey.send(cid(720), "Bonjour Vie").status_code == 200

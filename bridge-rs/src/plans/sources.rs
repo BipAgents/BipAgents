@@ -271,13 +271,18 @@ pub fn forget(store: &mut Store, now: f64) {
     store.grants.retain(|g| g.until > now);
 }
 
-/// Read, change, write (0600), under one lock.
+/// Read, change, write (0600) when it changed, under one lock.
 pub fn change<T>(config: &Config, f: impl FnOnce(&mut Store) -> T) -> T {
     let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let mut store = load(config);
+    let before = store.clone();
     let out = f(&mut store);
     forget(&mut store, py::time_time());
     let file = path(config);
+    // nothing changed: not written again (the keep clock looks every minute: review « plus tard » 1)
+    if store == before && file.exists() {
+        return out;
+    }
     let body = serde_json::to_string_pretty(&store).unwrap_or_default();
     if let Err(e) = crate::profile_files::write_atomic_with(&file, body.as_bytes(), 0o600) {
         tracing::warn!(file = %file.display(), error = %e, "plans' sources not saved");
@@ -1920,6 +1925,8 @@ pub fn keep_due(config: &Config, now: f64) -> Vec<KeepDue> {
         .filter(|t| crate::triggers::replies_watch(t) && !t.enabled)
         .map(|t| t.id)
         .collect();
+    // a reminder is pushed: never in the place's quiet hours (22:00 → 08:00 by default), it waits for the morning
+    let night = crate::notebook::ask::is_quiet(config, now);
     let mut out = Vec::new();
     let mut withdrawn: Vec<String> = Vec::new();
     change(config, |s| {
@@ -1937,7 +1944,11 @@ pub fn keep_due(config: &Config, now: f64) -> Vec<KeepDue> {
                 // paused past its end: it waits, `KEEP_ASK_DAYS` from now each time (it reads nothing while paused)
                 m.ends = now + KEEP_ASK_DAYS * DAY;
             }
-            let overdue = if on { tf::overdue(Some(m.ends), &m.fix, m.reminded, now) } else { Overdue::Wait };
+            let overdue = match tf::overdue(Some(m.ends), &m.fix, m.reminded, now) {
+                Overdue::Remind if night => Overdue::Wait,
+                due if on => due,
+                _ => Overdue::Wait,
+            };
             match overdue {
                 Overdue::Wait => {}
                 Overdue::Remind => {
