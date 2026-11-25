@@ -670,6 +670,17 @@ pub fn ai_buttons(lang: &str) -> [&'static str; 2] {
     }
 }
 
+/// What the card says once answered (`bip_fix.after`, the `once` answer's words then the `deny` one's; Alex 25/11,
+/// tf2-carte-ia-apres B: a repair card's « Réparation demandée » / « Arrêté, sur sa page » are a single routine's).
+pub fn ai_after(lang: &str) -> [&'static str; 2] {
+    match lang_of(lang) {
+        "fr" => ["Ses routines reprennent", "Arrêtées, sur leur page"],
+        "de" => ["Seine Routinen laufen wieder", "Gestoppt, auf ihrer Seite"],
+        "es" => ["Sus rutinas vuelven a funcionar", "Detenidas, en su página"],
+        _ => ["Its routines start again", "Stopped, on their page"],
+    }
+}
+
 pub fn ai_under_i(lang: &str) -> &'static str {
     match lang_of(lang) {
         "fr" => "Réessayer : ses routines reprennent ; allume son IA avant si elle est éteinte. Arrêter : elles ne tournent plus et restent sur leur page.",
@@ -771,7 +782,8 @@ pub fn ai_card_item(config: &Config, agent: &str, fix: &Fix, names: &[String]) -
     let summary = ai_summary(lang, &who, &shown);
     let bip = json!({"kind": "agent_ai", "ref": agent, "name": who, "variant": AI, "since": since, "routines": names,
                      "failures": fix.failures, "reason": AI, "title": ai_title(lang, &who),
-                     "text": ai_since_line(lang, &since_words(lang, since, zone), &shown), "buttons": ai_buttons(lang)});
+                     "text": ai_since_line(lang, &since_words(lang, since, zone), &shown), "buttons": ai_buttons(lang),
+                     "after": ai_after(lang)});
     let item = json!({
         "agent": agent, "run_id": format!("{RUN_PREFIX}{}", fix.id), "request_id": fix.id,
         "command": format!("{KIND} · {who}"), "description": summary, "choices": ["once", "deny"],
