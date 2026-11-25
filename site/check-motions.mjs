@@ -1,4 +1,3 @@
-// Not under the MIT license: the Bips' drawings are reserved (LICENSE-ASSETS).
 // The site's Bip animations (site/src/shared/bips.js, motionFrame) against the design page's own frames
 // (scripts/pixel/motion-frames.json, written by scripts/pixel/motions-ref.mjs), as the apps' tests do:
 //
