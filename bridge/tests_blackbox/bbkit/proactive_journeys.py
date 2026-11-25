@@ -1,4 +1,4 @@
-"""What the journeys' bridge needs for the proactive agents' journeys of 1.1 (J67–J71, docs/release-journeys.md
+"""What the journeys' bridge needs for the proactive agents' journeys of 1.1 (J67–J72, docs/release-journeys.md
 « Agents proactifs »; passation-pro briefs/design-agents-proactifs.md §6 line 11): the same for the black-box column
 (test_journeys_proactive.py) and for the apps' columns (serve_journeys_people.py, the apps' ReleaseJourneysPeople…).
 
@@ -10,6 +10,7 @@
 - two watchers of Vie's, approved and checked once (`watchers`): their check fails from then on (« Prix du vélo » for
   « Réparer », « Créneau médecin » for « Arrêter »), « Lancer maintenant » three times makes the card;
 - a mailbox for the replies due (`MAILBOX`, the fake IMAP's): its e-mails come once its watch idles (`feed_replies`);
+  its watch's default end 2 days after its « Oui » (J72: « Garder ? » at once, not after 90 days);
 - the smart pass's idea (`IDEA`): what the fake small model answers a pass.
 
 No real account: an invented person (camille@proton.me), the fake IMAP's password, the fake model."""
@@ -28,8 +29,10 @@ from .common import AUTH
 from .servers import wait_until
 
 AGENT = "vie"
-#: The plans' sources looked at every tick (never only « vers 8 h » / « vers 18 h »), an e-mail due at once.
-SOURCES = {"morning": "any", "evening": "any", "due_hours": 0, "tick_seconds": 0.3, "follow_seconds": 1}
+#: The plans' sources looked at every tick (never only « vers 8 h » / « vers 18 h »), an e-mail due at once; a
+#: mailbox's replies-due watch ends by default in 2 days, not 90: its « Garder ? » card comes at once (J72).
+SOURCES = {"morning": "any", "evening": "any", "due_hours": 0, "tick_seconds": 0.3, "follow_seconds": 1,
+           "replies_end_days": 2}
 TRIGGERS = {"tick_seconds": 0.2, "batch_seconds": 0, "idle_minutes": 0.2, "poll_minutes": 0.05}
 #: Checked only when asked (« Lancer maintenant »), « en panne » at the 3rd failure in a row.
 WATCHERS = {"tick_seconds": 3600, "wake_gap_minutes": 0, "failures_max": 3, "run_now_gap_seconds": 0}

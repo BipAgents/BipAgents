@@ -1,5 +1,5 @@
 """The release journeys of the proactive agents of 1.1 (docs/release-journeys.md « Agents proactifs », J67–J71, column
-« Pont »; passation-pro briefs/design-agents-proactifs.md §6 line 11), on the journeys' bridge (bbkit/journeys.py,
+« Pont »; J72 since 25/11; passation-pro briefs/design-agents-proactifs.md §6 line 11), on the journeys' bridge (bbkit/journeys.py,
 agent « Vie », its scripted model) with its proactive clocks made short (bbkit/proactive_journeys.py), as the apps do
 them over HTTP, each page and card checked as the person SEES it (bbkit/displayable_people.py) and as an app 1.0 draws
 it (the generic card: `bip_summary`, « Oui » / « Non » = `once` / `deny`):
@@ -14,7 +14,11 @@ it (the generic card: `bip_summary`, « Oui » / « Non » = `once` / `deny`):
 - J70 replies due: the mailbox's consent card, « Oui », the evening card built from headers only (sender, subject,
   since), « Oui »: one turn for the drafts, never sent; the mailbox's own switch (what the apps 1.1 send);
 - J71 a smart offer: Vie « Intelligente », a pass over a synthetic day places ONE offer « Avec : … » with the amber line,
-  « Oui » starts its turn; once Vie has « Santé », a pass never reads its conversations.
+  « Oui » starts its turn; once Vie has « Santé », a pass never reads its conversations;
+- J72 « Garder ? » (Alex's B2, 24/11; « Garder ? dans la 1.1 », 25/11): a mailbox's replies-due watch never stops at its
+  default end without the person: ONE card « Garder ? » before it, « Garder » a new period; unanswered at its date, on,
+  asked once more and pushed; unanswered again, on until stopped; « Le laisser s'arrêter » (an app 1.0's « Non »): it
+  stops at its date, one Boîte line.
 
 Each test is one journey `Jnn`, on a bridge of its own. No real account: invented names, the fake IMAP, the fake
 model (bbkit/proactive_journeys.py)."""
@@ -488,3 +492,106 @@ def test_j71_a_smart_pass_over_a_day_offers_with_what_and_the_amber_line_yes_sta
         text = chat["body"]["messages"][1]["content"]
         for secret in ("5 h 12", "pouls", "Je cours demain"):
             assert secret not in text, f"a pass read Vie's conversation though it has « Santé »: {secret!r}"
+
+
+# -- J72 « Garder ? » --------------------------------------------------------------------------------------------------
+
+def sources_file(bridge):
+    return bridge.data / "plans-sources.json"
+
+
+def edit_box(journey, account, done, timeout=20, **changes):
+    """The mailbox's watch as the bridge's clock would find it days later (`changes` written to plans-sources.json),
+    until `done()` (the sources' clock may write the file back meanwhile: written again)."""
+    path = sources_file(journey.bridge)
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        store = json.loads(path.read_text())
+        for m in store["mailboxes"]:
+            if m["account"] == account:
+                m.update(changes)
+        path.write_text(json.dumps(store))
+        if wait_until(done, timeout=3):
+            return
+    raise AssertionError(f"the bridge never acted on {changes}: {json.loads(path.read_text())['mailboxes']}")
+
+
+def keep_cards(journey):
+    return [c for c in fix_cards(journey) if c["bip_fix"].get("kind") == "replies"]
+
+
+def pushed(fakes, run_id):
+    return [p for p in fakes.apns.payloads() if run_id in json.dumps(p)]
+
+
+def test_j72_replies_watch_keep_card_garder_a_reminder_then_on_until_stopped_or_let_stop(journey, fakes):
+    assert journey.bridge.post("/v1/devices", headers=AUTH, json={"token": "f" * 64, "environment": "sandbox",
+                                                                  "agent_ids": [AGENT]}).status_code == 200
+    added = journey.bridge.post("/v1/mail/accounts", headers=AUTH, json=pj.mailbox(fakes))
+    assert added.status_code == 201, added.text
+    account = added.json()["id"]
+    assert wait_until(lambda: replies_cards(journey), timeout=30)
+    [consent] = replies_cards(journey)
+    approve(journey, consent, "once")
+    assert wait_until(lambda: fakes.imap.idling >= 1, timeout=30)
+    # its default end (2 days on the journeys' bridge, 90 at home): ONE card « Garder ? », not pushed
+    assert wait_until(lambda: keep_cards(journey), timeout=30), fix_cards(journey)
+    [card] = keep_cards(journey)
+    [box] = replies(journey)
+    fix, name = card["bip_fix"], f"Réponses dues · {pj.ME}"
+    assert (fix["variant"], fix["ref"], fix["name"], fix["title"]) == ("keep", box["trigger"], name, "Vie"), fix
+    assert re.fullmatch(rf"Le veilleur « {re.escape(name)} » s'arrête le .+\. Le garder 3 mois de plus \?", fix["text"]), fix
+    assert fix["buttons"] == ["Garder", "Le laisser s'arrêter"] and card["bip_choices"] == ["keep", "stop"], card
+    assert fix["ends_at"] == box["ends"], (fix, box)
+    assert card["bip_summary"] == fix["text"] and not generic_problems(card), card
+    assert box["state"] == "on" and box["ends"] > time.time() + DAY, box
+    waiting(journey, "bip-fix-")
+    rows = [i for i in autonomous(journey) if i["ref"] == box["trigger"]]
+    assert rows and rows[0]["fix"] == card["run_id"] and rows[0]["ends"]["kind"] == "date", rows
+    time.sleep(1.5)   # the sources' clock ticks every 0.3 s: never a second card
+    assert [c["run_id"] for c in keep_cards(journey)] == [card["run_id"]]
+    assert not pushed(fakes, card["run_id"]), "the first « Garder ? » pushed"
+    drawable(journey, journey.page())
+    # « Garder »: a new period (90 days more), the watch on, the card gone; its answered line says what was asked
+    ends = box["ends"]
+    approve(journey, card, "once")
+    assert not keep_cards(journey)
+    [box] = replies(journey)
+    assert box["state"] == "on" and abs(box["ends"] - (ends + 90 * DAY)) < 2, box
+    answered = [i["approval"] for i in journey.page()["items"]
+                if i.get("kind") == "approval" and i["approval"]["run_id"] == card["run_id"]]
+    assert answered and answered[0].get("command") and answered[0].get("description") == fix["text"], answered
+    assert fakes.imap.idling >= 1
+    # its new end comes (asked again, quiet), then passes with no answer: on, the card once more, pushed, 14 days later
+    edit_box(journey, account, lambda: keep_cards(journey), ends=time.time() + 2 * DAY)
+    [quiet] = keep_cards(journey)
+    edit_box(journey, account, lambda: [c for c in keep_cards(journey) if c["run_id"] != quiet["run_id"]],
+             ends=time.time() - 60)
+    [again] = keep_cards(journey)
+    assert again["bip_fix"]["ends_at"] > time.time() + 13 * DAY, again
+    assert wait_until(lambda: pushed(fakes, again["run_id"]), timeout=20), "the reminder not pushed"
+    [box] = replies(journey)
+    assert box["state"] == "on" and fakes.imap.idling >= 1, box
+    # unanswered again: on « jusqu'à ce que tu l'arrêtes », the card gone, nothing pushed
+    pushes = len(fakes.apns.payloads())
+    edit_box(journey, account, lambda: not keep_cards(journey), ends=time.time() - 60)
+    [box] = replies(journey)
+    assert (box["state"], box["ends"]) == ("on", None), box
+    rows = [i for i in autonomous(journey) if i["ref"] == box["trigger"]]
+    assert rows[0]["ends"]["kind"] == "never" and rows[0]["fix"] is None, rows
+    assert len(fakes.apns.payloads()) == pushes
+    # a new period (as its switch turned on again does) and « Le laisser s'arrêter » from an app 1.0 (« Non »): on until
+    # its date, then it stops, one Boîte line, never a consent card again
+    edit_box(journey, account, lambda: keep_cards(journey), ends=time.time() + 2 * DAY, keep_asked=False, reminded=False)
+    [last] = keep_cards(journey)
+    approve(journey, last, "deny", headers=APP_1_0)
+    [box] = replies(journey)
+    assert box["state"] == "on" and not keep_cards(journey), box
+    edit_box(journey, account, lambda: replies(journey)[0]["state"] == "off", ends=time.time() - 60)
+    assert wait_until(lambda: fakes.imap.idling == 0, timeout=30)
+    line = f"Le veilleur « {name} » s'est arrêté comme prévu ("
+    assert wait_until(lambda: [i for i in boite_items(journey.bridge) if line in (i.get("text") or "")], timeout=20), \
+        [i.get("text") for i in boite_items(journey.bridge)][-5:]
+    time.sleep(1.5)
+    assert not [c for c in replies_cards(journey) if c["bip_offer"]["kind"] == "reply_watch"], "asked again after « Le laisser s'arrêter »"
+    assert not keep_cards(journey)

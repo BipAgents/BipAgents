@@ -247,31 +247,182 @@ fn an_agent_on_an_outside_model_gets_no_agenda_line_and_no_replies_due_headers()
     assert_eq!(take_note(&config, "vie", "s1"), None);
 }
 
-/// Alex's B2 (24/11): a replies-due watch past its default end (90 days) goes on « jusqu'à ce que tu l'arrêtes », never
-/// stopped without the person; one still before its end, or off, is left as it is.
+fn replies_watch(account: &str, ends: f64) -> Mailbox {
+    Mailbox {
+        account: account.into(), agent: "vie".into(), address: format!("{account}@example.org"), state: ON.into(),
+        trigger: Some(format!("t-{account}")), ends, ..Mailbox::default()
+    }
+}
+
+fn mailbox_of(config: &Config, account: &str) -> Mailbox {
+    load(config).mailboxes.into_iter().find(|m| m.account == account).unwrap()
+}
+
+/// The keep cards waiting (`/v1/approvals`' shape, task_frame.rs `pending_items`), a mailbox's watch's only.
+fn keep_items(config: &Config) -> Vec<Dict> {
+    crate::task_frame::pending_items(config, Some("vie"))
+        .into_iter()
+        .filter(|i| i["bip_fix"]["kind"] == crate::task_frame::REPLIES_KIND)
+        .collect()
+}
+
+/// Alex's B2 (24/11, « Garder ? dans la 1.1 », 25/11): a mailbox's replies-due watch never stops at its 90 days without
+/// its person. 3 days before, ONE card « Garder ? » (the watcher's validated words, `bip-fix-`, variant keep, kind
+/// replies), not pushed, never twice; an app 1.0 draws it as its generic card (« Oui » keeps it, « Non » lets it stop).
 #[test]
-fn a_replies_watch_past_its_90_days_goes_on_never_stopped_without_the_person() {
+fn keep_a_replies_watch_asks_garder_once_three_days_before_its_end_never_twice() {
     let dir = tempfile::tempdir().unwrap();
     let config = config_in(dir.path());
     let n = now();
-    let watch = |account: &str, state: &str, ends: f64| Mailbox {
-        account: account.into(), agent: "vie".into(), address: format!("{account}@example.org"), state: state.into(),
-        trigger: Some(format!("t-{account}")), ends, ..Mailbox::default()
-    };
     change(&config, |s| {
-        s.mailboxes.push(watch("past", ON, n - 60.0));
-        s.mailboxes.push(watch("soon", ON, n + 3.0 * 86400.0));
-        s.mailboxes.push(watch("off", OFF, n - 60.0));
+        s.mailboxes.push(replies_watch("soon", n + 2.0 * DAY));
+        s.mailboxes.push(replies_watch("later", n + 30.0 * DAY));
+        s.mailboxes.push(Mailbox { state: OFF.into(), ..replies_watch("off", n + DAY) });
+        s.mailboxes.push(replies_watch("forever", 0.0));
     });
-    assert_eq!(keep_past_end(&config, n), vec!["past".to_string()]);
-    let kept = load(&config).mailboxes;
-    let of = |a: &str| kept.iter().find(|m| m.account == a).cloned().unwrap();
-    assert_eq!((of("past").state.as_str(), of("past").ends), (ON, 0.0), "still watched, with no end");
-    assert_eq!(of("soon").ends, n + 3.0 * 86400.0);
-    assert_eq!(of("off").ends, n - 60.0);
-    // later: the other one past its end goes on too; the first, with no end now, is not touched again
-    assert_eq!(keep_past_end(&config, n + 4.0 * 86400.0), vec!["soon".to_string()]);
-    assert!(load(&config).mailboxes.iter().filter(|m| m.state == ON).all(|m| m.ends == 0.0));
+    let found = keep_due(&config, n);
+    let [KeepDue::Raise { agent, run_id, line, push: false }] = found.as_slice() else { panic!("{found:?}") };
+    assert_eq!((agent.as_str(), line.as_str()), ("vie", ""));
+    assert!(run_id.starts_with(crate::task_frame::RUN_PREFIX), "{run_id}");
+    let m = mailbox_of(&config, "soon");
+    assert_eq!((m.state.as_str(), m.ends), (ON, n + 2.0 * DAY), "on, its end kept");
+    assert!(m.keep_asked && m.fix.as_ref().is_some_and(|f| f.variant == crate::task_frame::KEEP));
+    // one card for the mailbox, whatever the clock does next
+    assert!(keep_due(&config, n + 60.0).is_empty());
+    assert!(keep_due(&config, n + DAY).is_empty());
+    let items = keep_items(&config);
+    let [item] = items.as_slice() else { panic!("{items:?}") };
+    assert_eq!(item["run_id"], json!(run_id));
+    let fix = &item["bip_fix"];
+    let sentence = fix["text"].as_str().unwrap();
+    assert!(sentence.starts_with("Le veilleur « Réponses dues · soon@example.org » s'arrête le "), "{sentence}");
+    assert!(sentence.ends_with(". Le garder 3 mois de plus ?"), "{sentence}");
+    assert_eq!(fix["buttons"], json!(["Garder", "Le laisser s'arrêter"]));
+    assert_eq!((fix["variant"].as_str(), fix["ref"].as_str()), (Some("keep"), Some("t-soon")));
+    assert_eq!(fix["ends_at"], json!(n + 2.0 * DAY));
+    assert_eq!(item["bip_choices"], json!(["keep", "stop"]));
+    // what an app 1.0 draws: the sentence, « Oui » / « Non »
+    assert_eq!((item["choices"].clone(), item["bip_summary"].as_str()), (json!(["once", "deny"]), Some(sentence)));
+    assert!(item["command"].as_str().unwrap().contains("Réponses dues · soon@example.org"), "{item:?}");
+    // the others: not yet, off, or with no end
+    for account in ["later", "off", "forever"] {
+        assert!(mailbox_of(&config, account).fix.is_none(), "{account}");
+    }
+}
+
+/// Unanswered at its date: the watch goes on, its card asked once more and pushed, its date 14 days later; unanswered
+/// again: on « jusqu'à ce que tu l'arrêtes », the card gone, nothing pushed (as a routine's, task_frame.rs). A watch past
+/// its date with no card yet (the bridge was off) is asked the same way.
+#[test]
+fn keep_unanswered_at_its_end_the_watch_goes_on_asked_once_more_pushed_then_until_stopped() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = config_in(dir.path());
+    let n = now();
+    change(&config, |s| {
+        s.mailboxes.push(replies_watch("box", n + 2.0 * DAY));
+        s.mailboxes.push(replies_watch("missed", n - 60.0));
+    });
+    let first = keep_due(&config, n);
+    assert!(matches!(first.as_slice(), [KeepDue::Raise { push: false, .. }, KeepDue::Raise { push: true, .. }]), "{first:?}");
+    let old = mailbox_of(&config, "box").fix.unwrap().id;
+    let later = n + 2.0 * DAY + 60.0;
+    let found = keep_due(&config, later);
+    let [KeepDue::Raise { run_id, line, push: true, .. }] = found.as_slice() else { panic!("{found:?}") };
+    assert!(!run_id.ends_with(&old), "the same card again: {run_id}");
+    assert!(line.starts_with("Le veilleur « Réponses dues · box@example.org » s'arrête le "), "{line}");
+    let m = mailbox_of(&config, "box");
+    assert_eq!(m.state, ON, "stopped at its default end without its person");
+    assert!((m.ends - (later + crate::task_frame::REMIND_DAYS * DAY)).abs() < 1.0 && m.reminded, "{m:?}");
+    assert_eq!(keep_items(&config).iter().filter(|i| i["bip_fix"]["ref"] == "t-box").count(), 1, "one card a mailbox");
+    // the missed one: asked at once, pushed
+    let m = mailbox_of(&config, "missed");
+    assert!(m.reminded && m.fix.is_some() && m.ends > n + 13.0 * DAY, "{m:?}");
+    assert!(keep_due(&config, later + 60.0).is_empty(), "asked again once");
+    // unanswered again: on until its person stops it
+    let end = mailbox_of(&config, "box").ends;
+    let found = keep_due(&config, end + 60.0);
+    assert!(found.iter().all(|d| !matches!(d, KeepDue::Raise { .. } | KeepDue::End { .. })), "{found:?}");
+    let m = mailbox_of(&config, "box");
+    assert_eq!((m.state.as_str(), m.ends, m.fix.is_none()), (ON, 0.0, true), "{m:?}");
+    assert!(!keep_items(&config).iter().any(|i| i["bip_fix"]["ref"] == "t-box"));
+    assert!(keep_due(&config, end + 90.0 * DAY).is_empty());
+}
+
+/// « Garder »: a new period, 90 days more; « Le laisser s'arrêter » (an app 1.0's « Non »): its end is the person's,
+/// reached at its date: the watch stops there (`KeepDue::End`, its Boîte line), never asked again.
+#[test]
+fn keep_garder_gives_90_days_more_and_le_laisser_s_arreter_ends_it_at_its_date() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = config_in(dir.path());
+    let n = now();
+    change(&config, |s| {
+        s.mailboxes.push(replies_watch("kept", n + 2.0 * DAY));
+        s.mailboxes.push(replies_watch("let", n + 2.5 * DAY));
+    });
+    assert_eq!(keep_due(&config, n).len(), 2);
+    let id_of = |account: &str| mailbox_of(&config, account).fix.unwrap().id;
+    let (kept, let_go) = (id_of("kept"), id_of("let"));
+    // an unknown card, another agent's: nothing
+    assert!(crate::task_frame::settle(&config, "budget", &kept, true).is_none());
+    let settled = crate::task_frame::settle(&config, "vie", &kept, true).expect("its « Garder »");
+    assert_eq!((settled.variant.as_str(), settled.yes, settled.id.as_str()), (crate::task_frame::KEEP, true, "kept"));
+    let m = mailbox_of(&config, "kept");
+    assert_eq!(m.ends, n + 2.0 * DAY + crate::task_frame::KEEP_DAYS_MORE * DAY);
+    assert!(m.fix.is_none() && !m.keep_asked && !m.reminded && !m.person_end, "{m:?}");
+    assert!(crate::task_frame::settle(&config, "vie", &kept, true).is_none(), "answered twice");
+    assert!(crate::task_frame::settle(&config, "vie", &let_go, false).is_some());
+    let m = mailbox_of(&config, "let");
+    assert!(m.person_end && m.fix.is_none() && m.state == ON, "{m:?}");
+    assert!(keep_items(&config).is_empty());
+    // before its date: on; at its date: it ends, said once; never asked « Garder ? » again
+    assert!(keep_due(&config, n + 2.0 * DAY).is_empty());
+    let found = keep_due(&config, n + 2.5 * DAY + 60.0);
+    let [KeepDue::End { agent, account, name, ends }] = found.as_slice() else { panic!("{found:?}") };
+    assert_eq!((agent.as_str(), account.as_str(), name.as_str(), *ends), ("vie", "let", "Réponses dues · let@example.org", n + 2.5 * DAY));
+    // the kept one, 3 days before its new end: asked again (a new period)
+    let found = keep_due(&config, n + 89.5 * DAY);
+    assert!(matches!(found.as_slice(), [KeepDue::Raise { push: false, .. }]), "{found:?}");
+}
+
+/// A paused watch (its trigger paused in « Ce que tes agents font tout seuls ») past its default end: the end waits,
+/// 3 days from now each time (as a paused watcher's), never ended nor reminded while paused.
+#[test]
+fn keep_a_paused_watch_s_end_waits() {
+    use crate::triggers::{MailFilter, Trigger, MAIL, REPLIES};
+    let dir = tempfile::tempdir().unwrap();
+    let config = config_in(dir.path());
+    let n = now();
+    crate::triggers::change(&config, |s| {
+        s.triggers.push(Trigger {
+            id: "t-paused".into(), agent: "vie".into(), kind: MAIL.into(), by: REPLIES.into(), enabled: false,
+            mail: Some(MailFilter { account: "paused".into(), ..Default::default() }), ..Default::default()
+        })
+    });
+    change(&config, |s| s.mailboxes.push(replies_watch("paused", n - DAY)));
+    let found = keep_due(&config, n);
+    assert!(found.iter().all(|d| matches!(d, KeepDue::Raise { push: false, .. })), "{found:?}");
+    let m = mailbox_of(&config, "paused");
+    assert!(m.ends > n && m.ends <= n + crate::task_frame::KEEP_ASK_DAYS * DAY + 1.0 && !m.reminded, "{m:?}");
+}
+
+/// Its watch off (the person's switch, its trigger deleted, the mailbox gone) or on again: its keep card goes with it.
+#[test]
+fn keep_watch_off_takes_its_card() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = config_in(dir.path());
+    let n = now();
+    change(&config, |s| s.mailboxes.push(replies_watch("box", n + DAY)));
+    assert_eq!(keep_due(&config, n).len(), 1);
+    assert_eq!(keep_items(&config).len(), 1);
+    watch_off(&config, "box", OFF);
+    assert!(keep_items(&config).is_empty() && mailbox_of(&config, "box").fix.is_none());
+}
+
+/// The journeys' bridge makes a watch's default end short (`replies_end_days`): its « Garder ? » at once.
+#[test]
+fn keep_the_default_end_of_a_watch_is_a_setting() {
+    assert_eq!(Settings::from_table(&json!({})).replies_end_days, crate::task_frame::DEFAULT_END_DAYS);
+    assert_eq!(Settings::from_table(&json!({"replies_end_days": 2})).replies_end_days, 2.0);
 }
 
 /// Review B1 of plans-cards: switching a mailbox's watch off removes every replies-due watch of that mailbox, also one
