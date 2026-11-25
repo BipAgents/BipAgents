@@ -47,7 +47,7 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::Duration;
 
-use chrono::{DateTime, Datelike, NaiveDate, NaiveDateTime, TimeZone};
+use chrono::{DateTime, Datelike, NaiveDate, NaiveDateTime, TimeZone, Timelike};
 use chrono_tz::Tz;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -527,7 +527,11 @@ fn when_with(lang: &str, at: f64, zone: Tz, person: Tz, city: &str, before: bool
     let t = texts(lang);
     let Some(local) = zone.timestamp_opt(at as i64, 0).single() else { return String::new() };
     let day = t.days_short[local.weekday().num_days_from_monday() as usize];
-    let clock = local.format("%H:%M").to_string();
+    // « 10 h 50 » in French (Alex 25/11), « 10:50 » elsewhere
+    let clock = match t.lang {
+        "fr" => crate::schedule_words::fr_clock(local.hour(), local.minute()),
+        _ => local.format("%H:%M").to_string(),
+    };
     let clock = if before { fill(t.before, &[("time", &clock)]) } else { clock };
     let mut text = format!("{day} {} · {clock}", local.day());
     let theirs = person.timestamp_opt(at as i64, 0).single().map(|d| d.naive_local());
@@ -597,14 +601,18 @@ pub fn rhythm_text(lang: &str, r: &Repeat) -> String {
     format!("{days} {} {times} · {weeks}", t.around)
 }
 
-/// « vendredi 27 » and « 16:00 », for a moved appointment's line.
+/// « vendredi 27 » and « 16 h » (« 16:00 » outside French), for a moved appointment's line.
 fn day_and_time(lang: &str, at: f64, zone: Tz) -> (String, String) {
     let t = texts(lang);
     match zone.timestamp_opt(at as i64, 0).single() {
         Some(local) => {
             let day = t.days_long[local.weekday().num_days_from_monday() as usize];
             let day = if lang == "de" { format!("{day}, {}.", local.day()) } else { format!("{day} {}", local.day()) };
-            (day, local.format("%H:%M").to_string())
+            let time = match t.lang {
+                "fr" => crate::schedule_words::fr_clock(local.hour(), local.minute()),
+                _ => local.format("%H:%M").to_string(),
+            };
+            (day, time)
         }
         None => (String::new(), String::new()),
     }

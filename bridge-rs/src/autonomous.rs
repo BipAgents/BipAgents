@@ -69,11 +69,13 @@ const DAYS_FR: [&str; 7] = ["lundi", "mardi", "mercredi", "jeudi", "vendredi", "
 
 // --- when ------------------------------------------------------------------------------------------------------------
 
+/// « 8 h », « 12 h 30 » (Alex 25/11; schedule_words.rs `fr_clock`).
 fn clock(h: u32, m: u32) -> String {
-    format!("{h}:{m:02}")
+    crate::schedule_words::fr_clock(h, m)
 }
 
-/// The French words for a `when` (the apps use their own, from the same fields); « vers 8 h » when `approx`
+/// The French words for a `when` (« Chaque jour à 8 h », « Le lundi à 12 h 30 »: Alex 25/11; the cards' sentences say
+/// them too; the apps before 25/11 use their own, from the same fields); « vers 8 h » when `approx`
 /// (task_frame.rs).
 pub fn when_text(when: &Value) -> String {
     let int = |k: &str| when.get(k).and_then(Value::as_u64).unwrap_or(0) as u32;
@@ -87,7 +89,8 @@ pub fn when_text(when: &Value) -> String {
         "weekdays" => format!("En semaine {at}"),
         "weekly" => {
             let day = DAYS_FR.get((int("weekday").max(1) - 1) as usize).copied().unwrap_or("lundi");
-            format!("Chaque {day} {at}")
+            // « Le lundi à 8 h » (Alex 25/11: one day « Le dimanche », not « Chaque dimanche »)
+            format!("Le {day} {at}")
         }
         "monthly" => format!("Le {} de chaque mois {at}", int("day")),
         "every_hours" if int("hours") <= 1 => "Toutes les heures".into(),
@@ -700,13 +703,13 @@ mod tests {
 
     #[test]
     fn cron_expressions_in_words() {
-        assert_eq!(cron_when("0 8 * * *")["text"], "Chaque jour à 8:00");
+        assert_eq!(cron_when("0 8 * * *")["text"], "Chaque jour à 8\u{a0}h");
         assert_eq!(cron_when("30 7 * * 1-5")["kind"], "weekdays");
         let monday = cron_when("0 8 * * 1");
         assert_eq!((monday["kind"].as_str(), monday["weekday"].as_u64()), (Some("weekly"), Some(1)));
-        assert_eq!(monday["text"], "Chaque lundi à 8:00");
+        assert_eq!(monday["text"], "Le lundi à 8\u{a0}h");
         assert_eq!(cron_when("0 9 * * 0")["weekday"], 7);
-        assert_eq!(cron_when("0 9 3 * *")["text"], "Le 3 de chaque mois à 9:00");
+        assert_eq!(cron_when("0 9 3 * *")["text"], "Le 3 de chaque mois à 9\u{a0}h");
         let every = cron_when("*/5 * * * *");
         assert_eq!((every["kind"].as_str(), every["text"].as_str()), (Some("every_minutes"), Some("Toutes les 5 minutes")));
         assert_eq!(cron_when("0 */2 * * *")["text"], "Toutes les 2 h");
@@ -727,7 +730,7 @@ mod tests {
         assert_eq!(routine_when(&job)["text"], "Toutes les heures");
         let job = dict(json!({"schedule": {"kind": "once", "run_at": "2026-10-30T08:00:00+00:00"}}));
         assert_eq!(routine_when(&job)["at"], 1_793_347_200.0);
-        assert_eq!(connector_when(&When::Weekly(chrono::Weekday::Wed, 7, 5))["text"], "Chaque mercredi à 7:05");
+        assert_eq!(connector_when(&When::Weekly(chrono::Weekday::Wed, 7, 5))["text"], "Le mercredi à 7\u{a0}h\u{a0}05");
     }
 
     #[test]
@@ -811,7 +814,7 @@ mod tests {
         };
         let row = connector_item("lea", &conn, chrono_tz::UTC).unwrap();
         assert_eq!((row["kind"].as_str(), row["state"].as_str()), (Some("connector"), Some("active")));
-        assert_eq!(row["when"]["text"], "Chaque jour à 7:00");
+        assert_eq!(row["when"]["text"], "Chaque jour à 7\u{a0}h");
         assert_eq!(row["next_run"], 1_793_430_000.0); // the next day at 7:00
         assert_eq!(row["cost"]["ai"], false);
         conn.enabled = false;

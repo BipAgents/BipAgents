@@ -130,7 +130,7 @@ def test_every_routine_watcher_and_trigger_has_an_owner_an_end_and_a_place(bridg
     rows = {i["title"]: i for i in items}
     point = rows["Point du soir"]
     assert point["ends"] == {"kind": "never", "text": "until you stop it"} and point["deliver"]["kind"] == "boite"
-    assert point["approx"] is False and point["when"]["text"] == "Chaque jour à 19:00"
+    assert point["approx"] is False and point["when"]["text"] == "Chaque jour à 19\u00a0h"
     meteo = rows["Météo"]
     assert meteo["ends"] == {"kind": "date", "at": last, "text": f"until {day_en(last)}"}, meteo["ends"]
     assert meteo["approx"] is True and meteo["when"]["approx"] is True

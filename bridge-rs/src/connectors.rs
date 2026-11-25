@@ -2017,7 +2017,7 @@ mod tests {
         apply_fields(&mut conn, &args(good.clone()), true).unwrap();
         assert_eq!(conn.sites, ["connect.garmin.com", "sso.garmin.com"]);
         assert_eq!(conn.kind, "mcp");
-        assert_eq!(schedule_text(&conn.schedule), "Tous les jours à 7:00");
+        assert_eq!(schedule_text(&conn.schedule), "Tous les jours à 7\u{a0}h");
         let bad = |patch: Value| {
             let mut v = good.clone();
             for (k, x) in patch.as_object().unwrap() {

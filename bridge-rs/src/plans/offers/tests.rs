@@ -472,7 +472,7 @@ fn the_card_is_a_generic_yes_no_card_with_its_prompt_under_i() {
     let event = read("calendar", "Dentiste");
     assert!(detail("fr", &event, PARIS).starts_with("Dans "), "{}", detail("fr", &event, PARIS));
     let when = crate::plans::when_text("fr", epoch(&day_at(4, 15, 0)), PARIS, PARIS, "");
-    assert!(detail("fr", &event, PARIS).contains(&format!("« Dentiste », {when}–15:45")), "{}", detail("fr", &event, PARIS));
+    assert!(detail("fr", &event, PARIS).contains(&format!("« Dentiste », {when}–15\u{a0}h\u{a0}45")), "{}", detail("fr", &event, PARIS));
 }
 
 #[test]
@@ -543,7 +543,9 @@ fn review_a_calendar_offer_shows_its_start_and_end_on_the_same_clock() {
     let start = chrono::DateTime::parse_from_rfc3339(&format!("{day}T15:00:00+00:00")).unwrap().timestamp() as f64;
     let shown = detail("fr", &o, PARIS);
     let start_text = crate::plans::when_text("fr", start, PARIS, PARIS, "");
-    let end_clock = PARIS.timestamp_opt(start as i64 + 45 * 60, 0).single().unwrap().format("%H:%M").to_string();
+    let end = PARIS.timestamp_opt(start as i64 + 45 * 60, 0).single().unwrap();
+    // « 15 h 45 » in French (Alex 25/11)
+    let end_clock = crate::schedule_words::fr_clock(chrono::Timelike::hour(&end), chrono::Timelike::minute(&end));
     assert!(shown.contains(&format!("{start_text}–{end_clock}")), "« {shown} »: {start_text}–{end_clock}");
 }
 

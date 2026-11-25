@@ -273,11 +273,21 @@ fn exact_clock(lang: &str, (h, m): (u32, u32)) -> String {
     }
 }
 
+/// A time of day as French says it wherever the bridge shows one (Alex 25/11): « 8 h », « 12 h 30 », « 8 h 05 », on one
+/// line (non-breaking spaces). Routines, connectors' schedules, plans, reminders and offers use it; other languages
+/// keep their own clock.
+pub fn fr_clock(h: u32, m: u32) -> String {
+    if m == 0 {
+        format!("{h}{NBSP}h")
+    } else {
+        format!("{h}{NBSP}h{NBSP}{m:02}")
+    }
+}
+
 /// « 8 h », « 7 h 30 », « 8 AM », « 7:30 », « 8 »: a time « vers » it (the words of task_frame.rs `clock`).
 fn around_clock(lang: &str, (h, m): (u32, u32)) -> String {
     match (lang, m) {
-        ("fr", 0) => format!("{h}{NBSP}h"),
-        ("fr", _) => format!("{h}{NBSP}h{NBSP}{m:02}"),
+        ("fr", _) => fr_clock(h, m),
         ("en", _) => {
             let (h12, half) = (if h.is_multiple_of(12) { 12 } else { h % 12 }, if h < 12 { "AM" } else { "PM" });
             if m == 0 {

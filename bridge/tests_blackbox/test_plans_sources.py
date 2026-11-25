@@ -15,7 +15,7 @@ from bbkit.common import AUTH
 from bbkit.fakes import taken_notes, waiting_notes
 from bbkit.mcp import call, give_token, text_of
 from bbkit.servers import wait_until
-from test_plans import PARIS, TOKEN, answer, done, local, place, plan_jobs, propose
+from test_plans import PARIS, TOKEN, answer, clock, done, local, place, plan_jobs, propose
 
 CASES = json.loads((Path(__file__).resolve().parents[2] / "contracts" / "plans-sources" / "cases.json").read_text())
 TEXTS = CASES["texts"]
@@ -186,7 +186,7 @@ def test_without_an_exchange_the_day_before_one_card_and_yes_sets_the_plan_witho
     reminders = [j for j in jobs if not j["urgent"]]
     if eve > time.time() + 60:
         [reminder] = reminders
-        assert reminder["say"] == texts["calendar_reminder"].format(title="Dentiste", time="15:00"), reminder
+        assert reminder["say"] == texts["calendar_reminder"].format(title="Dentiste", time=clock(lang_of(card), "15:00")), reminder
     else:
         assert reminders == []   # the day before at 19:00 had passed: only when to leave
     # the home and the place went to the geocoder only now; no model at all

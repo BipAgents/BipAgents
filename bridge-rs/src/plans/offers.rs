@@ -35,7 +35,7 @@
 use std::path::PathBuf;
 use std::sync::Mutex;
 
-use chrono::TimeZone;
+use chrono::{TimeZone, Timelike};
 use chrono_tz::Tz;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -683,7 +683,12 @@ pub fn detail(lang: &str, offer: &Offer, person: Tz) -> String {
                 let day = |t: f64| person.timestamp_opt(t as i64, 0).single();
                 match super::parse_at(&field("end"), person).and_then(day) {
                     Some(end) if Some(end.date_naive()) == day(at).map(|d| d.date_naive()) => {
-                        format!("{start}–{}", end.format("%H:%M"))
+                        // « 15 h–16 h » in French (Alex 25/11)
+                        let end = match texts(lang).lang {
+                            "fr" => crate::schedule_words::fr_clock(end.hour(), end.minute()),
+                            _ => end.format("%H:%M").to_string(),
+                        };
+                        format!("{start}–{end}")
                     }
                     _ => start,
                 }

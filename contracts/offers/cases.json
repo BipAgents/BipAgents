@@ -132,7 +132,7 @@
    "name": "reminder",
    "arguments": {"kind": "reminder", "label": "Je te mets un rappel ?", "about": "Dentiste",
                  "params": {"at": "2026-11-25T19:00", "say": "Dentiste demain à 15:00."}},
-   "card": {"bip_detail": "Un rappel mer. 25 · 19:00 : « Dentiste demain à 15:00. »"}
+   "card": {"bip_detail": "Un rappel mer. 25 · 19\u00a0h : « Dentiste demain à 15:00. »"}
   }
  ],
  "texts": {
