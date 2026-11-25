@@ -443,11 +443,21 @@ pub fn with_session(config: &Config, mut item: Dict) -> Dict {
 /// A card answered (any device, the Boîte or the conversation): the conversations showing it touched, the decision
 /// kept in the one it showed in, its notifications read on every device.
 pub async fn answered(state: &AppState, agent: &AgentConfig, run_id: &str, choice: &str) {
-    answered_via(state, agent, run_id, choice, None).await;
+    answered_via(state, agent, run_id, choice, None, None).await;
 }
 
-/// `answered`, saying how (`via`: « auto » for one approved by the person's level, approval_level.rs).
-pub async fn answered_via(state: &AppState, agent: &AgentConfig, run_id: &str, choice: &str, via: Option<&str>) {
+/// `answered`, saying how (`via`: « auto » for one approved by the person's level, approval_level.rs), with the card as
+/// it was shown (`card`, taken before its answer took it away): what it asked is kept with the decision, as every other
+/// card's answered item says it (J68, 24/11: an answered plan, offer or « Réparer » card drew empty on another device
+/// and on an app 1.0). A card whose own route kept its words (a site's, a space's…) keeps them.
+pub async fn answered_via(
+    state: &AppState,
+    agent: &AgentConfig,
+    run_id: &str,
+    choice: &str,
+    via: Option<&str>,
+    card: Option<&Dict>,
+) {
     note_answered(run_id);
     let config = state.config();
     // the card's id: its request id in the approvals' shape, its notification's `ref`
@@ -471,6 +481,9 @@ pub async fn answered_via(state: &AppState, agent: &AgentConfig, run_id: &str, c
         if let Some(via) = via {
             fields.insert("via".into(), json!(via));
         }
+        if !crate::approvals_log::says_what(&config, &agent.name, run_id, id) {
+            fields.extend(asked_words(card, &place));
+        }
         if let Err(err) = crate::approvals_log::record(&config, &agent.name, &fields) {
             tracing::debug!(agent = %agent.name, error = %err, "card decision not placed");
         }
@@ -481,6 +494,35 @@ pub async fn answered_via(state: &AppState, agent: &AgentConfig, run_id: &str, c
     }
     crate::notifications::read_card(state, &agent.name, id, run_id).await;
     decide(state, run_id, &place, choice);
+}
+
+/// What a card asked, for its answered item (approvals_log.rs): its command, its sentence (`bip_summary`, else its
+/// description; else the sentence kept when it was placed) and its topic; a plan's offer shown on its card says so
+/// (`pill_of`: the apps 1.1 draw it in the plan's card, never as a line of its own).
+fn asked_words(shown: Option<&Dict>, place: &Place) -> serde_json::Map<String, Value> {
+    let mut out = serde_json::Map::new();
+    let text = |key: &str| {
+        shown.and_then(|c| c.get(key)).and_then(Value::as_str).map(str::trim).filter(|t| !t.is_empty()).map(str::to_string)
+    };
+    if let Some(command) = text("command") {
+        out.insert("command".into(), json!(command));
+    }
+    let sentence = text("bip_summary").or_else(|| text("description")).or_else(|| {
+        Some(place.summary.trim().to_string()).filter(|s| !s.is_empty())
+    });
+    if let Some(sentence) = sentence {
+        out.insert("description".into(), json!(sentence));
+    }
+    if let Some(topic) = text("topic").or_else(|| text("bip_topic")) {
+        out.insert("topic".into(), json!(topic));
+    }
+    let offer = shown.and_then(|c| c.get("bip_offer"));
+    if offer.and_then(|o| o.get("pill")).and_then(Value::as_bool) == Some(true) {
+        if let Some(plan) = offer.and_then(|o| o.get("plan")).and_then(Value::as_str).filter(|p| !p.is_empty()) {
+            out.insert("pill_of".into(), json!(plan));
+        }
+    }
+    out
 }
 
 /// The cards `answered` did, the last 200 (`watch` leaves them).

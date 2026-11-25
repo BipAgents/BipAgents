@@ -503,8 +503,16 @@ pub fn diet(kind: &str, bridge_tools: &[String], browser: bool, holds_vault_item
         // a plan or an offer to act it may suggest on its own (agent_proactive.rs `PROPOSING_TOOLS`), whatever the
         // kind, listed only while its « Initiative » is not off: behind the search, what it was never asked for would
         // never be suggested
-        for name in crate::agent_proactive::PROPOSING_TOOLS.iter().filter(|n| bridge_tools.iter().any(|t| t == *n)) {
+        let proposing: Vec<&&str> =
+            crate::agent_proactive::PROPOSING_TOOLS.iter().filter(|n| bridge_tools.iter().any(|t| t == *n)).collect();
+        for name in &proposing {
             add(&format!("!{BRIDGE_PREFIX}{name}"));
+        }
+        // and « arrête de me proposer des choses » beside them while they are listed (its « Initiative » on): behind
+        // the search, DeepSeek and the Spark called give_file with its arguments, were refused and said « c'est noté »
+        // with nothing changed (bench 1.1: 1 and 2 of 6 right). About 120 tokens, in the cache
+        if !proposing.is_empty() && bridge_tools.iter().any(|t| t == crate::agent_proactive::OFF_TOOL) {
+            add(&format!("!{BRIDGE_PREFIX}{}", crate::agent_proactive::OFF_TOOL));
         }
         // maps (maps.rs), whatever the kind: behind the search, asked for « une carte », the agent made a picture or a
         // page with coordinates of its own, which fell in the sea (2026-10-31)
@@ -825,17 +833,18 @@ mod tests {
     }
 
     #[test]
-    fn the_proposing_tools_are_in_view_while_listed_and_the_off_switch_stays_behind_the_search() {
+    fn the_proposing_tools_and_the_off_switch_are_in_view_while_listed() {
         let with =
             diet("custom", &names(&["plan_propose", "offer_act", "proactive_off", "create_page"]), false, false, false);
         for name in crate::agent_proactive::PROPOSING_TOOLS {
             assert!(with.defer.contains(&format!("!{BRIDGE_PREFIX}{name}")), "{name} behind the search");
         }
-        // rare: « arrête de me proposer des choses » costs nothing on a usual call
-        assert!(!with.defer.contains(&format!("!{BRIDGE_PREFIX}{}", crate::agent_proactive::OFF_TOOL)));
-        // off: not listed (agent_proactive.rs `keep_tools`), so nothing of them in view
+        // bench 1.1 (problem 3): « arrête de me proposer des choses » in view beside them, never behind the search
+        assert!(with.defer.contains(&format!("!{BRIDGE_PREFIX}{}", crate::agent_proactive::OFF_TOOL)));
+        // off: the proposing tools not listed (agent_proactive.rs `keep_tools`), so nothing of them in view, the
+        // switch behind the search (it would only say it is off already)
         let off = diet("custom", &names(&["proactive_off", "create_page"]), false, false, false);
-        assert!(!off.defer.iter().any(|d| d.contains("plan_propose") || d.contains("offer_act")));
+        assert!(!off.defer.iter().any(|d| d.contains("plan_propose") || d.contains("offer_act") || d.contains("proactive_off")));
     }
 
     #[test]

@@ -121,6 +121,9 @@ def managed_install(bridge: Bridge, fakes, agents=("coach",), **hermes: Any) -> 
         (home / "config.yaml").write_text("model:\n  provider: lmstudio\n")
     bridge.config["hermes"] = {"root": patched_hermes(bridge.root), "bin": str(bridge.fakebin / "hermes"),
                                "home": str(home), "hub_url": fakes.hermes.url, **hermes}
+    # no space starts here unless a test sets `[spaces]` itself: a project agent's move out of the hub (made at once
+    # since 24/11, own_space.rs) fails at once instead of waiting two minutes for a gateway nobody starts
+    bridge.config.setdefault("spaces", {"start": "exit 3"})
     for name in agents:
         bridge.config["agents"][name] = {"display_name": name.title(), "hermes_url": f"{fakes.hermes.url}/p/{name}",
                                          "hermes_key": "k" * 32}

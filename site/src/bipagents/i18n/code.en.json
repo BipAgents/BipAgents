@@ -2,7 +2,7 @@
   "page": {
     "code": {
       "title": "Get a code — BipAgents",
-      "description": "Join the BipAgents beta: with your own Hermes, no code and no limit, or with an all-included server, your code comes by e-mail."
+      "description": "Join the BipAgents beta with your own Hermes, no code and no limit, or with an all-included server: your code shows up right away."
     }
   },
   "code": {
@@ -14,14 +14,21 @@
     "placeTitle": "I want a server",
     "placeText": "Your private server in Europe, with the AI credit. Free during the beta.",
     "placeCta": "Get my code",
-    "formTitle": "Your code comes by e-mail",
+    "formTitle": "Your code for the beta",
     "email": "Your e-mail",
     "send": "Get my code",
-    "fine": "One code per address. Your address is read for a moment, only to send you your code, through Proton AG (Switzerland). We don’t keep it: we only keep a fingerprint computed with a secret key (pseudonymous data), to check that an address gets only one code, until 31 December 2026 at the latest. Proton keeps the sent message until we delete it from the outbox. Disposable addresses are refused, and the anti-bot check stores nothing on your device. Legal bases: sending what you ask for (GDPR art. 6(1)(b)) and preventing abuse (art. 6(1)(f)).",
+    "gotTitle": "Your code",
+    "copy": "Copy",
+    "again": "You already asked for it: it’s the same code.",
+    "step1": "Install the beta app:",
+    "step2": "In the app, choose “I have an invitation code” and paste your code.",
+    "fine": "One code per address. Your address is read for a moment, only to send you your code, through Proton AG (Switzerland). We don’t keep it: we only keep fingerprints computed with a secret key (pseudonymous data), one to check that an address gets only one code, until 31 December 2026 at the latest, the other, made from your address and your network, for one day, to show you the same code if you ask again. Proton keeps the sent message until we delete it from the outbox. Disposable addresses are refused, and the anti-bot check stores nothing on your device. Legal bases: sending what you ask for (GDPR art. 6(1)(b)) and preventing abuse (art. 6(1)(f)).",
     "privacy": "Privacy",
     "js": {
       "sending": "Sending…",
       "sent": "On its way! Check your inbox, and your spam folder.",
+      "copied": "Copied",
+      "life": "It works for {hours} hours. We also sent it to you by e-mail.",
       "badEmail": "This address doesn’t look right.",
       "disposable": "Disposable addresses don’t work: use your usual address.",
       "robot": "The check didn’t work. Try again.",

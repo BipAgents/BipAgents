@@ -149,7 +149,8 @@ JOURNEY_FLOOR = 5
 
 
 def journey_bridge(bridges, fakes, word_gap: float = 0.06, name: str = "journeys",
-                   family_relay: Optional[str] = None, tool_asks: bool = False, browser: bool = False) -> Journey:
+                   family_relay: Optional[str] = None, tool_asks: bool = False, browser: bool = False,
+                   proactive: Any = False) -> Journey:
     from test_connectors import IMAGE, SERVER
     from test_sandbox import TOKENS, isolated, started
     from conftest import profile
@@ -180,6 +181,9 @@ def journey_bridge(bridges, fakes, word_gap: float = 0.06, name: str = "journeys
         bridge.config["family"] = {"relay_url": family_relay}
     if tool_asks:   # J59–J63: the agent asks for a tool it has off, on a card (tool_asks.rs)
         bridge.config["tools"] = {"ask_in_conversation": True}
+    if proactive:   # J67–J71: the proactive agents' clocks made short (bbkit/proactive_journeys.py); « passes »: J71's only
+        from .proactive_journeys import configure
+        configure(bridge.config, fakes, passes_only=proactive == "passes")
     chrome = None
     if browser:
         # J64–J65: a visible browser of its own (its container's ports, its desktop the person can take over), its
@@ -202,6 +206,7 @@ def journey_bridge(bridges, fakes, word_gap: float = 0.06, name: str = "journeys
     main = bridge.get("/v1/threads/main", headers=AUTH, params={"agent": AGENT})
     assert main.status_code == 200, main.text
     journey = Journey(bridge, fakes, None, main.json()["id"], token)   # type: ignore[arg-type]
+    journey.profile = profile(hub, AGENT)   # Vie's Hermes profile (its sandbox's workspace: J68's watchers)
 
     def page(run: str) -> str:
         html = (f"<h1>Résumé de la journée</h1><p>Trois rendez-vous, deux trajets, une course.</p>"

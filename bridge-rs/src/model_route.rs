@@ -96,6 +96,22 @@ pub fn add_to_body(order: &[String], base_url: &str, body: &mut Value) {
     }
 }
 
+/// A short call of the bridge's that must not think (its few output tokens are for the answer): asked not to, as
+/// Hermes' patch 0010 does (`chat_template_kwargs`), and « none » at the router, which ignores the template's switch
+/// (DeepSeek V4.1 Flash spent a pass's 400 tokens thinking: bench 1.1). GLM through EUrouter can't switch it off: left
+/// to its floor ([`add_thinking_floor`]). Whether it was asked not to think.
+pub fn no_thinking(base_url: &str, body: &mut Value) -> bool {
+    let model = body.get("model").and_then(Value::as_str).unwrap_or("").to_string();
+    if crate::agents_admin::keeps_thinking_on(&model, base_url) {
+        return false;
+    }
+    body["chat_template_kwargs"] = json!({"enable_thinking": false, "thinking": false});
+    if pins(base_url) {
+        body["reasoning_effort"] = json!("none");
+    }
+    true
+}
+
 /// The bridge's own calls to GLM through EUrouter (Carnet, rooms' router, records, mail scan, memory language) ask
 /// for « low » thinking (agents_admin::keeps_thinking_on): sent without, GLM thinks at its own default and a call with
 /// a few output tokens (the rooms' router: 20) can end before any answer. Left alone when the body sets a level.

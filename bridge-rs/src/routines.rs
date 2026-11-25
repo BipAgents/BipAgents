@@ -2522,6 +2522,16 @@ in the app. Do not try to run it.",
             );
             (text, true, None)
         }
+        // paused for its repair (§4.1 rule 6): the « Réparer » turn changes it through its card, never runs it; it runs
+        // again only after the person's « Oui » to that change (bench 1.1: a DeepSeek repair turn ran it at once)
+        ("run", Some(r)) if r.frame.repairing && !r.enabled => {
+            let text = format!(
+                "Routine « {} » is paused while you repair it: do not run it. Propose the fix with action update; it \
+runs again only after your person says yes on that card.",
+                r.name
+            );
+            (text, true, None)
+        }
         // the approved words only, a proposal never (PI-6)
         ("run", Some(r)) => (format!("Routine « {} » starts now.", r.name), false, Some(r.id)),
         ("update", Some(_)) if too_long(&runnable(&arg(arguments, "prompt"))).is_some() => {

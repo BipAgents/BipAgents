@@ -931,7 +931,7 @@ mod tests {
     }
 
     /// Investigation of 24/11 (bench 1.1, problem 10: Lumi and Iris mute after their move, 502 at every message, a
-    /// bridge restart changes nothing). An agent that moves at its first secret (own_space.rs `ready`) does so in the
+    /// bridge restart changes nothing). An agent that moved at its first secret (own_space.rs before 24/11; a project agent's move now) does so in the
     /// middle of a hub turn; its space's gateway starts and takes the next runtime epoch in the profile's database
     /// (Hermes `begin_runtime_epoch`: hub's + 1); once the hub turn ends, `finish` copies the hub's database over the
     /// space's (`resync_database`) and puts the hub's epoch back. From then on the space's Hermes refuses every turn
