@@ -10,11 +10,12 @@
 //!     a routine's card                        `bip_routine.when.shown` (routines.rs)
 //!
 //! In the agent's language (as the bridge's other words: cards, frame, plans), the catalogue's in the one it is asked
-//! for: fr, en, de, es, nl (any other: en). The words of the routines' screens (« Chaque jour à 8:00 », « En semaine
-//! vers 7 h 30 », « Le 3 de chaque mois à 9:00 », « Toutes les 2 h »…), and for what they could not say: several days
-//! (« Chaque lundi, mercredi et vendredi à 9:00 »), the weekend, several times (« à 8:00 et 18:00 »), several days of
-//! the month, a cron's every N hours or minutes; anything else: « Régulièrement » (never wrong for a repeating
-//! schedule). French keeps « 7 h 30 » on one line (non-breaking spaces, as the apps' TaskFrame.clock).
+//! for: fr, en, de, es, nl (any other: en). The words of the routines' screens (« Chaque jour à 8 h », « En semaine
+//! vers 7 h 30 », « Le 3 de chaque mois à 9 h », « Toutes les 2 h »…; in French the hour « 12 h », « 12 h 30 » and one
+//! day « Le dimanche », Alex 25/11), and for what they could not say: several days (« Le lundi, le mercredi et le
+//! vendredi à 9 h »), the weekend, several times (« à 8 h et 18 h »), several days of the month, a cron's every N hours
+//! or minutes; anything else: « Régulièrement » (never wrong for a repeating schedule). French keeps « 7 h 30 » on one
+//! line (non-breaking spaces, as the apps' TaskFrame.clock).
 //!
 //! No Python counterpart.
 
@@ -260,9 +261,11 @@ fn joined(lang: &str, items: &[String]) -> String {
     }
 }
 
-/// « 8:00 », « 8:00 AM ».
+/// « 8 h », « 12 h 30 », « 8:00 AM », « 8:00 ».
 fn exact_clock(lang: &str, (h, m): (u32, u32)) -> String {
     match lang {
+        // « 12 h », « 12 h 30 », « 8 h » (Alex 25/11), on one line
+        "fr" => around_clock(lang, (h, m)),
         "en" => {
             format!("{}:{m:02} {}", if h.is_multiple_of(12) { 12 } else { h % 12 }, if h < 12 { "AM" } else { "PM" })
         }
@@ -288,7 +291,7 @@ fn around_clock(lang: &str, (h, m): (u32, u32)) -> String {
     }
 }
 
-/// « à 8:00 », « à 8:00 et 18:00 », « vers 7 h 30 », « um 8:00 Uhr », « gegen 8 und 18 Uhr », « a la 1:00 »…
+/// « à 8 h », « à 8 h et 18 h », « vers 7 h 30 », « um 8:00 Uhr », « gegen 8 und 18 Uhr », « a la 1:00 »…
 fn times_words(lang: &str, times: &[(u32, u32)], approx: bool) -> String {
     let clocks: Vec<String> =
         times.iter().map(|t| if approx { around_clock(lang, *t) } else { exact_clock(lang, *t) }).collect();
@@ -325,6 +328,11 @@ fn days_words(lang: &str, days: &Days) -> String {
         (_, Days::All) => "Every day".into(),
         (_, Days::Weekdays) => "Weekdays".into(),
         (_, Days::Weekend) => "Weekends".into(),
+        // « Le dimanche », « Le lundi, le mercredi et le vendredi » (Alex 25/11)
+        ("fr", Days::Some(list)) => {
+            let names: Vec<String> = list.iter().map(|d| format!("le {}", day_name(lang, *d))).collect();
+            in_words_first_capital(&joined(lang, &names))
+        }
         (_, Days::Some(list)) => {
             let names: Vec<String> = list.iter().map(|d| day_name(lang, *d).to_string()).collect();
             let each = match lang {
@@ -555,6 +563,15 @@ pub fn schedule_words(lang: &str, schedule: &Value, approx: bool, zone: Tz) -> S
     say(lang, &of_schedule(schedule), approx, zone)
 }
 
+/// Their first letter capital (« le lundi… » → « Le lundi… »).
+fn in_words_first_capital(words: &str) -> String {
+    let mut chars = words.chars();
+    match chars.next() {
+        Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
+        None => String::new(),
+    }
+}
+
 /// The words in a sentence: their first letter small (« …a créé la routine « X » : chaque lundi… »).
 pub fn in_sentence(words: &str) -> String {
     let mut chars = words.chars();
@@ -586,8 +603,8 @@ mod tests {
     #[test]
     fn the_models_routines_in_plain_french() {
         // the screen « Préparer Santé et sport » (sante.json)
-        assert_eq!(fr("0 12 * * 1-5"), "En semaine à 12:00");
-        assert_eq!(fr("0 19 * * 0"), "Chaque dimanche à 19:00");
+        assert_eq!(fr("0 12 * * 1-5"), "En semaine à 12 h");
+        assert_eq!(fr("0 19 * * 0"), "Le dimanche à 19 h");
         for item in crate::templates_catalogue::items() {
             for s in item["schedules"].as_array().unwrap() {
                 for l in LANGS {
@@ -601,21 +618,24 @@ mod tests {
 
     #[test]
     fn the_common_forms() {
-        assert_eq!(fr("0 8 * * *"), "Chaque jour à 8:00");
-        assert_eq!(fr("30 7 * * MON-FRI"), "En semaine à 7:30");
-        assert_eq!(fr("0 8 * * 1"), "Chaque lundi à 8:00");
-        assert_eq!(fr("0 8 * * 7"), "Chaque dimanche à 8:00");
-        assert_eq!(fr("0 9 * * 1,3,5"), "Chaque lundi, mercredi et vendredi à 9:00");
-        assert_eq!(fr("0 9 * * mon,wed"), "Chaque lundi et mercredi à 9:00");
-        assert_eq!(fr("0 9 * * 1-3"), "Chaque lundi, mardi et mercredi à 9:00");
-        assert_eq!(fr("0 10 * * 6,0"), "Le week-end à 10:00");
-        assert_eq!(fr("0 10 * * 0-6"), "Chaque jour à 10:00");
-        assert_eq!(fr("0 8,18 * * *"), "Chaque jour à 8:00 et 18:00");
-        assert_eq!(fr("0 9 3 * *"), "Le 3 de chaque mois à 9:00");
-        assert_eq!(fr("0 9 1,15 * *"), "Le 1er et le 15 de chaque mois à 9:00");
-        assert_eq!(fr("0 9 1 1,4,7,10 *"), "Le 1er janvier, avril, juillet et octobre à 9:00");
-        assert_eq!(fr("0 9 1 * *"), "Le 1er de chaque mois à 9:00");
-        assert_eq!(fr("0 9 1 1-12 *"), "Le 1er de chaque mois à 9:00");
+        assert_eq!(fr("0 8 * * *"), "Chaque jour à 8 h");
+        // « 12 h 30 » on one line, no zero before the hour (Alex 25/11)
+        assert_eq!(say("fr", &cron("30 12 * * *"), false, PARIS), "Chaque jour à 12\u{a0}h\u{a0}30");
+        assert_eq!(fr("5 8 * * *"), "Chaque jour à 8 h 05");
+        assert_eq!(fr("30 7 * * MON-FRI"), "En semaine à 7 h 30");
+        assert_eq!(fr("0 8 * * 1"), "Le lundi à 8 h");
+        assert_eq!(fr("0 8 * * 7"), "Le dimanche à 8 h");
+        assert_eq!(fr("0 9 * * 1,3,5"), "Le lundi, le mercredi et le vendredi à 9 h");
+        assert_eq!(fr("0 9 * * mon,wed"), "Le lundi et le mercredi à 9 h");
+        assert_eq!(fr("0 9 * * 1-3"), "Le lundi, le mardi et le mercredi à 9 h");
+        assert_eq!(fr("0 10 * * 6,0"), "Le week-end à 10 h");
+        assert_eq!(fr("0 10 * * 0-6"), "Chaque jour à 10 h");
+        assert_eq!(fr("0 8,18 * * *"), "Chaque jour à 8 h et 18 h");
+        assert_eq!(fr("0 9 3 * *"), "Le 3 de chaque mois à 9 h");
+        assert_eq!(fr("0 9 1,15 * *"), "Le 1er et le 15 de chaque mois à 9 h");
+        assert_eq!(fr("0 9 1 1,4,7,10 *"), "Le 1er janvier, avril, juillet et octobre à 9 h");
+        assert_eq!(fr("0 9 1 * *"), "Le 1er de chaque mois à 9 h");
+        assert_eq!(fr("0 9 1 1-12 *"), "Le 1er de chaque mois à 9 h");
         assert_eq!(fr("0 */2 * * *"), "Toutes les 2 h");
         assert_eq!(fr("15 * * * *"), "Toutes les heures");
         assert_eq!(fr("*/15 * * * *"), "Toutes les 15 minutes");
@@ -641,7 +661,7 @@ mod tests {
             looks_like_cron("0 12 * * 1-5") && looks_like_cron("30 7 * * MON-FRI") && looks_like_cron("*/5 * * * *")
         );
         assert!(
-            !looks_like_cron("En semaine à 12:00") && !looks_like_cron("Chaque lundi, mercredi et vendredi à 9:00")
+            !looks_like_cron("En semaine à 12 h") && !looks_like_cron("Le lundi, le mercredi et le vendredi à 9 h")
         );
     }
 
@@ -673,7 +693,7 @@ mod tests {
         assert_eq!(s("pt-BR", "0 8 * * *"), "Every day at 8:00 AM");
         // « vers »: task_frame.rs' clock, several times too
         assert_eq!(a("fr", "30 7 * * *"), "Chaque jour vers 7\u{a0}h\u{a0}30");
-        assert_eq!(a("fr", "37 7 * * 1,3,5").replace(NBSP, " "), "Chaque lundi, mercredi et vendredi vers 7 h 37");
+        assert_eq!(a("fr", "37 7 * * 1,3,5").replace(NBSP, " "), "Le lundi, le mercredi et le vendredi vers 7 h 37");
         assert_eq!(a("en", "0 8,18 * * *"), "Every day around 8 AM and 6 PM");
         assert_eq!(a("de", "30 7 * * 1-5"), "Werktags gegen 7:30 Uhr");
         assert_eq!(a("es", "0 8 * * *"), "Cada día hacia las 8");
@@ -687,14 +707,14 @@ mod tests {
     #[test]
     fn whens_and_schedules() {
         let w = |v: Value| when_words("fr", &v, PARIS).map(|t| t.replace(NBSP, " "));
-        assert_eq!(w(json!({"kind": "daily", "hour": 8, "minute": 0})).as_deref(), Some("Chaque jour à 8:00"));
+        assert_eq!(w(json!({"kind": "daily", "hour": 8, "minute": 0})).as_deref(), Some("Chaque jour à 8 h"));
         assert_eq!(
             w(json!({"kind": "weekly", "weekday": 3, "hour": 7, "minute": 5, "approx": true})).as_deref(),
-            Some("Chaque mercredi vers 7 h 05")
+            Some("Le mercredi vers 7 h 05")
         );
         assert_eq!(
             w(json!({"kind": "monthly", "day": 1, "hour": 9, "minute": 0})).as_deref(),
-            Some("Le 1er de chaque mois à 9:00")
+            Some("Le 1er de chaque mois à 9 h")
         );
         assert_eq!(w(json!({"kind": "every_hours", "hours": 1})).as_deref(), Some("Toutes les heures"));
         assert_eq!(w(json!({"kind": "every_hours", "hours": 3})).as_deref(), Some("Toutes les 3 h"));
@@ -702,26 +722,26 @@ mod tests {
         assert_eq!(w(json!({"kind": "once"})).as_deref(), Some("Une seule fois"));
         assert_eq!(
             w(json!({"kind": "custom", "raw": "30 7 * * 1,3,5", "approx": true})).as_deref(),
-            Some("Chaque lundi, mercredi et vendredi vers 7 h 30")
+            Some("Le lundi, le mercredi et le vendredi vers 7 h 30")
         );
         assert_eq!(w(json!({"kind": "custom", "raw": "0 8-18/2 * * *"})).as_deref(), Some("Régulièrement"));
         assert_eq!(w(json!({"kind": "on_change"})), None);
         assert_eq!(w(json!({"kind": "mail", "from": "banque.fr"})), None);
         // a date: the routines' clock
         let at = PARIS.with_ymd_and_hms(2031, 11, 30, 18, 0, 0).unwrap().timestamp() as f64;
-        assert_eq!(w(json!({"kind": "once", "at": at})).as_deref(), Some("Une fois, le 30/11/2031 à 18:00"));
+        assert_eq!(w(json!({"kind": "once", "at": at})).as_deref(), Some("Une fois, le 30/11/2031 à 18 h"));
         assert_eq!(say("en", &Plain::Once(Some(at)), false, PARIS), "Once, on Nov 30, 2031 at 6:00 PM");
         assert_eq!(say("de", &Plain::Once(Some(at)), false, PARIS), "Einmal, am 30.11.2031 um 18:00 Uhr");
         assert_eq!(say("nl", &Plain::Once(Some(at)), false, PARIS), "Eén keer, op 30-11-2031 om 18:00");
         // Hermes' schedules
         let sch = |v: Value| schedule_words("fr", &v, false, PARIS).replace(NBSP, " ");
-        assert_eq!(sch(json!({"kind": "cron", "expr": "0 7 * * *"})), "Chaque jour à 7:00");
+        assert_eq!(sch(json!({"kind": "cron", "expr": "0 7 * * *"})), "Chaque jour à 7 h");
         assert_eq!(sch(json!({"kind": "interval", "minutes": 120})), "Toutes les 2 h");
         assert_eq!(sch(json!({"kind": "interval", "minutes": 45})), "Toutes les 45 minutes");
         assert_eq!(
             sch(json!({"kind": "once", "run_at": "2031-11-30T18:00:00+01:00"})),
-            "Une fois, le 30/11/2031 à 18:00"
+            "Une fois, le 30/11/2031 à 18 h"
         );
-        assert_eq!(in_sentence("Chaque lundi à 8:00"), "chaque lundi à 8:00");
+        assert_eq!(in_sentence("Le lundi à 8 h"), "le lundi à 8 h");
     }
 }

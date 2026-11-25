@@ -96,7 +96,7 @@ pub fn when_text(when: &Value) -> String {
         "once" => "Une seule fois".into(),
         "on_change" => "Quand quelque chose change".into(),
         "now" => "En cours".into(),
-        // never the cron expression itself (schedule_words.rs): « Chaque lundi, mercredi et vendredi à 9:00 », else
+        // never the cron expression itself (schedule_words.rs): « Le lundi, le mercredi et le vendredi à 9 h », else
         // « Régulièrement »
         _ => crate::schedule_words::when_words("fr", when, chrono_tz::Tz::UTC).unwrap_or_default(),
     }
@@ -713,7 +713,7 @@ mod tests {
         // what the apps' fields can't say keeps its expression for them, its words never the expression (25/11)
         let days = cron_when("30 7 * * 1,3,5");
         assert_eq!((days["kind"].as_str(), days["raw"].as_str()), (Some("custom"), Some("30 7 * * 1,3,5")));
-        assert_eq!(days["text"], "Chaque lundi, mercredi et vendredi à 7:30");
+        assert_eq!(days["text"], "Le lundi, le mercredi et le vendredi à 7\u{a0}h\u{a0}30");
         assert_eq!(cron_when("0 8-18/2 * * *")["text"], "Régulièrement");
     }
 

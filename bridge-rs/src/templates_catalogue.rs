@@ -63,7 +63,7 @@ fn s(v: &Value, key: &str) -> String {
     tk::str_or_empty(v.get(key))
 }
 
-/// A routine's schedule as people read it, in `lang`: « En semaine à 7:00 », never « 0 7 * * 1-5 » (schedule_words.rs;
+/// A routine's schedule as people read it, in `lang`: « En semaine à 7 h », never « 0 7 * * 1-5 » (schedule_words.rs;
 /// Alex 25/11 « Ça veut dire quoi ces chiffres »).
 fn display(schedule: &Value, lang: &str) -> String {
     crate::schedule_words::schedule_words(language(lang), schedule, false, chrono_tz::Tz::UTC)
@@ -284,8 +284,8 @@ mod tests {
         assert_eq!(listed["templates"][0]["routines"][0]["name"], "Der Morgenüberblick");
         // its routines' times in words (25/11: « 0 12 * * 1-5 » on « Préparer Santé et sport »)
         let sante = |lang: &str| view(item("sante").unwrap(), lang)["routines"].clone();
-        assert_eq!(sante("fr")[0], json!({"name": "Un moment pour bouger", "display": "En semaine à 12:00"}));
-        assert_eq!(sante("fr")[1]["display"], "Chaque dimanche à 19:00");
+        assert_eq!(sante("fr")[0], json!({"name": "Un moment pour bouger", "display": "En semaine à 12\u{a0}h"}));
+        assert_eq!(sante("fr")[1]["display"], "Le dimanche à 19\u{a0}h");
         assert_eq!(sante("en")[0]["display"], "Weekdays at 12:00 PM");
         assert_eq!(sante("de")[1]["display"], "Jeden Sonntag um 19:00 Uhr");
         assert_eq!(sante("es")[0]["display"], "Entre semana a las 12:00");

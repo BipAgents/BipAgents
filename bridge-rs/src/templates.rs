@@ -953,7 +953,7 @@ pub async fn import(state: &AppState, body: &Value) -> ApiResult<Value> {
     if !made.is_empty() {
         let zone = crate::routines::zone(&config);
         let ids: Vec<String> = made.iter().map(|r| r.id.clone()).collect();
-        // its words in the new agent's language (« En semaine à 12:00 », never « 0 12 * * 1-5 »: schedule_words.rs)
+        // its words in the new agent's language (« En semaine à 12 h », never « 0 12 * * 1-5 »: schedule_words.rs)
         let words = Some(s(&bundle, "lang"))
             .filter(|l| !l.is_empty())
             .unwrap_or_else(|| crate::names::agent_language(&state.config(), &agent.name));
