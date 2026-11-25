@@ -10,7 +10,7 @@ The assets, each well under GitHub's 2 GB a file:
     <folder>.tar.gz            one per package the index lists (each language, the decoder `mimi-…`): the folder's
                                files under `<folder>/`, the same bytes every time (sorted, no dates, no owners)
     CREDITS.txt                what each package is made from and under which licence (the manifests' `credit`)
-    LICENSE-ASSETS             the Bips' voices are reserved assets: fetched by BipAgents' installer, not reused
+    LICENSE, TRADEMARKS.md     the repository's: the Bips' voices are MIT like the rest, the name and icon are marks
     SHA256SUMS                 the sha256 of every asset above
 
 Folders the index doesn't list (older builds, samples/) are left out. The name changes with the index, so with any
@@ -27,6 +27,7 @@ from typing import Dict, List
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[1]
+LICENCE_FILES = ("LICENSE", "TRADEMARKS.md")   # shipped beside the archives, as the repository has them
 LIMIT = 2 * 1000 ** 3 - 50 * 1000 ** 2   # GitHub refuses an asset of 2 GB or more: a margin under it
 
 CREDITS_HEAD = """The Bips' voices of BipAgents, as BipAgents' installer fetches them ({tag})
@@ -36,8 +37,10 @@ Kyutai's Pocket TTS converted to ONNX (the language model quantized to 8 bits) w
 
 - Pocket TTS by Kyutai, https://github.com/kyutai-labs/pocket-tts, weights under CC-BY-4.0
   (https://creativecommons.org/licenses/by/4.0/). Changes: converted to ONNX, the language model quantized to 8 bits.
-- The Bips' voices (the voices/*.kv.f16 states) are BipAgents' own, reserved assets (LICENSE-ASSETS): published here
-  for BipAgents' installer, not for reuse elsewhere.
+- The Bips' voices (the voices/*.kv.f16 states) are BipAgents' own, under the MIT license (LICENSE): made from
+  synthetic clips of Qwen3-TTS VoiceDesign (Apache-2.0), then cloned with Pocket TTS. The Pocket TTS weights inside
+  each archive stay under CC-BY-4.0, as above. The name BipAgents and its icon are the project's marks
+  (TRADEMARKS.md), not covered by the MIT license.
 
 Each package's own credit, as its manifest.json says it:
 """
@@ -110,8 +113,9 @@ def pack(src: Path, out: Path) -> str:
         assets.append(archive(src / folder, out))
     (out / "index.json").write_bytes((src / "index.json").read_bytes())
     (out / "CREDITS.txt").write_text(credits(src, index, name), encoding="utf-8")
-    (out / "LICENSE-ASSETS").write_bytes((REPO / "LICENSE-ASSETS").read_bytes())
-    assets += [out / "index.json", out / "CREDITS.txt", out / "LICENSE-ASSETS"]
+    for kept in LICENCE_FILES:
+        (out / kept).write_bytes((REPO / kept).read_bytes())
+    assets += [out / "index.json", out / "CREDITS.txt"] + [out / kept for kept in LICENCE_FILES]
     for path in assets:
         if path.stat().st_size >= LIMIT:
             raise SystemExit(f"{path.name}: {path.stat().st_size} bytes, over GitHub's limit for an asset")

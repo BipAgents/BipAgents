@@ -9,5 +9,5 @@
 ## Contribution terms
 
 - [ ] I agree to the [contribution terms](../CONTRIBUTING.md#contribution-terms): my contribution is under the MIT
-      license (code) or LICENSE-ASSETS (drawings, sounds, voices), Kerfy Studio may also distribute it under another
-      license, and I have the right to contribute it.
+      license (code, drawings, sounds, voices), Kerfy Studio may also distribute it under another license, and I have
+      the right to contribute it.

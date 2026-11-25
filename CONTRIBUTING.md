@@ -45,12 +45,11 @@ bridge there and point the installer at it with `BIPAGENTS_BRIDGE_BUILD=<folder 
 
 ## Contribution terms
 
-BipAgents' code published here is under the [MIT license](LICENSE); the Bips' drawings, the app's icon, the Bips'
-babble, their voices, the recordings and the screenshots are not ([LICENSE-ASSETS](LICENSE-ASSETS)). By submitting a
+Everything published here is under the [MIT license](LICENSE), the Bips' drawings, voices and recordings included;
+only the name BipAgents and the app's icon are the project's marks ([TRADEMARKS.md](TRADEMARKS.md)). By submitting a
 contribution (a pull request, a patch, a file in an issue), you agree that:
 
-1. **it is released under the same terms**: the MIT license for code, LICENSE-ASSETS for drawings, icons, sounds,
-   voices and recordings;
+1. **it is released under the same terms**: the MIT license, for code as for drawings, sounds, voices and recordings;
 2. **Kerfy Studio**, the publisher of BipAgents (a French SAS), and its successors may use, modify and distribute it
    under any license, including another license than MIT for later versions. This right is worldwide, free, perpetual
    and irrevocable;
