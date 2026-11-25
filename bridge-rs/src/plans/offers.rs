@@ -290,11 +290,33 @@ static TO_THE_PERSON: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(concat!(
         r"\b(je t envoie|je te l envoie|je te les envoie|je t en envoie|send you|send it to you|send them to you|dir|ihnen",
         r"|te envio|te lo envio|te la envio|te los envio|te las envio|te mando|te lo mando|te la mando|je sturen|jou sturen",
-        r"|het je|stuur ik je|rappel|rappels|reminder|reminders|erinnerung|recordatorio|herinnering|notification",
-        r"|notificacion|benachrichtigung|melding|alerte|alert)\b"
+        r"|het je|stuur ik je)\b"
     ))
     .unwrap()
 });
+
+/// A reminder or a notice (« Zal ik je een herinnering sturen? », « Je peux t'envoyer un rappel ? ») goes to the person
+/// when it is said to them (`TO_YOU`): one to someone else (« Shall I send a reminder to Paul? », « J'envoie un rappel
+/// à tes invités ? ») is sent on their behalf (the verification of 25/11: any reminder word let it through).
+static REMINDER: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(concat!(
+        r"\b(rappel|rappels|reminder|reminders|erinnerung|recordatorio|herinnering|notification|notificacion",
+        r"|benachrichtigung|melding|alerte|alert)\b"
+    ))
+    .unwrap()
+});
+static TO_YOU: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(concat!(
+        r"\b(te|toi|vous|you|dir|dich|ihnen|ti)\b|\bt (envoie|envoyer|renvoie|renvoyer)\b",
+        r"|\b(zal|kan|mag|moet|stuur) ik (je|jou|u)\b|\bik (stuur|verstuur) (je|jou|u)\b"
+    ))
+    .unwrap()
+});
+
+/// Whether a sending offer's words send to the person themselves (`TO_THE_PERSON`, or a reminder said to them).
+fn to_the_person(folded_label: &str) -> bool {
+    TO_THE_PERSON.is_match(folded_label) || (REMINDER.is_match(folded_label) && TO_YOU.is_match(folded_label))
+}
 
 /// German and Dutch put the verb at the end (« Soll ich den Tisch für Samstag reservieren? », « Zal ik de tafel …
 /// reserveren? »): their modal's lead, the verbs that book, pay or buy, those that send, and the words that start
@@ -351,7 +373,7 @@ pub fn acts_itself(label: &str) -> Option<String> {
     let acts = label.split([',', ';', ':', '?', '!', '.', '¿', '¡']).map(folded).any(|clause| {
         let (books, sends) = modal_acts(&clause);
         books || BOOKS_PAYS_BUYS.is_match(&clause)
-            || ((sends || SENDS.is_match(&clause)) && !TO_THE_PERSON.is_match(&folded(label)))
+            || ((sends || SENDS.is_match(&clause)) && !to_the_person(&folded(label)))
     });
     acts.then(|| {
         not_done("the offer itself can't be to book, pay, buy or send: offer the step before it (find, compare, prepare) \

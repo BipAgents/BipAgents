@@ -91,9 +91,9 @@ const ADD_ASKED: &[&str] = &[
     " pencil ", " jot ", " write it down ", " write that down ", " note it ", " note this ", " note that down ",
     " save the date ", // de
     " trag ", " trage ", " tragen sie ", " hinzu", " fug ", " fuge ", " notier", " vormerk", " setz ", " setze ",
-    " einplan", // es
+    " einplan", " einzutrag", " einzuplan", // es
     " anad", " apunt", " agreg", " anot", " pon ", " ponlo ", " ponla ", " ponme ", " poner", // nl
-    " toevoeg", " voeg ", " zet ", " zetten ", " noteer", " inplan",
+    " toevoeg", " voeg ", " zet ", " zetten ", " noteer", " noteren ", " toe te voegen", " inplan", " in te plannen",
 ];
 
 /// An agent's question that offers to add (« Je l'ajoute à ton agenda ? », « Je le note ? », « Shall I add it? », « Soll
@@ -108,19 +108,49 @@ const ADD_OFFERED: &[&str] = &[
 /// What makes the person's words a no (anywhere in them, as `words_of` writes them): « Non merci », « pas maintenant »,
 /// « No thanks », « not now », « Nein danke », « nicht jetzt », « No, gracias », « ahora no », « Nee, dank je », « niet
 /// nu », « je le ferai moi-même », « ne l'ajoute pas »… A doubt is a no: the agent offers it on a card, or asks.
+/// A no without a no word too (the verification of 25/11; each has a word `ADD_ASKED` or `CALENDAR_WORDS` takes): it is
+/// there already (« C'est déjà dans mon agenda », « Steht schon im Kalender », « Staat al in mijn agenda »), nothing is
+/// to be added (« Ajoute rien », « Trag nichts ein », « Voeg niets toe », « Annule l'ajout »), or the person adds it
+/// themselves (« Je l'ajoute », « I'll add it », « Ich trag ihn ein », « Lo apunto yo », « Ik zet het erin »).
 const NO_WORDS: &[&str] = &[
     " non ", " nan ", " pas ", " jamais ", " laisse ", " moi meme ", " plus tard ", " inutile ", " ne ", " n ", " no ",
     " nope ", " nah ", " not ", " don t ", " dont ", " never ", " later ", " myself ", " skip ", " nein ", " nee ",
     " nicht ", " kein ", " keine ", " nie ", " spater ", " selbst ", " nunca ", " mismo ", " misma ", " niet ", " geen ",
     " nooit ", " zelf ", " laat maar ",
+    // there already
+    " deja ", " already ", " bereits ", " schon im ", " schon in ", " schon drin", " steht schon ", " ya esta ",
+    " ya lo ", " ya la ", " ya tengo ", " staat al ", " al in ", " reeds ",
+    // nothing, or cancelled
+    " rien ", " aucun ", " aucune ", " nothing ", " nichts ", " nada ", " niets ", " niks ", " annul", " cancel",
+    " storn", " abbrech", " absag",
+    // the person does it
+    " je l ajout", " je vais l ajout", " je le mets ", " je la mets ", " je vais le mettre ", " je le note ",
+    " je la note ", " je vais le noter ", " je l inscri", " je m en occupe ", " je m en charge ", " i ll add",
+    " i will add", " i ll put", " i ll schedule", " i ll note", " i ll do it ", " i ll handle", " i ve got it ",
+    " i got it ", " ich trag", " ich setz", " ich notier", " ich mach das ", " ich mache das ", " mach ich ",
+    " trag ich ", " lo apunto ", " la apunto ", " lo anado ", " la anado ", " lo anoto ", " lo pongo ", " lo agrego ",
+    " me encargo ", " yo lo ", " ik zet ", " ik voeg ", " ik noteer ", " ik doe het ", " doe ik ", " zet ik ",
+    " ik regel ", " regel ik ",
 ];
-/// What only sounds like a no (« pas de souci », « no problem », « pourquoi pas »), taken out before `NO_WORDS` are
-/// looked for.
+/// What only sounds like a no (« pas de souci », « no problem », « pourquoi pas », « de rien », « … pour ne pas
+/// oublier », « so I don't forget », « N'oublie pas de l'ajouter »), taken out before `NO_WORDS` are looked for.
 const NOT_A_NO: &[&str] = &[
     " pas de souci ", " pas de soucis ", " pas de probleme ", " pourquoi pas ", " no problem ", " no worries ",
     " why not ", " kein problem ", " warum nicht ", " no hay problema ", " por que no ", " geen probleem ",
-    " waarom niet ",
+    " waarom niet ", " de rien ", " de nada ", " nichts dagegen ",
+    // not to forget
+    " pour ne pas oublier ", " pour pas oublier ", " pour ne pas l oublier ", " pour ne pas que j oublie ",
+    " pour que je n oublie pas ", " je ne veux pas oublier ", " je ne veux pas l oublier ", " n oublie pas ",
+    " oublie pas ", " so i don t forget ", " so i dont forget ", " so i won t forget ", " so i do not forget ",
+    " don t forget ", " dont forget ", " do not forget ", " damit ich es nicht vergesse ", " damit ich das nicht vergesse ",
+    " damit ich nicht vergesse ", " vergiss nicht ", " nicht vergessen ", " para no olvidar", " para que no se me olvide",
+    " no olvides ", " no te olvides ", " no se te olvide", " zodat ik het niet vergeet ", " zodat ik niet vergeet ",
+    " om het niet te vergeten ", " vergeet niet ", " niet vergeten ",
 ];
+/// A choice in the agent's question (« Je l'ajoute à ton agenda ou je te mets un rappel ? »): a yes to it says
+/// nothing of which. Not « … ou pas ? » (`NOT_A_CHOICE`, taken out first).
+const CHOICE_WORDS: &[&str] = &[" ou ", " or ", " oder ", " o ", " u ", " of "];
+const NOT_A_CHOICE: &[&str] = &[" ou pas ", " ou non ", " or not ", " oder nicht ", " o no ", " of niet ", " of nee "];
 /// The starts of a short yes (« Oui », « Ok vas-y », « Yes please », « Ja, gerne », « Sí, vale », « Graag »).
 const YES_WORDS: &[&str] = &[
     " oui ", " ouais ", " ouaip ", " ok ", " okay ", " oki ", " d accord ", " dac ", " vas y ", " volontiers ",
@@ -200,9 +230,16 @@ pub fn add_asked(messages: &[Dict]) -> bool {
         .filter(|m| m.get("role").and_then(Value::as_str) == Some("assistant"))
         .map(crate::cronwatch::message_text)
         .find(|text| !text.trim().is_empty())
-        .is_some_and(|text| {
-questions_of(&text).iter().any(|q| ADD_OFFERED.iter().any(|w| q.contains(w)))
-        })
+        .is_some_and(|text| questions_of(&text).iter().any(|q| ADD_OFFERED.iter().any(|w| q.contains(w)) && !a_choice(q)))
+}
+
+/// Whether an agent's question offers a choice (`CHOICE_WORDS`): a short yes to it says nothing of which.
+fn a_choice(question: &str) -> bool {
+    let mut question = question.to_string();
+    for phrase in NOT_A_CHOICE {
+        question = question.replace(phrase, " ");
+    }
+    CHOICE_WORDS.iter().any(|w| question.contains(w))
 }
 
 /// The tools' definitions (listed only for an agent allowed).

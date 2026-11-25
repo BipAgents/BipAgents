@@ -611,10 +611,14 @@ pub fn cancelled_line(lang: &str, title: &str) -> String {
 
 const DAY_WORDS: [&str; 7] = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
 
-/// A day of the week as models write it (« mon », « Mon. », « monday », « thurs »): its index from Monday. Only a day's
-/// whole word: « monthly » is not Monday.
+/// A day of the week as models write it (« mon », « Mon. », « monday », « Mondays », « thurs »): its index from Monday.
+/// Only a day's whole word, or its plural: « monthly » is not Monday.
 fn day_of(word: &str) -> Option<usize> {
     let word = word.trim().trim_end_matches('.').to_lowercase();
+    let word = match word.strip_suffix("days") {
+        Some(day) if !day.is_empty() => format!("{day}day"),
+        _ => word,
+    };
     const FULL: [&str; 7] = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"];
     const ALSO: [(&str, usize); 4] = [("tues", 1), ("thur", 3), ("thurs", 3), ("weds", 2)];
     DAY_WORDS
