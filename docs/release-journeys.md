@@ -38,7 +38,7 @@ Mots-clés que le faux modèle comprend : `#fichier`, `#page`, `#memoire` (une p
 `#secret`, `#coffre` (J64), `#connexion` (J65), `#sites`, `#connecteur`, `#lent`, `#jours` (au premier tour d'une conversation : un historique sur trois
 jours, réponses avec leur `reasoning`), `#reel` (le rythme de GLM par Hermes : 1,5 s d'attente puis 1 à 3 mots toutes
 les 60–200 ms) (voir `bbkit/model.py`) ; et pour J32 et après (`PeopleModel`) :
-`#routine`, `#tache`, `#famille`, `#etapes`, `#relais` ; pour les agents proactifs (J67–J71, `bbkit/proactive_journeys.py`) : `#plan`, `#offre`, `#ia-muette`.
+`#routine`, `#tache`, `#famille`, `#etapes`, `#relais` ; pour les agents proactifs (J67–J72, `bbkit/proactive_journeys.py`) : `#plan`, `#offre`, `#ia-muette`.
 
 ## Les parcours
 
@@ -150,6 +150,7 @@ la bêta.
 | J69 | « Réparer / Arrêter » | Un veilleur en panne (« Lancer maintenant » trois fois) : sa carte dans la Boîte, sans appel au modèle ; « Réparer » : un tour de Vie, le veilleur reste allumé ; l'autre : « Arrêter », éteint, sur sa page ; sans réponse 4 jours, la carte revient, poussée : « Sans réponse, il s'arrête le {date}. », jamais arrêté avant (P) ; l'IA de Vie muette (`#ia-muette`) : UNE carte « Vie · son IA ne répond pas » pour ses deux routines, « Réessayer » les rallume sans tour | P, i, A |
 | J70 | Les réponses dues | La boîte ajoutée : UNE carte d'accord « Je te dis quand un e-mail attend ta réponse… », « Oui » ; le soir (tout de suite ici), « Vie · 2 e-mails attendent ta réponse », une ligne par e-mail (expéditeur, objet, « depuis … »), ni la réponse déjà faite ni l'envoi en masse ; « Oui » : un tour qui ne lit que ces e-mails et écrit les brouillons, rien n'est envoyé ; l'interrupteur de la boîte (E-mail de l'agent) l'arrête | P, i (sans l'interrupteur : manuel), A |
 | J71 | Une offre de l'« Intelligente » | Vie en « Intelligente » ; une passe sur trois messages de la journée (`POST /v1/proactive/passes`, le petit modèle factice) pose UNE carte « Vie propose · Cadeau Léa », sa question, « Avec : une page » et la ligne ambre « Il te demandera ton accord avant de payer. » ; « Oui » : son travail démarre ; Vie avec « Santé » : aucune passe ne lit ses conversations (règle stricte, P) | P, i, A (le pont des parcours de l'app : celui des personnes a déjà les 2 cartes non demandées du jour de Vie, J70) |
+| J72 | « Garder ? » des réponses dues | La veille de la boîte allumée (sa fin par défaut à 2 jours sur le pont des parcours, 90 chez soi) : UNE carte « Le veilleur « Réponses dues · camille@proton.me » s'arrête le … Le garder 3 mois de plus ? », « Garder » / « Le laisser s'arrêter », jamais deux ; « Garder » : 90 jours de plus, la veille reste allumée, la ligne répondue « Garder · … » ; sans réponse à sa date : toujours allumée, la carte une fois de plus, poussée, sa date 14 jours plus tard ; encore sans réponse : « jusqu'à ce que tu l'arrêtes » ; « Le laisser s'arrêter » (le « Non » d'une app 1.0) : arrêtée à sa date, une ligne dans la Boîte, jamais redemandée (P) | P, i, A |
 
 **Ce que les parcours J32 et après ont trouvé (6/11)**
 

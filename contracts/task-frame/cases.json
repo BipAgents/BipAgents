@@ -49,7 +49,7 @@
    ],
    "bip_summary": "texts.<lang>.keep.<task>",
    "bip_detail": "the same sentence",
-   "bip_fix": "{kind, ref, name, variant: keep, ends_at (Unix seconds), title (the agent's shown name), text (= bip_summary), buttons (texts.<lang>.keep_buttons.<task>)}",
+   "bip_fix": "{kind (routine | watcher | replies: a mailbox's replies-due watch, a watcher's words, contracts/plans-sources `replies.keep`), ref, name, variant: keep, ends_at (Unix seconds), title (the agent's shown name), text (= bip_summary), buttons (texts.<lang>.keep_buttons.<task>)}",
    "when": "3 days before a default end (tools.default_end), once; never for an end the agent or the person gave. Unanswered at its date (Alex 24/11, B2): asked again once, pushed, its date 14 days later (`after.default_end`).",
    "placed": "As the fix card; not pushed the first time; its reminder at the default end is pushed (« Une demande attend ton accord »)."
   },

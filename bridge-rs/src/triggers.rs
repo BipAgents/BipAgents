@@ -269,18 +269,23 @@ pub struct Trigger {
 pub fn frame_view(config: &Config, t: &Trigger) -> Value {
     use crate::task_frame::{End, Task};
     let lang = crate::task_frame::lang_of_agent(config, &t.agent);
-    let end = match t.ends {
-        Some(at) => End::Date(at),
-        None if t.by == crate::plans::MAKER => End::Plan,
-        None => End::Never,
+    // a replies-due watch: its end and its « Garder ? » are its mailbox's (plans/sources.rs `keep_due`)
+    let replies = if replies_watch(t) { crate::plans::sources::frame_of(config, &t.id) } else { None };
+    let end = match (t.ends, &replies) {
+        (_, Some((at, _))) if *at > 0.0 => End::Date(*at),
+        (_, Some(_)) => End::Never,
+        (Some(at), None) => End::Date(at),
+        (None, None) if t.by == crate::plans::MAKER => End::Plan,
+        (None, None) => End::Never,
     };
+    let fix = replies.and_then(|(_, fix)| fix);
     let failures = t.runs.iter().rev().take_while(|r| !r.ok).count();
     json!({
         "owner": crate::task_frame::owner(config, &t.agent, None),
         "ends": crate::task_frame::ends_view(lang, Task::Routine, &end, crate::routines::zone(config)),
         "deliver": {"kind": "boite", "session_id": if t.session.is_empty() { Value::Null } else { json!(t.session) },
                     "title": null},
-        "failures": failures, "fix": null,
+        "failures": failures, "fix": fix,
     })
 }
 

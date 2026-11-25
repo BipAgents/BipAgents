@@ -41,6 +41,7 @@ use serde_json::{json, Value};
 use super::offers::{self, Offer};
 use super::{fill, lang_of, person_zone, shown_agent, EventRef, Moment, Plan};
 use crate::app::AppState;
+use crate::background_turn::{Delivery, Pipeline};
 use crate::config::{AgentConfig, Config};
 use crate::tools_knowledge as tk;
 use crate::web::{self, ApiResult, HttpError};
@@ -89,11 +90,21 @@ pub struct Settings {
     pub due_hours: f64,
     /// A Google or CalDAV event a plan follows is read again this often.
     pub follow_seconds: f64,
+    /// A mailbox's replies-due watch: its default end, this many days after its « Oui » (« Garder ? » before it);
+    /// short on the journeys' bridge (J72).
+    pub replies_end_days: f64,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { tick_seconds: 60.0, morning: Some((8, 0)), evening: Some((18, 0)), due_hours: 24.0, follow_seconds: 3600.0 }
+        Settings {
+            tick_seconds: 60.0,
+            morning: Some((8, 0)),
+            evening: Some((18, 0)),
+            due_hours: 24.0,
+            follow_seconds: 3600.0,
+            replies_end_days: crate::task_frame::DEFAULT_END_DAYS,
+        }
     }
 }
 
@@ -121,6 +132,7 @@ impl Settings {
             evening: clock_of(table.get("evening"), d.evening),
             due_hours: f("due_hours", d.due_hours, 0.0, 24.0 * 14.0),
             follow_seconds: f("follow_seconds", d.follow_seconds, 0.5, 86400.0),
+            replies_end_days: f("replies_end_days", d.replies_end_days, 0.01, 3650.0),
         }
     }
 }
@@ -169,8 +181,23 @@ pub struct Mailbox {
     pub asked_at: f64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub trigger: Option<String>,
+    /// Its end (Unix seconds; 0: « jusqu'à ce que tu l'arrêtes »): by default `replies_end_days` after its « Oui »,
+    /// « Garder ? » before it, never stopped there without its person (Alex's B2); its person's own (`person_end`):
+    /// it stops there.
     #[serde(default)]
     pub ends: f64,
+    /// « Le laisser s'arrêter » answered: `ends` is its person's, reached at its date.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub person_end: bool,
+    /// « Garder ? » asked for this end.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub keep_asked: bool,
+    /// « Garder ? » asked again at its end (14 days later): once, never more.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub reminded: bool,
+    /// Its card « Garder ? » waiting (task_frame.rs `bip-fix-<id>`, variant keep, kind `replies`): one per mailbox.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fix: Option<crate::task_frame::Fix>,
 }
 
 pub const ASKED: &str = "asked";
@@ -1091,7 +1118,7 @@ async fn consent_cards(state: &AppState, now: f64) {
                     asks,
                     asked_at: now,
                     trigger: None,
-                    ends: 0.0,
+                    ..Mailbox::default()
                 });
             }),
             Err((why, _)) => {
@@ -1104,7 +1131,7 @@ async fn consent_cards(state: &AppState, now: f64) {
 // -- the replies-due watch -------------------------------------------------------------------------------------------------------
 
 /// Its mailbox's replies-due watch on: a trigger of the bridge (triggers.rs `REPLIES`, kind mail, its headers only),
-/// on at once, ending in 90 days. Its id.
+/// on at once, its default end in 90 days (`replies_end_days`: « Garder ? » before it, `keep_due`). Its id.
 pub fn watch_on(config: &Config, agent: &str, account: &str) -> Result<String, String> {
     let accounts = crate::mailbox::of(config).read().map_err(|e| e.to_string())?;
     let found = accounts.iter().find(|a| tk::str_or_empty(a.get("id")) == account).ok_or("no such mailbox")?;
@@ -1136,27 +1163,33 @@ pub fn watch_on(config: &Config, agent: &str, account: &str) -> Result<String, S
         }
     };
     let now = py::time_time();
-    let ends = trigger.ends.unwrap_or(now + crate::task_frame::DEFAULT_END_DAYS * DAY);
-    change(config, |s| {
-        let asks = s.mailboxes.iter().find(|m| m.account == account).map(|m| m.asks).unwrap_or(0);
+    let ends = trigger.ends.unwrap_or(now + config.plans_sources.replies_end_days * DAY);
+    // on (again): a new period; a « Garder ? » still waiting goes
+    let old = change(config, |s| {
+        let before = s.mailboxes.iter().find(|m| m.account == account).cloned().unwrap_or_default();
         s.mailboxes.retain(|m| m.account != account);
         s.mailboxes.push(Mailbox {
             account: account.to_string(),
             agent: agent.to_string(),
             address: address.clone(),
             state: ON.into(),
-            asks,
+            asks: before.asks,
             asked_at: now,
             trigger: Some(trigger.id.clone()),
             ends,
+            ..Mailbox::default()
         });
+        before.fix
     });
+    if let Some(fix) = old {
+        crate::task_frame::withdraw(config, &fix.id);
+    }
     tracing::info!(target: "bipbridge::plans", agent, trigger = %trigger.id, "replies due watched");
     Ok(trigger.id)
 }
 
-/// Its watch off (`state`: `off`, or `declined`): the trigger, every header of the mailbox and its replies card still
-/// waiting go.
+/// Its watch off (`state`: `off`, or `declined`): the trigger, every header of the mailbox, its replies card and its
+/// « Garder ? » still waiting go.
 pub fn watch_off(config: &Config, account: &str, state: &str) {
     let known = load(config).mailboxes.into_iter().find(|m| m.account == account);
     if let Some(t) = known.as_ref().and_then(|m| m.trigger.clone()) {
@@ -1178,17 +1211,26 @@ pub fn watch_off(config: &Config, account: &str, state: &str) {
             offers::change(config, |s| s.offers.retain(|o| !(o.source == REPLIES && o.kind == DRAFT && o.mailbox == address)));
         }
     }
-    change(config, |s| {
+    let card = change(config, |s| {
         s.mails.retain(|m| m.account != account);
         match s.mailboxes.iter_mut().find(|m| m.account == account) {
             Some(m) => {
                 m.state = state.to_string();
                 m.trigger = None;
                 m.ends = 0.0;
+                (m.person_end, m.keep_asked, m.reminded) = (false, false, false);
+                m.fix.take()
             }
-            None => s.mailboxes.push(Mailbox { account: account.into(), state: state.into(), ..Mailbox::default() }),
+            None => {
+                s.mailboxes.push(Mailbox { account: account.into(), state: state.into(), ..Mailbox::default() });
+                None
+            }
         }
     });
+    // its « Garder ? » with it
+    if let Some(fix) = card {
+        crate::task_frame::withdraw(config, &fix.id);
+    }
 }
 
 static ROBOT: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
@@ -1829,29 +1871,195 @@ pub fn mailboxes_gone(config: &Config) -> Vec<String> {
     gone
 }
 
-/// A watch past its default end (90 days) goes on « jusqu'à ce que tu l'arrêtes »: never stopped without the person
-/// (Alex's B2, 24/11, alex-choices-1-1). Returns the mailboxes whose end was taken away. (Its « Garder ? » card, as a
-/// routine's, is not there yet.)
-pub fn keep_past_end(config: &Config, now: f64) -> Vec<String> {
-    if !load(config).mailboxes.iter().any(|m| m.state == ON && m.ends > 0.0 && now > m.ends) {
+// -- « Garder ? » ------------------------------------------------------------------------------------------------------
+
+/// What the keep clock found for a mailbox's watch (`keep_due`), done by `reconcile`.
+#[derive(Debug, Clone, PartialEq)]
+pub enum KeepDue {
+    /// Its card « Garder ? » to place (task_frame.rs `raise`), pushed when `push` (the reminder at its end, its words
+    /// `line`).
+    Raise { agent: String, run_id: String, line: String, push: bool },
+    /// Its person's end reached (« Le laisser s'arrêter »): switched off, one Boîte line, not pushed.
+    End { agent: String, account: String, name: String, ends: f64 },
+}
+
+/// A watch's name, as its trigger and its cards say it (« Réponses dues · {boîte} »).
+pub fn watch_name(config: &Config, m: &Mailbox) -> String {
+    fill(texts(lang_of(config, &m.agent)).watch_name, &[("mailbox", &m.address)])
+        .chars()
+        .take(crate::triggers::NAME_MAX)
+        .collect()
+}
+
+/// A mailbox's watch never stops at its default end without its person (Alex's B2, 24/11; « Garder ? dans la 1.1 »,
+/// 25/11), as a watcher's (task_frame.rs): `KEEP_ASK_DAYS` before, ONE card « Garder ? » (not pushed); unanswered at
+/// its date, it goes on and the card is asked once more, pushed, its date `REMIND_DAYS` later; unanswered again, on
+/// « jusqu'à ce que tu l'arrêtes », the card gone. Paused (its trigger), its end waits. « Le laisser s'arrêter »
+/// (`person_end`): it ends at its date. The state changes are made here, under the store's lock; what to place and
+/// say is returned.
+pub fn keep_due(config: &Config, now: f64) -> Vec<KeepDue> {
+    use crate::task_frame::{self as tf, Fix, Overdue, Task, KEEP, KEEP_ASK_DAYS, REMIND_DAYS};
+    let store = load(config);
+    if !store.mailboxes.iter().any(|m| m.state == ON && m.ends > 0.0) {
         return Vec::new();
     }
+    let paused: Vec<String> = crate::triggers::load(config)
+        .triggers
+        .into_iter()
+        .filter(|t| crate::triggers::replies_watch(t) && !t.enabled)
+        .map(|t| t.id)
+        .collect();
+    let zone = crate::routines::zone(config);
+    let mut out = Vec::new();
+    let mut withdrawn: Vec<String> = Vec::new();
     change(config, |s| {
-        let mut kept = Vec::new();
-        for m in s.mailboxes.iter_mut().filter(|m| m.state == ON && m.ends > 0.0 && now > m.ends) {
-            m.ends = 0.0;
-            kept.push(m.account.clone());
+        for m in s.mailboxes.iter_mut().filter(|m| m.state == ON && m.ends > 0.0) {
+            let on = !m.trigger.as_ref().is_some_and(|t| paused.contains(t));
+            let lang = tf::lang_of_agent(config, &m.agent);
+            if m.person_end {
+                if now > m.ends {
+                    withdrawn.extend(m.fix.take().map(|f| f.id));
+                    let name = watch_name(config, m);
+                    out.push(KeepDue::End { agent: m.agent.clone(), account: m.account.clone(), name, ends: m.ends });
+                }
+                continue;
+            }
+            if !on && m.ends < now {
+                // paused past its end: it waits, `KEEP_ASK_DAYS` from now each time (it reads nothing while paused)
+                m.ends = now + KEEP_ASK_DAYS * DAY;
+            }
+            let overdue = if on { tf::overdue(Some(m.ends), &m.fix, m.reminded, now) } else { Overdue::Wait };
+            match overdue {
+                Overdue::Wait => {}
+                Overdue::Remind => {
+                    // unanswered at its date: on, asked once more, pushed (B2)
+                    withdrawn.extend(m.fix.take().map(|f| f.id));
+                    let fix = Fix { id: py::token_hex(6), at: now, variant: KEEP.into(), ..Fix::default() };
+                    let run_id = format!("{}{}", tf::RUN_PREFIX, fix.id);
+                    m.ends = now + REMIND_DAYS * DAY;
+                    (m.fix, m.keep_asked, m.reminded) = (Some(fix), true, true);
+                    let name = watch_name(config, m);
+                    let line = tf::keep_sentence(lang, Task::Watcher, &name, &tf::day_words(lang, m.ends, zone));
+                    out.push(KeepDue::Raise { agent: m.agent.clone(), run_id, line, push: true });
+                }
+                Overdue::Forever => {
+                    // unanswered again: on until its person stops it, nothing more pushed (B2)
+                    withdrawn.extend(m.fix.take().map(|f| f.id));
+                    (m.ends, m.keep_asked, m.reminded) = (0.0, false, false);
+                    tracing::info!(target: "bipbridge::plans", agent = %m.agent,
+                                   "replies watch's « Garder ? » unanswered twice: on until its person stops it");
+                    continue;
+                }
+            }
+            let asks = !m.keep_asked && m.fix.is_none() && m.ends - now <= KEEP_ASK_DAYS * DAY && (m.ends > now || !on);
+            if asks {
+                let fix = Fix { id: py::token_hex(6), at: now, variant: KEEP.into(), ..Fix::default() };
+                let run_id = format!("{}{}", tf::RUN_PREFIX, fix.id);
+                (m.fix, m.keep_asked) = (Some(fix), true);
+                out.push(KeepDue::Raise { agent: m.agent.clone(), run_id, line: String::new(), push: false });
+            }
         }
-        kept
+    });
+    for id in &withdrawn {
+        tf::withdraw(config, id);
+    }
+    out
+}
+
+/// The cards « Garder ? » waiting, of `agent` (None: every agent's), with their mailbox (task_frame.rs
+/// `pending_items`).
+pub fn keep_cards(config: &Config, agent: Option<&str>) -> Vec<(Mailbox, crate::task_frame::Fix)> {
+    if !path(config).exists() {
+        return Vec::new();
+    }
+    load(config)
+        .mailboxes
+        .into_iter()
+        .filter(|m| m.state == ON && agent.is_none_or(|a| a == m.agent))
+        .filter_map(|m| m.fix.clone().map(|f| (m, f)))
+        .collect()
+}
+
+/// Card `fix_id` of `agent` answered (`yes`: « Garder », 90 days more; else « Le laisser s'arrêter »: its end is the
+/// person's, reached at its date). Its mailbox's account; None: no such card.
+pub fn settle_keep(config: &Config, agent: &str, fix_id: &str, yes: bool) -> Option<String> {
+    if !path(config).exists() {
+        return None;
+    }
+    change(config, |s| {
+        let m = s.mailboxes.iter_mut().find(|m| m.agent == agent && m.fix.as_ref().is_some_and(|f| f.id == fix_id))?;
+        m.fix = None;
+        if yes {
+            if m.ends > 0.0 {
+                m.ends += crate::task_frame::KEEP_DAYS_MORE * DAY;
+            }
+            (m.keep_asked, m.reminded, m.person_end) = (false, false, false);
+        } else {
+            (m.person_end, m.reminded) = (true, false);
+        }
+        tracing::info!(target: "bipbridge::plans", agent, keep = yes, "replies watch's « Garder ? » answered");
+        Some(m.account.clone())
     })
 }
 
+/// A replies-due watch's trigger, as « Ce que tes agents font tout seuls » shows its frame (triggers.rs
+/// `frame_view`): its end (0: none) and its card « Garder ? » waiting (`bip-fix-<id>`).
+pub fn frame_of(config: &Config, trigger: &str) -> Option<(f64, Option<String>)> {
+    if !path(config).exists() {
+        return None;
+    }
+    load(config).mailboxes.into_iter().find(|m| m.state == ON && m.trigger.as_deref() == Some(trigger)).map(|m| {
+        (m.ends, m.fix.map(|f| format!("{}{}", crate::task_frame::RUN_PREFIX, f.id)))
+    })
+}
+
+/// Its person's end reached: the watch off (its headers, its cards), one Boîte line, not pushed (« Le veilleur « … »
+/// s'est arrêté comme prévu (…). », validated); never asked for again (`off`: no consent card).
+async fn ended(state: &AppState, agent: &str, account: &str, name: &str, ends: f64) {
+    let config = state.config();
+    watch_off(&config, account, OFF);
+    tracing::info!(target: "bipbridge::plans", agent, "replies watch at its person's end: stopped");
+    let Some(agent) = config.agent(Some(agent)).cloned() else { return };
+    let lang = crate::task_frame::lang_of_agent(&config, &agent.name);
+    let zone = crate::routines::zone(&config);
+    let (task, date) = (crate::task_frame::Task::Watcher, crate::task_frame::End::Date(ends));
+    let end = crate::task_frame::end_words(lang, task, &date, zone);
+    let line = crate::task_frame::ended_line(lang, task, name, &end);
+    let pipeline = Pipeline::of(state);
+    let session = pipeline.tip(&agent, "main").await;
+    let delivery = Delivery {
+        agent,
+        session,
+        key: format!("replies-end:{account}:{}", ends as i64),
+        title: name.to_string(),
+        text: line,
+        as_written: false,
+        run_id: None,
+        notify: false,
+        files: Vec::new(),
+    };
+    pipeline.deliver(&delivery).await;
+}
+
 /// The watches that stopped (their trigger deleted, paused, the mailbox no longer the agent's): their headers
-/// forgotten. One past its default end goes on (`keep_past_end`).
+/// forgotten. Their « Garder ? » (`keep_due`).
 async fn reconcile(state: &AppState) {
     let config = state.config();
     let now = py::time_time();
-    keep_past_end(&config, now);
+    let due = {
+        let config = config.clone();
+        tokio::task::spawn_blocking(move || keep_due(&config, now)).await.unwrap_or_default()
+    };
+    for d in due {
+        match d {
+            KeepDue::Raise { agent, run_id, line, push } => {
+                if let Some(agent) = config.agent(Some(&agent)).cloned() {
+                    crate::task_frame::raise(state, &agent, &run_id, &line, push).await;
+                }
+            }
+            KeepDue::End { agent, account, name, ends } => ended(state, &agent, &account, &name, ends).await,
+        }
+    }
     let store = load(&config);
     if !store.mailboxes.iter().any(|m| m.state == ON) {
         return;

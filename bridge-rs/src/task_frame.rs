@@ -29,6 +29,8 @@
 //!
 //! Kept with each one, in today's files: `routines.json` (each routine's `frame`, `approx`), `connectors.json` (a
 //! watcher's `watch.until`, `watch.once`, `watch.default_end` and its connector's `frame`), `triggers.json` (`ends`).
+//! A mailbox's replies-due watch (a trigger of the bridge) keeps its end and its « Garder ? » in plans-sources.json
+//! (plans/sources.rs `keep_due`): the same card, kind `replies`, a watcher's words.
 //! The clock: `tick`, from the routines' scheduler.
 //!
 //! No Python counterpart.
@@ -51,6 +53,8 @@ pub const RUN_PREFIX: &str = "bip-fix-";
 pub const KIND: &str = "task_fix";
 pub const REPAIR: &str = "repair";
 pub const KEEP: &str = "keep";
+/// `bip_fix.kind` of a mailbox's replies-due watch's « Garder ? » (plans/sources.rs `keep_due`; its words a watcher's).
+pub const REPLIES_KIND: &str = "replies";
 /// The one card of an agent whose AI doesn't answer (Alex 24/11, tf-carte-commune-ia-eteinte B): its routines stopped
 /// by it share it, one card for the agent instead of one per routine.
 pub const AI: &str = "ai";
@@ -703,6 +707,8 @@ pub fn owner(config: &Config, agent: &str, by: Option<&str>) -> Value {
 /// What a card is about.
 pub struct About<'a> {
     pub task: Task,
+    /// `bip_fix.kind` when it is not the task's own (`REPLIES_KIND`).
+    pub kind: Option<&'a str>,
     pub agent: &'a str,
     /// The routine's or the watcher's id.
     pub id: &'a str,
@@ -722,8 +728,8 @@ pub fn card_item(config: &Config, about: &About) -> Dict {
     let keep = fix.variant == KEEP;
     let (summary, detail, bip) = if keep {
         let sentence = keep_sentence(lang, task, &name, &day_words(lang, about.ends_at.unwrap_or(fix.at), zone));
-        let bip = json!({"kind": task.key(), "ref": about.id, "name": name, "variant": KEEP, "ends_at": about.ends_at,
-                         "title": who, "text": sentence, "buttons": keep_buttons(lang, task)});
+        let bip = json!({"kind": about.kind.unwrap_or(task.key()), "ref": about.id, "name": name, "variant": KEEP,
+                         "ends_at": about.ends_at, "title": who, "text": sentence, "buttons": keep_buttons(lang, task)});
         (sentence.clone(), sentence, bip)
     } else {
         let since = if fix.since > 0.0 { fix.since } else { fix.at };
@@ -823,9 +829,25 @@ pub fn pending_items(config: &Config, agent: Option<&str>) -> Vec<Dict> {
         }
         if let Some(fix) = &conn.frame.fix {
             let ends_at = conn.watch.as_ref().and_then(|w| w.until);
-            let about = About { task: Task::Watcher, agent: &name, id: &conn.id, name: &conn.name, fix, ends_at };
+            let about =
+                About { task: Task::Watcher, kind: None, agent: &name, id: &conn.id, name: &conn.name, fix, ends_at };
             items.push((fix.at, card_item(config, &about)));
         }
+    }
+    // a mailbox's replies-due watch's « Garder ? » (plans/sources.rs): a watcher's words, its own kind
+    for (m, fix) in crate::plans::sources::keep_cards(config, agent) {
+        let name = crate::plans::sources::watch_name(config, &m);
+        let id = m.trigger.clone().unwrap_or_else(|| m.account.clone());
+        let about = About {
+            task: Task::Watcher,
+            kind: Some(REPLIES_KIND),
+            agent: &m.agent,
+            id: &id,
+            name: &name,
+            fix: &fix,
+            ends_at: Some(m.ends),
+        };
+        items.push((fix.at, card_item(config, &about)));
     }
     items.sort_by(|a, b| a.0.total_cmp(&b.0));
     items.into_iter().map(|(_, item)| item).collect()
@@ -833,7 +855,8 @@ pub fn pending_items(config: &Config, agent: Option<&str>) -> Vec<Dict> {
 
 /// The card of routine `r`.
 pub fn routine_card(config: &Config, r: &Routine, fix: &Fix) -> Dict {
-    let about = About { task: Task::Routine, agent: &r.agent, id: &r.id, name: &r.name, fix, ends_at: r.frame.until };
+    let about =
+        About { task: Task::Routine, kind: None, agent: &r.agent, id: &r.id, name: &r.name, fix, ends_at: r.frame.until };
     card_item(config, &about)
 }
 
@@ -970,6 +993,11 @@ pub fn settle(config: &Config, agent: &str, fix_id: &str, yes: bool) -> Option<S
     })
     .ok()
     .flatten()
+    // a mailbox's replies-due watch's « Garder ? » (its id: the mailbox's account; never a repair)
+    .or_else(|| {
+        crate::plans::sources::settle_keep(config, agent, fix_id, yes)
+            .map(|account| Settled { task: Task::Watcher, id: account, variant: KEEP.into(), yes })
+    })
 }
 
 /// `POST /v1/approve` for a card `bip-fix-<id>`: « Réparer » / « Garder » (once, repair, keep; session and always mean
