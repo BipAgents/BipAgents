@@ -33,11 +33,12 @@
 //! No Python counterpart.
 
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{LazyLock, Mutex};
 
 use chrono::TimeZone;
 use chrono_tz::Tz;
 use serde::{Deserialize, Serialize};
+use regex::Regex;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
@@ -191,6 +192,197 @@ pub fn subject_of(offer: &Offer) -> &str {
         &offer.subject
     }
 }
+
+/// The words that make an offer one of buying something, in the apps' five languages (folded: no accents, lowercase),
+/// at a word's start: buying, a basket, a shop, a cheap find. Not « compr… » alone: French « comprendre ». Not a price
+/// alone (« le prix du contrôle technique », « je compare les prix de l'électricité »: `PRICE_WORDS`).
+const SHOPPING_WORDS: &[&str] = &["achet", "achat", "commander", "panier", "magasin", "boutique", "soldes", "buy",
+    "purchas", "shop", "basket", "cheap", "bargain", "discount", "kauf", "einkauf", "bestel", "warenkorb", "gunstig",
+    "billig", "comprar", "compra", "barato", "rebaja", "kopen", "gekocht", "aankoop", "winkel", "goedkoop", "aanbieding",
+    "korting"];
+/// Short Dutch words that `SHOPPING_WORDS` can't take as starts (« koop » would take German « Kooperation »).
+const SHOPPING_WHOLE_WORDS: &[&str] = &["koop", "koopt", "kocht"];
+/// Words `SHOPPING_WORDS` would take that are not buying (« basketball », « Einkaufsliste »: a list, like « courses »).
+const NOT_SHOPPING_WORDS: &[&str] = &["basketbal", "einkaufsliste", "einkaufszettel", "shoppinglist", "boutiquehotel"];
+/// A price is buying only beside « the best » (« les meilleurs téléphones avec leurs prix », the bench).
+const PRICE_WORDS: &[&str] = &["prix", "price", "preis", "precio", "prijs", "prijz"];
+const BEST_WORDS: &[&str] = &["meilleur", "best", "mejor", "goedkoopst"];
+
+/// What says that nothing will be bought (« Rien ne sera acheté », « sans rien acheter », « nothing is bought »), or
+/// is a list (« shopping list », « lista de la compra »), taken out before the words are looked for; and what says a
+/// cheap find (« pas cher »).
+static NOTHING_BOUGHT: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(concat!(
+        r"\b(rien|nothing|nichts|nada|ne|sans|without|ohne|sin|never|jamais|niets|niks|zonder|nooit)\W+(\w+\W+){0,3}?",
+        r"(achet|buy|bought|kauf|gekauft|compr|koop|kocht|kopen)\w*",
+        r"|\b(shopping|grocery) lists?\b|\blistas? de (la )?compras?\b"
+    ))
+    .unwrap()
+});
+static CHEAP_FIND: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\b(pas cher|pas chere|pas chers|moins cher|moins chere|bon marche)\b").unwrap());
+
+/// The subject an offer is also counted by, whatever its kind (bench 1.1 problem 7, the choice of 24/11): « buying
+/// something ». Two « Non merci » to it in a row quiet it for `QUIET_DAYS`: a search « où acheter X », a page or a
+/// free-form offer about buying is then not offered either (the bench: after two declined « où acheter » searches,
+/// the agents offered them again as pages or as free-form ones, and the bridge let them through; on the new bench the
+/// labels often said « je te cherche des chaussures livrables avant dimanche » or « les meilleurs téléphones avec leurs
+/// prix »: its words and its prompt are read, what says nothing is bought aside). None: no such subject (counted by
+/// its kind, family and topic only, as before).
+pub fn theme_of(offer: &Offer) -> Option<&'static str> {
+    if offer.family == "shopping" || offer.kind == "cart" {
+        return Some(SHOPPING);
+    }
+    let text = [offer.label.as_str(), offer.about.as_str(), offer.subject.as_str(), offer.prompt.as_str()].join(" ");
+    let text = NOTHING_BOUGHT.replace_all(&folded(&text), " ").into_owned();
+    let words: Vec<&str> = text.split_whitespace().collect();
+    let starts = |list: &[&str]| words.iter().any(|w| list.iter().any(|s| w.starts_with(s)));
+    let buying = words.iter().any(|w| {
+        (SHOPPING_WORDS.iter().any(|s| w.starts_with(s)) && !NOT_SHOPPING_WORDS.iter().any(|n| w.starts_with(n)))
+            || SHOPPING_WHOLE_WORDS.contains(w)
+    });
+    (buying || CHEAP_FIND.is_match(&text) || (starts(PRICE_WORDS) && starts(BEST_WORDS))).then_some(SHOPPING)
+}
+
+/// An offer whose question is itself to book, pay or buy (« Je réserve la table de 8 chez … ? », the Spark on
+/// proactive-tune's bench; « Want me to book… », « Soll ich … reservieren? », « Tu veux que je la réserve ? », « Zal ik …
+/// reserveren? », the review of 24/11): never an offer (design §3b.3, the critical kinds), only a later step with its
+/// own card. The agent's own verb (first person, or after « shall I », « soll ich », « quieres que »…), never a noun
+/// (« el pago del alquiler »). On `folded` text.
+static BOOKS_PAYS_BUYS: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(concat!(
+        // fr
+        r"\bje( (te|t|vous|la|le|les|l|lui|leur|en))* (reserve|paie|paye|commande|achete)\b|\bj achete\b",
+        r"|\bje (peux|vais|dois|pourrais)( (te|t|vous|la|le|les|l|lui|en))* (reserver|payer|regler|commander|acheter)\b",
+        // en
+        r"|\b(i ll|i will|shall i|should i|can i|could i|may i|want me to|like me to|let me|i can)( go ahead and| just)? ",
+        r"(book|pay|order|buy|reserve|purchase)\b",
+        // de
+        r"|\bich( (dir|ihnen|es|ihn|sie|den|die|das))* (buche|reserviere|bezahle|zahle|bestelle|kaufe)\b",
+        // es
+        r"|^(reservo|pago|compro)\b|\b(te|lo|la|los|las|le|les|se|yo)( (lo|la|los|las))? (reservo|pago|compro)\b",
+        r"|\bque( (te|lo|la|los|las|se))* (reserve|pague|compre)\b",
+        r"|\b(puedo|quieres que|voy a)( (te|lo|la|los|las))? (reserv|pag|compr)ar\w*",
+        // nl
+        r"|\bik( (het|hem|ze|de|je|jou))* (boek|reserveer|betaal|bestel|koop)\b"
+    ))
+    .unwrap()
+});
+
+/// The same for sending (a mail, a message, on the person's behalf), in the agent's own words. What goes to the person
+/// themselves is not (`TO_THE_PERSON`).
+static SENDS: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(concat!(
+        r"\bje( (te|t|vous|la|le|les|l|lui|leur|en))* envoie\b|\bj envoie\b|\bje (peux|vais)( \w+){0,3}? envoyer\b",
+        r"|\b(i ll|i will|shall i|should i|can i|could i|may i|want me to|like me to|let me|i can)( go ahead and| just)? ",
+        r"(send|mail|email)\b",
+        r"|\bich( \w+){0,2}? (sende|schicke|verschicke)\b",
+        r"|^(envio|mando)\b|\b(te|lo|la|los|las|le|les|se|yo)( (lo|la|los|las))? (envio|mando)\b",
+        r"|\b(puedo|quieres que|voy a)( \w+){0,2}? (enviar|mandar)\w*",
+        r"|\bik( \w+){0,2}? (stuur|verstuur|verzend)\b"
+    ))
+    .unwrap()
+});
+
+/// What a sending offer sends to the person themselves (« Je t'envoie un rappel ? », « Shall I send you a reminder? »):
+/// the bridge's own reminder or message, nothing sent on their behalf.
+static TO_THE_PERSON: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(concat!(
+        r"\b(je t envoie|je te l envoie|je te les envoie|je t en envoie|send you|send it to you|send them to you|dir|ihnen",
+        r"|te envio|te lo envio|te la envio|te los envio|te las envio|te mando|te lo mando|te la mando|je sturen|jou sturen",
+        r"|het je|stuur ik je)\b"
+    ))
+    .unwrap()
+});
+
+/// A reminder or a notice (« Zal ik je een herinnering sturen? », « Je peux t'envoyer un rappel ? ») goes to the person
+/// when it is said to them (`TO_YOU`): one to someone else (« Shall I send a reminder to Paul? », « J'envoie un rappel
+/// à tes invités ? ») is sent on their behalf (the verification of 25/11: any reminder word let it through).
+static REMINDER: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(concat!(
+        r"\b(rappel|rappels|reminder|reminders|erinnerung|recordatorio|herinnering|notification|notificacion",
+        r"|benachrichtigung|melding|alerte|alert)\b"
+    ))
+    .unwrap()
+});
+static TO_YOU: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(concat!(
+        r"\b(te|toi|vous|you|dir|dich|ihnen|ti)\b|\bt (envoie|envoyer|renvoie|renvoyer)\b",
+        r"|\b(zal|kan|mag|moet|stuur) ik (je|jou|u)\b|\bik (stuur|verstuur) (je|jou|u)\b"
+    ))
+    .unwrap()
+});
+
+/// Whether a sending offer's words send to the person themselves (`TO_THE_PERSON`, or a reminder said to them).
+fn to_the_person(folded_label: &str) -> bool {
+    TO_THE_PERSON.is_match(folded_label) || (REMINDER.is_match(folded_label) && TO_YOU.is_match(folded_label))
+}
+
+/// German and Dutch put the verb at the end (« Soll ich den Tisch für Samstag reservieren? », « Zal ik de tafel …
+/// reserveren? »): their modal's lead, the verbs that book, pay or buy, those that send, and the words that start
+/// another clause or subject before the verb (« Soll ich schauen, wo du … kaufen kannst? »: the person buys).
+struct Modal {
+    leads: &'static [&'static str],
+    books: &'static [&'static str],
+    sends: &'static [&'static str],
+    stops: &'static [&'static str],
+}
+const MODALS: [Modal; 2] = [
+    Modal {
+        leads: &["soll ich", "kann ich", "darf ich", "dass ich"],
+        books: &["buchen", "reservieren", "bezahlen", "zahlen", "bestellen", "kaufen", "uberweisen", "buche", "reserviere",
+                 "bezahle", "zahle", "bestelle", "kaufe", "uberweise"],
+        sends: &["senden", "schicken", "verschicken", "sende", "schicke", "verschicke"],
+        stops: &["wo", "wie", "was", "ob", "du", "ihr", "man", "wann", "welche", "welchen", "welcher", "welches", "wer",
+                 "damit", "wenn", "falls"],
+    },
+    Modal {
+        leads: &["zal ik", "kan ik", "moet ik", "mag ik", "dat ik"],
+        books: &["boeken", "reserveren", "betalen", "bestellen", "kopen"],
+        sends: &["sturen", "versturen", "verzenden", "mailen", "opsturen"],
+        stops: &["waar", "hoe", "wat", "of", "wanneer", "welke", "welk", "wie", "om", "jij", "u", "men", "als"],
+    },
+];
+/// Words between a modal's lead and its verb, at most.
+const MODAL_GAP: usize = 8;
+
+/// `MODALS` in one clause: (books, pays or buys; sends).
+fn modal_acts(clause: &str) -> (bool, bool) {
+    let words: Vec<&str> = clause.split_whitespace().collect();
+    let (mut books, mut sends) = (false, false);
+    for modal in &MODALS {
+        for i in 0..words.len().saturating_sub(1) {
+            if !modal.leads.contains(&format!("{} {}", words[i], words[i + 1]).as_str()) {
+                continue;
+            }
+            for w in words.iter().skip(i + 2).take(MODAL_GAP + 1) {
+                if modal.stops.contains(w) {
+                    break;
+                }
+                books |= modal.books.contains(w);
+                sends |= modal.sends.contains(w);
+            }
+        }
+    }
+    (books, sends)
+}
+
+/// The refusal of an offer that would book, pay, buy or send itself (`BOOKS_PAYS_BUYS`, `SENDS`, `MODALS`), None
+/// otherwise. Read clause by clause (« Soll ich schauen, wo du … kaufen kannst? »: another subject after the comma).
+pub fn acts_itself(label: &str) -> Option<String> {
+    let acts = label.split([',', ';', ':', '?', '!', '.', '¿', '¡']).map(folded).any(|clause| {
+        let (books, sends) = modal_acts(&clause);
+        books || BOOKS_PAYS_BUYS.is_match(&clause)
+            || ((sends || SENDS.is_match(&clause)) && !to_the_person(&folded(label)))
+    });
+    acts.then(|| {
+        not_done("the offer itself can't be to book, pay, buy or send: offer the step before it (find, compare, prepare) \
+and say the booking, payment or sending will ask its own card.")
+    })
+}
+
+/// `theme_of`'s one subject, as the learning counts it (a key of its own beside the kinds: « theme:shopping »).
+pub const SHOPPING: &str = "theme:shopping";
 
 /// A « Oui » whose work is not done yet (a route, an event, the agent's turn): done again after a restart (review,
 /// remark), `MAX_TRIES` times at most.
@@ -502,14 +694,20 @@ pub fn learning_line(store: &Store, agent: &str, kinds: &[&'static str], now: f6
             accepts.push(plural(kind));
         }
     }
-    match (declines.is_empty(), accepts.is_empty()) {
+    let line = match (declines.is_empty(), accepts.is_empty()) {
         (true, true) => None,
         (false, true) => Some(format!("Your person often declines: {}.", declines.join(", "))),
         (true, false) => Some(format!("Your person often accepts: {}.", accepts.join(", "))),
         (false, false) => {
             Some(format!("Your person often declines: {}. Often accepts: {}.", declines.join(", "), accepts.join(", ")))
         }
+    };
+    // buying things declined twice (`theme_of`): whatever the kind, told before it tries
+    if !quiet(store, agent, SHOPPING, now) {
+        return line;
     }
+    let shopping = "They declined your offers to look for things to buy: offer nothing about buying for now.";
+    Some(line.map(|l| format!("{l} {shopping}")).unwrap_or_else(|| shopping.to_string()))
 }
 
 // -- the texts (contracts/offers/cases.json `texts`) -------------------------------------------------------------------
@@ -801,7 +999,10 @@ pub fn draft(arguments: &Dict, agent: &str, kinds: &[&str], person: Tz, now: f64
     if !kinds.contains(&kind.as_str()) {
         return Err(not_done(format!("you can't {} here; don't offer it.", can_not_words(&kind))));
     }
-    let about = plain(arguments.get("about"), "about", ABOUT_MAX).map_err(not_done)?;
+    // what it is about as models give it (proactive-tune's bench: 14 refusals): their `topic` when no `about`, either
+    // cut at a word to its length
+    let given = [arguments.get("about"), arguments.get("topic")].into_iter().flatten().map(|v| text_arg(Some(v))).find(|t| !t.is_empty());
+    let about = plain(given.map(|t| json!(super::shortened(&t, ABOUT_MAX))).as_ref(), "about", ABOUT_MAX).map_err(not_done)?;
     spec_of(&spec, agent, &about, kinds, person, now, LABEL_MAX)
 }
 
@@ -824,6 +1025,10 @@ pub fn spec_of(
         return Err(not_done(format!("you can't {} here; don't offer it.", can_not_words(&kind))));
     }
     let label = plain(spec.get("label"), "label", label_max).map_err(not_done)?;
+    // the bridge's own kinds (a reminder, a route, an event) never book, pay or send anything
+    if let Some(refused) = acts_itself(&label).filter(|_| !BY_BRIDGE.contains(&kind.as_str())) {
+        return Err(refused);
+    }
     let given_params = spec.get("params").filter(|p| !p.is_null());
     let mut until: Option<f64> = None;
     let (prompt, params, site) = if BY_BRIDGE.contains(&kind.as_str()) {
@@ -1030,6 +1235,12 @@ pub fn rule_refusal(store: &Store, offer: &Offer, now: f64) -> Option<String> {
             "Not done: your person said no to an offer about « {} » lately. Don't offer it again for now.",
             offer.about
         ));
+    }
+    if theme_of(offer).is_some_and(|theme| quiet(store, agent, theme, now)) {
+        return Some("Not done: your person said no thanks to your offers to look for things to buy lately: don't \
+offer buying anything for now, whatever the kind (a search, a page or another offer). It is not « Initiative » off: just \
+that, for a while."
+            .into());
     }
     if quiet(store, agent, &learn_key(offer), now) {
         return Some(format!(
@@ -1466,7 +1677,11 @@ pub fn answer(config: &Config, agent: &str, id: &str, yes: bool, now: f64) -> Op
     change(config, |s| {
         let at = s.offers.iter().position(|o| o.agent == agent && o.id == id && o.expires > now)?;
         let offer = s.offers.remove(at);
-        record(s, agent, &learn_key(&offer), subject_of(&offer), if yes { YES } else { NO }, now);
+        let outcome = if yes { YES } else { NO };
+        record(s, agent, &learn_key(&offer), subject_of(&offer), outcome, now);
+        if let Some(theme) = theme_of(&offer) {
+            record(s, agent, theme, subject_of(&offer), outcome, now);
+        }
         Some(offer)
     })
 }
@@ -1481,6 +1696,9 @@ pub fn expire(config: &Config, now: f64) -> Vec<Offer> {
         s.offers = kept;
         for o in &gone {
             record(s, &o.agent, &learn_key(o), subject_of(o), EXPIRED, now);
+            if let Some(theme) = theme_of(o) {
+                record(s, &o.agent, theme, subject_of(o), EXPIRED, now);
+            }
         }
         gone
     })
