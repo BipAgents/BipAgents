@@ -1110,7 +1110,7 @@ fn a3_a_default_end_never_stops_it_without_its_person() {
     let kept = routines::get(&config, &r.id).expect("gone at its default end without its person");
     let next = kept.frame.until.unwrap();
     assert!((next - (until + 60.0 + REMIND_DAYS * DAY)).abs() < 5.0, "{kept:?}");
-    assert!(line.starts_with("La routine « Météo » s'arrête le "), "{line}");
+    assert_eq!(line, "La routine « Météo » tourne depuis 3 mois. La garder ? Sans réponse, elle continue.");
     let items = pending_items(&config, Some("vie"));
     let [item] = items.as_slice() else { panic!("{items:?}") };
     assert_eq!(item["bip_fix"]["variant"], KEEP);
