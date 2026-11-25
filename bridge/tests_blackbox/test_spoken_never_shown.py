@@ -82,7 +82,7 @@ def test_a_report_kept_with_its_spoken_version_is_cleaned_at_start(bridges):
     escaped = SAY.replace("<", "&lt;").replace(">", "&gt;").replace("'", "&#x27;")
     long_words = "<li>Tuyau Geolia 25 m : 39,90 €</li>\n" * 150
     kept = {"t0123456789ab": (REPORT, "<li>Tuyau Geolia 25 m : 39,90 €</li>\n"),
-            "t0123456789ac": ("- Tuyau Geolia 25 m : 39,90 €\n" * 130, long_words)}
+            "t0123456789ac": (("- Tuyau Geolia 25 m : 39,90 €\n" * 130).rstrip(), long_words)}
     for job_id, (report, items) in kept.items():
         (folder / f"{job_id}.json").write_text(json.dumps({
             "id": job_id, "kind": "task", "agent": "wellness", "title": "Tickets", "prompt": "Retrouve mes tickets.",
