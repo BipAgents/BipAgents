@@ -115,6 +115,7 @@ def test_2_an_agent_whose_ai_does_not_answer_has_one_card_for_its_routines(bridg
     fix = card["bip_fix"]
     assert (fix["variant"], fix["kind"], fix["routines"]) == ("ai", "agent_ai", ["Courriels", "Météo"]), fix
     assert fix["title"] == "Wellness · its AI isn't answering" and fix["buttons"] == ["Try again", "Stop"]
+    assert fix["after"] == ["Its routines start again", "Stopped, on their page"], fix  # Alex 25/11, tf2-carte-ia-apres
     assert card["bip_summary"] == ("Wellness's AI isn't answering: its routines couldn't run (“Courriels”, “Météo”). "
                                    "Try again? (No: they stop.)")
     assert card["choices"] == ["once", "deny"]

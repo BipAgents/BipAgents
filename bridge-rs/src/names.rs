@@ -74,7 +74,7 @@ pub const NAMES: [Names; 4] = [
         task_paused: "Tâche de fond en pause",
         task_proposed: "Tâche de fond proposée",
         task_waiting: "Tâche de fond en attente",
-        task_waiting_why: "Pas assez de place sur ton serveur pour l’instant : elle partira toute seule dès qu’il y en aura. Tu peux aussi l’annuler.",
+        task_waiting_why: "Trop de choses tournent en ce moment : elle partira toute seule dès qu'il y aura de la place. Tu peux aussi l'annuler.",
         reminders: "Rappels",
         settings: "Réglages",
         mailboxes: "Boîtes mail",
@@ -100,7 +100,7 @@ pub const NAMES: [Names; 4] = [
         task_paused: "Background task paused",
         task_proposed: "Background task suggested",
         task_waiting: "Background task waiting",
-        task_waiting_why: "Not enough room on your server right now: it will go by itself as soon as there is. You can also cancel it.",
+        task_waiting_why: "Too much is running right now: it will start by itself as soon as there's room. You can also cancel it.",
         reminders: "Reminders",
         settings: "Settings",
         mailboxes: "Mailboxes",
@@ -126,7 +126,7 @@ pub const NAMES: [Names; 4] = [
         task_paused: "Hintergrundaufgabe pausiert",
         task_proposed: "Hintergrundaufgabe vorgeschlagen",
         task_waiting: "Hintergrundaufgabe wartet",
-        task_waiting_why: "Gerade nicht genug Platz auf deinem Server: Sie läuft von selbst los, sobald wieder Platz ist. Du kannst sie auch abbrechen.",
+        task_waiting_why: "Gerade läuft zu viel: sie startet von selbst, sobald wieder Platz ist. Du kannst sie auch abbrechen.",
         reminders: "Erinnerungen",
         settings: "Einstellungen",
         mailboxes: "Postfächer",
@@ -152,7 +152,7 @@ pub const NAMES: [Names; 4] = [
         task_paused: "Tarea en segundo plano en pausa",
         task_proposed: "Tarea en segundo plano propuesta",
         task_waiting: "Tarea en segundo plano en espera",
-        task_waiting_why: "Ahora no hay sitio suficiente en tu servidor: se pondrá en marcha sola en cuanto lo haya. También puedes cancelarla.",
+        task_waiting_why: "Ahora mismo hay demasiado en marcha: empezará sola en cuanto haya sitio. También puedes cancelarla.",
         reminders: "Recordatorios",
         settings: "Ajustes",
         mailboxes: "Buzones",
@@ -388,6 +388,27 @@ mod tests {
         for lang in ["en", "de", "es"] {
             assert_eq!(french_in(&localize(text, lang)), Vec::<&str>::new(), "{lang}");
         }
+    }
+
+    /// Alex 25/11 (texts lot 2, nt-tache-en-attente B): no « serveur » (wrong at home), a sentence that ends.
+    #[test]
+    fn a_long_wait_in_plain_words() {
+        assert_eq!(
+            names("fr").task_waiting_why,
+            "Trop de choses tournent en ce moment : elle partira toute seule dès qu'il y aura de la place. Tu peux aussi l'annuler."
+        );
+        assert_eq!(
+            names("en").task_waiting_why,
+            "Too much is running right now: it will start by itself as soon as there's room. You can also cancel it."
+        );
+        assert_eq!(
+            names("de").task_waiting_why,
+            "Gerade läuft zu viel: sie startet von selbst, sobald wieder Platz ist. Du kannst sie auch abbrechen."
+        );
+        assert_eq!(
+            names("es").task_waiting_why,
+            "Ahora mismo hay demasiado en marcha: empezará sola en cuanto haya sitio. También puedes cancelarla."
+        );
     }
 
     #[test]

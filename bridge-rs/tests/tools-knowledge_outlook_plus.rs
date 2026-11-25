@@ -394,6 +394,12 @@ async fn a_contact_created_then_changed_on_cards_by_the_level() {
     assert_eq!(card["bip_ok"]["kind"], "contacts_write", "{card}");
     assert!(card["bip_summary"].as_str().unwrap().contains("Nina Durand"), "{card}");
     assert!(card["bip_always"].is_string(), "{card}");
+    // its fields by their plain names in the agent's language (English here), never Microsoft's keys (Alex 25/11)
+    let lines = card["bip_detail"].as_str().unwrap();
+    assert!(lines.contains("Mobile: +33 6 00 00 00 01") && lines.contains("Company: Kerfy"), "{lines}");
+    for key in ["mobilePhone", "emailAddresses", "companyName", "categories", "birthday", "displayName"] {
+        assert!(!lines.contains(key), "{key} in {lines}");
+    }
     assert!(writes(&graph).is_empty(), "written with no « Oui »");
     let ((failed, said), _) = tokio::join!(tool(&app, "contacts_add", add, "h1"), common::answer_card(&app, "bip-ok-", "once"));
     assert!(!failed && said.contains("Added"), "{said}");
