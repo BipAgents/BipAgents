@@ -16,6 +16,7 @@ import socket
 import ssl
 import tempfile
 import threading
+import time
 from email.utils import parsedate_to_datetime
 from typing import Dict, List, Optional, Tuple
 
@@ -112,6 +113,9 @@ class FakeImap:
             if thread is not None and thread is not threading.current_thread():
                 thread.join(timeout=3)
         self.users: Dict[str, str] = {}
+        # what each connection did, for a failure to say (25/11): (seconds, generation, client port, event), the
+        # connections of an older generation too (a leftover shows with its own number)
+        self.trace: List[Tuple[float, int, int, str]] = []
         self.folders: Dict[str, List[Tuple[int, bytes]]] = {"INBOX": [], "Brouillons": [], "Sent": []}
         self.commands: List[str] = []
         self.appended: List[Tuple[str, str, bytes]] = []
@@ -165,16 +169,29 @@ class FakeImap:
             threading.Thread(target=self._session, args=(conn,), daemon=True).start()
 
     # -- one connection ---------------------------------------------------------------------------------------------
+    def _note(self, state, event: str) -> None:
+        self.trace.append((round(time.time(), 3), state["generation"], state["port"], event))
+
+    def report(self) -> dict:
+        """The counters and each connection's events, for an assert's message."""
+        return {"generation": self.generation, "idling": self.idling, "idles": self.idles, "trace": list(self.trace),
+                "commands": list(self.commands)}
+
     def _current(self, state) -> bool:
         """Whether this connection is of the generation now (not left over from the test before a reset)."""
         return state["generation"] == self.generation
 
     def _session(self, conn: socket.socket) -> None:
         stream = conn.makefile("rwb")
+        try:
+            port = conn.getpeername()[1]
+        except OSError:
+            port = 0
         state = {"user": None, "folder": None, "conn": conn, "stream": stream, "generation": self.generation,
-                 "thread": threading.current_thread()}
+                 "thread": threading.current_thread(), "port": port}
         with self._live_lock:
             self._live[id(state)] = state
+            self._note(state, "connect")
         try:
             self._send(state, b"* OK [CAPABILITY IMAP4rev1" + (b" STARTTLS" if self.starttls else b"")
                        + b"] fake IMAP ready\r\n")
@@ -202,6 +219,7 @@ class FakeImap:
         finally:
             with self._live_lock:
                 self._live.pop(id(state), None)
+                self._note(state, "close")
             for sock in {id(conn): conn, id(state["conn"]): state["conn"]}.values():
                 try:
                     sock.close()
@@ -249,6 +267,7 @@ class FakeImap:
             start = len(self.folders.get(folder, []))
             self._send(state, b"+ idling\r\n")
             with self._live_lock:
+                self._note(state, f"idle {folder}")
                 if not self._current(state):
                     return False
                 self.idles += 1
@@ -270,6 +289,7 @@ class FakeImap:
             finally:
                 # (a reset meanwhile counted it out already)
                 with self._live_lock:
+                    self._note(state, "idle end")
                     if self._current(state):
                         self.idling -= 1
             self._ok(state, tag, "IDLE terminated")

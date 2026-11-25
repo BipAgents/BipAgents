@@ -62,11 +62,24 @@ def replies(bridge, agent="coach"):
 
 def turn_on(bridge, fakes):
     """The consent card for the mailbox, answered « Oui »: its watch on, idling."""
-    assert wait_until(lambda: offer_cards(bridge, source="replies"), timeout=20)
+    assert wait_until(lambda: offer_cards(bridge, source="replies"), timeout=20), imap_state(fakes)
     [card] = offer_cards(bridge)
     assert answer(bridge, card, "once").json() == {"ok": True, "choice": "once", "kind": "reply_watch", "by": "bridge"}
-    assert wait_until(lambda: fakes.imap.idling >= 1, timeout=20), fakes.imap.commands
+    assert wait_until(lambda: fakes.imap.idling >= 1, timeout=20), imap_state(fakes)
     return card
+
+
+def imap_state(fakes, bridge=None):
+    """What a failure needs (test_reply_due flaky once in a full run on 24/11, its assert lost): the test's clock, the
+    fake server's counters and each connection's events (generation, client port), the cards and the mailboxes."""
+    state = {"now": time.time(), "imap": fakes.imap.report()}
+    if bridge is not None:
+        try:
+            state["cards"] = [c.get("bip_offer") for c in offer_cards(bridge)]
+            state["replies"] = replies(bridge)
+        except Exception as err:   # noqa: BLE001 — a diagnosis, never a failure of its own
+            state["bridge"] = f"unknown ({err})"
+    return json.dumps(state, default=str, ensure_ascii=False)
 
 
 def fetched_bodies(fakes):
@@ -77,8 +90,11 @@ def fetched_bodies(fakes):
 
 def test_a_mailbox_is_watched_only_after_its_own_yes(bridges, fakes):
     bridge, account = reply_place(bridges, fakes)
-    assert wait_until(lambda: offer_cards(bridge, source="replies"), timeout=20)
-    [card] = offer_cards(bridge)
+    why = lambda: imap_state(fakes, bridge)  # noqa: E731
+    assert wait_until(lambda: offer_cards(bridge, source="replies"), timeout=20), why()
+    cards = offer_cards(bridge)
+    assert len(cards) == 1, why()
+    [card] = cards
     offer = card["bip_offer"]
     texts = TEXTS[lang_of(card)]
     assert (offer["kind"], offer["source"], offer["mailbox"], offer["about"]) == ("reply_watch", "replies", ME, ME)
@@ -86,14 +102,14 @@ def test_a_mailbox_is_watched_only_after_its_own_yes(bridges, fakes):
     assert card["bip_detail"].startswith(texts["consent_under_i"]), card["bip_detail"]
     assert card["choices"] == ["once", "deny"] and "bip_always" not in card
     # off until then: nothing watched, nothing read
-    assert [m["state"] for m in replies(bridge)] == ["asked"]
+    assert [m["state"] for m in replies(bridge)] == ["asked"], why()
     time.sleep(1)
-    assert fakes.imap.idling == 0 and fetched_bodies(fakes) == []
+    assert fakes.imap.idling == 0 and fetched_bodies(fakes) == [], why()
     # « Non merci »: never asked again for that mailbox, still nothing watched
-    assert answer(bridge, card, "deny").json() == {"ok": True, "choice": "deny"}
+    assert answer(bridge, card, "deny").json() == {"ok": True, "choice": "deny"}, why()
     time.sleep(1.5)
-    assert offer_cards(bridge) == [] and [m["state"] for m in replies(bridge)] == ["declined"]
-    assert fakes.imap.idling == 0
+    assert offer_cards(bridge) == [] and [m["state"] for m in replies(bridge)] == ["declined"], why()
+    assert fakes.imap.idling == 0, why()
     # the person's own switch (the apps 1.1): on, its watch in « Ce que tes agents font tout seuls » as a trigger
     on = bridge.put("/v1/agents/coach/replies", headers=AUTH, json={"account": account, "on": True})
     assert on.json() == {"ok": True, "account": account, "state": "on"}, on.text
@@ -103,12 +119,12 @@ def test_a_mailbox_is_watched_only_after_its_own_yes(bridges, fakes):
     [item] = [i for i in items if i["ref"] == box["trigger"]]
     assert item["kind"] == "trigger" and item["when"]["kind"] == "mail" and item["when"]["replies"] is True, item
     assert item["title"] == texts["watch_name"].format(mailbox=ME) and item["detail"]["replies"]["account"] == account
-    assert wait_until(lambda: fakes.imap.idling >= 1, timeout=20)
+    assert wait_until(lambda: fakes.imap.idling >= 1, timeout=20), why()
     # the older mail is never read; off again: the watch goes
-    assert fetched_bodies(fakes) == []
+    assert fetched_bodies(fakes) == [], why()
     off = bridge.put("/v1/agents/coach/replies", headers=AUTH, json={"account": account, "on": False})
     assert off.json()["state"] == "off"
-    assert wait_until(lambda: fakes.imap.idling == 0, timeout=30)
+    assert wait_until(lambda: fakes.imap.idling == 0, timeout=30), why()
     assert bridge.put("/v1/agents/coach/replies", headers=AUTH, json={"account": "nope", "on": True}).status_code == 404
 
 
