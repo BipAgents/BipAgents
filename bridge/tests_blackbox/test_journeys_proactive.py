@@ -58,10 +58,9 @@ def wordless(page):
 
 
 def drawable(journey, page):
-    """The page checked as both apps draw it (bbkit/displayable_people.py), but for the wordless answered cards of
-    this release (`wordless`: a defect of their own, red in its own test, so the rest of each journey still runs)."""
-    left = {i["id"] for i in wordless(page)}
-    shown.check_page(journey.bridge, {**page, "items": [i for i in page["items"] if i.get("id") not in left]}, AGENT)
+    """The page checked as both apps draw it (bbkit/displayable_people.py), its answered plan, offer and fix cards
+    too (they say what was asked since fix-j68: `test_j68_an_answered_plan_or_offer_says_what_was_asked`)."""
+    shown.check_page(journey.bridge, page, AGENT)
 
 
 def cid(n: int) -> str:
@@ -204,6 +203,20 @@ def test_j68_a_plan_one_card_a_moment_unticked_a_pill_yes_its_work_and_plan_set(
     started = journey.model.inputs[asked:]
     assert started and any("liste de bagages" in json.dumps(i["input"], ensure_ascii=False) for i in started), started
     drawable(journey, page)
+    # the accepted pill stays in the plan's card, « ✓ Je te fais la liste de bagages » (design §3.1, §7.3), the
+    # other still waiting; its answered item says it is the plan's (the apps 1.1 draw it there, never apart)
+    [still] = waiting(journey, "bip-plan-")
+    pills = {p["id"]: p for p in still["bip_plan"]["pills"]}
+    taxi = next(c for c in offers.values() if "taxi" in c["bip_offer"]["label"])
+    assert pills[bagages["bip_offer"]["id"]] == {"id": bagages["bip_offer"]["id"], "run_id": bagages["run_id"],
+                                                  "state": "accepted", "text": "✓ Je te fais la liste de bagages"}, pills
+    assert pills[taxi["bip_offer"]["id"]]["state"] == "waiting", pills
+    assert pills[taxi["bip_offer"]["id"]]["text"] == taxi["bip_offer"]["label"], pills
+    # where it was on the card: the pills in the card's order
+    assert [p["id"] for p in still["bip_plan"]["pills"]] == plan["offers"], (still["bip_plan"]["pills"], plan["offers"])
+    assert still["bip_plan"]["offers"] == [taxi["bip_offer"]["id"]], still["bip_plan"]
+    [item] = [i for i in page["items"] if i.get("kind") == "approval" and i["approval"]["run_id"] == bagages["run_id"]]
+    assert item["approval"].get("pill_of") == plan["id"], item
     # « Prévoir » with « Ta chambre est prête » unticked
     skipped = next(m["id"] for m in plan["moments"] if "chambre" in m["what"])
     done = approve(journey, card, "once", skip=[skipped])
@@ -226,9 +239,9 @@ def test_j68_a_plan_one_card_a_moment_unticked_a_pill_yes_its_work_and_plan_set(
 def test_j68_an_answered_plan_or_offer_says_what_was_asked(journey):
     """What every device (another phone, the app reinstalled, an app 1.0) draws of a plan or an offer once answered
     comes from the timeline's `approval` item (approvals_log.rs, threads/mod.rs `kept`): it must say what was asked
-    (its command, description or topic), as every other card's answered item does (bbkit/displayable.py). RED on
-    journeys-1-1 (24/11): the answered `bip-plan-` and `bip-offer-` items have none of them (their « Oui » / « Non »
-    never goes through app.rs' generic log, which keeps the card as shown)."""
+    (its command, description or topic), as every other card's answered item does (bbkit/displayable.py). Red on
+    journeys-1-1 (24/11): the answered `bip-plan-` and `bip-offer-` items had none of them (card_place.rs
+    `answered_via` kept only the run and the choice); since fix-j68 the card as shown is kept with its answer."""
     assert journey.send(cid(685), "Je pars à Lisbonne dans trois jours, vol TP 433 #plan").status_code == 200
     reply_done(journey, "Je te propose un plan pour Lisbonne")
     [plan] = waiting(journey, "bip-plan-")
@@ -239,6 +252,10 @@ def test_j68_an_answered_plan_or_offer_says_what_was_asked(journey):
     answered = [i for i in page["items"] if i.get("kind") == "approval"]
     assert {i["approval"]["run_id"] for i in answered} >= {plan["run_id"], pill["run_id"]}, answered
     assert wordless(page) == [], [i["approval"] for i in wordless(page)]
+    said = {i["approval"]["run_id"]: i["approval"] for i in answered}
+    assert said[plan["run_id"]]["description"] == plan["bip_summary"], said[plan["run_id"]]
+    assert said[pill["run_id"]]["description"] == pill["bip_summary"], said[pill["run_id"]]
+    assert said[pill["run_id"]]["pill_of"] == plan["bip_plan"]["id"], said[pill["run_id"]]
 
 
 # -- J69 « Réparer / Arrêter » -----------------------------------------------------------------------------------------
@@ -341,6 +358,10 @@ def test_j69_repair_or_stop_a_broken_watcher_told_before_it_stops_and_one_card_w
     for name in ("Courriels", "Météo"):
         assert (jobs()[name]["state"], jobs()[name]["failures"], jobs()[name]["fix"]) == ("scheduled", 0, None), jobs()[name]
     assert not fix_cards(journey)
+    # every « Réparer / Arrêter » answered says what was asked, wherever it shows (fix-j68: card_place.rs `asked_words`)
+    answered = [i["approval"] for i in journey.page()["items"]
+                if i.get("kind") == "approval" and i["approval"]["run_id"].startswith("bip-fix-")]
+    assert all(a.get("command") and a.get("description") for a in answered), answered
 
 
 # -- J70 replies due ---------------------------------------------------------------------------------------------------

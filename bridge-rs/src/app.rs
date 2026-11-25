@@ -1510,9 +1510,12 @@ pub(crate) async fn answer_bridge_card(state: &AppState, agent: &AgentConfig, ru
         answer: None,
         skip: None,
     };
+    let config = state.config();
+    let cards = crate::card_place::bridge_cards(state, &config, Some(&agent.name));
+    let shown = cards.iter().find(|c| c.get("run_id").and_then(Value::as_str) == Some(run_id));
     match bridge_card(state, agent, run_id, &body).await {
         Ok(Some(r)) if r.status().is_success() => {
-            crate::card_place::answered_via(state, agent, run_id, choice, Some("auto")).await;
+            crate::card_place::answered_via(state, agent, run_id, choice, Some("auto"), shown).await;
             true
         }
         Ok(_) => false,
@@ -1558,15 +1561,16 @@ async fn approve(State(state): State<AppState>, Json(body): Json<ApproveRequest>
     if run_id.starts_with("bip-") {
         let members = crate::card_place::members(&state, &agent.name, &run_id);
         let choice = body.choice.trim().to_lowercase();
+        // the cards as shown, before the answer takes them away: what each asked is kept with its decision
+        let cards = crate::card_place::bridge_cards(&state, &config, Some(&agent.name));
         // « Toujours autoriser… »: the kind the card offers it for, read from the card itself (never from the body)
-        let always = (choice == "always")
-            .then(|| always_kind_of(crate::card_place::bridge_cards(&state, &config, Some(&agent.name)), &run_id))
-            .flatten();
+        let always = (choice == "always").then(|| always_kind_of(cards.clone(), &run_id)).flatten();
         let mut first: Option<ApiResult<Option<Response>>> = None;
         for member in &members {
+            let shown = cards.iter().find(|c| c.get("run_id").and_then(Value::as_str) == Some(member.as_str()));
             let answered = bridge_card(&state, &agent, member, &body).await;
             if matches!(&answered, Ok(Some(r)) if r.status().is_success()) {
-                crate::card_place::answered(&state, &agent, member, &choice).await;
+                crate::card_place::answered_via(&state, &agent, member, &choice, None, shown).await;
                 if first.as_ref().is_none_or(|f| !matches!(f, Ok(Some(r)) if r.status().is_success())) {
                     first = Some(answered); // the answer of the first request done stands for the card
                 }
