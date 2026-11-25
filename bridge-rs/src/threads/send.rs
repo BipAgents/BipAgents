@@ -1012,7 +1012,7 @@ fn line_beside(state: &AppState, agent: &AgentConfig, thread: &Thread, run: &str
         // (a turn about to restart with a second message: the new run never gets the line, so none: Relecture 2)
         let silent = state.hub.subscription(&agent.name, &run)
             .is_some_and(|sub| !sub.finished() && sub.terminal().is_none() && !sub.restarting())
-            && state.hub.glance(&agent.name, &run).is_some_and(|(_, words)| words.trim().is_empty());
+            && state.hub.glance(&agent.name, &run, false).is_some_and(|(_, words)| words.trim().is_empty());
         let mode = crate::instant_reply::FirstMode::Parallel;
         crate::instant_reply::first_outcome(&config, &agent, mode, got.is_some() && silent, crate::py::time_time());
         let Some(said) = got.and_then(|l| l.said).filter(|_| silent) else {

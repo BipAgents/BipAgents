@@ -1187,43 +1187,45 @@ async fn run_brake(
 }
 
 /// A listener of the run hub as the SSE the app reads (`event: <type>`, `data: <json>`, a keepalive comment every
-/// 10 s): the bridge's `GET /v1/runs/{id}/events`, and the door's relay of Hermes' own (lan.rs).
-pub fn listener_events(listener: crate::runs::Listener) -> Response {
-    listener_events_with(listener, None, false)
-}
-
-/// `listener_events`, with `by` on its cards (`approval.request`, `clarify.request`): whose turn it is; `status`: with
-/// the run's `turn.status` events (turn_status.rs), which an app asks for (`status=1`): an iPhone app from before them
-/// takes an unknown event for « not words » and drops its working line during a pause in the reply.
+/// 25 s): the bridge's `GET /v1/runs/{id}/events`. Each text comes whole, once written (runs.rs `WholeWords`). `by` on
+/// its cards (`approval.request`, `clarify.request`): whose turn it is; `status`: with the run's `turn.status` events
+/// (turn_status.rs), which an app asks for (`status=1`): an iPhone app from before them takes an unknown event for
+/// « not words » and drops its working line during a pause in the reply.
 pub fn listener_events_with(mut listener: crate::runs::Listener, by: Option<Value>, status: bool) -> Response {
     let events = async_stream::stream! {
         // the keepalive 25 s after the last bytes written, whatever the stream left out meanwhile (a status for an app
         // that doesn't read them: review B2, 17/11; R3 of 16/11)
         let every = Duration::from_secs_f64(SSE_KEEPALIVE_SECONDS);
         let mut due = tokio::time::Instant::now() + every;
+        // each text whole, once written (runs.rs `WholeWords`)
+        let mut whole = crate::runs::WholeWords::default();
         loop {
-            match tokio::time::timeout_at(due, listener.queue.recv()).await {
+            let (events, end) = match tokio::time::timeout_at(due, listener.queue.recv()).await {
                 Err(_) => {
                     due = tokio::time::Instant::now() + every;
                     yield Ok::<_, std::io::Error>(bytes::Bytes::from_static(b": keepalive\n\n"));
+                    continue;
                 }
-                Ok(None) | Ok(Some(None)) => break,
-                Ok(Some(Some(event))) if !crate::turn_status::crosses(&event.r#type, status) => {}
-                Ok(Some(Some(event))) => {
-                    due = tokio::time::Instant::now() + every;
-                    let card = ["approval.request", "clarify.request"].contains(&event.r#type.as_str());
-                    let data = match (&by, card) {
-                        (Some(by), true) => {
-                            let mut data = event.data.clone();
-                            data.insert("by".into(), by.clone());
-                            py::Dumps::new().unicode().dumps(&Value::Object(data))
-                        }
-                        _ if event.raw.is_empty() => py::Dumps::new().unicode().dumps(&Value::Object(event.data.clone())),
-                        _ => event.raw.clone(),
-                    };
-                    let data = data.replace('\n', "\ndata: ");
-                    yield Ok(bytes::Bytes::from(format!("event: {}\ndata: {}\n\n", event.r#type, data)));
-                }
+                Ok(None) | Ok(Some(None)) => (whole.rest(), true),
+                Ok(Some(Some(event))) => (whole.pass(event), false),
+            };
+            for event in events.into_iter().filter(|e| crate::turn_status::crosses(&e.r#type, status)) {
+                due = tokio::time::Instant::now() + every;
+                let card = ["approval.request", "clarify.request"].contains(&event.r#type.as_str());
+                let data = match (&by, card) {
+                    (Some(by), true) => {
+                        let mut data = event.data.clone();
+                        data.insert("by".into(), by.clone());
+                        py::Dumps::new().unicode().dumps(&Value::Object(data))
+                    }
+                    _ if event.raw.is_empty() => py::Dumps::new().unicode().dumps(&Value::Object(event.data.clone())),
+                    _ => event.raw.clone(),
+                };
+                let data = data.replace('\n', "\ndata: ");
+                yield Ok(bytes::Bytes::from(format!("event: {}\ndata: {}\n\n", event.r#type, data)));
+            }
+            if end {
+                break;
             }
         }
         listener.close();

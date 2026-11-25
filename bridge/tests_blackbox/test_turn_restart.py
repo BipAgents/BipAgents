@@ -3,6 +3,7 @@
 stream the apps follow; once it acted (a mail sent, a card asked) the words go in at its next step (Hermes' steer)."""
 import json
 import threading
+import time
 
 import httpx
 
@@ -77,7 +78,9 @@ def test_words_before_any_action_restart_the_turn_with_both(bridges, fakes):
     app = []
     reader = threading.Thread(target=follow, args=(bridge, "r1", app), daemon=True)
     reader.start()
-    assert wait_until(lambda: any(name == "message.delta" for name, _ in app), timeout=10)
+    # its words held until written whole (runs.rs `WholeWords`): the call done, the answer begun on the bridge
+    assert wait_until(lambda: any(name == "tool.completed" for name, _ in app), timeout=10)
+    time.sleep(0.5)
     sent = send(bridge, thread, P1, "Seulement les publiques")
     # taken into the turn going on (the apps as before), which starts again with it
     assert (sent["state"], sent["run_id"], sent["restarted"]) == ("steered", "r1", True), sent

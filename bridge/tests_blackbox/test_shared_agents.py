@@ -153,9 +153,10 @@ def test_a_relative_reads_the_owners_conversations_from_the_share_on(bridges, fa
             for line in live.iter_lines():
                 if line.startswith("event: "):
                     kinds.append(line[len("event: "):])
-                if kinds.count("message.delta") == 2:
+                if kinds.count("message.delta") == 1:
                     break
-    assert kinds == ["message.delta", "message.delta"], kinds
+    # (each text whole once written: « Je cherche » before the call; « une soupe » comes with the turn's end)
+    assert kinds == ["message.delta"], kinds
     assert wait(lambda: any(i["run_id"] == "r1" for i in a.get("/v1/approvals", headers=AUTH).json()["items"]))
     assert hers()["pending"]["approvals"] == []
     gate.set()
