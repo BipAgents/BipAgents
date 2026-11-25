@@ -22,7 +22,7 @@
     "again": "Tu l’avais déjà demandé : c’est le même code.",
     "step1": "Installe l’app de la bêta :",
     "step2": "Dans l’app, choisis « J’ai un code d’invitation » et colle ton code.",
-    "fine": "Un code par adresse. Ton adresse est lue un instant, seulement pour t’envoyer ton code, par Proton AG (Suisse). Nous ne la gardons pas : nous gardons seulement des empreintes calculées avec une clé secrète (des données pseudonymes), l’une pour vérifier qu’une adresse ne reçoit qu’un code, jusqu’au 31 décembre 2026 au plus tard, l’autre, faite de ton adresse et de ton réseau, pendant un jour, pour te remontrer le même code si tu le redemandes. Proton garde le message envoyé le temps que nous l’effacions de la boîte d’envoi. Les adresses jetables sont refusées, et l’anti-robot ne dépose rien sur ton appareil. Bases : l’envoi que tu demandes (art. 6.1.b RGPD) et la prévention des abus (art. 6.1.f).",
+    "fine": "Un code par adresse. Ton adresse est lue un instant, seulement pour t’envoyer ton code, par Proton AG (Suisse). Nous ne la gardons pas : nous gardons seulement des empreintes calculées avec une clé secrète (des données pseudonymes), l’une pour vérifier qu’une adresse ne reçoit qu’un code, jusqu’au 31 décembre 2026 au plus tard, l’autre, faite de ton adresse et d’un ticket tiré au hasard que seul ton navigateur garde, pendant un jour, pour te remontrer le même code si tu le redemandes depuis ce navigateur. Proton garde le message envoyé le temps que nous l’effacions de la boîte d’envoi. Les adresses jetables sont refusées, et l’anti-robot ne dépose rien sur ton appareil. Bases : l’envoi que tu demandes (art. 6.1.b RGPD) et la prévention des abus (art. 6.1.f).",
     "privacy": "Confidentialité",
     "js": {
       "sending": "Envoi…",

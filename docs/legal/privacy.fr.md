@@ -808,8 +808,7 @@ stockage). Une adresse reçoit un seul code, les adresses jetables sont refusée
 jour et par réseau. Ton adresse est lue un instant, seulement pour t'envoyer ton code par Proton AG (Suisse,
 section 11), depuis une adresse bipagents.com. Nous ne la gardons pas, et Proton garde le message envoyé le temps que
 nous l'effacions de la boîte d'envoi. Nous gardons seulement une empreinte de ton adresse, calculée avec une clé
-secrète, pour vérifier qu'une adresse ne reçoit qu'un code : c'est une donnée pseudonyme, donc encore une donnée personnelle. Ton code s'affiche aussi à l'écran. Pour te remontrer le même code si tu le redemandes depuis le même réseau, nous gardons à côté du code, un jour au plus, une seconde empreinte faite de ton adresse et de ton réseau, calculée avec une clé secrète ; elle est effacée plus tôt si le code est utilisé. Ton adresse IP n'est jamais enregistrée en clair : son empreinte sert seulement à la limite par réseau et à cette seconde empreinte,
-2 jours au plus (section 5.3).
+secrète, pour vérifier qu'une adresse ne reçoit qu'un code : c'est une donnée pseudonyme, donc encore une donnée personnelle. Ton code s'affiche aussi à l'écran, avec un ticket tiré au hasard que la page garde dans ton navigateur (stockage local de bipagents.com) un jour au plus. Si tu redemandes ton code depuis ce navigateur, la page renvoie ce ticket et le même code s'affiche. Pour cela, nous gardons à côté du code, un jour au plus, une seconde empreinte faite de ton adresse et de ce ticket, calculée avec une clé secrète ; elle est effacée plus tôt si le code est utilisé. Nous ne gardons pas le ticket : sans lui, cette empreinte ne permet pas de retrouver ton adresse. Ton adresse IP n'est jamais enregistrée en clair : son empreinte sert seulement à la limite par réseau, 2 jours au plus (section 5.3).
 
 **Bases légales.** T'envoyer le code que tu demandes (article 6.1.b du RGPD). Un seul code par adresse, la limite par
 réseau et le calcul contre les robots : intérêt légitime de Kerfy Studio à prévenir les abus et à répartir
@@ -1028,7 +1027,7 @@ l'Union. Tu peux nous demander une copie des garanties applicables.
 | Adresse IP à la réservation d'une semaine gratuite | Jamais enregistrée en clair ; en mémoire, sous forme d'empreinte, 15 minutes au plus |
 | Adresse e-mail donnée pour « Obtenir un code » | En clair : seulement le temps d'envoyer le code ; son empreinte : jusqu'à la fin de la bêta, au plus tard le 31 décembre 2026 |
 | Empreinte de l'adresse IP (codes bêta, « Obtenir un code », page de résiliation du site, signalements d'agents partagés) | 2 jours au plus ; jusqu'à 30 jours dans les copies chiffrées de la base |
-| Empreinte de l'adresse e-mail et du réseau, à côté d'un code donné sur le site (« Obtenir un code ») | Un jour au plus, effacée dès que le code est utilisé ; jusqu'à 30 jours dans les copies chiffrées de la base |
+| Empreinte de l'adresse e-mail et d'un ticket gardé par ton navigateur, à côté d'un code donné sur le site (« Obtenir un code ») | Un jour au plus, effacée dès que le code est utilisé ; jusqu'à 30 jours dans les copies chiffrées de la base. Le ticket lui-même reste dans ton navigateur, un jour |
 | Résiliation sur le site : la déclaration (e-mail, numéro, motif, date de fin, date et heure) | 3 ans |
 | Résiliation sur le site : l'adresse e-mail tapée, pour limiter les essais | 2 jours au plus |
 | Contenu de ta place | Pendant l'abonnement, puis 30 jours (3 jours après une semaine gratuite non poursuivie) |
