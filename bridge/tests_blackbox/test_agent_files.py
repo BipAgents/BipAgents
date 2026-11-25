@@ -254,10 +254,13 @@ def test_an_agent_that_moved_into_its_own_space_is_given_files_where_its_sandbox
     bridge.commands.rule("podman", ["network", "exists"], exit=1)
     bridge.start()
     wait_registered(bridge, ["coach", "quotidien"])
-    assert wait_until(lambda: tomllib.loads(bridge.toml_text())["agents"]["coach"].get("upload_dir_container")
-                      == "/fichiers", timeout=60), bridge.log_tail(4000)
-    (bridge.state_dir / "project-agents.json").write_text(json.dumps({"projects": {}}))
     root = bridge.root / "spaces" / "coach"
+    # the move written (its space), not only /fichiers: the sandbox's isolation in the hub writes /fichiers too, before
+    # the move ends (25/11, int-1.1d: the wait passed on it and `space` was read before the move wrote it)
+    moved = lambda: tomllib.loads(bridge.toml_text())["agents"]["coach"]  # noqa: E731
+    assert wait_until(lambda: moved().get("space") == str(root) and moved().get("upload_dir_container") == "/fichiers",
+                      timeout=60), bridge.log_tail(4000)
+    (bridge.state_dir / "project-agents.json").write_text(json.dumps({"projects": {}}))
     section = tomllib.loads(bridge.toml_text())["agents"]["coach"]
     assert section["space"] == str(root) and section["upload_dir_container"] == "/fichiers", section
     terminal = yaml.safe_load((root / "profiles" / "coach" / "config.yaml").read_text())["terminal"]
