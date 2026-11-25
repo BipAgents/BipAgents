@@ -91,5 +91,5 @@ a year of cache for `?v=` stylesheets and scripts, a week for pictures and fonts
 `/.well-known/security.txt`. A private script of the publisher mirrors them to the hostings over SFTP (OVH offers no
 FTP over TLS) and checks each home page. The pages already link to each other by their final addresses.
 
-The Bips' drawings, their voices, the recordings and the screenshots are not under the MIT license
-([LICENSE-ASSETS](../LICENSE-ASSETS)).
+Everything here is under the MIT license, the Bips' drawings, voices, recordings and screenshots included; the name
+BipAgents and the app's icon are the project's marks ([TRADEMARKS.md](../TRADEMARKS.md)).

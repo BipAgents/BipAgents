@@ -78,8 +78,8 @@ anunciará como se prevé en la sección 19.
   tampoco el nombre «Kerfy Studio». Puedes decir que un producto está construido sobre BipAgents o es compatible con
   él, no presentar otro producto como el nuestro; un fork que distribuyas debe cambiar de nombre y de icono (archivo
   TRADEMARKS.md del repositorio).
-- Los componentes de terceros (Hermes Agent, tipografías, modelos de voz de Kyutai, el pódcast de la demo grabado con
-  Fish Audio Drama 3 — «Built with Fish Audio»…) siguen bajo su propia licencia, indicada en el repositorio.
+- Los componentes de terceros (Hermes Agent, tipografías, modelos de voz de Kyutai…) siguen bajo su propia licencia,
+  indicada en el repositorio.
 - **Versión descargada del App Store**: el contrato de licencia estándar de Apple para apps («Licensed Application End
   User License Agreement») se aplica además de estas condiciones. Estas condiciones se celebran entre tú y Kerfy
   Studio, no con Apple; Apple no es responsable de la app ni de su contenido y no tiene ninguna obligación de
@@ -202,8 +202,8 @@ defecto y su documentación, y para avisar a los proyectos afectados cuando es �
 
 La demo integrada está **simulada** en tu teléfono, sin cuenta ni servidor. Sus agentes, personas, lugares, marcas,
 importes y datos son **ficticios**; ilustra lo que pueden hacer los agentes, sin reflejar exactamente lo que hará un
-agente real ni la calidad de un modelo concreto. Las voces de su pódcast se grabaron con Fish Audio Drama 3 («Built
-with Fish Audio»).
+agente real ni la calidad de un modelo concreto. Su pódcast lo leen las voces de los
+Bips.
 
 ## 13. El relé de notificaciones: reglas y contactos
 
