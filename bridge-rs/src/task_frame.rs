@@ -613,21 +613,56 @@ pub fn ended_line(lang: &str, task: Task, name: &str, end: &str) -> String {
 /// « Garder ? » at a default end (§7.4; Alex 25/11, textes lot 2 tf2-garder-nuance B and rd-nuance-b2 B: nothing stops
 /// without its person, so the card says it goes on with no answer; a mailbox's replies-due watch takes the watcher's
 /// words). `lang`: fr, de, es, nl (`keep_lang`); another: English.
-pub fn keep_sentence(lang: &str, task: Task, name: &str) -> String {
+pub fn keep_sentence(lang: &str, task: Task, name: &str, months: u32) -> String {
+    let d = keep_duration(lang, months);
     match (keep_of(lang), task) {
-        ("fr", Task::Watcher) => format!("Le veilleur « {name} » tourne depuis 3 mois. Le garder ? Sans réponse, il continue."),
-        ("fr", Task::Routine) => {
-            format!("La routine « {name} » tourne depuis 3 mois. La garder ? Sans réponse, elle continue.")
-        }
-        ("de", Task::Watcher) => format!("Der Wächter „{name}“ läuft seit 3 Monaten. Behalten? Ohne Antwort läuft er weiter."),
-        ("de", Task::Routine) => format!("Die Routine „{name}“ läuft seit 3 Monaten. Behalten? Ohne Antwort läuft sie weiter."),
-        ("es", Task::Watcher) => format!("El vigilante «{name}» lleva 3 meses funcionando. ¿Mantenerlo? Sin respuesta, sigue."),
-        ("es", Task::Routine) => format!("La rutina «{name}» lleva 3 meses funcionando. ¿Mantenerla? Sin respuesta, sigue."),
-        ("nl", Task::Watcher) => format!("De bewaker „{name}” draait al 3 maanden. Houden? Zonder antwoord gaat hij door."),
-        ("nl", Task::Routine) => format!("De routine „{name}” draait al 3 maanden. Houden? Zonder antwoord gaat hij door."),
-        (_, Task::Watcher) => format!("The watcher “{name}” has been running for 3 months. Keep it? With no answer, it goes on."),
-        (_, Task::Routine) => format!("The routine “{name}” has been running for 3 months. Keep it? With no answer, it goes on."),
+        ("fr", Task::Watcher) => format!("Le veilleur « {name} » tourne depuis {d}. Le garder ? Sans réponse, il continue."),
+        ("fr", Task::Routine) => format!("La routine « {name} » tourne depuis {d}. La garder ? Sans réponse, elle continue."),
+        ("de", Task::Watcher) => format!("Der Wächter „{name}“ läuft seit {d}. Behalten? Ohne Antwort läuft er weiter."),
+        ("de", Task::Routine) => format!("Die Routine „{name}“ läuft seit {d}. Behalten? Ohne Antwort läuft sie weiter."),
+        ("es", Task::Watcher) => format!("El vigilante «{name}» lleva {d} funcionando. ¿Mantenerlo? Sin respuesta, sigue."),
+        ("es", Task::Routine) => format!("La rutina «{name}» lleva {d} funcionando. ¿Mantenerla? Sin respuesta, sigue."),
+        ("nl", Task::Watcher) => format!("De bewaker „{name}” draait al {d}. Houden? Zonder antwoord gaat hij door."),
+        ("nl", Task::Routine) => format!("De routine „{name}” draait al {d}. Houden? Zonder antwoord gaat hij door."),
+        (_, Task::Watcher) => format!("The watcher “{name}” has been running for {d}. Keep it? With no answer, it goes on."),
+        (_, Task::Routine) => format!("The routine “{name}” has been running for {d}. Keep it? With no answer, it goes on."),
     }
+}
+
+/// How long it has run, in whole months (at least 1), then years: « 3 mois », « 1 an », « 1 an et 3 mois »,
+/// « 2 ans » (25/11: the card never says « 3 mois » after a « Garder »).
+pub fn keep_duration(lang: &str, months: u32) -> String {
+    let (y, m) = (months.max(1) / 12, months.max(1) % 12);
+    let (years, months) = match keep_of(lang) {
+        "fr" => (if y == 1 { "1 an".to_string() } else { format!("{y} ans") }, format!("{m} mois")),
+        "de" => (if y == 1 { "1 Jahr".to_string() } else { format!("{y} Jahren") },
+                 if m == 1 { "1 Monat".to_string() } else { format!("{m} Monaten") }),
+        "es" => (if y == 1 { "1 año".to_string() } else { format!("{y} años") },
+                 if m == 1 { "1 mes".to_string() } else { format!("{m} meses") }),
+        "nl" => (format!("{y} jaar"), if m == 1 { "1 maand".to_string() } else { format!("{m} maanden") }),
+        _ => (if y == 1 { "1 year".to_string() } else { format!("{y} years") },
+              if m == 1 { "1 month".to_string() } else { format!("{m} months") }),
+    };
+    let and = match keep_of(lang) {
+        "fr" => "et",
+        "de" => "und",
+        "es" => "y",
+        "nl" => "en",
+        _ => "and",
+    };
+    match (y, m) {
+        (0, _) => months,
+        (_, 0) => years,
+        _ => format!("{years} {and} {months}"),
+    }
+}
+
+/// Whole months from `since` (its start; 0: not known, its default end's 3 months) to `at` (the card).
+pub fn months_since(since: f64, at: f64) -> u32 {
+    if since <= 0.0 || at <= since {
+        return (DEFAULT_END_DAYS / 30.0).round() as u32;
+    }
+    (((at - since) / (365.25 / 12.0 * DAY)).round() as u32).max(1)
 }
 
 /// « Garder » · « L'arrêter le {date} » (its end: it stops there, never at once).
@@ -746,6 +781,8 @@ pub struct About<'a> {
     pub fix: &'a Fix,
     /// Its end (a « Garder ? »'s).
     pub ends_at: Option<f64>,
+    /// When it started (its first « Oui »; 0: not known): a « Garder ? » says how long it has run.
+    pub since: f64,
 }
 
 /// The card in `/v1/approvals`' shape (contracts/task-frame `cards.fix`, `cards.keep`).
@@ -758,7 +795,7 @@ pub fn card_item(config: &Config, about: &About) -> Dict {
     let keep = fix.variant == KEEP;
     let (summary, detail, bip) = if keep {
         let lang = keep_lang(config, about.agent);
-        let sentence = keep_sentence(lang, task, &name);
+        let sentence = keep_sentence(lang, task, &name, months_since(about.since, fix.at));
         let buttons = keep_buttons(lang, task, &keep_day(lang, about.ends_at.unwrap_or(fix.at), zone));
         let bip = json!({"kind": about.kind.unwrap_or(task.key()), "ref": about.id, "name": name, "variant": KEEP,
                          "ends_at": about.ends_at, "title": who, "text": sentence, "buttons": buttons});
@@ -862,7 +899,7 @@ pub fn pending_items(config: &Config, agent: Option<&str>) -> Vec<Dict> {
         if let Some(fix) = &conn.frame.fix {
             let ends_at = conn.watch.as_ref().and_then(|w| w.until);
             let about =
-                About { task: Task::Watcher, kind: None, agent: &name, id: &conn.id, name: &conn.name, fix, ends_at };
+                About { task: Task::Watcher, kind: None, agent: &name, id: &conn.id, name: &conn.name, fix, ends_at, since: watch_since(&conn) };
             items.push((fix.at, card_item(config, &about)));
         }
     }
@@ -878,6 +915,7 @@ pub fn pending_items(config: &Config, agent: Option<&str>) -> Vec<Dict> {
             name: &name,
             fix: &fix,
             ends_at: Some(m.ends),
+            since: m.asked_at,
         };
         items.push((fix.at, card_item(config, &about)));
     }
@@ -885,10 +923,15 @@ pub fn pending_items(config: &Config, agent: Option<&str>) -> Vec<Dict> {
     items.into_iter().map(|(_, item)| item).collect()
 }
 
+/// When a watcher started: its approval (its creation when not known).
+pub fn watch_since(conn: &connectors::Connector) -> f64 {
+    conn.approved_at.as_deref().or(Some(conn.created_at.as_str())).and_then(crate::place_move::epoch).unwrap_or(0.0)
+}
+
 /// The card of routine `r`.
 pub fn routine_card(config: &Config, r: &Routine, fix: &Fix) -> Dict {
     let about =
-        About { task: Task::Routine, kind: None, agent: &r.agent, id: &r.id, name: &r.name, fix, ends_at: r.frame.until };
+        About { task: Task::Routine, kind: None, agent: &r.agent, id: &r.id, name: &r.name, fix, ends_at: r.frame.until, since: r.created };
     card_item(config, &about)
 }
 
@@ -1228,7 +1271,7 @@ pub fn due(config: &Config, now: f64) -> Vec<Due> {
                         r.frame.until = Some(now + REMIND_DAYS * DAY);
                         (r.frame.fix, r.frame.keep_asked, r.frame.reminded) = (Some(fix), true, true);
                         let name = routines::flat(&r.name, routines::NAME_MAX);
-                        let line = keep_sentence(keep_lang(config, &r.agent), Task::Routine, &name);
+                        let line = keep_sentence(keep_lang(config, &r.agent), Task::Routine, &name, months_since(r.created, now));
                         out.push(Due::Raise { agent: r.agent.clone(), run_id, line, push: true });
                     }
                     Overdue::Forever => {
@@ -1327,7 +1370,8 @@ pub fn due(config: &Config, now: f64) -> Vec<Due> {
                                 w.until = Some(now + REMIND_DAYS * DAY);
                             }
                             (conn.frame.fix, conn.frame.keep_asked, conn.frame.reminded) = (Some(fix), true, true);
-                            let line = keep_sentence(keep_lang(config, agent), Task::Watcher, &name);
+                            let line =
+                                keep_sentence(keep_lang(config, agent), Task::Watcher, &name, months_since(watch_since(conn), now));
                             out.push(Due::Raise { agent: agent.clone(), run_id, line, push: true });
                         }
                         Overdue::Forever => {

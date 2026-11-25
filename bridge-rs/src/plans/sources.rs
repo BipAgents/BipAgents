@@ -1947,7 +1947,8 @@ pub fn keep_due(config: &Config, now: f64) -> Vec<KeepDue> {
                     let run_id = format!("{}{}", tf::RUN_PREFIX, fix.id);
                     m.ends = now + REMIND_DAYS * DAY;
                     (m.fix, m.keep_asked, m.reminded) = (Some(fix), true, true);
-                    let line = tf::keep_sentence(tf::keep_lang(config, &m.agent), Task::Watcher, &watch_name(config, m));
+                    let months = tf::months_since(m.asked_at, now);
+                    let line = tf::keep_sentence(tf::keep_lang(config, &m.agent), Task::Watcher, &watch_name(config, m), months);
                     out.push(KeepDue::Raise { agent: m.agent.clone(), run_id, line, push: true });
                 }
                 Overdue::Forever => {

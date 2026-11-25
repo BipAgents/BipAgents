@@ -342,7 +342,7 @@ def test_what_the_agent_sets_up_on_its_own_ends_after_90_days_and_asks_3_days_be
     assert approve(bridge, card, "once").status_code == 200
     # 3 days before its end: the card, once, not pushed
     soon = time.time() + 2 * DAY
-    edit_routine(bridge, job["id"], frame={"until": soon})
+    edit_routine(bridge, job["id"], frame={"until": soon}, created=time.time() - 88 * DAY)   # made 88 days ago
     assert wait_until(lambda: cards(bridge, "bip-fix-"), timeout=60)
     [keep] = cards(bridge, "bip-fix-")
     assert keep["bip_summary"] == ("The routine “Météo” has been running for 3 months. Keep it? With no answer, it goes "

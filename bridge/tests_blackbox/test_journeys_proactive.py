@@ -544,6 +544,11 @@ def test_j72_replies_watch_keep_card_garder_a_reminder_then_on_until_stopped_or_
     [box] = replies(journey)
     fix, name = card["bip_fix"], f"Réponses dues · {pj.ME}"
     assert (fix["variant"], fix["ref"], fix["name"], fix["title"]) == ("keep", box["trigger"], name, "Vie"), fix
+    # its words say how long it has run since its « Oui » (here 2 days: « 1 mois », the least it says); 88 days ago
+    edit_box(journey, account, lambda: "depuis 3 mois" in keep_cards(journey)[0]["bip_fix"]["text"],
+             asked_at=time.time() - 88 * DAY)
+    [card] = keep_cards(journey)
+    fix = card["bip_fix"]
     assert fix["text"] == f"Le veilleur « {name} » tourne depuis 3 mois. Le garder ? Sans réponse, il continue.", fix
     assert fix["buttons"][0] == "Garder" and re.fullmatch(r"L'arrêter le \d{1,2}/\d{1,2}", fix["buttons"][1]), fix
     assert card["bip_choices"] == ["keep", "stop"], card
@@ -577,6 +582,9 @@ def test_j72_replies_watch_keep_card_garder_a_reminder_then_on_until_stopped_or_
              ends=time.time() - 60)
     [again] = keep_cards(journey)
     assert again["bip_fix"]["ends_at"] > time.time() + 13 * DAY, again
+    # kept once, about 6 months after its « Oui »: it says so, never « 3 mois » again (25/11)
+    edit_box(journey, account, lambda: "depuis 6 mois" in keep_cards(journey)[0]["bip_fix"]["text"],
+             asked_at=time.time() - 180 * DAY)
     assert wait_until(lambda: pushed(fakes, again["run_id"]), timeout=20), "the reminder not pushed"
     [box] = replies(journey)
     assert box["state"] == "on" and fakes.imap.idling >= 1, box

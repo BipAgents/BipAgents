@@ -81,7 +81,10 @@ fn the_contract_s_texts_are_the_bridge_s() {
             assert_eq!(stopped_line(lang, task, "{name}"), s(&c["stopped"][k]), "{lang} {k}");
             assert_eq!(repair_failed_line(lang, task, "{name}"), s(&c["repair_failed"][k]), "{lang} {k}");
             assert_eq!(ended_line(lang, task, "{name}", "{end}"), s(&c["ended"][k]), "{lang} {k}");
-            assert_eq!(keep_sentence(lang, task, "{name}"), s(&c["keep"][k]), "{lang} {k}");
+            for (months, words) in contract()["texts"]["keep_duration"][lang].as_object().unwrap() {
+                let want = s(&c["keep"][k]).replace("{duration}", words.as_str().unwrap());
+                assert_eq!(keep_sentence(lang, task, "{name}", months.parse().unwrap()), want, "{lang} {k} {months}");
+            }
             let buttons: Vec<String> = c["keep_buttons"][k].as_array().unwrap().iter().map(s).collect();
             assert_eq!(keep_buttons(lang, task, "{date}").to_vec(), buttons, "{lang} {k}");
             assert_eq!(end_words(lang, task, &End::Once, PARIS), s(&c["ends"]["once"][k]), "{lang} {k}");
@@ -1187,7 +1190,9 @@ fn the_keep_card_s_dutch_words_are_the_contract_s() {
     let c = &contract()["texts"]["keep_nl"];
     let s = |v: &Value| v.as_str().unwrap().to_string();
     for task in [Task::Routine, Task::Watcher] {
-        assert_eq!(keep_sentence("nl", task, "{name}"), s(&c[task.key()]));
+        let three = s(&contract()["texts"]["keep_duration"]["nl"]["3"]);
+        assert_eq!(keep_sentence("nl", task, "{name}", 3), s(&c[task.key()]).replace("{duration}", &three));
+        assert_eq!(keep_duration("nl", 15), s(&contract()["texts"]["keep_duration"]["nl"]["15"]));
         let buttons: Vec<String> = c["buttons"].as_array().unwrap().iter().map(s).collect();
         assert_eq!(keep_buttons("nl", task, "{date}").to_vec(), buttons);
     }
@@ -1214,4 +1219,16 @@ fn keep_says_how_long_it_has_really_run_after_a_garder() {
     let items = pending_items(&config, Some("vie"));
     let [item] = items.as_slice() else { panic!("{items:?}") };
     assert_eq!(item["bip_summary"], json!("La routine « Météo » tourne depuis 6 mois. La garder ? Sans réponse, elle continue."));
+}
+
+/// How long, in whole months rounded (at least 1); unknown start: its default end's 3 months.
+#[test]
+fn months_since_rounds_whole_months() {
+    let at = 1_800_000_000.0;
+    assert_eq!(months_since(at - 87.0 * DAY, at), 3);
+    assert_eq!(months_since(at - 177.0 * DAY, at), 6);
+    assert_eq!(months_since(at - 2.0 * DAY, at), 1);
+    assert_eq!(months_since(0.0, at), 3);
+    assert_eq!(keep_duration("fr", 15), "1 an et 3 mois");
+    assert_eq!(keep_duration("fr", 24), "2 ans");
 }
