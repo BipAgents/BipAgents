@@ -99,11 +99,14 @@ p { margin: 0; }
 .brand-name { font-weight: 800; }
 .brand-name b { font-weight: 1000; }
 .top-links { display: none; gap: 26px; margin-left: 18px; }
-.top-links a { text-decoration: none; color: var(--ink2); font-weight: 800; font-size: 15px; }
+.top-links a { text-decoration: none; color: var(--ink2); font-weight: 800; font-size: 15px; white-space: nowrap; }
 .top-links a:hover { color: var(--ink); }
 .top-actions { margin-left: auto; display: flex; align-items: center; gap: 10px; }
 @media (max-width: 520px) { .brand { font-size: 19px; } }
-@media (max-width: 360px) { .brand-name { display: none; } }
+/* A phone's header on one line, never wider than the screen, whatever the language and the label (« EN-UK », the
+   widest, about 70 px): the GitHub link (also in the footer) goes up to 440 px, the name up to 370 px. */
+@media (max-width: 440px) { .top { gap: 12px; } }
+@media (max-width: 370px) { .brand-name { display: none; } }
 section[id] { scroll-margin-top: 72px; }
 .top-gh {
   height: 38px; width: 38px; border-radius: 999px; display: grid; place-items: center; flex: none; color: var(--ink);
@@ -111,17 +114,20 @@ section[id] { scroll-margin-top: 72px; }
 }
 .top-gh:hover { box-shadow: inset 0 0 0 1.5px var(--ink2); }
 .top:has(~ main .hero):not(.off-hero) .top-gh { background: rgba(255, 255, 255, .12); color: #FFFFFF; box-shadow: inset 0 0 0 1.5px rgba(255, 255, 255, .34); }
-@media (max-width: 340px) { .top-gh { display: none; } }
-.lang { position: relative; }
+@media (max-width: 440px) { .top-gh { display: none; } }
+.lang { position: relative; flex: none; }
 .lang summary {
   list-style: none; cursor: pointer; height: 38px; min-width: 50px; padding: 0 12px; border-radius: 999px; display: grid;
   place-items: center; font-weight: 900; font-size: 14px; background: var(--card); box-shadow: inset 0 0 0 1.5px var(--line);
+  white-space: nowrap;
 }
 .lang summary::-webkit-details-marker { display: none; }
 .lang-menu {
   position: absolute; right: 0; top: 46px; background: var(--card); border-radius: 18px; padding: 6px; box-shadow: var(--shadow-big);
   display: grid; width: 268px; max-width: calc(100vw - 32px); max-height: calc(100vh - 80px); overflow-y: auto;
 }
+/* on a phone the menu hangs from the header's right edge, not from the button (it went past the screen's left edge) */
+@media (max-width: 520px) { .lang { position: static; } .lang-menu { right: 16px; top: calc(100% - 6px); } }
 .lang-menu a { text-decoration: none; }
 .lang-name { display: block; padding: 9px 12px; border-radius: 12px; font-weight: 800; font-size: 15px; }
 .lang-name:hover, .lang-name[aria-current] { background: var(--ground2); }
@@ -134,7 +140,8 @@ section[id] { scroll-margin-top: 72px; }
 .lang-places a:hover { background: var(--ground2); }
 .lang-places a[aria-current] { background: var(--ink); color: var(--card); box-shadow: none; }
 .lang-places a[aria-current] small { color: inherit; opacity: .7; }
-@media (min-width: 900px) { .top-links { display: flex; } }
+/* the six links on one line each: the header then needs about 1015 px (German, the widest), so from 1080 px */
+@media (min-width: 1080px) { .top-links { display: flex; } }
 
 /* -- Buttons --------------------------------------------------------------------------------------------------- */
 .pill {
