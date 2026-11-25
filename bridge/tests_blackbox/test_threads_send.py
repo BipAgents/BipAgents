@@ -575,10 +575,10 @@ def test_a_quick_talk_asks_the_bridge_where_its_words_are_until_the_reply(bridge
     now = where(bridge, thread, client_id)
     assert (now["state"], now["message"], now["next"]) == ("running", f"s_{client_id}", 1000), now
     gate.set()
-    # then its words as they come
-    assert wait_until(lambda: (where(bridge, thread, client_id)["run"] or {}).get("answer") == "Demain à Bordeaux : ",
-                      timeout=10)
-    assert where(bridge, thread, client_id)["run"]["tool"] is None
+    # then none of its words while they are written (each text whole once written, Alex 25/11: runs.rs `WholeWords`)
+    assert wait_until(lambda: (where(bridge, thread, client_id)["run"] or {}).get("tool") is None, timeout=10)
+    time.sleep(0.5)
+    assert where(bridge, thread, client_id)["run"]["answer"] == ""
     stored(fakes, user("Quel temps demain à Bordeaux ?"), agent("Demain à Bordeaux : 18 °C."))
     done.set()
     assert wait_until(lambda: where(bridge, thread, client_id)["state"] == "reply", timeout=15)

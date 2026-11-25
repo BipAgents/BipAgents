@@ -161,9 +161,10 @@ def test_app_follows_run_through_bridge_and_replays_on_reattach(bridge, fakes):
         assert resp.status_code == 200 and resp.headers["content-type"].startswith("text/event-stream")
         assert resp.headers["cache-control"] == "no-store" and resp.headers["x-accel-buffering"] == "no"
         first = read_sse(resp)
-    assert [name for name, _ in first] == ["tool.started", "message.delta", "message.delta", "run.completed"]
+    # each text whole once written (Alex 25/11: runs.rs `WholeWords`), Hermes' fields kept
+    assert [name for name, _ in first] == ["tool.started", "message.delta", "run.completed"]
     assert first[-1][1]["output"] == "Bonjour Alex."
-    assert first[1][1] == {"event": "message.delta", "run_id": "run_a", "delta": "Bonjour "}   # Hermes' data as it was
+    assert first[1][1] == {"event": "message.delta", "run_id": "run_a", "delta": "Bonjour Alex."}
     # Re-attaching (app reopened, connection lost) replays the whole run from the bridge's backlog,
     # consecutive deltas merged.
     with bridge.stream("GET", url, headers=AUTH) as resp:
@@ -276,8 +277,9 @@ def test_replay_backlog_merges_deltas_so_long_replies_keep_their_start(bridge, f
         sse("message.delta", run_id="run_long", delta="Fin."),
         sse("run.completed", run_id="run_long", output="…")]
     with bridge.stream("GET", "/v1/runs/run_long/events?agent=wellness", headers=AUTH) as resp:
-        live = read_sse(resp)  # first follower: every delta, live
-    assert len(live) == len(words) + 4
+        live = read_sse(resp)  # first follower: each text whole once written
+    assert [name for name, _ in live] == ["message.delta", "tool.started", "message.delta", "run.completed"]
+    assert live[0][1]["delta"] == "Début : " + "".join(words)
     with bridge.stream("GET", "/v1/runs/run_long/events?agent=wellness", headers=AUTH) as resp:
         replay = read_sse(resp)  # late follower: the backlog
     assert [name for name, _ in replay] == ["message.delta", "tool.started", "message.delta", "run.completed"]
