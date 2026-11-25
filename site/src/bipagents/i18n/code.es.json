@@ -22,7 +22,7 @@
     "again": "Ya lo habías pedido: es el mismo código.",
     "step1": "Instala la app de la beta:",
     "step2": "En la app, elige «Tengo un código de invitación» y pega tu código.",
-    "fine": "Un código por dirección. Tu dirección se lee un instante, solo para enviarte tu código, a través de Proton AG (Suiza). No la guardamos: solo guardamos huellas calculadas con una clave secreta (datos seudónimos), una para comprobar que una dirección recibe un solo código, hasta el 31 de diciembre de 2026 como máximo, y otra, hecha con tu dirección y tu red, durante un día, para mostrarte el mismo código si lo vuelves a pedir. Proton guarda el mensaje enviado hasta que lo borramos de la bandeja de salida. Se rechazan las direcciones desechables, y el antirrobot no deja nada en tu dispositivo. Bases: el envío que pides (art. 6.1.b RGPD) y la prevención de abusos (art. 6.1.f).",
+    "fine": "Un código por dirección. Tu dirección se lee un instante, solo para enviarte tu código, a través de Proton AG (Suiza). No la guardamos: solo guardamos huellas calculadas con una clave secreta (datos seudónimos), una para comprobar que una dirección recibe un solo código, hasta el 31 de diciembre de 2026 como máximo, y otra, hecha con tu dirección y un ticket al azar que solo guarda tu navegador, durante un día, para mostrarte el mismo código si lo vuelves a pedir desde este navegador. Proton guarda el mensaje enviado hasta que lo borramos de la bandeja de salida. Se rechazan las direcciones desechables, y el antirrobot no deja nada en tu dispositivo. Bases: el envío que pides (art. 6.1.b RGPD) y la prevención de abusos (art. 6.1.f).",
     "privacy": "Privacidad",
     "js": {
       "sending": "Enviando…",

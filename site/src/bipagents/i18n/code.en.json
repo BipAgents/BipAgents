@@ -22,7 +22,7 @@
     "again": "You already asked for it: it’s the same code.",
     "step1": "Install the beta app:",
     "step2": "In the app, choose “I have an invitation code” and paste your code.",
-    "fine": "One code per address. Your address is read for a moment, only to send you your code, through Proton AG (Switzerland). We don’t keep it: we only keep fingerprints computed with a secret key (pseudonymous data), one to check that an address gets only one code, until 31 December 2026 at the latest, the other, made from your address and your network, for one day, to show you the same code if you ask again. Proton keeps the sent message until we delete it from the outbox. Disposable addresses are refused, and the anti-bot check stores nothing on your device. Legal bases: sending what you ask for (GDPR art. 6(1)(b)) and preventing abuse (art. 6(1)(f)).",
+    "fine": "One code per address. Your address is read for a moment, only to send you your code, through Proton AG (Switzerland). We don’t keep it: we only keep fingerprints computed with a secret key (pseudonymous data), one to check that an address gets only one code, until 31 December 2026 at the latest, the other, made from your address and a random ticket that only your browser keeps, for one day, to show you the same code if you ask again from this browser. Proton keeps the sent message until we delete it from the outbox. Disposable addresses are refused, and the anti-bot check stores nothing on your device. Legal bases: sending what you ask for (GDPR art. 6(1)(b)) and preventing abuse (art. 6(1)(f)).",
     "privacy": "Privacy",
     "js": {
       "sending": "Sending…",

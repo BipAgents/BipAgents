@@ -138,6 +138,24 @@ document.addEventListener("DOMContentLoaded", () => {
 
   function tell(text, tone) { say.textContent = text; say.dataset.tone = tone || ""; }
 
+  // The ticket of the code this browser got (the guichet's answer): sent back, it shows the same code again here, and
+  // here only, for a day (the guichet keeps only a keyed hash of the address and the ticket). In this browser alone,
+  // forgotten after the day; without storage (a private window), no ticket: the code is in the e-mail.
+  const TICKET = "bipagents.codeTicket", DAY_MS = 24 * 3600 * 1000;
+  function ticket() {
+    try {
+      const kept = JSON.parse(localStorage.getItem(TICKET) || "null");
+      if (kept && /^[0-9a-f]{32}$/.test(kept.t) && Date.now() - kept.at < DAY_MS) return kept.t;
+      localStorage.removeItem(TICKET);
+    } catch (e) { /* no storage: no ticket */ }
+    return "";
+  }
+  function keepTicket(t) {
+    if (typeof t !== "string" || !/^[0-9a-f]{32}$/.test(t)) return;
+    try { localStorage.setItem(TICKET, JSON.stringify({ t, at: Date.now() })); } catch (e) { /* not kept */ }
+  }
+  ticket(); // an old one goes as soon as the page opens
+
   // the code on the page at once (a guichet of 25/11 or later sends it; an older one doesn't: « look in your e-mails »)
   function show(answer) {
     value.textContent = answer.code;
@@ -206,11 +224,16 @@ document.addEventListener("DOMContentLoaded", () => {
       // JSON as text/plain: a simple request, no preflight; no cookie is sent or set
       const res = await fetch(`${api}/v1/beta/request`, {
         method: "POST", headers: { "content-type": "text/plain;charset=UTF-8" }, credentials: "omit", cache: "no-store",
-        body: JSON.stringify({ email: email.value.trim(), lang, altcha: proof }),
+        body: JSON.stringify({ email: email.value.trim(), lang, altcha: proof, ticket: ticket() }),
       });
       const answer = await res.json().catch(() => ({}));
       if (!res.ok || !answer.sent) { tell(why(res.status, answer.detail || ""), "no"); return; }
-      if (typeof answer.code === "string" && /^BIP-[A-Z0-9]{8}$/.test(answer.code)) { tell(""); show(answer); return; }
+      if (typeof answer.code === "string" && /^BIP-[A-Z0-9]{8}$/.test(answer.code)) {
+        keepTicket(answer.ticket);
+        tell("");
+        show(answer);
+        return;
+      }
       tell(t.sent, "ok");
       form.reset();
     } catch (err) {
