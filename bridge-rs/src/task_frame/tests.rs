@@ -1195,3 +1195,23 @@ fn the_keep_card_s_dutch_words_are_the_contract_s() {
     assert_eq!(keep_day("nl", at, PARIS), "30-11");
     assert_eq!(keep_day("fr", at, PARIS), "30/11");
 }
+
+/// The card never says something false (25/11): after a « Garder », the next « Garder ? » (about 6 months after its
+/// start) says how long it has really been running, not « 3 mois ».
+#[test]
+fn keep_says_how_long_it_has_really_run_after_a_garder() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = config_in(dir.path());
+    let r = agents(&config, "Météo", "every day at 7:30", &Ask { asked: false, ..Ask::default() });
+    let until = r.frame.until.unwrap();
+    due(&config, until - 2.0 * DAY);
+    let first = pending_items(&config, Some("vie"));
+    assert_eq!(first[0]["bip_summary"], json!("La routine « Météo » tourne depuis 3 mois. La garder ? Sans réponse, elle continue."));
+    let id = first[0]["request_id"].as_str().unwrap().to_string();
+    assert!(settle(&config, "vie", &id, true).is_some());
+    let next = routines::get(&config, &r.id).unwrap().frame.until.unwrap();
+    due(&config, next - 2.0 * DAY);
+    let items = pending_items(&config, Some("vie"));
+    let [item] = items.as_slice() else { panic!("{items:?}") };
+    assert_eq!(item["bip_summary"], json!("La routine « Météo » tourne depuis 6 mois. La garder ? Sans réponse, elle continue."));
+}

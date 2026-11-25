@@ -767,3 +767,25 @@ fn review_c4_an_odd_message_id_is_never_searched() {
     assert!(searchable("<p1@example.net>"));
     assert!(!searchable("<zoé.1@example.org>") && !searchable("<a\tb@x>") && !searchable(""));
 }
+
+/// The card never says something false (25/11): a watch kept once or more says how long it has really run since its
+/// « Oui » (`asked_at`), in whole months, then years.
+#[test]
+fn keep_says_how_long_the_watch_has_really_run() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = french(config_in(dir.path()));
+    let n = now();
+    change(&config, |s| {
+        s.mailboxes.push(Mailbox { asked_at: n - 175.0 * DAY, ..replies_watch("six", n + 2.0 * DAY) });
+        s.mailboxes.push(Mailbox { asked_at: n - 455.0 * DAY, ..replies_watch("quinze", n + 2.0 * DAY) });
+    });
+    assert_eq!(keep_due(&config, n).len(), 2);
+    let text = |r: &str| {
+        keep_items(&config).iter().find(|i| i["bip_fix"]["ref"] == json!(format!("t-{r}"))).unwrap()["bip_fix"]["text"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    assert_eq!(text("six"), "Le veilleur « Réponses dues · six@example.org » tourne depuis 6 mois. Le garder ? Sans réponse, il continue.");
+    assert_eq!(text("quinze"), "Le veilleur « Réponses dues · quinze@example.org » tourne depuis 1 an et 3 mois. Le garder ? Sans réponse, il continue.");
+}
