@@ -107,6 +107,7 @@ async fn the_phone_sends_its_days_only_once_an_agent_has_health_on() {
     assert!(health_variant, "in the circle as the health agent: what it learns stays its own");
     let plain = souls::split_notebook(&souls::split_health(&souls::split_payments(&soul)).0).0;
     let plain = bipbridge::dates::split_dates(&souls::split_shared_memory(&plain).0).0; // today's line: calendar-dependent
+    let plain = bipbridge::agent_proactive::split_block(&plain).0; // its « Initiative » rule (bench 1.1)
     assert_eq!(souls::split_language(&plain).0.trim(), "Tu es Coach.");
     let url = || {
         let text = std::fs::read_to_string(folder.join("config.yaml")).unwrap();

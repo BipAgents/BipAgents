@@ -168,10 +168,10 @@ pub fn tools_url(config: &Config) -> String {
     format!("{base}{PATH}?v={}", crate::agent_tools::version_of(&tools()))
 }
 
-/// Whether `agent` gets these tools: one that may hold credentials (its browser is checked at each call), or one of
-/// the shared hub, which moves into its own space at its first account (own_space.rs).
+/// Whether `agent` gets these tools: one that may hold credentials (own_space.rs `may_hold`; its browser is checked
+/// at each call).
 pub fn offered(config: &Config, agent: &AgentConfig) -> bool {
-    crate::vault::holder(config, agent).is_none() || crate::own_space::may_move(config, agent)
+    crate::own_space::may_hold(config, agent)
 }
 
 /// The agent's Hermes knows these tools (an entry next to `bipagents`, with its token). Returns whether its profile
@@ -730,12 +730,10 @@ async fn create(state: &AppState, agent: &AgentConfig, arguments: &Dict) -> anyh
         Ok(rules) => rules,
         Err(why) => return Ok(refusal(&format!("No password made: {why}. Nothing was asked or typed."))),
     };
-    // An agent of the shared hub: into its own space now, the account made there (own_space.rs).
-    let moved = match crate::own_space::ready(state, agent, &host).await {
-        Ok(moved) => moved,
-        Err(result) => return Ok(result),
-    };
-    let agent = &moved;
+    // while an agent other people talk to is on its way out of the hub: waited for, or the plain answer (own_space.rs)
+    if let Err(result) = crate::own_space::hub_private(state, &agent.name).await {
+        return Ok(result);
+    }
     if crate::vault::holder(&state.config(), agent).is_some() {
         return Ok(refusal(NO_VAULT));
     }

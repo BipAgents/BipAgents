@@ -848,7 +848,8 @@ fn the_soul_is_rendered_in_one_fixed_order() {
     let full = read_soul(&c, &agent).unwrap();
     // golden order: the personality, its language, the rules that never change, the switches' rules
     assert!(full.starts_with("Tu es Vie.\n\n<!-- bipagents:language -->"), "{full}");
-    assert_eq!(blocks(&full), ["language", "payments", "notebook", "health", "shared-memory"], "{full}");
+    // (the « Initiative » block last of them: its level's rule, the default « Basique » too since bench 1.1)
+    assert_eq!(blocks(&full), ["language", "payments", "notebook", "health", "shared-memory", "initiative"], "{full}");
     // today's line, the most volatile, comes after all of them: what is before it never changes with the day
     let dated = bipbridge::dates::with_dates(&full, Some("Mercredi 11 novembre : jour férié : Armistice"));
     assert!(dated.starts_with(full.trim_end()) && blocks(&dated).last().map(String::as_str) == Some("dates"), "{dated}");

@@ -69,10 +69,10 @@ def test_items_reach_only_the_agents_allowed_and_never_come_back(bridges, fakes)
 def test_who_can_hold_credentials(bridges, fakes):
     bridge = vault_bridge(bridges, fakes)
     agents = {a["id"]: (a["can_hold"], a["why"]) for a in bridge.get("/v1/vault", headers=AUTH).json()["agents"]}
-    assert agents == {"wellness": (False, "not_configured"), "vie": (True, None), "budget": (False, "needs_own_space")}
+    assert agents == {"wellness": (False, "not_configured"), "vie": (True, None), "budget": (False, "not_configured")}
     refused = bridge.post("/v1/vault", headers=AUTH, json={**LOGIN, "agents": ["vie", "budget"]})
     assert refused.status_code == 409
-    assert refused.json() == {"detail": {"code": "cannot_hold", "agents": {"budget": "needs_own_space"}}}
+    assert refused.json() == {"detail": {"code": "cannot_hold", "agents": {"budget": "not_configured"}}}
     assert requests_to_vie(bridge) == [] and bridge.get("/v1/vault", headers=AUTH).json()["items"] == []
     unknown = bridge.post("/v1/vault", headers=AUTH, json={**LOGIN, "agents": ["ghost"]})
     assert unknown.status_code == 400 and unknown.json() == {"detail": "unknown agent ghost"}

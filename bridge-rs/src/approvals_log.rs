@@ -75,6 +75,10 @@ pub fn record(config: &Config, agent: &str, fields: &Map<String, Value>) -> anyh
     entry.insert("command".into(), text(fields.get("command"), 4000));
     entry.insert("description".into(), text(fields.get("description"), 1000));
     entry.insert("topic".into(), text(fields.get("topic"), 40));
+    // a plan's offer shown on its card (plans/offers.rs `pill`): the plan's id (card_place.rs `asked_words`)
+    if let Some(plan) = text(fields.get("pill_of"), 200).as_str() {
+        entry.insert("pill_of".into(), json!(plan));
+    }
     entry.insert("choice".into(), json!(choice));
     entry.insert("via".into(), text(fields.get("via"), 20));
     let at = fields.get("at").and_then(Value::as_f64).filter(|t| *t > 0.0).unwrap_or_else(crate::py::time_time);
@@ -113,6 +117,17 @@ pub fn record(config: &Config, agent: &str, fields: &Map<String, Value>) -> anyh
 fn read(config: &Config, agent: &str) -> Vec<Map<String, Value>> {
     let Ok(body) = std::fs::read_to_string(file(config, agent)) else { return Vec::new() };
     body.lines().filter_map(|l| serde_json::from_str::<Value>(l).ok()).filter_map(|v| v.as_object().cloned()).collect()
+}
+
+/// The decision kept for this card's request already says what was asked (its command, description or topic): its own
+/// route wrote it (sandbox_sites.rs, storage_watch.rs…).
+pub fn says_what(config: &Config, agent: &str, run_id: &str, request_id: &str) -> bool {
+    let get = |e: &Map<String, Value>, k: &str| e.get(k).and_then(Value::as_str).unwrap_or("").to_string();
+    read(config, agent).iter().any(|e| {
+        get(e, "run_id") == run_id
+            && get(e, "request_id") == request_id
+            && ["command", "description", "topic"].iter().any(|k| !get(e, k).is_empty())
+    })
 }
 
 /// An agent's decisions, the oldest first; only one session's when `session` is given.
@@ -349,6 +364,26 @@ mod tests {
         assert!(record(&config, "home", &fields(json!({"choice": "once"}))).is_err());
         forget(&config, "home");
         assert!(list(&config, "home", None).is_empty());
+    }
+
+    #[test]
+    fn a_card_s_words_are_known_and_a_pill_says_its_plan() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = crate::config::parse_config(
+            &json!({"bridge_key": "k".repeat(32), "data_dir": dir.path().to_string_lossy()}),
+            None,
+        )
+        .unwrap();
+        let bare = fields(json!({"session_id": "s1", "run_id": "bip-plan-p1", "request_id": "p1", "choice": "once",
+                                 "at": 10.0}));
+        record(&config, "vie", &bare).unwrap();
+        assert!(!says_what(&config, "vie", "bip-plan-p1", "p1"));
+        let pill = fields(json!({"session_id": "s1", "run_id": "bip-offer-o1", "request_id": "o1", "choice": "once",
+                                 "command": "offer_act · Je te fais la liste ?", "pill_of": "p1", "at": 20.0}));
+        record(&config, "vie", &pill).unwrap();
+        assert!(says_what(&config, "vie", "bip-offer-o1", "o1"));
+        assert_eq!(list(&config, "vie", Some("s1"))[1]["pill_of"], json!("p1"));
+        assert!(list(&config, "vie", Some("s1"))[0].get("pill_of").is_none());
     }
 
     #[test]

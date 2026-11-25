@@ -7,7 +7,6 @@ import hashlib
 import json
 import os
 import tomllib
-from concurrent.futures import ThreadPoolExecutor
 
 import yaml
 
@@ -235,11 +234,12 @@ def test_a_running_sandbox_without_its_received_files_gets_the_file_at_once(brid
 
 
 def test_an_agent_that_moved_into_its_own_space_is_given_files_where_its_sandbox_reads_them(bridges, fakes):
-    """Coach moves into its own space (its first secret, in a hub that also hosts a project agent): its sandbox there
-    mounts its files' volume at /fichiers at once, and what Quotidien gives it is named by that path. Until
-    2026-11-07 the bridge named them by its space's folder, which its sandbox doesn't mount, until its next start."""
+    """Coach moves into its own space (since 24/11 only a project agent does: here one left in the hub, moved at
+    start): its sandbox there mounts its files' volume at /fichiers at once, and what Quotidien gives it is named by
+    that path. Until 2026-11-07 the bridge named them by its space's folder, which its sandbox doesn't mount, until its
+    next start. (Once moved, the test makes it an agent of the person again, so Quotidien may give it files.)"""
     import test_own_space as own
-    bridge, hub = own.hub_place(bridges, fakes, agents=("coach", "quotidien"), project="fete")
+    bridge, hub = own.hub_place(bridges, fakes, agents=("quotidien",), project="coach", tidy_after=0)
     volumes = {}
     for name in ("coach", "quotidien"):
         uploads = profile(hub, name) / "uploads"
@@ -253,16 +253,14 @@ def test_an_agent_that_moved_into_its_own_space_is_given_files_where_its_sandbox
                                             f"bipagents-{kind}-{name}"], stdout=f"{volume}\n")
     bridge.commands.rule("podman", ["network", "exists"], exit=1)
     bridge.start()
-    wait_registered(bridge, ["coach", "quotidien", "fete"])
-    own.use_token_of(hub)
-    with ThreadPoolExecutor(1) as pool:
-        call = pool.submit(own.tool, bridge, "ask_secret", own.ASK)
-        assert wait_until(lambda: own.secret_cards(bridge), timeout=60), bridge.log_tail(4000)
-        card = own.secret_cards(bridge)[0]
-        assert bridge.post(f"/v1/vault/secrets/requests/{card['request_id']}", headers=AUTH,
-                           json={"allow": False}).status_code == 200
-        call.result(timeout=60)
+    wait_registered(bridge, ["coach", "quotidien"])
     root = bridge.root / "spaces" / "coach"
+    # the move written (its space), not only /fichiers: the sandbox's isolation in the hub writes /fichiers too, before
+    # the move ends (25/11, int-1.1d: the wait passed on it and `space` was read before the move wrote it)
+    moved = lambda: tomllib.loads(bridge.toml_text())["agents"]["coach"]  # noqa: E731
+    assert wait_until(lambda: moved().get("space") == str(root) and moved().get("upload_dir_container") == "/fichiers",
+                      timeout=60), bridge.log_tail(4000)
+    (bridge.state_dir / "project-agents.json").write_text(json.dumps({"projects": {}}))
     section = tomllib.loads(bridge.toml_text())["agents"]["coach"]
     assert section["space"] == str(root) and section["upload_dir_container"] == "/fichiers", section
     terminal = yaml.safe_load((root / "profiles" / "coach" / "config.yaml").read_text())["terminal"]

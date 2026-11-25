@@ -324,13 +324,14 @@ def test_editing_the_secret_from_the_app_reopens_the_same_card(bridges, fakes):
 
 def test_a_hub_agent_gets_the_connector_tools_too(bridges, fakes):
     bridge, hub, _ = isolated(bridges, fakes, agents=("vie",))
-    bridge.start()   # vie is in the shared hub: its first secret moves it into its own space (test_own_space.py)
+    bridge.config["hermes"]["python"] = ["/usr/bin/false"]   # the hub's Python writes its agents' vaults
+    bridge.start()   # vie is in the shared hub: it keeps its secrets right there (test_own_space.py)
     wait_registered(bridge, ["vie"])
     def servers():   # read whole: the fake `hermes` and the bridge's start may be rewriting it (slower on the CI)
         data = yaml.safe_load((hub / "profiles" / "vie" / "config.yaml").read_text())
         return data.get("mcp_servers") if isinstance(data, dict) else None
     assert wait_until(lambda: servers() is not None, timeout=20)
-    assert "bipagents_connectors" in servers()   # a hub agent gets them too (it moves into its own space at first use)
+    assert "bipagents_connectors" in servers()   # a hub agent gets them too (held in the hub, it never moves)
 
 
 # --- the egress proxy, run here as the bridge writes its policy ---------------------------------------------------------
