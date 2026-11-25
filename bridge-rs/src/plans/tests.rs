@@ -608,3 +608,19 @@ fn fixes_a_habits_rhythm_is_read_never_guessed() {
     let said = draft(&args(&one_day), "vie", PARIS, PARIS, now).unwrap_err();
     assert!(said.contains("repeat.days: which days"), "{said}");
 }
+
+/// Verification of the fixes (25/11): a day's whole name in the plural (« Mondays », as models write « every
+/// Mondays ») is that day, as before the fix (« monthly » only is not a day).
+#[test]
+fn verify_a_days_plural_is_that_day() {
+    let now = at("2026-11-24T14:00:00+01:00");
+    let habit = |repeat: Value| json!({"kind": "habit", "title": "Yoga", "moments": [{"what": "Yoga", "say": "Yoga ?"}],
+                                       "repeat": repeat});
+    for (days, cron) in [(json!(["Mondays", "Thursdays"]), "1,4"), (json!("Sundays"), "0"), (json!("tuesdays, fridays"), "2,5")] {
+        let r = draft(&args(&habit(json!({"days": days, "times": ["09:00"]}))), "vie", PARIS, PARIS, now)
+            .unwrap_or_else(|e| panic!("{days}: {e}")).plan.repeat.unwrap();
+        assert_eq!(r.days, cron, "{days}");
+    }
+    let said = draft(&args(&habit(json!({"days": "mons", "times": ["09:00"]}))), "vie", PARIS, PARIS, now).unwrap_err();
+    assert!(said.contains("repeat.days"), "{said}");
+}

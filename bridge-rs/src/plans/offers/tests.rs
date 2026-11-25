@@ -1014,3 +1014,21 @@ fn fixes_buying_is_buying_in_five_languages() {
         assert_eq!(theme_of(&o(label)), Some(SHOPPING), "{label}");
     }
 }
+
+/// Verification of the fixes (25/11): a reminder sent to someone else is sent on the person's behalf (refused, as
+/// before the fix); only one to the person themselves passes.
+#[test]
+fn verify_a_reminder_to_someone_else_is_sending() {
+    for label in ["Shall I send a reminder to Paul?", "Shall I send the reminder to the whole team?",
+                  "J'envoie un rappel à tes invités ?", "J'envoie le rappel de paiement à ton locataire ?",
+                  "Soll ich deinen Gästen eine Erinnerung schicken?", "Soll ich Paul eine Erinnerung schicken?",
+                  "¿Le mando un recordatorio a Paul?", "¿Envío el recordatorio a tus invitados?",
+                  "Zal ik Paul een herinnering sturen?"] {
+        assert!(acts_itself(label).is_some(), "let through: {label}");
+    }
+    for label in ["Je t'envoie un rappel jeudi ?", "Shall I send you a reminder?", "Soll ich dir eine Erinnerung schicken?",
+                  "Soll ich Ihnen eine Erinnerung schicken?", "¿Te envío un recordatorio?", "Zal ik je een herinnering sturen?",
+                  "Zal ik u een herinnering sturen?", "Shall I send you a reminder on Thursday at 9?"] {
+        assert!(acts_itself(label).is_none(), "refused: {label}");
+    }
+}

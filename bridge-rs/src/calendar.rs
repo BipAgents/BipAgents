@@ -1379,6 +1379,59 @@ mod tests {
         assert!(third["content"][0]["text"].as_str().unwrap_or("").contains("didn't ask to put this"), "{third:?}");
     }
 
+    /// Verification of the fixes (25/11): a no said without a no word still keeps the add out, in the apps' five
+    /// languages — it is already there (a second event), the person adds it themselves, or nothing is to be added.
+    /// Each has a word `ADD_ASKED` or `CALENDAR_WORDS` takes for a request.
+    #[test]
+    fn verify_a_no_said_another_way_never_lets_the_add_through() {
+        let asked = [
+            ("Je l'ajoute à ton agenda ?", ["C'est déjà dans mon agenda", "Je l'ajoute", "Ajoute rien", "Aucun ajout, merci", "Annule l'ajout"]),
+            ("Shall I add it to your calendar?", ["It's already in my calendar", "I'll add it", "Add nothing", "I'll put it in", "Cancel the add"]),
+            ("Soll ich ihn in deinen Kalender eintragen?", ["Steht schon im Kalender", "Ich trag ihn ein", "Trag nichts ein", "Hab ich bereits eingetragen", "Füg nichts hinzu"]),
+            ("¿Lo apunto en tu calendario?", ["Ya está en mi calendario", "Lo apunto yo", "Ya lo apunté", "Lo añado yo", "Cancela, gracias"]),
+            ("Zal ik het in je agenda zetten?", ["Staat al in mijn agenda", "Ik zet het erin", "Zet er niks in", "Voeg niets toe", "Heb ik al toegevoegd"]),
+        ];
+        for (question, nos) in asked {
+            for no in nos {
+                let turns = said(&[("user", "Dentiste jeudi à 15 h."), ("assistant", question), ("user", no)]);
+                assert!(!add_asked(&turns), "added after « {question} » — « {no} »");
+            }
+        }
+    }
+
+    /// Verification of the fixes (25/11): a yes to a question that offers the calendar OR something else (« Je l'ajoute
+    /// à ton agenda ou je te mets un rappel ? » — « Oui, un rappel ») is no yes to the calendar; « … ou pas ? » is one.
+    #[test]
+    fn verify_a_yes_to_a_choice_is_no_yes_to_the_calendar() {
+        for (question, yes) in [("Je l'ajoute à ton agenda ou je te mets juste un rappel ?", "Oui un rappel"),
+                                ("Shall I add it to your calendar, or set a reminder?", "Yes, a reminder"),
+                                ("Soll ich es eintragen oder dich nur erinnern?", "Ja, erinnern"),
+                                ("¿Lo apunto en tu calendario o te pongo un recordatorio?", "Sí, el recordatorio"),
+                                ("Zal ik het in je agenda zetten of een herinnering maken?", "Ja, een herinnering")] {
+            let turns = said(&[("user", "Dentiste jeudi à 15 h."), ("assistant", question), ("user", yes)]);
+            assert!(!add_asked(&turns), "added after « {question} » — « {yes} »");
+        }
+        for (question, yes) in [("Je l'ajoute à ton agenda ou pas ?", "Oui"), ("Shall I add it to your calendar or not?", "Yes"),
+                                ("Soll ich ihn eintragen oder nicht?", "Ja"), ("¿Lo apunto o no?", "Sí"),
+                                ("Zal ik het noteren of niet?", "Ja")] {
+            let turns = said(&[("user", "Dentiste jeudi à 15 h."), ("assistant", question), ("user", yes)]);
+            assert!(add_asked(&turns), "refused after « {question} » — « {yes} »");
+        }
+    }
+
+    /// Verification of the fixes (25/11): a clear request that asks not to forget is no no, in the apps' five
+    /// languages (« … pour ne pas oublier », « … so I don't forget », « N'oublie pas de l'ajouter »).
+    #[test]
+    fn verify_a_clear_request_not_to_forget_passes() {
+        for request in ["Ajoute-le à mon agenda pour ne pas oublier", "N'oublie pas de l'ajouter à mon agenda",
+                        "Add it to my calendar so I don't forget", "Don't forget to add it to my calendar",
+                        "Trag es in meinen Kalender ein, damit ich es nicht vergesse", "Vergiss nicht, es einzutragen",
+                        "Apúntalo en mi calendario para no olvidarlo", "No olvides apuntarlo",
+                        "Zet het in mijn agenda zodat ik het niet vergeet", "Vergeet niet het toe te voegen"] {
+            assert!(add_asked(&said(&[("user", request)])), "refused: « {request} »");
+        }
+    }
+
     #[test]
     fn moments_as_agents_write_them() {
         assert_eq!(Moment::parse("2026-10-30").map(|m| m.write()).as_deref(), Some("2026-10-30"));
