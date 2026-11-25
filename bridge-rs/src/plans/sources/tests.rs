@@ -18,6 +18,8 @@ fn config_in(dir: &std::path::Path) -> Config {
         p.routines = "Europe/Paris".into();
     })
     .unwrap();
+    // never a quiet hour, whatever the hour the tests run (the reminder waits for the morning: `night_keeps_the_reminder`)
+    quiet(&config, "03:00", "03:00");
     config
 }
 
@@ -788,4 +790,48 @@ fn keep_says_how_long_the_watch_has_really_run() {
     };
     assert_eq!(text("six"), "Le veilleur « Réponses dues · six@example.org » tourne depuis 6 mois. Le garder ? Sans réponse, il continue.");
     assert_eq!(text("quinze"), "Le veilleur « Réponses dues · quinze@example.org » tourne depuis 1 an et 3 mois. Le garder ? Sans réponse, il continue.");
+}
+
+/// The place's quiet hours (the Carnet's `state.json` `quiet`).
+fn quiet(config: &Config, from: &str, to: &str) {
+    let mut state = crate::notebook::read_state(config);
+    state.insert("quiet".into(), json!({"from": from, "to": to}));
+    crate::notebook::write_state(config, &state).unwrap();
+}
+
+/// Never at night (25/11, review « plus tard » 4): a « Garder ? » reminder due in the quiet hours (22:00 → 08:00 by
+/// default) waits for the morning; nothing changes meanwhile.
+#[test]
+fn night_keeps_the_reminder_until_the_morning() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = french(config_in(dir.path()));
+    quiet(&config, "22:00", "08:00");
+    let night = epoch(1, 23);
+    let morning = epoch(2, 8) + 600.0;
+    change(&config, |s| s.mailboxes.push(Mailbox { asked_at: night - 90.0 * DAY, ..replies_watch("box", night - 60.0) }));
+    assert!(keep_due(&config, night).is_empty(), "a reminder pushed at 23:00");
+    assert!(keep_due(&config, night + 3.0 * 3600.0).is_empty(), "a reminder pushed at 02:00");
+    let m = mailbox_of(&config, "box");
+    assert!(m.fix.is_none() && !m.reminded && m.ends == night - 60.0, "{m:?}");
+    let found = keep_due(&config, morning);
+    assert!(matches!(found.as_slice(), [KeepDue::Raise { push: true, .. }]), "{found:?}");
+}
+
+/// `plans-sources.json` written only when it changed (review « plus tard » 1: it was written every minute as soon as a
+/// mailbox had an end).
+#[test]
+fn the_store_is_written_only_when_it_changed() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = french(config_in(dir.path()));
+    let n = now();
+    change(&config, |s| s.mailboxes.push(replies_watch("box", n + 30.0 * DAY)));
+    let file = path(&config);
+    // the same store written another way (compact): a write would make it pretty again
+    let compact = serde_json::to_string(&load(&config)).unwrap();
+    std::fs::write(&file, &compact).unwrap();
+    assert!(keep_due(&config, n).is_empty());
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), compact, "written though nothing changed");
+    // a change is written
+    keep_due(&config, n + 28.0 * DAY);
+    assert_ne!(std::fs::read_to_string(&file).unwrap(), compact);
 }

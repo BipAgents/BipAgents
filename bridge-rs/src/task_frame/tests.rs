@@ -21,6 +21,8 @@ fn config_in(dir: &std::path::Path) -> Config {
         p.routines = "Europe/Paris".into();
     })
     .unwrap();
+    // never a quiet hour, whatever the hour the tests run (the reminder waits for the morning: `night_keeps_the_reminder`)
+    quiet(&config, "03:00", "03:00");
     config
 }
 
@@ -1231,4 +1233,31 @@ fn months_since_rounds_whole_months() {
     assert_eq!(months_since(0.0, at), 3);
     assert_eq!(keep_duration("fr", 15), "1 an et 3 mois");
     assert_eq!(keep_duration("fr", 24), "2 ans");
+}
+
+/// The place's quiet hours (the Carnet's `state.json` `quiet`).
+fn quiet(config: &Config, from: &str, to: &str) {
+    let mut state = crate::notebook::read_state(config);
+    state.insert("quiet".into(), json!({"from": from, "to": to}));
+    crate::notebook::write_state(config, &state).unwrap();
+}
+
+/// Never at night (25/11): a routine's « Garder ? » reminder due in the quiet hours waits for the morning.
+#[test]
+fn night_keeps_a_routine_s_reminder_until_the_morning() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = config_in(dir.path());
+    quiet(&config, "22:00", "08:00");
+    let r = agents(&config, "Météo", "every day at 7:30", &Ask { asked: false, ..Ask::default() });
+    let until = r.frame.until.unwrap();
+    let local = |t: f64| PARIS.timestamp_opt(t as i64, 0).unwrap();
+    // its date passed, at 23:00 that night (the date's own day): nothing pushed yet
+    let day = local(until).date_naive();
+    let at = |d: chrono::NaiveDate, h: u32| PARIS.from_local_datetime(&d.and_hms_opt(h, 0, 0).unwrap()).unwrap().timestamp() as f64;
+    let night = at(day, 23).max(until + 60.0);
+    let night = if local(night).hour() >= 22 || local(night).hour() < 8 { night } else { at(day + chrono::Duration::days(1), 23) };
+    assert!(due(&config, night).iter().all(|d| !matches!(d, Due::Raise { push: true, .. })), "pushed at night");
+    assert!(!routines::get(&config, &r.id).unwrap().frame.reminded);
+    let morning = at(local(night).date_naive() + chrono::Duration::days(if local(night).hour() >= 22 { 1 } else { 0 }), 9);
+    assert!(matches!(due(&config, morning).as_slice(), [Due::Raise { push: true, .. }]));
 }
