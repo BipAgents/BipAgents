@@ -17,7 +17,7 @@ it (the generic card: `bip_summary`, « Oui » / « Non » = `once` / `deny`):
   « Oui » starts its turn; once Vie has « Santé », a pass never reads its conversations;
 - J72 « Garder ? » (Alex's B2, 24/11; « Garder ? dans la 1.1 », 25/11): a mailbox's replies-due watch never stops at its
   default end without the person: ONE card « Garder ? » before it, « Garder » a new period; unanswered at its date, on,
-  asked once more and pushed; unanswered again, on until stopped; « Le laisser s'arrêter » (an app 1.0's « Non »): it
+  asked once more and pushed; unanswered again, on until stopped; « L'arrêter le {date} » (an app 1.0's « Non »): it
   stops at its date, one Boîte line.
 
 Each test is one journey `Jnn`, on a bridge of its own. No real account: invented names, the fake IMAP, the fake
@@ -544,8 +544,9 @@ def test_j72_replies_watch_keep_card_garder_a_reminder_then_on_until_stopped_or_
     [box] = replies(journey)
     fix, name = card["bip_fix"], f"Réponses dues · {pj.ME}"
     assert (fix["variant"], fix["ref"], fix["name"], fix["title"]) == ("keep", box["trigger"], name, "Vie"), fix
-    assert re.fullmatch(rf"Le veilleur « {re.escape(name)} » s'arrête le .+\. Le garder 3 mois de plus \?", fix["text"]), fix
-    assert fix["buttons"] == ["Garder", "Le laisser s'arrêter"] and card["bip_choices"] == ["keep", "stop"], card
+    assert fix["text"] == f"Le veilleur « {name} » tourne depuis 3 mois. Le garder ? Sans réponse, il continue.", fix
+    assert fix["buttons"][0] == "Garder" and re.fullmatch(r"L'arrêter le \d{1,2}/\d{1,2}", fix["buttons"][1]), fix
+    assert card["bip_choices"] == ["keep", "stop"], card
     assert fix["ends_at"] == box["ends"], (fix, box)
     assert card["bip_summary"] == fix["text"] and not generic_problems(card), card
     assert box["state"] == "on" and box["ends"] > time.time() + DAY, box
@@ -587,7 +588,7 @@ def test_j72_replies_watch_keep_card_garder_a_reminder_then_on_until_stopped_or_
     rows = [i for i in autonomous(journey) if i["ref"] == box["trigger"]]
     assert rows[0]["ends"]["kind"] == "never" and rows[0]["fix"] is None, rows
     assert len(fakes.apns.payloads()) == pushes
-    # a new period (as its switch turned on again does) and « Le laisser s'arrêter » from an app 1.0 (« Non »): on until
+    # a new period (as its switch turned on again does) and « L'arrêter le {date} » from an app 1.0 (« Non »): on until
     # its date, then it stops, one Boîte line, never a consent card again
     edit_box(journey, account, lambda: keep_cards(journey), ends=time.time() + 2 * DAY, keep_asked=False, reminded=False)
     [last] = keep_cards(journey)
@@ -600,5 +601,5 @@ def test_j72_replies_watch_keep_card_garder_a_reminder_then_on_until_stopped_or_
     assert wait_until(lambda: [i for i in boite_items(journey.bridge) if line in (i.get("text") or "")], timeout=20), \
         [i.get("text") for i in boite_items(journey.bridge)][-5:]
     time.sleep(1.5)
-    assert not [c for c in replies_cards(journey) if c["bip_offer"]["kind"] == "reply_watch"], "asked again after « Le laisser s'arrêter »"
+    assert not [c for c in replies_cards(journey) if c["bip_offer"]["kind"] == "reply_watch"], "asked again after « L'arrêter le … »"
     assert not keep_cards(journey)

@@ -1158,7 +1158,7 @@ pub async fn repair(state: &AppState, agent: &AgentConfig, id: &str) {
 }
 
 /// A « once » watcher whose agent told its person: done (review C2): paused on its page, never deleted, and no end
-/// left to come nor « Garder 3 mois de plus ? » (review 2, N1): it has done its work; a « Garder ? » waiting goes. The
+/// left to come nor « Garder ? » (review 2, N1): it has done its work; a « Garder ? » waiting goes. The
 /// person may turn it back on: it then watches once more, until they stop it.
 pub fn once_told(config: &Config, agent: &str, id: &str) {
     let gone = connectors::change(config, |store| {

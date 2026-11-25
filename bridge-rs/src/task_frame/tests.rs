@@ -81,9 +81,9 @@ fn the_contract_s_texts_are_the_bridge_s() {
             assert_eq!(stopped_line(lang, task, "{name}"), s(&c["stopped"][k]), "{lang} {k}");
             assert_eq!(repair_failed_line(lang, task, "{name}"), s(&c["repair_failed"][k]), "{lang} {k}");
             assert_eq!(ended_line(lang, task, "{name}", "{end}"), s(&c["ended"][k]), "{lang} {k}");
-            assert_eq!(keep_sentence(lang, task, "{name}", "{date}"), s(&c["keep"][k]), "{lang} {k}");
+            assert_eq!(keep_sentence(lang, task, "{name}"), s(&c["keep"][k]), "{lang} {k}");
             let buttons: Vec<String> = c["keep_buttons"][k].as_array().unwrap().iter().map(s).collect();
-            assert_eq!(keep_buttons(lang, task).to_vec(), buttons, "{lang} {k}");
+            assert_eq!(keep_buttons(lang, task, "{date}").to_vec(), buttons, "{lang} {k}");
             assert_eq!(end_words(lang, task, &End::Once, PARIS), s(&c["ends"]["once"][k]), "{lang} {k}");
             let never = &c["ends"]["never"];
             assert_eq!(end_words(lang, task, &End::Never, PARIS), s(&never[k]), "{lang} {k}");
@@ -431,7 +431,7 @@ fn what_its_agent_sets_up_on_its_own_ends_after_90_days_and_asks_3_days_before()
     assert_eq!(routines::end_of(&agents(&config, "Agenda", "every day at 8:00", &asked())), End::Never);
     let given = agents(&config, "Dix", "every day at 9:00", &Ask { repeat: Some(10), asked: false, ..Ask::default() });
     assert!(!given.frame.default_end && given.frame.until.is_none());
-    // 3 days before: the card « Garder 3 mois de plus ? », once
+    // 3 days before: the card « Garder ? », once
     assert!(due(&config, until - 4.0 * DAY).is_empty());
     let found = due(&config, until - 2.0 * DAY);
     assert!(matches!(found.as_slice(), [Due::Raise { push: false, .. }]), "{found:?}");
@@ -441,7 +441,8 @@ fn what_its_agent_sets_up_on_its_own_ends_after_90_days_and_asks_3_days_before()
     assert_eq!(item["bip_choices"], json!(["keep", "stop"]));
     assert_eq!(item["bip_fix"]["variant"], KEEP);
     let date = day_words("fr", until, PARIS);
-    assert_eq!(item["bip_summary"], json!(format!("La routine « Météo » s'arrête le {date}. La garder 3 mois de plus ?")));
+    assert_eq!(item["bip_summary"], json!("La routine « Météo » tourne depuis 3 mois. La garder ? Sans réponse, elle continue."));
+    assert_eq!(item["bip_fix"]["buttons"], json!(["Garder", format!("L'arrêter le {date}")]));
     let id = item["request_id"].as_str().unwrap().to_string();
     // « Garder »: 90 days more
     assert!(settle(&config, "vie", &id, true).is_some());
@@ -467,7 +468,7 @@ fn a_once_watcher_and_a_watchers_end_are_read_from_its_watch() {
 
 // -- review-task-frame (23/11): red tests of the review (briefs/review-task-frame.md), not the branch's ------------------
 
-/// « Arrêter » pauses, never deletes; « Garder 3 mois de plus ? » 3 days before a default end. A routine its agent made
+/// « Arrêter » pauses, never deletes; « Garder ? » 3 days before a default end. A routine its agent made
 /// on its own, stopped after 3 failures: no « Garder ? » is asked (it is paused), and its default end deletes it.
 #[test]
 fn review_stop_never_deletes_even_at_its_default_end() {
@@ -547,7 +548,7 @@ fn review_the_retry_of_a_last_counted_run_is_not_dropped_by_its_end() {
     assert!(kept.as_ref().is_some_and(|k| k.frame.retry_at.is_some()), "its retry dropped with the routine: {kept:?}");
 }
 
-/// « Garder 3 mois de plus ? » replaced by « Réparer / Arrêter » (a failure 2 days before its end): once repaired, it
+/// « Garder ? » replaced by « Réparer / Arrêter » (a failure 2 days before its end): once repaired, it
 /// is asked again before the end, not lost.
 #[test]
 fn review_a_keep_card_replaced_by_a_repair_is_asked_again() {
@@ -885,7 +886,7 @@ fn r2_every_way_back_on_gives_a_passed_default_end_three_days() {
 }
 
 /// N1 (review 2): a « once » watcher of its agent's own that told its person is done: paused, no default end left, no
-/// « Garder 3 mois de plus ? », a « Garder ? » waiting taken.
+/// « Garder ? », a « Garder ? » waiting taken.
 #[test]
 fn r2_a_once_watcher_done_is_never_asked_garder() {
     let dir = tempfile::tempdir().unwrap();
@@ -1095,7 +1096,7 @@ fn a2_the_common_card_speaks_four_languages() {
 
 /// Point 3: tf-fin-par-defaut-de-lui-meme B2: what its agent set up on its own never stops at its default end without its
 /// person: unanswered, it goes on and « Garder ? » is asked once more, pushed, 14 days later; unanswered again, it
-/// goes on « until you stop it ». « La laisser s'arrêter » makes the end hers.
+/// goes on « until you stop it ». « L'arrêter le {date} » makes the end hers.
 #[test]
 fn a3_a_default_end_never_stops_it_without_its_person() {
     let dir = tempfile::tempdir().unwrap();
@@ -1122,7 +1123,7 @@ fn a3_a_default_end_never_stops_it_without_its_person() {
     assert_eq!(routines::end_of(&kept), End::Never);
     assert!(kept.enabled && kept.frame.fix.is_none() && pending_items(&config, Some("vie")).is_empty());
     assert!(due(&config, next + 30.0 * DAY).is_empty());
-    // « La laisser s'arrêter »: it stops at its date, as said
+    // « L'arrêter le {date} »: it stops at its date, as said
     let other = agents(&config, "Agenda", "every day at 8:00", &Ask { asked: false, ..Ask::default() });
     let until = other.frame.until.unwrap();
     due(&config, until - 2.0 * DAY);
@@ -1130,7 +1131,7 @@ fn a3_a_default_end_never_stops_it_without_its_person() {
     assert!(settle(&config, "vie", &id, false).is_some());
     assert!(routines::get(&config, &other.id).is_some());
     due(&config, until + 60.0);
-    assert!(routines::get(&config, &other.id).is_none(), "« La laisser s'arrêter » kept it");
+    assert!(routines::get(&config, &other.id).is_none(), "« L'arrêter le {date} » kept it");
 }
 
 /// Point 3: The same for a watcher of its agent's own.
@@ -1152,4 +1153,20 @@ fn a3_a_watchers_default_end_never_removes_it_without_its_person() {
     let c = connectors::get(&config, "vie", "c_veille").unwrap();
     assert_eq!(crate::watchers::end_of(c.watch.as_ref()), End::Never);
     assert!(c.enabled && c.frame.fix.is_none());
+}
+
+/// Alex 25/11 (textes lot 2, tf2-garder-nuance B): the « Garder ? » card in Dutch too (the rest of the frame stays
+/// English for nl), its day « 30-11 ».
+#[test]
+fn the_keep_card_s_dutch_words_are_the_contract_s() {
+    let c = &contract()["texts"]["keep_nl"];
+    let s = |v: &Value| v.as_str().unwrap().to_string();
+    for task in [Task::Routine, Task::Watcher] {
+        assert_eq!(keep_sentence("nl", task, "{name}"), s(&c[task.key()]));
+        let buttons: Vec<String> = c["buttons"].as_array().unwrap().iter().map(s).collect();
+        assert_eq!(keep_buttons("nl", task, "{date}").to_vec(), buttons);
+    }
+    let at = PARIS.with_ymd_and_hms(chrono::Datelike::year(&chrono::Utc::now()), 11, 30, 12, 0, 0).unwrap().timestamp() as f64;
+    assert_eq!(keep_day("nl", at, PARIS), "30-11");
+    assert_eq!(keep_day("fr", at, PARIS), "30/11");
 }

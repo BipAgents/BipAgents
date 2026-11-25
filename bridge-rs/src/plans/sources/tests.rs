@@ -301,9 +301,9 @@ fn keep_a_replies_watch_asks_garder_once_three_days_before_its_end_never_twice()
     assert_eq!(item["run_id"], json!(run_id));
     let fix = &item["bip_fix"];
     let sentence = fix["text"].as_str().unwrap();
-    assert!(sentence.starts_with("Le veilleur « Réponses dues · soon@example.org » s'arrête le "), "{sentence}");
-    assert!(sentence.ends_with(". Le garder 3 mois de plus ?"), "{sentence}");
-    assert_eq!(fix["buttons"], json!(["Garder", "Le laisser s'arrêter"]));
+    assert_eq!(sentence, "Le veilleur « Réponses dues · soon@example.org » tourne depuis 3 mois. Le garder ? Sans réponse, il continue.");
+    let day = crate::task_frame::day_words("fr", n + 2.0 * DAY, PARIS);
+    assert_eq!(fix["buttons"], json!(["Garder", format!("L'arrêter le {day}")]));
     assert_eq!((fix["variant"].as_str(), fix["ref"].as_str()), (Some("keep"), Some("t-soon")));
     assert_eq!(fix["ends_at"], json!(n + 2.0 * DAY));
     assert_eq!(item["bip_choices"], json!(["keep", "stop"]));
@@ -335,7 +335,7 @@ fn keep_unanswered_at_its_end_the_watch_goes_on_asked_once_more_pushed_then_unti
     let found = keep_due(&config, later);
     let [KeepDue::Raise { run_id, line, push: true, .. }] = found.as_slice() else { panic!("{found:?}") };
     assert!(!run_id.ends_with(&old), "the same card again: {run_id}");
-    assert!(line.starts_with("Le veilleur « Réponses dues · box@example.org » s'arrête le "), "{line}");
+    assert_eq!(line, "Le veilleur « Réponses dues · box@example.org » tourne depuis 3 mois. Le garder ? Sans réponse, il continue.");
     let m = mailbox_of(&config, "box");
     assert_eq!(m.state, ON, "stopped at its default end without its person");
     assert!((m.ends - (later + crate::task_frame::REMIND_DAYS * DAY)).abs() < 1.0 && m.reminded, "{m:?}");
@@ -354,7 +354,7 @@ fn keep_unanswered_at_its_end_the_watch_goes_on_asked_once_more_pushed_then_unti
     assert!(keep_due(&config, end + 90.0 * DAY).is_empty());
 }
 
-/// « Garder »: a new period, 90 days more; « Le laisser s'arrêter » (an app 1.0's « Non »): its end is the person's,
+/// « Garder »: a new period, 90 days more; « L'arrêter le {date} » (an app 1.0's « Non »): its end is the person's,
 /// reached at its date: the watch stops there (`KeepDue::End`, its Boîte line), never asked again.
 #[test]
 fn keep_garder_gives_90_days_more_and_le_laisser_s_arreter_ends_it_at_its_date() {

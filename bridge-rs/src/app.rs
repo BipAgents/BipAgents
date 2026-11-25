@@ -1400,7 +1400,7 @@ async fn bridge_card(
             None => Err(HttpError::new(404, "no such request (answered already?)")),
         }?));
     }
-    // « Réparer / Arrêter » or « Garder 3 mois de plus ? » (task_frame.rs): « Réparer » starts ONE turn of its agent
+    // « Réparer / Arrêter » or « Garder ? » (task_frame.rs): « Réparer » starts ONE turn of its agent
     if let Some(id) = run_id.strip_prefix(crate::task_frame::RUN_PREFIX) {
         if crate::task_frame::fix_by(&state.config(), &agent.name, id).is_some() {
             // a routine a family member asked for: hers to answer, from her bridge (review C7)

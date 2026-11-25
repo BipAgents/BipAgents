@@ -137,7 +137,7 @@ pub struct Watch {
     /// « Préviens-moi quand… »: it stops once it told its person.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub once: bool,
-    /// `until` set by default (its agent's own idea, no end given): « Garder 3 mois de plus ? » before it.
+    /// `until` set by default (its agent's own idea, no end given): « Garder ? » before it.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub default_end: bool,
 }
@@ -1059,7 +1059,7 @@ fn strings(value: Option<&Value>) -> Vec<String> {
 }
 
 /// A watcher's end as its frame wants it (task_frame.rs): asked by its person, as given; its agent's own idea, within
-/// `DEFAULT_END_DAYS` (« une seule fois » too), « Garder 3 mois de plus ? » before.
+/// `DEFAULT_END_DAYS` (« une seule fois » too), « Garder ? » before.
 pub fn watch_frame(watch: &mut Watch, asked: bool, now: f64) {
     (watch.until, watch.default_end) = crate::task_frame::own_end(watch.until, asked, now);
 }
@@ -1248,7 +1248,7 @@ async fn register_tool(state: &AppState, agent: &AgentConfig, arguments: &Dict) 
     }
     if let Some(watch) = conn.watch.as_mut() {
         // a watcher its agent sets up on its own (not in its person's own conversation): it stops by itself within
-        // 90 days, « Garder 3 mois de plus ? » before (task_frame.rs, Alex Q6 A; review C9, R2)
+        // 90 days, « Garder ? » before (task_frame.rs, Alex Q6 A; review C9, R2)
         watch_frame(watch, crate::agent_tools::asked_by_person(state, &agent.name, REGISTER), py::time_time());
     }
     if arguments.get("tools").is_none_or(Value::is_null) {

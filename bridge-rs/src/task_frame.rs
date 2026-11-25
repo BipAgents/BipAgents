@@ -6,8 +6,8 @@
 //! - an end: a date, a number of runs, its plan's end, « once » (a one-time routine; a watcher that stops once it told
 //!   its person), or « until you stop it ». What its agent sets up on its own (not in a turn of the person's own
 //!   conversation) with no end given has a default end `DEFAULT_END_DAYS` after; `KEEP_ASK_DAYS` before, a card
-//!   « Garder 3 mois de plus ? » (`KEEP`). It never ends there without its person (Alex 24/11, B2): « La laisser
-//!   s'arrêter » makes the end hers; unanswered at its date, it goes on and the card is asked once more, pushed
+//!   « Garder ? » (`KEEP`: « … tourne depuis 3 mois. La garder ? Sans réponse, elle continue. »). It never ends there
+//!   without its person (Alex 24/11, B2; its words, textes lot 2, 25/11): « L'arrêter le {date} » makes the end hers; unanswered at its date, it goes on and the card is asked once more, pushed
 //!   (`REMIND_DAYS` later); unanswered again, it goes on « until you stop it ». An end its person gave (a date, a
 //!   number of runs) is reached quietly: one Boîte line, not pushed, for what ran more than a week;
 //! - a place where it answers: the conversation it was made in, the Boîte, or silently on its page (`deliver`).
@@ -47,7 +47,7 @@ use crate::routines::{self, Routine};
 use crate::web::{self, ApiResult, HttpError};
 use crate::{py, Dict};
 
-/// The card « Réparer / Arrêter » or « Garder 3 mois de plus ? » (`/v1/approvals`, `/v1/approve`).
+/// The card « Réparer / Arrêter » or « Garder ? » (`/v1/approvals`, `/v1/approve`).
 pub const RUN_PREFIX: &str = "bip-fix-";
 /// Its kind (approval_level.rs: critical at every level).
 pub const KIND: &str = "task_fix";
@@ -70,7 +70,7 @@ pub const REMIND_DAYS: f64 = 14.0;
 pub const WARN_DAYS: f64 = 3.0;
 /// « Garder »: its end this much later.
 pub const KEEP_DAYS_MORE: f64 = 90.0;
-/// « Garder 3 mois de plus ? » this long before a default end.
+/// « Garder ? » this long before a default end.
 pub const KEEP_ASK_DAYS: f64 = 3.0;
 /// A card « Réparer / Arrêter » nobody answers: gone after this, the task paused.
 pub const NO_ANSWER_DAYS: f64 = 7.0;
@@ -139,10 +139,10 @@ pub struct Frame {
     /// Its end (a routine's; a watcher's is in its `watch`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub until: Option<f64>,
-    /// `until` set by default (its agent's own idea, no end given): « Garder 3 mois de plus ? » before it.
+    /// `until` set by default (its agent's own idea, no end given): « Garder ? » before it.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub default_end: bool,
-    /// « Garder 3 mois de plus ? » asked for this end.
+    /// « Garder ? » asked for this end.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub keep_asked: bool,
     /// A card waiting: « Réparer / Arrêter » or « Garder ? ».
@@ -610,28 +610,58 @@ pub fn ended_line(lang: &str, task: Task, name: &str, end: &str) -> String {
     }
 }
 
-/// « Garder 3 mois de plus ? » (§7.4).
-pub fn keep_sentence(lang: &str, task: Task, name: &str, date: &str) -> String {
-    match (lang_of(lang), task) {
-        ("fr", Task::Watcher) => format!("Le veilleur « {name} » s'arrête le {date}. Le garder 3 mois de plus ?"),
-        ("fr", Task::Routine) => format!("La routine « {name} » s'arrête le {date}. La garder 3 mois de plus ?"),
-        ("de", Task::Watcher) => format!("Der Wächter „{name}“ endet am {date}. Noch 3 Monate behalten?"),
-        ("de", Task::Routine) => format!("Die Routine „{name}“ endet am {date}. Noch 3 Monate behalten?"),
-        ("es", Task::Watcher) => format!("El vigilante «{name}» termina el {date}. ¿Mantenerlo 3 meses más?"),
-        ("es", Task::Routine) => format!("La rutina «{name}» termina el {date}. ¿Mantenerla 3 meses más?"),
-        (_, Task::Watcher) => format!("The watcher “{name}” stops on {date}. Keep it 3 more months?"),
-        (_, Task::Routine) => format!("The routine “{name}” stops on {date}. Keep it 3 more months?"),
+/// « Garder ? » at a default end (§7.4; Alex 25/11, textes lot 2 tf2-garder-nuance B and rd-nuance-b2 B: nothing stops
+/// without its person, so the card says it goes on with no answer; a mailbox's replies-due watch takes the watcher's
+/// words). `lang`: fr, de, es, nl (`keep_lang`); another: English.
+pub fn keep_sentence(lang: &str, task: Task, name: &str) -> String {
+    match (keep_of(lang), task) {
+        ("fr", Task::Watcher) => format!("Le veilleur « {name} » tourne depuis 3 mois. Le garder ? Sans réponse, il continue."),
+        ("fr", Task::Routine) => {
+            format!("La routine « {name} » tourne depuis 3 mois. La garder ? Sans réponse, elle continue.")
+        }
+        ("de", Task::Watcher) => format!("Der Wächter „{name}“ läuft seit 3 Monaten. Behalten? Ohne Antwort läuft er weiter."),
+        ("de", Task::Routine) => format!("Die Routine „{name}“ läuft seit 3 Monaten. Behalten? Ohne Antwort läuft sie weiter."),
+        ("es", Task::Watcher) => format!("El vigilante «{name}» lleva 3 meses funcionando. ¿Mantenerlo? Sin respuesta, sigue."),
+        ("es", Task::Routine) => format!("La rutina «{name}» lleva 3 meses funcionando. ¿Mantenerla? Sin respuesta, sigue."),
+        ("nl", Task::Watcher) => format!("De bewaker „{name}” draait al 3 maanden. Houden? Zonder antwoord gaat hij door."),
+        ("nl", Task::Routine) => format!("De routine „{name}” draait al 3 maanden. Houden? Zonder antwoord gaat hij door."),
+        (_, Task::Watcher) => format!("The watcher “{name}” has been running for 3 months. Keep it? With no answer, it goes on."),
+        (_, Task::Routine) => format!("The routine “{name}” has been running for 3 months. Keep it? With no answer, it goes on."),
     }
 }
 
-pub fn keep_buttons(lang: &str, task: Task) -> [&'static str; 2] {
-    match (lang_of(lang), task) {
-        ("fr", Task::Watcher) => ["Garder", "Le laisser s'arrêter"],
-        ("fr", Task::Routine) => ["Garder", "La laisser s'arrêter"],
-        ("de", _) => ["Behalten", "Enden lassen"],
-        ("es", _) => ["Mantener", "Dejar que termine"],
-        _ => ["Keep", "Let it stop"],
+/// « Garder » · « L'arrêter le {date} » (its end: it stops there, never at once).
+pub fn keep_buttons(lang: &str, task: Task, date: &str) -> [String; 2] {
+    let (keep, stop) = match (keep_of(lang), task) {
+        ("fr", _) => ("Garder", format!("L'arrêter le {date}")),
+        ("de", _) => ("Behalten", format!("Am {date} stoppen")),
+        ("es", Task::Watcher) => ("Mantener", format!("Detenerlo el {date}")),
+        ("es", Task::Routine) => ("Mantener", format!("Detenerla el {date}")),
+        ("nl", _) => ("Houden", format!("Stoppen op {date}")),
+        _ => ("Keep", format!("Stop it on {date}")),
+    };
+    [keep.to_string(), stop]
+}
+
+/// fr, de, es, nl; another: English (the « Garder ? » card has Dutch words, the rest of the frame not yet).
+fn keep_of(lang: &str) -> &'static str {
+    match lang {
+        "nl" => "nl",
+        other => lang_of(other),
     }
+}
+
+/// The agent's language for its « Garder ? » card: `lang_of_agent`, or nl.
+pub fn keep_lang(config: &Config, agent: &str) -> &'static str {
+    keep_of(crate::names::names(&crate::names::agent_language(config, agent)).lang)
+}
+
+/// The day on a « Garder ? » card: `day_words`, Dutch « 30-11 » (« 30-11-2027 » another year).
+pub fn keep_day(lang: &str, at: f64, zone: Tz) -> String {
+    if keep_of(lang) != "nl" {
+        return day_words(lang, at, zone);
+    }
+    day_words("fr", at, zone).replace('/', "-")
 }
 
 /// A watcher's « Réparer / Arrêter » asked again before it stops (`WARN_DAYS`; Alex 24/11: « prévenir avant de
@@ -727,9 +757,11 @@ pub fn card_item(config: &Config, about: &About) -> Dict {
     let (fix, task) = (about.fix, about.task);
     let keep = fix.variant == KEEP;
     let (summary, detail, bip) = if keep {
-        let sentence = keep_sentence(lang, task, &name, &day_words(lang, about.ends_at.unwrap_or(fix.at), zone));
+        let lang = keep_lang(config, about.agent);
+        let sentence = keep_sentence(lang, task, &name);
+        let buttons = keep_buttons(lang, task, &keep_day(lang, about.ends_at.unwrap_or(fix.at), zone));
         let bip = json!({"kind": about.kind.unwrap_or(task.key()), "ref": about.id, "name": name, "variant": KEEP,
-                         "ends_at": about.ends_at, "title": who, "text": sentence, "buttons": keep_buttons(lang, task)});
+                         "ends_at": about.ends_at, "title": who, "text": sentence, "buttons": buttons});
         (sentence.clone(), sentence, bip)
     } else {
         let since = if fix.since > 0.0 { fix.since } else { fix.at };
@@ -952,7 +984,7 @@ pub fn settle(config: &Config, agent: &str, fix_id: &str, yes: bool) -> Option<S
                 r.frame.until = r.frame.until.map(|u| u + KEEP_DAYS_MORE * DAY);
                 (r.frame.keep_asked, r.frame.reminded) = (false, false);
             }
-            // « La laisser s'arrêter »: its end is the person's now, reached at its date (B2)
+            // « L'arrêter le {date} »: its end is the person's now, reached at its date (B2)
             (KEEP, false) => (r.frame.default_end, r.frame.reminded) = (false, false),
             (_, true) => r.frame.repairing = true,
             (_, false) => {
@@ -978,7 +1010,7 @@ pub fn settle(config: &Config, agent: &str, fix_id: &str, yes: bool) -> Option<S
                 }
                 (conn.frame.keep_asked, conn.frame.reminded) = (false, false);
             }
-            // « Le laisser s'arrêter »: its end is the person's now (B2)
+            // « L'arrêter le {date} »: its end is the person's now (B2)
             (KEEP, false) => {
                 if let Some(w) = conn.watch.as_mut() {
                     w.default_end = false;
@@ -1001,7 +1033,7 @@ pub fn settle(config: &Config, agent: &str, fix_id: &str, yes: bool) -> Option<S
 }
 
 /// `POST /v1/approve` for a card `bip-fix-<id>`: « Réparer » / « Garder » (once, repair, keep; session and always mean
-/// once and keep nothing), « Arrêter » / « Le laisser s'arrêter » (deny and the other refusals, stop); anything else
+/// once and keep nothing), « Arrêter » / « L'arrêter le {date} » (deny and the other refusals, stop); anything else
 /// changes nothing (422).
 pub async fn approve(state: &AppState, agent: &AgentConfig, id: &str, choice: &str) -> ApiResult<axum::response::Response> {
     let choice = choice.trim().to_lowercase();
@@ -1196,8 +1228,7 @@ pub fn due(config: &Config, now: f64) -> Vec<Due> {
                         r.frame.until = Some(now + REMIND_DAYS * DAY);
                         (r.frame.fix, r.frame.keep_asked, r.frame.reminded) = (Some(fix), true, true);
                         let name = routines::flat(&r.name, routines::NAME_MAX);
-                        let line =
-                            keep_sentence(lang, Task::Routine, &name, &day_words(lang, now + REMIND_DAYS * DAY, zone));
+                        let line = keep_sentence(keep_lang(config, &r.agent), Task::Routine, &name);
                         out.push(Due::Raise { agent: r.agent.clone(), run_id, line, push: true });
                     }
                     Overdue::Forever => {
@@ -1296,12 +1327,7 @@ pub fn due(config: &Config, now: f64) -> Vec<Due> {
                                 w.until = Some(now + REMIND_DAYS * DAY);
                             }
                             (conn.frame.fix, conn.frame.keep_asked, conn.frame.reminded) = (Some(fix), true, true);
-                            let line = keep_sentence(
-                                lang,
-                                Task::Watcher,
-                                &name,
-                                &day_words(lang, now + REMIND_DAYS * DAY, zone),
-                            );
+                            let line = keep_sentence(keep_lang(config, agent), Task::Watcher, &name);
                             out.push(Due::Raise { agent: agent.clone(), run_id, line, push: true });
                         }
                         Overdue::Forever => {

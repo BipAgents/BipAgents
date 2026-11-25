@@ -48,9 +48,9 @@
     "stop"
    ],
    "bip_summary": "texts.<lang>.keep.<task>",
-   "bip_detail": "the same sentence",
+   "bip_detail": "the same sentence (nl: texts.keep_nl, the card's Dutch words; the rest of the frame stays English for nl)",
    "bip_fix": "{kind (routine | watcher | replies: a mailbox's replies-due watch, a watcher's words, contracts/plans-sources `replies.keep`), ref, name, variant: keep, ends_at (Unix seconds), title (the agent's shown name), text (= bip_summary), buttons (texts.<lang>.keep_buttons.<task>)}",
-   "when": "3 days before a default end (tools.default_end), once; never for an end the agent or the person gave. Unanswered at its date (Alex 24/11, B2): asked again once, pushed, its date 14 days later (`after.default_end`).",
+   "when": "3 days before a default end (tools.default_end), once (Alex 25/11, textes lot 2 tf2-garder-nuance B: it says it goes on with no answer; its second button stops it at its end, `{date}` = ends_at); never for an end the agent or the person gave. Unanswered at its date (Alex 24/11, B2): asked again once, pushed, its date 14 days later (`after.default_end`).",
    "placed": "As the fix card; not pushed the first time; its reminder at the default end is pushed (« Une demande attend ton accord »)."
   },
   "fix_warned": {
@@ -156,6 +156,12 @@
   "approx": "a routine « vers 8 h » shows « 8:00 » (its schedule is the exact one)"
  },
  "texts": {
+  "keep_nl": {
+   "watcher": "De bewaker „{name}” draait al 3 maanden. Houden? Zonder antwoord gaat hij door.",
+   "routine": "De routine „{name}” draait al 3 maanden. Houden? Zonder antwoord gaat hij door.",
+   "buttons": ["Houden", "Stoppen op {date}"],
+   "day": "30-11 (30-11-2027 another year)"
+  },
   "rules": {
    "lang": "The agent's language (names.rs `agent_language`); another than these four: English. Dutch: not yet (texts to validate, briefs/status-task-frame.md).",
    "dates": "A day: fr « 30/11 », en « Nov 30 », de « 30.11. », es « 30/11 »; not this year, with its year (review C9): « 30/11/2027 », « Nov 30, 2027 », « 30.11.2027 », « 30/11/2027 ». « Depuis {since} »: fr « le 21/11 », en « Nov 21 », de « dem 21.11. », es « el 21/11 ».",
@@ -190,17 +196,17 @@
     "watcher": "Le veilleur « {name} » s'est arrêté comme prévu ({end})."
    },
    "keep": {
-    "watcher": "Le veilleur « {name} » s'arrête le {date}. Le garder 3 mois de plus ?",
-    "routine": "La routine « {name} » s'arrête le {date}. La garder 3 mois de plus ?"
+    "watcher": "Le veilleur « {name} » tourne depuis 3 mois. Le garder ? Sans réponse, il continue.",
+    "routine": "La routine « {name} » tourne depuis 3 mois. La garder ? Sans réponse, elle continue."
    },
    "keep_buttons": {
     "watcher": [
      "Garder",
-     "Le laisser s'arrêter"
+     "L'arrêter le {date}"
     ],
     "routine": [
      "Garder",
-     "La laisser s'arrêter"
+     "L'arrêter le {date}"
     ]
    },
    "fix_top": {
@@ -275,17 +281,17 @@
     "watcher": "The watcher “{name}” stopped as planned ({end})."
    },
    "keep": {
-    "watcher": "The watcher “{name}” stops on {date}. Keep it 3 more months?",
-    "routine": "The routine “{name}” stops on {date}. Keep it 3 more months?"
+    "watcher": "The watcher “{name}” has been running for 3 months. Keep it? With no answer, it goes on.",
+    "routine": "The routine “{name}” has been running for 3 months. Keep it? With no answer, it goes on."
    },
    "keep_buttons": {
     "watcher": [
      "Keep",
-     "Let it stop"
+     "Stop it on {date}"
     ],
     "routine": [
      "Keep",
-     "Let it stop"
+     "Stop it on {date}"
     ]
    },
    "fix_top": {
@@ -360,17 +366,17 @@
     "watcher": "Der Wächter „{name}“ hat wie geplant aufgehört ({end})."
    },
    "keep": {
-    "watcher": "Der Wächter „{name}“ endet am {date}. Noch 3 Monate behalten?",
-    "routine": "Die Routine „{name}“ endet am {date}. Noch 3 Monate behalten?"
+    "watcher": "Der Wächter „{name}“ läuft seit 3 Monaten. Behalten? Ohne Antwort läuft er weiter.",
+    "routine": "Die Routine „{name}“ läuft seit 3 Monaten. Behalten? Ohne Antwort läuft sie weiter."
    },
    "keep_buttons": {
     "watcher": [
      "Behalten",
-     "Enden lassen"
+     "Am {date} stoppen"
     ],
     "routine": [
      "Behalten",
-     "Enden lassen"
+     "Am {date} stoppen"
     ]
    },
    "fix_top": {
@@ -445,17 +451,17 @@
     "watcher": "El vigilante «{name}» se ha detenido como estaba previsto ({end})."
    },
    "keep": {
-    "watcher": "El vigilante «{name}» termina el {date}. ¿Mantenerlo 3 meses más?",
-    "routine": "La rutina «{name}» termina el {date}. ¿Mantenerla 3 meses más?"
+    "watcher": "El vigilante «{name}» lleva 3 meses funcionando. ¿Mantenerlo? Sin respuesta, sigue.",
+    "routine": "La rutina «{name}» lleva 3 meses funcionando. ¿Mantenerla? Sin respuesta, sigue."
    },
    "keep_buttons": {
     "watcher": [
      "Mantener",
-     "Dejar que termine"
+     "Detenerlo el {date}"
     ],
     "routine": [
      "Mantener",
-     "Dejar que termine"
+     "Detenerla el {date}"
     ]
    },
    "fix_top": {

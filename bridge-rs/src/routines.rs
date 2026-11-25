@@ -142,7 +142,7 @@ pub struct Routine {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub approx: bool,
     /// Its frame (task_frame.rs): its end, its failures in a row, its retry, the card « Réparer / Arrêter » or
-    /// « Garder 3 mois de plus ? ».
+    /// « Garder ? ».
     #[serde(default, skip_serializing_if = "crate::task_frame::Frame::is_empty")]
     pub frame: crate::task_frame::Frame,
 }
@@ -577,7 +577,7 @@ pub fn create(
 }
 
 /// `create`, with its frame (task_frame.rs): its end, « vers », and its default end when its agent made it on its own
-/// (`DEFAULT_END_DAYS`, a card « Garder 3 mois de plus ? » before it).
+/// (`DEFAULT_END_DAYS`, a card « Garder ? » before it).
 #[allow(clippy::too_many_arguments)]
 pub fn create_framed(
     config: &Config,

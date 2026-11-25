@@ -2,7 +2,7 @@
 Alex 22/11 Q6 A, Q7 A, Q8 A): every routine, watcher and trigger has an owner, an end and a place where it answers;
 a « Oui » to a one-time routine is one time, a repeat asks its own « Oui » that says its rhythm and its end; the
 agent's routines run « vers » their time, the person's at theirs; what the agent sets up on its own ends after 90
-days (a card 3 days before: « Garder 3 mois de plus ? »); what fails is repaired in its frame or stopped with a word
+days (a card 3 days before: « Garder ? »); what fails is repaired in its frame or stopped with a word
 (the card « Réparer / Arrêter », `bip-fix-`, no model call before « Réparer »); an end reached goes quietly, with
 one line for what ran more than 7 days. An app 1.0 sees today's answers (the added keys left out)."""
 import json
@@ -313,7 +313,7 @@ def test_stop_pauses_never_deletes_and_no_answer_in_7_days_pauses_with_one_line(
 
 def test_what_the_agent_sets_up_on_its_own_ends_after_90_days_and_asks_3_days_before(bridges, fakes):
     """Alex Q6 A: a routine its agent makes on its own (here in a routine's run: nobody asked) with no end given stops
-    by itself 90 days after; 3 days before, « Garder 3 mois de plus ? »."""
+    by itself 90 days after; 3 days before, « Garder ? »."""
     bridge = started(with_device(bridges))
     hermes = fakes.hermes
     hermes.add_session("api_main", [{"role": "user", "content": "Bonjour"}], title="Bot Chat")
@@ -345,9 +345,10 @@ def test_what_the_agent_sets_up_on_its_own_ends_after_90_days_and_asks_3_days_be
     edit_routine(bridge, job["id"], frame={"until": soon})
     assert wait_until(lambda: cards(bridge, "bip-fix-"), timeout=60)
     [keep] = cards(bridge, "bip-fix-")
-    assert keep["bip_summary"] == f"The routine “Météo” stops on {day_en(soon)}. Keep it 3 more months?", keep
+    assert keep["bip_summary"] == ("The routine “Météo” has been running for 3 months. Keep it? With no answer, it goes "
+                                   "on."), keep
     assert keep["bip_choices"] == ["keep", "stop"] and keep["bip_fix"]["variant"] == "keep"
-    assert keep["bip_fix"]["buttons"] == ["Keep", "Let it stop"]
+    assert keep["bip_fix"]["buttons"] == ["Keep", f"Stop it on {day_en(soon)}"], keep["bip_fix"]
     time.sleep(1.0)
     assert not [p for p in fakes.apns.payloads() if keep["run_id"] in json.dumps(p)]
     # « Garder »: 90 days more

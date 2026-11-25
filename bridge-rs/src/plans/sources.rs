@@ -186,7 +186,7 @@ pub struct Mailbox {
     /// it stops there.
     #[serde(default)]
     pub ends: f64,
-    /// « Le laisser s'arrêter » answered: `ends` is its person's, reached at its date.
+    /// « L'arrêter le {date} » answered: `ends` is its person's, reached at its date.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub person_end: bool,
     /// « Garder ? » asked for this end.
@@ -1879,7 +1879,7 @@ pub enum KeepDue {
     /// Its card « Garder ? » to place (task_frame.rs `raise`), pushed when `push` (the reminder at its end, its words
     /// `line`).
     Raise { agent: String, run_id: String, line: String, push: bool },
-    /// Its person's end reached (« Le laisser s'arrêter »): switched off, one Boîte line, not pushed.
+    /// Its person's end reached (« L'arrêter le {date} »): switched off, one Boîte line, not pushed.
     End { agent: String, account: String, name: String, ends: f64 },
 }
 
@@ -1894,7 +1894,7 @@ pub fn watch_name(config: &Config, m: &Mailbox) -> String {
 /// A mailbox's watch never stops at its default end without its person (Alex's B2, 24/11; « Garder ? dans la 1.1 »,
 /// 25/11), as a watcher's (task_frame.rs): `KEEP_ASK_DAYS` before, ONE card « Garder ? » (not pushed); unanswered at
 /// its date, it goes on and the card is asked once more, pushed, its date `REMIND_DAYS` later; unanswered again, on
-/// « jusqu'à ce que tu l'arrêtes », the card gone. Paused (its trigger), its end waits. « Le laisser s'arrêter »
+/// « jusqu'à ce que tu l'arrêtes », the card gone. Paused (its trigger), its end waits. « L'arrêter le {date} »
 /// (`person_end`): it ends at its date. The state changes are made here, under the store's lock; what to place and
 /// say is returned.
 pub fn keep_due(config: &Config, now: f64) -> Vec<KeepDue> {
@@ -1909,13 +1909,11 @@ pub fn keep_due(config: &Config, now: f64) -> Vec<KeepDue> {
         .filter(|t| crate::triggers::replies_watch(t) && !t.enabled)
         .map(|t| t.id)
         .collect();
-    let zone = crate::routines::zone(config);
     let mut out = Vec::new();
     let mut withdrawn: Vec<String> = Vec::new();
     change(config, |s| {
         for m in s.mailboxes.iter_mut().filter(|m| m.state == ON && m.ends > 0.0) {
             let on = !m.trigger.as_ref().is_some_and(|t| paused.contains(t));
-            let lang = tf::lang_of_agent(config, &m.agent);
             if m.person_end {
                 if now > m.ends {
                     withdrawn.extend(m.fix.take().map(|f| f.id));
@@ -1938,8 +1936,7 @@ pub fn keep_due(config: &Config, now: f64) -> Vec<KeepDue> {
                     let run_id = format!("{}{}", tf::RUN_PREFIX, fix.id);
                     m.ends = now + REMIND_DAYS * DAY;
                     (m.fix, m.keep_asked, m.reminded) = (Some(fix), true, true);
-                    let name = watch_name(config, m);
-                    let line = tf::keep_sentence(lang, Task::Watcher, &name, &tf::day_words(lang, m.ends, zone));
+                    let line = tf::keep_sentence(tf::keep_lang(config, &m.agent), Task::Watcher, &watch_name(config, m));
                     out.push(KeepDue::Raise { agent: m.agent.clone(), run_id, line, push: true });
                 }
                 Overdue::Forever => {
@@ -1980,7 +1977,7 @@ pub fn keep_cards(config: &Config, agent: Option<&str>) -> Vec<(Mailbox, crate::
         .collect()
 }
 
-/// Card `fix_id` of `agent` answered (`yes`: « Garder », 90 days more; else « Le laisser s'arrêter »: its end is the
+/// Card `fix_id` of `agent` answered (`yes`: « Garder », 90 days more; else « L'arrêter le {date} »: its end is the
 /// person's, reached at its date). Its mailbox's account; None: no such card.
 pub fn settle_keep(config: &Config, agent: &str, fix_id: &str, yes: bool) -> Option<String> {
     if !path(config).exists() {
