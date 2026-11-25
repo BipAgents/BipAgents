@@ -136,8 +136,6 @@ def test_2_an_agent_whose_ai_does_not_answer_has_one_card_for_its_routines(bridg
 
 def test_3_a_routine_of_its_agent_s_own_goes_on_past_its_90_days_and_is_asked_again(bridges, fakes):
     bridge = started(with_device(bridges))
-    # quiet hours of one minute: the reminder is pushed whatever the hour (it waits for the morning otherwise)
-    assert bridge.patch("/v1/notebook/settings", headers=AUTH, json={"quiet": {"from": "03:00", "to": "03:01"}}).status_code == 200
     fakes.hermes.add_session("api_main", [{"role": "user", "content": "Bonjour"}], title="Bot Chat")
     _, card = made_by_agent(bridge, "Météo", "every day at 7:30")   # outside any turn: its own idea, 90 days
     assert approve(bridge, card, "once").status_code == 200

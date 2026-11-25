@@ -1937,8 +1937,6 @@ pub fn keep_due(config: &Config, now: f64) -> Vec<KeepDue> {
         .filter(|t| crate::triggers::replies_watch(t) && !t.enabled)
         .map(|t| t.id)
         .collect();
-    // a reminder is pushed: never in the place's quiet hours (22:00 → 08:00 by default), it waits for the morning
-    let night = crate::notebook::ask::is_quiet(config, now);
     let mut out = Vec::new();
     let mut withdrawn: Vec<String> = Vec::new();
     change(config, |s| {
@@ -1956,11 +1954,7 @@ pub fn keep_due(config: &Config, now: f64) -> Vec<KeepDue> {
                 // paused past its end: it waits, `KEEP_ASK_DAYS` from now each time (it reads nothing while paused)
                 m.ends = now + KEEP_ASK_DAYS * DAY;
             }
-            let overdue = match tf::overdue(Some(m.ends), &m.fix, m.reminded, now) {
-                Overdue::Remind if night => Overdue::Wait,
-                due if on => due,
-                _ => Overdue::Wait,
-            };
+            let overdue = if on { tf::overdue(Some(m.ends), &m.fix, m.reminded, now) } else { Overdue::Wait };
             match overdue {
                 Overdue::Wait => {}
                 Overdue::Remind => {
