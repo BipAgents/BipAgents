@@ -797,9 +797,10 @@ fn soul_role(soul: &str) -> String {
 
 // -- what an agent reads --------------------------------------------------------------------------------------------
 
-/// What the agents may not pass to each other: an agent's `MEDIA:` lines out of its reply (its files stay its own).
+/// What the agents may not pass to each other: an agent's `MEDIA:` lines out of its reply (its files stay its own),
+/// and its hidden spoken version (spoken.rs: a guest's words in a room, a family reply told to its members).
 pub fn room_text(reply: &str) -> (String, Vec<String>) {
-    let (text, mut files) = crate::media::extract_media(reply);
+    let (text, mut files) = crate::media::extract_media(&crate::spoken::strip(reply));
     files.dedup();
     (tk::head(tk::strip(&text), REPLY_CHARS).to_string(), files)
 }
@@ -3012,6 +3013,10 @@ mod tests {
         let (text, files) = room_text("Voici.\nMEDIA:/bipagents/pages/bip/a.html\nMEDIA:/bipagents/pages/bip/a.html");
         assert_eq!(text, "Voici.");
         assert_eq!(files, vec!["/bipagents/pages/bip/a.html"]);
+        // nor its hidden spoken version (25/11: a guest's words in a room, a family reply told to its members)
+        let said = "Trois idées :\n- a\n- b\n- c\n\n<!--bip:say Trois idées, la a d'abord.-->";
+        assert_eq!(room_text(said).0, "Trois idées :\n- a\n- b\n- c");
+        assert_eq!(room_text("| a |\n<!--bip:say-->\nLa a.").0, "| a |");
     }
 
     fn wellness_and_vie() -> Vec<Candidate> {

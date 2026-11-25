@@ -1912,6 +1912,7 @@ pub fn create_app(config: Config, options: AppOptions) -> anyhow::Result<App> {
     }
     crate::shares::heal_skills(&config);
     crate::jobs::repair_titles(&config); // tasks titled with Hermes' wrapper of a steer (21/11), before any task runs
+    crate::jobs::repair_reports(&config); // reports kept with their hidden spoken version (25/11)
     if options.start_background {
         state.start_background();
         state.spawn(queues.run_forever()); // the queues kept before a restart, and looked at again every 10 s

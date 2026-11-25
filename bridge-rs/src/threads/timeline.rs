@@ -213,7 +213,8 @@ fn tidy(text: &str) -> String {
 /// What a message shows of its raw text, and the attachments its lines name: (text, attachments). `id`: the
 /// message's id (attachments are `<id>.a<n>`); `images`: photos in its parts.
 pub fn visible(raw: &str, id: &str, images: usize) -> (String, Vec<Value>) {
-    let mut text = NOTES.replace_all(raw, "").to_string();
+    // a spoken version after an empty mark is the rest of the reply (spoken.rs): spoken, never shown
+    let mut text = NOTES.replace_all(&crate::spoken::strip(raw), "").to_string();
     text = SYNC_LINK.replace_all(&text, "").to_string();
     let marked = PHOTO_MARK.find_iter(&text).count();
     text = PHOTO_MARK.replace_all(&text, "").to_string();
@@ -1196,6 +1197,11 @@ mod tests {
         assert_eq!(atts[0]["kind"], "image");
         let (text, _) = visible("Bonjour<tool_call>search<arg_key>q</arg_key></tool_call>", "m_3", 0);
         assert_eq!(text, "Bonjour");
+        // a spoken version, in its mark or after an empty one (GLM, 10/11): spoken.rs's, never shown
+        let (text, _) = visible("| a |\n\n<!--bip:say La a.-->", "m_4", 0);
+        assert_eq!(text, "| a |");
+        let (text, _) = visible("| a |\n\n<!--bip:say-->\nLa a.", "m_5", 0);
+        assert_eq!(text, "| a |");
         let renamed = renamed_in("C'est fait.<!--bip:renamed bip Léo--><!--bip:renamed bip Léon-->");
         assert_eq!(renamed, vec![json!({"agent": "bip", "name": "Léon"})]);
     }
