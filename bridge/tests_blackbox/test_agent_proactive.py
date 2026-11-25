@@ -110,7 +110,8 @@ def test_stop_suggesting_turns_it_off_only_in_the_persons_own_turn(bridges, fake
     # its tool, for every app version: « arrête de me proposer des choses »
     assert "proactive_off" in tool_names(bridge)
     [tool] = [t for t in rpc(bridge, "tools/list", token=TOKEN).json()["result"]["tools"] if t["name"] == "proactive_off"]
-    assert tool["inputSchema"] == {"type": "object", "properties": {}}   # no level to give: never turned on by it
+    # no level to give: never turned on by it (only an optional, unread `reason`: the shape models give it, bench 1.1)
+    assert tool["inputSchema"] == {"type": "object", "properties": {"reason": {"type": "string"}}}
 
     # no turn of the person's: a routine's, a watcher's, an e-mail's… refused, nothing changed
     refused = call(bridge, "proactive_off", {}, token=TOKEN)
@@ -143,22 +144,26 @@ def test_stop_suggesting_turns_it_off_only_in_the_persons_own_turn(bridges, fake
 def test_off_holds_back_its_own_ideas_and_what_is_asked_still_goes(bridges, fakes):
     """Review 1 (B2): « Éteinte » (« Il ne propose rien de lui-même. Il fait ce que tu lui demandes. »): its
     personality gets the block that holds back its own ideas (a background task, a word for the family, a project
-    agent), its ongoing conversations are told; back to basic, the block goes; the person's personality never shows it."""
+    agent), its ongoing conversations are told; back to basic, its basic rule instead (bench 1.1); the person's
+    personality never shows either."""
     from test_agents_admin import hermes_args
     bridge, home = managed(bridges, fakes)
     assert bridge.post("/v1/agents", headers=AUTH, json={"name": "Budget", "kind": "finance"}).status_code == 201
     soul_file = home / "profiles" / "budget" / "SOUL.md"
     before = soul_file.read_text()
-    assert "bipagents:initiative" not in before
+    # basic (the default): its own rule since bench 1.1, the card rather than a question in words
+    assert "<!-- bipagents:initiative -->" in before and "plan_propose" in before and "never as your own idea" not in before
     bridge.commands.clear()
     assert put(bridge, "budget", {"level": "off"}).status_code == 200
     soul = soul_file.read_text()
     assert "<!-- bipagents:initiative -->" in soul and "never as your own idea" in soul and "propose_task" in soul
+    assert "plan_propose" not in soul
     assert wait_until(lambda: ["-p", "budget", "sessions", "refresh-prompts", "--json"] in hermes_args(bridge))
     assert "bipagents:initiative" not in settings(bridge, "budget")["soul"]
-    # smart or basic again: out
+    # smart: the basic rule and the offers'; basic again: as before
     assert put(bridge, "budget", {"level": "smart"}).status_code == 200
-    assert "bipagents:initiative" not in soul_file.read_text()
+    smart = soul_file.read_text()
+    assert "never as your own idea" not in smart and "plan_propose" in smart and "a clear next step" in smart
     assert put(bridge, "budget", {"level": "off"}).status_code == 200
     assert put(bridge, "budget", {"level": "basic"}).status_code == 200
     assert soul_file.read_text() == before

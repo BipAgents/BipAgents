@@ -95,6 +95,22 @@ impl Prices {
     }
 }
 
+/// Our European router's prices for the models a place is set up with (EUrouter's list, the one the guichet serves
+/// the apps; DeepSeek has no cache price there: its input's), by the model's id without its maker. For a home install's
+/// small calls of the bridge (offer_ideas.rs' passes), which has no guichet list: counted at `[notebook]`'s 0.50 / 1.50
+/// a pass was counted 5 times what the key paid (bench 1.1: 0.00009 € measured for GLM-5.3 Flash, 0.0004–0.0006 €
+/// counted), and the 0.10 € cap stopped them after about 200 passes instead of 1 100.
+pub const ROUTER_PRICES: [(&str, Prices); 2] = [
+    ("glm-5.3-flash", Prices { input: 0.10, cached: 0.02, output: 0.35 }),
+    ("deepseek-v4.1-flash", Prices { input: 0.25, cached: 0.25, output: 0.90 }),
+];
+
+/// `ROUTER_PRICES` for `model` (`deepseek/deepseek-v4.1-flash`, `GLM-5.3-Flash`), None for one not listed.
+pub fn router_prices(model: &str) -> Option<Prices> {
+    let id = model.trim().rsplit('/').next().unwrap_or("").to_ascii_lowercase();
+    ROUTER_PRICES.iter().find(|(known, _)| *known == id).map(|(_, p)| *p)
+}
+
 /// What a cache read counts on a home install, as a share of a fresh input token (the module's doc).
 pub const HOME_CACHE_WEIGHT: f64 = 0.10;
 

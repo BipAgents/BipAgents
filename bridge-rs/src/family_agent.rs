@@ -1295,7 +1295,6 @@ async fn create(State(state): State<AppState>, body: Bytes) -> ApiResult<Respons
     seed(&config, &lang, &by)?;
     tell_all(&state, &agent, true).await;
     tracing::info!(agent = %agent.name, take_over = take_over, "family agent: created");
-    crate::own_space::apart_when_idle(&state, &agent.name); // stays in the hub since 21/11 (own_space.rs): guest turns
     Ok(web::json_response(201, &own_view(&config, &agent)))
 }
 

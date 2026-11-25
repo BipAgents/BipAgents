@@ -1,97 +1,62 @@
-//! An agent moves into its own space by itself the first time it needs to keep a secret (Alex, 2026-10-28:
-//! « Pourquoi on complique ? … Le moment où ils rentrent un mot de passe, on annonce juste que ça se met en place et
-//! voilà. »).
+//! Credentials and the shared hub (Alex, 2026-10-28 evening: a person's own agents are no longer separated from each
+//! other; 24/11, for 1.1: « les agents de la personne ne déménagent plus jamais »).
 //!
-//! Credentials are only held by an agent in its own space (vault.rs `holder`). An agent of the shared hub used not to
-//! see `ask_secret`, the connectors' tools nor the vault's account tools, and improvised (« tape ton mot de passe dans
-//! le navigateur »). Now they are offered to it too (never to the family's agent nor a project agent, never on an
-//! install that doesn't protect the vault), and its first call moves it at once, with no card:
+//! A person's own agents hold credentials right where they are, in the shared hub (vault.rs `holds_in_hub`), and never
+//! move for it. Since 21/11 an agent other people talk to (the family's agent, one shared with a relative, one another
+//! household's agents write to) gets their messages as guest turns (Hermes patch 0018) and stays in the hub too (one
+//! that moved out before comes back by itself, own_space_back.rs). Only a project agent breaks the hub's privacy
+//! (vault.rs `hub_breakers`: its guests' turns are its own), so it never lives there:
 //!
-//! - the conversation shows one plain line (`bridge.notice`, code `own_space_moving`, the apps word it in the
-//!   person's language): « Je prépare un endroit sûr pour garder ton accès Garmin… (environ 1 min) »;
-//! - the move is the app's (agents_admin.rs `move_into_space`: conversations, memory and files go with it), except
-//!   that the hub keeps serving the profile until the turn that called ends there; then the conversations are copied
-//!   once more (that turn's end included) and the hub forgets it;
-//! - the call then goes on as if the agent had always been there: the secret card, the connector's card…;
-//! - a move that fails: one plain line (`own_space_failed`), the agent is told to say it will try again later, and
-//!   the next calls within `RETRY_AFTER` get the same answer without trying.
+//! - made (project_agent.rs), it leaves the hub at once (`leave_soon`), no turn awaited: its space is made while the
+//!   hub still serves it, a turn going on there ends there and its end is copied over (`finish`); its friends' share
+//!   opens once that move ended (read_shares.rs `create`, `out_of_hub`);
+//! - one found in the hub at start (made before 24/11), or whose move at creation failed, leaves once idle
+//!   (`tidy_at_start`, tried again later after a failure).
 //!
-//! **Since 2026-10-28 evening** (Alex: « Fais ce soir »), a person's own agents are no longer separated from each
-//! other: in the hub, an agent holds credentials right where it is (vault.rs `holds_in_hub`), and nothing moves.
-//! **Since 21/11** (Alex: « tout ce qui vient de quelqu'un d'autre tourne en tour d'invité ») an agent other people
-//! talk to (the family's agent, an agent shared with a relative, one another household's agents write to) gets their
-//! messages as guest turns (Hermes patch 0018: no terminal, files, vault, browser) and stays in the hub: no ~250 MB
-//! space for it (one that moved out before comes back by itself, own_space_back.rs). Only a project agent leaves it
-//! (vault.rs `hub_breakers`: its guests' turns are its own); as long as the hub hosts one, the move above is what happens, as before; the credentials already kept in the hub stay there
-//! (logged at start and at each move, `Vault::warn_hub_holders`) until their agent moves or the person takes them
-//! back. The trade-off, plainly: one of the person's agents tricked by what it read could reach another of their
-//! agents' passwords; it costs no ~250 MB container per agent.
+//! While one is on its way out (vault.rs `hub_leaving`), the hub's agents keep nothing new: an agent asking for a
+//! secret or an account waits for the move under way (`hub_private`), or, none under way, gets the plain answer at once
+//! (`LATER_FOR_AGENT`: it tries again a bit later); the app's gives get `needs_own_space` (« … pourra en garder dans
+//! quelques minutes »). The agent that asks never moves. One of the person's agents moved out by the rule of before
+//! 24/11 (at its first secret) stays in its space. The credentials already kept in the hub stay there (logged at start
+//! and at each move, `Vault::warn_hub_holders`). The trade-off, plainly: one of the person's agents tricked by what it
+//! read could reach another of their agents' passwords; it costs no ~250 MB container per agent.
 //!
 //! No Python counterpart.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, Instant};
-
-use serde_json::{json, Map, Value};
 
 use crate::app::AppState;
 use crate::config::{AgentConfig, Config};
 use crate::tools_knowledge::tool_text;
 use crate::Dict;
 
-pub const MOVING: &str = "own_space_moving";
-pub const FAILED: &str = "own_space_failed";
-/// After a failed move, the calls within so long are answered without trying again.
-pub const RETRY_AFTER: Duration = Duration::from_secs(120);
 /// How long the hub keeps serving a moved agent's profile for a turn still going on there.
 const HUB_WAIT: Duration = Duration::from_secs(30 * 60);
+/// How long an agent's ask for a secret waits for a move out of the hub under way (one takes up to two minutes).
+const LEAVE_WAIT: Duration = Duration::from_secs(180);
+/// How long a project's share waits for it to be out of the hub (the apps wait a minute for the share's first upload).
+const SHARE_WAIT: Duration = Duration::from_secs(40);
 
-/// An agent of the shared hub that moves into its own space by itself when it needs to keep a secret: one that may not
-/// hold it in the hub (`vault::holds_in_hub`: the hub hosts an agent other people talk to, or its tools have no
-/// sandbox of their own), never the family's agent nor a project agent, never on an install that doesn't protect the
-/// vault (`unprotected_install`), never when its space could not hold it either (`space_could_hold`). Asked again at
-/// each call.
-pub fn may_move(config: &Config, agent: &AgentConfig) -> bool {
-    crate::vault::holder(config, agent).as_deref() == Some("needs_own_space")
-        && !crate::family_agent::is_family(config, &agent.name)
-        && !crate::project_agent::is_project(config, &agent.name)
-        && space_could_hold(config, agent)
-}
-
-/// Whether the agent's space would isolate its sandbox (sandbox.rs `isolates`, which connectors and secrets need):
-/// not when Hermes' Bot Desktop runs in it (`desktop_in_sandbox`: an install without the visible browser's containers,
-/// the person answered « n »). The space gets the hub's settings and the agent's profile as they are, so its sandbox
-/// would hold the desktop too. Investigation of 24/11: such an agent moved at its first secret (~250 MB), was then
-/// refused the secret all the same in its space, and stayed mute there (its Hermes' epoch, `spaces::resync_database`).
-fn space_could_hold(config: &Config, agent: &AgentConfig) -> bool {
-    crate::shares::profile_dir(config, agent).is_none_or(|folder| !crate::sandbox::desktop_in_sandbox(config, &folder))
-}
-
-/// The agent may hold credentials now, or will once moved: the tools that keep some are offered.
+/// The agent may hold credentials now, or will once the agent on its way out of the hub has left: the tools that keep
+/// some are offered.
 pub fn may_hold(config: &Config, agent: &AgentConfig) -> bool {
-    crate::vault::holder(config, agent).is_none() || may_move(config, agent)
+    crate::vault::holder(config, agent).is_none() || crate::vault::may_hold_in_hub(config, agent)
 }
 
-/// The conversation's line while it moves (the apps show their own words for the code; older ones this).
-pub fn moving_text(service: &str) -> String {
-    if service.is_empty() {
-        "Je prépare un endroit sûr pour garder ton accès… (environ 1 min)".into()
-    } else {
-        format!("Je prépare un endroit sûr pour garder ton accès {service}… (environ 1 min)")
-    }
-}
-
-pub const FAILED_TEXT: &str = "Je n'ai pas pu préparer l'endroit sûr pour garder ton accès. Je réessaie un peu plus tard.";
-
-/// What the agent's call gets when the move failed.
-pub const FAILED_FOR_AGENT: &str = "Setting up a safe place to keep this access did not work this time; nothing was \
+/// What an agent's call for a secret or an account gets while the hub can't keep one yet (the tool's existing words).
+pub const LATER_FOR_AGENT: &str = "Setting up a safe place to keep this access did not work this time; nothing was \
 asked or kept. Tell the person in one plain sentence that you will try again a bit later (no technical words, never \
 another way to give you the password), and call again later.";
 
 static LOCKS: LazyLock<Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>> = LazyLock::new(Default::default);
-static FAILURES: LazyLock<Mutex<HashMap<String, Instant>>> = LazyLock::new(Default::default);
+/// The agents whose move out of the hub is under way (`Leaving`).
+static LEAVING: LazyLock<Mutex<HashSet<String>>> = LazyLock::new(Default::default);
+/// A tidy loop runs (`tidy`): one at a time.
+static TIDYING: AtomicBool = AtomicBool::new(false);
 
 /// The agent's own lock: one move (out of the hub, back into it) at a time, and a delete of its hub copy that waited
 /// (spaces.rs `forget_unless_served`) never in the middle of one.
@@ -99,54 +64,52 @@ pub fn lock_of(agent: &str) -> Arc<tokio::sync::Mutex<()>> {
     LOCKS.lock().unwrap_or_else(|e| e.into_inner()).entry(agent.to_string()).or_default().clone()
 }
 
-fn failed_recently(agent: &str) -> bool {
-    FAILURES.lock().unwrap_or_else(|e| e.into_inner()).get(agent).is_some_and(|at| at.elapsed() < RETRY_AFTER)
+/// An agent's move out of the hub under way, for as long as this lives.
+struct Leaving(String);
+
+impl Leaving {
+    fn new(agent: &str) -> Self {
+        LEAVING.lock().unwrap_or_else(|e| e.into_inner()).insert(agent.to_string());
+        Leaving(agent.to_string())
+    }
 }
 
-fn notice(state: &AppState, agent: &str, code: &str, text: &str, service: &str) {
-    let mut data = Map::new();
-    data.insert("type".into(), json!(crate::runs::NOTICE));
-    data.insert("code".into(), json!(code));
-    data.insert("text".into(), json!(text));
-    data.insert("service".into(), json!(service));
-    state.hub.notice_agent(agent, data);
+impl Drop for Leaving {
+    fn drop(&mut self) {
+        LEAVING.lock().unwrap_or_else(|e| e.into_inner()).remove(&self.0);
+    }
 }
 
-/// The agent as it is when it may keep secrets, else moved into its own space now (the conversation says so), its
-/// new configuration returned. Err: the plain result for the agent's call (the move failed).
-pub async fn ready(state: &AppState, agent: &AgentConfig, service: &str) -> Result<AgentConfig, Dict> {
-    if !may_move(&state.config(), agent) {
-        return Ok(agent.clone());
-    }
-    let lock = lock_of(&agent.name);
-    let _one_at_a_time = lock.lock_owned().await;
-    // another call may have moved it meanwhile
-    let config = state.config();
-    let current = config.agent(Some(&agent.name)).cloned().unwrap_or_else(|| agent.clone());
-    if !may_move(&config, &current) {
-        return Ok(current);
-    }
-    if failed_recently(&current.name) {
-        return Err(tool_text(FAILED_FOR_AGENT, true));
-    }
-    state.vault.warn_hub_holders(&config);
-    notice(state, &current.name, MOVING, &moving_text(service), service);
-    tracing::info!(target: "bipbridge::own_space", agent = %current.name, "moving into its own space to keep a secret");
-    let hub_url = current.hermes_url.clone();
-    match crate::agents_admin::move_into_space(state, &current, true).await {
-        Ok(moved) => {
-            FAILURES.lock().unwrap_or_else(|e| e.into_inner()).remove(&current.name);
-            let (state2, name, new_url) = (state.clone(), current.name.clone(), moved.hermes_url.clone());
-            let home = moved.hermes_home.clone();
-            tokio::spawn(async move { finish(state2, name, hub_url, new_url, home).await });
-            Ok(moved)
+fn leaving_now(agent: Option<&str>) -> bool {
+    let leaving = LEAVING.lock().unwrap_or_else(|e| e.into_inner());
+    agent.map_or(!leaving.is_empty(), |a| leaving.contains(a))
+}
+
+/// Before an agent keeps a secret of its own asking (ask_secret, a connector, an account): Ok when the hub may keep it,
+/// or the agent isn't one the hub would hold (its own checks follow). While an agent other people talk to is on its way
+/// out of the hub (`vault::hub_leaving`), the move under way is waited for (`LEAVE_WAIT` at most); none under way, or
+/// still not out: Err, the plain answer for its call. The agent that asks never moves.
+pub async fn hub_private(state: &AppState, agent: &str) -> Result<(), Dict> {
+    let started = Instant::now();
+    loop {
+        let config = state.config();
+        let waits = config.agent(Some(agent)).is_some_and(|a| crate::vault::may_hold_in_hub(&config, a));
+        if !waits || !crate::vault::hub_leaving(&config) {
+            return Ok(());
         }
-        Err(exc) => {
-            tracing::warn!(target: "bipbridge::own_space", agent = %current.name, error = ?exc, "move into its own space failed");
-            FAILURES.lock().unwrap_or_else(|e| e.into_inner()).insert(current.name.clone(), Instant::now());
-            notice(state, &current.name, FAILED, FAILED_TEXT, service);
-            Err(tool_text(FAILED_FOR_AGENT, true))
+        if !leaving_now(None) || started.elapsed() > LEAVE_WAIT {
+            return Err(tool_text(LATER_FOR_AGENT, true));
         }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+}
+
+/// Before a project's friends' share opens (read_shares.rs): its move out of the hub, when one is under way, is waited
+/// for (`SHARE_WAIT` at most). One that failed is tried again later (`tidy`); the share opens meanwhile, as before 24/11.
+pub async fn out_of_hub(agent: &str) {
+    let started = Instant::now();
+    while leaving_now(Some(agent)) && started.elapsed() < SHARE_WAIT {
+        tokio::time::sleep(Duration::from_millis(500)).await;
     }
 }
 
@@ -187,24 +150,21 @@ async fn finish(state: AppState, agent: String, hub_url: String, new_url: String
     }
 }
 
-/// How long an agent other people talk to may stay busy before its move out of the hub is given up (tried again when
-/// it is shared again).
-const APART_WAIT: Duration = Duration::from_secs(6 * 60 * 60);
-/// The move waits so long first: the app sets the new agent up (its look, its settings, its first words) without
-/// waiting behind a move that holds the agents' lock for a minute.
-const APART_SETTLE: Duration = Duration::from_secs(60);
-
-/// An agent that breaks the hub's privacy (vault.rs `hub_breakers`: a project agent) leaves the shared hub for its own
-/// space once idle, so the hub stays the person's and their agents keep their credentials there (Alex, 2026-10-28).
-/// Called when an agent is made, shared, or linked: since 21/11 only a project agent moves (`should_leave_hub`). Only on an install that
-/// protects the vault (elsewhere nothing holds credentials, nothing to keep apart); a move that fails is logged and
-/// the hub keeps it (its agents then move at their first secret, as before).
-pub fn apart_when_idle(state: &AppState, agent: &str) {
-    let (state, name) = (state.clone(), agent.to_string());
-    tokio::spawn(async move { apart(state, name).await });
+/// A project agent just made (project_agent.rs) leaves the shared hub now, no turn awaited (module doc); a move that
+/// fails is logged and tried again later, once it is idle (`tidy`). Only on an install that protects the vault
+/// (elsewhere nothing holds credentials, nothing to keep apart).
+pub fn leave_soon(state: &AppState, agent: &str) {
+    let (state, name, leaving) = (state.clone(), agent.to_string(), Leaving::new(agent));
+    tokio::spawn(async move {
+        let left = leave_now(&state, &name).await;
+        drop(leaving);
+        if left == Leave::Failed {
+            tidy_soon(state, TIDY_FAILED_AGAIN);
+        }
+    });
 }
 
-/// Whether `agent` should leave the hub now (`apart_when_idle`).
+/// Whether `agent` should leave the hub now (`leave_soon`, `tidy`).
 pub fn should_leave_hub(config: &Config, agent: &AgentConfig) -> bool {
     config.hermes.isolated
         && !agent.isolated
@@ -215,7 +175,7 @@ pub fn should_leave_hub(config: &Config, agent: &AgentConfig) -> bool {
 /// What one try at moving an agent out of the hub did.
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum Leave {
-    /// Moved, or nothing to do any more (gone, already in its own space, nobody else talks to it now…).
+    /// Moved, or nothing to do any more (gone, already in its own space…).
     Done,
     /// Busy (a turn, a Live call, a background task, a scan, a watcher, a routine): later.
     Busy,
@@ -223,8 +183,36 @@ enum Leave {
     Failed,
 }
 
-/// One try: the agent leaves the hub now if it should and does nothing (agent_restart.rs `activity`).
-async fn leave_hub_once(state: &AppState, name: &str) -> Leave {
+/// The agent out of the hub now if it should (the app's move, agents_admin.rs `move_into_space`: conversations, memory
+/// and files go with it), the hub serving it until the turns going on there ended (`finish`).
+async fn leave_now(state: &AppState, name: &str) -> Leave {
+    let lock = lock_of(name);
+    let _one_at_a_time = lock.lock_owned().await;
+    let config = state.config();
+    let Some(agent) = config.agent(Some(name)).cloned() else { return Leave::Done };
+    if !should_leave_hub(&config, &agent) {
+        return Leave::Done;
+    }
+    let _leaving = Leaving::new(name);
+    tracing::info!(target: "bipbridge::own_space", agent = %name, "other people talk to it: moving out of the shared hub");
+    let outcome = match crate::agents_admin::move_into_space(state, &agent).await {
+        Ok(moved) => {
+            tracing::info!(target: "bipbridge::own_space", agent = %name, "in its own space: the hub is the person's alone");
+            let (state2, name, new_url) = (state.clone(), name.to_string(), moved.hermes_url.clone());
+            tokio::spawn(async move { finish(state2, name, agent.hermes_url, new_url, moved.hermes_home).await });
+            Leave::Done
+        }
+        Err(exc) => {
+            tracing::warn!(target: "bipbridge::own_space", agent = %name, error = ?exc, "move out of the shared hub failed: it stays there for now, the hub's agents keep nothing new meanwhile");
+            Leave::Failed
+        }
+    };
+    state.vault.warn_hub_holders(&state.config());
+    outcome
+}
+
+/// One try of the tidy: the agent leaves the hub now if it should and does nothing (agent_restart.rs `activity`).
+async fn leave_when_idle(state: &AppState, name: &str) -> Leave {
     let config = state.config();
     let Some(agent) = config.agent(Some(name)).cloned() else { return Leave::Done };
     if !should_leave_hub(&config, &agent) {
@@ -237,78 +225,45 @@ async fn leave_hub_once(state: &AppState, name: &str) -> Leave {
         tracing::debug!(target: "bipbridge::own_space", agent = %name, why, "busy: moves out of the shared hub later");
         return Leave::Busy;
     }
-    let lock = lock_of(name);
-    let _one_at_a_time = lock.lock_owned().await;
-    let config = state.config();
-    let Some(agent) = config.agent(Some(name)).cloned() else { return Leave::Done };
-    if !should_leave_hub(&config, &agent) {
-        return Leave::Done;
-    }
-    if state.hub.agent_runs_at(name, &agent.hermes_url) > 0 {
-        return Leave::Busy;
-    }
-    tracing::info!(target: "bipbridge::own_space", agent = %name, "other people talk to it: moving out of the shared hub");
-    let outcome = match crate::agents_admin::move_into_space(state, &agent, false).await {
-        Ok(_) => {
-            tracing::info!(target: "bipbridge::own_space", agent = %name, "in its own space: the hub is the person's alone");
-            Leave::Done
-        }
-        Err(exc) => {
-            tracing::warn!(target: "bipbridge::own_space", agent = %name, error = ?exc, "move out of the shared hub failed: it stays there for now, the hub's agents move at their first secret");
-            Leave::Failed
-        }
-    };
-    state.vault.warn_hub_holders(&state.config());
-    outcome
+    leave_now(state, name).await
 }
 
-async fn apart(state: AppState, name: String) {
-    tokio::time::sleep(APART_SETTLE).await;
-    let started = Instant::now();
-    loop {
-        match leave_hub_once(&state, &name).await {
-            Leave::Done | Leave::Failed => return,
-            Leave::Busy if started.elapsed() > APART_WAIT => {
-                tracing::warn!(target: "bipbridge::own_space", agent = %name, "still busy: stays in the shared hub for now");
-                return;
-            }
-            Leave::Busy => tokio::time::sleep(Duration::from_secs(5)).await,
-        }
-    }
-}
-
-/// Between two rounds of the start's tidy while an agent is busy.
+/// Between two rounds of the tidy while an agent is busy.
 const TIDY_BUSY_AGAIN: Duration = Duration::from_secs(30);
-/// After a failed move, the start's tidy tries that agent again so much later.
+/// After a failed move, the tidy tries that agent again so much later.
 const TIDY_FAILED_AGAIN: Duration = Duration::from_secs(15 * 60);
 
 /// The agents of a protected install's shared hub that other people talk to and should leave it (`should_leave_hub`),
 /// in name order.
 pub fn to_tidy(config: &Config) -> Vec<String> {
-    if !config.hermes.isolated {
-        return Vec::new();
-    }
-    let facing = crate::vault::hub_breakers(config);
-    let mut names: Vec<String> = config
-        .agents
-        .values()
-        .filter(|a| facing.contains(&a.name) && should_leave_hub(config, a))
-        .map(|a| a.name.clone())
-        .collect();
+    let mut names: Vec<String> =
+        config.agents.values().filter(|a| should_leave_hub(config, a)).map(|a| a.name.clone()).collect();
     names.sort();
     names
 }
 
-/// At start (app.rs, so at each update): the agents other people talk to that still live in the shared hub of a
-/// protected install — made before they were moved out when made or shared (`apart_when_idle`) — leave it once,
-/// by themselves, one at a time, each once it does nothing; a busy one is looked at again a bit later, a failed move
-/// is logged and tried again later. Done when the hub hosts none: the person's agents then keep their credentials
-/// right there (vault.rs `holds_in_hub`). Never an unprotected install, never an agent already in its own space.
+/// At start (app.rs, so at each update): the project agents that still live in the shared hub of a protected install
+/// (made before 24/11) leave it, by themselves, one at a time, each once it does nothing (`tidy`). Done when the hub
+/// hosts none: the person's agents then keep their credentials right there (vault.rs `holds_in_hub`).
 pub async fn tidy_at_start(state: AppState) {
-    if to_tidy(&state.config()).is_empty() {
+    let after = Duration::from_secs_f64(state.config().spaces.tidy_after);
+    tidy_soon(state, after);
+}
+
+/// The tidy, `after` so long, unless one runs: a busy agent is looked at again a bit later, a failed move is logged
+/// and tried again later. Never an unprotected install, never an agent already in its own space.
+fn tidy_soon(state: AppState, after: Duration) {
+    if to_tidy(&state.config()).is_empty() || TIDYING.swap(true, Ordering::SeqCst) {
         return;
     }
-    tokio::time::sleep(Duration::from_secs_f64(state.config().spaces.tidy_after)).await;
+    tokio::spawn(async move {
+        tokio::time::sleep(after).await;
+        tidy(&state).await;
+        TIDYING.store(false, Ordering::SeqCst);
+    });
+}
+
+async fn tidy(state: &AppState) {
     let mut failed: HashMap<String, Instant> = HashMap::new();
     loop {
         let names = to_tidy(&state.config());
@@ -321,7 +276,7 @@ pub async fn tidy_at_start(state: AppState) {
             if failed.get(name).is_some_and(|at| at.elapsed() < TIDY_FAILED_AGAIN) {
                 continue;
             }
-            match leave_hub_once(&state, name).await {
+            match leave_when_idle(state, name).await {
                 Leave::Done => {
                     failed.remove(name);
                 }
@@ -343,67 +298,23 @@ pub async fn tidy_at_start(state: AppState) {
     }
 }
 
-/// Whether `value` reads as the result of a failed move (tests).
-pub fn is_failure(result: &Dict) -> bool {
-    result.get("content").and_then(Value::as_array).and_then(|c| c.first()).and_then(|c| c.get("text")).and_then(Value::as_str)
-        == Some(FAILED_FOR_AGENT)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn the_lines_are_plain() {
-        assert_eq!(moving_text("Garmin"), "Je prépare un endroit sûr pour garder ton accès Garmin… (environ 1 min)");
-        assert!(moving_text("").ends_with("accès… (environ 1 min)"));
-        for text in [moving_text("Garmin").as_str(), FAILED_TEXT, FAILED_FOR_AGENT] {
-            for word in ["espace", "space", "sandbox", "container", "conteneur", "Hermes", "profile", "navigateur", "browser"] {
-                assert!(!text.contains(word), "{word} in {text}");
-            }
+    fn the_answer_is_plain() {
+        for word in ["espace", "space", "sandbox", "container", "conteneur", "Hermes", "profile", "navigateur", "browser"] {
+            assert!(!LATER_FOR_AGENT.contains(word), "{word}");
         }
-        assert!(is_failure(&tool_text(FAILED_FOR_AGENT, true)));
-    }
-
-    /// Investigation of 24/11: an install without the visible browser's containers whose agents' sandbox holds
-    /// Hermes' Bot Desktop (the person answered « n », installer setup_desktop) isolates no sandbox, so its hub's
-    /// agents may not hold credentials there (`holder`: needs_own_space); their space would get the same settings and
-    /// refuse the secret all the same. They don't move: the existing refusal at once.
-    #[test]
-    fn no_move_when_the_space_would_hold_the_desktop_too() {
-        let dir = tempfile::tempdir().unwrap();
-        let hub = dir.path().join("hermes");
-        std::fs::create_dir_all(hub.join("profiles/coach")).unwrap();
-        let mut config = Config::with_key("k".repeat(32));
-        config.hermes.isolated = true;
-        config.hermes.bin = "/usr/bin/hermes".into();
-        config.hermes.hub_url = "http://127.0.0.1:8642".into();
-        config.hermes.home = hub.to_string_lossy().into_owned();
-        config.hermes.python = vec!["/usr/bin/python3".into()];
-        let coach =
-            AgentConfig { name: "coach".into(), hermes_url: "http://127.0.0.1:8642/p/coach".into(), ..Default::default() };
-        config.agents.insert("coach".into(), coach.clone());
-        std::fs::write(hub.join("config.yaml"), "bot_desktop:\n  auto_start: true\n").unwrap();
-        assert_eq!(crate::vault::holder(&config, &coach).as_deref(), Some("needs_own_space"));
-        assert!(!space_could_hold(&config, &coach));
-        assert!(!may_move(&config, &coach) && !may_hold(&config, &coach));
-        // its desktop in the gateway, or none: its space could hold it
-        std::fs::write(hub.join("config.yaml"), "bot_desktop:\n  auto_start: true\n  placement: gateway\n").unwrap();
-        assert!(space_could_hold(&config, &coach));
-        std::fs::write(hub.join("config.yaml"), "model:\n  default: glm\n").unwrap();
-        assert!(space_could_hold(&config, &coach));
-        // the visible browser's containers: no desktop in any sandbox
-        std::fs::write(hub.join("config.yaml"), "bot_desktop:\n  auto_start: true\n").unwrap();
-        config.browser.enabled = true;
-        assert!(space_could_hold(&config, &coach));
     }
 
     #[test]
-    fn a_failure_is_not_retried_at_once() {
-        assert!(!failed_recently("unit-own-space"));
-        FAILURES.lock().unwrap().insert("unit-own-space".into(), Instant::now());
-        assert!(failed_recently("unit-own-space"));
-        FAILURES.lock().unwrap().insert("unit-own-space".into(), Instant::now() - RETRY_AFTER - Duration::from_secs(1));
-        assert!(!failed_recently("unit-own-space"));
+    fn a_move_under_way_is_known_until_it_ends() {
+        assert!(!leaving_now(Some("unit-own-space")));
+        let leaving = Leaving::new("unit-own-space");
+        assert!(leaving_now(Some("unit-own-space")) && leaving_now(None));
+        drop(leaving);
+        assert!(!leaving_now(Some("unit-own-space")));
     }
 }

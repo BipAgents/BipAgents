@@ -714,19 +714,11 @@ pub struct Call {
 pub fn body(call: &Call, system: &str, user: &str, provider_order: &[String]) -> Value {
     let mut body = json!({"model": call.model, "temperature": 0.3, "max_tokens": MAX_TOKENS,
                           "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}]});
-    if crate::agents_admin::keeps_thinking_on(&call.model, &call.base_url) {
-        // « low »: about one token of thinking on so short a task (agents_admin.rs); room to answer all the same
+    // asked not to think (a thinking model answered nothing; DeepSeek V4.1 Flash thought ~160 tokens, +1 s: bench
+    // 19/11), one sentence of 15 words at most; GLM through EUrouter keeps « low », about one token of thinking on so
+    // short a task (agents_admin.rs), with room to answer all the same
+    if !crate::model_route::no_thinking(&call.base_url, &mut body) {
         body["max_tokens"] = json!(400);
-    } else {
-        // asked not to think, as Hermes' patch 0010 and the rooms' router do (a thinking model answered nothing)
-        body["chat_template_kwargs"] = json!({"enable_thinking": false, "thinking": false});
-        // one sentence of 15 words at most: a self-hosted single GPU the running turn shares does little for it
-        body["max_tokens"] = json!(MAX_TOKENS);
-        if crate::model_route::pins(&call.base_url) {
-            // the router ignores the template's switch: DeepSeek V4.1 Flash thought ~160 tokens (+1 s) without this
-            // (bench 19/11); « none » there answers at once
-            body["reasoning_effort"] = json!("none");
-        }
     }
     crate::model_route::add_to_body(provider_order, &call.base_url, &mut body);
     body
