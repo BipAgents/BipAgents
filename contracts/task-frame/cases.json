@@ -72,7 +72,7 @@
    ],
    "bip_summary": "texts.<lang>.ai_summary (the app 1.0's whole card: « Oui » = Réessayer, « Non » = Arrêter)",
    "bip_detail": "texts.<lang>.ai_under_i",
-   "bip_fix": "{kind: agent_ai, ref (the agent), name (its shown name), variant: ai, since, routines (their names), failures, reason: ai, title (texts.<lang>.ai_top), text (texts.<lang>.ai_since), buttons (texts.<lang>.ai_buttons)}",
+   "bip_fix": "{kind: agent_ai, ref (the agent), name (its shown name), variant: ai, since, routines (their names), failures, reason: ai, title (texts.<lang>.ai_top), text (texts.<lang>.ai_since), buttons (texts.<lang>.ai_buttons), after (texts.<lang>.ai_after: what the card says once answered, `once` then `deny`; an app reading no `after` keeps its own words)}",
    "answers": "« Réessayer » (once): its routines on again, their count from zero, no model turn. « Arrêter » (deny): they stay paused on their page. Never gone after 7 days: it waits (its routines are paused already). A routine turned back on, or deleted, leaves it to the others."
   }
  },
@@ -168,7 +168,7 @@
    "lang": "The agent's language (names.rs `agent_language`); another than these four: English. Dutch: not yet (texts to validate, briefs/status-task-frame.md).",
    "dates": "A day: fr « 30/11 », en « Nov 30 », de « 30.11. », es « 30/11 »; not this year, with its year (review C9): « 30/11/2027 », « Nov 30, 2027 », « 30.11.2027 », « 30/11/2027 ». « Depuis {since} »: fr « le 21/11 », en « Nov 21 », de « dem 21.11. », es « el 21/11 ».",
    "clock": "« vers 8 h » / « around 8 AM » / « gegen 8 Uhr » / « hacia las 8 »; with minutes « vers 7 h 30 », « around 7:30 AM », « gegen 7:30 Uhr », « hacia las 7:30 ».",
-   "new": "Not in the design's §7 as written, to validate by Alex: clock_minutes, ends.never, ends.once.routine, ended.watcher, keep.routine, keep_buttons.routine, fix_since's date form, the reasons, fix_under_i.routine (fr; de/es from the §7.5 notes), fix_summary.routine, stopped.routine, repair_failed (review C5), the year of a day not this year (review C9). Alex 24/11 (to validate): warn, ai_top, ai_since, ai_buttons, ai_under_i, ai_summary."
+   "new": "Not in the design's §7 as written, to validate by Alex: clock_minutes, ends.never, ends.once.routine, ended.watcher, keep.routine, keep_buttons.routine, fix_since's date form, the reasons, fix_under_i.routine (fr; de/es from the §7.5 notes), fix_summary.routine, stopped.routine, repair_failed (review C5), the year of a day not this year (review C9). Alex 24/11 (to validate): warn, ai_top, ai_since, ai_buttons, ai_under_i, ai_summary. Alex 25/11 (textes-1-1-lot2 tf2-carte-ia-apres B): ai_after (fr; en/de/es to validate)."
   },
   "fr": {
    "clock": "vers {h} h",
@@ -251,6 +251,10 @@
    "ai_buttons": [
     "Réessayer",
     "Arrêter"
+   ],
+   "ai_after": [
+    "Ses routines reprennent",
+    "Arrêtées, sur leur page"
    ],
    "ai_under_i": "Réessayer : ses routines reprennent ; allume son IA avant si elle est éteinte. Arrêter : elles ne tournent plus et restent sur leur page.",
    "ai_summary": "L'IA de {agent} ne répond pas : ses routines n'ont pas pu tourner ({names}). Réessayer ? (Non : elles s'arrêtent.)"
@@ -337,6 +341,10 @@
     "Try again",
     "Stop"
    ],
+   "ai_after": [
+    "Its routines start again",
+    "Stopped, on their page"
+   ],
    "ai_under_i": "Try again: its routines start again; switch its AI on first if it's off. Stop: they no longer run and stay on their page.",
    "ai_summary": "{agent}'s AI isn't answering: its routines couldn't run ({names}). Try again? (No: they stop.)"
   },
@@ -422,6 +430,10 @@
     "Erneut versuchen",
     "Stoppen"
    ],
+   "ai_after": [
+    "Seine Routinen laufen wieder",
+    "Gestoppt, auf ihrer Seite"
+   ],
    "ai_under_i": "Erneut versuchen: Seine Routinen laufen wieder; schalte seine KI vorher ein, falls sie aus ist. Stoppen: Sie laufen nicht mehr und bleiben auf ihrer Seite.",
    "ai_summary": "Die KI von {agent} antwortet nicht: Seine Routinen konnten nicht laufen ({names}). Erneut versuchen? (Nein: Sie stoppen.)"
   },
@@ -506,6 +518,10 @@
    "ai_buttons": [
     "Reintentar",
     "Detener"
+   ],
+   "ai_after": [
+    "Sus rutinas vuelven a funcionar",
+    "Detenidas, en su página"
    ],
    "ai_under_i": "Reintentar: sus rutinas vuelven a funcionar; enciende antes su IA si está apagada. Detener: dejan de funcionar y se quedan en su página.",
    "ai_summary": "La IA de {agent} no responde: sus rutinas no han podido funcionar ({names}). ¿Reintentar? (No: se detienen.)"

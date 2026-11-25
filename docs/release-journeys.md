@@ -50,7 +50,7 @@ la bêta.
 
 | N° | Parcours | Ce que la personne doit voir | Automatisé |
 |---|---|---|---|
-| J01 | Envoyer un texte | Son message tout de suite ; la réponse arrive mot à mot (pas d'un bloc à la fin) | P, i, A |
+| J01 | Envoyer un texte | Son message tout de suite ; la réponse arrive d'un coup, une fois écrite (jamais mot à mot) | P, i, A |
 | J02 | Envoyer une photo | La vignette avec l'IMAGE, jamais « 0 Ko » ; elle s'ouvre en plein écran ; toujours là en rouvrant (relue depuis le pont) | P, i, A |
 | J03 | Envoyer plusieurs photos | Chacune avec son image, dans l'ordre, avant et après réouverture | P, i, A |
 | J04 | Envoyer un document | Son nom et sa vraie taille ; il s'ouvre ; la conversation reste lisible ensuite | P, i, A |
@@ -110,7 +110,7 @@ la bêta.
 | J32 | Un ami ouvre le projet partagé | Son lien : « Alex te montre un projet », « Voir », puis la conversation (les mots d'Alex, les réponses de l'agent), en lecture seule, ouverte avec la clé de SON téléphone ; chez Alex, « Visible par 1 personne » | P, i, A |
 | J33 | L'ami voit la carte du projet | La réponse avec sa carte : la carte native (ses lieux, « Ouvrir l'itinéraire »), pas une page à ouvrir | P, i, A |
 | J34 | Relier deux foyers | Réglages › Famille : « Ton foyer », l'autre parmi « Proches reliés » ; dans « Qui peut écrire à qui », ses agents (« Coach (Marie) ») | P ; apps : manuel |
-| J35 | Un agent partagé avec un proche | Chez Marie : « Alex partage Cuisine avec toi », « Ajouter », SA conversation (ses mots, la réponse mot à mot) ; chez Alex : « avec Marie · N messages », jamais ses mots | P ; apps : manuel |
+| J35 | Un agent partagé avec un proche | Chez Marie : « Alex partage Cuisine avec toi », « Ajouter », SA conversation (ses mots, la réponse) ; chez Alex : « avec Marie · N messages », jamais ses mots | P ; apps : manuel |
 | J36 | Prévenir la famille | La carte « Prévenir Marie ? » (les mots, à qui) ; rien ne part avant « Envoyer », même en « Seulement le critique » ; chez Marie : « Alex · … Transmis par Vie », sa Boîte | P ; apps : manuel |
 | J37 | Trouver une date avec un autre foyer | Chez Marie (Boîte) : « Dîner » d'Alex et les soirs libres pour les deux, jamais leurs rendez-vous ; d'accord : réservé dans les deux agendas | P ; apps : manuel |
 | J38 | Les agents de deux foyers s'écrivent | Chez Marie : « Vie (Alex) ⇄ Coach · 2 messages · Voir l'échange », l'échange en lecture ; rien dans SA conversation avec Coach | P ; apps : manuel |

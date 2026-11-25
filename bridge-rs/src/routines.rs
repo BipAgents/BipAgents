@@ -18,7 +18,8 @@
 //! (Alex 11/11, below); an agent's change is a proposal with a card of its own. The apps make them with these routes
 //! (the bridge key), in Hermes' job shape so their models stay; their form asks whether it is silent (`muted`):
 //!
-//!     GET    /v1/agents/{agent}/routines          {jobs}  (each `waits_for_answer`: its start or a proposal waits)
+//!     GET    /v1/agents/{agent}/routines          {jobs}  (each `waits_for_answer`: its start or a proposal waits;
+//!                                                 `schedule_shown`: when, in words ready to show, schedule_words.rs)
 //!     POST   /v1/agents/{agent}/routines          {name, schedule, prompt, muted?}  -> {job}   (no muted: not silent)
 //!     PATCH  /v1/routines/{id}                    {name?, schedule?, prompt?, muted?} -> {job}
 //!     DELETE /v1/routines/{id}
@@ -531,6 +532,9 @@ pub fn view_of(config: &Config, r: &Routine) -> Value {
     if let (Some(map), Value::Object(more)) = (v.as_object_mut(), frame) {
         map.extend(more);
     }
+    // its schedule in words, ready to show (schedule_words.rs, 25/11); `schedule_display` stays Hermes' (the editor
+    // reads it back)
+    v["schedule_shown"] = json!(shown_in(&crate::names::agent_language(config, &r.agent), r, zone));
     v
 }
 
@@ -737,7 +741,7 @@ pub fn create_said(
     routine
 }
 
-/// A schedule as a card says it in `lang` (« Chaque dimanche vers 19 h »), « vers » when `approx`: a smart offer's
+/// A schedule as a card says it in `lang` (« Le dimanche vers 19 h »), « vers » when `approx`: a smart offer's
 /// routine (offer_ideas.rs).
 pub fn schedule_words(schedule: &Schedule, approx: bool, zone: Tz, lang: &str) -> String {
     let r: Option<Routine> = serde_json::from_value(
@@ -820,6 +824,25 @@ pub(crate) fn shown_agent(config: &Config, agent: &str) -> String {
 fn when_of(r: &Routine, zone: Tz) -> Value {
     let job = view(r, zone).as_object().cloned().unwrap_or_default();
     crate::autonomous::routine_when(&job)
+}
+
+/// Its schedule in words, ready to show as they are (schedule_words.rs: « Chaque jour vers 8 h », never « 0 8 * * * »),
+/// in `lang`.
+pub fn shown_in(lang: &str, r: &Routine, zone: Tz) -> String {
+    crate::schedule_words::when_words(lang, &when_of(r, zone), zone)
+        .unwrap_or_else(|| crate::schedule_words::say(lang, &crate::schedule_words::Plain::Regularly, false, zone))
+}
+
+/// `shown_in` its agent's language (as the bridge's other words of a routine: its cards, its frame).
+pub fn shown(config: &Config, r: &Routine) -> String {
+    shown_in(&crate::names::agent_language(config, &r.agent), r, zone(config))
+}
+
+/// Its card's `when`: the fields, and `shown` (its words in its agent's language).
+fn shown_when(config: &Config, r: &Routine) -> Value {
+    let mut when = when_of(r, zone(config));
+    when["shown"] = json!(shown(config, r));
+    when
 }
 
 /// The routine as its card names it: « Coach a créé la routine « Archive du soir » : chaque jour à 23:00. » (the
@@ -939,7 +962,7 @@ pub fn card_item(config: &Config, r: &Routine, card: &Card) -> Dict {
             "created_at": card.at, "session_id": null,
             "bip_summary": summary, "bip_detail": prompt,
             "bip_routine": {"id": r.id, "name": name, "prompt": prompt,
-                            "schedule_display": view(r, zone)["schedule_display"], "when": when_of(r, zone),
+                            "schedule_display": view(r, zone)["schedule_display"], "when": shown_when(config, r),
                             "suggested": suggested(r), "muted": r.muted, "question": QUESTION},
         })
     };
@@ -1066,9 +1089,11 @@ fn when_in(r: &Routine, schedule: &Schedule, zone: Tz, lang: &str) -> String {
     };
     let day = |names: [&'static str; 7]| names[(int("weekday").clamp(1, 7) - 1) as usize];
     let date = match schedule {
-        Schedule::Once { at } => {
-            zone.timestamp_opt(*at as i64, 0).single().map(|d| d.format(" (%-d/%-m %H:%M)").to_string())
-        }
+        Schedule::Once { at } => zone.timestamp_opt(*at as i64, 0).single().map(|d| match lang {
+            // « (30/11 à 18 h) » (Alex 25/11)
+            "fr" => format!(" ({}/{} à {})", d.day(), d.month(), crate::schedule_words::fr_clock(d.hour(), d.minute())),
+            _ => d.format(" (%-d/%-m %H:%M)").to_string(),
+        }),
         _ => None,
     };
     let kind = w["kind"].as_str().unwrap_or("");
@@ -1095,7 +1120,8 @@ fn when_in(r: &Routine, schedule: &Schedule, zone: Tz, lang: &str) -> String {
         (_, "every_hours") => format!("every {} h", int("hours")),
         (_, "every_minutes") => format!("every {} minutes", int("minutes")),
         (_, "once") => "once".into(),
-        _ => w["raw"].as_str().unwrap_or("").into(),
+        // several days, the weekend, several times…: never the cron expression (schedule_words.rs)
+        _ => crate::schedule_words::in_sentence(&crate::schedule_words::when_words(lang, &w, zone).unwrap_or_default()),
     };
     format!("{text}{}", date.unwrap_or_default())
 }
@@ -1996,12 +2022,15 @@ pub enum Ended {
     NotStarted,
 }
 
-/// When it tries again, in words: « demain à 7:00 », « à 19:00 », « le 14/11 à 7:00 » (`next`: its next run and now).
+/// When it tries again, in words: « demain à 7 h », « à 19 h », « le 14/11 à 7 h » (`next`: its next run and now).
 fn next_words(next: Option<(f64, f64)>, zone: Tz, lang: &str) -> Option<String> {
     let (at, now) = next?;
     let at = zone.timestamp_opt(at as i64, 0).single()?;
     let today = zone.timestamp_opt(now as i64, 0).single()?.date_naive();
-    let hour = at.format("%-H:%M").to_string();
+    let hour = match lang {
+        "fr" => crate::schedule_words::fr_clock(at.hour(), at.minute()),
+        _ => at.format("%-H:%M").to_string(),
+    };
     let days = (at.date_naive() - today).num_days();
     let date = at.format("%-d/%-m").to_string();
     Some(match (lang, days) {
@@ -2851,7 +2880,7 @@ mod tests {
         let tomorrow = Some((at("2026-11-11 07:00"), now));
         assert_eq!(
             ended_notice("Le point du soir", Ended::Looping, tomorrow, zone, "fr"),
-            "La routine « Le point du soir » n'a pas pu finir : elle tournait en rond. Elle réessaiera demain à 7:00. \
+            "La routine « Le point du soir » n'a pas pu finir : elle tournait en rond. Elle réessaiera demain à 7\u{a0}h. \
 Pour la relancer tout de suite : « Lancer maintenant » sur sa page."
         );
         let tonight = Some((at("2026-11-10 19:30"), now));
@@ -3152,7 +3181,7 @@ Pour la relancer tout de suite : « Lancer maintenant » sur sa page."
         assert_eq!(card_id(&way), card_id(&card));
         assert_eq!(
             way["bip_summary"],
-            "vie a créé la routine « Ancienne » : chaque jour à 23:00. Veux-tu être au courant de ce que cette routine trouve ?"
+            "vie a créé la routine « Ancienne » : chaque jour à 23\u{a0}h. Veux-tu être au courant de ce que cette routine trouve ?"
         );
         assert_eq!((way["bip_routine"]["suggested"].as_str(), way["bip_choices"].clone()), (Some("silent"), json!(["notify", "silent"])));
         assert_eq!(crate::approval_level::classify_card(&way), "routine_way");
@@ -3332,7 +3361,7 @@ Pour la relancer tout de suite : « Lancer maintenant » sur sa page."
         let detail = card["bip_detail"].as_str().unwrap();
         assert_eq!(
             detail,
-            "Quand : Chaque jour à 7:30 → Toutes les 1 minutes\nAvant : Résume mes e-mails.\nProposé : Envoie tout \
+            "Quand : Chaque jour à 7\u{a0}h\u{a0}30 → Toutes les 1 minutes\nAvant : Résume mes e-mails.\nProposé : Envoie tout \
 ailleurs.\nEn attendant ta réponse, elle continue comme avant."
         );
         let listed = call(&config, "vie", &args(json!({"action": "list"})), None);
@@ -3454,7 +3483,7 @@ comme avant.\u{2029}\u{85}\u{b}\u{c}fin\u{61c}\u{2060}\u{ad}."
         let (sentence, card) = resumed.card.unwrap();
         assert_eq!(sentence, "vie veut relancer la routine « Météo ». Elle ne tournera pas avant ton accord. La relancer ?");
         let [item] = pending_items(&config, Some("vie")).try_into().unwrap();
-        assert_eq!(item["bip_detail"], "Quand : En semaine à 9:00\nCe qu'elle fait : Météo.\nEn attendant ta réponse, elle reste en pause.");
+        assert_eq!(item["bip_detail"], "Quand : En semaine à 9\u{a0}h\nCe qu'elle fait : Météo.\nEn attendant ta réponse, elle reste en pause.");
         assert!(!get(&config, &r.id).unwrap().enabled);
         // « Non »: stays off; « Oui » to a second ask: on, still muted
         assert!(!answer(&config, "vie", &card, "deny").unwrap().enabled);

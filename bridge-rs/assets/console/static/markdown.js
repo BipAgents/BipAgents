@@ -6,11 +6,13 @@ import { h } from "./vendor/preact-htm.js";
 
 const OPENABLE = new Set(["http:", "https:", "tel:", "mailto:"]);
 
-/** The reply without the tool-call markup a model sometimes writes as text (no MEDIA line reaches an app). */
+/** The reply without the tool-call markup a model sometimes writes as text (no MEDIA line reaches an app), nor a
+ * hidden `<!--bip:…-->` note (the bridge takes them out: never shown, whatever comes). */
 export function visible(text) {
   let result = text || "";
   if (result.includes("<")) {
-    result = result.replace(/<tool_call>[\s\S]*?(?:<\/tool_call>|$)/g, "")
+    result = result.replace(/<!--\s*bip:[\s\S]*?(?:-->|$)/g, "")
+      .replace(/<tool_call>[\s\S]*?(?:<\/tool_call>|$)/g, "")
       .replace(/<\/?(?:arg_key|arg_value|tool_call|tool_response|function_calls?|invoke|parameter)\b[^>]*>/g, "");
   }
   return result.trim();

@@ -25,7 +25,8 @@ DAY = 86400.0
 #: The base's answers to an app 1.0 (recorded on int-1.1c 938d65f23 with TASK_FRAME_RECORD=1).
 RECORDED = Path(__file__).parent / "fixtures" / "task_frame_app_1_0.json"
 #: What this branch adds to them (contracts/task-frame `app_1_0.ignores`).
-ADDED = {"owner", "ends", "deliver_to", "approx", "bip_fix", "bip_choices", "until", "once", "default_end"}
+ADDED = {"owner", "ends", "deliver_to", "approx", "bip_fix", "bip_choices", "until", "once", "default_end",
+         "schedule_shown"}   # (a routine's words ready to show, schedule_words.rs, 25/11; its `when.shown` below)
 #: Added to what carries a frame (a job, a row, a trigger: with its `owner`); a watcher's detail had `failures` already.
 FRAMED = {"deliver", "failures", "fix"}
 
@@ -129,7 +130,7 @@ def test_every_routine_watcher_and_trigger_has_an_owner_an_end_and_a_place(bridg
     rows = {i["title"]: i for i in items}
     point = rows["Point du soir"]
     assert point["ends"] == {"kind": "never", "text": "until you stop it"} and point["deliver"]["kind"] == "boite"
-    assert point["approx"] is False and point["when"]["text"] == "Chaque jour à 19:00"
+    assert point["approx"] is False and point["when"]["text"] == "Chaque jour à 19\u00a0h"
     meteo = rows["Météo"]
     assert meteo["ends"] == {"kind": "date", "at": last, "text": f"until {day_en(last)}"}, meteo["ends"]
     assert meteo["approx"] is True and meteo["when"]["approx"] is True
@@ -498,6 +499,7 @@ def without_added(value):
             out.pop("plan", None)
         if isinstance(out.get("when"), dict):
             out["when"].pop("approx", None)
+            out["when"].pop("shown", None)
         return out
     if isinstance(value, list):
         return [without_added(v) for v in value]

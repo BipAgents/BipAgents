@@ -479,11 +479,56 @@ fn sentence(config: &Config, lang: &str, shown: &str, adding: bool, name: &str, 
     }
 }
 
-/// What the card shows under its sentence: the fields written (others' data: defused).
-fn detail(body: &Value) -> String {
+/// A field's plain name on the card, in the card's language: fr, en, de, es, nl (Alex 25/11, textes-1-1-lot2
+/// ol2-carte-contact: never Microsoft's own key, « mobilePhone »…). None: not shown (the name's two halves, said by the
+/// card's sentence already, or a field no write sends).
+fn field_name(lang: &str, key: &str) -> Option<&'static str> {
+    let [fr, en, de, es, nl] = match key {
+        "displayName" => ["Nom", "Name", "Name", "Nombre", "Naam"],
+        "nickName" => ["Surnom", "Nickname", "Spitzname", "Apodo", "Bijnaam"],
+        "companyName" => ["Société", "Company", "Firma", "Empresa", "Bedrijf"],
+        "jobTitle" => ["Poste", "Job title", "Position", "Puesto", "Functie"],
+        "personalNotes" => ["Notes", "Notes", "Notizen", "Notas", "Notities"],
+        "mobilePhone" => ["Mobile", "Mobile", "Handy", "Móvil", "Mobiel"],
+        "homePhones" => ["Téléphone", "Phone", "Telefon", "Teléfono", "Telefoon"],
+        "businessPhones" => ["Téléphone pro", "Work phone", "Telefon (Arbeit)", "Teléfono del trabajo", "Telefoon werk"],
+        "emailAddresses" => ["E-mails", "E-mails", "E-Mails", "Correos", "E-mails"],
+        "birthday" => ["Anniversaire", "Birthday", "Geburtstag", "Cumpleaños", "Verjaardag"],
+        "homeAddress" => ["Adresse", "Address", "Adresse", "Dirección", "Adres"],
+        "otherAddress" => ["Autre adresse", "Other address", "Weitere Adresse", "Otra dirección", "Ander adres"],
+        "businessAddress" => ["Adresse pro", "Work address", "Adresse (Arbeit)", "Dirección del trabajo", "Adres werk"],
+        "categories" => ["Groupes", "Groups", "Gruppen", "Grupos", "Groepen"],
+        _ => return None,
+    };
+    Some(match lang.split(['-', '_']).next().unwrap_or("") {
+        "fr" => fr,
+        "de" => de,
+        "es" => es,
+        "nl" => nl,
+        _ => en,
+    })
+}
+
+/// A birthday as Graph keeps it (« 1991-04-02T11:59:00Z ») as a day: « 02/04/1991 », « 2 April 1991 »…
+fn birthday_shown(lang: &str, value: &str) -> String {
+    let Ok(day) = chrono::NaiveDate::parse_from_str(tk::head(value, 10), "%Y-%m-%d") else { return value.to_string() };
+    let format = match lang.split(['-', '_']).next().unwrap_or("") {
+        "fr" | "es" => "%d/%m/%Y",
+        "de" => "%d.%m.%Y",
+        "nl" => "%d-%m-%Y",
+        _ => "%-d %B %Y",
+    };
+    day.format(format).to_string()
+}
+
+/// What the card shows under its sentence: the fields written, by their plain names (others' data: defused).
+fn detail(lang: &str, body: &Value) -> String {
+    let colon = if lang.starts_with("fr") { " :" } else { ":" };
     let mut lines = Vec::new();
     for (key, v) in body.as_object().into_iter().flatten() {
+        let Some(field) = field_name(lang, key).filter(|_| key != "givenName" && key != "surname") else { continue };
         let shown = match v {
+            Value::String(s) if key == "birthday" => birthday_shown(lang, s),
             Value::String(s) => s.clone(),
             Value::Array(items) => items
                 .iter()
@@ -493,8 +538,8 @@ fn detail(body: &Value) -> String {
             Value::Object(o) => o.get("street").and_then(Value::as_str).unwrap_or("").to_string(),
             _ => continue,
         };
-        if !shown.is_empty() && key != "givenName" && key != "surname" {
-            lines.push(format!("{key}: {}", crate::cards::quoted(&shown, 200)));
+        if !shown.is_empty() {
+            lines.push(format!("{field}{colon} {}", crate::cards::quoted(&shown, 200)));
         }
     }
     lines.join("\n")
@@ -554,7 +599,7 @@ pub async fn write_call(state: &AppState, agent: &AgentConfig, name: &str, argum
             tool: if adding { "contacts_add" } else { "contacts_update" },
             command: format!("{name} {} {}", outlook::mailbox_key(account), hex::encode(&digest[..8])),
             summary: summary.clone(),
-            detail: detail(&planned.body),
+            detail: detail(&lang, &planned.body),
             always: crate::approval_level::always_button(&lang, kind),
             always_key: None,
         };
@@ -609,4 +654,48 @@ pub async fn write_call(state: &AppState, agent: &AgentConfig, name: &str, argum
         said.push_str(&crate::approval_level::told(&[summary]));
     }
     Some(tool_text(&said, false))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Alex 25/11 (textes-1-1-lot2 ol2-carte-contact): the card's lines name every field a write sends in plain words,
+    /// in the card's language, never by Microsoft's key.
+    #[test]
+    fn the_cards_fields_by_their_plain_names() {
+        let add = json!({"name": "Nina Durand", "nickname": "Nini", "organization": "Kerfy", "job": "Designer",
+                         "notes": "Voisine", "phones": ["+33 6 00 00 00 01", "+33 1 00 00 00 02"],
+                         "emails": ["nina@example.org"], "birthday": "1991-04-02", "address": "1 rue X", "group": "Famille"});
+        let planned = plan_add(add.as_object().unwrap()).ok().unwrap();
+        let mut body = planned.body.clone();
+        body["otherAddress"] = json!({"street": "2 rue Y"});
+        body["businessAddress"] = json!({"street": "3 rue Z"});
+        body["businessPhones"] = json!(["+33 1 00 00 00 03"]);
+        body["someNewField"] = json!("x");
+        let keys: Vec<String> = body.as_object().unwrap().keys().cloned().collect();
+        for lang in ["fr", "en", "de", "es", "nl"] {
+            let lines = detail(lang, &body);
+            for key in &keys {
+                assert!(!lines.contains(&format!("{key}:")) && !lines.contains(&format!("{key} :")), "{lang}: {key} in {lines}");
+            }
+            assert_eq!(lines.lines().count(), 14, "{lang}: every field written, its name's halves and the unknown one apart: {lines}");
+        }
+        let fr = detail("fr", &body);
+        for line in ["Nom : Nina Durand", "Surnom : Nini", "Société : Kerfy", "Poste : Designer", "Notes : Voisine",
+                     "Mobile : +33 6 00 00 00 01", "Téléphone : +33 1 00 00 00 02", "Téléphone pro : +33 1 00 00 00 03",
+                     "E-mails : nina@example.org", "Anniversaire : 02/04/1991", "Adresse : 1 rue X", "Autre adresse : 2 rue Y",
+                     "Adresse pro : 3 rue Z", "Groupes : Famille"]
+        {
+            assert!(fr.lines().any(|l| l == line), "{line} in {fr}");
+        }
+        let en = detail("en", &body);
+        assert!(en.contains("Mobile: +33 6") && en.contains("Company: Kerfy") && en.contains("Birthday: 2 April 1991"), "{en}");
+        let de = detail("de-DE", &body);
+        assert!(de.contains("Handy: +33 6") && de.contains("Firma: Kerfy") && de.contains("Geburtstag: 02.04.1991"), "{de}");
+        let es = detail("es", &body);
+        assert!(es.contains("Móvil: +33 6") && es.contains("Correos: nina@example.org"), "{es}");
+        let nl = detail("nl", &body);
+        assert!(nl.contains("Mobiel: +33 6") && nl.contains("Bedrijf: Kerfy") && nl.contains("Verjaardag: 02-04-1991"), "{nl}");
+    }
 }

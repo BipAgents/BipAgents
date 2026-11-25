@@ -420,7 +420,8 @@ pub fn items_of(config: &Config, share: &Value, messages: &[Dict]) -> Vec<(Strin
                 None => continue,
             }
         } else {
-            split_media(&raw)
+            // the agent's words: never its hidden spoken version nor a note of the app's (spoken.rs, timeline.rs)
+            split_media(&crate::threads::timeline::NOTES.replace_all(&crate::spoken::strip(&raw), ""))
         };
         let mut media = Vec::new();
         if role == "assistant" {

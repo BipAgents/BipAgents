@@ -503,13 +503,15 @@ long as the stream is open: a notification for that thread is journaled, marked 
 
 On `thread`, an app showing that thread asks `timeline?after=<its last cursor>`; a list screen refetches
 `/v1/threads`. Events are hints: an app that missed some (asleep, offline) compares `version` and refetches. The live
-text of a run still comes from `/v1/runs/{run_id}/events` (unchanged): every delta as Hermes gives it, nothing held
-but a line that may still become a `MEDIA:` line (until its newline); a character Hermes passed in two UTF-16 halves
-over two deltas (a lone surrogate escape each) is joined, a half alone becomes U+FFFD (hermes.rs `SSEParser`). The
-apps draw the reply as it comes (iOS: at most 20 times a second, in its own bubble), with no cursor after it, its
-new words fading in from 30 % to full in 250 ms (`StreamReveal`; none with Reduce Motion or Android's animations
-removed), and show their working line under a reply whose words stopped for 2.5 s (`ReplyPause`: Hermes sends
-nothing while the model writes a call's arguments or its own notes).
+text of a run still comes from `/v1/runs/{run_id}/events`, each text whole once written (Alex 25/11, « retire le
+streaming partout »: runs.rs `WholeWords`): a text's deltas, and the files in it, are held and merged, then given in one
+`message.delta` just before the next event that is not a mere status (a call, a card, a notice, the turn's end); a
+`turn.status`, `model.usage` or `bridge.queue` passes meanwhile. A character Hermes passed in two UTF-16 halves over two
+deltas (a lone surrogate escape each) is joined, a half alone becomes U+FFFD (hermes.rs `SSEParser`). Meanwhile the
+apps show their working line (it stays until the turn's end, whatever the turn shows), and the reply comes in one piece,
+drawn as it is, at full opacity, with no fade (Alex 25/11, « retire le fondu »: `StreamReveal` removed). The quick
+talk's answer (`GET /v1/threads/{thread}/sends/{client_id}`, `run.answer`) is its texts already written. The Live's own
+stream (`/v1/live/turns`) keeps its words as they come.
 
 ### 6.5b What the agent does now (`turn.status`, 16/11)
 
@@ -612,7 +614,7 @@ step): never the agent's step, a site or the buttons. Friends and feeds: none (n
   meanwhile).
   Relayed the same way (step 4): `GET /v1/threads/events?agent=<x>__<h>&thread=<cid>` (the owner's
   `…/conversations/{cid}/events`: `thread` hints; open = on screen), `GET /v1/runs/{run}/events?agent=<x>__<h>&thread=<cid>`
-  (the turn's words live: text deltas, approvals, questions and the end only, no tool step),
+  (the turn's words: its texts whole once written, approvals, questions and the end only, no tool step),
   `POST /v1/threads/{cid|new}/messages` (her `client_id` kept on the owner's side; `new` opens a conversation titled by
   its first words), `…/{cid}/stop`, `DELETE /v1/threads/{cid}`, and her answers (an approval's `choice`, a question's
   `answer`) through `POST /v1/approve` with `agent=<x>__<h>` (the owner's `/family/s/{agent}/approval`); her bridge

@@ -398,7 +398,7 @@ function Conversation({ agent, threadId, onThreadChange, onMood }) {
       ${it.title && html`<strong>${it.title}</strong>`}
       ${it.text && html`<div class="bubble md">${markdown(it.text)}</div>`}
       ${files(it)}
-      <div class="meta">${it.at && html`<span>${when(it.at)}</span>`}${it.text && html`<${Listen} agent=${agent} text=${it.text}/>`}</div>
+      <div class="meta">${it.at && html`<span>${when(it.at)}</span>`}${it.text && html`<${Listen} agent=${agent} text=${it.spoken || it.text}/>`}</div>
     </div>`;
   };
 

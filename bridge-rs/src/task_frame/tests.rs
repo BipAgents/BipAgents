@@ -1050,6 +1050,7 @@ fn a2_one_card_per_agent_when_its_ai_does_not_answer() {
     assert_eq!(item["bip_fix"]["variant"], AI);
     assert_eq!(item["bip_fix"]["title"], "Vie · son IA ne répond pas");
     assert_eq!(item["bip_fix"]["buttons"], json!(["Réessayer", "Arrêter"]));
+    assert_eq!(item["bip_fix"]["after"], json!(["Ses routines reprennent", "Arrêtées, sur leur page"]));
     assert_eq!(item["bip_fix"]["routines"], json!(["Courriels", "Météo"]));
     assert!(
         item["bip_fix"]["text"]
@@ -1105,6 +1106,7 @@ fn a2_the_new_cards_texts_are_the_contracts() {
         assert_eq!(ai_title(lang, "{agent}"), s("ai_top"), "{lang}");
         assert_eq!(ai_since_line(lang, "{since}", "{names}"), s("ai_since"), "{lang}");
         assert_eq!(json!(ai_buttons(lang)), c["ai_buttons"], "{lang}");
+        assert_eq!(json!(ai_after(lang)), c["ai_after"], "{lang}");
         assert_eq!(ai_under_i(lang), s("ai_under_i"), "{lang}");
         assert_eq!(ai_summary(lang, "{agent}", "{names}"), s("ai_summary"), "{lang}");
     }
@@ -1112,14 +1114,21 @@ fn a2_the_new_cards_texts_are_the_contracts() {
 
 #[test]
 fn a2_the_common_card_speaks_four_languages() {
-    for (lang, title, buttons) in [
-        ("fr", "Vie · son IA ne répond pas", ["Réessayer", "Arrêter"]),
-        ("en", "Vie · its AI isn't answering", ["Try again", "Stop"]),
-        ("de", "Vie · seine KI antwortet nicht", ["Erneut versuchen", "Stoppen"]),
-        ("es", "Vie · su IA no responde", ["Reintentar", "Detener"]),
+    for (lang, title, buttons, after) in [
+        ("fr", "Vie · son IA ne répond pas", ["Réessayer", "Arrêter"], ["Ses routines reprennent", "Arrêtées, sur leur page"]),
+        ("en", "Vie · its AI isn't answering", ["Try again", "Stop"], ["Its routines start again", "Stopped, on their page"]),
+        ("de", "Vie · seine KI antwortet nicht", ["Erneut versuchen", "Stoppen"], [
+            "Seine Routinen laufen wieder",
+            "Gestoppt, auf ihrer Seite",
+        ]),
+        ("es", "Vie · su IA no responde", ["Reintentar", "Detener"], [
+            "Sus rutinas vuelven a funcionar",
+            "Detenidas, en su página",
+        ]),
     ] {
         assert_eq!(ai_title(lang, "Vie"), title);
         assert_eq!(ai_buttons(lang), buttons);
+        assert_eq!(ai_after(lang), after, "Alex 25/11 (tf2-carte-ia-apres B): what the card says once answered");
         assert!(!ai_under_i(lang).is_empty() && !ai_summary(lang, "Vie", "x").is_empty());
     }
 }

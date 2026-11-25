@@ -59,11 +59,12 @@ def reply_done(journey, words):
 
 # -- sending ------------------------------------------------------------------------------------------------------
 
-def test_j01_a_text_message_shows_and_its_reply_streams_word_by_word(journey):
+def test_j01_a_text_message_shows_and_its_reply_comes_whole(journey):
     sent = started(journey.send(cid(1), "Bonjour Vie, tu es là ?"))
     events = journey.run_events(sent["run_id"])
     deltas = [d.get("delta") for name, d in events if name == "message.delta"]
-    assert len(deltas) >= 8, events   # word by word, not the whole reply at the end
+    # whole once written (Alex 25/11), never word by word: the model wrote it word by word (bbkit/model.py)
+    assert len(deltas) == 1 and deltas[0].startswith("Bien reçu") and deltas[0].rstrip().endswith("autre chose."), events
     assert events[-1][0] == "run.completed", events[-3:]
     page = reply_done(journey, "Bien reçu")
     displayable.check(journey.bridge, page, AGENT)

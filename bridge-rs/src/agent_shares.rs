@@ -935,9 +935,9 @@ async fn served_run_events(
     Ok(turn_words(&state, &agent, &run_id, true, Some(by), status))
 }
 
-/// A turn's words as they come, only text crossing: its deltas, its end, and (`prompts`) its approvals and questions
-/// (with `by`, whose turn it is, on the family's); no tool step. `prompts` false: a reader who answers nothing
-/// (agent_feed.rs).
+/// A turn's words, only text crossing: its texts (each whole, once written: runs.rs `WholeWords`), its end, and
+/// (`prompts`) its approvals and questions (with `by`, whose turn it is, on the family's); no tool step. `prompts`
+/// false: a reader who answers nothing (agent_feed.rs).
 pub(crate) fn turn_words(state: &AppState, agent: &AgentConfig, run_id: &str, prompts: bool, by: Option<Value>,
                          status: bool) -> Response {
     let mut listener = state.hub.subscribe(agent, run_id, "shared", false);
@@ -945,37 +945,44 @@ pub(crate) fn turn_words(state: &AppState, agent: &AgentConfig, run_id: &str, pr
         // the keepalive 25 s after the last bytes written, whatever the stream left out meanwhile (review R3, 16/11)
         let every = Duration::from_secs_f64(crate::app::SSE_KEEPALIVE_SECONDS);
         let mut due = tokio::time::Instant::now() + every;
+        // each text whole, once written (runs.rs `WholeWords`)
+        let mut whole = crate::runs::WholeWords::default();
         loop {
-            match tokio::time::timeout_at(due, listener.queue.recv()).await {
+            let (events, end) = match tokio::time::timeout_at(due, listener.queue.recv()).await {
                 Err(_) => {
                     due = tokio::time::Instant::now() + every;
                     yield Ok::<_, std::io::Error>(Bytes::from_static(b": keepalive\n\n"));
+                    continue;
                 }
-                Ok(None) | Ok(Some(None)) => break,
-                Ok(Some(Some(event))) => {
-                    let kind = event.r#type.as_str();
-                    // what the agent does now: a member who asks reads it reduced (no site, no step, no buttons)
-                    if status && prompts && kind == crate::turn_status::EVENT {
-                        let reduced = Value::Object(crate::turn_status::reduced(&event.data));
-                        due = tokio::time::Instant::now() + every;
-                        yield Ok(event_line(kind, &reduced));
-                        continue;
-                    }
-                    let crosses = crate::hermes::is_delta(kind) || crate::hermes::is_terminal(kind)
-                        || (prompts && ["approval.request", "clarify.request", crate::hermes_prompts::APPROVAL_SETTLED,
-                            crate::hermes_prompts::CLARIFY_SETTLED].contains(&kind));
-                    if crosses {
-                        let mut data = crossing_fields(kind, &event.data);
-                        if let Some(Value::String(output)) = data.get_mut("output") {
-                            *output = crate::rooms::room_text(output).0;
-                        }
-                        if let (Some(by), true) = (&by, ["approval.request", "clarify.request"].contains(&kind)) {
-                            data.insert("by".into(), by.clone());
-                        }
-                        due = tokio::time::Instant::now() + every;
-                        yield Ok(event_line(kind, &Value::Object(data)));
-                    }
+                Ok(None) | Ok(Some(None)) => (whole.rest(), true),
+                Ok(Some(Some(event))) => (whole.pass(event), false),
+            };
+            for event in events {
+                let kind = event.r#type.as_str();
+                // what the agent does now: a member who asks reads it reduced (no site, no step, no buttons)
+                if status && prompts && kind == crate::turn_status::EVENT {
+                    let reduced = Value::Object(crate::turn_status::reduced(&event.data));
+                    due = tokio::time::Instant::now() + every;
+                    yield Ok(event_line(kind, &reduced));
+                    continue;
                 }
+                let crosses = crate::hermes::is_delta(kind) || crate::hermes::is_terminal(kind)
+                    || (prompts && ["approval.request", "clarify.request", crate::hermes_prompts::APPROVAL_SETTLED,
+                        crate::hermes_prompts::CLARIFY_SETTLED].contains(&kind));
+                if crosses {
+                    let mut data = crossing_fields(kind, &event.data);
+                    if let Some(Value::String(output)) = data.get_mut("output") {
+                        *output = crate::rooms::room_text(output).0;
+                    }
+                    if let (Some(by), true) = (&by, ["approval.request", "clarify.request"].contains(&kind)) {
+                        data.insert("by".into(), by.clone());
+                    }
+                    due = tokio::time::Instant::now() + every;
+                    yield Ok(event_line(kind, &Value::Object(data)));
+                }
+            }
+            if end {
+                break;
             }
         }
         listener.close();

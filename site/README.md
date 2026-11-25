@@ -10,8 +10,9 @@
   choices first, « I want to use my Hermes » → the home's `#install`, no code; « I want a place » → an e-mail address
   and ALTCHA's « I'm not a robot » (its widget served from `/assets/altcha/`, src/bipagents/altcha/README.txt), the
   guichet's `POST /v1/beta/request` answers with the code (a guichet of 25/11 or later): shown at once with « Copier »
-  and the beta's TestFlight / Play badges, and mailed too; an older guichet's `{sent}` alone keeps « look in your
-  e-mails »; `?api=` for a local guichet or mock as
+  and the beta's TestFlight / Play badges, and mailed too; the answer's `ticket` stays a day in this browser
+  (localStorage `bipagents.codeTicket`) and is sent back, so the same code shows again here and only here; an older
+  guichet's `{sent}` alone keeps « look in your e-mails »; `?api=` for a local guichet or mock as
   `/status/`); `/vault/` (how the vault keeps the passwords, and what it can't prevent in a block of its own: what the
   apps' « Comment c'est protégé ? » opens, at `/vault/` or `/fr/`, `/de/`, `/es/vault/` by the phone's language; texts in
   `i18n/vault.<lang>.json`); `/install/` only sends to the home's `#install`. English at `/`, French, German and

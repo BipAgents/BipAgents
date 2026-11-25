@@ -1142,8 +1142,10 @@ async fn a_task_waiting_long_for_room_is_told_to_the_person_once() {
     let (who, _session, line, body) = &said[0];
     assert_eq!((who.as_str(), body.as_str()), ("coach", "Tâche de fond en attente"));
     assert!(line.starts_with("Tâche de fond en attente : Comparer\n"), "{line}");
-    assert!(line.contains("toute seule") && line.contains("annuler"), "{line}");
-    for word in ["mémoire", "RAM", "Mo", "navigateur"] {
+    assert!(line.ends_with(
+        "\nTrop de choses tournent en ce moment : elle partira toute seule dès qu'il y aura de la place. Tu peux aussi l'annuler."
+    ), "{line}");
+    for word in ["mémoire", "RAM", "Mo", "navigateur", "serveur"] {
         assert!(!line.contains(word), "plain words only: {line}");
     }
     assert_eq!(board.tell_long_waits().await, 0, "told once");

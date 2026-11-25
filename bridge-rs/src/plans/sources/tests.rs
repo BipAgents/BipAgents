@@ -611,7 +611,12 @@ fn the_bridge_s_cards_are_offers_of_its_own_kinds() {
     assert_eq!((offer.kind.as_str(), offer.source.as_str(), offer.about.as_str()), (APPOINTMENT, CALENDAR, "Dentiste"));
     assert_eq!(
         offer.label,
-        fill(t.calendar_offer, &[("title", "Dentiste"), ("day", &day_words(lang, h.start, PARIS)), ("time", "15:00")])
+        // « 15 h » in French (Alex 25/11)
+        fill(t.calendar_offer, &[
+            ("title", "Dentiste"),
+            ("day", &day_words(lang, h.start, PARIS)),
+            ("time", if t.lang == "fr" { "15\u{a0}h" } else { "15:00" })
+        ])
     );
     assert!(offer.prompt.contains(&fill(t.calendar_detail_route, &[("place", "Cabinet")])));
     assert!(offer.expires <= h.start - 2.0 * 3600.0 + 1.0);

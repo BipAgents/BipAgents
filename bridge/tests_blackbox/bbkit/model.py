@@ -26,7 +26,7 @@ Installed as `FakeHermes.override`, it takes only the runs it starts (every othe
 | `#sites` | asks the bridge for two sites (`sandbox_sites_request`, a sites card) and waits |
 | `#connecteur` | registers a connector (`connector_register`, a connector card) and waits |
 | `#podcast` | makes its podcast (an .m4a in its files, as `create_podcast` gives) and names it |
-| `#lent` | a long reply, slowly (to be stopped, or to queue messages behind it) |
+| `#lent` | a first sentence, a quick search (read only), then a long reply, slowly (to be stopped, or to queue messages behind it) |
 | `#jours` | first run of its session: a history stored before the person's row (2 days ago, yesterday, today ~1 h ago; replies with `reasoning`, one after a tool call), then a short reply |
 | `#reel` | streams as GLM through Hermes: ~1.5 s before the first words, then 1–3 words every 60–200 ms (the same each run), ~50 words, stored with `reasoning` |
 
@@ -425,7 +425,11 @@ class ScriptedModel:
         if "#reel" in words:
             lines.append(REEL)
         if "#lent" in words:
-            lines.append(" ".join(["Je prends le temps de bien tout vérifier, point par point."] * 12))
+            # its first sentence, a quick look (read only: the turn still counts as having done nothing), then the rest
+            # slowly: the apps show that sentence while the turn goes on (each text whole once written, Alex 25/11)
+            opening += self.say(run, "Je prends le temps de bien tout vérifier, point par point. ", gap=0.25)
+            self.tool(run, "web_search", {"query": "vérifier point par point"}, lambda: "Rien de neuf.", calls, results)
+            lines.append(" ".join(["Je prends le temps de bien tout vérifier, point par point."] * 11))
         if not lines:
             what = []
             if run.photos:

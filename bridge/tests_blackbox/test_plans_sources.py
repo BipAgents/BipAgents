@@ -15,7 +15,7 @@ from bbkit.common import AUTH
 from bbkit.fakes import taken_notes, waiting_notes
 from bbkit.mcp import call, give_token, text_of
 from bbkit.servers import wait_until
-from test_plans import PARIS, TOKEN, answer, done, local, place, plan_jobs, propose
+from test_plans import PARIS, TOKEN, answer, clock, done, local, place, plan_jobs, propose
 
 CASES = json.loads((Path(__file__).resolve().parents[2] / "contracts" / "plans-sources" / "cases.json").read_text())
 TEXTS = CASES["texts"]
@@ -181,7 +181,7 @@ def test_without_an_exchange_the_day_before_one_card_and_yes_sets_the_plan_witho
     assert (offer["kind"], offer["source"], offer["about"]) == ("appointment", "calendar", "Dentiste"), why()
     assert card["choices"] == ["once", "deny"] and card["bip_summary"].endswith(offer["label"]), (card, why())
     assert offer["label"].startswith("Dentiste ") and texts["calendar_offer"].split(" · ")[1] in offer["label"], why()
-    assert "15:00" in offer["label"], why()
+    assert clock(lang_of(card), "15:00") in offer["label"], why()   # « 15 h » in French (Alex 25/11)
     detail = card["bip_detail"]
     assert texts["calendar_detail_route"].format(place="Cabinet du Dr Martin, 12 rue Exemple, Lyon") in detail, (detail, why())
     assert texts["calendar_detail_follow"] in detail, (detail, why())
@@ -211,7 +211,8 @@ def test_without_an_exchange_the_day_before_one_card_and_yes_sets_the_plan_witho
     reminders = [j for j in jobs if not j["urgent"]]
     if eve > time.time() + 60:
         assert len(reminders) == 1, why()
-        assert reminders[0]["say"] == texts["calendar_reminder"].format(title="Dentiste", time="15:00"), why()
+        assert reminders[0]["say"] == texts["calendar_reminder"].format(
+            title="Dentiste", time=clock(lang_of(card), "15:00")), why()
     else:
         assert reminders == [], why()   # the day before at 19:00 had passed: only when to leave
     # the home and the place went to the geocoder only now; no model at all

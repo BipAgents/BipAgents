@@ -333,7 +333,9 @@ async fn app_follows_run_through_bridge_and_replays_on_reattach() {
     assert_eq!(resp.status, StatusCode::OK);
     assert!(resp.header("content-type").unwrap().starts_with("text/event-stream"));
     let first = read_sse(&resp.text());
-    assert_eq!(names(&first), ["tool.started", "message.delta", "message.delta", "run.completed"]);
+    // each text whole once written (runs.rs `WholeWords`, Alex 25/11)
+    assert_eq!(names(&first), ["tool.started", "message.delta", "run.completed"]);
+    assert_eq!(first[1].1["delta"], "Bonjour Alex.");
     assert_eq!(first.last().unwrap().1["output"], "Bonjour Alex.");
     // Re-attaching (app reopened, connection lost) replays the whole run from the bridge's backlog,
     // consecutive deltas merged.
@@ -401,7 +403,7 @@ async fn replay_backlog_merges_deltas_so_long_replies_keep_their_start() {
     items.push(text(sse("message.delta", json!({"run_id": "run_long", "delta": "Fin."}))));
     items.push(text(sse("run.completed", json!({"run_id": "run_long", "output": "…"}))));
     c.script("run_long", items);
-    read_sse(&c.get("/v1/runs/run_long/events?agent=wellness").await.text()); // first follower: every delta, live
+    read_sse(&c.get("/v1/runs/run_long/events?agent=wellness").await.text()); // first follower (each text whole too)
     let replay = read_sse(&c.get("/v1/runs/run_long/events?agent=wellness").await.text()); // late follower: the backlog
     assert_eq!(names(&replay), ["message.delta", "tool.started", "message.delta", "run.completed"]);
     assert_eq!(replay[0].1["delta"], json!(format!("Début : {}", words.concat())));
@@ -409,11 +411,11 @@ async fn replay_backlog_merges_deltas_so_long_replies_keep_their_start() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn a_status_inside_a_reply_splits_its_backlog_delta_and_loses_nothing() {
+async fn a_status_inside_a_reply_passes_before_it_and_loses_nothing() {
     // The hub's clock says what the agent does (`turn.status`, on since 21/11; its first tick as soon as the run has
     // an event): a status that falls inside a reply ends the backlog's merged delta there. A late follower (the app
-    // back on the conversation) then gets the reply in two deltas, in order, nothing lost (the apps add deltas up);
-    // one that asks for statuses gets the status between them.
+    // back on the conversation) still gets the reply whole, nothing lost (runs.rs `WholeWords`, Alex 25/11); one that
+    // asks for statuses gets the status first, while the reply was being written.
     let c = client().await;
     let gate = Flag::new();
     let delta = |d: &str| text(sse("message.delta", json!({"run_id": "run_split", "delta": d})));
@@ -439,12 +441,12 @@ async fn a_status_inside_a_reply_splits_its_backlog_delta_and_loses_nothing() {
     let live = drain(&mut first).await; // every delta, live
     assert_eq!(live, ["message.delta", "message.delta", "message.delta", "message.delta", "run.completed"]);
     let replay = read_sse(&c.get("/v1/runs/run_split/events?agent=wellness").await.text());
-    assert_eq!(names(&replay), ["message.delta", "message.delta", "run.completed"]);
+    assert_eq!(names(&replay), ["message.delta", "run.completed"]);
     let said: String = replay.iter().filter_map(|(_, d)| d["delta"].as_str()).collect();
     assert_eq!(said, "Début de la réponse, suite et fin.");
     let with_status = read_sse(&c.get("/v1/runs/run_split/events?agent=wellness&status=1").await.text());
-    assert_eq!(names(&with_status), ["message.delta", "turn.status", "message.delta", "run.completed"]);
-    assert_eq!(with_status[1].1["state"], "thinking");
+    assert_eq!(names(&with_status), ["turn.status", "message.delta", "run.completed"]);
+    assert_eq!(with_status[0].1["state"], "thinking");
     c.close().await;
 }
 

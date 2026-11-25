@@ -100,8 +100,8 @@ fn moments_keep_their_zone_when_the_person_travels() {
     let plan = lisbon().plan;
     let arrival = &plan.moments[1];
     // at home in Paris: « heure de Lisbonne »; in Lisbon now: its own clock, nothing to add; the same instant
-    assert!(when_text("fr", arrival.at, LISBON, PARIS, "Lisbonne").ends_with("10:50 · heure de Lisbonne"));
-    assert_eq!(when_text("fr", arrival.at, LISBON, LISBON, "Lisbonne"), "mer. 25 · 10:50");
+    assert!(when_text("fr", arrival.at, LISBON, PARIS, "Lisbonne").ends_with("10\u{a0}h\u{a0}50 · heure de Lisbonne"));
+    assert_eq!(when_text("fr", arrival.at, LISBON, LISBON, "Lisbonne"), "mer. 25 · 10\u{a0}h\u{a0}50");
     // a one-time routine is an instant: the routines' zone moving (dates.rs) leaves it where it is
     let dir = tempfile::tempdir().unwrap();
     let config = config_in(dir.path());

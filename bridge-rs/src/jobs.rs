@@ -1469,7 +1469,8 @@ impl Jobs {
             job.insert("state".into(), json!("paused"));
             job.insert("reason".into(), stopping.unwrap_or(json!("interrupted")));
         } else if status == "completed" {
-            full = tk::strip(&output).to_string();
+            // its words, never its hidden spoken version (spoken.rs): the report, its page and its note are read
+            full = tk::strip(&crate::spoken::strip(&output)).to_string();
             let report = tk::head(&full, REPORT_CHARS).to_string();
             job.insert("state".into(), json!("done"));
             job.insert("report".into(), if report.is_empty() { Value::Null } else { json!(report) });
@@ -2536,6 +2537,50 @@ pub fn repair_titles(config: &crate::config::Config) -> usize {
     changed
 }
 
+/// The hidden spoken version as the report's page escaped it (handback.rs `report_html`).
+static ESCAPED_SAY: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"&lt;!--\s*bip:say[\s\S]*?--&gt;").expect("valid regex"));
+
+/// The tasks ended before 25/11 kept their report's hidden spoken version (spoken.rs) in its words: shown on the
+/// task's screens (« En bref », « Lire le résultat complet ») and, escaped, on its « Rapport » page (Alex 25/11,
+/// « …tickets.md). <!--bip:say J'ai retrouvé la facture… »). Cleaned at start with the titles (`create_app`), the
+/// page made again from its own source without it. Each on its own: `report` keeps the first `REPORT_CHARS` of the
+/// words, the page all of them (a long report's spoken version, at its end, is on its page only); one already clean
+/// is never written again. How many tasks were changed.
+pub fn repair_reports(config: &crate::config::Config) -> usize {
+    let mut changed = 0;
+    for mut job in tasks(config) {
+        let (id, agent) = (tk::str_or_empty(job.get("id")), agent_of(&job));
+        let mut repaired = false;
+        let report = tk::str_or_empty(job.get("report"));
+        if report.contains("bip:say") {
+            job.insert("report".into(), json!(crate::spoken::strip(&report)));
+            match save(config, &job) {
+                Ok(()) => repaired = true,
+                Err(err) => tracing::warn!(job = %id, error = %err, "a task's report not repaired"),
+            }
+        }
+        let page = format!("rapport-{id}");
+        let source = crate::pages::root(config).join(&agent).join(format!("{page}.source"));
+        if let Ok(html) = tk::read_text(&source) {
+            let clean = ESCAPED_SAY.replace_all(&html, "");
+            if clean != html {
+                match crate::pages::save(config, &agent, &clean, "", Some(&page)) {
+                    Ok(_) => repaired = true,
+                    Err(err) => {
+                        tracing::warn!(job = %id, error = %format!("{err:#}"), "a task's report page not repaired")
+                    }
+                }
+            }
+        }
+        changed += usize::from(repaired);
+    }
+    if changed > 0 {
+        tracing::info!(tasks = changed, "tasks' reports cleaned of their spoken version");
+    }
+    changed
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2602,6 +2647,71 @@ mod tests {
         assert_eq!(load(&config, "t0000000000bb").unwrap()["title"], "Trie Vestes en laine");
         assert_eq!(load(&config, &tk::str_or_empty(job.get("id"))).unwrap()["title"], "Vestes en laine");
         assert_eq!(repair_titles(&config), 0, "once");
+    }
+
+    /// Alex 25/11: a task's report kept its hidden spoken version (« …tickets.md). <!--bip:say J'ai retrouvé la
+    /// facture… ») on its screens and its « Rapport » page. Those kept are cleaned once at start (`repair_reports`).
+    #[test]
+    fn a_report_kept_with_its_spoken_version_is_cleaned_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = crate::config::Config::with_key("k");
+        config.outbox.db_path = dir.path().join("bridge.db").to_string_lossy().into_owned();
+        let words = "Les deux tickets sont ci-dessous.\n\n- Tuyau : 39,90 €";
+        let report = format!("{words}\n\n<!--bip:say J'ai retrouvé la facture du tuyau.-->");
+        let mut job = Dict::new();
+        for (k, v) in [("id", json!("t0000000000dd")), ("kind", json!("task")), ("agent", json!("vie")),
+                       ("title", json!("Tickets")), ("state", json!("done")), ("report", json!(report))] {
+            job.insert(k.into(), v);
+        }
+        save(&config, &job).unwrap();
+        let mut clean = job.clone();
+        clean.insert("id".into(), json!("t0000000000ee"));
+        clean.insert("report".into(), json!(words));
+        save(&config, &clean).unwrap();
+        let page = crate::handback::report_html("Rapport — Tickets", &report);
+        assert!(page.contains("&lt;!--bip:say J&#x27;ai retrouvé"), "the page as it was made before 25/11");
+        crate::pages::save(&config, "vie", &page, "Rapport — Tickets", Some("rapport-t0000000000dd")).unwrap();
+        assert_eq!(repair_reports(&config), 1);
+        assert_eq!(load(&config, "t0000000000dd").unwrap()["report"], words);
+        let folder = crate::pages::root(&config).join("vie");
+        for name in ["rapport-t0000000000dd.html", "rapport-t0000000000dd.source"] {
+            let kept = std::fs::read_to_string(folder.join(name)).unwrap();
+            let words_only = kept.contains("Tuyau : 39,90 €") && !kept.contains("bip:") && !kept.contains("retrouvé");
+            assert!(words_only, "{name}: {kept}");
+        }
+        assert_eq!(repair_reports(&config), 0, "once");
+    }
+
+    /// Review of 25/11: `report` keeps the first `REPORT_CHARS` of the words, the page all of them. A long report's
+    /// spoken version, at its end, is only on its page: the page is looked at on its own.
+    #[test]
+    fn a_long_reports_page_is_cleaned_even_when_its_kept_words_are() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = crate::config::Config::with_key("k");
+        config.outbox.db_path = dir.path().join("bridge.db").to_string_lossy().into_owned();
+        let lines = "- Une veste en laine bleue.\n".repeat(200);
+        let full = format!("{lines}\n<!--bip:say J'ai comparé douze vestes.-->");
+        let kept = tk::head(&full, REPORT_CHARS).to_string();
+        assert!(full.chars().count() > REPORT_CHARS && !kept.contains("bip:say"), "the mark past the kept words");
+        let mut job = Dict::new();
+        for (k, v) in [("id", json!("t0000000000ff")), ("kind", json!("task")), ("agent", json!("vie")),
+                       ("title", json!("Vestes")), ("state", json!("done")), ("report", json!(kept))] {
+            job.insert(k.into(), v);
+        }
+        save(&config, &job).unwrap();
+        let page = crate::handback::report_html("Rapport — Vestes", &full);
+        crate::pages::save(&config, "vie", &page, "Rapport — Vestes", Some("rapport-t0000000000ff")).unwrap();
+        assert_eq!(repair_reports(&config), 1);
+        assert_eq!(load(&config, "t0000000000ff").unwrap()["report"], kept, "its kept words untouched");
+        let folder = crate::pages::root(&config).join("vie");
+        let read = |name: &str| std::fs::read_to_string(folder.join(name)).unwrap();
+        for name in ["rapport-t0000000000ff.html", "rapport-t0000000000ff.source"] {
+            let shown = read(name);
+            assert!(shown.contains("Une veste en laine bleue.") && !shown.contains("bip:"), "{name}");
+        }
+        let before = read("rapport-t0000000000ff.json");
+        assert_eq!(repair_reports(&config), 0, "once");
+        assert_eq!(read("rapport-t0000000000ff.json"), before, "a clean page is never made again");
     }
 
     #[test]

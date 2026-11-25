@@ -198,11 +198,12 @@ fn shareable_job(job: &Value) -> Option<Value> {
     if prompt.is_empty() || script || monitor || job.get("no_agent").and_then(Value::as_bool).unwrap_or(false) {
         return None;
     }
+    // what its preview and the share review show: its words (schedule_words.rs), never the cron expression
     let display = job
-        .get("schedule_display")
+        .get("schedule_shown")
         .and_then(Value::as_str)
         .map(str::to_string)
-        .unwrap_or_else(|| s(schedule, "display"));
+        .unwrap_or_else(|| crate::schedule_words::schedule_words("en", schedule, false, chrono_tz::Tz::UTC));
     let schedule = match kind.as_str() {
         "cron" => json!({"kind": "cron", "expr": s(schedule, "expr"), "display": display}),
         "interval" => {
@@ -453,9 +454,8 @@ pub async fn review(state: &AppState, agent: &AgentConfig, body: &Value) -> (u16
     bundle.insert("skills".into(), json!(skills));
     // routines' definitions
     let mut routines = Vec::new();
-    let zone = crate::routines::zone(&config);
     for routine in crate::routines::list(&config, Some(&agent.name)).iter().take(MAX_ROUTINES) {
-        let job = &crate::routines::view(routine, zone);
+        let job = &crate::routines::view_of(&config, routine);
         let Some(mut shared) = shareable_job(job) else { continue };
         let id = format!("routine:{}", s(job, "id"));
         let shown = s(&shared, "name");
@@ -953,9 +953,13 @@ pub async fn import(state: &AppState, body: &Value) -> ApiResult<Value> {
     if !made.is_empty() {
         let zone = crate::routines::zone(&config);
         let ids: Vec<String> = made.iter().map(|r| r.id.clone()).collect();
+        // its words in the new agent's language (« En semaine à 12 h », never « 0 12 * * 1-5 »: schedule_words.rs)
+        let words = Some(s(&bundle, "lang"))
+            .filter(|l| !l.is_empty())
+            .unwrap_or_else(|| crate::names::agent_language(&state.config(), &agent.name));
         for r in &made {
-            let v = crate::routines::view(r, zone);
-            routines_out.push(json!({"job": r.id, "name": r.name, "display": v["schedule_display"], "on": false}));
+            routines_out.push(json!({"job": r.id, "name": r.name, "display": crate::routines::shown_in(&words, r, zone),
+                                     "on": false}));
         }
         crate::routines::change(&config, |b| b.routines.extend(made));
         let _ = remember_routines(&config, &agent.name, &ids);
@@ -1033,12 +1037,11 @@ async fn routines_route(State(state): State<AppState>, UrlPath(agent_id): UrlPat
     let agent = agent_of(&config, &agent_id)?;
     let ours: BTreeSet<String> =
         imported_routines(&config).remove(&agent.name).unwrap_or_default().into_iter().collect();
-    let zone = crate::routines::zone(&config);
     let routines: Vec<Value> = crate::routines::list(&config, Some(&agent.name))
         .iter()
         .filter(|r| ours.contains(&r.id))
         .map(|r| {
-            json!({"job": r.id, "name": r.name, "display": crate::routines::view(r, zone)["schedule_display"],
+            json!({"job": r.id, "name": r.name, "display": crate::routines::shown(&config, r),
                    "prompt": r.prompt, "on": r.enabled})
         })
         .collect();

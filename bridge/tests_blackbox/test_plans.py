@@ -41,6 +41,14 @@ def lang_of(card):
     raise AssertionError(card["bip_summary"])
 
 
+def clock(lang, hhmm):
+    """« 15:00 » as the bridge says it in `lang`: French « 15 h », « 9 h 15 » (non-breaking spaces; Alex 25/11)."""
+    if lang != "fr":
+        return hhmm
+    h, m = (int(x) for x in hhmm.split(":"))
+    return f"{h}\u00a0h" if m == 0 else f"{h}\u00a0h\u00a0{m:02d}"
+
+
 def place(bridges, fakes, agents=("coach",), change=None):
     bridge = bridges.new()
     # a phone to push to
@@ -125,9 +133,10 @@ def test_a_trip_is_one_card_with_its_moments_and_nothing_runs_before_yes(bridges
     assert (plan["kind"], plan["title"], plan["offers"], plan["rhythm_text"], plan["watch_text"]) == (
         "trip", "Lisbonne", [], None, None)
     first, arrival, room = plan["moments"]
-    assert first["when_text"].endswith("09:15") and first["when_text"].count("·") == 1, first
+    assert first["when_text"].endswith(clock(lang, "09:15")) and first["when_text"].count("·") == 1, first
     other = texts["other_zone"].format(city="Lisbonne")
-    assert arrival["when_text"].endswith("10:50 " + other) and room["when_text"].endswith("15:00 " + other)
+    assert arrival["when_text"].endswith(clock(lang, "10:50") + " " + other)
+    assert room["when_text"].endswith(clock(lang, "15:00") + " " + other)
     assert first["say"] == "L’enregistrement en ligne du TP 433 est ouvert https://www.flytap.com/checkin"
     assert abs(arrival["at"] - epoch(trip()["moments"][1]["at"], ZoneInfo("Europe/Lisbon"))) < 1
     assert not any(m["urgent"] for m in plan["moments"])
@@ -215,7 +224,7 @@ def test_a_route_moment_is_timed_by_the_streets_and_urgent(bridges, fakes):
     assert fakes.maps.seen("/search") == [] and fakes.maps.seen("/routed-") == []
     assert route["what"] == texts["route_pending"].format(place="Cabinet du Dr Martin", mode=walking), route
     assert (route["urgent"], route["route"], route["pending"]) == (True, True, True), route
-    assert route["when_text"].endswith(texts["before"].format(time="15:00")), route
+    assert route["when_text"].endswith(texts["before"].format(time=clock(lang_of(card), "15:00"))), route
     # « Prévoir »: found and timed then, 25 min on foot and 5 min to spare: 14:30
     assert answer(bridge, card, "once").status_code == 200
     words = texts["route"].format(place="Cabinet du Dr Martin", n=25, mode=walking)
@@ -594,7 +603,7 @@ def test_a_route_from_home_is_timed_only_after_yes_from_the_entry_labelled_home(
     walking = texts["modes"]["walking"]
     assert (route["route"], route["urgent"], route["pending"]) == (True, True, True), route
     assert route["what"] == texts["route_pending"].format(place="Cabinet du Dr Martin", mode=walking), route
-    assert route["when_text"].endswith(texts["before"].format(time="15:00")), route
+    assert route["when_text"].endswith(texts["before"].format(time=clock(lang_of(card), "15:00"))), route
     # « Non merci »: still nothing
     assert answer(bridge, card, "deny").status_code == 200
     assert searched() == [] and not fakes.maps.seen("/routed-")

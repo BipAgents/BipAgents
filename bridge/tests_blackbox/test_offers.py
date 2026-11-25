@@ -396,7 +396,7 @@ def test_a_moment_offer_places_its_card_at_its_time_without_the_model(bridges, f
 VOLATILE = {"run_id", "request_id", "created_at", "id", "at", "session_id", "expires_at"}
 HEX = re.compile(r"\b[0-9a-f]{12}\b")
 #: A moment's day and time (« mar. 24 · 09:15 »): the day the tests run.
-WHEN = re.compile(r"\S+ \d{1,2} · \d{2}:\d{2}")
+WHEN = re.compile(r"\S+ \d{1,2} · (\d{2}:\d{2}|\d{1,2}\u00a0h(\u00a0\d{2})?)")
 
 
 def normal(value, key=None):

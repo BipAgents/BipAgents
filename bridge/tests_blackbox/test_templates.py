@@ -69,7 +69,9 @@ def test_a_model_carries_no_canary_and_lands_unapproved(bridges, fakes):
     assert len(review["never"]) == 6
     assert bundle["format"] == "bipagents-agent-template" and bundle["version"] == 1
     assert bundle["routines"] == [{"name": "Séance du jour", "prompt": "Prépare la séance du jour.", "skills": ["plan-semaine"],
-                                   "schedule": {"kind": "cron", "expr": "0 7 * * *", "display": "0 7 * * *"}}]
+                                   "schedule": {"kind": "cron", "expr": "0 7 * * *", "display": "Every day at 7:00 AM"}}]
+    # in words, in vie's language: the guichet's preview and the share review's line (25/11: never « 0 7 * * * »)
+    assert {p["id"]: p["detail"] for p in review["parts"]}["routine:aaaaaaaaaaaa"] == "Every day at 7:00 AM"
     shipped = bundle["connectors"][0]
     assert shipped["sites"] == REGISTER["sites"] and shipped["unofficial"] is True
     assert shipped["secrets"] == [{"name": "garmin", "kind": "password", "identifier_label": "E-mail de ton compte Garmin"}]
