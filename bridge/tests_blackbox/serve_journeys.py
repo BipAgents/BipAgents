@@ -7,7 +7,8 @@ Robolectric), which drive the real apps against it. Run by scripts/release-journ
 Writes `JOURNEYS_OUT` once the bridge answers:
 
     {"url": "http://127.0.0.1:<port>", "door": "https://127.0.0.1:<port>", "key": "<bridge key>", "agent": "vie",
-     "thread": "t_…", "pairing": {<the install's QR code: what the iPhone pairs with>}}
+     "thread": "t_…", "pairing": {<the install's QR code: what the iPhone pairs with>},
+     "proactive": {"idea": {"label", "topic", "with", "later"}, "day": [the person's words]}}   (J71)
 
 then serves until the file `JOURNEYS_OUT + ".done"` appears (or `JOURNEYS_MINUTES`, default 60). The phones' journeys
 use their own words each time: they share the one conversation, its earlier messages stay."""
@@ -23,10 +24,15 @@ from bbkit.journeys import AGENT, journey_bridge
 def test_serve(bridges, fakes):
     # browser=True: Vie's own (fake) Chrome and screen, for the vault's journeys J64 (vault_login types, the line under
     # the turn) and J65 (« Je le taperai moi-même »: the Bureau, the hand taken and given back)
-    journey = journey_bridge(bridges, fakes, word_gap=float(os.environ.get("JOURNEYS_WORD_GAP", "0.12")), browser=True)
+    # proactive="passes": J71, a smart pass over the day (bbkit/proactive_journeys.py), its idea the fake model's
+    journey = journey_bridge(bridges, fakes, word_gap=float(os.environ.get("JOURNEYS_WORD_GAP", "0.12")), browser=True,
+                             proactive="passes")
+    from bbkit import proactive_journeys
+    fakes.model.idea_lines = [proactive_journeys.IDEA]
     pairing = journey.pairing()
     out = {"url": journey.bridge.url, "door": journey.bridge.config["public_url"], "key": BRIDGE_KEY, "agent": AGENT,
-           "thread": journey.thread, "pairing": pairing, "log": str(journey.bridge.log_path)}
+           "thread": journey.thread, "pairing": pairing, "log": str(journey.bridge.log_path),
+           "proactive": proactive_journeys.out_passes()}
     target = Path(os.environ.get("JOURNEYS_OUT", "/tmp/journeys.json"))
     target.write_text(json.dumps(out))
     print(f"\n[journeys] {json.dumps(out)}", flush=True)

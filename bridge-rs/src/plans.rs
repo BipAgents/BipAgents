@@ -211,6 +211,24 @@ pub struct Plan {
     /// When a set plan goes (Unix seconds).
     #[serde(default)]
     pub ends: f64,
+    /// Its offers shown on its card (pills) once answered: the card keeps drawing them, « ✓ <its words> » for a
+    /// « Oui » (plans/offers.rs `pill_views`; J68, 24/11: an accepted pill left the card).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pills: Vec<PillDone>,
+    /// The ids of its pills in the card's order, kept when the first one is answered: an answered pill stays where it
+    /// was on the card.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pill_order: Vec<String>,
+}
+
+/// A pill of a plan's card answered (or gone past its time): its words as the card showed them, its outcome
+/// (plans/offers.rs `YES`, `NO`, `EXPIRED`), when it was made (the pills' order on the card).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct PillDone {
+    pub id: String,
+    pub label: String,
+    pub outcome: String,
+    pub made: f64,
 }
 
 /// A plan card made (the caps count them).
@@ -886,6 +904,8 @@ pub fn draft(arguments: &Dict, agent: &str, person: Tz, routines: Tz, now: f64) 
         routines: Vec::new(),
         trigger: None,
         ends: 0.0,
+        pills: Vec::new(),
+        pill_order: Vec::new(),
     };
     Ok(Draft { plan, routes })
 }
@@ -1118,7 +1138,8 @@ pub fn card_item(config: &Config, plan: &Plan) -> Dict {
         "bip_plan": {"id": plan.id, "kind": plan.kind, "title": plan.title, "agent": shown, "moments": moments,
                      "top": top(lang, &shown, &plan.title, &plan.kind),
                      "rhythm_text": plan.repeat.as_ref().map(|r| rhythm_text(lang, r)), "watch_text": watch,
-                     "offers": offers::pills_of(config, &plan.id)},
+                     "offers": offers::pills_of(config, &plan.id),
+                     "pills": offers::pill_views(config, plan)},
     });
     item.as_object().cloned().unwrap_or_default()
 }
