@@ -83,8 +83,8 @@ diese Änderung wird wie in Abschnitt 19 vorgesehen angekündigt.
   ebenso wenig den Namen „Kerfy Studio“. Du darfst sagen, dass ein Produkt auf BipAgents aufbaut oder mit ihm
   kompatibel ist, aber kein anderes Produkt als unseres ausgeben; ein Fork, den du verbreitest, muss Namen und Icon
   ändern (Datei TRADEMARKS.md im Repository).
-- Komponenten Dritter (Hermes Agent, Schriften, Stimmmodelle von Kyutai …) bleiben unter ihrer eigenen Lizenz, die im
-  Repository angegeben ist.
+- Komponenten Dritter (Hermes Agent, Schriften, Stimmmodelle von Kyutai, der Podcast der Demo, aufgenommen mit Fish
+  Audio Drama 3 — „Built with Fish Audio“ …) bleiben unter ihrer eigenen Lizenz, die im Repository angegeben ist.
 - **Aus dem App Store geladene Version**: Der Standard-Lizenzvertrag von Apple für Apps („Licensed Application End
   User License Agreement“) gilt zusätzlich zu diesen Bedingungen. Diese Bedingungen gelten zwischen dir und Kerfy
   Studio, nicht mit Apple; Apple ist nicht für die App oder ihre Inhalte verantwortlich und hat keine Pflicht zu
@@ -212,8 +212,8 @@ informieren.
 
 Die eingebaute Demo ist auf deinem Telefon **simuliert**, ohne Konto und ohne Server. Ihre Agenten, Personen, Orte,
 Marken, Beträge und Daten sind **erfunden**; sie zeigt, was Agenten tun können, ohne genau abzubilden, was ein echter
-Agent tun wird, oder die Qualität eines bestimmten Modells. Ihr Podcast wird von den Stimmen
-der Bips gesprochen.
+Agent tun wird, oder die Qualität eines bestimmten Modells. Die Stimmen ihres Podcasts wurden mit Fish Audio Drama 3
+aufgenommen („Built with Fish Audio“).
 
 ## 13. Das Relay für Benachrichtigungen: Regeln und Kontakte
 

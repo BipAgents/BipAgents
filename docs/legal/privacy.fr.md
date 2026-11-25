@@ -913,8 +913,8 @@ Si tu connectes ton compte Google, ta place reçoit de Google seulement ce que t
 
 La démo intégrée tourne entièrement sur ton téléphone : des agents et des données inventés, sans compte, sans
 serveur, et rien n'est envoyé à Kerfy Studio. Tu peux l'ouvrir dès la première ouverture, avec « Seulement la démo ».
-Son podcast est un fichier audio enregistré à l'avance et inclus dans l'app (les voix des Bips).
-Si tu parles à la démo, la reconnaissance vocale du téléphone s'applique (section 7).
+Son podcast est un fichier audio enregistré à l'avance et inclus dans l'app (voix : Fish Audio Drama 3, « Built with
+Fish Audio »). Si tu parles à la démo, la reconnaissance vocale du téléphone s'applique (section 7).
 
 ## 9. Les voix
 

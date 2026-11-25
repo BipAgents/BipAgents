@@ -73,8 +73,8 @@ and whether any payment influences their order; this change will be announced as
 - The name "BipAgents" (or "Bip Agents") and the app's icon are our marks: the MIT licence does not grant them, nor
   the name "Kerfy Studio". You may say a product is built on BipAgents or compatible with it, not present another
   product as ours; a fork you distribute must change its name and icon (the repository's TRADEMARKS.md file).
-- Third-party components (Hermes Agent, fonts, Kyutai's voice models…) remain under their own licences, listed in the
-  repository.
+- Third-party components (Hermes Agent, fonts, Kyutai's voice models, the demo's podcast made with Fish Audio Drama 3
+  — "Built with Fish Audio"…) remain under their own licences, listed in the repository.
 - **Version downloaded from the App Store**: Apple's standard Licensed Application End User License Agreement applies
   in addition to these terms. These terms are between you and Kerfy Studio, not Apple; Apple is not responsible for
   the app or its content and has no obligation to provide maintenance or support for it.
@@ -187,8 +187,8 @@ documentation, and warn the projects concerned when useful.
 
 The built-in demo is **simulated** on your phone, with no account and no server. Its agents, people, places, brands,
 amounts and data are **fictional**; it illustrates what agents can do, without reflecting exactly what a real agent
-will do or the quality of a given model. Its podcast is spoken by the Bips' own
-voices.
+will do or the quality of a given model. Its podcast voices were recorded with Fish Audio Drama 3 ("Built with Fish
+Audio").
 
 ## 13. The notification relay: rules and contacts
 

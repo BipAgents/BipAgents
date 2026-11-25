@@ -853,7 +853,7 @@ If you connect your Google account, your server receives from Google only what y
 
 The built-in demo runs entirely on your phone: invented agents and data, no account, no server, and nothing is sent
 to Kerfy Studio. You can open it from the first launch, with "Demo only". Its podcast is an audio file recorded in
-advance with the Bips' own voices and bundled with the app. If you talk to the demo, the
+advance and bundled with the app (voices: Fish Audio Drama 3, "Built with Fish Audio"). If you talk to the demo, the
 phone's speech recognition applies (section 7).
 
 ## 9. Voices

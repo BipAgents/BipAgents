@@ -893,7 +893,7 @@ Si conectas tu cuenta de Google, tu servidor recibe de Google solo lo que autori
 
 La demo integrada funciona por completo en tu teléfono: agentes y datos inventados, sin cuenta, sin servidor, y no se
 envía nada a Kerfy Studio. Puedes abrirla desde la primera apertura, con «Solo la demo». Su pódcast es un archivo de
-audio grabado de antemano e incluido en la app (las voces de los Bips). Si hablas con la
+audio grabado de antemano e incluido en la app (voces: Fish Audio Drama 3, «Built with Fish Audio»). Si hablas con la
 demo, se aplica el reconocimiento de voz del teléfono (sección 7).
 
 ## 9. Las voces
