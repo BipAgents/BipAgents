@@ -509,9 +509,9 @@ streaming partout »: runs.rs `WholeWords`): a text's deltas, and the files in i
 `turn.status`, `model.usage` or `bridge.queue` passes meanwhile. A character Hermes passed in two UTF-16 halves over two
 deltas (a lone surrogate escape each) is joined, a half alone becomes U+FFFD (hermes.rs `SSEParser`). Meanwhile the
 apps show their working line (it stays until the turn's end, whatever the turn shows), and the reply comes in one piece,
-fading in from 30 % to full in 250 ms (`StreamReveal`; none with Reduce Motion or Android's animations removed). The
-quick talk's answer (`GET /v1/threads/{thread}/sends/{client_id}`, `run.answer`) is its texts already written. The
-Live's own stream (`/v1/live/turns`) keeps its words as they come.
+drawn as it is, at full opacity, with no fade (Alex 25/11, « retire le fondu »: `StreamReveal` removed). The quick
+talk's answer (`GET /v1/threads/{thread}/sends/{client_id}`, `run.answer`) is its texts already written. The Live's own
+stream (`/v1/live/turns`) keeps its words as they come.
 
 ### 6.5b What the agent does now (`turn.status`, 16/11)
 
