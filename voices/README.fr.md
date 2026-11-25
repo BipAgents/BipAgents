@@ -15,7 +15,9 @@ Une nouvelle langue = un nouveau dossier (`english/`, `spanish/`…) avec la mê
 (état Pocket TTS), `<voix>_source.wav` (extrait de clonage), `<voix>_sample.wav` (phrase de test), `voices.json`, `README.md`.
 
 Voix calculées avec Kyutai Pocket TTS (poids CC-BY-4.0, Kyutai) à partir d'extraits Qwen3-TTS VoiceDesign (Apache-2.0).
-Entièrement synthétiques : aucune personne réelle n'est imitée.
+Entièrement synthétiques : aucune personne réelle n'est imitée. Les voix des Bips ici (états, extraits, échantillons)
+sont celles de BipAgents, sous licence MIT ([LICENSE](../LICENSE)) ; les modèles qui les ont faites gardent leurs
+propres licences.
 
 ## Pocket 4.0.1 (25/10/2026)
 

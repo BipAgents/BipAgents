@@ -15,7 +15,8 @@ A new language = a new folder (`english/`, `spanish/`…) with the same structur
 (Pocket TTS state), `<voice>_source.wav` (cloning clip), `<voice>_sample.wav` (test sentence), `voices.json`, `README.md`.
 
 Voices computed with Kyutai Pocket TTS (CC-BY-4.0 weights, Kyutai) from Qwen3-TTS VoiceDesign clips (Apache-2.0).
-Fully synthetic: no real person is imitated.
+Fully synthetic: no real person is imitated. The Bips' voices here (states, clips, samples) are BipAgents' own, under
+the MIT license ([LICENSE](../LICENSE)); the models that made them keep their own licences.
 
 ## Pocket 4.0.1 (2026-10-25)
 
