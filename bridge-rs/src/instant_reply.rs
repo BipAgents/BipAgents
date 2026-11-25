@@ -298,7 +298,7 @@ pub fn watch_first_words(state: &AppState, agent: &str, thread: &str, run: &str)
         while started.elapsed() < Duration::from_secs(60) {
             tokio::time::sleep(Duration::from_millis(300)).await;
             let over = state.hub.subscription(&agent, &run).is_none_or(|sub| sub.finished() || sub.terminal().is_some());
-            let said = state.hub.glance(&agent, &run).is_some_and(|(_, words)| !words.trim().is_empty());
+            let said = state.hub.glance(&agent, &run, false).is_some_and(|(_, words)| !words.trim().is_empty());
             if said || over {
                 note_first_words(&agent, &thread, started.elapsed().as_secs_f64());
                 return;

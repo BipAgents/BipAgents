@@ -388,6 +388,48 @@ pub fn append_to_backlog(backlog: &mut VecDeque<SSEEvent>, event: &SSEEvent) {
     backlog.push_back(event.clone());
 }
 
+/// What an app reads of a run's words (Alex 25/11: « retire le streaming partout »): each text whole, once written,
+/// never word by word. A text's deltas (and the files in it, media.rs) are held, merged, and let out together just before
+/// the next event that is not a mere status (a call, a card, a notice, the turn's end), which comes after them as
+/// before. Meanwhile the apps
+/// show the agent at work (its working line, its steps). The Live's own stream (live_turns.rs) is no run the hub
+/// follows: its words still come as they are written.
+#[derive(Default)]
+pub struct WholeWords {
+    held: VecDeque<SSEEvent>,
+}
+
+impl WholeWords {
+    /// The events to write now for `event` (none while a text is being written).
+    pub fn pass(&mut self, event: SSEEvent) -> Vec<SSEEvent> {
+        if in_text(&event.r#type) {
+            append_to_backlog(&mut self.held, &event);
+            return Vec::new();
+        }
+        if says_how_it_goes(&event.r#type) {
+            return vec![event];
+        }
+        let mut out: Vec<SSEEvent> = self.held.drain(..).collect();
+        out.push(event);
+        out
+    }
+
+    /// The words still held, at the stream's end.
+    pub fn rest(&mut self) -> Vec<SSEEvent> {
+        self.held.drain(..).collect()
+    }
+}
+
+/// A piece of a text being written: its words, a file in it.
+fn in_text(kind: &str) -> bool {
+    is_delta(kind) || kind == crate::media::FILE
+}
+
+/// An event that says how the turn goes, drawn nowhere in the thread: a text being written is held across it.
+fn says_how_it_goes(kind: &str) -> bool {
+    [crate::turn_status::EVENT, MODEL_USAGE, crate::msg_queue::RUN_EVENT].contains(&kind)
+}
+
 /// An approval's or a question's card with the id of the timeline item it becomes once answered
 /// (threads::answered_id): one row on every device, waiting then answered.
 fn with_item_id(sub: &RunSubscription, event: SSEEvent) -> SSEEvent {
@@ -1267,17 +1309,23 @@ impl RunHub {
     }
 
     /// What a run followed now is doing, as a quick talk shows it (threads/follow.rs): the tool going on (None: it
-    /// thinks or writes) and its words so far (the backlog's deltas).
-    pub fn glance(&self, agent: &str, run_id: &str) -> Option<(Option<String>, String)> {
+    /// thinks or writes) and its words so far (the backlog's deltas); `whole`: only its texts already written, as the
+    /// apps read them (`WholeWords`).
+    pub fn glance(&self, agent: &str, run_id: &str, whole: bool) -> Option<(Option<String>, String)> {
         let sub = self.subscription(agent, run_id)?;
         let st = lock(&sub.state);
         let tool = (st.tools_open > 0 && !st.last_tool.is_empty()).then(|| st.last_tool.clone());
-        let answer = st
-            .backlog
-            .iter()
-            .filter(|e| e.r#type == "message.delta")
-            .filter_map(|e| e.data.get("delta").and_then(Value::as_str))
-            .collect();
+        let (mut answer, mut writing) = (String::new(), String::new());
+        for event in &st.backlog {
+            if event.r#type == "message.delta" {
+                writing.push_str(event.data.get("delta").and_then(Value::as_str).unwrap_or(""));
+            } else if !in_text(&event.r#type) && !says_how_it_goes(&event.r#type) {
+                answer.push_str(&std::mem::take(&mut writing));
+            }
+        }
+        if !whole {
+            answer.push_str(&writing);
+        }
         Some((tool, answer))
     }
 
@@ -4088,6 +4136,57 @@ mod tests {
     }
 
     /// Hermes' failed-turn line as a run's output or error: `stopped` says which, for the apps' own words.
+    /// Alex 25/11, « retire le streaming partout »: an app reads each text whole, once written, before what follows it.
+    #[test]
+    fn an_app_reads_each_text_whole_once_written() {
+        let other = |kind: &str| SSEEvent::new(kind, Map::new(), "{}");
+        let mut whole = WholeWords::default();
+        assert!(whole.pass(delta("message.delta", "Je ")).is_empty());
+        assert!(whole.pass(delta("message.delta", "regarde.")).is_empty());
+        // how the turn goes passes at once, the words still held
+        let status = whole.pass(other(crate::turn_status::EVENT));
+        assert_eq!(status.iter().map(|e| e.r#type.as_str()).collect::<Vec<_>>(), [crate::turn_status::EVENT]);
+        assert!(whole.pass(other(MODEL_USAGE)).len() == 1 && whole.pass(other(crate::msg_queue::RUN_EVENT)).len() == 1);
+        assert!(whole.pass(delta("message.delta", " Voilà")).is_empty());
+        // a file in the text stays in it, held with its words
+        assert!(whole.pass(other(crate::media::FILE)).is_empty());
+        assert!(whole.pass(delta("message.delta", "Et puis")).is_empty());
+        // a call: the text written so far, in one piece, then the call
+        let out = whole.pass(other("tool.started"));
+        let kinds = out.iter().map(|e| e.r#type.as_str()).collect::<Vec<_>>();
+        assert_eq!(kinds, ["message.delta", crate::media::FILE, "message.delta", "tool.started"]);
+        assert_eq!(out[0].data["delta"], "Je regarde. Voilà");
+        assert_eq!(out[0].raw, "{\"event\": \"message.delta\", \"delta\": \"Je regarde. Voilà\"}");
+        assert_eq!(whole.pass(other("tool.completed")).len(), 1, "nothing held: the event alone");
+        // the turn's last text before its end; what a stream ending without it held comes out at its end
+        assert!(whole.pass(delta("message.delta", "Fini.")).is_empty());
+        let end = whole.pass(other("run.completed"));
+        assert_eq!((end[0].data["delta"].as_str(), end[1].r#type.as_str()), (Some("Fini."), "run.completed"));
+        assert!(whole.pass(delta("message.delta", "Cou")).is_empty());
+        assert_eq!(whole.rest().iter().map(|e| e.text()).collect::<String>(), "Cou");
+        assert!(whole.rest().is_empty());
+    }
+
+    /// The quick talk shows its answer's texts once written (threads/follow.rs), the instant reply knows its first words.
+    #[test]
+    fn a_glance_at_a_run_shows_its_texts_once_written() {
+        let hub = RunHub::new(HermesClient::new(reqwest::Client::new()), None, 7200, None);
+        let sub = Arc::new(RunSubscription::new(AgentConfig { name: "vie".into(), ..Default::default() }, "run_g"));
+        {
+            let mut st = lock(&sub.state);
+            append_to_backlog(&mut st.backlog, &delta("message.delta", "Je regarde."));
+            append_to_backlog(&mut st.backlog, &SSEEvent::new(crate::turn_status::EVENT, Map::new(), "{}"));
+            append_to_backlog(&mut st.backlog, &SSEEvent::new("tool.started", Map::new(), "{}"));
+            append_to_backlog(&mut st.backlog, &delta("message.delta", "Le train"));
+            append_to_backlog(&mut st.backlog, &SSEEvent::new(crate::turn_status::EVENT, Map::new(), "{}"));
+            append_to_backlog(&mut st.backlog, &delta("message.delta", " part"));
+        }
+        lock(&hub.inner).subs.insert(sub.key(), sub);
+        assert_eq!(hub.glance("vie", "run_g", true).unwrap().1, "Je regarde.");
+        assert_eq!(hub.glance("vie", "run_g", false).unwrap().1, "Je regarde.Le train part");
+        assert_eq!(hub.glance("vie", "run_other", true), None);
+    }
+
     #[test]
     fn a_failed_turns_end_says_which_it_is() {
         let end = |kind: &str, data: Value| with_stopped(SSEEvent::new(kind, data.as_object().cloned().unwrap(), "{}"));

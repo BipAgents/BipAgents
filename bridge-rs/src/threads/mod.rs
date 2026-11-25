@@ -1511,7 +1511,7 @@ async fn sends_route(
     let items = threads.items(&agent, &thread, &segments).await.map_err(unavailable)?;
     let Waiting { approvals, questions, run, .. } = waiting_here(&state, &agent, &thread, &segments, &items).await;
     let live = run.and_then(|(run_id, _)| {
-        let (tool, answer) = state.hub.glance(&agent.name, &run_id)?;
+        let (tool, answer) = state.hub.glance(&agent.name, &run_id, true)?;
         Some(follow::Live { run_id, tool, answer })
     });
     let queued = crate::msg_queue::queues_of(&state)
