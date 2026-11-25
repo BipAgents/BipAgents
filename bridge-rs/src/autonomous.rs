@@ -12,7 +12,9 @@
 //! Each item: `id` (`routine:<agent>:<job>`, `task:<id>`, `mail_scan:<agent>`, `connector:<agent>:<id>`,
 //! `watcher:<agent>:<id>`), `kind`,
 //! `group`, `agent`, `ref` (the id its own routes take), `title`, `when` ({kind, hour, minute, weekday 1 = Monday, day,
-//! hours, minutes, at, text}: the apps put it in their language; `text` is the French one), `state` (`active`,
+//! hours, minutes, at, text, shown}: `shown` is a schedule's words in its agent's language, ready to show as they are,
+//! never a cron expression (schedule_words.rs, 25/11); `text` the French ones; the apps before 25/11 put the fields in
+//! their language), `state` (`active`,
 //! `paused`, `waiting` for the person, `running`, `done`), `raw_state`, `last_run` ({at, ok, error} or null),
 //! `next_run` (Unix seconds or null), `cost` (null for a routine; `{ai: false}` for a connector's schedule; a task's or
 //! scan's `tokens`, `max_tokens`, `eur`, `budget_eur` (a task's euros as the credit counts them, task_cost.rs), which the apps turn into a share of the month's credit on the
@@ -67,11 +69,13 @@ const DAYS_FR: [&str; 7] = ["lundi", "mardi", "mercredi", "jeudi", "vendredi", "
 
 // --- when ------------------------------------------------------------------------------------------------------------
 
+/// « 8 h », « 12 h 30 » (Alex 25/11; schedule_words.rs `fr_clock`).
 fn clock(h: u32, m: u32) -> String {
-    format!("{h}:{m:02}")
+    crate::schedule_words::fr_clock(h, m)
 }
 
-/// The French words for a `when` (the apps use their own, from the same fields); « vers 8 h » when `approx`
+/// The French words for a `when` (« Chaque jour à 8 h », « Le lundi à 12 h 30 »: Alex 25/11; the cards' sentences say
+/// them too; the apps before 25/11 use their own, from the same fields); « vers 8 h » when `approx`
 /// (task_frame.rs).
 pub fn when_text(when: &Value) -> String {
     let int = |k: &str| when.get(k).and_then(Value::as_u64).unwrap_or(0) as u32;
@@ -85,7 +89,8 @@ pub fn when_text(when: &Value) -> String {
         "weekdays" => format!("En semaine {at}"),
         "weekly" => {
             let day = DAYS_FR.get((int("weekday").max(1) - 1) as usize).copied().unwrap_or("lundi");
-            format!("Chaque {day} {at}")
+            // « Le lundi à 8 h » (Alex 25/11: one day « Le dimanche », not « Chaque dimanche »)
+            format!("Le {day} {at}")
         }
         "monthly" => format!("Le {} de chaque mois {at}", int("day")),
         "every_hours" if int("hours") <= 1 => "Toutes les heures".into(),
@@ -94,7 +99,9 @@ pub fn when_text(when: &Value) -> String {
         "once" => "Une seule fois".into(),
         "on_change" => "Quand quelque chose change".into(),
         "now" => "En cours".into(),
-        _ => when.get("raw").and_then(Value::as_str).unwrap_or("").to_string(),
+        // never the cron expression itself (schedule_words.rs): « Le lundi, le mercredi et le vendredi à 9 h », else
+        // « Régulièrement »
+        _ => crate::schedule_words::when_words("fr", when, chrono_tz::Tz::UTC).unwrap_or_default(),
     }
 }
 
@@ -138,7 +145,12 @@ pub fn cron_when(expr: &str) -> Value {
             }
         }
     }
-    with_text(json!({"kind": "custom", "raw": expr}))
+    // « 0 */2 * * * », « 15 * * * * », « */15 * * * * »: the kinds the apps already say
+    match crate::schedule_words::cron(expr) {
+        crate::schedule_words::Plain::EveryHours(n) => with_text(json!({"kind": "every_hours", "hours": n})),
+        crate::schedule_words::Plain::EveryMinutes(n) => with_text(json!({"kind": "every_minutes", "minutes": n})),
+        _ => with_text(json!({"kind": "custom", "raw": expr})),
+    }
 }
 
 fn interval_when(minutes: u64) -> Value {
@@ -586,6 +598,14 @@ pub async fn listing(state: &AppState, only: Option<&str>) -> Vec<Value> {
         }
     }
     items.extend(crate::triggers::autonomous_items(&config, only));
+    // its « when » in words, ready to show (schedule_words.rs; its agent's language, as its frame's)
+    let zone = crate::routines::zone(&config);
+    for item in &mut items {
+        let lang = crate::names::agent_language(&config, item["agent"].as_str().unwrap_or(""));
+        if let Some(shown) = crate::schedule_words::when_words(&lang, &item["when"], zone) {
+            item["when"]["shown"] = json!(shown);
+        }
+    }
     sort_items(&mut items);
     items
 }
@@ -683,15 +703,21 @@ mod tests {
 
     #[test]
     fn cron_expressions_in_words() {
-        assert_eq!(cron_when("0 8 * * *")["text"], "Chaque jour à 8:00");
+        assert_eq!(cron_when("0 8 * * *")["text"], "Chaque jour à 8\u{a0}h");
         assert_eq!(cron_when("30 7 * * 1-5")["kind"], "weekdays");
         let monday = cron_when("0 8 * * 1");
         assert_eq!((monday["kind"].as_str(), monday["weekday"].as_u64()), (Some("weekly"), Some(1)));
-        assert_eq!(monday["text"], "Chaque lundi à 8:00");
+        assert_eq!(monday["text"], "Le lundi à 8\u{a0}h");
         assert_eq!(cron_when("0 9 * * 0")["weekday"], 7);
-        assert_eq!(cron_when("0 9 3 * *")["text"], "Le 3 de chaque mois à 9:00");
-        let odd = cron_when("*/5 * * * *");
-        assert_eq!((odd["kind"].as_str(), odd["text"].as_str()), (Some("custom"), Some("*/5 * * * *")));
+        assert_eq!(cron_when("0 9 3 * *")["text"], "Le 3 de chaque mois à 9\u{a0}h");
+        let every = cron_when("*/5 * * * *");
+        assert_eq!((every["kind"].as_str(), every["text"].as_str()), (Some("every_minutes"), Some("Toutes les 5 minutes")));
+        assert_eq!(cron_when("0 */2 * * *")["text"], "Toutes les 2 h");
+        // what the apps' fields can't say keeps its expression for them, its words never the expression (25/11)
+        let days = cron_when("30 7 * * 1,3,5");
+        assert_eq!((days["kind"].as_str(), days["raw"].as_str()), (Some("custom"), Some("30 7 * * 1,3,5")));
+        assert_eq!(days["text"], "Le lundi, le mercredi et le vendredi à 7\u{a0}h\u{a0}30");
+        assert_eq!(cron_when("0 8-18/2 * * *")["text"], "Régulièrement");
     }
 
     #[test]
@@ -704,7 +730,7 @@ mod tests {
         assert_eq!(routine_when(&job)["text"], "Toutes les heures");
         let job = dict(json!({"schedule": {"kind": "once", "run_at": "2026-10-30T08:00:00+00:00"}}));
         assert_eq!(routine_when(&job)["at"], 1_793_347_200.0);
-        assert_eq!(connector_when(&When::Weekly(chrono::Weekday::Wed, 7, 5))["text"], "Chaque mercredi à 7:05");
+        assert_eq!(connector_when(&When::Weekly(chrono::Weekday::Wed, 7, 5))["text"], "Le mercredi à 7\u{a0}h\u{a0}05");
     }
 
     #[test]
@@ -788,7 +814,7 @@ mod tests {
         };
         let row = connector_item("lea", &conn, chrono_tz::UTC).unwrap();
         assert_eq!((row["kind"].as_str(), row["state"].as_str()), (Some("connector"), Some("active")));
-        assert_eq!(row["when"]["text"], "Chaque jour à 7:00");
+        assert_eq!(row["when"]["text"], "Chaque jour à 7\u{a0}h");
         assert_eq!(row["next_run"], 1_793_430_000.0); // the next day at 7:00
         assert_eq!(row["cost"]["ai"], false);
         conn.enabled = false;

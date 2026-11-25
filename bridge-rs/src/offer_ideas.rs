@@ -227,7 +227,7 @@ fn lang_index(lang: &str) -> usize {
     }
 }
 
-/// « Chaque dimanche vers 19 h » → « chaque dimanche vers 19 h » (German nouns keep theirs: only the first letter).
+/// « Le dimanche vers 19 h » → « le dimanche vers 19 h » (German nouns keep theirs: only the first letter).
 fn lower_first(text: &str) -> String {
     let mut c = text.chars();
     c.next().map(|f| f.to_lowercase().collect::<String>() + c.as_str()).unwrap_or_default()

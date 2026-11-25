@@ -211,7 +211,8 @@ pub fn parse_when(text: &str) -> Result<When, String> {
 
 /// What the person reads.
 pub fn when_text(when: &When) -> String {
-    let at = |h: u32, m: u32| format!("{h}:{m:02}");
+    // « 7 h », « 18 h 05 » (Alex 25/11)
+    let at = crate::schedule_words::fr_clock;
     match when {
         When::Hourly => "Toutes les heures".into(),
         When::Every(n) => format!("Toutes les {n} minutes"),
@@ -909,8 +910,8 @@ mod tests {
         assert_eq!(next_after(&parse_when("hourly").unwrap(), at), zone.with_ymd_and_hms(2026, 10, 28, 9, 0, 0).unwrap());
         assert_eq!(next_after(&parse_when("every 30 minutes").unwrap(), at), zone.with_ymd_and_hms(2026, 10, 28, 8, 30, 0).unwrap());
         assert!(parse_when("every 5 minutes").is_err() && parse_when("daily 25:00").is_err() && parse_when("tomorrow").is_err());
-        assert_eq!(when_text(&parse_when("daily 07:00").unwrap()), "Tous les jours à 7:00");
-        assert_eq!(when_text(&parse_when("weekly mon 18:05").unwrap()), "Tous les lundis à 18:05");
+        assert_eq!(when_text(&parse_when("daily 07:00").unwrap()), "Tous les jours à 7\u{a0}h");
+        assert_eq!(when_text(&parse_when("weekly mon 18:05").unwrap()), "Tous les lundis à 18\u{a0}h\u{a0}05");
     }
 
     #[test]

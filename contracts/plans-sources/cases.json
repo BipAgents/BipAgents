@@ -74,7 +74,7 @@
       "watch_prompt": "Le soir, je te dis quels e-mails attendent ta réponse depuis plus d’un jour (l’expéditeur et l’objet seulement).",
       "calendar_reminder": "{title} demain à {time}",
       "calendar_reminder_what": "Rappel la veille",
-      "calendar_detail_reminder": "La veille à 19:00 : « {say} ».",
+      "calendar_detail_reminder": "La veille à 19\u00a0h : « {say} ».",
       "calendar_detail_route": "Le jour même, l’heure de partir pour {place}, calculée à ton « Oui » depuis chez toi.",
       "calendar_detail_follow": "S’il bouge, les rappels suivent.",
       "trip_prompt": "Je regarde ton voyage dans le Carnet et je te propose un plan : les bons rappels au bon moment. Rien n’est réservé."

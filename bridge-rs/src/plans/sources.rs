@@ -384,7 +384,7 @@ pub static TEXTS: [Texts; 4] = [
         watch_prompt: "Le soir, je te dis quels e-mails attendent ta réponse depuis plus d’un jour (l’expéditeur et l’objet seulement).",
         calendar_reminder: "{title} demain à {time}",
         calendar_reminder_what: "Rappel la veille",
-        calendar_detail_reminder: "La veille à 19:00 : « {say} ».",
+        calendar_detail_reminder: "La veille à 19\u{a0}h : « {say} ».",
         calendar_detail_route: "Le jour même, l’heure de partir pour {place}, calculée à ton « Oui » depuis chez toi.",
         calendar_detail_follow: "S’il bouge, les rappels suivent.",
         trip_prompt: "Je regarde ton voyage dans le Carnet et je te propose un plan : les bons rappels au bon moment. Rien n’est réservé.",
@@ -493,6 +493,18 @@ pub fn day_words(lang: &str, at: f64, zone: Tz) -> String {
 
 fn clock(at: f64, zone: Tz) -> String {
     zone.timestamp_opt(at as i64, 0).single().map(|d| d.format("%H:%M").to_string()).unwrap_or_default()
+}
+
+/// `clock` as the person reads it: « 15 h », « 9 h 30 » in French (Alex 25/11), « 15:00 » elsewhere.
+fn clock_in(lang: &str, at: f64, zone: Tz) -> String {
+    match texts(lang).lang {
+        "fr" => zone
+            .timestamp_opt(at as i64, 0)
+            .single()
+            .map(|d| crate::schedule_words::fr_clock(d.hour(), d.minute()))
+            .unwrap_or_default(),
+        _ => clock(at, zone),
+    }
 }
 
 /// A trip's dates: « 25–28 nov. », « 30 nov.–2 déc. » (fr, es), « Nov 25–28 » (en), « 25.–28. Nov. » (de).
@@ -818,7 +830,7 @@ pub fn appointment_detail(lang: &str, title: &str, place: &str, start: f64, zone
     let t = texts(lang);
     let mut parts = Vec::new();
     if eve_of(start, zone).is_some_and(|e| e > now + 60.0) {
-        let say = fill(t.calendar_reminder, &[("title", title), ("time", &clock(start, zone))]);
+        let say = fill(t.calendar_reminder, &[("title", title), ("time", &clock_in(lang, start, zone))]);
         parts.push(fill(t.calendar_detail_reminder, &[("say", &say)]));
     }
     parts.push(fill(t.calendar_detail_route, &[("place", place)]));
@@ -839,7 +851,7 @@ pub fn appointment_offer(config: &Config, hint: &Hint, now: f64) -> Offer {
     let title = clean(&hint.title, 40);
     let label = fill(
         texts(lang).calendar_offer,
-        &[("title", &title), ("day", &day_words(lang, hint.start, zone)), ("time", &clock(hint.start, zone))],
+        &[("title", &title), ("day", &day_words(lang, hint.start, zone)), ("time", &clock_in(lang, hint.start, zone))],
     );
     let place = clean(&hint.place, 120);
     let detail = appointment_detail(lang, &title, &place, hint.start, zone, now);
@@ -1682,7 +1694,7 @@ pub async fn appointment_yes(state: &AppState, agent: &AgentConfig, offer: &Offe
             at: eve,
             zone: zone.name().to_string(),
             what: t.calendar_reminder_what.into(),
-            say: fill(t.calendar_reminder, &[("title", &title), ("time", &clock(start, zone))]),
+            say: fill(t.calendar_reminder, &[("title", &title), ("time", &clock_in(lang, start, zone))]),
             urgent: false,
             route: false,
             leg: None,

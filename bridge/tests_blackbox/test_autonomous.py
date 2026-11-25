@@ -76,7 +76,9 @@ def test_one_list_of_what_the_agents_do_on_their_own(bridges, fakes):
     monday = items["routine:wellness:j1"]
     assert (monday["kind"], monday["group"], monday["state"], monday["main_action"]) == \
         ("routine", "schedule", "active", "pause")
-    assert monday["when"] == {"kind": "weekly", "weekday": 1, "hour": 8, "minute": 0, "text": "Chaque lundi à 8:00"}
+    # `shown`: its words ready to show, in its agent's language (schedule_words.rs, 25/11)
+    assert monday["when"] == {"kind": "weekly", "weekday": 1, "hour": 8, "minute": 0, "text": "Le lundi à 8\u00a0h",
+                              "shown": "Every Monday at 8:00 AM"}
     assert monday["last_run"]["ok"] is True and monday["next_run"] > 0 and monday["cost"] is None
     assert monday["actions"] == ["pause", "run", "delete", "open"] and monday["ref"] == "j1"
     water = items["routine:wellness:j2"]
@@ -87,7 +89,7 @@ def test_one_list_of_what_the_agents_do_on_their_own(bridges, fakes):
     done = items["task:t0000000000a3"]
     assert done["state"] == "done" and done["last_run"]["ok"] is True and done["cost"]["tokens"]["input"] == 120_000
     garmin = items["connector:coach:c1"]
-    assert (garmin["state"], garmin["when"]["text"], garmin["cost"]) == ("active", "Chaque jour à 7:00", {"ai": False})
+    assert (garmin["state"], garmin["when"]["text"], garmin["cost"]) == ("active", "Chaque jour à 7\u00a0h", {"ai": False})
     assert garmin["last_run"]["ok"] is False and "pas répondu" in garmin["last_run"]["error"]
     assert garmin["next_run"] > time.time() - 600
     # groups in order: the schedules first, then what runs now
@@ -113,7 +115,7 @@ def test_an_agent_s_routines_once_its_hermes_answers_and_after(bridges, fakes):
     assert wait_until(lambda: bridge.get("/v1/agents/coach/routines", headers=AUTH).json()["jobs"], timeout=90)
     first = bridge.get("/v1/autonomous", headers=AUTH, params={"agent": "coach"}).json()
     assert {i["id"] for i in first["items"]} == {"routine:coach:k1", "connector:coach:c1"}
-    assert first["items"][0]["when"]["text"] in ("Chaque jour à 7:00",)
+    assert first["items"][0]["when"]["text"] in ("Chaque jour à 7\u00a0h",)
 
     def down(seen):
         if seen.path.startswith("/p/coach/"):
