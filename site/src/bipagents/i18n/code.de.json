@@ -2,7 +2,7 @@
   "page": {
     "code": {
       "title": "Einen Code bekommen — BipAgents",
-      "description": "Mach bei der BipAgents-Beta mit: mit deinem eigenen Hermes, ohne Code und ohne Limit, oder mit einem Alles-inklusive-Server, dein Code kommt per E-Mail."
+      "description": "Mach bei der BipAgents-Beta mit: mit deinem eigenen Hermes, ohne Code und ohne Limit, oder mit einem Alles-inklusive-Server, dein Code erscheint sofort."
     }
   },
   "code": {
@@ -14,14 +14,21 @@
     "placeTitle": "Ich will einen Server",
     "placeText": "Dein privater Server in Europa, mit dem KI-Guthaben. Kostenlos während der Beta.",
     "placeCta": "Meinen Code bekommen",
-    "formTitle": "Dein Code kommt per E-Mail",
+    "formTitle": "Dein Code für die Beta",
     "email": "Deine E-Mail",
     "send": "Meinen Code bekommen",
-    "fine": "Ein Code pro Adresse. Deine Adresse wird nur kurz gelesen, nur um dir deinen Code über Proton AG (Schweiz) zu senden. Wir speichern sie nicht: Wir behalten nur einen mit einem geheimen Schlüssel berechneten Fingerabdruck (pseudonyme Daten), um zu prüfen, dass eine Adresse nur einen Code bekommt, längstens bis zum 31. Dezember 2026. Proton bewahrt die gesendete Nachricht auf, bis wir sie aus dem Postausgang löschen. Wegwerfadressen werden abgelehnt, und die Robotersperre legt nichts auf deinem Gerät ab. Rechtsgrundlagen: der Versand, um den du bittest (Art. 6 Abs. 1 lit. b DSGVO), und die Verhinderung von Missbrauch (Art. 6 Abs. 1 lit. f).",
+    "gotTitle": "Dein Code",
+    "copy": "Kopieren",
+    "again": "Du hast ihn schon angefordert: Es ist derselbe Code.",
+    "step1": "Installiere die Beta-App:",
+    "step2": "Wähle in der App „Ich habe einen Einladungscode“ und füge deinen Code ein.",
+    "fine": "Ein Code pro Adresse. Deine Adresse wird nur kurz gelesen, nur um dir deinen Code über Proton AG (Schweiz) zu senden. Wir speichern sie nicht: Wir behalten nur mit einem geheimen Schlüssel berechnete Fingerabdrücke (pseudonyme Daten), einen, um zu prüfen, dass eine Adresse nur einen Code bekommt, längstens bis zum 31. Dezember 2026, und einen aus deiner Adresse und deinem Netzwerk, einen Tag lang, um dir denselben Code noch einmal zu zeigen, wenn du ihn erneut anforderst. Proton bewahrt die gesendete Nachricht auf, bis wir sie aus dem Postausgang löschen. Wegwerfadressen werden abgelehnt, und die Robotersperre legt nichts auf deinem Gerät ab. Rechtsgrundlagen: der Versand, um den du bittest (Art. 6 Abs. 1 lit. b DSGVO), und die Verhinderung von Missbrauch (Art. 6 Abs. 1 lit. f).",
     "privacy": "Datenschutz",
     "js": {
       "sending": "Wird gesendet…",
       "sent": "Ist unterwegs! Schau in dein Postfach, auch in den Spam-Ordner.",
+      "copied": "Kopiert",
+      "life": "Er gilt {hours} Stunden. Wir haben ihn dir auch per E-Mail geschickt.",
       "badEmail": "Diese Adresse sieht nicht richtig aus.",
       "disposable": "Wegwerf-Adressen gehen nicht: Nimm deine übliche Adresse.",
       "robot": "Die Prüfung hat nicht geklappt. Versuch es noch mal.",
