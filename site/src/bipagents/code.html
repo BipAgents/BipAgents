@@ -28,10 +28,32 @@
 .code-say[data-tone="ok"] { color: var(--green-deep); }
 .code-say[data-tone="no"] { color: var(--coral-deep); }
 .code-fine { color: var(--muted); font-size: 14px; }
+/* the code given (the guichet's answer carries it since 25/11): on the page at once, a copy button, the beta's links */
+.code-form { scroll-margin-top: 88px; }
+.code-form form[hidden], .code-form h2[hidden], .code-got[hidden] { display: none; }
+.code-got h2 { margin-bottom: 14px; }
+.code-box { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 16px; padding: 18px 20px; border-radius: 20px;
+  background: var(--green-tint); box-shadow: inset 0 0 0 1.5px var(--green); }
+.code-value { flex: 1 1 auto; min-width: 0; font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: clamp(24px, 6.4vw, 34px);
+  font-weight: 800; letter-spacing: .04em; color: var(--ink); user-select: all; -webkit-user-select: all; overflow-wrap: anywhere; }
+.code-copy { flex: none; min-width: 120px; }
+.code-again { margin-top: 14px; font-weight: 800; color: var(--green-deep); }
+.code-again[hidden], .code-life:empty { display: none; }
+.code-life { margin-top: 12px; color: var(--ink2); }
+.code-steps { margin: 22px 0 0; padding: 0; list-style: none; counter-reset: step; display: grid; gap: 16px; }
+.code-steps li { counter-increment: step; display: grid; grid-template-columns: 34px 1fr; gap: 4px 12px; align-items: start; font-weight: 800; }
+.code-steps li::before { content: counter(step); display: grid; place-items: center; width: 34px; height: 34px; border-radius: 50%;
+  background: var(--ink); color: var(--ground); font-weight: 900; }
+.code-steps li > span { padding-top: 5px; }
+.code-steps .cta-row { grid-column: 2; margin-top: 8px; }
 @media (max-width: 680px) {
   .code-choices { grid-template-columns: 1fr; }
   .code-choice, .code-form { padding: 22px; }
   .code-form button { justify-self: stretch; }
+  .code-box { padding: 16px; }
+  .code-copy { flex: 1 1 100%; }
+  .code-steps .cta-row { grid-column: 1 / -1; }
+  .code-steps .store { flex: 1 1 100%; }
 }
 </style>
 <section class="section page-section" id="code">
@@ -55,7 +77,7 @@
       </a>
     </div>
     <div class="code-form" id="place">
-      <h2>{{code.formTitle}}</h2>
+      <h2 id="code-form-title">{{code.formTitle}}</h2>
       <form id="code-form" novalidate>
         <label for="code-email">{{code.email}}</label>
         <input id="code-email" name="email" type="email" required autocomplete="email" inputmode="email" maxlength="254" spellcheck="false">
@@ -64,6 +86,19 @@
         <p class="code-say" id="code-say" role="status" aria-live="polite"></p>
         <p class="code-fine">{{code.fine}} <a href="{{privacyhref}}">{{code.privacy}}</a></p>
       </form>
+      <div class="code-got" id="code-got" hidden>
+        <h2 id="code-got-title" tabindex="-1">{{code.gotTitle}}</h2>
+        <div class="code-box">
+          <span class="code-value" id="code-value" translate="no"></span>
+          <button class="pill pill-ink code-copy" type="button" id="code-copy">{{code.copy}}</button>
+        </div>
+        <p class="code-again" id="code-again" hidden>{{code.again}}</p>
+        <p class="code-life" id="code-life"></p>
+        <ol class="code-steps">
+          <li><span>{{code.step1}}</span><div class="cta-row">{{betabadges}}</div></li>
+          <li><span>{{code.step2}}</span></li>
+        </ol>
+      </div>
     </div>
   </div>
 </section>
@@ -78,6 +113,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const $ = (id) => document.getElementById(id);
   const form = $("code-form"), email = $("code-email"), widget = $("code-check"), send = $("code-send"), say = $("code-say");
   const box = $("place"), choose = $("choose-place");
+  const got = $("code-got"), value = $("code-value"), copy = $("code-copy"), copyLabel = copy.textContent;
 
   // the widget: its proof-of-work worker and texts from this site, nothing fetched elsewhere
   const altcha = globalThis.$altcha;
@@ -101,6 +137,39 @@ document.addEventListener("DOMContentLoaded", () => {
   if (location.hash === "#place") open(false);
 
   function tell(text, tone) { say.textContent = text; say.dataset.tone = tone || ""; }
+
+  // the code on the page at once (a guichet of 25/11 or later sends it; an older one doesn't: « look in your e-mails »)
+  function show(answer) {
+    value.textContent = answer.code;
+    $("code-again").hidden = answer.again !== true;
+    $("code-life").textContent = Number.isFinite(answer.hours) && answer.hours > 0
+      ? t.life.replace("{hours}", String(answer.hours)) : "";
+    form.hidden = true;
+    $("code-form-title").hidden = true;
+    got.hidden = false;
+    const title = $("code-got-title");
+    title.focus({ preventScroll: true });
+    box.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  // « Copier »: the clipboard when the browser allows it, else the code selected for a copy by hand
+  let copied = 0;
+  copy.addEventListener("click", async () => {
+    const code = value.textContent;
+    try {
+      await navigator.clipboard.writeText(code);
+    } catch (err) {
+      const range = document.createRange();
+      range.selectNodeContents(value);
+      const selection = getSelection();
+      selection.removeAllRanges();
+      selection.addRange(range);
+      try { if (!document.execCommand("copy")) return; } catch (e) { return; }
+    }
+    copy.textContent = t.copied;
+    clearTimeout(copied);
+    copied = setTimeout(() => { copy.textContent = copyLabel; }, 2500);
+  });
 
   // the guichet's refusals, in the page's words (beta.rs request)
   function why(status, detail) {
@@ -141,6 +210,7 @@ document.addEventListener("DOMContentLoaded", () => {
       });
       const answer = await res.json().catch(() => ({}));
       if (!res.ok || !answer.sent) { tell(why(res.status, answer.detail || ""), "no"); return; }
+      if (typeof answer.code === "string" && /^BIP-[A-Z0-9]{8}$/.test(answer.code)) { tell(""); show(answer); return; }
       tell(t.sent, "ok");
       form.reset();
     } catch (err) {

@@ -2,7 +2,7 @@ English · [Français](privacy.fr.md) · [Deutsch](privacy.de.md) · [Español](
 
 # BipAgents privacy policy
 
-> Last updated: 23 November 2026.
+> Last updated: 25 November 2026.
 
 ## In short
 
@@ -761,9 +761,7 @@ On bipagents.com, "Get a code" asks for your email address and has your browser 
 gets a single code, disposable addresses are refused, and the number of codes is limited per day and per network.
 Your address is read for a moment, only to send you your code through Proton AG (Switzerland, section 11), from a
 bipagents.com address. We don't keep it, and Proton keeps the sent message until we delete it from the outbox. We only
-keep a fingerprint of your address, computed with a secret key, to check that an address gets only one code: it is
-pseudonymous data, so still personal data. Your IP address is never stored in clear: only its fingerprint is used for
-the per-network limit, 2 days at most (section 5.3).
+keep a fingerprint of your address, computed with a secret key, to check that an address gets only one code: it is pseudonymous data, so still personal data. Your code is also shown on the screen. To show you the same code if you ask again from the same network, we keep next to the code, for one day at most, a second fingerprint made from your address and your network, computed with a secret key; it is erased sooner if the code is used. Your IP address is never stored in clear: its fingerprint is used only for the per-network limit and this second fingerprint, 2 days at most (section 5.3).
 
 **Legal bases.** Sending you the code you ask for (GDPR article 6(1)(b)). One code per address, the per-network limit
 and the anti-bot calculation: Kerfy Studio's legitimate interest in preventing abuse and sharing the beta's spots fairly (article 6(1)(f)). **Retention.** The address's fingerprint, until the end of the beta, 31 December 2026 at the
@@ -966,6 +964,7 @@ of the applicable safeguards.
 | IP address when a free week is reserved | Never stored in clear; in memory, as a fingerprint, 15 minutes at most |
 | Email address given for "Get a code" | In clear: only while the code is sent; its fingerprint: until the end of the beta, 31 December 2026 at the latest |
 | Fingerprint of the IP address (beta codes, "Get a code", the website's cancellation page, reports of shared agents) | 2 days at most; up to 30 days in the encrypted copies of the database |
+| Fingerprint of the e-mail address and the network, next to a code given on the website ("Get a code") | One day at most, erased as soon as the code is used; up to 30 days in the encrypted copies of the database |
 | Cancellation on the website: the declaration (email, number, reason, end date, date and time) | 3 years |
 | Cancellation on the website: the email address typed, to limit tries | 2 days at most |
 | Content of your server | During the subscription, then 30 days (3 days after a free week that was not continued) |
