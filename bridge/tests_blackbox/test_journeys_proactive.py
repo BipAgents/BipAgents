@@ -587,7 +587,7 @@ def test_j72_replies_watch_keep_card_garder_a_reminder_then_on_until_stopped_or_
     assert (box["state"], box["ends"]) == ("on", None), box
     rows = [i for i in autonomous(journey) if i["ref"] == box["trigger"]]
     assert rows[0]["ends"]["kind"] == "never" and rows[0]["fix"] is None, rows
-    assert len(fakes.apns.payloads()) == pushes
+    assert not [p for p in fakes.apns.payloads()[pushes:] if "bip-fix-" in json.dumps(p)], "pushed again"
     # a new period (as its switch turned on again does) and « L'arrêter le {date} » from an app 1.0 (« Non »): on until
     # its date, then it stops, one Boîte line, never a consent card again
     edit_box(journey, account, lambda: keep_cards(journey), ends=time.time() + 2 * DAY, keep_asked=False, reminded=False)

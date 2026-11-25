@@ -85,8 +85,9 @@ def test_a_mailbox_is_watched_only_after_its_own_yes(bridges, fakes):
     assert offer["label"] == texts["consent"].format(mailbox=ME)
     assert card["bip_detail"].startswith(texts["consent_under_i"]), card["bip_detail"]
     assert card["choices"] == ["once", "deny"] and "bip_always" not in card
-    # off until then: nothing watched, nothing read
-    assert [m["state"] for m in replies(bridge)] == ["asked"]
+    # off until then: nothing watched, nothing read (its state « asked » is written just after the card is placed,
+    # plans/sources.rs `consent_cards`: waited for, as J70 does; red once in a full suite on 25/11)
+    assert wait_until(lambda: [m["state"] for m in replies(bridge)] == ["asked"], timeout=10), replies(bridge)
     time.sleep(1)
     assert fakes.imap.idling == 0 and fetched_bodies(fakes) == []
     # « Non merci »: never asked again for that mailbox, still nothing watched

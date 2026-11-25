@@ -1131,7 +1131,7 @@ fn a3_a_default_end_never_stops_it_without_its_person() {
     assert!(settle(&config, "vie", &id, false).is_some());
     assert!(routines::get(&config, &other.id).is_some());
     due(&config, until + 60.0);
-    assert!(routines::get(&config, &other.id).is_none(), "« L'arrêter le {date} » kept it");
+    assert!(routines::get(&config, &other.id).is_none(), "« L'arrêter le … » kept it");
 }
 
 /// Point 3: The same for a watcher of its agent's own.
