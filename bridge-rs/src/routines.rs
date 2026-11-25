@@ -18,7 +18,8 @@
 //! (Alex 11/11, below); an agent's change is a proposal with a card of its own. The apps make them with these routes
 //! (the bridge key), in Hermes' job shape so their models stay; their form asks whether it is silent (`muted`):
 //!
-//!     GET    /v1/agents/{agent}/routines          {jobs}  (each `waits_for_answer`: its start or a proposal waits)
+//!     GET    /v1/agents/{agent}/routines          {jobs}  (each `waits_for_answer`: its start or a proposal waits;
+//!                                                 `schedule_shown`: when, in words ready to show, schedule_words.rs)
 //!     POST   /v1/agents/{agent}/routines          {name, schedule, prompt, muted?}  -> {job}   (no muted: not silent)
 //!     PATCH  /v1/routines/{id}                    {name?, schedule?, prompt?, muted?} -> {job}
 //!     DELETE /v1/routines/{id}
@@ -531,6 +532,9 @@ pub fn view_of(config: &Config, r: &Routine) -> Value {
     if let (Some(map), Value::Object(more)) = (v.as_object_mut(), frame) {
         map.extend(more);
     }
+    // its schedule in words, ready to show (schedule_words.rs, 25/11); `schedule_display` stays Hermes' (the editor
+    // reads it back)
+    v["schedule_shown"] = json!(shown_in(&crate::names::agent_language(config, &r.agent), r, zone));
     v
 }
 
@@ -822,6 +826,25 @@ fn when_of(r: &Routine, zone: Tz) -> Value {
     crate::autonomous::routine_when(&job)
 }
 
+/// Its schedule in words, ready to show as they are (schedule_words.rs: « Chaque jour vers 8 h », never « 0 8 * * * »),
+/// in `lang`.
+pub fn shown_in(lang: &str, r: &Routine, zone: Tz) -> String {
+    crate::schedule_words::when_words(lang, &when_of(r, zone), zone)
+        .unwrap_or_else(|| crate::schedule_words::say(lang, &crate::schedule_words::Plain::Regularly, false, zone))
+}
+
+/// `shown_in` its agent's language (as the bridge's other words of a routine: its cards, its frame).
+pub fn shown(config: &Config, r: &Routine) -> String {
+    shown_in(&crate::names::agent_language(config, &r.agent), r, zone(config))
+}
+
+/// Its card's `when`: the fields, and `shown` (its words in its agent's language).
+fn shown_when(config: &Config, r: &Routine) -> Value {
+    let mut when = when_of(r, zone(config));
+    when["shown"] = json!(shown(config, r));
+    when
+}
+
 /// The routine as its card names it: « Coach a créé la routine « Archive du soir » : chaque jour à 23:00. » (the
 /// agent's language: fr, en, de, es). Never « it starts after your answer »: only a creation card says that, and a
 /// routine with this card already runs (S4).
@@ -939,7 +962,7 @@ pub fn card_item(config: &Config, r: &Routine, card: &Card) -> Dict {
             "created_at": card.at, "session_id": null,
             "bip_summary": summary, "bip_detail": prompt,
             "bip_routine": {"id": r.id, "name": name, "prompt": prompt,
-                            "schedule_display": view(r, zone)["schedule_display"], "when": when_of(r, zone),
+                            "schedule_display": view(r, zone)["schedule_display"], "when": shown_when(config, r),
                             "suggested": suggested(r), "muted": r.muted, "question": QUESTION},
         })
     };
@@ -1095,7 +1118,8 @@ fn when_in(r: &Routine, schedule: &Schedule, zone: Tz, lang: &str) -> String {
         (_, "every_hours") => format!("every {} h", int("hours")),
         (_, "every_minutes") => format!("every {} minutes", int("minutes")),
         (_, "once") => "once".into(),
-        _ => w["raw"].as_str().unwrap_or("").into(),
+        // several days, the weekend, several times…: never the cron expression (schedule_words.rs)
+        _ => crate::schedule_words::in_sentence(&crate::schedule_words::when_words(lang, &w, zone).unwrap_or_default()),
     };
     format!("{text}{}", date.unwrap_or_default())
 }

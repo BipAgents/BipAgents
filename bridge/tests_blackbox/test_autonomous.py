@@ -76,7 +76,9 @@ def test_one_list_of_what_the_agents_do_on_their_own(bridges, fakes):
     monday = items["routine:wellness:j1"]
     assert (monday["kind"], monday["group"], monday["state"], monday["main_action"]) == \
         ("routine", "schedule", "active", "pause")
-    assert monday["when"] == {"kind": "weekly", "weekday": 1, "hour": 8, "minute": 0, "text": "Chaque lundi à 8:00"}
+    # `shown`: its words ready to show, in its agent's language (schedule_words.rs, 25/11)
+    assert monday["when"] == {"kind": "weekly", "weekday": 1, "hour": 8, "minute": 0, "text": "Chaque lundi à 8:00",
+                              "shown": "Every Monday at 8:00 AM"}
     assert monday["last_run"]["ok"] is True and monday["next_run"] > 0 and monday["cost"] is None
     assert monday["actions"] == ["pause", "run", "delete", "open"] and monday["ref"] == "j1"
     water = items["routine:wellness:j2"]

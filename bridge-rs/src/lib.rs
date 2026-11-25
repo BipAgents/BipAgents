@@ -230,6 +230,8 @@ pub mod rules;
 pub mod rules_live;
 pub mod rooms;
 pub mod routines;
+/// A routine's « when » in plain words, ready to show (never a cron expression on a screen).
+pub mod schedule_words;
 // plans an agent proposes on its own (proactive agents, part 3)
 pub mod plans;
 /// « Initiative » smart: any action the agent can really do, checked; the day's passes (proactive agents 3b).
