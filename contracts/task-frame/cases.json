@@ -158,8 +158,8 @@
  "texts": {
   "keep_duration": {"fr": {"3": "3 mois", "6": "6 mois", "12": "1 an", "15": "1 an et 3 mois", "24": "2 ans"}, "en": {"3": "3 months", "6": "6 months", "12": "1 year", "15": "1 year and 3 months", "24": "2 years"}, "de": {"3": "3 Monaten", "6": "6 Monaten", "12": "1 Jahr", "15": "1 Jahr und 3 Monaten", "24": "2 Jahren"}, "es": {"3": "3 meses", "6": "6 meses", "12": "1 año", "15": "1 año y 3 meses", "24": "2 años"}, "nl": {"3": "3 maanden", "6": "6 maanden", "12": "1 jaar", "15": "1 jaar en 3 maanden", "24": "2 jaar"}},
   "keep_nl": {
-   "watcher": "De bewaker „{name}” draait al {duration}. Houden? Zonder antwoord gaat hij door.",
-   "routine": "De routine „{name}” draait al {duration}. Houden? Zonder antwoord gaat hij door.",
+   "watcher": "De bewaker „{name}” draait al {duration}. Houden? Als je niet antwoordt, blijft hij lopen.",
+   "routine": "De routine „{name}” draait al {duration}. Houden? Als je niet antwoordt, blijft hij lopen.",
    "buttons": ["Houden", "Stoppen op {date}"],
    "day": "30-11 (30-11-2027 another year)",
    "duration": "keep_duration.nl"
@@ -283,8 +283,8 @@
     "watcher": "The watcher “{name}” stopped as planned ({end})."
    },
    "keep": {
-    "watcher": "The watcher “{name}” has been running for {duration}. Keep it? With no answer, it goes on.",
-    "routine": "The routine “{name}” has been running for {duration}. Keep it? With no answer, it goes on."
+    "watcher": "The watcher “{name}” has been running for {duration}. Keep it? If you don't answer, it keeps running.",
+    "routine": "The routine “{name}” has been running for {duration}. Keep it? If you don't answer, it keeps running."
    },
    "keep_buttons": {
     "watcher": [
@@ -453,8 +453,8 @@
     "watcher": "El vigilante «{name}» se ha detenido como estaba previsto ({end})."
    },
    "keep": {
-    "watcher": "El vigilante «{name}» lleva {duration} funcionando. ¿Mantenerlo? Sin respuesta, sigue.",
-    "routine": "La rutina «{name}» lleva {duration} funcionando. ¿Mantenerla? Sin respuesta, sigue."
+    "watcher": "El vigilante «{name}» lleva {duration} funcionando. ¿Mantenerlo? Si no respondes, sigue.",
+    "routine": "La rutina «{name}» lleva {duration} funcionando. ¿Mantenerla? Si no respondes, sigue."
    },
    "keep_buttons": {
     "watcher": [

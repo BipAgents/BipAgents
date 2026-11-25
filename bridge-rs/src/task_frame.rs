@@ -620,12 +620,12 @@ pub fn keep_sentence(lang: &str, task: Task, name: &str, months: u32) -> String 
         ("fr", Task::Routine) => format!("La routine « {name} » tourne depuis {d}. La garder ? Sans réponse, elle continue."),
         ("de", Task::Watcher) => format!("Der Wächter „{name}“ läuft seit {d}. Behalten? Ohne Antwort läuft er weiter."),
         ("de", Task::Routine) => format!("Die Routine „{name}“ läuft seit {d}. Behalten? Ohne Antwort läuft sie weiter."),
-        ("es", Task::Watcher) => format!("El vigilante «{name}» lleva {d} funcionando. ¿Mantenerlo? Sin respuesta, sigue."),
-        ("es", Task::Routine) => format!("La rutina «{name}» lleva {d} funcionando. ¿Mantenerla? Sin respuesta, sigue."),
-        ("nl", Task::Watcher) => format!("De bewaker „{name}” draait al {d}. Houden? Zonder antwoord gaat hij door."),
-        ("nl", Task::Routine) => format!("De routine „{name}” draait al {d}. Houden? Zonder antwoord gaat hij door."),
-        (_, Task::Watcher) => format!("The watcher “{name}” has been running for {d}. Keep it? With no answer, it goes on."),
-        (_, Task::Routine) => format!("The routine “{name}” has been running for {d}. Keep it? With no answer, it goes on."),
+        ("es", Task::Watcher) => format!("El vigilante «{name}» lleva {d} funcionando. ¿Mantenerlo? Si no respondes, sigue."),
+        ("es", Task::Routine) => format!("La rutina «{name}» lleva {d} funcionando. ¿Mantenerla? Si no respondes, sigue."),
+        ("nl", Task::Watcher) => format!("De bewaker „{name}” draait al {d}. Houden? Als je niet antwoordt, blijft hij lopen."),
+        ("nl", Task::Routine) => format!("De routine „{name}” draait al {d}. Houden? Als je niet antwoordt, blijft hij lopen."),
+        (_, Task::Watcher) => format!("The watcher “{name}” has been running for {d}. Keep it? If you don't answer, it keeps running."),
+        (_, Task::Routine) => format!("The routine “{name}” has been running for {d}. Keep it? If you don't answer, it keeps running."),
     }
 }
 

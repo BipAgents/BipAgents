@@ -345,8 +345,8 @@ def test_what_the_agent_sets_up_on_its_own_ends_after_90_days_and_asks_3_days_be
     edit_routine(bridge, job["id"], frame={"until": soon}, created=time.time() - 88 * DAY)   # made 88 days ago
     assert wait_until(lambda: cards(bridge, "bip-fix-"), timeout=60)
     [keep] = cards(bridge, "bip-fix-")
-    assert keep["bip_summary"] == ("The routine “Météo” has been running for 3 months. Keep it? With no answer, it goes "
-                                   "on."), keep
+    assert keep["bip_summary"] == ("The routine “Météo” has been running for 3 months. Keep it? If you don't answer, it "
+                                   "keeps running."), keep
     assert keep["bip_choices"] == ["keep", "stop"] and keep["bip_fix"]["variant"] == "keep"
     assert keep["bip_fix"]["buttons"] == ["Keep", f"Stop it on {day_en(soon)}"], keep["bip_fix"]
     time.sleep(1.0)
