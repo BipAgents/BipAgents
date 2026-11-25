@@ -54,7 +54,7 @@ def test_the_release_holds_one_archive_per_package_and_their_checksums(tmp_path)
     digest = hashlib.sha256((tmp_path / "voices" / "index.json").read_bytes()).hexdigest()[:12]
     assert name == f"voices-4.0.1-{digest}" == release.tag(tmp_path / "voices")
     assets = sorted(p.name for p in (tmp_path / "out").iterdir())
-    assert assets == ["CREDITS.txt", "LICENSE-ASSETS", "SHA256SUMS", "dutch-dut.tar.gz", "english-eng.tar.gz",
+    assert assets == ["CREDITS.txt", "LICENSE", "SHA256SUMS", "TRADEMARKS.md", "dutch-dut.tar.gz", "english-eng.tar.gz",
                       "french-fre.tar.gz", "index.json", "mimi-aaa.tar.gz"]
     sums = voices.sums_of((tmp_path / "out" / "SHA256SUMS").read_text())
     assert set(sums) == set(assets) - {"SHA256SUMS"}
@@ -64,7 +64,9 @@ def test_the_release_holds_one_archive_per_package_and_their_checksums(tmp_path)
     assert {m.name for m in members} >= {"french-fre/manifest.json", "french-fre/voices/colibri.kv.f16"}
     assert all(m.mtime == 0 and m.uid == 0 and m.uname == "" for m in members)
     assert "Kyutai" in (tmp_path / "out" / "CREDITS.txt").read_text()
-    assert "not under the MIT license" in (tmp_path / "out" / "LICENSE-ASSETS").read_text()
+    assert (tmp_path / "out" / "LICENSE").read_text().startswith("MIT License")
+    assert "BipAgents" in (tmp_path / "out" / "TRADEMARKS.md").read_text()
+    assert "reserved" not in (tmp_path / "out" / "CREDITS.txt").read_text()
     # The same build gives the same bytes: a second run finds the release already out under the same name.
     assert release.pack(tmp_path / "voices", tmp_path / "again") == name
     assert (tmp_path / "again" / "SHA256SUMS").read_text() == (tmp_path / "out" / "SHA256SUMS").read_text()

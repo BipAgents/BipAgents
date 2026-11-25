@@ -2,7 +2,7 @@
 
 # Conditions générales d'utilisation de BipAgents
 
-> Dernière mise à jour : 18 novembre 2026.
+> Dernière mise à jour : 25 novembre 2026.
 
 ## 1. Objet
 
@@ -71,17 +71,16 @@ comme prévu à la section 19.
 
 ## 6. Licence et logiciel libre
 
-- Le **code source** de BipAgents est publié sous **licence MIT** : https://github.com/BipAgents/BipAgents. Tu peux l'utiliser, le copier, le
-  modifier et le redistribuer selon cette licence, qui prime sur les présentes conditions pour tout ce qui concerne le
-  code source.
-- Les **Bips eux-mêmes** ne sont pas sous licence MIT : leurs dessins, l'icône de l'app, leur babil, leurs voix, les
-  enregistrements de la démo (le podcast, réalisé avec Fish Audio Drama 3 — « Built with Fish Audio ») et les captures
-  d'écran. Tu peux les montrer pour présenter BipAgents et compiler BipAgents avec eux, pas les reprendre dans une
-  autre app ou un autre produit (fichier LICENSE-ASSETS du dépôt).
-- Les composants tiers (Hermes Agent, polices, modèles de voix de Kyutai…) restent sous leur propre licence, indiquée
-  dans le dépôt.
-- La licence MIT porte sur le code ; elle ne te donne pas le droit d'utiliser les noms « BipAgents » et « Kerfy
-  Studio » pour présenter un autre produit comme le nôtre.
+- Le **code source** de BipAgents **et les Bips** (leurs dessins, leur babil, leurs voix, les captures d'écran) sont
+  publiés sous **licence MIT** : https://github.com/BipAgents/BipAgents. Tu peux les utiliser, les copier, les modifier
+  et les redistribuer selon cette licence, qui prime sur les présentes conditions pour tout ce qui est publié dans le
+  dépôt.
+- Le nom « BipAgents » (ou « Bip Agents ») et l'icône de l'app sont nos marques : la licence MIT ne les donne pas, pas
+  plus que le nom « Kerfy Studio ». Tu peux dire qu'un produit est construit sur BipAgents ou compatible avec lui, pas
+  présenter un autre produit comme le nôtre ; un fork que tu distribues doit changer de nom et d'icône (fichier
+  TRADEMARKS.md du dépôt).
+- Les composants tiers (Hermes Agent, polices, modèles de voix de Kyutai, le podcast de la démo réalisé avec Fish Audio
+  Drama 3 — « Built with Fish Audio »…) restent sous leur propre licence, indiquée dans le dépôt.
 - **Version téléchargée sur l'App Store** : le contrat de licence standard d'Apple pour les apps (« Licensed
   Application End User License Agreement ») s'applique en plus de ces conditions. Ces conditions sont conclues entre
   toi et Kerfy Studio, pas avec Apple ; Apple n'est pas responsable de l'app ni de son contenu et n'a aucune obligation

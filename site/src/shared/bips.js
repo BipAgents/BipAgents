@@ -1,4 +1,3 @@
-// Not under the MIT license: the Bips' drawings and sounds are reserved (LICENSE-ASSETS).
 // The Bips for the websites, drawn like the apps draw them (PixelEngine.swift / PixelEngine.kt, the design page
 // « Les Bips se déguisent »): every number comes from scripts/pixel/pixel.json, which the build writes next to this
 // file as pixel-data.js. Body cells of P, face pixels of U = P/3, the mouth in the eyes' colour, each open eye one

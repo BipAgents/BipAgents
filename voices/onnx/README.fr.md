@@ -34,7 +34,7 @@ soumettre avec la version) et de Google Play (le script d'envoi de l'éditeur le
 l'offre les reçoivent de leur guichet (copier `build/voices` dans son dossier `voices`). Toutes les autres installations
 (son propre serveur, celui d'une famille, un Mac) les prennent dans une release GitHub du dépôt public,
 `voices-<moteur>-<hash de l'index>` (depuis le 2026-10-26) : `release.py` emballe `build/voices` (un `<dossier>.tar.gz`
-par paquet de l'index, `index.json`, `CREDITS.txt`, `LICENSE-ASSETS`, `SHA256SUMS`) et `scripts/publish-voices.sh` la
+par paquet de l'index, `index.json`, `CREDITS.txt`, `LICENSE`, `TRADEMARKS.md`, `SHA256SUMS`) et `scripts/publish-voices.sh` la
 publie (`--dry-run` liste les fichiers ; une release déjà publiée est sautée). L'installateur prend la plus récente du
 Pocket qu'il épingle, seulement les langues qu'il sert, chaque fichier vérifié (installer/bipinstall/voices.py), et
 retire PyTorch une fois que Pocket répond.

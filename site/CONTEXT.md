@@ -46,7 +46,7 @@ What follows is only what the site has to stay true to, and how to work in this 
 5. **The demo is the app's real demo** (`App/Resources/Demo/demo.json`, shared with the iPhone and Android apps).
    Don't edit it for the site's sake without telling the owner: the apps use the same file.
 6. **The Bips** are drawn by the same pixel engine as the apps (`src/shared/bips.js`, data in `scripts/pixel/`). Use
-   them as you like on the site; their drawings, voices and screenshots are not MIT (`LICENSE-ASSETS`).
+   them as you like on the site; they are MIT like the rest (only the name and the icon are marks: `TRADEMARKS.md`).
 7. **Four languages**: every text lives once, in `src/<site>/i18n/<lang>.json` (en, fr, de, es); a new text needs its
    four versions. Plain words, no technical jargon in the product's voice.
 

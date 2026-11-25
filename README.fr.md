@@ -228,10 +228,11 @@ limites](docs/security-model.fr.md).
 
 ## 📜 Licence
 
-Le **code publié ici** est un logiciel libre sous [licence MIT](LICENSE). Les **Bips eux-mêmes** (leurs dessins,
-l'icône de l'app, leur babil et leurs voix, les enregistrements et les captures d'écran) ne le sont pas :
-[LICENSE-ASSETS](LICENSE-ASSETS) permet de les montrer et de compiler BipAgents avec eux, pas de les mettre dans une
-autre app. Contribuer : voir les [conditions de contribution](CONTRIBUTING.md#contribution-terms).
+Tout ce qui est publié ici est un logiciel libre sous [licence MIT](LICENSE) : le code et les **Bips** aussi (leurs
+dessins, leurs voix, les enregistrements et les captures d'écran). Les éléments de tiers gardent leurs licences et leurs
+crédits (les poids de Pocket TTS de Kyutai dans les paquets de voix sont sous CC BY 4.0, par exemple). Seuls le **nom
+BipAgents et l'icône de l'app** sont réservés comme marques du projet : voir [TRADEMARKS.fr.md](TRADEMARKS.fr.md).
+Contribuer : voir les [conditions de contribution](CONTRIBUTING.md#contribution-terms).
 
 ## 💬 Qui est derrière
 
@@ -246,4 +247,4 @@ Construit sur [Hermes Agent](https://github.com/NousResearch/hermes-agent) de No
 indépendant), avec les voix des Bips faites avec Pocket TTS de [Kyutai](https://kyutai.org), et beaucoup de sessions
 avec Claude.
 
-<p align="center"><sub>Code sous MIT · les Bips sont réservés (LICENSE-ASSETS) · Fait avec ♥ et des Bips</sub></p>
+<p align="center"><sub>Sous MIT, les Bips compris · le nom et l'icône sont des marques (TRADEMARKS.fr.md) · Fait avec ♥ et des Bips</sub></p>

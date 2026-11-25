@@ -209,10 +209,11 @@ you (web search, maps, weather) see its requests. Details: [what the apps send, 
 
 ## 📜 License
 
-The **code published here** is free software under the [MIT license](LICENSE). The **Bips themselves** (their
-drawings, the app's icon, their babble and voices, the recordings and the screenshots) are not:
-[LICENSE-ASSETS](LICENSE-ASSETS) lets you show them and build BipAgents with them, not put them in another app.
-Contributing: see the [contribution terms](CONTRIBUTING.md#contribution-terms).
+Everything published here is free software under the [MIT license](LICENSE): the code and the **Bips** too (their
+drawings, their voices, the recordings and the screenshots). Third-party pieces keep their own licences and credits
+(Kyutai's Pocket TTS weights inside the voice packages are CC BY 4.0, for instance). Only the **name BipAgents and the
+app's icon** are reserved as the project's marks: see [TRADEMARKS.md](TRADEMARKS.md). Contributing: see the
+[contribution terms](CONTRIBUTING.md#contribution-terms).
 
 ## 💬 Who's behind it
 
@@ -226,4 +227,4 @@ security@bipagents.com · abuse@bipagents.com.
 Built on [Hermes Agent](https://github.com/NousResearch/hermes-agent) by Nous Research (BipAgents is independent of
 it), with the Bips' voices made with [Kyutai](https://kyutai.org)'s Pocket TTS, and many sessions with Claude.
 
-<p align="center"><sub>Code under MIT · the Bips are reserved (LICENSE-ASSETS) · Made with ♥ and Bips</sub></p>
+<p align="center"><sub>Under MIT, the Bips included · the name and icon are marks (TRADEMARKS.md) · Made with ♥ and Bips</sub></p>

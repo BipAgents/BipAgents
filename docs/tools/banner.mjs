@@ -1,4 +1,3 @@
-// Not under the MIT license: the Bips' drawings and sounds are reserved (LICENSE-ASSETS).
 // Builds docs/bips.svg, the animated README banner: the eight Bips in pixels, drawn by the websites' engine
 // (site/src/shared/bips.js) from scripts/pixel/pixel.json, as the apps draw them, each bobbing.
 // CSS animations only (GitHub shows SVG through <img>, scripts never run). Run: node docs/tools/banner.mjs

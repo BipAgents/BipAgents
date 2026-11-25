@@ -33,7 +33,7 @@ submit them with the build) and from Google Play (the publisher's upload script 
 servers get them from their guichet (copy `build/voices` to its `voices` folder). Every other install (one's own
 server, a family's, a Mac) gets them from a GitHub release of the public repository, `voices-<engine>-<index hash>`
 (since 2026-10-26): `release.py` packs `build/voices` (one `<folder>.tar.gz` per package the index lists, `index.json`,
-`CREDITS.txt`, `LICENSE-ASSETS`, `SHA256SUMS`) and `scripts/publish-voices.sh` uploads it (`--dry-run` lists the
+`CREDITS.txt`, `LICENSE`, `TRADEMARKS.md`, `SHA256SUMS`) and `scripts/publish-voices.sh` uploads it (`--dry-run` lists the
 assets; a release already out is skipped). The installer takes the newest one of the Pocket it pins, only the
 languages it serves, each file checked (installer/bipinstall/voices.py), and drops PyTorch once Pocket answers.
 
