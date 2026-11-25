@@ -227,7 +227,7 @@ def test_what_is_refused(bridges, fakes):
         bridge, folder = install(bridges, fakes, service)
         refused = bridge.post("/v1/connections/notion/start", headers=AUTH, json={"agents": ["coach"]})
         assert refused.status_code == 409
-        assert refused.json() == {"detail": {"code": "cannot_hold", "agents": {"coach": "needs_own_space"}}}
+        assert refused.json() == {"detail": {"code": "cannot_hold", "agents": {"coach": "not_configured"}}}
         assert bridge.post("/v1/connections/drive/start", headers=AUTH, json={"agents": ["maison"]}).status_code == 404
         assert bridge.post("/v1/connections/notion/start", headers=AUTH, json={"agents": []}).status_code == 422
         assert bridge.post("/v1/connections/notion/start", headers=AUTH,
