@@ -6,9 +6,15 @@ mod common;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::process::Command;
+use std::sync::Mutex;
 
-use common::{auth, TestApp, Urls};
-use serde_json::json;
+use base64::Engine;
+use bipbridge::cloud_setup::{self, CLAIM_CONTEXT};
+use common::{auth, TestApp, Urls, BRIDGE_KEY};
+use serde_json::{json, Value};
+
+/// HOME is the process's: one test at a time points it at its folder.
+static HOME: Mutex<()> = Mutex::new(());
 
 fn a_key(dir: &Path, name: &str, kind: &str) -> (String, String) {
     let path = dir.join(name);
@@ -30,6 +36,7 @@ fn mode(path: &Path) -> u32 {
 
 #[tokio::test]
 async fn the_person_adds_lists_and_removes_their_keys_on_a_server_of_the_offer() {
+    let _home = HOME.lock().unwrap_or_else(|e| e.into_inner());
     if Command::new("ssh-keygen").arg("-?").output().is_err() {
         return; // no ssh-keygen here
     }
@@ -80,4 +87,86 @@ async fn the_person_adds_lists_and_removes_their_keys_on_a_server_of_the_offer()
     assert_eq!(gone.status, 200);
     assert!(!std::fs::read_to_string(home.join(".ssh/authorized_keys")).unwrap().contains("two@laptop"));
     assert_eq!(app.request("DELETE", &query, &h, None).await.status, 404);
+}
+
+fn encoded(secret: &[u8]) -> String {
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(secret)
+}
+
+/// A place of the all-included offer, its certificate made, its first pairing secret given (as the cloud setup
+/// tests' fixture).
+fn place(dir: &Path) -> bipbridge::config::Config {
+    let setup = dir.join("setup.json");
+    std::fs::write(&setup, json!({"pair": encoded(&[7u8; 32])}).to_string()).unwrap();
+    let path = dir.join("bridge.toml");
+    std::fs::write(&path, "# bridge config\n").unwrap();
+    let mut d = common::config_dict(dir, &Urls::default());
+    let map = d.as_object_mut().unwrap();
+    map.insert("cloud".into(), json!(true));
+    map.insert("public_url".into(), json!("https://203.0.113.7"));
+    map.insert(
+        "lan".into(),
+        json!({"enabled": true, "address": "203.0.113.7", "port": 443, "cert_dir": dir.join("lan").to_string_lossy()}),
+    );
+    map.insert(
+        "setup".into(),
+        json!({"file": setup.to_string_lossy(), "progress": dir.join("progress.json").to_string_lossy()}),
+    );
+    let mut config = bipbridge::config::parse_config(&d, Some(&path.to_string_lossy())).unwrap();
+    config.place_spare_agents = Some(0);
+    bipbridge::lan::ensure_certificate(&config).unwrap();
+    config
+}
+
+/// Security review 2026-11-26, E3: a stolen phone, while it still had its device key, added an SSH key; the person
+/// removes the phone from their account and the place is reopened (a new pairing secret from the guichet). The keys
+/// that open the account by SSH go with every device key: the one added from the app, one added by hand since (with
+/// options), one in authorized_keys2 (sshd reads it too). Comments and blank lines stay.
+#[tokio::test]
+async fn a_reopen_removes_the_ssh_keys_a_removed_device_could_have_added() {
+    let _home = HOME.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("home");
+    std::fs::create_dir(&home).unwrap();
+    std::env::set_var("HOME", &home);
+    let config = place(dir.path());
+    let app = TestApp::new(config.clone());
+    let owner = format!("Bearer {BRIDGE_KEY}");
+    let phone = app.send_json("POST", "/v1/device-keys", &[("authorization", &owner)], &json!({"name": "Pixel"})).await;
+    assert_eq!(phone.status, 200, "{}", phone.text());
+    let phone = format!("Bearer {}", phone.json()["key"].as_str().unwrap());
+    std::fs::create_dir(home.join(".ssh")).unwrap();
+    std::fs::write(home.join(".ssh/authorized_keys"), "# kept\n\n").unwrap();
+    let key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl thief@laptop";
+    let added = app.send_json("POST", "/v1/ssh/keys", &[("authorization", &phone)], &json!({"key": key})).await;
+    assert_eq!(added.status, 200, "{}", added.text());
+    let by_hand = "no-pty ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl again";
+    let mut text = std::fs::read_to_string(home.join(".ssh/authorized_keys")).unwrap();
+    text.push_str(&format!("{by_hand}\n"));
+    std::fs::write(home.join(".ssh/authorized_keys"), text).unwrap();
+    std::fs::write(home.join(".ssh/authorized_keys2"), format!("{key}\n")).unwrap();
+
+    // The phone is removed from the account: the guichet's order gives the place a new secret, a phone left pairs again.
+    let secret: Vec<u8> = (32u8..64).collect();
+    std::fs::write(config.setup_file.clone().unwrap(), json!({"pair": encoded(&secret), "reopen": true}).to_string())
+        .unwrap();
+    let progress = config.setup_progress.clone().unwrap();
+    std::fs::write(progress, json!({"step": 6, "total": 6, "label": "Checks", "done": true}).to_string()).unwrap();
+    let setup = app.get("/v1/setup?nonce=abababababababababababababababab", &[]).await.json();
+    let challenge = setup["challenge"].as_str().unwrap().to_string();
+    let request = json!({"reopen": {"name": "Tablette"}}).to_string();
+    let body = json!({"challenge": challenge, "mac": cloud_setup::proof(&secret, &[CLAIM_CONTEXT, &challenge, &request]),
+                      "request": request});
+    let again = app.send_json("POST", "/v1/setup/claim", &[], &body).await;
+    assert_eq!(again.status, 200, "{}", again.text());
+    let mine: Value = again.json();
+    assert_eq!(mine["reopened"], true);
+    let left = std::fs::read_to_string(home.join(".ssh/authorized_keys")).unwrap();
+    assert_eq!(left, "# kept\n\n", "every key went, the comment stayed");
+    assert!(!std::fs::read_to_string(home.join(".ssh/authorized_keys2")).unwrap_or_default().contains("ssh-ed25519"));
+    assert_eq!(mode(&home.join(".ssh/authorized_keys")), 0o600);
+    let tablet = format!("Bearer {}", mine["bridgeKey"].as_str().unwrap());
+    let status = app.get("/v1/ssh", &[("authorization", &tablet)]).await.json();
+    assert_eq!((status["enabled"].clone(), status["keys"].clone()), (json!(true), json!([])));
+    assert_eq!(app.get("/v1/ssh", &[("authorization", &phone)]).await.status, 401); // the phone's key: gone too
 }

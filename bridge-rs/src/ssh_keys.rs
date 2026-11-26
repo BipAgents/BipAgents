@@ -8,6 +8,10 @@
 //!
 //! A key is one public key line with nothing in front (no `command=` or other options); it goes to
 //! ~/.ssh/authorized_keys (700/600), which the account's other keys share.
+//!
+//! A reopen (cloud_setup::reopen: a device removed from the person's account, a recovery) takes every key away
+//! ([`forget_all`]): a key a removed device added must not outlive it (security review 2026-11-26, E3). The person adds
+//! theirs again from the app.
 
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
@@ -65,7 +69,7 @@ impl SshKey {
     }
 }
 
-fn home() -> PathBuf {
+pub(crate) fn home() -> PathBuf {
     match std::env::var("HOME") {
         Ok(h) if !h.is_empty() => PathBuf::from(h),
         _ => PathBuf::from(crate::py::expanduser("~")),
@@ -157,14 +161,64 @@ pub fn keys(home: &Path) -> Vec<Dict> {
 }
 
 fn write(home: &Path, lines: &[String]) -> std::io::Result<()> {
+    let text: String = lines.iter().map(|l| format!("{l}\n")).collect();
+    write_named(home, "authorized_keys", text.as_bytes())
+}
+
+/// ~/.ssh/<name> (700/600) replaced at once: a temporary file renamed over it.
+fn write_named(home: &Path, name: &str, bytes: &[u8]) -> std::io::Result<()> {
     let folder = home.join(".ssh");
     crate::py::makedirs(&folder.to_string_lossy(), 0o700)?;
     crate::py::chmod(&folder.to_string_lossy(), 0o700)?;
-    let path = file(home);
-    let tmp = folder.join(".authorized_keys.tmp");
-    let text: String = lines.iter().map(|l| format!("{l}\n")).collect();
-    crate::py::write_with_mode(&tmp.to_string_lossy(), text.as_bytes(), 0o600)?;
-    std::fs::rename(&tmp, &path)
+    let tmp = folder.join(format!(".{name}.tmp"));
+    crate::py::write_with_mode(&tmp.to_string_lossy(), bytes, 0o600)?;
+    std::fs::rename(&tmp, folder.join(name))
+}
+
+/// Every key that opens this account by SSH goes, from both files sshd reads (~/.ssh/authorized_keys and
+/// authorized_keys2): the ones added from the app, and any added by hand since over SSH (with options or not), which a
+/// key from the app let in first. Comments and blank lines stay; a file that can't be read as one (a folder made in its
+/// place, say) goes whole. How many lines went.
+pub fn forget_all(home: &Path) -> std::io::Result<usize> {
+    let mut gone = 0;
+    for name in ["authorized_keys", "authorized_keys2"] {
+        let path = home.join(".ssh").join(name);
+        let bytes = match std::fs::read(&path) {
+            Ok(bytes) => bytes,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(_) => {
+                match std::fs::remove_file(&path) {
+                    Ok(()) => {}
+                    Err(_) => std::fs::remove_dir_all(&path)?,
+                }
+                gone += 1;
+                continue;
+            }
+        };
+        let mut lines: Vec<&[u8]> = bytes.split(|b| *b == b'\n').collect();
+        if lines.last().is_some_and(|l| l.is_empty()) {
+            lines.pop(); // after the last line's end
+        }
+        let kept: Vec<&[u8]> = lines
+            .iter()
+            .copied()
+            .filter(|line| {
+                let text = line.trim_ascii();
+                text.is_empty() || text.starts_with(b"#")
+            })
+            .collect();
+        if kept.len() == lines.len() {
+            continue;
+        }
+        gone += lines.len() - kept.len();
+        let mut out = Vec::new();
+        for line in kept {
+            out.extend_from_slice(line);
+            out.push(b'\n');
+        }
+        write_named(home, name, &out)?;
+    }
+    Ok(gone)
 }
 
 fn read_lines(home: &Path) -> std::io::Result<Vec<String>> {
@@ -331,6 +385,26 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
         let mode = std::fs::metadata(home.path().join(".ssh/authorized_keys")).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o600);
+    }
+
+    /// E3 (review 26/11): at a reopen every key goes, whatever was written in the files; nothing there stops it.
+    #[test]
+    fn every_key_goes_comments_stay() {
+        let home = tempfile::tempdir().unwrap();
+        assert_eq!(forget_all(home.path()).unwrap(), 0); // no ~/.ssh at all
+        let ssh = home.path().join(".ssh");
+        std::fs::create_dir_all(&ssh).unwrap();
+        let mut odd = format!("# kept\n\n{GOOD}\r\n  # indented, kept\n").into_bytes();
+        odd.extend_from_slice(b"no-pty \xff\xfe not even text\n");
+        odd.extend_from_slice(GOOD.as_bytes()); // no line end
+        std::fs::write(ssh.join("authorized_keys"), odd).unwrap();
+        std::fs::create_dir(ssh.join("authorized_keys2")).unwrap(); // a folder in its place
+        std::fs::write(ssh.join("authorized_keys2").join("x"), GOOD).unwrap();
+        assert_eq!(forget_all(home.path()).unwrap(), 4);
+        assert_eq!(std::fs::read_to_string(ssh.join("authorized_keys")).unwrap(), "# kept\n\n  # indented, kept\n");
+        assert!(!ssh.join("authorized_keys2").exists());
+        assert!(keys(home.path()).is_empty());
+        assert_eq!(forget_all(home.path()).unwrap(), 0); // nothing left to take: the file untouched
     }
 
     #[test]
