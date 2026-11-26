@@ -388,3 +388,79 @@ LOCATION:5 place Exemple\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n")
     dav.lock().unwrap().events.remove(href);
     assert_eq!(sources::remote_news(&config, "coach", &event, paris).await, EventNews::Cancelled);
 }
+
+/// Security review 26/11 (E5): `calendar_delete` with an id made up from a known one (an e-mail, an invitation or a
+/// page the agent read says so) names something that is no event of the calendar: a task of the same calendar, a
+/// contact card, a file of the same server reached by `..` (plain or encoded), the calendar itself, an address with a
+/// query. `deletable` found nothing, which read as « no card », and the call then deleted it with the mailbox's own
+/// login. Now nothing is ever deleted then, and the tool answers at once (no card: there is nothing to ask about).
+#[tokio::test]
+async fn what_is_no_event_of_the_calendar_is_never_deleted_without_its_card() {
+    let (dav_url, dav) = fake_dav().await;
+    let kept = [
+        ("/dav/calendars/alex/work/todo1.ics",
+         "BEGIN:VCALENDAR\r\nBEGIN:VTODO\r\nUID:todo1\r\nSUMMARY:Déclarer les impôts\r\nEND:VTODO\r\nEND:VCALENDAR\r\n"),
+        ("/dav/calendars/alex/work/both.ics",
+         "BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:b1\r\nDTSTART:20261024T090000Z\r\nSUMMARY:Un\r\nEND:VEVENT\r\n\
+BEGIN:VTODO\r\nUID:b2\r\nSUMMARY:Deux\r\nEND:VTODO\r\nEND:VCALENDAR\r\n"),
+        ("/dav/calendars/alex/work/alex.vcf", "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Alex\r\nEND:VCARD\r\n"),
+        ("/dav/files/alex/contrat.pdf", "%PDF-1.7 ceci n'est pas un agenda"),
+        // a server that answers a GET on the calendar itself (a page listing it)
+        ("/dav/calendars/alex/work/", "<html><body>Travail</body></html>"),
+    ];
+    for (path, body) in kept {
+        dav.lock().unwrap().events.insert(path.into(), body.into());
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let config = with_mailboxes(dir.path());
+    let app = TestApp::new(config.clone());
+    let (k, v) = auth();
+    let h = [(k, v.as_str())];
+    let on = app
+        .send_json("PATCH", "/v1/mail/accounts/m1", &h, &json!({"calendar": true, "calendar_url": format!("{dav_url}/dav/")}))
+        .await;
+    assert_eq!(on.status, 200, "{}", on.text());
+    let (_, text) = tool(&app, "calendar_list", json!({"from": "2026-10-21", "to": "2026-10-31"})).await;
+    let known = text
+        .lines()
+        .find(|l| l.contains("Réunion client"))
+        .unwrap()
+        .split(" · ")
+        .next()
+        .unwrap()
+        .trim_start_matches("- id ")
+        .to_string();
+    assert!(known.starts_with("mail:m1:http://127.0.0.1:") && known.ends_with("/dav/calendars/alex/work/r1.ics"), "{known}");
+    let base = known.strip_suffix("r1.ics").unwrap().to_string();
+    let forged = [
+        format!("{base}todo1.ics"),
+        format!("{base}both.ics"),
+        format!("{base}alex.vcf"),
+        format!("{base}../../../files/alex/contrat.pdf"),
+        format!("{base}%2e%2e/%2e%2e/%2e%2e/files/alex/contrat.pdf"),
+        format!("{base}..%2F..%2F..%2Ffiles%2Falex%2Fcontrat.pdf"),
+        format!("{base}./todo1.ics"),
+        base.clone(),
+        format!("{base}todo1.ics?x=1"),
+        base.replacen("http://", "http://alex@", 1) + "todo1.ics",
+    ];
+    for id in &forged {
+        let said = tokio::time::timeout(std::time::Duration::from_secs(10), tool(&app, "calendar_delete", json!({"id": id})))
+            .await
+            .unwrap_or_else(|_| panic!("{id}: a card was asked (the tool waited) for what is no event"));
+        assert!(said.0, "{id}: {said:?}");
+    }
+    let deletes: Vec<String> =
+        dav.lock().unwrap().requests.iter().filter(|(m, _)| m == "DELETE").map(|(_, p)| p.clone()).collect();
+    assert!(deletes.is_empty(), "deleted with no card: {deletes:?}");
+    for (path, _) in kept {
+        assert!(dav.lock().unwrap().events.contains_key(path), "{path} deleted");
+    }
+    let cards = app.get("/v1/approvals", &h).await.json()["items"].clone();
+    assert!(cards.as_array().is_some_and(|c| c.is_empty()), "{cards}");
+    // the event itself: its card, then deleted on « Oui »
+    let ((failed, said), card) =
+        tokio::join!(tool(&app, "calendar_delete", json!({"id": known})), common::answer_card(&app, "bip-ok-", "once"));
+    assert!(!failed && said.contains("Deleted from Mail perso"), "{said}");
+    assert!(card["bip_summary"].as_str().unwrap().ends_with("« Réunion client »"), "{card}");
+}

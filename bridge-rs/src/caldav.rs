@@ -865,25 +865,89 @@ fn split_id(id: &str) -> Option<(&str, &str)> {
     rest.split_once(':')
 }
 
+const UNKNOWN_EVENT: &str = "unknown event id (see calendar_list)";
+
+/// `href` is the address of a resource right in the calendar at `calendar`, written as the listing writes it (`Url`'s
+/// own form: no `.` nor `..`, no query, fragment nor login), on the same server, one plain name under its folder (no
+/// slash, encoded or not).
+fn directly_in(href: &str, calendar: &str) -> bool {
+    let (Ok(event), Ok(folder)) = (url::Url::parse(href), url::Url::parse(calendar)) else { return false };
+    if event.as_str() != href
+        || event.query().is_some()
+        || event.fragment().is_some()
+        || !event.username().is_empty()
+        || event.password().is_some()
+        || event.origin() != folder.origin()
+    {
+        return false;
+    }
+    let base = folder.path().trim_end_matches('/');
+    let Some(name) = event.path().strip_prefix(base).and_then(|rest| rest.strip_prefix('/')) else { return false };
+    let lower = name.to_ascii_lowercase();
+    !name.is_empty() && !name.contains(['/', '\\']) && !lower.contains("%2f") && !lower.contains("%5c")
+}
+
+/// The iCalendar text holds one event and nothing else: one VCALENDAR with exactly one VEVENT (its alarms inside, time
+/// zones beside), never a task, a journal entry, a contact card or a file.
+fn one_event(ics: &str) -> bool {
+    let unfolded = ics.replace("\r\n", "\n").replace("\n ", "").replace("\n\t", "");
+    let mut open: Vec<String> = Vec::new();
+    let (mut calendars, mut events) = (0, 0);
+    for line in unfolded.lines() {
+        let upper = line.trim().to_ascii_uppercase();
+        if let Some(name) = upper.strip_prefix("BEGIN:") {
+            match (open.len(), name) {
+                (0, "VCALENDAR") => calendars += 1,
+                (1, "VEVENT") => events += 1,
+                (1, "VTIMEZONE") => {}
+                (1, other) if other.starts_with("X-") => {}
+                (0, _) | (1, _) => return false,
+                _ => {} // inside an event (VALARM) or a time zone (STANDARD, DAYLIGHT)
+            }
+            open.push(name.to_string());
+        } else if let Some(name) = upper.strip_prefix("END:") {
+            if open.pop().as_deref() != Some(name) {
+                return false;
+            }
+        } else if open.is_empty() && !upper.is_empty() {
+            return false;
+        }
+    }
+    open.is_empty() && calendars == 1 && events == 1
+}
+
+/// The event `id` names, when `calendar_delete` may delete it (security review 26/11, E5): one of the mailbox's known
+/// calendars, its address exactly that of a resource right in it (`directly_in`), and what is there now one event
+/// (`one_event`), not repeating: (its mailbox, its address, the event). Err: why not, for the agent; nothing is
+/// deleted then (and no card is asked: there is nothing to ask about).
+async fn event_at<'a>(id: &str, sources: &'a [Source]) -> Result<(&'a Source, String, Value), String> {
+    let (account, href) = split_id(id).ok_or(UNKNOWN_EVENT)?;
+    let source = sources.iter().find(|s| s.account == account).ok_or(UNKNOWN_EVENT)?;
+    if !source.calendars.iter().any(|c| directly_in(href, &c.href)) {
+        return Err(UNKNOWN_EVENT.into());
+    }
+    let body = match dav("GET", href, &source.username, &source.password, None, None, &[]).await? {
+        a if a.status == 200 => a.body,
+        a if a.status == 404 => return Err("no such event any more".into()),
+        a => return Err(refused(a.status).unwrap_or_else(|| format!("answered {}", a.status))),
+    };
+    let mut events = read_ics(&body);
+    if !one_event(&body) || events.len() != 1 {
+        return Err("not one event of this calendar (see calendar_list)".into());
+    }
+    let event = events.remove(0);
+    if event.get("recurring").map(py::truthy).unwrap_or(false) {
+        return Err("a repeating event: the person changes or deletes it in their calendar app (tell them)".into());
+    }
+    Ok((source, href.to_string(), event))
+}
+
 /// The event `id` of a mailbox's calendar that `calendar_delete` would delete now (its title, its start, the
-/// mailbox's label): one of its calendars, there, not repeating. None: not one (`handle` says why, with no card).
-pub async fn deletable(id: &str, sources: &[Source]) -> Option<(String, String, String)> {
-    let (account, href) = split_id(id)?;
-    let source = sources.iter().find(|s| s.account == account)?;
-    if !source.calendars.iter().any(|c| href.starts_with(c.href.as_str())) {
-        return None;
-    }
-    let got = dav("GET", href, &source.username, &source.password, None, None, &[]).await.ok()?;
-    if got.status != 200 {
-        return None;
-    }
-    let events = read_ics(&got.body);
-    if events.iter().any(|e| e.get("recurring").map(py::truthy).unwrap_or(false)) {
-        return None;
-    }
-    let event = events.first()?;
+/// mailbox's label: `event_at`). Err: not one, and why (agent_tools.rs `delete_card` says it: no card, nothing deleted).
+pub async fn deletable(id: &str, sources: &[Source]) -> Result<(String, String, String), String> {
+    let (source, _, event) = event_at(id, sources).await?;
     let field = |k: &str| event.get(k).and_then(Value::as_str).unwrap_or("").to_string();
-    Some((field("title"), field("start"), source.label.clone()))
+    Ok((field("title"), field("start"), source.label.clone()))
 }
 
 /// The tools' work on the mailboxes' calendars: an event added to one of them (its calendar named, or no phone copy
@@ -934,10 +998,10 @@ pub async fn handle(name: &str, arguments: &Dict, sources: &[Source], phone: boo
         }
         "calendar_update" | "calendar_delete" => {
             let id = tk::strip(&tk::str_or_empty(arguments.get("id"))).to_string();
-            let (account, href) = split_id(&id)?;
-            let Some(source) = sources.iter().find(|s| s.account == account) else {
-                return Some(tool_text("unknown event id (see calendar_list)", true));
-            };
+            let (account, _) = split_id(&id)?;
+            if !sources.iter().any(|s| s.account == account) {
+                return Some(tool_text(UNKNOWN_EVENT, true));
+            }
             if name == "calendar_update" {
                 return Some(tool_text(
                     "an event of a mailbox's calendar is changed in the person's calendar app (tell them), or deleted \
@@ -945,27 +1009,12 @@ and added again",
                     true,
                 ));
             }
-            if !source.calendars.iter().any(|c| href.starts_with(c.href.as_str())) {
-                return Some(tool_text("unknown event id (see calendar_list)", true));
-            }
-            let current = match dav("GET", href, &source.username, &source.password, None, None, &[]).await {
-                Ok(a) if a.status == 200 => a.body,
-                Ok(a) if a.status == 404 => return Some(tool_text("no such event any more", true)),
-                Ok(a) => {
-                    return Some(tool_text(
-                        &refused(a.status).unwrap_or_else(|| format!("answered {}", a.status)),
-                        true,
-                    ))
-                }
+            // only an event's own address, one event there, not repeating: the same check as its card's (`deletable`)
+            let (source, href) = match event_at(&id, sources).await {
+                Ok((source, href, _)) => (source, href),
                 Err(why) => return Some(tool_text(&why, true)),
             };
-            if read_ics(&current).iter().any(|e| e.get("recurring").map(py::truthy).unwrap_or(false)) {
-                return Some(tool_text(
-                    "a repeating event: the person changes or deletes it in their calendar app (tell them)",
-                    true,
-                ));
-            }
-            Some(match dav("DELETE", href, &source.username, &source.password, None, None, &[]).await {
+            Some(match dav("DELETE", &href, &source.username, &source.password, None, None, &[]).await {
                 Ok(a) if (200..300).contains(&a.status) => tool_text(&format!("Deleted from {}.", source.label), false),
                 Ok(a) => tk::tool_failure(
                     &refused(a.status).unwrap_or_else(|| format!("not deleted ({})", a.status)),
@@ -989,6 +1038,50 @@ pub fn xml_escape(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Security review 26/11 (E5): only an event's own address right in a known calendar, and only one event there.
+    #[test]
+    fn only_an_events_own_address_and_one_event_there_may_be_deleted() {
+        let cal = "https://dav.example/dav/calendars/alex/work/";
+        assert!(directly_in("https://dav.example/dav/calendars/alex/work/r1.ics", cal));
+        assert!(directly_in("https://dav.example/dav/calendars/alex/work/r%20one.ics", cal));
+        for bad in [
+            "https://dav.example/dav/calendars/alex/work/",
+            "https://dav.example/dav/calendars/alex/work",
+            "https://dav.example/dav/calendars/alex/work/../../../files/alex/contrat.pdf",
+            "https://dav.example/dav/calendars/alex/work/%2e%2e/%2e%2e/files/x",
+            "https://dav.example/dav/calendars/alex/work/..%2F..%2Ffiles%2Fx",
+            "https://dav.example/dav/calendars/alex/work/a\\b.ics",
+            "https://dav.example/dav/calendars/alex/work/sub/r1.ics",
+            "https://dav.example/dav/calendars/alex/work/./r1.ics",
+            "https://dav.example/dav/calendars/alex/work/r1.ics?x=1",
+            "https://dav.example/dav/calendars/alex/work/r1.ics#x",
+            "https://alex@dav.example/dav/calendars/alex/work/r1.ics",
+            "https://dav.example:8443/dav/calendars/alex/work/r1.ics",
+            "http://dav.example/dav/calendars/alex/work/r1.ics",
+            "https://other.example/dav/calendars/alex/work/r1.ics",
+            "https://dav.example/dav/calendars/alex/workshop/r1.ics",
+            "/dav/calendars/alex/work/r1.ics",
+        ] {
+            assert!(!directly_in(bad, cal), "{bad}");
+        }
+        let event = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VTIMEZONE\r\nTZID:Europe/Paris\r\nBEGIN:STANDARD\r\n\
+END:STANDARD\r\nEND:VTIMEZONE\r\nBEGIN:VEVENT\r\nUID:1\r\nDTSTART:20261023T120000Z\r\nBEGIN:VALARM\r\n\
+ACTION:DISPLAY\r\nEND:VALARM\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n";
+        assert!(one_event(event));
+        for bad in [
+            "BEGIN:VCALENDAR\r\nBEGIN:VTODO\r\nUID:t\r\nEND:VTODO\r\nEND:VCALENDAR\r\n",
+            "BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:1\r\nEND:VEVENT\r\nBEGIN:VTODO\r\nEND:VTODO\r\nEND:VCALENDAR\r\n",
+            "BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:1\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:2\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n",
+            "BEGIN:VCARD\r\nFN:Alex\r\nEND:VCARD\r\n",
+            "%PDF-1.7\nBEGIN:VCALENDAR\nBEGIN:VEVENT\nEND:VEVENT\nEND:VCALENDAR\n",
+            "BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:1\r\nEND:VCALENDAR\r\n",
+            "<html>Travail</html>",
+            "",
+        ] {
+            assert!(!one_event(bad), "{bad}");
+        }
+    }
 
     #[test]
     fn xml_as_servers_write_it() {

@@ -212,3 +212,54 @@ async fn health_advertises_the_calendar() {
     let features = app.get("/health", &[]).await.json()["features"].clone();
     assert!(features.as_array().unwrap().contains(&json!("calendar")));
 }
+
+/// Security review 26/11 (E5, its twin on the phone's calendar): a deletion whose card found nothing to ask about
+/// (`deletable`: not an event of the copy, a repeating one) is answered by `call_unasked`, which never asks the phone
+/// to delete anything, even an event the copy holds by then (a new copy came between the card's check and the call):
+/// « nothing found » never means « no card ». A request of the agent's own still waiting is cancelled, as before.
+#[tokio::test]
+async fn a_deletion_with_nothing_on_its_card_never_reaches_the_phone() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = with_agent(dir.path());
+    let app = TestApp::new(config.clone());
+    let (k, v) = auth();
+    let h = [(k, v.as_str())];
+    let allowed = app.send_json("PUT", "/v1/calendar/agents", &h, &json!({"agents": ["coach"]})).await;
+    assert_eq!(allowed.status, 200, "{}", allowed.text());
+    let copy = json!({"from": "2026-10-14", "to": "2026-12-20", "calendars": [{"id": "C1", "title": "Perso"}],
+        "events": [
+            {"id": "e1", "calendar": "C1", "title": "Dentiste", "start": "2026-10-22T10:00:00+02:00",
+             "end": "2026-10-22T10:30:00+02:00", "all_day": false},
+            {"id": "e3", "calendar": "C1", "title": "Point équipe", "start": "2026-10-21T09:00:00+02:00",
+             "end": "2026-10-21T09:30:00+02:00", "recurring": true}]});
+    assert_eq!(app.send_json("PUT", "/v1/calendar", &h, &copy).await.json(), json!({"events": 2}));
+    // what waits for the phone (the route lists only the requests still pending)
+    let deletes = |queue: &Value| queue.as_array().unwrap().iter().filter(|op| op["op"] == "delete").count();
+    // through the tool: an unknown id and a repeating event answered at once, no card, nothing asked of the phone
+    for id in ["zz", "e3"] {
+        let said = tokio::time::timeout(std::time::Duration::from_secs(10), tool(&app, "calendar_delete", json!({"id": id})))
+            .await
+            .unwrap_or_else(|_| panic!("{id}: a card was asked for nothing to delete"));
+        assert!(said.0, "{id}: {said:?}");
+    }
+    assert_eq!(deletes(&app.get("/v1/calendar/queue", &h).await.json()["queue"]), 0);
+    // the event there by the time of the call, its card having found nothing: never deleted
+    let remote = bipbridge::caldav::Remote::default();
+    let args = json!({"id": "e1"}).as_object().cloned().unwrap();
+    let said = calendar::call_unasked(&config, "coach", "calendar_delete", &args, None, &remote).unwrap();
+    assert_eq!(said["content"][0]["text"], calendar::DELETE_CHANGED, "{said:?}");
+    assert_eq!(deletes(&app.get("/v1/calendar/queue", &h).await.json()["queue"]), 0);
+    // its own request still waiting: cancelled (nothing of the person's)
+    let (failed, asked) = tool(&app, "calendar_add", json!({"title": "Banque", "start": "2026-10-30T10:00"})).await;
+    assert!(!failed, "{asked}");
+    let queue = app.get("/v1/calendar/queue", &h).await.json()["queue"].clone();
+    let request = queue[0]["id"].as_str().unwrap().to_string();
+    let said = tokio::time::timeout(std::time::Duration::from_secs(10), tool(&app, "calendar_delete", json!({"id": request})))
+        .await
+        .expect("answered at once");
+    assert!(!said.0 && said.1.contains("Cancelled"), "{said:?}");
+    // after its « Oui » (`call`): asked of the phone
+    let said = calendar::call(&config, "coach", "calendar_delete", &args, None, &remote).unwrap();
+    assert!(said["content"][0]["text"].as_str().unwrap().starts_with(calendar::ASKED), "{said:?}");
+    assert_eq!(deletes(&app.get("/v1/calendar/queue", &h).await.json()["queue"]), 1);
+}

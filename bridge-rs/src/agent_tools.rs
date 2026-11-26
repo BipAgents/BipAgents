@@ -1548,25 +1548,55 @@ fn carnet_turn(state: &AppState, agent: &str, turn: Option<&crate::loop_brake::T
     reads::Turn { run: Some(turn.run_id.clone()), session, cap, busy, phone }
 }
 
+/// What `calendar_delete` may do once its card is settled (`delete_card`).
+enum Deletion {
+    /// Go on: the person said « Oui » to this very event (or a family agent's: its calendar's owner is asked instead,
+    /// family_calendar.rs `owner_card`).
+    Go,
+    /// Not deleted: their « Non », no answer in time, or held for later.
+    Answered(Dict),
+    /// Nothing that would be deleted now, so nothing to ask: the tool's answer, and never a deletion (security review
+    /// 26/11, E5: « nothing found » was read as « no card », and the call then deleted what an id made up named).
+    Nothing(Dict),
+}
+
 /// Before `calendar_delete` (audit 1.3, Alex 17/11: critical, as `mail_trash`): the person's card « Oui / Non » for
-/// an event that would be deleted now (the phone's copy, a mailbox's calendar: deleted at once there, no trash). None:
-/// go on (« Oui », or nothing to delete: the tool says why). A family agent's: the card goes to the calendar's owner
-/// instead, never to whoever asked (family_calendar.rs `owner_card`, Alex 18/11).
-async fn delete_card(state: &AppState, agent: &AgentConfig, arguments: &Dict, family: bool) -> Option<Dict> {
+/// an event that would be deleted now (the phone's copy, a mailbox's calendar: deleted at once there, no trash). A
+/// family agent's: the card goes to the calendar's owner instead, never to whoever asked (family_calendar.rs
+/// `owner_card`, Alex 18/11).
+async fn delete_card(state: &AppState, agent: &AgentConfig, arguments: &Dict, family: bool) -> Deletion {
     if family {
-        return None;
+        return Deletion::Go;
     }
     let config = state.config();
     let id = tk::strip(&tk::str_or_empty(arguments.get("id"))).to_string();
-    let found = if id.starts_with("mail:") {
-        let (c, a) = (config.clone(), agent.name.clone());
-        let sources = tokio::task::spawn_blocking(move || crate::caldav::sources(&c, &a)).await.ok()?;
-        crate::caldav::deletable(&id, &sources).await.map(|(title, start, label)| (title, format!("{start} ({label})")))
+    let (c, a) = (config.clone(), agent.name.clone());
+    let sources = tokio::task::spawn_blocking(move || crate::caldav::sources(&c, &a)).await.unwrap_or_default();
+    let (title, when) = if id.starts_with("mail:") {
+        match crate::caldav::deletable(&id, &sources).await {
+            Ok((title, start, label)) => (title, format!("{start} ({label})")),
+            Err(why) => return Deletion::Nothing(tool_text(&why, true)),
+        }
     } else {
         let (c, a, i) = (config.clone(), agent.name.clone(), id.clone());
-        tokio::task::spawn_blocking(move || crate::calendar::deletable(&c, &a, &i)).await.ok().flatten()
+        match tokio::task::spawn_blocking(move || crate::calendar::deletable(&c, &a, &i)).await.ok().flatten() {
+            Some(found) => found,
+            None => {
+                // the phone calendar's own answer (an unknown id, a repeating event, no right to write, a request of
+                // its own cancelled), never a deletion
+                let (c, a, args) = (config.clone(), agent.name.clone(), arguments.clone());
+                let remote = crate::caldav::Remote::of(&sources);
+                let said = tokio::task::spawn_blocking(move || {
+                    crate::calendar::call_unasked(&c, &a, "calendar_delete", &args, None, &remote)
+                })
+                .await;
+                return Deletion::Nothing(match said {
+                    Ok(Ok(said)) => said,
+                    _ => tool_text("the calendar can't be read just now: nothing was deleted", true),
+                });
+            }
+        }
     };
-    let (title, when) = found?;
     let lang = crate::mail_tidy::language(&config, &agent.name);
     let shown = crate::mail_tidy::shown_agent(&config, &agent.name);
     let card = crate::person_ok::Card {
@@ -1579,10 +1609,10 @@ async fn delete_card(state: &AppState, agent: &AgentConfig, arguments: &Dict, fa
         always_key: None,
     };
     match crate::person_ok::ask(state, agent, card).await {
-        crate::person_ok::Answer::Once | crate::person_ok::Answer::Always => None,
-        crate::person_ok::Answer::Deny => Some(tool_text(crate::calendar::DELETE_REFUSED, true)),
-        crate::person_ok::Answer::NoAnswer => Some(tool_text(crate::calendar::DELETE_NO_ANSWER, true)),
-        crate::person_ok::Answer::Held => Some(tool_text(crate::calendar::DELETE_HELD, false)),
+        crate::person_ok::Answer::Once | crate::person_ok::Answer::Always => Deletion::Go,
+        crate::person_ok::Answer::Deny => Deletion::Answered(tool_text(crate::calendar::DELETE_REFUSED, true)),
+        crate::person_ok::Answer::NoAnswer => Deletion::Answered(tool_text(crate::calendar::DELETE_NO_ANSWER, true)),
+        crate::person_ok::Answer::Held => Deletion::Answered(tool_text(crate::calendar::DELETE_HELD, false)),
     }
 }
 
@@ -2655,8 +2685,13 @@ async fn mcp_call(
     }
     if name == "calendar_delete" {
         // critical (audit 1.3, Alex 17/11: as mail_trash): a card before each event deleted (person_ok.rs)
-        if let Some(refused) = delete_card(&state, &agent, &arguments, family).await {
-            return Ok(answer(refused));
+        match delete_card(&state, &agent, &arguments, family).await {
+            Deletion::Go => {}
+            Deletion::Answered(said) => return Ok(answer(said)),
+            Deletion::Nothing(mut said) => {
+                wrote(&agent.name, &name, &arguments, &mut said);
+                return Ok(answer(said));
+            }
         }
     }
     if family && crate::calendar::TOOL_NAMES.contains(&name.as_str()) {
