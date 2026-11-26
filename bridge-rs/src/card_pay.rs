@@ -1013,6 +1013,16 @@ pub fn payment_id(command: &str) -> Option<&str> {
     (id.len() == 16 && id.starts_with("pay_") && id[4..].bytes().all(|b| b.is_ascii_hexdigit())).then_some(id)
 }
 
+/// The payment id of a Hermes approval that is this bridge's card payment question (an MCP elicitation, approval_level.rs
+/// `card_payment`), never of a terminal command that begins with its words (security review 26/11, E8: the bridge
+/// answers such a question « once » itself in a turn nobody follows, `urgent`).
+pub fn payment_of(item: &Dict) -> Option<&str> {
+    if !crate::approval_level::card_payment(item) {
+        return None;
+    }
+    payment_id(item.get("command").and_then(Value::as_str).unwrap_or(""))
+}
+
 /// A card payment asked in `run_id`, a turn nobody follows (held_approvals.rs): instead of a held card that denies the
 /// run (and loses the cart), the bridge answers Hermes' question itself (nobody else could, and Hermes would give up
 /// after 5 minutes), and the payment waits `URGENT_WINDOW` as the bridge's own card (`bip-pay-<id>`), placed in the
@@ -1020,9 +1030,8 @@ pub fn payment_id(command: &str) -> Option<&str> {
 /// required anyway; « Non » refuses it (`deny`). False: no such payment waiting for this agent (Hermes is answered
 /// « deny »).
 pub async fn urgent(state: &AppState, agent: &AgentConfig, run_id: &str, session: Option<String>, item: &Dict) -> bool {
-    let command = item.get("command").and_then(Value::as_str).unwrap_or("");
     let request_id = item.get("request_id").and_then(Value::as_str).map(str::to_string);
-    let found = payment_id(command)
+    let found = payment_of(item)
         .and_then(|id| mark_urgent(id, &agent.name, run_id, session.as_deref(), urgent_window()).map(|a| (id.to_string(), a)));
     let choice = if found.is_some() { "once" } else { "deny" };
     let answered = state.hermes.answer_prompt(agent, run_id, "approval", choice, request_id.as_deref()).await;
