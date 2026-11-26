@@ -835,6 +835,7 @@ def test_a_file_nested_too_deep_stops_no_read_of_root_s(place, monkeypatch, tmp_
     read(home)   # no RecursionError
 
 
+@pytest.mark.linux   # health() reads /proc (seat-agent.py `running`): Linux only, as the servers run it
 def test_a_file_nested_too_deep_never_stops_the_beat(place, monkeypatch, tmp_path):
     home, system = place
     monkeypatch.setattr(agent, "VAULT_TRIED", str(tmp_path / "tried"))
