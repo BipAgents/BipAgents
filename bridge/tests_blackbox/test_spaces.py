@@ -54,11 +54,13 @@ def test_an_agent_moves_into_its_own_space(bridges, fakes):
     copied = root / "profiles" / "coach"
     assert (copied / "SOUL.md").read_text().startswith("Tu es Coach.") and (copied / "memories" / "MEMORY.md").exists()
     assert not (copied / "gateway.pid").exists()
-    commands = [(e["argv"], e["hermes_home"]) for e in bridge.commands.entries("hermes")]
+    hermes_commands = lambda: [(e["argv"], e["hermes_home"]) for e in bridge.commands.entries("hermes")]  # noqa: E731
+    # the hub forgets it once its turns there ended (own_space.rs `finish`, after the move is saved): none here
+    assert wait_until(lambda: (["profile", "delete", "coach", "--yes"], str(hub)) in hermes_commands(), timeout=30)
+    commands = hermes_commands()
     settings = yaml.safe_load((copied / "config.yaml").read_text())   # written by the bridge, no `hermes config set`
     assert settings["gateway"]["strict"] is True and settings["browser"]["backend"] == "off"
     assert not any(argv[2:4] == ["config", "set"] and argv[4] in ("gateway.strict", "browser.backend") for argv, _ in commands)
-    assert (["profile", "delete", "coach", "--yes"], str(hub)) in commands        # the hub forgets it
     assert bridge.commands.of("fake-gateway") == [[str(root)]]
     # Its tools came with its profile (the same entry and token: nothing to register again).
     assert yaml.safe_load((copied / "config.yaml").read_text())["mcp_servers"]["bipagents"]["timeout"] == 1800
