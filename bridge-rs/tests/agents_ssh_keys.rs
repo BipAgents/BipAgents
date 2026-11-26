@@ -1,5 +1,5 @@
-//! A place of the all-included offer has no SSH (Alex, 2026-11-26): its account has no login shell and the server's
-//! SSH refuses it (installer/cloud), and the bridge no longer opens it to a key. An app from before still asks
+//! A place of the all-included offer has no SSH (Alex, 2026-11-26): the server's SSH refuses its account
+//! (installer/cloud/seat-agent.py), and the bridge no longer opens it to a key. An app from before still asks
 //! `/v1/ssh`: the bridge answers that there is none, as the apps already show it, and touches no key. A place that
 //! starts, and a reopen, take away any key still in its account. The keys' folder is the place's home from the config
 //! (common::config_dict: the test's own folder). Its own test binary: each test points HOME at a decoy holding a key,

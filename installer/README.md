@@ -322,7 +322,7 @@ Before and after, on the same provider and size, a fresh server each time:
    min ») and `/var/log/bipagents-images.log` (« … (new) »).
 6. From the app: the time from paying to « ready » on the phone, and from pairing to the first answer.
 7. Disk: `du -sh /opt/bipagents/hermes /var/lib/bipagents/images /home/*/.local/share/containers`: the accounts'
-   own image storage should stay small (no browser or sandbox image in it: `sudo -u bip2 -H bash -lc 'cd && podman images'` lists them
+   own image storage should stay small (no browser or sandbox image in it: `sudo -iu bip2 podman images` lists them
    as read-only, `R/O`).
 
 The « before » numbers: 18 min for a full install (DigitalOcean, 2026-10-19); 13.5 min for a first place and 10.5 min

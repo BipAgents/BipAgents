@@ -11,9 +11,8 @@
 # by system but the zram line's fallback (below).
 #
 # It creates the `bip` account (BipAgents and its agents, without sudo: an agent that got out of its sandbox would not
-# be root; nor a login shell, and the server's SSH refuses it: no place logs in, Alex 2026-11-26), lets in only the
-# bridge's door (443) and SSH by key for the server's own administrator account, turns on security updates, then runs
-# the installer in `--cloud` mode as `bip` (installer/bipinstall/cloud.py). Its log: /var/log/bipagents-install.log.
+# be root), lets in only the bridge's door (443) and SSH by key, turns on security updates, then runs the installer in
+# `--cloud` mode as `bip` (installer/bipinstall/cloud.py). Its log: /var/log/bipagents-install.log.
 #
 # The guichet turns this text into the first-boot script of its reserve's servers (guichet/bipguichet/bootstrap.py):
 # OVHcloud's VPS take a shell script, not cloud-config. ASCII only: DigitalOcean ignored the whole user-data when it
@@ -22,7 +21,7 @@
 users:
   - default
   - name: bip
-    shell: /usr/sbin/nologin
+    shell: /bin/bash
     lock_passwd: true
 
 package_update: true
@@ -54,7 +53,7 @@ packages:
   - fuse-overlayfs
   # The metadata service for root only (bipagents-metadata-block.service, below).
   - nftables
-  # In Ubuntu's cloud images already, not in Debian 13's (Hetzner's has no sudo at all): the install's `sudo -u bip`,
+  # In Ubuntu's cloud images already, not in Debian 13's (Hetzner's has no sudo at all): the install's `sudo -iu bip`,
   # the user bus rootless podman's systemd cgroups need, and the restarts after an update (below).
   - sudo
   - dbus-user-session
@@ -72,11 +71,6 @@ write_files:
   - path: /etc/ssh/sshd_config.d/10-bipagents.conf
     content: |
       PasswordAuthentication no
-  # No place's account logs in by SSH (the seat agent writes the same file on servers installed before: no_login).
-  - path: /etc/ssh/sshd_config.d/11-bipagents-places.conf
-    content: |
-      # BipAgents: no place's account logs in by SSH (installer/cloud/seat-agent.py, user-data.yaml).
-      DenyUsers bip bip2 bip3 bip4 bip5 bip6 bip7 bip8 bip9 bip10 bip11 bip12 bip13 bip14 bip15 bip16 bip17 bip18 bip19 bip20 bip21 bip22 bip23 bip24 bip25 bip26 bip27 bip28 bip29 bip30 bip31 bip32 bip33 bip34 bip35 bip36 bip37 bip38 bip39 bip40
   - path: /etc/systemd/journald.conf.d/60-bipagents.conf
     content: |
       # The logs of all the server's places stay under 200 MB together.
@@ -290,8 +284,7 @@ runcmd:
   - git -C /usr/local/lib/bipagents/repo -c advice.detachedHead=false checkout --quiet --force origin/HEAD
   - cd /usr/local/lib/bipagents/repo && { PYTHONPATH=installer python3 -m bipinstall.shared_hermes enable > /var/log/bipagents-shared-hermes.log 2>&1 & PYTHONPATH=installer python3 -m bipinstall.shared_images pull --timer > /var/log/bipagents-images.log 2>&1 & wait; }; cd /
   - echo "$(date -u +%FT%TZ) shared done, install start" >> /var/log/bipagents-timeline.log
-  # In bip's login environment, from bash itself: never through its login shell (nologin).
-  - sudo -u bip -H bash -lc 'cd && curl -fsSL https://raw.githubusercontent.com/BipAgents/BipAgents/stable/install.sh | bash -s -- --cloud /etc/bipagents/cloud.json' > /var/log/bipagents-install.log 2>&1
+  - sudo -iu bip bash -c 'curl -fsSL https://raw.githubusercontent.com/BipAgents/BipAgents/stable/install.sh | bash -s -- --cloud /etc/bipagents/cloud.json' > /var/log/bipagents-install.log 2>&1
   - echo "$(date -u +%FT%TZ) install done" >> /var/log/bipagents-timeline.log
   # The installer kept the secret for the bridge (deleted once the app has paired); this copy goes.
   - shred -u /etc/bipagents/cloud.json || rm -f /etc/bipagents/cloud.json

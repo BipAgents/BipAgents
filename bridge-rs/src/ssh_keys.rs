@@ -1,9 +1,9 @@
 //! `/v1/ssh` on a place of the all-included offer, closed (Alex, 2026-11-26). Since 20/10 the app could put an SSH key
 //! in the place's account, which gave the person a shell on a server shared with other places: where the attacks on
 //! the neighbours started (security review 2026-11-26: C1, E1, E3, E7), and nobody on the offer needed it (whoever
-//! wants SSH has a server of their own, where it stays theirs). The account has no login shell now and the server's
-//! SSH refuses it (installer/cloud: user-data.yaml, add-seat.sh, seat-agent.py's `no_login`). On someone's own computer
-//! the app never offered SSH. An app from before still asks, and gets what it already shows without an error screen:
+//! wants SSH has a server of their own, where it stays theirs). The server's SSH refuses the place's account now
+//! (installer/cloud/seat-agent.py, `deny_places_ssh`). On someone's own computer the app never offered SSH. An app
+//! from before still asks, and gets what it already shows without an error screen:
 //!
 //!     GET    /v1/ssh                                  {enabled: false, keys: []}
 //!     POST   /v1/ssh/keys                             403

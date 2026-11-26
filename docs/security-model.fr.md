@@ -499,8 +499,8 @@ podman, il sort par le même proxy.
 > de « Coordonnées » qu'après que tu as confirmé que d'autres lui parlent.
 
 **Les espaces de l'offre.** Ta place est un compte Linux à toi sur un serveur partagé avec d'autres places : pas de
-sudo, un mot de passe verrouillé, ni shell de connexion ni SSH (le serveur SSH refuse les comptes des places, et l'app
-n'ajoute aucune clé : `installer/cloud/seat-agent.py` `no_login`, `bridge-rs/src/ssh_keys.rs`), sa propre plage
+sudo, un mot de passe verrouillé, pas de SSH (le serveur SSH refuse les comptes des places, et l'app n'ajoute aucune
+clé : `installer/cloud/seat-agent.py` `deny_places_ssh`, `bridge-rs/src/ssh_keys.rs`), sa propre plage
 d'identifiants pour ses bacs à sable, sa propre image disque (5 Go), sa propre part de mémoire et de processeur
 (`installer/cloud/add-seat.sh`). Les places ne partagent ni fichiers, ni
 clés, ni agents. Le serveur des voix est partagé (il reçoit du texte à dire, pas des fichiers).

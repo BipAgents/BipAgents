@@ -25,8 +25,7 @@ def test_the_user_data_the_apps_send_sets_up_the_server_and_runs_the_cloud_insta
     text = render(pair)
     assert text.startswith("#cloud-config\n") and "{{" not in text
     data = yaml.safe_load(text)
-    # no sudo, no password, no login shell (the server's SSH refuses it too: test_no_place_account_logs_in_by_ssh)
-    assert data["users"][1] == {"name": "bip", "shell": "/usr/sbin/nologin", "lock_passwd": True}
+    assert data["users"][1] == {"name": "bip", "shell": "/bin/bash", "lock_passwd": True}   # no sudo
     assert {"podman", "catatonit", "uidmap", "ufw", "unattended-upgrades"} <= set(data["packages"])
     files = {f["path"]: f for f in data["write_files"]}
     setup = files["/etc/bipagents/cloud.json"]
@@ -40,8 +39,7 @@ def test_the_user_data_the_apps_send_sets_up_the_server_and_runs_the_cloud_insta
     assert commands.index("ufw default deny incoming") < commands.index("ufw --force enable")
     assert "ufw allow 443/tcp" in commands and not any("ufw allow 80" in c for c in commands)
     install = next(c for c in commands if "/install.sh |" in c)
-    # in its login environment, as `sudo -iu bip` gave it, without going through its login shell (nologin)
-    assert install.startswith("sudo -u bip -H bash -lc 'cd && curl ") and "--cloud /etc/bipagents/cloud.json" in install
+    assert install.startswith("sudo -iu bip ") and "--cloud /etc/bipagents/cloud.json" in install
     # Hermes and the agents' images first, ready-made, once for the server (root's own BipAgents), both at once.
     shared = next(c for c in commands if "bipinstall.shared_hermes enable" in c)
     assert "bipinstall.shared_images pull --timer" in shared and shared.count(" & ") == 2 and "wait;" in shared
@@ -439,7 +437,11 @@ def test_the_beat_s_body_and_its_order(tmp_path, monkeypatch):
     monkeypatch.setattr(agent, "memory_settled", lambda server: steps.append(("settled", server["memory_mb"])))
     monkeypatch.setattr(agent, "disk_settled", lambda: {"1": {"disk_mb": 900, "disk": "ok"}})
     monkeypatch.setattr(agent, "zram", lambda: steps.append("zram"))
-    monkeypatch.setattr(agent, "no_login", lambda: steps.append("no_login"))   # every round, before the beat
+
+    def deny():   # every round, before the beat; whatever it raises never stops the round (review M2)
+        steps.append("deny_places_ssh")
+        raise UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte")
+    monkeypatch.setattr(agent, "deny_places_ssh", deny)
 
     def call(conf, method, path, body=None):
         sent.append((path, body))
@@ -450,7 +452,7 @@ def test_the_beat_s_body_and_its_order(tmp_path, monkeypatch):
     assert sent == [("/v1/server/beat", {"seats": {"1": {"up": True}}, "server": {"memory_mb": 7812},
                                          "places": {"1": {"mem_mb": 812, "mem_peak_mb": 1630, "disk_mb": 900,
                                                           "disk": "ok"}}})]
-    assert steps == ["no_login", ("settled", 7812), ("settled", 7812), "zram"]
+    assert steps == ["deny_places_ssh", ("settled", 7812), ("settled", 7812), "zram"]
     assert json.loads((tmp_path / "settings.json").read_text()) == {"memory_high_share": 0.3}
 
 
@@ -471,7 +473,7 @@ def test_a_long_order_keeps_the_server_beating(tmp_path, monkeypatch):
     monkeypatch.setattr(agent, "memory_settled", lambda server: None)
     monkeypatch.setattr(agent, "disk_settled", lambda: {"1": {"disk_mb": 900}})
     monkeypatch.setattr(agent, "zram", lambda: None)
-    monkeypatch.setattr(agent, "no_login", lambda: [])
+    monkeypatch.setattr(agent, "deny_places_ssh", lambda: True)
     monkeypatch.setattr(agent, "add_moves", lambda beat: beat.__setitem__("moves", {"m1": {"phase": "copy"}}))
     monkeypatch.setattr(agent, "verified", lambda body, signature: True)
     monkeypatch.setattr(agent, "accepted", lambda order, server, done, now: json.loads(order["body"]))
@@ -698,7 +700,7 @@ def test_a_new_place_gets_the_shared_hermes_and_images_of_its_version_first(tmp_
     assert 'pin="${pin}BIPAGENTS_TO_REPO=$repo "' in text   # the version's repository, a known one (case above it)
     # install.sh of the pinned version itself, never the branch's tip (review R10)
     assert 'installer="https://raw.githubusercontent.com/${slug%.git}/$version/install.sh"' in text
-    assert 'sudo -u "$user" -H bash -lc "cd && curl -fsSL $installer | ${pin}bash -s -- --cloud $setup"' in text
+    assert 'bash -c "curl -fsSL $installer | ${pin}bash -s -- --cloud $setup"' in text
     assert text.index("--ceiling") < prepare < text.index("curl -fsSL $installer |")
 
 
@@ -721,7 +723,7 @@ def test_an_update_order_naming_a_repository_moves_the_place_there(tmp_path, mon
     new, commit = "https://github.com/BipAgents/BipAgents.git", "c" * 40  # known-public-repos
     assert agent.update_order(2, commit, moves=str(tmp_path / "moves"), home=str(tmp_path), repo=new)
     assert prepared == [(commit, new)]
-    assert ran[-1][:8] == agent.as_place("bip2") and "BIPAGENTS_TO=" + commit in ran[-1]
+    assert ran[-1][:2] == ["sudo", "-iu"] and "BIPAGENTS_TO=" + commit in ran[-1]
     assert "BIPAGENTS_TO_REPO=" + new in ran[-1]
     assert ran[-1].index("BIPAGENTS_TO_REPO=" + new) < ran[-1].index("BipAgents/install.sh")
     prepared.clear(), ran.clear()
@@ -762,7 +764,7 @@ def test_a_pretest_order_updates_that_place_alone_and_leaves_what_the_server_sha
     assert not any("shared_images" in " ".join(a) for a in ran), "the images' store pulled"
     assert any(a[-1] == commit and str(tmp_path / "repo-pretest") in a for a in ran), "its own checkout at its commit"
     assert any(a[:4] == ["python3", "-m", "bipinstall.shared_hermes", "build"] for a in ran)
-    assert ran[-1][:8] == agent.as_place("bip2") and "BIPAGENTS_TO=" + commit in ran[-1]
+    assert ran[-1][:2] == ["sudo", "-iu"] and "BIPAGENTS_TO=" + commit in ran[-1]
     # the order's word, checked: a boolean or nothing
     now = __import__("time").time()
     body = {"order": 3, "server": "vps-1", "seat": 2, "action": "update", "expires": int(now + 3600),
@@ -794,7 +796,7 @@ def test_an_update_order_naming_a_repository_moves_the_place_there(tmp_path, mon
     new, commit = "https://github.com/BipAgents/BipAgents.git", "c" * 40  # known-public-repos
     assert agent.update_order(2, commit, moves=str(tmp_path / "moves"), home=str(tmp_path), repo=new)
     assert prepared == [(commit, new)]
-    assert ran[-1][:8] == agent.as_place("bip2") and "BIPAGENTS_TO=" + commit in ran[-1]
+    assert ran[-1][:2] == ["sudo", "-iu"] and "BIPAGENTS_TO=" + commit in ran[-1]
     assert "BIPAGENTS_TO_REPO=" + new in ran[-1]
     assert ran[-1].index("BIPAGENTS_TO_REPO=" + new) < ran[-1].index("BipAgents/install.sh")
     prepared.clear(), ran.clear()
@@ -903,97 +905,104 @@ def test_the_seat_agent_waits_for_its_token_and_keeps_the_metadata_block(tmp_pat
     assert ran == [("nft", "list", "table", "inet", "bipagents_metadata")]   # there: left as it is
 
 
-# what runs a command through the account's own login shell: `sudo -i`/`-iu`, `su -`, `runuser -l`, `machinectl shell`
-PLACE_SHELLS = r"""\bsudo\s+-iu?\b|["']sudo["'],\s*["']-iu?["']|\bsu\s+-|\brunuser\s+-l\b|\bmachinectl\s+shell\b"""
+class Sshd:
+    """A fake `sshd -t` and systemctl for deny_places_ssh: what each was asked, whether /run/sshd was there for the
+    check, and what they answer (sshd -t failing always, or only while the places' rule is in)."""
+
+    def __init__(self, rule, run_dir, check=0, without_rule=0, reload=0):
+        self.rule, self.run_dir, self.ran = rule, run_dir, []
+        self.check, self.without_rule, self.reload = check, without_rule, reload
+
+    def __call__(self, *args):
+        import os
+        if args == ("/usr/sbin/sshd", "-t"):
+            self.ran.append(("sshd -t", os.path.exists(self.rule), os.path.isdir(self.run_dir)))
+            return self.check if os.path.exists(self.rule) else self.without_rule
+        self.ran.append(args)
+        return self.reload
 
 
-def test_no_place_account_logs_in_by_ssh_nor_has_a_login_shell():
+def test_the_seat_agent_has_the_ssh_server_refuse_the_places_and_leaves_it_so(tmp_path, monkeypatch):
     """Alex, 2026-11-26 (security review C1, E1, E3, E7: a place's shell was where the attacks on its neighbours
-    started): a place's account has no login shell (nologin) and the server's SSH refuses it, on a new server
-    (user-data.yaml for place 1, add-seat.sh for the others and any place installed again) as on one installed before
-    (the seat agent's no_login); the server's own administrator account keeps its SSH. Nothing root runs as a place
-    goes through that shell: its install and updates take the account's login environment from bash itself."""
-    import re
-    agent = _seat_agent()
-    data = yaml.safe_load(render("A" * 43))
-    assert data["users"][1]["shell"] == "/usr/sbin/nologin"
-    files = {f["path"]: f for f in data["write_files"]}
-    refused = files[agent.SSHD_PLACES]
-    assert refused["content"] == agent.sshd_places()
-    denied = next(line for line in agent.sshd_places().splitlines() if line.startswith("DenyUsers "))
-    assert denied.split()[1:] == ["bip"] + ["bip%d" % n for n in range(2, agent.MAX_SEATS + 1)]
-    assert "lab" not in denied.split() and "bipmove" not in denied.split()   # the move's own sshd reads none of it
-    assert agent.SSHD_PLACES.startswith("/etc/ssh/sshd_config.d/") and agent.SSHD_PLACES.endswith(".conf")
-    commands = data["runcmd"]
-    assert "systemctl restart ssh" in commands   # after the files: the rule is on before any place runs
-    install = next(c for c in commands if "/install.sh |" in c)
-    assert install.startswith("sudo -u bip -H bash -lc 'cd && curl ")
-    seat = (ROOT / "installer" / "cloud" / "add-seat.sh").read_text(encoding="utf-8")
-    assert 'useradd --create-home --shell /usr/sbin/nologin "$user"' in seat
-    assert '|| usermod --shell /usr/sbin/nologin "$user"' in seat   # an account there before: nologin too
-    assert seat.index("usermod --shell /usr/sbin/nologin") < seat.index("loginctl enable-linger") < seat.index(
-        'sudo -u "$user" -H bash -lc "cd && curl')
-    assert agent.as_place("bip2") == ["sudo", "-u", "bip2", "-H", "bash", "-lc", 'cd && exec "$@"', "bash"]
-    # root's scripts never go through a place's login shell (it would refuse: « This account is currently not
-    # available »)
-    for name in ("user-data.yaml", "add-seat.sh", "seat-agent.py", "place-move.py", "nightly-reboot.sh"):
-        text = (ROOT / "installer" / "cloud" / name).read_text(encoding="utf-8")
-        code = "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#"))
-        assert not re.findall(PLACE_SHELLS, code), name
-
-
-def test_the_seat_agent_closes_the_places_logins_and_leaves_them_so(tmp_path, monkeypatch):
-    """Each round (servers installed before get it with the agent's next refresh): every place's account given nologin,
-    the server's SSH told to refuse them (the drop-in checked by `sshd -t` before sshd reads it again); nothing written
-    or reloaded once it is so. Only the places' accounts, never another."""
+    started): the server's SSH refuses bip, bip2 ... bip40, its tunnels too (`ssh -N`); the server's own administrator
+    account and the move's own sshd (place-move.py, its own settings and `bipmove`) are not concerned. The accounts
+    keep their shell this time: root's `sudo -iu` needs it, an agent from before a rollback too. Written once, checked
+    by `sshd -t` before sshd reads it, then nothing while it is so."""
     import os
-    import types
     agent = _seat_agent()
     monkeypatch.setattr(agent, "log", lambda text: None)
     folder = tmp_path / "sshd_config.d"
     folder.mkdir()
-    path = folder / "11-bipagents-places.conf"
-    shells = {"bip": "/bin/bash", "bip2": "/usr/sbin/nologin", "bip3": "/bin/bash"}
-    ran = []
-
-    def entries():
-        return [types.SimpleNamespace(pw_name=name, pw_shell=shell) for name, shell in shells.items()]
-
-    def runner(*args):
-        ran.append(args)
-        if args[:2] == ("usermod", "--shell"):
-            shells[args[3]] = args[2]
-        return 0
-
-    assert agent.no_login(str(path), runner, entries) == ["bip", "bip3", "sshd"]
-    assert ran == [("usermod", "--shell", "/usr/sbin/nologin", "bip"),
-                   ("usermod", "--shell", "/usr/sbin/nologin", "bip3"),
-                   ("/usr/sbin/sshd", "-t"), ("systemctl", "try-reload-or-restart", "ssh.service")]
-    assert path.read_text() == agent.sshd_places() and oct(path.stat().st_mode & 0o777) == "0o644"
-    assert os.listdir(folder) == [path.name]   # no temporary file left (one ending in .conf would be read too)
-    ran.clear()
-    assert agent.no_login(str(path), runner, entries) == [] and ran == []   # so already: nothing done
+    rule, pending, run_dir = folder / "11-bipagents-places.conf", tmp_path / "pending", tmp_path / "run-sshd"
+    text = agent.sshd_places()
+    denied = next(line for line in text.decode().splitlines() if line.startswith("DenyUsers "))
+    assert denied.split()[1:] == ["bip"] + ["bip%d" % n for n in range(2, agent.MAX_SEATS + 1)]
+    assert "lab" not in denied.split() and "bipmove" not in denied.split()
+    assert agent.SSHD_PLACES == "/etc/ssh/sshd_config.d/11-bipagents-places.conf"
+    sshd = Sshd(rule, run_dir)
+    assert agent.deny_places_ssh(str(rule), sshd, str(pending), str(run_dir))
+    assert sshd.ran == [("sshd -t", True, True), ("systemctl", "try-reload-or-restart", "ssh.service")]
+    assert rule.read_bytes() == text and oct(rule.stat().st_mode & 0o777) == "0o644"
+    assert os.listdir(folder) == [rule.name] and not pending.exists()   # nothing else left (a .conf would be read)
+    sshd.ran.clear()
+    assert agent.deny_places_ssh(str(rule), sshd, str(pending), str(run_dir)) and sshd.ran == []   # so: nothing
     # changed by hand: written again
-    path.write_text("DenyUsers nobody\n")
-    assert agent.no_login(str(path), runner, entries) == ["sshd"]
-    assert path.read_text() == agent.sshd_places()
-    # sshd refuses its settings with the file in: the file goes, sshd isn't reloaded (it would stop)
-    path.unlink()
-    ran.clear()
-    assert agent.no_login(str(path), lambda *args: ran.append(args) or (1 if args[-1] == "-t" else 0), entries) == []
-    assert not path.exists() and ran == [("/usr/sbin/sshd", "-t")]
+    rule.write_text("DenyUsers nobody\n")
+    assert agent.deny_places_ssh(str(rule), sshd, str(pending), str(run_dir)) and rule.read_bytes() == text
     # no OpenSSH server on the server: nothing to write
-    assert agent.no_login(str(tmp_path / "none" / "x.conf"), runner, entries) == []
-    # the places' accounts only, by their numbers (bip, bip2... bip40): never the move's account, nor any other
-    known = {"bip": 1000, "bip7": 1006, "bip41": 1040, "bipmove": 998, "lab": 1001}
+    assert not agent.deny_places_ssh(str(tmp_path / "none" / "x.conf"), sshd, str(pending), str(run_dir))
+    # the agent's own text never says « no login shell »: the accounts keep theirs, and what root runs as them
+    code = (ROOT / "installer" / "cloud" / "seat-agent.py").read_text(encoding="utf-8")
+    assert "usermod" not in code and "nologin" not in code
+    assert '["sudo", "-iu", user, "env"' in code
 
-    def getpwnam(name):
-        if name not in known:
-            raise KeyError(name)
-        return types.SimpleNamespace(pw_name=name, pw_uid=known[name], pw_shell="/bin/bash")
 
-    monkeypatch.setattr(agent.pwd, "getpwnam", getpwnam)
-    assert [e.pw_name for e in agent.place_entries()] == ["bip", "bip7"]
+def test_review_m2_a_rule_file_that_is_not_text_is_written_again_and_never_stops_the_round(tmp_path, monkeypatch):
+    agent = _seat_agent()
+    monkeypatch.setattr(agent, "log", lambda text: None)
+    (tmp_path / "d").mkdir()
+    rule = tmp_path / "d" / "11-bipagents-places.conf"
+    rule.write_bytes(b"\xff\xfe DenyUsers bip\n")
+    sshd = Sshd(rule, tmp_path / "run")
+    assert agent.deny_places_ssh(str(rule), sshd, str(tmp_path / "pending"), str(tmp_path / "run"))
+    assert rule.read_bytes() == agent.sshd_places()
+
+
+def test_review_m3_sshd_failing_for_another_reason_keeps_the_rule_and_tries_again(tmp_path, monkeypatch):
+    """Ubuntu 24.04's ssh.socket: /run/sshd is missing after a reboot and `sshd -t` fails without it. The folder is
+    made first; `sshd -t` failing without the places' rule too says the rule isn't the cause: kept, sshd told again
+    next round. Only a rule sshd refuses goes. sshd not told (its reload failing): told again next round."""
+    agent = _seat_agent()
+    monkeypatch.setattr(agent, "log", lambda text: None)
+    (tmp_path / "d").mkdir()
+    rule, pending, run_dir = tmp_path / "d" / "11-bipagents-places.conf", tmp_path / "pending", tmp_path / "run-sshd"
+    args = (str(rule), str(pending), str(run_dir))
+
+    def deny(sshd):
+        return agent.deny_places_ssh(args[0], sshd, args[1], args[2])
+
+    # /run/sshd missing: made before the check
+    sshd = Sshd(rule, run_dir)
+    assert deny(sshd) and sshd.ran[0] == ("sshd -t", True, True)
+    rule.unlink()
+    # sshd -t fails with the rule and without it: not the rule's fault, kept, tried again
+    sshd = Sshd(rule, run_dir, check=1, without_rule=1)
+    assert not deny(sshd)
+    assert rule.read_bytes() == agent.sshd_places() and pending.exists()
+    assert ("systemctl", "try-reload-or-restart", "ssh.service") not in sshd.ran
+    sshd = Sshd(rule, run_dir)   # next round, sshd fine again: the same rule, told now
+    assert deny(sshd) and sshd.ran[-1] == ("systemctl", "try-reload-or-restart", "ssh.service") and not pending.exists()
+    # sshd -t fails only with the rule: the rule goes, sshd not told
+    rule.unlink()
+    sshd = Sshd(rule, run_dir, check=1, without_rule=0)
+    assert not deny(sshd) and not rule.exists()
+    assert sshd.ran == [("sshd -t", True, True), ("sshd -t", False, True)]
+    # its reload fails: not done, told again next round although the file is the same
+    sshd = Sshd(rule, run_dir, reload=1)
+    assert not deny(sshd) and pending.exists()
+    sshd = Sshd(rule, run_dir)
+    assert deny(sshd) and sshd.ran == [("sshd -t", True, True), ("systemctl", "try-reload-or-restart", "ssh.service")]
+    assert not pending.exists()
 
 
 def test_an_encrypted_place_s_server_is_hardened_before_any_place_runs():

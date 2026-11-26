@@ -458,8 +458,8 @@ and autofill are off. On a podman install it goes out through the same proxy.
 > talk to it.
 
 **The offer's spaces.** Each person's place is a Linux account of its own on a server shared with other places: no
-sudo, a locked password, no login shell and no SSH (the server's SSH refuses the places' accounts, and the app adds no
-key: `installer/cloud/seat-agent.py` `no_login`, `bridge-rs/src/ssh_keys.rs`), its own range of user ids for its
+sudo, a locked password, no SSH (the server's SSH refuses the places' accounts, and the app adds no key:
+`installer/cloud/seat-agent.py` `deny_places_ssh`, `bridge-rs/src/ssh_keys.rs`), its own range of user ids for its
 sandboxes, its own disk image (5 GB), its own memory and CPU share (`installer/cloud/add-seat.sh`). Places don't
 share files, keys or agents. The voices' TTS server is shared (it receives text to speak, not files).
 
