@@ -189,6 +189,47 @@ pub fn forget_all(config: &Config) -> std::io::Result<usize> {
     }
 }
 
+/// Where a reopen notes that the keys could not all go (a write refused, a full disk): the bridge's data folder.
+fn left_mark(config: &Config) -> PathBuf {
+    PathBuf::from(config.data_dir()).join("ssh-keys-to-forget")
+}
+
+/// At a reopen: [`forget_all`]. A failure is never silent: logged as an error and marked, so each next start of the
+/// bridge tries again ([`forget_left`]) and says so until the keys are gone. The reopen itself goes on. Whether the
+/// keys are gone.
+pub fn forget_at_reopen(config: &Config) -> bool {
+    let mark = left_mark(config);
+    match forget_all(config) {
+        Ok(gone) => {
+            if gone > 0 {
+                tracing::info!(gone, "the account's SSH keys removed at a reopen");
+            }
+            if mark.exists() {
+                let _ = std::fs::remove_file(&mark);
+                tracing::info!("the SSH keys a reopen could not remove are gone now");
+            }
+            true
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "the account's SSH keys could not be removed at a reopen: tried at each start");
+            if let Err(w) = crate::py::write_with_mode(&mark.to_string_lossy(), b"1\n", 0o600) {
+                tracing::error!(error = %w, "and the mark to try again could not be written");
+            }
+            false
+        }
+    }
+}
+
+/// At the bridge's start: the SSH keys a reopen could not remove (its mark), tried again. Whether none are left to
+/// remove.
+pub fn forget_left(config: &Config) -> bool {
+    if !left_mark(config).exists() {
+        return true;
+    }
+    tracing::warn!("a reopen left SSH keys on this place: removing them now");
+    forget_at_reopen(config)
+}
+
 fn forget_in(home: &Path) -> std::io::Result<usize> {
     let mut gone = 0;
     for name in ["authorized_keys", "authorized_keys2"] {
@@ -437,6 +478,30 @@ mod tests {
         assert_eq!(folder(&config).as_deref(), Some(home.path()));
         assert_eq!(forget_all(&config).unwrap(), 1);
         assert!(keys(home.path()).is_empty());
+    }
+
+    /// A reopen whose keys can't go is never silent: marked, and the next start tries again until they are gone.
+    #[test]
+    fn keys_a_reopen_could_not_remove_are_removed_at_the_next_start() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::write(home.join(".ssh"), "a file where the folder should be").unwrap();
+        let mut config = Config::with_key("k".repeat(40));
+        config.cloud = true;
+        config.place_home = Some(home.to_string_lossy().into_owned());
+        config.outbox.db_path = dir.path().join("data").join("bridge.db").to_string_lossy().into_owned();
+        std::fs::create_dir_all(dir.path().join("data")).unwrap();
+        let mark = dir.path().join("data").join("ssh-keys-to-forget");
+        assert!(forget_left(&config) && !mark.exists(), "nothing left: nothing done");
+        assert!(!forget_at_reopen(&config));
+        assert!(mark.exists());
+        assert!(!forget_left(&config) && mark.exists(), "still failing: still marked");
+        std::fs::remove_file(home.join(".ssh")).unwrap();
+        std::fs::create_dir(home.join(".ssh")).unwrap();
+        std::fs::write(home.join(".ssh/authorized_keys"), format!("{GOOD}\n")).unwrap();
+        assert!(forget_left(&config));
+        assert!(!mark.exists() && keys(&home).is_empty());
     }
 
     #[test]

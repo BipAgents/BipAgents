@@ -415,6 +415,8 @@ impl AppState {
                 });
             }
             if config.cloud {
+                // the SSH keys a reopen could not remove, tried again (ssh_keys.rs)
+                crate::ssh_keys::forget_left(&config);
                 // a place of the reserve: its first agent made before its claim; what a claim left, finished
                 self.spawn(crate::cloud_setup::prepare_when_installed(self.config.clone(), self.http.clone()));
                 if crate::cloud_setup::has_pending(&config) {
