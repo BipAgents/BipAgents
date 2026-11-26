@@ -400,8 +400,7 @@ async fn held(state: &AppState, agent: &AgentConfig, run_id: &str, session: Opti
             .await;
         return;
     }
-    let command = item.get("command").and_then(Value::as_str).unwrap_or("");
-    if crate::card_pay::payment_id(command).is_some() {
+    if crate::card_pay::payment_of(&item).is_some() {
         // a card payment (a watcher found the ticket): never a held card, which would end the run and lose the cart;
         // it waits for the person a few minutes, pushed urgent (card_pay.rs `urgent`)
         crate::card_pay::urgent(state, agent, run_id, session, &item).await;
@@ -454,7 +453,8 @@ mod tests {
     fn a_held_approval_waits_joins_the_same_and_is_granted_once() {
         let dir = tempfile::tempdir().unwrap();
         let config = config_in(&dir);
-        let ask = data(json!({"command": "MCP tool 'move_page' on UNTRUSTED server 'notion'", "bip_summary": "Vie veut ranger"}));
+        let mut ask = crate::approval_level::hermes_gate("move_page", "notion");
+        ask.insert("bip_summary".into(), json!("Vie veut ranger"));
         let now = py::time_time();
         let (card, joined) = hold(&config, "vie", "run_1", Some("s_rout"), &ask, Some("r1"), now + 3600.0);
         assert!(!joined && card.summary == "Vie veut ranger" && card.kind == "service_write");

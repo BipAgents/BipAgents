@@ -272,7 +272,10 @@ def test_toujours_on_a_service_write_is_per_service_and_hermes_only_hears_once(b
     def watched(run, request, server):
         gate = threading.Event()
         hermes.runs[run] = [sse("approval.request", run_id=run, request_id=request, choices=["once", "deny"],
-                                command=write.format(s=server), pattern_key="mcp_elicitation"), gate,
+                                command=write.format(s=server), pattern_key="mcp_elicitation",
+                                description=(f"Server '{server}' is configured 'trust: untrusted'. Approve to run "
+                                             "'notion_create_page' once, for this session, or always, or deny to "
+                                             "block it.")), gate,
                             sse("run.completed", run_id=run, output="Fait.")]
         assert bridge.post("/v1/watch", headers=AUTH,
                            json={"agent": "wellness", "run_id": run, "session_id": "api_main"}).status_code == 200

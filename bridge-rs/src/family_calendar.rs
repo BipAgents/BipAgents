@@ -167,7 +167,13 @@ async fn served(
     }
     let (config_c, id_c, name_c) = (config.clone(), id.clone(), name.clone());
     let result = tokio::task::spawn_blocking(move || {
-        crate::calendar::call(&config_c, &id_c, &name_c, &arguments, None, &crate::caldav::Remote::default())
+        let remote = crate::caldav::Remote::default();
+        if name_c == "calendar_delete" {
+            // nothing to ask her about (`owner_card`): never deleted (review 26/11, E5; calendar.rs `call_unasked`)
+            crate::calendar::call_unasked(&config_c, &id_c, &name_c, &arguments, None, &remote)
+        } else {
+            crate::calendar::call(&config_c, &id_c, &name_c, &arguments, None, &remote)
+        }
     })
     .await
     .map_err(anyhow::Error::from)??;
@@ -227,7 +233,7 @@ again.";
 
 /// `calendar_delete` of this place's calendar as `agent_id` (the family agent on its creator's place, `<agent>__<household>`
 /// on a member's): a card for this place's person when the event would be deleted now (calendar.rs `deletable`), the
-/// call answered at once. None: nothing to ask (calendar.rs says why).
+/// call answered at once. None: nothing to ask (calendar.rs `call_unasked` says why, and never deletes).
 async fn owner_card(state: &AppState, agent_id: &str, shown: &str, arguments: &Dict) -> Option<Dict> {
     let config = state.config();
     let id = tk::strip(&tk::str_or_empty(arguments.get("id"))).to_string();
@@ -512,7 +518,13 @@ Calendars you may change: {}. Say whose with who.",
             }
             let (c, a, n, args) = (config.clone(), agent.name.clone(), name.to_string(), arguments.clone());
             let result = tokio::task::spawn_blocking(move || {
-                crate::calendar::call(&c, &a, &n, &args, None, &crate::caldav::Remote::default())
+                let remote = crate::caldav::Remote::default();
+                if n == "calendar_delete" {
+                    // nothing to ask him about (`owner_card`): never deleted (review 26/11, E5; `call_unasked`)
+                    crate::calendar::call_unasked(&c, &a, &n, &args, None, &remote)
+                } else {
+                    crate::calendar::call(&c, &a, &n, &args, None, &remote)
+                }
             })
             .await??;
             if text_of(&result).starts_with(crate::calendar::ASKED) && !failed(&result) {

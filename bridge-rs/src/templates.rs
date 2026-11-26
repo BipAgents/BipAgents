@@ -979,7 +979,7 @@ pub async fn import(state: &AppState, body: &Value) -> ApiResult<Value> {
             let Ok((mut conn, files)) = checked_connector(&item) else { continue };
             conn.id = format!("c_{}", &py::uuid4_hex()[..12]);
             let code = connectors::code_dir(&config, &agent.name, &conn.id);
-            let pinned = write_files(&code, &files).map_err(|e| e.to_string()).and_then(|_| runner::fingerprint(&code));
+            let pinned = write_files(&code, &files).map_err(|e| e.to_string()).and_then(|_| runner::pinned_fingerprint(&code));
             let Ok(fingerprint) = pinned else {
                 let _ = std::fs::remove_dir_all(code.parent().unwrap_or(&code));
                 left_out.push(format!("le connecteur « {} »", conn.name));

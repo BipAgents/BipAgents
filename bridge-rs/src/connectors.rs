@@ -789,7 +789,7 @@ pub async fn answer(state: &AppState, card_id: &str, allow: bool, via: &str) -> 
                 runner::snapshot(&source, &code)
             }
             // its folder is gone (the sandbox reset): the copy kept, if it is the files on the card
-            None => runner::fingerprint(&code),
+            None => runner::pinned_fingerprint(&code),
         }
     })
     .await

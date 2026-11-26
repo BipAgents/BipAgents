@@ -529,7 +529,8 @@ pub fn new_event(arguments: &Dict) -> Result<Value, String> {
 
 /// One of the calendar tools, for `agent`: the phone's copy (when the person shared it with the agent) and its
 /// mailboxes' calendars (`remote`, read by caldav.rs). The phone's requests go to its queue. Err: a file that cannot
-/// be written.
+/// be written. A deletion comes here only once its card was answered « Oui » (agent_tools.rs `delete_card`,
+/// family_calendar.rs `owner_card`); when the card found nothing to ask about, `call_unasked`.
 pub fn call(
     config: &Config,
     agent: &str,
@@ -537,6 +538,37 @@ pub fn call(
     arguments: &Dict,
     now: Option<f64>,
     remote: &crate::caldav::Remote,
+) -> anyhow::Result<Dict> {
+    call_as(config, agent, name, arguments, now, remote, true)
+}
+
+/// `call` when a deletion's card found nothing to ask about (`deletable`: not an event of the copy, a repeating one,
+/// no right to write): the same answers, but no deletion is ever asked of the phone, even if the copy changed in
+/// between (security review 26/11, E5: « nothing found » never means « no card »). A request of the agent's own still
+/// waiting is cancelled, as with `call`: nothing of the person's is deleted.
+pub fn call_unasked(
+    config: &Config,
+    agent: &str,
+    name: &str,
+    arguments: &Dict,
+    now: Option<f64>,
+    remote: &crate::caldav::Remote,
+) -> anyhow::Result<Dict> {
+    call_as(config, agent, name, arguments, now, remote, false)
+}
+
+/// The phone's calendar changed between a deletion's card and the deletion: nothing deleted.
+pub const DELETE_CHANGED: &str = "The phone's calendar changed meanwhile: nothing was deleted. Read it again \
+(calendar_list), then call calendar_delete again.";
+
+fn call_as(
+    config: &Config,
+    agent: &str,
+    name: &str,
+    arguments: &Dict,
+    now: Option<f64>,
+    remote: &crate::caldav::Remote,
+    asked: bool,
 ) -> anyhow::Result<Dict> {
     let now = now_or(now);
     let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -751,6 +783,9 @@ BipAgents app.",
                 ));
             }
             if name == "calendar_delete" {
+                if !asked {
+                    return Ok(tool_text(DELETE_CHANGED, true));
+                }
                 json!({"id": id})
             } else {
                 let mut args = Dict::new();
