@@ -1,20 +1,14 @@
-"""A place of the all-included offer (`cloud = true`): the person's SSH keys (`/v1/ssh`), its backups' key and state
+"""A place of the all-included offer (`cloud = true`): no SSH (`/v1/ssh`), its backups' key and state
 (`/v1/backup`), one's own Hermes sent in (`/v1/import…`), a place nobody uses put to sleep and woken by the next
 request; and the site icons kept by the bridge (`/v1/favicon`). tests/test_ssh_keys.py, test_place_backup.py,
 test_place_import.py, test_ai_transparency.py and test_sleep.py, over HTTP; HOME is the bridge's own folder."""
-import base64
 import hashlib
 import hmac
 import json
-import os
-import pwd
 import secrets
 import ssl
 import threading
 import time
-
-from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric import ec, ed25519
 
 from bbkit.common import AUTH, REMOTE
 from bbkit.servers import free_port, wait_until
@@ -33,64 +27,40 @@ def cloud(bridges, lan=False, start=True):
     return bridge.start() if start else bridge
 
 
-# -- SSH keys --------------------------------------------------------------------------------------------------------
+# -- no SSH on a place (Alex, 2026-11-26) -----------------------------------------------------------------------------
 
-def openssh(public_key, comment):
-    line = public_key.public_bytes(serialization.Encoding.OpenSSH, serialization.PublicFormat.OpenSSH).decode()
-    blob = base64.b64decode(line.split()[1])
-    return f"{line} {comment}", "SHA256:" + base64.b64encode(hashlib.sha256(blob).digest()).decode().rstrip("=")
+KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl thief@laptop"
 
 
-def test_the_person_adds_lists_and_removes_their_keys_on_a_server_of_the_offer(bridges):
+def test_an_app_from_before_hears_there_is_no_ssh_and_adds_no_key(bridges):
+    """`/v1/ssh` on a place of the offer: none (`enabled: false`, what the apps show as « not here »); adding or
+    removing a key is refused in words of its own. On someone's own computer, the same answers as ever."""
     own = bridges.new("own").start()
-    assert own.get("/v1/ssh", headers=AUTH).json() == {"enabled": False, "keys": []}   # someone's own computer
-    one, one_print = openssh(ed25519.Ed25519PrivateKey.generate().public_key(), "one@laptop")
-    refused = own.post("/v1/ssh/keys", json={"key": one}, headers=AUTH)
+    assert own.get("/v1/ssh", headers=AUTH).json() == {"enabled": False, "keys": []}
+    refused = own.post("/v1/ssh/keys", json={"key": KEY}, headers=AUTH)
     assert refused.status_code == 403 and refused.json() == {"detail": "only on a server of the all-included offer"}
-    assert own.delete("/v1/ssh/keys", params={"fingerprint": one_print}, headers=AUTH).status_code == 403
-    bridge = cloud(bridges, start=False)
-    (bridge.home / ".ssh").mkdir(mode=0o755)
-    (bridge.home / ".ssh" / "authorized_keys").write_text("# kept\n")
-    bridge.start()
-    assert bridge.get("/v1/ssh").status_code == 401
-    added = bridge.post("/v1/ssh/keys", json={"key": one}, headers=AUTH).json()
-    assert added == {"fingerprint": one_print, "type": "ssh-ed25519", "comment": "one@laptop"}
-    two, two_print = openssh(ec.generate_private_key(ec.SECP256R1()).public_key(), "two@laptop")
-    bridge.post("/v1/ssh/keys", json={"key": two + "\n"}, headers=AUTH)
-    assert bridge.post("/v1/ssh/keys", json={"key": one}, headers=AUTH).json()["fingerprint"] == one_print   # once only
-    status = bridge.get("/v1/ssh", headers=AUTH).json()
-    assert status["enabled"] and status["login"] == f"ssh {pwd.getpwuid(os.getuid()).pw_name}@203.0.113.7"
-    assert [(k["type"], k["comment"], k["fingerprint"]) for k in status["keys"]] == [
-        ("ssh-ed25519", "one@laptop", one_print), ("ecdsa-sha2-nistp256", "two@laptop", two_print)]
-    text = (bridge.home / ".ssh" / "authorized_keys").read_text()
-    assert text.startswith("# kept\n") and text.count("\n") == 3
-    assert oct((bridge.home / ".ssh").stat().st_mode & 0o777) == "0o700"
-    assert oct((bridge.home / ".ssh" / "authorized_keys").stat().st_mode & 0o777) == "0o600"
-    unnamed, _ = openssh(ed25519.Ed25519PrivateKey.generate().public_key(), "")
-    assert bridge.post("/v1/ssh/keys", json={"key": unnamed.strip()}, headers=AUTH).json()["comment"] == "added from BipAgents"
-    gone = bridge.delete("/v1/ssh/keys", params={"fingerprint": two_print}, headers=AUTH)
-    assert gone.status_code == 200 and gone.json() == {"ok": True}
-    assert "two@laptop" not in (bridge.home / ".ssh" / "authorized_keys").read_text()
-    again = bridge.delete("/v1/ssh/keys", params={"fingerprint": two_print}, headers=AUTH)
-    assert again.status_code == 404 and again.json() == {"detail": "no such key"}
-    assert bridge.delete("/v1/ssh/keys", headers=AUTH).status_code == 422
-
-
-def test_only_a_plain_public_key_goes_in(bridges):
+    assert own.delete("/v1/ssh/keys", params={"fingerprint": "SHA256:AAAA"}, headers=AUTH).status_code == 403
     bridge = cloud(bridges)
-    good = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl me"
-    from cryptography.hazmat.primitives.asymmetric import rsa
-    rsa_blob = openssh(rsa.generate_private_key(public_exponent=65537, key_size=2048).public_key(), "")[0].split()[1]
-    assert bridge.post("/v1/ssh/keys", json={"key": good}, headers=AUTH).json()["type"] == "ssh-ed25519"
-    for bad, detail in (('command="rm -rf ~" ' + good, "not a public SSH key (ssh-ed25519 AAAA… name)"),
-                        ("ssh-dss AAAAB3NzaC1kc3MAAACBAP me", "not a public SSH key (ssh-ed25519 AAAA… name)"),
-                        ("ssh-ed25519 " + rsa_blob + " me", "not a public SSH key (its type and its content differ)"),
-                        ("ssh-ed25519 AAAAB3NzaC1yc2EAAAADAQABAAABAQC me", "not a public SSH key (its middle part)"),
-                        ("ssh-ed25519 not-base64!-and-long-enough", "not a public SSH key (ssh-ed25519 AAAA… name)"),
-                        (good + "\nssh-rsa AAAA second", "one public key at a time")):
-        resp = bridge.post("/v1/ssh/keys", json={"key": bad}, headers=AUTH)
-        assert resp.status_code == 400 and resp.json() == {"detail": detail}, bad
-    assert bridge.post("/v1/ssh/keys", json={"key": "short"}, headers=AUTH).status_code == 422
+    assert bridge.get("/v1/ssh").status_code == 401
+    assert bridge.get("/v1/ssh", headers=AUTH).json() == {"enabled": False, "keys": []}
+    for refused in (bridge.post("/v1/ssh/keys", json={"key": KEY}, headers=AUTH),
+                    bridge.delete("/v1/ssh/keys", params={"fingerprint": "SHA256:AAAA"}, headers=AUTH)):
+        assert refused.status_code == 403
+        assert refused.json() == {"detail": "no SSH access on a server of the all-included offer"}
+    assert not (bridge.home / ".ssh").exists()
+
+
+def test_a_place_that_starts_takes_away_the_keys_left_in_its_account(bridges):
+    """The keys an app added before 26/11, or any added by hand since (sshd reads authorized_keys2 too): gone when
+    the place's bridge starts; comments stay."""
+    bridge = cloud(bridges, start=False)
+    (bridge.home / ".ssh").mkdir(mode=0o700)
+    (bridge.home / ".ssh" / "authorized_keys").write_text(f"# kept\n{KEY}\nno-pty {KEY} again\n")
+    (bridge.home / ".ssh" / "authorized_keys2").write_text(KEY + "\n")
+    bridge.start()
+    assert (bridge.home / ".ssh" / "authorized_keys").read_text() == "# kept\n"
+    assert "ssh-ed25519" not in (bridge.home / ".ssh" / "authorized_keys2").read_text()
+    assert oct((bridge.home / ".ssh" / "authorized_keys").stat().st_mode & 0o777) == "0o600"
 
 
 # -- backups ----------------------------------------------------------------------------------------------------------

@@ -1899,6 +1899,7 @@ pub fn create_app(config: Config, options: AppOptions) -> anyhow::Result<App> {
     crate::profile_files::set_hands_off(crate::profile_files::hands_off_home(&config));
     // before anything reads the vault: the data folder held (no sealing meanwhile), the place key from memory if sealed
     crate::sealed_keys::at_start(&config)?;
+    crate::ssh_keys::at_start(&config); // a place of the offer: no SSH key left in its account (no SSH there, 26/11)
     crate::family_agent::drop_stale_temporaries(&config); // what a hard stop left of the family Carnet's writes
     // the souls as this start finds them, before it rewrites any (dates::run_forever tells the conversations)
     *state.start_souls.lock().unwrap_or_else(|e| e.into_inner()) = Some(crate::agents_admin::souls_now(&config));

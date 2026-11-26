@@ -163,9 +163,10 @@ pub fn reopen(state: &AppState, name: &str) -> anyhow::Result<String> {
             state.console.revoke(&crate::py::py_str(id));
         }
     }
-    // and the SSH keys any device could add (security review 2026-11-26, E3): a removed phone's must not outlive its
-    // device key. After the keys above, so that nothing in those files can keep a removed device's key valid.
-    // Only in the place's home from the config, never $HOME (ssh_keys::folder).
+    // and any SSH key put in the account since the place started (security review 2026-11-26, E3; the app adds none
+    // since 26/11, ssh_keys.rs): nothing a removed device left may open it. After the keys above, so that nothing in
+    // those files can keep a removed device's key valid. Only in the place's home from the config, never $HOME
+    // (ssh_keys::folder).
     match crate::ssh_keys::forget_all(&config) {
         Ok(0) => {}
         Ok(gone) => tracing::info!(gone, "reopen: the account's SSH keys removed"),

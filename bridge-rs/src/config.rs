@@ -865,10 +865,10 @@ pub struct Config {
     /// A server the app created in the person's own account (« no computer »): the door is on the Internet, the
     /// web console is off and wrong keys are limited (guard.py).
     pub cloud: bool,
-    /// The account's home on a place of the offer: the only folder whose SSH keys this bridge shows, adds or removes,
-    /// and only while `cloud` (ssh_keys.rs). `place_home` in bridge.toml (an absolute path), else the home of the
-    /// installer's layout (bridge.toml at <home>/.config/bipagents/bridge.toml, `data_dir` <home>/.local/share/
-    /// bipagents), else none. Never $HOME: a test's reopen once emptied the build server's own authorized_keys through
+    /// The account's home on a place of the offer: the only folder whose SSH keys this bridge takes away (at its start
+    /// and at a reopen), and only while `cloud` (ssh_keys.rs). `place_home` in bridge.toml (an absolute path), else
+    /// the home of the installer's layout (bridge.toml at <home>/.config/bipagents/bridge.toml, `data_dir`
+    /// <home>/.local/share/bipagents), else none. Never $HOME: a test's reopen once emptied the build server's own authorized_keys through
     /// it (review 26/11, E3).
     #[serde(skip)]
     pub place_home: Option<String>,

@@ -1,6 +1,6 @@
 //! The agents group's Python tests: test_spaces.py, test_own_skills.py, test_services.py, test_shares.py,
-//! test_peers.py, test_households.py, test_ssh_keys.py (parsing; the routes are in agents_ssh_keys.rs) and the files
-//! part of test_http_routes.py.
+//! test_peers.py, test_households.py and the files part of test_http_routes.py (the SSH routes, closed on 26/11: in
+//! agents_ssh_keys.rs).
 
 mod common;
 
@@ -17,7 +17,7 @@ use bipbridge::config::{parse_config, Config, SharedConfig};
 use bipbridge::households::{HouseholdError, Households};
 use bipbridge::peers::{self, Links};
 use bipbridge::rules;
-use bipbridge::{files, own_skills, services, shares, ssh_keys};
+use bipbridge::{files, own_skills, services, shares};
 use common::{auth, config_dict, TestApp, Urls};
 use indexmap::IndexMap;
 use serde_json::{json, Value};
@@ -1102,25 +1102,6 @@ fn invitations_are_one_time_and_expire() {
     data.insert("invites".into(), Value::Object(invites));
     households.save(&data).unwrap();
     assert!(households.accept(&late, "Paul", "https://c.ts.net", &"p".repeat(40), None, None).is_err());
-}
-
-// -- ssh keys ---------------------------------------------------------------------------------------------------------
-
-#[test]
-fn only_a_plain_public_key_goes_in() {
-    let good = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl me";
-    assert_eq!(ssh_keys::parse(good).unwrap().kind, "ssh-ed25519");
-    for bad in [
-        format!("command=\"rm -rf ~\" {good}"),
-        format!("from=\"*\" {good}"),
-        "ssh-dss AAAAB3NzaC1kc3MAAACBAP me".into(),
-        "ssh-ed25519 AAAAB3NzaC1yc2EAAAADAQABAAABAQC me".into(),
-        "ssh-ed25519 not-base64!".into(),
-        "-----BEGIN OPENSSH PRIVATE KEY-----".into(),
-        format!("{good}\nssh-rsa AAAA second"),
-    ] {
-        assert!(ssh_keys::parse(&bad).is_err(), "{bad}");
-    }
 }
 
 // -- files (test_http_routes.py) --------------------------------------------------------------------------------------
