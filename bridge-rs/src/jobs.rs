@@ -444,7 +444,7 @@ fn counted_tokens(job: &Dict) -> Option<Value> {
 
 /// `task_view`, on a place of the offer (the tokens as Hermes counts them) or at home (`counted_tokens`).
 pub fn task_view_on(job: &Dict, offer: bool) -> Dict {
-    const KEEP: [&str; 24] = [
+    const KEEP: [&str; 27] = [
         "id",
         "kind",
         "agent",
@@ -471,6 +471,11 @@ pub fn task_view_on(job: &Dict, offer: bool) -> Dict {
         // paused at its budget: what one more step costs, and the budget in all that pays for a few (`note_step`)
         "step_eur",
         "needed_eur",
+        // waiting for memory: the server's free memory and the floor it waits for (MB); its browser (« agent »: its
+        // agent's, memory short for one of its own)
+        "memory_free_mb",
+        "memory_floor_mb",
+        "browser",
     ];
     // an extraction from an archive (archives/records_fill.rs): its euros, its cap, the documents read
     const EXTRACT: [&str; 5] = ["archive", "progress", "model", "counts", "max_tokens"];
@@ -1009,7 +1014,8 @@ impl Jobs {
                 }
                 let (id, agent) = (tk::str_or_empty(job.get("id")), agent_of(&job));
                 let c = self.config.get();
-                let waits = tokio::task::spawn_blocking(move || crate::heavy_work::task_waits(&c, &agent))
+                // the place's room alone: a browser of its own that doesn't fit is no reason to wait (`start_check`)
+                let waits = tokio::task::spawn_blocking(move || crate::heavy_work::task_room(&c, &agent).0)
                     .await
                     .unwrap_or(Some("busy"));
                 if waits.is_some() {
@@ -1038,12 +1044,6 @@ impl Jobs {
             self.stop(&agent, &mut job, SPACE_REASON).await;
         }
         !running.is_empty()
-    }
-
-    /// Whether a task of `agent` would get a browser of its own (browsers.rs `setup_task`) and the server's free memory
-    /// is short for it (`memory_short_in`).
-    fn memory_short(&self, agent: &str) -> bool {
-        memory_short_in(&self.config.get(), agent, &self.memory)
     }
 
     /// A waiting task whose agent was deleted: ended as failed (« this agent isn't on this install any more »), its
@@ -1079,8 +1079,8 @@ impl Jobs {
             if self.ended_without_agent(job) {
                 continue;
             }
-            if self.memory_short(&agent_of(job)) {
-                return 0; // the oldest one's turn: no room for it yet
+            if below_floor(&self.config.get(), &self.memory).is_some() {
+                return 0; // the oldest one's turn: not even room for its agent's browser yet
             }
             let id = tk::str_or_empty(job.get("id"));
             match self.resume(&id, None, None).await {
@@ -1198,9 +1198,13 @@ impl Jobs {
             return Ok(());
         }
         let (c, name, memory) = (self.config.get(), agent.name.clone(), self.memory.clone());
+        // the person's « Reprendre »: started at its best even under the floor (`start_check`)
+        let person = job.remove(START_ANYWAY).is_some_and(|v| v == json!(true));
+        let id = tk::str_or_empty(job.get("id"));
         // both checks and the start's hold at once (`start_check`): starts at once each see the others' browsers
-        let browser_start = match tokio::task::spawn_blocking(move || start_check(&c, &name, &memory)).await? {
-            Ok(hold) => hold,
+        let started = tokio::task::spawn_blocking(move || start_check(&c, &name, &id, &memory, person)).await?;
+        let (browser_start, plan) = match started {
+            Ok(go) => go,
             Err(StartWait::Room(why)) => {
                 // The place's room as heavy_work reads it (heavy_work.rs): queued, started by itself once there is room.
                 job.insert("state".into(), json!("paused"));
@@ -1211,11 +1215,14 @@ impl Jobs {
                 tracing::info!(agent = %agent.name, job = %tk::str_or_empty(job.get("id")), why, "job queued: no room now");
                 return Ok(());
             }
-            Err(StartWait::Memory) => {
-                // a browser of its own (browsers.rs `setup_task`) needs free memory: short of it, the task waits its
-                // turn (Alex 20/11, never refused), started by `resume_after_memory` once there is room
+            Err(StartWait::Memory(free)) => {
+                // the server's free memory under the floor even for its agent's browser: the task waits its turn
+                // (Alex 20/11, never refused), started by `resume_after_memory` once over it (or the person's
+                // « Reprendre »); what is free and the floor kept for its words
                 job.insert("state".into(), json!("paused"));
                 job.insert("reason".into(), json!(MEMORY_REASON));
+                job.insert("memory_free_mb".into(), json!(free));
+                job.insert("memory_floor_mb".into(), json!(self.config.get().jobs.browser_floor_mb));
                 job.insert("queued_text".into(), json!(text));
                 waiting_from_now(job);
                 save(&self.config.get(), job)?;
@@ -1243,7 +1250,13 @@ impl Jobs {
         let (c, a, j, sess) = (self.config.get(), agent.name.clone(), tk::str_or_empty(job.get("id")), session_id.clone());
         // removed again when the task doesn't start after all (a refusal below): no copy of the logins left behind
         let mut unstarted = TaskBrowserUnused::default();
-        let own_browser = match tokio::task::spawn_blocking(move || crate::browsers::setup_task(&c, &a, &j, &sess)).await? {
+        // memory short for a second browser: it browses in its agent's (as tasks did before 19/11), never waits
+        job.insert("browser".into(), if plan == BrowserPlan::Agent { json!("agent") } else { Value::Null });
+        let setup = move || match plan {
+            BrowserPlan::Own => crate::browsers::setup_task(&c, &a, &j, &sess),
+            BrowserPlan::Agent => Ok(None),
+        };
+        let own_browser = match tokio::task::spawn_blocking(setup).await? {
             Ok(found) => {
                 if found.is_some() {
                     unstarted.arm(&self.config.get(), &agent.name, &tk::str_or_empty(job.get("id")));
@@ -1307,6 +1320,8 @@ impl Jobs {
             ("stopping", Value::Null),
             ("waiting_since", Value::Null),
             ("wait_told", Value::Null),
+            ("memory_free_mb", Value::Null),
+            ("memory_floor_mb", Value::Null),
         ] {
             job.insert(key.into(), value);
         }
@@ -1701,16 +1716,30 @@ impl Jobs {
         budget_eur: Option<f64>,
         message: Option<&str>,
     ) -> anyhow::Result<Dict> {
-        self.resume_with(job_id, None, message, budget_eur).await
+        self.resume_from(job_id, None, message, budget_eur, false).await
     }
 
-    /// `resume`: a mail scan's new step budget in tokens (`max_tokens`), a task's or an extraction's in euros.
+    /// The person's « Reprendre » (`POST /v1/jobs/{id}/resume`): a mail scan's new step budget in tokens
+    /// (`max_tokens`), a task's or an extraction's in euros. A task waiting for memory starts at its best, in its
+    /// agent's browser (`start_check`), never left as it was.
     pub async fn resume_with(
         self: &Arc<Self>,
         job_id: &str,
         max_tokens: Option<i64>,
         message: Option<&str>,
         budget_eur: Option<f64>,
+    ) -> anyhow::Result<Dict> {
+        self.resume_from(job_id, max_tokens, message, budget_eur, true).await
+    }
+
+    /// `resume_with`, by the person (`person`) or by the bridge (after the credit, the memory, a move).
+    async fn resume_from(
+        self: &Arc<Self>,
+        job_id: &str,
+        max_tokens: Option<i64>,
+        message: Option<&str>,
+        budget_eur: Option<f64>,
+        person: bool,
     ) -> anyhow::Result<Dict> {
         if job_id.starts_with("mail-scan:") {
             return self.scan(job_id, "resume", max_tokens);
@@ -1749,6 +1778,9 @@ impl Jobs {
             _ => None,
         };
         let text = if !words.is_empty() { words } else { queued.unwrap_or_else(|| CONTINUE.to_string()) };
+        if person {
+            job.insert(START_ANYWAY.into(), json!(true));
+        }
         self.launch(&mut job, &text).await?;
         Ok(task_view(&job))
     }
@@ -2459,10 +2491,36 @@ fn waiting_from_now(job: &mut Dict) {
 }
 
 /// Why a task can't start now (`start_check`): the place's room (heavy_work.rs `task_gate`: « space », « busy »), or the
-/// server's free memory for its browser (« memory »).
+/// server's free memory (MB) under `[jobs] browser_floor_mb` (« memory »).
 enum StartWait {
     Room(&'static str),
-    Memory,
+    Memory(u64),
+}
+
+/// The browser a task starts with (`start_check`): one of its own, or its agent's.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum BrowserPlan {
+    Own,
+    Agent,
+}
+
+/// On a task the person resumes (`resume_with`), read and removed by `launch`.
+const START_ANYWAY: &str = "start_anyway";
+
+/// The server's free memory (MB) when it is under `[jobs] browser_floor_mb` (0: no floor; unread: none).
+fn below_floor(config: &crate::config::Config, memory: &MemoryProbe) -> Option<u64> {
+    let floor = config.jobs.browser_floor_mb;
+    memory().filter(|free| floor > 0 && *free < floor)
+}
+
+/// Another task of `agent` running in its agent's browser (`BrowserPlan::Agent`).
+fn agent_browser_shared(config: &crate::config::Config, agent: &str, job_id: &str) -> bool {
+    tasks(config).iter().any(|j| {
+        agent_of(j) == agent
+            && tk::str_or_empty(j.get("id")) != job_id
+            && ["running", "stopping"].contains(&state_of(j).as_str())
+            && j.get("browser") == Some(&json!("agent"))
+    })
 }
 
 /// One start's checks at a time on this bridge: the room, then the server's memory, then its browser held as
@@ -2502,17 +2560,41 @@ impl Drop for BrowserStart {
     }
 }
 
-/// `launch`'s checks for a task of `agent`, under `START_GATE`: the place's room (on the offer), the server's free
-/// memory for a browser of its own, then that browser held as starting.
-fn start_check(config: &crate::config::Config, agent: &str, memory: &MemoryProbe) -> Result<BrowserStart, StartWait> {
+/// `launch`'s checks for task `job` of `agent`, under `START_GATE`: the place's room (on the offer), then its browser
+/// (Alex 21/10, no blocking for capacity: room is our cost, not the person's wait):
+///
+///     a browser of its own fits (the server's `memory_short`, the place's ceiling)   its own, held as starting
+///     it doesn't, the server over `[jobs] browser_floor_mb`                          its agent's browser; that one
+///                                                                                    taken by another task: its own
+///     under the floor                                                                waits (« memory ») — but for
+///                                                                                    the person's « Reprendre »
+///                                                                                    (`person`): its agent's
+///
+/// A task that has a browser of its own already (paused mid-run) keeps it.
+fn start_check(
+    config: &crate::config::Config,
+    agent: &str,
+    job: &str,
+    memory: &MemoryProbe,
+    person: bool,
+) -> Result<(BrowserStart, BrowserPlan), StartWait> {
     let _gate = START_GATE.lock().unwrap_or_else(|e| e.into_inner());
-    if let Some(why) = crate::heavy_work::task_waits(config, agent) {
+    let (wait, place_fits) = crate::heavy_work::task_room(config, agent);
+    if let Some(why) = wait {
         return Err(StartWait::Room(why));
     }
-    if memory_short_in(config, agent, memory) {
-        return Err(StartWait::Memory);
+    if !crate::browsers::gives_task_browsers(config, agent) || (place_fits && !memory_short_in(config, agent, memory)) {
+        return Ok((BrowserStart::hold(config, agent), BrowserPlan::Own));
     }
-    Ok(BrowserStart::hold(config, agent))
+    let below = below_floor(config, memory);
+    if let (Some(free), false) = (below, person) {
+        return Err(StartWait::Memory(free));
+    }
+    let kept = crate::browsers::folder(config, &crate::browsers::task_browser(agent, job)).is_dir();
+    if !kept && (below.is_some() || !agent_browser_shared(config, agent, job)) {
+        return Ok((BrowserStart(None), BrowserPlan::Agent));
+    }
+    Ok((BrowserStart::hold(config, agent), BrowserPlan::Own))
 }
 
 /// The place's task browsers that take memory or soon will (24/11): those of a task running or stopping, and those

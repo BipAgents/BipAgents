@@ -463,13 +463,16 @@ pub async fn call_with(
 /// Whether a background task of `agent` may start now (jobs.rs `launch`): None, or why not (« space »: the place
 /// full; « busy »: its memory pressed, or another agent's heavy job on). The same room `heavy_work` reads.
 pub fn task_gate(config: &Config, agent: &str, room: &Room, now: f64) -> Option<&'static str> {
+    gate(config, agent, room, now).or_else(|| (!browser_fits(config, agent, &room.memory)).then_some("busy"))
+}
+
+/// `task_gate` but its own browser's ceiling (`browser_fits`): the place full, its memory pressed, another agent's
+/// heavy job on.
+fn gate(config: &Config, agent: &str, room: &Room, now: f64) -> Option<&'static str> {
     if room.seat.pause || room.seat.state == "full" || room.disk_used_ratio().is_some_and(|r| r >= DISK_STOP) {
         return Some("space");
     }
     if room.memory.pressed() || held(config, now).is_some_and(|l| l.agent != agent) {
-        return Some("busy");
-    }
-    if !browser_fits(config, agent, &room.memory) {
         return Some("busy");
     }
     None
@@ -500,13 +503,16 @@ fn browser_fits(config: &Config, agent: &str, memory: &Memory) -> bool {
     high.saturating_sub(used) >= need * (1 + browsers.unstarted)
 }
 
-/// `task_gate` measured now, on the offer only (a self-install's tasks always start).
-pub fn task_waits(config: &Config, agent: &str) -> Option<&'static str> {
+/// What keeps a task of `agent` from starting now whatever its browser (`gate`, on the offer only), and whether a
+/// browser of its own fits the place (`browser_fits`; true off the offer): jobs.rs `start_check` shares the agent's
+/// browser when it doesn't, rather than waiting (Alex 21/10: no blocking for capacity).
+pub fn task_room(config: &Config, agent: &str) -> (Option<&'static str>, bool) {
     if !crate::handover::on_offer() {
-        return None;
+        return (None, true);
     }
     let now = py::time_time();
-    task_gate(config, agent, &room_now(now), now)
+    let room = room_now(now);
+    (gate(config, agent, &room, now), browser_fits(config, agent, &room.memory))
 }
 
 // --- the backstop ------------------------------------------------------------------------------------------------

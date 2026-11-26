@@ -847,35 +847,66 @@ async fn a_tasks_payment_is_handed_over_to_the_agents_main_conversation() {
     board.forget(&id).await.unwrap();
 }
 
-/// Alex 20/11, « no blocking for capacity »: a task that would browse in a browser of its own waits its turn when the
-/// place's free memory (MemAvailable) is under `[jobs] browser_free_mb` (a browsing task measured 0.5–0.8 GB): queued,
-/// « memory », never refused; it starts by itself once there is room again.
+/// Alex 26/11 (his offer place, a VPS of 8 GB for three places, ≈ 4.4 GB free): « Scan prix Mac mini — Black Friday »
+/// waited « de la place pour son navigateur », 0 € spent, and « Reprendre » did nothing. A task that would browse in a
+/// browser of its own waited while the server's MemAvailable was under twice `[jobs] browser_free_mb` (2 GB, the place's
+/// first task browser; 1 GB more for each one set up and not started yet), and a resume only checked the same again.
+/// Alex's rule (21/10): no blocking for capacity. Now, memory short for a browser of its own, the task starts at once in
+/// its agent's browser; a second task while that one is taken gets its own anyway; it waits only under
+/// `[jobs] browser_floor_mb` (512 MB) — and the person's « Reprendre » starts it there too, in its agent's browser.
 #[tokio::test]
-async fn a_browsing_task_waits_for_free_memory_and_starts_once_there_is() {
+async fn short_of_memory_a_browsing_task_shares_its_agents_browser_and_waits_only_under_the_floor() {
     let dir = tempfile::tempdir().unwrap();
     let (fake, url) = gateway(1000, 10).await;
     let (mut config, agent) = setup(dir.path(), &url);
     config.browser.root = dir.path().join("browsers").to_string_lossy().into_owned();
-    assert_eq!(config.jobs.browser_free_mb, 1024, "the default threshold");
+    assert_eq!((config.jobs.browser_free_mb, config.jobs.browser_floor_mb), (1024, 512), "the defaults");
     let place = bipbridge::browsers::folder(&config, "coach");
     std::fs::create_dir_all(place.join("profile")).unwrap();
     std::fs::write(place.join("ports.json"), r#"{"cdp": 19600, "vnc": 19601}"#).unwrap();
     std::fs::write(place.join("mcp.json"), r#"{"server": ["/usr/bin/podman"]}"#).unwrap();
-    let free = Arc::new(Mutex::new(Some(600u64)));
+    let free = Arc::new(Mutex::new(Some(1700u64)));
     let mut jobs = Arc::try_unwrap(board(&config, None)).ok().unwrap();
     let probe = free.clone();
     jobs.memory = Arc::new(move || *probe.lock().unwrap());
     let board = Arc::new(jobs);
-    let job = board.create(&agent, "Comparer", "Compare trois offres sur leurs sites.", 0.50, None).await.unwrap();
-    let id = id_of(&job);
-    assert_eq!((job["state"].as_str(), job["reason"].as_str()), (Some("paused"), Some("memory")), "{job:?}");
-    assert!(posted_runs(&fake).is_empty(), "nothing started while memory is short");
-    assert_eq!(board.resume_after_memory().await, 0, "still short: it keeps waiting");
-    *free.lock().unwrap() = Some(4096);
-    assert_eq!(board.resume_after_memory().await, 1);
-    assert_eq!(board.view(&id).unwrap()["state"], "running");
+    let own = |id: &str| bipbridge::browsers::folder(&config, &bipbridge::browsers::task_browser("coach", id)).is_dir();
+    // 1.7 GB free, under the 2 GB a first browser of its own asks: it goes at once, in its agent's browser
+    let first = board.create(&agent, "Comparer", "Compare trois offres sur leurs sites.", 0.50, None).await.unwrap();
+    assert_eq!((first["state"].as_str(), first["browser"].as_str()), (Some("running"), Some("agent")), "{first:?}");
+    assert!(!own(&id_of(&first)), "no second browser for the same agent");
     assert!(words(&posted_runs(&fake)[0]["input"]).starts_with("Comparer\n\nCompare trois offres"), "its own words");
-    board.forget(&id).await.unwrap();
+    assert!(posted_runs(&fake)[0].get("model_options").and_then(|o| o.get("closed_tools")).is_none(),
+        "its agent's browser: Hermes' own browser tools stay open");
+    // a second task while the agent's browser is taken: one of its own anyway, over the floor
+    let second = board.create(&agent, "Réserver", "Trouve un créneau chez le dentiste.", 0.50, None).await.unwrap();
+    assert_eq!((second["state"].as_str(), second["browser"].as_str()), (Some("running"), None), "{second:?}");
+    assert!(own(&id_of(&second)));
+    // under the floor (300 MB): a third waits, plainly, and goes by itself once over it
+    *free.lock().unwrap() = Some(300);
+    let third = board.create(&agent, "Trier", "Trie les factures du mois sur le site.", 0.50, None).await.unwrap();
+    let id = id_of(&third);
+    assert_eq!((third["state"].as_str(), third["reason"].as_str()), (Some("paused"), Some("memory")), "{third:?}");
+    assert_eq!((third["memory_free_mb"].as_u64(), third["memory_floor_mb"].as_u64()), (Some(300), Some(512)));
+    assert_eq!(board.resume_after_memory().await, 0, "still under the floor: it keeps waiting");
+    // the person's « Reprendre » under the floor: started at its best, in its agent's browser
+    let resumed = board.resume_with(&id, None, None, None).await.unwrap();
+    assert_eq!((resumed["state"].as_str(), resumed["browser"].as_str()), (Some("running"), Some("agent")), "{resumed:?}");
+    assert!(resumed["memory_free_mb"].is_null() && !own(&id));
+    for job in [&first, &second, &third] {
+        board.forget(&id_of(job)).await.unwrap();
+    }
+    // over the floor, the bridge's own minute starts a waiting one; with room, a browser of its own as before
+    *free.lock().unwrap() = Some(300);
+    let waiting = id_of(&board.create(&agent, "Comparer", "Compare trois offres.", 0.50, None).await.unwrap());
+    *free.lock().unwrap() = Some(600);
+    assert_eq!(board.resume_after_memory().await, 1);
+    assert_eq!(board.view(&waiting).unwrap()["browser"], "agent");
+    board.forget(&waiting).await.unwrap();
+    *free.lock().unwrap() = Some(4096);
+    let roomy = board.create(&agent, "Comparer", "Compare trois offres.", 0.50, None).await.unwrap();
+    assert!(roomy["browser"].is_null() && own(&id_of(&roomy)), "{roomy:?}");
+    board.forget(&id_of(&roomy)).await.unwrap();
 }
 
 // -- Review 2 (subtasks-redesign, 20/11, head 347bdad19): one browser per task ------------------------------------------
@@ -1056,9 +1087,10 @@ async fn a_places_first_task_browser_needs_only_the_servers_room_and_the_second_
 /// 24/11, the server's own check (`memory_short`) for a task browser: MemAvailable read at each start knew nothing of
 /// a browser just set up, which only takes its memory at its first page. Two starts at once with 1.5 GB free both
 /// passed (two browsers: up to 1.6 GB). The browsers set up but not started yet now count, starts under way included:
-/// one goes, the other waits its turn (« memory », never refused). Finitions 1.1: the place's first browser asks 2 GB
-/// (`f5_…`), so the case is 2.5 GB free: the first goes (2 GB), the second needs 1 GB for itself and 1 GB for the
-/// first one not started yet… and 1 GB more as the place's first is still unstarted: it waits.
+/// one gets a browser of its own, the other, short of memory for a second one, its agent's (26/11: never waits over
+/// `browser_floor_mb`). Finitions 1.1: the place's first browser asks 2 GB (`f5_…`), so the case is 2.5 GB free: the
+/// first gets its own (2 GB), the second would need 1 GB for itself, 1 GB for the first one not started yet and 1 GB
+/// more as the place's first is still unstarted: its agent's browser.
 #[tokio::test]
 async fn two_browsing_tasks_started_at_once_never_both_pass_the_servers_check() {
     let dir = tempfile::tempdir().unwrap();
@@ -1078,7 +1110,10 @@ async fn two_browsing_tasks_started_at_once_never_both_pass_the_servers_check() 
         (b["state"].as_str().unwrap().to_string(), b["reason"].as_str().map(str::to_string)),
     ];
     states.sort();
-    assert_eq!(states, [("paused".to_string(), Some("memory".to_string())), ("running".to_string(), None)]);
+    assert_eq!(states, [("running".to_string(), None), ("running".to_string(), None)]);
+    let mut browsers = vec![a["browser"].as_str(), b["browser"].as_str()];
+    browsers.sort();
+    assert_eq!(browsers, [None, Some("agent")], "one browser of its own, the other its agent's");
     // one alone with that much free: it goes
     for job in [&a, &b] {
         board.forget(&id_of(job)).await.unwrap();
@@ -1091,7 +1126,8 @@ async fn two_browsing_tasks_started_at_once_never_both_pass_the_servers_check() 
 /// Finitions 1.1, point 5 (review subtasks-five A1): the place's FIRST task browser needs twice `browser_free_mb` of
 /// the server's free memory. Each place's bridge reads MemAvailable at its own minute and a browser takes its memory
 /// only at its first pages: two places starting their first browser in the same minute with 1.0–1.7 GB free both
-/// passed at 1 GB each, and the server swapped. With 2 GB asked, two such starts fit. Never refused: it waits.
+/// passed at 1 GB each, and the server swapped. With 2 GB asked, two such starts fit. Short of it, never refused nor
+/// waiting (26/11): its agent's browser.
 #[tokio::test]
 async fn f5_a_places_first_task_browser_needs_twice_the_free_memory() {
     let dir = tempfile::tempdir().unwrap();
@@ -1105,9 +1141,11 @@ async fn f5_a_places_first_task_browser_needs_twice_the_free_memory() {
     jobs.memory = Arc::new(move || *probe.lock().unwrap());
     let board = Arc::new(jobs);
     let job = board.create(&agent, "Comparer", "Compare trois offres sur leurs sites.", 0.50, None).await.unwrap();
-    assert_eq!((job["state"].as_str(), job["reason"].as_str()), (Some("paused"), Some("memory")), "1.7 GB: {job:?}");
+    assert_eq!((job["state"].as_str(), job["browser"].as_str()), (Some("running"), Some("agent")), "1.7 GB: {job:?}");
+    board.forget(&id_of(&job)).await.unwrap();
     *free.lock().unwrap() = Some(2048);
-    assert_eq!(board.resume_after_memory().await, 1, "2 GB free: the first browser goes");
+    let job = board.create(&agent, "Comparer", "Compare trois offres sur leurs sites.", 0.50, None).await.unwrap();
+    assert_eq!((job["state"].as_str(), job["browser"].as_str()), (Some("running"), None), "2 GB free: its own: {job:?}");
     board.forget(&id_of(&job)).await.unwrap();
 }
 
@@ -1123,7 +1161,7 @@ async fn a_task_waiting_long_for_room_is_told_to_the_person_once() {
     agent_browser(&mut config, dir.path(), 16);
     let told: Told = Default::default();
     let mut jobs = Arc::try_unwrap(board(&config, Some(&told))).ok().unwrap();
-    jobs.memory = Arc::new(|| Some(600));
+    jobs.memory = Arc::new(|| Some(300)); // under `browser_floor_mb`: the only memory a task waits for (26/11)
     let board = Arc::new(jobs);
     let job = board.create(&agent, "Comparer", "Compare trois offres sur leurs sites.", 0.50, None).await.unwrap();
     let id = id_of(&job);
@@ -1220,7 +1258,7 @@ async fn review3_a_waiting_task_that_cant_start_never_holds_the_others_back() {
     std::fs::create_dir_all(place.join("profile")).unwrap();
     std::fs::write(place.join("ports.json"), r#"{"cdp": 19600, "vnc": 19601}"#).unwrap();
     std::fs::write(place.join("mcp.json"), r#"{"server": ["/usr/bin/podman"]}"#).unwrap();
-    let free = Arc::new(Mutex::new(Some(600u64)));
+    let free = Arc::new(Mutex::new(Some(300u64)));
     let mut jobs = Arc::try_unwrap(board(&config, None)).ok().unwrap();
     let probe = free.clone();
     jobs.memory = Arc::new(move || *probe.lock().unwrap());
