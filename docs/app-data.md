@@ -407,7 +407,8 @@ store alone (StoreKit products and storefront, Play Billing products and country
   with a link that removes it (which changes the keys again), and logged. Removing a device, or a recovery, also
   changes the subscription's purchase token and the claim token of each server paired again, and removes the SSH keys
   on those servers: what the removed device kept opens nothing; the devices left use their own account token, and add
-  their SSH keys again (security review of 2026-11-26). The authenticator's secret is kept encrypted
+  their SSH keys again (security review of 2026-11-26). Restoring the purchase with the store's proof gives its
+  token only to a device signed in to the account that holds the subscription; any other phone is asked to sign in. The authenticator's secret is kept encrypted
   by the guichet. Recovery with no code at all (after 24 hours) stays for when email can't be received. The guichet
   never reads conversations.
 - On a server of the offer, the software is installed for Kerfy Studio and runs at a hosting provider. The app's
