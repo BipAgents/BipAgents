@@ -55,7 +55,8 @@ def test_a_task_runs_in_its_own_conversation_and_ends_with_its_report(bridges, f
     assert re.fullmatch(r"t[0-9a-f]{12}", job["id"]) and job["state"] == "running" and job["session_id"] == "api_s1"
     assert set(job) == {"id", "kind", "agent", "title", "prompt", "template", "state", "reason", "error", "created",
                         "started", "finished", "tokens", "budget_eur", "eur", "max_tokens", "session_id", "report",
-                        "proposed_by", "runs", "from_session", "seen", "steps", "step_eur", "needed_eur"}
+                        "proposed_by", "runs", "from_session", "seen", "steps", "step_eur", "needed_eur",
+                        "memory_free_mb", "memory_floor_mb", "browser"}
     assert (job["kind"], job["proposed_by"], job["runs"], job["template"]) == ("task", "person", 1, "research")
     assert fakes.hermes.created == [("", {"title": "🧩 Écoles du quartier"})]
     run = fakes.hermes.seen("/v1/runs", "POST")[0].json()
