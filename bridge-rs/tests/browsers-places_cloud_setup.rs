@@ -528,12 +528,15 @@ async fn a_claim_retried_after_a_profile_was_left_makes_its_agent_under_another_
     let shared = bipbridge::config::SharedConfig::new(config.clone());
     let commands: Arc<Mutex<Vec<Vec<String>>>> = Arc::default();
     let hermes = fake_hermes(home.clone(), commands.clone());
-    let failing = Arc::new(std::sync::atomic::AtomicBool::new(true));
+    // twice: a creation tries a failed step once more with its profile kept (agent-create-launch), the claim fails
+    // only when both tries do
+    let failing = Arc::new(std::sync::atomic::AtomicI32::new(2));
     let fail = failing.clone();
-    // the first try: its profile made (a real `profile create` leaves its folder), then a later step fails
+    // the first try: its profile made (a real `profile create` leaves its folder), then a later step fails; the
+    // profile's removal afterwards (`profile delete`) leaves its folder in this fake, as a delete that failed would
     let run: bipbridge::agents_admin::Run = Arc::new(move |args: Vec<String>, env| {
         let after_create = args.get(1) == Some(&"-p".to_string()) && args.get(3) == Some(&"tools".to_string());
-        if after_create && fail.swap(false, std::sync::atomic::Ordering::SeqCst) {
+        if after_create && fail.fetch_sub(1, std::sync::atomic::Ordering::SeqCst) > 0 {
             return Box::pin(async { anyhow::bail!("the gateway did not pick the agent up") });
         }
         hermes(args, env)
@@ -545,7 +548,7 @@ async fn a_claim_retried_after_a_profile_was_left_makes_its_agent_under_another_
     let http = reqwest::Client::new();
     assert!(cloud_setup::claim_server(&shared, &wanted, &http, Some(run.clone())).await.is_err());
     assert!(home.join("profiles/quotidien/config.yaml").is_file()); // what the first try left
-    assert!(!failing.load(std::sync::atomic::Ordering::SeqCst));
+    assert_eq!(failing.load(std::sync::atomic::Ordering::SeqCst), 0);
     let agents = cloud_setup::claim_server(&shared, &wanted, &http, Some(run)).await.unwrap();
     assert_eq!(agents, vec![json!({"id": "quotidien-2", "name": "Quotidien"})]);
     let ran = commands.lock().unwrap().clone();
